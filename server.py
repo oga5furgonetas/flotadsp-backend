@@ -222,32 +222,54 @@ async def push_incidence(entry: Dict[str, Any]) -> Dict[str, Any]:
 
 @api.post("/analyze")
 async def analyze_vehicle(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Call Claude API to analyze vehicle photos."""
-    import httpx
+    """Analyze vehicle photos using Google Gemini Vision (free)."""
+    import httpx, base64
     plate = payload.get("plate", "")
     messages = payload.get("messages", [])
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not anthropic_key:
-        return {"ok": False, "text": "ANTHROPIC_API_KEY no configurada en Railway"}
+    has_yesterday = payload.get("hasYesterday", False)
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not gemini_key:
+        return {"ok": False, "text": "GEMINI_API_KEY no configurada en Railway"}
+
+    # Build Gemini parts from Claude-format messages
+    parts = []
+    for msg in messages:
+        content = msg.get("content", [])
+        if isinstance(content, list):
+            for block in content:
+                if block.get("type") == "image":
+                    src = block.get("source", {})
+                    parts.append({
+                        "inline_data": {
+                            "mime_type": src.get("media_type", "image/jpeg"),
+                            "data": src.get("data", "")
+                        }
+                    })
+                elif block.get("type") == "text":
+                    parts.append({"text": block.get("text", "")})
+        elif isinstance(content, str):
+            parts.append({"text": content})
+
+    if not parts:
+        return {"ok": False, "text": "No se recibieron imágenes"}
+
     try:
         async with httpx.AsyncClient(timeout=90) as client:
             resp = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": anthropic_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json"
-                },
-                json={"model":"claude-sonnet-4-20250514","max_tokens":800,"messages":messages}
+                f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}",
+                headers={"Content-Type": "application/json"},
+                json={"contents": [{"parts": parts}]}
             )
             result = resp.json()
-            text = ""
-            for block in result.get("content", []):
-                if block.get("type") == "text":
-                    text += block.get("text", "")
-            return {"ok": True, "text": text or "Sin respuesta"}
+            candidates = result.get("candidates", [])
+            if candidates:
+                text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "Sin respuesta")
+                return {"ok": True, "text": text}
+            else:
+                error = result.get("error", {}).get("message", "Sin respuesta de Gemini")
+                return {"ok": False, "text": error}
     except Exception as e:
-        logger.error(f"analyze error: {e}")
+        logger.error(f"Gemini analyze error: {e}")
         return {"ok": False, "text": "Error al conectar con IA: " + str(e)}
 
 app.include_router(api)
