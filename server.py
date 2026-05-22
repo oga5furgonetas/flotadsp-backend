@@ -218,6 +218,38 @@ async def push_incidence(entry: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": True, "version": update["version"]}
 
 
+
+
+@api.post("/analyze")
+async def analyze_vehicle(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Call Claude API to analyze vehicle photos."""
+    import httpx
+    plate = payload.get("plate", "")
+    messages = payload.get("messages", [])
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not anthropic_key:
+        return {"ok": False, "text": "ANTHROPIC_API_KEY no configurada en Railway"}
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            resp = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": anthropic_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                },
+                json={"model":"claude-sonnet-4-20250514","max_tokens":800,"messages":messages}
+            )
+            result = resp.json()
+            text = ""
+            for block in result.get("content", []):
+                if block.get("type") == "text":
+                    text += block.get("text", "")
+            return {"ok": True, "text": text or "Sin respuesta"}
+    except Exception as e:
+        logger.error(f"analyze error: {e}")
+        return {"ok": False, "text": "Error al conectar con IA: " + str(e)}
+
 app.include_router(api)
 
 app.add_middleware(
