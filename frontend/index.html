@@ -2190,7 +2190,7 @@
     });
   })();
   </script>
-  <!-- FlotaDSP — Ficha del conductor (click en tarjeta) -->
+  <!-- FlotaDSP — Ficha del conductor: ver + editar + foto, todo en uno -->
   <script>
   (function(){
     var API = "https://flotadsp-backend.fly.dev/api";
@@ -2202,59 +2202,113 @@
 
       var ov = document.createElement('div');
       ov.id = 'fdsp-drv-sheet';
-      ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+      ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto';
       ov.addEventListener('click', function(e){ if (e.target === ov) ov.remove(); });
 
       var initial = (drv.name||'?').charAt(0).toUpperCase();
-      var rows = [
-        ['📧 Email', drv.email], ['🔑 Login', drv.login], ['🆔 Driver ID', drv.driver_id],
-        ['📞 Teléfono', drv.phone], ['🪪 DNI', drv.dni], ['🏢 Centro', drv.center]
-      ].filter(function(r){ return r[1]; }).map(function(r){
-        return '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:13px">'+
-          '<span style="color:#8892a4">'+r[0]+'</span><span style="color:#e5e7eb;font-weight:600">'+r[1]+'</span></div>';
+      var FIELDS = [
+        ['name','Nombre completo','text'],
+        ['email','Email','email'],
+        ['login','Login','text'],
+        ['driver_id_field','Driver ID (Amazon)','text'],
+        ['phone','Teléfono','tel'],
+        ['dni','DNI','text']
+      ];
+      var inputs = FIELDS.map(function(f){
+        var key = f[0]==='driver_id_field' ? 'driver_id' : f[0];
+        var val = (drv[key]||'').toString().replace(/"/g,'&quot;');
+        return '<div style="margin-bottom:10px">'+
+          '<label style="display:block;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#8892a4;margin-bottom:4px">'+f[1]+'</label>'+
+          '<input id="fdsp-f-'+key+'" type="'+f[2]+'" value="'+val+'" style="width:100%;box-sizing:border-box;background:rgba(34,38,49,.8);border:1px solid rgba(255,255,255,.12);border-radius:9px;color:#f4f5f8;padding:8px 11px;font-size:13px;outline:none">'+
+        '</div>';
       }).join('');
 
-      ov.innerHTML += '<div style="background:#111318;border:1px solid rgba(255,255,255,.12);border-radius:20px;width:100%;max-width:420px;padding:26px;box-shadow:0 24px 64px rgba(0,0,0,.7)" id="fdsp-drv-card">'+
+      var centerSel = '<div style="margin-bottom:10px">'+
+        '<label style="display:block;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#8892a4;margin-bottom:4px">Centro</label>'+
+        '<select id="fdsp-f-center" style="width:100%;box-sizing:border-box;background:rgba(34,38,49,.8);border:1px solid rgba(255,255,255,.12);border-radius:9px;color:#f4f5f8;padding:8px 11px;font-size:13px">'+
+          ['OGA5','DGA1','DGA2'].map(function(c){
+            return '<option value="'+c+'"'+((drv.center||'').toUpperCase().includes(c)?' selected':'')+'>'+c+'</option>';
+          }).join('')+
+        '</select></div>';
+
+      ov.innerHTML += '<div style="background:#111318;border:1px solid rgba(255,255,255,.12);border-radius:20px;width:100%;max-width:440px;padding:24px;box-shadow:0 24px 64px rgba(0,0,0,.7);margin:auto" id="fdsp-drv-card">'+
         '<div style="display:flex;align-items:center;gap:16px;margin-bottom:18px">'+
-          '<div id="fdsp-drv-avatar" style="width:72px;height:72px;border-radius:50%;flex-shrink:0;background:rgba(249,115,22,.15);border:2px solid rgba(249,115,22,.5);display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800;color:#fb923c;overflow:hidden">'+
-            (drv.photo_url ? '<img src="'+drv.photo_url+'" style="width:100%;height:100%;object-fit:cover">' : initial)+
+          '<div style="position:relative;flex-shrink:0">'+
+            '<div id="fdsp-drv-avatar" style="width:78px;height:78px;border-radius:50%;background:rgba(249,115,22,.15);border:2px solid rgba(249,115,22,.5);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#fb923c;overflow:hidden">'+
+              (drv.photo_url ? '<img src="'+drv.photo_url+'" style="width:100%;height:100%;object-fit:cover">' : initial)+
+            '</div>'+
+            '<button id="fdsp-drv-photo" title="Cambiar imagen" style="position:absolute;bottom:-2px;right:-2px;width:28px;height:28px;border-radius:50%;background:#f97316;border:2px solid #111318;color:#fff;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0">📷</button>'+
           '</div>'+
           '<div style="flex:1;min-width:0">'+
             '<h3 style="margin:0;font-size:17px;font-weight:800;color:#f4f5f8">'+(drv.name||'—')+'</h3>'+
             '<p style="margin:4px 0 0;font-size:12px;color:#8892a4">Conductor · '+(drv.center||'—')+'</p>'+
+            '<p id="fdsp-photo-status" style="margin:4px 0 0;font-size:11px;color:#8892a4"></p>'+
           '</div>'+
-          '<button id="fdsp-drv-close" style="background:none;border:none;color:#8892a4;font-size:22px;cursor:pointer;line-height:1">×</button>'+
+          '<button id="fdsp-drv-close" style="background:none;border:none;color:#8892a4;font-size:22px;cursor:pointer;line-height:1;align-self:flex-start">×</button>'+
         '</div>'+
-        rows+
+        inputs + centerSel +
         '<input type="file" accept="image/*" id="fdsp-drv-file" style="display:none">'+
-        '<button id="fdsp-drv-photo" style="margin-top:16px;width:100%;padding:10px;border-radius:10px;border:1px dashed rgba(249,115,22,.45);background:rgba(249,115,22,.10);color:#fb923c;font-size:13px;font-weight:700;cursor:pointer">📷 '+(drv.photo_url?'Cambiar imagen':'Añadir imagen')+'</button>'+
+        '<div style="display:flex;gap:10px;margin-top:16px">'+
+          '<button id="fdsp-drv-save" style="flex:1;padding:11px;border-radius:11px;border:none;background:linear-gradient(135deg,#fb923c,#ea6800);color:#fff;font-size:14px;font-weight:800;cursor:pointer">💾 Guardar cambios</button>'+
+          '<button id="fdsp-drv-cancel" style="padding:11px 18px;border-radius:11px;border:1px solid rgba(255,255,255,.14);background:transparent;color:#c8ccd6;font-size:13px;cursor:pointer">Cerrar</button>'+
+        '</div>'+
       '</div>';
 
       document.body.appendChild(ov);
       document.getElementById('fdsp-drv-close').addEventListener('click', function(){ ov.remove(); });
+      document.getElementById('fdsp-drv-cancel').addEventListener('click', function(){ ov.remove(); });
 
+      /* Foto */
       var fileInput = document.getElementById('fdsp-drv-file');
       document.getElementById('fdsp-drv-photo').addEventListener('click', function(){ fileInput.click(); });
       fileInput.addEventListener('change', function(){
         var f = fileInput.files && fileInput.files[0];
         if (!f) return;
-        var btn = document.getElementById('fdsp-drv-photo');
-        btn.textContent = '⏳ Subiendo…';
+        var st = document.getElementById('fdsp-photo-status');
+        st.textContent = '⏳ Subiendo imagen…';
         var fd = new FormData();
         fd.append('file', f, 'foto.jpg');
         fetch(API + '/drivers/' + drv.id + '/photo', {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + tok() },
-          body: fd
+          method: 'POST', headers: { 'Authorization': 'Bearer ' + tok() }, body: fd
         }).then(function(r){ return r.json(); }).then(function(j){
           if (j.success && j.photo_url) {
             document.getElementById('fdsp-drv-avatar').innerHTML = '<img src="'+j.photo_url+'" style="width:100%;height:100%;object-fit:cover">';
-            btn.textContent = '✅ Imagen guardada';
-            setTimeout(function(){ btn.textContent = '📷 Cambiar imagen'; }, 2000);
+            st.textContent = '✅ Imagen guardada';
+            st.style.color = '#4ade80';
           } else {
-            btn.textContent = '❌ Error: ' + (j.detail || 'no se pudo subir');
+            st.textContent = '❌ ' + (j.detail || 'No se pudo subir');
+            st.style.color = '#f87171';
           }
-        }).catch(function(){ btn.textContent = '❌ Error de conexión'; });
+        }).catch(function(){ st.textContent = '❌ Error de conexión'; st.style.color = '#f87171'; });
+      });
+
+      /* Guardar datos */
+      document.getElementById('fdsp-drv-save').addEventListener('click', function(){
+        var btn = this;
+        var payload = {
+          name: document.getElementById('fdsp-f-name').value.trim(),
+          email: document.getElementById('fdsp-f-email').value.trim(),
+          login: document.getElementById('fdsp-f-login').value.trim(),
+          driver_id: document.getElementById('fdsp-f-driver_id').value.trim(),
+          phone: document.getElementById('fdsp-f-phone').value.trim(),
+          dni: document.getElementById('fdsp-f-dni').value.trim(),
+          center: document.getElementById('fdsp-f-center').value
+        };
+        if (!payload.name) { btn.textContent = '❌ El nombre es obligatorio'; setTimeout(function(){btn.textContent='💾 Guardar cambios';},1800); return; }
+        btn.textContent = '⏳ Guardando…';
+        fetch(API + '/drivers/' + drv.id, {
+          method: 'PATCH',
+          headers: { 'Authorization': 'Bearer ' + tok(), 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }).then(function(r){ return r.json(); }).then(function(j){
+          if (j.success) {
+            btn.textContent = '✅ Guardado';
+            setTimeout(function(){ ov.remove(); location.reload(); }, 700);
+          } else {
+            btn.textContent = '❌ ' + (j.detail || 'Error guardando');
+            setTimeout(function(){btn.textContent='💾 Guardar cambios';},2200);
+          }
+        }).catch(function(){ btn.textContent = '❌ Error de conexión'; setTimeout(function(){btn.textContent='💾 Guardar cambios';},2200); });
       });
     };
   })();
