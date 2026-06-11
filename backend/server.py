@@ -3315,6 +3315,98 @@ async def send_daily_inspection_summary():
         logger.error(f"Error en resumen diario: {e}", exc_info=True)
 
 
+async def backup_database_to_r2() -> dict:
+    """Exporta TODAS las colecciones a un JSON.gz y lo sube a R2 (backups/).
+    Conserva los últimos 14 backups. El cluster Atlas es M0 (sin backups nativos):
+    esto es la red de seguridad contra corrupción o borrado accidental."""
+    import gzip as _gzip
+    r2 = get_r2()
+    if not r2:
+        return {"success": False, "error": "R2 no configurado"}
+    try:
+        dump = {}
+        total_docs = 0
+        names = await db.list_collection_names()
+        for cname in names:
+            docs = await db[cname].find({}, {"_id": 0}).to_list(100000)
+            dump[cname] = docs
+            total_docs += len(docs)
+
+        raw = json.dumps(dump, default=str, ensure_ascii=False).encode("utf-8")
+        compressed = _gzip.compress(raw, compresslevel=6)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M")
+        key = f"backups/flotadsp_{stamp}.json.gz"
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(_executor, lambda: r2.put_object(
+            Bucket=R2_BUCKET, Key=key, Body=compressed,
+            ContentType="application/gzip"
+        ))
+
+        # Rotación: conservar solo los 14 más recientes
+        deleted = 0
+        try:
+            listing = await loop.run_in_executor(_executor, lambda: r2.list_objects_v2(
+                Bucket=R2_BUCKET, Prefix="backups/"
+            ))
+            keys = sorted([o["Key"] for o in listing.get("Contents", [])], reverse=True)
+            for old_key in keys[14:]:
+                await loop.run_in_executor(_executor, lambda k=old_key: r2.delete_object(Bucket=R2_BUCKET, Key=k))
+                deleted += 1
+        except Exception as _rot:
+            logger.warning(f"Rotación de backups falló (no crítico): {_rot}")
+
+        size_mb = round(len(compressed) / 1024 / 1024, 2)
+        logger.info(f"Backup BD OK: {key} — {total_docs} docs, {size_mb}MB, {len(names)} colecciones, {deleted} antiguos borrados")
+        return {"success": True, "key": key, "collections": len(names),
+                "documents": total_docs, "size_mb": size_mb}
+    except Exception as e:
+        logger.error(f"Backup BD FALLÓ: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@api_router.post("/admin/backup-now")
+async def trigger_backup(_=Depends(require_admin)):
+    """Lanza un backup manual de la base de datos a R2."""
+    return await backup_database_to_r2()
+
+
+@app.on_event("startup")
+async def start_backup_scheduler():
+    """Backup automático diario a las 04:00 hora española."""
+    async def _backup_loop():
+        from zoneinfo import ZoneInfo
+        madrid = ZoneInfo("Europe/Madrid")
+        while True:
+            try:
+                now = datetime.now(madrid)
+                target = now.replace(hour=4, minute=0, second=0, microsecond=0)
+                if now >= target:
+                    target = target + timedelta(days=1)
+                await asyncio.sleep((target - now).total_seconds())
+                result = await backup_database_to_r2()
+                if not result.get("success"):
+                    # Avisar por Telegram si el backup falla — esto SÍ es crítico
+                    try:
+                        config = await db.telegram_config.find_one({}, {"_id": 0})
+                        if config and config.get("enabled") and config.get("bot_token"):
+                            async with _aiohttp.ClientSession() as session:
+                                for chat_id in config.get("chat_ids", []):
+                                    if chat_id.strip():
+                                        await session.post(
+                                            f"https://api.telegram.org/bot{config['bot_token']}/sendMessage",
+                                            json={"chat_id": chat_id,
+                                                  "text": f"🚨 EL BACKUP DIARIO DE LA BASE DE DATOS HA FALLADO: {result.get('error')}"},
+                                            timeout=_aiohttp.ClientTimeout(total=8))
+                    except Exception:
+                        pass
+                await asyncio.sleep(70)
+            except Exception as e:
+                logger.error(f"Backup scheduler: {e}")
+                await asyncio.sleep(600)
+    asyncio.create_task(_backup_loop())
+
+
 @app.on_event("startup")
 async def start_daily_summary_scheduler():
     """Programa el resumen diario de inspecciones a las 22:00 hora española."""
