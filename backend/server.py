@@ -1865,7 +1865,7 @@ async def conductor_list_public(center: Optional[str] = None):
     query = {}
     if center and center != "Todos":
         query["center"] = {"$regex": center, "$options": "i"}
-    cursor = db.drivers.find(query, {"_id": 0, "id": 1, "name": 1, "email": 1, "center": 1})
+    cursor = db.drivers.find(query, {"_id": 0, "id": 1, "name": 1, "email": 1, "center": 1, "photo_url": 1})
     drivers = await cursor.to_list(500)
     return drivers
 

@@ -210,9 +210,12 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
             <ChevronLeft size={18} />
           </button>
         )}
+        {driver.photo_url && (
+          <img src={driver.photo_url} className="h-9 w-9 shrink-0 rounded-full border-2 border-brand-500/50 object-cover" alt="" />
+        )}
         <div className="flex-1">
-          <h2 className="text-sm font-semibold text-dark-100">Inspección diaria</h2>
-          <p className="text-xs text-dark-500">{driver.name} · {driver.center}</p>
+          <h2 className="text-sm font-semibold text-dark-100">👋 Hola, {(driver.name || '').split(' ')[0]}</h2>
+          <p className="text-xs text-dark-500">Inspección diaria · {driver.center}</p>
         </div>
         <button onClick={onLogout} className="btn-ghost p-1.5 text-dark-400">
           <LogOut size={16} />
