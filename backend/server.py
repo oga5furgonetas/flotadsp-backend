@@ -4577,53 +4577,137 @@ async def import_roster_text(
     data: dict,
     _=Depends(require_admin),
 ):
-    """Importa el roster desde texto pegado directamente (copia-pega del Excel de Amazon).
-    Formato: filas tabuladas con conductor en col 5 y matrícula en col 7 (índice 0).
-    Ejemplo de fila: '11\\t\\t09/06/2026\\tAMZL OGA5\\tETT20\\tRios Moledo, Diego\\tC\\t7120 NGB\\t...'
-    """
-    import json as _json2
+    """Importa el roster pegado desde la plataforma de Amazon, EN CUALQUIER FORMATO.
 
+    Estrategia en cascada:
+      1. Gemini estructura el texto crudo en pares matricula->conductor (entiende
+         cualquier orden de columnas, saltos raros y formatos cambiantes).
+      2. Si Gemini no responde: deteccion automatica de columnas (busca la columna
+         que parece matricula y la que parece nombre, sin posiciones fijas).
+      3. Matching contra la BD insensible a acentos y con desempate por apellidos.
+    """
     raw_text = data.get("text", "")
     date = data.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     center = data.get("center", "OGA5")
 
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="Texto vacío")
+    raw_text = raw_text[:30000]  # límite de seguridad
 
-    # Parsear líneas tabuladas
+    PLATE_RE = re.compile(r'\b(\d{4})\s*-?\s*([A-Z]{3})\b', re.IGNORECASE)
+
+    # 1) Intento con Gemini: entiende cualquier formato
     parsed = []
-    for line in raw_text.splitlines():
-        cols = line.split("\t")
-        if len(cols) < 8:
-            continue
-        plate_raw = cols[7].strip() if len(cols) > 7 else ""
-        driver_raw = cols[5].strip() if len(cols) > 5 else ""
-        # Filtrar filas sin matrícula o conductor
-        if not plate_raw or not driver_raw:
-            continue
-        # Validar que parece una matrícula española (4 dígitos + espacio + 3 letras)
-        if not re.match(r'^\d{4}\s+[A-Z]{2,3}$', plate_raw, re.IGNORECASE):
-            continue
-        # Ignorar filas con conductor vacío o "SIN ASIGN"
-        if not driver_raw or "sin asign" in driver_raw.lower():
-            continue
-        parsed.append({"plate": plate_raw, "driver": driver_raw})
+    parse_method = "gemini"
+    try:
+        from google import genai as genai_sdk
+        from google.genai import types as genai_types
+
+        use_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
+        if use_vertex:
+            from google.oauth2 import service_account
+            import json as _json
+            import base64 as _b64
+            sa_clean = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+            if sa_clean and not sa_clean.startswith("{"):
+                sa_clean = _b64.b64decode(sa_clean).decode("utf-8")
+            credentials = service_account.Credentials.from_service_account_info(
+                _json.loads(sa_clean), scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            ) if sa_clean else None
+            client = genai_sdk.Client(
+                vertexai=True, project=os.environ.get("GCP_PROJECT", ""),
+                location=os.environ.get("GCP_LOCATION", "us-central1"), credentials=credentials
+            )
+        else:
+            client = genai_sdk.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+
+        prompt = (
+            "Este texto es un roster/cuadrante de reparto copiado de una plataforma "
+            "(formato impredecible: columnas tabuladas, líneas sueltas, etc.). "
+            "Extrae TODAS las parejas de matrícula española (4 dígitos + 3 letras) y "
+            "nombre del conductor asignado a esa matrícula.\n"
+            "Reglas:\n"
+            "- Una pareja por matrícula. Si una matrícula no tiene conductor (vacío, 'SIN ASIGNAR', '-'), omítela.\n"
+            "- El nombre puede venir como 'Apellidos, Nombre' o 'Nombre Apellidos' — devuélvelo tal cual aparece.\n"
+            "- Ignora cabeceras, totales, horas, rutas y cualquier otra cosa.\n"
+            "Responde SOLO este JSON sin markdown: "
+            '{"pairs": [{"plate": "1234 ABC", "driver": "nombre tal cual"}]}\n\n'
+            "TEXTO:\n" + raw_text
+        )
+        gen_config = genai_types.GenerateContentConfig(temperature=0.0, response_mime_type="application/json")
+        loop = asyncio.get_running_loop()
+        async with _gemini_sem:
+            response = await asyncio.wait_for(
+                loop.run_in_executor(
+                    _executor,
+                    lambda: client.models.generate_content(
+                        model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+                        contents=[prompt], config=gen_config
+                    )
+                ),
+                timeout=45.0
+            )
+        gdata = json.loads(_strip_markdown_json(response.text or "{}"))
+        for p in gdata.get("pairs", []):
+            plate = (p.get("plate") or "").strip()
+            drv = (p.get("driver") or "").strip()
+            if PLATE_RE.search(plate.upper()) and drv and "sin asign" not in drv.lower():
+                parsed.append({"plate": plate, "driver": drv})
+    except Exception as _ge:
+        logger.warning(f"Import roster: Gemini falló ({_ge}), usando detección automática")
+        parsed = []
+
+    # 2) Respaldo: detección automática de columnas (sin posiciones fijas)
+    if not parsed:
+        parse_method = "auto-columns"
+        for line in raw_text.splitlines():
+            cols = [c.strip() for c in re.split(r'\t|\s{3,}', line)]
+            if len(cols) < 2:
+                continue
+            plate_val, plate_idx = None, None
+            for idx, c in enumerate(cols):
+                m = PLATE_RE.search(c.upper())
+                if m:
+                    plate_val = f"{m.group(1)} {m.group(2).upper()}"
+                    plate_idx = idx
+                    break
+            if not plate_val:
+                continue
+            best_name, best_len = "", 0
+            for idx, c in enumerate(cols):
+                if idx == plate_idx:
+                    continue
+                letters = len(re.sub(r'[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ ]', '', c))
+                if letters >= 6 and letters > best_len and not PLATE_RE.search(c.upper()):
+                    if re.search(r'\d{2}/\d{2}|AMZL|^ETT', c, re.IGNORECASE):
+                        continue
+                    best_name, best_len = c, letters
+            if best_name and "sin asign" not in best_name.lower():
+                parsed.append({"plate": plate_val, "driver": best_name})
 
     if not parsed:
-        raise HTTPException(status_code=400, detail="No se encontraron filas válidas (matrícula + conductor). Comprueba el formato.")
+        raise HTTPException(status_code=400, detail="No se encontraron parejas matrícula+conductor en el texto. Copia la tabla completa del roster.")
 
-    # Reutilizar lógica de matching del endpoint de imagen
-    vehicles = await db.vehicles.find(
-        {"center": {"$regex": center[:4], "$options": "i"}, "status": {"$ne": "deleted"}},
-        {"_id": 0}
-    ).to_list(500)
-    drivers = await db.drivers.find({"center": {"$regex": center[:4], "$options": "i"}}, {"_id": 0}).to_list(500)
+    # 3) Matching contra la BD: insensible a acentos, desempate por apellidos
+    import unicodedata as _ud
+
+    def _fold(s):
+        s = _ud.normalize("NFD", (s or "").lower())
+        return "".join(c for c in s if _ud.category(c) != "Mn")
 
     def _norm_plate_local(p):
         return re.sub(r'[^A-Z0-9]', '', (p or "").upper())
 
     def _norm_words(name):
-        return set(re.sub(r'[^a-záéíóúüñ ]', '', (name or "").lower()).split())
+        return set(w for w in re.sub(r'[^a-z ]', ' ', _fold(name)).split() if len(w) > 1)
+
+    vehicles = await db.vehicles.find(
+        {"center": {"$regex": center[:4], "$options": "i"}, "status": {"$ne": "deleted"}},
+        {"_id": 0}
+    ).to_list(500)
+    drivers = await db.drivers.find({"center": {"$regex": center[:4], "$options": "i"}}, {"_id": 0}).to_list(500)
+    if len(drivers) < 3:
+        drivers = await db.drivers.find({}, {"_id": 0}).to_list(500)
 
     vehicle_map = {_norm_plate_local(v.get("license_plate", "")): v for v in vehicles}
     driver_words = [(_d, _norm_words(_d.get("name", ""))) for _d in drivers]
@@ -4632,6 +4716,7 @@ async def import_roster_text(
     matched = 0
     unmatched_plate = []
     unmatched_driver = []
+    ambiguous = []
 
     for row in parsed:
         pnorm = _norm_plate_local(row["plate"])
@@ -4639,17 +4724,27 @@ async def import_roster_text(
         if not veh:
             unmatched_plate.append(row["plate"])
             continue
-        dname = row["driver"]
-        words = _norm_words(dname)
-        best, best_score = None, 0
+        words = _norm_words(row["driver"])
+        scored = []
         for d, dw in driver_words:
-            score = len(words & dw)
-            if score > best_score:
-                best, best_score = d, score
-        if best and best_score >= 2:
+            inter = words & dw
+            if not inter:
+                continue
+            score = sum(2 if len(w) >= 5 else 1 for w in inter)
+            scored.append((score, d))
+        scored.sort(key=lambda x: -x[0])
+        best = scored[0] if scored else None
+        second = scored[1] if len(scored) > 1 else None
+
+        ok = bool(best) and (best[0] >= 3 or (best[0] >= 2 and (not second or second[0] < best[0])))
+        if ok and second and second[0] == best[0]:
+            ok = False
+            ambiguous.append(row["driver"])
+
+        if ok:
             slots.append({
                 "vehicle_id": veh.get("id"), "vehicle_plate": veh.get("license_plate"),
-                "driver_id": best.get("id"), "driver_name": best.get("name"),
+                "driver_id": best[1].get("id"), "driver_name": best[1].get("name"),
             })
             matched += 1
         else:
@@ -4657,9 +4752,9 @@ async def import_roster_text(
                 "vehicle_id": veh.get("id"), "vehicle_plate": veh.get("license_plate"),
                 "driver_id": "", "driver_name": "",
             })
-            unmatched_driver.append(dname)
+            if row["driver"] not in ambiguous:
+                unmatched_driver.append(row["driver"])
 
-    # Añadir vehículos del centro no presentes en el roster (en blanco)
     plates_in_roster = {_norm_plate_local(s["vehicle_plate"]) for s in slots}
     for v in vehicles:
         if v.get("status") in ("inactive", "deleted"):
@@ -4670,10 +4765,14 @@ async def import_roster_text(
                 "driver_id": "", "driver_name": "",
             })
 
+    logger.info(f"Import roster ({parse_method}): {matched}/{len(parsed)} emparejados, "
+                f"{len(unmatched_plate)} matriculas desconocidas, {len(unmatched_driver)} sin match")
     return {
         "date": date, "center": center, "slots": slots,
         "matched": matched, "total_roster": len(parsed),
+        "parse_method": parse_method,
         "unmatched_plate": unmatched_plate, "unmatched_driver": unmatched_driver,
+        "ambiguous": ambiguous,
     }
 
 
