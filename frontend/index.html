@@ -2190,19 +2190,47 @@
     });
   })();
   </script>
-  <!-- FlotaDSP — Ficha del conductor: ver + editar + foto, todo en uno -->
+  <!-- FlotaDSP — Ficha del conductor: ver + editar + foto (con tema adaptativo) -->
   <script>
   (function(){
     var API = "https://flotadsp-backend.fly.dev/api";
     function tok(){ return localStorage.getItem("flotadsp_token")||""; }
 
+    /* Paleta según el tema activo (Mery pastel / Judyt Stitch / oscuro normal) */
+    function theme(){
+      if (document.body.classList.contains('mery-theme')) return {
+        card:'#fdf6fb', border:'rgba(200,120,180,.35)', text:'#1a5c8a', sub:'#5298c4',
+        inputBg:'rgba(240,248,255,.9)', inputBorder:'rgba(100,170,220,.4)', inputText:'#1a5c8a',
+        accent:'#d46ebe', accentGrad:'linear-gradient(135deg,#e085ce,#c05aaa)',
+        avatarBg:'rgba(212,110,190,.15)', avatarBorder:'rgba(212,110,190,.55)', avatarText:'#c05aaa',
+        shadow:'0 24px 64px rgba(180,60,120,.35)', cancelBorder:'rgba(180,80,160,.3)', cancelText:'#5298c4'
+      };
+      if (document.body.classList.contains('judyt-theme')) return {
+        card:'#101c42', border:'rgba(110,194,255,.3)', text:'#eaf4ff', sub:'#84aed6',
+        inputBg:'rgba(14,24,52,.9)', inputBorder:'rgba(110,194,255,.25)', inputText:'#eaf4ff',
+        accent:'#41b0ff', accentGrad:'linear-gradient(135deg,#7fd0ff,#1b8ae0)',
+        avatarBg:'rgba(65,176,255,.15)', avatarBorder:'rgba(65,176,255,.55)', avatarText:'#6ec2ff',
+        shadow:'0 24px 64px rgba(8,16,40,.7)', cancelBorder:'rgba(110,194,255,.25)', cancelText:'#bcd9f5'
+      };
+      return {
+        card:'#111318', border:'rgba(255,255,255,.12)', text:'#f4f5f8', sub:'#8892a4',
+        inputBg:'rgba(34,38,49,.8)', inputBorder:'rgba(255,255,255,.12)', inputText:'#f4f5f8',
+        accent:'#fb923c', accentGrad:'linear-gradient(135deg,#fb923c,#ea6800)',
+        avatarBg:'rgba(249,115,22,.15)', avatarBorder:'rgba(249,115,22,.5)', avatarText:'#fb923c',
+        shadow:'0 24px 64px rgba(0,0,0,.7)', cancelBorder:'rgba(255,255,255,.14)', cancelText:'#c8ccd6'
+      };
+    }
+
     window.__fdspDriverSheet = function(drv){
+      var T = theme();
       var old = document.getElementById('fdsp-drv-sheet');
       if (old) old.remove();
 
+      var pendingPhotoUpload = null;  /* promesa de subida en curso — Guardar la espera */
+
       var ov = document.createElement('div');
       ov.id = 'fdsp-drv-sheet';
-      ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto';
+      ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);backdrop-filter:blur(6px);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto';
       ov.addEventListener('click', function(e){ if (e.target === ov) ov.remove(); });
 
       var initial = (drv.name||'?').charAt(0).toUpperCase();
@@ -2210,47 +2238,46 @@
         ['name','Nombre completo','text'],
         ['email','Email','email'],
         ['login','Login','text'],
-        ['driver_id_field','Driver ID (Amazon)','text'],
+        ['driver_id','Driver ID (Amazon)','text'],
         ['phone','Teléfono','tel'],
         ['dni','DNI','text']
       ];
       var inputs = FIELDS.map(function(f){
-        var key = f[0]==='driver_id_field' ? 'driver_id' : f[0];
-        var val = (drv[key]||'').toString().replace(/"/g,'&quot;');
+        var val = (drv[f[0]]||'').toString().replace(/"/g,'&quot;');
         return '<div style="margin-bottom:10px">'+
-          '<label style="display:block;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#8892a4;margin-bottom:4px">'+f[1]+'</label>'+
-          '<input id="fdsp-f-'+key+'" type="'+f[2]+'" value="'+val+'" style="width:100%;box-sizing:border-box;background:rgba(34,38,49,.8);border:1px solid rgba(255,255,255,.12);border-radius:9px;color:#f4f5f8;padding:8px 11px;font-size:13px;outline:none">'+
+          '<label style="display:block;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:'+T.sub+';margin-bottom:4px">'+f[1]+'</label>'+
+          '<input id="fdsp-f-'+f[0]+'" type="'+f[2]+'" value="'+val+'" style="width:100%;box-sizing:border-box;background:'+T.inputBg+';border:1px solid '+T.inputBorder+';border-radius:9px;color:'+T.inputText+';padding:8px 11px;font-size:13px;outline:none">'+
         '</div>';
       }).join('');
 
       var centerSel = '<div style="margin-bottom:10px">'+
-        '<label style="display:block;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#8892a4;margin-bottom:4px">Centro</label>'+
-        '<select id="fdsp-f-center" style="width:100%;box-sizing:border-box;background:rgba(34,38,49,.8);border:1px solid rgba(255,255,255,.12);border-radius:9px;color:#f4f5f8;padding:8px 11px;font-size:13px">'+
+        '<label style="display:block;font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:'+T.sub+';margin-bottom:4px">Centro</label>'+
+        '<select id="fdsp-f-center" style="width:100%;box-sizing:border-box;background:'+T.inputBg+';border:1px solid '+T.inputBorder+';border-radius:9px;color:'+T.inputText+';padding:8px 11px;font-size:13px">'+
           ['OGA5','DGA1','DGA2'].map(function(c){
             return '<option value="'+c+'"'+((drv.center||'').toUpperCase().includes(c)?' selected':'')+'>'+c+'</option>';
           }).join('')+
         '</select></div>';
 
-      ov.innerHTML += '<div style="background:#111318;border:1px solid rgba(255,255,255,.12);border-radius:20px;width:100%;max-width:440px;padding:24px;box-shadow:0 24px 64px rgba(0,0,0,.7);margin:auto" id="fdsp-drv-card">'+
+      ov.innerHTML += '<div style="background:'+T.card+';border:1px solid '+T.border+';border-radius:20px;width:100%;max-width:440px;padding:24px;box-shadow:'+T.shadow+';margin:auto">'+
         '<div style="display:flex;align-items:center;gap:16px;margin-bottom:18px">'+
           '<div style="position:relative;flex-shrink:0">'+
-            '<div id="fdsp-drv-avatar" style="width:78px;height:78px;border-radius:50%;background:rgba(249,115,22,.15);border:2px solid rgba(249,115,22,.5);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:#fb923c;overflow:hidden">'+
+            '<div id="fdsp-drv-avatar" style="width:78px;height:78px;border-radius:50%;background:'+T.avatarBg+';border:2px solid '+T.avatarBorder+';display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;color:'+T.avatarText+';overflow:hidden">'+
               (drv.photo_url ? '<img src="'+drv.photo_url+'" style="width:100%;height:100%;object-fit:cover">' : initial)+
             '</div>'+
-            '<button id="fdsp-drv-photo" title="Cambiar imagen" style="position:absolute;bottom:-2px;right:-2px;width:28px;height:28px;border-radius:50%;background:#f97316;border:2px solid #111318;color:#fff;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0">📷</button>'+
+            '<button id="fdsp-drv-photo" title="Cambiar imagen" style="position:absolute;bottom:-2px;right:-2px;width:28px;height:28px;border-radius:50%;background:'+T.accent+';border:2px solid '+T.card+';color:#fff;font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0">📷</button>'+
           '</div>'+
           '<div style="flex:1;min-width:0">'+
-            '<h3 style="margin:0;font-size:17px;font-weight:800;color:#f4f5f8">'+(drv.name||'—')+'</h3>'+
-            '<p style="margin:4px 0 0;font-size:12px;color:#8892a4">Conductor · '+(drv.center||'—')+'</p>'+
-            '<p id="fdsp-photo-status" style="margin:4px 0 0;font-size:11px;color:#8892a4"></p>'+
+            '<h3 style="margin:0;font-size:17px;font-weight:800;color:'+T.text+'">'+(drv.name||'—')+'</h3>'+
+            '<p style="margin:4px 0 0;font-size:12px;color:'+T.sub+'">Conductor · '+(drv.center||'—')+'</p>'+
+            '<p id="fdsp-photo-status" style="margin:4px 0 0;font-size:11px;color:'+T.sub+'"></p>'+
           '</div>'+
-          '<button id="fdsp-drv-close" style="background:none;border:none;color:#8892a4;font-size:22px;cursor:pointer;line-height:1;align-self:flex-start">×</button>'+
+          '<button id="fdsp-drv-close" style="background:none;border:none;color:'+T.sub+';font-size:22px;cursor:pointer;line-height:1;align-self:flex-start">×</button>'+
         '</div>'+
         inputs + centerSel +
         '<input type="file" accept="image/*" id="fdsp-drv-file" style="display:none">'+
         '<div style="display:flex;gap:10px;margin-top:16px">'+
-          '<button id="fdsp-drv-save" style="flex:1;padding:11px;border-radius:11px;border:none;background:linear-gradient(135deg,#fb923c,#ea6800);color:#fff;font-size:14px;font-weight:800;cursor:pointer">💾 Guardar cambios</button>'+
-          '<button id="fdsp-drv-cancel" style="padding:11px 18px;border-radius:11px;border:1px solid rgba(255,255,255,.14);background:transparent;color:#c8ccd6;font-size:13px;cursor:pointer">Cerrar</button>'+
+          '<button id="fdsp-drv-save" style="flex:1;padding:11px;border-radius:11px;border:none;background:'+T.accentGrad+';color:#fff;font-size:14px;font-weight:800;cursor:pointer">💾 Guardar cambios</button>'+
+          '<button id="fdsp-drv-cancel" style="padding:11px 18px;border-radius:11px;border:1px solid '+T.cancelBorder+';background:transparent;color:'+T.cancelText+';font-size:13px;cursor:pointer">Cerrar</button>'+
         '</div>'+
       '</div>';
 
@@ -2258,7 +2285,7 @@
       document.getElementById('fdsp-drv-close').addEventListener('click', function(){ ov.remove(); });
       document.getElementById('fdsp-drv-cancel').addEventListener('click', function(){ ov.remove(); });
 
-      /* Foto */
+      /* ── Foto: subida inmediata, pero Guardar la ESPERA si sigue en curso ── */
       var fileInput = document.getElementById('fdsp-drv-file');
       document.getElementById('fdsp-drv-photo').addEventListener('click', function(){ fileInput.click(); });
       fileInput.addEventListener('change', function(){
@@ -2266,23 +2293,30 @@
         if (!f) return;
         var st = document.getElementById('fdsp-photo-status');
         st.textContent = '⏳ Subiendo imagen…';
+        st.style.color = T.sub;
         var fd = new FormData();
         fd.append('file', f, 'foto.jpg');
-        fetch(API + '/drivers/' + drv.id + '/photo', {
+        pendingPhotoUpload = fetch(API + '/drivers/' + drv.id + '/photo', {
           method: 'POST', headers: { 'Authorization': 'Bearer ' + tok() }, body: fd
         }).then(function(r){ return r.json(); }).then(function(j){
           if (j.success && j.photo_url) {
             document.getElementById('fdsp-drv-avatar').innerHTML = '<img src="'+j.photo_url+'" style="width:100%;height:100%;object-fit:cover">';
             st.textContent = '✅ Imagen guardada';
-            st.style.color = '#4ade80';
+            st.style.color = '#22a55e';
           } else {
-            st.textContent = '❌ ' + (j.detail || 'No se pudo subir');
-            st.style.color = '#f87171';
+            st.textContent = '❌ ' + (j.detail || 'No se pudo subir la imagen');
+            st.style.color = '#e05050';
           }
-        }).catch(function(){ st.textContent = '❌ Error de conexión'; st.style.color = '#f87171'; });
+          pendingPhotoUpload = null;
+          return j;
+        }).catch(function(){
+          st.textContent = '❌ Error de conexión subiendo la imagen';
+          st.style.color = '#e05050';
+          pendingPhotoUpload = null;
+        });
       });
 
-      /* Guardar datos */
+      /* ── Guardar: espera a que termine la foto antes de recargar ── */
       document.getElementById('fdsp-drv-save').addEventListener('click', function(){
         var btn = this;
         var payload = {
@@ -2296,19 +2330,29 @@
         };
         if (!payload.name) { btn.textContent = '❌ El nombre es obligatorio'; setTimeout(function(){btn.textContent='💾 Guardar cambios';},1800); return; }
         btn.textContent = '⏳ Guardando…';
-        fetch(API + '/drivers/' + drv.id, {
-          method: 'PATCH',
-          headers: { 'Authorization': 'Bearer ' + tok(), 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+        btn.disabled = true;
+
+        var waitPhoto = pendingPhotoUpload ? pendingPhotoUpload : Promise.resolve();
+        waitPhoto.then(function(){
+          return fetch(API + '/drivers/' + drv.id, {
+            method: 'PATCH',
+            headers: { 'Authorization': 'Bearer ' + tok(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
         }).then(function(r){ return r.json(); }).then(function(j){
           if (j.success) {
             btn.textContent = '✅ Guardado';
             setTimeout(function(){ ov.remove(); location.reload(); }, 700);
           } else {
             btn.textContent = '❌ ' + (j.detail || 'Error guardando');
+            btn.disabled = false;
             setTimeout(function(){btn.textContent='💾 Guardar cambios';},2200);
           }
-        }).catch(function(){ btn.textContent = '❌ Error de conexión'; setTimeout(function(){btn.textContent='💾 Guardar cambios';},2200); });
+        }).catch(function(){
+          btn.textContent = '❌ Error de conexión';
+          btn.disabled = false;
+          setTimeout(function(){btn.textContent='💾 Guardar cambios';},2200);
+        });
       });
     };
   })();
