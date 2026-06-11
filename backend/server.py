@@ -2224,8 +2224,10 @@ async def upload_vehicle_document(
     object_key = f"docs/{vehicle_id}/{safe_type}_{uuid.uuid4().hex[:8]}.{ext}"
 
     # Subir a R2
-    s3 = _get_r2_client()
-    bucket = os.environ.get("R2_BUCKET_NAME", "flotadsp-photos")
+    s3 = get_r2()
+    if not s3:
+        raise HTTPException(status_code=502, detail="Almacenamiento R2 no configurado")
+    bucket = R2_BUCKET
     content_type = file.content_type or "application/octet-stream"
     try:
         await asyncio.get_running_loop().run_in_executor(
@@ -5087,6 +5089,64 @@ async def register_oil_change(vehicle_id: str, data: dict, _=Depends(require_adm
             "warning_at_km": km + intervalo - aviso_antes}
 
 
+# Mantenimientos por km adicionales (mismo patrón que el aceite)
+_MAINT_KINDS = {
+    "ruedas": {"label": "Cambio de ruedas", "default_interval": 40000, "default_warning": 3000},
+    "pastillas": {"label": "Pastillas de freno", "default_interval": 30000, "default_warning": 3000},
+}
+
+
+@api_router.post("/vehicles/{vehicle_id}/maintenance/{kind}/change")
+async def register_maintenance_change(vehicle_id: str, kind: str, data: dict, _=Depends(require_admin)):
+    """Registra un mantenimiento por km (ruedas, pastillas): igual que el aceite."""
+    spec = _MAINT_KINDS.get(kind)
+    if not spec:
+        raise HTTPException(status_code=400, detail=f"Tipo desconocido. Válidos: {list(_MAINT_KINDS)}")
+    km = int(data.get("km", 0))
+    fecha = data.get("date") or datetime.now(timezone.utc).date().isoformat()
+    intervalo = int(data.get("interval_km", spec["default_interval"]))
+    aviso_antes = int(data.get("warning_before_km", spec["default_warning"]))
+    v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
+    if not v:
+        raise HTTPException(status_code=404, detail="Furgoneta no encontrada")
+    await db.vehicles.update_one({"id": vehicle_id}, {"$set": {
+        f"{kind}_last_change_km": km, f"{kind}_last_change_date": fecha,
+        f"{kind}_interval_km": intervalo, f"{kind}_warning_before_km": aviso_antes,
+        "mileage": max(km, v.get("mileage") or 0), "updated_at": datetime.now(timezone.utc)}})
+    return {"success": True, "kind": kind, "label": spec["label"],
+            "next_change_km": km + intervalo, "warning_at_km": km + intervalo - aviso_antes}
+
+
+@api_router.post("/drivers/{driver_id}/photo")
+async def upload_driver_photo(driver_id: str, file: UploadFile = File(...), _=Depends(require_admin)):
+    """Sube la foto/imagen de un conductor a R2 y la guarda en su ficha."""
+    d = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "id": 1})
+    if not d:
+        raise HTTPException(status_code=404, detail="Conductor no encontrado")
+    content = await file.read()
+    if not content or len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Imagen inválida o demasiado grande (máx 10 MB)")
+    try:
+        img = Image.open(io.BytesIO(content)).convert("RGB")
+        img.thumbnail((600, 600))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        photo_bytes = buf.getvalue()
+    except Exception:
+        raise HTTPException(status_code=400, detail="El archivo no es una imagen válida")
+    s3 = get_r2()
+    if not s3:
+        raise HTTPException(status_code=502, detail="Almacenamiento no configurado")
+    key = f"drivers/{driver_id}_{uuid.uuid4().hex[:8]}.jpg"
+    await asyncio.get_running_loop().run_in_executor(
+        _executor,
+        lambda: s3.put_object(Bucket=R2_BUCKET, Key=key, Body=photo_bytes, ContentType="image/jpeg")
+    )
+    url = f"{R2_PUBLIC_URL}/{key}"
+    await db.drivers.update_one({"id": driver_id}, {"$set": {"photo_url": url}})
+    return {"success": True, "photo_url": url}
+
+
 # =========================
 # STICKERS DE MERY — persistentes en servidor
 # =========================
@@ -5369,6 +5429,43 @@ async def update_mileage(vehicle_id: str, data: dict, user: dict = Depends(requi
                                         timeout=_aiohttp.ClientTimeout(total=8))
                 except Exception as e:
                     logger.warning(f"Telegram aceite: {e}")
+
+    # ¿Toca avisar de ruedas o pastillas? (mismo patrón que el aceite)
+    for _mk, _mspec in (("ruedas", {"label": "CAMBIO DE RUEDAS", "emoji": "🛞", "interval": 40000, "warn": 3000}),
+                        ("pastillas", {"label": "PASTILLAS DE FRENO", "emoji": "🛑", "interval": 30000, "warn": 3000})):
+        last_km = v.get(f"{_mk}_last_change_km")
+        if last_km is None:
+            continue
+        _interval = v.get(f"{_mk}_interval_km", _mspec["interval"])
+        _warn = v.get(f"{_mk}_warning_before_km", _mspec["warn"])
+        _rest = _interval - (km - last_km)
+        if _rest <= _warn:
+            if _rest <= 0:
+                _tit = f"{_mspec['label']} VENCIDO en {v.get('license_plate','')}"
+                _desc = f"Se ha pasado {abs(_rest)} km del cambio."
+                _sev = "high"
+            else:
+                _tit = f"{_mspec['label'].capitalize()} próximo en {v.get('license_plate','')}"
+                _desc = f"Quedan {_rest} km (intervalo {_interval} km)."
+                _sev = "medium"
+            _existe = await db.alerts.find_one({"vehicle_id": vehicle_id, "title": _tit, "read": {"$ne": True}})
+            if not _existe:
+                await db.alerts.insert_one(serialize_doc(Alert(
+                    vehicle_id=vehicle_id, inspection_id="", title=_tit,
+                    description=_desc, severity=_sev).model_dump()))
+                try:
+                    config = await db.telegram_config.find_one({}, {"_id": 0})
+                    if config and config.get("enabled") and config.get("bot_token"):
+                        async with _aiohttp.ClientSession() as session:
+                            for cid in config.get("chat_ids", []):
+                                if cid.strip():
+                                    await session.post(
+                                        f"https://api.telegram.org/bot{config['bot_token']}/sendMessage",
+                                        json={"chat_id": cid, "text": f"{_mspec['emoji']} <b>{_tit}</b>\n{_desc}", "parse_mode": "HTML"},
+                                        timeout=_aiohttp.ClientTimeout(total=8))
+                except Exception as e:
+                    logger.warning(f"Telegram {_mk}: {e}")
+
     return {"success": True, "mileage": km, "oil_alert": oil_alert}
 
 

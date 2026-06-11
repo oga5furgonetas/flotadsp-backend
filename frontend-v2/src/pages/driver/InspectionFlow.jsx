@@ -43,15 +43,18 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
   const [photos, setPhotos] = useState({})          // slotId → Blob
   const [photoErrors, setPhotoErrors] = useState({}) // slotId → motivo de rechazo
   const [validating, setValidating] = useState(null) // slotId en validación
+  const [odoPhoto, setOdoPhoto] = useState(null)     // Blob del cuentakilómetros
+  const [odoKm, setOdoKm] = useState(null)           // km leídos por la IA
+  const [odoError, setOdoError] = useState('')
+  const [odoBusy, setOdoBusy] = useState(false)
   const [checklist, setChecklist] = useState({})
   const [checklistPhotos, setChecklistPhotos] = useState({})
   const [notes, setNotes] = useState('')
-  const [km, setKm] = useState('')
-  const [odoStatus, setOdoStatus] = useState('')
   const [sending, setSending] = useState(false)
   const [assigned, setAssigned] = useState(null)
   const fileRefs = useRef({})
   const odoRef = useRef(null)
+  const checklistRefs = useRef({})
 
   useEffect(() => {
     getAssignedVehicle()
@@ -59,7 +62,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
       .catch(() => {})
   }, [])
 
-  /* ── Captura + validación IA de las fotos obligatorias ── */
+  /* ── Captura + validación IA de las fotos de zona ── */
   const handlePhoto = async (slotId, e) => {
     const file = e.target.files?.[0]
     e.target.value = ''
@@ -96,40 +99,49 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
     setValidating(null)
   }
 
-  const handleChecklistPhoto = async (itemId, e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const blob = await compressImage(file, 800, 0.6)
-    setChecklistPhotos((p) => ({ ...p, [itemId]: blob }))
-  }
-
-  const handleOdometerPhoto = async (e) => {
+  /* ── Cuentakilómetros: foto obligatoria, la IA lee los km ── */
+  const handleOdoPhoto = async (e) => {
     const file = e.target.files?.[0]
     e.target.value = ''
-    if (!file || !vehicleId) return
-    setOdoStatus('📷 Leyendo cuentakilómetros…')
+    if (!file) return
+    const blob = await compressImage(file, 1280, 0.8)
+    setOdoBusy(true)
+    setOdoError('')
     try {
-      const blob = await compressImage(file, 1280, 0.8)
       const r = await readOdometer(vehicleId, blob)
       if (r.data?.success && r.data.km) {
-        setKm(String(r.data.km))
-        setOdoStatus(
-          r.data.warning
-            ? `⚠️ ${r.data.warning}`
-            : `✅ Leído: ${r.data.km.toLocaleString()} km — revisa que sea correcto`,
-        )
-        toast.success(`Km leídos: ${r.data.km.toLocaleString()}`)
+        setOdoPhoto(blob)
+        setOdoKm(r.data.km)
+        if (r.data.warning) {
+          setOdoError(`⚠️ ${r.data.warning}`)
+        }
+        toast.success(`✅ Km leídos: ${r.data.km.toLocaleString()}`)
       } else {
-        setOdoStatus('❌ No se pudo leer. Escríbelo a mano.')
-        toast.error('No se pudo leer el cuentakilómetros')
+        setOdoError('No se pudo leer el número de kilómetros. Acércate más al cuadro, enfoca bien y repite la foto.')
+        toast.error('❌ Cuentakilómetros no legible. Repite la foto.')
       }
     } catch {
-      setOdoStatus('❌ Error leyendo. Escríbelo a mano.')
+      // Fail-open: si la IA no responde, aceptamos la foto sin km
+      setOdoPhoto(blob)
+      setOdoKm(null)
+      setOdoError('Lectura no disponible ahora mismo — la foto se ha guardado igualmente.')
+      toast.warning('Foto guardada (lectura de km no disponible)')
     }
+    setOdoBusy(false)
+  }
+
+  const handleChecklistPhoto = async (itemId, e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    const blob = await compressImage(file, 1000, 0.65)
+    setChecklistPhotos((p) => ({ ...p, [itemId]: blob }))
+    toast.success(`Foto de ${CHECKLIST.find((c) => c.id === itemId)?.label} añadida`)
   }
 
   /* ── Envío ── */
-  const allRequiredPhotos = PHOTO_SLOTS.filter((s) => s.required).every((s) => photos[s.id])
+  const allRequiredPhotos =
+    PHOTO_SLOTS.filter((s) => s.required).every((s) => photos[s.id]) && !!odoPhoto
   const missingDamagePhotos = Object.entries(checklist).filter(
     ([id, st]) => (st === 'malo' || st === 'danado') && !checklistPhotos[id],
   )
@@ -144,18 +156,30 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
       const fd = new FormData()
       fd.append('vehicle_id', vehicleId)
       fd.append('driver_id', driver.id)
-      fd.append('notes', JSON.stringify({ checklist, notes, driver_name: driver.name, center: driver.center }))
+      fd.append(
+        'notes',
+        JSON.stringify({
+          checklist,
+          notes,
+          driver_name: driver.name,
+          center: driver.center,
+          odometer_km: odoKm,
+          checklist_photo_items: Object.keys(checklistPhotos).map(
+            (id) => CHECKLIST.find((c) => c.id === id)?.label || id,
+          ),
+        }),
+      )
       // Orden FIJO de zonas — el backend y la IA dependen de él
       PHOTO_SLOTS.forEach((slot, i) => {
         if (photos[slot.id]) fd.append('files', photos[slot.id], `angle_${i}_${slot.id}.jpg`)
       })
-      Object.values(checklistPhotos).forEach((blob, i) =>
-        fd.append('files', blob, `checklist_${i}.jpg`),
+      if (odoPhoto) fd.append('files', odoPhoto, 'odometro.jpg')
+      Object.entries(checklistPhotos).forEach(([itemId, blob]) =>
+        fd.append('files', blob, `checklist_${itemId}.jpg`),
       )
       const r = await uploadInspection(fd)
-      // Km en paralelo, no bloquea el resultado
-      const kmVal = parseInt(km, 10)
-      if (kmVal > 0) updateMileage(vehicleId, kmVal).catch(() => {})
+      // Km leídos por la IA → al historial del vehículo (no bloquea)
+      if (odoKm > 0) updateMileage(vehicleId, odoKm).catch(() => {})
 
       if (r.data.analysis_status === 'ok' || r.data.analysis_status === 'pending') {
         toast.success('Inspección enviada correctamente. Las fotos se han guardado.')
@@ -196,7 +220,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
       </header>
 
       {/* Progreso */}
-      <div className="flex gap-1.5 px-4 py-3">
+      <div className="mx-auto flex max-w-2xl gap-1.5 px-4 py-3">
         {STEPS.map((label, i) => (
           <div key={label} className="flex-1">
             <div className={`h-1 rounded-full transition-all ${i <= step ? 'bg-brand-500' : 'bg-dark-800'}`} />
@@ -205,7 +229,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
         ))}
       </div>
 
-      <div className="px-4 pb-24">
+      <div className="mx-auto max-w-2xl px-4 pb-24">
         {/* ── Paso 0: vehículo ── */}
         {step === 0 && (
           <div className="animate-fadeIn space-y-3">
@@ -213,7 +237,6 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
               {assigned?.vehicle ? 'Tu asignación de hoy' : 'Selecciona tu vehículo'}
             </h3>
 
-            {/* Banner incentivos */}
             <div className="flex items-start gap-3 rounded-xl border border-emerald-500/25 p-4"
                  style={{ background: 'linear-gradient(135deg, rgba(34,197,94,.10), rgba(249,115,22,.08))' }}>
               <span className="text-[22px] leading-none">🎁</span>
@@ -226,7 +249,6 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
               </div>
             </div>
 
-            {/* Furgoneta asignada */}
             {assigned?.vehicle && (
               <button
                 onClick={() => { setVehicleId(assigned.vehicle.id); setStep(1) }}
@@ -264,13 +286,13 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
               <button
                 key={v.id}
                 onClick={() => { setVehicleId(v.id); setStep(1) }}
-                className={`card-hover flex w-full items-center gap-4 p-4 text-left ${vehicleId === v.id ? 'border-brand-500' : ''}`}
+                className={`card-hover flex w-full items-center gap-4 p-3 text-left ${vehicleId === v.id ? 'border-brand-500' : ''}`}
               >
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-500/10">
-                  <Truck size={18} className="text-brand-400" />
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-500/10">
+                  <Truck size={16} className="text-brand-400" />
                 </div>
                 <div className="flex-1">
-                  <p className="font-mono font-medium text-dark-100">{v.license_plate}</p>
+                  <p className="font-mono text-sm font-medium text-dark-100">{v.license_plate}</p>
                   <p className="text-xs text-dark-400">{v.brand} {v.model}</p>
                 </div>
                 <ChevronRight size={16} className="text-dark-500" />
@@ -285,14 +307,16 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
           </div>
         )}
 
-        {/* ── Paso 1: fotos ── */}
+        {/* ── Paso 1: fotos (4 zonas + cuentakilómetros) ── */}
         {step === 1 && (
           <div className="animate-fadeIn space-y-4">
             <h3 className="mt-2 font-semibold text-dark-200">Fotografías obligatorias</h3>
-            <p className="text-xs text-dark-400">Usa la cámara para capturar cada ángulo del vehículo</p>
-            <div className="grid grid-cols-2 gap-3">
+            <p className="text-xs text-dark-400">
+              Captura cada ángulo del vehículo y el cuentakilómetros. La IA verifica cada foto.
+            </p>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {PHOTO_SLOTS.map((slot) => (
-                <div key={slot.id} className="relative">
+                <div key={slot.id}>
                   <input
                     ref={(el) => (fileRefs.current[slot.id] = el)}
                     type="file"
@@ -304,7 +328,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                   <button
                     onClick={() => fileRefs.current[slot.id]?.click()}
                     disabled={validating === slot.id}
-                    className={`flex aspect-[4/3] w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed transition-all ${
+                    className={`flex aspect-[4/3] max-h-36 w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed transition-all ${
                       photos[slot.id]
                         ? 'border-emerald-500/50 bg-emerald-500/5'
                         : photoErrors[slot.id]
@@ -314,8 +338,8 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                   >
                     {validating === slot.id ? (
                       <>
-                        <Loader2 size={24} className="animate-spin text-brand-400" />
-                        <span className="text-xs text-brand-400">Comprobando…</span>
+                        <Loader2 size={20} className="animate-spin text-brand-400" />
+                        <span className="text-[11px] text-brand-400">Comprobando…</span>
                       </>
                     ) : photos[slot.id] ? (
                       <div className="relative h-full w-full">
@@ -330,9 +354,9 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                       </div>
                     ) : (
                       <>
-                        <Camera size={24} className="text-dark-500" />
-                        <span className="text-xs text-dark-400">{slot.label}</span>
-                        {slot.required && <span className="text-[10px] text-brand-400">Obligatorio</span>}
+                        <Camera size={20} className="text-dark-500" />
+                        <span className="text-[11px] text-dark-400">{slot.label}</span>
+                        <span className="text-[9px] text-brand-400">Obligatorio</span>
                       </>
                     )}
                   </button>
@@ -343,26 +367,108 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                   )}
                 </div>
               ))}
+
+              {/* Casilla del cuentakilómetros */}
+              <div>
+                <input
+                  ref={odoRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={handleOdoPhoto}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => odoRef.current?.click()}
+                  disabled={odoBusy}
+                  className={`flex aspect-[4/3] max-h-36 w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed transition-all ${
+                    odoPhoto
+                      ? 'border-emerald-500/50 bg-emerald-500/5'
+                      : odoError
+                        ? 'border-red-500/60 bg-red-500/5'
+                        : 'border-brand-500/40 bg-brand-500/5 hover:border-brand-500/70'
+                  }`}
+                >
+                  {odoBusy ? (
+                    <>
+                      <Loader2 size={20} className="animate-spin text-brand-400" />
+                      <span className="text-[11px] text-brand-400">Leyendo km…</span>
+                    </>
+                  ) : odoPhoto ? (
+                    <div className="relative h-full w-full">
+                      <img
+                        src={URL.createObjectURL(odoPhoto)}
+                        className="h-full w-full rounded-lg object-cover"
+                        alt="Cuentakilómetros"
+                      />
+                      <div className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500">
+                        <Check size={12} className="text-white" />
+                      </div>
+                      {odoKm && (
+                        <div className="absolute bottom-1 left-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-center text-[11px] font-bold text-emerald-300">
+                          {odoKm.toLocaleString()} km
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <Gauge size={20} className="text-brand-400" />
+                      <span className="text-[11px] text-dark-300">Cuentakilómetros</span>
+                      <span className="text-[9px] text-brand-400">Obligatorio · la IA lee los km</span>
+                    </>
+                  )}
+                </button>
+                {odoError && (
+                  <div className="mt-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-300">
+                    {odoError}
+                  </div>
+                )}
+              </div>
             </div>
+
             {allRequiredPhotos ? (
-              <button onClick={() => setStep(2)} className="btn-primary flex w-full items-center justify-center gap-2 py-4">
+              <button onClick={() => setStep(2)} className="btn-primary flex w-full items-center justify-center gap-2 py-3.5">
                 Continuar <ChevronRight size={16} />
               </button>
             ) : (
               <p className="text-center text-xs text-amber-400">
-                Captura las 4 fotos obligatorias para continuar
+                Captura las 4 fotos del vehículo y la del cuentakilómetros para continuar
               </p>
             )}
           </div>
         )}
 
-        {/* ── Paso 2: checklist ── */}
+        {/* ── Paso 2: checklist (foto opcional en TODOS los ítems) ── */}
         {step === 2 && (
           <div className="animate-fadeIn space-y-4">
             <h3 className="mt-2 font-semibold text-dark-200">Checklist del vehículo</h3>
+            <p className="text-xs text-dark-400">
+              Puedes añadir una foto a cualquier punto (limpieza, ruedas…) — el admin la verá en la inspección.
+            </p>
             {CHECKLIST.map((item) => (
               <div key={item.id} className="card space-y-2 p-4">
-                <span className="text-sm font-medium text-dark-200">{item.label}</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-dark-200">{item.label}</span>
+                  <input
+                    ref={(el) => (checklistRefs.current[item.id] = el)}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={(e) => handleChecklistPhoto(item.id, e)}
+                    className="hidden"
+                  />
+                  <button
+                    onClick={() => checklistRefs.current[item.id]?.click()}
+                    className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] transition-colors ${
+                      checklistPhotos[item.id]
+                        ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-400'
+                        : 'border-dark-700 text-dark-400 hover:border-brand-500/50 hover:text-brand-400'
+                    }`}
+                  >
+                    <Camera size={11} />
+                    {checklistPhotos[item.id] ? 'Foto ✓' : 'Foto'}
+                  </button>
+                </div>
                 <div className="flex gap-2">
                   {CHECK_STATES.map((st) => (
                     <button
@@ -378,25 +484,12 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                     </button>
                   ))}
                 </div>
-                {(checklist[item.id] === 'malo' || checklist[item.id] === 'danado') && (
-                  <div className="mt-2 rounded-lg border border-red-800/30 bg-red-500/5 p-3">
-                    <p className="mb-2 flex items-center gap-1 text-xs text-red-400">
-                      <AlertTriangle size={12} /> Foto obligatoria del daño
+                {(checklist[item.id] === 'malo' || checklist[item.id] === 'danado') &&
+                  !checklistPhotos[item.id] && (
+                    <p className="flex items-center gap-1 rounded-lg border border-red-800/30 bg-red-500/5 p-2.5 text-xs text-red-400">
+                      <AlertTriangle size={12} /> Foto obligatoria del daño — usa el botón “Foto” de arriba
                     </p>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      onChange={(e) => handleChecklistPhoto(item.id, e)}
-                      className="text-xs text-dark-400"
-                    />
-                    {checklistPhotos[item.id] && (
-                      <div className="mt-2 flex items-center gap-2 text-xs text-emerald-400">
-                        <CheckCircle2 size={12} /> Foto capturada
-                      </div>
-                    )}
-                  </div>
-                )}
+                  )}
               </div>
             ))}
             <div>
@@ -411,7 +504,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
             <button
               onClick={() => setStep(3)}
               disabled={missingDamagePhotos.length > 0}
-              className="btn-primary flex w-full items-center justify-center gap-2 py-4"
+              className="btn-primary flex w-full items-center justify-center gap-2 py-3.5"
             >
               {missingDamagePhotos.length > 0
                 ? `Faltan ${missingDamagePhotos.length} foto(s) de daños`
@@ -420,7 +513,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
           </div>
         )}
 
-        {/* ── Paso 3: resumen + km + enviar ── */}
+        {/* ── Paso 3: resumen + enviar ── */}
         {step === 3 && (
           <div className="animate-fadeIn space-y-4">
             <h3 className="mt-2 font-semibold text-dark-200">Resumen de la inspección</h3>
@@ -441,7 +534,13 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
               <div className="flex justify-between">
                 <span className="text-dark-400">Fotos</span>
                 <span className="text-dark-100">
-                  {Object.keys(photos).length + Object.keys(checklistPhotos).length}
+                  {Object.keys(photos).length + (odoPhoto ? 1 : 0) + Object.keys(checklistPhotos).length}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-dark-400">Kilómetros (leídos por IA)</span>
+                <span className="font-semibold text-emerald-400">
+                  {odoKm ? `${odoKm.toLocaleString()} km` : '— no legibles'}
                 </span>
               </div>
             </div>
@@ -451,7 +550,10 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                 <h4 className="mb-2 text-xs font-medium text-dark-400">Checklist</h4>
                 {Object.entries(checklist).map(([id, state]) => (
                   <div key={id} className="flex justify-between py-1 text-sm">
-                    <span className="text-dark-300">{CHECKLIST.find((c) => c.id === id)?.label}</span>
+                    <span className="text-dark-300">
+                      {CHECKLIST.find((c) => c.id === id)?.label}
+                      {checklistPhotos[id] ? ' 📷' : ''}
+                    </span>
                     <span className={
                       state === 'ok' ? 'text-emerald-400'
                         : state === 'regular' ? 'text-amber-400' : 'text-red-400'
@@ -463,7 +565,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
               </div>
             )}
 
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-5 gap-2">
               {Object.entries(photos).map(([id, blob]) => (
                 <img
                   key={id}
@@ -472,44 +574,13 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                   alt={id}
                 />
               ))}
-            </div>
-
-            {/* Kilómetros con lectura por foto */}
-            <div className="card border border-brand-500/30 p-4">
-              <label className="label flex items-center gap-2">
-                <Gauge size={14} className="text-brand-400" /> Kilómetros actuales del vehículo
-              </label>
-              <input
-                type="number"
-                inputMode="numeric"
-                className="input text-lg"
-                placeholder="Ej: 142500"
-                value={km}
-                onChange={(e) => setKm(e.target.value)}
-              />
-              <div className="mt-2">
-                <input
-                  ref={odoRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={handleOdometerPhoto}
-                  className="hidden"
+              {odoPhoto && (
+                <img
+                  src={URL.createObjectURL(odoPhoto)}
+                  className="aspect-square rounded-lg border border-brand-500/40 object-cover"
+                  alt="Cuentakilómetros"
                 />
-                <button
-                  type="button"
-                  onClick={() => odoRef.current?.click()}
-                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-brand-500/45 bg-brand-500/10 py-2.5 text-sm font-semibold text-brand-400"
-                >
-                  📷 Foto del cuentakilómetros (lectura automática)
-                </button>
-                {odoStatus && (
-                  <p className="mt-1.5 text-center text-xs text-dark-400">{odoStatus}</p>
-                )}
-              </div>
-              <p className="mt-1 text-xs text-dark-500">
-                Haz una foto al salpicadero o introduce el kilometraje a mano
-              </p>
+              )}
             </div>
 
             <button
