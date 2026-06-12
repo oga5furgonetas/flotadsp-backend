@@ -2056,6 +2056,182 @@
     });
   })();
   </script>
+  <!-- FlotaDSP — Lupa universal de fotos: zoom, arrastre y navegación -->
+  <script>
+  (function(){
+    /* Cualquier foto de inspección (R2) de tamaño decente, al clicarla se abre
+       en pantalla completa con zoom (rueda/doble-click), arrastre y flechas. */
+
+    function isInspectionPhoto(img){
+      var s = img.src || '';
+      if (s.indexOf('r2.dev') < 0) return false;
+      if (s.indexOf('/drivers/') >= 0 || s.indexOf('/docs/') >= 0 || s.indexOf('/backups/') >= 0) return false;
+      if (s.indexOf('/assets/') >= 0) return false;
+      return true;
+    }
+
+    function openLightbox(gallery, index){
+      var old = document.getElementById('fdsp-lightbox');
+      if (old) old.remove();
+
+      var scale = 1, tx = 0, ty = 0, rot = 0;
+      var dragging = false, lastX = 0, lastY = 0;
+      var idx = index;
+
+      var ov = document.createElement('div');
+      ov.id = 'fdsp-lightbox';
+      ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:99999;display:flex;align-items:center;justify-content:center;overflow:hidden;touch-action:none';
+
+      var img = document.createElement('img');
+      img.style.cssText = 'max-width:92vw;max-height:88vh;user-select:none;cursor:grab;transition:transform .08s ease-out';
+      img.draggable = false;
+
+      function apply(){ img.style.transform = 'translate('+tx+'px,'+ty+'px) scale('+scale+') rotate('+rot+'deg)'; }
+      function load(){
+        img.src = gallery[idx];
+        scale = 1; tx = 0; ty = 0; rot = 0; apply();
+        counter.textContent = (idx+1) + ' / ' + gallery.length;
+      }
+
+      /* Controles */
+      function mkBtn(txt, title, right, top){
+        var b = document.createElement('button');
+        b.textContent = txt; b.title = title;
+        b.style.cssText = 'position:fixed;top:'+top+'px;right:'+right+'px;width:40px;height:40px;border-radius:50%;border:1px solid rgba(255,255,255,.25);background:rgba(30,32,40,.85);color:#e5e7eb;font-size:17px;cursor:pointer;z-index:100000;backdrop-filter:blur(6px)';
+        ov.appendChild(b);
+        return b;
+      }
+      var btnClose = mkBtn('✕','Cerrar (Esc)',14,14);
+      var btnRot   = mkBtn('⟳','Rotar',62,14);
+      var btnDl    = mkBtn('⤓','Descargar',110,14);
+      var btnZoomI = mkBtn('+','Acercar',14,66);
+      var btnZoomO = mkBtn('−','Alejar',14,114);
+
+      var counter = document.createElement('div');
+      counter.style.cssText = 'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);color:#cbd2dd;font-size:13px;font-weight:700;background:rgba(30,32,40,.85);border:1px solid rgba(255,255,255,.18);border-radius:99px;padding:6px 16px;z-index:100000';
+      ov.appendChild(counter);
+
+      var hint = document.createElement('div');
+      hint.textContent = 'Rueda o doble-click: zoom · arrastra para mover · ← → cambiar foto';
+      hint.style.cssText = 'position:fixed;top:18px;left:50%;transform:translateX(-50%);color:#7d8595;font-size:11.5px;z-index:100000';
+      ov.appendChild(hint);
+      setTimeout(function(){ hint.style.transition='opacity 1s'; hint.style.opacity='0'; }, 3500);
+
+      function navBtn(txt, side){
+        var b = document.createElement('button');
+        b.textContent = txt;
+        b.style.cssText = 'position:fixed;'+side+':12px;top:50%;transform:translateY(-50%);width:46px;height:64px;border-radius:12px;border:1px solid rgba(255,255,255,.2);background:rgba(30,32,40,.75);color:#e5e7eb;font-size:22px;cursor:pointer;z-index:100000';
+        ov.appendChild(b);
+        return b;
+      }
+      var prev = null, next = null;
+      if (gallery.length > 1) {
+        prev = navBtn('‹','left');
+        next = navBtn('›','right');
+        prev.addEventListener('click', function(e){ e.stopPropagation(); idx = (idx-1+gallery.length)%gallery.length; load(); });
+        next.addEventListener('click', function(e){ e.stopPropagation(); idx = (idx+1)%gallery.length; load(); });
+      }
+
+      btnClose.addEventListener('click', close);
+      btnRot.addEventListener('click', function(e){ e.stopPropagation(); rot = (rot+90)%360; apply(); });
+      btnDl.addEventListener('click', function(e){
+        e.stopPropagation();
+        var a = document.createElement('a');
+        a.href = gallery[idx]; a.download = 'inspeccion_foto_'+(idx+1)+'.jpg'; a.target='_blank';
+        a.click();
+      });
+      btnZoomI.addEventListener('click', function(e){ e.stopPropagation(); scale = Math.min(6, scale*1.4); apply(); });
+      btnZoomO.addEventListener('click', function(e){ e.stopPropagation(); scale = Math.max(1, scale/1.4); if(scale===1){tx=0;ty=0;} apply(); });
+
+      /* Zoom con rueda, centrado en el cursor */
+      ov.addEventListener('wheel', function(e){
+        e.preventDefault();
+        var f = e.deltaY < 0 ? 1.18 : 1/1.18;
+        var ns = Math.min(6, Math.max(1, scale*f));
+        if (ns !== scale) {
+          var r = img.getBoundingClientRect();
+          var cx = e.clientX - r.left - r.width/2;
+          var cy = e.clientY - r.top - r.height/2;
+          tx -= cx*(ns/scale-1); ty -= cy*(ns/scale-1);
+          scale = ns;
+          if (scale === 1) { tx = 0; ty = 0; }
+          apply();
+        }
+      }, {passive:false});
+
+      /* Doble click: alternar 1x ↔ 2.5x */
+      img.addEventListener('dblclick', function(e){
+        e.stopPropagation();
+        if (scale > 1) { scale = 1; tx = 0; ty = 0; }
+        else { scale = 2.5; }
+        apply();
+      });
+
+      /* Arrastre */
+      img.addEventListener('pointerdown', function(e){
+        dragging = true; lastX = e.clientX; lastY = e.clientY;
+        img.style.cursor = 'grabbing'; img.setPointerCapture(e.pointerId);
+      });
+      img.addEventListener('pointermove', function(e){
+        if (!dragging) return;
+        tx += e.clientX - lastX; ty += e.clientY - lastY;
+        lastX = e.clientX; lastY = e.clientY; apply();
+      });
+      img.addEventListener('pointerup', function(){ dragging = false; img.style.cursor = 'grab'; });
+
+      /* Pinch en móvil */
+      var pinchDist = 0;
+      ov.addEventListener('touchmove', function(e){
+        if (e.touches.length === 2) {
+          e.preventDefault();
+          var d = Math.hypot(e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
+          if (pinchDist) { scale = Math.min(6, Math.max(1, scale * d/pinchDist)); apply(); }
+          pinchDist = d;
+        }
+      }, {passive:false});
+      ov.addEventListener('touchend', function(){ pinchDist = 0; });
+
+      ov.addEventListener('click', function(e){ if (e.target === ov) close(); });
+
+      function onKey(e){
+        if (e.key === 'Escape') close();
+        else if (e.key === 'ArrowLeft' && prev) prev.click();
+        else if (e.key === 'ArrowRight' && next) next.click();
+        else if (e.key === '+') btnZoomI.click();
+        else if (e.key === '-') btnZoomO.click();
+      }
+      document.addEventListener('keydown', onKey);
+
+      function close(){
+        document.removeEventListener('keydown', onKey);
+        ov.remove();
+      }
+
+      ov.appendChild(img);
+      document.body.appendChild(ov);
+      load();
+    }
+
+    /* Delegación global: click en cualquier foto de inspección grande */
+    document.addEventListener('click', function(e){
+      var img = e.target;
+      if (!img || img.tagName !== 'IMG') return;
+      if (!isInspectionPhoto(img)) return;
+      var r = img.getBoundingClientRect();
+      if (r.width < 120) return;            /* miniaturas: respetan su click propio */
+      if (img.closest('#fdsp-lightbox')) return;
+      e.preventDefault(); e.stopPropagation();
+      /* Galería: todas las fotos de inspección visibles en la página, en orden */
+      var all = Array.prototype.slice.call(document.querySelectorAll('img'))
+        .filter(function(i2){ return isInspectionPhoto(i2) && !i2.closest('#fdsp-lightbox'); })
+        .map(function(i2){ return i2.src; });
+      var gallery = all.filter(function(v, i3){ return all.indexOf(v) === i3; });
+      var idx = Math.max(0, gallery.indexOf(img.src));
+      openLightbox(gallery, idx);
+    }, true);
+  })();
+  </script>
+
   <!-- FlotaDSP — Ayuda contextual por sección (botón ?) -->
   <script>
   (function(){
@@ -2457,6 +2633,23 @@
         function validBox(b){
           return Array.isArray(b) && b.length === 4 && b.some(function(v){ return v > 0; }) && b[2] > b[0] && b[3] > b[1];
         }
+        /* Atajos: R = revisada · S = saltar · ←/→ = cambiar foto */
+        React.useEffect(function(){
+          function onKey(e){
+            if (document.getElementById('fdsp-lightbox')) return;       /* la lupa tiene los suyos */
+            if (/INPUT|TEXTAREA|SELECT/.test((e.target&&e.target.tagName)||'')) return;
+            var it = pending[Math.min(idx, Math.max(0, pending.length-1))];
+            if (!it) return;
+            var k = e.key.toLowerCase();
+            if (k === 'r') { e.preventDefault(); markReviewed(it); }
+            else if (k === 's') { e.preventDefault(); next(); }
+            else if (e.key === 'ArrowLeft') { setPhotoIdx(function(p){ return Math.max(0, p-1); }); }
+            else if (e.key === 'ArrowRight') { setPhotoIdx(function(p){ return Math.min((it.photos||[]).length-1, p+1); }); }
+          }
+          document.addEventListener('keydown', onKey);
+          return function(){ document.removeEventListener('keydown', onKey); };
+        });
+
         function jumpToDamage(dmg, di, nPhotos){
           var pi = damagePhotoIdx(dmg, nPhotos);
           if(pi !== null) setPhotoIdx(pi);
