@@ -4,7 +4,7 @@
 //   - Navegaciones HTML (rutas): Network First con fallback a shell cacheado
 //   - API /api/*: Network Only (nunca cachear datos sensibles ni respuestas firmadas)
 
-const CACHE_NAME = 'flotadsp-v40';
+const CACHE_NAME = 'flotadsp-v41';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
