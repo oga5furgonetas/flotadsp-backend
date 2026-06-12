@@ -2599,6 +2599,7 @@
         var rs=React.useState(0),reviewed=rs[0],setReviewed=rs[1];
         var hs=React.useState(null),highlightDmg=hs[0],setHighlightDmg=hs[1];
         var fbs=React.useState({}),fb=fbs[0],setFb=fbs[1];
+        var dws=React.useState(null),draw=dws[0],setDraw=dws[1]; // {mode:'correct'|'missed', di, photoIdx, rect, part, severity, dragging}
         function sendFeedback(item,di,verdict){
           var key=item.id+':'+di;
           setFb(function(p){var n2=Object.assign({},p);n2[key]=verdict;return n2;});
@@ -2744,7 +2745,7 @@
                 borderRadius:'99px',padding:'7px 16px',fontSize:'12px',fontWeight:700,
                 maxWidth:'90%',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',
                 animation:'fdspGlow 1.6s ease-in-out infinite',boxShadow:'0 4px 20px rgba(239,68,68,.4)'
-              }},'🆕 '+(item.new_damages[highlightDmg].part||'Daño')+(item.new_damages[highlightDmg].description?' — '+item.new_damages[highlightDmg].description:''))
+              },title:(item.new_damages[highlightDmg].part||'')+': '+(item.new_damages[highlightDmg].description||'')},'🆕 '+(item.new_damages[highlightDmg].part||'Daño')+(item.new_damages[highlightDmg].description?' — '+item.new_damages[highlightDmg].description:''))
             ),
 
             /* Miniaturas (con punto rojo en zonas con daño nuevo) */
@@ -2805,7 +2806,11 @@
                 h('span',{style:{fontSize:'13px'}},'🆕'),
                 h('span',{style:{fontSize:'12px',fontWeight:800,color:'#f87171',letterSpacing:'.04em'}},
                   'DAÑO NUEVO DETECTADO'+(item.new_damages_count>1?' ('+item.new_damages_count+')':'')),
-                h('span',{style:{fontSize:'10px',color:'#8892a4',marginLeft:'auto'}},'vs. inspección anterior')
+                h('span',{style:{fontSize:'10px',color:'#8892a4',marginLeft:'auto'}},'vs. inspección anterior'),
+                h('button',{title:'La IA se ha dejado un daño (ej: tulipa rota) — márcalo tú y aprenderá',onClick:function(ev){ev.stopPropagation();setDraw({mode:'missed',photoIdx:photoIdx,rect:null,part:'',severity:'leve'});},style:{
+                  marginLeft:'8px',fontSize:'10px',fontWeight:800,padding:'3px 9px',borderRadius:'99px',cursor:'pointer',
+                  border:'1px solid rgba(139,92,246,.5)',background:'rgba(139,92,246,.15)',color:'#a78bfa'
+                }},'➕ daño no visto')
               ),
               item.new_damages.slice(0,5).map(function(nd,di){
                 return h('button',{key:di,onClick:function(){jumpToDamage(nd,di,item.photos.length);},style:{
@@ -2818,7 +2823,7 @@
                     borderRadius:'5px',padding:'2px 7px',flexShrink:0,textTransform:'uppercase'
                   }},nd.severity||'?'),
                   h('span',{style:{fontSize:'12px',color:'#e5e7eb',fontWeight:600,flexShrink:0}},nd.part||'—'),
-                  h('span',{style:{fontSize:'12px',color:'#8892a4',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},nd.description||''),
+                  h('span',{title:(nd.part||'')+': '+(nd.description||''),style:{fontSize:'12px',color:'#8892a4',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',cursor:'help'}},nd.description||''),
                   h('span',{style:{fontSize:'10px',color:'#fb923c',marginLeft:'auto',flexShrink:0}},
                     ZONE_LABEL[nd.location_hint]?'📍 '+ZONE_LABEL[nd.location_hint]:''),
                   (function(){
@@ -2836,7 +2841,13 @@
                         border:'1px solid '+(v==='wrong'?'#ef4444':'rgba(255,255,255,.15)'),
                         background:v==='wrong'?'rgba(239,68,68,.25)':'rgba(255,255,255,.04)',
                         color:v==='wrong'?'#f87171':'#8892a4'
-                      }},'✗')
+                      }},'✗'),
+                      h('button',{title:'Dibujar dónde está REALMENTE el daño (corrige a la IA y entrena la tuya)',onClick:function(ev){ev.stopPropagation();var pi=damagePhotoIdx(nd,item.photos.length);setDraw({mode:'correct',di:di,photoIdx:pi!==null?pi:0,rect:null,aiBox:validBox(nd.box_2d)?nd.box_2d:null});},style:{
+                        width:'24px',height:'24px',borderRadius:'6px',cursor:'pointer',fontSize:'11px',lineHeight:1,padding:0,
+                        border:'1px solid '+(v==='corrected'?'#3b82f6':'rgba(255,255,255,.15)'),
+                        background:v==='corrected'?'rgba(59,130,246,.25)':'rgba(255,255,255,.04)',
+                        color:v==='corrected'?'#60a5fa':'#8892a4'
+                      }},'✏️')
                     );
                   })()
                 );
@@ -2852,6 +2863,11 @@
                 ),
                 h('p',{style:{margin:'4px 0 0',fontSize:'13px',color:'#8892a4'}},
                   '👤 '+item.driver_name+' · 🕐 '+fmtDate(item.created_at)+(item.vehicle_label?' · '+item.vehicle_label:''))
+              ,
+              h('button',{title:'La IA se ha dejado un daño real (ej: tulipa rota) — dibújalo tú y aprenderá de ello',onClick:function(){setDraw({mode:'missed',photoIdx:photoIdx,rect:null,part:'',severity:'leve'});},style:{
+                fontSize:'11px',fontWeight:800,padding:'6px 12px',borderRadius:'99px',cursor:'pointer',flexShrink:0,
+                border:'1px solid rgba(139,92,246,.5)',background:'rgba(139,92,246,.15)',color:'#a78bfa'
+              }},'➕ daño no visto')
               )
             ),
 
@@ -2876,6 +2892,97 @@
                 padding:'14px 18px',borderRadius:'12px',fontSize:'14px',fontWeight:700,cursor:'pointer',
                 background:'rgba(249,115,22,.12)',border:'1px solid rgba(249,115,22,.35)',color:'#fb923c'
               }},'Abrir')
+            ),
+            h('p',{style:{textAlign:'center',fontSize:'10.5px',color:'#4d5568',padding:'0 0 12px',margin:0}},
+              '⌨️ R = revisada · S = saltar · flechas = fotos · click en foto = lupa · botón ✏️ corrige la caja · ➕ marca lo que la IA no vio')
+          ),
+
+          /* EDITOR DE DIBUJO: corregir caja o marcar daño no visto */
+          draw && item && h('div',{style:{position:'fixed',inset:0,background:'rgba(0,0,0,.88)',zIndex:99990,
+            display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'14px'}},
+            h('p',{style:{color:'#e5e7eb',fontSize:'13px',fontWeight:700,margin:'0 0 10px',textAlign:'center'}},
+              draw.mode==='correct'
+                ? '✏️ Dibuja un rectángulo sobre el daño REAL (la caja roja punteada es lo que dijo la IA)'
+                : '➕ Dibuja un rectángulo sobre el daño que la IA no vio'),
+            h('div',{
+              style:{position:'relative',display:'inline-block',cursor:'crosshair',touchAction:'none',userSelect:'none'},
+              onPointerDown:function(e){
+                var r=e.currentTarget.getBoundingClientRect();
+                var x=(e.clientX-r.left)/r.width, y=(e.clientY-r.top)/r.height;
+                setDraw(Object.assign({},draw,{dragging:true,start:[y,x],rect:[y,x,y,x]}));
+                e.currentTarget.setPointerCapture(e.pointerId);
+              },
+              onPointerMove:function(e){
+                if(!draw.dragging) return;
+                var r=e.currentTarget.getBoundingClientRect();
+                var x=Math.min(1,Math.max(0,(e.clientX-r.left)/r.width));
+                var y=Math.min(1,Math.max(0,(e.clientY-r.top)/r.height));
+                var s=draw.start;
+                setDraw(Object.assign({},draw,{rect:[Math.min(s[0],y),Math.min(s[1],x),Math.max(s[0],y),Math.max(s[1],x)]}));
+              },
+              onPointerUp:function(){ setDraw(Object.assign({},draw,{dragging:false})); }
+            },
+              h('img',{src:item.photos[Math.min(draw.photoIdx||0,item.photos.length-1)],draggable:false,
+                style:{maxWidth:'90vw',maxHeight:'58vh',display:'block',pointerEvents:'none'}}),
+              draw.mode==='correct'&&draw.aiBox&&h('div',{style:{position:'absolute',pointerEvents:'none',
+                top:(draw.aiBox[0]/10)+'%',left:(draw.aiBox[1]/10)+'%',
+                width:((draw.aiBox[3]-draw.aiBox[1])/10)+'%',height:((draw.aiBox[2]-draw.aiBox[0])/10)+'%',
+                border:'2px dashed rgba(239,68,68,.85)',borderRadius:'6px'}}),
+              draw.rect&&h('div',{style:{position:'absolute',pointerEvents:'none',
+                top:(draw.rect[0]*100)+'%',left:(draw.rect[1]*100)+'%',
+                width:((draw.rect[3]-draw.rect[1])*100)+'%',height:((draw.rect[2]-draw.rect[0])*100)+'%',
+                border:'2.5px solid #22c55e',borderRadius:'6px',background:'rgba(34,197,94,.12)',
+                boxShadow:'0 0 14px rgba(34,197,94,.5)'}})
+            ),
+            item.photos.length>1&&h('div',{style:{display:'flex',gap:'6px',marginTop:'10px'}},
+              item.photos.map(function(p,i){
+                return h('img',{key:i,src:p,onClick:function(){setDraw(Object.assign({},draw,{photoIdx:i,rect:null}));},
+                  style:{width:'52px',height:'38px',objectFit:'cover',borderRadius:'6px',cursor:'pointer',
+                    border:(draw.photoIdx||0)===i?'2px solid #22c55e':'2px solid transparent',opacity:(draw.photoIdx||0)===i?1:.5}});
+              })
+            ),
+            draw.mode==='missed'&&h('div',{style:{display:'flex',gap:'8px',marginTop:'10px',flexWrap:'wrap',justifyContent:'center'}},
+              h('input',{placeholder:'¿Qué pieza? (ej: tulipa trasera izquierda)',value:draw.part||'',
+                onChange:function(e){setDraw(Object.assign({},draw,{part:e.target.value}));},
+                style:{background:'#1c1f28',border:'1px solid rgba(255,255,255,.18)',borderRadius:'9px',
+                  color:'#f4f5f8',padding:'8px 12px',fontSize:'13px',width:'280px'}}),
+              h('select',{value:draw.severity||'leve',onChange:function(e){setDraw(Object.assign({},draw,{severity:e.target.value}));},
+                style:{background:'#1c1f28',border:'1px solid rgba(255,255,255,.18)',borderRadius:'9px',
+                  color:'#f4f5f8',padding:'8px 10px',fontSize:'13px'}},
+                ['leve','moderado','grave','critico'].map(function(sv){return h('option',{key:sv,value:sv},sv);}))
+            ),
+            h('div',{style:{display:'flex',gap:'10px',marginTop:'14px'}},
+              h('button',{
+                disabled:!draw.rect||(draw.mode==='missed'&&!(draw.part||'').trim()),
+                onClick:function(){
+                  var b=draw.rect;
+                  var box=[Math.round(b[0]*1000),Math.round(b[1]*1000),Math.round(b[2]*1000),Math.round(b[3]*1000)];
+                  var url, body;
+                  if(draw.mode==='correct'){
+                    url=API+'/inspections/'+item.id+'/damage-feedback';
+                    body={damage_index:draw.di,verdict:'corrected',scope:'new',corrected_box:box};
+                  }else{
+                    url=API+'/inspections/'+item.id+'/missed-damage';
+                    body={part:draw.part,severity:draw.severity||'leve',box_2d:box,photo_index:(draw.photoIdx||0)+1};
+                  }
+                  fetch(url,{method:'POST',headers:{'Authorization':'Bearer '+tok(),'Content-Type':'application/json'},
+                    body:JSON.stringify(body)})
+                    .then(function(r){return r.json();})
+                    .then(function(j){
+                      if(j.success){
+                        if(draw.mode==='correct'){var key=item.id+':'+draw.di;setFb(function(p){var n2=Object.assign({},p);n2[key]='corrected';return n2;});}
+                        if(toast)toast.success('🧠 Guardado para entrenar tu IA — dataset: '+(j.dataset_size||'?')+' ejemplos');
+                        setDraw(null);
+                      }else{ if(toast)toast.error(j.detail||'No se pudo guardar'); }
+                    }).catch(function(){ if(toast)toast.error('Error de conexión'); });
+                },
+                style:{padding:'11px 26px',borderRadius:'11px',border:'none',cursor:'pointer',fontSize:'14px',fontWeight:800,
+                  background:'linear-gradient(135deg,#22c55e,#16a34a)',color:'#fff',
+                  opacity:(!draw.rect||(draw.mode==='missed'&&!(draw.part||'').trim()))?.45:1}},
+                '💾 Guardar'),
+              h('button',{onClick:function(){setDraw(null);},style:{padding:'11px 20px',borderRadius:'11px',
+                border:'1px solid rgba(255,255,255,.2)',background:'transparent',color:'#c8ccd6',fontSize:'13px',cursor:'pointer'}},
+                'Cancelar')
             )
           )
         );

@@ -2858,8 +2858,8 @@ async def damage_feedback(inspection_id: str, data: dict, user: dict = Depends(g
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Solo administradores")
     verdict = data.get("verdict")
-    if verdict not in ("correct", "wrong"):
-        raise HTTPException(status_code=400, detail="verdict debe ser 'correct' o 'wrong'")
+    if verdict not in ("correct", "wrong", "corrected"):
+        raise HTTPException(status_code=400, detail="verdict debe ser 'correct', 'wrong' o 'corrected'")
     damage_index = data.get("damage_index")
     scope = data.get("scope", "new")  # 'new' = new_damages, 'all' = damages
 
@@ -2886,7 +2886,8 @@ async def damage_feedback(inspection_id: str, data: dict, user: dict = Depends(g
         "damage": dmg,                      # copia completa: part, severity, box_2d, photo_index…
         "photo_url": photo_url,
         "all_photo_urls": photos,
-        "verdict": verdict,                 # correct = la IA acertó · wrong = falso positivo
+        "verdict": verdict,                 # correct = acertó · wrong = falso positivo · corrected = caja corregida a mano
+        "corrected_box": data.get("corrected_box"),   # [ymin,xmin,ymax,xmax] 0-1000 dibujada por el humano
         "reviewed_by": user.get("name", "?"),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model_version": "gemini-2.5-flash",
@@ -2896,6 +2897,51 @@ async def damage_feedback(inspection_id: str, data: dict, user: dict = Depends(g
         {"inspection_id": inspection_id, "scope": scope, "damage_index": damage_index},
         {"$set": sample}, upsert=True
     )
+    total = await db.ai_feedback.count_documents({})
+    return {"success": True, "dataset_size": total}
+
+
+@api_router.post("/inspections/{inspection_id}/missed-damage")
+async def missed_damage(inspection_id: str, data: dict, user: dict = Depends(get_current_user)):
+    """Daño REAL que la IA no detectó, marcado y dibujado por el humano.
+    El ejemplo más valioso del dataset: enseña a la IA lo que se le escapa
+    (tulipas rotas, daños bajos, etc.)."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administradores")
+    box = data.get("box_2d")
+    part = (data.get("part") or "").strip()[:80]
+    if not part:
+        raise HTTPException(status_code=400, detail="Indica la pieza (ej: tulipa trasera)")
+    if not (isinstance(box, list) and len(box) == 4):
+        raise HTTPException(status_code=400, detail="Dibuja la caja del daño en la foto")
+    photo_index = int(data.get("photo_index") or 1)
+
+    insp = await db.inspections.find_one({"id": inspection_id}, {"_id": 0})
+    if not insp:
+        raise HTTPException(status_code=404, detail="Inspección no encontrada")
+    photos = insp.get("photos") or []
+    photo_url = photos[photo_index - 1] if 1 <= photo_index <= len(photos) else (photos[0] if photos else None)
+
+    sample = {
+        "id": str(uuid.uuid4()),
+        "inspection_id": inspection_id,
+        "vehicle_id": insp.get("vehicle_id"),
+        "scope": "missed",
+        "damage": {
+            "part": part,
+            "severity": data.get("severity") or "leve",
+            "description": (data.get("description") or "").strip()[:300],
+            "box_2d": [int(b) for b in box],
+            "photo_index": photo_index,
+        },
+        "photo_url": photo_url,
+        "all_photo_urls": photos,
+        "verdict": "missed",               # la IA NO lo vio — falso negativo
+        "reviewed_by": user.get("name", "?"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "model_version": "gemini-2.5-flash",
+    }
+    await db.ai_feedback.insert_one(sample)
     total = await db.ai_feedback.count_documents({})
     return {"success": True, "dataset_size": total}
 
