@@ -2116,6 +2116,20 @@ async def root():
 # VEHICLES — solo admin
 # =========================
 
+@api_router.get("/vehicles/last-inspections")
+async def vehicles_last_inspections(_=Depends(require_admin)):
+    """Mapa vehicle_id → fecha de su última inspección (para el semáforo de la lista)."""
+    pipeline = [
+        {"$match": {"deleted": {"$ne": True}}},
+        {"$group": {"_id": "$vehicle_id", "last": {"$max": "$created_at"}}},
+    ]
+    out = {}
+    async for row in db.inspections.aggregate(pipeline):
+        if row.get("_id"):
+            out[row["_id"]] = row.get("last")
+    return out
+
+
 @api_router.get("/vehicles/portal")
 async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
     """Portal conductor: devuelve los vehículos que puede inspeccionar el conductor.
@@ -3528,6 +3542,127 @@ async def start_backup_scheduler():
                 logger.error(f"Backup scheduler: {e}")
                 await asyncio.sleep(600)
     asyncio.create_task(_backup_loop())
+
+
+async def send_weekly_summary():
+    """Informe de gerencia de la semana (lunes 08:00): cumplimiento por centro,
+    € de daños nuevos, top 3 del scoring y furgonetas con más daños nuevos."""
+    try:
+        config = await db.telegram_config.find_one({}, {"_id": 0})
+        if not config or not config.get("enabled") or not config.get("bot_token"):
+            return {"success": False, "error": "Telegram no configurado"}
+        token = config["bot_token"]
+        chat_ids = [c for c in config.get("chat_ids", []) if c.strip()]
+        if not chat_ids:
+            return {"success": False, "error": "sin chats"}
+
+        now = datetime.now(timezone.utc)
+        week_ago = (now - timedelta(days=7)).isoformat()
+        week_start_d = (now - timedelta(days=7)).strftime("%d/%m")
+        week_end_d = now.strftime("%d/%m")
+
+        # Inspecciones de la semana
+        insps = await db.inspections.find(
+            {"deleted": {"$ne": True}, "created_at": {"$gte": week_ago}},
+            {"_id": 0, "vehicle_id": 1, "analysis": 1, "analysis_status": 1, "reference_photos": 1}
+        ).to_list(3000)
+
+        # Cumplimiento: slots asignados vs inspecciones, por los cuadrantes de la semana
+        assignments = await db.daily_assignments.find(
+            {"date": {"$gte": (now - timedelta(days=7)).strftime("%Y-%m-%d")}},
+            {"_id": 0, "center": 1, "slots": 1, "date": 1}
+        ).to_list(100)
+        total_slots = sum(len([sl for sl in a.get("slots", []) if sl.get("driver_id")]) for a in assignments)
+
+        # € de daños nuevos de la semana + furgonetas con más daños nuevos
+        total_eur = 0.0
+        dam_by_vehicle = {}
+        for i in insps:
+            a = i.get("analysis") or {}
+            if i.get("analysis_status") != "ok":
+                continue
+            if i.get("reference_photos"):
+                nds = [nd for nd in (a.get("new_damages") or []) if isinstance(nd, dict)]
+                total_eur += sum((nd.get("estimated_cost") or 0) for nd in nds)
+                if nds:
+                    dam_by_vehicle[i.get("vehicle_id")] = dam_by_vehicle.get(i.get("vehicle_id"), 0) + len(nds)
+
+        # Matrículas de las furgonetas problemáticas
+        worst = sorted(dam_by_vehicle.items(), key=lambda x: -x[1])[:3]
+        plates = {}
+        if worst:
+            vids = [w[0] for w in worst]
+            async for v in db.vehicles.find({"id": {"$in": vids}}, {"_id": 0, "id": 1, "license_plate": 1}):
+                plates[v["id"]] = v.get("license_plate", "?")
+
+        # Top 3 del scoring del mes en curso
+        top3_txt = ""
+        try:
+            sc = await get_driver_scoring(month=now.month, year=now.year, _=None)
+            ranked = [x for x in sc.get("scores", []) if not x.get("insufficient")][:3]
+            medals = ["🥇", "🥈", "🥉"]
+            top3_txt = "\n".join(f"{medals[i]} {r['name']} — {r['total']} pts" for i, r in enumerate(ranked))
+        except Exception as _se:
+            logger.warning(f"Weekly: scoring falló: {_se}")
+
+        lines = [
+            f"📊 <b>RESUMEN SEMANAL</b> ({week_start_d} – {week_end_d})",
+            "",
+            f"📸 Inspecciones: <b>{len(insps)}</b>" + (f" de {total_slots} asignaciones ({round(len(insps)/total_slots*100)}%)" if total_slots else ""),
+            f"💶 Daños nuevos detectados: <b>{round(total_eur):,} €</b>".replace(",", "."),
+        ]
+        if worst:
+            lines.append("")
+            lines.append("🚨 <b>Furgonetas con más daños nuevos:</b>")
+            for vid, cnt in worst:
+                lines.append(f"  • {plates.get(vid, '?')} — {cnt} daño(s)")
+        if top3_txt:
+            lines.append("")
+            lines.append("🏆 <b>Top scoring del mes:</b>")
+            lines.append(top3_txt)
+        lines.append("")
+        lines.append("¡Buena semana! 💪")
+
+        text = "\n".join(lines)
+        async with _aiohttp.ClientSession() as session:
+            for cid in chat_ids:
+                await session.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={"chat_id": cid, "text": text, "parse_mode": "HTML"},
+                    timeout=_aiohttp.ClientTimeout(total=8))
+        logger.info("Resumen semanal enviado")
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Resumen semanal: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@api_router.post("/telegram/send-weekly-summary")
+async def trigger_weekly_summary(_=Depends(require_admin)):
+    """Dispara el resumen semanal a mano (para probar sin esperar al lunes)."""
+    return await send_weekly_summary()
+
+
+@app.on_event("startup")
+async def start_weekly_summary_scheduler():
+    """Resumen semanal cada lunes a las 08:00 hora española."""
+    async def _loop():
+        from zoneinfo import ZoneInfo
+        madrid = ZoneInfo("Europe/Madrid")
+        while True:
+            try:
+                now = datetime.now(madrid)
+                days_ahead = (0 - now.weekday()) % 7  # 0 = lunes
+                target = (now + timedelta(days=days_ahead)).replace(hour=8, minute=0, second=0, microsecond=0)
+                if target <= now:
+                    target = target + timedelta(days=7)
+                await asyncio.sleep((target - now).total_seconds())
+                await send_weekly_summary()
+                await asyncio.sleep(70)
+            except Exception as e:
+                logger.error(f"Weekly scheduler: {e}")
+                await asyncio.sleep(600)
+    asyncio.create_task(_loop())
 
 
 @app.on_event("startup")
