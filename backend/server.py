@@ -180,6 +180,9 @@ class Driver(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     license_number: Optional[str] = None
+    login: Optional[str] = None        # login del conductor
+    driver_id: Optional[str] = None    # ID de Amazon
+    photo_url: Optional[str] = None    # foto de perfil (R2)
     center: Optional[str] = None
     active: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -2270,6 +2273,23 @@ async def delete_vehicle_document(vehicle_id: str, doc_id: str, _=Depends(requir
 
 @api_router.get("/scoring/drivers")
 async def get_driver_scoring(month: int = None, year: int = None, _=Depends(require_admin)):
+    """Scoring competitivo de conductores (0-100), 5 pilares:
+
+      📋 Cumplimiento   30 — inspecciones hechas vs días con asignación en el cuadrante
+                              (si no hay cuadrantes, días naturales transcurridos)
+      ⏰ Puntualidad    15 — hora de subida: 100% antes de las 20:45 (vuelta de ruta),
+                              decae hasta 0 a las 23:00
+      📸 Evidencia      15 — fotos completas + análisis OK; cada aviso de calidad
+                              de la IA (borrosa, zona equivocada) resta
+      🔍 Honestidad     15 — si la IA ve daños, ¿los declaró en sus notas?
+      🛡️ Conservación   25 — empieza con 25; daños NUEVOS en su turno restan:
+                              leve −6 · grave −15 · crítico −25 (solo con análisis
+                              válidos en ambas inspecciones del delta)
+
+    Desempate: a igual puntuación gana quien más inspecciones haya hecho.
+    Solo puntúan conductores con al menos 3 inspecciones en el mes (los demás
+    aparecen como 'sin datos suficientes').
+    """
     import calendar as _cal
     now = datetime.now(timezone.utc)
     y = year or now.year
@@ -2279,33 +2299,50 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
     month_end = datetime(y, m, days_in_month, 23, 59, 59, tzinfo=timezone.utc)
     days_elapsed = now.day if (y == now.year and m == now.month) else days_in_month
 
-    # Pull data
     inspections_month = await db.inspections.find(
         {"deleted": {"$ne": True}, "created_at": {"$gte": month_start.isoformat(), "$lte": month_end.isoformat()}},
         {"_id": 0}
     ).to_list(length=5000)
 
-    drivers = await db.drivers.find({"status": {"$ne": "deleted"}}, {"_id": 0}).to_list(length=500)
+    drivers = await db.drivers.find({"status": {"$ne": "deleted"}, "active": {"$ne": False}}, {"_id": 0}).to_list(500)
 
-    # Vehicle inspection history (all time) sorted by date for delta calc
+    # Días asignados por conductor según los cuadrantes del mes
+    assignments = await db.daily_assignments.find(
+        {"date": {"$gte": month_start.strftime("%Y-%m-%d"), "$lte": month_end.strftime("%Y-%m-%d")}},
+        {"_id": 0, "date": 1, "slots.driver_id": 1}
+    ).to_list(200)
+    assigned_days = {}
+    for a in assignments:
+        for slot in a.get("slots", []):
+            did = slot.get("driver_id")
+            if did:
+                assigned_days.setdefault(did, set()).add(a.get("date"))
+
+    # Historial por vehículo SOLO con análisis válidos (para el delta)
     all_inspections = await db.inspections.find(
-        {"deleted": {"$ne": True}}, {"_id": 0, "id": 1, "vehicle_id": 1, "driver_id": 1, "created_at": 1, "analysis": 1, "analysis_status": 1}
+        {"deleted": {"$ne": True}, "analysis_status": "ok", "analysis": {"$ne": None}},
+        {"_id": 0, "id": 1, "vehicle_id": 1, "driver_id": 1, "created_at": 1, "analysis": 1}
     ).sort("created_at", 1).to_list(length=20000)
-
     vehicle_history = {}
     for insp in all_inspections:
         vid = insp.get("vehicle_id")
-        # Solo análisis VÁLIDOS entran en el historial del delta: una inspección
-        # fallida (SIN_ANALISIS, severidad 0) culparía injustamente al siguiente
-        # conductor de todos los daños preexistentes.
-        if vid and insp.get("analysis_status") == "ok" and insp.get("analysis"):
+        if vid:
             vehicle_history.setdefault(vid, []).append(insp)
 
-    SEV = {"sin_danos": 0, "sin_daños": 0, "": 0, "leve": 1, "grave": 2, "critico": 3, "crítico": 3}
+    SEV = {"sin_danos": 0, "sin_daños": 0, "": 0, "leve": 1, "moderado": 1, "grave": 2, "critico": 3, "crítico": 3}
 
     def get_sev(insp):
         a = insp.get("analysis") or {}
         return SEV.get((a.get("severity") or "").lower().strip(), 0)
+
+    def hour_of(iso):
+        """Hora local española aproximada (UTC+2 verano)."""
+        try:
+            hh = int(iso[11:13]) + 2
+            mm = int(iso[14:16])
+            return hh + mm / 60.0
+        except Exception:
+            return None
 
     results = []
     for driver in drivers:
@@ -2315,91 +2352,106 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
         driver_insps = [i for i in inspections_month if i.get("driver_id") == driver_id]
         n = len(driver_insps)
 
-        # --- Cumplimiento (40 pts) ---
-        compliance = round(min(40, (n / max(days_elapsed, 1)) * 40))
+        if n < 3:
+            results.append({
+                "driver_id": driver_id, "name": name, "center": center,
+                "photo_url": driver.get("photo_url"),
+                "total": None, "inspections_count": n, "insufficient": True,
+            })
+            continue
 
-        # --- Calidad (30 pts) ---
-        q_scores = []
+        # ── 📋 Cumplimiento (30) ──
+        days_assigned = len(assigned_days.get(driver_id, set()))
+        denom = days_assigned if days_assigned >= 3 else max(days_elapsed, 1)
+        compliance = round(min(30, (n / denom) * 30))
+
+        # ── ⏰ Puntualidad (15) ──
+        punct_scores = []
         for insp in driver_insps:
-            photos = len(insp.get("photo_urls") or [])
-            ok = insp.get("analysis_status") == "ok"
-            if photos >= 6 and ok:
-                q_scores.append(30)
-            elif photos >= 6:
-                q_scores.append(20)
-            elif photos >= 4:
-                q_scores.append(20)
-            elif photos >= 2:
-                q_scores.append(10)
+            hr = hour_of(insp.get("created_at", ""))
+            if hr is None:
+                continue
+            # Operación DSP real: inspección al volver de ruta. Puntual = antes
+            # de las 20:45; decae hasta 0 a las 23:00. Las de mañana (pre-ruta,
+            # antes de las 12:00) también puntúan completo.
+            if hr <= 12.0 or hr <= 20.75:
+                punct_scores.append(15)
+            elif hr >= 23.0:
+                punct_scores.append(0)
             else:
-                q_scores.append(0)
-        quality = round(sum(q_scores) / len(q_scores)) if q_scores else 30
+                punct_scores.append(15 * (23.0 - hr) / 2.25)
+        punctuality = round(sum(punct_scores) / len(punct_scores)) if punct_scores else 8
 
-        # --- Honestidad (15 pts) ---
+        # ── 📸 Evidencia (15) ──
+        ev_scores = []
+        for insp in driver_insps:
+            photos = len(insp.get("photo_urls") or insp.get("photos") or [])
+            ok = insp.get("analysis_status") == "ok"
+            base = 15 if (photos >= 5 and ok) else 11 if photos >= 4 else 6 if photos >= 2 else 0
+            warns = len(((insp.get("analysis") or {}).get("image_quality_warnings")) or [])
+            ev_scores.append(max(0, base - 3 * warns))
+        evidence = round(sum(ev_scores) / len(ev_scores)) if ev_scores else 0
+
+        # ── 🔍 Honestidad (15) ──
         h_scores = []
         for insp in driver_insps:
             a = insp.get("analysis") or {}
             sev = (a.get("severity") or "").lower()
-            if sev in ("leve", "grave", "critico", "crítico"):
+            if insp.get("analysis_status") == "ok" and sev in ("leve", "moderado", "grave", "critico", "crítico"):
                 notes = (insp.get("notes") or "").lower()
-                kws = ["daño", "daño", "golpe", "rasguño", "rayad", "abollad", "roto", "rota", "crack", "grieta", "araña", "choc"]
+                kws = ["daño", "dano", "golpe", "rasguño", "rasguno", "rayad", "abollad",
+                       "roto", "rota", "crack", "grieta", "araña", "arana", "choc", "malo", "danado"]
                 h_scores.append(15 if any(k in notes for k in kws) else 0)
-            else:
-                h_scores.append(15)
         honesty = round(sum(h_scores) / len(h_scores)) if h_scores else 15
 
-        # --- Delta daños (15 pts base, penalizaciones) ---
+        # ── 🛡️ Conservación (25) — delta de daños con análisis válidos ──
         delta_events = []
         for insp in driver_insps:
             vid = insp.get("vehicle_id")
             if not vid or vid not in vehicle_history:
                 continue
-            # La inspección actual también debe tener análisis válido para atribuir delta
             if insp.get("analysis_status") != "ok" or not insp.get("analysis"):
                 continue
             insp_time = insp.get("created_at", "")
-            vh = vehicle_history[vid]
             prev = None
-            for h in reversed(vh):
-                if h.get("created_at", "") < insp_time and h.get("driver_id") != driver_id:
-                    prev = h
+            for hist in reversed(vehicle_history[vid]):
+                if hist.get("created_at", "") < insp_time and hist.get("driver_id") != driver_id:
+                    prev = hist
                     break
             if not prev:
                 continue
-            prev_s = get_sev(prev)
-            curr_s = get_sev(insp)
+            prev_s, curr_s = get_sev(prev), get_sev(insp)
             if curr_s > prev_s:
-                diff = curr_s - prev_s
-                penalty = {1: -5, 2: -15, 3: -25}.get(diff, -25)
+                penalty = {1: -6, 2: -15, 3: -25}.get(curr_s - prev_s, -25)
                 sev_labels = {0: "sin_daños", 1: "leve", 2: "grave", 3: "crítico"}
                 delta_events.append({
                     "vehicle_id": vid,
                     "from_sev": sev_labels.get(prev_s, "?"),
                     "to_sev": sev_labels.get(curr_s, "?"),
                     "penalty": penalty,
-                    "date": insp_time[:10] if len(insp_time) >= 10 else insp_time
+                    "date": insp_time[:10] if len(insp_time) >= 10 else insp_time,
                 })
-        delta_penalty = sum(e["penalty"] for e in delta_events)
-        delta_score = max(0, 15 + delta_penalty)
+        conservation = max(0, 25 + sum(e["penalty"] for e in delta_events))
 
-        total = min(100, compliance + quality + honesty + delta_score)
+        total = min(100, compliance + punctuality + evidence + honesty + conservation)
 
         results.append({
-            "driver_id": driver_id,
-            "name": name,
-            "center": center,
+            "driver_id": driver_id, "name": name, "center": center,
+            "photo_url": driver.get("photo_url"),
             "total": total,
-            "compliance": compliance,
-            "quality": quality,
-            "honesty": honesty,
-            "delta_score": delta_score,
+            "compliance": compliance, "punctuality": punctuality,
+            "evidence": evidence, "honesty": honesty, "conservation": conservation,
             "delta_events": delta_events,
             "inspections_count": n,
+            "days_assigned": days_assigned,
             "days_elapsed": days_elapsed,
+            "insufficient": False,
         })
 
-    results.sort(key=lambda x: x["total"], reverse=True)
-    return {"scores": results, "month": m, "year": y, "days_elapsed": days_elapsed}
+    # Orden: puntuación desc; desempate por nº de inspecciones; los 'sin datos' al final
+    results.sort(key=lambda x: (x["total"] is None, -(x["total"] or 0), -x["inspections_count"]))
+    return {"scores": results, "month": m, "year": y, "days_elapsed": days_elapsed,
+            "min_inspections": 3}
 
 
 @api_router.patch("/vehicles/{vehicle_id}")
@@ -2407,7 +2459,13 @@ async def update_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
     data.pop("_id", None)
     data.pop("id", None)
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    result = await db.vehicles.update_one({"id": vehicle_id}, {"$set": data})
+    prev = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "status": 1})
+    result = await db.vehicles.update_one({"id": vehicle_id}, {"": data})
+    if "status" in data:
+        try:
+            await _auto_incident_on_workshop(vehicle_id, (prev or {}).get("status"), data.get("status"))
+        except Exception as _ai:
+            logger.warning(f"Auto-incidencia taller: {_ai}")
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Vehículo no encontrado")
     return {"success": True}
@@ -3469,6 +3527,39 @@ class IncidentCreate(BaseModel):
     notes: str = ""
 
 
+async def _auto_incident_on_workshop(vehicle_id: str, prev_status, new_status):
+    """Al marcar un vehículo 'en taller', crea (o reabre) su incidencia automáticamente
+    para que siempre quede en el histórico."""
+    if new_status != "in_workshop" or prev_status == "in_workshop":
+        return
+    v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "license_plate": 1})
+    plate = (v or {}).get("license_plate", vehicle_id)
+    titulo = f"Vehículo en taller — {plate}"
+    # ¿Ya hay una incidencia de taller para este vehículo? → reabrirla en vez de duplicar
+    existing = await db.incidents.find_one({"vehicle_id": vehicle_id, "title": titulo})
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if existing:
+        if existing.get("status") in ("resolved", "closed"):
+            await db.incidents.update_one(
+                {"id": existing["id"]},
+                {"": {"status": "open", "resolved_at": None, "reopened_at": now_iso},
+                 "": {"history": {"date": now_iso, "event": "Reabierta: vuelve a entrar en taller"}}}
+            )
+            logger.info(f"Incidencia de taller reabierta para {plate}")
+        return
+    inc = Incident(
+        vehicle_id=vehicle_id,
+        title=titulo,
+        description=f"Entrada en taller registrada automáticamente el {now_iso[:10]}.",
+        severity="media",
+        status="open",
+    )
+    doc = serialize_doc(inc.model_dump())
+    doc["auto_created"] = True
+    await db.incidents.insert_one(doc)
+    logger.info(f"Incidencia de taller creada automáticamente para {plate}")
+
+
 @api_router.get("/incidents")
 async def get_incidents(vehicle_id: Optional[str] = None, user: dict = Depends(require_any_auth)):
     query = {}
@@ -3489,6 +3580,19 @@ async def create_incident(data: IncidentCreate, user: dict = Depends(require_any
     await db.incidents.insert_one(doc)
     logger.info(f"Incidencia creada: {incident.id} — vehículo {incident.vehicle_id}")
     return serialize_doc(incident.model_dump())
+
+
+@api_router.put("/incidents/{incident_id}/reopen")
+async def reopen_incident(incident_id: str, _=Depends(require_admin)):
+    """Reabre una incidencia cerrada (sin necesidad de crear otra)."""
+    result = await db.incidents.update_one(
+        {"id": incident_id},
+        {"": {"status": "open", "resolved_at": None,
+                  "reopened_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Incidencia no encontrada")
+    return {"success": True}
 
 
 @api_router.put("/incidents/{incident_id}/resolve")
@@ -3833,7 +3937,13 @@ async def put_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
     data.pop("_id", None)
     data.pop("id", None)
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    result = await db.vehicles.update_one({"id": vehicle_id}, {"$set": data})
+    prev = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "status": 1})
+    result = await db.vehicles.update_one({"id": vehicle_id}, {"": data})
+    if "status" in data:
+        try:
+            await _auto_incident_on_workshop(vehicle_id, (prev or {}).get("status"), data.get("status"))
+        except Exception as _ai:
+            logger.warning(f"Auto-incidencia taller: {_ai}")
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Vehículo no encontrado")
     return {"success": True}
@@ -4592,7 +4702,7 @@ async def import_roster_text(
 
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="Texto vacío")
-    raw_text = raw_text[:30000]  # límite de seguridad
+    raw_text = raw_text[:15000]  # límite de seguridad (textos más largos ralentizan a Gemini)
 
     PLATE_RE = re.compile(r'\b(\d{4})\s*-?\s*([A-Z]{3})\b', re.IGNORECASE)
 
@@ -4645,7 +4755,7 @@ async def import_roster_text(
                         contents=[prompt], config=gen_config
                     )
                 ),
-                timeout=45.0
+                timeout=20.0
             )
         gdata = json.loads(_strip_markdown_json(response.text or "{}"))
         for p in gdata.get("pairs", []):
