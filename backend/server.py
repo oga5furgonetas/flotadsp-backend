@@ -2460,7 +2460,7 @@ async def update_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
     data.pop("id", None)
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     prev = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "status": 1})
-    result = await db.vehicles.update_one({"id": vehicle_id}, {"": data})
+    result = await db.vehicles.update_one({"id": vehicle_id}, {"$set": data})
     if "status" in data:
         try:
             await _auto_incident_on_workshop(vehicle_id, (prev or {}).get("status"), data.get("status"))
@@ -2833,6 +2833,69 @@ async def delete_inspection(inspection_id: str, user: dict = Depends(get_current
         raise HTTPException(status_code=404, detail="Inspección no encontrada")
     logger.info(f"Inspección {inspection_id} eliminada (soft) por {user.get('name')}")
     return {"success": True, "message": "Inspección eliminada"}
+
+
+@api_router.post("/inspections/{inspection_id}/damage-feedback")
+async def damage_feedback(inspection_id: str, data: dict, user: dict = Depends(get_current_user)):
+    """Validación humana de un daño detectado por la IA: ✓ correcto / ✗ falso.
+    Cada veredicto se guarda como ejemplo de entrenamiento (dataset propio) con
+    una copia completa del daño + la foto donde está — independiente de la
+    inspección original, listo para entrenar el modelo propio."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administradores")
+    verdict = data.get("verdict")
+    if verdict not in ("correct", "wrong"):
+        raise HTTPException(status_code=400, detail="verdict debe ser 'correct' o 'wrong'")
+    damage_index = data.get("damage_index")
+    scope = data.get("scope", "new")  # 'new' = new_damages, 'all' = damages
+
+    insp = await db.inspections.find_one({"id": inspection_id}, {"_id": 0})
+    if not insp:
+        raise HTTPException(status_code=404, detail="Inspección no encontrada")
+    analysis = insp.get("analysis") or {}
+    pool = analysis.get("new_damages" if scope == "new" else "damages") or []
+    if damage_index is None or damage_index < 0 or damage_index >= len(pool):
+        raise HTTPException(status_code=404, detail="Daño no encontrado")
+    dmg = pool[damage_index] if isinstance(pool[damage_index], dict) else {}
+
+    # Foto concreta donde la IA localizó el daño
+    photos = insp.get("photos") or []
+    pi = dmg.get("photo_index")
+    photo_url = photos[pi - 1] if (isinstance(pi, int) and 1 <= pi <= len(photos)) else (photos[0] if photos else None)
+
+    sample = {
+        "id": str(uuid.uuid4()),
+        "inspection_id": inspection_id,
+        "vehicle_id": insp.get("vehicle_id"),
+        "scope": scope,
+        "damage_index": damage_index,
+        "damage": dmg,                      # copia completa: part, severity, box_2d, photo_index…
+        "photo_url": photo_url,
+        "all_photo_urls": photos,
+        "verdict": verdict,                 # correct = la IA acertó · wrong = falso positivo
+        "reviewed_by": user.get("name", "?"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "model_version": "gemini-2.5-flash",
+    }
+    # Upsert: si re-valida el mismo daño, se actualiza el veredicto
+    await db.ai_feedback.update_one(
+        {"inspection_id": inspection_id, "scope": scope, "damage_index": damage_index},
+        {"$set": sample}, upsert=True
+    )
+    total = await db.ai_feedback.count_documents({})
+    return {"success": True, "dataset_size": total}
+
+
+@api_router.get("/ai-dataset/stats")
+async def ai_dataset_stats(_=Depends(require_admin)):
+    """Progreso del dataset de entrenamiento de la IA propia."""
+    total = await db.ai_feedback.count_documents({})
+    correct = await db.ai_feedback.count_documents({"verdict": "correct"})
+    wrong = await db.ai_feedback.count_documents({"verdict": "wrong"})
+    return {"total": total, "correct": correct, "wrong": wrong,
+            "precision_ia": round(correct / total * 100, 1) if total else None,
+            "goal": 3000,
+            "progress_pct": round(total / 3000 * 100, 1)}
 
 
 @api_router.post("/inspections/{inspection_id}/mark-reviewed")
@@ -3542,8 +3605,8 @@ async def _auto_incident_on_workshop(vehicle_id: str, prev_status, new_status):
         if existing.get("status") in ("resolved", "closed"):
             await db.incidents.update_one(
                 {"id": existing["id"]},
-                {"": {"status": "open", "resolved_at": None, "reopened_at": now_iso},
-                 "": {"history": {"date": now_iso, "event": "Reabierta: vuelve a entrar en taller"}}}
+                {"$set": {"status": "open", "resolved_at": None, "reopened_at": now_iso},
+                 "$push": {"history": {"date": now_iso, "event": "Reabierta: vuelve a entrar en taller"}}}
             )
             logger.info(f"Incidencia de taller reabierta para {plate}")
         return
@@ -3587,7 +3650,7 @@ async def reopen_incident(incident_id: str, _=Depends(require_admin)):
     """Reabre una incidencia cerrada (sin necesidad de crear otra)."""
     result = await db.incidents.update_one(
         {"id": incident_id},
-        {"": {"status": "open", "resolved_at": None,
+        {"$set": {"status": "open", "resolved_at": None,
                   "reopened_at": datetime.now(timezone.utc).isoformat()}}
     )
     if result.matched_count == 0:
@@ -3938,7 +4001,7 @@ async def put_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
     data.pop("id", None)
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     prev = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "status": 1})
-    result = await db.vehicles.update_one({"id": vehicle_id}, {"": data})
+    result = await db.vehicles.update_one({"id": vehicle_id}, {"$set": data})
     if "status" in data:
         try:
             await _auto_incident_on_workshop(vehicle_id, (prev or {}).get("status"), data.get("status"))
