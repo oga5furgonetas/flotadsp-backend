@@ -7589,7 +7589,7 @@ async def _extract_report_text(content: bytes, filename: str):
     return txt[:60000], None
 
 
-async def _analyze_report_with_gemini(text, pdf_bytes):
+async def _analyze_report_with_gemini(text, pdf_bytes, driver_map=None):
     from google import genai as genai_sdk
     from google.genai import types as genai_types
     use_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
@@ -7606,7 +7606,13 @@ async def _analyze_report_with_gemini(text, pdf_bytes):
     else:
         client = genai_sdk.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
 
-    contents = [_DSP_ANALYST_PROMPT]
+    prompt = _DSP_ANALYST_PROMPT
+    if driver_map:
+        tabla = "\n".join(f"  {tid} = {nombre}" for tid, nombre in list(driver_map.items())[:300])
+        prompt += ("\n\n=== TABLA DE CONDUCTORES (Amazon Transporter ID = Nombre real) ===\n"
+                   "Cuando en el report aparezca un ID de conductor de esta tabla, usa SIEMPRE el NOMBRE REAL "
+                   "en el campo 'name' (no el ID). Tabla:\n" + tabla)
+    contents = [prompt]
     if pdf_bytes:
         contents.append(genai_types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"))
     else:
@@ -7632,7 +7638,20 @@ async def upload_amazon_report(file: UploadFile = File(...), center: str = Form(
         raise HTTPException(status_code=413, detail="Archivo demasiado grande (máx 25 MB)")
     try:
         text, pdf_bytes = await _extract_report_text(content, file.filename or "report")
-        analysis = await _analyze_report_with_gemini(text, pdf_bytes)
+        # Mapa Driver ID (Amazon) -> nombre real, para que la IA cruce los IDs
+        drivers_db = await db.drivers.find(
+            {"driver_id": {"$exists": True, "$ne": ""}},
+            {"_id": 0, "name": 1, "driver_id": 1}
+        ).to_list(1000)
+        driver_map = {d["driver_id"].strip().upper(): d.get("name", "")
+                      for d in drivers_db if d.get("driver_id")}
+        analysis = await _analyze_report_with_gemini(text, pdf_bytes, driver_map)
+        # Post-proceso: si algún 'name' sigue siendo un ID conocido, sustituir por el nombre
+        for dr in (analysis.get("drivers_at_risk") or []):
+            nm = (dr.get("name") or "").strip().upper()
+            if nm in driver_map and driver_map[nm]:
+                dr["transporter_id"] = dr.get("name")
+                dr["name"] = driver_map[nm]
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="El análisis tardó demasiado. Inténtalo de nuevo.")
     except Exception as e:

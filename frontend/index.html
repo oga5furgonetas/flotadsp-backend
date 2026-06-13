@@ -2990,7 +2990,7 @@
     });
   })();
   </script>
-  <!-- FlotaDSP — Scorecard Amazon: sube reports y la IA los desglosa -->
+  <!-- FlotaDSP — Scorecard Amazon v2: visual y limpio, con cruce de Driver IDs -->
   <script>
   (function(){
     var API = "https://flotadsp-backend.fly.dev/api";
@@ -3000,11 +3000,11 @@
 
     waitReact(function(React){
       var h = React.createElement;
-      function stColor(s){ return s==='good'?'#22c55e':s==='warning'?'#f59e0b':s==='bad'?'#ef4444':'#8892a4'; }
-      function stBg(s){ return s==='good'?'rgba(34,197,94,.12)':s==='warning'?'rgba(245,158,11,.12)':s==='bad'?'rgba(239,68,68,.12)':'rgba(255,255,255,.05)'; }
-      function prColor(p){ return p==='alta'?'#ef4444':p==='media'?'#f59e0b':'#3b82f6'; }
-      function trend(t){ return t==='up'?'▲':t==='down'?'▼':t==='flat'?'▬':''; }
-      function fmtDate(iso){ try{var d=new Date(iso);return d.toLocaleDateString('es-ES',{day:'2-digit',month:'short'})+' '+d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});}catch(e){return '';} }
+      function sc(s){ return s==='good'?'#22c55e':s==='warning'?'#f59e0b':s==='bad'?'#ef4444':'#64748b'; }
+      function tierColor(t){ t=(t||'').toLowerCase(); return t.indexOf('fantastic')>=0?'#22c55e':t.indexOf('great')>=0?'#3b82f6':t.indexOf('fair')>=0?'#f59e0b':t.indexOf('poor')>=0||t.indexOf('risk')>=0?'#ef4444':'#8892a4'; }
+      function trend(t){ return t==='up'?'↑':t==='down'?'↓':''; }
+      function ini(n){ return (n||'?').split(' ').map(function(w){return w[0];}).join('').slice(0,2).toUpperCase(); }
+      function fmtDate(iso){ try{var d=new Date(iso);return d.toLocaleDateString('es-ES',{day:'2-digit',month:'short'});}catch(e){return '';} }
 
       window.__FlotaScorecard = function(props){
         var rs=React.useState(null),reports=rs[0],setReports=rs[1];
@@ -3014,136 +3014,134 @@
         var fileRef=React.useRef(null);
         var toast=props.toast;
 
-        function load(){
-          setLoading(true);
-          apiGet('/metrics/reports').then(function(r){ setReports(Array.isArray(r)?r:[]); setLoading(false); }).catch(function(){ setLoading(false); });
-        }
+        function load(){ setLoading(true); apiGet('/metrics/reports').then(function(r){ setReports(Array.isArray(r)?r:[]); setLoading(false); }).catch(function(){ setLoading(false); }); }
         React.useEffect(function(){ load(); },[]);
 
         function onFile(e){
-          var f=e.target.files&&e.target.files[0];
-          e.target.value='';
-          if(!f) return;
-          setUploading(true);
-          if(toast)toast.info('📊 Analizando '+f.name+'… (puede tardar ~1 min)');
-          var fd=new FormData();
-          fd.append('file',f);
-          fd.append('center',(props.center&&props.center!=='Todos')?props.center:'OGA5');
+          var f=e.target.files&&e.target.files[0]; e.target.value=''; if(!f) return;
+          setUploading(true); if(toast)toast.info('📊 Analizando '+f.name+'…');
+          var fd=new FormData(); fd.append('file',f); fd.append('center',(props.center&&props.center!=='Todos')?props.center:'OGA5');
           fetch(API+'/metrics/upload-report',{method:'POST',headers:{'Authorization':'Bearer '+tok()},body:fd})
-            .then(function(r){return r.json();})
-            .then(function(j){
+            .then(function(r){return r.json();}).then(function(j){
               setUploading(false);
-              if(j.success){ if(toast)toast.success('✅ Report analizado'); setOpen(j.report); load(); }
+              if(j.success){ if(toast)toast.success('✅ Analizado'); setOpen(j.report); load(); }
               else { if(toast)toast.error(j.detail||'No se pudo analizar'); }
-            }).catch(function(){ setUploading(false); if(toast)toast.error('Error subiendo el report'); });
+            }).catch(function(){ setUploading(false); if(toast)toast.error('Error subiendo'); });
         }
 
         var a = open && open.analysis;
 
-        return h('div',{style:{padding:'22px',maxWidth:'920px',margin:'0 auto'}},
-          h('div',{style:{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'12px',flexWrap:'wrap',marginBottom:'16px'}},
-            h('div',null,
-              h('h1',{style:{margin:0,fontSize:'21px',fontWeight:800,color:'#f4f5f8'}},'📊 Scorecard Amazon'),
-              h('p',{style:{margin:'4px 0 0',fontSize:'12.5px',color:'#8892a4',maxWidth:'560px'}},
-                'Sube cualquier informe de Amazon (Scorecard 3.0, Daily Report, POD Quality, CDF, Concessions, DNR…) en PDF, HTML o Excel. La IA lo desglosa: qué métricas fallan, qué conductores y qué hacer esta semana.')
-            ),
+        return h('div',{style:{padding:'22px',maxWidth:'880px',margin:'0 auto'}},
+          /* Cabecera minimal */
+          h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px',marginBottom:'18px'}},
+            h('h1',{style:{margin:0,fontSize:'20px',fontWeight:800,color:'#f4f5f8'}},'📊 Scorecard Amazon'),
             h('div',null,
               h('input',{ref:fileRef,type:'file',accept:'.pdf,.html,.htm,.xlsx,.xlsm,.csv,.txt',style:{display:'none'},onChange:onFile}),
               h('button',{onClick:function(){fileRef.current&&fileRef.current.click();},disabled:uploading,style:{
-                padding:'10px 18px',borderRadius:'11px',border:'none',cursor:'pointer',fontSize:'13.5px',fontWeight:800,
+                padding:'9px 16px',borderRadius:'10px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,
                 background:'linear-gradient(135deg,#fb923c,#ea6800)',color:'#fff',opacity:uploading?.6:1
-              }},uploading?'⏳ Analizando…':'⬆️ Subir informe')
+              }},uploading?'⏳…':'⬆️ Subir informe')
             )
           ),
 
-          /* Detalle del report abierto */
-          a && h('div',{style:{background:'linear-gradient(145deg,rgba(22,24,31,.97),rgba(17,19,24,.99))',
-            border:'1px solid rgba(255,255,255,.10)',borderRadius:'18px',padding:'20px',marginBottom:'18px'}},
-            h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'10px',flexWrap:'wrap'}},
-              h('div',null,
-                h('div',{style:{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}},
-                  h('span',{style:{fontSize:'16px',fontWeight:800,color:'#f4f5f8'}},a.report_type||'Informe'),
-                  a.period && h('span',{style:{fontSize:'11px',color:'#8892a4',background:'rgba(255,255,255,.06)',borderRadius:'99px',padding:'2px 9px'}},a.period),
-                  a.overall_tier && h('span',{style:{fontSize:'12px',fontWeight:800,color:'#fb923c',background:'rgba(249,115,22,.14)',borderRadius:'99px',padding:'3px 12px'}},'🏅 '+a.overall_tier)
-                ),
-                a.headline && h('p',{style:{margin:'8px 0 0',fontSize:'13.5px',color:'#e5e7eb',fontWeight:600}},a.headline)
+          /* ══ DETALLE — diseño visual y aireado ══ */
+          a && h('div',null,
+            /* Hero: tier grande + titular */
+            h('div',{style:{display:'flex',alignItems:'center',gap:'18px',padding:'20px',borderRadius:'18px',marginBottom:'14px',
+              background:'linear-gradient(135deg,'+tierColor(a.overall_tier)+'22,rgba(17,19,24,.6))',
+              border:'1px solid '+tierColor(a.overall_tier)+'44'}},
+              a.overall_tier && h('div',{style:{textAlign:'center',flexShrink:0}},
+                h('div',{style:{fontSize:'26px',fontWeight:900,color:tierColor(a.overall_tier),lineHeight:1.1}},a.overall_tier),
+                h('div',{style:{fontSize:'10px',color:'#8892a4',marginTop:'2px',textTransform:'uppercase',letterSpacing:'.05em'}},'Tier')
               ),
-              h('button',{onClick:function(){setOpen(null);},style:{background:'none',border:'none',color:'#8892a4',fontSize:'20px',cursor:'pointer'}},'×')
+              h('div',{style:{flex:1}},
+                h('div',{style:{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap',marginBottom:'4px'}},
+                  h('span',{style:{fontSize:'13px',fontWeight:700,color:'#e5e7eb'}},a.report_type||'Informe'),
+                  a.period && h('span',{style:{fontSize:'10.5px',color:'#8892a4'}},'· '+a.period)
+                ),
+                a.headline && h('p',{style:{margin:0,fontSize:'13.5px',color:'#f4f5f8',fontWeight:600,lineHeight:1.45}},a.headline)
+              ),
+              h('button',{onClick:function(){setOpen(null);},style:{background:'none',border:'none',color:'#8892a4',fontSize:'20px',cursor:'pointer',alignSelf:'flex-start'}},'×')
             ),
 
-            a.executive_summary && h('p',{style:{margin:'12px 0 0',padding:'12px 14px',fontSize:'13px',lineHeight:1.6,
-              color:'#c8ccd6',background:'rgba(255,255,255,.04)',borderRadius:'10px',borderLeft:'3px solid #fb923c'}},a.executive_summary),
+            /* Métricas: barras horizontales limpias */
+            a.key_metrics && a.key_metrics.length>0 && h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:'8px',marginBottom:'14px'}},
+              a.key_metrics.map(function(m,i){
+                return h('div',{key:i,style:{padding:'12px 14px',borderRadius:'12px',background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.07)'}},
+                  h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'6px'}},
+                    h('span',{style:{fontSize:'11.5px',color:'#9aa3b5'}},m.name),
+                    h('span',{style:{width:'7px',height:'7px',borderRadius:'50%',background:sc(m.status)}})
+                  ),
+                  h('div',{style:{display:'flex',alignItems:'baseline',gap:'8px'}},
+                    h('span',{style:{fontSize:'20px',fontWeight:800,color:sc(m.status)}},m.value),
+                    m.trend && h('span',{style:{fontSize:'12px',color:sc(m.status)}},trend(m.trend)),
+                    m.target && h('span',{style:{fontSize:'10.5px',color:'#5c6578',marginLeft:'auto'}},'obj '+m.target)
+                  )
+                );
+              })
+            ),
 
-            /* métricas clave */
-            a.key_metrics && a.key_metrics.length>0 && h('div',{style:{marginTop:'14px'}},
-              h('p',{style:{margin:'0 0 8px',fontSize:'11px',fontWeight:800,color:'#8892a4',letterSpacing:'.05em'}},'MÉTRICAS CLAVE'),
-              h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:'8px'}},
-                a.key_metrics.map(function(m,i){
-                  return h('div',{key:i,style:{padding:'10px 12px',borderRadius:'10px',background:stBg(m.status),border:'1px solid '+stColor(m.status)+'33'}},
-                    h('div',{style:{fontSize:'10.5px',color:'#8892a4',marginBottom:'3px'}},m.name),
-                    h('div',{style:{display:'flex',alignItems:'baseline',gap:'6px'}},
-                      h('span',{style:{fontSize:'17px',fontWeight:800,color:stColor(m.status)}},m.value),
-                      m.trend && h('span',{style:{fontSize:'11px',color:stColor(m.status)}},trend(m.trend))
-                    ),
-                    m.target && h('div',{style:{fontSize:'10px',color:'#6b7280'}},'objetivo: '+m.target)
+            /* Conductores: chips con avatar */
+            a.drivers_at_risk && a.drivers_at_risk.length>0 && h('div',{style:{marginBottom:'14px'}},
+              h('p',{style:{margin:'0 0 8px',fontSize:'11px',fontWeight:800,color:'#f87171',letterSpacing:'.05em'}},'⚠️ A VIGILAR'),
+              h('div',{style:{display:'flex',flexDirection:'column',gap:'7px'}},
+                a.drivers_at_risk.map(function(dr,i){
+                  return h('div',{key:i,style:{display:'flex',alignItems:'center',gap:'12px',padding:'10px 13px',borderRadius:'12px',
+                    background:'rgba(239,68,68,.06)',border:'1px solid rgba(239,68,68,.18)'}},
+                    h('div',{style:{width:'34px',height:'34px',borderRadius:'50%',flexShrink:0,background:'rgba(239,68,68,.18)',
+                      border:'1.5px solid rgba(239,68,68,.4)',display:'flex',alignItems:'center',justifyContent:'center',
+                      fontSize:'12px',fontWeight:800,color:'#f87171'}},ini(dr.name)),
+                    h('div',{style:{flex:1,minWidth:0}},
+                      h('div',{style:{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}},
+                        h('span',{style:{fontSize:'13.5px',fontWeight:700,color:'#f4f5f8'}},dr.name),
+                        dr.metric && h('span',{style:{fontSize:'10px',color:'#fff',background:'rgba(239,68,68,.45)',borderRadius:'5px',padding:'1px 7px'}},dr.metric)
+                      ),
+                      h('p',{style:{margin:'2px 0 0',fontSize:'12px',color:'#c8ccd6'}},dr.issue+(dr.detail?' · '+dr.detail:''))
+                    )
                   );
                 })
               )
             ),
 
-            /* conductores en riesgo */
-            a.drivers_at_risk && a.drivers_at_risk.length>0 && h('div',{style:{marginTop:'16px'}},
-              h('p',{style:{margin:'0 0 8px',fontSize:'11px',fontWeight:800,color:'#f87171',letterSpacing:'.05em'}},'⚠️ CONDUCTORES A VIGILAR'),
-              a.drivers_at_risk.map(function(dr,i){
-                return h('div',{key:i,style:{display:'flex',alignItems:'flex-start',gap:'10px',padding:'9px 12px',marginBottom:'6px',
-                  background:'rgba(239,68,68,.07)',border:'1px solid rgba(239,68,68,.2)',borderRadius:'10px'}},
-                  h('div',{style:{flex:1}},
-                    h('span',{style:{fontSize:'13px',fontWeight:700,color:'#f4f5f8'}},dr.name),
-                    h('span',{style:{fontSize:'11px',color:'#8892a4',marginLeft:'8px'}},dr.metric),
-                    h('p',{style:{margin:'3px 0 0',fontSize:'12px',color:'#c8ccd6'}},dr.issue+(dr.detail?' — '+dr.detail:''))
-                  )
-                );
-              })
+            /* Plan de acción: compacto */
+            a.recommendations && a.recommendations.length>0 && h('div',{style:{marginBottom:'10px'}},
+              h('p',{style:{margin:'0 0 8px',fontSize:'11px',fontWeight:800,color:'#4ade80',letterSpacing:'.05em'}},'✅ QUÉ HACER'),
+              h('div',{style:{display:'flex',flexDirection:'column',gap:'6px'}},
+                a.recommendations.map(function(rc,i){
+                  var pc=rc.priority==='alta'?'#ef4444':rc.priority==='media'?'#f59e0b':'#3b82f6';
+                  return h('div',{key:i,style:{display:'flex',alignItems:'center',gap:'10px',padding:'9px 12px',borderRadius:'10px',
+                    background:'rgba(255,255,255,.03)',borderLeft:'3px solid '+pc}},
+                    h('span',{style:{fontSize:'13px',color:'#e5e7eb',flex:1}},rc.action),
+                    rc.for_whom && h('span',{style:{fontSize:'10px',color:'#6b7280',flexShrink:0}},rc.for_whom)
+                  );
+                })
+              )
             ),
 
-            /* recomendaciones */
-            a.recommendations && a.recommendations.length>0 && h('div',{style:{marginTop:'16px'}},
-              h('p',{style:{margin:'0 0 8px',fontSize:'11px',fontWeight:800,color:'#4ade80',letterSpacing:'.05em'}},'✅ PLAN DE ACCIÓN'),
-              a.recommendations.map(function(rc,i){
-                return h('div',{key:i,style:{display:'flex',alignItems:'flex-start',gap:'10px',padding:'9px 12px',marginBottom:'6px',
-                  background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.07)',borderRadius:'10px'}},
-                  h('span',{style:{fontSize:'9.5px',fontWeight:800,color:'#fff',background:prColor(rc.priority),borderRadius:'5px',padding:'2px 7px',flexShrink:0,textTransform:'uppercase',marginTop:'1px'}},rc.priority),
-                  h('div',{style:{flex:1}},
-                    h('p',{style:{margin:0,fontSize:'13px',color:'#e5e7eb'}},rc.action),
-                    rc.for_whom && h('span',{style:{fontSize:'10.5px',color:'#6b7280'}},'→ '+rc.for_whom)
-                  )
-                );
-              })
-            ),
-
-            a.top_issues && a.top_issues.length>0 && h('div',{style:{marginTop:'14px',fontSize:'12px',color:'#9aa3b5'}},
-              h('span',{style:{fontWeight:700,color:'#8892a4'}},'Problemas detectados: '),
-              a.top_issues.join(' · '))
+            a.executive_summary && h('details',{style:{marginTop:'4px'}},
+              h('summary',{style:{fontSize:'11.5px',color:'#8892a4',cursor:'pointer',padding:'6px 0'}},'Ver resumen ejecutivo'),
+              h('p',{style:{margin:'4px 0 0',fontSize:'12.5px',lineHeight:1.6,color:'#c8ccd6'}},a.executive_summary)
+            )
           ),
 
-          /* lista de reports subidos */
-          h('p',{style:{margin:'0 0 8px',fontSize:'11px',fontWeight:800,color:'#8892a4',letterSpacing:'.05em'}},'INFORMES ANALIZADOS'),
-          loading && h('div',{style:{textAlign:'center',padding:'30px 0',color:'#8892a4'}},'⏳ Cargando…'),
-          !loading && (reports||[]).length===0 && h('div',{style:{textAlign:'center',padding:'40px 0',color:'#8892a4'}},
-            'Aún no has subido ningún informe. Pulsa "⬆️ Subir informe" y elige un PDF/HTML/Excel de Amazon.'),
-          !loading && h('div',{style:{display:'flex',flexDirection:'column',gap:'7px'}},
+          /* Lista de informes */
+          h('p',{style:{margin:'18px 0 8px',fontSize:'11px',fontWeight:800,color:'#8892a4',letterSpacing:'.05em'}},'INFORMES ANALIZADOS'),
+          loading && h('div',{style:{textAlign:'center',padding:'24px 0',color:'#8892a4'}},'⏳…'),
+          !loading && (reports||[]).length===0 && h('div',{style:{textAlign:'center',padding:'34px 0',color:'#8892a4',fontSize:'13px'}},
+            'Sube un informe de Amazon (PDF, HTML o Excel) y la IA te lo desglosa.'),
+          !loading && h('div',{style:{display:'flex',flexDirection:'column',gap:'6px'}},
             (reports||[]).map(function(r){
               var an=r.analysis||{};
               return h('div',{key:r.id,onClick:function(){setOpen(r);},style:{
-                display:'flex',alignItems:'center',gap:'12px',padding:'11px 14px',borderRadius:'11px',cursor:'pointer',
-                background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.07)'
-              }},
-                h('span',{style:{fontSize:'18px'}},'📄'),
+                display:'flex',alignItems:'center',gap:'11px',padding:'10px 13px',borderRadius:'10px',cursor:'pointer',
+                background:'rgba(255,255,255,.025)',border:'1px solid rgba(255,255,255,.06)'}},
+                an.overall_tier
+                  ? h('span',{style:{fontSize:'11px',fontWeight:800,color:tierColor(an.overall_tier),background:tierColor(an.overall_tier)+'18',borderRadius:'6px',padding:'3px 8px',flexShrink:0,minWidth:'58px',textAlign:'center'}},an.overall_tier)
+                  : h('span',{style:{fontSize:'16px',flexShrink:0}},'📄'),
                 h('div',{style:{flex:1,minWidth:0}},
-                  h('div',{style:{fontSize:'13px',fontWeight:700,color:'#e5e7eb',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},an.report_type||r.filename),
-                  h('div',{style:{fontSize:'10.5px',color:'#6b7280'}},(an.period?an.period+' · ':'')+r.center+' · '+fmtDate(r.created_at))
+                  h('div',{style:{fontSize:'13px',fontWeight:600,color:'#e5e7eb',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},an.report_type||r.filename),
+                  h('div',{style:{fontSize:'10px',color:'#6b7280'}},(an.period?an.period+' · ':'')+r.center+' · '+fmtDate(r.created_at))
                 ),
-                an.overall_tier && h('span',{style:{fontSize:'11px',fontWeight:800,color:'#fb923c',flexShrink:0}},an.overall_tier),
                 (an.drivers_at_risk&&an.drivers_at_risk.length)?h('span',{style:{fontSize:'11px',fontWeight:700,color:'#f87171',flexShrink:0}},'⚠️ '+an.drivers_at_risk.length):null
               );
             })
