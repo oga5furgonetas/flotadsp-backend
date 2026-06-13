@@ -7518,5 +7518,155 @@ async def delete_rental(rental_id: str, _=Depends(require_admin)):
 
 
 
+# =========================
+# MÉTRICAS AMAZON — análisis de Scorecard y reports con IA
+# =========================
+
+_DSP_ANALYST_PROMPT = """Eres un analista senior de operaciones de un Amazon DSP (Delivery Service Partner) en España, experto en el DSP Scorecard 3.0 y todos los reports semanales que Amazon entrega.
+
+Conoces a fondo estas métricas y sus objetivos:
+- SAFETY: Safe Driving Score (Mentor/FICO), Seatbelt-Off Rate, Speeding Event Rate, Distractions Rate, Following Distance Rate, Sign/Signal Violations. (Objetivo: bajos / verde)
+- COMPLIANCE: Comprehensive Audit Score (CAS), Working Hours Compliance (WHC), Vehicle Inspection (DVIC pre/post), Comprehensive DVIC.
+- QUALITY: Delivery Completion Rate DCR (objetivo ≥98-99%), Delivered Not Received DNR DPMO (objetivo bajo, <1500), Photo-On-Delivery / RTS quality, Contact Compliance (objetivo bajo), Customer Delivery Feedback CDF / Concessions.
+- Tier general: Fantastic+ > Fantastic > Great > Fair > Poor > At Risk.
+
+Te paso el contenido de un report real de un DSP. Analízalo a fondo desde la óptica de un JEFE DE TRÁFICO / DISPATCHER que necesita saber QUÉ está mal, QUIÉN falla y QUÉ hacer esta semana.
+
+Responde SOLO con este JSON (sin markdown):
+{
+  "report_type": "tipo detectado (Scorecard 3.0, Daily Report, POD Quality, CDF/Concessions, DNR Investigations, Contact Compliance, etc.)",
+  "period": "semana o fecha del report si aparece",
+  "overall_tier": "tier general si es un scorecard, o vacío",
+  "headline": "una frase de titular: lo más importante de este report",
+  "key_metrics": [
+    {"name": "nombre métrica", "value": "valor actual", "target": "objetivo", "status": "good|warning|bad", "trend": "up|down|flat|"}
+  ],
+  "drivers_at_risk": [
+    {"name": "nombre del conductor tal cual aparece", "issue": "qué hace mal", "metric": "métrica afectada", "detail": "dato concreto (ej: 3 DNR, 5 speeding events)"}
+  ],
+  "top_issues": ["problema 1 priorizado", "problema 2", "..."],
+  "recommendations": [
+    {"priority": "alta|media|baja", "action": "acción concreta y accionable", "for_whom": "dispatcher|conductor concreto|coordinador|flota"}
+  ],
+  "executive_summary": "3-4 frases para el jefe de tráfico: estado general, qué está en riesgo y qué priorizar."
+}
+
+Sé concreto y útil. Si el report no menciona conductores individuales, deja drivers_at_risk vacío. Usa los nombres EXACTOS que aparezcan. Si no detectas un dato, no lo inventes."""
+
+
+async def _extract_report_text(content: bytes, filename: str):
+    """Devuelve (texto_o_None, pdf_bytes_o_None). Para PDF pasamos los bytes a Gemini;
+    para HTML/XLSX/CSV extraemos texto plano."""
+    fn = (filename or "").lower()
+    if fn.endswith(".pdf"):
+        return None, content
+    if fn.endswith(".xlsx") or fn.endswith(".xlsm"):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+            out = []
+            for ws in wb.worksheets:
+                out.append(f"### Hoja: {ws.title}")
+                for row in ws.iter_rows(values_only=True):
+                    cells = [str(c) for c in row if c is not None]
+                    if cells:
+                        out.append(" | ".join(cells))
+            return "\n".join(out)[:60000], None
+        except Exception as e:
+            return f"(No se pudo leer el Excel: {e})", None
+    # HTML / CSV / TXT → quitar tags
+    try:
+        txt = content.decode("utf-8", errors="ignore")
+    except Exception:
+        txt = str(content[:50000])
+    if fn.endswith(".html") or "<html" in txt[:500].lower() or "<table" in txt.lower():
+        txt = re.sub(r"<script[\s\S]*?</script>", " ", txt, flags=re.I)
+        txt = re.sub(r"<style[\s\S]*?</style>", " ", txt, flags=re.I)
+        txt = re.sub(r"<[^>]+>", " ", txt)
+        txt = re.sub(r"&nbsp;", " ", txt)
+        txt = re.sub(r"[ \t]+", " ", txt)
+        txt = re.sub(r"\n\s*\n+", "\n", txt)
+    return txt[:60000], None
+
+
+async def _analyze_report_with_gemini(text, pdf_bytes):
+    from google import genai as genai_sdk
+    from google.genai import types as genai_types
+    use_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
+    if use_vertex:
+        from google.oauth2 import service_account
+        import json as _json, base64 as _b64
+        sa = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+        if sa and not sa.startswith("{"):
+            sa = _b64.b64decode(sa).decode("utf-8")
+        creds = service_account.Credentials.from_service_account_info(
+            _json.loads(sa), scopes=["https://www.googleapis.com/auth/cloud-platform"]) if sa else None
+        client = genai_sdk.Client(vertexai=True, project=os.environ.get("GCP_PROJECT", ""),
+                                  location=os.environ.get("GCP_LOCATION", "us-central1"), credentials=creds)
+    else:
+        client = genai_sdk.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+
+    contents = [_DSP_ANALYST_PROMPT]
+    if pdf_bytes:
+        contents.append(genai_types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"))
+    else:
+        contents.append("CONTENIDO DEL REPORT:\n\n" + (text or ""))
+
+    cfg = genai_types.GenerateContentConfig(temperature=0.1, response_mime_type="application/json")
+    loop = asyncio.get_running_loop()
+    async with _gemini_sem:
+        resp = await asyncio.wait_for(
+            loop.run_in_executor(_executor, lambda: client.models.generate_content(
+                model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), contents=contents, config=cfg)),
+            timeout=90.0)
+    return json.loads(_strip_markdown_json(resp.text or "{}"))
+
+
+@api_router.post("/metrics/upload-report")
+async def upload_amazon_report(file: UploadFile = File(...), center: str = Form("OGA5"), _=Depends(require_admin)):
+    """Sube un report de Amazon (Scorecard, Daily, POD, CDF…) y lo analiza con IA."""
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Archivo vacío")
+    if len(content) > 25 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Archivo demasiado grande (máx 25 MB)")
+    try:
+        text, pdf_bytes = await _extract_report_text(content, file.filename or "report")
+        analysis = await _analyze_report_with_gemini(text, pdf_bytes)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="El análisis tardó demasiado. Inténtalo de nuevo.")
+    except Exception as e:
+        logger.error(f"Análisis report: {e}")
+        raise HTTPException(status_code=502, detail="No se pudo analizar el report. ¿Es un informe de Amazon válido?")
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "filename": file.filename or "report",
+        "center": center,
+        "analysis": analysis,
+        "uploaded_by": "admin",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.amazon_reports.insert_one(serialize_doc(dict(doc)))
+    doc.pop("_id", None)
+    return {"success": True, "report": doc}
+
+
+@api_router.get("/metrics/reports")
+async def list_amazon_reports(center: Optional[str] = None, _=Depends(require_admin)):
+    query = {}
+    if center and center != "Todos":
+        query["center"] = center
+    docs = await db.amazon_reports.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return docs
+
+
+@api_router.delete("/metrics/reports/{report_id}")
+async def delete_amazon_report(report_id: str, _=Depends(require_admin)):
+    await db.amazon_reports.delete_one({"id": report_id})
+    return {"success": True}
+
+
+
 app.include_router(auth_router)
 app.include_router(api_router)
