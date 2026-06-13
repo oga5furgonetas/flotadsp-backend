@@ -7628,6 +7628,92 @@ async def _analyze_report_with_gemini(text, pdf_bytes, driver_map=None):
     return json.loads(_strip_markdown_json(resp.text or "{}"))
 
 
+def _parse_routes_excel(content: bytes, driver_map_inv):
+    """Parsea el Excel 'Rutas' de Cortex a estructura operativa. driver_map_inv:
+    {transporter_id_upper: nombre_real_BD} para mostrar el nombre de la ficha si existe.
+    Devuelve dict con kpis + lista de rutas, o None si no es ese formato."""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return None
+        headers = [str(c or "").strip().lower() for c in rows[0]]
+
+        def col(*names):
+            for n in names:
+                for i, hd in enumerate(headers):
+                    if n in hd:
+                        return i
+            return None
+
+        ci_code = col("código de ruta", "codigo de ruta", "route code")
+        ci_id = col("id del transportista", "transporter")
+        ci_name = col("nombre del conductor", "driver name")
+        ci_prog = col("progreso de la ruta", "route progress")
+        ci_service = col("tipo de servicio")
+        ci_allstops = col("todas las paradas", "total stops")
+        ci_done = col("paradas completadas", "completed")
+        ci_notstarted = col("paradas no iniciadas", "not started")
+        ci_deliv = col("entregas totales", "total deliveries")
+        ci_dep = col("hora de salida")
+        if ci_code is None or ci_name is None:
+            return None  # no es el Excel de Rutas
+
+        routes = []
+        for r in rows[1:]:
+            if not r or all(c is None for c in r):
+                continue
+            tid = (str(r[ci_id]).strip().upper() if ci_id is not None and r[ci_id] else "")
+            name = (str(r[ci_name]).strip() if ci_name is not None and r[ci_name] else "")
+            real = driver_map_inv.get(tid) if tid else None
+            allstops = int(r[ci_allstops]) if ci_allstops is not None and isinstance(r[ci_allstops], (int, float)) else 0
+            done = int(r[ci_done]) if ci_done is not None and isinstance(r[ci_done], (int, float)) else 0
+            prog_raw = (str(r[ci_prog]).strip().upper() if ci_prog is not None and r[ci_prog] else "")
+            # estado: BEHIND/AHEAD/ON TIME → bad/good/ok
+            status = "bad" if "BEHIND" in prog_raw else "good" if ("AHEAD" in prog_raw or "ON TIME" in prog_raw) else "ok"
+            pct = round(done / allstops * 100) if allstops else 0
+            routes.append({
+                "code": str(r[ci_code]).strip() if ci_code is not None and r[ci_code] else "",
+                "transporter_id": tid,
+                "driver_name": real or name,
+                "from_db": bool(real),
+                "service": str(r[ci_service]).strip() if ci_service is not None and r[ci_service] else "",
+                "progress_label": prog_raw,
+                "status": status,
+                "stops_total": allstops,
+                "stops_done": done,
+                "stops_pct": pct,
+                "deliveries": int(r[ci_deliv]) if ci_deliv is not None and isinstance(r[ci_deliv], (int, float)) else 0,
+                "departure": str(r[ci_dep]).strip() if ci_dep is not None and r[ci_dep] else "",
+            })
+
+        # ordenar: los más atrasados primero (BEHIND y menor %)
+        routes.sort(key=lambda x: (0 if x["status"] == "bad" else 1, x["stops_pct"]))
+
+        behind = sum(1 for x in routes if x["status"] == "bad")
+        total_stops = sum(x["stops_total"] for x in routes)
+        done_stops = sum(x["stops_done"] for x in routes)
+        return {
+            "report_type": "Rutas en vivo",
+            "period": datetime.now(timezone.utc).strftime("%d/%m/%Y"),
+            "is_routes": True,
+            "kpis": {
+                "total_routes": len(routes),
+                "behind": behind,
+                "on_track": len(routes) - behind,
+                "stops_done": done_stops,
+                "stops_total": total_stops,
+                "global_pct": round(done_stops / total_stops * 100) if total_stops else 0,
+            },
+            "routes": routes,
+        }
+    except Exception as e:
+        logger.warning(f"parse routes excel: {e}")
+        return None
+
+
 @api_router.post("/metrics/upload-report")
 async def upload_amazon_report(file: UploadFile = File(...), center: str = Form("OGA5"), _=Depends(require_admin)):
     """Sube un report de Amazon (Scorecard, Daily, POD, CDF…) y lo analiza con IA."""
@@ -7637,15 +7723,21 @@ async def upload_amazon_report(file: UploadFile = File(...), center: str = Form(
     if len(content) > 25 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Archivo demasiado grande (máx 25 MB)")
     try:
-        text, pdf_bytes = await _extract_report_text(content, file.filename or "report")
-        # Mapa Driver ID (Amazon) -> nombre real, para que la IA cruce los IDs
+        # Mapa Driver ID (Amazon) -> nombre real
         drivers_db = await db.drivers.find(
             {"driver_id": {"$exists": True, "$ne": ""}},
             {"_id": 0, "name": 1, "driver_id": 1}
         ).to_list(1000)
         driver_map = {d["driver_id"].strip().upper(): d.get("name", "")
                       for d in drivers_db if d.get("driver_id")}
-        analysis = await _analyze_report_with_gemini(text, pdf_bytes, driver_map)
+        fn = (file.filename or "").lower()
+        analysis = None
+        # ¿Es el Excel de Rutas de Cortex? → panel operativo estructurado (sin IA)
+        if fn.endswith(".xlsx") or fn.endswith(".xlsm"):
+            analysis = _parse_routes_excel(content, driver_map)
+        if analysis is None:
+            text, pdf_bytes = await _extract_report_text(content, file.filename or "report")
+            analysis = await _analyze_report_with_gemini(text, pdf_bytes, driver_map)
         # Post-proceso: si algún 'name' sigue siendo un ID conocido, sustituir por el nombre
         for dr in (analysis.get("drivers_at_risk") or []):
             nm = (dr.get("name") or "").strip().upper()
