@@ -7687,5 +7687,113 @@ async def delete_amazon_report(report_id: str, _=Depends(require_admin)):
 
 
 
+@api_router.post("/drivers/import-ids")
+async def import_driver_ids(data: dict, _=Depends(require_admin)):
+    """Importa Amazon Transporter IDs en masa desde un export de Cortex (pegado).
+    La IA extrae pares (nombre, transporter_id) de cualquier formato y los cruza
+    con los conductores de la BD por nombre (insensible a acentos)."""
+    raw_text = (data.get("text") or "")[:30000]
+    if not raw_text.strip():
+        raise HTTPException(status_code=400, detail="Pega el contenido del export de Cortex")
+
+    TID_RE = re.compile(r"\bA[A-Z0-9]{8,16}\b")
+
+    # 1) Parseo con Gemini (entiende cualquier formato)
+    pairs = []
+    try:
+        from google import genai as genai_sdk
+        from google.genai import types as genai_types
+        use_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
+        if use_vertex:
+            from google.oauth2 import service_account
+            import json as _json, base64 as _b64
+            sa = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+            if sa and not sa.startswith("{"):
+                sa = _b64.b64decode(sa).decode("utf-8")
+            creds = service_account.Credentials.from_service_account_info(
+                _json.loads(sa), scopes=["https://www.googleapis.com/auth/cloud-platform"]) if sa else None
+            client = genai_sdk.Client(vertexai=True, project=os.environ.get("GCP_PROJECT", ""),
+                                      location=os.environ.get("GCP_LOCATION", "us-central1"), credentials=creds)
+        else:
+            client = genai_sdk.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+        prompt = (
+            "Este texto es un export de Amazon Cortex/Scorecard con conductores (DAs). "
+            "Extrae TODAS las parejas de nombre del conductor y su Transporter ID "
+            "(el ID empieza por 'A' y tiene letras y numeros, ej: A1W24EJAOPQ5F0). "
+            "Responde SOLO JSON sin markdown: "
+            '{"pairs":[{"name":"nombre tal cual","transporter_id":"AXXXX"}]}\n\nTEXTO:\n' + raw_text
+        )
+        cfg = genai_types.GenerateContentConfig(temperature=0.0, response_mime_type="application/json")
+        loop = asyncio.get_running_loop()
+        async with _gemini_sem:
+            resp = await asyncio.wait_for(
+                loop.run_in_executor(_executor, lambda: client.models.generate_content(
+                    model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), contents=[prompt], config=cfg)),
+                timeout=40.0)
+        gd = json.loads(_strip_markdown_json(resp.text or "{}"))
+        for p in gd.get("pairs", []):
+            tid = (p.get("transporter_id") or "").strip().upper()
+            nm = (p.get("name") or "").strip()
+            if nm and TID_RE.match(tid):
+                pairs.append({"name": nm, "tid": tid})
+    except Exception as _e:
+        logger.warning(f"Import IDs: Gemini fallo ({_e}), usando deteccion por lineas")
+        pairs = []
+
+    # 2) Respaldo: detectar por linea (un ID + el texto restante = nombre)
+    if not pairs:
+        for line in raw_text.splitlines():
+            m = TID_RE.search(line.upper())
+            if not m:
+                continue
+            tid = m.group(0)
+            name = re.sub(TID_RE, "", line, flags=re.I)
+            name = re.sub(r"[\t,;|]+", " ", name).strip()
+            if len(name) > 3:
+                pairs.append({"name": name, "tid": tid})
+
+    if not pairs:
+        raise HTTPException(status_code=400, detail="No se encontraron pares nombre + Transporter ID en el texto.")
+
+    # 3) Cruce con la BD por nombre (insensible a acentos)
+    import unicodedata as _ud
+
+    def _fold(s):
+        s = _ud.normalize("NFD", (s or "").lower())
+        return "".join(c for c in s if _ud.category(c) != "Mn")
+
+    def _words(s):
+        return set(w for w in re.sub(r"[^a-z ]", " ", _fold(s)).split() if len(w) > 1)
+
+    drivers = await db.drivers.find({"status": {"$ne": "deleted"}}, {"_id": 0, "id": 1, "name": 1}).to_list(1000)
+    driver_words = [(d, _words(d.get("name", ""))) for d in drivers]
+
+    matched, ambiguous, unmatched = 0, [], []
+    for p in pairs:
+        pw = _words(p["name"])
+        scored = []
+        for d, dw in driver_words:
+            inter = pw & dw
+            if inter:
+                scored.append((sum(2 if len(w) >= 5 else 1 for w in inter), d))
+        scored.sort(key=lambda x: -x[0])
+        best = scored[0] if scored else None
+        second = scored[1] if len(scored) > 1 else None
+        ok = best and (best[0] >= 3 or (best[0] >= 2 and (not second or second[0] < best[0])))
+        if ok and second and second[0] == best[0]:
+            ok = False
+            ambiguous.append(p["name"])
+        if ok:
+            await db.drivers.update_one({"id": best[1]["id"]}, {"$set": {"driver_id": p["tid"]}})
+            matched += 1
+        elif p["name"] not in ambiguous:
+            unmatched.append(p["name"])
+
+    logger.info(f"Import IDs Cortex: {matched}/{len(pairs)} asignados")
+    return {"success": True, "total": len(pairs), "matched": matched,
+            "ambiguous": ambiguous[:20], "unmatched": unmatched[:20]}
+
+
+
 app.include_router(auth_router)
 app.include_router(api_router)
