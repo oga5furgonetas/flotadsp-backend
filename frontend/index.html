@@ -3079,7 +3079,11 @@
         var us=React.useState(false),uploading=us[0],setUploading=us[1];
         var os=React.useState(null),open=os[0],setOpen=os[1];
         var qs=React.useState(''),q=qs[0],setQ=qs[1];
-        var fileRef=React.useRef(null); var toast=props.toast;
+        var fileRef=React.useRef(null); var planRef=React.useRef(null); var toast=props.toast;
+        var ups=React.useState(false),uploadingPlan=ups[0],setUploadingPlan=ups[1];
+        var pas=React.useState({}),planAvail=pas[0],setPlanAvail=pas[1];
+        React.useEffect(function(){ apiGet('/metrics/routeplan-available'+((props.center&&props.center!=='Todos')?'?center='+props.center:'')).then(function(r){ setPlanAvail((r&&r.routes)||{}); }).catch(function(){}); },[]);
+        function onPlan(e){ var f=e.target.files&&e.target.files[0]; e.target.value=''; if(!f) return; setUploadingPlan(true); if(toast)toast.info('🗺️ Procesando plan de rutas…'); var fd=new FormData(); fd.append('file',f); fd.append('center',(props.center&&props.center!=='Todos')?props.center:'OGA5'); fetch(API+'/metrics/upload-routeplan',{method:'POST',headers:{'Authorization':'Bearer '+tok()},body:fd}).then(function(r){return r.json();}).then(function(j){ setUploadingPlan(false); if(j.success){ if(toast)toast.success('✅ '+j.routes+' rutas · '+j.stops+' paradas cargadas'); apiGet('/metrics/routeplan-available'+((props.center&&props.center!=='Todos')?'?center='+props.center:'')).then(function(r){ setPlanAvail((r&&r.routes)||{}); }); } else { if(toast)toast.error(j.detail||'No se pudo procesar'); } }).catch(function(){ setUploadingPlan(false); if(toast)toast.error('Error subiendo el plan'); }); }
 
         function load(){ setLoading(true); apiGet('/metrics/reports').then(function(r){ setReports(Array.isArray(r)?r:[]); setLoading(false); }).catch(function(){ setLoading(false); }); }
         React.useEffect(function(){ load(); },[]);
@@ -3109,14 +3113,13 @@
         }
 
         return h('div',{style:{padding:'22px',maxWidth:'940px',margin:'0 auto'}},
-          h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px',marginBottom:'18px'}},
+          h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px',marginBottom:'18px',flexWrap:'wrap'}},
             h('h1',{style:{margin:0,fontSize:'20px',fontWeight:800,color:'#f4f5f8'}},'📊 Centro de control'),
-            h('div',null,
+            h('div',{style:{display:'flex',gap:'8px'}},
+              h('input',{ref:planRef,type:'file',accept:'.xls,.xlsx',style:{display:'none'},onChange:onPlan}),
+              h('button',{onClick:function(){planRef.current&&planRef.current.click();},disabled:uploadingPlan,title:'Sube el archivo CYCLE de la mañana (paradas y direcciones)',style:{padding:'9px 14px',borderRadius:'10px',cursor:'pointer',fontSize:'13px',fontWeight:700,background:'rgba(59,130,246,.15)',border:'1px solid rgba(59,130,246,.35)',color:'#60a5fa',opacity:uploadingPlan?.6:1}},uploadingPlan?'⏳…':'🗺️ Plan rutas'),
               h('input',{ref:fileRef,type:'file',accept:'.pdf,.html,.htm,.xlsx,.xlsm,.csv,.txt',style:{display:'none'},onChange:onFile}),
-              h('button',{onClick:function(){fileRef.current&&fileRef.current.click();},disabled:uploading,style:{
-                padding:'9px 18px',borderRadius:'10px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,
-                background:'linear-gradient(135deg,#fb923c,#ea6800)',color:'#fff',opacity:uploading?.6:1
-              }},uploading?'⏳…':'⬆️ Subir informe')
+              h('button',{onClick:function(){fileRef.current&&fileRef.current.click();},disabled:uploading,style:{padding:'9px 18px',borderRadius:'10px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#fb923c,#ea6800)',color:'#fff',opacity:uploading?.6:1}},uploading?'⏳…':'⬆️ Subir informe')
             )
           ),
 
@@ -3169,6 +3172,7 @@
                       h('div',{style:{height:'100%',width:rt.stops_pct+'%',background:sc(rt.status),borderRadius:'99px'}})
                     )
                   ),
+                  (planAvail[rt.code])&&h('button',{onClick:function(e){e.stopPropagation();window.__fdspRouteMap&&window.__fdspRouteMap(rt.code,open.center||'OGA5',rt.stops_done);},title:'Ver mapa de paradas reales',style:{flexShrink:0,width:'30px',height:'30px',borderRadius:'8px',background:'rgba(59,130,246,.15)',border:'1px solid rgba(59,130,246,.35)',color:'#60a5fa',cursor:'pointer',fontSize:'14px'}},'🗺️'),
                   (rt.phone)&&h('a',{href:(function(){var ph=rt.phone.replace(/[^0-9]/g,'');if(ph.length===9)ph='34'+ph;var msg='Hola '+(rt.driver_name||'').split(' ')[0]+' 👋 Vas por '+rt.stops_done+'/'+rt.stops_total+' paradas ('+rt.stops_pct+'%).'+(rt.rescue>0?' A tu ritmo te quedarían ~'+rt.rescue+' paquetes sin entregar — te organizamos rescate.':' Vas bien de tiempo, ¡sigue así! 💪');return 'https://wa.me/'+ph+'?text='+encodeURIComponent(msg);})(),target:'_blank',rel:'noopener',onClick:function(e){e.stopPropagation();},title:'Enviar su estado por WhatsApp',style:{flexShrink:0,width:'30px',height:'30px',borderRadius:'8px',background:'rgba(34,197,94,.15)',border:'1px solid rgba(34,197,94,.35)',display:'flex',alignItems:'center',justifyContent:'center',textDecoration:'none',fontSize:'15px'}},'💬'),
                   h('div',{style:{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'2px',flexShrink:0,minWidth:'92px'}},
                     (rt.rescue!=null&&rt.rescue>0)
@@ -3257,6 +3261,81 @@
         );
       };
     });
+  })();
+  </script>
+
+  <!-- FlotaDSP — Mapa de ruta con paradas reales (Leaflet/OSM, gratis) -->
+  <script>
+  (function(){
+    var API = "https://flotadsp-backend.fly.dev/api";
+    function tok(){ return localStorage.getItem("flotadsp_token")||""; }
+
+    function ensureLeaflet(cb){
+      if (window.L) { cb(); return; }
+      var css = document.createElement('link');
+      css.rel='stylesheet'; css.href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      document.head.appendChild(css);
+      var sc = document.createElement('script');
+      sc.src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      sc.onload = cb;
+      document.body.appendChild(sc);
+    }
+
+    // done = nº de paradas ya completadas (del Itinerarios), para pintar hechas vs pendientes
+    window.__fdspRouteMap = function(code, center, done){
+      var old = document.getElementById('fdsp-map-modal');
+      if (old) old.remove();
+      var ov = document.createElement('div');
+      ov.id='fdsp-map-modal';
+      ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.8);backdrop-filter:blur(4px);z-index:99999;display:flex;align-items:center;justify-content:center;padding:14px';
+      ov.addEventListener('click',function(e){ if(e.target===ov) ov.remove(); });
+      ov.innerHTML='<div style="background:#0d0f14;border:1px solid rgba(255,255,255,.12);border-radius:16px;width:100%;max-width:760px;height:82vh;display:flex;flex-direction:column;overflow:hidden">'+
+        '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.08)">'+
+          '<div><div id="fdsp-map-title" style="font-size:15px;font-weight:800;color:#f4f5f8">Ruta '+code+'</div>'+
+          '<div id="fdsp-map-sub" style="font-size:11.5px;color:#8892a4">Cargando paradas…</div></div>'+
+          '<button id="fdsp-map-x" style="background:none;border:none;color:#8892a4;font-size:22px;cursor:pointer">×</button></div>'+
+        '<div id="fdsp-map" style="flex:1;background:#1a1a1a"></div>'+
+      '</div>';
+      document.body.appendChild(ov);
+      document.getElementById('fdsp-map-x').addEventListener('click',function(){ ov.remove(); });
+
+      fetch(API+'/metrics/routeplan?code='+encodeURIComponent(code)+'&center='+encodeURIComponent(center),
+        {headers:{'Authorization':'Bearer '+tok()}})
+        .then(function(r){ if(!r.ok) throw new Error('nodata'); return r.json(); })
+        .then(function(plan){
+          var stops = (plan.stops||[]).filter(function(s){ return s.lat && s.lon; });
+          document.getElementById('fdsp-map-sub').textContent =
+            stops.length+' paradas · '+(plan.distance_km?plan.distance_km+' km':'')+(plan.plan_time?' · '+plan.plan_time:'');
+          ensureLeaflet(function(){
+            var map = L.map('fdsp-map',{zoomControl:true}).setView([stops[0].lat, stops[0].lon], 12);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+              attribution:'© OpenStreetMap © CARTO', maxZoom:19
+            }).addTo(map);
+            var latlngs=[], bounds=[];
+            stops.forEach(function(s,i){
+              var ll=[s.lat,s.lon]; latlngs.push(ll); bounds.push(ll);
+              var doneStop = (done!=null && i < done);
+              var col = doneStop ? '#22c55e' : '#fb923c';
+              var mk = L.circleMarker(ll,{radius:5,color:col,weight:2,fillColor:col,fillOpacity:.7}).addTo(map);
+              mk.bindPopup('<b>Parada '+(s.seq!=null?s.seq:(i+1))+'</b>'+(doneStop?' ✅':'')+'<br>'+
+                (s.address||'')+'<br>'+(s.postal||'')+(s.arrival?'<br>🕐 '+s.arrival:'')+(s.window?'<br>Ventana: '+s.window:''));
+            });
+            // línea de la ruta en orden
+            L.polyline(latlngs,{color:'#3b82f6',weight:2,opacity:.5}).addTo(map);
+            if(bounds.length) map.fitBounds(bounds,{padding:[30,30]});
+            // leyenda de progreso
+            if(done!=null){
+              var lg=L.control({position:'bottomleft'});
+              lg.onAdd=function(){var d=L.DomUtil.create('div');d.style.cssText='background:rgba(13,15,20,.9);border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:7px 10px;font-size:11px;color:#c8ccd6';d.innerHTML='🟢 '+done+' hechas · 🟠 '+(stops.length-done)+' pendientes';return d;};
+              lg.addTo(map);
+            }
+            setTimeout(function(){ map.invalidateSize(); }, 100);
+          });
+        })
+        .catch(function(){
+          document.getElementById('fdsp-map-sub').textContent = 'No hay plan para esta ruta. Sube el archivo de la mañana (CYCLE) en el botón "Plan rutas".';
+        });
+    };
   })();
   </script>
 

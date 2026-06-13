@@ -7809,6 +7809,133 @@ def _parse_routes_excel(content: bytes, driver_info, snapshot_name=None):
         return None
 
 
+@api_router.post("/metrics/upload-routeplan")
+async def upload_route_plan(file: UploadFile = File(...), center: str = Form("OGA5"), _=Depends(require_admin)):
+    """Sube el archivo de la mañana (sequenced routes / CYCLE) con las paradas reales
+    de cada ruta: dirección, código postal, GPS y hora planificada por Amazon.
+    Guarda un documento por ruta para luego mostrar el mapa y el progreso geográfico."""
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Archivo vacío")
+    fn = (file.filename or "").lower()
+    # Lectura universal: .xls (xlrd) y .xlsx (openpyxl) → dict {sheet: [rows]}
+    sheet_rows = {}
+    try:
+        if fn.endswith(".xls"):
+            import xlrd
+            book = xlrd.open_workbook(file_contents=content)
+            for shn in book.sheet_names():
+                sh = book.sheet_by_name(shn)
+                sheet_rows[shn] = [sh.row_values(i) for i in range(sh.nrows)]
+        else:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+            for shn in wb.sheetnames:
+                sheet_rows[shn] = [list(r) for r in wb[shn].iter_rows(values_only=True)]
+    except Exception as _re:
+        raise HTTPException(status_code=400, detail=f"No se pudo leer el archivo: {_re}")
+
+    sheets = [s for s in sheet_rows if s.lower().startswith("sequencedroute")]
+    if not sheets:
+        raise HTTPException(status_code=400, detail="No es el archivo de rutas secuenciadas (CYCLE). Sube el que te llega por la mañana.")
+    try:
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        # Limpiar plan anterior del mismo día/centro
+        await db.route_plans.delete_many({"date": today, "center": center})
+
+        saved = 0
+        total_stops = 0
+        for sn in sheets:
+            rows = sheet_rows[sn]
+            if len(rows) < 3:
+                continue
+            code = sn.replace("sequencedRoute_", "").replace("sequencedroute_", "")
+            info = str(rows[0][0] or "")
+            dist_m = re.search(r"([\d.]+)\s*km", info)
+            distance_km = float(dist_m.group(1)) if dist_m else None
+            plan_m = re.search(r"Route plan:\s*([^R]+?)(?:Route time|Total|$)", str(rows[0][4] or ""))
+            plan_time = plan_m.group(1).strip() if plan_m else ""
+
+            hdr = [str(c or "").strip().lower() for c in rows[1]]
+
+            def hc(*names):
+                for n in names:
+                    for i, x in enumerate(hdr):
+                        if n in x:
+                            return i
+                return None
+
+            ci_stop = hc("stop")
+            ci_track = hc("tracking")
+            ci_arr = hc("arrival")
+            ci_win = hc("time window")
+            ci_addr = hc("customer address", "address")
+            ci_post = hc("postal")
+            ci_lat = hc("latitude")
+            ci_lon = hc("longitude")
+            ci_zone = hc("zone")
+
+            stops = []
+            for r in rows[2:]:
+                if not r:
+                    continue
+                track = r[ci_track] if ci_track is not None else None
+                if not track:  # saltar el depot (sin tracking)
+                    continue
+                lat = r[ci_lat] if ci_lat is not None else None
+                lon = r[ci_lon] if ci_lon is not None else None
+                stops.append({
+                    "seq": int(r[ci_stop]) if ci_stop is not None and isinstance(r[ci_stop], (int, float)) else None,
+                    "tracking": str(track),
+                    "arrival": str(r[ci_arr]).strip() if ci_arr is not None and r[ci_arr] else "",
+                    "window": str(r[ci_win]).strip() if ci_win is not None and r[ci_win] else "",
+                    "address": str(r[ci_addr]).strip() if ci_addr is not None and r[ci_addr] else "",
+                    "postal": str(r[ci_post]).strip() if ci_post is not None and r[ci_post] else "",
+                    "lat": float(lat) if isinstance(lat, (int, float)) else None,
+                    "lon": float(lon) if isinstance(lon, (int, float)) else None,
+                    "zone": str(r[ci_zone]).strip() if ci_zone is not None and r[ci_zone] else "",
+                })
+            if not stops:
+                continue
+            await db.route_plans.insert_one({
+                "id": str(uuid.uuid4()),
+                "date": today, "center": center, "code": code,
+                "distance_km": distance_km, "plan_time": plan_time,
+                "stops_count": len(stops), "stops": stops,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            saved += 1
+            total_stops += len(stops)
+
+        return {"success": True, "routes": saved, "stops": total_stops, "date": today}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Route plan: {e}")
+        raise HTTPException(status_code=502, detail=f"No se pudo procesar el archivo: {e}")
+
+
+@api_router.get("/metrics/routeplan")
+async def get_route_plan(code: str, center: str = "OGA5", date: Optional[str] = None, _=Depends(require_admin)):
+    """Devuelve las paradas de una ruta (la más reciente o de una fecha)."""
+    q = {"center": center, "code": code}
+    if date:
+        q["date"] = date
+    doc = await db.route_plans.find_one(q, {"_id": 0}, sort=[("date", -1)])
+    if not doc:
+        raise HTTPException(status_code=404, detail="No hay plan para esa ruta. Sube el archivo de la mañana.")
+    return doc
+
+
+@api_router.get("/metrics/routeplan-available")
+async def routeplan_available(center: str = "OGA5", _=Depends(require_admin)):
+    """Lista de códigos de ruta con plan disponible hoy (para enlazar el mapa)."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    docs = await db.route_plans.find({"center": center, "date": today}, {"_id": 0, "code": 1, "stops_count": 1, "distance_km": 1}).to_list(200)
+    return {"date": today, "routes": {d["code"]: {"stops": d.get("stops_count"), "km": d.get("distance_km")} for d in docs}}
+
+
 @api_router.post("/metrics/upload-report")
 async def upload_amazon_report(file: UploadFile = File(...), center: str = Form("OGA5"), _=Depends(require_admin)):
     """Sube un report de Amazon (Scorecard, Daily, POD, CDF…) y lo analiza con IA."""
