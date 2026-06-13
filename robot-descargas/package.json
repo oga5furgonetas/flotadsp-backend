@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "grabar": "playwright codegen",
-    "robot": "node robot.js"
+    "robot": "node robot.js",
+    "vigilante": "node vigilante.js"
   },
   "dependencies": {
     "playwright": "^1.49.0"

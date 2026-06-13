@@ -59,8 +59,38 @@ USO DIARIO
   • En FlotaDSP → Centro de control verás los datos actualizándose.
   • Para parar: Ctrl+C en la terminal.
 
-CONSEJO
-  Si solo quieres que suba lo que TÚ descargas (sin que el robot entre
-  en Cortex), dímelo y te hago la versión "vigilante de carpeta": tú
-  descargas con 1 clic y se sube solo. Cero riesgo con Amazon.
+════════════════════════════════════════════════════════════════
+ OPCIÓN B (RECOMENDADA): VIGILANTE DE CARPETA  ·  cero riesgo
+════════════════════════════════════════════════════════════════
+  No entra en Cortex. Tú descargas tus informes como SIEMPRE, y él
+  los detecta en la carpeta de Descargas y los sube solos a FlotaDSP.
+  Ideal para tus compañeros: no hay que explicar nada raro.
+
+  PARA TUS COMPAÑEROS (lo más fácil — sin terminal):
+    1) Doble clic en  "VIGILANTE - doble clic.bat"
+    2) Se abre una ventana negra. Dejarla abierta.
+    3) Descargar los informes de Cortex como siempre.
+       → se suben solos. En FlotaDSP se ve actualizándose.
+    4) Para parar: cerrar la ventana negra.
+    (La primera vez tarda un poco: instala lo necesario solo.)
+
+  Detecta automáticamente el tipo de archivo:
+    • Itinerarios / Rutas / DAs  → panel operativo + rescate
+    • CYCLE                       → paradas y mapa
+  No sube dos veces el mismo archivo.
+
+  CONFIGURAR EL CENTRO (importante):
+    Abre vigilante.js y pon  centro: 'DGA1'  (o OGA5 / DGA2) según
+    el centro de quien lo use. Si cada compañero está en un centro,
+    cada PC lleva su propia carpeta con su centro configurado.
+
+  Por defecto vigila la carpeta de Descargas de Windows. Si guardáis
+  los informes en otra carpeta, cámbiala en CONFIG.carpeta.
+
+────────────────────────────────────────────────────────────────
+ ¿Cuál uso?
+   • Vigilante (Opción B) → recomendado. Cero roce con Amazon.
+   • Robot (Opción A)     → totalmente automático pero entra en
+                            Cortex. Úsalo solo si quieres "manos
+                            libres" y asumes el roce con sus términos.
 ════════════════════════════════════════════════════════════════
