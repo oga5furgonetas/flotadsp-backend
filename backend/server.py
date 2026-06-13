@@ -7637,7 +7637,7 @@ async def _analyze_report_with_gemini(text, pdf_bytes, driver_map=None):
     return json.loads(_strip_markdown_json(resp.text or "{}"))
 
 
-def _parse_routes_excel(content: bytes, driver_map_inv, snapshot_name=None):
+def _parse_routes_excel(content: bytes, driver_info, snapshot_name=None):
     """Parsea el Excel 'Rutas' de Cortex a estructura operativa. driver_map_inv:
     {transporter_id_upper: nombre_real_BD} para mostrar el nombre de la ficha si existe.
     Devuelve dict con kpis + lista de rutas, o None si no es ese formato."""
@@ -7660,15 +7660,23 @@ def _parse_routes_excel(content: bytes, driver_map_inv, snapshot_name=None):
         ci_code = col("código de ruta", "codigo de ruta", "route code")
         ci_id = col("id del transportista", "transporter")
         ci_name = col("nombre del conductor", "driver name")
-        ci_prog = col("progreso de la ruta", "route progress")
+        ci_prog = col("progreso de la ruta", "estado del progreso", "route progress")
         ci_service = col("tipo de servicio")
         ci_allstops = col("todas las paradas", "total stops")
         ci_done = col("paradas completadas", "completed")
         ci_notstarted = col("paradas no iniciadas", "not started")
         ci_deliv = col("entregas totales", "total deliveries")
         ci_dep = col("hora de salida")
-        if ci_code is None or ci_name is None:
-            return None  # no es el Excel de Rutas
+        # ── Columnas extra del export de Itinerarios/DAs (datos REALES de Amazon) ──
+        ci_phone = col("número de teléfono", "numero de telefono", "phone")
+        ci_pace = col("avg_pace", "pace_stops_per_hour")           # ritmo real de Amazon
+        ci_return = col("regreso previsto a la estación", "regreso previsto")  # cierre real
+        ci_battery = col("% de batería", "bateria")
+        ci_helper = col("ayudante")
+        ci_login = col("inicio de sesión", "inicio de sesion")
+        ci_totalpkg = col("total de paquetes")
+        if (ci_code is None and ci_id is None) or ci_name is None:
+            return None  # no es ninguno de los Excel de rutas
 
         # Momento del snapshot: preferir la hora del nombre del archivo
         # (ej "Rutas_OGA5_2026-06-13_13_23 (GMT+2).xlsx" → 13:23). Si no, hora actual.
@@ -7682,7 +7690,7 @@ def _parse_routes_excel(content: bytes, driver_map_inv, snapshot_name=None):
                 snap_h = int(fm.group(4)) + int(fm.group(5)) / 60.0
                 snap_label = f"{fm.group(3)}/{fm.group(2)}/{fm.group(1)} {fm.group(4)}:{fm.group(5)}"
         now_h = snap_h if snap_h is not None else (now_es.hour + now_es.minute / 60.0)
-        CUTOFF_H = 22.0  # cierre operativo estimado de rutas (22:00)
+        SHIFT_HOURS = 9.0  # jornada: cierre = hora de salida + 9h
 
         def _parse_hour(s):
             m = re.match(r"(\d{1,2}):(\d{2})", str(s or ""))
@@ -7694,7 +7702,11 @@ def _parse_routes_excel(content: bytes, driver_map_inv, snapshot_name=None):
                 continue
             tid = (str(r[ci_id]).strip().upper() if ci_id is not None and r[ci_id] else "")
             name = (str(r[ci_name]).strip() if ci_name is not None and r[ci_name] else "")
-            real = driver_map_inv.get(tid) if tid else None
+            info = driver_info.get(tid) if tid else None
+            real = info.get("name") if info else None
+            # Teléfono: PRIMERO el del Excel (con el que trabaja hoy), luego el de la ficha
+            phone_xl = re.sub(r"[^0-9+]", "", str(r[ci_phone])) if ci_phone is not None and r[ci_phone] and str(r[ci_phone]).lower() != "falta" else ""
+            phone = phone_xl or (info.get("phone") if info else "") or ""
             allstops = int(r[ci_allstops]) if ci_allstops is not None and isinstance(r[ci_allstops], (int, float)) else 0
             done = int(r[ci_done]) if ci_done is not None and isinstance(r[ci_done], (int, float)) else 0
             prog_raw = (str(r[ci_prog]).strip().upper() if ci_prog is not None and r[ci_prog] else "")
@@ -7703,35 +7715,50 @@ def _parse_routes_excel(content: bytes, driver_map_inv, snapshot_name=None):
             remaining = max(0, allstops - done)
             dep = str(r[ci_dep]).strip() if ci_dep is not None and r[ci_dep] else ""
 
-            # ── Predicción de ritmo y rescate ──
+            # Datos REALES de Amazon (export Itinerarios) si están disponibles
+            amz_pace = None
+            if ci_pace is not None and isinstance(r[ci_pace], (int, float)):
+                amz_pace = round(float(r[ci_pace]), 1)
+            return_str = str(r[ci_return]).strip() if ci_return is not None and r[ci_return] and str(r[ci_return]).lower() != "falta" else ""
+            battery = None
+            if ci_battery is not None and isinstance(r[ci_battery], (int, float)):
+                battery = round(float(r[ci_battery]))
+            helper = str(r[ci_helper]).strip() if ci_helper is not None and r[ci_helper] and str(r[ci_helper]).lower() != "falta" else ""
+            total_pkg = int(r[ci_totalpkg]) if ci_totalpkg is not None and isinstance(r[ci_totalpkg], (int, float)) else 0
+
+            # ── Predicción: usa el ritmo y el cierre REALES de Amazon si existen ──
             dep_h = _parse_hour(dep)
-            rate = None          # paradas/hora
-            eta = None           # hora estimada de fin a ritmo actual
-            rescue = None        # paradas que NO dará tiempo antes del cierre
+            return_h = _parse_hour(return_str)
+            cutoff_h = return_h if return_h is not None else ((dep_h + SHIFT_HOURS) if dep_h is not None else None)
+            rate = amz_pace  # ritmo real de Amazon
+            eta = None
+            rescue = None
             will_finish = None
-            if dep_h is not None and done > 0 and now_h > dep_h:
+            # si Amazon no da ritmo, lo estimamos
+            if rate is None and dep_h is not None and done > 0 and now_h > dep_h:
                 worked = now_h - dep_h
-                if worked >= 0.25:  # al menos 15 min para que el ritmo sea fiable
+                if worked >= 0.25:
                     rate = round(done / worked, 1)
-                    if rate > 0:
-                        hours_left_route = remaining / rate
-                        eta_h = now_h + hours_left_route
-                        eh = int(eta_h) % 24
-                        em = int(round((eta_h - int(eta_h)) * 60))
-                        if em == 60:
-                            eh, em = (eh + 1) % 24, 0
-                        eta = f"{eh:02d}:{em:02d}"
-                        # ¿cuántas hará antes del cierre?
-                        hours_to_cutoff = max(0, CUTOFF_H - now_h)
-                        can_do = rate * hours_to_cutoff
-                        rescue = max(0, round(remaining - can_do))
-                        will_finish = eta_h <= CUTOFF_H
+            if rate and rate > 0:
+                hours_left_route = remaining / rate
+                eta_h = now_h + hours_left_route
+                eh = int(eta_h) % 24
+                em = int(round((eta_h - int(eta_h)) * 60))
+                if em == 60:
+                    eh, em = (eh + 1) % 24, 0
+                eta = f"{eh:02d}:{em:02d}"
+                if cutoff_h is not None:
+                    hours_to_cutoff = max(0, cutoff_h - now_h)
+                    can_do = rate * hours_to_cutoff
+                    rescue = max(0, round(remaining - can_do))
+                    will_finish = eta_h <= cutoff_h
 
             routes.append({
                 "code": str(r[ci_code]).strip() if ci_code is not None and r[ci_code] else "",
                 "transporter_id": tid,
                 "driver_name": real or name,
                 "from_db": bool(real),
+                "phone": phone or "",
                 "service": str(r[ci_service]).strip() if ci_service is not None and r[ci_service] else "",
                 "progress_label": prog_raw,
                 "status": status,
@@ -7741,10 +7768,15 @@ def _parse_routes_excel(content: bytes, driver_map_inv, snapshot_name=None):
                 "stops_pct": pct,
                 "deliveries": int(r[ci_deliv]) if ci_deliv is not None and isinstance(r[ci_deliv], (int, float)) else 0,
                 "departure": dep,
+                "return_planned": return_str,
                 "rate": rate,
+                "rate_source": "amazon" if amz_pace is not None else "estimado",
                 "eta": eta,
                 "rescue": rescue,
                 "will_finish": will_finish,
+                "battery": battery,
+                "helper": helper,
+                "total_packages": total_pkg,
             })
 
         # ordenar: primero quien más rescate necesita, luego atrasados, luego % bajo
@@ -7789,15 +7821,17 @@ async def upload_amazon_report(file: UploadFile = File(...), center: str = Form(
         # Mapa Driver ID (Amazon) -> nombre real
         drivers_db = await db.drivers.find(
             {"driver_id": {"$exists": True, "$ne": ""}},
-            {"_id": 0, "name": 1, "driver_id": 1}
+            {"_id": 0, "name": 1, "driver_id": 1, "phone": 1}
         ).to_list(1000)
         driver_map = {d["driver_id"].strip().upper(): d.get("name", "")
                       for d in drivers_db if d.get("driver_id")}
+        driver_info = {d["driver_id"].strip().upper(): {"name": d.get("name", ""), "phone": d.get("phone", "")}
+                       for d in drivers_db if d.get("driver_id")}
         fn = (file.filename or "").lower()
         analysis = None
         # ¿Es el Excel de Rutas de Cortex? → panel operativo estructurado (sin IA)
         if fn.endswith(".xlsx") or fn.endswith(".xlsm"):
-            analysis = _parse_routes_excel(content, driver_map, file.filename)
+            analysis = _parse_routes_excel(content, driver_info, file.filename)
         if analysis is None:
             text, pdf_bytes = await _extract_report_text(content, file.filename or "report")
             analysis = await _analyze_report_with_gemini(text, pdf_bytes, driver_map)
@@ -7884,6 +7918,12 @@ async def list_amazon_reports(center: Optional[str] = None, _=Depends(require_ad
         query["center"] = center
     docs = await db.amazon_reports.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
     return docs
+
+
+@api_router.delete("/metrics/reports/all")
+async def delete_all_reports(_=Depends(require_admin)):
+    r = await db.amazon_reports.delete_many({})
+    return {"success": True, "deleted": r.deleted_count}
 
 
 @api_router.delete("/metrics/reports/{report_id}")

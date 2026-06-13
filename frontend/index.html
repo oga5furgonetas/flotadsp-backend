@@ -3157,7 +3157,7 @@
                   h('div',{style:{flex:1,minWidth:0}},
                     h('div',{style:{fontSize:'13px',fontWeight:600,color:'#e5e7eb',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},
                       rt.driver_name+(rt.from_db?'':' ')),
-                    h('div',{style:{fontSize:'10px',color:'#6b7280'}},rt.service+(rt.departure?' · sale '+rt.departure:''))
+                    h('div',{style:{fontSize:'10px',color:'#6b7280'}},rt.service+(rt.departure?' · sale '+rt.departure:'')+(rt.return_planned?' · cierra '+rt.return_planned:'')+(rt.battery!=null?' · 🔋'+rt.battery+'%':'')+(rt.helper?' · 🧑‍🤝‍🧑 ayudante':''))
                   ),
                   /* barra de progreso */
                   h('div',{style:{width:'120px',flexShrink:0}},
@@ -3169,6 +3169,7 @@
                       h('div',{style:{height:'100%',width:rt.stops_pct+'%',background:sc(rt.status),borderRadius:'99px'}})
                     )
                   ),
+                  (rt.phone)&&h('a',{href:(function(){var ph=rt.phone.replace(/[^0-9]/g,'');if(ph.length===9)ph='34'+ph;var msg='Hola '+(rt.driver_name||'').split(' ')[0]+' 👋 Vas por '+rt.stops_done+'/'+rt.stops_total+' paradas ('+rt.stops_pct+'%).'+(rt.rescue>0?' A tu ritmo te quedarían ~'+rt.rescue+' paquetes sin entregar — te organizamos rescate.':' Vas bien de tiempo, ¡sigue así! 💪');return 'https://wa.me/'+ph+'?text='+encodeURIComponent(msg);})(),target:'_blank',rel:'noopener',onClick:function(e){e.stopPropagation();},title:'Enviar su estado por WhatsApp',style:{flexShrink:0,width:'30px',height:'30px',borderRadius:'8px',background:'rgba(34,197,94,.15)',border:'1px solid rgba(34,197,94,.35)',display:'flex',alignItems:'center',justifyContent:'center',textDecoration:'none',fontSize:'15px'}},'💬'),
                   h('div',{style:{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'2px',flexShrink:0,minWidth:'92px'}},
                     (rt.rescue!=null&&rt.rescue>0)
                       ? h('span',{style:{fontSize:'10px',fontWeight:800,padding:'2px 8px',borderRadius:'99px',color:'#fb923c',background:'rgba(251,146,60,.15)'}},'🆘 +'+rt.rescue+' ayuda')
@@ -3231,7 +3232,7 @@
           ),
 
           /* lista de informes */
-          h('p',{style:{margin:'18px 0 8px',fontSize:'11px',fontWeight:800,color:'#8892a4',letterSpacing:'.05em'}},'HISTÓRICO'),
+          h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',margin:'18px 0 8px'}},h('span',{style:{fontSize:'11px',fontWeight:800,color:'#8892a4',letterSpacing:'.05em'}},'HISTÓRICO'),(reports&&reports.length>0)&&h('button',{onClick:function(){if(!confirm('¿Borrar TODO el histórico de informes?'))return;fetch(API+'/metrics/reports/all',{method:'DELETE',headers:{'Authorization':'Bearer '+tok()}}).then(function(r){return r.json();}).then(function(){setOpen(null);load();if(toast)toast.success('Histórico borrado');});},style:{fontSize:'11px',color:'#f87171',background:'none',border:'none',cursor:'pointer'}},'🗑️ Limpiar todo')),
           loading && h('div',{style:{textAlign:'center',padding:'24px 0',color:'#8892a4'}},'⏳…'),
           !loading && (reports||[]).length===0 && h('div',{style:{textAlign:'center',padding:'34px 0',color:'#8892a4',fontSize:'13px'}},
             'Sube un informe de Amazon — el Excel "Rutas" te da el panel operativo en vivo; el Scorecard, POD o CDF los analiza la IA.'),
@@ -3248,7 +3249,8 @@
                   h('div',{style:{fontSize:'13px',fontWeight:600,color:'#e5e7eb',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}},an.report_type||r.filename),
                   h('div',{style:{fontSize:'10px',color:'#6b7280'}},(an.period?an.period+' · ':'')+r.center+' · '+fmtDate(r.created_at))),
                 an.is_routes&&an.kpis ? h('span',{style:{fontSize:'11px',fontWeight:700,color:an.kpis.behind>0?'#f87171':'#4ade80',flexShrink:0}},an.kpis.behind+' atras.')
-                  : (an.drivers_at_risk&&an.drivers_at_risk.length)?h('span',{style:{fontSize:'11px',fontWeight:700,color:'#f87171',flexShrink:0}},'⚠️ '+an.drivers_at_risk.length):null
+                  : (an.drivers_at_risk&&an.drivers_at_risk.length)?h('span',{style:{fontSize:'11px',fontWeight:700,color:'#f87171',flexShrink:0}},'⚠️ '+an.drivers_at_risk.length):null,
+                h('button',{onClick:function(e){e.stopPropagation();if(!confirm('¿Borrar este informe?'))return;fetch(API+'/metrics/reports/'+r.id,{method:'DELETE',headers:{'Authorization':'Bearer '+tok()}}).then(function(){if(open&&open.id===r.id)setOpen(null);load();});},style:{flexShrink:0,background:'none',border:'none',color:'#5c6578',fontSize:'15px',cursor:'pointer',padding:'0 2px'},title:'Borrar'},'×')
               );
             })
           )
