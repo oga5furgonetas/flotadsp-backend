@@ -2669,6 +2669,19 @@ async def upload_inspection_photos(
                     analyze_images_with_gemini(photos_base64, ref_bytes_list if ref_bytes_list else None),
                     timeout=120.0
                 )
+                # Filtro determinista: un panel ya dañado antes NO es "nuevo" otra vez
+                if analysis and analysis_status == "ok" and getattr(analysis, "new_damages", None):
+                    try:
+                        known = await _known_damaged_panels(
+                            vehicle_id, before_iso=doc.get("created_at"), exclude_id=inspection.id)
+                        if known:
+                            kept = [nd for nd in analysis.new_damages
+                                    if _canon_panel(getattr(nd, "part", None) or getattr(nd, "zone", None)) not in known]
+                            if len(kept) != len(analysis.new_damages):
+                                analysis.new_damages = kept
+                                analysis.new_damages_count = len(kept)
+                    except Exception as _fe:
+                        logger.warning(f"Filtro panel-historial: {_fe}")
                 await db.inspections.update_one(
                     {"id": inspection.id},
                     {"$set": {"analysis": serialize_doc(analysis.model_dump()) if analysis else None,
@@ -4675,6 +4688,55 @@ def _vehicle_panel_cost(new_damages):
         else:
             total += _PANEL_BAREMO.get(panel, _PANEL_BAREMO["otros"]).get(p["sev"], 0)
     return total, panels
+
+
+async def _known_damaged_panels(vehicle_id, before_iso=None, exclude_id=None):
+    """Paneles que YA estaban dañados en inspecciones anteriores de la furgo.
+    Un panel ya conocido no puede ser 'daño nuevo' otra vez."""
+    q = {"vehicle_id": vehicle_id, "deleted": {"$ne": True}, "analysis_status": "ok"}
+    if before_iso:
+        q["created_at"] = {"$lt": before_iso}
+    if exclude_id:
+        q["id"] = {"$ne": exclude_id}
+    panels = set()
+    async for pi in db.inspections.find(q, {"_id": 0, "analysis.damages": 1}):
+        for d in ((pi.get("analysis") or {}).get("damages") or []):
+            if isinstance(d, dict):
+                p = _canon_panel(d.get("part") or d.get("zone") or d.get("location"))
+                if p:
+                    panels.add(p)
+    return panels
+
+
+@api_router.post("/admin/backfill-new-damages")
+async def backfill_new_damages(_=Depends(require_admin)):
+    """Reprocesa el histórico: por cada furgo, en orden cronológico, deja como
+    'daño nuevo' SOLO la primera vez que aparece cada panel. Idempotente."""
+    vehicles = await db.inspections.distinct(
+        "vehicle_id", {"deleted": {"$ne": True}, "analysis_status": "ok"})
+    corregidas = 0
+    for veh in vehicles:
+        insps = await db.inspections.find(
+            {"vehicle_id": veh, "deleted": {"$ne": True}, "analysis_status": "ok"},
+            {"_id": 0, "id": 1, "created_at": 1, "analysis.damages": 1, "analysis.new_damages": 1}
+        ).sort("created_at", 1).to_list(20000)
+        known = set()
+        for ins in insps:
+            a = ins.get("analysis") or {}
+            nds = a.get("new_damages") or []
+            kept = [nd for nd in nds if isinstance(nd, dict)
+                    and _canon_panel(nd.get("part") or nd.get("zone") or nd.get("location")) not in known]
+            if len(kept) != len(nds):
+                await db.inspections.update_one(
+                    {"id": ins["id"]},
+                    {"$set": {"analysis.new_damages": kept, "analysis.new_damages_count": len(kept)}})
+                corregidas += 1
+            for d in (a.get("damages") or []):
+                if isinstance(d, dict):
+                    p = _canon_panel(d.get("part") or d.get("zone") or d.get("location"))
+                    if p:
+                        known.add(p)
+    return {"success": True, "vehiculos": len(vehicles), "inspecciones_corregidas": corregidas}
 
 
 @api_router.get("/stats/attention")
