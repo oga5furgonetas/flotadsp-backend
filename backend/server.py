@@ -8176,6 +8176,296 @@ async def import_driver_ids(data: dict, _=Depends(require_admin)):
             "ambiguous": ambiguous[:20], "unmatched": unmatched[:20]}
 
 
+# =========================
+# CUADRANTE DE TURNOS (shifts) + solicitudes de días
+#   shifts:        {center, driver_id, driver_name, date "YYYY-MM-DD", type}
+#                  type ∈ trabaja | libre | extra
+#   shift_requests:{id, center, driver_id, driver_name, date, type(libre|extra),
+#                   status(pendiente|aprobado|rechazado), created_at, resolved_by, note}
+#   shift_settings:{center, min_cobertura}  -> para auto-aprobar si sobra gente
+# =========================
+
+VALID_SHIFT_TYPE = {"trabaja", "libre", "extra"}
+
+
+async def _user_center(user: dict) -> Optional[str]:
+    """Centro del usuario. Admin -> None (ve todos)."""
+    if user.get("role") == "admin":
+        return None
+    d = await db.drivers.find_one({"id": user.get("sub")}, {"_id": 0, "center": 1})
+    return d.get("center") if d else None
+
+
+async def _min_cobertura(center: str) -> int:
+    s = await db.shift_settings.find_one({"center": center}, {"_id": 0, "min_cobertura": 1})
+    if s and isinstance(s.get("min_cobertura"), int):
+        return s["min_cobertura"]
+    return 0  # 0 = auto-aprobado desactivado (todo pasa a pendiente)
+
+
+async def _coverage_for_date(center: str, date: str) -> int:
+    """Conductores que ese día están 'trabaja' o 'extra'."""
+    return await db.shifts.count_documents(
+        {"center": center, "date": date, "type": {"$in": ["trabaja", "extra"]}}
+    )
+
+
+@api_router.get("/shifts")
+async def get_shifts(center: Optional[str] = None, desde: Optional[str] = None,
+                     hasta: Optional[str] = None, _=Depends(require_admin)):
+    q = {}
+    if center:
+        q["center"] = center
+    if desde or hasta:
+        rng = {}
+        if desde:
+            rng["$gte"] = desde
+        if hasta:
+            rng["$lte"] = hasta
+        q["date"] = rng
+    docs = await db.shifts.find(q, {"_id": 0}).to_list(20000)
+    return {"shifts": docs}
+
+
+@api_router.post("/shifts/bulk")
+async def save_shifts_bulk(data: dict = Body(...), _=Depends(require_admin)):
+    """Guarda/actualiza varios turnos. body: {items:[{driver_id,driver_name,center,date,type}]}"""
+    items = data.get("items") or []
+    saved = 0
+    for it in items:
+        did = it.get("driver_id")
+        date = it.get("date")
+        center = it.get("center")
+        typ = it.get("type")
+        if not (did and date and center and typ in VALID_SHIFT_TYPE):
+            continue
+        await db.shifts.update_one(
+            {"driver_id": did, "date": date},
+            {"$set": {"driver_id": did, "driver_name": it.get("driver_name", ""),
+                      "center": center, "date": date, "type": typ}},
+            upsert=True,
+        )
+        saved += 1
+    return {"success": True, "saved": saved}
+
+
+@api_router.get("/shifts/coverage")
+async def get_coverage(center: str, desde: str, hasta: str, _=Depends(require_admin)):
+    """Nº de conductores disponibles (trabaja+extra) por día en el rango."""
+    cur = db.shifts.find(
+        {"center": center, "date": {"$gte": desde, "$lte": hasta},
+         "type": {"$in": ["trabaja", "extra"]}},
+        {"_id": 0, "date": 1},
+    )
+    counts: dict = {}
+    async for s in cur:
+        counts[s["date"]] = counts.get(s["date"], 0) + 1
+    return {"coverage": counts, "min": await _min_cobertura(center)}
+
+
+@api_router.post("/shifts/settings")
+async def set_shift_settings(data: dict = Body(...), _=Depends(require_admin)):
+    center = data.get("center")
+    mn = data.get("min_cobertura")
+    if not center or not isinstance(mn, int):
+        raise HTTPException(status_code=400, detail="center y min_cobertura (int) requeridos")
+    await db.shift_settings.update_one(
+        {"center": center}, {"$set": {"center": center, "min_cobertura": mn}}, upsert=True
+    )
+    return {"success": True}
+
+
+@api_router.get("/shifts/mine")
+async def get_my_shifts(desde: Optional[str] = None, hasta: Optional[str] = None,
+                        user: dict = Depends(require_any_auth)):
+    """Calendario propio del conductor: sus turnos + sus solicitudes."""
+    did = user.get("sub")
+    q = {"driver_id": did}
+    if desde or hasta:
+        rng = {}
+        if desde:
+            rng["$gte"] = desde
+        if hasta:
+            rng["$lte"] = hasta
+        q["date"] = rng
+    shifts = await db.shifts.find(q, {"_id": 0}).to_list(2000)
+    reqs = await db.shift_requests.find(
+        {"driver_id": did}, {"_id": 0}
+    ).sort("date", 1).to_list(500)
+    return {"shifts": shifts, "requests": reqs}
+
+
+@api_router.post("/shift-requests")
+async def create_shift_request(data: dict = Body(...), user: dict = Depends(require_any_auth)):
+    """El conductor solicita un día (libre o extra). Auto-aprueba si hay cobertura."""
+    date = data.get("date")
+    typ = data.get("type", "libre")
+    if not date or typ not in {"libre", "extra"}:
+        raise HTTPException(status_code=400, detail="date y type(libre|extra) requeridos")
+    did = user.get("sub")
+    drv = await db.drivers.find_one({"id": did}, {"_id": 0, "name": 1, "center": 1})
+    if not drv:
+        raise HTTPException(status_code=404, detail="Conductor no encontrado")
+    center = drv.get("center")
+    name = drv.get("name", "")
+    note = (data.get("note") or "").strip()[:200]
+
+    # ¿auto-aprobar? solo para 'libre' y si tras quitarlo aún queda cobertura mínima
+    status = "pendiente"
+    resolved_by = None
+    mn = await _min_cobertura(center)
+    if typ == "libre" and mn > 0:
+        cov = await _coverage_for_date(center, date)
+        if (cov - 1) >= mn:
+            status = "aprobado"
+            resolved_by = "auto"
+
+    req = {
+        "id": str(uuid.uuid4()), "center": center, "driver_id": did,
+        "driver_name": name, "date": date, "type": typ, "status": status,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "resolved_by": resolved_by, "note": note,
+    }
+    await db.shift_requests.insert_one(req)
+    # si se auto-aprobó, refleja el turno
+    if status == "aprobado":
+        await db.shifts.update_one(
+            {"driver_id": did, "date": date},
+            {"$set": {"driver_id": did, "driver_name": name, "center": center,
+                      "date": date, "type": typ}},
+            upsert=True,
+        )
+    req.pop("_id", None)
+    return {"success": True, "request": req, "auto": status == "aprobado"}
+
+
+@api_router.get("/shift-requests")
+async def list_shift_requests(center: Optional[str] = None, status: Optional[str] = None,
+                              _=Depends(require_admin)):
+    q = {}
+    if center:
+        q["center"] = center
+    if status:
+        q["status"] = status
+    reqs = await db.shift_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return {"requests": reqs}
+
+
+@api_router.post("/shift-requests/{req_id}/resolve")
+async def resolve_shift_request(req_id: str, data: dict = Body(...),
+                                admin: dict = Depends(require_admin)):
+    """Aprobar o rechazar. body: {action: aprobar|rechazar}"""
+    action = data.get("action")
+    if action not in {"aprobar", "rechazar"}:
+        raise HTTPException(status_code=400, detail="action debe ser aprobar|rechazar")
+    req = await db.shift_requests.find_one({"id": req_id}, {"_id": 0})
+    if not req:
+        raise HTTPException(status_code=404, detail="Solicitud no encontrada")
+    new_status = "aprobado" if action == "aprobar" else "rechazado"
+    await db.shift_requests.update_one(
+        {"id": req_id},
+        {"$set": {"status": new_status, "resolved_by": admin.get("name", "admin")}},
+    )
+    if new_status == "aprobado":
+        await db.shifts.update_one(
+            {"driver_id": req["driver_id"], "date": req["date"]},
+            {"$set": {"driver_id": req["driver_id"], "driver_name": req.get("driver_name", ""),
+                      "center": req["center"], "date": req["date"], "type": req["type"]}},
+            upsert=True,
+        )
+    return {"success": True, "status": new_status}
+
+
+@api_router.post("/shifts/import")
+async def import_shifts(file: UploadFile = File(...), center: str = Form(...),
+                        _=Depends(require_admin)):
+    """Importa un cuadrante desde Excel.
+    Formato esperado: 1ª columna = nombre del conductor; cabeceras de las
+    siguientes columnas = fechas (YYYY-MM-DD o día del mes); celdas = T/L/E
+    (trabaja/libre/extra). Tolerante: reconoce 't','trabaja','x' -> trabaja,
+    'l','libre','-' -> libre, 'e','extra' -> extra."""
+    content = await file.read()
+    fname = (file.filename or "").lower()
+    rows = []
+    try:
+        if fname.endswith(".xls"):
+            import xlrd
+            book = xlrd.open_workbook(file_contents=content)
+            sh = book.sheet_by_index(0)
+            for r in range(sh.nrows):
+                rows.append([sh.cell_value(r, c) for c in range(sh.ncols)])
+        else:
+            import openpyxl, io
+            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+            ws = wb[wb.sheetnames[0]]
+            for row in ws.iter_rows(values_only=True):
+                rows.append(list(row))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"No se pudo leer el Excel: {e}")
+
+    if len(rows) < 2:
+        raise HTTPException(status_code=400, detail="Excel vacío o sin cabecera de fechas")
+
+    def norm_type(v):
+        s = str(v or "").strip().lower()
+        if s in {"t", "trabaja", "x", "tr", "w", "1"}:
+            return "trabaja"
+        if s in {"e", "extra", "ex"}:
+            return "extra"
+        if s in {"l", "libre", "-", "0", "off", "d"}:
+            return "libre"
+        return None
+
+    def norm_date(v):
+        s = str(v).strip()
+        if not s:
+            return None
+        if hasattr(v, "strftime"):
+            return v.strftime("%Y-%m-%d")
+        m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", s)
+        if m:
+            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+        return None
+
+    header = rows[0]
+    date_cols = {}  # idx -> 'YYYY-MM-DD'
+    for ci in range(1, len(header)):
+        d = norm_date(header[ci])
+        if d:
+            date_cols[ci] = d
+    if not date_cols:
+        raise HTTPException(status_code=400,
+                            detail="No encontré fechas válidas (YYYY-MM-DD) en la cabecera")
+
+    drivers = await db.drivers.find({"center": center}, {"_id": 0, "id": 1, "name": 1}).to_list(1000)
+    by_name = {(d.get("name") or "").strip().lower(): d for d in drivers}
+
+    saved, unmatched = 0, []
+    for r in rows[1:]:
+        if not r or not str(r[0]).strip():
+            continue
+        nm = str(r[0]).strip()
+        drv = by_name.get(nm.lower())
+        if not drv:
+            unmatched.append(nm)
+            continue
+        for ci, date in date_cols.items():
+            if ci >= len(r):
+                continue
+            typ = norm_type(r[ci])
+            if not typ:
+                continue
+            await db.shifts.update_one(
+                {"driver_id": drv["id"], "date": date},
+                {"$set": {"driver_id": drv["id"], "driver_name": drv["name"],
+                          "center": center, "date": date, "type": typ}},
+                upsert=True,
+            )
+            saved += 1
+    return {"success": True, "saved": saved, "dias": len(date_cols),
+            "unmatched": unmatched[:20]}
+
+
 
 app.include_router(auth_router)
 app.include_router(api_router)
