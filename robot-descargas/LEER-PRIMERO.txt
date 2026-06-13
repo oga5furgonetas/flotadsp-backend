@@ -1,0 +1,66 @@
+════════════════════════════════════════════════════════════════
+ ROBOT DE DESCARGAS FLOTADSP — Guía rápida
+════════════════════════════════════════════════════════════════
+
+QUÉ HACE
+  Cada X minutos abre Cortex (con tu sesión), descarga el informe
+  y lo sube solo a FlotaDSP, que recalcula el rescate al instante.
+  Tú no tocas nada mientras esté corriendo.
+
+QUÉ NECESITAS
+  • Este PC encendido mientras quieras que funcione.
+  • Tu sesión de Cortex iniciada (la 1ª vez logueas tú a mano).
+  • Node.js instalado (ya lo tienes).
+
+⚠️ AVISO IMPORTANTE
+  Esto automatiza el acceso a Cortex. Amazon no publica una API, así
+  que técnicamente esto "imita" tus clics. No es ilegal como falsear
+  el Mentor, pero roza los términos de uso del portal. Úsalo con
+  cabeza: intervalos razonables (20-30 min, no cada minuto) y solo
+  para descargar TUS informes. Si Cortex cambia de diseño, habrá que
+  reajustar el robot.
+
+────────────────────────────────────────────────────────────────
+PUESTA EN MARCHA (solo la primera vez)
+────────────────────────────────────────────────────────────────
+
+1) Abre una terminal en esta carpeta y ejecuta:
+       npm install
+       npx playwright install chromium
+
+2) Averigua la URL y el botón de descarga de Cortex:
+       npm run grabar -- "https://cortex...la-pagina-de-itinerarios"
+   Se abre un navegador. Haz EXACTAMENTE lo que harías para descargar
+   el informe (clic en la pestaña DAs, clic en el botón de descarga).
+   En la ventanita "Playwright Inspector" verás el código que genera.
+   Fíjate en:
+     • la URL de la página  → va en CONFIG.cortexUrl
+     • la línea del clic de descargar → de ahí sacas el texto/selector
+       del botón (CONFIG.textoBotonDescarga o selectorBotonDescarga)
+
+3) Abre robot.js y rellena la sección "CONFIGURA AQUÍ":
+       intervaloMinutos     → cada cuánto (ej. 30)
+       centro               → OGA5 / DGA1 / DGA2
+       cortexUrl            → la URL del paso 2
+       textoBotonDescarga   → el texto del botón (ej. "Descargar")
+       endpointSubida       → '/metrics/upload-report' para Itinerarios
+                              '/metrics/upload-routeplan' para el CYCLE
+
+4) Arranca el robot:
+       npm run robot
+   La primera vez, si Cortex pide login, hazlo en la ventana que se
+   abre y déjala. A partir de ahí recuerda la sesión.
+
+────────────────────────────────────────────────────────────────
+USO DIARIO
+────────────────────────────────────────────────────────────────
+  • Enciende el PC, abre la terminal en esta carpeta y:  npm run robot
+  • Déjalo corriendo. Cada X min descarga y sube solo.
+  • En FlotaDSP → Centro de control verás los datos actualizándose.
+  • Para parar: Ctrl+C en la terminal.
+
+CONSEJO
+  Si solo quieres que suba lo que TÚ descargas (sin que el robot entre
+  en Cortex), dímelo y te hago la versión "vigilante de carpeta": tú
+  descargas con 1 clic y se sube solo. Cero riesgo con Amazon.
+════════════════════════════════════════════════════════════════
