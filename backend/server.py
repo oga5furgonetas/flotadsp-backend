@@ -7347,5 +7347,176 @@ async def vehicle_provider_info_by_plate(plate: str, _=Depends(require_any_auth)
     }
 
 
+# =========================
+# ALQUILER DE FURGONETAS — directorio por centro (datos reales verificados)
+# =========================
+
+# Coordenadas aproximadas de cada centro logístico (para distancia)
+_CENTER_COORDS = {
+    "OGA5": (42.8782, -8.5448),   # Santiago de Compostela
+    "DGA1": (43.3623, -8.4115),   # A Coruña (La Grela)
+    "DGA2": (42.2328, -8.7226),   # Vigo
+}
+
+_SEED_RENTALS = [
+    # ── SANTIAGO (OGA5) ──
+    {"name": "Iberfurgo Santiago", "center": "OGA5",
+     "address": "Santiago de Compostela", "phone": "679954668",
+     "email": "santiago@iberfurgo.com",
+     "website": "https://www.iberfurgo.com/oficinas/alquiler-furgonetas-santiago-compostela/",
+     "notes": "Furgonetas y camiones. Desde ~30 €/día. Stock de vehículos nuevos."},
+    {"name": "Hello Rentacar Santiago", "center": "OGA5",
+     "address": "Avenida de Lugo, 117, Santiago de Compostela", "phone": "881972226",
+     "email": "",
+     "website": "https://www.hellorentacar.es/alquiler-furgonetas/galicia/santiago-compostela/",
+     "notes": "Coches y furgonetas en el centro de Santiago."},
+    {"name": "GoRental Santiago", "center": "OGA5",
+     "address": "Santiago de Compostela", "phone": "981573993",
+     "email": "",
+     "website": "http://www.gorental.es/",
+     "notes": "Alquiler local de vehículos comerciales."},
+    {"name": "OneFurgo Santiago", "center": "OGA5",
+     "address": "Santiago de Compostela", "phone": "",
+     "email": "info@onefurgo.com",
+     "website": "https://onefurgo.com/red-de-oficinas/alquiler-de-furgonetas-baratas-en-santiago-de-compostela",
+     "notes": "Furgonetas de carga, pasajeros y carrozadas. Reserva online."},
+    {"name": "Hertz — Aeropuerto Santiago", "center": "OGA5",
+     "address": "Aeropuerto de Santiago (Lavacolla)", "phone": "",
+     "email": "",
+     "website": "https://www.hertz.es/p/alquiler-de-furgonetas/espana/santiago-de-compostela",
+     "notes": "En el aeropuerto. Accesible por A-54/SC-21."},
+
+    # ── A CORUÑA (DGA1) ──
+    {"name": "Iberfurgo A Coruña", "center": "DGA1",
+     "address": "C/ Gutemberg 38A, P.I. La Grela, 15008 A Coruña", "phone": "698139597",
+     "email": "",
+     "website": "https://www.iberfurgo.com/oficinas/alquiler-furgonetas-coruna/",
+     "notes": "L-V 8:00-13:30 y 16:00-20:30 · Sáb 9:00-13:00 · Dom/festivos cita previa. Asistencia 24/7."},
+    {"name": "OneFurgo A Coruña", "center": "DGA1",
+     "address": "Carretera Pocomaco, S/N, A Coruña", "phone": "",
+     "email": "info@onefurgo.com",
+     "website": "https://onefurgo.com/red-de-oficinas/a-coruna",
+     "notes": "Furgonetas sin conductor para empresas y particulares. Reserva online."},
+
+    # ── VIGO (DGA2) ──
+    {"name": "OneFurgo Vigo", "center": "DGA2",
+     "address": "Camiño Gandariña, 21, Lavadores, 36214 Vigo", "phone": "986933464",
+     "email": "info@onefurgo.com",
+     "website": "https://onefurgo.com/red-de-oficinas/vigo",
+     "notes": "Carga, pasajeros y carrozadas. Reserva online."},
+    {"name": "Iberfurgo Vigo", "center": "DGA2",
+     "address": "Autovía de Madrid, 234 - Nave 4B, 36318 Vigo", "phone": "608096307",
+     "email": "",
+     "website": "https://www.iberfurgo.com/oficinas/alquiler-furgonetas-vigo/",
+     "notes": "Alquiler por días y renting por meses. Flota nueva. Asistencia 24/7."},
+]
+
+
+@app.on_event("startup")
+async def seed_rental_companies():
+    """Siembra el directorio de empresas de alquiler (idempotente)."""
+    try:
+        existing = await db.rental_companies.count_documents({})
+        if existing > 0:
+            return
+        docs = []
+        for r in _SEED_RENTALS:
+            doc = dict(r)
+            doc["id"] = str(uuid.uuid4())
+            doc["maps_url"] = "https://www.google.com/maps/search/?api=1&query=" + (r.get("address") or r["name"]).replace(" ", "+")
+            doc["active"] = True
+            doc["last_check"] = None     # {date, by, available, note}
+            doc["created_at"] = datetime.now(timezone.utc).isoformat()
+            docs.append(doc)
+        if docs:
+            await db.rental_companies.insert_many(docs)
+            logger.info(f"Sembradas {len(docs)} empresas de alquiler")
+    except Exception as e:
+        logger.error(f"Seed rentals: {e}")
+
+
+def _haversine_km(c1, c2):
+    import math
+    if not c1 or not c2:
+        return None
+    lat1, lon1 = c1
+    lat2, lon2 = c2
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2)**2
+    return round(R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a)), 1)
+
+
+@api_router.get("/rentals")
+async def list_rentals(center: Optional[str] = None, _=Depends(require_admin)):
+    """Empresas de alquiler de furgonetas, opcionalmente filtradas por centro."""
+    query = {"active": {"$ne": False}}
+    if center and center != "Todos":
+        query["center"] = center
+    docs = await db.rental_companies.find(query, {"_id": 0}).to_list(200)
+    docs.sort(key=lambda d: d.get("name", ""))
+    return docs
+
+
+@api_router.post("/rentals")
+async def create_rental(data: dict, _=Depends(require_admin)):
+    """Añade una empresa de alquiler manualmente."""
+    name = (data.get("name") or "").strip()
+    center = (data.get("center") or "").strip()
+    if not name or center not in ("OGA5", "DGA1", "DGA2"):
+        raise HTTPException(status_code=400, detail="Nombre y centro (OGA5/DGA1/DGA2) requeridos")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": name, "center": center,
+        "address": (data.get("address") or "").strip(),
+        "phone": re.sub(r"[^0-9+]", "", data.get("phone") or ""),
+        "email": (data.get("email") or "").strip(),
+        "website": (data.get("website") or "").strip(),
+        "notes": (data.get("notes") or "").strip(),
+        "maps_url": "https://www.google.com/maps/search/?api=1&query=" + ((data.get("address") or name).replace(" ", "+")),
+        "active": True, "last_check": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.rental_companies.insert_one(doc)
+    doc.pop("_id", None)
+    return {"success": True, "id": doc["id"]}
+
+
+@api_router.patch("/rentals/{rental_id}")
+async def update_rental(rental_id: str, data: dict, _=Depends(require_admin)):
+    """Edita una empresa o registra una verificación de disponibilidad."""
+    data.pop("_id", None)
+    data.pop("id", None)
+    await db.rental_companies.update_one({"id": rental_id}, {"$set": data})
+    return {"success": True}
+
+
+@api_router.post("/rentals/{rental_id}/check")
+async def verify_rental_availability(rental_id: str, data: dict, user: dict = Depends(get_current_user)):
+    """Registra disponibilidad verificada por el equipo (tras llamar)."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administradores")
+    check = {
+        "date": datetime.now(timezone.utc).isoformat(),
+        "by": user.get("name", "?"),
+        "available": data.get("available"),          # nº de furgonetas o texto
+        "note": (data.get("note") or "").strip()[:200],
+    }
+    result = await db.rental_companies.update_one(
+        {"id": rental_id}, {"$set": {"last_check": check}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Empresa no encontrada")
+    return {"success": True, "last_check": check}
+
+
+@api_router.delete("/rentals/{rental_id}")
+async def delete_rental(rental_id: str, _=Depends(require_admin)):
+    await db.rental_companies.update_one({"id": rental_id}, {"$set": {"active": False}})
+    return {"success": True}
+
+
+
 app.include_router(auth_router)
 app.include_router(api_router)

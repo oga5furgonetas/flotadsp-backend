@@ -27,7 +27,7 @@
 
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
   <title>FlotaDSP</title>
-  <script type="module" crossorigin src="/assets/index-v533w.js"></script>
+  <script type="module" crossorigin src="/assets/index-v533x.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-BdiVWMWf.css">
 
   <!-- ═══════════════════════════════════════════════════════
@@ -2990,6 +2990,153 @@
     });
   })();
   </script>
+  <!-- FlotaDSP — Casas de alquiler de furgonetas por centro -->
+  <script>
+  (function(){
+    var API = "https://flotadsp-backend.fly.dev/api";
+    function tok(){ return localStorage.getItem("flotadsp_token")||""; }
+    function apiGet(p){ return fetch(API+p,{headers:{"Authorization":"Bearer "+tok()}}).then(function(r){return r.json();}); }
+    function apiPost(p,b){ return fetch(API+p,{method:"POST",headers:{"Authorization":"Bearer "+tok(),"Content-Type":"application/json"},body:JSON.stringify(b)}).then(function(r){return r.json();}); }
+    function waitReact(cb){ var t=setInterval(function(){ if(window.__FlotaReact){clearInterval(t);cb(window.__FlotaReact);} },120); }
+
+    waitReact(function(React){
+      var h = React.createElement;
+
+      function fmtCheck(lc){
+        if(!lc) return null;
+        var d = new Date(lc.date);
+        var days = Math.floor((Date.now()-d.getTime())/864e5);
+        var when = days===0?'hoy':days===1?'ayer':'hace '+days+' días';
+        return {when:when, by:lc.by, available:lc.available, note:lc.note, stale:days>14};
+      }
+
+      window.__FlotaRentals = function(props){
+        var xs=React.useState(null),items=xs[0],setItems=xs[1];
+        var xl=React.useState(true),loading=xl[0],setLoading=xl[1];
+        var xc=React.useState(props.center && props.center!=='Todos' ? props.center : 'OGA5'),centro=xc[0],setCentro=xc[1];
+        var xk=React.useState(null),checkId=xk[0],setCheckId=xk[1];
+        var xa=React.useState(''),avail=xa[0],setAvail=xa[1];
+        var xn=React.useState(''),note=xn[0],setNote=xn[1];
+
+        function load(){
+          setLoading(true);
+          apiGet('/rentals?center='+centro).then(function(r){ setItems(Array.isArray(r)?r:[]); setLoading(false); }).catch(function(){ setLoading(false); });
+        }
+        React.useEffect(function(){ load(); },[centro]);
+
+        function saveCheck(id){
+          apiPost('/rentals/'+id+'/check',{available:avail,note:note}).then(function(j){
+            if(j.success){ setCheckId(null); setAvail(''); setNote(''); load(); if(props.toast)props.toast.success('Disponibilidad registrada'); }
+          });
+        }
+
+        var cc={'OGA5':'#f97316','DGA1':'#3b82f6','DGA2':'#8b5cf6'};
+
+        return h('div',{style:{padding:'22px',maxWidth:'820px',margin:'0 auto'}},
+          h('div',{style:{marginBottom:'8px'}},
+            h('h1',{style:{margin:0,fontSize:'21px',fontWeight:800,color:'#f4f5f8'}},'🏠 Casas de alquiler de furgonetas'),
+            h('p',{style:{margin:'4px 0 0',fontSize:'12.5px',color:'#8892a4'}},
+              'Empresas reales de la zona de cada centro. Llama o reserva en su web — y deja anotada la disponibilidad que te confirmen para que la vea todo el equipo.')
+          ),
+
+          /* pestañas de centro */
+          h('div',{style:{display:'flex',gap:'6px',margin:'14px 0'}},
+            ['OGA5','DGA1','DGA2'].map(function(c){
+              var active=centro===c;
+              var lbl={'OGA5':'OGA5 · Santiago','DGA1':'DGA1 · A Coruña','DGA2':'DGA2 · Vigo'}[c];
+              return h('button',{key:c,onClick:function(){setCentro(c);},style:{
+                padding:'7px 16px',borderRadius:'99px',fontSize:'12.5px',fontWeight:700,cursor:'pointer',
+                border:'1px solid '+(active?cc[c]+'88':'rgba(255,255,255,.10)'),
+                background:active?cc[c]+'22':'transparent',color:active?cc[c]:'#8892a4'
+              }},lbl);
+            })
+          ),
+
+          loading && h('div',{style:{textAlign:'center',padding:'50px 0',color:'#8892a4'}},'⏳ Cargando…'),
+
+          !loading && (items||[]).length===0 && h('div',{style:{textAlign:'center',padding:'50px 0',color:'#8892a4'}},
+            'No hay empresas registradas en este centro todavía.'),
+
+          !loading && h('div',{style:{display:'flex',flexDirection:'column',gap:'12px'}},
+            (items||[]).map(function(it){
+              var chk = fmtCheck(it.last_check);
+              return h('div',{key:it.id,style:{
+                background:'linear-gradient(145deg,rgba(22,24,31,.95),rgba(17,19,24,.98))',
+                border:'1px solid rgba(255,255,255,.08)',borderRadius:'16px',padding:'16px 18px'
+              }},
+                h('div',{style:{display:'flex',alignItems:'flex-start',gap:'12px',flexWrap:'wrap'}},
+                  h('div',{style:{flex:1,minWidth:'200px'}},
+                    h('div',{style:{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}},
+                      h('span',{style:{fontSize:'15px',fontWeight:800,color:'#f4f5f8'}},it.name),
+                      chk && h('span',{title:'Última disponibilidad verificada por el equipo',style:{
+                        fontSize:'10.5px',fontWeight:700,padding:'2px 9px',borderRadius:'99px',
+                        color: chk.stale?'#f59e0b':'#4ade80',
+                        background: chk.stale?'rgba(245,158,11,.12)':'rgba(34,197,94,.12)'
+                      }}, '✓ '+(chk.available||'verificada')+' · '+chk.when)
+                    ),
+                    it.address && h('p',{style:{margin:'5px 0 0',fontSize:'12.5px',color:'#8892a4'}},'📍 '+it.address),
+                    it.notes && h('p',{style:{margin:'4px 0 0',fontSize:'12px',color:'#6b7280',lineHeight:1.5}},it.notes),
+                    chk && chk.note && h('p',{style:{margin:'6px 0 0',fontSize:'12px',color:'#9aa3b5',fontStyle:'italic'}},
+                      '🗒️ '+chk.note+' — '+chk.by)
+                  )
+                ),
+                /* botonera */
+                h('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap',marginTop:'12px'}},
+                  it.phone && h('a',{href:'tel:'+it.phone,style:{
+                    display:'inline-flex',alignItems:'center',gap:'6px',padding:'7px 14px',borderRadius:'9px',
+                    background:'rgba(34,197,94,.12)',border:'1px solid rgba(34,197,94,.3)',color:'#4ade80',
+                    fontSize:'12.5px',fontWeight:700,textDecoration:'none'
+                  }},'📞 '+it.phone),
+                  it.website && h('a',{href:it.website,target:'_blank',rel:'noopener',style:{
+                    display:'inline-flex',alignItems:'center',gap:'6px',padding:'7px 14px',borderRadius:'9px',
+                    background:'rgba(59,130,246,.12)',border:'1px solid rgba(59,130,246,.3)',color:'#60a5fa',
+                    fontSize:'12.5px',fontWeight:700,textDecoration:'none'
+                  }},'🌐 Ver disponibilidad y reservar'),
+                  it.maps_url && h('a',{href:it.maps_url,target:'_blank',rel:'noopener',style:{
+                    display:'inline-flex',alignItems:'center',gap:'6px',padding:'7px 14px',borderRadius:'9px',
+                    background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',color:'#c8ccd6',
+                    fontSize:'12.5px',fontWeight:600,textDecoration:'none'
+                  }},'🗺️ Cómo llegar'),
+                  it.email && h('a',{href:'mailto:'+it.email,style:{
+                    display:'inline-flex',alignItems:'center',gap:'6px',padding:'7px 14px',borderRadius:'9px',
+                    background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.12)',color:'#c8ccd6',
+                    fontSize:'12.5px',fontWeight:600,textDecoration:'none'
+                  }},'✉️ Email'),
+                  h('button',{onClick:function(){ setCheckId(checkId===it.id?null:it.id); setAvail(''); setNote(''); },style:{
+                    padding:'7px 14px',borderRadius:'9px',cursor:'pointer',
+                    background:'rgba(249,115,22,.12)',border:'1px solid rgba(249,115,22,.35)',color:'#fb923c',
+                    fontSize:'12.5px',fontWeight:700
+                  }},'✏️ Anotar disponibilidad')
+                ),
+                /* formulario de verificación */
+                checkId===it.id && h('div',{style:{marginTop:'12px',padding:'12px',borderRadius:'10px',
+                  background:'rgba(249,115,22,.06)',border:'1px solid rgba(249,115,22,.2)'}},
+                  h('p',{style:{margin:'0 0 8px',fontSize:'11.5px',color:'#fb923c',fontWeight:700}},
+                    'Tras llamar, anota lo que te confirmen (lo verá todo el equipo):'),
+                  h('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap'}},
+                    h('input',{placeholder:'Disponibles (ej: 2 L2H2)',value:avail,onChange:function(e){setAvail(e.target.value);},
+                      style:{flex:'0 0 auto',width:'170px',background:'#1c1f28',border:'1px solid rgba(255,255,255,.15)',borderRadius:'8px',color:'#f4f5f8',padding:'7px 10px',fontSize:'12.5px'}}),
+                    h('input',{placeholder:'Nota (precio, condiciones…)',value:note,onChange:function(e){setNote(e.target.value);},
+                      style:{flex:1,minWidth:'160px',background:'#1c1f28',border:'1px solid rgba(255,255,255,.15)',borderRadius:'8px',color:'#f4f5f8',padding:'7px 10px',fontSize:'12.5px'}}),
+                    h('button',{onClick:function(){saveCheck(it.id);},style:{
+                      padding:'7px 16px',borderRadius:'8px',border:'none',cursor:'pointer',fontSize:'12.5px',fontWeight:700,
+                      background:'linear-gradient(135deg,#22c55e,#16a34a)',color:'#fff'
+                    }},'Guardar')
+                  )
+                )
+              );
+            })
+          ),
+
+          /* aviso de honestidad */
+          !loading && h('p',{style:{marginTop:'18px',fontSize:'11px',color:'#5c6578',lineHeight:1.6,textAlign:'center'}},
+            'ℹ️ La disponibilidad en tiempo real solo la tiene cada empresa en su propia web de reservas (botón "Ver disponibilidad"). Aquí guardamos lo que tu equipo verifica al llamar, para no repetir llamadas.')
+        );
+      };
+    });
+  })();
+  </script>
+
   <!-- FlotaDSP — Vehicle Documents Tab Component -->
   <script>
   (function(){
