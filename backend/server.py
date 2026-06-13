@@ -185,6 +185,9 @@ class Driver(BaseModel):
     photo_url: Optional[str] = None    # foto de perfil (R2)
     center: Optional[str] = None
     active: bool = True
+    contrato: Optional[str] = None     # empresa | ett (cuadrante de turnos)
+    nivel: Optional[str] = None        # pleno | L1 | L2 | L3 (novatos)
+    zona: Optional[str] = None         # zona habitual (opcional)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

@@ -3576,6 +3576,12 @@
     function fmt(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
     function addDays(d,n){ var x=new Date(d); x.setDate(x.getDate()+n); return x; }
     function pretty(iso){ try{var p=iso.split('-');return p[2]+'/'+p[1];}catch(e){return iso;} }
+    function firstOfMonth(d){ var x=new Date(d); x.setDate(1); x.setHours(0,0,0,0); return x; }
+    function addMonths(d,n){ var x=new Date(d); x.setDate(1); x.setMonth(x.getMonth()+n); return x; }
+    function _dt(iso){ var p=iso.split('-'); return new Date(+p[0],+p[1]-1,+p[2]); }
+    function isWeekend(iso){ var dd=_dt(iso).getDay(); return dd===0||dd===6; }
+    function dowLetter(iso){ return ['L','M','X','J','V','S','D'][(_dt(iso).getDay()+6)%7]; }
+    function monthName(d){ var s=d.toLocaleDateString('es-ES',{month:'long',year:'numeric'}); return s.charAt(0).toUpperCase()+s.slice(1); }
 
     waitReact(function(React){
       var h = React.createElement;
@@ -3585,7 +3591,7 @@
         var propCenter = (props.center && props.center!=='Todos') ? props.center : null;
         var cS=React.useState(propCenter||'OGA5'),center=cS[0],setCenter=cS[1];
         React.useEffect(function(){ if(propCenter) setCenter(propCenter); },[props.center]);
-        var wS=React.useState(monday(new Date())),wkStart=wS[0],setWk=wS[1];
+        var wS=React.useState(firstOfMonth(new Date())),monStart=wS[0],setMon=wS[1];
         var dS=React.useState([]),drivers=dS[0],setDrivers=dS[1];
         var mS=React.useState({}),map=mS[0],setMap=mS[1];      /* did|date -> type */
         var dirtyS=React.useState({}),dirty=dirtyS[0],setDirty=dirtyS[1];
@@ -3599,14 +3605,16 @@
         var genS=React.useState(false),showGen=genS[0],setShowGen=genS[1];
         var gpS=React.useState('Los de empresa solo de lunes a viernes. Prioriza eficiencia (no equitativo). Coloca a los novatos L1/L2/L3 con carga progresiva.'),genPrompt=gpS[0],setGenPrompt=gpS[1];
         var ggS=React.useState(false),generating=ggS[0],setGenerating=ggS[1];
+        var geS=React.useState(0),genElapsed=geS[0],setGenElapsed=geS[1];
         var grS=React.useState(''),genResumen=grS[0],setGenResumen=grS[1];
         var edS=React.useState(null),editDrv=edS[0],setEditDrv=edS[1];
         var scwS=React.useState({semanas:{},total:0}),scInfo=scwS[0],setScInfo=scwS[1];
         var spS=React.useState([]),scProg=spS[0],setScProg=spS[1];
         var siS=React.useState(false),scImporting=siS[0],setScImporting=siS[1];
 
-        var days = []; for(var i=0;i<7;i++) days.push(fmt(addDays(wkStart,i)));
-        var desde=days[0], hasta=days[6];
+        var _dim=new Date(monStart.getFullYear(),monStart.getMonth()+1,0).getDate();
+        var days = []; for(var i=0;i<_dim;i++) days.push(fmt(addDays(monStart,i)));
+        var desde=days[0], hasta=days[days.length-1];
 
         function load(){
           setLoading(true);
@@ -3629,6 +3637,7 @@
           }).catch(function(){ setLoading(false); if(toast)toast.error('Error cargando el cuadrante'); });
         }
         React.useEffect(function(){ load(); },[center, desde]);
+        React.useEffect(function(){ if(!generating){ setGenElapsed(0); return; } var s=0; var iv=setInterval(function(){ s++; setGenElapsed(s); },1000); return function(){ clearInterval(iv); }; },[generating]);
 
         function cellType(did,date){ return map[did+'|'+date]||'libre'; }
         function cycle(did,date){
@@ -3688,18 +3697,46 @@
 
         function generate(){
           var anyObj=days.some(function(d){ return demand[d]&&demand[d].objetivo; });
-          if(!anyObj){ if(toast)toast.error('Pon las rutas objetivo de Amazon antes de generar'); return; }
-          setGenerating(true); setGenResumen('');
-          saveDemand();
-          apiPost('/shifts/generate',{center:center,desde:desde,hasta:hasta,prompt:genPrompt}).then(function(j){
-            setGenerating(false);
-            if(j&&j.success){
-              var m=Object.assign({},map), dd=Object.assign({},dirty);
-              (j.assignments||[]).forEach(function(a){ var k=a.driver_id+'|'+a.date; m[k]=a.type; dd[k]=1; });
-              setMap(m); setDirty(dd); setGenResumen(j.resumen||'Propuesta generada.'); setShowGen(false);
-              if(toast)toast.success('✨ Cuadrante propuesto · revísalo y guarda');
-            } else { if(toast)toast.error((j&&j.detail)||'La IA no pudo generar'); }
-          }).catch(function(){ setGenerating(false); if(toast)toast.error('Error generando'); });
+          if(!anyObj){ if(toast)toast.error('Pon las rutas objetivo de Amazon en al menos un día antes de generar'); return; }
+          setGenerating(true); setGenResumen(''); saveDemand();
+          /* partir el mes en semanas (acaban en domingo) → cada llamada pequeña = mejor calidad */
+          var weeks=[], cur=[];
+          days.forEach(function(d){ cur.push(d); if(dowLetter(d)==='D'){ weeks.push(cur); cur=[]; } });
+          if(cur.length) weeks.push(cur);
+          weeks=weeks.filter(function(w){ return w.some(function(d){ return demand[d]&&demand[d].objetivo; }); });
+          if(!weeks.length){ setGenerating(false); if(toast)toast.error('Pon objetivos en alguna semana'); return; }
+          var m=Object.assign({},map), dd=Object.assign({},dirty), res=[], i=0;
+          function nextWeek(){
+            if(i>=weeks.length){ setMap(m); setDirty(dd); setGenResumen(res.join('  ·  ')||'Propuesta generada.'); setGenerating(false); setShowGen(false); if(toast)toast.success('✨ Cuadrante propuesto · revísalo y guarda'); return; }
+            var w=weeks[i]; setGenResumen('⏳ Generando semana '+(i+1)+' de '+weeks.length+'…');
+            var ctrl=new AbortController(); var killer=setTimeout(function(){ ctrl.abort(); },180000);
+            fetch(API+'/shifts/generate',{method:'POST',headers:{'Authorization':'Bearer '+tok(),'Content-Type':'application/json'},body:JSON.stringify({center:center,desde:w[0],hasta:w[w.length-1],prompt:genPrompt}),signal:ctrl.signal})
+              .then(function(r){return r.json();}).then(function(j){
+                clearTimeout(killer);
+                if(j&&j.success){ (j.assignments||[]).forEach(function(a){ var k=a.driver_id+'|'+a.date; m[k]=a.type; dd[k]=1; }); if(j.resumen)res.push('S'+(i+1)+': '+j.resumen); }
+                else if(toast)toast.error('Semana '+(i+1)+': '+((j&&j.detail)||'no se pudo'));
+                i++; nextWeek();
+              }).catch(function(err){ clearTimeout(killer); if(toast)toast.error('Semana '+(i+1)+(err&&err.name==='AbortError'?': tardó demasiado, reintenta':': error de red')); i++; nextWeek(); });
+          }
+          nextWeek();
+        }
+
+        function downloadXls(){
+          var L={trabaja:'T',libre:'L',extra:'E'};
+          var head='<tr><th>Conductor</th><th>Contrato</th><th>Nivel</th>'+days.map(function(d){return '<th>'+dowLetter(d)+' '+pretty(d)+'</th>';}).join('')+'</tr>';
+          var body=drivers.map(function(drv){
+            var tds=days.map(function(d){ return '<td>'+(L[cellType(drv.id,d)]||'')+'</td>'; }).join('');
+            return '<tr><td>'+drv.name+'</td><td>'+(((drv.contrato||'ett')==='empresa')?'EMP':'ETT')+'</td><td>'+(drv.nivel||'pleno')+'</td>'+tds+'</tr>';
+          }).join('');
+          var dem='<tr><td>Rutas Amazon</td><td></td><td></td>'+days.map(function(d){var x=demand[d]||{};return '<td>'+(x.objetivo!=null?x.objetivo:'')+'</td>';}).join('')+'</tr>';
+          var cov='<tr><td>Disponibles</td><td></td><td></td>'+days.map(function(d){return '<td>'+coverageOf(d)+'</td>';}).join('')+'</tr>';
+          var html='<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table border="1">'+head+dem+body+cov+'</table></body></html>';
+          var blob=new Blob(['﻿'+html],{type:'application/vnd.ms-excel'});
+          var url=URL.createObjectURL(blob); var a=document.createElement('a');
+          a.href=url; a.download='Cuadrante_'+center+'_'+monthName(monStart).replace(/ /g,'_')+'.xls';
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          setTimeout(function(){ URL.revokeObjectURL(url); },1500);
+          if(toast)toast.success('📥 Cuadrante descargado');
         }
 
         function onScorecards(e){
@@ -3747,16 +3784,17 @@
               h('input',{ref:scFileRef,type:'file',accept:'.pdf,.html,.htm,.xlsx,.csv',multiple:true,style:{display:'none'},onChange:onScorecards}),
               btn('📊 Scorecards',function(){scFileRef.current&&scFileRef.current.click();}),
               h('button',{onClick:function(){setShowGen(true);},style:{padding:'8px 14px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#a78bfa,#7c3aed)',color:'#fff'}},'✨ Generar IA'),
+              btn('📥 Descargar',downloadXls),
               h('button',{onClick:save,disabled:saving,style:{padding:'8px 16px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#34d399,#059669)',color:'#fff',opacity:saving?.6:1}},saving?'⏳…':'💾 Guardar')
             )
           ),
 
-          /* navegación de semana */
-          h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'14px'}},
-            btn('‹ Semana',function(){setWk(addDays(wkStart,-7));}),
-            h('div',{style:{fontSize:'13.5px',fontWeight:700,color:'#cbd3e0'}}, pretty(days[0])+' – '+pretty(days[6])),
-            btn('Semana ›',function(){setWk(addDays(wkStart,7));}),
-            btn('Hoy',function(){setWk(monday(new Date()));},{fontWeight:600}),
+          /* navegación de mes */
+          h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'14px',flexWrap:'wrap'}},
+            btn('‹ Mes',function(){setMon(addMonths(monStart,-1));}),
+            h('div',{style:{fontSize:'14px',fontWeight:800,color:'#f4f5f8',minWidth:'150px',textAlign:'center'}}, monthName(monStart)),
+            btn('Mes ›',function(){setMon(addMonths(monStart,1));}),
+            btn('Hoy',function(){setMon(firstOfMonth(new Date()));},{fontWeight:600}),
             h('div',{style:{flex:1}}),
             h('div',{style:{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:'#8892a4'}},'Cobertura mín.',
               h('input',{type:'number',min:0,value:minCob,onChange:function(e){saveMin(e.target.value);},style:{width:'56px',padding:'5px',borderRadius:'7px',background:'#1a2030',color:'#cbd3e0',border:'1px solid rgba(255,255,255,.12)',fontSize:'12px'}}))
@@ -3816,15 +3854,15 @@
               h('thead',null,
                 h('tr',{style:{background:'rgba(255,255,255,.03)'}},
                   h('th',{style:{textAlign:'left',padding:'10px 12px',fontSize:'12px',color:'#8892a4',position:'sticky',left:0,background:'#141926'}},'Conductor'),
-                  days.map(function(d,i){ return h('th',{key:d,style:{padding:'8px 4px',fontSize:'11px',color:'#8892a4',textAlign:'center',minWidth:'62px'}},
-                    h('div',{style:{fontWeight:700,color:'#cbd3e0'}},DOW[i]),
-                    h('div',null,pretty(d))); })
+                  days.map(function(d){ var we=isWeekend(d); return h('th',{key:d,style:{padding:'6px 2px',fontSize:'10px',textAlign:'center',minWidth:'34px',background:we?'rgba(255,255,255,.025)':'transparent'}},
+                    h('div',{style:{fontWeight:700,color:we?'#8892a4':'#cbd3e0'}},dowLetter(d)),
+                    h('div',{style:{color:we?'#6b7280':'#8892a4'}},d.split('-')[2])); })
                 ),
                 h('tr',{style:{background:'rgba(167,139,250,.06)'}},
                   h('th',{style:{textAlign:'left',padding:'5px 12px',fontSize:'10.5px',color:'#a78bfa',fontWeight:700,position:'sticky',left:0,background:'#141926'}},'Rutas Amazon'),
-                  days.map(function(d){ var x=demand[d]||{}; return h('th',{key:d,style:{padding:'3px',textAlign:'center'}},
-                    h('input',{type:'number',min:0,placeholder:'obj',value:(x.objetivo!=null?x.objetivo:''),onChange:function(e){setDem(d,'objetivo',e.target.value);},onBlur:saveDemand,title:'Rutas objetivo que pide Amazon ese día',
-                      style:{width:'46px',padding:'4px',borderRadius:'6px',background:'#1a2030',color:'#e3e8f0',border:'1px solid rgba(167,139,250,.3)',fontSize:'12px',textAlign:'center'}})); })
+                  days.map(function(d){ var x=demand[d]||{}; var we=isWeekend(d); return h('th',{key:d,style:{padding:'2px',textAlign:'center',background:we?'rgba(255,255,255,.02)':'transparent'}},
+                    h('input',{type:'number',min:0,placeholder:'',value:(x.objetivo!=null?x.objetivo:''),onChange:function(e){setDem(d,'objetivo',e.target.value);},onBlur:saveDemand,title:'Rutas objetivo '+pretty(d),
+                      style:{width:'30px',padding:'3px 2px',borderRadius:'5px',background:'#1a2030',color:'#e3e8f0',border:'1px solid rgba(167,139,250,.3)',fontSize:'11px',textAlign:'center'}})); })
                 )
               ),
               h('tbody',null,
@@ -3845,32 +3883,33 @@
                         [['pleno','Pleno'],['L1','L1'],['L2','L2'],['L3','L3']].map(function(o){return h('option',{key:o[0],value:o[0]},o[1]);}))
                     )
                   ),
-                  days.map(function(d){ var t=cellType(drv.id,d); var c=TYC[t]; var isD=dirty[drv.id+'|'+d];
-                    return h('td',{key:d,style:{padding:'4px',textAlign:'center'}},
-                      h('div',{onClick:function(){cycle(drv.id,d);},title:t,
-                        style:{cursor:'pointer',height:'30px',borderRadius:'7px',background:c.bg,border:(isD?'1px solid #60a5fa':'1px solid '+c.bd),
-                               color:c.fg,fontSize:'13px',fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center'}},c.t)); })
+                  days.map(function(d){ var t=cellType(drv.id,d); var c=TYC[t]; var isD=dirty[drv.id+'|'+d]; var we=isWeekend(d);
+                    return h('td',{key:d,style:{padding:'3px 2px',textAlign:'center',background:we?'rgba(255,255,255,.015)':'transparent'}},
+                      h('div',{onClick:function(){cycle(drv.id,d);},title:t+' · '+pretty(d),
+                        style:{cursor:'pointer',height:'26px',minWidth:'26px',borderRadius:'6px',background:c.bg,border:(isD?'1px solid #60a5fa':'1px solid '+c.bd),
+                               color:c.fg,fontSize:'12px',fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center'}},c.t)); })
                 ); })
               ),
               h('tfoot',null,
                 h('tr',{style:{borderTop:'2px solid rgba(255,255,255,.1)',background:'rgba(255,255,255,.02)'}},
                   h('td',{style:{padding:'8px 12px',fontSize:'11px',color:'#8892a4',fontWeight:700,position:'sticky',left:0,background:'#141926'}},'Disponibles'),
-                  days.map(function(d){ var n=coverageOf(d); var obj=(demand[d]||{}).objetivo; var low=obj?(n<obj):(minCob>0&&n<minCob);
-                    return h('td',{key:d,style:{padding:'6px 4px',textAlign:'center',fontSize:'13px',fontWeight:800,color:low?'#ef4444':'#22c55e'}}, obj?(n+'/'+obj):n); })
+                  days.map(function(d){ var n=coverageOf(d); var obj=(demand[d]||{}).objetivo; var low=obj?(n<obj):(minCob>0&&n<minCob); var we=isWeekend(d);
+                    return h('td',{key:d,style:{padding:'5px 2px',textAlign:'center',fontSize:'10.5px',fontWeight:800,color:low?'#ef4444':'#22c55e',background:we?'rgba(255,255,255,.02)':'transparent'}}, obj?(n+'/'+obj):n); })
                 )
               )
             )
           ),
-          h('p',{style:{fontSize:'11.5px',color:'#5c6578',marginTop:'10px'}},'Pon las rutas que pide Amazon en la fila morada (1 conductor = 1 ruta). Clic en un nombre para marcar Empresa/ETT y nivel L1/L2/L3. Importar Excel: 1ª columna el nombre, cabeceras con fechas (AAAA-MM-DD) y celdas T/L/E.'),
+          h('p',{style:{fontSize:'11.5px',color:'#5c6578',marginTop:'10px',lineHeight:1.5}},'Vista del mes completo (sábados y domingos sombreados). Pon las rutas que pide Amazon en la fila morada (1 conductor = 1 ruta). Clic en el chip EMP/ETT para cambiar contrato; clic en el nombre para el nivel L1/L2/L3. «📥 Descargar» exporta el mes a Excel. «✨ Generar IA» lo monta semana a semana.'),
 
           showGen && h('div',{style:{position:'fixed',inset:0,zIndex:9999,background:'rgba(0,0,0,.6)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'},onClick:function(){setShowGen(false);}},
             h('div',{onClick:function(e){e.stopPropagation();},style:{background:'#141926',border:'1px solid rgba(255,255,255,.1)',borderRadius:'16px',padding:'22px',maxWidth:'520px',width:'100%'}},
               h('h2',{style:{margin:'0 0 6px',fontSize:'17px',fontWeight:800,color:'#f4f5f8'}},'✨ Generar cuadrante con IA'),
-              h('p',{style:{margin:'0 0 12px',fontSize:'12.5px',color:'#8892a4',lineHeight:1.5}},'Usa el ritmo real, los días ya trabajados y las rutas objetivo de Amazon. Empresa solo L–V; novatos L1/L2/L3 con carga progresiva (protegidos aparte). Escribe tus reglas:'),
-              h('textarea',{value:genPrompt,onChange:function(e){setGenPrompt(e.target.value);},rows:5,style:{width:'100%',boxSizing:'border-box',padding:'10px',borderRadius:'10px',background:'#1a2030',color:'#e3e8f0',border:'1px solid rgba(255,255,255,.12)',fontSize:'13px',resize:'vertical'}}),
+              h('p',{style:{margin:'0 0 12px',fontSize:'12.5px',color:'#8892a4',lineHeight:1.5}},'Genera el mes semana a semana usando el ritmo real, los días ya trabajados y las rutas objetivo de Amazon. Empresa solo L–V; novatos L1/L2/L3 con carga progresiva (protegidos aparte). Escribe tus reglas:'),
+              h('textarea',{value:genPrompt,onChange:function(e){setGenPrompt(e.target.value);},rows:5,disabled:generating,style:{width:'100%',boxSizing:'border-box',padding:'10px',borderRadius:'10px',background:'#1a2030',color:'#e3e8f0',border:'1px solid rgba(255,255,255,.12)',fontSize:'13px',resize:'vertical'}}),
+              generating&&h('div',{style:{marginTop:'10px',fontSize:'12.5px',color:'#a78bfa',fontWeight:700}}, (genResumen||'⏳ Generando…')+' ('+genElapsed+'s) — no cierres esta ventana'),
               h('div',{style:{display:'flex',gap:'8px',justifyContent:'flex-end',marginTop:'14px'}},
-                btn('Cancelar',function(){setShowGen(false);}),
-                h('button',{onClick:generate,disabled:generating,style:{padding:'9px 18px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#a78bfa,#7c3aed)',color:'#fff',opacity:generating?.6:1}},generating?'⏳ Generando…':'✨ Generar')
+                btn(generating?'Cerrar (sigue en 2º plano)':'Cancelar',function(){setShowGen(false);}),
+                h('button',{onClick:generate,disabled:generating,style:{padding:'9px 18px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#a78bfa,#7c3aed)',color:'#fff',opacity:generating?.6:1}},generating?('⏳ '+genElapsed+'s'):'✨ Generar')
               )
             )
           )
