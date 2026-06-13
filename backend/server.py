@@ -7674,6 +7674,7 @@ def _parse_routes_excel(content: bytes, driver_info, snapshot_name=None):
         ci_battery = col("% de batería", "bateria")
         ci_helper = col("ayudante")
         ci_login = col("inicio de sesión", "inicio de sesion")
+        ci_realdep = col("salida real")
         ci_totalpkg = col("total de paquetes")
         if (ci_code is None and ci_id is None) or ci_name is None:
             return None  # no es ninguno de los Excel de rutas
@@ -7726,15 +7727,22 @@ def _parse_routes_excel(content: bytes, driver_info, snapshot_name=None):
             helper = str(r[ci_helper]).strip() if ci_helper is not None and r[ci_helper] and str(r[ci_helper]).lower() != "falta" else ""
             total_pkg = int(r[ci_totalpkg]) if ci_totalpkg is not None and isinstance(r[ci_totalpkg], (int, float)) else 0
 
-            # ── Predicción: usa el ritmo y el cierre REALES de Amazon si existen ──
-            dep_h = _parse_hour(dep)
-            return_h = _parse_hour(return_str)
-            cutoff_h = return_h if return_h is not None else ((dep_h + SHIFT_HOURS) if dep_h is not None else None)
-            rate = amz_pace  # ritmo real de Amazon
+            # ── Predicción de RESCATE EN PARADAS ──
+            # Regla fija de la empresa: jornada de 9h desde que SALE (salida real
+            # si está, si no la planificada). El cierre de Amazon se ignora.
+            real_dep = str(r[ci_realdep]).strip() if ci_realdep is not None and r[ci_realdep] and str(r[ci_realdep]).lower() != "falta" else ""
+            dep_h = _parse_hour(real_dep) or _parse_hour(dep)
+            cutoff_h = (dep_h + SHIFT_HOURS) if dep_h is not None else None
+            cutoff_label = None
+            if cutoff_h is not None:
+                ch, cm = int(cutoff_h) % 24, int(round((cutoff_h - int(cutoff_h)) * 60))
+                if cm == 60:
+                    ch, cm = (ch + 1) % 24, 0
+                cutoff_label = f"{ch:02d}:{cm:02d}"
+            rate = amz_pace  # ritmo real de Amazon (paradas/hora)
             eta = None
-            rescue = None
+            rescue = None          # PARADAS que no le dará tiempo de hacer en sus 9h
             will_finish = None
-            # si Amazon no da ritmo, lo estimamos
             if rate is None and dep_h is not None and done > 0 and now_h > dep_h:
                 worked = now_h - dep_h
                 if worked >= 0.25:
@@ -7749,8 +7757,8 @@ def _parse_routes_excel(content: bytes, driver_info, snapshot_name=None):
                 eta = f"{eh:02d}:{em:02d}"
                 if cutoff_h is not None:
                     hours_to_cutoff = max(0, cutoff_h - now_h)
-                    can_do = rate * hours_to_cutoff
-                    rescue = max(0, round(remaining - can_do))
+                    can_do = rate * hours_to_cutoff            # paradas que hará antes de su cierre
+                    rescue = max(0, round(remaining - can_do)) # paradas de AYUDA necesarias
                     will_finish = eta_h <= cutoff_h
 
             routes.append({
@@ -7768,6 +7776,7 @@ def _parse_routes_excel(content: bytes, driver_info, snapshot_name=None):
                 "stops_pct": pct,
                 "deliveries": int(r[ci_deliv]) if ci_deliv is not None and isinstance(r[ci_deliv], (int, float)) else 0,
                 "departure": dep,
+                "cutoff": cutoff_label,
                 "return_planned": return_str,
                 "rate": rate,
                 "rate_source": "amazon" if amz_pace is not None else "estimado",
