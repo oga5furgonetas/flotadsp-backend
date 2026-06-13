@@ -7542,7 +7542,16 @@ Responde SOLO con este JSON (sin markdown):
     {"name": "nombre métrica", "value": "valor actual", "target": "objetivo", "status": "good|warning|bad", "trend": "up|down|flat|"}
   ],
   "drivers_at_risk": [
-    {"name": "nombre del conductor tal cual aparece", "issue": "qué hace mal", "metric": "métrica afectada", "detail": "dato concreto (ej: 3 DNR, 5 speeding events)"}
+    {
+      "name": "nombre del conductor tal cual aparece",
+      "metric": "métrica afectada (DNR, POD, Speeding…)",
+      "detail": "dato concreto (ej: 3 DNR, 5 speeding events)",
+      "what": "QUÉ falla, en una frase clara",
+      "why": "POR QUÉ suele pasar esto (causa raíz típica)",
+      "work_on": "EN QUÉ debe trabajar concretamente",
+      "advice": "CONSEJO accionable para que mejore",
+      "how_to_explain": "CÓMO explicárselo al conductor de forma motivadora y sin que se ponga a la defensiva (tono de coaching, frase lista para decirle)"
+    }
   ],
   "top_issues": ["problema 1 priorizado", "problema 2", "..."],
   "recommendations": [
@@ -7551,7 +7560,7 @@ Responde SOLO con este JSON (sin markdown):
   "executive_summary": "3-4 frases para el jefe de tráfico: estado general, qué está en riesgo y qué priorizar."
 }
 
-Sé concreto y útil. Si el report no menciona conductores individuales, deja drivers_at_risk vacío. Usa los nombres EXACTOS que aparezcan. Si no detectas un dato, no lo inventes."""
+Para drivers_at_risk, eres un COACH de conductores: rellena what/why/work_on/advice/how_to_explain de forma concreta y humana. El campo how_to_explain debe ser una frase que el jefe de tráfico pueda decirle tal cual al conductor, en tono positivo (reconoce lo bueno, señala lo concreto a mejorar, da un objetivo claro). Sé concreto. Si el report no menciona conductores individuales, deja drivers_at_risk vacío. Usa los nombres EXACTOS que aparezcan."""
 
 
 async def _extract_report_text(content: bytes, filename: str):
@@ -7628,7 +7637,7 @@ async def _analyze_report_with_gemini(text, pdf_bytes, driver_map=None):
     return json.loads(_strip_markdown_json(resp.text or "{}"))
 
 
-def _parse_routes_excel(content: bytes, driver_map_inv):
+def _parse_routes_excel(content: bytes, driver_map_inv, snapshot_name=None):
     """Parsea el Excel 'Rutas' de Cortex a estructura operativa. driver_map_inv:
     {transporter_id_upper: nombre_real_BD} para mostrar el nombre de la ficha si existe.
     Devuelve dict con kpis + lista de rutas, o None si no es ese formato."""
@@ -7661,6 +7670,24 @@ def _parse_routes_excel(content: bytes, driver_map_inv):
         if ci_code is None or ci_name is None:
             return None  # no es el Excel de Rutas
 
+        # Momento del snapshot: preferir la hora del nombre del archivo
+        # (ej "Rutas_OGA5_2026-06-13_13_23 (GMT+2).xlsx" → 13:23). Si no, hora actual.
+        from zoneinfo import ZoneInfo as _ZI
+        now_es = datetime.now(_ZI("Europe/Madrid"))
+        snap_h = None
+        snap_label = now_es.strftime("%d/%m/%Y %H:%M")
+        if snapshot_name:
+            fm = re.search(r"(\d{4})-(\d{2})-(\d{2})[_ ](\d{2})[_:](\d{2})", snapshot_name)
+            if fm:
+                snap_h = int(fm.group(4)) + int(fm.group(5)) / 60.0
+                snap_label = f"{fm.group(3)}/{fm.group(2)}/{fm.group(1)} {fm.group(4)}:{fm.group(5)}"
+        now_h = snap_h if snap_h is not None else (now_es.hour + now_es.minute / 60.0)
+        CUTOFF_H = 22.0  # cierre operativo estimado de rutas (22:00)
+
+        def _parse_hour(s):
+            m = re.match(r"(\d{1,2}):(\d{2})", str(s or ""))
+            return int(m.group(1)) + int(m.group(2)) / 60.0 if m else None
+
         routes = []
         for r in rows[1:]:
             if not r or all(c is None for c in r):
@@ -7671,9 +7698,35 @@ def _parse_routes_excel(content: bytes, driver_map_inv):
             allstops = int(r[ci_allstops]) if ci_allstops is not None and isinstance(r[ci_allstops], (int, float)) else 0
             done = int(r[ci_done]) if ci_done is not None and isinstance(r[ci_done], (int, float)) else 0
             prog_raw = (str(r[ci_prog]).strip().upper() if ci_prog is not None and r[ci_prog] else "")
-            # estado: BEHIND/AHEAD/ON TIME → bad/good/ok
             status = "bad" if "BEHIND" in prog_raw else "good" if ("AHEAD" in prog_raw or "ON TIME" in prog_raw) else "ok"
             pct = round(done / allstops * 100) if allstops else 0
+            remaining = max(0, allstops - done)
+            dep = str(r[ci_dep]).strip() if ci_dep is not None and r[ci_dep] else ""
+
+            # ── Predicción de ritmo y rescate ──
+            dep_h = _parse_hour(dep)
+            rate = None          # paradas/hora
+            eta = None           # hora estimada de fin a ritmo actual
+            rescue = None        # paradas que NO dará tiempo antes del cierre
+            will_finish = None
+            if dep_h is not None and done > 0 and now_h > dep_h:
+                worked = now_h - dep_h
+                if worked >= 0.25:  # al menos 15 min para que el ritmo sea fiable
+                    rate = round(done / worked, 1)
+                    if rate > 0:
+                        hours_left_route = remaining / rate
+                        eta_h = now_h + hours_left_route
+                        eh = int(eta_h) % 24
+                        em = int(round((eta_h - int(eta_h)) * 60))
+                        if em == 60:
+                            eh, em = (eh + 1) % 24, 0
+                        eta = f"{eh:02d}:{em:02d}"
+                        # ¿cuántas hará antes del cierre?
+                        hours_to_cutoff = max(0, CUTOFF_H - now_h)
+                        can_do = rate * hours_to_cutoff
+                        rescue = max(0, round(remaining - can_do))
+                        will_finish = eta_h <= CUTOFF_H
+
             routes.append({
                 "code": str(r[ci_code]).strip() if ci_code is not None and r[ci_code] else "",
                 "transporter_id": tid,
@@ -7684,21 +7737,29 @@ def _parse_routes_excel(content: bytes, driver_map_inv):
                 "status": status,
                 "stops_total": allstops,
                 "stops_done": done,
+                "stops_remaining": remaining,
                 "stops_pct": pct,
                 "deliveries": int(r[ci_deliv]) if ci_deliv is not None and isinstance(r[ci_deliv], (int, float)) else 0,
-                "departure": str(r[ci_dep]).strip() if ci_dep is not None and r[ci_dep] else "",
+                "departure": dep,
+                "rate": rate,
+                "eta": eta,
+                "rescue": rescue,
+                "will_finish": will_finish,
             })
 
-        # ordenar: los más atrasados primero (BEHIND y menor %)
-        routes.sort(key=lambda x: (0 if x["status"] == "bad" else 1, x["stops_pct"]))
+        # ordenar: primero quien más rescate necesita, luego atrasados, luego % bajo
+        routes.sort(key=lambda x: (-(x["rescue"] or 0), 0 if x["status"] == "bad" else 1, x["stops_pct"]))
 
         behind = sum(1 for x in routes if x["status"] == "bad")
         total_stops = sum(x["stops_total"] for x in routes)
         done_stops = sum(x["stops_done"] for x in routes)
+        total_rescue = sum((x["rescue"] or 0) for x in routes)
+        need_help = [x for x in routes if (x["rescue"] or 0) > 0]
         return {
             "report_type": "Rutas en vivo",
-            "period": datetime.now(timezone.utc).strftime("%d/%m/%Y"),
+            "period": snap_label,
             "is_routes": True,
+            "snapshot_hour": round(now_h, 2),
             "kpis": {
                 "total_routes": len(routes),
                 "behind": behind,
@@ -7706,6 +7767,8 @@ def _parse_routes_excel(content: bytes, driver_map_inv):
                 "stops_done": done_stops,
                 "stops_total": total_stops,
                 "global_pct": round(done_stops / total_stops * 100) if total_stops else 0,
+                "total_rescue": total_rescue,
+                "routes_need_help": len(need_help),
             },
             "routes": routes,
         }
@@ -7734,7 +7797,7 @@ async def upload_amazon_report(file: UploadFile = File(...), center: str = Form(
         analysis = None
         # ¿Es el Excel de Rutas de Cortex? → panel operativo estructurado (sin IA)
         if fn.endswith(".xlsx") or fn.endswith(".xlsm"):
-            analysis = _parse_routes_excel(content, driver_map)
+            analysis = _parse_routes_excel(content, driver_map, file.filename)
         if analysis is None:
             text, pdf_bytes = await _extract_report_text(content, file.filename or "report")
             analysis = await _analyze_report_with_gemini(text, pdf_bytes, driver_map)
@@ -7760,7 +7823,58 @@ async def upload_amazon_report(file: UploadFile = File(...), center: str = Form(
     }
     await db.amazon_reports.insert_one(serialize_doc(dict(doc)))
     doc.pop("_id", None)
+
+    # Acumular histórico por conductor/ruta (para construir el ritmo medio con el tiempo)
+    if analysis and analysis.get("is_routes"):
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        for rt in analysis.get("routes", []):
+            if not rt.get("transporter_id"):
+                continue
+            try:
+                await db.route_history.insert_one({
+                    "date": today, "center": center,
+                    "transporter_id": rt["transporter_id"],
+                    "driver_name": rt.get("driver_name"),
+                    "code": rt.get("code"),
+                    "service": rt.get("service"),
+                    "stops_total": rt.get("stops_total"),
+                    "stops_done": rt.get("stops_done"),
+                    "rate": rt.get("rate"),
+                    "rescue": rt.get("rescue"),
+                    "snapshot_at": datetime.now(timezone.utc).isoformat(),
+                })
+            except Exception:
+                pass
+
     return {"success": True, "report": doc}
+
+
+@api_router.get("/metrics/driver-history/{transporter_id}")
+async def driver_route_history(transporter_id: str, _=Depends(require_admin)):
+    """Histórico acumulado de un conductor: ritmo medio, rutas hechas, rescates."""
+    tid = transporter_id.strip().upper()
+    snaps = await db.route_history.find(
+        {"transporter_id": tid}, {"_id": 0}
+    ).sort("snapshot_at", -1).to_list(500)
+    if not snaps:
+        return {"transporter_id": tid, "snapshots": 0}
+    # último snapshot por día para no contar el mismo día varias veces en la media
+    by_day = {}
+    for s in snaps:
+        by_day.setdefault(s.get("date"), s)
+    days = list(by_day.values())
+    rates = [d["rate"] for d in days if d.get("rate")]
+    rescues = [d["rescue"] for d in days if d.get("rescue") is not None]
+    return {
+        "transporter_id": tid,
+        "driver_name": snaps[0].get("driver_name"),
+        "snapshots": len(snaps),
+        "days": len(days),
+        "avg_rate": round(sum(rates) / len(rates), 1) if rates else None,
+        "avg_rescue": round(sum(rescues) / len(rescues), 1) if rescues else None,
+        "days_needed_help": sum(1 for r in rescues if r > 0),
+        "recent": days[:10],
+    }
 
 
 @api_router.get("/metrics/reports")

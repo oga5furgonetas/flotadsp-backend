@@ -3132,8 +3132,9 @@
             ),
             h('div',{style:{display:'flex',gap:'10px',flexWrap:'wrap',marginBottom:'14px'}},
               kpi('Rutas', a.kpis.total_routes, '#f4f5f8'),
-              kpi('En curso', a.kpis.on_track, '#22c55e'),
               kpi('Atrasadas', a.kpis.behind, a.kpis.behind>0?'#ef4444':'#22c55e'),
+              kpi('Rutas SOS', a.kpis.routes_need_help!=null?a.kpis.routes_need_help:'-', a.kpis.routes_need_help>0?'#ef4444':'#22c55e', 'no terminan a tiempo'),
+              kpi('Paquetes ayuda', a.kpis.total_rescue!=null?a.kpis.total_rescue:'-', a.kpis.total_rescue>0?'#fb923c':'#22c55e', 'rescate estimado'),
               kpi('Progreso', a.kpis.global_pct+'%', '#3b82f6')
             ),
             /* buscador */
@@ -3168,8 +3169,12 @@
                       h('div',{style:{height:'100%',width:rt.stops_pct+'%',background:sc(rt.status),borderRadius:'99px'}})
                     )
                   ),
-                  h('span',{style:{fontSize:'9.5px',fontWeight:800,padding:'2px 8px',borderRadius:'99px',flexShrink:0,
-                    color:sc(rt.status),background:sc(rt.status)+'18'}}, rt.status==='bad'?'ATRASADO':rt.status==='good'?'EN HORA':'—')
+                  h('div',{style:{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:'2px',flexShrink:0,minWidth:'92px'}},
+                    (rt.rescue!=null&&rt.rescue>0)
+                      ? h('span',{style:{fontSize:'10px',fontWeight:800,padding:'2px 8px',borderRadius:'99px',color:'#fb923c',background:'rgba(251,146,60,.15)'}},'🆘 +'+rt.rescue+' ayuda')
+                      : (rt.will_finish===true?h('span',{style:{fontSize:'10px',fontWeight:800,padding:'2px 8px',borderRadius:'99px',color:'#4ade80',background:'rgba(34,197,94,.15)'}},'✅ a tiempo'):h('span',{style:{fontSize:'9.5px',fontWeight:800,padding:'2px 8px',borderRadius:'99px',color:sc(rt.status),background:sc(rt.status)+'18'}},rt.status==='bad'?'ATRASADO':'—')),
+                    rt.rate?h('span',{style:{fontSize:'9.5px',color:'#6b7280'}},rt.rate+' par/h'+(rt.eta&&rt.will_finish!==false?' · '+rt.eta:'')):null
+                  )
                 );
               })
             )
@@ -3209,7 +3214,7 @@
                       h('div',{style:{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}},
                         h('span',{style:{fontSize:'13.5px',fontWeight:700,color:'#f4f5f8'}},dr.name),
                         dr.metric && h('span',{style:{fontSize:'10px',color:'#fff',background:'rgba(239,68,68,.45)',borderRadius:'5px',padding:'1px 7px'}},dr.metric)),
-                      h('p',{style:{margin:'2px 0 0',fontSize:'12px',color:'#c8ccd6'}},dr.issue+(dr.detail?' · '+dr.detail:''))));
+                      h('p',{style:{margin:'2px 0 0',fontSize:'12px',color:'#c8ccd6'}},(dr.what||dr.issue||'')+(dr.detail?' · '+dr.detail:'')),(dr.why||dr.work_on||dr.advice||dr.how_to_explain)&&h('details',{style:{marginTop:'6px'}},h('summary',{style:{fontSize:'11px',color:'#fb923c',cursor:'pointer',fontWeight:700}},'Ver coaching para este conductor'),h('div',{style:{marginTop:'7px',display:'flex',flexDirection:'column',gap:'6px'}},dr.why&&h('div',{style:{fontSize:'12px'}},h('span',{style:{color:'#8892a4',fontWeight:700}},'Por qué pasa: '),h('span',{style:{color:'#c8ccd6'}},dr.why)),dr.work_on&&h('div',{style:{fontSize:'12px'}},h('span',{style:{color:'#8892a4',fontWeight:700}},'En qué trabajar: '),h('span',{style:{color:'#c8ccd6'}},dr.work_on)),dr.advice&&h('div',{style:{fontSize:'12px'}},h('span',{style:{color:'#8892a4',fontWeight:700}},'Consejo: '),h('span',{style:{color:'#c8ccd6'}},dr.advice)),dr.how_to_explain&&h('div',{style:{fontSize:'12px',padding:'8px 10px',borderRadius:'8px',background:'rgba(59,130,246,.08)',border:'1px solid rgba(59,130,246,.2)'}},h('span',{style:{color:'#60a5fa',fontWeight:700}},'💬 Cómo decírselo: '),h('span',{style:{color:'#dbeafe'}},dr.how_to_explain))))));
                 }))),
             a.recommendations && a.recommendations.length>0 && h('div',{style:{marginBottom:'10px'}},
               h('p',{style:{margin:'0 0 8px',fontSize:'11px',fontWeight:800,color:'#4ade80',letterSpacing:'.05em'}},'✅ QUÉ HACER'),
