@@ -8466,6 +8466,238 @@ async def import_shifts(file: UploadFile = File(...), center: str = Form(...),
             "unmatched": unmatched[:20]}
 
 
+@api_router.get("/route-demand")
+async def get_route_demand(center: str, desde: str, hasta: str, _=Depends(require_admin)):
+    """Rutas que pide Amazon por día: objetivo y máximo."""
+    docs = await db.route_demand.find(
+        {"center": center, "date": {"$gte": desde, "$lte": hasta}}, {"_id": 0}
+    ).to_list(400)
+    demand = {d["date"]: {"objetivo": d.get("objetivo"), "maximo": d.get("maximo")} for d in docs}
+    return {"demand": demand}
+
+
+@api_router.post("/route-demand")
+async def set_route_demand(data: dict = Body(...), _=Depends(require_admin)):
+    """body: {center, items:[{date, objetivo, maximo}]}"""
+    center = data.get("center")
+    items = data.get("items") or []
+    if not center:
+        raise HTTPException(status_code=400, detail="center requerido")
+    saved = 0
+    for it in items:
+        date = it.get("date")
+        if not date:
+            continue
+        obj = it.get("objetivo")
+        mx = it.get("maximo")
+        await db.route_demand.update_one(
+            {"center": center, "date": date},
+            {"$set": {"center": center, "date": date,
+                      "objetivo": int(obj) if obj not in (None, "") else None,
+                      "maximo": int(mx) if mx not in (None, "") else None}},
+            upsert=True,
+        )
+        saved += 1
+    return {"success": True, "saved": saved}
+
+
+def _date_range(desde: str, hasta: str):
+    out = []
+    d0 = datetime.strptime(desde, "%Y-%m-%d")
+    d1 = datetime.strptime(hasta, "%Y-%m-%d")
+    cur = d0
+    while cur <= d1:
+        out.append(cur.strftime("%Y-%m-%d"))
+        cur += timedelta(days=1)
+    return out
+
+
+_SCHEDULER_PROMPT = """Eres el planificador de turnos de una empresa DSP de reparto Amazon.
+Tu objetivo es montar el cuadrante semanal MÁS EFICIENTE posible (NO equitativo):
+los mejores repartidores cubren el trabajo, garantizando que TODOS los días
+queden cubiertos con al menos la cobertura mínima indicada.
+
+REGLAS DE CONTRATO (obligatorias):
+- contrato "empresa": trabaja SOLO de lunes a viernes. NUNCA sábado ni domingo
+  (esos dos días van siempre 'libre' para ellos).
+- contrato "ett": puede trabajar cualquier día de la semana, incluido finde.
+
+NIVELES DE NOVATO (carga progresiva) — van PROTEGIDOS APARTE:
+- Coloca PRIMERO a los novatos (L1/L2/L3) asegurándoles días de trabajo para que
+  cojan experiencia. NO los metas en el ranking de eficiencia y NUNCA los dejes
+  sin trabajar por falta de datos: es injusto, tienen que empezar a rodar.
+- L1 = recién entra: rutas cortas/fáciles y acompañado, carga ligera.
+- L2 = ruta normal en zona ya conocida.
+- L3 = casi autónomo, carga casi completa.
+- nivel "pleno" = ya formado: entra al ranking normal de eficiencia.
+
+EFICIENCIA (solo para los 'pleno'):
+- Usa SOLO datos reales. "ritmo" = paradas/hora reales (más alto = mejor).
+  Si un 'pleno' no tiene datos, trátalo como ritmo medio; NO inventes cifras.
+- Prioriza a los de mayor ritmo para los días de trabajo; los de menor ritmo
+  son los primeros en librar cuando sobra capacidad. No busques reparto equitativo.
+
+GENERAL:
+- Respeta SIEMPRE las instrucciones extra del usuario. Cruza por el nombre.
+- Cada conductor ~5 días/semana salvo que el usuario o su contrato digan otra cosa.
+- OBLIGATORIO: cada día debe tener en 'trabaja'+'extra' tantos conductores como
+  rutas objetivo pide Amazon ese día (1 conductor = 1 ruta). No superes el máximo.
+  Si no hay gente suficiente para el objetivo, avísalo en el resumen.
+- Usa 'extra' para llegar al objetivo del día cuando con los habituales no alcanza.
+- Tipos válidos: "trabaja", "libre", "extra".
+
+Devuelve EXCLUSIVAMENTE JSON:
+{"assignments":[{"driver_id":"<id>","date":"YYYY-MM-DD","type":"trabaja|libre|extra"}],
+ "resumen":"2-3 frases: criterio seguido, cómo colocaste a los novatos y avisos de cobertura"}"""
+
+
+async def _generate_schedule_with_gemini(context_text: str, user_prompt: str):
+    from google import genai as genai_sdk
+    from google.genai import types as genai_types
+    use_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
+    if use_vertex:
+        from google.oauth2 import service_account
+        import json as _json, base64 as _b64
+        sa = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+        if sa and not sa.startswith("{"):
+            sa = _b64.b64decode(sa).decode("utf-8")
+        creds = service_account.Credentials.from_service_account_info(
+            _json.loads(sa), scopes=["https://www.googleapis.com/auth/cloud-platform"]) if sa else None
+        client = genai_sdk.Client(vertexai=True, project=os.environ.get("GCP_PROJECT", ""),
+                                  location=os.environ.get("GCP_LOCATION", "us-central1"), credentials=creds)
+    else:
+        client = genai_sdk.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+
+    full = (_SCHEDULER_PROMPT + "\n\n=== INSTRUCCIONES DEL USUARIO ===\n" +
+            (user_prompt or "(sin instrucciones extra: prioriza eficiencia y cobertura)") +
+            "\n\n=== DATOS ===\n" + context_text)
+    cfg = genai_types.GenerateContentConfig(temperature=0.2, response_mime_type="application/json")
+    loop = asyncio.get_running_loop()
+    async with _gemini_sem:
+        resp = await asyncio.wait_for(
+            loop.run_in_executor(_executor, lambda: client.models.generate_content(
+                model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), contents=[full], config=cfg)),
+            timeout=170.0)
+    return json.loads(_strip_markdown_json(resp.text or "{}"))
+
+
+@api_router.post("/shifts/generate")
+async def generate_schedule(data: dict = Body(...), _=Depends(require_admin)):
+    """Genera un cuadrante con IA a partir de un prompt + datos reales.
+    No guarda nada: devuelve la propuesta para que el admin la revise y guarde."""
+    center = data.get("center")
+    desde = data.get("desde")
+    hasta = data.get("hasta")
+    user_prompt = (data.get("prompt") or "").strip()
+    if not (center and desde and hasta):
+        raise HTTPException(status_code=400, detail="center, desde y hasta requeridos")
+    days = _date_range(desde, hasta)
+    min_cov = data.get("min_cobertura")
+    if not isinstance(min_cov, int):
+        min_cov = await _min_cobertura(center)
+
+    drivers = await db.drivers.find(
+        {"center": {"$regex": center, "$options": "i"}, "active": {"$ne": False}},
+        {"_id": 0, "id": 1, "name": 1, "driver_id": 1, "contrato": 1, "zona": 1, "nivel": 1},
+    ).to_list(1000)
+    if not drivers:
+        raise HTTPException(status_code=404, detail=f"No hay conductores en {center}")
+
+    # ── ritmo real (paradas/hora) por transporter_id desde route_history ──
+    tids = [d.get("driver_id") for d in drivers if d.get("driver_id")]
+    pace = {}
+    if tids:
+        cur = db.route_history.find(
+            {"transporter_id": {"$in": [t.upper() for t in tids]}},
+            {"_id": 0, "transporter_id": 1, "date": 1, "rate": 1},
+        )
+        tmp = {}
+        async for s in cur:
+            t = s.get("transporter_id")
+            if s.get("rate"):
+                tmp.setdefault(t, {})[s.get("date")] = s["rate"]  # último por día
+        for t, byday in tmp.items():
+            vals = list(byday.values())
+            if vals:
+                pace[t] = round(sum(vals) / len(vals), 1)
+
+    # ── días ya trabajados en los últimos 14 días (para no recargar siempre a los mismos) ──
+    d14 = (datetime.strptime(desde, "%Y-%m-%d") - timedelta(days=14)).strftime("%Y-%m-%d")
+    worked = {}
+    cur2 = db.shifts.find(
+        {"center": {"$regex": center, "$options": "i"}, "date": {"$gte": d14, "$lt": desde},
+         "type": {"$in": ["trabaja", "extra"]}},
+        {"_id": 0, "driver_id": 1},
+    )
+    async for s in cur2:
+        worked[s["driver_id"]] = worked.get(s["driver_id"], 0) + 1
+
+    # ── demanda de Amazon por día (rutas objetivo / máximo) ──
+    dem_docs = await db.route_demand.find(
+        {"center": center, "date": {"$gte": desde, "$lte": hasta}}, {"_id": 0}
+    ).to_list(400)
+    demand = {d["date"]: d for d in dem_docs}
+    if not any(demand.get(dd, {}).get("objetivo") for dd in days):
+        raise HTTPException(
+            status_code=400,
+            detail="Falta la demanda de Amazon: pon las rutas objetivo de cada día antes de generar el cuadrante.")
+
+    # ── construir contexto para la IA ──
+    dem_lines = []
+    for dd in days:
+        o = demand.get(dd, {}).get("objetivo")
+        mx = demand.get(dd, {}).get("maximo")
+        dem_lines.append(f"  {dd}: objetivo {o if o is not None else '—'} rutas"
+                         + (f", máximo {mx}" if mx is not None else ""))
+    lines = [f"Centro: {center}", f"Días a planificar: {', '.join(days)}",
+             "Rutas que pide Amazon por día (1 conductor = 1 ruta; cubre el objetivo, no superes el máximo):",
+             "\n".join(dem_lines),
+             f"Total conductores disponibles: {len(drivers)}", "",
+             "Conductores (id | nombre | contrato | nivel | ritmo real p/h | días trabajados últimas 2 sem | zona):"]
+    for d in drivers:
+        tid = (d.get("driver_id") or "").upper()
+        r = pace.get(tid)
+        contrato = (d.get("contrato") or "empresa").lower()
+        nivel = (d.get("nivel") or "pleno")
+        lines.append(
+            f"- {d['id']} | {d.get('name','')} | "
+            f"{contrato} | {nivel} | "
+            f"{(str(r)+' p/h') if r else 'sin datos'} | "
+            f"{worked.get(d['id'],0)} días | {d.get('zona') or '—'}"
+        )
+    context_text = "\n".join(lines)
+
+    try:
+        result = await _generate_schedule_with_gemini(context_text, user_prompt)
+    except Exception as e:
+        logger.error(f"generate_schedule gemini error: {type(e).__name__}: {repr(e)}")
+        raise HTTPException(status_code=502, detail="La IA no pudo generar el cuadrante; reintenta.")
+
+    # validar/filtrar assignments contra ids y días reales
+    valid_ids = {d["id"] for d in drivers}
+    name_by_id = {d["id"]: d.get("name", "") for d in drivers}
+    day_set = set(days)
+    clean = []
+    for a in (result.get("assignments") or []):
+        did = a.get("driver_id")
+        date = a.get("date")
+        typ = a.get("type")
+        if did in valid_ids and date in day_set and typ in VALID_SHIFT_TYPE:
+            clean.append({"driver_id": did, "driver_name": name_by_id.get(did, ""),
+                          "center": center, "date": date, "type": typ})
+
+    # cobertura resultante por día (para avisar)
+    cov = {dd: 0 for dd in days}
+    for a in clean:
+        if a["type"] in ("trabaja", "extra"):
+            cov[a["date"]] = cov.get(a["date"], 0) + 1
+
+    return {"success": True, "assignments": clean,
+            "resumen": result.get("resumen", ""),
+            "coverage": cov, "min_cobertura": min_cov,
+            "con_datos_ritmo": len(pace)}
+
+
 
 app.include_router(auth_router)
 app.include_router(api_router)

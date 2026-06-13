@@ -3594,6 +3594,12 @@
         var savingS=React.useState(false),saving=savingS[0],setSaving=savingS[1];
         var minS=React.useState(0),minCob=minS[0],setMinCob=minS[1];
         var fileRef=React.useRef(null);
+        var demS=React.useState({}),demand=demS[0],setDemand=demS[1];   /* date -> {objetivo,maximo} */
+        var genS=React.useState(false),showGen=genS[0],setShowGen=genS[1];
+        var gpS=React.useState('Los de empresa solo de lunes a viernes. Prioriza eficiencia (no equitativo). Coloca a los novatos L1/L2/L3 con carga progresiva.'),genPrompt=gpS[0],setGenPrompt=gpS[1];
+        var ggS=React.useState(false),generating=ggS[0],setGenerating=ggS[1];
+        var grS=React.useState(''),genResumen=grS[0],setGenResumen=grS[1];
+        var edS=React.useState(null),editDrv=edS[0],setEditDrv=edS[1];
 
         var days = []; for(var i=0;i<7;i++) days.push(fmt(addDays(wkStart,i)));
         var desde=days[0], hasta=days[6];
@@ -3604,13 +3610,15 @@
             apiGet('/drivers?center='+encodeURIComponent(center)),
             apiGet('/shifts?center='+encodeURIComponent(center)+'&desde='+desde+'&hasta='+hasta),
             apiGet('/shift-requests?center='+encodeURIComponent(center)+'&status=pendiente'),
-            apiGet('/shifts/coverage?center='+encodeURIComponent(center)+'&desde='+desde+'&hasta='+hasta)
+            apiGet('/shifts/coverage?center='+encodeURIComponent(center)+'&desde='+desde+'&hasta='+hasta),
+            apiGet('/route-demand?center='+encodeURIComponent(center)+'&desde='+desde+'&hasta='+hasta)
           ]).then(function(res){
             setDrivers(Array.isArray(res[0])?res[0]:[]);
             var m={}; ((res[1]&&res[1].shifts)||[]).forEach(function(s){ m[s.driver_id+'|'+s.date]=s.type; });
             setMap(m); setDirty({});
             setReqs((res[2]&&res[2].requests)||[]);
             setMinCob((res[3]&&res[3].min)||0);
+            setDemand((res[4]&&res[4].demand)||{});
             setLoading(false);
           }).catch(function(){ setLoading(false); if(toast)toast.error('Error cargando el cuadrante'); });
         }
@@ -3664,6 +3672,36 @@
           apiPost('/shifts/settings',{center:center,min_cobertura:n}).then(function(){ if(toast)toast.info('Cobertura mínima: '+n); });
         }
 
+        function setDem(date,field,val){
+          var dm=Object.assign({},demand); dm[date]=Object.assign({},dm[date]||{}); dm[date][field]=val===''?null:parseInt(val,10); setDemand(dm);
+        }
+        function saveDemand(){
+          var items=days.map(function(d){ var x=demand[d]||{}; return {date:d,objetivo:x.objetivo,maximo:x.maximo}; });
+          apiPost('/route-demand',{center:center,items:items}).then(function(j){ if(j&&j.success&&toast)toast.info('Demanda guardada'); });
+        }
+
+        function generate(){
+          var anyObj=days.some(function(d){ return demand[d]&&demand[d].objetivo; });
+          if(!anyObj){ if(toast)toast.error('Pon las rutas objetivo de Amazon antes de generar'); return; }
+          setGenerating(true); setGenResumen('');
+          saveDemand();
+          apiPost('/shifts/generate',{center:center,desde:desde,hasta:hasta,prompt:genPrompt}).then(function(j){
+            setGenerating(false);
+            if(j&&j.success){
+              var m=Object.assign({},map), dd=Object.assign({},dirty);
+              (j.assignments||[]).forEach(function(a){ var k=a.driver_id+'|'+a.date; m[k]=a.type; dd[k]=1; });
+              setMap(m); setDirty(dd); setGenResumen(j.resumen||'Propuesta generada.'); setShowGen(false);
+              if(toast)toast.success('✨ Cuadrante propuesto · revísalo y guarda');
+            } else { if(toast)toast.error((j&&j.detail)||'La IA no pudo generar'); }
+          }).catch(function(){ setGenerating(false); if(toast)toast.error('Error generando'); });
+        }
+
+        function saveDriverMeta(did,contrato,nivel){
+          var ds=drivers.map(function(x){ return x.id===did?Object.assign({},x,{contrato:contrato,nivel:nivel}):x; });
+          setDrivers(ds); setEditDrv(null);
+          fetch(API+'/drivers/'+did,{method:'PATCH',headers:{'Authorization':'Bearer '+tok(),'Content-Type':'application/json'},body:JSON.stringify({contrato:contrato,nivel:nivel})}).then(function(){ if(toast)toast.info('Conductor actualizado'); });
+        }
+
         var btn=function(label,on,style){ return h('button',{onClick:on,style:Object.assign({padding:'8px 12px',borderRadius:'9px',cursor:'pointer',fontSize:'13px',fontWeight:700,border:'1px solid rgba(255,255,255,.12)',background:'rgba(255,255,255,.04)',color:'#cbd3e0'},style||{})},label); };
 
         return h('div',{style:{padding:'22px',maxWidth:'1040px',margin:'0 auto'}},
@@ -3675,6 +3713,7 @@
                 ['OGA5','DGA1','DGA2'].map(function(c){return h('option',{key:c,value:c},c);})),
               h('input',{ref:fileRef,type:'file',accept:'.xls,.xlsx',style:{display:'none'},onChange:onImport}),
               btn('📥 Importar Excel',function(){fileRef.current&&fileRef.current.click();}),
+              h('button',{onClick:function(){setShowGen(true);},style:{padding:'8px 14px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#a78bfa,#7c3aed)',color:'#fff'}},'✨ Generar IA'),
               h('button',{onClick:save,disabled:saving,style:{padding:'8px 16px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#34d399,#059669)',color:'#fff',opacity:saving?.6:1}},saving?'⏳…':'💾 Guardar')
             )
           ),
@@ -3701,6 +3740,10 @@
             ); })
           ),
 
+          genResumen && h('div',{style:{marginBottom:'12px',padding:'12px 14px',borderRadius:'12px',background:'rgba(167,139,250,.1)',border:'1px solid rgba(167,139,250,.3)',fontSize:'13px',color:'#cbd3e0',lineHeight:1.5}},
+            h('b',{style:{color:'#a78bfa'}},'✨ Propuesta IA: '),genResumen,
+            h('div',{style:{color:'#8892a4',fontSize:'11.5px',marginTop:'4px'}},'Revisa las celdas en azul y pulsa 💾 Guardar para confirmar.')),
+
           /* leyenda */
           h('div',{style:{display:'flex',gap:'16px',marginBottom:'10px',fontSize:'12px',color:'#8892a4'}},
             h('span',null,h('b',{style:{color:'#22c55e'}},'T '),'Trabaja'),
@@ -3720,11 +3763,29 @@
                   days.map(function(d,i){ return h('th',{key:d,style:{padding:'8px 4px',fontSize:'11px',color:'#8892a4',textAlign:'center',minWidth:'62px'}},
                     h('div',{style:{fontWeight:700,color:'#cbd3e0'}},DOW[i]),
                     h('div',null,pretty(d))); })
+                ),
+                h('tr',{style:{background:'rgba(167,139,250,.06)'}},
+                  h('th',{style:{textAlign:'left',padding:'5px 12px',fontSize:'10.5px',color:'#a78bfa',fontWeight:700,position:'sticky',left:0,background:'#141926'}},'Rutas Amazon'),
+                  days.map(function(d){ var x=demand[d]||{}; return h('th',{key:d,style:{padding:'3px',textAlign:'center'}},
+                    h('input',{type:'number',min:0,placeholder:'obj',value:(x.objetivo!=null?x.objetivo:''),onChange:function(e){setDem(d,'objetivo',e.target.value);},onBlur:saveDemand,title:'Rutas objetivo que pide Amazon ese día',
+                      style:{width:'46px',padding:'4px',borderRadius:'6px',background:'#1a2030',color:'#e3e8f0',border:'1px solid rgba(167,139,250,.3)',fontSize:'12px',textAlign:'center'}})); })
                 )
               ),
               h('tbody',null,
                 drivers.map(function(drv){ return h('tr',{key:drv.id,style:{borderTop:'1px solid rgba(255,255,255,.05)'}},
-                  h('td',{style:{padding:'8px 12px',fontSize:'13px',color:'#e3e8f0',whiteSpace:'nowrap',position:'sticky',left:0,background:'#141926'}},drv.name),
+                  h('td',{style:{padding:'8px 12px',fontSize:'13px',color:'#e3e8f0',whiteSpace:'nowrap',position:'sticky',left:0,background:'#141926'}},
+                    h('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},
+                      h('span',{onClick:function(){setEditDrv(editDrv===drv.id?null:drv.id);},title:'Clic para marcar contrato/nivel',style:{cursor:'pointer'}},drv.name),
+                      (drv.contrato==='ett')&&h('span',{style:{fontSize:'9px',fontWeight:700,padding:'1px 5px',borderRadius:'5px',background:'rgba(59,130,246,.18)',color:'#60a5fa'}},'ETT'),
+                      (drv.nivel&&drv.nivel!=='pleno')&&h('span',{style:{fontSize:'9px',fontWeight:700,padding:'1px 5px',borderRadius:'5px',background:'rgba(245,158,11,.18)',color:'#f59e0b'}},String(drv.nivel).toUpperCase())
+                    ),
+                    editDrv===drv.id && h('div',{style:{display:'flex',gap:'6px',marginTop:'6px'}},
+                      h('select',{value:drv.contrato||'empresa',onChange:function(e){saveDriverMeta(drv.id,e.target.value,drv.nivel||'pleno');},style:{padding:'3px',borderRadius:'6px',background:'#1a2030',color:'#cbd3e0',border:'1px solid rgba(255,255,255,.12)',fontSize:'11px'}},
+                        [['empresa','Empresa'],['ett','ETT']].map(function(o){return h('option',{key:o[0],value:o[0]},o[1]);})),
+                      h('select',{value:drv.nivel||'pleno',onChange:function(e){saveDriverMeta(drv.id,drv.contrato||'empresa',e.target.value);},style:{padding:'3px',borderRadius:'6px',background:'#1a2030',color:'#cbd3e0',border:'1px solid rgba(255,255,255,.12)',fontSize:'11px'}},
+                        [['pleno','Pleno'],['L1','L1'],['L2','L2'],['L3','L3']].map(function(o){return h('option',{key:o[0],value:o[0]},o[1]);}))
+                    )
+                  ),
                   days.map(function(d){ var t=cellType(drv.id,d); var c=TYC[t]; var isD=dirty[drv.id+'|'+d];
                     return h('td',{key:d,style:{padding:'4px',textAlign:'center'}},
                       h('div',{onClick:function(){cycle(drv.id,d);},title:t,
@@ -3735,13 +3796,25 @@
               h('tfoot',null,
                 h('tr',{style:{borderTop:'2px solid rgba(255,255,255,.1)',background:'rgba(255,255,255,.02)'}},
                   h('td',{style:{padding:'8px 12px',fontSize:'11px',color:'#8892a4',fontWeight:700,position:'sticky',left:0,background:'#141926'}},'Disponibles'),
-                  days.map(function(d){ var n=coverageOf(d); var low=minCob>0&&n<minCob;
-                    return h('td',{key:d,style:{padding:'6px 4px',textAlign:'center',fontSize:'13px',fontWeight:800,color:low?'#ef4444':'#22c55e'}},n); })
+                  days.map(function(d){ var n=coverageOf(d); var obj=(demand[d]||{}).objetivo; var low=obj?(n<obj):(minCob>0&&n<minCob);
+                    return h('td',{key:d,style:{padding:'6px 4px',textAlign:'center',fontSize:'13px',fontWeight:800,color:low?'#ef4444':'#22c55e'}}, obj?(n+'/'+obj):n); })
                 )
               )
             )
           ),
-          h('p',{style:{fontSize:'11.5px',color:'#5c6578',marginTop:'10px'}},'Importar Excel: 1ª columna el nombre del conductor, cabeceras con fechas (AAAA-MM-DD) y celdas T/L/E. La cobertura mínima activa la auto-aprobación de días libres cuando sobra gente.')
+          h('p',{style:{fontSize:'11.5px',color:'#5c6578',marginTop:'10px'}},'Pon las rutas que pide Amazon en la fila morada (1 conductor = 1 ruta). Clic en un nombre para marcar Empresa/ETT y nivel L1/L2/L3. Importar Excel: 1ª columna el nombre, cabeceras con fechas (AAAA-MM-DD) y celdas T/L/E.'),
+
+          showGen && h('div',{style:{position:'fixed',inset:0,zIndex:9999,background:'rgba(0,0,0,.6)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px'},onClick:function(){setShowGen(false);}},
+            h('div',{onClick:function(e){e.stopPropagation();},style:{background:'#141926',border:'1px solid rgba(255,255,255,.1)',borderRadius:'16px',padding:'22px',maxWidth:'520px',width:'100%'}},
+              h('h2',{style:{margin:'0 0 6px',fontSize:'17px',fontWeight:800,color:'#f4f5f8'}},'✨ Generar cuadrante con IA'),
+              h('p',{style:{margin:'0 0 12px',fontSize:'12.5px',color:'#8892a4',lineHeight:1.5}},'Usa el ritmo real, los días ya trabajados y las rutas objetivo de Amazon. Empresa solo L–V; novatos L1/L2/L3 con carga progresiva (protegidos aparte). Escribe tus reglas:'),
+              h('textarea',{value:genPrompt,onChange:function(e){setGenPrompt(e.target.value);},rows:5,style:{width:'100%',boxSizing:'border-box',padding:'10px',borderRadius:'10px',background:'#1a2030',color:'#e3e8f0',border:'1px solid rgba(255,255,255,.12)',fontSize:'13px',resize:'vertical'}}),
+              h('div',{style:{display:'flex',gap:'8px',justifyContent:'flex-end',marginTop:'14px'}},
+                btn('Cancelar',function(){setShowGen(false);}),
+                h('button',{onClick:generate,disabled:generating,style:{padding:'9px 18px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#a78bfa,#7c3aed)',color:'#fff',opacity:generating?.6:1}},generating?'⏳ Generando…':'✨ Generar')
+              )
+            )
+          )
         );
       };
     });
