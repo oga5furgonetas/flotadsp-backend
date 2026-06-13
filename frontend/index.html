@@ -3594,6 +3594,7 @@
         var savingS=React.useState(false),saving=savingS[0],setSaving=savingS[1];
         var minS=React.useState(0),minCob=minS[0],setMinCob=minS[1];
         var fileRef=React.useRef(null);
+        var scFileRef=React.useRef(null);
         var demS=React.useState({}),demand=demS[0],setDemand=demS[1];   /* date -> {objetivo,maximo} */
         var genS=React.useState(false),showGen=genS[0],setShowGen=genS[1];
         var gpS=React.useState('Los de empresa solo de lunes a viernes. Prioriza eficiencia (no equitativo). Coloca a los novatos L1/L2/L3 con carga progresiva.'),genPrompt=gpS[0],setGenPrompt=gpS[1];
@@ -3696,6 +3697,21 @@
           }).catch(function(){ setGenerating(false); if(toast)toast.error('Error generando'); });
         }
 
+        function onScorecards(e){
+          var fl=e.target.files; e.target.value=''; if(!fl||!fl.length) return;
+          var arr=Array.prototype.slice.call(fl);
+          if(toast)toast.info('📊 Importando '+arr.length+' scorecard(s)…');
+          var total=0, crz=0, done=0;
+          arr.forEach(function(f){
+            var fd=new FormData(); fd.append('file',f); fd.append('center',center);
+            fetch(API+'/scorecard/import',{method:'POST',headers:{'Authorization':'Bearer '+tok()},body:fd})
+              .then(function(r){return r.json();}).then(function(j){
+                done++; if(j&&j.success){ total+=j.conductores||0; crz+=j.cruzados||0; }
+                if(done===arr.length&&toast)toast.success('✅ '+total+' líneas · '+crz+' cruzadas con conductores');
+              }).catch(function(){ done++; if(done===arr.length&&toast)toast.error('Error importando alguna scorecard'); });
+          });
+        }
+
         function saveDriverMeta(did,contrato,nivel){
           var ds=drivers.map(function(x){ return x.id===did?Object.assign({},x,{contrato:contrato,nivel:nivel}):x; });
           setDrivers(ds); setEditDrv(null);
@@ -3713,6 +3729,8 @@
                 ['OGA5','DGA1','DGA2'].map(function(c){return h('option',{key:c,value:c},c);})),
               h('input',{ref:fileRef,type:'file',accept:'.xls,.xlsx',style:{display:'none'},onChange:onImport}),
               btn('📥 Importar Excel',function(){fileRef.current&&fileRef.current.click();}),
+              h('input',{ref:scFileRef,type:'file',accept:'.pdf,.html,.htm,.xlsx,.csv',multiple:true,style:{display:'none'},onChange:onScorecards}),
+              btn('📊 Scorecards',function(){scFileRef.current&&scFileRef.current.click();}),
               h('button',{onClick:function(){setShowGen(true);},style:{padding:'8px 14px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#a78bfa,#7c3aed)',color:'#fff'}},'✨ Generar IA'),
               h('button',{onClick:save,disabled:saving,style:{padding:'8px 16px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#34d399,#059669)',color:'#fff',opacity:saving?.6:1}},saving?'⏳…':'💾 Guardar')
             )

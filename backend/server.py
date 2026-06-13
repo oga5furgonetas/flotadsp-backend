@@ -8532,8 +8532,10 @@ NIVELES DE NOVATO (carga progresiva) — van PROTEGIDOS APARTE:
 - nivel "pleno" = ya formado: entra al ranking normal de eficiencia.
 
 EFICIENCIA (solo para los 'pleno'):
-- Usa SOLO datos reales. "ritmo" = paradas/hora reales (más alto = mejor).
-  Si un 'pleno' no tiene datos, trátalo como ritmo medio; NO inventes cifras.
+- Usa SOLO datos reales. Dos señales: la "scorecard tier" (Fantastic+ > Fantastic >
+  Great > Fair > Poor > At Risk; media 1-6, más alto = mejor) y el "ritmo" =
+  paradas/hora reales. Da más peso a la scorecard si está; el ritmo desempata.
+  Si un 'pleno' no tiene ninguna de las dos, trátalo como medio; NO inventes cifras.
 - Prioriza a los de mayor ritmo para los días de trabajo; los de menor ritmo
   son los primeros en librar cuando sobra capacidad. No busques reparto equitativo.
 
@@ -8632,6 +8634,29 @@ async def generate_schedule(data: dict = Body(...), _=Depends(require_admin)):
     async for s in cur2:
         worked[s["driver_id"]] = worked.get(s["driver_id"], 0) + 1
 
+    # ── rendimiento de scorecard (últimas semanas) por conductor ──
+    sc = {}  # driver_id -> {"tier": último, "avg": media tier_score}
+    sc_cur = db.driver_scorecard.find(
+        {"$or": [{"driver_id": {"$in": [d["id"] for d in drivers]}},
+                 {"transporter_id": {"$in": [t.upper() for t in tids]}}]},
+        {"_id": 0, "driver_id": 1, "transporter_id": 1, "tier": 1, "tier_score": 1, "imported_at": 1},
+    ).sort("imported_at", -1)
+    tid_to_id = {(d.get("driver_id") or "").upper(): d["id"] for d in drivers if d.get("driver_id")}
+    tmp_sc = {}
+    async for s in sc_cur:
+        did = s.get("driver_id") or tid_to_id.get((s.get("transporter_id") or "").upper())
+        if not did:
+            continue
+        e = tmp_sc.setdefault(did, {"tiers": [], "scores": []})
+        if len(e["tiers"]) < 4:
+            if s.get("tier"):
+                e["tiers"].append(s["tier"])
+            if isinstance(s.get("tier_score"), (int, float)):
+                e["scores"].append(s["tier_score"])
+    for did, e in tmp_sc.items():
+        sc[did] = {"tier": e["tiers"][0] if e["tiers"] else None,
+                   "avg": round(sum(e["scores"]) / len(e["scores"]), 1) if e["scores"] else None}
+
     # ── demanda de Amazon por día (rutas objetivo / máximo) ──
     dem_docs = await db.route_demand.find(
         {"center": center, "date": {"$gte": desde, "$lte": hasta}}, {"_id": 0}
@@ -8653,16 +8678,19 @@ async def generate_schedule(data: dict = Body(...), _=Depends(require_admin)):
              "Rutas que pide Amazon por día (1 conductor = 1 ruta; cubre el objetivo, no superes el máximo):",
              "\n".join(dem_lines),
              f"Total conductores disponibles: {len(drivers)}", "",
-             "Conductores (id | nombre | contrato | nivel | ritmo real p/h | días trabajados últimas 2 sem | zona):"]
+             "Conductores (id | nombre | contrato | nivel | scorecard tier (media 1-6) | ritmo real p/h | días trabajados últimas 2 sem | zona):"]
     for d in drivers:
         tid = (d.get("driver_id") or "").upper()
         r = pace.get(tid)
         contrato = (d.get("contrato") or "empresa").lower()
         nivel = (d.get("nivel") or "pleno")
+        scd = sc.get(d["id"])
+        sc_txt = (f"{scd['tier']} (med {scd['avg']})" if scd and scd.get("tier")
+                  else (f"med {scd['avg']}" if scd and scd.get("avg") is not None else "sin scorecard"))
         lines.append(
             f"- {d['id']} | {d.get('name','')} | "
-            f"{contrato} | {nivel} | "
-            f"{(str(r)+' p/h') if r else 'sin datos'} | "
+            f"{contrato} | {nivel} | {sc_txt} | "
+            f"{(str(r)+' p/h') if r else 'sin ritmo'} | "
             f"{worked.get(d['id'],0)} días | {d.get('zona') or '—'}"
         )
     context_text = "\n".join(lines)
@@ -8696,6 +8724,141 @@ async def generate_schedule(data: dict = Body(...), _=Depends(require_admin)):
             "resumen": result.get("resumen", ""),
             "coverage": cov, "min_cobertura": min_cov,
             "con_datos_ritmo": len(pace)}
+
+
+# =========================
+# IMPORTAR SCORECARDS → rendimiento real por conductor (para el generador)
+#   driver_scorecard: {center, semana, driver_name, transporter_id, tier,
+#                      tier_score(1-6), posicion, score, metrics, imported_at}
+# =========================
+
+_TIER_SCORE = {"fantastic+": 6, "fantastic +": 6, "fantastic plus": 6, "fantastic": 5,
+               "great": 4, "fair": 3, "poor": 2, "at risk": 1, "en riesgo": 1}
+
+
+def _tier_to_score(tier):
+    t = (tier or "").strip().lower()
+    for k, v in _TIER_SCORE.items():
+        if k in t:
+            return v
+    return None
+
+
+_SCORECARD_EXTRACT_PROMPT = """Eres un analista de Amazon DSP. Te paso una Scorecard semanal.
+Extrae el RENDIMIENTO INDIVIDUAL de CADA repartidor que aparezca (no solo los que fallan).
+Para cada uno devuelve su nombre tal cual, su Transporter ID si aparece (formato tipo
+A1W24EJAOPQ5F0), su tier/standing global de la semana y, si están, sus métricas clave.
+
+Tiers posibles: "Fantastic+", "Fantastic", "Great", "Fair", "Poor", "At Risk".
+
+Devuelve EXCLUSIVAMENTE JSON:
+{"semana":"texto de la semana o fecha si aparece",
+ "conductores":[
+   {"name":"Nombre Apellido","transporter_id":"A1... o null",
+    "tier":"Fantastic|Great|Fair|Poor|At Risk|...","posicion":<int o null>,
+    "score":<número global 0-100 o null>,
+    "dcr":<o null>,"dnr_dpmo":<o null>,"pod":<o null>,"cc":<o null>}
+ ]}
+No inventes conductores ni cifras: solo lo que aparezca en la Scorecard."""
+
+
+async def _extract_scorecard_standings(text, pdf_bytes):
+    from google import genai as genai_sdk
+    from google.genai import types as genai_types
+    use_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
+    if use_vertex:
+        from google.oauth2 import service_account
+        import json as _json, base64 as _b64
+        sa = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+        if sa and not sa.startswith("{"):
+            sa = _b64.b64decode(sa).decode("utf-8")
+        creds = service_account.Credentials.from_service_account_info(
+            _json.loads(sa), scopes=["https://www.googleapis.com/auth/cloud-platform"]) if sa else None
+        client = genai_sdk.Client(vertexai=True, project=os.environ.get("GCP_PROJECT", ""),
+                                  location=os.environ.get("GCP_LOCATION", "us-central1"), credentials=creds)
+    else:
+        client = genai_sdk.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+    contents = [_SCORECARD_EXTRACT_PROMPT]
+    if pdf_bytes:
+        contents.append(genai_types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"))
+    else:
+        contents.append("CONTENIDO DE LA SCORECARD:\n\n" + (text or ""))
+    cfg = genai_types.GenerateContentConfig(temperature=0.1, response_mime_type="application/json")
+    loop = asyncio.get_running_loop()
+    async with _gemini_sem:
+        resp = await asyncio.wait_for(
+            loop.run_in_executor(_executor, lambda: client.models.generate_content(
+                model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), contents=contents, config=cfg)),
+            timeout=170.0)
+    return json.loads(_strip_markdown_json(resp.text or "{}"))
+
+
+@api_router.post("/scorecard/import")
+async def import_scorecard(file: UploadFile = File(...), center: str = Form(...),
+                           _=Depends(require_admin)):
+    """Sube una Scorecard; la IA extrae el rendimiento de cada repartidor y lo guarda
+    para que el generador de cuadrantes lo use como señal de eficiencia real."""
+    content = await file.read()
+    text, pdf_bytes = await _extract_report_text(content, file.filename or "scorecard")
+    try:
+        data = await _extract_scorecard_standings(text, pdf_bytes)
+    except Exception as e:
+        logger.error(f"import_scorecard gemini error: {type(e).__name__}: {repr(e)}")
+        raise HTTPException(status_code=502, detail="La IA no pudo leer la Scorecard; reintenta.")
+
+    semana = (data.get("semana") or file.filename or "").strip()[:80]
+    conductores = data.get("conductores") or []
+    # mapa de nombres -> driver para cruzar transporter_id que falte
+    drivers = await db.drivers.find({}, {"_id": 0, "id": 1, "name": 1, "driver_id": 1}).to_list(2000)
+    by_tid = {(d.get("driver_id") or "").upper(): d for d in drivers if d.get("driver_id")}
+    by_name = {(d.get("name") or "").strip().lower(): d for d in drivers}
+
+    saved, matched = 0, 0
+    for c in conductores:
+        name = (c.get("name") or "").strip()
+        tid = (c.get("transporter_id") or "").strip().upper()
+        drv = by_tid.get(tid) or by_name.get(name.lower())
+        if drv and not tid:
+            tid = (drv.get("driver_id") or "").upper()
+        if drv:
+            matched += 1
+        tier = c.get("tier")
+        doc = {
+            "center": center, "semana": semana,
+            "driver_name": drv.get("name") if drv else name,
+            "transporter_id": tid or None,
+            "driver_id": drv.get("id") if drv else None,
+            "tier": tier, "tier_score": _tier_to_score(tier),
+            "posicion": c.get("posicion"), "score": c.get("score"),
+            "metrics": {"dcr": c.get("dcr"), "dnr_dpmo": c.get("dnr_dpmo"),
+                        "pod": c.get("pod"), "cc": c.get("cc")},
+            "imported_at": datetime.now(timezone.utc).isoformat(),
+        }
+        # una entrada por (conductor, semana, centro)
+        key = {"center": center, "semana": semana}
+        if tid:
+            key["transporter_id"] = tid
+        else:
+            key["driver_name"] = doc["driver_name"]
+        await db.driver_scorecard.update_one(key, {"$set": doc}, upsert=True)
+        saved += 1
+
+    return {"success": True, "semana": semana, "conductores": saved,
+            "cruzados": matched, "sin_cruzar": saved - matched}
+
+
+@api_router.get("/scorecard/standings")
+async def scorecard_standings(center: Optional[str] = None, _=Depends(require_admin)):
+    """Últimas semanas de scorecard guardadas (para ver qué hay importado)."""
+    q = {}
+    if center:
+        q["center"] = center
+    docs = await db.driver_scorecard.find(q, {"_id": 0}).sort("imported_at", -1).to_list(2000)
+    semanas = {}
+    for d in docs:
+        semanas.setdefault(d.get("semana", "?"), 0)
+        semanas[d["semana"]] += 1
+    return {"semanas": semanas, "total": len(docs)}
 
 
 
