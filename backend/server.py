@@ -4556,6 +4556,127 @@ async def reanalyze_all_failed(_=Depends(require_admin)):
 # STATS DASHBOARD
 # =========================
 
+# ── Valoración de daños tipo taller: por PANEL, no por rayón ──
+# La IA etiqueta la zona con texto libre (cientos de variantes). La
+# normalizamos a ~16 paneles de carrocería y aplicamos un baremo por
+# panel × gravedad (mano de obra + pintura incluidas, mercado ES 2026).
+# Un panel se paga UNA vez: pintar una puerta cubre todos sus rayones.
+_PANEL_BAREMO = {
+    "paragolpes":  {"leve": 90,  "moderado": 200, "grave": 350, "critico": 500},
+    "puerta":      {"leve": 150, "moderado": 300, "grave": 500, "critico": 850},
+    "porton":      {"leve": 170, "moderado": 340, "grave": 580, "critico": 1000},
+    "aleta":       {"leve": 140, "moderado": 280, "grave": 480, "critico": 750},
+    "lateral":     {"leve": 180, "moderado": 380, "grave": 650, "critico": 1300},
+    "faldon":      {"leve": 90,  "moderado": 180, "grave": 320, "critico": 500},
+    "paso_rueda":  {"leve": 60,  "moderado": 130, "grave": 220, "critico": 350},
+    "capo":        {"leve": 150, "moderado": 320, "grave": 550, "critico": 900},
+    "techo":       {"leve": 200, "moderado": 420, "grave": 700, "critico": 1400},
+    "retrovisor":  {"leve": 60,  "moderado": 120, "grave": 180, "critico": 220},
+    "optica":      {"leve": 90,  "moderado": 160, "grave": 240, "critico": 320},
+    "parabrisas":  {"leve": 80,  "moderado": 250, "grave": 350, "critico": 450},
+    "rueda":       {"leve": 40,  "moderado": 90,  "grave": 150, "critico": 220},
+    "rejilla":     {"leve": 50,  "moderado": 110, "grave": 180, "critico": 280},
+    "moldura":     {"leve": 40,  "moderado": 90,  "grave": 140, "critico": 200},
+    "menor":       {"leve": 40,  "moderado": 80,  "grave": 140, "critico": 220},
+    "otros":       {"leve": 100, "moderado": 250, "grave": 450, "critico": 800},
+}
+
+_SEV_RANK = {"leve": 1, "moderado": 2, "grave": 3, "critico": 4}
+
+
+def _norm_sev(sev):
+    s = (sev or "").strip().lower()
+    if "crit" in s or "críti" in s:
+        return "critico"
+    if "grav" in s:
+        return "grave"
+    if "moder" in s:
+        return "moderado"
+    return "leve"
+
+
+def _canon_panel(part):
+    """Normaliza la zona de texto libre a un panel de carrocería. None = no
+    cuenta para reparación (suciedad, mecánica, interior — no es chapa)."""
+    s = (part or "").lower()
+
+    def has(*ws):
+        return any(w in s for w in ws)
+
+    # no es carrocería / no fiable desde foto → no se valora
+    if has("sucied", "limpieza"):
+        return None
+    if has("motor", "freno", "tpms", "fluido", "electrón", "electron", "cuadro",
+           "salpicadero", "instrument", "interior", "mantenimiento", "neumát", "neumat"):
+        return None
+    if has("parabrisas", "luna"):
+        return "parabrisas"
+    if has("retrovisor", "espejo"):
+        return "retrovisor"
+    if has("faro", "piloto", "óptica", "optica", "intermitente", "luz trasera", "luz delantera"):
+        return "optica"
+    if has("llanta", "rueda", "tapacubo"):
+        return "rueda"
+    if has("rejilla", "calandra", "parrilla"):
+        return "rejilla"
+    if has("paragolpes", "parachoques"):
+        return "paragolpes"
+    if has("portón", "porton"):
+        return "porton"
+    if has("puerta"):
+        return "puerta"
+    if has("aleta", "guardabarros"):
+        return "aleta"
+    if has("faldón", "faldon", "umbral", "estrib", "moldura inferior", "panel inferior",
+           "panel basculante", "rocker"):
+        return "faldon"
+    if has("paso de rueda"):
+        return "paso_rueda"
+    if has("capó", "capo"):
+        return "capo"
+    if has("techo"):
+        return "techo"
+    if has("moldura", "embellecedor"):
+        return "moldura"
+    if has("panel lateral", "lateral", "panel trasero", "pilar"):
+        return "lateral"
+    if has("matrícula", "matricula", "tapa de combustible", "tapa del depós", "depósito",
+           "maneta", "cerradura", "mecanismo"):
+        return "menor"
+    if has("general", "completa", "completo", "exterior", "carrocería", "carroceria", "paneles"):
+        return None  # descripciones globales vagas: no inventar coste
+    return "otros"
+
+
+def _vehicle_panel_cost(new_damages):
+    """Coste de reparación de un vehículo agrupando por panel (peor gravedad
+    de cada panel; usa actual_cost si el admin lo metió)."""
+    panels = {}  # panel -> {"rank":, "sev":, "actual":}
+    for nd in (new_damages or []):
+        if not isinstance(nd, dict):
+            continue
+        panel = _canon_panel(nd.get("part") or nd.get("zone") or nd.get("location"))
+        if not panel:
+            continue
+        sev = _norm_sev(nd.get("severity"))
+        rank = _SEV_RANK[sev]
+        cur = panels.get(panel)
+        actual = nd.get("actual_cost") or 0
+        if cur is None:
+            panels[panel] = {"rank": rank, "sev": sev, "actual": actual}
+        else:
+            if rank > cur["rank"]:
+                cur["rank"], cur["sev"] = rank, sev
+            cur["actual"] = max(cur["actual"], actual)
+    total = 0
+    for panel, p in panels.items():
+        if p["actual"] > 0:
+            total += p["actual"]
+        else:
+            total += _PANEL_BAREMO.get(panel, _PANEL_BAREMO["otros"]).get(p["sev"], 0)
+    return total, panels
+
+
 @api_router.get("/stats/attention")
 async def stats_attention(_=Depends(require_admin)):
     """Panel 'qué necesita mi atención HOY': pendientes de revisar, incidentes
@@ -4602,14 +4723,13 @@ async def stats_attention(_=Depends(require_admin)):
     prev_month_start = prev_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     async def _month_cost(start_iso, end_iso):
-        # Coste de daños NUEVOS del periodo, contado de forma realista:
-        #  1) SOLO inspecciones con foto de referencia (sin baseline no se puede
-        #     saber qué es nuevo: lo demás es "lo que ya estaba", no se cuenta).
-        #  2) Cada daño físico (vehículo+zona+gravedad) se cuenta UNA vez,
-        #     aunque aparezca en varias inspecciones del mes.
-        #  3) Si el admin metió el coste real (actual_cost), se usa ese; si no,
-        #     la estimación de la IA.
-        seen = {}
+        # Coste realista tipo taller:
+        #  1) SOLO inspecciones con foto de referencia (sin baseline no se sabe
+        #     qué es nuevo; lo demás es "lo que ya estaba").
+        #  2) Se juntan los daños nuevos del mes por vehículo y se valora por
+        #     PANEL (peor gravedad de cada panel, pagado una vez).
+        #  3) Usa el coste real (actual_cost) si lo metió el admin.
+        veh_damages = {}
         async for i in db.inspections.find(
             {"deleted": {"$ne": True}, "analysis_status": "ok",
              "reference_photos": {"$exists": True, "$ne": []},
@@ -4618,18 +4738,12 @@ async def stats_attention(_=Depends(require_admin)):
         ):
             a = i.get("analysis") or {}
             veh = i.get("vehicle_id") or "?"
-            for nd in (a.get("new_damages") or []):
-                if not isinstance(nd, dict):
-                    continue
-                zona = nd.get("zone") or nd.get("location") or nd.get("part") or nd.get("description") or "?"
-                sev = nd.get("severity") or "?"
-                coste = nd.get("actual_cost")
-                if not coste:
-                    coste = nd.get("estimated_cost") or 0
-                key = f"{veh}|{str(zona)[:40]}|{sev}"
-                if coste > seen.get(key, 0):
-                    seen[key] = coste
-        return round(sum(seen.values()))
+            veh_damages.setdefault(veh, []).extend(a.get("new_damages") or [])
+        total = 0
+        for veh, dmgs in veh_damages.items():
+            cost, _ = _vehicle_panel_cost(dmgs)
+            total += cost
+        return round(total)
 
     cost_this_month = await _month_cost(month_start.isoformat(), now.isoformat())
     cost_prev_month = await _month_cost(prev_month_start.isoformat(), prev_month_end.isoformat())
