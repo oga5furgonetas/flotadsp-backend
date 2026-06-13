@@ -4602,19 +4602,34 @@ async def stats_attention(_=Depends(require_admin)):
     prev_month_start = prev_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     async def _month_cost(start_iso, end_iso):
-        total = 0.0
+        # Coste de daños NUEVOS del periodo, contado de forma realista:
+        #  1) SOLO inspecciones con foto de referencia (sin baseline no se puede
+        #     saber qué es nuevo: lo demás es "lo que ya estaba", no se cuenta).
+        #  2) Cada daño físico (vehículo+zona+gravedad) se cuenta UNA vez,
+        #     aunque aparezca en varias inspecciones del mes.
+        #  3) Si el admin metió el coste real (actual_cost), se usa ese; si no,
+        #     la estimación de la IA.
+        seen = {}
         async for i in db.inspections.find(
             {"deleted": {"$ne": True}, "analysis_status": "ok",
+             "reference_photos": {"$exists": True, "$ne": []},
              "created_at": {"$gte": start_iso, "$lte": end_iso}},
-            {"_id": 0, "analysis.new_damages": 1, "analysis.total_estimated_cost": 1, "reference_photos": 1}
+            {"_id": 0, "vehicle_id": 1, "analysis.new_damages": 1}
         ):
             a = i.get("analysis") or {}
-            # Si hubo comparación con referencia, contar solo daños NUEVOS
-            if i.get("reference_photos"):
-                total += sum((nd.get("estimated_cost") or 0) for nd in (a.get("new_damages") or []) if isinstance(nd, dict))
-            else:
-                total += a.get("total_estimated_cost") or 0
-        return round(total)
+            veh = i.get("vehicle_id") or "?"
+            for nd in (a.get("new_damages") or []):
+                if not isinstance(nd, dict):
+                    continue
+                zona = nd.get("zone") or nd.get("location") or nd.get("part") or nd.get("description") or "?"
+                sev = nd.get("severity") or "?"
+                coste = nd.get("actual_cost")
+                if not coste:
+                    coste = nd.get("estimated_cost") or 0
+                key = f"{veh}|{str(zona)[:40]}|{sev}"
+                if coste > seen.get(key, 0):
+                    seen[key] = coste
+        return round(sum(seen.values()))
 
     cost_this_month = await _month_cost(month_start.isoformat(), now.isoformat())
     cost_prev_month = await _month_cost(prev_month_start.isoformat(), prev_month_end.isoformat())

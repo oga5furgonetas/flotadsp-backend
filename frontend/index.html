@@ -3626,7 +3626,7 @@
             apiGet('/route-demand?center='+encodeURIComponent(center)+'&desde='+desde+'&hasta='+hasta),
             apiGet('/scorecard/standings?center='+encodeURIComponent(center))
           ]).then(function(res){
-            setDrivers(Array.isArray(res[0])?res[0]:[]);
+            setDrivers((Array.isArray(res[0])?res[0]:[]).sort(function(a,b){ return (a.name||'').localeCompare(b.name||'','es',{sensitivity:'base'}); }));
             var m={}; ((res[1]&&res[1].shifts)||[]).forEach(function(s){ m[s.driver_id+'|'+s.date]=s.type; });
             setMap(m); setDirty({});
             setReqs((res[2]&&res[2].requests)||[]);
@@ -3741,7 +3741,7 @@
           var head='<tr><th>Conductor</th><th>Contrato</th><th>Nivel</th>'+days.map(function(d){return '<th>'+dowLetter(d)+' '+pretty(d)+'</th>';}).join('')+'</tr>';
           var body=drivers.map(function(drv){
             var tds=days.map(function(d){ return '<td>'+(L[cellType(drv.id,d)]||'')+'</td>'; }).join('');
-            return '<tr><td>'+drv.name+'</td><td>'+(((drv.contrato||'ett')==='empresa')?'EMP':'ETT')+'</td><td>'+(drv.nivel||'pleno')+'</td>'+tds+'</tr>';
+            return '<tr><td>'+(drv.name||'').toUpperCase()+'</td><td>'+(((drv.contrato||'ett')==='empresa')?'EMP':'ETT')+'</td><td>'+(drv.nivel||'pleno')+'</td>'+tds+'</tr>';
           }).join('');
           var dem='<tr><td>Rutas Amazon</td><td></td><td></td>'+days.map(function(d){var x=demand[d]||{};return '<td>'+(x.objetivo!=null?x.objetivo:'')+'</td>';}).join('')+'</tr>';
           var cov='<tr><td>Disponibles</td><td></td><td></td>'+days.map(function(d){return '<td>'+coverageOf(d)+'</td>';}).join('')+'</tr>';
@@ -3885,7 +3885,7 @@
                 drivers.map(function(drv){ return h('tr',{key:drv.id,style:{borderTop:'1px solid rgba(255,255,255,.05)'}},
                   h('td',{style:{padding:'8px 12px',fontSize:'13px',color:'#e3e8f0',whiteSpace:'nowrap',position:'sticky',left:0,background:'#141926'}},
                     h('div',{style:{display:'flex',alignItems:'center',gap:'6px'}},
-                      h('span',{onClick:function(){setEditDrv(editDrv===drv.id?null:drv.id);},title:'Clic para marcar nivel L1/L2/L3',style:{cursor:'pointer'}},drv.name),
+                      h('span',{onClick:function(){setEditDrv(editDrv===drv.id?null:drv.id);},title:'Clic para marcar nivel L1/L2/L3',style:{cursor:'pointer',textTransform:'uppercase'}},drv.name),
                       (function(){ var emp=(drv.contrato||'ett')==='empresa';
                         return h('span',{onClick:function(){saveDriverMeta(drv.id,emp?'ett':'empresa',drv.nivel||'pleno');},title:'Clic: cambiar Empresa / ETT',
                           style:{cursor:'pointer',fontSize:'9px',fontWeight:700,padding:'1px 6px',borderRadius:'5px',
