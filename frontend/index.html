@@ -3602,6 +3602,8 @@
         var grS=React.useState(''),genResumen=grS[0],setGenResumen=grS[1];
         var edS=React.useState(null),editDrv=edS[0],setEditDrv=edS[1];
         var scwS=React.useState({semanas:{},total:0}),scInfo=scwS[0],setScInfo=scwS[1];
+        var spS=React.useState([]),scProg=spS[0],setScProg=spS[1];
+        var siS=React.useState(false),scImporting=siS[0],setScImporting=siS[1];
 
         var days = []; for(var i=0;i<7;i++) days.push(fmt(addDays(wkStart,i)));
         var desde=days[0], hasta=days[6];
@@ -3702,16 +3704,27 @@
 
         function onScorecards(e){
           var arr=Array.prototype.slice.call(e.target.files||[]); e.target.value=''; if(!arr.length) return;
-          if(toast)toast.info('📊 Importando '+arr.length+' scorecard(s)…');
-          var total=0, crz=0, done=0;
-          arr.forEach(function(f){
+          setScProg(arr.map(function(f){ return {name:f.name, state:'proc', lines:0, crz:0, detail:''}; }));
+          setScImporting(true);
+          var done=0;
+          arr.forEach(function(f,idx){
             var fd=new FormData(); fd.append('file',f); fd.append('center',center);
             fetch(API+'/scorecard/import',{method:'POST',headers:{'Authorization':'Bearer '+tok()},body:fd})
               .then(function(r){return r.json();}).then(function(j){
-                done++; if(j&&j.success){ total+=j.conductores||0; crz+=j.cruzados||0; }
-                if(done===arr.length){ if(toast)toast.success('✅ '+total+' líneas · '+crz+' cruzadas con conductores'); load(); }
-              }).catch(function(){ done++; if(done===arr.length&&toast)toast.error('Error importando alguna scorecard'); });
+                setScProg(function(prev){ var c=prev.slice(); c[idx]=Object.assign({},c[idx],{
+                  state:(j&&j.success)?'ok':'err', lines:(j&&j.conductores)||0, crz:(j&&j.cruzados)||0,
+                  detail:(j&&j.detail)||'' }); return c; });
+              }).catch(function(){
+                setScProg(function(prev){ var c=prev.slice(); c[idx]=Object.assign({},c[idx],{state:'err',detail:'fallo de red'}); return c; });
+              }).then(function(){
+                done++; if(done===arr.length){ setScImporting(false); load(); }
+              });
           });
+        }
+
+        function delWeek(sem){
+          fetch(API+'/scorecard/week?center='+encodeURIComponent(center)+'&semana='+encodeURIComponent(sem),{method:'DELETE',headers:{'Authorization':'Bearer '+tok()}})
+            .then(function(r){return r.json();}).then(function(){ if(toast)toast.info('Semana borrada'); load(); }).catch(function(){ if(toast)toast.error('No se pudo borrar'); });
         }
 
         function saveDriverMeta(did,contrato,nivel){
@@ -3764,10 +3777,27 @@
             h('b',{style:{color:'#a78bfa'}},'✨ Propuesta IA: '),genResumen,
             h('div',{style:{color:'#8892a4',fontSize:'11.5px',marginTop:'4px'}},'Revisa las celdas en azul y pulsa 💾 Guardar para confirmar.')),
 
+          scProg.length>0 && h('div',{style:{marginBottom:'12px',padding:'12px 14px',borderRadius:'12px',background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.1)'}},
+            h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'8px'}},
+              h('span',{style:{fontSize:'12.5px',fontWeight:700,color:'#cbd3e0'}},
+                scImporting?('⏳ Importando… '+scProg.filter(function(p){return p.state!=='proc';}).length+'/'+scProg.length+' (la IA tarda ~10-60s por archivo)'):'📊 Importación terminada'),
+              !scImporting && h('button',{onClick:function(){setScProg([]);},style:{padding:'3px 9px',borderRadius:'7px',border:'1px solid rgba(255,255,255,.12)',background:'rgba(255,255,255,.04)',color:'#8892a4',fontSize:'11px',cursor:'pointer'}},'Ocultar')
+            ),
+            scProg.map(function(p,i){ return h('div',{key:i,style:{display:'flex',alignItems:'center',gap:'8px',fontSize:'12.5px',padding:'4px 0',borderTop:i?'1px solid rgba(255,255,255,.05)':'none'}},
+              h('span',{style:{width:'16px'}}, p.state==='proc'?'⏳':p.state==='ok'?'✅':'❌'),
+              h('span',{style:{flex:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',color:'#cbd3e0'}},p.name),
+              p.state==='proc'&&h('span',{style:{color:'#f59e0b'}},'procesando…'),
+              p.state==='ok'&&h('span',{style:{color:p.crz>0?'#22c55e':'#f59e0b',fontWeight:700}}, p.lines+' líneas · '+p.crz+' cruzadas'),
+              p.state==='err'&&h('span',{style:{color:'#ef4444'}}, p.detail||'error')
+            ); }),
+            !scImporting && (function(){ var ok=scProg.filter(function(p){return p.state==='ok';}); var tl=ok.reduce(function(a,p){return a+p.lines;},0); var tc=ok.reduce(function(a,p){return a+p.crz;},0);
+              return h('div',{style:{marginTop:'8px',fontSize:'12px',color:tc>0?'#22c55e':'#f59e0b',fontWeight:700}}, 'Total: '+tl+' líneas · '+tc+' cruzadas con tus conductores'+(tc===0?' — revisa que los conductores tengan su Transporter ID':'')); })()
+          ),
+
           h('div',{style:{display:'flex',alignItems:'center',gap:'8px',marginBottom:'10px',fontSize:'12px',color:'#8892a4',flexWrap:'wrap'}},
             h('span',{style:{padding:'3px 9px',borderRadius:'7px',background:scInfo.total>0?'rgba(34,197,94,.12)':'rgba(255,255,255,.04)',color:scInfo.total>0?'#22c55e':'#7e8aa0',border:'1px solid '+(scInfo.total>0?'rgba(34,197,94,.3)':'rgba(255,255,255,.1)')}},
-              scInfo.total>0?('📊 Scorecards: '+Object.keys(scInfo.semanas).length+' semana(s) · '+scInfo.total+' líneas'):'📊 Sin scorecards cargadas — súbelas con el botón Scorecards'),
-            scInfo.total>0&&h('span',{style:{fontSize:'11px',color:'#5c6578'}},Object.keys(scInfo.semanas).slice(0,4).join(' · '))
+              scInfo.total>0?('📊 Scorecards: '+Object.keys(scInfo.semanas).length+' semana(s) · '+scInfo.total+' líneas · '+(scInfo.cruzados||0)+' cruzadas con conductores'):'📊 Sin scorecards cargadas — súbelas con el botón Scorecards'),
+            scInfo.total>0&&h('span',{style:{display:'flex',gap:'6px',flexWrap:'wrap'}}, Object.keys(scInfo.semanas).map(function(w){ return h('span',{key:w,style:{display:'inline-flex',alignItems:'center',gap:'5px',fontSize:'11px',padding:'2px 7px',borderRadius:'6px',background:'rgba(255,255,255,.05)',color:'#8892a4',border:'1px solid rgba(255,255,255,.1)'}}, w+' ('+scInfo.semanas[w]+')', h('span',{onClick:function(){delWeek(w);},title:'Borrar esta semana',style:{cursor:'pointer',color:'#ef4444',fontWeight:700,fontSize:'13px'}},'×')); }))
           ),
 
           /* leyenda */

@@ -8847,6 +8847,17 @@ async def import_scorecard(file: UploadFile = File(...), center: str = Form(...)
             "cruzados": matched, "sin_cruzar": saved - matched}
 
 
+@api_router.delete("/scorecard/week")
+async def delete_scorecard_week(semana: str, center: Optional[str] = None,
+                               _=Depends(require_admin)):
+    """Borra todas las líneas de una semana de scorecard (para reimportar o limpiar)."""
+    q = {"semana": semana}
+    if center:
+        q["center"] = center
+    r = await db.driver_scorecard.delete_many(q)
+    return {"success": True, "borradas": r.deleted_count}
+
+
 @api_router.get("/scorecard/standings")
 async def scorecard_standings(center: Optional[str] = None, _=Depends(require_admin)):
     """Últimas semanas de scorecard guardadas (para ver qué hay importado)."""
@@ -8855,10 +8866,13 @@ async def scorecard_standings(center: Optional[str] = None, _=Depends(require_ad
         q["center"] = center
     docs = await db.driver_scorecard.find(q, {"_id": 0}).sort("imported_at", -1).to_list(2000)
     semanas = {}
+    cruzados = 0
     for d in docs:
         semanas.setdefault(d.get("semana", "?"), 0)
         semanas[d["semana"]] += 1
-    return {"semanas": semanas, "total": len(docs)}
+        if d.get("driver_id"):
+            cruzados += 1
+    return {"semanas": semanas, "total": len(docs), "cruzados": cruzados}
 
 
 
