@@ -3721,6 +3721,21 @@
           nextWeek();
         }
 
+        function genAuto(){
+          var anyObj=days.some(function(d){ return demand[d]&&demand[d].objetivo; });
+          if(!anyObj){ if(toast)toast.error('Pon las rutas objetivo de Amazon antes de generar'); return; }
+          setGenerating(true); setGenResumen('⚙️ Calculando cuadrante…'); saveDemand();
+          apiPost('/shifts/generate-auto',{center:center,desde:desde,hasta:hasta}).then(function(j){
+            setGenerating(false);
+            if(j&&j.success){
+              var m=Object.assign({},map), dd=Object.assign({},dirty);
+              (j.assignments||[]).forEach(function(a){ var k=a.driver_id+'|'+a.date; m[k]=a.type; dd[k]=1; });
+              setMap(m); setDirty(dd); setGenResumen('⚙️ '+(j.resumen||'Cuadrante generado.'));
+              if(toast)toast.success('⚙️ Cuadrante automático listo · revísalo y guarda');
+            } else if(toast)toast.error((j&&j.detail)||'No se pudo generar');
+          }).catch(function(){ setGenerating(false); if(toast)toast.error('Error generando'); });
+        }
+
         function downloadXls(){
           var L={trabaja:'T',libre:'L',extra:'E'};
           var head='<tr><th>Conductor</th><th>Contrato</th><th>Nivel</th>'+days.map(function(d){return '<th>'+dowLetter(d)+' '+pretty(d)+'</th>';}).join('')+'</tr>';
@@ -3783,7 +3798,8 @@
               btn('📥 Importar Excel',function(){fileRef.current&&fileRef.current.click();}),
               h('input',{ref:scFileRef,type:'file',accept:'.pdf,.html,.htm,.xlsx,.csv',multiple:true,style:{display:'none'},onChange:onScorecards}),
               btn('📊 Scorecards',function(){scFileRef.current&&scFileRef.current.click();}),
-              h('button',{onClick:function(){setShowGen(true);},style:{padding:'8px 14px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#a78bfa,#7c3aed)',color:'#fff'}},'✨ Generar IA'),
+              h('button',{onClick:genAuto,disabled:generating,title:'Algoritmo determinista: instantáneo y consistente',style:{padding:'8px 14px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#38bdf8,#0284c7)',color:'#fff',opacity:generating?.6:1}},'⚙️ Generar auto'),
+              h('button',{onClick:function(){setShowGen(true);},style:{padding:'8px 14px',borderRadius:'9px',border:'1px solid rgba(167,139,250,.5)',cursor:'pointer',fontSize:'13px',fontWeight:700,background:'rgba(167,139,250,.12)',color:'#a78bfa'}},'✨ IA (ajuste)'),
               btn('📥 Descargar',downloadXls),
               h('button',{onClick:save,disabled:saving,style:{padding:'8px 16px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#34d399,#059669)',color:'#fff',opacity:saving?.6:1}},saving?'⏳…':'💾 Guardar')
             )
@@ -3812,7 +3828,7 @@
           ),
 
           genResumen && h('div',{style:{marginBottom:'12px',padding:'12px 14px',borderRadius:'12px',background:'rgba(167,139,250,.1)',border:'1px solid rgba(167,139,250,.3)',fontSize:'13px',color:'#cbd3e0',lineHeight:1.5}},
-            h('b',{style:{color:'#a78bfa'}},'✨ Propuesta IA: '),genResumen,
+            h('b',{style:{color:'#a78bfa'}},'Propuesta: '),genResumen,
             h('div',{style:{color:'#8892a4',fontSize:'11.5px',marginTop:'4px'}},'Revisa las celdas en azul y pulsa 💾 Guardar para confirmar.')),
 
           scProg.length>0 && h('div',{style:{marginBottom:'12px',padding:'12px 14px',borderRadius:'12px',background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.1)'}},

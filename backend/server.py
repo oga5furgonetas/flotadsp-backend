@@ -8729,6 +8729,164 @@ async def generate_schedule(data: dict = Body(...), _=Depends(require_admin)):
             "con_datos_ritmo": len(pace)}
 
 
+# Presupuesto de días/semana por nivel (carga progresiva de novatos)
+_NIVEL_BUDGET = {"L1": 3, "L2": 4, "L3": 5, "pleno": 5}
+_NOVATOS = {"L1", "L2", "L3"}
+
+
+@api_router.post("/shifts/generate-auto")
+async def generate_schedule_auto(data: dict = Body(...), _=Depends(require_admin)):
+    """Genera el cuadrante con un ALGORITMO DETERMINISTA (sin IA): instantáneo,
+    gratis y siempre consistente. Cubre la demanda de Amazon por eficiencia real,
+    respeta empresa(L-V)/ETT y protege a los novatos. No guarda: devuelve propuesta."""
+    center = data.get("center")
+    desde = data.get("desde")
+    hasta = data.get("hasta")
+    if not (center and desde and hasta):
+        raise HTTPException(status_code=400, detail="center, desde y hasta requeridos")
+    days = _date_range(desde, hasta)
+
+    drivers = await db.drivers.find(
+        {"center": {"$regex": center, "$options": "i"}, "active": {"$ne": False}},
+        {"_id": 0, "id": 1, "name": 1, "driver_id": 1, "contrato": 1, "nivel": 1},
+    ).to_list(1000)
+    if not drivers:
+        raise HTTPException(status_code=404, detail=f"No hay conductores en {center}")
+
+    # demanda
+    dem_docs = await db.route_demand.find(
+        {"center": center, "date": {"$gte": desde, "$lte": hasta}}, {"_id": 0}
+    ).to_list(400)
+    demand = {d["date"]: d for d in dem_docs}
+    if not any(demand.get(dd, {}).get("objetivo") for dd in days):
+        raise HTTPException(status_code=400,
+            detail="Falta la demanda de Amazon: pon las rutas objetivo de cada día antes de generar.")
+
+    # ritmo real (paradas/hora) por transporter_id
+    tids = [d.get("driver_id") for d in drivers if d.get("driver_id")]
+    pace = {}
+    if tids:
+        cur = db.route_history.find(
+            {"transporter_id": {"$in": [t.upper() for t in tids]}},
+            {"_id": 0, "transporter_id": 1, "date": 1, "rate": 1})
+        tmp = {}
+        async for s in cur:
+            if s.get("rate"):
+                tmp.setdefault(s.get("transporter_id"), {})[s.get("date")] = s["rate"]
+        for t, byday in tmp.items():
+            vals = list(byday.values())
+            if vals:
+                pace[t] = sum(vals) / len(vals)
+
+    # scorecard (media tier_score 1-6) por driver_id
+    sc = {}
+    sc_cur = db.driver_scorecard.find(
+        {"$or": [{"driver_id": {"$in": [d["id"] for d in drivers]}},
+                 {"transporter_id": {"$in": [t.upper() for t in tids]}}]},
+        {"_id": 0, "driver_id": 1, "transporter_id": 1, "tier_score": 1, "imported_at": 1},
+    ).sort("imported_at", -1)
+    tid_to_id = {(d.get("driver_id") or "").upper(): d["id"] for d in drivers if d.get("driver_id")}
+    tmp_sc = {}
+    async for s in sc_cur:
+        did = s.get("driver_id") or tid_to_id.get((s.get("transporter_id") or "").upper())
+        if not did:
+            continue
+        e = tmp_sc.setdefault(did, [])
+        if len(e) < 4 and isinstance(s.get("tier_score"), (int, float)):
+            e.append(s["tier_score"])
+    for did, vals in tmp_sc.items():
+        if vals:
+            sc[did] = sum(vals) / len(vals)
+
+    # días ya trabajados últimas 2 semanas (para no recargar siempre a los mismos)
+    d14 = (datetime.strptime(desde, "%Y-%m-%d") - timedelta(days=14)).strftime("%Y-%m-%d")
+    worked = {}
+    cur2 = db.shifts.find(
+        {"center": {"$regex": center, "$options": "i"}, "date": {"$gte": d14, "$lt": desde},
+         "type": {"$in": ["trabaja", "extra"]}}, {"_id": 0, "driver_id": 1})
+    async for s in cur2:
+        worked[s["driver_id"]] = worked.get(s["driver_id"], 0) + 1
+
+    # eficiencia por conductor: scorecard (1-6) + ritmo como desempate
+    pace_vals = [v for v in pace.values() if v]
+    pmax = max(pace_vals) if pace_vals else 1.0
+
+    def eff(d):
+        did = d["id"]
+        base = sc.get(did)
+        if base is None:
+            base = 3.5  # sin datos = medio (no se infravalora)
+        tid = (d.get("driver_id") or "").upper()
+        pv = pace.get(tid)
+        pn = (pv / pmax) if (pv and pmax) else 0.0
+        return base + 0.3 * pn
+
+    # agrupar en semanas (lunes inicia semana) para el cupo de ~5 días
+    weeks, cur = [], []
+    for dd in days:
+        if datetime.strptime(dd, "%Y-%m-%d").weekday() == 0 and cur:
+            weeks.append(cur); cur = []
+        cur.append(dd)
+    if cur:
+        weeks.append(cur)
+
+    assignments, faltas = [], []
+    name_by_id = {d["id"]: d.get("name", "") for d in drivers}
+    for wk in weeks:
+        assigned = {d["id"]: 0 for d in drivers}   # días asignados esta semana
+        for dd in wk:
+            obj = demand.get(dd, {}).get("objetivo")
+            if not obj:
+                continue
+            mx = demand.get(dd, {}).get("maximo") or obj
+            need = min(int(obj), int(mx))
+            is_weekend = datetime.strptime(dd, "%Y-%m-%d").weekday() >= 5
+
+            elig = []
+            for d in drivers:
+                contrato = (d.get("contrato") or "ett").lower()
+                if contrato == "empresa" and is_weekend:
+                    continue   # empresa nunca trabaja en finde
+                elig.append(d)
+
+            def sortkey(d):
+                nivel = d.get("nivel") or "pleno"
+                budget = _NIVEL_BUDGET.get(nivel, 5)
+                under = assigned[d["id"]] < budget
+                is_nov = nivel in _NOVATOS
+                grp = 0 if (is_nov and under) else (1 if under else 2)  # novatos protegidos primero
+                return (grp, -eff(d), assigned[d["id"]], worked.get(d["id"], 0), d.get("name", ""))
+
+            elig.sort(key=sortkey)
+            picked = elig[:need]
+            for d in picked:
+                budget = _NIVEL_BUDGET.get(d.get("nivel") or "pleno", 5)
+                typ = "extra" if assigned[d["id"]] >= budget else "trabaja"
+                assignments.append({"driver_id": d["id"], "driver_name": name_by_id[d["id"]],
+                                    "center": center, "date": dd, "type": typ})
+                assigned[d["id"]] += 1
+            if len(picked) < int(obj):
+                faltas.append(f"{dd[8:]}/{dd[5:7]} faltan {int(obj) - len(picked)}")
+
+    cov = {dd: 0 for dd in days}
+    for a in assignments:
+        if a["type"] in ("trabaja", "extra"):
+            cov[a["date"]] = cov.get(a["date"], 0) + 1
+
+    con_sc = len(sc)
+    resumen = (f"Cuadrante automático por eficiencia real "
+               f"({con_sc} con scorecard, {len(pace)} con ritmo). "
+               f"Empresa solo L-V, novatos protegidos con carga progresiva.")
+    if faltas:
+        resumen += " ⚠️ Días sin cubrir el objetivo: " + ", ".join(faltas[:12])
+    else:
+        resumen += " Todos los días cubren el objetivo."
+
+    return {"success": True, "assignments": assignments, "resumen": resumen,
+            "coverage": cov, "con_datos_ritmo": len(pace), "con_scorecard": con_sc,
+            "faltas": len(faltas)}
+
+
 # =========================
 # IMPORTAR SCORECARDS → rendimiento real por conductor (para el generador)
 #   driver_scorecard: {center, semana, driver_name, transporter_id, tier,
