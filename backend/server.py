@@ -2682,6 +2682,14 @@ async def upload_inspection_photos(
                                 analysis.new_damages_count = len(kept)
                     except Exception as _fe:
                         logger.warning(f"Filtro panel-historial: {_fe}")
+                # Coste tipo taller (por panel) como total de la inspección
+                if analysis and analysis_status == "ok":
+                    try:
+                        dmg_dicts = [d.model_dump() if hasattr(d, "model_dump") else d
+                                     for d in (analysis.damages or [])]
+                        analysis.total_estimated_cost = float(_vehicle_panel_cost(dmg_dicts)[0])
+                    except Exception as _ce:
+                        logger.warning(f"Coste por panel: {_ce}")
                 await db.inspections.update_one(
                     {"id": inspection.id},
                     {"$set": {"analysis": serialize_doc(analysis.model_dump()) if analysis else None,
@@ -4726,11 +4734,13 @@ async def backfill_new_damages(_=Depends(require_admin)):
             nds = a.get("new_damages") or []
             kept = [nd for nd in nds if isinstance(nd, dict)
                     and _canon_panel(nd.get("part") or nd.get("zone") or nd.get("location")) not in known]
+            panel_total = float(_vehicle_panel_cost(a.get("damages") or [])[0])
+            update = {"analysis.total_estimated_cost": panel_total}
             if len(kept) != len(nds):
-                await db.inspections.update_one(
-                    {"id": ins["id"]},
-                    {"$set": {"analysis.new_damages": kept, "analysis.new_damages_count": len(kept)}})
-                corregidas += 1
+                update["analysis.new_damages"] = kept
+                update["analysis.new_damages_count"] = len(kept)
+            await db.inspections.update_one({"id": ins["id"]}, {"$set": update})
+            corregidas += 1
             for d in (a.get("damages") or []):
                 if isinstance(d, dict):
                     p = _canon_panel(d.get("part") or d.get("zone") or d.get("location"))
