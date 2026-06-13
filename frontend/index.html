@@ -3701,8 +3701,7 @@
         }
 
         function onScorecards(e){
-          var fl=e.target.files; e.target.value=''; if(!fl||!fl.length) return;
-          var arr=Array.prototype.slice.call(fl);
+          var arr=Array.prototype.slice.call(e.target.files||[]); e.target.value=''; if(!arr.length) return;
           if(toast)toast.info('📊 Importando '+arr.length+' scorecard(s)…');
           var total=0, crz=0, done=0;
           arr.forEach(function(f){
