@@ -8682,7 +8682,7 @@ async def generate_schedule(data: dict = Body(...), _=Depends(require_admin)):
     for d in drivers:
         tid = (d.get("driver_id") or "").upper()
         r = pace.get(tid)
-        contrato = (d.get("contrato") or "empresa").lower()
+        contrato = (d.get("contrato") or "ett").lower()
         nivel = (d.get("nivel") or "pleno")
         scd = sc.get(d["id"])
         sc_txt = (f"{scd['tier']} (med {scd['avg']})" if scd and scd.get("tier")
