@@ -709,29 +709,26 @@
 <body>
   <div id="root"></div>
   <script>
+    // Eliminamos el Service Worker: causaba que el navegador sirviera código
+    // cacheado viejo (las actualizaciones no llegaban). Sin SW = siempre fresco.
     if ('serviceWorker' in navigator) {
-      var _swReloaded = false;
-      // Cuando una versión nueva toma el control, recargar SOLO una vez (auto-update)
-      navigator.serviceWorker.addEventListener('controllerchange', function () {
-        if (_swReloaded) return; _swReloaded = true; window.location.reload();
-      });
-      window.addEventListener('load', function () {
-        navigator.serviceWorker.register('/service-worker.js').then(function (reg) {
-          reg.update();
-          // buscar actualizaciones cada 60s mientras la app está abierta
-          setInterval(function () { reg.update(); }, 60000);
-          reg.addEventListener('updatefound', function () {
-            var nw = reg.installing;
-            if (!nw) return;
-            nw.addEventListener('statechange', function () {
-              // hay versión nueva instalada y ya había una controlando → activarla
-              if (nw.state === 'installed' && navigator.serviceWorker.controller) {
-                nw.postMessage({ type: 'SKIP_WAITING' });
-              }
-            });
-          });
-        }).catch(function (err) { console.warn('[PWA] SW falló:', err); });
-      });
+      navigator.serviceWorker.getRegistrations().then(function (regs) {
+        if (!regs.length) return;
+        Promise.all(regs.map(function (r) { return r.unregister(); }))
+          .then(function () {
+            if (window.caches && caches.keys) {
+              return caches.keys().then(function (ks) {
+                return Promise.all(ks.map(function (k) { return caches.delete(k); }));
+              });
+            }
+          })
+          .then(function () {
+            if (!sessionStorage.getItem('_swkilled')) {
+              sessionStorage.setItem('_swkilled', '1');
+              window.location.reload();
+            }
+          }).catch(function () {});
+      }).catch(function () {});
     }
   </script>
 
