@@ -2457,6 +2457,7 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
                         p = _canon_panel(d.get("part") or d.get("zone") or d.get("location"))
                         if p:
                             base_panels.add(p)
+            photos = insp.get("photo_urls") or insp.get("photos") or []
             curr = {}
             for d in ((insp.get("analysis") or {}).get("damages") or []):
                 if not isinstance(d, dict):
@@ -2466,18 +2467,28 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
                     continue
                 sev = _norm_sev(d.get("severity"))
                 rank = _SEV_RANK[sev]
-                if rank > curr.get(p, (0, None))[0]:
-                    curr[p] = (rank, sev)
-            for p, (rank, sev) in curr.items():
+                if rank > curr.get(p, {}).get("rank", 0):
+                    curr[p] = {"rank": rank, "sev": sev, "dmg": d}
+            for p, info in curr.items():
+                sev = info["sev"]
                 pen = PANEL_PEN.get(sev, 0)
                 if p not in base_panels and pen != 0:
+                    d = info["dmg"]
+                    pidx = d.get("photo_index")
+                    photo_url = (photos[pidx - 1] if isinstance(pidx, int) and 1 <= pidx <= len(photos)
+                                 else (photos[0] if photos else None))
                     delta_events.append({
                         "vehicle_id": vid,
                         "panel": p,
-                        "from_sev": p,            # se muestra "panel → gravedad"
+                        "part": d.get("part") or p,        # nombre real de la pieza
+                        "from_sev": d.get("part") or p,    # se muestra "pieza → gravedad"
                         "to_sev": sev,
                         "penalty": pen,
                         "date": insp_time[:10] if len(insp_time) >= 10 else insp_time,
+                        "inspection_id": insp.get("id"),
+                        "photo_url": photo_url,
+                        "box_2d": d.get("box_2d"),
+                        "description": d.get("description"),
                     })
         conservation = max(0, 25 + sum(e["penalty"] for e in delta_events))
 

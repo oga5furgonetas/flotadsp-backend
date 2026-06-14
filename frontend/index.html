@@ -1876,6 +1876,7 @@
         var xd=React.useState(null),detail=xd[0],setDetail=xd[1];
         var xc=React.useState('Todos'),centro=xc[0],setCentro=xc[1];
         var xi=React.useState(false),showIns=xi[0],setShowIns=xi[1];
+        var xdv=React.useState(null),dmgView=xdv[0],setDmgView=xdv[1];
         var now=new Date();
         var xm=React.useState(now.getMonth()+1),selMonth=xm[0],setSelMonth=xm[1];
         var xy=React.useState(now.getFullYear()),selYear=xy[0],setSelYear=xy[1];
@@ -2037,18 +2038,36 @@
                 h('p',{style:{margin:'0 0 8px',fontSize:'11px',fontWeight:800,color:'#f87171',letterSpacing:'.05em'}},
                   '⚠️ DAÑOS NUEVOS EN SUS TURNOS'),
                 detail.delta_events.map(function(ev,i){
-                  return h('div',{key:i,style:{display:'flex',alignItems:'center',gap:'10px',
+                  var clickable=!!ev.photo_url;
+                  return h('div',{key:i,onClick:clickable?function(){setDmgView(ev);}:null,
+                    title:clickable?'Ver el daño en la foto':'',
+                    style:{display:'flex',alignItems:'center',gap:'10px',
                     background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.2)',
-                    borderRadius:'9px',padding:'8px 12px',marginBottom:'6px',fontSize:'12px'}},
+                    borderRadius:'9px',padding:'8px 12px',marginBottom:'6px',fontSize:'12px',
+                    cursor:clickable?'pointer':'default'}},
                     h('span',{style:{color:'#c8ccd6',fontFamily:'monospace'}},ev.date),
-                    h('span',{style:{color:'#8892a4',flex:1}},ev.from_sev+' → '+ev.to_sev),
-                    h('span',{style:{color:'#f87171',fontWeight:800}},ev.penalty)
+                    h('span',{style:{color:'#c8ccd6',flex:1,textTransform:'capitalize'}},(ev.from_sev||'')+' → ',h('b',{style:{color:'#f59e0b'}},ev.to_sev)),
+                    clickable&&h('span',{style:{color:'#60a5fa',fontSize:'14px'}},'🔍'),
+                    h('span',{style:{color:'#f87171',fontWeight:800,minWidth:'30px',textAlign:'right'}},ev.penalty)
                   );
                 })
               ),
               detail.delta_events&&detail.delta_events.length===0&&h('p',{style:{marginTop:'14px',padding:'10px',
                 textAlign:'center',fontSize:'12px',color:'#22c55e',background:'rgba(34,197,94,.08)',
-                borderRadius:'9px',border:'1px solid rgba(34,197,94,.2)'}},'✅ Sin daños nuevos en sus turnos este mes')
+                borderRadius:'9px',border:'1px solid rgba(34,197,94,.2)'}},'✅ Sin daños nuevos en sus turnos este mes'),
+
+              dmgView && h('div',{onClick:function(){setDmgView(null);},style:{position:'fixed',inset:0,zIndex:10000,background:'rgba(0,0,0,.86)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'20px'}},
+                h('div',{style:{color:'#fff',fontSize:'14px',marginBottom:'10px',fontWeight:700,textAlign:'center',textTransform:'capitalize'}}, (dmgView.part||'')+' · ',h('span',{style:{color:'#f59e0b'}},dmgView.to_sev),' · '+dmgView.date),
+                dmgView.photo_url ? h('div',{onClick:function(e){e.stopPropagation();},style:{position:'relative',display:'inline-block',maxWidth:'92vw',maxHeight:'72vh'}},
+                  h('img',{src:dmgView.photo_url,style:{maxWidth:'92vw',maxHeight:'72vh',borderRadius:'10px',display:'block'}}),
+                  (dmgView.box_2d&&dmgView.box_2d.length===4) && h('div',{style:{position:'absolute',
+                    top:(dmgView.box_2d[0]/10)+'%',left:(dmgView.box_2d[1]/10)+'%',
+                    height:((dmgView.box_2d[2]-dmgView.box_2d[0])/10)+'%',width:((dmgView.box_2d[3]-dmgView.box_2d[1])/10)+'%',
+                    border:'3px solid #f87171',borderRadius:'4px',boxShadow:'0 0 0 9999px rgba(0,0,0,.45)'}})
+                ) : h('div',{style:{color:'#8892a4'}},'Sin foto disponible'),
+                dmgView.description && h('div',{style:{color:'#c8ccd6',fontSize:'12.5px',marginTop:'12px',maxWidth:'620px',textAlign:'center',lineHeight:1.5}},dmgView.description),
+                h('button',{onClick:function(){setDmgView(null);},style:{marginTop:'14px',padding:'9px 24px',borderRadius:'9px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:700,background:'rgba(255,255,255,.16)',color:'#fff'}},'Cerrar')
+              )
             )
           )
         );
