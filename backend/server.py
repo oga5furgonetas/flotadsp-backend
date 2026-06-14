@@ -2410,15 +2410,25 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
         evidence = round(sum(ev_scores) / len(ev_scores)) if ev_scores else 0
 
         # ── 🔍 Honestidad (15) ──
+        # JUSTO: solo se examina la honestidad cuando hay daño NUEVO serio
+        # (abolladura/grave/crítico) en esa inspección. No se pide declarar lo
+        # preexistente (el sistema ya lo conoce del historial) ni los rayones
+        # leves — así no es una carga y no penaliza por daño que ya estaba.
         h_scores = []
         for insp in driver_insps:
             a = insp.get("analysis") or {}
-            sev = (a.get("severity") or "").lower()
-            if insp.get("analysis_status") == "ok" and sev in ("leve", "moderado", "grave", "critico", "crítico"):
+            serious_new = any(
+                _norm_sev(d.get("severity")) in ("moderado", "grave", "critico")
+                for d in (a.get("new_damages") or []) if isinstance(d, dict))
+            if insp.get("analysis_status") == "ok" and serious_new:
                 notes = (insp.get("notes") or "").lower()
                 kws = ["daño", "dano", "golpe", "rasguño", "rasguno", "rayad", "abollad",
-                       "roto", "rota", "crack", "grieta", "araña", "arana", "choc", "malo", "danado"]
-                h_scores.append(15 if any(k in notes for k in kws) else 0)
+                       "roto", "rota", "crack", "grieta", "araña", "arana", "choc", "malo", "danado",
+                       "raya", "marca", "toque", "incidente"]
+                # Declararlo = 15 (transparente). No declararlo NO es prueba de
+                # ocultación (quizá no lo vio o no sabía que debía) → suelo de 10,
+                # no un cero que hunda el score antes de educar el hábito.
+                h_scores.append(15 if any(k in notes for k in kws) else 10)
         honesty = round(sum(h_scores) / len(h_scores)) if h_scores else 15
 
         # ── 🛡️ Conservación (25) — daño NUEVO por panel durante su custodia ──
