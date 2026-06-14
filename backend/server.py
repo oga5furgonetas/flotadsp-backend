@@ -9574,12 +9574,35 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
           "value": m["value"], "next": m["next"]}
          for m in out if m["tier"] and m["tier"] != "Fantastic" and m["next"]],
         key=lambda m: abs(m["next"]["gap"]) if m["next"] else 9e9)
-    # El tier oficial (overall/seguridad/calidad) lo guarda el usuario del scorecard real.
-    official = (doc or {}).get("official", {})
+    # ── Puntuación estimada (overall + categorías) ──
+    # Amazon no publica la fórmula exacta con pesos. Modelo calibrado con la
+    # scorecard real: tier de categoría = el tier de la MAYORÍA de sus métricas
+    # (una métrica suelta en Fair no baja la categoría); overall = la categoría
+    # más baja, con SEGURIDAD como límite (no puedes superar tu tier de Seguridad).
+    def _cat_tier(group):
+        ts = [m["tier"] for m in out if m["group"] == group and m["tier"]]
+        if not ts:
+            return None
+        cnt = {}
+        for t in ts:
+            cnt[t] = cnt.get(t, 0) + 1
+        mx = max(cnt.values())
+        cands = [t for t in cnt if cnt[t] == mx]
+        return max(cands, key=lambda t: _TIER_ORDER.index(t))  # empate -> el más alto
 
+    safety_tier = _cat_tier("safety")
+    quality_tier = _cat_tier("quality")
+    cats = [c for c in (safety_tier, quality_tier) if c]
+    overall = min(cats, key=lambda t: _TIER_ORDER.index(t)) if cats else None
+    if safety_tier and overall and _TIER_ORDER.index(overall) > _TIER_ORDER.index(safety_tier):
+        overall = safety_tier  # Seguridad como techo
+
+    official = (doc or {}).get("official", {})
     return {"center": center, "week": sun, "desde": sun, "hasta": sat,
             "metrics": out, "counts": counts, "to_improve": to_improve,
-            "official": official}
+            "safety_tier": safety_tier, "quality_tier": quality_tier,
+            "overall": overall, "official": official,
+            "overall_method": "estimado (categoría = mayoría; overall = la peor categoría, Seguridad como techo)"}
 
 
 @api_router.post("/scorecard/full")
@@ -9618,6 +9641,122 @@ async def scorecard_set_thresholds(data: dict = Body(...), _=Depends(require_adm
     await db.scorecard_thresholds.update_one(
         {"center": center}, {"$set": {"center": center, key: band}}, upsert=True)
     return {"success": True}
+
+
+_OFFICIAL_SC_PROMPT = """Eres un analista de Amazon DSP. Te paso la scorecard semanal OFICIAL (Scorecard 3.0) de un DSP.
+Extrae EXACTAMENTE lo que aparece, sin inventar nada. Si un valor no está o pone "None"/"N/A", déjalo null.
+
+Devuelve SOLO JSON:
+{
+ "week": <número de semana, int>,
+ "year": <año, int>,
+ "center": "<código del centro, ej OGA5>",
+ "overall_score": <número, ej 91.99, o null>,
+ "overall_tier": "<Fantastic Plus|Fantastic|Great|Fair|Poor|At Risk>",
+ "categories": {
+   "compliance_safety": "<tier>", "quality_swc": "<tier>", "capacity": "<tier>"
+ },
+ "metrics": [
+   {"key":"fico","value":<num>,"tier":"<tier>"},
+   {"key":"speeding","value":<num>,"tier":"<tier>"},
+   {"key":"mentor","value":<num>,"tier":"<tier>"},
+   {"key":"vsa","value":<num>,"tier":"<tier>"},
+   {"key":"boc","value":<num>,"tier":"<tier>"},
+   {"key":"whc","value":<num>,"tier":"<tier>"},
+   {"key":"cas","value":<num>,"tier":"<tier>"},
+   {"key":"dcr","value":<num>,"tier":"<tier>"},
+   {"key":"dnr_dpmo","value":<num>,"tier":"<tier>"},
+   {"key":"lor_dpmo","value":<num>,"tier":"<tier>"},
+   {"key":"dsc_dpmo","value":<num>,"tier":"<tier>"},
+   {"key":"cec_dpmo","value":<num>,"tier":"<tier>"},
+   {"key":"cdf","value":<num>,"tier":"<tier>"},
+   {"key":"pod","value":<num>,"tier":"<tier>"},
+   {"key":"cc","value":<num>,"tier":"<tier>"},
+   {"key":"ndcr","value":<num>,"tier":"<tier>"}
+ ]
+}
+Mapeo de nombres → key: Safe Driving Metric/FICO=fico; Speeding Event Rate=speeding;
+Mentor Adoption Rate=mentor; Vehicle Audit/VSA=vsa; Breach of Contract/BOC=boc;
+Working Hours Compliance/WHC=whc; Comprehensive Audit Score/CAS=cas;
+Delivery Completion Rate/DCR=dcr; Delivered Not Received/DNR DPMO=dnr_dpmo;
+Lost on Road/LoR DPMO=lor_dpmo; Delivery Success Conditions/DSC DPMO=dsc_dpmo;
+Customer escalation DPMO=cec_dpmo; Customer Delivery Feedback/CDF=cdf;
+Photo-On-Delivery/POD=pod; Contact Compliance=cc; Next Day Capacity Reliability=ndcr.
+Para %, devuelve solo el número (98.33, no "98.33%"). Si una métrica no aparece, omítela."""
+
+
+async def _parse_official_scorecard(content: bytes, filename: str):
+    text, pdf_bytes = await _extract_report_text(content, filename)
+    from google import genai as genai_sdk
+    from google.genai import types as genai_types
+    use_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
+    if use_vertex:
+        from google.oauth2 import service_account
+        import json as _json, base64 as _b64
+        sa = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+        if sa and not sa.startswith("{"):
+            sa = _b64.b64decode(sa).decode("utf-8")
+        creds = service_account.Credentials.from_service_account_info(
+            _json.loads(sa), scopes=["https://www.googleapis.com/auth/cloud-platform"]) if sa else None
+        client = genai_sdk.Client(vertexai=True, project=os.environ.get("GCP_PROJECT", ""),
+                                  location=os.environ.get("GCP_LOCATION", "us-central1"), credentials=creds)
+    else:
+        client = genai_sdk.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+    contents = [_OFFICIAL_SC_PROMPT]
+    if pdf_bytes:
+        contents.append(genai_types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf"))
+    else:
+        contents.append("SCORECARD:\n\n" + (text or ""))
+    cfg = genai_types.GenerateContentConfig(temperature=0.0, response_mime_type="application/json")
+    loop = asyncio.get_running_loop()
+    async with _gemini_sem:
+        resp = await asyncio.wait_for(
+            loop.run_in_executor(_executor, lambda: client.models.generate_content(
+                model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), contents=contents, config=cfg)),
+            timeout=120.0)
+    return json.loads(_strip_markdown_json(resp.text or "{}"))
+
+
+@api_router.post("/scorecard/import-official")
+async def import_official_scorecard(file: UploadFile = File(...), center: Optional[str] = Form(None),
+                                    _=Depends(require_admin)):
+    """Sube la scorecard OFICIAL (PDF). Extrae métricas+tiers reales y el Overall
+    Score, y los guarda como observaciones para afinar umbrales (verídico)."""
+    content = await file.read()
+    try:
+        sc = await _parse_official_scorecard(content, file.filename or "scorecard.pdf")
+    except Exception as e:
+        logger.error(f"import-official gemini: {type(e).__name__}: {repr(e)}")
+        raise HTTPException(status_code=502, detail="La IA no pudo leer la scorecard; reintenta.")
+    cen = (sc.get("center") or center or "").upper() or "OGA5"
+    week = sc.get("week")
+    year = sc.get("year")
+    if not week:
+        raise HTTPException(status_code=400, detail="No reconocí la semana en la scorecard")
+    doc = {"center": cen, "week": int(week), "year": int(year) if year else None,
+           "overall_score": sc.get("overall_score"), "overall_tier": sc.get("overall_tier"),
+           "categories": sc.get("categories") or {}, "metrics": sc.get("metrics") or [],
+           "uploaded_at": datetime.now(timezone.utc).isoformat()}
+    await db.scorecard_official.update_one(
+        {"center": cen, "week": int(week)}, {"$set": doc}, upsert=True)
+
+    # Guardar observaciones (valor→tier) por métrica para derivar umbrales
+    for m in (sc.get("metrics") or []):
+        if m.get("key") and m.get("value") is not None and m.get("tier"):
+            await db.scorecard_obs.update_one(
+                {"center": cen, "week": int(week), "metric": m["key"]},
+                {"$set": {"center": cen, "week": int(week), "metric": m["key"],
+                          "value": m["value"], "tier": m["tier"]}}, upsert=True)
+    n_obs = await db.scorecard_official.count_documents({"center": cen})
+    return {"success": True, "center": cen, "week": week, "year": year,
+            "overall_score": sc.get("overall_score"), "overall_tier": sc.get("overall_tier"),
+            "metricas": len(sc.get("metrics") or []), "scorecards_guardadas": n_obs}
+
+
+@api_router.get("/scorecard/official")
+async def list_official_scorecards(center: str, _=Depends(require_admin)):
+    docs = await db.scorecard_official.find({"center": center}, {"_id": 0}).sort("week", -1).to_list(60)
+    return {"scorecards": docs}
 
 
 app.include_router(auth_router)
