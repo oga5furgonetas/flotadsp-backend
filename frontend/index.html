@@ -3998,57 +3998,85 @@
         var propCenter=(props.center && props.center!=='Todos')?props.center:null;
         var cS=React.useState(propCenter||'OGA5'),center=cS[0],setCenter=cS[1];
         React.useEffect(function(){ if(propCenter) setCenter(propCenter); },[props.center]);
-        var wS=React.useState(null),wk=wS[0],setWk=wS[1];
-        var dS=React.useState(null),data=dS[0],setData=dS[1];
-        var tS=React.useState({}),targets=tS[0],setTargets=tS[1];
+        var wS=React.useState(null),week=wS[0],setWeek=wS[1];
+        var fS=React.useState(null),full=fS[0],setFull=fS[1];
+        var dS=React.useState(null),daily=dS[0],setDaily=dS[1];
         var lS=React.useState(true),loading=lS[0],setLoading=lS[1];
         var uS=React.useState(false),uploading=uS[0],setUploading=uS[1];
-        var eS=React.useState(false),editT=eS[0],setEditT=eS[1];
+        var edS=React.useState(null),editKey=edS[0],setEditKey=edS[1];
+        var drS=React.useState(null),drill=drS[0],setDrill=drS[1];
         var fileRef=React.useRef(null);
 
-        function loadAll(){
+        function loadAll(wk){
           setLoading(true);
-          apiGet('/scorecard/week-range').then(function(wr){
-            setWk(wr);
-            return Promise.all([
-              apiGet('/metrics/daily-week?center='+encodeURIComponent(center)+'&desde='+wr.desde+'&hasta='+wr.hasta),
-              apiGet('/scorecard/targets?center='+encodeURIComponent(center))
-            ]);
-          }).then(function(res){
-            setData(res[0]||{}); setTargets((res[1]&&res[1].targets)||{}); setLoading(false);
-          }).catch(function(){ setLoading(false); if(toast)toast.error('Error cargando'); });
+          apiGet('/scorecard/full?center='+encodeURIComponent(center)+(wk?('&week='+wk):'')).then(function(j){
+            setFull(j); setWeek(j.week);
+            return apiGet('/metrics/daily-week?center='+encodeURIComponent(center)+'&desde='+j.desde+'&hasta='+j.hasta);
+          }).then(function(dw){ setDaily(dw||{}); setLoading(false); }).catch(function(){ setLoading(false); if(toast)toast.error('Error cargando'); });
         }
-        React.useEffect(function(){ loadAll(); },[center]);
+        React.useEffect(function(){ loadAll(null); },[center]);
 
+        function navWeek(delta){
+          if(!week) return;
+          var p=week.split('-'); var d=new Date(+p[0],+p[1]-1,+p[2]); d.setDate(d.getDate()+delta*7);
+          loadAll(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'));
+        }
+        function saveValue(key,val){
+          apiPost('/scorecard/full',{center:center,week:week,key:key,value:val}).then(function(){ setEditKey(null); loadAll(week); });
+        }
         function onFile(e){
           var fl=Array.prototype.slice.call(e.target.files||[]); e.target.value=''; if(!fl.length) return;
           setUploading(true); if(toast)toast.info('⬆️ Subiendo '+fl.length+' reporte(s)…');
-          var done=0, ok=0;
-          fl.forEach(function(f){
-            var fd=new FormData(); fd.append('file',f);
+          var done=0,ok=0;
+          fl.forEach(function(f){ var fd=new FormData(); fd.append('file',f);
             fetch(API+'/metrics/upload-daily',{method:'POST',headers:{'Authorization':'Bearer '+tok()},body:fd})
-              .then(function(r){return r.json();}).then(function(j){ if(j&&j.success){ok++;} })
-              .catch(function(){})
-              .then(function(){ done++; if(done===fl.length){ setUploading(false); if(toast)toast.success('✅ '+ok+'/'+fl.length+' procesados'); loadAll(); } });
+              .then(function(r){return r.json();}).then(function(j){ if(j&&j.success)ok++; }).catch(function(){})
+              .then(function(){ done++; if(done===fl.length){ setUploading(false); if(toast)toast.success('✅ '+ok+'/'+fl.length+' procesados'); loadAll(week); } });
           });
         }
-
-        function saveTargets(){
-          apiPost('/scorecard/targets',Object.assign({center:center},targets)).then(function(){ if(toast)toast.success('Objetivos guardados'); setEditT(false); });
+        function diaCorto(iso){ try{var p=iso.split('-');return p[2]+'/'+p[1];}catch(e){return iso;} }
+        function tierColor(t){ return t==='Fantastic'?'#0ea5e9':t==='Great'?'#22c55e':t==='Fair'?'#f59e0b':t==='Poor'?'#ef4444':'#5c6578'; }
+        function fmtVal(m){ if(m.value==null) return '—'; return m.value+(m.unit==='%'?'%':''); }
+        function drillRows(m){
+          var rk=(daily&&daily.ranking)||[]; var f=m.drill;
+          if(f==='pod') return rk.filter(function(d){return d.pod>0;}).sort(function(a,b){return b.pod-a.pod;});
+          if(f==='dnr') return rk.filter(function(d){return d.dnr>0;}).sort(function(a,b){return b.dnr-a.dnr;});
+          if(f==='cc') return rk.filter(function(d){return d.cc>0;}).sort(function(a,b){return b.cc-a.cc;});
+          if(f==='all') return rk.filter(function(d){return (d.pod+d.dnr+d.rts+d.cc)>0;}).sort(function(a,b){return (b.pod+b.dnr+b.rts+b.cc)-(a.pod+a.dnr+a.rts+a.cc);});
+          return [];
         }
-        function setT(k,v){ var o=Object.assign({},targets); o[k]=v===''?null:parseFloat(v); setTargets(o); }
 
+        function metricCard(m){
+          var col=tierColor(m.tier); var clickable=!!m.drill;
+          return h('div',{key:m.key,onClick:clickable&&editKey!==m.key?function(){setDrill(m);}:null,
+            style:{flex:'1 1 230px',minWidth:'205px',padding:'12px 14px',borderRadius:'12px',background:'rgba(255,255,255,.03)',border:'1px solid '+(m.tier?(col+'55'):'rgba(255,255,255,.08)'),cursor:(clickable&&editKey!==m.key)?'pointer':'default'}},
+            h('div',{style:{fontSize:'11.5px',color:'#8892a4',marginBottom:'5px'}}, m.label, clickable&&h('span',{style:{color:'#60a5fa',marginLeft:'6px'}},'🔍')),
+            h('div',{style:{display:'flex',alignItems:'baseline',justifyContent:'space-between',gap:'8px'}},
+              h('span',{style:{fontSize:'15px',fontWeight:800,color:col}}, m.tier||'sin datos'),
+              editKey===m.key
+                ? h('input',{type:'number',step:'0.01',autoFocus:true,defaultValue:(m.value!=null?m.value:''),
+                    onClick:function(e){e.stopPropagation();},
+                    onKeyDown:function(e){ if(e.key==='Enter')saveValue(m.key,e.target.value); if(e.key==='Escape')setEditKey(null); },
+                    onBlur:function(e){ saveValue(m.key,e.target.value); },
+                    style:{width:'84px',padding:'4px',borderRadius:'6px',background:'#1a2030',color:'#e3e8f0',border:'1px solid rgba(120,160,255,.5)',fontSize:'15px',textAlign:'right',fontWeight:700}})
+                : h('span',{onClick:function(e){e.stopPropagation();setEditKey(m.key);},title:'Clic para editar el valor',style:{fontSize:'21px',fontWeight:800,color:'#f4f5f8',cursor:'pointer'}}, fmtVal(m))
+            ),
+            m.next && h('div',{style:{fontSize:'10.5px',color:'#8892a4',marginTop:'5px'}}, '↑ para '+m.next.to_tier+': '+m.next.target+(m.unit==='%'?'%':'')+' · faltan '+Math.abs(m.next.gap))
+          );
+        }
+
+        var metrics=(full&&full.metrics)||[];
+        var safety=metrics.filter(function(m){return m.group==='safety';});
+        var quality=metrics.filter(function(m){return m.group==='quality';});
+        var counts=(full&&full.counts)||{};
+        var toImprove=(full&&full.to_improve)||[];
         var btn=function(label,on,st){ return h('button',{onClick:on,style:Object.assign({padding:'8px 14px',borderRadius:'9px',cursor:'pointer',fontSize:'13px',fontWeight:700,border:'1px solid rgba(255,255,255,.12)',background:'rgba(255,255,255,.04)',color:'#cbd3e0'},st||{})},label); };
-        function kpi(label,val,color,sub){ return h('div',{key:label,style:{flex:1,minWidth:'120px',padding:'14px 16px',borderRadius:'14px',background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.07)'}},
-          h('div',{style:{fontSize:'26px',fontWeight:800,color:color||'#f4f5f8',lineHeight:1}},val),
-          h('div',{style:{fontSize:'11px',color:'#8892a4',marginTop:'5px',textTransform:'uppercase',letterSpacing:'.04em'}},label),
-          sub&&h('div',{style:{fontSize:'10.5px',color:'#5c6578',marginTop:'2px'}},sub)); }
+        function section(title,arr){ return h('div',{style:{marginBottom:'18px'}},
+          h('div',{style:{fontSize:'12px',fontWeight:800,color:'#cbd3e0',textTransform:'uppercase',letterSpacing:'.05em',marginBottom:'10px'}},title),
+          h('div',{style:{display:'flex',gap:'10px',flexWrap:'wrap'}}, arr.map(metricCard))
+        ); }
 
-        var T=data&&data.totals?data.totals:{rts:0,dnr:0,pod:0,cc:0};
-        var ranking=(data&&data.ranking)||[];
-        var podR=(data&&data.pod_reasons)||[];
-
-        return h('div',{style:{padding:'22px',maxWidth:'1000px',margin:'0 auto'}},
+        return h('div',{style:{padding:'22px',maxWidth:'1040px',margin:'0 auto'}},
           h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'12px',marginBottom:'6px',flexWrap:'wrap'}},
             h('h1',{style:{margin:0,fontSize:'20px',fontWeight:800,color:'#f4f5f8'}},'📈 Scorecard en vivo'),
             h('div',{style:{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}},
@@ -4058,68 +4086,49 @@
               h('button',{onClick:function(){fileRef.current&&fileRef.current.click();},disabled:uploading,style:{padding:'9px 16px',borderRadius:'10px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#fb923c,#ea6800)',color:'#fff',opacity:uploading?.6:1}},uploading?'⏳…':'⬆️ Subir reporte diario')
             )
           ),
-          wk && h('p',{style:{margin:'0 0 16px',fontSize:'12.5px',color:'#8892a4'}},
-            'Semana scorecard (dom–sáb): ',h('b',{style:{color:'#cbd3e0'}},diaCorto(wk.desde)+' – '+diaCorto(wk.hasta)),
-            ' · datos hasta ',h('b',{style:{color:'#cbd3e0'}},diaCorto(wk.data_hasta)),' (Cortex va 2 días por detrás)'),
-
-          loading ? h('div',{style:{padding:'50px',textAlign:'center',color:'#8892a4'}},'Cargando…') :
-          (!data || !data.dias || data.dias.length===0) ? h('div',{style:{padding:'40px',textAlign:'center',color:'#8892a4',background:'rgba(255,255,255,.03)',borderRadius:'14px',border:'1px dashed rgba(255,255,255,.12)'}},
-            'Sin reportes diarios de esta semana en '+center+'. Súbelos con el botón naranja (el HTML que descargas de Cortex).') :
-          h('div',null,
-            /* KPIs de fallos */
-            h('div',{style:{display:'flex',gap:'10px',flexWrap:'wrap',marginBottom:'18px'}},
-              kpi('Fallos POD', T.pod, T.pod>0?'#fb923c':'#22c55e', 'foto de entrega'),
-              kpi('DNR', T.dnr, T.dnr>0?'#ef4444':'#22c55e', 'no recibidos'),
-              kpi('RTS', T.rts, '#cbd3e0', 'devueltos'),
-              kpi('Contact Compliance', T.cc, T.cc>0?'#f59e0b':'#22c55e', 'fallos CC')
-            ),
-
-            /* Coaching: motivos de POD */
-            podR.length>0 && h('div',{style:{marginBottom:'18px',padding:'14px 16px',borderRadius:'14px',background:'rgba(251,146,60,.08)',border:'1px solid rgba(251,146,60,.25)'}},
-              h('div',{style:{fontSize:'12px',fontWeight:800,color:'#fb923c',marginBottom:'10px',textTransform:'uppercase',letterSpacing:'.04em'}},'🎯 Qué corregir esta semana (fallos de foto de entrega)'),
-              podR.map(function(pr,i){ return h('div',{key:i,style:{display:'flex',alignItems:'flex-start',gap:'10px',padding:'7px 0',borderTop:i?'1px solid rgba(255,255,255,.06)':'none'}},
-                h('span',{style:{fontWeight:800,color:'#fb923c',minWidth:'34px'}},'×'+pr[1]),
-                h('div',{style:{flex:1}},
-                  h('div',{style:{fontSize:'13px',color:'#e3e8f0',fontWeight:600}},pr[0]),
-                  POD_TIP[pr[0]]&&h('div',{style:{fontSize:'11.5px',color:'#8892a4'}},POD_TIP[pr[0]]))
-              ); })
-            ),
-
-            /* Ranking de quién arrastra */
-            ranking.length>0 && h('div',{style:{borderRadius:'14px',border:'1px solid rgba(255,255,255,.07)',overflow:'hidden'}},
-              h('div',{style:{padding:'12px 16px',background:'rgba(255,255,255,.03)',fontSize:'12px',fontWeight:800,color:'#cbd3e0',textTransform:'uppercase',letterSpacing:'.04em'}},'Conductores que más arrastran'),
-              h('table',{style:{width:'100%',borderCollapse:'collapse'}},
-                h('thead',null,h('tr',{style:{fontSize:'10.5px',color:'#8892a4',textTransform:'uppercase'}},
-                  h('th',{style:{textAlign:'left',padding:'8px 16px'}},'Conductor'),
-                  ['POD','DNR','RTS','CC'].map(function(c){return h('th',{key:c,style:{textAlign:'center',padding:'8px 6px'}},c);}))),
-                h('tbody',null, ranking.slice(0,15).map(function(d,i){
-                  var bad=d.pod+d.dnr*2+d.rts*0.3+d.cc;
-                  return h('tr',{key:i,style:{borderTop:'1px solid rgba(255,255,255,.05)',background:i<3&&bad>4?'rgba(239,68,68,.05)':'transparent'}},
-                    h('td',{style:{padding:'9px 16px',fontSize:'13px',color:'#e3e8f0'}},d.name||d.transporter_id),
-                    h('td',{style:{textAlign:'center',padding:'9px 6px',fontSize:'13px',fontWeight:700,color:d.pod>0?'#fb923c':'#5c6578'}},d.pod||''),
-                    h('td',{style:{textAlign:'center',padding:'9px 6px',fontSize:'13px',fontWeight:700,color:d.dnr>0?'#ef4444':'#5c6578'}},d.dnr||''),
-                    h('td',{style:{textAlign:'center',padding:'9px 6px',fontSize:'13px',color:d.rts>0?'#cbd3e0':'#5c6578'}},d.rts||''),
-                    h('td',{style:{textAlign:'center',padding:'9px 6px',fontSize:'13px',fontWeight:700,color:d.cc>0?'#f59e0b':'#5c6578'}},d.cc||'')
-                  );
-                }))
-              )
-            )
+          h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'14px',flexWrap:'wrap'}},
+            btn('‹',function(){navWeek(-1);},{padding:'6px 12px'}),
+            h('div',{style:{fontSize:'13px',fontWeight:700,color:'#cbd3e0',minWidth:'190px',textAlign:'center'}}, full?('Semana '+diaCorto(full.desde)+' – '+diaCorto(full.hasta)+' (dom–sáb)'):'…'),
+            btn('›',function(){navWeek(1);},{padding:'6px 12px'}),
+            h('div',{style:{flex:1}}),
+            h('div',{style:{fontSize:'12px',color:'#8892a4'}}, '✓ '+(counts.Fantastic||0)+' Fantastic · '+(counts.Great||0)+' Great · '+(counts.Fair||0)+' Fair'+((counts.Poor||0)?(' · '+counts.Poor+' Poor'):''))
           ),
 
-          /* Objetivos (editables) + aviso sobre el tier */
-          h('div',{style:{marginTop:'18px',padding:'14px 16px',borderRadius:'14px',background:'rgba(124,58,237,.08)',border:'1px solid rgba(167,139,250,.25)'}},
-            h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'8px'}},
-              h('span',{style:{fontSize:'12px',fontWeight:800,color:'#c4b5fd',textTransform:'uppercase',letterSpacing:'.04em'}},'🎯 Tus objetivos (tier)'),
-              btn(editT?'Guardar':'Editar', editT?saveTargets:function(){setEditT(true);}, {fontSize:'12px',padding:'5px 12px'})),
-            h('div',{style:{display:'flex',gap:'14px',flexWrap:'wrap',fontSize:'12.5px',color:'#cbd3e0'}},
-              [['dcr','DCR %'],['dnr_dpmo','DNR DPMO'],['pod','POD %'],['cc','CC %'],['rts_pct','RTS %'],['fdds','FDDS %']].map(function(o){
-                return h('div',{key:o[0],style:{display:'flex',alignItems:'center',gap:'6px'}},
-                  h('span',{style:{color:'#8892a4'}},o[1]+':'),
-                  editT ? h('input',{type:'number',step:'0.1',value:(targets[o[0]]!=null?targets[o[0]]:''),onChange:function(e){setT(o[0],e.target.value);},style:{width:'70px',padding:'4px',borderRadius:'6px',background:'#1a2030',color:'#e3e8f0',border:'1px solid rgba(255,255,255,.12)',fontSize:'12px'}})
-                        : h('b',null, targets[o[0]]!=null?targets[o[0]]:'—'));
-              })),
-            h('div',{style:{fontSize:'11.5px',color:'#8892a4',marginTop:'10px',lineHeight:1.5}},
-              'El tier proyectado (Fantastic/Great…) aparecerá aquí en cuanto subas los ratios de la "Descripción general" de Cortex. De momento ves los fallos en bruto y a quién coachear.')
+          loading ? h('div',{style:{padding:'50px',textAlign:'center',color:'#8892a4'}},'Cargando…') :
+          h('div',null,
+            toImprove.length>0 && h('div',{style:{marginBottom:'18px',padding:'14px 16px',borderRadius:'14px',background:'rgba(245,158,11,.08)',border:'1px solid rgba(245,158,11,.25)'}},
+              h('div',{style:{fontSize:'12px',fontWeight:800,color:'#f59e0b',marginBottom:'8px',textTransform:'uppercase',letterSpacing:'.04em'}},'⬆️ Lo más fácil para subir tier'),
+              toImprove.slice(0,4).map(function(m,i){ var mm=metrics.filter(function(x){return x.key===m.key;})[0];
+                return h('div',{key:i,onClick:mm&&mm.drill?function(){setDrill(mm);}:null,style:{display:'flex',alignItems:'center',gap:'10px',padding:'7px 0',borderTop:i?'1px solid rgba(255,255,255,.06)':'none',cursor:mm&&mm.drill?'pointer':'default'}},
+                  h('span',{style:{fontSize:'12.5px',color:'#e3e8f0',flex:1}}, m.label,' ',h('b',{style:{color:tierColor(m.tier)}},'('+m.tier+')')),
+                  h('span',{style:{fontSize:'12px',color:'#8892a4'}}, '→ '+m.next.to_tier+': faltan ',h('b',{style:{color:'#f4f5f8'}},Math.abs(m.next.gap))),
+                  mm&&mm.drill&&h('span',{style:{color:'#60a5fa'}},'🔍')
+                ); })
+            ),
+            section('🛡️ Seguridad', safety),
+            section('📦 Calidad (clic en una métrica para ver quién falla)', quality),
+            h('p',{style:{fontSize:'11.5px',color:'#5c6578',marginTop:'4px',lineHeight:1.5}},'Clic en el número grande para editar el valor a mano. Sube el reporte diario para alimentar el coaching (quién falla). Los umbrales del tier están sembrados de tu scorecard real y se afinan al subir scorecards.')
+          ),
+
+          drill && h('div',{onClick:function(){setDrill(null);},style:{position:'fixed',inset:0,zIndex:10000,background:'rgba(0,0,0,.72)',display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'40px 20px',overflowY:'auto'}},
+            h('div',{onClick:function(e){e.stopPropagation();},style:{background:'#141926',border:'1px solid rgba(255,255,255,.1)',borderRadius:'16px',padding:'20px',maxWidth:'520px',width:'100%'}},
+              h('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'4px'}},
+                h('h2',{style:{margin:0,fontSize:'16px',fontWeight:800,color:'#f4f5f8'}}, drill.label),
+                h('button',{onClick:function(){setDrill(null);},style:{background:'none',border:'none',color:'#8892a4',fontSize:'20px',cursor:'pointer'}},'×')),
+              h('p',{style:{margin:'0 0 12px',fontSize:'12px',color:'#8892a4'}},'Quién está fallando esta semana en '+center+' (clic en otra semana arriba para cambiar)'),
+              (function(){ var rows=drillRows(drill);
+                if(!rows.length) return h('div',{style:{padding:'24px',textAlign:'center',color:'#22c55e',fontSize:'13px'}},'✅ Nadie falla esta métrica esta semana — o falta subir el reporte diario.');
+                return h('div',null, rows.slice(0,20).map(function(d,i){
+                  var n = drill.drill==='pod'?d.pod : drill.drill==='dnr'?d.dnr : drill.drill==='cc'?d.cc : (d.pod+d.dnr+d.rts+d.cc);
+                  return h('div',{key:i,style:{display:'flex',alignItems:'center',gap:'10px',padding:'8px 0',borderTop:i?'1px solid rgba(255,255,255,.06)':'none'}},
+                    h('span',{style:{flex:1,fontSize:'13px',color:'#e3e8f0'}}, d.name||d.transporter_id),
+                    h('span',{style:{fontSize:'13px',fontWeight:800,color:'#fb923c'}}, '×'+n));
+                }));
+              })(),
+              (daily&&daily.pod_reasons&&drill.drill==='pod') && h('div',{style:{marginTop:'12px',paddingTop:'12px',borderTop:'1px solid rgba(255,255,255,.1)'}},
+                h('div',{style:{fontSize:'11px',fontWeight:700,color:'#8892a4',marginBottom:'6px'}},'MOTIVOS'),
+                (daily.pod_reasons||[]).slice(0,6).map(function(pr,i){ return h('div',{key:i,style:{fontSize:'12px',color:'#cbd3e0',padding:'2px 0'}}, '×'+pr[1]+'  '+pr[0]); }))
+            )
           )
         );
       };
