@@ -710,10 +710,27 @@
   <div id="root"></div>
   <script>
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/service-worker.js')
-          .then(reg => console.log('[PWA] SW registrado', reg.scope))
-          .catch(err => console.warn('[PWA] SW falló:', err));
+      var _swReloaded = false;
+      // Cuando una versión nueva toma el control, recargar SOLO una vez (auto-update)
+      navigator.serviceWorker.addEventListener('controllerchange', function () {
+        if (_swReloaded) return; _swReloaded = true; window.location.reload();
+      });
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('/service-worker.js').then(function (reg) {
+          reg.update();
+          // buscar actualizaciones cada 60s mientras la app está abierta
+          setInterval(function () { reg.update(); }, 60000);
+          reg.addEventListener('updatefound', function () {
+            var nw = reg.installing;
+            if (!nw) return;
+            nw.addEventListener('statechange', function () {
+              // hay versión nueva instalada y ya había una controlando → activarla
+              if (nw.state === 'installed' && navigator.serviceWorker.controller) {
+                nw.postMessage({ type: 'SKIP_WAITING' });
+              }
+            });
+          });
+        }).catch(function (err) { console.warn('[PWA] SW falló:', err); });
       });
     }
   </script>
