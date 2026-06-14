@@ -4005,19 +4005,41 @@
         var uS=React.useState(false),uploading=uS[0],setUploading=uS[1];
         var edS=React.useState(null),editKey=edS[0],setEditKey=edS[1];
         var drS=React.useState(null),drill=drS[0],setDrill=drS[1];
+        var qS=React.useState([]),queue=qS[0],setQueue=qS[1];
+        var prS=React.useState(null),predict=prS[0],setPredict=prS[1];
         var fileRef=React.useRef(null);
-        var scRef=React.useRef(null);
 
-        function onOfficial(e){
-          var fl=Array.prototype.slice.call(e.target.files||[]); e.target.value=''; if(!fl.length) return;
-          setUploading(true); if(toast)toast.info('📄 Leyendo '+fl.length+' scorecard(s)…');
-          var done=0,ok=0,last=null;
-          fl.forEach(function(f){ var fd=new FormData(); fd.append('file',f); fd.append('center',center);
-            fetch(API+'/scorecard/import-official',{method:'POST',headers:{'Authorization':'Bearer '+tok()},body:fd})
-              .then(function(r){return r.json();}).then(function(j){ if(j&&j.success){ok++;last=j;} else if(toast)toast.error((j&&j.detail)||'No se pudo leer'); }).catch(function(){})
-              .then(function(){ done++; if(done===fl.length){ setUploading(false); if(toast)toast.success('✅ '+ok+'/'+fl.length+' scorecards · última: W'+(last?last.week+' '+(last.overall_tier||''):'')); if(last&&last.week){ var s=new Date(2026,4,31); s.setDate(s.getDate()+(last.week-23)*7); loadAll(s.getFullYear()+'-'+String(s.getMonth()+1).padStart(2,'0')+'-'+String(s.getDate()).padStart(2,'0')); } else loadAll(week); } });
-          });
+        function loadPredict(){
+          apiGet('/scorecard/predict?center='+encodeURIComponent(center)).then(function(j){ setPredict(j||null); }).catch(function(){});
         }
+
+        // ── Cola de subida UNIFICADA (PDF/HTML/XLSX/XLS/CSV) — máx 3 a la vez, ×3 reintentos ──
+        function uploadFiles(fileList){
+          var files=Array.prototype.slice.call(fileList||[]); if(!files.length) return;
+          var items=files.map(function(f){ return {name:f.name,size:f.size,status:'Esperando',pct:0,msg:'',tipo:'',file:f}; });
+          setQueue(items); setUploading(true);
+          var idx=0, active=0, fin=0, lastSc=null;
+          function upd(i,patch){ setQueue(function(prev){ var c=prev.slice(); c[i]=Object.assign({},c[i],patch); return c; }); }
+          function done(i){ active--; fin++; if(fin===items.length){ setUploading(false); if(lastSc&&lastSc.week){ var s=new Date(2026,4,31); s.setDate(s.getDate()+(lastSc.week-23)*7); loadAll(s.getFullYear()+'-'+String(s.getMonth()+1).padStart(2,'0')+'-'+String(s.getDate()).padStart(2,'0')); } else loadAll(week); loadPredict(); if(toast)toast.success('Subida terminada'); } else pump(); }
+          function one(i,attempt){
+            var it=items[i]; upd(i,{status:'Subiendo',pct:15});
+            var fd=new FormData(); fd.append('file',it.file); fd.append('center',center);
+            var ctrl=new AbortController(); var killer=setTimeout(function(){ctrl.abort();},120000);
+            setTimeout(function(){ upd(i,{status:'Procesando',pct:55}); },300);
+            fetch(API+'/scorecard/upload',{method:'POST',headers:{'Authorization':'Bearer '+tok()},body:fd,signal:ctrl.signal})
+              .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+              .then(function(res){ clearTimeout(killer);
+                if(res.ok && res.j && res.j.ok){ upd(i,{status:'Completado',pct:100,msg:res.j.mensaje||'',tipo:res.j.tipo||''}); if(res.j.tipo==='scorecard'){ var mw=(res.j.mensaje||'').match(/W(\d+)/); if(mw)lastSc={week:+mw[1]}; } done(i); }
+                else { throw new Error((res.j&&res.j.detail)||'no se pudo procesar'); }
+              }).catch(function(e){ clearTimeout(killer);
+                if(attempt<3){ upd(i,{status:'Reintentando '+(attempt+1)+'/3',pct:25}); setTimeout(function(){ one(i,attempt+1); },800); }
+                else { upd(i,{status:'Error',pct:100,msg:(e&&e.message)||'falló'}); done(i); }
+              });
+          }
+          function pump(){ while(active<3 && idx<items.length){ var i=idx++; active++; one(i,1); } }
+          pump();
+        }
+        function onPick(e){ var f=e.target.files; e.target.value=''; uploadFiles(f); }
 
         function loadAll(wk){
           setLoading(true);
@@ -4026,7 +4048,7 @@
             return apiGet('/metrics/daily-week?center='+encodeURIComponent(center)+'&desde='+j.desde+'&hasta='+j.hasta);
           }).then(function(dw){ setDaily(dw||{}); setLoading(false); }).catch(function(){ setLoading(false); if(toast)toast.error('Error cargando'); });
         }
-        React.useEffect(function(){ loadAll(null); },[center]);
+        React.useEffect(function(){ loadAll(null); loadPredict(); },[center]);
 
         function navWeek(delta){
           if(!week) return;
@@ -4096,10 +4118,8 @@
             h('div',{style:{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}},
               !propCenter && h('select',{value:center,onChange:function(e){setCenter(e.target.value);},style:{padding:'8px',borderRadius:'9px',background:'#1a2030',color:'#cbd3e0',border:'1px solid rgba(255,255,255,.12)',fontSize:'13px'}},
                 ['OGA5','DGA1','DGA2'].map(function(c){return h('option',{key:c,value:c},c);})),
-              h('input',{ref:scRef,type:'file',accept:'.pdf',multiple:true,style:{display:'none'},onChange:onOfficial}),
-              h('button',{onClick:function(){scRef.current&&scRef.current.click();},disabled:uploading,title:'Sube la scorecard oficial semanal (PDF)',style:{padding:'9px 16px',borderRadius:'10px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#0ea5e9,#0369a1)',color:'#fff',opacity:uploading?.6:1}},uploading?'⏳…':'📄 Scorecard (PDF)'),
-              h('input',{ref:fileRef,type:'file',accept:'.html,.htm',multiple:true,style:{display:'none'},onChange:onFile}),
-              btn('⬆️ Reporte diario',function(){fileRef.current&&fileRef.current.click();})
+              h('input',{ref:fileRef,type:'file',accept:'.pdf,.html,.htm,.xlsx,.xls,.xlsm,.csv',multiple:true,style:{display:'none'},onChange:onPick}),
+              h('button',{onClick:function(){fileRef.current&&fileRef.current.click();},disabled:uploading,title:'Sube scorecards (PDF), reportes diarios (HTML) o ratios (Excel/CSV) — varios a la vez',style:{padding:'9px 18px',borderRadius:'10px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#0ea5e9,#0369a1)',color:'#fff',opacity:uploading?.6:1}},uploading?'⏳ Subiendo…':'⬆️ Subir archivos')
             )
           ),
           h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'14px',flexWrap:'wrap'}},
@@ -4108,6 +4128,37 @@
             btn('›',function(){navWeek(1);},{padding:'6px 12px'}),
             h('div',{style:{flex:1}}),
             h('div',{style:{fontSize:'12px',color:'#8892a4'}}, '✓ '+(counts.Fantastic||0)+' Fantastic · '+(counts.Great||0)+' Great · '+(counts.Fair||0)+' Fair'+((counts.Poor||0)?(' · '+counts.Poor+' Poor'):''))
+          ),
+
+          /* Cola de subida con estado por archivo */
+          queue.length>0 && h('div',{style:{marginBottom:'16px',padding:'12px 14px',borderRadius:'12px',background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.1)'}},
+            h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'8px'}},
+              h('span',{style:{fontSize:'12px',fontWeight:700,color:'#cbd3e0'}}, '📥 Subida — '+queue.filter(function(q){return q.status==='Completado'||q.status==='Error';}).length+'/'+queue.length),
+              !uploading&&h('button',{onClick:function(){setQueue([]);},style:{padding:'3px 9px',borderRadius:'7px',border:'1px solid rgba(255,255,255,.12)',background:'rgba(255,255,255,.04)',color:'#8892a4',fontSize:'11px',cursor:'pointer'}},'Ocultar')),
+            queue.map(function(it,i){ var col=it.status==='Completado'?'#22c55e':it.status==='Error'?'#ef4444':it.status.indexOf('Reintent')>=0?'#f59e0b':'#60a5fa';
+              return h('div',{key:i,style:{padding:'6px 0',borderTop:i?'1px solid rgba(255,255,255,.05)':'none'}},
+                h('div',{style:{display:'flex',alignItems:'center',gap:'8px',fontSize:'12px'}},
+                  h('span',{style:{width:'16px'}}, it.status==='Completado'?'✅':it.status==='Error'?'❌':'⏳'),
+                  h('span',{style:{flex:1,color:'#e3e8f0',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}, it.name),
+                  h('span',{style:{color:'#5c6578',fontSize:'10.5px'}}, Math.round(it.size/1024)+' KB'),
+                  h('span',{style:{color:col,fontWeight:700,minWidth:'90px',textAlign:'right'}}, it.status)),
+                h('div',{style:{height:'4px',borderRadius:'99px',background:'rgba(255,255,255,.08)',marginTop:'4px',overflow:'hidden'}},
+                  h('div',{style:{height:'100%',width:it.pct+'%',background:col,transition:'width .3s'}})),
+                it.msg&&h('div',{style:{fontSize:'11px',color:it.status==='Error'?'#f87171':'#8892a4',marginTop:'3px'}}, it.msg)
+              ); })
+          ),
+
+          /* Predicción de la semana en curso (de los ratios subidos) */
+          predict && predict.dias_con_datos && predict.dias_con_datos.length>0 && h('div',{style:{marginBottom:'18px',padding:'16px 18px',borderRadius:'16px',background:'rgba(16,185,129,.07)',border:'1px solid rgba(16,185,129,.28)'}},
+            h('div',{style:{fontSize:'11px',fontWeight:800,color:'#34d399',textTransform:'uppercase',letterSpacing:'.05em',marginBottom:'8px'}},'🔮 Predicción de esta semana (en vivo)'),
+            h('div',{style:{display:'flex',gap:'24px',flexWrap:'wrap',alignItems:'baseline'}},
+              h('div',null, h('div',{style:{fontSize:'10.5px',color:'#8892a4'}},'Tier esperado'), h('div',{style:{fontSize:'26px',fontWeight:800,color:tierColorBig(predict.predicted_tier)}}, predict.predicted_tier||'—')),
+              h('div',null, h('div',{style:{fontSize:'10.5px',color:'#8892a4'}},'Confianza'), h('div',{style:{fontSize:'20px',fontWeight:800,color:'#cbd3e0'}}, predict.confidence+'%')),
+              h('div',null, h('div',{style:{fontSize:'10.5px',color:'#8892a4'}},'Datos'), h('div',{style:{fontSize:'13px',color:'#cbd3e0'}}, predict.dias_con_datos.length+' días de ratios')),
+              predict.delta_anterior && h('div',null, h('div',{style:{fontSize:'10.5px',color:'#8892a4'}},'Semana anterior'), h('div',{style:{fontSize:'13px',color:'#cbd3e0'}}, 'W'+predict.delta_anterior.week+': '+predict.delta_anterior.tier))
+            ),
+            (predict.empeoran&&predict.empeoran.length>0) && h('div',{style:{fontSize:'12px',color:'#f59e0b',marginTop:'8px'}}, '↓ Te empeoran: '+predict.empeoran.map(function(x){return x.label+' ('+x.tier+')';}).join(', ')),
+            (predict.faltan_datos&&predict.faltan_datos.length>0) && h('div',{style:{fontSize:'11px',color:'#5c6578',marginTop:'6px'}}, 'Faltan datos de: '+predict.faltan_datos.slice(0,6).join(', ')+(predict.faltan_datos.length>6?'…':''))
           ),
 
           loading ? h('div',{style:{padding:'50px',textAlign:'center',color:'#8892a4'}},'Cargando…') :

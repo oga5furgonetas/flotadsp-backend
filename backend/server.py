@@ -9797,5 +9797,268 @@ async def list_official_scorecards(center: str, _=Depends(require_admin)):
     return {"scorecards": docs}
 
 
+# =========================
+# SUBIDA UNIFICADA + PREDICCIÓN DE SCORE (datos reales de los archivos)
+# =========================
+
+_MESES_ES = {"enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+             "julio": 7, "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10,
+             "noviembre": 11, "diciembre": 12}
+
+
+def _read_table_any(content: bytes, filename: str):
+    """Devuelve filas (listas de str) de xlsx/xls/csv/html."""
+    fn = (filename or "").lower()
+    rows = []
+    if fn.endswith(".xlsx") or fn.endswith(".xlsm"):
+        import openpyxl, io
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        for ws in wb.worksheets:
+            for r in ws.iter_rows(values_only=True):
+                rows.append(["" if c is None else str(c) for c in r])
+    elif fn.endswith(".xls"):
+        import xlrd
+        book = xlrd.open_workbook(file_contents=content)
+        for sh in book.sheets():
+            for ri in range(sh.nrows):
+                rows.append([str(sh.cell_value(ri, ci)) for ci in range(sh.ncols)])
+    elif fn.endswith(".csv"):
+        import csv, io
+        txt = content.decode("utf-8", errors="ignore")
+        for r in csv.reader(io.StringIO(txt)):
+            rows.append(r)
+    else:
+        html = content.decode("utf-8", errors="ignore")
+        for tbl in re.findall(r"<table.*?</table>", html, re.S | re.I):
+            for tr in re.findall(r"<tr.*?</tr>", tbl, re.S | re.I):
+                cells = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", c)).strip()
+                         for c in re.findall(r"<t[hd].*?</t[hd]>", tr, re.S | re.I)]
+                if any(cells):
+                    rows.append(cells)
+    return rows
+
+
+def _es_date(s: str, year: int):
+    s = (s or "").lower().strip()
+    m = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    for nombre, num in _MESES_ES.items():
+        m = re.search(nombre + r"\s+(\d{1,2})", s) or re.search(r"(\d{1,2})\s+" + nombre, s)
+        if m:
+            return f"{year}-{num:02d}-{int(m.group(1)):02d}"
+    return None
+
+
+def _num(s):
+    s = str(s).strip()
+    if s in ("", "-", "Sin datos", "None", "N/A"):
+        return None
+    s = s.replace("%", "").strip()
+    s = s.replace(",", "") if (s.count(",") and "." in s) else s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+# Mapa de filas de "Descripción general" (Cortex, ES) → claves de conteo/ratio
+_RATIO_ROWS = [
+    (["entrega correcta (%) - dsp", "entrega correcta (%)-dsp"], "dcr"),
+    (["dpmo de dnr"], "dnr_dpmo"),
+    (["tasa de éxito de pod", "tasa de exito de pod"], "pod"),
+    (["paquetes devueltos al centro (rts) %"], "rts_pct"),
+    (["éxito de entrega en el primer día", "exito de entrega en el primer"], "fdds"),
+    (["paquetes enviados"], "c_enviados"),
+    (["paquetes entregados"], "c_entregados"),
+    (["oportunidades de pod"], "c_pod_opp"),
+    (["éxito de pod", "exito de pod"], "c_pod_succ"),
+    (["paquetes entregados no recibidos"], "c_dnr"),
+]
+
+
+def _parse_ratios(content: bytes, filename: str):
+    """Parsea la 'Descripción general' (ratios diarios) → {days:{date:{dcr,pod,...,conteos}}}."""
+    rows = _read_table_any(content, filename)
+    if not rows:
+        return None
+    year = datetime.now(timezone.utc).year
+    # localizar fila cabecera: la que tenga >=2 fechas reconocibles
+    hdr_i, date_cols = None, {}
+    for i, r in enumerate(rows[:8]):
+        cols = {}
+        for ci in range(1, len(r)):
+            d = _es_date(r[ci], year)
+            if d:
+                cols[ci] = d
+        if len(cols) >= 2:
+            hdr_i, date_cols = i, cols
+            break
+    if not date_cols:
+        return None
+    days = {d: {} for d in date_cols.values()}
+    for r in rows[hdr_i + 1:]:
+        if not r:
+            continue
+        label = (r[0] or "").lower().strip()
+        key = next((k for names, k in _RATIO_ROWS if any(n in label for n in names)), None)
+        if not key:
+            continue
+        for ci, date in date_cols.items():
+            if ci < len(r):
+                v = _num(r[ci])
+                if v is not None:
+                    days[date][key] = v
+    return {"days": days} if any(days.values()) else None
+
+
+@api_router.post("/scorecard/upload")
+async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] = Form(None),
+                           _=Depends(require_admin)):
+    """Subida UNIFICADA: detecta el tipo (PDF scorecard / HTML reporte diario /
+    Excel-CSV ratios), valida, parsea, guarda y devuelve estado claro."""
+    content = await file.read()
+    fn = (file.filename or "").lower()
+    if not content:
+        raise HTTPException(status_code=400, detail="Archivo vacío")
+    import hashlib
+    fhash = hashlib.md5(content).hexdigest()
+    ext = fn.rsplit(".", 1)[-1] if "." in fn else ""
+    if ext not in ("pdf", "html", "htm", "xlsx", "xls", "xlsm", "csv"):
+        raise HTTPException(status_code=400, detail=f"Formato no soportado: .{ext}")
+    logger.info(f"[upload] {fn} ({len(content)}B, {ext})")
+
+    # PDF → scorecard oficial
+    if ext == "pdf":
+        sc = await _parse_official_scorecard(content, file.filename or "")
+        cen = (sc.get("center") or center or "").upper() or "OGA5"
+        week = sc.get("week")
+        if not week:
+            raise HTTPException(status_code=422, detail="No reconocí la semana en el PDF")
+        doc = {"center": cen, "week": int(week), "year": sc.get("year"),
+               "overall_score": sc.get("overall_score"), "overall_tier": sc.get("overall_tier"),
+               "categories": sc.get("categories") or {}, "metrics": sc.get("metrics") or [],
+               "hash": fhash, "uploaded_at": datetime.now(timezone.utc).isoformat()}
+        await db.scorecard_official.update_one({"center": cen, "week": int(week)}, {"$set": doc}, upsert=True)
+        for m in (sc.get("metrics") or []):
+            if m.get("key") and m.get("value") is not None and m.get("tier"):
+                await db.scorecard_obs.update_one(
+                    {"center": cen, "week": int(week), "metric": m["key"]},
+                    {"$set": {"center": cen, "week": int(week), "metric": m["key"],
+                              "value": m["value"], "tier": m["tier"]}}, upsert=True)
+        return {"tipo": "scorecard", "ok": True, "center": cen,
+                "mensaje": f"Scorecard W{week}: {sc.get('overall_tier')} ({sc.get('overall_score')})",
+                "metricas": len(sc.get("metrics") or [])}
+
+    # HTML → puede ser reporte diario (fallos) o ratios (Descripción general)
+    if ext in ("html", "htm"):
+        parsed = _parse_daily_report(content, file.filename or "")
+        if parsed.get("center") and parsed.get("date") and parsed.get("drivers"):
+            cen = parsed["center"]
+            doc = dict(parsed); doc["hash"] = fhash
+            doc["uploaded_at"] = datetime.now(timezone.utc).isoformat()
+            await db.daily_dsp.update_one({"center": cen, "date": parsed["date"]}, {"$set": doc}, upsert=True)
+            return {"tipo": "reporte_diario", "ok": True, "center": cen,
+                    "mensaje": f"Reporte {parsed['date']}: {len(parsed['drivers'])} conductores",
+                    "fecha": parsed["date"]}
+        # intentar como ratios HTML
+        ratios = _parse_ratios(content, file.filename or "")
+        if ratios:
+            return await _store_ratios(ratios, center)
+        raise HTTPException(status_code=422,
+                            detail="HTML no reconocido (ni reporte diario ni Descripción general)")
+
+    # Excel/CSV → ratios (Descripción general)
+    ratios = _parse_ratios(content, file.filename or "")
+    if not ratios:
+        raise HTTPException(status_code=422,
+                            detail="Excel/CSV no reconocido. ¿Es la 'Descripción general' de Cortex?")
+    return await _store_ratios(ratios, center)
+
+
+async def _store_ratios(ratios, center):
+    cen = (center or "OGA5").upper()
+    n = 0
+    for date, vals in ratios["days"].items():
+        if not vals:
+            continue
+        await db.daily_ratios.update_one(
+            {"center": cen, "date": date},
+            {"$set": {"center": cen, "date": date, **vals,
+                      "uploaded_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+        n += 1
+    return {"tipo": "ratios", "ok": True, "center": cen,
+            "mensaje": f"Ratios de {n} día(s) cargados", "dias": n}
+
+
+@api_router.get("/scorecard/predict")
+async def scorecard_predict(center: str, week: Optional[str] = None, _=Depends(require_admin)):
+    """Predicción REAL de la semana en curso con los ratios diarios subidos +
+    umbrales de tus scorecards. Sin valores fijos."""
+    if not week:
+        last = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+        week, _s = _sun_sat_week(last)
+    sun, sat = _sun_sat_week(week)
+    thr = await _sc_thresholds(center)
+    docs = await db.daily_ratios.find(
+        {"center": center, "date": {"$gte": sun, "$lte": sat}}, {"_id": 0}).sort("date", 1).to_list(10)
+    dias = [d["date"] for d in docs]
+
+    def s(k):
+        return sum(d.get(k, 0) or 0 for d in docs)
+    enviados, entregados = s("c_enviados"), s("c_entregados")
+    pod_opp, pod_succ, dnr = s("c_pod_opp"), s("c_pod_succ"), s("c_dnr")
+
+    vals = {}
+    if enviados:
+        vals["dcr"] = round(entregados / enviados * 100, 2)
+        vals["dnr_dpmo"] = round(dnr / entregados * 1e6) if entregados else None
+    if pod_opp:
+        vals["pod"] = round(pod_succ / pod_opp * 100, 2)
+    # los que no tienen conteo: media ponderada de los % diarios
+    for k in ("dcr", "pod", "fdds", "rts_pct", "dnr_dpmo"):
+        if k not in vals:
+            xs = [d[k] for d in docs if d.get(k) is not None]
+            if xs:
+                vals[k] = round(sum(xs) / len(xs), 2)
+
+    metrics = []
+    for m in _SC_METRICS:
+        v = vals.get(m["key"])
+        t = _sc_tier(v, thr.get(m["key"]), m["dir"]) if v is not None else None
+        metrics.append({"key": m["key"], "label": m["label"], "group": m["group"],
+                        "value": v, "tier": t, "next": _sc_next_target(v, t, thr.get(m["key"]), m["dir"]) if t else None})
+
+    tiers = [m["tier"] for m in metrics if m["tier"]]
+    if tiers:
+        cnt = {}
+        for t in tiers:
+            cnt[t] = cnt.get(t, 0) + 1
+        mx = max(cnt.values())
+        predicted_tier = max([t for t in cnt if cnt[t] == mx], key=lambda t: _TIER_ORDER.index(t))
+    else:
+        predicted_tier = None
+    confidence = round(min(100, len(dias) / 7 * 100))
+
+    # delta vs última scorecard oficial
+    wnum = _sun_to_week_num(sun)
+    prev = await db.scorecard_official.find_one(
+        {"center": center, "week": {"$lt": wnum}}, {"_id": 0}, sort=[("week", -1)])
+    delta = None
+    if prev and prev.get("overall_tier"):
+        delta = {"week": prev.get("week"), "tier": prev.get("overall_tier"),
+                 "score": prev.get("overall_score")}
+
+    helps = [m["label"] for m in metrics if m["tier"] in ("Fantastic", "Fantastic Plus")]
+    hurts = [{"label": m["label"], "tier": m["tier"]} for m in metrics if m["tier"] in ("Fair", "Poor")]
+    faltan = [m["label"] for m in _SC_METRICS if vals.get(m["key"]) is None]
+
+    return {"center": center, "desde": sun, "hasta": sat, "dias_con_datos": dias,
+            "predicted_tier": predicted_tier, "confidence": confidence,
+            "metrics": metrics, "ayudan": helps, "empeoran": hurts,
+            "faltan_datos": faltan, "delta_anterior": delta,
+            "fuentes": {"ratios_dias": len(dias)}}
+
+
 app.include_router(auth_router)
 app.include_router(api_router)
