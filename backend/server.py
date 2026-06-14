@@ -9928,52 +9928,57 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
         raise HTTPException(status_code=400, detail=f"Formato no soportado: .{ext}")
     logger.info(f"[upload] {fn} ({len(content)}B, {ext})")
 
-    # PDF → scorecard oficial
-    if ext == "pdf":
-        sc = await _parse_official_scorecard(content, file.filename or "")
-        cen = (sc.get("center") or center or "").upper() or "OGA5"
-        week = sc.get("week")
-        if not week:
-            raise HTTPException(status_code=422, detail="No reconocí la semana en el PDF")
-        doc = {"center": cen, "week": int(week), "year": sc.get("year"),
-               "overall_score": sc.get("overall_score"), "overall_tier": sc.get("overall_tier"),
-               "categories": sc.get("categories") or {}, "metrics": sc.get("metrics") or [],
-               "hash": fhash, "uploaded_at": datetime.now(timezone.utc).isoformat()}
-        await db.scorecard_official.update_one({"center": cen, "week": int(week)}, {"$set": doc}, upsert=True)
-        for m in (sc.get("metrics") or []):
-            if m.get("key") and m.get("value") is not None and m.get("tier"):
-                await db.scorecard_obs.update_one(
-                    {"center": cen, "week": int(week), "metric": m["key"]},
-                    {"$set": {"center": cen, "week": int(week), "metric": m["key"],
-                              "value": m["value"], "tier": m["tier"]}}, upsert=True)
-        return {"tipo": "scorecard", "ok": True, "center": cen,
-                "mensaje": f"Scorecard W{week}: {sc.get('overall_tier')} ({sc.get('overall_score')})",
-                "metricas": len(sc.get("metrics") or [])}
+    try:
+        # PDF → scorecard oficial
+        if ext == "pdf":
+            sc = await _parse_official_scorecard(content, file.filename or "")
+            cen = (sc.get("center") or center or "").upper() or "OGA5"
+            week = sc.get("week")
+            if not week:
+                raise HTTPException(status_code=422, detail="No reconocí la semana en el PDF (¿es una scorecard oficial?)")
+            doc = {"center": cen, "week": int(week), "year": sc.get("year"),
+                   "overall_score": sc.get("overall_score"), "overall_tier": sc.get("overall_tier"),
+                   "categories": sc.get("categories") or {}, "metrics": sc.get("metrics") or [],
+                   "hash": fhash, "uploaded_at": datetime.now(timezone.utc).isoformat()}
+            await db.scorecard_official.update_one({"center": cen, "week": int(week)}, {"$set": doc}, upsert=True)
+            for m in (sc.get("metrics") or []):
+                if m.get("key") and m.get("value") is not None and m.get("tier"):
+                    await db.scorecard_obs.update_one(
+                        {"center": cen, "week": int(week), "metric": m["key"]},
+                        {"$set": {"center": cen, "week": int(week), "metric": m["key"],
+                                  "value": m["value"], "tier": m["tier"]}}, upsert=True)
+            return {"tipo": "scorecard", "ok": True, "center": cen,
+                    "mensaje": f"Scorecard W{week}: {sc.get('overall_tier')} ({sc.get('overall_score')})",
+                    "metricas": len(sc.get("metrics") or [])}
 
-    # HTML → puede ser reporte diario (fallos) o ratios (Descripción general)
-    if ext in ("html", "htm"):
-        parsed = _parse_daily_report(content, file.filename or "")
-        if parsed.get("center") and parsed.get("date") and parsed.get("drivers"):
-            cen = parsed["center"]
-            doc = dict(parsed); doc["hash"] = fhash
-            doc["uploaded_at"] = datetime.now(timezone.utc).isoformat()
-            await db.daily_dsp.update_one({"center": cen, "date": parsed["date"]}, {"$set": doc}, upsert=True)
-            return {"tipo": "reporte_diario", "ok": True, "center": cen,
-                    "mensaje": f"Reporte {parsed['date']}: {len(parsed['drivers'])} conductores",
-                    "fecha": parsed["date"]}
-        # intentar como ratios HTML
+        # HTML → reporte diario (fallos) o ratios (Descripción general)
+        if ext in ("html", "htm"):
+            parsed = _parse_daily_report(content, file.filename or "")
+            if parsed.get("center") and parsed.get("date") and parsed.get("drivers"):
+                cen = parsed["center"]
+                doc = dict(parsed); doc["hash"] = fhash
+                doc["uploaded_at"] = datetime.now(timezone.utc).isoformat()
+                await db.daily_dsp.update_one({"center": cen, "date": parsed["date"]}, {"$set": doc}, upsert=True)
+                return {"tipo": "reporte_diario", "ok": True, "center": cen,
+                        "mensaje": f"Reporte {parsed['date']}: {len(parsed['drivers'])} conductores",
+                        "fecha": parsed["date"]}
+            ratios = _parse_ratios(content, file.filename or "")
+            if ratios:
+                return await _store_ratios(ratios, center)
+            raise HTTPException(status_code=422,
+                                detail="HTML no reconocido (ni reporte diario ni Descripción general)")
+
+        # Excel/CSV → ratios (Descripción general)
         ratios = _parse_ratios(content, file.filename or "")
-        if ratios:
-            return await _store_ratios(ratios, center)
-        raise HTTPException(status_code=422,
-                            detail="HTML no reconocido (ni reporte diario ni Descripción general)")
-
-    # Excel/CSV → ratios (Descripción general)
-    ratios = _parse_ratios(content, file.filename or "")
-    if not ratios:
-        raise HTTPException(status_code=422,
-                            detail="Excel/CSV no reconocido. ¿Es la 'Descripción general' de Cortex?")
-    return await _store_ratios(ratios, center)
+        if not ratios:
+            raise HTTPException(status_code=422,
+                                detail="Excel/CSV no reconocido. ¿Es la 'Descripción general' de Cortex?")
+        return await _store_ratios(ratios, center)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[upload] {fn} ERROR: {type(e).__name__}: {repr(e)}")
+        raise HTTPException(status_code=422, detail=f"No se pudo procesar {fn}: {type(e).__name__}")
 
 
 async def _store_ratios(ratios, center):
