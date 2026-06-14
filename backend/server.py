@@ -9369,6 +9369,63 @@ async def upload_daily_report(file: UploadFile = File(...), _=Depends(require_ad
             "conductores": len(parsed["drivers"]), "totales": parsed["totals"]}
 
 
+# Objetivos del scorecard (umbrales del tier) — los pone el usuario a mano.
+# Valores por defecto orientativos; cada DSP/centro ajusta los suyos.
+_DEFAULT_TARGETS = {"dcr": 98.5, "dnr_dpmo": 1500, "pod": 97.5, "cc": 95.0,
+                    "rts_pct": 1.5, "fdds": 98.5}
+
+
+@api_router.get("/scorecard/targets")
+async def get_scorecard_targets(center: Optional[str] = None, _=Depends(require_admin)):
+    """Objetivos (umbrales) del scorecard que el usuario define a mano."""
+    doc = await db.scorecard_targets.find_one(
+        {"center": center or "GLOBAL"}, {"_id": 0}) if center else None
+    if not doc:
+        doc = await db.scorecard_targets.find_one({"center": "GLOBAL"}, {"_id": 0})
+    targets = dict(_DEFAULT_TARGETS)
+    if doc:
+        for k in _DEFAULT_TARGETS:
+            if doc.get(k) is not None:
+                targets[k] = doc[k]
+    return {"center": center or "GLOBAL", "targets": targets, "default": _DEFAULT_TARGETS}
+
+
+@api_router.post("/scorecard/targets")
+async def set_scorecard_targets(data: dict = Body(...), _=Depends(require_admin)):
+    """body: {center?, dcr, dnr_dpmo, pod, cc, rts_pct, fdds} — los que envíes."""
+    center = data.get("center") or "GLOBAL"
+    upd = {"center": center}
+    for k in _DEFAULT_TARGETS:
+        if data.get(k) is not None:
+            try:
+                upd[k] = float(data[k])
+            except Exception:
+                pass
+    upd["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.scorecard_targets.update_one({"center": center}, {"$set": upd}, upsert=True)
+    return {"success": True, "center": center}
+
+
+def _sun_sat_week(date_iso: str):
+    """Devuelve (domingo, sábado) de la semana scorecard que contiene la fecha."""
+    d = datetime.strptime(date_iso, "%Y-%m-%d")
+    # weekday(): lunes=0 … domingo=6. Queremos retroceder al domingo anterior.
+    back = (d.weekday() + 1) % 7   # domingo->0, lunes->1, … sábado->6
+    sun = d - timedelta(days=back)
+    sat = sun + timedelta(days=6)
+    return sun.strftime("%Y-%m-%d"), sat.strftime("%Y-%m-%d")
+
+
+@api_router.get("/scorecard/week-range")
+async def scorecard_week_range(date: Optional[str] = None, _=Depends(require_admin)):
+    """Rango dom-sáb de la semana scorecard. Si no se pasa fecha, usa el último
+    día con dato disponible (hoy-2 por el desfase de Cortex)."""
+    if not date:
+        date = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    sun, sat = _sun_sat_week(date)
+    return {"desde": sun, "hasta": sat, "data_hasta": date}
+
+
 @api_router.get("/metrics/daily-week")
 async def daily_week(center: str, desde: str, hasta: str, _=Depends(require_admin)):
     """Acumulado de la semana (por centro): fallos por conductor, totales,
