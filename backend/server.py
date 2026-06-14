@@ -2421,7 +2421,14 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
                 h_scores.append(15 if any(k in notes for k in kws) else 0)
         honesty = round(sum(h_scores) / len(h_scores)) if h_scores else 15
 
-        # ── 🛡️ Conservación (25) — delta de daños con análisis válidos ──
+        # ── 🛡️ Conservación (25) — daño NUEVO por panel durante su custodia ──
+        # JUSTO: solo penaliza un panel que se daña por PRIMERA vez en su turno.
+        # Un panel ya dañado en cualquier inspección anterior NO cuenta (no se
+        # culpa al conductor por lo que ya estaba ni por re-detecciones de la IA).
+        # Si la furgo no tiene inspección previa (sin baseline), no se penaliza.
+        # Los rayones LEVES no penalizan (desgaste normal del reparto + son lo más
+        # ruidoso de la IA). Solo pesa el daño real: abolladura/grave/crítico.
+        PANEL_PEN = {"leve": 0, "moderado": -6, "grave": -12, "critico": -20}
         delta_events = []
         for insp in driver_insps:
             vid = insp.get("vehicle_id")
@@ -2430,24 +2437,38 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
             if insp.get("analysis_status") != "ok" or not insp.get("analysis"):
                 continue
             insp_time = insp.get("created_at", "")
-            prev = None
-            for hist in reversed(vehicle_history[vid]):
-                if hist.get("created_at", "") < insp_time and hist.get("driver_id") != driver_id:
-                    prev = hist
-                    break
-            if not prev:
-                continue
-            prev_s, curr_s = get_sev(prev), get_sev(insp)
-            if curr_s > prev_s:
-                penalty = {1: -6, 2: -15, 3: -25}.get(curr_s - prev_s, -25)
-                sev_labels = {0: "sin_daños", 1: "leve", 2: "grave", 3: "crítico"}
-                delta_events.append({
-                    "vehicle_id": vid,
-                    "from_sev": sev_labels.get(prev_s, "?"),
-                    "to_sev": sev_labels.get(curr_s, "?"),
-                    "penalty": penalty,
-                    "date": insp_time[:10] if len(insp_time) >= 10 else insp_time,
-                })
+            prior = [h for h in vehicle_history[vid] if h.get("created_at", "") < insp_time]
+            if not prior:
+                continue  # sin baseline: no se puede saber qué es nuevo
+            base_panels = set()
+            for h in prior:
+                for d in ((h.get("analysis") or {}).get("damages") or []):
+                    if isinstance(d, dict):
+                        p = _canon_panel(d.get("part") or d.get("zone") or d.get("location"))
+                        if p:
+                            base_panels.add(p)
+            curr = {}
+            for d in ((insp.get("analysis") or {}).get("damages") or []):
+                if not isinstance(d, dict):
+                    continue
+                p = _canon_panel(d.get("part") or d.get("zone") or d.get("location"))
+                if not p:
+                    continue
+                sev = _norm_sev(d.get("severity"))
+                rank = _SEV_RANK[sev]
+                if rank > curr.get(p, (0, None))[0]:
+                    curr[p] = (rank, sev)
+            for p, (rank, sev) in curr.items():
+                pen = PANEL_PEN.get(sev, 0)
+                if p not in base_panels and pen != 0:
+                    delta_events.append({
+                        "vehicle_id": vid,
+                        "panel": p,
+                        "from_sev": p,            # se muestra "panel → gravedad"
+                        "to_sev": sev,
+                        "penalty": pen,
+                        "date": insp_time[:10] if len(insp_time) >= 10 else insp_time,
+                    })
         conservation = max(0, 25 + sum(e["penalty"] for e in delta_events))
 
         total = min(100, compliance + punctuality + evidence + honesty + conservation)
