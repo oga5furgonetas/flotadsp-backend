@@ -9466,5 +9466,159 @@ async def daily_week(center: str, desde: str, hasta: str, _=Depends(require_admi
             "cc_reasons": sorted(cc_reasons.items(), key=lambda x: -x[1])}
 
 
+# =========================
+# SCORECARD COMPLETA EN VIVO — métricas reales de Amazon (Seguridad + Calidad)
+#   Tiers calculados con umbrales sembrados de tu scorecard (editables y que se
+#   afinan con cada scorecard que subas). Valores: manual + auto (daily).
+# =========================
+
+# key, label, grupo, unidad, dir(+1 más alto mejor / -1 más bajo mejor), drill(daily_dsp)
+_SC_METRICS = [
+    {"key": "fico", "label": "Conducción segura (FICO)", "group": "safety", "unit": "score", "dir": 1, "manual": True},
+    {"key": "speeding", "label": "Eventos de velocidad /100 viajes", "group": "safety", "unit": "ratio", "dir": -1, "manual": True},
+    {"key": "dvic", "label": "Cumplimiento DVIC", "group": "safety", "unit": "%", "dir": 1, "manual": True},
+    {"key": "vsa", "label": "Auditoría de vehículos (VSA)", "group": "safety", "unit": "%", "dir": 1, "manual": True},
+    {"key": "mentor", "label": "Adopción del mentor", "group": "safety", "unit": "%", "dir": 1, "manual": True},
+    {"key": "dcr", "label": "Finalización de entregas (DCR)", "group": "quality", "unit": "%", "dir": 1, "drill": "all"},
+    {"key": "dcr_dpmo", "label": "Condiciones de entrega correcta DPMO", "group": "quality", "unit": "DPMO", "dir": -1, "drill": "dnr"},
+    {"key": "lor_dpmo", "label": "Perdido en ruta DPMO", "group": "quality", "unit": "DPMO", "dir": -1, "drill": "dnr"},
+    {"key": "cdf_dpmo", "label": "Feedback de entrega (CDF) DPMO", "group": "quality", "unit": "DPMO", "dir": -1},
+    {"key": "cec_dpmo", "label": "Escalación del cliente (CEC) DPMO", "group": "quality", "unit": "DPMO", "dir": -1},
+    {"key": "pod", "label": "Foto en la entrega (POD)", "group": "quality", "unit": "%", "dir": 1, "drill": "pod"},
+    {"key": "cc", "label": "Normas de contacto (CC)", "group": "quality", "unit": "%", "dir": 1, "drill": "cc"},
+]
+
+# Sembrados de la scorecard real (reproducen sus tiers). Editables y refinables.
+_SC_SEED_THR = {
+    "fico": {"fantastic": 800, "great": 750, "fair": 700},
+    "speeding": {"fantastic": 2, "great": 5, "fair": 10},
+    "dvic": {"fantastic": 98, "great": 95, "fair": 90},
+    "vsa": {"fantastic": 98, "great": 95, "fair": 90},
+    "mentor": {"fantastic": 98, "great": 95, "fair": 90},
+    "dcr": {"fantastic": 98.5, "great": 97.5, "fair": 96.5},
+    "dcr_dpmo": {"fantastic": 500, "great": 1000, "fair": 1500},
+    "lor_dpmo": {"fantastic": 25, "great": 50, "fair": 150},
+    "cdf_dpmo": {"fantastic": 1000, "great": 2500, "fair": 5000},
+    "cec_dpmo": {"fantastic": 30, "great": 60, "fair": 100},
+    "pod": {"fantastic": 97.5, "great": 96, "fair": 94},
+    "cc": {"fantastic": 98, "great": 96, "fair": 94},
+}
+_TIER_ORDER = ["Poor", "Fair", "Great", "Fantastic"]
+
+
+def _sc_tier(value, thr, direction):
+    if value is None or thr is None:
+        return None
+    f, g, fa = thr.get("fantastic"), thr.get("great"), thr.get("fair")
+    if None in (f, g, fa):
+        return None
+    if direction > 0:
+        return "Fantastic" if value >= f else "Great" if value >= g else "Fair" if value >= fa else "Poor"
+    return "Fantastic" if value <= f else "Great" if value <= g else "Fair" if value <= fa else "Poor"
+
+
+def _sc_next_target(value, tier, thr, direction):
+    """Qué valor hace falta para subir al siguiente tier (None si ya Fantastic)."""
+    if tier == "Fantastic" or value is None or thr is None:
+        return None
+    nxt = {"Poor": "fair", "Fair": "great", "Great": "fantastic"}.get(tier)
+    if not nxt:
+        return None
+    target = thr.get(nxt)
+    if target is None:
+        return None
+    gap = round((target - value) if direction > 0 else (value - target), 2)
+    return {"to_tier": {"fair": "Fair", "great": "Great", "fantastic": "Fantastic"}[nxt],
+            "target": target, "gap": gap}
+
+
+async def _sc_thresholds(center):
+    """Umbrales: semilla + override del usuario (por centro o global)."""
+    thr = {k: dict(v) for k, v in _SC_SEED_THR.items()}
+    for c in ("GLOBAL", center):
+        if not c:
+            continue
+        doc = await db.scorecard_thresholds.find_one({"center": c}, {"_id": 0})
+        if doc:
+            for k in thr:
+                if isinstance(doc.get(k), dict):
+                    thr[k].update({kk: vv for kk, vv in doc[k].items() if vv is not None})
+    return thr
+
+
+@api_router.get("/scorecard/full")
+async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(require_admin)):
+    """Scorecard completa de la semana (dom): cada métrica con valor + tier +
+    qué falta para subir. Valores manuales (db) y auto donde haya."""
+    if not week:
+        last = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+        week, _sat = _sun_sat_week(last)
+    sun, sat = _sun_sat_week(week)
+    thr = await _sc_thresholds(center)
+    doc = await db.scorecard_live.find_one({"center": center, "week": sun}, {"_id": 0})
+    values = (doc or {}).get("values", {})
+
+    out = []
+    counts = {"Fantastic": 0, "Great": 0, "Fair": 0, "Poor": 0, "Sin datos": 0}
+    for m in _SC_METRICS:
+        v = values.get(m["key"])
+        t = _sc_tier(v, thr.get(m["key"]), m["dir"])
+        counts[t if t else "Sin datos"] += 1
+        out.append({**m, "value": v, "tier": t, "thr": thr.get(m["key"]),
+                    "next": _sc_next_target(v, t, thr.get(m["key"]), m["dir"])})
+
+    # NO fabricamos el tier global (Amazon usa una fórmula ponderada propia, no
+    # pública). Mostramos qué métricas mejorar, ordenadas por lo más fácil de subir.
+    to_improve = sorted(
+        [{"key": m["key"], "label": m["label"], "group": m["group"], "tier": m["tier"],
+          "value": m["value"], "next": m["next"]}
+         for m in out if m["tier"] and m["tier"] != "Fantastic" and m["next"]],
+        key=lambda m: abs(m["next"]["gap"]) if m["next"] else 9e9)
+    # El tier oficial (overall/seguridad/calidad) lo guarda el usuario del scorecard real.
+    official = (doc or {}).get("official", {})
+
+    return {"center": center, "week": sun, "desde": sun, "hasta": sat,
+            "metrics": out, "counts": counts, "to_improve": to_improve,
+            "official": official}
+
+
+@api_router.post("/scorecard/full")
+async def scorecard_set_value(data: dict = Body(...), _=Depends(require_admin)):
+    """Guarda el valor de una métrica. body: {center, week(dom), key, value}"""
+    center, week, key = data.get("center"), data.get("week"), data.get("key")
+    if not (center and week and key):
+        raise HTTPException(status_code=400, detail="center, week y key requeridos")
+    sun, _sat = _sun_sat_week(week)
+    val = data.get("value")
+    try:
+        val = float(val) if val not in (None, "") else None
+    except Exception:
+        val = None
+    await db.scorecard_live.update_one(
+        {"center": center, "week": sun},
+        {"$set": {"center": center, "week": sun, f"values.{key}": val,
+                  "updated_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    return {"success": True}
+
+
+@api_router.post("/scorecard/thresholds")
+async def scorecard_set_thresholds(data: dict = Body(...), _=Depends(require_admin)):
+    """body: {center?, key, fantastic, great, fair}"""
+    center = data.get("center") or "GLOBAL"
+    key = data.get("key")
+    if key not in _SC_SEED_THR:
+        raise HTTPException(status_code=400, detail="key inválida")
+    band = {}
+    for b in ("fantastic", "great", "fair"):
+        if data.get(b) is not None:
+            try:
+                band[b] = float(data[b])
+            except Exception:
+                pass
+    await db.scorecard_thresholds.update_one(
+        {"center": center}, {"$set": {"center": center, key: band}}, upsert=True)
+    return {"success": True}
+
+
 app.include_router(auth_router)
 app.include_router(api_router)
