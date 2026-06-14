@@ -4006,6 +4006,18 @@
         var edS=React.useState(null),editKey=edS[0],setEditKey=edS[1];
         var drS=React.useState(null),drill=drS[0],setDrill=drS[1];
         var fileRef=React.useRef(null);
+        var scRef=React.useRef(null);
+
+        function onOfficial(e){
+          var fl=Array.prototype.slice.call(e.target.files||[]); e.target.value=''; if(!fl.length) return;
+          setUploading(true); if(toast)toast.info('📄 Leyendo '+fl.length+' scorecard(s)…');
+          var done=0,ok=0,last=null;
+          fl.forEach(function(f){ var fd=new FormData(); fd.append('file',f); fd.append('center',center);
+            fetch(API+'/scorecard/import-official',{method:'POST',headers:{'Authorization':'Bearer '+tok()},body:fd})
+              .then(function(r){return r.json();}).then(function(j){ if(j&&j.success){ok++;last=j;} else if(toast)toast.error((j&&j.detail)||'No se pudo leer'); }).catch(function(){})
+              .then(function(){ done++; if(done===fl.length){ setUploading(false); if(toast)toast.success('✅ '+ok+'/'+fl.length+' scorecards · última: W'+(last?last.week+' '+(last.overall_tier||''):'')); if(last&&last.week){ var s=new Date(2026,4,31); s.setDate(s.getDate()+(last.week-23)*7); loadAll(s.getFullYear()+'-'+String(s.getMonth()+1).padStart(2,'0')+'-'+String(s.getDate()).padStart(2,'0')); } else loadAll(week); } });
+          });
+        }
 
         function loadAll(wk){
           setLoading(true);
@@ -4068,7 +4080,9 @@
         var metrics=(full&&full.metrics)||[];
         var safety=metrics.filter(function(m){return m.group==='safety';});
         var quality=metrics.filter(function(m){return m.group==='quality';});
+        var capacity=metrics.filter(function(m){return m.group==='capacity';});
         var counts=(full&&full.counts)||{};
+        function tierColorBig(t){ return t==='Fantastic Plus'?'#06b6d4':t==='Fantastic'?'#0ea5e9':t==='Great'?'#22c55e':t==='Fair'?'#f59e0b':t==='Poor'?'#ef4444':'#5c6578'; }
         var toImprove=(full&&full.to_improve)||[];
         var btn=function(label,on,st){ return h('button',{onClick:on,style:Object.assign({padding:'8px 14px',borderRadius:'9px',cursor:'pointer',fontSize:'13px',fontWeight:700,border:'1px solid rgba(255,255,255,.12)',background:'rgba(255,255,255,.04)',color:'#cbd3e0'},st||{})},label); };
         function section(title,arr){ return h('div',{style:{marginBottom:'18px'}},
@@ -4082,8 +4096,10 @@
             h('div',{style:{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}},
               !propCenter && h('select',{value:center,onChange:function(e){setCenter(e.target.value);},style:{padding:'8px',borderRadius:'9px',background:'#1a2030',color:'#cbd3e0',border:'1px solid rgba(255,255,255,.12)',fontSize:'13px'}},
                 ['OGA5','DGA1','DGA2'].map(function(c){return h('option',{key:c,value:c},c);})),
+              h('input',{ref:scRef,type:'file',accept:'.pdf',multiple:true,style:{display:'none'},onChange:onOfficial}),
+              h('button',{onClick:function(){scRef.current&&scRef.current.click();},disabled:uploading,title:'Sube la scorecard oficial semanal (PDF)',style:{padding:'9px 16px',borderRadius:'10px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#0ea5e9,#0369a1)',color:'#fff',opacity:uploading?.6:1}},uploading?'⏳…':'📄 Scorecard (PDF)'),
               h('input',{ref:fileRef,type:'file',accept:'.html,.htm',multiple:true,style:{display:'none'},onChange:onFile}),
-              h('button',{onClick:function(){fileRef.current&&fileRef.current.click();},disabled:uploading,style:{padding:'9px 16px',borderRadius:'10px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:800,background:'linear-gradient(135deg,#fb923c,#ea6800)',color:'#fff',opacity:uploading?.6:1}},uploading?'⏳…':'⬆️ Subir reporte diario')
+              btn('⬆️ Reporte diario',function(){fileRef.current&&fileRef.current.click();})
             )
           ),
           h('div',{style:{display:'flex',alignItems:'center',gap:'10px',marginBottom:'14px',flexWrap:'wrap'}},
@@ -4096,6 +4112,24 @@
 
           loading ? h('div',{style:{padding:'50px',textAlign:'center',color:'#8892a4'}},'Cargando…') :
           h('div',null,
+            /* Posición general (Overall) */
+            full && full.overall && h('div',{style:{marginBottom:'18px',padding:'18px 20px',borderRadius:'16px',background:'rgba(255,255,255,.03)',border:'1px solid '+tierColorBig(full.overall)+'55',display:'flex',alignItems:'center',gap:'20px',flexWrap:'wrap'}},
+              h('div',null,
+                h('div',{style:{fontSize:'11px',color:'#8892a4',textTransform:'uppercase',letterSpacing:'.05em'}},'Posición general'),
+                h('div',{style:{display:'flex',alignItems:'baseline',gap:'12px'}},
+                  h('span',{style:{fontSize:'30px',fontWeight:800,color:tierColorBig(full.overall)}}, full.overall),
+                  full.overall_score!=null && h('span',{style:{fontSize:'20px',fontWeight:700,color:'#cbd3e0'}}, full.overall_score)),
+                h('div',{style:{fontSize:'10.5px',color:'#5c6578',marginTop:'2px'}}, full.overall_method||'')),
+              h('div',{style:{flex:1}}),
+              h('div',{style:{display:'flex',gap:'16px',flexWrap:'wrap'}},
+                [['Seguridad',full.safety_tier],['Calidad',full.quality_tier],['Capacidad',full.capacity_tier]].map(function(o){
+                  return o[1]?h('div',{key:o[0],style:{textAlign:'center'}},
+                    h('div',{style:{fontSize:'10.5px',color:'#8892a4'}},o[0]),
+                    h('div',{style:{fontSize:'14px',fontWeight:800,color:tierColorBig(o[1])}},o[1])):null;
+                }))
+            ),
+            !full.has_official && h('div',{style:{marginBottom:'16px',padding:'10px 14px',borderRadius:'10px',background:'rgba(14,165,233,.08)',border:'1px solid rgba(14,165,233,.25)',fontSize:'12px',color:'#7dd3fc'}},
+              '💡 Esta semana no tiene scorecard oficial. Sube el PDF (botón azul) para ver tu nota real; lo de abajo es estimación con tus umbrales.'),
             toImprove.length>0 && h('div',{style:{marginBottom:'18px',padding:'14px 16px',borderRadius:'14px',background:'rgba(245,158,11,.08)',border:'1px solid rgba(245,158,11,.25)'}},
               h('div',{style:{fontSize:'12px',fontWeight:800,color:'#f59e0b',marginBottom:'8px',textTransform:'uppercase',letterSpacing:'.04em'}},'⬆️ Lo más fácil para subir tier'),
               toImprove.slice(0,4).map(function(m,i){ var mm=metrics.filter(function(x){return x.key===m.key;})[0];
@@ -4106,8 +4140,9 @@
                 ); })
             ),
             section('🛡️ Seguridad', safety),
-            section('📦 Calidad (clic en una métrica para ver quién falla)', quality),
-            h('p',{style:{fontSize:'11.5px',color:'#5c6578',marginTop:'4px',lineHeight:1.5}},'Clic en el número grande para editar el valor a mano. Sube el reporte diario para alimentar el coaching (quién falla). Los umbrales del tier están sembrados de tu scorecard real y se afinan al subir scorecards.')
+            section('📦 Calidad y SWC (clic en una métrica para ver quién falla)', quality),
+            capacity.length>0 && section('🚚 Capacidad', capacity),
+            h('p',{style:{fontSize:'11.5px',color:'#5c6578',marginTop:'4px',lineHeight:1.5}},'📄 Sube la scorecard oficial (PDF) para ver tu nota real de cada semana. ⬆️ El reporte diario alimenta el coaching (quién falla). Clic en el número grande para editarlo a mano. Los umbrales se afinan con cada scorecard que subas.')
           ),
 
           drill && h('div',{onClick:function(){setDrill(null);},style:{position:'fixed',inset:0,zIndex:10000,background:'rgba(0,0,0,.72)',display:'flex',alignItems:'flex-start',justifyContent:'center',padding:'40px 20px',overflowY:'auto'}},

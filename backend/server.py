@@ -9472,38 +9472,61 @@ async def daily_week(center: str, desde: str, hasta: str, _=Depends(require_admi
 #   afinan con cada scorecard que subas). Valores: manual + auto (daily).
 # =========================
 
-# key, label, grupo, unidad, dir(+1 más alto mejor / -1 más bajo mejor), drill(daily_dsp)
+# 16 métricas reales del DSP Scorecard 3.0. dir(+1 más alto mejor / -1 más bajo mejor)
 _SC_METRICS = [
     {"key": "fico", "label": "Conducción segura (FICO)", "group": "safety", "unit": "score", "dir": 1, "manual": True},
-    {"key": "speeding", "label": "Eventos de velocidad /100 viajes", "group": "safety", "unit": "ratio", "dir": -1, "manual": True},
-    {"key": "dvic", "label": "Cumplimiento DVIC", "group": "safety", "unit": "%", "dir": 1, "manual": True},
-    {"key": "vsa", "label": "Auditoría de vehículos (VSA)", "group": "safety", "unit": "%", "dir": 1, "manual": True},
+    {"key": "speeding", "label": "Eventos de velocidad /100", "group": "safety", "unit": "ratio", "dir": -1, "manual": True},
     {"key": "mentor", "label": "Adopción del mentor", "group": "safety", "unit": "%", "dir": 1, "manual": True},
+    {"key": "vsa", "label": "Auditoría de vehículos (VSA)", "group": "safety", "unit": "%", "dir": 1, "manual": True},
+    {"key": "whc", "label": "Cumplimiento de horas (WHC)", "group": "safety", "unit": "%", "dir": 1, "manual": True},
+    {"key": "cas", "label": "Auditoría integral (CAS)", "group": "safety", "unit": "%", "dir": 1, "manual": True},
+    {"key": "boc", "label": "Incumplimiento contrato (BOC)", "group": "safety", "unit": "%", "dir": 1, "manual": True},
     {"key": "dcr", "label": "Finalización de entregas (DCR)", "group": "quality", "unit": "%", "dir": 1, "drill": "all"},
-    {"key": "dcr_dpmo", "label": "Condiciones de entrega correcta DPMO", "group": "quality", "unit": "DPMO", "dir": -1, "drill": "dnr"},
-    {"key": "lor_dpmo", "label": "Perdido en ruta DPMO", "group": "quality", "unit": "DPMO", "dir": -1, "drill": "dnr"},
-    {"key": "cdf_dpmo", "label": "Feedback de entrega (CDF) DPMO", "group": "quality", "unit": "DPMO", "dir": -1},
+    {"key": "dnr_dpmo", "label": "No recibidos (DNR) DPMO", "group": "quality", "unit": "DPMO", "dir": -1, "drill": "dnr"},
+    {"key": "lor_dpmo", "label": "Perdido en ruta (LoR) DPMO", "group": "quality", "unit": "DPMO", "dir": -1, "drill": "dnr"},
+    {"key": "dsc_dpmo", "label": "Condiciones de entrega (DSC) DPMO", "group": "quality", "unit": "DPMO", "dir": -1},
     {"key": "cec_dpmo", "label": "Escalación del cliente (CEC) DPMO", "group": "quality", "unit": "DPMO", "dir": -1},
+    {"key": "cdf", "label": "Feedback del cliente (CDF)", "group": "quality", "unit": "DPMO", "dir": -1},
     {"key": "pod", "label": "Foto en la entrega (POD)", "group": "quality", "unit": "%", "dir": 1, "drill": "pod"},
     {"key": "cc", "label": "Normas de contacto (CC)", "group": "quality", "unit": "%", "dir": 1, "drill": "cc"},
+    {"key": "ndcr", "label": "Capacidad día siguiente", "group": "capacity", "unit": "%", "dir": 1, "manual": True},
 ]
 
-# Sembrados de la scorecard real (reproducen sus tiers). Editables y refinables.
+# Sembrados consistentes con tus scorecards reales (W21 PDF + W23). Se afinan solos.
 _SC_SEED_THR = {
     "fico": {"fantastic": 800, "great": 750, "fair": 700},
     "speeding": {"fantastic": 2, "great": 5, "fair": 10},
-    "dvic": {"fantastic": 98, "great": 95, "fair": 90},
+    "mentor": {"fantastic": 92, "great": 80, "fair": 70},
     "vsa": {"fantastic": 98, "great": 95, "fair": 90},
-    "mentor": {"fantastic": 98, "great": 95, "fair": 90},
+    "whc": {"fantastic": 98, "great": 95, "fair": 90},
+    "cas": {"fantastic": 98, "great": 95, "fair": 90},
+    "boc": {"fantastic": 98, "great": 95, "fair": 90},
     "dcr": {"fantastic": 98.5, "great": 97.5, "fair": 96.5},
-    "dcr_dpmo": {"fantastic": 500, "great": 1000, "fair": 1500},
-    "lor_dpmo": {"fantastic": 25, "great": 50, "fair": 150},
-    "cdf_dpmo": {"fantastic": 1000, "great": 2500, "fair": 5000},
+    "dnr_dpmo": {"fantastic": 1500, "great": 2500, "fair": 4000},
+    "lor_dpmo": {"fantastic": 25, "great": 60, "fair": 150},
+    "dsc_dpmo": {"fantastic": 700, "great": 900, "fair": 1500},
     "cec_dpmo": {"fantastic": 30, "great": 60, "fair": 100},
+    "cdf": {"fantastic": 1000, "great": 2500, "fair": 5000},
     "pod": {"fantastic": 97.5, "great": 96, "fair": 94},
     "cc": {"fantastic": 98, "great": 96, "fair": 94},
+    "ndcr": {"fantastic": 100, "great": 95, "fair": 90},
 }
-_TIER_ORDER = ["Poor", "Fair", "Great", "Fantastic"]
+_TIER_ORDER = ["Poor", "Fair", "Great", "Fantastic", "Fantastic Plus"]
+
+# Ancla semana Amazon ↔ domingo: la semana 23 de 2026 fue 31/05–06/06 (dom–sáb)
+_SC_ANCHOR_SUN = "2026-05-31"
+_SC_ANCHOR_WEEK = 23
+
+
+def _week_num_to_sun(week_num):
+    d = datetime.strptime(_SC_ANCHOR_SUN, "%Y-%m-%d") + timedelta(days=(int(week_num) - _SC_ANCHOR_WEEK) * 7)
+    return d.strftime("%Y-%m-%d")
+
+
+def _sun_to_week_num(sun):
+    d = datetime.strptime(sun, "%Y-%m-%d")
+    a = datetime.strptime(_SC_ANCHOR_SUN, "%Y-%m-%d")
+    return _SC_ANCHOR_WEEK + round((d - a).days / 7)
 
 
 def _sc_tier(value, thr, direction):
@@ -9557,52 +9580,67 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
     thr = await _sc_thresholds(center)
     doc = await db.scorecard_live.find_one({"center": center, "week": sun}, {"_id": 0})
     values = (doc or {}).get("values", {})
+    # ¿hay scorecard OFICIAL de esa semana? → valores+tiers REALES de Amazon
+    wnum = _sun_to_week_num(sun)
+    off = await db.scorecard_official.find_one({"center": center, "week": wnum}, {"_id": 0})
+    off_metrics = {mm.get("key"): mm for mm in (off.get("metrics") if off else [])}
+    has_official = bool(off)
 
     out = []
-    counts = {"Fantastic": 0, "Great": 0, "Fair": 0, "Poor": 0, "Sin datos": 0}
+    counts = {}
     for m in _SC_METRICS:
-        v = values.get(m["key"])
-        t = _sc_tier(v, thr.get(m["key"]), m["dir"])
-        counts[t if t else "Sin datos"] += 1
-        out.append({**m, "value": v, "tier": t, "thr": thr.get(m["key"]),
+        om = off_metrics.get(m["key"])
+        if om and om.get("value") is not None:
+            v = om.get("value")
+            t = om.get("tier") or _sc_tier(v, thr.get(m["key"]), m["dir"])
+            src = "oficial"
+        else:
+            v = values.get(m["key"])
+            t = _sc_tier(v, thr.get(m["key"]), m["dir"])
+            src = "manual" if v is not None else None
+        counts[t or "Sin datos"] = counts.get(t or "Sin datos", 0) + 1
+        out.append({**m, "value": v, "tier": t, "thr": thr.get(m["key"]), "source": src,
                     "next": _sc_next_target(v, t, thr.get(m["key"]), m["dir"])})
 
-    # NO fabricamos el tier global (Amazon usa una fórmula ponderada propia, no
-    # pública). Mostramos qué métricas mejorar, ordenadas por lo más fácil de subir.
     to_improve = sorted(
         [{"key": m["key"], "label": m["label"], "group": m["group"], "tier": m["tier"],
           "value": m["value"], "next": m["next"]}
-         for m in out if m["tier"] and m["tier"] != "Fantastic" and m["next"]],
+         for m in out if m["tier"] and m["tier"] not in ("Fantastic", "Fantastic Plus") and m["next"]],
         key=lambda m: abs(m["next"]["gap"]) if m["next"] else 9e9)
-    # ── Puntuación estimada (overall + categorías) ──
-    # Amazon no publica la fórmula exacta con pesos. Modelo calibrado con la
-    # scorecard real: tier de categoría = el tier de la MAYORÍA de sus métricas
-    # (una métrica suelta en Fair no baja la categoría); overall = la categoría
-    # más baja, con SEGURIDAD como límite (no puedes superar tu tier de Seguridad).
-    def _cat_tier(group):
-        ts = [m["tier"] for m in out if m["group"] == group and m["tier"]]
-        if not ts:
-            return None
-        cnt = {}
-        for t in ts:
-            cnt[t] = cnt.get(t, 0) + 1
-        mx = max(cnt.values())
-        cands = [t for t in cnt if cnt[t] == mx]
-        return max(cands, key=lambda t: _TIER_ORDER.index(t))  # empate -> el más alto
 
-    safety_tier = _cat_tier("safety")
-    quality_tier = _cat_tier("quality")
-    cats = [c for c in (safety_tier, quality_tier) if c]
-    overall = min(cats, key=lambda t: _TIER_ORDER.index(t)) if cats else None
-    if safety_tier and overall and _TIER_ORDER.index(overall) > _TIER_ORDER.index(safety_tier):
-        overall = safety_tier  # Seguridad como techo
+    if has_official:
+        overall = off.get("overall_tier")
+        overall_score = off.get("overall_score")
+        cats = off.get("categories") or {}
+        safety_tier = cats.get("compliance_safety")
+        quality_tier = cats.get("quality_swc")
+        capacity_tier = cats.get("capacity")
+        overall_method = "oficial — de tu scorecard de Amazon"
+    else:
+        def _cat_tier(group):
+            ts = [m["tier"] for m in out if m["group"] == group and m["tier"]]
+            if not ts:
+                return None
+            cnt = {}
+            for t in ts:
+                cnt[t] = cnt.get(t, 0) + 1
+            mx = max(cnt.values())
+            return max([t for t in cnt if cnt[t] == mx], key=lambda t: _TIER_ORDER.index(t))
+        safety_tier = _cat_tier("safety")
+        quality_tier = _cat_tier("quality")
+        capacity_tier = _cat_tier("capacity")
+        cl = [c for c in (safety_tier, quality_tier) if c]
+        overall = min(cl, key=lambda t: _TIER_ORDER.index(t)) if cl else None
+        if safety_tier and overall and _TIER_ORDER.index(overall) > _TIER_ORDER.index(safety_tier):
+            overall = safety_tier
+        overall_score = None
+        overall_method = "estimado — sube la scorecard oficial (PDF) para el dato real"
 
-    official = (doc or {}).get("official", {})
-    return {"center": center, "week": sun, "desde": sun, "hasta": sat,
+    return {"center": center, "week": sun, "desde": sun, "hasta": sat, "week_num": wnum,
             "metrics": out, "counts": counts, "to_improve": to_improve,
-            "safety_tier": safety_tier, "quality_tier": quality_tier,
-            "overall": overall, "official": official,
-            "overall_method": "estimado (categoría = mayoría; overall = la peor categoría, Seguridad como techo)"}
+            "safety_tier": safety_tier, "quality_tier": quality_tier, "capacity_tier": capacity_tier,
+            "overall": overall, "overall_score": overall_score, "has_official": has_official,
+            "overall_method": overall_method}
 
 
 @api_router.post("/scorecard/full")
