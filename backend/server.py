@@ -9280,5 +9280,134 @@ async def scorecard_standings(center: Optional[str] = None, _=Depends(require_ad
 
 
 
+# =========================
+# SCORECARD EN VIVO — reportes diarios de Cortex (por centro, día a día)
+#   Parsea el "Daily Report" HTML de Cortex: fallos por conductor (RTS/DNR/POD/CC)
+#   + motivos de POD para coaching. Acumula la semana → proyección de tier.
+#   daily_dsp: {center, date, drivers:[{transporter_id,rts,dnr,pod,cc}],
+#               totals:{...}, pod_reasons:{...}, cc_reasons:{...}, uploaded_at}
+# =========================
+
+def _parse_daily_report(content: bytes, filename: str):
+    html = content.decode("utf-8", errors="ignore")
+    center, date = None, None
+    m = re.search(r"([A-Z]{3}\d)-Daily-Report_(\d{4}-\d{2}-\d{2})", filename or "")
+    if m:
+        center, date = m.group(1), m.group(2)
+    if not center:
+        tm = re.search(r"TDSL\s+([A-Z]{3}\d)\s+Daily Report\s+(\d{4}-\d{2}-\d{2})", html)
+        if tm:
+            center, date = tm.group(1), tm.group(2)
+
+    tables = re.findall(r"<table.*?</table>", html, re.S | re.I)
+
+    def parse_rows(tbl):
+        out = []
+        for tr in re.findall(r"<tr.*?</tr>", tbl, re.S | re.I):
+            cells = re.findall(r"<t[hd].*?</t[hd]>", tr, re.S | re.I)
+            cells = [re.sub(r"\s+", " ", re.sub(r"&nbsp;", " ", re.sub(r"<[^>]+>", " ", c))).strip()
+                     for c in cells]
+            if any(cells):
+                out.append(cells)
+        return out
+
+    def num(x):
+        x = (x or "").strip()
+        return int(x) if x.isdigit() else 0
+
+    drivers, pod_reasons, cc_reasons = [], {}, {}
+    for tbl in tables:
+        rows = parse_rows(tbl)
+        if not rows:
+            continue
+        # la cabecera real es la 1ª fila con >=2 celdas (las tablas empiezan
+        # con una fila "Download This Table" de 1 sola celda)
+        hi = next((i for i, r in enumerate(rows) if len(r) >= 2), 0)
+        hdr = [c.lower() for c in rows[hi]]
+        rows = rows[hi:]
+        hjoin = " ".join(hdr)
+        # Tabla 1: fallos por conductor
+        if "transporter id" in hdr and "pod fails" in hjoin and "rts" in hdr:
+            for r in rows[1:]:
+                if len(r) >= 5 and re.match(r"^A[A-Z0-9]{8,}$", r[0]):
+                    drivers.append({"transporter_id": r[0], "rts": num(r[1]),
+                                    "dnr": num(r[2]), "pod": num(r[3]), "cc": num(r[4])})
+        # Tabla 4: motivos de POD
+        elif "pod audit" in hjoin:
+            idx = next((i for i, h in enumerate(hdr) if "pod audit" in h), len(hdr) - 1)
+            for r in rows[1:]:
+                if len(r) > idx and r[idx] and r[idx] != "-":
+                    pod_reasons[r[idx]] = pod_reasons.get(r[idx], 0) + 1
+        # Tabla 5: motivos de Contact Compliance
+        elif "cc type" in hjoin or "call duration" in hjoin:
+            idx = next((i for i, h in enumerate(hdr) if "reason" in h), 2)
+            for r in rows[1:]:
+                if len(r) > idx and r[idx]:
+                    key = r[idx].split("DELIVERED")[0].strip() or r[idx]
+                    cc_reasons[key[:40]] = cc_reasons.get(key[:40], 0) + 1
+
+    totals = {k: sum(d[k] for d in drivers) for k in ("rts", "dnr", "pod", "cc")}
+    return {"center": center, "date": date, "drivers": drivers, "totals": totals,
+            "pod_reasons": pod_reasons, "cc_reasons": cc_reasons}
+
+
+@api_router.post("/metrics/upload-daily")
+async def upload_daily_report(file: UploadFile = File(...), _=Depends(require_admin)):
+    """Sube un Daily Report de Cortex (HTML). Guarda fallos por conductor del día."""
+    content = await file.read()
+    parsed = _parse_daily_report(content, file.filename or "")
+    if not parsed.get("center") or not parsed.get("date"):
+        raise HTTPException(status_code=400,
+            detail="No reconozco el reporte. ¿Es un Daily Report de Cortex (HTML)?")
+    if not parsed.get("drivers"):
+        raise HTTPException(status_code=400, detail="No encontré la tabla de fallos por conductor")
+    doc = dict(parsed)
+    doc["uploaded_at"] = datetime.now(timezone.utc).isoformat()
+    await db.daily_dsp.update_one(
+        {"center": parsed["center"], "date": parsed["date"]}, {"$set": doc}, upsert=True)
+    return {"success": True, "center": parsed["center"], "date": parsed["date"],
+            "conductores": len(parsed["drivers"]), "totales": parsed["totals"]}
+
+
+@api_router.get("/metrics/daily-week")
+async def daily_week(center: str, desde: str, hasta: str, _=Depends(require_admin)):
+    """Acumulado de la semana (por centro): fallos por conductor, totales,
+    motivos de POD y los conductores que más arrastran el scorecard."""
+    docs = await db.daily_dsp.find(
+        {"center": center, "date": {"$gte": desde, "$lte": hasta}}, {"_id": 0}
+    ).sort("date", 1).to_list(40)
+
+    # nombres por transporter_id
+    drv_docs = await db.drivers.find(
+        {"driver_id": {"$ne": None}}, {"_id": 0, "name": 1, "driver_id": 1}).to_list(2000)
+    name_by_tid = {(d.get("driver_id") or "").upper(): d.get("name") for d in drv_docs}
+
+    by_driver = {}
+    totals = {"rts": 0, "dnr": 0, "pod": 0, "cc": 0}
+    pod_reasons, cc_reasons = {}, {}
+    days = []
+    for doc in docs:
+        days.append(doc["date"])
+        for k in totals:
+            totals[k] += doc.get("totals", {}).get(k, 0)
+        for d in doc.get("drivers", []):
+            tid = (d.get("transporter_id") or "").upper()
+            e = by_driver.setdefault(tid, {"transporter_id": tid,
+                "name": name_by_tid.get(tid), "rts": 0, "dnr": 0, "pod": 0, "cc": 0})
+            for k in ("rts", "dnr", "pod", "cc"):
+                e[k] += d.get(k, 0)
+        for r, n in (doc.get("pod_reasons") or {}).items():
+            pod_reasons[r] = pod_reasons.get(r, 0) + n
+        for r, n in (doc.get("cc_reasons") or {}).items():
+            cc_reasons[r] = cc_reasons.get(r, 0) + n
+
+    ranking = sorted(by_driver.values(),
+                     key=lambda e: -(e["pod"] * 2 + e["dnr"] * 3 + e["rts"] + e["cc"]))
+    top_pod = sorted(pod_reasons.items(), key=lambda x: -x[1])
+    return {"center": center, "dias": days, "totals": totals,
+            "ranking": ranking, "pod_reasons": top_pod,
+            "cc_reasons": sorted(cc_reasons.items(), key=lambda x: -x[1])}
+
+
 app.include_router(auth_router)
 app.include_router(api_router)
