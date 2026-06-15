@@ -4313,13 +4313,16 @@
   <!-- ===== CANDADOS MULTI-TENANT: oculta módulos no comerciales a cuentas DSP ===== -->
   <script>
   (function(){
+    function accountType(){
+      try{ var a=JSON.parse(localStorage.getItem('flotadsp_admin')||'{}'); if(a && a.account_type) return a.account_type; }catch(e){}
+      try{ var p=JSON.parse(atob((localStorage.getItem('flotadsp_token')||'').split('.')[1]||'')); return p && p.account_type; }catch(e){}
+      return null;
+    }
     function getHidden(){
-      var hidden=null;
-      try{ var a=JSON.parse(localStorage.getItem('flotadsp_admin')||'{}'); if(a && a.hidden_modules) hidden=a.hidden_modules; }catch(e){}
-      if(!hidden){
-        try{ var t=localStorage.getItem('flotadsp_token')||''; var p=JSON.parse(atob(t.split('.')[1]||'')); if(p && p.account_type==='dsp') hidden=['ia-peritaje','scorecard']; }catch(e){}
-      }
-      return hidden||[];
+      // Un DSP comercial siempre oculta estos; el dueño no oculta nada.
+      if(accountType()==='dsp') return ['ia-peritaje','scorecard','turnos'];
+      try{ var a=JSON.parse(localStorage.getItem('flotadsp_admin')||'{}'); if(a && a.hidden_modules && a.hidden_modules.length) return a.hidden_modules; }catch(e){}
+      return [];
     }
     var hidden=getHidden();
     if(!hidden.length) return; // dueño (tú) lo ve todo
@@ -4328,6 +4331,8 @@
     if(hidden.indexOf('ia-peritaje')>=0){ PATHS.push('/ia-peritaje'); LABELS.push('IA Peritaje'); }
     if(hidden.indexOf('scorecard')>=0){ PATHS.push('/scorecard','/scorecard-live');
       LABELS.push('Scorecard','Scorecard en vivo','Scorecard Amazon'); }
+    if(hidden.indexOf('turnos')>=0){ PATHS.push('/turnos');
+      LABELS.push('Cuadrante turnos','Cuadrante de turnos'); }
 
     function hideRow(el){ var r=el.closest('a,li,button')||el; if(r){ r.style.display='none'; r.setAttribute('data-locked','1'); } }
     function sweep(){

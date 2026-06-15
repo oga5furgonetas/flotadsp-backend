@@ -519,7 +519,7 @@ async def get_org(org_id):
 
 # Módulos OCULTOS por tipo de cuenta (para los candados del frontend).
 # El dueño (tú) lo ve todo; los DSP comerciales NO ven IA Peritaje ni Scorecard.
-HIDDEN_MODULES_DSP = ["ia-peritaje", "scorecard"]
+HIDDEN_MODULES_DSP = ["ia-peritaje", "scorecard", "turnos"]
 
 
 def org_hidden_modules(org):
