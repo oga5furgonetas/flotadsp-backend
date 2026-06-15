@@ -9632,13 +9632,33 @@ async def _sc_thresholds(center):
     return thr
 
 
+async def _latest_week_with_data(center):
+    """Domingo de la semana que estás siguiendo. Manda la semana de tus REPORTES
+    DIARIOS (lo que subes día a día); si no hay, la oficial; luego el resumen."""
+    # 1º: la semana de los reportes diarios (señal de la semana en curso que sigues)
+    d = await db.daily_dsp.find_one({"center": center}, {"date": 1}, sort=[("date", -1)])
+    if d and d.get("date"):
+        return _sun_sat_week(d["date"])[0]
+    r = await db.daily_ratios.find_one({"center": center}, {"date": 1}, sort=[("date", -1)])
+    if r and r.get("date"):
+        return _sun_sat_week(r["date"])[0]
+    # 2º: scorecard oficial más reciente
+    o = await db.scorecard_official.find_one({"center": center}, {"week": 1}, sort=[("week", -1)])
+    if o and o.get("week"):
+        return _week_num_to_sun(int(o["week"]))
+    # 3º: resumen semanal (puede ser la semana en curso a medias)
+    w = await db.scorecard_weekly.find_one({"center": center}, {"week": 1}, sort=[("week", -1)])
+    if w and w.get("week"):
+        return _week_num_to_sun(int(w["week"]))
+    return _sun_sat_week((datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d"))[0]
+
+
 @api_router.get("/scorecard/full")
 async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(require_admin)):
     """Scorecard completa de la semana (dom): cada métrica con valor + tier +
     qué falta para subir. Valores manuales (db) y auto donde haya."""
     if not week:
-        last = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
-        week, _sat = _sun_sat_week(last)
+        week = await _latest_week_with_data(center)
     sun, sat = _sun_sat_week(week)
     thr = await _sc_thresholds(center)
     doc = await db.scorecard_live.find_one({"center": center, "week": sun}, {"_id": 0})
@@ -9658,8 +9678,8 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
     # semana, así que la proyectamos con el último dato real (no inventado) para que
     # la nota de la semana en curso cubra TODO el peso sin volver a subir la scorecard.
     base = None
-    no_carry = bool((doc or {}).get("no_carry"))  # modo "solo datos reales" (tras Reset)
-    if not has_official and not no_carry:
+    estimar = bool((doc or {}).get("estimar"))  # OPT-IN: por defecto NO se estima nada
+    if not has_official and estimar:
         base = await db.scorecard_official.find_one(
             {"center": center, "week": {"$lt": wnum}}, {"_id": 0}, sort=[("week", -1)])
     base_metrics = {mm.get("key"): mm for mm in (base.get("metrics") if base else [])}
@@ -9747,7 +9767,7 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
             "overall": overall, "overall_score": overall_score,
             "score_calculado": score_calc, "cobertura_peso": cobertura,
             "estimada_desde": (base.get("week") if base else None),
-            "dias_ratios": len(ratio_dias), "estimacion_on": (not no_carry),
+            "dias_ratios": len(ratio_dias), "estimacion_on": estimar,
             "has_official": has_official, "overall_method": overall_method}
 
 
@@ -10196,7 +10216,7 @@ async def scorecard_reset(data: dict = Body(...), _=Depends(require_admin)):
     await db.scorecard_obs.delete_many({"center": center, "week": wnum})
     await db.scorecard_live.update_one(
         {"center": center, "week": sun},
-        {"$set": {"center": center, "week": sun, "values": {}, "no_carry": True,
+        {"$set": {"center": center, "week": sun, "values": {}, "estimar": False,
                   "updated_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
     return {"ok": True, "semana": sun,
             "borrados": {"ratios": r1.deleted_count, "diarios": r2.deleted_count,
@@ -10215,7 +10235,7 @@ async def scorecard_estimacion(data: dict = Body(...), _=Depends(require_admin))
     sun, _ = _sun_sat_week(week)
     await db.scorecard_live.update_one(
         {"center": center, "week": sun},
-        {"$set": {"center": center, "week": sun, "no_carry": (not on)}}, upsert=True)
+        {"$set": {"center": center, "week": sun, "estimar": on}}, upsert=True)
     return {"ok": True, "estimacion": on}
 
 
