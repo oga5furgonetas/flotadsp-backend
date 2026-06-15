@@ -4029,7 +4029,9 @@
 
         // ── Cola de subida UNIFICADA (PDF/HTML/XLSX/XLS/CSV) — máx 3 a la vez, ×3 reintentos ──
         function uploadFiles(fileList){
-          var files=Array.prototype.slice.call(fileList||[]); if(!files.length) return;
+          var files=Array.prototype.slice.call(fileList||[]);
+          console.log('[scupload] uploadFiles recibe:', files.length, 'archivo(s)');
+          if(!files.length){ console.warn('[scupload] 0 archivos → no se sube'); return; }
           var items=files.map(function(f){ return {name:f.name,size:f.size,status:'Esperando',pct:0,msg:'',tipo:'',file:f}; });
           setQueue(items); setUploading(true);
           var idx=0, active=0, fin=0, lastSc=null;
@@ -4053,7 +4055,7 @@
           function pump(){ while(active<3 && idx<items.length){ var i=idx++; active++; one(i,1); } }
           pump();
         }
-        function onPick(e){ var f=e.target.files; e.target.value=''; uploadFiles(f); }
+        function onPick(e){ var f=Array.prototype.slice.call(e.target.files||[]); console.log('[scupload] onPick archivos:', f.length, f.map(function(x){return x.name;})); e.target.value=''; uploadFiles(f); }
 
         function loadAll(wk){
           setLoading(true);
