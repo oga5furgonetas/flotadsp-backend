@@ -9650,6 +9650,15 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
     has_official = bool(off)
     # ratios diarios subidos (para rellenar Calidad de la semana en vivo)
     ratio_vals, ratio_dias = await _ratios_week_values(center, sun, sat)
+    # Baseline: arrastra Seguridad/Capacidad de tu ÚLTIMA scorecard conocida.
+    # Los reportes diarios solo traen Calidad; Seguridad cambia muy poco semana a
+    # semana, así que la proyectamos con el último dato real (no inventado) para que
+    # la nota de la semana en curso cubra TODO el peso sin volver a subir la scorecard.
+    base = None
+    if not has_official:
+        base = await db.scorecard_official.find_one(
+            {"center": center, "week": {"$lt": wnum}}, {"_id": 0}, sort=[("week", -1)])
+    base_metrics = {mm.get("key"): mm for mm in (base.get("metrics") if base else [])}
 
     out = []
     counts = {}
@@ -9667,6 +9676,10 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
             v = ratio_vals.get(m["key"])
             t = _sc_tier(v, thr.get(m["key"]), m["dir"])
             src = "ratios"
+        elif base_metrics.get(m["key"]) and base_metrics[m["key"]].get("value") is not None:
+            v = base_metrics[m["key"]].get("value")
+            t = _sc_tier(v, thr.get(m["key"]), m["dir"])
+            src = "estimado"  # arrastrado de la última scorecard conocida
         else:
             v = None
             t = None
@@ -9710,14 +9723,23 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
     else:
         overall_score = score_calc
         overall = _score_to_tier(score_calc)
-        overall_method = (f"calculado con pesos reales — {cobertura}% del peso con dato"
-                          if score_calc is not None else "faltan datos para la nota")
+        n_live = sum(1 for m in out if m["source"] == "ratios")
+        n_est = sum(1 for m in out if m["source"] == "estimado")
+        if score_calc is None:
+            overall_method = "faltan datos para la nota"
+        elif n_est:
+            overall_method = (f"proyección: Calidad en vivo de tus reportes diarios + "
+                              f"Seguridad estimada de la semana {base.get('week')} · {cobertura}% del peso")
+        else:
+            overall_method = f"calculado con pesos reales — {cobertura}% del peso con dato"
 
     return {"center": center, "week": sun, "desde": sun, "hasta": sat, "week_num": wnum,
             "metrics": out, "counts": counts, "to_improve": to_improve,
             "safety_tier": safety_tier, "quality_tier": quality_tier, "capacity_tier": capacity_tier,
             "overall": overall, "overall_score": overall_score,
             "score_calculado": score_calc, "cobertura_peso": cobertura,
+            "estimada_desde": (base.get("week") if base else None),
+            "dias_ratios": len(ratio_dias),
             "has_official": has_official, "overall_method": overall_method}
 
 
