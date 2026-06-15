@@ -4022,6 +4022,7 @@
         var qS=React.useState([]),queue=qS[0],setQueue=qS[1];
         var prS=React.useState(null),predict=prS[0],setPredict=prS[1];
         var srcS=React.useState(null),sources=srcS[0],setSources=srcS[1];
+        var trS=React.useState(null),trend=trS[0],setTrend=trS[1];
         var fileRef=React.useRef(null);
 
         function loadPredict(){
@@ -4029,6 +4030,9 @@
         }
         function loadSources(wk){
           apiGet('/scorecard/sources?center='+encodeURIComponent(center)+((wk||week)?('&week='+(wk||week)):'')).then(function(j){ setSources(j||null); }).catch(function(){});
+        }
+        function loadTrend(wk){
+          apiGet('/scorecard/daily-trend?center='+encodeURIComponent(center)+((wk||week)?('&week='+(wk||week)):'')).then(function(j){ setTrend(j||null); }).catch(function(){});
         }
         function toggleEstimacion(){
           var on=!(full&&full.estimacion_on);
@@ -4088,7 +4092,7 @@
             setFull(j); setWeek(j.week);
             return apiGet('/metrics/daily-week?center='+encodeURIComponent(center)+'&desde='+j.desde+'&hasta='+j.hasta);
           }).then(function(dw){ setDaily(dw||{}); setLoading(false); }).catch(function(){ setLoading(false); if(toast)toast.error('Error cargando'); });
-          loadSources(wk);
+          loadSources(wk); loadTrend(wk);
         }
         React.useEffect(function(){ loadAll(null); loadPredict(); },[center]);
 
@@ -4205,6 +4209,32 @@
                   title:'Borrar', style:{padding:'3px 9px',borderRadius:'7px',border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.08)',color:'#f87171',fontSize:'11px',cursor:'pointer',fontWeight:700}},'🗑️ Borrar')
               ); })
           ); }()),
+
+          /* Evolución DÍA A DÍA (del Resumen diario) — cómo vamos hasta hoy */
+          trend && trend.dias && trend.dias.length>0 && h('div',{style:{marginBottom:'16px',padding:'14px 16px',borderRadius:'14px',background:'rgba(96,165,250,.06)',border:'1px solid rgba(96,165,250,.25)'}},
+            h('div',{style:{fontSize:'12px',fontWeight:800,color:'#60a5fa',textTransform:'uppercase',letterSpacing:'.04em',marginBottom:'10px'}},'📈 Cómo vamos día a día ('+trend.n_dias+' días)'),
+            h('div',{style:{overflowX:'auto'}},
+              h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:'12px',minWidth:'460px'}},
+                h('thead',null,h('tr',{style:{color:'#8892a4',textAlign:'right'}},
+                  ['Día','Entregas','DCR','DNR DPMO','POD'].map(function(c,i){return h('th',{key:i,style:{padding:'4px 8px',textAlign:i?'right':'left',fontWeight:600}},c);}))),
+                h('tbody',null,
+                  trend.dias.map(function(d,i){ var dd=d.dia||{};
+                    return h('tr',{key:i,style:{borderTop:'1px solid rgba(255,255,255,.05)'}},
+                      h('td',{style:{padding:'4px 8px',color:'#cbd3e0'}}, diaCorto(d.fecha)),
+                      h('td',{style:{padding:'4px 8px',textAlign:'right',color:'#8892a4'}}, dd.entregados||'—'),
+                      h('td',{style:{padding:'4px 8px',textAlign:'right',color:'#e3e8f0'}}, dd.dcr!=null?dd.dcr+'%':'—'),
+                      h('td',{style:{padding:'4px 8px',textAlign:'right',color:'#e3e8f0'}}, dd.dnr_dpmo!=null?dd.dnr_dpmo:'—'),
+                      h('td',{style:{padding:'4px 8px',textAlign:'right',color:'#e3e8f0'}}, dd.pod!=null?dd.pod+'%':'—'));
+                  }),
+                  trend.acumulado && h('tr',{key:'ac',style:{borderTop:'2px solid rgba(96,165,250,.4)',fontWeight:800}},
+                    h('td',{style:{padding:'6px 8px',color:'#60a5fa'}},'ACUMULADO'),
+                    h('td',{style:{padding:'6px 8px',textAlign:'right',color:'#60a5fa'}}, trend.acumulado.entregados||'—'),
+                    h('td',{style:{padding:'6px 8px',textAlign:'right',color:'#60a5fa'}}, trend.acumulado.dcr!=null?trend.acumulado.dcr+'%':'—'),
+                    h('td',{style:{padding:'6px 8px',textAlign:'right',color:'#60a5fa'}}, trend.acumulado.dnr_dpmo!=null?trend.acumulado.dnr_dpmo:'—'),
+                    h('td',{style:{padding:'6px 8px',textAlign:'right',color:'#60a5fa'}}, trend.acumulado.pod!=null?trend.acumulado.pod+'%':'—'))
+                ))),
+            h('div',{style:{fontSize:'10.5px',color:'#5c6578',marginTop:'8px'}},'Sube el Resumen de entregas (formato diario) cada día y verás cómo evoluciona la semana. El "acumulado" es tu Calidad real hasta hoy.')
+          ),
 
           /* Predicción de la semana en curso (de los ratios subidos) */
           predict && predict.dias_con_datos && predict.dias_con_datos.length>0 && h('div',{style:{marginBottom:'18px',padding:'16px 18px',borderRadius:'16px',background:'rgba(16,185,129,.07)',border:'1px solid rgba(16,185,129,.28)'}},

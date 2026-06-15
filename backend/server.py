@@ -10239,6 +10239,38 @@ async def scorecard_estimacion(data: dict = Body(...), _=Depends(require_admin))
     return {"ok": True, "estimacion": on}
 
 
+@api_router.get("/scorecard/daily-trend")
+async def scorecard_daily_trend(center: str, week: Optional[str] = None, _=Depends(require_admin)):
+    """Evolución DÍA A DÍA de la semana (del Resumen diario): cada día su DCR/DNR/POD
+    y el ACUMULADO hasta ese día. Para saber 'cómo vamos' un miércoles."""
+    if not week:
+        week = await _latest_week_with_data(center)
+    sun, sat = _sun_sat_week(week)
+    docs = await db.daily_ratios.find(
+        {"center": center, "date": {"$gte": sun, "$lte": sat}}, {"_id": 0}).sort("date", 1).to_list(10)
+    dias = []
+    cEnv = cEnt = cDnr = cOpp = cSucc = 0
+    for d in docs:
+        env = d.get("c_enviados") or 0
+        ent = d.get("c_entregados") or 0
+        dnr = d.get("c_dnr") or 0
+        opp = d.get("c_pod_opp") or 0
+        suc = d.get("c_pod_succ") or 0
+        cEnv += env; cEnt += ent; cDnr += dnr; cOpp += opp; cSucc += suc
+        dias.append({
+            "fecha": d["date"],
+            "dia": {"dcr": d.get("dcr"), "dnr_dpmo": d.get("dnr_dpmo"), "pod": d.get("pod"),
+                    "entregados": ent or None},
+            "acum": {
+                "dcr": round(cEnt / cEnv * 100, 2) if cEnv else None,
+                "dnr_dpmo": round(cDnr / cEnt * 1e6) if cEnt else None,
+                "pod": round(cSucc / cOpp * 100, 2) if cOpp else None,
+                "entregados": cEnt or None}})
+    return {"center": center, "desde": sun, "hasta": sat, "dias": dias,
+            "n_dias": len(dias),
+            "acumulado": (dias[-1]["acum"] if dias else None)}
+
+
 @api_router.get("/scorecard/sources")
 async def scorecard_sources(center: str, week: Optional[str] = None, _=Depends(require_admin)):
     """Lista TODO lo cargado de la semana (para verlo y poder borrarlo):
