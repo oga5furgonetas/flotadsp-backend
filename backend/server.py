@@ -9731,15 +9731,15 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
     else:
         overall_score = score_calc
         overall = _score_to_tier(score_calc)
-        n_live = sum(1 for m in out if m["source"] == "ratios")
+        n_real = sum(1 for m in out if m["source"] in ("resumen", "ratios", "manual", "oficial"))
         n_est = sum(1 for m in out if m["source"] == "estimado")
         if score_calc is None:
             overall_method = "faltan datos para la nota"
         elif n_est:
-            overall_method = (f"proyección: Calidad en vivo de tus reportes diarios + "
-                              f"Seguridad estimada de la semana {base.get('week')} · {cobertura}% del peso")
+            overall_method = (f"{n_real} métricas reales de tus archivos + {n_est} estimadas "
+                              f"de la W{base.get('week') if base else '?'} · {cobertura}% del peso")
         else:
-            overall_method = f"calculado con pesos reales — {cobertura}% del peso con dato"
+            overall_method = f"solo datos reales de tus archivos — {cobertura}% del peso ({n_real} métricas)"
 
     return {"center": center, "week": sun, "desde": sun, "hasta": sat, "week_num": wnum,
             "metrics": out, "counts": counts, "to_improve": to_improve,
@@ -9747,7 +9747,7 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
             "overall": overall, "overall_score": overall_score,
             "score_calculado": score_calc, "cobertura_peso": cobertura,
             "estimada_desde": (base.get("week") if base else None),
-            "dias_ratios": len(ratio_dias),
+            "dias_ratios": len(ratio_dias), "estimacion_on": (not no_carry),
             "has_official": has_official, "overall_method": overall_method}
 
 
@@ -10060,6 +10060,35 @@ def _parse_resumen_semanal(content: bytes, filename: str):
     return res or None
 
 
+def _parse_contact_compliance(content: bytes, filename: str):
+    """Contact Compliance Report (HTML): tabla 'Driver Summary' con Total Addresses /
+    Total Contacts por conductor. CC del DSP = Σcontactos / Σdirecciones × 100."""
+    html = content.decode("utf-8", "ignore")
+    mw = re.search(r"(\d{4})[-\s]+(\d{1,2})\b", html)
+    week = int(mw.group(2)) if mw else None
+    # filas de 4 celdas: ID, direcciones, contactos, %  (solo la tabla Driver Summary)
+    rows = re.findall(
+        r"<td>\s*([A-Z0-9]{8,})\s*</td>\s*<td>\s*(\d+)\s*</td>\s*<td>\s*(\d+)\s*</td>\s*<td>\s*[\d.]+\s*%",
+        html)
+    if not rows or not week:
+        return None
+    tot_addr = sum(int(r[1]) for r in rows)
+    tot_con = sum(int(r[2]) for r in rows)
+    if not tot_addr:
+        return None
+    return {"week": week, "key": "cc", "value": round(tot_con / tot_addr * 100, 2),
+            "detalle": f"{tot_con}/{tot_addr} contactos ({len(rows)} conductores)"}
+
+
+async def _store_weekly_metric(center, week, key, value):
+    """Guarda UNA métrica semanal (de un reporte por métrica) en scorecard_weekly."""
+    cen = (center or "OGA5").upper()
+    await db.scorecard_weekly.update_one(
+        {"center": cen, "week": int(week)},
+        {"$set": {"center": cen, "week": int(week), f"values.{key}": value,
+                  "uploaded_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+
+
 @api_router.post("/scorecard/upload")
 async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] = Form(None),
                            _=Depends(require_admin)):
@@ -10078,10 +10107,17 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
 
     # Reportes de UNA métrica suelta (no son la scorecard ni el Resumen): de momento
     # esas métricas se meten a mano. Mensaje claro en vez de guardarlas mal.
+    # Reporte de Customer Escalation (PDF de imagen) → métrica CEC. De momento a mano.
     if "escalation" in fn:
-        raise HTTPException(status_code=422, detail="Es el reporte de Customer Escalation (métrica CEC), no la scorecard. Mete el CEC a mano (clic en su número) — pronto lo leeré solo.")
+        raise HTTPException(status_code=422, detail="El reporte de Customer Escalation es un PDF de imagen (sin texto). Mete el CEC a mano: clic en su número en 'Calidad'. (Pronto lo leeré por OCR.)")
+    # Reporte de Contact Compliance → métrica CC (calculada de la tabla por conductor)
     if "compliance" in fn and ("contact" in fn or "concession" in fn):
-        raise HTTPException(status_code=422, detail="Es el reporte de Contact Compliance (métrica CC), no la scorecard. Mete el CC a mano (clic en su número) — pronto lo leeré solo.")
+        cc = _parse_contact_compliance(content, fn)
+        if not cc:
+            raise HTTPException(status_code=422, detail="No pude leer la tabla del Contact Compliance.")
+        await _store_weekly_metric(center, cc["week"], cc["key"], cc["value"])
+        return {"tipo": "metrica", "ok": True, "center": (center or "OGA5").upper(),
+                "mensaje": f"Contact Compliance W{cc['week']}: CC = {cc['value']}% ({cc['detalle']})"}
 
     try:
         # PDF → scorecard oficial
@@ -10165,6 +10201,22 @@ async def scorecard_reset(data: dict = Body(...), _=Depends(require_admin)):
     return {"ok": True, "semana": sun,
             "borrados": {"ratios": r1.deleted_count, "diarios": r2.deleted_count,
                          "oficial": r3.deleted_count}}
+
+
+@api_router.post("/scorecard/estimacion")
+async def scorecard_estimacion(data: dict = Body(...), _=Depends(require_admin)):
+    """Activa/desactiva el relleno de huecos con la última scorecard conocida.
+    on=True → estima lo que falta (nota completa). on=False → solo datos reales."""
+    center = data.get("center")
+    week = data.get("week")
+    on = bool(data.get("on"))
+    if not (center and week):
+        raise HTTPException(status_code=400, detail="center y week requeridos")
+    sun, _ = _sun_sat_week(week)
+    await db.scorecard_live.update_one(
+        {"center": center, "week": sun},
+        {"$set": {"center": center, "week": sun, "no_carry": (not on)}}, upsert=True)
+    return {"ok": True, "estimacion": on}
 
 
 @api_router.get("/scorecard/sources")

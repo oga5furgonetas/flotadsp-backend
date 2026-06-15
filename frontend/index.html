@@ -4030,6 +4030,13 @@
         function loadSources(wk){
           apiGet('/scorecard/sources?center='+encodeURIComponent(center)+((wk||week)?('&week='+(wk||week)):'')).then(function(j){ setSources(j||null); }).catch(function(){});
         }
+        function toggleEstimacion(){
+          var on=!(full&&full.estimacion_on);
+          fetch(API+'/scorecard/estimacion',{method:'POST',headers:{'Authorization':'Bearer '+tok(),'Content-Type':'application/json'},body:JSON.stringify({center:center,week:week,on:on})})
+            .then(function(r){return r.json();})
+            .then(function(){ if(toast)toast.success(on?'Estimando lo que falta':'Solo datos reales'); loadAll(week); })
+            .catch(function(){ if(toast)toast.error('No se pudo cambiar'); });
+        }
         function resetWeek(){
           if(!window.confirm('¿Poner esta semana a CERO?\n\nSe borran: reportes diarios, Descripción general, valores a mano y la scorecard de esta semana. Se desactiva la estimación de semanas anteriores.\n\nLa nota se calculará SOLO con lo que subas o edites a partir de ahora.')) return;
           fetch(API+'/scorecard/reset',{method:'POST',headers:{'Authorization':'Bearer '+tok(),'Content-Type':'application/json'},body:JSON.stringify({center:center,week:week})})
@@ -4163,7 +4170,8 @@
             btn('›',function(){navWeek(1);},{padding:'6px 12px'}),
             h('div',{style:{flex:1}}),
             h('div',{style:{fontSize:'12px',color:'#8892a4'}}, '✓ '+(counts.Fantastic||0)+' Fantastic · '+(counts.Great||0)+' Great · '+(counts.Fair||0)+' Fair'+((counts.Poor||0)?(' · '+counts.Poor+' Poor'):'')),
-            h('button',{onClick:resetWeek,title:'Pone la semana a cero: borra todo y calcula solo con lo que subas',style:{marginLeft:'12px',padding:'6px 12px',borderRadius:'9px',border:'1px solid rgba(239,68,68,.35)',background:'rgba(239,68,68,.08)',color:'#f87171',fontSize:'12px',fontWeight:700,cursor:'pointer'}},'🔄 Resetear semana')
+            h('button',{onClick:toggleEstimacion,title:'Rellena las métricas que no están en tus archivos con tu última scorecard conocida',style:{marginLeft:'12px',padding:'6px 12px',borderRadius:'9px',border:'1px solid '+((full&&full.estimacion_on)?'rgba(16,185,129,.45)':'rgba(255,255,255,.18)'),background:(full&&full.estimacion_on)?'rgba(16,185,129,.12)':'rgba(255,255,255,.04)',color:(full&&full.estimacion_on)?'#34d399':'#8892a4',fontSize:'12px',fontWeight:700,cursor:'pointer'}},(full&&full.estimacion_on)?'🔮 Estimación: ON':'🔮 Estimación: OFF'),
+            h('button',{onClick:resetWeek,title:'Pone la semana a cero: borra todo y calcula solo con lo que subas',style:{marginLeft:'8px',padding:'6px 12px',borderRadius:'9px',border:'1px solid rgba(239,68,68,.35)',background:'rgba(239,68,68,.08)',color:'#f87171',fontSize:'12px',fontWeight:700,cursor:'pointer'}},'🔄 Resetear semana')
           ),
 
           /* Cola de subida con estado por archivo */
