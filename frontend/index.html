@@ -4309,5 +4309,47 @@
     });
   })();
   </script>
+
+  <!-- ===== CANDADOS MULTI-TENANT: oculta módulos no comerciales a cuentas DSP ===== -->
+  <script>
+  (function(){
+    function getHidden(){
+      var hidden=null;
+      try{ var a=JSON.parse(localStorage.getItem('flotadsp_admin')||'{}'); if(a && a.hidden_modules) hidden=a.hidden_modules; }catch(e){}
+      if(!hidden){
+        try{ var t=localStorage.getItem('flotadsp_token')||''; var p=JSON.parse(atob(t.split('.')[1]||'')); if(p && p.account_type==='dsp') hidden=['ia-peritaje','scorecard']; }catch(e){}
+      }
+      return hidden||[];
+    }
+    var hidden=getHidden();
+    if(!hidden.length) return; // dueño (tú) lo ve todo
+
+    var PATHS=[], LABELS=[];
+    if(hidden.indexOf('ia-peritaje')>=0){ PATHS.push('/ia-peritaje'); LABELS.push('IA Peritaje'); }
+    if(hidden.indexOf('scorecard')>=0){ PATHS.push('/scorecard','/scorecard-live');
+      LABELS.push('Scorecard','Scorecard en vivo','Scorecard Amazon'); }
+
+    function hideRow(el){ var r=el.closest('a,li,button')||el; if(r){ r.style.display='none'; r.setAttribute('data-locked','1'); } }
+    function sweep(){
+      var scopes=document.querySelectorAll('[class*="sidebar"],[class*="Sidebar"],nav,aside');
+      scopes.forEach(function(scope){
+        scope.querySelectorAll('a[href]').forEach(function(a){
+          var h=a.getAttribute('href')||'';
+          if(PATHS.some(function(p){return h===p||h==='#'+p||h.endsWith(p);})) hideRow(a);
+        });
+        scope.querySelectorAll('a,button,li').forEach(function(el){
+          if(el.getAttribute('data-locked')) return;
+          if(el.querySelectorAll('a,button,li').length>0) return; // solo el item hoja
+          var t=(el.textContent||'').replace(/\s+/g,' ').trim();
+          if(LABELS.indexOf(t)>=0) hideRow(el);
+        });
+      });
+    }
+    var raf=null;
+    function schedule(){ if(raf) return; raf=requestAnimationFrame(function(){ raf=null; sweep(); }); }
+    function start(){ sweep(); new MutationObserver(schedule).observe(document.body,{childList:true,subtree:true}); }
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',start); else start();
+  })();
+  </script>
 </body>
 </html>
