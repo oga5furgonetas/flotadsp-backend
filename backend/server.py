@@ -419,6 +419,8 @@ class TokenResponse(BaseModel):
     id: str
     center: Optional[str] = None
     theme: Optional[str] = None
+    account_type: Optional[str] = None
+    hidden_modules: Optional[list] = None
 
 
 # =========================
@@ -436,7 +438,9 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
-def create_token(user_id: str, role: str, name: str) -> str:
+def create_token(user_id: str, role: str, name: str,
+                 org_id: Optional[str] = None, db_name: Optional[str] = None,
+                 account_type: Optional[str] = None) -> str:
     expires = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
     payload = {
         "sub": user_id,
@@ -444,6 +448,12 @@ def create_token(user_id: str, role: str, name: str) -> str:
         "name": name,
         "exp": expires
     }
+    if org_id:
+        payload["org_id"] = org_id
+    if db_name:
+        payload["db_name"] = db_name
+    if account_type:
+        payload["account_type"] = account_type
     return jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
@@ -459,7 +469,11 @@ async def get_current_user(
 ) -> dict:
     if not credentials:
         raise HTTPException(status_code=401, detail="Se requiere autenticación")
-    return decode_token(credentials.credentials)
+    payload = decode_token(credentials.credentials)
+    # AÍSLA: fija la BD de la organización del token para TODA esta petición.
+    # Tokens antiguos sin db_name → BD por defecto (tu data) = sin cambios.
+    set_current_org_db(payload.get("db_name"))
+    return payload
 
 
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
@@ -473,54 +487,89 @@ async def require_any_auth(user: dict = Depends(get_current_user)) -> dict:
 
 
 # =========================
-# STARTUP — seed admin inicial
+# ORGANIZACIONES (multi-tenant) — en global_db
+# =========================
+
+OWNER_ORG_ID = "owner"
+
+
+async def get_org(org_id):
+    if not org_id:
+        return None
+    return await global_db.organizations.find_one({"id": org_id}, {"_id": 0})
+
+
+# Módulos OCULTOS por tipo de cuenta (para los candados del frontend).
+# El dueño (tú) lo ve todo; los DSP comerciales NO ven IA Peritaje ni Scorecard.
+HIDDEN_MODULES_DSP = ["ia-peritaje", "scorecard"]
+
+
+def org_hidden_modules(org):
+    if not org or org.get("account_type") == "owner":
+        return []
+    return org.get("hidden_modules") or HIDDEN_MODULES_DSP
+
+
+async def ensure_owner_org():
+    o = await global_db.organizations.find_one({"id": OWNER_ORG_ID})
+    if not o:
+        await global_db.organizations.insert_one({
+            "id": OWNER_ORG_ID,
+            "name": os.environ.get("ADMIN_NAME", "FlotaDSP"),
+            "account_type": "owner",
+            "db_name": _DEFAULT_DB_NAME,
+            "status": "active",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info("Organización 'owner' creada (BD: %s)", _DEFAULT_DB_NAME)
+    return OWNER_ORG_ID
+
+
+# =========================
+# STARTUP — seed admin inicial (en global_db) + migración
 # =========================
 
 @app.on_event("startup")
 async def seed_initial_admin():
+    await ensure_owner_org()
+
+    # Migración: pasa los admins existentes de la BD por defecto a global_db (una vez),
+    # para que sigan pudiendo entrar tras activar el multi-tenant.
+    legacy = client[_DEFAULT_DB_NAME].admin_users
+    async for u in legacy.find({}):
+        if not await global_db.admin_users.find_one({"username": u["username"]}):
+            u.pop("_id", None)
+            u["org_id"] = OWNER_ORG_ID
+            await global_db.admin_users.insert_one(u)
+            logger.info("Admin '%s' migrado a global_db", u.get("username"))
+
     username = os.environ.get("ADMIN_USERNAME", "")
     password = os.environ.get("ADMIN_PASSWORD", "")
-
     if not username or not password:
         logger.info("ADMIN_USERNAME/ADMIN_PASSWORD no configurados — omitiendo seed")
-    else:
-        existing = await db.admin_users.find_one({"username": username})
-        if existing:
-            logger.info(f"Admin '{username}' ya existe — seed omitido")
-        else:
-            doc = {
-                "id": str(uuid.uuid4()),
-                "username": username,
-                "hashed_password": hash_password(password),
-                "name": os.environ.get("ADMIN_NAME", username),
-                "role": "admin",
-                "created_at": datetime.now(timezone.utc).isoformat()
-            }
-            await db.admin_users.insert_one(doc)
-            logger.info(f"Admin inicial '{username}' creado correctamente")
+    elif not await global_db.admin_users.find_one({"username": username}):
+        await global_db.admin_users.insert_one({
+            "id": str(uuid.uuid4()), "username": username,
+            "hashed_password": hash_password(password),
+            "name": os.environ.get("ADMIN_NAME", username),
+            "role": "admin", "org_id": OWNER_ORG_ID,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info(f"Admin inicial '{username}' creado")
 
-    # ── Admin fijo: Mery ──────────────────────────────────────────────────────
-    # Cuenta permanente para Mery. Idempotente: solo se crea si no existe.
-    mery_existing = await db.admin_users.find_one({"username": "Mery"})
+    # ── Admin fijo: Mery ── (idempotente)
+    mery_existing = await global_db.admin_users.find_one({"username": "Mery"})
     if not mery_existing:
-        mery_doc = {
-            "id": str(uuid.uuid4()),
-            "username": "Mery",
-            "hashed_password": hash_password("ogsan2024"),
-            "name": "Mery",
-            "role": "admin",
-            "theme": "pastel",
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.admin_users.insert_one(mery_doc)
-        logger.info("Admin 'Mery' creado correctamente")
-    else:
-        # Asegurar que tenga el campo theme aunque venga de versión anterior
-        if not mery_existing.get("theme"):
-            await db.admin_users.update_one(
-                {"username": "Mery"},
-                {"$set": {"theme": "pastel"}}
-            )
+        await global_db.admin_users.insert_one({
+            "id": str(uuid.uuid4()), "username": "Mery",
+            "hashed_password": hash_password("ogsan2024"), "name": "Mery",
+            "role": "admin", "theme": "pastel", "org_id": OWNER_ORG_ID,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info("Admin 'Mery' creado")
+    elif not mery_existing.get("theme"):
+        await global_db.admin_users.update_one(
+            {"username": "Mery"}, {"$set": {"theme": "pastel"}})
 
     # Informar si R2 está configurado
     r2 = get_r2()
@@ -552,7 +601,7 @@ async def create_indexes():
         await db.alerts.create_index("read")
         await db.incidents.create_index("vehicle_id")
         await db.incidents.create_index("status")
-        await db.admin_users.create_index("username")
+        await global_db.admin_users.create_index("username")
         await db.driver_accounts.create_index("username")
         await db.inspection_ai_results.create_index(
             [("inspection_id", 1), ("photo_index", 1)], unique=True
@@ -1878,7 +1927,7 @@ async def admin_login(data: LoginRequest, request: Request):
     _rl_check(rl_user)
     _rl_check(rl_ip)
 
-    user = await db.admin_users.find_one({"username": data.username}, {"_id": 0})
+    user = await global_db.admin_users.find_one({"username": data.username}, {"_id": 0})
     if not user or not verify_password(data.password, user["hashed_password"]):
         await _rl_fail(rl_user, f"admin '{data.username}' (IP {_rl_key_ip(request)})")
         await _rl_fail(rl_ip, f"admin '{data.username}' (IP {_rl_key_ip(request)})")
@@ -1887,14 +1936,20 @@ async def admin_login(data: LoginRequest, request: Request):
 
     _rl_ok(rl_user)
     _rl_ok(rl_ip)
-    token = create_token(user["id"], user["role"], user["name"])
-    logger.info(f"Admin login: {data.username}")
+    org = await get_org(user.get("org_id"))
+    db_name = _tenant_db_name(org)
+    account_type = (org or {}).get("account_type", "owner")
+    token = create_token(user["id"], user["role"], user["name"],
+                         org_id=user.get("org_id"), db_name=db_name, account_type=account_type)
+    logger.info(f"Admin login: {data.username} (org={user.get('org_id')})")
     return TokenResponse(
         access_token=token,
         role=user["role"],
         name=user["name"],
         id=user["id"],
-        theme=user.get("theme")
+        theme=user.get("theme"),
+        account_type=account_type,
+        hidden_modules=org_hidden_modules(org),
     )
 
 
@@ -2011,7 +2066,7 @@ async def get_me(user: dict = Depends(get_current_user)):
     # Incluir el campo theme si existe en la BD (solo admins)
     theme = None
     if user.get("role") == "admin":
-        admin_doc = await db.admin_users.find_one({"id": user["sub"]}, {"_id": 0, "theme": 1})
+        admin_doc = await global_db.admin_users.find_one({"id": user["sub"]}, {"_id": 0, "theme": 1})
         if admin_doc:
             theme = admin_doc.get("theme")
     return {
@@ -2027,7 +2082,7 @@ async def create_admin(
     data: CreateAdminRequest,
     _admin: dict = Depends(require_admin)
 ):
-    existing = await db.admin_users.find_one({"username": data.username})
+    existing = await global_db.admin_users.find_one({"username": data.username})
     if existing:
         raise HTTPException(status_code=409, detail="El usuario ya existe")
 
@@ -2039,7 +2094,7 @@ async def create_admin(
         "role": "admin",
         "created_at": datetime.now(timezone.utc).isoformat()
     }
-    await db.admin_users.insert_one(doc)
+    await global_db.admin_users.insert_one(doc)
     logger.info(f"Admin creado: {data.username} por {_admin['name']}")
     return {"success": True, "id": doc["id"], "username": data.username}
 
@@ -2053,11 +2108,11 @@ async def change_my_password(data: dict, user: dict = Depends(get_current_user))
     new = data.get("new_password") or ""
     if len(new) < 6:
         raise HTTPException(status_code=400, detail="La nueva contraseña debe tener al menos 6 caracteres")
-    doc = await db.admin_users.find_one({"id": user["sub"]})
+    doc = await global_db.admin_users.find_one({"id": user["sub"]})
     if not doc or not verify_password(current, doc["hashed_password"]):
         await asyncio.sleep(0.8)
         raise HTTPException(status_code=401, detail="La contraseña actual no es correcta")
-    await db.admin_users.update_one(
+    await global_db.admin_users.update_one(
         {"id": user["sub"]},
         {"$set": {"hashed_password": hash_password(new)}}
     )
@@ -2072,7 +2127,7 @@ async def reset_admin_password(data: dict, _admin: dict = Depends(require_admin)
     new_password = data.get("password") or ""
     if not username or len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Usuario y contraseña (mín. 6 caracteres) requeridos")
-    result = await db.admin_users.update_one(
+    result = await global_db.admin_users.update_one(
         {"username": username},
         {"$set": {"hashed_password": hash_password(new_password)}}
     )
@@ -2127,7 +2182,7 @@ async def set_driver_password(
 
 @auth_router.get("/admins")
 async def list_admins(_admin: dict = Depends(require_admin)):
-    admins = await db.admin_users.find({}, {"_id": 0, "hashed_password": 0}).to_list(100)
+    admins = await global_db.admin_users.find({}, {"_id": 0, "hashed_password": 0}).to_list(100)
     return admins
 
 
