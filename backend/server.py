@@ -9585,6 +9585,8 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
     off = await db.scorecard_official.find_one({"center": center, "week": wnum}, {"_id": 0})
     off_metrics = {mm.get("key"): mm for mm in (off.get("metrics") if off else [])}
     has_official = bool(off)
+    # ratios diarios subidos (para rellenar Calidad de la semana en vivo)
+    ratio_vals, ratio_dias = await _ratios_week_values(center, sun, sat)
 
     out = []
     counts = {}
@@ -9594,10 +9596,18 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
             v = om.get("value")
             t = om.get("tier") or _sc_tier(v, thr.get(m["key"]), m["dir"])
             src = "oficial"
-        else:
+        elif values.get(m["key"]) is not None:
             v = values.get(m["key"])
             t = _sc_tier(v, thr.get(m["key"]), m["dir"])
-            src = "manual" if v is not None else None
+            src = "manual"
+        elif ratio_vals.get(m["key"]) is not None:
+            v = ratio_vals.get(m["key"])
+            t = _sc_tier(v, thr.get(m["key"]), m["dir"])
+            src = "ratios"
+        else:
+            v = None
+            t = None
+            src = None
         counts[t or "Sin datos"] = counts.get(t or "Sin datos", 0) + 1
         out.append({**m, "value": v, "tier": t, "thr": thr.get(m["key"]), "source": src,
                     "next": _sc_next_target(v, t, thr.get(m["key"]), m["dir"])})
@@ -9862,18 +9872,21 @@ def _num(s):
         return None
 
 
-# Mapa de filas de "Descripción general" (Cortex, ES) → claves de conteo/ratio
+# Mapa de filas de "Descripción general" (Cortex, ES) → claves. COINCIDENCIA
+# EXACTA del nombre de fila (evita que "paquetes entregados no recibidos"
+# colisione con "paquetes entregados").
 _RATIO_ROWS = [
     (["entrega correcta (%) - dsp", "entrega correcta (%)-dsp"], "dcr"),
     (["dpmo de dnr"], "dnr_dpmo"),
     (["tasa de éxito de pod", "tasa de exito de pod"], "pod"),
     (["paquetes devueltos al centro (rts) %"], "rts_pct"),
-    (["éxito de entrega en el primer día", "exito de entrega en el primer"], "fdds"),
+    (["éxito de entrega en el primer día (%)", "exito de entrega en el primer día (%)",
+      "éxito de entrega en el primer dia (%)"], "fdds"),
     (["paquetes enviados"], "c_enviados"),
+    (["paquetes entregados no recibidos (dnr)", "paquetes entregados no recibidos"], "c_dnr"),
     (["paquetes entregados"], "c_entregados"),
     (["oportunidades de pod"], "c_pod_opp"),
     (["éxito de pod", "exito de pod"], "c_pod_succ"),
-    (["paquetes entregados no recibidos"], "c_dnr"),
 ]
 
 
@@ -9901,7 +9914,7 @@ def _parse_ratios(content: bytes, filename: str):
         if not r:
             continue
         label = (r[0] or "").lower().strip()
-        key = next((k for names, k in _RATIO_ROWS if any(n in label for n in names)), None)
+        key = next((k for names, k in _RATIO_ROWS if label in names), None)
         if not key:
             continue
         for ci, date in date_cols.items():
@@ -9996,6 +10009,38 @@ async def _store_ratios(ratios, center):
             "mensaje": f"Ratios de {n} día(s) cargados", "dias": n}
 
 
+async def _ratios_week_values(center, sun, sat):
+    """% de calidad de la semana a partir de los ratios diarios (conteos reales)."""
+    docs = await db.daily_ratios.find(
+        {"center": center, "date": {"$gte": sun, "$lte": sat}}, {"_id": 0}).to_list(10)
+    if not docs:
+        return {}, []
+
+    def s(k):
+        return sum(d.get(k, 0) or 0 for d in docs)
+    enviados, entregados = s("c_enviados"), s("c_entregados")
+    pod_opp, pod_succ, dnr = s("c_pod_opp"), s("c_pod_succ"), s("c_dnr")
+    vals = {}
+    if enviados and entregados:
+        vals["dcr"] = round(entregados / enviados * 100, 2)
+        vals["dnr_dpmo"] = round(dnr / entregados * 1e6)
+    if pod_opp:
+        vals["pod"] = round(pod_succ / pod_opp * 100, 2)
+    for k in ("dcr", "pod", "fdds", "rts_pct"):
+        if k not in vals:
+            xs = [d[k] for d in docs if d.get(k) is not None]
+            if xs:
+                vals[k] = round(sum(xs) / len(xs), 2)
+    return vals, sorted([d["date"] for d in docs])
+
+
+@api_router.get("/scorecard/ratios-raw")
+async def ratios_raw(center: str, desde: str, hasta: str, _=Depends(require_admin)):
+    docs = await db.daily_ratios.find(
+        {"center": center, "date": {"$gte": desde, "$lte": hasta}}, {"_id": 0}).sort("date", 1).to_list(40)
+    return {"count": len(docs), "docs": docs}
+
+
 @api_router.get("/scorecard/predict")
 async def scorecard_predict(center: str, week: Optional[str] = None, _=Depends(require_admin)):
     """Predicción REAL de la semana en curso con los ratios diarios subidos +
@@ -10005,45 +10050,31 @@ async def scorecard_predict(center: str, week: Optional[str] = None, _=Depends(r
         week, _s = _sun_sat_week(last)
     sun, sat = _sun_sat_week(week)
     thr = await _sc_thresholds(center)
-    docs = await db.daily_ratios.find(
-        {"center": center, "date": {"$gte": sun, "$lte": sat}}, {"_id": 0}).sort("date", 1).to_list(10)
-    dias = [d["date"] for d in docs]
-
-    def s(k):
-        return sum(d.get(k, 0) or 0 for d in docs)
-    enviados, entregados = s("c_enviados"), s("c_entregados")
-    pod_opp, pod_succ, dnr = s("c_pod_opp"), s("c_pod_succ"), s("c_dnr")
-
-    vals = {}
-    if enviados:
-        vals["dcr"] = round(entregados / enviados * 100, 2)
-        vals["dnr_dpmo"] = round(dnr / entregados * 1e6) if entregados else None
-    if pod_opp:
-        vals["pod"] = round(pod_succ / pod_opp * 100, 2)
-    # los que no tienen conteo: media ponderada de los % diarios
-    for k in ("dcr", "pod", "fdds", "rts_pct", "dnr_dpmo"):
-        if k not in vals:
-            xs = [d[k] for d in docs if d.get(k) is not None]
-            if xs:
-                vals[k] = round(sum(xs) / len(xs), 2)
+    vals, dias = await _ratios_week_values(center, sun, sat)
 
     metrics = []
     for m in _SC_METRICS:
+        if m["group"] != "quality":
+            continue  # los ratios solo dan CALIDAD; Seguridad/Capacidad son manuales
         v = vals.get(m["key"])
         t = _sc_tier(v, thr.get(m["key"]), m["dir"]) if v is not None else None
         metrics.append({"key": m["key"], "label": m["label"], "group": m["group"],
                         "value": v, "tier": t, "next": _sc_next_target(v, t, thr.get(m["key"]), m["dir"]) if t else None})
 
+    # Tier de CALIDAD: conservador (en empate, el MÁS BAJO → sin falsos positivos)
     tiers = [m["tier"] for m in metrics if m["tier"]]
     if tiers:
         cnt = {}
         for t in tiers:
             cnt[t] = cnt.get(t, 0) + 1
         mx = max(cnt.values())
-        predicted_tier = max([t for t in cnt if cnt[t] == mx], key=lambda t: _TIER_ORDER.index(t))
+        predicted_tier = min([t for t in cnt if cnt[t] == mx], key=lambda t: _TIER_ORDER.index(t))
     else:
         predicted_tier = None
-    confidence = round(min(100, len(dias) / 7 * 100))
+    # Confianza: % de días de la semana × % de métricas de calidad con dato
+    qkeys = [m["key"] for m in _SC_METRICS if m["group"] == "quality"]
+    con_dato = sum(1 for k in qkeys if vals.get(k) is not None)
+    confidence = round((len(dias) / 7) * (con_dato / max(1, len(qkeys))) * 100) if dias else 0
 
     # delta vs última scorecard oficial
     wnum = _sun_to_week_num(sun)
