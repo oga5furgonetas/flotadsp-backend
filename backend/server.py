@@ -9532,11 +9532,15 @@ def _sun_to_week_num(sun):
 def _sc_tier(value, thr, direction):
     if value is None or thr is None:
         return None
-    f, g, fa = thr.get("fantastic"), thr.get("great"), thr.get("fair")
+    fp, f, g, fa = thr.get("fantastic_plus"), thr.get("fantastic"), thr.get("great"), thr.get("fair")
     if None in (f, g, fa):
         return None
     if direction > 0:
+        if fp is not None and value >= fp:
+            return "Fantastic Plus"
         return "Fantastic" if value >= f else "Great" if value >= g else "Fair" if value >= fa else "Poor"
+    if fp is not None and value <= fp:
+        return "Fantastic Plus"
     return "Fantastic" if value <= f else "Great" if value <= g else "Fair" if value <= fa else "Poor"
 
 
@@ -10094,6 +10098,66 @@ async def scorecard_predict(center: str, week: Optional[str] = None, _=Depends(r
             "metrics": metrics, "ayudan": helps, "empeoran": hurts,
             "faltan_datos": faltan, "delta_anterior": delta,
             "fuentes": {"ratios_dias": len(dias)}}
+
+
+# Columna del Excel de umbrales → (clave métrica, dirección +1/-1)
+_XLSX_THR_MAP = {
+    "dcr": ("dcr", 1), "dsc_dpmo": ("dsc_dpmo", -1), "lor_dpmo": ("lor_dpmo", -1),
+    "pod": ("pod", 1), "cc": ("cc", 1), "capacity_reliability": ("ndcr", 1),
+    "ce_dpmo": ("cec_dpmo", -1), "cdf_dpmo": ("cdf", -1), "speeding_event": ("speeding", -1),
+    "fico": ("fico", 1), "ementor_adoption": ("mentor", 1), "vsa": ("vsa", 1),
+    "dvic": ("dvic", 1), "dex": ("dex", 1), "uwh": ("whc", 1),
+}
+
+
+@api_router.post("/scorecard/import-thresholds")
+async def import_thresholds(file: UploadFile = File(...), _=Depends(require_admin)):
+    """Sube el Excel de umbrales de Amazon (t0/t1/t2/t3 por métrica y semana).
+    Guarda, por estación, los umbrales de la ÚLTIMA semana = vigentes."""
+    content = await file.read()
+    rows = _read_table_any(content, file.filename or "umbrales.xlsx")
+    if len(rows) < 2:
+        raise HTTPException(status_code=400, detail="Excel vacío o sin filas")
+    hdr = [str(c).strip().lower() for c in rows[0]]
+    col = {name: i for i, name in enumerate(hdr)}
+
+    def cell(r, name):
+        i = col.get(name)
+        return r[i] if (i is not None and i < len(r)) else None
+
+    best = {}  # station -> (week, row)
+    for r in rows[1:]:
+        st = str(cell(r, "station") or "").upper().strip()
+        wk = cell(r, "week")
+        if not st or wk in (None, ""):
+            continue
+        try:
+            wk = int(float(wk))
+        except Exception:
+            continue
+        if st not in best or wk > best[st][0]:
+            best[st] = (wk, r)
+
+    saved = []
+    for st, (wk, r) in best.items():
+        thr_doc = {"center": st, "week": wk}
+        n = 0
+        for xcol, (key, _dir) in _XLSX_THR_MAP.items():
+            band = {}
+            for lvl, name in (("t0", "fantastic_plus"), ("t1", "fantastic"),
+                              ("t2", "great"), ("t3", "fair")):
+                v = cell(r, xcol + "_" + lvl)
+                if v not in (None, ""):
+                    try:
+                        band[name] = float(v)
+                    except Exception:
+                        pass
+            if band:
+                thr_doc[key] = band
+                n += 1
+        await db.scorecard_thresholds.update_one({"center": st}, {"$set": thr_doc}, upsert=True)
+        saved.append({"center": st, "week": wk, "metricas": n})
+    return {"success": True, "guardadas": saved}
 
 
 app.include_router(auth_router)
