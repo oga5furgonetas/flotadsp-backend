@@ -112,7 +112,7 @@ def _tenant_db_name(org):
     if not org:
         return _DEFAULT_DB_NAME
     return org.get("db_name") or (_DEFAULT_DB_NAME if org.get("account_type") == "owner"
-                                  else f"flotadsp_org_{org.get('id')}")
+                                  else f"dsp_{org.get('id')}")
 
 
 def set_current_org_db(db_name):
@@ -393,6 +393,13 @@ class Alert(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class RegisterRequest(BaseModel):
+    org_name: str          # nombre del DSP/empresa
+    username: str          # usuario de acceso del dueño
+    password: str
+    email: Optional[str] = None
 
 
 class DriverLoginRequest(BaseModel):
@@ -1918,6 +1925,46 @@ async def _rl_fail(key: str, context: str):
 
 def _rl_ok(key: str):
     _login_fails.pop(key, None)
+
+
+@auth_router.post("/register", response_model=TokenResponse)
+async def register_dsp(data: RegisterRequest, request: Request):
+    """Auto-registro de un DSP nuevo: crea su ORGANIZACIÓN (con BD propia y aislada)
+    y su usuario dueño. Empieza en prueba (trial). Datos 100% separados del resto."""
+    username = (data.username or "").strip()
+    org_name = (data.org_name or "").strip()
+    if len(username) < 3:
+        raise HTTPException(status_code=400, detail="El usuario debe tener al menos 3 caracteres")
+    if len(data.password or "") < 8:
+        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 8 caracteres")
+    if not org_name:
+        raise HTTPException(status_code=400, detail="Indica el nombre de tu empresa/DSP")
+    if await global_db.admin_users.find_one({"username": username}):
+        raise HTTPException(status_code=409, detail="Ese usuario ya existe, elige otro")
+
+    org_id = uuid.uuid4().hex[:12]   # corto: el nombre de BD de Atlas no pasa de 38 chars
+    org = {
+        "id": org_id, "name": org_name, "account_type": "dsp",
+        "db_name": f"dsp_{org_id}",
+        "status": "trial",
+        "trial_ends": (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(),
+        "email": (data.email or "").strip().lower() or None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await global_db.organizations.insert_one(dict(org))
+    user_id = str(uuid.uuid4())
+    await global_db.admin_users.insert_one({
+        "id": user_id, "username": username,
+        "hashed_password": hash_password(data.password),
+        "name": org_name, "role": "admin", "org_id": org_id,
+        "email": org.get("email"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    logger.info("Nuevo DSP registrado: %s (org=%s)", username, org_id)
+    token = create_token(user_id, "admin", org_name,
+                         org_id=org_id, db_name=org["db_name"], account_type="dsp")
+    return TokenResponse(access_token=token, role="admin", name=org_name, id=user_id,
+                         account_type="dsp", hidden_modules=org_hidden_modules(org))
 
 
 @auth_router.post("/login", response_model=TokenResponse)
