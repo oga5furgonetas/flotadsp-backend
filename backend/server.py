@@ -400,6 +400,16 @@ class RegisterRequest(BaseModel):
     username: str          # usuario de acceso del dueño
     password: str
     email: Optional[str] = None
+    slug: Optional[str] = None   # identificador en la URL (flotadsp.com/<slug>)
+
+
+def _slugify(s):
+    s = (s or "").lower().strip()
+    s = re.sub(r"[áàä]", "a", s); s = re.sub(r"[éèë]", "e", s)
+    s = re.sub(r"[íìï]", "i", s); s = re.sub(r"[óòö]", "o", s)
+    s = re.sub(r"[úùü]", "u", s); s = re.sub(r"ñ", "n", s)
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s[:30]
 
 
 class DriverLoginRequest(BaseModel):
@@ -428,6 +438,7 @@ class TokenResponse(BaseModel):
     theme: Optional[str] = None
     account_type: Optional[str] = None
     hidden_modules: Optional[list] = None
+    slug: Optional[str] = None
 
 
 # =========================
@@ -525,10 +536,14 @@ async def ensure_owner_org():
             "name": os.environ.get("ADMIN_NAME", "FlotaDSP"),
             "account_type": "owner",
             "db_name": _DEFAULT_DB_NAME,
+            "slug": "admin",
             "status": "active",
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info("Organización 'owner' creada (BD: %s)", _DEFAULT_DB_NAME)
+    elif not o.get("slug"):
+        await global_db.organizations.update_one(
+            {"id": OWNER_ORG_ID}, {"$set": {"slug": "admin"}})
     return OWNER_ORG_ID
 
 
@@ -1942,9 +1957,17 @@ async def register_dsp(data: RegisterRequest, request: Request):
     if await global_db.admin_users.find_one({"username": username}):
         raise HTTPException(status_code=409, detail="Ese usuario ya existe, elige otro")
 
+    slug = _slugify(data.slug or org_name)
+    if len(slug) < 3:
+        raise HTTPException(status_code=400, detail="El identificador (URL) debe tener al menos 3 letras")
+    if slug in ("registro", "login", "admin", "api", "conductor", "app", "www"):
+        raise HTTPException(status_code=409, detail="Ese identificador está reservado, elige otro")
+    if await global_db.organizations.find_one({"slug": slug}):
+        raise HTTPException(status_code=409, detail=f"El identificador '{slug}' ya está cogido, elige otro")
+
     org_id = uuid.uuid4().hex[:12]   # corto: el nombre de BD de Atlas no pasa de 38 chars
     org = {
-        "id": org_id, "name": org_name, "account_type": "dsp",
+        "id": org_id, "name": org_name, "account_type": "dsp", "slug": slug,
         "db_name": f"dsp_{org_id}",
         "status": "trial",
         "trial_ends": (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(),
@@ -1964,7 +1987,30 @@ async def register_dsp(data: RegisterRequest, request: Request):
     token = create_token(user_id, "admin", org_name,
                          org_id=org_id, db_name=org["db_name"], account_type="dsp")
     return TokenResponse(access_token=token, role="admin", name=org_name, id=user_id,
-                         account_type="dsp", hidden_modules=org_hidden_modules(org))
+                         account_type="dsp", hidden_modules=org_hidden_modules(org), slug=slug)
+
+
+@auth_router.get("/org/{slug}")
+async def org_by_slug(slug: str):
+    """Info pública de un DSP por su slug — para que la URL flotadsp.com/<slug>
+    sepa de qué empresa es (mostrar nombre, scope del login del conductor)."""
+    org = await global_db.organizations.find_one({"slug": slug}, {"_id": 0})
+    if not org:
+        raise HTTPException(status_code=404, detail="No existe ninguna empresa con esa URL")
+    return {"name": org.get("name"), "slug": org.get("slug"),
+            "account_type": org.get("account_type"), "status": org.get("status")}
+
+
+async def _set_tenant_by_slug(slug):
+    """Fija la BD del DSP a partir del slug (para endpoints públicos del conductor)."""
+    if not slug:
+        set_current_org_db(_DEFAULT_DB_NAME)
+        return None
+    org = await global_db.organizations.find_one({"slug": slug}, {"_id": 0})
+    if not org:
+        raise HTTPException(status_code=404, detail="No existe ninguna empresa con esa URL")
+    set_current_org_db(_tenant_db_name(org))
+    return org
 
 
 @auth_router.post("/login", response_model=TokenResponse)
@@ -1997,13 +2043,15 @@ async def admin_login(data: LoginRequest, request: Request):
         theme=user.get("theme"),
         account_type=account_type,
         hidden_modules=org_hidden_modules(org),
+        slug=(org or {}).get("slug"),
     )
 
 
 @auth_router.get("/conductor-list")
-async def conductor_list_public(center: Optional[str] = None):
+async def conductor_list_public(center: Optional[str] = None, slug: Optional[str] = None):
     """Lista pública de conductores (solo nombre, email, centro, id) para el
-    portal de login del conductor. NO requiere autenticación."""
+    portal de login del conductor. NO requiere autenticación. Scoped al DSP por slug."""
+    await _set_tenant_by_slug(slug)
     query = {}
     if center and center != "Todos":
         query["center"] = {"$regex": center, "$options": "i"}
@@ -2030,10 +2078,13 @@ async def _driver_token_impl(data: dict):
     driver_id = data.get("driver_id")
     if not driver_id:
         raise HTTPException(status_code=400, detail="driver_id requerido")
+    org = await _set_tenant_by_slug(data.get("slug"))   # scope al DSP del conductor
     driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0})
     if not driver:
         raise HTTPException(status_code=404, detail="Conductor no encontrado")
-    token = create_token(driver_id, "driver", driver.get("name", ""))
+    token = create_token(driver_id, "driver", driver.get("name", ""),
+                         org_id=(org or {}).get("id"), db_name=_tenant_db_name(org),
+                         account_type=(org or {}).get("account_type"))
     logger.info(f"Portal conductor token: {driver.get('name')} ({driver_id})")
     return {
         "access_token": token,
