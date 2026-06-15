@@ -401,6 +401,7 @@ class RegisterRequest(BaseModel):
     password: str
     email: Optional[str] = None
     slug: Optional[str] = None   # identificador en la URL (flotadsp.com/<slug>)
+    center: Optional[str] = None  # código de su primer centro/estación (ej. su station)
 
 
 def _slugify(s):
@@ -439,6 +440,7 @@ class TokenResponse(BaseModel):
     account_type: Optional[str] = None
     hidden_modules: Optional[list] = None
     slug: Optional[str] = None
+    centers: Optional[list] = None
 
 
 # =========================
@@ -458,7 +460,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_token(user_id: str, role: str, name: str,
                  org_id: Optional[str] = None, db_name: Optional[str] = None,
-                 account_type: Optional[str] = None) -> str:
+                 account_type: Optional[str] = None, centers: Optional[list] = None) -> str:
     expires = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
     payload = {
         "sub": user_id,
@@ -472,6 +474,8 @@ def create_token(user_id: str, role: str, name: str,
         payload["db_name"] = db_name
     if account_type:
         payload["account_type"] = account_type
+    if centers:
+        payload["centers"] = centers
     return jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
@@ -538,12 +542,20 @@ async def ensure_owner_org():
             "db_name": _DEFAULT_DB_NAME,
             "slug": "admin",
             "status": "active",
+            "centers": ["OGA5", "DGA1", "DGA2"],
+            "max_centers": 999,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info("Organización 'owner' creada (BD: %s)", _DEFAULT_DB_NAME)
-    elif not o.get("slug"):
-        await global_db.organizations.update_one(
-            {"id": OWNER_ORG_ID}, {"$set": {"slug": "admin"}})
+    else:
+        patch = {}
+        if not o.get("slug"):
+            patch["slug"] = "admin"
+        if not o.get("centers"):
+            patch["centers"] = ["OGA5", "DGA1", "DGA2"]
+            patch["max_centers"] = 999
+        if patch:
+            await global_db.organizations.update_one({"id": OWNER_ORG_ID}, {"$set": patch})
     return OWNER_ORG_ID
 
 
@@ -1966,12 +1978,15 @@ async def register_dsp(data: RegisterRequest, request: Request):
         raise HTTPException(status_code=409, detail=f"El identificador '{slug}' ya está cogido, elige otro")
 
     org_id = uuid.uuid4().hex[:12]   # corto: el nombre de BD de Atlas no pasa de 38 chars
+    first_center = (data.center or "").strip().upper() or "PRINCIPAL"
     org = {
         "id": org_id, "name": org_name, "account_type": "dsp", "slug": slug,
         "db_name": f"dsp_{org_id}",
         "status": "trial",
         "trial_ends": (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(),
         "email": (data.email or "").strip().lower() or None,
+        "centers": [first_center],   # cada DSP empieza con UN centro (el suyo)
+        "max_centers": 1,            # añadir más = de pago (sube este límite)
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await global_db.organizations.insert_one(dict(org))
@@ -1985,9 +2000,41 @@ async def register_dsp(data: RegisterRequest, request: Request):
     })
     logger.info("Nuevo DSP registrado: %s (org=%s)", username, org_id)
     token = create_token(user_id, "admin", org_name,
-                         org_id=org_id, db_name=org["db_name"], account_type="dsp")
+                         org_id=org_id, db_name=org["db_name"], account_type="dsp",
+                         centers=org.get("centers"))
     return TokenResponse(access_token=token, role="admin", name=org_name, id=user_id,
-                         account_type="dsp", hidden_modules=org_hidden_modules(org), slug=slug)
+                         account_type="dsp", hidden_modules=org_hidden_modules(org), slug=slug,
+                         centers=org.get("centers"))
+
+
+@api_router.get("/org/centers")
+async def list_org_centers(user: dict = Depends(get_current_user)):
+    """Centros de TU organización (cada uno ve solo los suyos)."""
+    org = await get_org(user.get("org_id"))
+    return {"centers": (org or {}).get("centers") or [],
+            "max_centers": (org or {}).get("max_centers", 1),
+            "account_type": (org or {}).get("account_type")}
+
+
+@api_router.post("/org/centers")
+async def add_org_center(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Añade un centro a tu organización. Pasado el límite del plan → 402 (de pago)."""
+    name = (data.get("name") or "").strip().upper()
+    if not name:
+        raise HTTPException(status_code=400, detail="Indica el nombre del centro")
+    org = await get_org(user.get("org_id"))
+    if not org:
+        raise HTTPException(status_code=404, detail="Organización no encontrada")
+    centers = org.get("centers") or []
+    if name in centers:
+        raise HTTPException(status_code=409, detail="Ese centro ya existe")
+    if len(centers) >= org.get("max_centers", 1):
+        raise HTTPException(status_code=402,
+                            detail="Has alcanzado el límite de centros de tu plan. Amplía tu suscripción para añadir más.")
+    centers.append(name)
+    await global_db.organizations.update_one(
+        {"id": org["id"]}, {"$set": {"centers": centers}})
+    return {"ok": True, "centers": centers}
 
 
 @auth_router.get("/org/{slug}")
@@ -2033,7 +2080,8 @@ async def admin_login(data: LoginRequest, request: Request):
     db_name = _tenant_db_name(org)
     account_type = (org or {}).get("account_type", "owner")
     token = create_token(user["id"], user["role"], user["name"],
-                         org_id=user.get("org_id"), db_name=db_name, account_type=account_type)
+                         org_id=user.get("org_id"), db_name=db_name, account_type=account_type,
+                         centers=(org or {}).get("centers"))
     logger.info(f"Admin login: {data.username} (org={user.get('org_id')})")
     return TokenResponse(
         access_token=token,
@@ -2044,6 +2092,7 @@ async def admin_login(data: LoginRequest, request: Request):
         account_type=account_type,
         hidden_modules=org_hidden_modules(org),
         slug=(org or {}).get("slug"),
+        centers=(org or {}).get("centers"),
     )
 
 

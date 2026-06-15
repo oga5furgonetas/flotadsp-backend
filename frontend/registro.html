@@ -52,6 +52,10 @@
       </div>
       <div class="hint">Aquí entrarán tú y tus conductores. Solo letras, números y guiones.</div>
 
+      <label>Código de tu centro / estación</label>
+      <input id="center" placeholder="ej. tu station de Amazon" autocomplete="off">
+      <div class="hint">Tu centro de trabajo. Podrás añadir más centros más adelante.</div>
+
       <label>Usuario de acceso</label>
       <input id="user" placeholder="tu usuario" autocomplete="username">
 
@@ -83,7 +87,7 @@
   function showMsg(t, ok){ var m=$("msg"); m.textContent=t; m.className="msg "+(ok?"ok":"err"); }
 
   async function register(){
-    var org=$("org").value.trim(), slug=slugify($("slug").value), user=$("user").value.trim(), pass=$("pass").value;
+    var org=$("org").value.trim(), slug=slugify($("slug").value), user=$("user").value.trim(), pass=$("pass").value, center=$("center").value.trim();
     if(!org) return showMsg("Pon el nombre de tu empresa.");
     if(slug.length<3) return showMsg("La URL debe tener al menos 3 letras.");
     if(user.length<3) return showMsg("El usuario debe tener al menos 3 caracteres.");
@@ -91,14 +95,14 @@
     var btn=$("go"); btn.disabled=true; btn.textContent="Creando…";
     try{
       var r=await fetch(API+"/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({org_name:org,username:user,password:pass,slug:slug})});
+        body:JSON.stringify({org_name:org,username:user,password:pass,slug:slug,center:center})});
       var j=await r.json();
       if(!r.ok){ showMsg(j.detail||"No se pudo crear la cuenta."); btn.disabled=false; btn.textContent="Crear cuenta y empezar"; return; }
       // entra directo: guarda sesión igual que el login de la app
       localStorage.setItem("flotadsp_token", j.access_token);
       localStorage.setItem("flotadsp_admin", JSON.stringify({
         name:j.name, role:j.role, id:j.id, account_type:j.account_type,
-        hidden_modules:j.hidden_modules||[], slug:j.slug, theme:j.theme||null }));
+        hidden_modules:j.hidden_modules||[], slug:j.slug, theme:j.theme||null, centers:j.centers||[] }));
       showMsg("¡Cuenta creada! Entrando…", true);
       setTimeout(function(){ window.location.href="/"; }, 700);
     }catch(e){ showMsg("Error de conexión. Inténtalo de nuevo."); btn.disabled=false; btn.textContent="Crear cuenta y empezar"; }

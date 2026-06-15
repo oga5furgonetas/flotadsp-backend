@@ -27,6 +27,17 @@
 
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet"/>
   <title>FlotaDSP</title>
+  <!-- Centros dinámicos por organización: cada uno ve SOLO los suyos. El dueño, los suyos. -->
+  <script>
+  (function(){
+    var C=["OGA5","DGA1","DGA2"];   // por defecto (dueño / sin sesión)
+    try{
+      var p=JSON.parse(atob((localStorage.getItem('flotadsp_token')||'').split('.')[1]||''));
+      if(p && p.centers && p.centers.length) C=p.centers;   // del token: vale para login y registro
+    }catch(e){}
+    window.__FC=C; window.__FCT=["Todos"].concat(C); window.__FCS=C.join(",");
+  })();
+  </script>
   <script type="module" crossorigin src="/assets/app-w72.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-BdiVWMWf.css">
 
