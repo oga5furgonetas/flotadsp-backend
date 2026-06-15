@@ -4021,10 +4021,21 @@
         var drS=React.useState(null),drill=drS[0],setDrill=drS[1];
         var qS=React.useState([]),queue=qS[0],setQueue=qS[1];
         var prS=React.useState(null),predict=prS[0],setPredict=prS[1];
+        var srcS=React.useState(null),sources=srcS[0],setSources=srcS[1];
         var fileRef=React.useRef(null);
 
         function loadPredict(){
           apiGet('/scorecard/predict?center='+encodeURIComponent(center)).then(function(j){ setPredict(j||null); }).catch(function(){});
+        }
+        function loadSources(wk){
+          apiGet('/scorecard/sources?center='+encodeURIComponent(center)+((wk||week)?('&week='+(wk||week)):'')).then(function(j){ setSources(j||null); }).catch(function(){});
+        }
+        function deleteSource(it){
+          var q='/scorecard/source?center='+encodeURIComponent(center)+'&kind='+encodeURIComponent(it.kind)+'&ref='+encodeURIComponent(it.ref)+(week?('&week='+week):'');
+          fetch(API+q,{method:'DELETE',headers:{'Authorization':'Bearer '+tok()}})
+            .then(function(r){return r.json();})
+            .then(function(){ if(toast)toast.success('Eliminado · recalculando…'); loadAll(week); loadPredict(); loadSources(week); })
+            .catch(function(){ if(toast)toast.error('No se pudo borrar'); });
         }
 
         // ── Cola de subida UNIFICADA (PDF/HTML/XLSX/XLS/CSV) — máx 3 a la vez, ×3 reintentos ──
@@ -4063,6 +4074,7 @@
             setFull(j); setWeek(j.week);
             return apiGet('/metrics/daily-week?center='+encodeURIComponent(center)+'&desde='+j.desde+'&hasta='+j.hasta);
           }).then(function(dw){ setDaily(dw||{}); setLoading(false); }).catch(function(){ setLoading(false); if(toast)toast.error('Error cargando'); });
+          loadSources(wk);
         }
         React.useEffect(function(){ loadAll(null); loadPredict(); },[center]);
 
@@ -4161,6 +4173,20 @@
                 h('div',{style:{height:'4px',borderRadius:'99px',background:'rgba(255,255,255,.08)',marginTop:'4px',overflow:'hidden'}},
                   h('div',{style:{height:'100%',width:it.pct+'%',background:col,transition:'width .3s'}})),
                 it.msg&&h('div',{style:{fontSize:'11px',color:it.status==='Error'?'#f87171':'#8892a4',marginTop:'3px'}}, it.msg)
+              ); })
+          ),
+
+          /* Archivos cargados esta semana — ver y borrar (recalcula al instante) */
+          sources && sources.items && sources.items.length>0 && h('div',{style:{marginBottom:'16px',padding:'12px 14px',borderRadius:'12px',background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.1)'}},
+            h('div',{style:{fontSize:'12px',fontWeight:700,color:'#cbd3e0',marginBottom:'8px'}}, '🗂️ Cargado esta semana ('+sources.items.length+') — bórralo si te confundiste'),
+            sources.items.map(function(it,i){
+              var ic=it.kind==='official'?'📄':it.kind==='daily'?'📋':it.kind==='manual'?'✏️':'📊';
+              return h('div',{key:i,style:{display:'flex',alignItems:'center',gap:'10px',padding:'6px 0',borderTop:i?'1px solid rgba(255,255,255,.05)':'none',fontSize:'12px'}},
+                h('span',{style:{width:'18px'}}, ic),
+                h('span',{style:{flex:1,color:'#e3e8f0',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}, it.label),
+                h('span',{style:{color:'#5c6578',fontSize:'10.5px',whiteSpace:'nowrap'}}, it.detalle||''),
+                h('button',{onClick:function(){ if(window.confirm('¿Borrar "'+it.label+'"? La nota se recalculará.')) deleteSource(it); },
+                  title:'Borrar', style:{padding:'3px 9px',borderRadius:'7px',border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.08)',color:'#f87171',fontSize:'11px',cursor:'pointer',fontWeight:700}},'🗑️ Borrar')
               ); })
           ),
 

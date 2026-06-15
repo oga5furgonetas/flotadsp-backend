@@ -10084,6 +10084,72 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
         raise HTTPException(status_code=422, detail=f"No se pudo procesar {fn}: {type(e).__name__}")
 
 
+@api_router.get("/scorecard/sources")
+async def scorecard_sources(center: str, week: Optional[str] = None, _=Depends(require_admin)):
+    """Lista TODO lo cargado de la semana (para verlo y poder borrarlo):
+    días de ratios, reportes diarios, scorecard oficial y valores metidos a mano."""
+    if not week:
+        last = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+        week, _s = _sun_sat_week(last)
+    sun, sat = _sun_sat_week(week)
+    wnum = _sun_to_week_num(sun)
+    items = []
+    async for d in db.daily_ratios.find({"center": center, "date": {"$gte": sun, "$lte": sat}}, {"_id": 0}):
+        items.append({"kind": "ratios", "fecha": d["date"], "ref": d["date"],
+                      "label": "Descripción general · " + d["date"],
+                      "detalle": "envíos/entregas del día", "subido": d.get("uploaded_at")})
+    async for d in db.daily_dsp.find({"center": center, "date": {"$gte": sun, "$lte": sat}}, {"_id": 0}):
+        items.append({"kind": "daily", "fecha": d["date"], "ref": d["date"],
+                      "label": "Reporte diario · " + d["date"],
+                      "detalle": str(len(d.get("drivers") or [])) + " conductores", "subido": d.get("uploaded_at")})
+    off = await db.scorecard_official.find_one({"center": center, "week": wnum}, {"_id": 0})
+    if off:
+        items.append({"kind": "official", "fecha": None, "ref": str(wnum),
+                      "label": "Scorecard oficial · W" + str(wnum),
+                      "detalle": (off.get("overall_tier") or "") + " " + str(off.get("overall_score") or ""),
+                      "subido": off.get("uploaded_at")})
+    live = await db.scorecard_live.find_one({"center": center, "week": sun}, {"_id": 0})
+    manual = [{"kind": "manual", "fecha": None, "ref": k,
+               "label": "Valor a mano · " + next((m["label"] for m in _SC_METRICS if m["key"] == k), k),
+               "detalle": str(v), "subido": (live or {}).get("updated_at")}
+              for k, v in ((live or {}).get("values") or {}).items() if v is not None]
+    items = sorted(items, key=lambda x: (x["fecha"] or "", x["kind"]))
+    return {"center": center, "week": sun, "desde": sun, "hasta": sat,
+            "items": items + manual, "total": len(items) + len(manual)}
+
+
+@api_router.delete("/scorecard/source")
+async def scorecard_delete_source(center: str, kind: str, ref: str,
+                                  week: Optional[str] = None, _=Depends(require_admin)):
+    """Borra un archivo/dato cargado. kind: ratios|daily|official|manual.
+    ref = fecha (ratios/daily), nº de semana (official) o clave de métrica (manual)."""
+    if kind == "ratios":
+        r = await db.daily_ratios.delete_one({"center": center, "date": ref})
+    elif kind == "daily":
+        r = await db.daily_dsp.delete_one({"center": center, "date": ref})
+    elif kind == "official":
+        try:
+            wn = int(ref)
+        except Exception:
+            raise HTTPException(status_code=400, detail="ref debe ser nº de semana")
+        await db.scorecard_obs.delete_many({"center": center, "week": wn})
+        r = await db.scorecard_official.delete_one({"center": center, "week": wn})
+    elif kind == "manual":
+        if week:
+            wsun, _ = _sun_sat_week(week)
+        else:
+            last = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+            wsun, _ = _sun_sat_week(last)
+        r = await db.scorecard_live.update_one(
+            {"center": center, "week": wsun}, {"$unset": {f"values.{ref}": ""}})
+    else:
+        raise HTTPException(status_code=400, detail=f"kind inválido: {kind}")
+    borrados = getattr(r, "deleted_count", None)
+    if borrados is None:
+        borrados = getattr(r, "modified_count", 0)
+    return {"ok": True, "borrados": borrados}
+
+
 async def _store_ratios(ratios, center):
     cen = (center or "OGA5").upper()
     n = 0
