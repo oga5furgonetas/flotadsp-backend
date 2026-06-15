@@ -9544,6 +9544,65 @@ def _sc_tier(value, thr, direction):
     return "Fantastic" if value <= f else "Great" if value <= g else "Fair" if value <= fa else "Poor"
 
 
+def _interp(value, anchors):
+    """Interpola linealmente sobre anclas (valor, puntos), clamp 0-100."""
+    anchors = sorted(anchors)
+    if value <= anchors[0][0]:
+        (x0, y0), (x1, y1) = anchors[0], anchors[1]
+        y = y0 if x1 == x0 else y0 + (value - x0) / (x1 - x0) * (y1 - y0)
+        return max(0.0, min(100.0, y))
+    for i in range(len(anchors) - 1):
+        x0, y0 = anchors[i]
+        x1, y1 = anchors[i + 1]
+        if value <= x1:
+            return y1 if x1 == x0 else y0 + (value - x0) / (x1 - x0) * (y1 - y0)
+    (x0, y0), (x1, y1) = anchors[-2], anchors[-1]
+    y = y1 if x1 == x0 else y1 + (value - x1) / (x1 - x0) * (y1 - y0)
+    return max(0.0, min(100.0, y))
+
+
+def _metric_subscore(value, thr, direction):
+    """Sub-puntuación 0-100 de una métrica (modelo Amazon: t0=100, t1=90,
+    t2=70, t3=50, interpolado). Calibrado con scorecards reales."""
+    if value is None or thr is None:
+        return None
+    fp, f, g, fa = thr.get("fantastic_plus"), thr.get("fantastic"), thr.get("great"), thr.get("fair")
+    if None in (f, g, fa):
+        return None
+    if fp is None:
+        fp = f
+    return _interp(value, [(fp, 100), (f, 90), (g, 70), (fa, 50)])
+
+
+def _overall_score(out, weights):
+    """Overall Score ponderado = Σ(peso × sub-puntuación) / Σpesos."""
+    num = den = 0.0
+    usados = 0
+    for m in out:
+        w = weights.get(m["key"], 0) or 0
+        if not w:
+            continue
+        ss = _metric_subscore(m.get("value"), m.get("thr"), m["dir"])
+        if ss is None:
+            continue
+        num += w * ss
+        den += w
+        usados += 1
+    return (round(num / den, 2) if den else None), den, usados
+
+
+_OVERALL_TIER_BANDS = [(95, "Fantastic Plus"), (85, "Fantastic"), (70, "Great"), (50, "Fair"), (0, "Poor")]
+
+
+def _score_to_tier(score):
+    if score is None:
+        return None
+    for thr, name in _OVERALL_TIER_BANDS:
+        if score >= thr:
+            return name
+    return "Poor"
+
+
 def _sc_next_target(value, tier, thr, direction):
     """Qué valor hace falta para subir al siguiente tier (None si ya Fantastic)."""
     if tier == "Fantastic" or value is None or thr is None:
@@ -9622,39 +9681,44 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
          for m in out if m["tier"] and m["tier"] not in ("Fantastic", "Fantastic Plus") and m["next"]],
         key=lambda m: abs(m["next"]["gap"]) if m["next"] else 9e9)
 
+    def _cat_tier(group):
+        ts = [m["tier"] for m in out if m["group"] == group and m["tier"]]
+        if not ts:
+            return None
+        cnt = {}
+        for t in ts:
+            cnt[t] = cnt.get(t, 0) + 1
+        mx = max(cnt.values())
+        return max([t for t in cnt if cnt[t] == mx], key=lambda t: _TIER_ORDER.index(t))
+    safety_tier = _cat_tier("safety")
+    quality_tier = _cat_tier("quality")
+    capacity_tier = _cat_tier("capacity")
+
+    weights = await _sc_weights(center)
+    score_calc, wsum, nused = _overall_score(out, weights)
+    peso_total = sum(v for v in weights.values() if isinstance(v, (int, float)))
+    cobertura = round(wsum / peso_total * 100) if peso_total else 0
+
     if has_official:
         overall = off.get("overall_tier")
         overall_score = off.get("overall_score")
         cats = off.get("categories") or {}
-        safety_tier = cats.get("compliance_safety")
-        quality_tier = cats.get("quality_swc")
-        capacity_tier = cats.get("capacity")
+        safety_tier = cats.get("compliance_safety") or safety_tier
+        quality_tier = cats.get("quality_swc") or quality_tier
+        capacity_tier = cats.get("capacity") or capacity_tier
         overall_method = "oficial — de tu scorecard de Amazon"
     else:
-        def _cat_tier(group):
-            ts = [m["tier"] for m in out if m["group"] == group and m["tier"]]
-            if not ts:
-                return None
-            cnt = {}
-            for t in ts:
-                cnt[t] = cnt.get(t, 0) + 1
-            mx = max(cnt.values())
-            return max([t for t in cnt if cnt[t] == mx], key=lambda t: _TIER_ORDER.index(t))
-        safety_tier = _cat_tier("safety")
-        quality_tier = _cat_tier("quality")
-        capacity_tier = _cat_tier("capacity")
-        cl = [c for c in (safety_tier, quality_tier) if c]
-        overall = min(cl, key=lambda t: _TIER_ORDER.index(t)) if cl else None
-        if safety_tier and overall and _TIER_ORDER.index(overall) > _TIER_ORDER.index(safety_tier):
-            overall = safety_tier
-        overall_score = None
-        overall_method = "estimado — sube la scorecard oficial (PDF) para el dato real"
+        overall_score = score_calc
+        overall = _score_to_tier(score_calc)
+        overall_method = (f"calculado con pesos reales — {cobertura}% del peso con dato"
+                          if score_calc is not None else "faltan datos para la nota")
 
     return {"center": center, "week": sun, "desde": sun, "hasta": sat, "week_num": wnum,
             "metrics": out, "counts": counts, "to_improve": to_improve,
             "safety_tier": safety_tier, "quality_tier": quality_tier, "capacity_tier": capacity_tier,
-            "overall": overall, "overall_score": overall_score, "has_official": has_official,
-            "overall_method": overall_method}
+            "overall": overall, "overall_score": overall_score,
+            "score_calculado": score_calc, "cobertura_peso": cobertura,
+            "has_official": has_official, "overall_method": overall_method}
 
 
 @api_router.post("/scorecard/full")
@@ -10158,6 +10222,69 @@ async def import_thresholds(file: UploadFile = File(...), _=Depends(require_admi
         await db.scorecard_thresholds.update_one({"center": st}, {"$set": thr_doc}, upsert=True)
         saved.append({"center": st, "week": wk, "metricas": n})
     return {"success": True, "guardadas": saved}
+
+
+# Columna de pesos (CSV ..._wt_final) → clave métrica
+_XLSX_WT_MAP = {
+    "dcr": "dcr", "dnr": "dnr_dpmo", "dsc_dpmo": "dsc_dpmo", "lor_dpmo": "lor_dpmo",
+    "pod": "pod", "cc": "cc", "capacity_reliability": "ndcr", "whc": "whc", "cas": "cas",
+    "ce_dpmo": "cec_dpmo", "positive_dex": "dex", "cdf_dpmo": "cdf",
+    "speeding_event_rate": "speeding", "fico": "fico", "ementor_adoption_rate": "mentor",
+    "vsa": "vsa", "dvic": "dvic",
+}
+
+
+@api_router.post("/scorecard/import-weights")
+async def import_weights(file: UploadFile = File(...), _=Depends(require_admin)):
+    """Sube el CSV/Excel de pesos de Amazon (..._wt_final por métrica y semana).
+    Guarda, por estación, los pesos de la ÚLTIMA semana = vigentes."""
+    content = await file.read()
+    rows = _read_table_any(content, file.filename or "pesos.csv")
+    if len(rows) < 2:
+        raise HTTPException(status_code=400, detail="Archivo vacío")
+    hdr = [str(c).strip().lower() for c in rows[0]]
+    col = {name: i for i, name in enumerate(hdr)}
+
+    def cell(r, name):
+        i = col.get(name)
+        return r[i] if (i is not None and i < len(r)) else None
+
+    best = {}
+    for r in rows[1:]:
+        st = str(cell(r, "station") or "").upper().strip()
+        wk = cell(r, "week")
+        if not st or wk in (None, ""):
+            continue
+        try:
+            wk = int(float(wk))
+        except Exception:
+            continue
+        if st not in best or wk > best[st][0]:
+            best[st] = (wk, r)
+
+    saved = []
+    for st, (wk, r) in best.items():
+        doc = {"center": st, "week": wk}
+        total = 0.0
+        for xcol, key in _XLSX_WT_MAP.items():
+            v = cell(r, xcol + "_wt_final")
+            if v not in (None, ""):
+                try:
+                    fv = float(v)
+                    doc[key] = fv
+                    total += fv
+                except Exception:
+                    pass
+        await db.scorecard_weights.update_one({"center": st}, {"$set": doc}, upsert=True)
+        saved.append({"center": st, "week": wk, "suma_pesos": round(total, 2)})
+    return {"success": True, "guardados": saved}
+
+
+async def _sc_weights(center):
+    doc = await db.scorecard_weights.find_one({"center": center}, {"_id": 0})
+    if not doc:
+        doc = await db.scorecard_weights.find_one({"center": "GLOBAL"}, {"_id": 0})
+    return {k: v for k, v in (doc or {}).items() if k not in ("center", "week")}
 
 
 app.include_router(auth_router)
