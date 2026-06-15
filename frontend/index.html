@@ -4030,6 +4030,13 @@
         function loadSources(wk){
           apiGet('/scorecard/sources?center='+encodeURIComponent(center)+((wk||week)?('&week='+(wk||week)):'')).then(function(j){ setSources(j||null); }).catch(function(){});
         }
+        function resetWeek(){
+          if(!window.confirm('¿Poner esta semana a CERO?\n\nSe borran: reportes diarios, Descripción general, valores a mano y la scorecard de esta semana. Se desactiva la estimación de semanas anteriores.\n\nLa nota se calculará SOLO con lo que subas o edites a partir de ahora.')) return;
+          fetch(API+'/scorecard/reset',{method:'POST',headers:{'Authorization':'Bearer '+tok(),'Content-Type':'application/json'},body:JSON.stringify({center:center,week:week})})
+            .then(function(r){return r.json();})
+            .then(function(){ if(toast)toast.success('Semana reseteada · sube tus archivos'); loadAll(week); loadPredict(); loadSources(week); })
+            .catch(function(){ if(toast)toast.error('No se pudo resetear'); });
+        }
         function deleteSource(it){
           var q='/scorecard/source?center='+encodeURIComponent(center)+'&kind='+encodeURIComponent(it.kind)+'&ref='+encodeURIComponent(it.ref)+(week?('&week='+week):'');
           fetch(API+q,{method:'DELETE',headers:{'Authorization':'Bearer '+tok()}})
@@ -4155,7 +4162,8 @@
             h('div',{style:{fontSize:'13px',fontWeight:700,color:'#cbd3e0',minWidth:'190px',textAlign:'center'}}, full?('Semana '+diaCorto(full.desde)+' – '+diaCorto(full.hasta)+' (dom–sáb)'):'…'),
             btn('›',function(){navWeek(1);},{padding:'6px 12px'}),
             h('div',{style:{flex:1}}),
-            h('div',{style:{fontSize:'12px',color:'#8892a4'}}, '✓ '+(counts.Fantastic||0)+' Fantastic · '+(counts.Great||0)+' Great · '+(counts.Fair||0)+' Fair'+((counts.Poor||0)?(' · '+counts.Poor+' Poor'):''))
+            h('div',{style:{fontSize:'12px',color:'#8892a4'}}, '✓ '+(counts.Fantastic||0)+' Fantastic · '+(counts.Great||0)+' Great · '+(counts.Fair||0)+' Fair'+((counts.Poor||0)?(' · '+counts.Poor+' Poor'):'')),
+            h('button',{onClick:resetWeek,title:'Pone la semana a cero: borra todo y calcula solo con lo que subas',style:{marginLeft:'12px',padding:'6px 12px',borderRadius:'9px',border:'1px solid rgba(239,68,68,.35)',background:'rgba(239,68,68,.08)',color:'#f87171',fontSize:'12px',fontWeight:700,cursor:'pointer'}},'🔄 Resetear semana')
           ),
 
           /* Cola de subida con estado por archivo */
@@ -4177,10 +4185,10 @@
           ),
 
           /* Archivos cargados esta semana — ver y borrar (recalcula al instante) */
-          sources && sources.items && sources.items.length>0 && h('div',{style:{marginBottom:'16px',padding:'12px 14px',borderRadius:'12px',background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.1)'}},
-            h('div',{style:{fontSize:'12px',fontWeight:700,color:'#cbd3e0',marginBottom:'8px'}}, '🗂️ Cargado esta semana ('+sources.items.length+') — bórralo si te confundiste'),
-            sources.items.map(function(it,i){
-              var ic=it.kind==='official'?'📄':it.kind==='daily'?'📋':it.kind==='manual'?'✏️':'📊';
+          (function(){ var arch=(sources&&sources.items||[]).filter(function(it){return it.kind!=='manual';}); return arch.length>0 && h('div',{style:{marginBottom:'16px',padding:'12px 14px',borderRadius:'12px',background:'rgba(255,255,255,.03)',border:'1px solid rgba(255,255,255,.1)'}},
+            h('div',{style:{fontSize:'12px',fontWeight:700,color:'#cbd3e0',marginBottom:'8px'}}, '🗂️ Archivos que has subido esta semana ('+arch.length+') — bórralos si te confundiste'),
+            arch.map(function(it,i){
+              var ic=it.kind==='official'?'📄':it.kind==='daily'?'📋':'📊';
               return h('div',{key:i,style:{display:'flex',alignItems:'center',gap:'10px',padding:'6px 0',borderTop:i?'1px solid rgba(255,255,255,.05)':'none',fontSize:'12px'}},
                 h('span',{style:{width:'18px'}}, ic),
                 h('span',{style:{flex:1,color:'#e3e8f0',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}, it.label),
@@ -4188,7 +4196,7 @@
                 h('button',{onClick:function(){ if(window.confirm('¿Borrar "'+it.label+'"? La nota se recalculará.')) deleteSource(it); },
                   title:'Borrar', style:{padding:'3px 9px',borderRadius:'7px',border:'1px solid rgba(239,68,68,.3)',background:'rgba(239,68,68,.08)',color:'#f87171',fontSize:'11px',cursor:'pointer',fontWeight:700}},'🗑️ Borrar')
               ); })
-          ),
+          ); }()),
 
           /* Predicción de la semana en curso (de los ratios subidos) */
           predict && predict.dias_con_datos && predict.dias_con_datos.length>0 && h('div',{style:{marginBottom:'18px',padding:'16px 18px',borderRadius:'16px',background:'rgba(16,185,129,.07)',border:'1px solid rgba(16,185,129,.28)'}},

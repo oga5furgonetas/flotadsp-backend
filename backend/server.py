@@ -9655,7 +9655,8 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
     # semana, así que la proyectamos con el último dato real (no inventado) para que
     # la nota de la semana en curso cubra TODO el peso sin volver a subir la scorecard.
     base = None
-    if not has_official:
+    no_carry = bool((doc or {}).get("no_carry"))  # modo "solo datos reales" (tras Reset)
+    if not has_official and not no_carry:
         base = await db.scorecard_official.find_one(
             {"center": center, "week": {"$lt": wnum}}, {"_id": 0}, sort=[("week", -1)])
     base_metrics = {mm.get("key"): mm for mm in (base.get("metrics") if base else [])}
@@ -10082,6 +10083,32 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
     except Exception as e:
         logger.error(f"[upload] {fn} ERROR: {type(e).__name__}: {repr(e)}")
         raise HTTPException(status_code=422, detail=f"No se pudo procesar {fn}: {type(e).__name__}")
+
+
+@api_router.post("/scorecard/reset")
+async def scorecard_reset(data: dict = Body(...), _=Depends(require_admin)):
+    """Pone la semana A CERO: borra ratios, reportes diarios, valores a mano y la
+    scorecard oficial de ESA semana, y desactiva la estimación de W21. A partir de
+    ahí la nota se calcula SOLO con lo que subas/edites (datos reales)."""
+    center = data.get("center")
+    week = data.get("week")
+    if not center:
+        raise HTTPException(status_code=400, detail="center requerido")
+    if not week:
+        week = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    sun, sat = _sun_sat_week(week)
+    wnum = _sun_to_week_num(sun)
+    r1 = await db.daily_ratios.delete_many({"center": center, "date": {"$gte": sun, "$lte": sat}})
+    r2 = await db.daily_dsp.delete_many({"center": center, "date": {"$gte": sun, "$lte": sat}})
+    r3 = await db.scorecard_official.delete_one({"center": center, "week": wnum})
+    await db.scorecard_obs.delete_many({"center": center, "week": wnum})
+    await db.scorecard_live.update_one(
+        {"center": center, "week": sun},
+        {"$set": {"center": center, "week": sun, "values": {}, "no_carry": True,
+                  "updated_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    return {"ok": True, "semana": sun,
+            "borrados": {"ratios": r1.deleted_count, "diarios": r2.deleted_count,
+                         "oficial": r3.deleted_count}}
 
 
 @api_router.get("/scorecard/sources")
