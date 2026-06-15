@@ -9650,6 +9650,9 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
     has_official = bool(off)
     # ratios diarios subidos (para rellenar Calidad de la semana en vivo)
     ratio_vals, ratio_dias = await _ratios_week_values(center, sun, sat)
+    # Resumen de entregas semanal (DSP Resumen Entregas): DCR/DNR/POD reales de la semana
+    wk_doc = await db.scorecard_weekly.find_one({"center": center, "week": wnum}, {"_id": 0})
+    week_vals = (wk_doc or {}).get("values", {})
     # Baseline: arrastra Seguridad/Capacidad de tu ÚLTIMA scorecard conocida.
     # Los reportes diarios solo traen Calidad; Seguridad cambia muy poco semana a
     # semana, así que la proyectamos con el último dato real (no inventado) para que
@@ -9673,6 +9676,10 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
             v = values.get(m["key"])
             t = _sc_tier(v, thr.get(m["key"]), m["dir"])
             src = "manual"
+        elif week_vals.get(m["key"]) is not None:
+            v = week_vals.get(m["key"])
+            t = _sc_tier(v, thr.get(m["key"]), m["dir"])
+            src = "resumen"
         elif ratio_vals.get(m["key"]) is not None:
             v = ratio_vals.get(m["key"])
             t = _sc_tier(v, thr.get(m["key"]), m["dir"])
@@ -10016,6 +10023,43 @@ def _parse_ratios(content: bytes, filename: str):
     return {"days": days} if any(days.values()) else None
 
 
+def _parse_resumen_semanal(content: bytes, filename: str):
+    """Parsea el 'DSP Resumen Entregas' de Cortex: filas = ratios, columnas =
+    'Semana 22/23/24/25'. Devuelve {week_num: {dcr,dnr_dpmo,pod,...}} con métricas reales."""
+    rows = _read_table_any(content, filename)
+    if not rows:
+        return None
+    # cabecera: fila con >=2 columnas tipo "Semana NN"
+    hdr_i, week_cols = None, {}
+    for i, r in enumerate(rows[:6]):
+        cols = {}
+        for ci in range(1, len(r)):
+            m = re.search(r"semana\s*(\d{1,2})", str(r[ci]).lower())
+            if m:
+                cols[ci] = int(m.group(1))
+        if len(cols) >= 1:
+            hdr_i, week_cols = i, cols
+            break
+    if not week_cols:
+        return None
+    out = {wn: {} for wn in week_cols.values()}
+    for r in rows[hdr_i + 1:]:
+        if not r:
+            continue
+        label = (r[0] or "").lower().strip()
+        key = next((k for names, k in _RATIO_ROWS if label in names), None)
+        if not key:
+            continue
+        for ci, wn in week_cols.items():
+            if ci < len(r):
+                v = _num(r[ci])
+                if v is not None:
+                    out[wn][key] = v
+    # deja solo semanas con métricas de scorecard útiles (dcr/dnr/pod)
+    res = {wn: v for wn, v in out.items() if any(k in v for k in ("dcr", "dnr_dpmo", "pod"))}
+    return res or None
+
+
 @api_router.post("/scorecard/upload")
 async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] = Form(None),
                            _=Depends(require_admin)):
@@ -10032,6 +10076,13 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
         raise HTTPException(status_code=400, detail=f"Formato no soportado: .{ext}")
     logger.info(f"[upload] {fn} ({len(content)}B, {ext})")
 
+    # Reportes de UNA métrica suelta (no son la scorecard ni el Resumen): de momento
+    # esas métricas se meten a mano. Mensaje claro en vez de guardarlas mal.
+    if "escalation" in fn:
+        raise HTTPException(status_code=422, detail="Es el reporte de Customer Escalation (métrica CEC), no la scorecard. Mete el CEC a mano (clic en su número) — pronto lo leeré solo.")
+    if "compliance" in fn and ("contact" in fn or "concession" in fn):
+        raise HTTPException(status_code=422, detail="Es el reporte de Contact Compliance (métrica CC), no la scorecard. Mete el CC a mano (clic en su número) — pronto lo leeré solo.")
+
     try:
         # PDF → scorecard oficial
         if ext == "pdf":
@@ -10040,6 +10091,8 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
             week = sc.get("week")
             if not week:
                 raise HTTPException(status_code=422, detail="No reconocí la semana en el PDF (¿es una scorecard oficial?)")
+            if sc.get("overall_score") is None and sc.get("overall_tier") in (None, "None") and not (sc.get("metrics") or []):
+                raise HTTPException(status_code=422, detail=f"El PDF no parece una scorecard completa (no trae nota global). Si es un reporte de una métrica suelta, mete ese valor a mano.")
             doc = {"center": cen, "week": int(week), "year": sc.get("year"),
                    "overall_score": sc.get("overall_score"), "overall_tier": sc.get("overall_tier"),
                    "categories": sc.get("categories") or {}, "metrics": sc.get("metrics") or [],
@@ -10072,11 +10125,14 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
             raise HTTPException(status_code=422,
                                 detail="HTML no reconocido (ni reporte diario ni Descripción general)")
 
-        # Excel/CSV → ratios (Descripción general)
+        # Excel/CSV → 1º Resumen semanal (columnas Semana NN), 2º Descripción general (fechas)
+        sem = _parse_resumen_semanal(content, file.filename or "")
+        if sem:
+            return await _store_resumen_semanal(sem, center)
         ratios = _parse_ratios(content, file.filename or "")
         if not ratios:
             raise HTTPException(status_code=422,
-                                detail="Excel/CSV no reconocido. ¿Es la 'Descripción general' de Cortex?")
+                                detail="Excel/CSV no reconocido. ¿Es la 'Descripción general' o el 'Resumen de entregas' de Cortex?")
         return await _store_ratios(ratios, center)
     except HTTPException:
         raise
@@ -10129,6 +10185,13 @@ async def scorecard_sources(center: str, week: Optional[str] = None, _=Depends(r
         items.append({"kind": "daily", "fecha": d["date"], "ref": d["date"],
                       "label": "Reporte diario · " + d["date"],
                       "detalle": str(len(d.get("drivers") or [])) + " conductores", "subido": d.get("uploaded_at")})
+    wk = await db.scorecard_weekly.find_one({"center": center, "week": wnum}, {"_id": 0})
+    if wk:
+        vv = wk.get("values") or {}
+        items.append({"kind": "resumen", "fecha": None, "ref": str(wnum),
+                      "label": "Resumen de entregas · W" + str(wnum),
+                      "detalle": "DCR " + str(vv.get("dcr", "?")) + "% · POD " + str(vv.get("pod", "?")) + "%",
+                      "subido": wk.get("uploaded_at")})
     off = await db.scorecard_official.find_one({"center": center, "week": wnum}, {"_id": 0})
     if off:
         items.append({"kind": "official", "fecha": None, "ref": str(wnum),
@@ -10161,6 +10224,12 @@ async def scorecard_delete_source(center: str, kind: str, ref: str,
             raise HTTPException(status_code=400, detail="ref debe ser nº de semana")
         await db.scorecard_obs.delete_many({"center": center, "week": wn})
         r = await db.scorecard_official.delete_one({"center": center, "week": wn})
+    elif kind == "resumen":
+        try:
+            wn = int(ref)
+        except Exception:
+            raise HTTPException(status_code=400, detail="ref debe ser nº de semana")
+        r = await db.scorecard_weekly.delete_one({"center": center, "week": wn})
     elif kind == "manual":
         if week:
             wsun, _ = _sun_sat_week(week)
@@ -10175,6 +10244,21 @@ async def scorecard_delete_source(center: str, kind: str, ref: str,
     if borrados is None:
         borrados = getattr(r, "modified_count", 0)
     return {"ok": True, "borrados": borrados}
+
+
+async def _store_resumen_semanal(sem, center):
+    cen = (center or "OGA5").upper()
+    guardadas = []
+    for wn, vals in sem.items():
+        await db.scorecard_weekly.update_one(
+            {"center": cen, "week": int(wn)},
+            {"$set": {"center": cen, "week": int(wn), "values": vals,
+                      "uploaded_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+        guardadas.append(int(wn))
+    guardadas.sort()
+    return {"tipo": "resumen", "ok": True, "center": cen,
+            "mensaje": f"Resumen de entregas: semanas {', '.join('W'+str(w) for w in guardadas)} (DCR/DNR/POD)",
+            "semanas": guardadas}
 
 
 async def _store_ratios(ratios, center):
