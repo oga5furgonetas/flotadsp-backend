@@ -94,7 +94,41 @@ JWT_EXPIRE_HOURS = int(os.environ.get("JWT_EXPIRE_HOURS", "72"))
 
 mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ.get("DB_NAME", "flotadsp")]
+
+# === MULTI-TENANT (una BD por organización) ===
+# `db` es un proxy: resuelve la base de datos de la ORGANIZACIÓN del usuario logueado
+# (fijada por petición desde el token). Sin contexto → BD por defecto = comportamiento
+# idéntico al de siempre (no rompe nada). Login/usuarios/organizaciones viven en `global_db`.
+import contextvars
+_DEFAULT_DB_NAME = os.environ.get("DB_NAME", "flotadsp")
+_GLOBAL_DB_NAME = os.environ.get("GLOBAL_DB_NAME", "flotadsp_global")
+_current_db_name = contextvars.ContextVar("current_db_name", default=_DEFAULT_DB_NAME)
+
+global_db = client[_GLOBAL_DB_NAME]  # organizaciones, usuarios, suscripciones (compartida)
+
+
+def _tenant_db_name(org):
+    """Nombre de BD de una organización. La tuya (owner) reusa la BD existente."""
+    if not org:
+        return _DEFAULT_DB_NAME
+    return org.get("db_name") or (_DEFAULT_DB_NAME if org.get("account_type") == "owner"
+                                  else f"flotadsp_org_{org.get('id')}")
+
+
+def set_current_org_db(db_name):
+    _current_db_name.set(db_name or _DEFAULT_DB_NAME)
+
+
+class _TenantDBProxy:
+    """Reenvía todo (db.vehicles, db.command, …) a la BD del tenant actual."""
+    def __getattr__(self, name):
+        return getattr(client[_current_db_name.get()], name)
+
+    def __getitem__(self, name):
+        return client[_current_db_name.get()][name]
+
+
+db = _TenantDBProxy()
 
 # =========================
 # FASTAPI
