@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crear cuenta · FlotaDSP</title>
+<style>
+  :root{ --bg:#0b0d10; --card:#13161b; --line:rgba(255,255,255,.08); --txt:#e7ebf2; --mut:#8b94a3; --acc:#0ea5e9; --acc2:#0369a1; --err:#f87171; }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:radial-gradient(1200px 600px at 70% -10%,rgba(14,165,233,.10),transparent),var(--bg);color:var(--txt);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;align-items:center;justify-content:center;padding:24px}
+  .wrap{width:100%;max-width:440px}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:22px;justify-content:center}
+  .logo{width:38px;height:38px;border-radius:10px;background:linear-gradient(135deg,#fb923c,#ea6800);display:flex;align-items:center;justify-content:center;font-size:20px}
+  .brand h1{font-size:20px;margin:0;font-weight:800}
+  .brand span{color:var(--mut);font-size:11px;letter-spacing:.12em}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:26px 24px}
+  .card h2{margin:0 0 4px;font-size:19px;font-weight:800}
+  .card p.sub{margin:0 0 20px;color:var(--mut);font-size:13px}
+  label{display:block;font-size:12px;color:var(--mut);margin:14px 0 6px;font-weight:600}
+  input{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:#0e1116;color:var(--txt);font-size:14px;outline:none}
+  input:focus{border-color:var(--acc)}
+  .url{display:flex;align-items:center;gap:0;border:1px solid var(--line);border-radius:10px;background:#0e1116;overflow:hidden}
+  .url .pfx{padding:11px 4px 11px 12px;color:var(--mut);font-size:13px;white-space:nowrap}
+  .url input{border:none;border-radius:0;padding-left:2px}
+  .hint{font-size:11px;color:var(--mut);margin-top:5px}
+  button{width:100%;margin-top:22px;padding:12px;border:none;border-radius:11px;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;font-size:15px;font-weight:800;cursor:pointer}
+  button:disabled{opacity:.6;cursor:default}
+  .msg{margin-top:14px;padding:10px 12px;border-radius:10px;font-size:13px;display:none}
+  .msg.err{display:block;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);color:var(--err)}
+  .msg.ok{display:block;background:rgba(34,197,94,.1);border:1px solid rgba(34,197,94,.3);color:#4ade80}
+  .foot{text-align:center;margin-top:18px;font-size:13px;color:var(--mut)}
+  .foot a{color:var(--acc);text-decoration:none;font-weight:600}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand">
+      <div class="logo">⚡</div>
+      <div><h1>FlotaDSP</h1><span>FLEET INTELLIGENCE</span></div>
+    </div>
+    <div class="card">
+      <h2>Crea tu cuenta</h2>
+      <p class="sub">Gestiona tu flota de furgonetas. 14 días de prueba, sin tarjeta.</p>
+
+      <label>Nombre de tu empresa / DSP</label>
+      <input id="org" placeholder="Transportes Pérez SL" autocomplete="organization">
+
+      <label>La URL de tu empresa</label>
+      <div class="url">
+        <span class="pfx">flotadsp.com/</span>
+        <input id="slug" placeholder="transportes-perez" autocomplete="off">
+      </div>
+      <div class="hint">Aquí entrarán tú y tus conductores. Solo letras, números y guiones.</div>
+
+      <label>Usuario de acceso</label>
+      <input id="user" placeholder="tu usuario" autocomplete="username">
+
+      <label>Contraseña</label>
+      <input id="pass" type="password" placeholder="mínimo 8 caracteres" autocomplete="new-password">
+
+      <button id="go">Crear cuenta y empezar</button>
+      <div id="msg" class="msg"></div>
+
+      <div class="foot">¿Ya tienes cuenta? <a href="/">Inicia sesión</a></div>
+    </div>
+  </div>
+
+<script>
+  var API = "https://flotadsp-backend.fly.dev/api";
+  var $ = function(id){ return document.getElementById(id); };
+
+  function slugify(s){
+    return (s||"").toLowerCase().trim()
+      .replace(/[áàä]/g,"a").replace(/[éèë]/g,"e").replace(/[íìï]/g,"i")
+      .replace(/[óòö]/g,"o").replace(/[úùü]/g,"u").replace(/ñ/g,"n")
+      .replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"").slice(0,30);
+  }
+  // autocompleta el slug desde el nombre de empresa (hasta que el usuario lo edite a mano)
+  var slugTouched = false;
+  $("slug").addEventListener("input", function(){ slugTouched = true; this.value = slugify(this.value); });
+  $("org").addEventListener("input", function(){ if(!slugTouched) $("slug").value = slugify(this.value); });
+
+  function showMsg(t, ok){ var m=$("msg"); m.textContent=t; m.className="msg "+(ok?"ok":"err"); }
+
+  async function register(){
+    var org=$("org").value.trim(), slug=slugify($("slug").value), user=$("user").value.trim(), pass=$("pass").value;
+    if(!org) return showMsg("Pon el nombre de tu empresa.");
+    if(slug.length<3) return showMsg("La URL debe tener al menos 3 letras.");
+    if(user.length<3) return showMsg("El usuario debe tener al menos 3 caracteres.");
+    if(pass.length<8) return showMsg("La contraseña debe tener al menos 8 caracteres.");
+    var btn=$("go"); btn.disabled=true; btn.textContent="Creando…";
+    try{
+      var r=await fetch(API+"/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({org_name:org,username:user,password:pass,slug:slug})});
+      var j=await r.json();
+      if(!r.ok){ showMsg(j.detail||"No se pudo crear la cuenta."); btn.disabled=false; btn.textContent="Crear cuenta y empezar"; return; }
+      // entra directo: guarda sesión igual que el login de la app
+      localStorage.setItem("flotadsp_token", j.access_token);
+      localStorage.setItem("flotadsp_admin", JSON.stringify({
+        name:j.name, role:j.role, id:j.id, account_type:j.account_type,
+        hidden_modules:j.hidden_modules||[], slug:j.slug, theme:j.theme||null }));
+      showMsg("¡Cuenta creada! Entrando…", true);
+      setTimeout(function(){ window.location.href="/"; }, 700);
+    }catch(e){ showMsg("Error de conexión. Inténtalo de nuevo."); btn.disabled=false; btn.textContent="Crear cuenta y empezar"; }
+  }
+  $("go").addEventListener("click", register);
+  $("pass").addEventListener("keydown", function(e){ if(e.key==="Enter") register(); });
+</script>
+</body>
+</html>
