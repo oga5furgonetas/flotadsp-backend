@@ -11,10 +11,11 @@ import DriverPortal from './pages/driver/DriverPortal'
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ToastProvider>
-      <BrowserRouter>
+      <BrowserRouter basename="/conductor">
         <Routes>
-          <Route path="/portal-conductor" element={<DriverPortal />} />
-          <Route path="*" element={<Navigate to="/portal-conductor" replace />} />
+          {/* flotadsp.com/conductor/<slug> → portal del conductor de ESE DSP */}
+          <Route path="/:slug" element={<DriverPortal />} />
+          <Route path="*" element={<DriverPortal />} />
         </Routes>
       </BrowserRouter>
     </ToastProvider>

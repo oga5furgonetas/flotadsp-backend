@@ -14,12 +14,26 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-/* ── Auth conductor ───────────────────────────────────────── */
+/* ── Multi-tenant: el slug del DSP sale de la URL (flotadsp.com/<slug>/conductor) ── */
+export function currentSlug() {
+  // flotadsp.com/conductor/#<slug>  (hash: robusto, sin líos de enrutado servidor)
+  const h = (window.location.hash || '').replace(/^#\/?/, '').trim()
+  if (h && /^[a-z0-9-]+$/i.test(h)) return h
+  // alternativas: ?slug= o /conductor/<slug> por si acaso
+  const m = window.location.pathname.match(/\/conductor\/([a-z0-9-]+)/i)
+  if (m) return m[1]
+  return new URLSearchParams(window.location.search).get('slug') || undefined
+}
+
+/* ── Auth conductor (scoped al DSP por slug) ──────────────────── */
 export const getConductorList = (center) =>
-  api.get('/auth/conductor-list', { params: center ? { center } : {} })
+  api.get('/auth/conductor-list', { params: { slug: currentSlug(), ...(center ? { center } : {}) } })
 
 export const getDriverToken = (driverId) =>
-  api.post('/auth/driver-token', { driver_id: driverId })
+  api.post('/auth/driver-token', { driver_id: driverId, slug: currentSlug() })
+
+/* Info pública del DSP por su slug (para mostrar su nombre en el portal) */
+export const getOrgBySlug = (slug) => api.get(`/auth/org/${slug}`)
 
 export const getAssignedVehicle = () => api.get('/auth/me/assigned-vehicle')
 
