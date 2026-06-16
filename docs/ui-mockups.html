@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlotaDSP · Diseño de Interfaz (mockups)</title>
+<style>
+  :root{
+    --ink:#0f172a; --ink2:#334155; --muted:#64748b; --line:#e6eaf0;
+    --bg:#eef1f6; --card:#ffffff; --brand:#3b5bdb; --brand-d:#2f49b8; --brandbg:#eef1ff;
+    --green:#16a34a; --greenbg:#dcfce7; --amber:#d97706; --amberbg:#fef3c7;
+    --red:#dc2626; --redbg:#fee2e2; --purple:#7c3aed; --purplebg:#ede9fe;
+    --teal:#0d9488; --tealbg:#ccfbf1; --sidebar:#0f1729; --sidebar2:#1a2540;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased;line-height:1.5}
+  .page{max-width:1200px;margin:0 auto;padding:34px 20px 80px}
+  h1{font-size:34px;letter-spacing:-.02em;margin:0 0 6px}
+  .sub{color:var(--muted);font-size:16px;max-width:760px;margin:0 0 8px}
+  .principles{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0 6px}
+  .principles span{background:#fff;border:1px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;font-weight:600;color:var(--ink2)}
+  .screen-title{margin:46px 0 4px;font-size:13px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--brand)}
+  .screen-desc{color:var(--muted);font-size:14px;margin:0 0 14px;max-width:820px}
+
+  /* device frames */
+  .browser{border-radius:14px;overflow:hidden;box-shadow:0 10px 40px rgba(15,23,42,.16);border:1px solid #d7deea;background:#fff}
+  .chrome{background:#e8edf4;padding:9px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #d7deea}
+  .dots{display:flex;gap:6px}.dots i{width:11px;height:11px;border-radius:50%;display:block}
+  .url{flex:1;background:#fff;border:1px solid #d7deea;border-radius:8px;padding:5px 12px;font-size:12px;color:var(--muted);max-width:520px}
+
+  /* app shell */
+  .app{display:grid;grid-template-columns:212px 1fr;min-height:560px}
+  .side{background:var(--sidebar);color:#cdd6ea;padding:16px 12px;display:flex;flex-direction:column;gap:3px}
+  .brand{display:flex;align-items:center;gap:9px;color:#fff;font-weight:800;font-size:16px;padding:6px 8px 14px}
+  .brand .logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#3b5bdb,#7c3aed);display:flex;align-items:center;justify-content:center;font-size:13px}
+  .nav{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:9px;font-size:13.5px;font-weight:500;color:#aab6d4;cursor:default}
+  .nav .ic{width:18px;text-align:center}
+  .nav.active{background:var(--sidebar2);color:#fff;font-weight:600}
+  .nav .badge{margin-left:auto;background:var(--red);color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:999px}
+  .side .spacer{flex:1}
+  .side .org{margin-top:8px;border-top:1px solid #2a375a;padding-top:12px;font-size:12px;color:#8696bd}
+  .side .org b{color:#fff;display:block;font-size:13px}
+
+  .main{background:#f4f6fb;display:flex;flex-direction:column}
+  .top{background:#fff;border-bottom:1px solid var(--line);padding:13px 22px;display:flex;align-items:center;gap:14px}
+  .top h2{font-size:18px;margin:0;letter-spacing:-.01em}
+  .top .search{margin-left:8px;background:#f1f4f9;border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:13px;color:var(--muted);width:230px}
+  .top .right{margin-left:auto;display:flex;align-items:center;gap:12px}
+  .btn{background:var(--brand);color:#fff;border:none;border-radius:9px;padding:8px 15px;font-size:13px;font-weight:600;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--ink2);border:1px solid var(--line)}
+  .btn.sm{padding:5px 11px;font-size:12px}
+  .avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#3b5bdb,#0d9488);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700}
+  .bell{position:relative;font-size:18px;color:var(--ink2)}
+  .bell:after{content:"";position:absolute;top:0;right:1px;width:8px;height:8px;background:var(--red);border-radius:50%;border:2px solid #fff}
+  .content{padding:22px;overflow:auto}
+
+  /* generic ui */
+  .row{display:grid;gap:16px}
+  .c4{grid-template-columns:repeat(4,1fr)}.c3{grid-template-columns:repeat(3,1fr)}.c2{grid-template-columns:repeat(2,1fr)}
+  .c-2-1{grid-template-columns:2fr 1fr}
+  @media(max-width:760px){.c4,.c3,.c2,.c-2-1{grid-template-columns:1fr}.app{grid-template-columns:1fr}.side{display:none}}
+  .kpi{background:#fff;border:1px solid var(--line);border-radius:13px;padding:15px 16px}
+  .kpi .l{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.03em;display:flex;align-items:center;gap:6px}
+  .kpi .v{font-size:27px;font-weight:800;letter-spacing:-.02em;margin-top:4px}
+  .kpi .d{font-size:12px;margin-top:2px}
+  .up{color:var(--green)}.down{color:var(--red)}
+  .panel{background:#fff;border:1px solid var(--line);border-radius:13px;padding:17px}
+  .panel h3{margin:0 0 14px;font-size:15px;display:flex;align-items:center;gap:8px}
+  .panel h3 .more{margin-left:auto;font-size:12px;color:var(--brand);font-weight:600}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:999px}
+  .chip.g{background:var(--greenbg);color:var(--green)}.chip.a{background:var(--amberbg);color:var(--amber)}
+  .chip.r{background:var(--redbg);color:var(--red)}.chip.b{background:var(--brandbg);color:var(--brand)}
+  .chip.p{background:var(--purplebg);color:var(--purple)}.chip.gray{background:#eef1f6;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:8px 10px;border-bottom:1px solid var(--line)}
+  td{padding:10px;border-bottom:1px solid #f0f3f8}
+  tr:last-child td{border-bottom:none}
+  .mini-bar{height:8px;background:#eef2f8;border-radius:999px;overflow:hidden}
+  .mini-bar i{display:block;height:100%;border-radius:999px;background:var(--brand)}
+  .donut{width:120px;height:120px;border-radius:50%;
+    background:conic-gradient(var(--green) 0 78%, #eef2f8 78% 100%);display:flex;align-items:center;justify-content:center}
+  .donut .inner{width:86px;height:86px;background:#fff;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .donut .inner b{font-size:22px}.donut .inner small{font-size:11px;color:var(--muted)}
+  .photo{background:#0f1729;border-radius:10px;min-height:150px;position:relative;color:#7e8db0;display:flex;align-items:center;justify-content:center;font-size:13px;overflow:hidden}
+  .box-dmg{position:absolute;border:2px solid var(--red);border-radius:4px;box-shadow:0 0 0 9999px rgba(220,38,38,.06)}
+  .box-lbl{position:absolute;background:var(--red);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:5px}
+  .list-item{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid #f0f3f8}
+  .list-item:last-child{border-bottom:none}
+  .thumb{width:46px;height:38px;border-radius:7px;background:#0f1729;flex-shrink:0;position:relative}
+  .legend{display:flex;gap:8px;color:var(--muted);font-size:12px;margin-top:10px;flex-wrap:wrap}
+
+  /* mobile frame */
+  .phone{width:300px;border:10px solid #0f1729;border-radius:34px;overflow:hidden;box-shadow:0 20px 50px rgba(15,23,42,.22);background:#fff;margin:0 auto}
+  .phone .notch{height:24px;background:#0f1729;position:relative}
+  .phone .notch:after{content:"";position:absolute;top:6px;left:50%;transform:translateX(-50%);width:90px;height:6px;border-radius:6px;background:#33415a}
+  .ph-body{padding:14px}
+  .ph-top{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .ph-card{border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+  .cam{background:#0f1729;border-radius:14px;height:160px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#7e8db0;font-size:13px;position:relative}
+  .cam .shutter{position:absolute;bottom:12px;width:54px;height:54px;border-radius:50%;background:#fff;border:4px solid #c7d0e2}
+  .step{display:flex;gap:6px;margin-bottom:14px}
+  .step i{flex:1;height:5px;border-radius:999px;background:#e6eaf0}
+  .step i.on{background:var(--brand)}
+
+  /* onboarding */
+  .wizard{max-width:520px;margin:30px auto;background:#fff;border:1px solid var(--line);border-radius:16px;padding:26px}
+  .field{margin-bottom:14px}
+  .field label{font-size:12px;font-weight:700;color:var(--ink2);display:block;margin-bottom:5px}
+  .field .inp{border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:13px;color:var(--ink);background:#fbfcfe}
+  .plan-pick{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .plan-pick .p{border:1px solid var(--line);border-radius:12px;padding:12px;text-align:center;font-size:12px}
+  .plan-pick .p.sel{border:2px solid var(--brand);background:var(--brandbg)}
+  .plan-pick .p b{display:block;font-size:14px;margin-bottom:2px}
+  .plan-pick .p .pr{font-size:18px;font-weight:800;color:var(--brand)}
+
+  /* login */
+  .login-wrap{display:grid;grid-template-columns:1fr 1fr;min-height:520px}
+  .login-art{background:linear-gradient(155deg,#0f1729,#1d3a6e);color:#fff;padding:40px;display:flex;flex-direction:column;justify-content:center}
+  .login-art h2{font-size:28px;margin:0 0 12px;letter-spacing:-.02em}
+  .login-art p{color:#aebbd6;font-size:14px}
+  .login-form{padding:48px 44px;display:flex;flex-direction:column;justify-content:center}
+  @media(max-width:760px){.login-wrap{grid-template-columns:1fr}.login-art{display:none}}
+  .note{font-size:13px;color:var(--muted);background:#fff;border:1px dashed var(--line);border-radius:10px;padding:10px 14px;margin-top:10px}
+  .tabbar{display:flex;justify-content:space-around;border-top:1px solid var(--line);padding:10px 0 4px;color:var(--muted);font-size:10px}
+  .tabbar .t{display:flex;flex-direction:column;align-items:center;gap:3px}
+  .tabbar .t.on{color:var(--brand);font-weight:700}
+  .tabbar .ic{font-size:18px}
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>FlotaDSP · Diseño de interfaz</h1>
+  <p class="sub">Mockups de alta fidelidad de cómo construiría la UI del SaaS sobre tu backend. Diseño orientado a <b>eficiencia operativa</b>: que un DSP vea lo que importa de un vistazo y resuelva en el mínimo de clics.</p>
+  <div class="principles">
+    <span>🎯 Lo crítico arriba (scorecard, daños, ITV)</span>
+    <span>⚡ Acciones en 1 clic</span>
+    <span>📱 Conductor en móvil, admin en escritorio</span>
+    <span>🧱 Layout consistente (sidebar fijo)</span>
+    <span>🔔 Todo accionable, nada decorativo</span>
+  </div>
+
+  <!-- ============ 1. LOGIN ============ -->
+  <div class="screen-title">01 · Acceso multi-empresa</div>
+  <p class="screen-desc">Login único. El usuario entra con su email y el sistema lo lleva a SU empresa (tenant). Sin elegir servidores ni URLs raras.</p>
+  <div class="browser">
+    <div class="chrome"><div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div><div class="url">app.flotadsp.com/login</div></div>
+    <div class="login-wrap">
+      <div class="login-art">
+        <div style="display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;margin-bottom:24px"><span style="width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#3b5bdb,#7c3aed);display:flex;align-items:center;justify-content:center">🚐</span> FlotaDSP</div>
+        <h2>Tu flota, bajo control.</h2>
+        <p>Inspección de daños con IA, scorecard de Amazon, turnos y alertas de ITV/renting. Todo en un sitio.</p>
+        <div style="margin-top:24px;display:flex;gap:18px;font-size:13px;color:#8ea1c6">
+          <span>✓ Daños imputados</span><span>✓ Scorecard al día</span>
+        </div>
+      </div>
+      <div class="login-form">
+        <h3 style="font-size:20px;margin:0 0 4px">Inicia sesión</h3>
+        <p style="color:var(--muted);font-size:13px;margin:0 0 20px">Bienvenido de nuevo</p>
+        <div class="field"><label>Email</label><div class="inp">admin@transportesgarcia.es</div></div>
+        <div class="field"><label>Contraseña</label><div class="inp">••••••••••</div></div>
+        <button class="btn" style="width:100%;padding:11px;margin-top:4px">Entrar</button>
+        <p style="text-align:center;font-size:13px;color:var(--muted);margin-top:16px">¿Sin cuenta? <b style="color:var(--brand)">Registra tu empresa →</b></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 2. ONBOARDING ============ -->
+  <div class="screen-title">02 · Alta de empresa (autoservicio)</div>
+  <p class="screen-desc">Asistente de 4 pasos. El objetivo: de "me registro" a "veo mi flota dentro" lo más rápido posible. Sin tarjeta para la prueba.</p>
+  <div class="browser">
+    <div class="chrome"><div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div><div class="url">app.flotadsp.com/registro</div></div>
+    <div style="background:#f4f6fb;padding:10px 0">
+      <div class="wizard">
+        <div class="step"><i class="on"></i><i class="on"></i><i></i><i></i></div>
+        <h3 style="margin:0 0 2px;font-size:18px">Elige tu plan</h3>
+        <p style="color:var(--muted);font-size:13px;margin:0 0 16px">14 días gratis · cambia o cancela cuando quieras</p>
+        <div class="plan-pick">
+          <div class="p"><b>Starter</b><span class="pr">79€</span><small>≤10 furgos</small></div>
+          <div class="p sel"><b>Growth</b><span class="pr">199€</span><small>≤30 furgos</small></div>
+          <div class="p"><b>Pro</b><span class="pr">349€</span><small>≤60 · multi</small></div>
+        </div>
+        <div class="field" style="margin-top:18px"><label>Nº aproximado de vehículos</label><div class="inp">28</div></div>
+        <button class="btn" style="width:100%;padding:11px">Continuar → Importar flota</button>
+        <p style="text-align:center;font-size:12px;color:var(--muted);margin:12px 0 0">Paso 2 de 4 · Datos → Plan → Pago → Importar</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 3. DASHBOARD ============ -->
+  <div class="screen-title">03 · Dashboard del DSP</div>
+  <p class="screen-desc">La pantalla que se ve al entrar. Los 4 números que deciden si el negocio va bien, y debajo solo lo accionable: cola de daños, turnos sin cubrir y alertas que vencen.</p>
+  <div class="browser">
+    <div class="chrome"><div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div><div class="url">app.flotadsp.com/dashboard</div></div>
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><span class="logo">🚐</span> FlotaDSP</div>
+        <div class="nav active"><span class="ic">▢</span> Dashboard</div>
+        <div class="nav"><span class="ic">🔍</span> Inspecciones <span class="badge">3</span></div>
+        <div class="nav"><span class="ic">📊</span> Scorecard</div>
+        <div class="nav"><span class="ic">🚐</span> Flota</div>
+        <div class="nav"><span class="ic">👷</span> Conductores</div>
+        <div class="nav"><span class="ic">🗓️</span> Turnos</div>
+        <div class="nav"><span class="ic">🔧</span> Talleres</div>
+        <div class="nav"><span class="ic">🔔</span> Alertas <span class="badge">2</span></div>
+        <div class="spacer"></div>
+        <div class="nav"><span class="ic">⚙️</span> Ajustes</div>
+        <div class="org">Empresa<b>Transportes García SL</b><span class="chip g" style="margin-top:6px">Plan Growth · activo</span></div>
+      </aside>
+      <div class="main">
+        <div class="top">
+          <h2>Buenos días, Mery 👋</h2>
+          <div class="search">🔎 Buscar furgoneta, conductor…</div>
+          <div class="right"><span class="bell">🔔</span><div class="avatar">MG</div></div>
+        </div>
+        <div class="content">
+          <div class="row c4" style="margin-bottom:16px">
+            <div class="kpi"><div class="l">📊 Scorecard</div><div class="v" style="color:var(--green)">Fantastic</div><div class="d up">▲ subió desde Great</div></div>
+            <div class="kpi"><div class="l">🚐 Flota activa</div><div class="v">28<span style="font-size:14px;color:var(--muted)">/30</span></div><div class="d">2 en taller</div></div>
+            <div class="kpi"><div class="l">💥 Daños sin imputar</div><div class="v" style="color:var(--red)">3</div><div class="d down">≈ 640 € en juego</div></div>
+            <div class="kpi"><div class="l">📋 ITV próximas</div><div class="v" style="color:var(--amber)">2</div><div class="d">vencen en 9 días</div></div>
+          </div>
+          <div class="row c-2-1">
+            <div class="panel">
+              <h3>💥 Cola de daños por revisar <span class="more">Ver todos →</span></h3>
+              <div class="list-item">
+                <div class="thumb"><span class="box-dmg" style="top:8px;left:10px;width:22px;height:14px"></span></div>
+                <div style="flex:1"><b style="font-size:13px">1234-ABC</b><div style="font-size:12px;color:var(--muted)">Arañazo lateral izq · IA 94%</div></div>
+                <span class="chip a">Conductor turno 14/06</span>
+                <button class="btn sm">Imputar</button>
+              </div>
+              <div class="list-item">
+                <div class="thumb"><span class="box-dmg" style="top:14px;left:20px;width:16px;height:12px"></span></div>
+                <div style="flex:1"><b style="font-size:13px">5678-DEF</b><div style="font-size:12px;color:var(--muted)">Abolladura parachoques · IA 88%</div></div>
+                <span class="chip gray">Sin asignar</span>
+                <button class="btn sm">Revisar</button>
+              </div>
+              <div class="list-item">
+                <div class="thumb"><span class="box-dmg" style="top:6px;left:6px;width:30px;height:10px"></span></div>
+                <div style="flex:1"><b style="font-size:13px">9012-GHI</b><div style="font-size:12px;color:var(--muted)">Luna trasera grieta · IA 97%</div></div>
+                <span class="chip a">Conductor turno 13/06</span>
+                <button class="btn sm">Imputar</button>
+              </div>
+            </div>
+            <div class="panel" style="display:flex;flex-direction:column;align-items:center">
+              <h3 style="align-self:flex-start">🗓️ Cobertura de hoy</h3>
+              <div class="donut"><div class="inner"><b>26/28</b><small>rutas cubiertas</small></div></div>
+              <div style="margin-top:14px;text-align:center"><span class="chip r">2 rutas sin conductor</span></div>
+              <button class="btn ghost sm" style="margin-top:12px">Asignar conductores →</button>
+            </div>
+          </div>
+          <div class="row c2" style="margin-top:16px">
+            <div class="panel">
+              <h3>🔔 Alertas activas</h3>
+              <div class="list-item"><span class="chip a">ITV</span><div style="flex:1;font-size:13px">Furgoneta 1234-ABC vence el 25/06</div><span style="font-size:12px;color:var(--muted)">9 días</span></div>
+              <div class="list-item"><span class="chip r">Renting</span><div style="flex:1;font-size:13px">Contrato 5678-DEF finaliza pronto</div><span style="font-size:12px;color:var(--muted)">18 días</span></div>
+            </div>
+            <div class="panel">
+              <h3>📈 Inspecciones esta semana</h3>
+              <div style="display:flex;align-items:flex-end;gap:10px;height:120px;padding-top:10px">
+                <div style="flex:1;text-align:center"><div style="height:64px;background:var(--brand);border-radius:6px 6px 0 0"></div><small>L</small></div>
+                <div style="flex:1;text-align:center"><div style="height:52px;background:var(--brand);border-radius:6px 6px 0 0"></div><small>M</small></div>
+                <div style="flex:1;text-align:center"><div style="height:80px;background:var(--brand);border-radius:6px 6px 0 0"></div><small>X</small></div>
+                <div style="flex:1;text-align:center"><div style="height:70px;background:var(--brand);border-radius:6px 6px 0 0"></div><small>J</small></div>
+                <div style="flex:1;text-align:center"><div style="height:44px;background:#c7d0ea;border-radius:6px 6px 0 0"></div><small>V</small></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 4. INSPECCIÓN DETALLE ============ -->
+  <div class="screen-title">04 · Revisión de inspección con IA</div>
+  <p class="screen-desc">El corazón del producto. La IA ya hizo el trabajo: marca los daños sobre la foto, sugiere responsable y taller. El admin solo confirma o corrige en un clic. <b>Eficiencia = revisar 30 inspecciones en minutos, no en horas.</b></p>
+  <div class="browser">
+    <div class="chrome"><div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div><div class="url">app.flotadsp.com/inspecciones/4821</div></div>
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><span class="logo">🚐</span> FlotaDSP</div>
+        <div class="nav"><span class="ic">▢</span> Dashboard</div>
+        <div class="nav active"><span class="ic">🔍</span> Inspecciones <span class="badge">3</span></div>
+        <div class="nav"><span class="ic">📊</span> Scorecard</div>
+        <div class="nav"><span class="ic">🚐</span> Flota</div>
+        <div class="nav"><span class="ic">👷</span> Conductores</div>
+        <div class="nav"><span class="ic">🗓️</span> Turnos</div>
+        <div class="spacer"></div>
+        <div class="nav"><span class="ic">⚙️</span> Ajustes</div>
+      </aside>
+      <div class="main">
+        <div class="top"><h2>Inspección #4821 · 1234-ABC</h2><div class="right"><span class="chip b">Pendiente de revisión</span><button class="btn ghost sm">‹ Anterior</button><button class="btn sm">Siguiente ›</button></div></div>
+        <div class="content">
+          <div class="row c-2-1">
+            <div class="panel">
+              <h3>📷 Fotos del conductor <span class="more">4 imágenes</span></h3>
+              <div class="photo" style="min-height:230px">
+                <span class="box-dmg" style="top:70px;left:120px;width:90px;height:56px"></span>
+                <span class="box-lbl" style="top:54px;left:120px">Arañazo · 94%</span>
+                <span class="box-dmg" style="top:150px;left:250px;width:54px;height:36px;border-color:var(--amber);box-shadow:none"></span>
+                <span class="box-lbl" style="top:134px;left:250px;background:var(--amber)">Abolladura · 71%</span>
+                Lateral izquierdo
+              </div>
+              <div class="legend"><span>🟥 Daño confirmado IA</span><span>🟧 Posible daño (revisar)</span><span>Pulsa una caja para ver detalle</span></div>
+              <div style="display:flex;gap:8px;margin-top:12px">
+                <div class="photo" style="flex:1;min-height:60px;font-size:11px">Frontal</div>
+                <div class="photo" style="flex:1;min-height:60px;font-size:11px">Trasera</div>
+                <div class="photo" style="flex:1;min-height:60px;font-size:11px">Lat. der.</div>
+                <div class="photo" style="flex:1;min-height:60px;font-size:11px">Techo</div>
+              </div>
+            </div>
+            <div>
+              <div class="panel" style="margin-bottom:16px">
+                <h3>🤖 Veredicto IA</h3>
+                <div style="font-size:13px;line-height:1.7">
+                  <div style="display:flex;justify-content:space-between"><span class="chip r">2 daños nuevos</span><span class="chip gray">0 preexistentes</span></div>
+                  <div style="margin-top:12px;color:var(--muted)">Responsable sugerido</div>
+                  <b>Carlos M. · turno 14/06 mañana</b>
+                  <div style="margin-top:10px;color:var(--muted)">Taller sugerido</div>
+                  <b>Chapa Vigo · 2,1 km · ⭐4,6</b>
+                  <div style="margin-top:10px;color:var(--muted)">Coste estimado reparación</div>
+                  <b style="color:var(--red)">≈ 320 €</b>
+                </div>
+              </div>
+              <div class="panel">
+                <h3>Acción</h3>
+                <button class="btn" style="width:100%;margin-bottom:8px">✓ Imputar al conductor</button>
+                <button class="btn ghost" style="width:100%;margin-bottom:8px">✎ Corregir daños</button>
+                <button class="btn ghost" style="width:100%">✕ Descartar (falso positivo)</button>
+                <p class="note" style="margin-top:12px">Cada corrección reentrena la asignación. La IA mejora con tu feedback.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 5. SCORECARD ============ -->
+  <div class="screen-title">05 · Scorecard de Amazon</div>
+  <p class="screen-desc">No solo muestra el scorecard: lo interpreta. Resalta la métrica débil que pone en riesgo el contrato y dice qué hacer. Predicción de la semana que viene incluida.</p>
+  <div class="browser">
+    <div class="chrome"><div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div><div class="url">app.flotadsp.com/scorecard</div></div>
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><span class="logo">🚐</span> FlotaDSP</div>
+        <div class="nav"><span class="ic">▢</span> Dashboard</div>
+        <div class="nav"><span class="ic">🔍</span> Inspecciones</div>
+        <div class="nav active"><span class="ic">📊</span> Scorecard</div>
+        <div class="nav"><span class="ic">🚐</span> Flota</div>
+        <div class="nav"><span class="ic">👷</span> Conductores</div>
+        <div class="spacer"></div>
+        <div class="nav"><span class="ic">⚙️</span> Ajustes</div>
+      </aside>
+      <div class="main">
+        <div class="top"><h2>Scorecard · Semana 24</h2><div class="right"><button class="btn ghost sm">⬆ Importar scorecard</button><button class="btn sm">Exportar PDF</button></div></div>
+        <div class="content">
+          <div class="row c4" style="margin-bottom:16px">
+            <div class="kpi"><div class="l">Estado general</div><div class="v" style="color:var(--green)">Fantastic</div></div>
+            <div class="kpi"><div class="l">DCR</div><div class="v">99,2%</div><div class="d up">▲ objetivo 98,5</div></div>
+            <div class="kpi"><div class="l">DNR DPMO</div><div class="v" style="color:var(--amber)">1.420</div><div class="d down">▼ ojo, sube</div></div>
+            <div class="kpi"><div class="l">Seatbelt</div><div class="v">100%</div><div class="d up">perfecto</div></div>
+          </div>
+          <div class="row c-2-1">
+            <div class="panel">
+              <h3>Métricas vs objetivo</h3>
+              <div style="font-size:13px">
+                <div class="list-item"><span style="width:130px">Delivered (DCR)</span><div style="flex:1" class="mini-bar"><i style="width:99%;background:var(--green)"></i></div><span class="chip g">99,2%</span></div>
+                <div class="list-item"><span style="width:130px">DNR DPMO</span><div style="flex:1" class="mini-bar"><i style="width:62%;background:var(--amber)"></i></div><span class="chip a">1.420</span></div>
+                <div class="list-item"><span style="width:130px">POD</span><div style="flex:1" class="mini-bar"><i style="width:97%;background:var(--green)"></i></div><span class="chip g">98,1%</span></div>
+                <div class="list-item"><span style="width:130px">Contact Compliance</span><div style="flex:1" class="mini-bar"><i style="width:95%;background:var(--green)"></i></div><span class="chip g">96,4%</span></div>
+              </div>
+            </div>
+            <div class="panel" style="background:linear-gradient(160deg,#fffbeb,#fff)">
+              <h3>⚠️ Foco de la semana</h3>
+              <p style="font-size:13px;color:var(--ink2)">El <b>DNR (no entregados)</b> es lo único que te aleja del máximo. Concentrado en la zona <b>Vigo-Norte</b>, turnos de tarde.</p>
+              <div style="margin-top:10px"><span class="chip b">Acción sugerida</span></div>
+              <p style="font-size:13px;margin-top:8px">Revisar 2 conductores con más DNR y reforzar formación POD.</p>
+              <hr style="border:none;border-top:1px solid var(--line);margin:14px 0">
+              <div style="font-size:13px;color:var(--muted)">Predicción semana 25</div>
+              <b style="color:var(--green)">Probable: se mantiene Fantastic</b>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 6. FLOTA ============ -->
+  <div class="screen-title">06 · Flota (lista con semáforo)</div>
+  <p class="screen-desc">Vista densa pero escaneable. Cada furgoneta con su estado de un vistazo (inspección, ITV, conductor asignado). Filtros y acción masiva arriba.</p>
+  <div class="browser">
+    <div class="chrome"><div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div><div class="url">app.flotadsp.com/flota</div></div>
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><span class="logo">🚐</span> FlotaDSP</div>
+        <div class="nav"><span class="ic">▢</span> Dashboard</div>
+        <div class="nav"><span class="ic">🔍</span> Inspecciones</div>
+        <div class="nav"><span class="ic">📊</span> Scorecard</div>
+        <div class="nav active"><span class="ic">🚐</span> Flota</div>
+        <div class="nav"><span class="ic">👷</span> Conductores</div>
+        <div class="spacer"></div>
+        <div class="nav"><span class="ic">⚙️</span> Ajustes</div>
+      </aside>
+      <div class="main">
+        <div class="top"><h2>Flota · 30 vehículos</h2><div class="right"><div class="search">🔎 Matrícula…</div><button class="btn sm">+ Añadir vehículo</button></div></div>
+        <div class="content">
+          <div style="display:flex;gap:8px;margin-bottom:14px"><span class="chip b">Todos 30</span><span class="chip gray">Activos 28</span><span class="chip a">En taller 2</span><span class="chip r">ITV próxima 2</span></div>
+          <div class="panel" style="padding:0">
+            <table>
+              <tr><th>Matrícula</th><th>Modelo</th><th>Conductor</th><th>Última inspección</th><th>ITV</th><th>Estado</th><th></th></tr>
+              <tr><td><b>1234-ABC</b></td><td>Ford Transit</td><td>Carlos M.</td><td><span class="chip g">Hoy · OK</span></td><td><span class="chip a">25/06</span></td><td><span class="chip g">Activo</span></td><td><button class="btn ghost sm">Ver</button></td></tr>
+              <tr><td><b>5678-DEF</b></td><td>MB Sprinter</td><td>Ana R.</td><td><span class="chip r">2 daños</span></td><td>12/11</td><td><span class="chip a">Taller</span></td><td><button class="btn ghost sm">Ver</button></td></tr>
+              <tr><td><b>9012-GHI</b></td><td>Ford Transit</td><td>Sin asignar</td><td><span class="chip g">Ayer · OK</span></td><td>03/09</td><td><span class="chip g">Activo</span></td><td><button class="btn ghost sm">Ver</button></td></tr>
+              <tr><td><b>3456-JKL</b></td><td>Renault Master</td><td>Luis P.</td><td><span class="chip gray">Sin inspección</span></td><td><span class="chip a">28/06</span></td><td><span class="chip g">Activo</span></td><td><button class="btn ghost sm">Ver</button></td></tr>
+              <tr><td><b>7890-MNO</b></td><td>MB Sprinter</td><td>Sara T.</td><td><span class="chip g">Hoy · OK</span></td><td>15/01</td><td><span class="chip g">Activo</span></td><td><button class="btn ghost sm">Ver</button></td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 7. AJUSTES / BILLING ============ -->
+  <div class="screen-title">07 · Suscripción y uso (billing)</div>
+  <p class="screen-desc">Transparencia total: qué plan, cuánta IA has gastado del mes y la próxima factura. El medidor de IA es clave — el cliente ve su consumo y tú proteges tu margen.</p>
+  <div class="browser">
+    <div class="chrome"><div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div><div class="url">app.flotadsp.com/ajustes/suscripcion</div></div>
+    <div class="app">
+      <aside class="side">
+        <div class="brand"><span class="logo">🚐</span> FlotaDSP</div>
+        <div class="nav"><span class="ic">▢</span> Dashboard</div>
+        <div class="nav"><span class="ic">🔍</span> Inspecciones</div>
+        <div class="nav"><span class="ic">📊</span> Scorecard</div>
+        <div class="nav"><span class="ic">🚐</span> Flota</div>
+        <div class="spacer"></div>
+        <div class="nav active"><span class="ic">⚙️</span> Ajustes</div>
+      </aside>
+      <div class="main">
+        <div class="top"><h2>Ajustes › Suscripción</h2></div>
+        <div class="content">
+          <div class="row c3" style="margin-bottom:16px">
+            <div class="kpi"><div class="l">Plan actual</div><div class="v" style="font-size:22px">Growth</div><span class="chip g" style="margin-top:6px">Activo</span></div>
+            <div class="kpi"><div class="l">Próxima factura</div><div class="v" style="font-size:22px">199 €</div><div class="d">1 jul · Visa ···· 4242</div></div>
+            <div class="kpi"><div class="l">Vehículos</div><div class="v" style="font-size:22px">28 / 30</div><div class="d">incluidos en el plan</div></div>
+          </div>
+          <div class="row c2">
+            <div class="panel">
+              <h3>⚡ Uso de IA este mes</h3>
+              <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px"><span>612 inspecciones</span><b>de 900 incluidas</b></div>
+              <div class="mini-bar" style="height:14px"><i style="width:68%"></i></div>
+              <p style="font-size:12px;color:var(--muted);margin-top:10px">Al llegar al 90% te avisamos. Si lo superas, +0,15 €/inspección extra (sin cortes de servicio).</p>
+            </div>
+            <div class="panel">
+              <h3>Gestionar</h3>
+              <button class="btn ghost" style="width:100%;margin-bottom:8px">Cambiar de plan</button>
+              <button class="btn ghost" style="width:100%;margin-bottom:8px">Actualizar método de pago</button>
+              <button class="btn ghost" style="width:100%">Descargar facturas</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 8. MOBILE DRIVER ============ -->
+  <div class="screen-title">08 · App del conductor (móvil)</div>
+  <p class="screen-desc">El conductor no necesita un panel: necesita fichar y hacer fotos rápido. Diseño móvil, pocos botones grandes, guiado paso a paso. Aquí es donde nacen los datos de toda la plataforma.</p>
+  <div class="row c3" style="align-items:start">
+    <div>
+      <p style="text-align:center;font-size:12px;font-weight:700;color:var(--brand);margin-bottom:10px">INICIO CONDUCTOR</p>
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="ph-body">
+          <div class="ph-top"><div class="avatar">CM</div><div><b style="font-size:14px">Hola, Carlos</b><div style="font-size:11px;color:var(--muted)">Turno mañana · 14/06</div></div></div>
+          <div class="ph-card" style="background:var(--brandbg);border-color:#c9d2f7">
+            <div style="font-size:12px;color:var(--brand);font-weight:700">TU VEHÍCULO HOY</div>
+            <b style="font-size:20px">1234-ABC</b>
+            <div style="font-size:12px;color:var(--muted)">Ford Transit · Plaza 12</div>
+          </div>
+          <button class="btn" style="width:100%;padding:14px;font-size:15px;margin-bottom:10px">📷 Inspección de salida</button>
+          <button class="btn ghost" style="width:100%;padding:12px">🅿️ Inspección de entrada</button>
+          <div class="ph-card" style="margin-top:12px"><div style="font-size:12px;color:var(--muted)">Estado de hoy</div><span class="chip g">✓ Sin daños registrados</span></div>
+        </div>
+        <div class="tabbar"><div class="t on"><span class="ic">🏠</span>Inicio</div><div class="t"><span class="ic">📷</span>Inspección</div><div class="t"><span class="ic">🗓️</span>Turnos</div><div class="t"><span class="ic">👤</span>Perfil</div></div>
+      </div>
+    </div>
+    <div>
+      <p style="text-align:center;font-size:12px;font-weight:700;color:var(--brand);margin-bottom:10px">CAPTURA GUIADA</p>
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="ph-body">
+          <div class="step"><i class="on"></i><i class="on"></i><i></i><i></i></div>
+          <b style="font-size:15px">Foto 2 de 4 · Lateral izquierdo</b>
+          <p style="font-size:12px;color:var(--muted);margin:4px 0 12px">Encuadra todo el lateral. La IA detectará los daños automáticamente.</p>
+          <div class="cam">
+            <span>📷 Cámara</span>
+            <div style="position:absolute;inset:14px;border:2px dashed #46577d;border-radius:10px"></div>
+            <div class="shutter"></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:12px"><div class="thumb" style="width:50px;height:40px"></div><div class="thumb" style="width:50px;height:40px;border:2px solid var(--brand)"></div><div class="thumb" style="width:50px;height:40px;opacity:.4"></div><div class="thumb" style="width:50px;height:40px;opacity:.4"></div></div>
+        </div>
+        <div class="tabbar"><div class="t"><span class="ic">🏠</span>Inicio</div><div class="t on"><span class="ic">📷</span>Inspección</div><div class="t"><span class="ic">🗓️</span>Turnos</div><div class="t"><span class="ic">👤</span>Perfil</div></div>
+      </div>
+    </div>
+    <div>
+      <p style="text-align:center;font-size:12px;font-weight:700;color:var(--brand);margin-bottom:10px">RESULTADO IA</p>
+      <div class="phone">
+        <div class="notch"></div>
+        <div class="ph-body">
+          <div style="text-align:center;margin-bottom:10px"><span class="chip a" style="font-size:13px;padding:6px 14px">⚠️ 1 daño detectado</span></div>
+          <div class="cam" style="height:150px"><span class="box-dmg" style="top:50px;left:70px;width:70px;height:44px"></span><span class="box-lbl" style="top:34px;left:70px">Arañazo</span>Lateral izq.</div>
+          <div class="ph-card" style="margin-top:12px">
+            <div style="font-size:12px;color:var(--muted)">La IA encontró</div>
+            <b style="font-size:14px">Arañazo lateral · confianza 94%</b>
+            <p style="font-size:12px;color:var(--muted);margin:8px 0 0">¿Ya estaba antes de tu turno?</p>
+            <div style="display:flex;gap:8px;margin-top:8px"><button class="btn ghost sm" style="flex:1">Sí, ya estaba</button><button class="btn sm" style="flex:1">No, es nuevo</button></div>
+          </div>
+          <button class="btn" style="width:100%;padding:12px;margin-top:10px">Enviar inspección ✓</button>
+        </div>
+        <div class="tabbar"><div class="t"><span class="ic">🏠</span>Inicio</div><div class="t on"><span class="ic">📷</span>Inspección</div><div class="t"><span class="ic">🗓️</span>Turnos</div><div class="t"><span class="ic">👤</span>Perfil</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 9. SUPERADMIN ============ -->
+  <div class="screen-title">09 · Panel superadmin (tú, dueño del SaaS)</div>
+  <p class="screen-desc">Tu vista interna para gestionar todos los DSPs clientes: estado de cada cuenta, su consumo de IA (= tu coste) y MRR total. Aquí controlas el negocio.</p>
+  <div class="browser">
+    <div class="chrome"><div class="dots"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div><div class="url">admin.flotadsp.com</div></div>
+    <div class="app">
+      <aside class="side" style="background:#1a1030">
+        <div class="brand"><span class="logo" style="background:linear-gradient(135deg,#7c3aed,#db2777)">★</span> Superadmin</div>
+        <div class="nav active"><span class="ic">🏢</span> Clientes</div>
+        <div class="nav"><span class="ic">💰</span> Ingresos</div>
+        <div class="nav"><span class="ic">⚡</span> Uso de IA</div>
+        <div class="nav"><span class="ic">🛟</span> Soporte</div>
+        <div class="spacer"></div>
+        <div class="org">Conectado como<b>Owner</b></div>
+      </aside>
+      <div class="main">
+        <div class="top"><h2>Clientes (tenants)</h2><div class="right"><span class="chip g">MRR 9.340 €</span><span class="chip b">41 activos</span></div></div>
+        <div class="content">
+          <div class="row c4" style="margin-bottom:16px">
+            <div class="kpi"><div class="l">MRR</div><div class="v" style="font-size:22px">9.340 €</div><div class="d up">▲ +12% mes</div></div>
+            <div class="kpi"><div class="l">Clientes activos</div><div class="v" style="font-size:22px">41</div></div>
+            <div class="kpi"><div class="l">En prueba</div><div class="v" style="font-size:22px;color:var(--amber)">6</div></div>
+            <div class="kpi"><div class="l">Coste IA (mes)</div><div class="v" style="font-size:22px;color:var(--red)">1.180 €</div><div class="d">margen ~87%</div></div>
+          </div>
+          <div class="panel" style="padding:0">
+            <table>
+              <tr><th>Empresa</th><th>Plan</th><th>Vehículos</th><th>Uso IA</th><th>Estado</th><th>MRR</th></tr>
+              <tr><td><b>Transportes García SL</b></td><td>Growth</td><td>28</td><td><div class="mini-bar" style="width:90px"><i style="width:68%"></i></div></td><td><span class="chip g">Activo</span></td><td>199 €</td></tr>
+              <tr><td><b>Reparto Norte SL</b></td><td>Pro</td><td>54</td><td><div class="mini-bar" style="width:90px"><i style="width:82%;background:var(--amber)"></i></div></td><td><span class="chip g">Activo</span></td><td>349 €</td></tr>
+              <tr><td><b>Logística Sur</b></td><td>Starter</td><td>9</td><td><div class="mini-bar" style="width:90px"><i style="width:40%"></i></div></td><td><span class="chip a">Prueba · 6 días</span></td><td>—</td></tr>
+              <tr><td><b>DSP Levante</b></td><td>Growth</td><td>31</td><td><div class="mini-bar" style="width:90px"><i style="width:95%;background:var(--red)"></i></div></td><td><span class="chip r">Impago</span></td><td>199 €</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p style="margin-top:50px;font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding-top:20px">
+    <b>Nota:</b> mockups de diseño para discusión, hechos en HTML/CSS (no son la app real ni capturas). Los datos son de ejemplo. La eficiencia del diseño se basa en: jerarquía clara, acciones de un clic, separación admin-escritorio / conductor-móvil, y un medidor de consumo de IA visible para proteger tu margen.
+  </p>
+</div>
+</body>
+</html>
