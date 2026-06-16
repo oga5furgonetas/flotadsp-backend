@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlotaDSP · Estrategia SaaS para DSPs de Amazon</title>
+<style>
+  :root{
+    --ink:#0e1726; --ink2:#334155; --muted:#64748b; --line:#e2e8f0;
+    --bg:#f6f8fb; --card:#ffffff; --brand:#2563eb; --brand2:#1d4ed8;
+    --green:#16a34a; --greenbg:#dcfce7; --amber:#d97706; --amberbg:#fef3c7;
+    --red:#dc2626; --redbg:#fee2e2; --purple:#7c3aed; --purplebg:#ede9fe;
+    --teal:#0d9488; --tealbg:#ccfbf1; --slate:#475569;
+    --radius:16px; --shadow:0 1px 3px rgba(15,23,42,.08),0 8px 24px rgba(15,23,42,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink);background:var(--bg);line-height:1.6;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  h1,h2,h3,h4{line-height:1.2;margin:0 0 .4em}
+  h2{font-size:30px;letter-spacing:-.02em}
+  h3{font-size:20px}
+  p{margin:0 0 1em}
+  small{color:var(--muted)}
+  .tag{display:inline-block;font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+    padding:4px 10px;border-radius:999px;background:var(--brand);color:#fff}
+  section{padding:62px 0;border-bottom:1px solid var(--line)}
+  .lead{font-size:18px;color:var(--ink2);max-width:760px}
+  .grid{display:grid;gap:18px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:860px){.g2,.g3,.g4{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow)}
+  .kicker{font-size:13px;font-weight:700;color:var(--brand);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+  .pill{display:inline-block;font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;margin:2px 2px 2px 0}
+  .pill.g{background:var(--greenbg);color:var(--green)}
+  .pill.a{background:var(--amberbg);color:var(--amber)}
+  .pill.r{background:var(--redbg);color:var(--red)}
+  .pill.p{background:var(--purplebg);color:var(--purple)}
+  .pill.t{background:var(--tealbg);color:var(--teal)}
+  table{width:100%;border-collapse:collapse;font-size:14px;background:var(--card);border-radius:12px;overflow:hidden}
+  th,td{text-align:left;padding:11px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f1f5f9;font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--slate)}
+  tr:last-child td{border-bottom:none}
+  .hero{background:linear-gradient(160deg,#0b1220 0%,#12203b 55%,#1d3a6e 100%);color:#fff;border-bottom:none}
+  .hero h1{font-size:46px;letter-spacing:-.03em;margin-bottom:.2em}
+  .hero p{color:#c7d2e3;font-size:19px;max-width:720px}
+  .hero .meta{margin-top:26px;display:flex;gap:26px;flex-wrap:wrap;color:#93a4be;font-size:14px}
+  .hero .meta b{color:#fff;display:block;font-size:22px}
+  .num{font-size:40px;font-weight:800;letter-spacing:-.02em;color:var(--brand)}
+  .num.green{color:var(--green)} .num.red{color:var(--red)} .num.purple{color:var(--purple)}
+  .flow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0}
+  .node{background:#fff;border:2px solid var(--line);border-radius:12px;padding:10px 14px;font-size:13px;font-weight:600;text-align:center;min-width:96px}
+  .node.b{border-color:var(--brand);color:var(--brand2)}
+  .node.g{border-color:var(--green);color:var(--green)}
+  .node.p{border-color:var(--purple);color:var(--purple)}
+  .arrow{color:var(--muted);font-weight:800;font-size:18px}
+  .price{display:flex;flex-direction:column;height:100%}
+  .price .amt{font-size:36px;font-weight:800;letter-spacing:-.02em}
+  .price .amt span{font-size:15px;font-weight:600;color:var(--muted)}
+  .price ul{list-style:none;padding:0;margin:14px 0 0;font-size:14px}
+  .price li{padding:7px 0;border-top:1px solid var(--line);display:flex;gap:8px}
+  .price li:before{content:"✓";color:var(--green);font-weight:800}
+  .price.feat{border:2px solid var(--brand);position:relative}
+  .price.feat:before{content:"MÁS POPULAR";position:absolute;top:-12px;left:50%;transform:translateX(-50%);
+    background:var(--brand);color:#fff;font-size:11px;font-weight:700;padding:3px 12px;border-radius:999px;letter-spacing:.05em}
+  .mock{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff;box-shadow:var(--shadow)}
+  .mock .bar{background:#0e1726;color:#fff;padding:9px 14px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px}
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+  .mock .body{padding:16px;display:grid;gap:12px}
+  .stat{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:12px}
+  .stat .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .stat .v{font-size:22px;font-weight:800;margin-top:2px}
+  .bar-row{display:flex;align-items:center;gap:10px;font-size:13px;margin:6px 0}
+  .bar-track{flex:1;height:10px;background:#eef2f7;border-radius:999px;overflow:hidden}
+  .bar-fill{height:100%;border-radius:999px}
+  .timeline{position:relative;padding-left:28px}
+  .timeline:before{content:"";position:absolute;left:9px;top:6px;bottom:6px;width:3px;background:var(--line)}
+  .phase{position:relative;margin-bottom:22px}
+  .phase:before{content:"";position:absolute;left:-23px;top:4px;width:14px;height:14px;border-radius:50%;background:var(--brand);border:3px solid #fff;box-shadow:0 0 0 2px var(--brand)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--slate);margin-top:8px}
+  .legend span{display:flex;align-items:center;gap:6px}
+  .sw{width:12px;height:12px;border-radius:3px;display:inline-block}
+  .callout{border-left:4px solid var(--brand);background:#eff6ff;padding:14px 18px;border-radius:0 10px 10px 0;margin:14px 0}
+  .callout.warn{border-color:var(--amber);background:#fffbeb}
+  .callout.danger{border-color:var(--red);background:#fef2f2}
+  .toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .toc a{font-size:13px;text-decoration:none;color:var(--ink2);background:#fff;border:1px solid var(--line);padding:6px 12px;border-radius:999px}
+  .foot{padding:40px 0;color:var(--muted);font-size:13px}
+  .checklist li{margin-bottom:7px}
+  .archbox{border:2px dashed var(--line);border-radius:14px;padding:16px;background:#fbfdff}
+  .layer{background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0;font-size:13px}
+  .layer b{display:block;font-size:14px;color:var(--ink)}
+  .badge-new{background:var(--greenbg);color:var(--green);font-size:10px;font-weight:800;padding:2px 6px;border-radius:6px;letter-spacing:.04em}
+  .src{font-size:12px;color:var(--muted)}
+  .src a{color:var(--brand)}
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<header class="hero">
+  <div class="wrap" style="padding-top:64px;padding-bottom:64px">
+    <span class="tag">Estrategia de producto · v1</span>
+    <h1>De herramienta interna<br>a SaaS para DSPs de Amazon</h1>
+    <p>Cómo convertir FlotaDSP (hoy un backend a medida para tu flota) en un producto de membresía que otros Delivery Service Partners paguen cada mes. Análisis realista: lo que ya tienes, lo que falta de verdad, y cómo monetizarlo.</p>
+    <div class="meta">
+      <div><b>~4.500</b>DSPs Amazon en el mundo<sup>1</sup></div>
+      <div><b>20–40</b>furgonetas por DSP<sup>1</sup></div>
+      <div><b>136</b>endpoints ya construidos</div>
+      <div><b>0</b>de multi-tenancy hoy</div>
+    </div>
+    <div class="toc">
+      <a href="#resumen">Resumen</a>
+      <a href="#problema">Problema</a>
+      <a href="#mercado">Mercado real</a>
+      <a href="#estado">Estado actual</a>
+      <a href="#gaps">Qué falta</a>
+      <a href="#arquitectura">Arquitectura</a>
+      <a href="#precios">Precios</a>
+      <a href="#economics">Márgenes</a>
+      <a href="#mockups">Mockups</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="#gtm">Captación</a>
+      <a href="#riesgos">Riesgos</a>
+      <a href="#siguiente">Siguientes pasos</a>
+    </div>
+  </div>
+</header>
+
+<!-- RESUMEN EJECUTIVO -->
+<section id="resumen">
+  <div class="wrap">
+    <div class="kicker">Resumen ejecutivo</div>
+    <h2>La idea en una frase</h2>
+    <p class="lead">Tienes algo que casi nadie tiene: un backend que ya resuelve los dolores reales de un DSP (inspección de daños con IA, scorecard de Amazon, turnos, ITV/renting, talleres). Eso es el 60% del trabajo de producto. El 40% que falta es lo que separa "mi herramienta" de "un SaaS que se vende": <b>multi-tenant, autoservicio, cobros, frontend y cumplimiento</b>.</p>
+    <div class="grid g3" style="margin-top:18px">
+      <div class="card">
+        <div class="num green">≈60%</div>
+        <h3>Ya construido</h3>
+        <p>La lógica de negocio difícil. 136 endpoints, IA de daños, scorecard, turnos, alertas ITV/renting, PDFs. Esto es tu foso defensivo.</p>
+      </div>
+      <div class="card">
+        <div class="num red">≈40%</div>
+        <h3>Lo que falta</h3>
+        <p>Aislamiento de datos por cliente, registro autoservicio, facturación recurrente, panel de cliente y un frontend vendible.</p>
+      </div>
+      <div class="card">
+        <div class="num purple">3–6 meses</div>
+        <h3>A un MVP cobrable</h3>
+        <p>Realista para 1–2 personas a tiempo completo, reutilizando el backend actual. No semanas.</p>
+      </div>
+    </div>
+    <div class="callout">
+      <b>Tesis honesta:</b> el mercado de DSPs en España es pequeño (cientos, no miles). FlotaDSP puede ser un negocio rentable de nicho (bootstrap, decenas de miles de € de ingresos recurrentes), pero para que sea "grande" tendrás que salir de España o de Amazon. Esto no es un cohete a unicornio; es un negocio de software sólido y defendible si lo ejecutas bien.
+    </div>
+  </div>
+</section>
+
+<!-- PROBLEMA -->
+<section id="problema">
+  <div class="wrap">
+    <div class="kicker">El cliente</div>
+    <h2>¿Por qué un DSP pagaría por esto?</h2>
+    <p class="lead">Un DSP gana o pierde dinero según su <b>scorecard de Amazon</b> y según cuánto le cuesten los <b>daños de furgonetas</b> y la <b>rotación de conductores</b>. Tu producto toca justo esos tres nervios.</p>
+    <div class="grid g3" style="margin-top:18px">
+      <div class="card">
+        <h3>💸 Daños no imputados</h3>
+        <p>Cada golpe sin parte cuesta caro al renting. Tu IA detecta daños en la entrega/recogida y <b>asigna responsabilidad al conductor</b>. Eso es dinero directo recuperado.</p>
+        <span class="pill g">Ahorro medible</span>
+      </div>
+      <div class="card">
+        <h3>📊 Scorecard de Amazon</h3>
+        <p>El scorecard decide rutas, bonus y continuidad. Centralizas, predices y atacas las métricas débiles antes de que Amazon penalice.</p>
+        <span class="pill g">Riesgo de contrato</span>
+      </div>
+      <div class="card">
+        <h3>🧩 Caos operativo</h3>
+        <p>Turnos, ITV, renting, asignación de vehículos, talleres. Hoy lo llevan en Excel y WhatsApp. Tú lo unificas.</p>
+        <span class="pill g">Tiempo ahorrado</span>
+      </div>
+    </div>
+    <div class="callout">
+      <b>El gancho de venta:</b> "Si esta herramienta te ayuda a imputar <i>un solo</i> daño al mes o a no perder rutas por un scorecard malo, ya se ha pagado." Ese ROI tangible es lo que hace vendible un SaaS B2B de nicho.
+    </div>
+  </div>
+</section>
+
+<!-- MERCADO -->
+<section id="mercado">
+  <div class="wrap">
+    <div class="kicker">Mercado real — sin inflar</div>
+    <h2>TAM / SAM / SOM con los pies en la tierra</h2>
+    <p class="lead">Números basados en datos públicos de Amazon. Donde no hay dato oficial, lo marco como <b>estimación</b>. Prefiero quedarme corto que venderte humo.</p>
+
+    <div class="grid g3" style="margin-top:18px">
+      <div class="card">
+        <small>TAM — Total</small>
+        <div class="num">~4.500</div>
+        <p>DSPs de Amazon en el mundo (US, Canadá, UK, España, Alemania, etc.).<sup>1</sup> A 20–40 furgonetas cada uno.</p>
+      </div>
+      <div class="card">
+        <small>SAM — Alcanzable (España + idioma ES)</small>
+        <div class="num">~150–300</div>
+        <p><span class="pill a">estimación</span> DSPs operando en España. No hay cifra oficial publicada; se estima por el tamaño del mercado.</p>
+      </div>
+      <div class="card">
+        <small>SOM — Realista a 24 meses</small>
+        <div class="num green">30–80</div>
+        <p>Clientes de pago alcanzables siendo honestos sobre un producto nuevo, sin equipo comercial grande.</p>
+      </div>
+    </div>
+
+    <h3 style="margin-top:30px">Traducción a ingresos (escenarios)</h3>
+    <table>
+      <tr><th>Escenario</th><th>Clientes de pago</th><th>Ticket medio/mes</th><th>MRR</th><th>ARR</th></tr>
+      <tr><td>Conservador (año 1)</td><td>20</td><td>180 €</td><td>3.600 €</td><td>~43.000 €</td></tr>
+      <tr><td>Base (año 2)</td><td>60</td><td>220 €</td><td>13.200 €</td><td>~158.000 €</td></tr>
+      <tr><td>Optimista (año 2–3, + otros países/flotas)</td><td>150</td><td>250 €</td><td>37.500 €</td><td>~450.000 €</td></tr>
+    </table>
+    <p class="src" style="margin-top:10px"><sup>1</sup> Fuentes: Amazon (aboutamazon.com / aboutamazon.eu), 2024–2025 — programa DSP, ~4.500 socios, 20–40 furgonetas por DSP, +10.000 furgonetas eléctricas en Europa a finales de 2025. <a href="https://www.aboutamazon.com/news/transportation/amazon-delivery-service-partner-investment-safety-ai-tools">[ref]</a>. <i>Contenido reformulado para cumplir restricciones de licencia.</i></p>
+    <div class="callout warn">
+      <b>Realidad incómoda:</b> el techo en España solo es bajo. Para crecer de verdad necesitas (a) abrir a DSPs de UK/Alemania/Italia, o (b) abrir a flotas de reparto NO-Amazon (last-mile genérico, mensajería, talleres). El producto da para ambas, pero son esfuerzos distintos.
+    </div>
+  </div>
+</section>
+
+<!-- ESTADO ACTUAL -->
+<section id="estado">
+  <div class="wrap">
+    <div class="kicker">Punto de partida — sin complacencia</div>
+    <h2>Qué es FlotaDSP hoy, de verdad</h2>
+    <p class="lead">Es un backend potente y monolítico diseñado para <b>una sola empresa: la tuya</b>. Funciona, pero arquitectónicamente está a una distancia real de ser un SaaS.</p>
+    <div class="grid g2" style="margin-top:18px">
+      <div class="card">
+        <h3 style="color:var(--green)">✅ Lo que está bien</h3>
+        <ul class="checklist">
+          <li>FastAPI + MongoDB async (Motor), bien usado</li>
+          <li>136 endpoints cubriendo todo el dominio DSP</li>
+          <li>IA de daños (Gemini) con prompt forense serio</li>
+          <li>Scorecard de Amazon: import, predicción, standings</li>
+          <li>JWT + bcrypt, índices Mongo, healthcheck en Fly.io</li>
+          <li>Almacenamiento R2 con fallback a local</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3 style="color:var(--red)">⛔ Lo que bloquea venderlo</h3>
+        <ul class="checklist">
+          <li><b>Single-tenant:</b> 0 referencias a tenant/empresa/suscripción</li>
+          <li><b>Sin frontend</b> en este repo (solo API)</li>
+          <li><b>Sin cobros</b> (no hay Stripe ni planes)</li>
+          <li><b>Sin registro autoservicio</b> (admin "Mery" hardcodeado)</li>
+          <li><b>Sin metering de IA</b> (Gemini es coste directo)</li>
+          <li>Monolito de <b>10.100 líneas</b> en un archivo</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout danger">
+      <b>🔒 Seguridad urgente (antes de cualquier estrategia):</b> el repo tuvo la contraseña del admin en texto plano (<code>ogsan2024</code>) y estuvo público. Cámbiala ya, sácala del código, y vuelve el repo privado. Un SaaS que filtra credenciales en el primer día no se recupera de eso.
+    </div>
+  </div>
+</section>
+
+<!-- GAP ANALYSIS -->
+<section id="gaps">
+  <div class="wrap">
+    <div class="kicker">Gap analysis exhaustivo</div>
+    <h2>Todo lo que falta para cobrar membresías</h2>
+    <p class="lead">Inventario honesto, ordenado por severidad. "Esfuerzo" asume 1–2 devs reutilizando el backend actual.</p>
+    <div class="legend" style="margin-bottom:14px">
+      <span><i class="sw" style="background:var(--red)"></i> Bloqueante</span>
+      <span><i class="sw" style="background:var(--amber)"></i> Importante</span>
+      <span><i class="sw" style="background:var(--green)"></i> Mejora</span>
+    </div>
+    <table>
+      <tr><th>Área</th><th>Hoy</th><th>Necesario para SaaS</th><th>Sev.</th><th>Esfuerzo</th></tr>
+      <tr><td><b>Multi-tenancy</b></td><td>Inexistente</td><td><code>tenant_id</code> en TODAS las colecciones + aislamiento forzado en cada query</td><td><span class="pill r">Bloq.</span></td><td>Alto</td></tr>
+      <tr><td><b>Registro / onboarding</b></td><td>Admin hardcodeado</td><td>Alta de empresa autoservicio, verificación email, provisión de tenant</td><td><span class="pill r">Bloq.</span></td><td>Medio</td></tr>
+      <tr><td><b>Facturación</b></td><td>Nada</td><td>Stripe: planes, trial, prorrateo, impuestos (IVA), dunning, portal de cliente</td><td><span class="pill r">Bloq.</span></td><td>Medio-Alto</td></tr>
+      <tr><td><b>Frontend de producto</b></td><td>No existe aquí</td><td>App web (dashboard, inspecciones, scorecard, ajustes, billing) + app conductor</td><td><span class="pill r">Bloq.</span></td><td>Muy alto</td></tr>
+      <tr><td><b>Gestión de usuarios</b></td><td>Roles admin/driver globales</td><td>Roles por empresa, invitaciones, permisos, multi-admin</td><td><span class="pill a">Imp.</span></td><td>Medio</td></tr>
+      <tr><td><b>Metering de IA</b></td><td>Sin límites</td><td>Contador de inspecciones/IA por tenant, cuotas por plan, corte/aviso al superar</td><td><span class="pill a">Imp.</span></td><td>Medio</td></tr>
+      <tr><td><b>GDPR / legal</b></td><td>No abordado</td><td>DPA, política de privacidad, retención de fotos, consentimiento conductor, subprocesadores</td><td><span class="pill a">Imp.</span></td><td>Medio</td></tr>
+      <tr><td><b>Aislamiento de ficheros</b></td><td>R2 sin prefijo por cliente</td><td>Prefijo <code>tenant_id/</code> en R2 + URLs firmadas, no públicas</td><td><span class="pill a">Imp.</span></td><td>Bajo</td></tr>
+      <tr><td><b>Observabilidad</b></td><td>Logs básicos</td><td>Sentry, métricas por tenant, alertas de errores y de coste IA</td><td><span class="pill a">Imp.</span></td><td>Bajo</td></tr>
+      <tr><td><b>Panel superadmin</b></td><td>No existe</td><td>Ver tenants, suspender, ver uso, soporte, impersonar</td><td><span class="pill a">Imp.</span></td><td>Medio</td></tr>
+      <tr><td><b>Refactor del monolito</b></td><td>1 archivo 10k líneas</td><td>Modularizar (routers/services/models) para poder evolucionar sin romper</td><td><span class="pill g">Mejora</span></td><td>Alto</td></tr>
+      <tr><td><b>Tests + CI</b></td><td>Ninguno</td><td>Tests de aislamiento de tenant (críticos), auth, billing; CI en cada push</td><td><span class="pill a">Imp.</span></td><td>Medio</td></tr>
+      <tr><td><b>Onboarding de datos</b></td><td>Manual/seed</td><td>Importadores guiados (flota, conductores, scorecard) self-service</td><td><span class="pill g">Mejora</span></td><td>Medio</td></tr>
+    </table>
+    <div class="callout">
+      <b>El test que nunca puede fallar:</b> "la empresa A jamás ve datos de la empresa B". En un SaaS multi-tenant, una fuga de datos entre clientes es el fin del negocio. Por eso el aislamiento por <code>tenant_id</code> debe ir <i>forzado a nivel de capa de datos</i>, no confiado a cada endpoint.
+    </div>
+  </div>
+</section>
+
+<!-- ARQUITECTURA -->
+<section id="arquitectura">
+  <div class="wrap">
+    <div class="kicker">Arquitectura objetivo</div>
+    <h2>De single-tenant a SaaS multi-tenant</h2>
+
+    <h3 style="margin-top:14px">Hoy</h3>
+    <div class="flow">
+      <div class="node">App / Postman</div>
+      <span class="arrow">→</span>
+      <div class="node b">server.py<br><small>monolito 10k</small></div>
+      <span class="arrow">→</span>
+      <div class="node">MongoDB<br><small>1 empresa</small></div>
+      <span class="arrow">→</span>
+      <div class="node">R2 / Gemini</div>
+    </div>
+
+    <h3 style="margin-top:24px">Objetivo</h3>
+    <div class="archbox">
+      <div class="layer" style="border-color:var(--brand)">
+        <b>Frontend <span class="badge-new">NUEVO</span></b>
+        Web app (admin DSP) · App conductor (PWA/móvil) · Página pública + signup + pricing
+      </div>
+      <div style="text-align:center;color:var(--muted);font-weight:800">↓ JWT con <code>tenant_id</code> ↓</div>
+      <div class="layer" style="border-color:var(--brand)">
+        <b>Capa de identidad y tenant <span class="badge-new">NUEVO</span></b>
+        Signup empresa → crea tenant · Login · Invitaciones · Roles por org · Middleware que inyecta <code>tenant_id</code>
+      </div>
+      <div class="layer">
+        <b>API de negocio (tu backend, modularizado)</b>
+        Inspecciones · Scorecard · Turnos · Vehículos · Talleres · Alertas — <i>todo filtrado por tenant</i>
+      </div>
+      <div class="grid g3" style="margin-top:8px">
+        <div class="layer" style="margin:0;border-color:var(--purple)"><b>Billing <span class="badge-new">NUEVO</span></b>Stripe · planes · cuotas · webhooks</div>
+        <div class="layer" style="margin:0"><b>Datos</b>MongoDB con <code>tenant_id</code> indexado en cada colección</div>
+        <div class="layer" style="margin:0"><b>Ficheros / IA</b>R2 con prefijo <code>tenant_id/</code> · Gemini con metering</div>
+      </div>
+      <div class="layer" style="border-color:var(--teal);margin-top:8px">
+        <b>Superadmin + Observabilidad <span class="badge-new">NUEVO</span></b>
+        Gestión de tenants · uso y coste IA por cliente · Sentry · backups
+      </div>
+    </div>
+
+    <h3 style="margin-top:24px">Modelo de datos: la decisión clave</h3>
+    <div class="grid g3">
+      <div class="card">
+        <h4>A · BD compartida + <code>tenant_id</code></h4>
+        <p><span class="pill g">Recomendado para empezar</span></p>
+        <p>Una columna/campo <code>tenant_id</code> en cada documento. Más barato y simple. Riesgo: una query mal filtrada = fuga. Se mitiga con capa de acceso obligatoria.</p>
+      </div>
+      <div class="card">
+        <h4>B · BD por tenant</h4>
+        <p><span class="pill a">Más adelante</span></p>
+        <p>Aislamiento físico fuerte, ideal para clientes grandes/enterprise. Más coste operativo y de backups. Útil cuando haya clientes que lo exijan.</p>
+      </div>
+      <div class="card">
+        <h4>C · Híbrido</h4>
+        <p><span class="pill p">Largo plazo</span></p>
+        <p>Pool compartido para pequeños + BD dedicada para enterprise. Lo que hacen muchos SaaS maduros.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PRECIOS -->
+<section id="precios">
+  <div class="wrap">
+    <div class="kicker">Modelo de membresía</div>
+    <h2>Planes y precios propuestos</h2>
+    <p class="lead">Pricing por tramos de flota (alinea precio con valor y con tu coste de IA). Cifras de partida para validar con clientes reales — no las tomes como sagradas.</p>
+    <div class="grid g4" style="margin-top:18px">
+      <div class="card price">
+        <h3>Starter</h3>
+        <div class="amt">79 €<span>/mes</span></div>
+        <small>Hasta 10 vehículos</small>
+        <ul>
+          <li>Inspección IA (cuota baja)</li>
+          <li>Scorecard básico</li>
+          <li>Alertas ITV/renting</li>
+          <li>1 admin · 10 conductores</li>
+        </ul>
+      </div>
+      <div class="card price feat">
+        <h3>Growth</h3>
+        <div class="amt">199 €<span>/mes</span></div>
+        <small>Hasta 30 vehículos</small>
+        <ul>
+          <li>Todo Starter +</li>
+          <li>IA sin cuota práctica</li>
+          <li>Scorecard predictivo</li>
+          <li>Turnos + asignación</li>
+          <li>Multi-admin · talleres</li>
+        </ul>
+      </div>
+      <div class="card price">
+        <h3>Pro</h3>
+        <div class="amt">349 €<span>/mes</span></div>
+        <small>Hasta 60 vehículos · multi-centro</small>
+        <ul>
+          <li>Todo Growth +</li>
+          <li>Multi-centro</li>
+          <li>Informes PDF marca propia</li>
+          <li>Integración Telegram</li>
+          <li>Soporte prioritario</li>
+        </ul>
+      </div>
+      <div class="card price">
+        <h3>Enterprise</h3>
+        <div class="amt">A medida</div>
+        <small>+60 vehículos / varios DSP</small>
+        <ul>
+          <li>BD dedicada opcional</li>
+          <li>SLA y onboarding</li>
+          <li>Funciones a medida</li>
+          <li>Facturación anual</li>
+        </ul>
+      </div>
+    </div>
+    <div class="grid g2" style="margin-top:18px">
+      <div class="callout">
+        <b>Alternativa por furgoneta:</b> 6–8 €/vehículo/mes con mínimo mensual. Más justo y escala con el cliente. Un DSP de 30 furgos ≈ 180–240 €/mes (coherente con el plan Growth).
+      </div>
+      <div class="callout warn">
+        <b>Palancas extra de ingreso:</b> setup/onboarding único (199–499 €), módulo de informes de daños para renting, exportaciones, y posible <i>add-on</i> de almacenamiento de fotos a largo plazo.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- UNIT ECONOMICS -->
+<section id="economics">
+  <div class="wrap">
+    <div class="kicker">Unit economics — la parte que la gente ignora</div>
+    <h2>¿Esto deja margen de verdad?</h2>
+    <p class="lead">La trampa de tu producto es la IA: <b>cada inspección con Gemini cuesta dinero real</b>. Si no lo mides y lo tarificas, un cliente intensivo te come el margen. Ejemplo con un DSP tipo en plan Growth (199 €/mes).</p>
+    <div class="grid g2" style="margin-top:18px">
+      <div class="card">
+        <h3>Coste mensual estimado por cliente (COGS)</h3>
+        <table style="box-shadow:none">
+          <tr><th>Concepto</th><th>Estimación</th></tr>
+          <tr><td>IA Gemini (≈900 inspecciones/mes, visión)</td><td>~10–35 €<sup>*</sup></td></tr>
+          <tr><td>Almacenamiento R2 (fotos)</td><td>~3–8 €</td></tr>
+          <tr><td>Hosting Fly.io (prorrateado)</td><td>~5–12 €</td></tr>
+          <tr><td>Stripe (comisión ~1,5% + 0,25€)</td><td>~3–4 €</td></tr>
+          <tr><td>Soporte/infra prorrateado</td><td>~10–20 €</td></tr>
+          <tr><td style="font-weight:800">COGS total</td><td style="font-weight:800">~30–80 €</td></tr>
+        </table>
+        <p class="src"><sup>*</sup> Rango amplio a propósito: depende del modelo Gemini, nº de fotos por inspección y resolución. <b>Hay que medirlo en real antes de fijar cuotas.</b></p>
+      </div>
+      <div class="card">
+        <h3>Margen bruto</h3>
+        <div class="bar-row"><span style="width:90px">Ingreso</span><div class="bar-track"><div class="bar-fill" style="width:100%;background:var(--green)"></div></div><b>199 €</b></div>
+        <div class="bar-row"><span style="width:90px">COGS</span><div class="bar-track"><div class="bar-fill" style="width:28%;background:var(--red)"></div></div><b>~55 €</b></div>
+        <div class="bar-row"><span style="width:90px">Margen</span><div class="bar-track"><div class="bar-fill" style="width:72%;background:var(--brand)"></div></div><b>~144 €</b></div>
+        <p style="margin-top:12px">Margen bruto sano (~70%) <b>si controlas la IA</b>. Sin metering, un cliente que reanaliza miles de fotos puede dejarte el margen en negativo. De ahí que el metering sea "Importante", no opcional.</p>
+        <span class="pill g">Margen objetivo: 65–80%</span>
+      </div>
+    </div>
+    <div class="callout danger">
+      <b>Riesgo nº1 de rentabilidad:</b> el endpoint de <code>reanalyze</code> y los <code>batch-upload</code>. Sin límites por plan, son una puerta abierta a que tu factura de IA crezca sin que crezca tu ingreso. Cuota + alerta de coste por tenant desde el día 1 del SaaS.
+    </div>
+  </div>
+</section>
+
+<!-- MOCKUPS -->
+<section id="mockups">
+  <div class="wrap">
+    <div class="kicker">Cómo se vería</div>
+    <h2>Mockups de la experiencia</h2>
+    <p class="lead">Bocetos de las pantallas clave del SaaS. No es diseño final: es para que veas el <i>shape</i> del producto que hay que construir encima del backend.</p>
+
+    <!-- Dashboard -->
+    <h3 style="margin-top:18px">1 · Dashboard del DSP</h3>
+    <div class="mock">
+      <div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span>&nbsp; app.flotadsp.com/dashboard — <b>Transportes García SL</b></div>
+      <div class="body">
+        <div class="grid g4">
+          <div class="stat"><div class="l">Flota activa</div><div class="v">28</div></div>
+          <div class="stat"><div class="l">Scorecard</div><div class="v" style="color:var(--green)">Fantastic</div></div>
+          <div class="stat"><div class="l">Daños sin imputar</div><div class="v" style="color:var(--red)">3</div></div>
+          <div class="stat"><div class="l">ITV próximas</div><div class="v" style="color:var(--amber)">2</div></div>
+        </div>
+        <div class="grid g2">
+          <div class="stat">
+            <div class="l">Inspecciones esta semana</div>
+            <div class="bar-row"><span style="width:60px">Lun</span><div class="bar-track"><div class="bar-fill" style="width:80%;background:var(--brand)"></div></div></div>
+            <div class="bar-row"><span style="width:60px">Mar</span><div class="bar-track"><div class="bar-fill" style="width:65%;background:var(--brand)"></div></div></div>
+            <div class="bar-row"><span style="width:60px">Mié</span><div class="bar-track"><div class="bar-fill" style="width:90%;background:var(--brand)"></div></div></div>
+          </div>
+          <div class="stat">
+            <div class="l">Cobertura de turnos hoy</div>
+            <div class="v">26 / 28 <small style="font-weight:400">rutas cubiertas</small></div>
+            <span class="pill a">2 sin conductor asignado</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Inspeccion IA -->
+    <h3 style="margin-top:26px">2 · Inspección con IA (detección de daños)</h3>
+    <div class="mock">
+      <div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span>&nbsp; Inspección #4821 — Furgoneta 1234-ABC</div>
+      <div class="body">
+        <div class="grid g2">
+          <div class="stat" style="display:flex;align-items:center;justify-content:center;min-height:150px;background:#0e1726;color:#fff;position:relative">
+            <span style="position:absolute;border:2px solid var(--red);width:70px;height:46px;top:40px;left:60px;border-radius:4px"></span>
+            <span style="position:absolute;top:30px;left:60px;background:var(--red);color:#fff;font-size:10px;padding:1px 5px;border-radius:4px">Arañazo</span>
+            📷 Foto lateral izquierdo
+          </div>
+          <div>
+            <div class="stat"><div class="l">Daños detectados</div><div class="v" style="color:var(--red)">2 nuevos</div></div>
+            <div class="stat" style="margin-top:10px"><div class="l">Responsabilidad sugerida</div><div class="v" style="font-size:16px">Conductor turno 14/06</div></div>
+            <div class="stat" style="margin-top:10px"><div class="l">Taller sugerido</div><div class="v" style="font-size:16px">Chapa Vigo · 2,1 km</div></div>
+            <div style="margin-top:10px"><span class="pill g">Aceptar</span><span class="pill a">Revisar</span><span class="pill r">Descartar</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Onboarding / signup -->
+    <h3 style="margin-top:26px">3 · Alta de empresa (autoservicio) <span class="badge-new">NUEVO</span></h3>
+    <div class="mock">
+      <div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span>&nbsp; flotadsp.com/registro</div>
+      <div class="body">
+        <div class="flow" style="justify-content:center">
+          <div class="node b">1 · Datos empresa</div><span class="arrow">→</span>
+          <div class="node">2 · Elegir plan</div><span class="arrow">→</span>
+          <div class="node">3 · Pago (Stripe)</div><span class="arrow">→</span>
+          <div class="node g">4 · Importar flota</div><span class="arrow">→</span>
+          <div class="node g">✓ Listo</div>
+        </div>
+        <small style="text-align:center;display:block">14 días de prueba sin tarjeta · provisión automática del tenant al confirmar</small>
+      </div>
+    </div>
+
+    <!-- Billing -->
+    <h3 style="margin-top:26px">4 · Suscripción y facturación <span class="badge-new">NUEVO</span></h3>
+    <div class="mock">
+      <div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span>&nbsp; Ajustes › Suscripción</div>
+      <div class="body">
+        <div class="grid g3">
+          <div class="stat"><div class="l">Plan actual</div><div class="v" style="font-size:18px">Growth</div><span class="pill g">Activo</span></div>
+          <div class="stat"><div class="l">Uso de IA este mes</div><div class="v" style="font-size:18px">612 / 900</div><div class="bar-track" style="margin-top:6px"><div class="bar-fill" style="width:68%;background:var(--brand)"></div></div></div>
+          <div class="stat"><div class="l">Próxima factura</div><div class="v" style="font-size:18px">199 € · 1 jul</div><small>Visa ···· 4242</small></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ROADMAP -->
+<section id="roadmap">
+  <div class="wrap">
+    <div class="kicker">Plan de ejecución</div>
+    <h2>Roadmap realista por fases</h2>
+    <p class="lead">Estimaciones para 1–2 personas a tiempo completo reutilizando el backend. Si vas solo y a ratos, multiplica los plazos.</p>
+    <div class="timeline" style="margin-top:18px">
+      <div class="phase">
+        <h3>Fase 0 · Higiene y seguridad <span class="pill r">1–2 semanas</span></h3>
+        <p>Rotar credenciales expuestas, sacar secretos del código, repo privado, CORS restringido, Sentry, backups verificados. <b>No se construye nada nuevo encima de cimientos rotos.</b></p>
+      </div>
+      <div class="phase">
+        <h3>Fase 1 · Multi-tenant + identidad <span class="pill a">4–7 semanas</span></h3>
+        <p>Modelo de tenant, <code>tenant_id</code> en todas las colecciones, capa de acceso que lo fuerza, signup de empresa, roles por org, aislamiento de R2. <b>Tests de aislamiento obligatorios.</b></p>
+      </div>
+      <div class="phase">
+        <h3>Fase 2 · Billing + metering <span class="pill a">3–5 semanas</span></h3>
+        <p>Stripe (planes, trial, webhooks, portal de cliente, IVA), cuotas de IA por plan, alertas de coste, suspensión por impago.</p>
+      </div>
+      <div class="phase">
+        <h3>Fase 3 · Frontend vendible <span class="pill r">6–10 semanas</span></h3>
+        <p>Web app del DSP (dashboard, inspecciones, scorecard, turnos, ajustes/billing), página pública + pricing, app conductor. <b>Es el bloque más grande.</b></p>
+      </div>
+      <div class="phase">
+        <h3>Fase 4 · Beta privada <span class="pill g">4–6 semanas</span></h3>
+        <p>3–5 DSPs reales (empieza por conocidos del sector), feedback, arreglar fricción de onboarding, primeros cobros reales.</p>
+      </div>
+      <div class="phase">
+        <h3>Fase 5 · Lanzamiento + escala <span class="pill p">continuo</span></h3>
+        <p>Superadmin, panel de soporte, importadores guiados, refactor del monolito por módulos, contenido y captación.</p>
+      </div>
+    </div>
+    <div class="callout">
+      <b>Atajo si quieres validar ya:</b> antes de toda la Fase 1, puedes hacer una <i>beta manual single-tenant</i> — desplegar una instancia separada por cliente a mano para 2–3 clientes. Feo y no escala, pero te da ingresos y validación reales mientras construyes el multi-tenant de verdad.
+    </div>
+  </div>
+</section>
+
+<!-- GTM -->
+<section id="gtm">
+  <div class="wrap">
+    <div class="kicker">Captación</div>
+    <h2>Cómo conseguir los primeros DSPs</h2>
+    <div class="grid g3" style="margin-top:18px">
+      <div class="card"><h3>1 · Tu propia red</h3><p>Tú ERES un DSP. Tus contactos del sector son los primeros clientes y los mejores testimonios. La venta inicial es de persona a persona, no de marketing.</p></div>
+      <div class="card"><h3>2 · Grupos de DSPs</h3><p>Foros, grupos de Telegram/WhatsApp/Facebook de DSPs en España. Comunidad pequeña y conectada: un par de referencias buenas corren rápido.</p></div>
+      <div class="card"><h3>3 · Demo con SU scorecard</h3><p>Pídele su scorecard real, métela y enséñale insights en 10 minutos. El "aha" inmediato vende mejor que cualquier landing.</p></div>
+      <div class="card"><h3>4 · Caso de ahorro</h3><p>"Recuperamos X € en daños imputados el mes pasado." Número concreto de un cliente real = mejor argumento comercial.</p></div>
+      <div class="card"><h3>5 · Prueba sin fricción</h3><p>14 días gratis, importación asistida de su flota. Cuanto antes vean SUS datos dentro, antes pagan.</p></div>
+      <div class="card"><h3>6 · Expansión</h3><p>Tras dominar España-Amazon: otros países del programa, o flotas last-mile no-Amazon (mismo dolor de daños/flota).</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- RIESGOS -->
+<section id="riesgos">
+  <div class="wrap">
+    <div class="kicker">Lo que puede salir mal — sin maquillaje</div>
+    <h2>Riesgos reales</h2>
+    <table>
+      <tr><th>Riesgo</th><th>Por qué importa</th><th>Mitigación</th></tr>
+      <tr><td><b>Dependencia de Amazon</b></td><td>Si Amazon cambia el formato del scorecard o saca su propia herramienta, te afecta de lleno</td><td>No depender solo del scorecard; aportar valor (daños, flota, turnos) que sirve aunque Amazon cambie</td></tr>
+      <tr><td><b>Mercado pequeño (ES)</b></td><td>Cientos de clientes potenciales = techo de ingresos bajo</td><td>Plan claro de expansión geográfica y a flotas no-Amazon</td></tr>
+      <tr><td><b>Coste de IA</b></td><td>Sin metering, un cliente puede dejarte margen negativo</td><td>Cuotas por plan + alertas + tarificar por encima del COGS real medido</td></tr>
+      <tr><td><b>Fuga entre tenants</b></td><td>Una sola filtración de datos entre clientes mata la confianza y el negocio</td><td>Aislamiento forzado en capa de datos + tests automáticos de aislamiento</td></tr>
+      <tr><td><b>GDPR (fotos + PII conductor)</b></td><td>Manejas datos personales en la UE; multas y bloqueo legal si lo ignoras</td><td>DPA, política de retención de fotos, consentimiento, subprocesadores declarados</td></tr>
+      <tr><td><b>Vendes a competidores</b></td><td>DSPs de la misma zona pueden recelar de compartir plataforma</td><td>Aislamiento real + mensaje claro de privacidad como argumento de venta</td></tr>
+      <tr><td><b>Competencia</b></td><td>Fleetio, Samsara, Whip Around y herramientas propias de Amazon</td><td>Diferenciación de nicho: específico DSP, en español, IA de daños + scorecard integrados</td></tr>
+      <tr><td><b>Tú como cuello de botella</b></td><td>Mantener el monolito + vender + soportar tú solo no escala</td><td>Modularizar el código, automatizar onboarding/soporte, priorizar brutalmente</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- SIGUIENTES PASOS -->
+<section id="siguiente">
+  <div class="wrap">
+    <div class="kicker">Acción</div>
+    <h2>Qué haría yo, en este orden</h2>
+    <div class="grid g2" style="margin-top:18px">
+      <div class="card">
+        <h3>Esta semana</h3>
+        <ul class="checklist">
+          <li>🔴 Cambiar la contraseña expuesta y sacarla del código</li>
+          <li>🔴 Repo a privado + restringir CORS</li>
+          <li>📞 Hablar con 3–5 DSPs conocidos: ¿pagarían? ¿cuánto?</li>
+          <li>📊 Medir el coste REAL de Gemini por inspección</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Este mes</h3>
+        <ul class="checklist">
+          <li>🧱 Diseñar el modelo de tenant y la capa de aislamiento</li>
+          <li>💳 Prototipar Stripe con un plan de prueba</li>
+          <li>🖥️ Decidir stack del frontend y maquetar el dashboard</li>
+          <li>🤝 Cerrar 1–2 clientes beta (aunque sea single-tenant manual)</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout">
+      <b>Mi recomendación sincera:</b> no construyas el SaaS multi-tenant perfecto antes de validar que alguien paga. Consigue 2–3 DSPs que suelten dinero (aunque tengas que desplegarles una instancia a mano), aprende qué valoran de verdad, y <i>entonces</i> invierte los meses de Fase 1–3. El mayor riesgo no es técnico: es construir algo pulido que nadie acabe pagando.
+    </div>
+  </div>
+</section>
+
+<div class="wrap foot">
+  <p><b>FlotaDSP · Estrategia SaaS</b> — Documento de trabajo generado para discusión. Las cifras de mercado provienen de fuentes públicas de Amazon (2024–2025); las estimaciones de DSPs en España, precios, costes y proyecciones son hipótesis a validar con datos reales, no garantías.</p>
+  <p>Fuentes de mercado: aboutamazon.com / aboutamazon.eu (programa DSP). Contenido de fuentes externas reformulado para cumplir restricciones de licencia.</p>
+</div>
+
+</body>
+</html>
