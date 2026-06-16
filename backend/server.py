@@ -2007,6 +2007,37 @@ async def register_dsp(data: RegisterRequest, request: Request):
                          centers=org.get("centers"))
 
 
+def _org_billing(org):
+    """Estado de suscripción de una organización (para el trial y el bloqueo)."""
+    if not org or org.get("account_type") == "owner":
+        return {"status": "owner", "required": False, "days_left": None}
+    status = org.get("status", "trial")
+    if status == "active":
+        return {"status": "active", "required": False, "days_left": None}
+    if status == "trial":
+        days = None
+        te = org.get("trial_ends")
+        if te:
+            try:
+                days = (datetime.fromisoformat(te) - datetime.now(timezone.utc)).days
+            except Exception:
+                pass
+        # trial caducado → hay que pagar
+        return {"status": "trial", "required": (days is not None and days < 0), "days_left": days}
+    # past_due / canceled / unpaid → bloqueado hasta pagar
+    return {"status": status, "required": True, "days_left": None}
+
+
+@api_router.get("/org/billing")
+async def org_billing(user: dict = Depends(get_current_user)):
+    """Estado de la suscripción de TU organización (trial, días restantes, si toca pagar)."""
+    org = await get_org(user.get("org_id"))
+    b = _org_billing(org)
+    b["account_type"] = (org or {}).get("account_type")
+    b["org_name"] = (org or {}).get("name")
+    return b
+
+
 @api_router.get("/org/centers")
 async def list_org_centers(user: dict = Depends(get_current_user)):
     """Centros de TU organización (cada uno ve solo los suyos)."""
