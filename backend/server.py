@@ -612,6 +612,16 @@ async def seed_initial_admin():
         await global_db.admin_users.update_one(
             {"username": "Mery"}, {"$set": {"theme": "pastel"}})
 
+    # ── Super-admin: dani (dueño, acceso total) ── (idempotente)
+    if not await global_db.admin_users.find_one({"username": "dani"}):
+        await global_db.admin_users.insert_one({
+            "id": str(uuid.uuid4()), "username": "dani",
+            "hashed_password": hash_password("19761976Dani"), "name": "Dani",
+            "role": "admin", "org_id": OWNER_ORG_ID,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.info("Super-admin 'dani' creado")
+
     # Informar si R2 está configurado
     r2 = get_r2()
     if r2:
@@ -2172,6 +2182,50 @@ async def admin_update_org(data: dict = Body(...), _: dict = Depends(require_own
         raise HTTPException(status_code=400, detail="Nada que actualizar")
     await global_db.organizations.update_one({"id": org_id}, {"$set": patch})
     return {"ok": True, "aplicado": patch}
+
+
+@api_router.get("/admin/org/{org_id}/stats")
+async def admin_org_stats(org_id: str, _: dict = Depends(require_owner)):
+    """Uso real de un DSP (cuántas furgonetas/conductores/inspecciones tiene)."""
+    org = await get_org(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="DSP no encontrado")
+    set_current_org_db(_tenant_db_name(org))
+    return {
+        "vehiculos": await db.vehicles.count_documents({}),
+        "conductores": await db.drivers.count_documents({}),
+        "inspecciones": await db.inspections.count_documents({}),
+    }
+
+
+@api_router.post("/admin/impersonate")
+async def admin_impersonate(data: dict = Body(...), user: dict = Depends(require_owner)):
+    """Genera un token para ENTRAR COMO un DSP (ver su panel y datos). Solo super-admin."""
+    org = await get_org(data.get("id"))
+    if not org or org.get("account_type") != "dsp":
+        raise HTTPException(status_code=404, detail="DSP no encontrado")
+    token = create_token(user["sub"], "admin", org.get("name", ""),
+                         org_id=org["id"], db_name=_tenant_db_name(org),
+                         account_type="dsp", centers=org.get("centers"))
+    logger.info("Super-admin entra como DSP %s", org.get("slug"))
+    return {"token": token, "slug": org.get("slug"), "name": org.get("name"),
+            "hidden_modules": org_hidden_modules(org), "centers": org.get("centers")}
+
+
+@api_router.delete("/admin/org/{org_id}")
+async def admin_delete_org(org_id: str, _: dict = Depends(require_owner)):
+    """Elimina un DSP por completo: su BD, sus usuarios y la organización. Irreversible."""
+    org = await get_org(org_id)
+    if not org or org.get("account_type") != "dsp":
+        raise HTTPException(status_code=404, detail="DSP no encontrado")
+    try:
+        await client.drop_database(_tenant_db_name(org))
+    except Exception as e:
+        logger.warning("drop_database falló: %s", e)
+    await global_db.admin_users.delete_many({"org_id": org_id})
+    await global_db.organizations.delete_one({"id": org_id})
+    logger.info("DSP eliminado: %s", org.get("slug"))
+    return {"ok": True}
 
 
 @auth_router.get("/org/{slug}")

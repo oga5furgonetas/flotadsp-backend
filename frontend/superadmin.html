@@ -43,7 +43,7 @@
   <h2>Empresas (DSP) <span id="orgcount" style="color:var(--mut);font-weight:600"></span></h2>
   <div style="overflow-x:auto">
     <table id="orgtable">
-      <thead><tr><th>Empresa</th><th>URL</th><th>Estado</th><th>Plan</th><th>Centros</th><th>Prueba</th><th>Acciones</th></tr></thead>
+      <thead><tr><th>Empresa</th><th>URL</th><th>Estado</th><th>Plan</th><th>Centros</th><th>Prueba</th><th>Uso</th><th>Acciones</th></tr></thead>
       <tbody id="orgs"></tbody>
     </table>
   </div>
@@ -102,7 +102,12 @@
         '<td><input value="'+esc(o.plan||'')+'" placeholder="—" style="width:80px" onblur="setField(\''+o.id+'\',\'plan\',this.value)"></td>'+
         '<td>'+(o.centers||[]).length+'/<input class="num" type="number" value="'+(o.max_centers||1)+'" onblur="setField(\''+o.id+'\',\'max_centers\',this.value)"></td>'+
         '<td>'+(o.dias_prueba!=null?o.dias_prueba+'d':'—')+' <button class="mini" onclick="extend(\''+o.id+'\')">+14d</button></td>'+
-        '<td><button class="mini" onclick="setStatus(\''+o.id+'\',\'active\')">✓ Activar</button></td>'+
+        '<td id="stats-'+o.id+'"><button class="mini" onclick="stats(\''+o.id+'\')">Ver</button></td>'+
+        '<td style="white-space:nowrap">'+
+          '<button class="mini" onclick="setStatus(\''+o.id+'\',\'active\')">✓ Activar</button> '+
+          '<button class="mini" onclick="impersonate(\''+o.id+'\')">👁 Entrar</button> '+
+          '<button class="mini" style="color:var(--err);border-color:rgba(239,68,68,.3)" onclick="delOrg(\''+o.id+'\',\''+esc(o.name)+'\')">🗑</button>'+
+        '</td>'+
       '</tr>';
     }).join("") : '<tr><td colspan="7" class="empty">Aún no hay DSPs registrados.</td></tr>';
 
@@ -121,6 +126,30 @@
   window.setStatus=function(id,v){ patch(id,{status:v}); };
   window.setField=function(id,f,v){ var b={}; b[f]=v; patch(id,b); };
   window.extend=function(id){ patch(id,{extend_trial_days:14}); };
+
+  window.stats=async function(id){
+    var cell=document.getElementById("stats-"+id); cell.textContent="…";
+    try{ var s=await (await fetch(API+"/admin/org/"+id+"/stats",{headers:H()})).json();
+      cell.innerHTML='🚐 '+s.vehiculos+' · 👤 '+s.conductores+' · 📋 '+s.inspecciones;
+    }catch(e){ cell.textContent="error"; }
+  };
+
+  window.impersonate=async function(id){
+    if(!confirm("¿Entrar COMO este DSP? Verás su panel y sus datos. Para volver a tu cuenta, cierra sesión y entra de nuevo.")) return;
+    var r=await fetch(API+"/admin/impersonate",{method:"POST",headers:H(),body:JSON.stringify({id:id})});
+    if(!r.ok){ toast("No se pudo entrar"); return; }
+    var j=await r.json();
+    localStorage.setItem("flotadsp_token", j.token);
+    localStorage.setItem("flotadsp_admin", JSON.stringify({name:j.name,role:"admin",account_type:"dsp",hidden_modules:j.hidden_modules||[],slug:j.slug,centers:j.centers||[]}));
+    window.location.href="/";
+  };
+
+  window.delOrg=async function(id,name){
+    if(!confirm("⚠️ BORRAR el DSP \""+name+"\" y TODOS sus datos. Es irreversible. ¿Seguro?")) return;
+    if(!confirm("Confírmalo otra vez: se borra la base de datos completa de \""+name+"\".")) return;
+    var r=await fetch(API+"/admin/org/"+id,{method:"DELETE",headers:H()});
+    if(r.ok){ toast("DSP eliminado"); load(); } else { toast("Error al borrar"); }
+  };
 
   load();
 </script>
