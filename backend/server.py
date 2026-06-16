@@ -2068,6 +2068,33 @@ async def add_org_center(data: dict = Body(...), user: dict = Depends(require_ad
     return {"ok": True, "centers": centers}
 
 
+@auth_router.post("/lead")
+async def capture_lead(data: dict = Body(...), request: Request = None):
+    """Captura interés (sin cobrar): email + plan que le interesa. Para validar demanda."""
+    email = (data.get("email") or "").strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="Pon un email válido")
+    await global_db.leads.update_one(
+        {"email": email},
+        {"$set": {"email": email, "plan": (data.get("plan") or "").strip(),
+                  "name": (data.get("name") or "").strip(),
+                  "company": (data.get("company") or "").strip(),
+                  "updated_at": datetime.now(timezone.utc).isoformat()},
+         "$setOnInsert": {"created_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True)
+    return {"ok": True, "mensaje": "¡Apuntado! Te avisamos cuando abramos los pagos."}
+
+
+@api_router.get("/leads")
+async def list_leads(user: dict = Depends(require_admin)):
+    """Lista de interesados (solo el dueño). Para ver si hay demanda."""
+    org = await get_org(user.get("org_id"))
+    if (org or {}).get("account_type") != "owner":
+        raise HTTPException(status_code=403, detail="Solo el dueño")
+    leads = await global_db.leads.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return {"total": len(leads), "leads": leads}
+
+
 @auth_router.get("/org/{slug}")
 async def org_by_slug(slug: str):
     """Info pública de un DSP por su slug — para que la URL flotadsp.com/<slug>
