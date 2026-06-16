@@ -508,6 +508,13 @@ async def require_any_auth(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
+async def require_owner(user: dict = Depends(get_current_user)) -> dict:
+    """Solo el SUPER-ADMIN (cuenta dueño). Para el panel de control del negocio."""
+    if user.get("account_type") != "owner":
+        raise HTTPException(status_code=403, detail="Acceso solo para el super-admin")
+    return user
+
+
 # =========================
 # ORGANIZACIONES (multi-tenant) — en global_db
 # =========================
@@ -2086,13 +2093,85 @@ async def capture_lead(data: dict = Body(...), request: Request = None):
 
 
 @api_router.get("/leads")
-async def list_leads(user: dict = Depends(require_admin)):
-    """Lista de interesados (solo el dueño). Para ver si hay demanda."""
-    org = await get_org(user.get("org_id"))
-    if (org or {}).get("account_type") != "owner":
-        raise HTTPException(status_code=403, detail="Solo el dueño")
+async def list_leads(user: dict = Depends(require_owner)):
+    """Lista de interesados (solo super-admin). Para ver si hay demanda."""
     leads = await global_db.leads.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
     return {"total": len(leads), "leads": leads}
+
+
+# ===== PANEL SUPER-ADMIN (control del negocio) =====
+
+@api_router.get("/admin/overview")
+async def admin_overview(_: dict = Depends(require_owner)):
+    """Resumen del negocio: nº de DSPs, por estado, ingresos estimados, interesados."""
+    orgs = await global_db.organizations.find(
+        {"account_type": "dsp"}, {"_id": 0}).to_list(2000)
+    by_status = {}
+    mrr = 0.0
+    plan_price = {"Starter": 29, "Pro": 79, "Flota": 149}
+    for o in orgs:
+        st = o.get("status", "trial")
+        by_status[st] = by_status.get(st, 0) + 1
+        if st == "active":
+            mrr += plan_price.get(o.get("plan", ""), 0)
+    leads = await global_db.leads.count_documents({})
+    return {
+        "dsps_total": len(orgs),
+        "por_estado": by_status,
+        "activos": by_status.get("active", 0),
+        "en_prueba": by_status.get("trial", 0),
+        "mrr_estimado": round(mrr, 2),
+        "interesados": leads,
+    }
+
+
+@api_router.get("/admin/orgs")
+async def admin_list_orgs(_: dict = Depends(require_owner)):
+    """Todas las organizaciones DSP con su estado, plan, centros y fechas."""
+    orgs = await global_db.organizations.find(
+        {"account_type": "dsp"}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    out = []
+    for o in orgs:
+        b = _org_billing(o)
+        out.append({
+            "id": o.get("id"), "name": o.get("name"), "slug": o.get("slug"),
+            "status": o.get("status", "trial"), "plan": o.get("plan"),
+            "centers": o.get("centers") or [], "max_centers": o.get("max_centers", 1),
+            "email": o.get("email"), "trial_ends": o.get("trial_ends"),
+            "dias_prueba": b.get("days_left"), "created_at": o.get("created_at"),
+        })
+    return {"total": len(out), "orgs": out}
+
+
+@api_router.post("/admin/org")
+async def admin_update_org(data: dict = Body(...), _: dict = Depends(require_owner)):
+    """Controla una organización: estado, plan, límite de centros, ampliar prueba."""
+    org_id = data.get("id")
+    if not org_id:
+        raise HTTPException(status_code=400, detail="id requerido")
+    org = await get_org(org_id)
+    if not org or org.get("account_type") != "dsp":
+        raise HTTPException(status_code=404, detail="DSP no encontrado")
+    patch = {}
+    if data.get("status") in ("trial", "active", "suspended", "canceled"):
+        patch["status"] = data["status"]
+    if "plan" in data:
+        patch["plan"] = (data.get("plan") or "").strip() or None
+    if "max_centers" in data:
+        try:
+            patch["max_centers"] = max(1, int(data["max_centers"]))
+        except Exception:
+            pass
+    if data.get("extend_trial_days"):
+        try:
+            base = datetime.now(timezone.utc)
+            patch["trial_ends"] = (base + timedelta(days=int(data["extend_trial_days"]))).isoformat()
+        except Exception:
+            pass
+    if not patch:
+        raise HTTPException(status_code=400, detail="Nada que actualizar")
+    await global_db.organizations.update_one({"id": org_id}, {"$set": patch})
+    return {"ok": True, "aplicado": patch}
 
 
 @auth_router.get("/org/{slug}")

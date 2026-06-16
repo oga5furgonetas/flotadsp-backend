@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Super-Admin · FlotaDSP</title>
+<style>
+  :root{ --bg:#0b0d10; --card:#13161b; --line:rgba(255,255,255,.08); --txt:#e7ebf2; --mut:#8b94a3; --acc:#0ea5e9; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444; }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:22px 16px 60px}
+  .wrap{max-width:1140px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 2px;font-weight:850}
+  .sub{color:var(--mut);font-size:13px;margin:0 0 20px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:24px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .kpi .n{font-size:26px;font-weight:850}
+  .kpi .l{color:var(--mut);font-size:12px;margin-top:2px}
+  h2{font-size:15px;margin:24px 0 10px;font-weight:800}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;color:var(--mut);font-weight:600;padding:8px;border-bottom:1px solid var(--line);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
+  td{padding:9px 8px;border-bottom:1px solid rgba(255,255,255,.05);vertical-align:middle}
+  .badge{padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700}
+  .b-trial{background:rgba(245,158,11,.15);color:var(--warn)}
+  .b-active{background:rgba(34,197,94,.15);color:var(--ok)}
+  .b-suspended,.b-canceled{background:rgba(239,68,68,.15);color:var(--err)}
+  select,input{background:#0e1116;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:12.5px}
+  input.num{width:54px}
+  button.mini{background:rgba(255,255,255,.05);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:5px 9px;font-size:12px;cursor:pointer;font-weight:600}
+  button.mini:hover{background:rgba(255,255,255,.1)}
+  .empty{color:var(--mut);padding:30px;text-align:center}
+  .gate{max-width:420px;margin:80px auto;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:30px}
+  .gate a{color:var(--acc)}
+  #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1a2030;border:1px solid var(--line);padding:10px 18px;border-radius:10px;font-size:13px;display:none}
+</style>
+</head>
+<body>
+<div class="wrap" id="app" style="display:none">
+  <h1>🛠️ Panel Super-Admin</h1>
+  <p class="sub">Control del negocio: DSPs, suscripciones e interesados.</p>
+
+  <div class="cards" id="kpis"></div>
+
+  <h2>Empresas (DSP) <span id="orgcount" style="color:var(--mut);font-weight:600"></span></h2>
+  <div style="overflow-x:auto">
+    <table id="orgtable">
+      <thead><tr><th>Empresa</th><th>URL</th><th>Estado</th><th>Plan</th><th>Centros</th><th>Prueba</th><th>Acciones</th></tr></thead>
+      <tbody id="orgs"></tbody>
+    </table>
+  </div>
+
+  <h2>Interesados (reservas) <span id="leadcount" style="color:var(--mut);font-weight:600"></span></h2>
+  <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>Email</th><th>Empresa</th><th>Plan</th><th>Fecha</th></tr></thead>
+      <tbody id="leads"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="gate" id="gate" style="display:none">
+  <h2 style="margin-top:0">Acceso restringido</h2>
+  <p class="sub">Este panel es solo para el super-admin. <a href="/">Inicia sesión</a> con tu cuenta de dueño.</p>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  var API="https://flotadsp-backend.fly.dev/api";
+  function tok(){ return localStorage.getItem("flotadsp_token")||""; }
+  function H(){ return {Authorization:"Bearer "+tok(),"Content-Type":"application/json"}; }
+  function toast(t){ var e=document.getElementById("toast"); e.textContent=t; e.style.display="block"; setTimeout(function(){e.style.display="none";},2200); }
+  function esc(s){ return (s==null?"":String(s)).replace(/[<>&]/g,function(c){return{'<':'&lt;','>':'&gt;','&':'&amp;'}[c];}); }
+  function fdate(s){ try{return new Date(s).toLocaleDateString('es-ES');}catch(e){return s||'';} }
+
+  function gate(){ document.getElementById("app").style.display="none"; document.getElementById("gate").style.display="block"; }
+
+  async function load(){
+    if(!tok()){ gate(); return; }
+    var ov;
+    try{
+      var r=await fetch(API+"/admin/overview",{headers:H()});
+      if(r.status===403||r.status===401){ gate(); return; }
+      ov=await r.json();
+    }catch(e){ gate(); return; }
+    document.getElementById("app").style.display="block";
+    document.getElementById("kpis").innerHTML=[
+      ["DSPs totales",ov.dsps_total],["Activos (pagando)",ov.activos],
+      ["En prueba",ov.en_prueba],["MRR estimado",ov.mrr_estimado+" €"],["Interesados",ov.interesados]
+    ].map(function(k){ return '<div class="kpi"><div class="n">'+k[1]+'</div><div class="l">'+k[0]+'</div></div>'; }).join("");
+
+    var og=await (await fetch(API+"/admin/orgs",{headers:H()})).json();
+    document.getElementById("orgcount").textContent="("+og.total+")";
+    var tb=document.getElementById("orgs");
+    tb.innerHTML = og.orgs.length? og.orgs.map(function(o){
+      var st=o.status||'trial';
+      var statusSel='<select onchange="setStatus(\''+o.id+'\',this.value)">'+
+        ['trial','active','suspended','canceled'].map(function(s){return '<option value="'+s+'"'+(s===st?' selected':'')+'>'+s+'</option>';}).join('')+'</select>';
+      return '<tr>'+
+        '<td><b>'+esc(o.name)+'</b><br><span style="color:var(--mut);font-size:11px">'+esc(o.email||'')+'</span></td>'+
+        '<td><a href="/conductor/#'+esc(o.slug)+'" style="color:var(--acc)">/'+esc(o.slug)+'</a></td>'+
+        '<td>'+statusSel+'</td>'+
+        '<td><input value="'+esc(o.plan||'')+'" placeholder="—" style="width:80px" onblur="setField(\''+o.id+'\',\'plan\',this.value)"></td>'+
+        '<td>'+(o.centers||[]).length+'/<input class="num" type="number" value="'+(o.max_centers||1)+'" onblur="setField(\''+o.id+'\',\'max_centers\',this.value)"></td>'+
+        '<td>'+(o.dias_prueba!=null?o.dias_prueba+'d':'—')+' <button class="mini" onclick="extend(\''+o.id+'\')">+14d</button></td>'+
+        '<td><button class="mini" onclick="setStatus(\''+o.id+'\',\'active\')">✓ Activar</button></td>'+
+      '</tr>';
+    }).join("") : '<tr><td colspan="7" class="empty">Aún no hay DSPs registrados.</td></tr>';
+
+    var ld=await (await fetch(API+"/leads",{headers:H()})).json();
+    document.getElementById("leadcount").textContent="("+ld.total+")";
+    document.getElementById("leads").innerHTML = ld.leads.length? ld.leads.map(function(l){
+      return '<tr><td>'+esc(l.email)+'</td><td>'+esc(l.company||'')+'</td><td>'+esc(l.plan||'')+'</td><td>'+fdate(l.created_at)+'</td></tr>';
+    }).join("") : '<tr><td colspan="4" class="empty">Aún no hay interesados.</td></tr>';
+  }
+
+  async function patch(id,body){
+    body.id=id;
+    var r=await fetch(API+"/admin/org",{method:"POST",headers:H(),body:JSON.stringify(body)});
+    if(r.ok){ toast("Guardado ✓"); load(); } else { toast("Error: "+((await r.json()).detail||r.status)); }
+  }
+  window.setStatus=function(id,v){ patch(id,{status:v}); };
+  window.setField=function(id,f,v){ var b={}; b[f]=v; patch(id,b); };
+  window.extend=function(id){ patch(id,{extend_trial_days:14}); };
+
+  load();
+</script>
+</body>
+</html>
