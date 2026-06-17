@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" font-family="Segoe UI, Arial, sans-serif">
+  <style>
+    .bg{fill:#eef1f6}.t{fill:#0f172a}.m{fill:#64748b}.w{fill:#fff}.b{fill:#3b5bdb}
+    .green{fill:#16a34a}.red{fill:#dc2626}.amber{fill:#d97706}
+    text{font-size:12px}
+  </style>
+  <rect width="1000" height="560" class="bg"/>
+  <text x="500" y="34" class="b" font-size="13" font-weight="bold" text-anchor="middle">04 · APP DEL CONDUCTOR (MÓVIL) — fichar y hacer fotos en segundos</text>
+
+  <!-- PHONE 1: inicio -->
+  <g transform="translate(70,60)">
+    <rect width="250" height="460" rx="30" fill="#0f1729"/>
+    <rect x="10" y="10" width="230" height="440" rx="22" fill="#fff"/>
+    <rect x="90" y="20" width="70" height="6" rx="3" fill="#33415a"/>
+    <text x="28" y="58" class="b" font-size="11" font-weight="bold">INICIO</text>
+    <circle cx="42" cy="84" r="15" fill="#3b5bdb"/><text x="42" y="88" class="w" font-size="10" text-anchor="middle" font-weight="bold">CM</text>
+    <text x="66" y="80" class="t" font-size="13" font-weight="bold">Hola, Carlos</text>
+    <text x="66" y="96" class="m" font-size="10">Turno mañana · 14/06</text>
+    <rect x="22" y="112" width="206" height="68" rx="12" fill="#eef1ff" stroke="#c9d2f7"/>
+    <text x="36" y="134" class="b" font-size="10" font-weight="bold">TU VEHÍCULO HOY</text>
+    <text x="36" y="158" class="t" font-size="19" font-weight="bold">1234-ABC</text>
+    <text x="36" y="174" class="m" font-size="10">Ford Transit · Plaza 12</text>
+    <rect x="22" y="192" width="206" height="46" rx="10" class="b"/><text x="125" y="220" class="w" font-size="13" font-weight="bold" text-anchor="middle">📷 Inspección de salida</text>
+    <rect x="22" y="248" width="206" height="40" rx="10" fill="#fff" stroke="#e6eaf0"/><text x="125" y="273" class="t" font-size="12" font-weight="bold" text-anchor="middle">🅿️ Inspección de entrada</text>
+    <rect x="22" y="300" width="206" height="48" rx="10" fill="#fff" stroke="#e6eaf0"/>
+    <text x="36" y="320" class="m" font-size="10">Estado de hoy</text>
+    <rect x="36" y="326" width="150" height="18" rx="9" fill="#dcfce7"/><text x="44" y="339" class="green" font-size="10" font-weight="bold">✓ Sin daños registrados</text>
+    <line x1="10" y1="408" x2="240" y2="408" stroke="#e6eaf0"/>
+    <text x="44" y="432" class="b" font-size="9" text-anchor="middle" font-weight="bold">🏠</text><text x="44" y="444" class="b" font-size="8" text-anchor="middle">Inicio</text>
+    <text x="105" y="432" class="m" font-size="9" text-anchor="middle">📷</text><text x="105" y="444" class="m" font-size="8" text-anchor="middle">Inspección</text>
+    <text x="165" y="432" class="m" font-size="9" text-anchor="middle">🗓️</text><text x="165" y="444" class="m" font-size="8" text-anchor="middle">Turnos</text>
+    <text x="210" y="432" class="m" font-size="9" text-anchor="middle">👤</text><text x="210" y="444" class="m" font-size="8" text-anchor="middle">Perfil</text>
+  </g>
+
+  <!-- PHONE 2: captura -->
+  <g transform="translate(375,60)">
+    <rect width="250" height="460" rx="30" fill="#0f1729"/>
+    <rect x="10" y="10" width="230" height="440" rx="22" fill="#fff"/>
+    <rect x="90" y="20" width="70" height="6" rx="3" fill="#33415a"/>
+    <text x="28" y="58" class="b" font-size="11" font-weight="bold">CAPTURA GUIADA</text>
+    <rect x="22" y="70" width="62" height="5" rx="3" fill="#3b5bdb"/><rect x="90" y="70" width="62" height="5" rx="3" fill="#3b5bdb"/><rect x="158" y="70" width="30" height="5" rx="3" fill="#e6eaf0"/><rect x="194" y="70" width="34" height="5" rx="3" fill="#e6eaf0"/>
+    <text x="22" y="98" class="t" font-size="13" font-weight="bold">Foto 2 de 4 · Lateral izq.</text>
+    <text x="22" y="116" class="m" font-size="10">Encuadra todo el lateral. La IA</text>
+    <text x="22" y="130" class="m" font-size="10">detectará los daños sola.</text>
+    <rect x="22" y="142" width="206" height="180" rx="14" fill="#0f1729"/>
+    <rect x="36" y="156" width="178" height="152" rx="10" fill="none" stroke="#46577d" stroke-width="2" stroke-dasharray="6 5"/>
+    <text x="125" y="236" fill="#7e8db0" font-size="12" text-anchor="middle">📷 Cámara</text>
+    <circle cx="125" cy="300" r="22" fill="#fff" stroke="#c7d0e2" stroke-width="4"/>
+    <rect x="30" y="336" width="42" height="34" rx="6" fill="#0f1729"/>
+    <rect x="80" y="336" width="42" height="34" rx="6" fill="#0f1729" stroke="#3b5bdb" stroke-width="2"/>
+    <rect x="130" y="336" width="42" height="34" rx="6" fill="#0f1729" opacity="0.4"/>
+    <rect x="180" y="336" width="42" height="34" rx="6" fill="#0f1729" opacity="0.4"/>
+    <line x1="10" y1="408" x2="240" y2="408" stroke="#e6eaf0"/>
+    <text x="105" y="432" class="b" font-size="9" text-anchor="middle" font-weight="bold">📷</text><text x="105" y="444" class="b" font-size="8" text-anchor="middle">Inspección</text>
+  </g>
+
+  <!-- PHONE 3: resultado -->
+  <g transform="translate(680,60)">
+    <rect width="250" height="460" rx="30" fill="#0f1729"/>
+    <rect x="10" y="10" width="230" height="440" rx="22" fill="#fff"/>
+    <rect x="90" y="20" width="70" height="6" rx="3" fill="#33415a"/>
+    <text x="28" y="56" class="b" font-size="11" font-weight="bold">RESULTADO IA</text>
+    <rect x="70" y="66" width="110" height="24" rx="12" fill="#fef3c7"/><text x="125" y="82" class="amber" font-size="11" font-weight="bold" text-anchor="middle">⚠️ 1 daño detectado</text>
+    <rect x="22" y="100" width="206" height="130" rx="12" fill="#0f1729"/>
+    <rect x="100" y="140" width="70" height="44" rx="4" fill="none" stroke="#dc2626" stroke-width="3"/>
+    <rect x="100" y="122" width="60" height="16" rx="4" fill="#dc2626"/><text x="106" y="134" class="w" font-size="9" font-weight="bold">Arañazo</text>
+    <text x="125" y="212" fill="#46577d" font-size="10" text-anchor="middle">Lateral izq.</text>
+    <rect x="22" y="240" width="206" height="92" rx="12" fill="#fff" stroke="#e6eaf0"/>
+    <text x="36" y="260" class="m" font-size="10">La IA encontró</text>
+    <text x="36" y="277" class="t" font-size="12" font-weight="bold">Arañazo lateral · 94%</text>
+    <text x="36" y="296" class="m" font-size="10">¿Ya estaba antes de tu turno?</text>
+    <rect x="36" y="304" width="86" height="22" rx="7" fill="#fff" stroke="#e6eaf0"/><text x="79" y="319" class="t" font-size="10" font-weight="bold" text-anchor="middle">Sí, ya estaba</text>
+    <rect x="128" y="304" width="86" height="22" rx="7" class="b"/><text x="171" y="319" class="w" font-size="10" font-weight="bold" text-anchor="middle">No, es nuevo</text>
+    <rect x="22" y="342" width="206" height="40" rx="10" class="b"/><text x="125" y="367" class="w" font-size="12.5" font-weight="bold" text-anchor="middle">Enviar inspección ✓</text>
+    <line x1="10" y1="408" x2="240" y2="408" stroke="#e6eaf0"/>
+    <text x="105" y="432" class="b" font-size="9" text-anchor="middle" font-weight="bold">📷</text><text x="105" y="444" class="b" font-size="8" text-anchor="middle">Inspección</text>
+  </g>
+</svg>

@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 640" font-family="Segoe UI, Arial, sans-serif">
+  <style>
+    .bg{fill:#f4f6fb}.side{fill:#0f1729}.card{fill:#fff;stroke:#e6eaf0}
+    .t{fill:#0f172a}.m{fill:#64748b}.w{fill:#fff}.b{fill:#3b5bdb}
+    .green{fill:#16a34a}.red{fill:#dc2626}.amber{fill:#d97706}
+    .navt{fill:#aab6d4;font-size:12px}.kl{fill:#64748b;font-size:10px;font-weight:bold}
+    .kv{font-size:23px;font-weight:bold}.h{font-size:13px;font-weight:bold;fill:#0f172a}
+    text{font-size:12px}
+  </style>
+  <rect width="1000" height="640" class="bg"/>
+  <rect width="200" height="640" class="side"/>
+  <rect x="14" y="18" width="26" height="26" rx="7" fill="#3b5bdb"/>
+  <text x="48" y="36" class="w" font-size="15" font-weight="bold">FlotaDSP</text>
+  <text x="22" y="84" class="navt">▢  Dashboard</text>
+  <text x="22" y="118" class="navt">🔍  Inspecciones</text>
+  <rect x="10" y="134" width="180" height="34" rx="8" fill="#1a2540"/>
+  <text x="22" y="156" class="w" font-size="12.5" font-weight="bold">📊  Scorecard</text>
+  <text x="22" y="190" class="navt">🚐  Flota</text>
+  <text x="22" y="224" class="navt">👷  Conductores</text>
+  <text x="22" y="560" class="navt">⚙️  Ajustes</text>
+  <rect x="200" y="0" width="800" height="56" class="w" stroke="#e6eaf0"/>
+  <text x="222" y="34" class="t" font-size="16" font-weight="bold">Scorecard · Semana 24</text>
+  <rect x="760" y="16" width="130" height="24" rx="7" fill="#fff" stroke="#e6eaf0"/><text x="825" y="32" class="t" font-size="11" font-weight="bold" text-anchor="middle">⬆ Importar</text>
+  <rect x="900" y="16" width="76" height="24" rx="7" class="b"/><text x="938" y="32" class="w" font-size="11" font-weight="bold" text-anchor="middle">PDF</text>
+  <!-- KPIs -->
+  <rect x="222" y="74" width="178" height="74" rx="12" class="card"/><text x="238" y="98" class="kl">ESTADO GENERAL</text><text x="238" y="126" class="kv green">Fantastic</text>
+  <rect x="410" y="74" width="178" height="74" rx="12" class="card"/><text x="426" y="98" class="kl">DCR</text><text x="426" y="126" class="kv t">99,2%</text><text x="426" y="142" class="green" font-size="10">▲ objetivo 98,5</text>
+  <rect x="598" y="74" width="178" height="74" rx="12" class="card"/><text x="614" y="98" class="kl">DNR DPMO</text><text x="614" y="126" class="kv amber">1.420</text><text x="614" y="142" class="red" font-size="10">▼ ojo, sube</text>
+  <rect x="786" y="74" width="190" height="74" rx="12" class="card"/><text x="802" y="98" class="kl">SEATBELT</text><text x="802" y="126" class="kv t">100%</text><text x="802" y="142" class="green" font-size="10">perfecto</text>
+  <!-- metrics bars -->
+  <rect x="222" y="164" width="470" height="300" rx="12" class="card"/>
+  <text x="240" y="190" class="h">Métricas vs objetivo</text>
+  <g font-size="11.5">
+    <text x="240" y="226" class="t">Delivered (DCR)</text>
+    <rect x="370" y="218" width="230" height="10" rx="5" fill="#eef2f8"/><rect x="370" y="218" width="228" height="10" rx="5" fill="#16a34a"/>
+    <rect x="612" y="216" width="62" height="20" rx="10" fill="#dcfce7"/><text x="643" y="230" class="green" font-size="10" font-weight="bold" text-anchor="middle">99,2%</text>
+    <text x="240" y="266" class="t">DNR DPMO</text>
+    <rect x="370" y="258" width="230" height="10" rx="5" fill="#eef2f8"/><rect x="370" y="258" width="143" height="10" rx="5" fill="#d97706"/>
+    <rect x="612" y="256" width="62" height="20" rx="10" fill="#fef3c7"/><text x="643" y="270" class="amber" font-size="10" font-weight="bold" text-anchor="middle">1.420</text>
+    <text x="240" y="306" class="t">POD</text>
+    <rect x="370" y="298" width="230" height="10" rx="5" fill="#eef2f8"/><rect x="370" y="298" width="223" height="10" rx="5" fill="#16a34a"/>
+    <rect x="612" y="296" width="62" height="20" rx="10" fill="#dcfce7"/><text x="643" y="310" class="green" font-size="10" font-weight="bold" text-anchor="middle">98,1%</text>
+    <text x="240" y="346" class="t">Contact Compliance</text>
+    <rect x="370" y="338" width="230" height="10" rx="5" fill="#eef2f8"/><rect x="370" y="338" width="219" height="10" rx="5" fill="#16a34a"/>
+    <rect x="612" y="336" width="62" height="20" rx="10" fill="#dcfce7"/><text x="643" y="350" class="green" font-size="10" font-weight="bold" text-anchor="middle">96,4%</text>
+  </g>
+  <text x="240" y="400" class="m" font-size="11">Cada métrica con su objetivo de Amazon. En verde lo que</text>
+  <text x="240" y="416" class="m" font-size="11">cumple, en ámbar lo que está en riesgo.</text>
+  <!-- focus -->
+  <rect x="704" y="164" width="272" height="300" rx="12" fill="#fffbeb" stroke="#fde68a"/>
+  <text x="722" y="190" class="h">⚠️ Foco de la semana</text>
+  <text x="722" y="216" class="t" font-size="11.5">El <tspan font-weight="bold">DNR (no entregados)</tspan> es lo único</text>
+  <text x="722" y="234" class="t" font-size="11.5">que te aleja del máximo. Concentrado</text>
+  <text x="722" y="252" class="t" font-size="11.5">en <tspan font-weight="bold">Vigo-Norte</tspan>, turnos de tarde.</text>
+  <rect x="722" y="270" width="130" height="22" rx="11" fill="#eef1ff"/><text x="787" y="285" class="b" font-size="10.5" font-weight="bold" text-anchor="middle">Acción sugerida</text>
+  <text x="722" y="316" class="t" font-size="11.5">Revisar 2 conductores con más DNR</text>
+  <text x="722" y="334" class="t" font-size="11.5">y reforzar formación POD.</text>
+  <line x1="722" y1="356" x2="958" y2="356" stroke="#fde68a"/>
+  <text x="722" y="384" class="m" font-size="11">Predicción semana 25</text>
+  <text x="722" y="406" class="green" font-size="12.5" font-weight="bold">Probable: se mantiene Fantastic</text>
+  <text x="222" y="492" class="m" font-size="11">03 · Scorecard — no solo lo muestra, lo interpreta y te dice qué atacar.</text>
+</svg>
