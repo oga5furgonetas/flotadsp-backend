@@ -3,152 +3,282 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Super-Admin · FlotaDSP</title>
+<title>Centro de control · FlotaDSP</title>
 <style>
-  :root{ --bg:#0b0d10; --card:#13161b; --line:rgba(255,255,255,.08); --txt:#e7ebf2; --mut:#8b94a3; --acc:#0ea5e9; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444; }
+  :root{
+    --bg:#0a0c10; --bg2:#0e1116; --panel:#13161c; --panel2:#171b22;
+    --line:rgba(255,255,255,.07); --line2:rgba(255,255,255,.12);
+    --txt:#eef1f6; --mut:#8a93a3; --mut2:#5e6675;
+    --acc:#3b82f6; --acc2:#1d4ed8; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444; --gold:#fbbf24;
+  }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--txt);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:22px 16px 60px}
-  .wrap{max-width:1140px;margin:0 auto}
-  h1{font-size:22px;margin:0 0 2px;font-weight:850}
-  .sub{color:var(--mut);font-size:13px;margin:0 0 20px}
-  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:24px}
-  .kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
-  .kpi .n{font-size:26px;font-weight:850}
-  .kpi .l{color:var(--mut);font-size:12px;margin-top:2px}
-  h2{font-size:15px;margin:24px 0 10px;font-weight:800}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th{text-align:left;color:var(--mut);font-weight:600;padding:8px;border-bottom:1px solid var(--line);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em}
-  td{padding:9px 8px;border-bottom:1px solid rgba(255,255,255,.05);vertical-align:middle}
-  .badge{padding:2px 9px;border-radius:99px;font-size:11px;font-weight:700}
-  .b-trial{background:rgba(245,158,11,.15);color:var(--warn)}
-  .b-active{background:rgba(34,197,94,.15);color:var(--ok)}
-  .b-suspended,.b-canceled{background:rgba(239,68,68,.15);color:var(--err)}
-  select,input{background:#0e1116;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:5px 8px;font-size:12.5px}
-  input.num{width:54px}
-  button.mini{background:rgba(255,255,255,.05);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:5px 9px;font-size:12px;cursor:pointer;font-weight:600}
-  button.mini:hover{background:rgba(255,255,255,.1)}
-  .empty{color:var(--mut);padding:30px;text-align:center}
-  .gate{max-width:420px;margin:80px auto;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:30px}
-  .gate a{color:var(--acc)}
-  #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1a2030;border:1px solid var(--line);padding:10px 18px;border-radius:10px;font-size:13px;display:none}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-size:14px}
+  a{color:var(--acc);text-decoration:none}
+  .layout{display:flex;min-height:100vh}
+  /* Sidebar */
+  .side{width:230px;background:var(--bg2);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;position:fixed;height:100vh}
+  .logo{display:flex;align-items:center;gap:10px;padding:4px 8px 18px}
+  .logo .b{width:32px;height:32px;border-radius:9px;background:linear-gradient(135deg,#fb923c,#ea6800);display:flex;align-items:center;justify-content:center;font-size:17px}
+  .logo b{font-size:15px}.logo small{display:block;color:var(--mut2);font-size:10px;letter-spacing:.1em}
+  .nav{display:flex;flex-direction:column;gap:3px;margin-top:8px}
+  .nav a{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;color:var(--mut);font-weight:600;font-size:13.5px;cursor:pointer}
+  .nav a:hover{background:var(--panel);color:var(--txt)}
+  .nav a.on{background:linear-gradient(135deg,rgba(59,130,246,.18),rgba(29,78,216,.12));color:#fff;box-shadow:inset 0 0 0 1px rgba(59,130,246,.3)}
+  .nav a .i{width:18px;text-align:center}
+  .side .foot{margin-top:auto;padding:10px 8px;border-top:1px solid var(--line);font-size:12px;color:var(--mut2)}
+  .side .foot b{color:var(--txt)}
+  .side .foot a{display:block;margin-top:8px;color:var(--err);font-weight:600}
+  /* Main */
+  .main{margin-left:230px;flex:1;padding:26px 30px 60px;max-width:1180px}
+  .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
+  .head h1{font-size:22px;margin:0;font-weight:800;letter-spacing:-.01em}
+  .head .who{display:flex;align-items:center;gap:9px;background:var(--panel);border:1px solid var(--line);border-radius:99px;padding:6px 14px;font-size:13px}
+  .head .who .dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+  section.view{display:none}.section-on{display:block}
+  /* KPI */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:26px}
+  .kpi{background:linear-gradient(160deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:16px;padding:18px}
+  .kpi .ic{font-size:18px;opacity:.9}
+  .kpi .n{font-size:28px;font-weight:850;margin-top:8px;letter-spacing:-.02em}
+  .kpi .l{color:var(--mut);font-size:12.5px;margin-top:2px}
+  .kpi.gold .n{color:var(--gold)}
+  /* Card / table */
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:6px 4px;margin-bottom:18px;overflow:hidden}
+  .card .ch{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 8px}
+  .card .ch h2{font-size:15px;margin:0;font-weight:800}
+  .card .ch .cnt{color:var(--mut);font-weight:600;font-size:13px}
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;color:var(--mut2);font-weight:600;padding:9px 14px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--line)}
+  td{padding:11px 14px;border-bottom:1px solid rgba(255,255,255,.04);vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:rgba(255,255,255,.015)}
+  .name b{font-weight:700}.name small{color:var(--mut2);font-size:11.5px}
+  .badge{display:inline-block;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;text-transform:capitalize}
+  .b-trial{background:rgba(245,158,11,.14);color:var(--warn)}
+  .b-active{background:rgba(34,197,94,.14);color:var(--ok)}
+  .b-suspended,.b-canceled{background:rgba(239,68,68,.14);color:var(--err)}
+  select,input{background:var(--bg2);color:var(--txt);border:1px solid var(--line2);border-radius:8px;padding:6px 9px;font-size:13px;font-family:inherit}
+  input.num{width:50px;text-align:center}input.sm{width:90px}
+  .btn{border:none;border-radius:9px;padding:7px 13px;font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit}
+  .btn.p{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff}
+  .btn.g{background:rgba(255,255,255,.06);border:1px solid var(--line2);color:var(--txt)}
+  .btn.d{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#fca5a5}
+  .btn:hover{filter:brightness(1.12)}
+  .row-actions{display:flex;gap:6px;flex-wrap:wrap}
+  .mods{display:flex;gap:8px;flex-wrap:wrap}
+  .mods label{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--mut);background:var(--bg2);border:1px solid var(--line);border-radius:7px;padding:4px 8px;cursor:pointer}
+  .note{color:var(--mut2);font-size:12px;padding:0 16px 12px}
+  .empty{color:var(--mut);text-align:center;padding:34px}
+  .stripe-banner{background:linear-gradient(135deg,rgba(99,91,255,.12),rgba(59,130,246,.08));border:1px solid rgba(99,91,255,.3);border-radius:14px;padding:16px 18px;margin-bottom:18px;font-size:13px;color:#c7d2fe}
+  .gate{max-width:420px;margin:90px auto;text-align:center;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:34px}
+  #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#1c222c;border:1px solid var(--line2);padding:11px 20px;border-radius:11px;font-size:13px;display:none;z-index:9999;box-shadow:0 12px 30px -10px rgba(0,0,0,.6)}
+  @media(max-width:780px){ .side{position:static;width:100%;height:auto;flex-direction:row;flex-wrap:wrap} .main{margin-left:0;padding:18px} .nav{flex-direction:row;flex-wrap:wrap} .side .foot{display:none} }
 </style>
 </head>
 <body>
-<div class="wrap" id="app" style="display:none">
-  <h1>🛠️ Panel Super-Admin</h1>
-  <p class="sub">Control del negocio: DSPs, suscripciones e interesados.</p>
+<div class="layout" id="app" style="display:none">
+  <aside class="side">
+    <div class="logo"><div class="b">⚡</div><div><b>FlotaDSP</b><small>CENTRO DE CONTROL</small></div></div>
+    <nav class="nav" id="nav">
+      <a data-v="resumen" class="on"><span class="i">📊</span> Resumen</a>
+      <a data-v="empresas"><span class="i">🏢</span> Empresas</a>
+      <a data-v="facturacion"><span class="i">💳</span> Facturación</a>
+      <a data-v="interesados"><span class="i">✨</span> Interesados</a>
+    </nav>
+    <div class="foot">Conectado como <b>Dani</b><br>Super-admin<a id="logout">Cerrar sesión →</a></div>
+  </aside>
 
-  <div class="cards" id="kpis"></div>
+  <main class="main">
+    <div class="head"><h1 id="title">Resumen</h1><div class="who"><span class="dot"></span> Dani · Super-admin</div></div>
 
-  <h2>Empresas (DSP) <span id="orgcount" style="color:var(--mut);font-weight:600"></span></h2>
-  <div style="overflow-x:auto">
-    <table id="orgtable">
-      <thead><tr><th>Empresa</th><th>URL</th><th>Estado</th><th>Plan</th><th>Centros</th><th>Prueba</th><th>Uso</th><th>Acciones</th></tr></thead>
-      <tbody id="orgs"></tbody>
-    </table>
-  </div>
+    <!-- RESUMEN -->
+    <section class="view section-on" id="v-resumen">
+      <div class="kpis" id="kpis"></div>
+      <div class="card"><div class="ch"><h2>Últimos registros</h2></div>
+        <table><thead><tr><th>Empresa</th><th>URL</th><th>Estado</th><th>Alta</th></tr></thead><tbody id="recent"></tbody></table>
+      </div>
+    </section>
 
-  <h2>Interesados (reservas) <span id="leadcount" style="color:var(--mut);font-weight:600"></span></h2>
-  <div style="overflow-x:auto">
-    <table>
-      <thead><tr><th>Email</th><th>Empresa</th><th>Plan</th><th>Fecha</th></tr></thead>
-      <tbody id="leads"></tbody>
-    </table>
-  </div>
+    <!-- EMPRESAS -->
+    <section class="view" id="v-empresas">
+      <div class="card"><div class="ch"><h2>Empresas (DSP)</h2><span class="cnt" id="empcnt"></span></div>
+        <div style="overflow-x:auto"><table>
+          <thead><tr><th>Empresa</th><th>URL</th><th>Estado</th><th>Centros</th><th>Módulos visibles</th><th>Uso</th><th>Acciones</th></tr></thead>
+          <tbody id="empresas"></tbody></table></div>
+        <div class="note">➕ "Centros": escribe un código y Enter para añadirle un centro. · "Módulos": marca = el DSP lo ve. · 👁 Entrar = ver su panel.</div>
+      </div>
+    </section>
+
+    <!-- FACTURACIÓN -->
+    <section class="view" id="v-facturacion">
+      <div class="stripe-banner">💳 <b>Pagos con Stripe:</b> se activan cuando te des de alta de autónomo y conectemos las claves. Mientras, gestionas planes y estados aquí (el cobro real se enchufa encima sin tocar nada).</div>
+      <div class="kpis" id="bilkpis"></div>
+      <div class="card"><div class="ch"><h2>Suscripciones</h2><span class="cnt" id="bilcnt"></span></div>
+        <div style="overflow-x:auto"><table>
+          <thead><tr><th>Empresa</th><th>Plan</th><th>Precio/mes</th><th>Estado</th><th>Prueba</th><th>Acciones</th></tr></thead>
+          <tbody id="facturacion"></tbody></table></div>
+        <div class="note">Asigna plan y precio; "Activar" marca la suscripción como pagando y suma al MRR.</div>
+      </div>
+    </section>
+
+    <!-- INTERESADOS -->
+    <section class="view" id="v-interesados">
+      <div class="card"><div class="ch"><h2>Interesados (reservas de planes)</h2><span class="cnt" id="leadcnt"></span></div>
+        <table><thead><tr><th>Email</th><th>Empresa</th><th>Plan</th><th>Fecha</th></tr></thead><tbody id="leads"></tbody></table>
+      </div>
+    </section>
+  </main>
 </div>
 
 <div class="gate" id="gate" style="display:none">
-  <h2 style="margin-top:0">Acceso restringido</h2>
-  <p class="sub">Este panel es solo para el super-admin. <a href="/">Inicia sesión</a> con tu cuenta de dueño.</p>
+  <h2 style="margin-top:0">🔒 Acceso restringido</h2>
+  <p style="color:var(--mut)">Este centro de control es solo para <b>Dani</b> (super-admin).<br><a href="/">Inicia sesión</a> con tu cuenta.</p>
 </div>
-
 <div id="toast"></div>
 
 <script>
   var API="https://flotadsp-backend.fly.dev/api";
-  function tok(){ return localStorage.getItem("flotadsp_token")||""; }
-  function H(){ return {Authorization:"Bearer "+tok(),"Content-Type":"application/json"}; }
-  function toast(t){ var e=document.getElementById("toast"); e.textContent=t; e.style.display="block"; setTimeout(function(){e.style.display="none";},2200); }
-  function esc(s){ return (s==null?"":String(s)).replace(/[<>&]/g,function(c){return{'<':'&lt;','>':'&gt;','&':'&amp;'}[c];}); }
-  function fdate(s){ try{return new Date(s).toLocaleDateString('es-ES');}catch(e){return s||'';} }
+  var PRICES={Starter:29,Pro:79,Flota:149};
+  var MODS=[["ia-peritaje","IA Peritaje"],["scorecard","Scorecard"],["turnos","Turnos"]];
+  var DATA={orgs:[],ov:{},leads:[]};
+  function tok(){return localStorage.getItem("flotadsp_token")||"";}
+  function H(){return {Authorization:"Bearer "+tok(),"Content-Type":"application/json"};}
+  function esc(s){return (s==null?"":String(s)).replace(/[<>&"]/g,function(c){return{'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c];});}
+  function fdate(s){try{return new Date(s).toLocaleDateString('es-ES',{day:'2-digit',month:'short',year:'numeric'});}catch(e){return s||'';}}
+  function toast(t){var e=document.getElementById("toast");e.textContent=t;e.style.display="block";clearTimeout(e._t);e._t=setTimeout(function(){e.style.display="none";},2400);}
+  function badge(st){return '<span class="badge b-'+st+'">'+st+'</span>';}
 
-  function gate(){ document.getElementById("app").style.display="none"; document.getElementById("gate").style.display="block"; }
+  // navegación
+  document.getElementById("nav").addEventListener("click",function(e){
+    var a=e.target.closest("a[data-v]"); if(!a)return;
+    document.querySelectorAll("#nav a").forEach(function(x){x.classList.remove("on");}); a.classList.add("on");
+    document.querySelectorAll(".view").forEach(function(v){v.classList.remove("section-on");});
+    document.getElementById("v-"+a.dataset.v).classList.add("section-on");
+    document.getElementById("title").textContent=a.textContent.trim();
+  });
+  document.getElementById("logout").addEventListener("click",function(){localStorage.removeItem("flotadsp_token");localStorage.removeItem("flotadsp_admin");location.href="/";});
+
+  function gate(){document.getElementById("app").style.display="none";document.getElementById("gate").style.display="block";}
 
   async function load(){
-    if(!tok()){ gate(); return; }
-    var ov;
-    try{
-      var r=await fetch(API+"/admin/overview",{headers:H()});
-      if(r.status===403||r.status===401){ gate(); return; }
-      ov=await r.json();
-    }catch(e){ gate(); return; }
-    document.getElementById("app").style.display="block";
-    document.getElementById("kpis").innerHTML=[
-      ["DSPs totales",ov.dsps_total],["Activos (pagando)",ov.activos],
-      ["En prueba",ov.en_prueba],["MRR estimado",ov.mrr_estimado+" €"],["Interesados",ov.interesados]
-    ].map(function(k){ return '<div class="kpi"><div class="n">'+k[1]+'</div><div class="l">'+k[0]+'</div></div>'; }).join("");
+    if(!tok()){gate();return;}
+    var r;
+    try{ r=await fetch(API+"/admin/overview",{headers:H()}); }catch(e){gate();return;}
+    if(r.status!==200){gate();return;}
+    DATA.ov=await r.json();
+    DATA.orgs=(await (await fetch(API+"/admin/orgs",{headers:H()})).json()).orgs||[];
+    DATA.leads=(await (await fetch(API+"/leads",{headers:H()})).json()).leads||[];
+    document.getElementById("app").style.display="flex";
+    renderResumen(); renderEmpresas(); renderFacturacion(); renderLeads();
+  }
 
-    var og=await (await fetch(API+"/admin/orgs",{headers:H()})).json();
-    document.getElementById("orgcount").textContent="("+og.total+")";
-    var tb=document.getElementById("orgs");
-    tb.innerHTML = og.orgs.length? og.orgs.map(function(o){
-      var st=o.status||'trial';
-      var statusSel='<select onchange="setStatus(\''+o.id+'\',this.value)">'+
-        ['trial','active','suspended','canceled'].map(function(s){return '<option value="'+s+'"'+(s===st?' selected':'')+'>'+s+'</option>';}).join('')+'</select>';
+  function kpi(ic,n,l,cls){return '<div class="kpi '+(cls||'')+'"><div class="ic">'+ic+'</div><div class="n">'+n+'</div><div class="l">'+l+'</div></div>';}
+
+  function renderResumen(){
+    var o=DATA.ov;
+    document.getElementById("kpis").innerHTML=
+      kpi('🏢',o.dsps_total||0,'Empresas (DSP)')+
+      kpi('✅',o.activos||0,'Pagando')+
+      kpi('⏳',o.en_prueba||0,'En prueba')+
+      kpi('💶',(o.mrr_estimado||0)+' €','MRR estimado','gold')+
+      kpi('✨',o.interesados||0,'Interesados');
+    var rec=DATA.orgs.slice(0,8);
+    document.getElementById("recent").innerHTML=rec.length?rec.map(function(x){
+      return '<tr><td class="name"><b>'+esc(x.name)+'</b></td><td><a href="/conductor/#'+esc(x.slug)+'">/'+esc(x.slug)+'</a></td><td>'+badge(x.status||'trial')+'</td><td>'+fdate(x.created_at)+'</td></tr>';
+    }).join(''):'<tr><td colspan="4" class="empty">Aún no hay empresas registradas.</td></tr>';
+  }
+
+  function renderEmpresas(){
+    document.getElementById("empcnt").textContent=DATA.orgs.length+" empresas";
+    document.getElementById("empresas").innerHTML=DATA.orgs.length?DATA.orgs.map(function(o){
+      var hid=o.hidden_modules||['ia-peritaje','scorecard','turnos'];
+      var mods=MODS.map(function(m){var vis=hid.indexOf(m[0])<0;
+        return '<label><input type="checkbox" '+(vis?'checked':'')+' onchange="toggleMod(\''+o.id+'\',\''+m[0]+'\',this.checked)"> '+m[1]+'</label>';}).join('');
+      var cen=(o.centers||[]).map(esc).join(', ')||'—';
       return '<tr>'+
-        '<td><b>'+esc(o.name)+'</b><br><span style="color:var(--mut);font-size:11px">'+esc(o.email||'')+'</span></td>'+
-        '<td><a href="/conductor/#'+esc(o.slug)+'" style="color:var(--acc)">/'+esc(o.slug)+'</a></td>'+
-        '<td>'+statusSel+'</td>'+
-        '<td><input value="'+esc(o.plan||'')+'" placeholder="—" style="width:80px" onblur="setField(\''+o.id+'\',\'plan\',this.value)"></td>'+
-        '<td>'+(o.centers||[]).length+'/<input class="num" type="number" value="'+(o.max_centers||1)+'" onblur="setField(\''+o.id+'\',\'max_centers\',this.value)"></td>'+
-        '<td>'+(o.dias_prueba!=null?o.dias_prueba+'d':'—')+' <button class="mini" onclick="extend(\''+o.id+'\')">+14d</button></td>'+
-        '<td id="stats-'+o.id+'"><button class="mini" onclick="stats(\''+o.id+'\')">Ver</button></td>'+
-        '<td style="white-space:nowrap">'+
-          '<button class="mini" onclick="setStatus(\''+o.id+'\',\'active\')">✓ Activar</button> '+
-          '<button class="mini" onclick="impersonate(\''+o.id+'\')">👁 Entrar</button> '+
-          '<button class="mini" style="color:var(--err);border-color:rgba(239,68,68,.3)" onclick="delOrg(\''+o.id+'\',\''+esc(o.name)+'\')">🗑</button>'+
-        '</td>'+
-      '</tr>';
-    }).join("") : '<tr><td colspan="7" class="empty">Aún no hay DSPs registrados.</td></tr>';
+        '<td class="name"><b>'+esc(o.name)+'</b><br><small>'+esc(o.email||'')+'</small></td>'+
+        '<td><a href="/conductor/#'+esc(o.slug)+'">/'+esc(o.slug)+'</a></td>'+
+        '<td>'+badge(o.status||'trial')+'</td>'+
+        '<td style="min-width:140px">'+cen+'<br><input class="sm" placeholder="+ centro" onkeydown="if(event.key===\'Enter\'){addCenter(\''+o.id+'\',this.value);this.value=\'\';}"></td>'+
+        '<td><div class="mods">'+mods+'</div></td>'+
+        '<td id="st-'+o.id+'"><button class="btn g" onclick="stats(\''+o.id+'\')">Ver uso</button></td>'+
+        '<td><div class="row-actions">'+
+          '<button class="btn g" onclick="impersonate(\''+o.id+'\')">👁 Entrar</button>'+
+          '<button class="btn d" onclick="delOrg(\''+o.id+'\',\''+esc(o.name)+'\')">🗑</button>'+
+        '</div></td></tr>';
+    }).join(''):'<tr><td colspan="7" class="empty">Aún no hay empresas. Comparte flotadsp.com/registro 🚀</td></tr>';
+  }
 
-    var ld=await (await fetch(API+"/leads",{headers:H()})).json();
-    document.getElementById("leadcount").textContent="("+ld.total+")";
-    document.getElementById("leads").innerHTML = ld.leads.length? ld.leads.map(function(l){
-      return '<tr><td>'+esc(l.email)+'</td><td>'+esc(l.company||'')+'</td><td>'+esc(l.plan||'')+'</td><td>'+fdate(l.created_at)+'</td></tr>';
-    }).join("") : '<tr><td colspan="4" class="empty">Aún no hay interesados.</td></tr>';
+  function renderFacturacion(){
+    var act=DATA.orgs.filter(function(o){return o.status==='active';}).length;
+    var mrr=DATA.orgs.reduce(function(s,o){return s+(o.status==='active'?(PRICES[o.plan]||0):0);},0);
+    var pot=DATA.orgs.reduce(function(s,o){return s+(PRICES[o.plan]||0);},0);
+    document.getElementById("bilkpis").innerHTML=
+      kpi('💶',mrr+' €','MRR (pagando)','gold')+
+      kpi('📈',pot+' €','Potencial (todos con plan)')+
+      kpi('✅',act,'Suscripciones activas')+
+      kpi('⏳',DATA.orgs.filter(function(o){return o.status==='trial';}).length,'En prueba');
+    document.getElementById("bilcnt").textContent=DATA.orgs.length+" empresas";
+    document.getElementById("facturacion").innerHTML=DATA.orgs.length?DATA.orgs.map(function(o){
+      var plan=o.plan||'';
+      var sel='<select onchange="setField(\''+o.id+'\',\'plan\',this.value)"><option value="">— sin plan —</option>'+
+        Object.keys(PRICES).map(function(p){return '<option '+(p===plan?'selected':'')+'>'+p+'</option>';}).join('')+'</select>';
+      var price=plan&&PRICES[plan]?PRICES[plan]+' €':'—';
+      var act=o.status==='active';
+      return '<tr>'+
+        '<td class="name"><b>'+esc(o.name)+'</b><br><small>/'+esc(o.slug)+'</small></td>'+
+        '<td>'+sel+'</td>'+
+        '<td><b>'+price+'</b></td>'+
+        '<td>'+badge(o.status||'trial')+'</td>'+
+        '<td>'+(o.dias_prueba!=null?o.dias_prueba+' d':'—')+' <button class="btn g" onclick="extend(\''+o.id+'\')">+14d</button></td>'+
+        '<td><div class="row-actions">'+
+          (act?'<button class="btn g" onclick="setStatus(\''+o.id+'\',\'suspended\')">⏸ Suspender</button>'
+              :'<button class="btn p" onclick="setStatus(\''+o.id+'\',\'active\')">✓ Activar (cobrar)</button>')+
+        '</div></td></tr>';
+    }).join(''):'<tr><td colspan="6" class="empty">Sin empresas todavía.</td></tr>';
+  }
+
+  function renderLeads(){
+    document.getElementById("leadcnt").textContent=DATA.leads.length+" interesados";
+    document.getElementById("leads").innerHTML=DATA.leads.length?DATA.leads.map(function(l){
+      return '<tr><td><a href="mailto:'+esc(l.email)+'">'+esc(l.email)+'</a></td><td>'+esc(l.company||'')+'</td><td>'+esc(l.plan||'')+'</td><td>'+fdate(l.created_at)+'</td></tr>';
+    }).join(''):'<tr><td colspan="4" class="empty">Aún no hay reservas. Comparte flotadsp.com/planes</td></tr>';
   }
 
   async function patch(id,body){
     body.id=id;
     var r=await fetch(API+"/admin/org",{method:"POST",headers:H(),body:JSON.stringify(body)});
-    if(r.ok){ toast("Guardado ✓"); load(); } else { toast("Error: "+((await r.json()).detail||r.status)); }
+    if(r.ok){toast("Guardado ✓");await load();}else{toast("Error: "+((await r.json()).detail||r.status));}
   }
-  window.setStatus=function(id,v){ patch(id,{status:v}); };
-  window.setField=function(id,f,v){ var b={}; b[f]=v; patch(id,b); };
-  window.extend=function(id){ patch(id,{extend_trial_days:14}); };
-
+  window.setStatus=function(id,v){patch(id,{status:v});};
+  window.setField=function(id,f,v){var b={};b[f]=v;patch(id,b);};
+  window.extend=function(id){patch(id,{extend_trial_days:14});};
+  window.addCenter=function(id,v){if((v||'').trim())patch(id,{add_center:v});};
+  window.toggleMod=function(id,mod,visible){
+    var o=DATA.orgs.find(function(x){return x.id===id;}); if(!o)return;
+    var hid=(o.hidden_modules||['ia-peritaje','scorecard','turnos']).slice();
+    if(visible){hid=hid.filter(function(m){return m!==mod;});} else if(hid.indexOf(mod)<0){hid.push(mod);}
+    patch(id,{hidden_modules:hid});
+  };
   window.stats=async function(id){
-    var cell=document.getElementById("stats-"+id); cell.textContent="…";
-    try{ var s=await (await fetch(API+"/admin/org/"+id+"/stats",{headers:H()})).json();
-      cell.innerHTML='🚐 '+s.vehiculos+' · 👤 '+s.conductores+' · 📋 '+s.inspecciones;
-    }catch(e){ cell.textContent="error"; }
+    var c=document.getElementById("st-"+id);c.textContent="…";
+    try{var s=await (await fetch(API+"/admin/org/"+id+"/stats",{headers:H()})).json();
+      c.innerHTML='🚐 '+s.vehiculos+' · 👤 '+s.conductores+' · 📋 '+s.inspecciones;}catch(e){c.textContent="error";}
   };
-
   window.impersonate=async function(id){
-    if(!confirm("¿Entrar COMO este DSP? Verás su panel y sus datos. Para volver a tu cuenta, cierra sesión y entra de nuevo.")) return;
+    if(!confirm("¿Entrar COMO este DSP? Verás su panel y datos. Para volver, cierra sesión y entra como dani."))return;
     var r=await fetch(API+"/admin/impersonate",{method:"POST",headers:H(),body:JSON.stringify({id:id})});
-    if(!r.ok){ toast("No se pudo entrar"); return; }
+    if(!r.ok){toast("No se pudo");return;}
     var j=await r.json();
-    localStorage.setItem("flotadsp_token", j.token);
-    localStorage.setItem("flotadsp_admin", JSON.stringify({name:j.name,role:"admin",account_type:"dsp",hidden_modules:j.hidden_modules||[],slug:j.slug,centers:j.centers||[]}));
-    window.location.href="/";
+    localStorage.setItem("flotadsp_token",j.token);
+    localStorage.setItem("flotadsp_admin",JSON.stringify({name:j.name,role:"admin",account_type:"dsp",hidden_modules:j.hidden_modules||[],slug:j.slug,centers:j.centers||[]}));
+    location.href="/";
   };
-
   window.delOrg=async function(id,name){
-    if(!confirm("⚠️ BORRAR el DSP \""+name+"\" y TODOS sus datos. Es irreversible. ¿Seguro?")) return;
-    if(!confirm("Confírmalo otra vez: se borra la base de datos completa de \""+name+"\".")) return;
+    if(!confirm("⚠️ Borrar \""+name+"\" y TODOS sus datos. Irreversible. ¿Seguro?"))return;
+    if(!confirm("Confírmalo otra vez: se borra la base de datos de \""+name+"\"."))return;
     var r=await fetch(API+"/admin/org/"+id,{method:"DELETE",headers:H()});
-    if(r.ok){ toast("DSP eliminado"); load(); } else { toast("Error al borrar"); }
+    if(r.ok){toast("Eliminado");await load();}else{toast("Error al borrar");}
   };
 
   load();

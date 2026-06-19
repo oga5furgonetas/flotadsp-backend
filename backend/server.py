@@ -460,7 +460,8 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 def create_token(user_id: str, role: str, name: str,
                  org_id: Optional[str] = None, db_name: Optional[str] = None,
-                 account_type: Optional[str] = None, centers: Optional[list] = None) -> str:
+                 account_type: Optional[str] = None, centers: Optional[list] = None,
+                 super_admin: bool = False) -> str:
     expires = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
     payload = {
         "sub": user_id,
@@ -468,6 +469,8 @@ def create_token(user_id: str, role: str, name: str,
         "name": name,
         "exp": expires
     }
+    if super_admin:
+        payload["sa"] = True
     if org_id:
         payload["org_id"] = org_id
     if db_name:
@@ -509,8 +512,15 @@ async def require_any_auth(user: dict = Depends(get_current_user)) -> dict:
 
 
 async def require_owner(user: dict = Depends(get_current_user)) -> dict:
-    """Solo el SUPER-ADMIN (cuenta dueño). Para el panel de control del negocio."""
+    """Cualquier cuenta dueño (tú y tus admins internos)."""
     if user.get("account_type") != "owner":
+        raise HTTPException(status_code=403, detail="Acceso restringido")
+    return user
+
+
+async def require_superadmin(user: dict = Depends(get_current_user)) -> dict:
+    """SOLO el super-admin (dani). Panel de control del negocio y facturación."""
+    if not user.get("sa"):
         raise HTTPException(status_code=403, detail="Acceso solo para el super-admin")
     return user
 
@@ -612,15 +622,19 @@ async def seed_initial_admin():
         await global_db.admin_users.update_one(
             {"username": "Mery"}, {"$set": {"theme": "pastel"}})
 
-    # ── Super-admin: dani (dueño, acceso total) ── (idempotente)
-    if not await global_db.admin_users.find_one({"username": "dani"}):
+    # ── Super-admin: dani (dueño del negocio, ÚNICO con panel super-admin) ── (idempotente)
+    dani = await global_db.admin_users.find_one({"username": "dani"})
+    if not dani:
         await global_db.admin_users.insert_one({
             "id": str(uuid.uuid4()), "username": "dani",
             "hashed_password": hash_password("19761976Dani"), "name": "Dani",
-            "role": "admin", "org_id": OWNER_ORG_ID,
+            "role": "admin", "org_id": OWNER_ORG_ID, "super_admin": True,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info("Super-admin 'dani' creado")
+    elif not dani.get("super_admin"):
+        await global_db.admin_users.update_one(
+            {"username": "dani"}, {"$set": {"super_admin": True}})
 
     # Informar si R2 está configurado
     r2 = get_r2()
@@ -2103,7 +2117,7 @@ async def capture_lead(data: dict = Body(...), request: Request = None):
 
 
 @api_router.get("/leads")
-async def list_leads(user: dict = Depends(require_owner)):
+async def list_leads(user: dict = Depends(require_superadmin)):
     """Lista de interesados (solo super-admin). Para ver si hay demanda."""
     leads = await global_db.leads.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
     return {"total": len(leads), "leads": leads}
@@ -2112,7 +2126,7 @@ async def list_leads(user: dict = Depends(require_owner)):
 # ===== PANEL SUPER-ADMIN (control del negocio) =====
 
 @api_router.get("/admin/overview")
-async def admin_overview(_: dict = Depends(require_owner)):
+async def admin_overview(_: dict = Depends(require_superadmin)):
     """Resumen del negocio: nº de DSPs, por estado, ingresos estimados, interesados."""
     orgs = await global_db.organizations.find(
         {"account_type": "dsp"}, {"_id": 0}).to_list(2000)
@@ -2136,7 +2150,7 @@ async def admin_overview(_: dict = Depends(require_owner)):
 
 
 @api_router.get("/admin/orgs")
-async def admin_list_orgs(_: dict = Depends(require_owner)):
+async def admin_list_orgs(_: dict = Depends(require_superadmin)):
     """Todas las organizaciones DSP con su estado, plan, centros y fechas."""
     orgs = await global_db.organizations.find(
         {"account_type": "dsp"}, {"_id": 0}).sort("created_at", -1).to_list(2000)
@@ -2154,7 +2168,7 @@ async def admin_list_orgs(_: dict = Depends(require_owner)):
 
 
 @api_router.post("/admin/org")
-async def admin_update_org(data: dict = Body(...), _: dict = Depends(require_owner)):
+async def admin_update_org(data: dict = Body(...), _: dict = Depends(require_superadmin)):
     """Controla una organización: estado, plan, límite de centros, ampliar prueba."""
     org_id = data.get("id")
     if not org_id:
@@ -2178,6 +2192,15 @@ async def admin_update_org(data: dict = Body(...), _: dict = Depends(require_own
             patch["trial_ends"] = (base + timedelta(days=int(data["extend_trial_days"]))).isoformat()
         except Exception:
             pass
+    if data.get("add_center"):
+        c = str(data["add_center"]).strip().upper()
+        centers = org.get("centers") or []
+        if c and c not in centers:
+            centers.append(c)
+            patch["centers"] = centers
+            patch["max_centers"] = max(org.get("max_centers", 1), len(centers))
+    if isinstance(data.get("hidden_modules"), list):
+        patch["hidden_modules"] = [str(m) for m in data["hidden_modules"]]
     if not patch:
         raise HTTPException(status_code=400, detail="Nada que actualizar")
     await global_db.organizations.update_one({"id": org_id}, {"$set": patch})
@@ -2185,7 +2208,7 @@ async def admin_update_org(data: dict = Body(...), _: dict = Depends(require_own
 
 
 @api_router.get("/admin/org/{org_id}/stats")
-async def admin_org_stats(org_id: str, _: dict = Depends(require_owner)):
+async def admin_org_stats(org_id: str, _: dict = Depends(require_superadmin)):
     """Uso real de un DSP (cuántas furgonetas/conductores/inspecciones tiene)."""
     org = await get_org(org_id)
     if not org:
@@ -2199,7 +2222,7 @@ async def admin_org_stats(org_id: str, _: dict = Depends(require_owner)):
 
 
 @api_router.post("/admin/impersonate")
-async def admin_impersonate(data: dict = Body(...), user: dict = Depends(require_owner)):
+async def admin_impersonate(data: dict = Body(...), user: dict = Depends(require_superadmin)):
     """Genera un token para ENTRAR COMO un DSP (ver su panel y datos). Solo super-admin."""
     org = await get_org(data.get("id"))
     if not org or org.get("account_type") != "dsp":
@@ -2213,7 +2236,7 @@ async def admin_impersonate(data: dict = Body(...), user: dict = Depends(require
 
 
 @api_router.delete("/admin/org/{org_id}")
-async def admin_delete_org(org_id: str, _: dict = Depends(require_owner)):
+async def admin_delete_org(org_id: str, _: dict = Depends(require_superadmin)):
     """Elimina un DSP por completo: su BD, sus usuarios y la organización. Irreversible."""
     org = await get_org(org_id)
     if not org or org.get("account_type") != "dsp":
@@ -2272,7 +2295,7 @@ async def admin_login(data: LoginRequest, request: Request):
     account_type = (org or {}).get("account_type", "owner")
     token = create_token(user["id"], user["role"], user["name"],
                          org_id=user.get("org_id"), db_name=db_name, account_type=account_type,
-                         centers=(org or {}).get("centers"))
+                         centers=(org or {}).get("centers"), super_admin=bool(user.get("super_admin")))
     logger.info(f"Admin login: {data.username} (org={user.get('org_id')})")
     return TokenResponse(
         access_token=token,
