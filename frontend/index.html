@@ -38,6 +38,17 @@
     window.__FC=C; window.__FCT=["Todos"].concat(C); window.__FCS=C.join(",");
   })();
   </script>
+  <!-- Super-admin (dani): su perfil ES el panel. Al entrar va al centro de control.
+       Escape: /?app=1 muestra la app de flota (su OGA5). -->
+  <script>
+  (function(){
+    try{
+      if(/[?&]app=1/.test(location.search)) return;       // viendo la flota a propósito
+      var p=JSON.parse(atob((localStorage.getItem('flotadsp_token')||'').split('.')[1]||''));
+      if(p && p.sa){ location.replace('/superadmin'); }
+    }catch(e){}
+  })();
+  </script>
   <script type="module" crossorigin src="/assets/app-w72.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/index-BdiVWMWf.css">
 

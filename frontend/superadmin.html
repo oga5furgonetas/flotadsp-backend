@@ -85,7 +85,9 @@
       <a data-v="facturacion"><span class="i">💳</span> Facturación</a>
       <a data-v="interesados"><span class="i">✨</span> Interesados</a>
     </nav>
-    <div class="foot">Conectado como <b>Dani</b><br>Super-admin<a id="logout">Cerrar sesión →</a></div>
+    <div class="foot">Conectado como <b>Dani</b><br>Super-admin
+      <a href="/?app=1" style="color:var(--acc);display:block;margin-top:8px">🚐 Ver mi flota (OGA5)</a>
+      <a id="logout">Cerrar sesión →</a></div>
   </aside>
 
   <main class="main">
@@ -131,8 +133,13 @@
 </div>
 
 <div class="gate" id="gate" style="display:none">
-  <h2 style="margin-top:0">🔒 Acceso restringido</h2>
-  <p style="color:var(--mut)">Este centro de control es solo para <b>Dani</b> (super-admin).<br><a href="/">Inicia sesión</a> con tu cuenta.</p>
+  <div style="font-size:30px;margin-bottom:6px">⚡</div>
+  <h2 style="margin:0 0 4px">Centro de Control</h2>
+  <p style="color:var(--mut);margin:0 0 20px;font-size:13px">Acceso del super-admin</p>
+  <input id="lu" placeholder="Usuario" autocomplete="username" style="width:100%;margin-bottom:10px;padding:11px 12px">
+  <input id="lp" type="password" placeholder="Contraseña" autocomplete="current-password" style="width:100%;margin-bottom:14px;padding:11px 12px">
+  <button class="btn p" id="lbtn" style="width:100%;padding:12px">Entrar</button>
+  <div id="lmsg" style="margin-top:12px;font-size:13px;color:var(--err);display:none"></div>
 </div>
 <div id="toast"></div>
 
@@ -158,18 +165,44 @@
   });
   document.getElementById("logout").addEventListener("click",function(){localStorage.removeItem("flotadsp_token");localStorage.removeItem("flotadsp_admin");location.href="/";});
 
-  function gate(){document.getElementById("app").style.display="none";document.getElementById("gate").style.display="block";}
+  function tokenIsSuper(){ try{ var p=JSON.parse(atob((tok()||'').split('.')[1]||'')); return !!(p&&p.sa); }catch(e){ return false; } }
+  function showLogin(msg){
+    document.getElementById("app").style.display="none";
+    document.getElementById("gate").style.display="block";
+    var m=document.getElementById("lmsg"); if(m){ m.style.display=msg?"block":"none"; m.textContent=msg||""; }
+  }
+  async function doLogin(){
+    var u=document.getElementById("lu").value.trim(), p=document.getElementById("lp").value;
+    var btn=document.getElementById("lbtn"); btn.disabled=true; btn.textContent="Entrando…";
+    try{
+      var r=await fetch(API+"/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:u,password:p})});
+      var j=await r.json();
+      if(!r.ok || !j.access_token){ showLogin("Usuario o contraseña incorrectos."); }
+      else{
+        localStorage.setItem("flotadsp_token", j.access_token);
+        localStorage.setItem("flotadsp_admin", JSON.stringify({name:j.name,role:j.role,id:j.id,account_type:j.account_type,slug:j.slug}));
+        if(!tokenIsSuper()){ showLogin("Esa cuenta no es super-admin."); }
+        else{ document.getElementById("gate").style.display="none"; await load(); return; }
+      }
+    }catch(e){ showLogin("Error de conexión."); }
+    btn.disabled=false; btn.textContent="Entrar";
+  }
 
   async function load(){
-    if(!tok()){gate();return;}
-    var r;
-    try{ r=await fetch(API+"/admin/overview",{headers:H()}); }catch(e){gate();return;}
-    if(r.status!==200){gate();return;}
-    DATA.ov=await r.json();
-    DATA.orgs=(await (await fetch(API+"/admin/orgs",{headers:H()})).json()).orgs||[];
-    DATA.leads=(await (await fetch(API+"/leads",{headers:H()})).json()).leads||[];
+    if(!tokenIsSuper()){ showLogin(); return; }
     document.getElementById("app").style.display="flex";
-    renderResumen(); renderEmpresas(); renderFacturacion(); renderLeads();
+    document.getElementById("kpis").innerHTML='<div class="kpi"><div class="l">Cargando…</div></div>';
+    try{
+      var res=await Promise.all([
+        fetch(API+"/admin/overview",{headers:H()}),
+        fetch(API+"/admin/orgs",{headers:H()}),
+        fetch(API+"/leads",{headers:H()})
+      ]);
+      if(res.some(function(r){return r.status===401||r.status===403;})){ showLogin("Tu sesión caducó. Entra de nuevo."); return; }
+      var j=await Promise.all(res.map(function(r){return r.json();}));
+      DATA.ov=j[0]||{}; DATA.orgs=(j[1]||{}).orgs||[]; DATA.leads=(j[2]||{}).leads||[];
+      renderResumen(); renderEmpresas(); renderFacturacion(); renderLeads();
+    }catch(e){ document.getElementById("kpis").innerHTML='<div class="kpi"><div class="l" style="color:var(--err)">Error al cargar. Recarga la página.</div></div>'; }
   }
 
   function kpi(ic,n,l,cls){return '<div class="kpi '+(cls||'')+'"><div class="ic">'+ic+'</div><div class="n">'+n+'</div><div class="l">'+l+'</div></div>';}
@@ -280,6 +313,10 @@
     var r=await fetch(API+"/admin/org/"+id,{method:"DELETE",headers:H()});
     if(r.ok){toast("Eliminado");await load();}else{toast("Error al borrar");}
   };
+
+  document.getElementById("lbtn").addEventListener("click",doLogin);
+  document.getElementById("lp").addEventListener("keydown",function(e){if(e.key==="Enter")doLogin();});
+  document.getElementById("lu").addEventListener("keydown",function(e){if(e.key==="Enter")document.getElementById("lp").focus();});
 
   load();
 </script>
