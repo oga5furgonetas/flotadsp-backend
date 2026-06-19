@@ -8,6 +8,8 @@ export default function Dashboard() {
   const nav = useNavigate()
   const [me, setMe] = useState(null)
   const [data, setData] = useState({ vehicles: null, drivers: null, insp: [] })
+  const [bill, setBill] = useState(null)
+  const [billCfg, setBillCfg] = useState(null)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -23,12 +25,15 @@ export default function Dashboard() {
       const arr = Array.isArray(i) ? i : (i?.items || i?.inspections || [])
       setData({ vehicles: Array.isArray(v) ? v : [], drivers: Array.isArray(d) ? d : [], insp: arr })
     })
+    get('org/billing').then(setBill)
+    get('billing/config').then(setBillCfg)
   }, [nav])
 
   function logout() { localStorage.removeItem('flotadsp_token'); localStorage.removeItem('flotadsp_admin'); nav('/login') }
 
   if (!me) return null
   const link = `https://flotadsp.com/conductor/#${me.slug || ''}`
+  function orgId() { try { return JSON.parse(atob((localStorage.getItem('flotadsp_token') || '').split('.')[1] || '')).org_id || '' } catch { return '' } }
   const kpis = [
     { n: data.vehicles?.length, l: t('dash.vehicles'), ic: '🚐' },
     { n: data.drivers?.length, l: t('dash.drivers'), ic: '👤' },
@@ -71,6 +76,31 @@ export default function Dashboard() {
               style={{ ...btnPrimary, whiteSpace: 'nowrap' }}>{copied ? t('dash.copied') : t('dash.copy')}</button>
           </div>
         </div>
+
+        {bill && bill.account_type !== 'owner' && (
+          <div style={{ ...card, marginBottom: 22 }}>
+            <h2 style={h2}>💳 {t('bill.title')}</h2>
+            {bill.status === 'active' ? (
+              <p style={{ color: '#4ade80', fontSize: 14, margin: 0, fontWeight: 600 }}>✅ {t('bill.active')}{bill.plan ? ` · ${bill.plan}` : ''}</p>
+            ) : (
+              <div>
+                <p style={{ color: '#f59e0b', fontSize: 13, margin: '0 0 12px' }}>
+                  ⏳ {t('bill.trial')}{bill.days_left != null ? ` · ${bill.days_left} ${t('bill.daysleft')}` : ''}
+                </p>
+                {billCfg && billCfg.ready ? (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {['Starter', 'Pro', 'Flota'].map((p) => billCfg.checkout[p] ? (
+                      <a key={p} href={`${billCfg.checkout[p]}?checkout[custom][org_id]=${orgId()}`}
+                        style={{ ...btnPrimary, background: p === 'Pro' ? 'linear-gradient(135deg,#0ea5e9,#0369a1)' : 'rgba(255,255,255,.06)', border: p === 'Pro' ? 'none' : '1px solid rgba(255,255,255,.12)' }}>
+                        {t('bill.sub')} {p}
+                      </a>
+                    ) : null)}
+                  </div>
+                ) : <p style={{ color: '#8b94a3', fontSize: 13, margin: 0 }}>{t('bill.soon')}</p>}
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={card}>
           <h2 style={h2}>{t('dash.recent')}</h2>

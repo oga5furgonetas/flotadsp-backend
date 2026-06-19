@@ -85,6 +85,13 @@ const DICT = {
   'pl.feat.prio':  { es: 'Soporte prioritario', en: 'Priority support', fr: 'Support prioritaire', de: 'Priorisierter Support', it: 'Supporto prioritario', pt: 'Suporte prioritário' },
   'pl.feat.unlc':  { es: 'Centros ilimitados', en: 'Unlimited stations', fr: 'Dépôts illimités', de: 'Unbegrenzte Stationen', it: 'Sedi illimitate', pt: 'Centros ilimitados' },
   'pl.note':    { es: 'Socios fundadores: los primeros DSP fijan -30% de por vida. Paga anual y llévate 2 meses gratis.', en: 'Founding members: first DSPs lock in -30% for life. Pay yearly, get 2 months free.', fr: 'Membres fondateurs : les premiers DSP bénéficient de -30 % à vie. Paiement annuel = 2 mois offerts.', de: 'Gründungsmitglieder: erste DSPs erhalten -30% auf Lebenszeit. Jährlich zahlen = 2 Monate gratis.', it: 'Soci fondatori: i primi DSP bloccano -30% a vita. Paghi annuale = 2 mesi gratis.', pt: 'Sócios fundadores: os primeiros DSPs fixam -30% para sempre. Paga anual e leva 2 meses grátis.' },
+
+  'bill.title':  { es: 'Tu suscripción', en: 'Your subscription', fr: 'Votre abonnement', de: 'Dein Abo', it: 'Il tuo abbonamento', pt: 'A tua subscrição' },
+  'bill.trial':  { es: 'En prueba', en: 'On trial', fr: 'En essai', de: 'Testphase', it: 'In prova', pt: 'Em teste' },
+  'bill.daysleft': { es: 'días restantes', en: 'days left', fr: 'jours restants', de: 'Tage übrig', it: 'giorni rimasti', pt: 'dias restantes' },
+  'bill.active': { es: 'Suscripción activa', en: 'Active subscription', fr: 'Abonnement actif', de: 'Abo aktiv', it: 'Abbonamento attivo', pt: 'Subscrição ativa' },
+  'bill.soon':   { es: 'Pagos próximamente — estamos terminando de conectarlos.', en: 'Payments coming soon — we’re finishing the setup.', fr: 'Paiements bientôt — finalisation en cours.', de: 'Zahlungen bald — wir richten sie ein.', it: 'Pagamenti in arrivo — stiamo completando.', pt: 'Pagamentos em breve — a terminar a ligação.' },
+  'bill.sub':    { es: 'Suscribirse', en: 'Subscribe', fr: 'S’abonner', de: 'Abonnieren', it: 'Abbonati', pt: 'Subscrever' },
 }
 
 const LangCtx = createContext({ lang: 'es', setLang: () => {}, t: (k) => k })

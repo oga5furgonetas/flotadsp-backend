@@ -2069,6 +2069,63 @@ async def org_billing(user: dict = Depends(get_current_user)):
     return b
 
 
+# ===== PAGOS: Lemon Squeezy (Merchant of Record) =====
+# Se activa poniendo los secretos en Fly: LS_WEBHOOK_SECRET y las URLs de checkout
+# LS_CHECKOUT_STARTER / LS_CHECKOUT_PRO / LS_CHECKOUT_FLOTA.
+
+@api_router.get("/billing/config")
+async def billing_config(user: dict = Depends(get_current_user)):
+    """URLs de checkout por plan (vacío si aún no has conectado Lemon Squeezy).
+    El frontend añade el org_id del DSP para activar su cuenta al pagar."""
+    return {
+        "provider": "lemonsqueezy",
+        "ready": bool(os.environ.get("LS_CHECKOUT_PRO")),
+        "checkout": {
+            "Starter": os.environ.get("LS_CHECKOUT_STARTER", ""),
+            "Pro": os.environ.get("LS_CHECKOUT_PRO", ""),
+            "Flota": os.environ.get("LS_CHECKOUT_FLOTA", ""),
+        },
+    }
+
+
+@api_router.post("/billing/lemonsqueezy/webhook")
+async def lemonsqueezy_webhook(request: Request):
+    """Aviso de Lemon Squeezy cuando alguien paga/cancela → activa o suspende el DSP.
+    Verifica la firma con LS_WEBHOOK_SECRET. El org_id viaja en custom_data del checkout."""
+    import hmac as _hmac
+    import hashlib as _hashlib
+    secret = os.environ.get("LS_WEBHOOK_SECRET", "")
+    raw = await request.body()
+    if secret:
+        sig = request.headers.get("X-Signature", "")
+        digest = _hmac.new(secret.encode(), raw, _hashlib.sha256).hexdigest()
+        if not _hmac.compare_digest(digest, sig):
+            raise HTTPException(status_code=401, detail="Firma inválida")
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    meta = payload.get("meta") or {}
+    event = meta.get("event_name", "")
+    org_id = (meta.get("custom_data") or {}).get("org_id")
+    attrs = ((payload.get("data") or {}).get("attributes") or {})
+    status = attrs.get("status", "")
+    plan = attrs.get("variant_name") or attrs.get("product_name")
+    if not org_id:
+        return {"ok": True, "ignored": "sin org_id"}
+    # activo si la suscripción está viva; suspendido/cancelado si no
+    if event.startswith("subscription_") and status in ("active", "on_trial", "paid"):
+        await global_db.organizations.update_one(
+            {"id": org_id}, {"$set": {"status": "active", "plan": plan,
+                                      "ls_status": status, "ls_subscription_id": (payload.get("data") or {}).get("id")}})
+        logger.info("LS pago OK → DSP %s activo (%s)", org_id, plan)
+    elif event in ("subscription_cancelled", "subscription_expired", "subscription_paused"):
+        await global_db.organizations.update_one(
+            {"id": org_id}, {"$set": {"status": "suspended", "ls_status": status}})
+        logger.info("LS → DSP %s suspendido (%s)", org_id, event)
+    return {"ok": True}
+
+
 @api_router.get("/org/centers")
 async def list_org_centers(user: dict = Depends(get_current_user)):
     """Centros de TU organización (cada uno ve solo los suyos)."""
