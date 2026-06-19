@@ -29,6 +29,28 @@ const DICT = {
   'f4.d': { es: 'Cada empresa con su espacio aislado y su propio enlace para los conductores. Privado y seguro.', en: 'Each company with its own isolated space and driver link. Private and secure.', fr: 'Chaque entreprise avec son espace isolé et son lien chauffeurs. Privé et sécurisé.', de: 'Jedes Unternehmen mit eigenem isolierten Bereich und Fahrer-Link. Privat und sicher.', it: 'Ogni azienda con spazio isolato e link autisti. Privato e sicuro.', pt: 'Cada empresa com o seu espaço isolado e link para motoristas. Privado e seguro.' },
   'foot.have':        { es: '¿Ya tienes cuenta?', en: 'Already have an account?', fr: 'Déjà un compte ?', de: 'Schon ein Konto?', it: 'Hai già un account?', pt: 'Já tens conta?' },
   'foot.login':       { es: 'Inicia sesión', en: 'Log in', fr: 'Connectez-vous', de: 'Anmelden', it: 'Accedi', pt: 'Inicia sessão' },
+
+  'login.title':   { es: 'Entra en tu empresa', en: 'Log in to your company', fr: 'Connexion à votre entreprise', de: 'Bei deinem Unternehmen anmelden', it: 'Accedi alla tua azienda', pt: 'Entra na tua empresa' },
+  'login.user':    { es: 'Usuario', en: 'Username', fr: 'Identifiant', de: 'Benutzer', it: 'Utente', pt: 'Utilizador' },
+  'login.pass':    { es: 'Contraseña', en: 'Password', fr: 'Mot de passe', de: 'Passwort', it: 'Password', pt: 'Palavra-passe' },
+  'login.btn':     { es: 'Entrar', en: 'Log in', fr: 'Se connecter', de: 'Anmelden', it: 'Accedi', pt: 'Entrar' },
+  'login.err':     { es: 'Usuario o contraseña incorrectos', en: 'Wrong username or password', fr: 'Identifiant ou mot de passe incorrect', de: 'Benutzer oder Passwort falsch', it: 'Utente o password errati', pt: 'Utilizador ou palavra-passe incorretos' },
+  'login.no':      { es: '¿No tienes cuenta?', en: 'No account?', fr: 'Pas de compte ?', de: 'Kein Konto?', it: 'Nessun account?', pt: 'Sem conta?' },
+  'login.create':  { es: 'Crear empresa', en: 'Create company', fr: 'Créer une entreprise', de: 'Unternehmen erstellen', it: 'Crea azienda', pt: 'Criar empresa' },
+
+  'reg.title':     { es: 'Crea tu empresa', en: 'Create your company', fr: 'Créez votre entreprise', de: 'Erstelle dein Unternehmen', it: 'Crea la tua azienda', pt: 'Cria a tua empresa' },
+  'reg.sub':       { es: 'Gestiona tu flota. 14 días de prueba, sin tarjeta.', en: 'Manage your fleet. 14-day trial, no card.', fr: 'Gérez votre flotte. 14 jours d’essai, sans carte.', de: 'Verwalte deine Flotte. 14 Tage Test, ohne Karte.', it: 'Gestisci la tua flotta. 14 giorni di prova, senza carta.', pt: 'Gere a tua frota. 14 dias grátis, sem cartão.' },
+  'reg.company':   { es: 'Nombre de tu empresa', en: 'Company name', fr: 'Nom de l’entreprise', de: 'Firmenname', it: 'Nome azienda', pt: 'Nome da empresa' },
+  'reg.url':       { es: 'La URL de tu empresa', en: 'Your company URL', fr: 'L’URL de votre entreprise', de: 'Deine Firmen-URL', it: 'L’URL della tua azienda', pt: 'O URL da tua empresa' },
+  'reg.urlhint':   { es: 'Aquí entran tú y tus conductores. Solo letras, números y guiones.', en: 'Where you and your drivers log in. Letters, numbers and hyphens only.', fr: 'Où vous et vos chauffeurs vous connectez. Lettres, chiffres et tirets.', de: 'Hier melden sich du und deine Fahrer an. Nur Buchstaben, Zahlen, Bindestriche.', it: 'Qui accedete tu e i tuoi autisti. Solo lettere, numeri e trattini.', pt: 'Onde tu e os motoristas entram. Só letras, números e hífens.' },
+  'reg.center':    { es: 'Código de tu centro / estación', en: 'Your station / depot code', fr: 'Code de votre dépôt', de: 'Code deiner Station', it: 'Codice della tua sede', pt: 'Código do teu centro' },
+  'reg.btn':       { es: 'Crear cuenta y empezar', en: 'Create account and start', fr: 'Créer le compte et démarrer', de: 'Konto erstellen und starten', it: 'Crea account e inizia', pt: 'Criar conta e começar' },
+  'reg.have':      { es: '¿Ya tienes cuenta?', en: 'Already registered?', fr: 'Déjà inscrit ?', de: 'Schon registriert?', it: 'Già registrato?', pt: 'Já registado?' },
+  'reg.taken':     { es: 'Ese identificador ya está cogido, elige otro', en: 'That URL is taken, choose another', fr: 'Cet identifiant est pris, choisissez-en un autre', de: 'Diese URL ist vergeben, wähle eine andere', it: 'Quell’identificativo è già preso, scegline un altro', pt: 'Esse identificador já existe, escolhe outro' },
+
+  'dash.welcome':  { es: 'Bienvenido', en: 'Welcome', fr: 'Bienvenue', de: 'Willkommen', it: 'Benvenuto', pt: 'Bem-vindo' },
+  'dash.soon':     { es: 'Tu panel se está construyendo. Pronto verás aquí tu flota, conductores e inspecciones.', en: 'Your dashboard is being built. Soon you’ll see your fleet, drivers and inspections here.', fr: 'Votre tableau de bord est en cours de construction. Bientôt votre flotte, vos chauffeurs et vos inspections ici.', de: 'Dein Dashboard wird gebaut. Bald siehst du hier Flotte, Fahrer und Inspektionen.', it: 'La tua dashboard è in costruzione. Presto vedrai flotta, autisti e ispezioni qui.', pt: 'O teu painel está a ser construído. Em breve verás a tua frota, motoristas e inspeções aqui.' },
+  'dash.logout':   { es: 'Cerrar sesión', en: 'Log out', fr: 'Déconnexion', de: 'Abmelden', it: 'Esci', pt: 'Sair' },
 }
 
 const LangCtx = createContext({ lang: 'es', setLang: () => {}, t: (k) => k })
