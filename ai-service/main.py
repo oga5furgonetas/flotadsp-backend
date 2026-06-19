@@ -36,6 +36,7 @@ LABEL_ES = {
     "quaterpanel-dent": "Abolladura en panel trasero",
     "rear-bumper-dent": "Abolladura paragolpes trasero",
     "roof-dent": "Abolladura en techo",
+    "damage": "Daño",  # clase del modelo afinado con tus furgonetas
 }
 
 _model = None
@@ -44,12 +45,17 @@ _model = None
 MODEL_URL = os.environ.get("MODEL_URL", "").strip()
 
 
+LOCAL_MODEL = "model_finetuned.pt"   # modelo afinado con TUS furgonetas (tiene prioridad)
+
+
 def get_model():
     global _model
     if _model is None:
         from ultralytics import YOLO
-        if MODEL_URL:
-            # Modelo reentrenado con TUS correcciones, servido desde una URL (R2/HF/…)
+        if os.path.exists(LOCAL_MODEL) and os.environ.get("USE_FINETUNED", "") == "1":
+            path = LOCAL_MODEL
+            log.info("Modelo AFINADO (tus furgonetas) cargado: %s", LOCAL_MODEL)
+        elif MODEL_URL:
             import urllib.request
             path = "/tmp/model.pt"
             urllib.request.urlretrieve(MODEL_URL, path)
@@ -67,6 +73,7 @@ class DetectReq(BaseModel):
     inspection_id: str = ""
     photo_index: int = 0
     image_b64: str
+    conf: float = None  # umbral opcional (para diagnóstico/ajuste)
 
 
 @app.get("/health")
@@ -84,7 +91,7 @@ def detect(req: DetectReq):
         m = get_model()
         img = Image.open(io.BytesIO(base64.b64decode(req.image_b64))).convert("RGB")
         W, H = img.size
-        res = m.predict(img, conf=CONF, verbose=False)[0]
+        res = m.predict(img, conf=(req.conf if req.conf is not None else CONF), verbose=False)[0]
         dets = []
         for b in res.boxes:
             x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]

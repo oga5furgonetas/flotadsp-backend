@@ -14,8 +14,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
+# Modelo afinado con las furgonetas reales (tiene prioridad sobre el base)
+COPY model_finetuned.pt .
 
-# Descarga el modelo en el build → el primer /detect no espera la descarga
+# Descarga también el modelo base como respaldo
 RUN python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='vineetsarpal/yolov11n-car-damage', filename='best.pt')"
 
 ENV PORT=8001
