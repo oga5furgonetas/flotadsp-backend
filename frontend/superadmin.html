@@ -34,7 +34,8 @@
   .head h1{font-size:22px;margin:0;font-weight:800;letter-spacing:-.01em}
   .head .who{display:flex;align-items:center;gap:9px;background:var(--panel);border:1px solid var(--line);border-radius:99px;padding:6px 14px;font-size:13px}
   .head .who .dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
-  section.view{display:none}.section-on{display:block}
+  section.view{display:none}
+  section.view.section-on{display:block}
   /* KPI */
   .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:26px}
   .kpi{background:linear-gradient(160deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:16px;padding:18px}
@@ -86,7 +87,7 @@
       <a data-v="interesados"><span class="i">✨</span> Interesados</a>
     </nav>
     <div class="foot">Conectado como <b>Dani</b><br>Super-admin
-      <a href="/?app=1" style="color:var(--acc);display:block;margin-top:8px">🚐 Ver mi flota (OGA5)</a>
+      <a href="/" style="color:var(--acc);display:block;margin-top:8px">🚐 Ir a mi flota (OGA5)</a>
       <a id="logout">Cerrar sesión →</a></div>
   </aside>
 
