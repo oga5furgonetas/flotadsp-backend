@@ -3474,6 +3474,33 @@ async def ai_dataset_stats(_=Depends(require_admin)):
             "progress_pct": round(total / 3000 * 100, 1)}
 
 
+@api_router.get("/ai/export-dataset")
+async def ai_export_dataset(_=Depends(require_superadmin)):
+    """Exporta las correcciones como dataset ENTRENABLE (un solo objetivo: 'daño').
+    YOLO localiza el daño (caja) y Gemini lo describe → con pocos ejemplos mejora.
+    Cada muestra: foto + caja real marcada por un humano."""
+    # Positivos = la IA acertó, la corregiste a mano, o se le escapó (el oro)
+    cursor = db.ai_feedback.find(
+        {"verdict": {"$in": ["correct", "corrected", "missed"]}}, {"_id": 0})
+    samples = []
+    async for f in cursor:
+        dmg = f.get("damage") or {}
+        box = f.get("corrected_box") if f.get("verdict") == "corrected" else dmg.get("box_2d")
+        url = f.get("photo_url")
+        if not (url and isinstance(box, list) and len(box) == 4):
+            continue
+        samples.append({
+            "image_url": url,
+            "box_2d": [int(v) for v in box],   # [ymin,xmin,ymax,xmax] 0-1000
+            "label": "damage",
+            "part": dmg.get("part"),
+            "verdict": f.get("verdict"),
+        })
+    return {"classes": ["damage"], "n": len(samples), "samples": samples,
+            "formato_box": "[ymin,xmin,ymax,xmax] normalizado 0-1000",
+            "listo_para_entrenar": len(samples) >= 50}
+
+
 @api_router.post("/inspections/{inspection_id}/mark-reviewed")
 async def mark_inspection_reviewed(inspection_id: str, _=Depends(require_admin)):
     """Marca una inspección como revisada — desaparece de la cola de revisión rápida."""

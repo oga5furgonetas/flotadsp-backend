@@ -97,6 +97,7 @@
     <!-- RESUMEN -->
     <section class="view section-on" id="v-resumen">
       <div class="kpis" id="kpis"></div>
+      <div class="card" id="iacard"></div>
       <div class="card"><div class="ch"><h2>Últimos registros</h2></div>
         <table><thead><tr><th>Empresa</th><th>URL</th><th>Estado</th><th>Alta</th></tr></thead><tbody id="recent"></tbody></table>
       </div>
@@ -197,11 +198,14 @@
       var res=await Promise.all([
         fetch(API+"/admin/overview",{headers:H()}),
         fetch(API+"/admin/orgs",{headers:H()}),
-        fetch(API+"/leads",{headers:H()})
+        fetch(API+"/leads",{headers:H()}),
+        fetch(API+"/ai-dataset/stats",{headers:H()}),
+        fetch(API+"/ai/export-dataset",{headers:H()})
       ]);
-      if(res.some(function(r){return r.status===401||r.status===403;})){ showLogin("Tu sesión caducó. Entra de nuevo."); return; }
-      var j=await Promise.all(res.map(function(r){return r.json();}));
+      if(res.slice(0,3).some(function(r){return r.status===401||r.status===403;})){ showLogin("Tu sesión caducó. Entra de nuevo."); return; }
+      var j=await Promise.all(res.map(function(r){return r.json().catch(function(){return {};});}));
       DATA.ov=j[0]||{}; DATA.orgs=(j[1]||{}).orgs||[]; DATA.leads=(j[2]||{}).leads||[];
+      DATA.ia=j[3]||{}; DATA.iaTrain=j[4]||{};
       renderResumen(); renderEmpresas(); renderFacturacion(); renderLeads();
     }catch(e){ document.getElementById("kpis").innerHTML='<div class="kpi"><div class="l" style="color:var(--err)">Error al cargar. Recarga la página.</div></div>'; }
   }
@@ -216,6 +220,20 @@
       kpi('⏳',o.en_prueba||0,'En prueba')+
       kpi('💶',(o.mrr_estimado||0)+' €','MRR estimado','gold')+
       kpi('✨',o.interesados||0,'Interesados');
+    // Tarjeta de Aprendizaje IA (el "bucle"): correcciones acumuladas → entrenamiento
+    var ia=DATA.ia||{}, tr=DATA.iaTrain||{};
+    var iaBox=document.getElementById("iacard");
+    if(iaBox){
+      var entren=tr.n||0, listo=tr.listo_para_entrenar;
+      iaBox.innerHTML=
+        '<div class="ch"><h2>🧠 Aprendizaje IA (tus correcciones)</h2></div>'+
+        '<div style="display:flex;gap:24px;flex-wrap:wrap;padding:6px 16px 16px;align-items:center">'+
+          '<div><div style="font-size:26px;font-weight:850">'+(ia.total||0)+'</div><div class="l" style="color:var(--mut);font-size:12px">correcciones marcadas</div></div>'+
+          '<div><div style="font-size:26px;font-weight:850;color:var(--acc)">'+entren+'</div><div class="l" style="color:var(--mut);font-size:12px">ejemplos entrenables</div></div>'+
+          '<div><div style="font-size:26px;font-weight:850;color:'+(listo?"var(--ok)":"var(--warn)")+'">'+(listo?"Sí ✓":"Aún no")+'</div><div class="l" style="color:var(--mut);font-size:12px">¿listo para reentrenar?</div></div>'+
+          '<div style="flex:1;min-width:200px;color:var(--mut);font-size:12.5px;line-height:1.5">Cada daño que corriges o marcas se guarda como ejemplo. Con suficientes ('+(listo?'¡ya los tienes!':'~50+')+') reentrenamos el modelo y mejora en TUS furgonetas.</div>'+
+        '</div>';
+    }
     var rec=DATA.orgs.slice(0,8);
     document.getElementById("recent").innerHTML=rec.length?rec.map(function(x){
       return '<tr><td class="name"><b>'+esc(x.name)+'</b></td><td><a href="/conductor/#'+esc(x.slug)+'">/'+esc(x.slug)+'</a></td><td>'+badge(x.status||'trial')+'</td><td>'+fdate(x.created_at)+'</td></tr>';
