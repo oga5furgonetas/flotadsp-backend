@@ -4367,5 +4367,26 @@
     if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',start); else start();
   })();
   </script>
+
+  <!-- ===== Botón flotante "Panel Super-Admin" — solo para cuentas dueño ===== -->
+  <script>
+  (function(){
+    function isOwner(){
+      try{ var a=JSON.parse(localStorage.getItem('flotadsp_admin')||'{}'); if(a.account_type) return a.account_type==='owner'; }catch(e){}
+      try{ var p=JSON.parse(atob((localStorage.getItem('flotadsp_token')||'').split('.')[1]||'')); return p && p.account_type==='owner'; }catch(e){}
+      return false;
+    }
+    function add(){
+      if(!isOwner() || document.getElementById('sa-fab')) return;
+      var a=document.createElement('a');
+      a.id='sa-fab'; a.href='/superadmin'; a.textContent='🛠️ Panel Super-Admin';
+      a.style.cssText='position:fixed;right:18px;bottom:18px;z-index:99999;background:linear-gradient(135deg,#0ea5e9,#0369a1);color:#fff;font:700 13px system-ui,sans-serif;padding:11px 16px;border-radius:12px;text-decoration:none;box-shadow:0 10px 30px -8px rgba(14,165,233,.6)';
+      document.body.appendChild(a);
+    }
+    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',add); else add();
+    // reintenta por si la sesión se carga tras el render
+    setTimeout(add,1500); setTimeout(add,4000);
+  })();
+  </script>
 </body>
 </html>
