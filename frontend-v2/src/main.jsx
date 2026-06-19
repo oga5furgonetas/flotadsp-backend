@@ -7,6 +7,7 @@ import { LangProvider } from './i18n'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Registro from './pages/Registro'
+import Planes from './pages/Planes'
 import Dashboard from './pages/Dashboard'
 import DriverPortal from './pages/driver/DriverPortal'
 
@@ -21,6 +22,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
             <Route path="/registro" element={<Registro />} />
+            <Route path="/planes" element={<Planes />} />
             <Route path="/app" element={<Dashboard />} />
             <Route path="/conductor" element={<DriverPortal />} />
             <Route path="/conductor/:slug" element={<DriverPortal />} />
