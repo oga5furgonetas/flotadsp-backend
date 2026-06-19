@@ -1,23 +1,27 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import './index.css'
 import { ToastProvider } from './lib/toast'
+import { LangProvider } from './i18n'
+import Landing from './pages/Landing'
 import DriverPortal from './pages/driver/DriverPortal'
 
-/* Fase 1 de la reconstrucción: solo el Portal Conductor.
-   El resto de rutas redirigen a la app actual hasta que se migren. */
+/* App v2 (staging, en paralelo). La web actual NO se toca hasta el lanzamiento. */
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <ToastProvider>
-      <BrowserRouter basename="/conductor">
-        <Routes>
-          {/* flotadsp.com/conductor/<slug> → portal del conductor de ESE DSP */}
-          <Route path="/:slug" element={<DriverPortal />} />
-          <Route path="*" element={<DriverPortal />} />
-        </Routes>
-      </BrowserRouter>
-    </ToastProvider>
+    <LangProvider>
+      <ToastProvider>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/" element={<Landing />} />
+            <Route path="/conductor" element={<DriverPortal />} />
+            <Route path="/conductor/:slug" element={<DriverPortal />} />
+            <Route path="*" element={<Landing />} />
+          </Routes>
+        </BrowserRouter>
+      </ToastProvider>
+    </LangProvider>
   </React.StrictMode>,
 )
