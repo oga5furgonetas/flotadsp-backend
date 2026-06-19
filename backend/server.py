@@ -2083,7 +2083,7 @@ async def billing_config(user: dict = Depends(get_current_user)):
         "checkout": {
             "Starter": os.environ.get("LS_CHECKOUT_STARTER", ""),
             "Pro": os.environ.get("LS_CHECKOUT_PRO", ""),
-            "Flota": os.environ.get("LS_CHECKOUT_FLOTA", ""),
+            "Max": os.environ.get("LS_CHECKOUT_MAX", ""),
         },
     }
 

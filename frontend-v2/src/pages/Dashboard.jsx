@@ -89,7 +89,7 @@ export default function Dashboard() {
                 </p>
                 {billCfg && billCfg.ready ? (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {['Starter', 'Pro', 'Flota'].map((p) => billCfg.checkout[p] ? (
+                    {['Starter', 'Pro', 'Max'].map((p) => billCfg.checkout[p] ? (
                       <a key={p} href={`${billCfg.checkout[p]}?checkout[custom][org_id]=${orgId()}`}
                         style={{ ...btnPrimary, background: p === 'Pro' ? 'linear-gradient(135deg,#0ea5e9,#0369a1)' : 'rgba(255,255,255,.06)', border: p === 'Pro' ? 'none' : '1px solid rgba(255,255,255,.12)' }}>
                         {t('bill.sub')} {p}
