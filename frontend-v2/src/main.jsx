@@ -8,10 +8,15 @@ import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Registro from './pages/Registro'
 import Planes from './pages/Planes'
-import Dashboard from './pages/Dashboard'
 import DriverPortal from './pages/driver/DriverPortal'
 
-/* App v2 (staging, en paralelo). La web actual NO se toca hasta el lanzamiento. */
+/* La app de gestión completa (Conductores, Flota, HistorialIA, PeritoIA…) vive en
+   app.flotadsp.com. flotadsp.com = landing + registro + pagos + portal conductor.
+   Login/registro y cualquier ruta /app llevan a la app completa. */
+function AppRedirect() {
+  window.location.replace('https://app.flotadsp.com')
+  return null
+}
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -23,7 +28,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/login" element={<Login />} />
             <Route path="/registro" element={<Registro />} />
             <Route path="/planes" element={<Planes />} />
-            <Route path="/app" element={<Dashboard />} />
+            <Route path="/app" element={<AppRedirect />} />
             <Route path="/conductor" element={<DriverPortal />} />
             <Route path="/conductor/:slug" element={<DriverPortal />} />
             <Route path="*" element={<Landing />} />

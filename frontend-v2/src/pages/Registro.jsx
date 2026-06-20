@@ -41,7 +41,7 @@ export default function Registro() {
       localStorage.setItem('flotadsp_admin', JSON.stringify({ name: j.name, role: j.role, id: j.id, account_type: j.account_type, slug: j.slug, centers: j.centers || [] }))
       const plan = new URLSearchParams(window.location.search).get('plan')
       if (plan) localStorage.setItem('flota_plan', plan)
-      nav('/app')
+      window.location.href = 'https://app.flotadsp.com'
     } catch { setErr('—'); setBusy(false) }
   }
 
