@@ -1,21 +1,35 @@
 import { useEffect, useState } from 'react'
 import { Loader2, LogIn, Truck } from 'lucide-react'
-import { getConductorList, getDriverToken } from '../../services/api'
+import { getConductorList, getDriverToken, getOrgBySlug, currentSlug } from '../../services/api'
 import { useToast } from '../../lib/toast'
-
-const CENTERS = ['OGA5', 'DGA1', 'DGA2']
 
 export default function DriverLogin({ onLogin }) {
   const toast = useToast()
   const [email, setEmail] = useState('')
   const [busy, setBusy] = useState(false)
   const [drivers, setDrivers] = useState([])
-  const [center, setCenter] = useState('OGA5')
+  const [orgName, setOrgName] = useState('')
+  const [centers, setCenters] = useState([])
+  const [center, setCenter] = useState('') // '' = todos los centros
 
   useEffect(() => {
+    // Conductores del DSP (aislado por el slug de la URL: /conductor/#<slug>)
     getConductorList()
-      .then((r) => setDrivers(r.data || []))
+      .then((r) => {
+        const list = r.data || []
+        setDrivers(list)
+        // Centros REALES de este DSP, derivados de sus conductores (multi-tenant)
+        const uniq = [...new Set(list.map((d) => d.center).filter(Boolean))].sort()
+        setCenters(uniq)
+      })
       .catch(() => setDrivers([]))
+    // Nombre del DSP por su slug (para que el conductor confirme que es su empresa)
+    const slug = currentSlug()
+    if (slug) {
+      getOrgBySlug(slug)
+        .then((r) => setOrgName(r.data?.name || ''))
+        .catch(() => setOrgName(''))
+    }
   }, [])
 
   const handleLogin = async () => {
@@ -57,18 +71,21 @@ export default function DriverLogin({ onLogin }) {
             <Truck size={24} className="text-white" />
           </div>
           <h1 className="text-xl font-bold text-dark-50">Portal Conductor</h1>
-          <p className="mt-1 text-sm text-dark-400">FlotaDSP</p>
+          <p className="mt-1 text-sm text-dark-400">{orgName || 'FlotaDSP'}</p>
         </div>
 
         <div className="space-y-4">
-          <div>
-            <label className="label">Centro</label>
-            <select className="select" value={center} onChange={(e) => setCenter(e.target.value)}>
-              {CENTERS.map((c) => (
-                <option key={c}>{c}</option>
-              ))}
-            </select>
-          </div>
+          {centers.length > 0 && (
+            <div>
+              <label className="label">Centro</label>
+              <select className="select" value={center} onChange={(e) => setCenter(e.target.value)}>
+                <option value="">Todos los centros</option>
+                {centers.map((c) => (
+                  <option key={c}>{c}</option>
+                ))}
+              </select>
+            </div>
+          )}
           <div>
             <label className="label">Email asignado</label>
             <input
