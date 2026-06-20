@@ -37,11 +37,15 @@ function DamageMock({ label }) {
   return (
     <div style={{ position: 'relative', maxWidth: 460, margin: '0 auto', borderRadius: 16, overflow: 'hidden', border: '1px solid rgba(255,255,255,.12)', boxShadow: '0 30px 70px -30px rgba(0,0,0,.7)' }}>
       <img src="/van.jpg" alt="" style={{ width: '100%', display: 'block' }} />
-      {/* matrícula cubierta (privacidad) */}
-      <div style={{ position: 'absolute', left: '36%', top: '80.5%', width: '28%', height: '5%', background: 'rgba(10,12,16,.9)', borderRadius: 3 }} />
-      {/* recuadro de detección IA */}
-      <div style={{ position: 'absolute', left: '20%', top: '67%', width: '26%', height: '11%', border: '3px solid #f59e0b', borderRadius: 6, boxShadow: '0 0 0 100vmax rgba(0,0,0,.04)' }} />
-      <div style={{ position: 'absolute', left: '20%', top: '61%', background: '#f59e0b', color: '#1a1207', fontSize: 11.5, fontWeight: 800, padding: '3px 9px', borderRadius: 5 }}>⚠ {label} · 94%</div>
+      {/* Recuadros de detección IA — ajustados a los daños reales de la furgoneta */}
+      {/* 1 · Faldón / estribera lateral: arañazos extensos (300 €) — daño principal */}
+      <div style={{ position: 'absolute', left: '39%', top: '49.5%', width: '37%', height: '5.5%', border: '3px solid #f59e0b', borderRadius: 6 }} />
+      <div style={{ position: 'absolute', left: '39%', top: '43%', background: '#f59e0b', color: '#1a1207', fontSize: 11.5, fontWeight: 800, padding: '3px 9px', borderRadius: 5, whiteSpace: 'nowrap' }}>⚠ {label} · 95%</div>
+      {/* 2 · Puerta corredera izquierda: abolladura (450 €) */}
+      <div style={{ position: 'absolute', left: '41%', top: '39.5%', width: '8%', height: '8%', border: '2.5px solid #f59e0b', borderRadius: 6 }} />
+      {/* 3 · Aleta trasera izquierda: golpe (375 €) */}
+      <div style={{ position: 'absolute', left: '67.5%', top: '38.5%', width: '7.5%', height: '9.5%', border: '2.5px solid #f59e0b', borderRadius: 6 }} />
+      <div style={{ position: 'absolute', left: '68.5%', top: '32%', background: 'rgba(245,158,11,.95)', color: '#1a1207', fontSize: 10.5, fontWeight: 800, padding: '2px 7px', borderRadius: 5 }}>95%</div>
       <div style={{ position: 'absolute', top: 10, right: 10, background: 'rgba(14,165,233,.9)', color: '#fff', fontSize: 10.5, fontWeight: 800, padding: '4px 10px', borderRadius: 99, letterSpacing: '.04em' }}>● IA</div>
     </div>
   )
