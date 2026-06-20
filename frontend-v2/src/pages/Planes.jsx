@@ -5,11 +5,11 @@ export default function Planes() {
   const plans = [
     { tag: t('nav.try'), name: t('pl.days'), who: t('pl.who.trial'), price: t('pl.free'), per: '', cta: t('pl.start'), href: '/registro', pop: false,
       feats: ['pl.feat.all', 'pl.feat.nocard', 'pl.feat.1c'] },
-    { tag: 'Starter', name: 'Starter', who: t('pl.who.s'), price: '99,99€', per: t('pl.mo'), cta: t('pl.choose'), href: '/registro', pop: false,
+    { tag: 'Starter', name: 'Starter', who: t('pl.who.s'), price: '99,99€', per: t('pl.mo'), cta: t('pl.choose'), href: '/registro?plan=Starter', pop: false,
       feats: ['pl.feat.1c', 'pl.feat.25', 'pl.feat.insp'] },
-    { tag: 'Pro ⭐', name: 'Pro', who: t('pl.who.p'), price: '139,99€', per: t('pl.mo'), cta: t('pl.choose'), href: '/registro', pop: true,
+    { tag: 'Pro ⭐', name: 'Pro', who: t('pl.who.p'), price: '139,99€', per: t('pl.mo'), cta: t('pl.choose'), href: '/registro?plan=Pro', pop: true,
       feats: ['pl.feat.3c', 'pl.feat.unl', 'pl.feat.allm', 'pl.feat.prio'] },
-    { tag: 'Max', name: 'Max', who: t('pl.who.f'), price: '199,99€', per: t('pl.mo'), cta: t('pl.choose'), href: '/registro', pop: false,
+    { tag: 'Max', name: 'Max', who: t('pl.who.f'), price: '199,99€', per: t('pl.mo'), cta: t('pl.choose'), href: '/registro?plan=Max', pop: false,
       feats: ['pl.feat.unlc', 'pl.feat.allm', 'pl.feat.prio'] },
   ]
   return (

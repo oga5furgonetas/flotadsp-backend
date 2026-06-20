@@ -39,6 +39,8 @@ export default function Registro() {
       if (!r.ok || !j.access_token) { setErr(j.detail || t('reg.taken')); setBusy(false); return }
       localStorage.setItem('flotadsp_token', j.access_token)
       localStorage.setItem('flotadsp_admin', JSON.stringify({ name: j.name, role: j.role, id: j.id, account_type: j.account_type, slug: j.slug, centers: j.centers || [] }))
+      const plan = new URLSearchParams(window.location.search).get('plan')
+      if (plan) localStorage.setItem('flota_plan', plan)
       nav('/app')
     } catch { setErr('—'); setBusy(false) }
   }

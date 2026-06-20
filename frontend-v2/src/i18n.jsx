@@ -121,6 +121,8 @@ const DICT = {
   'bill.active': { es: 'Suscripción activa', en: 'Active subscription', fr: 'Abonnement actif', de: 'Abo aktiv', it: 'Abbonamento attivo', pt: 'Subscrição ativa' },
   'bill.soon':   { es: 'Pagos próximamente — estamos terminando de conectarlos.', en: 'Payments coming soon — we’re finishing the setup.', fr: 'Paiements bientôt — finalisation en cours.', de: 'Zahlungen bald — wir richten sie ein.', it: 'Pagamenti in arrivo — stiamo completando.', pt: 'Pagamentos em breve — a terminar a ligação.' },
   'bill.sub':    { es: 'Suscribirse', en: 'Subscribe', fr: 'S’abonner', de: 'Abonnieren', it: 'Abbonati', pt: 'Subscrever' },
+  'bill.continue': { es: 'Estás en prueba gratis. Suscríbete para seguir usándolo cuando termine.', en: 'You’re on a free trial. Subscribe to keep using it when it ends.', fr: 'Vous êtes en essai gratuit. Abonnez-vous pour continuer ensuite.', de: 'Du bist in der Testphase. Abonniere, um danach weiterzunutzen.', it: 'Sei in prova gratuita. Abbonati per continuare alla fine.', pt: 'Estás em teste grátis. Subscreve para continuar quando terminar.' },
+  'bill.chosen': { es: 'Has elegido', en: 'You chose', fr: 'Vous avez choisi', de: 'Du hast gewählt', it: 'Hai scelto', pt: 'Escolheste' },
 }
 
 const LangCtx = createContext({ lang: 'es', setLang: () => {}, t: (k) => k })

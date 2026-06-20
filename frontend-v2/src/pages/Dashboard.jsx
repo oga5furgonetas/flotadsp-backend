@@ -34,6 +34,9 @@ export default function Dashboard() {
   if (!me) return null
   const link = `https://flotadsp.com/conductor/#${me.slug || ''}`
   function orgId() { try { return JSON.parse(atob((localStorage.getItem('flotadsp_token') || '').split('.')[1] || '')).org_id || '' } catch { return '' } }
+  function chosenPlan() { const c = localStorage.getItem('flota_plan'); return ['Starter', 'Pro', 'Max'].includes(c) ? c : '' }
+  function planOrder() { const c = chosenPlan(); const all = ['Starter', 'Pro', 'Max']; return c ? [c, ...all.filter((p) => p !== c)] : all }
+  const PRICES = { Starter: '99,99', Pro: '139,99', Max: '199,99' }
   const kpis = [
     { n: data.vehicles?.length, l: t('dash.vehicles'), ic: '🚐' },
     { n: data.drivers?.length, l: t('dash.drivers'), ic: '👤' },
@@ -84,15 +87,18 @@ export default function Dashboard() {
               <p style={{ color: '#4ade80', fontSize: 14, margin: 0, fontWeight: 600 }}>✅ {t('bill.active')}{bill.plan ? ` · ${bill.plan}` : ''}</p>
             ) : (
               <div>
-                <p style={{ color: '#f59e0b', fontSize: 13, margin: '0 0 12px' }}>
+                <p style={{ color: '#f59e0b', fontSize: 13, margin: '0 0 4px', fontWeight: 600 }}>
                   ⏳ {t('bill.trial')}{bill.days_left != null ? ` · ${bill.days_left} ${t('bill.daysleft')}` : ''}
+                </p>
+                <p style={{ color: '#8b94a3', fontSize: 13, margin: '0 0 12px' }}>
+                  {t('bill.continue')}{chosenPlan() ? ` · ${t('bill.chosen')}: ${chosenPlan()}` : ''}
                 </p>
                 {billCfg && billCfg.ready ? (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {['Starter', 'Pro', 'Max'].map((p) => billCfg.checkout[p] ? (
+                    {planOrder().map((p) => billCfg.checkout[p] ? (
                       <a key={p} href={`${billCfg.checkout[p]}?checkout[custom][org_id]=${orgId()}`}
-                        style={{ ...btnPrimary, background: p === 'Pro' ? 'linear-gradient(135deg,#0ea5e9,#0369a1)' : 'rgba(255,255,255,.06)', border: p === 'Pro' ? 'none' : '1px solid rgba(255,255,255,.12)' }}>
-                        {t('bill.sub')} {p}
+                        style={{ ...btnPrimary, background: p === (chosenPlan() || 'Pro') ? 'linear-gradient(135deg,#0ea5e9,#0369a1)' : 'rgba(255,255,255,.06)', border: p === (chosenPlan() || 'Pro') ? 'none' : '1px solid rgba(255,255,255,.12)' }}>
+                        {t('bill.sub')} {p} {PRICES[p] ? `· ${PRICES[p]}€` : ''}
                       </a>
                     ) : null)}
                   </div>
