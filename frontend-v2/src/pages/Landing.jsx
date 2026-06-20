@@ -32,26 +32,32 @@ function DashboardMock() {
   )
 }
 
-/* Ilustración de detección de daño (SVG): furgoneta + recuadro IA */
+/* Detección de daño sobre FOTO real de furgoneta */
 function DamageMock({ label }) {
   return (
-    <svg viewBox="0 0 420 240" style={{ width: '100%', maxWidth: 460, borderRadius: 16, border: '1px solid rgba(255,255,255,.1)', background: '#0e1116' }}>
-      <rect width="420" height="240" fill="#0e1116" />
-      {/* furgoneta simplificada */}
-      <g fill="#2a2f3a" stroke="#3a4150" strokeWidth="2">
-        <rect x="60" y="90" width="220" height="90" rx="10" />
-        <rect x="280" y="70" width="80" height="110" rx="10" />
-        <rect x="295" y="85" width="55" height="45" rx="6" fill="#1a1e26" />
-      </g>
-      <circle cx="120" cy="190" r="20" fill="#15181f" stroke="#3a4150" strokeWidth="3" />
-      <circle cx="310" cy="190" r="20" fill="#15181f" stroke="#3a4150" strokeWidth="3" />
-      {/* recuadro de daño detectado */}
-      <rect x="150" y="120" width="70" height="44" rx="6" fill="none" stroke="#f59e0b" strokeWidth="3" strokeDasharray="2 0" />
-      <g>
-        <rect x="150" y="100" width="118" height="18" rx="4" fill="#f59e0b" />
-        <text x="158" y="113" fontFamily="system-ui" fontSize="11" fontWeight="700" fill="#1a1207">⚠ {label} · 87%</text>
-      </g>
-    </svg>
+    <div style={{ position: 'relative', maxWidth: 460, margin: '0 auto', borderRadius: 16, overflow: 'hidden', border: '1px solid rgba(255,255,255,.12)', boxShadow: '0 30px 70px -30px rgba(0,0,0,.7)' }}>
+      <img src="/van.jpg" alt="" style={{ width: '100%', display: 'block' }} />
+      {/* matrícula cubierta (privacidad) */}
+      <div style={{ position: 'absolute', left: '36%', top: '80.5%', width: '28%', height: '5%', background: 'rgba(10,12,16,.9)', borderRadius: 3 }} />
+      {/* recuadro de detección IA */}
+      <div style={{ position: 'absolute', left: '20%', top: '67%', width: '26%', height: '11%', border: '3px solid #f59e0b', borderRadius: 6, boxShadow: '0 0 0 100vmax rgba(0,0,0,.04)' }} />
+      <div style={{ position: 'absolute', left: '20%', top: '61%', background: '#f59e0b', color: '#1a1207', fontSize: 11.5, fontWeight: 800, padding: '3px 9px', borderRadius: 5 }}>⚠ {label} · 94%</div>
+      <div style={{ position: 'absolute', top: 10, right: 10, background: 'rgba(14,165,233,.9)', color: '#fff', fontSize: 10.5, fontWeight: 800, padding: '4px 10px', borderRadius: 99, letterSpacing: '.04em' }}>● IA</div>
+    </div>
+  )
+}
+
+/* Tarjeta de ahorro (ROI) */
+function RoiCard({ ic, big, t, d }) {
+  return (
+    <div style={{ background: '#13161b', border: '1px solid rgba(255,255,255,.08)', borderRadius: 16, padding: '20px 18px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <span style={{ fontSize: 20 }}>{ic}</span>
+        <span style={{ fontSize: 18, fontWeight: 850, color: '#34d399' }}>{big}</span>
+      </div>
+      <h3 style={{ margin: '0 0 5px', fontSize: 15.5 }}>{t}</h3>
+      <p style={{ margin: 0, color: '#8b94a3', fontSize: 13, lineHeight: 1.5 }}>{d}</p>
+    </div>
   )
 }
 
@@ -99,6 +105,18 @@ export default function Landing() {
         </div>
       </header>
 
+      {/* CUÁNTO TE AHORRAS (ROI) */}
+      <section style={sec}>
+        <h2 style={{ ...h2c, marginBottom: 6 }}>💸 {t('roi.t')}</h2>
+        <p style={{ textAlign: 'center', color: '#8b94a3', margin: '0 0 28px', fontSize: 15 }}>{t('roi.sub')}</p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))', gap: 16 }}>
+          <RoiCard ic="🛡️" big="300–1.500 €" t={t('roi.1t')} d={t('roi.1d')} />
+          <RoiCard ic="🔔" big="0 €" t={t('roi.2t')} d={t('roi.2d')} />
+          <RoiCard ic="🏆" big="−30%" t={t('roi.3t')} d={t('roi.3d')} />
+          <RoiCard ic="⏱️" big="2h → 5min" t={t('roi.4t')} d={t('roi.4d')} />
+        </div>
+      </section>
+
       {/* CÓMO FUNCIONA */}
       <section style={sec}>
         <h2 style={h2c}>{t('how.t')}</h2>
@@ -144,6 +162,14 @@ export default function Landing() {
           <span style={{ ...pillBlue, background: 'rgba(56,189,248,.15)' }}>🔮 {t('score.tag')}</span>
           <h2 style={{ fontSize: 24, margin: '6px 0 8px', fontWeight: 800 }}>{t('score.t')}</h2>
           <p style={{ color: '#8b94a3', fontSize: 15, maxWidth: 560, margin: '0 auto', lineHeight: 1.6 }}>{t('score.d')}</p>
+        </div>
+      </section>
+
+      {/* SOCIO FUNDADOR */}
+      <section style={sec}>
+        <div style={{ background: 'linear-gradient(135deg,rgba(251,191,36,.1),rgba(234,104,0,.06))', border: '1px solid rgba(251,191,36,.3)', borderRadius: 20, padding: '28px 26px', textAlign: 'center' }}>
+          <span style={{ ...pill, marginBottom: 10 }}>💙 {t('found.t')}</span>
+          <p style={{ color: '#e7ebf2', fontSize: 16, maxWidth: 600, margin: '0 auto', lineHeight: 1.6, fontWeight: 500 }}>{t('found.d')}</p>
         </div>
       </section>
 
