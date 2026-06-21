@@ -1,0 +1,39 @@
+app = "flotadsp-backend"
+primary_region = "cdg"
+
+[build]
+
+[env]
+  DB_NAME = "flotadsp"
+  CORS_ORIGINS = "*"
+  GEMINI_MODEL = "gemini-1.5-flash"
+  PUBLIC_BASE_URL = "https://flotadsp-backend.fly.dev"
+  JWT_EXPIRE_HOURS = "72"
+  ADMIN_NAME = "Administrador"
+  # ⚠️ Todos los secretos van con: fly secrets set CLAVE=valor
+  # SECRET_KEY, ADMIN_USERNAME, ADMIN_PASSWORD, GEMINI_API_KEY, MONGO_URL
+  # R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY, R2_SECRET_KEY, R2_PUBLIC_URL
+
+[mounts]
+  source = "flotadsp_uploads"
+  destination = "/app/uploads"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+  kill_timeout = "90s"
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/api/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

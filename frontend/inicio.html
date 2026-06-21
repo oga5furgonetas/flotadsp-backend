@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlotaDSP — Gestiona tu flota de furgonetas</title>
+<meta name="description" content="Inspecciones, ITV, conductores y mantenimiento para DSPs de Amazon. Ahorra en daños y multas. Prueba gratis 14 días, sin tarjeta.">
+<style>
+  :root{ --bg:#0b0d10; --card:#13161b; --line:rgba(255,255,255,.08); --txt:#e7ebf2; --mut:#8b94a3; --acc:#0ea5e9; --acc2:#0369a1; }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1100px 560px at 72% -12%,rgba(14,165,233,.12),transparent),var(--bg);color:var(--txt);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .nav{display:flex;align-items:center;justify-content:space-between;max-width:1040px;margin:0 auto;padding:18px 18px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .logo{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#fb923c,#ea6800);display:flex;align-items:center;justify-content:center;font-size:18px}
+  .brand b{font-size:17px}
+  .nav a{color:var(--mut);text-decoration:none;font-size:14px;font-weight:600;margin-left:18px}
+  .nav a.btn{color:#fff;background:linear-gradient(135deg,var(--acc),var(--acc2));padding:8px 14px;border-radius:9px}
+  .hero{max-width:860px;margin:0 auto;padding:54px 18px 30px;text-align:center}
+  .pill{display:inline-block;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.35);color:#fbbf24;padding:6px 14px;border-radius:99px;font-size:12.5px;font-weight:700;margin-bottom:20px}
+  h1{font-size:clamp(30px,5vw,46px);line-height:1.08;margin:0 0 16px;font-weight:850;letter-spacing:-.02em}
+  h1 span{background:linear-gradient(120deg,#38bdf8,#0ea5e9);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{font-size:17px;color:var(--mut);max-width:600px;margin:0 auto 28px;line-height:1.55}
+  .cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .cta a{text-decoration:none;font-weight:800;font-size:15px;padding:13px 22px;border-radius:12px}
+  .cta a.primary{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff}
+  .cta a.ghost{background:rgba(255,255,255,.05);border:1px solid var(--line);color:var(--txt)}
+  .mini{color:var(--mut);font-size:12.5px;margin-top:14px}
+  .feats{max-width:1000px;margin:30px auto 0;padding:0 18px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+  .feat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px}
+  .feat .ic{font-size:22px;margin-bottom:8px}
+  .feat h3{margin:0 0 5px;font-size:15.5px}
+  .feat p{margin:0;color:var(--mut);font-size:13px;line-height:1.5}
+  .foot{text-align:center;color:var(--mut);font-size:13px;padding:40px 18px 50px}
+  .foot a{color:var(--acc);text-decoration:none}
+</style>
+</head>
+<body>
+  <div class="nav">
+    <div class="brand"><div class="logo">⚡</div><b>FlotaDSP</b></div>
+    <div><a href="/planes">Planes</a><a href="/">Entrar</a><a class="btn" href="/registro">Probar gratis</a></div>
+  </div>
+
+  <div class="hero">
+    <span class="pill">🚀 Beta — prueba todo gratis, sin tarjeta</span>
+    <h1>Tu flota de furgonetas, <span>bajo control</span>.</h1>
+    <p class="sub">Inspecciones con foto, avisos de ITV, scoring de conductores y mantenimiento — todo en un sitio. Pensado para DSPs de Amazon. Ahorra en daños y evita multas.</p>
+    <div class="cta">
+      <a class="primary" href="/registro">Crear cuenta gratis</a>
+      <a class="ghost" href="/planes">Ver planes y precios</a>
+    </div>
+    <div class="mini">14 días gratis · sin tarjeta · tus conductores suben fotos desde su móvil</div>
+  </div>
+
+  <div class="feats">
+    <div class="feat"><div class="ic">📸</div><h3>Inspecciones con IA</h3><p>Tus conductores fotografían la furgoneta y el sistema detecta daños al momento. Menos disputas, menos cargos.</p></div>
+    <div class="feat"><div class="ic">🔔</div><h3>Avisos de ITV</h3><p>Te avisa antes de que caduque la ITV de cada furgoneta. Nunca más una multa por despiste.</p></div>
+    <div class="feat"><div class="ic">🏆</div><h3>Scoring de conductores</h3><p>Ranking justo por cumplimiento, puntualidad y conservación. Sabes quién cuida la flota.</p></div>
+    <div class="feat"><div class="ic">🔒</div><h3>Tus datos, solo tuyos</h3><p>Cada empresa con su espacio aislado y su propia URL para los conductores. Privado y seguro.</p></div>
+  </div>
+
+  <div class="foot">¿Ya tienes cuenta? <a href="/">Inicia sesión</a> · ¿Dudas? <a href="/planes">Mira los planes</a></div>
+</body>
+</html>

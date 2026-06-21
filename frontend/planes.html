@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Planes y precios · FlotaDSP</title>
+<style>
+  :root{ --bg:#0b0d10; --card:#13161b; --line:rgba(255,255,255,.08); --txt:#e7ebf2; --mut:#8b94a3; --acc:#0ea5e9; --acc2:#0369a1; --gold:#fbbf24; }
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,rgba(14,165,233,.10),transparent),var(--bg);color:var(--txt);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:28px 16px 60px}
+  .wrap{max-width:1040px;margin:0 auto}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:8px;justify-content:center}
+  .logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#fb923c,#ea6800);display:flex;align-items:center;justify-content:center;font-size:19px}
+  .brand h1{font-size:19px;margin:0;font-weight:800}
+  h2.title{text-align:center;font-size:30px;margin:18px 0 6px;font-weight:850}
+  p.lead{text-align:center;color:var(--mut);margin:0 0 6px;font-size:15px}
+  .beta{text-align:center;margin:14px 0 26px}
+  .beta span{display:inline-block;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.35);color:var(--gold);padding:6px 14px;border-radius:99px;font-size:12.5px;font-weight:700}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;align-items:stretch}
+  .plan{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px 20px;display:flex;flex-direction:column}
+  .plan.pop{border-color:rgba(14,165,233,.5);box-shadow:0 0 0 1px rgba(14,165,233,.25),0 18px 50px -20px rgba(14,165,233,.4)}
+  .tag{align-self:flex-start;font-size:10.5px;font-weight:800;letter-spacing:.06em;color:var(--acc);background:rgba(14,165,233,.12);padding:3px 9px;border-radius:99px;margin-bottom:10px;text-transform:uppercase}
+  .plan h3{margin:0 0 2px;font-size:18px;font-weight:800}
+  .who{color:var(--mut);font-size:12px;margin:0 0 14px;min-height:28px}
+  .price{font-size:30px;font-weight:850;margin-bottom:2px}
+  .price small{font-size:13px;color:var(--mut);font-weight:600}
+  ul{list-style:none;padding:0;margin:14px 0;flex:1}
+  li{font-size:13px;color:#cbd3e0;padding:5px 0 5px 22px;position:relative}
+  li:before{content:"✓";position:absolute;left:0;color:var(--acc);font-weight:800}
+  .btn{display:block;text-align:center;text-decoration:none;padding:11px;border-radius:11px;font-weight:800;font-size:14px;cursor:pointer;border:none;width:100%}
+  .btn.primary{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff}
+  .btn.ghost{background:rgba(255,255,255,.05);border:1px solid var(--line);color:var(--txt)}
+  .note{text-align:center;color:var(--mut);font-size:12px;margin:22px auto 0;max-width:620px;line-height:1.6}
+  .res{max-width:480px;margin:34px auto 0;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px}
+  .res h3{margin:0 0 4px;font-size:17px;font-weight:800}
+  .res p{margin:0 0 14px;color:var(--mut);font-size:13px}
+  .res input,.res select{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#0e1116;color:var(--txt);font-size:14px;margin-bottom:10px}
+  .msg{margin-top:10px;font-size:13px;display:none}
+  .msg.ok{display:block;color:#4ade80}.msg.err{display:block;color:#f87171}
+  .foot{text-align:center;margin-top:30px;font-size:13px;color:var(--mut)}
+  .foot a{color:var(--acc);text-decoration:none;font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><div class="logo">⚡</div><h1>FlotaDSP</h1></div>
+  <h2 class="title">Gestiona tu flota. Ahorra en daños y multas.</h2>
+  <p class="lead">Inspecciones, ITV, conductores y mantenimiento — todo en un sitio. Para DSPs de Amazon.</p>
+  <div class="beta"><span>🚀 Beta: prueba TODO gratis · sin tarjeta · los pagos abren pronto</span></div>
+
+  <div class="grid">
+    <div class="plan">
+      <span class="tag">Empezar</span>
+      <h3>Prueba</h3>
+      <p class="who">Para probarlo sin compromiso</p>
+      <div class="price">Gratis <small>14 días</small></div>
+      <ul><li>Acceso a todo</li><li>Sin tarjeta</li><li>1 centro</li><li>Tus conductores suben fotos</li></ul>
+      <a class="btn primary" href="/registro">Crear cuenta gratis</a>
+    </div>
+    <div class="plan">
+      <span class="tag">Starter</span>
+      <h3>Starter</h3>
+      <p class="who">DSP pequeño, una estación</p>
+      <div class="price">29€ <small>/mes</small></div>
+      <ul><li>1 centro</li><li>Hasta 25 furgonetas</li><li>Inspecciones + ITV</li><li>Conductores + scoring</li></ul>
+      <button class="btn ghost" data-plan="Starter">Reservar plan</button>
+    </div>
+    <div class="plan pop">
+      <span class="tag">Más popular ⭐</span>
+      <h3>Pro</h3>
+      <p class="who">El DSP típico</p>
+      <div class="price">79€ <small>/mes</small></div>
+      <ul><li>Hasta 3 centros</li><li>Furgonetas ilimitadas</li><li>Todos los módulos</li><li>Soporte prioritario</li></ul>
+      <button class="btn primary" data-plan="Pro">Reservar plan</button>
+    </div>
+    <div class="plan">
+      <span class="tag">Flota</span>
+      <h3>Flota</h3>
+      <p class="who">Multi-estación</p>
+      <div class="price">149€ <small>/mes</small></div>
+      <ul><li>Centros ilimitados</li><li>Todo lo de Pro</li><li>Onboarding dedicado</li><li>Soporte premium</li></ul>
+      <button class="btn ghost" data-plan="Flota">Reservar plan</button>
+    </div>
+  </div>
+
+  <p class="note">💙 <b>Socios fundadores:</b> los primeros DSP fijan <b>-30% de por vida</b>. · 🎁 Paga anual y llévate <b>2 meses gratis</b>. · ➕ Centro extra: 20€/mes. <br>Precios de lanzamiento, pueden ajustarse. Sin permanencia.</p>
+
+  <div class="res">
+    <h3>Reserva tu plan (sin pagar nada)</h3>
+    <p>Te avisamos cuando abramos los pagos, con tu descuento de fundador.</p>
+    <input id="company" placeholder="Tu empresa / DSP">
+    <input id="email" type="email" placeholder="Tu email">
+    <select id="plan"><option value="">¿Qué plan te interesa?</option><option>Starter</option><option>Pro</option><option>Flota</option><option>Aún no lo sé</option></select>
+    <button class="btn primary" id="send">Reservar mi plan</button>
+    <div id="msg" class="msg"></div>
+  </div>
+
+  <div class="foot">¿Listo ya? <a href="/registro">Crea tu cuenta gratis</a> · ¿Tienes cuenta? <a href="/">Entrar</a></div>
+</div>
+
+<script>
+  var API="https://flotadsp-backend.fly.dev/api";
+  var $=function(id){return document.getElementById(id);};
+  // clic en "Reservar plan" de una tarjeta → rellena el selector y baja al formulario
+  document.querySelectorAll("[data-plan]").forEach(function(b){
+    b.addEventListener("click",function(){ $("plan").value=b.getAttribute("data-plan"); document.querySelector(".res").scrollIntoView({behavior:"smooth"}); $("email").focus(); });
+  });
+  $("send").addEventListener("click",function(){
+    var email=$("email").value.trim(), plan=$("plan").value, company=$("company").value.trim();
+    var m=$("msg");
+    if(email.indexOf("@")<0){ m.className="msg err"; m.textContent="Pon un email válido."; return; }
+    $("send").disabled=true; $("send").textContent="Enviando…";
+    fetch(API+"/auth/lead",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:email,plan:plan,company:company})})
+      .then(function(r){return r.json();})
+      .then(function(j){ m.className="msg ok"; m.textContent=j.mensaje||"¡Apuntado! Gracias."; $("send").textContent="✓ Reservado"; })
+      .catch(function(){ m.className="msg err"; m.textContent="Error, inténtalo de nuevo."; $("send").disabled=false; $("send").textContent="Reservar mi plan"; });
+  });
+</script>
+</body>
+</html>
