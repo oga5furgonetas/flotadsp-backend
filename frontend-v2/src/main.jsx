@@ -19,6 +19,10 @@ import PanelNegocio from './panel/pages/Negocio'
 import PanelPerfil from './panel/pages/Perfil'
 import PanelInspecciones from './panel/pages/Inspecciones'
 import PanelConductores from './panel/pages/Conductores'
+import PanelAvisosITV from './panel/pages/AvisosITV'
+import PanelRenting from './panel/pages/Renting'
+import PanelTalleres from './panel/pages/Talleres'
+import PanelCasasAlquiler from './panel/pages/CasasAlquiler'
 
 /* La app de gestión completa (Conductores, Flota, HistorialIA, PeritoIA…) vive en
    app.flotadsp.com. flotadsp.com = landing + registro + pagos + portal conductor.
@@ -57,10 +61,10 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="revision" element={<PanelRevision />} />
               <Route path="inspecciones" element={<PanelInspecciones />} />
               <Route path="vehiculos" element={<PanelVehiculos />} />
-              <Route path="talleres" element={<Placeholder title="Talleres" />} />
-              <Route path="avisos-itv" element={<Placeholder title="Avisos ITV" />} />
-              <Route path="renting" element={<Placeholder title="Renting" />} />
-              <Route path="casas-alquiler" element={<Placeholder title="Casas de alquiler" />} />
+              <Route path="talleres" element={<PanelTalleres />} />
+              <Route path="avisos-itv" element={<PanelAvisosITV />} />
+              <Route path="renting" element={<PanelRenting />} />
+              <Route path="casas-alquiler" element={<PanelCasasAlquiler />} />
               <Route path="ia-peritaje" element={<Placeholder title="IA Peritaje" />} />
               <Route path="importaciones" element={<Placeholder title="Importaciones" />} />
               <Route path="configuracion" element={<Placeholder title="Configuración" />} />
