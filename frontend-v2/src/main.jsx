@@ -17,6 +17,7 @@ import PanelVehiculos from './panel/pages/Vehiculos'
 import PanelRevision from './panel/pages/RevisionRapida'
 import PanelNegocio from './panel/pages/Negocio'
 import PanelPerfil from './panel/pages/Perfil'
+import PanelInspecciones from './panel/pages/Inspecciones'
 
 /* La app de gestión completa (Conductores, Flota, HistorialIA, PeritoIA…) vive en
    app.flotadsp.com. flotadsp.com = landing + registro + pagos + portal conductor.
@@ -53,7 +54,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="actividad" element={<Placeholder title="Actividad" />} />
               {/* Furgonetas */}
               <Route path="revision" element={<PanelRevision />} />
-              <Route path="inspecciones" element={<Placeholder title="Inspecciones" />} />
+              <Route path="inspecciones" element={<PanelInspecciones />} />
               <Route path="vehiculos" element={<PanelVehiculos />} />
               <Route path="talleres" element={<Placeholder title="Talleres" />} />
               <Route path="avisos-itv" element={<Placeholder title="Avisos ITV" />} />

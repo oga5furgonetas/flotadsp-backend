@@ -27,6 +27,12 @@ export const markReviewed = (id) => api.post(`/inspections/${id}/mark-reviewed`)
 export const damageFeedback = (id, body) => api.post(`/inspections/${id}/damage-feedback`, body)
 export const missedDamage = (id, body) => api.post(`/inspections/${id}/missed-damage`, body)
 
+// Descarga autenticada (PDF/anotada): el endpoint exige Bearer, un <a href> no lo envía.
+export const fetchAuthedBlob = async (path) => {
+  const res = await api.get(path, { responseType: 'blob' })
+  return URL.createObjectURL(res.data)
+}
+
 /* ── Talleres ── */
 export const getWorkshops = () => api.get('/workshops')
 
