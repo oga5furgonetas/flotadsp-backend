@@ -12,6 +12,8 @@ import DriverPortal from './pages/driver/DriverPortal'
 import PanelLogin from './panel/PanelLogin'
 import PanelLayout from './panel/PanelLayout'
 import Placeholder from './panel/Placeholder'
+import PanelDashboard from './panel/pages/Dashboard'
+import PanelVehiculos from './panel/pages/Vehiculos'
 
 /* La app de gestión completa (Conductores, Flota, HistorialIA, PeritoIA…) vive en
    app.flotadsp.com. flotadsp.com = landing + registro + pagos + portal conductor.
@@ -39,21 +41,25 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 NO afecta a las rutas actuales ni al login en vivo. */}
             <Route path="/panel/login" element={<PanelLogin />} />
             <Route path="/panel" element={<PanelLayout />}>
-              <Route index element={<Placeholder title="Dashboard" />} />
-              <Route path="flota" element={<Placeholder title="Flota" />} />
-              <Route path="conductores" element={<Placeholder title="Conductores" />} />
-              <Route path="inspecciones" element={<Placeholder title="Inspecciones · IA" />} />
-              <Route path="alertas" element={<Placeholder title="Alertas" />} />
-              <Route path="incidencias" element={<Placeholder title="Incidencias" />} />
+              {/* Operacional */}
+              <Route index element={<PanelDashboard />} />
               <Route path="scorecard" element={<Placeholder title="Scorecard" />} />
-              <Route path="metricas" element={<Placeholder title="Métricas · Reportes" />} />
+              <Route path="conductores" element={<Placeholder title="Conductores" />} />
               <Route path="turnos" element={<Placeholder title="Turnos" />} />
-              <Route path="renting" element={<Placeholder title="Renting" />} />
+              <Route path="metricas" element={<Placeholder title="Métricas" />} />
+              <Route path="actividad" element={<Placeholder title="Actividad" />} />
+              {/* Furgonetas */}
+              <Route path="revision" element={<Placeholder title="Revisión rápida" />} />
+              <Route path="inspecciones" element={<Placeholder title="Inspecciones" />} />
+              <Route path="vehiculos" element={<PanelVehiculos />} />
               <Route path="talleres" element={<Placeholder title="Talleres" />} />
-              <Route path="import-export" element={<Placeholder title="Import / Export" />} />
-              <Route path="documentos" element={<Placeholder title="Documentos" />} />
-              <Route path="ajustes" element={<Placeholder title="Ajustes" />} />
-              <Route path="admin" element={<Placeholder title="Admin" />} />
+              <Route path="avisos-itv" element={<Placeholder title="Avisos ITV" />} />
+              <Route path="renting" element={<Placeholder title="Renting" />} />
+              <Route path="casas-alquiler" element={<Placeholder title="Casas de alquiler" />} />
+              <Route path="ia-peritaje" element={<Placeholder title="IA Peritaje" />} />
+              <Route path="importaciones" element={<Placeholder title="Importaciones" />} />
+              <Route path="configuracion" element={<Placeholder title="Configuración" />} />
+              <Route path="admin" element={<Placeholder title="Negocio (super-admin)" />} />
             </Route>
 
             <Route path="*" element={<Landing />} />
