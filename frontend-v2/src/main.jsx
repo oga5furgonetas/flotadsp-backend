@@ -24,6 +24,8 @@ import PanelRenting from './panel/pages/Renting'
 import PanelTalleres from './panel/pages/Talleres'
 import PanelCasasAlquiler from './panel/pages/CasasAlquiler'
 import PanelScorecard from './panel/pages/Scorecard'
+import PanelConfiguracion from './panel/pages/Configuracion'
+import PanelTurnos from './panel/pages/Turnos'
 
 /* La app de gestión completa (Conductores, Flota, HistorialIA, PeritoIA…) vive en
    app.flotadsp.com. flotadsp.com = landing + registro + pagos + portal conductor.
@@ -55,7 +57,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route index element={<PanelDashboard />} />
               <Route path="scorecard" element={<PanelScorecard />} />
               <Route path="conductores" element={<PanelConductores />} />
-              <Route path="turnos" element={<Placeholder title="Turnos" />} />
+              <Route path="turnos" element={<PanelTurnos />} />
               <Route path="metricas" element={<Placeholder title="Métricas" />} />
               <Route path="actividad" element={<Placeholder title="Actividad" />} />
               {/* Furgonetas */}
@@ -68,7 +70,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="casas-alquiler" element={<PanelCasasAlquiler />} />
               <Route path="ia-peritaje" element={<Placeholder title="IA Peritaje" />} />
               <Route path="importaciones" element={<Placeholder title="Importaciones" />} />
-              <Route path="configuracion" element={<Placeholder title="Configuración" />} />
+              <Route path="configuracion" element={<PanelConfiguracion />} />
               <Route path="admin" element={<PanelNegocio />} />
               <Route path="perfil" element={<PanelPerfil />} />
             </Route>

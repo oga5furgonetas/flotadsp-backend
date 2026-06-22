@@ -1,0 +1,87 @@
+import { useEffect, useState } from 'react'
+import { Loader2, Plus, Building, Send, CreditCard, Check } from 'lucide-react'
+import { getOrgCenters, addOrgCenter, getTelegramConfig, getOrgBilling } from '../api'
+import { getAdmin } from '../auth'
+
+export default function Configuracion() {
+  const [centers, setCenters] = useState(null)
+  const [tg, setTg] = useState(null)
+  const [billing, setBilling] = useState(null)
+  const [nuevo, setNuevo] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  function load() {
+    getOrgCenters().then((r) => setCenters(r.data?.centers || [])).catch(() => setCenters([]))
+    getTelegramConfig().then((r) => setTg(r.data)).catch(() => setTg({}))
+    getOrgBilling().then((r) => setBilling(r.data)).catch(() => setBilling(null))
+  }
+  useEffect(load, [])
+
+  async function add() {
+    const name = nuevo.trim().toUpperCase()
+    if (!name) return
+    setBusy(true); setMsg(null)
+    try {
+      const r = await addOrgCenter(name)
+      setCenters(r.data?.centers || [])
+      // refleja en la sesión para el filtro de centro
+      const a = getAdmin(); if (a) { a.centers = r.data?.centers || []; localStorage.setItem('flotadsp_admin', JSON.stringify(a)) }
+      setNuevo(''); setMsg({ ok: true, t: `Centro ${name} añadido.` })
+    } catch (e) {
+      setMsg({ ok: false, t: e?.response?.data?.detail || 'No se pudo añadir el centro.' })
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-5">
+      <h1 className="text-xl font-bold">Configuración</h1>
+      {msg && <div className={`rounded-lg px-3 py-2 text-sm ${msg.ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{msg.t}</div>}
+
+      {/* Centros */}
+      <div className="card p-5">
+        <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-dark-200"><Building size={16} /> Centros</div>
+        {!centers ? <Loader2 className="animate-spin text-dark-400" size={16} /> : (
+          <>
+            <div className="mb-3 flex flex-wrap gap-2">
+              {centers.length === 0 ? <span className="text-sm text-dark-500">Aún no hay centros.</span> :
+                centers.map((c) => <span key={c} className="rounded-lg bg-dark-800 px-3 py-1.5 text-sm font-medium">{c}</span>)}
+            </div>
+            <div className="flex gap-2">
+              <input className="input flex-1" placeholder="Nuevo centro (ej. OGA5)" value={nuevo} onChange={(e) => setNuevo(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()} />
+              <button onClick={add} disabled={busy || !nuevo.trim()} className="btn-primary flex items-center gap-1.5 disabled:opacity-50">
+                {busy ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />} Añadir
+              </button>
+            </div>
+            <p className="mt-2 text-xs text-dark-500">Cada centro tiene sus conductores, vehículos y baremos de scorecard propios.</p>
+          </>
+        )}
+      </div>
+
+      {/* Telegram */}
+      <div className="card p-5">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-dark-200"><Send size={16} /> Avisos por Telegram</div>
+        {!tg ? <Loader2 className="animate-spin text-dark-400" size={16} /> : (
+          <div className="flex items-center gap-3 text-sm">
+            <span className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${tg.enabled ? 'bg-emerald-500/15 text-emerald-300' : 'bg-dark-700 text-dark-400'}`}>
+              {tg.enabled ? <><Check size={12} /> Activado</> : 'Desactivado'}
+            </span>
+            <span className="text-dark-400">{(tg.chat_ids || []).filter(Boolean).length} chat(s) configurado(s)</span>
+          </div>
+        )}
+        <p className="mt-2 text-xs text-dark-500">Recibe alertas de daños graves, ITV y coberturas directamente en Telegram.</p>
+      </div>
+
+      {/* Plan */}
+      <div className="card p-5">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-dark-200"><CreditCard size={16} /> Plan y suscripción</div>
+        {billing ? (
+          <div className="text-sm text-dark-300">
+            Estado: <b>{billing.status || billing.estado || '—'}</b>{billing.plan ? ` · Plan ${billing.plan}` : ''}
+          </div>
+        ) : <span className="text-sm text-dark-500">Información de plan no disponible.</span>}
+        <a href="/planes" className="btn-secondary mt-3 inline-flex text-sm">Ver planes</a>
+      </div>
+    </div>
+  )
+}

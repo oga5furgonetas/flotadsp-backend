@@ -61,7 +61,14 @@ export const uploadScorecard = (file, center) => {
 
 /* ── Org / Config ── */
 export const getOrgCenters = () => api.get('/org/centers')
+export const addOrgCenter = (name) => api.post('/org/centers', { name })
+export const getTelegramConfig = () => api.get('/telegram/config')
+export const getOrgBilling = () => api.get('/org/billing')
 export const getMe = () => api.get('/auth/me')
+
+/* ── Turnos ── */
+export const getShifts = (center, desde, hasta) => api.get('/shifts', { params: { center, desde, hasta } })
+export const getShiftCoverage = (center, desde, hasta) => api.get('/shifts/coverage', { params: { center, desde, hasta } })
 
 /* ── Negocio (super-admin) ── */
 export const getAdminOverview = () => api.get('/admin/overview')
