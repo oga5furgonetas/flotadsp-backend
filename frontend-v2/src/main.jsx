@@ -23,6 +23,7 @@ import PanelAvisosITV from './panel/pages/AvisosITV'
 import PanelRenting from './panel/pages/Renting'
 import PanelTalleres from './panel/pages/Talleres'
 import PanelCasasAlquiler from './panel/pages/CasasAlquiler'
+import PanelScorecard from './panel/pages/Scorecard'
 
 /* La app de gestión completa (Conductores, Flota, HistorialIA, PeritoIA…) vive en
    app.flotadsp.com. flotadsp.com = landing + registro + pagos + portal conductor.
@@ -52,7 +53,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/panel" element={<PanelLayout />}>
               {/* Operacional */}
               <Route index element={<PanelDashboard />} />
-              <Route path="scorecard" element={<Placeholder title="Scorecard" />} />
+              <Route path="scorecard" element={<PanelScorecard />} />
               <Route path="conductores" element={<PanelConductores />} />
               <Route path="turnos" element={<Placeholder title="Turnos" />} />
               <Route path="metricas" element={<Placeholder title="Métricas" />} />

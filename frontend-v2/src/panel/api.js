@@ -47,6 +47,18 @@ export const getRentals = () => api.get('/rentals')
 /* ── Incidencias ── */
 export const getIncidents = () => api.get('/incidents')
 
+/* ── Scorecard (baremos y subida POR CENTRO) ── */
+export const getScorecardTargets = (center) => api.get('/scorecard/targets', { params: { center } })
+export const setScorecardTargets = (body) => api.post('/scorecard/targets', body) // {center, dcr, dnr_dpmo, pod, cc, rts_pct, fdds}
+export const getScorecardStandings = (center) => api.get('/scorecard/standings', { params: { center } })
+export const getScorecardSources = (center, week) => api.get('/scorecard/sources', { params: { center, ...(week ? { week } : {}) } })
+export const uploadScorecard = (file, center) => {
+  const fd = new FormData()
+  fd.append('file', file, file.name)
+  if (center && center !== 'Todos') fd.append('center', center)
+  return api.post('/scorecard/upload', fd, { timeout: 120000, headers: { 'Content-Type': undefined } })
+}
+
 /* ── Org / Config ── */
 export const getOrgCenters = () => api.get('/org/centers')
 export const getMe = () => api.get('/auth/me')
