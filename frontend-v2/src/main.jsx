@@ -15,6 +15,8 @@ import Placeholder from './panel/Placeholder'
 import PanelDashboard from './panel/pages/Dashboard'
 import PanelVehiculos from './panel/pages/Vehiculos'
 import PanelRevision from './panel/pages/RevisionRapida'
+import PanelNegocio from './panel/pages/Negocio'
+import PanelPerfil from './panel/pages/Perfil'
 
 /* La app de gestión completa (Conductores, Flota, HistorialIA, PeritoIA…) vive en
    app.flotadsp.com. flotadsp.com = landing + registro + pagos + portal conductor.
@@ -60,7 +62,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="ia-peritaje" element={<Placeholder title="IA Peritaje" />} />
               <Route path="importaciones" element={<Placeholder title="Importaciones" />} />
               <Route path="configuracion" element={<Placeholder title="Configuración" />} />
-              <Route path="admin" element={<Placeholder title="Negocio (super-admin)" />} />
+              <Route path="admin" element={<PanelNegocio />} />
+              <Route path="perfil" element={<PanelPerfil />} />
             </Route>
 
             <Route path="*" element={<Landing />} />

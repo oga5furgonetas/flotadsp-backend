@@ -43,4 +43,18 @@ export const getIncidents = () => api.get('/incidents')
 
 /* ── Org / Config ── */
 export const getOrgCenters = () => api.get('/org/centers')
-export const getMe = () => api.get('/me')
+export const getMe = () => api.get('/auth/me')
+
+/* ── Negocio (super-admin) ── */
+export const getAdminOverview = () => api.get('/admin/overview')
+export const getAdminOrgs = () => api.get('/admin/orgs')
+export const updateOrg = (body) => api.post('/admin/org', body) // {id, status?, plan?, extend_trial_days?, add_center?, max_centers?}
+export const impersonateOrg = (id) => api.post('/admin/impersonate', { id })
+export const deleteOrg = (id) => api.delete(`/admin/org/${id}`)
+export const getLeads = () => api.get('/leads')
+export const getBillingConfig = () => api.get('/billing/config')
+export const backupNow = () => api.post('/admin/backup-now')
+
+/* ── Perfil / cuenta ── */
+export const changeMyPassword = (current_password, new_password) =>
+  api.post('/auth/change-my-password', { current_password, new_password })

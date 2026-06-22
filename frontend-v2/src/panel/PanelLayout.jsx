@@ -63,6 +63,17 @@ export default function PanelLayout() {
     nav('/panel/login', { replace: true })
   }
 
+  const impersonating = !!localStorage.getItem('flotadsp_token_super')
+  function backToSuper() {
+    const superTok = localStorage.getItem('flotadsp_token_super')
+    if (superTok) {
+      localStorage.setItem('flotadsp_token', superTok)
+      localStorage.removeItem('flotadsp_token_super')
+      localStorage.removeItem('flotadsp_admin')
+    }
+    window.location.href = '/panel/admin'
+  }
+
   return (
     <div className="flex min-h-screen bg-dark-950 text-dark-50">
       {/* Sidebar */}
@@ -132,10 +143,10 @@ export default function PanelLayout() {
             <ExternalLink size={14} />
           </a>
           <div className="mt-2 flex items-center justify-between">
-            <div className="min-w-0">
+            <NavLink to="/panel/perfil" className="min-w-0 rounded-lg px-1 hover:bg-dark-800">
               <div className="truncate text-sm font-medium text-dark-100">{admin?.name || 'Admin'}</div>
-              <div className="text-[11px] text-dark-500">{showAdmin ? 'Super-admin' : 'Administrador'}</div>
-            </div>
+              <div className="text-[11px] text-dark-500">{showAdmin ? 'Super-admin · ver perfil' : 'Administrador · ver perfil'}</div>
+            </NavLink>
             <button onClick={doLogout} className="btn-ghost p-2" title="Salir"><LogOut size={16} /></button>
           </div>
         </div>
@@ -143,6 +154,12 @@ export default function PanelLayout() {
 
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
+        {impersonating && (
+          <div className="flex items-center justify-between gap-2 bg-amber-500/15 px-4 py-2 text-sm text-amber-200">
+            <span>Estás viendo como <b>{admin?.name}</b> (cliente).</span>
+            <button onClick={backToSuper} className="rounded-md bg-amber-500/30 px-3 py-1 text-xs font-semibold hover:bg-amber-500/40">← Volver a super-admin</button>
+          </div>
+        )}
         <header className="flex items-center justify-between gap-3 border-b border-dark-800 bg-dark-900/60 px-4 py-2.5">
           {/* selector de pestaña en móvil (sin sidebar) */}
           <div className="flex items-center gap-2 md:hidden">
