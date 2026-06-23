@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Clock, Sparkles, AlertTriangle } from 'lucide-react'
 import { getOrgBilling, getBillingConfig } from './api'
-import { getAdmin } from './auth'
+import { getAdmin, getOrgId } from './auth'
 
 // Banner global: enseña los días de prueba que quedan y un botón para pagar (Lemon Squeezy).
 export default function TrialBanner() {
@@ -21,16 +21,17 @@ export default function TrialBanner() {
   const days = billing.days_left
   const required = billing.required
   const adminSlug = getAdmin()?.slug || ''
+  const orgId = getOrgId()
   const planRecord = localStorage.getItem('flota_plan') || 'Pro'
   const checkoutPro = cfg?.checkout?.[planRecord] || cfg?.checkout?.Pro
-  // El backend webhook activa la org cuando paga: pasamos org_id en custom_data
-  // y el slug para que LS la recuerde y el usuario vea su empresa.
+  // El backend webhook activa la org cuando paga: necesita org_id real en custom_data.
+  // Sin org_id no abrimos checkout (LS devolvería 422 y, peor, un pago no activaría la cuenta).
   const goPay = () => {
-    if (!checkoutPro) return
+    if (!checkoutPro) return alert('Pasarela de pago no configurada todavía.')
+    if (!orgId) return alert('No hemos podido identificar tu organización. Cierra sesión y vuelve a entrar para reintentar.')
     const u = new URL(checkoutPro)
-    u.searchParams.set('checkout[custom][org_id]', getAdmin()?.id ? '' : '') // org_id va en la sesión backend
-    // Lemon Squeezy admite checkout_data[custom][key]
-    u.searchParams.set('checkout[custom][slug]', adminSlug)
+    u.searchParams.set('checkout[custom][org_id]', orgId)
+    if (adminSlug) u.searchParams.set('checkout[custom][slug]', adminSlug)
     window.location.href = u.toString()
   }
 

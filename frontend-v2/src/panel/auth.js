@@ -19,6 +19,23 @@ export function isAuthed() {
   return !!getToken()
 }
 
+// Decodifica el payload del JWT (sin verificar firma — solo lectura cliente).
+// El backend pone aquí: sub, role, name, exp, sa, org_id, db_name, account_type, centers, permissions.
+export function decodeToken() {
+  try {
+    const t = getToken()
+    if (!t) return null
+    const b64 = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : ''
+    return JSON.parse(decodeURIComponent(escape(atob(b64 + pad))))
+  } catch { return null }
+}
+
+// org_id real de la organización (no es lo mismo que admin.id, que es el id del usuario).
+export function getOrgId() {
+  return decodeToken()?.org_id || null
+}
+
 export function isSuperAdmin() {
   const a = getAdmin()
   return !!(a && (a.super_admin || a.account_type === 'owner'))
