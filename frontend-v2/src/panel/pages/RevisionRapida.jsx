@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, CheckCircle2, Check, X, ChevronLeft, ChevronRight, User, Clock,
-  AlertTriangle, BrainCircuit,
+  AlertTriangle, BrainCircuit, Pencil, Plus,
 } from 'lucide-react'
-import { getReviewQueue, getAiDatasetStats, damageFeedback, markReviewed } from '../api'
+import { getReviewQueue, getAiDatasetStats, damageFeedback, markReviewed, missedDamage } from '../api'
 
 const GOAL = 3000
 
@@ -34,6 +34,11 @@ export default function RevisionRapida() {
   const [verdicts, setVerdicts] = useState({}) // `${inspId}:${dmgIdx}` -> 'correct'|'wrong'
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  // Dibujo de caja: drawMode = null | {type:'missed'} | {type:'corrected', dmgIndex}
+  const [drawMode, setDrawMode] = useState(null)
+  const [box, setBox] = useState(null)      // {left,top,w,h} en % de la imagen
+  const [drag, setDrag] = useState(null)    // punto inicial mientras se arrastra
+  const [partName, setPartName] = useState('')
 
   const loadStats = useCallback(() => {
     getAiDatasetStats().then((r) => setStats(r.data)).catch(() => {})
@@ -56,6 +61,7 @@ export default function RevisionRapida() {
   function go(delta) {
     setPhotoIdx(0)
     setIdx((i) => Math.min(Math.max(0, i + delta), queue.length - 1))
+    cancelDraw()
   }
 
   async function sendFeedback(dmgIndex, verdict) {
@@ -81,11 +87,44 @@ export default function RevisionRapida() {
       setQueue(next)
       setIdx((i) => Math.min(i, Math.max(0, next.length - 1)))
       setPhotoIdx(0)
+      cancelDraw()
     } catch {
       setErr('No se pudo marcar como revisada.')
     } finally {
       setBusy(false)
     }
+  }
+
+  // ── Dibujo de caja sobre la foto ──
+  function cancelDraw() { setDrawMode(null); setBox(null); setDrag(null); setPartName('') }
+  function pct(e, el) {
+    const r = el.getBoundingClientRect()
+    return { x: Math.min(100, Math.max(0, ((e.clientX - r.left) / r.width) * 100)), y: Math.min(100, Math.max(0, ((e.clientY - r.top) / r.height) * 100)) }
+  }
+  function onDown(e) { if (!drawMode) return; const p = pct(e, e.currentTarget); setDrag(p); setBox({ left: p.x, top: p.y, w: 0, h: 0 }) }
+  function onMove(e) { if (!drawMode || !drag) return; const p = pct(e, e.currentTarget); setBox({ left: Math.min(drag.x, p.x), top: Math.min(drag.y, p.y), w: Math.abs(p.x - drag.x), h: Math.abs(p.y - drag.y) }) }
+  function onUp() { setDrag(null) }
+  function boxTo2d(b) {
+    const c = (v) => Math.round(Math.min(1000, Math.max(0, v * 10)))
+    return [c(b.top), c(b.left), c(b.top + b.h), c(b.left + b.w)] // [ymin,xmin,ymax,xmax]
+  }
+  async function saveDraw() {
+    if (!box || box.w < 1 || box.h < 1) return setErr('Dibuja una caja sobre el daño.')
+    setBusy(true); setErr('')
+    try {
+      const box_2d = boxTo2d(box)
+      if (drawMode.type === 'missed') {
+        if (!partName.trim()) { setBusy(false); return setErr('Indica la pieza del daño (ej. tulipa trasera).') }
+        await missedDamage(item.id, { part: partName.trim(), box_2d, photo_index: photoIdx + 1 })
+      } else {
+        await damageFeedback(item.id, { verdict: 'corrected', damage_index: drawMode.dmgIndex, scope: 'new', corrected_box: box_2d })
+        setVerdicts((v) => ({ ...v, [`${item.id}:${drawMode.dmgIndex}`]: 'corrected' }))
+      }
+      loadStats()
+      cancelDraw()
+    } catch {
+      setErr('No se pudo guardar.')
+    } finally { setBusy(false) }
   }
 
   return (
@@ -134,8 +173,19 @@ export default function RevisionRapida() {
           {/* Imagen + recuadros reales */}
           <div className="relative bg-black">
             {item.photos?.[photoIdx] ? (
-              <div className="relative mx-auto" style={{ maxWidth: 520 }}>
-                <img src={item.photos[photoIdx]} alt="" className="block w-full" />
+              <div className={`relative mx-auto ${drawMode ? 'cursor-crosshair select-none' : ''}`} style={{ maxWidth: 520 }}
+                onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}>
+                <img src={item.photos[photoIdx]} alt="" className="block w-full" draggable={false} />
+                {/* caja que se está dibujando */}
+                {box && (
+                  <div className="pointer-events-none absolute rounded border-2 border-dashed border-emerald-400 bg-emerald-400/10"
+                    style={{ left: `${box.left}%`, top: `${box.top}%`, width: `${box.w}%`, height: `${box.h}%` }} />
+                )}
+                {drawMode && (
+                  <div className="pointer-events-none absolute left-2 top-2 rounded bg-black/70 px-2 py-1 text-[11px] text-emerald-300">
+                    {drawMode.type === 'missed' ? 'Arrastra para marcar el daño que la IA no vio' : 'Arrastra la caja correcta del daño'}
+                  </div>
+                )}
                 {(item.new_damages || []).map((d, i) => {
                   if (!Array.isArray(d.box_2d) || d.box_2d.length !== 4) return null
                   if (d.photo_index && d.photo_index - 1 !== photoIdx) return null
@@ -153,6 +203,19 @@ export default function RevisionRapida() {
               <div className="flex h-64 items-center justify-center text-dark-500">Sin foto</div>
             )}
           </div>
+
+          {/* Barra de dibujo */}
+          {drawMode && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-dark-800 bg-dark-800/60 px-4 py-2.5">
+              {drawMode.type === 'missed' && (
+                <input autoFocus className="input h-9 w-48" placeholder="Pieza (ej. tulipa trasera)" value={partName} onChange={(e) => setPartName(e.target.value)} />
+              )}
+              <button onClick={saveDraw} disabled={busy || !box || box.w < 1} className="btn-primary flex items-center gap-1.5 py-1.5 text-sm disabled:opacity-50">
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Guardar {drawMode.type === 'missed' ? 'daño' : 'caja'}
+              </button>
+              <button onClick={cancelDraw} className="btn-ghost px-3 py-1.5 text-sm">Cancelar</button>
+            </div>
+          )}
 
           {/* Miniaturas */}
           {item.photos?.length > 1 && (
@@ -214,6 +277,10 @@ export default function RevisionRapida() {
                           className={`flex h-8 w-8 items-center justify-center rounded-lg border ${v === 'wrong' ? 'border-red-500 bg-red-500/20 text-red-300' : 'border-dark-700 text-dark-300 hover:bg-red-500/10 hover:text-red-300'} disabled:opacity-50`} title="Falso positivo">
                           <X size={16} />
                         </button>
+                        <button disabled={busy || v} onClick={() => { setDrawMode({ type: 'corrected', dmgIndex: i }); setBox(null) }}
+                          className={`flex h-8 w-8 items-center justify-center rounded-lg border ${v === 'corrected' ? 'border-amber-500 bg-amber-500/20 text-amber-300' : 'border-dark-700 text-dark-300 hover:bg-amber-500/10 hover:text-amber-300'} disabled:opacity-50`} title="Corregir la caja (dibújala)">
+                          <Pencil size={15} />
+                        </button>
                       </div>
                     </div>
                   )
@@ -221,8 +288,14 @@ export default function RevisionRapida() {
               </div>
             )}
 
+            {/* Daño que la IA no vio */}
+            <button onClick={() => { setDrawMode({ type: 'missed' }); setBox(null); setPartName('') }} disabled={busy || !!drawMode}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-dark-600 py-2 text-sm text-dark-300 hover:border-emerald-500/50 hover:text-emerald-300 disabled:opacity-40">
+              <Plus size={15} /> Marcar un daño que la IA no vio
+            </button>
+
             <button onClick={reviewDone} disabled={busy}
-              className="btn-primary mt-4 flex w-full items-center justify-center gap-2 py-2.5 disabled:opacity-50">
+              className="btn-primary mt-3 flex w-full items-center justify-center gap-2 py-2.5 disabled:opacity-50">
               {busy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Marcar revisada y siguiente
             </button>
           </div>
