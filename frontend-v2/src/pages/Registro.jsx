@@ -38,10 +38,10 @@ export default function Registro() {
       const j = await r.json()
       if (!r.ok || !j.access_token) { setErr(j.detail || t('reg.taken')); setBusy(false); return }
       localStorage.setItem('flotadsp_token', j.access_token)
-      localStorage.setItem('flotadsp_admin', JSON.stringify({ name: j.name, role: j.role, id: j.id, account_type: j.account_type, slug: j.slug, centers: j.centers || [] }))
+      localStorage.setItem('flotadsp_admin', JSON.stringify({ name: j.name, role: j.role, id: j.id, account_type: j.account_type, slug: j.slug, super_admin: j.super_admin, permissions: j.permissions ?? null, centers: j.centers || [] }))
       const plan = new URLSearchParams(window.location.search).get('plan')
-      if (plan) localStorage.setItem('flota_plan', plan)
-      window.location.href = 'https://app.flotadsp.com'
+      // Entran al panel nuevo (con su trial de 14 días). Si vienen con plan, lo recordamos para sugerir checkout.
+      window.location.href = plan ? `/panel?plan=${encodeURIComponent(plan)}` : '/panel'
     } catch { setErr('—'); setBusy(false) }
   }
 

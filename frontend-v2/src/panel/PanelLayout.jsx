@@ -7,6 +7,7 @@ import {
   ChevronRight, ExternalLink,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, logout, canSee } from './auth'
+import TrialBanner from './TrialBanner'
 
 const keyOf = (to) => (to === '/panel' ? 'dashboard' : to.split('/').pop())
 
@@ -58,7 +59,7 @@ export default function PanelLayout() {
   // Guard de ruta: impide acceder por URL a un módulo no permitido.
   const curKey = keyOf(loc.pathname.replace(/\/+$/, '') || '/panel')
   const routeAllowed = (k) => {
-    if (k === 'perfil' || k === 'login') return true
+    if (k === 'perfil' || k === 'login' || k === 'portal-conductor') return true
     if (k === 'admin' || k === 'usuarios') return isSuperAdmin()
     return canSee(k)
   }
@@ -67,8 +68,7 @@ export default function PanelLayout() {
     return <Navigate to={firstAllowed ? firstAllowed.to : '/panel/perfil'} replace />
   }
 
-  // Link del portal del conductor de ESTE DSP (aislado por su slug) — dominio de producción
-  const driverLink = `https://flotadsp.com/conductor/#${admin?.slug || ''}`
+  // Portal Conductor ahora es una página interna del panel: /panel/portal-conductor
 
   const items = TABS[tab].items.filter((it) => canSee(keyOf(it.to)))
   const showAdmin = isSuperAdmin()
@@ -157,18 +157,15 @@ export default function PanelLayout() {
           )}
         </nav>
 
-        {/* Portal Conductor — link por DSP (multi-tenant) */}
+        {/* Portal Conductor — página interna del panel (multi-tenant, sin exponer token) */}
         <div className="border-t border-dark-800 p-3">
-          <a
-            href={driverLink}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center justify-between rounded-lg border border-brand-500/40 bg-brand-500/10 px-3 py-2 text-sm font-semibold text-brand-300 hover:bg-brand-500/20"
-            title={driverLink}
+          <NavLink
+            to="/panel/portal-conductor"
+            className={({ isActive }) => `flex items-center justify-between rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${isActive ? 'border-brand-500 bg-brand-500/20 text-brand-200' : 'border-brand-500/40 bg-brand-500/10 text-brand-300 hover:bg-brand-500/20'}`}
           >
             <span className="flex items-center gap-2"><Shield size={15} /> Portal Conductor</span>
-            <ExternalLink size={14} />
-          </a>
+            <ChevronRight size={14} />
+          </NavLink>
           <div className="mt-2 flex items-center justify-between">
             <NavLink to="/panel/perfil" className="min-w-0 rounded-lg px-1 hover:bg-dark-800">
               <div className="truncate text-sm font-medium text-dark-100">{admin?.name || 'Admin'}</div>
@@ -187,6 +184,7 @@ export default function PanelLayout() {
             <button onClick={backToSuper} className="rounded-md bg-amber-500/30 px-3 py-1 text-xs font-semibold hover:bg-amber-500/40">← Volver a super-admin</button>
           </div>
         )}
+        <TrialBanner />
         <header className="flex items-center justify-between gap-3 border-b border-dark-800 bg-dark-900/60 px-4 py-2.5">
           {/* selector de pestaña en móvil (sin sidebar) */}
           <div className="flex items-center gap-2 md:hidden">

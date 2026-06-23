@@ -58,31 +58,7 @@ export default function Configuracion() {
       <h1 className="text-xl font-bold">Configuración</h1>
       {msg && <div className={`rounded-lg px-3 py-2 text-sm ${msg.ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{msg.t}</div>}
 
-      {/* Enlace para los conductores (por empresa y por estación) */}
-      <div className="card border-brand-500/30 bg-brand-500/5 p-5">
-        <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-brand-200"><Link2 size={16} /> Enlace para tus conductores</div>
-        <p className="mb-3 text-sm text-dark-300">Comparte estos enlaces con tus conductores para que suban las fotos. Todo entra <b>solo en tu empresa</b> — las estaciones <b>no se mezclan</b>: cada conductor sube a su propio centro.</p>
-
-        {(() => {
-          const slug = getAdmin()?.slug || ''
-          const empresa = `${PORTAL_BASE}/conductor/#${slug}`
-          const cs = centers || []
-          return (
-            <div className="space-y-3">
-              <CopyRow label="Enlace de la empresa (todos los centros)" url={empresa} />
-              {cs.length > 0 && (
-                <div className="space-y-2 border-t border-dark-800 pt-3">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-dark-500">Un enlace por estación (recomendado)</div>
-                  {cs.map((c) => (
-                    <CopyRow key={c} label={c} url={`${PORTAL_BASE}/conductor/?c=${encodeURIComponent(c)}#${slug}`} />
-                  ))}
-                </div>
-              )}
-              <p className="text-[11px] text-dark-500">El enlace por estación deja el centro ya elegido: el conductor solo pone su email y sube fotos. Más cómodo y a prueba de errores.</p>
-            </div>
-          )
-        })()}
-      </div>
+      <p className="text-sm text-dark-400">Los enlaces para conductores están en la página <b>Portal Conductor</b> del menú lateral.</p>
 
       {/* Centros */}
       <div className="card p-5">
