@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Loader2, Search, Mail, Phone, Trophy } from 'lucide-react'
-import { getDrivers, getDriverRanking } from '../api'
+import { Loader2, Search, Mail, Phone, Trophy, X, ClipboardList, AlertTriangle, ShieldAlert } from 'lucide-react'
+import { getDrivers, getDriverRanking, getDriverScore } from '../api'
 
 function scoreCls(s) {
   if (s == null) return 'bg-dark-700 text-dark-300'
@@ -16,6 +16,7 @@ export default function Conductores() {
   const [scores, setScores] = useState({})
   const [q, setQ] = useState('')
   const [err, setErr] = useState('')
+  const [sel, setSel] = useState(null)
 
   useEffect(() => {
     setDrivers(null); setErr('')
@@ -63,7 +64,7 @@ export default function Conductores() {
             {list.map((d) => {
               const sc = scores[d.id]
               return (
-                <tr key={d.id} className="border-b border-dark-800/60 hover:bg-dark-800/30">
+                <tr key={d.id} onClick={() => setSel(d)} className="cursor-pointer border-b border-dark-800/60 hover:bg-dark-800/30">
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-2.5">
                       {d.photo_url
@@ -97,6 +98,59 @@ export default function Conductores() {
             })}
           </tbody>
         </table>
+      </div>
+      {sel && <DriverDetail driver={sel} onClose={() => setSel(null)} />}
+    </div>
+  )
+}
+
+function DriverDetail({ driver, onClose }) {
+  const [score, setScore] = useState(null)
+  useEffect(() => { getDriverScore(driver.id).then((r) => setScore(r.data)).catch(() => setScore({})) }, [driver.id])
+
+  const s = score?.score
+  const level = score?.level
+  return (
+    <div className="fixed inset-0 z-40 flex justify-end bg-black/60" onClick={onClose}>
+      <div className="h-full w-full max-w-md overflow-y-auto bg-dark-900 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            {driver.photo_url
+              ? <img src={driver.photo_url} alt="" className="h-12 w-12 rounded-full object-cover" />
+              : <div className="flex h-12 w-12 items-center justify-center rounded-full bg-dark-700 text-lg font-bold text-dark-300">{(driver.name || '?').slice(0, 1).toUpperCase()}</div>}
+            <div><h2 className="text-lg font-bold">{driver.name}</h2><div className="text-sm text-dark-400">{driver.center || ''}</div></div>
+          </div>
+          <button onClick={onClose} className="btn-ghost p-2"><X size={18} /></button>
+        </div>
+
+        {/* Score grande */}
+        <div className="card mb-4 flex items-center justify-between p-5">
+          <div>
+            <div className="text-xs text-dark-500">Puntuación</div>
+            <div className={`text-4xl font-extrabold ${s >= 85 ? 'text-emerald-400' : s >= 65 ? 'text-amber-400' : s != null ? 'text-red-400' : 'text-dark-400'}`}>{s ?? '—'}</div>
+            <div className="text-sm text-dark-400">{level || ''}</div>
+          </div>
+          {s >= 85 && <Trophy size={40} className="text-emerald-400/70" />}
+        </div>
+
+        {/* Desglose */}
+        {score && (
+          <div className="grid grid-cols-3 gap-3">
+            <div className="card p-3"><div className="flex items-center gap-1.5"><ClipboardList size={14} className="text-dark-500" /><span className="text-xl font-bold">{score.total_inspections ?? 0}</span></div><div className="text-[11px] text-dark-400">Inspecciones</div></div>
+            <div className="card p-3"><div className="flex items-center gap-1.5"><AlertTriangle size={14} className="text-amber-400" /><span className="text-xl font-bold">{score.inspections_with_damage ?? 0}</span></div><div className="text-[11px] text-dark-400">Con daño</div></div>
+            <div className="card p-3"><div className="flex items-center gap-1.5"><ShieldAlert size={14} className="text-red-400" /><span className="text-xl font-bold">{score.severe_damages ?? 0}</span></div><div className="text-[11px] text-dark-400">Graves</div></div>
+          </div>
+        )}
+
+        {/* Datos */}
+        <div className="card mt-4 grid grid-cols-2 gap-3 p-4 text-sm">
+          <div><div className="text-[11px] text-dark-500">DNI</div><div className="font-medium">{driver.dni || '—'}</div></div>
+          <div><div className="text-[11px] text-dark-500">Teléfono</div><div className="font-medium">{driver.phone || '—'}</div></div>
+          <div className="col-span-2"><div className="text-[11px] text-dark-500">Email</div><div className="font-medium">{driver.email || '—'}</div></div>
+          <div><div className="text-[11px] text-dark-500">Contrato</div><div className="font-medium">{driver.contrato || '—'}</div></div>
+          <div><div className="text-[11px] text-dark-500">Nivel</div><div className="font-medium">{driver.nivel || '—'}</div></div>
+          <div><div className="text-[11px] text-dark-500">ID Amazon</div><div className="font-medium">{driver.driver_id || '—'}</div></div>
+        </div>
       </div>
     </div>
   )

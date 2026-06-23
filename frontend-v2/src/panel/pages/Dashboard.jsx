@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Truck, Wrench, Users, ClipboardList, BellRing, AlertTriangle, Loader2,
 } from 'lucide-react'
@@ -12,9 +13,10 @@ const SEV = [
   { key: 'critico', label: 'Crítico', color: '#ef4444' },
 ]
 
-function Kpi({ icon: Icon, label, value, accent }) {
+function Kpi({ icon: Icon, label, value, accent, to }) {
+  const nav = useNavigate()
   return (
-    <div className="card p-4">
+    <div onClick={to ? () => nav(to) : undefined} className={`card p-4 ${to ? 'cursor-pointer transition-colors hover:border-dark-600' : ''}`}>
       <div className="mb-2 flex items-center gap-2">
         <Icon size={18} style={{ color: accent }} />
         <span className="text-2xl font-extrabold">{value}</span>
@@ -44,11 +46,11 @@ export default function Dashboard() {
       <h1 className="mb-4 text-xl font-bold">Dashboard</h1>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <Kpi icon={Truck} label="Furgonetas" value={data.total_vehicles} accent="#0ea5e9" />
-        <Kpi icon={Wrench} label="En taller" value={data.vehicles_in_workshop} accent="#fb923c" />
-        <Kpi icon={Users} label="Conductores" value={data.total_drivers} accent="#a78bfa" />
-        <Kpi icon={ClipboardList} label="Inspecciones" value={data.total_inspections} accent="#34d399" />
-        <Kpi icon={BellRing} label="Avisos" value={data.unread_alerts} accent="#fbbf24" />
+        <Kpi icon={Truck} label="Furgonetas" value={data.total_vehicles} accent="#0ea5e9" to="/panel/vehiculos" />
+        <Kpi icon={Wrench} label="En taller" value={data.vehicles_in_workshop} accent="#fb923c" to="/panel/talleres" />
+        <Kpi icon={Users} label="Conductores" value={data.total_drivers} accent="#a78bfa" to="/panel/conductores" />
+        <Kpi icon={ClipboardList} label="Inspecciones" value={data.total_inspections} accent="#34d399" to="/panel/inspecciones" />
+        <Kpi icon={BellRing} label="Avisos" value={data.unread_alerts} accent="#fbbf24" to="/panel/avisos-itv" />
         <Kpi icon={AlertTriangle} label="Incidencias" value={data.open_incidents} accent="#f87171" />
       </div>
 

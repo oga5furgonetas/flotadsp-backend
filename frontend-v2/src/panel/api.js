@@ -20,6 +20,7 @@ export const updateVehicle = (id, body) => api.patch(`/vehicles/${id}`, body)
 /* ── Conductores ── */
 export const getDrivers = (center) => api.get('/drivers', { params: centerParam(center) })
 export const getDriverRanking = () => api.get('/drivers/ranking')
+export const getDriverScore = (id) => api.get(`/drivers/${id}/score`)
 
 /* ── Inspecciones ── */
 export const getInspections = (params = {}) => api.get('/inspections', { params })
