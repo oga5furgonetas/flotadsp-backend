@@ -12,7 +12,11 @@ export default function DriverLogin({ onLogin }) {
   const [centers, setCenters] = useState([])
   const [center, setCenter] = useState('') // '' = todos los centros
 
+  // Centro fijado por la URL del enlace de la estación (?c=OGA5): cada estación su link.
+  const urlCenter = (new URLSearchParams(window.location.search).get('c') || '').toUpperCase()
+
   useEffect(() => {
+    if (urlCenter) setCenter(urlCenter)
     // Conductores del DSP (aislado por el slug de la URL: /conductor/#<slug>)
     getConductorList()
       .then((r) => {

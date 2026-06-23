@@ -1,7 +1,27 @@
 import { useEffect, useState } from 'react'
-import { Loader2, Plus, Building, Send, CreditCard, Check } from 'lucide-react'
+import { Loader2, Plus, Building, Send, CreditCard, Check, Link2, Copy, ExternalLink } from 'lucide-react'
 import { getOrgCenters, addOrgCenter, getTelegramConfig, getOrgBilling } from '../api'
 import { getAdmin } from '../auth'
+
+// El portal del conductor vive SIEMPRE en el dominio de producción.
+const PORTAL_BASE = 'https://flotadsp.com'
+
+function CopyRow({ label, url }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <div>
+      {label && <div className="mb-1 text-xs font-medium text-dark-400">{label}</div>}
+      <div className="flex gap-2">
+        <input readOnly value={url} className="input flex-1 font-mono text-xs" onFocus={(e) => e.target.select()} />
+        <button onClick={() => { navigator.clipboard?.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
+          className="btn-secondary flex items-center gap-1.5 whitespace-nowrap text-sm">
+          {copied ? <><Check size={14} /> Copiado</> : <><Copy size={14} /> Copiar</>}
+        </button>
+        <a href={url} target="_blank" rel="noreferrer" className="btn-ghost px-2" title="Abrir"><ExternalLink size={15} /></a>
+      </div>
+    </div>
+  )
+}
 
 export default function Configuracion() {
   const [centers, setCenters] = useState(null)
@@ -37,6 +57,32 @@ export default function Configuracion() {
     <div className="mx-auto max-w-2xl space-y-5">
       <h1 className="text-xl font-bold">Configuración</h1>
       {msg && <div className={`rounded-lg px-3 py-2 text-sm ${msg.ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{msg.t}</div>}
+
+      {/* Enlace para los conductores (por empresa y por estación) */}
+      <div className="card border-brand-500/30 bg-brand-500/5 p-5">
+        <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-brand-200"><Link2 size={16} /> Enlace para tus conductores</div>
+        <p className="mb-3 text-sm text-dark-300">Comparte estos enlaces con tus conductores para que suban las fotos. Todo entra <b>solo en tu empresa</b> — las estaciones <b>no se mezclan</b>: cada conductor sube a su propio centro.</p>
+
+        {(() => {
+          const slug = getAdmin()?.slug || ''
+          const empresa = `${PORTAL_BASE}/conductor/#${slug}`
+          const cs = centers || []
+          return (
+            <div className="space-y-3">
+              <CopyRow label="Enlace de la empresa (todos los centros)" url={empresa} />
+              {cs.length > 0 && (
+                <div className="space-y-2 border-t border-dark-800 pt-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-dark-500">Un enlace por estación (recomendado)</div>
+                  {cs.map((c) => (
+                    <CopyRow key={c} label={c} url={`${PORTAL_BASE}/conductor/?c=${encodeURIComponent(c)}#${slug}`} />
+                  ))}
+                </div>
+              )}
+              <p className="text-[11px] text-dark-500">El enlace por estación deja el centro ya elegido: el conductor solo pone su email y sube fotos. Más cómodo y a prueba de errores.</p>
+            </div>
+          )
+        })()}
+      </div>
 
       {/* Centros */}
       <div className="card p-5">

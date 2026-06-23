@@ -67,8 +67,8 @@ export default function PanelLayout() {
     return <Navigate to={firstAllowed ? firstAllowed.to : '/panel/perfil'} replace />
   }
 
-  // Link del portal del conductor de ESTE DSP (aislado por su slug)
-  const driverLink = `${window.location.origin}/conductor/#${admin?.slug || ''}`
+  // Link del portal del conductor de ESTE DSP (aislado por su slug) — dominio de producción
+  const driverLink = `https://flotadsp.com/conductor/#${admin?.slug || ''}`
 
   const items = TABS[tab].items.filter((it) => canSee(keyOf(it.to)))
   const showAdmin = isSuperAdmin()
