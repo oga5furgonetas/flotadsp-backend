@@ -7,7 +7,7 @@ export default function Terminos() {
       <p>Al registrarte o usar {COMPANY.brand} (en adelante, "el Servicio"), aceptas estas condiciones. Si no estás de acuerdo, no uses el Servicio.</p>
 
       <h2>1. Quiénes somos</h2>
-      <p>El Servicio es prestado por {COMPANY.legalName} (CIF {COMPANY.cif}), con domicilio en {COMPANY.address}. Contacto: <a href={`mailto:${COMPANY.contactEmail}`}>{COMPANY.contactEmail}</a>.</p>
+      <p>El Servicio es prestado por {COMPANY.legalName}{COMPANY.cif ? ` (CIF ${COMPANY.cif})` : ''}{COMPANY.address ? `, con domicilio en ${COMPANY.address}` : ''}. Contacto: <a href={`mailto:${COMPANY.contactEmail}`}>{COMPANY.contactEmail}</a>.</p>
 
       <h2>2. Objeto del Servicio</h2>
       <p>{COMPANY.brand} es una plataforma web SaaS para gestionar flotas de furgonetas, conductores e inspecciones, incluyendo el análisis automático de fotografías mediante inteligencia artificial.</p>

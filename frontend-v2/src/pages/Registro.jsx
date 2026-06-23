@@ -22,15 +22,18 @@ export default function Registro() {
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [accept, setAccept] = useState(false)
+  const planParam = (new URLSearchParams(window.location.search).get('plan') || '').trim()
 
   function onOrg(v) { setOrg(v); if (!slugTouched) setSlug(slugify(v)) }
 
   async function submit() {
     setErr('')
     const s = slugify(slug)
-    if (!org.trim()) return setErr('—')
-    if (s.length < 3 || user.trim().length < 3 || pass.length < 8) return setErr('—')
-    if (!accept) return setErr('Debes aceptar los Términos y la Política de Privacidad.')
+    if (!org.trim()) return setErr('Indica el nombre de tu empresa.')
+    if (s.length < 3) return setErr('La URL de tu empresa debe tener al menos 3 caracteres (a-z, 0-9).')
+    if (user.trim().length < 3) return setErr('El usuario debe tener al menos 3 caracteres.')
+    if (pass.length < 8) return setErr('La contraseña debe tener al menos 8 caracteres.')
+    if (!accept) return setErr('Debes aceptar los Términos y la Política de Privacidad para continuar.')
     setBusy(true)
     try {
       const r = await fetch(`${API_BASE}/auth/register`, {
@@ -38,13 +41,12 @@ export default function Registro() {
         body: JSON.stringify({ org_name: org.trim(), username: user.trim(), password: pass, slug: s, center: center.trim() }),
       })
       const j = await r.json()
-      if (!r.ok || !j.access_token) { setErr(j.detail || t('reg.taken')); setBusy(false); return }
+      if (!r.ok || !j.access_token) { setErr(j.detail || 'No se pudo crear la cuenta. Prueba con otro usuario o URL.'); setBusy(false); return }
       localStorage.setItem('flotadsp_token', j.access_token)
       localStorage.setItem('flotadsp_admin', JSON.stringify({ name: j.name, role: j.role, id: j.id, account_type: j.account_type, slug: j.slug, super_admin: j.super_admin, permissions: j.permissions ?? null, centers: j.centers || [] }))
-      const plan = new URLSearchParams(window.location.search).get('plan')
-      // Entran al panel nuevo (con su trial de 14 días). Si vienen con plan, lo recordamos para sugerir checkout.
-      window.location.href = plan ? `/panel?plan=${encodeURIComponent(plan)}` : '/panel'
-    } catch { setErr('—'); setBusy(false) }
+      if (planParam) localStorage.setItem('flota_plan', planParam)
+      window.location.href = planParam ? `/panel?plan=${encodeURIComponent(planParam)}` : '/panel'
+    } catch { setErr('Sin conexión con el servidor. Revisa tu red e inténtalo de nuevo.'); setBusy(false) }
   }
 
   return (
@@ -58,6 +60,11 @@ export default function Registro() {
         <div style={{ fontSize: 28, textAlign: 'center' }}>⚡</div>
         <h2 style={{ margin: '6px 0 2px', textAlign: 'center', fontSize: 20 }}>{t('reg.title')}</h2>
         <p style={{ margin: '0 0 16px', textAlign: 'center', color: '#8b94a3', fontSize: 13 }}>{t('reg.sub')}</p>
+        {planParam && (
+          <div style={{ marginBottom: 14, padding: '10px 12px', borderRadius: 10, background: 'rgba(14,165,233,.12)', border: '1px solid rgba(14,165,233,.35)', textAlign: 'center', fontSize: 13 }}>
+            Plan elegido: <b style={{ color: '#0ea5e9' }}>{planParam}</b> · <span style={{ color: '#cbd3e0' }}>14 días gratis, sin cobro durante la prueba</span>
+          </div>
+        )}
 
         <label style={lbl}>{t('reg.company')}</label>
         <input style={inp} value={org} onChange={(e) => onOrg(e.target.value)} placeholder="Transportes Pérez SL" />
@@ -84,8 +91,8 @@ export default function Registro() {
           <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} style={{ marginTop: 2 }} />
           <span>Acepto los <a href="/terminos" target="_blank" style={{ color: '#0ea5e9' }}>Términos</a> y la <a href="/privacidad" target="_blank" style={{ color: '#0ea5e9' }}>Política de Privacidad</a>. Prueba gratuita de 14 días — sin cobro durante la prueba; al finalizar se cobra el plan elegido salvo cancelación.</span>
         </label>
-        <button style={{ ...btn, opacity: busy || !accept ? .6 : 1 }} disabled={busy || !accept} onClick={submit}>{busy ? '…' : t('reg.btn')}</button>
-        {err && err !== '—' && <div style={{ color: '#f87171', fontSize: 13, marginTop: 12, textAlign: 'center' }}>{err}</div>}
+        <button style={{ ...btn, opacity: busy ? .6 : 1, cursor: busy ? 'wait' : 'pointer' }} disabled={busy} onClick={submit}>{busy ? 'Creando cuenta…' : (t('reg.btn') || 'Crear cuenta')}</button>
+        {err && <div style={{ color: '#f87171', fontSize: 13, marginTop: 12, padding: '8px 10px', borderRadius: 8, background: 'rgba(248,113,113,.08)', border: '1px solid rgba(248,113,113,.25)', textAlign: 'center' }}>{err}</div>}
         <div style={{ textAlign: 'center', marginTop: 16, color: '#8b94a3', fontSize: 13 }}>
           {t('reg.have')} <a href="/login" style={{ color: '#0ea5e9', textDecoration: 'none', fontWeight: 600 }}>{t('login.btn')}</a>
         </div>

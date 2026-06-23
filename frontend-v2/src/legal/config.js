@@ -1,11 +1,12 @@
-// === DATOS DEL RESPONSABLE — RELLÉNALOS antes de publicar a producción ===
-// Estos datos aparecen en TODAS las páginas legales (Aviso legal, Privacidad, etc.).
+// === DATOS DEL RESPONSABLE ===
+// Cuando tengas CIF y dirección formal, rellénalos en `cif` y `address`.
+// Si quedan vacíos, las páginas legales lo ocultan y no enseñan placeholders.
 export const COMPANY = {
-  legalName: '[NOMBRE LEGAL DE TU EMPRESA O AUTÓNOMO]',
+  legalName: 'FlotaDSP',
   brand: 'FlotaDSP',
-  cif: '[CIF / NIF]',
-  address: '[Dirección completa, código postal, ciudad, país]',
-  registry: '', // opcional: 'Registro Mercantil de … tomo … folio …'
+  cif: '',
+  address: '',
+  registry: '',
   contactEmail: 'soporte@flotadsp.com',
   privacyEmail: 'privacidad@flotadsp.com',
   website: 'https://flotadsp.com',
