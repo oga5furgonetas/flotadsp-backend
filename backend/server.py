@@ -427,6 +427,7 @@ class CreateAdminRequest(BaseModel):
     username: str
     password: str
     name: str
+    permissions: Optional[List[str]] = None   # módulos permitidos; None = todos (menos super-admin)
 
 
 class TokenResponse(BaseModel):
@@ -441,6 +442,8 @@ class TokenResponse(BaseModel):
     hidden_modules: Optional[list] = None
     slug: Optional[str] = None
     centers: Optional[list] = None
+    super_admin: Optional[bool] = None
+    permissions: Optional[list] = None
 
 
 # =========================
@@ -461,7 +464,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 def create_token(user_id: str, role: str, name: str,
                  org_id: Optional[str] = None, db_name: Optional[str] = None,
                  account_type: Optional[str] = None, centers: Optional[list] = None,
-                 super_admin: bool = False) -> str:
+                 super_admin: bool = False, permissions: Optional[list] = None) -> str:
     expires = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
     payload = {
         "sub": user_id,
@@ -471,6 +474,9 @@ def create_token(user_id: str, role: str, name: str,
     }
     if super_admin:
         payload["sa"] = True
+    # Permisos por usuario (lista de módulos permitidos). None = sin restricción.
+    if permissions is not None:
+        payload["permissions"] = permissions
     if org_id:
         payload["org_id"] = org_id
     if db_name:
@@ -2352,7 +2358,8 @@ async def admin_login(data: LoginRequest, request: Request):
     account_type = (org or {}).get("account_type", "owner")
     token = create_token(user["id"], user["role"], user["name"],
                          org_id=user.get("org_id"), db_name=db_name, account_type=account_type,
-                         centers=(org or {}).get("centers"), super_admin=bool(user.get("super_admin")))
+                         centers=(org or {}).get("centers"), super_admin=bool(user.get("super_admin")),
+                         permissions=user.get("permissions"))
     logger.info(f"Admin login: {data.username} (org={user.get('org_id')})")
     return TokenResponse(
         access_token=token,
@@ -2364,6 +2371,8 @@ async def admin_login(data: LoginRequest, request: Request):
         hidden_modules=org_hidden_modules(org),
         slug=(org or {}).get("slug"),
         centers=(org or {}).get("centers"),
+        super_admin=bool(user.get("super_admin")),
+        permissions=user.get("permissions"),
     )
 
 
@@ -2510,11 +2519,48 @@ async def create_admin(
         "hashed_password": hash_password(data.password),
         "name": data.name,
         "role": "admin",
+        "super_admin": False,                        # nunca super-admin desde aquí
+        "org_id": _admin.get("org_id"),              # MISMA organización que su creador (multi-tenant)
+        "permissions": data.permissions,             # módulos permitidos (None = todos menos Negocio)
+        "created_by": _admin.get("sub"),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await global_db.admin_users.insert_one(doc)
-    logger.info(f"Admin creado: {data.username} por {_admin['name']}")
+    logger.info(f"Admin creado: {data.username} por {_admin.get('name')} (org={_admin.get('org_id')})")
     return {"success": True, "id": doc["id"], "username": data.username}
+
+
+@auth_router.patch("/admins/{admin_id}")
+async def update_admin_permissions(admin_id: str, data: dict = Body(...), _admin: dict = Depends(require_admin)):
+    """Actualiza nombre o permisos de un usuario de MI organización. No toca super-admins."""
+    target = await global_db.admin_users.find_one({"id": admin_id}, {"_id": 0})
+    if not target or target.get("org_id") != _admin.get("org_id"):
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if target.get("super_admin"):
+        raise HTTPException(status_code=403, detail="No puedes modificar a un super-admin")
+    patch = {}
+    if "permissions" in data:
+        patch["permissions"] = data.get("permissions")
+    if data.get("name"):
+        patch["name"] = str(data["name"]).strip()
+    if not patch:
+        raise HTTPException(status_code=400, detail="Nada que actualizar")
+    await global_db.admin_users.update_one({"id": admin_id}, {"$set": patch})
+    return {"success": True}
+
+
+@auth_router.delete("/admins/{admin_id}")
+async def delete_admin(admin_id: str, _admin: dict = Depends(require_admin)):
+    """Elimina un usuario de MI organización (no a uno mismo ni a super-admins)."""
+    if admin_id == _admin.get("sub"):
+        raise HTTPException(status_code=400, detail="No puedes eliminarte a ti mismo")
+    target = await global_db.admin_users.find_one({"id": admin_id}, {"_id": 0})
+    if not target or target.get("org_id") != _admin.get("org_id"):
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if target.get("super_admin"):
+        raise HTTPException(status_code=403, detail="No puedes eliminar a un super-admin")
+    await global_db.admin_users.delete_one({"id": admin_id})
+    return {"success": True}
 
 
 @auth_router.post("/change-my-password")
@@ -2600,7 +2646,9 @@ async def set_driver_password(
 
 @auth_router.get("/admins")
 async def list_admins(_admin: dict = Depends(require_admin)):
-    admins = await global_db.admin_users.find({}, {"_id": 0, "hashed_password": 0}).to_list(100)
+    # Solo los usuarios de MI organización (multi-tenant). El super-admin dueño ve los suyos.
+    q = {"org_id": _admin.get("org_id")} if _admin.get("org_id") else {}
+    admins = await global_db.admin_users.find(q, {"_id": 0, "hashed_password": 0}).to_list(100)
     return admins
 
 

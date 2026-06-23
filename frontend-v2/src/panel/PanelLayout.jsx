@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Navigate, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Trophy, Users, CalendarClock, BarChart3, Activity,
   CheckCircle2, ClipboardList, Truck, Wrench, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap,
   ChevronRight, ExternalLink,
 } from 'lucide-react'
-import { getAdmin, isAuthed, isSuperAdmin, logout } from './auth'
+import { getAdmin, isAuthed, isSuperAdmin, logout, canSee } from './auth'
+
+const keyOf = (to) => (to === '/panel' ? 'dashboard' : to.split('/').pop())
 
 // Menú real (dos pestañas, como la app actual)
 const TABS = {
@@ -40,6 +42,7 @@ const TABS = {
 
 export default function PanelLayout() {
   const nav = useNavigate()
+  const loc = useLocation()
   const admin = getAdmin()
   const [tab, setTab] = useState(() => localStorage.getItem('panel_tab') || 'furgonetas')
   const [center, setCenter] = useState(() => localStorage.getItem('panel_center') || 'Todos')
@@ -52,10 +55,22 @@ export default function PanelLayout() {
 
   if (!isAuthed()) return <Navigate to="/panel/login" replace />
 
+  // Guard de ruta: impide acceder por URL a un módulo no permitido.
+  const curKey = keyOf(loc.pathname.replace(/\/+$/, '') || '/panel')
+  const routeAllowed = (k) => {
+    if (k === 'perfil' || k === 'login') return true
+    if (k === 'admin' || k === 'usuarios') return isSuperAdmin()
+    return canSee(k)
+  }
+  if (!routeAllowed(curKey)) {
+    const firstAllowed = [...TABS.operacional.items, ...TABS.furgonetas.items].find((it) => canSee(keyOf(it.to)))
+    return <Navigate to={firstAllowed ? firstAllowed.to : '/panel/perfil'} replace />
+  }
+
   // Link del portal del conductor de ESTE DSP (aislado por su slug)
   const driverLink = `${window.location.origin}/conductor/#${admin?.slug || ''}`
 
-  const items = TABS[tab].items
+  const items = TABS[tab].items.filter((it) => canSee(keyOf(it.to)))
   const showAdmin = isSuperAdmin()
 
   function doLogout() {
@@ -126,6 +141,18 @@ export default function PanelLayout() {
               }
             >
               <Shield size={16} /> Negocio (super-admin)
+            </NavLink>
+          )}
+          {showAdmin && (
+            <NavLink
+              to="/panel/usuarios"
+              className={({ isActive }) =>
+                `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
+                  isActive ? 'bg-brand-500/15 text-brand-300' : 'text-dark-300 hover:bg-dark-800 hover:text-dark-100'
+                }`
+              }
+            >
+              <Users size={16} /> Usuarios
             </NavLink>
           )}
         </nav>

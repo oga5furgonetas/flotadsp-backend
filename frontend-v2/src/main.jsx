@@ -26,6 +26,7 @@ import PanelCasasAlquiler from './panel/pages/CasasAlquiler'
 import PanelScorecard from './panel/pages/Scorecard'
 import PanelConfiguracion from './panel/pages/Configuracion'
 import PanelTurnos from './panel/pages/Turnos'
+import PanelUsuarios from './panel/pages/Usuarios'
 
 /* La app de gestión completa (Conductores, Flota, HistorialIA, PeritoIA…) vive en
    app.flotadsp.com. flotadsp.com = landing + registro + pagos + portal conductor.
@@ -72,6 +73,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="importaciones" element={<Placeholder title="Importaciones" />} />
               <Route path="configuracion" element={<PanelConfiguracion />} />
               <Route path="admin" element={<PanelNegocio />} />
+              <Route path="usuarios" element={<PanelUsuarios />} />
               <Route path="perfil" element={<PanelPerfil />} />
             </Route>
 

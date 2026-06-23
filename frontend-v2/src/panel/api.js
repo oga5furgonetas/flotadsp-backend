@@ -80,6 +80,12 @@ export const getLeads = () => api.get('/leads')
 export const getBillingConfig = () => api.get('/billing/config')
 export const backupNow = () => api.post('/admin/backup-now')
 
+/* ── Usuarios (RBAC) ── */
+export const getAdmins = () => api.get('/auth/admins')
+export const createAdmin = (body) => api.post('/auth/create-admin', body) // {username, password, name, permissions:[]}
+export const updateAdmin = (id, body) => api.patch(`/auth/admins/${id}`, body) // {permissions?, name?}
+export const deleteAdmin = (id) => api.delete(`/auth/admins/${id}`)
+
 /* ── Perfil / cuenta ── */
 export const changeMyPassword = (current_password, new_password) =>
   api.post('/auth/change-my-password', { current_password, new_password })
