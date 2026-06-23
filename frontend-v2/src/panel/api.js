@@ -13,6 +13,9 @@ export const getVehicles = (center) => api.get('/vehicles', { params: centerPara
 export const getVehicle = (id) => api.get(`/vehicles/${id}`)
 export const getVehicleHistory = (id) => api.get(`/vehicles/${id}/history`)
 export const getLastInspections = () => api.get('/vehicles/last-inspections')
+export const getVehicleDriver = (id) => api.get(`/vehicles/${id}/driver`)
+export const getVehicleInspections = (id) => api.get(`/inspections/vehicle/${id}`)
+export const updateVehicle = (id, body) => api.patch(`/vehicles/${id}`, body)
 
 /* ── Conductores ── */
 export const getDrivers = (center) => api.get('/drivers', { params: centerParam(center) })
