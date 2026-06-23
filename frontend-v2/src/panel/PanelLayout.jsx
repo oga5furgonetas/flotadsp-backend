@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Trophy, Users, CalendarClock, BarChart3, Activity,
-  CheckCircle2, ClipboardList, Truck, Wrench, BellRing, KeyRound,
+  CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap,
   ChevronRight, ExternalLink,
 } from 'lucide-react'
@@ -19,6 +19,7 @@ const TABS = {
       { to: '/panel', label: 'Dashboard', icon: LayoutDashboard, end: true },
       { to: '/panel/scorecard', label: 'Scorecard', icon: Trophy },
       { to: '/panel/conductores', label: 'Conductores', icon: Users },
+      { to: '/panel/asignacion', label: 'Asignación diaria', icon: ClipboardCheck },
       { to: '/panel/turnos', label: 'Turnos', icon: CalendarClock },
       { to: '/panel/metricas', label: 'Métricas', icon: BarChart3 },
       { to: '/panel/actividad', label: 'Actividad', icon: Activity },

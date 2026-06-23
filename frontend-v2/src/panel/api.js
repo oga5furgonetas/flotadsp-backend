@@ -86,6 +86,10 @@ export const importVehicles = (file, center) => {
 export const getShifts = (center, desde, hasta) => api.get('/shifts', { params: { center, desde, hasta } })
 export const getShiftCoverage = (center, desde, hasta) => api.get('/shifts/coverage', { params: { center, desde, hasta } })
 
+/* ── Asignación diaria (qué conductor lleva qué furgo) ── */
+export const getDailyAssignment = (center, date) => api.get('/assignments/daily', { params: { center, date } })
+export const putDailyAssignment = (body) => api.put('/assignments/daily', body) // {center, date, slots:[{vehicle_id,vehicle_plate,driver_id,driver_name}]}
+
 /* ── Negocio (super-admin) ── */
 export const getAdminOverview = () => api.get('/admin/overview')
 export const getAdminOrgs = () => api.get('/admin/orgs')

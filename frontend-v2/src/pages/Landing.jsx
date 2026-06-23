@@ -85,7 +85,7 @@ export default function Landing() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <LangPicker />
           <a href="/planes" style={link}>{t('nav.plans')}</a>
-          <a href="https://app.flotadsp.com" style={link}>{t('nav.login')}</a>
+          <a href="/panel/login" style={link}>{t('nav.login')}</a>
           <a href="/registro" style={btnPrimary}>{t('nav.try')}</a>
         </div>
       </nav>
@@ -185,7 +185,7 @@ export default function Landing() {
       </section>
 
       <footer style={{ textAlign: 'center', color: '#7b8494', fontSize: 13, padding: '30px 18px 50px', borderTop: '1px solid rgba(255,255,255,.05)' }}>
-        {t('foot.have')} <a href="https://app.flotadsp.com" style={{ color: '#0ea5e9', textDecoration: 'none' }}>{t('foot.login')}</a>
+        {t('foot.have')} <a href="/panel/login" style={{ color: '#0ea5e9', textDecoration: 'none' }}>{t('foot.login')}</a>
         <div style={{ marginTop: 10, color: '#5e6675' }}>© FlotaDSP</div>
       </footer>
     </div>

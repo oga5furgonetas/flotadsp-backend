@@ -32,12 +32,11 @@ import PanelMetricas from './panel/pages/Metricas'
 import PanelImportaciones from './panel/pages/Importaciones'
 import PanelActividad from './panel/pages/Actividad'
 import PanelPortalConductor from './panel/pages/PortalConductor'
+import PanelAsignacion from './panel/pages/Asignacion'
 
-/* La app de gestión completa (Conductores, Flota, HistorialIA, PeritoIA…) vive en
-   app.flotadsp.com. flotadsp.com = landing + registro + pagos + portal conductor.
-   Login/registro y cualquier ruta /app llevan a la app completa. */
+/* Toda la app vive en /panel. /app es un alias legado que redirige al panel nuevo. */
 function AppRedirect() {
-  window.location.replace('https://app.flotadsp.com')
+  window.location.replace('/panel')
   return null
 }
 
@@ -64,6 +63,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="scorecard" element={<PanelScorecard />} />
               <Route path="conductores" element={<PanelConductores />} />
               <Route path="turnos" element={<PanelTurnos />} />
+              <Route path="asignacion" element={<PanelAsignacion />} />
               <Route path="metricas" element={<PanelMetricas />} />
               <Route path="actividad" element={<PanelActividad />} />
               {/* Furgonetas */}

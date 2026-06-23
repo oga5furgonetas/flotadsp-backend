@@ -22,7 +22,7 @@ export default function Login() {
       if (!r.ok || !j.access_token) { setErr(t('login.err')); setBusy(false); return }
       localStorage.setItem('flotadsp_token', j.access_token)
       localStorage.setItem('flotadsp_admin', JSON.stringify({ name: j.name, role: j.role, id: j.id, account_type: j.account_type, slug: j.slug }))
-      window.location.href = 'https://app.flotadsp.com'
+      window.location.href = '/panel'
     } catch { setErr(t('login.err')); setBusy(false) }
   }
 
