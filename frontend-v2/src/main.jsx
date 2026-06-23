@@ -33,6 +33,13 @@ import PanelImportaciones from './panel/pages/Importaciones'
 import PanelActividad from './panel/pages/Actividad'
 import PanelPortalConductor from './panel/pages/PortalConductor'
 import PanelAsignacion from './panel/pages/Asignacion'
+import PanelBandeja from './panel/pages/Bandeja'
+import Privacidad from './legal/Privacidad'
+import Terminos from './legal/Terminos'
+import CookiesPage from './legal/Cookies'
+import AvisoLegal from './legal/AvisoLegal'
+import Contacto from './legal/Contacto'
+import CookieBanner from './legal/CookieBanner'
 
 /* Toda la app vive en /panel. /app es un alias legado que redirige al panel nuevo. */
 function AppRedirect() {
@@ -45,11 +52,17 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <LangProvider>
       <ToastProvider>
         <BrowserRouter>
+          <CookieBanner />
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/login" element={<Login />} />
             <Route path="/registro" element={<Registro />} />
             <Route path="/planes" element={<Planes />} />
+            <Route path="/privacidad" element={<Privacidad />} />
+            <Route path="/terminos" element={<Terminos />} />
+            <Route path="/cookies" element={<CookiesPage />} />
+            <Route path="/aviso-legal" element={<AvisoLegal />} />
+            <Route path="/contacto" element={<Contacto />} />
             <Route path="/app" element={<AppRedirect />} />
             <Route path="/conductor" element={<DriverPortal />} />
             <Route path="/conductor/:slug" element={<DriverPortal />} />
@@ -81,6 +94,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="usuarios" element={<PanelUsuarios />} />
               <Route path="perfil" element={<PanelPerfil />} />
               <Route path="portal-conductor" element={<PanelPortalConductor />} />
+              <Route path="bandeja" element={<PanelBandeja />} />
             </Route>
 
             <Route path="*" element={<Landing />} />

@@ -21,6 +21,7 @@ export default function Registro() {
   const [pass, setPass] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [accept, setAccept] = useState(false)
 
   function onOrg(v) { setOrg(v); if (!slugTouched) setSlug(slugify(v)) }
 
@@ -29,6 +30,7 @@ export default function Registro() {
     const s = slugify(slug)
     if (!org.trim()) return setErr('—')
     if (s.length < 3 || user.trim().length < 3 || pass.length < 8) return setErr('—')
+    if (!accept) return setErr('Debes aceptar los Términos y la Política de Privacidad.')
     setBusy(true)
     try {
       const r = await fetch(`${API_BASE}/auth/register`, {
@@ -78,7 +80,11 @@ export default function Registro() {
         <input style={inp} type="password" value={pass} onChange={(e) => setPass(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && submit()} autoComplete="new-password" />
 
-        <button style={{ ...btn, opacity: busy ? .6 : 1 }} disabled={busy} onClick={submit}>{busy ? '…' : t('reg.btn')}</button>
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 16, fontSize: 12.5, color: '#cbd3e0', lineHeight: 1.5, cursor: 'pointer' }}>
+          <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} style={{ marginTop: 2 }} />
+          <span>Acepto los <a href="/terminos" target="_blank" style={{ color: '#0ea5e9' }}>Términos</a> y la <a href="/privacidad" target="_blank" style={{ color: '#0ea5e9' }}>Política de Privacidad</a>. Prueba gratuita de 14 días — sin cobro durante la prueba; al finalizar se cobra el plan elegido salvo cancelación.</span>
+        </label>
+        <button style={{ ...btn, opacity: busy || !accept ? .6 : 1 }} disabled={busy || !accept} onClick={submit}>{busy ? '…' : t('reg.btn')}</button>
         {err && err !== '—' && <div style={{ color: '#f87171', fontSize: 13, marginTop: 12, textAlign: 'center' }}>{err}</div>}
         <div style={{ textAlign: 'center', marginTop: 16, color: '#8b94a3', fontSize: 13 }}>
           {t('reg.have')} <a href="/login" style={{ color: '#0ea5e9', textDecoration: 'none', fontWeight: 600 }}>{t('login.btn')}</a>

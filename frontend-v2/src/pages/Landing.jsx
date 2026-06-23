@@ -186,7 +186,14 @@ export default function Landing() {
 
       <footer style={{ textAlign: 'center', color: '#7b8494', fontSize: 13, padding: '30px 18px 50px', borderTop: '1px solid rgba(255,255,255,.05)' }}>
         {t('foot.have')} <a href="/panel/login" style={{ color: '#0ea5e9', textDecoration: 'none' }}>{t('foot.login')}</a>
-        <div style={{ marginTop: 10, color: '#5e6675' }}>© FlotaDSP</div>
+        <div style={{ marginTop: 14, display: 'flex', gap: 18, justifyContent: 'center', flexWrap: 'wrap', fontSize: 12.5 }}>
+          <a href="/privacidad" style={{ color: '#8b94a3', textDecoration: 'none' }}>Privacidad</a>
+          <a href="/terminos" style={{ color: '#8b94a3', textDecoration: 'none' }}>Términos</a>
+          <a href="/cookies" style={{ color: '#8b94a3', textDecoration: 'none' }}>Cookies</a>
+          <a href="/aviso-legal" style={{ color: '#8b94a3', textDecoration: 'none' }}>Aviso legal</a>
+          <a href="/contacto" style={{ color: '#8b94a3', textDecoration: 'none' }}>Contacto</a>
+        </div>
+        <div style={{ marginTop: 12, color: '#5e6675', fontSize: 12 }}>© {new Date().getFullYear()} FlotaDSP</div>
       </footer>
     </div>
   )

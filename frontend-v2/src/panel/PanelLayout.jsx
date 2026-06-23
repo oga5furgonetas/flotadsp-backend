@@ -3,7 +3,7 @@ import { NavLink, Navigate, Outlet, useNavigate, useLocation } from 'react-route
 import {
   LayoutDashboard, Trophy, Users, CalendarClock, BarChart3, Activity,
   CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
-  Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap,
+  Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ExternalLink,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, logout, canSee } from './auth'
@@ -61,7 +61,7 @@ export default function PanelLayout() {
   const curKey = keyOf(loc.pathname.replace(/\/+$/, '') || '/panel')
   const routeAllowed = (k) => {
     if (k === 'perfil' || k === 'login' || k === 'portal-conductor') return true
-    if (k === 'admin' || k === 'usuarios') return isSuperAdmin()
+    if (k === 'admin' || k === 'usuarios' || k === 'bandeja') return isSuperAdmin()
     return canSee(k)
   }
   if (!routeAllowed(curKey)) {
@@ -154,6 +154,18 @@ export default function PanelLayout() {
               }
             >
               <Users size={16} /> Usuarios
+            </NavLink>
+          )}
+          {showAdmin && (
+            <NavLink
+              to="/panel/bandeja"
+              className={({ isActive }) =>
+                `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
+                  isActive ? 'bg-brand-500/15 text-brand-300' : 'text-dark-300 hover:bg-dark-800 hover:text-dark-100'
+                }`
+              }
+            >
+              <Inbox size={16} /> Bandeja
             </NavLink>
           )}
         </nav>
