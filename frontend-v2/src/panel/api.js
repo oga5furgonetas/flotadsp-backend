@@ -66,6 +66,18 @@ export const getTelegramConfig = () => api.get('/telegram/config')
 export const getOrgBilling = () => api.get('/org/billing')
 export const getMe = () => api.get('/auth/me')
 
+/* ── IA Peritaje / Métricas / Importaciones ── */
+export const getHealth = () => api.get('/health')
+export const reanalyzeFailed = () => api.post('/inspections/reanalyze-failed')
+export const reanalyzeInspection = (id) => api.post(`/inspections/${id}/reanalyze`)
+export const getMetricsReports = (center) => api.get('/metrics/reports', { params: centerParam(center) })
+export const importVehicles = (file, center) => {
+  const fd = new FormData()
+  fd.append('file', file, file.name)
+  if (center && center !== 'Todos') fd.append('center_filter', center)
+  return api.post('/import/vehicles', fd, { timeout: 120000, headers: { 'Content-Type': undefined } })
+}
+
 /* ── Turnos ── */
 export const getShifts = (center, desde, hasta) => api.get('/shifts', { params: { center, desde, hasta } })
 export const getShiftCoverage = (center, desde, hasta) => api.get('/shifts/coverage', { params: { center, desde, hasta } })
