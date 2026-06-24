@@ -3935,8 +3935,10 @@ async def sign_inspection(inspection_id: str, data: SignInspectionRequest, reque
 @api_router.get("/inspections/{inspection_id}/forensic")
 async def get_forensic_status(inspection_id: str, _=Depends(require_any_auth)):
     """Estado de firma de una inspección. Sin secretos: NO devuelve payload completo."""
+    # FIX (bug S1.A): incluir 'id' en projection para que find_one no devuelva {} en docs
+    # sin campos forensic_*. Sin esto, /forensic devolvía 404 para inspecciones no firmadas.
     insp = await db.inspections.find_one(
-        {"id": inspection_id}, {"_id": 0, "forensic_signed": 1, "forensic_hash": 1,
+        {"id": inspection_id}, {"_id": 0, "id": 1, "forensic_signed": 1, "forensic_hash": 1,
                                 "forensic_signed_at": 1, "forensic_signed_by": 1}
     )
     if not insp:
