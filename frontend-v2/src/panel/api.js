@@ -9,6 +9,9 @@ export const getForensicStatus = (inspId) => api.get(`/inspections/${inspId}/for
 export const signInspectionAdmin = (inspId, signatureText) =>
   api.post(`/inspections/${inspId}/sign`, { signature_text: signatureText })
 
+/* ── Fraud Guard (S3) ── */
+export const recheckFraud = (inspId) => api.post(`/inspections/${inspId}/recheck-fraud`)
+
 /* ── Dashboard ── */
 export const getDashboardStats = () => api.get('/stats/dashboard')
 export const getAttention = () => api.get('/stats/attention')

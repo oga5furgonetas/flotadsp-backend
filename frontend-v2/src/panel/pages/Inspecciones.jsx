@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, Search, X, FileText, Image as ImageIcon, ShieldQuestion, User, ChevronDown,
-  ShieldCheck, FileSignature,
+  ShieldCheck, FileSignature, ShieldAlert, RefreshCw,
 } from 'lucide-react'
-import { getInspections, getVehicles, getDrivers, getVehicleInspections, fetchAuthedBlob, getForensicStatus, signInspectionAdmin } from '../api'
+import { getInspections, getVehicles, getDrivers, getVehicleInspections, fetchAuthedBlob, getForensicStatus, signInspectionAdmin, recheckFraud } from '../api'
 
 const SEV_LABEL = { sin_danos: 'Sin daños', sin_analisis: 'Sin análisis', leve: 'Leve', moderado: 'Moderado', grave: 'Grave', critico: 'Crítico' }
 const SEV_CLS = {
@@ -91,6 +91,11 @@ export default function Inspecciones() {
                   {i.photos?.[0] ? <img src={i.photos[0]} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-dark-600"><ImageIcon size={24} /></div>}
                   <span className={`absolute left-2 top-2 rounded px-2 py-0.5 text-[11px] font-bold ${SEV_CLS[s]}`}>{SEV_LABEL[s] || s}</span>
                   {i.forensic_signed && <span className="absolute right-2 top-2 flex items-center gap-0.5 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[10px] font-bold text-white" title="Inspección firmada"><ShieldCheck size={10} /> Firmada</span>}
+                  {typeof i.fraud_score === 'number' && i.fraud_score >= 70 && (
+                    <span className={`absolute left-2 bottom-2 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold text-white ${i.fraud_score >= 85 ? 'bg-red-600' : 'bg-amber-500'}`} title={`Score ${i.fraud_score}/100`}>
+                      <ShieldAlert size={10} /> {i.fraud_score >= 85 ? 'Fraude' : 'Sospechoso'}
+                    </span>
+                  )}
                 </div>
                 <div className="p-3">
                   <div className="flex items-center justify-between"><span className="font-bold">{v.plate || '—'}</span><span className="text-xs text-dark-500">{fmt(i.created_at)}</span></div>
@@ -171,9 +176,68 @@ function Detail({ insp, plate, dmap, onClose, onPdf }) {
             <QuienTimeline vehicleId={insp.vehicle_id} dmap={dmap} currentId={insp.id} />
           )}
 
+          <FraudBlock insp={insp} />
           <ForensicSignBlock inspId={insp.id} onPdf={onPdf} />
         </div>
       </div>
+    </div>
+  )
+}
+
+function FraudBlock({ insp }) {
+  const [score, setScore] = useState(typeof insp.fraud_score === 'number' ? insp.fraud_score : null)
+  const [reasons, setReasons] = useState(insp.fraud_reasons || [])
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+
+  async function recheck() {
+    setBusy(true); setErr('')
+    try {
+      const r = await recheckFraud(insp.id)
+      setScore(r.data?.score ?? 0)
+      setReasons(r.data?.reasons || [])
+    } catch (e) { setErr(e?.response?.data?.detail || 'No se pudo recalcular.') }
+    setBusy(false)
+  }
+
+  // Si nunca se ha calculado, mostrar botón para forzar.
+  if (score === null) {
+    return (
+      <div className="mt-4 rounded-lg border border-dark-800 bg-dark-800/30 p-3 text-sm">
+        <div className="mb-1.5 flex items-center gap-2 text-dark-300"><ShieldAlert size={14} /> Análisis de fraude no ejecutado</div>
+        <button onClick={recheck} disabled={busy} className="btn-secondary flex items-center gap-1.5 text-xs disabled:opacity-50">
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Comprobar ahora
+        </button>
+        {err && <p className="mt-1 text-xs text-red-400">{err}</p>}
+      </div>
+    )
+  }
+
+  const level = score >= 85 ? 'high' : score >= 70 ? 'mid' : 'low'
+  const cls = level === 'high' ? 'border-red-500/40 bg-red-500/10 text-red-200'
+            : level === 'mid' ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+            : 'border-emerald-500/30 bg-emerald-500/5 text-emerald-200'
+  const Icon = level === 'low' ? ShieldCheck : ShieldAlert
+  const title = level === 'high' ? 'POSIBLE FRAUDE' : level === 'mid' ? 'Indicios sospechosos' : 'Sin indicios de fraude'
+
+  return (
+    <div className={`mt-4 rounded-lg border p-3 text-sm ${cls}`}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="flex items-center gap-2 font-semibold"><Icon size={15} /> {title} <span className="text-xs opacity-70">({score}/100)</span></span>
+        <button onClick={recheck} disabled={busy} className="btn-ghost p-1 text-xs disabled:opacity-50" title="Recomprobar">
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+        </button>
+      </div>
+      {reasons.length > 0 ? (
+        <ul className="ml-1 space-y-1 text-xs">
+          {reasons.map((r, i) => (
+            <li key={i}>• <b>{r.type === 'plate_mismatch' ? 'Matrícula no coincide' : r.type === 'old_photo' ? 'Foto antigua' : r.type === 'reused_photo' ? 'Foto reusada' : r.type}:</b> {r.detail}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs opacity-80">EXIF correcto · pHash único · matrícula coincide.</p>
+      )}
+      {err && <p className="mt-2 text-xs text-red-400">{err}</p>}
     </div>
   )
 }
