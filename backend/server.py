@@ -3992,6 +3992,112 @@ async def _fetch_photo_bytes(url: str, timeout: int = 8):
     return None
 
 
+# Umbral de confianza mínimo para DIBUJAR caja en el PDF (compromiso de veracidad).
+# Daños bajo el umbral aparecen listados como "sugeridos" pero NO se marcan visualmente.
+_FORENSIC_CONFIDENCE_MIN = 0.5
+# Mínimo área de caja (en % del área de la imagen) para considerarla un daño real.
+_FORENSIC_MIN_BOX_AREA_PCT = 0.5  # 0.5% mínimo
+
+_SEVERITY_COLORS = {
+    "leve":     (250, 204, 21),   # amarillo
+    "moderado": (251, 146, 60),   # naranja
+    "grave":    (239, 68, 68),    # rojo
+    "critico":  (220, 38, 38),    # rojo intenso
+    "sin_danos": (34, 197, 94),   # verde (no se dibuja normalmente)
+}
+
+
+def _is_box_valid(box_2d) -> bool:
+    """Valida que box_2d sea una caja real (no placeholder, dentro de rango, con área mínima)."""
+    if not isinstance(box_2d, (list, tuple)) or len(box_2d) != 4:
+        return False
+    try:
+        y1, x1, y2, x2 = [float(v) for v in box_2d]
+    except Exception:
+        return False
+    if y1 + x1 + y2 + x2 == 0:                # placeholder [0,0,0,0]
+        return False
+    if not (0 <= y1 < y2 <= 1000 and 0 <= x1 < x2 <= 1000):
+        return False
+    area_pct = ((y2 - y1) * (x2 - x1)) / 10000.0  # 1000*1000/10000 = 100%
+    if area_pct < _FORENSIC_MIN_BOX_AREA_PCT:
+        return False
+    return True
+
+
+def _annotate_photo_with_damages(photo_bytes: bytes, damages_for_photo: list) -> bytes:
+    """Dibuja cajas sobre los daños VERÍDICOS de una foto.
+    Solo dibuja: confidence ≥ 0.5, box_2d válido, severity ≠ sin_danos.
+    Si la imagen falla → devuelve los bytes originales (fallback seguro)."""
+    if not photo_bytes:
+        return photo_bytes
+    try:
+        from PIL import Image as PILImage, ImageDraw, ImageFont
+        import io as _io
+        img = PILImage.open(_io.BytesIO(photo_bytes))
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        W, H = img.size
+        draw = ImageDraw.Draw(img)
+        # Grosor proporcional a la imagen (mínimo 3 px).
+        thick = max(3, int(min(W, H) * 0.006))
+        try:
+            font = ImageFont.truetype("DejaVuSans-Bold.ttf", max(14, int(min(W, H) * 0.022)))
+        except Exception:
+            font = ImageFont.load_default()
+
+        drawn = 0
+        for d in (damages_for_photo or []):
+            if (d.get("severity") in (None, "sin_danos", "sin_analisis")):
+                continue
+            if float(d.get("confidence", 0)) < _FORENSIC_CONFIDENCE_MIN:
+                continue
+            box = d.get("box_2d")
+            if not _is_box_valid(box):
+                continue
+            y1, x1, y2, x2 = box
+            # Mapear 0-1000 a píxeles.
+            left, top = int(x1 / 1000.0 * W), int(y1 / 1000.0 * H)
+            right, bottom = int(x2 / 1000.0 * W), int(y2 / 1000.0 * H)
+            color = _SEVERITY_COLORS.get(d.get("severity"), (239, 68, 68))
+            # Rectángulo
+            draw.rectangle([left, top, right, bottom], outline=color, width=thick)
+            # Etiqueta arriba del rectángulo: parte + confidence
+            label = f"{(d.get('part') or 'daño')[:24]}  {int(float(d.get('confidence', 0)) * 100)}%"
+            try:
+                tb = draw.textbbox((0, 0), label, font=font)
+                tw, th = tb[2] - tb[0], tb[3] - tb[1]
+            except Exception:
+                tw, th = (len(label) * 8, 14)
+            ly = max(0, top - th - 6)
+            draw.rectangle([left, ly, left + tw + 8, ly + th + 4], fill=color)
+            draw.text((left + 4, ly), label, fill=(0, 0, 0), font=font)
+            drawn += 1
+
+        buf = _io.BytesIO()
+        # JPEG para no inflar PDF; calidad alta para mantener detalle del daño.
+        img.save(buf, format="JPEG", quality=85, optimize=True)
+        return buf.getvalue()
+    except Exception as e:
+        logger.warning(f"forensic PDF: anotación de foto falló: {e}")
+        return photo_bytes
+
+
+def _filter_damages_for_peritaje(damages: list):
+    """Devuelve (incluidos, sugeridos): incluidos pasan los filtros estrictos."""
+    incluidos, sugeridos = [], []
+    for d in (damages or []):
+        sev = d.get("severity")
+        if sev in (None, "sin_danos", "sin_analisis"):
+            continue
+        conf = float(d.get("confidence", 0))
+        if conf >= _FORENSIC_CONFIDENCE_MIN and _is_box_valid(d.get("box_2d")):
+            incluidos.append(d)
+        else:
+            sugeridos.append(d)
+    return incluidos, sugeridos
+
+
 def _generate_qr_png(data: str) -> bytes:
     """QR como PNG bytes (para embed en PDF). Importado lazy."""
     import qrcode as _qr
@@ -4005,9 +4111,26 @@ def _generate_qr_png(data: str) -> bytes:
     return buf.getvalue()
 
 
+def _legend_pill(color_hex, label):
+    """Genera una mini-tabla 'cuadrito de color + label' para la leyenda."""
+    from reportlab.platypus import Table, TableStyle, Paragraph
+    from reportlab.lib import colors as _c
+    from reportlab.lib.styles import getSampleStyleSheet
+    st = getSampleStyleSheet()
+    return Table([["", Paragraph(label, st["BodyText"])]],
+                 colWidths=[4*1.5, None],
+                 style=TableStyle([
+                     ("BACKGROUND", (0, 0), (0, 0), color_hex),
+                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                     ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                 ]))
+
+
 def _build_forensic_pdf(insp: dict, sig: dict, vehicle: dict, driver_name: str,
-                        photo_bytes_list: list, verify_url: str) -> bytes:
-    """Construye el PDF de peritaje técnico. Síncrono, llamado vía run_in_executor."""
+                        photo_bytes_list: list, verify_url: str,
+                        damages_incluidos: list = None, damages_sugeridos: list = None) -> bytes:
+    """Construye el PDF de peritaje técnico. Síncrono, llamado vía run_in_executor.
+    photo_bytes_list contiene fotos YA anotadas con cajas (donde aplique)."""
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import mm
@@ -4017,15 +4140,18 @@ def _build_forensic_pdf(insp: dict, sig: dict, vehicle: dict, driver_name: str,
     from reportlab.lib.enums import TA_LEFT
     import io as _io
 
+    damages_incluidos = damages_incluidos or []
+    damages_sugeridos = damages_sugeridos or []
+
     buf = _io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=18*mm, leftMargin=18*mm,
-                            topMargin=18*mm, bottomMargin=18*mm,
+    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=15*mm, leftMargin=15*mm,
+                            topMargin=15*mm, bottomMargin=15*mm,
                             title=f"Peritaje técnico {insp.get('id','')[:8]}",
                             author="FlotaDSP")
     styles = getSampleStyleSheet()
     h1 = ParagraphStyle("H1", parent=styles["Heading1"], fontSize=18, textColor=colors.HexColor("#0b1220"))
     h2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=12, textColor=colors.HexColor("#0ea5e9"),
-                        spaceBefore=10, spaceAfter=4)
+                        spaceBefore=8, spaceAfter=4)
     body = ParagraphStyle("body", parent=styles["BodyText"], fontSize=9.5, leading=13, alignment=TA_LEFT)
     small = ParagraphStyle("small", parent=styles["BodyText"], fontSize=8, textColor=colors.HexColor("#6b7280"))
     mono = ParagraphStyle("mono", parent=styles["BodyText"], fontSize=8.5, fontName="Courier",
@@ -4036,7 +4162,7 @@ def _build_forensic_pdf(insp: dict, sig: dict, vehicle: dict, driver_name: str,
     # Cabecera
     story.append(Paragraph("Peritaje técnico de inspección", h1))
     story.append(Paragraph("Cadena de custodia con hash inmutable · FlotaDSP", small))
-    story.append(Spacer(1, 6*mm))
+    story.append(Spacer(1, 5*mm))
 
     # Bloque datos
     analysis = (insp.get("analysis") or {})
@@ -4045,9 +4171,9 @@ def _build_forensic_pdf(insp: dict, sig: dict, vehicle: dict, driver_name: str,
         ["Marca/Modelo", f"{vehicle.get('brand','—')} {vehicle.get('model','')}".strip(), "VIN", vehicle.get("vin", "—")],
         ["Conductor", driver_name or "—", "Inspección ID", (insp.get("id","")[:8] + "…")],
         ["Fecha inspección", (insp.get("created_at") or "")[:19].replace("T", " "), "Severidad", str(analysis.get("severity", "—"))],
-        ["Daños detectados", str(analysis.get("total_damages_count", 0)), "Coste estimado", f"{analysis.get('total_estimated_cost', 0)} €"],
+        ["Daños incluidos", str(len(damages_incluidos)), "Coste estimado", f"{analysis.get('total_estimated_cost', 0)} €"],
     ]
-    t = Table(rows, colWidths=[32*mm, 60*mm, 32*mm, 50*mm])
+    t = Table(rows, colWidths=[28*mm, 60*mm, 28*mm, 64*mm])
     t.setStyle(TableStyle([
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#6b7280")),
@@ -4057,24 +4183,45 @@ def _build_forensic_pdf(insp: dict, sig: dict, vehicle: dict, driver_name: str,
         ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
     ]))
     story.append(t)
-    story.append(Spacer(1, 6*mm))
+    story.append(Spacer(1, 5*mm))
+
+    # Leyenda de colores
+    if damages_incluidos:
+        legend_data = [[
+            "Leyenda:",
+            _legend_pill(colors.HexColor("#facc15"), "Leve"),
+            _legend_pill(colors.HexColor("#fb923c"), "Moderado"),
+            _legend_pill(colors.HexColor("#ef4444"), "Grave"),
+            _legend_pill(colors.HexColor("#dc2626"), "Crítico"),
+        ]]
+        leg = Table(legend_data, colWidths=[18*mm, 30*mm, 35*mm, 30*mm, 30*mm])
+        leg.setStyle(TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("TEXTCOLOR", (0, 0), (0, 0), colors.HexColor("#6b7280")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        story.append(leg)
+        story.append(Spacer(1, 3*mm))
 
     # Resumen ejecutivo si hay
     if analysis.get("executive_summary"):
         story.append(Paragraph("Resumen del peritaje IA", h2))
         story.append(Paragraph((analysis.get("executive_summary") or "")[:1500], body))
 
-    # Fotos (hasta 4 por página, miniatura)
-    if photo_bytes_list:
-        story.append(Paragraph("Evidencia fotográfica", h2))
-        story.append(Paragraph(f"{len([b for b in photo_bytes_list if b])} fotos adjuntas. Hash inmutable garantiza que estas imágenes son las analizadas.", small))
+    # Fotos con cajas
+    photos_valid = [b for b in photo_bytes_list if b]
+    if photos_valid:
+        story.append(Paragraph("Evidencia fotográfica con daños marcados", h2))
+        msg = (f"{len(photos_valid)} fotos analizadas. Las cajas señalan únicamente daños "
+               f"con confianza ≥ {int(_FORENSIC_CONFIDENCE_MIN*100)}% verificados por la IA. "
+               f"El hash de cada imagen está sellado en la cadena de custodia.")
+        story.append(Paragraph(msg, small))
         story.append(Spacer(1, 3*mm))
         thumbs = []
-        for b in photo_bytes_list:
-            if not b:
-                continue
+        for b in photos_valid:
             try:
-                img = Image(_io.BytesIO(b), width=78*mm, height=58*mm, kind="proportional")
+                img = Image(_io.BytesIO(b), width=85*mm, height=64*mm, kind="proportional")
                 thumbs.append(img)
             except Exception as e:
                 logger.warning(f"forensic PDF: foto inválida: {e}")
@@ -4082,10 +4229,9 @@ def _build_forensic_pdf(insp: dict, sig: dict, vehicle: dict, driver_name: str,
         if thumbs:
             grid = []
             for i in range(0, len(thumbs), 2):
-                row = [thumbs[i]]
-                row.append(thumbs[i+1] if i + 1 < len(thumbs) else "")
+                row = [thumbs[i], thumbs[i+1] if i + 1 < len(thumbs) else ""]
                 grid.append(row)
-            tg = Table(grid, colWidths=[85*mm, 85*mm])
+            tg = Table(grid, colWidths=[90*mm, 90*mm])
             tg.setStyle(TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
                 ("LEFTPADDING", (0, 0), (-1, -1), 2),
@@ -4094,6 +4240,65 @@ def _build_forensic_pdf(insp: dict, sig: dict, vehicle: dict, driver_name: str,
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
             ]))
             story.append(tg)
+
+    # Tabla de daños incluidos en el peritaje
+    if damages_incluidos:
+        story.append(Spacer(1, 4*mm))
+        story.append(Paragraph(f"Daños incluidos en el peritaje ({len(damages_incluidos)})", h2))
+        story.append(Paragraph("Cada daño cumple los criterios de veracidad: confianza ≥ 50%, caja delimitada, severidad clasificada.", small))
+        story.append(Spacer(1, 2*mm))
+        tdata = [["Pieza", "Severidad", "Confianza", "Foto", "Coste est."]]
+        for d in damages_incluidos[:30]:
+            tdata.append([
+                (d.get("part") or "—")[:38],
+                (d.get("severity") or "—"),
+                f"{int(float(d.get('confidence', 0)) * 100)}%",
+                str(d.get("photo_index") or "—"),
+                f"{d.get('estimated_cost', 0)} €",
+            ])
+        tdmg = Table(tdata, colWidths=[68*mm, 24*mm, 22*mm, 14*mm, 22*mm])
+        tdmg.setStyle(TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f3f4f6")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#0b1220")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.3, colors.HexColor("#e5e7eb")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(tdmg)
+
+    # Daños sugeridos (NO incluidos por baja confianza)
+    if damages_sugeridos:
+        story.append(Spacer(1, 4*mm))
+        story.append(Paragraph(f"Sugerencias no incluidas ({len(damages_sugeridos)})", h2))
+        story.append(Paragraph("La IA detectó estos posibles daños pero NO cumplen el umbral de veracidad para formar parte del peritaje. Revisión humana recomendada.", small))
+        story.append(Spacer(1, 2*mm))
+        tdata2 = [["Pieza", "Severidad", "Confianza", "Motivo de exclusión"]]
+        for d in damages_sugeridos[:15]:
+            conf = float(d.get("confidence", 0))
+            box_ok = _is_box_valid(d.get("box_2d"))
+            motivo = []
+            if conf < _FORENSIC_CONFIDENCE_MIN: motivo.append(f"confianza {int(conf*100)}%<50%")
+            if not box_ok: motivo.append("caja inválida")
+            tdata2.append([
+                (d.get("part") or "—")[:38],
+                (d.get("severity") or "—"),
+                f"{int(conf * 100)}%",
+                ", ".join(motivo) or "—",
+            ])
+        tsug = Table(tdata2, colWidths=[60*mm, 24*mm, 22*mm, 64*mm])
+        tsug.setStyle(TableStyle([
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#6b7280")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#fef3c7")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#854d0e")),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("LINEBELOW", (0, 0), (-1, -1), 0.3, colors.HexColor("#fde68a")),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.append(tsug)
 
     # Sección de firma + cadena
     story.append(PageBreak())
@@ -4167,12 +4372,38 @@ async def forensic_pdf(inspection_id: str, _=Depends(require_admin)):
         if d:
             driver_name = d.get("name", "—")
     photos = (insp.get("photos") or [])[:6]
-    photo_bytes_list = await asyncio.gather(*[_fetch_photo_bytes(u) for u in photos]) if photos else []
+    raw_bytes_list = await asyncio.gather(*[_fetch_photo_bytes(u) for u in photos]) if photos else []
+
+    # Filtrar daños incluidos vs sugeridos (umbral de veracidad).
+    all_damages = ((insp.get("analysis") or {}).get("damages") or []) + \
+                  ((insp.get("analysis") or {}).get("new_damages") or [])
+    # Dedupe por (part, photo_index, hash de box) para no duplicar entre damages y new_damages.
+    seen, dedup = set(), []
+    for d in all_damages:
+        k = (d.get("part"), d.get("photo_index"), tuple(d.get("box_2d") or []))
+        if k in seen: continue
+        seen.add(k); dedup.append(d)
+    damages_incluidos, damages_sugeridos = _filter_damages_for_peritaje(dedup)
+
+    # Anotar cada foto con sus daños (filtrados por photo_index 1-based; si no hay índice, va a foto 1).
+    annotated_bytes_list = []
+    for i, raw in enumerate(raw_bytes_list):
+        if not raw:
+            annotated_bytes_list.append(None)
+            continue
+        dmgs_for_photo = [d for d in damages_incluidos
+                          if (d.get("photo_index") or 1) == (i + 1)]
+        # Si no hay daños asignados explícitamente, también dibujamos los sin photo_index en la foto 1.
+        if i == 0 and not damages_incluidos:
+            dmgs_for_photo = []
+        annotated_bytes_list.append(_annotate_photo_with_damages(raw, dmgs_for_photo))
+
     verify_url = f"{_PORTAL_BASE_FRONT}/verify/{sig['content_hash']}"
     # Generación PDF en hilo (reportlab es síncrono y CPU-bound).
     loop = asyncio.get_event_loop()
     pdf_bytes = await loop.run_in_executor(
-        None, _build_forensic_pdf, insp, sig, vehicle, driver_name, photo_bytes_list, verify_url
+        None, _build_forensic_pdf, insp, sig, vehicle, driver_name, annotated_bytes_list, verify_url,
+        damages_incluidos, damages_sugeridos
     )
     fn_plate = re.sub(r"[^A-Za-z0-9]", "", (vehicle.get("license_plate") or "INSP"))
     fn_date = (sig.get("signed_at") or "")[:10]
