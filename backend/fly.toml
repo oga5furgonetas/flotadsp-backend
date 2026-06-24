@@ -5,7 +5,8 @@ primary_region = "cdg"
 
 [env]
   DB_NAME = "flotadsp"
-  CORS_ORIGINS = "*"
+  # CORS_ORIGINS eliminado a propósito: el código aplica lista blanca segura por defecto.
+  # Para ampliar dominios sin tocar código: flyctl secrets set CORS_ORIGINS="https://flotadsp.com,https://otro.com,..."
   GEMINI_MODEL = "gemini-1.5-flash"
   PUBLIC_BASE_URL = "https://flotadsp-backend.fly.dev"
   JWT_EXPIRE_HOURS = "72"
