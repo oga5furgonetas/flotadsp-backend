@@ -20,6 +20,7 @@ from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
 from jose import jwt, JWTError
+from pymongo.errors import DuplicateKeyError
 import bcrypt
 import re
 
@@ -673,6 +674,9 @@ async def create_indexes():
         await db.incidents.create_index("vehicle_id")
         await db.incidents.create_index("status")
         await global_db.admin_users.create_index("username")
+        # Bandeja de mensajes (append-only) y idempotencia LS.
+        await global_db.inbox_messages.create_index([("created_at", -1)])
+        await global_db.ls_webhook_events.create_index("event_uid", unique=True)
         await db.driver_accounts.create_index("username")
         await db.inspection_ai_results.create_index(
             [("inspection_id", 1), ("photo_index", 1)], unique=True
@@ -1991,10 +1995,30 @@ def _rl_ok(key: str):
     _login_fails.pop(key, None)
 
 
+# ── Rate limit genérico para acciones públicas (no solo fallos). ──
+# Cuenta TODAS las invocaciones en ventana. Para anti-spam de /register y /lead.
+_public_actions: dict = _dd(list)
+
+
+def _rl_public_action(key: str, max_count: int, window_s: int, detail: str = "Demasiadas peticiones. Inténtalo en unos minutos."):
+    """Lanza 429 si la clave supera max_count en window_s segundos. Para endpoints anónimos."""
+    now = datetime.now(timezone.utc).timestamp()
+    _public_actions[key] = [t for t in _public_actions[key] if now - t < window_s]
+    if len(_public_actions[key]) >= max_count:
+        raise HTTPException(status_code=429, detail=detail)
+    _public_actions[key].append(now)
+
+
 @auth_router.post("/register", response_model=TokenResponse)
 async def register_dsp(data: RegisterRequest, request: Request):
     """Auto-registro de un DSP nuevo: crea su ORGANIZACIÓN (con BD propia y aislada)
     y su usuario dueño. Empieza en prueba (trial). Datos 100% separados del resto."""
+    # Anti-spam: máx 5 registros/min/IP y 30/día/IP. Holgado para uso real.
+    ip = _rl_key_ip(request)
+    _rl_public_action(f"reg-ip-min:{ip}", max_count=5, window_s=60,
+                      detail="Estás creando demasiadas cuentas. Espera un minuto.")
+    _rl_public_action(f"reg-ip-day:{ip}", max_count=30, window_s=86400,
+                      detail="Has alcanzado el límite diario de registros desde esta red.")
     username = (data.username or "").strip()
     org_name = (data.org_name or "").strip()
     if len(username) < 3:
@@ -2114,6 +2138,23 @@ async def lemonsqueezy_webhook(request: Request):
     meta = payload.get("meta") or {}
     event = meta.get("event_name", "")
     org_id = (meta.get("custom_data") or {}).get("org_id")
+
+    # Idempotencia: si LS reintenta el mismo evento, no lo procesamos dos veces.
+    # Identificador robusto: combina event_name + id del recurso (subscription/order) + timestamp.
+    event_uid = (
+        f"{event}:{(payload.get('data') or {}).get('id', '')}:"
+        f"{(meta.get('event_id') or meta.get('webhook_id') or '')}"
+    )
+    try:
+        await global_db.ls_webhook_events.insert_one({
+            "event_uid": event_uid,
+            "event_name": event,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "org_id": org_id,
+        })
+    except DuplicateKeyError:
+        logger.info(f"LS webhook duplicado ignorado: {event_uid}")
+        return {"ok": True, "dedup": True}
     attrs = ((payload.get("data") or {}).get("attributes") or {})
     status = attrs.get("status", "")
     plan = attrs.get("variant_name") or attrs.get("product_name")
@@ -2164,26 +2205,50 @@ async def add_org_center(data: dict = Body(...), user: dict = Depends(require_ad
 
 @auth_router.post("/lead")
 async def capture_lead(data: dict = Body(...), request: Request = None):
-    """Captura interés (sin cobrar): email + plan que le interesa. Para validar demanda."""
+    """Captura interés (CRM) + guarda mensaje en Bandeja (append-only).
+    - 'leads' es el CRM de interesados: 1 doc por email (upsert).
+    - 'inbox_messages' es la bandeja real: 1 doc por envío (append).
+    Así no se pierden mensajes si la misma persona escribe varias veces."""
+    # Anti-spam: máx 5/min/IP y 30/día/IP.
+    ip = _rl_key_ip(request) if request else "?"
+    _rl_public_action(f"lead-ip-min:{ip}", max_count=5, window_s=60,
+                      detail="Has enviado muchos mensajes en poco tiempo. Espera un minuto.")
+    _rl_public_action(f"lead-ip-day:{ip}", max_count=30, window_s=86400,
+                      detail="Has alcanzado el límite diario de envíos desde esta red.")
     email = (data.get("email") or "").strip().lower()
     if "@" not in email:
         raise HTTPException(status_code=400, detail="Pon un email válido")
+    name = (data.get("name") or "").strip()
+    company = (data.get("company") or "").strip()
+    plan = (data.get("plan") or "").strip()  # también usado como "asunto + mensaje" desde el form
+    now = datetime.now(timezone.utc).isoformat()
+    # CRM: 1 lead por email (upsert).
     await global_db.leads.update_one(
         {"email": email},
-        {"$set": {"email": email, "plan": (data.get("plan") or "").strip(),
-                  "name": (data.get("name") or "").strip(),
-                  "company": (data.get("company") or "").strip(),
-                  "updated_at": datetime.now(timezone.utc).isoformat()},
-         "$setOnInsert": {"created_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {"email": email, "plan": plan, "name": name, "company": company, "updated_at": now},
+         "$setOnInsert": {"created_at": now}},
         upsert=True)
-    return {"ok": True, "mensaje": "¡Apuntado! Te avisamos cuando abramos los pagos."}
+    # Bandeja: append-only, no pierde mensajes.
+    await global_db.inbox_messages.insert_one({
+        "id": str(uuid.uuid4()), "email": email, "name": name, "company": company,
+        "body": plan, "ip": ip, "ua": (request.headers.get("user-agent") if request else None),
+        "created_at": now,
+    })
+    return {"ok": True, "mensaje": "¡Recibido! Te respondemos en menos de 24 horas hábiles."}
 
 
 @api_router.get("/leads")
 async def list_leads(user: dict = Depends(require_superadmin)):
-    """Lista de interesados (solo super-admin). Para ver si hay demanda."""
+    """Lista de interesados (CRM). Solo super-admin. 1 doc por email."""
     leads = await global_db.leads.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
     return {"total": len(leads), "leads": leads}
+
+
+@api_router.get("/inbox")
+async def list_inbox(user: dict = Depends(require_superadmin)):
+    """Bandeja de mensajes (append-only). Solo super-admin. 1 doc por mensaje."""
+    msgs = await global_db.inbox_messages.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return {"total": len(msgs), "messages": msgs}
 
 
 # ===== PANEL SUPER-ADMIN (control del negocio) =====
@@ -3826,9 +3891,21 @@ async def security_headers(request: Request, call_next):
     return response
 
 
-cors_origins_raw = os.environ.get("CORS_ORIGINS", "*")
+# CORS: por defecto SOLO los dominios oficiales de FlotaDSP (lista blanca).
+# En desarrollo se puede ampliar con CORS_ORIGINS="https://flotadsp.com,http://localhost:5175,..."
+# Para abrir a todo (NO recomendado en producción): CORS_ORIGINS="*"
+_DEFAULT_CORS = ",".join([
+    "https://flotadsp.com",
+    "https://www.flotadsp.com",
+    "https://app.flotadsp.com",
+    "https://flotadsp-v2.pages.dev",
+    "https://test.flotadsp-v2.pages.dev",
+])
+cors_origins_raw = os.environ.get("CORS_ORIGINS", _DEFAULT_CORS)
 cors_origins = [o.strip() for o in cors_origins_raw.split(",") if o.strip()]
+# Si alguien explícitamente quiere abrirlo, usar wildcard. Si no, credenciales activas.
 use_credentials = cors_origins != ["*"]
+logger.info(f"CORS allow_origins={cors_origins} credentials={use_credentials}")
 
 # IMPORTANTE: middleware ANTES de montar rutas estáticas
 app.add_middleware(

@@ -1,16 +1,29 @@
 import { useEffect, useState } from 'react'
 import { Loader2, Mail, Inbox, RefreshCw, Search, ExternalLink, Building2 } from 'lucide-react'
-import { getLeads } from '../api'
+import { getInbox, getLeads } from '../api'
 import { isSuperAdmin } from '../auth'
 
-// Bandeja de mensajes del super-admin: muestra los leads del formulario público de Contacto.
-// (En el futuro se puede conectar SMTP/IMAP para reenvío real a tu email.)
+// Bandeja de mensajes del super-admin.
+// Lee de /api/inbox (append-only: cada envío del formulario = mensaje).
+// Si el endpoint no existe (backend antiguo), cae a /api/leads (CRM por email, último mensaje).
 export default function Bandeja() {
   const [leads, setLeads] = useState(null)
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(null)
+  const [usingFallback, setFallback] = useState(false)
 
-  function load() { getLeads().then((r) => setLeads(r.data?.leads || [])).catch(() => setLeads([])) }
+  function load() {
+    getInbox()
+      .then((r) => {
+        // Normalizamos: cada mensaje del inbox usa 'body' (no 'plan').
+        const msgs = (r.data?.messages || []).map((m) => ({ ...m, plan: m.body || m.plan || '' }))
+        setLeads(msgs); setFallback(false)
+      })
+      .catch(() => {
+        // Fallback al endpoint antiguo (1 doc por email; pierde mensajes repetidos).
+        getLeads().then((r) => { setLeads(r.data?.leads || []); setFallback(true) }).catch(() => setLeads([]))
+      })
+  }
   useEffect(load, [])
 
   if (!isSuperAdmin()) return <div className="card p-10 text-center text-dark-400">Solo el super-admin puede ver la bandeja.</div>
@@ -35,6 +48,11 @@ export default function Bandeja() {
       </div>
 
       <p className="mb-3 text-sm text-dark-400">Mensajes enviados desde el formulario público de <a href="/contacto" target="_blank" rel="noreferrer" className="text-sky-400 hover:underline">Contacto</a> e interesados captados desde la landing.</p>
+      {usingFallback && (
+        <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          Modo compatibilidad: usando bandeja antigua (1 entrada por email). Despliega la última versión del backend para activar la bandeja real (todos los mensajes).
+        </div>
+      )}
 
       {!leads ? <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> Cargando…</div> :
         list.length === 0 ? <div className="card p-10 text-center text-dark-400">Aún no hay mensajes.</div> : (

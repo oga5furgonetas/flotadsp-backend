@@ -48,6 +48,9 @@ export const getRentingAlerts = () => api.get('/alerts/renting')
 /* ── Renting / Casas de alquiler ── */
 export const getRentals = () => api.get('/rentals')
 
+/* ── Bandeja super-admin (inbox append-only + fallback leads) ── */
+export const getInbox = () => api.get('/inbox')
+
 /* ── Incidencias ── */
 export const getIncidents = () => api.get('/incidents')
 
