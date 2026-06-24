@@ -4154,14 +4154,20 @@ async def _refine_damage_boxes_with_yolo_sam(inspection_id: str, photo_index_0ba
                  if y.get("box_2d") and _is_box_valid(y["box_2d"])
                  and float(y.get("confidence", 0)) >= 0.35]
 
+    # STRICT: si YOLO no tiene detecciones esta foto → NO dibujamos cajas Gemini.
+    # Mejor foto limpia que cajas inventadas. Las gemini se listan como sugeridas.
     if not yolo_dets:
-        # YOLO no disponible / sin detecciones esta foto → mantenemos Gemini tal cual.
-        return list(gemini_damages_for_photo)
+        return []
 
     refined = []
     for g in gemini_damages_for_photo:
         g_box = g.get("box_2d")
         if not _is_box_valid(g_box):
+            continue
+        # Filtro de área: caja > 35% de la foto = "toda la pieza", no daño puntual → fuera.
+        y1, x1, y2, x2 = g_box
+        area_pct = ((y2 - y1) * (x2 - x1)) / 10000.0
+        if area_pct > 35:
             continue
         # Mejor detección YOLO/SAM que se solape con esta Gemini.
         best_iou, best_y = 0.0, None
@@ -4169,19 +4175,19 @@ async def _refine_damage_boxes_with_yolo_sam(inspection_id: str, photo_index_0ba
             iou = _bbox_iou(g_box, y["box_2d"])
             if iou > best_iou:
                 best_iou, best_y = iou, y
+        # STRICT: solo aceptamos si YOLO confirma con IoU>=0.3 → usamos caja de YOLO.
         if best_iou >= 0.3 and best_y is not None:
-            # Cross-validado: combinamos label de Gemini con caja precisa de YOLO/SAM.
+            yy1, yx1, yy2, yx2 = best_y["box_2d"]
+            y_area = ((yy2 - yy1) * (yx2 - yx1)) / 10000.0
+            if y_area > 35:
+                continue
             refined.append({
                 **g,
                 "box_2d": list(best_y["box_2d"]),
                 "_box_source": best_y.get("source", "yolo+sam"),
                 "_iou": round(best_iou, 2),
             })
-        elif float(g.get("confidence", 0)) >= 0.7:
-            # Sin confirmación geométrica pero confidence muy alta → mantenemos.
-            refined.append({**g, "_box_source": "gemini_only"})
-        # else: descarta silenciosamente (Gemini dudoso sin confirmación visual)
-    # NMS final para eliminar duplicados.
+        # else: descartamos. Mejor cero cajas que cajas falsas.
     return _nms_damages(refined, iou_thresh=0.7)
 
 
@@ -4363,10 +4369,11 @@ def _build_forensic_pdf(insp: dict, sig: dict, vehicle: dict, driver_name: str,
         story.append(Paragraph("La IA detectó estos posibles daños pero NO cumplen el umbral de veracidad para formar parte del peritaje. Revisión humana recomendada.", small))
         story.append(Spacer(1, 2*mm))
         tdata2 = [["Pieza", "Severidad", "Confianza", "Motivo de exclusión"]]
-        for d in damages_sugeridos[:15]:
+        for d in damages_sugeridos[:20]:
             conf = float(d.get("confidence", 0))
             box_ok = _is_box_valid(d.get("box_2d"))
             motivo = []
+            if d.get("_motivo"): motivo.append(d["_motivo"])
             if conf < _FORENSIC_CONFIDENCE_MIN: motivo.append(f"confianza {int(conf*100)}%<50%")
             if not box_ok: motivo.append("caja inválida")
             tdata2.append([
@@ -4472,13 +4479,20 @@ async def forensic_pdf(inspection_id: str, _=Depends(require_admin)):
         seen.add(k); dedup.append(d)
     gemini_incluidos, damages_sugeridos = _filter_damages_for_peritaje(dedup)
 
-    # ENSEMBLE: cruzar Gemini con YOLO+SAM por foto. Caja precisa de SAM + label de Gemini.
+    # ENSEMBLE STRICT: cruzar Gemini con YOLO+SAM por foto. Solo dibujamos cajas confirmadas.
     refined_per_photo = []
+    incluidos_keys = set()
     for i in range(len(raw_bytes_list)):
         gem_for_photo = [d for d in gemini_incluidos if (d.get("photo_index") or 1) == (i + 1)]
         rfn = await _refine_damage_boxes_with_yolo_sam(inspection_id, i, gem_for_photo)
         refined_per_photo.append(rfn)
+        for d in rfn:
+            incluidos_keys.add((d.get("part"), d.get("photo_index")))
     damages_incluidos = [d for sub in refined_per_photo for d in sub]
+    # Los Gemini que NO pasaron el filtro estricto pasan a "sugeridos" (transparencia total).
+    for g in gemini_incluidos:
+        if (g.get("part"), g.get("photo_index")) not in incluidos_keys:
+            damages_sugeridos.append({**g, "_motivo": "no confirmado por YOLO/SAM"})
 
     # Anotar cada foto con sus daños refinados.
     annotated_bytes_list = []
