@@ -683,6 +683,9 @@ async def create_indexes():
         await db.forensic_signatures.create_index([("signed_at", -1)])
         await db.inspections.create_index("forensic_signed")
         await db.inspections.create_index("forensic_hash")
+        # Índice global hash → tenant (necesario para verificador público /verify/{hash}).
+        await global_db.forensic_index.create_index("content_hash", unique=True)
+        await global_db.forensic_index.create_index([("signed_at", -1)])
         await db.driver_accounts.create_index("username")
         await db.inspection_ai_results.create_index(
             [("inspection_id", 1), ("photo_index", 1)], unique=True
@@ -3907,6 +3910,18 @@ async def sign_inspection(inspection_id: str, data: SignInspectionRequest, reque
         {"$set": {"forensic_signed": True, "forensic_hash": sig_doc["content_hash"],
                   "forensic_signed_at": now, "forensic_signed_by": sig_doc["signed_by_name"]}}
     )
+    # Índice global hash → tenant (para que /verify/{hash} público pueda localizar la firma sin auth).
+    # Aditivo: si falla (DuplicateKey, race), no rompe la firma local.
+    try:
+        await global_db.forensic_index.insert_one({
+            "content_hash": sig_doc["content_hash"],
+            "org_id": user.get("org_id"),
+            "db_name": _tenant_db_name(await get_org(user.get("org_id"))),
+            "inspection_id": inspection_id,
+            "signed_at": now,
+        })
+    except DuplicateKeyError:
+        logger.warning(f"forensic_index duplicado para hash={sig_doc['content_hash'][:12]}")
     logger.info(f"Inspección {inspection_id} firmada por {user.get('name')} hash={sig_doc['content_hash'][:12]}…")
     return {
         "ok": True,
@@ -3941,6 +3956,273 @@ async def get_forensic_status(inspection_id: str, _=Depends(require_any_auth)):
         "signed_by_name": insp.get("forensic_signed_by"),
         "signature_text": (sig or {}).get("signature_text"),
         "revision": (sig or {}).get("revision", 1),
+    }
+
+
+# --- Generación del PDF forense (reportlab + qrcode) ---
+
+_PORTAL_BASE_FRONT = os.environ.get("PUBLIC_BASE_URL_FRONT", "https://flotadsp.com").rstrip("/")
+
+
+def _mask_plate(plate: str) -> str:
+    """Oculta parcialmente una matrícula para mostrarla en el verificador público.
+    1234ABC -> 1234A** ; corto -> tal cual."""
+    if not plate:
+        return "—"
+    p = re.sub(r"\s+", "", plate.strip().upper())
+    if len(p) < 5:
+        return p
+    keep = max(4, len(p) - 2)
+    return p[:keep] + "*" * (len(p) - keep)
+
+
+async def _fetch_photo_bytes(url: str, timeout: int = 8):
+    """Descarga una foto de R2/CDN. None si falla. Usado solo para embedirla en PDF."""
+    if not url:
+        return None
+    try:
+        async with _aiohttp.ClientSession() as s:
+            async with s.get(url, timeout=_aiohttp.ClientTimeout(total=timeout)) as r:
+                if r.status == 200:
+                    return await r.read()
+    except Exception as e:
+        logger.warning(f"forensic PDF: foto inaccesible {url}: {e}")
+    return None
+
+
+def _generate_qr_png(data: str) -> bytes:
+    """QR como PNG bytes (para embed en PDF). Importado lazy."""
+    import qrcode as _qr
+    import io as _io
+    q = _qr.QRCode(border=2, box_size=4)
+    q.add_data(data)
+    q.make(fit=True)
+    img = q.make_image()
+    buf = _io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _build_forensic_pdf(insp: dict, sig: dict, vehicle: dict, driver_name: str,
+                        photo_bytes_list: list, verify_url: str) -> bytes:
+    """Construye el PDF de peritaje técnico. Síncrono, llamado vía run_in_executor."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Image, Table,
+                                    TableStyle, PageBreak)
+    from reportlab.lib.enums import TA_LEFT
+    import io as _io
+
+    buf = _io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, rightMargin=18*mm, leftMargin=18*mm,
+                            topMargin=18*mm, bottomMargin=18*mm,
+                            title=f"Peritaje técnico {insp.get('id','')[:8]}",
+                            author="FlotaDSP")
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("H1", parent=styles["Heading1"], fontSize=18, textColor=colors.HexColor("#0b1220"))
+    h2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=12, textColor=colors.HexColor("#0ea5e9"),
+                        spaceBefore=10, spaceAfter=4)
+    body = ParagraphStyle("body", parent=styles["BodyText"], fontSize=9.5, leading=13, alignment=TA_LEFT)
+    small = ParagraphStyle("small", parent=styles["BodyText"], fontSize=8, textColor=colors.HexColor("#6b7280"))
+    mono = ParagraphStyle("mono", parent=styles["BodyText"], fontSize=8.5, fontName="Courier",
+                          textColor=colors.HexColor("#0b1220"))
+
+    story = []
+
+    # Cabecera
+    story.append(Paragraph("Peritaje técnico de inspección", h1))
+    story.append(Paragraph("Cadena de custodia con hash inmutable · FlotaDSP", small))
+    story.append(Spacer(1, 6*mm))
+
+    # Bloque datos
+    analysis = (insp.get("analysis") or {})
+    rows = [
+        ["Matrícula", vehicle.get("license_plate", "—"), "Centro", vehicle.get("center", "—")],
+        ["Marca/Modelo", f"{vehicle.get('brand','—')} {vehicle.get('model','')}".strip(), "VIN", vehicle.get("vin", "—")],
+        ["Conductor", driver_name or "—", "Inspección ID", (insp.get("id","")[:8] + "…")],
+        ["Fecha inspección", (insp.get("created_at") or "")[:19].replace("T", " "), "Severidad", str(analysis.get("severity", "—"))],
+        ["Daños detectados", str(analysis.get("total_damages_count", 0)), "Coste estimado", f"{analysis.get('total_estimated_cost', 0)} €"],
+    ]
+    t = Table(rows, colWidths=[32*mm, 60*mm, 32*mm, 50*mm])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#6b7280")),
+        ("TEXTCOLOR", (2, 0), (2, -1), colors.HexColor("#6b7280")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#e5e7eb")),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 6*mm))
+
+    # Resumen ejecutivo si hay
+    if analysis.get("executive_summary"):
+        story.append(Paragraph("Resumen del peritaje IA", h2))
+        story.append(Paragraph((analysis.get("executive_summary") or "")[:1500], body))
+
+    # Fotos (hasta 4 por página, miniatura)
+    if photo_bytes_list:
+        story.append(Paragraph("Evidencia fotográfica", h2))
+        story.append(Paragraph(f"{len([b for b in photo_bytes_list if b])} fotos adjuntas. Hash inmutable garantiza que estas imágenes son las analizadas.", small))
+        story.append(Spacer(1, 3*mm))
+        thumbs = []
+        for b in photo_bytes_list:
+            if not b:
+                continue
+            try:
+                img = Image(_io.BytesIO(b), width=78*mm, height=58*mm, kind="proportional")
+                thumbs.append(img)
+            except Exception as e:
+                logger.warning(f"forensic PDF: foto inválida: {e}")
+        # Tabla 2 columnas
+        if thumbs:
+            grid = []
+            for i in range(0, len(thumbs), 2):
+                row = [thumbs[i]]
+                row.append(thumbs[i+1] if i + 1 < len(thumbs) else "")
+                grid.append(row)
+            tg = Table(grid, colWidths=[85*mm, 85*mm])
+            tg.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]))
+            story.append(tg)
+
+    # Sección de firma + cadena
+    story.append(PageBreak())
+    story.append(Paragraph("Firma electrónica y cadena de custodia", h2))
+    sig_rows = [
+        ["Firmado por", sig.get("signed_by_name", "—")],
+        ["Fecha de firma", (sig.get("signed_at") or "")[:19].replace("T", " ")],
+        ["IP del firmante", sig.get("client_ip", "—")],
+        ["Hash de esta inspección", Paragraph(sig.get("content_hash", "—"), mono)],
+        ["Hash anterior en la cadena", Paragraph(sig.get("prev_hash", "—"), mono)],
+        ["Revisión", str(sig.get("revision", 1))],
+    ]
+    st = Table(sig_rows, colWidths=[55*mm, 119*mm])
+    st.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#6b7280")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.4, colors.HexColor("#e5e7eb")),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(st)
+    story.append(Spacer(1, 4*mm))
+
+    # Declaración firmada
+    if sig.get("signature_text"):
+        story.append(Paragraph("Declaración aceptada por el firmante", h2))
+        story.append(Paragraph(f"«{sig.get('signature_text','')}»", body))
+    story.append(Spacer(1, 6*mm))
+
+    # QR al verificador
+    try:
+        qr_png = _generate_qr_png(verify_url)
+        qr_img = Image(_io.BytesIO(qr_png), width=32*mm, height=32*mm)
+        qr_tbl = Table([[qr_img,
+                         Paragraph(f"<b>Verifica este peritaje</b><br/>{verify_url}<br/><br/>"
+                                   f"Escanea el QR o introduce el hash en el verificador público.", body)]],
+                       colWidths=[36*mm, 138*mm])
+        qr_tbl.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+        story.append(qr_tbl)
+    except Exception as e:
+        logger.warning(f"forensic PDF: QR falló: {e}")
+
+    # Disclaimer legal honesto
+    story.append(Spacer(1, 8*mm))
+    story.append(Paragraph(
+        "<b>Aviso:</b> este documento es evidencia técnica con cadena de custodia hash, NO una firma "
+        "electrónica avanzada conforme al reglamento eIDAS. FlotaDSP no presta servicios de asesoría "
+        "jurídica. La validez probatoria del documento dependerá de la valoración que haga el "
+        "destinatario o, en su caso, la autoridad competente.", small))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+@api_router.get("/inspections/{inspection_id}/forensic-pdf")
+async def forensic_pdf(inspection_id: str, _=Depends(require_admin)):
+    """Genera y devuelve el PDF de peritaje técnico de una inspección firmada."""
+    insp = await db.inspections.find_one({"id": inspection_id, "deleted": {"$ne": True}}, {"_id": 0})
+    if not insp:
+        raise HTTPException(status_code=404, detail="Inspección no encontrada")
+    if not insp.get("forensic_signed"):
+        raise HTTPException(status_code=409, detail="Esta inspección aún no está firmada. Fírmala antes de generar el peritaje.")
+    sig = await db.forensic_signatures.find_one({"inspection_id": inspection_id}, {"_id": 0})
+    if not sig:
+        raise HTTPException(status_code=500, detail="Firma marcada pero no encontrada (estado inconsistente).")
+    vehicle = await db.vehicles.find_one({"id": insp.get("vehicle_id")}, {"_id": 0}) or {}
+    driver_name = "—"
+    did = insp.get("driver_id") or vehicle.get("current_driver_id")
+    if did:
+        d = await db.drivers.find_one({"id": did}, {"_id": 0, "name": 1})
+        if d:
+            driver_name = d.get("name", "—")
+    photos = (insp.get("photos") or [])[:6]
+    photo_bytes_list = await asyncio.gather(*[_fetch_photo_bytes(u) for u in photos]) if photos else []
+    verify_url = f"{_PORTAL_BASE_FRONT}/verify/{sig['content_hash']}"
+    # Generación PDF en hilo (reportlab es síncrono y CPU-bound).
+    loop = asyncio.get_event_loop()
+    pdf_bytes = await loop.run_in_executor(
+        None, _build_forensic_pdf, insp, sig, vehicle, driver_name, photo_bytes_list, verify_url
+    )
+    fn_plate = re.sub(r"[^A-Za-z0-9]", "", (vehicle.get("license_plate") or "INSP"))
+    fn_date = (sig.get("signed_at") or "")[:10]
+    filename = f"peritaje-{fn_plate}-{fn_date}.pdf"
+    from starlette.responses import Response
+    return Response(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api_router.get("/verify/{content_hash}")
+async def verify_hash_public(content_hash: str, request: Request):
+    """Verificador PÚBLICO (sin auth) de un hash de peritaje.
+    Devuelve solo info mínima no sensible. Rate-limited para evitar scraping enumerativo."""
+    ip = _rl_key_ip(request)
+    _rl_public_action(f"verify-ip-min:{ip}", max_count=20, window_s=60,
+                      detail="Demasiadas verificaciones. Espera un minuto.")
+    _rl_public_action(f"verify-ip-hour:{ip}", max_count=200, window_s=3600,
+                      detail="Demasiadas verificaciones esta hora.")
+    h = (content_hash or "").strip().lower()
+    if len(h) != 64 or not re.match(r"^[0-9a-f]+$", h):
+        raise HTTPException(status_code=400, detail="Hash inválido (debe ser SHA-256 hex de 64 caracteres).")
+
+    # Localiza el tenant donde vive este hash (índice global creado al firmar).
+    idx = await global_db.forensic_index.find_one({"content_hash": h}, {"_id": 0})
+    if not idx:
+        return {"valid": False, "error": "Hash no encontrado. Puede que no exista o que se firmara antes de junio 2026."}
+
+    # Carga el cliente de Mongo del tenant correcto.
+    tenant_db = client[idx["db_name"]]
+    sig = await tenant_db.forensic_signatures.find_one({"content_hash": h}, {"_id": 0})
+    if not sig:
+        return {"valid": False, "error": "Inconsistencia interna. Contacta con soporte."}
+    insp = await tenant_db.inspections.find_one({"id": sig.get("inspection_id")},
+                                                 {"_id": 0, "vehicle_id": 1, "created_at": 1, "id": 1}) or {}
+    vehicle = await tenant_db.vehicles.find_one({"id": insp.get("vehicle_id")},
+                                                 {"_id": 0, "license_plate": 1}) or {}
+    next_sig = await tenant_db.forensic_signatures.find_one(
+        {"signed_at": {"$gt": sig.get("signed_at", "")}}, {"_id": 0, "content_hash": 1}
+    )
+
+    return {
+        "valid": True,
+        "hash": h,
+        "prev_hash": sig.get("prev_hash"),
+        "signed_at": sig.get("signed_at"),
+        "signed_by_name": sig.get("signed_by_name", ""),
+        "inspection_date": insp.get("created_at"),
+        "vehicle_plate_masked": _mask_plate(vehicle.get("license_plate", "")),
+        "has_next_in_chain": bool(next_sig),
+        "disclaimer": "Evidencia técnica con cadena de custodia hash. No constituye firma electrónica avanzada eIDAS.",
     }
 
 
