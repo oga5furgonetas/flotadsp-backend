@@ -677,6 +677,12 @@ async def create_indexes():
         # Bandeja de mensajes (append-only) y idempotencia LS.
         await global_db.inbox_messages.create_index([("created_at", -1)])
         await global_db.ls_webhook_events.create_index("event_uid", unique=True)
+        # Peritaje firmado (S1): cadena de hashes encadenados por tenant.
+        await db.forensic_signatures.create_index([("inspection_id", 1), ("revision", 1)], unique=True)
+        await db.forensic_signatures.create_index("content_hash", unique=True)
+        await db.forensic_signatures.create_index([("signed_at", -1)])
+        await db.inspections.create_index("forensic_signed")
+        await db.inspections.create_index("forensic_hash")
         await db.driver_accounts.create_index("username")
         await db.inspection_ai_results.create_index(
             [("inspection_id", 1), ("photo_index", 1)], unique=True
@@ -3794,6 +3800,147 @@ async def reanalyze_inspection(inspection_id: str, _=Depends(require_admin)):
         "analysis_status": analysis_status,
         "analysis_error": analysis_error,
         "analysis": serialize_doc(analysis.model_dump()) if analysis else None,
+    }
+
+
+# =========================
+# PERITAJE TÉCNICO FIRMADO (S1) — cadena de custodia con hash encadenado
+# =========================
+# Cada firma calcula content_hash = SHA-256(prev_hash + payload canónico de la inspección).
+# El prev_hash es el hash de la firma INMEDIATAMENTE anterior de la MISMA organización.
+# Si alguien manipula o elimina una firma intermedia, la cadena se rompe (detectable).
+# NOTA LEGAL: es evidencia técnica con cadena de custodia, NO firma electrónica avanzada eIDAS.
+
+_GENESIS_HASH = "0" * 64
+
+
+def _canonical_inspection_payload(insp: dict, prev_hash: str) -> str:
+    """Serialización determinista de la inspección para hashear.
+    NO usamos json.dumps con sort_keys directamente porque queremos un subconjunto fijo
+    para que cambios futuros en otros campos no rompan la cadena."""
+    payload = {
+        "prev_hash": prev_hash,
+        "inspection_id": insp.get("id"),
+        "vehicle_id": insp.get("vehicle_id"),
+        "driver_id": insp.get("driver_id"),
+        "created_at": insp.get("created_at"),
+        "photos": list(insp.get("photos") or []),  # URLs en R2; URL inmutable = foto inmutable
+        "plate_text": (insp.get("plate_text") or ""),
+        "analysis_summary": {
+            "severity": (insp.get("analysis") or {}).get("severity"),
+            "total_damages_count": (insp.get("analysis") or {}).get("total_damages_count"),
+            "executive_summary": (insp.get("analysis") or {}).get("executive_summary"),
+        },
+    }
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+
+
+async def _last_signature_hash() -> str:
+    """Último hash de la cadena (esta org). _GENESIS_HASH si la cadena está vacía."""
+    last = await db.forensic_signatures.find_one({}, sort=[("signed_at", -1)])
+    return (last or {}).get("content_hash", _GENESIS_HASH)
+
+
+class SignInspectionRequest(BaseModel):
+    signature_text: str   # declaración aceptada por el firmante (texto libre, queda inmortalizada)
+
+
+@api_router.post("/inspections/{inspection_id}/sign")
+async def sign_inspection(inspection_id: str, data: SignInspectionRequest, request: Request,
+                          user: dict = Depends(require_any_auth)):
+    """Firma una inspección con cadena de custodia hash. Idempotente: 409 si ya firmada.
+    Auth: el conductor asignado al vehículo de esa inspección, o cualquier admin de la org."""
+    # Rate-limit: 3 firmas/min por usuario (anti-rebote).
+    _rl_public_action(f"sign:{user.get('sub')}", max_count=3, window_s=60,
+                      detail="Demasiadas firmas seguidas. Espera un minuto.")
+
+    insp = await db.inspections.find_one({"id": inspection_id, "deleted": {"$ne": True}}, {"_id": 0})
+    if not insp:
+        raise HTTPException(status_code=404, detail="Inspección no encontrada")
+    if insp.get("forensic_signed"):
+        raise HTTPException(status_code=409,
+                            detail="Esta inspección ya está firmada (cadena de custodia cerrada)")
+
+    # Autorización: admin puede firmar cualquiera. Conductor solo la suya.
+    if user.get("role") == "driver":
+        if insp.get("driver_id") and insp["driver_id"] != user.get("sub"):
+            # Si la inspección no tiene driver_id, comprobamos por current_driver del vehículo.
+            v = await db.vehicles.find_one({"id": insp.get("vehicle_id")}, {"_id": 0, "current_driver_id": 1})
+            if not v or v.get("current_driver_id") != user.get("sub"):
+                raise HTTPException(status_code=403, detail="No puedes firmar inspecciones de otro conductor")
+
+    # Calcular hashes con reintento simple ante race condition de prev_hash.
+    import hashlib as _hl
+    now = datetime.now(timezone.utc).isoformat()
+    sig_doc = None
+    for attempt in range(3):
+        prev_hash = await _last_signature_hash()
+        payload = _canonical_inspection_payload(insp, prev_hash)
+        content_hash = _hl.sha256(payload.encode("utf-8")).hexdigest()
+        try:
+            sig_doc = {
+                "id": str(uuid.uuid4()),
+                "inspection_id": inspection_id,
+                "revision": 1,
+                "prev_hash": prev_hash,
+                "content_hash": content_hash,
+                "payload_canonical": payload,           # útil para reverificar sin recalcular
+                "signed_by_user_id": user.get("sub"),
+                "signed_by_user_role": user.get("role"),
+                "signed_by_name": user.get("name", ""),
+                "signed_at": now,
+                "client_ip": _rl_key_ip(request),
+                "user_agent": (request.headers.get("user-agent") or "")[:300],
+                "signature_text": (data.signature_text or "").strip()[:1000],
+            }
+            await db.forensic_signatures.insert_one(sig_doc)
+            break
+        except DuplicateKeyError:
+            # Otra firma se coló en el medio: recalcula y reintenta.
+            if attempt == 2:
+                raise HTTPException(status_code=503, detail="Conflicto al firmar. Reintenta.")
+            await asyncio.sleep(0.05)
+
+    # Marca la inspección como firmada (no rompemos compatibilidad: campos nuevos opcionales).
+    await db.inspections.update_one(
+        {"id": inspection_id},
+        {"$set": {"forensic_signed": True, "forensic_hash": sig_doc["content_hash"],
+                  "forensic_signed_at": now, "forensic_signed_by": sig_doc["signed_by_name"]}}
+    )
+    logger.info(f"Inspección {inspection_id} firmada por {user.get('name')} hash={sig_doc['content_hash'][:12]}…")
+    return {
+        "ok": True,
+        "hash": sig_doc["content_hash"],
+        "prev_hash": sig_doc["prev_hash"],
+        "signed_at": now,
+        "signed_by_name": sig_doc["signed_by_name"],
+    }
+
+
+@api_router.get("/inspections/{inspection_id}/forensic")
+async def get_forensic_status(inspection_id: str, _=Depends(require_any_auth)):
+    """Estado de firma de una inspección. Sin secretos: NO devuelve payload completo."""
+    insp = await db.inspections.find_one(
+        {"id": inspection_id}, {"_id": 0, "forensic_signed": 1, "forensic_hash": 1,
+                                "forensic_signed_at": 1, "forensic_signed_by": 1}
+    )
+    if not insp:
+        raise HTTPException(status_code=404, detail="Inspección no encontrada")
+    if not insp.get("forensic_signed"):
+        return {"signed": False}
+    sig = await db.forensic_signatures.find_one(
+        {"inspection_id": inspection_id}, {"_id": 0, "prev_hash": 1, "content_hash": 1,
+                                            "signed_at": 1, "signed_by_name": 1, "signature_text": 1,
+                                            "revision": 1}
+    )
+    return {
+        "signed": True,
+        "hash": insp.get("forensic_hash"),
+        "prev_hash": (sig or {}).get("prev_hash"),
+        "signed_at": insp.get("forensic_signed_at"),
+        "signed_by_name": insp.get("forensic_signed_by"),
+        "signature_text": (sig or {}).get("signature_text"),
+        "revision": (sig or {}).get("revision", 1),
     }
 
 
