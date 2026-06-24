@@ -40,6 +40,7 @@ import CookiesPage from './legal/Cookies'
 import AvisoLegal from './legal/AvisoLegal'
 import Contacto from './legal/Contacto'
 import CookieBanner from './legal/CookieBanner'
+import PeritajeTecnico from './pages/PeritajeTecnico'
 
 /* Toda la app vive en /panel. /app es un alias legado que redirige al panel nuevo. */
 function AppRedirect() {
@@ -63,6 +64,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Route path="/cookies" element={<CookiesPage />} />
             <Route path="/aviso-legal" element={<AvisoLegal />} />
             <Route path="/contacto" element={<Contacto />} />
+            <Route path="/peritaje-tecnico" element={<PeritajeTecnico />} />
             <Route path="/app" element={<AppRedirect />} />
             <Route path="/conductor" element={<DriverPortal />} />
             <Route path="/conductor/:slug" element={<DriverPortal />} />

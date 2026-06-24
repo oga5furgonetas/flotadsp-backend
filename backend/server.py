@@ -2106,14 +2106,19 @@ async def org_billing(user: dict = Depends(get_current_user)):
 @api_router.get("/billing/config")
 async def billing_config(user: dict = Depends(get_current_user)):
     """URLs de checkout por plan (vacío si aún no has conectado Lemon Squeezy).
-    El frontend añade el org_id del DSP para activar su cuenta al pagar."""
+    El frontend añade el org_id del DSP en custom_data para que el webhook active
+    la cuenta correcta al pagar.
+    Claves: Starter (149€), Pro (299€), Forensics (Pro + AI Forensics 499€),
+    Enterprise (contacto). 'Max' se mantiene por compatibilidad con localStorage antiguo."""
     return {
         "provider": "lemonsqueezy",
-        "ready": bool(os.environ.get("LS_CHECKOUT_PRO")),
+        "ready": bool(os.environ.get("LS_CHECKOUT_PRO") or os.environ.get("LS_CHECKOUT_AI_FORENSICS")),
         "checkout": {
             "Starter": os.environ.get("LS_CHECKOUT_STARTER", ""),
             "Pro": os.environ.get("LS_CHECKOUT_PRO", ""),
-            "Max": os.environ.get("LS_CHECKOUT_MAX", ""),
+            "Forensics": os.environ.get("LS_CHECKOUT_AI_FORENSICS", ""),
+            "Enterprise": os.environ.get("LS_CHECKOUT_ENTERPRISE", ""),
+            "Max": os.environ.get("LS_CHECKOUT_MAX", ""),  # legacy, no enseñar
         },
     }
 

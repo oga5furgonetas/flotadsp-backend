@@ -22,24 +22,35 @@ export default function TrialBanner() {
   const required = billing.required
   const adminSlug = getAdmin()?.slug || ''
   const orgId = getOrgId()
-  const planRecord = localStorage.getItem('flota_plan') || 'Pro'
-  const checkoutPro = cfg?.checkout?.[planRecord] || cfg?.checkout?.Pro
+  // Resuelve el plan a vender. Si vino del registro, lo respeta; si no, default Forensics (el más popular).
+  // 'Max' es legacy y se mapea a 'Forensics' (la oferta nueva con peritaje).
+  const raw = localStorage.getItem('flota_plan') || 'Forensics'
+  const planKey = raw === 'Max' ? 'Forensics' : raw
+  const planLabel = ({ Starter: 'Starter', Pro: 'Pro', Forensics: 'AI Forensics', Enterprise: 'Enterprise' })[planKey] || planKey
+  const checkoutUrl = cfg?.checkout?.[planKey] || cfg?.checkout?.Forensics || cfg?.checkout?.Pro
+  const isEnterprise = planKey === 'Enterprise'
+
   // El backend webhook activa la org cuando paga: necesita org_id real en custom_data.
   // Sin org_id no abrimos checkout (LS devolvería 422 y, peor, un pago no activaría la cuenta).
   const goPay = () => {
-    if (!checkoutPro) return alert('Pasarela de pago no configurada todavía.')
+    // Enterprise: no es self-service, va a contacto comercial.
+    if (isEnterprise) { window.location.href = '/contacto?asunto=Enterprise'; return }
+    if (!checkoutUrl) return alert('Pasarela de pago no configurada todavía.')
     if (!orgId) return alert('No hemos podido identificar tu organización. Cierra sesión y vuelve a entrar para reintentar.')
-    const u = new URL(checkoutPro)
+    const u = new URL(checkoutUrl)
     u.searchParams.set('checkout[custom][org_id]', orgId)
     if (adminSlug) u.searchParams.set('checkout[custom][slug]', adminSlug)
     window.location.href = u.toString()
   }
 
+  const ctaText = isEnterprise ? `Contactar (${planLabel})` : `Pasar a ${planLabel}`
+  const canShowCta = isEnterprise || cfg?.ready
+
   if (required) {
     return (
       <div className="flex flex-wrap items-center justify-between gap-2 bg-red-500/20 px-4 py-2 text-sm text-red-200">
         <span className="flex items-center gap-1.5"><AlertTriangle size={14} /> Tu prueba ha terminado. Activa una suscripción para seguir usando FlotaDSP.</span>
-        {cfg?.ready && <button onClick={goPay} className="rounded-md bg-red-500/30 px-3 py-1 text-xs font-bold hover:bg-red-500/40">Pasar a Pro · activar →</button>}
+        {canShowCta && <button onClick={goPay} className="rounded-md bg-red-500/30 px-3 py-1 text-xs font-bold hover:bg-red-500/40">{ctaText} · activar →</button>}
       </div>
     )
   }
@@ -51,7 +62,7 @@ export default function TrialBanner() {
           {urgent ? <AlertTriangle size={14} /> : <Clock size={14} />}
           {days != null ? <>Prueba gratis: te quedan <b>{days} día{days === 1 ? '' : 's'}</b>.</> : 'En periodo de prueba.'}
         </span>
-        {cfg?.ready && <button onClick={goPay} className={`flex items-center gap-1 rounded-md px-3 py-1 text-xs font-bold ${urgent ? 'bg-amber-500/30 hover:bg-amber-500/40' : 'bg-sky-500/30 hover:bg-sky-500/40'}`}><Sparkles size={12} /> Pasar a {planRecord}</button>}
+        {canShowCta && <button onClick={goPay} className={`flex items-center gap-1 rounded-md px-3 py-1 text-xs font-bold ${urgent ? 'bg-amber-500/30 hover:bg-amber-500/40' : 'bg-sky-500/30 hover:bg-sky-500/40'}`}><Sparkles size={12} /> {ctaText}</button>}
       </div>
     )
   }
@@ -59,7 +70,7 @@ export default function TrialBanner() {
     return (
       <div className="flex flex-wrap items-center justify-between gap-2 bg-red-500/20 px-4 py-2 text-sm text-red-200">
         <span className="flex items-center gap-1.5"><AlertTriangle size={14} /> Suscripción suspendida.</span>
-        {cfg?.ready && <button onClick={goPay} className="rounded-md bg-red-500/30 px-3 py-1 text-xs font-bold hover:bg-red-500/40">Reactivar →</button>}
+        {canShowCta && <button onClick={goPay} className="rounded-md bg-red-500/30 px-3 py-1 text-xs font-bold hover:bg-red-500/40">Reactivar →</button>}
       </div>
     )
   }
