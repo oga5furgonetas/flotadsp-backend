@@ -14,10 +14,23 @@ export default function Verify() {
 
   useEffect(() => { if (hashParam) verify(hashParam) }, [hashParam])
 
+  function cleanHash(input) {
+    if (!input) return ''
+    // Extrae el primer match de 64 hex chars consecutivos. Acepta paste con espacios, "Hash:", saltos de línea, mayúsculas, etc.
+    const compact = String(input).replace(/[\s ]+/g, '')
+    const m = compact.match(/[0-9a-fA-F]{64}/)
+    return (m ? m[0] : compact).toLowerCase()
+  }
+
   async function verify(h) {
     setLoading(true); setErr(''); setData(null)
+    const cleaned = cleanHash(h)
+    if (cleaned.length !== 64) {
+      setErr(`El hash debe tener 64 caracteres hexadecimales. Te falta ${64 - cleaned.length} (probablemente lo has copiado incompleto del PDF).`)
+      setLoading(false); return
+    }
     try {
-      const r = await fetch(`${API_BASE}/verify/${h.trim()}`)
+      const r = await fetch(`${API_BASE}/verify/${cleaned}`)
       const j = await r.json()
       if (!r.ok) throw new Error(j?.detail || 'Error de verificación')
       setData(j)
