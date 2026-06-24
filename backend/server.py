@@ -4060,10 +4060,22 @@ def _annotate_photo_with_damages(photo_bytes: bytes, damages_for_photo: list) ->
             left, top = int(x1 / 1000.0 * W), int(y1 / 1000.0 * H)
             right, bottom = int(x2 / 1000.0 * W), int(y2 / 1000.0 * H)
             color = _SEVERITY_COLORS.get(d.get("severity"), (239, 68, 68))
-            # Rectángulo
-            draw.rectangle([left, top, right, bottom], outline=color, width=thick)
-            # Etiqueta arriba del rectángulo: parte + confidence
-            label = f"{(d.get('part') or 'daño')[:24]}  {int(float(d.get('confidence', 0)) * 100)}%"
+            verified = bool(d.get("_verified"))
+            if verified:
+                # Sólido + grueso → daño cross-validado con YOLO/SAM.
+                draw.rectangle([left, top, right, bottom], outline=color, width=thick)
+            else:
+                # Discontinuo → solo Gemini (caja aproximada, sin confirmación geométrica).
+                seg = max(8, thick * 3)
+                for sx in range(left, right, seg * 2):
+                    draw.line([(sx, top), (min(sx + seg, right), top)], fill=color, width=thick)
+                    draw.line([(sx, bottom), (min(sx + seg, right), bottom)], fill=color, width=thick)
+                for sy in range(top, bottom, seg * 2):
+                    draw.line([(left, sy), (left, min(sy + seg, bottom))], fill=color, width=thick)
+                    draw.line([(right, sy), (right, min(sy + seg, bottom))], fill=color, width=thick)
+            # Etiqueta arriba del rectángulo: parte + confidence (+ ~ si no verificada)
+            tag = "" if verified else "~"
+            label = f"{tag}{(d.get('part') or 'daño')[:22]}  {int(float(d.get('confidence', 0)) * 100)}%"
             try:
                 tb = draw.textbbox((0, 0), label, font=font)
                 tw, th = tb[2] - tb[0], tb[3] - tb[1]
@@ -4154,40 +4166,35 @@ async def _refine_damage_boxes_with_yolo_sam(inspection_id: str, photo_index_0ba
                  if y.get("box_2d") and _is_box_valid(y["box_2d"])
                  and float(y.get("confidence", 0)) >= 0.35]
 
-    # STRICT: si YOLO no tiene detecciones esta foto → NO dibujamos cajas Gemini.
-    # Mejor foto limpia que cajas inventadas. Las gemini se listan como sugeridas.
-    if not yolo_dets:
-        return []
-
+    # Filtro geométrico estricto: cajas > 15% del área = "toda la pieza" → no es daño puntual.
+    # Aplicable a Gemini y a YOLO. Un daño real raramente supera el 15% de la foto.
+    MAX_AREA_PCT = 15.0
     refined = []
     for g in gemini_damages_for_photo:
         g_box = g.get("box_2d")
         if not _is_box_valid(g_box):
             continue
-        # Filtro de área: caja > 35% de la foto = "toda la pieza", no daño puntual → fuera.
         y1, x1, y2, x2 = g_box
-        area_pct = ((y2 - y1) * (x2 - x1)) / 10000.0
-        if area_pct > 35:
-            continue
-        # Mejor detección YOLO/SAM que se solape con esta Gemini.
+        g_area = ((y2 - y1) * (x2 - x1)) / 10000.0
+        if g_area > MAX_AREA_PCT:
+            continue  # Gemini marcó la pieza entera, no el daño.
+        # Cross-validation con YOLO/SAM.
         best_iou, best_y = 0.0, None
         for y in yolo_dets:
             iou = _bbox_iou(g_box, y["box_2d"])
             if iou > best_iou:
                 best_iou, best_y = iou, y
-        # STRICT: solo aceptamos si YOLO confirma con IoU>=0.3 → usamos caja de YOLO.
         if best_iou >= 0.3 and best_y is not None:
             yy1, yx1, yy2, yx2 = best_y["box_2d"]
             y_area = ((yy2 - yy1) * (yx2 - yx1)) / 10000.0
-            if y_area > 35:
+            if y_area <= MAX_AREA_PCT:
+                # Cross-validado: caja YOLO precisa + label Gemini. Borde SÓLIDO.
+                refined.append({**g, "box_2d": list(best_y["box_2d"]),
+                                "_box_source": "yolo+sam", "_iou": round(best_iou, 2),
+                                "_verified": True})
                 continue
-            refined.append({
-                **g,
-                "box_2d": list(best_y["box_2d"]),
-                "_box_source": best_y.get("source", "yolo+sam"),
-                "_iou": round(best_iou, 2),
-            })
-        # else: descartamos. Mejor cero cajas que cajas falsas.
+        # Gemini sin confirmación pero con caja pequeña razonable. Borde DISCONTINUO.
+        refined.append({**g, "_box_source": "gemini_only", "_verified": False})
     return _nms_damages(refined, iou_thresh=0.7)
 
 
@@ -4306,8 +4313,9 @@ def _build_forensic_pdf(insp: dict, sig: dict, vehicle: dict, driver_name: str,
     photos_valid = [b for b in photo_bytes_list if b]
     if photos_valid:
         story.append(Paragraph("Evidencia fotográfica con daños marcados", h2))
-        msg = (f"{len(photos_valid)} fotos analizadas. Las cajas señalan únicamente daños "
-               f"con confianza ≥ {int(_FORENSIC_CONFIDENCE_MIN*100)}% verificados por la IA. "
+        msg = (f"{len(photos_valid)} fotos analizadas. "
+               f"<b>Borde sólido</b> = daño confirmado por dos modelos (Gemini+YOLO/SAM). "
+               f"<b>Borde discontinuo</b> = detectado por Gemini sin confirmación geométrica (caja aproximada, marcado con ~). "
                f"El hash de cada imagen está sellado en la cadena de custodia.")
         story.append(Paragraph(msg, small))
         story.append(Spacer(1, 3*mm))
