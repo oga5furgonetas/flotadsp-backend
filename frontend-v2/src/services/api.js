@@ -57,6 +57,10 @@ export const uploadInspection = (formData) =>
     headers: { 'Content-Type': undefined },
   })
 
+// Peritaje firmado: el conductor firma su propia inspección con texto-declaración.
+export const signInspection = (inspectionId, signatureText) =>
+  api.post(`/inspections/${inspectionId}/sign`, { signature_text: signatureText })
+
 export const readOdometer = (vehicleId, file) => {
   const fd = new FormData()
   fd.append('file', file, 'odometro.jpg')
