@@ -4098,6 +4098,93 @@ def _filter_damages_for_peritaje(damages: list):
     return incluidos, sugeridos
 
 
+# --- ENSEMBLE GEMINI + YOLO+SAM (precisión geométrica del bounding box) ---
+
+def _bbox_iou(a, b) -> float:
+    """IoU entre 2 cajas [y1,x1,y2,x2] (cualquier escala). 0 si no se solapan."""
+    try:
+        ay1, ax1, ay2, ax2 = float(a[0]), float(a[1]), float(a[2]), float(a[3])
+        by1, bx1, by2, bx2 = float(b[0]), float(b[1]), float(b[2]), float(b[3])
+    except Exception:
+        return 0.0
+    iy1, ix1 = max(ay1, by1), max(ax1, bx1)
+    iy2, ix2 = min(ay2, by2), min(ax2, bx2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, ay2 - ay1) * max(0.0, ax2 - ax1)
+    area_b = max(0.0, by2 - by1) * max(0.0, bx2 - bx1)
+    union = area_a + area_b - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _nms_damages(damages: list, iou_thresh: float = 0.7) -> list:
+    """Non-Max Suppression: si 2 daños solapan IoU>thresh, queda el de mayor confidence."""
+    if not damages:
+        return []
+    sorted_d = sorted(damages, key=lambda d: float(d.get("confidence", 0)), reverse=True)
+    keep, suppressed = [], set()
+    for i, d in enumerate(sorted_d):
+        if i in suppressed:
+            continue
+        keep.append(d)
+        for j in range(i + 1, len(sorted_d)):
+            if j in suppressed:
+                continue
+            if _bbox_iou(d.get("box_2d") or [0, 0, 0, 0],
+                        sorted_d[j].get("box_2d") or [0, 0, 0, 0]) > iou_thresh:
+                suppressed.add(j)
+    return keep
+
+
+async def _refine_damage_boxes_with_yolo_sam(inspection_id: str, photo_index_0based: int,
+                                              gemini_damages_for_photo: list) -> list:
+    """Cruza cajas Gemini con detecciones YOLO+SAM ya almacenadas en inspection_ai_results.
+    Cuando hay coincidencia (IoU≥0.3) → caja YOLO/SAM (geométricamente precisa)
+                                       + label semántica Gemini (qué es el daño).
+    Sin coincidencia → mantiene Gemini SOLO si confidence ≥ 0.7 (compromiso de veracidad).
+    Sin detecciones YOLO disponibles → degrada elegantemente a Gemini sin cambios."""
+    ai_doc = await db.inspection_ai_results.find_one(
+        {"inspection_id": inspection_id, "photo_index": photo_index_0based}, {"_id": 0}
+    )
+    yolo_dets = (ai_doc or {}).get("detections") or []
+    # Filtra detecciones YOLO/SAM con cajas válidas y confianza decente.
+    yolo_dets = [y for y in yolo_dets
+                 if y.get("box_2d") and _is_box_valid(y["box_2d"])
+                 and float(y.get("confidence", 0)) >= 0.35]
+
+    if not yolo_dets:
+        # YOLO no disponible / sin detecciones esta foto → mantenemos Gemini tal cual.
+        return list(gemini_damages_for_photo)
+
+    refined = []
+    for g in gemini_damages_for_photo:
+        g_box = g.get("box_2d")
+        if not _is_box_valid(g_box):
+            continue
+        # Mejor detección YOLO/SAM que se solape con esta Gemini.
+        best_iou, best_y = 0.0, None
+        for y in yolo_dets:
+            iou = _bbox_iou(g_box, y["box_2d"])
+            if iou > best_iou:
+                best_iou, best_y = iou, y
+        if best_iou >= 0.3 and best_y is not None:
+            # Cross-validado: combinamos label de Gemini con caja precisa de YOLO/SAM.
+            refined.append({
+                **g,
+                "box_2d": list(best_y["box_2d"]),
+                "_box_source": best_y.get("source", "yolo+sam"),
+                "_iou": round(best_iou, 2),
+            })
+        elif float(g.get("confidence", 0)) >= 0.7:
+            # Sin confirmación geométrica pero confidence muy alta → mantenemos.
+            refined.append({**g, "_box_source": "gemini_only"})
+        # else: descarta silenciosamente (Gemini dudoso sin confirmación visual)
+    # NMS final para eliminar duplicados.
+    return _nms_damages(refined, iou_thresh=0.7)
+
+
 def _generate_qr_png(data: str) -> bytes:
     """QR como PNG bytes (para embed en PDF). Importado lazy."""
     import qrcode as _qr
@@ -4374,7 +4461,7 @@ async def forensic_pdf(inspection_id: str, _=Depends(require_admin)):
     photos = (insp.get("photos") or [])[:6]
     raw_bytes_list = await asyncio.gather(*[_fetch_photo_bytes(u) for u in photos]) if photos else []
 
-    # Filtrar daños incluidos vs sugeridos (umbral de veracidad).
+    # Filtrar daños incluidos vs sugeridos (umbral de veracidad inicial sobre Gemini).
     all_damages = ((insp.get("analysis") or {}).get("damages") or []) + \
                   ((insp.get("analysis") or {}).get("new_damages") or [])
     # Dedupe por (part, photo_index, hash de box) para no duplicar entre damages y new_damages.
@@ -4383,20 +4470,23 @@ async def forensic_pdf(inspection_id: str, _=Depends(require_admin)):
         k = (d.get("part"), d.get("photo_index"), tuple(d.get("box_2d") or []))
         if k in seen: continue
         seen.add(k); dedup.append(d)
-    damages_incluidos, damages_sugeridos = _filter_damages_for_peritaje(dedup)
+    gemini_incluidos, damages_sugeridos = _filter_damages_for_peritaje(dedup)
 
-    # Anotar cada foto con sus daños (filtrados por photo_index 1-based; si no hay índice, va a foto 1).
+    # ENSEMBLE: cruzar Gemini con YOLO+SAM por foto. Caja precisa de SAM + label de Gemini.
+    refined_per_photo = []
+    for i in range(len(raw_bytes_list)):
+        gem_for_photo = [d for d in gemini_incluidos if (d.get("photo_index") or 1) == (i + 1)]
+        rfn = await _refine_damage_boxes_with_yolo_sam(inspection_id, i, gem_for_photo)
+        refined_per_photo.append(rfn)
+    damages_incluidos = [d for sub in refined_per_photo for d in sub]
+
+    # Anotar cada foto con sus daños refinados.
     annotated_bytes_list = []
     for i, raw in enumerate(raw_bytes_list):
         if not raw:
             annotated_bytes_list.append(None)
             continue
-        dmgs_for_photo = [d for d in damages_incluidos
-                          if (d.get("photo_index") or 1) == (i + 1)]
-        # Si no hay daños asignados explícitamente, también dibujamos los sin photo_index en la foto 1.
-        if i == 0 and not damages_incluidos:
-            dmgs_for_photo = []
-        annotated_bytes_list.append(_annotate_photo_with_damages(raw, dmgs_for_photo))
+        annotated_bytes_list.append(_annotate_photo_with_damages(raw, refined_per_photo[i]))
 
     verify_url = f"{_PORTAL_BASE_FRONT}/verify/{sig['content_hash']}"
     # Generación PDF en hilo (reportlab es síncrono y CPU-bound).
