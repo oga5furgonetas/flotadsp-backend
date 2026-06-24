@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, Search, X, FileText, Image as ImageIcon, ShieldQuestion, User, ChevronDown,
+  ShieldCheck, FileSignature,
 } from 'lucide-react'
-import { getInspections, getVehicles, getDrivers, getVehicleInspections, fetchAuthedBlob } from '../api'
+import { getInspections, getVehicles, getDrivers, getVehicleInspections, fetchAuthedBlob, getForensicStatus, signInspectionAdmin } from '../api'
 
 const SEV_LABEL = { sin_danos: 'Sin daños', sin_analisis: 'Sin análisis', leve: 'Leve', moderado: 'Moderado', grave: 'Grave', critico: 'Crítico' }
 const SEV_CLS = {
@@ -51,9 +52,9 @@ export default function Inspecciones() {
     })
   }, [insps, vmap, center, sev, q])
 
-  async function openPdf(id) {
-    try { const url = await fetchAuthedBlob(`/inspections/${id}/pdf?boxes=1`); window.open(url, '_blank') }
-    catch { setErr('No se pudo generar el PDF.') }
+  async function openForensicPdf(id) {
+    try { const url = await fetchAuthedBlob(`/inspections/${id}/forensic-pdf`); window.open(url, '_blank') }
+    catch (e) { setErr(e?.response?.data?.detail || 'No se pudo generar el peritaje (debe estar firmado).') }
   }
 
   if (err) return <p className="text-red-400">{err}</p>
@@ -89,6 +90,7 @@ export default function Inspecciones() {
                 <div className="relative h-36 bg-dark-800">
                   {i.photos?.[0] ? <img src={i.photos[0]} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-dark-600"><ImageIcon size={24} /></div>}
                   <span className={`absolute left-2 top-2 rounded px-2 py-0.5 text-[11px] font-bold ${SEV_CLS[s]}`}>{SEV_LABEL[s] || s}</span>
+                  {i.forensic_signed && <span className="absolute right-2 top-2 flex items-center gap-0.5 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[10px] font-bold text-white" title="Inspección firmada"><ShieldCheck size={10} /> Firmada</span>}
                 </div>
                 <div className="p-3">
                   <div className="flex items-center justify-between"><span className="font-bold">{v.plate || '—'}</span><span className="text-xs text-dark-500">{fmt(i.created_at)}</span></div>
@@ -100,7 +102,7 @@ export default function Inspecciones() {
         </div>
       )}
 
-      {sel && <Detail insp={sel} plate={vmap[sel.vehicle_id]?.plate} dmap={dmap} onClose={() => setSel(null)} onPdf={openPdf} />}
+      {sel && <Detail insp={sel} plate={vmap[sel.vehicle_id]?.plate} dmap={dmap} onClose={() => setSel(null)} onPdf={openForensicPdf} />}
     </div>
   )
 }
@@ -169,9 +171,67 @@ function Detail({ insp, plate, dmap, onClose, onPdf }) {
             <QuienTimeline vehicleId={insp.vehicle_id} dmap={dmap} currentId={insp.id} />
           )}
 
-          <button onClick={() => onPdf(insp.id)} className="btn-primary mt-5 flex w-full items-center justify-center gap-2 py-2.5"><FileText size={16} /> Descargar PDF del peritaje</button>
+          <ForensicSignBlock inspId={insp.id} onPdf={onPdf} />
         </div>
       </div>
+    </div>
+  )
+}
+
+function ForensicSignBlock({ inspId, onPdf }) {
+  const [status, setStatus] = useState(null) // null | {signed, hash, signed_at, signed_by_name, ...}
+  const [signing, setSigning] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    getForensicStatus(inspId).then((r) => setStatus(r.data)).catch(() => setStatus({ signed: false }))
+  }, [inspId])
+
+  async function sign() {
+    setSigning(true); setErr('')
+    try {
+      const r = await signInspectionAdmin(inspId, 'Firmado por administrador desde panel FlotaDSP.')
+      setStatus({ signed: true, hash: r.data.hash, signed_by_name: r.data.signed_by_name, signed_at: r.data.signed_at })
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo firmar.')
+    }
+    setSigning(false)
+  }
+
+  if (!status) {
+    return <div className="mt-5 flex items-center gap-2 text-sm text-dark-500"><Loader2 size={14} className="animate-spin" /> Comprobando firma…</div>
+  }
+
+  if (!status.signed) {
+    return (
+      <div className="mt-5 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-300">
+          <FileSignature size={16} /> Inspección sin firmar
+        </div>
+        <p className="mb-3 text-xs text-dark-400">Para generar el peritaje técnico con cadena de custodia hash, esta inspección debe estar firmada. Si el conductor no firmó, puedes firmarla tú como administrador.</p>
+        {err && <p className="mb-2 text-xs text-red-400">{err}</p>}
+        <button onClick={sign} disabled={signing} className="btn-primary flex items-center gap-2 disabled:opacity-50">
+          {signing ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
+          {signing ? 'Firmando…' : 'Firmar ahora'}
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-5 space-y-3">
+      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
+        <div className="mb-1 flex items-center gap-2 font-semibold text-emerald-300">
+          <ShieldCheck size={15} /> Inspección firmada
+        </div>
+        <div className="text-xs text-dark-400">
+          Por <b className="text-dark-200">{status.signed_by_name || '—'}</b> · {fmt(status.signed_at)}
+        </div>
+        {status.hash && <code className="mt-1 block break-all text-[10px] text-emerald-400">{status.hash}</code>}
+      </div>
+      <button onClick={() => onPdf(inspId)} className="btn-primary flex w-full items-center justify-center gap-2 py-2.5">
+        <FileText size={16} /> Descargar peritaje técnico (PDF)
+      </button>
     </div>
   )
 }

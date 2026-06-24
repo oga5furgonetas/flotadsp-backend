@@ -4,6 +4,11 @@ import { api } from '../services/api'
 // Centro: 'Todos' | 'OGA5' | 'DGA1' | 'DGA2' … (filtro global del panel)
 const centerParam = (center) => (center && center !== 'Todos' ? { center } : {})
 
+/* ── Peritaje firmado (S1) ── */
+export const getForensicStatus = (inspId) => api.get(`/inspections/${inspId}/forensic`)
+export const signInspectionAdmin = (inspId, signatureText) =>
+  api.post(`/inspections/${inspId}/sign`, { signature_text: signatureText })
+
 /* ── Dashboard ── */
 export const getDashboardStats = () => api.get('/stats/dashboard')
 export const getAttention = () => api.get('/stats/attention')
