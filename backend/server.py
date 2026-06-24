@@ -686,6 +686,9 @@ async def create_indexes():
         # Índice global hash → tenant (necesario para verificador público /verify/{hash}).
         await global_db.forensic_index.create_index("content_hash", unique=True)
         await global_db.forensic_index.create_index([("signed_at", -1)])
+        # Fraud Guard (S3): índice para detección de reuso de foto.
+        await db.inspections.create_index("first_phash")
+        await db.inspections.create_index("fraud_score")
         await db.driver_accounts.create_index("username")
         await db.inspection_ai_results.create_index(
             [("inspection_id", 1), ("photo_index", 1)], unique=True
@@ -3411,6 +3414,12 @@ async def upload_inspection_photos(
 
         # Lanzar detección YOLO en background (no bloquea la respuesta al usuario)
         asyncio.create_task(_run_yolo_for_inspection(inspection.id, photo_urls))
+        # Lanzar fraud check en background (depende de analysis.plate_text, así que esperamos un poco).
+        async def _delayed_fraud():
+            await asyncio.sleep(45)  # da tiempo al análisis Gemini para escribir plate_text
+            try: await _calculate_fraud_score(inspection.id)
+            except Exception as e: logger.warning(f"fraud check bg failed: {e}")
+        asyncio.create_task(_delayed_fraud())
 
         # Respuesta inmediata — análisis Gemini se completa en background
         return {
@@ -4569,6 +4578,166 @@ async def verify_hash_public(content_hash: str, request: Request):
         "has_next_in_chain": bool(next_sig),
         "disclaimer": "Evidencia técnica con cadena de custodia hash. No constituye firma electrónica avanzada eIDAS.",
     }
+
+
+# =========================
+# AI FRAUD GUARD (S3) — detecta intentos de engaño del conductor
+# =========================
+# 3 heurísticas:
+#  1) EXIF DateTimeOriginal MUY anterior al upload → "foto antigua"
+#  2) Perceptual hash coincide con inspección anterior reciente del mismo vehículo → "reusa foto"
+#  3) plate_text del análisis ≠ matrícula del vehículo asignado → "matrícula no coincide"
+# Score 0-100. Notifica Telegram si ≥85.
+
+_FRAUD_OLD_PHOTO_HOURS = 24      # foto con EXIF >24h antes del upload → flag
+_FRAUD_PHASH_DISTANCE = 8        # distancia Hamming <8 = misma foto (de 64 bits)
+_FRAUD_PHASH_LOOKBACK_DAYS = 30  # ventana para buscar foto reusada
+
+
+def _normalize_plate(p: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", (p or "").upper())
+
+
+def _exif_datetime(img_bytes: bytes):
+    """Lee EXIF DateTimeOriginal de la foto. None si no hay."""
+    try:
+        from PIL import Image as PILImage
+        import io as _io
+        img = PILImage.open(_io.BytesIO(img_bytes))
+        exif = img._getexif() if hasattr(img, "_getexif") else None
+        if not exif:
+            return None
+        # tag 36867 = DateTimeOriginal
+        raw = exif.get(36867) or exif.get(306)
+        if not raw:
+            return None
+        return datetime.strptime(raw, "%Y:%m:%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def _phash_bytes(img_bytes: bytes) -> str:
+    """Perceptual hash (pHash) como string hex. None si falla."""
+    try:
+        import imagehash
+        from PIL import Image as PILImage
+        import io as _io
+        img = PILImage.open(_io.BytesIO(img_bytes))
+        return str(imagehash.phash(img))
+    except Exception as e:
+        logger.warning(f"phash failed: {e}")
+        return None
+
+
+def _phash_distance(h1: str, h2: str) -> int:
+    """Distancia Hamming entre 2 phash hex (64 bits)."""
+    try:
+        import imagehash
+        return imagehash.hex_to_hash(h1) - imagehash.hex_to_hash(h2)
+    except Exception:
+        return 999
+
+
+async def _calculate_fraud_score(inspection_id: str) -> dict:
+    """Calcula fraud_score y guarda en la inspección. Devuelve {score, reasons}."""
+    insp = await db.inspections.find_one({"id": inspection_id}, {"_id": 0})
+    if not insp:
+        return {"score": 0, "reasons": []}
+    vehicle = await db.vehicles.find_one({"id": insp.get("vehicle_id")}, {"_id": 0}) or {}
+    reasons = []
+    score = 0
+    now = datetime.now(timezone.utc)
+
+    # 3) Plate check (rápido, sin descargar fotos)
+    plate_text = (insp.get("analysis") or {}).get("plate_text") or insp.get("plate_text") or ""
+    expected_plate = vehicle.get("license_plate") or ""
+    if plate_text and expected_plate:
+        if _normalize_plate(plate_text) != _normalize_plate(expected_plate):
+            reasons.append({
+                "type": "plate_mismatch",
+                "detail": f"IA leyó '{plate_text}' pero el vehículo asignado es '{expected_plate}'",
+                "weight": 40,
+            })
+            score += 40
+
+    # 1+2) EXIF + pHash sobre la primera foto (suficiente para detección rápida)
+    photos = (insp.get("photos") or [])[:3]   # primeras 3 fotos máximo
+    if photos:
+        photo_bytes = await _fetch_photo_bytes(photos[0])
+        if photo_bytes:
+            # EXIF: comparar con created_at del upload
+            exif_dt = _exif_datetime(photo_bytes)
+            if exif_dt:
+                # Asumimos zona local (no hay TZ en EXIF); margen amplio.
+                try:
+                    upload_dt = datetime.fromisoformat((insp.get("created_at") or "").replace("Z", "+00:00"))
+                    delta_h = abs((upload_dt.replace(tzinfo=None) - exif_dt).total_seconds()) / 3600.0
+                    if delta_h > _FRAUD_OLD_PHOTO_HOURS:
+                        reasons.append({
+                            "type": "old_photo",
+                            "detail": f"Foto tomada hace {delta_h:.0f}h (EXIF {exif_dt.isoformat()}), subida posterior",
+                            "weight": 35,
+                        })
+                        score += 35
+                except Exception:
+                    pass
+
+            # pHash: comparar con inspecciones anteriores del mismo vehículo (últimos 30 días)
+            this_phash = _phash_bytes(photo_bytes)
+            if this_phash:
+                cutoff = (now - timedelta(days=_FRAUD_PHASH_LOOKBACK_DAYS)).isoformat()
+                prev = await db.inspections.find(
+                    {"vehicle_id": insp.get("vehicle_id"),
+                     "id": {"$ne": inspection_id},
+                     "deleted": {"$ne": True},
+                     "created_at": {"$gte": cutoff},
+                     "first_phash": {"$exists": True}},
+                    {"_id": 0, "id": 1, "first_phash": 1, "created_at": 1}
+                ).limit(50).to_list(50)
+                for p in prev:
+                    d = _phash_distance(this_phash, p.get("first_phash", ""))
+                    if d < _FRAUD_PHASH_DISTANCE:
+                        reasons.append({
+                            "type": "reused_photo",
+                            "detail": f"Foto casi idéntica (distancia pHash {d}) a inspección anterior {p.get('id','')[:8]} del {(p.get('created_at') or '')[:10]}",
+                            "weight": 50,
+                        })
+                        score += 50
+                        break
+                # Guarda el phash para futuras comparaciones (en TODAS las inspecciones, no solo fraud).
+                await db.inspections.update_one({"id": inspection_id}, {"$set": {"first_phash": this_phash}})
+
+    score = min(100, score)
+    await db.inspections.update_one(
+        {"id": inspection_id},
+        {"$set": {"fraud_score": score, "fraud_reasons": reasons,
+                  "fraud_checked_at": now.isoformat()}}
+    )
+    logger.info(f"fraud check insp={inspection_id[:8]} score={score} reasons={[r['type'] for r in reasons]}")
+
+    # Notificación Telegram si alto.
+    if score >= 85:
+        try:
+            cfg = await db.telegram_config.find_one({}, {"_id": 0})
+            if cfg and cfg.get("enabled") and cfg.get("bot_token"):
+                txt = (f"🚨 <b>POSIBLE FRAUDE</b>\n\nInspección <code>{inspection_id[:8]}</code> · "
+                       f"vehículo {expected_plate} · score {score}/100\n\n" +
+                       "\n".join(f"• {r['detail']}" for r in reasons))
+                async with _aiohttp.ClientSession() as s:
+                    for cid in cfg.get("chat_ids", []):
+                        if cid.strip():
+                            await s.post(f"https://api.telegram.org/bot{cfg['bot_token']}/sendMessage",
+                                         json={"chat_id": cid, "text": txt, "parse_mode": "HTML"},
+                                         timeout=_aiohttp.ClientTimeout(total=8))
+        except Exception as e:
+            logger.warning(f"Telegram fraud alert failed: {e}")
+    return {"score": score, "reasons": reasons}
+
+
+@api_router.post("/inspections/{inspection_id}/recheck-fraud")
+async def recheck_fraud(inspection_id: str, _=Depends(require_admin)):
+    """Fuerza recálculo del fraud_score (útil tras ediciones)."""
+    return await _calculate_fraud_score(inspection_id)
 
 
 # =========================
