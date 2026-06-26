@@ -429,6 +429,7 @@ class CreateAdminRequest(BaseModel):
     password: str
     name: str
     permissions: Optional[List[str]] = None   # módulos permitidos; None = todos (menos super-admin)
+    allowed_centers: Optional[List[str]] = None  # centros visibles; None = todos los de la org
 
 
 class TokenResponse(BaseModel):
@@ -445,6 +446,7 @@ class TokenResponse(BaseModel):
     centers: Optional[list] = None
     super_admin: Optional[bool] = None
     permissions: Optional[list] = None
+    allowed_centers: Optional[list] = None  # subset de centros que este admin puede ver
 
 
 # =========================
@@ -689,6 +691,10 @@ async def create_indexes():
         # Fraud Guard (S3): índice para detección de reuso de foto.
         await db.inspections.create_index("first_phash")
         await db.inspections.create_index("fraud_score")
+        # Checklist operativo: unique por centro+día+turno.
+        await db.daily_checklists.create_index(
+            [("center", 1), ("date", 1), ("shift", 1)], unique=True
+        )
         await db.driver_accounts.create_index("username")
         await db.inspection_ai_results.create_index(
             [("inspection_id", 1), ("photo_index", 1)], unique=True
@@ -2455,6 +2461,7 @@ async def admin_login(data: LoginRequest, request: Request):
         centers=(org or {}).get("centers"),
         super_admin=bool(user.get("super_admin")),
         permissions=user.get("permissions"),
+        allowed_centers=user.get("allowed_centers"),
     )
 
 
@@ -2604,6 +2611,7 @@ async def create_admin(
         "super_admin": False,                        # nunca super-admin desde aquí
         "org_id": _admin.get("org_id"),              # MISMA organización que su creador (multi-tenant)
         "permissions": data.permissions,             # módulos permitidos (None = todos menos Negocio)
+        "allowed_centers": data.allowed_centers,     # centros visibles (None = todos)
         "created_by": _admin.get("sub"),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -2623,6 +2631,9 @@ async def update_admin_permissions(admin_id: str, data: dict = Body(...), _admin
     patch = {}
     if "permissions" in data:
         patch["permissions"] = data.get("permissions")
+    if "allowed_centers" in data:
+        ac = data.get("allowed_centers")
+        patch["allowed_centers"] = ac if (isinstance(ac, list) or ac is None) else None
     if data.get("name"):
         patch["name"] = str(data["name"]).strip()
     if not patch:
@@ -4578,6 +4589,138 @@ async def verify_hash_public(content_hash: str, request: Request):
         "has_next_in_chain": bool(next_sig),
         "disclaimer": "Evidencia técnica con cadena de custodia hash. No constituye firma electrónica avanzada eIDAS.",
     }
+
+
+# =========================
+# CHECKLIST OPERATIVO POR CENTRO/TURNO (dispatcher)
+# =========================
+# 1 doc por (center, date, shift) en db.daily_checklists. Items con done/done_by/done_at.
+# Permisos: el admin ve solo los centros de su allowed_centers (o todos si no esta seteado).
+
+_DEFAULT_CHECKLIST_ITEMS = [
+    "Revisar lista de conductores del día",
+    "Confirmar asignaciones furgoneta-conductor",
+    "Verificar combustible flota",
+    "Comprobar estado de móviles entregados",
+    "Confirmar rutas cargadas en sistema",
+    "Revisión de paquetes dañados del día anterior",
+    "Validar plantilla con Cortex",
+    "Briefing matutino completado",
+]
+
+
+def _user_can_see_center(user: dict, center: str) -> bool:
+    """True si el usuario admin puede ver ese centro. Super-admin/owner ve todos."""
+    if user.get("sa") or user.get("account_type") == "owner":
+        return True
+    ac = user.get("allowed_centers")
+    if ac is None:
+        return True   # sin restricción: ve todos los de la org
+    return (center or "") in ac
+
+
+@api_router.get("/checklist")
+async def get_checklist(center: str, date: Optional[str] = None,
+                        user: dict = Depends(require_admin)):
+    """Devuelve los 2 turnos (mañana, tarde) de un centro y día. Crea con defaults si no existe."""
+    if not center:
+        raise HTTPException(400, "Centro requerido")
+    if not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a este centro")
+    date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    docs = await db.daily_checklists.find({"center": center, "date": date}, {"_id": 0}).to_list(2)
+    by_shift = {d["shift"]: d for d in docs}
+    result = {}
+    for shift in ("manana", "tarde"):
+        if shift in by_shift:
+            result[shift] = by_shift[shift]
+        else:
+            # Crear con plantilla por defecto (no persistir aún: vacío hasta primer edit/check).
+            result[shift] = {
+                "center": center, "date": date, "shift": shift,
+                "items": [{"id": str(uuid.uuid4()), "text": t, "done": False,
+                           "done_by": None, "done_at": None} for t in _DEFAULT_CHECKLIST_ITEMS],
+                "updated_at": None,
+            }
+    return result
+
+
+@api_router.put("/checklist")
+async def upsert_checklist(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Crea/actualiza la lista de items de un (center,date,shift). El cliente envía items completos."""
+    center = data.get("center")
+    date = data.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    shift = data.get("shift")
+    if not center or shift not in ("manana", "tarde"):
+        raise HTTPException(400, "Faltan center/shift válidos")
+    if not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a este centro")
+    raw_items = data.get("items") or []
+    items = []
+    for it in raw_items:
+        if not isinstance(it, dict):
+            continue
+        text = (it.get("text") or "").strip()
+        if not text:
+            continue
+        items.append({
+            "id": it.get("id") or str(uuid.uuid4()),
+            "text": text[:300],
+            "done": bool(it.get("done")),
+            "done_by": it.get("done_by"),
+            "done_at": it.get("done_at"),
+        })
+    now = datetime.now(timezone.utc).isoformat()
+    await db.daily_checklists.update_one(
+        {"center": center, "date": date, "shift": shift},
+        {"$set": {"items": items, "updated_at": now, "updated_by": user.get("name")},
+         "$setOnInsert": {"id": str(uuid.uuid4()), "center": center, "date": date, "shift": shift,
+                          "created_at": now}},
+        upsert=True,
+    )
+    return {"ok": True, "count": len(items)}
+
+
+@api_router.post("/checklist/toggle")
+async def toggle_checklist_item(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Marca/desmarca un item concreto. Más rápido que reenviar la lista entera."""
+    center = data.get("center")
+    date = data.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    shift = data.get("shift")
+    item_id = data.get("item_id")
+    done = bool(data.get("done"))
+    if not center or shift not in ("manana", "tarde") or not item_id:
+        raise HTTPException(400, "Faltan center/shift/item_id")
+    if not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a este centro")
+    now = datetime.now(timezone.utc).isoformat()
+    # 1) Asegurar que el doc existe (con defaults si no).
+    doc = await db.daily_checklists.find_one({"center": center, "date": date, "shift": shift}, {"_id": 0})
+    if not doc:
+        doc = {
+            "id": str(uuid.uuid4()), "center": center, "date": date, "shift": shift,
+            "items": [{"id": str(uuid.uuid4()), "text": t, "done": False, "done_by": None, "done_at": None}
+                      for t in _DEFAULT_CHECKLIST_ITEMS],
+            "created_at": now, "updated_at": now,
+        }
+        await db.daily_checklists.insert_one(doc)
+    # 2) Toggle item por id.
+    items = doc.get("items", [])
+    found = False
+    for it in items:
+        if it.get("id") == item_id:
+            it["done"] = done
+            it["done_by"] = user.get("name") if done else None
+            it["done_at"] = now if done else None
+            found = True
+            break
+    if not found:
+        raise HTTPException(404, "Item no encontrado")
+    await db.daily_checklists.update_one(
+        {"center": center, "date": date, "shift": shift},
+        {"$set": {"items": items, "updated_at": now}}
+    )
+    return {"ok": True}
 
 
 # =========================
