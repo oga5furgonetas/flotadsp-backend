@@ -33,6 +33,7 @@ import PanelImportaciones from './panel/pages/Importaciones'
 import PanelActividad from './panel/pages/Actividad'
 import PanelPortalConductor from './panel/pages/PortalConductor'
 import PanelAsignacion from './panel/pages/Asignacion'
+import PanelChecklistOp from './panel/pages/ChecklistOperativo'
 import PanelBandeja from './panel/pages/Bandeja'
 import Privacidad from './legal/Privacidad'
 import Terminos from './legal/Terminos'
@@ -82,6 +83,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="conductores" element={<PanelConductores />} />
               <Route path="turnos" element={<PanelTurnos />} />
               <Route path="asignacion" element={<PanelAsignacion />} />
+              <Route path="checklist-operativo" element={<PanelChecklistOp />} />
               <Route path="metricas" element={<PanelMetricas />} />
               <Route path="actividad" element={<PanelActividad />} />
               {/* Furgonetas */}

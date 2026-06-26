@@ -25,8 +25,9 @@ export default function Usuarios() {
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [form, setForm] = useState({ name: '', username: '', password: '', perms: ALL_KEYS })
-  const [editing, setEditing] = useState(null) // {id, perms}
+  const allOrgCenters = me?.centers || []
+  const [form, setForm] = useState({ name: '', username: '', password: '', perms: ALL_KEYS, centers: null })
+  const [editing, setEditing] = useState(null) // {id, perms, centers}
 
   function load() {
     getAdmins().then((r) => setUsers(r.data || [])).catch(() => setErr('No se pudieron cargar los usuarios.'))
@@ -43,18 +44,18 @@ export default function Usuarios() {
     }
     setBusy(true); setMsg(null)
     try {
-      await createAdmin({ name: form.name.trim(), username: form.username.trim(), password: form.password, permissions: form.perms })
+      await createAdmin({ name: form.name.trim(), username: form.username.trim(), password: form.password, permissions: form.perms, allowed_centers: form.centers })
       setMsg({ ok: true, t: `Usuario ${form.username} creado.` })
-      setForm({ name: '', username: '', password: '', perms: ALL_KEYS })
+      setForm({ name: '', username: '', password: '', perms: ALL_KEYS, centers: null })
       load()
     } catch (e) {
       setMsg({ ok: false, t: e?.response?.data?.detail || 'No se pudo crear el usuario.' })
     } finally { setBusy(false) }
   }
 
-  async function savePerms(id, perms) {
+  async function savePerms(id, perms, centers) {
     setBusy(true); setMsg(null)
-    try { await updateAdmin(id, { permissions: perms }); setMsg({ ok: true, t: 'Permisos actualizados.' }); setEditing(null); load() }
+    try { await updateAdmin(id, { permissions: perms, allowed_centers: centers }); setMsg({ ok: true, t: 'Permisos actualizados.' }); setEditing(null); load() }
     catch (e) { setMsg({ ok: false, t: e?.response?.data?.detail || 'No se pudo actualizar.' }) } finally { setBusy(false) }
   }
 
@@ -99,6 +100,34 @@ export default function Usuarios() {
             <button type="button" onClick={() => setForm({ ...form, perms: [] })} className="text-dark-400 hover:text-dark-200">Ninguno</button>
           </div>
         </div>
+
+        {/* Centros visibles */}
+        {allOrgCenters.length > 0 && (
+          <div className="mt-4">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-dark-500">¿Qué centros puede ver?</div>
+            <div className="flex flex-wrap gap-1.5">
+              <button type="button" onClick={() => setForm({ ...form, centers: null })}
+                className={`rounded-full px-2.5 py-1 text-xs ${form.centers === null ? 'bg-emerald-500/20 text-emerald-300' : 'bg-dark-800 text-dark-400'}`}>
+                Todos los centros
+              </button>
+              {allOrgCenters.map((c) => {
+                const active = Array.isArray(form.centers) && form.centers.includes(c)
+                return (
+                  <button key={c} type="button"
+                    onClick={() => {
+                      const curr = Array.isArray(form.centers) ? form.centers : []
+                      const next = active ? curr.filter((x) => x !== c) : [...curr, c]
+                      setForm({ ...form, centers: next })
+                    }}
+                    className={`rounded-full px-2.5 py-1 text-xs ${active ? 'bg-brand-500/20 text-brand-300' : 'bg-dark-800 text-dark-400'}`}>
+                    {c}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
         <button onClick={create} disabled={busy} className="btn-primary mt-4 flex items-center gap-2 disabled:opacity-50">
           {busy ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />} Crear usuario
         </button>
@@ -123,7 +152,7 @@ export default function Usuarios() {
                   </div>
                   {!isSuper && (
                     <div className="flex items-center gap-1">
-                      <button onClick={() => setEditing(isEd ? null : { id: u.id, perms: perms || ALL_KEYS })} className="btn-ghost px-2 py-1 text-xs">{isEd ? 'Cerrar' : 'Permisos'}</button>
+                      <button onClick={() => setEditing(isEd ? null : { id: u.id, perms: perms || ALL_KEYS, centers: Array.isArray(u.allowed_centers) ? u.allowed_centers : null })} className="btn-ghost px-2 py-1 text-xs">{isEd ? 'Cerrar' : 'Permisos'}</button>
                       <button onClick={() => remove(u)} className="btn-ghost px-2 py-1 text-xs text-red-400"><Trash2 size={14} /></button>
                     </div>
                   )}
@@ -148,7 +177,29 @@ export default function Usuarios() {
                         </div>
                       </div>
                     ))}
-                    <button onClick={() => savePerms(u.id, editing.perms)} disabled={busy} className="btn-primary mt-2 flex items-center gap-2 text-sm disabled:opacity-50">
+                    {allOrgCenters.length > 0 && (
+                      <div className="mb-3">
+                        <div className="mb-1 text-[11px] text-dark-500">Centros visibles</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          <button type="button" onClick={() => setEditing((s) => ({ ...s, centers: null }))}
+                            className={`rounded-full px-2.5 py-1 text-xs ${editing.centers === null ? 'bg-emerald-500/20 text-emerald-300' : 'bg-dark-800 text-dark-400'}`}>Todos</button>
+                          {allOrgCenters.map((c) => {
+                            const active = Array.isArray(editing.centers) && editing.centers.includes(c)
+                            return (
+                              <button key={c} type="button"
+                                onClick={() => setEditing((s) => {
+                                  const curr = Array.isArray(s.centers) ? s.centers : []
+                                  return { ...s, centers: active ? curr.filter((x) => x !== c) : [...curr, c] }
+                                })}
+                                className={`rounded-full px-2.5 py-1 text-xs ${active ? 'bg-brand-500/20 text-brand-300' : 'bg-dark-800 text-dark-400'}`}>
+                                {c}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    <button onClick={() => savePerms(u.id, editing.perms, editing.centers)} disabled={busy} className="btn-primary mt-2 flex items-center gap-2 text-sm disabled:opacity-50">
                       <Save size={14} /> Guardar permisos
                     </button>
                   </div>

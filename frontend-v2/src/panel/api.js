@@ -12,6 +12,11 @@ export const signInspectionAdmin = (inspId, signatureText) =>
 /* ── Fraud Guard (S3) ── */
 export const recheckFraud = (inspId) => api.post(`/inspections/${inspId}/recheck-fraud`)
 
+/* ── Checklist operativo ── */
+export const getChecklist = (center, date) => api.get('/checklist', { params: { center, date } })
+export const upsertChecklist = (body) => api.put('/checklist', body)
+export const toggleChecklistItem = (body) => api.post('/checklist/toggle', body)
+
 /* ── Dashboard ── */
 export const getDashboardStats = () => api.get('/stats/dashboard')
 export const getAttention = () => api.get('/stats/attention')

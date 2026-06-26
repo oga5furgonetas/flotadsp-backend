@@ -68,6 +68,7 @@ export function saveSession(j) {
       slug: j.slug,
       super_admin: j.super_admin,
       permissions: j.permissions ?? null,
+      allowed_centers: j.allowed_centers ?? null,
       centers: j.centers || [],
     }),
   )

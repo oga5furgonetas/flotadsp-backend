@@ -43,7 +43,7 @@ export default function Registro() {
       const j = await r.json()
       if (!r.ok || !j.access_token) { setErr(j.detail || 'No se pudo crear la cuenta. Prueba con otro usuario o URL.'); setBusy(false); return }
       localStorage.setItem('flotadsp_token', j.access_token)
-      localStorage.setItem('flotadsp_admin', JSON.stringify({ name: j.name, role: j.role, id: j.id, account_type: j.account_type, slug: j.slug, super_admin: j.super_admin, permissions: j.permissions ?? null, centers: j.centers || [] }))
+      localStorage.setItem('flotadsp_admin', JSON.stringify({ name: j.name, role: j.role, id: j.id, account_type: j.account_type, slug: j.slug, super_admin: j.super_admin, permissions: j.permissions ?? null, allowed_centers: j.allowed_centers ?? null, centers: j.centers || [] }))
       if (planParam) localStorage.setItem('flota_plan', planParam)
       window.location.href = planParam ? `/panel?plan=${encodeURIComponent(planParam)}` : '/panel'
     } catch { setErr('Sin conexión con el servidor. Revisa tu red e inténtalo de nuevo.'); setBusy(false) }

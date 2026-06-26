@@ -20,6 +20,7 @@ const TABS = {
       { to: '/panel/scorecard', label: 'Scorecard', icon: Trophy },
       { to: '/panel/conductores', label: 'Conductores', icon: Users },
       { to: '/panel/asignacion', label: 'Asignación diaria', icon: ClipboardCheck },
+      { to: '/panel/checklist-operativo', label: 'Checklist turno', icon: CheckCircle2 },
       { to: '/panel/turnos', label: 'Turnos', icon: CalendarClock },
       { to: '/panel/metricas', label: 'Métricas', icon: BarChart3 },
       { to: '/panel/actividad', label: 'Actividad', icon: Activity },
@@ -50,7 +51,10 @@ export default function PanelLayout() {
   const [center, setCenter] = useState(() => localStorage.getItem('panel_center') || 'Todos')
 
   // Centros DINÁMICOS de este DSP (multi-tenant: nunca hardcodeado)
-  const centers = Array.isArray(admin?.centers) ? admin.centers : []
+  // Centros visibles: si allowed_centers es una lista, filtra; si no, todos los de la org.
+  const allCenters = Array.isArray(admin?.centers) ? admin.centers : []
+  const allowed = Array.isArray(admin?.allowed_centers) ? admin.allowed_centers : null
+  const centers = allowed ? allCenters.filter((c) => allowed.includes(c)) : allCenters
 
   useEffect(() => { localStorage.setItem('panel_tab', tab) }, [tab])
   useEffect(() => { localStorage.setItem('panel_center', center) }, [center])
@@ -60,7 +64,7 @@ export default function PanelLayout() {
   // Guard de ruta: impide acceder por URL a un módulo no permitido.
   const curKey = keyOf(loc.pathname.replace(/\/+$/, '') || '/panel')
   const routeAllowed = (k) => {
-    if (k === 'perfil' || k === 'login' || k === 'portal-conductor') return true
+    if (k === 'perfil' || k === 'login' || k === 'portal-conductor' || k === 'checklist-operativo') return true
     if (k === 'admin' || k === 'usuarios' || k === 'bandeja') return isSuperAdmin()
     return canSee(k)
   }
