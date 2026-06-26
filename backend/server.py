@@ -4631,17 +4631,28 @@ async def get_checklist(center: str, date: Optional[str] = None,
     docs = await db.daily_checklists.find({"center": center, "date": date}, {"_id": 0}).to_list(2)
     by_shift = {d["shift"]: d for d in docs}
     result = {}
+    now = datetime.now(timezone.utc).isoformat()
     for shift in ("manana", "tarde"):
         if shift in by_shift:
             result[shift] = by_shift[shift]
-        else:
-            # Crear con plantilla por defecto (no persistir aún: vacío hasta primer edit/check).
-            result[shift] = {
-                "center": center, "date": date, "shift": shift,
-                "items": [{"id": str(uuid.uuid4()), "text": t, "done": False,
-                           "done_by": None, "done_at": None} for t in _DEFAULT_CHECKLIST_ITEMS],
-                "updated_at": None,
-            }
+            continue
+        # No existe: crear y PERSISTIR con plantilla por defecto (IDs estables).
+        new_doc = {
+            "id": str(uuid.uuid4()), "center": center, "date": date, "shift": shift,
+            "items": [{"id": str(uuid.uuid4()), "text": t, "done": False,
+                       "done_by": None, "done_at": None} for t in _DEFAULT_CHECKLIST_ITEMS],
+            "created_at": now, "updated_at": now,
+        }
+        try:
+            await db.daily_checklists.insert_one(new_doc)
+        except DuplicateKeyError:
+            # Race: alguien lo creó entre el find y el insert. Recargamos.
+            existing = await db.daily_checklists.find_one(
+                {"center": center, "date": date, "shift": shift}, {"_id": 0})
+            if existing:
+                result[shift] = existing
+                continue
+        result[shift] = new_doc
     return result
 
 
