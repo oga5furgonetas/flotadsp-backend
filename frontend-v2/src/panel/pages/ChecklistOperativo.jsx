@@ -62,7 +62,11 @@ export default function ChecklistOperativo() {
       await upsertChecklist({ center, date, shift, items: clean })
       setEditing(false)
       await load()
-    } catch (e) { setErr('No se pudo guardar.') }
+    } catch (e) {
+      const d = e?.response?.data?.detail
+      const status = e?.response?.status
+      setErr(`No se pudo guardar${status ? ` (${status})` : ''}: ${typeof d === 'string' ? d : JSON.stringify(d || e?.message)}`)
+    }
     setSaving(false)
   }
 

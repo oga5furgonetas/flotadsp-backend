@@ -5013,6 +5013,8 @@ logger.info(f"CORS allow_origins={cors_origins} credentials={use_credentials}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    # Cualquier preview deploy de Cloudflare Pages del proyecto flotadsp-v2 (<hash>.flotadsp-v2.pages.dev).
+    allow_origin_regex=r"https://([a-z0-9-]+\.)?flotadsp-v2\.pages\.dev",
     allow_credentials=use_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
