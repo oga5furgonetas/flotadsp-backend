@@ -695,6 +695,8 @@ async def create_indexes():
         await db.daily_checklists.create_index(
             [("center", 1), ("date", 1), ("shift", 1)], unique=True
         )
+        # Chat por centro.
+        await db.chat_messages.create_index([("center", 1), ("created_at", -1)])
         await db.driver_accounts.create_index("username")
         await db.inspection_ai_results.create_index(
             [("inspection_id", 1), ("photo_index", 1)], unique=True
@@ -4732,6 +4734,99 @@ async def toggle_checklist_item(data: dict = Body(...), user: dict = Depends(req
         {"$set": {"items": items, "updated_at": now}}
     )
     return {"ok": True}
+
+
+# =========================
+# CHAT INTERNO POR CENTRO (entre admins del mismo centro)
+# =========================
+# 1 sala = 1 centro. Cada org tiene N salas (una por centro de la org).
+# Solo ven la sala los admins con allowed_centers compatible.
+# Polling cada N s desde el cliente (no hay WS — KISS).
+
+async def _chat_room_can_access(user: dict, center: str) -> bool:
+    return _user_can_see_center(user, center)
+
+
+@api_router.get("/chat/{center}")
+async def chat_get(center: str, since: Optional[str] = None,
+                   limit: int = 100, user: dict = Depends(require_admin)):
+    """Devuelve los últimos N mensajes de la sala del centro (o desde 'since' ISO si se pasa)."""
+    if not await _chat_room_can_access(user, center):
+        raise HTTPException(403, "No tienes acceso a este chat")
+    q = {"center": center}
+    if since:
+        q["created_at"] = {"$gt": since}
+    limit = max(1, min(limit, 200))
+    msgs = await db.chat_messages.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    msgs.reverse()  # cronológico ascendente para el cliente
+    return {"messages": msgs}
+
+
+@api_router.post("/chat/{center}")
+async def chat_post(center: str, data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Envía un mensaje a la sala del centro."""
+    if not await _chat_room_can_access(user, center):
+        raise HTTPException(403, "No tienes acceso a este chat")
+    text = (data.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "Mensaje vacío")
+    if len(text) > 2000:
+        raise HTTPException(400, "Mensaje demasiado largo (máx 2000)")
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "center": center,
+        "text": text[:2000],
+        "author_id": user.get("sub"),
+        "author_name": user.get("name") or user.get("username") or "—",
+        "created_at": now,
+        "pinned_to_checklist": False,
+    }
+    await db.chat_messages.insert_one(doc)
+    return {"ok": True, "message": doc}
+
+
+@api_router.post("/chat/{center}/{message_id}/to-checklist")
+async def chat_pin_to_checklist(center: str, message_id: str,
+                                 data: dict = Body(default={}),
+                                 user: dict = Depends(require_admin)):
+    """Convierte un mensaje de chat en un item de la checklist del turno actual.
+    Marca el mensaje como 'pinned_to_checklist' para feedback visual."""
+    if not await _chat_room_can_access(user, center):
+        raise HTTPException(403, "No tienes acceso a este chat")
+    msg = await db.chat_messages.find_one({"id": message_id, "center": center}, {"_id": 0})
+    if not msg:
+        raise HTTPException(404, "Mensaje no encontrado")
+    # Decidir turno: el cliente puede pasarlo, si no, basado en hora UTC.
+    shift = data.get("shift")
+    if shift not in ("manana", "tarde"):
+        h = datetime.now(timezone.utc).hour
+        shift = "manana" if h < 14 else "tarde"
+    date = data.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now = datetime.now(timezone.utc).isoformat()
+    # Asegurar doc checklist + añadir item.
+    doc = await db.daily_checklists.find_one({"center": center, "date": date, "shift": shift}, {"_id": 0})
+    if not doc:
+        doc = {
+            "id": str(uuid.uuid4()), "center": center, "date": date, "shift": shift,
+            "items": [{"id": str(uuid.uuid4()), "text": t, "done": False, "done_by": None, "done_at": None}
+                      for t in _DEFAULT_CHECKLIST_ITEMS],
+            "created_at": now, "updated_at": now,
+        }
+        await db.daily_checklists.insert_one(doc)
+    items = doc.get("items", [])
+    items.append({
+        "id": str(uuid.uuid4()),
+        "text": (msg["text"][:280] + ("…" if len(msg["text"]) > 280 else "")),
+        "done": False, "done_by": None, "done_at": None,
+        "from_chat_id": message_id, "from_chat_author": msg.get("author_name"),
+    })
+    await db.daily_checklists.update_one(
+        {"center": center, "date": date, "shift": shift},
+        {"$set": {"items": items, "updated_at": now}}
+    )
+    await db.chat_messages.update_one({"id": message_id}, {"$set": {"pinned_to_checklist": True, "pinned_shift": shift, "pinned_date": date}})
+    return {"ok": True, "shift": shift, "date": date}
 
 
 # =========================
