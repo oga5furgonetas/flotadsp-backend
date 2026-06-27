@@ -12453,11 +12453,9 @@ async def _sc_weights(center):
 # BLOQUE 4 – Generador de plantilla de turno
 # ──────────────────────────────────────────────
 
-_PLANTILLA_PROMPT = """
-Eres un extractor de datos ESTRICTAMENTE VISUAL de capturas de pantalla de Amazon DSP.
-Se te envían DOS imágenes:
-  IMAGEN 1 = Cortex (plataforma Amazon): lista de DAs con ruta asignada y hora de salida de ruta.
-  IMAGEN 2 = Plataforma de furgonetas: asignación DA → matrícula de furgoneta.
+_PROMPT_CORTEX = """
+Eres un extractor de datos de una captura de pantalla de Cortex (plataforma Amazon DSP).
+La imagen muestra una lista de rutas con sus conductores (DAs) y horas de salida.
 
 Devuelve ÚNICAMENTE un JSON válido, sin texto adicional, sin markdown, sin bloques de código.
 
@@ -12465,27 +12463,44 @@ Formato exacto:
 {
   "week": <número de semana ISO como entero, o null si no aparece>,
   "date": "<DD/MM/YYYY visible en la imagen, o null si no aparece>",
-  "rows": [
+  "rutas": [
     {
-      "ruta": "<código exacto de ruta tal como aparece, p.ej. CA_A44 — null si no legible>",
-      "conductor": "<nombre completo exacto en MAYÚSCULAS tal como aparece — null si no legible>",
-      "movil": "<número de teléfono o ID de dispositivo exacto — null si no aparece>",
-      "furgo": "<matrícula exacta tal como aparece en imagen 2, p.ej. 7906NFX — null si no legible>",
-      "h_salida_cortex": "<hora de salida HH:MM exacta visible en imagen 1 para este DA — null si no aparece>",
-      "observaciones": ""
+      "ruta": "<código exacto de ruta tal como aparece, p.ej. CA_A44>",
+      "conductor": "<nombre(s) completo(s) del DA o DAs en MAYÚSCULAS exactamente como aparecen>",
+      "h_salida": "<hora de salida HH:MM del DA según Cortex — null si no aparece>"
     }
   ]
 }
 
-REGLAS ABSOLUTAS — NO LAS IGNORES:
-1. Extrae ÚNICAMENTE datos que puedas leer con total claridad en las imágenes.
-2. Si un dato no está claramente visible, pon null. NUNCA inventes ni supongas.
-3. El cruce entre imágenes se hace por nombre exacto del DA. Si los nombres no coinciden con certeza, deja furgo: null.
-4. No dupliques filas. Un DA = una fila.
-5. Ordena por código de ruta alfabéticamente.
-6. Si las imágenes no corresponden a Cortex/plataforma DSP, devuelve: {"error": "imagen no reconocida"}
-7. h_salida_cortex es la hora a la que el DA debe salir según Cortex (hora de inicio de ruta).
-   Es el único campo de hora que extraes de las imágenes. Las demás horas las calcula el sistema.
+REGLAS:
+1. Extrae ÚNICAMENTE lo que puedas leer con total claridad. Null si no está claro.
+2. Algunos códigos de ruta pueden estar incompletos (p.ej. "2..." en lugar de CA_A2X). Extrae lo que veas.
+3. Si hay múltiples DAs en una ruta, incluye todos los nombres separados por " / ".
+4. No dupliques rutas.
+5. Ordena por código de ruta.
+"""
+
+_PROMPT_PLATAFORMA = """
+Eres un extractor de datos de una captura de pantalla de una plataforma de gestión de furgonetas DSP.
+La imagen muestra una lista de conductores (DAs) con la furgoneta (matrícula) asignada a cada uno.
+
+Devuelve ÚNICAMENTE un JSON válido, sin texto adicional, sin markdown, sin bloques de código.
+
+Formato exacto:
+{
+  "asignaciones": [
+    {
+      "conductor": "<nombre completo del DA exactamente como aparece en la imagen>",
+      "furgo": "<matrícula de la furgoneta exactamente como aparece, p.ej. 7906NFX o 7906 NFX>",
+      "movil": "<número de teléfono o código de dispositivo si aparece, null si no>"
+    }
+  ]
+}
+
+REGLAS:
+1. Extrae ÚNICAMENTE lo que puedas leer con total claridad. Null si no está claro.
+2. Las matrículas pueden tener formato con o sin espacio (7906NFX o 7906 NFX). Cópialas exactamente.
+3. No dupliques conductores.
 """
 
 
@@ -12624,6 +12639,35 @@ def _build_plantilla_excel(rows: list, red_routes: set, week_num, fecha_str: str
     return buf.getvalue()
 
 
+def _name_tokens(name: str) -> set:
+    """Normaliza un nombre a tokens de palabras >= 3 letras para cruce fuzzy."""
+    import unicodedata
+    s = unicodedata.normalize("NFD", name.upper())
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")  # quita tildes
+    return {w for w in s.split() if len(w) >= 3}
+
+
+def _match_score(name_a: str, name_b: str) -> int:
+    """Cuántos tokens comparten dos nombres (sin tildes, mayúsculas)."""
+    return len(_name_tokens(name_a) & _name_tokens(name_b))
+
+
+async def _gemini_extract(client, model_name: str, prompt: str, img_bytes: bytes) -> dict:
+    from google.genai import types as genai_types
+    resp = await asyncio.wait_for(
+        asyncio.to_thread(
+            lambda: client.models.generate_content(
+                model=model_name,
+                contents=[prompt, genai_types.Part.from_bytes(data=img_bytes, mime_type=_mime_type(img_bytes))],
+                config=genai_types.GenerateContentConfig(temperature=0.0),
+            )
+        ),
+        timeout=120,
+    )
+    raw = _strip_markdown_json((resp.text or "").strip())
+    return json.loads(raw)
+
+
 # ── Paso 1: extraer datos con Gemini, devuelve JSON para preview ──
 @app.post("/api/tools/plantilla-extraer", dependencies=[Depends(require_admin)])
 async def plantilla_extraer(
@@ -12634,34 +12678,14 @@ async def plantilla_extraer(
     plat_bytes   = await plataforma.read()
 
     try:
-        from google.genai import types as genai_types
-        client = _gemini_client_plantilla()
+        client     = _gemini_client_plantilla()
         model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-        contents = [
-            _PLANTILLA_PROMPT,
-            "IMAGEN 1 – Cortex (rutas/conductores/hora salida):",
-            genai_types.Part.from_bytes(data=cortex_bytes, mime_type=_mime_type(cortex_bytes)),
-            "IMAGEN 2 – Plataforma furgonetas (DA → matrícula):",
-            genai_types.Part.from_bytes(data=plat_bytes,   mime_type=_mime_type(plat_bytes)),
-        ]
-
-        resp = await asyncio.wait_for(
-            asyncio.to_thread(
-                lambda: client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=genai_types.GenerateContentConfig(temperature=0.0),
-                )
-            ),
-            timeout=120,
+        # Dos llamadas en paralelo: una por imagen
+        cortex_data, plat_data = await asyncio.gather(
+            _gemini_extract(client, model_name, _PROMPT_CORTEX, cortex_bytes),
+            _gemini_extract(client, model_name, _PROMPT_PLATAFORMA, plat_bytes),
         )
-
-        raw  = _strip_markdown_json((resp.text or "").strip())
-        data = json.loads(raw)
-
-        if "error" in data:
-            raise HTTPException(422, f"Gemini: {data['error']}")
 
     except asyncio.TimeoutError:
         raise HTTPException(504, "Gemini tardó demasiado. Intenta de nuevo.")
@@ -12674,23 +12698,43 @@ async def plantilla_extraer(
         raise HTTPException(500, str(e))
 
     from datetime import date as _date
-    week_num  = data.get("week")  or _date.today().isocalendar()[1]
-    fecha_str = data.get("date")  or _date.today().strftime("%d/%m/%Y")
+    week_num  = cortex_data.get("week")  or _date.today().isocalendar()[1]
+    fecha_str = cortex_data.get("date")  or _date.today().strftime("%d/%m/%Y")
 
-    # Calcular horas a partir de h_salida_cortex
+    asignaciones = plat_data.get("asignaciones", [])  # [{conductor, furgo, movil}]
+
     rows_out = []
-    for row in data.get("rows", []):
-        h_salida = row.get("h_salida_cortex") or ""
+    for ruta_row in cortex_data.get("rutas", []):
+        ruta      = ruta_row.get("ruta") or ""
+        conductor = ruta_row.get("conductor") or ""
+        h_salida  = ruta_row.get("h_salida") or ""
+
+        # Cruce por mejor coincidencia de tokens de nombre
+        furgo = ""
+        movil = ""
+        best_score = 0
+        best_asig  = None
+        for asig in asignaciones:
+            sc = _match_score(conductor, asig.get("conductor") or "")
+            if sc > best_score:
+                best_score = sc
+                best_asig  = asig
+
+        # Umbral: al menos 2 tokens en común para considerar match
+        if best_asig and best_score >= 2:
+            furgo = (best_asig.get("furgo") or "").replace(" ", "")
+            movil = best_asig.get("movil") or ""
+
         h_llegada, h_bajada = _calc_horas(h_salida)
         rows_out.append({
-            "ruta":          row.get("ruta")      or "",
-            "conductor":     row.get("conductor") or "",
-            "movil":         row.get("movil")     or "",
-            "furgo":         row.get("furgo")     or "",
+            "ruta":          ruta,
+            "conductor":     conductor,
+            "movil":         movil,
+            "furgo":         furgo,
             "h_salida":      h_salida,
             "h_bajada":      h_bajada,
             "h_llegada":     h_llegada,
-            "observaciones": row.get("observaciones") or "",
+            "observaciones": "",
         })
 
     return {"week": week_num, "date": fecha_str, "rows": rows_out}
