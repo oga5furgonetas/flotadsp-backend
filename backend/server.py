@@ -11425,6 +11425,16 @@ _SC_METRICS = [
     {"key": "ndcr", "label": "Capacidad día siguiente", "group": "capacity", "unit": "%", "dir": 1, "manual": True},
 ]
 
+# Pesos semilla (% del score total): distribución uniforme dentro de cada pilar.
+# Se sobreescriben por centro si el usuario sube el Excel de pesos de Amazon.
+# Safety 40% (7 métricas), Quality 30% (8 métricas), Capacity 30% (1 métrica).
+_SC_SEED_WEIGHTS = {
+    "fico": 6, "speeding": 6, "mentor": 6, "vsa": 6, "whc": 6, "cas": 5, "boc": 5,
+    "dcr": 4, "dnr_dpmo": 4, "lor_dpmo": 4, "dsc_dpmo": 4,
+    "cec_dpmo": 4, "cdf": 4, "pod": 4, "cc": 2,
+    "ndcr": 30,
+}
+
 # Sembrados consistentes con tus scorecards reales (W21 PDF + W23). Se afinan solos.
 _SC_SEED_THR = {
     "fico": {"fantastic": 800, "great": 750, "fair": 700},
@@ -11537,18 +11547,18 @@ def _score_to_tier(score):
 
 
 def _sc_next_target(value, tier, thr, direction):
-    """Qué valor hace falta para subir al siguiente tier (None si ya Fantastic)."""
-    if tier == "Fantastic" or value is None or thr is None:
+    """Qué valor hace falta para subir al siguiente tier."""
+    if value is None or thr is None or tier == "Fantastic Plus":
         return None
-    nxt = {"Poor": "fair", "Fair": "great", "Great": "fantastic"}.get(tier)
+    nxt = {"Poor": "fair", "Fair": "great", "Great": "fantastic", "Fantastic": "fantastic_plus"}.get(tier)
     if not nxt:
         return None
-    target = thr.get(nxt)
+    target = thr.get(nxt) or (thr.get("fantastic") if nxt == "fantastic_plus" else None)
     if target is None:
         return None
     gap = round((target - value) if direction > 0 else (value - target), 2)
-    return {"to_tier": {"fair": "Fair", "great": "Great", "fantastic": "Fantastic"}[nxt],
-            "target": target, "gap": gap}
+    label = {"fair": "Fair", "great": "Great", "fantastic": "Fantastic", "fantastic_plus": "Fantastic Plus"}[nxt]
+    return {"to_tier": label, "target": target, "gap": gap}
 
 
 async def _sc_thresholds(center):
@@ -12630,10 +12640,15 @@ async def import_weights(file: UploadFile = File(...), _=Depends(require_admin))
 
 
 async def _sc_weights(center):
-    doc = await db.scorecard_weights.find_one({"center": center}, {"_id": 0})
-    if not doc:
-        doc = await db.scorecard_weights.find_one({"center": "GLOBAL"}, {"_id": 0})
-    return {k: v for k, v in (doc or {}).items() if k not in ("center", "week")}
+    """Pesos por métrica. Prioridad: centro > GLOBAL > semilla uniforme por pilar."""
+    weights = dict(_SC_SEED_WEIGHTS)
+    for c in ("GLOBAL", center):
+        if not c:
+            continue
+        doc = await db.scorecard_weights.find_one({"center": c}, {"_id": 0})
+        if doc:
+            weights.update({k: v for k, v in doc.items() if k not in ("center", "week") and isinstance(v, (int, float))})
+    return weights
 
 
 # ──────────────────────────────────────────────
