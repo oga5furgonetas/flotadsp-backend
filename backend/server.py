@@ -12347,41 +12347,91 @@ async def ratios_raw(center: str, desde: str, hasta: str, _=Depends(require_admi
 
 @api_router.get("/scorecard/predict")
 async def scorecard_predict(center: str, week: Optional[str] = None, _=Depends(require_admin)):
-    """Predicción REAL de la semana en curso con los ratios diarios subidos +
-    umbrales de tus scorecards. Sin valores fijos."""
+    """Predicción completa de la semana: usa TODOS los datos disponibles
+    (oficial PDF > manual > resumen semanal > ratios diarios) para las 16 métricas.
+    Calcula el score global exacto y el gap al siguiente tier."""
     if not week:
         last = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
         week, _s = _sun_sat_week(last)
     sun, sat = _sun_sat_week(week)
-    thr = await _sc_thresholds(center)
-    vals, dias = await _ratios_week_values(center, sun, sat)
-
-    metrics = []
-    for m in _SC_METRICS:
-        if m["group"] != "quality":
-            continue  # los ratios solo dan CALIDAD; Seguridad/Capacidad son manuales
-        v = vals.get(m["key"])
-        t = _sc_tier(v, thr.get(m["key"]), m["dir"]) if v is not None else None
-        metrics.append({"key": m["key"], "label": m["label"], "group": m["group"],
-                        "value": v, "tier": t, "next": _sc_next_target(v, t, thr.get(m["key"]), m["dir"]) if t else None})
-
-    # Tier de CALIDAD: conservador (en empate, el MÁS BAJO → sin falsos positivos)
-    tiers = [m["tier"] for m in metrics if m["tier"]]
-    if tiers:
-        cnt = {}
-        for t in tiers:
-            cnt[t] = cnt.get(t, 0) + 1
-        mx = max(cnt.values())
-        predicted_tier = min([t for t in cnt if cnt[t] == mx], key=lambda t: _TIER_ORDER.index(t))
-    else:
-        predicted_tier = None
-    # Confianza: % de días de la semana × % de métricas de calidad con dato
-    qkeys = [m["key"] for m in _SC_METRICS if m["group"] == "quality"]
-    con_dato = sum(1 for k in qkeys if vals.get(k) is not None)
-    confidence = round((len(dias) / 7) * (con_dato / max(1, len(qkeys))) * 100) if dias else 0
-
-    # delta vs última scorecard oficial
     wnum = _sun_to_week_num(sun)
+    thr = await _sc_thresholds(center)
+    weights = await _sc_weights(center)
+
+    # Todas las fuentes disponibles (mismo orden de prioridad que /scorecard/full)
+    ratio_vals, dias = await _ratios_week_values(center, sun, sat)
+    live_doc = await db.scorecard_live.find_one({"center": center, "week": sun}, {"_id": 0})
+    live_vals = (live_doc or {}).get("values", {})
+    wk_doc = await db.scorecard_weekly.find_one({"center": center, "week": wnum}, {"_id": 0})
+    week_vals = (wk_doc or {}).get("values", {})
+    off = await db.scorecard_official.find_one({"center": center, "week": wnum}, {"_id": 0})
+    off_metrics = {mm.get("key"): mm for mm in (off.get("metrics") if off else [])}
+
+    # Baseline estimado de la última scorecard conocida (Safety/Capacity)
+    base = await db.scorecard_official.find_one(
+        {"center": center, "week": {"$lt": wnum}}, {"_id": 0}, sort=[("week", -1)])
+    base_metrics = {mm.get("key"): mm for mm in (base.get("metrics") if base else [])}
+
+    metrics_out = []
+    fuentes_usadas = set()
+    for m in _SC_METRICS:
+        if off_metrics.get(m["key"]) and off_metrics[m["key"]].get("value") is not None:
+            v = off_metrics[m["key"]].get("value")
+            src = "oficial"
+        elif live_vals.get(m["key"]) is not None:
+            v = live_vals[m["key"]]
+            src = "manual"
+        elif week_vals.get(m["key"]) is not None:
+            v = week_vals[m["key"]]
+            src = "resumen"
+        elif ratio_vals.get(m["key"]) is not None:
+            v = ratio_vals[m["key"]]
+            src = "ratios"
+        elif base_metrics.get(m["key"]) and base_metrics[m["key"]].get("value") is not None:
+            # Para Safety/Capacity: arrastra última scorecard conocida
+            v = base_metrics[m["key"]]["value"]
+            src = "estimado"
+        else:
+            v = None
+            src = None
+        if src:
+            fuentes_usadas.add(src)
+        t = _sc_tier(v, thr.get(m["key"]), m["dir"]) if v is not None else None
+        metrics_out.append({"key": m["key"], "label": m["label"], "group": m["group"],
+                            "unit": m.get("unit"), "dir": m["dir"],
+                            "value": v, "tier": t, "source": src,
+                            "thr": thr.get(m["key"]),
+                            "next": _sc_next_target(v, t, thr.get(m["key"]), m["dir"]) if t else None})
+
+    # Score global ponderado (igual que /scorecard/full)
+    score_calc, wsum, nused = _overall_score(metrics_out, weights)
+    predicted_tier = _score_to_tier(score_calc) if score_calc is not None else None
+
+    # Gap al siguiente tier (cuánto score falta para subir)
+    gap_to_next = None
+    next_tier_name = None
+    if score_calc is not None:
+        for threshold, name in _OVERALL_TIER_BANDS:
+            if score_calc < threshold:
+                gap_to_next = round(threshold - score_calc, 2)
+                next_tier_name = name
+                break  # primer tier por encima
+
+    # Cobertura del peso total
+    peso_total = sum(v for v in weights.values() if isinstance(v, (int, float)))
+    cobertura = round(wsum / peso_total * 100) if peso_total else 0
+
+    # Confianza: métricas con dato real (no estimado) / total métricas con peso
+    n_real = sum(1 for m in metrics_out if m["source"] in ("oficial", "manual", "resumen", "ratios") and m["value"] is not None)
+    n_total = sum(1 for m in metrics_out if (weights.get(m["key"]) or 0) > 0)
+    confidence = round(n_real / max(1, n_total) * 100)
+
+    helps = [m["label"] for m in metrics_out if m["tier"] in ("Fantastic", "Fantastic Plus")]
+    hurts = [{"label": m["label"], "tier": m["tier"], "value": m["value"], "unit": m.get("unit")}
+             for m in metrics_out if m["tier"] in ("Fair", "Poor")]
+    faltan = [m["label"] for m in metrics_out if m["value"] is None]
+
+    # Delta vs scorecard oficial anterior
     prev = await db.scorecard_official.find_one(
         {"center": center, "week": {"$lt": wnum}}, {"_id": 0}, sort=[("week", -1)])
     delta = None
@@ -12389,15 +12439,21 @@ async def scorecard_predict(center: str, week: Optional[str] = None, _=Depends(r
         delta = {"week": prev.get("week"), "tier": prev.get("overall_tier"),
                  "score": prev.get("overall_score")}
 
-    helps = [m["label"] for m in metrics if m["tier"] in ("Fantastic", "Fantastic Plus")]
-    hurts = [{"label": m["label"], "tier": m["tier"]} for m in metrics if m["tier"] in ("Fair", "Poor")]
-    faltan = [m["label"] for m in _SC_METRICS if vals.get(m["key"]) is None]
-
-    return {"center": center, "desde": sun, "hasta": sat, "dias_con_datos": dias,
-            "predicted_tier": predicted_tier, "confidence": confidence,
-            "metrics": metrics, "ayudan": helps, "empeoran": hurts,
-            "faltan_datos": faltan, "delta_anterior": delta,
-            "fuentes": {"ratios_dias": len(dias)}}
+    return {
+        "center": center, "desde": sun, "hasta": sat, "week_num": wnum,
+        "dias_con_datos": dias,
+        "predicted_tier": predicted_tier,
+        "predicted_score": score_calc,
+        "gap_to_next": gap_to_next,
+        "next_tier": next_tier_name,
+        "confidence": confidence,
+        "cobertura_peso": cobertura,
+        "metrics": metrics_out,
+        "ayudan": helps, "empeoran": hurts, "faltan_datos": faltan,
+        "delta_anterior": delta,
+        "fuentes": sorted(fuentes_usadas),
+        "estimado_desde": (base.get("week") if base and "estimado" in fuentes_usadas else None),
+    }
 
 
 # Columna del Excel de umbrales → (clave métrica, dirección +1/-1)
