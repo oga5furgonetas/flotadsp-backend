@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, Upload, Trophy, ChevronLeft, ChevronRight, Pencil, Check, X,
   TrendingUp, TrendingDown, Minus, RefreshCw, FileText, Trash2, Info,
-  ChevronDown, ChevronUp, RotateCcw,
+  ChevronDown, ChevronUp, RotateCcw, ExternalLink, BookOpen, AlertCircle,
 } from 'lucide-react'
 import {
   getScorecardFull, setScorecardValue,
@@ -39,6 +39,38 @@ const GROUP_CFG = {
   capacity: { label: 'Capacidad',                weight: '30%', color: 'text-purple-300' },
 }
 
+// Dónde encontrar cada métrica en el portal de Amazon DSP
+// Cada entrada: { tipo, archivo, pasos, url? }
+// tipo: pdf | cortex | mentor | compliance
+const FUENTE_METRICA = {
+  // Safety & Compliance
+  fico:     { tipo: 'mentor',     archivo: 'Station Performance Report',      pasos: ['Amazon Mentor', 'Station Reports', 'Selecciona tu estación', 'Export → Excel/CSV'] },
+  speeding: { tipo: 'mentor',     archivo: 'Station Performance Report',      pasos: ['Amazon Mentor', 'Station Reports', 'Selecciona tu estación', 'Export → Excel/CSV'] },
+  mentor:   { tipo: 'mentor',     archivo: 'Station Performance Report',      pasos: ['Amazon Mentor', 'Station Reports', 'Selecciona tu estación', 'Export → Excel/CSV'] },
+  vsa:      { tipo: 'pdf',        archivo: 'Scorecard PDF oficial semanal',   pasos: ['DSP Portal', 'Performance', 'Scorecard', 'Descargar PDF de la semana'] },
+  whc:      { tipo: 'compliance', archivo: 'Scorecard PDF o Compliance',      pasos: ['DSP Portal', 'Compliance', 'Working Hours Compliance'] },
+  cas:      { tipo: 'pdf',        archivo: 'Scorecard PDF oficial semanal',   pasos: ['DSP Portal', 'Performance', 'Scorecard', 'Descargar PDF de la semana'] },
+  boc:      { tipo: 'pdf',        archivo: 'Scorecard PDF oficial semanal',   pasos: ['DSP Portal', 'Performance', 'Scorecard', 'Solo disponible en el PDF'] },
+  // Quality
+  dcr:      { tipo: 'cortex',     archivo: 'Resumen de entregas o Descripción general', pasos: ['DSP Portal', 'Cortex', 'Delivery overview / Descripción general', 'Export → Excel o CSV'] },
+  dnr_dpmo: { tipo: 'cortex',     archivo: 'Resumen de entregas o Descripción general', pasos: ['DSP Portal', 'Cortex', 'Delivery overview / Resumen de entregas', 'Export → Excel o CSV'] },
+  lor_dpmo: { tipo: 'cortex',     archivo: 'Descripción general (Cortex)',    pasos: ['DSP Portal', 'Cortex', 'Delivery overview', 'Export → Excel/CSV (columna "Lost on Road")'] },
+  dsc_dpmo: { tipo: 'cortex',     archivo: 'Descripción general (Cortex)',    pasos: ['DSP Portal', 'Cortex', 'Delivery overview', 'Export → Excel/CSV (columna "DSC")'] },
+  cec_dpmo: { tipo: 'pdf',        archivo: 'Scorecard PDF o sección Escalaciones', pasos: ['DSP Portal', 'Performance', 'Scorecard PDF', 'O: Customer Contact Escalations → Export'] },
+  cdf:      { tipo: 'pdf',        archivo: 'Scorecard PDF oficial semanal',   pasos: ['DSP Portal', 'Performance', 'Scorecard PDF', 'Valor visible en el PDF de la semana'] },
+  pod:      { tipo: 'cortex',     archivo: 'Resumen de entregas o Descripción general', pasos: ['DSP Portal', 'Cortex', 'Delivery overview', 'Export → Excel/CSV (columna "POD")'] },
+  cc:       { tipo: 'pdf',        archivo: 'Scorecard PDF oficial semanal',   pasos: ['DSP Portal', 'Performance', 'Scorecard PDF', 'Solo disponible en el PDF'] },
+  // Capacity
+  ndcr:     { tipo: 'pdf',        archivo: 'Scorecard PDF o Capacity Planning', pasos: ['DSP Portal', 'Performance', 'Scorecard PDF', 'O: Capacity → Same-day standing'] },
+}
+
+const TIPO_CFG = {
+  pdf:        { dot: 'bg-emerald-400', label: 'PDF Scorecard', cls: 'text-emerald-400' },
+  cortex:     { dot: 'bg-cyan-400',    label: 'Cortex Excel',  cls: 'text-cyan-400' },
+  mentor:     { dot: 'bg-purple-400',  label: 'Mentor',        cls: 'text-purple-400' },
+  compliance: { dot: 'bg-orange-400',  label: 'Compliance',    cls: 'text-orange-400' },
+}
+
 function addDays(dateStr, n) {
   const d = new Date(dateStr + 'T12:00:00Z')
   d.setUTCDate(d.getUTCDate() + n)
@@ -58,7 +90,7 @@ function fmtVal(v, unit) {
 }
 
 // ── TierBadge ─────────────────────────────────────────────────────────────────
-function TierBadge({ tier, size = 'sm' }) {
+function TierBadge({ tier }) {
   const cfg = tierCfg(tier)
   if (!tier) return <span className="text-xs text-dark-600">Sin datos</span>
   return (
@@ -66,6 +98,41 @@ function TierBadge({ tier, size = 'sm' }) {
       <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`} />
       {tier}
     </span>
+  )
+}
+
+// ── MetricSourceTooltip ────────────────────────────────────────────────────────
+function MetricSourceTooltip({ metricKey }) {
+  const [show, setShow] = useState(false)
+  const guide = FUENTE_METRICA[metricKey]
+  if (!guide) return null
+  const tc = TIPO_CFG[guide.tipo] || TIPO_CFG.pdf
+  return (
+    <div className="relative">
+      <button
+        onMouseEnter={() => setShow(true)}
+        onMouseLeave={() => setShow(false)}
+        onClick={() => setShow(s => !s)}
+        className="flex items-center gap-0.5 opacity-40 hover:opacity-100 transition-opacity"
+        title="Dónde encontrar este dato"
+      >
+        <span className={`h-1.5 w-1.5 rounded-full ${tc.dot}`} />
+        <Info size={9} className={tc.cls} />
+      </button>
+      {show && (
+        <div className="absolute left-0 top-5 z-50 w-64 rounded-lg border border-dark-600 bg-dark-850 p-3 shadow-xl">
+          <div className={`mb-1 text-[10px] font-bold ${tc.cls}`}>{tc.label}</div>
+          <div className="mb-2 text-[10px] text-dark-300">{guide.archivo}</div>
+          <div className="space-y-0.5">
+            {guide.pasos.map((p, i) => (
+              <div key={i} className="flex items-center gap-1 text-[10px] text-dark-400">
+                <span className="text-dark-600">{i + 1}.</span> {p}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -98,11 +165,12 @@ function MetricRow({ m, weekSun, center, onSaved }) {
 
   return (
     <div className="flex items-center gap-2 rounded-lg border border-dark-800 bg-dark-900 px-3 py-2">
+      <MetricSourceTooltip metricKey={m.key} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-xs font-medium text-dark-200">{m.label}</div>
         {next && (
           <div className="mt-0.5 text-[10px] text-dark-500">
-            Falta <span className="text-orange-400">{next.gap} {m.unit}</span> para {next.to_tier.fantastic || next.to_tier.great || next.to_tier.fair}
+            Falta <span className="text-orange-400">{next.gap} {m.unit}</span> para {next.to_tier?.fantastic || next.to_tier?.great || next.to_tier?.fair}
           </div>
         )}
       </div>
@@ -149,10 +217,10 @@ function CategoryCard({ groupKey, tier, metrics }) {
     <div className={`rounded-xl border p-4 ${tc.ring ? `ring-1 ${tc.ring}` : ''} border-dark-800 bg-dark-900`}>
       <div className="mb-2 flex items-center justify-between">
         <span className={`text-xs font-semibold uppercase tracking-wide ${cfg.color}`}>{cfg.label}</span>
-        <span className="text-[10px] text-dark-500">{cfg.weight} peso</span>
+        <span className="text-[10px] text-dark-500">{cfg.weight}</span>
       </div>
       <TierBadge tier={tier} />
-      <div className="mt-2 text-[10px] text-dark-600">{filled}/{metrics.length} métricas con dato</div>
+      <div className="mt-2 text-[10px] text-dark-600">{filled}/{metrics.length} con dato</div>
     </div>
   )
 }
@@ -160,7 +228,10 @@ function CategoryCard({ groupKey, tier, metrics }) {
 // ── DailyTrendTable ───────────────────────────────────────────────────────────
 function DailyTrendTable({ trend }) {
   if (!trend?.dias?.length) return (
-    <p className="text-xs text-dark-500">Sin datos diarios esta semana. Sube el Excel de Cortex para verlo aquí.</p>
+    <div className="text-xs text-dark-500 space-y-1">
+      <p>Sin datos diarios esta semana.</p>
+      <p className="text-dark-600">Sube el Excel de "Descripción general" de Cortex (DSP Portal → Cortex → Export).</p>
+    </div>
   )
   return (
     <div className="overflow-x-auto">
@@ -223,6 +294,123 @@ function DailyTrendTable({ trend }) {
   )
 }
 
+// ── ImportGuide ───────────────────────────────────────────────────────────────
+function ImportGuide({ center, fileRef, uploadBusy, onUpload }) {
+  const [open, setOpen] = useState(false)
+  const FILES = [
+    {
+      id: 'pdf',
+      color: 'emerald',
+      icon: '📄',
+      titulo: 'Scorecard PDF oficial semanal',
+      desc: 'El más importante. Contiene todas las métricas de Safety, CAS, BOC, CC, Capacity y más.',
+      pasos: [
+        'Entra en el portal Amazon DSP (logistics.amazon.es)',
+        'Ve a Performance → Scorecard',
+        'Haz clic en la semana que quieras (semana pasada)',
+        'Descarga el PDF del informe semanal',
+        'Súbelo aquí → el sistema extrae todos los valores automáticamente',
+      ],
+      metricas: 'FICO, SES, Mentor Adoption, VSA, WHC, CAS, BOC, CEC, CDF, CC, Capacity',
+    },
+    {
+      id: 'cortex',
+      color: 'cyan',
+      icon: '📊',
+      titulo: 'Descripción general / Resumen de entregas (Cortex)',
+      desc: 'Export de Cortex. Cubre DCR, DNR DPMO, POD y ratios diarios de calidad.',
+      pasos: [
+        'Entra en el portal Amazon DSP (logistics.amazon.es)',
+        'Ve a Cortex → "Descripción general" (o "Delivery overview")',
+        'Ajusta el rango de fechas a la semana actual (lunes a domingo)',
+        'Haz clic en Export → descarga el Excel o CSV',
+        'Súbelo aquí → el sistema detecta el tipo automáticamente',
+      ],
+      metricas: 'DCR, DNR DPMO, POD, Pérdido en ruta (LOF), DSC DPMO',
+    },
+    {
+      id: 'mentor',
+      color: 'purple',
+      icon: '🏍',
+      titulo: 'Amazon Mentor — Station Performance Report',
+      desc: 'Métricas de conducción: FICO score, eventos de velocidad y adopción del mentor.',
+      pasos: [
+        'Entra en mentor.amazon.com',
+        'Ve a Station Reports → selecciona tu estación (' + center + ')',
+        'Elige la semana actual',
+        'Export → descarga el Excel o CSV',
+        'Súbelo aquí',
+      ],
+      metricas: 'FICO (conducción segura), Eventos velocidad/100, Adopción Mentor',
+    },
+    {
+      id: 'html',
+      color: 'amber',
+      icon: '🌐',
+      titulo: 'Reporte diario HTML (Cortex)',
+      desc: 'El reporte diario de la estación en formato HTML. Se puede subir cada día para tener ratios diarios.',
+      pasos: [
+        'Entra en el portal Amazon DSP',
+        'Ve a Cortex → selecciona el día de hoy',
+        'Ctrl+S (o Archivo → Guardar página) → guarda como archivo .html',
+        'Súbelo aquí',
+      ],
+      metricas: 'DCR diario, DNR diario, POD diario',
+    },
+  ]
+
+  return (
+    <div className="card overflow-hidden">
+      <button onClick={() => setOpen(s => !s)} className="flex w-full items-center justify-between p-5">
+        <div className="flex items-center gap-2 text-sm font-semibold text-dark-200">
+          <BookOpen size={15} className="text-brand-400" />
+          Guía de importación · ¿Qué archivo descargo de Amazon?
+        </div>
+        {open ? <ChevronUp size={15} className="text-dark-500" /> : <ChevronDown size={15} className="text-dark-500" />}
+      </button>
+
+      {open && (
+        <div className="border-t border-dark-800 p-5 space-y-4">
+          {FILES.map(f => (
+            <div key={f.id} className={`rounded-xl border border-${f.color}-500/20 bg-${f.color}-500/5 p-4`}>
+              <div className="flex items-start gap-3">
+                <span className="text-xl">{f.icon}</span>
+                <div className="flex-1 min-w-0">
+                  <div className={`text-sm font-semibold text-${f.color}-300`}>{f.titulo}</div>
+                  <div className="mt-0.5 text-xs text-dark-400">{f.desc}</div>
+                  <div className={`mt-2 text-[10px] text-${f.color}-400/70`}>Cubre: {f.metricas}</div>
+                  <div className="mt-3 space-y-1">
+                    {f.pasos.map((p, i) => (
+                      <div key={i} className="flex items-start gap-2 text-[11px] text-dark-400">
+                        <span className={`shrink-0 rounded-full h-4 w-4 flex items-center justify-center text-[9px] font-bold bg-${f.color}-500/20 text-${f.color}-400`}>{i + 1}</span>
+                        {p}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          <div className="rounded-lg border border-brand-500/20 bg-brand-500/5 p-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-xs font-semibold text-brand-300">Subir archivo de {center}</div>
+                <div className="mt-0.5 text-[11px] text-dark-400">El sistema detecta automáticamente si es PDF, Cortex Excel, Mentor o HTML diario.</div>
+              </div>
+              <input ref={fileRef} type="file" accept=".pdf,.html,.htm,.xlsx,.xls,.xlsm,.csv" onChange={onUpload} className="hidden" id="sc-upload-guide" />
+              <label htmlFor="sc-upload-guide" className="btn-primary shrink-0 inline-flex cursor-pointer items-center gap-2">
+                {uploadBusy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                {uploadBusy ? 'Subiendo…' : 'Elegir archivo'}
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── BaremosEditor ─────────────────────────────────────────────────────────────
 function BaremosEditor({ full, center, onSaved }) {
   const [vals, setVals] = useState({})
@@ -237,7 +425,7 @@ function BaremosEditor({ full, center, onSaved }) {
       setMsg({ ok: true, t: `Baremos calibrados desde ${r.data.desde_scorecards} scorecard(s): ${r.data.calibradas.join(', ')}` })
       onSaved()
     } catch (e) {
-      setMsg({ ok: false, t: e?.response?.data?.detail || 'Error al calibrar.' })
+      setMsg({ ok: false, t: e?.response?.data?.detail || 'Error al calibrar. Asegúrate de haber subido el PDF oficial primero.' })
     } finally { setCalibBusy(false) }
   }
 
@@ -268,23 +456,28 @@ function BaremosEditor({ full, center, onSaved }) {
     <div>
       {msg && <div className={`mb-3 rounded-lg px-3 py-2 text-xs ${msg.ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{msg.t}</div>}
 
-      {/* Calibración automática */}
-      <div className="mb-4 flex items-start justify-between gap-4 rounded-lg border border-brand-500/20 bg-brand-500/5 px-4 py-3">
-        <div>
-          <p className="text-xs font-semibold text-brand-300">Calibrar automáticamente desde tus scorecards</p>
-          <p className="mt-0.5 text-[11px] text-dark-500">
-            Sube primero el PDF de la scorecard oficial de Amazon (semana pasada). El sistema lee los valores reales y los tiers que Amazon te asignó, y ajusta los umbrales de {center} para que coincidan exactamente.
-          </p>
+      <div className="mb-4 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-4 py-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-emerald-300">Calibrar baremos de {center} automáticamente</p>
+            <p className="mt-1 text-xs text-dark-400">
+              Sube el PDF de la scorecard oficial de Amazon de la semana pasada (Performance → Scorecard → PDF).
+              El sistema lee los valores reales y los tiers que Amazon te asignó, e infiere los umbrales exactos de {center}.
+            </p>
+            <p className="mt-2 text-[11px] text-dark-500">
+              ⚡ Si ya has subido el PDF arriba, haz clic en "Calibrar" y los baremos se ajustan solos.
+            </p>
+          </div>
+          <button onClick={calibrate} disabled={calibBusy}
+            className="shrink-0 flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-4 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-50">
+            {calibBusy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            Calibrar desde PDF
+          </button>
         </div>
-        <button onClick={calibrate} disabled={calibBusy}
-          className="shrink-0 flex items-center gap-1.5 rounded-lg bg-brand-500/20 px-3 py-1.5 text-xs font-semibold text-brand-300 hover:bg-brand-500/30 disabled:opacity-50">
-          {calibBusy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-          Calibrar
-        </button>
       </div>
 
       <p className="mb-4 text-xs text-dark-500">
-        O ajusta manualmente fila por fila. Los umbrales se guardan solo para {center}.
+        O ajusta manualmente fila por fila. Los baremos se guardan solo para <span className="text-dark-300 font-semibold">{center}</span> (cada estación tiene los suyos).
       </p>
       {groups.map(g => {
         const gm = full.metrics.filter(m => m.group === g)
@@ -298,11 +491,13 @@ function BaremosEditor({ full, center, onSaved }) {
                 const isBusy = busy === m.key
                 return (
                   <div key={m.key} className="flex flex-wrap items-center gap-2 rounded border border-dark-800 bg-dark-900 px-3 py-1.5">
-                    <span className="w-48 shrink-0 text-xs text-dark-300">{m.label}</span>
-                    <span className="text-[10px] text-dark-600">{m.unit}</span>
+                    <span className="w-44 shrink-0 text-xs text-dark-300">{m.label}</span>
+                    <span className="text-[10px] text-dark-600 w-10">{m.unit}</span>
                     {['fantastic', 'great', 'fair'].map(band => (
                       <div key={band} className="flex items-center gap-1">
-                        <span className="text-[10px] text-dark-500 capitalize">{band === 'fantastic' ? 'Fantastic' : band === 'great' ? 'Great' : 'Fair'}</span>
+                        <span className={`text-[10px] capitalize ${band === 'fantastic' ? 'text-green-500' : band === 'great' ? 'text-yellow-500' : 'text-orange-500'}`}>
+                          {band === 'fantastic' ? 'F+/F' : band === 'great' ? 'Great' : 'Fair'}
+                        </span>
                         <input
                           type="number"
                           step="0.01"
@@ -432,6 +627,7 @@ export default function Scorecard() {
   const overallCfg = tierCfg(full?.overall)
   const metrics = full?.metrics || []
   const byGroup = (g) => metrics.filter(m => m.group === g)
+  const hasScore = full?.overall != null || predict?.predicted_score != null
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
@@ -460,18 +656,40 @@ export default function Scorecard() {
 
       {full && (
         <>
-          {/* Overall tier banner */}
-          <div className={`rounded-xl border p-5 ${overallCfg.ring ? `ring-1 ${overallCfg.ring}` : ''} border-dark-800`}>
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
+          {/* Overall banner */}
+          <div className={`rounded-xl border p-5 ${hasScore && overallCfg.ring ? `ring-1 ${overallCfg.ring}` : ''} border-dark-800`}>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="min-w-0">
                 <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-dark-500">Resultado global</div>
-                <div className="flex items-center gap-3">
-                  <span className={`text-3xl font-bold ${overallCfg.text}`}>{full.overall || 'Sin datos'}</span>
-                  {full.overall_score != null && (
-                    <span className={`text-xl font-semibold ${overallCfg.text}`}>{Number(full.overall_score).toFixed(2)}</span>
-                  )}
-                </div>
-                <p className="mt-1 text-xs text-dark-500 max-w-md">{full.overall_method}</p>
+                {full.overall ? (
+                  <div className="flex items-baseline gap-3">
+                    <span className={`text-3xl font-bold ${overallCfg.text}`}>{full.overall}</span>
+                    {full.overall_score != null && (
+                      <span className={`text-xl font-mono font-semibold ${overallCfg.text}`}>{Number(full.overall_score).toFixed(2)}</span>
+                    )}
+                  </div>
+                ) : predict?.predicted_score != null ? (
+                  <div>
+                    <div className="flex items-baseline gap-3">
+                      <span className={`text-3xl font-bold tabular-nums ${tierCfg(predict.predicted_tier).text}`}>
+                        {Number(predict.predicted_score).toFixed(2)}
+                      </span>
+                      <TierBadge tier={predict.predicted_tier} />
+                    </div>
+                    <div className="mt-1 text-[11px] text-amber-400">
+                      {predict.gap_to_next != null
+                        ? `Te faltan ${Number(predict.gap_to_next).toFixed(2)} puntos para ${predict.next_tier}`
+                        : predict.predicted_tier === 'Fantastic Plus' ? '¡Ya estás en Fantastic Plus!' : ''}
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-dark-500">Predicción · {predict.confidence}% datos reales · {predict.cobertura_peso}% peso cubierto</div>
+                  </div>
+                ) : (
+                  <div>
+                    <span className="text-2xl font-bold text-dark-500">Sin datos</span>
+                    <p className="mt-1 text-[11px] text-dark-500">Faltan datos para la nota. Sube el PDF oficial o el resumen semanal de Cortex.</p>
+                  </div>
+                )}
+                {full.overall_method && <p className="mt-1 text-[10px] text-dark-600">{full.overall_method}</p>}
               </div>
               <div className="flex gap-3">
                 {['safety', 'quality', 'capacity'].map(g => (
@@ -479,6 +697,7 @@ export default function Scorecard() {
                 ))}
               </div>
             </div>
+
             {/* Options bar */}
             <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-dark-800 pt-3">
               <label className="flex cursor-pointer items-center gap-2 text-xs text-dark-400">
@@ -489,14 +708,14 @@ export default function Scorecard() {
                 />
                 Proyectar con última scorecard conocida (rellena Safety/Capacity)
               </label>
-              {!full.has_official && (
+              {!full.has_official && !full.estimacion_on && (
                 <span className="flex items-center gap-1 text-xs text-amber-400">
-                  <Info size={11} /> Sin scorecard oficial esta semana
+                  <AlertCircle size={11} /> Sin scorecard oficial · activa "Proyectar" para estimar Safety/Capacity
                 </span>
               )}
               {full.has_official && (
                 <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-400">
-                  Scorecard oficial cargada
+                  ✓ Scorecard oficial cargada
                 </span>
               )}
               {confirmReset ? (
@@ -537,10 +756,13 @@ export default function Scorecard() {
                         <MetricRow key={m.key} m={m} weekSun={full.week} center={center} onSaved={reload} />
                       ))}
                     </div>
-                    {g === 'safety' && (
-                      <p className="mt-2 text-[10px] text-dark-600">
-                        Seguridad se actualiza con la scorecard PDF semanal. Edita a mano si tienes los valores de Amazon.
-                      </p>
+                    {g === 'safety' && !byGroup('safety').some(m => m.value != null) && (
+                      <div className="mt-3 rounded-lg border border-blue-500/15 bg-blue-500/5 px-3 py-2">
+                        <p className="text-[11px] text-blue-400">
+                          Safety (40% del score) requiere el PDF oficial de Amazon.{' '}
+                          <span className="text-blue-300">DSP Portal → Performance → Scorecard → Descargar PDF</span>
+                        </p>
+                      </div>
                     )}
                   </div>
                 )
@@ -557,44 +779,42 @@ export default function Scorecard() {
                   </div>
                   {predict.predicted_tier || predict.predicted_score != null ? (
                     <>
-                      {/* Score exacto + tier */}
+                      {/* Score exacto */}
                       <div className="mb-3 rounded-lg border border-dark-700 bg-dark-950 px-4 py-3 text-center">
-                        {predict.predicted_score != null && (
-                          <div className={`text-3xl font-bold tabular-nums ${tierCfg(predict.predicted_tier).text}`}>
-                            {Number(predict.predicted_score).toFixed(2)}
-                          </div>
-                        )}
-                        <div className="mt-1">
-                          <TierBadge tier={predict.predicted_tier} />
+                        <div className={`text-4xl font-bold tabular-nums ${tierCfg(predict.predicted_tier).text}`}>
+                          {Number(predict.predicted_score).toFixed(2)}
                         </div>
+                        <div className="mt-1"><TierBadge tier={predict.predicted_tier} /></div>
                         {predict.gap_to_next != null && predict.next_tier && (
-                          <div className="mt-2 text-xs text-amber-400">
-                            Te faltan <span className="font-bold">{Number(predict.gap_to_next).toFixed(2)} puntos</span> para <span className="font-semibold">{predict.next_tier}</span>
+                          <div className="mt-2 rounded-md bg-amber-500/10 px-2 py-1 text-xs text-amber-400">
+                            Te faltan <span className="font-bold">{Number(predict.gap_to_next).toFixed(2)} pts</span> para <span className="font-semibold">{predict.next_tier}</span>
                           </div>
                         )}
                         {predict.predicted_tier === 'Fantastic Plus' && (
-                          <div className="mt-2 text-xs text-emerald-400 font-semibold">¡Ya estás en Fantastic Plus!</div>
+                          <div className="mt-2 rounded-md bg-emerald-500/10 px-2 py-1 text-xs text-emerald-400 font-semibold">
+                            ¡Ya estás en Fantastic Plus! 🏆
+                          </div>
                         )}
                       </div>
 
-                      {/* Cobertura y fuentes */}
-                      <div className="mb-3 flex items-center gap-2">
+                      {/* Cobertura */}
+                      <div className="mb-2 flex items-center gap-2">
                         <div className="h-1.5 flex-1 rounded-full bg-dark-800">
-                          <div className="h-1.5 rounded-full bg-brand-500" style={{ width: `${predict.confidence}%` }} />
+                          <div className="h-1.5 rounded-full bg-brand-500 transition-all" style={{ width: `${predict.confidence}%` }} />
                         </div>
-                        <span className="text-[10px] text-dark-400">{predict.confidence}% datos reales</span>
+                        <span className="text-[10px] text-dark-400">{predict.confidence}%</span>
                       </div>
-                      <p className="text-[10px] text-dark-500">
+                      <p className="text-[10px] text-dark-500 mb-3">
                         {predict.cobertura_peso}% del peso cubierto ·{' '}
-                        {predict.fuentes?.join(', ') || 'sin datos'}
-                        {predict.estimado_desde && ` · Safety/Capacity estimados de W${predict.estimado_desde}`}
+                        {predict.fuentes?.join(', ') || '—'}
+                        {predict.estimado_desde && ` · Safety estimado de W${predict.estimado_desde}`}
                       </p>
 
                       {predict.empeoran?.length > 0 && (
-                        <div className="mt-3">
-                          <div className="mb-1 text-[10px] font-semibold text-red-400">Arrastrando hacia abajo</div>
+                        <div className="mb-3">
+                          <div className="mb-1.5 text-[10px] font-semibold text-red-400 uppercase tracking-wide">⬇ Arrastrando el score</div>
                           {predict.empeoran.map((e, i) => (
-                            <div key={i} className="flex items-center justify-between gap-1 text-xs">
+                            <div key={i} className="flex items-center justify-between gap-1 py-0.5 text-xs">
                               <span className="truncate text-dark-400">{e.label}</span>
                               <div className="flex shrink-0 items-center gap-1">
                                 <TierBadge tier={e.tier} />
@@ -606,27 +826,33 @@ export default function Scorecard() {
                       )}
 
                       {predict.faltan_datos?.length > 0 && (
-                        <div className="mt-2">
-                          <div className="mb-1 text-[10px] font-semibold text-dark-500">Sin datos ({predict.faltan_datos.length})</div>
-                          {predict.faltan_datos.slice(0, 4).map((f, i) => (
+                        <div className="rounded-lg bg-dark-900 px-3 py-2">
+                          <div className="mb-1 text-[10px] font-semibold text-dark-500">Sin datos aún ({predict.faltan_datos.length} métricas)</div>
+                          {predict.faltan_datos.slice(0, 5).map((f, i) => (
                             <div key={i} className="text-[10px] text-dark-600">· {f}</div>
                           ))}
-                          {predict.faltan_datos.length > 4 && <div className="text-[10px] text-dark-600">y {predict.faltan_datos.length - 4} más…</div>}
+                          {predict.faltan_datos.length > 5 && <div className="text-[10px] text-dark-600">y {predict.faltan_datos.length - 5} más…</div>}
                         </div>
                       )}
 
                       {predict.delta_anterior && (
                         <div className="mt-3 border-t border-dark-800 pt-2 flex items-center gap-2 text-[10px] text-dark-500">
-                          Semana anterior W{predict.delta_anterior.week}:
+                          Sem. anterior W{predict.delta_anterior.week}:
                           <TierBadge tier={predict.delta_anterior.tier} />
                           {predict.delta_anterior.score != null && <span className="font-mono">{Number(predict.delta_anterior.score).toFixed(2)}</span>}
                         </div>
                       )}
                     </>
                   ) : (
-                    <div className="text-xs text-dark-500 space-y-1">
-                      <p>Sin datos suficientes para calcular el score.</p>
-                      <p className="text-dark-600">Sube el PDF de la scorecard oficial, el resumen semanal o el Excel de ratios diarios de Cortex.</p>
+                    <div className="space-y-3">
+                      <p className="text-xs text-dark-400">Aún no hay datos suficientes para calcular el score de esta semana.</p>
+                      <div className="rounded-lg border border-dark-700 bg-dark-900 p-3 text-[11px] text-dark-400 space-y-1.5">
+                        <div className="font-semibold text-dark-300 mb-2">Para ver la predicción, sube alguno de estos:</div>
+                        <div>📄 <span className="text-emerald-400">PDF oficial</span> → todas las métricas</div>
+                        <div>📊 <span className="text-cyan-400">Resumen de entregas</span> → DCR, DNR, POD</div>
+                        <div>🏍 <span className="text-purple-400">Mentor export</span> → FICO, velocidad</div>
+                        <div className="text-dark-600 pt-1">O activa "Proyectar con última scorecard" arriba para estimar Safety/Capacity.</div>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -642,7 +868,7 @@ export default function Scorecard() {
                         <span className="truncate text-dark-400">{m.label}</span>
                         <div className="flex shrink-0 items-center gap-1">
                           <TierBadge tier={m.tier} />
-                          {m.next && <span className="text-orange-400 text-[10px]">+{m.next.gap}{' '}{m.next.to_tier?.fantastic ? 'F' : 'G'}</span>}
+                          {m.next && <span className="text-orange-400 text-[10px]">+{m.next.gap}</span>}
                         </div>
                       </div>
                     ))}
@@ -664,21 +890,29 @@ export default function Scorecard() {
         </>
       )}
 
-      {/* Upload section */}
+      {/* Upload + guide */}
       <div className="card p-5">
         <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-dark-200"><Upload size={15} /> Subir datos de {center}</div>
         <p className="mb-3 text-xs text-dark-400">
-          Acepta 4 tipos de archivo del portal Amazon:
-          <span className="ml-1 text-dark-300">PDF (scorecard oficial semanal)</span>,{' '}
-          <span className="text-dark-300">Excel/CSV (Descripción general = ratios diarios, o Resumen de entregas)</span>,{' '}
-          <span className="text-dark-300">HTML (reporte diario de la estación)</span>.
-          El sistema detecta el tipo solo.
+          Acepta: <span className="text-dark-300">PDF scorecard oficial</span> · <span className="text-dark-300">Excel/CSV Cortex (ratios o resumen)</span> · <span className="text-dark-300">HTML reporte diario</span>.
+          El sistema detecta el tipo automáticamente.
         </p>
-        <input ref={fileRef} type="file" accept=".pdf,.html,.htm,.xlsx,.xls,.xlsm,.csv" onChange={onUpload} className="hidden" id="sc-upload" />
-        <label htmlFor="sc-upload" className="btn-primary inline-flex cursor-pointer items-center gap-2 disabled:opacity-50">
-          {uploadBusy ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
-          {uploadBusy ? 'Subiendo…' : 'Elegir archivo'}
-        </label>
+        <div className="flex flex-wrap items-center gap-3">
+          <input ref={fileRef} type="file" accept=".pdf,.html,.htm,.xlsx,.xls,.xlsm,.csv" onChange={onUpload} className="hidden" id="sc-upload" />
+          <label htmlFor="sc-upload" className="btn-primary inline-flex cursor-pointer items-center gap-2">
+            {uploadBusy ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+            {uploadBusy ? 'Subiendo…' : 'Elegir archivo'}
+          </label>
+
+          {/* Legend */}
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(TIPO_CFG).map(([k, v]) => (
+              <span key={k} className={`flex items-center gap-1 text-[10px] ${v.cls}`}>
+                <span className={`h-2 w-2 rounded-full ${v.dot}`} /> {v.label}
+              </span>
+            ))}
+          </div>
+        </div>
 
         {/* Sources list */}
         {sources.length > 0 && (
@@ -706,12 +940,12 @@ export default function Scorecard() {
         )}
       </div>
 
-      {/* Baremos (thresholds) */}
+      {/* Guía de importación */}
+      <ImportGuide center={center} fileRef={fileRef} uploadBusy={uploadBusy} onUpload={onUpload} />
+
+      {/* Baremos */}
       <div className="card p-5">
-        <button
-          onClick={() => setShowBaremos(s => !s)}
-          className="flex w-full items-center justify-between"
-        >
+        <button onClick={() => setShowBaremos(s => !s)} className="flex w-full items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-semibold text-dark-200">
             <Trophy size={15} /> Baremos (umbrales) de {center}
           </div>
