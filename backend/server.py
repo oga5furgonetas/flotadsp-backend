@@ -12485,6 +12485,10 @@ _PROMPT_PLATAFORMA = """
 Eres un extractor de datos de una captura de pantalla de una plataforma de gestión de furgonetas DSP.
 La imagen muestra filas con conductores (DAs) y su furgoneta asignada.
 
+Los nombres en la imagen aparecen en formato "Apellido(s), Nombre" (apellidos primero, luego coma, luego nombre).
+Debes invertirlos y devolverlos en formato "NOMBRE APELLIDO(S)" en MAYÚSCULAS.
+Ejemplo: "Rodriguez Arias, Andrea" → conductor: "ANDREA RODRIGUEZ ARIAS"
+
 La tabla tiene columnas. La ÚLTIMA columna de cada fila contiene el código de matrícula
 de la furgoneta (formato: 4 dígitos + 3 letras, p.ej. 7906NFX o 7906 NFX o 0116 MBP).
 Puede haber también una columna con tipo de contrato (ETT11, ETT20, ETT28, ETT30) — eso NO es la matrícula.
@@ -12495,18 +12499,17 @@ Formato exacto:
 {
   "asignaciones": [
     {
-      "conductor": "<nombre completo del DA exactamente como aparece>",
-      "furgo": "<código de la ÚLTIMA columna: 4 dígitos + espacio + 3 letras, p.ej. 7906 NFX>"
+      "conductor": "<NOMBRE APELLIDO(S) en MAYÚSCULAS, con el nombre primero>",
+      "furgo": "<código de la ÚLTIMA columna: 4 dígitos + 3 letras, p.ej. 7906NFX>"
     }
   ]
 }
 
 REGLAS:
-1. Extrae ÚNICAMENTE lo que puedas leer con claridad. Null si no está claro.
-2. La matrícula siempre tiene formato: 4 dígitos + 3 letras (con o sin espacio). Verifícalo.
-3. No confundas ETT11/ETT20/ETT28/ETT30 con la matrícula — esos son tipos de contrato.
-4. No dupliques conductores.
-5. Extrae TODOS los conductores visibles en la imagen.
+1. Extrae ÚNICAMENTE lo que puedas leer con claridad.
+2. Invierte siempre el orden: la imagen dice "Apellido, Nombre" → tú devuelves "NOMBRE APELLIDO".
+3. La matrícula siempre tiene formato 4 dígitos + 3 letras. No confundas con ETT11/ETT20/ETT28/ETT30.
+4. No dupliques conductores. Extrae TODOS los visibles.
 """
 
 
@@ -12645,17 +12648,43 @@ def _build_plantilla_excel(rows: list, red_routes: set, week_num, fecha_str: str
     return buf.getvalue()
 
 
-def _name_tokens(name: str) -> set:
-    """Normaliza un nombre a tokens de palabras >= 3 letras para cruce fuzzy."""
+def _normalize_name(name: str) -> str:
+    """Normaliza a mayúsculas sin tildes."""
     import unicodedata
     s = unicodedata.normalize("NFD", name.upper())
-    s = "".join(c for c in s if unicodedata.category(c) != "Mn")  # quita tildes
-    return {w for w in s.split() if len(w) >= 3}
+    return "".join(c for c in s if unicodedata.category(c) != "Mn")
 
 
-def _match_score(name_a: str, name_b: str) -> int:
-    """Cuántos tokens comparten dos nombres (sin tildes, mayúsculas)."""
-    return len(_name_tokens(name_a) & _name_tokens(name_b))
+def _name_tokens(name: str) -> list:
+    """Tokens de palabras >= 3 letras, ordenados por longitud desc."""
+    return sorted([w for w in _normalize_name(name).split() if len(w) >= 3], key=len, reverse=True)
+
+
+def _match_score(name_a: str, name_b: str) -> float:
+    """
+    Score de similitud entre dos nombres.
+    Cuenta tokens que coinciden exactamente O donde uno es prefijo del otro (>=4 chars).
+    Retorna número de coincidencias (puede ser fraccionario para prefijos).
+    """
+    tokens_a = _name_tokens(name_a)
+    tokens_b = _name_tokens(name_b)
+    score = 0.0
+    used_b = set()
+    for ta in tokens_a:
+        for i, tb in enumerate(tokens_b):
+            if i in used_b:
+                continue
+            if ta == tb:
+                score += 1.0
+                used_b.add(i)
+                break
+            # prefijo: el más corto es prefijo del más largo (min 4 chars)
+            short, long_ = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+            if len(short) >= 4 and long_.startswith(short):
+                score += 0.8
+                used_b.add(i)
+                break
+    return score
 
 
 async def _gemini_extract(client, model_name: str, prompt: str, img_bytes: bytes) -> dict:
@@ -12726,8 +12755,8 @@ async def plantilla_extraer(
                 best_score = sc
                 best_asig  = asig
 
-        # Umbral: al menos 2 tokens en común para considerar match
-        if best_asig and best_score >= 2:
+        # Umbral: score >= 1.6 (un apellido exacto + prefijo, o dos apellidos exactos)
+        if best_asig and best_score >= 1.6:
             furgo = (best_asig.get("furgo") or "").replace(" ", "")
             movil = best_asig.get("movil") or ""
 
