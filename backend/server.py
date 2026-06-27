@@ -11435,24 +11435,26 @@ _SC_SEED_WEIGHTS = {
     "ndcr": 30,
 }
 
-# Sembrados consistentes con tus scorecards reales (W21 PDF + W23). Se afinan solos.
+# Umbrales globales sembrados (se sobreescriben por centro con datos reales del PDF).
+# Fantastic se ajusta cuando el usuario sube el PDF oficial — los valores de "great"/"fair"
+# están basados en las proporciones habituales de Amazon Scorecard 3.0.
 _SC_SEED_THR = {
-    "fico": {"fantastic": 800, "great": 750, "fair": 700},
-    "speeding": {"fantastic": 2, "great": 5, "fair": 10},
-    "mentor": {"fantastic": 92, "great": 80, "fair": 70},
-    "vsa": {"fantastic": 98, "great": 95, "fair": 90},
-    "whc": {"fantastic": 98, "great": 95, "fair": 90},
-    "cas": {"fantastic": 98, "great": 95, "fair": 90},
-    "boc": {"fantastic": 98, "great": 95, "fair": 90},
-    "dcr": {"fantastic": 98.5, "great": 97.5, "fair": 96.5},
-    "dnr_dpmo": {"fantastic": 1500, "great": 2500, "fair": 4000},
-    "lor_dpmo": {"fantastic": 25, "great": 60, "fair": 150},
-    "dsc_dpmo": {"fantastic": 700, "great": 900, "fair": 1500},
-    "cec_dpmo": {"fantastic": 30, "great": 60, "fair": 100},
-    "cdf": {"fantastic": 1000, "great": 2500, "fair": 5000},
-    "pod": {"fantastic": 97.5, "great": 96, "fair": 94},
-    "cc": {"fantastic": 98, "great": 96, "fair": 94},
-    "ndcr": {"fantastic": 100, "great": 95, "fair": 90},
+    "fico":     {"fantastic": 810,  "great": 750,  "fair": 700},   # PDF: >=810 Fantastic
+    "speeding": {"fantastic": 5,    "great": 10,   "fair": 20},    # PDF: <=5 Fantastic
+    "mentor":   {"fantastic": 90,   "great": 80,   "fair": 70},    # PDF: >=90% Fantastic
+    "vsa":      {"fantastic": 98.5, "great": 95,   "fair": 90},    # PDF: >=98.5% Fantastic
+    "whc":      {"fantastic": 100,  "great": 95,   "fair": 90},    # PDF: 100% Fantastic
+    "cas":      {"fantastic": 100,  "great": 95,   "fair": 90},    # PDF: In Compliance = 100%
+    "boc":      {"fantastic": 100,  "great": 95,   "fair": 90},
+    "dcr":      {"fantastic": 98.5, "great": 97.5, "fair": 96.5},  # Varía por estación; DGA1: 99%
+    "dnr_dpmo": {"fantastic": 1500, "great": 2500, "fair": 4000},  # Varía por estación; DGA1: 1080
+    "lor_dpmo": {"fantastic": 0,    "great": 50,   "fair": 150},   # PDF: <=0 Fantastic
+    "dsc_dpmo": {"fantastic": 605,  "great": 900,  "fair": 1500},  # PDF: <=605.85 Fantastic
+    "cec_dpmo": {"fantastic": 30,   "great": 80,   "fair": 150},   # PDF: <=0 Fantastic (en práctica ~30)
+    "cdf":      {"fantastic": 500,  "great": 1500, "fair": 3000},  # PDF: <=0 Fantastic (en práctica ~500)
+    "pod":      {"fantastic": 97,   "great": 96,   "fair": 94},    # PDF: >=97% Fantastic
+    "cc":       {"fantastic": 98,   "great": 96,   "fair": 94},    # PDF: >=98% Fantastic
+    "ndcr":     {"fantastic": 100,  "great": 95,   "fair": 90},
 }
 _TIER_ORDER = ["Poor", "Fair", "Great", "Fantastic", "Fantastic Plus"]
 
@@ -11755,43 +11757,68 @@ async def scorecard_set_thresholds(data: dict = Body(...), _=Depends(require_adm
 _OFFICIAL_SC_PROMPT = """Eres un analista de Amazon DSP. Te paso la scorecard semanal OFICIAL (Scorecard 3.0) de un DSP.
 Extrae EXACTAMENTE lo que aparece, sin inventar nada. Si un valor no está o pone "None"/"N/A", déjalo null.
 
-Devuelve SOLO JSON:
+Devuelve SOLO JSON con esta estructura:
 {
  "week": <número de semana, int>,
  "year": <año, int>,
- "center": "<código del centro, ej OGA5>",
+ "center": "<código del centro, ej OGA5, DGA1>",
  "overall_score": <número, ej 91.99, o null>,
  "overall_tier": "<Fantastic Plus|Fantastic|Great|Fair|Poor|At Risk>",
  "categories": {
    "compliance_safety": "<tier>", "quality_swc": "<tier>", "capacity": "<tier>"
  },
  "metrics": [
-   {"key":"fico","value":<num>,"tier":"<tier>"},
-   {"key":"speeding","value":<num>,"tier":"<tier>"},
-   {"key":"mentor","value":<num>,"tier":"<tier>"},
-   {"key":"vsa","value":<num>,"tier":"<tier>"},
-   {"key":"boc","value":<num>,"tier":"<tier>"},
-   {"key":"whc","value":<num>,"tier":"<tier>"},
-   {"key":"cas","value":<num>,"tier":"<tier>"},
-   {"key":"dcr","value":<num>,"tier":"<tier>"},
-   {"key":"dnr_dpmo","value":<num>,"tier":"<tier>"},
-   {"key":"lor_dpmo","value":<num>,"tier":"<tier>"},
-   {"key":"dsc_dpmo","value":<num>,"tier":"<tier>"},
-   {"key":"cec_dpmo","value":<num>,"tier":"<tier>"},
-   {"key":"cdf","value":<num>,"tier":"<tier>"},
-   {"key":"pod","value":<num>,"tier":"<tier>"},
-   {"key":"cc","value":<num>,"tier":"<tier>"},
-   {"key":"ndcr","value":<num>,"tier":"<tier>"}
- ]
+   {"key":"fico","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"speeding","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"mentor","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"vsa","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"boc","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"whc","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"cas","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"dcr","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"dnr_dpmo","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"lor_dpmo","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"dsc_dpmo","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"cec_dpmo","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"cdf","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"pod","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"cc","value":<num o null>,"tier":"<tier o null>"},
+   {"key":"ndcr","value":<num o null>,"tier":"<tier o null>"}
+ ],
+ "explicit_thresholds": {
+   "fico":     {"fantastic": <num o null>, "dir": 1},
+   "speeding": {"fantastic": <num o null>, "dir": -1},
+   "mentor":   {"fantastic": <num o null>, "dir": 1},
+   "vsa":      {"fantastic": <num o null>, "dir": 1},
+   "whc":      {"fantastic": <num o null>, "dir": 1},
+   "cas":      {"fantastic": <num o null>, "dir": 1},
+   "dcr":      {"fantastic": <num o null>, "dir": 1},
+   "dnr_dpmo": {"fantastic": <num o null>, "dir": -1},
+   "lor_dpmo": {"fantastic": <num o null>, "dir": -1},
+   "dsc_dpmo": {"fantastic": <num o null>, "dir": -1},
+   "cec_dpmo": {"fantastic": <num o null>, "dir": -1},
+   "cdf":      {"fantastic": <num o null>, "dir": -1},
+   "pod":      {"fantastic": <num o null>, "dir": 1},
+   "cc":       {"fantastic": <num o null>, "dir": 1},
+   "ndcr":     {"fantastic": <num o null>, "dir": 1}
+ }
 }
-Mapeo de nombres → key: Safe Driving Metric/FICO=fico; Speeding Event Rate=speeding;
-Mentor Adoption Rate=mentor; Vehicle Audit/VSA=vsa; Breach of Contract/BOC=boc;
-Working Hours Compliance/WHC=whc; Comprehensive Audit Score/CAS=cas;
-Delivery Completion Rate/DCR=dcr; Delivered Not Received/DNR DPMO=dnr_dpmo;
-Lost on Road/LoR DPMO=lor_dpmo; Delivery Success Conditions/DSC DPMO=dsc_dpmo;
-Customer escalation DPMO=cec_dpmo; Customer Delivery Feedback/CDF=cdf;
-Photo-On-Delivery/POD=pod; Contact Compliance=cc; Next Day Capacity Reliability=ndcr.
-Para %, devuelve solo el número (98.33, no "98.33%"). Si una métrica no aparece, omítela."""
+
+REGLAS CRÍTICAS:
+1. En "metrics": extrae los valores y tiers de la PÁGINA DE RESULTADOS (página 2).
+   Para %, devuelve solo el número (98.33, no "98.33%"). Null si no aparece o es N/A.
+2. En "explicit_thresholds": busca frases como "A DSP who has Fantastic standing would receive a X in METRIC"
+   en las PÁGINAS DE DEFINICIONES (páginas 5-7). Extrae el número X.
+   SOLO pon valores que estén EXPLÍCITAMENTE en el texto — no inventes ni inferias.
+   Si el texto dice ">= 99%" para DCR, pon 99. Si dice "<= 1080" para DNR, pon 1080.
+3. Mapeo nombres → key:
+   Safe Driving Metric/FICO=fico; Speeding Event Rate=speeding; Mentor Adoption Rate=mentor;
+   Vehicle Audit/VSA=vsa; Breach of Contract/BOC=boc; Working Hours Compliance/WHC=whc;
+   Comprehensive Audit Score/CAS=cas; Delivery Completion Rate/DCR=dcr;
+   Delivered Not Received/DNR DPMO=dnr_dpmo; Lost on Road/LoR DPMO=lor_dpmo;
+   Delivery Success Conditions/DSC DPMO=dsc_dpmo; Customer escalation DPMO=cec_dpmo;
+   Customer Delivery Feedback/CDF=cdf; Photo-On-Delivery/POD=pod;
+   Contact Compliance=cc; Next Day Capacity Reliability=ndcr."""
 
 
 async def _parse_official_scorecard(content: bytes, filename: str):
@@ -11842,24 +11869,42 @@ async def import_official_scorecard(file: UploadFile = File(...), center: Option
     year = sc.get("year")
     if not week:
         raise HTTPException(status_code=400, detail="No reconocí la semana en la scorecard")
+    explicit_thr = sc.get("explicit_thresholds") or {}
     doc = {"center": cen, "week": int(week), "year": int(year) if year else None,
            "overall_score": sc.get("overall_score"), "overall_tier": sc.get("overall_tier"),
            "categories": sc.get("categories") or {}, "metrics": sc.get("metrics") or [],
+           "explicit_thresholds": explicit_thr,
            "uploaded_at": datetime.now(timezone.utc).isoformat()}
     await db.scorecard_official.update_one(
         {"center": cen, "week": int(week)}, {"$set": doc}, upsert=True)
 
-    # Guardar observaciones (valor→tier) por métrica para derivar umbrales
+    # Guardar observaciones (valor→tier) para derivar umbrales por inferencia
     for m in (sc.get("metrics") or []):
         if m.get("key") and m.get("value") is not None and m.get("tier"):
             await db.scorecard_obs.update_one(
                 {"center": cen, "week": int(week), "metric": m["key"]},
                 {"$set": {"center": cen, "week": int(week), "metric": m["key"],
                           "value": m["value"], "tier": m["tier"]}}, upsert=True)
+
+    # Si el PDF tenía umbrales explícitos, aplicarlos directamente como thresholds del centro
+    thr_aplicados = []
+    if explicit_thr:
+        thr_update = {"center": cen}
+        for key, info in explicit_thr.items():
+            f_val = info.get("fantastic") if isinstance(info, dict) else None
+            if f_val is not None and key in _SC_SEED_THR:
+                # Solo actualiza el campo "fantastic"; mantiene great/fair existentes
+                thr_update[f"{key}.fantastic"] = float(f_val)
+                thr_aplicados.append(key)
+        if thr_update:
+            await db.scorecard_thresholds.update_one(
+                {"center": cen}, {"$set": thr_update}, upsert=True)
+
     n_obs = await db.scorecard_official.count_documents({"center": cen})
     return {"success": True, "center": cen, "week": week, "year": year,
             "overall_score": sc.get("overall_score"), "overall_tier": sc.get("overall_tier"),
-            "metricas": len(sc.get("metrics") or []), "scorecards_guardadas": n_obs}
+            "metricas": len(sc.get("metrics") or []), "scorecards_guardadas": n_obs,
+            "umbrales_explicitos_aplicados": thr_aplicados}
 
 
 @api_router.get("/scorecard/official")
@@ -12478,10 +12523,11 @@ _XLSX_THR_MAP = {
 
 @api_router.post("/scorecard/calibrate-thresholds")
 async def calibrate_thresholds(data: dict = Body(...), _=Depends(require_admin)):
-    """Infiere umbrales del centro a partir de las scorecards oficiales ya importadas.
-    Para cada métrica y tier observado, toma el PEOR valor en ese tier como umbral
-    (conservador: si vimos 98.45% como Fantastic, umbral Fantastic = 98.45%).
-    Solo actualiza métricas con al menos 1 dato real."""
+    """Calibra umbrales del centro con 2 fuentes en orden de prioridad:
+    1. Umbrales EXPLÍCITOS del texto del PDF ("Fantastic >= 99% in DCR") — más fiables.
+    2. Inferencia desde pares valor+tier observados en múltiples scorecards — solo cuando
+       hay ≥2 tiers distintos observados para la misma métrica (evita confundir el valor
+       observado con el umbral cuando solo hay 1 punto de datos)."""
     center = data.get("center")
     if not center:
         raise HTTPException(status_code=400, detail="center requerido")
@@ -12489,7 +12535,14 @@ async def calibrate_thresholds(data: dict = Body(...), _=Depends(require_admin))
     if not docs:
         raise HTTPException(status_code=404, detail=f"No hay scorecards oficiales importadas para {center}. Sube primero el PDF.")
 
-    # Acumular pares (valor, tier) por métrica
+    # 1. Recopilar umbrales explícitos de los PDFs (campo explicit_thresholds)
+    explicit = {}  # key -> {"fantastic": valor}
+    for doc in docs:
+        for key, info in (doc.get("explicit_thresholds") or {}).items():
+            if isinstance(info, dict) and info.get("fantastic") is not None:
+                explicit.setdefault(key, []).append(float(info["fantastic"]))
+
+    # 2. Acumular pares (valor, tier) para inferencia
     pairs = {}
     for doc in docs:
         for m in (doc.get("metrics") or []):
@@ -12500,36 +12553,58 @@ async def calibrate_thresholds(data: dict = Body(...), _=Depends(require_admin))
                 pairs.setdefault(key, []).append((float(val), tier))
 
     thr_update = {}
+    explicitos_usados = []
+    inferidos_usados = []
+
     for m_cfg in _SC_METRICS:
         key = m_cfg["key"]
-        obs = pairs.get(key)
-        if not obs:
-            continue
-        direction = m_cfg["dir"]  # +1 mayor=mejor; -1 menor=mejor
-        by_tier = {}
-        for val, tier in obs:
-            by_tier.setdefault(tier, []).append(val)
-
-        # Umbral = PEOR valor observado en ese tier (frontera con el tier inferior)
+        direction = m_cfg["dir"]
         thr_doc = {}
-        if "Fantastic Plus" in by_tier:
-            thr_doc["fantastic_plus"] = min(by_tier["Fantastic Plus"]) if direction == 1 else max(by_tier["Fantastic Plus"])
-        if "Fantastic" in by_tier:
-            thr_doc["fantastic"] = min(by_tier["Fantastic"]) if direction == 1 else max(by_tier["Fantastic"])
-        if "Great" in by_tier:
-            thr_doc["great"] = min(by_tier["Great"]) if direction == 1 else max(by_tier["Great"])
-        if "Fair" in by_tier:
-            thr_doc["fair"] = min(by_tier["Fair"]) if direction == 1 else max(by_tier["Fair"])
+
+        # Fuente 1: umbral explícito del texto del PDF
+        if key in explicit:
+            # Media de los umbrales explícitos de todas las scorecards (suelen ser iguales)
+            thr_doc["fantastic"] = round(sum(explicit[key]) / len(explicit[key]), 4)
+            explicitos_usados.append(key)
+
+        # Fuente 2: inferencia desde pares valor+tier
+        # Solo inferimos si hay ≥2 tiers distintos observados (para poder acotar el umbral)
+        obs = pairs.get(key, [])
+        if obs:
+            by_tier = {}
+            for val, tier in obs:
+                by_tier.setdefault(tier, []).append(val)
+            tiers_vistos = set(by_tier.keys())
+
+            # Umbral Great: solo inferimos si vimos Great Y (Fantastic o Fair)
+            # Esto evita confundir "98.83% Great" con el umbral Great cuando no vemos Fantastic
+            if "Great" in tiers_vistos and ("Fantastic" in tiers_vistos or "Fantastic Plus" in tiers_vistos or "Fair" in tiers_vistos):
+                thr_doc["great"] = min(by_tier["Great"]) if direction == 1 else max(by_tier["Great"])
+
+            # Umbral Fair: solo si vimos Fair Y (Great o Poor)
+            if "Fair" in tiers_vistos and ("Great" in tiers_vistos or "Poor" in tiers_vistos):
+                thr_doc["fair"] = min(by_tier["Fair"]) if direction == 1 else max(by_tier["Fair"])
+
+            # Fantastic solo desde inferencia si no hay explícito Y hay ≥2 tiers con Fantastic
+            if "fantastic" not in thr_doc and ("Fantastic" in tiers_vistos or "Fantastic Plus" in tiers_vistos):
+                if "Great" in tiers_vistos:  # Acotamos: vimos ambos Fantastic y Great
+                    f_vals = by_tier.get("Fantastic", []) + by_tier.get("Fantastic Plus", [])
+                    thr_doc["fantastic"] = min(f_vals) if direction == 1 else max(f_vals)
+                    inferidos_usados.append(key)
+
         if thr_doc:
             thr_update[key] = thr_doc
 
     if not thr_update:
-        raise HTTPException(status_code=422, detail="No se encontraron métricas con valor + tier en las scorecards importadas.")
+        raise HTTPException(status_code=422, detail="No se encontraron métricas con umbrales. Asegúrate de haber subido el PDF de la scorecard oficial.")
 
     update_doc = {"center": center}
     update_doc.update(thr_update)
     await db.scorecard_thresholds.update_one({"center": center}, {"$set": update_doc}, upsert=True)
-    return {"success": True, "center": center, "calibradas": list(thr_update.keys()),
+    return {"success": True, "center": center,
+            "calibradas": list(thr_update.keys()),
+            "desde_texto_pdf": explicitos_usados,
+            "inferidas": inferidos_usados,
             "desde_scorecards": len(docs)}
 
 
