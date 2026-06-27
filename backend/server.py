@@ -12466,23 +12466,28 @@ Formato exacto:
   "rutas": [
     {
       "ruta": "<código exacto de ruta tal como aparece, p.ej. CA_A44>",
-      "conductor": "<nombre(s) completo(s) del DA o DAs en MAYÚSCULAS exactamente como aparecen>",
-      "h_salida": "<hora de salida HH:MM del DA según Cortex — null si no aparece>"
+      "conductor": "<nombre del PRIMER conductor (DA principal) en MAYÚSCULAS>",
+      "h_salida": "<hora de salida HH:MM exacta — null si no aparece>"
     }
   ]
 }
 
 REGLAS:
 1. Extrae ÚNICAMENTE lo que puedas leer con total claridad. Null si no está claro.
-2. Algunos códigos de ruta pueden estar incompletos (p.ej. "2..." en lugar de CA_A2X). Extrae lo que veas.
-3. Si hay múltiples DAs en una ruta, incluye todos los nombres separados por " / ".
-4. No dupliques rutas.
-5. Ordena por código de ruta.
+2. Si una ruta tiene VARIOS conductores listados (conductor principal + ayuda o compartido),
+   coge SOLO EL PRIMERO que aparece. Ignora completamente el segundo y siguientes.
+3. No dupliques rutas.
+4. Ordena por código de ruta.
+5. La hora de salida suele aparecer como HH:MM cerca del nombre de la ruta.
 """
 
 _PROMPT_PLATAFORMA = """
 Eres un extractor de datos de una captura de pantalla de una plataforma de gestión de furgonetas DSP.
-La imagen muestra una lista de conductores (DAs) con la furgoneta (matrícula) asignada a cada uno.
+La imagen muestra filas con conductores (DAs) y su furgoneta asignada.
+
+La tabla tiene columnas. La ÚLTIMA columna de cada fila contiene el código de matrícula
+de la furgoneta (formato: 4 dígitos + 3 letras, p.ej. 7906NFX o 7906 NFX o 0116 MBP).
+Puede haber también una columna con tipo de contrato (ETT11, ETT20, ETT28, ETT30) — eso NO es la matrícula.
 
 Devuelve ÚNICAMENTE un JSON válido, sin texto adicional, sin markdown, sin bloques de código.
 
@@ -12490,17 +12495,18 @@ Formato exacto:
 {
   "asignaciones": [
     {
-      "conductor": "<nombre completo del DA exactamente como aparece en la imagen>",
-      "furgo": "<matrícula de la furgoneta exactamente como aparece, p.ej. 7906NFX o 7906 NFX>",
-      "movil": "<número de teléfono o código de dispositivo si aparece, null si no>"
+      "conductor": "<nombre completo del DA exactamente como aparece>",
+      "furgo": "<código de la ÚLTIMA columna: 4 dígitos + espacio + 3 letras, p.ej. 7906 NFX>"
     }
   ]
 }
 
 REGLAS:
-1. Extrae ÚNICAMENTE lo que puedas leer con total claridad. Null si no está claro.
-2. Las matrículas pueden tener formato con o sin espacio (7906NFX o 7906 NFX). Cópialas exactamente.
-3. No dupliques conductores.
+1. Extrae ÚNICAMENTE lo que puedas leer con claridad. Null si no está claro.
+2. La matrícula siempre tiene formato: 4 dígitos + 3 letras (con o sin espacio). Verifícalo.
+3. No confundas ETT11/ETT20/ETT28/ETT30 con la matrícula — esos son tipos de contrato.
+4. No dupliques conductores.
+5. Extrae TODOS los conductores visibles en la imagen.
 """
 
 
