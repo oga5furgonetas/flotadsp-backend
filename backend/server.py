@@ -11517,6 +11517,12 @@ def _metric_subscore(value, thr, direction):
         return None
     if fp is None:
         fp = f
+    # Cuando fp == f (ej. NDCR=100, WHC=100), alcanzar ese valor es Fantastic Plus → 100 puntos.
+    # La interpolación normal falla con dos anclas en el mismo x.
+    if fp == f:
+        if (direction > 0 and value >= fp) or (direction < 0 and value <= fp):
+            return 100.0
+        return _interp(value, [(f, 90), (g, 70), (fa, 50)])
     return _interp(value, [(fp, 100), (f, 90), (g, 70), (fa, 50)])
 
 
