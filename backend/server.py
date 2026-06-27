@@ -11407,31 +11407,26 @@ async def daily_week(center: str, desde: str, hasta: str, _=Depends(require_admi
 
 # 16 métricas reales del DSP Scorecard 3.0. dir(+1 más alto mejor / -1 más bajo mejor)
 _SC_METRICS = [
-    {"key": "fico", "label": "Conducción segura (FICO)", "group": "safety", "unit": "score", "dir": 1, "manual": True},
-    {"key": "speeding", "label": "Eventos de velocidad /100", "group": "safety", "unit": "ratio", "dir": -1, "manual": True},
-    {"key": "mentor", "label": "Adopción del mentor", "group": "safety", "unit": "%", "dir": 1, "manual": True},
-    {"key": "vsa", "label": "Auditoría de vehículos (VSA)", "group": "safety", "unit": "%", "dir": 1, "manual": True},
-    {"key": "whc", "label": "Cumplimiento de horas (WHC)", "group": "safety", "unit": "%", "dir": 1, "manual": True},
-    {"key": "cas", "label": "Auditoría integral (CAS)", "group": "safety", "unit": "%", "dir": 1, "manual": True},
-    {"key": "boc", "label": "Incumplimiento contrato (BOC)", "group": "safety", "unit": "%", "dir": 1, "manual": True},
-    {"key": "dcr", "label": "Finalización de entregas (DCR)", "group": "quality", "unit": "%", "dir": 1, "drill": "all"},
-    {"key": "dnr_dpmo", "label": "No recibidos (DNR) DPMO", "group": "quality", "unit": "DPMO", "dir": -1, "drill": "dnr"},
-    {"key": "lor_dpmo", "label": "Perdido en ruta (LoR) DPMO", "group": "quality", "unit": "DPMO", "dir": -1, "drill": "dnr"},
-    {"key": "dsc_dpmo", "label": "Condiciones de entrega (DSC) DPMO", "group": "quality", "unit": "DPMO", "dir": -1},
-    {"key": "cec_dpmo", "label": "Escalación del cliente (CEC) DPMO", "group": "quality", "unit": "DPMO", "dir": -1},
-    {"key": "cdf", "label": "Feedback del cliente (CDF)", "group": "quality", "unit": "DPMO", "dir": -1},
-    {"key": "pod", "label": "Foto en la entrega (POD)", "group": "quality", "unit": "%", "dir": 1, "drill": "pod"},
-    {"key": "cc", "label": "Normas de contacto (CC)", "group": "quality", "unit": "%", "dir": 1, "drill": "cc"},
-    {"key": "ndcr", "label": "Capacidad día siguiente", "group": "capacity", "unit": "%", "dir": 1, "manual": True},
+    {"key": "fico",     "label": "Conducción segura (FICO)",          "group": "safety",   "unit": "score", "dir": 1,  "manual": True},
+    {"key": "speeding", "label": "Eventos de velocidad /100",          "group": "safety",   "unit": "ratio", "dir": -1, "manual": True},
+    {"key": "mentor",   "label": "Adopción del mentor",                "group": "safety",   "unit": "%",     "dir": 1,  "manual": True},
+    {"key": "vsa",      "label": "Auditoría de vehículos (VSA)",       "group": "safety",   "unit": "%",     "dir": 1,  "manual": True},
+    {"key": "whc",      "label": "Cumplimiento de horas (WHC)",        "group": "safety",   "unit": "%",     "dir": 1,  "manual": True},
+    {"key": "dcr",      "label": "Finalización de entregas (DCR)",     "group": "quality",  "unit": "%",     "dir": 1,  "drill": "all"},
+    {"key": "lor_dpmo", "label": "Perdido en ruta (LoR) DPMO",        "group": "quality",  "unit": "DPMO",  "dir": -1, "drill": "dnr"},
+    {"key": "dsc_dpmo", "label": "Condiciones de entrega (DSC) DPMO", "group": "quality",  "unit": "DPMO",  "dir": -1},
+    {"key": "cec_dpmo", "label": "Escalación del cliente (CEC) DPMO", "group": "quality",  "unit": "DPMO",  "dir": -1},
+    {"key": "pod",      "label": "Foto en la entrega (POD)",           "group": "quality",  "unit": "%",     "dir": 1,  "drill": "pod"},
+    {"key": "cc",       "label": "Normas de contacto (CC)",            "group": "quality",  "unit": "%",     "dir": 1,  "drill": "cc"},
+    {"key": "ndcr",     "label": "Capacidad día siguiente",            "group": "capacity", "unit": "%",     "dir": 1,  "manual": True},
 ]
 
 # Pesos oficiales por métrica — fuente: Excel "Peso metricas scorecard wk22.xlsx" DGA1.
 # Suma = 100. DNR, BOC y CAS no aparecen como métricas ponderadas en Scorecard 3.0.
 _SC_SEED_WEIGHTS = {
     "fico": 8.625, "speeding": 8.625, "mentor": 8.625, "vsa": 8.625, "whc": 5.625,
-    "cas": 0, "boc": 0,
-    "dcr": 15.625, "dnr_dpmo": 0, "lor_dpmo": 5.625, "dsc_dpmo": 15.625,
-    "cec_dpmo": 8.125, "cdf": 0, "pod": 5.625, "cc": 3.625,
+    "dcr": 15.625, "lor_dpmo": 5.625, "dsc_dpmo": 15.625,
+    "cec_dpmo": 8.125, "pod": 5.625, "cc": 3.625,
     "ndcr": 5.625,
 }
 
@@ -11445,14 +11440,10 @@ _SC_SEED_THR = {
     "mentor":   {"fantastic_plus": 100,  "fantastic": 90,   "great": 82,   "fair": 75},
     "vsa":      {"fantastic_plus": 100,  "fantastic": 98.5, "great": 97,   "fair": 96},
     "whc":      {"fantastic_plus": 100,  "fantastic": 100,  "great": 97,   "fair": 95},
-    "cas":      {"fantastic_plus": 100,  "fantastic": 100,  "great": 95,   "fair": 90},
-    "boc":      {"fantastic_plus": 100,  "fantastic": 100,  "great": 95,   "fair": 90},
     "dcr":      {"fantastic_plus": 100,  "fantastic": 99,   "great": 98.5, "fair": 97},
-    "dnr_dpmo": {"fantastic_plus": 0,    "fantastic": 1080, "great": 2500, "fair": 4000},
     "lor_dpmo": {"fantastic_plus": 0,    "fantastic": 0,    "great": 40,   "fair": 85},
     "dsc_dpmo": {"fantastic_plus": 0,    "fantastic": 606,  "great": 906,  "fair": 1186},
     "cec_dpmo": {"fantastic_plus": 0,    "fantastic": 0.02, "great": 40,   "fair": 135},
-    "cdf":      {"fantastic_plus": 0,    "fantastic": 500,  "great": 1500, "fair": 3000},
     "pod":      {"fantastic_plus": 100,  "fantastic": 97,   "great": 95,   "fair": 90},
     "cc":       {"fantastic_plus": 100,  "fantastic": 98,   "great": 97,   "fair": 95},
     "ndcr":     {"fantastic_plus": 100,  "fantastic": 100,  "great": 95,   "fair": 90},
