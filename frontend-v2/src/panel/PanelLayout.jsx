@@ -19,8 +19,6 @@ const TABS = {
       { to: '/panel', label: 'Dashboard', icon: LayoutDashboard, end: true },
       { to: '/panel/scorecard', label: 'Scorecard', icon: Trophy },
       { to: '/panel/conductores', label: 'Conductores', icon: Users },
-      { to: '/panel/turnos', label: 'Turnos', icon: CalendarClock },
-      { to: '/panel/metricas', label: 'Métricas', icon: BarChart3 },
       { to: '/panel/actividad', label: 'Actividad', icon: Activity },
     ],
   },
