@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Loader2, UserPlus, Trash2, Save, ShieldCheck, X } from 'lucide-react'
+import { Loader2, UserPlus, Trash2, Save, ShieldCheck } from 'lucide-react'
 import { getAdmins, createAdmin, updateAdmin, deleteAdmin } from '../api'
-import { getAdmin } from '../auth'
+import { getAdmin, isSuperAdmin, isCenterManager } from '../auth'
 
 // Catálogo de módulos asignables (la clave = último segmento de la ruta del panel)
 const MODULES = [
@@ -19,15 +19,20 @@ const MODULES = [
 const ALL_KEYS = MODULES.flatMap((g) => g.items.map(([k]) => k))
 const labelOf = (k) => MODULES.flatMap((g) => g.items).find(([kk]) => kk === k)?.[1] || k
 
+const ROLE_LABELS = { center_manager: 'Gestor de centro', dispatcher: 'Dispatcher', null: 'Admin completo' }
+
 export default function Usuarios() {
   const me = getAdmin()
+  const sa = isSuperAdmin()
+  const cm = isCenterManager()
   const [users, setUsers] = useState(null)
   const [err, setErr] = useState('')
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState(false)
-  const allOrgCenters = me?.centers || []
-  const [form, setForm] = useState({ name: '', username: '', password: '', perms: ALL_KEYS, centers: null })
-  const [editing, setEditing] = useState(null) // {id, perms, centers}
+  // center_manager solo puede asignar sus propios centros
+  const allOrgCenters = sa ? (me?.centers || []) : (me?.allowed_centers || [])
+  const [form, setForm] = useState({ name: '', username: '', password: '', perms: ALL_KEYS, centers: null, admin_role: null })
+  const [editing, setEditing] = useState(null) // {id, perms, centers, admin_role}
 
   function load() {
     getAdmins().then((r) => setUsers(r.data || [])).catch(() => setErr('No se pudieron cargar los usuarios.'))
@@ -44,18 +49,21 @@ export default function Usuarios() {
     }
     setBusy(true); setMsg(null)
     try {
-      await createAdmin({ name: form.name.trim(), username: form.username.trim(), password: form.password, permissions: form.perms, allowed_centers: form.centers })
+      await createAdmin({ name: form.name.trim(), username: form.username.trim(), password: form.password, permissions: form.perms, allowed_centers: form.centers, admin_role: form.admin_role })
       setMsg({ ok: true, t: `Usuario ${form.username} creado.` })
-      setForm({ name: '', username: '', password: '', perms: ALL_KEYS, centers: null })
+      setForm({ name: '', username: '', password: '', perms: ALL_KEYS, centers: null, admin_role: null })
       load()
     } catch (e) {
       setMsg({ ok: false, t: e?.response?.data?.detail || 'No se pudo crear el usuario.' })
     } finally { setBusy(false) }
   }
 
-  async function savePerms(id, perms, centers) {
+  async function savePerms(id, perms, centers, admin_role) {
     setBusy(true); setMsg(null)
-    try { await updateAdmin(id, { permissions: perms, allowed_centers: centers }); setMsg({ ok: true, t: 'Permisos actualizados.' }); setEditing(null); load() }
+    try {
+      await updateAdmin(id, { permissions: perms, allowed_centers: centers, admin_role: admin_role ?? null })
+      setMsg({ ok: true, t: 'Permisos actualizados.' }); setEditing(null); load()
+    }
     catch (e) { setMsg({ ok: false, t: e?.response?.data?.detail || 'No se pudo actualizar.' }) } finally { setBusy(false) }
   }
 
@@ -80,6 +88,25 @@ export default function Usuarios() {
           <div><label className="label">Usuario</label><input className="input" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></div>
           <div><label className="label">Contraseña</label><input type="password" className="input" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
         </div>
+        {/* Rol */}
+        <div className="mt-4">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-dark-500">Rol del usuario</div>
+          <div className="flex flex-wrap gap-2">
+            {(sa ? [null, 'center_manager', 'dispatcher'] : ['dispatcher']).map((r) => (
+              <button key={String(r)} type="button"
+                onClick={() => setForm({ ...form, admin_role: r })}
+                className={`rounded-full px-3 py-1 text-xs font-medium ${form.admin_role === r ? 'bg-brand-500/25 text-brand-200 ring-1 ring-brand-500/50' : 'bg-dark-800 text-dark-400'}`}>
+                {ROLE_LABELS[r] || 'Admin completo'}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-[11px] text-dark-500">
+            {form.admin_role === 'center_manager' ? 'Puede gestionar usuarios de sus centros, pero nunca por encima de ti.' :
+             form.admin_role === 'dispatcher' ? 'Solo ve lo que tú le marques. No puede gestionar usuarios.' :
+             'Acceso completo al panel (menos super-admin).'}
+          </p>
+        </div>
+
         <div className="mt-4">
           <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-dark-500">¿Qué puede ver? (Negocio y Usuarios quedan solo para ti)</div>
           {MODULES.map((g) => (
@@ -146,13 +173,15 @@ export default function Usuarios() {
                   <div>
                     <div className="flex items-center gap-2 font-semibold">{u.name || u.username}
                       {isSuper && <span className="flex items-center gap-1 rounded-full bg-brand-500/15 px-2 py-0.5 text-[10px] text-brand-300"><ShieldCheck size={10} /> super-admin</span>}
+                      {!isSuper && u.admin_role === 'center_manager' && <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-300">Gestor de centro</span>}
+                      {!isSuper && u.admin_role === 'dispatcher' && <span className="rounded-full bg-dark-700 px-2 py-0.5 text-[10px] text-dark-400">Dispatcher</span>}
                       {u.id === me?.id && <span className="rounded-full bg-dark-700 px-2 py-0.5 text-[10px] text-dark-400">tú</span>}
                     </div>
-                    <div className="text-xs text-dark-500">/{u.username}</div>
+                    <div className="text-xs text-dark-500">/{u.username} {u.allowed_centers ? `· ${u.allowed_centers.join(', ')}` : ''}</div>
                   </div>
                   {!isSuper && (
                     <div className="flex items-center gap-1">
-                      <button onClick={() => setEditing(isEd ? null : { id: u.id, perms: perms || ALL_KEYS, centers: Array.isArray(u.allowed_centers) ? u.allowed_centers : null })} className="btn-ghost px-2 py-1 text-xs">{isEd ? 'Cerrar' : 'Permisos'}</button>
+                      <button onClick={() => setEditing(isEd ? null : { id: u.id, perms: perms || ALL_KEYS, centers: Array.isArray(u.allowed_centers) ? u.allowed_centers : null, admin_role: u.admin_role ?? null })} className="btn-ghost px-2 py-1 text-xs">{isEd ? 'Cerrar' : 'Editar'}</button>
                       <button onClick={() => remove(u)} className="btn-ghost px-2 py-1 text-xs text-red-400"><Trash2 size={14} /></button>
                     </div>
                   )}
@@ -166,6 +195,19 @@ export default function Usuarios() {
 
                 {isEd && (
                   <div className="mt-3 border-t border-dark-800 pt-3">
+                    {/* Rol */}
+                    <div className="mb-3">
+                      <div className="mb-1 text-[11px] text-dark-500">Rol</div>
+                      <div className="flex flex-wrap gap-2">
+                        {(sa ? [null, 'center_manager', 'dispatcher'] : ['dispatcher']).map((r) => (
+                          <button key={String(r)} type="button"
+                            onClick={() => setEditing((s) => ({ ...s, admin_role: r }))}
+                            className={`rounded-full px-3 py-1 text-xs font-medium ${editing.admin_role === r ? 'bg-brand-500/25 text-brand-200 ring-1 ring-brand-500/50' : 'bg-dark-800 text-dark-400'}`}>
+                            {ROLE_LABELS[r] || 'Admin completo'}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     {MODULES.map((g) => (
                       <div key={g.g} className="mb-2">
                         <div className="mb-1 text-[11px] text-dark-500">{g.g}</div>
@@ -199,7 +241,7 @@ export default function Usuarios() {
                         </div>
                       </div>
                     )}
-                    <button onClick={() => savePerms(u.id, editing.perms, editing.centers)} disabled={busy} className="btn-primary mt-2 flex items-center gap-2 text-sm disabled:opacity-50">
+                    <button onClick={() => savePerms(u.id, editing.perms, editing.centers, editing.admin_role)} disabled={busy} className="btn-primary mt-2 flex items-center gap-2 text-sm disabled:opacity-50">
                       <Save size={14} /> Guardar permisos
                     </button>
                   </div>

@@ -6,7 +6,7 @@ import {
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ExternalLink, FileSpreadsheet,
 } from 'lucide-react'
-import { getAdmin, isAuthed, isSuperAdmin, logout, canSee } from './auth'
+import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee } from './auth'
 import TrialBanner from './TrialBanner'
 
 const keyOf = (to) => (to === '/panel' ? 'dashboard' : to.split('/').pop())
@@ -63,6 +63,13 @@ export default function PanelLayout() {
   const allowed = Array.isArray(admin?.allowed_centers) ? admin.allowed_centers : null
   const centers = allowed ? allCenters.filter((c) => allowed.includes(c)) : allCenters
 
+  // Si el usuario tiene exactamente 1 centro asignado, forzamos ese centro automáticamente
+  const singleCenter = centers.length === 1 ? centers[0] : null
+
+  useEffect(() => {
+    if (singleCenter && center !== singleCenter) setCenter(singleCenter)
+  }, [singleCenter]) // eslint-disable-line
+
   useEffect(() => { localStorage.setItem('panel_tab', tab) }, [tab])
   useEffect(() => { localStorage.setItem('panel_center', center) }, [center])
 
@@ -70,9 +77,12 @@ export default function PanelLayout() {
 
   // Guard de ruta: impide acceder por URL a un módulo no permitido.
   const curKey = keyOf(loc.pathname.replace(/\/+$/, '') || '/panel')
+  const sa = isSuperAdmin()
+  const cm = isCenterManager()
   const routeAllowed = (k) => {
     if (k === 'perfil' || k === 'login' || k === 'portal-conductor' || k === 'checklist-operativo' || k === 'chat' || k === 'plantilla') return true
-    if (k === 'admin' || k === 'usuarios' || k === 'bandeja') return isSuperAdmin()
+    if (k === 'admin' || k === 'bandeja') return sa
+    if (k === 'usuarios') return sa || cm
     return canSee(k)
   }
   if (!routeAllowed(curKey)) {
@@ -87,7 +97,7 @@ export default function PanelLayout() {
     const k = keyOf(it.to)
     return EQUIPO_KEYS.has(k) || canSee(k)
   })
-  const showAdmin = isSuperAdmin()
+  const showAdmin = sa
 
   function doLogout() {
     logout()
@@ -159,7 +169,7 @@ export default function PanelLayout() {
               <Shield size={16} /> Negocio (super-admin)
             </NavLink>
           )}
-          {showAdmin && (
+          {(showAdmin || cm) && (
             <NavLink
               to="/panel/usuarios"
               className={({ isActive }) =>
@@ -222,19 +232,25 @@ export default function PanelLayout() {
           </div>
           <div className="hidden text-sm text-dark-400 md:block">{TABS[tab].label}</div>
 
-          {/* Filtro de CENTRO — dinámico por DSP */}
+          {/* Filtro de CENTRO — si solo tiene 1 centro asignado se muestra fijo */}
           <div className="ml-auto flex items-center gap-1 rounded-lg bg-dark-800/60 p-1">
-            {['Todos', ...centers].map((c) => (
-              <button
-                key={c}
-                onClick={() => setCenter(c)}
-                className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
-                  center === c ? 'bg-brand-500/20 text-brand-300' : 'text-dark-400 hover:text-dark-200'
-                }`}
-              >
-                {c}
-              </button>
-            ))}
+            {singleCenter ? (
+              <span className="rounded-md bg-brand-500/20 px-3 py-1 text-xs font-semibold text-brand-300">
+                {singleCenter}
+              </span>
+            ) : (
+              ['Todos', ...centers].map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setCenter(c)}
+                  className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
+                    center === c ? 'bg-brand-500/20 text-brand-300' : 'text-dark-400 hover:text-dark-200'
+                  }`}
+                >
+                  {c}
+                </button>
+              ))
+            )}
           </div>
         </header>
 

@@ -430,6 +430,7 @@ class CreateAdminRequest(BaseModel):
     name: str
     permissions: Optional[List[str]] = None   # módulos permitidos; None = todos (menos super-admin)
     allowed_centers: Optional[List[str]] = None  # centros visibles; None = todos los de la org
+    admin_role: Optional[str] = None  # "center_manager" | "dispatcher" | None (admin completo)
 
 
 class TokenResponse(BaseModel):
@@ -447,6 +448,7 @@ class TokenResponse(BaseModel):
     super_admin: Optional[bool] = None
     permissions: Optional[list] = None
     allowed_centers: Optional[list] = None  # subset de centros que este admin puede ver
+    admin_role: Optional[str] = None  # "center_manager" | "dispatcher" | None
 
 
 # =========================
@@ -2464,6 +2466,7 @@ async def admin_login(data: LoginRequest, request: Request):
         super_admin=bool(user.get("super_admin")),
         permissions=user.get("permissions"),
         allowed_centers=user.get("allowed_centers"),
+        admin_role=user.get("admin_role"),
     )
 
 
@@ -2596,6 +2599,31 @@ async def get_me(user: dict = Depends(get_current_user)):
 
 
 @auth_router.post("/create-admin")
+def _is_center_manager(user: dict) -> bool:
+    return user.get("admin_role") == "center_manager" and not user.get("sa")
+
+def _can_manage_user(actor: dict, target_centers: Optional[list]) -> bool:
+    """True si el actor puede gestionar un usuario con esos centros."""
+    if actor.get("sa"):
+        return True
+    if not _is_center_manager(actor):
+        return False  # dispatchers no pueden gestionar usuarios
+    actor_centers = set(actor.get("allowed_centers") or [])
+    target_set   = set(target_centers or [])
+    # center_manager solo puede gestionar usuarios cuyos centros son subconjunto de los suyos
+    return target_set.issubset(actor_centers)
+
+def _clamp_permissions(actor: dict, permissions: Optional[list]) -> Optional[list]:
+    """center_manager no puede dar más permisos de los que él mismo tiene."""
+    if actor.get("sa"):
+        return permissions
+    actor_perms = actor.get("permissions")  # None = todos
+    if actor_perms is None:
+        return permissions
+    if permissions is None:
+        return actor_perms  # no puede dar "todos" si él no tiene todos
+    return [p for p in permissions if p in actor_perms]
+
 async def create_admin(
     data: CreateAdminRequest,
     _admin: dict = Depends(require_admin)
@@ -2604,16 +2632,30 @@ async def create_admin(
     if existing:
         raise HTTPException(status_code=409, detail="El usuario ya existe")
 
+    # center_manager solo puede crear usuarios en sus propios centros
+    if not _admin.get("sa") and _is_center_manager(_admin):
+        if not _can_manage_user(_admin, data.allowed_centers):
+            raise HTTPException(403, "Solo puedes crear usuarios en tus centros asignados")
+        # no puede crear center_managers, solo dispatchers
+        if data.admin_role == "center_manager":
+            raise HTTPException(403, "No puedes crear otros gestores de centro")
+    elif not _admin.get("sa") and not _is_center_manager(_admin):
+        raise HTTPException(403, "Sin permisos para crear usuarios")
+
+    admin_role = data.admin_role if data.admin_role in ("center_manager", "dispatcher") else None
+    perms = _clamp_permissions(_admin, data.permissions)
+
     doc = {
         "id": str(uuid.uuid4()),
         "username": data.username,
         "hashed_password": hash_password(data.password),
         "name": data.name,
         "role": "admin",
-        "super_admin": False,                        # nunca super-admin desde aquí
-        "org_id": _admin.get("org_id"),              # MISMA organización que su creador (multi-tenant)
-        "permissions": data.permissions,             # módulos permitidos (None = todos menos Negocio)
-        "allowed_centers": data.allowed_centers,     # centros visibles (None = todos)
+        "admin_role": admin_role,
+        "super_admin": False,
+        "org_id": _admin.get("org_id"),
+        "permissions": perms,
+        "allowed_centers": data.allowed_centers,
         "created_by": _admin.get("sub"),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -2624,20 +2666,37 @@ async def create_admin(
 
 @auth_router.patch("/admins/{admin_id}")
 async def update_admin_permissions(admin_id: str, data: dict = Body(...), _admin: dict = Depends(require_admin)):
-    """Actualiza nombre o permisos de un usuario de MI organización. No toca super-admins."""
+    """Actualiza nombre, permisos o rol de un usuario de MI organización."""
     target = await global_db.admin_users.find_one({"id": admin_id}, {"_id": 0})
     if not target or target.get("org_id") != _admin.get("org_id"):
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     if target.get("super_admin"):
         raise HTTPException(status_code=403, detail="No puedes modificar a un super-admin")
+
+    # center_manager solo puede tocar usuarios en sus centros
+    if not _admin.get("sa") and _is_center_manager(_admin):
+        if not _can_manage_user(_admin, target.get("allowed_centers")):
+            raise HTTPException(403, "No tienes acceso para modificar este usuario")
+        if target.get("admin_role") == "center_manager":
+            raise HTTPException(403, "No puedes modificar a otro gestor de centro")
+    elif not _admin.get("sa") and not _is_center_manager(_admin):
+        raise HTTPException(403, "Sin permisos para modificar usuarios")
+
     patch = {}
     if "permissions" in data:
-        patch["permissions"] = data.get("permissions")
+        patch["permissions"] = _clamp_permissions(_admin, data.get("permissions"))
     if "allowed_centers" in data:
         ac = data.get("allowed_centers")
         patch["allowed_centers"] = ac if (isinstance(ac, list) or ac is None) else None
     if data.get("name"):
         patch["name"] = str(data["name"]).strip()
+    if "admin_role" in data:
+        ar = data.get("admin_role")
+        if ar in ("center_manager", "dispatcher", None):
+            # center_manager no puede crear otros center_managers
+            if ar == "center_manager" and not _admin.get("sa"):
+                raise HTTPException(403, "Solo super-admin puede asignar rol de gestor de centro")
+            patch["admin_role"] = ar
     if not patch:
         raise HTTPException(status_code=400, detail="Nada que actualizar")
     await global_db.admin_users.update_one({"id": admin_id}, {"$set": patch})
@@ -2741,9 +2800,16 @@ async def set_driver_password(
 
 @auth_router.get("/admins")
 async def list_admins(_admin: dict = Depends(require_admin)):
-    # Solo los usuarios de MI organización (multi-tenant). El super-admin dueño ve los suyos.
     q = {"org_id": _admin.get("org_id")} if _admin.get("org_id") else {}
-    admins = await global_db.admin_users.find(q, {"_id": 0, "hashed_password": 0}).to_list(100)
+    admins = await global_db.admin_users.find(q, {"_id": 0, "hashed_password": 0}).to_list(200)
+    # center_manager solo ve usuarios en sus centros (+ a sí mismo)
+    if not _admin.get("sa") and _is_center_manager(_admin):
+        my_centers = set(_admin.get("allowed_centers") or [])
+        admins = [
+            a for a in admins
+            if a["id"] == _admin.get("sub")
+            or set(a.get("allowed_centers") or []).issubset(my_centers)
+        ]
     return admins
 
 
@@ -4599,16 +4665,27 @@ async def verify_hash_public(content_hash: str, request: Request):
 # 1 doc por (center, date, shift) en db.daily_checklists. Items con done/done_by/done_at.
 # Permisos: el admin ve solo los centros de su allowed_centers (o todos si no esta seteado).
 
-_DEFAULT_CHECKLIST_ITEMS = [
-    "Revisar lista de conductores del día",
-    "Confirmar asignaciones furgoneta-conductor",
+_DEFAULT_CHECKLIST_ITEMS_MANANA = [
+    "Confirmar asignaciones conductor-furgoneta",
+    "Validar plantilla con Cortex",
+    "Briefing de mañana completado",
     "Verificar combustible flota",
     "Comprobar estado de móviles entregados",
     "Confirmar rutas cargadas en sistema",
-    "Revisión de paquetes dañados del día anterior",
-    "Validar plantilla con Cortex",
-    "Briefing matutino completado",
 ]
+
+_DEFAULT_CHECKLIST_ITEMS_TARDE = [
+    "Recepción de furgonetas del turno de mañana",
+    "Revisión de paquetes dañados / incidencias del día",
+    "Confirmar asignaciones conductor-furgoneta (tarde)",
+    "Validar plantilla Cortex turno tarde",
+    "Briefing de tarde completado",
+    "Cierre y documentación de turno",
+]
+
+def _default_items_for_shift(shift: str) -> list:
+    src = _DEFAULT_CHECKLIST_ITEMS_TARDE if shift == "tarde" else _DEFAULT_CHECKLIST_ITEMS_MANANA
+    return [{"id": str(uuid.uuid4()), "text": t, "done": False, "done_by": None, "done_at": None} for t in src]
 
 
 def _user_can_see_center(user: dict, center: str) -> bool:
@@ -4641,8 +4718,7 @@ async def get_checklist(center: str, date: Optional[str] = None,
         # No existe: crear y PERSISTIR con plantilla por defecto (IDs estables).
         new_doc = {
             "id": str(uuid.uuid4()), "center": center, "date": date, "shift": shift,
-            "items": [{"id": str(uuid.uuid4()), "text": t, "done": False,
-                       "done_by": None, "done_at": None} for t in _DEFAULT_CHECKLIST_ITEMS],
+            "items": _default_items_for_shift(shift),
             "created_at": now, "updated_at": now,
         }
         try:
@@ -4712,8 +4788,7 @@ async def toggle_checklist_item(data: dict = Body(...), user: dict = Depends(req
     if not doc:
         doc = {
             "id": str(uuid.uuid4()), "center": center, "date": date, "shift": shift,
-            "items": [{"id": str(uuid.uuid4()), "text": t, "done": False, "done_by": None, "done_at": None}
-                      for t in _DEFAULT_CHECKLIST_ITEMS],
+            "items": _default_items_for_shift(shift),
             "created_at": now, "updated_at": now,
         }
         await db.daily_checklists.insert_one(doc)
@@ -4810,8 +4885,7 @@ async def chat_pin_to_checklist(center: str, message_id: str,
     if not doc:
         doc = {
             "id": str(uuid.uuid4()), "center": center, "date": date, "shift": shift,
-            "items": [{"id": str(uuid.uuid4()), "text": t, "done": False, "done_by": None, "done_at": None}
-                      for t in _DEFAULT_CHECKLIST_ITEMS],
+            "items": _default_items_for_shift(shift),
             "created_at": now, "updated_at": now,
         }
         await db.daily_checklists.insert_one(doc)

@@ -70,8 +70,21 @@ export function saveSession(j) {
       permissions: j.permissions ?? null,
       allowed_centers: j.allowed_centers ?? null,
       centers: j.centers || [],
+      admin_role: j.admin_role ?? null,
     }),
   )
+}
+
+export function getAdminRole() {
+  return getAdmin()?.admin_role ?? null   // "center_manager" | "dispatcher" | null
+}
+
+export function isCenterManager() {
+  return getAdminRole() === 'center_manager' && !isSuperAdmin()
+}
+
+export function isDispatcher() {
+  return getAdminRole() === 'dispatcher'
 }
 
 export function logout() {
