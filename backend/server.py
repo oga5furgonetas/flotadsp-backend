@@ -11534,7 +11534,7 @@ def _overall_score(out, weights):
     return (round(num / den, 2) if den else None), den, usados
 
 
-_OVERALL_TIER_BANDS = [(95, "Fantastic Plus"), (85, "Fantastic"), (70, "Great"), (50, "Fair"), (0, "Poor")]
+_OVERALL_TIER_BANDS = [(93, "Fantastic Plus"), (85, "Fantastic"), (70, "Great"), (50, "Fair"), (0, "Poor")]
 
 
 def _score_to_tier(score):
