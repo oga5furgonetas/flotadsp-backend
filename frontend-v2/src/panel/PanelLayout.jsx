@@ -82,7 +82,11 @@ export default function PanelLayout() {
 
   // Portal Conductor ahora es una página interna del panel: /panel/portal-conductor
 
-  const items = TABS[tab].items.filter((it) => canSee(keyOf(it.to)))
+  const EQUIPO_KEYS = new Set(['asignacion', 'checklist-operativo', 'chat', 'plantilla'])
+  const items = TABS[tab].items.filter((it) => {
+    const k = keyOf(it.to)
+    return EQUIPO_KEYS.has(k) || canSee(k)
+  })
   const showAdmin = isSuperAdmin()
 
   function doLogout() {
@@ -113,7 +117,7 @@ export default function PanelLayout() {
         </div>
 
         {/* Pestañas Operacional / Furgonetas */}
-        <div className="mx-3 mb-2 grid grid-cols-2 gap-1 rounded-lg bg-dark-800/60 p-1">
+        <div className="mx-3 mb-2 grid grid-cols-3 gap-1 rounded-lg bg-dark-800/60 p-1">
           {Object.entries(TABS).map(([k, v]) => (
             <button
               key={k}
