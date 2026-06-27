@@ -12454,159 +12454,112 @@ async def _sc_weights(center):
 # ──────────────────────────────────────────────
 
 _PLANTILLA_PROMPT = """
-Eres un extractor de datos de capturas de pantalla de operaciones de flota Amazon DSP.
+Eres un extractor de datos ESTRICTAMENTE VISUAL de capturas de pantalla de Amazon DSP.
 Se te envían DOS imágenes:
-  IMAGEN 1 = Cortex (plataforma Amazon): muestra la lista de DAs (conductores) con sus rutas asignadas.
-  IMAGEN 2 = Plataforma de furgonetas: muestra qué furgoneta (matrícula) está asignada a cada DA.
+  IMAGEN 1 = Cortex (plataforma Amazon): lista de DAs con ruta asignada y hora de salida de ruta.
+  IMAGEN 2 = Plataforma de furgonetas: asignación DA → matrícula de furgoneta.
 
-Tu tarea es extraer todos los datos y devolver UN JSON (sin texto antes ni después, sin markdown).
+Devuelve ÚNICAMENTE un JSON válido, sin texto adicional, sin markdown, sin bloques de código.
 
-Formato de respuesta:
+Formato exacto:
 {
-  "week": <número de semana ISO, int>,
-  "date": "<DD/MM/YYYY>",
+  "week": <número de semana ISO como entero, o null si no aparece>,
+  "date": "<DD/MM/YYYY visible en la imagen, o null si no aparece>",
   "rows": [
     {
-      "ruta": "<código de ruta, p.ej. CA_A44>",
-      "conductor": "<nombre completo del DA en MAYÚSCULAS>",
-      "movil": "<número de teléfono móvil o ID de dispositivo, o cadena vacía si no hay>",
-      "furgo": "<matrícula de la furgoneta, p.ej. 7906NFX>",
-      "h_llegada": "<hora HH:MM o cadena vacía>",
-      "h_bajada": "<hora HH:MM o cadena vacía>",
+      "ruta": "<código exacto de ruta tal como aparece, p.ej. CA_A44 — null si no legible>",
+      "conductor": "<nombre completo exacto en MAYÚSCULAS tal como aparece — null si no legible>",
+      "movil": "<número de teléfono o ID de dispositivo exacto — null si no aparece>",
+      "furgo": "<matrícula exacta tal como aparece en imagen 2, p.ej. 7906NFX — null si no legible>",
+      "h_salida_cortex": "<hora de salida HH:MM exacta visible en imagen 1 para este DA — null si no aparece>",
       "observaciones": ""
     }
   ]
 }
 
-Reglas estrictas:
-- Extrae SOLO lo que ves con claridad en las imágenes. NO inventes datos.
-- Si un campo no aparece en las imágenes, usa cadena vacía "".
-- No dupliques conductores.
-- Cruza ambas imágenes por nombre del DA para asociar ruta + furgoneta.
-- Si la imagen no es de Cortex ni de plataforma de furgonetas, devuelve {"error": "imagen no reconocida"}.
-- Ordena las filas por código de ruta alfabéticamente.
+REGLAS ABSOLUTAS — NO LAS IGNORES:
+1. Extrae ÚNICAMENTE datos que puedas leer con total claridad en las imágenes.
+2. Si un dato no está claramente visible, pon null. NUNCA inventes ni supongas.
+3. El cruce entre imágenes se hace por nombre exacto del DA. Si los nombres no coinciden con certeza, deja furgo: null.
+4. No dupliques filas. Un DA = una fila.
+5. Ordena por código de ruta alfabéticamente.
+6. Si las imágenes no corresponden a Cortex/plataforma DSP, devuelve: {"error": "imagen no reconocida"}
+7. h_salida_cortex es la hora a la que el DA debe salir según Cortex (hora de inicio de ruta).
+   Es el único campo de hora que extraes de las imágenes. Las demás horas las calcula el sistema.
 """
 
-_RUTAS_ROJAS = {"CA_A46", "CA_A48", "CA_A63", "CA_A64", "CA_A65"}  # ejemplo; se aplica color rojo
 
-@app.post("/api/tools/plantilla-generar", dependencies=[Depends(require_admin)])
-async def plantilla_generar(
-    cortex: UploadFile = File(...),
-    plataforma: UploadFile = File(...),
-):
-    """
-    Recibe 2 capturas de pantalla (Cortex + plataforma furgonetas).
-    Devuelve un Excel con la plantilla de turno en el formato estándar DSP.
-    """
+def _gemini_client_plantilla():
+    """Construye cliente Gemini reutilizando el mismo patrón que el resto del backend."""
+    from google import genai as genai_sdk
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    _use_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
-    if not gemini_key and not _use_vertex:
+    use_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
+    if use_vertex:
+        vertex_project  = os.environ.get("GCP_PROJECT", "")
+        vertex_location = os.environ.get("GCP_LOCATION", "us-central1")
+        sa_json = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
+        if sa_json:
+            from google.oauth2 import service_account
+            import base64 as _b64
+            sa_clean = sa_json.strip()
+            if not sa_clean.startswith("{"):
+                try:
+                    sa_clean = _b64.b64decode(sa_clean).decode("utf-8")
+                except Exception:
+                    pass
+            creds_info = json.loads(sa_clean)
+            credentials = service_account.Credentials.from_service_account_info(
+                creds_info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+            return genai_sdk.Client(
+                vertexai=True, project=vertex_project,
+                location=vertex_location, credentials=credentials
+            )
+        return genai_sdk.Client(vertexai=True, project=vertex_project, location=vertex_location)
+    if not gemini_key:
         raise HTTPException(503, "GEMINI_API_KEY no configurada")
+    return genai_sdk.Client(api_key=gemini_key)
 
-    cortex_bytes = await cortex.read()
-    plat_bytes = await plataforma.read()
 
-    try:
-        from google import genai as genai_sdk
-        from google.genai import types as genai_types
+def _mime_type(data: bytes) -> str:
+    if data[:4] == b"\x89PNG":
+        return "image/png"
+    return "image/jpeg"
 
-        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-        use_vertex = _use_vertex
-        if use_vertex:
-            vertex_project = os.environ.get("GCP_PROJECT", "")
-            vertex_location = os.environ.get("GCP_LOCATION", "us-central1")
-            sa_json = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "")
-            if sa_json:
-                from google.oauth2 import service_account
-                import json as _json
-                import base64 as _b64
-                sa_clean = sa_json.strip()
-                if not sa_clean.startswith("{"):
-                    try:
-                        sa_clean = _b64.b64decode(sa_clean).decode("utf-8")
-                    except Exception:
-                        pass
-                creds_info = _json.loads(sa_clean)
-                credentials = service_account.Credentials.from_service_account_info(
-                    creds_info, scopes=["https://www.googleapis.com/auth/cloud-platform"]
-                )
-                client = genai_sdk.Client(
-                    vertexai=True, project=vertex_project,
-                    location=vertex_location, credentials=credentials
-                )
-            else:
-                client = genai_sdk.Client(
-                    vertexai=True, project=vertex_project, location=vertex_location
-                )
-        else:
-            client = genai_sdk.Client(api_key=gemini_key)
 
-        # Detectar mime type
-        def _mime(data: bytes) -> str:
-            if data[:4] == b"\x89PNG":
-                return "image/png"
-            if data[:2] in (b"\xff\xd8",):
-                return "image/jpeg"
-            return "image/jpeg"
+def _calc_horas(h_salida: str | None) -> tuple[str, str]:
+    """Dado h_salida (HH:MM de Cortex) calcula bajada y llegada. Devuelve ("", "") si no hay hora."""
+    if not h_salida:
+        return "", ""
+    from datetime import datetime as _dt, timedelta as _td
+    for fmt in ("%H:%M", "%H.%M", "%I:%M %p", "%I:%M%p"):
+        try:
+            t = _dt.strptime(h_salida.strip(), fmt)
+            bajada  = (_dt.combine(_dt.today(), t.time()) - _td(minutes=10)).strftime("%H:%M")
+            llegada = (_dt.combine(_dt.today(), t.time()) - _td(minutes=30)).strftime("%H:%M")
+            return llegada, bajada
+        except ValueError:
+            continue
+    return "", ""
 
-        contents = [
-            _PLANTILLA_PROMPT,
-            "IMAGEN 1 – Cortex (rutas/conductores):",
-            genai_types.Part.from_bytes(data=cortex_bytes, mime_type=_mime(cortex_bytes)),
-            "IMAGEN 2 – Plataforma furgonetas:",
-            genai_types.Part.from_bytes(data=plat_bytes, mime_type=_mime(plat_bytes)),
-        ]
 
-        resp = await asyncio.wait_for(
-            asyncio.to_thread(
-                lambda: client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=genai_types.GenerateContentConfig(temperature=0.0),
-                )
-            ),
-            timeout=90,
-        )
-
-        raw = (resp.text or "").strip()
-        raw = _strip_markdown_json(raw)
-        data = json.loads(raw)
-
-        if "error" in data:
-            raise HTTPException(422, f"Gemini: {data['error']}")
-
-    except asyncio.TimeoutError:
-        raise HTTPException(504, "Gemini tardó demasiado. Intenta de nuevo.")
-    except json.JSONDecodeError as e:
-        raise HTTPException(422, f"Gemini no devolvió JSON válido: {e}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"plantilla_generar error: {e}", exc_info=True)
-        raise HTTPException(500, str(e))
-
-    # ── Generar Excel ──
+def _build_plantilla_excel(rows: list, red_routes: set, week_num, fecha_str: str) -> bytes:
     import openpyxl
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
     import io
-    from datetime import date as _date
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Plantilla Turno"
 
-    week_num = data.get("week") or _date.today().isocalendar()[1]
-    fecha_str = data.get("date") or _date.today().strftime("%d/%m/%Y")
-
-    # ── Colores ──
-    C_HEADER_BG = "1F2937"  # casi negro
+    C_HEADER_BG = "1F2937"
     C_HEADER_FG = "FFFFFF"
-    C_TITLE_BG  = "F97316"  # naranja marca
+    C_TITLE_BG  = "F97316"
     C_TITLE_FG  = "FFFFFF"
-    C_RED_BG    = "FCA5A5"  # rojo claro
-    C_CYAN_BG   = "A5F3FC"  # cyan claro
-    C_ALT_BG    = "F3F4F6"  # gris muy claro
+    C_RED_BG    = "FCA5A5"
+    C_CYAN_BG   = "A5F3FC"
+    C_ALT_BG    = "F3F4F6"
     C_WHITE     = "FFFFFF"
     C_BORDER    = "D1D5DB"
 
@@ -12620,7 +12573,6 @@ async def plantilla_generar(
     center_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
     left_align   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
 
-    # Fila 1: título WEEK / fecha
     ws.merge_cells("A1:H1")
     c = ws["A1"]
     c.value = f"WEEK {week_num}  ·  {fecha_str}"
@@ -12629,7 +12581,6 @@ async def plantilla_generar(
     c.alignment = center_align
     ws.row_dimensions[1].height = 28
 
-    # Fila 2: encabezados de columnas
     cols = ["RUTA", "CONDUCTOR", "MOVIL", "FURGO",
             "H. LLEGADA A NAVE", "H. BAJADA AL YARD", "OBSERVACIONES", ""]
     col_widths = [14, 30, 16, 14, 20, 20, 30, 4]
@@ -12642,28 +12593,23 @@ async def plantilla_generar(
         ws.column_dimensions[get_column_letter(i)].width = w
     ws.row_dimensions[2].height = 22
 
-    # Filas de datos
-    rows = data.get("rows", [])
     for idx, row in enumerate(rows):
         r = idx + 3
-        ruta = row.get("ruta", "")
-        conductor = row.get("conductor", "")
-        movil = row.get("movil", "")
-        furgo = row.get("furgo", "")
-        h_llegada = row.get("h_llegada", "")
-        h_bajada = row.get("h_bajada", "")
-        obs = row.get("observaciones", "")
+        ruta      = row.get("ruta") or ""
+        conductor = row.get("conductor") or ""
+        movil     = row.get("movil") or ""
+        furgo     = row.get("furgo") or ""
+        h_llegada = row.get("h_llegada") or ""
+        h_bajada  = row.get("h_bajada") or ""
+        obs       = row.get("observaciones") or ""
 
-        is_red = ruta.upper() in _RUTAS_ROJAS
+        is_red = ruta.upper() in red_routes
         bg = C_RED_BG if is_red else (C_ALT_BG if idx % 2 == 1 else C_WHITE)
 
         values = [ruta, conductor, movil, furgo, h_llegada, h_bajada, obs, ""]
         for ci, val in enumerate(values, start=1):
             cell = ws.cell(row=r, column=ci, value=val)
-            # Hora de llegada en cyan si tiene valor
-            if ci == 5 and h_llegada:
-                cell.fill = fill(C_CYAN_BG)
-            elif ci == 6 and h_bajada:
+            if ci in (5, 6) and val:
                 cell.fill = fill(C_CYAN_BG)
             else:
                 cell.fill = fill(bg)
@@ -12672,16 +12618,99 @@ async def plantilla_generar(
             cell.border = thin_border()
         ws.row_dimensions[r].height = 18
 
-    # Freeze header rows
     ws.freeze_panes = "A3"
-
     buf = io.BytesIO()
     wb.save(buf)
-    buf.seek(0)
+    return buf.getvalue()
 
+
+# ── Paso 1: extraer datos con Gemini, devuelve JSON para preview ──
+@app.post("/api/tools/plantilla-extraer", dependencies=[Depends(require_admin)])
+async def plantilla_extraer(
+    cortex: UploadFile = File(...),
+    plataforma: UploadFile = File(...),
+):
+    cortex_bytes = await cortex.read()
+    plat_bytes   = await plataforma.read()
+
+    try:
+        from google.genai import types as genai_types
+        client = _gemini_client_plantilla()
+        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+        contents = [
+            _PLANTILLA_PROMPT,
+            "IMAGEN 1 – Cortex (rutas/conductores/hora salida):",
+            genai_types.Part.from_bytes(data=cortex_bytes, mime_type=_mime_type(cortex_bytes)),
+            "IMAGEN 2 – Plataforma furgonetas (DA → matrícula):",
+            genai_types.Part.from_bytes(data=plat_bytes,   mime_type=_mime_type(plat_bytes)),
+        ]
+
+        resp = await asyncio.wait_for(
+            asyncio.to_thread(
+                lambda: client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=genai_types.GenerateContentConfig(temperature=0.0),
+                )
+            ),
+            timeout=120,
+        )
+
+        raw  = _strip_markdown_json((resp.text or "").strip())
+        data = json.loads(raw)
+
+        if "error" in data:
+            raise HTTPException(422, f"Gemini: {data['error']}")
+
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "Gemini tardó demasiado. Intenta de nuevo.")
+    except json.JSONDecodeError as e:
+        raise HTTPException(422, f"Gemini no devolvió JSON válido: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"plantilla_extraer error: {e}", exc_info=True)
+        raise HTTPException(500, str(e))
+
+    from datetime import date as _date
+    week_num  = data.get("week")  or _date.today().isocalendar()[1]
+    fecha_str = data.get("date")  or _date.today().strftime("%d/%m/%Y")
+
+    # Calcular horas a partir de h_salida_cortex
+    rows_out = []
+    for row in data.get("rows", []):
+        h_salida = row.get("h_salida_cortex") or ""
+        h_llegada, h_bajada = _calc_horas(h_salida)
+        rows_out.append({
+            "ruta":          row.get("ruta")      or "",
+            "conductor":     row.get("conductor") or "",
+            "movil":         row.get("movil")     or "",
+            "furgo":         row.get("furgo")     or "",
+            "h_salida":      h_salida,
+            "h_bajada":      h_bajada,
+            "h_llegada":     h_llegada,
+            "observaciones": row.get("observaciones") or "",
+        })
+
+    return {"week": week_num, "date": fecha_str, "rows": rows_out}
+
+
+# ── Paso 2: generar Excel con rutas rojas elegidas por el usuario ──
+@app.post("/api/tools/plantilla-excel", dependencies=[Depends(require_admin)])
+async def plantilla_excel(body: dict = Body(...)):
+    from datetime import date as _date
+
+    rows       = body.get("rows", [])
+    red_routes = {r.upper() for r in body.get("red_routes", [])}
+    week_num   = body.get("week")  or _date.today().isocalendar()[1]
+    fecha_str  = body.get("date")  or _date.today().strftime("%d/%m/%Y")
+
+    import io
+    xlsx = _build_plantilla_excel(rows, red_routes, week_num, fecha_str)
     filename = f"plantilla_turno_w{week_num}_{fecha_str.replace('/', '-')}.xlsx"
     return StreamingResponse(
-        buf,
+        io.BytesIO(xlsx),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
     )
