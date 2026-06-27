@@ -11757,11 +11757,14 @@ async def scorecard_set_thresholds(data: dict = Body(...), _=Depends(require_adm
 
 @api_router.delete("/scorecard/thresholds")
 async def scorecard_reset_thresholds(center: str, _=Depends(require_admin)):
-    """Borra los umbrales personalizados del centro → vuelve a los valores semilla
-    corregidos con el PDF oficial de Amazon (FICO≥810, DCR≥98.5, DNR≤1500, etc.)."""
-    result = await db.scorecard_thresholds.delete_one({"center": center})
-    return {"success": True, "borrado": result.deleted_count > 0, "center": center,
-            "mensaje": f"Umbrales de {center} reiniciados a los valores del PDF de Amazon."}
+    """Escribe los seeds oficiales de Amazon directamente en MongoDB para el centro.
+    Sobreescribe cualquier calibración anterior con los valores verificados del Excel de targets."""
+    doc = {"center": center}
+    for key, bands in _SC_SEED_THR.items():
+        doc[key] = {b: v for b, v in bands.items() if v is not None}
+    await db.scorecard_thresholds.replace_one({"center": center}, doc, upsert=True)
+    return {"success": True, "center": center, "metricas": list(_SC_SEED_THR.keys()),
+            "mensaje": f"Umbrales de {center} escritos directamente desde los targets oficiales de Amazon."}
 
 
 _OFFICIAL_SC_PROMPT = """Eres un analista de Amazon DSP. Te paso la scorecard semanal OFICIAL (Scorecard 3.0) de un DSP.
