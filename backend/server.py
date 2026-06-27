@@ -11425,14 +11425,14 @@ _SC_METRICS = [
     {"key": "ndcr", "label": "Capacidad día siguiente", "group": "capacity", "unit": "%", "dir": 1, "manual": True},
 ]
 
-# Pesos semilla (% del score total): distribución uniforme dentro de cada pilar.
-# Se sobreescriben por centro si el usuario sube el Excel de pesos de Amazon.
-# Safety 40% (7 métricas), Quality 30% (8 métricas), Capacity 30% (1 métrica).
+# Pesos oficiales por métrica — fuente: Excel "Peso metricas scorecard wk22.xlsx" DGA1.
+# Suma = 100. DNR, BOC y CAS no aparecen como métricas ponderadas en Scorecard 3.0.
 _SC_SEED_WEIGHTS = {
-    "fico": 6, "speeding": 6, "mentor": 6, "vsa": 6, "whc": 6, "cas": 5, "boc": 5,
-    "dcr": 4, "dnr_dpmo": 4, "lor_dpmo": 4, "dsc_dpmo": 4,
-    "cec_dpmo": 4, "cdf": 4, "pod": 4, "cc": 2,
-    "ndcr": 30,
+    "fico": 8.625, "speeding": 8.625, "mentor": 8.625, "vsa": 8.625, "whc": 5.625,
+    "cas": 0, "boc": 0,
+    "dcr": 15.625, "dnr_dpmo": 0, "lor_dpmo": 5.625, "dsc_dpmo": 15.625,
+    "cec_dpmo": 8.125, "cdf": 0, "pod": 5.625, "cc": 3.625,
+    "ndcr": 5.625,
 }
 
 # Umbrales globales sembrados (se sobreescriben por centro con datos reales del PDF).
