@@ -11439,22 +11439,23 @@ _SC_SEED_WEIGHTS = {
 # Fantastic se ajusta cuando el usuario sube el PDF oficial — los valores de "great"/"fair"
 # están basados en las proporciones habituales de Amazon Scorecard 3.0.
 _SC_SEED_THR = {
-    "fico":     {"fantastic": 810,  "great": 750,  "fair": 700},   # PDF: >=810 Fantastic
-    "speeding": {"fantastic": 5,    "great": 10,   "fair": 20},    # PDF: <=5 Fantastic
-    "mentor":   {"fantastic": 90,   "great": 80,   "fair": 70},    # PDF: >=90% Fantastic
-    "vsa":      {"fantastic": 98.5, "great": 95,   "fair": 90},    # PDF: >=98.5% Fantastic
-    "whc":      {"fantastic": 100,  "great": 95,   "fair": 90},    # PDF: 100% Fantastic
-    "cas":      {"fantastic": 100,  "great": 95,   "fair": 90},    # PDF: In Compliance = 100%
-    "boc":      {"fantastic": 100,  "great": 95,   "fair": 90},
-    "dcr":      {"fantastic": 98.5, "great": 97.5, "fair": 96.5},  # Varía por estación; DGA1: 99%
-    "dnr_dpmo": {"fantastic": 1500, "great": 2500, "fair": 4000},  # Varía por estación; DGA1: 1080
-    "lor_dpmo": {"fantastic": 0,    "great": 50,   "fair": 150},   # PDF: <=0 Fantastic
-    "dsc_dpmo": {"fantastic": 605,  "great": 900,  "fair": 1500},  # PDF: <=605.85 Fantastic
-    "cec_dpmo": {"fantastic": 30,   "great": 80,   "fair": 150},   # PDF: <=0 Fantastic (en práctica ~30)
-    "cdf":      {"fantastic": 500,  "great": 1500, "fair": 3000},  # PDF: <=0 Fantastic (en práctica ~500)
-    "pod":      {"fantastic": 97,   "great": 96,   "fair": 94},    # PDF: >=97% Fantastic
-    "cc":       {"fantastic": 98,   "great": 96,   "fair": 94},    # PDF: >=98% Fantastic
-    "ndcr":     {"fantastic": 100,  "great": 95,   "fair": 90},
+    # Fuente: Excel "Targets scorecard nuevos" DGA1 — t0=Fantastic Plus, t1=Fantastic, t2=Great, t3=Fair
+    "fico":     {"fantastic_plus": 850,  "fantastic": 810,  "great": 790,  "fair": 730},
+    "speeding": {"fantastic_plus": 0,    "fantastic": 5,    "great": 7,    "fair": 10},
+    "mentor":   {"fantastic_plus": 100,  "fantastic": 90,   "great": 82,   "fair": 75},
+    "vsa":      {"fantastic_plus": 100,  "fantastic": 98.5, "great": 97,   "fair": 96},
+    "whc":      {"fantastic_plus": 100,  "fantastic": 100,  "great": 97,   "fair": 95},
+    "cas":      {"fantastic_plus": 100,  "fantastic": 100,  "great": 95,   "fair": 90},
+    "boc":      {"fantastic_plus": 100,  "fantastic": 100,  "great": 95,   "fair": 90},
+    "dcr":      {"fantastic_plus": 100,  "fantastic": 99,   "great": 98.5, "fair": 97},
+    "dnr_dpmo": {"fantastic_plus": 0,    "fantastic": 1080, "great": 2500, "fair": 4000},
+    "lor_dpmo": {"fantastic_plus": 0,    "fantastic": 0,    "great": 40,   "fair": 85},
+    "dsc_dpmo": {"fantastic_plus": 0,    "fantastic": 606,  "great": 906,  "fair": 1186},
+    "cec_dpmo": {"fantastic_plus": 0,    "fantastic": 0.02, "great": 40,   "fair": 135},
+    "cdf":      {"fantastic_plus": 0,    "fantastic": 500,  "great": 1500, "fair": 3000},
+    "pod":      {"fantastic_plus": 100,  "fantastic": 97,   "great": 95,   "fair": 90},
+    "cc":       {"fantastic_plus": 100,  "fantastic": 98,   "great": 97,   "fair": 95},
+    "ndcr":     {"fantastic_plus": 100,  "fantastic": 100,  "great": 95,   "fair": 90},
 }
 _TIER_ORDER = ["Poor", "Fair", "Great", "Fantastic", "Fantastic Plus"]
 
