@@ -12,6 +12,7 @@ import {
   setScorecardThreshold, toggleScorecardEstimacion,
   resetScorecardWeek, deleteScorecardSource,
   calibrateScorecardThresholds,
+  resetScorecardThresholds,
 } from '../api'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -416,6 +417,7 @@ function BaremosEditor({ full, center, onSaved }) {
   const [vals, setVals] = useState({})
   const [busy, setBusy] = useState(null)
   const [calibBusy, setCalibBusy] = useState(false)
+  const [resetBusy, setResetBusy] = useState(false)
   const [msg, setMsg] = useState(null)
 
   async function calibrate() {
@@ -427,6 +429,18 @@ function BaremosEditor({ full, center, onSaved }) {
     } catch (e) {
       setMsg({ ok: false, t: e?.response?.data?.detail || 'Error al calibrar. Asegúrate de haber subido el PDF oficial primero.' })
     } finally { setCalibBusy(false) }
+  }
+
+  async function resetToAmazon() {
+    if (!confirm(`¿Resetear los baremos de ${center} a los valores oficiales del PDF de Amazon? Se borrarán todos los ajustes manuales.`)) return
+    setResetBusy(true); setMsg(null)
+    try {
+      await resetScorecardThresholds(center)
+      setMsg({ ok: true, t: `Baremos de ${center} reiniciados a los valores Amazon por defecto.` })
+      onSaved()
+    } catch (e) {
+      setMsg({ ok: false, t: e?.response?.data?.detail || 'Error al resetear baremos.' })
+    } finally { setResetBusy(false) }
   }
 
   useEffect(() => {
@@ -468,11 +482,18 @@ function BaremosEditor({ full, center, onSaved }) {
               ⚡ Si ya has subido el PDF arriba, haz clic en "Calibrar" y los baremos se ajustan solos.
             </p>
           </div>
-          <button onClick={calibrate} disabled={calibBusy}
-            className="shrink-0 flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-4 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-50">
-            {calibBusy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-            Calibrar desde PDF
-          </button>
+          <div className="flex flex-col gap-2 shrink-0">
+            <button onClick={calibrate} disabled={calibBusy}
+              className="flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-4 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-50">
+              {calibBusy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+              Calibrar desde PDF
+            </button>
+            <button onClick={resetToAmazon} disabled={resetBusy}
+              className="flex items-center gap-1.5 rounded-lg bg-red-500/10 px-4 py-2 text-xs font-medium text-red-400 hover:bg-red-500/20 disabled:opacity-50">
+              {resetBusy ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+              Resetear a valores Amazon
+            </button>
+          </div>
         </div>
       </div>
 

@@ -11754,6 +11754,15 @@ async def scorecard_set_thresholds(data: dict = Body(...), _=Depends(require_adm
     return {"success": True}
 
 
+@api_router.delete("/scorecard/thresholds")
+async def scorecard_reset_thresholds(center: str, _=Depends(require_admin)):
+    """Borra los umbrales personalizados del centro → vuelve a los valores semilla
+    corregidos con el PDF oficial de Amazon (FICO≥810, DCR≥98.5, DNR≤1500, etc.)."""
+    result = await db.scorecard_thresholds.delete_one({"center": center})
+    return {"success": True, "borrado": result.deleted_count > 0, "center": center,
+            "mensaje": f"Umbrales de {center} reiniciados a los valores del PDF de Amazon."}
+
+
 _OFFICIAL_SC_PROMPT = """Eres un analista de Amazon DSP. Te paso la scorecard semanal OFICIAL (Scorecard 3.0) de un DSP.
 Extrae EXACTAMENTE lo que aparece, sin inventar nada. Si un valor no está o pone "None"/"N/A", déjalo null.
 

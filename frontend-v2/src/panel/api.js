@@ -84,6 +84,7 @@ export const getScorecardPredict = (center, week) => api.get('/scorecard/predict
 export const getScorecardDailyTrend = (center, week) => api.get('/scorecard/daily-trend', { params: { center, ...(week ? { week } : {}) } })
 export const setScorecardThreshold = (body) => api.post('/scorecard/thresholds', body) // {center?, key, fantastic, great, fair}
 export const calibrateScorecardThresholds = (center) => api.post('/scorecard/calibrate-thresholds', { center })
+export const resetScorecardThresholds = (center) => api.delete('/scorecard/thresholds', { params: { center } })
 export const toggleScorecardEstimacion = (body) => api.post('/scorecard/estimacion', body) // {center, week, on}
 export const resetScorecardWeek = (body) => api.post('/scorecard/reset', body) // {center, week?}
 export const deleteScorecardSource = (center, kind, ref, week) => api.delete('/scorecard/source', { params: { center, kind, ref, ...(week ? { week } : {}) } })
