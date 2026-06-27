@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { Upload, FileSpreadsheet, Loader2, AlertCircle, X, CheckCircle2, Download, RotateCcw } from 'lucide-react'
+import { Upload, FileSpreadsheet, Loader2, AlertCircle, X, CheckCircle2, Download, RotateCcw, Plus } from 'lucide-react'
 import { getToken } from '../auth'
 
 const API = import.meta.env.VITE_API_URL || 'https://flotadsp-backend.fly.dev/api'
@@ -18,44 +18,39 @@ async function apiFetch(path, opts = {}) {
 }
 
 export default function PlantillaGenerador() {
-  const [cortex, setCortex] = useState(null)
-  const [plat,   setPlat]   = useState(null)
-  const [step,   setStep]   = useState('upload') // upload | preview | done
+  const [cortexList, setCortexList] = useState([])   // [{file, preview}]
+  const [platList,   setPlatList]   = useState([])
+  const [step,    setStep]    = useState('upload')
   const [loading, setLoading] = useState(false)
-  const [err,    setErr]    = useState('')
-  const [data,   setData]   = useState(null)   // { week, date, rows }
-  const [redSet, setRedSet] = useState(new Set())
+  const [err,     setErr]     = useState('')
+  const [data,    setData]    = useState(null)        // { week, date, rows }
+  const [redSet,  setRedSet]  = useState(new Set())
   const refCortex = useRef()
   const refPlat   = useRef()
 
-  function pickFile(e, setter) {
-    const f = e.target.files?.[0]
-    if (!f) return
-    setter({ file: f, preview: URL.createObjectURL(f) })
+  function addFiles(files, setter) {
+    const items = Array.from(files).map(f => ({ file: f, preview: URL.createObjectURL(f) }))
+    setter(prev => [...prev, ...items])
     setErr('')
   }
 
-  function dropFile(e, setter) {
-    e.preventDefault()
-    const f = e.dataTransfer.files?.[0]
-    if (!f) return
-    setter({ file: f, preview: URL.createObjectURL(f) })
-    setErr('')
+  function removeFile(idx, setter) {
+    setter(prev => prev.filter((_, i) => i !== idx))
   }
 
   function reset() {
-    setCortex(null); setPlat(null)
+    setCortexList([]); setPlatList([])
     setStep('upload'); setData(null)
     setRedSet(new Set()); setErr('')
   }
 
   async function extraer() {
-    if (!cortex || !plat) return
+    if (!cortexList.length || !platList.length) return
     setLoading(true); setErr('')
     try {
       const fd = new FormData()
-      fd.append('cortex', cortex.file)
-      fd.append('plataforma', plat.file)
+      cortexList.forEach(f => fd.append('cortex', f.file))
+      platList.forEach(f => fd.append('plataforma', f.file))
       const resp = await apiFetch('/tools/plantilla-extraer', { method: 'POST', body: fd })
       const json = await resp.json()
       setData(json)
@@ -96,16 +91,37 @@ export default function PlantillaGenerador() {
   }
 
   function toggleRed(ruta) {
-    setRedSet((prev) => {
+    setRedSet(prev => {
       const next = new Set(prev)
-      if (next.has(ruta)) next.delete(ruta)
-      else next.add(ruta)
+      next.has(ruta) ? next.delete(ruta) : next.add(ruta)
       return next
     })
   }
 
+  function editCell(rowIdx, field, value) {
+    setData(prev => ({
+      ...prev,
+      rows: prev.rows.map((r, i) => i === rowIdx ? { ...r, [field]: value } : r),
+    }))
+  }
+
+  function editMeta(field, value) {
+    setData(prev => ({ ...prev, [field]: value }))
+  }
+
+  function addRow() {
+    setData(prev => ({
+      ...prev,
+      rows: [...prev.rows, { ruta: '', conductor: '', movil: '', furgo: '', h_salida: '', h_bajada: '', h_llegada: '', observaciones: '' }],
+    }))
+  }
+
+  function removeRow(idx) {
+    setData(prev => ({ ...prev, rows: prev.rows.filter((_, i) => i !== idx) }))
+  }
+
   return (
-    <div className="mx-auto max-w-4xl">
+    <div className="mx-auto max-w-5xl">
       <div className="mb-6 flex items-start justify-between">
         <div>
           <h1 className="flex items-center gap-2 text-xl font-bold">
@@ -113,12 +129,12 @@ export default function PlantillaGenerador() {
             Generador de Plantilla de Turno
           </h1>
           <p className="mt-1 text-sm text-dark-400">
-            Sube las 2 capturas → revisa y marca rutas en rojo → descarga el Excel.
+            Sube las capturas → edita si necesitas → marca rojos → descarga Excel.
           </p>
         </div>
         {step !== 'upload' && (
           <button onClick={reset} className="btn-ghost flex items-center gap-1.5 text-xs text-dark-400">
-            <RotateCcw size={13} /> Volver a empezar
+            <RotateCcw size={13} /> Nueva plantilla
           </button>
         )}
       </div>
@@ -126,23 +142,21 @@ export default function PlantillaGenerador() {
       {/* PASO 1: subir imágenes */}
       {step === 'upload' && (
         <>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <DropZone
-              label="1 · Cortex — rutas + hora de salida"
-              hint="Captura con la lista de DAs, rutas y horas"
-              value={cortex}
-              onFile={(e) => pickFile(e, setCortex)}
-              onDrop={(e) => dropFile(e, setCortex)}
-              onClear={() => setCortex(null)}
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+            <MultiDropZone
+              label="Cortex — rutas + hora salida"
+              hint="Puedes subir varias capturas si no caben en una"
+              items={cortexList}
+              onAdd={(files) => addFiles(files, setCortexList)}
+              onRemove={(i) => removeFile(i, setCortexList)}
               inputRef={refCortex}
             />
-            <DropZone
-              label="2 · Plataforma — furgonetas"
-              hint="Captura con la asignación DA → matrícula"
-              value={plat}
-              onFile={(e) => pickFile(e, setPlat)}
-              onDrop={(e) => dropFile(e, setPlat)}
-              onClear={() => setPlat(null)}
+            <MultiDropZone
+              label="Plataforma — furgonetas"
+              hint="Puedes subir varias capturas si no caben en una"
+              items={platList}
+              onAdd={(files) => addFiles(files, setPlatList)}
+              onRemove={(i) => removeFile(i, setPlatList)}
               inputRef={refPlat}
             />
           </div>
@@ -152,67 +166,98 @@ export default function PlantillaGenerador() {
           <div className="mt-6 flex justify-end">
             <button
               onClick={extraer}
-              disabled={!cortex || !plat || loading}
+              disabled={!cortexList.length || !platList.length || loading}
               className="btn-primary flex items-center gap-2 disabled:opacity-40"
             >
               {loading
-                ? <><Loader2 size={16} className="animate-spin" /> Analizando imágenes…</>
+                ? <><Loader2 size={16} className="animate-spin" /> Analizando…</>
                 : <><FileSpreadsheet size={16} /> Extraer datos</>}
             </button>
           </div>
 
           <div className="mt-6 rounded-lg border border-dark-700 bg-dark-800/60 p-4 text-xs text-dark-400 space-y-1">
             <p className="font-semibold text-dark-300">¿Cómo funciona?</p>
-            <p>1. Gemini Vision lee las 2 capturas y extrae rutas, conductores, matrículas y horas.</p>
-            <p>2. El sistema calcula: <b className="text-dark-200">Bajada al yard = hora Cortex − 10 min</b> · <b className="text-dark-200">Llegada a nave = hora Cortex − 30 min</b>.</p>
-            <p>3. Revisas la tabla, marcas las rutas en rojo que necesites y descargas el Excel.</p>
-            <p className="text-amber-400/80">Solo extrae datos claramente visibles. Nada inventado.</p>
+            <p>· Sube <b className="text-dark-200">una o varias capturas</b> de Cortex y de la plataforma de furgonetas.</p>
+            <p>· El sistema extrae todos los datos, cruza por nombre y calcula horas automáticamente.</p>
+            <p>· Puedes <b className="text-dark-200">editar cualquier celda</b> antes de descargar el Excel.</p>
           </div>
         </>
       )}
 
-      {/* PASO 2: preview + selección rojos */}
+      {/* PASO 2: tabla editable */}
       {step === 'preview' && data && (
         <>
-          <div className="mb-3 flex items-center justify-between">
-            <div>
-              <span className="rounded-md bg-brand-500/20 px-2 py-1 text-xs font-semibold text-brand-300">
-                WEEK {data.week} · {data.date}
-              </span>
-              <span className="ml-3 text-xs text-dark-400">{data.rows.length} conductores extraídos</span>
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-dark-400">WEEK</span>
+              <input
+                value={data.week}
+                onChange={e => editMeta('week', e.target.value)}
+                className="w-16 rounded border border-dark-600 bg-dark-800 px-2 py-1 text-center text-xs font-bold text-brand-300 focus:outline-none focus:border-brand-500"
+              />
+              <span className="text-xs text-dark-400">Fecha</span>
+              <input
+                value={data.date}
+                onChange={e => editMeta('date', e.target.value)}
+                className="w-28 rounded border border-dark-600 bg-dark-800 px-2 py-1 text-center text-xs focus:outline-none focus:border-brand-500"
+              />
             </div>
-            <p className="text-xs text-dark-500">Haz clic en una fila para marcarla en <span className="text-red-400">rojo</span></p>
+            <span className="text-xs text-dark-500">{data.rows.length} conductores · haz clic en fila para marcar rojo · edita directamente cualquier celda</span>
           </div>
 
           <div className="overflow-x-auto rounded-xl border border-dark-700">
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-dark-800 text-dark-300">
-                  {['RUTA','CONDUCTOR','MOVIL','FURGO','H. LLEGADA NAVE','H. BAJADA YARD','OBS'].map((h) => (
-                    <th key={h} className="px-3 py-2 text-left font-semibold">{h}</th>
+                  {['RUTA','CONDUCTOR','MOVIL','FURGO','H. LLEGADA NAVE','H. BAJADA YARD','OBS','',''].map((h, i) => (
+                    <th key={i} className="px-2 py-2 text-left font-semibold whitespace-nowrap">{h}</th>
                   ))}
-                  <th className="px-3 py-2 text-center font-semibold">ROJO</th>
                 </tr>
               </thead>
               <tbody>
                 {data.rows.map((row, i) => {
                   const isRed = redSet.has(row.ruta)
+                  const rowBg = isRed
+                    ? 'bg-red-500/15'
+                    : i % 2 === 0 ? 'bg-dark-900' : 'bg-dark-850'
                   return (
-                    <tr
-                      key={i}
-                      onClick={() => toggleRed(row.ruta)}
-                      className={`cursor-pointer border-t border-dark-700 transition-colors
-                        ${isRed ? 'bg-red-500/15 hover:bg-red-500/20' : i % 2 === 0 ? 'bg-dark-900 hover:bg-dark-800' : 'bg-dark-850 hover:bg-dark-800'}`}
-                    >
-                      <td className="px-3 py-1.5 font-bold text-brand-300">{row.ruta || <Nil />}</td>
-                      <td className="px-3 py-1.5">{row.conductor || <Nil />}</td>
-                      <td className="px-3 py-1.5 text-dark-400">{row.movil || '—'}</td>
-                      <td className="px-3 py-1.5 font-mono">{row.furgo || <Nil />}</td>
-                      <td className="px-3 py-1.5 text-center font-mono text-cyan-300">{row.h_llegada || '—'}</td>
-                      <td className="px-3 py-1.5 text-center font-mono text-cyan-300">{row.h_bajada  || '—'}</td>
-                      <td className="px-3 py-1.5 text-dark-500">{row.observaciones || ''}</td>
-                      <td className="px-3 py-1.5 text-center">
-                        {isRed && <span className="inline-block h-3 w-3 rounded-full bg-red-400" />}
+                    <tr key={i} className={`border-t border-dark-700 ${rowBg}`}>
+                      <td className="px-1 py-0.5">
+                        <EditCell value={row.ruta} onChange={v => editCell(i, 'ruta', v)} bold accent />
+                      </td>
+                      <td className="px-1 py-0.5">
+                        <EditCell value={row.conductor} onChange={v => editCell(i, 'conductor', v)} wide />
+                      </td>
+                      <td className="px-1 py-0.5">
+                        <EditCell value={row.movil} onChange={v => editCell(i, 'movil', v)} placeholder="—" />
+                      </td>
+                      <td className="px-1 py-0.5">
+                        <EditCell value={row.furgo} onChange={v => editCell(i, 'furgo', v)} mono />
+                      </td>
+                      <td className="px-1 py-0.5">
+                        <EditCell value={row.h_llegada} onChange={v => editCell(i, 'h_llegada', v)} mono cyan center />
+                      </td>
+                      <td className="px-1 py-0.5">
+                        <EditCell value={row.h_bajada} onChange={v => editCell(i, 'h_bajada', v)} mono cyan center />
+                      </td>
+                      <td className="px-1 py-0.5">
+                        <EditCell value={row.observaciones} onChange={v => editCell(i, 'observaciones', v)} wide placeholder="…" />
+                      </td>
+                      <td className="px-1 py-0.5 text-center">
+                        <button
+                          onClick={() => toggleRed(row.ruta)}
+                          title="Marcar/desmarcar rojo"
+                          className={`h-4 w-4 rounded-full border transition ${isRed ? 'bg-red-400 border-red-300' : 'border-dark-500 hover:border-red-400'}`}
+                        />
+                      </td>
+                      <td className="px-1 py-0.5 text-center">
+                        <button
+                          onClick={() => removeRow(i)}
+                          className="text-dark-600 hover:text-red-400 transition"
+                          title="Eliminar fila"
+                        >
+                          <X size={12} />
+                        </button>
                       </td>
                     </tr>
                   )
@@ -221,12 +266,18 @@ export default function PlantillaGenerador() {
             </table>
           </div>
 
+          <div className="mt-2">
+            <button onClick={addRow} className="btn-ghost flex items-center gap-1.5 text-xs text-dark-400 hover:text-brand-300">
+              <Plus size={13} /> Añadir fila
+            </button>
+          </div>
+
           {err && <ErrBanner msg={err} />}
 
           <div className="mt-4 flex items-center justify-between">
             <p className="text-xs text-dark-500">
               {redSet.size > 0
-                ? <><span className="text-red-400 font-semibold">{redSet.size} rutas en rojo</span>: {[...redSet].join(', ')}</>
+                ? <><span className="text-red-400 font-semibold">{redSet.size} rutas en rojo:</span> {[...redSet].join(', ')}</>
                 : 'Sin rutas marcadas en rojo'}
             </p>
             <button
@@ -257,50 +308,70 @@ export default function PlantillaGenerador() {
   )
 }
 
-function Nil() {
-  return <span className="text-red-400/70 italic">sin dato</span>
+function EditCell({ value, onChange, bold, accent, mono, cyan, center, wide, placeholder }) {
+  return (
+    <input
+      value={value || ''}
+      onChange={e => onChange(e.target.value)}
+      placeholder={placeholder || ''}
+      className={[
+        'w-full rounded bg-transparent px-1.5 py-0.5 focus:outline-none focus:bg-dark-700 focus:ring-1 focus:ring-brand-500/50 transition',
+        bold   ? 'font-bold' : '',
+        accent ? 'text-brand-300' : '',
+        mono   ? 'font-mono' : '',
+        cyan   ? 'text-cyan-300' : '',
+        center ? 'text-center' : '',
+        wide   ? 'min-w-[120px]' : 'min-w-[60px]',
+      ].join(' ')}
+    />
+  )
 }
 
 function ErrBanner({ msg }) {
   return (
     <div className="mt-4 flex items-start gap-2 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-300">
-      <AlertCircle size={15} className="mt-0.5 shrink-0" />
-      {msg}
+      <AlertCircle size={15} className="mt-0.5 shrink-0" /> {msg}
     </div>
   )
 }
 
-function DropZone({ label, hint, value, onFile, onDrop, onClear, inputRef }) {
+function MultiDropZone({ label, hint, items, onAdd, onRemove, inputRef }) {
   const [over, setOver] = useState(false)
+
   return (
     <div className="flex flex-col gap-2">
       <p className="text-sm font-semibold text-dark-200">{label}</p>
+
+      {items.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {items.map((it, i) => (
+            <div key={i} className="relative h-20 w-20 flex-shrink-0">
+              <img src={it.preview} alt="" className="h-20 w-20 rounded-lg object-cover border border-dark-600" />
+              <button
+                onClick={() => onRemove(i)}
+                className="absolute -right-1.5 -top-1.5 rounded-full bg-dark-700 p-0.5 text-dark-300 hover:text-white border border-dark-600"
+              >
+                <X size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div
-        onDragOver={(e) => { e.preventDefault(); setOver(true) }}
+        onDragOver={e => { e.preventDefault(); setOver(true) }}
         onDragLeave={() => setOver(false)}
-        onDrop={(e) => { setOver(false); onDrop(e) }}
-        onClick={() => !value && inputRef.current?.click()}
-        className={`relative flex min-h-[180px] cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed transition
-          ${over ? 'border-brand-400 bg-brand-500/10' : value ? 'border-dark-600 bg-dark-800' : 'border-dark-600 bg-dark-900 hover:border-brand-500/50'}`}
+        onDrop={e => { e.preventDefault(); setOver(false); onAdd(e.dataTransfer.files) }}
+        onClick={() => inputRef.current?.click()}
+        className={`flex h-20 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed transition
+          ${over ? 'border-brand-400 bg-brand-500/10' : 'border-dark-600 bg-dark-900 hover:border-brand-500/50'}`}
       >
-        {value ? (
-          <>
-            <img src={value.preview} alt="preview" className="h-full max-h-[160px] w-full rounded-lg object-contain p-1" />
-            <button
-              onClick={(e) => { e.stopPropagation(); onClear() }}
-              className="absolute right-2 top-2 rounded-full bg-dark-700 p-1 text-dark-300 hover:text-white"
-            >
-              <X size={13} />
-            </button>
-          </>
-        ) : (
-          <div className="flex flex-col items-center gap-2 text-dark-500">
-            <Upload size={28} />
-            <span className="text-sm">Arrastra o haz clic</span>
-            <span className="text-xs text-center px-4">{hint}</span>
-          </div>
-        )}
-        <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={onFile} />
+        <div className="flex items-center gap-2 text-dark-500">
+          <Upload size={18} />
+          <span className="text-xs">{items.length > 0 ? 'Añadir más capturas' : 'Arrastra o haz clic'}</span>
+        </div>
+        {items.length === 0 && <span className="mt-1 text-[10px] text-dark-600 text-center px-4">{hint}</span>}
+        <input ref={inputRef} type="file" accept="image/*" multiple className="hidden" onChange={e => onAdd(e.target.files)} />
       </div>
     </div>
   )

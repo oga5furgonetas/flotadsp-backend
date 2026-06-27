@@ -12706,21 +12706,22 @@ async def _gemini_extract(client, model_name: str, prompt: str, img_bytes: bytes
 # ── Paso 1: extraer datos con Gemini, devuelve JSON para preview ──
 @app.post("/api/tools/plantilla-extraer", dependencies=[Depends(require_admin)])
 async def plantilla_extraer(
-    cortex: UploadFile = File(...),
-    plataforma: UploadFile = File(...),
+    cortex:     List[UploadFile] = File(...),
+    plataforma: List[UploadFile] = File(...),
 ):
-    cortex_bytes = await cortex.read()
-    plat_bytes   = await plataforma.read()
+    cortex_imgs = [await f.read() for f in cortex]
+    plat_imgs   = [await f.read() for f in plataforma]
 
     try:
         client     = _gemini_client_plantilla()
         model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-        # Dos llamadas en paralelo: una por imagen
-        cortex_data, plat_data = await asyncio.gather(
-            _gemini_extract(client, model_name, _PROMPT_CORTEX, cortex_bytes),
-            _gemini_extract(client, model_name, _PROMPT_PLATAFORMA, plat_bytes),
+        # Todas las imágenes en paralelo
+        tasks = (
+            [_gemini_extract(client, model_name, _PROMPT_CORTEX,     b) for b in cortex_imgs] +
+            [_gemini_extract(client, model_name, _PROMPT_PLATAFORMA, b) for b in plat_imgs]
         )
+        results = await asyncio.gather(*tasks)
 
     except asyncio.TimeoutError:
         raise HTTPException(504, "Gemini tardó demasiado. Intenta de nuevo.")
@@ -12732,22 +12733,46 @@ async def plantilla_extraer(
         logger.error(f"plantilla_extraer error: {e}", exc_info=True)
         raise HTTPException(500, str(e))
 
+    nc = len(cortex_imgs)
+    cortex_results = results[:nc]
+    plat_results   = results[nc:]
+
     from datetime import date as _date
-    week_num  = cortex_data.get("week")  or _date.today().isocalendar()[1]
-    fecha_str = cortex_data.get("date")  or _date.today().strftime("%d/%m/%Y")
 
-    asignaciones = plat_data.get("asignaciones", [])  # [{conductor, furgo, movil}]
+    # Combinar datos de todas las imágenes Cortex (dedup por ruta)
+    week_num  = _date.today().isocalendar()[1]
+    fecha_str = _date.today().strftime("%d/%m/%Y")
+    rutas_map: dict = {}  # ruta -> {conductor, h_salida}
+    for cd in cortex_results:
+        if cd.get("week"):
+            week_num = cd["week"]
+        if cd.get("date"):
+            fecha_str = cd["date"]
+        for r in cd.get("rutas", []):
+            key = (r.get("ruta") or "").strip()
+            if key and key not in rutas_map:
+                rutas_map[key] = r
 
+    # Combinar datos de todas las imágenes plataforma (dedup por conductor)
+    asignaciones: list = []
+    seen_conductores: set = set()
+    for pd in plat_results:
+        for a in pd.get("asignaciones", []):
+            nombre = _normalize_name(a.get("conductor") or "")
+            if nombre and nombre not in seen_conductores:
+                seen_conductores.add(nombre)
+                asignaciones.append(a)
+
+    # Cruce por tokens de nombre
     rows_out = []
-    for ruta_row in cortex_data.get("rutas", []):
-        ruta      = ruta_row.get("ruta") or ""
+    for ruta_key in sorted(rutas_map):
+        ruta_row  = rutas_map[ruta_key]
         conductor = ruta_row.get("conductor") or ""
         h_salida  = ruta_row.get("h_salida") or ""
 
-        # Cruce por mejor coincidencia de tokens de nombre
         furgo = ""
         movil = ""
-        best_score = 0
+        best_score = 0.0
         best_asig  = None
         for asig in asignaciones:
             sc = _match_score(conductor, asig.get("conductor") or "")
@@ -12755,14 +12780,13 @@ async def plantilla_extraer(
                 best_score = sc
                 best_asig  = asig
 
-        # Umbral: score >= 0.8 — basta con que un apellido (exacto o prefijo largo) coincida
         if best_asig and best_score >= 0.8:
             furgo = (best_asig.get("furgo") or "").replace(" ", "")
             movil = best_asig.get("movil") or ""
 
         h_llegada, h_bajada = _calc_horas(h_salida)
         rows_out.append({
-            "ruta":          ruta,
+            "ruta":          ruta_key,
             "conductor":     conductor,
             "movil":         movil,
             "furgo":         furgo,
