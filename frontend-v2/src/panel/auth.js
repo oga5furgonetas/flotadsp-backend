@@ -38,7 +38,7 @@ export function getOrgId() {
 
 export function isSuperAdmin() {
   const a = getAdmin()
-  return !!(a && (a.super_admin || a.account_type === 'owner'))
+  return !!(a && a.super_admin)
 }
 
 // Permisos por usuario: array de claves de módulo, o null = sin restricción (ve todo).

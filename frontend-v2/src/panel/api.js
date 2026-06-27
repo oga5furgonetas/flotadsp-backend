@@ -75,9 +75,18 @@ export const getIncidents = () => api.get('/incidents')
 
 /* ── Scorecard (baremos y subida POR CENTRO) ── */
 export const getScorecardTargets = (center) => api.get('/scorecard/targets', { params: { center } })
-export const setScorecardTargets = (body) => api.post('/scorecard/targets', body) // {center, dcr, dnr_dpmo, pod, cc, rts_pct, fdds}
+export const setScorecardTargets = (body) => api.post('/scorecard/targets', body)
 export const getScorecardStandings = (center) => api.get('/scorecard/standings', { params: { center } })
 export const getScorecardSources = (center, week) => api.get('/scorecard/sources', { params: { center, ...(week ? { week } : {}) } })
+export const getScorecardFull = (center, week) => api.get('/scorecard/full', { params: { center, ...(week ? { week } : {}) } })
+export const setScorecardValue = (body) => api.post('/scorecard/full', body)   // {center, week, key, value}
+export const getScorecardPredict = (center, week) => api.get('/scorecard/predict', { params: { center, ...(week ? { week } : {}) } })
+export const getScorecardDailyTrend = (center, week) => api.get('/scorecard/daily-trend', { params: { center, ...(week ? { week } : {}) } })
+export const setScorecardThreshold = (body) => api.post('/scorecard/thresholds', body) // {center?, key, fantastic, great, fair}
+export const calibrateScorecardThresholds = (center) => api.post('/scorecard/calibrate-thresholds', { center })
+export const toggleScorecardEstimacion = (body) => api.post('/scorecard/estimacion', body) // {center, week, on}
+export const resetScorecardWeek = (body) => api.post('/scorecard/reset', body) // {center, week?}
+export const deleteScorecardSource = (center, kind, ref, week) => api.delete('/scorecard/source', { params: { center, kind, ref, ...(week ? { week } : {}) } })
 export const uploadScorecard = (file, center) => {
   const fd = new FormData()
   fd.append('file', file, file.name)

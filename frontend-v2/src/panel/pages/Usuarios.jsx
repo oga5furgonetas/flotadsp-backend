@@ -9,6 +9,10 @@ const MODULES = [
     ['dashboard', 'Dashboard'], ['scorecard', 'Scorecard'], ['conductores', 'Conductores'],
     ['turnos', 'Turnos'], ['metricas', 'Métricas'], ['actividad', 'Actividad'],
   ]},
+  { g: 'Equipo', items: [
+    ['asignacion', 'Asignación diaria'], ['checklist-operativo', 'Checklist turno'],
+    ['chat', 'Chat interno'], ['plantilla', 'Plantilla turno'],
+  ]},
   { g: 'Furgonetas', items: [
     ['revision', 'Revisión rápida'], ['inspecciones', 'Inspecciones'], ['vehiculos', 'Vehículos'],
     ['talleres', 'Talleres'], ['avisos-itv', 'Avisos ITV'], ['renting', 'Renting'],
@@ -155,7 +159,8 @@ export default function Usuarios() {
           </div>
         )}
 
-        <button onClick={create} disabled={busy} className="btn-primary mt-4 flex items-center gap-2 disabled:opacity-50">
+        {msg && <div className={`mt-3 rounded-lg px-3 py-2 text-sm ${msg.ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{msg.t}</div>}
+        <button onClick={create} disabled={busy} className="btn-primary mt-3 flex items-center gap-2 disabled:opacity-50">
           {busy ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />} Crear usuario
         </button>
       </div>
