@@ -136,7 +136,7 @@ export default function Chat() {
               return (
                 <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
                   <div className={`group max-w-[80%] rounded-2xl px-3.5 py-2 text-sm ${mine ? 'bg-brand-500/20 text-brand-100' : 'bg-dark-800 text-dark-100'}`}>
-                    {!mine && <div className="mb-0.5 text-[11px] font-semibold text-brand-300">{m.author_name}</div>}
+                    <div className={`mb-0.5 text-[11px] font-semibold ${mine ? 'text-brand-200' : 'text-brand-300'}`}>{m.author_name}{mine ? ' (tú)' : ''}</div>
                     <div className="whitespace-pre-wrap break-words">{m.text}</div>
                     <div className="mt-1 flex items-center justify-end gap-2 text-[10px] text-dark-400">
                       {m.pinned_to_checklist && <span className="flex items-center gap-0.5 text-emerald-400"><CheckSquare size={10} /> en checklist</span>}

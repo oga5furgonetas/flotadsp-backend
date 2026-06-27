@@ -11,7 +11,7 @@ import TrialBanner from './TrialBanner'
 
 const keyOf = (to) => (to === '/panel' ? 'dashboard' : to.split('/').pop())
 
-// Menú real (dos pestañas, como la app actual)
+// Menú real (3 pestañas: operacional, equipo, furgonetas)
 const TABS = {
   operacional: {
     label: 'Operacional',
@@ -19,12 +19,17 @@ const TABS = {
       { to: '/panel', label: 'Dashboard', icon: LayoutDashboard, end: true },
       { to: '/panel/scorecard', label: 'Scorecard', icon: Trophy },
       { to: '/panel/conductores', label: 'Conductores', icon: Users },
-      { to: '/panel/asignacion', label: 'Asignación diaria', icon: ClipboardCheck },
-      { to: '/panel/checklist-operativo', label: 'Checklist turno', icon: CheckCircle2 },
-      { to: '/panel/chat', label: 'Chat interno', icon: BellRing },
       { to: '/panel/turnos', label: 'Turnos', icon: CalendarClock },
       { to: '/panel/metricas', label: 'Métricas', icon: BarChart3 },
       { to: '/panel/actividad', label: 'Actividad', icon: Activity },
+    ],
+  },
+  equipo: {
+    label: 'Equipo',
+    items: [
+      { to: '/panel/asignacion', label: 'Asignación diaria', icon: ClipboardCheck },
+      { to: '/panel/checklist-operativo', label: 'Checklist turno', icon: CheckCircle2 },
+      { to: '/panel/chat', label: 'Chat interno', icon: BellRing },
     ],
   },
   furgonetas: {
