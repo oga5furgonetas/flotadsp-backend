@@ -4783,6 +4783,7 @@ async def chat_post(center: str, data: dict = Body(...), user: dict = Depends(re
         "pinned_to_checklist": False,
     }
     await db.chat_messages.insert_one(doc)
+    doc.pop("_id", None)  # insert_one añade _id (ObjectId) que FastAPI no serializa
     return {"ok": True, "message": doc}
 
 
