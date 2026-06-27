@@ -12569,7 +12569,7 @@ async def plantilla_generar(
         )
 
         raw = (resp.text or "").strip()
-        raw = _clean_json_response(raw)
+        raw = _strip_markdown_json(raw)
         data = json.loads(raw)
 
         if "error" in data:
