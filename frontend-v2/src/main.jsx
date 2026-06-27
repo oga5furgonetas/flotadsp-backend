@@ -35,6 +35,7 @@ import PanelPortalConductor from './panel/pages/PortalConductor'
 import PanelAsignacion from './panel/pages/Asignacion'
 import PanelChecklistOp from './panel/pages/ChecklistOperativo'
 import PanelChat from './panel/pages/Chat'
+import PanelPlantilla from './panel/pages/PlantillaGenerador'
 import PanelBandeja from './panel/pages/Bandeja'
 import Privacidad from './legal/Privacidad'
 import Terminos from './legal/Terminos'
@@ -86,6 +87,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="asignacion" element={<PanelAsignacion />} />
               <Route path="checklist-operativo" element={<PanelChecklistOp />} />
               <Route path="chat" element={<PanelChat />} />
+              <Route path="plantilla" element={<PanelPlantilla />} />
               <Route path="metricas" element={<PanelMetricas />} />
               <Route path="actividad" element={<PanelActividad />} />
               {/* Furgonetas */}
