@@ -21,6 +21,7 @@ const TABS = {
       { to: '/panel/conductores', label: 'Conductores', icon: Users },
       { to: '/panel/asignacion', label: 'Asignación diaria', icon: ClipboardCheck },
       { to: '/panel/checklist-operativo', label: 'Checklist turno', icon: CheckCircle2 },
+      { to: '/panel/chat', label: 'Chat interno', icon: BellRing },
       { to: '/panel/turnos', label: 'Turnos', icon: CalendarClock },
       { to: '/panel/metricas', label: 'Métricas', icon: BarChart3 },
       { to: '/panel/actividad', label: 'Actividad', icon: Activity },
@@ -64,7 +65,7 @@ export default function PanelLayout() {
   // Guard de ruta: impide acceder por URL a un módulo no permitido.
   const curKey = keyOf(loc.pathname.replace(/\/+$/, '') || '/panel')
   const routeAllowed = (k) => {
-    if (k === 'perfil' || k === 'login' || k === 'portal-conductor' || k === 'checklist-operativo') return true
+    if (k === 'perfil' || k === 'login' || k === 'portal-conductor' || k === 'checklist-operativo' || k === 'chat') return true
     if (k === 'admin' || k === 'usuarios' || k === 'bandeja') return isSuperAdmin()
     return canSee(k)
   }

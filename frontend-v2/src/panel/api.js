@@ -17,6 +17,12 @@ export const getChecklist = (center, date) => api.get('/checklist', { params: { 
 export const upsertChecklist = (body) => api.put('/checklist', body)
 export const toggleChecklistItem = (body) => api.post('/checklist/toggle', body)
 
+/* ── Chat por centro ── */
+export const getChat = (center, since) => api.get(`/chat/${center}`, { params: since ? { since } : {} })
+export const postChat = (center, text) => api.post(`/chat/${center}`, { text })
+export const chatToChecklist = (center, messageId, body = {}) =>
+  api.post(`/chat/${center}/${messageId}/to-checklist`, body)
+
 /* ── Dashboard ── */
 export const getDashboardStats = () => api.get('/stats/dashboard')
 export const getAttention = () => api.get('/stats/attention')
