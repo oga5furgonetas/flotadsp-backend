@@ -12649,10 +12649,12 @@ def _build_plantilla_excel(rows: list, red_routes: set, week_num, fecha_str: str
 
 
 def _normalize_name(name: str) -> str:
-    """Normaliza a mayúsculas sin tildes."""
-    import unicodedata
+    """Mayúsculas, sin tildes, sin puntuación ni puntos suspensivos."""
+    import unicodedata, re
     s = unicodedata.normalize("NFD", name.upper())
-    return "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
+    s = re.sub(r"[^A-Z0-9 ]", " ", s)  # quita puntos, comas, etc.
+    return s
 
 
 def _name_tokens(name: str) -> list:
@@ -12662,9 +12664,8 @@ def _name_tokens(name: str) -> list:
 
 def _match_score(name_a: str, name_b: str) -> float:
     """
-    Score de similitud entre dos nombres.
-    Cuenta tokens que coinciden exactamente O donde uno es prefijo del otro (>=4 chars).
-    Retorna número de coincidencias (puede ser fraccionario para prefijos).
+    Score entre dos nombres. Coincidencia exacta = 1.0, prefijo (>=4 chars) = 0.8.
+    Maneja nombres truncados con '...' porque _normalize_name ya elimina los puntos.
     """
     tokens_a = _name_tokens(name_a)
     tokens_b = _name_tokens(name_b)
@@ -12678,7 +12679,6 @@ def _match_score(name_a: str, name_b: str) -> float:
                 score += 1.0
                 used_b.add(i)
                 break
-            # prefijo: el más corto es prefijo del más largo (min 4 chars)
             short, long_ = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
             if len(short) >= 4 and long_.startswith(short):
                 score += 0.8
@@ -12755,8 +12755,8 @@ async def plantilla_extraer(
                 best_score = sc
                 best_asig  = asig
 
-        # Umbral: score >= 1.6 (un apellido exacto + prefijo, o dos apellidos exactos)
-        if best_asig and best_score >= 1.6:
+        # Umbral: score >= 0.8 — basta con que un apellido (exacto o prefijo largo) coincida
+        if best_asig and best_score >= 0.8:
             furgo = (best_asig.get("furgo") or "").replace(" ", "")
             movil = best_asig.get("movil") or ""
 
