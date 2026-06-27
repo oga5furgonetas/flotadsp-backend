@@ -43,6 +43,7 @@ export const getDriverScore = (id) => api.get(`/drivers/${id}/score`)
 export const createDriver = (data) => api.post('/drivers', data)
 export const updateDriver = (id, data) => api.patch(`/drivers/${id}`, data)
 export const deleteDriver = (id) => api.delete(`/drivers/${id}`)
+export const uploadDriverPhoto = (id, file) => { const fd = new FormData(); fd.append('file', file); return api.post(`/drivers/${id}/photo`, fd) }
 
 /* ── Inspecciones ── */
 export const getInspections = (params = {}) => api.get('/inspections', { params })

@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
-  Loader2, Search, Plus, X, Pencil, Trash2, Check, UserCheck,
-  Phone, Mail, IdCard, Car, MapPin, FileText, Building2, Save,
+  Loader2, Search, Plus, X, Pencil, Trash2, UserCheck,
+  Phone, Mail, IdCard, Car, MapPin, FileText, Building2, Save, Camera,
 } from 'lucide-react'
-import { getDrivers, createDriver, updateDriver, deleteDriver } from '../api'
+import { getDrivers, createDriver, updateDriver, deleteDriver, uploadDriverPhoto } from '../api'
 
 const EMPTY = {
   name: '', dni: '', phone: '', email: '', driver_id: '',
@@ -159,7 +159,10 @@ function DriverModal({ driver, centers, onSave, onDelete, onClose }) {
   const [editing, setEditing] = useState(isNew)
   const [form, setForm] = useState(driver ? { ...driver } : { ...EMPTY })
   const [busy, setBusy] = useState(false)
+  const [photoBusy, setPhotoBusy] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState(driver?.photo_url || null)
   const [err, setErr] = useState('')
+  const photoRef = useRef()
 
   function set(k, v) { setForm(f => ({ ...f, [k]: v })) }
   function cancel() { if (isNew) onClose(); else { setForm({ ...driver }); setEditing(false); setErr('') } }
@@ -170,6 +173,18 @@ function DriverModal({ driver, centers, onSave, onDelete, onClose }) {
     setBusy(true); setErr('')
     try { await onSave(driver?.id || null, form) }
     catch (ex) { setErr(ex?.response?.data?.detail || 'Error al guardar.'); setBusy(false) }
+  }
+
+  async function handlePhoto(e) {
+    const file = e.target.files?.[0]
+    if (!file || !driver?.id) return
+    setPreviewUrl(URL.createObjectURL(file))
+    setPhotoBusy(true)
+    try {
+      const r = await uploadDriverPhoto(driver.id, file)
+      setForm(f => ({ ...f, photo_url: r.data.photo_url }))
+    } catch { setErr('Error subiendo la foto.') }
+    finally { setPhotoBusy(false) }
   }
 
   const [nl, nc] = NIVEL[driver?.nivel] || []
@@ -189,7 +204,26 @@ function DriverModal({ driver, centers, onSave, onDelete, onClose }) {
         {/* Header */}
         <div className="flex items-center justify-between border-b border-dark-800 px-6 py-4">
           <div className="flex items-center gap-3">
-            {driver && <Avatar driver={driver} size={10} />}
+            {/* Avatar clickable para cambiar foto */}
+            {driver && (
+              <button
+                type="button"
+                onClick={() => photoRef.current?.click()}
+                className="group relative shrink-0"
+                title="Cambiar foto"
+                disabled={photoBusy}
+              >
+                <div className="h-10 w-10 overflow-hidden rounded-full">
+                  {previewUrl
+                    ? <img src={previewUrl} alt="" className="h-full w-full object-cover" />
+                    : <div className={`flex h-full w-full items-center justify-center bg-gradient-to-br ${avatarGrad(driver.name)} text-sm font-bold text-white`}>{initials(driver.name)}</div>}
+                </div>
+                <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
+                  {photoBusy ? <Loader2 size={14} className="animate-spin text-white" /> : <Camera size={14} className="text-white" />}
+                </div>
+              </button>
+            )}
+            <input ref={photoRef} type="file" accept="image/*" className="hidden" onChange={handlePhoto} />
             <div>
               <h2 className="font-bold text-dark-50">
                 {isNew ? 'Nuevo conductor' : driver.name}

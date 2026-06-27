@@ -6171,6 +6171,23 @@ async def delete_driver(driver_id: str, _=Depends(require_admin)):
     return {"success": True}
 
 
+@api_router.post("/drivers/{driver_id}/photo")
+async def upload_driver_photo(driver_id: str, file: UploadFile = File(...), _=Depends(require_admin)):
+    """Sube foto de perfil del conductor a R2 y guarda la URL en MongoDB."""
+    driver = await db.drivers.find_one({"id": driver_id})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Conductor no encontrado")
+    content = await file.read()
+    if len(content) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="La foto no puede superar 8 MB")
+    try:
+        photo_url, _ = await process_and_save_image(content, f"driver-{driver_id}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error procesando imagen: {e}")
+    await db.drivers.update_one({"id": driver_id}, {"$set": {"photo_url": photo_url}})
+    return {"success": True, "photo_url": photo_url}
+
+
 # =========================
 # PUT (alias de PATCH) para vehículos y conductores
 # =========================
