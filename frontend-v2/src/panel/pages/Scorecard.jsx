@@ -562,6 +562,16 @@ export default function Scorecard() {
     finally { setLoadingFull(false) }
   }, [])
 
+  // Auto-activar proyección si no hay oficial y hay scorecard anterior
+  useEffect(() => {
+    if (!full || full.has_official || full.estimacion_on) return
+    if (full.estimada_desde) {
+      toggleScorecardEstimacion({ center, week: full.week, on: true })
+        .then(() => loadFull(center, full.week))
+        .catch(() => {})
+    }
+  }, [full?.has_official, full?.estimacion_on, full?.estimada_desde]) // eslint-disable-line
+
   useEffect(() => {
     setFull(null); setPredict(null); setTrend(null); setSources([])
     setWeekSun(null); setMsg(null)
