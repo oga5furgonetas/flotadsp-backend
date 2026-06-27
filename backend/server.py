@@ -2598,7 +2598,6 @@ async def get_me(user: dict = Depends(get_current_user)):
     }
 
 
-@auth_router.post("/create-admin")
 def _is_center_manager(user: dict) -> bool:
     return user.get("admin_role") == "center_manager" and not user.get("sa")
 
@@ -2624,6 +2623,7 @@ def _clamp_permissions(actor: dict, permissions: Optional[list]) -> Optional[lis
         return actor_perms  # no puede dar "todos" si él no tiene todos
     return [p for p in permissions if p in actor_perms]
 
+@auth_router.post("/create-admin")
 async def create_admin(
     data: CreateAdminRequest,
     _admin: dict = Depends(require_admin)
