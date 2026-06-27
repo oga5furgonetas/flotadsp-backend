@@ -12410,6 +12410,63 @@ _XLSX_THR_MAP = {
 }
 
 
+@api_router.post("/scorecard/calibrate-thresholds")
+async def calibrate_thresholds(data: dict = Body(...), _=Depends(require_admin)):
+    """Infiere umbrales del centro a partir de las scorecards oficiales ya importadas.
+    Para cada métrica y tier observado, toma el PEOR valor en ese tier como umbral
+    (conservador: si vimos 98.45% como Fantastic, umbral Fantastic = 98.45%).
+    Solo actualiza métricas con al menos 1 dato real."""
+    center = data.get("center")
+    if not center:
+        raise HTTPException(status_code=400, detail="center requerido")
+    docs = await db.scorecard_official.find({"center": center}, {"_id": 0}).to_list(200)
+    if not docs:
+        raise HTTPException(status_code=404, detail=f"No hay scorecards oficiales importadas para {center}. Sube primero el PDF.")
+
+    # Acumular pares (valor, tier) por métrica
+    pairs = {}
+    for doc in docs:
+        for m in (doc.get("metrics") or []):
+            key = m.get("key")
+            val = m.get("value")
+            tier = m.get("tier")
+            if key and val is not None and tier and tier in ("Fantastic Plus", "Fantastic", "Great", "Fair", "Poor"):
+                pairs.setdefault(key, []).append((float(val), tier))
+
+    thr_update = {}
+    for m_cfg in _SC_METRICS:
+        key = m_cfg["key"]
+        obs = pairs.get(key)
+        if not obs:
+            continue
+        direction = m_cfg["dir"]  # +1 mayor=mejor; -1 menor=mejor
+        by_tier = {}
+        for val, tier in obs:
+            by_tier.setdefault(tier, []).append(val)
+
+        # Umbral = PEOR valor observado en ese tier (frontera con el tier inferior)
+        thr_doc = {}
+        if "Fantastic Plus" in by_tier:
+            thr_doc["fantastic_plus"] = min(by_tier["Fantastic Plus"]) if direction == 1 else max(by_tier["Fantastic Plus"])
+        if "Fantastic" in by_tier:
+            thr_doc["fantastic"] = min(by_tier["Fantastic"]) if direction == 1 else max(by_tier["Fantastic"])
+        if "Great" in by_tier:
+            thr_doc["great"] = min(by_tier["Great"]) if direction == 1 else max(by_tier["Great"])
+        if "Fair" in by_tier:
+            thr_doc["fair"] = min(by_tier["Fair"]) if direction == 1 else max(by_tier["Fair"])
+        if thr_doc:
+            thr_update[key] = thr_doc
+
+    if not thr_update:
+        raise HTTPException(status_code=422, detail="No se encontraron métricas con valor + tier en las scorecards importadas.")
+
+    update_doc = {"center": center}
+    update_doc.update(thr_update)
+    await db.scorecard_thresholds.update_one({"center": center}, {"$set": update_doc}, upsert=True)
+    return {"success": True, "center": center, "calibradas": list(thr_update.keys()),
+            "desde_scorecards": len(docs)}
+
+
 @api_router.post("/scorecard/import-thresholds")
 async def import_thresholds(file: UploadFile = File(...), _=Depends(require_admin)):
     """Sube el Excel de umbrales de Amazon (t0/t1/t2/t3 por métrica y semana).
