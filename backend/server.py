@@ -1,4 +1,6 @@
-﻿from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Depends, Body, Request
+﻿from damage_segmentation import segment_damage, preload_sam
+from ai_learning import get_few_shot_examples, build_few_shot_prompt_parts_multimodal, save_feedback as _save_ai_feedback
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Depends, Body, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -595,6 +597,12 @@ async def ensure_owner_org():
 # =========================
 
 @app.on_event("startup")
+async def _init_segmentation():
+    import asyncio
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, preload_sam)
+
+@app.on_event("startup")
 async def seed_initial_admin():
     await ensure_owner_org()
 
@@ -691,6 +699,13 @@ async def _ensure_tenant_indexes(db_name: str):
     await tdb.daily_assignments.create_index([("date", -1), ("center", 1)])
     await tdb.alerts.create_index([("created_at", -1)])
     await tdb.alerts.create_index("read")
+    await tdb.ai_feedback.create_index([("created_at", -1)])
+    await tdb.ai_feedback.create_index([("damage.part", 1)])
+    await tdb.ai_feedback.create_index([("damage.location_hint", 1)])
+    await tdb.ai_feedback.create_index([("verdict", 1)])
+    await tdb.ai_feedback.create_index(
+        [("inspection_id", 1), ("damage_index", 1)], unique=True
+    )
     await tdb.incidents.create_index("vehicle_id")
     await tdb.incidents.create_index("status")
     await tdb.forensic_signatures.create_index([("inspection_id", 1), ("revision", 1)], unique=True)
@@ -1761,7 +1776,8 @@ def _strip_markdown_json(raw: str) -> str:
 
 async def analyze_images_with_gemini(
     images_base64: List[str],
-    reference_images_bytes: Optional[List[bytes]] = None
+    reference_images_bytes: Optional[List[bytes]] = None,
+    db=None,
 ) -> tuple[InspectionAnalysis, str, Optional[str]]:
     """
     Retorna (analysis, status, error_message).
@@ -1816,6 +1832,24 @@ async def analyze_images_with_gemini(
             logger.info("Gemini via AI Studio (api key)")
 
         contents = [GEMINI_SYSTEM_PROMPT]
+
+        # ── FEW-SHOT LEARNING: inyectar errores anteriores antes de las fotos ──
+        if db is not None:
+            try:
+                general_examples = await get_few_shot_examples(db, location_hint="", part="", limit=2, general=True)
+                few_shot_parts = build_few_shot_prompt_parts_multimodal(general_examples)
+                for part_dict in few_shot_parts:
+                    if "inline_data" in part_dict:
+                        contents.append(
+                            genai_types.Part.from_bytes(
+                                data=base64.b64decode(part_dict["inline_data"]["data"]),
+                                mime_type=part_dict["inline_data"]["mime_type"],
+                            )
+                        )
+                    else:
+                        contents.append(part_dict["text"])
+            except Exception as _fse:
+                logger.debug(f"[Learning] Error cargando ejemplos generales: {_fse}")
 
         logger.info(f"Enviando {len(images_base64)} imágenes a Gemini ({model_name}) [SDK google-genai]")
 
@@ -1925,7 +1959,7 @@ async def analyze_images_with_gemini(
 
         # ─ SEGUNDA PASADA: refinamiento quirúrgico de bounding boxes ─
         if damages and os.environ.get("TWO_PASS_DISABLED", "").lower() not in ("1", "true"):
-            damages = await _refine_damage_boxes(client, model_name, damages, images_base64)
+            damages = await _refine_damage_boxes(client, model_name, damages, images_base64, db=db)
             # Sincronizar new_damages con los objetos refinados (misma pieza+ubicación)
             refined_ids = {id(d) for d in damages}
             new_damages = [d for d in damages if getattr(d, 'is_new', True)]
@@ -2040,7 +2074,7 @@ _REFINE_PROMPT = (
 
 
 async def _refine_damage_boxes(
-    client, model_name: str, damages: list, images_b64: list
+    client, model_name: str, damages: list, images_b64: list, db=None
 ) -> list:
     """
     Segunda pasada de Gemini: para cada daño con caja aproximada, envía un recorte
@@ -2075,11 +2109,34 @@ async def _refine_damage_boxes(
         crop_bytes, region = _crop_damage_zone(images_raw[pi], d.box_2d or [0,0,0,0])
         if crop_bytes is None:
             return
+        part_str = getattr(d, 'part', 'parte desconocida')
+        location_hint_str = getattr(d, 'location_hint', '') or ''
+        refine_contents = []
+        if db is not None:
+            try:
+                examples = await get_few_shot_examples(db, location_hint_str, part_str, limit=2)
+                few_shot_parts = build_few_shot_prompt_parts_multimodal(examples)
+                for part_dict in few_shot_parts:
+                    if "inline_data" in part_dict:
+                        refine_contents.append(
+                            genai_types.Part.from_bytes(
+                                data=base64.b64decode(part_dict["inline_data"]["data"]),
+                                mime_type=part_dict["inline_data"]["mime_type"],
+                            )
+                        )
+                    else:
+                        refine_contents.append(part_dict["text"])
+            except Exception as _fse:
+                logger.debug(f"[Learning] Error cargando ejemplos: {_fse}")
         prompt = _REFINE_PROMPT.format(
-            part=getattr(d, 'part', 'parte desconocida'),
+            part=part_str,
             severity=getattr(d, 'severity', 'desconocido'),
             description=(getattr(d, 'description', '') or '')[:200]
         )
+        refine_contents.extend([
+            prompt,
+            genai_types.Part.from_bytes(data=crop_bytes, mime_type="image/jpeg"),
+        ])
         try:
             gen_cfg = genai_types.GenerateContentConfig(
                 temperature=0.05, response_mime_type="application/json"
@@ -2091,10 +2148,7 @@ async def _refine_damage_boxes(
                         _executor,
                         lambda: client.models.generate_content(
                             model=model_name,
-                            contents=[
-                                prompt,
-                                genai_types.Part.from_bytes(data=crop_bytes, mime_type="image/jpeg"),
-                            ],
+                            contents=refine_contents,
                             config=gen_cfg,
                         )
                     ),
@@ -2210,25 +2264,24 @@ def _segment_damage_opencv(
         import cv2 as _cv2
         import numpy as _np
 
-        # ── Decodificar imagen ──────────────────────────────────────────
         buf = _np.frombuffer(img_bytes, _np.uint8)
         img_bgr = _cv2.imdecode(buf, _cv2.IMREAD_COLOR)
         if img_bgr is None:
             return None, None
         H_orig, W_orig = img_bgr.shape[:2]
 
-        # ── Escalar para reducir RAM (máx scale_max px en el lado largo) ──
         scale = min(scale_max / max(H_orig, W_orig), 1.0)
         if scale < 1.0:
             W_p = int(W_orig * scale)
             H_p = int(H_orig * scale)
             img_p = _cv2.resize(img_bgr, (W_p, H_p), interpolation=_cv2.INTER_AREA)
         else:
-            W_p, H_p, img_p = W_orig, H_orig, img_bgr.copy()
+            W_p, H_p = W_orig, H_orig
+            img_p = img_bgr.copy()
 
-        # ── ROI: bbox de Gemini + margen 40% para contexto ──────────────
         ymin, xmin, ymax, xmax = box_2d
-        bh = ymax - ymin; bw = xmax - xmin
+        bh = ymax - ymin
+        bw = xmax - xmin
         MARGIN = 0.40
         ry1 = max(0.0, (ymin - bh * MARGIN) / 1000)
         rx1 = max(0.0, (xmin - bw * MARGIN) / 1000)
@@ -2241,99 +2294,104 @@ def _segment_damage_opencv(
         if crop.size == 0 or crop.shape[0] < 30 or crop.shape[1] < 30:
             return None, None
 
-        # ── Espacio LAB: L = luminosidad perceptual (ideal para pintura blanca) ──
-        lab   = _cv2.cvtColor(crop, _cv2.COLOR_BGR2LAB)
-        L     = lab[:, :, 0].astype(_np.float32)
+        lab = _cv2.cvtColor(crop, _cv2.COLOR_BGR2LAB)
+        L = lab[:, :, 0].astype(_np.float32)
         blur_L = _cv2.GaussianBlur(L, (51, 51), 0)
 
-        # 1. Mapa de bordes: gradiente de L (deformaciones → cambio brusco de curvatura)
-        gx = _cv2.Sobel(L, _cv2.CV_32F, 1, 0, ksize=3)
-        gy = _cv2.Sobel(L, _cv2.CV_32F, 0, 1, ksize=3)
-        edge_map = _np.sqrt(gx ** 2 + gy ** 2)
-        edge_map = _cv2.normalize(edge_map, None, 0, 255, _cv2.NORM_MINMAX).astype(_np.uint8)
-
-        # 2. Mapa de sombras: píxeles más oscuros que su vecindario (interior de abolladura)
-        shadow_raw = _np.clip(blur_L - L, 0, 255)
-        shadow_map = _cv2.normalize(shadow_raw, None, 0, 255, _cv2.NORM_MINMAX).astype(_np.uint8)
-
-        # 3. Mapa de reflexión: píxeles más brillantes que su vecindario (especular del borde)
-        reflex_raw = _np.clip(L - blur_L, 0, 255)
-        reflex_map = _cv2.normalize(reflex_raw, None, 0, 255, _cv2.NORM_MINMAX).astype(_np.uint8)
-
-        # 4. Zona candidata: edge 40% + shadow 35% + reflexión 25%
-        cand = (_np.float32(edge_map)  * 0.40
-              + _np.float32(shadow_map) * 0.35
-              + _np.float32(reflex_map) * 0.25)
-        cand = _cv2.GaussianBlur(cand.astype(_np.uint8), (21, 21), 0)
-
-        # ── Guardia de señal: si no hay señal dentro del bbox Gemini, el daño
-        #    no es visible desde este ángulo → devolver None (no inventar)
         bx1_c = max(0, int(xmin / 1000 * W_p) - cx1)
         bx2_c = min(crop.shape[1], int(xmax / 1000 * W_p) - cx1)
         by1_c = max(0, int(ymin / 1000 * H_p) - cy1)
         by2_c = min(crop.shape[0], int(ymax / 1000 * H_p) - cy1)
-        if bx2_c > bx1_c and by2_c > by1_c:
-            inner_signal = float(_np.mean(cand[by1_c:by2_c, bx1_c:bx2_c]))
-        else:
-            inner_signal = 0.0
-        if inner_signal < 28.0:   # sin señal real dentro del bbox → daño invisible en esta foto
-            logger.info(f"[opencv-seg] señal insuficiente en bbox ({inner_signal:.1f}<28) → omitir OpenCV")
+
+        if bx2_c <= bx1_c or by2_c <= by1_c:
             return None, None
 
-        # 5. Threshold automático (Otsu) + morfología para rellenar la superficie
-        _, binary = _cv2.threshold(cand, 0, 255, _cv2.THRESH_BINARY + _cv2.THRESH_OTSU)
+        gx = _cv2.Sobel(L, _cv2.CV_32F, 1, 0, ksize=3)
+        gy = _cv2.Sobel(L, _cv2.CV_32F, 0, 1, ksize=3)
+        edge_abs = _np.sqrt(gx ** 2 + gy ** 2)
+
+        shadow_abs = _np.clip(blur_L - L, 0, 255)
+        reflex_abs = _np.clip(L - blur_L, 0, 255)
+
+        cand_abs = edge_abs * 0.40 + shadow_abs * 0.35 + reflex_abs * 0.25
+
+        # GUARD 1: señal absoluta dentro del bbox (sin normalizar)
+        # Pintura blanca sin daño: 3-15 | golpe sutil: 20-35 | claro: 40+
+        inner_signal = float(_np.mean(cand_abs[by1_c:by2_c, bx1_c:bx2_c]))
+        if inner_signal < 20.0:
+            return None, None
+
+        # GUARD 2: señal interior debe superar 1.3x la señal exterior
+        # Evita que líneas de carrocería que cruzan toda la imagen den falso positivo
+        outer_mask = _np.ones(crop.shape[:2], dtype=bool)
+        outer_mask[by1_c:by2_c, bx1_c:bx2_c] = False
+        outer_signal = float(_np.mean(cand_abs[outer_mask])) if outer_mask.any() else inner_signal
+        if outer_signal > 0 and (inner_signal / outer_signal) < 1.3:
+            return None, None
+
+        # Normalizar solo para threshold Otsu (no para los guards)
+        cand_norm = _cv2.normalize(cand_abs, None, 0, 255, _cv2.NORM_MINMAX).astype(_np.uint8)
+        cand_smooth = _cv2.GaussianBlur(cand_norm, (21, 21), 0)
+
+        _, binary = _cv2.threshold(cand_smooth, 0, 255, _cv2.THRESH_BINARY + _cv2.THRESH_OTSU)
         ksize = max(9, int(min(crop.shape[:2]) * 0.04))
         ksize = ksize if ksize % 2 == 1 else ksize + 1
         kernel = _cv2.getStructuringElement(_cv2.MORPH_ELLIPSE, (ksize, ksize))
         final_mask = _cv2.morphologyEx(binary, _cv2.MORPH_CLOSE, kernel, iterations=3)
         final_mask = _cv2.dilate(final_mask, kernel, iterations=2)
 
-        # 6. Seleccionar contorno más cercano al centroide del bbox de Gemini
         contours, _ = _cv2.findContours(final_mask, _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
             return None, None
 
-        # Centro del bbox en coordenadas de crop
-        bx_cx = int(((xmin / 1000 * W_p) + (xmax / 1000 * W_p)) / 2) - cx1
-        bx_cy = int(((ymin / 1000 * H_p) + (ymax / 1000 * H_p)) / 2) - cy1
+        bbox_mask = _np.zeros(crop.shape[:2], dtype=_np.uint8)
+        bbox_mask[by1_c:by2_c, bx1_c:bx2_c] = 255
+        bbox_area = float((by2_c - by1_c) * (bx2_c - bx1_c))
 
-        # Diagonal del bbox en píxeles de crop (para la guardia de deriva)
-        bbox_w_px = max(1, int((xmax - xmin) / 1000 * W_p))
-        bbox_h_px = max(1, int((ymax - ymin) / 1000 * H_p))
-        max_drift = ((bbox_w_px ** 2 + bbox_h_px ** 2) ** 0.5) * 1.2
+        bx_cx = (bx1_c + bx2_c) / 2.0
+        bx_cy = (by1_c + by2_c) / 2.0
+        bbox_diag = ((bx2_c - bx1_c) ** 2 + (by2_c - by1_c) ** 2) ** 0.5
 
         def _score(c):
+            c_mask = _np.zeros(crop.shape[:2], dtype=_np.uint8)
+            _cv2.drawContours(c_mask, [c], -1, 255, _cv2.FILLED)
+            overlap = float(_np.sum((c_mask > 0) & (bbox_mask > 0)))
+            overlap_frac = overlap / max(bbox_area, 1)
+            if overlap_frac < 0.05:
+                return float('inf')
             M = _cv2.moments(c)
             if M['m00'] < 1:
                 return float('inf')
-            ccx = M['m10'] / M['m00']; ccy = M['m01'] / M['m00']
-            dist = ((ccx - bx_cx) ** 2 + (ccy - bx_cy) ** 2) ** 0.5
-            area = _cv2.contourArea(c)
-            # Preferir contornos grandes y cercanos al centro
-            return dist - area * 0.05
+            ccx = M['m10'] / M['m00']
+            ccy = M['m01'] / M['m00']
+            dist_norm = ((ccx - bx_cx) ** 2 + (ccy - bx_cy) ** 2) ** 0.5 / max(bbox_diag, 1)
+            return dist_norm - overlap_frac * 2.0
 
         best = min(contours, key=_score)
-        if _cv2.contourArea(best) < 50:   # muy pequeño → no fiable
+
+        # Verificar overlap real del contorno ganador
+        best_mask = _np.zeros(crop.shape[:2], dtype=_np.uint8)
+        _cv2.drawContours(best_mask, [best], -1, 255, _cv2.FILLED)
+        overlap_px = float(_np.sum((best_mask > 0) & (bbox_mask > 0)))
+        if overlap_px / max(bbox_area, 1) < 0.05:
             return None, None
 
-        # ── Guardia de deriva: si el centroide del mejor contorno se alejó demasiado
-        #    del bbox Gemini, el OpenCV ha encontrado algo irrelevante (p.ej. arco de rueda)
+        if _cv2.contourArea(best) < 50:
+            return None, None
+
         M_best = _cv2.moments(best)
         if M_best['m00'] > 0:
             best_cx = M_best['m10'] / M_best['m00']
             best_cy = M_best['m01'] / M_best['m00']
             drift = ((best_cx - bx_cx) ** 2 + (best_cy - bx_cy) ** 2) ** 0.5
-            if drift > max_drift:
-                logger.info(f"[opencv-seg] deriva excesiva ({drift:.0f}px > {max_drift:.0f}px) → omitir OpenCV")
+            if drift > bbox_diag * 1.5:
                 return None, None
 
-        # 7. Simplificar polígono
         eps = 0.02 * _cv2.arcLength(best, True)
         approx = _cv2.approxPolyDP(best, eps, True)
         if len(approx) < 4:
             return None, None
 
-        # 8. Remap a coordenadas 0-1000 de la imagen original
         poly = []
         for pt in approx:
             px_crop, py_crop = float(pt[0][0]), float(pt[0][1])
@@ -2348,18 +2406,17 @@ def _segment_damage_opencv(
         if debug:
             debug_imgs = {
                 'crop':       crop,
-                'edges':      edge_map,
-                'shadows':    shadow_map,
-                'reflection': reflex_map,
-                'candidate':  cand,
+                'edges':      edge_abs,
+                'shadows':    shadow_abs,
+                'reflection': reflex_abs,
+                'candidate':  cand_smooth,
                 'mask':       final_mask,
+                'bbox_mask':  bbox_mask,
             }
 
-        logger.info(f"[opencv-seg] segmentación: {len(poly)} pts, área contorno={_cv2.contourArea(best):.0f}px²")
         return poly, debug_imgs
 
-    except Exception as e:
-        logger.warning(f"[opencv-seg] error: {e}")
+    except Exception:
         return None, None
 
 
@@ -2509,17 +2566,15 @@ def _annotate_photo_sync(img_bytes: bytes, damage_list: list) -> bytes:
         gemini_poly = [(int(pt[1] / 1000 * W), int(pt[0] / 1000 * H))
                        for pt in raw_poly if len(pt) >= 2] if len(raw_poly) >= 4 else None
 
-        # ── FASE 1: segmentación OpenCV de la superficie dañada real ──────
-        # Primero intentamos con OpenCV (gradientes + sombras + reflexión).
-        # Si falla, usamos el polígono de Gemini; si tampoco hay, elipse de bbox.
+        # ── FASE 1: segmentación SAM (API HF) → OpenCV → fallback Gemini ──
         if len(box) == 4 and any(v > 0 for v in box):
-            cv_poly_norm, _ = _segment_damage_opencv(img_bytes, box)
+            seg_poly_norm, _ = segment_damage(img_bytes, box)
         else:
-            cv_poly_norm = None
+            seg_poly_norm = None
 
-        if cv_poly_norm and len(cv_poly_norm) >= 4:
-            poly_px = [(int(pt[1] / 1000 * W), int(pt[0] / 1000 * H)) for pt in cv_poly_norm]
-            logger.info(f"[anotación] daño {num}: polígono OpenCV ({len(poly_px)} pts) ✓")
+        if seg_poly_norm and len(seg_poly_norm) >= 4:
+            poly_px = [(int(pt[1] / 1000 * W), int(pt[0] / 1000 * H)) for pt in seg_poly_norm]
+            logger.info(f"[anotación] daño {num}: polígono segmentación ({len(poly_px)} pts) ✓")
         elif gemini_poly and len(gemini_poly) >= 4:
             poly_px = gemini_poly
             logger.info(f"[anotación] daño {num}: polígono Gemini fallback ({len(poly_px)} pts)")
@@ -4473,7 +4528,7 @@ async def upload_inspection_photos(
         async def _analyze_and_update():
             try:
                 analysis, analysis_status, analysis_error = await asyncio.wait_for(
-                    analyze_images_with_gemini(photos_base64, ref_bytes_list if ref_bytes_list else None),
+                    analyze_images_with_gemini(photos_base64, ref_bytes_list if ref_bytes_list else None, db=db),
                     timeout=120.0
                 )
                 # Filtro determinista: un panel ya dañado antes NO es "nuevo" otra vez
@@ -4754,6 +4809,46 @@ async def damage_feedback(inspection_id: str, data: dict, user: dict = Depends(g
     return {"success": True, "dataset_size": total}
 
 
+@api_router.post("/ai-feedback")
+async def ai_feedback_simple(data: dict, user: dict = Depends(get_current_user)):
+    """Endpoint simplificado para botones ✅/❌/✏️ del panel IAPeritaje.
+    Llama internamente a save_feedback de ai_learning."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administradores")
+    verdict = data.get("verdict")
+    if verdict not in ("correct", "wrong", "corrected"):
+        raise HTTPException(status_code=400, detail="verdict inválido")
+    inspection_id = data.get("inspection_id")
+    damage_index = data.get("damage_index")
+    if not inspection_id or damage_index is None:
+        raise HTTPException(status_code=400, detail="inspection_id y damage_index requeridos")
+
+    insp = await db.inspections.find_one({"id": inspection_id}, {"_id": 0})
+    if not insp:
+        raise HTTPException(status_code=404, detail="Inspección no encontrada")
+    analysis = insp.get("analysis") or {}
+    pool = analysis.get("damages") or []
+    dmg = pool[damage_index] if (0 <= damage_index < len(pool)) else {}
+
+    photos = insp.get("photos") or []
+    pi = dmg.get("photo_index")
+    photo_url = photos[pi - 1] if (isinstance(pi, int) and 1 <= pi <= len(photos)) else (photos[0] if photos else None)
+
+    await _save_ai_feedback(
+        db=db,
+        inspection_id=inspection_id,
+        damage_index=damage_index,
+        damage=dmg,
+        photo_url=photo_url or "",
+        verdict=verdict,
+        corrected_box=data.get("corrected_box"),
+        corrected_polygon=data.get("corrected_polygon_points"),
+        reviewed_by=user.get("name", "?"),
+    )
+    total = await db.ai_feedback.count_documents({})
+    return {"success": True, "dataset_size": total}
+
+
 @api_router.post("/inspections/{inspection_id}/missed-damage")
 async def missed_damage(inspection_id: str, data: dict, user: dict = Depends(get_current_user)):
     """Daño REAL que la IA no detectó, marcado y dibujado por el humano.
@@ -4941,9 +5036,11 @@ async def debug_segment(inspection_id: str, photo_index: int = 0, damage_index: 
         debug_imgs['mask'],
     ]
 
-    # Convertir todos a BGR para cv2 (los maps en escala de grises → BGR)
+    # Convertir todos a uint8 BGR para cv2 (float32 → normalizar, grises → BGR)
     frames = []
     for f in frames_raw:
+        if f.dtype != _np.uint8:
+            f = _cv2.normalize(f, None, 0, 255, _cv2.NORM_MINMAX).astype(_np.uint8)
         if len(f.shape) == 2:
             frames.append(_cv2.cvtColor(f, _cv2.COLOR_GRAY2BGR))
         else:
@@ -5016,7 +5113,7 @@ async def reanalyze_inspection(inspection_id: str, silent: bool = False, _=Depen
     )
 
     analysis, analysis_status, analysis_error = await analyze_images_with_gemini(
-        photos_base64, ref_bytes_list if ref_bytes_list else None
+        photos_base64, ref_bytes_list if ref_bytes_list else None, db=db
     )
 
     await db.inspections.update_one(
@@ -8676,7 +8773,7 @@ async def _process_single_inspection(vehicle_id, driver_id, photo_urls, photos_b
     ref_bytes_list = await load_reference_images(ref_photo_urls) if ref_photo_urls else []
 
     analysis, analysis_status, analysis_error = await analyze_images_with_gemini(
-        photos_base64, ref_bytes_list if ref_bytes_list else None
+        photos_base64, ref_bytes_list if ref_bytes_list else None, db=db
     )
 
     inspection = Inspection(

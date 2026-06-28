@@ -40,6 +40,8 @@ export const updateVehicle = (id, body) => api.patch(`/vehicles/${id}`, body)
 export const getDrivers = (center) => api.get('/drivers', { params: centerParam(center) })
 export const getDriverRanking = () => api.get('/drivers/ranking')
 export const getDriverScore = (id) => api.get(`/drivers/${id}/score`)
+export const getDriversScoring = (month, year) => api.get('/scoring/drivers', { params: { ...(month ? { month } : {}), ...(year ? { year } : {}) } })
+export const getScoringLeaderboard = (month, year) => api.get('/scoring/leaderboard', { params: { ...(month ? { month } : {}), ...(year ? { year } : {}) } })
 export const createDriver = (data) => api.post('/drivers', data)
 export const updateDriver = (id, data) => api.patch(`/drivers/${id}`, data)
 export const deleteDriver = (id) => api.delete(`/drivers/${id}`)
@@ -109,7 +111,8 @@ export const getMe = () => api.get('/auth/me')
 /* ── IA Peritaje / Métricas / Importaciones ── */
 export const getHealth = () => api.get('/health')
 export const reanalyzeFailed = () => api.post('/inspections/reanalyze-failed')
-export const reanalyzeInspection = (id) => api.post(`/inspections/${id}/reanalyze`)
+export const reanalyzeInspection = (id) => api.post(`/inspections/${id}/reanalyze?silent=true`, {}, { timeout: 120000 })
+export const submitAiFeedback = (body) => api.post('/ai-feedback', body)
 export const getMetricsReports = (center) => api.get('/metrics/reports', { params: centerParam(center) })
 export const importVehicles = (file, center) => {
   const fd = new FormData()
@@ -121,6 +124,11 @@ export const importVehicles = (file, center) => {
 /* ── Turnos ── */
 export const getShifts = (center, desde, hasta) => api.get('/shifts', { params: { center, desde, hasta } })
 export const getShiftCoverage = (center, desde, hasta) => api.get('/shifts/coverage', { params: { center, desde, hasta } })
+
+/* ── Historial de plantillas ── */
+export const getPlantillas = (center) => api.get('/plantillas', { params: centerParam(center) })
+export const downloadPlantilla = (id) => api.get(`/plantillas/${id}/download`, { responseType: 'blob' })
+export const deletePlantilla = (id) => api.delete(`/plantillas/${id}`)
 
 /* ── Asignación diaria (qué conductor lleva qué furgo) ── */
 export const getDailyAssignment = (center, date) => api.get('/assignments/daily', { params: { center, date } })
