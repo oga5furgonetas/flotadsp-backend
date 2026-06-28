@@ -14164,8 +14164,9 @@ def _build_plantilla_excel(rows: list, red_routes: set, pink_furgos: set, week_n
         h_wave    = row.get("h_salida") or row.get("h_wave") or ""
         obs       = row.get("observaciones") or ""
 
-        is_red    = ruta.upper() in red_routes
-        is_yellow = ruta.upper() in _yellow_routes
+        row_key   = ruta.upper() if ruta.strip() else conductor.upper()
+        is_red    = row_key in red_routes
+        is_yellow = row_key in _yellow_routes
 
         # Ola tardía: h_llegada >= 11:50 (solo si no tiene otra marca)
         is_blue = False

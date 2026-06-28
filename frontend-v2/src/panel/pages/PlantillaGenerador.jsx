@@ -423,8 +423,9 @@ export default function PlantillaGenerador() {
               </thead>
               <tbody>
                 {data.rows.map((row, i) => {
-                  const isRed     = redSet.has(row.ruta)
-                  const isYellow  = !isRed && yellowSet.has(row.ruta)
+                  const rowKey    = row.ruta || row.conductor || String(i)
+                  const isRed     = redSet.has(rowKey)
+                  const isYellow  = !isRed && yellowSet.has(rowKey)
                   const isPink    = pinkSet.has(row.furgo)
                   const isMarked  = markedSet.has(row.conductor)
 
@@ -507,12 +508,12 @@ export default function PlantillaGenerador() {
                       <td className="border border-[#BFBFBF] px-1 py-0.5">
                         <div className="flex items-center justify-center gap-1">
                           <button
-                            onClick={() => toggle(yellowSet, setYellowSet, row.ruta)}
+                            onClick={() => toggle(yellowSet, setYellowSet, rowKey)}
                             title="Marcar fila amarilla (incidencia)"
                             className={`h-3.5 w-3.5 rounded-sm border transition ${isYellow ? 'bg-yellow-300 border-yellow-500' : 'border-gray-300 hover:border-yellow-400'}`}
                           />
                           <button
-                            onClick={() => toggle(redSet, setRedSet, row.ruta)}
+                            onClick={() => toggle(redSet, setRedSet, rowKey)}
                             title="Marcar fila roja (no vino)"
                             className={`h-3.5 w-3.5 rounded-sm border transition ${isRed ? 'bg-red-500 border-red-300' : 'border-gray-300 hover:border-red-400'}`}
                           />
