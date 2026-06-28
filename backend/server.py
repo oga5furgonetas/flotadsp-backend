@@ -247,7 +247,9 @@ class Damage(BaseModel):
     location_hint: str = ""
     photo_index: Optional[int] = None      # imagen (1-based) donde mejor se ve el daño
     box_2d: Optional[List[int]] = None     # [ymin,xmin,ymax,xmax] normalizado 0-1000
+    polygon_points: Optional[List[List[int]]] = None  # [[y,x], ...] normalizado 0-1000
     is_new: bool = True
+    confirmed: bool = True          # False = sugerido (confidence < 0.65), no cuenta en scoring
     # --- v5.1: gestión de reparación ---
     actual_cost: Optional[float] = None       # coste real introducido por admin tras la reparación
     workshop_id: Optional[str] = None         # taller asignado para reparar este daño
@@ -369,6 +371,7 @@ class Inspection(BaseModel):
     vehicle_id: str
     driver_id: Optional[str] = None
     photos: List[str] = []
+    annotated_photos: List[Optional[str]] = []   # versiones anotadas con marcadores de daños
     reference_photos: List[str] = []
     is_reference: bool = False
     analysis: Optional[InspectionAnalysis] = None
@@ -620,29 +623,39 @@ async def seed_initial_admin():
         logger.info(f"Admin inicial '{username}' creado")
 
     # ── Admin fijo: Mery ── (idempotente)
+    # Contraseña inicial: variable de entorno MERY_PASSWORD (obligatoria en producción).
+    mery_password = os.environ.get("MERY_PASSWORD", "")
     mery_existing = await global_db.admin_users.find_one({"username": "Mery"})
     if not mery_existing:
-        await global_db.admin_users.insert_one({
-            "id": str(uuid.uuid4()), "username": "Mery",
-            "hashed_password": hash_password("ogsan2024"), "name": "Mery",
-            "role": "admin", "theme": "pastel", "org_id": OWNER_ORG_ID,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-        logger.info("Admin 'Mery' creado")
+        if not mery_password:
+            logger.warning("MERY_PASSWORD no configurada — admin 'Mery' NO creado. Configura: fly secrets set MERY_PASSWORD=<contraseña>")
+        else:
+            await global_db.admin_users.insert_one({
+                "id": str(uuid.uuid4()), "username": "Mery",
+                "hashed_password": hash_password(mery_password), "name": "Mery",
+                "role": "admin", "theme": "pastel", "org_id": OWNER_ORG_ID,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.info("Admin 'Mery' creado")
     elif not mery_existing.get("theme"):
         await global_db.admin_users.update_one(
             {"username": "Mery"}, {"$set": {"theme": "pastel"}})
 
     # ── Super-admin: dani (dueño del negocio, ÚNICO con panel super-admin) ── (idempotente)
+    # Contraseña inicial: variable de entorno DANI_PASSWORD (obligatoria en producción).
+    dani_password = os.environ.get("DANI_PASSWORD", "")
     dani = await global_db.admin_users.find_one({"username": "dani"})
     if not dani:
-        await global_db.admin_users.insert_one({
-            "id": str(uuid.uuid4()), "username": "dani",
-            "hashed_password": hash_password("19761976Dani"), "name": "Dani",
-            "role": "admin", "org_id": OWNER_ORG_ID, "super_admin": True,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
-        logger.info("Super-admin 'dani' creado")
+        if not dani_password:
+            logger.warning("DANI_PASSWORD no configurada — super-admin 'dani' NO creado. Configura: fly secrets set DANI_PASSWORD=<contraseña>")
+        else:
+            await global_db.admin_users.insert_one({
+                "id": str(uuid.uuid4()), "username": "dani",
+                "hashed_password": hash_password(dani_password), "name": "Dani",
+                "role": "admin", "org_id": OWNER_ORG_ID, "super_admin": True,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            })
+            logger.info("Super-admin 'dani' creado")
     elif not dani.get("super_admin"):
         await global_db.admin_users.update_one(
             {"username": "dani"}, {"$set": {"super_admin": True}})
@@ -655,61 +668,74 @@ async def seed_initial_admin():
         logger.warning("R2 NO configurado — usando almacenamiento local (no recomendado en producción)")
 
 
+async def _ensure_tenant_indexes(db_name: str):
+    """Crea índices en la BD de un tenant. Idempotente. Llamar al registrar un DSP nuevo."""
+    tdb = client[db_name]
+    await tdb.vehicles.create_index("id")
+    await tdb.vehicles.create_index("license_plate")
+    await tdb.vehicles.create_index("center")
+    await tdb.vehicles.create_index("current_driver_id")
+    await tdb.vehicles.create_index("status")
+    await tdb.drivers.create_index("id")
+    await tdb.drivers.create_index("driver_id")
+    await tdb.inspections.create_index("id")
+    await tdb.inspections.create_index("vehicle_id")
+    await tdb.inspections.create_index([("created_at", -1)])
+    await tdb.inspections.create_index("driver_id")
+    await tdb.inspections.create_index("reviewed")
+    await tdb.inspections.create_index("analysis_status")
+    await tdb.inspections.create_index("forensic_signed")
+    await tdb.inspections.create_index("forensic_hash")
+    await tdb.inspections.create_index("first_phash")
+    await tdb.inspections.create_index("fraud_score")
+    await tdb.daily_assignments.create_index([("date", -1), ("center", 1)])
+    await tdb.alerts.create_index([("created_at", -1)])
+    await tdb.alerts.create_index("read")
+    await tdb.incidents.create_index("vehicle_id")
+    await tdb.incidents.create_index("status")
+    await tdb.forensic_signatures.create_index([("inspection_id", 1), ("revision", 1)], unique=True)
+    await tdb.forensic_signatures.create_index("content_hash", unique=True)
+    await tdb.forensic_signatures.create_index([("signed_at", -1)])
+    await tdb.daily_checklists.create_index(
+        [("center", 1), ("date", 1), ("shift", 1)], unique=True
+    )
+    await tdb.chat_messages.create_index([("center", 1), ("created_at", -1)])
+    await tdb.driver_accounts.create_index("username")
+    await tdb.inspection_ai_results.create_index(
+        [("inspection_id", 1), ("photo_index", 1)], unique=True
+    )
+    await tdb.workshops.create_index("id")
+    await tdb.workshops.create_index("center")
+    await tdb.workshops.create_index("convenios")
+    await tdb.workshops.create_index("categories")
+    await tdb.plantillas_diarias.create_index("id")
+    await tdb.plantillas_diarias.create_index([("center", 1), ("uploaded_at", -1)])
+
+
 @app.on_event("startup")
 async def create_indexes():
-    """Crea indices MongoDB para rendimiento. Idempotente."""
+    """Crea índices en la BD owner y en todas las BDs de DSPs existentes. Idempotente."""
     try:
-        await db.vehicles.create_index("id")
-        await db.vehicles.create_index("license_plate")
-        await db.vehicles.create_index("center")
-        await db.vehicles.create_index("current_driver_id")
-        await db.vehicles.create_index("status")
-        await db.drivers.create_index("id")
-        await db.drivers.create_index("driver_id")
-        await db.inspections.create_index("id")
-        await db.inspections.create_index("vehicle_id")
-        await db.inspections.create_index([("created_at", -1)])
-        await db.inspections.create_index("driver_id")          # scoring por conductor
-        await db.inspections.create_index("reviewed")           # cola de revisión rápida
-        await db.inspections.create_index("analysis_status")    # recuperación de análisis
-        await db.daily_assignments.create_index([("date", -1), ("center", 1)])  # cuadrante/resumen diario
-        await db.alerts.create_index([("created_at", -1)])
-        await db.alerts.create_index("read")
-        await db.incidents.create_index("vehicle_id")
-        await db.incidents.create_index("status")
+        # Índices del owner (BD por defecto)
+        await _ensure_tenant_indexes(_DEFAULT_DB_NAME)
+        # Índices globales (compartidos entre tenants)
         await global_db.admin_users.create_index("username")
-        # Bandeja de mensajes (append-only) y idempotencia LS.
         await global_db.inbox_messages.create_index([("created_at", -1)])
         await global_db.ls_webhook_events.create_index("event_uid", unique=True)
-        # Peritaje firmado (S1): cadena de hashes encadenados por tenant.
-        await db.forensic_signatures.create_index([("inspection_id", 1), ("revision", 1)], unique=True)
-        await db.forensic_signatures.create_index("content_hash", unique=True)
-        await db.forensic_signatures.create_index([("signed_at", -1)])
-        await db.inspections.create_index("forensic_signed")
-        await db.inspections.create_index("forensic_hash")
-        # Índice global hash → tenant (necesario para verificador público /verify/{hash}).
         await global_db.forensic_index.create_index("content_hash", unique=True)
         await global_db.forensic_index.create_index([("signed_at", -1)])
-        # Fraud Guard (S3): índice para detección de reuso de foto.
-        await db.inspections.create_index("first_phash")
-        await db.inspections.create_index("fraud_score")
-        # Checklist operativo: unique por centro+día+turno.
-        await db.daily_checklists.create_index(
-            [("center", 1), ("date", 1), ("shift", 1)], unique=True
-        )
-        # Chat por centro.
-        await db.chat_messages.create_index([("center", 1), ("created_at", -1)])
-        await db.driver_accounts.create_index("username")
-        await db.inspection_ai_results.create_index(
-            [("inspection_id", 1), ("photo_index", 1)], unique=True
-        )
-        await db.workshops.create_index("id")
-        await db.workshops.create_index("center")
-        await db.workshops.create_index("convenios")
-        await db.workshops.create_index("categories")
-        logger.info("Indices MongoDB creados/verificados correctamente")
+        # Crear índices en BDs de DSPs ya existentes (por si arrancamos con DSPs sin índices)
+        orgs = await global_db.organizations.find(
+            {"account_type": "dsp", "db_name": {"$exists": True}}, {"db_name": 1}
+        ).to_list(500)
+        for org in orgs:
+            try:
+                await _ensure_tenant_indexes(org["db_name"])
+            except Exception as _ie:
+                logger.warning(f"Error creando índices para DSP {org.get('db_name')}: {_ie}")
+        logger.info("Índices MongoDB creados/verificados correctamente")
     except Exception as e:
-        logger.warning(f"Error creando indices: {e}")
+        logger.warning(f"Error creando índices: {e}")
 
 
 # =========================
@@ -1419,37 +1445,145 @@ async def refresh_workshops_v2():
 # GEMINI PROMPT
 # =========================
 
-GEMINI_SYSTEM_PROMPT = """Eres un perito industrial automotriz senior y forense, especializado en inspección estricta de flotas empresariales. Tu trabajo tiene consecuencias legales y económicas: un conductor podría intentar ENGAÑARTE para ocultar daños que él causó, o subir fotos de otro vehículo. Tu deber es detectar eso.
+GEMINI_SYSTEM_PROMPT = """Eres el sistema de peritaje visual más preciso del mundo para flotas de reparto de última milla.
+Combinas 20 años de experiencia forense automotriz con visión computacional de nivel médico.
+Tus informes se usan en disputas legales reales entre conductores y empresas DSP (Amazon Logistics, DHL, SEUR).
+Un error tuyo cuesta dinero y reputación. La precisión de tus coordenadas de bounding box tiene consecuencias económicas directas.
 
-ANALIZA con el máximo rigor. Detecta golpes, arañazos, abolladuras, grietas, óxido, lunas rotas, deformaciones, piezas desalineadas y cualquier daño visible, por pequeño que sea.
+=== PASO 1: IDENTIFICAR EL VEHÍCULO ===
+Antes de detectar daños, identifica:
+- Modelo (Opel Vivaro, Citroen Jumpy, Ford Transit, Mercedes Sprinter, Renault Master, Volkswagen Crafter…)
+- Color de carrocería
+- Estado general (limpio/sucio, antiguo/nuevo)
+- Matrícula visible → "detected_plate"
+Esto calibra tu expectativa: un Vivaro de 3 años tiene más tolerancia a rayones leves que uno nuevo.
 
-=== VERIFICACIÓN ANTI-FRAUDE (OBLIGATORIA) ===
-1. LEE la matrícula visible en las fotos (placa delantera y/o trasera). Devuélvela en "detected_plate".
-2. Si en distintas fotos aparecen matrículas DIFERENTES, o la matrícula no es legible, o sospechas montaje/edición, indícalo en "fraud_warnings".
-3. Si las fotos parecen de vehículos distintos (colores, modelos o estados incoherentes entre fotos), avísalo en "fraud_warnings".
-4. Señala en "image_quality_warnings" fotos borrosas, recortadas, con sospecha de edición o que ocultan zonas deliberadamente.
+=== PASO 2: INSPECCIONAR SISTEMÁTICAMENTE PANEL A PANEL ===
+Recorre mentalmente CADA panel en orden fijo, aunque no sea visible en todas las fotos:
+  FRONTAL: paragolpes delantero · capó · aletas delanteras · luna delantera · faros · rejilla · espejo izquierdo · espejo derecho
+  LATERAL IZQ: aleta delantera izq · puerta delantera izq · puerta corredera izq · panel lateral trasero izq · paso de rueda izq
+  LATERAL DER: aleta delantera der · puerta delantera der · puerta corredera der · panel lateral trasero der · paso de rueda der
+  TRASERO: paragolpes trasero · portón/puertas traseras · luz trasera izq · luz trasera der · panel trasero
 
-=== ORDEN DECLARADO DE LAS FOTOS (VERIFICAR) ===
-Las imágenes actuales deben seguir este orden declarado por la app:
-  Imagen 1 = FRONTAL del vehículo · Imagen 2 = TRASERA · Imagen 3 = LATERAL IZQUIERDO · Imagen 4 = LATERAL DERECHO
-(las imágenes 5+ son fotos extra del checklist, sin zona fija).
-Si alguna de las 4 primeras NO muestra la zona que le corresponde (ej: la imagen 1 muestra la trasera), añade un aviso claro en "image_quality_warnings" como: "Imagen 1 declarada FRONTAL pero muestra la TRASERA". Aun así, usa SIEMPRE en photo_index el número real de la imagen donde se ve cada daño.
+Para CADA panel con daño visible: anota el daño, su severidad y su posición exacta dentro de ese panel.
 
-=== COMPARACIÓN CON REFERENCIA (cuando se aporten fotos de referencia) ===
-Si recibes imágenes de referencia (estado anterior del vehículo), tu tarea principal es identificar DAÑOS NUEVOS: los que aparecen en las fotos actuales pero NO en las de referencia. 
-- Lista en "new_damages" SOLO los daños nuevos respecto a la referencia.
-- En "damages" lista TODOS los daños actuales (nuevos y antiguos).
-- Para cada daño indica si es nuevo con el campo "is_new": true/false.
-Si NO hay fotos de referencia, trata todos los daños como actuales y new_damages = damages.
+=== PASO 3: BOUNDING BOX QUIRÚRGICO (CRÍTICO — leer 3 veces) ===
+"box_2d": [ymin, xmin, ymax, xmax] — coordenadas 0-1000. ymin=arriba, ymax=abajo, xmin=izq, xmax=der.
 
-Responde ÚNICAMENTE con este JSON exacto, sin texto adicional, sin markdown, sin bloques de código:
+PRINCIPIO FUNDAMENTAL: el box debe rodear SOLO EL ÁREA FÍSICAMENTE DAÑADA, no el panel completo.
+Imagina que tienes que pintar exactamente la zona dañada con un spray — ese es el área del box.
+
+CALIBRACIÓN REAL para furgonetas de reparto (Vivaro/Jumpy/Transit tamaño estándar):
+
+  Vista LATERAL (la furgoneta ocupa ~80% del ancho de foto):
+  ┌─────────────────────────────────────────────────────────┐
+  │  Espejo  │  Puerta delantera  │  Puerta corredera  │ Panel trasero │
+  │ x: 2-9%  │   x: 10-38%        │   x: 38-70%        │   x: 70-95%   │
+  │ y: 15-45%│   y: 20-75%        │   y: 20-75%        │   y: 20-80%   │
+  └─────────────────────────────────────────────────────────┘
+  → Rayón horizontal en puerta corredera: [480,390,540,680] (estrecho y largo)
+  → Abolladura en aleta izq: [350,100,480,230] (compacto)
+  → Golpe en paso de rueda: [680,320,780,430] (zona baja)
+
+  Vista TRASERA (paragolpes ocupa toda la base):
+  → Paragolpes completo dañado: [750,40,970,960]
+  → Luz trasera rota izq: [600,40,780,200]
+  → Grieta portón central: [200,400,700,600]
+
+  Vista FRONTAL:
+  → Luna con grieta: [50,200,380,800]
+  → Faro roto der: [350,750,550,980]
+  → Paragolpes delantero: [700,50,970,950]
+
+REGLAS ABSOLUTAS DE TAMAÑO:
+✅ ABOLLADURAS/HUNDIMIENTOS de chapa: el box debe cubrir TODA LA ZONA DE DEFORMACIÓN VISIBLE
+   — incluye el área hundida + el borde de deformación alrededor del impacto.
+   — Típicamente 80-300 unidades por lado dependiendo del tamaño real del golpe.
+   — NUNCA solo las marcas de roce en el punto de contacto: esas son 5% del daño real.
+   — Ejemplo golpe en puerta de furgoneta (20cm diámetro): [450,200,650,400] ≈ 200×200
+✅ RAYONES lineales: box largo y estrecho siguiendo toda la longitud del rayón
+✅ ROTURAS/GRIETAS: box ajustado al área rota incluyendo propagación de grietas
+❌ NUNCA box < 50×50 unidades para un daño visible a simple vista (si lo ves, mídelo)
+❌ NUNCA uses [0,0,1000,1000] — es automáticamente rechazado como inútil
+❌ Si no puedes localizar el daño con certeza → [0,0,0,0] (honesto > impreciso)
+
+=== PASO 4: CALIBRAR CONFIANZA HONESTAMENTE ===
+"confidence" refleja tu certeza de que ES daño real (no suciedad, sombra, deformación de perspectiva):
+- 0.95–1.0 → inequívoco: grieta, rotura, abolladura profunda, pérdida de pintura evidente
+- 0.80–0.94 → claramente visible: marca de golpe, rayón con pérdida de pintura
+- 0.65–0.79 → probable: marca que podría ser daño o suciedad pegada
+- 0.45–0.64 → dudoso: posible mancha de barro, sombra, reflexo → marca como "sugerido"
+- < 0.45   → descarta: no reportes daños con confianza tan baja
+
+=== VERIFICACIÓN ANTI-FRAUDE ===
+1. Lee la matrícula → "detected_plate". Si no es legible claramente, escribe lo que veas.
+2. Matrículas diferentes entre fotos → fraud_warnings.
+3. Fotos de vehículos diferentes (color, modelo, estado radicalmente distinto) → fraud_warnings.
+4. Signos de edición digital, filtros, zonas deliberadamente ocultadas → image_quality_warnings.
+5. Fotos nocturnas o con poca luz que impidan detectar daños → image_quality_warnings.
+
+=== ORIENTACIÓN DE FOTOS (REFERENCIA — VERIFICA SIEMPRE LO QUE VES) ===
+  Imagen 1 = probablemente FRONTAL
+  Imagen 2 = probablemente TRASERA
+  Imagen 3 = probablemente LATERAL IZQUIERDO
+  Imagen 4 = probablemente LATERAL DERECHO o perspectiva 3/4 frontal-lateral
+  (Imagen 5+ = extra o perspectiva adicional)
+IMPORTANTE: Estas son orientaciones probables, NO garantizadas. Si ves que la imagen muestra
+un ángulo diferente al esperado (ej: una foto 3/4 que muestra el lateral IZQUIERDO desde el frente),
+determina location_hint basándote en lo que REALMENTE observas en la imagen, no en la numeración.
+Solo anota en image_quality_warnings si el contenido es completamente diferente al vehículo.
+
+=== COMPARACIÓN CON REFERENCIA ===
+Si hay imágenes de referencia del estado anterior del vehículo:
+- "damages": TODOS los daños visibles (nuevos + preexistentes).
+- "new_damages": SOLO los que NO aparecen en las fotos de referencia.
+Sin referencia: new_damages = damages, todos con is_new: true.
+
+=== POLÍGONO DE SEGMENTACIÓN (MUY IMPORTANTE) ===
+Para cada daño, además de box_2d, devuelve "polygon_points": lista de 8-20 puntos [y,x] en coords 0-1000
+que sigan el CONTORNO REAL del daño, no un rectángulo.
+
+EJEMPLOS:
+- Arañazo diagonal (~30cm, vista lateral):
+  polygon_points: [[480,150],[482,200],[485,350],[483,500],[480,650],[478,500],[475,350],[477,200]]
+  (forma de "lápiz" alargado siguiendo el arañazo)
+
+- Abolladura asimétrica en puerta (~15cm, vista lateral izquierdo):
+  polygon_points: [[420,310],[415,360],[410,400],[418,440],[435,460],[455,455],[475,440],[480,410],[470,370],[450,330],[430,315]]
+  (forma IRREGULAR — no oval — siguiendo el borde del hundimiento real)
+
+- Grieta en luna (horizontal, vista frontal):
+  polygon_points: [[195,200],[197,350],[199,500],[197,650],[195,800],[193,650],[191,500],[193,350]]
+  (forma muy estrecha y alargada siguiendo la grieta)
+
+- Paragolpes dañado (vista trasera):
+  polygon_points: [[750,40],[755,200],[760,400],[760,600],[755,800],[750,960],[800,960],[800,40]]
+  (forma de media luna en la base trasera)
+
+REGLAS CRÍTICAS:
+✅ Los puntos deben seguir el PERÍMETRO del daño, en orden (horario o antihorario)
+✅ Mínimo 6 puntos, máximo 24
+✅ Para arañazos/grietas lineales: forma muy estrecha (ancho < 30px de 1000)
+✅ Para abolladuras: forma IRREGULAR asimétrica — NUNCA un oval/círculo perfecto
+✅ El polígono debe AJUSTARSE al daño, no a un área rectangular o circular genérica
+❌ NUNCA extender el polígono sobre ruedas, cristales o paneles sin daño adyacentes
+❌ NO usar oval perfecto para abolladuras — los golpes reales son asimétricos
+✅ Si no puedes determinar el contorno exacto → usa el box_2d como base, pero irregular
+✅ polygon_points y box_2d deben ser consistentes (box debe contener al polígono)
+
+=== SUCIEDAD ===
+"dirt_level": 0 (impecable) → 10 (barro total).
+dirt_level ≥ 6: sé CONSERVADOR. Barro, polvo, agua seca NO son daños. Solo reporta
+deformaciones físicas, roturas o pérdida de pintura evidentes. Baja confidence en marcas ambiguas.
+
+Responde ÚNICAMENTE con este JSON exacto (sin markdown, sin bloques de código, sin texto extra):
 {
   "severity": "sin_danos|leve|moderado|grave|critico",
   "dirt_level": 0,
   "urgency": "puede_esperar|esta_semana|urgente|inmediato",
   "risk": "bajo|medio|alto|critico",
   "circulation_safe": true,
-  "detected_plate": "matrícula leída en las fotos o vacío si ilegible",
+  "detected_plate": "",
   "fraud_warnings": [],
   "critical_damages_count": 0,
   "total_damages_count": 0,
@@ -1457,31 +1591,33 @@ Responde ÚNICAMENTE con este JSON exacto, sin texto adicional, sin markdown, si
   "hidden_damage_probability": 0.0,
   "total_estimated_cost": 0.0,
   "confidence": 0.85,
-  "executive_summary": "Descripción ejecutiva del estado real del vehículo",
+  "executive_summary": "Descripción ejecutiva clara del estado del vehículo para un no-experto",
   "image_quality_warnings": [],
   "affected_parts": [],
   "critical_damages": [],
   "new_damages": [
     {
-      "part": "parte afectada",
+      "part": "nombre exacto de la pieza dañada",
       "severity": "leve|moderado|grave|critico",
-      "description": "descripción precisa y ubicación del daño nuevo (ej: esquina inferior izquierda del paragolpes)",
+      "description": "descripción técnica precisa con ubicación exacta (ej: esquina inferior izquierda del paragolpes trasero, grieta horizontal de ~15cm)",
       "location_hint": "frontal|trasera|lateral_izquierdo|lateral_derecho|techo|otra",
       "photo_index": 1,
-      "box_2d": [0, 0, 0, 0],
+      "box_2d": [ymin, xmin, ymax, xmax],
+      "polygon_points": [[y1,x1],[y2,x2],[y3,x3]],
       "estimated_cost": 0.0,
       "confidence": 0.9
     }
   ],
   "damages": [
     {
-      "part": "parte afectada",
+      "part": "nombre exacto de la pieza dañada",
       "severity": "leve|moderado|grave|critico",
-      "description": "descripción técnica precisa del daño",
+      "description": "descripción técnica precisa con ubicación exacta",
       "location_hint": "frontal|trasera|lateral_izquierdo|lateral_derecho|techo|otra",
       "photo_index": 1,
-      "box_2d": [0, 0, 0, 0],
-      "repair_suggestion": "acción de reparación recomendada",
+      "box_2d": [ymin, xmin, ymax, xmax],
+      "polygon_points": [[y1,x1],[y2,x2],[y3,x3]],
+      "repair_suggestion": "acción concreta de reparación (ej: sustitución de paragolpes, pulido y laqueado)",
       "estimated_cost": 0.0,
       "confidence": 0.9,
       "is_new": true
@@ -1489,26 +1625,12 @@ Responde ÚNICAMENTE con este JSON exacto, sin texto adicional, sin markdown, si
   ]
 }
 
-LOCALIZACIÓN DE CADA DAÑO (OBLIGATORIO en damages[] y new_damages[]):
-- "photo_index": número de la IMAGEN ACTUAL (1 a N, según el orden "Imagen actual X de N") donde MEJOR se ve el daño. NUNCA una imagen de referencia.
-- "box_2d": caja [ymin, xmin, ymax, xmax] con coordenadas normalizadas 0-1000 sobre ESA imagen, ajustada al daño. Si no puedes localizarlo con precisión, usa [0,0,0,0].
-
-=== SUCIEDAD (OBLIGATORIO) ===
-- "dirt_level": puntúa de 0 (impecable) a 10 (cubierta de barro) la suciedad general del vehículo.
-- Con dirt_level >= 6, SÉ MUY PRUDENTE: el barro, polvo, marcas de agua seca y salpicaduras NO son daños. Solo reporta como daño lo que sea claramente deformación, rotura o pérdida de pintura — y baja la "confidence" de cualquier marca dudosa que pueda ser suciedad.
-- NUNCA subas la severidad global por marcas que podrían ser suciedad.
-
-REGLAS ESTRICTAS:
-- SÉ EXIGENTE: ante la duda entre "sin daño" y "daño leve", marca daño leve. Es peor dejar pasar un daño que reportar uno dudoso. EXCEPCIÓN: si la marca puede ser suciedad (ver sección SUCIEDAD), la prudencia gana.
-- ⚠️ NO DUPLIQUES DAÑOS: las fotos muestran el MISMO vehículo desde distintos ángulos. El mismo daño físico suele ser visible en 2 o más fotos (ej: un rasguño en la puerta lateral aparece en la foto lateral Y en la trasera). Cada daño físico real = UNA SOLA entrada en damages[], aunque lo veas en varias fotos. Antes de añadir un daño, comprueba si ya lo has listado desde otro ángulo (misma pieza + misma zona = mismo daño).
-- Si no hay daños visibles: severity=sin_danos, damages=[], new_damages=[], total_damages_count=0
-- Si hay daños: listarlos TODOS en damages[], uno por cada zona dañada FÍSICA REAL (no por foto)
-- new_damages_count = número de elementos en new_damages
-- critical_damages_count = número de daños con severity critico o grave
-- estimated_cost en euros, realista según mercado español de taller 2026
-- confidence entre 0.0 y 1.0
-- SIEMPRE intenta leer y devolver detected_plate
-- NO uses markdown, NO uses bloques de código, responde SOLO el objeto JSON"""
+REGLAS FINALES:
+- Sin daños: severity=sin_danos, damages=[], new_damages=[], total_damages_count=0
+- UN daño físico = UNA entrada en damages[], aunque se vea en varias fotos (escoge la foto donde mejor se aprecia)
+- estimated_cost en euros, mercado español taller 2026 (sin pintura: 50-200€; con pintura: 200-800€; pieza nueva: 300-2000€)
+- SIEMPRE intenta leer detected_plate
+- NO dupliques daños por verlos en múltiples fotos"""
 
 
 # =========================
@@ -1801,6 +1923,18 @@ async def analyze_images_with_gemini(
         if dup_removed or dup_removed_new:
             logger.info(f"De-dup daños: {dup_removed} duplicados eliminados en damages, {dup_removed_new} en new_damages")
 
+        # ─ SEGUNDA PASADA: refinamiento quirúrgico de bounding boxes ─
+        if damages and os.environ.get("TWO_PASS_DISABLED", "").lower() not in ("1", "true"):
+            damages = await _refine_damage_boxes(client, model_name, damages, images_base64)
+            # Sincronizar new_damages con los objetos refinados (misma pieza+ubicación)
+            refined_ids = {id(d) for d in damages}
+            new_damages = [d for d in damages if getattr(d, 'is_new', True)]
+
+        # Confidence gating para los daños que no pasaron por 2ª pasada
+        for d in damages:
+            if not hasattr(d, 'confirmed') or d.confirmed is None:
+                d.confirmed = (getattr(d, 'confidence', 0) or 0) >= 0.65
+
         # Recalcular contadores y coste desde las listas de-duplicadas
         critical_count = sum(1 for d in damages if (d.severity or "").lower() in ("grave", "critico", "crítico"))
         total_cost_dedup = sum((d.estimated_cost or 0) for d in damages)
@@ -1837,6 +1971,751 @@ async def analyze_images_with_gemini(
     except Exception as e:
         logger.error(f"Error Gemini: {type(e).__name__}: {e}", exc_info=True)
         return _fallback_analysis(str(e)), "gemini_failed", str(e)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TWO-PASS ANALYSIS — Segunda pasada para cajas de precisión quirúrgica
+# ═══════════════════════════════════════════════════════════════════════
+
+def _crop_damage_zone(img_bytes: bytes, box_2d: list, padding: float = 0.30) -> tuple:
+    """
+    Recorta la zona del daño con padding para la segunda pasada.
+    Retorna (crop_bytes, crop_region_0to1) o (None, None) si el box es demasiado pequeño.
+    """
+    ymin, xmin, ymax, xmax = [v / 1000.0 for v in box_2d]
+    h_span, w_span = ymax - ymin, xmax - xmin
+    if h_span < 0.03 or w_span < 0.03:
+        return None, None
+    pad_y = h_span * padding
+    pad_x = w_span * padding
+    y0 = max(0.0, ymin - pad_y)
+    x0 = max(0.0, xmin - pad_x)
+    y1 = min(1.0, ymax + pad_y)
+    x1 = min(1.0, xmax + pad_x)
+    try:
+        img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+        W, H = img.size
+        crop = img.crop((int(x0*W), int(y0*H), int(x1*W), int(y1*H)))
+        buf = io.BytesIO()
+        crop.save(buf, format="JPEG", quality=92)
+        return buf.getvalue(), (y0, x0, y1, x1)
+    except Exception as e:
+        logger.warning(f"crop_damage_zone error: {e}")
+        return None, None
+
+
+def _remap_box_to_original(crop_box: list, crop_region: tuple) -> list:
+    """Convierte coordenadas del recorte (0-1000) al espacio de la imagen original (0-1000)."""
+    y0, x0, y1, x1 = crop_region
+    cy1, cx1, cy2, cx2 = [v / 1000.0 for v in crop_box]
+    hy, hx = y1 - y0, x1 - x0
+    return [int((y0 + cy1*hy)*1000), int((x0 + cx1*hx)*1000),
+            int((y0 + cy2*hy)*1000), int((x0 + cx2*hx)*1000)]
+
+
+_REFINE_PROMPT = (
+    "Eres un perito forense automotriz. Esta imagen es un RECORTE AMPLIADO de una zona de una furgoneta.\n\n"
+    "Daño detectado previamente: {part} — {severity}\n"
+    "Descripción previa: \"{description}\"\n\n"
+    "TU TAREA:\n"
+    "1. ¿Confirmas que hay un daño real y visible aquí (no suciedad, no sombra)?\n"
+    "2. Proporciona el bounding box PRECISO [ymin, xmin, ymax, xmax] (0-1000) del daño en ESTE recorte.\n"
+    "   — Rodea SOLO el área dañada, tan ajustado como puedas.\n"
+    "   — Un rayón: box estrecho y largo. Una abolladura: box compacto.\n"
+    "3. Actualiza description si ves algo más preciso.\n"
+    "4. Da tu confidence real (0.0-1.0) de que es un daño real.\n\n"
+    "Responde SOLO JSON (sin markdown):\n"
+    "{{\"confirmed\": true, \"confidence\": 0.92, \"box_2d\": [y1,x1,y2,x2], "
+    "\"polygon_points\": [[y1,x1],[y2,x2],[y3,x3]], "
+    "\"description\": \"descripción precisa\", \"severity\": \"leve|moderado|grave|critico\"}}\n\n"
+    "IMPORTANTE polygon_points: coordenadas 0-1000 relativas a ESTE RECORTE, "
+    "siguiendo el contorno exacto del daño (8-20 puntos). "
+    "NUNCA hagas un oval perfecto — sigue el borde real del daño visible. "
+    "Para arañazos: forma de lápiz MUY estrecha (ancho < 40px). "
+    "Para abolladuras: forma IRREGULAR siguiendo el borde del hundimiento visible, no un círculo. "
+    "Para roturas/grietas: forma irregular siguiendo el borde roto. "
+    "El polígono NO debe cubrir ruedas, cristales ni piezas adyacentes sin daño. "
+    "Sé conservador: mejor un polígono pequeño preciso que uno grande que tape zonas sanas."
+)
+
+
+async def _refine_damage_boxes(
+    client, model_name: str, damages: list, images_b64: list
+) -> list:
+    """
+    Segunda pasada de Gemini: para cada daño con caja aproximada, envía un recorte
+    ampliado para obtener coordenadas quirúrgicamente precisas.
+    Los daños con confidence < 0.45 o caja inválida se saltan.
+    """
+    from google.genai import types as genai_types
+
+    # Decodificar imágenes originales una sola vez
+    images_raw: dict[int, bytes] = {}
+    for i, b64 in enumerate(images_b64):
+        try:
+            images_raw[i + 1] = base64.b64decode(b64)
+        except Exception:
+            pass
+
+    to_refine = [
+        (idx, d) for idx, d in enumerate(damages)
+        if (getattr(d, 'box_2d', None) and any(v > 0 for v in (d.box_2d or []))
+            and (getattr(d, 'confidence', 0) or 0) >= 0.45
+            and (getattr(d, 'photo_index', 1) or 1) in images_raw)
+    ]
+
+    if not to_refine:
+        return damages
+
+    logger.info(f"[2ª pasada] Refinando {len(to_refine)} daños con zoom quirúrgico")
+    refined = list(damages)
+
+    async def _one(idx, d):
+        pi = getattr(d, 'photo_index', 1) or 1
+        crop_bytes, region = _crop_damage_zone(images_raw[pi], d.box_2d or [0,0,0,0])
+        if crop_bytes is None:
+            return
+        prompt = _REFINE_PROMPT.format(
+            part=getattr(d, 'part', 'parte desconocida'),
+            severity=getattr(d, 'severity', 'desconocido'),
+            description=(getattr(d, 'description', '') or '')[:200]
+        )
+        try:
+            gen_cfg = genai_types.GenerateContentConfig(
+                temperature=0.05, response_mime_type="application/json"
+            )
+            loop = asyncio.get_running_loop()
+            async with _gemini_sem:
+                resp = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        _executor,
+                        lambda: client.models.generate_content(
+                            model=model_name,
+                            contents=[
+                                prompt,
+                                genai_types.Part.from_bytes(data=crop_bytes, mime_type="image/jpeg"),
+                            ],
+                            config=gen_cfg,
+                        )
+                    ),
+                    timeout=25.0,
+                )
+            result = json.loads(_strip_markdown_json(resp.text or "{}"))
+
+            if not result.get("confirmed", True):
+                d.confidence = min(getattr(d, 'confidence', 0.5) or 0.5, 0.38)
+                return
+
+            new_box = result.get("box_2d") or []
+            if len(new_box) == 4 and any(v > 0 for v in new_box):
+                d.box_2d = _remap_box_to_original(new_box, region)
+
+            # Remap polygon_points from crop space to original image space
+            raw_poly = result.get("polygon_points") or []
+            if len(raw_poly) >= 4:
+                ry0, rx0, ry1, rx1 = region  # 0-1 fractions of original
+                rh = ry1 - ry0; rw = rx1 - rx0
+                remapped = []
+                for pt in raw_poly:
+                    if len(pt) >= 2:
+                        py_orig = int((pt[0] / 1000.0 * rh + ry0) * 1000)
+                        px_orig = int((pt[1] / 1000.0 * rw + rx0) * 1000)
+                        remapped.append([
+                            max(0, min(1000, py_orig)),
+                            max(0, min(1000, px_orig))
+                        ])
+                if len(remapped) >= 4:
+                    d.polygon_points = remapped
+
+            if result.get("confidence") is not None:
+                d.confidence = max(0.0, min(1.0, float(result["confidence"])))
+            if result.get("description"):
+                d.description = str(result["description"])[:500]
+            if result.get("severity") in ("leve", "moderado", "grave", "critico"):
+                d.severity = result["severity"]
+
+        except asyncio.TimeoutError:
+            logger.warning(f"[2ª pasada] timeout daño {idx}")
+        except Exception as e:
+            logger.warning(f"[2ª pasada] error daño {idx}: {e}")
+
+    # Paralelo con máx 3 simultáneos (respetar rate limit Gemini)
+    sem3 = asyncio.Semaphore(3)
+    async def _bounded(idx, d):
+        async with sem3:
+            await _one(idx, d)
+
+    await asyncio.gather(*[_bounded(i, d) for i, d in to_refine])
+
+    # Aplicar confidence gating: < 0.65 → sugerido (confirmed=False)
+    for d in refined:
+        conf = getattr(d, 'confidence', 0) or 0
+        d.confirmed = conf >= 0.65
+
+    logger.info(f"[2ª pasada] completa. Sugeridos: {sum(1 for d in refined if not d.confirmed)}/{len(refined)}")
+    return refined
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# PROFESSIONAL PHOTO ANNOTATION — Anotaciones forenses visuales
+# ═══════════════════════════════════════════════════════════════════════
+
+# Paleta de colores por severidad (R, G, B) + alfa relleno
+_ANN_FILL = {
+    "leve":     (255, 213,  79, 90),
+    "moderado": (255, 111,   0, 110),
+    "grave":    (211,  47,  47, 130),
+    "critico":  (136,  14,  79, 150),
+}
+_ANN_BORDER = {
+    "leve":     (251, 192,  45, 255),
+    "moderado": (230,  81,   0, 255),
+    "grave":    (183,  28,  28, 255),
+    "critico":  (106,  27,  54, 255),
+}
+_ANN_LABEL = {
+    "leve": "LEVE", "moderado": "MODERADO", "grave": "GRAVE", "critico": "CRÍTICO"
+}
+_ANN_ICON = {"leve": "◆", "moderado": "▲", "grave": "●", "critico": "◉"}
+
+_FONT_PATHS = [
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+]
+
+
+def _load_font(size: int):
+    """Carga la mejor fuente disponible en el sistema, con fallback al default."""
+    from PIL import ImageFont
+    for path in _FONT_PATHS:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
+
+def _segment_damage_opencv(
+    img_bytes: bytes,
+    box_2d: list,
+    debug: bool = False,
+    scale_max: int = 900,
+) -> tuple:
+    """Segmenta la superficie físicamente dañada analizando gradientes, sombras y reflexión.
+    Devuelve (polygon_points [[y,x] 0-1000], debug_dict | None).
+    polygon_points = None si no se puede segmentar con fiabilidad."""
+    try:
+        import cv2 as _cv2
+        import numpy as _np
+
+        # ── Decodificar imagen ──────────────────────────────────────────
+        buf = _np.frombuffer(img_bytes, _np.uint8)
+        img_bgr = _cv2.imdecode(buf, _cv2.IMREAD_COLOR)
+        if img_bgr is None:
+            return None, None
+        H_orig, W_orig = img_bgr.shape[:2]
+
+        # ── Escalar para reducir RAM (máx scale_max px en el lado largo) ──
+        scale = min(scale_max / max(H_orig, W_orig), 1.0)
+        if scale < 1.0:
+            W_p = int(W_orig * scale)
+            H_p = int(H_orig * scale)
+            img_p = _cv2.resize(img_bgr, (W_p, H_p), interpolation=_cv2.INTER_AREA)
+        else:
+            W_p, H_p, img_p = W_orig, H_orig, img_bgr.copy()
+
+        # ── ROI: bbox de Gemini + margen 40% para contexto ──────────────
+        ymin, xmin, ymax, xmax = box_2d
+        bh = ymax - ymin; bw = xmax - xmin
+        MARGIN = 0.40
+        ry1 = max(0.0, (ymin - bh * MARGIN) / 1000)
+        rx1 = max(0.0, (xmin - bw * MARGIN) / 1000)
+        ry2 = min(1.0, (ymax + bh * MARGIN) / 1000)
+        rx2 = min(1.0, (xmax + bw * MARGIN) / 1000)
+
+        cy1 = int(ry1 * H_p); cx1 = int(rx1 * W_p)
+        cy2 = int(ry2 * H_p); cx2 = int(rx2 * W_p)
+        crop = img_p[cy1:cy2, cx1:cx2]
+        if crop.size == 0 or crop.shape[0] < 30 or crop.shape[1] < 30:
+            return None, None
+
+        # ── Espacio LAB: L = luminosidad perceptual (ideal para pintura blanca) ──
+        lab   = _cv2.cvtColor(crop, _cv2.COLOR_BGR2LAB)
+        L     = lab[:, :, 0].astype(_np.float32)
+        blur_L = _cv2.GaussianBlur(L, (51, 51), 0)
+
+        # 1. Mapa de bordes: gradiente de L (deformaciones → cambio brusco de curvatura)
+        gx = _cv2.Sobel(L, _cv2.CV_32F, 1, 0, ksize=3)
+        gy = _cv2.Sobel(L, _cv2.CV_32F, 0, 1, ksize=3)
+        edge_map = _np.sqrt(gx ** 2 + gy ** 2)
+        edge_map = _cv2.normalize(edge_map, None, 0, 255, _cv2.NORM_MINMAX).astype(_np.uint8)
+
+        # 2. Mapa de sombras: píxeles más oscuros que su vecindario (interior de abolladura)
+        shadow_raw = _np.clip(blur_L - L, 0, 255)
+        shadow_map = _cv2.normalize(shadow_raw, None, 0, 255, _cv2.NORM_MINMAX).astype(_np.uint8)
+
+        # 3. Mapa de reflexión: píxeles más brillantes que su vecindario (especular del borde)
+        reflex_raw = _np.clip(L - blur_L, 0, 255)
+        reflex_map = _cv2.normalize(reflex_raw, None, 0, 255, _cv2.NORM_MINMAX).astype(_np.uint8)
+
+        # 4. Zona candidata: edge 40% + shadow 35% + reflexión 25%
+        cand = (_np.float32(edge_map)  * 0.40
+              + _np.float32(shadow_map) * 0.35
+              + _np.float32(reflex_map) * 0.25)
+        cand = _cv2.GaussianBlur(cand.astype(_np.uint8), (21, 21), 0)
+
+        # ── Guardia de señal: si no hay señal dentro del bbox Gemini, el daño
+        #    no es visible desde este ángulo → devolver None (no inventar)
+        bx1_c = max(0, int(xmin / 1000 * W_p) - cx1)
+        bx2_c = min(crop.shape[1], int(xmax / 1000 * W_p) - cx1)
+        by1_c = max(0, int(ymin / 1000 * H_p) - cy1)
+        by2_c = min(crop.shape[0], int(ymax / 1000 * H_p) - cy1)
+        if bx2_c > bx1_c and by2_c > by1_c:
+            inner_signal = float(_np.mean(cand[by1_c:by2_c, bx1_c:bx2_c]))
+        else:
+            inner_signal = 0.0
+        if inner_signal < 28.0:   # sin señal real dentro del bbox → daño invisible en esta foto
+            logger.info(f"[opencv-seg] señal insuficiente en bbox ({inner_signal:.1f}<28) → omitir OpenCV")
+            return None, None
+
+        # 5. Threshold automático (Otsu) + morfología para rellenar la superficie
+        _, binary = _cv2.threshold(cand, 0, 255, _cv2.THRESH_BINARY + _cv2.THRESH_OTSU)
+        ksize = max(9, int(min(crop.shape[:2]) * 0.04))
+        ksize = ksize if ksize % 2 == 1 else ksize + 1
+        kernel = _cv2.getStructuringElement(_cv2.MORPH_ELLIPSE, (ksize, ksize))
+        final_mask = _cv2.morphologyEx(binary, _cv2.MORPH_CLOSE, kernel, iterations=3)
+        final_mask = _cv2.dilate(final_mask, kernel, iterations=2)
+
+        # 6. Seleccionar contorno más cercano al centroide del bbox de Gemini
+        contours, _ = _cv2.findContours(final_mask, _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None, None
+
+        # Centro del bbox en coordenadas de crop
+        bx_cx = int(((xmin / 1000 * W_p) + (xmax / 1000 * W_p)) / 2) - cx1
+        bx_cy = int(((ymin / 1000 * H_p) + (ymax / 1000 * H_p)) / 2) - cy1
+
+        # Diagonal del bbox en píxeles de crop (para la guardia de deriva)
+        bbox_w_px = max(1, int((xmax - xmin) / 1000 * W_p))
+        bbox_h_px = max(1, int((ymax - ymin) / 1000 * H_p))
+        max_drift = ((bbox_w_px ** 2 + bbox_h_px ** 2) ** 0.5) * 1.2
+
+        def _score(c):
+            M = _cv2.moments(c)
+            if M['m00'] < 1:
+                return float('inf')
+            ccx = M['m10'] / M['m00']; ccy = M['m01'] / M['m00']
+            dist = ((ccx - bx_cx) ** 2 + (ccy - bx_cy) ** 2) ** 0.5
+            area = _cv2.contourArea(c)
+            # Preferir contornos grandes y cercanos al centro
+            return dist - area * 0.05
+
+        best = min(contours, key=_score)
+        if _cv2.contourArea(best) < 50:   # muy pequeño → no fiable
+            return None, None
+
+        # ── Guardia de deriva: si el centroide del mejor contorno se alejó demasiado
+        #    del bbox Gemini, el OpenCV ha encontrado algo irrelevante (p.ej. arco de rueda)
+        M_best = _cv2.moments(best)
+        if M_best['m00'] > 0:
+            best_cx = M_best['m10'] / M_best['m00']
+            best_cy = M_best['m01'] / M_best['m00']
+            drift = ((best_cx - bx_cx) ** 2 + (best_cy - bx_cy) ** 2) ** 0.5
+            if drift > max_drift:
+                logger.info(f"[opencv-seg] deriva excesiva ({drift:.0f}px > {max_drift:.0f}px) → omitir OpenCV")
+                return None, None
+
+        # 7. Simplificar polígono
+        eps = 0.02 * _cv2.arcLength(best, True)
+        approx = _cv2.approxPolyDP(best, eps, True)
+        if len(approx) < 4:
+            return None, None
+
+        # 8. Remap a coordenadas 0-1000 de la imagen original
+        poly = []
+        for pt in approx:
+            px_crop, py_crop = float(pt[0][0]), float(pt[0][1])
+            px_orig = (px_crop + cx1) / scale
+            py_orig = (py_crop + cy1) / scale
+            poly.append([
+                max(0, min(1000, round(py_orig / H_orig * 1000))),
+                max(0, min(1000, round(px_orig / W_orig * 1000))),
+            ])
+
+        debug_imgs = None
+        if debug:
+            debug_imgs = {
+                'crop':       crop,
+                'edges':      edge_map,
+                'shadows':    shadow_map,
+                'reflection': reflex_map,
+                'candidate':  cand,
+                'mask':       final_mask,
+            }
+
+        logger.info(f"[opencv-seg] segmentación: {len(poly)} pts, área contorno={_cv2.contourArea(best):.0f}px²")
+        return poly, debug_imgs
+
+    except Exception as e:
+        logger.warning(f"[opencv-seg] error: {e}")
+        return None, None
+
+
+def _poly_from_box(px1, py1, px2, py2, n=12):
+    """Elipse de N puntos a partir de bounding box — fallback."""
+    import math as _math
+    cx, cy = (px1 + px2) / 2, (py1 + py2) / 2
+    rx, ry = (px2 - px1) / 2, (py2 - py1) / 2
+    return [(int(cx + rx * _math.cos(2 * _math.pi * i / n)),
+             int(cy + ry * _math.sin(2 * _math.pi * i / n)))
+            for i in range(n)]
+
+
+def _grabcut_refine(img_rgb_np, px1, py1, px2, py2, gemini_poly_px=None):
+    """
+    Fase 2 — OpenCV GrabCut para segmentación pixel-level dentro de la zona de daño.
+
+    1. Usa el bounding box de Gemini como rectángulo de inicialización de GrabCut.
+    2. Si Gemini devolvió polígono, inicializa la máscara de probable-foreground.
+    3. Devuelve lista de puntos del contorno exterior del daño segmentado.
+    Fallback a elipse si GrabCut falla o el área es demasiado pequeña.
+    """
+    try:
+        import cv2 as _cv2
+        import numpy as _np
+
+        H, W = img_rgb_np.shape[:2]
+        pad = 8
+
+        # Añadir padding al rect sin salirse de la imagen
+        r_x1 = max(0, px1 - pad); r_y1 = max(0, py1 - pad)
+        r_x2 = min(W - 1, px2 + pad); r_y2 = min(H - 1, py2 + pad)
+        rw = r_x2 - r_x1; rh = r_y2 - r_y1
+
+        if rw < 15 or rh < 15:
+            return None  # demasiado pequeño
+
+        rect = (r_x1, r_y1, rw, rh)
+
+        # Inicializar máscara GrabCut
+        mask = _np.zeros((H, W), _np.uint8)
+
+        # Si Gemini dio polígono, usarlo como probable foreground
+        if gemini_poly_px and len(gemini_poly_px) >= 3:
+            pts = _np.array(gemini_poly_px, dtype=_np.int32)
+            _cv2.fillPoly(mask, [pts], _cv2.GC_PR_FGD)
+
+        bgd_model = _np.zeros((1, 65), _np.float64)
+        fgd_model = _np.zeros((1, 65), _np.float64)
+
+        # GrabCut — 4 iteraciones con rect como hint inicial
+        init_mode = _cv2.GC_INIT_WITH_MASK if gemini_poly_px and len(gemini_poly_px) >= 3 else _cv2.GC_INIT_WITH_RECT
+        if init_mode == _cv2.GC_INIT_WITH_MASK:
+            # Necesita al menos algo en el rect también
+            _cv2.grabCut(img_rgb_np, mask, rect, bgd_model, fgd_model, 2, _cv2.GC_INIT_WITH_RECT)
+            # Re-sembrar con polígono y refinar
+            pts = _np.array(gemini_poly_px, dtype=_np.int32)
+            _cv2.fillPoly(mask, [pts], _cv2.GC_PR_FGD)
+            _cv2.grabCut(img_rgb_np, mask, rect, bgd_model, fgd_model, 3, _cv2.GC_INIT_WITH_MASK)
+        else:
+            _cv2.grabCut(img_rgb_np, mask, rect, bgd_model, fgd_model, 5, _cv2.GC_INIT_WITH_RECT)
+
+        # Foreground = GC_FGD | GC_PR_FGD
+        fg_mask = _np.where((mask == _cv2.GC_FGD) | (mask == _cv2.GC_PR_FGD), 255, 0).astype(_np.uint8)
+
+        # Limpieza morfológica: eliminar ruido pequeño
+        kernel = _cv2.getStructuringElement(_cv2.MORPH_ELLIPSE, (7, 7))
+        fg_mask = _cv2.morphologyEx(fg_mask, _cv2.MORPH_CLOSE, kernel, iterations=2)
+        fg_mask = _cv2.morphologyEx(fg_mask, _cv2.MORPH_OPEN,  kernel, iterations=1)
+
+        # Encontrar contornos del foreground
+        contours, _ = _cv2.findContours(fg_mask, _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+
+        # Tomar el contorno más grande dentro del bounding box original
+        best = max(contours, key=_cv2.contourArea)
+        area = _cv2.contourArea(best)
+        if area < 100:  # muy pequeño, ignorar
+            return None
+
+        # Simplificar el contorno (Douglas-Peucker) para N puntos razonables
+        epsilon = 0.015 * _cv2.arcLength(best, True)
+        approx = _cv2.approxPolyDP(best, epsilon, True)
+
+        # Si quedaron muy pocos o demasiados puntos, ajustar epsilon
+        if len(approx) < 5:
+            epsilon = 0.005 * _cv2.arcLength(best, True)
+            approx = _cv2.approxPolyDP(best, epsilon, True)
+        if len(approx) > 30:
+            epsilon = 0.03 * _cv2.arcLength(best, True)
+            approx = _cv2.approxPolyDP(best, epsilon, True)
+
+        poly = [(int(p[0][0]), int(p[0][1])) for p in approx]
+        return poly if len(poly) >= 3 else None
+
+    except Exception as _e:
+        logger.debug(f"[grabcut] error: {_e}")
+        return None
+
+
+def _annotate_photo_sync(img_bytes: bytes, damage_list: list) -> bytes:
+    """
+    Anotación forense con segmentación poligonal — Phase 1 upgrade.
+
+    Técnicas:
+    1. MÁSCARA POLIGONAL: sigue el contorno exacto del daño (no bounding box)
+    2. GLOW SUAVE en los bordes del polígono — sin oscurecer el resto de la imagen
+    3. CONTORNO adaptativo de 2px del color de severidad
+    4. BURBUJA numerada con sombra + línea guía al centroide del polígono
+    5. ETIQUETA con pieza + severidad + confianza
+    6. PANEL DE LEYENDA en la base
+    7. WATERMARK
+    """
+    from PIL import Image as _Img, ImageDraw, ImageFont, ImageFilter
+    import math as _math
+
+    img_pil = _Img.open(io.BytesIO(img_bytes)).convert("RGBA")
+    W, H = img_pil.size
+    img = img_pil
+
+    font_num   = _load_font(max(18, H // 45))
+    font_label = _load_font(max(13, H // 68))
+    font_small = _load_font(max(11, H // 82))
+    font_wm    = _load_font(max(10, H // 95))
+
+    # ── Pre-calcular polígonos pixel para todos los daños ──
+    damages_px = []
+    for dmg, num in damage_list:
+        raw_poly = getattr(dmg, 'polygon_points', None) or []
+        box = getattr(dmg, 'box_2d', None) or []
+
+        # Coordenadas del bounding box siempre necesarias para GrabCut
+        if len(box) == 4 and any(v > 0 for v in box):
+            ymin, xmin, ymax, xmax = box
+            bpx1 = int(xmin / 1000 * W); bpy1 = int(ymin / 1000 * H)
+            bpx2 = max(int(xmax / 1000 * W), bpx1 + 20)
+            bpy2 = max(int(ymax / 1000 * H), bpy1 + 20)
+        elif len(raw_poly) >= 4:
+            xs_r = [int(pt[1] / 1000 * W) for pt in raw_poly]
+            ys_r = [int(pt[0] / 1000 * H) for pt in raw_poly]
+            bpx1, bpy1, bpx2, bpy2 = min(xs_r), min(ys_r), max(xs_r), max(ys_r)
+        else:
+            continue
+
+        # Polígono de Gemini en píxeles (hint para GrabCut)
+        gemini_poly = [(int(pt[1] / 1000 * W), int(pt[0] / 1000 * H))
+                       for pt in raw_poly if len(pt) >= 2] if len(raw_poly) >= 4 else None
+
+        # ── FASE 1: segmentación OpenCV de la superficie dañada real ──────
+        # Primero intentamos con OpenCV (gradientes + sombras + reflexión).
+        # Si falla, usamos el polígono de Gemini; si tampoco hay, elipse de bbox.
+        if len(box) == 4 and any(v > 0 for v in box):
+            cv_poly_norm, _ = _segment_damage_opencv(img_bytes, box)
+        else:
+            cv_poly_norm = None
+
+        if cv_poly_norm and len(cv_poly_norm) >= 4:
+            poly_px = [(int(pt[1] / 1000 * W), int(pt[0] / 1000 * H)) for pt in cv_poly_norm]
+            logger.info(f"[anotación] daño {num}: polígono OpenCV ({len(poly_px)} pts) ✓")
+        elif gemini_poly and len(gemini_poly) >= 4:
+            poly_px = gemini_poly
+            logger.info(f"[anotación] daño {num}: polígono Gemini fallback ({len(poly_px)} pts)")
+        else:
+            poly_px = _poly_from_box(bpx1, bpy1, bpx2, bpy2)
+            logger.info(f"[anotación] daño {num}: elipse bbox fallback")
+
+        if len(poly_px) < 3:
+            continue
+
+        xs = [p[0] for p in poly_px]; ys = [p[1] for p in poly_px]
+        cx = int(sum(xs) / len(xs)); cy = int(sum(ys) / len(ys))
+        bx1 = min(xs); by1 = min(ys); bx2 = max(xs); by2 = max(ys)
+
+        damages_px.append((dmg, num, poly_px, cx, cy, bx1, by1, bx2, by2))
+
+    # ══════════════════════════════════════════════════════════════
+    # 1. RELLENO MUY SUTIL + CONTORNO POLIGONAL
+    # El relleno es casi transparente para no tapar la foto.
+    # El CONTORNO es lo que comunica "aquí está el daño".
+    # ══════════════════════════════════════════════════════════════
+    poly_layer = _Img.new("RGBA", (W, H), (0, 0, 0, 0))
+    poly_dr    = ImageDraw.Draw(poly_layer)
+
+    for dmg, num, poly_px, cx, cy, bx1, by1, bx2, by2 in damages_px:
+        sev    = (getattr(dmg, 'severity', 'leve') or 'leve').lower()
+        border = _ANN_BORDER.get(sev, _ANN_BORDER['leve'])
+        r, g, b = border[:3]
+
+        # Relleno muy tenue (15% opacidad) — solo para marcar la zona
+        poly_dr.polygon(poly_px, fill=(r, g, b, 38))
+
+        # Glow exterior — 3 pasadas decrec. para efecto luminoso
+        for width, alpha in [(10, 20), (6, 45), (3, 80)]:
+            poly_dr.line(poly_px + [poly_px[0]], fill=(r, g, b, alpha), width=width)
+
+        # Contorno sólido fino — el "trazo de perito"
+        poly_dr.line(poly_px + [poly_px[0]], fill=(r, g, b, 240), width=2)
+
+    # Suavizar el glow exterior ligeramente
+    poly_blur = poly_layer.filter(ImageFilter.GaussianBlur(radius=1))
+    img = _Img.alpha_composite(img, poly_blur)
+
+    # ══════════════════════════════════════════════════════════════
+    # 3. BURBUJAS, LÍNEAS GUÍA Y ETIQUETAS
+    # ══════════════════════════════════════════════════════════════
+    overlay = _Img.new("RGBA", (W, H), (0, 0, 0, 0))
+    dr = ImageDraw.Draw(overlay)
+
+    for dmg, num, poly_px, cx, cy, bx1, by1, bx2, by2 in damages_px:
+        sev       = (getattr(dmg, 'severity', 'leve') or 'leve').lower()
+        part      = (getattr(dmg, 'part', '') or '').strip()
+        conf      = getattr(dmg, 'confidence', 0.8) or 0.8
+        confirmed = getattr(dmg, 'confirmed', True)
+
+        border = _ANN_BORDER.get(sev, _ANN_BORDER['leve'])
+        label  = _ANN_LABEL.get(sev, 'LEVE')
+        icon   = _ANN_ICON.get(sev, '●')
+
+        # ── Posición burbuja: fuera del bounding box del polígono ──
+        r_bubble = max(17, W // 46)
+        bx = bx1 + r_bubble + 4
+        by = by1 - r_bubble - 6
+        if by - r_bubble < 5:
+            by = by2 + r_bubble + 6
+        if bx + r_bubble > W - 5:
+            bx = bx2 - r_bubble - 5
+
+        # ── Línea guía: burbuja → centroide del polígono ──
+        dr.line([(bx, by), (cx, cy)], fill=border[:3] + (200,), width=max(2, W // 400))
+
+        # ── Burbuja con sombra ──
+        shadow_off = max(3, r_bubble // 5)
+        dr.ellipse([bx-r_bubble+shadow_off, by-r_bubble+shadow_off,
+                    bx+r_bubble+shadow_off, by+r_bubble+shadow_off],
+                   fill=(0, 0, 0, 130))
+        dr.ellipse([bx-r_bubble, by-r_bubble, bx+r_bubble, by+r_bubble], fill=border)
+
+        ns = str(num)
+        bb = dr.textbbox((0, 0), ns, font=font_num)
+        nw, nh = bb[2]-bb[0], bb[3]-bb[1]
+        dr.text((bx - nw//2, by - nh//2), ns, fill=(255, 255, 255, 255), font=font_num)
+
+        # ── Etiqueta ──
+        short_part = (part[:22] + "…") if len(part) > 22 else part
+        conf_str   = f"{int(conf*100)}%"
+        suffix     = " ?" if not confirmed else ""
+        tag        = f" {icon} {short_part}  {label}  {conf_str}{suffix} "
+
+        bb_t = dr.textbbox((0, 0), tag, font=font_label)
+        tw, th = bb_t[2]-bb_t[0], bb_t[3]-bb_t[1]
+        tx = max(2, min(bx1, W - tw - 6))
+        ty = by2 + 7
+        if ty + th + 10 > H:
+            ty = max(2, by1 - th - 10)
+
+        dr.rectangle([tx-3, ty-4, tx+tw+5, ty+th+6], fill=border[:3] + (215,))
+        dr.text((tx+1, ty+1), tag, fill=(255, 255, 255, 255), font=font_label)
+
+    # ══════════════════════════════════════════════════════════════
+    # 4. PANEL DE LEYENDA
+    # ══════════════════════════════════════════════════════════════
+    if damages_px:
+        leg_h = max(26, H // 20)
+        leg_y = H - leg_h - 4
+        dr.rectangle([4, leg_y - 2, W - 4, H - 2], fill=(0, 0, 0, 175))
+        lx = 10
+        for dmg_l, num_l, *_ in damages_px[:9]:
+            sev_l  = (getattr(dmg_l, 'severity', 'leve') or 'leve').lower()
+            part_l = (getattr(dmg_l, 'part', '') or '')[:16]
+            bdr_l  = _ANN_BORDER.get(sev_l, _ANN_BORDER['leve'])
+            entry  = f" {num_l}. {part_l} "
+            bb_e   = dr.textbbox((0, 0), entry, font=font_small)
+            ew     = bb_e[2] - bb_e[0]
+            if lx + ew + 8 > W:
+                break
+            dr.text((lx, leg_y + 4), entry, fill=(*bdr_l[:3], 235), font=font_small)
+            lx += ew + 4
+
+    # ══════════════════════════════════════════════════════════════
+    # 5. WATERMARK
+    # ══════════════════════════════════════════════════════════════
+    nd = len(damages_px)
+    wm = f"⬡ FlotaDSP AI  {nd} daño{'s' if nd != 1 else ''}"
+    bb_wm = dr.textbbox((0, 0), wm, font=font_wm)
+    wm_w  = bb_wm[2] - bb_wm[0]
+    dr.rectangle([W - wm_w - 14, 4, W - 4, 4 + (bb_wm[3]-bb_wm[1]) + 8],
+                 fill=(0, 0, 0, 110))
+    dr.text((W - wm_w - 10, 8), wm, fill=(255, 255, 255, 110), font=font_wm)
+
+    result = _Img.alpha_composite(img, overlay).convert("RGB")
+    buf = io.BytesIO()
+    result.save(buf, format="JPEG", quality=92, optimize=True)
+    return buf.getvalue()
+
+
+async def generate_annotated_photos(
+    inspection_id: str,
+    photo_urls: list,
+    damages: list,
+    photos_bytes: Optional[list] = None,
+) -> list:
+    """
+    Genera versiones anotadas profesionalmente de las fotos de inspección.
+    Solo anota fotos que tienen al menos un daño asignado.
+    Sube las anotadas a R2 y retorna la lista (None donde no hay daños).
+    """
+    if not damages or not photo_urls:
+        return []
+
+    # Agrupar daños por photo_index
+    by_photo: dict[int, list] = {}
+    for num, d in enumerate(damages, 1):
+        pi = getattr(d, 'photo_index', 1) or 1
+        by_photo.setdefault(pi, []).append((d, num))
+
+    loop = asyncio.get_running_loop()
+    annotated = []
+
+    for pi, url in enumerate(photo_urls, 1):
+        dmg_list = by_photo.get(pi)
+        if not dmg_list:
+            annotated.append(None)
+            continue
+
+        # Obtener bytes de la foto original
+        if photos_bytes and pi <= len(photos_bytes) and photos_bytes[pi - 1]:
+            raw = photos_bytes[pi - 1]
+        else:
+            raw = await _fetch_photo_bytes(url, timeout=12)
+
+        if not raw:
+            annotated.append(None)
+            continue
+
+        try:
+            ann_bytes = await loop.run_in_executor(
+                _executor,
+                lambda b=raw, dl=dmg_list: _annotate_photo_sync(b, dl),
+            )
+            key = f"inspections/annotated/{inspection_id}/foto_{pi}.jpg"
+            ann_url = await loop.run_in_executor(
+                _executor, lambda k=key, ab=ann_bytes: _upload_to_r2_sync(ab, k)
+            )
+            annotated.append(ann_url)
+            logger.info(f"[anotación] foto {pi}/{len(photo_urls)} → {ann_url[:60]}…")
+        except Exception as e:
+            logger.warning(f"[anotación] error foto {pi}: {e}")
+            annotated.append(None)
+
+    confirmed_count = sum(1 for d in damages if getattr(d, 'confirmed', True))
+    logger.info(
+        f"[anotación] {inspection_id}: {len(annotated)} fotos procesadas, "
+        f"{confirmed_count}/{len(damages)} daños confirmados"
+    )
+    return annotated
 
 
 # =========================
@@ -1980,15 +2859,6 @@ def _rl_key_ip(request: Request) -> str:
     return (fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "?"))
 
 
-def _rl_check(key: str):
-    """Lanza 429 si la clave superó el límite de fallos en la ventana."""
-    now = datetime.now(timezone.utc).timestamp()
-    _login_fails[key] = [t for t in _login_fails[key] if now - t < _LOGIN_WINDOW_S]
-    limit = _LOGIN_MAX_FAILS_IP if key.startswith("ip:") else _LOGIN_MAX_FAILS
-    if len(_login_fails[key]) >= limit:
-        raise HTTPException(status_code=429, detail="Demasiados intentos fallidos. Espera 5 minutos.")
-
-
 async def _rl_fail(key: str, context: str):
     """Registra un fallo; si alcanza el límite, avisa por Telegram una vez."""
     now = datetime.now(timezone.utc).timestamp()
@@ -2015,6 +2885,21 @@ async def _rl_fail(key: str, context: str):
 
 def _rl_ok(key: str):
     _login_fails.pop(key, None)
+    _public_actions.pop(key, None)
+
+
+def _rl_check(key: str):
+    """Lanza 429 si la clave superó el límite de fallos en la ventana."""
+    now = datetime.now(timezone.utc).timestamp()
+    recent = [t for t in _login_fails[key] if now - t < _LOGIN_WINDOW_S]
+    _login_fails[key] = recent
+    if not recent:
+        # Limpiar key vacía para evitar crecimiento indefinido del dict
+        _login_fails.pop(key, None)
+        return
+    limit = _LOGIN_MAX_FAILS_IP if key.startswith("ip:") else _LOGIN_MAX_FAILS
+    if len(recent) >= limit:
+        raise HTTPException(status_code=429, detail="Demasiados intentos fallidos. Espera 5 minutos.")
 
 
 # ── Rate limit genérico para acciones públicas (no solo fallos). ──
@@ -2082,6 +2967,11 @@ async def register_dsp(data: RegisterRequest, request: Request):
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
     logger.info("Nuevo DSP registrado: %s (org=%s)", username, org_id)
+    # Crear índices en la BD recién creada del DSP
+    try:
+        await _ensure_tenant_indexes(org["db_name"])
+    except Exception as _ie:
+        logger.warning(f"Error creando índices para nuevo DSP {org_id}: {_ie}")
     token = create_token(user_id, "admin", org_name,
                          org_id=org_id, db_name=org["db_name"], account_type="dsp",
                          centers=org.get("centers"))
@@ -2477,8 +3367,10 @@ async def conductor_list_public(center: Optional[str] = None, slug: Optional[str
     await _set_tenant_by_slug(slug)
     query = {}
     if center and center != "Todos":
-        query["center"] = {"$regex": center, "$options": "i"}
-    cursor = db.drivers.find(query, {"_id": 0, "id": 1, "name": 1, "email": 1, "center": 1, "photo_url": 1})
+        if not re.match(r'^[A-Za-z0-9_\-]{1,30}$', center):
+            raise HTTPException(400, "Código de centro inválido")
+        query["center"] = {"$regex": re.escape(center), "$options": "i"}
+    cursor = db.drivers.find(query, {"_id": 0, "id": 1, "name": 1, "center": 1, "photo_url": 1})
     drivers = await cursor.to_list(500)
     return drivers
 
@@ -2740,13 +3632,14 @@ async def change_my_password(data: dict, user: dict = Depends(get_current_user))
 
 @auth_router.post("/reset-admin-password")
 async def reset_admin_password(data: dict, _admin: dict = Depends(require_admin)):
-    """Cambia la contraseña de un admin existente. Solo admins."""
+    """Cambia la contraseña de un admin existente. Solo admins de la misma organización."""
     username = (data.get("username") or "").strip()
     new_password = data.get("password") or ""
     if not username or len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Usuario y contraseña (mín. 6 caracteres) requeridos")
+    # Filtra por org_id para evitar que un admin de un DSP resetee cuentas de otro DSP.
     result = await global_db.admin_users.update_one(
-        {"username": username},
+        {"username": username, "org_id": _admin.get("org_id")},
         {"$set": {"hashed_password": hash_password(new_password)}}
     )
     if result.matched_count == 0:
@@ -2874,7 +3767,7 @@ async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
             center = (driver.get("center") or "")[:4] if driver else ""
             if center:
                 vehicles = await db.vehicles.find(
-                    {"status": {"$ne": "deleted"}, "center": {"$regex": center, "$options": "i"}},
+                    {"status": {"$ne": "deleted"}, "center": {"$regex": re.escape(center), "$options": "i"}},
                     {"_id": 0}
                 ).to_list(100)
             else:
@@ -2902,8 +3795,9 @@ async def create_vehicle(data: VehicleCreate, _=Depends(require_admin)):
 async def get_vehicles(center: Optional[str] = None, _=Depends(require_admin)):
     query = {"status": {"$ne": "deleted"}}
     if center and center != "Todos":
-        # Coincidencia flexible: el centro de la furgoneta CONTIENE el código (OGA5, DGA1...)
-        query["center"] = {"$regex": center, "$options": "i"}
+        if not re.match(r'^[A-Za-z0-9_\-]{1,30}$', center):
+            raise HTTPException(400, "Código de centro inválido")
+        query["center"] = {"$regex": re.escape(center), "$options": "i"}
     vehicles = await db.vehicles.find(query, {"_id": 0}).to_list(1000)
     for v in vehicles:
         for k in ["created_at", "updated_at"]:
@@ -3147,14 +4041,23 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
                 h_scores.append(15 if any(k in notes for k in kws) else 10)
         honesty = round(sum(h_scores) / len(h_scores)) if h_scores else 15
 
-        # ── 🛡️ Conservación (25) — daño NUEVO por panel durante su custodia ──
-        # JUSTO: solo penaliza un panel que se daña por PRIMERA vez en su turno.
-        # Un panel ya dañado en cualquier inspección anterior NO cuenta (no se
-        # culpa al conductor por lo que ya estaba ni por re-detecciones de la IA).
-        # Si la furgo no tiene inspección previa (sin baseline), no se penaliza.
-        # Los rayones LEVES no penalizan (desgaste normal del reparto + son lo más
-        # ruidoso de la IA). Solo pesa el daño real: abolladura/grave/crítico.
-        PANEL_PEN = {"leve": 0, "moderado": -6, "grave": -12, "critico": -20}
+        # ── 🛡️ Conservación (25) — rate-based, confirmed-only, Bayesian-smoothed ──
+        #
+        #  Tres garantías de justicia:
+        #  1) Solo daños CONFIRMADOS (confidence ≥ 0.65). Los "sugeridos" no penalizan
+        #     aunque aparezcan en la foto anotada para revisión del admin.
+        #  2) Rate-based: se pondera por nº de inspecciones del mes, así quien trabaja
+        #     más días con la misma tasa de incidencias puntúa igual que quien trabaja
+        #     menos — la exposición mayor no castiga.
+        #  3) Bayesian smoothing (k=5): con pocas inspecciones el score se acerca a la
+        #     media perfecta (25 pts), evitando premiar/castigar con muestras pequeñas.
+        #     Con ≥15 inspecciones el peso propio del conductor es ya >75%.
+        #
+        #  Pesos de severidad (escala cuadrática: grave duele 3×, crítico 6×):
+        #    leve=0  moderado=1  grave=3  crítico=6
+        #  Conservación = 25 × exp(−rate × 1.2),  Bayesian → (raw×n + 25×5)/(n+5)
+        import math as _math
+        SEV_W = {"leve": 0, "moderado": 1, "grave": 3, "critico": 6}
         delta_events = []
         for insp in driver_insps:
             vid = insp.get("vehicle_id")
@@ -3165,7 +4068,7 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
             insp_time = insp.get("created_at", "")
             prior = [h for h in vehicle_history[vid] if h.get("created_at", "") < insp_time]
             if not prior:
-                continue  # sin baseline: no se puede saber qué es nuevo
+                continue  # sin baseline → no se puede saber qué es nuevo
             base_panels = set()
             for h in prior:
                 for d in ((h.get("analysis") or {}).get("damages") or []):
@@ -3178,6 +4081,8 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
             for d in ((insp.get("analysis") or {}).get("damages") or []):
                 if not isinstance(d, dict):
                     continue
+                if d.get("confirmed") is False:  # ignorar sugeridos (falsos positivos potenciales)
+                    continue
                 p = _canon_panel(d.get("part") or d.get("zone") or d.get("location"))
                 if not p:
                     continue
@@ -3187,26 +4092,82 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
                     curr[p] = {"rank": rank, "sev": sev, "dmg": d}
             for p, info in curr.items():
                 sev = info["sev"]
-                pen = PANEL_PEN.get(sev, 0)
-                if p not in base_panels and pen != 0:
+                w = SEV_W.get(sev, 0)
+                if p not in base_panels and w > 0:
                     d = info["dmg"]
                     pidx = d.get("photo_index")
                     photo_url = (photos[pidx - 1] if isinstance(pidx, int) and 1 <= pidx <= len(photos)
                                  else (photos[0] if photos else None))
+                    # penalty_display: equivalencia visual con el sistema anterior
+                    _PEN_DISP = {"moderado": -6, "grave": -12, "critico": -20}
                     delta_events.append({
                         "vehicle_id": vid,
                         "panel": p,
-                        "part": d.get("part") or p,        # nombre real de la pieza
-                        "from_sev": d.get("part") or p,    # se muestra "pieza → gravedad"
+                        "part": d.get("part") or p,
                         "to_sev": sev,
-                        "penalty": pen,
+                        "weight": w,
+                        "penalty": _PEN_DISP.get(sev, 0),  # solo display
                         "date": insp_time[:10] if len(insp_time) >= 10 else insp_time,
                         "inspection_id": insp.get("id"),
                         "photo_url": photo_url,
                         "box_2d": d.get("box_2d"),
                         "description": d.get("description"),
+                        "confirmed": d.get("confirmed", True),
                     })
-        conservation = max(0, 25 + sum(e["penalty"] for e in delta_events))
+
+        # Rate: peso total / nº inspecciones → independiente del volumen de trabajo
+        total_dmg_weight = sum(e["weight"] for e in delta_events)
+        damage_rate = total_dmg_weight / max(n, 1)
+        # Curva exponencial: rate=0 → 25 pts; rate=1 (1 grave/insp) → ~8 pts; rate=2 → ~2 pts
+        raw_conservation = round(25 * _math.exp(-damage_rate * 1.2))
+        # Bayesian prior k=5: mezcla el resultado propio con la media perfecta (25)
+        # para que los conductores con pocas inspecciones no distorsionen el ranking
+        _k = 5
+        conservation = round((raw_conservation * n + 25 * _k) / (n + _k))
+
+        # ── 📈 Tendencia del mes (no suma en total — informa al admin) ──
+        # Compara la tasa de daño de la primera mitad del mes vs la segunda.
+        insps_sorted = sorted(driver_insps, key=lambda x: x.get("created_at", ""))
+        half = max(len(insps_sorted) // 2, 1)
+
+        def _half_rate(subset):
+            w = sum(
+                SEV_W.get(_norm_sev(d.get("severity")), 0)
+                for i in subset
+                for d in ((i.get("analysis") or {}).get("damages") or [])
+                if isinstance(d, dict) and d.get("confirmed") is not False
+            )
+            return w / max(len(subset), 1)
+
+        if len(insps_sorted) >= 4:
+            r1 = _half_rate(insps_sorted[:half])
+            r2 = _half_rate(insps_sorted[half:])
+            if r2 < r1 * 0.7:
+                trend = "mejorando"
+            elif r2 > r1 * 1.4:
+                trend = "empeorando"
+            else:
+                trend = "estable"
+        else:
+            trend = "sin_datos"
+
+        # ── 🔥 Racha limpia (no suma en total — tiebreaker + badge) ──
+        # Inspecciones consecutivas más recientes sin daño confirmado ≥ moderado.
+        clean_streak = 0
+        for insp in reversed(insps_sorted):
+            if insp.get("analysis_status") != "ok":
+                continue
+            new_dmgs = ((insp.get("analysis") or {}).get("new_damages") or
+                        (insp.get("analysis") or {}).get("damages") or [])
+            has_new_confirmed = any(
+                d.get("confirmed") is not False and
+                _norm_sev(d.get("severity")) in ("moderado", "grave", "critico")
+                for d in new_dmgs if isinstance(d, dict)
+            )
+            if not has_new_confirmed:
+                clean_streak += 1
+            else:
+                break
 
         total = min(100, compliance + punctuality + evidence + honesty + conservation)
 
@@ -3216,6 +4177,9 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
             "total": total,
             "compliance": compliance, "punctuality": punctuality,
             "evidence": evidence, "honesty": honesty, "conservation": conservation,
+            "damage_rate": round(damage_rate, 3),       # rate crudo (debug / gráficas)
+            "trend": trend,                             # mejorando / empeorando / estable
+            "clean_streak": clean_streak,               # racha de inspecciones limpias
             "delta_events": delta_events,
             "inspections_count": n,
             "days_assigned": days_assigned,
@@ -3223,16 +4187,94 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
             "insufficient": False,
         })
 
-    # Orden: puntuación desc; desempate por nº de inspecciones; los 'sin datos' al final
-    results.sort(key=lambda x: (x["total"] is None, -(x["total"] or 0), -x["inspections_count"]))
+    # Orden: puntuación desc; desempate por racha limpia; los 'sin datos' al final
+    results.sort(key=lambda x: (
+        x["total"] is None,
+        -(x["total"] or 0),
+        -(x.get("clean_streak") or 0),
+        -x["inspections_count"],
+    ))
     return {"scores": results, "month": m, "year": y, "days_elapsed": days_elapsed,
             "min_inspections": 3}
 
 
+@api_router.get("/scoring/leaderboard")
+async def get_scoring_leaderboard(month: int = None, year: int = None, _=Depends(require_admin)):
+    """Top-3 conductores por centro según el scoring mensual.
+
+    Devuelve para cada centro los tres mejores conductores con su puntuación,
+    racha limpia, tendencia y una medalla (oro/plata/bronce).
+    Solo conductores con al menos 3 inspecciones en el mes.
+    """
+    import calendar as _cal
+    now = datetime.now(timezone.utc)
+    y = year or now.year
+    m = month or now.month
+    days_in_month = _cal.monthrange(y, m)[1]
+    month_start = datetime(y, m, 1, tzinfo=timezone.utc)
+    month_end = datetime(y, m, days_in_month, 23, 59, 59, tzinfo=timezone.utc)
+
+    # Reusar el endpoint de scoring completo para obtener todos los datos
+    full = await get_driver_scoring(month=m, year=y)
+    scores = [s for s in full["scores"] if not s.get("insufficient")]
+
+    MEDALS = ["🥇", "🥈", "🥉"]
+    BADGE_LABELS = {
+        "🥇": "oro", "🥈": "plata", "🥉": "bronce",
+    }
+
+    leaderboard = {}
+    centers_seen = set()
+    for s in scores:
+        c = s["center"]
+        centers_seen.add(c)
+        if c not in leaderboard:
+            leaderboard[c] = []
+        if len(leaderboard[c]) < 3:
+            pos = len(leaderboard[c])
+            leaderboard[c].append({
+                "position": pos + 1,
+                "medal": MEDALS[pos],
+                "badge": BADGE_LABELS[MEDALS[pos]],
+                "driver_id": s["driver_id"],
+                "name": s["name"],
+                "photo_url": s.get("photo_url"),
+                "total": s["total"],
+                "trend": s.get("trend", "sin_datos"),
+                "clean_streak": s.get("clean_streak", 0),
+                "inspections_count": s["inspections_count"],
+                "compliance": s.get("compliance"),
+                "conservation": s.get("conservation"),
+                "damage_rate": s.get("damage_rate"),
+            })
+
+    # Estadísticas por centro (para comparativas)
+    center_stats = {}
+    for c in centers_seen:
+        center_scores = [s["total"] for s in scores if s["center"] == c]
+        if center_scores:
+            center_stats[c] = {
+                "drivers_ranked": len(center_scores),
+                "avg_score": round(sum(center_scores) / len(center_scores), 1),
+                "top_score": max(center_scores),
+            }
+
+    return {
+        "month": m, "year": y,
+        "leaderboard": leaderboard,
+        "center_stats": center_stats,
+    }
+
+
 @api_router.patch("/vehicles/{vehicle_id}")
 async def update_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
-    data.pop("_id", None)
-    data.pop("id", None)
+    _VEHICLE_ALLOWED = {
+        "license_plate","brand","model","year","color","fuel_type","status",
+        "center","notes","current_driver_id","mileage","last_itv","next_itv",
+        "last_service","next_service","photo_url","vin","seats","load_capacity",
+        "acquisition_date","insurance_expiry","leasing","owner","gps_id","tags",
+    }
+    data = {k: v for k, v in data.items() if k in _VEHICLE_ALLOWED}
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     prev = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "status": 1})
     result = await db.vehicles.update_one({"id": vehicle_id}, {"$set": data})
@@ -3277,15 +4319,21 @@ async def create_driver(data: DriverCreate, admin: dict = Depends(require_admin)
 async def get_drivers(center: Optional[str] = None, _=Depends(require_admin)):
     query = {"active": {"$ne": False}}
     if center and center != "Todos":
-        query["center"] = {"$regex": center, "$options": "i"}
+        if not re.match(r'^[A-Za-z0-9_\-]{1,30}$', center):
+            raise HTTPException(400, "Código de centro inválido")
+        query["center"] = {"$regex": re.escape(center), "$options": "i"}
     drivers = await db.drivers.find(query, {"_id": 0}).to_list(1000)
     return drivers
 
 
 @api_router.patch("/drivers/{driver_id}")
 async def update_driver(driver_id: str, data: dict, _=Depends(require_admin)):
-    data.pop("_id", None)
-    data.pop("id", None)
+    _DRIVER_ALLOWED = {
+        "name","email","phone","center","notes","photo_url","active","dni",
+        "license_number","license_expiry","address","emergency_contact",
+        "contract_type","hire_date","tags","score_override",
+    }
+    data = {k: v for k, v in data.items() if k in _DRIVER_ALLOWED}
     result = await db.drivers.update_one({"id": driver_id}, {"$set": data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Conductor no encontrado")
@@ -3328,6 +4376,7 @@ async def upload_inspection_photos(
     files: List[UploadFile] = File(...),
     user: dict = Depends(require_any_auth)
 ):
+    notes = (notes or "")[:2000]
     if not files:
         raise HTTPException(status_code=400, detail="Se requiere al menos una imagen.")
     if len(files) > 20:
@@ -3455,6 +4504,21 @@ async def upload_inspection_photos(
                               "analysis_error": analysis_error,
                               "analyzed_at": datetime.now(timezone.utc)}}
                 )
+                # ─ Generar fotos anotadas profesionalmente ─
+                if analysis and analysis_status == "ok" and analysis.damages:
+                    try:
+                        ann_urls = await generate_annotated_photos(
+                            inspection.id, photo_urls, analysis.damages,
+                            photos_bytes=photos_base64 and
+                            [base64.b64decode(b) for b in photos_base64]
+                        )
+                        if any(u for u in ann_urls):
+                            await db.inspections.update_one(
+                                {"id": inspection.id},
+                                {"$set": {"annotated_photos": ann_urls}}
+                            )
+                    except Exception as _ae:
+                        logger.warning(f"Error generando anotaciones: {_ae}")
                 # Notificar por Telegram si hay daños graves o críticos
                 if analysis and analysis_status == "ok":
                     sev = (analysis.severity or "").lower()
@@ -3600,6 +4664,7 @@ async def get_review_queue(center: Optional[str] = None, _=Depends(require_admin
             "new_damages": new_damages,
             "new_damages_count": len(new_damages),
             "has_reference": bool(i.get("reference_photos")),
+            "annotated_photos": i.get("annotated_photos") or [],
             "detected_plate": analysis.get("detected_plate") or "",
             "plate_mismatch": plate_mismatch,
             "image_quality_warnings": list(analysis.get("image_quality_warnings") or [])[:5],
@@ -3825,10 +4890,106 @@ async def start_analysis_recovery():
     asyncio.create_task(_recovery_loop())
 
 
+@api_router.get("/inspections/{inspection_id}/debug-segment")
+async def debug_segment(inspection_id: str, photo_index: int = 0, damage_index: int = 0,
+                        _=Depends(require_admin)):
+    """Devuelve imagen compuesta con las 6 fases del pipeline de segmentación OpenCV.
+    photo_index: 0-based. damage_index: índice del daño en analysis.damages."""
+    from fastapi.responses import Response as _FR
+    insp = await db.inspections.find_one({"id": inspection_id}, {"_id": 0})
+    if not insp:
+        raise HTTPException(status_code=404, detail="Inspección no encontrada")
+    photos = insp.get("photos") or []
+    if photo_index >= len(photos):
+        raise HTTPException(status_code=400, detail="photo_index fuera de rango")
+
+    analysis = insp.get("analysis") or {}
+    damages = analysis.get("damages") or analysis.get("new_damages") or []
+    if damage_index >= len(damages):
+        raise HTTPException(status_code=400, detail="damage_index fuera de rango")
+
+    dmg = damages[damage_index]
+    box_2d = dmg.get("box_2d")
+    if not box_2d or len(box_2d) != 4 or not any(v > 0 for v in box_2d):
+        raise HTTPException(status_code=400, detail="Daño sin box_2d válido")
+
+    img_bytes = await _fetch_photo_bytes(photos[photo_index])
+    if not img_bytes:
+        raise HTTPException(status_code=400, detail="No se pudo cargar la foto")
+
+    loop = asyncio.get_running_loop()
+    poly, debug_imgs = await loop.run_in_executor(
+        _executor, lambda: _segment_damage_opencv(img_bytes, box_2d, debug=True)
+    )
+
+    if not debug_imgs:
+        raise HTTPException(status_code=422, detail="La segmentación no produjo resultado")
+
+    # Construir imagen compuesta: original | edges | shadows | reflection | candidate | mask
+    import cv2 as _cv2
+    import numpy as _np
+    from PIL import Image as _PILImg
+    import io as _io
+
+    labels = ['original', 'bordes', 'sombras', 'reflexión', 'candidato', 'máscara']
+    frames_raw = [
+        debug_imgs['crop'],
+        debug_imgs['edges'],
+        debug_imgs['shadows'],
+        debug_imgs['reflection'],
+        debug_imgs['candidate'],
+        debug_imgs['mask'],
+    ]
+
+    # Convertir todos a BGR para cv2 (los maps en escala de grises → BGR)
+    frames = []
+    for f in frames_raw:
+        if len(f.shape) == 2:
+            frames.append(_cv2.cvtColor(f, _cv2.COLOR_GRAY2BGR))
+        else:
+            frames.append(f)
+
+    # Redimensionar todos al mismo alto
+    H_target = 300
+    resized = []
+    for f in frames:
+        h, w = f.shape[:2]
+        new_w = int(w * H_target / h)
+        resized.append(_cv2.resize(f, (new_w, H_target)))
+
+    # Añadir etiqueta encima de cada frame
+    labeled = []
+    for i, (f, lbl) in enumerate(zip(resized, labels)):
+        bar = _np.zeros((28, f.shape[1], 3), dtype=_np.uint8)
+        _cv2.putText(bar, lbl, (4, 20), _cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+        labeled.append(_np.vstack([bar, f]))
+
+    composite = _np.hstack(labeled)
+
+    # Si hay polígono, dibujarlo sobre el crop en la primera columna (frame original)
+    if poly and len(poly) >= 4:
+        orig_with_poly = labeled[0].copy()
+        pts_px = _np.array([
+            [int(pt[1] / 1000 * resized[0].shape[1]),
+             int(pt[0] / 1000 * resized[0].shape[0]) + 28]
+            for pt in poly
+        ], dtype=_np.int32)
+        _cv2.polylines(orig_with_poly, [pts_px], True, (0, 80, 255), 2)
+        composite[:, :labeled[0].shape[1]] = orig_with_poly
+
+    # Codificar como JPEG
+    ok, buf = _cv2.imencode('.jpg', composite, [_cv2.IMWRITE_JPEG_QUALITY, 88])
+    if not ok:
+        raise HTTPException(status_code=500, detail="Error codificando imagen")
+
+    return _FR(content=buf.tobytes(), media_type="image/jpeg",
+               headers={"Content-Disposition": f'inline; filename="debug_{inspection_id[:8]}_p{photo_index}_d{damage_index}.jpg"'})
+
+
 @api_router.post("/inspections/{inspection_id}/reanalyze")
-async def reanalyze_inspection(inspection_id: str, _=Depends(require_admin)):
+async def reanalyze_inspection(inspection_id: str, silent: bool = False, _=Depends(require_admin)):
     """Relanza el análisis IA de una inspección usando las fotos ya guardadas.
-    Útil cuando el análisis original falló (rate limit, timeout, etc.)."""
+    silent=true suprime la notificación de Telegram (útil para pruebas)."""
     insp = await db.inspections.find_one({"id": inspection_id}, {"_id": 0})
     if not insp:
         raise HTTPException(status_code=404, detail="Inspección no encontrada")
@@ -3866,8 +5027,22 @@ async def reanalyze_inspection(inspection_id: str, _=Depends(require_admin)):
                   "analyzed_at": datetime.now(timezone.utc).isoformat()}}
     )
 
-    # Telegram si el reanálisis revela daños graves/críticos
-    if analysis and analysis_status == "ok":
+    # ─ Regenerar fotos anotadas ─
+    if analysis and analysis_status == "ok" and analysis.damages:
+        try:
+            ann_urls = await generate_annotated_photos(
+                inspection_id, photo_urls, analysis.damages
+            )
+            if any(u for u in ann_urls):
+                await db.inspections.update_one(
+                    {"id": inspection_id},
+                    {"$set": {"annotated_photos": ann_urls}}
+                )
+        except Exception as _ae:
+            logger.warning(f"Error generando anotaciones en reanálisis: {_ae}")
+
+    # Telegram si el reanálisis revela daños graves/críticos (omitir si silent=True)
+    if not silent and analysis and analysis_status == "ok":
         sev = (analysis.severity or "").lower()
         if sev in ("grave", "critico"):
             try:
@@ -6473,83 +7648,6 @@ async def fix_centers(_=Depends(require_admin)):
 # REPROCESAR INSPECCIONES FALLIDAS
 # =========================
 
-@api_router.post("/inspections/{inspection_id}/reanalyze")
-async def reanalyze_inspection(inspection_id: str, _=Depends(require_admin)):
-    """Reprocesa una inspeccion cuyo analisis IA fallo (ej. cuando Gemini estaba sin cuota)."""
-    insp = await db.inspections.find_one({"id": inspection_id}, {"_id": 0})
-    if not insp:
-        raise HTTPException(status_code=404, detail="Inspeccion no encontrada")
-
-    photos = insp.get("photos", [])
-    if not photos:
-        raise HTTPException(status_code=400, detail="La inspeccion no tiene fotos para reanalizar")
-
-    # Descargar las fotos (desde R2 o local) y convertir a base64
-    images_b64 = []
-    for url in photos:
-        try:
-            if url.startswith("http"):
-                async with _aiohttp.ClientSession() as session:
-                    async with session.get(url, timeout=_aiohttp.ClientTimeout(total=15)) as r:
-                        if r.status == 200:
-                            data = await r.read()
-                            images_b64.append(base64.b64encode(data).decode())
-            else:
-                p = Path(url.lstrip("/"))
-                if p.exists():
-                    images_b64.append(base64.b64encode(p.read_bytes()).decode())
-        except Exception as e:
-            logger.warning(f"No se pudo descargar foto {url}: {e}")
-
-    if not images_b64:
-        raise HTTPException(status_code=400, detail="No se pudieron recuperar las fotos")
-
-    analysis, status, error = await analyze_images_with_gemini(images_b64)
-
-    update = {
-        "analysis": serialize_doc(analysis.model_dump()),
-        "analysis_status": status,
-        "analysis_error": error,
-        "reanalyzed_at": datetime.now(timezone.utc).isoformat()
-    }
-    await db.inspections.update_one({"id": inspection_id}, {"$set": update})
-
-    # Si ahora detecta daños graves, crear alerta
-    if status == "ok" and analysis.severity in ["grave", "critico"]:
-        alert = {
-            "id": str(uuid.uuid4()),
-            "vehicle_id": insp.get("vehicle_id"),
-            "inspection_id": inspection_id,
-            "type": "damage",
-            "severity": "high" if analysis.severity == "grave" else "critical",
-            "message": analysis.executive_summary,
-            "read": False,
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.alerts.insert_one(alert)
-
-        # Datos para mensaje enriquecido
-        vehicle = await db.vehicles.find_one({"id": insp.get("vehicle_id")}, {"_id": 0})
-        plate = vehicle.get("license_plate") if vehicle else insp.get("vehicle_id")
-        driver_name = "Sin asignar"
-        did = insp.get("driver_id") or (vehicle.get("current_driver_id") if vehicle else None)
-        if did:
-            drv = await db.drivers.find_one({"id": did}, {"_id": 0, "name": 1})
-            if drv:
-                driver_name = drv.get("name", "Sin asignar")
-
-        await send_telegram_damage_alert(
-            plate=plate,
-            driver_name=driver_name,
-            analysis=analysis,
-            photo_urls=insp.get("photos", []),
-            inspection_id=inspection_id,
-        )
-
-    return {"success": status == "ok", "status": status, "error": error,
-            "severity": analysis.severity, "damages": analysis.total_damages_count}
-
-
 @api_router.post("/inspections/reanalyze-failed")
 async def reanalyze_all_failed(_=Depends(require_admin)):
     """Reprocesa TODAS las inspecciones cuyo analisis fallo. Util tras recuperar cuota de Gemini."""
@@ -7037,6 +8135,8 @@ async def get_daily_assignments(
     """Obtiene las asignaciones del día para un centro."""
     if not date:
         date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    elif not re.match(r'^\d{4}-\d{2}-\d{2}$', date):
+        raise HTTPException(400, "Formato de fecha inválido (YYYY-MM-DD)")
     query = {"date": date}
     if center and center != "Todos":
         query["center"] = center
@@ -7252,10 +8352,10 @@ async def import_roster_text(
         return set(w for w in re.sub(r'[^a-z ]', ' ', _fold(name)).split() if len(w) > 1)
 
     vehicles = await db.vehicles.find(
-        {"center": {"$regex": center[:4], "$options": "i"}, "status": {"$ne": "deleted"}},
+        {"center": {"$regex": re.escape(center[:4]), "$options": "i"}, "status": {"$ne": "deleted"}},
         {"_id": 0}
     ).to_list(500)
-    drivers = await db.drivers.find({"center": {"$regex": center[:4], "$options": "i"}}, {"_id": 0}).to_list(500)
+    drivers = await db.drivers.find({"center": {"$regex": re.escape(center[:4]), "$options": "i"}}, {"_id": 0}).to_list(500)
     if len(drivers) < 3:
         drivers = await db.drivers.find({}, {"_id": 0}).to_list(500)
 
@@ -7430,10 +8530,10 @@ async def import_roster_image(
     # --- Cruzar con vehículos y conductores de la BD ---
     # Usar regex igual que en el resto del API (coincidencia flexible de centros)
     vehicles = await db.vehicles.find(
-        {"center": {"$regex": center, "$options": "i"}, "status": {"$ne": "deleted"}},
+        {"center": {"$regex": re.escape(center), "$options": "i"}, "status": {"$ne": "deleted"}},
         {"_id": 0}
     ).to_list(500)
-    drivers = await db.drivers.find({"center": {"$regex": center, "$options": "i"}}, {"_id": 0}).to_list(500)
+    drivers = await db.drivers.find({"center": {"$regex": re.escape(center), "$options": "i"}}, {"_id": 0}).to_list(500)
     veh_by_plate = {_norm_plate(v.get("license_plate")): v for v in vehicles}
     driver_words = [(d, _norm_name_words(d.get("name"))) for d in drivers]
 
@@ -9484,10 +10584,12 @@ async def vehicle_provider_info_by_plate(plate: str, _=Depends(require_any_auth)
       - Datos del vehículo en BD
       - Talleres concertados con ese proveedor en el mismo centro
     """
-    plate_norm = plate.upper().replace(" ", "").replace("-", "")
+    plate_norm = re.sub(r'[^A-Z0-9]', '', plate.upper())
+    if not plate_norm or len(plate_norm) > 20:
+        raise HTTPException(400, "Matrícula inválida")
     # Buscar en BD por matrícula (normalizada)
     v = await db.vehicles.find_one(
-        {"license_plate": {"$regex": plate_norm, "$options": "i"}},
+        {"license_plate": {"$regex": re.escape(plate_norm), "$options": "i"}},
         {"_id": 0},
     )
     if not v:
@@ -10795,7 +11897,7 @@ async def generate_schedule(data: dict = Body(...), _=Depends(require_admin)):
         min_cov = await _min_cobertura(center)
 
     drivers = await db.drivers.find(
-        {"center": {"$regex": center, "$options": "i"}, "active": {"$ne": False}},
+        {"center": {"$regex": re.escape(center), "$options": "i"}, "active": {"$ne": False}},
         {"_id": 0, "id": 1, "name": 1, "driver_id": 1, "contrato": 1, "zona": 1, "nivel": 1},
     ).to_list(1000)
     if not drivers:
@@ -10823,7 +11925,7 @@ async def generate_schedule(data: dict = Body(...), _=Depends(require_admin)):
     d14 = (datetime.strptime(desde, "%Y-%m-%d") - timedelta(days=14)).strftime("%Y-%m-%d")
     worked = {}
     cur2 = db.shifts.find(
-        {"center": {"$regex": center, "$options": "i"}, "date": {"$gte": d14, "$lt": desde},
+        {"center": {"$regex": re.escape(center), "$options": "i"}, "date": {"$gte": d14, "$lt": desde},
          "type": {"$in": ["trabaja", "extra"]}},
         {"_id": 0, "driver_id": 1},
     )
@@ -10940,7 +12042,7 @@ async def generate_schedule_auto(data: dict = Body(...), _=Depends(require_admin
     days = _date_range(desde, hasta)
 
     drivers = await db.drivers.find(
-        {"center": {"$regex": center, "$options": "i"}, "active": {"$ne": False}},
+        {"center": {"$regex": re.escape(center), "$options": "i"}, "active": {"$ne": False}},
         {"_id": 0, "id": 1, "name": 1, "driver_id": 1, "contrato": 1, "nivel": 1},
     ).to_list(1000)
     if not drivers:
@@ -10995,7 +12097,7 @@ async def generate_schedule_auto(data: dict = Body(...), _=Depends(require_admin
     d14 = (datetime.strptime(desde, "%Y-%m-%d") - timedelta(days=14)).strftime("%Y-%m-%d")
     worked = {}
     cur2 = db.shifts.find(
-        {"center": {"$regex": center, "$options": "i"}, "date": {"$gte": d14, "$lt": desde},
+        {"center": {"$regex": re.escape(center), "$options": "i"}, "date": {"$gte": d14, "$lt": desde},
          "type": {"$in": ["trabaja", "extra"]}}, {"_id": 0, "driver_id": 1})
     async for s in cur2:
         worked[s["driver_id"]] = worked.get(s["driver_id"], 0) + 1
@@ -12871,80 +13973,146 @@ def _calc_horas(h_salida: str | None) -> tuple[str, str]:
     return "", ""
 
 
-def _build_plantilla_excel(rows: list, red_routes: set, week_num, fecha_str: str) -> bytes:
+def _build_plantilla_excel(rows: list, red_routes: set, pink_furgos: set, week_num, fecha_str: str, yellow_routes: set = None, marked_conductors: set = None) -> bytes:
     import openpyxl
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
+    from datetime import datetime as _dt
     import io
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Plantilla Turno"
 
-    C_HEADER_BG = "1F2937"
-    C_HEADER_FG = "FFFFFF"
-    C_TITLE_BG  = "F97316"
-    C_TITLE_FG  = "FFFFFF"
-    C_RED_BG    = "FCA5A5"
-    C_CYAN_BG   = "A5F3FC"
-    C_ALT_BG    = "F3F4F6"
-    C_WHITE     = "FFFFFF"
-    C_BORDER    = "D1D5DB"
+    # Colores exactos de la plantilla de referencia
+    C_TITLE_BG   = "F2F2F2"   # fila título: gris muy claro
+    C_TITLE_FG   = "000000"
+    C_HEADER_BG  = "FFD966"   # cabeceras columnas: amarillo
+    C_HEADER_FG  = "000000"   # texto negro
+    C_WHITE      = "FFFFFF"   # fila normal
+    C_BLUE       = "BDD7EE"   # fila ola tardía (H.WAVE >= 12:20)
+    C_RED_BG     = "FF0000"   # fila "no vino"
+    C_RED_FG     = "FFFFFF"
+    C_PINK       = "F4CCCC"   # celda FURGO especial
+    C_BORDER     = "BFBFBF"
 
     def fill(hex_color):
         return PatternFill("solid", fgColor=hex_color)
 
-    def thin_border():
+    def brd():
         s = Side(style="thin", color=C_BORDER)
         return Border(left=s, right=s, top=s, bottom=s)
 
-    center_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    left_align   = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+    ca = Alignment(horizontal="center", vertical="center")
+    la = Alignment(horizontal="left",   vertical="center")
 
-    ws.merge_cells("A1:H1")
-    c = ws["A1"]
-    c.value = f"WEEK {week_num}  ·  {fecha_str}"
-    c.fill = fill(C_TITLE_BG)
-    c.font = Font(bold=True, color=C_TITLE_FG, size=13)
-    c.alignment = center_align
-    ws.row_dimensions[1].height = 28
+    # ── Fila 1: WEEK xx (izq) · fecha (der) ──
+    ws.merge_cells("A1:D1")
+    ws.merge_cells("E1:H1")
+    for cell, val, align in [
+        (ws["A1"], f"WEEK {week_num}", la),
+        (ws["E1"], fecha_str,          ca),
+    ]:
+        cell.value = val
+        cell.fill  = fill(C_TITLE_BG)
+        cell.font  = Font(bold=True, color=C_TITLE_FG, size=11)
+        cell.alignment = align
+        cell.border = brd()
+    ws.row_dimensions[1].height = 22
 
-    cols = ["RUTA", "CONDUCTOR", "MOVIL", "FURGO",
-            "H. LLEGADA A NAVE", "H. BAJADA AL YARD", "OBSERVACIONES", ""]
-    col_widths = [14, 30, 16, 14, 20, 20, 30, 4]
-    for i, (h, w) in enumerate(zip(cols, col_widths), start=1):
+    # ── Fila 2: cabeceras ──
+    col_defs = [
+        ("RUTA",               13),
+        ("CONDUCTOR",          34),
+        ("MOVIL",               9),
+        ("FURGO",              12),
+        ("H. LLEGADA A NAVE",  18),
+        ("H. BAJADA AL YARD",  18),
+        ("H. WAVE",            11),
+        ("OBSERVACIONES",      32),
+    ]
+    for i, (h, w) in enumerate(col_defs, start=1):
         cell = ws.cell(row=2, column=i, value=h)
-        cell.fill = fill(C_HEADER_BG)
-        cell.font = Font(bold=True, color=C_HEADER_FG, size=10)
-        cell.alignment = center_align
-        cell.border = thin_border()
+        cell.fill  = fill(C_HEADER_BG)
+        cell.font  = Font(bold=True, color=C_HEADER_FG, size=9)
+        cell.alignment = ca
+        cell.border = brd()
         ws.column_dimensions[get_column_letter(i)].width = w
-    ws.row_dimensions[2].height = 22
+    ws.row_dimensions[2].height = 21
 
+    C_YELLOW      = "FFF2CC"   # amarillo clarito — marca manual
+    C_MARK        = "FCE4D6"   # naranja clarito — conductor marcado (sin batch, etc.)
+    C_MARK_FG     = "7B3F00"
+    # Paleta de pasteles para distinguir olas — máx 6 waves distintas
+    WAVE_PALETTE  = ["BDD7EE", "C6EFCE", "FFEB9C", "FCE4D6", "E2EFDA", "EAD1DC"]
+    _yellow_routes     = {r.upper() for r in (yellow_routes or [])}
+    _marked_conductors = {c.upper() for c in (marked_conductors or [])}
+
+    # Mapear cada hora de wave a un color (ordenadas cronológicamente)
+    _wave_times = sorted(set(
+        (row.get("h_salida") or "").strip()
+        for row in rows if (row.get("h_salida") or "").strip()
+    ))
+    _wave_color = {wt: WAVE_PALETTE[i % len(WAVE_PALETTE)] for i, wt in enumerate(_wave_times)}
+
+    # ── Filas de datos ──
     for idx, row in enumerate(rows):
-        r = idx + 3
-        ruta      = row.get("ruta") or ""
-        conductor = row.get("conductor") or ""
-        movil     = row.get("movil") or ""
-        furgo     = row.get("furgo") or ""
-        h_llegada = row.get("h_llegada") or ""
-        h_bajada  = row.get("h_bajada") or ""
+        r         = idx + 3
+        ruta      = row.get("ruta")          or ""
+        conductor = row.get("conductor")     or ""
+        movil     = row.get("movil")         or ""
+        furgo     = row.get("furgo")         or ""
+        h_llegada = row.get("h_llegada")     or ""
+        h_bajada  = row.get("h_bajada")      or ""
+        h_wave    = row.get("h_salida") or row.get("h_wave") or ""
         obs       = row.get("observaciones") or ""
 
-        is_red = ruta.upper() in red_routes
-        bg = C_RED_BG if is_red else (C_ALT_BG if idx % 2 == 1 else C_WHITE)
+        is_red    = ruta.upper() in red_routes
+        is_yellow = ruta.upper() in _yellow_routes
 
-        values = [ruta, conductor, movil, furgo, h_llegada, h_bajada, obs, ""]
-        for ci, val in enumerate(values, start=1):
+        # Ola tardía: h_llegada >= 11:50 (solo si no tiene otra marca)
+        is_blue = False
+        if not is_red and not is_yellow and h_llegada:
+            try:
+                t = _dt.strptime(h_llegada.strip(), "%H:%M").time()
+                is_blue = t >= _dt.strptime("11:50", "%H:%M").time()
+            except ValueError:
+                pass
+
+        if is_red:
+            row_bg, row_fg = C_RED_BG, C_RED_FG
+        elif is_yellow:
+            row_bg, row_fg = C_YELLOW, "000000"
+        elif is_blue:
+            row_bg, row_fg = C_BLUE, "000000"
+        else:
+            row_bg, row_fg = C_WHITE, "000000"
+
+        is_pink_furgo   = furgo.upper() in {f.upper() for f in pink_furgos}
+        is_marked_cond  = conductor.upper() in _marked_conductors
+        wave_time_color = _wave_color.get(h_wave.strip(), None) if h_wave else None
+
+        cells_vals = [ruta, conductor, movil, furgo, h_llegada, h_bajada, h_wave, obs]
+        for ci, val in enumerate(cells_vals, start=1):
             cell = ws.cell(row=r, column=ci, value=val)
-            if ci in (5, 6) and val:
-                cell.fill = fill(C_CYAN_BG)
+            if ci == 4 and is_pink_furgo and not is_red:
+                # FURGO especial — rosa
+                cell.fill = fill(C_PINK)
+                cell.font = Font(color="000000", size=9)
+            elif ci == 2 and is_marked_cond and not is_red:
+                # Conductor marcado — naranja clarito
+                cell.fill = fill(C_MARK)
+                cell.font = Font(color=C_MARK_FG, size=9, bold=True)
+            elif ci in (5, 6, 7) and wave_time_color and not is_red and not is_yellow:
+                # Hora de ola — color de la wave correspondiente
+                cell.fill = fill(wave_time_color)
+                cell.font = Font(color="000000", size=9)
             else:
-                cell.fill = fill(bg)
-            cell.font = Font(color="1F2937", size=10, bold=(ci == 1))
-            cell.alignment = center_align if ci != 2 else left_align
-            cell.border = thin_border()
-        ws.row_dimensions[r].height = 18
+                cell.fill = fill(row_bg)
+                cell.font = Font(color=row_fg, size=9, bold=(ci == 1))
+            cell.alignment = ca if ci not in (2, 8) else la
+            cell.border = brd()
+        ws.row_dimensions[r].height = 16
 
     ws.freeze_panes = "A3"
     buf = io.BytesIO()
@@ -13105,22 +14273,114 @@ async def plantilla_extraer(
 
 # ── Paso 2: generar Excel con rutas rojas elegidas por el usuario ──
 @app.post("/api/tools/plantilla-excel", dependencies=[Depends(require_admin)])
-async def plantilla_excel(body: dict = Body(...)):
+async def plantilla_excel(body: dict = Body(...), admin=Depends(require_admin)):
     from datetime import date as _date
 
-    rows       = body.get("rows", [])
-    red_routes = {r.upper() for r in body.get("red_routes", [])}
-    week_num   = body.get("week")  or _date.today().isocalendar()[1]
-    fecha_str  = body.get("date")  or _date.today().strftime("%d/%m/%Y")
+    rows               = body.get("rows", [])
+    red_routes         = {r.upper() for r in body.get("red_routes",         [])}
+    pink_furgos        = {f.upper() for f in body.get("pink_furgos",        [])}
+    yellow_routes      = {r.upper() for r in body.get("yellow_routes",      [])}
+    marked_conductors  = {c.upper() for c in body.get("marked_conductors",  [])}
+    week_num           = body.get("week")  or _date.today().isocalendar()[1]
+    fecha_str          = body.get("date")  or _date.today().strftime("%d/%m/%Y")
+    save_to_hist       = body.get("save", False)
+    center             = body.get("center", "")
+
+    # Verificar acceso al centro antes de guardar en historial
+    if center and center != "Todos":
+        allowed = admin.get("allowed_centers") or []
+        if allowed and center not in allowed:
+            raise HTTPException(403, "Sin acceso a este centro")
 
     import io
-    xlsx = _build_plantilla_excel(rows, red_routes, week_num, fecha_str)
-    filename = f"plantilla_turno_w{week_num}_{fecha_str.replace('/', '-')}.xlsx"
+    xlsx = _build_plantilla_excel(rows, red_routes, pink_furgos, week_num, fecha_str, yellow_routes, marked_conductors)
+    # Sanitizar fecha para uso seguro en nombre de archivo y header HTTP
+    safe_fecha = re.sub(r'[^a-zA-Z0-9_\-]', '-', fecha_str)
+    safe_week  = re.sub(r'[^a-zA-Z0-9_\-]', '-', str(week_num))
+    filename = f"plantilla_turno_w{safe_week}_{safe_fecha}.xlsx"
+
+    # Guardar en historial si se pide y hay centro especificado
+    if save_to_hist and center and center != "Todos":
+        try:
+            from uuid import uuid4 as _uuid4
+            r2 = get_r2()
+            if r2:
+                r2_key = f"plantillas/{center}/{filename}"
+                r2.put_object(
+                    Bucket=R2_BUCKET, Key=r2_key, Body=xlsx,
+                    ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+                meta = {
+                    "id": str(_uuid4()),
+                    "center": center,
+                    "date": fecha_str,
+                    "week": str(week_num),
+                    "r2_key": r2_key,
+                    "filename": filename,
+                    "uploaded_at": datetime.now(timezone.utc).isoformat(),
+                }
+                await db.plantillas_diarias.insert_one(meta)
+        except Exception as _e:
+            logger.warning(f"plantilla_excel: no se pudo guardar historial: {_e}")
+
     return StreamingResponse(
         io.BytesIO(xlsx),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
     )
+
+
+# ── Historial de plantillas ──
+@api_router.get("/plantillas")
+async def list_plantillas(center: str = None, admin=Depends(require_admin)):
+    allowed = admin.get("allowed_centers") or []
+    query: dict = {}
+    if center and center != "Todos":
+        if allowed and center not in allowed:
+            raise HTTPException(403, "Sin acceso a este centro")
+        query["center"] = center
+    elif allowed:
+        query["center"] = {"$in": allowed}
+    docs = await db.plantillas_diarias.find(query).sort("uploaded_at", -1).to_list(500)
+    for d in docs:
+        d.pop("_id", None)
+    return docs
+
+
+@api_router.get("/plantillas/{plantilla_id}/download")
+async def download_plantilla(plantilla_id: str, _=Depends(require_admin)):
+    doc = await db.plantillas_diarias.find_one({"id": plantilla_id})
+    if not doc:
+        raise HTTPException(404, "Plantilla no encontrada")
+    r2 = get_r2()
+    if not r2:
+        raise HTTPException(503, "R2 no disponible")
+    try:
+        obj = r2.get_object(Bucket=R2_BUCKET, Key=doc["r2_key"])
+        content = obj["Body"].read()
+    except Exception as e:
+        raise HTTPException(500, f"Error al recuperar el archivo: {e}")
+    import io
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=\"{doc['filename']}\""},
+    )
+
+
+@api_router.delete("/plantillas/{plantilla_id}")
+async def delete_plantilla(plantilla_id: str, _=Depends(require_admin)):
+    doc = await db.plantillas_diarias.find_one({"id": plantilla_id})
+    if not doc:
+        raise HTTPException(404, "Plantilla no encontrada")
+    try:
+        r2 = get_r2()
+        if r2:
+            r2.delete_object(Bucket=R2_BUCKET, Key=doc["r2_key"])
+    except Exception as _e:
+        logger.warning(f"delete_plantilla R2 error: {_e}")
+    await db.plantillas_diarias.delete_one({"id": plantilla_id})
+    return {"success": True}
 
 
 app.include_router(auth_router)
