@@ -3,9 +3,10 @@ import { useOutletContext } from 'react-router-dom'
 import {
   Upload, FileSpreadsheet, Loader2, AlertCircle, X, CheckCircle2,
   Download, RotateCcw, Plus, ChevronDown, ChevronUp, Trash2, FolderOpen,
+  Copy, ClipboardPaste, Car,
 } from 'lucide-react'
 import { getToken } from '../auth'
-import { getPlantillas, downloadPlantilla, deletePlantilla } from '../api'
+import { getPlantillas, downloadPlantilla, deletePlantilla, getVehicles } from '../api'
 
 const API = import.meta.env.VITE_API_URL || 'https://flotadsp-backend.fly.dev/api'
 
@@ -164,7 +165,26 @@ export default function PlantillaGenerador() {
   const [redSet,     setRedSet]     = useState(new Set())
   const [yellowSet,  setYellowSet]  = useState(new Set())
   const [pinkSet,    setPinkSet]    = useState(new Set())
-  const [markedSet,  setMarkedSet]  = useState(new Set()) // conductores sin batch / welcome
+  const [markedSet,  setMarkedSet]  = useState(new Set())
+
+  // Portapapeles de horas: {h_salida, h_llegada, h_bajada} o null
+  const [copiedHours, setCopiedHours] = useState(null)
+
+  // Furgos activas del centro
+  const [furgosDisp, setFurgosDisp] = useState([]) // ['2865NGX', ...]
+  useEffect(() => {
+    if (noCenter) return
+    getVehicles(center)
+      .then(r => {
+        const plates = (r.data || [])
+          .filter(v => v.status === 'active' || v.status === 'activo')
+          .map(v => (v.license_plate || v.id || '').replace(/\s/g, '').toUpperCase())
+          .filter(Boolean)
+          .sort()
+        setFurgosDisp(plates)
+      })
+      .catch(() => {})
+  }, [center, noCenter])
 
   // Colores de ola — pastel, uno por wave time distinta
   const WAVE_PALETTE_CSS = ['#DBEAFE', '#DCFCE7', '#FEF3C7', '#FFE4E6', '#EDE9FE', '#ECFDF5']
@@ -188,7 +208,8 @@ export default function PlantillaGenerador() {
   function reset() {
     setCortexList([]); setPlatList([])
     setStep('upload'); setData(null)
-    setRedSet(new Set()); setYellowSet(new Set()); setPinkSet(new Set()); setMarkedSet(new Set()); setErr('')
+    setRedSet(new Set()); setYellowSet(new Set()); setPinkSet(new Set()); setMarkedSet(new Set())
+    setCopiedHours(null); setErr('')
   }
 
   async function extraer() {
@@ -244,7 +265,14 @@ export default function PlantillaGenerador() {
   }
 
   function editCell(rowIdx, field, value) {
-    setData(prev => ({ ...prev, rows: prev.rows.map((r, i) => i === rowIdx ? { ...r, [field]: value } : r) }))
+    setData(prev => ({
+      ...prev,
+      rows: prev.rows.map((r, i) => {
+        if (i !== rowIdx) return r
+        if (field === '_paste_hours') return { ...r, h_salida: value.h_salida || r.h_salida, h_llegada: value.h_llegada || r.h_llegada, h_bajada: value.h_bajada || r.h_bajada }
+        return { ...r, [field]: value }
+      })
+    }))
   }
   function editMeta(field, value) { setData(prev => ({ ...prev, [field]: value })) }
   function addRow() {
@@ -412,11 +440,40 @@ export default function PlantillaGenerador() {
             </div>
           </div>
 
+          {/* Portapapeles de horas */}
+          {copiedHours && (
+            <div className="mb-2 flex items-center gap-3 rounded-lg border border-brand-500/30 bg-brand-500/10 px-3 py-2 text-xs">
+              <ClipboardPaste size={13} className="text-brand-400 shrink-0" />
+              <span className="text-brand-300 font-medium">
+                Horas copiadas: <b>{copiedHours.h_llegada || '—'}</b> llegada · <b>{copiedHours.h_bajada || '—'}</b> bajada · <b>{copiedHours.h_salida || '—'}</b> wave
+              </span>
+              <button
+                onClick={() => {
+                  setData(prev => ({
+                    ...prev,
+                    rows: prev.rows.map(r => ({
+                      ...r,
+                      h_llegada: copiedHours.h_llegada || r.h_llegada,
+                      h_bajada:  copiedHours.h_bajada  || r.h_bajada,
+                      h_salida:  copiedHours.h_salida  || r.h_salida,
+                    }))
+                  }))
+                }}
+                className="ml-auto rounded bg-brand-500/20 px-2 py-0.5 text-brand-300 hover:bg-brand-500/40 transition font-semibold"
+              >
+                Pegar a todos
+              </button>
+              <button onClick={() => setCopiedHours(null)} className="text-dark-500 hover:text-dark-200">
+                <X size={13} />
+              </button>
+            </div>
+          )}
+
           <div className="overflow-x-auto rounded-xl border border-dark-700">
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-[#FFD966] text-black">
-                  {['RUTA','CONDUCTOR','MOVIL','FURGO','H. LLEGADA A NAVE','H. BAJADA AL YARD','H. WAVE','OBSERVACIONES','',''].map((h, i) => (
+                  {['RUTA','CONDUCTOR','MOVIL','FURGO','H. LLEGADA A NAVE','H. BAJADA AL YARD','H. WAVE','OBSERVACIONES','','',''].map((h, i) => (
                     <th key={i} className="border border-[#BFBFBF] px-2 py-1.5 text-center font-bold whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -470,17 +527,19 @@ export default function PlantillaGenerador() {
                         <EditCell value={row.movil} onChange={v => editCell(i, 'movil', v)} extraCls={`text-center ${textCl}`} />
                       </td>
 
-                      {/* FURGO — clic en la celda para rosa */}
+                      {/* FURGO — desplegable con furgos activas + rosa */}
                       <td
-                        className={`border border-[#BFBFBF] cursor-pointer px-1 py-0.5 ${isPink && !isRed ? 'bg-pink-200' : ''}`}
-                        title="Clic para marcar furgo en rosa"
-                        onClick={() => row.furgo && toggle(pinkSet, setPinkSet, row.furgo)}
+                        className={`border border-[#BFBFBF] px-1 py-0.5 ${isPink && !isRed ? 'bg-pink-200' : ''}`}
                       >
-                        <EditCell
+                        <FurgoCell
                           value={row.furgo}
                           onChange={v => editCell(i, 'furgo', v)}
-                          extraCls={`text-center font-mono ${isPink && !isRed ? 'text-pink-900' : textCl}`}
-                          onClick={e => e.stopPropagation()}
+                          isPink={isPink && !isRed}
+                          isRed={isRed}
+                          furgosDisp={furgosDisp}
+                          usedFurgos={data.rows.filter((_, ri) => ri !== i).map(r => (r.furgo || '').toUpperCase()).filter(Boolean)}
+                          onTogglePink={() => row.furgo && toggle(pinkSet, setPinkSet, row.furgo)}
+                          textCl={textCl}
                         />
                       </td>
 
@@ -517,6 +576,28 @@ export default function PlantillaGenerador() {
                             title="Marcar fila roja (no vino)"
                             className={`h-3.5 w-3.5 rounded-sm border transition ${isRed ? 'bg-red-500 border-red-300' : 'border-gray-300 hover:border-red-400'}`}
                           />
+                        </div>
+                      </td>
+
+                      {/* Copiar / Pegar horas */}
+                      <td className="border border-[#BFBFBF] px-1 py-0.5 text-center">
+                        <div className="flex items-center justify-center gap-0.5">
+                          <button
+                            onClick={() => setCopiedHours({ h_salida: row.h_salida, h_llegada: row.h_llegada, h_bajada: row.h_bajada })}
+                            title="Copiar horas de esta fila"
+                            className="rounded p-0.5 text-gray-400 hover:text-blue-500 transition"
+                          >
+                            <Copy size={11} />
+                          </button>
+                          {copiedHours && (
+                            <button
+                              onClick={() => editCell(i, '_paste_hours', copiedHours)}
+                              title="Pegar horas copiadas"
+                              className="rounded p-0.5 text-gray-400 hover:text-brand-500 transition"
+                            >
+                              <ClipboardPaste size={11} />
+                            </button>
+                          )}
                         </div>
                       </td>
 
@@ -583,6 +664,83 @@ export default function PlantillaGenerador() {
           <button onClick={reset} className="btn-primary mt-2 flex items-center gap-2">
             <RotateCcw size={15} /> Generar otra plantilla
           </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FurgoCell({ value, onChange, isPink, isRed, furgosDisp, usedFurgos, onTogglePink, textCl }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef()
+
+  useEffect(() => {
+    if (!open) return
+    function handler(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const used = new Set(usedFurgos)
+  const available = furgosDisp.filter(f => !used.has(f))
+  const occupied  = furgosDisp.filter(f =>  used.has(f))
+
+  return (
+    <div ref={ref} className="relative flex items-center gap-0.5">
+      <input
+        value={value || ''}
+        onChange={e => onChange(e.target.value)}
+        className={`w-20 rounded bg-transparent px-1 py-0.5 font-mono text-center focus:outline-none focus:bg-yellow-50 focus:ring-1 focus:ring-yellow-400/60 transition ${isPink ? 'text-pink-900' : textCl}`}
+      />
+      <div className="flex shrink-0 items-center gap-0.5">
+        {furgosDisp.length > 0 && (
+          <button
+            onClick={() => setOpen(v => !v)}
+            title="Ver furgos disponibles"
+            className={`rounded p-0.5 transition ${open ? 'text-brand-400' : 'text-gray-300 hover:text-brand-400'}`}
+          >
+            <Car size={11} />
+          </button>
+        )}
+        <button
+          onClick={onTogglePink}
+          title="Marcar furgo rosa"
+          className={`h-3 w-3 rounded-sm border transition ${isPink ? 'bg-pink-300 border-pink-500' : 'border-gray-300 hover:border-pink-400'}`}
+        />
+      </div>
+
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 w-52 rounded-lg border border-dark-600 bg-dark-900 shadow-xl text-xs overflow-hidden"
+          style={{ minWidth: 200 }}>
+          {available.length > 0 && (
+            <>
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-400 bg-dark-800">
+                Disponibles ({available.length})
+              </div>
+              {available.map(f => (
+                <button key={f} onClick={() => { onChange(f); setOpen(false) }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-dark-100 hover:bg-emerald-500/10 hover:text-emerald-300 transition">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shrink-0" /> {f}
+                </button>
+              ))}
+            </>
+          )}
+          {occupied.length > 0 && (
+            <>
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-400 bg-dark-800 border-t border-dark-700">
+                Ya asignadas ({occupied.length})
+              </div>
+              {occupied.map(f => (
+                <button key={f} onClick={() => { onChange(f); setOpen(false) }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-dark-500 hover:bg-amber-500/10 hover:text-amber-300 transition">
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" /> {f}
+                </button>
+              ))}
+            </>
+          )}
+          {furgosDisp.length === 0 && (
+            <div className="px-3 py-2 text-dark-500">Sin furgos en el centro</div>
+          )}
         </div>
       )}
     </div>
