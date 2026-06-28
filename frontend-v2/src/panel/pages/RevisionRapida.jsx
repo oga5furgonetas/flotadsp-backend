@@ -4,7 +4,9 @@ import {
   Loader2, CheckCircle2, Check, X, ChevronLeft, ChevronRight, User, Clock,
   AlertTriangle, BrainCircuit, Pencil, Plus,
 } from 'lucide-react'
-import { getReviewQueue, getAiDatasetStats, damageFeedback, markReviewed, missedDamage } from '../api'
+import { getReviewQueue, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback } from '../api'
+import PolygonEditor from '../components/PolygonEditor'
+import BboxEditor from '../components/BboxEditor'
 
 const GOAL = 3000
 
@@ -38,7 +40,12 @@ export default function RevisionRapida() {
   const [drawMode, setDrawMode] = useState(null)
   const [box, setBox] = useState(null)      // {left,top,w,h} en % de la imagen
   const [drag, setDrag] = useState(null)    // punto inicial mientras se arrastra
+  const [showAnnotated, setShowAnnotated] = useState(true)  // toggle: foto IA vs original
   const [partName, setPartName] = useState('')
+  const [filterIA, setFilterIA] = useState(false)
+  // Modal editor de polígono/bbox
+  const [polyEdit, setPolyEdit] = useState(null) // { dmgIndex, damage, photoUrl, editorMode }
+  const [polyEditorMode, setPolyEditorMode] = useState('polygon') // 'bbox' | 'polygon'
 
   const loadStats = useCallback(() => {
     getAiDatasetStats().then((r) => setStats(r.data)).catch(() => {})
@@ -55,12 +62,14 @@ export default function RevisionRapida() {
   if (err) return <p className="text-red-400">{err}</p>
   if (!queue) return <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> Cargando…</div>
 
-  const item = queue[idx]
+  const displayQueue = filterIA ? queue.filter(i => (i.annotated_photos || []).some(Boolean)) : queue
+  const item = displayQueue[idx]
   const total = stats?.total ?? 0
 
   function go(delta) {
     setPhotoIdx(0)
-    setIdx((i) => Math.min(Math.max(0, i + delta), queue.length - 1))
+    setShowAnnotated(true)
+    setIdx((i) => Math.min(Math.max(0, i + delta), displayQueue.length - 1))
     cancelDraw()
   }
 
@@ -83,9 +92,9 @@ export default function RevisionRapida() {
     setBusy(true)
     try {
       await markReviewed(item.id)
-      const next = queue.filter((_, i) => i !== idx)
+      const next = queue.filter((q) => q.id !== item.id)
       setQueue(next)
-      setIdx((i) => Math.min(i, Math.max(0, next.length - 1)))
+      setIdx((i) => Math.min(i, Math.max(0, next.filter(q => filterIA ? (q.annotated_photos||[]).some(Boolean) : true).length - 1)))
       setPhotoIdx(0)
       cancelDraw()
     } catch {
@@ -135,7 +144,13 @@ export default function RevisionRapida() {
           <CheckCircle2 className="text-emerald-400" size={22} />
           <h1 className="text-xl font-bold">Revisión rápida</h1>
         </div>
-        <span className="text-sm text-dark-400">{queue.length} pendientes</span>
+        <div className="flex items-center gap-2">
+          <button onClick={() => { setFilterIA(f => !f); setIdx(0) }}
+            className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors ${filterIA ? 'bg-brand-500/20 text-brand-300 border border-brand-500/40' : 'bg-dark-800 text-dark-400 border border-dark-700 hover:text-dark-200'}`}>
+            ⬡ Solo IA {filterIA && `(${displayQueue.length})`}
+          </button>
+          <span className="text-sm text-dark-400">{displayQueue.length} pendientes</span>
+        </div>
       </div>
 
       {/* Entrenando tu IA */}
@@ -156,6 +171,13 @@ export default function RevisionRapida() {
         <div className="card flex flex-col items-center gap-2 p-12 text-center text-dark-300">
           <CheckCircle2 size={32} className="text-emerald-400" /> No hay inspecciones pendientes de revisar {center !== 'Todos' && `en ${center}`}.
         </div>
+      ) : filterIA && displayQueue.length === 0 ? (
+        <div className="card flex flex-col items-center gap-3 p-12 text-center text-dark-300">
+          <span className="text-3xl">⬡</span>
+          <p className="text-sm">Ninguna inspección pendiente tiene fotos anotadas por IA todavía.</p>
+          <p className="text-xs text-dark-500">Ve a <b className="text-dark-300">IA Peritaje → Fotos anotadas IA</b> y pulsa "Generar anotaciones".</p>
+          <button onClick={() => setFilterIA(false)} className="btn-ghost text-xs px-3 py-1.5">Ver todas las inspecciones</button>
+        </div>
       ) : (
         <div className="card overflow-hidden">
           {/* barra superior de la tarjeta */}
@@ -170,35 +192,66 @@ export default function RevisionRapida() {
             </div>
           </div>
 
-          {/* Imagen + recuadros reales */}
+          {/* Imagen + anotaciones IA */}
           <div className="relative bg-black">
             {item.photos?.[photoIdx] ? (
-              <div className={`relative mx-auto ${drawMode ? 'cursor-crosshair select-none' : ''}`} style={{ maxWidth: 520 }}
-                onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}>
-                <img src={item.photos[photoIdx]} alt="" className="block w-full" draggable={false} />
-                {/* caja que se está dibujando */}
-                {box && (
-                  <div className="pointer-events-none absolute rounded border-2 border-dashed border-emerald-400 bg-emerald-400/10"
-                    style={{ left: `${box.left}%`, top: `${box.top}%`, width: `${box.w}%`, height: `${box.h}%` }} />
-                )}
-                {drawMode && (
-                  <div className="pointer-events-none absolute left-2 top-2 rounded bg-black/70 px-2 py-1 text-[11px] text-emerald-300">
-                    {drawMode.type === 'missed' ? 'Arrastra para marcar el daño que la IA no vio' : 'Arrastra la caja correcta del daño'}
+              <>
+                {/* Toggle original / IA — solo si hay foto anotada para este índice */}
+                {item.annotated_photos?.[photoIdx] && (
+                  <div className="absolute right-2 top-2 z-10 flex overflow-hidden rounded-lg border border-dark-600 text-xs font-semibold shadow-lg">
+                    <button
+                      onClick={() => setShowAnnotated(false)}
+                      className={`px-2.5 py-1.5 transition ${!showAnnotated ? 'bg-dark-700 text-white' : 'bg-dark-900/80 text-dark-400 hover:text-dark-200'}`}
+                    >Original</button>
+                    <button
+                      onClick={() => setShowAnnotated(true)}
+                      className={`flex items-center gap-1 px-2.5 py-1.5 transition ${showAnnotated ? 'bg-brand-600 text-white' : 'bg-dark-900/80 text-dark-400 hover:text-dark-200'}`}
+                    >
+                      <BrainCircuit size={11} />
+                      Análisis IA
+                    </button>
                   </div>
                 )}
-                {(item.new_damages || []).map((d, i) => {
-                  if (!Array.isArray(d.box_2d) || d.box_2d.length !== 4) return null
-                  if (d.photo_index && d.photo_index - 1 !== photoIdx) return null
-                  const [ymin, xmin, ymax, xmax] = d.box_2d
-                  if (ymin + xmin + ymax + xmax === 0) return null
-                  return (
-                    <div key={i} className="pointer-events-none absolute rounded border-2 border-orange-400"
-                      style={{ left: `${xmin / 10}%`, top: `${ymin / 10}%`, width: `${(xmax - xmin) / 10}%`, height: `${(ymax - ymin) / 10}%` }}>
-                      <span className="absolute -top-5 left-0 whitespace-nowrap rounded bg-orange-400 px-1.5 text-[10px] font-bold text-black">{d.part || 'daño'}</span>
+
+                <div className={`relative mx-auto ${drawMode ? 'cursor-crosshair select-none' : ''}`} style={{ maxWidth: 520 }}
+                  onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}>
+
+                  {/* Foto: anotada (profesional) u original */}
+                  {showAnnotated && item.annotated_photos?.[photoIdx]
+                    ? <img src={item.annotated_photos[photoIdx]} alt="Análisis IA" className="block w-full" draggable={false} />
+                    : <img src={item.photos[photoIdx]} alt="" className="block w-full" draggable={false} />
+                  }
+
+                  {/* Cajas CSS solo en modo original (la foto anotada ya las lleva quemadas) */}
+                  {(!showAnnotated || !item.annotated_photos?.[photoIdx]) && (item.new_damages || []).map((d, i) => {
+                    if (!Array.isArray(d.box_2d) || d.box_2d.length !== 4) return null
+                    if (d.photo_index && d.photo_index - 1 !== photoIdx) return null
+                    const [ymin, xmin, ymax, xmax] = d.box_2d
+                    if (ymin + xmin + ymax + xmax === 0) return null
+                    const isConfirmed = d.confirmed !== false
+                    return (
+                      <div key={i}
+                        className={`pointer-events-none absolute rounded border-2 ${isConfirmed ? 'border-orange-400' : 'border-dashed border-yellow-400/70'}`}
+                        style={{ left: `${xmin / 10}%`, top: `${ymin / 10}%`, width: `${(xmax - xmin) / 10}%`, height: `${(ymax - ymin) / 10}%` }}>
+                        <span className="absolute -top-5 left-0 whitespace-nowrap rounded bg-orange-400 px-1.5 text-[10px] font-bold text-black">
+                          {d.part || 'daño'}{!isConfirmed ? ' ?' : ''}
+                        </span>
+                      </div>
+                    )
+                  })}
+
+                  {/* Caja en dibujo */}
+                  {box && (
+                    <div className="pointer-events-none absolute rounded border-2 border-dashed border-emerald-400 bg-emerald-400/10"
+                      style={{ left: `${box.left}%`, top: `${box.top}%`, width: `${box.w}%`, height: `${box.h}%` }} />
+                  )}
+                  {drawMode && (
+                    <div className="pointer-events-none absolute left-2 top-2 rounded bg-black/70 px-2 py-1 text-[11px] text-emerald-300">
+                      {drawMode.type === 'missed' ? 'Arrastra para marcar el daño que la IA no vio' : 'Arrastra la caja correcta del daño'}
                     </div>
-                  )
-                })}
-              </div>
+                  )}
+                </div>
+              </>
             ) : (
               <div className="flex h-64 items-center justify-center text-dark-500">Sin foto</div>
             )}
@@ -220,12 +273,18 @@ export default function RevisionRapida() {
           {/* Miniaturas */}
           {item.photos?.length > 1 && (
             <div className="flex gap-2 overflow-x-auto border-b border-dark-800 p-2">
-              {item.photos.map((p, i) => (
-                <button key={i} onClick={() => setPhotoIdx(i)}
-                  className={`h-14 w-16 shrink-0 overflow-hidden rounded border-2 ${i === photoIdx ? 'border-brand-400' : 'border-transparent opacity-70'}`}>
-                  <img src={p} alt="" className="h-full w-full object-cover" />
-                </button>
-              ))}
+              {item.photos.map((p, i) => {
+                const hasAnnotated = !!item.annotated_photos?.[i]
+                return (
+                  <button key={i} onClick={() => { setPhotoIdx(i); setShowAnnotated(true) }}
+                    className={`relative h-14 w-16 shrink-0 overflow-hidden rounded border-2 ${i === photoIdx ? 'border-brand-400' : 'border-transparent opacity-70'}`}>
+                    <img src={p} alt="" className="h-full w-full object-cover" />
+                    {hasAnnotated && (
+                      <span className="absolute bottom-0.5 right-0.5 rounded bg-brand-600/90 px-0.5 text-[8px] font-bold text-white">IA</span>
+                    )}
+                  </button>
+                )
+              })}
             </div>
           )}
 
@@ -277,8 +336,15 @@ export default function RevisionRapida() {
                           className={`flex h-8 w-8 items-center justify-center rounded-lg border ${v === 'wrong' ? 'border-red-500 bg-red-500/20 text-red-300' : 'border-dark-700 text-dark-300 hover:bg-red-500/10 hover:text-red-300'} disabled:opacity-50`} title="Falso positivo">
                           <X size={16} />
                         </button>
-                        <button disabled={busy || v} onClick={() => { setDrawMode({ type: 'corrected', dmgIndex: i }); setBox(null) }}
-                          className={`flex h-8 w-8 items-center justify-center rounded-lg border ${v === 'corrected' ? 'border-amber-500 bg-amber-500/20 text-amber-300' : 'border-dark-700 text-dark-300 hover:bg-amber-500/10 hover:text-amber-300'} disabled:opacity-50`} title="Corregir la caja (dibújala)">
+                        <button disabled={busy} onClick={() => {
+                            const photos = item.photos || []
+                            const pi = d.photo_index
+                            const photoUrl = (typeof pi === 'number' && pi >= 1 && pi <= photos.length)
+                              ? photos[pi - 1] : photos[photoIdx] || photos[0] || ''
+                            setPolyEditorMode('polygon')
+                            setPolyEdit({ dmgIndex: i, damage: d, photoUrl })
+                          }}
+                          className={`flex h-8 w-8 items-center justify-center rounded-lg border ${v === 'corrected' ? 'border-amber-500 bg-amber-500/20 text-amber-300' : 'border-dark-700 text-dark-300 hover:bg-amber-500/10 hover:text-amber-300'} disabled:opacity-50`} title="Corregir zona">
                           <Pencil size={15} />
                         </button>
                       </div>
@@ -298,6 +364,76 @@ export default function RevisionRapida() {
               className="btn-primary mt-3 flex w-full items-center justify-center gap-2 py-2.5 disabled:opacity-50">
               {busy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Marcar revisada y siguiente
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal editor polígono/bbox */}
+      {polyEdit && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.88)', zIndex: 1000,
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: 16, overflowY: 'auto' }}>
+          <div style={{ background: '#111827', borderRadius: 12, padding: 20, width: '100%', maxWidth: 860, marginTop: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+              <h3 style={{ color: 'white', margin: 0, fontSize: 15, fontWeight: 600 }}>
+                Corregir zona — {polyEdit.damage.part}
+              </h3>
+              <button onClick={() => setPolyEdit(null)}
+                style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: 20, lineHeight: 1 }}>✕</button>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              {[['polygon', '🔶 Polígono preciso'], ['bbox', '⬜ Rectángulo rápido']].map(([mode, label]) => (
+                <button key={mode} onClick={() => setPolyEditorMode(mode)} style={{
+                  padding: '6px 14px', borderRadius: 6, fontSize: 13, cursor: 'pointer',
+                  border: `1px solid ${polyEditorMode === mode ? '#f59e0b' : '#374151'}`,
+                  background: polyEditorMode === mode ? 'rgba(245,158,11,0.1)' : 'transparent',
+                  color: polyEditorMode === mode ? '#fbbf24' : '#9ca3af',
+                }}>{label}</button>
+              ))}
+            </div>
+            {polyEditorMode === 'polygon' ? (
+              <PolygonEditor
+                photoUrl={polyEdit.photoUrl}
+                currentPolygon={polyEdit.damage.polygon_points}
+                currentBox={polyEdit.damage.box_2d}
+                onConfirm={async (correctedPolygon) => {
+                  setBusy(true)
+                  try {
+                    const ys = correctedPolygon.map(p => p[0])
+                    const xs = correctedPolygon.map(p => p[1])
+                    const correctedBox = [Math.min(...ys), Math.min(...xs), Math.max(...ys), Math.max(...xs)]
+                    await submitAiFeedback({
+                      inspection_id: item.id,
+                      damage_index: polyEdit.dmgIndex,
+                      verdict: 'corrected',
+                      corrected_box: correctedBox,
+                      corrected_polygon_points: correctedPolygon,
+                    })
+                    setVerdicts(v => ({ ...v, [`${item.id}:${polyEdit.dmgIndex}`]: 'corrected' }))
+                    loadStats()
+                  } catch { setErr('No se pudo guardar.') }
+                  finally { setBusy(false); setPolyEdit(null) }
+                }}
+                onCancel={() => setPolyEdit(null)}
+              />
+            ) : (
+              <BboxEditor
+                photoUrl={polyEdit.photoUrl}
+                currentBox={polyEdit.damage.box_2d}
+                onConfirm={async (correctedBox) => {
+                  setBusy(true)
+                  try {
+                    await damageFeedback(item.id, {
+                      verdict: 'corrected', damage_index: polyEdit.dmgIndex,
+                      scope: 'new', corrected_box: correctedBox,
+                    })
+                    setVerdicts(v => ({ ...v, [`${item.id}:${polyEdit.dmgIndex}`]: 'corrected' }))
+                    loadStats()
+                  } catch { setErr('No se pudo guardar.') }
+                  finally { setBusy(false); setPolyEdit(null) }
+                }}
+                onCancel={() => setPolyEdit(null)}
+              />
+            )}
           </div>
         </div>
       )}

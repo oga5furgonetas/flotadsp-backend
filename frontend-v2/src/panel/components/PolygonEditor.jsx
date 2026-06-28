@@ -34,6 +34,20 @@ export default function PolygonEditor({ photoUrl, currentPolygon, currentBox, on
     ]),
   []);
 
+  // Cargar imagen via fetch→blob para evitar CORS taint en canvas
+  useEffect(() => {
+    if (!photoUrl) return;
+    let blobUrl = null;
+    fetch(photoUrl)
+      .then(r => r.blob())
+      .then(blob => {
+        blobUrl = URL.createObjectURL(blob);
+        imgRef.current.src = blobUrl;
+      })
+      .catch(() => { imgRef.current.src = photoUrl; }); // fallback directo
+    return () => { if (blobUrl) URL.revokeObjectURL(blobUrl); };
+  }, [photoUrl]);
+
   const onImgLoad = () => {
     const canvas = canvasRef.current;
     const img = imgRef.current;
@@ -210,10 +224,8 @@ export default function PolygonEditor({ photoUrl, currentPolygon, currentBox, on
       <div style={{ position: "relative" }}>
         <img
           ref={imgRef}
-          src={photoUrl}
           onLoad={onImgLoad}
           style={{ display: "none" }}
-          crossOrigin="anonymous"
           alt=""
         />
         <canvas

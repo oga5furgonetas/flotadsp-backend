@@ -14275,17 +14275,18 @@ async def _gemini_extract(client, model_name: str, prompt: str, img_bytes: bytes
 # ── Paso 1: extraer datos con Gemini, devuelve JSON para preview ──
 @app.post("/api/tools/plantilla-extraer", dependencies=[Depends(require_admin)])
 async def plantilla_extraer(
-    cortex:     List[UploadFile] = File(...),
     plataforma: List[UploadFile] = File(...),
+    cortex:     Optional[List[UploadFile]] = File(default=None),
 ):
-    cortex_imgs = [await f.read() for f in cortex]
+    if not plataforma:
+        raise HTTPException(400, "Sube al menos las capturas de plataforma.")
+    cortex_imgs = [await f.read() for f in (cortex or [])]
     plat_imgs   = [await f.read() for f in plataforma]
 
     try:
         client     = _gemini_client_plantilla()
         model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-        # Todas las imágenes en paralelo
         tasks = (
             [_gemini_extract(client, model_name, _PROMPT_CORTEX,     b) for b in cortex_imgs] +
             [_gemini_extract(client, model_name, _PROMPT_PLATAFORMA, b) for b in plat_imgs]
@@ -14308,10 +14309,11 @@ async def plantilla_extraer(
 
     from datetime import date as _date
 
-    # Combinar datos de todas las imágenes Cortex (dedup por ruta)
     week_num  = _date.today().isocalendar()[1]
     fecha_str = _date.today().strftime("%d/%m/%Y")
-    rutas_map: dict = {}  # ruta -> {conductor, h_salida}
+
+    # Combinar datos Cortex (dedup por ruta)
+    rutas_map: dict = {}
     for cd in cortex_results:
         if cd.get("week"):
             week_num = cd["week"]
@@ -14322,7 +14324,7 @@ async def plantilla_extraer(
             if key and key not in rutas_map:
                 rutas_map[key] = r
 
-    # Combinar datos de todas las imágenes plataforma (dedup por conductor)
+    # Combinar datos plataforma (dedup por conductor)
     asignaciones: list = []
     seen_conductores: set = set()
     for pd in plat_results:
@@ -14332,38 +14334,53 @@ async def plantilla_extraer(
                 seen_conductores.add(nombre)
                 asignaciones.append(a)
 
-    # Cruce por tokens de nombre
     rows_out = []
-    for ruta_key in sorted(rutas_map):
-        ruta_row  = rutas_map[ruta_key]
-        conductor = ruta_row.get("conductor") or ""
-        h_salida  = ruta_row.get("h_salida") or ""
 
-        furgo = ""
-        movil = ""
-        best_score = 0.0
-        best_asig  = None
+    if rutas_map:
+        # MODO COMPLETO: Cortex + Plataforma → cruce por nombre
+        for ruta_key in sorted(rutas_map):
+            ruta_row  = rutas_map[ruta_key]
+            conductor = ruta_row.get("conductor") or ""
+            h_salida  = ruta_row.get("h_salida") or ""
+
+            furgo = ""
+            movil = ""
+            best_score = 0.0
+            best_asig  = None
+            for asig in asignaciones:
+                sc = _match_score(conductor, asig.get("conductor") or "")
+                if sc > best_score:
+                    best_score = sc
+                    best_asig  = asig
+
+            if best_asig and best_score >= 0.8:
+                furgo = (best_asig.get("furgo") or "").replace(" ", "")
+                movil = best_asig.get("movil") or ""
+
+            h_llegada, h_bajada = _calc_horas(h_salida)
+            rows_out.append({
+                "ruta":          ruta_key,
+                "conductor":     conductor,
+                "movil":         movil,
+                "furgo":         furgo,
+                "h_salida":      h_salida,
+                "h_bajada":      h_bajada,
+                "h_llegada":     h_llegada,
+                "observaciones": "",
+            })
+    else:
+        # MODO SOLO PLATAFORMA: una fila por conductor, ruta vacía para rellenar a mano
         for asig in asignaciones:
-            sc = _match_score(conductor, asig.get("conductor") or "")
-            if sc > best_score:
-                best_score = sc
-                best_asig  = asig
-
-        if best_asig and best_score >= 0.8:
-            furgo = (best_asig.get("furgo") or "").replace(" ", "")
-            movil = best_asig.get("movil") or ""
-
-        h_llegada, h_bajada = _calc_horas(h_salida)
-        rows_out.append({
-            "ruta":          ruta_key,
-            "conductor":     conductor,
-            "movil":         movil,
-            "furgo":         furgo,
-            "h_salida":      h_salida,
-            "h_bajada":      h_bajada,
-            "h_llegada":     h_llegada,
-            "observaciones": "",
-        })
+            rows_out.append({
+                "ruta":          "",
+                "conductor":     asig.get("conductor") or "",
+                "movil":         asig.get("movil") or "",
+                "furgo":         (asig.get("furgo") or "").replace(" ", ""),
+                "h_salida":      "",
+                "h_bajada":      "",
+                "h_llegada":     "",
+                "observaciones": "",
+            })
 
     return {"week": week_num, "date": fecha_str, "rows": rows_out}
 

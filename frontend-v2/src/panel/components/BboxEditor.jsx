@@ -7,6 +7,7 @@
  */
 import { useRef, useState, useCallback, useEffect } from "react";
 
+
 export default function BboxEditor({ photoUrl, currentBox, onConfirm, onCancel }) {
   const canvasRef = useRef(null);
   const imgRef = useRef(null);
@@ -15,6 +16,19 @@ export default function BboxEditor({ photoUrl, currentBox, onConfirm, onCancel }
   const [start, setStart] = useState(null);
   const [box, setBox] = useState(null); // {x1,y1,x2,y2} en px canvas
   const [confirmed, setConfirmed] = useState(false);
+
+  useEffect(() => {
+    if (!photoUrl) return;
+    let blobUrl = null;
+    fetch(photoUrl)
+      .then(r => r.blob())
+      .then(blob => {
+        blobUrl = URL.createObjectURL(blob);
+        imgRef.current.src = blobUrl;
+      })
+      .catch(() => { imgRef.current.src = photoUrl; });
+    return () => { if (blobUrl) URL.revokeObjectURL(blobUrl); };
+  }, [photoUrl]);
 
   const onImgLoad = () => {
     const canvas = canvasRef.current;
@@ -123,7 +137,7 @@ export default function BboxEditor({ photoUrl, currentBox, onConfirm, onCancel }
         {box && !confirmed && <span style={{ color: "#fbbf24", marginLeft: 8 }}>⬜ Rectángulo listo — pulsa Confirmar</span>}
       </div>
       <div style={{ position: "relative" }}>
-        <img ref={imgRef} src={photoUrl} onLoad={onImgLoad} style={{ display: "none" }} crossOrigin="anonymous" alt="" />
+        <img ref={imgRef} onLoad={onImgLoad} style={{ display: "none" }} alt="" />
         <canvas
           ref={canvasRef}
           onMouseDown={onMouseDown}
