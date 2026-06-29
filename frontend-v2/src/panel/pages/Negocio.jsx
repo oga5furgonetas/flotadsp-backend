@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useT } from '../../i18n'
 import {
   Loader2, Building2, CheckCircle2, Clock, Euro, Sparkles, Gift, PauseCircle,
   LogIn, Trash2, Database, BrainCircuit, ExternalLink, RefreshCw,
@@ -10,12 +11,7 @@ import {
 } from '../api'
 import { API_BASE } from '../../services/api'
 
-const ST = {
-  active: { label: 'Activo', cls: 'bg-emerald-500/15 text-emerald-400' },
-  trial: { label: 'Prueba', cls: 'bg-sky-500/15 text-sky-400' },
-  suspended: { label: 'Suspendido', cls: 'bg-red-500/15 text-red-400' },
-  canceled: { label: 'Cancelado', cls: 'bg-dark-700 text-dark-300' },
-}
+// ST labels are now translated inside the component via t()
 
 function Kpi({ icon: Icon, label, value, accent }) {
   return (
@@ -28,6 +24,13 @@ function Kpi({ icon: Icon, label, value, accent }) {
 
 export default function Negocio() {
   const nav = useNavigate()
+  const { t } = useT()
+  const ST = {
+    active:    { label: t('neg.status.active'),    cls: 'bg-emerald-500/15 text-emerald-400' },
+    trial:     { label: t('neg.status.trial'),     cls: 'bg-sky-500/15 text-sky-400' },
+    suspended: { label: t('neg.status.suspended'), cls: 'bg-red-500/15 text-red-400' },
+    canceled:  { label: t('neg.status.canceled'),  cls: 'bg-dark-700 text-dark-300' },
+  }
   const [ov, setOv] = useState(null)
   const [orgs, setOrgs] = useState(null)
   const [leads, setLeads] = useState(null)
@@ -58,14 +61,14 @@ export default function Negocio() {
         localStorage.setItem('flotadsp_admin', JSON.stringify({ name: o.name, role: 'admin', account_type: 'dsp', slug: r.data.slug, centers: o.centers || [], impersonating: true }))
         nav('/panel'); window.location.reload()
       }
-    } catch { setMsg('No se pudo entrar como el cliente') } finally { setBusy('') }
+    } catch { setMsg(t('neg.impersonate.err')) } finally { setBusy('') }
   }
 
   async function removeOrg(o) {
-    if (!window.confirm(`¿Eliminar definitivamente el DSP "${o.name}" y todos sus datos? Esto NO se puede deshacer.`)) return
+    if (!window.confirm(t('neg.delete.confirm').replace('{n}', o.name))) return
     setBusy(o.id)
-    try { await deleteOrg(o.id); setMsg('DSP eliminado'); load() }
-    catch { setMsg('No se pudo eliminar') } finally { setBusy('') }
+    try { await deleteOrg(o.id); setMsg(t('neg.deleted')); load() }
+    catch { setMsg(t('neg.delete.err')) } finally { setBusy('') }
   }
 
   async function doBackup() {
@@ -77,42 +80,42 @@ export default function Negocio() {
   return (
     <div className="mx-auto max-w-6xl">
       <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-xl font-bold">Negocio</h1>
-        <button onClick={load} className="btn-secondary flex items-center gap-1.5 text-sm"><RefreshCw size={14} /> Actualizar</button>
+        <h1 className="text-xl font-bold">{t('neg.title')}</h1>
+        <button onClick={load} className="btn-secondary flex items-center gap-1.5 text-sm"><RefreshCw size={14} /> {t('neg.refresh')}</button>
       </div>
 
       {msg && <div className="mb-3 rounded-lg bg-brand-500/10 px-3 py-2 text-sm text-brand-300">{msg}</div>}
 
       {/* Resumen */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <Kpi icon={Building2} label="Clientes (DSP)" value={ov?.dsps_total ?? '—'} accent="#0ea5e9" />
-        <Kpi icon={CheckCircle2} label="Activos" value={ov?.activos ?? '—'} accent="#34d399" />
-        <Kpi icon={Clock} label="En prueba" value={ov?.en_prueba ?? '—'} accent="#fbbf24" />
-        <Kpi icon={Euro} label="MRR estimado" value={ov ? `${ov.mrr_estimado} €` : '—'} accent="#a78bfa" />
-        <Kpi icon={Sparkles} label="Interesados" value={ov?.interesados ?? '—'} accent="#fb923c" />
+        <Kpi icon={Building2} label={t('neg.kpi.clients')} value={ov?.dsps_total ?? '—'} accent="#0ea5e9" />
+        <Kpi icon={CheckCircle2} label={t('neg.kpi.active')} value={ov?.activos ?? '—'} accent="#34d399" />
+        <Kpi icon={Clock} label={t('neg.kpi.trial')} value={ov?.en_prueba ?? '—'} accent="#fbbf24" />
+        <Kpi icon={Euro} label={t('neg.kpi.mrr')} value={ov ? `${ov.mrr_estimado} €` : '—'} accent="#a78bfa" />
+        <Kpi icon={Sparkles} label={t('neg.kpi.leads')} value={ov?.interesados ?? '—'} accent="#fb923c" />
       </div>
 
       {/* Facturación (honesto: facturas reales en Lemon Squeezy) */}
       <div className="card mt-4 flex flex-wrap items-center justify-between gap-3 p-4">
         <div>
-          <h2 className="text-sm font-semibold">Facturación</h2>
-          <p className="text-sm text-dark-400">Ingresos recurrentes estimados: <b className="text-dark-100">{ov?.mrr_estimado ?? '—'} €/mes</b>. Las facturas oficiales (IVA, recibos) las emite Lemon Squeezy como Merchant of Record.</p>
+          <h2 className="text-sm font-semibold">{t('neg.billing')}</h2>
+          <p className="text-sm text-dark-400">{t('neg.billing.desc')} <b className="text-dark-100">{ov?.mrr_estimado ?? '—'} €/mes</b>. {t('neg.billing.lemon')}</p>
         </div>
-        <a href="https://app.lemonsqueezy.com" target="_blank" rel="noreferrer" className="btn-secondary flex items-center gap-1.5 text-sm">Panel de facturas <ExternalLink size={14} /></a>
+        <a href="https://app.lemonsqueezy.com" target="_blank" rel="noreferrer" className="btn-secondary flex items-center gap-1.5 text-sm">{t('neg.billing.panel')} <ExternalLink size={14} /></a>
       </div>
 
       {/* Clientes / DSPs */}
-      <h2 className="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-dark-500">Clientes</h2>
+      <h2 className="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-dark-500">{t('neg.clients')}</h2>
       {!orgs ? (
-        <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> Cargando…</div>
+        <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> {t('neg.loading')}</div>
       ) : orgs.length === 0 ? (
-        <div className="card p-8 text-center text-dark-400">Aún no hay clientes DSP registrados.</div>
+        <div className="card p-8 text-center text-dark-400">{t('neg.no.clients')}</div>
       ) : (
         <div className="card overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="border-b border-dark-800 text-left text-xs uppercase tracking-wide text-dark-500">
-              <th className="px-3 py-2.5">Empresa</th><th className="px-3 py-2.5">Estado</th><th className="px-3 py-2.5">Plan</th>
-              <th className="px-3 py-2.5">Centros</th><th className="px-3 py-2.5">Prueba</th><th className="px-3 py-2.5 text-right">Acciones</th>
+              <th className="px-3 py-2.5">{t('neg.col.company')}</th><th className="px-3 py-2.5">{t('neg.col.status')}</th><th className="px-3 py-2.5">{t('neg.col.plan')}</th>
+              <th className="px-3 py-2.5">{t('neg.col.centers')}</th><th className="px-3 py-2.5">{t('neg.col.trial')}</th><th className="px-3 py-2.5 text-right">{t('neg.col.actions')}</th>
             </tr></thead>
             <tbody>
               {orgs.map((o) => {
@@ -128,7 +131,7 @@ export default function Negocio() {
                     <td className="px-3 py-2.5">
                       <div className="flex items-center justify-end gap-1">
                         {o.status !== 'active' && (
-                          <button disabled={isBusy} onClick={() => act(o.id, { status: 'active' }, 'Regalado/activado')} className="btn-ghost flex items-center gap-1 px-2 py-1 text-xs text-emerald-400" title="Regalar / activar suscripción"><Gift size={14} /> Activar</button>
+                          <button disabled={isBusy} onClick={() => act(o.id, { status: 'active' }, t('neg.activate'))} className="btn-ghost flex items-center gap-1 px-2 py-1 text-xs text-emerald-400" title={t('neg.activate')}><Gift size={14} /> {t('neg.activate')}</button>
                         )}
                         <button disabled={isBusy} onClick={() => act(o.id, { extend_trial_days: 14 }, 'Prueba +14d')} className="btn-ghost px-2 py-1 text-xs" title="Ampliar prueba 14 días"><Clock size={14} /></button>
                         {o.status !== 'suspended' && (
@@ -148,9 +151,9 @@ export default function Negocio() {
       )}
 
       {/* Leads */}
-      <h2 className="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-dark-500">Interesados (leads)</h2>
+      <h2 className="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-dark-500">{t('neg.leads')}</h2>
       {!leads ? null : leads.length === 0 ? (
-        <div className="card p-6 text-center text-dark-400">Sin interesados todavía.</div>
+        <div className="card p-6 text-center text-dark-400">{t('neg.no.leads')}</div>
       ) : (
         <div className="card divide-y divide-dark-800">
           {leads.slice(0, 30).map((l, i) => (
@@ -165,13 +168,13 @@ export default function Negocio() {
       )}
 
       {/* Herramientas */}
-      <h2 className="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-dark-500">Herramientas</h2>
+      <h2 className="mb-2 mt-6 text-sm font-semibold uppercase tracking-wide text-dark-500">{t('neg.tools')}</h2>
       <div className="flex flex-wrap gap-3">
         <button onClick={doBackup} disabled={busy === 'backup'} className="btn-secondary flex items-center gap-2 text-sm">
-          {busy === 'backup' ? <Loader2 size={15} className="animate-spin" /> : <Database size={15} />} Backup de la BD ahora
+          {busy === 'backup' ? <Loader2 size={15} className="animate-spin" /> : <Database size={15} />} {t('neg.backup')}
         </button>
         <a href={`${API_BASE}/ai/export-dataset`} target="_blank" rel="noreferrer" className="btn-secondary flex items-center gap-2 text-sm">
-          <BrainCircuit size={15} /> Exportar dataset IA
+          <BrainCircuit size={15} /> {t('neg.export.ai')}
         </a>
       </div>
     </div>

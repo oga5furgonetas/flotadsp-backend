@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
+import { useT } from '../../i18n'
 import {
   Loader2, Upload, Trophy, ChevronLeft, ChevronRight, Pencil, Check, X,
   TrendingUp, TrendingDown, Minus, RefreshCw, FileText, Trash2, Info,
@@ -27,17 +28,17 @@ const TIER_CFG = {
 const tierCfg = (t) => TIER_CFG[t] || { bg: 'bg-dark-800', text: 'text-dark-500', ring: 'ring-dark-700', dot: 'bg-dark-600' }
 
 const SRC_CFG = {
-  oficial:  { cls: 'bg-emerald-500/15 text-emerald-400', label: 'Oficial Amazon' },
-  resumen:  { cls: 'bg-purple-500/15 text-purple-400',   label: 'Resumen semanal' },
-  ratios:   { cls: 'bg-cyan-500/15 text-cyan-400',       label: 'Ratios diarios' },
-  manual:   { cls: 'bg-brand-500/15 text-brand-400',     label: 'Manual' },
-  estimado: { cls: 'bg-amber-500/15 text-amber-400',     label: 'Estimado' },
+  oficial:  { cls: 'bg-emerald-500/15 text-emerald-400', labelKey: 'sc.src.oficial' },
+  resumen:  { cls: 'bg-purple-500/15 text-purple-400',   labelKey: 'sc.src.resumen' },
+  ratios:   { cls: 'bg-cyan-500/15 text-cyan-400',       labelKey: 'sc.src.ratios' },
+  manual:   { cls: 'bg-brand-500/15 text-brand-400',     labelKey: 'sc.src.manual' },
+  estimado: { cls: 'bg-amber-500/15 text-amber-400',     labelKey: 'sc.src.estimado' },
 }
 
 const GROUP_CFG = {
-  safety:   { label: 'Seguridad y Cumplimiento', weight: '40%', color: 'text-blue-300' },
-  quality:  { label: 'Calidad',                  weight: '30%', color: 'text-brand-300' },
-  capacity: { label: 'Capacidad',                weight: '30%', color: 'text-purple-300' },
+  safety:   { labelKey: 'sc.group.safety',   weight: '40%', color: 'text-blue-300' },
+  quality:  { labelKey: 'sc.group.quality',  weight: '30%', color: 'text-brand-300' },
+  capacity: { labelKey: 'sc.group.capacity', weight: '30%', color: 'text-purple-300' },
 }
 
 // Dónde encontrar cada métrica en el portal de Amazon DSP
@@ -139,6 +140,7 @@ function MetricSourceTooltip({ metricKey }) {
 
 // ── MetricRow ─────────────────────────────────────────────────────────────────
 function MetricRow({ m, weekSun, center, onSaved }) {
+  const { t } = useT()
   const [editing, setEditing] = useState(false)
   const [val, setVal] = useState('')
   const [busy, setBusy] = useState(false)
@@ -204,34 +206,36 @@ function MetricRow({ m, weekSun, center, onSaved }) {
       )}
 
       <TierBadge tier={m.tier} />
-      {src && <span className={`hidden rounded px-1.5 py-0.5 text-[10px] sm:inline ${src.cls}`}>{src.label}</span>}
+      {src && <span className={`hidden rounded px-1.5 py-0.5 text-[10px] sm:inline ${src.cls}`}>{t(src.labelKey)}</span>}
     </div>
   )
 }
 
 // ── CategoryCard ──────────────────────────────────────────────────────────────
 function CategoryCard({ groupKey, tier, metrics }) {
+  const { t } = useT()
   const cfg = GROUP_CFG[groupKey]
   const tc = tierCfg(tier)
   const filled = metrics.filter(m => m.value != null).length
   return (
     <div className={`rounded-xl border p-4 ${tc.ring ? `ring-1 ${tc.ring}` : ''} border-dark-800 bg-dark-900`}>
       <div className="mb-2 flex items-center justify-between">
-        <span className={`text-xs font-semibold uppercase tracking-wide ${cfg.color}`}>{cfg.label}</span>
+        <span className={`text-xs font-semibold uppercase tracking-wide ${cfg.color}`}>{t(cfg.labelKey)}</span>
         <span className="text-[10px] text-dark-500">{cfg.weight}</span>
       </div>
       <TierBadge tier={tier} />
-      <div className="mt-2 text-[10px] text-dark-600">{filled}/{metrics.length} con dato</div>
+      <div className="mt-2 text-[10px] text-dark-600">{t('sc.filled').replace('{n}', filled)}/{metrics.length}</div>
     </div>
   )
 }
 
 // ── DailyTrendTable ───────────────────────────────────────────────────────────
 function DailyTrendTable({ trend }) {
+  const { t } = useT()
   if (!trend?.dias?.length) return (
     <div className="text-xs text-dark-500 space-y-1">
-      <p>Sin datos diarios esta semana.</p>
-      <p className="text-dark-600">Sube el Excel de "Descripción general" de Cortex (DSP Portal → Cortex → Export).</p>
+      <p>{t('sc.no.daily')}</p>
+      <p className="text-dark-600">{t('sc.cortex.hint')}</p>
     </div>
   )
   return (
@@ -239,13 +243,13 @@ function DailyTrendTable({ trend }) {
       <table className="w-full text-xs">
         <thead>
           <tr className="text-dark-400">
-            <th className="pb-1 text-left">Día</th>
-            <th className="pb-1 text-right">DCR día</th>
-            <th className="pb-1 text-right">DCR acum.</th>
-            <th className="pb-1 text-right">DNR DPMO</th>
-            <th className="pb-1 text-right">POD día</th>
-            <th className="pb-1 text-right">POD acum.</th>
-            <th className="pb-1 text-right">Entreg.</th>
+            <th className="pb-1 text-left">{t('sc.trend.col.day')}</th>
+            <th className="pb-1 text-right">{t('sc.trend.dcr.day')}</th>
+            <th className="pb-1 text-right">{t('sc.trend.dcr.acc')}</th>
+            <th className="pb-1 text-right">{t('sc.trend.dnr')}</th>
+            <th className="pb-1 text-right">{t('sc.trend.pod.day')}</th>
+            <th className="pb-1 text-right">{t('sc.trend.pod.acc')}</th>
+            <th className="pb-1 text-right">{t('sc.trend.del')}</th>
           </tr>
         </thead>
         <tbody>
@@ -274,7 +278,7 @@ function DailyTrendTable({ trend }) {
         {trend.acumulado && (
           <tfoot>
             <tr className="border-t-2 border-dark-700 font-semibold">
-              <td className="pt-1 text-dark-300">Acumulado</td>
+              <td className="pt-1 text-dark-300">{t('sc.trend.accum')}</td>
               <td />
               <td className={`pt-1 text-right font-mono ${(trend.acumulado.dcr || 0) >= 98 ? 'text-green-300' : 'text-yellow-300'}`}>
                 {trend.acumulado.dcr != null ? `${trend.acumulado.dcr.toFixed(2)}%` : '—'}
@@ -297,6 +301,7 @@ function DailyTrendTable({ trend }) {
 
 // ── ImportGuide ───────────────────────────────────────────────────────────────
 function ImportGuide({ center, fileRef, uploadBusy, onUpload }) {
+  const { t } = useT()
   const [open, setOpen] = useState(false)
   const FILES = [
     {
@@ -365,7 +370,7 @@ function ImportGuide({ center, fileRef, uploadBusy, onUpload }) {
       <button onClick={() => setOpen(s => !s)} className="flex w-full items-center justify-between p-5">
         <div className="flex items-center gap-2 text-sm font-semibold text-dark-200">
           <BookOpen size={15} className="text-brand-400" />
-          Guía de importación · ¿Qué archivo descargo de Amazon?
+          {t('sc.guide.title')}
         </div>
         {open ? <ChevronUp size={15} className="text-dark-500" /> : <ChevronDown size={15} className="text-dark-500" />}
       </button>
@@ -396,13 +401,13 @@ function ImportGuide({ center, fileRef, uploadBusy, onUpload }) {
           <div className="rounded-lg border border-brand-500/20 bg-brand-500/5 p-4">
             <div className="flex items-center justify-between gap-4">
               <div>
-                <div className="text-xs font-semibold text-brand-300">Subir archivo de {center}</div>
-                <div className="mt-0.5 text-[11px] text-dark-400">El sistema detecta automáticamente si es PDF, Cortex Excel, Mentor o HTML diario.</div>
+                <div className="text-xs font-semibold text-brand-300">{t('sc.upload.title').replace('{center}', center)}</div>
+                <div className="mt-0.5 text-[11px] text-dark-400">{t('sc.upload.hint')}</div>
               </div>
               <input ref={fileRef} type="file" accept=".pdf,.html,.htm,.xlsx,.xls,.xlsm,.csv" onChange={onUpload} className="hidden" id="sc-upload-guide" />
               <label htmlFor="sc-upload-guide" className="btn-primary shrink-0 inline-flex cursor-pointer items-center gap-2">
                 {uploadBusy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-                {uploadBusy ? 'Subiendo…' : 'Elegir archivo'}
+                {uploadBusy ? t('sc.uploading') : t('sc.choose.file')}
               </label>
             </div>
           </div>
@@ -414,6 +419,7 @@ function ImportGuide({ center, fileRef, uploadBusy, onUpload }) {
 
 // ── BaremosEditor ─────────────────────────────────────────────────────────────
 function BaremosEditor({ full, center, onSaved }) {
+  const { t } = useT()
   const [vals, setVals] = useState({})
   const [busy, setBusy] = useState(null)
   const [calibBusy, setCalibBusy] = useState(false)
@@ -473,39 +479,36 @@ function BaremosEditor({ full, center, onSaved }) {
       <div className="mb-4 rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-4 py-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-sm font-semibold text-emerald-300">Calibrar baremos de {center} automáticamente</p>
-            <p className="mt-1 text-xs text-dark-400">
-              Sube el PDF de la scorecard oficial de Amazon de la semana pasada (Performance → Scorecard → PDF).
-              El sistema lee los valores reales y los tiers que Amazon te asignó, e infiere los umbrales exactos de {center}.
-            </p>
-            <p className="mt-2 text-[11px] text-dark-500">
-              ⚡ Si ya has subido el PDF arriba, haz clic en "Calibrar" y los baremos se ajustan solos.
-            </p>
+            <p className="text-sm font-semibold text-emerald-300">{t('sc.calib.from').replace('{center}', center)}</p>
+            <p className="mt-1 text-xs text-dark-400">{t('sc.calib.desc').replace('{center}', center)}</p>
+            <p className="mt-2 text-[11px] text-dark-500">{t('sc.calib.tip')}</p>
           </div>
           <div className="flex flex-col gap-2 shrink-0">
             <button onClick={calibrate} disabled={calibBusy}
               className="flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-4 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-50">
               {calibBusy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-              Calibrar desde PDF
+              {t('sc.calib.btn')}
             </button>
             <button onClick={resetToAmazon} disabled={resetBusy}
               className="flex items-center gap-1.5 rounded-lg bg-red-500/10 px-4 py-2 text-xs font-medium text-red-400 hover:bg-red-500/20 disabled:opacity-50">
               {resetBusy ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
-              Resetear a valores Amazon
+              {t('sc.reset.amazon')}
             </button>
           </div>
         </div>
       </div>
 
       <p className="mb-4 text-xs text-dark-500">
-        O ajusta manualmente fila por fila. Los baremos se guardan solo para <span className="text-dark-300 font-semibold">{center}</span> (cada estación tiene los suyos).
+        {t('sc.thresholds.desc').split('{center}')[0]}
+        <span className="font-semibold text-dark-300">{center}</span>
+        {t('sc.thresholds.desc').split('{center}')[1]}
       </p>
       {groups.map(g => {
         const gm = full.metrics.filter(m => m.group === g)
         if (!gm.length) return null
         return (
           <div key={g} className="mb-5">
-            <div className={`mb-2 text-xs font-semibold uppercase tracking-wide ${GROUP_CFG[g].color}`}>{GROUP_CFG[g].label}</div>
+            <div className={`mb-2 text-xs font-semibold uppercase tracking-wide ${GROUP_CFG[g].color}`}>{t(GROUP_CFG[g].labelKey)}</div>
             <div className="space-y-1">
               {gm.map(m => {
                 const v = vals[m.key] || { fantastic: '', great: '', fair: '' }
@@ -530,7 +533,7 @@ function BaremosEditor({ full, center, onSaved }) {
                     ))}
                     <button onClick={() => save(m.key)} disabled={isBusy}
                       className="ml-auto flex items-center gap-1 rounded bg-brand-500/20 px-2 py-0.5 text-xs text-brand-300 hover:bg-brand-500/30 disabled:opacity-50">
-                      {isBusy ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />} Guardar
+                      {isBusy ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />} {t('ui.save')}
                     </button>
                   </div>
                 )
@@ -546,6 +549,7 @@ function BaremosEditor({ full, center, onSaved }) {
 // ── Main component ─────────────────────────────────────────────────────────────
 export default function Scorecard() {
   const { center } = useOutletContext()
+  const { t } = useT()
   const fileRef = useRef()
   const noCenter = center === 'Todos'
 
@@ -650,7 +654,7 @@ export default function Scorecard() {
       <h1 className="mb-4 text-xl font-bold">Scorecard</h1>
       <div className="card flex flex-col items-center gap-3 p-10 text-center">
         <Trophy size={30} className="text-brand-400" />
-        <p className="text-dark-200">Elige un centro arriba para ver su scorecard.</p>
+        <p className="text-dark-200">{t('sc.pick.center')}</p>
       </div>
     </div>
   )
@@ -682,7 +686,7 @@ export default function Scorecard() {
       {msg && <div className={`rounded-lg px-3 py-2 text-sm ${msg.ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{msg.t}</div>}
 
       {loadingFull && !full && (
-        <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> Cargando scorecard…</div>
+        <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> {t('ui.loading')}</div>
       )}
 
       {full && (
@@ -691,7 +695,7 @@ export default function Scorecard() {
           <div className={`rounded-xl border p-5 ${hasScore && overallCfg.ring ? `ring-1 ${overallCfg.ring}` : ''} border-dark-800`}>
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
-                <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-dark-500">Resultado global</div>
+                <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-dark-500">{t('sc.overall')}</div>
                 {full.overall ? (
                   <div className="flex items-baseline gap-3">
                     <span className={`text-3xl font-bold ${overallCfg.text}`}>{full.overall}</span>
@@ -716,8 +720,8 @@ export default function Scorecard() {
                   </div>
                 ) : (
                   <div>
-                    <span className="text-2xl font-bold text-dark-500">Sin datos</span>
-                    <p className="mt-1 text-[11px] text-dark-500">Faltan datos para la nota. Sube el PDF oficial o el resumen semanal de Cortex.</p>
+                    <span className="text-2xl font-bold text-dark-500">{t('sc.no.data.simple')}</span>
+                    <p className="mt-1 text-[11px] text-dark-500">{t('sc.no.data.long')}</p>
                   </div>
                 )}
                 {full.overall_method && <p className="mt-1 text-[10px] text-dark-600">{full.overall_method}</p>}
@@ -737,29 +741,29 @@ export default function Scorecard() {
                   onChange={e => toggleEstimacion(e.target.checked)}
                   className="accent-brand-500"
                 />
-                Proyectar con última scorecard conocida (rellena Safety/Capacity)
+                {t('sc.project.label')}
               </label>
               {!full.has_official && !full.estimacion_on && (
                 <span className="flex items-center gap-1 text-xs text-amber-400">
-                  <AlertCircle size={11} /> Sin scorecard oficial · activa "Proyectar" para estimar Safety/Capacity
+                  <AlertCircle size={11} /> {t('sc.no.official')}
                 </span>
               )}
               {full.has_official && (
                 <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-400">
-                  ✓ Scorecard oficial cargada
+                  {t('sc.official.loaded')}
                 </span>
               )}
               {confirmReset ? (
                 <div className="ml-auto flex items-center gap-2">
-                  <span className="text-xs text-red-300">¿Borrar todos los datos de la semana?</span>
+                  <span className="text-xs text-red-300">{t('sc.reset.week')}</span>
                   <button onClick={doReset} disabled={resetBusy} className="rounded bg-red-500/20 px-2 py-0.5 text-xs text-red-300 hover:bg-red-500/30">
-                    {resetBusy ? <Loader2 size={11} className="animate-spin" /> : 'Sí, reiniciar'}
+                    {resetBusy ? <Loader2 size={11} className="animate-spin" /> : t('sc.reset.confirm')}
                   </button>
-                  <button onClick={() => setConfirmReset(false)} className="text-xs text-dark-400 hover:text-dark-200">Cancelar</button>
+                  <button onClick={() => setConfirmReset(false)} className="text-xs text-dark-400 hover:text-dark-200">{t('ui.cancel')}</button>
                 </div>
               ) : (
                 <button onClick={() => setConfirmReset(true)} className="ml-auto flex items-center gap-1 text-xs text-dark-500 hover:text-red-400">
-                  <RotateCcw size={11} /> Reiniciar semana
+                  <RotateCcw size={11} /> {t('sc.reset.btn')}
                 </button>
               )}
             </div>
@@ -776,7 +780,7 @@ export default function Scorecard() {
                 return (
                   <div key={g} className="card p-4">
                     <div className="mb-3 flex items-center justify-between">
-                      <span className={`text-xs font-semibold uppercase tracking-wide ${gc.color}`}>{gc.label}</span>
+                      <span className={`text-xs font-semibold uppercase tracking-wide ${gc.color}`}>{t(gc.labelKey)}</span>
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] text-dark-500">{gc.weight} del score total</span>
                         <TierBadge tier={full[`${g}_tier`]} />
@@ -806,7 +810,7 @@ export default function Scorecard() {
                 <div className="card p-4">
                   <div className="mb-3 flex items-center gap-2">
                     <TrendingUp size={14} className="text-brand-400" />
-                    <span className="text-sm font-semibold">Predicción semanal</span>
+                    <span className="text-sm font-semibold">{t('sc.predict.panel')}</span>
                   </div>
                   {predict.predicted_tier || predict.predicted_score != null ? (
                     <>
@@ -823,7 +827,7 @@ export default function Scorecard() {
                         )}
                         {predict.predicted_tier === 'Fantastic Plus' && (
                           <div className="mt-2 rounded-md bg-emerald-500/10 px-2 py-1 text-xs text-emerald-400 font-semibold">
-                            ¡Ya estás en Fantastic Plus! 🏆
+                            {t('sc.fantastic.plus')}
                           </div>
                         )}
                       </div>
@@ -843,7 +847,7 @@ export default function Scorecard() {
 
                       {predict.empeoran?.length > 0 && (
                         <div className="mb-3">
-                          <div className="mb-1.5 text-[10px] font-semibold text-red-400 uppercase tracking-wide">⬇ Arrastrando el score</div>
+                          <div className="mb-1.5 text-[10px] font-semibold text-red-400 uppercase tracking-wide">{t('sc.dragging.down')}</div>
                           {predict.empeoran.map((e, i) => (
                             <div key={i} className="flex items-center justify-between gap-1 py-0.5 text-xs">
                               <span className="truncate text-dark-400">{e.label}</span>
@@ -858,7 +862,7 @@ export default function Scorecard() {
 
                       {predict.faltan_datos?.length > 0 && (
                         <div className="rounded-lg bg-dark-900 px-3 py-2">
-                          <div className="mb-1 text-[10px] font-semibold text-dark-500">Sin datos aún ({predict.faltan_datos.length} métricas)</div>
+                          <div className="mb-1 text-[10px] font-semibold text-dark-500">{t('sc.missing.data').replace('{n}', predict.faltan_datos.length)}</div>
                           {predict.faltan_datos.slice(0, 5).map((f, i) => (
                             <div key={i} className="text-[10px] text-dark-600">· {f}</div>
                           ))}
@@ -892,7 +896,7 @@ export default function Scorecard() {
               {/* "To improve" list */}
               {full.to_improve?.length > 0 && (
                 <div className="card p-4">
-                  <div className="mb-2 text-xs font-semibold text-dark-200">Qué mejorar primero</div>
+                  <div className="mb-2 text-xs font-semibold text-dark-200">{t('sc.improve.first')}</div>
                   <div className="space-y-1.5">
                     {full.to_improve.slice(0, 6).map((m, i) => (
                       <div key={i} className="flex items-center justify-between gap-2 text-xs">
@@ -913,8 +917,8 @@ export default function Scorecard() {
           <div className="card p-4">
             <div className="mb-3 flex items-center gap-2">
               <Minus size={14} className="text-brand-400" />
-              <span className="text-sm font-semibold">Evolución diaria (Calidad)</span>
-              <span className="text-xs text-dark-500">· acumulado de lunes a hoy</span>
+              <span className="text-sm font-semibold">{t('sc.daily.quality')}</span>
+              <span className="text-xs text-dark-500">{t('sc.daily.accum')}</span>
             </div>
             <DailyTrendTable trend={trend} />
           </div>
@@ -923,16 +927,13 @@ export default function Scorecard() {
 
       {/* Upload + guide */}
       <div className="card p-5">
-        <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-dark-200"><Upload size={15} /> Subir datos de {center}</div>
-        <p className="mb-3 text-xs text-dark-400">
-          Acepta: <span className="text-dark-300">PDF scorecard oficial</span> · <span className="text-dark-300">Excel/CSV Cortex (ratios o resumen)</span> · <span className="text-dark-300">HTML reporte diario</span>.
-          El sistema detecta el tipo automáticamente.
-        </p>
+        <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-dark-200"><Upload size={15} /> {t('sc.upload.title').replace('{center}', center)}</div>
+        <p className="mb-3 text-xs text-dark-400">{t('sc.upload.hint')}</p>
         <div className="flex flex-wrap items-center gap-3">
           <input ref={fileRef} type="file" accept=".pdf,.html,.htm,.xlsx,.xls,.xlsm,.csv" onChange={onUpload} className="hidden" id="sc-upload" />
           <label htmlFor="sc-upload" className="btn-primary inline-flex cursor-pointer items-center gap-2">
             {uploadBusy ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
-            {uploadBusy ? 'Subiendo…' : 'Elegir archivo'}
+            {uploadBusy ? t('sc.uploading') : t('sc.choose.file')}
           </label>
 
           {/* Legend */}
@@ -951,7 +952,7 @@ export default function Scorecard() {
             <button onClick={() => setShowSources(s => !s)}
               className="flex items-center gap-1 text-xs text-dark-400 hover:text-dark-200">
               {showSources ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-              {sources.length} archivos cargados esta semana
+              {t('sc.sources.count').replace('{n}', sources.length)}
             </button>
             {showSources && (
               <div className="mt-2 space-y-1">
@@ -978,7 +979,7 @@ export default function Scorecard() {
       <div className="card p-5">
         <button onClick={() => setShowBaremos(s => !s)} className="flex w-full items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-semibold text-dark-200">
-            <Trophy size={15} /> Baremos (umbrales) de {center}
+            <Trophy size={15} /> {t('sc.baremos.title').replace('{center}', center)}
           </div>
           {showBaremos ? <ChevronUp size={15} className="text-dark-500" /> : <ChevronDown size={15} className="text-dark-500" />}
         </button>

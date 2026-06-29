@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Loader2, Search, MapPin, Phone, Mail, Globe, BadgeCheck } from 'lucide-react'
+import { useT } from '../../i18n'
 
 // Directorio de contactos (talleres / casas de alquiler). Renderiza los campos que existan.
 export default function Directory({ title, fetcher, icon: Icon }) {
+  const { t } = useT()
   const ctx = useOutletContext?.() || {}
   const center = ctx.center || 'Todos'
   const [items, setItems] = useState(null)
@@ -11,7 +13,7 @@ export default function Directory({ title, fetcher, icon: Icon }) {
   const [err, setErr] = useState('')
 
   useEffect(() => {
-    fetcher().then((r) => setItems(r.data || [])).catch(() => setErr('No se pudo cargar.'))
+    fetcher().then((r) => setItems(r.data || [])).catch(() => setErr(t('dir.load.err')))
   }, [fetcher])
 
   const list = useMemo(() => (items || []).filter((it) => {
@@ -29,12 +31,12 @@ export default function Directory({ title, fetcher, icon: Icon }) {
         <h1 className="text-xl font-bold">{title} <span className="text-dark-500">· {list.length}</span></h1>
         <div className="relative">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />
-          <input className="input w-56 pl-9" placeholder="Buscar…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="input w-56 pl-9" placeholder={t('dir.search.ph')} value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
       </div>
 
       {list.length === 0 ? (
-        <div className="card p-10 text-center text-dark-400">Sin resultados.</div>
+        <div className="card p-10 text-center text-dark-400">{t('dir.no.results')}</div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {list.map((it) => (
@@ -44,15 +46,15 @@ export default function Directory({ title, fetcher, icon: Icon }) {
                   {Icon && <Icon size={16} className="text-brand-400" />}
                   <span className="font-semibold">{it.name}</span>
                 </div>
-                {it.is_official && <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300"><BadgeCheck size={11} /> Oficial</span>}
+                {it.is_official && <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-300"><BadgeCheck size={11} /> {t('dir.official')}</span>}
               </div>
               {it.center && <div className="mb-2 text-[11px] text-dark-500">{it.center}</div>}
               <div className="space-y-1 text-sm text-dark-400">
                 {(it.address || it.city) && <div className="flex items-start gap-1.5"><MapPin size={13} className="mt-0.5 shrink-0" /> {[it.address, it.city].filter(Boolean).join(', ')}</div>}
                 {it.phone && <a href={`tel:${it.phone}`} className="flex items-center gap-1.5 hover:text-dark-200"><Phone size={13} /> {it.phone}</a>}
                 {it.email && <a href={`mailto:${it.email}`} className="flex items-center gap-1.5 hover:text-dark-200"><Mail size={13} /> {it.email}</a>}
-                {it.website && <a href={it.website} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-sky-400 hover:underline"><Globe size={13} /> Web</a>}
-                {it.maps_url && <a href={it.maps_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-sky-400 hover:underline"><MapPin size={13} /> Cómo llegar</a>}
+                {it.website && <a href={it.website} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-sky-400 hover:underline"><Globe size={13} /> {t('dir.web')}</a>}
+                {it.maps_url && <a href={it.maps_url} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-sky-400 hover:underline"><MapPin size={13} /> {t('dir.directions')}</a>}
               </div>
               {Array.isArray(it.categories) && it.categories.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1">

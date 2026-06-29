@@ -16,7 +16,22 @@ export function getAdmin() {
 }
 
 export function isAuthed() {
-  return !!getToken()
+  const t = getToken()
+  if (!t) return false
+  // Verificar expiración del JWT sin validar firma (la firma la valida el backend)
+  try {
+    const b64 = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : ''
+    const payload = JSON.parse(new TextDecoder().decode(
+      Uint8Array.from(atob(b64 + pad), c => c.charCodeAt(0))
+    ))
+    if (payload.exp && Date.now() / 1000 > payload.exp) {
+      // Token expirado: limpiar sesión automáticamente
+      logout()
+      return false
+    }
+  } catch { return false }
+  return true
 }
 
 // Decodifica el payload del JWT (sin verificar firma — solo lectura cliente).
@@ -27,7 +42,9 @@ export function decodeToken() {
     if (!t) return null
     const b64 = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
     const pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : ''
-    return JSON.parse(decodeURIComponent(escape(atob(b64 + pad))))
+    return JSON.parse(new TextDecoder().decode(
+      Uint8Array.from(atob(b64 + pad), c => c.charCodeAt(0))
+    ))
   } catch { return null }
 }
 
@@ -37,8 +54,9 @@ export function getOrgId() {
 }
 
 export function isSuperAdmin() {
-  const a = getAdmin()
-  return !!(a && a.super_admin)
+  // Lee del token JWT (más fiable que localStorage que puede ser manipulado por el usuario)
+  const payload = decodeToken()
+  return !!(payload && payload.sa)
 }
 
 // Permisos por usuario: array de claves de módulo, o null = sin restricción (ve todo).

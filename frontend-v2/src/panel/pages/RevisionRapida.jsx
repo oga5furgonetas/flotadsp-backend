@@ -1,19 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
+import { useT } from '../../i18n'
 import {
   Loader2, CheckCircle2, Check, X, ChevronLeft, ChevronRight, User, Clock,
   AlertTriangle, BrainCircuit, Pencil, Plus,
 } from 'lucide-react'
-import { getReviewQueue, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback } from '../api'
+import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback } from '../api'
 import PolygonEditor from '../components/PolygonEditor'
 import BboxEditor from '../components/BboxEditor'
 
 const GOAL = 3000
 
-const SEV_LABEL = {
-  sin_danos: 'Sin daños', sin_analisis: 'Sin análisis', leve: 'Leve',
-  moderado: 'Moderado', grave: 'Grave', critico: 'Crítico',
-}
 const SEV_CLS = {
   leve: 'bg-amber-500/20 text-amber-300', moderado: 'bg-orange-500/20 text-orange-300',
   grave: 'bg-red-500/20 text-red-300', critico: 'bg-red-600/30 text-red-200',
@@ -24,11 +21,13 @@ function fmtDate(s) {
   if (!s) return ''
   const d = new Date(s)
   if (isNaN(d)) return s
-  return d.toLocaleString('es', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 
 export default function RevisionRapida() {
   const { center } = useOutletContext()
+  const { t } = useT()
+  const sevLabel = (k) => t('sev.' + k) || k
   const [queue, setQueue] = useState(null)
   const [idx, setIdx] = useState(0)
   const [photoIdx, setPhotoIdx] = useState(0)
@@ -46,25 +45,45 @@ export default function RevisionRapida() {
   // Modal editor de polígono/bbox
   const [polyEdit, setPolyEdit] = useState(null) // { dmgIndex, damage, photoUrl, editorMode }
   const [polyEditorMode, setPolyEditorMode] = useState('polygon') // 'bbox' | 'polygon'
+  const [fullInsp, setFullInsp] = useState(null) // inspección completa con daños
 
   const loadStats = useCallback(() => {
     getAiDatasetStats().then((r) => setStats(r.data)).catch(() => {})
   }, [])
 
+  // Calcular item actual antes de cualquier return para poder usar hooks
+  const displayQueue = queue ? (filterIA ? queue.filter(i => (i.annotated_photos || []).some(Boolean)) : queue) : []
+  const item = displayQueue[idx] ?? null
+  const total = stats?.total ?? 0
+
   useEffect(() => {
-    setQueue(null); setIdx(0); setPhotoIdx(0); setErr('')
+    setQueue(null); setIdx(0); setPhotoIdx(0); setErr(''); setFullInsp(null)
     getReviewQueue(center)
       .then((r) => setQueue(Array.isArray(r.data) ? r.data : r.data?.queue || []))
-      .catch(() => setErr('No se pudo cargar la cola de revisión.'))
+      .catch(() => setErr(t('rev.load.error')))
     loadStats()
   }, [center, loadStats])
 
-  if (err) return <p className="text-red-400">{err}</p>
-  if (!queue) return <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> Cargando…</div>
+  // Carga la inspección completa cuando cambia el item (el queue solo trae el conteo, no el array de daños)
+  useEffect(() => {
+    if (!item?.id) { setFullInsp(null); return }
+    setFullInsp(null)
+    getInspection(item.id)
+      .then((r) => setFullInsp(r.data))
+      .catch(() => setFullInsp({}))
+  }, [item?.id])
 
-  const displayQueue = filterIA ? queue.filter(i => (i.annotated_photos || []).some(Boolean)) : queue
-  const item = displayQueue[idx]
-  const total = stats?.total ?? 0
+  // Daños: inspección completa primero, luego fallbacks del item de queue
+  const damages = fullInsp?.analysis?.new_damages?.length > 0
+    ? fullInsp.analysis.new_damages
+    : fullInsp?.analysis?.damages?.length > 0
+      ? fullInsp.analysis.damages
+      : item?.new_damages?.length > 0
+        ? item.new_damages
+        : item?.analysis?.new_damages || []
+
+  if (err) return <p className="text-red-400">{err}</p>
+  if (!queue) return <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> {t('ui.loading')}</div>
 
   function go(delta) {
     setPhotoIdx(0)
@@ -81,7 +100,7 @@ export default function RevisionRapida() {
       setVerdicts((v) => ({ ...v, [`${item.id}:${dmgIndex}`]: verdict }))
       loadStats()
     } catch {
-      setErr('No se pudo guardar el veredicto.')
+      setErr(t('rev.save.verdict.error'))
     } finally {
       setBusy(false)
     }
@@ -98,7 +117,7 @@ export default function RevisionRapida() {
       setPhotoIdx(0)
       cancelDraw()
     } catch {
-      setErr('No se pudo marcar como revisada.')
+      setErr(t('rev.mark.error'))
     } finally {
       setBusy(false)
     }
@@ -118,12 +137,12 @@ export default function RevisionRapida() {
     return [c(b.top), c(b.left), c(b.top + b.h), c(b.left + b.w)] // [ymin,xmin,ymax,xmax]
   }
   async function saveDraw() {
-    if (!box || box.w < 1 || box.h < 1) return setErr('Dibuja una caja sobre el daño.')
+    if (!box || box.w < 1 || box.h < 1) return setErr(t('rev.draw.no.box'))
     setBusy(true); setErr('')
     try {
       const box_2d = boxTo2d(box)
       if (drawMode.type === 'missed') {
-        if (!partName.trim()) { setBusy(false); return setErr('Indica la pieza del daño (ej. tulipa trasera).') }
+        if (!partName.trim()) { setBusy(false); return setErr(t('rev.draw.no.part')) }
         await missedDamage(item.id, { part: partName.trim(), box_2d, photo_index: photoIdx + 1 })
       } else {
         await damageFeedback(item.id, { verdict: 'corrected', damage_index: drawMode.dmgIndex, scope: 'new', corrected_box: box_2d })
@@ -132,7 +151,7 @@ export default function RevisionRapida() {
       loadStats()
       cancelDraw()
     } catch {
-      setErr('No se pudo guardar.')
+      setErr(t('rev.save.error'))
     } finally { setBusy(false) }
   }
 
@@ -142,14 +161,14 @@ export default function RevisionRapida() {
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <CheckCircle2 className="text-emerald-400" size={22} />
-          <h1 className="text-xl font-bold">Revisión rápida</h1>
+          <h1 className="text-xl font-bold">{t('rev.title')}</h1>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => { setFilterIA(f => !f); setIdx(0) }}
             className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors ${filterIA ? 'bg-brand-500/20 text-brand-300 border border-brand-500/40' : 'bg-dark-800 text-dark-400 border border-dark-700 hover:text-dark-200'}`}>
             ⬡ Solo IA {filterIA && `(${displayQueue.length})`}
           </button>
-          <span className="text-sm text-dark-400">{displayQueue.length} pendientes</span>
+          <span className="text-sm text-dark-400">{displayQueue.length} {t('rev.pending')}</span>
         </div>
       </div>
 
@@ -157,37 +176,37 @@ export default function RevisionRapida() {
       <div className="card mb-4 border-violet-500/30 bg-violet-500/5 p-4">
         <div className="mb-2 flex items-center justify-between">
           <span className="flex items-center gap-2 text-sm font-semibold text-violet-300">
-            <BrainCircuit size={16} /> Entrenando tu IA propia
+            <BrainCircuit size={16} /> {t('rev.ai.training')}
           </span>
-          <span className="text-sm font-bold">{total} / {GOAL.toLocaleString('es')} ejemplos</span>
+          <span className="text-sm font-bold">{total} / {GOAL.toLocaleString('es-ES')} {t('rev.ai.examples')}</span>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-dark-800">
           <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500" style={{ width: `${Math.min(100, (total / GOAL) * 100)}%` }} />
         </div>
-        <p className="mt-2 text-xs text-dark-400">Cada ✓ / ✗ que marcas suma un ejemplo. Al llegar a {GOAL.toLocaleString('es')} podrás entrenar tu propia IA.</p>
+        <p className="mt-2 text-xs text-dark-400">{t('rev.ai.training.hint').replace('{goal}', GOAL.toLocaleString('es-ES'))}</p>
       </div>
 
       {queue.length === 0 ? (
         <div className="card flex flex-col items-center gap-2 p-12 text-center text-dark-300">
-          <CheckCircle2 size={32} className="text-emerald-400" /> No hay inspecciones pendientes de revisar {center !== 'Todos' && `en ${center}`}.
+          <CheckCircle2 size={32} className="text-emerald-400" /> {t('rev.no.pending')} {center !== 'Todos' && `${t('rev.in.center')} ${center}`}.
         </div>
       ) : filterIA && displayQueue.length === 0 ? (
         <div className="card flex flex-col items-center gap-3 p-12 text-center text-dark-300">
           <span className="text-3xl">⬡</span>
-          <p className="text-sm">Ninguna inspección pendiente tiene fotos anotadas por IA todavía.</p>
-          <p className="text-xs text-dark-500">Ve a <b className="text-dark-300">IA Peritaje → Fotos anotadas IA</b> y pulsa "Generar anotaciones".</p>
-          <button onClick={() => setFilterIA(false)} className="btn-ghost text-xs px-3 py-1.5">Ver todas las inspecciones</button>
+          <p className="text-sm">{t('rev.no.ai.photos')}</p>
+          <p className="text-xs text-dark-500">{t('rev.go.ia.hint')}</p>
+          <button onClick={() => setFilterIA(false)} className="btn-ghost text-xs px-3 py-1.5">{t('rev.show.all')}</button>
         </div>
       ) : (
         <div className="card overflow-hidden">
           {/* barra superior de la tarjeta */}
           <div className="flex items-center justify-between gap-2 border-b border-dark-800 px-4 py-2.5">
             <span className={`rounded px-2 py-0.5 text-xs font-bold ${SEV_CLS[item.severity] || SEV_CLS.sin_analisis}`}>
-              {(SEV_LABEL[item.severity] || item.severity || '—').toUpperCase()} · {item.new_damages_count || item.total_damages_count || 0} daños
+              {sevLabel(item.severity || 'sin_analisis').toUpperCase()} · {item.new_damages_count || item.total_damages_count || 0} {t('rev.damages')}
             </span>
             <div className="flex items-center gap-2 text-sm text-dark-400">
               <button className="btn-ghost p-1.5 disabled:opacity-30" disabled={idx === 0} onClick={() => go(-1)}><ChevronLeft size={18} /></button>
-              <span>{idx + 1} de {queue.length}</span>
+              <span>{idx + 1} {t('rev.of')} {queue.length}</span>
               <button className="btn-ghost p-1.5 disabled:opacity-30" disabled={idx === queue.length - 1} onClick={() => go(1)}><ChevronRight size={18} /></button>
             </div>
           </div>
@@ -202,13 +221,13 @@ export default function RevisionRapida() {
                     <button
                       onClick={() => setShowAnnotated(false)}
                       className={`px-2.5 py-1.5 transition ${!showAnnotated ? 'bg-dark-700 text-white' : 'bg-dark-900/80 text-dark-400 hover:text-dark-200'}`}
-                    >Original</button>
+                    >{t('rev.original')}</button>
                     <button
                       onClick={() => setShowAnnotated(true)}
                       className={`flex items-center gap-1 px-2.5 py-1.5 transition ${showAnnotated ? 'bg-brand-600 text-white' : 'bg-dark-900/80 text-dark-400 hover:text-dark-200'}`}
                     >
                       <BrainCircuit size={11} />
-                      Análisis IA
+                      {t('rev.ai.analysis')}
                     </button>
                   </div>
                 )}
@@ -223,7 +242,7 @@ export default function RevisionRapida() {
                   }
 
                   {/* Cajas CSS solo en modo original (la foto anotada ya las lleva quemadas) */}
-                  {(!showAnnotated || !item.annotated_photos?.[photoIdx]) && (item.new_damages || []).map((d, i) => {
+                  {(!showAnnotated || !item.annotated_photos?.[photoIdx]) && damages.map((d, i) => {
                     if (!Array.isArray(d.box_2d) || d.box_2d.length !== 4) return null
                     if (d.photo_index && d.photo_index - 1 !== photoIdx) return null
                     const [ymin, xmin, ymax, xmax] = d.box_2d
@@ -247,13 +266,13 @@ export default function RevisionRapida() {
                   )}
                   {drawMode && (
                     <div className="pointer-events-none absolute left-2 top-2 rounded bg-black/70 px-2 py-1 text-[11px] text-emerald-300">
-                      {drawMode.type === 'missed' ? 'Arrastra para marcar el daño que la IA no vio' : 'Arrastra la caja correcta del daño'}
+                      {drawMode.type === 'missed' ? t('rev.drag.mark') : t('rev.drag.fix')}
                     </div>
                   )}
                 </div>
               </>
             ) : (
-              <div className="flex h-64 items-center justify-center text-dark-500">Sin foto</div>
+              <div className="flex h-64 items-center justify-center text-dark-500">{t('rev.no.photo')}</div>
             )}
           </div>
 
@@ -313,17 +332,22 @@ export default function RevisionRapida() {
             )}
 
             {/* Daños nuevos con ✓ / ✗ */}
-            {(item.new_damages || []).length > 0 && (
+            {!fullInsp && item && (
+              <div className="mt-4 flex items-center gap-2 text-xs text-dark-500">
+                <Loader2 size={13} className="animate-spin" /> {t('ui.loading')}
+              </div>
+            )}
+            {damages.length > 0 && (
               <div className="mt-4 space-y-2">
-                <div className="text-xs font-semibold uppercase tracking-wide text-dark-500">Daños detectados — valida cada uno</div>
-                {item.new_damages.map((d, i) => {
+                <div className="text-xs font-semibold uppercase tracking-wide text-dark-500">{t('rev.damages.validate')}</div>
+                {damages.map((d, i) => {
                   const v = verdicts[`${item.id}:${i}`]
                   return (
                     <div key={i} className="flex items-center justify-between gap-3 rounded-lg border border-dark-800 bg-dark-800/40 p-2.5">
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="truncate text-sm font-medium">{d.part || 'Daño'}</span>
-                          {d.severity && <span className={`rounded px-1.5 py-0.5 text-[10px] ${SEV_CLS[d.severity] || SEV_CLS.sin_analisis}`}>{SEV_LABEL[d.severity] || d.severity}</span>}
+                          <span className="truncate text-sm font-medium">{d.part || t('rev.damage')}</span>
+                          {d.severity && <span className={`rounded px-1.5 py-0.5 text-[10px] ${SEV_CLS[d.severity] || SEV_CLS.sin_analisis}`}>{sevLabel(d.severity)}</span>}
                         </div>
                         {d.description && <div className="truncate text-xs text-dark-400">{d.description}</div>}
                       </div>

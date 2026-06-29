@@ -1,8 +1,24 @@
 import { useState } from 'react'
-import { CheckCircle2, ShieldCheck, Loader2, FileSignature, AlertTriangle } from 'lucide-react'
+import { AlertTriangle, Check, CheckCircle2, FileSignature, Loader2, LogOut, Plus, ShieldCheck } from 'lucide-react'
 import { signInspection } from '../../services/api'
 
-const DECLARATION = "Confirmo que el estado del vehículo es como aparece en las fotos. Firmo electrónicamente con mi nombre a la fecha y hora actuales."
+const DECLARATION =
+  'Confirmo que el estado del vehículo es como aparece en las fotos. Firmo electrónicamente con mi nombre a la fecha y hora actuales.'
+
+function SeverityBadge({ severity }) {
+  const s = (severity || '').toLowerCase()
+  const cls =
+    s === 'grave' || s === 'critico'
+      ? 'bg-red-500/15 text-red-400 border-red-500/30'
+      : s === 'moderado'
+        ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+        : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+  return (
+    <span className={`inline-flex items-center rounded-full border px-3 py-0.5 text-xs font-bold uppercase tracking-wider ${cls}`}>
+      {severity || '—'}
+    </span>
+  )
+}
 
 export default function InspectionDone({ result, onNew, onLogout }) {
   const analysis = result?.analysis
@@ -27,97 +43,153 @@ export default function InspectionDone({ result, onNew, onLogout }) {
     setSigning(false)
   }
 
-  // Estado: firma completada
+  /* ── Firmada ── */
   if (signed) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-dark-950 p-4">
-        <div className="card w-full max-w-sm animate-fadeIn p-7 text-center">
-          <ShieldCheck size={48} className="mx-auto mb-3 text-emerald-400" />
-          <h2 className="mb-1 text-xl font-bold text-dark-50">Inspección firmada</h2>
-          <p className="mb-3 text-sm text-dark-400">Peritaje técnico con cadena de custodia.</p>
+      <div className="flex min-h-screen flex-col items-center justify-center bg-dark-950 px-4">
+        <div className="pointer-events-none fixed inset-0">
+          <div className="absolute left-1/2 top-1/3 h-96 w-96 -translate-x-1/2 rounded-full bg-emerald-500/6 blur-3xl" />
+        </div>
+        <div className="relative w-full max-w-sm text-center">
+          {/* Icono animado */}
+          <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400/20 to-emerald-600/20 ring-4 ring-emerald-500/20">
+            <ShieldCheck size={44} className="text-emerald-400" />
+          </div>
+          <h2 className="mb-1 text-2xl font-black text-dark-50">¡Inspección firmada!</h2>
+          <p className="mb-6 text-sm text-dark-400">Peritaje técnico registrado con cadena de custodia digital.</p>
           {hash && (
-            <div className="mb-4 rounded-lg border border-dark-700 bg-dark-900 p-3 text-left">
-              <div className="mb-1 text-[10px] uppercase tracking-wide text-dark-500">Hash de tu firma</div>
-              <code className="break-all text-[11px] text-emerald-300">{hash.slice(0, 32)}…</code>
+            <div className="mb-6 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-left">
+              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-emerald-600">Hash criptográfico de tu firma</p>
+              <code className="break-all text-[11px] leading-relaxed text-emerald-300">{hash.slice(0, 40)}…</code>
             </div>
           )}
-          <div className="flex gap-2">
-            <button onClick={onNew} className="btn-primary flex-1">Nueva inspección</button>
-            <button onClick={onLogout} className="btn-secondary">Salir</button>
+          <div className="flex gap-3">
+            <button onClick={onNew} className="btn-primary flex flex-1 items-center justify-center gap-2 py-3.5">
+              <Plus size={16} /> Nueva inspección
+            </button>
+            <button onClick={onLogout} className="btn-ghost flex items-center justify-center gap-1.5 px-4 py-3.5 text-sm text-dark-400">
+              <LogOut size={15} /> Salir
+            </button>
           </div>
         </div>
       </div>
     )
   }
 
-  // Estado: el conductor decidió saltarse la firma → mostrar pantalla original
+  /* ── Saltada la firma ── */
   if (skipped) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-dark-950 p-4">
-        <div className="card w-full max-w-sm animate-fadeIn p-8 text-center">
-          <CheckCircle2 size={48} className="mx-auto mb-4 text-emerald-400" />
-          <h2 className="mb-2 text-xl font-bold text-dark-50">Inspección enviada</h2>
-          <p className="mb-1 text-sm text-amber-400">⚠ Pendiente de firma. Tu administrador puede firmarla desde el panel.</p>
+      <div className="flex min-h-screen flex-col items-center justify-center bg-dark-950 px-4">
+        <div className="w-full max-w-sm text-center">
+          <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400/20 to-brand-500/20 ring-4 ring-brand-500/20">
+            <CheckCircle2 size={44} className="text-emerald-400" />
+          </div>
+          <h2 className="mb-1 text-2xl font-black text-dark-50">Inspección enviada</h2>
+          <p className="mb-1 text-sm text-dark-400">Tu administrador recibirá la inspección y podrá firmarla desde el panel.</p>
           {analysis && (
-            <div className="card mt-4 space-y-1 p-3 text-left text-sm">
-              <div className="flex justify-between"><span className="text-dark-400">Severidad</span><span className="font-medium">{analysis.severity}</span></div>
-              <div className="flex justify-between"><span className="text-dark-400">Daños</span><span>{analysis.total_damages_count}</span></div>
+            <div className="my-5 overflow-hidden rounded-2xl border border-dark-800 bg-dark-900">
+              <div className="grid grid-cols-2 divide-x divide-dark-800">
+                <div className="p-4 text-center">
+                  <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-dark-500">Severidad</p>
+                  <SeverityBadge severity={analysis.severity} />
+                </div>
+                <div className="p-4 text-center">
+                  <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-dark-500">Daños</p>
+                  <span className="text-xl font-black text-dark-100">{analysis.total_damages_count ?? 0}</span>
+                </div>
+              </div>
             </div>
           )}
-          <div className="mt-6 flex gap-2">
-            <button onClick={onNew} className="btn-primary flex-1">Nueva inspección</button>
-            <button onClick={onLogout} className="btn-secondary">Salir</button>
+          <div className="flex gap-3">
+            <button onClick={onNew} className="btn-primary flex flex-1 items-center justify-center gap-2 py-3.5">
+              <Plus size={16} /> Nueva inspección
+            </button>
+            <button onClick={onLogout} className="btn-ghost flex items-center justify-center gap-1.5 px-4 py-3.5 text-sm text-dark-400">
+              <LogOut size={15} /> Salir
+            </button>
           </div>
         </div>
       </div>
     )
   }
 
-  // Estado: paso de firma (por defecto cuando hay inspId)
+  /* ── Pantalla de firma ── */
   return (
-    <div className="flex min-h-screen items-center justify-center bg-dark-950 p-4">
-      <div className="card w-full max-w-sm animate-fadeIn p-6">
-        <div className="mb-4 flex items-center gap-2">
-          <FileSignature size={22} className="text-brand-400" />
-          <h2 className="text-lg font-bold text-dark-50">Firma tu inspección</h2>
+    <div className="flex min-h-screen flex-col items-center justify-center bg-dark-950 px-4">
+      <div className="pointer-events-none fixed inset-0">
+        <div className="absolute left-1/2 top-1/3 h-80 w-80 -translate-x-1/2 rounded-full bg-brand-500/6 blur-3xl" />
+      </div>
+      <div className="relative w-full max-w-sm">
+
+        {/* Success icon */}
+        <div className="mb-6 text-center">
+          <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-brand-400/20 to-brand-600/20 ring-4 ring-brand-500/20">
+            <CheckCircle2 size={38} className="text-brand-400" />
+          </div>
+          <h2 className="text-xl font-black text-dark-50">Inspección completada</h2>
+          <p className="mt-0.5 text-xs text-dark-500">Firma electrónica para validar el informe</p>
         </div>
 
+        {/* Resumen de análisis */}
         {analysis && (
-          <div className="mb-4 grid grid-cols-2 gap-2 text-sm">
-            <div className="card p-2">
-              <div className="text-[10px] uppercase text-dark-500">Severidad</div>
-              <div className={`font-bold ${analysis.severity === 'grave' || analysis.severity === 'critico' ? 'text-red-400' : analysis.severity === 'moderado' ? 'text-amber-400' : 'text-emerald-400'}`}>{analysis.severity || '—'}</div>
-            </div>
-            <div className="card p-2">
-              <div className="text-[10px] uppercase text-dark-500">Daños</div>
-              <div className="font-bold text-dark-100">{analysis.total_damages_count ?? 0}</div>
+          <div className="mb-4 overflow-hidden rounded-2xl border border-dark-800 bg-dark-900">
+            <div className="grid grid-cols-2 divide-x divide-dark-800">
+              <div className="p-4 text-center">
+                <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-dark-500">Severidad IA</p>
+                <SeverityBadge severity={analysis.severity} />
+              </div>
+              <div className="p-4 text-center">
+                <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-dark-500">Daños</p>
+                <span className="text-xl font-black text-dark-100">{analysis.total_damages_count ?? 0}</span>
+              </div>
             </div>
           </div>
         )}
 
-        <div className="mb-3 rounded-lg border border-dark-800 bg-dark-900 p-3 text-sm text-dark-300">
-          «{DECLARATION}»
+        {/* Card de firma */}
+        <div className="rounded-2xl border border-dark-800 bg-dark-900/80 p-5 backdrop-blur-sm">
+          <div className="mb-3 flex items-center gap-2">
+            <FileSignature size={16} className="text-brand-400" />
+            <span className="text-sm font-bold text-dark-100">Declaración de firma</span>
+          </div>
+
+          <div className="mb-4 rounded-xl border border-dark-800 bg-dark-950/60 p-3 text-xs leading-relaxed text-dark-400">
+            «{DECLARATION}»
+          </div>
+
+          <label className="mb-4 flex cursor-pointer items-start gap-3">
+            <div className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded border-2 transition-all ${
+              accepted ? 'border-brand-500 bg-brand-500' : 'border-dark-600 bg-transparent'
+            }`}>
+              {accepted && <Check size={12} className="text-white" />}
+              <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} className="sr-only" />
+            </div>
+            <span className="text-sm text-dark-300">Acepto la declaración y firmo electrónicamente.</span>
+          </label>
+
+          {err && (
+            <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
+              <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+              <span>{err}</span>
+            </div>
+          )}
+
+          <button
+            onClick={doSign}
+            disabled={!accepted || signing || !inspId}
+            className="btn-primary mb-3 flex w-full items-center justify-center gap-2 py-3.5 text-sm font-bold disabled:opacity-50"
+          >
+            {signing ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
+            {signing ? 'Firmando…' : 'Firmar electrónicamente'}
+          </button>
+
+          <button
+            onClick={() => setSkipped(true)}
+            className="w-full text-center text-xs text-dark-600 transition hover:text-dark-400"
+          >
+            Continuar sin firma — mi administrador la firmará
+          </button>
         </div>
-
-        <label className="mb-4 flex cursor-pointer items-start gap-2 text-sm text-dark-300">
-          <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} className="mt-0.5 h-4 w-4 cursor-pointer" />
-          <span>Acepto y firmo electrónicamente.</span>
-        </label>
-
-        {err && (
-          <div className="mb-3 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-300">
-            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-            <span>{err}</span>
-          </div>
-        )}
-
-        <button onClick={doSign} disabled={!accepted || signing || !inspId} className="btn-primary mb-2 flex w-full items-center justify-center gap-2 disabled:opacity-50">
-          {signing ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
-          {signing ? 'Firmando…' : 'Firmar y enviar'}
-        </button>
-        <button onClick={() => setSkipped(true)} className="w-full text-xs text-dark-500 hover:text-dark-300">
-          Continuar sin firma (mi administrador la firmará)
-        </button>
       </div>
     </div>
   )

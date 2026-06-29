@@ -20,7 +20,9 @@ export default function Terminos() {
       </ul>
 
       <h2>4. Inteligencia Artificial — alcance y límites</h2>
-      <p><strong>Los análisis generados por la IA son una asistencia automatizada y no sustituyen la revisión humana.</strong> {COMPANY.brand} no garantiza que la detección de daños, severidad o coste estimado sea exacta en todos los casos. El cliente es responsable de validar los resultados antes de utilizarlos en disputas con terceros (talleres, conductores, aseguradoras, etc.). Las correcciones humanas pueden usarse, de forma anonimizada, para mejorar el modelo.</p>
+      <p><strong>Los análisis generados por la IA son una asistencia automatizada y no sustituyen la revisión humana.</strong> {COMPANY.brand} no garantiza que la detección de daños, severidad o coste estimado sea exacta en todos los casos. El cliente es responsable de validar los resultados antes de utilizarlos en disputas con terceros (talleres, conductores, aseguradoras, etc.).</p>
+      <p>El Servicio se encuentra en desarrollo activo y mejora de forma continua. Las correcciones y validaciones realizadas por los usuarios (de forma anonimizada y agregada) contribuyen a calibrar y perfeccionar el sistema con el tiempo. {COMPANY.brand} no garantiza un nivel de precisión específico de la IA, pero se compromete a mejorar progresivamente la calidad del análisis.</p>
+      <p><strong>Ventaja para clientes fundadores:</strong> los clientes que contraten el Servicio durante su fase inicial recibirán acceso prioritario a nuevas funciones y mejoras de la IA antes que el resto de usuarios.</p>
 
       <h2>5. Suscripción, prueba y pagos</h2>
       <ul>

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  AlertTriangle, Camera, Check, CheckCircle2, ChevronLeft, ChevronRight,
-  Gauge, Loader2, LogOut, Send, Truck,
+  AlertTriangle, Camera, Check, ChevronLeft, ChevronRight,
+  Gauge, Loader2, LogOut, Send, Truck, ArrowRight, Shield,
 } from 'lucide-react'
 import {
   getAssignedVehicle, readOdometer, updateMileage, uploadInspection, validatePhoto,
@@ -10,41 +10,70 @@ import { compressImage } from '../../lib/compressImage'
 import { useToast } from '../../lib/toast'
 
 const PHOTO_SLOTS = [
-  { id: 'frontal', label: 'Frontal', required: true },
-  { id: 'trasera', label: 'Trasera', required: true },
-  { id: 'lateral_izq', label: 'Lateral izquierdo', required: true },
-  { id: 'lateral_der', label: 'Lateral derecho', required: true },
+  { id: 'frontal',      label: 'Frontal',            icon: '⬆', required: true },
+  { id: 'trasera',      label: 'Trasera',             icon: '⬇', required: true },
+  { id: 'lateral_izq',  label: 'Lateral izquierdo',  icon: '◀', required: true },
+  { id: 'lateral_der',  label: 'Lateral derecho',     icon: '▶', required: true },
 ]
 
 const CHECKLIST = [
-  { id: 'neumaticos', label: 'Neumáticos' },
-  { id: 'luces', label: 'Luces' },
-  { id: 'chapa', label: 'Chapa/Carrocería' },
-  { id: 'puertas', label: 'Puertas' },
-  { id: 'espejos', label: 'Espejos' },
-  { id: 'interior', label: 'Interior' },
-  { id: 'combustible', label: 'Combustible' },
-  { id: 'limpieza', label: 'Limpieza' },
+  { id: 'neumaticos', label: 'Neumáticos',      emoji: '🛞' },
+  { id: 'luces',      label: 'Luces',           emoji: '💡' },
+  { id: 'chapa',      label: 'Chapa/Carrocería', emoji: '🔧' },
+  { id: 'puertas',    label: 'Puertas',         emoji: '🚪' },
+  { id: 'espejos',    label: 'Espejos',         emoji: '🪞' },
+  { id: 'interior',   label: 'Interior',        emoji: '🪑' },
+  { id: 'combustible',label: 'Combustible',     emoji: '⛽' },
+  { id: 'limpieza',   label: 'Limpieza',        emoji: '🧹' },
 ]
 
 const CHECK_STATES = [
-  { id: 'ok', label: '✓ OK', cls: 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400' },
-  { id: 'regular', label: '~ Regular', cls: 'bg-amber-500/20 border-amber-500/50 text-amber-400' },
-  { id: 'malo', label: '✗ Malo', cls: 'bg-red-500/20 border-red-500/50 text-red-400' },
-  { id: 'danado', label: '⚠ Daño', cls: 'bg-red-500/20 border-red-500/50 text-red-400' },
+  { id: 'ok',     label: 'OK',     cls: 'bg-emerald-500/20 border-emerald-500/60 text-emerald-400' },
+  { id: 'regular',label: 'Regular',cls: 'bg-amber-500/20 border-amber-500/60 text-amber-400' },
+  { id: 'malo',   label: 'Malo',   cls: 'bg-red-500/20 border-red-500/60 text-red-400' },
+  { id: 'danado', label: '⚠ Daño', cls: 'bg-red-500/20 border-red-500/60 text-red-400' },
 ]
 
-const STEPS = ['Vehículo', 'Fotos', 'Checklist', 'Enviar']
+const STEPS = [
+  { label: 'Vehículo', short: '1' },
+  { label: 'Fotos',    short: '2' },
+  { label: 'Checklist',short: '3' },
+  { label: 'Enviar',   short: '4' },
+]
+
+function StepBar({ step }) {
+  return (
+    <div className="flex items-center gap-0 px-4 py-4">
+      {STEPS.map((s, i) => (
+        <div key={s.label} className="flex flex-1 items-center">
+          <div className="flex flex-col items-center gap-1">
+            <div className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-all ${
+              i < step  ? 'bg-brand-500 text-white' :
+              i === step ? 'bg-brand-500 text-white ring-4 ring-brand-500/20' :
+                           'bg-dark-800 text-dark-500'
+            }`}>
+              {i < step ? <Check size={13} /> : s.short}
+            </div>
+            <span className={`text-[9px] font-medium ${i === step ? 'text-brand-400' : 'text-dark-600'}`}>{s.label}</span>
+          </div>
+          {i < STEPS.length - 1 && (
+            <div className={`mx-1 mb-4 h-px flex-1 transition-all ${i < step ? 'bg-brand-500' : 'bg-dark-800'}`} />
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
 
 export default function InspectionFlow({ driver, vehicles, onComplete, onLogout }) {
   const toast = useToast()
   const [step, setStep] = useState(0)
   const [vehicleId, setVehicleId] = useState('')
-  const [photos, setPhotos] = useState({})          // slotId → Blob
-  const [photoErrors, setPhotoErrors] = useState({}) // slotId → motivo de rechazo
-  const [validating, setValidating] = useState(null) // slotId en validación
-  const [odoPhoto, setOdoPhoto] = useState(null)     // Blob del cuentakilómetros
-  const [odoKm, setOdoKm] = useState(null)           // km leídos por la IA
+  const [photos, setPhotos] = useState({})
+  const [photoErrors, setPhotoErrors] = useState({})
+  const [validating, setValidating] = useState(null)
+  const [odoPhoto, setOdoPhoto] = useState(null)
+  const [odoKm, setOdoKm] = useState(null)
   const [odoError, setOdoError] = useState('')
   const [odoBusy, setOdoBusy] = useState(false)
   const [checklist, setChecklist] = useState({})
@@ -56,76 +85,71 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
   const odoRef = useRef(null)
   const checklistRefs = useRef({})
 
+  // Cache de blob URLs para evitar memory leaks: un URL por blob, revocado al desmontar
+  const blobUrlCache = useRef(new Map())
+  const getBlobUrl = (blob) => {
+    if (!blob) return null
+    if (!blobUrlCache.current.has(blob)) {
+      blobUrlCache.current.set(blob, URL.createObjectURL(blob))
+    }
+    return blobUrlCache.current.get(blob)
+  }
+  useEffect(() => {
+    return () => { blobUrlCache.current.forEach((url) => URL.revokeObjectURL(url)) }
+  }, [])
+
   useEffect(() => {
     getAssignedVehicle()
       .then((r) => r.data?.assigned && setAssigned(r.data))
       .catch(() => {})
   }, [])
 
-  /* ── Captura + validación IA de las fotos de zona ── */
   const handlePhoto = async (slotId, e) => {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
     const blob = await compressImage(file, 1200, 0.7)
-
     if (!vehicleId) {
       setPhotos((p) => ({ ...p, [slotId]: blob }))
-      toast.success(`Foto ${slotId} capturada`)
       return
     }
     setValidating(slotId)
     try {
       const r = await validatePhoto(vehicleId, slotId, blob)
       if (r.data?.valid === false) {
-        const reason = r.data.reason || 'Foto no válida. Repítela.'
-        setPhotoErrors((errs) => ({ ...errs, [slotId]: reason }))
-        toast.error(`❌ ${reason}`)
+        setPhotoErrors((errs) => ({ ...errs, [slotId]: r.data.reason || 'Foto no válida. Repítela.' }))
+        toast.error(`❌ ${r.data.reason || 'Foto rechazada'}`)
         setValidating(null)
         return
       }
-      setPhotoErrors((errs) => {
-        const next = { ...errs }
-        delete next[slotId]
-        return next
-      })
+      setPhotoErrors((errs) => { const next = { ...errs }; delete next[slotId]; return next })
       setPhotos((p) => ({ ...p, [slotId]: blob }))
-      toast.success(r.data?.checked ? '✅ Foto verificada y aceptada' : `Foto ${slotId} capturada`)
+      toast.success(r.data?.checked ? '✅ Foto verificada' : '📷 Foto capturada')
     } catch {
-      // Fail-open: si la validación no responde, la foto se acepta
       setPhotos((p) => ({ ...p, [slotId]: blob }))
-      toast.success(`Foto ${slotId} capturada`)
     }
     setValidating(null)
   }
 
-  /* ── Cuentakilómetros: foto obligatoria, la IA lee los km ── */
   const handleOdoPhoto = async (e) => {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
     const blob = await compressImage(file, 1280, 0.8)
-    setOdoBusy(true)
-    setOdoError('')
+    setOdoBusy(true); setOdoError('')
     try {
       const r = await readOdometer(vehicleId, blob)
       if (r.data?.success && r.data.km) {
-        setOdoPhoto(blob)
-        setOdoKm(r.data.km)
-        if (r.data.warning) {
-          setOdoError(`⚠️ ${r.data.warning}`)
-        }
-        toast.success(`✅ Km leídos: ${r.data.km.toLocaleString()}`)
+        setOdoPhoto(blob); setOdoKm(r.data.km)
+        if (r.data.warning) setOdoError(`⚠️ ${r.data.warning}`)
+        toast.success(`✅ ${r.data.km.toLocaleString()} km detectados`)
       } else {
-        setOdoError('No se pudo leer el número de kilómetros. Acércate más al cuadro, enfoca bien y repite la foto.')
-        toast.error('❌ Cuentakilómetros no legible. Repite la foto.')
+        setOdoError('No se pudo leer el cuentakilómetros. Acércate más, enfoca bien y vuelve a intentar.')
+        toast.error('❌ Cuentakilómetros no legible')
       }
     } catch {
-      // Fail-open: si la IA no responde, aceptamos la foto sin km
-      setOdoPhoto(blob)
-      setOdoKm(null)
-      setOdoError('Lectura no disponible ahora mismo — la foto se ha guardado igualmente.')
-      toast.warning('Foto guardada (lectura de km no disponible)')
+      setOdoPhoto(blob); setOdoKm(null)
+      setOdoError('Foto guardada — lectura automática no disponible ahora mismo.')
     }
     setOdoBusy(false)
   }
@@ -136,12 +160,9 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
     if (!file) return
     const blob = await compressImage(file, 1000, 0.65)
     setChecklistPhotos((p) => ({ ...p, [itemId]: blob }))
-    toast.success(`Foto de ${CHECKLIST.find((c) => c.id === itemId)?.label} añadida`)
   }
 
-  /* ── Envío ── */
-  const allRequiredPhotos =
-    PHOTO_SLOTS.filter((s) => s.required).every((s) => photos[s.id]) && !!odoPhoto
+  const allRequiredPhotos = PHOTO_SLOTS.filter((s) => s.required).every((s) => photos[s.id]) && !!odoPhoto
   const missingDamagePhotos = Object.entries(checklist).filter(
     ([id, st]) => (st === 'malo' || st === 'danado') && !checklistPhotos[id],
   )
@@ -149,365 +170,356 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
   const submit = async () => {
     if (!vehicleId) return toast.error('Selecciona un vehículo')
     if (!allRequiredPhotos) return toast.error('Faltan fotos obligatorias')
-    if (missingDamagePhotos.length > 0)
-      return toast.error('Faltan fotos del checklist para ítems con daños')
+    if (missingDamagePhotos.length > 0) return toast.error('Faltan fotos de los daños marcados')
     setSending(true)
     try {
       const fd = new FormData()
       fd.append('vehicle_id', vehicleId)
       fd.append('driver_id', driver.id)
-      fd.append(
-        'notes',
-        JSON.stringify({
-          checklist,
-          notes,
-          driver_name: driver.name,
-          center: driver.center,
-          odometer_km: odoKm,
-          checklist_photo_items: Object.keys(checklistPhotos).map(
-            (id) => CHECKLIST.find((c) => c.id === id)?.label || id,
-          ),
-        }),
-      )
-      // Orden FIJO de zonas — el backend y la IA dependen de él
+      fd.append('notes', JSON.stringify({
+        checklist, notes, driver_name: driver.name, center: driver.center,
+        odometer_km: odoKm,
+        checklist_photo_items: Object.keys(checklistPhotos).map((id) => CHECKLIST.find((c) => c.id === id)?.label || id),
+      }))
       PHOTO_SLOTS.forEach((slot, i) => {
         if (photos[slot.id]) fd.append('files', photos[slot.id], `angle_${i}_${slot.id}.jpg`)
       })
       if (odoPhoto) fd.append('files', odoPhoto, 'odometro.jpg')
       Object.entries(checklistPhotos).forEach(([itemId, blob]) =>
-        fd.append('files', blob, `checklist_${itemId}.jpg`),
-      )
+        fd.append('files', blob, `checklist_${itemId}.jpg`))
       const r = await uploadInspection(fd)
-      // Km leídos por la IA → al historial del vehículo (no bloquea)
       if (odoKm > 0) updateMileage(vehicleId, odoKm).catch(() => {})
-
-      if (r.data.analysis_status === 'ok' || r.data.analysis_status === 'pending') {
-        toast.success('Inspección enviada correctamente. Las fotos se han guardado.')
-      } else {
-        toast.error(`⚠️ ${r.data.message}`)
-      }
       onComplete(r.data)
     } catch (err) {
       const detail = err?.response?.data?.detail
-      toast.error(`Error enviando: ${typeof detail === 'string' ? detail : err.message}`)
+      toast.error(`Error: ${typeof detail === 'string' ? detail : err.message}`)
     }
     setSending(false)
   }
 
-  /* ── Selección de vehículo (asignada primero) ── */
   const otherVehicles = vehicles.filter((v) => !assigned?.vehicle || v.id !== assigned.vehicle.id)
   const selectedVehicle = vehicles.find((v) => v.id === vehicleId) || assigned?.vehicle
+  const photosOk = Object.keys(photos).length
+  const today = new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })
 
   return (
-    <div className="min-h-screen bg-dark-950">
+    <div className="min-h-[100dvh] bg-dark-950">
       {/* Header */}
       <header
-        className="sticky top-0 z-40 flex items-center gap-3 border-b border-dark-800 bg-dark-950/90 px-4 pb-3 backdrop-blur-md"
+        className="sticky top-0 z-40 border-b border-dark-800/60 bg-dark-950/95 backdrop-blur-md"
         style={{ paddingTop: 'max(12px, env(safe-area-inset-top, 12px))' }}
       >
-        {step > 0 && (
-          <button onClick={() => setStep((s) => s - 1)} className="btn-ghost p-1">
-            <ChevronLeft size={18} />
+        <div className="flex items-center gap-3 px-4 pb-3">
+          {step > 0 && (
+            <button onClick={() => setStep((s) => s - 1)} className="btn-ghost p-1.5">
+              <ChevronLeft size={18} />
+            </button>
+          )}
+          <div className="flex-1">
+            {driver.photo_url && (
+              <div className="mb-0.5 flex items-center gap-2">
+                <img src={driver.photo_url} className="h-6 w-6 rounded-full border border-brand-500/40 object-cover" alt="" />
+                <span className="text-xs font-medium text-dark-300">{driver.name}</span>
+              </div>
+            )}
+            {!driver.photo_url && (
+              <p className="text-xs font-semibold text-dark-300">{driver.name}</p>
+            )}
+            <p className="text-[10px] capitalize text-dark-600">{today} · {driver.center}</p>
+          </div>
+          <button onClick={onLogout} className="btn-ghost p-1.5 text-dark-500" title="Cerrar sesión">
+            <LogOut size={15} />
           </button>
-        )}
-        {driver.photo_url && (
-          <img src={driver.photo_url} className="h-9 w-9 shrink-0 rounded-full border-2 border-brand-500/50 object-cover" alt="" />
-        )}
-        <div className="flex-1">
-          <h2 className="text-sm font-semibold text-dark-100">👋 Hola, {(driver.name || '').split(' ')[0]}</h2>
-          <p className="text-xs text-dark-500">Inspección diaria · {driver.center}</p>
         </div>
-        <button onClick={onLogout} className="btn-ghost p-1.5 text-dark-400">
-          <LogOut size={16} />
-        </button>
+        <StepBar step={step} />
       </header>
 
-      {/* Progreso */}
-      <div className="mx-auto flex max-w-2xl gap-1.5 px-4 py-3">
-        {STEPS.map((label, i) => (
-          <div key={label} className="flex-1">
-            <div className={`h-1 rounded-full transition-all ${i <= step ? 'bg-brand-500' : 'bg-dark-800'}`} />
-            <p className="mt-1 text-center text-[10px] text-dark-500">{label}</p>
-          </div>
-        ))}
-      </div>
+      <div className="mx-auto max-w-lg px-4 pt-2" style={{ paddingBottom: 'max(7rem, calc(5rem + env(safe-area-inset-bottom)))' }}>
 
-      <div className="mx-auto max-w-2xl px-4 pb-24">
-        {/* ── Paso 0: vehículo ── */}
+        {/* ── PASO 0: Selección de vehículo ── */}
         {step === 0 && (
-          <div className="animate-fadeIn space-y-3">
-            <h3 className="mt-2 font-semibold text-dark-200">
-              {assigned?.vehicle ? 'Tu asignación de hoy' : 'Selecciona tu vehículo'}
-            </h3>
-
-            <div className="flex items-start gap-3 rounded-xl border border-emerald-500/25 p-4"
-                 style={{ background: 'linear-gradient(135deg, rgba(34,197,94,.10), rgba(249,115,22,.08))' }}>
-              <span className="text-[22px] leading-none">🎁</span>
-              <div>
-                <p className="text-sm font-semibold text-emerald-400">Próximamente: incentivos para conductores</p>
-                <p className="mt-1 text-xs text-dark-400">
-                  Premiaremos cada mes a quienes mantengan su furgoneta sin golpes, limpia y con las
-                  inspecciones al día. ¡Tu cuidado cuenta desde hoy!
-                </p>
-              </div>
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-bold text-dark-50">Inspección diaria</h2>
+              <p className="text-xs text-dark-500">Selecciona tu furgoneta asignada para hoy</p>
             </div>
 
             {assigned?.vehicle && (
-              <button
-                onClick={() => { setVehicleId(assigned.vehicle.id); setStep(1) }}
-                className="flex w-full items-center gap-4 rounded-xl border-2 p-4 text-left transition-all"
-                style={{
-                  borderColor: 'rgba(249,115,22,.65)',
-                  background: 'rgba(249,115,22,.10)',
-                  boxShadow: '0 0 18px rgba(249,115,22,.18)',
-                }}
-              >
-                <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-brand-500/20">
-                  <Truck size={20} className="text-brand-400" />
-                </div>
-                <div className="flex-1">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-brand-400">
-                    🚐 Tu furgoneta de hoy
-                  </p>
-                  <p className="font-mono text-base font-semibold text-dark-100">
-                    {assigned.vehicle.license_plate}
-                  </p>
-                  <p className="text-xs text-dark-400">
-                    {assigned.vehicle.brand} {assigned.vehicle.model}
-                    {assigned.already_inspected ? ' · ✅ ya inspeccionada hoy' : ''}
-                  </p>
-                </div>
-                <ChevronRight size={18} className="text-brand-400" />
-              </button>
-            )}
-
-            {assigned?.vehicle && otherVehicles.length > 0 && (
-              <p className="pt-2 text-xs text-dark-500">Otras furgonetas:</p>
-            )}
-
-            {otherVehicles.map((v) => (
-              <button
-                key={v.id}
-                onClick={() => { setVehicleId(v.id); setStep(1) }}
-                className={`card-hover flex w-full items-center gap-4 p-3 text-left ${vehicleId === v.id ? 'border-brand-500' : ''}`}
-              >
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-500/10">
-                  <Truck size={16} className="text-brand-400" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-mono text-sm font-medium text-dark-100">{v.license_plate}</p>
-                  <p className="text-xs text-dark-400">{v.brand} {v.model}</p>
-                </div>
-                <ChevronRight size={16} className="text-dark-500" />
-              </button>
-            ))}
-
-            {vehicles.length === 0 && !assigned?.vehicle && (
-              <div className="py-10 text-center text-sm text-dark-500">
-                No hay vehículos asignados a tu centro
+              <div>
+                <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-brand-500">Tu asignación de hoy</p>
+                <button
+                  onClick={() => { setVehicleId(assigned.vehicle.id); setStep(1) }}
+                  className="group flex w-full items-center gap-4 rounded-2xl border-2 border-brand-500/40 bg-gradient-to-r from-brand-500/10 to-transparent p-4 text-left transition-all hover:border-brand-500/70"
+                >
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand-500/20">
+                    <Truck size={22} className="text-brand-400" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-mono text-xl font-black tracking-widest text-dark-50">
+                      {assigned.vehicle.license_plate}
+                    </p>
+                    <p className="text-xs text-dark-400">
+                      {[assigned.vehicle.brand, assigned.vehicle.model].filter(Boolean).join(' ')}
+                    </p>
+                    {assigned.already_inspected && (
+                      <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400">
+                        <Check size={10} /> Ya inspeccionada hoy
+                      </span>
+                    )}
+                  </div>
+                  <ArrowRight size={18} className="text-brand-400 opacity-60 transition group-hover:translate-x-0.5 group-hover:opacity-100" />
+                </button>
               </div>
             )}
+
+            {otherVehicles.length > 0 && (
+              <div>
+                {assigned?.vehicle && <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-dark-600">Otras furgonetas</p>}
+                <div className="space-y-2">
+                  {otherVehicles.map((v) => (
+                    <button
+                      key={v.id}
+                      onClick={() => { setVehicleId(v.id); setStep(1) }}
+                      className="card-hover flex w-full items-center gap-3 p-3 text-left"
+                    >
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-dark-800">
+                        <Truck size={16} className="text-dark-400" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-mono text-sm font-bold text-dark-100">{v.license_plate}</p>
+                        <p className="text-xs text-dark-500">{[v.brand, v.model].filter(Boolean).join(' ')}</p>
+                      </div>
+                      <ChevronRight size={15} className="text-dark-600" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {vehicles.length === 0 && !assigned?.vehicle && (
+              <div className="flex flex-col items-center gap-3 rounded-2xl border border-dark-800 bg-dark-900/50 py-16 text-center">
+                <Truck size={32} className="text-dark-700" />
+                <p className="text-sm text-dark-500">No hay vehículos disponibles en tu centro</p>
+                <p className="text-xs text-dark-600">Contacta con tu responsable de flota</p>
+              </div>
+            )}
+
+            {/* Incentivos */}
+            <div className="flex items-start gap-3 rounded-2xl border border-amber-500/15 bg-amber-500/5 p-4">
+              <span className="text-lg">🏆</span>
+              <div>
+                <p className="text-xs font-bold text-amber-400">Próximamente: incentivos para conductores</p>
+                <p className="mt-0.5 text-[11px] text-dark-500">
+                  Cada mes premiaremos a quienes mantengan su furgoneta en perfecto estado y con inspecciones al día.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* ── Paso 1: fotos (4 zonas + cuentakilómetros) ── */}
+        {/* ── PASO 1: Fotografías ── */}
         {step === 1 && (
-          <div className="animate-fadeIn space-y-4">
-            <h3 className="mt-2 font-semibold text-dark-200">Fotografías obligatorias</h3>
-            <p className="text-xs text-dark-400">
-              Captura cada ángulo del vehículo y el cuentakilómetros. La IA verifica cada foto.
-            </p>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          <div className="space-y-5">
+            <div>
+              <div className="mb-0.5 flex items-center gap-2">
+                <span className="font-mono text-sm font-bold text-brand-400">{selectedVehicle?.license_plate}</span>
+                {photosOk > 0 && <span className="text-[10px] text-dark-500">{photosOk + (odoPhoto ? 1 : 0)} / 5 fotos</span>}
+              </div>
+              <h2 className="text-lg font-bold text-dark-50">Fotografías obligatorias</h2>
+              <p className="text-xs text-dark-500">La IA verifica que cada foto sea correcta y nítida</p>
+            </div>
+
+            {/* 4 ángulos + cuentakilómetros */}
+            <div className="grid grid-cols-2 gap-3">
               {PHOTO_SLOTS.map((slot) => (
                 <div key={slot.id}>
                   <input
                     ref={(el) => (fileRefs.current[slot.id] = el)}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
+                    type="file" accept="image/*" capture="environment"
                     onChange={(e) => handlePhoto(slot.id, e)}
                     className="hidden"
                   />
                   <button
                     onClick={() => fileRefs.current[slot.id]?.click()}
                     disabled={validating === slot.id}
-                    className={`flex aspect-[4/3] max-h-36 w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed transition-all ${
-                      photos[slot.id]
-                        ? 'border-emerald-500/50 bg-emerald-500/5'
-                        : photoErrors[slot.id]
-                          ? 'border-red-500/60 bg-red-500/5'
-                          : 'border-dark-700 hover:border-brand-500/50'
+                    className={`relative flex aspect-[4/3] w-full flex-col items-center justify-center gap-1.5 overflow-hidden rounded-2xl border-2 border-dashed transition-all ${
+                      photos[slot.id]     ? 'border-emerald-500/50 bg-emerald-500/5' :
+                      photoErrors[slot.id]? 'border-red-500/50 bg-red-500/5' :
+                                            'border-dark-700 hover:border-brand-500/40 hover:bg-brand-500/5'
                     }`}
                   >
                     {validating === slot.id ? (
                       <>
-                        <Loader2 size={20} className="animate-spin text-brand-400" />
-                        <span className="text-[11px] text-brand-400">Comprobando…</span>
+                        <Loader2 size={22} className="animate-spin text-brand-400" />
+                        <span className="text-[10px] font-semibold text-brand-400">Verificando IA…</span>
                       </>
                     ) : photos[slot.id] ? (
-                      <div className="relative h-full w-full">
-                        <img
-                          src={URL.createObjectURL(photos[slot.id])}
-                          className="h-full w-full rounded-lg object-cover"
-                          alt={slot.label}
-                        />
-                        <div className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500">
-                          <Check size={12} className="text-white" />
+                      <>
+                        <img src={getBlobUrl(photos[slot.id])} className="absolute inset-0 h-full w-full object-cover" alt={slot.label} />
+                        <div className="absolute inset-0 bg-black/20" />
+                        <div className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500 shadow-lg">
+                          <Check size={13} className="text-white" />
                         </div>
-                      </div>
+                        <span className="absolute bottom-2 left-0 right-0 text-center text-[10px] font-bold text-white drop-shadow">{slot.label}</span>
+                      </>
                     ) : (
                       <>
-                        <Camera size={20} className="text-dark-500" />
-                        <span className="text-[11px] text-dark-400">{slot.label}</span>
-                        <span className="text-[9px] text-brand-400">Obligatorio</span>
+                        <Camera size={22} className={photoErrors[slot.id] ? 'text-red-400' : 'text-dark-500'} />
+                        <span className="text-[11px] font-semibold text-dark-400">{slot.label}</span>
+                        <span className="text-[9px] font-bold uppercase tracking-wider text-brand-500">Obligatorio</span>
                       </>
                     )}
                   </button>
                   {photoErrors[slot.id] && (
-                    <div className="mt-1.5 rounded-lg border border-red-500/40 bg-red-500/10 px-2 py-1.5 text-[11px] leading-snug text-red-300">
+                    <p className="mt-1.5 rounded-xl border border-red-500/30 bg-red-500/10 px-2.5 py-1.5 text-[10px] leading-snug text-red-300">
                       ❌ {photoErrors[slot.id]}
-                    </div>
+                    </p>
                   )}
                 </div>
               ))}
 
-              {/* Casilla del cuentakilómetros */}
-              <div>
-                <input
-                  ref={odoRef}
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={handleOdoPhoto}
-                  className="hidden"
-                />
+              {/* Cuentakilómetros */}
+              <div className="col-span-2">
+                <input ref={odoRef} type="file" accept="image/*" capture="environment" onChange={handleOdoPhoto} className="hidden" />
                 <button
                   onClick={() => odoRef.current?.click()}
                   disabled={odoBusy}
-                  className={`flex aspect-[4/3] max-h-36 w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed transition-all ${
-                    odoPhoto
-                      ? 'border-emerald-500/50 bg-emerald-500/5'
-                      : odoError
-                        ? 'border-red-500/60 bg-red-500/5'
-                        : 'border-brand-500/40 bg-brand-500/5 hover:border-brand-500/70'
+                  className={`relative flex h-28 w-full flex-col items-center justify-center gap-1.5 overflow-hidden rounded-2xl border-2 border-dashed transition-all ${
+                    odoPhoto   ? 'border-emerald-500/50 bg-emerald-500/5' :
+                    odoError   ? 'border-amber-500/50 bg-amber-500/5' :
+                                 'border-brand-500/30 bg-brand-500/5 hover:border-brand-500/60'
                   }`}
                 >
                   {odoBusy ? (
                     <>
-                      <Loader2 size={20} className="animate-spin text-brand-400" />
-                      <span className="text-[11px] text-brand-400">Leyendo km…</span>
+                      <Loader2 size={22} className="animate-spin text-brand-400" />
+                      <span className="text-[11px] font-semibold text-brand-400">La IA está leyendo los km…</span>
                     </>
                   ) : odoPhoto ? (
-                    <div className="relative h-full w-full">
-                      <img
-                        src={URL.createObjectURL(odoPhoto)}
-                        className="h-full w-full rounded-lg object-cover"
-                        alt="Cuentakilómetros"
-                      />
-                      <div className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500">
-                        <Check size={12} className="text-white" />
+                    <>
+                      <img src={getBlobUrl(odoPhoto)} className="absolute inset-0 h-full w-full object-cover" alt="Cuentakilómetros" />
+                      <div className="absolute inset-0 bg-black/40" />
+                      <div className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500">
+                        <Check size={13} className="text-white" />
                       </div>
                       {odoKm && (
-                        <div className="absolute bottom-1 left-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-center text-[11px] font-bold text-emerald-300">
+                        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-dark-900/90 px-4 py-1 text-xs font-black text-emerald-300 ring-1 ring-emerald-500/30">
                           {odoKm.toLocaleString()} km
                         </div>
                       )}
-                    </div>
+                    </>
                   ) : (
                     <>
-                      <Gauge size={20} className="text-brand-400" />
-                      <span className="text-[11px] text-dark-300">Cuentakilómetros</span>
-                      <span className="text-[9px] text-brand-400">Obligatorio · la IA lee los km</span>
+                      <Gauge size={24} className="text-brand-400" />
+                      <span className="text-xs font-semibold text-dark-300">Foto del cuentakilómetros</span>
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-brand-500">Obligatorio · la IA lee los km automáticamente</span>
                     </>
                   )}
                 </button>
                 {odoError && (
-                  <div className="mt-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] leading-snug text-amber-300">
+                  <p className="mt-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[10px] leading-snug text-amber-300">
                     {odoError}
-                  </div>
+                  </p>
                 )}
               </div>
             </div>
 
             {allRequiredPhotos ? (
-              <button onClick={() => setStep(2)} className="btn-primary flex w-full items-center justify-center gap-2 py-3.5">
-                Continuar <ChevronRight size={16} />
+              <button onClick={() => setStep(2)} className="btn-primary flex w-full items-center justify-center gap-2 py-3.5 text-sm">
+                Continuar al checklist <ChevronRight size={16} />
               </button>
             ) : (
-              <p className="text-center text-xs text-amber-400">
-                Captura las 4 fotos del vehículo y la del cuentakilómetros para continuar
-              </p>
+              <div className="rounded-xl border border-dark-800 bg-dark-900/50 p-3 text-center text-xs text-dark-500">
+                Necesitas las 4 fotos del vehículo + la del cuentakilómetros para continuar
+              </div>
             )}
           </div>
         )}
 
-        {/* ── Paso 2: checklist (foto opcional en TODOS los ítems) ── */}
+        {/* ── PASO 2: Checklist ── */}
         {step === 2 && (
-          <div className="animate-fadeIn space-y-4">
-            <h3 className="mt-2 font-semibold text-dark-200">Checklist del vehículo</h3>
-            <p className="text-xs text-dark-400">
-              Puedes añadir una foto a cualquier punto (limpieza, ruedas…) — el admin la verá en la inspección.
-            </p>
-            {CHECKLIST.map((item) => (
-              <div key={item.id} className="card space-y-2 p-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-dark-200">{item.label}</span>
-                  <input
-                    ref={(el) => (checklistRefs.current[item.id] = el)}
-                    type="file"
-                    accept="image/*"
-                    capture="environment"
-                    onChange={(e) => handleChecklistPhoto(item.id, e)}
-                    className="hidden"
-                  />
-                  <button
-                    onClick={() => checklistRefs.current[item.id]?.click()}
-                    className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] transition-colors ${
-                      checklistPhotos[item.id]
-                        ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-400'
-                        : 'border-dark-700 text-dark-400 hover:border-brand-500/50 hover:text-brand-400'
-                    }`}
-                  >
-                    <Camera size={11} />
-                    {checklistPhotos[item.id] ? 'Foto ✓' : 'Foto'}
-                  </button>
-                </div>
-                <div className="flex gap-2">
-                  {CHECK_STATES.map((st) => (
-                    <button
-                      key={st.id}
-                      onClick={() => setChecklist((c) => ({ ...c, [item.id]: st.id }))}
-                      className={`flex-1 rounded-lg border py-2 text-xs transition-all ${
-                        checklist[item.id] === st.id
-                          ? st.cls
-                          : 'border-dark-700 text-dark-400 hover:border-dark-500'
-                      }`}
-                    >
-                      {st.label}
-                    </button>
-                  ))}
-                </div>
-                {(checklist[item.id] === 'malo' || checklist[item.id] === 'danado') &&
-                  !checklistPhotos[item.id] && (
-                    <p className="flex items-center gap-1 rounded-lg border border-red-800/30 bg-red-500/5 p-2.5 text-xs text-red-400">
-                      <AlertTriangle size={12} /> Foto obligatoria del daño — usa el botón “Foto” de arriba
-                    </p>
-                  )}
-              </div>
-            ))}
+          <div className="space-y-4">
             <div>
-              <label className="label">Observaciones</label>
+              <h2 className="text-lg font-bold text-dark-50">Estado del vehículo</h2>
+              <p className="text-xs text-dark-500">Revisa cada punto. Si hay daño, saca una foto obligatoriamente.</p>
+            </div>
+
+            <div className="space-y-2">
+              {CHECKLIST.map((item) => {
+                const state = checklist[item.id]
+                const hasPhoto = !!checklistPhotos[item.id]
+                const needsPhoto = (state === 'malo' || state === 'danado') && !hasPhoto
+                return (
+                  <div key={item.id} className={`rounded-2xl border p-4 transition-all ${
+                    needsPhoto ? 'border-red-500/40 bg-red-500/5' :
+                    state === 'ok' ? 'border-emerald-500/20 bg-dark-900' :
+                    state ? 'border-amber-500/20 bg-dark-900' :
+                            'border-dark-800 bg-dark-900'
+                  }`}>
+                    <div className="mb-3 flex items-center justify-between">
+                      <span className="text-sm font-semibold text-dark-100">
+                        {item.emoji} {item.label}
+                      </span>
+                      <div>
+                        <input
+                          ref={(el) => (checklistRefs.current[item.id] = el)}
+                          type="file" accept="image/*" capture="environment"
+                          onChange={(e) => handleChecklistPhoto(item.id, e)}
+                          className="hidden"
+                        />
+                        <button
+                          onClick={() => checklistRefs.current[item.id]?.click()}
+                          className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                            hasPhoto
+                              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+                              : needsPhoto
+                                ? 'border-red-500/60 bg-red-500/15 text-red-400'
+                                : 'border-dark-700 text-dark-400 hover:border-brand-500/40 hover:text-brand-400'
+                          }`}
+                        >
+                          <Camera size={11} />
+                          {hasPhoto ? 'Foto ✓' : needsPhoto ? 'Foto ← OBLIGATORIA' : 'Foto'}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {CHECK_STATES.map((st) => (
+                        <button
+                          key={st.id}
+                          onClick={() => setChecklist((c) => ({ ...c, [item.id]: st.id }))}
+                          className={`rounded-xl border py-3 text-[11px] font-semibold transition-all ${
+                            state === st.id ? st.cls : 'border-dark-700 text-dark-500 hover:border-dark-500 hover:text-dark-300'
+                          }`}
+                        >
+                          {st.label}
+                        </button>
+                      ))}
+                    </div>
+                    {needsPhoto && (
+                      <p className="mt-2.5 flex items-center gap-1.5 rounded-xl border border-red-500/25 bg-red-500/8 p-2 text-[11px] text-red-300">
+                        <AlertTriangle size={12} className="shrink-0" />
+                        Foto obligatoria cuando hay daño — pulsa el botón "Foto" para hacer una
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            <div>
+              <label className="label">Observaciones adicionales</label>
               <textarea
-                className="input min-h-[60px]"
+                className="input min-h-[80px] resize-none"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Notas adicionales…"
+                placeholder="Escribe aquí cualquier comentario relevante sobre el estado del vehículo…"
               />
             </div>
+
             <button
               onClick={() => setStep(3)}
               disabled={missingDamagePhotos.length > 0}
-              className="btn-primary flex w-full items-center justify-center gap-2 py-3.5"
+              className="btn-primary flex w-full items-center justify-center gap-2 py-3.5 text-sm disabled:opacity-60"
             >
               {missingDamagePhotos.length > 0
                 ? `Faltan ${missingDamagePhotos.length} foto(s) de daños`
@@ -516,87 +528,90 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
           </div>
         )}
 
-        {/* ── Paso 3: resumen + enviar ── */}
+        {/* ── PASO 3: Resumen + Enviar ── */}
         {step === 3 && (
-          <div className="animate-fadeIn space-y-4">
-            <h3 className="mt-2 font-semibold text-dark-200">Resumen de la inspección</h3>
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-bold text-dark-50">Confirmar y enviar</h2>
+              <p className="text-xs text-dark-500">Revisa el resumen antes de enviar la inspección</p>
+            </div>
 
-            <div className="card space-y-2 p-4 text-sm">
-              <div className="flex justify-between">
-                <span className="text-dark-400">Conductor</span>
-                <span className="text-dark-100">{driver.name}</span>
+            {/* Resumen */}
+            <div className="overflow-hidden rounded-2xl border border-dark-800 bg-dark-900">
+              <div className="border-b border-dark-800 bg-gradient-to-r from-dark-800/50 to-transparent px-4 py-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-base font-black text-dark-50">{selectedVehicle?.license_plate}</span>
+                  <span className="badge-orange">{driver.center}</span>
+                </div>
+                <p className="text-xs text-dark-500">{driver.name}</p>
               </div>
-              <div className="flex justify-between">
-                <span className="text-dark-400">Vehículo</span>
-                <span className="font-mono text-dark-100">{selectedVehicle?.license_plate}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-dark-400">Centro</span>
-                <span className="badge-orange">{driver.center}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-dark-400">Fotos</span>
-                <span className="text-dark-100">
-                  {Object.keys(photos).length + (odoPhoto ? 1 : 0) + Object.keys(checklistPhotos).length}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-dark-400">Kilómetros (leídos por IA)</span>
-                <span className="font-semibold text-emerald-400">
-                  {odoKm ? `${odoKm.toLocaleString()} km` : '— no legibles'}
-                </span>
+              <div className="divide-y divide-dark-800/60 px-4">
+                <div className="flex justify-between py-2.5 text-sm">
+                  <span className="text-dark-400">Fotos enviadas</span>
+                  <span className="font-semibold text-dark-100">
+                    {Object.keys(photos).length + (odoPhoto ? 1 : 0) + Object.keys(checklistPhotos).length}
+                  </span>
+                </div>
+                <div className="flex justify-between py-2.5 text-sm">
+                  <span className="text-dark-400">Kilómetros</span>
+                  <span className={`font-bold ${odoKm ? 'text-emerald-400' : 'text-dark-500'}`}>
+                    {odoKm ? `${odoKm.toLocaleString()} km ✓` : '— no detectados'}
+                  </span>
+                </div>
+                <div className="flex justify-between py-2.5 text-sm">
+                  <span className="text-dark-400">Ítems revisados</span>
+                  <span className="font-semibold text-dark-100">{Object.keys(checklist).length} / {CHECKLIST.length}</span>
+                </div>
+                {Object.keys(checklist).length > 0 && (
+                  <div className="py-2.5">
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.entries(checklist).map(([id, state]) => (
+                        <span key={id} className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          state === 'ok'  ? 'bg-emerald-500/15 text-emerald-400' :
+                          state === 'regular' ? 'bg-amber-500/15 text-amber-400' :
+                                                'bg-red-500/15 text-red-400'
+                        }`}>
+                          {CHECKLIST.find(c => c.id === id)?.emoji} {CHECKLIST.find(c => c.id === id)?.label}
+                          {checklistPhotos[id] ? ' 📷' : ''}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
-            {Object.keys(checklist).length > 0 && (
-              <div className="card p-4">
-                <h4 className="mb-2 text-xs font-medium text-dark-400">Checklist</h4>
-                {Object.entries(checklist).map(([id, state]) => (
-                  <div key={id} className="flex justify-between py-1 text-sm">
-                    <span className="text-dark-300">
-                      {CHECKLIST.find((c) => c.id === id)?.label}
-                      {checklistPhotos[id] ? ' 📷' : ''}
-                    </span>
-                    <span className={
-                      state === 'ok' ? 'text-emerald-400'
-                        : state === 'regular' ? 'text-amber-400' : 'text-red-400'
-                    }>
-                      {state.toUpperCase()}
-                    </span>
-                  </div>
+            {/* Miniaturas */}
+            <div className="grid grid-cols-5 gap-1.5">
+              {[...Object.entries(photos), odoPhoto ? ['odo', odoPhoto] : null, ...Object.entries(checklistPhotos)]
+                .filter(Boolean)
+                .map(([id, blob]) => (
+                  <img
+                    key={id}
+                    src={getBlobUrl(blob)}
+                    className={`aspect-square rounded-xl object-cover ${id === 'odo' ? 'ring-2 ring-brand-500/50' : ''}`}
+                    alt={id}
+                  />
                 ))}
-              </div>
-            )}
-
-            <div className="grid grid-cols-5 gap-2">
-              {Object.entries(photos).map(([id, blob]) => (
-                <img
-                  key={id}
-                  src={URL.createObjectURL(blob)}
-                  className="aspect-square rounded-lg object-cover"
-                  alt={id}
-                />
-              ))}
-              {odoPhoto && (
-                <img
-                  src={URL.createObjectURL(odoPhoto)}
-                  className="aspect-square rounded-lg border border-brand-500/40 object-cover"
-                  alt="Cuentakilómetros"
-                />
-              )}
             </div>
 
             <button
               onClick={submit}
               disabled={sending}
-              className="btn-primary flex w-full items-center justify-center gap-2 py-4 text-base"
+              className="btn-primary flex w-full items-center justify-center gap-2 py-4 text-base font-bold"
             >
               {sending ? (
-                <><Loader2 size={18} className="animate-spin" /> Enviando análisis IA…</>
+                <><Loader2 size={18} className="animate-spin" /> Analizando con IA…</>
               ) : (
-                <><Send size={18} /> Enviar inspección</>
+                <><Shield size={18} /> Enviar inspección</>
               )}
             </button>
+
+            {sending && (
+              <p className="text-center text-xs text-dark-500">
+                La IA está analizando las fotos. Puede tardar unos segundos…
+              </p>
+            )}
           </div>
         )}
       </div>

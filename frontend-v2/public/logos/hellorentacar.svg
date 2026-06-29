@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 80">
+  <rect width="240" height="80" fill="#fff"/>
+  <rect width="240" height="80" fill="#00B140"/>
+  <text x="120" y="34" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="300" font-size="18" fill="#fff" letter-spacing="1">hello</text>
+  <text x="120" y="62" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="22" fill="#fff" letter-spacing="1">RENTACAR</text>
+</svg>

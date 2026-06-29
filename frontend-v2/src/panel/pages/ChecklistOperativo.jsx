@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
+import { useT } from '../../i18n'
 import {
-  Loader2, CheckSquare, Square, Sun, Moon, Pencil, Plus, Trash2, Save, X, Calendar,
+  Loader2, CheckSquare, Sun, Moon, Pencil, Plus, Trash2, Save, X, Calendar,
 } from 'lucide-react'
 import { getChecklist, upsertChecklist, toggleChecklistItem } from '../api'
 
@@ -9,6 +10,7 @@ const isoToday = () => new Date().toISOString().slice(0, 10)
 
 export default function ChecklistOperativo() {
   const { center, centers } = useOutletContext()
+  const { t } = useT()
   const [date, setDate] = useState(isoToday())
   const [shift, setShift] = useState('manana')
   const [data, setData] = useState(null)
@@ -37,7 +39,6 @@ export default function ChecklistOperativo() {
   const pct = Math.round((completed / total) * 100)
 
   async function toggle(item) {
-    // optimistic
     const next = { ...data, [shift]: { ...current, items: items.map((i) => i.id === item.id ? { ...i, done: !i.done } : i) } }
     setData(next)
     try {
@@ -53,7 +54,7 @@ export default function ChecklistOperativo() {
   }
   function addRow() { setDraft((d) => [...d, { id: crypto.randomUUID(), text: '', done: false }]) }
   function rmRow(id) { setDraft((d) => d.filter((x) => x.id !== id)) }
-  function setText(id, text) { setDraft((d) => d.map((x) => x.id === id ? { ...x, text } : x)) }
+  function setItemText(id, text) { setDraft((d) => d.map((x) => x.id === id ? { ...x, text } : x)) }
 
   async function saveEdit() {
     setSaving(true); setErr('')
@@ -70,10 +71,15 @@ export default function ChecklistOperativo() {
     setSaving(false)
   }
 
+  const SHIFTS = [
+    { k: 'manana', label: t('chk.shift.morning'), icon: Sun },
+    { k: 'tarde',  label: t('chk.shift.afternoon'), icon: Moon },
+  ]
+
   if (noCenter) {
     return (
       <div className="mx-auto max-w-3xl">
-        <h1 className="mb-3 text-xl font-bold">Checklist operativo</h1>
+        <h1 className="mb-3 text-xl font-bold">{t('chk.title')}</h1>
         <div className="card flex flex-col items-center gap-3 p-10 text-center">
           <CheckSquare size={28} className="text-brand-400" />
           <p className="text-dark-200">Elige un centro arriba para ver su checklist.</p>
@@ -87,8 +93,8 @@ export default function ChecklistOperativo() {
     <div className="mx-auto max-w-3xl">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold">Checklist operativo · {center}</h1>
-          <p className="text-sm text-dark-400">Tareas críticas del turno · marcar al hacerlas</p>
+          <h1 className="text-xl font-bold">{t('chk.title')} · {center}</h1>
+          <p className="text-sm text-dark-400">{t('chk.critical.tasks')}</p>
         </div>
         <div className="flex items-center gap-2">
           <Calendar size={15} className="text-dark-500" />
@@ -98,15 +104,12 @@ export default function ChecklistOperativo() {
 
       {/* Tabs turno */}
       <div className="mb-4 flex gap-2">
-        {[
-          { k: 'manana', label: 'Turno Mañana', icon: Sun },
-          { k: 'tarde', label: 'Turno Tarde', icon: Moon },
-        ].map((t) => (
-          <button key={t.k} onClick={() => { setShift(t.k); setEditing(false) }}
+        {SHIFTS.map((s) => (
+          <button key={s.k} onClick={() => { setShift(s.k); setEditing(false) }}
             className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-sm font-semibold transition-colors ${
-              shift === t.k ? 'border-brand-500 bg-brand-500/15 text-brand-200' : 'border-dark-800 bg-dark-900 text-dark-300 hover:bg-dark-800'
+              shift === s.k ? 'border-brand-500 bg-brand-500/15 text-brand-200' : 'border-dark-800 bg-dark-900 text-dark-300 hover:bg-dark-800'
             }`}>
-            <t.icon size={15} /> {t.label}
+            <s.icon size={15} /> {s.label}
           </button>
         ))}
       </div>
@@ -115,15 +118,15 @@ export default function ChecklistOperativo() {
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-baseline gap-2">
           <span className="text-3xl font-extrabold text-brand-400">{pct}%</span>
-          <span className="text-xs uppercase tracking-wide text-dark-500">completado ({completed}/{total})</span>
+          <span className="text-xs uppercase tracking-wide text-dark-500">{t('chk.completed')} ({completed}/{total})</span>
         </div>
         {!editing ? (
-          <button onClick={startEdit} className="btn-secondary flex items-center gap-1.5 text-sm"><Pencil size={14} /> Editar</button>
+          <button onClick={startEdit} className="btn-secondary flex items-center gap-1.5 text-sm"><Pencil size={14} /> {t('ui.edit')}</button>
         ) : (
           <div className="flex gap-2">
-            <button onClick={() => setEditing(false)} className="btn-ghost flex items-center gap-1.5 text-sm"><X size={14} /> Cancelar</button>
+            <button onClick={() => setEditing(false)} className="btn-ghost flex items-center gap-1.5 text-sm"><X size={14} /> {t('ui.cancel')}</button>
             <button onClick={saveEdit} disabled={saving} className="btn-primary flex items-center gap-1.5 text-sm disabled:opacity-50">
-              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Guardar
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {t('ui.save')}
             </button>
           </div>
         )}
@@ -136,23 +139,23 @@ export default function ChecklistOperativo() {
       {err && <div className="mb-3 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-300">{err}</div>}
 
       {loading ? (
-        <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> Cargando…</div>
+        <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> {t('ui.loading')}</div>
       ) : editing ? (
         <div className="card divide-y divide-dark-800">
           {draft.map((d) => (
             <div key={d.id} className="flex items-center gap-2 px-3 py-2">
-              <input className="input flex-1 text-sm" value={d.text} placeholder="Tarea…" onChange={(e) => setText(d.id, e.target.value)} />
+              <input className="input flex-1 text-sm" value={d.text} placeholder="Tarea…" onChange={(e) => setItemText(d.id, e.target.value)} />
               <button onClick={() => rmRow(d.id)} className="btn-ghost p-1.5 text-red-400" title="Quitar"><Trash2 size={14} /></button>
             </div>
           ))}
           <div className="px-3 py-2">
-            <button onClick={addRow} className="btn-ghost flex w-full items-center justify-center gap-1.5 text-sm text-dark-300 hover:text-brand-300"><Plus size={14} /> Añadir tarea</button>
+            <button onClick={addRow} className="btn-ghost flex w-full items-center justify-center gap-1.5 text-sm text-dark-300 hover:text-brand-300"><Plus size={14} /> {t('chk.add.task')}</button>
           </div>
         </div>
       ) : (
         <div className="card divide-y divide-dark-800">
           {items.length === 0 ? (
-            <div className="px-4 py-8 text-center text-sm text-dark-500">Sin tareas. Pulsa <b>Editar</b> para añadir.</div>
+            <div className="px-4 py-8 text-center text-sm text-dark-500">{t('chk.no.tasks')}</div>
           ) : items.map((it) => (
             <button key={it.id} onClick={() => toggle(it)} className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-dark-800/40">
               <div className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded ${it.done ? 'bg-brand-500' : 'border border-dark-600 bg-transparent'}`}>
@@ -161,7 +164,9 @@ export default function ChecklistOperativo() {
               <div className="min-w-0 flex-1">
                 <div className={`text-sm ${it.done ? 'text-dark-500 line-through' : 'text-dark-100'}`}>{it.text}</div>
                 {it.done && it.done_by && (
-                  <div className="mt-0.5 text-[11px] text-dark-500">Completado a las {(it.done_at || '').slice(11, 16)} por {it.done_by}</div>
+                  <div className="mt-0.5 text-[11px] text-dark-500">
+                    {t('chk.done.at').replace('{time}', (it.done_at || '').slice(11, 16)).replace('{name}', it.done_by)}
+                  </div>
                 )}
               </div>
             </button>

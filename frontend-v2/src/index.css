@@ -7,6 +7,20 @@
     @apply bg-dark-950 text-dark-50 font-sans antialiased;
     font-size: 14px;
     letter-spacing: -0.01em;
+    /* Prevent iOS bounce scroll on body */
+    overscroll-behavior: none;
+  }
+
+  /* Prevent iOS Safari auto-zoom on input focus (requires font-size >= 16px) */
+  @media (max-width: 768px) {
+    input, select, textarea {
+      font-size: 16px !important;
+    }
+  }
+
+  /* Remove tap highlight on mobile */
+  * {
+    -webkit-tap-highlight-color: transparent;
   }
 }
 

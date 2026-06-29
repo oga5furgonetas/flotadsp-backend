@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 80">
+  <rect width="240" height="80" fill="#fff"/>
+  <ellipse cx="34" cy="40" rx="22" ry="22" fill="#009A44"/>
+  <ellipse cx="34" cy="40" rx="13" ry="13" fill="#fff"/>
+  <text x="130" y="52" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="28" fill="#009A44" letter-spacing="-0.5">europcar</text>
+</svg>

@@ -37,6 +37,8 @@ import PanelChecklistOp from './panel/pages/ChecklistOperativo'
 import PanelChat from './panel/pages/Chat'
 import PanelPlantilla from './panel/pages/PlantillaGenerador'
 import PanelBandeja from './panel/pages/Bandeja'
+import PanelIncidencias from './panel/pages/Incidencias'
+import PanelContactos from './panel/pages/Contactos'
 import Privacidad from './legal/Privacidad'
 import Terminos from './legal/Terminos'
 import CookiesPage from './legal/Cookies'
@@ -106,6 +108,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="perfil" element={<PanelPerfil />} />
               <Route path="portal-conductor" element={<PanelPortalConductor />} />
               <Route path="bandeja" element={<PanelBandeja />} />
+              <Route path="incidencias" element={<PanelIncidencias />} />
+              <Route path="contactos" element={<PanelContactos />} />
             </Route>
 
             <Route path="*" element={<Landing />} />

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useT } from '../../i18n'
 import { Loader2, BrainCircuit, RefreshCw, CheckCircle2, AlertTriangle, Clock, Image, Sparkles, X, ChevronLeft, ChevronRight, ThumbsUp, ThumbsDown, Pencil } from 'lucide-react'
 import { getHealth, getInspections, reanalyzeFailed, reanalyzeInspection, submitAiFeedback } from '../api'
 import BboxEditor from '../components/BboxEditor'
@@ -35,6 +36,7 @@ function PhotoModal({ insp, onClose }) {
 }
 
 export default function IAPeritaje() {
+  const { t } = useT()
   const [health, setHealth] = useState(null)
   const [insps, setInsps] = useState(null)
   const [busy, setBusy] = useState('')
@@ -123,7 +125,7 @@ export default function IAPeritaje() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold"><BrainCircuit size={22} className="text-brand-400" /> IA Peritaje</h1>
+      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold"><BrainCircuit size={22} className="text-brand-400" /> {t('ia.title')}</h1>
       {msg && (
         <div className={`mb-4 rounded-lg px-3 py-2.5 text-sm ${msg.ok ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-red-500/10 text-red-300'}`}>
           {msg.t}
@@ -132,13 +134,13 @@ export default function IAPeritaje() {
 
       {/* Motor IA */}
       <div className="card mb-5 p-5">
-        <div className="mb-3 text-sm font-semibold text-dark-200">Motor de IA</div>
+        <div className="mb-3 text-sm font-semibold text-dark-200">{t('ia.engine')}</div>
         {!health ? <Loader2 className="animate-spin text-dark-400" size={16} /> : (
           <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-            <div><div className="text-dark-500">Análisis</div><div className="font-medium">{health.gemini_model || '—'}</div></div>
-            <div><div className="text-dark-500">Modo</div><div className="font-medium">{health.gemini_mode || '—'}</div></div>
-            <div><div className="text-dark-500">Detección</div><div className="font-medium">{health.detection_mode || '—'}</div></div>
-            <div><div className="text-dark-500">Servicio IA</div><div className={`font-medium ${health.ai_service_configured ? 'text-emerald-400' : 'text-amber-400'}`}>{health.ai_service_configured ? 'activo' : 'fallback'}</div></div>
+            <div><div className="text-dark-500">{t('ia.analysis')}</div><div className="font-medium">{health.gemini_model || '—'}</div></div>
+            <div><div className="text-dark-500">{t('ia.mode')}</div><div className="font-medium">{health.gemini_mode || '—'}</div></div>
+            <div><div className="text-dark-500">{t('ia.detection')}</div><div className="font-medium">{health.detection_mode || '—'}</div></div>
+            <div><div className="text-dark-500">{t('ia.service')}</div><div className={`font-medium ${health.ai_service_configured ? 'text-emerald-400' : 'text-amber-400'}`}>{health.ai_service_configured ? t('ia.active') : t('ia.fallback')}</div></div>
           </div>
         )}
       </div>
@@ -147,25 +149,25 @@ export default function IAPeritaje() {
       <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="card p-4">
           <div className="flex items-center gap-2"><CheckCircle2 size={15} className="text-emerald-400" /><span className="text-2xl font-extrabold">{insps ? ok : '—'}</span></div>
-          <div className="text-xs text-dark-400 mt-1">Analizadas OK</div>
+          <div className="text-xs text-dark-400 mt-1">{t('ia.stat.ok')}</div>
         </div>
         <div className="card p-4">
           <div className="flex items-center gap-2"><Clock size={15} className="text-amber-400" /><span className="text-2xl font-extrabold">{insps ? pending : '—'}</span></div>
-          <div className="text-xs text-dark-400 mt-1">Pendientes</div>
+          <div className="text-xs text-dark-400 mt-1">{t('ia.stat.pending')}</div>
         </div>
         <div className="card p-4">
           <div className="flex items-center gap-2"><AlertTriangle size={15} className="text-red-400" /><span className="text-2xl font-extrabold">{insps ? failed.length : '—'}</span></div>
-          <div className="text-xs text-dark-400 mt-1">Fallidas</div>
+          <div className="text-xs text-dark-400 mt-1">{t('ia.stat.failed')}</div>
         </div>
         <div className="card p-4">
           <div className="flex items-center gap-2"><Image size={15} className="text-brand-400" /><span className="text-2xl font-extrabold">{insps ? withAnn.length : '—'}</span></div>
-          <div className="text-xs text-dark-400 mt-1">Fotos anotadas</div>
+          <div className="text-xs text-dark-400 mt-1">{t('ia.stat.annotated')}</div>
         </div>
       </div>
 
       {/* Tabs */}
       <div className="flex gap-0 border-b border-dark-800 mb-5">
-        {[['estado','Estado & Fallidas'],['anotaciones','⬡ Fotos anotadas IA'],['revision','✅ Revisión daños']].map(([id, lbl]) => (
+        {[['estado', t('ia.tab.status')],['anotaciones', t('ia.tab.annotated')],['revision', t('ia.tab.review')]].map(([id, lbl]) => (
           <button key={id} onClick={() => setTab(id)}
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${tab===id ? 'border-brand-400 text-brand-300' : 'border-transparent text-dark-500 hover:text-dark-300'}`}>
             {lbl}
@@ -177,13 +179,13 @@ export default function IAPeritaje() {
       {tab === 'estado' && (
         <div>
           <button onClick={doReanalyzeFailed} disabled={busy === 'all' || (insps && failed.length === 0)} className="btn-primary mb-4 flex items-center gap-2 disabled:opacity-50">
-            {busy === 'all' ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} Reanalizar todas las fallidas ({failed.length})
+            {busy === 'all' ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} {t('ia.reanalyze.failed')} ({failed.length})
           </button>
 
           {!insps
-            ? <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> Cargando…</div>
+            ? <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> {t('ui.loading')}</div>
             : failedList.length === 0
-              ? <div className="card p-8 text-center text-dark-400">No hay inspecciones fallidas. La IA está al día ✓</div>
+              ? <div className="card p-8 text-center text-dark-400">{t('ia.no.failed')}</div>
               : (
                 <div className="card divide-y divide-dark-800">
                   {failedList.map((i) => (
@@ -191,7 +193,7 @@ export default function IAPeritaje() {
                       <span className="text-dark-300">{(i.created_at || '').slice(0, 16).replace('T', ' ')}</span>
                       <span className="rounded bg-red-500/15 px-2 py-0.5 text-[11px] text-red-300">{i.analysis_status}</span>
                       <button onClick={() => doReanalyze(i.id)} disabled={busy === i.id} className="btn-ghost px-2 py-1 text-xs">
-                        {busy === i.id ? <Loader2 size={12} className="animate-spin" /> : 'Reanalizar'}
+                        {busy === i.id ? <Loader2 size={12} className="animate-spin" /> : t('ia.reanalyze')}
                       </button>
                     </div>
                   ))}
@@ -242,7 +244,7 @@ export default function IAPeritaje() {
 
           {/* Lista de inspecciones con/sin anotación */}
           {!insps
-            ? <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> Cargando…</div>
+            ? <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> {t('ui.loading')}</div>
             : (
               <div className="card divide-y divide-dark-800">
                 {all.filter(i => i.analysis_status === 'ok')
@@ -259,7 +261,7 @@ export default function IAPeritaje() {
                       )}
                       <button onClick={() => doReanalyze(i.id)} disabled={!!busy}
                           className="text-[10px] font-semibold text-dark-500 hover:text-dark-200 transition-colors disabled:opacity-40 ml-1">
-                          {busy === i.id ? <Loader2 size={11} className="animate-spin" /> : 'Reanalizar →'}
+                          {busy === i.id ? <Loader2 size={11} className="animate-spin" /> : t('ia.reanalyze')}
                       </button>
                     </div>
                   )
@@ -287,7 +289,7 @@ export default function IAPeritaje() {
             />
           </div>
           {!insps
-            ? <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> Cargando…</div>
+            ? <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> {t('ui.loading')}</div>
             : (
               <div className="space-y-3">
                 {all

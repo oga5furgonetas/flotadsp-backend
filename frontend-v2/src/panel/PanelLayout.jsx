@@ -4,46 +4,60 @@ import {
   LayoutDashboard, Trophy, Users, CalendarClock, BarChart3, Activity,
   CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
-  ChevronRight, ExternalLink, FileSpreadsheet,
+  ChevronRight, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee } from './auth'
 import TrialBanner from './TrialBanner'
+import { useT, LANGS } from '../i18n'
+import { usePlan } from '../lib/usePlan'
 
 const keyOf = (to) => (to === '/panel' ? 'dashboard' : to.split('/').pop())
 
-// Menú real (3 pestañas: operacional, equipo, furgonetas)
-const TABS = {
+// Qué feature del plan requiere cada ruta (undefined = siempre visible)
+const ROUTE_FEATURE = {
+  scorecard: 'scorecard',
+  chat: 'chat',
+  asignacion: 'assignments',
+  plantilla: 'assignments',
+  'ia-peritaje': 'forensics',
+  importaciones: 'export',
+}
+
+// Menú real (3 pestañas: operacional, equipo, furgonetas) — labels traducidos dinámicamente
+const TABS_DEF = {
   operacional: {
-    label: 'Operacional',
+    labelKey: 'nav.tab.ops',
     items: [
-      { to: '/panel', label: 'Dashboard', icon: LayoutDashboard, end: true },
-      { to: '/panel/scorecard', label: 'Scorecard', icon: Trophy },
-      { to: '/panel/conductores', label: 'Conductores', icon: Users },
-      { to: '/panel/actividad', label: 'Actividad', icon: Activity },
+      { to: '/panel', labelKey: 'nav.dashboard', icon: LayoutDashboard, end: true },
+      { to: '/panel/scorecard', labelKey: 'nav.scorecard', icon: Trophy },
+      { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
+      { to: '/panel/actividad', labelKey: 'nav.activity', icon: Activity },
+      { to: '/panel/contactos', labelKey: 'nav.contacts', icon: BookUser },
     ],
   },
   equipo: {
-    label: 'Equipo',
+    labelKey: 'nav.tab.team',
     items: [
-      { to: '/panel/asignacion', label: 'Asignación diaria', icon: ClipboardCheck },
-      { to: '/panel/checklist-operativo', label: 'Checklist turno', icon: CheckCircle2 },
-      { to: '/panel/chat', label: 'Chat interno', icon: BellRing },
-      { to: '/panel/plantilla', label: 'Plantilla turno', icon: FileSpreadsheet },
+      { to: '/panel/asignacion', labelKey: 'nav.assign', icon: ClipboardCheck },
+      { to: '/panel/checklist-operativo', labelKey: 'nav.checklist', icon: CheckCircle2 },
+      { to: '/panel/chat', labelKey: 'nav.chat', icon: BellRing },
+      { to: '/panel/plantilla', labelKey: 'nav.template', icon: FileSpreadsheet },
     ],
   },
   furgonetas: {
-    label: 'Furgonetas',
+    labelKey: 'nav.tab.vans',
     items: [
-      { to: '/panel/revision', label: 'Revisión rápida', icon: CheckCircle2 },
-      { to: '/panel/inspecciones', label: 'Inspecciones', icon: ClipboardList },
-      { to: '/panel/vehiculos', label: 'Vehículos', icon: Truck },
-      { to: '/panel/talleres', label: 'Talleres', icon: Wrench },
-      { to: '/panel/avisos-itv', label: 'Avisos ITV', icon: BellRing },
-      { to: '/panel/renting', label: 'Renting', icon: KeyRound },
-      { to: '/panel/casas-alquiler', label: 'Casas de alquiler', icon: Building2 },
-      { to: '/panel/ia-peritaje', label: 'IA Peritaje', icon: BrainCircuit },
-      { to: '/panel/importaciones', label: 'Importaciones', icon: FileUp },
-      { to: '/panel/configuracion', label: 'Configuración', icon: Settings },
+      { to: '/panel/revision', labelKey: 'nav.revision', icon: CheckCircle2 },
+      { to: '/panel/inspecciones', labelKey: 'nav.inspections', icon: ClipboardList },
+      { to: '/panel/vehiculos', labelKey: 'nav.vehicles', icon: Truck },
+      { to: '/panel/talleres', labelKey: 'nav.workshops', icon: Wrench },
+      { to: '/panel/incidencias', labelKey: 'nav.incidents', icon: AlertTriangle },
+      { to: '/panel/avisos-itv', labelKey: 'nav.itvalerts', icon: BellRing },
+      { to: '/panel/renting', labelKey: 'nav.renting', icon: KeyRound },
+      { to: '/panel/casas-alquiler', labelKey: 'nav.rental', icon: Building2 },
+      { to: '/panel/ia-peritaje', labelKey: 'nav.ai', icon: BrainCircuit },
+      { to: '/panel/importaciones', labelKey: 'nav.imports', icon: FileUp },
+      { to: '/panel/configuracion', labelKey: 'nav.settings', icon: Settings },
     ],
   },
 }
@@ -52,8 +66,18 @@ export default function PanelLayout() {
   const nav = useNavigate()
   const loc = useLocation()
   const admin = getAdmin()
+  const { lang, setLang, t } = useT()
+  const { limits } = usePlan()
   const [tab, setTab] = useState(() => localStorage.getItem('panel_tab') || 'furgonetas')
   const [center, setCenter] = useState(() => localStorage.getItem('panel_center') || 'Todos')
+
+  // Traduce los tabs dinámicamente según el idioma activo
+  const TABS = Object.fromEntries(
+    Object.entries(TABS_DEF).map(([k, v]) => [k, {
+      label: t(v.labelKey),
+      items: v.items.map(it => ({ ...it, label: t(it.labelKey) })),
+    }])
+  )
 
   // Centros DINÁMICOS de este DSP (multi-tenant: nunca hardcodeado)
   // Centros visibles: si allowed_centers es una lista, filtra; si no, todos los de la org.
@@ -93,7 +117,10 @@ export default function PanelLayout() {
   const EQUIPO_KEYS = new Set(['asignacion', 'checklist-operativo', 'chat', 'plantilla'])
   const items = TABS[tab].items.filter((it) => {
     const k = keyOf(it.to)
-    return EQUIPO_KEYS.has(k) || canSee(k)
+    if (!EQUIPO_KEYS.has(k) && !canSee(k)) return false
+    const feat = ROUTE_FEATURE[k]
+    if (feat && limits && limits[feat] === false) return false
+    return true
   })
   const showAdmin = sa
 
@@ -164,7 +191,7 @@ export default function PanelLayout() {
                 }`
               }
             >
-              <Shield size={16} /> Negocio (super-admin)
+              <Shield size={16} /> {t('nav.business')}
             </NavLink>
           )}
           {(showAdmin || cm) && (
@@ -176,7 +203,7 @@ export default function PanelLayout() {
                 }`
               }
             >
-              <Users size={16} /> Usuarios
+              <Users size={16} /> {t('nav.users')}
             </NavLink>
           )}
           {showAdmin && (
@@ -188,26 +215,35 @@ export default function PanelLayout() {
                 }`
               }
             >
-              <Inbox size={16} /> Bandeja
+              <Inbox size={16} /> {t('nav.inbox')}
             </NavLink>
           )}
         </nav>
 
-        {/* Portal Conductor — página interna del panel (multi-tenant, sin exponer token) */}
+        {/* Badge Fundador */}
+        <div className="mx-3 mb-2 rounded-lg border border-amber-500/20 bg-amber-500/8 px-3 py-2">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs">⭐</span>
+            <span className="text-xs font-bold text-amber-400">{t('nav.founder')}</span>
+          </div>
+          <p className="mt-0.5 text-[10px] leading-snug text-amber-600">{t('nav.founder.sub')}</p>
+        </div>
+
+        {/* Portal Conductor */}
         <div className="border-t border-dark-800 p-3">
           <NavLink
             to="/panel/portal-conductor"
             className={({ isActive }) => `flex items-center justify-between rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${isActive ? 'border-brand-500 bg-brand-500/20 text-brand-200' : 'border-brand-500/40 bg-brand-500/10 text-brand-300 hover:bg-brand-500/20'}`}
           >
-            <span className="flex items-center gap-2"><Shield size={15} /> Portal Conductor</span>
+            <span className="flex items-center gap-2"><Shield size={15} /> {t('nav.portal')}</span>
             <ChevronRight size={14} />
           </NavLink>
           <div className="mt-2 flex items-center justify-between">
             <NavLink to="/panel/perfil" className="min-w-0 rounded-lg px-1 hover:bg-dark-800">
               <div className="truncate text-sm font-medium text-dark-100">{admin?.name || 'Admin'}</div>
-              <div className="text-[11px] text-dark-500">{showAdmin ? 'Super-admin · ver perfil' : 'Administrador · ver perfil'}</div>
+              <div className="text-[11px] text-dark-500">{showAdmin ? `Super-admin · ${t('nav.profile')}` : `${t('nav.admin')} · ${t('nav.profile')}`}</div>
             </NavLink>
-            <button onClick={doLogout} className="btn-ghost p-2" title="Salir"><LogOut size={16} /></button>
+            <button onClick={doLogout} className="btn-ghost p-2" title={t('nav.logout')}><LogOut size={16} /></button>
           </div>
         </div>
       </aside>
@@ -216,8 +252,8 @@ export default function PanelLayout() {
       <div className="flex min-w-0 flex-1 flex-col">
         {impersonating && (
           <div className="flex items-center justify-between gap-2 bg-amber-500/15 px-4 py-2 text-sm text-amber-200">
-            <span>Estás viendo como <b>{admin?.name}</b> (cliente).</span>
-            <button onClick={backToSuper} className="rounded-md bg-amber-500/30 px-3 py-1 text-xs font-semibold hover:bg-amber-500/40">← Volver a super-admin</button>
+            <span>{t('nav.impersonate')} <b>{admin?.name}</b> ({t('nav.client')}).</span>
+            <button onClick={backToSuper} className="rounded-md bg-amber-500/30 px-3 py-1 text-xs font-semibold hover:bg-amber-500/40">{t('nav.back.super')}</button>
           </div>
         )}
         <TrialBanner />
@@ -230,8 +266,18 @@ export default function PanelLayout() {
           </div>
           <div className="hidden text-sm text-dark-400 md:block">{TABS[tab].label}</div>
 
+          {/* Selector de idioma */}
+          <select
+            value={lang}
+            onChange={(e) => setLang(e.target.value)}
+            className="ml-auto rounded-lg border border-dark-700 bg-dark-800 px-2 py-1 text-xs font-semibold text-dark-300 focus:outline-none"
+            title="Idioma"
+          >
+            {Object.entries(LANGS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+
           {/* Filtro de CENTRO — si solo tiene 1 centro asignado se muestra fijo */}
-          <div className="ml-auto flex items-center gap-1 rounded-lg bg-dark-800/60 p-1">
+          <div className="flex items-center gap-1 rounded-lg bg-dark-800/60 p-1">
             {singleCenter ? (
               <span className="rounded-md bg-brand-500/20 px-3 py-1 text-xs font-semibold text-brand-300">
                 {singleCenter}
@@ -245,7 +291,7 @@ export default function PanelLayout() {
                     center === c ? 'bg-brand-500/20 text-brand-300' : 'text-dark-400 hover:text-dark-200'
                   }`}
                 >
-                  {c}
+                  {c === 'Todos' ? t('nav.all') : c}
                 </button>
               ))
             )}

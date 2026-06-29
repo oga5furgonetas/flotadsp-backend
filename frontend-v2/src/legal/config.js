@@ -1,18 +1,18 @@
 // === DATOS DEL RESPONSABLE ===
-// Cuando tengas CIF y dirección formal, rellénalos en `cif` y `address`.
-// Si quedan vacíos, las páginas legales lo ocultan y no enseñan placeholders.
+// FlotaDSP es un servicio prestado sin sociedad mercantil constituida.
+// Cuando se constituya empresa, rellena cif, address y registry.
 export const COMPANY = {
   legalName: 'FlotaDSP',
   brand: 'FlotaDSP',
-  cif: '',
-  address: '',
+  cif: '',           // rellenar cuando se constituya la sociedad
+  address: '',       // rellenar cuando haya sede
   registry: '',
-  contactEmail: 'soporte@flotadsp.com',
-  privacyEmail: 'privacidad@flotadsp.com',
+  contactEmail: 'contacto@flotadsp.com',
+  privacyEmail: 'contacto@flotadsp.com',
   website: 'https://flotadsp.com',
   jurisdiction: 'España',
   governingLaw: 'legislación española',
-  effectiveDate: '2026-06-23',
+  effectiveDate: '2026-06-20',
 }
 
 // Proveedores que tratan datos en tu nombre (encargados del tratamiento).

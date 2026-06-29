@@ -24,17 +24,20 @@ export const chatToChecklist = (center, messageId, body = {}) =>
   api.post(`/chat/${center}/${messageId}/to-checklist`, body)
 
 /* ── Dashboard ── */
-export const getDashboardStats = () => api.get('/stats/dashboard')
+export const getDashboardStats = (center) => api.get('/stats/dashboard', { params: centerParam(center) })
 export const getAttention = () => api.get('/stats/attention')
 
 /* ── Vehículos / Flota ── */
 export const getVehicles = (center) => api.get('/vehicles', { params: centerParam(center) })
 export const getVehicle = (id) => api.get(`/vehicles/${id}`)
 export const getVehicleHistory = (id) => api.get(`/vehicles/${id}/history`)
-export const getLastInspections = () => api.get('/vehicles/last-inspections')
+export const getLastInspections = (center) => api.get('/vehicles/last-inspections', { params: centerParam(center) })
 export const getVehicleDriver = (id) => api.get(`/vehicles/${id}/driver`)
 export const getVehicleInspections = (id) => api.get(`/inspections/vehicle/${id}`)
 export const updateVehicle = (id, body) => api.patch(`/vehicles/${id}`, body)
+export const getVehicleMaintenance = (id) => api.get(`/vehicles/${id}/maintenance`)
+export const registerOilChange = (id, body) => api.post(`/vehicles/${id}/oil/change`, body)
+export const registerMaintenanceChange = (id, kind, body) => api.post(`/vehicles/${id}/maintenance/${kind}/change`, body)
 
 /* ── Conductores ── */
 export const getDrivers = (center) => api.get('/drivers', { params: centerParam(center) })
@@ -46,6 +49,11 @@ export const createDriver = (data) => api.post('/drivers', data)
 export const updateDriver = (id, data) => api.patch(`/drivers/${id}`, data)
 export const deleteDriver = (id) => api.delete(`/drivers/${id}`)
 export const uploadDriverPhoto = (id, file) => { const fd = new FormData(); fd.append('file', file); return api.post(`/drivers/${id}/photo`, fd) }
+
+/* ── Cuentas de conductor (acceso con contraseña) ── */
+export const getDriverAccounts = () => api.get('/auth/driver-accounts')
+export const setDriverPassword = (driverId, password) => api.post('/auth/set-driver-password', { driver_id: driverId, password })
+export const deleteDriverAccount = (driverId) => api.delete(`/auth/driver-account/${driverId}`)
 
 /* ── Inspecciones ── */
 export const getInspections = (params = {}) => api.get('/inspections', { params })
@@ -64,20 +72,30 @@ export const fetchAuthedBlob = async (path) => {
 
 /* ── Talleres ── */
 export const getWorkshops = () => api.get('/workshops')
+export const getWorkshopsNearby = (lat, lng, { provider, category, maxKm = 80 } = {}) =>
+  api.get('/workshops/nearby', { params: { lat, lng, max_km: maxKm, ...(provider ? { provider } : {}), ...(category ? { category } : {}) } })
 
 /* ── Avisos / Alertas ── */
 export const getAlerts = () => api.get('/alerts')
-export const getItvAlerts = () => api.get('/alerts/itv')
+export const getItvAlerts = (center) => api.get('/alerts/itv', { params: centerParam(center) })
+export const getMaintenanceAlerts = () => api.get('/alerts/maintenance')
 export const getRentingAlerts = () => api.get('/alerts/renting')
 
 /* ── Renting / Casas de alquiler ── */
 export const getRentals = () => api.get('/rentals')
+export const getRentalsNearby = (lat, lng, maxKm = 80) =>
+  api.get('/rentals/nearby', { params: { lat, lng, max_km: maxKm } })
 
 /* ── Bandeja super-admin (inbox append-only + fallback leads) ── */
 export const getInbox = () => api.get('/inbox')
 
 /* ── Incidencias ── */
-export const getIncidents = () => api.get('/incidents')
+export const getIncidents = (params = {}) => api.get('/incidents', { params })
+export const createIncident = (body) => api.post('/incidents', body)
+export const updateIncident = (id, body) => api.patch(`/incidents/${id}`, body)
+export const deleteIncident = (id) => api.delete(`/incidents/${id}`)
+export const resolveIncident = (id) => api.put(`/incidents/${id}/resolve`)
+export const reopenIncident = (id) => api.put(`/incidents/${id}/reopen`)
 
 /* ── Scorecard (baremos y subida POR CENTRO) ── */
 export const getScorecardTargets = (center) => api.get('/scorecard/targets', { params: { center } })

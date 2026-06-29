@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useT } from '../../i18n'
 import { Loader2, CalendarClock } from 'lucide-react'
 
 const ST = {
@@ -9,30 +10,31 @@ const ST = {
 
 // Lista de vencimientos (ITV o Renting) — misma estructura, distinta fecha.
 export default function ExpiryAlerts({ title, fetcher, dateField, dateLabel, extraCol }) {
+  const { t } = useT()
   const [rows, setRows] = useState(null)
   const [err, setErr] = useState('')
 
   useEffect(() => {
-    fetcher().then((r) => setRows(r.data || [])).catch(() => setErr('No se pudieron cargar los avisos.'))
+    fetcher().then((r) => setRows(r.data || [])).catch(() => setErr(t('ui.error')))
   }, [fetcher])
 
   if (err) return <p className="text-red-400">{err}</p>
-  if (!rows) return <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> Cargando…</div>
+  if (!rows) return <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> {t('ui.loading')}</div>
 
   return (
     <div>
       <h1 className="mb-4 text-xl font-bold">{title} <span className="text-dark-500">· {rows.length}</span></h1>
       {rows.length === 0 ? (
         <div className="card flex flex-col items-center gap-2 p-10 text-center text-dark-400">
-          <CalendarClock size={28} /> Nada próximo a vencer. Todo al día.
+          <CalendarClock size={28} /> {t('itv.empty')}
         </div>
       ) : (
         <div className="card overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="border-b border-dark-800 text-left text-xs uppercase tracking-wide text-dark-500">
-              <th className="px-4 py-2.5">Matrícula</th><th className="px-4 py-2.5">Vehículo</th><th className="px-4 py-2.5">Centro</th>
+              <th className="px-4 py-2.5">{t('veh.plate')}</th><th className="px-4 py-2.5">{t('ui.vehicle')}</th><th className="px-4 py-2.5">{t('ui.center')}</th>
               {extraCol && <th className="px-4 py-2.5">{extraCol.label}</th>}
-              <th className="px-4 py-2.5">{dateLabel}</th><th className="px-4 py-2.5 text-center">Días</th><th className="px-4 py-2.5">Estado</th>
+              <th className="px-4 py-2.5">{dateLabel}</th><th className="px-4 py-2.5 text-center">{t('itv.days.left')}</th><th className="px-4 py-2.5">{t('ui.status')}</th>
             </tr></thead>
             <tbody>
               {rows.map((r) => (

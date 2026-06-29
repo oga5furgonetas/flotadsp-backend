@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import { Loader2, Mail, Inbox, RefreshCw, Search, ExternalLink, Building2 } from 'lucide-react'
 import { getInbox, getLeads } from '../api'
 import { isSuperAdmin } from '../auth'
+import { useT } from '../../i18n'
 
 // Bandeja de mensajes del super-admin.
 // Lee de /api/inbox (append-only: cada envío del formulario = mensaje).
 // Si el endpoint no existe (backend antiguo), cae a /api/leads (CRM por email, último mensaje).
 export default function Bandeja() {
+  const { t } = useT()
   const [leads, setLeads] = useState(null)
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(null)
@@ -26,7 +28,7 @@ export default function Bandeja() {
   }
   useEffect(load, [])
 
-  if (!isSuperAdmin()) return <div className="card p-10 text-center text-dark-400">Solo el super-admin puede ver la bandeja.</div>
+  if (!isSuperAdmin()) return <div className="card p-10 text-center text-dark-400">{t('inbox.superonly')}</div>
 
   const list = (leads || []).filter((l) => {
     if (!q) return true
@@ -37,25 +39,25 @@ export default function Bandeja() {
   return (
     <div className="mx-auto max-w-4xl">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="flex items-center gap-2 text-xl font-bold"><Inbox size={20} className="text-brand-400" /> Bandeja {leads && <span className="text-dark-500">· {list.length}</span>}</h1>
+        <h1 className="flex items-center gap-2 text-xl font-bold"><Inbox size={20} className="text-brand-400" /> {t('inbox.title')} {leads && <span className="text-dark-500">· {list.length}</span>}</h1>
         <div className="flex items-center gap-2">
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />
-            <input className="input w-56 pl-9" placeholder="Buscar…" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input className="input w-56 pl-9" placeholder={t('inbox.search.ph')} value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
           <button onClick={load} className="btn-secondary flex items-center gap-1.5 text-sm"><RefreshCw size={14} /></button>
         </div>
       </div>
 
-      <p className="mb-3 text-sm text-dark-400">Mensajes enviados desde el formulario público de <a href="/contacto" target="_blank" rel="noreferrer" className="text-sky-400 hover:underline">Contacto</a> e interesados captados desde la landing.</p>
+      <p className="mb-3 text-sm text-dark-400">{t('inbox.desc')} <a href="/contacto" target="_blank" rel="noreferrer" className="text-sky-400 hover:underline">Contacto</a> {t('inbox.leads')}</p>
       {usingFallback && (
         <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-          Modo compatibilidad: usando bandeja antigua (1 entrada por email). Despliega la última versión del backend para activar la bandeja real (todos los mensajes).
+          {t('inbox.compat')}
         </div>
       )}
 
-      {!leads ? <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> Cargando…</div> :
-        list.length === 0 ? <div className="card p-10 text-center text-dark-400">Aún no hay mensajes.</div> : (
+      {!leads ? <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> {t('ui.loading')}</div> :
+        list.length === 0 ? <div className="card p-10 text-center text-dark-400">{t('inbox.no.msgs')}</div> : (
           <div className="card divide-y divide-dark-800">
             {list.map((l, i) => (
               <button key={i} onClick={() => setSel(l)} className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm hover:bg-dark-800/40">
@@ -81,12 +83,12 @@ export default function Bandeja() {
               <button onClick={() => setSel(null)} className="btn-ghost p-2">✕</button>
             </div>
             <div className="space-y-2 text-sm">
-              <div><span className="text-dark-500">De:</span> <a href={`mailto:${sel.email}`} className="text-sky-400 hover:underline">{sel.email}</a></div>
-              {sel.company && <div><span className="text-dark-500">Empresa:</span> {sel.company}</div>}
-              <div><span className="text-dark-500">Recibido:</span> {(sel.created_at || '').replace('T', ' ').slice(0, 16)}</div>
-              {sel.plan && <div className="rounded-lg border border-dark-800 bg-dark-800/40 p-3"><div className="mb-1 text-[11px] uppercase text-dark-500">Mensaje</div><div className="whitespace-pre-wrap text-dark-200">{sel.plan}</div></div>}
+              <div><span className="text-dark-500">{t('inbox.from')}</span> <a href={`mailto:${sel.email}`} className="text-sky-400 hover:underline">{sel.email}</a></div>
+              {sel.company && <div><span className="text-dark-500">{t('inbox.company')}</span> {sel.company}</div>}
+              <div><span className="text-dark-500">{t('inbox.received')}</span> {(sel.created_at || '').replace('T', ' ').slice(0, 16)}</div>
+              {sel.plan && <div className="rounded-lg border border-dark-800 bg-dark-800/40 p-3"><div className="mb-1 text-[11px] uppercase text-dark-500">{t('inbox.message')}</div><div className="whitespace-pre-wrap text-dark-200">{sel.plan}</div></div>}
               <a href={`mailto:${sel.email}?subject=Re:%20FlotaDSP&body=Hola%20${encodeURIComponent(sel.name || '')}%2C%0A%0A`} className="btn-primary mt-4 inline-flex items-center gap-2 text-sm">
-                <ExternalLink size={14} /> Responder por email
+                <ExternalLink size={14} /> {t('inbox.reply')}
               </a>
             </div>
           </div>

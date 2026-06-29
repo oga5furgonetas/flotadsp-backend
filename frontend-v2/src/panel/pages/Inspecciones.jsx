@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
+import { useT, LANG_LOCALE } from '../../i18n'
 import {
   Loader2, Search, X, FileText, Image as ImageIcon, ShieldQuestion, User, ChevronDown,
   ShieldCheck, FileSignature, ShieldAlert, RefreshCw,
 } from 'lucide-react'
 import { getInspections, getVehicles, getDrivers, getVehicleInspections, fetchAuthedBlob, getForensicStatus, signInspectionAdmin, recheckFraud } from '../api'
 
-const SEV_LABEL = { sin_danos: 'Sin daños', sin_analisis: 'Sin análisis', leve: 'Leve', moderado: 'Moderado', grave: 'Grave', critico: 'Crítico' }
 const SEV_CLS = {
   leve: 'bg-amber-500/20 text-amber-300', moderado: 'bg-orange-500/20 text-orange-300',
   grave: 'bg-red-500/20 text-red-300', critico: 'bg-red-600/30 text-red-200',
@@ -15,12 +15,17 @@ const SEV_CLS = {
 const SEV_DOT = { leve: 'bg-amber-400', moderado: 'bg-orange-400', grave: 'bg-red-400', critico: 'bg-red-500', sin_danos: 'bg-emerald-400', sin_analisis: 'bg-dark-500' }
 const FILTERS = ['Todas', 'grave', 'critico', 'moderado', 'leve', 'sin_danos']
 
-const fmt = (s) => { const d = new Date(s); return isNaN(d) ? (s || '') : d.toLocaleString('es', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) }
-const fmtDay = (s) => { const d = new Date(s); return isNaN(d) ? (s || '') : d.toLocaleDateString('es', { day: '2-digit', month: 'short', year: 'numeric' }) }
 const eur = (n) => (n ? `${Number(n).toLocaleString('es')} €` : '—')
 
 export default function Inspecciones() {
   const { center } = useOutletContext()
+  const { t, lang } = useT()
+
+  const fmt = (s) => { const d = new Date(s); return isNaN(d) ? (s || '') : d.toLocaleString(LANG_LOCALE[lang], { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) }
+  const fmtDay = (s) => { const d = new Date(s); return isNaN(d) ? (s || '') : d.toLocaleDateString(LANG_LOCALE[lang], { day: '2-digit', month: 'short', year: 'numeric' }) }
+
+  const sevLabel = (k) => t(`sev.${k}`) || k
+
   const [insps, setInsps] = useState(null)
   const [vmap, setVmap] = useState({})
   const [dmap, setDmap] = useState({})
@@ -58,28 +63,28 @@ export default function Inspecciones() {
   }
 
   if (err) return <p className="text-red-400">{err}</p>
-  if (!insps) return <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> Cargando…</div>
+  if (!insps) return <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> {t('ui.loading')}</div>
 
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold">Inspecciones <span className="text-dark-500">· {list.length}</span></h1>
+        <h1 className="text-xl font-bold">{t('insp.title')} <span className="text-dark-500">· {list.length}</span></h1>
         <div className="relative">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />
-          <input className="input w-56 pl-9" placeholder="Buscar matrícula…" value={q} onChange={(e) => setQ(e.target.value)} />
+          <input className="input w-56 pl-9" placeholder={`${t('ui.search')} ${t('veh.plate')}…`} value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
       </div>
 
       <div className="mb-3 flex flex-wrap gap-1.5">
         {FILTERS.map((f) => (
           <button key={f} onClick={() => setSev(f)} className={`rounded-full px-3 py-1 text-xs font-semibold ${sev === f ? 'bg-brand-500/20 text-brand-300' : 'bg-dark-800 text-dark-400 hover:text-dark-200'}`}>
-            {f === 'Todas' ? 'Todas' : SEV_LABEL[f]}
+            {f === 'Todas' ? t('ui.all') : sevLabel(f)}
           </button>
         ))}
       </div>
 
       {list.length === 0 ? (
-        <div className="card p-10 text-center text-dark-400">Sin inspecciones con estos filtros.</div>
+        <div className="card p-10 text-center text-dark-400">{t('insp.empty')}</div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {list.map((i) => {
@@ -89,17 +94,17 @@ export default function Inspecciones() {
               <button key={i.id} onClick={() => setSel(i)} className="card-hover overflow-hidden text-left">
                 <div className="relative h-36 bg-dark-800">
                   {i.photos?.[0] ? <img src={i.photos[0]} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-dark-600"><ImageIcon size={24} /></div>}
-                  <span className={`absolute left-2 top-2 rounded px-2 py-0.5 text-[11px] font-bold ${SEV_CLS[s]}`}>{SEV_LABEL[s] || s}</span>
-                  {i.forensic_signed && <span className="absolute right-2 top-2 flex items-center gap-0.5 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[10px] font-bold text-white" title="Inspección firmada"><ShieldCheck size={10} /> Firmada</span>}
+                  <span className={`absolute left-2 top-2 rounded px-2 py-0.5 text-[11px] font-bold ${SEV_CLS[s]}`}>{sevLabel(s)}</span>
+                  {i.forensic_signed && <span className="absolute right-2 top-2 flex items-center gap-0.5 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[10px] font-bold text-white" title={t('insp.sign.done')}><ShieldCheck size={10} /> {t('insp.signed')}</span>}
                   {typeof i.fraud_score === 'number' && i.fraud_score >= 70 && (
                     <span className={`absolute left-2 bottom-2 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold text-white ${i.fraud_score >= 85 ? 'bg-red-600' : 'bg-amber-500'}`} title={`Score ${i.fraud_score}/100`}>
-                      <ShieldAlert size={10} /> {i.fraud_score >= 85 ? 'Fraude' : 'Sospechoso'}
+                      <ShieldAlert size={10} /> {i.fraud_score >= 85 ? t('insp.fraud.high') : t('insp.fraud.mid')}
                     </span>
                   )}
                 </div>
                 <div className="p-3">
                   <div className="flex items-center justify-between"><span className="font-bold">{v.plate || '—'}</span><span className="text-xs text-dark-500">{fmt(i.created_at)}</span></div>
-                  <div className="mt-1 flex items-center justify-between text-xs text-dark-400"><span>{i.analysis?.total_damages_count || 0} daños</span><span>{eur(i.analysis?.total_estimated_cost)}</span></div>
+                  <div className="mt-1 flex items-center justify-between text-xs text-dark-400"><span>{i.analysis?.total_damages_count || 0} {t('insp.damages')}</span><span>{eur(i.analysis?.total_estimated_cost)}</span></div>
                 </div>
               </button>
             )
@@ -107,12 +112,13 @@ export default function Inspecciones() {
         </div>
       )}
 
-      {sel && <Detail insp={sel} plate={vmap[sel.vehicle_id]?.plate} dmap={dmap} onClose={() => setSel(null)} onPdf={openForensicPdf} />}
+      {sel && <Detail insp={sel} plate={vmap[sel.vehicle_id]?.plate} dmap={dmap} onClose={() => setSel(null)} onPdf={openForensicPdf} fmt={fmt} fmtDay={fmtDay} sevLabel={sevLabel} />}
     </div>
   )
 }
 
-function Detail({ insp, plate, dmap, onClose, onPdf }) {
+function Detail({ insp, plate, dmap, onClose, onPdf, fmt, fmtDay, sevLabel }) {
+  const { t } = useT()
   const [pi, setPi] = useState(0)
   const [tab, setTab] = useState('danos') // 'danos' | 'quien'
   const a = insp.analysis || {}
@@ -124,8 +130,8 @@ function Detail({ insp, plate, dmap, onClose, onPdf }) {
         {/* cabecera */}
         <div className="sticky top-0 z-10 flex items-center justify-between border-b border-dark-800 bg-dark-900/95 px-5 py-3 backdrop-blur">
           <div className="flex items-center gap-2">
-            <span className="text-lg font-bold">{plate || 'Inspección'}</span>
-            <span className={`rounded px-2 py-0.5 text-[11px] font-bold ${SEV_CLS[a.severity] || SEV_CLS.sin_analisis}`}>{SEV_LABEL[a.severity] || a.severity || '—'}</span>
+            <span className="text-lg font-bold">{plate || t('insp.title')}</span>
+            <span className={`rounded px-2 py-0.5 text-[11px] font-bold ${SEV_CLS[a.severity] || SEV_CLS.sin_analisis}`}>{sevLabel(a.severity) || a.severity || '—'}</span>
           </div>
           <button onClick={onClose} className="btn-ghost p-2"><X size={18} /></button>
         </div>
@@ -149,7 +155,7 @@ function Detail({ insp, plate, dmap, onClose, onPdf }) {
 
           {/* resumen compacto (chips, no parrafo) */}
           <div className="mt-3 flex flex-wrap gap-2 text-xs">
-            <span className="rounded-full bg-dark-800 px-2.5 py-1">{a.total_damages_count || 0} daños</span>
+            <span className="rounded-full bg-dark-800 px-2.5 py-1">{a.total_damages_count || 0} {t('insp.damages')}</span>
             <span className="rounded-full bg-dark-800 px-2.5 py-1 font-semibold text-dark-200">{eur(a.total_estimated_cost)}</span>
             <span className="rounded-full bg-dark-800 px-2.5 py-1">{fmt(insp.created_at)}</span>
             {insp.driver_id && dmap[insp.driver_id] && <span className="flex items-center gap-1 rounded-full bg-dark-800 px-2.5 py-1"><User size={11} /> {dmap[insp.driver_id]}</span>}
@@ -157,27 +163,27 @@ function Detail({ insp, plate, dmap, onClose, onPdf }) {
 
           {/* pestañas */}
           <div className="mt-4 flex gap-1 border-b border-dark-800">
-            <button onClick={() => setTab('danos')} className={`px-3 py-2 text-sm font-medium ${tab === 'danos' ? 'border-b-2 border-brand-400 text-brand-300' : 'text-dark-400'}`}>Daños</button>
-            <button onClick={() => setTab('quien')} className={`flex items-center gap-1 px-3 py-2 text-sm font-medium ${tab === 'quien' ? 'border-b-2 border-brand-400 text-brand-300' : 'text-dark-400'}`}><ShieldQuestion size={14} /> ¿Quién lo golpeó?</button>
+            <button onClick={() => setTab('danos')} className={`px-3 py-2 text-sm font-medium ${tab === 'danos' ? 'border-b-2 border-brand-400 text-brand-300' : 'text-dark-400'}`}>{t('insp.tab.damages')}</button>
+            <button onClick={() => setTab('quien')} className={`flex items-center gap-1 px-3 py-2 text-sm font-medium ${tab === 'quien' ? 'border-b-2 border-brand-400 text-brand-300' : 'text-dark-400'}`}><ShieldQuestion size={14} /> {t('insp.tab.who')}</button>
           </div>
 
           {tab === 'danos' ? (
             <div className="mt-3 space-y-2">
-              {damages.length === 0 ? <div className="card p-4 text-center text-sm text-dark-500">Sin daños detectados.</div> :
+              {damages.length === 0 ? <div className="card p-4 text-center text-sm text-dark-500">{t('insp.no.damage')}</div> :
                 damages.map((d, k) => <DamageRow key={k} d={d} />)}
               {a.executive_summary && (
                 <details className="mt-2 text-sm text-dark-400">
-                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-dark-500">Resumen del peritaje</summary>
+                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-dark-500">{t('insp.summary')}</summary>
                   <p className="mt-2 leading-relaxed">{a.executive_summary}</p>
                 </details>
               )}
             </div>
           ) : (
-            <QuienTimeline vehicleId={insp.vehicle_id} dmap={dmap} currentId={insp.id} />
+            <QuienTimeline vehicleId={insp.vehicle_id} dmap={dmap} currentId={insp.id} fmtDay={fmtDay} />
           )}
 
           <FraudBlock insp={insp} />
-          <ForensicSignBlock inspId={insp.id} onPdf={onPdf} />
+          <ForensicSignBlock inspId={insp.id} onPdf={onPdf} fmt={fmt} />
         </div>
       </div>
     </div>
@@ -185,6 +191,7 @@ function Detail({ insp, plate, dmap, onClose, onPdf }) {
 }
 
 function FraudBlock({ insp }) {
+  const { t } = useT()
   const [score, setScore] = useState(typeof insp.fraud_score === 'number' ? insp.fraud_score : null)
   const [reasons, setReasons] = useState(insp.fraud_reasons || [])
   const [busy, setBusy] = useState(false)
@@ -200,13 +207,12 @@ function FraudBlock({ insp }) {
     setBusy(false)
   }
 
-  // Si nunca se ha calculado, mostrar botón para forzar.
   if (score === null) {
     return (
       <div className="mt-4 rounded-lg border border-dark-800 bg-dark-800/30 p-3 text-sm">
-        <div className="mb-1.5 flex items-center gap-2 text-dark-300"><ShieldAlert size={14} /> Análisis de fraude no ejecutado</div>
+        <div className="mb-1.5 flex items-center gap-2 text-dark-300"><ShieldAlert size={14} /> {t('insp.fraud.not.run')}</div>
         <button onClick={recheck} disabled={busy} className="btn-secondary flex items-center gap-1.5 text-xs disabled:opacity-50">
-          {busy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Comprobar ahora
+          {busy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} {t('insp.fraud.check')}
         </button>
         {err && <p className="mt-1 text-xs text-red-400">{err}</p>}
       </div>
@@ -218,20 +224,20 @@ function FraudBlock({ insp }) {
             : level === 'mid' ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
             : 'border-emerald-500/30 bg-emerald-500/5 text-emerald-200'
   const Icon = level === 'low' ? ShieldCheck : ShieldAlert
-  const title = level === 'high' ? 'POSIBLE FRAUDE' : level === 'mid' ? 'Indicios sospechosos' : 'Sin indicios de fraude'
+  const title = level === 'high' ? t('insp.fraud.high') : level === 'mid' ? t('insp.fraud.mid') : t('insp.fraud.none')
 
   return (
     <div className={`mt-4 rounded-lg border p-3 text-sm ${cls}`}>
       <div className="mb-2 flex items-center justify-between gap-2">
         <span className="flex items-center gap-2 font-semibold"><Icon size={15} /> {title} <span className="text-xs opacity-70">({score}/100)</span></span>
-        <button onClick={recheck} disabled={busy} className="btn-ghost p-1 text-xs disabled:opacity-50" title="Recomprobar">
+        <button onClick={recheck} disabled={busy} className="btn-ghost p-1 text-xs disabled:opacity-50" title={t('insp.fraud.recheck')}>
           {busy ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
         </button>
       </div>
       {reasons.length > 0 ? (
         <ul className="ml-1 space-y-1 text-xs">
           {reasons.map((r, i) => (
-            <li key={i}>• <b>{r.type === 'plate_mismatch' ? 'Matrícula no coincide' : r.type === 'old_photo' ? 'Foto antigua' : r.type === 'reused_photo' ? 'Foto reusada' : r.type}:</b> {r.detail}</li>
+            <li key={i}>• <b>{r.type === 'plate_mismatch' ? t('insp.fraud.plate') : r.type === 'old_photo' ? t('insp.fraud.old.photo') : r.type === 'reused_photo' ? t('insp.fraud.reused') : r.type}:</b> {r.detail}</li>
           ))}
         </ul>
       ) : (
@@ -242,8 +248,9 @@ function FraudBlock({ insp }) {
   )
 }
 
-function ForensicSignBlock({ inspId, onPdf }) {
-  const [status, setStatus] = useState(null) // null | {signed, hash, signed_at, signed_by_name, ...}
+function ForensicSignBlock({ inspId, onPdf, fmt }) {
+  const { t } = useT()
+  const [status, setStatus] = useState(null)
   const [signing, setSigning] = useState(false)
   const [err, setErr] = useState('')
 
@@ -263,20 +270,20 @@ function ForensicSignBlock({ inspId, onPdf }) {
   }
 
   if (!status) {
-    return <div className="mt-5 flex items-center gap-2 text-sm text-dark-500"><Loader2 size={14} className="animate-spin" /> Comprobando firma…</div>
+    return <div className="mt-5 flex items-center gap-2 text-sm text-dark-500"><Loader2 size={14} className="animate-spin" /> {t('insp.sign.checking')}</div>
   }
 
   if (!status.signed) {
     return (
       <div className="mt-5 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-amber-300">
-          <FileSignature size={16} /> Inspección sin firmar
+          <FileSignature size={16} /> {t('insp.sign.unsigned')}
         </div>
         <p className="mb-3 text-xs text-dark-400">Para generar el peritaje técnico con cadena de custodia hash, esta inspección debe estar firmada. Si el conductor no firmó, puedes firmarla tú como administrador.</p>
         {err && <p className="mb-2 text-xs text-red-400">{err}</p>}
         <button onClick={sign} disabled={signing} className="btn-primary flex items-center gap-2 disabled:opacity-50">
           {signing ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-          {signing ? 'Firmando…' : 'Firmar ahora'}
+          {signing ? t('insp.sign.signing') : t('insp.sign.now')}
         </button>
       </div>
     )
@@ -286,7 +293,7 @@ function ForensicSignBlock({ inspId, onPdf }) {
     <div className="mt-5 space-y-3">
       <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
         <div className="mb-1 flex items-center gap-2 font-semibold text-emerald-300">
-          <ShieldCheck size={15} /> Inspección firmada
+          <ShieldCheck size={15} /> {t('insp.sign.done')}
         </div>
         <div className="text-xs text-dark-400">
           Por <b className="text-dark-200">{status.signed_by_name || '—'}</b> · {fmt(status.signed_at)}
@@ -294,7 +301,7 @@ function ForensicSignBlock({ inspId, onPdf }) {
         {status.hash && <code className="mt-1 block break-all text-[10px] text-emerald-400">{status.hash}</code>}
       </div>
       <button onClick={() => onPdf(inspId)} className="btn-primary flex w-full items-center justify-center gap-2 py-2.5">
-        <FileText size={16} /> Descargar peritaje técnico (PDF)
+        <FileText size={16} /> {t('insp.pdf.download')}
       </button>
     </div>
   )
@@ -315,23 +322,23 @@ function DamageRow({ d }) {
   )
 }
 
-// Línea de tiempo del vehículo: quién condujo y qué daños NUEVOS aparecieron cada día.
-function QuienTimeline({ vehicleId, dmap, currentId }) {
+function QuienTimeline({ vehicleId, dmap, currentId, fmtDay }) {
+  const { t } = useT()
   const [insps, setInsps] = useState(null)
   useEffect(() => {
     getVehicleInspections(vehicleId).then((r) => setInsps((r.data || []).filter((i) => i.analysis))).catch(() => setInsps([]))
   }, [vehicleId])
 
-  if (!insps) return <div className="mt-3 flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> Reconstruyendo el historial…</div>
-  if (insps.length === 0) return <div className="mt-3 card p-4 text-center text-sm text-dark-500">Sin historial suficiente.</div>
+  if (!insps) return <div className="mt-3 flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> {t('insp.history.loading')}</div>
+  if (insps.length === 0) return <div className="mt-3 card p-4 text-center text-sm text-dark-500">{t('insp.history.empty')}</div>
 
   return (
     <div className="mt-3">
-      <p className="mb-3 text-xs text-dark-500">Cada vez que apareció un <b className="text-dark-300">daño nuevo</b>, el responsable es el conductor que tenía la furgoneta ese día.</p>
+      <p className="mb-3 text-xs text-dark-500">Cada vez que apareció un <b className="text-dark-300">{t('insp.new.damage')}</b>, el responsable es el conductor que tenía la furgoneta ese día.</p>
       <div className="space-y-3">
         {insps.map((i) => {
           const nuevos = i.analysis?.new_damages || []
-          const driver = dmap[i.driver_id] || 'conductor desconocido'
+          const driver = dmap[i.driver_id] || t('ui.no.driver')
           const isCur = i.id === currentId
           return (
             <div key={i.id} className={`relative rounded-lg border p-3 ${nuevos.length ? 'border-red-500/40 bg-red-500/5' : 'border-dark-800 bg-dark-800/30'} ${isCur ? 'ring-1 ring-brand-500/50' : ''}`}>
@@ -341,13 +348,13 @@ function QuienTimeline({ vehicleId, dmap, currentId }) {
               </div>
               {nuevos.length > 0 ? (
                 <div className="mt-2">
-                  <div className="mb-1 text-[11px] font-bold uppercase text-red-300">⚠ {nuevos.length} daño(s) NUEVO(s) — responsable: {driver}</div>
+                  <div className="mb-1 text-[11px] font-bold uppercase text-red-300">⚠ {nuevos.length} {t('insp.new.damage.responsible')} {driver}</div>
                   <div className="flex flex-wrap gap-1.5">
                     {nuevos.map((d, k) => <span key={k} className="rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] text-red-200">{d.part || 'daño'}</span>)}
                   </div>
                 </div>
               ) : (
-                <div className="mt-1 text-xs text-dark-500">Sin daños nuevos ese día{i.photos?.[0] ? '' : ''}.</div>
+                <div className="mt-1 text-xs text-dark-500">{t('insp.no.new.damage')}</div>
               )}
             </div>
           )

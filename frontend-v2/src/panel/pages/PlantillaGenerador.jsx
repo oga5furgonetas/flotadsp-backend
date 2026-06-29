@@ -170,6 +170,8 @@ export default function PlantillaGenerador() {
   // Portapapeles de horas: {h_salida, h_llegada, h_bajada} o null
   const [copiedHours, setCopiedHours] = useState(null)
 
+  const noCenter = !center || center === 'Todos'
+
   // Furgos activas del centro
   const [furgosDisp, setFurgosDisp] = useState([]) // ['2865NGX', ...]
   useEffect(() => {
@@ -195,8 +197,6 @@ export default function PlantillaGenerador() {
   }, [data])
   const refCortex = useRef()
   const refPlat   = useRef()
-
-  const noCenter = !center || center === 'Todos'
 
   function addFiles(files, setter) {
     const items = Array.from(files).map(f => ({ file: f, preview: URL.createObjectURL(f) }))

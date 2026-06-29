@@ -2,9 +2,20 @@ import { useEffect, useState } from 'react'
 import { Clock, Sparkles, AlertTriangle } from 'lucide-react'
 import { getOrgBilling, getBillingConfig } from './api'
 import { getAdmin, getOrgId } from './auth'
+import { useT } from '../i18n'
 
-// Banner global: enseña los días de prueba que quedan y un botón para pagar (Lemon Squeezy).
+// Convierte claves antiguas (capitalizadas) a las nuevas (lowercase)
+const PLAN_KEY_MAP = {
+  Starter: 'basico',
+  Forensics: 'flota',
+  Max: 'flota',
+  Pro: 'pro',
+  Enterprise: 'enterprise',
+}
+const PLAN_LABELS = { basico: 'Básico', pro: 'Pro', flota: 'Flota', enterprise: 'Enterprise' }
+
 export default function TrialBanner() {
+  const { t } = useT()
   const [billing, setBilling] = useState(null)
   const [cfg, setCfg] = useState(null)
 
@@ -14,7 +25,6 @@ export default function TrialBanner() {
   }, [])
 
   if (!billing) return null
-  // Owner (tu propio DSP, super-admin del SaaS) no ve banner: no paga.
   if (billing.account_type === 'owner' || billing.status === 'owner') return null
   if (billing.status === 'active') return null
 
@@ -22,35 +32,41 @@ export default function TrialBanner() {
   const required = billing.required
   const adminSlug = getAdmin()?.slug || ''
   const orgId = getOrgId()
-  // Resuelve el plan a vender. Si vino del registro, lo respeta; si no, default Forensics (el más popular).
-  // 'Max' es legacy y se mapea a 'Forensics' (la oferta nueva con peritaje).
-  const raw = localStorage.getItem('flota_plan') || 'Forensics'
-  const planKey = raw === 'Max' ? 'Forensics' : raw
-  const planLabel = ({ Starter: 'Starter', Pro: 'Pro', Forensics: 'AI Forensics', Enterprise: 'Enterprise' })[planKey] || planKey
-  const checkoutUrl = cfg?.checkout?.[planKey] || cfg?.checkout?.Forensics || cfg?.checkout?.Pro
-  const isEnterprise = planKey === 'Enterprise'
 
-  // El backend webhook activa la org cuando paga: necesita org_id real en custom_data.
-  // Sin org_id no abrimos checkout (LS devolvería 422 y, peor, un pago no activaría la cuenta).
+  // Normalizar clave de plan (soporta formato antiguo y nuevo)
+  const rawPlan = localStorage.getItem('flota_plan') || 'pro'
+  const planKey = PLAN_KEY_MAP[rawPlan] || rawPlan.toLowerCase()
+  const planLabel = PLAN_LABELS[planKey] || planKey
+  const isEnterprise = planKey === 'enterprise'
+
+  // Modo de facturación elegido en el registro
+  const billingMode = localStorage.getItem('flota_billing') || 'monthly'
+
+  // URL de checkout: anual primero (si existe), luego mensual, luego fallback a flota/pro
+  const checkoutUrl =
+    (billingMode === 'annual' ? cfg?.checkout?.[`${planKey}_annual`] : null) ||
+    cfg?.checkout?.[planKey] ||
+    cfg?.checkout?.flota ||
+    cfg?.checkout?.pro
+
   const goPay = () => {
-    // Enterprise: no es self-service, va a contacto comercial.
     if (isEnterprise) { window.location.href = '/contacto?asunto=Enterprise'; return }
     if (!checkoutUrl) return alert('Pasarela de pago no configurada todavía.')
-    if (!orgId) return alert('No hemos podido identificar tu organización. Cierra sesión y vuelve a entrar para reintentar.')
+    if (!orgId) return alert('No hemos podido identificar tu organización. Cierra sesión y vuelve a entrar.')
     const u = new URL(checkoutUrl)
     u.searchParams.set('checkout[custom][org_id]', orgId)
     if (adminSlug) u.searchParams.set('checkout[custom][slug]', adminSlug)
     window.location.href = u.toString()
   }
 
-  const ctaText = isEnterprise ? `Contactar (${planLabel})` : `Pasar a ${planLabel}`
+  const ctaText = isEnterprise ? `${t('trial.contact')} (${planLabel})` : `${t('trial.goto')} ${planLabel}`
   const canShowCta = isEnterprise || cfg?.ready
 
   if (required) {
     return (
       <div className="flex flex-wrap items-center justify-between gap-2 bg-red-500/20 px-4 py-2 text-sm text-red-200">
-        <span className="flex items-center gap-1.5"><AlertTriangle size={14} /> Tu prueba ha terminado. Activa una suscripción para seguir usando FlotaDSP.</span>
-        {canShowCta && <button onClick={goPay} className="rounded-md bg-red-500/30 px-3 py-1 text-xs font-bold hover:bg-red-500/40">{ctaText} · activar →</button>}
+        <span className="flex items-center gap-1.5"><AlertTriangle size={14} /> {t('trial.ended')}</span>
+        {canShowCta && <button onClick={goPay} className="rounded-md bg-red-500/30 px-3 py-1 text-xs font-bold hover:bg-red-500/40">{ctaText} · {t('trial.activate')}</button>}
       </div>
     )
   }
@@ -60,7 +76,9 @@ export default function TrialBanner() {
       <div className={`flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-sm ${urgent ? 'bg-amber-500/20 text-amber-200' : 'bg-sky-500/15 text-sky-200'}`}>
         <span className="flex items-center gap-1.5">
           {urgent ? <AlertTriangle size={14} /> : <Clock size={14} />}
-          {days != null ? <>Prueba gratis: te quedan <b>{days} día{days === 1 ? '' : 's'}</b>.</> : 'En periodo de prueba.'}
+          {days != null
+            ? <>{t('trial.free')} <b>{planLabel}</b>: {t('trial.days.left')} <b>{days} {days === 1 ? t('trial.day') : t('trial.days')}</b>.</>
+            : t('trial.on')}
         </span>
         {canShowCta && <button onClick={goPay} className={`flex items-center gap-1 rounded-md px-3 py-1 text-xs font-bold ${urgent ? 'bg-amber-500/30 hover:bg-amber-500/40' : 'bg-sky-500/30 hover:bg-sky-500/40'}`}><Sparkles size={12} /> {ctaText}</button>}
       </div>
@@ -69,8 +87,8 @@ export default function TrialBanner() {
   if (billing.status === 'suspended') {
     return (
       <div className="flex flex-wrap items-center justify-between gap-2 bg-red-500/20 px-4 py-2 text-sm text-red-200">
-        <span className="flex items-center gap-1.5"><AlertTriangle size={14} /> Suscripción suspendida.</span>
-        {canShowCta && <button onClick={goPay} className="rounded-md bg-red-500/30 px-3 py-1 text-xs font-bold hover:bg-red-500/40">Reactivar →</button>}
+        <span className="flex items-center gap-1.5"><AlertTriangle size={14} /> {t('trial.suspended')}</span>
+        {canShowCta && <button onClick={goPay} className="rounded-md bg-red-500/30 px-3 py-1 text-xs font-bold hover:bg-red-500/40">{t('trial.reactivate')}</button>}
       </div>
     )
   }
