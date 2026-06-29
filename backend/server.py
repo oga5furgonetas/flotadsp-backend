@@ -277,6 +277,39 @@ _LOCATION_BOX: dict = {
 # TALLERES (v5.1)
 # =========================
 
+# Teléfonos de asistencia en carretera por proveedor (confirmados, no inventados)
+PROVIDER_ROADSIDE: dict = {
+    # Santander Renting — Línea Conductor verificada en documentación oficial
+    "BANSACAR":           {"phone": "917 098 569", "label": "Línea Conductor Santander Renting", "app": None},
+    "SANTANDER RENTING":  {"phone": "917 098 569", "label": "Línea Conductor Santander Renting", "app": None},
+    # Ayvens (ex-ALD/LeasePlan) — número confirmado en notas del seed
+    "AYVENS":             {"phone": "913 336 717", "label": "Asistencia Ayvens",    "app": "My Ayvens"},
+    "ALD":                {"phone": "913 336 717", "label": "Asistencia Ayvens",    "app": "My Ayvens"},
+    "LEASE PLAN":         {"phone": "913 336 717", "label": "Asistencia Ayvens",    "app": "My Ayvens"},
+    "LEASEPLAN":          {"phone": "913 336 717", "label": "Asistencia Ayvens",    "app": "My Ayvens"},
+    # Sabadell Renting / VayVans — comparten red Ayvens Premier
+    "VAYVANS":            {"phone": "932 437 080", "label": "Asistencia Sabadell Renting / VayVans", "app": "My Ayvens"},
+    "SABADELL RENTING":   {"phone": "932 437 080", "label": "Asistencia Sabadell Renting",          "app": None},
+    # Kinto (Toyota Renting) — pendiente confirmar número oficial
+    "KINTO":              {"phone": None, "label": "Kinto One — contacta con tu gestor", "app": "Kinto Share"},
+    "KINTO ONE":          {"phone": None, "label": "Kinto One — contacta con tu gestor", "app": "Kinto Share"},
+    # One Furgo — alquiler sin asistencia propia, usar seguro del vehículo
+    "ONE FURGO":          {"phone": None, "label": "One Furgo — usa el seguro incluido", "app": None},
+}
+
+
+def _provider_roadside(provider: str) -> Optional[dict]:
+    """Devuelve info de asistencia en carretera para un proveedor (coincidencia parcial)."""
+    if not provider:
+        return None
+    pup = provider.upper()
+    for key, data in PROVIDER_ROADSIDE.items():
+        if key in pup or pup in key:
+            return data
+    return None
+
+
+
 class Workshop(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -408,6 +441,18 @@ class RegisterRequest(BaseModel):
     email: Optional[str] = None
     slug: Optional[str] = None   # identificador en la URL (flotadsp.com/<slug>)
     center: Optional[str] = None  # código de su primer centro/estación (ej. su station)
+    plan: Optional[str] = None   # plan elegido: basico | pro | flota | enterprise
+
+
+# Límites y features por plan
+PLAN_LIMITS = {
+    "basico":     {"max_vehicles": 20,  "max_drivers": 20,  "max_centers": 1,  "ai": False, "scorecard": False, "chat": False, "forensics": False, "maintenance": True,  "assignments": False, "export": False},
+    "pro":        {"max_vehicles": 75,  "max_drivers": -1,  "max_centers": 3,  "ai": True,  "scorecard": True,  "chat": True,  "forensics": False, "maintenance": True,  "assignments": True,  "export": False},
+    "flota":      {"max_vehicles": -1,  "max_drivers": -1,  "max_centers": -1, "ai": True,  "scorecard": True,  "chat": True,  "forensics": True,  "maintenance": True,  "assignments": True,  "export": True},
+    "enterprise": {"max_vehicles": -1,  "max_drivers": -1,  "max_centers": -1, "ai": True,  "scorecard": True,  "chat": True,  "forensics": True,  "maintenance": True,  "assignments": True,  "export": True},
+    "owner":      {"max_vehicles": -1,  "max_drivers": -1,  "max_centers": -1, "ai": True,  "scorecard": True,  "chat": True,  "forensics": True,  "maintenance": True,  "assignments": True,  "export": True},
+}
+PLAN_DEFAULT = PLAN_LIMITS["pro"]  # trial sin plan elegido → acceso Pro para evaluación
 
 
 def _slugify(s):
@@ -539,6 +584,25 @@ async def require_superadmin(user: dict = Depends(get_current_user)) -> dict:
     if not user.get("sa"):
         raise HTTPException(status_code=403, detail="Acceso solo para el super-admin")
     return user
+
+
+# =========================
+# PLAN ENFORCEMENT — helper reutilizable
+# =========================
+
+async def _require_plan_feature(user: dict, feature: str):
+    """Lanza 403 si el plan de la org no incluye la feature pedida.
+    owner / super-admin siempre pasan. Se cachea el org por petición."""
+    if user.get("account_type") == "owner" or user.get("sa"):
+        return
+    org = await get_org(user.get("org_id"))
+    billing = _org_billing(org)
+    if not billing["limits"].get(feature):
+        plan_label = billing.get("plan", "basico").capitalize()
+        raise HTTPException(
+            status_code=403,
+            detail=f"Tu plan {plan_label} no incluye esta función. Actualiza tu suscripción en /planes."
+        )
 
 
 # =========================
@@ -3008,6 +3072,7 @@ async def register_dsp(data: RegisterRequest, request: Request):
         "status": "trial",
         "trial_ends": (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(),
         "email": (data.email or "").strip().lower() or None,
+        "plan": (data.plan or "").strip().lower() or None,
         "centers": [first_center],   # cada DSP empieza con UN centro (el suyo)
         "max_centers": 1,            # añadir más = de pago (sube este límite)
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -3027,6 +3092,51 @@ async def register_dsp(data: RegisterRequest, request: Request):
         await _ensure_tenant_indexes(org["db_name"])
     except Exception as _ie:
         logger.warning(f"Error creando índices para nuevo DSP {org_id}: {_ie}")
+    # Enviar email de bienvenida con Resend (no bloqueante)
+    recipient = org.get("email")
+    resend_key = os.environ.get("RESEND_API_KEY", "")
+    if recipient and resend_key:
+        plan_label = {"basico": "Básico", "pro": "Pro", "flota": "Flota"}.get(org.get("plan") or "", "Pro")
+        try:
+            import httpx as _httpx
+            await _httpx.AsyncClient().post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                json={
+                    "from": "FlotaDSP <hola@flotadsp.com>",
+                    "to": [recipient],
+                    "subject": f"¡Bienvenido a FlotaDSP! Tu prueba gratuita de 14 días ya está activa",
+                    "html": f"""
+<div style="font-family:Inter,sans-serif;max-width:520px;margin:0 auto;background:#0b0d10;color:#eef1f6;border-radius:16px;overflow:hidden">
+  <div style="background:linear-gradient(135deg,#0ea5e9,#0369a1);padding:32px 28px;text-align:center">
+    <div style="font-size:32px;margin-bottom:8px">⚡</div>
+    <h1 style="margin:0;font-size:24px;font-weight:900;color:#fff">¡Bienvenido a FlotaDSP!</h1>
+    <p style="margin:8px 0 0;color:rgba(255,255,255,.8);font-size:14px">Tu prueba gratuita de 14 días ya está activa</p>
+  </div>
+  <div style="padding:28px">
+    <p style="margin:0 0 16px;color:#cbd3e0;font-size:15px">Hola <b>{org_name}</b>,</p>
+    <p style="margin:0 0 20px;color:#8b94a3;font-size:14px;line-height:1.6">
+      Tu cuenta con el plan <b style="color:#0ea5e9">{plan_label}</b> está lista. Tienes 14 días completos para probarlo sin límites y sin introducir ninguna tarjeta.
+    </p>
+    <div style="background:#13161b;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:16px 20px;margin-bottom:24px">
+      <div style="font-size:12px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Tu acceso</div>
+      <div style="font-size:14px;color:#cbd3e0;margin-bottom:6px">🔐 Usuario: <b style="color:#eef1f6">{username}</b></div>
+      <div style="font-size:14px;color:#cbd3e0">📦 Plan: <b style="color:#0ea5e9">{plan_label}</b> · Prueba gratuita 14 días</div>
+    </div>
+    <a href="https://flotadsp.com/panel" style="display:block;text-align:center;background:linear-gradient(135deg,#0ea5e9,#0369a1);color:#fff;text-decoration:none;padding:14px 24px;border-radius:10px;font-weight:800;font-size:15px;margin-bottom:24px">
+      Entrar al panel →
+    </a>
+    <p style="margin:0;color:#64748b;font-size:12px;text-align:center;line-height:1.6">
+      Si tienes alguna pregunta, escríbenos a <a href="mailto:hola@flotadsp.com" style="color:#0ea5e9">hola@flotadsp.com</a><br>
+      Al finalizar la prueba, se cobra el plan elegido salvo cancelación.
+    </p>
+  </div>
+</div>""",
+                },
+                timeout=8.0,
+            )
+        except Exception as _ee:
+            logger.warning(f"Email de bienvenida no enviado a {recipient}: {_ee}")
     token = create_token(user_id, "admin", org_name,
                          org_id=org_id, db_name=org["db_name"], account_type="dsp",
                          centers=org.get("centers"))
@@ -3038,22 +3148,36 @@ async def register_dsp(data: RegisterRequest, request: Request):
 def _org_billing(org):
     """Estado de suscripción de una organización (para el trial y el bloqueo)."""
     if not org or org.get("account_type") == "owner":
-        return {"status": "owner", "required": False, "days_left": None}
+        limits = PLAN_LIMITS["owner"]
+        return {"status": "owner", "required": False, "days_left": None, "plan": "owner", "limits": limits}
+    _raw = (org.get("plan") or "").lower().strip()
+    for _c, _r in [("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u")]:
+        _raw = _raw.replace(_c, _r)
+    plan_key = _raw
+    limits = PLAN_LIMITS.get(plan_key, PLAN_DEFAULT)
     status = org.get("status", "trial")
     if status == "active":
-        return {"status": "active", "required": False, "days_left": None}
+        return {"status": "active", "required": False, "days_left": None, "plan": plan_key or "pro", "limits": limits}
     if status == "trial":
         days = None
         te = org.get("trial_ends")
         if te:
             try:
-                days = (datetime.fromisoformat(te) - datetime.now(timezone.utc)).days
+                te_dt = datetime.fromisoformat(te)
+                # Normalizar a aware si es naive (cuentas antiguas sin tz)
+                if te_dt.tzinfo is None:
+                    te_dt = te_dt.replace(tzinfo=timezone.utc)
+                delta = te_dt - datetime.now(timezone.utc)
+                # Redondear hacia arriba: si quedan 13d 23h mostramos 14
+                days = max(0, -(-delta.total_seconds() // 86400))  # ceil division
+                days = int(days)
             except Exception:
-                pass
-        # trial caducado → hay que pagar
-        return {"status": "trial", "required": (days is not None and days < 0), "days_left": days}
-    # past_due / canceled / unpaid → bloqueado hasta pagar
-    return {"status": status, "required": True, "days_left": None}
+                days = None
+        trial_limits = PLAN_LIMITS.get(plan_key, PLAN_DEFAULT)
+        return {"status": "trial", "required": (days is not None and days < 0), "days_left": days,
+                "plan": plan_key or "pro", "limits": trial_limits}
+    # past_due / canceled / unpaid → bloqueado
+    return {"status": status, "required": True, "days_left": None, "plan": plan_key or "basico", "limits": PLAN_LIMITS.get(plan_key, PLAN_LIMITS["basico"])}
 
 
 @api_router.get("/org/billing")
@@ -3066,26 +3190,89 @@ async def org_billing(user: dict = Depends(get_current_user)):
     return b
 
 
+# ===== UPGRADE PRORRATEADO =====
+
+PLAN_PRICES = {"basico": 99, "pro": 229, "flota": 399, "enterprise": 0, "owner": 0}
+
+@api_router.get("/org/upgrade-preview")
+async def upgrade_preview(new_plan: str, user: dict = Depends(require_admin)):
+    """Calcula el coste real de subir de plan a mitad de ciclo.
+    Devuelve: credit (días ya pagados del plan actual), charge (a pagar ahora), total_new (precio completo del nuevo plan)."""
+    org = await get_org(user.get("org_id"))
+    billing = _org_billing(org)
+    current_plan = billing.get("plan", "basico")
+    new_plan = new_plan.lower().strip()
+
+    if new_plan not in PLAN_LIMITS:
+        raise HTTPException(400, "Plan no válido")
+    if new_plan == current_plan:
+        raise HTTPException(400, "Ya estás en ese plan")
+
+    current_price = PLAN_PRICES.get(current_plan, 0)
+    new_price = PLAN_PRICES.get(new_plan, 0)
+
+    if new_price <= current_price:
+        return {"type": "downgrade", "current_plan": current_plan, "new_plan": new_plan,
+                "message": "El cambio a un plan inferior se aplica al siguiente ciclo de facturación.",
+                "charge": 0, "credit": 0, "total_new": new_price}
+
+    # Calcular días restantes del mes actual
+    today = datetime.now(timezone.utc)
+    import calendar as _cal
+    days_in_month = _cal.monthrange(today.year, today.month)[1]
+    days_used = today.day - 1
+    days_remaining = days_in_month - days_used
+    credit = round(current_price * days_remaining / days_in_month, 2)
+    prorated_new = round(new_price * days_remaining / days_in_month, 2)
+    charge = max(0, round(prorated_new - credit, 2))
+
+    return {
+        "type": "upgrade",
+        "current_plan": current_plan, "new_plan": new_plan,
+        "current_price": current_price, "new_price": new_price,
+        "days_remaining": days_remaining, "days_in_month": days_in_month,
+        "credit": credit,
+        "prorated_new": prorated_new,
+        "charge": charge,
+        "message": f"Pagas {charge}€ ahora ({days_remaining} días del nuevo plan menos {credit}€ de crédito del plan actual).",
+    }
+
+
+@api_router.post("/org/change-plan")
+async def change_plan(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Cambia el plan de la organización (solo downgrade o upgrades ya pagados vía Lemon Squeezy)."""
+    new_plan = (data.get("plan") or "").lower().strip()
+    if new_plan not in PLAN_LIMITS:
+        raise HTTPException(400, "Plan no válido")
+    org = await get_org(user.get("org_id"))
+    if not org:
+        raise HTTPException(404, "Organización no encontrada")
+    await global_db.organizations.update_one(
+        {"id": org["id"]},
+        {"$set": {"plan": new_plan, "plan_changed_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"success": True, "plan": new_plan}
+
+
 # ===== PAGOS: Lemon Squeezy (Merchant of Record) =====
 # Se activa poniendo los secretos en Fly: LS_WEBHOOK_SECRET y las URLs de checkout
 # LS_CHECKOUT_STARTER / LS_CHECKOUT_PRO / LS_CHECKOUT_FLOTA.
 
 @api_router.get("/billing/config")
 async def billing_config(user: dict = Depends(get_current_user)):
-    """URLs de checkout por plan (vacío si aún no has conectado Lemon Squeezy).
-    El frontend añade el org_id del DSP en custom_data para que el webhook active
-    la cuenta correcta al pagar.
-    Claves: Starter (149€), Pro (299€), Forensics (Pro + AI Forensics 499€),
-    Enterprise (contacto). 'Max' se mantiene por compatibilidad con localStorage antiguo."""
+    """URLs de checkout por plan (Básico / Pro / Flota / Enterprise)."""
     return {
         "provider": "lemonsqueezy",
-        "ready": bool(os.environ.get("LS_CHECKOUT_PRO") or os.environ.get("LS_CHECKOUT_AI_FORENSICS")),
+        "ready": bool(os.environ.get("LS_CHECKOUT_BASICO") or os.environ.get("LS_CHECKOUT_PRO")),
         "checkout": {
-            "Starter": os.environ.get("LS_CHECKOUT_STARTER", ""),
-            "Pro": os.environ.get("LS_CHECKOUT_PRO", ""),
-            "Forensics": os.environ.get("LS_CHECKOUT_AI_FORENSICS", ""),
-            "Enterprise": os.environ.get("LS_CHECKOUT_ENTERPRISE", ""),
-            "Max": os.environ.get("LS_CHECKOUT_MAX", ""),  # legacy, no enseñar
+            "basico": os.environ.get("LS_CHECKOUT_BASICO", ""),
+            "pro": os.environ.get("LS_CHECKOUT_PRO", ""),
+            "flota": os.environ.get("LS_CHECKOUT_FLOTA", ""),
+            "enterprise": os.environ.get("LS_CHECKOUT_ENTERPRISE", ""),
+            # Variantes anuales — añadir cuando crees los productos en Lemon Squeezy
+            "basico_annual": os.environ.get("LS_CHECKOUT_BASICO_ANNUAL", ""),
+            "pro_annual": os.environ.get("LS_CHECKOUT_PRO_ANNUAL", ""),
+            "flota_annual": os.environ.get("LS_CHECKOUT_FLOTA_ANNUAL", ""),
         },
     }
 
@@ -3129,7 +3316,18 @@ async def lemonsqueezy_webhook(request: Request):
         return {"ok": True, "dedup": True}
     attrs = ((payload.get("data") or {}).get("attributes") or {})
     status = attrs.get("status", "")
-    plan = attrs.get("variant_name") or attrs.get("product_name")
+    raw_plan = attrs.get("product_name") or attrs.get("variant_name") or ""
+    # Normalizar nombre LS → clave interna (acepta acentos, mayúsculas, sufijo Y/anual)
+    def _ls_plan_key(s: str) -> str:
+        s = (s or "").lower()
+        for c, r in [("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u")]:
+            s = s.replace(c, r)
+        if "enterprise" in s: return "enterprise"
+        if "flota" in s:      return "flota"
+        if "pro" in s:        return "pro"
+        if "basico" in s or "basic" in s: return "basico"
+        return "pro"  # fallback seguro: nunca menos permisos de los pagados
+    plan = _ls_plan_key(raw_plan)
     if not org_id:
         return {"ok": True, "ignored": "sin org_id"}
     # activo si la suscripción está viva; suspendido/cancelado si no
@@ -3425,8 +3623,18 @@ async def conductor_list_public(center: Optional[str] = None, slug: Optional[str
         if not re.match(r'^[A-Za-z0-9_\-]{1,30}$', center):
             raise HTTPException(400, "Código de centro inválido")
         query["center"] = {"$regex": re.escape(center), "$options": "i"}
-    cursor = db.drivers.find(query, {"_id": 0, "id": 1, "name": 1, "center": 1, "photo_url": 1})
+    cursor = db.drivers.find(query, {"_id": 0, "id": 1, "name": 1, "email": 1, "center": 1, "photo_url": 1})
     drivers = await cursor.to_list(500)
+    # Añadir has_account para que el portal sepa si debe pedir contraseña
+    if drivers:
+        ids_with_account = {
+            a["driver_id"] async for a in db.driver_accounts.find(
+                {"driver_id": {"$in": [d["id"] for d in drivers]}, "active": True},
+                {"driver_id": 1}
+            )
+        }
+        for d in drivers:
+            d["has_account"] = d["id"] in ids_with_account
     return drivers
 
 
@@ -3444,7 +3652,8 @@ async def driver_token_by_id(data: dict, request: Request):
 
 async def _driver_token_impl(data: dict):
     """Genera JWT para el portal conductor (login por email sin contraseña).
-    El portal ya valida que el email existe en la BD pública — aquí solo emitimos el token."""
+    El portal ya valida que el email existe en la BD pública — aquí solo emitimos el token.
+    Si el conductor tiene una cuenta con contraseña, se rechaza el acceso sin contraseña."""
     driver_id = data.get("driver_id")
     if not driver_id:
         raise HTTPException(status_code=400, detail="driver_id requerido")
@@ -3452,6 +3661,10 @@ async def _driver_token_impl(data: dict):
     driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0})
     if not driver:
         raise HTTPException(status_code=404, detail="Conductor no encontrado")
+    # Seguridad: si el conductor tiene contraseña configurada, debe usarla
+    account = await db.driver_accounts.find_one({"driver_id": driver_id, "active": True})
+    if account:
+        raise HTTPException(status_code=403, detail="Este conductor tiene contraseña. Usa tu email y contraseña para acceder.")
     token = create_token(driver_id, "driver", driver.get("name", ""),
                          org_id=(org or {}).get("id"), db_name=_tenant_db_name(org),
                          account_type=(org or {}).get("account_type"))
@@ -3769,6 +3982,15 @@ async def list_driver_accounts(_admin: dict = Depends(require_admin)):
     return accounts
 
 
+@auth_router.delete("/driver-account/{driver_id}")
+async def delete_driver_account(driver_id: str, _admin: dict = Depends(require_admin)):
+    result = await db.driver_accounts.delete_one({"driver_id": driver_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="No existe cuenta para este conductor")
+    logger.info(f"Cuenta de conductor eliminada: {driver_id}")
+    return {"success": True, "driver_id": driver_id}
+
+
 # =============================================================
 # API ROUTES
 # =============================================================
@@ -4000,11 +4222,13 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
             if did:
                 assigned_days.setdefault(did, set()).add(a.get("date"))
 
-    # Historial por vehículo SOLO con análisis válidos (para el delta)
+    # Historial por vehículo SOLO con análisis válidos (para el delta) — acotado a 6 meses atrás
+    _history_start = datetime(y, m, 1, tzinfo=timezone.utc) - __import__('datetime').timedelta(days=180)
     all_inspections = await db.inspections.find(
-        {"deleted": {"$ne": True}, "analysis_status": "ok", "analysis": {"$ne": None}},
+        {"deleted": {"$ne": True}, "analysis_status": "ok", "analysis": {"$ne": None},
+         "created_at": {"$gte": _history_start.isoformat()}},
         {"_id": 0, "id": 1, "vehicle_id": 1, "driver_id": 1, "created_at": 1, "analysis": 1}
-    ).sort("created_at", 1).to_list(length=20000)
+    ).sort("created_at", 1).to_list(length=2000)
     vehicle_history = {}
     for insp in all_inspections:
         vid = insp.get("vehicle_id")
@@ -4333,13 +4557,13 @@ async def update_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     prev = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "status": 1})
     result = await db.vehicles.update_one({"id": vehicle_id}, {"$set": data})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Vehículo no encontrado")
     if "status" in data:
         try:
             await _auto_incident_on_workshop(vehicle_id, (prev or {}).get("status"), data.get("status"))
         except Exception as _ai:
             logger.warning(f"Auto-incidencia taller: {_ai}")
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Vehículo no encontrado")
     return {"success": True}
 
 
@@ -4524,7 +4748,10 @@ async def upload_inspection_photos(
         doc = serialize_doc(inspection.model_dump())
         await db.inspections.insert_one(doc)
 
-        # Llamar a Gemini en background (no bloquea la respuesta al conductor)
+        # Llamar a Gemini en background SOLO si el plan lo permite
+        org = await get_org(user.get("org_id"))
+        plan_ai = _org_billing(org)["limits"].get("ai", False)
+
         async def _analyze_and_update():
             try:
                 analysis, analysis_status, analysis_error = await asyncio.wait_for(
@@ -4608,7 +4835,13 @@ async def upload_inspection_photos(
                     {"id": inspection.id},
                     {"$set": {"analysis_status": "error", "analysis_error": str(_e)}}
                 )
-        asyncio.create_task(_analyze_and_update())
+        if plan_ai:
+            asyncio.create_task(_analyze_and_update())
+        else:
+            await db.inspections.update_one(
+                {"id": inspection.id},
+                {"$set": {"analysis_status": "plan_disabled", "analysis_error": "IA no incluida en tu plan"}}
+            )
 
         # Lanzar detección YOLO en background (no bloquea la respuesta al usuario)
         asyncio.create_task(_run_yolo_for_inspection(inspection.id, photo_urls))
@@ -4639,6 +4872,9 @@ async def upload_inspection_photos(
 @api_router.get("/inspections", response_model=List[Inspection])
 async def get_inspections(
     vehicle_id: Optional[str] = None,
+    center: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
     limit: int = 100,
     skip: int = 0,
     _=Depends(require_admin),
@@ -4646,6 +4882,12 @@ async def get_inspections(
     query = {"deleted": {"$ne": True}}
     if vehicle_id:
         query["vehicle_id"] = vehicle_id
+    if center and center != "Todos":
+        query["center"] = center
+    if date_from:
+        query.setdefault("created_at", {})["$gte"] = date_from
+    if date_to:
+        query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
     limit = max(1, min(limit, 500))
     skip = max(0, skip)
     inspections = await db.inspections.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).to_list(limit)
@@ -5213,6 +5455,7 @@ async def sign_inspection(inspection_id: str, data: SignInspectionRequest, reque
                           user: dict = Depends(require_any_auth)):
     """Firma una inspección con cadena de custodia hash. Idempotente: 409 si ya firmada.
     Auth: el conductor asignado al vehículo de esa inspección, o cualquier admin de la org."""
+    await _require_plan_feature(user, "forensics")
     # Rate-limit: 3 firmas/min por usuario (anti-rebote).
     _rl_public_action(f"sign:{user.get('sub')}", max_count=3, window_s=60,
                       detail="Demasiadas firmas seguidas. Espera un minuto.")
@@ -6098,6 +6341,7 @@ async def _chat_room_can_access(user: dict, center: str) -> bool:
 async def chat_get(center: str, since: Optional[str] = None,
                    limit: int = 100, user: dict = Depends(require_admin)):
     """Devuelve los últimos N mensajes de la sala del centro (o desde 'since' ISO si se pasa)."""
+    await _require_plan_feature(user, "chat")
     if not await _chat_room_can_access(user, center):
         raise HTTPException(403, "No tienes acceso a este chat")
     q = {"center": center}
@@ -6112,6 +6356,7 @@ async def chat_get(center: str, since: Optional[str] = None,
 @api_router.post("/chat/{center}")
 async def chat_post(center: str, data: dict = Body(...), user: dict = Depends(require_admin)):
     """Envía un mensaje a la sala del centro."""
+    await _require_plan_feature(user, "chat")
     if not await _chat_room_can_access(user, center):
         raise HTTPException(403, "No tienes acceso a este chat")
     text = (data.get("text") or "").strip()
@@ -7022,6 +7267,7 @@ class Incident(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     vehicle_id: str
     driver_id: Optional[str] = None
+    created_by_name: Optional[str] = None   # nombre del admin/conductor que abrió la incidencia
     title: str = ""
     description: str
     severity: str = "leve"
@@ -7045,7 +7291,7 @@ class IncidentCreate(BaseModel):
 async def _auto_incident_on_workshop(vehicle_id: str, prev_status, new_status):
     """Al marcar un vehículo 'en taller', crea (o reabre) su incidencia automáticamente
     para que siempre quede en el histórico."""
-    if new_status != "in_workshop" or prev_status == "in_workshop":
+    if new_status != "taller" or prev_status == "taller":
         return
     v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "license_plate": 1})
     plate = (v or {}).get("license_plate", vehicle_id)
@@ -7091,6 +7337,21 @@ async def create_incident(data: IncidentCreate, user: dict = Depends(require_any
     incident = Incident(**data.model_dump())
     if user["role"] == "driver":
         incident.driver_id = user["sub"]
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        assigned_today = await db.daily_assignments.find_one({
+            "date": today,
+            "slots": {"$elemMatch": {"driver_id": user["sub"], "vehicle_id": incident.vehicle_id}}
+        }, {"_id": 0, "id": 1})
+        inspected_today = None
+        if not assigned_today:
+            inspected_today = await db.inspections.find_one({
+                "vehicle_id": incident.vehicle_id,
+                "driver_id": user["sub"],
+                "created_at": {"$regex": f"^{today}"}
+            }, {"_id": 0, "id": 1})
+        if not assigned_today and not inspected_today:
+            raise HTTPException(status_code=403, detail="Solo puedes crear incidencias en tu vehículo asignado")
+    incident.created_by_name = user.get("name") or user.get("username") or "Admin"
     doc = serialize_doc(incident.model_dump())
     await db.incidents.insert_one(doc)
     logger.info(f"Incidencia creada: {incident.id} — vehículo {incident.vehicle_id}")
@@ -7118,6 +7379,88 @@ async def resolve_incident(incident_id: str, _=Depends(require_admin)):
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Incidencia no encontrada")
+    return {"success": True}
+
+
+@api_router.patch("/incidents/{incident_id}")
+async def update_incident(incident_id: str, request: Request, _=Depends(require_admin)):
+    """Actualiza campos editables de una incidencia."""
+    _ALLOWED = {"title", "description", "severity", "notes", "status"}
+    data = await request.json()
+    data = {k: v for k, v in data.items() if k in _ALLOWED}
+    if not data:
+        raise HTTPException(status_code=400, detail="Sin campos válidos")
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if data.get("status") == "resolved" and "resolved_at" not in data:
+        data["resolved_at"] = data["updated_at"]
+    elif data.get("status") == "open":
+        data["resolved_at"] = None
+    result = await db.incidents.update_one({"id": incident_id}, {"$set": data})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Incidencia no encontrada")
+    return {"success": True}
+
+
+@api_router.delete("/incidents/{incident_id}")
+async def delete_incident(incident_id: str, _=Depends(require_admin)):
+    """Elimina permanentemente una incidencia."""
+    result = await db.incidents.delete_one({"id": incident_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Incidencia no encontrada")
+    return {"success": True}
+
+
+# =========================
+# CONTACTOS — directorio interno de empleados
+# =========================
+
+class ContactCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    role: Optional[str] = ""          # cargo / rol
+    phone: Optional[str] = ""
+    email: Optional[str] = ""
+    center: Optional[str] = ""
+    notes: Optional[str] = ""
+
+class ContactUpdate(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    center: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@api_router.get("/contacts")
+async def get_contacts(_=Depends(require_admin)):
+    contacts = await db.contacts.find({}, {"_id": 0}).sort("name", 1).to_list(500)
+    return contacts
+
+
+@api_router.post("/contacts")
+async def create_contact(data: ContactCreate, _=Depends(require_admin)):
+    doc = {"id": str(uuid.uuid4()), "created_at": datetime.now(timezone.utc).isoformat(), **data.model_dump()}
+    await db.contacts.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.patch("/contacts/{contact_id}")
+async def update_contact(contact_id: str, data: ContactUpdate, _=Depends(require_admin)):
+    updates = {k: v for k, v in data.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="Sin cambios")
+    result = await db.contacts.update_one({"id": contact_id}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Contacto no encontrado")
+    return {"success": True}
+
+
+@api_router.delete("/contacts/{contact_id}")
+async def delete_contact(contact_id: str, _=Depends(require_admin)):
+    result = await db.contacts.delete_one({"id": contact_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Contacto no encontrado")
     return {"success": True}
 
 
@@ -7195,6 +7538,54 @@ async def list_workshops(
                 except Exception:
                     pass
     return workshops
+
+
+@api_router.get("/workshops/nearby")
+async def workshops_nearby(
+    lat: float,
+    lng: float,
+    provider: Optional[str] = None,
+    max_km: float = 80,
+    limit: int = 15,
+    category: Optional[str] = None,
+    current_user: dict = Depends(require_any_auth),
+):
+    """
+    Devuelve talleres ordenados por distancia al punto (lat, lng).
+    Accesible para cualquier usuario autenticado (no solo admin).
+    Incluye info de asistencia en carretera del proveedor.
+    """
+    query = {"active": {"$ne": False}}
+    if category:
+        query["categories"] = category
+
+    workshops = await db.workshops.find(query, {"_id": 0}).to_list(500)
+
+    if provider:
+        workshops = [w for w in workshops if _provider_matches(w, provider)]
+
+    # Calcular distancia y filtrar
+    results = []
+    for w in workshops:
+        if w.get("latitude") is None or w.get("longitude") is None:
+            continue
+        dist = _haversine_km((lat, lng), (w["latitude"], w["longitude"])) or 9999
+        if dist <= max_km:
+            w["distance_km"] = round(dist, 1)
+            results.append(w)
+
+    results.sort(key=lambda x: x["distance_km"])
+    results = results[:limit]
+
+    # Inyectar info de asistencia en carretera
+    roadside = _provider_roadside(provider or "")
+    return {
+        "workshops": results,
+        "roadside": roadside,
+        "provider": provider,
+        "user_lat": lat,
+        "user_lng": lng,
+    }
 
 
 @api_router.post("/workshops", response_model=Workshop)
@@ -7471,13 +7862,13 @@ async def put_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     prev = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "status": 1})
     result = await db.vehicles.update_one({"id": vehicle_id}, {"$set": data})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Vehículo no encontrado")
     if "status" in data:
         try:
             await _auto_incident_on_workshop(vehicle_id, (prev or {}).get("status"), data.get("status"))
         except Exception as _ai:
             logger.warning(f"Auto-incidencia taller: {_ai}")
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Vehículo no encontrado")
     return {"success": True}
 
 
@@ -8227,8 +8618,9 @@ async def drivers_ranking(_=Depends(require_admin)):
 
 @api_router.get("/assignments/daily")
 async def get_daily_assignments(
-    date: Optional[str] = None, center: Optional[str] = None, _=Depends(require_admin)
+    date: Optional[str] = None, center: Optional[str] = None, user: dict = Depends(require_admin)
 ):
+    await _require_plan_feature(user, "assignments")
     """Obtiene las asignaciones del día para un centro."""
     if not date:
         date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -8254,8 +8646,9 @@ async def get_daily_assignments(
 
 
 @api_router.put("/assignments/daily")
-async def upsert_daily_assignment(request: Request, _=Depends(require_admin)):
+async def upsert_daily_assignment(request: Request, user: dict = Depends(require_admin)):
     """Crea o actualiza la asignación diaria de un centro."""
+    await _require_plan_feature(user, "assignments")
     try:
         data = await request.json()
     except Exception as e:
@@ -8322,8 +8715,9 @@ def _norm_name_words(name):
 @api_router.post("/assignments/import-text")
 async def import_roster_text(
     data: dict,
-    _=Depends(require_admin),
+    user: dict = Depends(require_admin),
 ):
+    await _require_plan_feature(user, "assignments")
     """Importa el roster pegado desde la plataforma de Amazon, EN CUALQUIER FORMATO.
 
     Estrategia en cascada:
@@ -8528,10 +8922,11 @@ async def import_roster_image(
     file: UploadFile = File(...),
     date: str = Form(None),
     center: str = Form(...),
-    _=Depends(require_admin),
+    user: dict = Depends(require_admin),
 ):
     """Lee una captura del roster de Amazon con Gemini Vision, extrae los pares
     matrícula↔conductor y los cruza con la BD para rellenar el cuadrante."""
+    await _require_plan_feature(user, "assignments")
     if not date:
         date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -9398,23 +9793,78 @@ async def get_vehicle_history(vehicle_id: str, _=Depends(require_admin)):
     }
 
 
+def _build_maint_item(v: dict, kind: str, default_interval: int, default_warn: int) -> Optional[dict]:
+    """Construye el objeto de estado de un ítem de mantenimiento a partir del documento de vehículo."""
+    last_km = v.get(f"{kind}_last_change_km")
+    if last_km is None:
+        return None
+    km_actual = v.get("mileage") or last_km
+    interval = v.get(f"{kind}_interval_km", default_interval)
+    warn = v.get(f"{kind}_warning_before_km", default_warn)
+    recorridos = km_actual - last_km
+    restantes = interval - recorridos
+    return {
+        "last_change_km": last_km,
+        "last_change_date": v.get(f"{kind}_last_change_date"),
+        "interval_km": interval,
+        "warning_before_km": warn,
+        "km_until_change": restantes,
+        "next_change_at_km": last_km + interval,
+        "overdue": restantes <= 0,
+        "warning": 0 < restantes <= warn,
+    }
+
+
 @api_router.get("/vehicles/{vehicle_id}/maintenance")
 async def get_maintenance_info(vehicle_id: str, _=Depends(require_admin)):
-    """Devuelve info de bolsas y aceite de una furgoneta."""
+    """Devuelve info de mantenimiento completa de una furgoneta (aceite, ruedas, pastillas)."""
     v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
     if not v:
         raise HTTPException(status_code=404, detail="Furgoneta no encontrada")
-    oil = None
-    if v.get("oil_last_change_km") is not None:
-        km_actual = v.get("mileage") or v.get("oil_last_change_km")
-        recorridos = km_actual - v["oil_last_change_km"]
-        restantes = v.get("oil_interval_km", 15000) - recorridos
-        oil = {"last_change_km": v["oil_last_change_km"], "last_change_date": v.get("oil_last_change_date"),
-               "interval_km": v.get("oil_interval_km", 15000), "km_until_change": restantes,
-               "next_change_at_km": v["oil_last_change_km"] + v.get("oil_interval_km", 15000)}
-    return {"bags_remaining": v.get("bags_remaining", 0),
-            "bags_history": v.get("bags_history", [])[-10:],
-            "provider": v.get("provider"), "mileage": v.get("mileage"), "oil": oil}
+    return {
+        "mileage": v.get("mileage"),
+        "bags_remaining": v.get("bags_remaining", 0),
+        "bags_history": v.get("bags_history", [])[-10:],
+        "provider": v.get("provider"),
+        "oil":       _build_maint_item(v, "oil",       15000, 2500),
+        "ruedas":    _build_maint_item(v, "ruedas",    40000, 3000),
+        "pastillas": _build_maint_item(v, "pastillas", 30000, 3000),
+    }
+
+
+@api_router.get("/alerts/maintenance")
+async def get_maintenance_alerts(_=Depends(require_admin)):
+    """Devuelve todas las furgonetas con mantenimiento vencido o próximo."""
+    vehicles = await db.vehicles.find(
+        {"status": {"$ne": "baja"}},
+        {"_id": 0, "id": 1, "license_plate": 1, "brand": 1, "model": 1, "center": 1,
+         "mileage": 1,
+         "oil_last_change_km": 1, "oil_last_change_date": 1, "oil_interval_km": 1, "oil_warning_before_km": 1,
+         "ruedas_last_change_km": 1, "ruedas_last_change_date": 1, "ruedas_interval_km": 1, "ruedas_warning_before_km": 1,
+         "pastillas_last_change_km": 1, "pastillas_last_change_date": 1, "pastillas_interval_km": 1, "pastillas_warning_before_km": 1}
+    ).to_list(500)
+
+    alerts = []
+    for v in vehicles:
+        for kind, default_i, default_w, label in [
+            ("oil", 15000, 2500, "Aceite"),
+            ("ruedas", 40000, 3000, "Ruedas"),
+            ("pastillas", 30000, 3000, "Pastillas de freno"),
+        ]:
+            item = _build_maint_item(v, kind, default_i, default_w)
+            if item and (item["overdue"] or item["warning"]):
+                alerts.append({
+                    "vehicle_id": v["id"],
+                    "license_plate": v.get("license_plate"),
+                    "brand": v.get("brand"),
+                    "center": v.get("center"),
+                    "mileage": v.get("mileage"),
+                    "kind": kind,
+                    "label": label,
+                    **item,
+                })
+    alerts.sort(key=lambda a: a["km_until_change"])
+    return alerts
 
 
 
@@ -10754,78 +11204,155 @@ _CENTER_COORDS = {
 }
 
 _SEED_RENTALS = [
-    # ── SANTIAGO (OGA5) ──
+    # ── SANTIAGO CIUDAD (OGA5) — radio ~5 km ──
     {"name": "Iberfurgo Santiago", "center": "OGA5",
-     "address": "Santiago de Compostela", "phone": "679954668",
+     "address": "Rúa de Xoán XXIII, 3, 15703 Santiago de Compostela", "phone": "679954668",
      "email": "santiago@iberfurgo.com",
      "website": "https://www.iberfurgo.com/oficinas/alquiler-furgonetas-santiago-compostela/",
-     "notes": "Furgonetas y camiones. Desde ~30 €/día. Stock de vehículos nuevos."},
-    {"name": "Hello Rentacar Santiago", "center": "OGA5",
-     "address": "Avenida de Lugo, 117, Santiago de Compostela", "phone": "881972226",
-     "email": "",
-     "website": "https://www.hellorentacar.es/alquiler-furgonetas/galicia/santiago-compostela/",
-     "notes": "Coches y furgonetas en el centro de Santiago."},
-    {"name": "GoRental Santiago", "center": "OGA5",
-     "address": "Santiago de Compostela", "phone": "981573993",
-     "email": "",
-     "website": "http://www.gorental.es/",
-     "notes": "Alquiler local de vehículos comerciales."},
+     "latitude": 42.8757, "longitude": -8.5470,
+     "logo_domain": "iberfurgo.com", "brand_color": "#E84023",
+     "notes": "Furgonetas y camiones. Desde ~30 €/día. Asistencia 24/7."},
     {"name": "OneFurgo Santiago", "center": "OGA5",
-     "address": "Santiago de Compostela", "phone": "",
+     "address": "Rúa de Casas Reais, 20, 15703 Santiago de Compostela", "phone": "900829339",
      "email": "info@onefurgo.com",
      "website": "https://onefurgo.com/red-de-oficinas/alquiler-de-furgonetas-baratas-en-santiago-de-compostela",
+     "latitude": 42.8808, "longitude": -8.5453,
+     "logo_domain": "onefurgo.com", "brand_color": "#FF6B00",
      "notes": "Furgonetas de carga, pasajeros y carrozadas. Reserva online."},
+    {"name": "Hello Rentacar Santiago", "center": "OGA5",
+     "address": "Avenida de Lugo, 117, 15703 Santiago de Compostela", "phone": "881972226",
+     "email": "",
+     "website": "https://www.hellorentacar.es/alquiler-furgonetas/galicia/santiago-compostela/",
+     "latitude": 42.8803, "longitude": -8.5338,
+     "logo_domain": "hellorentacar.es", "brand_color": "#00B140",
+     "notes": "Coches y furgonetas en el centro de Santiago."},
+    {"name": "GoRental Santiago", "center": "OGA5",
+     "address": "Rúa do Hórreo, 76, 15702 Santiago de Compostela", "phone": "981573993",
+     "email": "",
+     "website": "http://www.gorental.es/",
+     "latitude": 42.8726, "longitude": -8.5442,
+     "logo_domain": "gorental.es", "brand_color": "#0073CF",
+     "notes": "Alquiler local de vehículos comerciales."},
+    {"name": "Europcar Santiago Ciudad", "center": "OGA5",
+     "address": "Rúa do Hórreo, 24, 15702 Santiago de Compostela", "phone": "981563668",
+     "email": "",
+     "website": "https://www.europcar.es/location/spain/santiago-de-compostela/santiago-downtown",
+     "latitude": 42.8721, "longitude": -8.5437,
+     "logo_domain": "europcar.com", "brand_color": "#009A44",
+     "notes": "Oficina en el centro. Coches y furgonetas. L-V 8:00-20:00, S 9:00-13:00."},
+
+    # ── AEROPUERTO SCQ — 14 km del centro, todos dentro del radio de 20 km ──
     {"name": "Hertz — Aeropuerto Santiago", "center": "OGA5",
-     "address": "Aeropuerto de Santiago (Lavacolla)", "phone": "",
+     "address": "Aeropuerto SCQ, Terminal, 15820 Lavacolla", "phone": "981591323",
      "email": "",
      "website": "https://www.hertz.es/p/alquiler-de-furgonetas/espana/santiago-de-compostela",
-     "notes": "En el aeropuerto. Accesible por A-54/SC-21."},
+     "latitude": 42.8963, "longitude": -8.4151,
+     "logo_domain": "hertz.com", "brand_color": "#FFD100",
+     "notes": "Mostrador en terminal de llegadas. Coches y furgonetas."},
+    {"name": "Europcar — Aeropuerto Santiago", "center": "OGA5",
+     "address": "Aeropuerto SCQ, Terminal, 15820 Lavacolla", "phone": "981591861",
+     "email": "",
+     "website": "https://www.europcar.es/location/spain/santiago-de-compostela/santiago-airport",
+     "latitude": 42.8968, "longitude": -8.4147,
+     "logo_domain": "europcar.com", "brand_color": "#009A44",
+     "notes": "Mostrador en terminal. Recogida y entrega 24h con reserva."},
+    {"name": "Sixt — Aeropuerto Santiago", "center": "OGA5",
+     "address": "Aeropuerto SCQ, Terminal, 15820 Lavacolla", "phone": "932719000",
+     "email": "",
+     "website": "https://www.sixt.es/alquiler-de-coches/espana/santiago-de-compostela/aeropuerto-sgo/",
+     "latitude": 42.8965, "longitude": -8.4148,
+     "logo_domain": "sixt.com", "brand_color": "#FF5F00",
+     "notes": "Mostrador en terminal de llegadas. Coches y SUVs."},
+    {"name": "Avis — Aeropuerto Santiago", "center": "OGA5",
+     "address": "Aeropuerto SCQ, Terminal, 15820 Lavacolla", "phone": "981597648",
+     "email": "",
+     "website": "https://www.avis.es/es/locations/es/sco",
+     "latitude": 42.8961, "longitude": -8.4153,
+     "logo_domain": "avis.com", "brand_color": "#C8102E",
+     "notes": "Mostrador en terminal. Reserva online con tarifa garantizada."},
+    {"name": "Budget — Aeropuerto Santiago", "center": "OGA5",
+     "address": "Aeropuerto SCQ, Terminal, 15820 Lavacolla", "phone": "981597648",
+     "email": "",
+     "website": "https://www.budget.es/brs/carHireSearch.do?selectedOffice=SCQT01",
+     "latitude": 42.8962, "longitude": -8.4152,
+     "logo_domain": "budget.com", "brand_color": "#E4002B",
+     "notes": "Grupo Avis. Tarifas económicas para reservas anticipadas."},
+    {"name": "Record Go — Aeropuerto Santiago", "center": "OGA5",
+     "address": "Aeropuerto SCQ, P. Exterior, 15820 Lavacolla", "phone": "902500905",
+     "email": "",
+     "website": "https://www.record-go.com/alquiler-coches/santiago-de-compostela-aeropuerto",
+     "latitude": 42.8970, "longitude": -8.4160,
+     "logo_domain": "record-go.com", "brand_color": "#E30613",
+     "notes": "Parking exterior con lanzadera. Precios muy competitivos."},
 
-    # ── A CORUÑA (DGA1) ──
+    # ── A CORUÑA (DGA1) — ~65 km, fuera del radio Santiago ──
     {"name": "Iberfurgo A Coruña", "center": "DGA1",
      "address": "C/ Gutemberg 38A, P.I. La Grela, 15008 A Coruña", "phone": "698139597",
      "email": "",
      "website": "https://www.iberfurgo.com/oficinas/alquiler-furgonetas-coruna/",
-     "notes": "L-V 8:00-13:30 y 16:00-20:30 · Sáb 9:00-13:00 · Dom/festivos cita previa. Asistencia 24/7."},
+     "latitude": 43.3228, "longitude": -8.4472,
+     "logo_domain": "iberfurgo.com", "brand_color": "#E84023",
+     "notes": "L-V 8:00-13:30 y 16:00-20:30 · Sáb 9:00-13:00 · Dom/festivos cita previa."},
     {"name": "OneFurgo A Coruña", "center": "DGA1",
-     "address": "Carretera Pocomaco, S/N, A Coruña", "phone": "",
+     "address": "Carretera Pocomaco, S/N, 15190 A Coruña", "phone": "900829339",
      "email": "info@onefurgo.com",
      "website": "https://onefurgo.com/red-de-oficinas/a-coruna",
+     "latitude": 43.3402, "longitude": -8.3793,
+     "logo_domain": "onefurgo.com", "brand_color": "#FF6B00",
      "notes": "Furgonetas sin conductor para empresas y particulares. Reserva online."},
+    {"name": "Europcar A Coruña", "center": "DGA1",
+     "address": "Rúa Federico Tapia, 30, 15005 A Coruña", "phone": "981233397",
+     "email": "",
+     "website": "https://www.europcar.es/location/spain/a-coruna",
+     "latitude": 43.3623, "longitude": -8.4115,
+     "logo_domain": "europcar.com", "brand_color": "#009A44",
+     "notes": "Oficina en el centro de A Coruña. L-V 8:30-13:30 / 16:00-19:30."},
 
-    # ── VIGO (DGA2) ──
+    # ── VIGO (DGA2) — ~90 km, fuera del radio Santiago ──
     {"name": "OneFurgo Vigo", "center": "DGA2",
      "address": "Camiño Gandariña, 21, Lavadores, 36214 Vigo", "phone": "986933464",
      "email": "info@onefurgo.com",
      "website": "https://onefurgo.com/red-de-oficinas/vigo",
+     "latitude": 42.2248, "longitude": -8.7217,
+     "logo_domain": "onefurgo.com", "brand_color": "#FF6B00",
      "notes": "Carga, pasajeros y carrozadas. Reserva online."},
     {"name": "Iberfurgo Vigo", "center": "DGA2",
      "address": "Autovía de Madrid, 234 - Nave 4B, 36318 Vigo", "phone": "608096307",
      "email": "",
      "website": "https://www.iberfurgo.com/oficinas/alquiler-furgonetas-vigo/",
+     "latitude": 42.1950, "longitude": -8.6600,
+     "logo_domain": "iberfurgo.com", "brand_color": "#E84023",
      "notes": "Alquiler por días y renting por meses. Flota nueva. Asistencia 24/7."},
+    {"name": "Europcar Vigo", "center": "DGA2",
+     "address": "Avda. de Madrid, 7, 36204 Vigo", "phone": "986439282",
+     "email": "",
+     "website": "https://www.europcar.es/location/spain/vigo",
+     "latitude": 42.2328, "longitude": -8.7114,
+     "logo_domain": "europcar.com", "brand_color": "#009A44",
+     "notes": "Oficina en el centro de Vigo."},
 ]
 
 
 @app.on_event("startup")
 async def seed_rental_companies():
-    """Siembra el directorio de empresas de alquiler (idempotente)."""
+    """Siembra y actualiza el directorio de empresas de alquiler (upsert por nombre)."""
     try:
-        existing = await db.rental_companies.count_documents({})
-        if existing > 0:
-            return
-        docs = []
         for r in _SEED_RENTALS:
-            doc = dict(r)
-            doc["id"] = str(uuid.uuid4())
-            doc["maps_url"] = "https://www.google.com/maps/search/?api=1&query=" + (r.get("address") or r["name"]).replace(" ", "+")
-            doc["active"] = True
-            doc["last_check"] = None     # {date, by, available, note}
-            doc["created_at"] = datetime.now(timezone.utc).isoformat()
-            docs.append(doc)
-        if docs:
-            await db.rental_companies.insert_many(docs)
-            logger.info(f"Sembradas {len(docs)} empresas de alquiler")
+            existing = await db.rental_companies.find_one({"name": r["name"]})
+            if existing:
+                # Actualiza coordenadas y campos nuevos sin tocar id/created_at
+                await db.rental_companies.update_one(
+                    {"name": r["name"]},
+                    {"$set": {k: v for k, v in r.items() if k not in ("name",)}}
+                )
+            else:
+                doc = dict(r)
+                doc["id"] = str(uuid.uuid4())
+                doc["active"] = True
+                doc["last_check"] = None
+                doc["created_at"] = datetime.now(timezone.utc).isoformat()
+                await db.rental_companies.insert_one(doc)
+        logger.info(f"Seed rentals: {len(_SEED_RENTALS)} empresas sincronizadas")
     except Exception as e:
         logger.error(f"Seed rentals: {e}")
 
@@ -10841,6 +11368,36 @@ def _haversine_km(c1, c2):
     dlon = math.radians(lon2 - lon1)
     a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2)**2
     return round(R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a)), 1)
+
+
+@api_router.get("/rentals/nearby")
+async def rentals_nearby(
+    lat: float,
+    lng: float,
+    max_km: float = 20,
+    limit: int = 20,
+    current_user: dict = Depends(require_any_auth),
+):
+    """
+    Devuelve casas de alquiler ordenadas por distancia al punto (lat, lng).
+    Las que no tienen coordenadas se añaden al final ordenadas por nombre.
+    """
+    docs = await db.rental_companies.find({"active": {"$ne": False}}, {"_id": 0}).to_list(200)
+
+    with_coords, without_coords = [], []
+    for d in docs:
+        if d.get("latitude") is not None and d.get("longitude") is not None:
+            dist = _haversine_km((lat, lng), (d["latitude"], d["longitude"])) or 9999
+            if dist <= max_km:
+                d["distance_km"] = round(dist, 1)
+                with_coords.append(d)
+        else:
+            without_coords.append(d)
+
+    with_coords.sort(key=lambda x: x["distance_km"])
+    without_coords.sort(key=lambda x: x.get("name", ""))
+
+    return {"rentals": (with_coords + without_coords)[:limit], "user_lat": lat, "user_lng": lng}
 
 
 @api_router.get("/rentals")
@@ -12348,9 +12905,10 @@ async def _extract_scorecard_standings(text, pdf_bytes):
 
 @api_router.post("/scorecard/import")
 async def import_scorecard(file: UploadFile = File(...), center: str = Form(...),
-                           _=Depends(require_admin)):
+                           user: dict = Depends(require_admin)):
     """Sube una Scorecard; la IA extrae el rendimiento de cada repartidor y lo guarda
     para que el generador de cuadrantes lo use como señal de eficiencia real."""
+    await _require_plan_feature(user, "scorecard")
     content = await file.read()
     text, pdf_bytes = await _extract_report_text(content, file.filename or "scorecard")
     try:
@@ -12412,8 +12970,9 @@ async def delete_scorecard_week(semana: str, center: Optional[str] = None,
 
 
 @api_router.get("/scorecard/standings")
-async def scorecard_standings(center: Optional[str] = None, _=Depends(require_admin)):
+async def scorecard_standings(center: Optional[str] = None, user: dict = Depends(require_admin)):
     """Últimas semanas de scorecard guardadas (para ver qué hay importado)."""
+    await _require_plan_feature(user, "scorecard")
     q = {}
     if center:
         q["center"] = center
@@ -12813,9 +13372,10 @@ async def _latest_week_with_data(center):
 
 
 @api_router.get("/scorecard/full")
-async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(require_admin)):
+async def scorecard_full(center: str, week: Optional[str] = None, user: dict = Depends(require_admin)):
     """Scorecard completa de la semana (dom): cada métrica con valor + tier +
     qué falta para subir. Valores manuales (db) y auto donde haya."""
+    await _require_plan_feature(user, "scorecard")
     if not week:
         week = await _latest_week_with_data(center)
     sun, sat = _sun_sat_week(week)
@@ -12931,8 +13491,9 @@ async def scorecard_full(center: str, week: Optional[str] = None, _=Depends(requ
 
 
 @api_router.post("/scorecard/full")
-async def scorecard_set_value(data: dict = Body(...), _=Depends(require_admin)):
+async def scorecard_set_value(data: dict = Body(...), user: dict = Depends(require_admin)):
     """Guarda el valor de una métrica. body: {center, week(dom), key, value}"""
+    await _require_plan_feature(user, "scorecard")
     center, week, key = data.get("center"), data.get("week"), data.get("key")
     if not (center and week and key):
         raise HTTPException(status_code=400, detail="center, week y key requeridos")

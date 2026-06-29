@@ -6,7 +6,7 @@ import {
   Copy, RotateCcw, Trash2, Camera, AlertTriangle, Check,
   ClipboardPaste, Plus, X,
 } from 'lucide-react'
-import { getDailyAssignment, putDailyAssignment, getVehicles, getDrivers } from '../api'
+import { getDailyAssignment, putDailyAssignment, getVehicles, getDrivers, getInspections } from '../api'
 
 /* ── Date helpers ── */
 function isoToday() { return new Date().toISOString().slice(0, 10) }
@@ -368,17 +368,19 @@ export default function Asignacion() {
     if (noCenter) return
     setLoading(true); setMsg(null)
     try {
-      const [da, vs, ds] = await Promise.all([
+      const [da, vs, ds, insp] = await Promise.all([
         getDailyAssignment(center, date),
         getVehicles(center),
         getDrivers(center),
+        getInspections({ center, date_from: date, date_to: date, limit: 500 }).catch(() => ({ data: [] })),
       ])
       setVehicles(vs.data || [])
       setDrivers(ds.data || [])
       const doc = Array.isArray(da.data) ? da.data[0] : da.data
       const loadedSlots = Array.isArray(doc?.slots) ? doc.slots : []
       setSlots(loadedSlots)
-      const map = buildInspMapFromSlots(loadedSlots)
+      const insps = Array.isArray(insp.data) ? insp.data : []
+      const map = buildInspMap(loadedSlots, insps)
       prevInspRef.current = map
       setInspMap(map)
     } catch { setMsg({ ok: false, t: t('asgn.load.error') }) }
@@ -392,11 +394,14 @@ export default function Asignacion() {
     if (noCenter) return
     const poll = async () => {
       try {
-        const da = await getDailyAssignment(center, date)
+        const [da, insp] = await Promise.all([
+          getDailyAssignment(center, date),
+          getInspections({ center, date_from: date, date_to: date, limit: 500 }).catch(() => ({ data: [] })),
+        ])
         const doc = Array.isArray(da.data) ? da.data[0] : da.data
         const freshSlots = Array.isArray(doc?.slots) ? doc.slots : []
-        const newMap = buildInspMapFromSlots(freshSlots)
-        // Detectar nuevas subidas y lanzar notificación
+        const insps = Array.isArray(insp.data) ? insp.data : []
+        const newMap = buildInspMap(freshSlots, insps)
         for (const vid of Object.keys(newMap)) {
           if (!prevInspRef.current[vid]) {
             const slot = slotsRef.current.find(s => s.vehicle_id === vid)
@@ -411,11 +416,19 @@ export default function Asignacion() {
     return () => clearInterval(id)
   }, [center, date, noCenter])
 
-  // El backend enriquece cada slot con has_inspection + inspection_severity
-  function buildInspMapFromSlots(slotsArr) {
+  // Combina: has_inspection del slot (backend) + inspecciones directas por vehicle_id
+  function buildInspMap(slotsArr, insps) {
     const map = {}
+    // Desde inspecciones reales (fuente principal)
+    for (const ins of insps) {
+      if (!ins.vehicle_id) continue
+      if (!map[ins.vehicle_id] || ins.created_at > map[ins.vehicle_id].created_at) {
+        map[ins.vehicle_id] = ins
+      }
+    }
+    // Desde el enriquecimiento del backend (fallback si getInspections falló)
     for (const slot of slotsArr) {
-      if (slot.vehicle_id && slot.has_inspection) {
+      if (slot.vehicle_id && slot.has_inspection && !map[slot.vehicle_id]) {
         map[slot.vehicle_id] = { severity: slot.inspection_severity || '' }
       }
     }
