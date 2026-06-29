@@ -33,6 +33,12 @@ const LD = {
   'ld.stat.2l':      { es: 'ahorrados por daño documentado', en: 'saved per documented damage', fr: 'économisés par dommage documenté', de: 'gespart pro dokumentiertem Schaden', it: 'risparmiati per danno documentato', pt: 'poupados por dano documentado' },
   'ld.stat.3n':      { es: '6 idiomas', en: '6 languages', fr: '6 langues', de: '6 Sprachen', it: '6 lingue', pt: '6 idiomas' },
   'ld.stat.3l':      { es: 'panel y app del conductor', en: 'dashboard and driver app', fr: 'tableau de bord et app chauffeur', de: 'Dashboard und Fahrer-App', it: 'pannello e app autista', pt: 'painel e app motorista' },
+  'ld.sh.title':     { es: 'Todo lo que necesita tu flota', en: 'Everything your fleet needs', fr: 'Tout ce dont votre flotte a besoin', de: 'Alles was deine Flotte braucht', it: 'Tutto ciò di cui ha bisogno la tua flotta', pt: 'Tudo o que a tua frota precisa' },
+  'ld.sh.sub':       { es: 'Desde la inspección hasta la ITV, pasando por el scorecard y el chat interno. Una sola app.', en: 'From inspection to MOT, scorecard and internal chat. One single app.', fr: 'De l\'inspection au CT, scorecard et chat interne. Une seule app.', de: 'Von der Inspektion bis zum TÜV, Scorecard und internem Chat. Eine App.', it: 'Dall\'ispezione alla revisione, scorecard e chat. Un\'unica app.', pt: 'Da inspeção à inspeção periódica, scorecard e chat. Uma só app.' },
+  'ld.sh.t1':        { es: 'Alertas ITV', en: 'MOT Alerts', fr: 'Alertes CT', de: 'TÜV-Warnungen', it: 'Allerte revisione', pt: 'Alertas IPO' },
+  'ld.sh.t2':        { es: 'Chat interno', en: 'Internal chat', fr: 'Chat interne', de: 'Interner Chat', it: 'Chat interno', pt: 'Chat interno' },
+  'ld.sh.t3':        { es: 'Estado de flota', en: 'Fleet health', fr: 'État de la flotte', de: 'Flottenstand', it: 'Stato flotta', pt: 'Estado da frota' },
+  'ld.sh.t4':        { es: 'Revisión IA', en: 'AI Review', fr: 'Révision IA', de: 'KI-Prüfung', it: 'Revisione IA', pt: 'Revisão IA' },
   'ld.plan.try':     { es: 'Empieza con 14 días gratis', en: 'Start with 14 days free', fr: 'Commencez avec 14 jours gratuits', de: 'Starte mit 14 Tagen gratis', it: 'Inizia con 14 giorni gratis', pt: 'Começa com 14 dias grátis' },
   'ld.plan.sub':     { es: 'Sin tarjeta durante la prueba. Sin permanencia. Cancela cuando quieras.', en: 'No card during trial. No commitment. Cancel any time.', fr: 'Sans carte pendant l\'essai. Sans engagement. Annulez à tout moment.', de: 'Keine Karte während des Tests. Keine Bindung. Jederzeit kündigen.', it: 'Senza carta durante la prova. Senza vincoli. Cancella quando vuoi.', pt: 'Sem cartão durante o teste. Sem fidelização. Cancela quando quiseres.' },
 }
@@ -260,6 +266,230 @@ function LiveDemo() {
   )
 }
 
+/* ─── Feature Showcase ─── */
+function FeatureShowcase() {
+  const { lang } = useT()
+  const tl = useLD()
+  const [tab, setTab] = useState(0)
+  const timer = useRef(null)
+
+  const FEATURES = [
+    {
+      icon: '🔔', accent: '#ef4444', accentLight: 'rgba(239,68,68,.12)', accentBorder: 'rgba(239,68,68,.3)',
+      label: tl('ld.sh.t1'),
+      sub: lang === 'es' ? 'Nunca más una multa por ITV vencida' : lang === 'en' ? 'Never miss an MOT deadline' : lang === 'fr' ? 'Plus jamais de CT manqué' : lang === 'de' ? 'Nie wieder TÜV verpassen' : lang === 'it' ? 'Mai più revisione scaduta' : 'Nunca perder uma inspeção',
+      desc: lang === 'es' ? 'Cada vehículo tiene su fecha de ITV registrada. Recibes alertas automáticas antes de que venza para que nunca te pillen con la revisión caducada.' : lang === 'en' ? 'Each vehicle has its MOT date logged. You get automatic alerts before expiry so you\'re never caught with an expired inspection.' : lang === 'fr' ? 'Chaque véhicule a sa date CT enregistrée. Alertes automatiques avant expiration.' : lang === 'de' ? 'Jedes Fahrzeug hat seinen TÜV-Termin. Automatische Warnungen vor Ablauf.' : lang === 'it' ? 'Ogni veicolo ha la data revisione registrata. Avvisi automatici prima della scadenza.' : 'Cada veículo tem a data registada. Alertas automáticos antes do vencimento.',
+    },
+    {
+      icon: '💬', accent: '#38bdf8', accentLight: 'rgba(56,189,248,.1)', accentBorder: 'rgba(56,189,248,.25)',
+      label: tl('ld.sh.t2'),
+      sub: lang === 'es' ? 'Tu equipo coordinado en tiempo real' : lang === 'en' ? 'Your team coordinated in real time' : lang === 'fr' ? 'Votre équipe coordonnée en temps réel' : lang === 'de' ? 'Dein Team in Echtzeit koordiniert' : lang === 'it' ? 'Il tuo team coordinato in tempo reale' : 'A tua equipa coordenada em tempo real',
+      desc: lang === 'es' ? 'Chat interno por estación para coordinadores y jefes de turno. Sin WhatsApp, sin grupos externos. Todo dentro de la plataforma y registrado.' : lang === 'en' ? 'Internal chat per station for coordinators and shift managers. No WhatsApp, no external groups. Everything in-platform and logged.' : lang === 'fr' ? 'Chat interne par dépôt. Sans WhatsApp, tout dans la plateforme.' : lang === 'de' ? 'Interner Chat je Station. Kein WhatsApp, alles in der Plattform.' : lang === 'it' ? 'Chat interno per sede. Senza WhatsApp, tutto nella piattaforma.' : 'Chat interno por estação. Sem WhatsApp, tudo na plataforma.',
+    },
+    {
+      icon: '🚛', accent: '#a78bfa', accentLight: 'rgba(167,139,250,.1)', accentBorder: 'rgba(167,139,250,.25)',
+      label: tl('ld.sh.t3'),
+      sub: lang === 'es' ? 'El estado real de cada furgoneta' : lang === 'en' ? 'The real state of every van' : lang === 'fr' ? 'L\'état réel de chaque camionnette' : lang === 'de' ? 'Der echte Zustand jedes Transporters' : lang === 'it' ? 'Lo stato reale di ogni furgone' : 'O estado real de cada carrinha',
+      desc: lang === 'es' ? 'Barra de salud de flota con desglose por severidad. De un vistazo ves cuántas están sin daños, cuántas tienen daño leve y cuántas necesitan atención urgente.' : lang === 'en' ? 'Fleet health bar with severity breakdown. At a glance see how many are damage-free, minor damage and which need urgent attention.' : lang === 'fr' ? 'Barre de santé flotte par sévérité. D\'un coup d\'œil: sans dommages, légers, urgents.' : lang === 'de' ? 'Flottengesundheitsleiste nach Schweregrad. Auf einen Blick: beschädigt, leicht, dringend.' : lang === 'it' ? 'Barra salute flotta per gravità. A colpo d\'occhio: senza danni, lievi, urgenti.' : 'Barra de saúde da frota por severidade. De relance: sem danos, leves, urgentes.',
+    },
+    {
+      icon: '🤖', accent: '#34d399', accentLight: 'rgba(52,211,153,.1)', accentBorder: 'rgba(52,211,153,.25)',
+      label: tl('ld.sh.t4'),
+      sub: lang === 'es' ? 'Una IA que aprende de tu flota' : lang === 'en' ? 'An AI that learns from your fleet' : lang === 'fr' ? 'Une IA qui apprend de votre flotte' : lang === 'de' ? 'Eine KI die von deiner Flotte lernt' : lang === 'it' ? 'Una IA che impara dalla tua flotta' : 'Uma IA que aprende com a tua frota',
+      desc: lang === 'es' ? 'Cada ✓ o ✗ que pones en revisión rápida entrena tu modelo propio. Con el tiempo la IA de tu flota es más precisa que cualquier solución genérica.' : lang === 'en' ? 'Every ✓ or ✗ you give in quick review trains your own model. Over time your fleet\'s AI becomes more accurate than any generic solution.' : lang === 'fr' ? 'Chaque ✓/✗ en révision rapide entraîne votre modèle. Votre IA devient plus précise qu\'une solution générique.' : lang === 'de' ? 'Jedes ✓/✗ beim Schnellcheck trainiert dein Modell. Deine KI wird präziser als jede Standardlösung.' : lang === 'it' ? 'Ogni ✓/✗ in revisione rapida allena il tuo modello. La tua IA supera qualsiasi soluzione generica.' : 'Cada ✓/✗ na revisão rápida treina o teu modelo. A tua IA supera qualquer solução genérica.',
+    },
+  ]
+
+  useEffect(() => {
+    timer.current = setInterval(() => setTab(t => (t + 1) % 4), 3800)
+    return () => clearInterval(timer.current)
+  }, [])
+
+  const f = FEATURES[tab]
+
+  /* ── Pantallas mockup ── */
+  const screens = [
+    /* ITV */
+    <div style={{ padding: '20px 18px', display: 'flex', flexDirection: 'column', gap: 9 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 2 }}>
+        {lang === 'es' ? 'Alertas ITV próximas' : lang === 'en' ? 'Upcoming MOT alerts' : lang === 'fr' ? 'Alertes CT à venir' : lang === 'de' ? 'TÜV-Warnungen' : lang === 'it' ? 'Allerte revisione' : 'Alertas inspeção'}
+      </div>
+      {[{p:'2866 NGX',d:-3,c:'OGA5'},{p:'1304 NJS',d:-1,c:'DGA1'},{p:'5804 MVN',d:12,c:'OGA5'},{p:'3301 MKL',d:18,c:'DGA2'},{p:'7712 BPR',d:29,c:'DGA1'}].map(v => {
+        const exp = v.d < 0, urg = v.d >= 0 && v.d <= 14
+        const col = exp ? '#ef4444' : urg ? '#f59e0b' : '#34d399'
+        return (
+          <div key={v.p} style={{ display:'flex', alignItems:'center', gap:10, background: exp?'rgba(239,68,68,.07)':urg?'rgba(245,158,11,.06)':'rgba(52,211,153,.05)', border:`1px solid ${exp?'rgba(239,68,68,.22)':urg?'rgba(245,158,11,.18)':'rgba(52,211,153,.12)'}`, borderRadius:10, padding:'9px 13px' }}>
+            <span style={{ fontSize:16 }}>🛡</span>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:'#eef1f6' }}>{v.p}</div>
+              <div style={{ fontSize:10, color:'#64748b' }}>{v.c}</div>
+            </div>
+            <div style={{ fontSize:11, fontWeight:800, color:col, background:`${col}18`, padding:'3px 10px', borderRadius:99 }}>
+              {exp ? (lang==='es'?'Vencida':lang==='en'?'Expired':lang==='fr'?'Expirée':lang==='de'?'Abgelaufen':'Scaduta') : `${v.d}d`}
+            </div>
+          </div>
+        )
+      })}
+    </div>,
+
+    /* Chat */
+    <div style={{ padding:'16px', display:'flex', flexDirection:'column', gap:8 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 12px', background:'#13161b', borderRadius:10, marginBottom:2 }}>
+        <div style={{ width:7, height:7, borderRadius:'50%', background:'#34d399' }} />
+        <span style={{ fontSize:10, fontWeight:700, color:'#64748b' }}>Chat · OGA5</span>
+      </div>
+      {[
+        {who:'Dani',msg:lang==='es'?'¿Alguien vio el parte de VAN-142?':lang==='en'?'Anyone seen VAN-142 report?':'Has jemand VAN-142 Bericht gesehen?',me:false,t:'09:14'},
+        {who:'Laura',msg:lang==='es'?'Sí, daño leve en lateral. Ya está en revisión.':lang==='en'?'Yes, minor side damage. Already in review.':'Ja, leichter Schaden. In Prüfung.',me:true,t:'09:15'},
+        {who:'Dani',msg:lang==='es'?'👍 Perfecto, lo gestiono':lang==='en'?'👍 Perfect, I\'ll handle it':'👍 Perfekt, ich kümmere mich',me:false,t:'09:15'},
+        {who:'Laura',msg:lang==='es'?'✅ VAN-089 también tiene ITV en 5 días':lang==='en'?'✅ VAN-089 also has MOT in 5 days':'✅ VAN-089 hat auch TÜV in 5 Tagen',me:true,t:'09:16'},
+      ].map((m,i) => (
+        <div key={i} style={{ display:'flex', flexDirection:m.me?'row-reverse':'row', gap:7, alignItems:'flex-end' }}>
+          {!m.me && <div style={{ width:26,height:26,borderRadius:'50%',background:'rgba(14,165,233,.2)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:10,fontWeight:800,color:'#38bdf8',flexShrink:0 }}>{m.who[0]}</div>}
+          <div style={{ maxWidth:'74%',background:m.me?'rgba(14,165,233,.14)':'#1e2330',border:m.me?'1px solid rgba(14,165,233,.22)':'1px solid rgba(255,255,255,.06)',borderRadius:m.me?'13px 13px 3px 13px':'13px 13px 13px 3px',padding:'7px 11px' }}>
+            {!m.me && <div style={{ fontSize:8,fontWeight:800,color:'#38bdf8',marginBottom:2 }}>{m.who}</div>}
+            <div style={{ fontSize:11.5,color:'#cbd3e0',lineHeight:1.4 }}>{m.msg}</div>
+            <div style={{ fontSize:9,color:'#475569',marginTop:3,textAlign:m.me?'right':'left' }}>{m.t}</div>
+          </div>
+        </div>
+      ))}
+    </div>,
+
+    /* Estado flota */
+    <div style={{ padding:'20px 18px', display:'flex', flexDirection:'column', gap:13 }}>
+      <div style={{ fontSize:10, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'.07em' }}>
+        {lang==='es'?'Estado de la flota — 88 vehículos':lang==='en'?'Fleet health — 88 vehicles':lang==='fr'?'État flotte — 88 véhicules':lang==='de'?'Flottenstand — 88 Fahrzeuge':'Stato flotta — 88 veicoli'}
+      </div>
+      <div style={{ display:'flex', height:12, borderRadius:99, overflow:'hidden' }}>
+        {[['#34d399',22],['#fbbf24',41],['#fb923c',26],['#f87171',8],['#ef4444',3]].map(([col,pct],i) =>
+          <div key={i} style={{ width:`${pct}%`, background:col }} />
+        )}
+      </div>
+      {[
+        {k:lang==='es'?'Sin daños':lang==='en'?'No damage':lang==='fr'?'Sans dommage':lang==='de'?'Kein Schaden':'Senza danni',p:22,n:19,c:'#34d399'},
+        {k:lang==='es'?'Leve':lang==='en'?'Minor':lang==='fr'?'Léger':lang==='de'?'Leicht':'Lieve',p:41,n:36,c:'#fbbf24'},
+        {k:lang==='es'?'Moderado':lang==='en'?'Moderate':lang==='fr'?'Modéré':lang==='de'?'Mittel':'Moderato',p:26,n:23,c:'#fb923c'},
+        {k:lang==='es'?'Grave':lang==='en'?'Serious':lang==='fr'?'Grave':lang==='de'?'Schwer':'Grave',p:8,n:7,c:'#f87171'},
+        {k:lang==='es'?'Crítico':lang==='en'?'Critical':lang==='fr'?'Critique':lang==='de'?'Kritisch':'Critico',p:3,n:3,c:'#ef4444'},
+      ].map(b => (
+        <div key={b.k} style={{ display:'flex', alignItems:'center', gap:9 }}>
+          <div style={{ width:8,height:8,borderRadius:'50%',background:b.c,flexShrink:0 }} />
+          <span style={{ flex:1,fontSize:12,color:'#8b94a3' }}>{b.k}</span>
+          <div style={{ width:70,height:4,background:'rgba(255,255,255,.06)',borderRadius:99,overflow:'hidden' }}>
+            <div style={{ width:`${b.p}%`,height:'100%',background:b.c,borderRadius:99 }} />
+          </div>
+          <span style={{ fontSize:12,fontWeight:700,color:'#cbd3e0',width:18,textAlign:'right' }}>{b.n}</span>
+          <span style={{ fontSize:10,color:'#475569',width:26,textAlign:'right' }}>{b.p}%</span>
+        </div>
+      ))}
+      <div style={{ display:'flex', gap:8 }}>
+        <div style={{ flex:1,background:'rgba(52,211,153,.08)',border:'1px solid rgba(52,211,153,.2)',borderRadius:10,padding:'10px',textAlign:'center' }}>
+          <div style={{ fontSize:20,fontWeight:900,color:'#34d399' }}>19</div>
+          <div style={{ fontSize:10,color:'#64748b' }}>{lang==='es'?'sin daños':lang==='en'?'no damage':'senza danni'}</div>
+        </div>
+        <div style={{ flex:1,background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.2)',borderRadius:10,padding:'10px',textAlign:'center' }}>
+          <div style={{ fontSize:20,fontWeight:900,color:'#ef4444' }}>10</div>
+          <div style={{ fontSize:10,color:'#64748b' }}>{lang==='es'?'críticos/graves':lang==='en'?'critical/serious':'critici/gravi'}</div>
+        </div>
+      </div>
+    </div>,
+
+    /* Revisión IA */
+    <div style={{ padding:'16px 18px', display:'flex', flexDirection:'column', gap:10 }}>
+      <div style={{ fontSize:10, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'.07em' }}>
+        {lang==='es'?'Revisión rápida — valida la IA':lang==='en'?'Quick review — validate AI':lang==='fr'?'Révision rapide — valider IA':lang==='de'?'Schnellcheck — KI prüfen':'Revisione rapida — valida IA'}
+      </div>
+      <div style={{ position:'relative', background:'#0a0c10', borderRadius:12, overflow:'hidden', height:130 }}>
+        <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', fontSize:50 }}>🚐</div>
+        <div style={{ position:'absolute', left:'30%', top:'32%', width:'38%', height:'30%', border:'2.5px solid #f59e0b', borderRadius:6, boxShadow:'0 0 14px rgba(245,158,11,.45)' }} />
+        <div style={{ position:'absolute', left:'30%', top:'23%', background:'#f59e0b', color:'#000', fontSize:8, fontWeight:900, padding:'2px 7px', borderRadius:4, whiteSpace:'nowrap' }}>
+          {lang==='es'?'Rozadura lateral · 87%':lang==='en'?'Side scratch · 87%':lang==='fr'?'Rayure · 87%':'Kratzer · 87%'}
+        </div>
+        <div style={{ position:'absolute', top:8, right:8, background:'rgba(245,158,11,.9)', borderRadius:6, padding:'3px 8px', fontSize:9, fontWeight:800, color:'#000' }}>LEVE</div>
+      </div>
+      {[
+        {part:lang==='es'?'Puerta corredera izq.':lang==='en'?'Left sliding door':lang==='de'?'Linke Schiebetür':'Porta scorrevole sx.',sev:lang==='es'?'Leve':'Minor',ok:true},
+        {part:lang==='es'?'Paragolpes trasero':lang==='en'?'Rear bumper':lang==='de'?'Heckstoßstange':'Paraurti posteriore',sev:lang==='es'?'Moderado':'Moderate',ok:null},
+      ].map((d,i) => (
+        <div key={i} style={{ display:'flex', alignItems:'center', gap:10, background:'#13161b', border:'1px solid rgba(255,255,255,.07)', borderRadius:10, padding:'9px 12px' }}>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:12,fontWeight:600,color:'#eef1f6' }}>{d.part}</div>
+            <div style={{ fontSize:10,color:'#64748b' }}>{d.sev}</div>
+          </div>
+          <div style={{ display:'flex', gap:5 }}>
+            <div style={{ width:30,height:30,borderRadius:8,border:d.ok?'1px solid #34d399':'1px solid rgba(255,255,255,.1)',background:d.ok?'rgba(52,211,153,.15)':'transparent',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,color:d.ok?'#34d399':'#64748b' }}>✓</div>
+            <div style={{ width:30,height:30,borderRadius:8,border:'1px solid rgba(255,255,255,.1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:13,color:'#64748b' }}>✗</div>
+          </div>
+        </div>
+      ))}
+      <div style={{ background:'rgba(139,92,246,.1)', border:'1px solid rgba(139,92,246,.22)', borderRadius:10, padding:'8px 12px', display:'flex', alignItems:'center', gap:8 }}>
+        <span style={{ fontSize:14 }}>🧠</span>
+        <span style={{ fontSize:11, color:'#a78bfa' }}>{lang==='es'?'Cada ✓/✗ entrena tu IA propia':lang==='en'?'Each ✓/✗ trains your own AI':lang==='fr'?'Chaque ✓/✗ entraîne votre IA':'Jedes ✓/✗ trainiert deine KI'}</span>
+      </div>
+    </div>,
+  ]
+
+  return (
+    <section style={{ background: '#0e1116', borderTop: '1px solid rgba(255,255,255,.05)', borderBottom: '1px solid rgba(255,255,255,.05)' }}>
+      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '80px 20px' }}>
+
+        {/* Header centrado */}
+        <div style={{ textAlign: 'center', marginBottom: 56 }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: f.accentLight, border: `1px solid ${f.accentBorder}`, borderRadius: 99, padding: '4px 14px', fontSize: 11, fontWeight: 700, color: f.accent, letterSpacing: '.06em', textTransform: 'uppercase', marginBottom: 14, transition: 'all .4s' }}>
+            {f.icon} {f.label}
+          </div>
+          <h2 style={{ fontSize: 'clamp(22px,3vw,34px)', fontWeight: 900, margin: '0 0 10px' }}>{tl('ld.sh.title')}</h2>
+          <p style={{ color: '#8b94a3', fontSize: 15, margin: 0, maxWidth: 540, marginLeft: 'auto', marginRight: 'auto' }}>{tl('ld.sh.sub')}</p>
+        </div>
+
+        {/* Layout lado a lado */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 48, alignItems: 'center' }}>
+
+          {/* Izquierda: steps clickables — igual que LiveDemo */}
+          <div>
+            {FEATURES.map((feat, i) => {
+              const active = tab === i
+              return (
+                <div key={i} onClick={() => { clearInterval(timer.current); setTab(i) }}
+                  style={{ display: 'flex', alignItems: 'flex-start', gap: 16, marginBottom: 20, cursor: 'pointer', opacity: active ? 1 : 0.42, transition: 'opacity .3s' }}>
+                  <div style={{ width: 40, height: 40, borderRadius: 11, background: active ? `linear-gradient(135deg,${feat.accent},${feat.accent}99)` : '#13161b', border: active ? 'none' : '1px solid rgba(255,255,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0, transition: 'background .3s', boxShadow: active ? `0 4px 20px ${feat.accent}40` : 'none' }}>
+                    {feat.icon}
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: 15, color: active ? '#eef1f6' : '#8b94a3', marginBottom: 3 }}>{feat.label}</div>
+                    <div style={{ fontSize: 13, color: active ? '#94a3b8' : '#475569', lineHeight: 1.5 }}>{active ? feat.desc : feat.sub}</div>
+                    {active && (
+                      <div style={{ marginTop: 10, height: 2, borderRadius: 99, background: `linear-gradient(90deg,${feat.accent},transparent)`, width: '60%' }} />
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Derecha: mockup browser — igual que el hero */}
+          <div style={{ position: 'relative' }}>
+            <div style={{ position: 'absolute', inset: -40, background: `radial-gradient(ellipse at center, ${f.accent}0d, transparent 65%)`, pointerEvents: 'none', transition: 'all .5s' }} />
+            <div style={{ background: '#0e1116', border: `1px solid ${f.accentBorder}`, borderRadius: 20, overflow: 'hidden', boxShadow: `0 40px 100px -30px rgba(0,0,0,.9), 0 0 0 1px ${f.accent}18`, position: 'relative', transition: 'border-color .4s, box-shadow .4s' }}>
+              {/* Barra de título */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '11px 16px', borderBottom: `1px solid ${f.accentBorder}`, background: '#080a0e' }}>
+                {['#ef4444','#f59e0b','#22c55e'].map(c => <span key={c} style={{ width: 10, height: 10, borderRadius: '50%', background: c, display: 'inline-block' }} />)}
+                <span style={{ marginLeft: 8, fontSize: 11, color: '#334155', fontWeight: 600 }}>flotadsp.com/panel</span>
+                <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5, background: f.accentLight, border: `1px solid ${f.accentBorder}`, borderRadius: 6, padding: '2px 8px' }}>
+                  <span style={{ fontSize: 10, color: f.accent, fontWeight: 700 }}>{f.icon} {f.label}</span>
+                </div>
+              </div>
+              {/* Pantalla activa */}
+              <div style={{ minHeight: 360 }}>{screens[tab]}</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+  )
+}
+
 /* ─── Feature pill ─── */
 function FeatPill({ children }) {
   return (
@@ -295,6 +525,257 @@ function RoiRow({ icon: Icon, big, title, desc, accent }) {
         <p style={{ margin: 0, color: '#8b94a3', fontSize: 13.5, lineHeight: 1.55 }}>{desc}</p>
       </div>
     </div>
+  )
+}
+
+/* ─── Dual Demo (phone + browser side by side) ─── */
+function DualDemo() {
+  const { lang } = useT()
+  const tl = useLD()
+
+  /* ── LiveDemo state ── */
+  const [step, setStep] = useState(0)
+  const [scanPct, setScanPct] = useState(0)
+  const phoneTimer = useRef(null)
+
+  useEffect(() => {
+    phoneTimer.current = setInterval(() => {
+      setStep(s => {
+        if (s === 0) { setScanPct(0); return 1 }
+        if (s === 5) return 0
+        return s + 1
+      })
+    }, 2400)
+    return () => clearInterval(phoneTimer.current)
+  }, [])
+
+  useEffect(() => {
+    if (step === 1) {
+      setScanPct(0)
+      let v = 0
+      const iv = setInterval(() => { v += 5; setScanPct(v); if (v >= 100) clearInterval(iv) }, 100)
+      return () => clearInterval(iv)
+    }
+  }, [step])
+
+  const activeLabel = STEP_TO_LABEL[step] ?? 0
+  const demoLabels = [tl('ld.demo.s1'), tl('ld.demo.s2'), tl('ld.demo.s3'), tl('ld.demo.s4')]
+  const demoSubs = [
+    { es:'Foto del conductor · IA analiza al instante', en:'Driver photo · AI analyses instantly', fr:'Photo du chauffeur · IA analyse instantanément', de:'Foto des Fahrers · KI analysiert sofort', it:"Foto autista · IA analizza", pt:'Foto motorista · IA analisa' },
+    { es:'Alertas, historial, stats de tu flota', en:'Alerts, history, fleet stats', fr:'Alertes, historique, stats', de:'Warnungen, Verlauf, Statistiken', it:'Avvisi, storico, statistiche', pt:'Alertas, histórico, estatísticas' },
+    { es:'Métricas Amazon · ranking conductores', en:'Amazon metrics · driver ranking', fr:'Métriques Amazon · classement', de:'Amazon-Metriken · Ranking', it:'Metriche Amazon · classifica', pt:'Métricas Amazon · ranking' },
+    { es:'Quién conduce qué furgoneta · 1 clic', en:'Who drives which van · 1 click', fr:'Qui conduit quelle camionnette', de:'Wer fährt welchen Transporter', it:'Chi guida quale furgone', pt:'Quem conduz qual carrinha' },
+  ]
+
+  /* ── FeatureShowcase state ── */
+  const [tab, setTab] = useState(0)
+  const browserTimer = useRef(null)
+
+  const FEATURES = [
+    { icon:'🔔', accent:'#ef4444', accentLight:'rgba(239,68,68,.12)', accentBorder:'rgba(239,68,68,.3)', label:tl('ld.sh.t1'), sub:lang==='es'?'Nunca más una multa por ITV vencida':lang==='en'?'Never miss an MOT deadline':lang==='fr'?'Plus jamais de CT manqué':lang==='de'?'Nie wieder TÜV verpassen':lang==='it'?'Mai più revisione scaduta':'Nunca perder uma inspeção' },
+    { icon:'💬', accent:'#38bdf8', accentLight:'rgba(56,189,248,.1)', accentBorder:'rgba(56,189,248,.25)', label:tl('ld.sh.t2'), sub:lang==='es'?'Tu equipo coordinado en tiempo real':lang==='en'?'Your team coordinated in real time':lang==='fr'?'Votre équipe en temps réel':lang==='de'?'Dein Team in Echtzeit':lang==='it'?'Il tuo team in tempo reale':'A tua equipa em tempo real' },
+    { icon:'🚛', accent:'#a78bfa', accentLight:'rgba(167,139,250,.1)', accentBorder:'rgba(167,139,250,.25)', label:tl('ld.sh.t3'), sub:lang==='es'?'El estado real de cada furgoneta':lang==='en'?'The real state of every van':lang==='fr'?'L\'état réel de chaque camionnette':lang==='de'?'Der echte Zustand jedes Transporters':lang==='it'?'Lo stato reale di ogni furgone':'O estado real de cada carrinha' },
+    { icon:'🤖', accent:'#34d399', accentLight:'rgba(52,211,153,.1)', accentBorder:'rgba(52,211,153,.25)', label:tl('ld.sh.t4'), sub:lang==='es'?'Una IA que aprende de tu flota':lang==='en'?'An AI that learns from your fleet':lang==='fr'?'Une IA qui apprend de votre flotte':lang==='de'?'Eine KI die von deiner Flotte lernt':lang==='it'?'Una IA che impara dalla tua flotta':'Uma IA que aprende com a tua frota' },
+  ]
+
+  useEffect(() => {
+    browserTimer.current = setInterval(() => setTab(t => (t + 1) % 4), 3800)
+    return () => clearInterval(browserTimer.current)
+  }, [])
+
+  const f = FEATURES[tab]
+
+  /* ── Browser screens ── */
+  const browserScreens = [
+    <div style={{ padding:'18px 16px', display:'flex', flexDirection:'column', gap:8 }}>
+      <div style={{ fontSize:10, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:2 }}>{lang==='es'?'Alertas ITV próximas':lang==='en'?'Upcoming MOT alerts':lang==='fr'?'Alertes CT à venir':lang==='de'?'TÜV-Warnungen':'Allerte revisione'}</div>
+      {[{p:'2866 NGX',d:-3,c:'OGA5'},{p:'1304 NJS',d:-1,c:'DGA1'},{p:'5804 MVN',d:12,c:'OGA5'},{p:'3301 MKL',d:18,c:'DGA2'},{p:'7712 BPR',d:29,c:'DGA1'}].map(v => {
+        const exp=v.d<0, urg=v.d>=0&&v.d<=14
+        const col=exp?'#ef4444':urg?'#f59e0b':'#34d399'
+        return (
+          <div key={v.p} style={{ display:'flex', alignItems:'center', gap:9, background:exp?'rgba(239,68,68,.07)':urg?'rgba(245,158,11,.06)':'rgba(52,211,153,.05)', border:`1px solid ${exp?'rgba(239,68,68,.22)':urg?'rgba(245,158,11,.18)':'rgba(52,211,153,.12)'}`, borderRadius:9, padding:'8px 12px' }}>
+            <span style={{ fontSize:14 }}>🛡</span>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:'#eef1f6' }}>{v.p}</div>
+              <div style={{ fontSize:10, color:'#64748b' }}>{v.c}</div>
+            </div>
+            <div style={{ fontSize:11, fontWeight:800, color:col, background:`${col}18`, padding:'2px 9px', borderRadius:99 }}>{exp?(lang==='es'?'Vencida':lang==='en'?'Expired':lang==='fr'?'Expirée':lang==='de'?'Abgelaufen':'Scaduta'):`${v.d}d`}</div>
+          </div>
+        )
+      })}
+    </div>,
+    <div style={{ padding:'14px', display:'flex', flexDirection:'column', gap:7 }}>
+      <div style={{ display:'flex', alignItems:'center', gap:7, padding:'6px 11px', background:'#13161b', borderRadius:9, marginBottom:2 }}>
+        <div style={{ width:7,height:7,borderRadius:'50%',background:'#34d399' }} />
+        <span style={{ fontSize:10, fontWeight:700, color:'#64748b' }}>Chat · OGA5</span>
+      </div>
+      {[
+        {who:'Dani',msg:lang==='es'?'¿Alguien vio el parte de VAN-142?':lang==='en'?'Anyone seen VAN-142 report?':'Hat jemand VAN-142 gesehen?',me:false,t:'09:14'},
+        {who:'Laura',msg:lang==='es'?'Sí, daño leve en lateral. En revisión.':lang==='en'?'Yes, minor side damage. In review.':'Ja, leichter Schaden. In Prüfung.',me:true,t:'09:15'},
+        {who:'Dani',msg:lang==='es'?'👍 Perfecto, lo gestiono':lang==='en'?'👍 Perfect, I\'ll handle it':'👍 Perfekt, danke',me:false,t:'09:15'},
+        {who:'Laura',msg:lang==='es'?'✅ VAN-089 tiene ITV en 5 días':lang==='en'?'✅ VAN-089 has MOT in 5 days':'✅ VAN-089 hat TÜV in 5 Tagen',me:true,t:'09:16'},
+      ].map((m,i) => (
+        <div key={i} style={{ display:'flex', flexDirection:m.me?'row-reverse':'row', gap:6, alignItems:'flex-end' }}>
+          {!m.me && <div style={{ width:24,height:24,borderRadius:'50%',background:'rgba(14,165,233,.2)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:800,color:'#38bdf8',flexShrink:0 }}>{m.who[0]}</div>}
+          <div style={{ maxWidth:'74%',background:m.me?'rgba(14,165,233,.14)':'#1e2330',border:m.me?'1px solid rgba(14,165,233,.22)':'1px solid rgba(255,255,255,.06)',borderRadius:m.me?'12px 12px 3px 12px':'12px 12px 12px 3px',padding:'6px 10px' }}>
+            {!m.me && <div style={{ fontSize:8,fontWeight:800,color:'#38bdf8',marginBottom:2 }}>{m.who}</div>}
+            <div style={{ fontSize:11,color:'#cbd3e0',lineHeight:1.4 }}>{m.msg}</div>
+            <div style={{ fontSize:9,color:'#475569',marginTop:2,textAlign:m.me?'right':'left' }}>{m.t}</div>
+          </div>
+        </div>
+      ))}
+    </div>,
+    <div style={{ padding:'18px 16px', display:'flex', flexDirection:'column', gap:11 }}>
+      <div style={{ fontSize:10, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'.07em' }}>{lang==='es'?'Estado flota — 88 vehículos':lang==='en'?'Fleet health — 88 vehicles':lang==='fr'?'État flotte — 88 véhicules':'Stato flotta — 88 veicoli'}</div>
+      <div style={{ display:'flex', height:10, borderRadius:99, overflow:'hidden' }}>
+        {[[22,'#34d399'],[41,'#fbbf24'],[26,'#fb923c'],[8,'#f87171'],[3,'#ef4444']].map(([p,c],i)=><div key={i} style={{ width:`${p}%`,background:c }} />)}
+      </div>
+      {[
+        {k:lang==='es'?'Sin daños':lang==='en'?'No damage':'Senza danni',p:22,n:19,c:'#34d399'},
+        {k:lang==='es'?'Leve':lang==='en'?'Minor':'Lieve',p:41,n:36,c:'#fbbf24'},
+        {k:lang==='es'?'Moderado':lang==='en'?'Moderate':'Moderato',p:26,n:23,c:'#fb923c'},
+        {k:lang==='es'?'Grave':lang==='en'?'Serious':'Grave',p:8,n:7,c:'#f87171'},
+        {k:lang==='es'?'Crítico':lang==='en'?'Critical':'Critico',p:3,n:3,c:'#ef4444'},
+      ].map(b=>(
+        <div key={b.k} style={{ display:'flex', alignItems:'center', gap:8 }}>
+          <div style={{ width:7,height:7,borderRadius:'50%',background:b.c,flexShrink:0 }} />
+          <span style={{ flex:1,fontSize:11.5,color:'#8b94a3' }}>{b.k}</span>
+          <div style={{ width:60,height:4,background:'rgba(255,255,255,.06)',borderRadius:99,overflow:'hidden' }}><div style={{ width:`${b.p}%`,height:'100%',background:b.c,borderRadius:99 }} /></div>
+          <span style={{ fontSize:11,fontWeight:700,color:'#cbd3e0',width:16,textAlign:'right' }}>{b.n}</span>
+        </div>
+      ))}
+      <div style={{ display:'flex', gap:7 }}>
+        <div style={{ flex:1,background:'rgba(52,211,153,.08)',border:'1px solid rgba(52,211,153,.2)',borderRadius:9,padding:'9px',textAlign:'center' }}>
+          <div style={{ fontSize:18,fontWeight:900,color:'#34d399' }}>19</div>
+          <div style={{ fontSize:10,color:'#64748b' }}>{lang==='es'?'sin daños':'no damage'}</div>
+        </div>
+        <div style={{ flex:1,background:'rgba(239,68,68,.08)',border:'1px solid rgba(239,68,68,.2)',borderRadius:9,padding:'9px',textAlign:'center' }}>
+          <div style={{ fontSize:18,fontWeight:900,color:'#ef4444' }}>10</div>
+          <div style={{ fontSize:10,color:'#64748b' }}>{lang==='es'?'críticos/graves':'critical/serious'}</div>
+        </div>
+      </div>
+    </div>,
+    <div style={{ padding:'14px 16px', display:'flex', flexDirection:'column', gap:9 }}>
+      <div style={{ fontSize:10, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'.07em' }}>{lang==='es'?'Revisión rápida — valida IA':lang==='en'?'Quick review — validate AI':'Revisione rapida — valida IA'}</div>
+      <div style={{ position:'relative', background:'#0a0c10', borderRadius:11, overflow:'hidden', height:120 }}>
+        <div style={{ position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:44 }}>🚐</div>
+        <div style={{ position:'absolute',left:'30%',top:'32%',width:'38%',height:'30%',border:'2.5px solid #f59e0b',borderRadius:6,boxShadow:'0 0 12px rgba(245,158,11,.4)' }} />
+        <div style={{ position:'absolute',left:'30%',top:'23%',background:'#f59e0b',color:'#000',fontSize:8,fontWeight:900,padding:'2px 6px',borderRadius:4 }}>{lang==='es'?'Rozadura · 87%':'Scratch · 87%'}</div>
+      </div>
+      {[
+        {part:lang==='es'?'Puerta corredera izq.':lang==='en'?'Left sliding door':'Porta scorrevole sx.',sev:lang==='es'?'Leve':'Minor',ok:true},
+        {part:lang==='es'?'Paragolpes trasero':lang==='en'?'Rear bumper':'Paraurti posteriore',sev:lang==='es'?'Moderado':'Moderate',ok:null},
+      ].map((d,i)=>(
+        <div key={i} style={{ display:'flex', alignItems:'center', gap:9, background:'#13161b', border:'1px solid rgba(255,255,255,.07)', borderRadius:9, padding:'8px 11px' }}>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:11.5,fontWeight:600,color:'#eef1f6' }}>{d.part}</div>
+            <div style={{ fontSize:10,color:'#64748b' }}>{d.sev}</div>
+          </div>
+          <div style={{ display:'flex', gap:5 }}>
+            <div style={{ width:28,height:28,borderRadius:7,border:d.ok?'1px solid #34d399':'1px solid rgba(255,255,255,.1)',background:d.ok?'rgba(52,211,153,.15)':'transparent',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,color:d.ok?'#34d399':'#64748b' }}>✓</div>
+            <div style={{ width:28,height:28,borderRadius:7,border:'1px solid rgba(255,255,255,.1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,color:'#64748b' }}>✗</div>
+          </div>
+        </div>
+      ))}
+      <div style={{ background:'rgba(139,92,246,.1)', border:'1px solid rgba(139,92,246,.22)', borderRadius:9, padding:'7px 11px', display:'flex', alignItems:'center', gap:7 }}>
+        <span style={{ fontSize:13 }}>🧠</span>
+        <span style={{ fontSize:11, color:'#a78bfa' }}>{lang==='es'?'Cada ✓/✗ entrena tu IA propia':lang==='en'?'Each ✓/✗ trains your own AI':'Jedes ✓/✗ trainiert deine KI'}</span>
+      </div>
+    </div>,
+  ]
+
+  return (
+    <section style={{ background:'#0e1116', borderTop:'1px solid rgba(255,255,255,.05)', borderBottom:'1px solid rgba(255,255,255,.05)' }}>
+      <div style={{ maxWidth:1180, margin:'0 auto', padding:'80px 20px' }}>
+
+        {/* Header */}
+        <div style={{ textAlign:'center', marginBottom:56 }}>
+          <h2 style={{ fontSize:'clamp(24px,3vw,38px)', fontWeight:900, margin:'0 0 12px', background:'linear-gradient(135deg,#eef1f6,#94a3b8)', WebkitBackgroundClip:'text', WebkitTextFillColor:'transparent' }}>
+            {tl('ld.demo.title')}
+          </h2>
+          <p style={{ color:'#8b94a3', fontSize:15, margin:0, maxWidth:540, marginLeft:'auto', marginRight:'auto' }}>{tl('ld.sh.sub')}</p>
+        </div>
+
+        {/* Mockups side by side */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:32, alignItems:'start' }}>
+
+          {/* ── Teléfono (LiveDemo) ── */}
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:24 }}>
+            {/* Glow */}
+            <div style={{ position:'relative' }}>
+              <div style={{ position:'absolute', inset:-40, background:'radial-gradient(ellipse at center,rgba(14,165,233,.12),transparent 65%)', pointerEvents:'none' }} />
+              <div style={{ position:'relative', width:220, height:440, background:'#0e1116', borderRadius:34, border:'3px solid rgba(255,255,255,.12)', boxShadow:'0 40px 80px -20px rgba(0,0,0,.9)', overflow:'hidden' }}>
+                <div style={{ width:76,height:20,background:'#0e1116',borderRadius:'0 0 12px 12px',margin:'0 auto',position:'relative',zIndex:2 }} />
+                <div style={{ margin:'0 9px', borderRadius:18, overflow:'hidden', height:385, position:'relative', background:'#13161b' }}>
+                  <img src="/van.jpg" alt="" style={{ width:'100%',height:'100%',objectFit:'cover',opacity:step===0?0.4:0.85,transition:'opacity .6s' }} />
+                  {step===0 && <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:8 }}><div style={{ width:52,height:52,borderRadius:'50%',background:'rgba(14,165,233,.25)',border:'2px solid rgba(14,165,233,.5)',display:'flex',alignItems:'center',justifyContent:'center' }}><Camera size={22} color="#38bdf8" /></div><span style={{ color:'#38bdf8',fontSize:11,fontWeight:700 }}>{tl('ld.demo.s1')}</span></div>}
+                  {step===1 && <div style={{ position:'absolute',inset:0 }}><div style={{ position:'absolute',left:0,right:0,height:2,background:'linear-gradient(90deg,transparent,#0ea5e9,transparent)',top:`${scanPct}%`,transition:'top .1s',boxShadow:'0 0 12px #0ea5e9' }} /><div style={{ position:'absolute',bottom:12,left:0,right:0,textAlign:'center' }}><div style={{ display:'inline-flex',alignItems:'center',gap:6,background:'rgba(14,165,233,.9)',borderRadius:20,padding:'5px 14px' }}><div style={{ width:8,height:8,borderRadius:'50%',background:'#fff' }} /><span style={{ color:'#fff',fontSize:11,fontWeight:700 }}>{tl('ld.demo.scanning')}</span></div></div></div>}
+                  {step===2 && <div style={{ position:'absolute',inset:0 }}><div style={{ position:'absolute',left:'38%',top:'48%',width:'38%',height:'8%',border:'2.5px solid #f59e0b',borderRadius:6,boxShadow:'0 0 10px rgba(245,158,11,.5)' }} /><div style={{ position:'absolute',left:'38%',top:'42%',background:'#f59e0b',color:'#000',fontSize:8,fontWeight:900,padding:'2px 6px',borderRadius:4,whiteSpace:'nowrap' }}>{tl('ld.demo.dmg')}</div><div style={{ position:'absolute',top:8,right:8,background:'rgba(239,68,68,.9)',borderRadius:20,padding:'3px 10px',fontSize:9,fontWeight:800,color:'#fff' }}>GRAVE</div><div style={{ position:'absolute',bottom:10,left:10,right:10 }}><div style={{ background:'rgba(0,0,0,.7)',borderRadius:10,padding:'8px 10px',backdropFilter:'blur(8px)' }}><div style={{ fontSize:9,fontWeight:700,color:'#f59e0b' }}>{tl('ld.demo.sev')}</div><div style={{ fontSize:8,color:'#94a3b8',marginTop:2 }}>3 {lang==='es'?'zonas afectadas':lang==='en'?'areas affected':'Bereiche'}</div></div></div></div>}
+                  {step===3 && <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',gap:7,padding:11,background:'#0b0d10' }}><div style={{ fontSize:9,fontWeight:700,color:'#64748b',textTransform:'uppercase',letterSpacing:'.06em' }}>FlotaDSP Panel</div><div style={{ display:'flex',gap:5 }}>{[['48',lang==='es'?'Furgonetas':'Vans','#38bdf8'],['96%','Score','#34d399'],['2',lang==='es'?'Alertas':'Alerts','#f59e0b']].map(([v,l,c])=><div key={l} style={{ flex:1,background:'#13161b',borderRadius:7,padding:'7px 5px',textAlign:'center' }}><div style={{ fontSize:13,fontWeight:900,color:c }}>{v}</div><div style={{ fontSize:7,color:'#64748b' }}>{l}</div></div>)}</div><div style={{ background:'rgba(239,68,68,.12)',border:'1px solid rgba(239,68,68,.3)',borderRadius:7,padding:'7px 9px' }}><div style={{ fontSize:9,fontWeight:800,color:'#f87171' }}>{tl('ld.demo.alert')}</div><div style={{ fontSize:8,color:'#94a3b8',marginTop:2 }}>VAN-8742 · {tl('ld.demo.sev')}</div></div><div style={{ background:'#13161b',borderRadius:7,padding:'7px 8px 4px',flex:1 }}><div style={{ fontSize:8,color:'#64748b',marginBottom:5 }}>{lang==='es'?'Inspecciones / semana':'Inspections / week'}</div><div style={{ display:'flex',alignItems:'flex-end',gap:2,height:36 }}>{[55,80,65,90,70,95,85].map((h,i)=><div key={i} style={{ flex:1,height:`${h}%`,borderRadius:2,background:i===5?'#0ea5e9':'rgba(14,165,233,.3)' }} />)}</div></div></div>}
+                  {step===4 && <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',gap:6,padding:11,background:'#0b0d10' }}><div style={{ display:'flex',alignItems:'center',justifyContent:'space-between' }}><div style={{ fontSize:8,fontWeight:700,color:'#64748b',textTransform:'uppercase' }}>Scorecard Amazon</div><div style={{ fontSize:7,background:'rgba(52,211,153,.15)',color:'#34d399',padding:'2px 6px',borderRadius:99,fontWeight:800 }}>Sem 23</div></div><div style={{ background:'linear-gradient(135deg,rgba(52,211,153,.12),rgba(52,211,153,.04))',border:'1px solid rgba(52,211,153,.25)',borderRadius:9,padding:'9px 11px' }}><div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:5 }}><div style={{ fontSize:9,fontWeight:800,color:'#34d399' }}>Fantastic+</div><div style={{ fontSize:16,fontWeight:900,color:'#34d399' }}>96%</div></div><div style={{ height:4,background:'rgba(52,211,153,.2)',borderRadius:99 }}><div style={{ width:'96%',height:'100%',background:'#34d399',borderRadius:99 }} /></div></div>{[['DCR','99.2%','#34d399'],['POD','98.8%','#34d399'],['DPMO','1.2','#34d399'],['CC','0','#34d399']].map(([k,v,c])=><div key={k} style={{ display:'flex',alignItems:'center',justifyContent:'space-between',background:'#13161b',borderRadius:6,padding:'5px 9px' }}><div style={{ fontSize:8,color:'#64748b',fontWeight:700 }}>{k}</div><div style={{ display:'flex',alignItems:'center',gap:3 }}><div style={{ fontSize:10,fontWeight:900,color:c }}>{v}</div><div style={{ fontSize:9,color:'#34d399' }}>✓</div></div></div>)}<div style={{ fontSize:8,color:'#64748b',textAlign:'center',marginTop:2 }}>🏆 {lang==='es'?'Top: Juan G.':'Top driver: Juan G.'}</div></div>}
+                  {step===5 && <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',gap:5,padding:11,background:'#0b0d10' }}><div style={{ display:'flex',alignItems:'center',justifyContent:'space-between' }}><div style={{ fontSize:8,fontWeight:700,color:'#64748b',textTransform:'uppercase' }}>{lang==='es'?'Asignación del día':'Daily assignment'}</div><div style={{ fontSize:8,color:'#8b94a3' }}>Lun 28</div></div>{[{name:'Juan García',van:'VAN-142',ok:true},{name:'María López',van:'VAN-089',ok:true},{name:'Pedro Ruiz',van:'—',ok:false},{name:'Ana Martín',van:'VAN-231',ok:true},{name:'Luis Sánchez',van:'VAN-007',ok:true}].map(d=><div key={d.name} style={{ display:'flex',alignItems:'center',gap:6,background:'#13161b',borderRadius:7,padding:'6px 8px',border:d.ok?'1px solid rgba(52,211,153,.1)':'1px solid rgba(245,158,11,.2)' }}><div style={{ width:6,height:6,borderRadius:'50%',background:d.ok?'#34d399':'#f59e0b',flexShrink:0 }} /><div style={{ fontSize:9,color:'#cbd3e0',flex:1,fontWeight:600 }}>{d.name}</div><div style={{ fontSize:9,color:d.ok?'#38bdf8':'#f59e0b',fontWeight:800 }}>{d.van}</div></div>)}<div style={{ fontSize:8,color:'#64748b',textAlign:'center',marginTop:2 }}>4/5 {lang==='es'?'asignados · 1 pendiente':'assigned · 1 pending'}</div></div>}
+                </div>
+              </div>
+            </div>
+
+            {/* Step indicators debajo del teléfono */}
+            <div style={{ width:'100%', maxWidth:340 }}>
+              <div style={{ display:'inline-flex', alignItems:'center', gap:6, background:'rgba(14,165,233,.1)', border:'1px solid rgba(14,165,233,.25)', borderRadius:99, padding:'4px 14px', fontSize:11, fontWeight:700, color:'#38bdf8', letterSpacing:'.06em', textTransform:'uppercase', marginBottom:16 }}>🎬 Demo</div>
+              {demoLabels.map((label,i) => {
+                const active = activeLabel === i
+                return (
+                  <div key={i} onClick={() => { clearInterval(phoneTimer.current); setStep(DEMO_NAV[i]) }} style={{ display:'flex', alignItems:'flex-start', gap:12, marginBottom:13, cursor:'pointer', opacity:active?1:0.42, transition:'opacity .3s' }}>
+                    <div style={{ width:32,height:32,borderRadius:9,background:active?'linear-gradient(135deg,#0ea5e9,#0369a1)':'#13161b',border:active?'none':'1px solid rgba(255,255,255,.1)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:900,fontSize:13,flexShrink:0,transition:'background .3s',color:'#fff' }}>{i+1}</div>
+                    <div style={{ flex:1, paddingTop:4 }}>
+                      <div style={{ fontWeight:700, fontSize:13, color:active?'#eef1f6':'#8b94a3' }}>{label}</div>
+                      <div style={{ fontSize:11, color:'#64748b', marginTop:1 }}>{demoSubs[i][lang]||demoSubs[i].en}</div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* ── Browser (FeatureShowcase) ── */}
+          <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:24 }}>
+            {/* Mockup */}
+            <div style={{ position:'relative', width:'100%', maxWidth:420 }}>
+              <div style={{ position:'absolute', inset:-40, background:`radial-gradient(ellipse at center,${f.accent}0d,transparent 65%)`, pointerEvents:'none', transition:'all .5s' }} />
+              <div style={{ background:'#0e1116', border:`1px solid ${f.accentBorder}`, borderRadius:18, overflow:'hidden', boxShadow:`0 40px 100px -30px rgba(0,0,0,.9), 0 0 0 1px ${f.accent}18`, position:'relative', transition:'border-color .4s,box-shadow .4s' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:6, padding:'10px 14px', borderBottom:`1px solid ${f.accentBorder}`, background:'#080a0e' }}>
+                  {['#ef4444','#f59e0b','#22c55e'].map(c=><span key={c} style={{ width:9,height:9,borderRadius:'50%',background:c,display:'inline-block' }} />)}
+                  <span style={{ marginLeft:7, fontSize:11, color:'#334155', fontWeight:600 }}>flotadsp.com/panel</span>
+                  <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:4, background:f.accentLight, border:`1px solid ${f.accentBorder}`, borderRadius:6, padding:'2px 8px' }}>
+                    <span style={{ fontSize:10, color:f.accent, fontWeight:700 }}>{f.icon} {f.label}</span>
+                  </div>
+                </div>
+                <div style={{ minHeight:340 }}>{browserScreens[tab]}</div>
+              </div>
+            </div>
+
+            {/* Feature tabs debajo del browser */}
+            <div style={{ width:'100%', maxWidth:420 }}>
+              <div style={{ display:'inline-flex', alignItems:'center', gap:6, background:f.accentLight, border:`1px solid ${f.accentBorder}`, borderRadius:99, padding:'4px 14px', fontSize:11, fontWeight:700, color:f.accent, letterSpacing:'.06em', textTransform:'uppercase', marginBottom:16, transition:'all .4s' }}>
+                {f.icon} {f.label}
+              </div>
+              {FEATURES.map((feat,i) => {
+                const active = tab === i
+                return (
+                  <div key={i} onClick={() => { clearInterval(browserTimer.current); setTab(i) }} style={{ display:'flex', alignItems:'flex-start', gap:12, marginBottom:13, cursor:'pointer', opacity:active?1:0.42, transition:'opacity .3s' }}>
+                    <div style={{ width:32,height:32,borderRadius:9,background:active?`linear-gradient(135deg,${feat.accent},${feat.accent}99)`:'#13161b',border:active?'none':'1px solid rgba(255,255,255,.1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:15,flexShrink:0,transition:'background .3s',boxShadow:active?`0 3px 14px ${feat.accent}40`:'none' }}>{feat.icon}</div>
+                    <div style={{ flex:1, paddingTop:4 }}>
+                      <div style={{ fontWeight:700, fontSize:13, color:active?'#eef1f6':'#8b94a3' }}>{feat.label}</div>
+                      <div style={{ fontSize:11, color:'#64748b', marginTop:1 }}>{feat.sub}</div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -422,13 +903,11 @@ export default function Landing() {
         </div>
       </div>
 
-      {/* ── DEMO ANIMADO ── */}
-      <section style={{ maxWidth: 1100, margin: '0 auto', padding: '80px 20px' }}>
-        <LiveDemo />
-      </section>
+      {/* ── DUAL DEMO ── */}
+      <DualDemo />
 
       {/* ── ROI ── */}
-      <section style={{ background: '#0e1116', borderTop: '1px solid rgba(255,255,255,.05)', borderBottom: '1px solid rgba(255,255,255,.05)' }}>
+      <section style={{ borderTop: '1px solid rgba(255,255,255,.05)', borderBottom: '1px solid rgba(255,255,255,.05)' }}>
         <div style={{ maxWidth: 1100, margin: '0 auto', padding: '72px 20px' }}>
           <div style={{ textAlign: 'center', marginBottom: 44 }}>
             <h2 style={{ fontSize: 'clamp(22px,3vw,34px)', fontWeight: 900, margin: '0 0 10px' }}>💸 {t('roi.t')}</h2>

@@ -6,7 +6,7 @@ import {
   Copy, RotateCcw, Trash2, Camera, AlertTriangle, Check,
   ClipboardPaste, Plus, X,
 } from 'lucide-react'
-import { getDailyAssignment, putDailyAssignment, getVehicles, getDrivers, getInspections } from '../api'
+import { getDailyAssignment, putDailyAssignment, getVehicles, getDrivers } from '../api'
 
 /* ── Date helpers ── */
 function isoToday() { return new Date().toISOString().slice(0, 10) }
@@ -368,18 +368,17 @@ export default function Asignacion() {
     if (noCenter) return
     setLoading(true); setMsg(null)
     try {
-      const [da, vs, ds, insp] = await Promise.all([
+      const [da, vs, ds] = await Promise.all([
         getDailyAssignment(center, date),
         getVehicles(center),
         getDrivers(center),
-        getInspections({ center, date_from: date, date_to: date }).catch(() => ({ data: [] })),
       ])
       setVehicles(vs.data || [])
       setDrivers(ds.data || [])
       const doc = Array.isArray(da.data) ? da.data[0] : da.data
-      setSlots(Array.isArray(doc?.slots) ? doc.slots : [])
-      const insps = Array.isArray(insp.data) ? insp.data : (insp.data?.items || [])
-      const map = buildInspMap(insps)
+      const loadedSlots = Array.isArray(doc?.slots) ? doc.slots : []
+      setSlots(loadedSlots)
+      const map = buildInspMapFromSlots(loadedSlots)
       prevInspRef.current = map
       setInspMap(map)
     } catch { setMsg({ ok: false, t: t('asgn.load.error') }) }
@@ -393,9 +392,10 @@ export default function Asignacion() {
     if (noCenter) return
     const poll = async () => {
       try {
-        const res = await getInspections({ center, date_from: date, date_to: date }).catch(() => ({ data: [] }))
-        const insps = Array.isArray(res.data) ? res.data : (res.data?.items || [])
-        const newMap = buildInspMap(insps)
+        const da = await getDailyAssignment(center, date)
+        const doc = Array.isArray(da.data) ? da.data[0] : da.data
+        const freshSlots = Array.isArray(doc?.slots) ? doc.slots : []
+        const newMap = buildInspMapFromSlots(freshSlots)
         // Detectar nuevas subidas y lanzar notificación
         for (const vid of Object.keys(newMap)) {
           if (!prevInspRef.current[vid]) {
@@ -411,14 +411,12 @@ export default function Asignacion() {
     return () => clearInterval(id)
   }, [center, date, noCenter])
 
-  function buildInspMap(insps) {
+  // El backend enriquece cada slot con has_inspection + inspection_severity
+  function buildInspMapFromSlots(slotsArr) {
     const map = {}
-    for (const ins of insps) {
-      // Solo contar inspecciones del día seleccionado (el backend no filtra por fecha)
-      if (!ins.vehicle_id) continue
-      if (ins.created_at && !String(ins.created_at).startsWith(date)) continue
-      if (!map[ins.vehicle_id] || ins.created_at > map[ins.vehicle_id].created_at) {
-        map[ins.vehicle_id] = ins
+    for (const slot of slotsArr) {
+      if (slot.vehicle_id && slot.has_inspection) {
+        map[slot.vehicle_id] = { severity: slot.inspection_severity || '' }
       }
     }
     return map

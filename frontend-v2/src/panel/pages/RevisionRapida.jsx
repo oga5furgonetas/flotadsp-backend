@@ -74,6 +74,11 @@ export default function RevisionRapida() {
   }, [item?.id])
 
   // Daños: inspección completa primero, luego fallbacks del item de queue
+  // damageScope determina qué array usa el backend al validar
+  const damageScope = fullInsp?.analysis?.new_damages?.length > 0 ? 'new'
+    : fullInsp?.analysis?.damages?.length > 0 ? 'all'
+    : item?.new_damages?.length > 0 ? 'new'
+    : 'new'
   const damages = fullInsp?.analysis?.new_damages?.length > 0
     ? fullInsp.analysis.new_damages
     : fullInsp?.analysis?.damages?.length > 0
@@ -96,7 +101,7 @@ export default function RevisionRapida() {
     if (!item || busy) return
     setBusy(true)
     try {
-      await damageFeedback(item.id, { verdict, damage_index: dmgIndex, scope: 'new' })
+      await damageFeedback(item.id, { verdict, damage_index: dmgIndex, scope: damageScope })
       setVerdicts((v) => ({ ...v, [`${item.id}:${dmgIndex}`]: verdict }))
       loadStats()
     } catch {
@@ -145,7 +150,7 @@ export default function RevisionRapida() {
         if (!partName.trim()) { setBusy(false); return setErr(t('rev.draw.no.part')) }
         await missedDamage(item.id, { part: partName.trim(), box_2d, photo_index: photoIdx + 1 })
       } else {
-        await damageFeedback(item.id, { verdict: 'corrected', damage_index: drawMode.dmgIndex, scope: 'new', corrected_box: box_2d })
+        await damageFeedback(item.id, { verdict: 'corrected', damage_index: drawMode.dmgIndex, scope: damageScope, corrected_box: box_2d })
         setVerdicts((v) => ({ ...v, [`${item.id}:${drawMode.dmgIndex}`]: 'corrected' }))
       }
       loadStats()
@@ -448,7 +453,7 @@ export default function RevisionRapida() {
                   try {
                     await damageFeedback(item.id, {
                       verdict: 'corrected', damage_index: polyEdit.dmgIndex,
-                      scope: 'new', corrected_box: correctedBox,
+                      scope: damageScope, corrected_box: correctedBox,
                     })
                     setVerdicts(v => ({ ...v, [`${item.id}:${polyEdit.dmgIndex}`]: 'corrected' }))
                     loadStats()
