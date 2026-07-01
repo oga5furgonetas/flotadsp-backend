@@ -292,6 +292,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
   const [uploadingDoc, setUploadingDoc] = useState(false)
   const docInputRef = useRef()
   const [pendingDocType, setPendingDocType] = useState(null)
+  const [activeTab, setActiveTab] = useState('info') // 'info' | 'inspecciones' | 'docs'
 
   const vinOrPlate = vehicle.vin || vehicle.license_plate || ''
   const st = STATUS_MAP[vehicle.status] || STATUS_MAP.baja
@@ -547,8 +548,37 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
             </div>
           </div>
 
+          {/* ── TABS ── */}
+          <div className="flex shrink-0 border-b border-white/5">
+            {[
+              { id: 'info',         label: 'Info',          count: null },
+              { id: 'inspecciones', label: 'Inspecciones',  count: insps?.length ?? null },
+              { id: 'docs',         label: 'Documentos',    count: docs?.length ?? null },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-xs font-semibold transition border-b-2 ${
+                  activeTab === tab.id
+                    ? 'border-blue-500 text-blue-400'
+                    : 'border-transparent text-dark-500 hover:text-dark-300'
+                }`}
+              >
+                {tab.label}
+                {tab.count != null && (
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${activeTab === tab.id ? 'bg-blue-500/20 text-blue-300' : 'bg-dark-800 text-dark-500'}`}>
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+
           {/* ── CONTENIDO SCROLLABLE ── */}
           <div className="flex-1 overflow-y-auto">
+
+            {/* ══ TAB: INFO ══ */}
+            {activeTab === 'info' && <>
 
             {/* Sección: Datos del vehículo */}
             <Section title={t('veh.title')} icon={<Truck size={13} />}>
@@ -681,99 +711,6 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
               </div>
             </Section>
 
-            {/* Sección: Inspecciones */}
-            <Section title="Inspecciones recientes" icon={<Camera size={13} />} count={insps?.length}>
-              <div className="px-3 pb-3">
-                {!insps ? (
-                  <Loader2 size={14} className="animate-spin text-dark-500" />
-                ) : insps.length === 0 ? (
-                  <div className="rounded-xl border border-dark-700/40 p-6 text-center text-sm text-dark-500">
-                    <Camera size={22} className="mx-auto mb-2 opacity-30" />
-                    Sin inspecciones registradas
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    {insps.slice(0, 10).map((insp) => {
-                      const sev = insp.analysis?.severity || ''
-                      const sevMap = {
-                        grave: 'bg-red-500/10 text-red-300 ring-red-500/20',
-                        critico: 'bg-red-500/10 text-red-300 ring-red-500/20',
-                        moderado: 'bg-orange-500/10 text-orange-300 ring-orange-500/20',
-                        leve: 'bg-amber-500/10 text-amber-300 ring-amber-500/20',
-                      }
-                      const sevCls = sevMap[sev] || 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/20'
-                      return (
-                        <div key={insp.id} className="flex items-center justify-between gap-2 rounded-xl px-3 py-2.5 transition hover:bg-dark-800/50">
-                          <span className="text-xs text-dark-400">{(insp.created_at || '').slice(0, 16).replace('T', ' ')}</span>
-                          <div className="flex items-center gap-2">
-                            {sev && <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${sevCls}`}>{sev}</span>}
-                            <ChevronRight size={12} className="text-dark-700" />
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            </Section>
-
-            {/* Sección: Historial de incidencias */}
-            <Section title="Historial de incidencias" icon={<AlertTriangle size={13} />} count={vehicleIncidents?.length}>
-              <div className="px-3 pb-3">
-                {vehicleIncidents === null ? (
-                  <Loader2 size={14} className="animate-spin text-dark-500" />
-                ) : vehicleIncidents.length === 0 ? (
-                  <div className="rounded-xl border border-dark-700/40 p-6 text-center text-sm text-dark-500">
-                    <AlertTriangle size={20} className="mx-auto mb-2 opacity-20" />
-                    Sin incidencias registradas
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {vehicleIncidents.map(inc => {
-                      const sevCls = {
-                        leve:     'bg-yellow-500/10 text-yellow-300 ring-yellow-500/20',
-                        moderado: 'bg-amber-500/10  text-amber-300  ring-amber-500/20',
-                        grave:    'bg-orange-500/10 text-orange-300 ring-orange-500/20',
-                        critico:  'bg-red-500/10    text-red-300    ring-red-500/20',
-                        media:    'bg-amber-500/10  text-amber-300  ring-amber-500/20',
-                      }[inc.severity] || 'bg-dark-700 text-dark-400'
-                      const isResolved = inc.status !== 'open'
-                      return (
-                        <div key={inc.id} className={`rounded-xl border px-3 py-2.5 ${isResolved ? 'border-dark-800/40 opacity-70' : 'border-dark-700/60'}`}>
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 ${sevCls}`}>
-                                  {inc.severity}
-                                </span>
-                                {isResolved && (
-                                  <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-400 ring-1 ring-emerald-500/20">
-                                    resuelta
-                                  </span>
-                                )}
-                              </div>
-                              <p className="mt-1 text-[12px] font-medium text-dark-200 leading-snug">
-                                {inc.title || inc.description?.slice(0, 60) || '—'}
-                              </p>
-                              {inc.description && inc.title && (
-                                <p className="mt-0.5 text-[11px] text-dark-500 line-clamp-2">{inc.description}</p>
-                              )}
-                              <div className="mt-1.5 flex flex-wrap gap-2 text-[10px] text-dark-600">
-                                {inc.created_by_name && <span>Por: <span className="text-dark-400">{inc.created_by_name}</span></span>}
-                                {inc.created_at && <span>{(inc.created_at || '').slice(0, 10)}</span>}
-                                {inc.resolved_at && <span className="text-emerald-700">· Resuelta {(inc.resolved_at || '').slice(0, 10)}</span>}
-                              </div>
-                              {inc.notes && <p className="mt-1 text-[10px] italic text-dark-600">{inc.notes}</p>}
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            </Section>
-
             {/* Sección: Mantenimiento por km */}
             <Section title="Mantenimiento" icon={<Wrench size={13} />}>
               <div className="px-3 pb-3 space-y-2">
@@ -821,89 +758,155 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
               </div>
             </Section>
 
-            {/* Sección: Documentación */}
-            <Section title="Documentación" icon={<FileText size={13} />} count={docs?.length}>
-              <div className="px-3 pb-3 space-y-2">
-                {/* Input oculto para subir ficheros */}
-                <input
-                  ref={docInputRef}
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png,.webp"
-                  className="hidden"
-                  onChange={handleDocUpload}
-                />
+            <div className="h-4" />
+            </> /* fin tab info */}
 
-                {/* Tipos de documentos con botón de subida */}
-                {[
-                  { type: 'seguro',        label: 'Seguro',              Icon: Shield },
-                  { type: 'itv',           label: 'Certificado ITV',     Icon: FileCheck },
-                  { type: 'ficha_tecnica', label: 'Ficha técnica',       Icon: FileBadge },
-                  { type: 'contrato',      label: 'Contrato renting',    Icon: FileText },
-                  { type: 'otro',          label: 'Otro documento',      Icon: File },
-                ].map(({ type, label, Icon }) => {
-                  const typeDocs = (docs || []).filter(d => d.doc_type === type)
-                  return (
-                    <div key={type}>
-                      {/* Cabecera del tipo */}
-                      <div className="flex items-center justify-between mb-1 px-1">
-                        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-dark-500">
-                          <Icon size={11} /> {label}
-                        </div>
-                        <button
-                          onClick={() => triggerUpload(type)}
-                          disabled={uploadingDoc}
-                          className="flex items-center gap-1 rounded-lg border border-dark-700 px-2 py-0.5 text-[10px] font-medium text-dark-400 hover:border-blue-500/40 hover:text-blue-400 transition disabled:opacity-40"
-                        >
-                          {uploadingDoc && pendingDocType === type
-                            ? <Loader2 size={9} className="animate-spin" />
-                            : <Upload size={9} />
-                          } Subir
-                        </button>
-                      </div>
-
-                      {/* Documentos de este tipo */}
-                      {typeDocs.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-dark-700/60 px-3 py-2 text-[11px] text-dark-600">
-                          Sin documentos — pulsa Subir para añadir
-                        </div>
-                      ) : (
-                        <div className="space-y-1">
-                          {typeDocs.map(doc => (
-                            <div key={doc.id} className="flex items-center gap-2 rounded-lg border border-dark-700/50 bg-dark-800/40 px-3 py-2">
-                              <FileImage size={12} className="shrink-0 text-blue-400/70" />
-                              <span className="flex-1 truncate text-[11px] text-dark-300" title={doc.name}>{doc.name}</span>
-                              <span className="shrink-0 text-[10px] text-dark-600">{(doc.uploaded_at || '').slice(0, 10)}</span>
-                              <a
-                                href={doc.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="shrink-0 rounded p-1 text-dark-500 hover:text-blue-400 transition"
-                                title="Abrir"
-                              >
-                                <ExternalLink size={11} />
-                              </a>
-                              <button
-                                onClick={() => handleDocDelete(doc.id)}
-                                className="shrink-0 rounded p-1 text-dark-600 hover:text-red-400 transition"
-                                title="Eliminar"
-                              >
-                                <Trash2 size={11} />
-                              </button>
+            {/* ══ TAB: INSPECCIONES ══ */}
+            {activeTab === 'inspecciones' && (
+              <div className="px-3 py-3">
+                {!insps ? (
+                  <div className="flex items-center gap-2 py-8 text-dark-500"><Loader2 size={14} className="animate-spin" /> Cargando…</div>
+                ) : insps.length === 0 ? (
+                  <div className="rounded-xl border border-dark-700/40 p-10 text-center text-sm text-dark-500">
+                    <Camera size={28} className="mx-auto mb-3 opacity-20" />
+                    Sin inspecciones registradas
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {insps.map((insp) => {
+                      const sev = insp.analysis?.severity || ''
+                      const sevMap = {
+                        grave:    'bg-red-500/10 text-red-300 ring-red-500/20',
+                        critico:  'bg-red-500/10 text-red-300 ring-red-500/20',
+                        moderado: 'bg-orange-500/10 text-orange-300 ring-orange-500/20',
+                        leve:     'bg-amber-500/10 text-amber-300 ring-amber-500/20',
+                      }
+                      const sevCls = sevMap[sev] || 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/20'
+                      return (
+                        <div key={insp.id} className="flex items-center gap-3 rounded-xl border border-dark-800/60 px-3 py-2.5 transition hover:bg-dark-800/40">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-medium text-dark-200">{(insp.created_at || '').slice(0, 16).replace('T', ' ')}</span>
+                              {sev && <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${sevCls}`}>{sev}</span>}
                             </div>
-                          ))}
+                            {insp.driver_name && (
+                              <div className="mt-0.5 flex items-center gap-1 text-[11px] text-dark-500">
+                                <User size={9} className="shrink-0" />
+                                <span className="truncate">{insp.driver_name}</span>
+                              </div>
+                            )}
+                          </div>
+                          <ChevronRight size={12} className="shrink-0 text-dark-700" />
                         </div>
-                      )}
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Incidencias dentro del mismo tab */}
+                {vehicleIncidents !== null && vehicleIncidents.length > 0 && (
+                  <div className="mt-5">
+                    <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-dark-500">
+                      <AlertTriangle size={11} /> Incidencias ({vehicleIncidents.length})
                     </div>
-                  )
-                })}
+                    <div className="space-y-2">
+                      {vehicleIncidents.map(inc => {
+                        const sevCls = {
+                          leve:     'bg-yellow-500/10 text-yellow-300 ring-yellow-500/20',
+                          moderado: 'bg-amber-500/10 text-amber-300 ring-amber-500/20',
+                          grave:    'bg-orange-500/10 text-orange-300 ring-orange-500/20',
+                          critico:  'bg-red-500/10 text-red-300 ring-red-500/20',
+                        }[inc.severity] || 'bg-dark-700 text-dark-400'
+                        const isResolved = inc.status !== 'open'
+                        return (
+                          <div key={inc.id} className={`rounded-xl border px-3 py-2.5 ${isResolved ? 'border-dark-800/40 opacity-60' : 'border-dark-700/60'}`}>
+                            <div className="flex items-start gap-2">
+                              <span className={`mt-0.5 inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 ${sevCls}`}>{inc.severity}</span>
+                              {isResolved && <span className="mt-0.5 inline-flex rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-400 ring-1 ring-emerald-500/20">resuelta</span>}
+                            </div>
+                            <p className="mt-1 text-[12px] font-medium text-dark-200 leading-snug">{inc.title || inc.description?.slice(0, 60) || '—'}</p>
+                            {inc.description && inc.title && <p className="mt-0.5 text-[11px] text-dark-500 line-clamp-2">{inc.description}</p>}
+                            <div className="mt-1.5 flex flex-wrap gap-2 text-[10px] text-dark-600">
+                              {inc.created_by_name && <span>Por: <span className="text-dark-400">{inc.created_by_name}</span></span>}
+                              {inc.created_at && <span>{(inc.created_at || '').slice(0, 10)}</span>}
+                              {inc.resolved_at && <span className="text-emerald-700">· Resuelta {(inc.resolved_at || '').slice(0, 10)}</span>}
+                            </div>
+                            {inc.notes && <p className="mt-1 text-[10px] italic text-dark-600">{inc.notes}</p>}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+                <div className="h-4" />
+              </div>
+            )}
+
+            {/* ══ TAB: DOCUMENTOS ══ */}
+            {activeTab === 'docs' && (
+              <div className="px-3 py-3">
+                {/* Input oculto para subir */}
+                <input ref={docInputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleDocUpload} />
+
+                {/* Tipos de documentos */}
+                <div className="space-y-4">
+                  {[
+                    { type: 'seguro',        label: 'Seguro',           Icon: Shield },
+                    { type: 'itv',           label: 'Certificado ITV',  Icon: FileCheck },
+                    { type: 'ficha_tecnica', label: 'Ficha técnica',    Icon: FileBadge },
+                    { type: 'contrato',      label: 'Contrato renting', Icon: FileText },
+                    { type: 'otro',          label: 'Otro documento',   Icon: File },
+                  ].map(({ type, label, Icon }) => {
+                    const typeDocs = (docs || []).filter(d => d.doc_type === type)
+                    return (
+                      <div key={type}>
+                        <div className="mb-1.5 flex items-center justify-between">
+                          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-dark-500">
+                            <Icon size={11} /> {label}
+                          </div>
+                          <button
+                            onClick={() => triggerUpload(type)}
+                            disabled={uploadingDoc}
+                            className="flex items-center gap-1 rounded-lg border border-dark-700 px-2 py-0.5 text-[10px] font-medium text-dark-400 hover:border-blue-500/40 hover:text-blue-400 transition disabled:opacity-40"
+                          >
+                            {uploadingDoc && pendingDocType === type ? <Loader2 size={9} className="animate-spin" /> : <Upload size={9} />}
+                            Subir
+                          </button>
+                        </div>
+                        {typeDocs.length === 0 ? (
+                          <div className="rounded-lg border border-dashed border-dark-700/50 px-3 py-2 text-[11px] text-dark-600">
+                            Sin documentos — pulsa Subir para añadir
+                          </div>
+                        ) : (
+                          <div className="space-y-1">
+                            {typeDocs.map(doc => (
+                              <div key={doc.id} className="flex items-center gap-2 rounded-lg border border-dark-700/50 bg-dark-800/40 px-3 py-2">
+                                <FileImage size={12} className="shrink-0 text-blue-400/70" />
+                                <span className="flex-1 truncate text-[11px] text-dark-300" title={doc.name}>{doc.name}</span>
+                                <span className="shrink-0 text-[10px] text-dark-600">{(doc.uploaded_at || '').slice(0, 10)}</span>
+                                <a href={doc.url} target="_blank" rel="noopener noreferrer" className="shrink-0 rounded p-1 text-dark-500 hover:text-blue-400 transition" title="Abrir">
+                                  <ExternalLink size={11} />
+                                </a>
+                                <button onClick={() => handleDocDelete(doc.id)} className="shrink-0 rounded p-1 text-dark-600 hover:text-red-400 transition" title="Eliminar">
+                                  <Trash2 size={11} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
 
                 {docs === null && (
-                  <div className="flex items-center gap-2 py-2 text-xs text-dark-500">
+                  <div className="flex items-center gap-2 py-4 text-xs text-dark-500">
                     <Loader2 size={12} className="animate-spin" /> Cargando documentos…
                   </div>
                 )}
+                <div className="h-4" />
               </div>
-            </Section>
+            )}
 
             <div className="h-6" />
           </div>

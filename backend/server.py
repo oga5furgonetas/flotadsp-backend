@@ -4904,6 +4904,16 @@ async def get_vehicle_inspections(vehicle_id: str, user: dict = Depends(require_
     inspections = await db.inspections.find(
         {"deleted": {"$ne": True}, "vehicle_id": vehicle_id}, {"_id": 0}
     ).sort("created_at", -1).to_list(50)
+
+    # Enrich with driver name
+    driver_ids = list({i["driver_id"] for i in inspections if i.get("driver_id")})
+    if driver_ids:
+        drivers = await db.drivers.find({"id": {"$in": driver_ids}}, {"_id": 0, "id": 1, "name": 1}).to_list(200)
+        name_map = {d["id"]: d["name"] for d in drivers}
+        for insp in inspections:
+            if insp.get("driver_id"):
+                insp["driver_name"] = name_map.get(insp["driver_id"], "")
+
     return inspections
 
 
