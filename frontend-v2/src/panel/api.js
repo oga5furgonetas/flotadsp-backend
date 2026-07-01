@@ -38,6 +38,9 @@ export const updateVehicle = (id, body) => api.patch(`/vehicles/${id}`, body)
 export const getVehicleMaintenance = (id) => api.get(`/vehicles/${id}/maintenance`)
 export const registerOilChange = (id, body) => api.post(`/vehicles/${id}/oil/change`, body)
 export const registerMaintenanceChange = (id, kind, body) => api.post(`/vehicles/${id}/maintenance/${kind}/change`, body)
+export const getVehicleDocuments = (id) => api.get(`/vehicles/${id}/documents`)
+export const uploadVehicleDocument = (id, formData) => api.post(`/vehicles/${id}/documents`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+export const deleteVehicleDocument = (vehicleId, docId) => api.delete(`/vehicles/${vehicleId}/documents/${docId}`)
 
 /* ── Conductores ── */
 export const getDrivers = (center) => api.get('/drivers', { params: centerParam(center) })

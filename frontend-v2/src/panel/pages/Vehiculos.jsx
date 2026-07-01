@@ -7,11 +7,13 @@ import {
   MapPin, Gauge, Calendar, Package, Shield, ChevronRight,
   User, Camera, ZoomIn, Pencil, Check, Maximize2, ArrowLeft,
   Fuel, Palette, Hash, Building2, Clock, AlertTriangle, Wrench,
-  Droplets, CircleDot, Disc,
+  Droplets, CircleDot, Disc, FileText, Trash2, Upload, ExternalLink,
+  FileCheck, FileBadge, FileImage, File,
 } from 'lucide-react'
 import {
   getVehicles, getLastInspections, getVehicleDriver, getVehicleInspections, updateVehicle, createIncident, getIncidents,
   getVehicleMaintenance, registerOilChange, registerMaintenanceChange,
+  getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument,
 } from '../api'
 
 const STATUS_MAP = {
@@ -286,6 +288,10 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
   const [vehicleIncidents, setVehicleIncidents] = useState(null)
   const [maintenance, setMaintenance] = useState(null)
   const [maintModal, setMaintModal] = useState(null) // 'oil' | 'ruedas' | 'pastillas' | null
+  const [docs, setDocs] = useState(null)
+  const [uploadingDoc, setUploadingDoc] = useState(false)
+  const docInputRef = useRef()
+  const [pendingDocType, setPendingDocType] = useState(null)
 
   const vinOrPlate = vehicle.vin || vehicle.license_plate || ''
   const st = STATUS_MAP[vehicle.status] || STATUS_MAP.baja
@@ -297,6 +303,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
     getVehicleInspections(vehicle.id).then(r => { if (!cancelled) setInsps(r.data || []) }).catch(() => { if (!cancelled) setInsps([]) })
     getIncidents({ vehicle_id: vehicle.id }).then(r => { if (!cancelled) setVehicleIncidents(Array.isArray(r.data) ? r.data : []) }).catch(() => { if (!cancelled) setVehicleIncidents([]) })
     getVehicleMaintenance(vehicle.id).then(r => { if (!cancelled) setMaintenance(r.data || null) }).catch(() => { if (!cancelled) setMaintenance(null) })
+    getVehicleDocuments(vehicle.id).then(r => { if (!cancelled) setDocs(Array.isArray(r.data) ? r.data : []) }).catch(() => { if (!cancelled) setDocs([]) })
     return () => { cancelled = true }
   }, [vehicle.id])
 
@@ -323,6 +330,36 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
       onSaved?.()
     } catch { showToast('No se pudo guardar', false) }
     finally { setBusy(false) }
+  }
+
+  async function handleDocUpload(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file || !pendingDocType) return
+    setUploadingDoc(true)
+    try {
+      const fd = new FormData()
+      fd.append('doc_type', pendingDocType)
+      fd.append('file', file)
+      await uploadVehicleDocument(vehicle.id, fd)
+      const r = await getVehicleDocuments(vehicle.id)
+      setDocs(Array.isArray(r.data) ? r.data : [])
+      showToast('Documento subido correctamente')
+    } catch { showToast('No se pudo subir el documento', false) }
+    finally { setUploadingDoc(false); setPendingDocType(null) }
+  }
+
+  async function handleDocDelete(docId) {
+    try {
+      await deleteVehicleDocument(vehicle.id, docId)
+      setDocs(d => d.filter(x => x.id !== docId))
+      showToast('Documento eliminado')
+    } catch { showToast('No se pudo eliminar', false) }
+  }
+
+  function triggerUpload(docType) {
+    setPendingDocType(docType)
+    setTimeout(() => docInputRef.current?.click(), 0)
   }
 
   // Intercept status → taller: open modal first
@@ -779,6 +816,90 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                 {maintenance === null && (
                   <div className="flex items-center gap-2 py-2 text-xs text-dark-500">
                     <Loader2 size={12} className="animate-spin" /> Cargando mantenimiento…
+                  </div>
+                )}
+              </div>
+            </Section>
+
+            {/* Sección: Documentación */}
+            <Section title="Documentación" icon={<FileText size={13} />} count={docs?.length}>
+              <div className="px-3 pb-3 space-y-2">
+                {/* Input oculto para subir ficheros */}
+                <input
+                  ref={docInputRef}
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png,.webp"
+                  className="hidden"
+                  onChange={handleDocUpload}
+                />
+
+                {/* Tipos de documentos con botón de subida */}
+                {[
+                  { type: 'seguro',        label: 'Seguro',              Icon: Shield },
+                  { type: 'itv',           label: 'Certificado ITV',     Icon: FileCheck },
+                  { type: 'ficha_tecnica', label: 'Ficha técnica',       Icon: FileBadge },
+                  { type: 'contrato',      label: 'Contrato renting',    Icon: FileText },
+                  { type: 'otro',          label: 'Otro documento',      Icon: File },
+                ].map(({ type, label, Icon }) => {
+                  const typeDocs = (docs || []).filter(d => d.doc_type === type)
+                  return (
+                    <div key={type}>
+                      {/* Cabecera del tipo */}
+                      <div className="flex items-center justify-between mb-1 px-1">
+                        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-dark-500">
+                          <Icon size={11} /> {label}
+                        </div>
+                        <button
+                          onClick={() => triggerUpload(type)}
+                          disabled={uploadingDoc}
+                          className="flex items-center gap-1 rounded-lg border border-dark-700 px-2 py-0.5 text-[10px] font-medium text-dark-400 hover:border-blue-500/40 hover:text-blue-400 transition disabled:opacity-40"
+                        >
+                          {uploadingDoc && pendingDocType === type
+                            ? <Loader2 size={9} className="animate-spin" />
+                            : <Upload size={9} />
+                          } Subir
+                        </button>
+                      </div>
+
+                      {/* Documentos de este tipo */}
+                      {typeDocs.length === 0 ? (
+                        <div className="rounded-lg border border-dashed border-dark-700/60 px-3 py-2 text-[11px] text-dark-600">
+                          Sin documentos — pulsa Subir para añadir
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          {typeDocs.map(doc => (
+                            <div key={doc.id} className="flex items-center gap-2 rounded-lg border border-dark-700/50 bg-dark-800/40 px-3 py-2">
+                              <FileImage size={12} className="shrink-0 text-blue-400/70" />
+                              <span className="flex-1 truncate text-[11px] text-dark-300" title={doc.name}>{doc.name}</span>
+                              <span className="shrink-0 text-[10px] text-dark-600">{(doc.uploaded_at || '').slice(0, 10)}</span>
+                              <a
+                                href={doc.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="shrink-0 rounded p-1 text-dark-500 hover:text-blue-400 transition"
+                                title="Abrir"
+                              >
+                                <ExternalLink size={11} />
+                              </a>
+                              <button
+                                onClick={() => handleDocDelete(doc.id)}
+                                className="shrink-0 rounded p-1 text-dark-600 hover:text-red-400 transition"
+                                title="Eliminar"
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+
+                {docs === null && (
+                  <div className="flex items-center gap-2 py-2 text-xs text-dark-500">
+                    <Loader2 size={12} className="animate-spin" /> Cargando documentos…
                   </div>
                 )}
               </div>
