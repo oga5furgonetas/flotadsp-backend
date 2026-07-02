@@ -22,6 +22,19 @@
   * {
     -webkit-tap-highlight-color: transparent;
   }
+
+  /* Accesibilidad: foco visible solo con teclado (no al hacer clic) */
+  :focus-visible {
+    @apply outline-none ring-2 ring-brand-500/60;
+  }
+
+  /* Accesibilidad: respetar la preferencia de menos movimiento del SO */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 }
 
 @layer components {
@@ -57,5 +70,20 @@
   .badge-orange {
     @apply inline-flex items-center rounded-full bg-brand-500/15 px-2.5 py-0.5 text-[11px]
            font-bold uppercase tracking-wide text-brand-400;
+  }
+  .kbd {
+    @apply inline-flex items-center rounded border border-dark-700 bg-dark-800 px-1.5 py-0.5
+           font-mono text-[10px] font-semibold text-dark-400;
+  }
+}
+
+@layer utilities {
+  /* Entrada suave de contenido (cambio de ruta, modales, skeletons) */
+  .animate-fade-in {
+    animation: ffade 0.18s ease-out;
+  }
+  @keyframes ffade {
+    from { opacity: 0; transform: translateY(3px); }
+    to   { opacity: 1; transform: none; }
   }
 }

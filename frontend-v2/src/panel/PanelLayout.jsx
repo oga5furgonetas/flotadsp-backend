@@ -4,10 +4,11 @@ import {
   LayoutDashboard, Trophy, Users, CalendarClock, BarChart3, Activity,
   CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
-  ChevronRight, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser,
+  ChevronRight, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee } from './auth'
 import TrialBanner from './TrialBanner'
+import CommandPalette from './CommandPalette'
 import { useT, LANGS } from '../i18n'
 import { usePlan } from '../lib/usePlan'
 
@@ -70,6 +71,19 @@ export default function PanelLayout() {
   const { limits } = usePlan()
   const [tab, setTab] = useState(() => localStorage.getItem('panel_tab') || 'furgonetas')
   const [center, setCenter] = useState(() => localStorage.getItem('panel_center') || 'Todos')
+  const [cmdOpen, setCmdOpen] = useState(false)
+
+  // Paleta de comandos global: Ctrl/Cmd+K
+  useEffect(() => {
+    const h = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setCmdOpen((o) => !o)
+      }
+    }
+    document.addEventListener('keydown', h)
+    return () => document.removeEventListener('keydown', h)
+  }, [])
 
   // Traduce los tabs dinámicamente según el idioma activo
   const TABS = Object.fromEntries(
@@ -128,6 +142,19 @@ export default function PanelLayout() {
     logout()
     nav('/panel/login', { replace: true })
   }
+
+  // Páginas visibles para la paleta de comandos (mismos permisos que el menú)
+  const paletteBase = [...TABS.operacional.items, ...TABS.equipo.items, ...TABS.furgonetas.items]
+    .filter((it) => {
+      const k = keyOf(it.to)
+      if (!EQUIPO_KEYS.has(k) && !canSee(k)) return false
+      const feat = ROUTE_FEATURE[k]
+      if (feat && limits && limits[feat] === false) return false
+      return true
+    })
+  const palettePages = showAdmin
+    ? [...paletteBase, { to: '/panel/admin', label: t('nav.business'), icon: Shield }, { to: '/panel/bandeja', label: t('nav.inbox'), icon: Inbox }]
+    : paletteBase
 
   const impersonating = !!localStorage.getItem('flotadsp_token_super')
   function backToSuper() {
@@ -266,11 +293,22 @@ export default function PanelLayout() {
           </div>
           <div className="hidden text-sm text-dark-400 md:block">{TABS[tab].label}</div>
 
+          {/* Paleta de comandos (Ctrl+K) */}
+          <button
+            onClick={() => setCmdOpen(true)}
+            className="ml-auto flex items-center gap-2 rounded-lg border border-dark-700 bg-dark-800/70 px-3 py-1.5 text-xs text-dark-400 transition-colors hover:border-dark-600 hover:text-dark-200"
+            title="Ctrl+K"
+          >
+            <Search size={13} />
+            <span className="hidden sm:inline">{t('cmdk.hint')}…</span>
+            <kbd className="kbd hidden sm:inline-flex">Ctrl K</kbd>
+          </button>
+
           {/* Selector de idioma */}
           <select
             value={lang}
             onChange={(e) => setLang(e.target.value)}
-            className="ml-auto rounded-lg border border-dark-700 bg-dark-800 px-2 py-1 text-xs font-semibold text-dark-300 focus:outline-none"
+            className="rounded-lg border border-dark-700 bg-dark-800 px-2 py-1 text-xs font-semibold text-dark-300 focus:outline-none"
             title="Idioma"
           >
             {Object.entries(LANGS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -316,10 +354,12 @@ export default function PanelLayout() {
           ))}
         </div>
 
-        <main className="flex-1 overflow-y-auto p-4 md:p-5">
+        <main key={loc.pathname} className="animate-fade-in flex-1 overflow-y-auto p-4 md:p-5">
           <Outlet context={{ center, centers, admin }} />
         </main>
       </div>
+
+      <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} pages={palettePages} />
     </div>
   )
 }

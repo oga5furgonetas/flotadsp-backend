@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { getDashboardStats, getLastInspections, getItvAlerts, getVehicles, getDrivers } from '../api'
 import { useT, LANG_LOCALE } from '../../i18n'
+import { PageSkeleton } from '../components/Skeleton'
 
 /* ── helpers ── */
 function greeting(t) {
@@ -345,11 +346,7 @@ export default function Dashboard() {
   }, [center])
 
   if (err) return <p className="text-red-400 p-4">{err}</p>
-  if (!data) return (
-    <div className="flex h-64 items-center justify-center gap-2 text-dark-400">
-      <Loader2 className="animate-spin" size={20} /> {t('dash.loading')}
-    </div>
-  )
+  if (!data) return <PageSkeleton kpis={4} rows={6} />
 
   const fleet = data.total_vehicles || 0
   const inShop = data.vehicles_in_workshop || 0

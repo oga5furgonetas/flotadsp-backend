@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { useEscape } from '../../lib/useEscape'
+import { PageSkeleton } from '../components/Skeleton'
 import QRCode from 'qrcode'
 import {
   Loader2, Search, Truck, X, Save, Download, QrCode,
@@ -1158,6 +1159,17 @@ export default function Vehiculos() {
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(null)
   const [addOpen, setAddOpen] = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Deep-link desde la paleta de comandos: /panel/vehiculos?open=<id>
+  useEffect(() => {
+    const openId = searchParams.get('open')
+    if (openId && vehicles) {
+      const v = vehicles.find((x) => x.id === openId)
+      if (v) setSel(v)
+      setSearchParams({}, { replace: true })
+    }
+  }, [vehicles]) // eslint-disable-line
 
   function load() {
     setVehicles(null); setErr('')
@@ -1228,7 +1240,7 @@ export default function Vehiculos() {
       )}
 
       {!vehicles ? (
-        <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> {t('ui.loading')}</div>
+        <PageSkeleton kpis={4} rows={9} />
       ) : list.length === 0 ? (
         <div className="card flex flex-col items-center gap-2 p-10 text-center text-dark-400">
           <Truck size={28} /> {t('veh.empty')} {center !== 'Todos' && `en ${center}`}.

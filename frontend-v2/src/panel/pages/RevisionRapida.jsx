@@ -87,13 +87,30 @@ export default function RevisionRapida() {
         ? item.new_damages
         : item?.analysis?.new_damages || []
 
+  // Atajos de teclado: ←/→ navegar, Enter marcar revisada. El equipo valida
+  // cientos de inspecciones — sin tocar el ratón se va mucho más rápido.
+  // (go y reviewDone son function declarations: hoisted, accesibles desde aquí)
+  useEffect(() => {
+    const h = (e) => {
+      if (!queue) return
+      const tag = (e.target.tagName || '').toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return
+      if (e.key === 'ArrowRight') { e.preventDefault(); go(1) }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1) }
+      else if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey && !e.altKey) { e.preventDefault(); reviewDone() }
+    }
+    document.addEventListener('keydown', h)
+    return () => document.removeEventListener('keydown', h)
+  })
+
   if (err) return <p className="text-red-400">{err}</p>
   if (!queue) return <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> {t('ui.loading')}</div>
 
   function go(delta) {
     setPhotoIdx(0)
     setShowAnnotated(true)
-    setIdx((i) => Math.min(Math.max(0, i + delta), displayQueue.length - 1))
+    // max DESPUÉS de min: con cola vacía el resultado queda en 0, nunca -1
+    setIdx((i) => Math.max(0, Math.min(i + delta, displayQueue.length - 1)))
     cancelDraw()
   }
 
@@ -210,6 +227,9 @@ export default function RevisionRapida() {
               {sevLabel(item.severity || 'sin_analisis').toUpperCase()} · {item.new_damages_count || item.total_damages_count || 0} {t('rev.damages')}
             </span>
             <div className="flex items-center gap-2 text-sm text-dark-400">
+              <span className="mr-1 hidden items-center gap-1 text-[10px] text-dark-600 lg:flex" title={`← → · Enter — ${t('rev.kbd.hint')}`}>
+                <kbd className="kbd">←</kbd><kbd className="kbd">→</kbd><kbd className="kbd">↵</kbd>
+              </span>
               <button className="btn-ghost p-1.5 disabled:opacity-30" disabled={idx === 0} onClick={() => go(-1)}><ChevronLeft size={18} /></button>
               <span>{idx + 1} {t('rev.of')} {queue.length}</span>
               <button className="btn-ghost p-1.5 disabled:opacity-30" disabled={idx === queue.length - 1} onClick={() => go(1)}><ChevronRight size={18} /></button>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT } from '../../i18n'
 import { useEscape } from '../../lib/useEscape'
 import {
@@ -410,6 +410,17 @@ export default function Conductores() {
   const [q, setQ] = useState('')
   const [modal, setModal] = useState(null) // null | { driver: obj|null }
   const [tab, setTab] = useState('directorio') // directorio | ranking | scoring
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Deep-link desde la paleta de comandos: /panel/conductores?open=<id>
+  useEffect(() => {
+    const openId = searchParams.get('open')
+    if (openId && drivers) {
+      const d = drivers.find((x) => x.id === openId)
+      if (d) setModal({ driver: d })
+      setSearchParams({}, { replace: true })
+    }
+  }, [drivers]) // eslint-disable-line
 
   async function load() {
     try {
