@@ -534,7 +534,8 @@ def verify_password(plain: str, hashed: str) -> bool:
 def create_token(user_id: str, role: str, name: str,
                  org_id: Optional[str] = None, db_name: Optional[str] = None,
                  account_type: Optional[str] = None, centers: Optional[list] = None,
-                 super_admin: bool = False, permissions: Optional[list] = None) -> str:
+                 super_admin: bool = False, permissions: Optional[list] = None,
+                 demo: bool = False) -> str:
     expires = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
     payload = {
         "sub": user_id,
@@ -544,6 +545,8 @@ def create_token(user_id: str, role: str, name: str,
     }
     if super_admin:
         payload["sa"] = True
+    if demo:
+        payload["demo"] = True  # solo lectura: get_current_user bloquea mutaciones
     # Permisos por usuario (lista de módulos permitidos). None = sin restricción.
     if permissions is not None:
         payload["permissions"] = permissions
@@ -566,11 +569,18 @@ def decode_token(token: str) -> dict:
 
 
 async def get_current_user(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer)
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> dict:
     if not credentials:
         raise HTTPException(status_code=401, detail="Se requiere autenticación")
     payload = decode_token(credentials.credentials)
+    # Modo demo: cuenta de solo lectura para probar el producto sin registro.
+    # Cualquier mutación se bloquea aquí, cubra el endpoint que cubra.
+    if payload.get("demo") and request.method not in ("GET", "HEAD", "OPTIONS"):
+        # El asistente IA es una "lectura" aunque viaje por POST
+        if not request.url.path.endswith("/assistant/ask"):
+            raise HTTPException(status_code=403, detail="Modo demo: solo lectura. Crea tu cuenta gratis para editar.")
     # AÍSLA: fija la BD de la organización del token para TODA esta petición.
     # Tokens antiguos sin db_name → BD por defecto (tu data) = sin cambios.
     set_current_org_db(payload.get("db_name"))
@@ -3758,6 +3768,209 @@ async def reset_password(data: dict, request: Request):
     await global_db.password_resets.update_one({"token_hash": th}, {"$set": {"used": True}})
     logger.info(f"Contraseña restablecida vía email para user {doc['user_id']}")
     return {"success": True}
+
+
+# =========================
+# DEMO SIN REGISTRO — org de solo lectura con datos sintéticos
+# =========================
+
+_DEMO_ORG_ID = "demo"
+_DEMO_DB = "dsp_demo"
+
+
+async def _seed_demo_data():
+    """Crea datos sintéticos realistas en dsp_demo si está vacía (idempotente)."""
+    ddb = client[_DEMO_DB]
+    if await ddb.vehicles.count_documents({}) > 0:
+        return
+    import random as _r
+    _r.seed(42)  # datos estables entre re-seeds
+    now = datetime.now(timezone.utc)
+    brands = [("Toyota", "Proace"), ("Renault", "Trafic"), ("Ford", "Transit"),
+              ("Mercedes", "Vito"), ("Peugeot", "Expert")]
+    vehicles, plates = [], []
+    for i in range(10):
+        b, mo = brands[i % len(brands)]
+        plate = f"{1000 + i * 731 % 9000} {'BCD FGH JKL MNP RST'.split()[i % 5]}"
+        plates.append(plate)
+        vehicles.append({
+            "id": f"demo-v{i}", "license_plate": plate, "brand": b, "model": mo,
+            "center": "MADRID", "status": "taller" if i == 7 else "active",
+            "mileage": 28000 + i * 9500, "fuel_type": "Diésel", "vehicle_type": "Furgoneta",
+            "itv_date": (now + timedelta(days=12 + i * 40)).strftime("%Y-%m-%d"),
+            "renting_end_date": (now + timedelta(days=200 + i * 30)).strftime("%Y-%m-%d"),
+            "provider": "BANSACAR", "oil_last_change_km": 20000 + i * 9000,
+            "oil_interval_km": 15000, "oil_warning_before_km": 2500,
+            "mileage_history": [
+                {"date": (now - timedelta(days=d)).strftime("%Y-%m-%d"), "km": 28000 + i * 9500 - d * 120, "source": "demo"}
+                for d in (30, 20, 10, 0)
+            ],
+            "created_at": now.isoformat(), "updated_at": now.isoformat(),
+        })
+    await ddb.vehicles.insert_many(vehicles)
+
+    names = ["Carlos Ruiz", "María López", "Ahmed Ben", "Lucía García", "Ion Popescu",
+             "Sara Ortiz", "Diego Fernández", "Ana Torres"]
+    drivers = [{
+        "id": f"demo-d{i}", "name": n, "center": "MADRID", "active": True,
+        "contrato": "empresa" if i % 3 else "ett", "nivel": ["pleno", "L1", "L2"][i % 3],
+        "email": f"demo{i}@flotadsp.com", "created_at": now.isoformat(),
+    } for i, n in enumerate(names)]
+    await ddb.drivers.insert_many(drivers)
+
+    # Inspecciones de los últimos 10 días con algunos daños (para dashboard/€/scoring)
+    parts = ["puerta lateral derecha", "paragolpes trasero", "aleta delantera izquierda", "portón trasero"]
+    insps = []
+    for day in range(10):
+        for j in range(5):
+            di = (day + j) % len(drivers)
+            vi = (day * 3 + j) % len(vehicles)
+            has_dmg = (day * 5 + j) % 9 == 0
+            nd = ([{
+                "part": parts[(day + j) % len(parts)], "severity": ["leve", "moderado", "grave"][(day + j) % 3],
+                "description": "Rozadura visible en el panel", "estimated_cost": [90, 240, 520][(day + j) % 3],
+                "confirmed": True, "photo_index": 1,
+            }] if has_dmg else [])
+            created = (now - timedelta(days=day, hours=4 + j)).isoformat()
+            insps.append({
+                "id": f"demo-i{day}-{j}", "vehicle_id": vehicles[vi]["id"], "driver_id": drivers[di]["id"],
+                "center": "MADRID", "photos": [], "annotated_photos": [], "notes": "",
+                "analysis_status": "ok", "created_at": created, "reviewed": True,
+                "analysis": {
+                    "severity": nd[0]["severity"] if nd else "sin_danos",
+                    "urgency": "puede_esperar", "risk": "bajo", "circulation_safe": True,
+                    "critical_damages_count": 0, "total_damages_count": len(nd),
+                    "total_estimated_cost": sum(d["estimated_cost"] for d in nd),
+                    "confidence": 90, "executive_summary": "Inspección de demostración.",
+                    "damages": nd, "new_damages": nd, "affected_parts": [d["part"] for d in nd],
+                    "image_quality_warnings": [], "critical_damages": [],
+                },
+            })
+    await ddb.inspections.insert_many(insps)
+
+    # Cuadrante de hoy + incidencias abiertas
+    await ddb.daily_assignments.insert_one({
+        "date": now.strftime("%Y-%m-%d"), "center": "MADRID",
+        "slots": [{"vehicle_id": v["id"], "vehicle_plate": v["license_plate"],
+                   "driver_id": drivers[i % len(drivers)]["id"],
+                   "driver_name": drivers[i % len(drivers)]["name"]}
+                  for i, v in enumerate(vehicles[:8])],
+    })
+    await ddb.incidents.insert_many([
+        {"id": f"demo-inc{i}", "vehicle_id": vehicles[i]["id"], "title": tt,
+         "description": "Incidencia de demostración", "severity": sv, "status": "open",
+         "center": "MADRID", "created_at": (now - timedelta(days=i + 1)).isoformat()}
+        for i, (tt, sv) in enumerate([("Golpe en puerta lateral", "moderado"),
+                                      ("Luz de freno fundida", "leve"),
+                                      ("Retrovisor roto", "grave")])
+    ])
+    logger.info("Demo: datos sintéticos creados en dsp_demo")
+
+
+@auth_router.post("/demo-login")
+async def demo_login(request: Request):
+    """Acceso instantáneo a una organización DEMO de solo lectura (sin registro).
+    Los datos son sintéticos y las mutaciones están bloqueadas por token."""
+    _rl_public_action(f"demo:{_rl_key_ip(request)}", max_count=10, window_s=3600,
+                      detail="Demasiados accesos a la demo. Inténtalo más tarde.")
+    org = await global_db.organizations.find_one({"id": _DEMO_ORG_ID})
+    if not org:
+        await global_db.organizations.insert_one({
+            "id": _DEMO_ORG_ID, "name": "Demo FlotaDSP", "account_type": "dsp",
+            "slug": "demo", "db_name": _DEMO_DB, "status": "active", "plan": "pro",
+            "centers": ["MADRID"], "max_centers": 1,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    try:
+        await _seed_demo_data()
+    except Exception as _se:
+        logger.warning(f"Demo seed: {_se}")
+    token = create_token("demo-user", "admin", "Demo FlotaDSP",
+                         org_id=_DEMO_ORG_ID, db_name=_DEMO_DB, account_type="dsp",
+                         centers=["MADRID"], demo=True)
+    logger.info(f"Demo login desde {_rl_key_ip(request)}")
+    return {"access_token": token, "role": "admin", "name": "Demo FlotaDSP",
+            "id": "demo-user", "account_type": "dsp", "slug": "demo",
+            "centers": ["MADRID"], "demo": True}
+
+
+# =========================
+# ASISTENTE — pregúntale a tu flota (Gemini con contexto real de la org)
+# =========================
+
+@api_router.post("/assistant/ask")
+async def assistant_ask(data: dict, user: dict = Depends(require_admin)):
+    """Responde preguntas en lenguaje natural sobre LA FLOTA DE ESTA ORG.
+    Enfoque fiable: se recopila un resumen compacto de datos reales (solo
+    lectura, acotado) y Gemini responde SOLO con esos datos."""
+    question = (data.get("question") or "").strip()[:300]
+    if len(question) < 4:
+        raise HTTPException(status_code=400, detail="Escribe una pregunta")
+    _rl_public_action(f"ask:{user.get('org_id') or user.get('sub')}", max_count=15, window_s=300,
+                      detail="Demasiadas preguntas seguidas. Espera un momento.")
+
+    now = datetime.now(timezone.utc)
+    month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc).isoformat()
+    vehicles = await db.vehicles.find(
+        {"status": {"$ne": "deleted"}},
+        {"_id": 0, "license_plate": 1, "brand": 1, "model": 1, "center": 1, "status": 1,
+         "mileage": 1, "itv_date": 1, "renting_end_date": 1, "current_driver_id": 1}
+    ).to_list(150)
+    drivers = await db.drivers.find(
+        {"active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1, "center": 1, "contrato": 1, "nivel": 1}
+    ).to_list(150)
+    incidents = await db.incidents.find(
+        {"status": {"$ne": "resolved"}},
+        {"_id": 0, "title": 1, "severity": 1, "vehicle_id": 1, "center": 1, "created_at": 1}
+    ).to_list(50)
+    month_insps = await db.inspections.find(
+        {"deleted": {"$ne": True}, "created_at": {"$gte": month_start}},
+        {"_id": 0, "vehicle_id": 1, "driver_id": 1, "created_at": 1,
+         "analysis.severity": 1, "analysis.new_damages.part": 1,
+         "analysis.new_damages.severity": 1, "analysis.new_damages.estimated_cost": 1}
+    ).to_list(2000)
+
+    dmap = {d["id"]: d.get("name", "?") for d in drivers}
+    ctx = {
+        "hoy": now.strftime("%Y-%m-%d"),
+        "vehiculos": vehicles,
+        "conductores": [{"nombre": d.get("name"), "centro": d.get("center"),
+                         "contrato": d.get("contrato"), "nivel": d.get("nivel")} for d in drivers],
+        "incidencias_abiertas": incidents,
+        "inspecciones_mes": [
+            {"vehiculo": i.get("vehicle_id"), "conductor": dmap.get(i.get("driver_id"), i.get("driver_id")),
+             "fecha": (i.get("created_at") or "")[:10],
+             "severidad": ((i.get("analysis") or {}).get("severity")),
+             "danos_nuevos": (i.get("analysis") or {}).get("new_damages") or []}
+            for i in month_insps[:600]
+        ],
+    }
+
+    prompt = (
+        "Eres el asistente de FlotaDSP para el gestor de una flota de furgonetas DSP.\n"
+        "Responde a la pregunta usando EXCLUSIVAMENTE los datos JSON adjuntos. "
+        "Si el dato no está, di claramente que no tienes esa información. "
+        "Sé conciso y directo (máx. ~120 palabras), en el idioma de la pregunta, "
+        "menciona matrículas y nombres concretos cuando ayuden, y usa formato de lista si hay varios elementos.\n\n"
+        f"PREGUNTA: {question}\n\nDATOS DE LA FLOTA:\n{json.dumps(ctx, ensure_ascii=False, default=str)[:60000]}"
+    )
+    try:
+        client_g = _gemini_client_plantilla()
+        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        resp = await asyncio.wait_for(
+            asyncio.get_running_loop().run_in_executor(
+                _executor,
+                lambda: client_g.models.generate_content(model=model_name, contents=prompt),
+            ),
+            timeout=30,
+        )
+        answer = (resp.text or "").strip()
+        if not answer:
+            raise ValueError("respuesta vacía")
+        return {"answer": answer}
+    except Exception as e:
+        logger.warning(f"assistant/ask: {e}")
+        raise HTTPException(status_code=503, detail="El asistente no está disponible ahora mismo. Inténtalo en unos minutos.")
 
 
 @auth_router.get("/conductor-list")

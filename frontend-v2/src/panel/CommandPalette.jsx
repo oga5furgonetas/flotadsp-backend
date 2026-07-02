@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search, Truck, User, CornerDownLeft } from 'lucide-react'
-import { getVehicles, getDrivers } from './api'
+import { Search, Truck, User, CornerDownLeft, Sparkles, Loader2 } from 'lucide-react'
+import { getVehicles, getDrivers, askAssistant } from './api'
 import { useT } from '../i18n'
 
 /* ── Paleta de comandos (Ctrl/Cmd+K) ──────────────────────────────────────
@@ -30,14 +30,28 @@ export default function CommandPalette({ open, onClose, pages }) {
   const [q, setQ] = useState('')
   const [selIdx, setSelIdx] = useState(0)
   const [data, setData] = useState(_cache)
+  const [asking, setAsking] = useState(false)
+  const [answer, setAnswer] = useState(null) // { q, text } | { q, error }
 
   useEffect(() => {
     if (!open) return
-    setQ(''); setSelIdx(0)
+    setQ(''); setSelIdx(0); setAnswer(null); setAsking(false)
     // focus tras el paint del modal
     requestAnimationFrame(() => inputRef.current?.focus())
     loadData().then(setData).catch(() => {})
   }, [open])
+
+  async function ask() {
+    const question = q.trim()
+    if (question.length < 8 || asking) return
+    setAsking(true); setAnswer(null)
+    try {
+      const r = await askAssistant(question)
+      setAnswer({ q: question, text: r.data?.answer || '' })
+    } catch (e) {
+      setAnswer({ q: question, error: e?.response?.data?.detail || t('cmdk.ask.error') })
+    } finally { setAsking(false) }
+  }
 
   const results = useMemo(() => {
     const nq = norm(q).replace(/\s+/g, '')
@@ -83,15 +97,23 @@ export default function CommandPalette({ open, onClose, pages }) {
 
   if (!open) return null
 
+  const canAsk = q.trim().length >= 8
+
   function goTo(r) {
+    if (r.type === 'ask') { ask(); return }
     onClose()
     nav(r.to)
   }
 
+  // Fila virtual "preguntar a la IA" al final de los resultados
+  const allRows = canAsk
+    ? [...results, { type: 'ask', label: `${t('cmdk.ask')} "${q.trim()}"`, icon: Sparkles, to: '#ask' }]
+    : results
+
   function onKeyDown(e) {
-    if (e.key === 'ArrowDown') { e.preventDefault(); setSelIdx((i) => Math.min(i + 1, results.length - 1)) }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setSelIdx((i) => Math.min(i + 1, allRows.length - 1)) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setSelIdx((i) => Math.max(i - 1, 0)) }
-    else if (e.key === 'Enter' && results[selIdx]) { e.preventDefault(); goTo(results[selIdx]) }
+    else if (e.key === 'Enter' && allRows[selIdx]) { e.preventDefault(); goTo(allRows[selIdx]) }
     else if (e.key === 'Escape') { e.preventDefault(); onClose() }
   }
 
@@ -117,24 +139,44 @@ export default function CommandPalette({ open, onClose, pages }) {
         </div>
 
         <div ref={listRef} className="max-h-[46vh] overflow-y-auto p-1.5">
-          {results.length === 0 ? (
+          {allRows.length === 0 ? (
             <p className="px-3 py-6 text-center text-sm text-dark-500">{t('cmdk.empty')}</p>
           ) : (
-            results.map((r, i) => (
+            allRows.map((r, i) => (
               <button
                 key={`${r.type}-${r.to}`}
                 onClick={() => goTo(r)}
                 onMouseMove={() => setSelIdx(i)}
                 className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
                   i === selIdx ? 'bg-brand-500/15 text-brand-200' : 'text-dark-200'
-                }`}
+                } ${r.type === 'ask' ? 'border-t border-white/5 mt-1 pt-3' : ''}`}
               >
-                <r.icon size={15} className={i === selIdx ? 'text-brand-300' : 'text-dark-500'} />
+                <r.icon size={15} className={r.type === 'ask' ? 'text-purple-400' : i === selIdx ? 'text-brand-300' : 'text-dark-500'} />
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">{r.label}</span>
                 {r.sub && <span className="max-w-[40%] truncate text-xs text-dark-500">{r.sub}</span>}
                 <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wider text-dark-600">{TYPE_LABEL[r.type]}</span>
               </button>
             ))
+          )}
+
+          {/* Respuesta del asistente IA */}
+          {(asking || answer) && (
+            <div className="animate-fade-in mx-1.5 mb-1.5 mt-2 rounded-xl border border-purple-500/20 bg-purple-500/5 p-3.5">
+              {asking ? (
+                <div className="flex items-center gap-2 text-sm text-purple-300">
+                  <Loader2 size={14} className="animate-spin" /> {t('cmdk.ask.loading')}
+                </div>
+              ) : answer?.error ? (
+                <p className="text-sm text-red-400">{answer.error}</p>
+              ) : (
+                <>
+                  <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-purple-400">
+                    <Sparkles size={10} /> {t('cmdk.ask.answer')}
+                  </div>
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-dark-100">{answer.text}</p>
+                </>
+              )}
+            </div>
           )}
         </div>
 

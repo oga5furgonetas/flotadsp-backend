@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useT, LANGS } from '../i18n'
+import { API_BASE } from '../lib/apiBase'
 import {
   Zap, Shield, Bell, Trophy, Clock, CheckCircle, ChevronRight,
   Camera, Truck, Users, BarChart3, Star, ArrowRight, Globe, Lock,
@@ -353,6 +354,27 @@ export default function Landing() {
   const { t, lang } = useT()
   const tl = useLD()
   const { setLang } = useT()
+  const [demoBusy, setDemoBusy] = useState(false)
+
+  // Demo sin registro: pide un token de solo lectura y entra al panel
+  async function openDemo() {
+    if (demoBusy) return
+    setDemoBusy(true)
+    try {
+      const r = await fetch(`${API_BASE}/auth/demo-login`, { method: 'POST' })
+      const j = await r.json()
+      if (j?.access_token) {
+        localStorage.setItem('flotadsp_token', j.access_token)
+        localStorage.setItem('flotadsp_admin', JSON.stringify({
+          name: j.name, role: j.role, id: j.id, account_type: j.account_type,
+          slug: j.slug, centers: j.centers || [],
+        }))
+        window.location.href = '/panel'
+        return
+      }
+    } catch { /* backend caído: no romper la landing */ }
+    setDemoBusy(false)
+  }
 
   return (
     <div style={{ background: '#080a0e', color: '#eef1f6', fontFamily: 'Inter,system-ui,sans-serif', overflowX: 'hidden' }}>
@@ -400,6 +422,10 @@ export default function Landing() {
               <a href="/planes" style={{ background: 'rgba(255,255,255,.05)', color: '#eef1f6', textDecoration: 'none', padding: '14px 24px', borderRadius: 12, fontSize: 15, fontWeight: 700, border: '1px solid rgba(255,255,255,.1)' }}>
                 {t('hero.ctaPlans')}
               </a>
+              <button onClick={openDemo} disabled={demoBusy}
+                style={{ background: 'transparent', color: '#8b94a3', padding: '14px 18px', borderRadius: 12, fontSize: 14, fontWeight: 700, border: '1px dashed rgba(255,255,255,.18)', cursor: 'pointer', opacity: demoBusy ? .6 : 1 }}>
+                {demoBusy ? '…' : `▶ ${t('hero.ctaDemo')}`}
+              </button>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 18px' }}>
               {[t('hero.mini').split('·').filter(Boolean)].flat().map((s, i) => (

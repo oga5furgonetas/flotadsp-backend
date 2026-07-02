@@ -6,7 +6,7 @@ import {
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search,
 } from 'lucide-react'
-import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee } from './auth'
+import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken } from './auth'
 import TrialBanner from './TrialBanner'
 import CommandPalette from './CommandPalette'
 import { useT, LANGS } from '../i18n'
@@ -281,6 +281,12 @@ export default function PanelLayout() {
           <div className="flex items-center justify-between gap-2 bg-amber-500/15 px-4 py-2 text-sm text-amber-200">
             <span>{t('nav.impersonate')} <b>{admin?.name}</b> ({t('nav.client')}).</span>
             <button onClick={backToSuper} className="rounded-md bg-amber-500/30 px-3 py-1 text-xs font-semibold hover:bg-amber-500/40">{t('nav.back.super')}</button>
+          </div>
+        )}
+        {decodeToken()?.demo && (
+          <div className="flex items-center justify-between gap-2 bg-purple-500/15 px-4 py-2 text-sm text-purple-200">
+            <span>▶ {t('demo.banner')}</span>
+            <a href="/registro" className="rounded-md bg-purple-500/30 px-3 py-1 text-xs font-semibold hover:bg-purple-500/40">{t('demo.banner.cta')}</a>
           </div>
         )}
         <TrialBanner />

@@ -94,6 +94,9 @@ export const getRentalsNearby = (lat, lng, maxKm = 80) =>
 /* ── Bandeja super-admin (inbox append-only + fallback leads) ── */
 export const getInbox = () => api.get('/inbox')
 
+/* ── Asistente: pregúntale a tu flota (Gemini sobre datos reales de la org) ── */
+export const askAssistant = (question) => api.post('/assistant/ask', { question }, { timeout: 45000 })
+
 /* ── Incidencias ── */
 export const getIncidents = (params = {}) => api.get('/incidents', { params })
 export const createIncident = (body) => api.post('/incidents', body)
