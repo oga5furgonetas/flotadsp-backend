@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
+import { useEscape } from '../../lib/useEscape'
 import {
   Loader2, Save, ClipboardList, Truck, User, Calendar,
   Copy, RotateCcw, Trash2, Camera, AlertTriangle, Check,
@@ -165,6 +166,7 @@ function Toasts({ toasts }) {
 
 /* ── Paste Modal ── */
 function PasteModal({ drivers, vehicles, onApply, onClose }) {
+  useEscape(onClose)
   const { t } = useT()
   const [text, setText] = useState('')
   const parsed = useMemo(() => (text.trim() ? parseRoster(text) : []), [text])

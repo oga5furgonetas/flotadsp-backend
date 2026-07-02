@@ -1,0 +1,24 @@
+name: Uptime
+
+# Vigila producción cada hora. Si falla, GitHub envía email al dueño del repo
+# (notificación por defecto de workflow fallido). Lanzable a mano desde Actions.
+on:
+  schedule:
+    - cron: '7 * * * *'
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Backend /api/health
+        run: |
+          resp=$(curl -sS --max-time 20 https://flotadsp-backend.fly.dev/api/health)
+          echo "$resp"
+          echo "$resp" | grep -q '"status":"ok"' || { echo "::error::Backend caído o degradado"; exit 1; }
+          echo "$resp" | grep -q '"mongo_connected":true' || { echo "::error::MongoDB desconectado"; exit 1; }
+      - name: Frontend flotadsp.com
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 https://flotadsp.com)
+          echo "HTTP $code"
+          [ "$code" = "200" ] || { echo "::error::flotadsp.com devuelve $code"; exit 1; }

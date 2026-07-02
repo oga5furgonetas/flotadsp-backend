@@ -36,7 +36,8 @@ def whitelist_set(tree: ast.Module, var_name: str) -> set:
 
 
 def main() -> int:
-    tree = ast.parse(SERVER.read_text(encoding="utf-8"))
+    # utf-8-sig: server.py lleva BOM (editado históricamente en Windows)
+    tree = ast.parse(SERVER.read_text(encoding="utf-8-sig"))
     failures = []
 
     def require(subset: set, superset: set, what: str):

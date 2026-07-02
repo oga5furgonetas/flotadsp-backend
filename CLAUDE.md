@@ -46,7 +46,10 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    ruta igual es inalcanzable. `scripts/check-routes.mjs` lo detecta.
 3. **change-my-password devuelve 401** con contraseña actual errónea — el interceptor de
    sesión expirada del frontend lo excluye a propósito (services/api.js).
-4. En Windows de desarrollo NO hay Python: la sintaxis del backend la valida el CI o el deploy.
+4. Python local en Windows: `%LOCALAPPDATA%\Programs\Python\Python312\python.exe`
+   (instalado 2026-07; el alias `python` de la Store puede no funcionar en shells no interactivos).
+   Validar backend antes de commitear: `python -m py_compile backend/server.py` +
+   `python scripts/check_contracts.py`. server.py lleva BOM UTF-8 (leer con utf-8-sig).
 5. El repo versiona `frontend-v2/dist/` (build) a propósito, para paridad entre ordenadores.
 
 ## Reglas de trabajo

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
+import { useEscape } from '../../lib/useEscape'
 import {
   Loader2, Search, Plus, X, Pencil, Trash2, UserCheck,
   Phone, Mail, IdCard, Car, MapPin, FileText, Building2, Save, Camera,
@@ -558,6 +559,7 @@ export default function Conductores() {
 // ── Modal ─────────────────────────────────────────────────────────────────────
 function DriverModal({ driver, centers, hasAccount, onSave, onDelete, onClose, onAccountChange }) {
   const { t } = useT()
+  useEscape(onClose)
   const isNew = !driver
   const [editing, setEditing] = useState(isNew)
   const [form, setForm] = useState(driver ? { ...driver } : { ...EMPTY })

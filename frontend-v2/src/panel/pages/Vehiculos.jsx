@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT, LANG_LOCALE } from '../../i18n'
+import { useEscape } from '../../lib/useEscape'
 import QRCode from 'qrcode'
 import {
   Loader2, Search, Truck, X, Save, Download, QrCode,
@@ -156,6 +157,7 @@ const TALLER_SEV = [
 function TallerModal({ vehicle, onConfirm, onCancel }) {
   const [form, setForm] = useState({ title: `Vehículo en taller — ${vehicle.license_plate || ''}`, description: '', severity: 'leve', notes: '' })
   const [submitting, setSubmitting] = useState(false)
+  useEscape(onCancel)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const valid = form.description.trim().length >= 3
 
@@ -233,6 +235,7 @@ const MAINT_META = {
 
 function MaintModal({ kind, currentKm, onSave, onClose }) {
   const meta = MAINT_META[kind] || {}
+  useEscape(onClose)
   const [km, setKm] = useState(String(currentKm || ''))
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
   const [intervalKm, setIntervalKm] = useState(String(meta.defaultInterval || 15000))
@@ -952,6 +955,7 @@ const VEHICLE_TYPES = ['Furgoneta', 'Camión', 'Turismo', 'Monovolumen', 'Pick-u
 const PROVIDERS     = ['BANSACAR', 'SANTANDER RENTING', 'LeasePlan', 'ALD', 'Arval', 'Alphabet', 'Kinto One', 'Leaseplan', 'One Furgo', 'Otro']
 
 function AddVehicleModal({ centers, onSaved, onClose }) {
+  useEscape(onClose)
   const [form, setForm] = useState({
     license_plate: '', brand: '', model: '', color: '',
     year: '', vin: '', center: centers?.[0] || '',
