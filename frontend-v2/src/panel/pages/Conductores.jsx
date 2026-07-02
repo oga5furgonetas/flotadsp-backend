@@ -619,7 +619,7 @@ function DriverModal({ driver, centers, hasAccount, onSave, onDelete, onClose, o
   async function handlePhoto(e) {
     const file = e.target.files?.[0]
     if (!file || !driver?.id) return
-    setPreviewUrl(URL.createObjectURL(file))
+    setPreviewUrl(prev => { if (prev) URL.revokeObjectURL(prev); return URL.createObjectURL(file) })
     setPhotoBusy(true)
     try {
       const r = await uploadDriverPhoto(driver.id, file)

@@ -8,12 +8,12 @@ import {
   User, Camera, ZoomIn, Pencil, Check, Maximize2, ArrowLeft,
   Fuel, Palette, Hash, Building2, Clock, AlertTriangle, Wrench,
   Droplets, CircleDot, Disc, FileText, Trash2, Upload, ExternalLink,
-  FileCheck, FileBadge, FileImage, File,
+  FileCheck, FileBadge, FileImage, File, Plus,
 } from 'lucide-react'
 import {
   getVehicles, getLastInspections, getVehicleDriver, getVehicleInspections, updateVehicle, createIncident, getIncidents,
   getVehicleMaintenance, registerOilChange, registerMaintenanceChange,
-  getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument,
+  getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument, createVehicle,
 } from '../api'
 
 const STATUS_MAP = {
@@ -235,12 +235,12 @@ function MaintModal({ kind, currentKm, onSave, onClose }) {
   const meta = MAINT_META[kind] || {}
   const [km, setKm] = useState(String(currentKm || ''))
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
-  const [interval, setInterval] = useState(String(meta.defaultInterval || 15000))
+  const [intervalKm, setIntervalKm] = useState(String(meta.defaultInterval || 15000))
   const [busy, setBusy] = useState(false)
 
   async function submit() {
     setBusy(true)
-    await onSave({ km: Number(km), date, interval_km: Number(interval) })
+    await onSave({ km: Number(km), date, interval_km: Number(intervalKm) })
     setBusy(false)
   }
 
@@ -260,7 +260,7 @@ function MaintModal({ kind, currentKm, onSave, onClose }) {
           </div>
           <div>
             <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-dark-600">Intervalo (km)</label>
-            <input className="input w-full text-sm" type="number" value={interval} onChange={e => setInterval(e.target.value)} />
+            <input className="input w-full text-sm" type="number" value={intervalKm} onChange={e => setIntervalKm(e.target.value)} />
           </div>
         </div>
         <div className="mt-5 flex gap-2">
@@ -946,15 +946,214 @@ function Section({ title, icon, count, children }) {
   )
 }
 
+/* ── Modal: Añadir vehículo ── */
+const FUEL_TYPES   = ['Gasolina', 'Diésel', 'Híbrido', 'Eléctrico', 'GLP', 'GNC']
+const VEHICLE_TYPES = ['Furgoneta', 'Camión', 'Turismo', 'Monovolumen', 'Pick-up', 'Otro']
+const PROVIDERS     = ['BANSACAR', 'SANTANDER RENTING', 'LeasePlan', 'ALD', 'Arval', 'Alphabet', 'Kinto One', 'Leaseplan', 'One Furgo', 'Otro']
+
+function AddVehicleModal({ centers, onSaved, onClose }) {
+  const [form, setForm] = useState({
+    license_plate: '', brand: '', model: '', color: '',
+    year: '', vin: '', center: centers?.[0] || '',
+    mileage: '', provider: '', vehicle_type: 'Furgoneta',
+    fuel_type: '', itv_date: '', renting_end_date: '',
+  })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  const valid = form.license_plate.trim().length >= 4 && form.center
+
+  async function submit() {
+    if (!valid || busy) return
+    setBusy(true); setErr('')
+    try {
+      const payload = {
+        license_plate: form.license_plate.trim().toUpperCase(),
+        brand: form.brand.trim(),
+        model: form.model.trim(),
+        color: form.color.trim(),
+        year: form.year ? Number(form.year) : undefined,
+        vin: form.vin.trim() || undefined,
+        center: form.center,
+        mileage: form.mileage ? Number(form.mileage) : undefined,
+        provider: form.provider || undefined,
+        vehicle_type: form.vehicle_type || undefined,
+        fuel_type: form.fuel_type || undefined,
+        itv_date: form.itv_date || undefined,
+        renting_end_date: form.renting_end_date || undefined,
+      }
+      await createVehicle(payload)
+      onSaved()
+      onClose()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo crear el vehículo')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onClose}>
+      <div
+        className="relative w-full max-w-xl rounded-2xl border border-dark-700 bg-dark-900 shadow-2xl"
+        style={{ background: 'linear-gradient(160deg,#0f1829 0%,#0a0f1e 100%)' }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-white/5 px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-500/15">
+              <Truck size={17} className="text-blue-400" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-dark-50">Añadir vehículo</h2>
+              <p className="text-[11px] text-dark-500">Nuevo vehículo en la flota</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-1.5 text-dark-500 hover:bg-dark-800 hover:text-white transition">
+            <X size={15} />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="max-h-[70vh] overflow-y-auto px-6 py-5">
+          <div className="space-y-5">
+
+            {/* Matrícula + Centro — los dos más importantes */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="col-span-1">
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">
+                  Matrícula <span className="text-red-400">*</span>
+                </label>
+                <input
+                  autoFocus
+                  className="input w-full font-mono text-sm font-bold tracking-widest uppercase"
+                  placeholder="1234 ABC"
+                  value={form.license_plate}
+                  onChange={e => set('license_plate', e.target.value.toUpperCase())}
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">
+                  Centro <span className="text-red-400">*</span>
+                </label>
+                {centers?.length > 0 ? (
+                  <select className="select w-full text-sm" value={form.center} onChange={e => set('center', e.target.value)}>
+                    {centers.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                ) : (
+                  <input className="input w-full text-sm" placeholder="OGA5, DGA1…" value={form.center} onChange={e => set('center', e.target.value)} />
+                )}
+              </div>
+            </div>
+
+            {/* Marca + Modelo */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">Marca</label>
+                <input className="input w-full text-sm" placeholder="Toyota, Renault…" value={form.brand} onChange={e => set('brand', e.target.value)} />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">Modelo</label>
+                <input className="input w-full text-sm" placeholder="Proace, Trafic…" value={form.model} onChange={e => set('model', e.target.value)} />
+              </div>
+            </div>
+
+            {/* Tipo + Combustible + Año */}
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">Tipo</label>
+                <select className="select w-full text-sm" value={form.vehicle_type} onChange={e => set('vehicle_type', e.target.value)}>
+                  {VEHICLE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">Combustible</label>
+                <select className="select w-full text-sm" value={form.fuel_type} onChange={e => set('fuel_type', e.target.value)}>
+                  <option value="">—</option>
+                  {FUEL_TYPES.map(f => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">Año</label>
+                <input className="input w-full text-sm" type="number" placeholder="2023" min="2000" max="2030" value={form.year} onChange={e => set('year', e.target.value)} />
+              </div>
+            </div>
+
+            {/* Color + Km */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">Color</label>
+                <input className="input w-full text-sm" placeholder="Blanco, Gris…" value={form.color} onChange={e => set('color', e.target.value)} />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">Kilómetros</label>
+                <input className="input w-full text-sm" type="number" placeholder="0" value={form.mileage} onChange={e => set('mileage', e.target.value)} />
+              </div>
+            </div>
+
+            {/* VIN */}
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">VIN / Bastidor</label>
+              <input className="input w-full font-mono text-xs tracking-wider" placeholder="YARVJYHVMRZxxxxxxx" value={form.vin} onChange={e => set('vin', e.target.value.toUpperCase())} />
+            </div>
+
+            {/* Proveedor */}
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">Proveedor renting</label>
+              <select className="select w-full text-sm" value={form.provider} onChange={e => set('provider', e.target.value)}>
+                <option value="">— Sin proveedor —</option>
+                {PROVIDERS.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+
+            {/* ITV + Fin renting */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">Caducidad ITV</label>
+                <input className="input w-full text-sm" type="date" value={form.itv_date} onChange={e => set('itv_date', e.target.value)} />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">Fin contrato renting</label>
+                <input className="input w-full text-sm" type="date" value={form.renting_end_date} onChange={e => set('renting_end_date', e.target.value)} />
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between border-t border-white/5 px-6 py-4">
+          {err ? (
+            <p className="text-xs text-red-400">{err}</p>
+          ) : (
+            <p className="text-[11px] text-dark-600">Los campos con <span className="text-red-400">*</span> son obligatorios</p>
+          )}
+          <div className="flex gap-2">
+            <button onClick={onClose} className="btn-secondary text-sm">Cancelar</button>
+            <button
+              onClick={submit}
+              disabled={!valid || busy}
+              className="btn-primary flex items-center gap-2 text-sm disabled:opacity-40"
+            >
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+              Añadir vehículo
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /* ── Tabla principal ── */
 export default function Vehiculos() {
-  const { center } = useOutletContext()
+  const { center, centers } = useOutletContext()
   const { t, lang } = useT()
   const [vehicles, setVehicles] = useState(null)
   const [lastInsp, setLastInsp] = useState({})
   const [err, setErr] = useState('')
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(null)
+  const [addOpen, setAddOpen] = useState(false)
 
   function load() {
     setVehicles(null); setErr('')
@@ -985,11 +1184,28 @@ export default function Vehiculos() {
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-bold">{t('veh.title')} {vehicles && <span className="text-dark-500">· {list.length}</span>}</h1>
-        <div className="relative">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />
-          <input className="input w-64 pl-9" placeholder={`${t('ui.search')} ${t('veh.plate')}, VIN…`} value={q} onChange={e => setQ(e.target.value)} />
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />
+            <input className="input w-56 pl-9" placeholder={`${t('ui.search')} ${t('veh.plate')}, VIN…`} value={q} onChange={e => setQ(e.target.value)} />
+          </div>
+          <button
+            onClick={() => setAddOpen(true)}
+            className="btn-primary flex items-center gap-1.5 text-sm"
+          >
+            <Plus size={14} />
+            Añadir vehículo
+          </button>
         </div>
       </div>
+
+      {addOpen && (
+        <AddVehicleModal
+          centers={centers?.filter(c => c !== 'Todos') || []}
+          onSaved={load}
+          onClose={() => setAddOpen(false)}
+        />
+      )}
 
       {vehicles && (
         <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">

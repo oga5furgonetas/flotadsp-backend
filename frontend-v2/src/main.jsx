@@ -1,57 +1,69 @@
-import React from 'react'
+import React, { Suspense, lazy } from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import './index.css'
 import { ToastProvider } from './lib/toast'
 import { LangProvider } from './i18n'
 import Landing from './pages/Landing'
-import Login from './pages/Login'
-import Registro from './pages/Registro'
-import Planes from './pages/Planes'
-import DriverPortal from './pages/driver/DriverPortal'
-import PanelLogin from './panel/PanelLogin'
-import PanelLayout from './panel/PanelLayout'
-import Placeholder from './panel/Placeholder'
-import PanelDashboard from './panel/pages/Dashboard'
-import PanelVehiculos from './panel/pages/Vehiculos'
-import PanelRevision from './panel/pages/RevisionRapida'
-import PanelNegocio from './panel/pages/Negocio'
-import PanelPerfil from './panel/pages/Perfil'
-import PanelInspecciones from './panel/pages/Inspecciones'
-import PanelConductores from './panel/pages/Conductores'
-import PanelAvisosITV from './panel/pages/AvisosITV'
-import PanelRenting from './panel/pages/Renting'
-import PanelTalleres from './panel/pages/Talleres'
-import PanelCasasAlquiler from './panel/pages/CasasAlquiler'
-import PanelScorecard from './panel/pages/Scorecard'
-import PanelConfiguracion from './panel/pages/Configuracion'
-import PanelTurnos from './panel/pages/Turnos'
-import PanelUsuarios from './panel/pages/Usuarios'
-import PanelIAPeritaje from './panel/pages/IAPeritaje'
-import PanelMetricas from './panel/pages/Metricas'
-import PanelImportaciones from './panel/pages/Importaciones'
-import PanelActividad from './panel/pages/Actividad'
-import PanelPortalConductor from './panel/pages/PortalConductor'
-import PanelAsignacion from './panel/pages/Asignacion'
-import PanelChecklistOp from './panel/pages/ChecklistOperativo'
-import PanelChat from './panel/pages/Chat'
-import PanelPlantilla from './panel/pages/PlantillaGenerador'
-import PanelBandeja from './panel/pages/Bandeja'
-import PanelIncidencias from './panel/pages/Incidencias'
-import PanelContactos from './panel/pages/Contactos'
-import Privacidad from './legal/Privacidad'
-import Terminos from './legal/Terminos'
-import CookiesPage from './legal/Cookies'
-import AvisoLegal from './legal/AvisoLegal'
-import Contacto from './legal/Contacto'
 import CookieBanner from './legal/CookieBanner'
-import PeritajeTecnico from './pages/PeritajeTecnico'
-import Verify from './pages/Verify'
+
+/* Code-splitting: la landing carga al instante; el resto de rutas se descargan
+   solo cuando se visitan (panel, portal conductor, legal…). */
+const Login = lazy(() => import('./pages/Login'))
+const Registro = lazy(() => import('./pages/Registro'))
+const Planes = lazy(() => import('./pages/Planes'))
+const DriverPortal = lazy(() => import('./pages/driver/DriverPortal'))
+const PanelLogin = lazy(() => import('./panel/PanelLogin'))
+const PanelLayout = lazy(() => import('./panel/PanelLayout'))
+const PanelDashboard = lazy(() => import('./panel/pages/Dashboard'))
+const PanelVehiculos = lazy(() => import('./panel/pages/Vehiculos'))
+const PanelRevision = lazy(() => import('./panel/pages/RevisionRapida'))
+const PanelNegocio = lazy(() => import('./panel/pages/Negocio'))
+const PanelPerfil = lazy(() => import('./panel/pages/Perfil'))
+const PanelInspecciones = lazy(() => import('./panel/pages/Inspecciones'))
+const PanelConductores = lazy(() => import('./panel/pages/Conductores'))
+const PanelAvisosITV = lazy(() => import('./panel/pages/AvisosITV'))
+const PanelRenting = lazy(() => import('./panel/pages/Renting'))
+const PanelTalleres = lazy(() => import('./panel/pages/Talleres'))
+const PanelCasasAlquiler = lazy(() => import('./panel/pages/CasasAlquiler'))
+const PanelScorecard = lazy(() => import('./panel/pages/Scorecard'))
+const PanelConfiguracion = lazy(() => import('./panel/pages/Configuracion'))
+const PanelTurnos = lazy(() => import('./panel/pages/Turnos'))
+const PanelUsuarios = lazy(() => import('./panel/pages/Usuarios'))
+const PanelIAPeritaje = lazy(() => import('./panel/pages/IAPeritaje'))
+const PanelMetricas = lazy(() => import('./panel/pages/Metricas'))
+const PanelImportaciones = lazy(() => import('./panel/pages/Importaciones'))
+const PanelActividad = lazy(() => import('./panel/pages/Actividad'))
+const PanelPortalConductor = lazy(() => import('./panel/pages/PortalConductor'))
+const PanelAsignacion = lazy(() => import('./panel/pages/Asignacion'))
+const PanelChecklistOp = lazy(() => import('./panel/pages/ChecklistOperativo'))
+const PanelChat = lazy(() => import('./panel/pages/Chat'))
+const PanelPlantilla = lazy(() => import('./panel/pages/PlantillaGenerador'))
+const PanelBandeja = lazy(() => import('./panel/pages/Bandeja'))
+const PanelIncidencias = lazy(() => import('./panel/pages/Incidencias'))
+const PanelContactos = lazy(() => import('./panel/pages/Contactos'))
+const Privacidad = lazy(() => import('./legal/Privacidad'))
+const Terminos = lazy(() => import('./legal/Terminos'))
+const CookiesPage = lazy(() => import('./legal/Cookies'))
+const AvisoLegal = lazy(() => import('./legal/AvisoLegal'))
+const Contacto = lazy(() => import('./legal/Contacto'))
+const PeritajeTecnico = lazy(() => import('./pages/PeritajeTecnico'))
+const Verify = lazy(() => import('./pages/Verify'))
 
 /* Toda la app vive en /panel. /app es un alias legado que redirige al panel nuevo. */
 function AppRedirect() {
   window.location.replace('/panel')
   return null
+}
+
+/* Fallback mínimo mientras se descarga el chunk de la ruta (mismo fondo oscuro de la app) */
+function RouteLoader() {
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0f1e' }}>
+      <div style={{ width: 28, height: 28, border: '3px solid rgba(255,255,255,.1)', borderTopColor: '#3b82f6', borderRadius: '50%', animation: 'spin .8s linear infinite' }} />
+      <style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style>
+    </div>
+  )
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
@@ -60,60 +72,62 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <ToastProvider>
         <BrowserRouter>
           <CookieBanner />
-          <Routes>
-            <Route path="/" element={<Landing />} />
-            <Route path="/login" element={<Login />} />
-            <Route path="/registro" element={<Registro />} />
-            <Route path="/planes" element={<Planes />} />
-            <Route path="/privacidad" element={<Privacidad />} />
-            <Route path="/terminos" element={<Terminos />} />
-            <Route path="/cookies" element={<CookiesPage />} />
-            <Route path="/aviso-legal" element={<AvisoLegal />} />
-            <Route path="/contacto" element={<Contacto />} />
-            <Route path="/peritaje-tecnico" element={<PeritajeTecnico />} />
-            <Route path="/verify" element={<Verify />} />
-            <Route path="/verify/:hash" element={<Verify />} />
-            <Route path="/app" element={<AppRedirect />} />
-            <Route path="/conductor" element={<DriverPortal />} />
-            <Route path="/conductor/:slug" element={<DriverPortal />} />
+          <Suspense fallback={<RouteLoader />}>
+            <Routes>
+              <Route path="/" element={<Landing />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/registro" element={<Registro />} />
+              <Route path="/planes" element={<Planes />} />
+              <Route path="/privacidad" element={<Privacidad />} />
+              <Route path="/terminos" element={<Terminos />} />
+              <Route path="/cookies" element={<CookiesPage />} />
+              <Route path="/aviso-legal" element={<AvisoLegal />} />
+              <Route path="/contacto" element={<Contacto />} />
+              <Route path="/peritaje-tecnico" element={<PeritajeTecnico />} />
+              <Route path="/verify" element={<Verify />} />
+              <Route path="/verify/:hash" element={<Verify />} />
+              <Route path="/app" element={<AppRedirect />} />
+              <Route path="/conductor" element={<DriverPortal />} />
+              <Route path="/conductor/:slug" element={<DriverPortal />} />
 
-            {/* Panel de administración nuevo (modelo v2). En construcción por módulos.
-                NO afecta a las rutas actuales ni al login en vivo. */}
-            <Route path="/panel/login" element={<PanelLogin />} />
-            <Route path="/panel" element={<PanelLayout />}>
-              {/* Operacional */}
-              <Route index element={<PanelDashboard />} />
-              <Route path="scorecard" element={<PanelScorecard />} />
-              <Route path="conductores" element={<PanelConductores />} />
-              <Route path="turnos" element={<PanelTurnos />} />
-              <Route path="asignacion" element={<PanelAsignacion />} />
-              <Route path="checklist-operativo" element={<PanelChecklistOp />} />
-              <Route path="chat" element={<PanelChat />} />
-              <Route path="plantilla" element={<PanelPlantilla />} />
-              <Route path="metricas" element={<PanelMetricas />} />
-              <Route path="actividad" element={<PanelActividad />} />
-              {/* Furgonetas */}
-              <Route path="revision" element={<PanelRevision />} />
-              <Route path="inspecciones" element={<PanelInspecciones />} />
-              <Route path="vehiculos" element={<PanelVehiculos />} />
-              <Route path="talleres" element={<PanelTalleres />} />
-              <Route path="avisos-itv" element={<PanelAvisosITV />} />
-              <Route path="renting" element={<PanelRenting />} />
-              <Route path="casas-alquiler" element={<PanelCasasAlquiler />} />
-              <Route path="ia-peritaje" element={<PanelIAPeritaje />} />
-              <Route path="importaciones" element={<PanelImportaciones />} />
-              <Route path="configuracion" element={<PanelConfiguracion />} />
-              <Route path="admin" element={<PanelNegocio />} />
-              <Route path="usuarios" element={<PanelUsuarios />} />
-              <Route path="perfil" element={<PanelPerfil />} />
-              <Route path="portal-conductor" element={<PanelPortalConductor />} />
-              <Route path="bandeja" element={<PanelBandeja />} />
-              <Route path="incidencias" element={<PanelIncidencias />} />
-              <Route path="contactos" element={<PanelContactos />} />
-            </Route>
+              {/* Panel de administración nuevo (modelo v2). En construcción por módulos.
+                  NO afecta a las rutas actuales ni al login en vivo. */}
+              <Route path="/panel/login" element={<PanelLogin />} />
+              <Route path="/panel" element={<PanelLayout />}>
+                {/* Operacional */}
+                <Route index element={<PanelDashboard />} />
+                <Route path="scorecard" element={<PanelScorecard />} />
+                <Route path="conductores" element={<PanelConductores />} />
+                <Route path="turnos" element={<PanelTurnos />} />
+                <Route path="asignacion" element={<PanelAsignacion />} />
+                <Route path="checklist-operativo" element={<PanelChecklistOp />} />
+                <Route path="chat" element={<PanelChat />} />
+                <Route path="plantilla" element={<PanelPlantilla />} />
+                <Route path="metricas" element={<PanelMetricas />} />
+                <Route path="actividad" element={<PanelActividad />} />
+                {/* Furgonetas */}
+                <Route path="revision" element={<PanelRevision />} />
+                <Route path="inspecciones" element={<PanelInspecciones />} />
+                <Route path="vehiculos" element={<PanelVehiculos />} />
+                <Route path="talleres" element={<PanelTalleres />} />
+                <Route path="avisos-itv" element={<PanelAvisosITV />} />
+                <Route path="renting" element={<PanelRenting />} />
+                <Route path="casas-alquiler" element={<PanelCasasAlquiler />} />
+                <Route path="ia-peritaje" element={<PanelIAPeritaje />} />
+                <Route path="importaciones" element={<PanelImportaciones />} />
+                <Route path="configuracion" element={<PanelConfiguracion />} />
+                <Route path="admin" element={<PanelNegocio />} />
+                <Route path="usuarios" element={<PanelUsuarios />} />
+                <Route path="perfil" element={<PanelPerfil />} />
+                <Route path="portal-conductor" element={<PanelPortalConductor />} />
+                <Route path="bandeja" element={<PanelBandeja />} />
+                <Route path="incidencias" element={<PanelIncidencias />} />
+                <Route path="contactos" element={<PanelContactos />} />
+              </Route>
 
-            <Route path="*" element={<Landing />} />
-          </Routes>
+              <Route path="*" element={<Landing />} />
+            </Routes>
+          </Suspense>
         </BrowserRouter>
       </ToastProvider>
     </LangProvider>

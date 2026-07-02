@@ -9368,35 +9368,8 @@ async def register_maintenance_change(vehicle_id: str, kind: str, data: dict, _=
             "next_change_km": km + intervalo, "warning_at_km": km + intervalo - aviso_antes}
 
 
-@api_router.post("/drivers/{driver_id}/photo")
-async def upload_driver_photo(driver_id: str, file: UploadFile = File(...), _=Depends(require_admin)):
-    """Sube la foto/imagen de un conductor a R2 y la guarda en su ficha."""
-    d = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "id": 1})
-    if not d:
-        raise HTTPException(status_code=404, detail="Conductor no encontrado")
-    content = await file.read()
-    if not content or len(content) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Imagen inválida o demasiado grande (máx 10 MB)")
-    try:
-        img = Image.open(io.BytesIO(content)).convert("RGB")
-        img.thumbnail((600, 600))
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=85)
-        photo_bytes = buf.getvalue()
-    except Exception:
-        raise HTTPException(status_code=400, detail="El archivo no es una imagen válida")
-    s3 = get_r2()
-    if not s3:
-        raise HTTPException(status_code=502, detail="Almacenamiento no configurado")
-    key = f"drivers/{driver_id}_{uuid.uuid4().hex[:8]}.jpg"
-    await asyncio.get_running_loop().run_in_executor(
-        _executor,
-        lambda: s3.put_object(Bucket=R2_BUCKET, Key=key, Body=photo_bytes, ContentType="image/jpeg")
-    )
-    url = f"{R2_PUBLIC_URL}/{key}"
-    await db.drivers.update_one({"id": driver_id}, {"$set": {"photo_url": url}})
-    return {"success": True, "photo_url": url}
-
+# NOTA: la subida de foto de conductor vive en POST /drivers/{driver_id}/photo
+# (definida más arriba). Aquí había un duplicado inalcanzable que se eliminó.
 
 # =========================
 # STICKERS DE MERY — persistentes en servidor

@@ -29,6 +29,7 @@ export const getAttention = () => api.get('/stats/attention')
 
 /* ── Vehículos / Flota ── */
 export const getVehicles = (center) => api.get('/vehicles', { params: centerParam(center) })
+export const createVehicle = (body) => api.post('/vehicles', body)
 export const getVehicle = (id) => api.get(`/vehicles/${id}`)
 export const getVehicleHistory = (id) => api.get(`/vehicles/${id}/history`)
 export const getLastInspections = (center) => api.get('/vehicles/last-inspections', { params: centerParam(center) })

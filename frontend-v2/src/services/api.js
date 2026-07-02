@@ -14,6 +14,29 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+// Sesión expirada/inválida dentro del panel → limpiar y volver al login.
+// OJO: change-my-password devuelve 401 cuando la contraseña actual es errónea
+// (no es un problema de sesión), por eso se excluye.
+api.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    const status = error?.response?.status
+    const url = error?.config?.url || ''
+    const path = window.location.pathname
+    if (
+      status === 401 &&
+      path.startsWith('/panel') &&
+      path !== '/panel/login' &&
+      !url.includes('/auth/change-my-password')
+    ) {
+      localStorage.removeItem('flotadsp_token')
+      localStorage.removeItem('flotadsp_admin')
+      window.location.replace('/panel/login')
+    }
+    return Promise.reject(error)
+  }
+)
+
 /* ── Multi-tenant: el slug del DSP sale de la URL (flotadsp.com/<slug>/conductor) ── */
 export function currentSlug() {
   // flotadsp.com/conductor/#<slug>  (hash: robusto, sin líos de enrutado servidor)
