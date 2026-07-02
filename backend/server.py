@@ -1760,6 +1760,19 @@ def _user_friendly_error(reason: str) -> str:
 
 def _fallback_analysis(reason: str = "Gemini no disponible") -> InspectionAnalysis:
     logger.warning(f"Usando fallback analysis: {reason}")
+    # Config rota (billing/permisos de Gemini): avisar por Telegram con dedupe 1h.
+    # Sin esto, las inspecciones se quedan "sin análisis" en silencio hasta que
+    # alguien lo ve en el panel (pasó el 2026-07-02 con BILLING_DISABLED).
+    rl = reason.lower()
+    if any(s in rl for s in ("billing", "permission", "api_key", "api key", "401", "403")):
+        try:
+            asyncio.get_running_loop().create_task(_notify_error_once(
+                "backend",
+                "Análisis IA caído: Gemini/Vertex rechaza las llamadas (billing o permisos)",
+                reason[:400],
+            ))
+        except RuntimeError:
+            pass  # sin event loop (contexto síncrono): queda en el log
     return InspectionAnalysis(
         critical_damages_count=0,
         total_damages_count=0,
