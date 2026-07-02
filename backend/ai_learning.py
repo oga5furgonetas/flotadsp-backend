@@ -6,6 +6,8 @@ Recupera ejemplos relevantes de ai_feedback y los inyecta en los prompts de Gemi
 """
 import base64
 import logging
+import re
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -25,20 +27,34 @@ async def get_few_shot_examples(
     Recupera correcciones humanas de ai_feedback.
     general=True → cualquier zona (para el primer pase donde aún no sabemos qué daños hay)
     general=False → filtra por zona/pieza (para el segundo pase de refinado)
-    """
-    if general:
-        query = {"verdict": {"$in": ["corrected", "wrong"]}}
-    else:
-        query = {
-            "$or": [
-                {"damage.location_hint": location_hint},
-                {"damage.part": {"$regex": part.split()[0], "$options": "i"}},
-            ],
-            "verdict": {"$in": ["corrected", "wrong"]},
-        }
 
-    cursor = db.ai_feedback.find(query, sort=[("created_at", -1)], limit=limit * 3)
-    docs = await cursor.to_list(length=limit * 3)
+    Mezcla dos tipos de ejemplo:
+    · errores de detección (wrong/corrected) → enseñan a no inventar daños
+    · daños no detectados (missed)          → enseñan lo que se le escapa
+    """
+    part_token = re.escape(part.split()[0]) if part.strip() else ""
+    if general:
+        err_query = {"verdict": {"$in": ["corrected", "wrong"]}}
+        missed_query = {"verdict": "missed"}
+    else:
+        zone_or = [{"damage.location_hint": location_hint}]
+        if part_token:
+            zone_or.append({"damage.part": {"$regex": part_token, "$options": "i"}})
+        err_query = {"$or": zone_or, "verdict": {"$in": ["corrected", "wrong"]}}
+        missed_query = {"$or": zone_or, "verdict": "missed"}
+
+    docs_err = await db.ai_feedback.find(err_query, sort=[("created_at", -1)], limit=limit * 3).to_list(length=limit * 3)
+    docs_missed = await db.ai_feedback.find(missed_query, sort=[("created_at", -1)], limit=limit * 3).to_list(length=limit * 3)
+
+    # Intercalar missed/errores para que ambos tipos entren dentro del límite
+    docs = []
+    i = 0
+    while len(docs) < limit * 3 and (i < len(docs_missed) or i < len(docs_err)):
+        if i < len(docs_missed):
+            docs.append(docs_missed[i])
+        if i < len(docs_err):
+            docs.append(docs_err[i])
+        i += 1
 
     examples = []
     async with httpx.AsyncClient(timeout=10) as client:
@@ -101,6 +117,14 @@ def build_few_shot_prompt_parts_multimodal(examples: list[dict]) -> list:
                 f"pero el inspector confirmó que NO había daño real. "
                 f"Esta imagen NO tiene ese daño. No lo detectes de nuevo.\n"
             )
+        elif ex["verdict"] == "missed":
+            lesson = (
+                f"CASO {i} — DAÑO NO DETECTADO (falso negativo):\n"
+                f"La IA NO detectó '{ex['original_part']}' ({ex['original_severity']}) "
+                f"en la zona bbox {ex.get('original_box') or '?'} de esta imagen, "
+                f"pero el inspector confirmó que el daño SÍ existe. "
+                f"Daños de este tipo se te escapan: búscalos activamente en las fotos actuales.\n"
+            )
         else:
             original_box = ex.get("original_box", [])
             corrected_box = ex.get("corrected_box", [])
@@ -142,12 +166,19 @@ def build_few_shot_prompt_text(examples: list) -> str:
     ]
 
     for i, ex in enumerate(examples, 1):
-        verdict_text = "FALSO POSITIVO (daño no existía)" if ex["verdict"] == "wrong" else "BBOX INCORRECTA"
+        verdict_text = (
+            "FALSO POSITIVO (daño no existía)" if ex["verdict"] == "wrong"
+            else "DAÑO NO DETECTADO (falso negativo)" if ex["verdict"] == "missed"
+            else "BBOX INCORRECTA"
+        )
         lines.append(f"Caso {i} — {verdict_text}:")
         lines.append(f"  · Pieza: {ex['original_part']} ({ex['original_severity']})")
         if ex["verdict"] == "wrong":
             lines.append("  · El inspector confirmó que NO había daño real en esa zona.")
             lines.append("  · Lección: sé más conservador en esta zona, exige evidencia visual clara.")
+        elif ex["verdict"] == "missed":
+            lines.append("  · La IA no lo detectó; el inspector confirmó que el daño SÍ existía.")
+            lines.append("  · Lección: examina esta pieza activamente, daños así se te escapan.")
         elif ex["corrected_box"]:
             lines.append(f"  · Bbox original (incorrecta): {ex['original_box']}")
             lines.append(f"  · Bbox corregida por inspector: {ex['corrected_box']}")
@@ -157,6 +188,113 @@ def build_few_shot_prompt_text(examples: list) -> str:
     lines.append("--- FIN DE CORRECCIONES ---")
     lines.append("Teniendo en cuenta estos errores pasados, sé más preciso en el análisis.\n")
     return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATRONES AGREGADOS — resumen estadístico de TODO el dataset de feedback.
+# Barato (una agregación, sin fotos) y mucho más potente que 2 ejemplos sueltos:
+# le dice a Gemini en qué piezas suele inventar daños y cuáles se le escapan.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Cache POR BASE DE DATOS (multi-tenant: cada org tiene su BD y sus patrones;
+# no se deben mezclar flotas distintas en el prompt).
+_pattern_cache: dict = {}
+_PATTERN_TTL_S = 600  # 10 min — el feedback nuevo entra en el siguiente ciclo
+
+
+async def get_pattern_lessons(db) -> str:
+    """Bloque de texto para el prompt del primer pase con los patrones de error
+    aprendidos de las validaciones humanas (✓/✗/daños no detectados)."""
+    now = time.monotonic()
+    cache_key = getattr(db, "name", "default")
+    cached = _pattern_cache.get(cache_key)
+    if cached is not None and now - cached["at"] < _PATTERN_TTL_S:
+        return cached["text"]
+
+    pipeline = [
+        {"$match": {"verdict": {"$in": ["wrong", "missed", "correct"]}}},
+        {"$group": {
+            "_id": {
+                "part": {"$toLower": {"$trim": {"input": {"$ifNull": ["$damage.part", ""]}}}},
+                "verdict": "$verdict",
+            },
+            "n": {"$sum": 1},
+        }},
+    ]
+    rows = await db.ai_feedback.aggregate(pipeline).to_list(2000)
+
+    per_part: dict = {}
+    totals = {"wrong": 0, "missed": 0, "correct": 0}
+    for r in rows:
+        part = (r["_id"].get("part") or "").strip()
+        verdict = r["_id"].get("verdict")
+        n = r.get("n", 0)
+        totals[verdict] = totals.get(verdict, 0) + n
+        if part:
+            per_part.setdefault(part, {})[verdict] = n
+
+    total = sum(totals.values())
+    # Umbrales mínimos para no aprender de ruido (1 solo caso no es un patrón)
+    fp_parts = sorted(
+        ((p, v.get("wrong", 0)) for p, v in per_part.items()
+         if v.get("wrong", 0) >= 3 and v.get("wrong", 0) > v.get("correct", 0)),
+        key=lambda x: -x[1],
+    )[:6]
+    fn_parts = sorted(
+        ((p, v.get("missed", 0)) for p, v in per_part.items() if v.get("missed", 0) >= 2),
+        key=lambda x: -x[1],
+    )[:6]
+
+    if not fp_parts and not fn_parts:
+        _pattern_cache[cache_key] = {"at": now, "text": ""}
+        return ""
+
+    lines = [
+        f"\n=== PATRONES DE ERROR APRENDIDOS DE ESTA FLOTA ({total} validaciones humanas) ===",
+    ]
+    if fp_parts:
+        listado = ", ".join(f"{p} ({n} falsos positivos)" for p, n in fp_parts)
+        lines.append(
+            "FALSOS POSITIVOS RECURRENTES — en estas piezas la IA ha reportado daños "
+            f"que NO existían: {listado}. En ellas exige evidencia visual inequívoca; "
+            "NUNCA reportes daño por reflejos, sombras, gotas de agua o suciedad. "
+            "Ante la duda en estas piezas, NO reportes el daño."
+        )
+    if fn_parts:
+        listado = ", ".join(f"{p} ({n} no detectados)" for p, n in fn_parts)
+        lines.append(
+            "DAÑOS QUE SE TE ESCAPAN — daños reales que la IA no detectó: "
+            f"{listado}. Examina estas piezas activamente y con detalle en cada foto."
+        )
+    lines.append("=== FIN DE PATRONES ===\n")
+    text = "\n".join(lines)
+    _pattern_cache[cache_key] = {"at": now, "text": text}
+    return text
+
+
+async def get_part_lesson(db, part: str) -> str:
+    """Lección de 1 línea para el pase de refinado de un daño concreto:
+    historial humano de esa pieza (falsos positivos vs aciertos vs escapados)."""
+    if not (part or "").strip():
+        return ""
+    token = re.escape(part.split()[0])
+    q = {"damage.part": {"$regex": token, "$options": "i"}}
+    wrong = await db.ai_feedback.count_documents({**q, "verdict": "wrong"})
+    correct = await db.ai_feedback.count_documents({**q, "verdict": "correct"})
+    missed = await db.ai_feedback.count_documents({**q, "verdict": "missed"})
+    if wrong >= 2 and wrong > correct:
+        return (
+            f"\nHISTORIAL DE ESTA PIEZA: en '{part}' los inspectores han registrado "
+            f"{wrong} falsos positivos frente a {correct} aciertos de la IA. "
+            "Sé MUY exigente: confirma el daño solo si la evidencia es clara e inequívoca; "
+            "si puede ser reflejo, sombra o suciedad, descártalo.\n"
+        )
+    if missed >= 2:
+        return (
+            f"\nHISTORIAL DE ESTA PIEZA: en '{part}' se han registrado {missed} daños "
+            "reales que la IA no detectó. Examina la zona con especial detalle antes de descartar.\n"
+        )
+    return ""
 
 
 async def save_feedback(

@@ -1,5 +1,8 @@
 ﻿from damage_segmentation import segment_damage, preload_sam
-from ai_learning import get_few_shot_examples, build_few_shot_prompt_parts_multimodal, save_feedback as _save_ai_feedback
+from ai_learning import (
+    get_few_shot_examples, build_few_shot_prompt_parts_multimodal,
+    get_pattern_lessons, get_part_lesson, save_feedback as _save_ai_feedback,
+)
 from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Depends, Body, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -1911,6 +1914,14 @@ async def analyze_images_with_gemini(
 
         # ── FEW-SHOT LEARNING: inyectar errores anteriores antes de las fotos ──
         if db is not None:
+            # Patrones agregados de toda la flota (piezas con falsos positivos
+            # recurrentes / daños que se le escapan). Barato: cacheado 10 min.
+            try:
+                pattern_lessons = await get_pattern_lessons(db)
+                if pattern_lessons:
+                    contents.append(pattern_lessons)
+            except Exception as _pl:
+                logger.debug(f"[Learning] Error cargando patrones: {_pl}")
             try:
                 general_examples = await get_few_shot_examples(db, location_hint="", part="", limit=2, general=True)
                 few_shot_parts = build_few_shot_prompt_parts_multimodal(general_examples)
@@ -2204,6 +2215,14 @@ async def _refine_damage_boxes(
                         refine_contents.append(part_dict["text"])
             except Exception as _fse:
                 logger.debug(f"[Learning] Error cargando ejemplos: {_fse}")
+            # Historial humano de ESTA pieza: aquí es donde se matan los
+            # falsos positivos recurrentes (y se evita descartar lo que se escapa).
+            try:
+                part_lesson = await get_part_lesson(db, part_str)
+                if part_lesson:
+                    refine_contents.append(part_lesson)
+            except Exception as _ple:
+                logger.debug(f"[Learning] Error cargando lección de pieza: {_ple}")
         prompt = _REFINE_PROMPT.format(
             part=part_str,
             severity=getattr(d, 'severity', 'desconocido'),
