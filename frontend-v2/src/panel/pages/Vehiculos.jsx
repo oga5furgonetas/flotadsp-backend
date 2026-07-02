@@ -718,6 +718,12 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
             {/* Sección: Mantenimiento por km */}
             <Section title="Mantenimiento" icon={<Wrench size={13} />}>
               <div className="px-3 pb-3 space-y-2">
+                {maintenance?.km_per_day != null && (
+                  <div className="flex items-center gap-1.5 text-[11px] text-dark-500">
+                    <Gauge size={11} className="text-brand-400" />
+                    Ritmo real: <b className="text-dark-300">{maintenance.km_per_day} km/día</b> (últimos 60 días) — las fechas ≈ se estiman con este ritmo
+                  </div>
+                )}
                 {[
                   { key: 'oil',       label: 'Aceite',              Icon: Droplets,  color: 'amber'   },
                   { key: 'ruedas',    label: 'Ruedas',              Icon: CircleDot, color: 'sky'     },
@@ -740,6 +746,9 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                             {overdue
                               ? `Vencido hace ${Math.abs(item.km_until_change).toLocaleString()} km`
                               : `${item.km_until_change.toLocaleString()} km restantes · próximo a ${item.next_change_at_km.toLocaleString()} km`}
+                            {!overdue && item.days_left_estimate != null && (
+                              <span className="ml-1 font-semibold text-brand-300">· ≈ {item.days_left_estimate} días</span>
+                            )}
                           </div>
                         ) : (
                           <div className="mt-0.5 text-[11px] opacity-60">Sin datos registrados</div>

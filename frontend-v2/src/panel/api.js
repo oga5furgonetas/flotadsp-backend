@@ -25,6 +25,7 @@ export const chatToChecklist = (center, messageId, body = {}) =>
 
 /* ── Dashboard ── */
 export const getDashboardStats = (center) => api.get('/stats/dashboard', { params: centerParam(center) })
+export const getDamageCosts = (center) => api.get('/stats/damage-costs', { params: centerParam(center) })
 export const getAttention = () => api.get('/stats/attention')
 
 /* ── Vehículos / Flota ── */

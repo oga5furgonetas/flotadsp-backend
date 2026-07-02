@@ -6,7 +6,7 @@ import {
   Loader2, TrendingUp, Camera, ShieldAlert, CheckCircle2,
   ChevronRight, Clock, ArrowRight,
 } from 'lucide-react'
-import { getDashboardStats, getLastInspections, getItvAlerts, getVehicles, getDrivers } from '../api'
+import { getDashboardStats, getLastInspections, getItvAlerts, getVehicles, getDrivers, getDamageCosts } from '../api'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { PageSkeleton } from '../components/Skeleton'
 
@@ -287,7 +287,14 @@ export default function Dashboard() {
   const [data,   setData]   = useState(null)
   const [recent, setRecent] = useState([])
   const [itv,    setItv]    = useState([])
+  const [costs,  setCosts]  = useState(null)
   const [err,    setErr]    = useState('')
+
+  // € de daños nuevos (mes actual vs anterior) — carga independiente, no bloquea
+  useEffect(() => {
+    setCosts(null)
+    getDamageCosts(center).then(r => setCosts(r.data)).catch(() => {})
+  }, [center])
 
   useEffect(() => {
     setData(null)
@@ -388,6 +395,52 @@ export default function Dashboard() {
         <KpiCard icon={Camera}   label={t('dash.insptoday')}     value={todayInsp}           sub={inspSub}                    accent="#34d399" to="/panel/inspecciones" />
         <KpiCard icon={BellRing} label={t('dash.itvalerts')}     value={data.unread_alerts}  sub={itvSub}                     accent="#fbbf24" to="/panel/avisos-itv" alert={critCount > 0 ? critCount : 0} />
       </div>
+
+      {/* ── € de daños del mes (el argumento de FlotaDSP en una tarjeta) ── */}
+      {costs && (costs.month_count > 0 || costs.prev_month_count > 0) && (
+        <div className="rounded-2xl border border-dark-700/60 bg-dark-800/60 p-5">
+          <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-dark-500">{t('dash.costs.title')}</div>
+              <div className="mt-1 flex items-baseline gap-2">
+                <span className={`text-2xl font-extrabold ${costs.month_eur > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                  {costs.month_eur.toLocaleString('es-ES')}€
+                </span>
+                <span className="text-xs text-dark-500">{costs.month_count} {t('dash.costs.damages')}</span>
+              </div>
+            </div>
+            <div className="h-10 w-px bg-dark-700/60 hidden sm:block" />
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-dark-600">{t('dash.costs.prev')}</div>
+              <div className="mt-1 flex items-baseline gap-2">
+                <span className="text-lg font-bold text-dark-300">{costs.prev_month_eur.toLocaleString('es-ES')}€</span>
+                {costs.prev_month_eur > 0 && (
+                  <span className={`text-xs font-semibold ${costs.month_eur <= costs.prev_month_eur ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {costs.month_eur <= costs.prev_month_eur ? '▼' : '▲'}
+                    {Math.abs(Math.round(((costs.month_eur - costs.prev_month_eur) / costs.prev_month_eur) * 100))}%
+                  </span>
+                )}
+              </div>
+            </div>
+            {costs.top_drivers?.length > 0 && (
+              <>
+                <div className="h-10 w-px bg-dark-700/60 hidden sm:block" />
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-dark-600">{t('dash.costs.top')}</div>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    {costs.top_drivers.slice(0, 3).map(d => (
+                      <span key={d.driver_id} className="rounded-full bg-dark-900/80 border border-dark-700 px-2.5 py-0.5 text-xs text-dark-300">
+                        {d.name} · <b className="text-red-400">{d.eur.toLocaleString('es-ES')}€</b>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+          <p className="mt-3 text-[11px] text-dark-600">{t('dash.costs.note')}</p>
+        </div>
+      )}
 
       {/* ── Middle row ── */}
       <div className="grid gap-4 lg:grid-cols-5">

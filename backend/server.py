@@ -4333,13 +4333,17 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
       📸 Evidencia      15 — fotos completas + análisis OK; cada aviso de calidad
                               de la IA (borrosa, zona equivocada) resta
       🔍 Honestidad     15 — si la IA ve daños, ¿los declaró en sus notas?
-      🛡️ Conservación   25 — empieza con 25; daños NUEVOS en su turno restan:
-                              leve −6 · grave −15 · crítico −25 (solo con análisis
-                              válidos en ambas inspecciones del delta)
+      🛡️ Conservación   25 — daños NUEVOS en su turno, con TRES garantías de
+                              justicia: (1) el veredicto humano de Revisión
+                              Rápida manda (✗ nunca penaliza, ✓ cuenta siempre);
+                              (2) rate-based: penaliza la TASA de daños, no el
+                              volumen — trabajar más días no castiga;
+                              (3) suavizado bayesiano con muestras pequeñas.
 
-    Desempate: a igual puntuación gana quien más inspecciones haya hecho.
-    Solo puntúan conductores con al menos 3 inspecciones en el mes (los demás
-    aparecen como 'sin datos suficientes').
+    🏆 Premio del mes: solo son ELEGIBLES los conductores con ≥35% de los días
+    transcurridos asignados en cuadrante (mín. 3) — nadie gana con 3 días buenos.
+    Desempate: racha limpia, luego nº de inspecciones. Puntualidad en hora
+    Europe/Madrid real (con cambio de hora). Mínimo 3 inspecciones para puntuar.
     """
     import calendar as _cal
     now = datetime.now(timezone.utc)
@@ -4389,13 +4393,33 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
         return SEV.get((a.get("severity") or "").lower().strip(), 0)
 
     def hour_of(iso):
-        """Hora local española aproximada (UTC+2 verano)."""
+        """Hora local española REAL (Europe/Madrid, con horario de verano/invierno)."""
         try:
-            hh = int(iso[11:13]) + 2
-            mm = int(iso[14:16])
-            return hh + mm / 60.0
+            from zoneinfo import ZoneInfo
+            dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            local = dt.astimezone(ZoneInfo("Europe/Madrid"))
+            return local.hour + local.minute / 60.0
         except Exception:
             return None
+
+    # ── Veredictos humanos de Revisión Rápida ──
+    # Un daño marcado ✗ (falso positivo) por un inspector NO puede penalizar al
+    # conductor; uno marcado ✓ cuenta aunque la IA dudara. El humano manda.
+    _fb_docs = await db.ai_feedback.find(
+        {"verdict": {"$in": ["wrong", "correct"]}},
+        {"_id": 0, "inspection_id": 1, "verdict": 1, "damage.part": 1, "damage.zone": 1, "damage.location": 1}
+    ).to_list(5000)
+    wrong_panels: dict = {}   # inspection_id → set(panels rechazados por humano)
+    correct_panels: dict = {}  # inspection_id → set(panels confirmados por humano)
+    for _f in _fb_docs:
+        _dmg = _f.get("damage") or {}
+        _p = _canon_panel(_dmg.get("part") or _dmg.get("zone") or _dmg.get("location"))
+        if not _p:
+            continue
+        _target = wrong_panels if _f["verdict"] == "wrong" else correct_panels
+        _target.setdefault(_f.get("inspection_id"), set()).add(_p)
 
     results = []
     for driver in drivers:
@@ -4504,14 +4528,20 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
                             base_panels.add(p)
             photos = insp.get("photo_urls") or insp.get("photos") or []
             curr = {}
+            _iid = insp.get("id")
+            _wrong = wrong_panels.get(_iid, set())
+            _correct = correct_panels.get(_iid, set())
             for d in ((insp.get("analysis") or {}).get("damages") or []):
                 if not isinstance(d, dict):
-                    continue
-                if d.get("confirmed") is False:  # ignorar sugeridos (falsos positivos potenciales)
                     continue
                 p = _canon_panel(d.get("part") or d.get("zone") or d.get("location"))
                 if not p:
                     continue
+                # Veredicto humano manda: ✗ nunca penaliza; ✓ cuenta aunque la IA dudara
+                if p in _wrong:
+                    continue
+                if d.get("confirmed") is False and p not in _correct:
+                    continue  # sugerido sin confirmación humana → no penaliza
                 sev = _norm_sev(d.get("severity"))
                 rank = _SEV_RANK[sev]
                 if rank > curr.get(p, {}).get("rank", 0):
@@ -4597,10 +4627,19 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
 
         total = min(100, compliance + punctuality + evidence + honesty + conservation)
 
+        # ── 🏆 Elegibilidad para el premio del mes ──
+        # Regla explicable: al menos el 35% de los días transcurridos con
+        # asignación en el cuadrante (mínimo 3). Sin cuadrantes, cuentan las
+        # inspecciones hechas. Evita que una muestra pequeña gane el premio.
+        _prize_min = max(3, round(days_elapsed * 0.35))
+        _base_days = days_assigned if days_assigned > 0 else n
+        prize_eligible = _base_days >= _prize_min
+
         results.append({
             "driver_id": driver_id, "name": name, "center": center,
             "photo_url": driver.get("photo_url"),
             "total": total,
+            "prize_eligible": prize_eligible,
             "compliance": compliance, "punctuality": punctuality,
             "evidence": evidence, "honesty": honesty, "conservation": conservation,
             "damage_rate": round(damage_rate, 3),       # rate crudo (debug / gráficas)
@@ -4621,7 +4660,7 @@ async def get_driver_scoring(month: int = None, year: int = None, _=Depends(requ
         -x["inspections_count"],
     ))
     return {"scores": results, "month": m, "year": y, "days_elapsed": days_elapsed,
-            "min_inspections": 3}
+            "min_inspections": 3, "prize_min_days": max(3, round(days_elapsed * 0.35))}
 
 
 @api_router.get("/scoring/leaderboard")
@@ -4640,9 +4679,11 @@ async def get_scoring_leaderboard(month: int = None, year: int = None, _=Depends
     month_start = datetime(y, m, 1, tzinfo=timezone.utc)
     month_end = datetime(y, m, days_in_month, 23, 59, 59, tzinfo=timezone.utc)
 
-    # Reusar el endpoint de scoring completo para obtener todos los datos
+    # Reusar el endpoint de scoring completo para obtener todos los datos.
+    # El PODIO solo admite conductores elegibles para el premio (≥35% de días
+    # asignados): nadie gana el mes con una muestra pequeña.
     full = await get_driver_scoring(month=m, year=y)
-    scores = [s for s in full["scores"] if not s.get("insufficient")]
+    scores = [s for s in full["scores"] if not s.get("insufficient") and s.get("prize_eligible")]
 
     MEDALS = ["🥇", "🥈", "🥉"]
     BADGE_LABELS = {
@@ -4672,6 +4713,7 @@ async def get_scoring_leaderboard(month: int = None, year: int = None, _=Depends
                 "compliance": s.get("compliance"),
                 "conservation": s.get("conservation"),
                 "damage_rate": s.get("damage_rate"),
+                "prize_eligible": True,
             })
 
     # Estadísticas por centro (para comparativas)
@@ -4689,6 +4731,7 @@ async def get_scoring_leaderboard(month: int = None, year: int = None, _=Depends
         "month": m, "year": y,
         "leaderboard": leaderboard,
         "center_stats": center_stats,
+        "prize_min_days": full.get("prize_min_days"),
     }
 
 
@@ -8760,6 +8803,79 @@ async def stats_attention(_=Depends(require_admin)):
     }
 
 
+@api_router.get("/stats/damage-costs")
+async def get_damage_costs(center: Optional[str] = None, _=Depends(require_admin)):
+    """€ estimados de daños NUEVOS: mes actual vs anterior + top conductores.
+    Justo: los daños marcados ✗ (falso positivo) en Revisión Rápida no cuentan,
+    y los 'sugeridos' sin confirmación humana tampoco."""
+    now = datetime.now(timezone.utc)
+    month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+    prev_start = (month_start - timedelta(days=1)).replace(day=1)
+
+    query = {"deleted": {"$ne": True}, "analysis_status": "ok",
+             "created_at": {"$gte": prev_start.isoformat()}}
+    if center and center != "Todos":
+        query["center"] = center
+    insps = await db.inspections.find(
+        query, {"_id": 0, "id": 1, "driver_id": 1, "created_at": 1, "analysis.new_damages": 1}
+    ).to_list(5000)
+
+    # Falsos positivos marcados por humanos → excluidos del cómputo
+    wrong = await db.ai_feedback.find(
+        {"verdict": "wrong"}, {"_id": 0, "inspection_id": 1, "damage.part": 1}
+    ).to_list(5000)
+    wrong_parts: dict = {}
+    for f in wrong:
+        p = ((f.get("damage") or {}).get("part") or "").strip().lower()
+        if p:
+            wrong_parts.setdefault(f.get("inspection_id"), set()).add(p)
+
+    cur = {"eur": 0.0, "count": 0}
+    prev = {"eur": 0.0, "count": 0}
+    by_driver: dict = {}
+    m_iso = month_start.isoformat()
+    for i in insps:
+        nd = ((i.get("analysis") or {}).get("new_damages")) or []
+        bad = wrong_parts.get(i.get("id"), set())
+        eur, cnt = 0.0, 0
+        for d in nd:
+            if not isinstance(d, dict):
+                continue
+            if d.get("confirmed") is False:
+                continue
+            if (d.get("part") or "").strip().lower() in bad:
+                continue
+            eur += float(d.get("estimated_cost") or 0)
+            cnt += 1
+        if cnt == 0:
+            continue
+        is_current = i.get("created_at", "") >= m_iso
+        bucket = cur if is_current else prev
+        bucket["eur"] += eur
+        bucket["count"] += cnt
+        if is_current and i.get("driver_id"):
+            e = by_driver.setdefault(i["driver_id"], {"eur": 0.0, "count": 0})
+            e["eur"] += eur
+            e["count"] += cnt
+
+    top = sorted(by_driver.items(), key=lambda kv: -kv[1]["eur"])[:5]
+    names = {}
+    if top:
+        ds = await db.drivers.find(
+            {"id": {"$in": [k for k, _ in top]}}, {"_id": 0, "id": 1, "name": 1}
+        ).to_list(10)
+        names = {d["id"]: d.get("name", "?") for d in ds}
+
+    return {
+        "month_eur": round(cur["eur"]), "month_count": cur["count"],
+        "prev_month_eur": round(prev["eur"]), "prev_month_count": prev["count"],
+        "top_drivers": [
+            {"driver_id": k, "name": names.get(k, "?"), "eur": round(v["eur"]), "count": v["count"]}
+            for k, v in top
+        ],
+    }
+
+
 @api_router.get("/stats/dashboard")
 async def stats_dashboard(_=Depends(require_admin)):
     """Devuelve los contadores y metricas del dashboard principal."""
@@ -10135,18 +10251,49 @@ def _build_maint_item(v: dict, kind: str, default_interval: int, default_warn: i
 
 @api_router.get("/vehicles/{vehicle_id}/maintenance")
 async def get_maintenance_info(vehicle_id: str, _=Depends(require_admin)):
-    """Devuelve info de mantenimiento completa de una furgoneta (aceite, ruedas, pastillas)."""
+    """Devuelve info de mantenimiento completa de una furgoneta (aceite, ruedas, pastillas).
+    Incluye PREDICCIÓN: km/día reales (mileage_history, últimos 60 días) → días
+    estimados hasta cada cambio, para planificar citas de taller con antelación."""
     v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
     if not v:
         raise HTTPException(status_code=404, detail="Furgoneta no encontrada")
+
+    # km/día reales: pendiente entre el primer y último registro recientes.
+    # Mínimo 2 registros con 7+ días de separación para no extrapolar ruido.
+    km_per_day = None
+    hist = sorted(
+        (h for h in (v.get("mileage_history") or [])
+         if isinstance(h, dict) and h.get("date") and isinstance(h.get("km"), (int, float))),
+        key=lambda h: str(h["date"]),
+    )
+    if len(hist) >= 2:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d")
+        recent = [h for h in hist if str(h["date"])[:10] >= cutoff] or hist[-5:]
+        if len(recent) >= 2:
+            try:
+                d0 = datetime.fromisoformat(str(recent[0]["date"])[:10])
+                d1 = datetime.fromisoformat(str(recent[-1]["date"])[:10])
+                span = (d1 - d0).days
+                dk = recent[-1]["km"] - recent[0]["km"]
+                if span >= 7 and dk > 0:
+                    km_per_day = round(dk / span, 1)
+            except Exception:
+                km_per_day = None
+
+    def _with_estimate(item):
+        if item and km_per_day and isinstance(item.get("km_until_change"), (int, float)):
+            item["days_left_estimate"] = max(0, round(item["km_until_change"] / km_per_day))
+        return item
+
     return {
         "mileage": v.get("mileage"),
         "bags_remaining": v.get("bags_remaining", 0),
         "bags_history": v.get("bags_history", [])[-10:],
         "provider": v.get("provider"),
-        "oil":       _build_maint_item(v, "oil",       15000, 2500),
-        "ruedas":    _build_maint_item(v, "ruedas",    40000, 3000),
-        "pastillas": _build_maint_item(v, "pastillas", 30000, 3000),
+        "km_per_day": km_per_day,
+        "oil":       _with_estimate(_build_maint_item(v, "oil",       15000, 2500)),
+        "ruedas":    _with_estimate(_build_maint_item(v, "ruedas",    40000, 3000)),
+        "pastillas": _with_estimate(_build_maint_item(v, "pastillas", 30000, 3000)),
     }
 
 

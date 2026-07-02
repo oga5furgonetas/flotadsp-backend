@@ -175,7 +175,14 @@ function DriverRow({ s, rank, showCenter, expanded, onToggle }) {
       <tr className="border-b border-dark-800/50 hover:bg-dark-800/30 cursor-pointer transition-colors" onClick={onToggle}>
         <td className={`py-3 pl-4 w-8 font-bold text-sm tabular-nums ${rankColor}`}>{rank}</td>
         <td className="py-3 pl-2 pr-4">
-          <div className="font-semibold text-dark-100 text-sm truncate max-w-[160px]">{s.name}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="font-semibold text-dark-100 text-sm truncate max-w-[160px]">{s.name}</span>
+            {s.prize_eligible === false && (
+              <span className="shrink-0 rounded-full bg-dark-800 px-1.5 py-0.5 text-[9px] font-semibold text-dark-500" title="No elegible para el premio del mes: pocos días asignados">
+                no elegible
+              </span>
+            )}
+          </div>
           {showCenter && <div className="text-[10px] text-dark-500">{s.center}</div>}
         </td>
         <td className="py-3 px-3">
@@ -289,7 +296,9 @@ function ScoringView({ center }) {
 
   const ranked   = scores.filter(s => !s.insufficient)
   const unranked = scores.filter(s => s.insufficient)
-  const top3     = ranked.slice(0, 3)
+  // El PODIO solo admite elegibles para el premio (≥35% de días asignados):
+  // nadie gana el mes con 3 días buenos. La lista completa muestra a todos.
+  const top3     = ranked.filter(s => s.prize_eligible !== false).slice(0, 3)
   const rest     = ranked.slice(3)
 
   const stats = lb?.center_stats?.[activeCtr] || {}
@@ -320,6 +329,12 @@ function ScoringView({ center }) {
           <span className="font-bold text-base">{t('drv.ranking.title')}</span>
           {stats.avg_score != null && (
             <span className="text-xs text-dark-500 ml-2">{t('drv.ranking.avg')} <span className="text-dark-300 font-semibold">{stats.avg_score}</span></span>
+          )}
+          {data?.prize_min_days != null && (
+            <span className="ml-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-0.5 text-[10px] font-semibold text-amber-400"
+              title="Para optar al premio: al menos el 35% de los días del mes con asignación en el cuadrante. Los daños marcados como falso positivo en Revisión Rápida no penalizan.">
+              🏆 Premio: mín. {data.prize_min_days} días asignados
+            </span>
           )}
         </div>
         {monthPicker}
