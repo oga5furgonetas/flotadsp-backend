@@ -172,6 +172,7 @@ class Vehicle(BaseModel):
     mileage: Optional[int] = None
     provider: Optional[str] = None
     vehicle_type: Optional[str] = None
+    fuel_type: Optional[str] = None
     workshop_status: Optional[str] = None
     workshop_reason: Optional[str] = None
     documents: List[str] = []
@@ -204,6 +205,9 @@ class VehicleCreate(BaseModel):
     mileage: Optional[int] = None
     provider: Optional[str] = None
     vehicle_type: Optional[str] = None
+    fuel_type: Optional[str] = None
+    itv_date: Optional[str] = None            # ISO YYYY-MM-DD, caducidad ITV
+    renting_end_date: Optional[str] = None    # ISO, vencimiento contrato renting
     workshop_status: Optional[str] = None
     workshop_reason: Optional[str] = None
     documents: List[str] = []
@@ -225,6 +229,8 @@ class Driver(BaseModel):
     contrato: Optional[str] = None     # empresa | ett (cuadrante de turnos)
     nivel: Optional[str] = None        # pleno | L1 | L2 | L3 (novatos)
     zona: Optional[str] = None         # zona habitual (opcional)
+    alojamiento: Optional[str] = None  # alojamiento del conductor
+    notas: Optional[str] = None        # observaciones libres
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -236,6 +242,12 @@ class DriverCreate(BaseModel):
     license_number: Optional[str] = None
     center: Optional[str] = None
     password: Optional[str] = None
+    driver_id: Optional[str] = None    # ID de Amazon
+    contrato: Optional[str] = None
+    nivel: Optional[str] = None
+    zona: Optional[str] = None
+    alojamiento: Optional[str] = None
+    notas: Optional[str] = None
 
 
 class Damage(BaseModel):
@@ -4552,6 +4564,10 @@ async def update_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
         "center","notes","current_driver_id","mileage","last_itv","next_itv",
         "last_service","next_service","photo_url","vin","seats","load_capacity",
         "acquisition_date","insurance_expiry","leasing","owner","gps_id","tags",
+        # Campos que edita la ficha del panel (antes se filtraban y el guardado
+        # fallaba en silencio): tipo, ITV, renting, proveedor y motivo de taller.
+        "vehicle_type","itv_date","renting_end_date","renting_baja_date",
+        "provider","workshop_status","workshop_reason",
     }
     data = {k: v for k, v in data.items() if k in _VEHICLE_ALLOWED}
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -4611,6 +4627,9 @@ async def update_driver(driver_id: str, data: dict, _=Depends(require_admin)):
         "name","email","phone","center","notes","photo_url","active","dni",
         "license_number","license_expiry","address","emergency_contact",
         "contract_type","hire_date","tags","score_override",
+        # Campos del formulario del panel (antes se filtraban y el guardado
+        # fallaba en silencio): contrato/nivel/zona + ficha extendida.
+        "contrato","nivel","zona","driver_id","alojamiento","notas","login",
     }
     data = {k: v for k, v in data.items() if k in _DRIVER_ALLOWED}
     result = await db.drivers.update_one({"id": driver_id}, {"$set": data})
@@ -6446,7 +6465,9 @@ _FRAUD_PHASH_LOOKBACK_DAYS = 30  # ventana para buscar foto reusada
 
 
 def _normalize_plate(p: str) -> str:
-    return re.sub(r"[^A-Z0-9]", "", (p or "").upper())
+    """Quita espacios, guiones y pasa a mayúsculas para comparar matrículas.
+    (Definición única: antes había un duplicado más abajo que la pisaba.)"""
+    return "".join(ch for ch in (p or "").upper() if ch.isalnum())
 
 
 def _exif_datetime(img_bytes: bytes):
@@ -9159,11 +9180,6 @@ async def fleet_report_pdf(_=Depends(require_admin)):
 # =========================
 # SUBIDA MASIVA POR CARPETAS (matrícula = nombre de carpeta)
 # =========================
-
-def _normalize_plate(p: str) -> str:
-    """Quita espacios, guiones y pasa a mayúsculas para comparar matrículas."""
-    return "".join(ch for ch in (p or "").upper() if ch.isalnum())
-
 
 async def _process_single_inspection(vehicle_id, driver_id, photo_urls, photos_base64):
     """Procesa una inspección: referencia + Gemini + guardar + alerta Telegram.

@@ -120,16 +120,20 @@ function initials(name) {
 function SeverityBadge({ insp }) {
   const { t } = useT()
   if (!insp) return <span className="text-xs text-dark-600">{t('asgn.no.photos')}</span>
-  const sev = insp.damage_level || insp.severity || insp.damage_severity || ''
+  // Las inspecciones reales traen la severidad dentro de analysis; el fallback
+  // del slot (backend) la trae a nivel raíz como severity.
+  const sev = insp.analysis?.severity || insp.damage_level || insp.severity || insp.damage_severity || ''
   const cls =
     /CRIT/i.test(sev) ? 'bg-red-500/25 text-red-300' :
     /GRAV/i.test(sev) ? 'bg-orange-500/25 text-orange-300' :
     /MOD/i.test(sev)  ? 'bg-amber-500/25 text-amber-300' :
     /LEV/i.test(sev)  ? 'bg-yellow-500/20 text-yellow-300' :
     'bg-emerald-500/20 text-emerald-300'
+  // Traducir claves conocidas (sin_danos → "Sin daños"); si no hay clave, mostrar tal cual.
+  const label = sev ? (t('sev.' + sev) !== 'sev.' + sev ? t('sev.' + sev) : sev) : 'Subidas'
   return (
     <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${cls}`}>
-      <Camera size={10} /> {sev || 'Subidas'}
+      <Camera size={10} /> {label}
     </span>
   )
 }

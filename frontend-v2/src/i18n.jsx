@@ -302,6 +302,7 @@ const DICT = {
   'veh.mileage':      { es: 'Kilometraje',    en: 'Mileage',      fr: 'Kilométrage',   de: 'Kilometerstand', it: 'Chilometraggio', pt: 'Quilometragem' },
   'veh.download.qr':  { es: 'Descargar QR',   en: 'Download QR',  fr: 'Télécharger QR', de: 'QR herunterladen', it: 'Scarica QR', pt: 'Descarregar QR' },
   'veh.all':          { es: 'Todos los vehículos', en: 'All vehicles', fr: 'Tous les véhicules', de: 'Alle Fahrzeuge', it: 'Tutti i veicoli', pt: 'Todos os veículos' },
+  'veh.plate':        { es: 'Matrícula',           en: 'Plate',        fr: 'Immatriculation',    de: 'Kennzeichen',   it: 'Targa',          pt: 'Matrícula' },
   'veh.empty':        { es: 'No hay vehículos', en: 'No vehicles', fr: 'Aucun véhicule', de: 'Keine Fahrzeuge', it: 'Nessun veicolo', pt: 'Sem veículos' },
 
   // ── Conductores ──────────────────────────────────────────────────────────
@@ -616,6 +617,14 @@ const DICT = {
   'rev.no.pending':        { es: 'No hay inspecciones pendientes de revisar', en: 'No inspections pending review', fr: 'Aucune inspection en attente de révision', de: 'Keine Inspektionen zur Überprüfung ausstehend', it: 'Nessuna ispezione in attesa di revisione', pt: 'Sem inspeções pendentes de revisão' },
   'rev.filter.ai.only':    { es: 'Solo IA',            en: 'AI only',              fr: 'IA seulement',           de: 'Nur KI',                it: 'Solo IA',               pt: 'Só IA' },
   'rev.pending':           { es: 'pendientes',         en: 'pending',              fr: 'en attente',             de: 'ausstehend',            it: 'in attesa',             pt: 'pendentes' },
+  'rev.ai.examples':       { es: 'ejemplos',           en: 'examples',             fr: 'exemples',               de: 'Beispiele',             it: 'esempi',                pt: 'exemplos' },
+  'rev.damages':           { es: 'daños',              en: 'damages',              fr: 'dommages',               de: 'Schäden',               it: 'danni',                 pt: 'danos' },
+  'rev.of':                { es: 'de',                 en: 'of',                   fr: 'sur',                    de: 'von',                   it: 'di',                    pt: 'de' },
+  'rev.in.center':         { es: 'en',                 en: 'in',                   fr: 'à',                      de: 'in',                    it: 'in',                    pt: 'em' },
+  'rev.load.error':        { es: 'Error al cargar la cola de revisión.', en: 'Error loading the review queue.', fr: 'Erreur de chargement de la file de révision.', de: 'Fehler beim Laden der Prüfwarteschlange.', it: 'Errore nel caricamento della coda di revisione.', pt: 'Erro ao carregar a fila de revisão.' },
+  'rev.no.ai.photos':      { es: 'Ninguna inspección pendiente tiene análisis de IA.', en: 'No pending inspection has AI analysis.', fr: 'Aucune inspection en attente n\'a d\'analyse IA.', de: 'Keine ausstehende Inspektion hat eine KI-Analyse.', it: 'Nessuna ispezione in attesa ha analisi IA.', pt: 'Nenhuma inspeção pendente tem análise de IA.' },
+  'rev.go.ia.hint':        { es: 'Puedes relanzar el análisis desde IA Peritaje.', en: 'You can re-run the analysis from AI Assessment.', fr: 'Vous pouvez relancer l\'analyse depuis Expertise IA.', de: 'Du kannst die Analyse über KI-Gutachten neu starten.', it: 'Puoi rilanciare l\'analisi da Perizia IA.', pt: 'Podes relançar a análise em Peritagem IA.' },
+  'rev.show.all':          { es: 'Ver todas',          en: 'Show all',             fr: 'Tout afficher',          de: 'Alle anzeigen',         it: 'Mostra tutte',          pt: 'Ver todas' },
 
   // ── IA Peritaje (ampliado) ────────────────────────────────────────────────
   'ia.engine':             { es: 'Motor de IA',        en: 'AI engine',            fr: 'Moteur IA',              de: 'KI-Motor',              it: 'Motore IA',             pt: 'Motor de IA' },
