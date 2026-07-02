@@ -172,6 +172,9 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
     if (!allRequiredPhotos) return toast.error('Faltan fotos obligatorias')
     if (missingDamagePhotos.length > 0) return toast.error('Faltan fotos de los daños marcados')
     setSending(true)
+    // Evitar que un cierre accidental de la pestaña pierda la inspección en curso
+    const guard = (e) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', guard)
     try {
       const fd = new FormData()
       fd.append('vehicle_id', vehicleId)
@@ -187,14 +190,38 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
       if (odoPhoto) fd.append('files', odoPhoto, 'odometro.jpg')
       Object.entries(checklistPhotos).forEach(([itemId, blob]) =>
         fd.append('files', blob, `checklist_${itemId}.jpg`))
-      const r = await uploadInspection(fd)
+
+      // Subida con reintentos: los conductores suben desde garajes con cobertura
+      // mala. Red caída o 5xx → hasta 3 intentos; errores 4xx no se reintentan.
+      let r = null
+      for (let attempt = 1; ; attempt++) {
+        try {
+          if (!navigator.onLine) {
+            toast.error('Sin conexión — esperando a recuperarla…')
+            await new Promise((resolve) => {
+              const onBack = () => { window.removeEventListener('online', onBack); resolve() }
+              window.addEventListener('online', onBack)
+              setTimeout(() => { window.removeEventListener('online', onBack); resolve() }, 60000)
+            })
+          }
+          r = await uploadInspection(fd)
+          break
+        } catch (err) {
+          const status = err?.response?.status
+          if ((status >= 400 && status < 500) || attempt >= 3) throw err
+          toast.error(`Fallo de conexión — reintentando (${attempt}/3)…`)
+          await new Promise((resolve) => setTimeout(resolve, attempt * 3000))
+        }
+      }
       if (odoKm > 0) updateMileage(vehicleId, odoKm).catch(() => {})
       onComplete(r.data)
     } catch (err) {
       const detail = err?.response?.data?.detail
       toast.error(`Error: ${typeof detail === 'string' ? detail : err.message}`)
+    } finally {
+      window.removeEventListener('beforeunload', guard)
+      setSending(false)
     }
-    setSending(false)
   }
 
   const otherVehicles = vehicles.filter((v) => !assigned?.vehicle || v.id !== assigned.vehicle.id)

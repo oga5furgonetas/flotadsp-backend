@@ -4,12 +4,51 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import './index.css'
 import { ToastProvider } from './lib/toast'
 import { LangProvider } from './i18n'
+import { API_BASE } from './lib/apiBase'
 import Landing from './pages/Landing'
 import CookieBanner from './legal/CookieBanner'
+
+/* ── Monitorización: errores JS → backend → Telegram (máx 5/sesión, dedupe) ── */
+const _reported = new Set()
+function reportError(message, stack) {
+  try {
+    const msg = String(message || '').slice(0, 500)
+    if (!msg || _reported.size >= 5 || _reported.has(msg)) return
+    _reported.add(msg)
+    fetch(`${API_BASE}/client-error`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg, stack: String(stack || '').slice(0, 800), url: window.location.href }),
+    }).catch(() => {})
+  } catch { /* reportar nunca debe romper la app */ }
+}
+window.addEventListener('error', (e) => reportError(e.message, e.error?.stack))
+window.addEventListener('unhandledrejection', (e) => reportError(e.reason?.message || String(e.reason), e.reason?.stack))
+
+/* Un error de render no debe dejar la pantalla en blanco */
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { broken: false } }
+  static getDerivedStateFromError() { return { broken: true } }
+  componentDidCatch(error, info) { reportError(error?.message, (error?.stack || '') + (info?.componentStack || '')) }
+  render() {
+    if (!this.state.broken) return this.props.children
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: '#0b0d10', color: '#eef1f6', fontFamily: 'Inter,system-ui,sans-serif', padding: 24, textAlign: 'center' }}>
+        <div style={{ fontSize: 34 }}>⚠️</div>
+        <h1 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>Algo ha ido mal</h1>
+        <p style={{ margin: 0, color: '#8b94a3', fontSize: 14 }}>El error se ha reportado automáticamente. Recarga la página para continuar.</p>
+        <button onClick={() => window.location.reload()} style={{ marginTop: 8, padding: '11px 22px', border: 'none', borderRadius: 10, background: 'linear-gradient(135deg,#0ea5e9,#0369a1)', color: '#fff', fontWeight: 800, fontSize: 14, cursor: 'pointer' }}>
+          Recargar
+        </button>
+      </div>
+    )
+  }
+}
 
 /* Code-splitting: la landing carga al instante; el resto de rutas se descargan
    solo cuando se visitan (panel, portal conductor, legal…). */
 const Login = lazy(() => import('./pages/Login'))
+const ResetPassword = lazy(() => import('./pages/ResetPassword'))
 const Registro = lazy(() => import('./pages/Registro'))
 const Planes = lazy(() => import('./pages/Planes'))
 const DriverPortal = lazy(() => import('./pages/driver/DriverPortal'))
@@ -68,6 +107,7 @@ function RouteLoader() {
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
+    <ErrorBoundary>
     <LangProvider>
       <ToastProvider>
         <BrowserRouter>
@@ -76,6 +116,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
             <Routes>
               <Route path="/" element={<Landing />} />
               <Route path="/login" element={<Login />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="/registro" element={<Registro />} />
               <Route path="/planes" element={<Planes />} />
               <Route path="/privacidad" element={<Privacidad />} />
@@ -131,5 +172,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         </BrowserRouter>
       </ToastProvider>
     </LangProvider>
+    </ErrorBoundary>
   </React.StrictMode>,
 )

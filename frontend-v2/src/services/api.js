@@ -1,6 +1,7 @@
 import axios from 'axios'
+import { API_BASE } from '../lib/apiBase'
 
-export const API_BASE = 'https://flotadsp-backend.fly.dev/api'
+export { API_BASE }
 
 export const api = axios.create({
   baseURL: API_BASE,

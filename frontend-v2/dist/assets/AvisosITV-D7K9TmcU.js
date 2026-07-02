@@ -1,0 +1,2 @@
+import{u as e,j as r}from"./index-7TRXerlw.js";import{E as i}from"./ExpiryAlerts-Bt4m8S94.js";import{d as o}from"./api-BjzpkvAv.js";import"./loader-circle-DGdeuGyh.js";import"./calendar-clock-CF1P_cUm.js";import"./api-DRcAvZ3t.js";function f(){const{t}=e();return r.jsx(i,{title:t("itv.title"),fetcher:o,dateField:"itv_date",dateLabel:t("itv.date.label")})}export{f as default};
+//# sourceMappingURL=AvisosITV-D7K9TmcU.js.map

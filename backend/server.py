@@ -3644,6 +3644,109 @@ async def admin_login(data: LoginRequest, request: Request):
     )
 
 
+# =========================
+# RECUPERACIÓN DE CONTRASEÑA (admins / DSPs)
+# =========================
+
+async def _send_resend_email(to: str, subject: str, html: str) -> bool:
+    """Envía un email transaccional con Resend. Devuelve False si no está configurado."""
+    resend_key = os.environ.get("RESEND_API_KEY", "")
+    if not (resend_key and to):
+        return False
+    import httpx as _httpx
+    async with _httpx.AsyncClient(timeout=15) as _c:
+        r = await _c.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+            json={"from": "FlotaDSP <hola@flotadsp.com>", "to": [to], "subject": subject, "html": html},
+        )
+        return r.status_code < 300
+
+
+_RESET_TOKEN_TTL_MIN = 60  # el enlace caduca en 1 hora
+
+
+@auth_router.post("/forgot-password")
+async def forgot_password(data: dict, request: Request):
+    """Envía un enlace de restablecimiento al email de la cuenta.
+    SIEMPRE responde éxito (sin revelar si el email existe). Rate-limited por IP."""
+    import hashlib as _hl
+    import secrets as _sec
+    email = (data.get("email") or "").strip().lower()
+    _rl_public_action(f"fp:{_rl_key_ip(request)}", max_count=5, window_s=900,
+                      detail="Demasiadas solicitudes. Inténtalo en 15 minutos.")
+    if not email or "@" not in email:
+        return {"success": True}
+
+    user = await global_db.admin_users.find_one({"email": email}, {"_id": 0, "id": 1, "name": 1})
+    if user:
+        token = _sec.token_urlsafe(32)
+        await global_db.password_resets.insert_one({
+            "token_hash": _hl.sha256(token.encode()).hexdigest(),
+            "user_id": user["id"],
+            "used": False,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=_RESET_TOKEN_TTL_MIN)).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        link = f"{_PORTAL_BASE_FRONT}/reset-password?token={token}"
+        html = f"""
+<div style="font-family:Inter,sans-serif;max-width:520px;margin:0 auto;background:#0b0d10;color:#eef1f6;border-radius:16px;overflow:hidden">
+  <div style="background:linear-gradient(135deg,#0ea5e9,#0369a1);padding:28px;text-align:center">
+    <div style="font-size:28px;margin-bottom:6px">🔑</div>
+    <h1 style="margin:0;font-size:21px;font-weight:900;color:#fff">Restablecer contraseña</h1>
+  </div>
+  <div style="padding:28px">
+    <p style="margin:0 0 16px;color:#cbd3e0;font-size:15px">Hola <b>{user.get('name','')}</b>,</p>
+    <p style="margin:0 0 20px;color:#8b94a3;font-size:14px;line-height:1.6">
+      Hemos recibido una solicitud para restablecer tu contraseña de FlotaDSP.
+      El enlace caduca en 1 hora.
+    </p>
+    <a href="{link}" style="display:block;text-align:center;background:linear-gradient(135deg,#0ea5e9,#0369a1);color:#fff;text-decoration:none;padding:14px 24px;border-radius:10px;font-weight:800;font-size:15px;margin-bottom:20px">
+      Crear nueva contraseña →
+    </a>
+    <p style="margin:0;color:#64748b;font-size:12px;text-align:center;line-height:1.6">
+      Si no has pedido este cambio, ignora este email: tu contraseña seguirá siendo la misma.
+    </p>
+  </div>
+</div>"""
+        try:
+            sent = await _send_resend_email(email, "Restablece tu contraseña de FlotaDSP", html)
+            if not sent:
+                logger.warning("forgot-password: RESEND_API_KEY no configurada, email no enviado")
+        except Exception as _fe:
+            logger.error(f"forgot-password: error enviando email: {_fe}")
+    return {"success": True}
+
+
+@auth_router.post("/reset-password")
+async def reset_password(data: dict, request: Request):
+    """Cambia la contraseña con un token de restablecimiento válido (un solo uso)."""
+    import hashlib as _hl
+    _rl_public_action(f"rp:{_rl_key_ip(request)}", max_count=10, window_s=900)
+    token = (data.get("token") or "").strip()
+    new = data.get("new_password") or ""
+    if len(new) < 6:
+        raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 6 caracteres")
+    if not token:
+        raise HTTPException(status_code=400, detail="Enlace inválido")
+
+    th = _hl.sha256(token.encode()).hexdigest()
+    doc = await global_db.password_resets.find_one({"token_hash": th})
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if not doc or doc.get("used") or doc.get("expires_at", "") < now_iso:
+        raise HTTPException(status_code=400, detail="El enlace no es válido o ha caducado. Solicita uno nuevo.")
+
+    result = await global_db.admin_users.update_one(
+        {"id": doc["user_id"]},
+        {"$set": {"hashed_password": hash_password(new)}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=400, detail="La cuenta ya no existe")
+    await global_db.password_resets.update_one({"token_hash": th}, {"$set": {"used": True}})
+    logger.info(f"Contraseña restablecida vía email para user {doc['user_id']}")
+    return {"success": True}
+
+
 @auth_router.get("/conductor-list")
 async def conductor_list_public(center: Optional[str] = None, slug: Optional[str] = None):
     """Lista pública de conductores (solo nombre, email, centro, id) para el
@@ -4672,7 +4775,7 @@ async def get_my_driver_profile(user: dict = Depends(require_any_auth)):
 
 
 @api_router.get("/me/vehicle")
-async def get_my_assigned_vehicle(user: dict = Depends(require_any_auth)):
+async def get_my_current_vehicle(user: dict = Depends(require_any_auth)):
     vehicle = await db.vehicles.find_one(
         {"current_driver_id": user["sub"]}, {"_id": 0}
     )
@@ -6869,6 +6972,65 @@ async def send_telegram_alert(title: str, message: str, severity: str = "critico
         logger.warning(f"Error enviando Telegram: {e}")
 
 
+# =========================
+# MONITORIZACIÓN DE ERRORES — el panel/portal reporta errores JS y el backend
+# avisa por Telegram de los 500 no controlados. Dedupe 1h por mensaje.
+# =========================
+
+_err_alerted: dict = {}          # hash del error → timestamp del último aviso
+_ERR_ALERT_WINDOW_S = 3600       # máximo 1 aviso Telegram por error único y hora
+
+
+async def _notify_error_once(kind: str, message: str, extra: str = ""):
+    """Log + Telegram con dedupe. kind: 'frontend' | 'backend'."""
+    import hashlib as _hl
+    logger.error(f"[{kind}] {message} {extra}"[:2000])
+    key = _hl.sha256(f"{kind}:{message[:300]}".encode()).hexdigest()
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if now_ts - _err_alerted.get(key, 0) < _ERR_ALERT_WINDOW_S:
+        return
+    _err_alerted[key] = now_ts
+    # Limpieza para que el dict no crezca sin límite
+    if len(_err_alerted) > 500:
+        cutoff = now_ts - _ERR_ALERT_WINDOW_S
+        for k in [k for k, t in _err_alerted.items() if t < cutoff]:
+            _err_alerted.pop(k, None)
+    emoji = "🖥️" if kind == "frontend" else "🔥"
+    await send_telegram_alert(
+        f"{emoji} Error en {'el panel/portal' if kind == 'frontend' else 'el backend'}",
+        f"{message[:500]}\n{extra[:400]}".strip(),
+        severity="critico",
+    )
+
+
+@api_router.post("/client-error")
+async def report_client_error(data: dict, request: Request):
+    """Recibe errores JS del frontend (window.onerror). Público pero rate-limited."""
+    _rl_public_action(f"ce:{_rl_key_ip(request)}", max_count=10, window_s=600,
+                      detail="Demasiados reportes")
+    message = str(data.get("message") or "")[:500]
+    if not message:
+        return {"success": True}
+    stack = str(data.get("stack") or "")[:800]
+    url = str(data.get("url") or "")[:200]
+    ua = (request.headers.get("user-agent") or "")[:120]
+    await _notify_error_once("frontend", message, f"URL: {url}\nStack: {stack[:300]}\nUA: {ua}")
+    return {"success": True}
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Los 500 no controlados se loguean con traza y avisan por Telegram (dedupe 1h)."""
+    import traceback as _tb
+    trace = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))[-1500:]
+    try:
+        await _notify_error_once("backend", f"{type(exc).__name__}: {exc}",
+                                 f"{request.method} {request.url.path}\n{trace[-600:]}")
+    except Exception:
+        logger.error(f"Error notificando excepción: {exc}")
+    return JSONResponse(status_code=500, content={"detail": "Error interno del servidor"})
+
+
 def _severity_emoji(sev: str) -> str:
     return {"critico": "🔴", "grave": "🟠", "moderado": "🟡", "leve": "🟢"}.get(sev, "⚪")
 
@@ -7273,6 +7435,131 @@ async def start_weekly_summary_scheduler():
                 await asyncio.sleep(70)
             except Exception as e:
                 logger.error(f"Weekly scheduler: {e}")
+                await asyncio.sleep(600)
+    asyncio.create_task(_loop())
+
+
+# =========================
+# DIGEST SEMANAL POR EMAIL A LOS DSPs (retención) — lunes 07:30
+# =========================
+
+async def send_weekly_email_digest():
+    """Email semanal a cada organización con email: ITVs próximas, inspecciones
+    y daños nuevos de la semana. Dedupe por semana ISO en global_db.app_meta."""
+    if os.environ.get("WEEKLY_DIGEST_DISABLED", "").lower() in ("1", "true"):
+        return {"success": False, "error": "deshabilitado por env"}
+    week_key = datetime.now(timezone.utc).strftime("%G-W%V")
+    meta = await global_db.app_meta.find_one({"_id": "weekly_email_digest"})
+    if meta and meta.get("last_week") == week_key:
+        return {"success": False, "error": f"ya enviado esta semana ({week_key})"}
+
+    since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    orgs = await global_db.organizations.find(
+        {"email": {"$nin": [None, ""]}, "status": {"$nin": ["suspended", "deleted"]}},
+        {"_id": 0, "id": 1, "name": 1, "email": 1, "db_name": 1}
+    ).to_list(500)
+
+    sent = 0
+    for org in orgs:
+        try:
+            set_current_org_db(org.get("db_name"))
+            n_vehicles = await db.vehicles.count_documents({"status": {"$ne": "deleted"}})
+            if n_vehicles == 0:
+                continue  # sin flota aún: un digest vacío no aporta
+            n_taller = await db.vehicles.count_documents({"status": "taller"})
+            n_insp = await db.inspections.count_documents(
+                {"deleted": {"$ne": True}, "created_at": {"$gte": since}})
+            n_damages = await db.inspections.count_documents(
+                {"deleted": {"$ne": True}, "created_at": {"$gte": since},
+                 "analysis.new_damages.0": {"$exists": True}})
+
+            hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            limite = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")
+            itvs = await db.vehicles.find(
+                {"status": {"$ne": "deleted"}, "itv_date": {"$gte": hoy, "$lte": limite}},
+                {"_id": 0, "license_plate": 1, "itv_date": 1}
+            ).sort("itv_date", 1).to_list(5)
+
+            itv_html = "".join(
+                f"<div style='font-size:13px;color:#cbd3e0;margin-bottom:4px'>🛡 <b>{v.get('license_plate','?')}</b> — ITV el {v.get('itv_date','')}</div>"
+                for v in itvs
+            ) or "<div style='font-size:13px;color:#34d399'>✓ Ninguna ITV caduca en los próximos 30 días</div>"
+
+            html = f"""
+<div style="font-family:Inter,sans-serif;max-width:520px;margin:0 auto;background:#0b0d10;color:#eef1f6;border-radius:16px;overflow:hidden">
+  <div style="background:linear-gradient(135deg,#0ea5e9,#0369a1);padding:26px 28px;text-align:center">
+    <div style="font-size:26px;margin-bottom:6px">⚡</div>
+    <h1 style="margin:0;font-size:20px;font-weight:900;color:#fff">Tu semana en FlotaDSP</h1>
+    <p style="margin:6px 0 0;color:rgba(255,255,255,.8);font-size:13px">{org.get('name','')}</p>
+  </div>
+  <div style="padding:26px 28px">
+    <div style="display:flex;gap:10px;margin-bottom:20px">
+      <div style="flex:1;background:#13161b;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px;text-align:center">
+        <div style="font-size:22px;font-weight:900;color:#0ea5e9">{n_insp}</div>
+        <div style="font-size:11px;color:#64748b">inspecciones</div>
+      </div>
+      <div style="flex:1;background:#13161b;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px;text-align:center">
+        <div style="font-size:22px;font-weight:900;color:{'#f87171' if n_damages else '#34d399'}">{n_damages}</div>
+        <div style="font-size:11px;color:#64748b">con daños nuevos</div>
+      </div>
+      <div style="flex:1;background:#13161b;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:14px;text-align:center">
+        <div style="font-size:22px;font-weight:900;color:{'#fb923c' if n_taller else '#34d399'}">{n_taller}</div>
+        <div style="font-size:11px;color:#64748b">en taller</div>
+      </div>
+    </div>
+    <div style="background:#13161b;border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:16px 18px;margin-bottom:22px">
+      <div style="font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">ITV próximas (30 días)</div>
+      {itv_html}
+    </div>
+    <a href="https://flotadsp.com/panel" style="display:block;text-align:center;background:linear-gradient(135deg,#0ea5e9,#0369a1);color:#fff;text-decoration:none;padding:13px 24px;border-radius:10px;font-weight:800;font-size:14px">
+      Abrir el panel →
+    </a>
+  </div>
+</div>"""
+            ok = await _send_resend_email(
+                org["email"],
+                f"Tu semana en FlotaDSP: {n_insp} inspecciones, {n_damages} con daños nuevos",
+                html,
+            )
+            if ok:
+                sent += 1
+        except Exception as _oe:
+            logger.warning(f"Digest semanal: error con org {org.get('id')}: {_oe}")
+    set_current_org_db(None)
+
+    await global_db.app_meta.update_one(
+        {"_id": "weekly_email_digest"},
+        {"$set": {"last_week": week_key, "sent": sent, "at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    logger.info(f"Digest semanal por email: {sent} orgs")
+    return {"success": True, "sent": sent, "week": week_key}
+
+
+@api_router.post("/admin/send-weekly-digest")
+async def trigger_weekly_digest(_=Depends(require_superadmin)):
+    """Dispara el digest por email a mano (para probar). Dedupe semanal incluido."""
+    return await send_weekly_email_digest()
+
+
+@app.on_event("startup")
+async def start_weekly_email_digest_scheduler():
+    """Digest por email a los DSPs cada lunes a las 07:30 hora española."""
+    async def _loop():
+        from zoneinfo import ZoneInfo
+        madrid = ZoneInfo("Europe/Madrid")
+        while True:
+            try:
+                now = datetime.now(madrid)
+                days_ahead = (0 - now.weekday()) % 7  # 0 = lunes
+                target = (now + timedelta(days=days_ahead)).replace(hour=7, minute=30, second=0, microsecond=0)
+                if target <= now:
+                    target = target + timedelta(days=7)
+                await asyncio.sleep((target - now).total_seconds())
+                await send_weekly_email_digest()
+                await asyncio.sleep(70)
+            except Exception as e:
+                logger.error(f"Digest email scheduler: {e}")
                 await asyncio.sleep(600)
     asyncio.create_task(_loop())
 

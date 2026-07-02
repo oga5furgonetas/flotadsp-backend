@@ -43,7 +43,10 @@ export default function Login() {
           onKeyDown={(e) => e.key === 'Enter' && submit()} autoComplete="current-password" />
         <button style={{ ...btn, opacity: busy ? .6 : 1 }} disabled={busy} onClick={submit}>{busy ? '…' : t('login.btn')}</button>
         {err && <div style={{ color: '#f87171', fontSize: 13, marginTop: 12, textAlign: 'center' }}>{err}</div>}
-        <div style={{ textAlign: 'center', marginTop: 18, color: '#8b94a3', fontSize: 13 }}>
+        <div style={{ textAlign: 'center', marginTop: 14 }}>
+          <a href="/reset-password" style={{ color: '#8b94a3', fontSize: 13, textDecoration: 'none' }}>{t('login.forgot')}</a>
+        </div>
+        <div style={{ textAlign: 'center', marginTop: 12, color: '#8b94a3', fontSize: 13 }}>
           {t('login.no')} <a href="/registro" style={{ color: '#0ea5e9', textDecoration: 'none', fontWeight: 600 }}>{t('login.create')}</a>
         </div>
       </div>

@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontend:
+    name: Frontend (build + checkers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend-v2/package-lock.json
+      - name: Instalar dependencias
+        working-directory: frontend-v2
+        run: npm ci
+      - name: Build de producción
+        working-directory: frontend-v2
+        run: npm run build
+      - name: Checker i18n (claves faltantes/duplicadas)
+        run: node scripts/check-i18n.mjs
+      - name: Checker rutas backend (duplicados)
+        run: node scripts/check-routes.mjs
+
+  backend:
+    name: Backend (sintaxis + contratos)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Sintaxis (py_compile)
+        run: python -m py_compile backend/server.py backend/ai_learning.py backend/damage_segmentation.py
+      - name: Contratos modelo↔frontend (campos que se descartarían en silencio)
+        run: python scripts/check_contracts.py
