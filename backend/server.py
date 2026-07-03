@@ -1898,6 +1898,71 @@ def _enforce_spatial_coherence(damages: list, photo_views: dict) -> int:
     return fixes
 
 
+async def _apply_vehicle_memory(vehicle_id: str, analysis) -> None:
+    """AUTO-CORRECCIÓN CON VERDAD HUMANA PROPAGADA (nunca IA validando IA).
+
+    Reutiliza los veredictos de Revisión Rápida de ESTE vehículo:
+    · Panel con daño ya validado ✓ por un humano → si reaparece como "nuevo"
+      con severidad igual o menor, se saca de new_damages (ya conocido: no
+      re-alerta ni re-penaliza). Si aparece MÁS grave que lo validado, sí
+      alerta (puede ser un golpe nuevo sobre el mismo panel).
+    · Panel donde un humano marcó ✗ (falso positivo) → una nueva detección
+      leve/moderada y no rotunda ahí se degrada a "sugerido" (sigue visible
+      en Revisión Rápida; el humano tiene la última palabra).
+
+    IMPORTANTE: no escribe NADA en ai_feedback — el dataset solo crece con
+    veredictos humanos. Esto evita el colapso por auto-confirmación del
+    self-training clásico."""
+    try:
+        if not vehicle_id or not analysis or not getattr(analysis, "new_damages", None):
+            return
+        fb = await db.ai_feedback.find(
+            {"vehicle_id": vehicle_id, "verdict": {"$in": ["correct", "wrong"]}},
+            {"_id": 0, "verdict": 1, "damage.part": 1, "damage.severity": 1}
+        ).to_list(500)
+        if not fb:
+            return
+        ok_panels: dict = {}   # panel → rango de severidad máximo validado ✓
+        bad_panels: set = set()
+        for f in fb:
+            dmg = f.get("damage") or {}
+            p = _canon_panel(dmg.get("part") or "")
+            if not p:
+                continue
+            if f["verdict"] == "correct":
+                rank = _SEV_RANK.get(_norm_sev(dmg.get("severity")), 1)
+                ok_panels[p] = max(ok_panels.get(p, 0), rank)
+            else:
+                bad_panels.add(p)
+
+        kept, moved, downgraded = [], 0, 0
+        for d in analysis.new_damages:
+            p = _canon_panel(d.part or "")
+            d_rank = _SEV_RANK.get(_norm_sev(d.severity), 1)
+            if p and p in ok_panels and d_rank <= ok_panels[p]:
+                # Ya validado por un humano con severidad >= a esta → conocido
+                d.is_new = False
+                d.description = (d.description or "") + " · [panel con daño ya validado ✓ previamente]"
+                moved += 1
+                continue  # fuera de new_damages (sigue en damages[])
+            if (p and p in bad_panels and getattr(d, "confirmed", True)
+                    and (d.confidence or 0) < 0.85
+                    and _norm_sev(d.severity) in ("leve", "moderado")):
+                d.confirmed = False
+                d.description = (d.description or "") + " · [patrón rechazado ✗ previamente en este panel — revisar]"
+                downgraded += 1
+            kept.append(d)
+
+        if moved or downgraded:
+            analysis.new_damages = kept
+            if hasattr(analysis, "new_damages_count"):
+                analysis.new_damages_count = len(kept)
+            logger.info(f"[MemoriaVehículo] {vehicle_id}: {moved} ya conocidos fuera de nuevos, "
+                        f"{downgraded} degradados por ✗ humano previo")
+    except Exception as e:
+        logger.debug(f"[MemoriaVehículo] {e}")
+
+
 # =========================
 # HELPERS
 # =========================
@@ -6016,6 +6081,8 @@ async def reanalyze_inspection(inspection_id: str, silent: bool = False, _=Depen
     analysis, analysis_status, analysis_error = await analyze_images_with_gemini(
         photos_base64, ref_bytes_list if ref_bytes_list else None, db=db
     )
+    if analysis_status == "ok" and analysis:
+        await _apply_vehicle_memory(insp.get("vehicle_id"), analysis)
 
     await db.inspections.update_one(
         {"id": inspection_id},
@@ -10236,6 +10303,8 @@ async def _process_single_inspection(vehicle_id, driver_id, photo_urls, photos_b
     analysis, analysis_status, analysis_error = await analyze_images_with_gemini(
         photos_base64, ref_bytes_list if ref_bytes_list else None, db=db
     )
+    if analysis_status == "ok" and analysis:
+        await _apply_vehicle_memory(vehicle_id, analysis)
 
     inspection = Inspection(
         vehicle_id=vehicle_id, driver_id=driver_id, photos=photo_urls,
