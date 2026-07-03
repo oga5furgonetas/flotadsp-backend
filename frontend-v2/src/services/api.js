@@ -85,6 +85,10 @@ export const uploadInspection = (formData) =>
 export const signInspection = (inspectionId, signatureText) =>
   api.post(`/inspections/${inspectionId}/sign`, { signature_text: signatureText })
 
+/* ── Ofertas patrocinadas del portal conductor (públicas) ── */
+export const getDriverOffers = () => api.get('/driver-offers')
+export const clickDriverOffer = (offerId) => api.post(`/driver-offers/${offerId}/click`)
+
 export const readOdometer = (vehicleId, file) => {
   const fd = new FormData()
   fd.append('file', file, 'odometro.jpg')

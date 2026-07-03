@@ -635,14 +635,16 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                   onSave={v => patch({ renting_end_date: v })}
                 />
                 <div className="col-span-2">
-                  <ReadField label="VIN / Bastidor" icon={<Hash size={13} />}>
-                    <span className="font-mono text-xs tracking-wider text-blue-300">{vehicle.vin || <span className="text-dark-600">—</span>}</span>
-                  </ReadField>
+                  <EditableField label="VIN / Bastidor" icon={<Hash size={13} />}
+                    value={vehicle.vin} mono
+                    onSave={v => patch({ vin: v.trim().toUpperCase() })}
+                  />
                 </div>
                 <div className="col-span-2">
-                  <ReadField label="Proveedor" icon={<Building2 size={13} />}>
-                    {vehicle.provider}
-                  </ReadField>
+                  <EditableField label="Proveedor" icon={<Building2 size={13} />}
+                    value={vehicle.provider}
+                    onSave={v => patch({ provider: v.trim() })}
+                  />
                 </div>
               </div>
             </Section>

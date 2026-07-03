@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { LANGS, useT } from '../i18n'
 import { Check, Zap, ArrowRight } from 'lucide-react'
+import { API_BASE } from '../lib/apiBase'
 
 // Precios base mensuales
 const PLANS = [
@@ -84,6 +85,92 @@ const annualM = (key) => Math.round(ANNUAL_PRICE[key] / 12)
 const annualY = (key) => ANNUAL_PRICE[key]
 const annualSave = (priceM, key) => priceM * 12 - ANNUAL_PRICE[key]
 
+/* ── Oferta Fundador: Pro a precio Básico para siempre, plazas reales contadas
+   por el backend. La reserva no cobra: captura el contacto y avisa por Telegram
+   para cerrar la venta por teléfono. ── */
+function FounderOffer() {
+  const [slots, setSlots] = useState(null)          // { total, left }
+  const [open, setOpen] = useState(false)
+  const [form, setForm] = useState({ name: '', email: '', phone: '', fleet_size: '' })
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    fetch(`${API_BASE}/founder/slots`).then(r => r.json()).then(setSlots).catch(() => {})
+  }, [])
+
+  async function reserve(e) {
+    e.preventDefault()
+    if (busy) return
+    setBusy(true); setErr('')
+    try {
+      const r = await fetch(`${API_BASE}/founder/reserve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j?.detail || 'No se pudo reservar')
+      setDone(true)
+      if (typeof j.left === 'number') setSlots(s => ({ ...(s || { total: 10 }), left: j.left }))
+    } catch (e2) {
+      setErr(e2.message)
+    } finally { setBusy(false) }
+  }
+
+  if (slots && slots.left <= 0) return null   // agotadas: la oferta desaparece sola
+
+  const inputS = { background: '#0b0d10', border: '1px solid rgba(255,255,255,.12)', borderRadius: 10, padding: '10px 12px', fontSize: 14, color: '#eef1f6', outline: 'none', width: '100%' }
+
+  return (
+    <div style={{ position: 'relative', overflow: 'hidden', background: 'linear-gradient(145deg,rgba(245,158,11,.10),rgba(249,115,22,.05)), #13161b', border: '1.5px solid rgba(245,158,11,.35)', borderRadius: 20, padding: '26px 28px', marginBottom: 36, boxShadow: '0 0 50px rgba(245,158,11,.08)' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 20 }}>
+        <div style={{ minWidth: 260, flex: '1 1 320px' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(245,158,11,.15)', borderRadius: 99, padding: '4px 12px', fontSize: 11, fontWeight: 800, color: '#fbbf24', letterSpacing: '.08em', textTransform: 'uppercase', marginBottom: 12 }}>
+            ⭐ Oferta fundador {slots ? `· quedan ${slots.left} de ${slots.total} plazas` : '· plazas limitadas'}
+          </div>
+          <h2 style={{ margin: '0 0 8px', fontSize: 24, fontWeight: 900, lineHeight: 1.2 }}>
+            Plan Pro completo por <span style={{ color: '#fbbf24' }}>99€/mes para siempre</span>
+          </h2>
+          <p style={{ margin: 0, color: '#94a3b8', fontSize: 14, lineHeight: 1.6, maxWidth: 520 }}>
+            IA de daños, scorecard, chat y asignación diaria — todo el plan Pro (229€) a precio de Básico,
+            <b style={{ color: '#cbd3e0' }}> bloqueado de por vida</b> mientras seas cliente. Solo para los primeros DSPs.
+            Reservar es gratis y sin compromiso: te llamamos y lo activamos juntos.
+          </p>
+        </div>
+
+        <div style={{ flex: '0 1 340px', minWidth: 280 }}>
+          {done ? (
+            <div style={{ background: 'rgba(52,211,153,.08)', border: '1px solid rgba(52,211,153,.3)', borderRadius: 14, padding: '18px 20px', textAlign: 'center' }}>
+              <div style={{ fontSize: 26, marginBottom: 6 }}>✅</div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: '#34d399', marginBottom: 4 }}>Plaza reservada</div>
+              <div style={{ fontSize: 13, color: '#94a3b8' }}>Te contactamos en menos de 24h para activarla. Sin compromiso.</div>
+            </div>
+          ) : open ? (
+            <form onSubmit={reserve} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <input style={inputS} placeholder="Tu nombre *" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} required />
+              <input style={inputS} type="email" placeholder="Email *" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} required />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input style={inputS} placeholder="Teléfono" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} />
+                <input style={inputS} placeholder="Nº furgonetas" value={form.fleet_size} onChange={e => setForm(f => ({ ...f, fleet_size: e.target.value }))} />
+              </div>
+              {err && <div style={{ fontSize: 12, color: '#f87171' }}>{err}</div>}
+              <button type="submit" disabled={busy} style={{ background: 'linear-gradient(135deg,#fbbf24,#f59e0b)', border: 'none', borderRadius: 11, padding: '12px 0', fontSize: 14, fontWeight: 900, color: '#0b0d10', cursor: 'pointer', opacity: busy ? .6 : 1 }}>
+                {busy ? 'Reservando…' : 'Confirmar reserva gratuita'}
+              </button>
+            </form>
+          ) : (
+            <button onClick={() => setOpen(true)} style={{ width: '100%', background: 'linear-gradient(135deg,#fbbf24,#f59e0b)', border: 'none', borderRadius: 12, padding: '15px 24px', fontSize: 15, fontWeight: 900, color: '#0b0d10', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, boxShadow: '0 8px 30px rgba(245,158,11,.25)' }}>
+              Reservar mi plaza fundador <ArrowRight size={16} />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Planes() {
   const { lang, setLang, t } = useT()
   const [billing, setBilling] = useState('monthly') // 'monthly' | 'annual'
@@ -148,6 +235,9 @@ export default function Planes() {
             </p>
           )}
         </div>
+
+        {/* Oferta fundador con plazas reales */}
+        <FounderOffer />
 
         {/* Cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 20, marginBottom: 24 }}>
