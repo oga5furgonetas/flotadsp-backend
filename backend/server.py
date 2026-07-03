@@ -15859,6 +15859,13 @@ async def admin_list_driver_offers(_=Depends(require_superadmin)):
     return {"offers": docs}
 
 
+@api_router.get("/admin/founder-reservations")
+async def admin_list_founder_reservations(_=Depends(require_superadmin)):
+    """Super-admin: reservas de plaza fundador (para cerrarlas por teléfono)."""
+    docs = await global_db.founder_reservations.find({}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return {"reservations": docs, "total_slots": FOUNDER_TOTAL_SLOTS}
+
+
 @api_router.post("/admin/driver-offers")
 async def admin_create_driver_offer(data: DriverOfferIn, _=Depends(require_superadmin)):
     url = data.url.strip()

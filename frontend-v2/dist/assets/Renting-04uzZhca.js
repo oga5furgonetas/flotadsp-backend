@@ -1,2 +1,0 @@
-import{u as e,j as r}from"./index-DGWqrY8x.js";import{E as i}from"./ExpiryAlerts-Bb7AB4Vp.js";import{Z as o}from"./api-Dk893ADy.js";import"./loader-circle-AFD-2OqU.js";import"./calendar-clock-BF6jdY2H.js";import"./api-DkJ0fHAT.js";function m(){const{t}=e();return r.jsx(i,{title:t("rent.title"),fetcher:o,dateField:"renting_end_date",dateLabel:t("rent.date.label"),extraCol:{label:t("rent.provider"),field:"provider"}})}export{m as default};
-//# sourceMappingURL=Renting-04uzZhca.js.map
