@@ -54,9 +54,9 @@ export default function Login() {
   )
 }
 
-const wrap = { minHeight: '100vh', background: 'radial-gradient(1100px 560px at 72% -12%,rgba(14,165,233,.10),transparent),#0b0d10', color: '#eef1f6', fontFamily: 'Inter,system-ui,sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, position: 'relative' }
+const wrap = { minHeight: '100vh', background: 'radial-gradient(1100px 560px at 72% -12%,rgba(14,165,233,.10),transparent),#0b0d10', color: '#eef1f6', fontFamily: 'Inter Variable,Inter,system-ui,sans-serif', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, position: 'relative' }
 const card = { width: '100%', maxWidth: 380, background: '#13161b', border: '1px solid rgba(255,255,255,.08)', borderRadius: 18, padding: '28px 24px' }
 const lbl = { display: 'block', fontSize: 12, color: '#8b94a3', margin: '12px 0 6px', fontWeight: 600 }
 const inp = { width: '100%', padding: '11px 12px', borderRadius: 10, border: '1px solid rgba(255,255,255,.12)', background: '#0e1116', color: '#eef1f6', fontSize: 14, boxSizing: 'border-box' }
-const btn = { width: '100%', marginTop: 20, padding: 12, border: 'none', borderRadius: 11, background: 'linear-gradient(135deg,#0ea5e9,#0369a1)', color: '#fff', fontSize: 15, fontWeight: 800, cursor: 'pointer' }
+const btn = { width: '100%', marginTop: 20, padding: 12, border: 'none', borderRadius: 11, background: 'linear-gradient(135deg,#fb923c,#ea6800)', color: '#fff', fontSize: 15, fontWeight: 800, cursor: 'pointer' }
 const sel = { background: '#13161b', color: '#e7ebf2', border: '1px solid rgba(255,255,255,.12)', borderRadius: 9, padding: '7px 10px', fontSize: 13, fontWeight: 600 }

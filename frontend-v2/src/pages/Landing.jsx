@@ -296,7 +296,7 @@ function DualDemo() {
                 const active = activeLabel === i
                 return (
                   <div key={i} onClick={() => { clearInterval(phoneTimer.current); setStep(DEMO_NAV[i]) }} style={{ display:'flex', alignItems:'flex-start', gap:12, marginBottom:13, cursor:'pointer', opacity:active?1:0.42, transition:'opacity .3s' }}>
-                    <div style={{ width:32,height:32,borderRadius:9,background:active?'linear-gradient(135deg,#0ea5e9,#0369a1)':'#13161b',border:active?'none':'1px solid rgba(255,255,255,.1)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:900,fontSize:13,flexShrink:0,transition:'background .3s',color:'#fff' }}>{i+1}</div>
+                    <div style={{ width:32,height:32,borderRadius:9,background:active?'linear-gradient(135deg,#fb923c,#ea6800)':'#13161b',border:active?'none':'1px solid rgba(255,255,255,.1)',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:900,fontSize:13,flexShrink:0,transition:'background .3s',color:'#fff' }}>{i+1}</div>
                     <div style={{ flex:1, paddingTop:4 }}>
                       <div style={{ fontWeight:700, fontSize:13, color:active?'#eef1f6':'#8b94a3' }}>{label}</div>
                       <div style={{ fontSize:11, color:'#64748b', marginTop:1 }}>{demoSubs[i][lang]||demoSubs[i].en}</div>
@@ -377,7 +377,7 @@ export default function Landing() {
   }
 
   return (
-    <div style={{ background: '#080a0e', color: '#eef1f6', fontFamily: 'Inter,system-ui,sans-serif', overflowX: 'hidden' }}>
+    <div style={{ background: '#080a0e', color: '#eef1f6', fontFamily: 'Inter Variable,Inter,system-ui,sans-serif', overflowX: 'hidden' }}>
 
       {/* ── NAV ── */}
       <nav style={{ position: 'sticky', top: 0, zIndex: 50, borderBottom: '1px solid rgba(255,255,255,.06)', background: 'rgba(8,10,14,.85)', backdropFilter: 'blur(16px)' }}>
@@ -394,7 +394,7 @@ export default function Landing() {
             </select>
             <a href="/planes" style={{ color: '#8b94a3', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>{t('nav.plans')}</a>
             <a href="/panel/login" style={{ color: '#8b94a3', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>{t('nav.login')}</a>
-            <a href="/registro" style={{ background: 'linear-gradient(135deg,#0ea5e9,#0369a1)', color: '#fff', textDecoration: 'none', padding: '7px 16px', borderRadius: 9, fontSize: 13, fontWeight: 800 }}>{t('nav.try')}</a>
+            <a href="/registro" style={{ background: 'linear-gradient(135deg,#fb923c,#ea6800)', color: '#fff', textDecoration: 'none', padding: '7px 16px', borderRadius: 9, fontSize: 13, fontWeight: 800 }}>{t('nav.try')}</a>
           </div>
         </div>
       </nav>
@@ -412,11 +412,11 @@ export default function Landing() {
             </div>
             <h1 style={{ fontSize: 'clamp(32px,5vw,54px)', lineHeight: 1.06, margin: '0 0 18px', fontWeight: 950, letterSpacing: '-.03em' }}>
               {t('hero.title1')}<br />
-              <span style={{ background: 'linear-gradient(120deg,#38bdf8 20%,#818cf8)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>{t('hero.title2')}</span>.
+              <span style={{ background: 'linear-gradient(120deg,#fb923c 20%,#fbbf24)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>{t('hero.title2')}</span>.
             </h1>
             <p style={{ fontSize: 16.5, color: '#94a3b8', maxWidth: 500, margin: '0 0 30px', lineHeight: 1.65 }}>{t('hero.sub')}</p>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
-              <a href="/registro" style={{ background: 'linear-gradient(135deg,#0ea5e9,#0369a1)', color: '#fff', textDecoration: 'none', padding: '14px 24px', borderRadius: 12, fontSize: 15, fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <a href="/registro" style={{ background: 'linear-gradient(135deg,#fb923c,#ea6800)', color: '#fff', textDecoration: 'none', padding: '14px 24px', borderRadius: 12, fontSize: 15, fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                 {t('hero.ctaTry')} <ArrowRight size={16} />
               </a>
               <a href="/planes" style={{ background: 'rgba(255,255,255,.05)', color: '#eef1f6', textDecoration: 'none', padding: '14px 24px', borderRadius: 12, fontSize: 15, fontWeight: 700, border: '1px solid rgba(255,255,255,.1)' }}>
@@ -591,7 +591,7 @@ export default function Landing() {
           <h2 style={{ fontSize: 'clamp(26px,4vw,42px)', fontWeight: 950, margin: '0 0 14px', letterSpacing: '-.025em', lineHeight: 1.1 }}>{t('cta.t')}</h2>
           <p style={{ color: '#8b94a3', margin: '0 0 32px', fontSize: 16, lineHeight: 1.6 }}>{tl('ld.plan.sub')}</p>
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
-            <a href="/registro" style={{ background: 'linear-gradient(135deg,#0ea5e9,#0369a1)', color: '#fff', textDecoration: 'none', padding: '15px 32px', borderRadius: 12, fontSize: 16, fontWeight: 900, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <a href="/registro" style={{ background: 'linear-gradient(135deg,#fb923c,#ea6800)', color: '#fff', textDecoration: 'none', padding: '15px 32px', borderRadius: 12, fontSize: 16, fontWeight: 900, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
               {t('hero.ctaTry')} <ArrowRight size={18} />
             </a>
             <a href="/planes" style={{ background: 'rgba(255,255,255,.05)', color: '#eef1f6', textDecoration: 'none', padding: '15px 28px', borderRadius: 12, fontSize: 15, fontWeight: 700, border: '1px solid rgba(255,255,255,.1)' }}>

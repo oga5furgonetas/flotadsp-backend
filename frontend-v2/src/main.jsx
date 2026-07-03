@@ -1,6 +1,10 @@
 import React, { Suspense, lazy } from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
+/* Tipografía self-hosted (la CSP bloquea Google Fonts): Inter para texto,
+   Space Grotesk para titulares. Vite las sirve desde el propio dominio. */
+import '@fontsource-variable/inter'
+import '@fontsource-variable/space-grotesk'
 import './index.css'
 import { ToastProvider } from './lib/toast'
 import { LangProvider } from './i18n'
@@ -33,11 +37,11 @@ class ErrorBoundary extends React.Component {
   render() {
     if (!this.state.broken) return this.props.children
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: '#0b0d10', color: '#eef1f6', fontFamily: 'Inter,system-ui,sans-serif', padding: 24, textAlign: 'center' }}>
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: '#0b0d10', color: '#eef1f6', fontFamily: 'Inter Variable,Inter,system-ui,sans-serif', padding: 24, textAlign: 'center' }}>
         <div style={{ fontSize: 34 }}>⚠️</div>
         <h1 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>Algo ha ido mal</h1>
         <p style={{ margin: 0, color: '#8b94a3', fontSize: 14 }}>El error se ha reportado automáticamente. Recarga la página para continuar.</p>
-        <button onClick={() => window.location.reload()} style={{ marginTop: 8, padding: '11px 22px', border: 'none', borderRadius: 10, background: 'linear-gradient(135deg,#0ea5e9,#0369a1)', color: '#fff', fontWeight: 800, fontSize: 14, cursor: 'pointer' }}>
+        <button onClick={() => window.location.reload()} style={{ marginTop: 8, padding: '11px 22px', border: 'none', borderRadius: 10, background: 'linear-gradient(135deg,#fb923c,#ea6800)', color: '#fff', fontWeight: 800, fontSize: 14, cursor: 'pointer' }}>
           Recargar
         </button>
       </div>
@@ -98,8 +102,8 @@ function AppRedirect() {
 /* Fallback mínimo mientras se descarga el chunk de la ruta (mismo fondo oscuro de la app) */
 function RouteLoader() {
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0f1e' }}>
-      <div style={{ width: 28, height: 28, border: '3px solid rgba(255,255,255,.1)', borderTopColor: '#3b82f6', borderRadius: '50%', animation: 'spin .8s linear infinite' }} />
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0a0b0f' }}>
+      <div style={{ width: 28, height: 28, border: '3px solid rgba(255,255,255,.1)', borderTopColor: '#f97316', borderRadius: '50%', animation: 'spin .8s linear infinite' }} />
       <style>{'@keyframes spin{to{transform:rotate(360deg)}}'}</style>
     </div>
   )

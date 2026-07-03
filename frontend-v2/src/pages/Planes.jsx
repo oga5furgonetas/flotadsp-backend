@@ -89,7 +89,7 @@ export default function Planes() {
   const [billing, setBilling] = useState('monthly') // 'monthly' | 'annual'
 
   return (
-    <div style={{ minHeight: '100vh', background: 'radial-gradient(1100px 560px at 72% -12%,rgba(14,165,233,.10),transparent),#0b0d10', color: '#eef1f6', fontFamily: 'Inter,system-ui,sans-serif', padding: '20px 16px 80px' }}>
+    <div style={{ minHeight: '100vh', background: 'radial-gradient(1100px 560px at 72% -12%,rgba(14,165,233,.10),transparent),#0b0d10', color: '#eef1f6', fontFamily: 'Inter Variable,Inter,system-ui,sans-serif', padding: '20px 16px 80px' }}>
       <div style={{ maxWidth: 1100, margin: '0 auto' }}>
 
         {/* Nav */}
