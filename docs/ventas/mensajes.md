@@ -108,6 +108,94 @@ favor real. ¿Os enseño la herramienta en 15 minutos?
 
 ---
 
+## 🇬🇧 ENGLISH — LinkedIn connection request (UK/NL/PL)
+
+Hi [NAME], fellow Amazon DSP owner here (Spain, 3 stations). I built a tool
+to document van damage with AI and stop eating rental chargebacks — I use it
+daily on my own fleet. Connecting in case it's useful — no-signup demo at
+flotadsp.com
+
+## 🇬🇧 ENGLISH — message after connecting / email touch 1
+
+**Subject:** How I stopped paying rental chargebacks (DSP owner, Spain)
+
+Hi [NAME],
+
+I run an Amazon DSP in Spain (3 stations). Like you, every van I returned
+to the rental company was a chargeback lottery: €300-1,500 for damage nobody
+could say when it happened or who was driving.
+
+I built a tool for my own fleet and opened it to other DSPs:
+
+- Driver takes 5 photos when picking up the van (30 seconds, own phone)
+- AI compares with the previous state and flags ONLY new damage
+- Everything documented: photo, date, driver, estimated cost, signature
+- MOT alerts, driver scoring with monthly prize, Amazon scorecard import
+
+Don't book a call yet — try it yourself, NO signup:
+👉 flotadsp.com → "Try the demo"
+
+If it fits, reply and I'll activate 3 months free for the first 10 DSPs
+(then from [PRICE]€/month — one avoided chargeback pays for years).
+
+Best,
+Dani — FlotaDSP · DSP owner since [YEAR]
+
+## 🇩🇪 DEUTSCH — LinkedIn-Kontaktanfrage (NUR LinkedIn in DE/AT — kein Kalt-Email!)
+
+Hallo [NAME], ich bin selbst Amazon-DSP-Inhaber (Spanien, 3 Stationen).
+Ich habe ein Tool gebaut, das Transporterschäden per KI dokumentiert —
+nie wieder ungeklärte Vermieter-Nachbelastungen. Demo ohne Anmeldung:
+flotadsp.com
+
+## 🇩🇪 DEUTSCH — Nachricht nach Annahme
+
+Danke fürs Vernetzen, [NAME]! Kurz erklärt: Jede Rückgabe an den Vermieter
+war eine Lotterie — 300-1.500€ für Schäden, von denen niemand wusste, wann
+sie passiert sind. Jetzt machen meine Fahrer beim Übernehmen 5 Fotos
+(30 Sekunden), die KI vergleicht mit dem Vortag und meldet NUR neue Schäden —
+mit Foto, Datum, Fahrer und Kostenschätzung. Dazu: TÜV-Erinnerungen,
+Fahrer-Scoring mit Monatsprämie, Amazon-Scorecard-Import.
+Teste es ohne Anmeldung: flotadsp.com → Demo. Für die ersten 10 DSPs:
+3 Monate gratis. 15 Minuten diese Woche?
+
+## 🇫🇷 FRANÇAIS — demande de connexion LinkedIn
+
+Bonjour [NAME], je suis moi-même propriétaire d'un DSP Amazon (Espagne,
+3 stations). J'ai créé un outil qui documente les dommages des camionnettes
+par IA — fini les refacturations surprises du loueur. Démo sans inscription :
+flotadsp.com
+
+## 🇫🇷 FRANÇAIS — message après connexion / email
+
+Merci pour la connexion, [NAME]. En 30 secondes : chaque restitution au
+loueur était une loterie — 300 à 1 500 € de dommages dont personne ne savait
+ni quand ni qui. Maintenant mes chauffeurs prennent 5 photos en 30 secondes,
+l'IA compare avec la veille et signale UNIQUEMENT les nouveaux dommages —
+photo, date, chauffeur, coût estimé. En plus : alertes contrôle technique,
+scoring des chauffeurs avec prime mensuelle, import scorecard Amazon.
+Essayez sans inscription : flotadsp.com → « Essayer la démo ».
+3 mois gratuits pour les 10 premiers DSP. 15 minutes cette semaine ?
+
+## 🇮🇹 ITALIANO — richiesta di collegamento LinkedIn
+
+Ciao [NAME], anch'io sono titolare di un DSP Amazon (Spagna, 3 stazioni).
+Ho creato uno strumento che documenta i danni dei furgoni con l'IA — basta
+addebiti a sorpresa dal noleggio. Demo senza registrazione: flotadsp.com
+
+## 🇮🇹 ITALIANO — messaggio dopo il collegamento / email
+
+Grazie per il collegamento, [NAME]. In 30 secondi: ogni riconsegna al
+noleggio era una lotteria — 300-1.500€ di danni di cui nessuno sapeva né
+quando né chi. Ora i miei autisti fanno 5 foto in 30 secondi, l'IA confronta
+con il giorno prima e segnala SOLO i danni nuovi — foto, data, autista,
+costo stimato. In più: promemoria revisione, scoring autisti con premio
+mensile, import scorecard Amazon.
+Provalo senza registrarti: flotadsp.com → "Prova la demo".
+3 mesi gratis per i primi 10 DSP. 15 minuti questa settimana?
+
+---
+
 ## Respuestas a objeciones típicas
 
 **"Ya uso Excel/WhatsApp"** → "Yo también lo hacía. El problema no es apuntar,

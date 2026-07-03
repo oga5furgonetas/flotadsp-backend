@@ -70,6 +70,35 @@ tiendas de material laboral. Precio orientativo: 150-300€/mes por slot cuando 
 500+ conductores activos en la plataforma. NO vender antes de tener esa audiencia:
 quema el canal.
 
+## Europa — el mismo método funciona en cada país
+
+La app ya está en 6 idiomas y el programa DSP opera en toda Europa. La mina de las
+ofertas de empleo funciona igual: buscar "repartidor Amazon" en el idioma local y
+apuntar la EMPRESA que publica.
+
+| País | Tamaño DSP | Búsqueda en portal de empleo | Canal recomendado |
+|---|---|---|---|
+| 🇩🇪 Alemania | El más grande de Europa | indeed.de → "Paketzusteller Amazon" / "Fahrer Amazon DSP" | **Solo LinkedIn** (el email frío B2B está restringido por ley en DE — UWG) |
+| 🇬🇧 Reino Unido | Enorme | indeed.co.uk → "Amazon delivery driver" | Email + LinkedIn (B2B frío permitido) |
+| 🇫🇷 Francia | Grande | indeed.fr → "chauffeur-livreur Amazon" | LinkedIn primero, email a direcciones de empresa |
+| 🇮🇹 Italia | Grande | indeed.it → "autista corriere Amazon" | Email + LinkedIn |
+| 🇳🇱 Países Bajos | Medio | indeed.nl → "pakketbezorger Amazon" | LinkedIn (inglés funciona) |
+| 🇦🇹 Austria | Pequeño | indeed.at → "Paketzusteller Amazon" | Solo LinkedIn (misma restricción que DE) |
+| 🇵🇱 Polonia | Creciendo | pracuj.pl → "kurier Amazon" | LinkedIn en inglés |
+
+**Orden recomendado (no te disperses):**
+1. **España primero** — ventaja local, referencias, mismo huso, tu historia completa.
+2. **Reino Unido segundo** — el inglés hace el outreach fácil y el mercado es enorme.
+3. **Alemania/Francia/Italia** cuando tengas 2-3 casos de éxito que contar (los
+   mensajes ya están traducidos en mensajes.md).
+
+**Antes del primer cliente no-español** (avísame y lo hago en una tarde):
+- Revisar que los emails transaccionales (bienvenida, digest, reset) salgan en su idioma
+- Precio en GBP para UK en la página de planes (Lemon Squeezy lo soporta)
+
+**Regla de oro europea**: en Alemania y Austria, LinkedIn SIEMPRE (conexión + mensaje),
+nunca email frío — es la diferencia entre prospectar y una multa.
+
 ## Qué NO hacer
 
 - No comprar listas de emails ni enviar masivo desde el dominio: quema flotadsp.com.
