@@ -12,12 +12,33 @@ import { API_BASE } from './lib/apiBase'
 import Landing from './pages/Landing'
 import CookieBanner from './legal/CookieBanner'
 
+/* ── Auto-recuperación tras deploy: si una pestaña abierta pide un chunk viejo
+   (invalidado por un despliegue), Vite emite vite:preloadError. Recargamos UNA
+   vez para coger la versión nueva — sin pantalla rota y sin alertas de ruido. ── */
+window.addEventListener('vite:preloadError', (e) => {
+  e.preventDefault()
+  const k = 'chunk_reload_at'
+  const last = Number(sessionStorage.getItem(k) || 0)
+  if (Date.now() - last > 30_000) {           // guarda anti-bucle de recargas
+    sessionStorage.setItem(k, String(Date.now()))
+    window.location.reload()
+  }
+})
+
 /* ── Monitorización: errores JS → backend → Telegram (máx 5/sesión, dedupe) ── */
+// Ruido que NO merece alerta: chunks viejos tras deploy, cortes de red del móvil,
+// errores opacos de extensiones/scripts externos, ResizeObserver…
+const _NOISE = [
+  'dynamically imported module', 'Importing a module script failed', 'ChunkLoadError',
+  'Failed to fetch', 'NetworkError', 'Load failed', 'network error',
+  'Script error', 'ResizeObserver loop',
+]
 const _reported = new Set()
 function reportError(message, stack) {
   try {
     const msg = String(message || '').slice(0, 500)
     if (!msg || _reported.size >= 5 || _reported.has(msg)) return
+    if (_NOISE.some((n) => msg.includes(n))) return
     _reported.add(msg)
     fetch(`${API_BASE}/client-error`, {
       method: 'POST',

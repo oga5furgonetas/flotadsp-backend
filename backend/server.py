@@ -7686,16 +7686,28 @@ async def send_telegram_alert(title: str, message: str, severity: str = "critico
 # =========================
 
 _err_alerted: dict = {}          # hash del error → timestamp del último aviso
-_ERR_ALERT_WINDOW_S = 3600       # máximo 1 aviso Telegram por error único y hora
+_ERR_ALERT_WINDOW_S = 3600       # backend: máx 1 aviso por error único y hora
+_ERR_ALERT_WINDOW_FRONT_S = 6 * 3600  # frontend: máx 1 aviso por error único cada 6h
+
+# Ruido de cliente que NO merece Telegram (se loguea y ya): chunks viejos tras
+# un deploy, cortes de red de móvil, errores opacos de extensiones…
+_ERR_NOISE_PATTERNS = (
+    "dynamically imported module", "importing a module script failed", "chunkloaderror",
+    "failed to fetch", "networkerror", "load failed", "network error",
+    "script error", "resizeobserver",
+)
 
 
 async def _notify_error_once(kind: str, message: str, extra: str = ""):
     """Log + Telegram con dedupe. kind: 'frontend' | 'backend'."""
     import hashlib as _hl
     logger.error(f"[{kind}] {message} {extra}"[:2000])
+    if kind == "frontend" and any(p in (message or "").lower() for p in _ERR_NOISE_PATTERNS):
+        return  # ruido conocido: queda en el log, no molesta por Telegram
     key = _hl.sha256(f"{kind}:{message[:300]}".encode()).hexdigest()
     now_ts = datetime.now(timezone.utc).timestamp()
-    if now_ts - _err_alerted.get(key, 0) < _ERR_ALERT_WINDOW_S:
+    window = _ERR_ALERT_WINDOW_FRONT_S if kind == "frontend" else _ERR_ALERT_WINDOW_S
+    if now_ts - _err_alerted.get(key, 0) < window:
         return
     _err_alerted[key] = now_ts
     # Limpieza para que el dict no crezca sin límite

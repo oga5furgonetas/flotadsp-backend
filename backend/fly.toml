@@ -37,4 +37,6 @@ primary_region = "cdg"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "512mb"
+  # 1GB: con 512MB el procesado de imágenes (OpenCV/PIL, 5+ fotos por inspección)
+  # iba al límite → lentitud y riesgo de muertes por memoria (OOM).
+  memory = "1gb"
