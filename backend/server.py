@@ -6772,6 +6772,134 @@ async def _chat_room_can_access(user: dict, center: str) -> bool:
     return _user_can_see_center(user, center)
 
 
+# =========================
+# WEB PUSH — notificaciones al móvil de los coordinadores del panel (PWA)
+# =========================
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:hola@flotadsp.com")
+_push_enabled = bool(VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY)
+if _push_enabled:
+    try:
+        from pywebpush import webpush as _webpush, WebPushException as _WebPushException
+    except Exception as _pe:
+        logger.warning(f"pywebpush no disponible, push desactivado: {_pe}")
+        _push_enabled = False
+
+
+@api_router.get("/push/vapid-key")
+async def push_vapid_key(_=Depends(require_admin)):
+    """Clave pública VAPID para que el navegador se suscriba."""
+    return {"key": VAPID_PUBLIC_KEY, "enabled": _push_enabled}
+
+
+@api_router.post("/push/subscribe")
+async def push_subscribe(data: dict, user: dict = Depends(require_admin)):
+    """Guarda la suscripción push del dispositivo de este coordinador."""
+    sub = data.get("subscription") or {}
+    if not sub.get("endpoint"):
+        raise HTTPException(400, "Suscripción inválida")
+    await global_db.push_subscriptions.update_one(
+        {"endpoint": sub["endpoint"]},
+        {"$set": {
+            "endpoint": sub["endpoint"],
+            "subscription": sub,
+            "user_id": user.get("sub"),
+            "org_id": user.get("org_id"),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api_router.post("/push/unsubscribe")
+async def push_unsubscribe(data: dict, user: dict = Depends(require_admin)):
+    ep = (data.get("endpoint") or "").strip()
+    if ep:
+        await global_db.push_subscriptions.delete_one({"endpoint": ep})
+    return {"ok": True}
+
+
+def _do_webpush(sub, payload_json):
+    _webpush(subscription_info=sub, data=payload_json,
+             vapid_private_key=VAPID_PRIVATE_KEY,
+             vapid_claims={"sub": VAPID_SUBJECT}, timeout=10)
+
+
+async def send_web_push_to_users(user_ids: list, title: str, body: str, url: str = "/panel"):
+    """Envía push a los dispositivos de esos usuarios. Fire-and-forget: tolera
+    fallos y borra las suscripciones caducadas (404/410). No bloquea el event loop."""
+    if not (_push_enabled and user_ids):
+        return
+    try:
+        subs = await global_db.push_subscriptions.find(
+            {"user_id": {"$in": list(set(user_ids))}}, {"_id": 0}
+        ).to_list(1000)
+    except Exception:
+        return
+    if not subs:
+        return
+    payload = json.dumps({"title": (title or "")[:80], "body": (body or "")[:180], "url": url})
+    loop = asyncio.get_running_loop()
+    for s in subs:
+        sub = s.get("subscription")
+        if not sub:
+            continue
+        try:
+            await loop.run_in_executor(_executor, _do_webpush, sub, payload)
+        except _WebPushException as e:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code in (404, 410):
+                await global_db.push_subscriptions.delete_one({"endpoint": s.get("endpoint")})
+            else:
+                logger.debug(f"web push {code}")
+        except Exception as ex:
+            logger.debug(f"web push error: {ex}")
+
+
+async def _push_org_id() -> Optional[str]:
+    """org_id de la organización del contexto actual (por su BD de tenant)."""
+    try:
+        org = await global_db.organizations.find_one(
+            {"db_name": _current_db_name.get()}, {"_id": 0, "id": 1})
+        return org.get("id") if org else None
+    except Exception:
+        return None
+
+
+async def _center_recipient_ids(org_id, center, exclude_id=None) -> list:
+    """IDs de admins de la org que pueden ver ese centro (destinatarios de push)."""
+    if not org_id:
+        return []
+    try:
+        users = await global_db.admin_users.find(
+            {"org_id": org_id}, {"_id": 0, "id": 1, "allowed_centers": 1}).to_list(500)
+    except Exception:
+        return []
+    out = []
+    for u in users:
+        if exclude_id and u.get("id") == exclude_id:
+            continue
+        ac = u.get("allowed_centers")
+        if ac is None or (center or "") in ac:
+            out.append(u.get("id"))
+    return out
+
+
+async def push_center_event(center, title, body, url, exclude_id=None):
+    """Resuelve destinatarios del centro y lanza el push en segundo plano."""
+    if not _push_enabled:
+        return
+    try:
+        org_id = await _push_org_id()
+        ids = await _center_recipient_ids(org_id, center, exclude_id=exclude_id)
+        if ids:
+            asyncio.create_task(send_web_push_to_users(ids, title, body, url))
+    except Exception as e:
+        logger.debug(f"push_center_event: {e}")
+
+
 @api_router.get("/chat/{center}")
 async def chat_get(center: str, since: Optional[str] = None,
                    limit: int = 100, user: dict = Depends(require_admin)):
@@ -6811,6 +6939,10 @@ async def chat_post(center: str, data: dict = Body(...), user: dict = Depends(re
     }
     await db.chat_messages.insert_one(doc)
     doc.pop("_id", None)  # insert_one añade _id (ObjectId) que FastAPI no serializa
+    # Push al móvil de los demás miembros del centro
+    await push_center_event(
+        center, f"💬 {doc['author_name']} · {center}", text,
+        url="/panel/chat", exclude_id=user.get("sub"))
     return {"ok": True, "message": doc}
 
 
@@ -7321,7 +7453,16 @@ def _severity_emoji(sev: str) -> str:
 
 async def send_telegram_damage_alert(plate, driver_name, analysis, photo_urls, inspection_id, center=None):
     """Envía a Telegram una alerta de daños con formato detallado: matrícula, conductor,
-    daños NUEVOS y enlaces a las fotos."""
+    daños NUEVOS y enlaces a las fotos. Además dispara push a los coordinadores del centro."""
+    # Push al móvil (independiente de Telegram: aunque Telegram no esté configurado)
+    try:
+        _sev = (getattr(analysis, "severity", None)
+                or (analysis.get("severity") if isinstance(analysis, dict) else "") or "")
+        await push_center_event(
+            center or "", f"🚨 Daño {_sev} · {center or ''}".strip(),
+            f"{plate}: nueva inspección con daño, revísala", url="/panel/revision")
+    except Exception as _pe:
+        logger.debug(f"push daño: {_pe}")
     try:
         config = await db.telegram_config.find_one({}, {"_id": 0})
         if not config or not config.get("enabled") or not config.get("bot_token"):
@@ -7976,6 +8117,17 @@ async def create_incident(data: IncidentCreate, user: dict = Depends(require_any
     doc = serialize_doc(incident.model_dump())
     await db.incidents.insert_one(doc)
     logger.info(f"Incidencia creada: {incident.id} — vehículo {incident.vehicle_id}")
+    # Push a los coordinadores del centro de ese vehículo
+    try:
+        veh = await db.vehicles.find_one({"id": incident.vehicle_id}, {"_id": 0, "center": 1, "license_plate": 1})
+        _center = (veh or {}).get("center") or ""
+        _plate = (veh or {}).get("license_plate") or ""
+        await push_center_event(
+            _center, f"⚠️ Incidencia · {_center}".strip(),
+            f"{_plate}: {incident.title or incident.description[:60]}",
+            url="/panel/incidencias", exclude_id=user.get("sub"))
+    except Exception as _pe:
+        logger.debug(f"push incidencia: {_pe}")
     return serialize_doc(incident.model_dump())
 
 

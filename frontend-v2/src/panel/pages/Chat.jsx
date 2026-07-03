@@ -4,6 +4,7 @@ import { useT, LANG_LOCALE } from '../../i18n'
 import { Loader2, Send, MessageSquare, CheckSquare, Bell, BellOff } from 'lucide-react'
 import { getChat, postChat, chatToChecklist } from '../api'
 import { getAdmin, isSuperAdmin } from '../auth'
+import { pushSupported, isPushEnabled, enablePush, disablePush } from '../../lib/push'
 
 const POLL_MS = 7000
 
@@ -17,10 +18,15 @@ export default function Chat() {
   const [sending, setSending] = useState(false)
   const [text, setText] = useState('')
   const [err, setErr] = useState('')
-  const [notif, setNotif] = useState(() => localStorage.getItem('chat_notif') === '1')
+  const [notif, setNotif] = useState(false)          // ¿este dispositivo tiene push activo?
+  const [notifBusy, setNotifBusy] = useState(false)
+  const canPush = pushSupported()
   const lastIdRef = useRef(null)
   const bottomRef = useRef(null)
   const noCenter = center === 'Todos'
+
+  // Refleja el estado real de la suscripción push al abrir el chat
+  useEffect(() => { isPushEnabled().then(setNotif).catch(() => {}) }, [])
 
   function fmtTime(s) {
     if (!s) return ''
@@ -35,19 +41,13 @@ export default function Chat() {
       const r = await getChat(center)
       const arr = r.data?.messages || []
       setMsgs(arr)
-      if (notif && lastIdRef.current && arr.length > 0) {
-        const last = arr[arr.length - 1]
-        if (last.id !== lastIdRef.current && last.author_id !== me?.id) {
-          notifyDesktop(last)
-        }
-      }
       if (arr.length > 0) lastIdRef.current = arr[arr.length - 1].id
       setErr('')
     } catch (e) {
       setErr(e?.response?.data?.detail || 'Sin conexión')
     }
     setLoading(false)
-  }, [center, notif, me?.id, noCenter])
+  }, [center, noCenter])
 
   useEffect(() => { setMsgs([]); lastIdRef.current = null; setLoading(true); load() }, [center, load])
   useEffect(() => {
@@ -73,19 +73,21 @@ export default function Chat() {
   }
 
   async function toggleNotif() {
-    if (!notif) {
-      try { if (Notification.permission !== 'granted') await Notification.requestPermission() } catch {}
-    }
-    const v = !notif
-    setNotif(v)
-    localStorage.setItem('chat_notif', v ? '1' : '0')
-  }
-
-  function notifyDesktop(msg) {
+    if (notifBusy) return
+    setNotifBusy(true); setErr('')
     try {
-      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
-      new Notification(`💬 ${msg.author_name} (${center})`, { body: msg.text.slice(0, 200), tag: msg.id })
-    } catch {}
+      if (notif) {
+        await disablePush()
+        setNotif(false)
+      } else {
+        const r = await enablePush()
+        if (r === 'ok') setNotif(true)
+        else if (r === 'denied') setErr(t('push.denied'))
+        else if (r === 'unsupported') setErr(t('push.unsupported'))
+        else if (r === 'server-disabled') setErr(t('push.error'))
+        else setErr(t('push.error'))
+      }
+    } finally { setNotifBusy(false) }
   }
 
   async function pinToChecklist(m) {
@@ -117,10 +119,14 @@ export default function Chat() {
           <h1 className="flex items-center gap-2 text-xl font-bold"><MessageSquare size={20} /> {t('chat.title')} · {center}</h1>
           <p className="text-xs text-dark-500">{t('chat.visibility').replace('{center}', center)}</p>
         </div>
-        <button onClick={toggleNotif} className={`btn-ghost flex items-center gap-1.5 text-xs ${notif ? 'text-emerald-400' : 'text-dark-400'}`}>
-          {notif ? <Bell size={14} /> : <BellOff size={14} />}
-          {notif ? t('chat.notif.on') : t('chat.notif.off')}
-        </button>
+        {canPush && (
+          <button onClick={toggleNotif} disabled={notifBusy}
+            title={t('push.hint')}
+            className={`btn-ghost flex items-center gap-1.5 text-xs disabled:opacity-50 ${notif ? 'text-emerald-400' : 'text-dark-400'}`}>
+            {notifBusy ? <Loader2 size={14} className="animate-spin" /> : notif ? <Bell size={14} /> : <BellOff size={14} />}
+            {notif ? t('chat.notif.on') : t('chat.notif.off')}
+          </button>
+        )}
       </div>
 
       {err && <div className="mb-2 rounded-lg bg-red-500/10 px-3 py-2 text-xs text-red-300">{err}</div>}
