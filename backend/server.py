@@ -7137,8 +7137,9 @@ logger.info(f"CORS allow_origins={cors_origins} credentials={use_credentials}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    # Cualquier preview deploy de Cloudflare Pages del proyecto flotadsp-v2 (<hash>.flotadsp-v2.pages.dev).
-    allow_origin_regex=r"https://([a-z0-9-]+\.)?flotadsp-v2\.pages\.dev",
+    # Cualquier preview deploy de Cloudflare Pages del proyecto flotadsp-v2
+    # (<hash>.flotadsp-v2.pages.dev) y el dev server local de Vite (verificación).
+    allow_origin_regex=r"https://([a-z0-9-]+\.)?flotadsp-v2\.pages\.dev|http://localhost:517[0-9]",
     allow_credentials=use_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
