@@ -43,6 +43,7 @@ export const registerMaintenanceChange = (id, kind, body) => api.post(`/vehicles
 export const getVehicleDocuments = (id) => api.get(`/vehicles/${id}/documents`)
 export const uploadVehicleDocument = (id, formData) => api.post(`/vehicles/${id}/documents`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const deleteVehicleDocument = (vehicleId, docId) => api.delete(`/vehicles/${vehicleId}/documents/${docId}`)
+export const deleteVehicle = (vehicleId) => api.delete(`/vehicles/${vehicleId}`)
 
 /* ── Conductores ── */
 export const getDrivers = (center) => api.get('/drivers', { params: centerParam(center) })

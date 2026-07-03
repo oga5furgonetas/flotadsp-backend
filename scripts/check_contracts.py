@@ -64,7 +64,7 @@ def main() -> int:
     # La ficha del vehículo edita estos campos vía PATCH (whitelist)
     require(
         {"status", "mileage", "center", "color", "fuel_type", "vehicle_type",
-         "itv_date", "renting_end_date", "provider", "vin"},
+         "itv_date", "renting_end_date", "provider", "vin", "license_plate"},
         veh_allowed, "_VEHICLE_ALLOWED (ficha vehículo)")
 
     # El formulario de conductor envía estos campos (alta y edición)
