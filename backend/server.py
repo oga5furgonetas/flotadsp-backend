@@ -5612,6 +5612,21 @@ async def start_analysis_recovery():
     """Auto-recuperación de análisis perdidos: si el servidor se reinicia a mitad
     de un análisis (queda 'pending' colgado) o Gemini falló, se reintenta solo.
     Máximo 3 reintentos automáticos por inspección, 5 por ciclo, cada 10 min."""
+    # Al arrancar, dar OTRA ronda de reintentos a las fallidas recientes: si el
+    # reinicio viene de arreglar la config de Gemini (billing/clave caída), las
+    # que agotaron sus 3 intentos contra un Gemini roto deben curarse solas.
+    try:
+        _reset = await db.inspections.update_many(
+            {"analysis_status": {"$in": ["error", "gemini_failed", "gemini_timeout"]},
+             "deleted": {"$ne": True}, "auto_retries": {"$gte": 3},
+             "created_at": {"$gt": (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()}},
+            {"$set": {"auto_retries": 0}},
+        )
+        if _reset.modified_count:
+            logger.info(f"Auto-recuperación: {_reset.modified_count} inspecciones fallidas reencoladas tras reinicio")
+    except Exception as _rr:
+        logger.warning(f"Reset de reintentos al arrancar: {_rr}")
+
     async def _recovery_loop():
         await asyncio.sleep(60)  # dejar arrancar el servidor con calma
         while True:
