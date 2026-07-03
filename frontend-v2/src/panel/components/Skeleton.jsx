@@ -1,7 +1,7 @@
 /* Skeletons de carga — sensación de velocidad y estructura antes de tener datos. */
 
 export function Skeleton({ className = '' }) {
-  return <div className={`animate-pulse rounded-lg bg-dark-800/80 ${className}`} />
+  return <div className={`shimmer rounded-lg ${className}`} />
 }
 
 /* Grid de KPIs + tabla: el patrón de la mayoría de páginas del panel */

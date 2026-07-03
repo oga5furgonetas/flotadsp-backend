@@ -35,6 +35,10 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   Rutas lazy en `main.jsx` (code-splitting: no añadir imports eager de páginas).
 - **IA que aprende**: ✓/✗/corrección/daño-no-visto de Revisión Rápida → `ai_feedback` →
   `ai_learning.py` inyecta ejemplos few-shot + patrones agregados en los prompts de Gemini.
+- **Monetización** (bloque MONETIZACIÓN al final de server.py, colecciones en `global_db`):
+  oferta fundador en /planes (10 plazas reales, `founder_reservations`, avisa por Telegram)
+  y ofertas patrocinadas del portal conductor (`driver_offers`, views/clicks; sin ofertas
+  activas sirve auto-promo de referidos). Gestión super-admin en el panel de Negocio.
 
 ## Gotchas (bugs reales ya sufridos — no repetir)
 

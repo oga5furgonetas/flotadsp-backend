@@ -5,6 +5,8 @@ export default {
     extend: {
       colors: {
         brand: {
+          200: '#fed7aa',
+          300: '#fdba74',
           400: '#fb923c',
           500: '#f97316',
           600: '#ea6800',
@@ -24,16 +26,22 @@ export default {
         },
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        sans: ['Inter Variable', 'Inter', 'system-ui', 'sans-serif'],
+        display: ['Space Grotesk Variable', 'Inter Variable', 'system-ui', 'sans-serif'],
       },
       keyframes: {
         fadeIn: {
           from: { opacity: '0', transform: 'translateY(8px)' },
           to: { opacity: '1', transform: 'translateY(0)' },
         },
+        shimmer: {
+          from: { backgroundPosition: '200% 0' },
+          to: { backgroundPosition: '-200% 0' },
+        },
       },
       animation: {
         fadeIn: 'fadeIn 0.25s ease-out both',
+        shimmer: 'shimmer 1.8s linear infinite',
       },
     },
   },

@@ -13,7 +13,7 @@ import {
   FileCheck, FileBadge, FileImage, File, Plus,
 } from 'lucide-react'
 import {
-  getVehicles, getLastInspections, getVehicleDriver, getVehicleInspections, updateVehicle, createIncident, getIncidents,
+  getVehicles, getLastInspections, getVehicleDriver, getVehicleInspections, updateVehicle, deleteVehicle, createIncident, getIncidents,
   getVehicleMaintenance, registerOilChange, registerMaintenanceChange,
   getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument, createVehicle,
 } from '../api'
@@ -288,6 +288,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
   const [toast, setToast] = useState(null)
   const [qrDataUrl, setQrDataUrl] = useState(null)
   const [qrOpen, setQrOpen] = useState(false)
+  const [confirmDel, setConfirmDel] = useState(false)
   const [tallerModal, setTallerModal] = useState(null) // holds target status while modal open
   const [vehicleIncidents, setVehicleIncidents] = useState(null)
   const [maintenance, setMaintenance] = useState(null)
@@ -606,6 +607,14 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                     </div>
                   </div>
                 </div>
+                <EditableField label="Matrícula" icon={<Hash size={13} />}
+                  value={vehicle.license_plate} mono
+                  onSave={v => {
+                    const p = v.trim().toUpperCase()
+                    if (!p) { showToast('La matrícula no puede quedar vacía', false); return }
+                    patch({ license_plate: p })
+                  }}
+                />
                 <EditableField label="Kilómetros" icon={<Gauge size={13} />}
                   value={String(vehicle.mileage ?? '')} type="number"
                   onSave={v => patch({ mileage: Number(v) })}
@@ -635,14 +644,16 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                   onSave={v => patch({ renting_end_date: v })}
                 />
                 <div className="col-span-2">
-                  <ReadField label="VIN / Bastidor" icon={<Hash size={13} />}>
-                    <span className="font-mono text-xs tracking-wider text-blue-300">{vehicle.vin || <span className="text-dark-600">—</span>}</span>
-                  </ReadField>
+                  <EditableField label="VIN / Bastidor" icon={<Hash size={13} />}
+                    value={vehicle.vin} mono
+                    onSave={v => patch({ vin: v.trim().toUpperCase() })}
+                  />
                 </div>
                 <div className="col-span-2">
-                  <ReadField label="Proveedor" icon={<Building2 size={13} />}>
-                    {vehicle.provider}
-                  </ReadField>
+                  <EditableField label="Proveedor" icon={<Building2 size={13} />}
+                    value={vehicle.provider}
+                    onSave={v => patch({ provider: v.trim() })}
+                  />
                 </div>
               </div>
             </Section>
@@ -770,6 +781,40 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                 )}
               </div>
             </Section>
+
+            {/* Zona de peligro: eliminar furgoneta (borrado suave, doble confirmación) */}
+            <div className="mx-3 mb-4 mt-2 rounded-xl border border-red-500/15 bg-red-500/[0.03] p-3">
+              {confirmDel ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-red-300">
+                    ¿Eliminar <b className="font-mono">{vehicle.license_plate}</b>? Desaparecerá de todas las listas (el historial se conserva).
+                  </span>
+                  <div className="flex gap-2">
+                    <button
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true)
+                        try {
+                          await deleteVehicle(vehicle.id)
+                          onSaved?.()
+                          onClose()
+                        } catch { showToast('No se pudo eliminar', false); setBusy(false) }
+                      }}
+                      className="rounded-lg bg-red-500/90 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-red-500 disabled:opacity-50"
+                    >
+                      {busy ? 'Eliminando…' : 'Sí, eliminar'}
+                    </button>
+                    <button onClick={() => setConfirmDel(false)} className="rounded-lg border border-dark-600 px-3 py-1.5 text-xs text-dark-300 hover:text-white transition">
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button onClick={() => setConfirmDel(true)} className="flex items-center gap-1.5 text-xs font-semibold text-red-400/70 transition hover:text-red-400">
+                  <Trash2 size={12} /> Eliminar esta furgoneta
+                </button>
+              )}
+            </div>
 
             <div className="h-4" />
             </> /* fin tab info */}

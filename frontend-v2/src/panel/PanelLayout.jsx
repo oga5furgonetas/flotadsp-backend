@@ -170,22 +170,22 @@ export default function PanelLayout() {
   return (
     <div className="flex min-h-screen bg-dark-950 text-dark-50">
       {/* Sidebar */}
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-dark-800 bg-dark-900 md:flex">
-        <div className="flex items-center gap-2 px-5 py-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-400 to-brand-600">
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-dark-800/80 bg-gradient-to-b from-dark-900 to-dark-950 md:flex">
+        <div className="flex items-center gap-2.5 px-5 py-4">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 shadow-lg shadow-brand-500/30">
             <Zap size={18} className="text-white" />
           </div>
-          <b className="text-base">FlotaDSP</b>
+          <b className="font-display text-base font-bold tracking-tight">FlotaDSP</b>
         </div>
 
         {/* Pestañas Operacional / Furgonetas */}
-        <div className="mx-3 mb-2 grid grid-cols-3 gap-1 rounded-lg bg-dark-800/60 p-1">
+        <div className="mx-3 mb-2 grid grid-cols-3 gap-1 rounded-lg bg-dark-950/60 p-1 ring-1 ring-white/5">
           {Object.entries(TABS).map(([k, v]) => (
             <button
               key={k}
               onClick={() => setTab(k)}
-              className={`rounded-md px-2 py-1.5 text-xs font-semibold transition-colors ${
-                tab === k ? 'bg-brand-500/20 text-brand-300' : 'text-dark-400 hover:text-dark-200'
+              className={`rounded-md px-2 py-1.5 text-xs font-semibold transition-all duration-200 ${
+                tab === k ? 'bg-dark-700/80 text-white shadow-sm shadow-black/30' : 'text-dark-400 hover:text-dark-200'
               }`}
             >
               {v.label}
@@ -199,11 +199,7 @@ export default function PanelLayout() {
               key={it.to}
               to={it.to}
               end={it.end}
-              className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
-                  isActive ? 'bg-brand-500/15 text-brand-300' : 'text-dark-300 hover:bg-dark-800 hover:text-dark-100'
-                }`
-              }
+              className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}
             >
               <it.icon size={16} />
               {it.label}
@@ -212,11 +208,7 @@ export default function PanelLayout() {
           {showAdmin && (
             <NavLink
               to="/panel/admin"
-              className={({ isActive }) =>
-                `mt-1 flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
-                  isActive ? 'bg-brand-500/15 text-brand-300' : 'text-dark-300 hover:bg-dark-800 hover:text-dark-100'
-                }`
-              }
+              className={({ isActive }) => `nav-item mt-1 ${isActive ? 'nav-item-active' : ''}`}
             >
               <Shield size={16} /> {t('nav.business')}
             </NavLink>
@@ -224,11 +216,7 @@ export default function PanelLayout() {
           {(showAdmin || cm) && (
             <NavLink
               to="/panel/usuarios"
-              className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
-                  isActive ? 'bg-brand-500/15 text-brand-300' : 'text-dark-300 hover:bg-dark-800 hover:text-dark-100'
-                }`
-              }
+              className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}
             >
               <Users size={16} /> {t('nav.users')}
             </NavLink>
@@ -236,11 +224,7 @@ export default function PanelLayout() {
           {showAdmin && (
             <NavLink
               to="/panel/bandeja"
-              className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-colors ${
-                  isActive ? 'bg-brand-500/15 text-brand-300' : 'text-dark-300 hover:bg-dark-800 hover:text-dark-100'
-                }`
-              }
+              className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}
             >
               <Inbox size={16} /> {t('nav.inbox')}
             </NavLink>
@@ -290,7 +274,7 @@ export default function PanelLayout() {
           </div>
         )}
         <TrialBanner />
-        <header className="flex items-center justify-between gap-3 border-b border-dark-800 bg-dark-900/60 px-4 py-2.5">
+        <header className="glass flex items-center justify-between gap-3 border-b px-4 py-2.5">
           {/* selector de pestaña en móvil (sin sidebar) */}
           <div className="flex items-center gap-2 md:hidden">
             <select className="select w-auto py-1.5 text-sm" value={tab} onChange={(e) => setTab(e.target.value)}>

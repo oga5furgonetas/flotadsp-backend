@@ -234,7 +234,7 @@ function PasteModal({ drivers, vehicles, onApply, onClose }) {
 }
 
 /* ── Assignment row ── */
-function SlotRow({ slot, vehicles, drivers, usedV, usedD, onChange, onDelete, inspection }) {
+function SlotRow({ slot, vehicles, drivers, usedV, usedD, onChange, onDelete, inspection, center }) {
   const { t } = useT()
   const hasIssue = !slot.vehicle_id || !slot.driver_id
   const hasPhotos = !!inspection
@@ -310,12 +310,31 @@ function SlotRow({ slot, vehicles, drivers, usedV, usedD, onChange, onDelete, in
             className={`select w-full text-sm ${!slot.driver_id ? 'text-amber-400' : hasPhotos ? 'text-emerald-200' : ''}`}
           >
             <option value="">{t('asgn.driver.ph')}</option>
-            {drivers.map(d => (
-              <option key={d.id} value={d.id} disabled={usedD.has(d.id) && d.id !== slot.driver_id}>
-                {d.name}
-              </option>
-            ))}
+            <optgroup label={t('asgn.drv.center')}>
+              {drivers.filter(d => !d.center || d.center === center).map(d => (
+                <option key={d.id} value={d.id} disabled={usedD.has(d.id) && d.id !== slot.driver_id}>
+                  {d.name}
+                </option>
+              ))}
+            </optgroup>
+            {drivers.some(d => center && d.center && d.center !== center) && (
+              <optgroup label={t('asgn.drv.other')}>
+                {drivers.filter(d => center && d.center && d.center !== center).map(d => (
+                  <option key={d.id} value={d.id} disabled={usedD.has(d.id) && d.id !== slot.driver_id}>
+                    {d.name} — {d.center}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
+          {(() => {
+            const dObj = slot.driver_id ? drivers.find(x => x.id === slot.driver_id) : null
+            return dObj && center && dObj.center && dObj.center !== center ? (
+              <div className="mt-0.5 truncate px-0.5 text-[11px] font-semibold text-sky-400/80">
+                ⇄ {t('asgn.drv.loan')} · {dObj.center}
+              </div>
+            ) : null
+          })()}
           {slot.rawName && !slot._driverOk && (
             <div className="mt-0.5 truncate px-0.5 text-[11px] text-amber-400/70">⚠ {slot.rawName}</div>
           )}
@@ -377,7 +396,8 @@ export default function Asignacion() {
       const [da, vs, ds, insp] = await Promise.all([
         getDailyAssignment(center, date),
         getVehicles(center),
-        getDrivers(center),
+        // Todos los centros: a veces se usan conductores prestados de otra estación
+        getDrivers('Todos'),
         getInspections({ center, date_from: date, date_to: date, limit: 500 }).catch(() => ({ data: [] })),
       ])
       setVehicles(vs.data || [])
@@ -635,6 +655,7 @@ export default function Asignacion() {
                 drivers={drivers}
                 usedV={usedV}
                 usedD={usedD}
+                center={center}
                 onChange={patch => updateSlot(i, patch)}
                 onDelete={() => deleteSlot(i)}
                 inspection={slots[i].vehicle_id ? inspMap[slots[i].vehicle_id] : null}

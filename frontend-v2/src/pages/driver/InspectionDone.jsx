@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { AlertTriangle, Check, CheckCircle2, FileSignature, Loader2, LogOut, Plus, ShieldCheck } from 'lucide-react'
-import { signInspection } from '../../services/api'
+import { useEffect, useState } from 'react'
+import { AlertTriangle, Check, CheckCircle2, ExternalLink, FileSignature, Loader2, LogOut, Plus, ShieldCheck } from 'lucide-react'
+import { signInspection, getDriverOffers, clickDriverOffer } from '../../services/api'
 
 const DECLARATION =
   'Confirmo que el estado del vehículo es como aparece en las fotos. Firmo electrónicamente con mi nombre a la fecha y hora actuales.'
@@ -17,6 +17,45 @@ function SeverityBadge({ severity }) {
     <span className={`inline-flex items-center rounded-full border px-3 py-0.5 text-xs font-bold uppercase tracking-wider ${cls}`}>
       {severity || '—'}
     </span>
+  )
+}
+
+/* ── Ofertas patrocinadas: se muestran cuando el conductor ya terminó su tarea
+   (momento de atención libre). El backend cuenta views/clicks para poder vender
+   el espacio con métricas reales; sin patrocinadores muestra la auto-promo. ── */
+function DriverOffers() {
+  const [offers, setOffers] = useState([])
+
+  useEffect(() => {
+    getDriverOffers().then(r => setOffers(r.data?.offers || [])).catch(() => {})
+  }, [])
+
+  if (!offers.length) return null
+
+  function open(o) {
+    clickDriverOffer(o.id).catch(() => {})
+    window.open(o.url, '_blank', 'noopener')
+  }
+
+  return (
+    <div className="mt-6 space-y-2">
+      {offers.map(o => (
+        <button
+          key={o.id}
+          onClick={() => open(o)}
+          className="card-hover flex w-full items-center gap-3 p-3.5 text-left"
+        >
+          <span className="text-2xl">{o.emoji || '🎁'}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-bold text-dark-100">{o.title}</span>
+            {o.description && <span className="mt-0.5 block text-xs leading-snug text-dark-400">{o.description}</span>}
+          </span>
+          <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-brand-400">
+            {o.cta || 'Ver'} <ExternalLink size={11} />
+          </span>
+        </button>
+      ))}
+    </div>
   )
 }
 
@@ -71,6 +110,7 @@ export default function InspectionDone({ result, onNew, onLogout }) {
               <LogOut size={15} /> Salir
             </button>
           </div>
+          <DriverOffers />
         </div>
       </div>
     )
@@ -108,6 +148,7 @@ export default function InspectionDone({ result, onNew, onLogout }) {
               <LogOut size={15} /> Salir
             </button>
           </div>
+          <DriverOffers />
         </div>
       </div>
     )

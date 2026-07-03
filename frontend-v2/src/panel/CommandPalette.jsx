@@ -120,9 +120,9 @@ export default function CommandPalette({ open, onClose, pages }) {
   const TYPE_LABEL = { page: t('cmdk.section.pages'), vehicle: t('cmdk.section.vehicles'), driver: t('cmdk.section.drivers') }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center bg-black/60 p-4 pt-[16vh] backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-[100] flex items-start justify-center bg-black/60 p-4 pt-[16vh] backdrop-blur-md" onClick={onClose}>
       <div
-        className="animate-fade-in w-full max-w-lg overflow-hidden rounded-2xl border border-dark-700 bg-dark-900 shadow-2xl shadow-black/60"
+        className="animate-pop w-full max-w-lg overflow-hidden rounded-2xl border border-dark-700 bg-gradient-to-b from-dark-900 to-dark-950 shadow-2xl shadow-black/60 ring-1 ring-white/5"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-3 border-b border-white/5 px-4">

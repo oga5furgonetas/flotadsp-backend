@@ -7269,8 +7269,9 @@ logger.info(f"CORS allow_origins={cors_origins} credentials={use_credentials}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    # Cualquier preview deploy de Cloudflare Pages del proyecto flotadsp-v2 (<hash>.flotadsp-v2.pages.dev).
-    allow_origin_regex=r"https://([a-z0-9-]+\.)?flotadsp-v2\.pages\.dev",
+    # Cualquier preview deploy de Cloudflare Pages del proyecto flotadsp-v2
+    # (<hash>.flotadsp-v2.pages.dev) y el dev server local de Vite (verificación).
+    allow_origin_regex=r"https://([a-z0-9-]+\.)?flotadsp-v2\.pages\.dev|http://localhost:517[0-9]",
     allow_credentials=use_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -15901,6 +15902,154 @@ async def delete_plantilla(plantilla_id: str, _=Depends(require_admin)):
     except Exception as _e:
         logger.warning(f"delete_plantilla R2 error: {_e}")
     await db.plantillas_diarias.delete_one({"id": plantilla_id})
+    return {"success": True}
+
+
+# =========================
+# MONETIZACIÓN — reservas de plaza fundador (página de planes) y ofertas
+# patrocinadas del portal conductor. Ambas viven en global_db (negocio de la
+# plataforma, no de un tenant) y notifican por Telegram al owner.
+# =========================
+
+FOUNDER_TOTAL_SLOTS = 10
+
+
+class FounderReserve(BaseModel):
+    name: str
+    email: str
+    phone: str = ""
+    fleet_size: str = ""
+
+
+@api_router.get("/founder/slots")
+async def founder_slots():
+    """Público: plazas fundador restantes. Contador real, no marketing falso."""
+    used = await global_db.founder_reservations.count_documents({})
+    return {"total": FOUNDER_TOTAL_SLOTS, "left": max(0, FOUNDER_TOTAL_SLOTS - used)}
+
+
+@api_router.post("/founder/reserve")
+async def founder_reserve(data: FounderReserve, request: Request):
+    """Público: reserva una plaza fundador sin pago. El owner cierra la venta
+    en persona (Telegram avisa al momento con los datos de contacto)."""
+    _rl_public_action(f"founder:{_rl_key_ip(request)}", max_count=3, window_s=3600,
+                      detail="Demasiadas reservas desde esta conexión")
+    name = data.name.strip()[:80]
+    email = data.email.strip().lower()[:120]
+    if not name or "@" not in email or "." not in email.split("@")[-1]:
+        raise HTTPException(400, "Nombre y email válidos son obligatorios")
+    if await global_db.founder_reservations.find_one({"email": email}):
+        return {"success": True, "already": True}
+    used = await global_db.founder_reservations.count_documents({})
+    if used >= FOUNDER_TOTAL_SLOTS:
+        raise HTTPException(409, "No quedan plazas fundador")
+    await global_db.founder_reservations.insert_one({
+        "id": str(uuid.uuid4()), "name": name, "email": email,
+        "phone": data.phone.strip()[:40], "fleet_size": data.fleet_size.strip()[:40],
+        "status": "pending", "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    await send_telegram_alert(
+        "💰 RESERVA FUNDADOR — llámale hoy",
+        f"👤 {name}\n📧 {email}\n📞 {data.phone or '—'}\n🚐 Flota: {data.fleet_size or '—'}\n"
+        f"Plazas restantes: {FOUNDER_TOTAL_SLOTS - used - 1}/{FOUNDER_TOTAL_SLOTS}",
+        severity="critico",
+    )
+    return {"success": True, "left": FOUNDER_TOTAL_SLOTS - used - 1}
+
+
+# Oferta por defecto del portal conductor mientras no haya patrocinadores:
+# bucle de crecimiento (el conductor recomienda FlotaDSP a su jefe).
+_DEFAULT_DRIVER_OFFER = {
+    "id": "ref-flotadsp",
+    "emoji": "🎁",
+    "title": "¿Conoces otro DSP que sufra con las furgonetas?",
+    "description": "Recomiéndale FlotaDSP: inspecciones con IA en 30 segundos, como las tuyas.",
+    "cta": "Ver cómo funciona",
+    "url": "https://flotadsp.com/?utm_source=driver-portal&utm_medium=referral",
+}
+
+
+class DriverOfferIn(BaseModel):
+    title: str
+    description: str = ""
+    cta: str = ""
+    url: str
+    emoji: str = "🎁"
+    active: bool = True
+
+
+@api_router.get("/driver-offers")
+async def list_driver_offers():
+    """Público (portal conductor): ofertas patrocinadas activas.
+    Cuenta impresiones para poder vender el espacio con métricas reales."""
+    docs = await global_db.driver_offers.find(
+        {"active": True}, {"_id": 0}).sort("created_at", -1).to_list(4)
+    if docs:
+        await global_db.driver_offers.update_many(
+            {"id": {"$in": [d["id"] for d in docs]}}, {"$inc": {"views": 1}})
+        return {"offers": docs}
+    return {"offers": [_DEFAULT_DRIVER_OFFER]}
+
+
+@api_router.post("/driver-offers/{offer_id}/click")
+async def click_driver_offer(offer_id: str, request: Request):
+    """Público: registra un clic en una oferta (métrica de venta del espacio)."""
+    _rl_public_action(f"offer:{_rl_key_ip(request)}", max_count=30, window_s=600)
+    await global_db.driver_offers.update_one(
+        {"id": offer_id[:64]},
+        {"$inc": {"clicks": 1},
+         "$setOnInsert": {"active": False, "title": "(clics de la oferta por defecto)"}},
+        upsert=True,
+    )
+    return {"success": True}
+
+
+@api_router.get("/admin/driver-offers")
+async def admin_list_driver_offers(_=Depends(require_superadmin)):
+    """Super-admin: todas las ofertas con sus métricas (views/clicks)."""
+    docs = await global_db.driver_offers.find({}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return {"offers": docs}
+
+
+@api_router.get("/admin/founder-reservations")
+async def admin_list_founder_reservations(_=Depends(require_superadmin)):
+    """Super-admin: reservas de plaza fundador (para cerrarlas por teléfono)."""
+    docs = await global_db.founder_reservations.find({}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return {"reservations": docs, "total_slots": FOUNDER_TOTAL_SLOTS}
+
+
+@api_router.post("/admin/driver-offers")
+async def admin_create_driver_offer(data: DriverOfferIn, _=Depends(require_superadmin)):
+    url = data.url.strip()
+    if not url.startswith("https://"):
+        raise HTTPException(400, "La URL de la oferta debe empezar por https://")
+    doc = {
+        "id": str(uuid.uuid4()), "title": data.title.strip()[:120],
+        "description": data.description.strip()[:240], "cta": data.cta.strip()[:60],
+        "url": url[:300], "emoji": data.emoji.strip()[:8] or "🎁",
+        "active": data.active, "views": 0, "clicks": 0,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await global_db.driver_offers.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return {"success": True, "offer": doc}
+
+
+@api_router.patch("/admin/driver-offers/{offer_id}")
+async def admin_toggle_driver_offer(offer_id: str, data: dict, _=Depends(require_superadmin)):
+    """Solo permite activar/desactivar (whitelist de 1 campo a propósito)."""
+    if "active" not in data:
+        raise HTTPException(400, "Falta el campo active")
+    r = await global_db.driver_offers.update_one(
+        {"id": offer_id}, {"$set": {"active": bool(data["active"])}})
+    if not r.matched_count:
+        raise HTTPException(404, "Oferta no encontrada")
+    return {"success": True}
+
+
+@api_router.delete("/admin/driver-offers/{offer_id}")
+async def admin_delete_driver_offer(offer_id: str, _=Depends(require_superadmin)):
+    await global_db.driver_offers.delete_one({"id": offer_id})
     return {"success": True}
 
 

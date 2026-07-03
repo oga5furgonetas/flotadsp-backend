@@ -388,7 +388,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── KPI row ── */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="stagger grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <KpiCard icon={Truck}    label={t('dash.flota.active')} value={active}               sub={fleetSub}                   accent="#0ea5e9" to="/panel/vehiculos" />
         <KpiCard icon={Wrench}   label={t('dash.workshop')}     value={inShop}               sub={workshopSub}                accent="#fb923c" to="/panel/talleres" />
         <KpiCard icon={Users}    label={t('nav.drivers')}        value={data.total_drivers}  sub={t('dash.drivers.sub')}      accent="#a78bfa" to="/panel/conductores" />

@@ -44,7 +44,7 @@ export default function Dashboard() {
   ]
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0b0d10', color: '#eef1f6', fontFamily: 'Inter,system-ui,sans-serif' }}>
+    <div style={{ minHeight: '100vh', background: '#0b0d10', color: '#eef1f6', fontFamily: 'Inter Variable,Inter,system-ui,sans-serif' }}>
       <header style={hdr}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={logo}>⚡</div><b>{me.name || 'FlotaDSP'}</b>
@@ -97,7 +97,7 @@ export default function Dashboard() {
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     {planOrder().map((p) => billCfg.checkout[p] ? (
                       <a key={p} href={`${billCfg.checkout[p]}?checkout[custom][org_id]=${orgId()}`}
-                        style={{ ...btnPrimary, background: p === (chosenPlan() || 'Pro') ? 'linear-gradient(135deg,#0ea5e9,#0369a1)' : 'rgba(255,255,255,.06)', border: p === (chosenPlan() || 'Pro') ? 'none' : '1px solid rgba(255,255,255,.12)' }}>
+                        style={{ ...btnPrimary, background: p === (chosenPlan() || 'Pro') ? 'linear-gradient(135deg,#fb923c,#ea6800)' : 'rgba(255,255,255,.06)', border: p === (chosenPlan() || 'Pro') ? 'none' : '1px solid rgba(255,255,255,.12)' }}>
                         {t('bill.sub')} {p} {PRICES[p] ? `· ${PRICES[p]}€` : ''}
                       </a>
                     ) : null)}
@@ -130,4 +130,4 @@ const card = { background: '#13161b', border: '1px solid rgba(255,255,255,.08)',
 const h2 = { fontSize: 15, margin: '0 0 8px', fontWeight: 800 }
 const selSm = { background: '#13161b', color: '#e7ebf2', border: '1px solid rgba(255,255,255,.12)', borderRadius: 9, padding: '6px 9px', fontSize: 13 }
 const btnGhost = { background: 'rgba(255,255,255,.06)', border: '1px solid rgba(255,255,255,.12)', color: '#eef1f6', borderRadius: 9, padding: '7px 13px', fontSize: 13, cursor: 'pointer', fontWeight: 600 }
-const btnPrimary = { background: 'linear-gradient(135deg,#0ea5e9,#0369a1)', border: 'none', color: '#fff', borderRadius: 10, padding: '10px 16px', fontSize: 13, cursor: 'pointer', fontWeight: 800 }
+const btnPrimary = { background: 'linear-gradient(135deg,#fb923c,#ea6800)', border: 'none', color: '#fff', borderRadius: 10, padding: '10px 16px', fontSize: 13, cursor: 'pointer', fontWeight: 800 }

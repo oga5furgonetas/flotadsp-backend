@@ -43,6 +43,7 @@ export const registerMaintenanceChange = (id, kind, body) => api.post(`/vehicles
 export const getVehicleDocuments = (id) => api.get(`/vehicles/${id}/documents`)
 export const uploadVehicleDocument = (id, formData) => api.post(`/vehicles/${id}/documents`, formData, { headers: { 'Content-Type': 'multipart/form-data' } })
 export const deleteVehicleDocument = (vehicleId, docId) => api.delete(`/vehicles/${vehicleId}/documents/${docId}`)
+export const deleteVehicle = (vehicleId) => api.delete(`/vehicles/${vehicleId}`)
 
 /* ── Conductores ── */
 export const getDrivers = (center) => api.get('/drivers', { params: centerParam(center) })
@@ -169,6 +170,12 @@ export const deleteOrg = (id) => api.delete(`/admin/org/${id}`)
 export const getLeads = () => api.get('/leads')
 export const getBillingConfig = () => api.get('/billing/config')
 export const backupNow = () => api.post('/admin/backup-now')
+/* Monetización: ofertas del portal conductor + reservas fundador */
+export const adminGetDriverOffers = () => api.get('/admin/driver-offers')
+export const adminCreateDriverOffer = (body) => api.post('/admin/driver-offers', body)
+export const adminToggleDriverOffer = (id, active) => api.patch(`/admin/driver-offers/${id}`, { active })
+export const adminDeleteDriverOffer = (id) => api.delete(`/admin/driver-offers/${id}`)
+export const adminGetFounderReservations = () => api.get('/admin/founder-reservations')
 
 /* ── Usuarios (RBAC) ── */
 export const getAdmins = () => api.get('/auth/admins')
