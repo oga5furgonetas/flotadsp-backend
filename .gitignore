@@ -4,3 +4,7 @@ __pycache__/
 node_modules/
 uploads/
 .wrangler/
+
+# Build del frontend: se regenera con `npm run build` antes de cada deploy.
+# NO versionarlo evita conflictos masivos al trabajar desde varios ordenadores.
+frontend-v2/dist/

@@ -54,7 +54,9 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    (instalado 2026-07; el alias `python` de la Store puede no funcionar en shells no interactivos).
    Validar backend antes de commitear: `python -m py_compile backend/server.py` +
    `python scripts/check_contracts.py`. server.py lleva BOM UTF-8 (leer con utf-8-sig).
-5. El repo versiona `frontend-v2/dist/` (build) a propósito, para paridad entre ordenadores.
+5. `frontend-v2/dist/` NO se versiona (está en .gitignore desde 2026-07). Es el build:
+   se regenera con `npm run build` antes de cada deploy. Antes se commiteaba y provocaba
+   conflictos masivos al trabajar desde dos ordenadores; ya no.
 
 ## Reglas de trabajo
 

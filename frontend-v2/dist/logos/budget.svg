@@ -1,5 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 80">
-  <rect width="240" height="80" fill="#E4002B"/>
-  <text x="120" y="52" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="36" fill="#fff" letter-spacing="1">Budget</text>
-  <rect x="20" y="60" width="200" height="4" fill="#fff" opacity="0.3"/>
-</svg>
