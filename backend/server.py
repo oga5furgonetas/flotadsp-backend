@@ -1675,6 +1675,24 @@ REGLAS CRÍTICAS:
 ✅ Si no puedes determinar el contorno exacto → usa el box_2d como base, pero irregular
 ✅ polygon_points y box_2d deben ser consistentes (box debe contener al polígono)
 
+=== QUÉ NO ES UN DAÑO (catálogo de falsos positivos — repásalo ante CADA marca) ===
+NUNCA reportes como daño:
+- REFLEJOS: árboles, farolas, edificios o cielo reflejados en la chapa — franjas oscuras
+  alargadas que siguen la curvatura del panel. PRUEBA FÍSICA OBLIGATORIA: un daño real
+  permanece en el MISMO punto del panel en TODAS las fotos donde ese panel aparece;
+  un reflejo cambia de posición o desaparece entre ángulos. Si el panel sale en 2+ fotos
+  y la marca solo existe en una → es reflejo/luz: NO lo reportes.
+- GOTAS DE AGUA y churretes de lluvia seca (patrón vertical repetido a lo largo del panel)
+- BARRO Y SUCIEDAD (aspecto mate superpuesto, sin deformación de chapa ni pérdida de pintura)
+- UNIONES DE CHAPA Y JUNTAS entre paneles (líneas rectas de fábrica, bordes perfectamente paralelos)
+- LÍNEAS DE DISEÑO y nervios de carrocería (pliegues simétricos de fábrica; si la misma
+  línea existe en el lado opuesto del vehículo, es diseño, no daño)
+- MOLDURAS, EMBELLECEDORES y protectores de plástico negro (son piezas, no daños)
+- PEGATINAS, LOGOS, ROTULACIÓN de empresa y restos de adhesivo
+- SOMBRAS proyectadas (barandillas, árboles, el propio fotógrafo)
+- MANCHAS de combustible/grasa junto al tapón
+Ante la duda entre cualquiera de estos y un daño real: confidence < 0.65 y márcalo sugerido.
+
 === SUCIEDAD ===
 "dirt_level": 0 (impecable) → 10 (barro total).
 dirt_level ≥ 6: sé CONSERVADOR. Barro, polvo, agua seca NO son daños. Solo reporta
@@ -1735,6 +1753,149 @@ REGLAS FINALES:
 - estimated_cost en euros, mercado español taller 2026 (sin pintura: 50-200€; con pintura: 200-800€; pieza nueva: 300-2000€)
 - SIEMPRE intenta leer detected_plate
 - NO dupliques daños por verlos en múltiples fotos"""
+
+
+# =========================
+# MOTOR IA v2 — ETAPA 0: ORIENTACIÓN VERIFICADA + COHERENCIA ESPACIAL
+# La confusión izquierda/derecha nacía de adivinar la orientación DENTRO de la
+# llamada gigante de análisis. Solución estructural: una llamada dedicada mono-
+# tarea clasifica la vista de cada foto, y un validador determinista en Python
+# hace cumplir esa geometría sobre los daños devueltos.
+# =========================
+
+_VIEW_LABELS = (
+    "frontal", "trasera", "lateral_izquierdo", "lateral_derecho",
+    "tres_cuartos_frontal_izquierdo", "tres_cuartos_frontal_derecho",
+    "tres_cuartos_trasero_izquierdo", "tres_cuartos_trasero_derecho",
+    "interior", "otra",
+)
+
+_ORIENTATION_PROMPT = """Tarea ÚNICA: clasificar qué vista de una furgoneta muestra cada foto.
+Usa PISTAS FÍSICAS verificables, no suposiciones:
+- Retrovisores: su lado indica el lado del vehículo
+- Manetas de puerta y riel de la puerta corredera
+- Matrícula delantera (con parabrisas/rejilla) vs trasera (con portón/pilotos)
+- Texto y logos: se leen del derecho en el lado correcto de la rotulación
+- Volante visible tras el cristal (España: volante a la IZQUIERDA del vehículo)
+- Tapón de combustible, tubo de escape, forma de los faros vs pilotos
+
+IZQUIERDA/DERECHA siempre desde el punto de vista del CONDUCTOR sentado dentro
+(NO del fotógrafo). Si dudas entre lateral puro y 3/4, elige la vista 3/4 del lado que corresponda.
+
+Responde SOLO JSON. El campo confidence es OBLIGATORIO y debe reflejar tu certeza real
+(ej: 0.95 si las pistas son inequívocas, 0.6 si dudas entre dos vistas — nunca 0):
+{"views":[{"photo":1,"view":"<etiqueta>","confidence":0.9,"clue":"pista física concreta usada"}]}
+Etiquetas válidas: frontal | trasera | lateral_izquierdo | lateral_derecho | tres_cuartos_frontal_izquierdo | tres_cuartos_frontal_derecho | tres_cuartos_trasero_izquierdo | tres_cuartos_trasero_derecho | interior | otra"""
+
+
+async def _classify_photo_orientations(client, genai_types, model_name, images_base64):
+    """ETAPA 0: clasificador de orientación dedicado (mono-tarea = fiable).
+    Devuelve {photo_index_1based: {"view", "confidence", "clue"}} o None si falla
+    (en cuyo caso el análisis continúa como antes — nunca bloquea)."""
+    try:
+        contents = [_ORIENTATION_PROMPT]
+        for i, img_b64 in enumerate(images_base64):
+            contents.append(genai_types.Part.from_bytes(
+                data=base64.b64decode(img_b64), mime_type="image/jpeg"))
+            contents.append(f"Imagen {i+1}")
+        cfg = genai_types.GenerateContentConfig(temperature=0.0, response_mime_type="application/json")
+        loop = asyncio.get_running_loop()
+        resp = await asyncio.wait_for(
+            loop.run_in_executor(_executor, lambda: client.models.generate_content(
+                model=model_name, contents=contents, config=cfg)),
+            timeout=45.0,
+        )
+        data = json.loads(_strip_markdown_json(resp.text or ""))
+        out = {}
+        for v in data.get("views", []):
+            try:
+                idx = int(v.get("photo", 0))
+                view = str(v.get("view", "")).strip()
+                if 1 <= idx <= len(images_base64) and view in _VIEW_LABELS:
+                    conf = float(v.get("confidence", 0) or 0)
+                    # Gemini a veces no rellena confidence (llega 0.0). Si eligió
+                    # una etiqueta válida, la clasificación en sí es la señal:
+                    # default 0.8 para que el validador de coherencia pueda actuar.
+                    if conf <= 0:
+                        conf = 0.8
+                    out[idx] = {"view": view,
+                                "confidence": conf,
+                                "clue": str(v.get("clue", ""))[:120]}
+            except Exception:
+                continue
+        if out:
+            logger.info("[Etapa0] Orientaciones: " + ", ".join(
+                f"img{i}={out[i]['view']}({out[i]['confidence']:.2f})" for i in sorted(out)))
+        return out or None
+    except Exception as e:
+        logger.warning(f"[Etapa0] Clasificador de orientación falló (se continúa sin restricciones): {e}")
+        return None
+
+
+def _swap_side_words(text: str, to_side: str) -> str:
+    """Corrige el lado en el nombre de una pieza (derecho→izquierdo o viceversa)."""
+    if to_side == "izq":
+        text = re.sub(r"derecha", "izquierda", text, flags=re.I)
+        text = re.sub(r"derecho", "izquierdo", text, flags=re.I)
+        text = re.sub(r"\bder\b\.?", "izq", text, flags=re.I)
+    else:
+        text = re.sub(r"izquierda", "derecha", text, flags=re.I)
+        text = re.sub(r"izquierdo", "derecho", text, flags=re.I)
+        text = re.sub(r"\bizq\b\.?", "der", text, flags=re.I)
+    return text
+
+
+def _enforce_spatial_coherence(damages: list, photo_views: dict) -> int:
+    """Validador determinista post-IA: la orientación VERIFICADA de la foto manda.
+    - Foto verificada como lado izquierdo → una pieza 'derecha' en esa foto es
+      imposible: se corrige el lado (y viceversa).
+    - location_hint se alinea con la vista verificada.
+    - Combos físicamente imposibles (capó en vista trasera pura, portón en
+      frontal pura) → el daño se degrada a 'sugerido' en vez de eliminarse
+      (el humano decide en Revisión Rápida; cero daños reales perdidos).
+    Solo actúa con confianza de orientación ≥ 0.75. Devuelve nº de correcciones."""
+    if not photo_views:
+        return 0
+    fixes = 0
+    hint_by_view = {"frontal": "frontal", "trasera": "trasera",
+                    "lateral_izquierdo": "lateral_izquierdo",
+                    "lateral_derecho": "lateral_derecho"}
+    for d in damages:
+        pv = photo_views.get(getattr(d, "photo_index", None) or -1)
+        if not pv or pv.get("confidence", 0) < 0.75:
+            continue
+        view = pv["view"]
+        side = "izq" if "izquierdo" in view else ("der" if "derecho" in view else None)
+        part_l = (d.part or "").lower()
+
+        # 1) El lado de la pieza no puede contradecir el lado verificado de la foto
+        if side == "izq" and "derech" in part_l:
+            d.part = _swap_side_words(d.part, "izq")
+            fixes += 1
+        elif side == "der" and "izquierd" in part_l:
+            d.part = _swap_side_words(d.part, "der")
+            fixes += 1
+
+        # 2) location_hint alineado con la vista verificada
+        if view in hint_by_view and d.location_hint and d.location_hint != hint_by_view[view]:
+            d.location_hint = hint_by_view[view]
+            fixes += 1
+        elif side and view.startswith("tres_cuartos"):
+            want = "lateral_izquierdo" if side == "izq" else "lateral_derecho"
+            if d.location_hint in ("lateral_izquierdo", "lateral_derecho") and d.location_hint != want:
+                d.location_hint = want
+                fixes += 1
+
+        # 3) Combos físicamente imposibles (solo vistas puras, conservador)
+        impossible = (
+            (view == "trasera" and any(w in part_l for w in ("capó", "capo", "parabrisas", "paragolpes delantero"))) or
+            (view == "frontal" and any(w in part_l for w in ("portón", "porton", "paragolpes trasero", "piloto tras", "luz trasera")))
+        )
+        if impossible and getattr(d, "confirmed", True):
+            d.confirmed = False
+            d.confidence = min(d.confidence or 0.5, 0.5)
+            fixes += 1
+    return fixes
 
 
 # =========================
@@ -1963,6 +2124,22 @@ async def analyze_images_with_gemini(
 
         logger.info(f"Enviando {len(images_base64)} imágenes a Gemini ({model_name}) [SDK google-genai]")
 
+        # ── ETAPA 0: orientación verificada por clasificador dedicado ──
+        # Si falla, photo_views=None y todo funciona exactamente como antes.
+        photo_views = await _classify_photo_orientations(client, genai_types, model_name, images_base64)
+        if photo_views:
+            _ori_lines = ["\n=== ORIENTACIÓN VERIFICADA DE CADA FOTO (Etapa 0 — clasificador dedicado) ==="]
+            for _idx in sorted(photo_views):
+                _pv = photo_views[_idx]
+                _ori_lines.append(
+                    f"Imagen {_idx}: {_pv['view'].upper()} (confianza {_pv['confidence']:.2f}; pista: {_pv['clue']})")
+            _ori_lines.append(
+                "REGLA DURA: el location_hint y el LADO de cada pieza dañada DEBEN ser coherentes con la "
+                "orientación verificada de la foto donde se reporta. En una foto LATERAL_IZQUIERDO solo "
+                "existen piezas del lado izquierdo; en LATERAL_DERECHO solo del derecho. Esta clasificación "
+                "tiene PRIORIDAD sobre la numeración probable de las fotos.")
+            contents.append("\n".join(_ori_lines))
+
         for i, img_b64 in enumerate(images_base64):
             img_data = base64.b64decode(img_b64)
             contents.append(genai_types.Part.from_bytes(data=img_data, mime_type="image/jpeg"))
@@ -2060,6 +2237,13 @@ async def analyze_images_with_gemini(
         # Si no vino new_damages pero hay damages marcados is_new, usarlos
         if not new_damages and damages:
             new_damages = [d for d in damages if getattr(d, "is_new", True)]
+
+        # ── COHERENCIA ESPACIAL (determinista): la orientación verificada manda ──
+        if photo_views:
+            _coh_fixes = (_enforce_spatial_coherence(damages, photo_views)
+                          + _enforce_spatial_coherence(new_damages, photo_views))
+            if _coh_fixes:
+                logger.info(f"[Coherencia] {_coh_fixes} correcciones lado/vista según orientación verificada")
 
         # De-duplicación: el mismo daño visto en varias fotos = 1 solo daño
         damages, dup_removed = _dedup_damages(damages)
@@ -5554,6 +5738,46 @@ async def missed_damage(inspection_id: str, data: dict, user: dict = Depends(get
     await db.ai_feedback.insert_one(sample)
     total = await db.ai_feedback.count_documents({})
     return {"success": True, "dataset_size": total}
+
+
+@api_router.get("/ai-dataset/export")
+async def ai_dataset_export(_=Depends(require_admin)):
+    """Exporta el dataset de feedback humano (✓/✗/corregido/no-visto) en formato
+    COCO-like: la materia prima para entrenar el detector propio (Fase 2) junto
+    a datasets públicos como CarDD. Coordenadas 0-1000 [ymin,xmin,ymax,xmax]."""
+    docs = await db.ai_feedback.find({}, {"_id": 0}).to_list(20000)
+    images: dict = {}
+    annotations = []
+    for i, f in enumerate(docs):
+        url = f.get("photo_url")
+        if not url:
+            continue
+        if url not in images:
+            images[url] = {"id": len(images) + 1, "file_name": url}
+        dmg = f.get("damage") or {}
+        annotations.append({
+            "id": i + 1,
+            "image_id": images[url]["id"],
+            "verdict": f.get("verdict"),          # correct | wrong (hard negative) | corrected | missed
+            "part": dmg.get("part"),
+            "severity": dmg.get("severity"),
+            "location_hint": dmg.get("location_hint"),
+            "box_2d": f.get("corrected_box") or dmg.get("box_2d"),
+            "polygon_points": f.get("corrected_polygon_points") or dmg.get("polygon_points"),
+            "inspection_id": f.get("inspection_id"),
+            "reviewed_by": f.get("reviewed_by"),
+            "created_at": f.get("created_at"),
+        })
+    by_verdict: dict = {}
+    for a in annotations:
+        by_verdict[a["verdict"]] = by_verdict.get(a["verdict"], 0) + 1
+    return {
+        "format": "flotadsp-coco-v1",
+        "coords": "0-1000, box_2d=[ymin,xmin,ymax,xmax], polygon=[[y,x],...]",
+        "counts": {"images": len(images), "annotations": len(annotations), "by_verdict": by_verdict},
+        "images": list(images.values()),
+        "annotations": annotations,
+    }
 
 
 @api_router.get("/ai-dataset/stats")
