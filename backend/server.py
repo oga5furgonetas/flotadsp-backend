@@ -786,6 +786,7 @@ async def _ensure_tenant_indexes(db_name: str):
     await tdb.inspections.create_index("first_phash")
     await tdb.inspections.create_index("fraud_score")
     await tdb.daily_assignments.create_index([("date", -1), ("center", 1)])
+    await tdb.vehicle_damage_ledger.create_index([("vehicle_id", 1), ("status", 1)])
     await tdb.alerts.create_index([("created_at", -1)])
     await tdb.alerts.create_index("read")
     await tdb.ai_feedback.create_index([("created_at", -1)])
@@ -1898,67 +1899,150 @@ def _enforce_spatial_coherence(damages: list, photo_views: dict) -> int:
     return fixes
 
 
-async def _apply_vehicle_memory(vehicle_id: str, analysis) -> None:
-    """AUTO-CORRECCIÓN CON VERDAD HUMANA PROPAGADA (nunca IA validando IA).
+async def _get_vehicle_ledger(vehicle_id: str, exclude_inspection_id: str = None) -> list:
+    """REGISTRO DE DAÑOS DEL VEHÍCULO (ledger): un daño se registra la primera
+    vez que se ve y NUNCA vuelve a contar como nuevo hasta que se repare.
 
-    Reutiliza los veredictos de Revisión Rápida de ESTE vehículo:
-    · Panel con daño ya validado ✓ por un humano → si reaparece como "nuevo"
-      con severidad igual o menor, se saca de new_damages (ya conocido: no
-      re-alerta ni re-penaliza). Si aparece MÁS grave que lo validado, sí
-      alerta (puede ser un golpe nuevo sobre el mismo panel).
-    · Panel donde un humano marcó ✗ (falso positivo) → una nueva detección
-      leve/moderada y no rotunda ahí se degrada a "sugerido" (sigue visible
-      en Revisión Rápida; el humano tiene la última palabra).
+    Backfill perezoso: si el vehículo aún no tiene ledger, se construye desde
+    su historial de inspecciones (6 meses) — así funciona desde el minuto uno
+    para toda la flota existente, sin migración global."""
+    entries = await db.vehicle_damage_ledger.find(
+        {"vehicle_id": vehicle_id, "status": "open"}, {"_id": 0}).to_list(200)
+    if entries:
+        return [e for e in entries if e.get("first_seen_inspection") != exclude_inspection_id]
 
-    IMPORTANTE: no escribe NADA en ai_feedback — el dataset solo crece con
-    veredictos humanos. Esto evita el colapso por auto-confirmación del
-    self-training clásico."""
+    # Backfill desde el historial (excluida la inspección en curso si reanaliza)
+    q = {"deleted": {"$ne": True}, "vehicle_id": vehicle_id,
+         "analysis_status": "ok", "analysis": {"$ne": None},
+         "created_at": {"$gte": (datetime.now(timezone.utc) - timedelta(days=180)).isoformat()}}
+    prior = await db.inspections.find(
+        q, {"_id": 0, "id": 1, "created_at": 1, "analysis.damages.part": 1,
+            "analysis.damages.severity": 1, "analysis.damages.confirmed": 1}
+    ).sort("created_at", 1).to_list(400)
+    panels: dict = {}
+    for insp in prior:
+        if insp.get("id") == exclude_inspection_id:
+            continue
+        for d in ((insp.get("analysis") or {}).get("damages") or []):
+            if not isinstance(d, dict) or d.get("confirmed") is False:
+                continue
+            p = _canon_panel(d.get("part") or "")
+            if not p:
+                continue
+            rank = _SEV_RANK.get(_norm_sev(d.get("severity")), 1)
+            e = panels.get(p)
+            if not e:
+                panels[p] = {"vehicle_id": vehicle_id, "panel": p, "part": d.get("part"),
+                             "severity": _norm_sev(d.get("severity")), "rank": rank,
+                             "status": "open", "source": "ai",
+                             "first_seen": (insp.get("created_at") or "")[:10],
+                             "first_seen_inspection": insp.get("id"),
+                             "updated_at": datetime.now(timezone.utc).isoformat()}
+            elif rank > e["rank"]:
+                e["rank"], e["severity"] = rank, _norm_sev(d.get("severity"))
+    if panels:
+        try:
+            await db.vehicle_damage_ledger.insert_many(list(panels.values()))
+        except Exception as _be:
+            logger.debug(f"ledger backfill {vehicle_id}: {_be}")
+    return list(panels.values())
+
+
+async def _known_damages_prompt(vehicle_id: str, exclude_inspection_id: str = None) -> str:
+    """Bloque textual para el prompt: los daños YA REGISTRADOS del vehículo.
+    Cierra el agujero de la comparación visual (si la foto de referencia no
+    muestra bien un panel, Gemini re-reportaba el daño viejo como nuevo)."""
+    try:
+        entries = await _get_vehicle_ledger(vehicle_id, exclude_inspection_id)
+        if not entries:
+            return ""
+        lines = ["\n=== DAÑOS YA REGISTRADOS DE ESTE VEHÍCULO (histórico del sistema) ==="]
+        for e in entries[:25]:
+            lines.append(f"- {e.get('part') or e.get('panel')}: severidad {e.get('severity')}, "
+                         f"registrado desde {e.get('first_seen')}")
+        lines.append(
+            "REGLA: estos daños YA EXISTEN y están documentados. Si los ves, inclúyelos en "
+            "damages[] con is_new=false, pero NUNCA en new_damages[] — salvo que veas en ese "
+            "panel un daño CLARAMENTE distinto o de severidad claramente mayor (otra zona del "
+            "panel, otro tipo de daño, tamaño mucho mayor).")
+        return "\n".join(lines)
+    except Exception as e:
+        logger.debug(f"known_damages_prompt: {e}")
+        return ""
+
+
+async def _apply_vehicle_memory(vehicle_id: str, analysis, inspection_id: str = None) -> None:
+    """MEMORIA DEL VEHÍCULO tras cada análisis. Tres garantías:
+
+    1) LEDGER: un daño en un panel ya registrado (misma severidad o menor)
+       sale de new_damages — no re-alerta, no re-cuenta en € ni en scoring.
+       Da igual que nadie lo haya validado aún: registrado una vez = conocido.
+    2) Un daño en un panel NUEVO (o claramente más grave) se queda como nuevo
+       Y se registra en el ledger → mañana ya no volverá a ser "nuevo".
+    3) ✗ humanos (falsos positivos previos): detección floja en ese panel se
+       degrada a sugerido (el humano decide en Revisión Rápida).
+
+    La reparación (repair_status=done) limpia el panel del ledger → un golpe
+    posterior ahí vuelve a contar como nuevo, que es lo justo para el scoring.
+    No escribe NADA en ai_feedback (el dataset solo crece con humanos)."""
     try:
         if not vehicle_id or not analysis or not getattr(analysis, "new_damages", None):
             return
-        fb = await db.ai_feedback.find(
-            {"vehicle_id": vehicle_id, "verdict": {"$in": ["correct", "wrong"]}},
-            {"_id": 0, "verdict": 1, "damage.part": 1, "damage.severity": 1}
-        ).to_list(500)
-        if not fb:
-            return
-        ok_panels: dict = {}   # panel → rango de severidad máximo validado ✓
-        bad_panels: set = set()
-        for f in fb:
-            dmg = f.get("damage") or {}
-            p = _canon_panel(dmg.get("part") or "")
-            if not p:
-                continue
-            if f["verdict"] == "correct":
-                rank = _SEV_RANK.get(_norm_sev(dmg.get("severity")), 1)
-                ok_panels[p] = max(ok_panels.get(p, 0), rank)
-            else:
-                bad_panels.add(p)
+        ledger = await _get_vehicle_ledger(vehicle_id, inspection_id)
+        known = {e["panel"]: e for e in ledger}
 
-        kept, moved, downgraded = [], 0, 0
+        bad_panels: set = set()
+        try:
+            fb = await db.ai_feedback.find(
+                {"vehicle_id": vehicle_id, "verdict": "wrong"},
+                {"_id": 0, "damage.part": 1}).to_list(300)
+            bad_panels = {_canon_panel((f.get("damage") or {}).get("part") or "") for f in fb}
+            bad_panels.discard("")
+        except Exception:
+            pass
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        kept, moved, downgraded, registered = [], 0, 0, 0
         for d in analysis.new_damages:
             p = _canon_panel(d.part or "")
             d_rank = _SEV_RANK.get(_norm_sev(d.severity), 1)
-            if p and p in ok_panels and d_rank <= ok_panels[p]:
-                # Ya validado por un humano con severidad >= a esta → conocido
+
+            if p and p in known and d_rank <= known[p]["rank"]:
+                # YA REGISTRADO → conocido, fuera de nuevos (sigue en damages[])
                 d.is_new = False
-                d.description = (d.description or "") + " · [panel con daño ya validado ✓ previamente]"
+                d.description = ((d.description or "") +
+                                 f" · [ya registrado desde {known[p].get('first_seen')}]")
                 moved += 1
-                continue  # fuera de new_damages (sigue en damages[])
+                continue
+
             if (p and p in bad_panels and getattr(d, "confirmed", True)
                     and (d.confidence or 0) < 0.85
                     and _norm_sev(d.severity) in ("leve", "moderado")):
                 d.confirmed = False
-                d.description = (d.description or "") + " · [patrón rechazado ✗ previamente en este panel — revisar]"
+                d.description = (d.description or "") + " · [patrón rechazado ✗ previamente — revisar]"
                 downgraded += 1
+
+            # Daño genuinamente nuevo (o escalada) → REGISTRAR en el ledger
+            if p and getattr(d, "confirmed", True):
+                await db.vehicle_damage_ledger.update_one(
+                    {"vehicle_id": vehicle_id, "panel": p, "status": "open"},
+                    {"$set": {"part": d.part, "severity": _norm_sev(d.severity),
+                              "rank": max(d_rank, known.get(p, {}).get("rank", 0)),
+                              "updated_at": now_iso},
+                     "$setOnInsert": {"vehicle_id": vehicle_id, "panel": p, "status": "open",
+                                      "source": "ai", "first_seen": now_iso[:10],
+                                      "first_seen_inspection": inspection_id or ""}},
+                    upsert=True)
+                registered += 1
             kept.append(d)
 
         if moved or downgraded:
             analysis.new_damages = kept
             if hasattr(analysis, "new_damages_count"):
                 analysis.new_damages_count = len(kept)
-            logger.info(f"[MemoriaVehículo] {vehicle_id}: {moved} ya conocidos fuera de nuevos, "
-                        f"{downgraded} degradados por ✗ humano previo")
+        if moved or downgraded or registered:
+            logger.info(f"[Ledger] {vehicle_id}: {moved} ya registrados fuera de nuevos, "
+                        f"{registered} registrados, {downgraded} degradados por ✗")
     except Exception as e:
         logger.debug(f"[MemoriaVehículo] {e}")
 
@@ -2106,6 +2190,7 @@ async def analyze_images_with_gemini(
     images_base64: List[str],
     reference_images_bytes: Optional[List[bytes]] = None,
     db=None,
+    known_damages_text: str = "",
 ) -> tuple[InspectionAnalysis, str, Optional[str]]:
     """
     Retorna (analysis, status, error_message).
@@ -2188,6 +2273,10 @@ async def analyze_images_with_gemini(
                 logger.debug(f"[Learning] Error cargando ejemplos generales: {_fse}")
 
         logger.info(f"Enviando {len(images_base64)} imágenes a Gemini ({model_name}) [SDK google-genai]")
+
+        # ── REGISTRO DE DAÑOS DEL VEHÍCULO: lo ya documentado no es "nuevo" ──
+        if known_damages_text:
+            contents.append(known_damages_text)
 
         # ── ETAPA 0: orientación verificada por clasificador dedicado ──
         # Si falla, photo_views=None y todo funciona exactamente como antes.
@@ -5755,6 +5844,32 @@ async def damage_feedback(inspection_id: str, data: dict, user: dict = Depends(g
         {"inspection_id": inspection_id, "scope": scope, "damage_index": damage_index},
         {"$set": sample}, upsert=True
     )
+
+    # ── Sincronizar el LEDGER del vehículo con el veredicto humano ──
+    try:
+        _p = _canon_panel(dmg.get("part") or "")
+        _vid = insp.get("vehicle_id")
+        if _p and _vid:
+            if verdict in ("correct", "corrected"):
+                # Confirmado por humano → entrada consolidada (fuente humana)
+                await db.vehicle_damage_ledger.update_one(
+                    {"vehicle_id": _vid, "panel": _p, "status": "open"},
+                    {"$set": {"part": dmg.get("part"), "source": "human",
+                              "severity": _norm_sev(dmg.get("severity")),
+                              "rank": _SEV_RANK.get(_norm_sev(dmg.get("severity")), 1),
+                              "updated_at": datetime.now(timezone.utc).isoformat()},
+                     "$setOnInsert": {"vehicle_id": _vid, "panel": _p, "status": "open",
+                                      "first_seen": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                                      "first_seen_inspection": inspection_id}},
+                    upsert=True)
+            elif verdict == "wrong":
+                # El humano dice que era un fantasma → fuera del ledger las
+                # entradas creadas por la IA en ese panel (las humanas quedan)
+                await db.vehicle_damage_ledger.delete_many(
+                    {"vehicle_id": _vid, "panel": _p, "status": "open", "source": "ai"})
+    except Exception as _le:
+        logger.debug(f"ledger feedback: {_le}")
+
     total = await db.ai_feedback.count_documents({})
     return {"success": True, "dataset_size": total}
 
@@ -6117,11 +6232,13 @@ async def reanalyze_inspection(inspection_id: str, silent: bool = False, _=Depen
         {"$set": {"analysis_status": "pending", "analysis_error": None}}
     )
 
+    _known_txt = await _known_damages_prompt(insp.get("vehicle_id"), exclude_inspection_id=inspection_id)
     analysis, analysis_status, analysis_error = await analyze_images_with_gemini(
-        photos_base64, ref_bytes_list if ref_bytes_list else None, db=db
+        photos_base64, ref_bytes_list if ref_bytes_list else None, db=db,
+        known_damages_text=_known_txt,
     )
     if analysis_status == "ok" and analysis:
-        await _apply_vehicle_memory(insp.get("vehicle_id"), analysis)
+        await _apply_vehicle_memory(insp.get("vehicle_id"), analysis, inspection_id=inspection_id)
 
     await db.inspections.update_one(
         {"id": inspection_id},
@@ -9039,6 +9156,17 @@ async def update_damage(
             current["repair_status"] = "assigned"
     if data.get("repair_status") == "done":
         current["completed_at"] = now_iso
+        # Reparado → el panel queda LIMPIO en el ledger: un golpe futuro ahí
+        # vuelve a contar como daño nuevo (lo justo para scoring y €).
+        try:
+            _p = _canon_panel(current.get("part") or "")
+            if _p:
+                await db.vehicle_damage_ledger.update_many(
+                    {"vehicle_id": insp.get("vehicle_id"), "panel": _p, "status": "open"},
+                    {"$set": {"status": "repaired", "repaired_at": now_iso}})
+                logger.info(f"[Ledger] panel '{_p}' de {insp.get('vehicle_id')} limpiado por reparación")
+        except Exception as _le:
+            logger.debug(f"ledger repair: {_le}")
 
     damages[damage_index] = current
 
@@ -10605,8 +10733,10 @@ async def _process_single_inspection(vehicle_id, driver_id, photo_urls, photos_b
     ref_photo_urls = last_insp.get("photos", [])[:4] if last_insp else []
     ref_bytes_list = await load_reference_images(ref_photo_urls) if ref_photo_urls else []
 
+    _known_txt = await _known_damages_prompt(vehicle_id)
     analysis, analysis_status, analysis_error = await analyze_images_with_gemini(
-        photos_base64, ref_bytes_list if ref_bytes_list else None, db=db
+        photos_base64, ref_bytes_list if ref_bytes_list else None, db=db,
+        known_damages_text=_known_txt,
     )
     if analysis_status == "ok" and analysis:
         await _apply_vehicle_memory(vehicle_id, analysis)
