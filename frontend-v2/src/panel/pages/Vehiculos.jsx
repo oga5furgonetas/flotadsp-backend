@@ -3,6 +3,7 @@ import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { useEscape } from '../../lib/useEscape'
 import { PageSkeleton } from '../components/Skeleton'
+import GuidedEmpty from '../components/GuidedEmpty'
 import QRCode from 'qrcode'
 import {
   Loader2, Search, Truck, X, Save, Download, QrCode,
@@ -822,6 +823,38 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
             {/* ══ TAB: INSPECCIONES ══ */}
             {activeTab === 'inspecciones' && (
               <div className="px-3 py-3">
+                {/* ── Línea de tiempo visual: la historia del vehículo de un vistazo.
+                     Oro para disputas con el renting: "entró sin daño el 12, salió con él el 13" ── */}
+                {insps?.length > 1 && (
+                  <div className="mb-4 overflow-x-auto pb-2">
+                    <div className="flex min-w-max items-end gap-1 px-1">
+                      {[...insps].reverse().slice(-30).map((tl) => {
+                        const s = tl.analysis?.severity || 'sin_analisis'
+                        const hasNew = (tl.analysis?.new_damages || []).length > 0
+                        const col = s === 'critico' || s === 'grave' ? 'bg-red-400'
+                          : s === 'moderado' ? 'bg-orange-400'
+                          : s === 'leve' ? 'bg-yellow-400'
+                          : s === 'sin_danos' ? 'bg-emerald-400' : 'bg-dark-600'
+                        return (
+                          <div key={tl.id} className="group relative flex flex-col items-center gap-1"
+                            title={`${(tl.created_at || '').slice(0, 10)} · ${s}${hasNew ? ' · DAÑO NUEVO' : ''}${tl.driver_name ? ' · ' + tl.driver_name : ''}`}>
+                            {tl.photos?.[0] ? (
+                              <img src={tl.photos[0]} alt="" loading="lazy"
+                                className={`h-9 w-9 rounded-md object-cover opacity-80 ring-2 transition group-hover:scale-125 group-hover:opacity-100 ${hasNew ? 'ring-red-500/70' : 'ring-transparent'}`} />
+                            ) : (
+                              <div className="h-9 w-9 rounded-md bg-dark-800" />
+                            )}
+                            <span className={`h-1.5 w-1.5 rounded-full ${col}`} />
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="mt-1 flex justify-between px-1 text-[9px] text-dark-600">
+                      <span>{(insps[insps.length - 1]?.created_at || '').slice(0, 10)}</span>
+                      <span>hoy · {insps.length} inspecciones</span>
+                    </div>
+                  </div>
+                )}
                 {!insps ? (
                   <div className="flex items-center gap-2 py-8 text-dark-500"><Loader2 size={14} className="animate-spin" /> Cargando…</div>
                 ) : insps.length === 0 ? (
@@ -1296,9 +1329,20 @@ export default function Vehiculos() {
       {!vehicles ? (
         <PageSkeleton kpis={4} rows={9} />
       ) : list.length === 0 ? (
-        <div className="card flex flex-col items-center gap-2 p-10 text-center text-dark-400">
-          <Truck size={28} /> {t('veh.empty')} {center !== 'Todos' && `en ${center}`}.
-        </div>
+        vehicles.length === 0 ? (
+          <GuidedEmpty
+            emoji="🚐"
+            title={t('empty.veh.title')}
+            hint={t('empty.veh.hint')}
+            actionLabel={`+ ${t('empty.veh.add')}`}
+            onAction={() => setAddOpen(true)}
+            secondary={{ to: '/panel/importaciones', label: t('empty.veh.import') }}
+          />
+        ) : (
+          <div className="card flex flex-col items-center gap-2 p-10 text-center text-dark-400">
+            <Truck size={28} /> {t('veh.empty')} {center !== 'Todos' && `en ${center}`}.
+          </div>
+        )
       ) : (
         <div className="card overflow-hidden">
           <div className="overflow-x-auto">

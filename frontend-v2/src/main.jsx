@@ -80,6 +80,7 @@ const DriverPortal = lazy(() => import('./pages/driver/DriverPortal'))
 const PanelLogin = lazy(() => import('./panel/PanelLogin'))
 const PanelLayout = lazy(() => import('./panel/PanelLayout'))
 const PanelDashboard = lazy(() => import('./panel/pages/Dashboard'))
+const PanelMiDia = lazy(() => import('./panel/pages/MiDia'))
 const PanelVehiculos = lazy(() => import('./panel/pages/Vehiculos'))
 const PanelRevision = lazy(() => import('./panel/pages/RevisionRapida'))
 const PanelNegocio = lazy(() => import('./panel/pages/Negocio'))
@@ -162,6 +163,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/panel" element={<PanelLayout />}>
                 {/* Operacional */}
                 <Route index element={<PanelDashboard />} />
+                <Route path="mi-dia" element={<PanelMiDia />} />
                 <Route path="scorecard" element={<PanelScorecard />} />
                 <Route path="conductores" element={<PanelConductores />} />
                 <Route path="turnos" element={<PanelTurnos />} />

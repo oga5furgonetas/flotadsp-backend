@@ -6,7 +6,7 @@ import {
   Loader2, Search, Plus, X, Pencil, Trash2, UserCheck,
   Phone, Mail, IdCard, Car, MapPin, FileText, Building2, Save, Camera,
   Trophy, TrendingUp, TrendingDown, Minus, Flame, BarChart2, ChevronDown, ChevronUp, AlertCircle,
-  Lock, LockOpen, Eye, EyeOff, ShieldCheck,
+  Lock, LockOpen, Eye, EyeOff, ShieldCheck, Share2,
 } from 'lucide-react'
 import { getDrivers, createDriver, updateDriver, deleteDriver, uploadDriverPhoto, getDriversScoring, getScoringLeaderboard, getDriverAccounts, setDriverPassword, deleteDriverAccount } from '../api'
 
@@ -314,6 +314,53 @@ function ScoringView({ center }) {
     </select>
   )
 
+  // Tarjeta PNG del podio para compartir en el grupo de WhatsApp del equipo.
+  // Marketing orgánico: la marca se pasea por los grupos cada lunes.
+  async function sharePodium() {
+    if (top3.length === 0) return
+    const c = document.createElement('canvas')
+    c.width = 1000; c.height = 1000
+    const x = c.getContext('2d')
+    const g = x.createLinearGradient(0, 0, 0, 1000)
+    g.addColorStop(0, '#0b0d10'); g.addColorStop(1, '#171b22')
+    x.fillStyle = g; x.fillRect(0, 0, 1000, 1000)
+    x.textAlign = 'center'
+    x.font = '900 58px Arial'; x.fillStyle = '#fb923c'
+    x.fillText('🏆 RANKING DEL MES', 500, 120)
+    x.font = '600 32px Arial'; x.fillStyle = '#8b94a3'
+    x.fillText(`${MONTHS_ES[month - 1]} ${year}${activeCtr ? ' · ' + activeCtr : ''}`, 500, 175)
+    const medals = ['🥇', '🥈', '🥉']
+    top3.forEach((d, i) => {
+      const y = 330 + i * 190
+      x.fillStyle = i === 0 ? 'rgba(251,146,60,.10)' : 'rgba(255,255,255,.04)'
+      x.fillRect(80, y - 95, 840, 155)
+      x.textAlign = 'left'
+      x.font = '700 64px Arial'; x.fillText(medals[i], 110, y)
+      x.fillStyle = '#eef1f6'; x.font = '800 46px Arial'
+      x.fillText((d.name || '—').slice(0, 18), 215, y - 12)
+      x.fillStyle = '#8b94a3'; x.font = '600 27px Arial'
+      x.fillText(`${d.inspections_count} inspecciones · 🔥 racha ${d.clean_streak || 0}`, 215, y + 32)
+      x.textAlign = 'right'; x.fillStyle = '#fb923c'; x.font = '900 72px Arial'
+      x.fillText(String(d.total), 895, y + 8)
+      x.textAlign = 'left'
+    })
+    x.textAlign = 'center'; x.fillStyle = '#64748b'; x.font = '600 27px Arial'
+    x.fillText('⚡ flotadsp.com — gestión de flotas DSP con IA', 500, 940)
+
+    const blob = await new Promise((r) => c.toBlob(r, 'image/png'))
+    const file = new File([blob], 'ranking-flotadsp.png', { type: 'image/png' })
+    try {
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Ranking del mes — FlotaDSP' })
+        return
+      }
+    } catch { /* usuario canceló el share: no descargar encima */ return }
+    const u = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = u; a.download = 'ranking-flotadsp.png'; a.click()
+    setTimeout(() => URL.revokeObjectURL(u), 5000)
+  }
+
   if (!data) return (
     <div className="flex items-center gap-2 py-16 text-dark-400 justify-center">
       <Loader2 size={18} className="animate-spin" /> {t('drv.ranking.loading')}
@@ -337,7 +384,14 @@ function ScoringView({ center }) {
             </span>
           )}
         </div>
-        {monthPicker}
+        <div className="flex items-center gap-2">
+          <button onClick={sharePodium} disabled={top3.length === 0}
+            className="btn-secondary flex items-center gap-1.5 px-2.5 py-1 text-xs disabled:opacity-40"
+            title="Genera una imagen del podio para compartir en WhatsApp">
+            <Share2 size={13} /> Compartir
+          </button>
+          {monthPicker}
+        </div>
       </div>
 
       {/* Tabs por centro (si hay varios) */}

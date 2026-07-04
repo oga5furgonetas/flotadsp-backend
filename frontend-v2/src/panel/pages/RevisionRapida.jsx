@@ -3,11 +3,12 @@ import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
   Loader2, CheckCircle2, Check, X, ChevronLeft, ChevronRight, User, Clock,
-  AlertTriangle, BrainCircuit, Pencil, Plus,
+  AlertTriangle, BrainCircuit, Pencil, Plus, FileText,
 } from 'lucide-react'
-import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback } from '../api'
+import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback, fetchAuthedBlob } from '../api'
 import PolygonEditor from '../components/PolygonEditor'
 import BboxEditor from '../components/BboxEditor'
+import CompareSlider from '../components/CompareSlider'
 
 const GOAL = 3000
 
@@ -40,6 +41,7 @@ export default function RevisionRapida() {
   const [box, setBox] = useState(null)      // {left,top,w,h} en % de la imagen
   const [drag, setDrag] = useState(null)    // punto inicial mientras se arrastra
   const [showAnnotated, setShowAnnotated] = useState(true)  // toggle: foto IA vs original
+  const [compareMode, setCompareMode] = useState(false)     // slider antes/después vs referencia
   const [partName, setPartName] = useState('')
   const [filterIA, setFilterIA] = useState(false)
   // Modal editor de polígono/bbox
@@ -109,6 +111,7 @@ export default function RevisionRapida() {
   function go(delta) {
     setPhotoIdx(0)
     setShowAnnotated(true)
+    setCompareMode(false)
     // max DESPUÉS de min: con cola vacía el resultado queda en 0, nunca -1
     setIdx((i) => Math.max(0, Math.min(i + delta, displayQueue.length - 1)))
     cancelDraw()
@@ -125,6 +128,21 @@ export default function RevisionRapida() {
       setErr(t('rev.save.verdict.error'))
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function downloadDamageReport(dmgIndex) {
+    // Parte de daño en PDF: un clic → documento listo para el renting/seguro
+    try {
+      const url = await fetchAuthedBlob(
+        `/inspections/${item.id}/damage-report?damage_index=${dmgIndex}&scope=${damageScope}`)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `parte-dano-${(item.vehicle_plate || item.license_plate || 'vehiculo').replace(/\s+/g, '')}.pdf`
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 5000)
+    } catch {
+      setErr(t('rev.pdf.error'))
     }
   }
 
@@ -257,17 +275,37 @@ export default function RevisionRapida() {
                   </div>
                 )}
 
+                {/* Comparador antes/después — cuando hay foto de referencia */}
+                {(() => {
+                  const refs = fullInsp?.reference_photos || []
+                  const refUrl = refs[photoIdx] || refs[0]
+                  return refUrl && !drawMode ? (
+                    <button
+                      onClick={() => setCompareMode((c) => !c)}
+                      className={`absolute left-2 top-2 z-10 rounded-lg border px-2.5 py-1.5 text-xs font-semibold shadow-lg transition ${
+                        compareMode ? 'border-emerald-500 bg-emerald-600 text-white' : 'border-dark-600 bg-dark-900/80 text-dark-300 hover:text-white'
+                      }`}
+                    >
+                      ⇄ {t('rev.compare')}
+                    </button>
+                  ) : null
+                })()}
+
                 <div className={`relative mx-auto ${drawMode ? 'cursor-crosshair select-none' : ''}`} style={{ maxWidth: 520 }}
                   onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}>
 
-                  {/* Foto: anotada (profesional) u original */}
-                  {showAnnotated && item.annotated_photos?.[photoIdx]
-                    ? <img src={item.annotated_photos[photoIdx]} alt="Análisis IA" className="block w-full" draggable={false} />
-                    : <img src={item.photos[photoIdx]} alt="" className="block w-full" draggable={false} />
+                  {/* Foto: comparador / anotada (profesional) / original */}
+                  {compareMode && (fullInsp?.reference_photos?.[photoIdx] || fullInsp?.reference_photos?.[0])
+                    ? <CompareSlider
+                        beforeUrl={fullInsp.reference_photos[photoIdx] || fullInsp.reference_photos[0]}
+                        afterUrl={item.photos[photoIdx]} />
+                    : showAnnotated && item.annotated_photos?.[photoIdx]
+                      ? <img src={item.annotated_photos[photoIdx]} alt="Análisis IA" className="block w-full" draggable={false} />
+                      : <img src={item.photos[photoIdx]} alt="" className="block w-full" draggable={false} />
                   }
 
                   {/* Cajas CSS solo en modo original (la foto anotada ya las lleva quemadas) */}
-                  {(!showAnnotated || !item.annotated_photos?.[photoIdx]) && damages.map((d, i) => {
+                  {!compareMode && (!showAnnotated || !item.annotated_photos?.[photoIdx]) && damages.map((d, i) => {
                     if (!Array.isArray(d.box_2d) || d.box_2d.length !== 4) return null
                     if (d.photo_index && d.photo_index - 1 !== photoIdx) return null
                     const [ymin, xmin, ymax, xmax] = d.box_2d
@@ -395,6 +433,11 @@ export default function RevisionRapida() {
                           }}
                           className={`flex h-8 w-8 items-center justify-center rounded-lg border ${v === 'corrected' ? 'border-amber-500 bg-amber-500/20 text-amber-300' : 'border-dark-700 text-dark-300 hover:bg-amber-500/10 hover:text-amber-300'} disabled:opacity-50`} title="Corregir zona">
                           <Pencil size={15} />
+                        </button>
+                        <button disabled={busy} onClick={() => downloadDamageReport(i)}
+                          className="flex h-8 w-8 items-center justify-center rounded-lg border border-dark-700 text-dark-300 hover:bg-brand-500/10 hover:text-brand-300 disabled:opacity-50"
+                          title="Parte de daño en PDF (para renting/seguro)">
+                          <FileText size={15} />
                         </button>
                       </div>
                     </div>

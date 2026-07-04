@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Trophy, Users, CalendarClock, BarChart3, Activity,
   CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
-  ChevronRight, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search,
+  ChevronRight, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken } from './auth'
 import TrialBanner from './TrialBanner'
@@ -30,6 +30,7 @@ const TABS_DEF = {
     labelKey: 'nav.tab.ops',
     items: [
       { to: '/panel', labelKey: 'nav.dashboard', icon: LayoutDashboard, end: true },
+      { to: '/panel/mi-dia', labelKey: 'nav.miDia', icon: Sun },
       { to: '/panel/scorecard', labelKey: 'nav.scorecard', icon: Trophy },
       { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
       { to: '/panel/actividad', labelKey: 'nav.activity', icon: Activity },
@@ -116,7 +117,7 @@ export default function PanelLayout() {
   const sa = isSuperAdmin()
   const cm = isCenterManager()
   const routeAllowed = (k) => {
-    if (k === 'perfil' || k === 'login' || k === 'portal-conductor' || k === 'checklist-operativo' || k === 'chat' || k === 'plantilla') return true
+    if (k === 'perfil' || k === 'login' || k === 'portal-conductor' || k === 'checklist-operativo' || k === 'chat' || k === 'plantilla' || k === 'mi-dia') return true
     if (k === 'admin' || k === 'bandeja') return sa
     if (k === 'usuarios') return sa || cm
     return canSee(k)
@@ -344,10 +345,31 @@ export default function PanelLayout() {
           ))}
         </div>
 
-        <main key={loc.pathname} className="animate-fade-in flex-1 overflow-y-auto p-4 md:p-5">
+        <main key={loc.pathname} className="animate-fade-in flex-1 overflow-y-auto p-4 pb-24 md:p-5 md:pb-5">
           <Outlet context={{ center, centers, admin }} />
         </main>
       </div>
+
+      {/* Barra de navegación inferior — solo móvil (sensación de app nativa) */}
+      <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-dark-800 bg-dark-900/95 backdrop-blur-md md:hidden"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+        {[
+          { to: '/panel', label: t('nav.dashboard'), icon: LayoutDashboard, end: true },
+          { to: '/panel/revision', label: t('nav.revision'), icon: CheckCircle2 },
+          { to: '/panel/asignacion', label: t('nav.assign'), icon: ClipboardCheck },
+          { to: '/panel/chat', label: t('nav.chat'), icon: BellRing },
+          { to: '/panel/vehiculos', label: t('nav.vehicles'), icon: Truck },
+        ].map((it) => (
+          <NavLink key={it.to} to={it.to} end={it.end}
+            className={({ isActive }) =>
+              `flex flex-1 flex-col items-center gap-0.5 py-2 text-[10px] font-semibold transition-colors ${
+                isActive ? 'text-brand-400' : 'text-dark-500'
+              }`}>
+            <it.icon size={19} />
+            <span className="max-w-full truncate px-1">{it.label}</span>
+          </NavLink>
+        ))}
+      </nav>
 
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} pages={palettePages} />
     </div>

@@ -28,14 +28,30 @@ jobs:
         run: node scripts/check-routes.mjs
 
   backend:
-    name: Backend (sintaxis + contratos)
+    name: Backend (sintaxis + contratos + tests de API)
     runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
       - name: Sintaxis (py_compile)
         run: python -m py_compile backend/server.py backend/ai_learning.py backend/damage_segmentation.py
       - name: Contratos modelo↔frontend (campos que se descartarían en silencio)
         run: python scripts/check_contracts.py
+      - name: Instalar dependencias
+        run: pip install -r backend/requirements.txt pytest pytest-asyncio
+      - name: Tests de API contra Mongo real (persistencia, auth, demo read-only)
+        env:
+          SECRET_KEY: test-secret-key-only-for-tests
+          MONGO_URL: mongodb://localhost:27017
+          DB_NAME: test_flotadsp
+          GLOBAL_DB_NAME: test_flotadsp_global
+        run: pytest backend/tests -q

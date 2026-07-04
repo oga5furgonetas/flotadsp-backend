@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle, Camera, Check, ChevronLeft, ChevronRight,
-  Gauge, Loader2, LogOut, Send, Truck, ArrowRight, Shield,
+  Gauge, Loader2, LogOut, Send, Truck, ArrowRight, Shield, Bell,
 } from 'lucide-react'
 import {
   getAssignedVehicle, readOdometer, updateMileage, uploadInspection, validatePhoto,
 } from '../../services/api'
 import { compressImage } from '../../lib/compressImage'
 import { useToast } from '../../lib/toast'
+import { pushSupported, isPushEnabled, enablePush } from '../../lib/push'
 
 const PHOTO_SLOTS = [
   { id: 'frontal',      label: 'Frontal',            icon: '⬆', required: true },
@@ -81,7 +82,23 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
   const [notes, setNotes] = useState('')
   const [sending, setSending] = useState(false)
   const [assigned, setAssigned] = useState(null)
+  const [pushOn, setPushOn] = useState(true)      // true de inicio = no mostrar botón hasta saber
+  const [pushBusy, setPushBusy] = useState(false)
   const fileRefs = useRef({})
+
+  // ¿Este móvil ya tiene los avisos activados?
+  useEffect(() => { isPushEnabled().then(setPushOn).catch(() => setPushOn(false)) }, [])
+
+  async function activateDriverPush() {
+    if (pushBusy) return
+    setPushBusy(true)
+    try {
+      const r = await enablePush()
+      if (r === 'ok') { setPushOn(true); toast.success('🔔 Avisos activados en este móvil') }
+      else if (r === 'denied') toast.error('Notificaciones bloqueadas: actívalas en ajustes del navegador')
+      else toast.error('No se pudieron activar los avisos')
+    } finally { setPushBusy(false) }
+  }
   const odoRef = useRef(null)
   const checklistRefs = useRef({})
 
@@ -248,6 +265,13 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                 <img src={driver.photo_url} className="h-6 w-6 rounded-full border border-brand-500/40 object-cover" alt="" />
                 <span className="text-xs font-medium text-dark-300">{driver.name}</span>
               </div>
+            )}
+            {pushSupported() && !pushOn && (
+              <button onClick={activateDriverPush} disabled={pushBusy}
+                className="mt-1 flex items-center gap-1.5 rounded-full border border-brand-500/30 bg-brand-500/10 px-2.5 py-1 text-[11px] font-semibold text-brand-300 disabled:opacity-50">
+                {pushBusy ? <Loader2 size={11} className="animate-spin" /> : <Bell size={11} />}
+                Activar avisos en este móvil
+              </button>
             )}
             {!driver.photo_url && (
               <p className="text-xs font-semibold text-dark-300">{driver.name}</p>

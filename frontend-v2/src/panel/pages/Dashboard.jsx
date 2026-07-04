@@ -9,6 +9,7 @@ import {
 import { getDashboardStats, getLastInspections, getItvAlerts, getVehicles, getDrivers, getDamageCosts } from '../api'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { PageSkeleton } from '../components/Skeleton'
+import GuidedEmpty from '../components/GuidedEmpty'
 
 /* ── helpers ── */
 function greeting(t) {
@@ -386,6 +387,18 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      {/* ── Onboarding: flota vacía → guiar el primer paso ── */}
+      {fleet === 0 && (
+        <GuidedEmpty
+          emoji="👋"
+          title={t('empty.dash.title')}
+          hint={t('empty.dash.hint')}
+          actionLabel={t('empty.veh.import')}
+          to="/panel/importaciones"
+          secondary={{ to: '/panel/vehiculos', label: t('empty.veh.add') }}
+        />
+      )}
 
       {/* ── KPI row ── */}
       <div className="stagger grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">

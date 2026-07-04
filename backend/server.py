@@ -3433,6 +3433,10 @@ async def register_dsp(data: RegisterRequest, request: Request):
       Si tienes alguna pregunta, escríbenos a <a href="mailto:hola@flotadsp.com" style="color:#0ea5e9">hola@flotadsp.com</a><br>
       Al finalizar la prueba, se cobra el plan elegido salvo cancelación.
     </p>
+    <p style="margin:12px 0 0;color:#475569;font-size:11px;text-align:center;line-height:1.5">
+      🇬🇧 Welcome to FlotaDSP! Your 14-day free trial is active — no card required.
+      Log in at flotadsp.com/panel with the username above. Questions? hola@flotadsp.com
+    </p>
   </div>
 </div>""",
                 },
@@ -3978,6 +3982,10 @@ async def forgot_password(data: dict, request: Request):
     </a>
     <p style="margin:0;color:#64748b;font-size:12px;text-align:center;line-height:1.6">
       Si no has pedido este cambio, ignora este email: tu contraseña seguirá siendo la misma.
+    </p>
+    <p style="margin:12px 0 0;color:#475569;font-size:11px;text-align:center;line-height:1.5">
+      🇬🇧 Reset your FlotaDSP password with the button above — the link expires in 1 hour.
+      If you didn't request this, just ignore this email.
     </p>
   </div>
 </div>"""
@@ -6784,6 +6792,130 @@ def _build_forensic_pdf(insp: dict, sig: dict, vehicle: dict, driver_name: str,
     return buf.getvalue()
 
 
+def _build_damage_report_pdf(insp: dict, vehicle: dict, driver_name: str,
+                             dmg: dict, annotated_photo: Optional[bytes]) -> bytes:
+    """Parte de daño individual (1-2 páginas): foto anotada + datos clave + hash.
+    Pensado para enviarse tal cual al renting o al seguro."""
+    import io as _io
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import (SimpleDocTemplate, Paragraph, Spacer, Image as RLImage,
+                                    Table, TableStyle)
+
+    buf = _io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, topMargin=16 * mm, bottomMargin=14 * mm,
+                            leftMargin=16 * mm, rightMargin=16 * mm,
+                            title="Parte de daño — FlotaDSP")
+    ss = getSampleStyleSheet()
+    h1 = ParagraphStyle("h1", parent=ss["Title"], fontSize=17, spaceAfter=2)
+    small = ParagraphStyle("small", parent=ss["Normal"], fontSize=8.5, textColor=colors.grey)
+    body = ParagraphStyle("body", parent=ss["Normal"], fontSize=10.5, leading=15)
+
+    sev = (dmg.get("severity") or "").capitalize()
+    fecha = (insp.get("created_at") or "")[:16].replace("T", " ")
+    story = [
+        Paragraph("PARTE DE DAÑO DE VEHÍCULO", h1),
+        Paragraph("Documento generado por FlotaDSP — registro fotográfico con sello temporal", small),
+        Spacer(1, 6 * mm),
+    ]
+
+    rows = [
+        ["Matrícula", vehicle.get("license_plate") or "—",
+         "Marca / Modelo", f"{vehicle.get('brand') or ''} {vehicle.get('model') or ''}".strip() or "—"],
+        ["Fecha de detección", fecha or "—", "Conductor asignado", driver_name or "—"],
+        ["Pieza afectada", dmg.get("part") or "—", "Severidad", sev or "—"],
+        ["Coste estimado reparación", f"{float(dmg.get('estimated_cost') or 0):,.0f} €".replace(",", "."),
+         "Centro", vehicle.get("center") or "—"],
+    ]
+    t = Table(rows, colWidths=[38 * mm, 52 * mm, 42 * mm, 46 * mm])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTNAME", (2, 0), (2, -1), "Helvetica-Bold"),
+        ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#555555")),
+        ("TEXTCOLOR", (2, 0), (2, -1), colors.HexColor("#555555")),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.4, colors.HexColor("#dddddd")),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story.append(t)
+    story.append(Spacer(1, 5 * mm))
+
+    if dmg.get("description"):
+        story.append(Paragraph(f"<b>Descripción técnica:</b> {dmg['description'][:600]}", body))
+        story.append(Spacer(1, 4 * mm))
+
+    if annotated_photo:
+        try:
+            from PIL import Image as PILImage
+            pil = PILImage.open(_io.BytesIO(annotated_photo))
+            iw, ih = pil.size
+            max_w = 178 * mm
+            max_h = 150 * mm
+            ratio = min(max_w / iw, max_h / ih)
+            story.append(RLImage(_io.BytesIO(annotated_photo), width=iw * ratio, height=ih * ratio))
+            story.append(Spacer(1, 2 * mm))
+            story.append(Paragraph("Fotografía original de la inspección con el daño señalizado automáticamente.", small))
+        except Exception as _ie:
+            logger.warning(f"parte PDF: imagen no embebible: {_ie}")
+
+    story.append(Spacer(1, 6 * mm))
+    fh = insp.get("forensic_hash") or ""
+    integrity = (f"Integridad: las fotos originales están selladas con hash SHA-256 ({fh[:24]}…) "
+                 f"en el momento de la subida." if fh else
+                 "Las fotos originales se conservan sin alteración en el sistema.")
+    story.append(Paragraph(
+        f"{integrity} Inspección {insp.get('id', '')} · Generado el "
+        f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} · flotadsp.com", small))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+@api_router.get("/inspections/{inspection_id}/damage-report")
+async def damage_report_pdf(inspection_id: str, damage_index: int, scope: str = "new",
+                            _=Depends(require_admin)):
+    """PARTE DE DAÑO EN UN CLIC: PDF de un daño concreto (foto anotada + datos +
+    coste + sello), listo para enviar al renting o al seguro."""
+    insp = await db.inspections.find_one({"id": inspection_id}, {"_id": 0})
+    if not insp:
+        raise HTTPException(status_code=404, detail="Inspección no encontrada")
+    analysis = insp.get("analysis") or {}
+    pool = analysis.get("new_damages" if scope == "new" else "damages") or []
+    if not (0 <= damage_index < len(pool)):
+        raise HTTPException(status_code=404, detail="Daño no encontrado")
+    dmg = pool[damage_index] if isinstance(pool[damage_index], dict) else {}
+
+    vehicle = await db.vehicles.find_one({"id": insp.get("vehicle_id")}, {"_id": 0}) or {}
+    driver_name = ""
+    if insp.get("driver_id"):
+        drv = await db.drivers.find_one({"id": insp["driver_id"]}, {"_id": 0, "name": 1})
+        driver_name = (drv or {}).get("name", "")
+
+    # Foto donde está el daño, anotada con su caja
+    photos = insp.get("photos") or []
+    pi = dmg.get("photo_index")
+    photo_url = photos[pi - 1] if (isinstance(pi, int) and 1 <= pi <= len(photos)) else (photos[0] if photos else None)
+    annotated = None
+    if photo_url:
+        raw = await _fetch_photo_bytes(photo_url, timeout=10)
+        if raw:
+            annotated = _annotate_photo_with_damages(raw, [dmg])
+
+    loop = asyncio.get_running_loop()
+    pdf_bytes = await loop.run_in_executor(
+        None, _build_damage_report_pdf, insp, vehicle, driver_name, dmg, annotated)
+
+    from fastapi.responses import Response as _Resp
+    plate = (vehicle.get("license_plate") or "vehiculo").replace(" ", "")
+    return _Resp(
+        content=pdf_bytes, media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="parte-dano-{plate}-{inspection_id[:8]}.pdf"'},
+    )
+
+
 @api_router.get("/inspections/{inspection_id}/forensic-pdf")
 async def forensic_pdf(inspection_id: str, _=Depends(require_admin)):
     """Genera y devuelve el PDF de peritaje técnico de una inspección firmada."""
@@ -7079,14 +7211,14 @@ if _push_enabled:
 
 
 @api_router.get("/push/vapid-key")
-async def push_vapid_key(_=Depends(require_admin)):
-    """Clave pública VAPID para que el navegador se suscriba."""
+async def push_vapid_key(_=Depends(require_any_auth)):
+    """Clave pública VAPID para que el navegador se suscriba (admins Y conductores)."""
     return {"key": VAPID_PUBLIC_KEY, "enabled": _push_enabled}
 
 
 @api_router.post("/push/subscribe")
-async def push_subscribe(data: dict, user: dict = Depends(require_admin)):
-    """Guarda la suscripción push del dispositivo de este coordinador."""
+async def push_subscribe(data: dict, user: dict = Depends(require_any_auth)):
+    """Guarda la suscripción push del dispositivo (coordinador o conductor)."""
     sub = data.get("subscription") or {}
     if not sub.get("endpoint"):
         raise HTTPException(400, "Suscripción inválida")
@@ -7096,7 +7228,9 @@ async def push_subscribe(data: dict, user: dict = Depends(require_admin)):
             "endpoint": sub["endpoint"],
             "subscription": sub,
             "user_id": user.get("sub"),
+            "role": user.get("role"),
             "org_id": user.get("org_id"),
+            "db_name": user.get("db_name"),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }},
         upsert=True,
@@ -7105,7 +7239,7 @@ async def push_subscribe(data: dict, user: dict = Depends(require_admin)):
 
 
 @api_router.post("/push/unsubscribe")
-async def push_unsubscribe(data: dict, user: dict = Depends(require_admin)):
+async def push_unsubscribe(data: dict, user: dict = Depends(require_any_auth)):
     ep = (data.get("endpoint") or "").strip()
     if ep:
         await global_db.push_subscriptions.delete_one({"endpoint": ep})
@@ -8243,6 +8377,9 @@ async def send_weekly_email_digest():
     <a href="https://flotadsp.com/panel" style="display:block;text-align:center;background:linear-gradient(135deg,#0ea5e9,#0369a1);color:#fff;text-decoration:none;padding:13px 24px;border-radius:10px;font-weight:800;font-size:14px">
       Abrir el panel →
     </a>
+    <p style="margin:12px 0 0;color:#475569;font-size:11px;text-align:center;line-height:1.5">
+      🇬🇧 Your week in FlotaDSP: inspections, new damage and upcoming MOT dates above. Open the panel for details.
+    </p>
   </div>
 </div>"""
             ok = await _send_resend_email(
@@ -8269,6 +8406,68 @@ async def send_weekly_email_digest():
 async def trigger_weekly_digest(_=Depends(require_superadmin)):
     """Dispara el digest por email a mano (para probar). Dedupe semanal incluido."""
     return await send_weekly_email_digest()
+
+
+async def _send_inspection_reminders():
+    """Push a cada conductor con furgoneta asignada HOY que aún no subió inspección."""
+    if not _push_enabled:
+        return
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    orgs = await global_db.organizations.find(
+        {"status": {"$nin": ["suspended", "deleted"]}},
+        {"_id": 0, "id": 1, "db_name": 1}).to_list(500)
+    total = 0
+    for org in orgs:
+        try:
+            set_current_org_db(org.get("db_name"))
+            assignments = await db.daily_assignments.find(
+                {"date": today}, {"_id": 0, "slots": 1}).to_list(50)
+            pending = {}
+            for a in assignments:
+                for s in a.get("slots", []):
+                    if s.get("driver_id") and s.get("vehicle_id"):
+                        pending[s["driver_id"]] = s.get("vehicle_plate") or ""
+            if not pending:
+                continue
+            done = await db.inspections.find(
+                {"deleted": {"$ne": True}, "created_at": {"$regex": f"^{today}"},
+                 "driver_id": {"$in": list(pending)}},
+                {"_id": 0, "driver_id": 1}).to_list(2000)
+            for i in done:
+                pending.pop(i.get("driver_id"), None)
+            for did, plate in pending.items():
+                asyncio.create_task(send_web_push_to_users(
+                    [did], "📸 Inspección pendiente",
+                    f"Recuerda hacer las fotos de la furgoneta {plate} antes de salir.",
+                    url="/conductor"))
+                total += 1
+        except Exception as _oe:
+            logger.debug(f"reminder org {org.get('id')}: {_oe}")
+    set_current_org_db(None)
+    if total:
+        logger.info(f"Recordatorios de inspección push enviados: {total}")
+
+
+@app.on_event("startup")
+async def start_inspection_reminder_scheduler():
+    """Recordatorio push a conductores a las 08:15 hora española: quien tiene
+    furgoneta asignada hoy y no ha subido inspección, recibe aviso en el móvil."""
+    async def _loop():
+        from zoneinfo import ZoneInfo
+        madrid = ZoneInfo("Europe/Madrid")
+        while True:
+            try:
+                now = datetime.now(madrid)
+                target = now.replace(hour=8, minute=15, second=0, microsecond=0)
+                if target <= now:
+                    target += timedelta(days=1)
+                await asyncio.sleep((target - now).total_seconds())
+                await _send_inspection_reminders()
+                await asyncio.sleep(70)
+            except Exception as e:
+                logger.error(f"Reminder scheduler: {e}")
+                await asyncio.sleep(600)
+    asyncio.create_task(_loop())
 
 
 @app.on_event("startup")
