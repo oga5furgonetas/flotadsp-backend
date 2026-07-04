@@ -4168,39 +4168,60 @@ async def assistant_ask(data: dict, user: dict = Depends(require_admin)):
 
     now = datetime.now(timezone.utc)
     month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc).isoformat()
+    recent_start = (now - timedelta(days=14)).isoformat()
     vehicles = await db.vehicles.find(
         {"status": {"$ne": "deleted"}},
-        {"_id": 0, "license_plate": 1, "brand": 1, "model": 1, "center": 1, "status": 1,
-         "mileage": 1, "itv_date": 1, "renting_end_date": 1, "current_driver_id": 1}
-    ).to_list(150)
+        {"_id": 0, "id": 1, "license_plate": 1, "brand": 1, "model": 1, "center": 1,
+         "status": 1, "mileage": 1, "itv_date": 1, "renting_end_date": 1}
+    ).to_list(300)
     drivers = await db.drivers.find(
         {"active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1, "center": 1, "contrato": 1, "nivel": 1}
-    ).to_list(150)
+    ).to_list(300)
     incidents = await db.incidents.find(
         {"status": {"$ne": "resolved"}},
-        {"_id": 0, "title": 1, "severity": 1, "vehicle_id": 1, "center": 1, "created_at": 1}
-    ).to_list(50)
+        {"_id": 0, "title": 1, "severity": 1, "vehicle_id": 1, "created_at": 1}
+    ).to_list(40)
     month_insps = await db.inspections.find(
         {"deleted": {"$ne": True}, "created_at": {"$gte": month_start}},
         {"_id": 0, "vehicle_id": 1, "driver_id": 1, "created_at": 1,
          "analysis.severity": 1, "analysis.new_damages.part": 1,
          "analysis.new_damages.severity": 1, "analysis.new_damages.estimated_cost": 1}
-    ).to_list(2000)
+    ).to_list(3000)
 
+    # Contexto COMPACTO a escala real: agregados por conductor + solo los daños
+    # recientes en detalle, con matrículas resueltas (no IDs opacos). Con flotas
+    # grandes el JSON masivo de antes superaba el timeout de Gemini → 503.
     dmap = {d["id"]: d.get("name", "?") for d in drivers}
+    vplate = {v.get("id"): (v.get("license_plate") or v.get("id")) for v in vehicles}
+    per_driver: dict = {}
+    recent_damages = []
+    for i in month_insps:
+        did = i.get("driver_id")
+        st = per_driver.setdefault(did, {"inspecciones": 0, "danos_nuevos": 0, "coste_estimado": 0})
+        st["inspecciones"] += 1
+        nd = (i.get("analysis") or {}).get("new_damages") or []
+        st["danos_nuevos"] += len(nd)
+        st["coste_estimado"] += sum(float(d.get("estimated_cost") or 0) for d in nd if isinstance(d, dict))
+        if nd and (i.get("created_at") or "") >= recent_start and len(recent_damages) < 60:
+            recent_damages.append({
+                "fecha": (i.get("created_at") or "")[:10],
+                "vehiculo": vplate.get(i.get("vehicle_id"), i.get("vehicle_id")),
+                "conductor": dmap.get(did, "?"),
+                "danos": [{"pieza": d.get("part"), "severidad": d.get("severity"),
+                           "coste": d.get("estimated_cost")} for d in nd if isinstance(d, dict)][:5],
+            })
+
     ctx = {
         "hoy": now.strftime("%Y-%m-%d"),
-        "vehiculos": vehicles,
+        "vehiculos": [{k: v for k, v in x.items() if k != "id"} for x in vehicles],
         "conductores": [{"nombre": d.get("name"), "centro": d.get("center"),
                          "contrato": d.get("contrato"), "nivel": d.get("nivel")} for d in drivers],
-        "incidencias_abiertas": incidents,
-        "inspecciones_mes": [
-            {"vehiculo": i.get("vehicle_id"), "conductor": dmap.get(i.get("driver_id"), i.get("driver_id")),
-             "fecha": (i.get("created_at") or "")[:10],
-             "severidad": ((i.get("analysis") or {}).get("severity")),
-             "danos_nuevos": (i.get("analysis") or {}).get("new_damages") or []}
-            for i in month_insps[:600]
-        ],
+        "incidencias_abiertas": [
+            {**{k: v for k, v in i.items() if k != "vehicle_id"},
+             "vehiculo": vplate.get(i.get("vehicle_id"), i.get("vehicle_id"))} for i in incidents],
+        "resumen_mes_por_conductor": [
+            {"conductor": dmap.get(k, "?"), **v} for k, v in per_driver.items() if k],
+        "danos_ultimos_14_dias": recent_damages,
     }
 
     prompt = (
@@ -4209,17 +4230,27 @@ async def assistant_ask(data: dict, user: dict = Depends(require_admin)):
         "Si el dato no está, di claramente que no tienes esa información. "
         "Sé conciso y directo (máx. ~120 palabras), en el idioma de la pregunta, "
         "menciona matrículas y nombres concretos cuando ayuden, y usa formato de lista si hay varios elementos.\n\n"
-        f"PREGUNTA: {question}\n\nDATOS DE LA FLOTA:\n{json.dumps(ctx, ensure_ascii=False, default=str)[:60000]}"
+        f"PREGUNTA: {question}\n\nDATOS DE LA FLOTA:\n{json.dumps(ctx, ensure_ascii=False, default=str)[:30000]}"
     )
     try:
+        from google.genai import types as genai_types
         client_g = _gemini_client_plantilla()
         model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        # thinking_budget=0: la pregunta es factual sobre datos adjuntos, no hace
+        # falta razonamiento largo — respuesta en segundos en vez de decenas.
+        try:
+            _cfg = genai_types.GenerateContentConfig(
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0))
+        except Exception:
+            _cfg = None
         resp = await asyncio.wait_for(
             asyncio.get_running_loop().run_in_executor(
                 _executor,
-                lambda: client_g.models.generate_content(model=model_name, contents=prompt),
+                lambda: client_g.models.generate_content(
+                    model=model_name, contents=prompt,
+                    **({"config": _cfg} if _cfg else {})),
             ),
-            timeout=30,
+            timeout=45,
         )
         answer = (resp.text or "").strip()
         if not answer:
@@ -7061,6 +7092,42 @@ def _default_items_for_shift(shift: str) -> list:
     return [{"id": str(uuid.uuid4()), "text": t, "done": False, "done_by": None, "done_at": None} for t in src]
 
 
+async def _template_items_for(center: str, shift: str) -> list:
+    """Items iniciales del día para UN centro: su plantilla propia si la tiene,
+    y si no, la genérica. Así cada centro tiene sus tareas recurrentes SUYAS
+    (antes todos los centros clonaban la misma lista fija cada día)."""
+    tpl = await db.checklist_templates.find_one(
+        {"center": center, "shift": shift}, {"_id": 0, "texts": 1})
+    texts = (tpl or {}).get("texts")
+    if not texts:
+        return _default_items_for_shift(shift)
+    return [{"id": str(uuid.uuid4()), "text": t, "done": False, "done_by": None, "done_at": None}
+            for t in texts if (t or "").strip()]
+
+
+@api_router.post("/checklist/template")
+async def save_checklist_template(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Guarda la lista actual como plantilla recurrente DE ESE CENTRO y turno:
+    a partir de mañana, sus checklists nacen con estas tareas."""
+    center = data.get("center")
+    shift = data.get("shift")
+    if not center or shift not in ("manana", "tarde"):
+        raise HTTPException(400, "Faltan center/shift válidos")
+    if not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a este centro")
+    texts = [(it.get("text") or "").strip()[:300] if isinstance(it, dict) else str(it).strip()[:300]
+             for it in (data.get("items") or [])]
+    texts = [t for t in texts if t][:50]
+    await db.checklist_templates.update_one(
+        {"center": center, "shift": shift},
+        {"$set": {"center": center, "shift": shift, "texts": texts,
+                  "updated_by": user.get("name"),
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return {"ok": True, "count": len(texts)}
+
+
 def _user_can_see_center(user: dict, center: str) -> bool:
     """True si el usuario admin puede ver ese centro. Super-admin/owner ve todos."""
     if user.get("sa") or user.get("account_type") == "owner":
@@ -7088,10 +7155,10 @@ async def get_checklist(center: str, date: Optional[str] = None,
         if shift in by_shift:
             result[shift] = by_shift[shift]
             continue
-        # No existe: crear y PERSISTIR con plantilla por defecto (IDs estables).
+        # No existe: crear y PERSISTIR con la plantilla DEL CENTRO (IDs estables).
         new_doc = {
             "id": str(uuid.uuid4()), "center": center, "date": date, "shift": shift,
-            "items": _default_items_for_shift(shift),
+            "items": await _template_items_for(center, shift),
             "created_at": now, "updated_at": now,
         }
         try:
@@ -7132,6 +7199,12 @@ async def upsert_checklist(data: dict = Body(...), user: dict = Depends(require_
             "done_by": it.get("done_by"),
             "done_at": it.get("done_at"),
         })
+    # Detectar tareas NUEVAS (para avisar por push a los del centro)
+    _prev = await db.daily_checklists.find_one(
+        {"center": center, "date": date, "shift": shift}, {"_id": 0, "items.id": 1})
+    _prev_ids = {i.get("id") for i in (_prev or {}).get("items", [])}
+    _new_items = [i for i in items if i["id"] not in _prev_ids] if _prev else []
+
     now = datetime.now(timezone.utc).isoformat()
     await db.daily_checklists.update_one(
         {"center": center, "date": date, "shift": shift},
@@ -7140,7 +7213,28 @@ async def upsert_checklist(data: dict = Body(...), user: dict = Depends(require_
                           "created_at": now}},
         upsert=True,
     )
-    return {"ok": True, "count": len(items)}
+    # Push a los coordinadores del centro por cada tarea nueva (máx 3 avisos)
+    for _ni in _new_items[:3]:
+        await push_center_event(
+            center, f"📝 Nueva tarea · {center}", _ni.get("text", ""),
+            url="/panel/checklist-operativo", exclude_id=user.get("sub"))
+    return {"ok": True, "count": len(items), "new_items": len(_new_items)}
+
+
+@api_router.delete("/chat/{center}/{message_id}")
+async def chat_delete_message(center: str, message_id: str, user: dict = Depends(require_admin)):
+    """Borra un mensaje del chat del centro. El autor puede borrar los suyos;
+    el super-admin/owner puede borrar cualquiera."""
+    if not await _chat_room_can_access(user, center):
+        raise HTTPException(403, "No tienes acceso a este chat")
+    msg = await db.chat_messages.find_one({"id": message_id, "center": center}, {"_id": 0})
+    if not msg:
+        raise HTTPException(404, "Mensaje no encontrado")
+    is_owner_like = user.get("sa") or user.get("account_type") == "owner"
+    if msg.get("author_id") != user.get("sub") and not is_owner_like:
+        raise HTTPException(403, "Solo puedes borrar tus propios mensajes")
+    await db.chat_messages.delete_one({"id": message_id, "center": center})
+    return {"ok": True}
 
 
 @api_router.post("/checklist/toggle")

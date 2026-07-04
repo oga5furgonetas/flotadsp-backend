@@ -4,7 +4,7 @@ import { useT } from '../../i18n'
 import {
   Loader2, CheckSquare, Sun, Moon, Pencil, Plus, Trash2, Save, X, Calendar,
 } from 'lucide-react'
-import { getChecklist, upsertChecklist, toggleChecklistItem } from '../api'
+import { getChecklist, upsertChecklist, toggleChecklistItem, saveChecklistTemplate } from '../api'
 
 const isoToday = () => new Date().toISOString().slice(0, 10)
 
@@ -18,7 +18,21 @@ export default function ChecklistOperativo() {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState([])
   const [saving, setSaving] = useState(false)
+  const [tplSaving, setTplSaving] = useState(false)
   const [err, setErr] = useState('')
+
+  async function saveAsTemplate() {
+    const items = data?.[shift]?.items || []
+    if (items.length === 0) return
+    if (!confirm(`¿Usar estas ${items.length} tareas como plantilla recurrente de ${center} (${shift === 'manana' ? 'mañana' : 'tarde'})?\nCada día nuevo de ${center} nacerá con ellas. Los demás centros no cambian.`)) return
+    setTplSaving(true)
+    try {
+      await saveChecklistTemplate({ center, shift, items })
+      alert(`✅ Plantilla de ${center} guardada. Desde mañana, sus checklists nacen con estas tareas.`)
+    } catch (e) {
+      alert(e?.response?.data?.detail || 'No se pudo guardar la plantilla')
+    } finally { setTplSaving(false) }
+  }
   const noCenter = center === 'Todos'
 
   const load = useCallback(async () => {
@@ -121,7 +135,14 @@ export default function ChecklistOperativo() {
           <span className="text-xs uppercase tracking-wide text-dark-500">{t('chk.completed')} ({completed}/{total})</span>
         </div>
         {!editing ? (
-          <button onClick={startEdit} className="btn-secondary flex items-center gap-1.5 text-sm"><Pencil size={14} /> {t('ui.edit')}</button>
+          <div className="flex items-center gap-2">
+            <button onClick={saveAsTemplate} disabled={tplSaving}
+              title={`Las tareas actuales pasan a ser la plantilla recurrente de ${center} (${shift === 'manana' ? 'mañana' : 'tarde'}): cada día nuevo nacerá con ellas. Cada centro tiene la suya.`}
+              className="btn-ghost flex items-center gap-1.5 text-xs text-dark-400 hover:text-brand-300">
+              {tplSaving ? <Loader2 size={13} className="animate-spin" /> : '📌'} Plantilla de {center}
+            </button>
+            <button onClick={startEdit} className="btn-secondary flex items-center gap-1.5 text-sm"><Pencil size={14} /> {t('ui.edit')}</button>
+          </div>
         ) : (
           <div className="flex gap-2">
             <button onClick={() => setEditing(false)} className="btn-ghost flex items-center gap-1.5 text-sm"><X size={14} /> {t('ui.cancel')}</button>

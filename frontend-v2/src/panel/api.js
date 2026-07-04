@@ -20,6 +20,8 @@ export const toggleChecklistItem = (body) => api.post('/checklist/toggle', body)
 /* ── Chat por centro ── */
 export const getChat = (center, since) => api.get(`/chat/${center}`, { params: since ? { since } : {} })
 export const postChat = (center, text) => api.post(`/chat/${center}`, { text })
+export const deleteChatMessage = (center, messageId) => api.delete(`/chat/${center}/${messageId}`)
+export const saveChecklistTemplate = (body) => api.post('/checklist/template', body) // {center, shift, items}
 export const chatToChecklist = (center, messageId, body = {}) =>
   api.post(`/chat/${center}/${messageId}/to-checklist`, body)
 

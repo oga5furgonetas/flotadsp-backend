@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT, LANG_LOCALE } from '../../i18n'
-import { Loader2, Send, MessageSquare, CheckSquare, Bell, BellOff } from 'lucide-react'
-import { getChat, postChat, chatToChecklist } from '../api'
+import { Loader2, Send, MessageSquare, CheckSquare, Bell, BellOff, Trash2 } from 'lucide-react'
+import { getChat, postChat, chatToChecklist, deleteChatMessage } from '../api'
 import { getAdmin, isSuperAdmin } from '../auth'
 import { pushSupported, isPushEnabled, enablePush, disablePush } from '../../lib/push'
 
@@ -99,6 +99,16 @@ export default function Chat() {
     }
   }
 
+  async function removeMessage(m) {
+    if (!confirm('¿Borrar este mensaje para todos?')) return
+    try {
+      await deleteChatMessage(center, m.id)
+      setMsgs((arr) => arr.filter((x) => x.id !== m.id))
+    } catch (e) {
+      alert(e?.response?.data?.detail || 'No se pudo borrar el mensaje')
+    }
+  }
+
   if (noCenter) {
     return (
       <div className="mx-auto max-w-3xl">
@@ -151,6 +161,11 @@ export default function Chat() {
                       {sa && !m.pinned_to_checklist && (
                         <button onClick={() => pinToChecklist(m)} className="opacity-0 transition group-hover:opacity-100 hover:text-emerald-300" title="Convertir a tarea de checklist">
                           <CheckSquare size={11} />
+                        </button>
+                      )}
+                      {(mine || sa) && (
+                        <button onClick={() => removeMessage(m)} className="opacity-0 transition group-hover:opacity-100 hover:text-red-300" title="Borrar mensaje">
+                          <Trash2 size={11} />
                         </button>
                       )}
                     </div>

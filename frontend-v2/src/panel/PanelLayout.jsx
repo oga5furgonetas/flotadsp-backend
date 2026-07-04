@@ -9,6 +9,7 @@ import {
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken } from './auth'
 import TrialBanner from './TrialBanner'
 import CommandPalette from './CommandPalette'
+import LiveNotifier from './LiveNotifier'
 import { useT, LANGS } from '../i18n'
 import { usePlan } from '../lib/usePlan'
 
@@ -372,6 +373,7 @@ export default function PanelLayout() {
       </nav>
 
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} pages={palettePages} />
+      <LiveNotifier center={center} centers={centers} />
     </div>
   )
 }
