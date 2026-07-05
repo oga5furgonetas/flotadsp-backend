@@ -10,6 +10,26 @@ export default function PanelLogin() {
   const [pass, setPass] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const [forgot, setForgot] = useState(false)   // vista "recuperar contraseña"
+  const [fEmail, setFEmail] = useState('')
+  const [fMsg, setFMsg] = useState(null)
+  const [fBusy, setFBusy] = useState(false)
+
+  async function sendReset() {
+    if (!fEmail.trim()) return setFMsg({ ok: false, text: 'Introduce tu email' })
+    setFBusy(true); setFMsg(null)
+    try {
+      await fetch(`${API_BASE}/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: fEmail.trim() }),
+      })
+      // Respuesta genérica siempre (no revelamos si el email existe).
+      setFMsg({ ok: true, text: 'Si ese email está vinculado a una cuenta, te hemos enviado un enlace para restablecer la contraseña. Revisa tu bandeja (y spam).' })
+    } catch {
+      setFMsg({ ok: false, text: 'No se pudo conectar. Inténtalo de nuevo.' })
+    } finally { setFBusy(false) }
+  }
 
   // Sesión guardada: solo auto-entrar si el servidor confirma que sigue siendo
   // válida (usuarios borrados/revocados quedaban entrando con el token viejo).
@@ -63,36 +83,75 @@ export default function PanelLogin() {
           <p className="mt-1 text-sm text-dark-400">Panel de administración</p>
         </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className="label">Usuario</label>
-            <input
-              className="input"
-              value={user}
-              onChange={(e) => setUser(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && submit()}
-              autoFocus
-            />
+        {!forgot ? (
+          <div className="space-y-4">
+            <div>
+              <label className="label">Usuario</label>
+              <input
+                className="input"
+                value={user}
+                onChange={(e) => setUser(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && submit()}
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="label">Contraseña</label>
+              <input
+                type="password"
+                className="input"
+                value={pass}
+                onChange={(e) => setPass(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && submit()}
+              />
+            </div>
+            {err && <p className="text-sm text-red-400">{err}</p>}
+            <button
+              onClick={submit}
+              disabled={busy}
+              className="btn-primary flex w-full items-center justify-center gap-2 py-2.5"
+            >
+              {busy ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />} Entrar
+            </button>
+            <button
+              type="button"
+              onClick={() => { setForgot(true); setFMsg(null); setErr('') }}
+              className="w-full text-center text-xs text-dark-400 hover:text-brand-400"
+            >
+              ¿Has olvidado tu contraseña?
+            </button>
           </div>
-          <div>
-            <label className="label">Contraseña</label>
-            <input
-              type="password"
-              className="input"
-              value={pass}
-              onChange={(e) => setPass(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && submit()}
-            />
+        ) : (
+          <div className="space-y-4">
+            <p className="text-sm text-dark-300">Introduce el email vinculado a tu cuenta y te enviaremos un enlace para crear una nueva contraseña.</p>
+            <div>
+              <label className="label">Email</label>
+              <input
+                type="email"
+                className="input"
+                value={fEmail}
+                onChange={(e) => setFEmail(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && sendReset()}
+                autoFocus
+              />
+            </div>
+            {fMsg && <p className={`text-sm ${fMsg.ok ? 'text-emerald-400' : 'text-red-400'}`}>{fMsg.text}</p>}
+            <button
+              onClick={sendReset}
+              disabled={fBusy}
+              className="btn-primary flex w-full items-center justify-center gap-2 py-2.5"
+            >
+              {fBusy ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />} Enviar enlace
+            </button>
+            <button
+              type="button"
+              onClick={() => { setForgot(false); setFMsg(null) }}
+              className="w-full text-center text-xs text-dark-400 hover:text-brand-400"
+            >
+              ← Volver al acceso
+            </button>
           </div>
-          {err && <p className="text-sm text-red-400">{err}</p>}
-          <button
-            onClick={submit}
-            disabled={busy}
-            className="btn-primary flex w-full items-center justify-center gap-2 py-2.5"
-          >
-            {busy ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />} Entrar
-          </button>
-        </div>
+        )}
       </div>
     </div>
   )

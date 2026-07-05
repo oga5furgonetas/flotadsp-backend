@@ -189,3 +189,5 @@ export const deleteAdmin = (id) => api.delete(`/auth/admins/${id}`)
 /* ── Perfil / cuenta ── */
 export const changeMyPassword = (current_password, new_password) =>
   api.post('/auth/change-my-password', { current_password, new_password })
+export const setMyEmail = (email) => api.post('/auth/my-email', { email })
+export const forgotPassword = (email) => api.post('/auth/forgot-password', { email })

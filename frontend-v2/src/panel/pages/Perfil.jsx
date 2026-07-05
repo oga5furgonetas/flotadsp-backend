@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useT } from '../../i18n'
-import { Loader2, KeyRound, User, Mail, Receipt, ExternalLink, ShieldCheck } from 'lucide-react'
+import { Loader2, KeyRound, User, Mail, Receipt, ExternalLink, ShieldCheck, Check } from 'lucide-react'
 import { getAdmin, isSuperAdmin } from '../auth'
-import { changeMyPassword } from '../api'
+import { changeMyPassword, getMe, setMyEmail } from '../api'
 
 export default function Perfil() {
   const { t } = useT()
@@ -12,6 +12,14 @@ export default function Perfil() {
   const [nw2, setNw2] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null) // {ok, text}
+  const [email, setEmail] = useState('')
+  const [savedEmail, setSavedEmail] = useState('')
+  const [emailBusy, setEmailBusy] = useState(false)
+  const [emailMsg, setEmailMsg] = useState(null)
+
+  useEffect(() => {
+    getMe().then((r) => { setEmail(r.data?.email || ''); setSavedEmail(r.data?.email || '') }).catch(() => {})
+  }, [])
 
   async function savePassword() {
     setMsg(null)
@@ -25,6 +33,18 @@ export default function Perfil() {
     } catch (e) {
       setMsg({ ok: false, text: e?.response?.data?.detail || t('prof.pw.error') })
     } finally { setBusy(false) }
+  }
+
+  async function saveEmail() {
+    setEmailMsg(null)
+    setEmailBusy(true)
+    try {
+      const r = await setMyEmail(email.trim())
+      setSavedEmail(r.data?.email || '')
+      setEmailMsg({ ok: true, text: 'Email guardado. Ya puedes recuperar tu contraseña con él.' })
+    } catch (e) {
+      setEmailMsg({ ok: false, text: e?.response?.data?.detail || 'No se pudo guardar el email.' })
+    } finally { setEmailBusy(false) }
   }
 
   return (
@@ -57,14 +77,23 @@ export default function Perfil() {
         </div>
       </div>
 
-      {/* Email profesional (pendiente de backend — honesto) */}
+      {/* Email de recuperación */}
       <div className="card p-5">
-        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-dark-200"><Mail size={16} /> {t('prof.email')}</div>
-        <p className="text-sm text-dark-400">Conectar un email propio (ej. <i>hola@flotadsp.com</i>) para enviar avisos y recibos a tus clientes desde tu marca.</p>
-        <div className="mt-3 flex items-center gap-2">
-          <input className="input flex-1" placeholder="hola@tudominio.com" disabled />
-          <span className="rounded-full bg-amber-500/15 px-2.5 py-1 text-[11px] font-semibold text-amber-400">Requiere activar backend de email</span>
+        <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-dark-200"><Mail size={16} /> Email de recuperación</div>
+        <p className="text-sm text-dark-400">Vincula tu email para poder <b>recuperar tu contraseña</b> si la olvidas: recibirás un enlace para crear una nueva desde la pantalla de acceso.</p>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            type="email"
+            className="input flex-1"
+            placeholder="tucorreo@ejemplo.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <button onClick={saveEmail} disabled={emailBusy || email.trim() === savedEmail} className="btn-primary flex items-center justify-center gap-2 disabled:opacity-50">
+            {emailBusy ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Guardar
+          </button>
         </div>
+        {emailMsg && <p className={`mt-2 text-sm ${emailMsg.ok ? 'text-emerald-400' : 'text-red-400'}`}>{emailMsg.text}</p>}
       </div>
 
       {/* Facturación */}

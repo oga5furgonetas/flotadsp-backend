@@ -524,6 +524,9 @@ class TokenResponse(BaseModel):
 _bearer = HTTPBearer(auto_error=False)
 
 
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
 def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
 
@@ -4535,18 +4538,40 @@ async def get_my_assigned_vehicle(user: dict = Depends(get_current_user)):
 
 @auth_router.get("/me")
 async def get_me(user: dict = Depends(get_current_user)):
-    # Incluir el campo theme si existe en la BD (solo admins)
+    # Incluir theme y email si existen en la BD (solo admins)
     theme = None
+    email = None
     if user.get("role") == "admin":
-        admin_doc = await global_db.admin_users.find_one({"id": user["sub"]}, {"_id": 0, "theme": 1})
+        admin_doc = await global_db.admin_users.find_one({"id": user["sub"]}, {"_id": 0, "theme": 1, "email": 1})
         if admin_doc:
             theme = admin_doc.get("theme")
+            email = admin_doc.get("email")
     return {
         "id": user["sub"],
         "role": user["role"],
         "name": user["name"],
         "theme": theme,
+        "email": email,
     }
+
+
+@auth_router.post("/my-email")
+async def set_my_email(data: dict, user: dict = Depends(get_current_user)):
+    """Cada admin vincula (o borra) su propio email de recuperación."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administradores")
+    em = (data.get("email") or "").strip().lower()
+    if em and not _EMAIL_RE.match(em):
+        raise HTTPException(status_code=400, detail="Email no válido")
+    # Evita que dos cuentas compartan email (rompería recuperar-contraseña).
+    if em:
+        clash = await global_db.admin_users.find_one(
+            {"email": em, "id": {"$ne": user["sub"]}}, {"_id": 0, "id": 1})
+        if clash:
+            raise HTTPException(status_code=409, detail="Ese email ya está en uso por otra cuenta")
+    await global_db.admin_users.update_one(
+        {"id": user["sub"]}, {"$set": {"email": em or None}})
+    return {"success": True, "email": em or None}
 
 
 def _is_center_manager(user: dict) -> bool:
@@ -4648,9 +4673,23 @@ async def update_admin_permissions(admin_id: str, data: dict = Body(...), _admin
             if ar == "center_manager" and not _admin.get("sa"):
                 raise HTTPException(403, "Solo super-admin puede asignar rol de gestor de centro")
             patch["admin_role"] = ar
+    if "email" in data:
+        em = (data.get("email") or "").strip().lower()
+        if em and not _EMAIL_RE.match(em):
+            raise HTTPException(status_code=400, detail="Email no válido")
+        patch["email"] = em or None
+    # Reset de contraseña por el gestor (para cuando un usuario la olvida).
+    new_pw = data.get("new_password")
+    if new_pw:
+        if len(new_pw) < 6:
+            raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 6 caracteres")
+        patch["hashed_password"] = hash_password(new_pw)
     if not patch:
         raise HTTPException(status_code=400, detail="Nada que actualizar")
     await global_db.admin_users.update_one({"id": admin_id}, {"$set": patch})
+    if "hashed_password" in patch:
+        _ADMIN_EXISTS_CACHE.pop(admin_id, None)
+        logger.info(f"Contraseña de '{target.get('username')}' restablecida por {_admin.get('name')}")
     return {"success": True}
 
 

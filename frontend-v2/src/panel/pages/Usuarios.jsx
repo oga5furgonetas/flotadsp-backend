@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Loader2, UserPlus, Trash2, Save, ShieldCheck } from 'lucide-react'
+import { Loader2, UserPlus, Trash2, Save, ShieldCheck, Mail, KeyRound } from 'lucide-react'
 import { getAdmins, createAdmin, updateAdmin, deleteAdmin } from '../api'
 import { getAdmin, isSuperAdmin, isCenterManager } from '../auth'
 import { useT } from '../../i18n'
@@ -72,6 +72,25 @@ export default function Usuarios() {
       setMsg({ ok: true, t: t('usr.perms.ok') }); setEditing(null); load()
     }
     catch (e) { setMsg({ ok: false, t: e?.response?.data?.detail || t('usr.update.err') }) } finally { setBusy(false) }
+  }
+
+  // Email de recuperación + restablecer contraseña de un usuario (por si la olvida).
+  async function saveAccount(id, email, newPassword) {
+    const body = {}
+    if (typeof email === 'string') body.email = email.trim()
+    if (newPassword) {
+      if (newPassword.length < 6) return setMsg({ ok: false, t: 'La contraseña debe tener al menos 6 caracteres' })
+      body.new_password = newPassword
+    }
+    if (Object.keys(body).length === 0) return
+    setBusy(true); setMsg(null)
+    try {
+      await updateAdmin(id, body)
+      setMsg({ ok: true, t: newPassword ? 'Contraseña restablecida' : 'Email guardado' })
+      setEditing((s) => s && s.id === id ? { ...s, newPassword: '' } : s)
+      load()
+    } catch (e) { setMsg({ ok: false, t: e?.response?.data?.detail || t('usr.update.err') }) }
+    finally { setBusy(false) }
   }
 
   async function remove(u) {
@@ -189,7 +208,7 @@ export default function Usuarios() {
                   </div>
                   {!isSuper && (
                     <div className="flex items-center gap-1">
-                      <button onClick={() => setEditing(isEd ? null : { id: u.id, perms: perms || ALL_KEYS, centers: Array.isArray(u.allowed_centers) ? u.allowed_centers : null, admin_role: u.admin_role ?? null })} className="btn-ghost px-2 py-1 text-xs">{isEd ? t('ui.close') : t('ui.edit')}</button>
+                      <button onClick={() => setEditing(isEd ? null : { id: u.id, perms: perms || ALL_KEYS, centers: Array.isArray(u.allowed_centers) ? u.allowed_centers : null, admin_role: u.admin_role ?? null, email: u.email || '', newPassword: '' })} className="btn-ghost px-2 py-1 text-xs">{isEd ? t('ui.close') : t('ui.edit')}</button>
                       <button onClick={() => remove(u)} className="btn-ghost px-2 py-1 text-xs text-red-400"><Trash2 size={14} /></button>
                     </div>
                   )}
@@ -252,6 +271,32 @@ export default function Usuarios() {
                     <button onClick={() => savePerms(u.id, editing.perms, editing.centers, editing.admin_role)} disabled={busy} className="btn-primary mt-2 flex items-center gap-2 text-sm disabled:opacity-50">
                       <Save size={14} /> {t('usr.save.perms')}
                     </button>
+
+                    {/* Email de recuperación + restablecer contraseña */}
+                    <div className="mt-4 border-t border-dark-800 pt-3">
+                      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-dark-500">
+                        <Mail size={12} /> Email de recuperación
+                      </div>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <input type="email" className="input flex-1" placeholder="correo@ejemplo.com"
+                          value={editing.email}
+                          onChange={(e) => setEditing((s) => ({ ...s, email: e.target.value }))} />
+                        <button onClick={() => saveAccount(u.id, editing.email, '')} disabled={busy}
+                          className="btn-secondary text-sm disabled:opacity-50">Guardar email</button>
+                      </div>
+
+                      <div className="mb-2 mt-4 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-dark-500">
+                        <KeyRound size={12} /> Restablecer contraseña
+                      </div>
+                      <p className="mb-2 text-[11px] text-dark-500">Escribe una nueva contraseña (mín. 6) para {u.name || u.username} — úsalo si la ha olvidado.</p>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <input type="text" className="input flex-1" placeholder="Nueva contraseña"
+                          value={editing.newPassword}
+                          onChange={(e) => setEditing((s) => ({ ...s, newPassword: e.target.value }))} />
+                        <button onClick={() => saveAccount(u.id, undefined, editing.newPassword)} disabled={busy || !editing.newPassword}
+                          className="btn-secondary text-sm disabled:opacity-50">Cambiar contraseña</button>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
