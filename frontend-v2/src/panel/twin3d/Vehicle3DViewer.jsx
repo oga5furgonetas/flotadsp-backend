@@ -1,17 +1,17 @@
-import { Suspense, useMemo, useRef, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Environment, Lightformer, ContactShadows, Html } from '@react-three/drei'
 import {
-  Loader2, Rotate3d, Eye, EyeOff, Layers, Filter, Maximize2, Info, Car,
+  Loader2, Eye, EyeOff, Layers, Filter, Info, Car, Sparkles, BadgeCheck,
 } from 'lucide-react'
 import VanModel from './VanModel'
 import DamagePins, { SEV_COLOR, SEV_LABEL } from './DamagePins'
 import DamageSidebar from './DamageSidebar'
 import CameraController, { frameFromNormal } from './CameraController'
 import { useVehicleDamages } from './useVehicleDamages'
-import { classifyVan } from './vanGeometry'
+import { dimsFromResolver } from './vanGeometry'
+import { resolveVehicleModel, identifyVehicleModel } from '../api'
 
-const VIEW_LABELS = { cls: '' }
 const SEVERITIES = ['critico', 'grave', 'moderado', 'leve']
 
 function Loader() {
@@ -43,7 +43,39 @@ function VehicleLighting() {
 
 export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading }) {
   const controlsRef = useRef()
-  const { dims, markers, timeline } = useVehicleDamages(vehicle, inspections, ledger)
+
+  // VehicleModelResolver: marca/modelo (IA si existe, si no lo introducido) → malla.
+  const [modelInfo, setModelInfo] = useState(null)
+  const [aiModel, setAiModel] = useState(vehicle?.ai_model || null)
+  const [identifying, setIdentifying] = useState(false)
+  const [idMsg, setIdMsg] = useState(null)
+
+  useEffect(() => {
+    const b = aiModel?.brand || vehicle?.brand
+    const m = aiModel?.model || vehicle?.model
+    resolveVehicleModel(b, m).then((r) => setModelInfo(r.data)).catch(() => setModelInfo(null))
+  }, [vehicle?.id, aiModel, vehicle?.brand, vehicle?.model])
+
+  const dimsOverride = useMemo(
+    () => dimsFromResolver(modelInfo, aiModel?.brand || vehicle?.brand, aiModel?.model || vehicle?.model),
+    [modelInfo, aiModel, vehicle?.brand, vehicle?.model])
+
+  const { dims, markers, timeline } = useVehicleDamages(vehicle, inspections, ledger, dimsOverride)
+
+  async function identify() {
+    setIdentifying(true); setIdMsg(null)
+    try {
+      const r = await identifyVehicleModel(vehicle.id)
+      setAiModel(r.data?.ai_model || null)
+      setModelInfo(r.data?.resolved || null)
+      const am = r.data?.ai_model
+      setIdMsg({ ok: true, text: am ? `${am.brand} ${am.model}${am.body_type ? ' · ' + am.body_type : ''} (${Math.round((am.confidence || 0) * 100)}%)` : 'Identificado' })
+    } catch (e) {
+      setIdMsg({ ok: false, text: e?.response?.data?.detail || 'No se pudo identificar el modelo' })
+    } finally { setIdentifying(false) }
+  }
+
+  const modelName = modelInfo?.name || aiModel?.model || [vehicle?.brand, vehicle?.model].filter(Boolean).join(' ')
 
   const [selectedKey, setSelectedKey] = useState(null)
   const [hoveredKey, setHoveredKey] = useState(null)
@@ -127,7 +159,22 @@ export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading 
         <button onClick={() => setShowFilters((v) => !v)} style={{ ...pillBtn, background: 'rgba(15,18,26,.85)', color: '#cbd5e1' }}>
           <Filter size={14} /> Filtros
         </button>
+
+        <button onClick={identify} disabled={identifying}
+          style={{ ...pillBtn, background: 'rgba(168,85,247,.18)', color: '#d8b4fe', borderColor: '#a855f788' }}
+          title="La IA identifica marca/modelo exacto desde las fotos de inspección">
+          {identifying ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Identificar con IA
+        </button>
       </div>
+
+      {idMsg && (
+        <div style={{ position: 'absolute', top: 52, left: 10, zIndex: 25,
+          background: idMsg.ok ? 'rgba(34,197,94,.15)' : 'rgba(239,68,68,.15)',
+          color: idMsg.ok ? '#86efac' : '#fca5a5', border: `1px solid ${idMsg.ok ? '#22c55e55' : '#ef444455'}`,
+          borderRadius: 8, padding: '6px 12px', fontSize: 12, maxWidth: 320 }}>
+          {idMsg.ok ? '✓ Modelo identificado: ' : ''}{idMsg.text}
+        </div>
+      )}
 
       {/* ── Panel de filtros ── */}
       {showFilters && (
@@ -154,12 +201,16 @@ export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading 
       {/* ── Contador / leyenda inferior izquierda ── */}
       <div style={{ position: 'absolute', bottom: 12, left: 12, zIndex: 20, background: 'rgba(15,18,26,.82)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 10, padding: '8px 12px', fontSize: 12, color: '#cbd5e1' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: '#fff', marginBottom: 2 }}>
-          <Car size={13} /> {vehicle?.brand} {vehicle?.model}
+          <Car size={13} /> {modelName || `${vehicle?.brand || ''} ${vehicle?.model || ''}`}
+          {modelInfo && (modelInfo.glb_url
+            ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: 'rgba(34,197,94,.18)', color: '#86efac', borderRadius: 20, padding: '1px 7px', fontSize: 9, fontWeight: 700 }}><BadgeCheck size={9} /> modelo real</span>
+            : <span style={{ background: 'rgba(148,163,184,.18)', color: '#cbd5e1', borderRadius: 20, padding: '1px 7px', fontSize: 9, fontWeight: 700 }}>modelo provisional</span>)}
         </div>
         <div style={{ color: '#94a3b8', fontSize: 11 }}>
           <span style={{ color: '#fb923c' }}>{counts.open} abiertos</span>
           {counts.repaired > 0 && <span> · <span style={{ color: '#22c55e' }}>{counts.repaired} reparados</span></span>}
           {visible.length !== markers.length && <span> · {visible.length} en vista</span>}
+          {aiModel && <span> · <span style={{ color: '#d8b4fe' }}>IA {Math.round((aiModel.confidence || 0) * 100)}%</span></span>}
         </div>
       </div>
 
@@ -184,7 +235,7 @@ export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading 
         <color attach="background" args={['#0b0e14']} />
         <VehicleLighting />
         <Suspense fallback={<Loader />}>
-          <VanModel dims={dims} brand={vehicle?.brand} inspectionMode={inspectionMode} litZones={litZones} />
+          <VanModel dims={dims} brand={vehicle?.brand} inspectionMode={inspectionMode} litZones={litZones} glbUrl={modelInfo?.glb_url} />
           <DamagePins markers={visible} selectedKey={selectedKey} hoveredKey={hoveredKey}
             onSelect={selectMarker} onHover={setHoveredKey} />
         </Suspense>

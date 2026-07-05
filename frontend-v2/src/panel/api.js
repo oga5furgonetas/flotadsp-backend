@@ -39,6 +39,9 @@ export const getLastInspections = (center) => api.get('/vehicles/last-inspection
 export const getVehicleDriver = (id) => api.get(`/vehicles/${id}/driver`)
 export const getVehicleInspections = (id) => api.get(`/inspections/vehicle/${id}`)
 export const getVehicleDamageLedger = (id) => api.get(`/vehicles/${id}/damage-ledger`)
+export const resolveVehicleModel = (brand, model, year, version) =>
+  api.get('/vehicle-models/resolve', { params: { brand: brand || '', model: model || '', ...(year ? { year } : {}), ...(version ? { version } : {}) } })
+export const identifyVehicleModel = (id) => api.post(`/vehicles/${id}/identify-model`)
 export const updateVehicle = (id, body) => api.patch(`/vehicles/${id}`, body)
 export const getVehicleMaintenance = (id) => api.get(`/vehicles/${id}/maintenance`)
 export const registerOilChange = (id, body) => api.post(`/vehicles/${id}/oil/change`, body)

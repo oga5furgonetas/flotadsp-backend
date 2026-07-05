@@ -41,6 +41,15 @@ export function vanDims(brand, model) {
   return { cls, ...(CLASS_DIMS[cls] || CLASS_DIMS.default) }
 }
 
+// Dimensiones del vehículo priorizando la config REAL del modelo que devuelve el
+// VehicleModelResolver (backend). Si no hay match en el catálogo, cae a la clase.
+export function dimsFromResolver(resolved, brand, model) {
+  if (resolved?.body && resolved.body.L) {
+    return { cls: resolved.key || classifyVan(brand, model), ...resolved.body }
+  }
+  return vanDims(brand, model)
+}
+
 // Color de carrocería por marca (aprox., para reconocerla de un vistazo) —
 // se ignora en modo inspección (gris).
 export function bodyColorFor(brand = '') {

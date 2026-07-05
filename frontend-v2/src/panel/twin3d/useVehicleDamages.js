@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { canonPanel, parseSide, zonePosition, sideLabel, vanDims } from './vanGeometry'
+// dimsOverride: dimensiones reales del modelo (del VehicleModelResolver).
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Construye el modelo de daños del gemelo digital a partir de datos REALES:
@@ -17,9 +18,9 @@ function zoneKey(panel, side, end) {
   return `${panel}|${side || '-'}|${end || '-'}`
 }
 
-export function useVehicleDamages(vehicle, inspections, ledger) {
+export function useVehicleDamages(vehicle, inspections, ledger, dimsOverride) {
   return useMemo(() => {
-    const dims = vanDims(vehicle?.brand, vehicle?.model)
+    const dims = (dimsOverride && dimsOverride.L) ? dimsOverride : vanDims(vehicle?.brand, vehicle?.model)
     const insps = (inspections || [])
       .filter((i) => i?.analysis)
       .slice()
@@ -112,5 +113,5 @@ export function useVehicleDamages(vehicle, inspections, ledger) {
     const timeline = insps.map((i) => ({ id: i.id, date: i.created_at }))
 
     return { dims, markers, timeline, brand: vehicle?.brand, model: vehicle?.model }
-  }, [vehicle, inspections, ledger])
+  }, [vehicle, inspections, ledger, dimsOverride])
 }

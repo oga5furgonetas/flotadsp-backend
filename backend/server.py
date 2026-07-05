@@ -192,6 +192,12 @@ class Vehicle(BaseModel):
     oil_last_change_date: Optional[str] = None
     oil_interval_km: int = 15000
     oil_warning_before_km: int = 2500
+    # --- Gemelo digital 3D ---
+    # Modelo identificado por IA desde las fotos: {brand, model, body_type, color,
+    # confidence, identified_at}. Alimenta el VehicleModelResolver.
+    ai_model: Optional[dict] = None
+    # ADN visual acumulado del vehículo (accesorios, pegatinas, color exacto…).
+    dna: Optional[dict] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -5813,6 +5819,156 @@ async def get_vehicle_damage_ledger(vehicle_id: str, _admin: dict = Depends(requ
         {"vehicle_id": vehicle_id, "status": "repaired"}, {"_id": 0}
     ).sort("updated_at", -1).to_list(100)
     return {"open": open_entries, "repaired": repaired}
+
+
+# =========================================================================
+# GEMELO DIGITAL — CATÁLOGO DE MODELOS + RESOLVER (marca/modelo → malla 3D)
+# =========================================================================
+# Cada entrada lleva la CONFIG DE CARROCERÍA real del modelo (dimensiones,
+# silueta) para que el modelo provisional se parezca a ESE vehículo y no a una
+# furgoneta genérica, y un `glb_url` para el modelo 3D real cuando lo tengamos
+# (se sirve desde nuestro CDN/R2). Mientras glb_url es None → provisional.
+# body: L=largo H=alto W=ancho (m), cab=proporción cabina, roofDrop=caída de
+# techo cabina, nose=morro. Fuente: fichas técnicas de cada modelo.
+VEHICLE_MODEL_CATALOG = {
+    "mercedes_sprinter": {"name": "Mercedes-Benz Sprinter", "match": ["sprinter"],
+        "body": {"L": 5.93, "H": 2.62, "W": 2.02, "cab": 0.30, "roofDrop": 0.16, "nose": 0.10}, "glb_url": None},
+    "vw_crafter": {"name": "Volkswagen Crafter", "match": ["crafter"],
+        "body": {"L": 5.99, "H": 2.59, "W": 2.04, "cab": 0.30, "roofDrop": 0.16, "nose": 0.11}, "glb_url": None},
+    "man_tge": {"name": "MAN TGE", "match": ["tge"],
+        "body": {"L": 5.98, "H": 2.59, "W": 2.04, "cab": 0.30, "roofDrop": 0.16, "nose": 0.11}, "glb_url": None},
+    "ford_transit": {"name": "Ford Transit", "match": ["transit"],
+        "body": {"L": 5.98, "H": 2.55, "W": 2.06, "cab": 0.32, "roofDrop": 0.20, "nose": 0.16}, "glb_url": None},
+    "ford_transit_custom": {"name": "Ford Transit Custom", "match": ["transit custom", "custom", "tourneo custom"],
+        "body": {"L": 5.34, "H": 1.98, "W": 1.99, "cab": 0.36, "roofDrop": 0.14, "nose": 0.22}, "glb_url": None},
+    "renault_master": {"name": "Renault Master", "match": ["master"],
+        "body": {"L": 6.20, "H": 2.50, "W": 2.07, "cab": 0.31, "roofDrop": 0.18, "nose": 0.17}, "glb_url": None},
+    "renault_trafic": {"name": "Renault Trafic", "match": ["trafic", "traffic"],
+        "body": {"L": 5.48, "H": 1.97, "W": 1.96, "cab": 0.36, "roofDrop": 0.13, "nose": 0.22}, "glb_url": None},
+    "opel_vivaro": {"name": "Opel Vivaro", "match": ["vivaro"],
+        "body": {"L": 5.30, "H": 1.93, "W": 1.92, "cab": 0.37, "roofDrop": 0.13, "nose": 0.22}, "glb_url": None},
+    "opel_movano": {"name": "Opel Movano", "match": ["movano"],
+        "body": {"L": 6.20, "H": 2.50, "W": 2.07, "cab": 0.31, "roofDrop": 0.18, "nose": 0.17}, "glb_url": None},
+    "fiat_ducato": {"name": "Fiat Ducato", "match": ["ducato"],
+        "body": {"L": 5.99, "H": 2.52, "W": 2.05, "cab": 0.30, "roofDrop": 0.15, "nose": 0.14}, "glb_url": None},
+    "peugeot_boxer": {"name": "Peugeot Boxer", "match": ["boxer"],
+        "body": {"L": 5.99, "H": 2.52, "W": 2.05, "cab": 0.30, "roofDrop": 0.15, "nose": 0.14}, "glb_url": None},
+    "citroen_jumper": {"name": "Citroën Jumper", "match": ["jumper", "relay"],
+        "body": {"L": 5.99, "H": 2.52, "W": 2.05, "cab": 0.30, "roofDrop": 0.15, "nose": 0.14}, "glb_url": None},
+    "peugeot_expert": {"name": "Peugeot Expert", "match": ["expert"],
+        "body": {"L": 5.31, "H": 1.94, "W": 1.92, "cab": 0.37, "roofDrop": 0.13, "nose": 0.22}, "glb_url": None},
+    "citroen_jumpy": {"name": "Citroën Jumpy", "match": ["jumpy", "dispatch"],
+        "body": {"L": 5.31, "H": 1.94, "W": 1.92, "cab": 0.37, "roofDrop": 0.13, "nose": 0.22}, "glb_url": None},
+    "toyota_proace": {"name": "Toyota Proace", "match": ["proace"],
+        "body": {"L": 5.31, "H": 1.94, "W": 1.92, "cab": 0.37, "roofDrop": 0.13, "nose": 0.22}, "glb_url": None},
+    "iveco_daily": {"name": "Iveco Daily", "match": ["daily"],
+        "body": {"L": 6.00, "H": 2.60, "W": 2.00, "cab": 0.30, "roofDrop": 0.16, "nose": 0.13}, "glb_url": None},
+    "vw_transporter": {"name": "Volkswagen Transporter", "match": ["transporter", "t6", "t5", "caravelle"],
+        "body": {"L": 5.30, "H": 1.99, "W": 1.90, "cab": 0.38, "roofDrop": 0.12, "nose": 0.20}, "glb_url": None},
+    "nissan_primastar": {"name": "Nissan Primastar", "match": ["primastar", "nv300"],
+        "body": {"L": 5.48, "H": 1.97, "W": 1.96, "cab": 0.36, "roofDrop": 0.13, "nose": 0.22}, "glb_url": None},
+    "mercedes_vito": {"name": "Mercedes-Benz Vito", "match": ["vito", "viano"],
+        "body": {"L": 5.14, "H": 1.91, "W": 1.93, "cab": 0.38, "roofDrop": 0.12, "nose": 0.20}, "glb_url": None},
+    "vw_caddy": {"name": "Volkswagen Caddy", "match": ["caddy"],
+        "body": {"L": 4.50, "H": 1.83, "W": 1.79, "cab": 0.44, "roofDrop": 0.10, "nose": 0.26}, "glb_url": None},
+    "citroen_berlingo": {"name": "Citroën Berlingo", "match": ["berlingo", "partner", "combo", "doblo", "kangoo", "rifter"],
+        "body": {"L": 4.40, "H": 1.80, "W": 1.85, "cab": 0.45, "roofDrop": 0.10, "nose": 0.24}, "glb_url": None},
+}
+
+
+def _resolve_vehicle_model(brand: str = "", model: str = "") -> dict:
+    """Marca+modelo (texto libre) → mejor entrada del catálogo. El match más
+    específico (más largo) gana, para que 'Transit Custom' no caiga en 'Transit'."""
+    s = f"{brand} {model}".lower().strip()
+    best_key, best_len = None, 0
+    for key, ent in VEHICLE_MODEL_CATALOG.items():
+        for kw in ent["match"]:
+            if kw in s and len(kw) > best_len:
+                best_key, best_len = key, len(kw)
+    if not best_key:
+        return {"key": None, "name": None, "body": None, "glb_url": None, "provisional": True}
+    ent = VEHICLE_MODEL_CATALOG[best_key]
+    return {"key": best_key, "name": ent["name"], "body": ent["body"],
+            "glb_url": ent.get("glb_url"), "provisional": ent.get("glb_url") is None}
+
+
+@api_router.get("/vehicle-models/resolve")
+async def resolve_vehicle_model(brand: str = "", model: str = "", year: Optional[int] = None,
+                                version: str = "", _admin: dict = Depends(require_admin)):
+    """VehicleModelResolver: devuelve la config de carrocería del modelo y, si
+    existe, la URL del GLB real. year/version reservados para futuras variantes."""
+    return _resolve_vehicle_model(brand, model)
+
+
+@api_router.post("/vehicles/{vehicle_id}/identify-model")
+async def identify_vehicle_model(vehicle_id: str, _admin: dict = Depends(require_admin)):
+    """La IA (Gemini) identifica marca/modelo/carrocería/color mirando las fotos
+    de la última inspección del vehículo. Se guarda en vehicle.ai_model."""
+    v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
+    if not v:
+        raise HTTPException(status_code=404, detail="Vehículo no encontrado")
+    insp = await db.inspections.find_one(
+        {"vehicle_id": vehicle_id, "deleted": {"$ne": True}, "photos.0": {"$exists": True}},
+        {"_id": 0, "photos": 1}, sort=[("created_at", -1)])
+    photos = (insp or {}).get("photos") or []
+    if not photos:
+        raise HTTPException(status_code=400, detail="Este vehículo aún no tiene fotos de inspección para identificar el modelo")
+
+    import httpx as _httpx
+    imgs = []
+    async with _httpx.AsyncClient(timeout=20) as _c:
+        for url in photos[:4]:
+            try:
+                r = await _c.get(url)
+                if r.status_code == 200 and r.content:
+                    imgs.append(r.content)
+            except Exception:
+                pass
+    if not imgs:
+        raise HTTPException(status_code=502, detail="No se pudieron descargar las fotos para el análisis")
+
+    prompt = (
+        "Eres un perito de vehículos comerciales. Observa estas fotos de una furgoneta "
+        "de reparto y deduce el MODELO EXACTO. Devuelve SOLO un JSON con: "
+        '{"brand": marca (ej. Mercedes-Benz, Ford, Renault, Fiat, Peugeot, Citroën, '
+        'Volkswagen, Iveco, Opel, Toyota, Nissan), "model": modelo (ej. Sprinter, '
+        'Transit, Transit Custom, Master, Trafic, Ducato, Boxer, Jumper, Daily, '
+        'Crafter, Vivaro, Proace, Expert, Transporter, Vito, Caddy, Berlingo), '
+        '"body_type": carrocería (ej. L2H2, furgón medio, furgón largo, combi), '
+        '"color": color dominante en español, "confidence": 0.0-1.0}. '
+        "Si no estás seguro del modelo exacto, da tu mejor estimación y baja la confidence. "
+        "No inventes: si solo ves parte del vehículo, usa lo visible."
+    )
+    try:
+        from google.genai import types as genai_types
+        client = _gemini_client_plantilla()
+        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+        contents = [prompt] + [genai_types.Part.from_bytes(data=b, mime_type="image/jpeg") for b in imgs]
+        cfg = genai_types.GenerateContentConfig(
+            response_mime_type="application/json",
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=0))
+        loop = asyncio.get_event_loop()
+        resp = await asyncio.wait_for(
+            loop.run_in_executor(_executor, lambda: client.models.generate_content(
+                model=model_name, contents=contents, config=cfg)),
+            timeout=45.0)
+        parsed = json.loads((resp.text or "{}").strip())
+    except Exception as e:
+        logger.warning(f"identify-model {vehicle_id}: {e}")
+        raise HTTPException(status_code=502, detail="La IA no pudo identificar el modelo ahora mismo, inténtalo de nuevo")
+
+    ai_model = {
+        "brand": (parsed.get("brand") or "").strip(),
+        "model": (parsed.get("model") or "").strip(),
+        "body_type": (parsed.get("body_type") or "").strip(),
+        "color": (parsed.get("color") or "").strip(),
+        "confidence": float(parsed.get("confidence") or 0.0),
+        "identified_at": datetime.now(timezone.utc).isoformat(),
+        "source": "gemini_photos",
+    }
+    resolved = _resolve_vehicle_model(ai_model["brand"], ai_model["model"])
+    await db.vehicles.update_one({"id": vehicle_id}, {"$set": {"ai_model": ai_model}})
+    return {"ai_model": ai_model, "resolved": resolved}
 
 
 @api_router.get("/inspections/review-queue")

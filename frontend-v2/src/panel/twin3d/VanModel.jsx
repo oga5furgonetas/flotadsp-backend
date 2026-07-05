@@ -1,13 +1,28 @@
 import { useMemo } from 'react'
-import { RoundedBox } from '@react-three/drei'
+import { RoundedBox, useGLTF } from '@react-three/drei'
 import { bodyColorFor } from './vanGeometry'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VehicleModelLoader — malla de la furgoneta.
-// Hoy: geometría procedural paramétrica (proporciones por clase). Mañana: si
-// existe un GLB para el modelo, se carga aquí y el resto del visor no cambia,
-// porque todo se posiciona con las MISMAS dimensiones (dims) y el mapeo de zonas.
+// Si el VehicleModelResolver aporta un GLB del modelo real, se carga ese (y el
+// resto del visor no cambia porque todo se posiciona con las MISMAS dims y el
+// mapeo de zonas). Si no, geometría procedural paramétrica con las dimensiones
+// REALES del modelo (no una furgoneta genérica): silueta específica del modelo.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Modelo 3D real desde GLB (CDN/R2), escalado a las dimensiones del modelo.
+function RealVanModel({ url, dims }) {
+  const { scene } = useGLTF(url)
+  const cloned = useMemo(() => scene.clone(true), [scene])
+  return <primitive object={cloned} position={[0, 0, 0]} />
+}
+
+export default function VanModel({ dims, brand, inspectionMode, litZones, glbUrl }) {
+  if (glbUrl) {
+    return <RealVanModel url={glbUrl} dims={dims} />
+  }
+  return <ProceduralVan dims={dims} brand={brand} inspectionMode={inspectionMode} litZones={litZones} />
+}
 
 // Cristal
 const GLASS = {
@@ -15,7 +30,7 @@ const GLASS = {
   transparent: true, opacity: 0.55,
 }
 
-export default function VanModel({ dims, brand, inspectionMode, litZones }) {
+function ProceduralVan({ dims, brand, inspectionMode, litZones }) {
   const { L, H, W, cab, roofDrop, nose } = dims
   const bodyColor = inspectionMode ? '#6b7280' : bodyColorFor(brand)
 
