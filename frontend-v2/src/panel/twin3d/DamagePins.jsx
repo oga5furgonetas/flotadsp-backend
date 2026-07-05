@@ -15,7 +15,11 @@ function offsetPos(pos, normal, d = 0.32) {
   return [pos[0] + normal[0] * d, pos[1] + normal[1] * d, pos[2] + normal[2] * d]
 }
 
-export default function DamagePins({ markers, selectedKey, hoveredKey, onSelect, onHover }) {
+export default function DamagePins({ markers, selectedKey, hoveredKey, onSelect, onHover, occluder }) {
+  // occluder: ref al modelo. Un pin detrás de la furgoneta se oculta (como en
+  // Google Maps un marcador tras un edificio) → deja de confundir. El pin
+  // seleccionado nunca se oculta (la cámara ya vuela hacia él).
+  const occ = occluder ? [occluder] : undefined
   return (
     <>
       {markers.map((m) => {
@@ -29,6 +33,7 @@ export default function DamagePins({ markers, selectedKey, hoveredKey, onSelect,
             position={offsetPos(m.pos, m.normal)}
             center
             zIndexRange={[60, 0]}
+            occlude={active ? undefined : occ}
             style={{ pointerEvents: 'auto', cursor: 'pointer' }}
           >
             <div

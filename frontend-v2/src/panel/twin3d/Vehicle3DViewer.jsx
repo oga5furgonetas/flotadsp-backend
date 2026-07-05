@@ -43,6 +43,7 @@ function VehicleLighting() {
 
 export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading, _debugModel }) {
   const controlsRef = useRef()
+  const vanRef = useRef()   // modelo 3D → oclusión de pines detrás de la furgoneta
 
   // VehicleModelResolver: marca/modelo (IA si existe, si no lo introducido) → malla.
   const [modelInfo, setModelInfo] = useState(_debugModel || null)
@@ -236,9 +237,11 @@ export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading,
         <color attach="background" args={['#0b0e14']} />
         <VehicleLighting />
         <Suspense fallback={<Loader />}>
-          <VanModel dims={dims} brand={vehicle?.brand} inspectionMode={inspectionMode} litZones={litZones} glbUrl={modelInfo?.glb_url} />
+          <group ref={vanRef}>
+            <VanModel dims={dims} brand={vehicle?.brand} inspectionMode={inspectionMode} litZones={litZones} glbUrl={modelInfo?.glb_url} />
+          </group>
           <DamagePins markers={visible} selectedKey={selectedKey} hoveredKey={hoveredKey}
-            onSelect={selectMarker} onHover={setHoveredKey} />
+            onSelect={selectMarker} onHover={setHoveredKey} occluder={vanRef} />
         </Suspense>
         <ContactShadows position={[0, 0.01, 0]} opacity={0.55} scale={dims.L * 2.2} blur={2.4} far={4} />
         <OrbitControls ref={controlsRef} target={orbitTarget}
