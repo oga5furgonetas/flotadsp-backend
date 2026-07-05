@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/providers.dart';
 import '../../../core/theme/app_theme.dart';
@@ -62,7 +63,10 @@ class FleetScreen extends ConsumerWidget {
                       padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
                       itemCount: list.length,
                       separatorBuilder: (_, _) => const SizedBox(height: 10),
-                      itemBuilder: (context, i) => _VehicleTile(vehicle: list[i]),
+                      itemBuilder: (context, i) => _VehicleTile(
+                        vehicle: list[i],
+                        onTap: () => context.push('/vehicle/${list[i].id}', extra: list[i]),
+                      ),
                     ),
               loading: () => const _LoadingList(),
               error: (e, _) => ListView(
@@ -112,8 +116,9 @@ const _statusMeta = {
 };
 
 class _VehicleTile extends StatelessWidget {
-  const _VehicleTile({required this.vehicle});
+  const _VehicleTile({required this.vehicle, this.onTap});
   final Vehicle vehicle;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -121,9 +126,12 @@ class _VehicleTile extends StatelessWidget {
     final meta = _statusMeta[vehicle.status] ?? ('—', muted);
 
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
           children: [
             Container(
               width: 44,
@@ -161,6 +169,7 @@ class _VehicleTile extends StatelessWidget {
                   style: TextStyle(color: meta.$2, fontSize: 11, fontWeight: FontWeight.w700)),
             ),
           ],
+          ),
         ),
       ),
     );

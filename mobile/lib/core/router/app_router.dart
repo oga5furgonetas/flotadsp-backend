@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../features/auth/presentation/auth_controller.dart';
 import '../../features/auth/presentation/login_screen.dart';
+import '../../features/fleet/domain/vehicle.dart';
+import '../../features/fleet/presentation/vehicle_detail_screen.dart';
 import '../../features/home/presentation/home_shell.dart';
 import '../providers.dart';
 import '../widgets/splash_screen.dart';
@@ -23,6 +25,14 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/splash', name: 'splash', builder: (_, _) => const SplashScreen()),
       GoRoute(path: '/login', name: 'login', builder: (_, _) => const LoginScreen()),
       GoRoute(path: '/home', name: 'home', builder: (_, _) => const HomeShell()),
+      GoRoute(
+        path: '/vehicle/:id',
+        name: 'vehicle',
+        builder: (context, state) => VehicleDetailScreen(
+          vehicleId: state.pathParameters['id']!,
+          vehicle: state.extra is Vehicle ? state.extra as Vehicle : null,
+        ),
+      ),
     ],
     redirect: (context, state) {
       final status = ref.read(authControllerProvider).status;
