@@ -50,17 +50,17 @@ const TABS_DEF = {
   furgonetas: {
     labelKey: 'nav.tab.vans',
     items: [
-      { to: '/panel/revision', labelKey: 'nav.revision', icon: CheckCircle2 },
-      { to: '/panel/inspecciones', labelKey: 'nav.inspections', icon: ClipboardList },
-      { to: '/panel/vehiculos', labelKey: 'nav.vehicles', icon: Truck },
-      { to: '/panel/talleres', labelKey: 'nav.workshops', icon: Wrench },
-      { to: '/panel/incidencias', labelKey: 'nav.incidents', icon: AlertTriangle },
-      { to: '/panel/avisos-itv', labelKey: 'nav.itvalerts', icon: BellRing },
-      { to: '/panel/renting', labelKey: 'nav.renting', icon: KeyRound },
-      { to: '/panel/casas-alquiler', labelKey: 'nav.rental', icon: Building2 },
-      { to: '/panel/ia-peritaje', labelKey: 'nav.ai', icon: BrainCircuit },
-      { to: '/panel/importaciones', labelKey: 'nav.imports', icon: FileUp },
-      { to: '/panel/configuracion', labelKey: 'nav.settings', icon: Settings },
+      { to: '/panel/revision', labelKey: 'nav.revision', icon: CheckCircle2, group: 'nav.grp.ops' },
+      { to: '/panel/inspecciones', labelKey: 'nav.inspections', icon: ClipboardList, group: 'nav.grp.ops' },
+      { to: '/panel/vehiculos', labelKey: 'nav.vehicles', icon: Truck, group: 'nav.grp.ops' },
+      { to: '/panel/talleres', labelKey: 'nav.workshops', icon: Wrench, group: 'nav.grp.ops' },
+      { to: '/panel/incidencias', labelKey: 'nav.incidents', icon: AlertTriangle, group: 'nav.grp.ops' },
+      { to: '/panel/ia-peritaje', labelKey: 'nav.ai', icon: BrainCircuit, group: 'nav.grp.ops' },
+      { to: '/panel/avisos-itv', labelKey: 'nav.itvalerts', icon: BellRing, group: 'nav.grp.expiry' },
+      { to: '/panel/renting', labelKey: 'nav.renting', icon: KeyRound, group: 'nav.grp.expiry' },
+      { to: '/panel/casas-alquiler', labelKey: 'nav.rental', icon: Building2, group: 'nav.grp.expiry' },
+      { to: '/panel/importaciones', labelKey: 'nav.imports', icon: FileUp, group: 'nav.grp.manage' },
+      { to: '/panel/configuracion', labelKey: 'nav.settings', icon: Settings, group: 'nav.grp.manage' },
     ],
   },
 }
@@ -196,17 +196,27 @@ export default function PanelLayout() {
         </div>
 
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-1">
-          {items.map((it) => (
-            <NavLink
-              key={it.to}
-              to={it.to}
-              end={it.end}
-              className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}
-            >
-              <it.icon size={16} />
-              {it.label}
-            </NavLink>
-          ))}
+          {items.map((it, i) => {
+            // Subtítulo de grupo cuando cambia el grupo (declutter del menú).
+            const showHeader = it.group && it.group !== (i > 0 ? items[i - 1].group : null)
+            return (
+              <div key={it.to}>
+                {showHeader && (
+                  <div className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-dark-600">
+                    {t(it.group)}
+                  </div>
+                )}
+                <NavLink
+                  to={it.to}
+                  end={it.end}
+                  className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}
+                >
+                  <it.icon size={16} />
+                  {it.label}
+                </NavLink>
+              </div>
+            )
+          })}
           {showAdmin && (
             <NavLink
               to="/panel/admin"
