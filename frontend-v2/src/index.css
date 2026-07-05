@@ -2,6 +2,34 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Tema claro/oscuro de la LANDING pública (solo .ld-root) ──────────────── */
+.ld-root {
+  --ld-bg: #080a0e;
+  --ld-surface: #0e1116;
+  --ld-surface2: #13161b;
+  --ld-text: #eef1f6;
+  --ld-muted: #94a3b8;
+  --ld-dim: #64748b;
+  --ld-border: rgba(255, 255, 255, 0.08);
+  --ld-border-strong: rgba(255, 255, 255, 0.12);
+  --ld-fill: rgba(255, 255, 255, 0.05);
+  --ld-nav: rgba(8, 10, 14, 0.85);
+  background: var(--ld-bg);
+  color: var(--ld-text);
+}
+.ld-root[data-theme='light'] {
+  --ld-bg: #f5f8fc;
+  --ld-surface: #ffffff;
+  --ld-surface2: #eef2f8;
+  --ld-text: #0f172a;
+  --ld-muted: #475569;
+  --ld-dim: #64748b;
+  --ld-border: rgba(15, 23, 42, 0.1);
+  --ld-border-strong: rgba(15, 23, 42, 0.16);
+  --ld-fill: rgba(15, 23, 42, 0.04);
+  --ld-nav: rgba(255, 255, 255, 0.85);
+}
+
 @layer base {
   body {
     @apply bg-dark-950 text-dark-50 font-sans antialiased;

@@ -41,7 +41,7 @@ function VehicleLighting() {
   )
 }
 
-export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading, _debugModel }) {
+export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading, _debugModel, publicMode }) {
   const controlsRef = useRef()
   const vanRef = useRef()   // modelo 3D → oclusión de pines detrás de la furgoneta
 
@@ -162,11 +162,13 @@ export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading,
           <Filter size={14} /> Filtros
         </button>
 
-        <button onClick={identify} disabled={identifying}
-          style={{ ...pillBtn, background: 'rgba(168,85,247,.18)', color: '#d8b4fe', borderColor: '#a855f788' }}
-          title="La IA identifica marca/modelo exacto desde las fotos de inspección">
-          {identifying ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Identificar con IA
-        </button>
+        {!publicMode && (
+          <button onClick={identify} disabled={identifying}
+            style={{ ...pillBtn, background: 'rgba(168,85,247,.18)', color: '#d8b4fe', borderColor: '#a855f788' }}
+            title="La IA identifica marca/modelo exacto desde las fotos de inspección">
+            {identifying ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />} Identificar con IA
+          </button>
+        )}
       </div>
 
       {idMsg && (
