@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../dashboard/presentation/dashboard_screen.dart';
+import '../../fleet/presentation/fleet_screen.dart';
 import '../../settings/presentation/settings_screen.dart';
 
 /// Shell principal tras el login: navegación por pestañas (bottom nav).
@@ -16,7 +17,7 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell> {
   int _index = 0;
 
-  static const _titles = ['Resumen', 'Ajustes'];
+  static const _titles = ['Resumen', 'Flota', 'Ajustes'];
 
   @override
   Widget build(BuildContext context) {
@@ -26,6 +27,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         index: _index,
         children: const [
           DashboardScreen(),
+          FleetScreen(),
           SettingsScreen(),
         ],
       ),
@@ -37,6 +39,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             icon: Icon(Icons.dashboard_outlined),
             selectedIcon: Icon(Icons.dashboard_rounded),
             label: 'Resumen',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.local_shipping_outlined),
+            selectedIcon: Icon(Icons.local_shipping_rounded),
+            label: 'Flota',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_outlined),
