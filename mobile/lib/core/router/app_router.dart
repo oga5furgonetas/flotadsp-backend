@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../features/auth/presentation/auth_controller.dart';
 import '../../features/auth/presentation/login_screen.dart';
-import '../../features/home/presentation/home_screen.dart';
+import '../../features/home/presentation/home_shell.dart';
 import '../providers.dart';
 import '../widgets/splash_screen.dart';
 
@@ -22,7 +22,7 @@ final routerProvider = Provider<GoRouter>((ref) {
     routes: [
       GoRoute(path: '/splash', name: 'splash', builder: (_, _) => const SplashScreen()),
       GoRoute(path: '/login', name: 'login', builder: (_, _) => const LoginScreen()),
-      GoRoute(path: '/home', name: 'home', builder: (_, _) => const HomeScreen()),
+      GoRoute(path: '/home', name: 'home', builder: (_, _) => const HomeShell()),
     ],
     redirect: (context, state) {
       final status = ref.read(authControllerProvider).status;
