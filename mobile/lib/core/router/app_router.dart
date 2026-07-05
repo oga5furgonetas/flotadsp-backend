@@ -7,6 +7,7 @@ import '../../features/auth/presentation/login_screen.dart';
 import '../../features/fleet/domain/vehicle.dart';
 import '../../features/fleet/presentation/vehicle_detail_screen.dart';
 import '../../features/home/presentation/home_shell.dart';
+import '../../features/inspections/presentation/inspection_detail_screen.dart';
 import '../providers.dart';
 import '../widgets/splash_screen.dart';
 
@@ -31,6 +32,13 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => VehicleDetailScreen(
           vehicleId: state.pathParameters['id']!,
           vehicle: state.extra is Vehicle ? state.extra as Vehicle : null,
+        ),
+      ),
+      GoRoute(
+        path: '/inspection/:id',
+        name: 'inspection',
+        builder: (context, state) => InspectionDetailScreen(
+          inspectionId: state.pathParameters['id']!,
         ),
       ),
     ],

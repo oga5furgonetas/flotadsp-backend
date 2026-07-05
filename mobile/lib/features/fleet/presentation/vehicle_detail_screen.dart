@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/severity.dart';
@@ -158,50 +159,56 @@ class _InspectionTile extends StatelessWidget {
     final sev = SeverityStyle.of(inspection.severity);
 
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: sev.color.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(10),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => context.push('/inspection/${inspection.id}'),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: sev.color.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(Icons.fact_check_rounded, color: sev.color, size: 20),
               ),
-              child: Icon(Icons.fact_check_rounded, color: sev.color, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_fmtDate(inspection.date), style: const TextStyle(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text(
+                      [
+                        if (inspection.driver.isNotEmpty) inspection.driver,
+                        '${inspection.photoCount} fotos',
+                        if (inspection.damageCount > 0) '${inspection.damageCount} daños',
+                      ].join(' · '),
+                      style: TextStyle(color: muted, fontSize: 12.5),
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Text(_fmtDate(inspection.date), style: const TextStyle(fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 2),
-                  Text(
-                    [
-                      if (inspection.driver.isNotEmpty) inspection.driver,
-                      '${inspection.photoCount} fotos',
-                      if (inspection.damageCount > 0) '${inspection.damageCount} daños',
-                    ].join(' · '),
-                    style: TextStyle(color: muted, fontSize: 12.5),
+                  Text(sev.label, style: TextStyle(color: sev.color, fontSize: 12, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 4),
+                  Icon(
+                    inspection.reviewed ? Icons.check_circle_rounded : Icons.schedule_rounded,
+                    size: 15,
+                    color: inspection.reviewed ? AppTheme.success : muted,
                   ),
                 ],
               ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(sev.label, style: TextStyle(color: sev.color, fontSize: 12, fontWeight: FontWeight.w700)),
-                const SizedBox(height: 4),
-                Icon(
-                  inspection.reviewed ? Icons.check_circle_rounded : Icons.schedule_rounded,
-                  size: 15,
-                  color: inspection.reviewed ? AppTheme.success : muted,
-                ),
-              ],
-            ),
-          ],
+              const SizedBox(width: 6),
+              Icon(Icons.chevron_right_rounded, size: 18, color: muted),
+            ],
+          ),
         ),
       ),
     );
