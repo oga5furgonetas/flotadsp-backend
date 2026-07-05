@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Requerido para llamar al backend. Sin esto, el APK release no tiene red
+         (Flutter solo lo añade a las builds de debug). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="flotadsp_admin"
+        android:label="FlotaDSP"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
