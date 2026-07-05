@@ -4077,18 +4077,31 @@ async def admin_login(data: LoginRequest, request: Request):
 # =========================
 
 async def _send_resend_email(to: str, subject: str, html: str) -> bool:
-    """Envía un email transaccional con Resend. Devuelve False si no está configurado."""
+    """Envía un email transaccional con Resend. Devuelve False si falla.
+    Remitente configurable con EMAIL_FROM (por defecto hola@flotadsp.com); OJO:
+    el dominio del remitente DEBE estar verificado en resend.com/domains o Resend
+    devuelve 403 y no envía nada. Registramos el error REAL para no fallar en
+    silencio (antes un dominio sin verificar parecía 'no configurado')."""
     resend_key = os.environ.get("RESEND_API_KEY", "")
     if not (resend_key and to):
+        logger.warning("email: RESEND_API_KEY o destinatario ausente — no se envía")
         return False
+    sender = os.environ.get("EMAIL_FROM", "FlotaDSP <hola@flotadsp.com>")
     import httpx as _httpx
-    async with _httpx.AsyncClient(timeout=15) as _c:
-        r = await _c.post(
-            "https://api.resend.com/emails",
-            headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-            json={"from": "FlotaDSP <hola@flotadsp.com>", "to": [to], "subject": subject, "html": html},
-        )
-        return r.status_code < 300
+    try:
+        async with _httpx.AsyncClient(timeout=15) as _c:
+            r = await _c.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
+                json={"from": sender, "to": [to], "subject": subject, "html": html},
+            )
+        if r.status_code >= 300:
+            logger.error(f"email: Resend rechazó el envío a {to} ({r.status_code}): {r.text[:300]}")
+            return False
+        return True
+    except Exception as e:
+        logger.error(f"email: excepción enviando a {to}: {e}")
+        return False
 
 
 _RESET_TOKEN_TTL_MIN = 60  # el enlace caduca en 1 hora
