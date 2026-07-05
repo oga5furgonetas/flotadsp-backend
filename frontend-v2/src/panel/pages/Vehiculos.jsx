@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { useEscape } from '../../lib/useEscape'
@@ -11,13 +11,17 @@ import {
   User, Camera, ZoomIn, Pencil, Check, Maximize2, ArrowLeft,
   Fuel, Palette, Hash, Building2, Clock, AlertTriangle, Wrench,
   Droplets, CircleDot, Disc, FileText, Trash2, Upload, ExternalLink,
-  FileCheck, FileBadge, FileImage, File, Plus,
+  FileCheck, FileBadge, FileImage, File, Plus, Box,
 } from 'lucide-react'
 import {
   getVehicles, getLastInspections, getVehicleDriver, getVehicleInspections, updateVehicle, deleteVehicle, createIncident, getIncidents,
   getVehicleMaintenance, registerOilChange, registerMaintenanceChange,
   getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument, createVehicle,
+  getVehicleDamageLedger,
 } from '../api'
+
+// El visor 3D (three.js ~400 kB) se carga solo al abrir la pestaña Gemelo 3D.
+const Vehicle3DViewer = lazy(() => import('../twin3d/Vehicle3DViewer'))
 
 const STATUS_MAP = {
   active: { label: 'Disponible',  labelKey: 'veh.available', dot: 'bg-emerald-400', badge: 'bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/30' },
@@ -298,7 +302,9 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
   const [uploadingDoc, setUploadingDoc] = useState(false)
   const docInputRef = useRef()
   const [pendingDocType, setPendingDocType] = useState(null)
-  const [activeTab, setActiveTab] = useState('info') // 'info' | 'inspecciones' | 'docs'
+  const [activeTab, setActiveTab] = useState('info') // 'info' | 'gemelo' | 'inspecciones' | 'docs'
+  const [ledger, setLedger] = useState(null)
+  const [ledgerLoading, setLedgerLoading] = useState(false)
 
   const vinOrPlate = vehicle.vin || vehicle.license_plate || ''
   const st = STATUS_MAP[vehicle.status] || STATUS_MAP.baja
@@ -311,8 +317,21 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
     getIncidents({ vehicle_id: vehicle.id }).then(r => { if (!cancelled) setVehicleIncidents(Array.isArray(r.data) ? r.data : []) }).catch(() => { if (!cancelled) setVehicleIncidents([]) })
     getVehicleMaintenance(vehicle.id).then(r => { if (!cancelled) setMaintenance(r.data || null) }).catch(() => { if (!cancelled) setMaintenance(null) })
     getVehicleDocuments(vehicle.id).then(r => { if (!cancelled) setDocs(Array.isArray(r.data) ? r.data : []) }).catch(() => { if (!cancelled) setDocs([]) })
+    setLedger(null)
     return () => { cancelled = true }
   }, [vehicle.id])
+
+  // Ledger del gemelo 3D: se carga la primera vez que se abre la pestaña.
+  useEffect(() => {
+    if (activeTab !== 'gemelo' || ledger || ledgerLoading) return
+    let cancelled = false
+    setLedgerLoading(true)
+    getVehicleDamageLedger(vehicle.id)
+      .then(r => { if (!cancelled) setLedger(r.data || { open: [], repaired: [] }) })
+      .catch(() => { if (!cancelled) setLedger({ open: [], repaired: [] }) })
+      .finally(() => { if (!cancelled) setLedgerLoading(false) })
+    return () => { cancelled = true }
+  }, [activeTab, vehicle.id, ledger, ledgerLoading])
 
   useEffect(() => {
     if (!vinOrPlate) return
@@ -558,6 +577,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
           <div className="flex shrink-0 border-b border-white/5">
             {[
               { id: 'info',         label: 'Info',          count: null },
+              { id: 'gemelo',       label: 'Gemelo 3D',     count: null },
               { id: 'inspecciones', label: 'Inspecciones',  count: insps?.length ?? null },
               { id: 'docs',         label: 'Documentos',    count: docs?.length ?? null },
             ].map(tab => (
@@ -819,6 +839,31 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
 
             <div className="h-4" />
             </> /* fin tab info */}
+
+            {/* ══ TAB: GEMELO DIGITAL 3D ══ */}
+            {activeTab === 'gemelo' && (
+              <div className="p-3" style={{ height: 'calc(100vh - 220px)', minHeight: 460 }}>
+                {insps === null ? (
+                  <div className="flex h-full items-center justify-center text-dark-500">
+                    <Loader2 size={18} className="animate-spin" /> <span className="ml-2">Cargando…</span>
+                  </div>
+                ) : (
+                  <Suspense fallback={
+                    <div className="flex h-full flex-col items-center justify-center gap-2 text-dark-500">
+                      <Box size={26} className="animate-pulse" />
+                      <span className="text-sm">Preparando el gemelo digital…</span>
+                    </div>
+                  }>
+                    <Vehicle3DViewer
+                      vehicle={vehicle}
+                      inspections={insps || []}
+                      ledger={ledger}
+                      loading={ledgerLoading}
+                    />
+                  </Suspense>
+                )}
+              </div>
+            )}
 
             {/* ══ TAB: INSPECCIONES ══ */}
             {activeTab === 'inspecciones' && (

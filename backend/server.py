@@ -28,6 +28,7 @@ from jose import jwt, JWTError
 from pymongo.errors import DuplicateKeyError
 import bcrypt
 import re
+import time
 
 import asyncio
 import os
@@ -568,6 +569,26 @@ def decode_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail=f"Token inválido: {e}")
 
 
+# Un JWT es válido hasta que caduca (72h) aunque el usuario haya sido borrado.
+# Para que borrar/deshabilitar un admin surta efecto YA, se comprueba que siga
+# existiendo en BD (con caché de 60s para no añadir una query a cada petición).
+_ADMIN_EXISTS_CACHE: dict = {}   # user_id -> (expira_ts, existe)
+_ADMIN_EXISTS_TTL = 60.0
+
+
+async def _admin_still_exists(user_id: str) -> bool:
+    now = time.time()
+    hit = _ADMIN_EXISTS_CACHE.get(user_id)
+    if hit and hit[0] > now:
+        return hit[1]
+    doc = await global_db.admin_users.find_one({"id": user_id}, {"_id": 0, "id": 1, "disabled": 1})
+    ok = bool(doc) and not doc.get("disabled")
+    if len(_ADMIN_EXISTS_CACHE) > 2000:
+        _ADMIN_EXISTS_CACHE.clear()
+    _ADMIN_EXISTS_CACHE[user_id] = (now + _ADMIN_EXISTS_TTL, ok)
+    return ok
+
+
 async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
@@ -575,6 +596,12 @@ async def get_current_user(
     if not credentials:
         raise HTTPException(status_code=401, detail="Se requiere autenticación")
     payload = decode_token(credentials.credentials)
+    # Sesión revocada: el usuario ya no existe (o está deshabilitado) en BD.
+    # Los tokens de demo y de mantenimiento no viven en admin_users.
+    if (payload.get("role") == "admin" and not payload.get("demo")
+            and payload.get("sub") != "maintenance-claude"
+            and not await _admin_still_exists(payload.get("sub", ""))):
+        raise HTTPException(status_code=401, detail="Sesión revocada: el usuario ya no existe")
     # Modo demo: cuenta de solo lectura para probar el producto sin registro.
     # Cualquier mutación se bloquea aquí, cubra el endpoint que cubra.
     if payload.get("demo") and request.method not in ("GET", "HEAD", "OPTIONS"):
@@ -695,21 +722,30 @@ async def _init_segmentation():
 async def seed_initial_admin():
     await ensure_owner_org()
 
-    # Migración: pasa los admins existentes de la BD por defecto a global_db (una vez),
-    # para que sigan pudiendo entrar tras activar el multi-tenant.
-    legacy = client[_DEFAULT_DB_NAME].admin_users
-    async for u in legacy.find({}):
-        if not await global_db.admin_users.find_one({"username": u["username"]}):
-            u.pop("_id", None)
-            u["org_id"] = OWNER_ORG_ID
-            await global_db.admin_users.insert_one(u)
-            logger.info("Admin '%s' migrado a global_db", u.get("username"))
+    # Migración: pasa los admins existentes de la BD por defecto a global_db.
+    # Corre UNA sola vez de verdad (flag en app_meta): antes corría en cada
+    # arranque y resucitaba usuarios borrados a propósito.
+    if not await global_db.app_meta.find_one({"_id": "legacy_admins_migrated"}):
+        legacy = client[_DEFAULT_DB_NAME].admin_users
+        async for u in legacy.find({}):
+            if await global_db.admin_tombstones.find_one({"username": u["username"]}):
+                continue  # borrado a propósito: no resucitar
+            if not await global_db.admin_users.find_one({"username": u["username"]}):
+                u.pop("_id", None)
+                u["org_id"] = OWNER_ORG_ID
+                await global_db.admin_users.insert_one(u)
+                logger.info("Admin '%s' migrado a global_db", u.get("username"))
+        await global_db.app_meta.update_one(
+            {"_id": "legacy_admins_migrated"},
+            {"$set": {"at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
 
+    # Admin inicial desde env: SOLO en el primer arranque (BD sin admins).
+    # Antes se re-creaba en cada deploy si no existía → un admin borrado volvía solo.
     username = os.environ.get("ADMIN_USERNAME", "")
     password = os.environ.get("ADMIN_PASSWORD", "")
     if not username or not password:
         logger.info("ADMIN_USERNAME/ADMIN_PASSWORD no configurados — omitiendo seed")
-    elif not await global_db.admin_users.find_one({"username": username}):
+    elif await global_db.admin_users.count_documents({}) == 0:
         await global_db.admin_users.insert_one({
             "id": str(uuid.uuid4()), "username": username,
             "hashed_password": hash_password(password),
@@ -717,7 +753,7 @@ async def seed_initial_admin():
             "role": "admin", "org_id": OWNER_ORG_ID,
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
-        logger.info(f"Admin inicial '{username}' creado")
+        logger.info(f"Admin inicial '{username}' creado (primer arranque)")
 
     # ── Admin fijo: Mery ── (idempotente)
     # Contraseña inicial: variable de entorno MERY_PASSWORD (obligatoria en producción).
@@ -1986,7 +2022,9 @@ async def _apply_vehicle_memory(vehicle_id: str, analysis, inspection_id: str = 
     posterior ahí vuelve a contar como nuevo, que es lo justo para el scoring.
     No escribe NADA en ai_feedback (el dataset solo crece con humanos)."""
     try:
-        if not vehicle_id or not analysis or not getattr(analysis, "new_damages", None):
+        if not vehicle_id or not analysis:
+            return
+        if not (getattr(analysis, "new_damages", None) or getattr(analysis, "damages", None)):
             return
         ledger = await _get_vehicle_ledger(vehicle_id, inspection_id)
         known = {e["panel"]: e for e in ledger}
@@ -2040,9 +2078,25 @@ async def _apply_vehicle_memory(vehicle_id: str, analysis, inspection_id: str = 
             analysis.new_damages = kept
             if hasattr(analysis, "new_damages_count"):
                 analysis.new_damages_count = len(kept)
-        if moved or downgraded or registered:
+
+        # damages[] (todos los visibles): marca también los ya registrados.
+        # is_new=True es el default del modelo y Gemini no siempre lo pone bien;
+        # con esto Revisión Rápida puede fiarse de is_new para no re-validar.
+        marked = 0
+        for d in (getattr(analysis, "damages", None) or []):
+            p = _canon_panel(d.part or "")
+            d_rank = _SEV_RANK.get(_norm_sev(d.severity), 1)
+            if p and p in known and d_rank <= known[p]["rank"] and getattr(d, "is_new", True):
+                d.is_new = False
+                if "[ya registrado" not in (d.description or ""):
+                    d.description = ((d.description or "") +
+                                     f" · [ya registrado desde {known[p].get('first_seen')}]")
+                marked += 1
+
+        if moved or downgraded or registered or marked:
             logger.info(f"[Ledger] {vehicle_id}: {moved} ya registrados fuera de nuevos, "
-                        f"{registered} registrados, {downgraded} degradados por ✗")
+                        f"{registered} registrados, {downgraded} degradados por ✗, "
+                        f"{marked} marcados conocidos en damages[]")
     except Exception as e:
         logger.debug(f"[MemoriaVehículo] {e}")
 
@@ -3976,7 +4030,7 @@ async def admin_login(data: LoginRequest, request: Request):
     _rl_check(rl_ip)
 
     user = await global_db.admin_users.find_one({"username": data.username}, {"_id": 0})
-    if not user or not verify_password(data.password, user["hashed_password"]):
+    if not user or user.get("disabled") or not verify_password(data.password, user["hashed_password"]):
         await _rl_fail(rl_user, f"admin '{data.username}' (IP {_rl_key_ip(request)})")
         await _rl_fail(rl_ip, f"admin '{data.username}' (IP {_rl_key_ip(request)})")
         await asyncio.sleep(0.8)  # frena ataques automatizados
@@ -4611,6 +4665,13 @@ async def delete_admin(admin_id: str, _admin: dict = Depends(require_admin)):
     if target.get("super_admin"):
         raise HTTPException(status_code=403, detail="No puedes eliminar a un super-admin")
     await global_db.admin_users.delete_one({"id": admin_id})
+    # Lápida: los seeds/migraciones de arranque no deben resucitarlo jamás,
+    # y sus tokens vivos dejan de valer al momento (no en 60s de caché).
+    await global_db.admin_tombstones.update_one(
+        {"username": target.get("username")},
+        {"$set": {"deleted_at": datetime.now(timezone.utc).isoformat(),
+                  "deleted_by": _admin.get("sub")}}, upsert=True)
+    _ADMIN_EXISTS_CACHE.pop(admin_id, None)
     return {"success": True}
 
 
@@ -5702,6 +5763,17 @@ async def get_vehicle_inspections(vehicle_id: str, user: dict = Depends(require_
                 insp["driver_name"] = name_map.get(insp["driver_id"], "")
 
     return inspections
+
+
+@api_router.get("/vehicles/{vehicle_id}/damage-ledger")
+async def get_vehicle_damage_ledger(vehicle_id: str, _admin: dict = Depends(require_admin)):
+    """Ledger de daños del vehículo (gemelo digital 3D): daños abiertos
+    (con backfill perezoso si aún no existe) + historial de reparados."""
+    open_entries = await _get_vehicle_ledger(vehicle_id)
+    repaired = await db.vehicle_damage_ledger.find(
+        {"vehicle_id": vehicle_id, "status": "repaired"}, {"_id": 0}
+    ).sort("updated_at", -1).to_list(100)
+    return {"open": open_entries, "repaired": repaired}
 
 
 @api_router.get("/inspections/review-queue")

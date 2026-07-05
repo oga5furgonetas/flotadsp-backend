@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Loader2, LogIn, Zap } from 'lucide-react'
 import { API_BASE } from '../services/api'
-import { saveSession, isAuthed } from './auth'
+import { saveSession, isAuthed, getToken, logout } from './auth'
 
 export default function PanelLogin() {
   const nav = useNavigate()
@@ -11,9 +11,22 @@ export default function PanelLogin() {
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
 
-  if (isAuthed()) {
-    nav('/panel', { replace: true })
-  }
+  // Sesión guardada: solo auto-entrar si el servidor confirma que sigue siendo
+  // válida (usuarios borrados/revocados quedaban entrando con el token viejo).
+  useEffect(() => {
+    if (!isAuthed()) return
+    const ctrl = new AbortController()
+    fetch(`${API_BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+      signal: ctrl.signal,
+    })
+      .then((r) => {
+        if (r.ok) nav('/panel', { replace: true })
+        else logout()
+      })
+      .catch(() => {}) // sin red: se queda en el login, sin auto-entrar a ciegas
+    return () => ctrl.abort()
+  }, [nav])
 
   async function submit() {
     if (!user || !pass) return setErr('Introduce usuario y contraseña')

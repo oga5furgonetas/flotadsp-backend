@@ -81,13 +81,18 @@ export default function RevisionRapida() {
     : fullInsp?.analysis?.damages?.length > 0 ? 'all'
     : item?.new_damages?.length > 0 ? 'new'
     : 'new'
-  const damages = fullInsp?.analysis?.new_damages?.length > 0
+  const allDamages = fullInsp?.analysis?.new_damages?.length > 0
     ? fullInsp.analysis.new_damages
     : fullInsp?.analysis?.damages?.length > 0
       ? fullInsp.analysis.damages
       : item?.new_damages?.length > 0
         ? item.new_damages
         : item?.analysis?.new_damages || []
+  // Un daño ya registrado en el ledger del vehículo NO se vuelve a validar.
+  // _idx conserva el índice del array original: el backend valida por índice+scope.
+  const isKnownDamage = (d) => d?.is_new === false || (d?.description || '').includes('[ya registrado')
+  const damages = allDamages.map((d, i) => ({ ...d, _idx: i })).filter((d) => !isKnownDamage(d))
+  const knownCount = allDamages.length - damages.length
 
   // Atajos de teclado: ←/→ navegar, Enter marcar revisada. El equipo valida
   // cientos de inspecciones — sin tocar el ratón se va mucho más rápido.
@@ -403,7 +408,8 @@ export default function RevisionRapida() {
             {damages.length > 0 && (
               <div className="mt-4 space-y-2">
                 <div className="text-xs font-semibold uppercase tracking-wide text-dark-500">{t('rev.damages.validate')}</div>
-                {damages.map((d, i) => {
+                {damages.map((d) => {
+                  const i = d._idx
                   const v = verdicts[`${item.id}:${i}`]
                   return (
                     <div key={i} className="flex items-center justify-between gap-3 rounded-lg border border-dark-800 bg-dark-800/40 p-2.5">
@@ -443,6 +449,16 @@ export default function RevisionRapida() {
                     </div>
                   )
                 })}
+              </div>
+            )}
+
+            {/* Daños ya en el ledger del vehículo: informativo, sin re-validar */}
+            {knownCount > 0 && (
+              <div className="mt-3 flex items-center gap-1.5 rounded-lg bg-dark-800/40 px-2.5 py-2 text-xs text-dark-500">
+                <Check size={13} className="shrink-0 text-emerald-500/70" />
+                {knownCount === 1
+                  ? '1 daño ya registrado anteriormente en este vehículo — no requiere nueva validación'
+                  : `${knownCount} daños ya registrados anteriormente en este vehículo — no requieren nueva validación`}
               </div>
             )}
 
