@@ -35,18 +35,3 @@ final StateNotifierProvider<AuthController, AuthState> authControllerProvider =
 
 /// Modo de tema (claro/oscuro/sistema). Por defecto sigue al sistema.
 final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.system);
-
-/// Cabeceras HTTP con el token Bearer para peticiones fuera de [ApiClient]
-/// (p. ej. `Image.network` a rutas del backend que exigen sesión). Se lee el
-/// token del almacenamiento cifrado una sola vez y se cachea vía Riverpod.
-/// Si la lectura falla (p. ej. plugin no disponible en tests), devuelve mapa
-/// vacío en vez de propagar el error.
-final authHeadersProvider = FutureProvider<Map<String, String>>((ref) async {
-  try {
-    final token = await ref.watch(tokenStorageProvider).readToken();
-    if (token == null || token.isEmpty) return const <String, String>{};
-    return {'Authorization': 'Bearer $token'};
-  } catch (_) {
-    return const <String, String>{};
-  }
-});

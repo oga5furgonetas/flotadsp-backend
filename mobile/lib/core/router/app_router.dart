@@ -4,10 +4,15 @@ import 'package:go_router/go_router.dart';
 
 import '../../features/auth/presentation/auth_controller.dart';
 import '../../features/auth/presentation/login_screen.dart';
+import '../../features/chat/presentation/chat_screen.dart';
+import '../../features/drivers/presentation/drivers_screen.dart';
 import '../../features/fleet/domain/vehicle.dart';
 import '../../features/fleet/presentation/vehicle_detail_screen.dart';
 import '../../features/home/presentation/home_shell.dart';
+import '../../features/incidents/presentation/incidents_screen.dart';
+import '../../features/inspections/domain/inspection_detail.dart';
 import '../../features/inspections/presentation/inspection_detail_screen.dart';
+import '../../features/settings/presentation/settings_screen.dart';
 import '../providers.dart';
 import '../widgets/splash_screen.dart';
 
@@ -39,6 +44,18 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: 'inspection',
         builder: (context, state) => InspectionDetailScreen(
           inspectionId: state.pathParameters['id']!,
+          initial: state.extra is InspectionDetail ? state.extra as InspectionDetail : null,
+        ),
+      ),
+      GoRoute(path: '/drivers', name: 'drivers', builder: (_, _) => const DriversScreen()),
+      GoRoute(path: '/incidents', name: 'incidents', builder: (_, _) => const IncidentsScreen()),
+      GoRoute(path: '/chat', name: 'chat', builder: (_, _) => const ChatScreen()),
+      GoRoute(
+        path: '/settings',
+        name: 'settings',
+        builder: (_, _) => Scaffold(
+          appBar: AppBar(title: const Text('Ajustes')),
+          body: const SettingsScreen(),
         ),
       ),
     ],

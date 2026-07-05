@@ -12,6 +12,9 @@ class InspectionDetail {
     required this.photos,
     required this.damages,
     required this.newDamagesCount,
+    this.executiveSummary = '',
+    this.plateMismatch = false,
+    this.qualityWarnings = const [],
     this.vehicleId,
     this.vehiclePlate,
     this.center,
@@ -29,6 +32,9 @@ class InspectionDetail {
   final List<InspectionPhoto> photos;
   final List<DamageItem> damages;
   final int newDamagesCount;
+  final String executiveSummary;
+  final bool plateMismatch;
+  final List<String> qualityWarnings;
   final String? vehicleId;
   final String? vehiclePlate;
   final String? center;
@@ -40,22 +46,35 @@ class InspectionDetail {
   factory InspectionDetail.fromJson(Map<String, dynamic> j) {
     final analysis = (j['analysis'] as Map?)?.cast<String, dynamic>() ?? const {};
 
-    // Fotos: acepta lista de strings o de objetos {url,label,...}.
+    // Fotos: acepta lista de strings o de objetos {url,label,...}. La versión
+    // anotada (cajas de daños) viene en el array paralelo `annotated_photos`,
+    // emparejado por índice con `photos`.
     final rawPhotos = j['photos'] ?? j['images'];
+    final rawAnnotated = j['annotated_photos'];
+    final annotated = rawAnnotated is List ? rawAnnotated : const [];
+    String? annAt(int i) =>
+        (i < annotated.length && annotated[i] is String && (annotated[i] as String).isNotEmpty)
+            ? annotated[i] as String
+            : null;
     final photos = <InspectionPhoto>[];
     if (rawPhotos is List) {
-      for (final p in rawPhotos) {
+      for (var i = 0; i < rawPhotos.length; i++) {
+        final p = rawPhotos[i];
         if (p is String && p.isNotEmpty) {
-          photos.add(InspectionPhoto(url: p));
+          photos.add(InspectionPhoto(url: p, annotatedUrl: annAt(i)));
         } else if (p is Map) {
           final ph = InspectionPhoto.fromJson(Map<String, dynamic>.from(p));
-          if (ph.url.isNotEmpty) photos.add(ph);
+          if (ph.url.isNotEmpty) {
+            photos.add(InspectionPhoto(url: ph.url, label: ph.label, annotatedUrl: ph.annotatedUrl ?? annAt(i)));
+          }
         }
       }
     }
 
-    // Daños: prioriza new_damages dentro de analysis; si no, damages a raíz.
-    final rawDamages = analysis['new_damages'] ?? analysis['damages'] ?? j['damages'];
+    // Daños: new_damages (en analysis o a raíz, formato de la cola de revisión),
+    // si no damages.
+    final rawDamages =
+        analysis['new_damages'] ?? j['new_damages'] ?? analysis['damages'] ?? j['damages'];
     final damages = <DamageItem>[];
     if (rawDamages is List) {
       for (final d in rawDamages) {
@@ -73,7 +92,12 @@ class InspectionDetail {
       reviewed: (j['reviewed'] ?? false) == true,
       photos: photos,
       damages: damages,
-      newDamagesCount: _int(analysis['new_damages_count']) ?? damages.length,
+      newDamagesCount: _int(analysis['new_damages_count']) ?? _int(j['new_damages_count']) ?? damages.length,
+      executiveSummary: (analysis['executive_summary'] ?? j['executive_summary'] ?? '') as String,
+      plateMismatch: (j['plate_mismatch'] ?? false) == true,
+      qualityWarnings: (j['image_quality_warnings'] is List)
+          ? (j['image_quality_warnings'] as List).whereType<String>().toList()
+          : const [],
       vehicleId: j['vehicle_id']?.toString(),
       vehiclePlate: (j['license_plate'] ?? j['vehicle_plate']) as String?,
       center: j['center'] as String?,

@@ -41,6 +41,10 @@ dependencies:
   dio: ^5.7.0
   # Almacenamiento cifrado de tokens (Keychain iOS / Keystore Android).
   flutter_secure_storage: ^9.2.4
+  # Imágenes de red cacheadas (galerías de fotos de inspección fluidas).
+  cached_network_image: ^3.4.1
+  # Visor de fotos con pinch-to-zoom (fotos de daños a pantalla completa).
+  photo_view: ^0.15.0
 
 dev_dependencies:
   flutter_test:

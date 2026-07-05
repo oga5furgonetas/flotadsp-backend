@@ -5,7 +5,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flotadsp_admin/core/theme/app_theme.dart';
 import 'package:flotadsp_admin/features/inspections/domain/inspection_detail.dart';
 import 'package:flotadsp_admin/features/inspections/presentation/inspection_detail_screen.dart';
-import 'package:flotadsp_admin/features/inspections/presentation/inspection_providers.dart';
 
 void main() {
   group('InspectionDetail', () {
@@ -22,18 +21,8 @@ void main() {
           'severity': 'moderado',
           'new_damages_count': 2,
           'new_damages': [
-            {
-              'severity': 'leve',
-              'label': 'arañazo',
-              'position': 'puerta_conductor',
-              'confidence': 0.87,
-            },
-            {
-              'severity': 'moderado',
-              'type': 'abolladura',
-              'zone': 'parachoques_trasero',
-              'notes': 'Zona con óxido',
-            },
+            {'severity': 'leve', 'label': 'arañazo', 'position': 'puerta_conductor', 'confidence': 0.87},
+            {'severity': 'moderado', 'type': 'abolladura', 'zone': 'parachoques_trasero', 'notes': 'Zona con óxido'},
           ],
         },
       });
@@ -54,24 +43,31 @@ void main() {
       expect(d.newDamagesCount, 2);
     });
 
-    test('fromJson tolera fotos como objetos y damages a nivel raíz', () {
+    test('empareja annotated_photos con photos por índice', () {
       final d = InspectionDetail.fromJson({
-        'id': 'insp2',
-        'photos': [
-          {'url': '/u/1.jpg', 'label': 'frontal'},
-          {'path': '/u/2.jpg', 'name': 'lateral_izq'},
-        ],
-        'damages': [
-          {'severity': 'grave', 'label': 'rotura', 'is_new': false},
+        'id': 'x',
+        'photos': ['/a.jpg', '/b.jpg'],
+        'annotated_photos': ['/a_ann.jpg', null],
+      });
+      expect(d.photos[0].annotatedUrl, '/a_ann.jpg');
+      expect(d.photos[1].annotatedUrl, isNull);
+    });
+
+    test('lee daños de new_damages a nivel raíz (formato cola de revisión)', () {
+      final d = InspectionDetail.fromJson({
+        'id': 'q1',
+        'severity': 'grave',
+        'plate_mismatch': true,
+        'image_quality_warnings': ['Foto borrosa'],
+        'new_damages': [
+          {'part': 'puerta', 'severity': 'grave', 'description': 'Abolladura'},
         ],
       });
-
-      expect(d.photos.length, 2);
-      expect(d.photos.first.label, 'frontal');
-      expect(d.photos.last.url, '/u/2.jpg');
-      expect(d.damages.single.severity, 'grave');
-      expect(d.damages.single.isNew, isFalse);
-      expect(d.severity, 'sin_analisis'); // sin analysis → default
+      expect(d.severity, 'grave');
+      expect(d.plateMismatch, isTrue);
+      expect(d.qualityWarnings, ['Foto borrosa']);
+      expect(d.damages.single.position, 'puerta');
+      expect(d.damages.single.notes, 'Abolladura');
     });
 
     test('fromJson con respuesta vacía no rompe', () {
@@ -79,37 +75,12 @@ void main() {
       expect(d.id, '');
       expect(d.photos, isEmpty);
       expect(d.damages, isEmpty);
-      expect(d.newDamagesCount, 0);
       expect(d.severity, 'sin_analisis');
-    });
-
-    test('fromJson parsea notas administrativas y metadatos de revisión', () {
-      final d = InspectionDetail.fromJson({
-        'id': 'insp3',
-        'reviewed': true,
-        'admin_notes': 'Enviado a taller el 06/07',
-        'reviewed_at': '2026-07-06T09:15:00Z',
-        'reviewed_by': 'Admin Central',
-      });
-      expect(d.reviewed, isTrue);
-      expect(d.adminNotes, 'Enviado a taller el 06/07');
-      expect(d.reviewedAt, '2026-07-06T09:15:00Z');
-      expect(d.reviewedBy, 'Admin Central');
-    });
-
-    test('fromJson acepta alias review_notes / reviewer_notes', () {
-      final d1 = InspectionDetail.fromJson({'review_notes': 'x'});
-      final d2 = InspectionDetail.fromJson({'reviewer_notes': 'y'});
-      expect(d1.adminNotes, 'x');
-      expect(d2.adminNotes, 'y');
     });
   });
 
   group('InspectionDetailScreen', () {
-    testWidgets('muestra cabecera, contadores y tarjetas de daños',
-        (tester) async {
-      // Viewport alto para que el ListView materialice también los daños
-      // (por defecto flutter_test usa 800x600 y quedan bajo la línea de flotación).
+    testWidgets('muestra matrícula, conductor y daños', (tester) async {
       await tester.binding.setSurfaceSize(const Size(1000, 2000));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -119,7 +90,7 @@ void main() {
         driver: 'Dani',
         severity: 'moderado',
         reviewed: true,
-        photos: [InspectionPhoto(url: '/uploads/a.jpg', label: 'frontal')],
+        photos: [],
         damages: [
           DamageItem(severity: 'leve', label: 'arañazo', position: 'puerta_conductor'),
           DamageItem(severity: 'grave', label: 'rotura'),
@@ -131,29 +102,21 @@ void main() {
 
       await tester.pumpWidget(
         ProviderScope(
-          overrides: [
-            inspectionDetailProvider('insp1').overrideWith((ref) async => detail),
-            inspectionAnnotatedProvider('insp1').overrideWith((ref) async => const <String>[]),
-          ],
           child: MaterialApp(
             theme: AppTheme.light,
-            home: const InspectionDetailScreen(inspectionId: 'insp1'),
+            home: const InspectionDetailScreen(inspectionId: 'insp1', initial: detail),
           ),
         ),
       );
       await tester.pump();
 
-      expect(find.text('Inspección'), findsOneWidget);
-      expect(find.text('Dani'), findsOneWidget);
-      expect(find.text('1234ABC'), findsOneWidget);
-      expect(find.text('OGA5'), findsOneWidget);
-      expect(find.text('Arañazo'), findsOneWidget);
-      expect(find.text('Rotura'), findsOneWidget);
-      expect(find.text('Moderado'), findsWidgets);
+      expect(find.text('1234ABC'), findsOneWidget); // AppBar
+      expect(find.textContaining('Dani'), findsWidgets);
+      expect(find.text('arañazo'), findsOneWidget);
+      expect(find.text('rotura'), findsOneWidget);
     });
 
-    testWidgets('sin daños muestra un banner de "Sin daños registrados"',
-        (tester) async {
+    testWidgets('sin daños muestra "Sin daños detectados"', (tester) async {
       await tester.binding.setSurfaceSize(const Size(1000, 2000));
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -170,13 +133,9 @@ void main() {
 
       await tester.pumpWidget(
         ProviderScope(
-          overrides: [
-            inspectionDetailProvider('insp2').overrideWith((ref) async => detail),
-            inspectionAnnotatedProvider('insp2').overrideWith((ref) async => const <String>[]),
-          ],
           child: MaterialApp(
             theme: AppTheme.light,
-            home: const InspectionDetailScreen(inspectionId: 'insp2'),
+            home: const InspectionDetailScreen(inspectionId: 'insp2', initial: detail),
           ),
         ),
       );

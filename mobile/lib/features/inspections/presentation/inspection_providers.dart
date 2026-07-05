@@ -9,21 +9,23 @@ final inspectionRepositoryProvider = Provider<InspectionRepository>(
   (ref) => InspectionRepository(ref.watch(apiClientProvider)),
 );
 
-/// Inspecciones de un vehículo (por id). `family` para cachear por vehículo.
+/// Inspecciones de un vehículo (por id).
 final vehicleInspectionsProvider =
     FutureProvider.autoDispose.family<List<InspectionSummary>, String>(
   (ref, vehicleId) => ref.watch(inspectionRepositoryProvider).forVehicle(vehicleId),
 );
 
-/// Detalle de una inspección concreta (fotos + daños).
+/// Detalle completo de una inspección (por id).
 final inspectionDetailProvider =
     FutureProvider.autoDispose.family<InspectionDetail, String>(
   (ref, id) => ref.watch(inspectionRepositoryProvider).byId(id),
 );
 
-/// Lista de URLs con la versión anotada de las fotos. Puede venir vacía si
-/// aún no se ha generado; en ese caso la UI muestra solo las originales.
-final inspectionAnnotatedProvider =
-    FutureProvider.autoDispose.family<List<String>, String>(
-  (ref, id) => ref.watch(inspectionRepositoryProvider).annotatedPhotoUrls(id),
-);
+/// Centro seleccionado en Revisión Rápida.
+final reviewCenterProvider = StateProvider<String>((ref) => 'Todos');
+
+/// Cola de Revisión Rápida del centro seleccionado.
+final reviewQueueProvider = FutureProvider.autoDispose<List<InspectionDetail>>((ref) {
+  final center = ref.watch(reviewCenterProvider);
+  return ref.watch(inspectionRepositoryProvider).reviewQueue(center: center);
+});

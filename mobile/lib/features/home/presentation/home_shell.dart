@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../dashboard/presentation/dashboard_providers.dart';
 import '../../dashboard/presentation/dashboard_screen.dart';
 import '../../fleet/presentation/fleet_screen.dart';
-import '../../settings/presentation/settings_screen.dart';
+import '../../review/presentation/review_screen.dart';
+import 'more_screen.dart';
 
 /// Shell principal tras el login: navegación por pestañas (bottom nav).
 /// Cada pestaña conserva su estado (IndexedStack).
@@ -18,12 +20,18 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell> {
   int _index = 0;
 
-  static const _titles = ['Resumen', 'Flota', 'Ajustes'];
+  static const _titles = ['Resumen', 'Flota', 'Revisión', 'Más'];
+
+  void _select(int i) {
+    if (i == _index) return;
+    HapticFeedback.selectionClick();
+    setState(() => _index = i);
+  }
 
   @override
   Widget build(BuildContext context) {
-    // Escuchamos las stats para mostrar la burbuja de alertas sin leer sobre
-    // la pestaña "Resumen". Comparte cache con DashboardScreen (no hay doble fetch).
+    // Burbuja de alertas sin necesidad de estar en "Resumen" (comparte caché con
+    // DashboardScreen, no hay doble fetch).
     final unread = ref.watch(dashboardStatsProvider).asData?.value.unreadAlerts ?? 0;
 
     return Scaffold(
@@ -33,22 +41,17 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         children: const [
           DashboardScreen(),
           FleetScreen(),
-          SettingsScreen(),
+          ReviewScreen(),
+          MoreScreen(),
         ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: _select,
         destinations: [
           NavigationDestination(
-            icon: _WithBadge(
-              count: unread,
-              child: const Icon(Icons.dashboard_outlined),
-            ),
-            selectedIcon: _WithBadge(
-              count: unread,
-              child: const Icon(Icons.dashboard_rounded),
-            ),
+            icon: _WithBadge(count: unread, child: const Icon(Icons.dashboard_outlined)),
+            selectedIcon: _WithBadge(count: unread, child: const Icon(Icons.dashboard_rounded)),
             label: 'Resumen',
           ),
           const NavigationDestination(
@@ -57,9 +60,14 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             label: 'Flota',
           ),
           const NavigationDestination(
-            icon: Icon(Icons.settings_outlined),
-            selectedIcon: Icon(Icons.settings_rounded),
-            label: 'Ajustes',
+            icon: Icon(Icons.fact_check_outlined),
+            selectedIcon: Icon(Icons.fact_check_rounded),
+            label: 'Revisión',
+          ),
+          const NavigationDestination(
+            icon: Icon(Icons.grid_view_outlined),
+            selectedIcon: Icon(Icons.grid_view_rounded),
+            label: 'Más',
           ),
         ],
       ),
@@ -67,8 +75,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   }
 }
 
-/// Envuelve un icono con una burbuja numérica si `count > 0`. Muestra `99+`
-/// cuando el valor supera 99 para no romper la maquetación del NavigationBar.
+/// Envuelve un icono con una burbuja numérica si `count > 0`.
 class _WithBadge extends StatelessWidget {
   const _WithBadge({required this.child, required this.count});
   final Widget child;
@@ -77,9 +84,6 @@ class _WithBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (count <= 0) return child;
-    return Badge(
-      label: Text(count > 99 ? '99+' : '$count'),
-      child: child,
-    );
+    return Badge(label: Text(count > 99 ? '99+' : '$count'), child: child);
   }
 }
