@@ -41,20 +41,21 @@ function VehicleLighting() {
   )
 }
 
-export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading }) {
+export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading, _debugModel }) {
   const controlsRef = useRef()
 
   // VehicleModelResolver: marca/modelo (IA si existe, si no lo introducido) → malla.
-  const [modelInfo, setModelInfo] = useState(null)
+  const [modelInfo, setModelInfo] = useState(_debugModel || null)
   const [aiModel, setAiModel] = useState(vehicle?.ai_model || null)
   const [identifying, setIdentifying] = useState(false)
   const [idMsg, setIdMsg] = useState(null)
 
   useEffect(() => {
+    if (_debugModel) return
     const b = aiModel?.brand || vehicle?.brand
     const m = aiModel?.model || vehicle?.model
     resolveVehicleModel(b, m).then((r) => setModelInfo(r.data)).catch(() => setModelInfo(null))
-  }, [vehicle?.id, aiModel, vehicle?.brand, vehicle?.model])
+  }, [vehicle?.id, aiModel, vehicle?.brand, vehicle?.model, _debugModel])
 
   const dimsOverride = useMemo(
     () => dimsFromResolver(modelInfo, aiModel?.brand || vehicle?.brand, aiModel?.model || vehicle?.model),

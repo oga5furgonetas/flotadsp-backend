@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import * as THREE from 'three'
 import { RoundedBox, useGLTF } from '@react-three/drei'
 import { bodyColorFor } from './vanGeometry'
 
@@ -10,11 +11,41 @@ import { bodyColorFor } from './vanGeometry'
 // REALES del modelo (no una furgoneta genérica): silueta específica del modelo.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Modelo 3D real desde GLB (CDN/R2), escalado a las dimensiones del modelo.
-function RealVanModel({ url, dims }) {
+// Modelo 3D real desde GLB, NORMALIZADO al mismo marco que el procedural para
+// que los pines de daño (posicionados con dims) encajen sobre la malla:
+//   · centrado en X/Z, apoyado en el suelo (y=0)
+//   · escalado para que el largo del vehículo = dims.L
+//   · orientado con el largo a lo largo de X (front +X)
+// flipX/rot corrigen la orientación nativa del GLB (varía según de dónde salga).
+function RealVanModel({ url, dims, flipX = false }) {
   const { scene } = useGLTF(url)
-  const cloned = useMemo(() => scene.clone(true), [scene])
-  return <primitive object={cloned} position={[0, 0, 0]} />
+  const norm = useMemo(() => {
+    const obj = scene.clone(true)
+    const box = new THREE.Box3().setFromObject(obj)
+    const size = new THREE.Vector3(); box.getSize(size)
+    const center = new THREE.Vector3(); box.getCenter(center)
+    // largo = eje horizontal mayor; si va por Z, rotamos 90° para llevarlo a X
+    const lengthAxisZ = size.z > size.x
+    const lengthNative = Math.max(size.x, size.z)
+    const scale = lengthNative > 0 ? dims.L / lengthNative : 1
+    return {
+      obj,
+      // centra X/Z y apoya en el suelo (en unidades nativas, antes de escalar)
+      center: [-center.x, -box.min.y, -center.z],
+      scale,
+      rotY: (lengthAxisZ ? Math.PI / 2 : 0) + (flipX ? Math.PI : 0),
+    }
+  }, [scene, dims, flipX])
+
+  return (
+    <group rotation={[0, norm.rotY, 0]}>
+      <group scale={[norm.scale, norm.scale, norm.scale]}>
+        <group position={norm.center}>
+          <primitive object={norm.obj} />
+        </group>
+      </group>
+    </group>
+  )
 }
 
 export default function VanModel({ dims, brand, inspectionMode, litZones, glbUrl }) {
