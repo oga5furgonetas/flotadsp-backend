@@ -114,6 +114,7 @@ const AvisoLegal = lazy(() => import('./legal/AvisoLegal'))
 const Contacto = lazy(() => import('./legal/Contacto'))
 const PeritajeTecnico = lazy(() => import('./pages/PeritajeTecnico'))
 const Verify = lazy(() => import('./pages/Verify'))
+const NotFound = lazy(() => import('./pages/NotFound'))
 
 /* Toda la app vive en /panel. /app es un alias legado que redirige al panel nuevo. */
 function AppRedirect() {
@@ -193,7 +194,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="contactos" element={<PanelContactos />} />
               </Route>
 
-              <Route path="*" element={<Landing />} />
+              <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
         </BrowserRouter>
