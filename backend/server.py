@@ -5654,6 +5654,35 @@ async def upload_inspection_photos(
         doc = serialize_doc(inspection.model_dump())
         await db.inspections.insert_one(doc)
 
+        # Actualizar automáticamente el kilometraje de la furgoneta con el que la
+        # IA leyó del cuentakilómetros en la inspección (el portal del conductor
+        # lo manda en notes como odometer_km). Así el km real se refleja al
+        # instante en el panel web y en la app, sin ningún paso manual.
+        try:
+            odo_km = None
+            try:
+                _n = json.loads(notes) if notes else None
+                if isinstance(_n, dict):
+                    odo_km = _n.get("odometer_km")
+            except Exception:
+                odo_km = None
+            if isinstance(odo_km, (int, float)) and odo_km > 0:
+                odo_km = int(odo_km)
+                veh = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "mileage": 1})
+                current = (veh or {}).get("mileage") or 0
+                # Solo si sube: evita retrocesos por lecturas OCR erróneas.
+                if odo_km >= current:
+                    await db.vehicles.update_one(
+                        {"id": vehicle_id},
+                        {"$set": {"mileage": odo_km, "updated_at": datetime.now(timezone.utc)},
+                         "$push": {"mileage_history": {
+                             "date": datetime.now(timezone.utc).isoformat(),
+                             "km": odo_km, "source": "inspection"}}}
+                    )
+                    logger.info(f"Km auto-actualizados por inspección: {vehicle_id} → {odo_km}")
+        except Exception as _km_e:
+            logger.warning(f"Auto-km inspección: {_km_e}")
+
         # Llamar a Gemini en background SOLO si el plan lo permite
         org = await get_org(user.get("org_id"))
         plan_ai = _org_billing(org)["limits"].get("ai", False)

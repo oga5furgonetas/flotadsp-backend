@@ -15,6 +15,7 @@ import '../domain/vehicle.dart';
 import '../domain/vehicle_detail.dart';
 import 'fleet_providers.dart';
 import 'vehicle_actions.dart';
+import 'vin_qr.dart';
 
 /// Ficha completa de un vehículo: datos técnicos (VIN incluido), vencimientos
 /// (ITV/renting), kilómetros y bolsas, conductor asignado, mantenimiento con
@@ -232,6 +233,10 @@ class _SpecsCard extends StatelessWidget {
         if (fuel != null) _InfoRow(label: 'Combustible', value: fuel),
         if ((vehicle.vehicleType ?? '').isNotEmpty) _InfoRow(label: 'Tipo', value: vehicle.vehicleType!),
         _InfoRow(label: 'Centro', value: vehicle.center ?? '—'),
+        if (vehicle.vin != null) ...[
+          const SizedBox(height: 14),
+          VinQr(vin: vehicle.vin!, plate: vehicle.licensePlate),
+        ],
       ],
     );
   }
