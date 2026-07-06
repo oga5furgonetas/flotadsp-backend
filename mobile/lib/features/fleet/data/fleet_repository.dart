@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../../../core/network/api_client.dart';
+import '../domain/damage_ledger.dart';
 import '../domain/vehicle.dart';
 import '../domain/vehicle_detail.dart';
 
@@ -112,5 +113,11 @@ class FleetRepository {
   /// Borra un documento (`DELETE /vehicles/{id}/documents/{docId}`).
   Future<void> deleteDocument(String id, String docId) async {
     await _client.delete('/vehicles/$id/documents/$docId');
+  }
+
+  /// Ledger de daños (gemelo digital): abiertos + reparados.
+  Future<DamageLedger> damageLedger(String id) async {
+    final res = await _client.get<Map<String, dynamic>>('/vehicles/$id/damage-ledger');
+    return DamageLedger.fromJson(res.data ?? const {});
   }
 }

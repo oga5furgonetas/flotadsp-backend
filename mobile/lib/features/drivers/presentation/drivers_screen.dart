@@ -7,10 +7,15 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_view.dart';
 import '../../../core/widgets/skeleton.dart';
 import '../data/drivers_repository.dart';
+import '../domain/driver_profile.dart';
 import '../domain/driver_rank.dart';
+import 'driver_detail_sheet.dart';
 
-final _driversRepoProvider = Provider<DriversRepository>((ref) => DriversRepository(ref.watch(apiClientProvider)));
-final driversRankingProvider = FutureProvider.autoDispose<List<DriverRank>>((ref) => ref.watch(_driversRepoProvider).ranking());
+final driversRepoProvider = Provider<DriversRepository>((ref) => DriversRepository(ref.watch(apiClientProvider)));
+final driversRankingProvider = FutureProvider.autoDispose<List<DriverRank>>((ref) => ref.watch(driversRepoProvider).ranking());
+
+/// Fichas completas de los conductores (para el detalle/edición).
+final driversListProvider = FutureProvider.autoDispose<List<DriverProfile>>((ref) => ref.watch(driversRepoProvider).all());
 
 /// Ranking de conductores por puntuación (página completa).
 class DriversScreen extends ConsumerWidget {
@@ -31,8 +36,11 @@ class DriversScreen extends ConsumerWidget {
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
                   itemCount: list.length,
                   separatorBuilder: (_, _) => const SizedBox(height: 10),
-                  itemBuilder: (context, i) =>
-                      _DriverCard(rank: i + 1, driver: list[i]).entrance(index: i.clamp(0, 6)),
+                  itemBuilder: (context, i) => _DriverCard(
+                    rank: i + 1,
+                    driver: list[i],
+                    onTap: () => showDriverDetailSheet(context, driverId: list[i].driverId, name: list[i].name),
+                  ).entrance(index: i.clamp(0, 6)),
                 ),
           loading: () => Shimmer(
             child: ListView.separated(
@@ -60,9 +68,10 @@ class DriversScreen extends ConsumerWidget {
 }
 
 class _DriverCard extends StatelessWidget {
-  const _DriverCard({required this.rank, required this.driver});
+  const _DriverCard({required this.rank, required this.driver, this.onTap});
   final int rank;
   final DriverRank driver;
+  final VoidCallback? onTap;
 
   Color get _scoreColor => driver.score >= 85
       ? AppTheme.success
@@ -76,7 +85,10 @@ class _DriverCard extends StatelessWidget {
     final medal = rank <= 3;
     final medalColor = [const Color(0xFFFFD700), const Color(0xFFC0C0C0), const Color(0xFFCD7F32)];
     return Card(
-      child: Padding(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
         padding: const EdgeInsets.all(14),
         child: Row(
           children: [
@@ -113,6 +125,7 @@ class _DriverCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
       ),
     );
   }

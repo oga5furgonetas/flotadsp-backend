@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers.dart';
 import '../data/fleet_repository.dart';
+import '../domain/damage_ledger.dart';
 import '../domain/vehicle.dart';
 import '../domain/vehicle_detail.dart';
 
@@ -30,6 +31,12 @@ final vehicleDocumentsProvider =
 final vehicleDriverProvider =
     FutureProvider.autoDispose.family<AssignedDriver?, String>(
   (ref, id) => ref.watch(fleetRepositoryProvider).assignedDriver(id),
+);
+
+/// Ledger de daños del vehículo (gemelo digital).
+final vehicleLedgerProvider =
+    FutureProvider.autoDispose.family<DamageLedger, String>(
+  (ref, id) => ref.watch(fleetRepositoryProvider).damageLedger(id),
 );
 
 /// Centro seleccionado en el filtro ('Todos' por defecto).

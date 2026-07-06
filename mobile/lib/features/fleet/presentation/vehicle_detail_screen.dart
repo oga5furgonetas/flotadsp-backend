@@ -61,6 +61,8 @@ class VehicleDetailScreen extends ConsumerWidget {
                 children: [
                   _HeaderCard(vehicle: v).entrance(),
                   const SizedBox(height: 14),
+                  _TwinButton(vehicleId: vehicleId, title: v.title).entrance(index: 1),
+                  const SizedBox(height: 14),
                   _SpecsCard(vehicle: v).entrance(index: 1),
                   const SizedBox(height: 14),
                   _ExpiriesCard(vehicle: v).entrance(index: 2),
@@ -164,6 +166,52 @@ class _HeaderCard extends StatelessWidget {
               ),
             ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Acceso al gemelo digital / estado de carrocería.
+class _TwinButton extends StatelessWidget {
+  const _TwinButton({required this.vehicleId, required this.title});
+  final String vehicleId;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(context).extension<AppColors>()!.muted;
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => context.push('/vehicle/$vehicleId/body', extra: title),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppTheme.info.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.view_in_ar_rounded, color: AppTheme.info, size: 22),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Carrocería y daños',
+                        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                    Text('Gemelo digital · estado por zonas', style: TextStyle(color: muted, fontSize: 12.5)),
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded, color: muted),
+            ],
+          ),
         ),
       ),
     );

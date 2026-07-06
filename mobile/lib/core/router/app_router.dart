@@ -7,6 +7,7 @@ import '../../features/auth/presentation/login_screen.dart';
 import '../../features/chat/presentation/chat_screen.dart';
 import '../../features/drivers/presentation/drivers_screen.dart';
 import '../../features/fleet/domain/vehicle.dart';
+import '../../features/fleet/presentation/body_status_screen.dart';
 import '../../features/fleet/presentation/vehicle_detail_screen.dart';
 import '../../features/home/presentation/home_shell.dart';
 import '../../features/incidents/presentation/incidents_screen.dart';
@@ -38,6 +39,14 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => VehicleDetailScreen(
           vehicleId: state.pathParameters['id']!,
           vehicle: state.extra is Vehicle ? state.extra as Vehicle : null,
+        ),
+      ),
+      GoRoute(
+        path: '/vehicle/:id/body',
+        name: 'vehicle-body',
+        builder: (context, state) => BodyStatusScreen(
+          vehicleId: state.pathParameters['id']!,
+          title: state.extra is String ? state.extra as String : null,
         ),
       ),
       GoRoute(
