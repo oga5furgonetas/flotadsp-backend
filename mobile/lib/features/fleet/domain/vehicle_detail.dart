@@ -19,11 +19,11 @@ class MaintenanceInfo {
   final MaintItem? brakes;
 
   /// Ítems presentes (con datos de último cambio), en orden de vencimiento.
-  List<({String label, MaintItem item})> get items {
-    final out = <({String label, MaintItem item})>[
-      if (oil != null) (label: 'Aceite', item: oil!),
-      if (tires != null) (label: 'Ruedas', item: tires!),
-      if (brakes != null) (label: 'Pastillas de freno', item: brakes!),
+  List<({String kind, String label, MaintItem item})> get items {
+    final out = <({String kind, String label, MaintItem item})>[
+      if (oil != null) (kind: 'oil', label: 'Aceite', item: oil!),
+      if (tires != null) (kind: 'ruedas', label: 'Ruedas', item: tires!),
+      if (brakes != null) (kind: 'pastillas', label: 'Pastillas de freno', item: brakes!),
     ]..sort((a, b) => a.item.kmUntilChange.compareTo(b.item.kmUntilChange));
     return out;
   }
@@ -110,6 +110,31 @@ class VehicleDocument {
         name: (j['name'] ?? 'Documento') as String,
         url: (j['url'] ?? '') as String,
         uploadedAt: j['uploaded_at'] as String?,
+      );
+}
+
+/// Lectura del cuentakilómetros por IA (`POST /vehicles/{id}/odometer-photo`).
+class OdometerRead {
+  const OdometerRead({
+    required this.success,
+    this.km,
+    this.confidence = 0,
+    this.currentMileage,
+    this.warning,
+  });
+
+  final bool success;
+  final int? km;
+  final double confidence;
+  final int? currentMileage;
+  final String? warning;
+
+  factory OdometerRead.fromJson(Map<String, dynamic> j) => OdometerRead(
+        success: j['success'] == true,
+        km: j['km'] is num ? (j['km'] as num).toInt() : null,
+        confidence: j['confidence'] is num ? (j['confidence'] as num).toDouble() : 0,
+        currentMileage: j['current_mileage'] is num ? (j['current_mileage'] as num).toInt() : null,
+        warning: j['warning'] as String?,
       );
 }
 

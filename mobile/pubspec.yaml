@@ -53,6 +53,10 @@ dependencies:
   connectivity_plus: ^6.1.0
   # Abrir documentos del vehículo (PDF/imágenes) y enlaces externos.
   url_launcher: ^6.3.1
+  # Cámara/galería para leer el cuentakilómetros con IA.
+  image_picker: ^1.1.2
+  # Selección de archivos (PDF/imágenes) para subir documentos del vehículo.
+  file_picker: ^8.1.7
 
 dev_dependencies:
   flutter_test:

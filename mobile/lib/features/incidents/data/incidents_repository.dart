@@ -14,4 +14,19 @@ class IncidentsRepository {
         .map((e) => Incident.fromJson(Map<String, dynamic>.from(e)))
         .toList();
   }
+
+  /// Crea una incidencia (`POST /incidents`).
+  Future<void> create({
+    required String vehicleId,
+    required String description,
+    String title = '',
+    String severity = 'leve',
+  }) async {
+    await _client.post('/incidents', data: {
+      'vehicle_id': vehicleId,
+      'title': title,
+      'description': description,
+      'severity': severity,
+    });
+  }
 }

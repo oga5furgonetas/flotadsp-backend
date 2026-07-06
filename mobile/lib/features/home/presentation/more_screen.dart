@@ -47,6 +47,7 @@ class MoreScreen extends ConsumerWidget {
         ),
         const SizedBox(height: 16),
         _MenuTile(icon: Icons.emoji_events_rounded, label: 'Conductores', color: const Color(0xFFA78BFA), onTap: () => context.push('/drivers')),
+        _MenuTile(icon: Icons.build_circle_rounded, label: 'Avisos de mantenimiento', color: AppTheme.warning, onTap: () => context.push('/maintenance')),
         _MenuTile(icon: Icons.report_problem_rounded, label: 'Incidencias', color: AppTheme.danger, onTap: () => context.push('/incidents')),
         _MenuTile(icon: Icons.forum_rounded, label: 'Chat de centro', color: AppTheme.info, onTap: () => context.push('/chat')),
         _MenuTile(icon: Icons.settings_rounded, label: 'Ajustes', color: muted, onTap: () => context.push('/settings')),

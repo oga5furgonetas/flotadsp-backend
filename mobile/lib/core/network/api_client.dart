@@ -42,6 +42,11 @@ class ApiClient {
   Future<Response<T>> post<T>(String path, {Object? data}) =>
       _guard(() => _dio.post<T>(path, data: data));
 
+  /// POST multipart (subida de archivos: documentos, foto de cuentakm).
+  Future<Response<T>> postForm<T>(String path, FormData data) => _guard(
+        () => _dio.post<T>(path, data: data, options: Options(contentType: 'multipart/form-data')),
+      );
+
   Future<Response<T>> patch<T>(String path, {Object? data}) =>
       _guard(() => _dio.patch<T>(path, data: data));
 

@@ -73,6 +73,8 @@ void main() {
     expect(find.text('VF1ABCDE123456789'), findsOneWidget); // VIN
     expect(find.text('Datos del vehículo'), findsOneWidget);
     expect(find.text('Mantenimiento'), findsOneWidget);
-    expect(find.text('Aceite'), findsOneWidget);
+    // "Aceite" aparece en la fila de estado y en el chip de "registrar cambio".
+    expect(find.text('Aceite'), findsWidgets);
+    expect(find.text('Actualizar km'), findsOneWidget); // acción de km presente
   });
 }

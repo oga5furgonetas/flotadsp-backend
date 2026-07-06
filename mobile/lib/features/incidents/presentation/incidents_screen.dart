@@ -7,11 +7,13 @@ import '../../../core/theme/app_theme.dart';
 import '../../../core/util/severity.dart';
 import '../../../core/widgets/error_view.dart';
 import '../../../core/widgets/skeleton.dart';
+import '../../fleet/domain/vehicle.dart';
+import '../../fleet/presentation/fleet_providers.dart';
 import '../data/incidents_repository.dart';
 import '../domain/incident.dart';
 
-final _incidentsRepoProvider = Provider<IncidentsRepository>((ref) => IncidentsRepository(ref.watch(apiClientProvider)));
-final incidentsProvider = FutureProvider.autoDispose<List<Incident>>((ref) => ref.watch(_incidentsRepoProvider).all());
+final incidentsRepoProvider = Provider<IncidentsRepository>((ref) => IncidentsRepository(ref.watch(apiClientProvider)));
+final incidentsProvider = FutureProvider.autoDispose<List<Incident>>((ref) => ref.watch(incidentsRepoProvider).all());
 
 /// Incidencias de la flota (página completa): abiertas primero.
 class IncidentsScreen extends ConsumerWidget {
@@ -22,6 +24,16 @@ class IncidentsScreen extends ConsumerWidget {
     final async = ref.watch(incidentsProvider);
     return Scaffold(
       appBar: AppBar(title: const Text('Incidencias')),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => showModalBottomSheet<void>(
+          context: context,
+          isScrollControlled: true,
+          useSafeArea: true,
+          builder: (_) => const _NewIncidentSheet(),
+        ),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Nueva'),
+      ),
       body: RefreshIndicator(
         color: AppTheme.brand,
         onRefresh: () => ref.refresh(incidentsProvider.future),
@@ -119,6 +131,139 @@ class _IncidentCard extends StatelessWidget {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Formulario para crear una incidencia (selección de vehículo + severidad).
+class _NewIncidentSheet extends ConsumerStatefulWidget {
+  const _NewIncidentSheet();
+
+  @override
+  ConsumerState<_NewIncidentSheet> createState() => _NewIncidentSheetState();
+}
+
+class _NewIncidentSheetState extends ConsumerState<_NewIncidentSheet> {
+  final _titleController = TextEditingController();
+  final _descController = TextEditingController();
+  String? _vehicleId;
+  String _severity = 'leve';
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _descController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_vehicleId == null) {
+      setState(() => _error = 'Selecciona un vehículo');
+      return;
+    }
+    final desc = _descController.text.trim();
+    if (desc.isEmpty) {
+      setState(() => _error = 'Describe la incidencia');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await ref.read(incidentsRepoProvider).create(
+            vehicleId: _vehicleId!,
+            description: desc,
+            title: _titleController.text.trim(),
+            severity: _severity,
+          );
+      ref.invalidate(incidentsProvider);
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Incidencia creada')));
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = e is Exception ? e.toString().replaceFirst('Exception: ', '') : 'No se pudo crear');
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(context).extension<AppColors>()!.muted;
+    final vehiclesAsync = ref.watch(vehiclesProvider);
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 40, height: 4,
+                  decoration: BoxDecoration(color: muted.withValues(alpha: 0.4), borderRadius: BorderRadius.circular(99)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text('Nueva incidencia', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800)),
+              const SizedBox(height: 16),
+              vehiclesAsync.when(
+                loading: () => const LinearProgressIndicator(),
+                error: (_, _) => Text('No se pudieron cargar los vehículos', style: TextStyle(color: muted)),
+                data: (vehicles) => DropdownButtonFormField<String>(
+                  initialValue: _vehicleId,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Vehículo'),
+                  items: [
+                    for (final Vehicle v in vehicles)
+                      DropdownMenuItem(value: v.id, child: Text(v.title, overflow: TextOverflow.ellipsis)),
+                  ],
+                  onChanged: (v) => setState(() => _vehicleId = v),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _titleController,
+                decoration: const InputDecoration(labelText: 'Título (opcional)'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _descController,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(labelText: 'Descripción'),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _severity,
+                decoration: const InputDecoration(labelText: 'Gravedad'),
+                items: const [
+                  DropdownMenuItem(value: 'leve', child: Text('Leve')),
+                  DropdownMenuItem(value: 'moderado', child: Text('Moderada')),
+                  DropdownMenuItem(value: 'grave', child: Text('Grave')),
+                  DropdownMenuItem(value: 'critico', child: Text('Crítica')),
+                ],
+                onChanged: (v) => setState(() => _severity = v ?? _severity),
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(_error!, style: const TextStyle(color: AppTheme.danger, fontSize: 12.5)),
+              ],
+              const SizedBox(height: 18),
+              FilledButton(
+                onPressed: _busy ? null : _save,
+                child: _busy
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
+                    : const Text('Crear incidencia'),
+              ),
+            ],
+          ),
         ),
       ),
     );

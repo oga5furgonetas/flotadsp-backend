@@ -6,7 +6,9 @@ plugins {
 
 android {
     namespace = "com.flotadsp.flotadsp_admin"
-    compileSdk = flutter.compileSdkVersion
+    // file_picker (vía flutter_plugin_android_lifecycle) exige compilar contra
+    // la API 36 o superior; no cambia targetSdk/minSdk (comportamiento runtime).
+    compileSdk = maxOf(flutter.compileSdkVersion, 36)
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

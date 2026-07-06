@@ -12,6 +12,7 @@ import '../../features/home/presentation/home_shell.dart';
 import '../../features/incidents/presentation/incidents_screen.dart';
 import '../../features/inspections/domain/inspection_detail.dart';
 import '../../features/inspections/presentation/inspection_detail_screen.dart';
+import '../../features/maintenance/presentation/maintenance_alerts_screen.dart';
 import '../../features/settings/presentation/settings_screen.dart';
 import '../providers.dart';
 import '../widgets/splash_screen.dart';
@@ -49,6 +50,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(path: '/drivers', name: 'drivers', builder: (_, _) => const DriversScreen()),
       GoRoute(path: '/incidents', name: 'incidents', builder: (_, _) => const IncidentsScreen()),
+      GoRoute(path: '/maintenance', name: 'maintenance', builder: (_, _) => const MaintenanceAlertsScreen()),
       GoRoute(path: '/chat', name: 'chat', builder: (_, _) => const ChatScreen()),
       GoRoute(
         path: '/settings',

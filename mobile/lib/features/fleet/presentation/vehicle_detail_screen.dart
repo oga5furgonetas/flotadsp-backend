@@ -14,6 +14,7 @@ import '../../inspections/presentation/inspection_providers.dart';
 import '../domain/vehicle.dart';
 import '../domain/vehicle_detail.dart';
 import 'fleet_providers.dart';
+import 'vehicle_actions.dart';
 
 /// Ficha completa de un vehículo: datos técnicos (VIN incluido), vencimientos
 /// (ITV/renting), kilómetros y bolsas, conductor asignado, mantenimiento con
@@ -32,7 +33,17 @@ class VehicleDetailScreen extends ConsumerWidget {
     final v = freshAsync.valueOrNull ?? vehicle;
 
     return Scaffold(
-      appBar: AppBar(title: Text(v?.title ?? 'Vehículo')),
+      appBar: AppBar(
+        title: Text(v?.title ?? 'Vehículo'),
+        actions: [
+          if (v != null)
+            IconButton(
+              tooltip: 'Editar',
+              icon: const Icon(Icons.edit_rounded),
+              onPressed: () => showEditVehicleSheet(context, vehicle: v),
+            ),
+        ],
+      ),
       body: v == null
           ? _whenNoVehicle(context, ref, freshAsync)
           : RefreshIndicator(
@@ -302,6 +313,12 @@ class _UsageCard extends StatelessWidget {
     return _CardSection(
       title: 'Uso',
       icon: Icons.speed_rounded,
+      action: TextButton.icon(
+        onPressed: () => showUpdateMileageSheet(context, vehicleId: vehicle.id, currentKm: vehicle.mileage),
+        icon: const Icon(Icons.add_road_rounded, size: 18),
+        label: const Text('Actualizar km'),
+        style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
+      ),
       children: [
         _InfoRow(
           label: 'Kilómetros',
@@ -402,10 +419,8 @@ class _MaintenanceSection extends ConsumerWidget {
           error: (_, _) => Text('No se pudo cargar', style: TextStyle(color: muted)),
           data: (m) {
             final items = m.items;
-            if (items.isEmpty) {
-              return Text('Sin datos de mantenimiento registrados', style: TextStyle(color: muted));
-            }
             return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (m.kmPerDay != null) ...[
                   Row(
@@ -416,12 +431,41 @@ class _MaintenanceSection extends ConsumerWidget {
                           style: TextStyle(color: muted, fontSize: 12.5)),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                ],
-                for (final e in items) ...[
-                  _MaintRow(label: e.label, item: e.item),
                   const SizedBox(height: 10),
                 ],
+                if (items.isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text('Sin cambios registrados todavía', style: TextStyle(color: muted)),
+                  )
+                else
+                  for (final e in items) ...[
+                    _MaintRow(label: e.label, item: e.item),
+                    const SizedBox(height: 10),
+                  ],
+                const SizedBox(height: 2),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final k in const [
+                      ('oil', 'Aceite'),
+                      ('ruedas', 'Ruedas'),
+                      ('pastillas', 'Pastillas de freno'),
+                    ])
+                      ActionChip(
+                        avatar: const Icon(Icons.add_rounded, size: 16),
+                        label: Text(k.$2),
+                        onPressed: () => showRegisterMaintenanceSheet(
+                          context,
+                          vehicleId: vehicleId,
+                          kind: k.$1,
+                          label: k.$2,
+                          currentKm: m.mileage,
+                        ),
+                      ),
+                  ],
+                ),
               ],
             );
           },
@@ -486,6 +530,12 @@ class _DocumentsSection extends ConsumerWidget {
     return _CardSection(
       title: 'Documentos',
       icon: Icons.folder_rounded,
+      action: TextButton.icon(
+        onPressed: () => showUploadDocumentSheet(context, vehicleId: vehicleId),
+        icon: const Icon(Icons.upload_file_rounded, size: 18),
+        label: const Text('Subir'),
+        style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 8)),
+      ),
       children: [
         async.when(
           loading: () => const Padding(
@@ -497,18 +547,50 @@ class _DocumentsSection extends ConsumerWidget {
               ? Text('Sin documentos', style: TextStyle(color: muted))
               : Column(
                   children: [
-                    for (final doc in docs) _DocTile(doc: doc),
+                    for (final doc in docs)
+                      _DocTile(doc: doc, onDelete: () => _confirmDelete(context, ref, doc)),
                   ],
                 ),
         ),
       ],
     );
   }
+
+  Future<void> _confirmDelete(BuildContext context, WidgetRef ref, VehicleDocument doc) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Borrar documento'),
+        content: Text('¿Seguro que quieres borrar «${doc.docType.isNotEmpty ? doc.docType : doc.name}»?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Borrar'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await ref.read(fleetRepositoryProvider).deleteDocument(vehicleId, doc.id);
+      ref.invalidate(vehicleDocumentsProvider(vehicleId));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Documento borrado')));
+      }
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No se pudo borrar')));
+      }
+    }
+  }
 }
 
 class _DocTile extends StatelessWidget {
-  const _DocTile({required this.doc});
+  const _DocTile({required this.doc, this.onDelete});
   final VehicleDocument doc;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -535,6 +617,11 @@ class _DocTile extends StatelessWidget {
               ),
             ),
             Icon(Icons.open_in_new_rounded, size: 16, color: muted),
+            if (onDelete != null)
+              IconButton(
+                icon: Icon(Icons.delete_outline_rounded, size: 20, color: muted),
+                onPressed: onDelete,
+              ),
           ],
         ),
       ),
@@ -666,10 +753,11 @@ class _InspectionTile extends StatelessWidget {
 // ─────────────────────────── Reutilizables ───────────────────────────
 
 class _CardSection extends StatelessWidget {
-  const _CardSection({required this.title, required this.icon, required this.children});
+  const _CardSection({required this.title, required this.icon, required this.children, this.action});
   final String title;
   final IconData icon;
   final List<Widget> children;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -684,7 +772,10 @@ class _CardSection extends StatelessWidget {
               children: [
                 Icon(icon, size: 18, color: muted),
                 const SizedBox(width: 8),
-                Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                Expanded(
+                  child: Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                ),
+                ?action,
               ],
             ),
             const Divider(height: 22),
