@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/design/motion.dart';
 import '../../../core/providers.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_view.dart';
@@ -30,7 +31,8 @@ class DriversScreen extends ConsumerWidget {
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
                   itemCount: list.length,
                   separatorBuilder: (_, _) => const SizedBox(height: 10),
-                  itemBuilder: (context, i) => _DriverCard(rank: i + 1, driver: list[i]),
+                  itemBuilder: (context, i) =>
+                      _DriverCard(rank: i + 1, driver: list[i]).entrance(index: i.clamp(0, 6)),
                 ),
           loading: () => Shimmer(
             child: ListView.separated(

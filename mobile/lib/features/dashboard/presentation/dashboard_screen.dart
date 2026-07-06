@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/design/motion.dart';
+import '../../../core/providers.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_view.dart';
 import '../../../core/widgets/skeleton.dart';
@@ -15,12 +17,13 @@ class DashboardScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(dashboardStatsProvider);
+    final name = ref.watch(authControllerProvider).session?.name ?? '';
 
     return RefreshIndicator(
       color: AppTheme.brand,
       onRefresh: () => ref.refresh(dashboardStatsProvider.future),
       child: async.when(
-        data: (stats) => _Content(stats: stats),
+        data: (stats) => _Content(stats: stats, userName: name),
         loading: () => const _LoadingSkeleton(),
         error: (e, _) => ListView(
           // ListView para que el pull-to-refresh funcione también en error.
@@ -40,8 +43,9 @@ class DashboardScreen extends ConsumerWidget {
 }
 
 class _Content extends StatelessWidget {
-  const _Content({required this.stats});
+  const _Content({required this.stats, required this.userName});
   final DashboardStats stats;
+  final String userName;
 
   @override
   Widget build(BuildContext context) {
@@ -55,8 +59,10 @@ class _Content extends StatelessWidget {
     ];
 
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
+        _GreetingHeader(name: userName).entrance(),
+        const SizedBox(height: 16),
         GridView.count(
           crossAxisCount: 2,
           shrinkWrap: true,
@@ -64,18 +70,53 @@ class _Content extends StatelessWidget {
           crossAxisSpacing: 12,
           mainAxisSpacing: 12,
           childAspectRatio: 1.55,
-          children: cards.map((d) => _StatCard(data: d)).toList(),
+          children: [
+            for (var i = 0; i < cards.length; i++)
+              _StatCard(data: cards[i]).entrance(index: i + 1),
+          ],
         ),
         const SizedBox(height: 20),
-        _SectionTitle('Estado de la flota'),
+        _SectionTitle('Estado de la flota').entrance(index: 7),
         const SizedBox(height: 10),
-        _SeverityBreakdown(severity: stats.severity),
+        _SeverityBreakdown(severity: stats.severity).entrance(index: 8),
         const SizedBox(height: 20),
         if (stats.weekly.isNotEmpty) ...[
-          _SectionTitle('Inspecciones · últimos días'),
+          _SectionTitle('Inspecciones · últimos días').entrance(index: 9),
           const SizedBox(height: 10),
-          _WeeklyChart(data: stats.weekly),
+          _WeeklyChart(data: stats.weekly).entrance(index: 10),
         ],
+      ],
+    );
+  }
+}
+
+/// Cabecera de bienvenida: saludo según la hora + primer nombre.
+class _GreetingHeader extends StatelessWidget {
+  const _GreetingHeader({required this.name});
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(context).extension<AppColors>()!.muted;
+    final hour = DateTime.now().hour;
+    final greeting = hour < 6
+        ? 'Buenas noches'
+        : hour < 13
+            ? 'Buenos días'
+            : hour < 21
+                ? 'Buenas tardes'
+                : 'Buenas noches';
+    final first = name.trim().split(' ').first;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          first.isEmpty ? greeting : '$greeting, $first',
+          style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, letterSpacing: -0.5),
+        ),
+        const SizedBox(height: 2),
+        Text('Aquí tienes el estado de tu flota hoy',
+            style: TextStyle(color: muted, fontSize: 13.5)),
       ],
     );
   }

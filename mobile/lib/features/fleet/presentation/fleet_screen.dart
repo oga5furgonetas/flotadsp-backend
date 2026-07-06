@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/design/motion.dart';
 import '../../../core/providers.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_view.dart';
@@ -66,7 +67,7 @@ class FleetScreen extends ConsumerWidget {
                       itemBuilder: (context, i) => _VehicleTile(
                         vehicle: list[i],
                         onTap: () => context.push('/vehicle/${list[i].id}', extra: list[i]),
-                      ),
+                      ).entrance(index: i.clamp(0, 6)),
                     ),
               loading: () => const _LoadingList(),
               error: (e, _) => ListView(

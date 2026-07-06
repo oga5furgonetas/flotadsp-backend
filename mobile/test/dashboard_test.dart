@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:flotadsp_admin/core/theme/app_theme.dart';
@@ -8,6 +9,10 @@ import 'package:flotadsp_admin/features/dashboard/presentation/dashboard_provide
 import 'package:flotadsp_admin/features/dashboard/presentation/dashboard_screen.dart';
 
 void main() {
+  // La cabecera del dashboard lee la sesión (cadena de auth → secure storage).
+  // Sin backend real: almacenamiento cifrado en memoria.
+  setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+
   testWidgets('El dashboard pinta las estadísticas reales', (tester) async {
     const stats = DashboardStats(
       totalVehicles: 42,
@@ -31,7 +36,7 @@ void main() {
         ),
       ),
     );
-    await tester.pump(); // resuelve el Future del provider
+    await tester.pumpAndSettle(); // resuelve el Future y drena animaciones
 
     expect(find.text('42'), findsOneWidget); // furgonetas
     expect(find.text('55'), findsOneWidget); // conductores

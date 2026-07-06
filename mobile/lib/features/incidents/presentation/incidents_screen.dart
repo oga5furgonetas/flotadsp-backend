@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/design/motion.dart';
 import '../../../core/providers.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/severity.dart';
@@ -35,7 +36,8 @@ class IncidentsScreen extends ConsumerWidget {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
               itemCount: sorted.length,
               separatorBuilder: (_, _) => const SizedBox(height: 10),
-              itemBuilder: (context, i) => _IncidentCard(incident: sorted[i]),
+              itemBuilder: (context, i) =>
+                  _IncidentCard(incident: sorted[i]).entrance(index: i.clamp(0, 6)),
             );
           },
           loading: () => Shimmer(

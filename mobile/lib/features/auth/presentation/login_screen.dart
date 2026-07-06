@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/providers.dart';
@@ -40,7 +41,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final colors = Theme.of(context).extension<AppColors>()!;
 
     return Scaffold(
-      body: SafeArea(
+      body: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: const Alignment(0.4, -1.1),
+            radius: 1.3,
+            colors: [AppTheme.brand.withValues(alpha: 0.14), colors.background],
+            stops: const [0, 0.65],
+          ),
+        ),
+        child: SafeArea(
         child: Center(
           child: SingleChildScrollView(
             padding: const EdgeInsets.all(24),
@@ -122,10 +132,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       style: TextStyle(color: colors.muted, fontSize: 12),
                     ),
                   ],
-                ),
+                ).animate().fadeIn(duration: 450.ms).slideY(
+                      begin: 0.06,
+                      end: 0,
+                      duration: 450.ms,
+                      curve: Curves.easeOutCubic,
+                    ),
               ),
             ),
           ),
+        ),
         ),
       ),
     );

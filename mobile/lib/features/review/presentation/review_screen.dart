@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/design/motion.dart';
 import '../../../core/providers.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/util/severity.dart';
@@ -73,7 +74,7 @@ class _List extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
       itemCount: items.length,
       separatorBuilder: (_, _) => const SizedBox(height: 10),
-      itemBuilder: (context, i) => _ReviewCard(item: items[i]),
+      itemBuilder: (context, i) => _ReviewCard(item: items[i]).entrance(index: i.clamp(0, 6)),
     );
   }
 }

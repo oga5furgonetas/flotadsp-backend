@@ -5,6 +5,7 @@ import 'core/config/app_config.dart';
 import 'core/providers.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
+import 'core/widgets/connectivity_banner.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -26,6 +27,7 @@ class FlotaDspApp extends ConsumerWidget {
       darkTheme: AppTheme.dark,
       themeMode: themeMode,
       routerConfig: router,
+      builder: (context, child) => ConnectivityBanner(child: child ?? const SizedBox.shrink()),
     );
   }
 }

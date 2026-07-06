@@ -45,10 +45,21 @@ dependencies:
   cached_network_image: ^3.4.1
   # Visor de fotos con pinch-to-zoom (fotos de daños a pantalla completa).
   photo_view: ^0.15.0
+  # Tipografía premium (Inter) coherente con la web.
+  google_fonts: ^6.2.1
+  # Animaciones y microinteracciones declarativas (feel de producto top).
+  flutter_animate: ^4.5.2
+  # Detección de conexión para el aviso de "sin conexión".
+  connectivity_plus: ^6.1.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+
+  # Genera el icono de launcher (Android + iOS) desde un PNG.
+  flutter_launcher_icons: ^0.14.1
+  # Genera la splash nativa de arranque (Android 12+ y iOS).
+  flutter_native_splash: ^2.4.3
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
@@ -59,6 +70,28 @@ dev_dependencies:
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
+
+# Icono de launcher (Android + iOS) generado desde el PNG de marca.
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/icon.png"
+  min_sdk_android: 21
+  remove_alpha_ios: true
+  adaptive_icon_background: "#EA6800"
+  adaptive_icon_foreground: "assets/icon/icon_fg.png"
+
+# Splash nativa de arranque (marca sobre fondo oscuro; Android 12+ e iOS).
+flutter_native_splash:
+  color: "#080A0E"
+  image: "assets/icon/icon_fg.png"
+  color_dark: "#080A0E"
+  image_dark: "assets/icon/icon_fg.png"
+  android_12:
+    color: "#080A0E"
+    image: "assets/icon/icon_fg.png"
+    color_dark: "#080A0E"
+    image_dark: "assets/icon/icon_fg.png"
 
 # The following section is specific to Flutter packages.
 flutter:

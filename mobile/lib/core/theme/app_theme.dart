@@ -1,4 +1,6 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 /// Tema premium de FlotaDSP: claro y oscuro, Material 3, coherente con la marca
 /// (naranja) y con la web. Un único origen de verdad para colores, tipografía y
@@ -43,6 +45,10 @@ class AppTheme {
       scaffoldBackgroundColor: background,
       canvasColor: background,
       dividerColor: border,
+      pageTransitionsTheme: const PageTransitionsTheme(builders: {
+        TargetPlatform.android: _FadeThroughTransitions(),
+        TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+      }),
       textTheme: _textTheme(base.textTheme, onSurface, muted),
       appBarTheme: AppBarTheme(
         backgroundColor: background,
@@ -105,7 +111,7 @@ class AppTheme {
   }
 
   static TextTheme _textTheme(TextTheme base, Color onSurface, Color muted) {
-    return base
+    return GoogleFonts.interTextTheme(base)
         .apply(bodyColor: onSurface, displayColor: onSurface)
         .copyWith(
           headlineSmall: base.headlineSmall?.copyWith(fontWeight: FontWeight.w800, letterSpacing: -0.5),
@@ -114,6 +120,29 @@ class AppTheme {
           bodySmall: base.bodySmall?.copyWith(color: muted),
           labelLarge: base.labelLarge?.copyWith(fontWeight: FontWeight.w700),
         );
+  }
+}
+
+/// Transición de página premium: fade + ligero desplazamiento hacia arriba.
+class _FadeThroughTransitions extends PageTransitionsBuilder {
+  const _FadeThroughTransitions();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+    return FadeTransition(
+      opacity: curved,
+      child: SlideTransition(
+        position: Tween<Offset>(begin: const Offset(0, 0.03), end: Offset.zero).animate(curved),
+        child: child,
+      ),
+    );
   }
 }
 

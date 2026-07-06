@@ -12,7 +12,7 @@ Widget _wrap() => ProviderScope(
 void main() {
   testWidgets('El login muestra los campos y el botón Entrar', (tester) async {
     await tester.pumpWidget(_wrap());
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(find.text('Usuario'), findsOneWidget);
     expect(find.text('Contraseña'), findsOneWidget);
@@ -21,8 +21,9 @@ void main() {
 
   testWidgets('Enviar el login vacío muestra validación y no navega', (tester) async {
     await tester.pumpWidget(_wrap());
+    await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Entrar'));
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(find.text('Introduce tu usuario'), findsOneWidget);
     expect(find.text('Introduce tu contraseña'), findsOneWidget);
