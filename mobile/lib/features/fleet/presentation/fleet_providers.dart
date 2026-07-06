@@ -3,9 +3,33 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/providers.dart';
 import '../data/fleet_repository.dart';
 import '../domain/vehicle.dart';
+import '../domain/vehicle_detail.dart';
 
 final fleetRepositoryProvider = Provider<FleetRepository>(
   (ref) => FleetRepository(ref.watch(apiClientProvider)),
+);
+
+/// Ficha completa del vehículo (datos frescos del backend por id).
+final vehicleByIdProvider = FutureProvider.autoDispose.family<Vehicle, String>(
+  (ref, id) => ref.watch(fleetRepositoryProvider).byId(id),
+);
+
+/// Mantenimiento (aceite/ruedas/pastillas + predicción) del vehículo.
+final vehicleMaintenanceProvider =
+    FutureProvider.autoDispose.family<MaintenanceInfo, String>(
+  (ref, id) => ref.watch(fleetRepositoryProvider).maintenance(id),
+);
+
+/// Documentos del vehículo.
+final vehicleDocumentsProvider =
+    FutureProvider.autoDispose.family<List<VehicleDocument>, String>(
+  (ref, id) => ref.watch(fleetRepositoryProvider).documents(id),
+);
+
+/// Conductor asignado actualmente al vehículo (o null).
+final vehicleDriverProvider =
+    FutureProvider.autoDispose.family<AssignedDriver?, String>(
+  (ref, id) => ref.watch(fleetRepositoryProvider).assignedDriver(id),
 );
 
 /// Centro seleccionado en el filtro ('Todos' por defecto).

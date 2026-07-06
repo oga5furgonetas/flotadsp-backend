@@ -160,6 +160,11 @@ class _VehicleTile extends StatelessWidget {
                 ],
               ),
             ),
+            if (vehicle.itvLevel == ExpiryLevel.expired ||
+                vehicle.itvLevel == ExpiryLevel.soon) ...[
+              _ItvBadge(expired: vehicle.itvLevel == ExpiryLevel.expired),
+              const SizedBox(width: 6),
+            ],
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
@@ -172,6 +177,28 @@ class _VehicleTile extends StatelessWidget {
           ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ItvBadge extends StatelessWidget {
+  const _ItvBadge({required this.expired});
+  final bool expired;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = expired ? AppTheme.danger : AppTheme.warning;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(99)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.event_busy_rounded, color: color, size: 12),
+          const SizedBox(width: 4),
+          Text('ITV', style: TextStyle(color: color, fontSize: 10.5, fontWeight: FontWeight.w800)),
+        ],
       ),
     );
   }
