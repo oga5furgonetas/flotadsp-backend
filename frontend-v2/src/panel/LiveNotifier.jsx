@@ -1,49 +1,83 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { MessageSquare, CheckSquare, X } from 'lucide-react'
+import { MessageSquare, CheckSquare, X, BellRing } from 'lucide-react'
 import { getChat, getChecklist } from './api'
 import { getAdmin } from './auth'
 
 /* ── Avisos EN VIVO dentro del panel (PC) ─────────────────────────────────────
    Con la app abierta en cualquier página: si alguien escribe en el chat de tu
-   centro o añade una tarea al checklist, salta un popup + sonido sin tener que
-   entrar a mirar. Complementa al push del móvil (que cubre la app cerrada). */
+   centro o añade una tarea al checklist, salta un aviso GRANDE + campanilla.
+   Diseñado para que quien está trabajando se entere SIEMPRE:
+   · El aviso NO se cierra solo: hay que tocarlo (abre la página) o cerrarlo.
+   · La campanilla se repite cada 25s mientras haya avisos sin atender.
+   · El título de la pestaña parpadea con el número de avisos.
+   · Los avisos sobreviven a un F5 (se guardan en localStorage).
+   Complementa al push del móvil (que cubre la app cerrada). */
 
 const POLL_MS = 25000
 const MAX_CENTERS = 4
+const PENDING_KEY = 'ln_pending'
+const PENDING_TTL_MS = 12 * 3600 * 1000 // un aviso de hace >12h ya no es "en vivo"
 
-function ding() {
+/* Campanilla clara: arpegio ascendente con 2 osciladores por nota (más cuerpo
+   que el "ding" anterior). times=2 al llegar el aviso, times=1 en recordatorios. */
+function playChime(times = 2) {
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext
     if (!Ctx) return
     const ctx = new Ctx()
-    const o = ctx.createOscillator()
-    const g = ctx.createGain()
-    o.connect(g); g.connect(ctx.destination)
-    o.type = 'sine'
-    o.frequency.value = 880
-    g.gain.setValueAtTime(0.0001, ctx.currentTime)
-    g.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.02)
-    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.55)
-    o.start()
-    o.frequency.setValueAtTime(1318, ctx.currentTime + 0.12) // "di-ding"
-    o.stop(ctx.currentTime + 0.6)
-    setTimeout(() => ctx.close().catch(() => {}), 900)
+    const notes = [659.25, 880, 1108.73] // E5 → A5 → C#6
+    for (let r = 0; r < times; r++) {
+      const base = ctx.currentTime + r * 0.75
+      notes.forEach((f, i) => {
+        const o = ctx.createOscillator()
+        const o2 = ctx.createOscillator()
+        const g = ctx.createGain()
+        o.type = 'sine'; o.frequency.value = f
+        o2.type = 'triangle'; o2.frequency.value = f * 2 // armónico: más presencia
+        o.connect(g); o2.connect(g); g.connect(ctx.destination)
+        const t = base + i * 0.16
+        g.gain.setValueAtTime(0.0001, t)
+        g.gain.exponentialRampToValueAtTime(0.4, t + 0.025)
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55)
+        o.start(t); o2.start(t)
+        o.stop(t + 0.6); o2.stop(t + 0.6)
+      })
+    }
+    setTimeout(() => ctx.close().catch(() => {}), times * 800 + 1200)
   } catch { /* sin audio no pasa nada */ }
+}
+
+function loadPending() {
+  try {
+    const arr = JSON.parse(localStorage.getItem(PENDING_KEY) || '[]')
+    const now = Date.now()
+    return Array.isArray(arr) ? arr.filter((n) => n?.key && now - (n.ts || 0) < PENDING_TTL_MS) : []
+  } catch { return [] }
 }
 
 export default function LiveNotifier({ center, centers }) {
   const nav = useNavigate()
   const loc = useLocation()
   const me = getAdmin()
-  const [notes, setNotes] = useState([]) // {key, icon, title, body, to}
+  // {key, icon, title, body, to, ts} — sobreviven a recargas de página
+  const [notes, setNotes] = useState(loadPending)
   const pathRef = useRef(loc.pathname)
   pathRef.current = loc.pathname
 
+  // Persistir pendientes: un F5 no borra un aviso que nadie ha atendido
+  useEffect(() => {
+    try { localStorage.setItem(PENDING_KEY, JSON.stringify(notes)) } catch { /* lleno */ }
+  }, [notes])
+
   function addNote(n) {
-    setNotes((arr) => [...arr.filter((x) => x.key !== n.key), n].slice(-4))
-    ding()
-    setTimeout(() => setNotes((arr) => arr.filter((x) => x.key !== n.key)), 12000)
+    setNotes((arr) => [...arr.filter((x) => x.key !== n.key), { ...n, ts: Date.now() }].slice(-6))
+    playChime(2)
+    // Sin auto-cierre: el aviso queda en pantalla hasta que se toque o se cierre.
+  }
+
+  function dismiss(key) {
+    setNotes((a) => a.filter((x) => x.key !== key))
   }
 
   useEffect(() => {
@@ -66,8 +100,8 @@ export default function LiveNotifier({ center, centers }) {
                 && !pathRef.current.startsWith('/panel/chat')) {
               addNote({
                 key: `chat-${last.id}`, icon: 'chat',
-                title: `💬 ${last.author_name} · ${c}`,
-                body: (last.text || '').slice(0, 90),
+                title: `${last.author_name} · ${c}`,
+                body: (last.text || '').slice(0, 140),
                 to: '/panel/chat',
               })
             }
@@ -91,8 +125,8 @@ export default function LiveNotifier({ center, centers }) {
           if (firstNewText && !pathRef.current.startsWith('/panel/checklist')) {
             addNote({
               key: `task-${today}-${ids.length}`, icon: 'task',
-              title: `📝 Nueva tarea · ${c}`,
-              body: firstNewText.slice(0, 90),
+              title: `Nueva tarea · ${c}`,
+              body: firstNewText.slice(0, 140),
               to: '/panel/checklist-operativo',
             })
           }
@@ -106,37 +140,67 @@ export default function LiveNotifier({ center, centers }) {
     return () => { stop = true; clearInterval(iv) }
   }, [center, centers]) // eslint-disable-line
 
-  // Parpadeo del título de la pestaña mientras hay avisos sin atender
+  const hasNotes = notes.length > 0
+
+  // Recordatorio sonoro cada 25s mientras haya avisos sin atender:
+  // levantarse a por un café no puede significar perderse un aviso.
   useEffect(() => {
-    if (notes.length === 0) return
+    if (!hasNotes) return
+    const iv = setInterval(() => playChime(1), 25000)
+    return () => clearInterval(iv)
+  }, [hasNotes])
+
+  // Parpadeo del título de la pestaña con el número de avisos sin atender
+  useEffect(() => {
+    if (!hasNotes) return
     const base = 'FlotaDSP'
     let on = false
     const iv = setInterval(() => {
-      document.title = on ? `🔔 Aviso — ${base}` : base
+      document.title = on ? `🔔 (${notes.length}) Aviso — ${base}` : base
       on = !on
     }, 1200)
     return () => { clearInterval(iv); document.title = base }
-  }, [notes.length])
+  }, [hasNotes, notes.length])
 
-  if (notes.length === 0) return null
+  if (!hasNotes) return null
 
   return (
-    <div className="fixed bottom-20 right-4 z-[90] flex w-80 flex-col gap-2 md:bottom-4">
+    <div className="fixed bottom-20 right-4 z-[90] flex w-[26rem] max-w-[calc(100vw-2rem)] flex-col gap-2.5 md:bottom-4">
+      {notes.length > 1 && (
+        <button
+          onClick={() => setNotes([])}
+          className="self-end rounded-lg border border-dark-700 bg-dark-900/95 px-3 py-1.5 text-xs font-semibold text-dark-300 hover:border-dark-500 hover:text-white"
+        >
+          Cerrar todos ({notes.length})
+        </button>
+      )}
       {notes.map((n) => (
         <div key={n.key}
-          className="animate-fade-in cursor-pointer rounded-xl border border-brand-500/30 bg-dark-900 p-3.5 shadow-2xl shadow-black/60 hover:border-brand-500/60"
-          onClick={() => { setNotes((a) => a.filter((x) => x.key !== n.key)); nav(n.to) }}>
-          <div className="flex items-start gap-2.5">
-            <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-500/15 text-brand-300">
-              {n.icon === 'chat' ? <MessageSquare size={15} /> : <CheckSquare size={15} />}
+          className="animate-fade-in cursor-pointer rounded-2xl border-2 border-brand-500/70 bg-gradient-to-br from-dark-900 to-dark-950 p-4 shadow-[0_8px_40px_rgba(0,0,0,.7),0_0_24px_rgba(249,115,22,.28)] transition-transform hover:scale-[1.02] hover:border-brand-400"
+          onClick={() => { dismiss(n.key); nav(n.to) }}>
+          <div className="flex items-start gap-3">
+            <span className="relative mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-500/20 text-brand-300">
+              {n.icon === 'chat' ? <MessageSquare size={20} /> : <CheckSquare size={20} />}
+              <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-75" />
+                <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-brand-500" />
+              </span>
             </span>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-bold text-dark-50">{n.title}</div>
-              <div className="mt-0.5 line-clamp-2 text-xs text-dark-400">{n.body}</div>
+              <div className="flex items-center gap-1.5">
+                <BellRing size={13} className="shrink-0 animate-pulse text-brand-400" />
+                <span className="truncate text-[15px] font-extrabold text-white">{n.title}</span>
+              </div>
+              <div className="mt-1 line-clamp-3 text-[13px] leading-snug text-dark-200">{n.body}</div>
+              <div className="mt-1.5 text-[11px] font-medium text-dark-500">
+                Toca para abrir · ✕ para marcar visto
+              </div>
             </div>
-            <button className="shrink-0 rounded p-1 text-dark-500 hover:text-white"
-              onClick={(e) => { e.stopPropagation(); setNotes((a) => a.filter((x) => x.key !== n.key)) }}>
-              <X size={13} />
+            <button
+              className="shrink-0 rounded-lg border border-dark-700 p-1.5 text-dark-400 hover:border-dark-500 hover:text-white"
+              aria-label="Cerrar aviso"
+              onClick={(e) => { e.stopPropagation(); dismiss(n.key) }}>
+              <X size={16} />
             </button>
           </div>
         </div>
