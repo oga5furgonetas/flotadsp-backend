@@ -2181,6 +2181,65 @@ def serialize_doc(doc: dict) -> dict:
     return doc
 
 
+def _remap_photo_indexes(analysis, idx_map: dict) -> None:
+    """Traduce photo_index del subconjunto analizado al índice real en photos.
+    idx_map: {índice_en_análisis (1-based) → índice_en_photos (1-based)}."""
+    if not idx_map:
+        return
+    for lst in ((getattr(analysis, "damages", None) or []),
+                (getattr(analysis, "new_damages", None) or [])):
+        for d in lst:
+            pi = getattr(d, "photo_index", None)
+            if pi:
+                d.photo_index = idx_map.get(pi, pi)
+
+
+def _iou_1000(a: list, b: list) -> float:
+    """IoU de dos cajas [ymin,xmin,ymax,xmax] en coords 0-1000."""
+    try:
+        iy1, ix1 = max(a[0], b[0]), max(a[1], b[1])
+        iy2, ix2 = min(a[2], b[2]), min(a[3], b[3])
+        inter = max(0.0, iy2 - iy1) * max(0.0, ix2 - ix1)
+        if inter <= 0:
+            return 0.0
+        area_a = max(0.0, a[2] - a[0]) * max(0.0, a[3] - a[1])
+        area_b = max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
+    except Exception:
+        return 0.0
+
+
+def _snap_damage_boxes_to_yolo(damages: list, yolo_by_photo: dict) -> int:
+    """Corrige las cajas del LLM con las del detector CV (QW2 del plan IA):
+    el LLM acierta QUÉ es el daño pero localiza mal; YOLO localiza bien.
+    Si una detección YOLO solapa (IoU ≥ 0.25) o su centro cae dentro de la
+    caja del LLM (caso "caja gigante"), se adopta la caja YOLO y se descarta
+    el polígono del LLM (ya no corresponde). Devuelve nº de cajas corregidas."""
+    snapped = 0
+    for d in damages or []:
+        pi = getattr(d, "photo_index", None)
+        box = getattr(d, "box_2d", None)
+        if not pi or not box or len(box) != 4:
+            continue
+        best, best_score = None, 0.0
+        for det in yolo_by_photo.get(pi) or []:
+            db_ = getattr(det, "box_2d", None)
+            if not db_ or len(db_) != 4:
+                continue
+            iou = _iou_1000(box, db_)
+            cy, cx = (db_[0] + db_[2]) / 2, (db_[1] + db_[3]) / 2
+            center_in = box[0] <= cy <= box[2] and box[1] <= cx <= box[3]
+            score = max(iou, 0.26 if (center_in and iou > 0.02) else 0.0)
+            if score > best_score:
+                best_score, best = score, det
+        if best is not None and best_score >= 0.25:
+            d.box_2d = [int(round(v)) for v in best.box_2d]
+            d.polygon_points = None
+            snapped += 1
+    return snapped
+
+
 def _user_friendly_error(reason: str) -> str:
     """Convierte errores tecnicos de Gemini en mensajes claros para el usuario."""
     r = reason.lower()
@@ -2436,7 +2495,10 @@ async def analyze_images_with_gemini(
                 except Exception as e:
                     logger.warning(f"Error añadiendo referencia {i}: {e}")
 
-        gen_config = genai_types.GenerateContentConfig(temperature=0.2, response_mime_type="application/json")
+        # temperature=0 + seed fija: la misma inspección debe dar el mismo
+        # resultado (reproducibilidad, QW4 del plan IA). El CV ya es determinista.
+        gen_config = genai_types.GenerateContentConfig(
+            temperature=0.0, seed=7, response_mime_type="application/json")
         loop = asyncio.get_running_loop()
 
         # Modelos de fallback si el principal da 429. Los alias *-latest los
@@ -5679,6 +5741,7 @@ async def upload_inspection_photos(
     try:
         photo_urls = []
         photos_base64 = []
+        photo_roles = []  # angle | odometer | checklist — por nombre de archivo del portal
 
         for file in files:
             content = await file.read()
@@ -5689,9 +5752,24 @@ async def upload_inspection_photos(
             photo_url, processed_bytes = await process_and_save_image(content, vehicle_id)
             photo_urls.append(photo_url)
             photos_base64.append(base64.b64encode(processed_bytes).decode("utf-8"))
+            _fn = (file.filename or "").lower()
+            photo_roles.append(
+                "odometer" if _fn.startswith("odometro")
+                else "checklist" if _fn.startswith("checklist")
+                else "angle")
 
         if not photo_urls:
             raise HTTPException(status_code=400, detail="No se procesó ninguna imagen válida.")
+
+        # El análisis de daños SOLO mira la carrocería: las fotos del cuentakm y
+        # del checklist confundían a la IA (daños fantasma en salpicaderos) y
+        # gastaban tokens. Se guardan igual, pero no entran al análisis.
+        analysis_photo_idx = [i for i, r in enumerate(photo_roles) if r == "angle"]
+        if not analysis_photo_idx:  # nombres inesperados → comportamiento clásico
+            analysis_photo_idx = list(range(len(photo_urls)))
+        analysis_b64 = [photos_base64[i] for i in analysis_photo_idx]
+        # índice en el análisis (1-based) → índice real en photos (1-based)
+        analysis_idx_map = {k + 1: analysis_photo_idx[k] + 1 for k in range(len(analysis_photo_idx))}
 
         logger.info(f"Guardadas {len(photo_urls)} fotos — vehículo {vehicle_id}")
 
@@ -5724,6 +5802,7 @@ async def upload_inspection_photos(
             analyzed_at=None
         )
         doc = serialize_doc(inspection.model_dump())
+        doc["photo_roles"] = photo_roles  # para reanálisis: qué fotos son carrocería
         await db.inspections.insert_one(doc)
 
         # Actualizar automáticamente el kilometraje de la furgoneta con el que la
@@ -5764,9 +5843,13 @@ async def upload_inspection_photos(
         async def _analyze_and_update():
             try:
                 analysis, analysis_status, analysis_error = await asyncio.wait_for(
-                    analyze_images_with_gemini(photos_base64, ref_bytes_list if ref_bytes_list else None, db=db),
+                    analyze_images_with_gemini(analysis_b64, ref_bytes_list if ref_bytes_list else None, db=db),
                     timeout=120.0
                 )
+                # Los photo_index de Gemini son relativos a las fotos analizadas
+                # (solo carrocería); remapear al índice real dentro de photos.
+                if analysis:
+                    _remap_photo_indexes(analysis, analysis_idx_map)
                 # Filtro determinista: un panel ya dañado antes NO es "nuevo" otra vez
                 if analysis and analysis_status == "ok" and getattr(analysis, "new_damages", None):
                     try:
@@ -5788,6 +5871,25 @@ async def upload_inspection_photos(
                         analysis.total_estimated_cost = float(_vehicle_panel_cost(dmg_dicts)[0])
                     except Exception as _ce:
                         logger.warning(f"Coste por panel: {_ce}")
+                # Snap de cajas al detector CV: el LLM decide el QUÉ, YOLO el DÓNDE
+                if AI_SERVICE_URL and analysis and analysis_status == "ok" and (analysis.damages or analysis.new_damages):
+                    try:
+                        _pis = sorted({d.photo_index
+                                       for d in (analysis.damages or []) + (analysis.new_damages or [])
+                                       if getattr(d, "photo_index", None)})
+                        yolo_by_photo = {}
+                        for _pi in _pis:
+                            if 1 <= _pi <= len(photos_base64):
+                                dets = await _call_ai_service_detect(
+                                    inspection.id, _pi - 1, base64.b64decode(photos_base64[_pi - 1]))
+                                if dets:
+                                    yolo_by_photo[_pi] = dets
+                        _s1 = _snap_damage_boxes_to_yolo(analysis.damages or [], yolo_by_photo)
+                        _s2 = _snap_damage_boxes_to_yolo(analysis.new_damages or [], yolo_by_photo)
+                        if _s1 or _s2:
+                            logger.info(f"Snap YOLO: {_s1}+{_s2} cajas corregidas insp={inspection.id[:8]}")
+                    except Exception as _se:
+                        logger.warning(f"Snap YOLO: {_se}")
                 await db.inspections.update_one(
                     {"id": inspection.id},
                     {"$set": {"analysis": serialize_doc(analysis.model_dump()) if analysis else None,
@@ -6616,6 +6718,16 @@ async def reanalyze_inspection(inspection_id: str, silent: bool = False, _=Depen
 
     photos_base64 = [base64.b64encode(b).decode("utf-8") for b in photo_bytes]
 
+    # Solo carrocería al análisis (photo_roles existe desde 2026-07; en
+    # inspecciones antiguas sin roles se analizan todas, como siempre).
+    _roles = insp.get("photo_roles") or []
+    if len(_roles) == len(photos_base64):
+        _aidx = [i for i, r in enumerate(_roles) if r == "angle"] or list(range(len(photos_base64)))
+    else:
+        _aidx = list(range(len(photos_base64)))
+    analysis_b64 = [photos_base64[i] for i in _aidx]
+    _idx_map = {k + 1: _aidx[k] + 1 for k in range(len(_aidx))}
+
     # Fotos de referencia (estado anterior) si las había
     ref_urls = insp.get("reference_photos") or []
     ref_bytes_list = await load_reference_images(ref_urls) if ref_urls else None
@@ -6628,11 +6740,32 @@ async def reanalyze_inspection(inspection_id: str, silent: bool = False, _=Depen
 
     _known_txt = await _known_damages_prompt(insp.get("vehicle_id"), exclude_inspection_id=inspection_id)
     analysis, analysis_status, analysis_error = await analyze_images_with_gemini(
-        photos_base64, ref_bytes_list if ref_bytes_list else None, db=db,
+        analysis_b64, ref_bytes_list if ref_bytes_list else None, db=db,
         known_damages_text=_known_txt,
     )
+    if analysis:
+        _remap_photo_indexes(analysis, _idx_map)
     if analysis_status == "ok" and analysis:
         await _apply_vehicle_memory(insp.get("vehicle_id"), analysis, inspection_id=inspection_id)
+
+    # Snap de cajas al detector CV (mismo criterio que en la subida)
+    if AI_SERVICE_URL and analysis and analysis_status == "ok" and (analysis.damages or analysis.new_damages):
+        try:
+            _pis = sorted({d.photo_index
+                           for d in (analysis.damages or []) + (analysis.new_damages or [])
+                           if getattr(d, "photo_index", None)})
+            yolo_by_photo = {}
+            for _pi in _pis:
+                if 1 <= _pi <= len(photo_bytes):
+                    dets = await _call_ai_service_detect(inspection_id, _pi - 1, photo_bytes[_pi - 1])
+                    if dets:
+                        yolo_by_photo[_pi] = dets
+            _s1 = _snap_damage_boxes_to_yolo(analysis.damages or [], yolo_by_photo)
+            _s2 = _snap_damage_boxes_to_yolo(analysis.new_damages or [], yolo_by_photo)
+            if _s1 or _s2:
+                logger.info(f"Snap YOLO (reanálisis): {_s1}+{_s2} cajas corregidas insp={inspection_id[:8]}")
+        except Exception as _se:
+            logger.warning(f"Snap YOLO reanálisis: {_se}")
 
     await db.inspections.update_one(
         {"id": inspection_id},
