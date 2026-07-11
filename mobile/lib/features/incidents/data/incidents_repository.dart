@@ -29,4 +29,10 @@ class IncidentsRepository {
       'severity': severity,
     });
   }
+
+  /// Resuelve o reabre una incidencia (`PATCH /incidents/{id}`).
+  /// El backend fija/limpia `resolved_at` automáticamente según el estado.
+  Future<void> setStatus(String id, {required bool resolved}) async {
+    await _client.patch('/incidents/$id', data: {'status': resolved ? 'resolved' : 'open'});
+  }
 }

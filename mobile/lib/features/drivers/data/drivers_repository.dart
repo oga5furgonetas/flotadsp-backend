@@ -1,3 +1,5 @@
+import 'package:dio/dio.dart';
+
 import '../../../core/network/api_client.dart';
 import '../domain/driver_profile.dart';
 import '../domain/driver_rank.dart';
@@ -34,5 +36,14 @@ class DriversRepository {
   /// Edita un conductor (`PATCH /drivers/{id}`). Solo campos de la whitelist.
   Future<void> update(String id, Map<String, dynamic> fields) async {
     await _client.patch('/drivers/$id', data: fields);
+  }
+
+  /// Sube la foto de perfil (`POST /drivers/{id}/photo`, máx 8 MB).
+  Future<String?> uploadPhoto(String id, List<int> bytes, String filename) async {
+    final form = FormData.fromMap({
+      'file': MultipartFile.fromBytes(bytes, filename: filename),
+    });
+    final res = await _client.postForm<Map<String, dynamic>>('/drivers/$id/photo', form);
+    return res.data?['photo_url'] as String?;
   }
 }

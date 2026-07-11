@@ -6,6 +6,7 @@ import '../../dashboard/presentation/dashboard_providers.dart';
 import '../../dashboard/presentation/dashboard_screen.dart';
 import '../../fleet/presentation/fleet_screen.dart';
 import '../../review/presentation/review_screen.dart';
+import 'home_tab.dart';
 import 'more_screen.dart';
 
 /// Shell principal tras el login: navegación por pestañas (bottom nav).
@@ -18,26 +19,25 @@ class HomeShell extends ConsumerStatefulWidget {
 }
 
 class _HomeShellState extends ConsumerState<HomeShell> {
-  int _index = 0;
-
   static const _titles = ['Resumen', 'Flota', 'Revisión', 'Más'];
 
   void _select(int i) {
-    if (i == _index) return;
+    if (i == ref.read(homeTabProvider)) return;
     HapticFeedback.selectionClick();
-    setState(() => _index = i);
+    ref.read(homeTabProvider.notifier).state = i;
   }
 
   @override
   Widget build(BuildContext context) {
+    final index = ref.watch(homeTabProvider);
     // Burbuja de alertas sin necesidad de estar en "Resumen" (comparte caché con
     // DashboardScreen, no hay doble fetch).
     final unread = ref.watch(dashboardStatsProvider).asData?.value.unreadAlerts ?? 0;
 
     return Scaffold(
-      appBar: AppBar(title: Text(_titles[_index])),
+      appBar: AppBar(title: Text(_titles[index])),
       body: IndexedStack(
-        index: _index,
+        index: index,
         children: const [
           DashboardScreen(),
           FleetScreen(),
@@ -46,7 +46,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         ],
       ),
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
+        selectedIndex: index,
         onDestinationSelected: _select,
         destinations: [
           NavigationDestination(

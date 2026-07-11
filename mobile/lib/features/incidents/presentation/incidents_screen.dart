@@ -49,7 +49,10 @@ class IncidentsScreen extends ConsumerWidget {
               itemCount: sorted.length,
               separatorBuilder: (_, _) => const SizedBox(height: 10),
               itemBuilder: (context, i) =>
-                  _IncidentCard(incident: sorted[i]).entrance(index: i.clamp(0, 6)),
+                  _IncidentCard(
+                    incident: sorted[i],
+                    onToggle: () => _toggleStatus(context, ref, sorted[i]),
+                  ).entrance(index: i.clamp(0, 6)),
             );
           },
           loading: () => Shimmer(
@@ -64,6 +67,43 @@ class IncidentsScreen extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _toggleStatus(BuildContext context, WidgetRef ref, Incident incident) async {
+    final resolving = incident.isOpen;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(resolving ? 'Resolver incidencia' : 'Reabrir incidencia'),
+        content: Text(resolving
+            ? '¿Marcar «${incident.title}» como resuelta?'
+            : '¿Reabrir «${incident.title}»?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: resolving ? AppTheme.success : AppTheme.warning),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(resolving ? 'Resolver' : 'Reabrir'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await ref.read(incidentsRepoProvider).setStatus(incident.id, resolved: resolving);
+      ref.invalidate(incidentsProvider);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(resolving ? 'Incidencia resuelta' : 'Incidencia reabierta')),
+        );
+      }
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('No se pudo actualizar')));
+      }
+    }
   }
 
   Widget _empty(BuildContext context) {
@@ -87,8 +127,9 @@ class IncidentsScreen extends ConsumerWidget {
 }
 
 class _IncidentCard extends StatelessWidget {
-  const _IncidentCard({required this.incident});
+  const _IncidentCard({required this.incident, this.onToggle});
   final Incident incident;
+  final VoidCallback? onToggle;
 
   @override
   Widget build(BuildContext context) {
@@ -96,7 +137,10 @@ class _IncidentCard extends StatelessWidget {
     final sev = SeverityStyle.of(incident.severity);
     final open = incident.isOpen;
     return Card(
-      child: Padding(
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onToggle,
+        child: Padding(
         padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -131,6 +175,7 @@ class _IncidentCard extends StatelessWidget {
               ],
             ),
           ],
+        ),
         ),
       ),
     );

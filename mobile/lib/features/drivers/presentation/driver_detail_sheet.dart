@@ -1,5 +1,7 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/network/api_exception.dart';
@@ -98,6 +100,47 @@ class _DriverDetailSheetState extends ConsumerState<_DriverDetailSheet> {
     if (await canLaunchUrl(uri)) await launchUrl(uri);
   }
 
+  Future<void> _changePhoto() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt_rounded),
+              title: const Text('Hacer foto'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded),
+              title: const Text('Elegir de la galería'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+    final img = await ImagePicker().pickImage(source: source, imageQuality: 82, maxWidth: 1200);
+    if (img == null) return;
+    setState(() => _busy = true);
+    try {
+      final bytes = await img.readAsBytes();
+      await ref.read(driversRepoProvider).uploadPhoto(widget.driverId, bytes, img.name);
+      // El avatar lee photo_url del provider: al invalidar se refresca solo,
+      // sin perder los cambios sin guardar de los campos de texto.
+      ref.invalidate(driversListProvider);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Foto actualizada')));
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = e is ApiException ? e.message : 'No se pudo subir la foto');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final muted = Theme.of(context).extension<AppColors>()!.muted;
@@ -143,12 +186,35 @@ class _DriverDetailSheetState extends ConsumerState<_DriverDetailSheet> {
                   const SizedBox(height: 16),
                   Row(
                     children: [
-                      CircleAvatar(
-                        radius: 22,
-                        backgroundColor: AppTheme.brand.withValues(alpha: 0.15),
-                        child: Text(
-                          profile.name.isNotEmpty ? profile.name[0].toUpperCase() : '?',
-                          style: const TextStyle(color: AppTheme.brand, fontWeight: FontWeight.w800, fontSize: 18),
+                      InkWell(
+                        onTap: _busy ? null : _changePhoto,
+                        customBorder: const CircleBorder(),
+                        child: Stack(
+                          children: [
+                            CircleAvatar(
+                              radius: 26,
+                              backgroundColor: AppTheme.brand.withValues(alpha: 0.15),
+                              backgroundImage: (profile.photoUrl ?? '').isNotEmpty
+                                  ? CachedNetworkImageProvider(profile.photoUrl!)
+                                  : null,
+                              child: (profile.photoUrl ?? '').isEmpty
+                                  ? Text(
+                                      profile.name.isNotEmpty ? profile.name[0].toUpperCase() : '?',
+                                      style: const TextStyle(
+                                          color: AppTheme.brand, fontWeight: FontWeight.w800, fontSize: 18),
+                                    )
+                                  : null,
+                            ),
+                            Positioned(
+                              right: 0,
+                              bottom: 0,
+                              child: Container(
+                                padding: const EdgeInsets.all(3),
+                                decoration: const BoxDecoration(color: AppTheme.brand, shape: BoxShape.circle),
+                                child: const Icon(Icons.camera_alt_rounded, size: 11, color: Colors.white),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                       const SizedBox(width: 12),

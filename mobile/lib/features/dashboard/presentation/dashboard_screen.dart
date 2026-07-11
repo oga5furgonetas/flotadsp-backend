@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/design/motion.dart';
 import '../../../core/providers.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/error_view.dart';
 import '../../../core/widgets/skeleton.dart';
+import '../../home/presentation/home_tab.dart';
 import '../domain/dashboard_stats.dart';
 import 'dashboard_providers.dart';
 
@@ -42,20 +45,31 @@ class DashboardScreen extends ConsumerWidget {
   }
 }
 
-class _Content extends StatelessWidget {
+class _Content extends ConsumerWidget {
   const _Content({required this.stats, required this.userName});
   final DashboardStats stats;
   final String userName;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    void tab(int i) {
+      HapticFeedback.selectionClick();
+      ref.read(homeTabProvider.notifier).state = i;
+    }
+
     final cards = [
-      _StatData('Furgonetas', stats.totalVehicles, Icons.local_shipping_rounded, AppTheme.info),
-      _StatData('Conductores', stats.totalDrivers, Icons.people_alt_rounded, const Color(0xFFA78BFA)),
-      _StatData('Inspecciones', stats.totalInspections, Icons.fact_check_rounded, AppTheme.success),
-      _StatData('En taller', stats.vehiclesInWorkshop, Icons.build_rounded, AppTheme.warning),
-      _StatData('Alertas', stats.unreadAlerts, Icons.notifications_active_rounded, AppTheme.brand),
-      _StatData('Incidencias', stats.openIncidents, Icons.report_problem_rounded, AppTheme.danger),
+      _StatData('Furgonetas', stats.totalVehicles, Icons.local_shipping_rounded, AppTheme.info,
+          onTap: () => tab(1)),
+      _StatData('Conductores', stats.totalDrivers, Icons.people_alt_rounded, const Color(0xFFA78BFA),
+          onTap: () => context.push('/drivers')),
+      _StatData('Inspecciones', stats.totalInspections, Icons.fact_check_rounded, AppTheme.success,
+          onTap: () => tab(2)),
+      _StatData('En taller', stats.vehiclesInWorkshop, Icons.build_rounded, AppTheme.warning,
+          onTap: () => tab(1)),
+      _StatData('Alertas', stats.unreadAlerts, Icons.notifications_active_rounded, AppTheme.brand,
+          onTap: () => context.push('/maintenance')),
+      _StatData('Incidencias', stats.openIncidents, Icons.report_problem_rounded, AppTheme.danger,
+          onTap: () => context.push('/incidents')),
     ];
 
     return ListView(
@@ -123,11 +137,12 @@ class _GreetingHeader extends StatelessWidget {
 }
 
 class _StatData {
-  const _StatData(this.label, this.value, this.icon, this.color);
+  const _StatData(this.label, this.value, this.icon, this.color, {this.onTap});
   final String label;
   final int value;
   final IconData icon;
   final Color color;
+  final VoidCallback? onTap;
 }
 
 class _StatCard extends StatelessWidget {
@@ -138,24 +153,35 @@ class _StatCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final muted = Theme.of(context).extension<AppColors>()!.muted;
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: data.color.withValues(alpha: 0.14),
-                borderRadius: BorderRadius.circular(10),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: data.onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: data.color.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(data.icon, color: data.color, size: 20),
+                  ),
+                  if (data.onTap != null)
+                    Icon(Icons.chevron_right_rounded, size: 18, color: muted.withValues(alpha: 0.6)),
+                ],
               ),
-              child: Icon(data.icon, color: data.color, size: 20),
-            ),
-            Text('${data.value}',
-                style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
-            Text(data.label, style: TextStyle(color: muted, fontSize: 12.5)),
-          ],
+              Text('${data.value}',
+                  style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
+              Text(data.label, style: TextStyle(color: muted, fontSize: 12.5)),
+            ],
+          ),
         ),
       ),
     );
