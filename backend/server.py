@@ -51,6 +51,28 @@ load_dotenv(ROOT_DIR / ".env")
 _executor = ThreadPoolExecutor(max_workers=4)
 _gemini_sem = asyncio.Semaphore(2)  # máximo 2 llamadas Gemini simultáneas
 
+# ── Gestión de cuota DIARIA de Gemini (crítico en nivel gratuito) ──
+# El free tier limita por PETICIONES/DÍA y MODELO (p. ej. 20/día en 2.5-flash).
+# Reintentar contra un modelo con el día agotado quema el cupo de los demás.
+# Cuando un 429 dice "PerDay", el modelo se veta 4h y se salta directamente.
+_gemini_daily_exhausted: dict = {}  # modelo → epoch en que se agotó su día
+_GEMINI_EXHAUST_TTL = 4 * 3600
+
+
+def _mark_daily_exhausted(model: str):
+    _gemini_daily_exhausted[model] = time.time()
+    logger.warning(f"Gemini cuota DIARIA agotada en {model}: vetado {_GEMINI_EXHAUST_TTL // 3600}h")
+
+
+def _is_daily_exhausted(model: str) -> bool:
+    return time.time() - _gemini_daily_exhausted.get(model, 0) < _GEMINI_EXHAUST_TTL
+
+
+def _is_perday_429(err_str: str) -> bool:
+    """¿El 429 es por cupo DIARIO (no por ráfaga por minuto)?"""
+    e = err_str.lower()
+    return "perday" in e or "per day" in e or "daily" in e
+
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 
 # AI Detection microservice (YOLO11 + SAM2)
@@ -1744,6 +1766,32 @@ Ante la duda entre cualquiera de estos y un daño real: confidence < 0.65 y már
 dirt_level ≥ 6: sé CONSERVADOR. Barro, polvo, agua seca NO son daños. Solo reporta
 deformaciones físicas, roturas o pérdida de pintura evidentes. Baja confidence en marcas ambiguas.
 
+=== BAREMO DE SEVERIDAD (criterios de peritaje — aplícalo a CADA daño) ===
+- LEVE: rayón superficial sin deformación (< 15 cm), roce en paragolpes, desconchón puntual
+  de pintura. Solo estética; se pule o retoca.
+- MODERADO: rayón largo o profundo con pérdida de pintura clara, abolladura pequeña
+  (< 10 cm) sin pliegues, moldura/embellecedor suelto o rajado. Requiere chapa-pintura del panel.
+- GRAVE: abolladura grande o con pliegues de chapa, panel deformado, óptica/piloto ROTO,
+  luna agrietada, paragolpes rajado o descolgado. Sustitución o reparación estructural del panel.
+- CRÍTICO: afecta a la SEGURIDAD o a la circulación: luna del conductor rota, óptica delantera
+  inservible, rueda/neumático dañado, puerta que no cierra, elemento colgando que puede
+  desprenderse, deformación que invade el paso de rueda.
+Regla: ante la duda entre dos niveles, elige el MENOR y explica en description por qué.
+La severidad global ("severity") = la del PEOR daño individual, nunca mayor.
+
+=== CONTROL DE CALIDAD FINAL (obligatorio ANTES de responder) ===
+Repasa tu lista de daños UNA POR UNA y elimina las entradas que no superen TODAS estas pruebas:
+1. PRUEBA FÍSICA: si el panel aparece en 2+ fotos, ¿la marca está en el MISMO punto en todas?
+   Si solo existe en una foto → reflejo/luz → FUERA.
+2. CATÁLOGO: ¿podría ser alguno de los falsos positivos listados (reflejo, gota, junta,
+   nervio de diseño, moldura, pegatina, sombra, barro)? Si no puedes descartarlo → FUERA
+   o confidence < 0.65 como sugerido.
+3. EVIDENCIA: ¿puedes señalar el daño con un box preciso y describir su forma y tamaño
+   aproximado en cm? Si no → FUERA.
+4. BAREMO: ¿la severidad asignada cumple el baremo de arriba? Ajústala si no.
+Es MEJOR devolver 1 daño cierto que 5 dudosos: cada falso positivo cuesta tiempo de revisión
+y credibilidad. Un vehículo limpio y sin daños con "sin_danos" es una respuesta perfectamente válida.
+
 Responde ÚNICAMENTE con este JSON exacto (sin markdown, sin bloques de código, sin texto extra):
 {
   "severity": "sin_danos|leve|moderado|grave|critico",
@@ -1838,6 +1886,12 @@ async def _classify_photo_orientations(client, genai_types, model_name, images_b
     """ETAPA 0: clasificador de orientación dedicado (mono-tarea = fiable).
     Devuelve {photo_index_1based: {"view", "confidence", "clue"}} o None si falla
     (en cuyo caso el análisis continúa como antes — nunca bloquea)."""
+    # Cuota diaria justa (free tier): la llamada extra de Etapa0 se sacrifica
+    # para reservar el cupo al análisis principal. Nunca bloquea: sin
+    # orientaciones, el análisis continúa sin restricciones, como siempre.
+    if _is_daily_exhausted(model_name):
+        logger.info("[Etapa0] Saltado: cuota diaria de Gemini justa, se reserva para el análisis")
+        return None
     try:
         contents = [_ORIENTATION_PROMPT]
         for i, img_b64 in enumerate(images_base64):
@@ -1874,6 +1928,8 @@ async def _classify_photo_orientations(client, genai_types, model_name, images_b
                 f"img{i}={out[i]['view']}({out[i]['confidence']:.2f})" for i in sorted(out)))
         return out or None
     except Exception as e:
+        if _is_perday_429(str(e)):
+            _mark_daily_exhausted(model_name)
         logger.warning(f"[Etapa0] Clasificador de orientación falló (se continúa sin restricciones): {e}")
         return None
 
@@ -2323,7 +2379,9 @@ async def analyze_images_with_gemini(
             except Exception as _pl:
                 logger.debug(f"[Learning] Error cargando patrones: {_pl}")
             try:
-                general_examples = await get_few_shot_examples(db, location_hint="", part="", limit=2, general=True)
+                # 4 ejemplos (antes 2): con 1300+ correcciones humanas etiquetadas,
+                # más señal propia por petición a coste de peticiones CERO.
+                general_examples = await get_few_shot_examples(db, location_hint="", part="", limit=4, general=True)
                 few_shot_parts = build_few_shot_prompt_parts_multimodal(general_examples)
                 for part_dict in few_shot_parts:
                     if "inline_data" in part_dict:
@@ -2393,6 +2451,10 @@ async def analyze_images_with_gemini(
         # Semáforo: máximo 2 llamadas Gemini simultáneas para evitar 429
         async with _gemini_sem:
             for model_attempt, current_model in enumerate(models_to_try):
+                # Cupo diario agotado hace poco: ni lo intentamos (ahorra peticiones).
+                if _is_daily_exhausted(current_model):
+                    logger.info(f"Gemini {current_model} con día agotado: saltado")
+                    continue
                 for retry in range(3):
                     try:
                         response = await asyncio.wait_for(
@@ -2414,6 +2476,11 @@ async def analyze_images_with_gemini(
                         last_err = e
                         err_str = str(e).lower()
                         is_rate_limit = "429" in err_str or "resource_exhausted" in err_str
+                        # Cupo DIARIO agotado: reintentar en segundos es inútil y quema
+                        # el cupo del resto de modelos → vetar y pasar al siguiente.
+                        if is_rate_limit and _is_perday_429(err_str):
+                            _mark_daily_exhausted(current_model)
+                            break
                         if is_rate_limit and retry < 2:
                             wait_s = (retry + 1) * 15
                             logger.warning(f"Gemini 429 modelo={current_model}, reintento {retry+1} en {wait_s}s")
@@ -2630,7 +2697,7 @@ async def _refine_damage_boxes(
         refine_contents = []
         if db is not None:
             try:
-                examples = await get_few_shot_examples(db, location_hint_str, part_str, limit=2)
+                examples = await get_few_shot_examples(db, location_hint_str, part_str, limit=3)
                 few_shot_parts = build_few_shot_prompt_parts_multimodal(examples)
                 for part_dict in few_shot_parts:
                     if "inline_data" in part_dict:
@@ -6389,8 +6456,16 @@ async def start_analysis_recovery():
 
     async def _recovery_loop():
         await asyncio.sleep(60)  # dejar arrancar el servidor con calma
+        _chain = ["gemini-2.5-flash", "gemini-flash-latest",
+                  "gemini-flash-lite-latest", "gemini-2.5-flash-lite"]
         while True:
             try:
+                # Toda la cadena con el día agotado (free tier): reintentar solo
+                # quemaría los auto_retries de cada inspección contra un muro.
+                if all(_is_daily_exhausted(m) for m in _chain):
+                    logger.info("Auto-recuperación en pausa: cuota diaria de Gemini agotada en toda la cadena")
+                    await asyncio.sleep(1800)
+                    continue
                 now = datetime.now(timezone.utc)
                 cutoff_stuck = (now - timedelta(minutes=15)).isoformat()
                 # 14 días: una caída larga (p. ej. créditos de Gemini agotados
