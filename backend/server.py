@@ -2128,6 +2128,8 @@ def serialize_doc(doc: dict) -> dict:
 def _user_friendly_error(reason: str) -> str:
     """Convierte errores tecnicos de Gemini en mensajes claros para el usuario."""
     r = reason.lower()
+    if "depleted" in r or "prepay" in r:
+        return "Creditos de IA agotados. Recarga en AI Studio (ai.studio/projects); las inspecciones se reanalizaran solas."
     if "429" in r or "quota" in r or "resource_exhausted" in r:
         return "Analisis IA temporalmente no disponible (limite de uso alcanzado). Se reintentara automaticamente."
     if "404" in r or "not found" in r:
@@ -2147,11 +2149,12 @@ def _fallback_analysis(reason: str = "Gemini no disponible") -> InspectionAnalys
     # Sin esto, las inspecciones se quedan "sin análisis" en silencio hasta que
     # alguien lo ve en el panel (pasó el 2026-07-02 con BILLING_DISABLED).
     rl = reason.lower()
-    if any(s in rl for s in ("billing", "permission", "api_key", "api key", "401", "403")):
+    if any(s in rl for s in ("billing", "permission", "api_key", "api key", "401", "403",
+                             "depleted", "prepay")):
         try:
             asyncio.get_running_loop().create_task(_notify_error_once(
                 "backend",
-                "Análisis IA caído: Gemini/Vertex rechaza las llamadas (billing o permisos)",
+                "Análisis IA caído: Gemini rechaza las llamadas (créditos agotados, billing o permisos)",
                 reason[:400],
             ))
         except RuntimeError:
@@ -2378,8 +2381,10 @@ async def analyze_images_with_gemini(
         gen_config = genai_types.GenerateContentConfig(temperature=0.2, response_mime_type="application/json")
         loop = asyncio.get_running_loop()
 
-        # Modelos de fallback si el principal da 429
-        fallback_models = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
+        # Modelos de fallback si el principal da 429. Los alias *-latest los
+        # mantiene Google apuntando a la versión vigente (los 1.5 murieron en
+        # 2026 devolviendo 404 y dejaban todo "sin análisis").
+        fallback_models = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash-lite"]
         models_to_try = [model_name] + [m for m in fallback_models if m != model_name]
 
         response = None
@@ -5666,6 +5671,8 @@ async def upload_inspection_photos(
                     odo_km = _n.get("odometer_km")
             except Exception:
                 odo_km = None
+            if isinstance(odo_km, str) and odo_km.strip().isdigit():
+                odo_km = int(odo_km.strip())
             if isinstance(odo_km, (int, float)) and odo_km > 0:
                 odo_km = int(odo_km)
                 veh = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "mileage": 1})
@@ -6372,7 +6379,7 @@ async def start_analysis_recovery():
         _reset = await db.inspections.update_many(
             {"analysis_status": {"$in": ["error", "gemini_failed", "gemini_timeout"]},
              "deleted": {"$ne": True}, "auto_retries": {"$gte": 3},
-             "created_at": {"$gt": (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()}},
+             "created_at": {"$gt": (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()}},
             {"$set": {"auto_retries": 0}},
         )
         if _reset.modified_count:
@@ -6386,7 +6393,9 @@ async def start_analysis_recovery():
             try:
                 now = datetime.now(timezone.utc)
                 cutoff_stuck = (now - timedelta(minutes=15)).isoformat()
-                cutoff_recent = (now - timedelta(hours=48)).isoformat()
+                # 14 días: una caída larga (p. ej. créditos de Gemini agotados
+                # durante días) no debe dejar inspecciones huérfanas sin análisis.
+                cutoff_recent = (now - timedelta(days=14)).isoformat()
                 stuck = await db.inspections.find({
                     "$and": [
                         {"$or": [
@@ -9959,16 +9968,23 @@ async def fix_centers(_=Depends(require_admin)):
 
 @api_router.post("/inspections/reanalyze-failed")
 async def reanalyze_all_failed(_=Depends(require_admin)):
-    """Reprocesa TODAS las inspecciones cuyo analisis fallo. Util tras recuperar cuota de Gemini."""
+    """Reencola TODAS las inspecciones cuyo analisis fallo: resetea sus contadores
+    de reintentos para que el ciclo de auto-recuperacion (cada 10 min, 5 por ciclo)
+    las vaya reanalizando solo. Util tras recuperar cuota/creditos de Gemini."""
     failed = await db.inspections.find(
-        {"deleted": {"$ne": True}, "analysis_status": {"$ne": "ok"}}, {"_id": 0, "id": 1}
+        {"deleted": {"$ne": True}, "analysis_status": {"$ne": "ok"},
+         "photos": {"$exists": True, "$ne": []}}, {"_id": 0, "id": 1}
     ).to_list(500)
+    ids = [f["id"] for f in failed]
+    if ids:
+        await db.inspections.update_many(
+            {"id": {"$in": ids}}, {"$set": {"auto_retries": 0}})
 
     return {
-        "found": len(failed),
-        "message": f"{len(failed)} inspecciones pendientes de reanalisis. "
-                   f"Usa el boton de reanalizar en cada una, o espera al reproceso automatico.",
-        "inspection_ids": [f["id"] for f in failed]
+        "found": len(ids),
+        "message": f"{len(ids)} inspecciones reencoladas. El reproceso automatico "
+                   f"las ira analizando (5 cada 10 min, ~{max(1, len(ids) // 30)}h).",
+        "inspection_ids": ids,
     }
 
 
@@ -10874,7 +10890,7 @@ async def import_roster_image(
         loop = asyncio.get_running_loop()
 
         # Reintentos con fallback de modelo si hay 429 RESOURCE_EXHAUSTED
-        fallback_models = [model_name, "gemini-1.5-flash", "gemini-1.5-pro"]
+        fallback_models = [model_name, "gemini-flash-latest", "gemini-flash-lite-latest"]
         last_err = None
         response = None
         for _attempt_model in fallback_models:

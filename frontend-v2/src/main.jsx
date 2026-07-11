@@ -32,6 +32,8 @@ const _NOISE = [
   'dynamically imported module', 'Importing a module script failed', 'ChunkLoadError',
   'Failed to fetch', 'NetworkError', 'Load failed', 'network error',
   'Script error', 'ResizeObserver loop',
+  // Navegadores viejos sin 'wasm-unsafe-eval' en CSP: el 3D degrada solo, no es accionable.
+  'WebAssembly.instantiate', 'WebAssembly.compile',
 ]
 const _reported = new Set()
 function reportError(message, stack) {
