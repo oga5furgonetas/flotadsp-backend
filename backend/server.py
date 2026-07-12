@@ -294,6 +294,9 @@ class Damage(BaseModel):
     photo_index: Optional[int] = None      # imagen (1-based) donde mejor se ve el daño
     box_2d: Optional[List[int]] = None     # [ymin,xmin,ymax,xmax] normalizado 0-1000
     polygon_points: Optional[List[List[int]]] = None  # [[y,x], ...] normalizado 0-1000
+    # Pieza determinada por GEOMETRÍA (modelo de paneles ∩ caja del daño),
+    # independiente del "part" textual del LLM. Fiable para ledger y revisión.
+    panel_cv: Optional[str] = None
     is_new: bool = True
     confirmed: bool = True          # False = sugerido (confidence < 0.65), no cuenta en scoring
     # --- v5.1: gestión de reparación ---
@@ -408,6 +411,9 @@ class AIDetection(BaseModel):
     box_2d: List[float]  # [ymin, xmin, ymax, xmax] normalized 0-1000
     confidence: float = 0.7
     source: str = "location_hint"  # "yolo" | "sam2" | "location_hint"
+    # Pieza asignada por el modelo de paneles del ai-service (geometría, no LLM)
+    panel: Optional[str] = None
+    panel_conf: Optional[float] = None
 
 
 class InspectionAIResult(BaseModel):
@@ -2236,6 +2242,9 @@ def _snap_damage_boxes_to_yolo(damages: list, yolo_by_photo: dict) -> int:
         if best is not None and best_score >= 0.25:
             d.box_2d = [int(round(v)) for v in best.box_2d]
             d.polygon_points = None
+            panel = getattr(best, "panel", None)
+            if panel:
+                d.panel_cv = panel
             snapped += 1
     return snapped
 

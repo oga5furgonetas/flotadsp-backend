@@ -18,6 +18,8 @@ COPY main.py .
 COPY model_finetuned.pt .
 # Detector propio v2 (CarDD+DrBimmer, 10 clases, 832px) — prioridad por defecto
 COPY model_v2.pt .
+# Modelo de paneles (21 piezas) para la asignación daño→pieza
+COPY model_parts.pt .
 
 # Descarga también el modelo base como respaldo
 RUN python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='vineetsarpal/yolov11n-car-damage', filename='best.pt')"

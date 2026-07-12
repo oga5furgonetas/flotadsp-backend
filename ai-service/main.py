@@ -56,6 +56,32 @@ SEV_V2 = {
     "corrosion": "moderado",
 }
 
+# ── Modelo de PANELES (21 piezas, mAP50 0.90) — asignación daño→pieza ──
+MODEL_PARTS = "model_parts.pt"
+LABEL_PARTS = {
+    "back-bumper": "paragolpes trasero",
+    "back-door": "puerta trasera",
+    "back-wheel": "rueda trasera",
+    "back-window": "ventanilla trasera",
+    "back-windshield": "luna trasera",
+    "fender": "aleta",
+    "front-bumper": "paragolpes delantero",
+    "front-door": "puerta delantera",
+    "front-wheel": "rueda delantera",
+    "front-window": "ventanilla delantera",
+    "grille": "parrilla",
+    "headlight": "faro delantero",
+    "hood": "capó",
+    "license-plate": "matrícula",
+    "mirror": "retrovisor",
+    "quarter-panel": "panel lateral trasero",
+    "rocker-panel": "faldón",
+    "roof": "techo",
+    "tail-light": "piloto trasero",
+    "trunk": "portón",
+    "windshield": "parabrisas",
+}
+
 # ── Modelo comunitario (respaldo, 14 clases) ──
 LABEL_ES = {
     "front-windscreen-damage": "Parabrisas dañado",
@@ -76,10 +102,63 @@ LABEL_ES = {
 }
 
 _model = None
+_parts = None
 
 MODEL_URL = os.environ.get("MODEL_URL", "").strip()
 MODEL_V2 = "model_v2.pt"            # detector propio (prioridad por defecto)
 LOCAL_MODEL = "model_finetuned.pt"  # afinado legado (solo con USE_FINETUNED=1)
+
+
+def get_parts_model():
+    """Modelo de paneles (21 piezas). None si no está o USE_PARTS=0."""
+    global _parts
+    if _parts is None and os.path.exists(MODEL_PARTS) and os.environ.get("USE_PARTS", "1") != "0":
+        from ultralytics import YOLO
+        _parts = YOLO(MODEL_PARTS)
+        log.info("Modelo de PANELES cargado (%s): %s", MODEL_PARTS, list(_parts.names.values()))
+    return _parts
+
+
+def _assign_panels(dets, img):
+    """Asignación determinista daño→pieza: intersección de cajas.
+    share = área(daño ∩ panel) / área(daño). Gana el panel con más share;
+    si empatan (±0.1), el más pequeño (más específico: faro gana a capó)."""
+    pm = get_parts_model()
+    if pm is None or not dets:
+        return
+    try:
+        res = pm.predict(img, conf=0.40, imgsz=640, verbose=False)[0]
+        W, H = img.size
+        panels = []
+        for b in res.boxes:
+            x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]
+            raw = str(pm.names.get(int(b.cls[0]), "")).strip().lower()
+            name = LABEL_PARTS.get(raw)
+            if not name:
+                continue
+            box = [y1 / H * 1000, x1 / W * 1000, y2 / H * 1000, x2 / W * 1000]
+            area = max(1.0, (box[2] - box[0]) * (box[3] - box[1]))
+            panels.append((name, box, float(b.conf[0]), area))
+        if not panels:
+            return
+        for d in dets:
+            db = d["box_2d"]
+            d_area = max(1.0, (db[2] - db[0]) * (db[3] - db[1]))
+            best = None  # (share, -area, name, conf) → más share y más pequeño
+            for name, pb, pconf, parea in panels:
+                iy1, ix1 = max(db[0], pb[0]), max(db[1], pb[1])
+                iy2, ix2 = min(db[2], pb[2]), min(db[3], pb[3])
+                inter = max(0.0, iy2 - iy1) * max(0.0, ix2 - ix1)
+                share = inter / d_area
+                if share < 0.15:
+                    continue
+                if best is None or share > best[0] + 0.1 or (abs(share - best[0]) <= 0.1 and parea < best[1]):
+                    best = (share, parea, name, pconf)
+            if best:
+                d["panel"] = best[2]
+                d["panel_conf"] = round(best[3], 3)
+    except Exception as e:
+        log.warning("asignación de paneles falló (se continúa sin panel): %s", e)
 
 
 def get_model():
@@ -118,7 +197,8 @@ def health():
     try:
         m = get_model()
         return {"ok": True, "model": MODEL_V2 if os.path.exists(MODEL_V2) else REPO,
-                "imgsz": IMGSZ, "classes": list(m.names.values())}
+                "imgsz": IMGSZ, "classes": list(m.names.values()),
+                "parts_model": bool(get_parts_model())}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -144,6 +224,7 @@ def detect(req: DetectReq):
                    round(y2 / H * 1000, 1), round(x2 / W * 1000, 1)]
             dets.append({"label": label, "severity": severity, "box_2d": box,
                          "confidence": round(conf, 3), "source": "yolo"})
+        _assign_panels(dets, img)
         log.info("detect insp=%s photo=%s → %d daños", req.inspection_id[:8], req.photo_index, len(dets))
         return {"detections": dets}
     except Exception as e:
