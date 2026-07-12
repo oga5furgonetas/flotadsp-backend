@@ -7,9 +7,33 @@ const DEFAULT_URL = 'https://flotadsp-backend.fly.dev/api/cortex/ingest';
 const MAX_BATCH = 200;
 const ALARM = 'flotadsp-flush';
 
-chrome.runtime.onInstalled.addListener(() => chrome.alarms.create(ALARM, { periodInMinutes: 1 }));
-chrome.runtime.onStartup.addListener(() => chrome.alarms.create(ALARM, { periodInMinutes: 1 }));
+const AMZ = ['https://logistics.amazon.es/*', 'https://*.amazon.es/*'];
+
+// Inyecta el interceptor (MAIN) + puente (ISOLATED) en una pestaña. Los scripts
+// se auto-protegen contra doble carga, así que es seguro llamarlo varias veces.
+async function inject(tabId) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', files: ['interceptor.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, world: 'ISOLATED', files: ['bridge.js'] });
+  } catch (_) { /* pestaña sin permiso o descargándose */ }
+}
+// Inyecta en TODAS las pestañas de Amazon ya abiertas (sin depender de recargar).
+async function injectAll() {
+  try {
+    const tabs = await chrome.tabs.query({ url: AMZ });
+    for (const t of tabs) if (t.id) inject(t.id);
+  } catch (_) {}
+}
+function boot() { chrome.alarms.create(ALARM, { periodInMinutes: 1 }); injectAll(); }
+
+chrome.runtime.onInstalled.addListener(boot);
+chrome.runtime.onStartup.addListener(boot);
+boot(); // al despertar el service worker
 chrome.alarms.onAlarm.addListener((a) => { if (a.name === ALARM) flush(); });
+// Reinyecta cuando una pestaña de Amazon termina de cargar (navegación real).
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status === 'complete' && /amazon\.es/.test(tab.url || '')) inject(tabId);
+});
 
 async function cfg() {
   const { ingestToken = '', ingestUrl = DEFAULT_URL } = await chrome.storage.local.get(['ingestToken', 'ingestUrl']);
