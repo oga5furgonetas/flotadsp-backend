@@ -17391,5 +17391,396 @@ async def admin_delete_driver_offer(offer_id: str, _=Depends(require_superadmin)
     return {"success": True}
 
 
+# =========================================================================
+# PACKAGE INTELLIGENCE CENTER (Cortex) — investigación de incidencias de paquetes
+# =========================================================================
+# La extensión de navegador intercepta el JSON real de Cortex (route-summaries /
+# route-details) usando la sesión ya autenticada del usuario y lo envía aquí
+# normalizado. El backend reconstruye el histórico (solo cambios de estado),
+# el timeline por paquete, aplica reglas de transición, prioriza y genera la
+# ficha del investigador. Datos aislados por org (colecciones en la BD tenant).
+
+_CORTEX_STATES = {
+    # crudo (Cortex/es) → canónico
+    "loaded": "LOADED", "out_for_delivery": "LOADED", "on_road": "LOADED", "en_route": "LOADED",
+    "picked_up": "LOADED", "in_transit": "LOADED",
+    "arrived": "ARRIVED", "arrived_at_stop": "ARRIVED", "at_stop": "ARRIVED",
+    "attempted": "ATTEMPTED", "delivery_attempted": "ATTEMPTED", "attempt": "ATTEMPTED",
+    "rejected": "ATTEMPTED", "business_closed": "ATTEMPTED", "unable_to_access": "ATTEMPTED",
+    "missing": "MISSING", "not_on_van": "MISSING", "not_found": "MISSING",
+    "delivered": "DELIVERED", "completed": "DELIVERED",
+    "recovered": "RECOVERED", "rescued": "RECOVERED",
+    "returned": "RETURNED", "returned_to_station": "RETURNED", "rts": "RETURNED",
+    "lost": "LOST",
+    "uncollected": "UNCOLLECTED", "pickup_failed": "UNCOLLECTED",
+}
+# palabras clave (texto libre en español) → canónico, por si llega evidencia de texto
+_CORTEX_STATE_TEXT = [
+    ("MISSING", ("falta", "perdido", "missing", "no está en la furgoneta")),
+    ("RECOVERED", ("recuperado", "recovered")),
+    ("RETURNED", ("devuelto a la estación", "devuelto", "returned")),
+    ("LOST", ("lost", "extraviado definit")),
+    ("ATTEMPTED", ("se ha intentado", "no se ha podido entregar", "no se puede entregar", "intento de entrega")),
+    ("UNCOLLECTED", ("no se ha podido recoger", "recogida pendiente")),
+    ("DELIVERED", ("entregado", "buzón", "puerta principal", "recibido", "delivered")),
+    ("ARRIVED", ("en la parada", "llegada a la parada", "arrived")),
+    ("LOADED", ("cargado", "en ruta", "loaded")),
+]
+_CORTEX_ORDER = {s: i for i, s in enumerate(
+    ["LOADED", "ARRIVED", "ATTEMPTED", "MISSING", "RECOVERED", "DELIVERED", "RETURNED", "LOST",
+     "UNCOLLECTED", "OBSERVED"])}
+
+
+def _cortex_canon_state(raw) -> str:
+    if not raw:
+        return "OBSERVED"
+    s = str(raw).strip().lower().replace(" ", "_").replace("-", "_")
+    if s.upper() in _CORTEX_ORDER:
+        return s.upper()
+    if s in _CORTEX_STATES:
+        return _CORTEX_STATES[s]
+    low = str(raw).strip().lower()
+    for canon, kws in _CORTEX_STATE_TEXT:
+        if any(k in low for k in kws):
+            return canon
+    return "OBSERVED"
+
+
+def _cortex_parse_dt(v):
+    if not v:
+        return None
+    try:
+        s = str(v).replace("Z", "+00:00")
+        d = datetime.fromisoformat(s)
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except Exception:
+        try:
+            return datetime.fromtimestamp(float(v) / (1000 if float(v) > 1e12 else 1), tz=timezone.utc)
+        except Exception:
+            return None
+
+
+def _cortex_ingest_org(request: Request) -> str:
+    """Autentica la extensión por su token de ingesta y fija la BD del DSP.
+    Devuelve el org_id. El token es un JWT de larga duración con scope propio."""
+    token = request.headers.get("x-ingest-token") or request.query_params.get("ingest_token", "")
+    if not token:
+        raise HTTPException(status_code=401, detail="Falta el token de ingesta (X-Ingest-Token).")
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    except Exception:
+        raise HTTPException(status_code=401, detail="Token de ingesta inválido o caducado.")
+    if payload.get("scope") != "cortex_ingest":
+        raise HTTPException(status_code=403, detail="Token sin permiso de ingesta.")
+    set_current_org_db(payload.get("db_name"))
+    return payload.get("org_id", "")
+
+
+def _cortex_evaluate(pkg: dict) -> dict:
+    """Motor de reglas: prioridad + ficha del investigador a partir del timeline.
+    Determinista y sin IA generativa: es un peritaje de secuencia de estados."""
+    tl = pkg.get("timeline") or []
+    seq = [e.get("state") for e in tl]
+    state = pkg.get("state") or (seq[-1] if seq else "OBSERVED")
+    now = datetime.now(timezone.utc)
+
+    def _at(i):
+        return _cortex_parse_dt(tl[i].get("at")) if 0 <= i < len(tl) else None
+
+    def _mins_since(dt):
+        return int((now - dt).total_seconds() // 60) if dt else None
+
+    # ¿Hubo Attempted inmediatamente antes de un Missing?
+    attempted_before_missing = False
+    idx_missing = next((i for i, s in enumerate(seq) if s == "MISSING"), None)
+    if idx_missing is not None:
+        prev = [s for s in seq[:idx_missing] if s in ("ATTEMPTED", "ARRIVED", "LOADED")]
+        attempted_before_missing = bool(prev) and prev[-1] == "ATTEMPTED"
+
+    missing_at = _at(idx_missing) if idx_missing is not None else None
+    mins_missing = _mins_since(missing_at)
+
+    priority, reason = "low", ""
+    if state in ("RECOVERED", "DELIVERED"):
+        priority = "low"
+        reason = "Resuelto" if state == "DELIVERED" else "Recuperado"
+    elif state == "LOST":
+        priority, reason = "critical", "Paquete dado por perdido (Lost)."
+    elif state == "MISSING" and attempted_before_missing:
+        priority, reason = "critical", "Transición Attempted → Missing: probablemente estaba en la furgoneta."
+    elif state == "MISSING" and mins_missing is not None and mins_missing >= 15:
+        priority, reason = "high", f"Missing desde hace {mins_missing} min sin resolver."
+    elif state == "MISSING":
+        priority, reason = "high", "Missing reciente sin resolver."
+    elif state == "ATTEMPTED":
+        priority, reason = "medium", "Intento de entrega sin resolver."
+
+    # Ficha del investigador (recomendación)
+    investigator = None
+    if state in ("MISSING", "LOST"):
+        container = pkg.get("container_id")
+        rec_type, confidence, text = "review", 0.6, ""
+        if attempted_before_missing:
+            rec_type, confidence = "vehicle_or_tote", 0.9
+            att_at = _at(seq.index("ATTEMPTED")) if "ATTEMPTED" in seq else None
+            gap = None
+            if att_at and missing_at:
+                gap = int((missing_at - att_at).total_seconds() // 60)
+            text = (f"El paquete tuvo un Attempted{f' {gap} minutos' if gap else ''} antes del Missing. "
+                    "Es muy probable que estuviera físicamente en la furgoneta. "
+                    + (f"Revisa el contenedor {container}." if container else "Revisa el tote del stop u organización de la furgoneta."))
+        elif seq and seq[0] == "LOADED" and "ATTEMPTED" not in seq and "ARRIVED" not in seq:
+            rec_type, confidence = "loaded_never_attempted", 0.75
+            text = ("El paquete se cargó pero nunca se intentó entregar ni llegó a la parada. "
+                    "Puede seguir en la furgoneta o no haberse escaneado correctamente al cargar. "
+                    + (f"Revisa el contenedor {container}." if container else "Revisa la carga y el tote."))
+        else:
+            text = ("Missing sin un Attempted previo claro. Revisa el último escaneo del paquete y "
+                    "el tote del stop antes de darlo por perdido.")
+        investigator = {
+            "type": rec_type, "confidence": confidence, "text": text,
+            "container": container, "mins_since_missing": mins_missing,
+        }
+
+    return {"priority": priority, "reason": reason,
+            "attempted_before_missing": attempted_before_missing,
+            "investigator": investigator}
+
+
+async def _cortex_apply_observation(obs: dict, captured_at) -> str:
+    """Aplica una observación canónica: crea o actualiza el paquete guardando
+    solo los cambios de estado en el histórico. Devuelve 'new'|'changed'|'same'."""
+    tba = (obs.get("tba") or obs.get("package_id") or "").strip().upper()
+    if not tba:
+        return "same"
+    state = _cortex_canon_state(obs.get("state") or obs.get("raw_state") or obs.get("taskState"))
+    observed_at = _cortex_parse_dt(obs.get("observed_at")) or _cortex_parse_dt(captured_at) or datetime.now(timezone.utc)
+    ev = {
+        "state": state, "at": observed_at.isoformat(),
+        "raw": (obs.get("raw_state") or obs.get("taskState") or "")[:80],
+        "stop_id": obs.get("stop_id"), "container_id": obs.get("container_id"),
+    }
+    common = {
+        "tba": tba, "reference_id": obs.get("reference_id") or tba,
+        "route_code": obs.get("route_code") or obs.get("route_id"),
+        "route_id": obs.get("route_id"),
+        "driver_name": obs.get("driver_name"), "driver_id": obs.get("driver_id"),
+        "stop_id": obs.get("stop_id"), "stop_address": obs.get("stop_address") or obs.get("address"),
+        "container_id": obs.get("container_id"), "station": obs.get("station"),
+        "lat": obs.get("lat"), "lng": obs.get("lng"),
+        "state": state, "updated_at": observed_at.isoformat(),
+    }
+    pkg = await db.cortex_packages.find_one({"tba": tba}, {"_id": 0})
+    if not pkg:
+        # Sembrar timeline con recentTaskEvents si vienen, más el estado actual
+        seed = []
+        for e in (obs.get("events") or []):
+            st = _cortex_canon_state(e.get("state") or e.get("raw"))
+            at = _cortex_parse_dt(e.get("at") or e.get("time"))
+            if at:
+                seed.append({"state": st, "at": at.isoformat(), "raw": (e.get("raw") or "")[:80]})
+        seed.sort(key=lambda e: e["at"])
+        if not seed or seed[-1]["state"] != state:
+            seed.append(ev)
+        doc = {**common, "id": str(uuid.uuid4()), "first_seen": observed_at.isoformat(),
+               "timeline": seed}
+        evalr = _cortex_evaluate(doc)
+        doc.update({"priority": evalr["priority"], "reason": evalr["reason"]})
+        await db.cortex_packages.insert_one(serialize_doc(doc))
+        await db.cortex_events.insert_one(serialize_doc({"id": str(uuid.uuid4()), **ev, "tba": tba}))
+        return "new"
+
+    last = (pkg.get("timeline") or [{}])[-1]
+    if last.get("state") == state:
+        await db.cortex_packages.update_one({"tba": tba}, {"$set": common})
+        return "same"
+    # Cambio de estado real → histórico + timeline
+    doc = {**pkg, **common, "timeline": (pkg.get("timeline") or []) + [ev]}
+    evalr = _cortex_evaluate(doc)
+    await db.cortex_packages.update_one(
+        {"tba": tba},
+        {"$set": {**common, "priority": evalr["priority"], "reason": evalr["reason"]},
+         "$push": {"timeline": ev}})
+    await db.cortex_events.insert_one(serialize_doc({"id": str(uuid.uuid4()), **ev, "tba": tba}))
+    return "changed"
+
+
+@api_router.get("/cortex/ingest-token")
+async def cortex_ingest_token(user: dict = Depends(require_admin)):
+    """Genera el token que la extensión usa para enviar datos (1 año)."""
+    payload = {
+        "scope": "cortex_ingest", "org_id": user.get("org_id", ""),
+        "db_name": user.get("db_name"), "name": user.get("name", ""),
+        "exp": datetime.now(timezone.utc) + timedelta(days=365),
+    }
+    return {"token": jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGORITHM),
+            "ingest_url": f"{PUBLIC_BASE_URL}/api/cortex/ingest"}
+
+
+@api_router.post("/cortex/ingest")
+async def cortex_ingest(request: Request):
+    """Recibe observaciones canónicas de la extensión (JSON real de Cortex ya
+    normalizado). No requiere JWT de usuario: se autentica por token de ingesta."""
+    _cortex_ingest_org(request)
+    body = await request.json()
+    packages = body.get("packages") or []
+    if not isinstance(packages, list):
+        raise HTTPException(status_code=400, detail="Formato inválido: se espera 'packages': [...]")
+    captured_at = body.get("captured_at")
+    stats = {"new": 0, "changed": 0, "same": 0}
+    for obs in packages[:2000]:
+        try:
+            stats[await _cortex_apply_observation(obs, captured_at)] += 1
+        except Exception as e:
+            logger.warning(f"Cortex ingest obs: {e}")
+    logger.info(f"Cortex ingest: {stats['new']} nuevos, {stats['changed']} cambios de {len(packages)} obs")
+    return {"ok": True, **stats, "received": len(packages)}
+
+
+@api_router.get("/cortex/overview")
+async def cortex_overview(_=Depends(require_admin)):
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    pkgs = await db.cortex_packages.find({}, {"_id": 0}).to_list(5000)
+    n = len(pkgs)
+    missing = [p for p in pkgs if p.get("state") == "MISSING"]
+    recovered_today, lost, missing_today, rec_times, attempts_pre = [], [], [], [], []
+    by_driver, by_route = {}, {}
+    for p in pkgs:
+        tl = p.get("timeline") or []
+        states = [e.get("state") for e in tl]
+        if p.get("state") == "LOST":
+            lost.append(p)
+        # Missing hoy
+        m_ev = next((e for e in tl if e.get("state") == "MISSING"), None)
+        if m_ev and str(m_ev.get("at", ""))[:10] == today:
+            missing_today.append(p)
+            if p.get("driver_name"):
+                by_driver[p["driver_name"]] = by_driver.get(p["driver_name"], 0) + 1
+            if p.get("route_code"):
+                by_route[p["route_code"]] = by_route.get(p["route_code"], 0) + 1
+            attempts_pre.append(sum(1 for s in states[:states.index("MISSING")] if s == "ATTEMPTED") if "MISSING" in states else 0)
+        # Recuperación hoy + tiempo medio
+        if "RECOVERED" in states or (p.get("state") == "DELIVERED" and "MISSING" in states):
+            i_m = states.index("MISSING") if "MISSING" in states else None
+            i_r = next((i for i in range(len(states)) if states[i] in ("RECOVERED", "DELIVERED") and (i_m is None or i > i_m)), None)
+            if i_m is not None and i_r is not None:
+                t0, t1 = _cortex_parse_dt(tl[i_m].get("at")), _cortex_parse_dt(tl[i_r].get("at"))
+                if t0 and t1 and str(tl[i_r].get("at", ""))[:10] == today:
+                    recovered_today.append(p)
+                    rec_times.append((t1 - t0).total_seconds() / 60)
+    resolved = len(recovered_today) + len(lost)
+    recovery_pct = round(100 * len(recovered_today) / resolved) if resolved else None
+    health = 100 - min(60, len(missing) * 6) - min(20, len(lost) * 10)
+    return {
+        "tracked": n, "missing_now": len(missing),
+        "missing_today": len(missing_today), "recovered_today": len(recovered_today),
+        "lost": len(lost), "recovery_pct": recovery_pct,
+        "avg_recovery_min": round(sum(rec_times) / len(rec_times)) if rec_times else None,
+        "avg_attempts_before_missing": round(sum(attempts_pre) / len(attempts_pre), 1) if attempts_pre else None,
+        "health": max(0, health),
+        "by_driver": sorted([{"name": k, "n": v} for k, v in by_driver.items()], key=lambda x: -x["n"])[:8],
+        "by_route": sorted([{"route": k, "n": v} for k, v in by_route.items()], key=lambda x: -x["n"])[:8],
+    }
+
+
+@api_router.get("/cortex/packages")
+async def cortex_packages(q: str = "", state: str = "", priority: str = "", limit: int = 200,
+                          _=Depends(require_admin)):
+    query = {}
+    if state:
+        query["state"] = state.upper()
+    if priority:
+        query["priority"] = priority.lower()
+    if q:
+        rx = {"$regex": re.escape(q), "$options": "i"}
+        query["$or"] = [{"tba": rx}, {"reference_id": rx}, {"route_code": rx},
+                        {"driver_name": rx}, {"stop_address": rx}, {"stop_id": rx}]
+    pkgs = await db.cortex_packages.find(query, {"_id": 0, "timeline": 0}).sort("updated_at", -1).to_list(limit)
+    return {"packages": pkgs}
+
+
+@api_router.get("/cortex/package/{tba}")
+async def cortex_package_detail(tba: str, _=Depends(require_admin)):
+    pkg = await db.cortex_packages.find_one({"tba": tba.upper()}, {"_id": 0})
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Paquete no encontrado")
+    pkg["timeline"] = sorted(pkg.get("timeline") or [], key=lambda e: str(e.get("at", "")))
+    evalr = _cortex_evaluate(pkg)
+    # Paquetes del mismo stop (para la pista "otros del stop se entregaron")
+    same_stop = []
+    if pkg.get("stop_id") and pkg.get("route_code"):
+        same_stop = await db.cortex_packages.find(
+            {"stop_id": pkg["stop_id"], "route_code": pkg["route_code"], "tba": {"$ne": pkg["tba"]}},
+            {"_id": 0, "tba": 1, "state": 1}).to_list(20)
+    return {"package": pkg, "evaluation": evalr, "same_stop": same_stop}
+
+
+@api_router.get("/cortex/alerts")
+async def cortex_alerts(_=Depends(require_admin)):
+    pkgs = await db.cortex_packages.find(
+        {"state": {"$in": ["MISSING", "LOST"]}}, {"_id": 0}).sort("updated_at", -1).to_list(500)
+    alerts = []
+    rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    for p in pkgs:
+        ev = _cortex_evaluate(p)
+        if ev["priority"] in ("critical", "high"):
+            alerts.append({
+                "tba": p["tba"], "priority": ev["priority"], "reason": ev["reason"],
+                "route_code": p.get("route_code"), "driver_name": p.get("driver_name"),
+                "stop_id": p.get("stop_id"), "state": p.get("state"),
+                "confidence": (ev.get("investigator") or {}).get("confidence"),
+                "recommendation": (ev.get("investigator") or {}).get("text"),
+            })
+    alerts.sort(key=lambda a: rank.get(a["priority"], 9))
+    return {"alerts": alerts}
+
+
+@api_router.get("/cortex/heatmap")
+async def cortex_heatmap(_=Depends(require_admin)):
+    pkgs = await db.cortex_packages.find(
+        {"lat": {"$ne": None}, "state": {"$in": ["MISSING", "LOST", "ATTEMPTED"]}},
+        {"_id": 0, "lat": 1, "lng": 1, "state": 1, "tba": 1}).to_list(2000)
+    return {"points": [p for p in pkgs if p.get("lat") and p.get("lng")]}
+
+
+@api_router.post("/cortex/seed-demo")
+async def cortex_seed_demo(_=Depends(require_admin)):
+    """Siembra paquetes de demostración para ver el módulo funcionando."""
+    base = datetime.now(timezone.utc).replace(microsecond=0)
+
+    def iso(mins):
+        return (base - timedelta(minutes=mins)).isoformat()
+    demos = [
+        {"tba": "TBADEMO001", "reference_id": "REF-948201", "route_code": "XA_C1", "driver_name": "A. García",
+         "stop_id": "42", "stop_address": "Rúa do Vilar 12, Santiago", "container_id": "B14",
+         "lat": 42.881, "lng": -8.545, "state": "MISSING",
+         "timeline": [{"state": "LOADED", "at": iso(390)}, {"state": "ARRIVED", "at": iso(40)},
+                      {"state": "ATTEMPTED", "at": iso(30)}, {"state": "MISSING", "at": iso(13)}]},
+        {"tba": "TBADEMO014", "reference_id": "REF-948214", "route_code": "XA_C1", "driver_name": "A. García",
+         "stop_id": "43", "stop_address": "Avda de Lugo 5, Santiago", "container_id": "B14",
+         "lat": 42.878, "lng": -8.537, "state": "RECOVERED",
+         "timeline": [{"state": "LOADED", "at": iso(400)}, {"state": "ATTEMPTED", "at": iso(70)},
+                      {"state": "MISSING", "at": iso(55)}, {"state": "RECOVERED", "at": iso(18)}]},
+        {"tba": "TBADEMO032", "reference_id": "REF-948232", "route_code": "XA_C4", "driver_name": "M. López",
+         "stop_id": "12", "stop_address": "Calle Real 88, A Coruña", "container_id": "A03",
+         "lat": 43.370, "lng": -8.396, "state": "DELIVERED",
+         "timeline": [{"state": "LOADED", "at": iso(410)}, {"state": "ARRIVED", "at": iso(60)},
+                      {"state": "DELIVERED", "at": iso(50)}]},
+        {"tba": "TBADEMO007", "reference_id": "REF-948207", "route_code": "XA_C7", "driver_name": "G. Portomeñe",
+         "stop_id": "77", "stop_address": "Praza Maior 3, Lugo", "container_id": "C21",
+         "lat": 43.012, "lng": -7.556, "state": "MISSING",
+         "timeline": [{"state": "LOADED", "at": iso(420)}, {"state": "ATTEMPTED", "at": iso(95)},
+                      {"state": "MISSING", "at": iso(80)}]},
+    ]
+    for d in demos:
+        d["id"] = str(uuid.uuid4())
+        d["first_seen"] = d["timeline"][0]["at"]
+        d["updated_at"] = d["timeline"][-1]["at"]
+        ev = _cortex_evaluate(d)
+        d["priority"], d["reason"] = ev["priority"], ev["reason"]
+        await db.cortex_packages.update_one({"tba": d["tba"]}, {"$set": serialize_doc(d)}, upsert=True)
+    return {"ok": True, "seeded": len(demos)}
+
+
 app.include_router(auth_router)
 app.include_router(api_router)

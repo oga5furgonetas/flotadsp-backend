@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "FlotaDSP · Cortex Bridge",
+  "version": "2.0.0",
+  "description": "Lee la API de Cortex (route-summaries / route-details) con tu sesión y la envía a tu Package Intelligence Center. No lee la pantalla ni usa OCR.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://logistics.amazon.es/*",
+    "https://*.amazon.es/*",
+    "https://flotadsp-backend.fly.dev/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "FlotaDSP Cortex Bridge", "default_popup": "popup.html" },
+  "content_scripts": [
+    {
+      "matches": ["https://logistics.amazon.es/*", "https://*.amazon.es/*"],
+      "js": ["interceptor.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://logistics.amazon.es/*", "https://*.amazon.es/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    }
+  ]
+}

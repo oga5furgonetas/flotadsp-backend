@@ -5,6 +5,7 @@ import {
   CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun,
+  PackageSearch,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken } from './auth'
 import TrialBanner from './TrialBanner'
@@ -35,6 +36,7 @@ const TABS_DEF = {
       { to: '/panel/scorecard', labelKey: 'nav.scorecard', icon: Trophy },
       { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
       { to: '/panel/actividad', labelKey: 'nav.activity', icon: Activity },
+      { to: '/panel/paquetes', labelKey: 'nav.pkgintel', icon: PackageSearch },
       { to: '/panel/contactos', labelKey: 'nav.contacts', icon: BookUser },
     ],
   },

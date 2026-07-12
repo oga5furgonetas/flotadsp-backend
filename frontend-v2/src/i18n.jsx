@@ -250,6 +250,7 @@ const DICT = {
   'nav.inspections':{ es: 'Inspecciones',     en: 'Inspections',   fr: 'Inspections',     de: 'Inspektionen',    it: 'Ispezioni',      pt: 'Inspeções' },
   'nav.vehicles':   { es: 'Vehículos',        en: 'Vehicles',      fr: 'Véhicules',       de: 'Fahrzeuge',       it: 'Veicoli',        pt: 'Veículos' },
   'nav.workshops':  { es: 'Talleres',         en: 'Workshops',     fr: 'Ateliers',        de: 'Werkstätten',     it: 'Officine',       pt: 'Oficinas' },
+  'nav.pkgintel':   { es: 'Paquetes IA',        en: 'Package Intel',  fr: 'Colis IA',        de: 'Paket-Intel',     it: 'Pacchi IA',      pt: 'Pacotes IA' },
   'nav.incidents':  { es: 'Incidencias',      en: 'Incidents',     fr: 'Incidents',       de: 'Vorfälle',        it: 'Incidenti',      pt: 'Incidências' },
   'nav.itvalerts':  { es: 'Avisos ITV',       en: 'MOT alerts',    fr: 'Alertes CT',      de: 'TÜV-Warnungen',   it: 'Avvisi revisione', pt: 'Alertas inspeção' },
   'nav.renting':    { es: 'Renting',          en: 'Leasing',       fr: 'Location',        de: 'Leasing',         it: 'Leasing',        pt: 'Renting' },

@@ -194,3 +194,12 @@ export const changeMyPassword = (current_password, new_password) =>
   api.post('/auth/change-my-password', { current_password, new_password })
 export const setMyEmail = (email) => api.post('/auth/my-email', { email })
 export const forgotPassword = (email) => api.post('/auth/forgot-password', { email })
+
+/* ── Package Intelligence Center (Cortex) ── */
+export const cortexOverview = () => api.get('/cortex/overview')
+export const cortexPackages = (params) => api.get('/cortex/packages', { params })
+export const cortexPackage = (tba) => api.get(`/cortex/package/${tba}`)
+export const cortexAlerts = () => api.get('/cortex/alerts')
+export const cortexHeatmap = () => api.get('/cortex/heatmap')
+export const cortexIngestToken = () => api.get('/cortex/ingest-token')
+export const cortexSeedDemo = () => api.post('/cortex/seed-demo')
