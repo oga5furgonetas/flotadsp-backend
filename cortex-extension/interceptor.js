@@ -1,34 +1,37 @@
 /* FlotaDSP · Cortex Bridge — interceptor (MAIN world).
  * Parchea fetch y XHR para observar el JSON que Cortex ya pide con tu sesión.
  * NO lee la pantalla, NO usa OCR, NO toca cookies ni credenciales.
- * Solo procesa respuestas de endpoints de rutas/tareas y extrae paquetes.
+ * Extrae paquetes de CUALQUIER respuesta JSON que los contenga (no depende de
+ * adivinar la URL exacta del endpoint).
  */
 (() => {
   if (window.__flotadspCortexHooked) return;
   window.__flotadspCortexHooked = true;
+  console.log('%c[FlotaDSP] Cortex Bridge activo — escuchando la API de Cortex', 'color:#fb923c;font-weight:bold');
 
-  // ¿La URL parece de datos de ruta/paquetes de Cortex?
-  const RELEVANT = /route-summaries|route-detail|routes?\/[0-9a-f-]{8,}|task|stop|itinerary|delivery|parcel|package/i;
+  // Marcadores baratos: si el texto no los contiene, ni parseamos (evita coste).
+  const MARK = /"(?:containerScannableId|scannableId|trackingId|taskState|executionStatus|deliveryStatus|recentTaskEvents|stopId|routeId)"|TBA[A-Z0-9]{6,}|\bES\d{8,}\b/;
 
   const TBA_RE = /^(?:TBA[A-Z0-9]{6,}|ES\d{8,})$/i;
   const KEYS = {
-    tba: ['containerScannableId', 'scannableId', 'trackingId', 'trackingNumber', 'tba', 'packageId', 'parcelId', 'shipmentId'],
-    state: ['taskState', 'executionStatus', 'deliveryStatus', 'status', 'state', 'packageStatus', 'stopState'],
-    stop: ['stopId', 'stopNumber', 'sequenceId', 'sequenceNumber', 'stopSequence', 'stop'],
-    address: ['address', 'formattedAddress', 'addressLine', 'destinationAddress', 'shortAddress'],
-    container: ['containerId', 'toteId', 'binId', 'bagId', 'overrideContainerId'],
-    driverName: ['driverName', 'associateName', 'transporterName', 'daName'],
+    tba: ['containerScannableId', 'scannableId', 'trackingId', 'trackingNumber', 'tba', 'packageId', 'parcelId', 'shipmentId', 'addressId'],
+    state: ['taskState', 'executionStatus', 'deliveryStatus', 'status', 'state', 'packageStatus', 'stopState', 'taskStatus'],
+    stop: ['stopId', 'stopNumber', 'sequenceId', 'sequenceNumber', 'stopSequence', 'stop', 'stopKey'],
+    address: ['address', 'formattedAddress', 'addressLine', 'destinationAddress', 'shortAddress', 'addressLine1'],
+    container: ['containerId', 'toteId', 'binId', 'bagId', 'overrideContainerId', 'containerLabel'],
+    driverName: ['driverName', 'associateName', 'transporterName', 'daName', 'personName'],
     driverId: ['driverId', 'transporterId', 'associateId', 'daId'],
-    routeCode: ['routeCode', 'routeName', 'routeShortCode', 'cycleName'],
-    routeId: ['routeId', 'routeUuid', 'itineraryId'],
+    routeCode: ['routeCode', 'routeName', 'routeShortCode', 'cycleName', 'routeId'],
+    routeId: ['routeId', 'routeUuid', 'itineraryId', 'routeKey'],
     lat: ['latitude', 'lat'],
     lng: ['longitude', 'lng', 'lon'],
     station: ['stationCode', 'stationId', 'nodeId', 'warehouseId'],
-    events: ['recentTaskEvents', 'taskEvents', 'eventHistory', 'events', 'statusHistory'],
+    events: ['recentTaskEvents', 'taskEvents', 'eventHistory', 'events', 'statusHistory', 'taskEventHistory'],
+    time: ['lastUpdated', 'updatedAt', 'lastUpdatedTime', 'timestamp', 'time', 'lastEventTime'],
   };
 
   const firstKey = (obj, names) => {
-    for (const k of names) if (obj[k] != null && obj[k] !== '') return obj[k];
+    for (const k of names) if (obj && obj[k] != null && obj[k] !== '') return obj[k];
     return null;
   };
   const pickTba = (obj) => {
@@ -36,7 +39,6 @@
       const v = obj[k];
       if (typeof v === 'string' && TBA_RE.test(v.trim())) return v.trim().toUpperCase();
     }
-    // A veces el id útil está en un campo genérico "id"/"value"
     for (const k of ['id', 'value', 'code']) {
       const v = obj[k];
       if (typeof v === 'string' && TBA_RE.test(v.trim())) return v.trim().toUpperCase();
@@ -51,8 +53,8 @@
     let events = null;
     if (Array.isArray(evs)) {
       events = evs.map((e) => ({
-        state: firstKey(e, ['type', 'eventType', 'state', 'status', 'code']) || '',
-        at: firstKey(e, ['timestamp', 'time', 'eventTime', 'at', 'date', 'createdAt']) || null,
+        state: firstKey(e, ['type', 'eventType', 'state', 'status', 'code', 'taskState']) || '',
+        at: firstKey(e, ['timestamp', 'time', 'eventTime', 'at', 'date', 'createdAt', 'eventTimestamp']) || null,
       })).filter((e) => e.at);
     }
     return {
@@ -70,12 +72,11 @@
       raw_state: firstKey(node, KEYS.state) || null,
       lat: firstKey(node, KEYS.lat) ?? ctx.lat ?? null,
       lng: firstKey(node, KEYS.lng) ?? ctx.lng ?? null,
-      observed_at: firstKey(node, ['lastUpdated', 'updatedAt', 'timestamp', 'time']) || null,
+      observed_at: firstKey(node, KEYS.time) || null,
       events,
     };
   };
 
-  // Recorre el JSON heredando contexto (ruta/conductor/stop de los ancestros).
   const extract = (json) => {
     const out = [];
     const walk = (node, ctx) => {
@@ -93,20 +94,23 @@
       if (firstKey(node, KEYS.container)) next.container = firstKey(node, KEYS.container);
 
       const obs = buildObs(node, next);
-      if (obs) { out.push(obs); return; } // es un paquete: no seguir dentro
+      if (obs) { out.push(obs); return; }
       for (const v of Object.values(node)) if (v && typeof v === 'object') walk(v, next);
     };
     walk(json, {});
-    // dedup por tba (nos quedamos con la última observación de cada uno)
     const map = new Map();
     for (const o of out) map.set(o.tba, o);
     return [...map.values()];
   };
 
-  const emit = (url, json) => {
+  const emit = (url, text) => {
     try {
-      const packages = extract(json);
+      if (!text || text.length < 20 || !MARK.test(text)) return;
+      const c = text[0];
+      if (c !== '{' && c !== '[') return;
+      const packages = extract(JSON.parse(text));
       if (packages.length) {
+        console.log(`%c[FlotaDSP] ${packages.length} paquetes capturados`, 'color:#34d399', url.slice(0, 80));
         window.postMessage({ __flotadsp: true, kind: 'cortex', url, packages }, '*');
       }
     } catch (_) { /* nunca romper la página */ }
@@ -114,15 +118,18 @@
 
   // ── fetch ──
   const origFetch = window.fetch;
-  window.fetch = async function (...args) {
-    const res = await origFetch.apply(this, args);
-    try {
-      const url = (typeof args[0] === 'string' ? args[0] : args[0]?.url) || res.url || '';
-      if (RELEVANT.test(url)) {
-        res.clone().json().then((j) => emit(url, j)).catch(() => {});
-      }
-    } catch (_) {}
-    return res;
+  window.fetch = function (...args) {
+    const p = origFetch.apply(this, args);
+    p.then((res) => {
+      try {
+        const url = (typeof args[0] === 'string' ? args[0] : args[0]?.url) || res.url || '';
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('json') || /route|task|stop|package|parcel|delivery|itinerary|summar/i.test(url)) {
+          res.clone().text().then((t) => emit(url, t)).catch(() => {});
+        }
+      } catch (_) {}
+    }).catch(() => {});
+    return p;
   };
 
   // ── XMLHttpRequest ──
@@ -135,12 +142,9 @@
   XMLHttpRequest.prototype.send = function (...args) {
     this.addEventListener('load', function () {
       try {
-        const url = this.__flotadspUrl || '';
-        const isText = this.responseType === '' || this.responseType === 'text';
-        if (RELEVANT.test(url) && isText) {
-          const txt = this.responseText;
-          if (txt && (txt[0] === '{' || txt[0] === '[')) emit(url, JSON.parse(txt));
-        }
+        const rt = this.responseType;
+        if (rt === '' || rt === 'text') emit(this.__flotadspUrl || '', this.responseText);
+        else if (rt === 'json' && this.response) emit(this.__flotadspUrl || '', JSON.stringify(this.response));
       } catch (_) {}
     });
     return origSend.apply(this, args);

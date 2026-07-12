@@ -1,12 +1,15 @@
 /* FlotaDSP · Cortex Bridge — background (service worker).
- * Agrupa las observaciones y las envía al Package Intelligence Center cada ~20 s
- * (o al llegar a 200 paquetes). Guarda un pequeño estado para el popup. */
+ * Robusto ante la suspensión del service worker de MV3: la cola se guarda en
+ * chrome.storage.local (no en memoria) y el envío lo dispara chrome.alarms
+ * (despierta el worker aunque esté dormido). Envía cada minuto o al llegar a 200.
+ */
 const DEFAULT_URL = 'https://flotadsp-backend.fly.dev/api/cortex/ingest';
-const FLUSH_MS = 20000;
 const MAX_BATCH = 200;
+const ALARM = 'flotadsp-flush';
 
-let buffer = new Map(); // tba -> obs
-let timer = null;
+chrome.runtime.onInstalled.addListener(() => chrome.alarms.create(ALARM, { periodInMinutes: 1 }));
+chrome.runtime.onStartup.addListener(() => chrome.alarms.create(ALARM, { periodInMinutes: 1 }));
+chrome.alarms.onAlarm.addListener((a) => { if (a.name === ALARM) flush(); });
 
 async function cfg() {
   const { ingestToken = '', ingestUrl = DEFAULT_URL } = await chrome.storage.local.get(['ingestToken', 'ingestUrl']);
@@ -17,41 +20,49 @@ async function setState(patch) {
   await chrome.storage.local.set({ state: { ...state, ...patch, at: new Date().toISOString() } });
 }
 
+async function enqueue(packages) {
+  const { queue = {} } = await chrome.storage.local.get({ queue: {} });
+  for (const o of packages) if (o && o.tba) queue[o.tba] = o;
+  await chrome.storage.local.set({ queue });
+  const n = Object.keys(queue).length;
+  await setState({ lastMessage: `${n} paquetes en cola…`, buffered: n });
+  if (n >= MAX_BATCH) flush();
+}
+
+let flushing = false;
 async function flush() {
-  timer = null;
-  if (!buffer.size) return;
-  const { ingestToken, ingestUrl } = await cfg();
-  if (!ingestToken) { await setState({ lastMessage: 'Falta el token: pégalo en el popup.' }); return; }
-  const packages = [...buffer.values()];
-  buffer = new Map();
+  if (flushing) return;
+  flushing = true;
   try {
-    const r = await fetch(ingestUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': ingestToken },
-      body: JSON.stringify({ captured_at: new Date().toISOString(), packages }),
-    });
-    if (r.ok) {
-      const j = await r.json().catch(() => ({}));
-      const { sent = 0 } = await chrome.storage.local.get({ sent: 0 });
-      await chrome.storage.local.set({ sent: sent + packages.length });
-      await setState({ lastMessage: `Enviados ${packages.length} paquetes (${j.new || 0} nuevos, ${j.changed || 0} cambios).`, ok: true });
-    } else {
-      await setState({ lastMessage: `Error ${r.status} al enviar. Revisa el token.`, ok: false });
+    const { queue = {} } = await chrome.storage.local.get({ queue: {} });
+    const packages = Object.values(queue);
+    if (!packages.length) return;
+    const { ingestToken, ingestUrl } = await cfg();
+    if (!ingestToken) { await setState({ lastMessage: 'Falta el token: pégalo y pulsa Guardar.', ok: false }); return; }
+    try {
+      const r = await fetch(ingestUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': ingestToken },
+        body: JSON.stringify({ captured_at: new Date().toISOString(), packages }),
+      });
+      if (r.ok) {
+        const j = await r.json().catch(() => ({}));
+        const { sent = 0 } = await chrome.storage.local.get({ sent: 0 });
+        await chrome.storage.local.set({ queue: {}, sent: sent + packages.length });
+        await setState({ lastMessage: `Enviados ${packages.length} (${j.new || 0} nuevos, ${j.changed || 0} cambios).`, ok: true, buffered: 0 });
+      } else {
+        const body = await r.text().catch(() => '');
+        await setState({ lastMessage: `Error ${r.status}: ${body.slice(0, 80) || 'revisa el token'}`, ok: false });
+      }
+    } catch (e) {
+      await setState({ lastMessage: `Sin conexión, reintentando… (${String(e.message || e).slice(0, 50)})`, ok: false });
     }
-  } catch (e) {
-    // Reintentar en el siguiente ciclo
-    for (const o of packages) if (!buffer.has(o.tba)) buffer.set(o.tba, o);
-    await setState({ lastMessage: `Sin conexión, reintentando… (${String(e.message || e).slice(0, 60)})`, ok: false });
-  }
+  } finally { flushing = false; }
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.type === 'cortexPackages' && Array.isArray(msg.packages)) {
-    for (const o of msg.packages) if (o?.tba) buffer.set(o.tba, o);
-    setState({ lastMessage: `${buffer.size} paquetes en cola…`, buffered: buffer.size });
-    if (buffer.size >= MAX_BATCH) flush();
-    else if (!timer) timer = setTimeout(flush, FLUSH_MS);
-    reply?.({ ok: true });
+    enqueue(msg.packages).then(() => reply?.({ ok: true }));
     return true;
   }
   if (msg?.type === 'flushNow') { flush().then(() => reply?.({ ok: true })); return true; }
