@@ -15,6 +15,8 @@ import io
 import os
 import logging
 
+import cv2
+import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
 from PIL import Image
@@ -211,8 +213,13 @@ def detect(req: DetectReq):
         W, H = img.size
         res = m.predict(img, conf=(req.conf if req.conf is not None else CONF),
                         imgsz=IMGSZ, verbose=False)[0]
+        # Máscaras del modelo -seg en coords reales de la imagen (si las hay)
+        try:
+            mask_polys = res.masks.xy if res.masks is not None else None
+        except Exception:
+            mask_polys = None
         dets = []
-        for b in res.boxes:
+        for i, b in enumerate(res.boxes):
             x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]
             cls = int(b.cls[0])
             conf = float(b.conf[0])
@@ -222,8 +229,24 @@ def detect(req: DetectReq):
             # box_2d normalizado 0-1000 como [ymin, xmin, ymax, xmax]
             box = [round(y1 / H * 1000, 1), round(x1 / W * 1000, 1),
                    round(y2 / H * 1000, 1), round(x2 / W * 1000, 1)]
-            dets.append({"label": label, "severity": severity, "box_2d": box,
-                         "confidence": round(conf, 3), "source": "yolo"})
+            det = {"label": label, "severity": severity, "box_2d": box,
+                   "confidence": round(conf, 3), "source": "yolo"}
+            # Polígono real de segmentación → contorno fino en las fotos anotadas
+            # (simplificado a ≤24 puntos; [y,x] normalizado 0-1000 como el backend)
+            if mask_polys is not None and i < len(mask_polys) and len(mask_polys[i]) >= 3:
+                try:
+                    pts = np.asarray(mask_polys[i], dtype="float32").reshape(-1, 1, 2)
+                    eps = 0.004 * cv2.arcLength(pts, True)
+                    simp = cv2.approxPolyDP(pts, eps, True).reshape(-1, 2)
+                    if len(simp) > 24:
+                        simp = simp[np.linspace(0, len(simp) - 1, 24).astype(int)]
+                    if len(simp) >= 3:
+                        det["polygon_2d"] = [
+                            [round(float(py) / H * 1000, 1), round(float(px) / W * 1000, 1)]
+                            for px, py in simp]
+                except Exception:
+                    pass
+            dets.append(det)
         _assign_panels(dets, img)
         log.info("detect insp=%s photo=%s → %d daños", req.inspection_id[:8], req.photo_index, len(dets))
         return {"detections": dets}

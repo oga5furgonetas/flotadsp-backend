@@ -414,6 +414,8 @@ class AIDetection(BaseModel):
     # Pieza asignada por el modelo de paneles del ai-service (geometría, no LLM)
     panel: Optional[str] = None
     panel_conf: Optional[float] = None
+    # Contorno real de segmentación ([y,x] 0-1000, ≤24 puntos) del modelo -seg
+    polygon_2d: Optional[List[List[float]]] = None
 
 
 class InspectionAIResult(BaseModel):
@@ -2241,7 +2243,11 @@ def _snap_damage_boxes_to_yolo(damages: list, yolo_by_photo: dict) -> int:
                 best_score, best = score, det
         if best is not None and best_score >= 0.25:
             d.box_2d = [int(round(v)) for v in best.box_2d]
-            d.polygon_points = None
+            # Contorno fino del modelo de segmentación si lo trae; si no, se
+            # descarta el polígono del LLM (ya no corresponde a la caja nueva).
+            poly = getattr(best, "polygon_2d", None)
+            d.polygon_points = ([[int(round(y)), int(round(x))] for y, x in poly]
+                                if poly and len(poly) >= 3 else None)
             panel = getattr(best, "panel", None)
             if panel:
                 d.panel_cv = panel
@@ -2381,6 +2387,7 @@ async def analyze_images_with_gemini(
     reference_images_bytes: Optional[List[bytes]] = None,
     db=None,
     known_damages_text: str = "",
+    cv_detections_text: str = "",
 ) -> tuple[InspectionAnalysis, str, Optional[str]]:
     """
     Retorna (analysis, status, error_message).
@@ -2469,6 +2476,10 @@ async def analyze_images_with_gemini(
         # ── REGISTRO DE DAÑOS DEL VEHÍCULO: lo ya documentado no es "nuevo" ──
         if known_damages_text:
             contents.append(known_damages_text)
+
+        # ── DETECCIONES DEL CV PROPIO: Gemini confirma y describe, no inventa ──
+        if cv_detections_text:
+            contents.append(cv_detections_text)
 
         # ── ETAPA 0: orientación verificada por clasificador dedicado ──
         # Si falla, photo_views=None y todo funciona exactamente como antes.
@@ -5851,8 +5862,40 @@ async def upload_inspection_photos(
 
         async def _analyze_and_update():
             try:
+                # ── CV PRIMERO: el detector propio ve las fotos antes que Gemini.
+                # Sus detecciones (con pieza por geometría) guían el prompt y
+                # después corrigen las cajas (snap) sin llamar al servicio 2 veces.
+                cv_dets_full = {}  # índice real en photos (1-based) → detecciones
+                cv_text = ""
+                if AI_SERVICE_URL:
+                    try:
+                        _cv_lines = []
+                        for _k, _full_i in enumerate(analysis_photo_idx, start=1):
+                            dets = await _call_ai_service_detect(
+                                inspection.id, _full_i, base64.b64decode(photos_base64[_full_i]))
+                            if dets:
+                                cv_dets_full[_full_i + 1] = dets
+                                for det in dets:
+                                    _pnl = f" en {det.panel}" if getattr(det, "panel", None) else ""
+                                    _cv_lines.append(
+                                        f"Foto {_k}: {det.label}{_pnl} (confianza {det.confidence:.2f})")
+                        if _cv_lines:
+                            cv_text = (
+                                "\n=== DETECCIONES DEL DETECTOR CV PROPIO (geometría verificada) ===\n"
+                                + "\n".join(_cv_lines) +
+                                "\nEstas detecciones vienen de un modelo entrenado con miles de daños "
+                                "reales de carrocería; la pieza está determinada por intersección "
+                                "geométrica, no por estimación. Úsalas como BASE del análisis: "
+                                "confirma y describe con precisión cada una que veas en la foto. "
+                                "NO reportes daños adicionales salvo evidencia clara e inequívoca; "
+                                "si no ves alguna de estas detecciones, inclúyela con confidence < 0.5."
+                            )
+                    except Exception as _cve:
+                        logger.warning(f"CV pre-análisis: {_cve}")
+
                 analysis, analysis_status, analysis_error = await asyncio.wait_for(
-                    analyze_images_with_gemini(analysis_b64, ref_bytes_list if ref_bytes_list else None, db=db),
+                    analyze_images_with_gemini(analysis_b64, ref_bytes_list if ref_bytes_list else None, db=db,
+                                               cv_detections_text=cv_text),
                     timeout=120.0
                 )
                 # Los photo_index de Gemini son relativos a las fotos analizadas
@@ -5881,20 +5924,11 @@ async def upload_inspection_photos(
                     except Exception as _ce:
                         logger.warning(f"Coste por panel: {_ce}")
                 # Snap de cajas al detector CV: el LLM decide el QUÉ, YOLO el DÓNDE
-                if AI_SERVICE_URL and analysis and analysis_status == "ok" and (analysis.damages or analysis.new_damages):
+                # (reutiliza las detecciones ya pedidas antes del análisis)
+                if cv_dets_full and analysis and analysis_status == "ok" and (analysis.damages or analysis.new_damages):
                     try:
-                        _pis = sorted({d.photo_index
-                                       for d in (analysis.damages or []) + (analysis.new_damages or [])
-                                       if getattr(d, "photo_index", None)})
-                        yolo_by_photo = {}
-                        for _pi in _pis:
-                            if 1 <= _pi <= len(photos_base64):
-                                dets = await _call_ai_service_detect(
-                                    inspection.id, _pi - 1, base64.b64decode(photos_base64[_pi - 1]))
-                                if dets:
-                                    yolo_by_photo[_pi] = dets
-                        _s1 = _snap_damage_boxes_to_yolo(analysis.damages or [], yolo_by_photo)
-                        _s2 = _snap_damage_boxes_to_yolo(analysis.new_damages or [], yolo_by_photo)
+                        _s1 = _snap_damage_boxes_to_yolo(analysis.damages or [], cv_dets_full)
+                        _s2 = _snap_damage_boxes_to_yolo(analysis.new_damages or [], cv_dets_full)
                         if _s1 or _s2:
                             logger.info(f"Snap YOLO: {_s1}+{_s2} cajas corregidas insp={inspection.id[:8]}")
                     except Exception as _se:
@@ -6747,30 +6781,50 @@ async def reanalyze_inspection(inspection_id: str, silent: bool = False, _=Depen
         {"$set": {"analysis_status": "pending", "analysis_error": None}}
     )
 
+    # CV primero (igual que en la subida): guía el prompt y luego el snap
+    cv_dets_full = {}
+    cv_text = ""
+    if AI_SERVICE_URL:
+        try:
+            _cv_lines = []
+            for _k, _full_i in enumerate(_aidx, start=1):
+                if _full_i < len(photo_bytes):
+                    dets = await _call_ai_service_detect(inspection_id, _full_i, photo_bytes[_full_i])
+                    if dets:
+                        cv_dets_full[_full_i + 1] = dets
+                        for det in dets:
+                            _pnl = f" en {det.panel}" if getattr(det, "panel", None) else ""
+                            _cv_lines.append(f"Foto {_k}: {det.label}{_pnl} (confianza {det.confidence:.2f})")
+            if _cv_lines:
+                cv_text = (
+                    "\n=== DETECCIONES DEL DETECTOR CV PROPIO (geometría verificada) ===\n"
+                    + "\n".join(_cv_lines) +
+                    "\nEstas detecciones vienen de un modelo entrenado con miles de daños "
+                    "reales de carrocería; la pieza está determinada por intersección "
+                    "geométrica, no por estimación. Úsalas como BASE del análisis: "
+                    "confirma y describe con precisión cada una que veas en la foto. "
+                    "NO reportes daños adicionales salvo evidencia clara e inequívoca; "
+                    "si no ves alguna de estas detecciones, inclúyela con confidence < 0.5."
+                )
+        except Exception as _cve:
+            logger.warning(f"CV pre-reanálisis: {_cve}")
+
     _known_txt = await _known_damages_prompt(insp.get("vehicle_id"), exclude_inspection_id=inspection_id)
     analysis, analysis_status, analysis_error = await analyze_images_with_gemini(
         analysis_b64, ref_bytes_list if ref_bytes_list else None, db=db,
         known_damages_text=_known_txt,
+        cv_detections_text=cv_text,
     )
     if analysis:
         _remap_photo_indexes(analysis, _idx_map)
     if analysis_status == "ok" and analysis:
         await _apply_vehicle_memory(insp.get("vehicle_id"), analysis, inspection_id=inspection_id)
 
-    # Snap de cajas al detector CV (mismo criterio que en la subida)
-    if AI_SERVICE_URL and analysis and analysis_status == "ok" and (analysis.damages or analysis.new_damages):
+    # Snap de cajas al detector CV (reutiliza las detecciones ya pedidas)
+    if cv_dets_full and analysis and analysis_status == "ok" and (analysis.damages or analysis.new_damages):
         try:
-            _pis = sorted({d.photo_index
-                           for d in (analysis.damages or []) + (analysis.new_damages or [])
-                           if getattr(d, "photo_index", None)})
-            yolo_by_photo = {}
-            for _pi in _pis:
-                if 1 <= _pi <= len(photo_bytes):
-                    dets = await _call_ai_service_detect(inspection_id, _pi - 1, photo_bytes[_pi - 1])
-                    if dets:
-                        yolo_by_photo[_pi] = dets
-            _s1 = _snap_damage_boxes_to_yolo(analysis.damages or [], yolo_by_photo)
-            _s2 = _snap_damage_boxes_to_yolo(analysis.new_damages or [], yolo_by_photo)
+            _s1 = _snap_damage_boxes_to_yolo(analysis.damages or [], cv_dets_full)
+            _s2 = _snap_damage_boxes_to_yolo(analysis.new_damages or [], cv_dets_full)
             if _s1 or _s2:
                 logger.info(f"Snap YOLO (reanálisis): {_s1}+{_s2} cajas corregidas insp={inspection_id[:8]}")
         except Exception as _se:
