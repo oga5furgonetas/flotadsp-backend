@@ -1,7 +1,15 @@
-"""FlotaDSP — Microservicio de detección de daños (YOLOv11n, Apache 2.0).
+"""FlotaDSP — Microservicio de detección de daños.
 Contrato compatible con el backend: POST /detect {inspection_id, photo_index, image_b64}
 → {"detections":[{label, severity, box_2d:[ymin,xmin,ymax,xmax] 0-1000, confidence, source}]}
-El backend lo fusiona con Gemini (no lo sustituye)."""
+El backend lo fusiona con Gemini (no lo sustituye).
+
+Modelos, por prioridad:
+1. model_v2.pt   — YOLO11s-seg propio (CarDD + DrBimmer, 10 clases, 832px).
+                   Entrenado 2026-07-12; val mAP50 0.48 global, arañazos 0.32
+                   (el modelo comunitario anterior no veía arañazos).
+2. model_finetuned.pt (USE_FINETUNED=1) — afinado con furgonetas propias (legado).
+3. MODEL_URL / repo comunitario de HF — respaldo.
+"""
 import base64
 import io
 import os
@@ -19,8 +27,36 @@ app = FastAPI(title="FlotaDSP AI Detect")
 REPO = os.environ.get("MODEL_REPO", "vineetsarpal/yolov11n-car-damage")
 WEIGHTS = os.environ.get("MODEL_FILE", "best.pt")
 CONF = float(os.environ.get("CONF", "0.35"))
+IMGSZ = int(os.environ.get("IMGSZ", "832"))  # el v2 se entrenó a 832px
 
-# Traducción de las 14 clases del modelo → etiquetas para el peritaje (español)
+# ── Modelo v2 propio (10 clases) ──
+LABEL_V2 = {
+    "scratch": "Arañazo",
+    "dent": "Abolladura",
+    "crack": "Grieta",
+    "glass_shatter": "Cristal roto",
+    "lamp_broken": "Óptica rota",
+    "tire_flat": "Rueda pinchada",
+    "broken_part": "Pieza rota",
+    "missing_part": "Pieza faltante",
+    "paint_chip": "Desconchón de pintura",
+    "corrosion": "Corrosión",
+}
+# Severidad orientativa por clase (el perito final sigue siendo Gemini+revisión)
+SEV_V2 = {
+    "scratch": "leve",
+    "dent": "moderado",
+    "crack": "moderado",
+    "glass_shatter": "grave",
+    "lamp_broken": "grave",
+    "tire_flat": "critico",
+    "broken_part": "grave",
+    "missing_part": "grave",
+    "paint_chip": "leve",
+    "corrosion": "moderado",
+}
+
+# ── Modelo comunitario (respaldo, 14 clases) ──
 LABEL_ES = {
     "front-windscreen-damage": "Parabrisas dañado",
     "headlight-damage": "Faro delantero dañado",
@@ -36,23 +72,24 @@ LABEL_ES = {
     "quaterpanel-dent": "Abolladura en panel trasero",
     "rear-bumper-dent": "Abolladura paragolpes trasero",
     "roof-dent": "Abolladura en techo",
-    "damage": "Daño",  # clase del modelo afinado con tus furgonetas
+    "damage": "Daño",
 }
 
 _model = None
 
-
 MODEL_URL = os.environ.get("MODEL_URL", "").strip()
-
-
-LOCAL_MODEL = "model_finetuned.pt"   # modelo afinado con TUS furgonetas (tiene prioridad)
+MODEL_V2 = "model_v2.pt"            # detector propio (prioridad por defecto)
+LOCAL_MODEL = "model_finetuned.pt"  # afinado legado (solo con USE_FINETUNED=1)
 
 
 def get_model():
     global _model
     if _model is None:
         from ultralytics import YOLO
-        if os.path.exists(LOCAL_MODEL) and os.environ.get("USE_FINETUNED", "") == "1":
+        if os.path.exists(MODEL_V2) and os.environ.get("USE_V2", "1") != "0":
+            path = MODEL_V2
+            log.info("Modelo V2 propio (CarDD+DrBimmer, 10 clases) cargado: %s", MODEL_V2)
+        elif os.path.exists(LOCAL_MODEL) and os.environ.get("USE_FINETUNED", "") == "1":
             path = LOCAL_MODEL
             log.info("Modelo AFINADO (tus furgonetas) cargado: %s", LOCAL_MODEL)
         elif MODEL_URL:
@@ -80,7 +117,8 @@ class DetectReq(BaseModel):
 def health():
     try:
         m = get_model()
-        return {"ok": True, "model": REPO, "classes": list(m.names.values())}
+        return {"ok": True, "model": MODEL_V2 if os.path.exists(MODEL_V2) else REPO,
+                "imgsz": IMGSZ, "classes": list(m.names.values())}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -91,18 +129,20 @@ def detect(req: DetectReq):
         m = get_model()
         img = Image.open(io.BytesIO(base64.b64decode(req.image_b64))).convert("RGB")
         W, H = img.size
-        res = m.predict(img, conf=(req.conf if req.conf is not None else CONF), verbose=False)[0]
+        res = m.predict(img, conf=(req.conf if req.conf is not None else CONF),
+                        imgsz=IMGSZ, verbose=False)[0]
         dets = []
         for b in res.boxes:
             x1, y1, x2, y2 = [float(v) for v in b.xyxy[0].tolist()]
             cls = int(b.cls[0])
             conf = float(b.conf[0])
             raw = str(m.names.get(cls, cls)).strip().lower()
-            label = LABEL_ES.get(raw, raw.capitalize())
+            label = LABEL_V2.get(raw) or LABEL_ES.get(raw) or raw.capitalize()
+            severity = SEV_V2.get(raw, "leve")
             # box_2d normalizado 0-1000 como [ymin, xmin, ymax, xmax]
             box = [round(y1 / H * 1000, 1), round(x1 / W * 1000, 1),
                    round(y2 / H * 1000, 1), round(x2 / W * 1000, 1)]
-            dets.append({"label": label, "severity": "leve", "box_2d": box,
+            dets.append({"label": label, "severity": severity, "box_2d": box,
                          "confidence": round(conf, 3), "source": "yolo"})
         log.info("detect insp=%s photo=%s → %d daños", req.inspection_id[:8], req.photo_index, len(dets))
         return {"detections": dets}
