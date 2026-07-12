@@ -17,7 +17,7 @@ const LD = {
   'ld.demo.s3':      { es: 'Scorecard Amazon DSP', en: 'Amazon DSP Scorecard', fr: 'Scorecard Amazon DSP', de: 'Amazon DSP Scorecard', it: 'Scorecard Amazon DSP', pt: 'Scorecard Amazon DSP' },
   'ld.demo.s4':      { es: 'Asignación diaria', en: 'Daily assignment', fr: 'Affectation quotidienne', de: 'Tägliche Zuweisung', it: 'Assegnazione giornaliera', pt: 'Atribuição diária' },
   'ld.demo.scanning':{ es: 'Analizando con IA…', en: 'Analysing with AI…', fr: 'Analyse IA en cours…', de: 'KI analysiert…', it: 'Analisi IA in corso…', pt: 'A analisar com IA…' },
-  'ld.demo.dmg':     { es: 'Daño detectado · 94%', en: 'Damage detected · 94%', fr: 'Dégât détecté · 94%', de: 'Schaden erkannt · 94%', it: 'Danno rilevato · 94%', pt: 'Dano detetado · 94%' },
+  'ld.demo.dmg':     { es: 'Arañazo · puerta corredera · 94%', en: 'Scratch · sliding door · 94%', fr: 'Rayure · porte coulissante · 94%', de: 'Kratzer · Schiebetür · 94%', it: 'Graffio · porta scorrevole · 94%', pt: 'Risco · porta deslizante · 94%' },
   'ld.demo.alert':   { es: '⚠ Nueva inspección con daño', en: '⚠ New inspection with damage', fr: '⚠ Nouvelle inspection avec dommage', de: '⚠ Neue Inspektion mit Schaden', it: '⚠ Nuova ispezione con danno', pt: '⚠ Nova inspeção com dano' },
   'ld.demo.sev':     { es: 'Severidad: Moderado', en: 'Severity: Moderate', fr: 'Sévérité : Modéré', de: 'Schwere: Mittel', it: 'Gravità: Moderata', pt: 'Severidade: Moderado' },
   'ld.twin.badge':   { es: 'Gemelo Digital 3D', en: '3D Digital Twin', fr: 'Jumeau numérique 3D', de: '3D-Digital-Zwilling', it: 'Gemello digitale 3D', pt: 'Gémeo Digital 3D' },
@@ -49,6 +49,22 @@ const LD = {
   'ld.sh.t4':        { es: 'Revisión IA', en: 'AI Review', fr: 'Révision IA', de: 'KI-Prüfung', it: 'Revisione IA', pt: 'Revisão IA' },
   'ld.plan.try':     { es: 'Empieza con 14 días gratis', en: 'Start with 14 days free', fr: 'Commencez avec 14 jours gratuits', de: 'Starte mit 14 Tagen gratis', it: 'Inizia con 14 giorni gratis', pt: 'Começa com 14 dias grátis' },
   'ld.plan.sub':     { es: 'Sin tarjeta durante la prueba. Sin permanencia. Cancela cuando quieras.', en: 'No card during trial. No commitment. Cancel any time.', fr: 'Sans carte pendant l\'essai. Sans engagement. Annulez à tout moment.', de: 'Keine Karte während des Tests. Keine Bindung. Jederzeit kündigen.', it: 'Senza carta durante la prova. Senza vincoli. Cancella quando vuoi.', pt: 'Sem cartão durante o teste. Sem fidelização. Cancela quando quiseres.' },
+  /* ── Motor de visión propio ── */
+  'ld.ai.badge':     { es: 'Motor de visión propio', en: 'Proprietary vision engine', fr: 'Moteur de vision propriétaire', de: 'Eigene Vision-Engine', it: 'Motore di visione proprietario', pt: 'Motor de visão próprio' },
+  'ld.ai.title':     { es: 'Una IA que no adivina: mide', en: 'An AI that doesn’t guess: it measures', fr: 'Une IA qui ne devine pas : elle mesure', de: 'Eine KI, die nicht rät: sie misst', it: 'Un’IA che non indovina: misura', pt: 'Uma IA que não adivinha: mede' },
+  'ld.ai.sub':       { es: 'No usamos solo un chatbot mirando fotos. Nuestros propios modelos de visión, entrenados con miles de daños reales de furgonetas, detectan cada daño, dibujan su silueta al píxel y determinan la pieza exacta por geometría.', en: 'We don’t just point a chatbot at photos. Our own vision models, trained on thousands of real van damages, detect each damage, outline it to the pixel and determine the exact part by geometry.', fr: 'Pas un simple chatbot devant des photos. Nos propres modèles de vision, entraînés sur des milliers de dégâts réels, détectent chaque dommage, tracent sa silhouette au pixel et déterminent la pièce exacte par géométrie.', de: 'Kein Chatbot, der Fotos anschaut. Unsere eigenen Vision-Modelle, trainiert mit Tausenden echten Schäden, erkennen jeden Schaden, umranden ihn pixelgenau und bestimmen das exakte Bauteil geometrisch.', it: 'Non un semplice chatbot davanti alle foto. I nostri modelli di visione, addestrati su migliaia di danni reali, rilevano ogni danno, ne tracciano la sagoma al pixel e determinano il pezzo esatto per geometria.', pt: 'Não é só um chatbot a olhar fotos. Os nossos modelos de visão, treinados com milhares de danos reais, detetam cada dano, desenham a sua silhueta ao píxel e determinam a peça exata por geometria.' },
+  'ld.ai.s1t':       { es: 'Detector propio de daños', en: 'Own damage detector', fr: 'Détecteur de dégâts propriétaire', de: 'Eigener Schadensdetektor', it: 'Rilevatore di danni proprietario', pt: 'Detetor de danos próprio' },
+  'ld.ai.s1d':       { es: '10 tipos de daño — arañazos, abolladuras, grietas, cristales, ópticas, ruedas… — con su contorno real, no cajas aproximadas.', en: '10 damage types — scratches, dents, cracks, glass, lamps, tires… — with their real outline, not rough boxes.', fr: '10 types de dégâts — rayures, bosses, fissures, vitres, optiques, pneus… — avec leur contour réel.', de: '10 Schadensarten — Kratzer, Dellen, Risse, Glas, Leuchten, Reifen… — mit echter Kontur.', it: '10 tipi di danno — graffi, ammaccature, crepe, vetri, fari, gomme… — con il contorno reale.', pt: '10 tipos de dano — riscos, mossas, fissuras, vidros, óticas, pneus… — com o contorno real.' },
+  'ld.ai.s2t':       { es: 'Pieza exacta por geometría', en: 'Exact part by geometry', fr: 'Pièce exacte par géométrie', de: 'Exaktes Bauteil per Geometrie', it: 'Pezzo esatto per geometria', pt: 'Peça exata por geometria' },
+  'ld.ai.s2d':       { es: 'Un segundo modelo delimita las 21 piezas de la carrocería. El daño se asigna a su pieza por intersección geométrica: "arañazo en puerta corredera izquierda", no "daño en el lateral".', en: 'A second model outlines the 21 body panels. Damage is assigned to its part by geometric intersection: "scratch on left sliding door", not "damage on the side".', fr: 'Un second modèle délimite les 21 panneaux. Le dégât est affecté à sa pièce par intersection géométrique.', de: 'Ein zweites Modell umreißt die 21 Karosserieteile. Der Schaden wird geometrisch dem Bauteil zugeordnet.', it: 'Un secondo modello delimita i 21 pannelli. Il danno è assegnato al pezzo per intersezione geometrica.', pt: 'Um segundo modelo delimita os 21 painéis. O dano é atribuído à peça por interseção geométrica.' },
+  'ld.ai.s3t':       { es: 'Perito IA + revisión humana', en: 'AI adjuster + human review', fr: 'Expert IA + révision humaine', de: 'KI-Gutachter + menschliche Prüfung', it: 'Perito IA + revisione umana', pt: 'Perito IA + revisão humana' },
+  'ld.ai.s3d':       { es: 'La IA generativa confirma, clasifica la gravedad y lo explica en claro. Tu equipo valida en un clic — y cada validación reentrena los modelos con TU flota.', en: 'Generative AI confirms, grades severity and explains it plainly. Your team validates in one click — and every validation retrains the models on YOUR fleet.', fr: 'L’IA générative confirme, classe la gravité et l’explique. Votre équipe valide en un clic — chaque validation réentraîne les modèles.', de: 'Die generative KI bestätigt, bewertet die Schwere und erklärt sie. Dein Team validiert mit einem Klick — jede Validierung trainiert die Modelle neu.', it: 'L’IA generativa conferma, classifica la gravità e la spiega. Il tuo team valida in un clic — ogni validazione riaddestra i modelli.', pt: 'A IA generativa confirma, classifica a gravidade e explica. A tua equipa valida num clique — cada validação retreina os modelos.' },
+  'ld.ai.k1':        { es: 'daños reales de entrenamiento', en: 'real training damages', fr: 'dégâts réels d’entraînement', de: 'echte Trainingsschäden', it: 'danni reali di addestramento', pt: 'danos reais de treino' },
+  'ld.ai.k2':        { es: 'tipos de daño detectados', en: 'damage types detected', fr: 'types de dégâts détectés', de: 'erkannte Schadensarten', it: 'tipi di danno rilevati', pt: 'tipos de dano detetados' },
+  'ld.ai.k3':        { es: 'piezas de carrocería delimitadas', en: 'body panels outlined', fr: 'panneaux de carrosserie délimités', de: 'umrissene Karosserieteile', it: 'pannelli delimitati', pt: 'painéis delimitados' },
+  'ld.ai.k4':        { es: 'la IA mejora con cada revisión', en: 'AI improves with every review', fr: 'l’IA s’améliore à chaque révision', de: 'KI verbessert sich mit jeder Prüfung', it: 'l’IA migliora a ogni revisione', pt: 'a IA melhora a cada revisão' },
+  'ld.stat.4n':      { es: '15.000+', en: '15,000+', fr: '15 000+', de: '15.000+', it: '15.000+', pt: '15.000+' },
+  'ld.stat.4l':      { es: 'daños reales entrenando nuestra IA', en: 'real damages training our AI', fr: 'dégâts réels entraînant notre IA', de: 'echte Schäden trainieren unsere KI', it: 'danni reali che addestrano la nostra IA', pt: 'danos reais a treinar a nossa IA' },
 }
 
 function useLD() {
@@ -238,7 +254,7 @@ function DualDemo() {
       <div style={{ position:'relative', background:'#0a0c10', borderRadius:11, overflow:'hidden', height:120 }}>
         <div style={{ position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:44 }}>🚐</div>
         <div style={{ position:'absolute',left:'30%',top:'32%',width:'38%',height:'30%',border:'2.5px solid #f59e0b',borderRadius:6,boxShadow:'0 0 12px rgba(245,158,11,.4)' }} />
-        <div style={{ position:'absolute',left:'30%',top:'23%',background:'#f59e0b',color:'#000',fontSize:8,fontWeight:900,padding:'2px 6px',borderRadius:4 }}>{lang==='es'?'Rozadura · 87%':'Scratch · 87%'}</div>
+        <div style={{ position:'absolute',left:'30%',top:'23%',background:'#f59e0b',color:'#000',fontSize:8,fontWeight:900,padding:'2px 6px',borderRadius:4 }}>{lang==='es'?'Arañazo · puerta corredera · 92%':'Scratch · sliding door · 92%'}</div>
       </div>
       {[
         {part:lang==='es'?'Puerta corredera izq.':lang==='en'?'Left sliding door':'Porta scorrevole sx.',sev:lang==='es'?'Leve':'Minor',ok:true},
@@ -351,6 +367,60 @@ function DualDemo() {
             </div>
           </div>
 
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/* ─── Motor de visión propio (el diferenciador técnico) ─── */
+function AiEngineSection() {
+  const tl = useLD()
+  const steps = [
+    { icon: '🎯', accent: '#fb923c', t: tl('ld.ai.s1t'), d: tl('ld.ai.s1d') },
+    { icon: '📐', accent: '#38bdf8', t: tl('ld.ai.s2t'), d: tl('ld.ai.s2d') },
+    { icon: '🧠', accent: '#a78bfa', t: tl('ld.ai.s3t'), d: tl('ld.ai.s3d') },
+  ]
+  const kpis = [
+    ['15.000+', tl('ld.ai.k1'), '#fb923c'],
+    ['10', tl('ld.ai.k2'), '#38bdf8'],
+    ['21', tl('ld.ai.k3'), '#a78bfa'],
+    ['∞', tl('ld.ai.k4'), '#34d399'],
+  ]
+  return (
+    <section style={{ position: 'relative', overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse 700px 400px at 50% 0%, rgba(234,104,0,.08), transparent)', pointerEvents: 'none' }} />
+      <div style={{ maxWidth: 1100, margin: '0 auto', padding: '80px 20px', position: 'relative' }}>
+        <div style={{ textAlign: 'center', marginBottom: 48 }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(251,146,60,.1)', border: '1px solid rgba(251,146,60,.3)', borderRadius: 99, padding: '5px 14px', fontSize: 12, fontWeight: 700, color: '#fb923c', marginBottom: 18 }}>
+            ⚙️ {tl('ld.ai.badge')}
+          </div>
+          <h2 style={{ fontSize: 'clamp(24px,3.4vw,40px)', fontWeight: 950, margin: '0 0 12px', letterSpacing: '-.025em' }}>{tl('ld.ai.title')}</h2>
+          <p style={{ color: 'var(--ld-muted)', fontSize: 15.5, margin: '0 auto', maxWidth: 640, lineHeight: 1.65 }}>{tl('ld.ai.sub')}</p>
+        </div>
+
+        {/* Pipeline de 3 pasos con conectores */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 14, marginBottom: 36 }}>
+          {steps.map((s, i) => (
+            <div key={i} style={{ position: 'relative', background: 'var(--ld-surface2)', border: `1px solid ${s.accent}30`, borderRadius: 18, padding: '26px 22px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                <div style={{ width: 44, height: 44, borderRadius: 12, background: `${s.accent}18`, border: `1px solid ${s.accent}35`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{s.icon}</div>
+                <div style={{ fontSize: 11, fontWeight: 900, color: s.accent, background: `${s.accent}14`, borderRadius: 99, padding: '3px 10px' }}>{i + 1}</div>
+              </div>
+              <h3 style={{ margin: '0 0 8px', fontSize: 17, fontWeight: 800 }}>{s.t}</h3>
+              <p style={{ margin: 0, color: 'var(--ld-muted)', fontSize: 13.5, lineHeight: 1.6 }}>{s.d}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* KPIs del motor */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
+          {kpis.map(([n, l, c]) => (
+            <div key={l} style={{ textAlign: 'center', padding: '20px 14px', background: 'var(--ld-surface2)', border: '1px solid var(--ld-fill)', borderRadius: 14 }}>
+              <div style={{ fontSize: 26, fontWeight: 900, color: c }}>{n}</div>
+              <div style={{ fontSize: 12, color: 'var(--ld-dim)', marginTop: 4, lineHeight: 1.4 }}>{l}</div>
+            </div>
+          ))}
         </div>
       </div>
     </section>
@@ -504,6 +574,7 @@ export default function Landing() {
           {[
             [tl('ld.stat.1n'), tl('ld.stat.1l'), '#38bdf8'],
             [tl('ld.stat.2n'), tl('ld.stat.2l'), '#34d399'],
+            [tl('ld.stat.4n'), tl('ld.stat.4l'), '#fb923c'],
             [tl('ld.stat.3n'), tl('ld.stat.3l'), '#a78bfa'],
           ].map(([n, l, c]) => (
             <div key={n} style={{ padding: '22px 20px', textAlign: 'center', borderRight: '1px solid var(--ld-fill)' }}>
@@ -514,11 +585,14 @@ export default function Landing() {
         </div>
       </div>
 
-      {/* ── SHOWCASE GEMELO 3D (el diferenciador) ── */}
+      {/* ── SHOWCASE GEMELO 3D (el diferenciador visual) ── */}
       <Landing3DShowcase t={{
         badge: tl('ld.twin.badge'), title: tl('ld.twin.title'), sub: tl('ld.twin.sub'),
         hint: tl('ld.twin.hint'), loading: tl('ld.twin.loading'),
       }} />
+
+      {/* ── MOTOR DE VISIÓN PROPIO (el diferenciador técnico) ── */}
+      <AiEngineSection />
 
       {/* ── DUAL DEMO ── */}
       <DualDemo />
