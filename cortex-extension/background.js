@@ -60,10 +60,24 @@ async function flush() {
   } finally { flushing = false; }
 }
 
+async function pushActivity(url, count) {
+  const { activity = [] } = await chrome.storage.local.get({ activity: [] });
+  activity.unshift({ url: (url || '').replace(/^https?:\/\/[^/]+/, '').slice(0, 60), count, at: Date.now() });
+  await chrome.storage.local.set({ activity: activity.slice(0, 12) });
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.type === 'cortexPackages' && Array.isArray(msg.packages)) {
     enqueue(msg.packages).then(() => reply?.({ ok: true }));
     return true;
+  }
+  if (msg?.type === 'heartbeat') {
+    setState({ connected: true, hbUrl: msg.url, hbAt: Date.now() });
+    return false;
+  }
+  if (msg?.type === 'debug') {
+    pushActivity(msg.url, msg.count || 0);
+    return false;
   }
   if (msg?.type === 'flushNow') { flush().then(() => reply?.({ ok: true })); return true; }
 });

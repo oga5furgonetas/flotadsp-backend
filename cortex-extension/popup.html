@@ -4,32 +4,45 @@
   <meta charset="utf-8" />
   <style>
     :root { color-scheme: dark; }
-    body { width: 320px; margin: 0; padding: 16px; font: 13px/1.5 system-ui, sans-serif; background: #0e1116; color: #eef1f6; }
+    body { width: 340px; margin: 0; padding: 16px; font: 13px/1.5 system-ui, sans-serif; background: #0e1116; color: #eef1f6; }
     h1 { font-size: 15px; margin: 0 0 2px; display: flex; align-items: center; gap: 7px; }
     .b { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg,#fb923c,#ea6800); display: inline-block; }
-    p.sub { color: #93a0b4; margin: 0 0 14px; font-size: 12px; }
+    p.sub { color: #93a0b4; margin: 0 0 12px; font-size: 12px; }
     label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #93a0b4; margin: 12px 0 4px; }
     input { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px; border: 1px solid #252c37; background: #161a21; color: #eef1f6; font-size: 12px; font-family: ui-monospace, monospace; }
     button { width: 100%; margin-top: 12px; padding: 9px; border: none; border-radius: 8px; background: linear-gradient(135deg,#fb923c,#ea6800); color: #fff; font-weight: 800; font-size: 13px; cursor: pointer; }
     button.ghost { background: #161a21; border: 1px solid #252c37; color: #cbd5e1; font-weight: 600; margin-top: 8px; }
-    .status { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: #161a21; border: 1px solid #252c37; font-size: 12px; color: #cbd5e1; }
-    .status.ok { border-color: rgba(52,211,153,.4); }
-    .status.err { border-color: rgba(248,113,113,.4); }
+    .conn { display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-radius: 8px; border: 1px solid #252c37; background: #161a21; font-size: 12px; font-weight: 600; }
+    .conn .dot { width: 9px; height: 9px; border-radius: 50%; background: #64748b; flex-shrink: 0; }
+    .conn.ok .dot { background: #34d399; box-shadow: 0 0 8px #34d39988; }
+    .conn.ok { color: #a7f3d0; }
+    .conn.bad { color: #fca5a5; }
     .kpi { display: flex; gap: 8px; margin-top: 10px; }
     .kpi div { flex: 1; text-align: center; background: #161a21; border: 1px solid #252c37; border-radius: 8px; padding: 8px 4px; }
     .kpi b { display: block; font-size: 18px; }
     .kpi span { font-size: 10px; color: #93a0b4; }
+    .status { margin-top: 12px; padding: 9px 11px; border-radius: 8px; background: #161a21; border: 1px solid #252c37; font-size: 12px; color: #cbd5e1; }
+    .status.ok { border-color: rgba(52,211,153,.4); } .status.err { border-color: rgba(248,113,113,.4); }
+    .act { margin-top: 10px; }
+    .act h3 { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #93a0b4; margin: 0 0 6px; }
+    .act ul { list-style: none; margin: 0; padding: 0; max-height: 140px; overflow-y: auto; }
+    .act li { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; padding: 4px 0; border-top: 1px solid #1b212b; }
+    .act .u { color: #93a0b4; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .act .c { flex-shrink: 0; font-weight: 800; }
+    .act .c.zero { color: #64748b; } .act .c.some { color: #34d399; }
+    .empty { color: #64748b; font-size: 11px; padding: 8px 0; }
   </style>
 </head>
 <body>
-  <h1><span class="b"></span> Cortex Bridge</h1>
+  <h1><span class="b"></span> Cortex Bridge <span id="ver" style="font-size:10px;color:#64748b;font-weight:400"></span></h1>
   <p class="sub">Envía los datos de Cortex a tu Package Intelligence Center.</p>
+
+  <div id="conn" class="conn"><span class="dot"></span><span id="connText">Comprobando…</span></div>
 
   <label for="token">Token de ingesta</label>
   <input id="token" placeholder="Pégalo desde el panel → Paquetes IA" />
   <label for="url">URL de ingesta (avanzado)</label>
   <input id="url" />
-
   <button id="save">Guardar y activar</button>
   <button id="flush" class="ghost">Enviar ahora</button>
 
@@ -37,7 +50,12 @@
     <div><b id="buffered">0</b><span>en cola</span></div>
     <div><b id="sent">0</b><span>enviados</span></div>
   </div>
-  <div id="status" class="status">Abre Cortex y navega tus rutas. Los datos se envían solos.</div>
+  <div id="status" class="status">Abre Cortex, entra en una ruta y sus paradas. Los datos se envían solos.</div>
+
+  <div class="act">
+    <h3>Actividad (lo que ve la extensión)</h3>
+    <ul id="activity"><li class="empty">Nada aún. Recarga la pestaña de Cortex y navega.</li></ul>
+  </div>
 
   <script src="popup.js"></script>
 </body>

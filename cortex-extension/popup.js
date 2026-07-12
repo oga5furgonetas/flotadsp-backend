@@ -1,16 +1,41 @@
 const DEFAULT_URL = 'https://flotadsp-backend.fly.dev/api/cortex/ingest';
 const $ = (id) => document.getElementById(id);
 
+function ago(ts) {
+  if (!ts) return '';
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  return `${Math.floor(s / 3600)}h`;
+}
+
 async function render() {
-  const { ingestToken = '', ingestUrl = DEFAULT_URL, state = {}, sent = 0 } =
-    await chrome.storage.local.get(['ingestToken', 'ingestUrl', 'state', 'sent']);
-  $('token').value = ingestToken;
-  $('url').value = ingestUrl || DEFAULT_URL;
+  const st = await chrome.storage.local.get(['ingestToken', 'ingestUrl', 'state', 'sent', 'activity']);
+  const { ingestToken = '', ingestUrl = DEFAULT_URL, state = {}, sent = 0, activity = [] } = st;
+  $('ver').textContent = 'v' + (chrome.runtime.getManifest().version);
+  if (document.activeElement !== $('token')) $('token').value = ingestToken;
+  if (document.activeElement !== $('url')) $('url').value = ingestUrl || DEFAULT_URL;
   $('buffered').textContent = state.buffered || 0;
   $('sent').textContent = sent || 0;
+
+  // Estado de conexión con Cortex (heartbeat < 90 s)
+  const conn = $('conn'); const ct = $('connText');
+  const fresh = state.hbAt && (Date.now() - state.hbAt) < 90000;
+  if (fresh) { conn.className = 'conn ok'; ct.textContent = 'Conectado a Cortex ✓'; }
+  else { conn.className = 'conn bad'; ct.textContent = 'No conectado — abre y recarga (F5) Cortex'; }
+
+  // Mensaje de estado del envío
   const s = $('status');
-  s.textContent = state.lastMessage || 'Abre Cortex y navega tus rutas. Los datos se envían solos.';
+  s.textContent = state.lastMessage || 'Abre Cortex, entra en una ruta y sus paradas. Los datos se envían solos.';
   s.className = 'status' + (state.ok === true ? ' ok' : state.ok === false ? ' err' : '');
+  if (!ingestToken) { s.textContent = 'Pega tu token de ingesta y pulsa Guardar y activar.'; s.className = 'status err'; }
+
+  // Actividad
+  const ul = $('activity');
+  if (!activity.length) { ul.innerHTML = '<li class="empty">Nada aún. Recarga la pestaña de Cortex y navega por una ruta.</li>'; return; }
+  ul.innerHTML = activity.map((a) =>
+    `<li><span class="u" title="${a.url}">${a.url}</span><span class="c ${a.count ? 'some' : 'zero'}">${a.count} pkg · ${ago(a.at)}</span></li>`
+  ).join('');
 }
 
 $('save').addEventListener('click', async () => {
@@ -18,12 +43,11 @@ $('save').addEventListener('click', async () => {
     ingestToken: $('token').value.trim(),
     ingestUrl: ($('url').value.trim() || DEFAULT_URL),
   });
-  $('status').textContent = 'Guardado. Abre Cortex y navega; el envío es automático.';
-  $('status').className = 'status ok';
+  const s = $('status'); s.textContent = 'Guardado ✓. Abre Cortex y navega; el envío es automático.'; s.className = 'status ok';
 });
 
 $('flush').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'flushNow' }));
 
 chrome.storage.onChanged.addListener(render);
 render();
-setInterval(render, 2000);
+setInterval(render, 1500);

@@ -9,6 +9,14 @@
   window.__flotadspCortexHooked = true;
   console.log('%c[FlotaDSP] Cortex Bridge activo — escuchando la API de Cortex', 'color:#fb923c;font-weight:bold');
 
+  const post = (msg) => { try { window.postMessage({ __flotadsp: true, ...msg }, '*'); } catch (_) {} };
+  // Heartbeat: le dice al popup que el interceptor está vivo en esta pestaña.
+  const beat = () => post({ kind: 'heartbeat', url: location.href });
+  beat();
+  setInterval(beat, 25000);
+
+  const RELEVANT_URL = /route|task|stop|package|parcel|delivery|itinerary|summar|scan|assign/i;
+
   // Marcadores baratos: si el texto no los contiene, ni parseamos (evita coste).
   const MARK = /"(?:containerScannableId|scannableId|trackingId|taskState|executionStatus|deliveryStatus|recentTaskEvents|stopId|routeId)"|TBA[A-Z0-9]{6,}|\bES\d{8,}\b/;
 
@@ -105,13 +113,19 @@
 
   const emit = (url, text) => {
     try {
-      if (!text || text.length < 20 || !MARK.test(text)) return;
+      if (!text || text.length < 2) return;
       const c = text[0];
       if (c !== '{' && c !== '[') return;
-      const packages = extract(JSON.parse(text));
+      const marked = MARK.test(text);
+      // Solo nos interesan respuestas de datos (por URL o por contenido).
+      if (!marked && !RELEVANT_URL.test(url)) return;
+      let packages = [];
+      if (marked) { try { packages = extract(JSON.parse(text)); } catch (_) {} }
+      // Diagnóstico: registra CADA respuesta relevante, aunque saque 0 paquetes.
+      post({ kind: 'debug', url: url.slice(0, 130), count: packages.length, bytes: text.length });
       if (packages.length) {
         console.log(`%c[FlotaDSP] ${packages.length} paquetes capturados`, 'color:#34d399', url.slice(0, 80));
-        window.postMessage({ __flotadsp: true, kind: 'cortex', url, packages }, '*');
+        post({ kind: 'cortex', url, packages });
       }
     } catch (_) { /* nunca romper la página */ }
   };
