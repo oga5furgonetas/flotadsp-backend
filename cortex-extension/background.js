@@ -96,9 +96,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     return true;
   }
   if (msg?.type === 'heartbeat') {
-    setState({ connected: true, hbUrl: msg.url, hbAt: Date.now() });
+    const patch = { connected: true, hbUrl: msg.url, hbAt: Date.now() };
+    if (msg.src === 'main') patch.mainAt = Date.now(); // el hook de red (MAIN) está vivo
+    setState(patch);
     return false;
   }
+  if (msg?.type === 'reinject') { injectAll().then(() => reply?.({ ok: true })); return true; }
   if (msg?.type === 'debug') {
     pushActivity(msg.url, msg.count || 0);
     return false;

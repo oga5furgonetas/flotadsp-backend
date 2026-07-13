@@ -18,11 +18,13 @@ async function render() {
   $('buffered').textContent = state.buffered || 0;
   $('sent').textContent = sent || 0;
 
-  // Estado de conexión con Cortex (heartbeat < 90 s)
+  // Estado de conexión (dos señales: extensión inyectada + hook de red activo)
   const conn = $('conn'); const ct = $('connText');
-  const fresh = state.hbAt && (Date.now() - state.hbAt) < 90000;
-  if (fresh) { conn.className = 'conn ok'; ct.textContent = 'Conectado a Cortex ✓'; }
-  else { conn.className = 'conn bad'; ct.textContent = 'No conectado — abre y recarga (F5) Cortex'; }
+  const injected = state.hbAt && (Date.now() - state.hbAt) < 90000;   // el bridge late
+  const netHook = state.mainAt && (Date.now() - state.mainAt) < 90000; // el interceptor late
+  if (netHook) { conn.className = 'conn ok'; ct.textContent = 'Conectado y capturando red ✓'; }
+  else if (injected) { conn.className = 'conn ok'; ct.textContent = 'Extensión activa · esperando datos de Cortex…'; }
+  else { conn.className = 'conn bad'; ct.textContent = 'No inyectada — recarga la extensión y abre Cortex'; }
 
   // Mensaje de estado del envío
   const s = $('status');
@@ -47,6 +49,10 @@ $('save').addEventListener('click', async () => {
 });
 
 $('flush').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'flushNow' }));
+
+// Al abrir el popup, fuerza reinyección en las pestañas de Cortex ya abiertas
+// (por si el service worker se durmió o la pestaña se abrió antes que la extensión).
+try { chrome.runtime.sendMessage({ type: 'reinject' }); } catch (_) {}
 
 chrome.storage.onChanged.addListener(render);
 render();
