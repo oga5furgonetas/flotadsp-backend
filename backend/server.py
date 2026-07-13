@@ -17116,38 +17116,63 @@ def _match_score(name_a: str, name_b: str) -> float:
     return score
 
 
+def _is_transient_gemini(err_str: str) -> bool:
+    """503/500/UNAVAILABLE/overloaded/deadline: el modelo está saturado o lento,
+    no es un problema de cuota. Conviene saltar a otro modelo o reintentar."""
+    e = err_str.lower()
+    return any(k in e for k in ("503", "500", "unavailable", "overloaded",
+                                "high demand", "deadline", "timeout", "internal"))
+
+
 async def _gemini_extract(client, model_name: str, prompt: str, img_bytes: bytes) -> dict:
     from google.genai import types as genai_types
     part = genai_types.Part.from_bytes(data=img_bytes, mime_type=_mime_type(img_bytes))
-    cfg = genai_types.GenerateContentConfig(temperature=0.0)
-    # Cadena de respaldo: si el modelo principal tiene la cuota DIARIA agotada
-    # (429 per-day), probamos con otros que tienen su propia cuota. Así Plantilla
-    # sigue funcionando aunque una inspección/otra tarea haya gastado el modelo base.
-    chain = [model_name, "gemini-flash-latest", "gemini-2.5-flash-lite", "gemini-flash-lite-latest"]
+    # thinking_budget=0: leer una captura es una tarea factual, no necesita
+    # razonamiento largo → respuesta en segundos en vez de decenas.
+    try:
+        cfg = genai_types.GenerateContentConfig(
+            temperature=0.0,
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=0))
+    except Exception:
+        cfg = genai_types.GenerateContentConfig(temperature=0.0)
+    # Cadena de respaldo con dos motivos de salto:
+    #   · cuota DIARIA agotada (429 per-day) → veta ese modelo y pasa al siguiente.
+    #   · saturación/lentitud (503/500/UNAVAILABLE) → pasa al siguiente al instante.
+    # flash-lite suele estar menos saturado y responde rápido.
+    chain = [model_name, "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-flash-lite-latest"]
     seen, models = set(), []
     for m in chain:
         if m and m not in seen:
             seen.add(m); models.append(m)
     last_err = None
-    for m in models:
-        if _is_daily_exhausted(m):
-            continue
-        try:
-            resp = await asyncio.wait_for(
-                asyncio.to_thread(lambda mm=m: client.models.generate_content(
-                    model=mm, contents=[prompt, part], config=cfg)),
-                timeout=120)
-            raw = _strip_markdown_json((resp.text or "").strip())
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            raise
-        except Exception as e:
-            last_err = e
-            if "429" in str(e) and _is_perday_429(str(e)):
-                _mark_daily_exhausted(m)
-                continue  # cuota diaria de ESTE modelo agotada → siguiente
-            raise
-    raise last_err or RuntimeError("Sin modelos Gemini disponibles (cuota agotada)")
+    # Dos vueltas: la 1ª prueba cada modelo; la 2ª reintenta (tras breve pausa)
+    # por si TODOS estaban saturados un instante.
+    for attempt in range(2):
+        for m in models:
+            if _is_daily_exhausted(m):
+                continue
+            try:
+                resp = await asyncio.wait_for(
+                    asyncio.to_thread(lambda mm=m: client.models.generate_content(
+                        model=mm, contents=[prompt, part], config=cfg)),
+                    timeout=45)
+                raw = _strip_markdown_json((resp.text or "").strip())
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                raise  # el modelo respondió pero no era JSON → error real
+            except Exception as e:
+                last_err = e
+                es = str(e)
+                if "429" in es and _is_perday_429(es):
+                    _mark_daily_exhausted(m)
+                    continue
+                if _is_transient_gemini(es) or isinstance(e, asyncio.TimeoutError):
+                    continue  # saturado/lento → siguiente modelo
+                # Error inesperado: probamos el siguiente modelo igualmente.
+                continue
+        if attempt == 0:
+            await asyncio.sleep(2)  # respiro antes de la segunda vuelta
+    raise last_err or RuntimeError("Gemini no disponible ahora mismo (saturación/cuota)")
 
 
 # ── Paso 1: extraer datos con Gemini, devuelve JSON para preview ──
