@@ -6777,8 +6777,14 @@ async def reanalyze_inspection(inspection_id: str, silent: bool = False, _=Depen
     analysis_b64 = [photos_base64[i] for i in _aidx]
     _idx_map = {k + 1: _aidx[k] + 1 for k in range(len(_aidx))}
 
-    # Fotos de referencia (estado anterior) si las había
-    ref_urls = insp.get("reference_photos") or []
+    # MODO INVENTARIO (reconstrucción de flota): ignora las fotos de referencia
+    # para hacer un censo COMPLETO de todos los daños actuales del vehículo, en
+    # vez de comparar con el "antes" y decir "ya estaban". Se usa una sola vez
+    # por furgoneta (inventory_done) y a partir de ahí vuelve el modo normal.
+    inv_mode = bool(insp.get("rebuild_pass")) and not insp.get("inventory_done")
+
+    # Fotos de referencia (estado anterior) si las había — salvo en inventario
+    ref_urls = [] if inv_mode else (insp.get("reference_photos") or [])
     ref_bytes_list = await load_reference_images(ref_urls) if ref_urls else None
 
     # Marcar como pendiente mientras se reanaliza
@@ -6823,8 +6829,14 @@ async def reanalyze_inspection(inspection_id: str, silent: bool = False, _=Depen
     )
     if analysis:
         _remap_photo_indexes(analysis, _idx_map)
+    # En inventario, TODOS los daños vistos pasan a "pendientes de validar"
+    # (new_damages), para que el humano confirme el estado base de la furgoneta.
+    if inv_mode and analysis_status == "ok" and analysis and getattr(analysis, "damages", None):
+        analysis.new_damages = list(analysis.damages)
     if analysis_status == "ok" and analysis:
         await _apply_vehicle_memory(insp.get("vehicle_id"), analysis, inspection_id=inspection_id)
+        if inv_mode:
+            await db.inspections.update_one({"id": inspection_id}, {"$set": {"inventory_done": True}})
 
     # Snap de cajas al detector CV (reutiliza las detecciones ya pedidas)
     if cv_dets_full and analysis and analysis_status == "ok" and (analysis.damages or analysis.new_damages):
@@ -10284,7 +10296,8 @@ async def rebuild_fleet_damages(_=Depends(require_admin)):
         await db.inspections.update_many(
             {"id": {"$in": insp_ids}},
             {"$set": {"analysis_status": "pending", "analysis_error": None,
-                      "auto_retries": 0, "reviewed": False, "rebuild_pass": now_iso}})
+                      "auto_retries": 0, "reviewed": False, "rebuild_pass": now_iso,
+                      "inventory_done": False}})
 
     n = len(insp_ids)
     return {

@@ -61,8 +61,8 @@ export default function IAPeritaje() {
     loadRebuild()
     // Auto-lanzamiento (una sola vez, solo super-admin): deja armada la
     // reconstrucción de flota para que se ejecute sola al abrir esta pantalla.
-    if (isSuperAdmin() && !localStorage.getItem('flotadsp_fleet_rebuilt')) {
-      localStorage.setItem('flotadsp_fleet_rebuilt', new Date().toISOString())
+    if (isSuperAdmin() && !localStorage.getItem('flotadsp_fleet_rebuilt_v2')) {
+      localStorage.setItem('flotadsp_fleet_rebuilt_v2', new Date().toISOString())
       rebuildFleetDamages()
         .then((r) => { setMsg({ ok: true, t: r.data?.message || 'Reconstrucción de flota iniciada.' }); loadRebuild(); loadInsps() })
         .catch(() => { /* si ya estaba en marcha, no pasa nada */ })
