@@ -16840,7 +16840,10 @@ REGLAS:
    coge SOLO EL PRIMERO que aparece. Ignora completamente el segundo y siguientes.
 3. No dupliques rutas.
 4. Ordena por código de ruta.
-5. La hora de salida suele aparecer como HH:MM cerca del nombre de la ruta.
+5. HORA DE SALIDA — MUY IMPORTANTE: cada ruta tiene SU PROPIA hora, en su misma fila.
+   Léela fila por fila. NO copies la misma hora a todas las rutas. Si una ruta NO
+   muestra su hora con claridad, pon null en ESA ruta (mejor vacío que inventado).
+   Nunca uses la hora actual ni una hora "global" de la cabecera para todas.
 """
 
 _PROMPT_PLATAFORMA = """
@@ -17281,6 +17284,11 @@ async def plantilla_extraer(request: Request):
             if best_asig and best_score >= 0.8:
                 furgo = (best_asig.get("furgo") or "").replace(" ", "")
                 movil = best_asig.get("movil") or ""
+                # Complementar: el nombre COMPLETO viene de plataforma (Cortex lo
+                # muestra truncado). Solo si el de plataforma es más largo/completo.
+                plat_name = (best_asig.get("conductor") or "").strip()
+                if plat_name and len(plat_name) >= len(conductor.replace(".", "").strip()):
+                    conductor = plat_name
 
             h_llegada, h_bajada = _calc_horas(h_salida)
             rows_out.append({
