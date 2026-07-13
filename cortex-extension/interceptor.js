@@ -169,6 +169,66 @@
     return [...map.values()];
   };
 
+  // Parser específico de route-details: el paquete real es cada `task` dentro de
+  // stops[].tasks[] — con taskState (estado), referenceId, y domainMap.scannableId
+  // (el TBA). El conductor está en transporters[] y la dirección en addresses[].
+  const extractRouteDetails = (json) => {
+    const root = (json && json.rmsRouteDetails) || json;
+    if (!root || !Array.isArray(root.stops)) return null;
+    const routeCode = root.routeCode || null;
+    const routeId = root.routeId || null;
+    const drivers = {};
+    for (const t of (root.transporters || [])) {
+      if (t && t.transporterId) {
+        drivers[t.transporterId] = [t.firstName, t.lastName].filter(Boolean).join(' ').trim() || null;
+      }
+    }
+    const addrs = {};
+    for (const a of (root.addresses || [])) if (a && a.addressId) addrs[a.addressId] = a;
+    let day = null;
+    const ld = root.localDate;
+    if (Array.isArray(ld) && ld.length >= 3) {
+      day = `${ld[0]}-${String(ld[1]).padStart(2, '0')}-${String(ld[2]).padStart(2, '0')}`;
+    }
+    const out = [];
+    for (const stop of root.stops) {
+      const seq = stop.sequenceNumber;
+      for (const task of (stop.tasks || [])) {
+        const dm = task.domainMap || {};
+        const tba = pickTba(dm) || pickTba(task);
+        if (!tba) continue;
+        const a = addrs[task.addressId || stop.addressId] || {};
+        const addrStr = a.address1 ? [a.address1, a.address2, a.city].filter(Boolean).join(', ') : null;
+        const geo = task.executionGeocode || a.geocode || {};
+        const tid = task.transporterId || stop.transporterId;
+        let events = null;
+        if (Array.isArray(task.recentTaskEvents)) {
+          events = task.recentTaskEvents.map((e) => ({
+            state: firstKey(e, ['type', 'eventType', 'state', 'status', 'code', 'taskState', 'name']) || '',
+            at: firstKey(e, ['timestamp', 'time', 'eventTime', 'at', 'date', 'createdAt', 'eventTimestamp', 'epochMillis']) || null,
+          })).filter((e) => e.at);
+        }
+        out.push({
+          tba,
+          reference_id: task.referenceId || dm.orderId || null,
+          route_code: routeCode, route_id: routeId,
+          driver_name: drivers[tid] || null, driver_id: tid || null,
+          stop_id: seq != null ? String(seq) : null,
+          stop_address: addrStr,
+          container_id: task.containerScannableId || null,
+          state: task.taskState || task.executionStatus || null,
+          raw_state: task.taskState || null,
+          task_type: task.taskType || null,
+          lat: geo.latitude ?? null, lng: geo.longitude ?? null,
+          observed_at: task.actualExecutionTime || stop.actualEndTime || null,
+          service_day: day,
+          events,
+        });
+      }
+    }
+    return out.length ? out : null;
+  };
+
   const emit = (url, text, method) => {
     try {
       if (!text || text.length < 2) return;
@@ -178,7 +238,12 @@
       // Solo nos interesan respuestas de datos (por URL o por contenido).
       if (!marked && !RELEVANT_URL.test(url)) return;
       let packages = [];
-      if (marked) { try { packages = extract(JSON.parse(text)); } catch (_) {} }
+      if (marked) {
+        try {
+          const j = JSON.parse(text);
+          packages = extractRouteDetails(j) || extract(j);
+        } catch (_) {}
+      }
       // Diagnóstico de estructura: esquema de la respuesta de route-details (una vez).
       if (!schemaSent && /route-details/i.test(url)) {
         try {

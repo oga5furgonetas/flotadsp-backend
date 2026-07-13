@@ -17404,6 +17404,10 @@ _CORTEX_STATES = {
     # crudo (Cortex/es) → canónico
     "loaded": "LOADED", "out_for_delivery": "LOADED", "on_road": "LOADED", "en_route": "LOADED",
     "picked_up": "LOADED", "in_transit": "LOADED",
+    # taskState reales de Cortex que significan "aún por hacer / en la furgoneta"
+    "not_started": "LOADED", "not_attempted": "LOADED", "assigned": "LOADED",
+    "pending": "LOADED", "ready": "LOADED", "incomplete": "LOADED", "in_progress": "LOADED",
+    "reattemptable": "ATTEMPTED",
     "arrived": "ARRIVED", "arrived_at_stop": "ARRIVED", "at_stop": "ARRIVED",
     "attempted": "ATTEMPTED", "delivery_attempted": "ATTEMPTED", "attempt": "ATTEMPTED",
     "rejected": "ATTEMPTED", "business_closed": "ATTEMPTED", "unable_to_access": "ATTEMPTED",
@@ -17443,6 +17447,10 @@ def _cortex_canon_state(raw) -> str:
     for canon, kws in _CORTEX_STATE_TEXT:
         if any(k in low for k in kws):
             return canon
+    # No reconocido: si parece un código de estado (letras/underscore), lo
+    # mostramos tal cual (verdad de Cortex) en vez de "OBSERVED" genérico.
+    if re.fullmatch(r"[A-Za-z_]{2,28}", s):
+        return s.upper()
     return "OBSERVED"
 
 

@@ -50,7 +50,7 @@ const fmtTime = (iso) => { const d = iso && new Date(iso); return d && !isNaN(d)
 const sinceMin = (iso) => { const d = iso && new Date(iso); if (!d || isNaN(d)) return null; return Math.floor((Date.now() - d.getTime()) / 60000) }
 
 function Statecap({ s, sm }) {
-  const st = STATE[s] || STATE.OBSERVED
+  const st = STATE[s] || (s ? { c: 'zinc', l: String(s).replace(/_/g, ' ').toLowerCase() } : STATE.OBSERVED)
   return <span className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 font-mono text-[10.5px] font-bold uppercase tracking-wide ring-1 ${pillCls(st.c)} ${sm ? 'text-[9.5px]' : ''}`}>{st.l}</span>
 }
 
