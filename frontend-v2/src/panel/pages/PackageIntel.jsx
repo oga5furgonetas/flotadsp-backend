@@ -208,6 +208,7 @@ export default function PackageIntel() {
   const [seeding, setSeeding] = useState(false)
   const [day, setDay] = useState(todayISO())
   const [days, setDays] = useState([])
+  const [showSetup, setShowSetup] = useState(false)
   const qRef = useRef('')
 
   const load = useCallback(async () => {
@@ -231,6 +232,16 @@ export default function PackageIntel() {
   const seed = async () => { setSeeding(true); try { await cortexSeedDemo(); await load() } finally { setSeeding(false) } }
   const clearDemo = async () => { setSeeding(true); try { await cortexClearDemo(); setSel(null); await load() } finally { setSeeding(false) } }
   const empty = !loading && pkgs.length === 0 && days.length === 0
+  // Agrupado por ruta para que 500+ paquetes no salgan en un montón plano.
+  const groups = useMemo(() => {
+    const m = new Map()
+    for (const p of pkgs) {
+      const k = p.route_code || '—'
+      if (!m.has(k)) m.set(k, [])
+      m.get(k).push(p)
+    }
+    return [...m.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'es', { numeric: true }))
+  }, [pkgs])
   const hasDemo = pkgs.some(p => (p.tba || '').startsWith('TBADEMO')) ||
     alerts.some(a => (a.tba || '').startsWith('TBADEMO'))
 
@@ -266,11 +277,19 @@ export default function PackageIntel() {
               {seeding ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />} Limpiar demo
             </button>
           )}
+          <button onClick={() => setShowSetup(s => !s)} title="Token e instalación de la extensión"
+            className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-[13px] font-semibold ${showSetup ? 'border-sky-500/40 bg-sky-500/10 text-sky-300' : 'border-dark-700 bg-dark-900 text-dark-200 hover:border-dark-600'}`}>
+            <Radar size={14} /> Extensión
+          </button>
           <button onClick={load} className="inline-flex items-center gap-2 rounded-lg border border-dark-700 bg-dark-900 px-3 py-2 text-[13px] font-semibold text-dark-200 hover:border-dark-600">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar
           </button>
         </div>
       </div>
+
+      {showSetup && (
+        <div className="mb-5 mx-auto max-w-xl"><SetupCard onSeed={seed} seeding={seeding} /></div>
+      )}
 
       {/* KPIs */}
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -300,33 +319,42 @@ export default function PackageIntel() {
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-dark-800">
-              <div className="hidden grid-cols-[1.4fr_.8fr_1.2fr_.6fr] gap-2 border-b border-dark-800 bg-dark-900/60 px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-dark-500 sm:grid">
-                <span>Paquete</span><span>Estado</span><span>Ruta / conductor</span><span className="text-right">Hora</span>
+              <div className="hidden grid-cols-[1.6fr_.8fr_.6fr] gap-2 border-b border-dark-800 bg-dark-900/60 px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-dark-500 sm:grid">
+                <span>Paquete</span><span>Estado</span><span className="text-right">Hora</span>
               </div>
-              <div className="max-h-[62vh] divide-y divide-dark-800 overflow-y-auto">
-                {pkgs.map(p => {
-                  const active = sel === p.tba
-                  const mins = p.state === 'MISSING' ? sinceMin(p.updated_at) : null
-                  return (
-                    <button key={p.tba} onClick={() => setSel(p.tba)}
-                      className={`grid w-full grid-cols-2 items-center gap-2 px-4 py-3 text-left transition sm:grid-cols-[1.4fr_.8fr_1.2fr_.6fr] ${active ? 'bg-sky-500/[.07]' : 'hover:bg-dark-900/60'}`}>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 truncate font-semibold text-dark-50">{p.tba}
-                          {p.priority === 'critical' && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />}
-                        </div>
-                        <div className="truncate text-[11px] text-dark-500">{p.reference_id}</div>
+              <div className="max-h-[62vh] overflow-y-auto">
+                {groups.map(([route, items]) => (
+                  <div key={route}>
+                    <div className="sticky top-0 z-10 flex items-center justify-between border-b border-dark-800 bg-dark-900/95 px-4 py-2 backdrop-blur">
+                      <div className="flex items-center gap-2 text-[12px] font-bold text-dark-100">
+                        <RouteIcon size={13} className="text-sky-400" /> {route}
+                        {items.some(p => p.driver_name) && <span className="font-normal text-dark-500">· {items.find(p => p.driver_name)?.driver_name}</span>}
                       </div>
-                      <div><Statecap s={p.state} sm /></div>
-                      <div className="hidden min-w-0 sm:block">
-                        <div className="truncate text-[12.5px] text-dark-200">{p.route_code || '—'}</div>
-                        <div className="truncate text-[11px] text-dark-500">{p.driver_name || '—'}</div>
-                      </div>
-                      <div className="hidden text-right text-[12px] tabular-nums text-dark-400 sm:block">
-                        {fmtTime(p.updated_at)}{mins != null && <div className="text-[10px] text-red-400/80">{mins}m</div>}
-                      </div>
-                    </button>
-                  )
-                })}
+                      <span className="text-[11px] font-semibold text-dark-400">{items.length} paq.</span>
+                    </div>
+                    <div className="divide-y divide-dark-800">
+                      {items.map(p => {
+                        const active = sel === p.tba
+                        const mins = p.state === 'MISSING' ? sinceMin(p.updated_at) : null
+                        return (
+                          <button key={p.tba} onClick={() => setSel(p.tba)}
+                            className={`grid w-full grid-cols-[1.6fr_.8fr_.6fr] items-center gap-2 px-4 py-2.5 text-left transition ${active ? 'bg-sky-500/[.07]' : 'hover:bg-dark-900/60'}`}>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 truncate font-semibold text-dark-50">{p.tba}
+                                {p.priority === 'critical' && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />}
+                              </div>
+                              <div className="truncate text-[11px] text-dark-500">{p.reference_id}</div>
+                            </div>
+                            <div><Statecap s={p.state} sm /></div>
+                            <div className="text-right text-[12px] tabular-nums text-dark-400">
+                              {fmtTime(p.updated_at)}{mins != null && <div className="text-[10px] text-red-400/80">{mins}m</div>}
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ))}
                 {pkgs.length === 0 && <div className="px-4 py-8 text-center text-sm text-dark-500">Sin paquetes para este filtro.</div>}
               </div>
             </div>
