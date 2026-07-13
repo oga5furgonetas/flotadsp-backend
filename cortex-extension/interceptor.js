@@ -145,7 +145,7 @@
   const TBA_RE = /^(?:TBA[A-Z0-9]{6,}|ES\d{8,})$/i;
   const KEYS = {
     tba: ['containerScannableId', 'scannableId', 'trackingId', 'trackingNumber', 'tba', 'packageId', 'parcelId', 'shipmentId', 'addressId'],
-    state: ['taskState', 'executionStatus', 'deliveryStatus', 'status', 'state', 'packageStatus', 'stopState', 'taskStatus'],
+    state: ['taskState', 'executionStatus', 'deliveryStatus', 'status', 'state', 'packageStatus', 'stopState', 'taskStatus', 'reasonCode', 'missingReason', 'exceptionReason', 'reason'],
     stop: ['stopId', 'stopNumber', 'sequenceId', 'sequenceNumber', 'stopSequence', 'stop', 'stopKey'],
     address: ['address', 'formattedAddress', 'addressLine', 'destinationAddress', 'shortAddress', 'addressLine1'],
     container: ['containerId', 'toteId', 'binId', 'bagId', 'overrideContainerId', 'containerLabel'],

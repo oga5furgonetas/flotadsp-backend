@@ -17504,6 +17504,10 @@ def _cortex_evaluate(pkg: dict) -> dict:
     if idx_missing is not None:
         prev = [s for s in seq[:idx_missing] if s in ("ATTEMPTED", "ARRIVED", "LOADED")]
         attempted_before_missing = bool(prev) and prev[-1] == "ATTEMPTED"
+    # ¿Se llegó a ver en la furgoneta antes del Missing? Si no, es "falta en
+    # carga": nunca subió a la ruta y no tiene sentido buscarlo en el vehículo.
+    never_on_van = idx_missing is not None and not any(
+        s in ("LOADED", "ARRIVED", "ATTEMPTED") for s in seq[:idx_missing])
 
     missing_at = _at(idx_missing) if idx_missing is not None else None
     mins_missing = _mins_since(missing_at)
@@ -17516,6 +17520,8 @@ def _cortex_evaluate(pkg: dict) -> dict:
         priority, reason = "critical", "Paquete dado por perdido (Lost)."
     elif state == "MISSING" and attempted_before_missing:
         priority, reason = "critical", "Transición Attempted → Missing: probablemente estaba en la furgoneta."
+    elif state == "MISSING" and never_on_van:
+        priority, reason = "medium", "Falta en carga: nunca se escaneó en la furgoneta."
     elif state == "MISSING" and mins_missing is not None and mins_missing >= 15:
         priority, reason = "high", f"Missing desde hace {mins_missing} min sin resolver."
     elif state == "MISSING":
@@ -17542,6 +17548,11 @@ def _cortex_evaluate(pkg: dict) -> dict:
             text = ("El paquete se cargó pero nunca se intentó entregar ni llegó a la parada. "
                     "Puede seguir en la furgoneta o no haberse escaneado correctamente al cargar. "
                     + (f"Revisa el contenedor {container}." if container else "Revisa la carga y el tote."))
+        elif never_on_van:
+            rec_type, confidence = "missing_at_load", 0.8
+            text = ("Falta en carga: el paquete nunca se escaneó en la furgoneta (ni Loaded, ni Arrived, "
+                    "ni Attempted). Lo más probable es que no saliera de la estación: reclámalo como falta "
+                    "en carga y no pierdas tiempo buscándolo en el vehículo.")
         else:
             text = ("Missing sin un Attempted previo claro. Revisa el último escaneo del paquete y "
                     "el tote del stop antes de darlo por perdido.")
@@ -17606,6 +17617,13 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     last = (pkg.get("timeline") or [{}])[-1]
     if last.get("state") == state:
         await db.cortex_packages.update_one({"tba": tba}, {"$set": common})
+        return "same"
+    # Una observación SIN estado (OBSERVED) nunca degrada un estado real ya
+    # conocido: solo refresca metadatos (ruta, conductor, dirección…).
+    if state == "OBSERVED" and last.get("state") not in (None, "", "OBSERVED"):
+        meta = {k: v for k, v in common.items() if k not in ("state", "updated_at") and v not in (None, "")}
+        if meta:
+            await db.cortex_packages.update_one({"tba": tba}, {"$set": meta})
         return "same"
     # Cambio de estado real → histórico + timeline
     doc = {**pkg, **common, "timeline": (pkg.get("timeline") or []) + [ev]}
