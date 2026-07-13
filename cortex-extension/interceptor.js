@@ -44,7 +44,7 @@
     if (typeof v === 'string') return v.length > 32 ? 'str' : v; // conserva valores cortos (estados)
     return typeof v;
   };
-  let schemaSent = false;
+  let schemaSent = false, schemaSummarySent = false;
 
   // Auto-refresco: memorizamos las URLs GET de Cortex que devuelven paquetes y
   // las volvemos a pedir nosotros cada pocos minutos. Así todas las rutas se
@@ -76,15 +76,18 @@
       const h = u.searchParams.get('historicalDay'); if (h != null) histParam = h;
     } catch (_) {}
   };
+  const ROUTE_ID_RE = /^\d{5,}-\d{1,3}$/; // p.ej. 7624078-2 (formato distintivo)
   const collectRoutes = (json) => {
     const ids = new Set(); let sa = null;
     const walk = (n) => {
       if (Array.isArray(n)) { for (const x of n) walk(x); return; }
       if (!n || typeof n !== 'object') return;
       for (const [k, v] of Object.entries(n)) {
-        if (/^routeId$/i.test(k) && typeof v === 'string' && /^\d+-\d+$/.test(v)) ids.add(v);
-        if (/serviceAreaId/i.test(k) && typeof v === 'string' && v.length > 8 && !sa) sa = v;
-        if (v && typeof v === 'object') walk(v);
+        if (typeof v === 'string') {
+          // Cualquier valor con forma de routeId, sin depender del nombre de la clave.
+          if (ROUTE_ID_RE.test(v)) ids.add(v);
+          else if (/serviceAreaId/i.test(k) && v.length > 8 && !sa) sa = v;
+        } else if (v && typeof v === 'object') walk(v);
       }
     };
     walk(json);
@@ -289,11 +292,17 @@
       if (parsed && isSummary) harvestRoutes(parsed);
       let packages = [];
       if (parsed && (marked || isDetails)) packages = extractRouteDetails(parsed) || extract(parsed);
-      // Diagnóstico de estructura: esquema de route-details (una vez).
+      // Diagnóstico de estructura: esquema de route-details y de route-summaries.
       if (!schemaSent && isDetails && parsed) {
         try {
           schemaSent = true;
-          post({ kind: 'schema', url: url.slice(0, 120), schema: JSON.stringify(schemaOf(parsed, 0)).slice(0, 7000) });
+          post({ kind: 'schema', which: 'details', url: url.slice(0, 120), schema: JSON.stringify(schemaOf(parsed, 0)).slice(0, 7000) });
+        } catch (_) {}
+      }
+      if (!schemaSummarySent && isSummary && parsed) {
+        try {
+          schemaSummarySent = true;
+          post({ kind: 'schema', which: 'summary', url: url.slice(0, 120), schema: JSON.stringify(schemaOf(parsed, 0)).slice(0, 7000) });
         } catch (_) {}
       }
       // Diagnóstico: registra CADA respuesta relevante, aunque saque 0 paquetes.

@@ -107,8 +107,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     return false;
   }
   if (msg?.type === 'schema') {
+    const key = msg.which === 'summary' ? 'schemaSummary' : 'schema';
     chrome.storage.local.get({ diag: {} }).then(({ diag }) =>
-      chrome.storage.local.set({ diag: { ...diag, schema: msg.schema || '', schemaUrl: msg.url || '', at: Date.now() } }));
+      chrome.storage.local.set({ diag: { ...diag, [key]: msg.schema || '', schemaUrl: msg.url || '', at: Date.now() } }));
     return false;
   }
   if (msg?.type === 'flushNow') { flush().then(() => reply?.({ ok: true })); return true; }
