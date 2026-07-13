@@ -17782,5 +17782,15 @@ async def cortex_seed_demo(_=Depends(require_admin)):
     return {"ok": True, "seeded": len(demos)}
 
 
+@api_router.post("/cortex/clear-demo")
+async def cortex_clear_demo(_=Depends(require_admin)):
+    """Borra los paquetes de demostración (TBADEMO*) y su historial de eventos,
+    para que no contaminen KPIs ni alertas cuando ya llegan datos reales."""
+    q = {"tba": {"$regex": "^TBADEMO"}}
+    p = await db.cortex_packages.delete_many(q)
+    e = await db.cortex_events.delete_many(q)
+    return {"ok": True, "packages_deleted": p.deleted_count, "events_deleted": e.deleted_count}
+
+
 app.include_router(auth_router)
 app.include_router(api_router)

@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import {
   cortexOverview, cortexPackages, cortexPackage, cortexAlerts,
-  cortexIngestToken, cortexSeedDemo,
+  cortexIngestToken, cortexSeedDemo, cortexClearDemo,
 } from '../api'
 
 /* ── Estados de paquete: color + etiqueta ── */
@@ -214,7 +214,10 @@ export default function PackageIntel() {
   useEffect(() => { const iv = setInterval(load, 30000); return () => clearInterval(iv) }, [load])
 
   const seed = async () => { setSeeding(true); try { await cortexSeedDemo(); await load() } finally { setSeeding(false) } }
+  const clearDemo = async () => { setSeeding(true); try { await cortexClearDemo(); setSel(null); await load() } finally { setSeeding(false) } }
   const empty = !loading && pkgs.length === 0
+  const hasDemo = pkgs.some(p => (p.tba || '').startsWith('TBADEMO')) ||
+    alerts.some(a => (a.tba || '').startsWith('TBADEMO'))
 
   const filters = [['', 'Todos'], ['MISSING', 'Missing'], ['ATTEMPTED', 'Intentados'], ['RECOVERED', 'Recuperados'], ['DELIVERED', 'Entregados']]
 
@@ -232,9 +235,17 @@ export default function PackageIntel() {
             <PackageSearch size={22} className="text-sky-400" /> Centro de Investigación de Paquetes
           </h1>
         </div>
-        <button onClick={load} className="inline-flex items-center gap-2 rounded-lg border border-dark-700 bg-dark-900 px-3 py-2 text-[13px] font-semibold text-dark-200 hover:border-dark-600">
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar
-        </button>
+        <div className="flex items-center gap-2">
+          {hasDemo && (
+            <button onClick={clearDemo} disabled={seeding} title="Borra los paquetes de demostración (TBADEMO*)"
+              className="inline-flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] font-semibold text-amber-300 hover:border-amber-500/50 disabled:opacity-60">
+              {seeding ? <Loader2 size={14} className="animate-spin" /> : <X size={14} />} Limpiar demo
+            </button>
+          )}
+          <button onClick={load} className="inline-flex items-center gap-2 rounded-lg border border-dark-700 bg-dark-900 px-3 py-2 text-[13px] font-semibold text-dark-200 hover:border-dark-600">
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar
+          </button>
+        </div>
       </div>
 
       {/* KPIs */}

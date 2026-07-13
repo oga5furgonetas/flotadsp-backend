@@ -54,9 +54,17 @@
     return null;
   };
 
+  let sampled = false; // volcamos UNA muestra del nodo real al console para diagnosticar campos
   const buildObs = (node, ctx) => {
     const tba = pickTba(node);
     if (!tba) return null;
+    if (!sampled) {
+      sampled = true;
+      try {
+        console.log('%c[FlotaDSP] muestra de paquete (campos reales de Cortex):', 'color:#fb923c;font-weight:bold', Object.keys(node));
+        console.log('[FlotaDSP] nodo completo →', JSON.parse(JSON.stringify(node)));
+      } catch (_) {}
+    }
     const evs = firstKey(node, KEYS.events);
     let events = null;
     if (Array.isArray(evs)) {
