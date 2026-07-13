@@ -2020,6 +2020,12 @@ async def _get_vehicle_ledger(vehicle_id: str, exclude_inspection_id: str = None
     if entries:
         return [e for e in entries if e.get("first_seen_inspection") != exclude_inspection_id]
 
+    # Tras una reconstrucción de flota el ledger es autoritativo: NO se
+    # autorrellena desde el histórico viejo (se repobla con el modelo nuevo).
+    veh = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "ledger_reset_at": 1})
+    if veh and veh.get("ledger_reset_at"):
+        return []
+
     # Backfill desde el historial (excluida la inspección en curso si reanaliza)
     q = {"deleted": {"$ne": True}, "vehicle_id": vehicle_id,
          "analysis_status": "ok", "analysis": {"$ne": None},
@@ -10236,6 +10242,60 @@ async def fix_centers(_=Depends(require_admin)):
 # =========================
 # REPROCESAR INSPECCIONES FALLIDAS
 # =========================
+
+@api_router.post("/inspections/rebuild-fleet-damages")
+async def rebuild_fleet_damages(_=Depends(require_admin)):
+    """Reconstrucción del registro de daños de TODA la flota con el modelo nuevo.
+
+    Pensado para partir limpio tras la fase de pruebas/entrenamiento de peritos:
+    1) Archiva el ledger actual (no lo borra: status=archived, reversible).
+    2) Marca cada vehículo como 'reset' → deja de autorrellenarse del histórico viejo.
+    3) Reencola la ÚLTIMA inspección con fotos de cada vehículo para reanalizarla
+       con el modelo actual (el ciclo automático la procesa; 5 cada 10 min).
+    4) Las deja sin revisar → caen en Revisión Rápida para que el humano valide.
+    """
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    # 1) Archivar el ledger vigente (reversible)
+    arch = await db.vehicle_damage_ledger.update_many(
+        {"status": "open"},
+        {"$set": {"status": "archived", "archived_at": now_iso, "archived_reason": "rebuild_fleet"}})
+
+    # 3) Última inspección con fotos por vehículo (analizada o no)
+    pipeline = [
+        {"$match": {"deleted": {"$ne": True}, "vehicle_id": {"$ne": None},
+                    "photos": {"$exists": True, "$ne": []}}},
+        {"$sort": {"created_at": -1}},
+        {"$group": {"_id": "$vehicle_id", "insp_id": {"$first": "$id"}}},
+    ]
+    latest = await db.inspections.aggregate(pipeline).to_list(5000)
+    insp_ids = [d["insp_id"] for d in latest if d.get("insp_id")]
+    veh_ids = [d["_id"] for d in latest if d.get("_id")]
+
+    # 2) Marcar vehículos como reset (los que se van a reconstruir)
+    if veh_ids:
+        await db.vehicles.update_many(
+            {"id": {"$in": veh_ids}}, {"$set": {"ledger_reset_at": now_iso}})
+
+    # 4) Reencolar para reanálisis + dejar sin revisar (entran en la cola)
+    if insp_ids:
+        await db.inspections.update_many(
+            {"id": {"$in": insp_ids}},
+            {"$set": {"analysis_status": "pending", "analysis_error": None,
+                      "auto_retries": 0, "reviewed": False}})
+
+    n = len(insp_ids)
+    return {
+        "ok": True,
+        "archived_ledger_entries": arch.modified_count,
+        "vehicles_reset": len(veh_ids),
+        "inspections_requeued": n,
+        "message": (f"{n} furgonetas en reconstrucción. El modelo nuevo reanaliza su "
+                    f"última inspección (5 cada 10 min, ~{max(1, (n + 29) // 30)} h) y "
+                    f"aparecerán en Revisión Rápida para que las valides."),
+    }
+
 
 @api_router.post("/inspections/reanalyze-failed")
 async def reanalyze_all_failed(_=Depends(require_admin)):

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useT } from '../../i18n'
 import { Loader2, BrainCircuit, RefreshCw, CheckCircle2, AlertTriangle, Clock, Image, Sparkles, X, ChevronLeft, ChevronRight, ThumbsUp, ThumbsDown, Pencil } from 'lucide-react'
-import { getHealth, getInspections, reanalyzeFailed, reanalyzeInspection, submitAiFeedback } from '../api'
+import { getHealth, getInspections, reanalyzeFailed, reanalyzeInspection, submitAiFeedback, rebuildFleetDamages } from '../api'
 import BboxEditor from '../components/BboxEditor'
 import PolygonEditor from '../components/PolygonEditor'
 
@@ -68,6 +68,22 @@ export default function IAPeritaje() {
     setBusy('all'); setMsg(null)
     try { const r = await reanalyzeFailed(); setMsg({ ok: true, t: `Reanálisis lanzado: ${r.data?.count ?? r.data?.reanalizadas ?? ''} inspecciones en cola.` }); setTimeout(loadInsps, 1500) }
     catch { setMsg({ ok: false, t: 'No se pudo lanzar el reanálisis.' }) } finally { setBusy('') }
+  }
+
+  async function doRebuildFleet() {
+    if (!window.confirm(
+      'RECONSTRUIR DAÑOS DE TODA LA FLOTA\n\n' +
+      '· Se archiva el registro de daños actual (no se borra, es reversible).\n' +
+      '· Se reanaliza con el modelo NUEVO la última inspección con fotos de cada furgoneta.\n' +
+      '· Los resultados aparecerán en Revisión Rápida para que los valides tú.\n\n' +
+      '¿Empezar la reconstrucción?')) return
+    setBusy('rebuild'); setMsg(null)
+    try {
+      const r = await rebuildFleetDamages()
+      setMsg({ ok: true, t: r.data?.message || `Reconstrucción iniciada para ${r.data?.inspections_requeued ?? 0} furgonetas.` })
+      setTimeout(loadInsps, 1500)
+    } catch { setMsg({ ok: false, t: 'No se pudo iniciar la reconstrucción de flota.' }) }
+    finally { setBusy('') }
   }
 
   async function doReanalyze(id) {
@@ -178,6 +194,22 @@ export default function IAPeritaje() {
       {/* Tab: Estado */}
       {tab === 'estado' && (
         <div>
+          {/* Reconstrucción de flota con el modelo nuevo */}
+          <div className="card mb-4 border border-amber-500/25 bg-amber-500/[.04] p-4">
+            <div className="flex items-center gap-2 text-sm font-semibold text-amber-300">
+              <Sparkles size={16} /> Reconstruir daños de la flota con el modelo nuevo
+            </div>
+            <p className="mt-1 text-[12.5px] leading-relaxed text-dark-400">
+              Archiva el registro actual (reversible), reanaliza la última inspección de cada furgoneta
+              con el modelo nuevo y te lo deja en <b className="text-dark-200">Revisión Rápida</b> para validar.
+              Ideal para partir limpio tras las pruebas de entrenamiento.
+            </p>
+            <button onClick={doRebuildFleet} disabled={busy === 'rebuild'}
+              className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-[13px] font-semibold text-amber-200 hover:border-amber-500/60 disabled:opacity-60">
+              {busy === 'rebuild' ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Reconstruir flota
+            </button>
+          </div>
+
           <button onClick={doReanalyzeFailed} disabled={busy === 'all' || (insps && failed.length === 0)} className="btn-primary mb-4 flex items-center gap-2 disabled:opacity-50">
             {busy === 'all' ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />} {t('ia.reanalyze.failed')} ({failed.length})
           </button>
