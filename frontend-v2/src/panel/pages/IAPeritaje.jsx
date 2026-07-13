@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { useT } from '../../i18n'
 import { Loader2, BrainCircuit, RefreshCw, CheckCircle2, AlertTriangle, Clock, Image, Sparkles, X, ChevronLeft, ChevronRight, ThumbsUp, ThumbsDown, Pencil } from 'lucide-react'
 import { getHealth, getInspections, reanalyzeFailed, reanalyzeInspection, submitAiFeedback, rebuildFleetDamages, rebuildStatus } from '../api'
-import { isSuperAdmin } from '../auth'
 import BboxEditor from '../components/BboxEditor'
 import PolygonEditor from '../components/PolygonEditor'
 
@@ -59,14 +58,8 @@ export default function IAPeritaje() {
     getHealth().then((r) => setHealth(r.data)).catch(() => setHealth(null))
     loadInsps()
     loadRebuild()
-    // Auto-lanzamiento (una sola vez, solo super-admin): deja armada la
-    // reconstrucción de flota para que se ejecute sola al abrir esta pantalla.
-    if (isSuperAdmin() && !localStorage.getItem('flotadsp_fleet_rebuilt_v2')) {
-      localStorage.setItem('flotadsp_fleet_rebuilt_v2', new Date().toISOString())
-      rebuildFleetDamages()
-        .then((r) => { setMsg({ ok: true, t: r.data?.message || 'Reconstrucción de flota iniciada.' }); loadRebuild(); loadInsps() })
-        .catch(() => { /* si ya estaba en marcha, no pasa nada */ })
-    }
+    // (La reconstrucción se lanza SOLO con el botón, para no gastar cuota de IA
+    //  sin querer; con plan gratuito de Gemini hay que dosificarla.)
   }, [])
   // Mientras la reconstrucción está activa, refrescar el progreso cada 20 s.
   useEffect(() => {

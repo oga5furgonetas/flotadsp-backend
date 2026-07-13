@@ -6622,6 +6622,10 @@ async def start_analysis_recovery():
                 # 14 días: una caída larga (p. ej. créditos de Gemini agotados
                 # durante días) no debe dejar inspecciones huérfanas sin análisis.
                 cutoff_recent = (now - timedelta(days=14)).isoformat()
+                # La reconstrucción de flota (rebuild_pass) NO se procesa aquí:
+                # con cuota gratuita (20/día) agotaría el cupo y dejaría sin IA a
+                # las operaciones diarias (plantillas, inspecciones reales). Se
+                # procesa aparte, con presupuesto propio y a ritmo lento.
                 stuck = await db.inspections.find({
                     "$and": [
                         {"$or": [
@@ -6629,11 +6633,22 @@ async def start_analysis_recovery():
                             {"analysis_status": {"$in": ["error", "gemini_failed", "gemini_timeout"]},
                              "created_at": {"$gt": cutoff_recent}},
                         ]},
+                        {"rebuild_pass": {"$exists": False}},
                         {"auto_retries": {"$not": {"$gte": 3}}},
                         {"photos": {"$exists": True, "$ne": []}},
                         {"deleted": {"$ne": True}},
                     ]
                 }, {"_id": 0, "id": 1, "analysis_status": 1}).sort("created_at", -1).to_list(5)
+
+                # Reconstrucción de flota: MÁXIMO 3 furgonetas por ciclo (~10 min)
+                # y solo si el modelo base tiene cuota. Así no ahoga las operaciones.
+                if not _is_daily_exhausted("gemini-2.5-flash"):
+                    rebuild_stuck = await db.inspections.find({
+                        "rebuild_pass": {"$exists": True}, "inventory_done": {"$ne": True},
+                        "analysis_status": "pending", "auto_retries": {"$not": {"$gte": 3}},
+                        "photos": {"$exists": True, "$ne": []}, "deleted": {"$ne": True},
+                    }, {"_id": 0, "id": 1, "analysis_status": 1}).sort("created_at", -1).to_list(2)
+                    stuck = stuck + rebuild_stuck
 
                 for insp in stuck:
                     iid = insp["id"]
@@ -17103,18 +17118,36 @@ def _match_score(name_a: str, name_b: str) -> float:
 
 async def _gemini_extract(client, model_name: str, prompt: str, img_bytes: bytes) -> dict:
     from google.genai import types as genai_types
-    resp = await asyncio.wait_for(
-        asyncio.to_thread(
-            lambda: client.models.generate_content(
-                model=model_name,
-                contents=[prompt, genai_types.Part.from_bytes(data=img_bytes, mime_type=_mime_type(img_bytes))],
-                config=genai_types.GenerateContentConfig(temperature=0.0),
-            )
-        ),
-        timeout=120,
-    )
-    raw = _strip_markdown_json((resp.text or "").strip())
-    return json.loads(raw)
+    part = genai_types.Part.from_bytes(data=img_bytes, mime_type=_mime_type(img_bytes))
+    cfg = genai_types.GenerateContentConfig(temperature=0.0)
+    # Cadena de respaldo: si el modelo principal tiene la cuota DIARIA agotada
+    # (429 per-day), probamos con otros que tienen su propia cuota. Así Plantilla
+    # sigue funcionando aunque una inspección/otra tarea haya gastado el modelo base.
+    chain = [model_name, "gemini-flash-latest", "gemini-2.5-flash-lite", "gemini-flash-lite-latest"]
+    seen, models = set(), []
+    for m in chain:
+        if m and m not in seen:
+            seen.add(m); models.append(m)
+    last_err = None
+    for m in models:
+        if _is_daily_exhausted(m):
+            continue
+        try:
+            resp = await asyncio.wait_for(
+                asyncio.to_thread(lambda mm=m: client.models.generate_content(
+                    model=mm, contents=[prompt, part], config=cfg)),
+                timeout=120)
+            raw = _strip_markdown_json((resp.text or "").strip())
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            raise
+        except Exception as e:
+            last_err = e
+            if "429" in str(e) and _is_perday_429(str(e)):
+                _mark_daily_exhausted(m)
+                continue  # cuota diaria de ESTE modelo agotada → siguiente
+            raise
+    raise last_err or RuntimeError("Sin modelos Gemini disponibles (cuota agotada)")
 
 
 # ── Paso 1: extraer datos con Gemini, devuelve JSON para preview ──
