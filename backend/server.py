@@ -17641,7 +17641,7 @@ async def cortex_ingest(request: Request):
         raise HTTPException(status_code=400, detail="Formato inválido: se espera 'packages': [...]")
     captured_at = body.get("captured_at")
     stats = {"new": 0, "changed": 0, "same": 0}
-    for obs in packages[:2000]:
+    for obs in packages[:6000]:
         try:
             stats[await _cortex_apply_observation(obs, captured_at)] += 1
         except Exception as e:
@@ -17678,7 +17678,7 @@ async def cortex_days(_=Depends(require_admin)):
 @api_router.get("/cortex/overview")
 async def cortex_overview(day: str = "", _=Depends(require_admin)):
     today = (day or datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-    pkgs = await db.cortex_packages.find(_cortex_day_query(today), {"_id": 0}).to_list(5000)
+    pkgs = await db.cortex_packages.find(_cortex_day_query(today), {"_id": 0}).to_list(20000)
     n = len(pkgs)
     missing = [p for p in pkgs if p.get("state") == "MISSING"]
     recovered_today, lost, missing_today, rec_times, attempts_pre = [], [], [], [], []
@@ -17721,9 +17721,48 @@ async def cortex_overview(day: str = "", _=Depends(require_admin)):
     }
 
 
+@api_router.get("/cortex/routes")
+async def cortex_routes(day: str = "", _=Depends(require_admin)):
+    """Resumen agregado por ruta: la vista principal cuando hay miles de paquetes."""
+    today = (day or datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    pkgs = await db.cortex_packages.find(
+        _cortex_day_query(today),
+        {"_id": 0, "route_code": 1, "driver_name": 1, "state": 1, "priority": 1, "updated_at": 1}).to_list(20000)
+    routes = {}
+    for p in pkgs:
+        rc = p.get("route_code") or "—"
+        r = routes.setdefault(rc, {"route_code": rc, "driver_name": None, "total": 0, "delivered": 0,
+                                   "missing": 0, "attempted": 0, "loaded": 0, "returned": 0, "other": 0,
+                                   "critical": 0, "updated_at": None})
+        r["total"] += 1
+        st = p.get("state")
+        if st == "DELIVERED":
+            r["delivered"] += 1
+        elif st in ("MISSING", "LOST"):
+            r["missing"] += 1
+        elif st in ("ATTEMPTED", "UNCOLLECTED"):
+            r["attempted"] += 1
+        elif st in ("LOADED", "ARRIVED"):
+            r["loaded"] += 1
+        elif st in ("RETURNED", "RECOVERED"):
+            r["returned"] += 1
+        else:
+            r["other"] += 1
+        if p.get("priority") == "critical":
+            r["critical"] += 1
+        if p.get("driver_name") and not r["driver_name"]:
+            r["driver_name"] = p["driver_name"]
+        u = p.get("updated_at")
+        if u and (not r["updated_at"] or u > r["updated_at"]):
+            r["updated_at"] = u
+    out = sorted(routes.values(), key=lambda r: str(r["route_code"] or ""))
+    return {"routes": out, "total_packages": len(pkgs)}
+
+
 @api_router.get("/cortex/packages")
-async def cortex_packages(q: str = "", state: str = "", priority: str = "", day: str = "", limit: int = 200,
-                          _=Depends(require_admin)):
+async def cortex_packages(q: str = "", state: str = "", priority: str = "", day: str = "", route: str = "",
+                          limit: int = 200, _=Depends(require_admin)):
+    limit = max(1, min(int(limit or 200), 6000))
     ands = []
     dq = _cortex_day_query(day)
     if dq:
@@ -17737,9 +17776,17 @@ async def cortex_packages(q: str = "", state: str = "", priority: str = "", day:
         query["state"] = state.upper()
     if priority:
         query["priority"] = priority.lower()
+    if route:
+        query["route_code"] = route
     if ands:
         query["$and"] = ands
     pkgs = await db.cortex_packages.find(query, {"_id": 0, "timeline": 0}).sort("updated_at", -1).to_list(limit)
+    if route:
+        # Dentro de una ruta se lee mejor por orden de parada.
+        def _stop_key(p):
+            s = str(p.get("stop_id") or "")
+            return (0, int(s)) if s.isdigit() else (1, 0)
+        pkgs.sort(key=_stop_key)
     return {"packages": pkgs}
 
 

@@ -198,6 +198,7 @@ export const forgotPassword = (email) => api.post('/auth/forgot-password', { ema
 /* ── Package Intelligence Center (Cortex) ── */
 export const cortexOverview = (day) => api.get('/cortex/overview', { params: { day } })
 export const cortexPackages = (params) => api.get('/cortex/packages', { params })
+export const cortexRoutes = (day) => api.get('/cortex/routes', { params: { day } })
 export const cortexPackage = (tba) => api.get(`/cortex/package/${tba}`)
 export const cortexAlerts = (day) => api.get('/cortex/alerts', { params: { day } })
 export const cortexHeatmap = (day) => api.get('/cortex/heatmap', { params: { day } })

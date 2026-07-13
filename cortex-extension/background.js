@@ -58,21 +58,33 @@ async function flush() {
     if (!packages.length) return;
     const { ingestToken, ingestUrl } = await cfg();
     if (!ingestToken) { await setState({ lastMessage: 'Falta el token: pégalo y pulsa Guardar.', ok: false }); return; }
+    // Envío por lotes de 500: con 40 rutas hay miles de paquetes y un solo POST
+    // gigante fallaría o superaría los límites del backend.
+    const CHUNK = 500;
+    let sentNow = 0, newN = 0, chgN = 0;
     try {
-      const r = await fetch(ingestUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': ingestToken },
-        body: JSON.stringify({ captured_at: new Date().toISOString(), packages }),
-      });
-      if (r.ok) {
+      for (let i = 0; i < packages.length; i += CHUNK) {
+        const part = packages.slice(i, i + CHUNK);
+        const r = await fetch(ingestUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': ingestToken },
+          body: JSON.stringify({ captured_at: new Date().toISOString(), packages: part }),
+        });
+        if (!r.ok) {
+          // La cola no se ha tocado: todo se reintentará en el próximo ciclo.
+          const body = await r.text().catch(() => '');
+          await setState({ lastMessage: `Error ${r.status}: ${body.slice(0, 80) || 'revisa el token'}`, ok: false });
+          return;
+        }
         const j = await r.json().catch(() => ({}));
-        const { sent = 0 } = await chrome.storage.local.get({ sent: 0 });
-        await chrome.storage.local.set({ queue: {}, sent: sent + packages.length });
-        await setState({ lastMessage: `Enviados ${packages.length} (${j.new || 0} nuevos, ${j.changed || 0} cambios).`, ok: true, buffered: 0 });
-      } else {
-        const body = await r.text().catch(() => '');
-        await setState({ lastMessage: `Error ${r.status}: ${body.slice(0, 80) || 'revisa el token'}`, ok: false });
+        newN += j.new || 0; chgN += j.changed || 0; sentNow += part.length;
       }
+      // Borra de la cola SOLO lo enviado (lo que llegó durante el envío se queda).
+      const { queue: q2 = {} } = await chrome.storage.local.get({ queue: {} });
+      for (const o of packages) delete q2[o.tba];
+      const { sent = 0 } = await chrome.storage.local.get({ sent: 0 });
+      await chrome.storage.local.set({ queue: q2, sent: sent + sentNow });
+      await setState({ lastMessage: `Enviados ${sentNow} (${newN} nuevos, ${chgN} cambios).`, ok: true, buffered: Object.keys(q2).length });
     } catch (e) {
       await setState({ lastMessage: `Sin conexión, reintentando… (${String(e.message || e).slice(0, 50)})`, ok: false });
     }

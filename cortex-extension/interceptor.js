@@ -52,15 +52,39 @@
   const knownGets = new Set();
   const rememberGet = (url, method) => {
     if ((method || 'GET').toUpperCase() !== 'GET') return;
-    if (!/^https?:\/\/[^/]*amazon\.es/i.test(url)) return;
-    knownGets.add(url);
-    if (knownGets.size > 60) knownGets.delete(knownGets.values().next().value);
+    let abs;
+    try { abs = new URL(url, location.origin).href; } catch (_) { return; }
+    if (!/amazon\.es\//i.test(abs)) return;
+    knownGets.add(abs);
+    if (knownGets.size > 100) knownGets.delete(knownGets.values().next().value);
+  };
+
+  // Cabeceras que la propia página usa con la API de Cortex (csrf, accept…).
+  // Las copiamos en nuestras peticiones para que el servidor las acepte igual.
+  let apiHeaders = {};
+  const noteHeaders = (h) => {
+    if (!h || typeof h !== 'object') return;
+    const clean = {};
+    for (const [k, v] of Object.entries(h)) {
+      if (typeof v === 'string' && !/^content-length$/i.test(k)) clean[k] = v;
+    }
+    apiHeaders = { ...apiHeaders, ...clean };
+  };
+  // Petición propia, educada y observable: mismas cabeceras que la página,
+  // y si falla (403/429…) lo apunta en la actividad para diagnosticarlo.
+  const syntheticFetch = (url) => {
+    try {
+      window.fetch(url, { credentials: 'include', headers: { accept: 'application/json, text/plain, */*', ...apiHeaders } })
+        .then((r) => {
+          if (!r || !r.ok) post({ kind: 'debug', url: `HTTP ${r ? r.status : '?'} · ${url.replace(/^https?:\/\/[^/]+/, '').slice(0, 100)}`, count: 0, bytes: 0 });
+        })
+        .catch(() => post({ kind: 'debug', url: `sin respuesta · ${url.replace(/^https?:\/\/[^/]+/, '').slice(0, 100)}`, count: 0, bytes: 0 }));
+    } catch (_) {}
   };
   const replay = () => {
     let i = 0;
     for (const url of knownGets) {
-      const d = (i++) * 300; // escalona para no golpear a Cortex de golpe
-      setTimeout(() => { try { window.fetch(url, { credentials: 'include' }).catch(() => {}); } catch (_) {} }, d);
+      setTimeout(() => syntheticFetch(url), (i++) * 1000); // 1 req/s: ritmo suave
     }
   };
   setInterval(replay, 180000); // cada 3 min
@@ -97,16 +121,20 @@
   const harvestRoutes = (summaryJson) => {
     const { ids, sa } = collectRoutes(summaryJson);
     if (sa && !saId) saId = sa;
-    let i = 0;
+    let i = 0, nuevos = 0;
     for (const id of ids) {
       if (fetchedRoutes.has(id)) continue;
       fetchedRoutes.add(id);
+      nuevos++;
       const url = `${location.origin}/operations/execution/api/route-details/${id}`
         + `?historicalDay=${histParam}&routeId=${id}${saId ? `&serviceAreaId=${saId}` : ''}`;
       knownGets.add(url); // el replay periódico lo mantendrá fresco
-      setTimeout(() => { try { window.fetch(url, { credentials: 'include' }).catch(() => {}); } catch (_) {} }, (i++) * 400);
+      setTimeout(() => syntheticFetch(url), (i++) * 1500); // 1 ruta cada 1,5 s
     }
-    if (ids.length) console.log(`%c[FlotaDSP] ${ids.length} rutas descubiertas → pidiendo detalle de todas`, 'color:#fb923c;font-weight:bold');
+    if (nuevos) {
+      console.log(`%c[FlotaDSP] ${nuevos} rutas descubiertas → pidiendo detalle de todas`, 'color:#fb923c;font-weight:bold');
+      post({ kind: 'debug', url: `descubiertas ${nuevos} rutas → cargando todas…`, count: nuevos, bytes: 0 });
+    }
   };
 
   const RELEVANT_URL = /route|task|stop|package|parcel|delivery|itinerary|summar|scan|assign/i;
@@ -322,6 +350,19 @@
   // ── fetch ──
   const origFetch = window.fetch;
   window.fetch = function (...args) {
+    // Aprende las cabeceras que la página usa con la API de Cortex.
+    try {
+      const u0 = (typeof args[0] === 'string' ? args[0] : args[0]?.url) || '';
+      if (/route-details|route-summaries/i.test(u0)) {
+        const hh = (args[1] && args[1].headers) || (typeof args[0] === 'object' && args[0]?.headers) || null;
+        if (hh) {
+          const h = {};
+          if (typeof hh.forEach === 'function') hh.forEach((v, k) => { h[k] = v; });
+          else Object.assign(h, hh);
+          noteHeaders(h);
+        }
+      }
+    } catch (_) {}
     const p = origFetch.apply(this, args);
     p.then((res) => {
       try {
@@ -343,8 +384,16 @@
     this.__flotadspMethod = method;
     return origOpen.call(this, method, url, ...rest);
   };
+  const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+  XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
+    try { (this.__flotadspHdrs = this.__flotadspHdrs || {})[k] = v; } catch (_) {}
+    return origSetHeader.call(this, k, v);
+  };
   const origSend = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.send = function (...args) {
+    try {
+      if (/route-details|route-summaries/i.test(this.__flotadspUrl || '')) noteHeaders(this.__flotadspHdrs);
+    } catch (_) {}
     this.addEventListener('load', function () {
       try {
         const rt = this.responseType;

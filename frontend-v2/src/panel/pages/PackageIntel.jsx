@@ -4,7 +4,7 @@ import {
   MapPin, User, Route as RouteIcon, Box, Clock, Zap, Copy, Check, Loader2, X, Calendar,
 } from 'lucide-react'
 import {
-  cortexOverview, cortexPackages, cortexPackage, cortexAlerts,
+  cortexOverview, cortexPackages, cortexPackage, cortexAlerts, cortexRoutes,
   cortexIngestToken, cortexSeedDemo, cortexClearDemo, cortexDays, cortexReset,
 } from '../api'
 
@@ -205,6 +205,37 @@ function SetupCard({ onSeed, onReset, seeding }) {
   )
 }
 
+/* ── Tarjeta de ruta (vista principal con miles de paquetes) ── */
+function RouteCard({ r, onOpen }) {
+  const done = r.total ? Math.round(100 * r.delivered / r.total) : 0
+  const chip = (n, cls, label) => n > 0 && (
+    <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${cls}`}>{n} {label}</span>
+  )
+  return (
+    <button onClick={onOpen}
+      className="group flex flex-col rounded-2xl border border-dark-800 bg-dark-900/60 p-4 text-left transition hover:border-sky-500/40 hover:bg-dark-900">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-[15px] font-black text-dark-50">
+          <RouteIcon size={15} className="text-sky-400" /> {r.route_code}
+          {r.critical > 0 && <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />}
+        </div>
+        <span className="font-mono text-[11px] font-bold tabular-nums text-dark-400">{r.total}</span>
+      </div>
+      <div className="mt-1 truncate text-[12px] text-dark-500">{r.driver_name || 'Sin conductor'}</div>
+      {/* Barra de progreso de entregas */}
+      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-dark-800">
+        <div className="h-full rounded-full bg-emerald-500/80" style={{ width: `${done}%` }} />
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <span className="text-[11px] font-bold text-emerald-400">{done}%</span>
+        {chip(r.missing, 'bg-red-500/15 text-red-300', 'missing')}
+        {chip(r.attempted, 'bg-amber-500/15 text-amber-300', 'intent.')}
+        {chip(r.loaded, 'bg-sky-500/15 text-sky-300', 'en ruta')}
+      </div>
+    </button>
+  )
+}
+
 export default function PackageIntel() {
   const [ov, setOv] = useState(null)
   const [pkgs, setPkgs] = useState([])
@@ -217,19 +248,28 @@ export default function PackageIntel() {
   const [day, setDay] = useState(todayISO())
   const [days, setDays] = useState([])
   const [showSetup, setShowSetup] = useState(false)
+  const [routes, setRoutes] = useState([])
+  const [activeRoute, setActiveRoute] = useState(null) // ruta abierta (o null = vista de rutas)
   const qRef = useRef('')
 
   const load = useCallback(async () => {
     try {
-      const [o, p, a] = await Promise.all([
-        cortexOverview(day), cortexPackages({ q: qRef.current, state: filter, day, limit: 300 }), cortexAlerts(day),
-      ])
-      setOv(o.data); setPkgs(p.data.packages || []); setAlerts(a.data.alerts || [])
+      const searching = (qRef.current || '').trim().length > 0
+      const inRoute = !!activeRoute
+      const [o, r, a] = await Promise.all([cortexOverview(day), cortexRoutes(day), cortexAlerts(day)])
+      setOv(o.data); setRoutes(r.data.routes || []); setAlerts(a.data.alerts || [])
+      // Solo pedimos paquetes cuando hace falta: buscando o dentro de una ruta.
+      if (searching || inRoute) {
+        const p = await cortexPackages({ q: qRef.current, state: filter, day, route: inRoute ? activeRoute : '', limit: inRoute ? 6000 : 300 })
+        setPkgs(p.data.packages || [])
+      } else {
+        setPkgs([])
+      }
     } catch { /* red */ }
     setLoading(false)
-  }, [filter, day])
+  }, [filter, day, activeRoute])
 
-  useEffect(() => { cortexDays().then(r => setDays(r.data.days || [])).catch(() => {}) }, [pkgs.length])
+  useEffect(() => { cortexDays().then(r => setDays(r.data.days || [])).catch(() => {}) }, [routes.length])
 
   useEffect(() => { qRef.current = q }, [q])
   useEffect(() => { load() }, [load])
@@ -243,19 +283,10 @@ export default function PackageIntel() {
     if (!window.confirm('¿Borrar TODOS los paquetes de Cortex y empezar de cero?\nLa extensión los volverá a cargar solos al capturar las rutas.')) return
     setSeeding(true); try { await cortexReset(); setSel(null); await load() } finally { setSeeding(false) }
   }
-  const empty = !loading && pkgs.length === 0 && days.length === 0
-  // Agrupado por ruta para que 500+ paquetes no salgan en un montón plano.
-  const groups = useMemo(() => {
-    const m = new Map()
-    for (const p of pkgs) {
-      const k = p.route_code || '—'
-      if (!m.has(k)) m.set(k, [])
-      m.get(k).push(p)
-    }
-    return [...m.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0]), 'es', { numeric: true }))
-  }, [pkgs])
-  const hasDemo = pkgs.some(p => (p.tba || '').startsWith('TBADEMO')) ||
-    alerts.some(a => (a.tba || '').startsWith('TBADEMO'))
+  const searching = (q || '').trim().length > 0
+  const empty = !loading && routes.length === 0 && days.length === 0
+  const hasDemo = alerts.some(a => (a.tba || '').startsWith('TBADEMO')) ||
+    pkgs.some(p => (p.tba || '').startsWith('TBADEMO'))
 
   const filters = [['', 'Todos'], ['MISSING', 'Missing'], ['ATTEMPTED', 'Intentados'], ['RECOVERED', 'Recuperados'], ['DELIVERED', 'Entregados']]
 
@@ -315,61 +346,79 @@ export default function PackageIntel() {
         <div className="mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={reset} seeding={seeding} /></div>
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_420px]">
-          {/* Columna izquierda: buscador + lista */}
+          {/* Columna izquierda */}
           <div className="min-w-0">
+            {/* Buscador + navegación */}
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <div className="relative min-w-[220px] flex-1">
+              {activeRoute && !searching && (
+                <button onClick={() => { setActiveRoute(null); setSel(null) }}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-dark-700 bg-dark-900 px-3 py-2 text-[13px] font-semibold text-dark-200 hover:border-dark-600">
+                  ← Rutas
+                </button>
+              )}
+              <div className="relative min-w-[200px] flex-1">
                 <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />
-                <input value={q} onChange={e => setQ(e.target.value)} placeholder="TBA, ruta, conductor, dirección, stop…"
+                <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar TBA, conductor, dirección, stop…"
                   className="w-full rounded-lg border border-dark-700 bg-dark-900 py-2 pl-9 pr-3 text-[13px] text-dark-100 placeholder-dark-500 outline-none focus:border-sky-500/50" />
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {filters.map(([v, l]) => (
-                  <button key={v} onClick={() => setFilter(v)} className={`rounded-lg px-3 py-1.5 text-[12px] font-semibold ring-1 ${filter === v ? 'bg-sky-500/15 text-sky-300 ring-sky-500/30' : 'bg-dark-900 text-dark-400 ring-dark-700 hover:text-dark-200'}`}>{l}</button>
-                ))}
-              </div>
+              {(activeRoute || searching) && (
+                <div className="flex flex-wrap gap-1.5">
+                  {filters.map(([v, l]) => (
+                    <button key={v} onClick={() => setFilter(v)} className={`rounded-lg px-3 py-1.5 text-[12px] font-semibold ring-1 ${filter === v ? 'bg-sky-500/15 text-sky-300 ring-sky-500/30' : 'bg-dark-900 text-dark-400 ring-dark-700 hover:text-dark-200'}`}>{l}</button>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div className="overflow-hidden rounded-2xl border border-dark-800">
-              <div className="hidden grid-cols-[1.6fr_.8fr_.6fr] gap-2 border-b border-dark-800 bg-dark-900/60 px-4 py-2.5 text-[10px] font-bold uppercase tracking-wide text-dark-500 sm:grid">
-                <span>Paquete</span><span>Estado</span><span className="text-right">Hora</span>
-              </div>
-              <div className="max-h-[62vh] overflow-y-auto">
-                {groups.map(([route, items]) => (
-                  <div key={route}>
-                    <div className="sticky top-0 z-10 flex items-center justify-between border-b border-dark-800 bg-dark-900/95 px-4 py-2 backdrop-blur">
-                      <div className="flex items-center gap-2 text-[12px] font-bold text-dark-100">
-                        <RouteIcon size={13} className="text-sky-400" /> {route}
-                        {items.some(p => p.driver_name) && <span className="font-normal text-dark-500">· {items.find(p => p.driver_name)?.driver_name}</span>}
-                      </div>
-                      <span className="text-[11px] font-semibold text-dark-400">{items.length} paq.</span>
-                    </div>
-                    <div className="divide-y divide-dark-800">
-                      {items.map(p => {
-                        const active = sel === p.tba
-                        const mins = p.state === 'MISSING' ? sinceMin(p.updated_at) : null
-                        return (
-                          <button key={p.tba} onClick={() => setSel(p.tba)}
-                            className={`grid w-full grid-cols-[1.6fr_.8fr_.6fr] items-center gap-2 px-4 py-2.5 text-left transition ${active ? 'bg-sky-500/[.07]' : 'hover:bg-dark-900/60'}`}>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2 truncate font-semibold text-dark-50">{p.tba}
-                                {p.priority === 'critical' && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />}
-                              </div>
-                              <div className="truncate text-[11px] text-dark-500">{p.reference_id}</div>
-                            </div>
-                            <div><Statecap s={p.state} sm /></div>
-                            <div className="text-right text-[12px] tabular-nums text-dark-400">
-                              {fmtTime(p.updated_at)}{mins != null && <div className="text-[10px] text-red-400/80">{mins}m</div>}
-                            </div>
-                          </button>
-                        )
-                      })}
-                    </div>
+            {/* Vista de RUTAS (sin ruta abierta y sin buscar) */}
+            {!activeRoute && !searching ? (
+              <div>
+                <div className="mb-2 flex items-center justify-between text-[12px] text-dark-500">
+                  <span>{routes.length} rutas · {ov?.tracked?.toLocaleString('es-ES') || 0} paquetes</span>
+                  {loading && <Loader2 size={13} className="animate-spin" />}
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {routes.map(r => <RouteCard key={r.route_code} r={r} onOpen={() => { setActiveRoute(r.route_code); setSel(null); setFilter('') }} />)}
+                </div>
+                {routes.length === 0 && (
+                  <div className="rounded-2xl border border-dark-800 bg-dark-900/40 px-4 py-10 text-center text-sm text-dark-500">
+                    Aún no hay rutas para este día. Abre Cortex en la pantalla de rutas y espera unos minutos.
                   </div>
-                ))}
-                {pkgs.length === 0 && <div className="px-4 py-8 text-center text-sm text-dark-500">Sin paquetes para este filtro.</div>}
+                )}
               </div>
-            </div>
+            ) : (
+              /* Vista de PAQUETES (dentro de ruta o buscando) */
+              <div className="overflow-hidden rounded-2xl border border-dark-800">
+                <div className="flex items-center justify-between border-b border-dark-800 bg-dark-900/60 px-4 py-2.5">
+                  <span className="text-[12px] font-bold text-dark-100">{activeRoute ? `Ruta ${activeRoute}` : `Búsqueda: “${q}”`}</span>
+                  <span className="text-[11px] font-semibold text-dark-400">{pkgs.length} paq.</span>
+                </div>
+                <div className="max-h-[64vh] divide-y divide-dark-800 overflow-y-auto">
+                  {pkgs.map(p => {
+                    const active = sel === p.tba
+                    const mins = p.state === 'MISSING' ? sinceMin(p.updated_at) : null
+                    return (
+                      <button key={p.tba} onClick={() => setSel(p.tba)}
+                        className={`grid w-full grid-cols-[1.7fr_.8fr_.5fr] items-center gap-2 px-4 py-2.5 text-left transition ${active ? 'bg-sky-500/[.07]' : 'hover:bg-dark-900/60'}`}>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 truncate font-semibold text-dark-50">
+                            {p.stop_id && <span className="shrink-0 rounded bg-dark-800 px-1.5 py-0.5 font-mono text-[10px] text-dark-400">#{p.stop_id}</span>}
+                            {p.tba}
+                            {p.priority === 'critical' && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />}
+                          </div>
+                          <div className="truncate text-[11px] text-dark-500">{searching && p.route_code ? `${p.route_code} · ` : ''}{p.stop_address || p.reference_id}</div>
+                        </div>
+                        <div><Statecap s={p.state} sm /></div>
+                        <div className="text-right text-[12px] tabular-nums text-dark-400">
+                          {fmtTime(p.updated_at)}{mins != null && <div className="text-[10px] text-red-400/80">{mins}m</div>}
+                        </div>
+                      </button>
+                    )
+                  })}
+                  {pkgs.length === 0 && <div className="px-4 py-8 text-center text-sm text-dark-500">{loading ? 'Cargando…' : 'Sin paquetes.'}</div>}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Columna derecha: alertas + investigador */}
