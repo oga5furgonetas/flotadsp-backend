@@ -15,6 +15,35 @@
   beat();
   setInterval(beat, 25000);
 
+  // Día de servicio seleccionado en Cortex (metadato de la página, no del paquete).
+  // Se usa para separar los datos por día. Formato ISO YYYY-MM-DD.
+  const serviceDay = () => {
+    try {
+      const di = document.querySelector('input[type="date"]');
+      if (di && /^\d{4}-\d{2}-\d{2}$/.test(di.value || '')) return di.value;
+      const m = location.search.match(/(?:date|day|serviceDate|planDate|localDate)=(\d{4}-\d{2}-\d{2})/i);
+      if (m) return m[1];
+    } catch (_) {}
+    return null;
+  };
+
+  // Auto-refresco: memorizamos las URLs GET de Cortex que devuelven paquetes y
+  // las volvemos a pedir nosotros cada pocos minutos. Así todas las rutas se
+  // cargan y actualizan solas sin que el usuario entre en cada una.
+  const knownGets = new Set();
+  const rememberGet = (url, method) => {
+    if ((method || 'GET').toUpperCase() !== 'GET') return;
+    if (!/^https?:\/\/[^/]*amazon\.es/i.test(url)) return;
+    knownGets.add(url);
+    if (knownGets.size > 15) knownGets.delete(knownGets.values().next().value);
+  };
+  const replay = () => {
+    for (const url of knownGets) {
+      try { window.fetch(url, { credentials: 'include' }).catch(() => {}); } catch (_) {}
+    }
+  };
+  setInterval(replay, 180000); // cada 3 min
+
   const RELEVANT_URL = /route|task|stop|package|parcel|delivery|itinerary|summar|scan|assign/i;
 
   // Marcadores baratos: si el texto no los contiene, ni parseamos (evita coste).
@@ -63,6 +92,8 @@
       try {
         console.log('%c[FlotaDSP] muestra de paquete (campos reales de Cortex):', 'color:#fb923c;font-weight:bold', Object.keys(node));
         console.log('[FlotaDSP] nodo completo →', JSON.parse(JSON.stringify(node)));
+        // También al popup, para el botón "Copiar diagnóstico" (sin DevTools).
+        post({ kind: 'sample', keys: Object.keys(node), node: JSON.stringify(node).slice(0, 4000) });
       } catch (_) {}
     }
     const evs = firstKey(node, KEYS.events);
@@ -119,7 +150,7 @@
     return [...map.values()];
   };
 
-  const emit = (url, text) => {
+  const emit = (url, text, method) => {
     try {
       if (!text || text.length < 2) return;
       const c = text[0];
@@ -132,6 +163,9 @@
       // Diagnóstico: registra CADA respuesta relevante, aunque saque 0 paquetes.
       post({ kind: 'debug', url: url.slice(0, 130), count: packages.length, bytes: text.length });
       if (packages.length) {
+        const day = serviceDay();
+        for (const p of packages) if (day) p.service_day = day;
+        rememberGet(url, method); // esta URL trae paquetes → la refrescaremos sola
         console.log(`%c[FlotaDSP] ${packages.length} paquetes capturados`, 'color:#34d399', url.slice(0, 80));
         post({ kind: 'cortex', url, packages });
       }
@@ -145,9 +179,10 @@
     p.then((res) => {
       try {
         const url = (typeof args[0] === 'string' ? args[0] : args[0]?.url) || res.url || '';
+        const method = (args[1]?.method) || (typeof args[0] === 'object' ? args[0]?.method : '') || 'GET';
         const ct = res.headers.get('content-type') || '';
         if (ct.includes('json') || /route|task|stop|package|parcel|delivery|itinerary|summar/i.test(url)) {
-          res.clone().text().then((t) => emit(url, t)).catch(() => {});
+          res.clone().text().then((t) => emit(url, t, method)).catch(() => {});
         }
       } catch (_) {}
     }).catch(() => {});
@@ -158,6 +193,7 @@
   const origOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
     this.__flotadspUrl = url;
+    this.__flotadspMethod = method;
     return origOpen.call(this, method, url, ...rest);
   };
   const origSend = XMLHttpRequest.prototype.send;
@@ -165,8 +201,9 @@
     this.addEventListener('load', function () {
       try {
         const rt = this.responseType;
-        if (rt === '' || rt === 'text') emit(this.__flotadspUrl || '', this.responseText);
-        else if (rt === 'json' && this.response) emit(this.__flotadspUrl || '', JSON.stringify(this.response));
+        const m = this.__flotadspMethod || 'GET';
+        if (rt === '' || rt === 'text') emit(this.__flotadspUrl || '', this.responseText, m);
+        else if (rt === 'json' && this.response) emit(this.__flotadspUrl || '', JSON.stringify(this.response), m);
       } catch (_) {}
     });
     return origSend.apply(this, args);

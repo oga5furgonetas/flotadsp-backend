@@ -17570,6 +17570,11 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         "lat": obs.get("lat"), "lng": obs.get("lng"),
         "state": state, "updated_at": observed_at.isoformat(),
     }
+    # Día de servicio (el que el usuario tiene seleccionado en Cortex). Se guarda
+    # una sola vez y no se pisa con null: cada paquete pertenece a un día.
+    service_day = str(obs.get("service_day") or "").strip()[:10]
+    if service_day:
+        common["service_day"] = service_day
     pkg = await db.cortex_packages.find_one({"tba": tba}, {"_id": 0})
     if not pkg:
         # Sembrar timeline con recentTaskEvents si vienen, más el estado actual
@@ -17637,10 +17642,35 @@ async def cortex_ingest(request: Request):
     return {"ok": True, **stats, "received": len(packages)}
 
 
+def _cortex_day_query(day: str) -> dict:
+    """Filtro Mongo por día de servicio. Los paquetes nuevos traen service_day;
+    los antiguos (sin él) se ubican por la fecha de updated_at como fallback."""
+    if not day:
+        return {}
+    return {"$or": [
+        {"service_day": day},
+        {"$and": [{"service_day": {"$in": [None, ""]}},
+                  {"updated_at": {"$regex": f"^{re.escape(day)}"}}]},
+    ]}
+
+
+@api_router.get("/cortex/days")
+async def cortex_days(_=Depends(require_admin)):
+    """Días con datos, para el selector del panel (más reciente primero)."""
+    pkgs = await db.cortex_packages.find({}, {"_id": 0, "service_day": 1, "updated_at": 1}).to_list(20000)
+    counts = {}
+    for p in pkgs:
+        d = (p.get("service_day") or str(p.get("updated_at") or "")[:10]) or None
+        if d:
+            counts[d] = counts.get(d, 0) + 1
+    days = sorted(({"day": k, "n": v} for k, v in counts.items()), key=lambda x: x["day"], reverse=True)
+    return {"days": days, "today": datetime.now(timezone.utc).strftime("%Y-%m-%d")}
+
+
 @api_router.get("/cortex/overview")
-async def cortex_overview(_=Depends(require_admin)):
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    pkgs = await db.cortex_packages.find({}, {"_id": 0}).to_list(5000)
+async def cortex_overview(day: str = "", _=Depends(require_admin)):
+    today = (day or datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    pkgs = await db.cortex_packages.find(_cortex_day_query(today), {"_id": 0}).to_list(5000)
     n = len(pkgs)
     missing = [p for p in pkgs if p.get("state") == "MISSING"]
     recovered_today, lost, missing_today, rec_times, attempts_pre = [], [], [], [], []
@@ -17684,17 +17714,23 @@ async def cortex_overview(_=Depends(require_admin)):
 
 
 @api_router.get("/cortex/packages")
-async def cortex_packages(q: str = "", state: str = "", priority: str = "", limit: int = 200,
+async def cortex_packages(q: str = "", state: str = "", priority: str = "", day: str = "", limit: int = 200,
                           _=Depends(require_admin)):
+    ands = []
+    dq = _cortex_day_query(day)
+    if dq:
+        ands.append(dq)
+    if q:
+        rx = {"$regex": re.escape(q), "$options": "i"}
+        ands.append({"$or": [{"tba": rx}, {"reference_id": rx}, {"route_code": rx},
+                             {"driver_name": rx}, {"stop_address": rx}, {"stop_id": rx}]})
     query = {}
     if state:
         query["state"] = state.upper()
     if priority:
         query["priority"] = priority.lower()
-    if q:
-        rx = {"$regex": re.escape(q), "$options": "i"}
-        query["$or"] = [{"tba": rx}, {"reference_id": rx}, {"route_code": rx},
-                        {"driver_name": rx}, {"stop_address": rx}, {"stop_id": rx}]
+    if ands:
+        query["$and"] = ands
     pkgs = await db.cortex_packages.find(query, {"_id": 0, "timeline": 0}).sort("updated_at", -1).to_list(limit)
     return {"packages": pkgs}
 
@@ -17716,9 +17752,12 @@ async def cortex_package_detail(tba: str, _=Depends(require_admin)):
 
 
 @api_router.get("/cortex/alerts")
-async def cortex_alerts(_=Depends(require_admin)):
-    pkgs = await db.cortex_packages.find(
-        {"state": {"$in": ["MISSING", "LOST"]}}, {"_id": 0}).sort("updated_at", -1).to_list(500)
+async def cortex_alerts(day: str = "", _=Depends(require_admin)):
+    q = {"state": {"$in": ["MISSING", "LOST"]}}
+    dq = _cortex_day_query(day)
+    if dq:
+        q = {"$and": [q, dq]}
+    pkgs = await db.cortex_packages.find(q, {"_id": 0}).sort("updated_at", -1).to_list(500)
     alerts = []
     rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     for p in pkgs:
@@ -17736,10 +17775,13 @@ async def cortex_alerts(_=Depends(require_admin)):
 
 
 @api_router.get("/cortex/heatmap")
-async def cortex_heatmap(_=Depends(require_admin)):
+async def cortex_heatmap(day: str = "", _=Depends(require_admin)):
+    q = {"lat": {"$ne": None}, "state": {"$in": ["MISSING", "LOST", "ATTEMPTED"]}}
+    dq = _cortex_day_query(day)
+    if dq:
+        q = {"$and": [q, dq]}
     pkgs = await db.cortex_packages.find(
-        {"lat": {"$ne": None}, "state": {"$in": ["MISSING", "LOST", "ATTEMPTED"]}},
-        {"_id": 0, "lat": 1, "lng": 1, "state": 1, "tba": 1}).to_list(2000)
+        q, {"_id": 0, "lat": 1, "lng": 1, "state": 1, "tba": 1}).to_list(2000)
     return {"points": [p for p in pkgs if p.get("lat") and p.get("lng")]}
 
 

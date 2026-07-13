@@ -15,5 +15,6 @@ if (!window.__flotadspBridge) {
     if (d.kind === 'cortex') chrome.runtime.sendMessage({ type: 'cortexPackages', url: d.url, packages: d.packages });
     else if (d.kind === 'heartbeat') hb('main'); // el hook de red (MAIN) está vivo
     else if (d.kind === 'debug') chrome.runtime.sendMessage({ type: 'debug', url: d.url, count: d.count, bytes: d.bytes });
+    else if (d.kind === 'sample') chrome.runtime.sendMessage({ type: 'sample', keys: d.keys, node: d.node });
   });
 }

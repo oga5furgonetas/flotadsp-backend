@@ -50,6 +50,26 @@ $('save').addEventListener('click', async () => {
 
 $('flush').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'flushNow' }));
 
+$('diag').addEventListener('click', async () => {
+  const { diag, activity = [] } = await chrome.storage.local.get(['diag', 'activity']);
+  const payload = {
+    version: chrome.runtime.getManifest().version,
+    sample_keys: diag?.keys || null,
+    sample_node: diag?.node || null,
+    urls: activity.map((a) => ({ url: a.url, pkgs: a.count })),
+  };
+  const text = JSON.stringify(payload, null, 2);
+  const s = $('status');
+  try {
+    await navigator.clipboard.writeText(text);
+    s.textContent = diag ? 'Diagnóstico copiado ✓. Pégalo en el chat.' : 'Aún no hay muestra: navega por una ruta y reintenta.';
+    s.className = 'status ' + (diag ? 'ok' : 'err');
+  } catch (_) {
+    s.textContent = 'No se pudo copiar. Abre la consola (F12) y busca "[FlotaDSP] muestra".';
+    s.className = 'status err';
+  }
+});
+
 // Al abrir el popup, fuerza reinyección en las pestañas de Cortex ya abiertas
 // (por si el service worker se durmió o la pestaña se abrió antes que la extensión).
 try { chrome.runtime.sendMessage({ type: 'reinject' }); } catch (_) {}

@@ -101,6 +101,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     pushActivity(msg.url, msg.count || 0);
     return false;
   }
+  if (msg?.type === 'sample') {
+    chrome.storage.local.set({ diag: { keys: msg.keys || [], node: msg.node || '', at: Date.now() } });
+    return false;
+  }
   if (msg?.type === 'flushNow') { flush().then(() => reply?.({ ok: true })); return true; }
 });
 

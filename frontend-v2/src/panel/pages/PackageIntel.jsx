@@ -1,12 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Search, RefreshCw, PackageSearch, ShieldAlert, Activity, Radar,
-  MapPin, User, Route as RouteIcon, Box, Clock, Zap, Copy, Check, Loader2, X,
+  MapPin, User, Route as RouteIcon, Box, Clock, Zap, Copy, Check, Loader2, X, Calendar,
 } from 'lucide-react'
 import {
   cortexOverview, cortexPackages, cortexPackage, cortexAlerts,
-  cortexIngestToken, cortexSeedDemo, cortexClearDemo,
+  cortexIngestToken, cortexSeedDemo, cortexClearDemo, cortexDays,
 } from '../api'
+
+const todayISO = () => new Date().toISOString().slice(0, 10)
+const fmtDay = (d) => {
+  const dt = d && new Date(d + 'T00:00:00')
+  if (!dt || isNaN(dt)) return d
+  const t = todayISO()
+  if (d === t) return 'Hoy'
+  const y = new Date(Date.now() - 864e5).toISOString().slice(0, 10)
+  if (d === y) return 'Ayer'
+  return dt.toLocaleDateString('es-ES', { weekday: 'short', day: '2-digit', month: 'short' })
+}
 
 /* ── Estados de paquete: color + etiqueta ── */
 const STATE = {
@@ -195,17 +206,21 @@ export default function PackageIntel() {
   const [sel, setSel] = useState(null)
   const [loading, setLoading] = useState(true)
   const [seeding, setSeeding] = useState(false)
+  const [day, setDay] = useState(todayISO())
+  const [days, setDays] = useState([])
   const qRef = useRef('')
 
   const load = useCallback(async () => {
     try {
       const [o, p, a] = await Promise.all([
-        cortexOverview(), cortexPackages({ q: qRef.current, state: filter, limit: 300 }), cortexAlerts(),
+        cortexOverview(day), cortexPackages({ q: qRef.current, state: filter, day, limit: 300 }), cortexAlerts(day),
       ])
       setOv(o.data); setPkgs(p.data.packages || []); setAlerts(a.data.alerts || [])
     } catch { /* red */ }
     setLoading(false)
-  }, [filter])
+  }, [filter, day])
+
+  useEffect(() => { cortexDays().then(r => setDays(r.data.days || [])).catch(() => {}) }, [pkgs.length])
 
   useEffect(() => { qRef.current = q }, [q])
   useEffect(() => { load() }, [load])
@@ -215,7 +230,7 @@ export default function PackageIntel() {
 
   const seed = async () => { setSeeding(true); try { await cortexSeedDemo(); await load() } finally { setSeeding(false) } }
   const clearDemo = async () => { setSeeding(true); try { await cortexClearDemo(); setSel(null); await load() } finally { setSeeding(false) } }
-  const empty = !loading && pkgs.length === 0
+  const empty = !loading && pkgs.length === 0 && days.length === 0
   const hasDemo = pkgs.some(p => (p.tba || '').startsWith('TBADEMO')) ||
     alerts.some(a => (a.tba || '').startsWith('TBADEMO'))
 
@@ -236,6 +251,15 @@ export default function PackageIntel() {
           </h1>
         </div>
         <div className="flex items-center gap-2">
+          <div className="relative">
+            <Calendar size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dark-500" />
+            <select value={day} onChange={e => { setDay(e.target.value); setSel(null) }}
+              className="appearance-none rounded-lg border border-dark-700 bg-dark-900 py-2 pl-8 pr-8 text-[13px] font-semibold text-dark-200 outline-none hover:border-dark-600 focus:border-sky-500/50">
+              {(days.some(d => d.day === day) ? days : [{ day, n: 0 }, ...days]).map(d => (
+                <option key={d.day} value={d.day}>{fmtDay(d.day)}{d.n ? ` · ${d.n}` : ''}</option>
+              ))}
+            </select>
+          </div>
           {hasDemo && (
             <button onClick={clearDemo} disabled={seeding} title="Borra los paquetes de demostración (TBADEMO*)"
               className="inline-flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[13px] font-semibold text-amber-300 hover:border-amber-500/50 disabled:opacity-60">
