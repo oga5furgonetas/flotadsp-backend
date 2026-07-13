@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useT } from '../../i18n'
 import { Loader2, BrainCircuit, RefreshCw, CheckCircle2, AlertTriangle, Clock, Image, Sparkles, X, ChevronLeft, ChevronRight, ThumbsUp, ThumbsDown, Pencil } from 'lucide-react'
-import { getHealth, getInspections, reanalyzeFailed, reanalyzeInspection, submitAiFeedback, rebuildFleetDamages } from '../api'
+import { getHealth, getInspections, reanalyzeFailed, reanalyzeInspection, submitAiFeedback, rebuildFleetDamages, rebuildStatus } from '../api'
+import { isSuperAdmin } from '../auth'
 import BboxEditor from '../components/BboxEditor'
 import PolygonEditor from '../components/PolygonEditor'
 
@@ -48,13 +49,31 @@ export default function IAPeritaje() {
   const [editingDamage, setEditingDamage] = useState(null) // { inspectionId, damageIndex, damage, photoUrl }
   const [editorMode, setEditorMode] = useState('bbox') // 'bbox' | 'polygon'
 
+  const [rebuild, setRebuild] = useState(null)
+
   function loadInsps() {
     getInspections({ limit: 300 }).then((r) => setInsps(r.data || [])).catch(() => setInsps([]))
   }
+  const loadRebuild = () => rebuildStatus().then(r => setRebuild(r.data)).catch(() => {})
   useEffect(() => {
     getHealth().then((r) => setHealth(r.data)).catch(() => setHealth(null))
     loadInsps()
+    loadRebuild()
+    // Auto-lanzamiento (una sola vez, solo super-admin): deja armada la
+    // reconstrucción de flota para que se ejecute sola al abrir esta pantalla.
+    if (isSuperAdmin() && !localStorage.getItem('flotadsp_fleet_rebuilt')) {
+      localStorage.setItem('flotadsp_fleet_rebuilt', new Date().toISOString())
+      rebuildFleetDamages()
+        .then((r) => { setMsg({ ok: true, t: r.data?.message || 'Reconstrucción de flota iniciada.' }); loadRebuild(); loadInsps() })
+        .catch(() => { /* si ya estaba en marcha, no pasa nada */ })
+    }
   }, [])
+  // Mientras la reconstrucción está activa, refrescar el progreso cada 20 s.
+  useEffect(() => {
+    if (!rebuild?.active) return
+    const iv = setInterval(() => { loadRebuild(); loadInsps() }, 20000)
+    return () => clearInterval(iv)
+  }, [rebuild?.active])
 
   const all        = insps || []
   const ok         = all.filter((i) => i.analysis_status === 'ok').length
@@ -197,17 +216,41 @@ export default function IAPeritaje() {
           {/* Reconstrucción de flota con el modelo nuevo */}
           <div className="card mb-4 border border-amber-500/25 bg-amber-500/[.04] p-4">
             <div className="flex items-center gap-2 text-sm font-semibold text-amber-300">
-              <Sparkles size={16} /> Reconstruir daños de la flota con el modelo nuevo
+              <Sparkles size={16} /> Reconstrucción de daños de la flota
             </div>
-            <p className="mt-1 text-[12.5px] leading-relaxed text-dark-400">
-              Archiva el registro actual (reversible), reanaliza la última inspección de cada furgoneta
-              con el modelo nuevo y te lo deja en <b className="text-dark-200">Revisión Rápida</b> para validar.
-              Ideal para partir limpio tras las pruebas de entrenamiento.
-            </p>
-            <button onClick={doRebuildFleet} disabled={busy === 'rebuild'}
-              className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-[13px] font-semibold text-amber-200 hover:border-amber-500/60 disabled:opacity-60">
-              {busy === 'rebuild' ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Reconstruir flota
-            </button>
+            {rebuild && rebuild.total > 0 ? (
+              <div className="mt-2">
+                <div className="mb-1 flex items-center justify-between text-[12.5px] text-dark-300">
+                  <span>{rebuild.active ? 'Reanalizando la flota con el modelo nuevo…' : 'Reconstrucción completada'}</span>
+                  <span className="font-bold tabular-nums text-amber-200">{rebuild.analyzed}/{rebuild.total}</span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-dark-800">
+                  <div className="h-full rounded-full bg-amber-400 transition-all" style={{ width: `${rebuild.pct}%` }} />
+                </div>
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] text-dark-400">
+                  <span>✓ {rebuild.reviewed} validadas</span>
+                  <span>⏳ {rebuild.pending} en cola</span>
+                  <span>⚠ {rebuild.with_new_damages} con daños detectados</span>
+                </div>
+                {!rebuild.active && rebuild.reviewed < rebuild.total && (
+                  <a href="#" onClick={(e) => { e.preventDefault(); setTab('revision') }}
+                    className="mt-2 inline-block text-[12.5px] font-semibold text-brand-300 hover:underline">
+                    → Ir a validar en Revisión Rápida
+                  </a>
+                )}
+              </div>
+            ) : (
+              <>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-dark-400">
+                  Archiva el registro actual (reversible), reanaliza la última inspección de cada furgoneta
+                  con el modelo nuevo y te lo deja en <b className="text-dark-200">Revisión Rápida</b> para validar.
+                </p>
+                <button onClick={doRebuildFleet} disabled={busy === 'rebuild'}
+                  className="mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/15 px-3 py-2 text-[13px] font-semibold text-amber-200 hover:border-amber-500/60 disabled:opacity-60">
+                  {busy === 'rebuild' ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />} Reconstruir flota
+                </button>
+              </>
+            )}
           </div>
 
           <button onClick={doReanalyzeFailed} disabled={busy === 'all' || (insps && failed.length === 0)} className="btn-primary mb-4 flex items-center gap-2 disabled:opacity-50">

@@ -10278,12 +10278,13 @@ async def rebuild_fleet_damages(_=Depends(require_admin)):
         await db.vehicles.update_many(
             {"id": {"$in": veh_ids}}, {"$set": {"ledger_reset_at": now_iso}})
 
-    # 4) Reencolar para reanálisis + dejar sin revisar (entran en la cola)
+    # 4) Reencolar para reanálisis + dejar sin revisar (entran en la cola).
+    #    rebuild_pass marca el lote para poder seguir el progreso en vivo.
     if insp_ids:
         await db.inspections.update_many(
             {"id": {"$in": insp_ids}},
             {"$set": {"analysis_status": "pending", "analysis_error": None,
-                      "auto_retries": 0, "reviewed": False}})
+                      "auto_retries": 0, "reviewed": False, "rebuild_pass": now_iso}})
 
     n = len(insp_ids)
     return {
@@ -10294,6 +10295,31 @@ async def rebuild_fleet_damages(_=Depends(require_admin)):
         "message": (f"{n} furgonetas en reconstrucción. El modelo nuevo reanaliza su "
                     f"última inspección (5 cada 10 min, ~{max(1, (n + 29) // 30)} h) y "
                     f"aparecerán en Revisión Rápida para que las valides."),
+    }
+
+
+@api_router.get("/inspections/rebuild-status")
+async def rebuild_status(_=Depends(require_admin)):
+    """Progreso en vivo de la reconstrucción de flota (para la barra del panel)."""
+    batch = await db.inspections.find(
+        {"rebuild_pass": {"$exists": True}, "deleted": {"$ne": True}},
+        {"_id": 0, "analysis_status": 1, "reviewed": 1, "rebuild_pass": 1,
+         "analysis.new_damages": 1}).to_list(5000)
+    total = len(batch)
+    if not total:
+        return {"active": False, "total": 0}
+    analyzed = sum(1 for i in batch if i.get("analysis_status") == "ok")
+    pending = sum(1 for i in batch if i.get("analysis_status") == "pending")
+    reviewed = sum(1 for i in batch if i.get("reviewed") is True)
+    with_new = sum(1 for i in batch
+                   if (i.get("analysis") or {}).get("new_damages"))
+    last = max((i.get("rebuild_pass") or "" for i in batch), default="")
+    return {
+        "active": pending > 0,
+        "total": total, "analyzed": analyzed, "pending": pending,
+        "reviewed": reviewed, "with_new_damages": with_new,
+        "pct": round(100 * analyzed / total) if total else 0,
+        "started_at": last,
     }
 
 
