@@ -54,14 +54,57 @@
     if ((method || 'GET').toUpperCase() !== 'GET') return;
     if (!/^https?:\/\/[^/]*amazon\.es/i.test(url)) return;
     knownGets.add(url);
-    if (knownGets.size > 15) knownGets.delete(knownGets.values().next().value);
+    if (knownGets.size > 60) knownGets.delete(knownGets.values().next().value);
   };
   const replay = () => {
+    let i = 0;
     for (const url of knownGets) {
-      try { window.fetch(url, { credentials: 'include' }).catch(() => {}); } catch (_) {}
+      const d = (i++) * 300; // escalona para no golpear a Cortex de golpe
+      setTimeout(() => { try { window.fetch(url, { credentials: 'include' }).catch(() => {}); } catch (_) {} }, d);
     }
   };
   setInterval(replay, 180000); // cada 3 min
+
+  // Descubrimiento de TODAS las rutas: de route-summaries sacamos la lista de
+  // routeIds y pedimos el detalle de cada una nosotros mismos. Así se cargan
+  // todas las rutas del día sin que el usuario entre en ninguna.
+  let saId = null, histParam = 'false';
+  const learnTemplate = (url) => {
+    try {
+      const u = new URL(url, location.origin);
+      const s = u.searchParams.get('serviceAreaId'); if (s) saId = s;
+      const h = u.searchParams.get('historicalDay'); if (h != null) histParam = h;
+    } catch (_) {}
+  };
+  const collectRoutes = (json) => {
+    const ids = new Set(); let sa = null;
+    const walk = (n) => {
+      if (Array.isArray(n)) { for (const x of n) walk(x); return; }
+      if (!n || typeof n !== 'object') return;
+      for (const [k, v] of Object.entries(n)) {
+        if (/^routeId$/i.test(k) && typeof v === 'string' && /^\d+-\d+$/.test(v)) ids.add(v);
+        if (/serviceAreaId/i.test(k) && typeof v === 'string' && v.length > 8 && !sa) sa = v;
+        if (v && typeof v === 'object') walk(v);
+      }
+    };
+    walk(json);
+    return { ids: [...ids], sa };
+  };
+  const fetchedRoutes = new Set();
+  const harvestRoutes = (summaryJson) => {
+    const { ids, sa } = collectRoutes(summaryJson);
+    if (sa && !saId) saId = sa;
+    let i = 0;
+    for (const id of ids) {
+      if (fetchedRoutes.has(id)) continue;
+      fetchedRoutes.add(id);
+      const url = `${location.origin}/operations/execution/api/route-details/${id}`
+        + `?historicalDay=${histParam}&routeId=${id}${saId ? `&serviceAreaId=${saId}` : ''}`;
+      knownGets.add(url); // el replay periódico lo mantendrá fresco
+      setTimeout(() => { try { window.fetch(url, { credentials: 'include' }).catch(() => {}); } catch (_) {} }, (i++) * 400);
+    }
+    if (ids.length) console.log(`%c[FlotaDSP] ${ids.length} rutas descubiertas → pidiendo detalle de todas`, 'color:#fb923c;font-weight:bold');
+  };
 
   const RELEVANT_URL = /route|task|stop|package|parcel|delivery|itinerary|summar|scan|assign/i;
 
@@ -234,28 +277,32 @@
       if (!text || text.length < 2) return;
       const c = text[0];
       if (c !== '{' && c !== '[') return;
+      const isSummary = /route-summaries/i.test(url);
+      const isDetails = /route-details/i.test(url);
+      if (isDetails) learnTemplate(url);
       const marked = MARK.test(text);
-      // Solo nos interesan respuestas de datos (por URL o por contenido).
-      if (!marked && !RELEVANT_URL.test(url)) return;
+      // Nos interesan respuestas de datos (por URL o por contenido) y el sumario.
+      if (!marked && !isSummary && !RELEVANT_URL.test(url)) return;
+      let parsed = null;
+      try { parsed = JSON.parse(text); } catch (_) {}
+      // De route-summaries sacamos TODAS las rutas del día y pedimos su detalle.
+      if (parsed && isSummary) harvestRoutes(parsed);
       let packages = [];
-      if (marked) {
-        try {
-          const j = JSON.parse(text);
-          packages = extractRouteDetails(j) || extract(j);
-        } catch (_) {}
-      }
-      // Diagnóstico de estructura: esquema de la respuesta de route-details (una vez).
-      if (!schemaSent && /route-details/i.test(url)) {
+      if (parsed && (marked || isDetails)) packages = extractRouteDetails(parsed) || extract(parsed);
+      // Diagnóstico de estructura: esquema de route-details (una vez).
+      if (!schemaSent && isDetails && parsed) {
         try {
           schemaSent = true;
-          post({ kind: 'schema', url: url.slice(0, 120), schema: JSON.stringify(schemaOf(JSON.parse(text), 0)).slice(0, 7000) });
+          post({ kind: 'schema', url: url.slice(0, 120), schema: JSON.stringify(schemaOf(parsed, 0)).slice(0, 7000) });
         } catch (_) {}
       }
       // Diagnóstico: registra CADA respuesta relevante, aunque saque 0 paquetes.
       post({ kind: 'debug', url: url.slice(0, 130), count: packages.length, bytes: text.length });
       if (packages.length) {
         const day = serviceDay();
-        for (const p of packages) if (day) p.service_day = day;
+        // El día de route-details viene de localDate (fiable). Solo rellenamos con
+        // el de la página si el paquete no trae ya el suyo.
+        for (const p of packages) if (!p.service_day && day) p.service_day = day;
         rememberGet(url, method); // esta URL trae paquetes → la refrescaremos sola
         console.log(`%c[FlotaDSP] ${packages.length} paquetes capturados`, 'color:#34d399', url.slice(0, 80));
         post({ kind: 'cortex', url, packages });

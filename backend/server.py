@@ -17842,5 +17842,14 @@ async def cortex_clear_demo(_=Depends(require_admin)):
     return {"ok": True, "packages_deleted": p.deleted_count, "events_deleted": e.deleted_count}
 
 
+@api_router.post("/cortex/reset")
+async def cortex_reset(_=Depends(require_admin)):
+    """Borra TODOS los paquetes y eventos de Cortex (empezar de cero). Útil tras
+    pruebas que ensuciaron los días. La extensión los repuebla al capturar."""
+    p = await db.cortex_packages.delete_many({})
+    e = await db.cortex_events.delete_many({})
+    return {"ok": True, "packages_deleted": p.deleted_count, "events_deleted": e.deleted_count}
+
+
 app.include_router(auth_router)
 app.include_router(api_router)

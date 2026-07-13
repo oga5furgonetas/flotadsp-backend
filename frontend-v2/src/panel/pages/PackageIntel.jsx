@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import {
   cortexOverview, cortexPackages, cortexPackage, cortexAlerts,
-  cortexIngestToken, cortexSeedDemo, cortexClearDemo, cortexDays,
+  cortexIngestToken, cortexSeedDemo, cortexClearDemo, cortexDays, cortexReset,
 } from '../api'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
@@ -162,7 +162,7 @@ function Investigator({ tba, onClose }) {
 }
 
 /* ── Setup / instalación de la extensión ── */
-function SetupCard({ onSeed, seeding }) {
+function SetupCard({ onSeed, onReset, seeding }) {
   const [tok, setTok] = useState(null)
   const [copied, setCopied] = useState('')
   const load = () => cortexIngestToken().then(r => setTok(r.data)).catch(() => {})
@@ -190,9 +190,17 @@ function SetupCard({ onSeed, seeding }) {
           <div className="text-[11px] text-dark-500">El token dura 1 año y solo permite enviar datos de paquetes a tu DSP.</div>
         </div>
       )}
-      <button onClick={onSeed} disabled={seeding} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-dark-700 bg-dark-800 px-3 py-2 text-[12.5px] font-semibold text-dark-200 hover:border-dark-600 disabled:opacity-60">
-        {seeding ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} className="text-amber-400" />} Ver con datos de demostración
-      </button>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button onClick={onSeed} disabled={seeding} className="inline-flex items-center gap-2 rounded-lg border border-dark-700 bg-dark-800 px-3 py-2 text-[12.5px] font-semibold text-dark-200 hover:border-dark-600 disabled:opacity-60">
+          {seeding ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} className="text-amber-400" />} Datos de demostración
+        </button>
+        {onReset && (
+          <button onClick={onReset} disabled={seeding} title="Borra todos los paquetes y empieza de cero"
+            className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[12.5px] font-semibold text-red-300 hover:border-red-500/50 disabled:opacity-60">
+            <X size={13} /> Borrar todo y empezar limpio
+          </button>
+        )}
+      </div>
     </div>
   )
 }
@@ -231,6 +239,10 @@ export default function PackageIntel() {
 
   const seed = async () => { setSeeding(true); try { await cortexSeedDemo(); await load() } finally { setSeeding(false) } }
   const clearDemo = async () => { setSeeding(true); try { await cortexClearDemo(); setSel(null); await load() } finally { setSeeding(false) } }
+  const reset = async () => {
+    if (!window.confirm('¿Borrar TODOS los paquetes de Cortex y empezar de cero?\nLa extensión los volverá a cargar solos al capturar las rutas.')) return
+    setSeeding(true); try { await cortexReset(); setSel(null); await load() } finally { setSeeding(false) }
+  }
   const empty = !loading && pkgs.length === 0 && days.length === 0
   // Agrupado por ruta para que 500+ paquetes no salgan en un montón plano.
   const groups = useMemo(() => {
@@ -288,7 +300,7 @@ export default function PackageIntel() {
       </div>
 
       {showSetup && (
-        <div className="mb-5 mx-auto max-w-xl"><SetupCard onSeed={seed} seeding={seeding} /></div>
+        <div className="mb-5 mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={reset} seeding={seeding} /></div>
       )}
 
       {/* KPIs */}
@@ -300,7 +312,7 @@ export default function PackageIntel() {
       </div>
 
       {empty ? (
-        <div className="mx-auto max-w-xl"><SetupCard onSeed={seed} seeding={seeding} /></div>
+        <div className="mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={reset} seeding={seeding} /></div>
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_420px]">
           {/* Columna izquierda: buscador + lista */}
