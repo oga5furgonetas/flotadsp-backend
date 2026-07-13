@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FlotaDSP · Cortex Bridge",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "Lee la API de Cortex (route-summaries / route-details) con tu sesión y la envía a tu Package Intelligence Center. No lee la pantalla ni usa OCR.",
   "permissions": ["storage", "scripting", "tabs", "alarms"],
   "host_permissions": [

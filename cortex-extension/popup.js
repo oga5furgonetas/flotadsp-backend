@@ -56,6 +56,8 @@ $('diag').addEventListener('click', async () => {
     version: chrome.runtime.getManifest().version,
     sample_keys: diag?.keys || null,
     sample_node: diag?.node || null,
+    route_details_schema: diag?.schema || null,
+    schema_url: diag?.schemaUrl || null,
     urls: activity.map((a) => ({ url: a.url, pkgs: a.count })),
   };
   const text = JSON.stringify(payload, null, 2);

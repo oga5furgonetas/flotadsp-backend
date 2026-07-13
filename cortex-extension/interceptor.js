@@ -27,6 +27,25 @@
     return null;
   };
 
+  // Esquema de una respuesta: describe la ESTRUCTURA (claves + valores cortos)
+  // sin volcar miles de items. Los estados de entrega son strings cortos, así
+  // que aparecen literalmente y podemos localizar el campo real.
+  const schemaOf = (v, depth) => {
+    if (depth > 6) return '…';
+    if (Array.isArray(v)) return v.length ? [schemaOf(v[0], depth + 1), `×${v.length}`] : [];
+    if (v && typeof v === 'object') {
+      const o = {}; let i = 0;
+      for (const k of Object.keys(v)) {
+        if (i++ > 45) { o['…'] = '…'; break; }
+        o[k] = schemaOf(v[k], depth + 1);
+      }
+      return o;
+    }
+    if (typeof v === 'string') return v.length > 32 ? 'str' : v; // conserva valores cortos (estados)
+    return typeof v;
+  };
+  let schemaSent = false;
+
   // Auto-refresco: memorizamos las URLs GET de Cortex que devuelven paquetes y
   // las volvemos a pedir nosotros cada pocos minutos. Así todas las rutas se
   // cargan y actualizan solas sin que el usuario entre en cada una.
@@ -160,6 +179,13 @@
       if (!marked && !RELEVANT_URL.test(url)) return;
       let packages = [];
       if (marked) { try { packages = extract(JSON.parse(text)); } catch (_) {} }
+      // Diagnóstico de estructura: esquema de la respuesta de route-details (una vez).
+      if (!schemaSent && /route-details/i.test(url)) {
+        try {
+          schemaSent = true;
+          post({ kind: 'schema', url: url.slice(0, 120), schema: JSON.stringify(schemaOf(JSON.parse(text), 0)).slice(0, 7000) });
+        } catch (_) {}
+      }
       // Diagnóstico: registra CADA respuesta relevante, aunque saque 0 paquetes.
       post({ kind: 'debug', url: url.slice(0, 130), count: packages.length, bytes: text.length });
       if (packages.length) {
