@@ -17,7 +17,13 @@ async function apiFetch(path, opts = {}) {
   })
   if (!resp.ok) {
     let msg = `Error ${resp.status}`
-    try { const j = await resp.json(); msg = j.detail || msg } catch {}
+    try {
+      const j = await resp.json()
+      const d = j.detail
+      if (typeof d === 'string') msg = d
+      else if (Array.isArray(d)) msg = d.map(x => x?.msg || JSON.stringify(x)).join(' · ')
+      else if (d) msg = d.msg || JSON.stringify(d)
+    } catch {}
     throw new Error(msg)
   }
   return resp
@@ -322,8 +328,8 @@ export default function PlantillaGenerador() {
           {/* Selector de modo */}
           <div className="mb-5 flex gap-2">
             <button
-              onClick={() => { setCortexList([]); }}
-              className={`flex-1 rounded-lg border px-4 py-3 text-left transition ${!cortexList.length ? 'border-brand-500 bg-brand-500/10' : 'border-dark-700 bg-dark-900/60 hover:border-dark-600'}`}
+              onClick={() => { setCortexList([]); setCortexText('') }}
+              className={`flex-1 rounded-lg border px-4 py-3 text-left transition ${!(cortexList.length || cortexText.trim()) ? 'border-brand-500 bg-brand-500/10' : 'border-dark-700 bg-dark-900/60 hover:border-dark-600'}`}
             >
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-sm font-semibold text-dark-100">Solo Plataforma</span>
@@ -332,8 +338,8 @@ export default function PlantillaGenerador() {
               <p className="text-xs text-dark-500">Genera la plantilla solo con furgos y conductores. Importa Cortex después manualmente.</p>
             </button>
             <button
-              onClick={() => {}}
-              className={`flex-1 rounded-lg border px-4 py-3 text-left transition ${cortexList.length ? 'border-brand-500 bg-brand-500/10' : 'border-dark-700 bg-dark-900/60 hover:border-dark-600'}`}
+              onClick={() => refCortex.current?.click()}
+              className={`flex-1 rounded-lg border px-4 py-3 text-left transition ${(cortexList.length || cortexText.trim()) ? 'border-brand-500 bg-brand-500/10' : 'border-dark-700 bg-dark-900/60 hover:border-dark-600'}`}
             >
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-sm font-semibold text-dark-100">Cortex + Plataforma</span>

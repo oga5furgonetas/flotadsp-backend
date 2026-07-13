@@ -17182,16 +17182,24 @@ async def _gemini_extract_text(client, model_name: str, prompt: str, text: str) 
 
 # ── Paso 1: extraer datos con Gemini, devuelve JSON para preview ──
 @app.post("/api/tools/plantilla-extraer", dependencies=[Depends(require_admin)])
-async def plantilla_extraer(
-    plataforma:       Optional[List[UploadFile]] = File(default=None),
-    cortex:           Optional[List[UploadFile]] = File(default=None),
-    plataforma_texto: Optional[str] = Form(default=None),
-    cortex_texto:     Optional[str] = Form(default=None),
-):
-    cortex_imgs = [await f.read() for f in (cortex or [])]
-    plat_imgs   = [await f.read() for f in (plataforma or [])]
-    plat_txt    = (plataforma_texto or "").strip()
-    cortex_txt  = (cortex_texto or "").strip()
+async def plantilla_extraer(request: Request):
+    # Lectura en crudo del multipart: acepta imágenes y/o texto sin que la
+    # validación de FastAPI rechace combinaciones (imagen sola, texto solo, mezcla).
+    form = await request.form()
+
+    async def _read_files(field):
+        out = []
+        for f in form.getlist(field):
+            if hasattr(f, "read"):
+                b = await f.read()
+                if b:
+                    out.append(b)
+        return out
+
+    plat_imgs   = await _read_files("plataforma")
+    cortex_imgs = await _read_files("cortex")
+    plat_txt    = (str(form.get("plataforma_texto") or "")).strip()
+    cortex_txt  = (str(form.get("cortex_texto") or "")).strip()
 
     if not plat_imgs and not plat_txt:
         raise HTTPException(400, "Aporta las furgonetas de plataforma: sube una captura o pega el texto.")
