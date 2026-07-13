@@ -24,16 +24,11 @@ async function injectAll() {
     for (const t of tabs) if (t.id) inject(t.id);
   } catch (_) {}
 }
-function boot() { chrome.alarms.create(ALARM, { periodInMinutes: 1 }); injectAll(); }
-
-chrome.runtime.onInstalled.addListener(boot);
-chrome.runtime.onStartup.addListener(boot);
-boot(); // al despertar el service worker
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === ALARM) flush(); });
-// Reinyecta cuando una pestaña de Amazon termina de cargar (navegación real).
-chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
-  if (info.status === 'complete' && /amazon\.es/.test(tab.url || '')) inject(tabId);
-});
+function boot() {
+  // Cada API va en su propio try: si una falla (p.ej. sin permiso), no tumba el resto.
+  try { chrome.alarms?.create(ALARM, { periodInMinutes: 1 }); } catch (_) {}
+  try { injectAll(); } catch (_) {}
+}
 
 async function cfg() {
   const { ingestToken = '', ingestUrl = DEFAULT_URL } = await chrome.storage.local.get(['ingestToken', 'ingestUrl']);
@@ -108,3 +103,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   }
   if (msg?.type === 'flushNow') { flush().then(() => reply?.({ ok: true })); return true; }
 });
+
+// Registro de listeners al final (nunca antes de que existan sus funciones) y
+// arranque el último: así, aunque boot() fallara, los listeners ya están vivos.
+chrome.runtime.onInstalled.addListener(boot);
+chrome.runtime.onStartup.addListener(boot);
+chrome.alarms.onAlarm.addListener((a) => { if (a.name === ALARM) flush(); });
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
+  if (info.status === 'complete' && /amazon\.es/.test(tab.url || '')) inject(tabId);
+});
+boot(); // al despertar el service worker
