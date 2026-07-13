@@ -158,6 +158,8 @@ export default function PlantillaGenerador() {
 
   const [cortexList, setCortexList] = useState([])
   const [platList,   setPlatList]   = useState([])
+  const [platText,   setPlatText]   = useState('')  // texto pegado alternativo
+  const [cortexText, setCortexText] = useState('')
   const [step,    setStep]    = useState('upload')
   const [loading, setLoading] = useState(false)
   const [err,     setErr]     = useState('')
@@ -206,19 +208,21 @@ export default function PlantillaGenerador() {
   function removeFile(idx, setter) { setter(prev => prev.filter((_, i) => i !== idx)) }
 
   function reset() {
-    setCortexList([]); setPlatList([])
+    setCortexList([]); setPlatList([]); setPlatText(''); setCortexText('')
     setStep('upload'); setData(null)
     setRedSet(new Set()); setYellowSet(new Set()); setPinkSet(new Set()); setMarkedSet(new Set())
     setCopiedHours(null); setErr('')
   }
 
   async function extraer() {
-    if (!platList.length) return
+    if (!platList.length && !platText.trim()) return
     setLoading(true); setErr('')
     try {
       const fd = new FormData()
       platList.forEach(f => fd.append('plataforma', f.file))
       cortexList.forEach(f => fd.append('cortex', f.file))
+      if (platText.trim())   fd.append('plataforma_texto', platText.trim())
+      if (cortexText.trim()) fd.append('cortex_texto', cortexText.trim())
       const resp = await apiFetch('/tools/plantilla-extraer', { method: 'POST', body: fd })
       const json = await resp.json()
       setData(json)
@@ -341,35 +345,45 @@ export default function PlantillaGenerador() {
 
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
             {/* Plataforma — siempre requerida */}
-            <MultiDropZone
-              label="Plataforma — furgonetas"
-              hint="Requerido · Puedes subir varias capturas"
-              items={platList}
-              onAdd={files => addFiles(files, setPlatList)}
-              onRemove={i => removeFile(i, setPlatList)}
-              inputRef={refPlat}
-              required
-            />
+            <div>
+              <MultiDropZone
+                label="Plataforma — furgonetas"
+                hint="Requerido · Puedes subir varias capturas"
+                items={platList}
+                onAdd={files => addFiles(files, setPlatList)}
+                onRemove={i => removeFile(i, setPlatList)}
+                inputRef={refPlat}
+                required
+              />
+              <PasteBox
+                value={platText} onChange={setPlatText}
+                placeholder="Ej: Rodriguez Arias, Andrea    7906NFX&#10;Gomez Vidal, Luis    0116MBP" />
+            </div>
             {/* Cortex — opcional */}
-            <MultiDropZone
-              label="Cortex — rutas + hora salida"
-              hint="Opcional · Añade para cruzar rutas automáticamente"
-              items={cortexList}
-              onAdd={files => addFiles(files, setCortexList)}
-              onRemove={i => removeFile(i, setCortexList)}
-              inputRef={refCortex}
-              optional
-            />
+            <div>
+              <MultiDropZone
+                label="Cortex — rutas + hora salida"
+                hint="Opcional · Añade para cruzar rutas automáticamente"
+                items={cortexList}
+                onAdd={files => addFiles(files, setCortexList)}
+                onRemove={i => removeFile(i, setCortexList)}
+                inputRef={refCortex}
+                optional
+              />
+              <PasteBox
+                value={cortexText} onChange={setCortexText}
+                placeholder="Ej: CA_A44   ANDREA RODRIGUEZ   10:20&#10;CA_A45   LUIS GOMEZ   10:35" />
+            </div>
           </div>
 
-          {/* Info según lo que hay subido */}
-          {platList.length > 0 && !cortexList.length && (
+          {/* Info según lo que hay aportado (captura o texto) */}
+          {(platList.length > 0 || platText.trim()) && !(cortexList.length || cortexText.trim()) && (
             <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 text-xs text-amber-300">
               <span className="shrink-0 mt-0.5">💡</span>
               <span>Se generará la plantilla con conductor + furgo + móvil. Las columnas <b>ruta y horas</b> quedarán vacías para rellenar manualmente o importar desde Cortex.</span>
             </div>
           )}
-          {platList.length > 0 && cortexList.length > 0 && (
+          {(platList.length > 0 || platText.trim()) && (cortexList.length || cortexText.trim()) && (
             <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2.5 text-xs text-emerald-300">
               <span className="shrink-0 mt-0.5">✓</span>
               <span>Modo completo: se cruzarán rutas de Cortex con furgos de plataforma por nombre de conductor.</span>
@@ -385,12 +399,12 @@ export default function PlantillaGenerador() {
             <div className="ml-auto">
               <button
                 onClick={extraer}
-                disabled={!platList.length || loading}
+                disabled={(!platList.length && !platText.trim()) || loading}
                 className="btn-primary flex items-center gap-2 disabled:opacity-40"
               >
                 {loading
                   ? <><Loader2 size={16} className="animate-spin" /> Analizando…</>
-                  : <><FileSpreadsheet size={16} /> {cortexList.length ? 'Extraer datos (completo)' : 'Extraer datos (plataforma)'}</>}
+                  : <><FileSpreadsheet size={16} /> {(cortexList.length || cortexText.trim()) ? 'Extraer datos (completo)' : 'Extraer datos (plataforma)'}</>}
               </button>
             </div>
           </div>
@@ -765,6 +779,33 @@ function ErrBanner({ msg }) {
   return (
     <div className="mt-4 flex items-start gap-2 rounded-lg bg-red-500/10 px-4 py-3 text-sm text-red-300">
       <AlertCircle size={15} className="mt-0.5 shrink-0" /> {msg}
+    </div>
+  )
+}
+
+function PasteBox({ value, onChange, placeholder }) {
+  const [open, setOpen] = useState(false)
+  if (!open && !value) {
+    return (
+      <button type="button" onClick={() => setOpen(true)}
+        className="mt-2 text-xs font-medium text-brand-400 hover:text-brand-300">
+        …o pega el texto (si no cabe en una captura)
+      </button>
+    )
+  }
+  return (
+    <div className="mt-2">
+      <textarea
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        rows={5}
+        className="w-full rounded-lg border border-dark-700 bg-dark-900/60 px-3 py-2 text-xs text-dark-100 placeholder-dark-600 outline-none focus:border-brand-500 font-mono"
+      />
+      <div className="mt-1 flex items-center justify-between text-[11px] text-dark-500">
+        <span>Pega tal cual (columnas separadas por tabs o espacios). La IA lo entiende.</span>
+        {value && <button type="button" onClick={() => onChange('')} className="text-dark-400 hover:text-red-400">Borrar</button>}
+      </div>
     </div>
   )
 }

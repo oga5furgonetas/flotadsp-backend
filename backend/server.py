@@ -17124,91 +17124,105 @@ def _is_transient_gemini(err_str: str) -> bool:
                                 "high demand", "deadline", "timeout", "internal"))
 
 
-async def _gemini_extract(client, model_name: str, prompt: str, img_bytes: bytes) -> dict:
+async def _gemini_json_call(client, model_name: str, contents: list) -> dict:
+    """Llamada a Gemini que devuelve JSON, resistente a cuota y saturación.
+    Cadena de respaldo con dos motivos de salto:
+      · cuota DIARIA agotada (429 per-day) → veta ese modelo y pasa al siguiente.
+      · saturación/lentitud (503/500/UNAVAILABLE) → pasa al siguiente al instante.
+    flash-lite suele estar menos saturado y responde rápido."""
     from google.genai import types as genai_types
-    part = genai_types.Part.from_bytes(data=img_bytes, mime_type=_mime_type(img_bytes))
-    # thinking_budget=0: leer una captura es una tarea factual, no necesita
-    # razonamiento largo → respuesta en segundos en vez de decenas.
+    # thinking_budget=0: leer/parsear es factual, no necesita razonamiento largo.
     try:
         cfg = genai_types.GenerateContentConfig(
             temperature=0.0,
             thinking_config=genai_types.ThinkingConfig(thinking_budget=0))
     except Exception:
         cfg = genai_types.GenerateContentConfig(temperature=0.0)
-    # Cadena de respaldo con dos motivos de salto:
-    #   · cuota DIARIA agotada (429 per-day) → veta ese modelo y pasa al siguiente.
-    #   · saturación/lentitud (503/500/UNAVAILABLE) → pasa al siguiente al instante.
-    # flash-lite suele estar menos saturado y responde rápido.
     chain = [model_name, "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-flash-lite-latest"]
     seen, models = set(), []
     for m in chain:
         if m and m not in seen:
             seen.add(m); models.append(m)
     last_err = None
-    # Dos vueltas: la 1ª prueba cada modelo; la 2ª reintenta (tras breve pausa)
-    # por si TODOS estaban saturados un instante.
-    for attempt in range(2):
+    for attempt in range(2):  # 2ª vuelta por si TODOS estaban saturados un instante
         for m in models:
             if _is_daily_exhausted(m):
                 continue
             try:
                 resp = await asyncio.wait_for(
                     asyncio.to_thread(lambda mm=m: client.models.generate_content(
-                        model=mm, contents=[prompt, part], config=cfg)),
+                        model=mm, contents=contents, config=cfg)),
                     timeout=45)
-                raw = _strip_markdown_json((resp.text or "").strip())
-                return json.loads(raw)
+                return json.loads(_strip_markdown_json((resp.text or "").strip()))
             except json.JSONDecodeError:
-                raise  # el modelo respondió pero no era JSON → error real
+                raise
             except Exception as e:
                 last_err = e
                 es = str(e)
                 if "429" in es and _is_perday_429(es):
                     _mark_daily_exhausted(m)
-                    continue
-                if _is_transient_gemini(es) or isinstance(e, asyncio.TimeoutError):
-                    continue  # saturado/lento → siguiente modelo
-                # Error inesperado: probamos el siguiente modelo igualmente.
-                continue
+                continue  # 429/503/lento/otros → siguiente modelo
         if attempt == 0:
-            await asyncio.sleep(2)  # respiro antes de la segunda vuelta
+            await asyncio.sleep(2)
     raise last_err or RuntimeError("Gemini no disponible ahora mismo (saturación/cuota)")
+
+
+async def _gemini_extract(client, model_name: str, prompt: str, img_bytes: bytes) -> dict:
+    from google.genai import types as genai_types
+    part = genai_types.Part.from_bytes(data=img_bytes, mime_type=_mime_type(img_bytes))
+    return await _gemini_json_call(client, model_name, [prompt, part])
+
+
+async def _gemini_extract_text(client, model_name: str, prompt: str, text: str) -> dict:
+    """Igual que _gemini_extract pero desde TEXTO pegado en vez de captura."""
+    full = (prompt + "\n\n=== EN VEZ DE UNA IMAGEN, ANALIZA ESTE TEXTO PEGADO "
+            "(mismas reglas y mismo JSON de salida) ===\n" + (text or "").strip()[:20000])
+    return await _gemini_json_call(client, model_name, [full])
 
 
 # ── Paso 1: extraer datos con Gemini, devuelve JSON para preview ──
 @app.post("/api/tools/plantilla-extraer", dependencies=[Depends(require_admin)])
 async def plantilla_extraer(
-    plataforma: List[UploadFile] = File(...),
-    cortex:     Optional[List[UploadFile]] = File(default=None),
+    plataforma:       Optional[List[UploadFile]] = File(default=None),
+    cortex:           Optional[List[UploadFile]] = File(default=None),
+    plataforma_texto: Optional[str] = Form(default=None),
+    cortex_texto:     Optional[str] = Form(default=None),
 ):
-    if not plataforma:
-        raise HTTPException(400, "Sube al menos las capturas de plataforma.")
     cortex_imgs = [await f.read() for f in (cortex or [])]
-    plat_imgs   = [await f.read() for f in plataforma]
+    plat_imgs   = [await f.read() for f in (plataforma or [])]
+    plat_txt    = (plataforma_texto or "").strip()
+    cortex_txt  = (cortex_texto or "").strip()
 
-    try:
-        client     = _gemini_client_plantilla()
-        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    if not plat_imgs and not plat_txt:
+        raise HTTPException(400, "Aporta las furgonetas de plataforma: sube una captura o pega el texto.")
 
-        tasks = (
-            [_gemini_extract(client, model_name, _PROMPT_CORTEX,     b) for b in cortex_imgs] +
-            [_gemini_extract(client, model_name, _PROMPT_PLATAFORMA, b) for b in plat_imgs]
-        )
-        results = await asyncio.gather(*tasks)
+    client     = _gemini_client_plantilla()
+    model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-    except asyncio.TimeoutError:
-        raise HTTPException(504, "Gemini tardó demasiado. Intenta de nuevo.")
-    except json.JSONDecodeError as e:
-        raise HTTPException(422, f"Gemini no devolvió JSON válido: {e}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"plantilla_extraer error: {e}", exc_info=True)
-        raise HTTPException(500, str(e))
+    # Cada fuente (imagen o texto) es una tarea. Cortex primero, plataforma después.
+    cortex_tasks = [_gemini_extract(client, model_name, _PROMPT_CORTEX, b) for b in cortex_imgs]
+    if cortex_txt:
+        cortex_tasks.append(_gemini_extract_text(client, model_name, _PROMPT_CORTEX, cortex_txt))
+    plat_tasks = [_gemini_extract(client, model_name, _PROMPT_PLATAFORMA, b) for b in plat_imgs]
+    if plat_txt:
+        plat_tasks.append(_gemini_extract_text(client, model_name, _PROMPT_PLATAFORMA, plat_txt))
 
-    nc = len(cortex_imgs)
-    cortex_results = results[:nc]
-    plat_results   = results[nc:]
+    # return_exceptions: que un fallo puntual en UNA fuente no tumbe todo el proceso.
+    all_results = await asyncio.gather(*(cortex_tasks + plat_tasks), return_exceptions=True)
+    clean, n_fail = [], 0
+    for r in all_results:
+        if isinstance(r, Exception):
+            n_fail += 1
+            logger.warning(f"plantilla_extraer: una fuente falló: {r}")
+            clean.append({})
+        else:
+            clean.append(r)
+    if n_fail and n_fail == len(all_results):
+        raise HTTPException(503, "La IA no está disponible ahora mismo (saturación/cuota). Inténtalo en un minuto.")
+
+    nc = len(cortex_tasks)
+    cortex_results = clean[:nc]
+    plat_results   = clean[nc:]
 
     from datetime import date as _date
 
