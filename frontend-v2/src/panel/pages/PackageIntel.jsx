@@ -355,7 +355,7 @@ export default function PackageIntel() {
           <div className="space-y-2">
             {unmapped.map(s => (
               <div key={s.service_area_id} className="flex flex-wrap items-center gap-2 rounded-lg border border-dark-800 bg-dark-950/40 px-3 py-2">
-                <span className="font-mono text-[11px] text-dark-400">{s.service_area_id.slice(0, 12)}… · {s.n} paq.</span>
+                <span className="font-mono text-[11px] text-dark-400">Estación {s.station_code || s.service_area_id.slice(0, 10)} · {s.n} paq.</span>
                 <span className="ml-auto flex flex-wrap gap-1.5">
                   {centers.filter(c => c !== 'Todos').map(c => (
                     <button key={c} onClick={() => assignStation(s.service_area_id, c)}

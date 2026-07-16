@@ -17903,10 +17903,16 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     # lleguen sin etiqueta (informe de faltas) o los antiguos.
     said = str(obs.get("service_area_id") or "").strip() or None
     center = str(obs.get("center") or "").strip().upper() or None
-    if said and center:
+    station_code = str(obs.get("station_code") or "").strip() or None
+    if said and (center or station_code):
         try:
+            setd = {}
+            if center:
+                setd["center"] = center
+            if station_code:
+                setd["station_code"] = station_code
             await db.cortex_stations.update_one(
-                {"service_area_id": said}, {"$set": {"center": center}}, upsert=True)
+                {"service_area_id": said}, {"$set": setd}, upsert=True)
         except Exception:
             pass
     if said and not center:
@@ -18053,8 +18059,11 @@ async def cortex_stations(_=Depends(require_admin)):
         if sid:
             counts.setdefault(sid, {"n": 0, "center": p.get("center")})
             counts[sid]["n"] += 1
-    smap = {s["service_area_id"]: s.get("center") for s in stations}
-    out = [{"service_area_id": sid, "center": smap.get(sid) or c["center"], "n": c["n"]}
+    smap = {s["service_area_id"]: s for s in stations}
+    out = [{"service_area_id": sid,
+            "center": (smap.get(sid) or {}).get("center") or c["center"],
+            "station_code": (smap.get(sid) or {}).get("station_code"),
+            "n": c["n"]}
            for sid, c in counts.items()]
     return {"stations": sorted(out, key=lambda x: -x["n"])}
 

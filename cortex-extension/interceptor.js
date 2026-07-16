@@ -246,25 +246,34 @@
   // Parser específico de route-details: el paquete real es cada `task` dentro de
   // stops[].tasks[] — con taskState (estado), referenceId, y domainMap.scannableId
   // (el TBA). El conductor está en transporters[] y la dirección en addresses[].
-  // Centro/estación seleccionado en Cortex. El selector muestra algo como
-  // "OGA5 - O Milladoiro(OGA5)-Amazon Logistics(15895)". Sacamos el código corto.
-  const stationCenter = () => {
+  // Centro/estación seleccionado en Cortex. El selector muestra p.ej.:
+  //  "OGA5 - O Milladoiro(OGA5)-Amazon Logistics(15895)"  (OGA5, código 15895)
+  //  "DGA1 - Coruna (DGA1) - AMZL Logistics (15650)"      (DGA1, código 15650)
+  // Aceptamos "Amazon" y "AMZL", con o sin espacios. Devuelve {center, code}.
+  const STATION_RE = /^([A-Z0-9]{2,6})\s*-.*?(?:Amazon|AMZL)\s*Logistics\s*\(?\s*(\d{4,6})\s*\)?/i;
+  const stationInfo = () => {
     try {
-      let txt = '';
-      const opt = [...document.querySelectorAll('option, [role="option"], select')]
-        .find((e) => /Amazon Logistics\(\d+\)/i.test(e.textContent || '') || /-Amazon Logistics/i.test(e.value || ''));
-      if (opt) txt = (opt.selectedOptions && opt.selectedOptions[0]?.textContent) || opt.textContent || opt.value || '';
-      if (!txt) {
-        const el = [...document.querySelectorAll('button,span,div')]
-          .find((e) => e.children.length === 0 && /Amazon Logistics\(\d+\)/i.test(e.textContent || ''));
-        txt = el?.textContent || '';
+      const cands = [];
+      document.querySelectorAll('select').forEach((s) => {
+        const o = s.selectedOptions && s.selectedOptions[0];
+        if (o && o.textContent) cands.push(o.textContent);
+        if (s.value) cands.push(s.value);
+      });
+      document.querySelectorAll('[role="combobox"],[aria-haspopup],button,[class*="select"],[class*="Select"]').forEach((b) => {
+        const t = (b.textContent || '').trim();
+        if (t && t.length < 90) cands.push(t);
+      });
+      for (const raw of cands) {
+        const m = raw.replace(/\s+/g, ' ').trim().match(STATION_RE);
+        if (m) return { center: m[1].toUpperCase(), code: m[2] };
       }
-      const m = txt.match(/^\s*([A-Z0-9]{2,6})\s*-/) || txt.match(/\(([A-Z0-9]{2,6})\)\s*-\s*Amazon/i);
-      return m ? m[1].toUpperCase() : null;
-    } catch (_) { return null; }
+    } catch (_) {}
+    return { center: null, code: null };
   };
-  // serviceAreaId → centro aprendido en vivo (para etiquetar bien los replays).
-  const saCenter = {};
+  // Mapas aprendidos en vivo para etiquetar bien los replays y fuentes pobres:
+  const saCenter = {};      // serviceAreaId → centro
+  const prefixCenter = {};  // prefijo de ruta (XA_C, CA_A) → centro
+  const routePrefix = (rc) => { const m = String(rc || '').match(/^(.*?)(\d+)\s*$/); return m ? m[1] : null; };
 
   const extractRouteDetails = (json) => {
     const root = (json && json.rmsRouteDetails) || json;
@@ -272,9 +281,14 @@
     const routeCode = root.routeCode || null;
     const routeId = root.routeId || null;
     const said = root.serviceAreaId || saId || null;
-    const pageCenter = stationCenter();
+    const info = stationInfo();
+    const pageCenter = info.center;
+    const prefix = routePrefix(routeCode);
     if (said && pageCenter && !saCenter[said]) saCenter[said] = pageCenter; // 1ª vez = navegación real
-    const center = (said && saCenter[said]) || pageCenter || null;
+    if (prefix && pageCenter && !prefixCenter[prefix]) prefixCenter[prefix] = pageCenter;
+    // Prioridad: mapa por estación (duro) → página → mapa por prefijo de ruta.
+    const center = (said && saCenter[said]) || pageCenter || (prefix && prefixCenter[prefix]) || null;
+    const stationCode = info.code || null;
     const drivers = {};
     for (const t of (root.transporters || [])) {
       if (t && t.transporterId) {
@@ -315,7 +329,7 @@
           tba,
           reference_id: task.referenceId || dm.orderId || null,
           route_code: routeCode, route_id: routeId,
-          service_area_id: said, center,
+          service_area_id: said, center, station_code: stationCode,
           driver_name: drivers[tid] || soloDriver || null, driver_id: tid || null,
           stop_id: seq != null ? String(seq) : null,
           stop_address: addrStr,
