@@ -174,11 +174,84 @@ export default function PlantillaGenerador() {
   const [yellowSet,  setYellowSet]  = useState(new Set())
   const [pinkSet,    setPinkSet]    = useState(new Set())
   const [markedSet,  setMarkedSet]  = useState(new Set())
+  const [sharedDraft, setSharedDraft] = useState(null) // { id, revision, updated_by }
+  const [sharedNote, setSharedNote] = useState('')
+  const skipSharedSave = useRef(false)
+  const sharedTimer = useRef(null)
+  // Tras "Nueva plantilla" NO nos re-unimos al borrador compartido (era el bug:
+  // el auto-join re-enganchaba al borrador viejo y el botón parecía roto).
+  const suppressJoin = useRef(false)
 
   // Portapapeles de horas: {h_salida, h_llegada, h_bajada} o null
   const [copiedHours, setCopiedHours] = useState(null)
 
   const noCenter = !center || center === 'Todos'
+
+  const sharedPayload = useCallback(() => ({
+    ...(data || {}),
+    red_routes: [...redSet], yellow_routes: [...yellowSet],
+    pink_furgos: [...pinkSet], marked_conductors: [...markedSet],
+  }), [data, redSet, yellowSet, pinkSet, markedSet])
+
+  function applySharedDraft(draft) {
+    const s = draft?.state
+    if (!s?.rows) return
+    skipSharedSave.current = true
+    setData({ week: s.week, date: s.date, rows: s.rows })
+    setRedSet(new Set(s.red_routes || [])); setYellowSet(new Set(s.yellow_routes || []))
+    setPinkSet(new Set(s.pink_furgos || [])); setMarkedSet(new Set(s.marked_conductors || []))
+    setSharedDraft({ id: draft.id, revision: draft.revision, updated_by: draft.updated_by })
+    setSharedNote(`Plantilla compartida · última edición: ${draft.updated_by || 'otro usuario'}`)
+    setStep('preview')
+  }
+
+  // Al abrir el mismo centro en otro equipo se une al borrador reciente.
+  // (Salvo tras "Nueva plantilla": entonces NO nos re-unimos al borrador viejo.)
+  useEffect(() => {
+    if (noCenter || step !== 'upload' || suppressJoin.current) return
+    apiFetch(`/tools/plantilla-compartida?center=${encodeURIComponent(center)}`)
+      .then(r => r.json()).then(d => { if (d?.id) applySharedDraft(d) }).catch(() => {})
+  }, [center, noCenter, step])
+
+  // Cambiar de centro reactiva el auto-join (la supresión era para ESTE centro).
+  useEffect(() => { suppressJoin.current = false }, [center])
+
+  // Actualización visible en los otros dispositivos. Nunca sustituye cambios locales
+  // pendientes: esos se guardan antes por el efecto de abajo.
+  useEffect(() => {
+    if (!sharedDraft?.id) return
+    const id = setInterval(async () => {
+      try {
+        const d = await (await apiFetch(`/tools/plantilla-compartida/${sharedDraft.id}`)).json()
+        if (d.revision > sharedDraft.revision) applySharedDraft(d)
+      } catch {}
+    }, 2500)
+    return () => clearInterval(id)
+  }, [sharedDraft?.id, sharedDraft?.revision])
+
+  // Guardado automático con control de versión. Si dos personas cambian a la vez,
+  // no se pierde nada silenciosamente: se recarga la versión compartida y avisa.
+  useEffect(() => {
+    if (!sharedDraft?.id || !data) return
+    if (skipSharedSave.current) { skipSharedSave.current = false; return }
+    clearTimeout(sharedTimer.current)
+    sharedTimer.current = setTimeout(async () => {
+      try {
+        const r = await apiFetch(`/tools/plantilla-compartida/${sharedDraft.id}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ revision: sharedDraft.revision, state: sharedPayload() }),
+        })
+        const saved = await r.json()
+        skipSharedSave.current = true
+        setSharedDraft(p => p && ({ ...p, revision: saved.revision, updated_by: saved.updated_by }))
+        setSharedNote('Guardado y sincronizado con los demás dispositivos')
+      } catch (e) {
+        setSharedNote('Otro dispositivo guardó a la vez. Se ha recargado su versión para evitar sobrescribirla.')
+        try { const d = await (await apiFetch(`/tools/plantilla-compartida/${sharedDraft.id}`)).json(); applySharedDraft(d) } catch {}
+      }
+    }, 900)
+    return () => clearTimeout(sharedTimer.current)
+  }, [data, redSet, yellowSet, pinkSet, markedSet, sharedDraft?.id, sharedDraft?.revision, sharedPayload])
 
   // Furgos activas del centro
   const [furgosDisp, setFurgosDisp] = useState([]) // ['2865NGX', ...]
@@ -214,10 +287,17 @@ export default function PlantillaGenerador() {
   function removeFile(idx, setter) { setter(prev => prev.filter((_, i) => i !== idx)) }
 
   function reset() {
+    // Cierra el borrador compartido para TODOS los dispositivos y evita que el
+    // auto-join nos re-enganche al borrador viejo (era el bug de "Nueva plantilla").
+    clearTimeout(sharedTimer.current)
+    suppressJoin.current = true
+    const draftId = sharedDraft?.id
+    if (draftId) apiFetch(`/tools/plantilla-compartida/${draftId}`, { method: 'DELETE' }).catch(() => {})
     setCortexList([]); setPlatList([]); setPlatText(''); setCortexText('')
     setStep('upload'); setData(null)
     setRedSet(new Set()); setYellowSet(new Set()); setPinkSet(new Set()); setMarkedSet(new Set())
     setCopiedHours(null); setErr('')
+    setSharedDraft(null); setSharedNote('')
   }
 
   async function extraer() {
@@ -234,6 +314,15 @@ export default function PlantillaGenerador() {
       setData(json)
       setRedSet(new Set()); setYellowSet(new Set()); setPinkSet(new Set()); setMarkedSet(new Set())
       setStep('preview')
+      if (!noCenter) {
+        const shared = await (await apiFetch('/tools/plantilla-compartida', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ center, state: { ...json, red_routes: [], yellow_routes: [], pink_furgos: [], marked_conductors: [] } }),
+        })).json()
+        suppressJoin.current = false // hay borrador nuevo: el auto-join vuelve a la normalidad
+        setSharedDraft({ id: shared.id, revision: shared.revision, updated_by: shared.updated_by })
+        setSharedNote('Plantilla compartida creada: los demás equipos del mismo centro la verán automáticamente.')
+      }
     } catch (e) { setErr(e?.message || 'Error desconocido') }
     setLoading(false)
   }
@@ -420,6 +509,11 @@ export default function PlantillaGenerador() {
       {/* ── PASO 2: tabla editable ── */}
       {step === 'preview' && data && (
         <>
+          {sharedNote && (
+            <div className="mb-3 flex items-center gap-2 rounded-lg border border-sky-500/25 bg-sky-500/10 px-3 py-2 text-xs text-sky-200">
+              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" /> {sharedNote}
+            </div>
+          )}
           <div className="mb-3 flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <span className="text-xs text-dark-400">WEEK</span>

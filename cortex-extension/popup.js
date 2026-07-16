@@ -58,6 +58,7 @@ $('diag').addEventListener('click', async () => {
     sample_node: diag?.node || null,
     route_details_schema: diag?.schema || null,
     route_summaries_schema: diag?.schemaSummary || null,
+    missing_report_schema: diag?.schemaReport || null,
     schema_url: diag?.schemaUrl || null,
     urls: activity.map((a) => ({ url: a.url, pkgs: a.count })),
   };

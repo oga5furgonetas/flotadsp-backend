@@ -44,7 +44,7 @@
     if (typeof v === 'string') return v.length > 32 ? 'str' : v; // conserva valores cortos (estados)
     return typeof v;
   };
-  let schemaSent = false, schemaSummarySent = false;
+  let schemaSent = false, schemaSummarySent = false, schemaReportSent = false;
 
   // Auto-refresco: memorizamos las URLs GET de Cortex que devuelven paquetes y
   // las volvemos a pedir nosotros cada pocos minutos. Así todas las rutas se
@@ -137,7 +137,7 @@
     }
   };
 
-  const RELEVANT_URL = /route|task|stop|package|parcel|delivery|itinerary|summar|scan|assign/i;
+  const RELEVANT_URL = /route|task|stop|package|parcel|delivery|itinerary|summar|scan|assign|missing|falta|reason|exception|report/i;
 
   // Marcadores baratos: si el texto no los contiene, ni parseamos (evita coste).
   const MARK = /"(?:containerScannableId|scannableId|trackingId|taskState|executionStatus|deliveryStatus|recentTaskEvents|stopId|routeId)"|TBA[A-Z0-9]{6,}|\bES\d{8,}\b/;
@@ -145,7 +145,7 @@
   const TBA_RE = /^(?:TBA[A-Z0-9]{6,}|ES\d{8,})$/i;
   const KEYS = {
     tba: ['containerScannableId', 'scannableId', 'trackingId', 'trackingNumber', 'tba', 'packageId', 'parcelId', 'shipmentId', 'addressId'],
-    state: ['taskState', 'executionStatus', 'deliveryStatus', 'status', 'state', 'packageStatus', 'stopState', 'taskStatus', 'reasonCode', 'missingReason', 'exceptionReason', 'reason'],
+    state: ['taskState', 'executionStatus', 'deliveryStatus', 'status', 'state', 'packageStatus', 'stopState', 'taskStatus', 'reasonCode', 'missingReason', 'exceptionReason', 'reason', 'reasonDescription', 'exceptionCode', 'issueType'],
     stop: ['stopId', 'stopNumber', 'sequenceId', 'sequenceNumber', 'stopSequence', 'stop', 'stopKey'],
     address: ['address', 'formattedAddress', 'addressLine', 'destinationAddress', 'shortAddress', 'addressLine1'],
     container: ['containerId', 'toteId', 'binId', 'bagId', 'overrideContainerId', 'containerLabel'],
@@ -257,6 +257,10 @@
         drivers[t.transporterId] = [t.firstName, t.lastName].filter(Boolean).join(' ').trim() || null;
       }
     }
+    // Ruta con UN solo conductor: se lo asignamos a todas sus tareas aunque el
+    // transporterId de la tarea no cuadre (rescates/ediciones lo desalinean).
+    const driverVals = Object.values(drivers).filter(Boolean);
+    const soloDriver = driverVals.length === 1 ? driverVals[0] : null;
     const addrs = {};
     for (const a of (root.addresses || [])) if (a && a.addressId) addrs[a.addressId] = a;
     let day = null;
@@ -286,7 +290,7 @@
           tba,
           reference_id: task.referenceId || dm.orderId || null,
           route_code: routeCode, route_id: routeId,
-          driver_name: drivers[tid] || null, driver_id: tid || null,
+          driver_name: drivers[tid] || soloDriver || null, driver_id: tid || null,
           stop_id: seq != null ? String(seq) : null,
           stop_address: addrStr,
           container_id: task.containerScannableId || null,
@@ -331,6 +335,14 @@
         try {
           schemaSummarySent = true;
           post({ kind: 'schema', which: 'summary', url: url.slice(0, 120), schema: JSON.stringify(schemaOf(parsed, 0)).slice(0, 7000) });
+        } catch (_) {}
+      }
+      // Esquema del informe de faltas/motivos (una vez), para afinar su parser.
+      if (!schemaReportSent && parsed && !isSummary && !isDetails
+          && /missing|falta|reason|exception|report/i.test(url) && MARK.test(text)) {
+        try {
+          schemaReportSent = true;
+          post({ kind: 'schema', which: 'report', url: url.slice(0, 120), schema: JSON.stringify(schemaOf(parsed, 0)).slice(0, 7000) });
         } catch (_) {}
       }
       // Diagnóstico: registra CADA respuesta relevante, aunque saque 0 paquetes.

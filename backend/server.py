@@ -890,6 +890,8 @@ async def _ensure_tenant_indexes(db_name: str):
     await tdb.workshops.create_index("categories")
     await tdb.plantillas_diarias.create_index("id")
     await tdb.plantillas_diarias.create_index([("center", 1), ("uploaded_at", -1)])
+    await tdb.plantillas_compartidas.create_index("id", unique=True)
+    await tdb.plantillas_compartidas.create_index([("center", 1), ("updated_at", -1)])
 
 
 @app.on_event("startup")
@@ -16917,7 +16919,10 @@ def _mime_type(data: bytes) -> str:
 
 
 def _calc_horas(h_salida: str | None) -> tuple[str, str]:
-    """Dado h_salida (HH:MM de Cortex) calcula bajada y llegada. Devuelve ("", "") si no hay hora."""
+    """Normaliza la hora que muestra Cortex y calcula llegada/bajada.
+
+    h_salida ya llega normalizada desde Cortex (11:32 → 11:20).
+    """
     if not h_salida:
         return "", ""
     from datetime import datetime as _dt, timedelta as _td
@@ -16930,6 +16935,20 @@ def _calc_horas(h_salida: str | None) -> tuple[str, str]:
         except ValueError:
             continue
     return "", ""
+
+
+def _normalizar_hora_cortex(hora: str | None) -> str:
+    """Convierte la hora cruda de Cortex a la hora real de ola (UTC local).
+    No inventa una hora si el valor no se puede interpretar."""
+    if not hora:
+        return ""
+    from datetime import datetime as _dt, timedelta as _td
+    for fmt in ("%H:%M", "%H.%M", "%I:%M %p", "%I:%M%p"):
+        try:
+            return (_dt.strptime(str(hora).strip(), fmt) - _td(minutes=12)).strftime("%H:%M")
+        except ValueError:
+            pass
+    return ""
 
 
 def _build_plantilla_excel(rows: list, red_routes: set, pink_furgos: set, week_num, fecha_str: str, yellow_routes: set = None, marked_conductors: set = None) -> bytes:
@@ -17269,7 +17288,9 @@ async def plantilla_extraer(request: Request):
         for ruta_key in sorted(rutas_map):
             ruta_row  = rutas_map[ruta_key]
             conductor = ruta_row.get("conductor") or ""
-            h_salida  = ruta_row.get("h_salida") or ""
+            # Cortex adelanta doce minutos la hora visible; la plantilla trabaja
+            # con la hora real en intervalos de diez minutos.
+            h_salida  = _normalizar_hora_cortex(ruta_row.get("h_salida"))
 
             furgo = ""
             movil = ""
@@ -17375,6 +17396,96 @@ async def plantilla_excel(body: dict = Body(...), admin=Depends(require_admin)):
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
     )
+
+
+# ── Borradores compartidos de plantilla (edición simultánea) ──
+def _plantilla_shared_payload(doc: dict) -> dict:
+    """Respuesta pública, sin ObjectId interno de Mongo."""
+    return {k: doc.get(k) for k in (
+        "id", "center", "state", "revision", "updated_at", "updated_by"
+    )}
+
+
+@app.post("/api/tools/plantilla-compartida", dependencies=[Depends(require_admin)])
+async def crear_plantilla_compartida(body: dict = Body(...), admin=Depends(require_admin)):
+    center = str(body.get("center") or "").strip()
+    if not center or center == "Todos":
+        raise HTTPException(400, "Selecciona un centro antes de compartir una plantilla.")
+    allowed = admin.get("allowed_centers") or []
+    if allowed and center not in allowed:
+        raise HTTPException(403, "Sin acceso a este centro")
+    state = body.get("state") or {}
+    if not isinstance(state, dict) or not isinstance(state.get("rows"), list):
+        raise HTTPException(400, "Borrador de plantilla inválido.")
+    now = datetime.now(timezone.utc).isoformat()
+    doc = {"id": str(uuid.uuid4()), "center": center, "state": state,
+           "revision": 1, "updated_at": now, "updated_by": admin.get("name") or "Usuario"}
+    await db.plantillas_compartidas.insert_one(doc)
+    return _plantilla_shared_payload(doc)
+
+
+@app.get("/api/tools/plantilla-compartida/{draft_id}", dependencies=[Depends(require_admin)])
+async def leer_plantilla_compartida(draft_id: str, admin=Depends(require_admin)):
+    doc = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "La plantilla compartida ya no existe.")
+    allowed = admin.get("allowed_centers") or []
+    if allowed and doc.get("center") not in allowed:
+        raise HTTPException(403, "Sin acceso a este centro")
+    return _plantilla_shared_payload(doc)
+
+
+@app.get("/api/tools/plantilla-compartida", dependencies=[Depends(require_admin)])
+async def plantilla_compartida_activa(center: str, admin=Depends(require_admin)):
+    """Devuelve el último borrador reciente del centro para que otro equipo se una."""
+    allowed = admin.get("allowed_centers") or []
+    if allowed and center not in allowed:
+        raise HTTPException(403, "Sin acceso a este centro")
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=18)).isoformat()
+    doc = await db.plantillas_compartidas.find_one(
+        {"center": center, "updated_at": {"$gte": cutoff}}, {"_id": 0}, sort=[("updated_at", -1)])
+    return _plantilla_shared_payload(doc) if doc else {"id": None}
+
+
+@app.delete("/api/tools/plantilla-compartida/{draft_id}", dependencies=[Depends(require_admin)])
+async def cerrar_plantilla_compartida(draft_id: str, admin=Depends(require_admin)):
+    """Cierra el borrador compartido del centro ("Nueva plantilla"): lo borra para
+    TODOS los dispositivos. Sin esto, el auto-join re-enganchaba al borrador viejo
+    y el botón de crear una nueva parecía no funcionar."""
+    doc = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
+    if not doc:
+        return {"ok": True}  # ya no existe: objetivo cumplido
+    allowed = admin.get("allowed_centers") or []
+    if allowed and doc.get("center") not in allowed:
+        raise HTTPException(403, "Sin acceso a este centro")
+    # Borra todos los borradores del centro (evita que resucite uno anterior <18h)
+    await db.plantillas_compartidas.delete_many({"center": doc["center"]})
+    return {"ok": True}
+
+
+@app.put("/api/tools/plantilla-compartida/{draft_id}", dependencies=[Depends(require_admin)])
+async def guardar_plantilla_compartida(draft_id: str, body: dict = Body(...), admin=Depends(require_admin)):
+    """Guardado optimista: si otro equipo acaba de guardar, no se pisa en silencio."""
+    state = body.get("state")
+    revision = body.get("revision")
+    if not isinstance(state, dict) or not isinstance(state.get("rows"), list) or not isinstance(revision, int):
+        raise HTTPException(400, "Actualización de plantilla inválida.")
+    doc = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "La plantilla compartida ya no existe.")
+    allowed = admin.get("allowed_centers") or []
+    if allowed and doc.get("center") not in allowed:
+        raise HTTPException(403, "Sin acceso a este centro")
+    now = datetime.now(timezone.utc).isoformat()
+    result = await db.plantillas_compartidas.update_one(
+        {"id": draft_id, "revision": revision},
+        {"$set": {"state": state, "updated_at": now, "updated_by": admin.get("name") or "Usuario"}, "$inc": {"revision": 1}},
+    )
+    if not result.modified_count:
+        latest = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
+        raise HTTPException(409, detail={"message": "Otro dispositivo acaba de guardar cambios.", "draft": _plantilla_shared_payload(latest or {})})
+    saved = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
+    return _plantilla_shared_payload(saved)
 
 
 # ── Historial de plantillas ──
@@ -17766,16 +17877,20 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         "raw": (obs.get("raw_state") or obs.get("taskState") or "")[:80],
         "stop_id": obs.get("stop_id"), "container_id": obs.get("container_id"),
     }
-    common = {
-        "tba": tba, "reference_id": obs.get("reference_id") or tba,
+    ident = {
+        "reference_id": obs.get("reference_id"),
         "route_code": obs.get("route_code") or obs.get("route_id"),
         "route_id": obs.get("route_id"),
         "driver_name": obs.get("driver_name"), "driver_id": obs.get("driver_id"),
         "stop_id": obs.get("stop_id"), "stop_address": obs.get("stop_address") or obs.get("address"),
         "container_id": obs.get("container_id"), "station": obs.get("station"),
         "lat": obs.get("lat"), "lng": obs.get("lng"),
-        "state": state, "updated_at": observed_at.isoformat(),
     }
+    # Las fuentes se COMPLEMENTAN: el informe de faltas no trae conductor pero
+    # route-details sí. Un campo null/"" de una fuente pobre NUNCA pisa el dato
+    # ya conocido de otra fuente más rica.
+    ident = {k: v for k, v in ident.items() if v not in (None, "")}
+    common = {"tba": tba, "state": state, "updated_at": observed_at.isoformat(), **ident}
     # Día de servicio (el que el usuario tiene seleccionado en Cortex). Se guarda
     # una sola vez y no se pisa con null: cada paquete pertenece a un día.
     service_day = str(obs.get("service_day") or "").strip()[:10]
@@ -17795,6 +17910,7 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
             seed.append(ev)
         doc = {**common, "id": str(uuid.uuid4()), "first_seen": observed_at.isoformat(),
                "timeline": seed}
+        doc.setdefault("reference_id", tba)
         evalr = _cortex_evaluate(doc)
         doc.update({"priority": evalr["priority"], "reason": evalr["reason"]})
         await db.cortex_packages.insert_one(serialize_doc(doc))
@@ -17804,6 +17920,16 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     last = (pkg.get("timeline") or [{}])[-1]
     if last.get("state") == state:
         await db.cortex_packages.update_one({"tba": tba}, {"$set": common})
+        return "same"
+    # Un Missing explícito es evidencia más fuerte que el taskState resumido de
+    # route-details. Cortex puede seguir devolviendo "attempted" durante un
+    # tiempo aunque el informe de faltas ya haya marcado el paquete como Missing.
+    # Nunca lo rebajamos de forma silenciosa; solo un estado terminal/resuelto
+    # posterior puede cerrar el Missing.
+    if pkg.get("state") in ("MISSING", "LOST") and state in ("LOADED", "ARRIVED", "ATTEMPTED", "OBSERVED"):
+        meta = {k: v for k, v in common.items() if k not in ("state", "updated_at") and v not in (None, "")}
+        if meta:
+            await db.cortex_packages.update_one({"tba": tba}, {"$set": meta})
         return "same"
     # Una observación SIN estado (OBSERVED) nunca degrada un estado real ya
     # conocido: solo refresca metadatos (ruta, conductor, dirección…).
@@ -17995,12 +18121,31 @@ async def cortex_packages(q: str = "", state: str = "", priority: str = "", day:
     return {"packages": pkgs}
 
 
+def _cortex_clean_timeline(tl: list) -> list:
+    """Sanea el timeline: ordena por hora, quita el ruido OBSERVED (capturas sin
+    estado, legacy) cuando hay eventos reales, y colapsa repetidos consecutivos."""
+    tl = sorted(tl or [], key=lambda e: str(e.get("at", "")))
+    has_real = any(e.get("state") not in (None, "", "OBSERVED") for e in tl)
+    if has_real:
+        tl = [e for e in tl if e.get("state") not in (None, "", "OBSERVED")]
+    out = []
+    for e in tl:
+        if out and out[-1].get("state") == e.get("state"):
+            continue  # mismo estado seguido: el primero (más antiguo) es el que vale
+        out.append(e)
+    return out
+
+
 @api_router.get("/cortex/package/{tba}")
 async def cortex_package_detail(tba: str, _=Depends(require_admin)):
     pkg = await db.cortex_packages.find_one({"tba": tba.upper()}, {"_id": 0})
     if not pkg:
         raise HTTPException(status_code=404, detail="Paquete no encontrado")
-    pkg["timeline"] = sorted(pkg.get("timeline") or [], key=lambda e: str(e.get("at", "")))
+    clean = _cortex_clean_timeline(pkg.get("timeline") or [])
+    if clean != (pkg.get("timeline") or []):
+        # Cura permanente del registro (elimina el ruido legacy de una vez)
+        await db.cortex_packages.update_one({"tba": pkg["tba"]}, {"$set": {"timeline": clean}})
+    pkg["timeline"] = clean
     evalr = _cortex_evaluate(pkg)
     # Paquetes del mismo stop (para la pista "otros del stop se entregaron")
     same_stop = []
