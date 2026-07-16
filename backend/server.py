@@ -18035,14 +18035,24 @@ def _cortex_day_query(day: str) -> dict:
     ]}
 
 
-def _cortex_scope(day: str, center: str) -> dict:
-    """Query Mongo combinando día + centro. Centro vacío o 'Todos' = sin filtro."""
+async def _cortex_scope(day: str, center: str) -> dict:
+    """Query Mongo combinando día + centro. El centro se resuelve por el MAPEO
+    estación→centro (serviceAreaId), que es el identificador duro y siempre
+    correcto; así reasignar una estación re-filtra al instante sin re-etiquetar."""
     conds = []
     dq = _cortex_day_query(day)
     if dq:
         conds.append(dq)
     if center and center not in ("Todos", "todos", ""):
-        conds.append({"center": center.upper()})
+        c = center.upper()
+        saids = [s["service_area_id"] async for s in db.cortex_stations.find(
+            {"center": c}, {"_id": 0, "service_area_id": 1}) if s.get("service_area_id")]
+        # Un paquete es de este centro si su estación está mapeada a él, o si ya
+        # trae la etiqueta center (captura reciente que la leyó bien).
+        or_c = [{"center": c}]
+        if saids:
+            or_c.append({"service_area_id": {"$in": saids}})
+        conds.append({"$or": or_c})
     if not conds:
         return {}
     return conds[0] if len(conds) == 1 else {"$and": conds}
@@ -18054,15 +18064,18 @@ async def cortex_stations(_=Depends(require_admin)):
     stations = await db.cortex_stations.find({}, {"_id": 0}).to_list(200)
     # Cuenta de paquetes por serviceAreaId sin etiqueta de centro resuelta
     counts = {}
-    async for p in db.cortex_packages.find({}, {"_id": 0, "service_area_id": 1, "center": 1}):
+    async for p in db.cortex_packages.find({}, {"_id": 0, "service_area_id": 1, "center": 1, "route_code": 1}):
         sid = p.get("service_area_id")
         if sid:
-            counts.setdefault(sid, {"n": 0, "center": p.get("center")})
-            counts[sid]["n"] += 1
+            c = counts.setdefault(sid, {"n": 0, "center": p.get("center"), "routes": set()})
+            c["n"] += 1
+            if p.get("route_code") and len(c["routes"]) < 4:
+                c["routes"].add(p["route_code"])
     smap = {s["service_area_id"]: s for s in stations}
     out = [{"service_area_id": sid,
             "center": (smap.get(sid) or {}).get("center") or c["center"],
             "station_code": (smap.get(sid) or {}).get("station_code"),
+            "sample_routes": sorted(c["routes"])[:4],
             "n": c["n"]}
            for sid, c in counts.items()]
     return {"stations": sorted(out, key=lambda x: -x["n"])}
@@ -18083,7 +18096,7 @@ async def cortex_assign_station(body: dict = Body(...), _=Depends(require_admin)
 @api_router.get("/cortex/days")
 async def cortex_days(center: str = "", _=Depends(require_admin)):
     """Días con datos, para el selector del panel (más reciente primero)."""
-    q = _cortex_scope("", center)
+    q = await _cortex_scope("", center)
     pkgs = await db.cortex_packages.find(q, {"_id": 0, "service_day": 1, "updated_at": 1}).to_list(20000)
     counts = {}
     for p in pkgs:
@@ -18097,7 +18110,7 @@ async def cortex_days(center: str = "", _=Depends(require_admin)):
 @api_router.get("/cortex/overview")
 async def cortex_overview(day: str = "", center: str = "", _=Depends(require_admin)):
     today = (day or datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-    pkgs = await db.cortex_packages.find(_cortex_scope(today, center), {"_id": 0}).to_list(20000)
+    pkgs = await db.cortex_packages.find(await _cortex_scope(today, center), {"_id": 0}).to_list(20000)
     n = len(pkgs)
     missing = [p for p in pkgs if p.get("state") == "MISSING"]
     recovered_today, lost, missing_today, rec_times, attempts_pre = [], [], [], [], []
@@ -18145,7 +18158,7 @@ async def cortex_routes(day: str = "", center: str = "", _=Depends(require_admin
     """Resumen agregado por ruta: la vista principal cuando hay miles de paquetes."""
     today = (day or datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     pkgs = await db.cortex_packages.find(
-        _cortex_scope(today, center),
+        await _cortex_scope(today, center),
         {"_id": 0, "route_code": 1, "driver_name": 1, "state": 1, "priority": 1, "updated_at": 1, "center": 1}).to_list(20000)
     routes = {}
     for p in pkgs:
@@ -18183,7 +18196,7 @@ async def cortex_packages(q: str = "", state: str = "", priority: str = "", day:
                           center: str = "", limit: int = 200, _=Depends(require_admin)):
     limit = max(1, min(int(limit or 200), 6000))
     ands = []
-    dq = _cortex_scope(day, center)
+    dq = await _cortex_scope(day, center)
     if dq:
         ands.append(dq)
     if q:
@@ -18247,7 +18260,7 @@ async def cortex_package_detail(tba: str, _=Depends(require_admin)):
 @api_router.get("/cortex/alerts")
 async def cortex_alerts(day: str = "", center: str = "", _=Depends(require_admin)):
     q = {"state": {"$in": ["MISSING", "LOST"]}}
-    dq = _cortex_scope(day, center)
+    dq = await _cortex_scope(day, center)
     if dq:
         q = {"$and": [q, dq]}
     pkgs = await db.cortex_packages.find(q, {"_id": 0}).sort("updated_at", -1).to_list(500)
@@ -18270,7 +18283,7 @@ async def cortex_alerts(day: str = "", center: str = "", _=Depends(require_admin
 @api_router.get("/cortex/heatmap")
 async def cortex_heatmap(day: str = "", center: str = "", _=Depends(require_admin)):
     q = {"lat": {"$ne": None}, "state": {"$in": ["MISSING", "LOST", "ATTEMPTED"]}}
-    dq = _cortex_scope(day, center)
+    dq = await _cortex_scope(day, center)
     if dq:
         q = {"$and": [q, dq]}
     pkgs = await db.cortex_packages.find(

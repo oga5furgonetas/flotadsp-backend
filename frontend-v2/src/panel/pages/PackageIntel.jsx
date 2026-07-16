@@ -347,19 +347,25 @@ export default function PackageIntel() {
         <div className="mb-5 mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={reset} seeding={seeding} /></div>
       )}
 
-      {/* Estaciones sin centro asignado: hasta hacerlo, esas rutas no se separan */}
-      {unmapped.length > 0 && (centers?.length > 0) && (
+      {/* Estaciones → centro. Mapeo duro por serviceAreaId (infalible). */}
+      {stations.length > 0 && (centers?.length > 1) && (unmapped.length > 0 || stations.length > 1) && (
         <div className="mb-5 rounded-2xl border border-amber-500/30 bg-amber-500/[.06] p-4">
-          <div className="mb-2 text-[13px] font-bold text-amber-300">Asigna cada estación de Cortex a su centro</div>
-          <p className="mb-3 text-[12px] text-dark-400">Detecté estaciones nuevas. Asígnalas para separar las rutas por centro (una sola vez).</p>
+          <div className="mb-1 text-[13px] font-bold text-amber-300">Asigna cada estación de Cortex a su centro</div>
+          <p className="mb-3 text-[12px] text-dark-400">Mira las rutas de ejemplo y pulsa el centro correcto. Se separa al instante (una vez por estación).</p>
           <div className="space-y-2">
-            {unmapped.map(s => (
+            {stations.map(s => (
               <div key={s.service_area_id} className="flex flex-wrap items-center gap-2 rounded-lg border border-dark-800 bg-dark-950/40 px-3 py-2">
-                <span className="font-mono text-[11px] text-dark-400">Estación {s.station_code || s.service_area_id.slice(0, 10)} · {s.n} paq.</span>
+                <div className="min-w-0">
+                  <div className="text-[12px] font-semibold text-dark-100">
+                    Estación {s.station_code || s.service_area_id.slice(0, 10)} · {s.n} paq.
+                    {s.center && <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">{s.center}</span>}
+                  </div>
+                  {s.sample_routes?.length > 0 && <div className="truncate font-mono text-[11px] text-dark-500">rutas: {s.sample_routes.join(', ')}…</div>}
+                </div>
                 <span className="ml-auto flex flex-wrap gap-1.5">
                   {centers.filter(c => c !== 'Todos').map(c => (
                     <button key={c} onClick={() => assignStation(s.service_area_id, c)}
-                      className="rounded-lg bg-brand-500/20 px-2.5 py-1 text-[12px] font-semibold text-brand-300 hover:bg-brand-500/40">{c}</button>
+                      className={`rounded-lg px-2.5 py-1 text-[12px] font-semibold ${s.center === c ? 'bg-emerald-500/25 text-emerald-200' : 'bg-brand-500/20 text-brand-300 hover:bg-brand-500/40'}`}>{c}</button>
                   ))}
                 </span>
               </div>
