@@ -187,6 +187,11 @@ export default function PlantillaGenerador() {
 
   const noCenter = !center || center === 'Todos'
 
+  // Columnas "H. llegada a nave" y "H. bajada al yard": cada centro trabaja a su
+  // manera — OGA5 no las usa, así que ahí van ocultas por defecto (conmutable).
+  const [hideNY, setHideNY] = useState(false)
+  useEffect(() => { setHideNY((center || '').toUpperCase() === 'OGA5') }, [center])
+
   const sharedPayload = useCallback(() => ({
     ...(data || {}),
     red_routes: [...redSet], yellow_routes: [...yellowSet],
@@ -341,6 +346,7 @@ export default function PlantillaGenerador() {
           marked_conductors: [...markedSet],
           week:          data.week,
           date:          data.date,
+          hide_nave_yard: hideNY,
           // guardar en historial si hay centro seleccionado
           save:   !noCenter,
           center: noCenter ? '' : center,
@@ -551,6 +557,11 @@ export default function PlantillaGenerador() {
               <span className="flex items-center gap-1.5">
                 <span className="h-3 w-3 rounded-sm bg-[#FCE4D6] border border-orange-200" /> Naranja nombre = sin batch
               </span>
+              <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-dark-300">
+                <input type="checkbox" checked={!hideNY} onChange={e => setHideNY(!e.target.checked)}
+                  className="h-3.5 w-3.5 accent-brand-500" />
+                Columnas nave/yard
+              </label>
             </div>
           </div>
 
@@ -587,7 +598,7 @@ export default function PlantillaGenerador() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="bg-[#FFD966] text-black">
-                  {['RUTA','CONDUCTOR','MOVIL','FURGO','H. LLEGADA A NAVE','H. BAJADA AL YARD','H. WAVE','OBSERVACIONES','','',''].map((h, i) => (
+                  {['RUTA','CONDUCTOR','MOVIL','FURGO',...(hideNY ? [] : ['H. LLEGADA A NAVE','H. BAJADA AL YARD']),'H. WAVE','OBSERVACIONES','','',''].map((h, i) => (
                     <th key={i} className="border border-[#BFBFBF] px-2 py-1.5 text-center font-bold whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -657,15 +668,17 @@ export default function PlantillaGenerador() {
                         />
                       </td>
 
-                      {/* H. LLEGADA A NAVE — color de ola */}
-                      <td className="border border-[#BFBFBF] px-1 py-0.5" style={waveColor ? { background: waveColor } : {}}>
-                        <EditCell value={row.h_llegada} onChange={v => editCell(i, 'h_llegada', v)} extraCls={`text-center font-mono ${textCl}`} />
-                      </td>
+                      {!hideNY && (<>
+                        {/* H. LLEGADA A NAVE — color de ola */}
+                        <td className="border border-[#BFBFBF] px-1 py-0.5" style={waveColor ? { background: waveColor } : {}}>
+                          <EditCell value={row.h_llegada} onChange={v => editCell(i, 'h_llegada', v)} extraCls={`text-center font-mono ${textCl}`} />
+                        </td>
 
-                      {/* H. BAJADA AL YARD — color de ola */}
-                      <td className="border border-[#BFBFBF] px-1 py-0.5" style={waveColor ? { background: waveColor } : {}}>
-                        <EditCell value={row.h_bajada} onChange={v => editCell(i, 'h_bajada', v)} extraCls={`text-center font-mono ${textCl}`} />
-                      </td>
+                        {/* H. BAJADA AL YARD — color de ola */}
+                        <td className="border border-[#BFBFBF] px-1 py-0.5" style={waveColor ? { background: waveColor } : {}}>
+                          <EditCell value={row.h_bajada} onChange={v => editCell(i, 'h_bajada', v)} extraCls={`text-center font-mono ${textCl}`} />
+                        </td>
+                      </>)}
 
                       {/* H. WAVE — color de ola */}
                       <td className="border border-[#BFBFBF] px-1 py-0.5" style={waveColor ? { background: waveColor } : {}}>

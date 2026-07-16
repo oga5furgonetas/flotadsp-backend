@@ -2081,7 +2081,9 @@ async def _known_damages_prompt(vehicle_id: str, exclude_inspection_id: str = No
             "REGLA: estos daños YA EXISTEN y están documentados. Si los ves, inclúyelos en "
             "damages[] con is_new=false, pero NUNCA en new_damages[] — salvo que veas en ese "
             "panel un daño CLARAMENTE distinto o de severidad claramente mayor (otra zona del "
-            "panel, otro tipo de daño, tamaño mucho mayor).")
+            "panel, otro tipo de daño, tamaño mucho mayor). OJO: las fotos de cada día se hacen "
+            "desde ÁNGULOS y con LUZ distintos; el mismo daño visto desde otro ángulo, con otro "
+            "reflejo o percibido un grado más severo NO es un daño nuevo.")
         return "\n".join(lines)
     except Exception as e:
         logger.debug(f"known_damages_prompt: {e}")
@@ -2126,8 +2128,18 @@ async def _apply_vehicle_memory(vehicle_id: str, analysis, inspection_id: str = 
             p = _canon_panel(d.part or "")
             d_rank = _SEV_RANK.get(_norm_sev(d.severity), 1)
 
-            if p and p in known and d_rank <= known[p]["rank"]:
-                # YA REGISTRADO → conocido, fuera de nuevos (sigue en damages[])
+            if p and p in known and d_rank <= known[p]["rank"] + 1:
+                # YA REGISTRADO → conocido, fuera de nuevos (sigue en damages[]).
+                # Tolerancia de ±1 grado: otra foto con OTRO ÁNGULO del mismo daño
+                # suele variar un punto la severidad percibida — eso NO es un daño
+                # nuevo. Solo un salto claro (+2, p.ej. leve→grave) es escalada.
+                if d_rank == known[p]["rank"] + 1:
+                    # Consolidar la severidad mayor en el ledger, sin re-alertar
+                    await db.vehicle_damage_ledger.update_one(
+                        {"vehicle_id": vehicle_id, "panel": p, "status": "open"},
+                        {"$set": {"severity": _norm_sev(d.severity), "rank": d_rank,
+                                  "updated_at": now_iso}})
+                    known[p]["rank"] = d_rank
                 d.is_new = False
                 d.description = ((d.description or "") +
                                  f" · [ya registrado desde {known[p].get('first_seen')}]")
@@ -16951,7 +16963,7 @@ def _normalizar_hora_cortex(hora: str | None) -> str:
     return ""
 
 
-def _build_plantilla_excel(rows: list, red_routes: set, pink_furgos: set, week_num, fecha_str: str, yellow_routes: set = None, marked_conductors: set = None) -> bytes:
+def _build_plantilla_excel(rows: list, red_routes: set, pink_furgos: set, week_num, fecha_str: str, yellow_routes: set = None, marked_conductors: set = None, hide_nave_yard: bool = False) -> bytes:
     import openpyxl
     from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -16984,12 +16996,25 @@ def _build_plantilla_excel(rows: list, red_routes: set, pink_furgos: set, week_n
     ca = Alignment(horizontal="center", vertical="center")
     la = Alignment(horizontal="left",   vertical="center")
 
+    # ── Fila 2: cabeceras (nave/yard opcionales — p.ej. OGA5 no las usa) ──
+    col_defs = [
+        ("RUTA",               13),
+        ("CONDUCTOR",          34),
+        ("MOVIL",               9),
+        ("FURGO",              12),
+    ]
+    if not hide_nave_yard:
+        col_defs += [("H. LLEGADA A NAVE", 18), ("H. BAJADA AL YARD", 18)]
+    col_defs += [("H. WAVE", 11), ("OBSERVACIONES", 32)]
+    ncols = len(col_defs)
+
     # ── Fila 1: WEEK xx (izq) · fecha (der) ──
-    ws.merge_cells("A1:D1")
-    ws.merge_cells("E1:H1")
+    left_end = 4 if not hide_nave_yard else 3
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=left_end)
+    ws.merge_cells(start_row=1, start_column=left_end + 1, end_row=1, end_column=ncols)
     for cell, val, align in [
-        (ws["A1"], f"WEEK {week_num}", la),
-        (ws["E1"], fecha_str,          ca),
+        (ws.cell(row=1, column=1),            f"WEEK {week_num}", la),
+        (ws.cell(row=1, column=left_end + 1), fecha_str,          ca),
     ]:
         cell.value = val
         cell.fill  = fill(C_TITLE_BG)
@@ -16997,18 +17022,6 @@ def _build_plantilla_excel(rows: list, red_routes: set, pink_furgos: set, week_n
         cell.alignment = align
         cell.border = brd()
     ws.row_dimensions[1].height = 22
-
-    # ── Fila 2: cabeceras ──
-    col_defs = [
-        ("RUTA",               13),
-        ("CONDUCTOR",          34),
-        ("MOVIL",               9),
-        ("FURGO",              12),
-        ("H. LLEGADA A NAVE",  18),
-        ("H. BAJADA AL YARD",  18),
-        ("H. WAVE",            11),
-        ("OBSERVACIONES",      32),
-    ]
     for i, (h, w) in enumerate(col_defs, start=1):
         cell = ws.cell(row=2, column=i, value=h)
         cell.fill  = fill(C_HEADER_BG)
@@ -17071,7 +17084,13 @@ def _build_plantilla_excel(rows: list, red_routes: set, pink_furgos: set, week_n
         is_marked_cond  = conductor.upper() in _marked_conductors
         wave_time_color = _wave_color.get(h_wave.strip(), None) if h_wave else None
 
-        cells_vals = [ruta, conductor, movil, furgo, h_llegada, h_bajada, h_wave, obs]
+        if hide_nave_yard:
+            cells_vals = [ruta, conductor, movil, furgo, h_wave, obs]
+            wave_cols = (5,)
+        else:
+            cells_vals = [ruta, conductor, movil, furgo, h_llegada, h_bajada, h_wave, obs]
+            wave_cols = (5, 6, 7)
+        obs_col = len(cells_vals)
         for ci, val in enumerate(cells_vals, start=1):
             cell = ws.cell(row=r, column=ci, value=val)
             if ci == 4 and is_pink_furgo and not is_red:
@@ -17082,14 +17101,14 @@ def _build_plantilla_excel(rows: list, red_routes: set, pink_furgos: set, week_n
                 # Conductor marcado — naranja clarito
                 cell.fill = fill(C_MARK)
                 cell.font = Font(color=C_MARK_FG, size=9, bold=True)
-            elif ci in (5, 6, 7) and wave_time_color and not is_red and not is_yellow:
+            elif ci in wave_cols and wave_time_color and not is_red and not is_yellow:
                 # Hora de ola — color de la wave correspondiente
                 cell.fill = fill(wave_time_color)
                 cell.font = Font(color="000000", size=9)
             else:
                 cell.fill = fill(row_bg)
                 cell.font = Font(color=row_fg, size=9, bold=(ci == 1))
-            cell.alignment = ca if ci not in (2, 8) else la
+            cell.alignment = ca if ci not in (2, obs_col) else la
             cell.border = brd()
         ws.row_dimensions[r].height = 16
 
@@ -17361,7 +17380,8 @@ async def plantilla_excel(body: dict = Body(...), admin=Depends(require_admin)):
             raise HTTPException(403, "Sin acceso a este centro")
 
     import io
-    xlsx = _build_plantilla_excel(rows, red_routes, pink_furgos, week_num, fecha_str, yellow_routes, marked_conductors)
+    hide_nave_yard = bool(body.get("hide_nave_yard"))
+    xlsx = _build_plantilla_excel(rows, red_routes, pink_furgos, week_num, fecha_str, yellow_routes, marked_conductors, hide_nave_yard)
     # Sanitizar fecha para uso seguro en nombre de archivo y header HTTP
     safe_fecha = re.sub(r'[^a-zA-Z0-9_\-]', '-', fecha_str)
     safe_week  = re.sub(r'[^a-zA-Z0-9_\-]', '-', str(week_num))

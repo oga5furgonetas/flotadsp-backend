@@ -80,6 +80,11 @@ export default function LiveNotifier({ center, centers }) {
     setNotes((a) => a.filter((x) => x.key !== key))
   }
 
+  // Entrar en la página del aviso = visto: se cierra solo (y deja de sonar).
+  useEffect(() => {
+    setNotes((a) => a.filter((n) => !loc.pathname.startsWith(n.to)))
+  }, [loc.pathname])
+
   useEffect(() => {
     let stop = false
     const targets = () =>
@@ -142,11 +147,17 @@ export default function LiveNotifier({ center, centers }) {
 
   const hasNotes = notes.length > 0
 
-  // Recordatorio sonoro cada 25s mientras haya avisos sin atender:
-  // levantarse a por un café no puede significar perderse un aviso.
+  // Recordatorio sonoro cada 25s mientras haya avisos sin atender — pero con
+  // límite: 3 recordatorios y silencio. El aviso visual y el parpadeo del
+  // título siguen ahí; la campanilla no puede ser un castigo eterno.
   useEffect(() => {
     if (!hasNotes) return
-    const iv = setInterval(() => playChime(1), 25000)
+    let count = 0
+    const iv = setInterval(() => {
+      count += 1
+      if (count > 3) { clearInterval(iv); return }
+      playChime(1)
+    }, 25000)
     return () => clearInterval(iv)
   }, [hasNotes])
 
