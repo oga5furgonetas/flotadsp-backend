@@ -50,6 +50,22 @@ $('save').addEventListener('click', async () => {
 
 $('flush').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'flushNow' }));
 
+// Auto-guardado del token: al pegarlo/escribirlo se guarda solo y se envía la
+// cola (evita el clásico "lo pegué pero olvidé pulsar Guardar").
+let _tokTimer;
+const autoSaveToken = () => {
+  clearTimeout(_tokTimer);
+  _tokTimer = setTimeout(async () => {
+    const tok = $('token').value.trim();
+    if (!tok) return;
+    await chrome.storage.local.set({ ingestToken: tok });
+    chrome.runtime.sendMessage({ type: 'flushNow' });
+    const s = $('status'); s.textContent = 'Token guardado ✓. Enviando…'; s.className = 'status ok';
+  }, 500);
+};
+$('token').addEventListener('input', autoSaveToken);
+$('token').addEventListener('paste', () => setTimeout(autoSaveToken, 50));
+
 $('diag').addEventListener('click', async () => {
   const { diag, activity = [] } = await chrome.storage.local.get(['diag', 'activity']);
   const payload = {
