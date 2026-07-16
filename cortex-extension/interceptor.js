@@ -246,11 +246,35 @@
   // Parser específico de route-details: el paquete real es cada `task` dentro de
   // stops[].tasks[] — con taskState (estado), referenceId, y domainMap.scannableId
   // (el TBA). El conductor está en transporters[] y la dirección en addresses[].
+  // Centro/estación seleccionado en Cortex. El selector muestra algo como
+  // "OGA5 - O Milladoiro(OGA5)-Amazon Logistics(15895)". Sacamos el código corto.
+  const stationCenter = () => {
+    try {
+      let txt = '';
+      const opt = [...document.querySelectorAll('option, [role="option"], select')]
+        .find((e) => /Amazon Logistics\(\d+\)/i.test(e.textContent || '') || /-Amazon Logistics/i.test(e.value || ''));
+      if (opt) txt = (opt.selectedOptions && opt.selectedOptions[0]?.textContent) || opt.textContent || opt.value || '';
+      if (!txt) {
+        const el = [...document.querySelectorAll('button,span,div')]
+          .find((e) => e.children.length === 0 && /Amazon Logistics\(\d+\)/i.test(e.textContent || ''));
+        txt = el?.textContent || '';
+      }
+      const m = txt.match(/^\s*([A-Z0-9]{2,6})\s*-/) || txt.match(/\(([A-Z0-9]{2,6})\)\s*-\s*Amazon/i);
+      return m ? m[1].toUpperCase() : null;
+    } catch (_) { return null; }
+  };
+  // serviceAreaId → centro aprendido en vivo (para etiquetar bien los replays).
+  const saCenter = {};
+
   const extractRouteDetails = (json) => {
     const root = (json && json.rmsRouteDetails) || json;
     if (!root || !Array.isArray(root.stops)) return null;
     const routeCode = root.routeCode || null;
     const routeId = root.routeId || null;
+    const said = root.serviceAreaId || saId || null;
+    const pageCenter = stationCenter();
+    if (said && pageCenter && !saCenter[said]) saCenter[said] = pageCenter; // 1ª vez = navegación real
+    const center = (said && saCenter[said]) || pageCenter || null;
     const drivers = {};
     for (const t of (root.transporters || [])) {
       if (t && t.transporterId) {
@@ -284,18 +308,21 @@
           events = task.recentTaskEvents.map((e) => ({
             state: firstKey(e, ['type', 'eventType', 'state', 'status', 'code', 'taskState', 'name']) || '',
             at: firstKey(e, ['timestamp', 'time', 'eventTime', 'at', 'date', 'createdAt', 'eventTimestamp', 'epochMillis']) || null,
+            context: firstKey(e, ['taskStateContext', 'reasonCode', 'reason', 'context', 'detail', 'description']) || null,
           })).filter((e) => e.at);
         }
         out.push({
           tba,
           reference_id: task.referenceId || dm.orderId || null,
           route_code: routeCode, route_id: routeId,
+          service_area_id: said, center,
           driver_name: drivers[tid] || soloDriver || null, driver_id: tid || null,
           stop_id: seq != null ? String(seq) : null,
           stop_address: addrStr,
           container_id: task.containerScannableId || null,
           state: task.taskState || task.executionStatus || null,
           raw_state: task.taskState || null,
+          state_context: task.taskStateContext || null,
           task_type: task.taskType || null,
           lat: geo.latitude ?? null, lng: geo.longitude ?? null,
           observed_at: task.actualExecutionTime || stop.actualEndTime || null,

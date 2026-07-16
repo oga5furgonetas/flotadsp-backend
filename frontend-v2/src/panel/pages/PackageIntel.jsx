@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
 import {
   Search, RefreshCw, PackageSearch, ShieldAlert, Activity, Radar,
   MapPin, User, Route as RouteIcon, Box, Clock, Zap, Copy, Check, Loader2, X, Calendar,
@@ -6,6 +7,7 @@ import {
 import {
   cortexOverview, cortexPackages, cortexPackage, cortexAlerts, cortexRoutes,
   cortexIngestToken, cortexSeedDemo, cortexClearDemo, cortexDays, cortexReset,
+  cortexStations, cortexAssignStation,
 } from '../api'
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
@@ -71,12 +73,13 @@ function Kpi({ icon: Icon, label, value, sub, accent = 'dark' }) {
 }
 
 /* ── Timeline vertical gráfico ── */
+const humanCtx = (c) => c ? String(c).replace(/_/g, ' ').toLowerCase().replace(/^\w/, m => m.toUpperCase()) : ''
 function Timeline({ events }) {
   if (!events?.length) return <div className="text-sm text-dark-500">Sin eventos registrados.</div>
   return (
     <ol className="relative ml-1 border-l border-dark-700">
       {events.map((e, i) => {
-        const st = STATE[e.state] || STATE.OBSERVED
+        const st = STATE[e.state] || (e.state ? { c: 'zinc', l: humanCtx(e.state) } : STATE.OBSERVED)
         const last = i === events.length - 1
         return (
           <li key={i} className="ml-4 pb-4 last:pb-0">
@@ -85,6 +88,7 @@ function Timeline({ events }) {
               <span className="font-mono text-[11px] font-bold uppercase tracking-wide text-dark-100">{st.l}</span>
               <span className="text-[11px] tabular-nums text-dark-500">{fmtTime(e.at)}</span>
             </div>
+            {e.context && e.context !== 'NONE' && <div className="mt-0.5 text-[11px] text-amber-300/80">{humanCtx(e.context)}</div>}
             {e.container_id && <div className="mt-0.5 text-[11px] text-dark-500">Contenedor {e.container_id}</div>}
           </li>
         )
@@ -237,6 +241,8 @@ function RouteCard({ r, onOpen }) {
 }
 
 export default function PackageIntel() {
+  const { center, centers } = useOutletContext()
+  const [stations, setStations] = useState([])
   const [ov, setOv] = useState(null)
   const [pkgs, setPkgs] = useState([])
   const [alerts, setAlerts] = useState([])
@@ -256,20 +262,27 @@ export default function PackageIntel() {
     try {
       const searching = (qRef.current || '').trim().length > 0
       const inRoute = !!activeRoute
-      const [o, r, a] = await Promise.all([cortexOverview(day), cortexRoutes(day), cortexAlerts(day)])
+      const [o, r, a] = await Promise.all([cortexOverview(day, center), cortexRoutes(day, center), cortexAlerts(day, center)])
       setOv(o.data); setRoutes(r.data.routes || []); setAlerts(a.data.alerts || [])
       // Solo pedimos paquetes cuando hace falta: buscando o dentro de una ruta.
       if (searching || inRoute) {
-        const p = await cortexPackages({ q: qRef.current, state: filter, day, route: inRoute ? activeRoute : '', limit: inRoute ? 6000 : 300 })
+        const p = await cortexPackages({ q: qRef.current, state: filter, day, center, route: inRoute ? activeRoute : '', limit: inRoute ? 6000 : 300 })
         setPkgs(p.data.packages || [])
       } else {
         setPkgs([])
       }
     } catch { /* red */ }
     setLoading(false)
-  }, [filter, day, activeRoute])
+  }, [filter, day, activeRoute, center])
 
-  useEffect(() => { cortexDays().then(r => setDays(r.data.days || [])).catch(() => {}) }, [routes.length])
+  // Cambiar de centro arriba: volver a la vista de rutas de ese centro.
+  useEffect(() => { setActiveRoute(null); setSel(null) }, [center])
+
+  useEffect(() => { cortexDays(center).then(r => setDays(r.data.days || [])).catch(() => {}) }, [routes.length, center])
+  const loadStations = useCallback(() => { cortexStations().then(r => setStations(r.data.stations || [])).catch(() => {}) }, [])
+  useEffect(() => { loadStations() }, [routes.length, loadStations])
+  const unmapped = stations.filter(s => !s.center)
+  const assignStation = async (sid, c) => { await cortexAssignStation(sid, c); loadStations(); load() }
 
   useEffect(() => { qRef.current = q }, [q])
   useEffect(() => { load() }, [load])
@@ -332,6 +345,27 @@ export default function PackageIntel() {
 
       {showSetup && (
         <div className="mb-5 mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={reset} seeding={seeding} /></div>
+      )}
+
+      {/* Estaciones sin centro asignado: hasta hacerlo, esas rutas no se separan */}
+      {unmapped.length > 0 && (centers?.length > 0) && (
+        <div className="mb-5 rounded-2xl border border-amber-500/30 bg-amber-500/[.06] p-4">
+          <div className="mb-2 text-[13px] font-bold text-amber-300">Asigna cada estación de Cortex a su centro</div>
+          <p className="mb-3 text-[12px] text-dark-400">Detecté estaciones nuevas. Asígnalas para separar las rutas por centro (una sola vez).</p>
+          <div className="space-y-2">
+            {unmapped.map(s => (
+              <div key={s.service_area_id} className="flex flex-wrap items-center gap-2 rounded-lg border border-dark-800 bg-dark-950/40 px-3 py-2">
+                <span className="font-mono text-[11px] text-dark-400">{s.service_area_id.slice(0, 12)}… · {s.n} paq.</span>
+                <span className="ml-auto flex flex-wrap gap-1.5">
+                  {centers.filter(c => c !== 'Todos').map(c => (
+                    <button key={c} onClick={() => assignStation(s.service_area_id, c)}
+                      className="rounded-lg bg-brand-500/20 px-2.5 py-1 text-[12px] font-semibold text-brand-300 hover:bg-brand-500/40">{c}</button>
+                  ))}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* KPIs */}
