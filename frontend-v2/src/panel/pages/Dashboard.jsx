@@ -397,169 +397,139 @@ export default function Dashboard() {
     ? `${data.open_incidents} ${t('dash.incidents.open')}`
     : t('dash.incidents.none')
 
-  return (
-    <div className="space-y-5">
-      {/* ── Header ── */}
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-dark-50">{greeting(t)}</h1>
-          <p className="mt-0.5 text-sm capitalize text-dark-500">
-            {fmtDate(locale)}{center && center !== 'Todos' ? ` · ${t('dash.center')} ${center}` : ''}
-          </p>
-        </div>
-        {critCount > 0 && (
-          <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2 text-sm text-red-400">
-            <AlertTriangle size={14} /> {critCount} {t('dash.attention').replace('{s}', critCount !== 1 ? 's' : '')}
-          </div>
-        )}
-      </div>
+  // ── Centro de Operaciones: la home guía el trabajo, no muestra widgets ──
+  const urgent = [
+    { n: itv.length, label: t('ops.itv.due'), to: '/panel/vencimientos', color: 'bg-red-400' },
+    { n: nowLive?.missing || 0, label: t('ops.missing'), to: '/panel/paquetes', color: 'bg-red-400' },
+    { n: data.open_incidents || 0, label: t('ops.incidents'), to: '/panel/incidencias', color: 'bg-amber-400' },
+    { n: inShop, label: t('ops.workshop'), to: '/panel/talleres', color: 'bg-amber-400' },
+  ].filter((u) => u.n > 0)
+  const urgentTotal = urgent.reduce((a, u) => a + u.n, 0)
+  const todos = [
+    { n: nowLive?.review || 0, label: t('ops.validate'), to: '/panel/revision' },
+    { n: nowLive?.missing || 0, label: t('ops.investigate'), to: '/panel/paquetes' },
+    { n: itv.length, label: t('ops.review.exp'), to: '/panel/vencimientos' },
+  ].filter((x) => x.n > 0)
 
-      {/* ── Ahora mismo: lo que puede estropear el día, en vivo y clicable ── */}
-      {nowLive && (nowLive.routes > 0 || nowLive.review > 0 || nowLive.missing > 0 || itv.length > 0) && (
-        <div className="rounded-2xl border border-dark-800 bg-gradient-to-br from-dark-900/80 to-dark-950 p-3">
-          <div className="mb-2 flex items-center gap-2 px-1 text-[11px] font-bold uppercase tracking-wider text-dark-500">
-            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> {t('dash.now')}
-          </div>
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-            {[
-              { v: nowLive.missing, label: t('dash.now.missing'), to: '/panel/paquetes', danger: (nowLive.missing || 0) > 0, show: nowLive.missing != null },
-              { v: nowLive.routes, label: t('dash.now.routes'), to: '/panel/paquetes', show: nowLive.routes != null },
-              { v: nowLive.review, label: t('dash.now.review'), to: '/panel/revision', warn: nowLive.review > 0, show: true },
-              { v: itv.length, label: t('dash.now.itv'), to: '/panel/vencimientos', warn: itv.length > 0, show: true },
-            ].filter(c => c.show).map((c) => (
-              <button key={c.label} onClick={() => navTop(c.to)}
-                className={`rounded-xl border px-3 py-2.5 text-left transition hover:border-brand-500/50 ${
-                  c.danger ? 'border-red-500/40 bg-red-500/[.06]' : c.warn ? 'border-amber-500/30 bg-amber-500/[.05]' : 'border-dark-800 bg-dark-900/60'
-                }`}>
-                <div className={`text-xl font-extrabold tabular-nums ${c.danger ? 'text-red-300' : c.warn ? 'text-amber-300' : 'text-dark-50'}`}>{c.v}</div>
-                <div className="text-[11px] font-semibold text-dark-400">{c.label}</div>
+  return (
+    <div className="mx-auto max-w-4xl">
+      {/* ── Cabecera: saludo grande, sin cajas ── */}
+      <header className="pb-2 pt-1">
+        <h1 className="text-[26px] font-semibold tracking-tight text-dark-50 sm:text-3xl">{greeting(t)}</h1>
+        <p className="mt-1 text-[13.5px] capitalize text-dark-500">
+          {fmtDate(locale)}{center && center !== 'Todos' ? ` · ${center}` : ''}
+        </p>
+      </header>
+
+      {fleet === 0 ? (
+        <div className="mt-8">
+          <GuidedEmpty
+            emoji="👋"
+            title={t('empty.dash.title')}
+            hint={t('empty.dash.hint')}
+            actionLabel={t('empty.veh.import')}
+            to="/panel/importaciones"
+            secondary={{ to: '/panel/vehiculos', label: t('empty.veh.add') }}
+          />
+        </div>
+      ) : (
+      <div className="divide-y divide-dark-800/60">
+
+        {/* ── 1 · Requieren atención inmediata ── */}
+        {urgent.length > 0 && (
+          <section className="py-7">
+            <h2 className="flex items-baseline gap-2 text-[15px] font-semibold text-dark-100">
+              <span className="text-red-400">●</span> {t('ops.attention')}
+              <span className="text-[13px] font-normal tabular-nums text-dark-500">({urgentTotal})</span>
+            </h2>
+            <div className="mt-2">
+              {urgent.map((u) => (
+                <button key={u.label} onClick={() => navTop(u.to)}
+                  className="group -mx-3 flex w-[calc(100%+1.5rem)] items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-white/[0.03]">
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${u.color}`} />
+                  <span className="text-[14.5px] text-dark-200">
+                    <b className="font-semibold tabular-nums text-dark-50">{u.n}</b> {u.label}
+                  </span>
+                  <ChevronRight size={15} className="ml-auto shrink-0 text-dark-600 transition-transform group-hover:translate-x-0.5 group-hover:text-dark-300" />
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* ── 2 · Tu trabajo de hoy ── */}
+        <section className="py-7">
+          <h2 className="text-[15px] font-semibold text-dark-100">{t('ops.today')}</h2>
+          <div className="mt-2">
+            {todos.length === 0 ? (
+              <p className="flex items-center gap-2 py-2 text-[14px] text-emerald-400/90">
+                <CheckCircle2 size={15} /> {t('ops.clear')}
+              </p>
+            ) : todos.map((x) => (
+              <button key={x.label} onClick={() => navTop(x.to)}
+                className="group -mx-3 flex w-[calc(100%+1.5rem)] items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-white/[0.03]">
+                <span className="flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-[5px] border border-dark-600 text-transparent transition-colors group-hover:border-dark-400" />
+                <span className="text-[14.5px] text-dark-200">{x.label}</span>
+                <span className="ml-auto text-[13px] font-medium tabular-nums text-dark-500">{x.n}</span>
               </button>
             ))}
           </div>
-        </div>
-      )}
+        </section>
 
-      {/* ── Onboarding: flota vacía → guiar el primer paso ── */}
-      {fleet === 0 && (
-        <GuidedEmpty
-          emoji="👋"
-          title={t('empty.dash.title')}
-          hint={t('empty.dash.hint')}
-          actionLabel={t('empty.veh.import')}
-          to="/panel/importaciones"
-          secondary={{ to: '/panel/vehiculos', label: t('empty.veh.add') }}
-        />
-      )}
-
-      {/* ── KPI row ── */}
-      <div className="stagger grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <KpiCard icon={Truck}    label={t('dash.flota.active')} value={active}               sub={fleetSub}                   accent="#0ea5e9" to="/panel/vehiculos" />
-        <KpiCard icon={Wrench}   label={t('dash.workshop')}     value={inShop}               sub={workshopSub}                accent="#fb923c" to="/panel/talleres" />
-        <KpiCard icon={Users}    label={t('nav.drivers')}        value={data.total_drivers}  sub={t('dash.drivers.sub')}      accent="#a78bfa" to="/panel/conductores" />
-        <KpiCard icon={Camera}   label={t('dash.insptoday')}     value={todayInsp}           sub={inspSub}                    accent="#34d399" to="/panel/inspecciones" />
-        <KpiCard icon={BellRing} label={t('dash.itvalerts')}     value={data.unread_alerts}  sub={itvSub}                     accent="#fbbf24" to="/panel/avisos-itv" alert={critCount > 0 ? critCount : 0} />
-      </div>
-
-      {/* ── € de daños del mes (el argumento de FlotaDSP en una tarjeta) ── */}
-      {costs && (costs.month_count > 0 || costs.prev_month_count > 0) && (
-        <div className="rounded-2xl border border-dark-700/60 bg-dark-800/60 p-5">
-          <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-dark-500">{t('dash.costs.title')}</div>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className={`text-2xl font-extrabold ${costs.month_eur > 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-                  {costs.month_eur.toLocaleString('es-ES')}€
-                </span>
-                <span className="text-xs text-dark-500">{costs.month_count} {t('dash.costs.damages')}</span>
-              </div>
-            </div>
-            <div className="h-10 w-px bg-dark-700/60 hidden sm:block" />
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-dark-600">{t('dash.costs.prev')}</div>
-              <div className="mt-1 flex items-baseline gap-2">
-                <span className="text-lg font-bold text-dark-300">{costs.prev_month_eur.toLocaleString('es-ES')}€</span>
-                {costs.prev_month_eur > 0 && (
-                  <span className={`text-xs font-semibold ${costs.month_eur <= costs.prev_month_eur ? 'text-emerald-400' : 'text-red-400'}`}>
-                    {costs.month_eur <= costs.prev_month_eur ? '▼' : '▲'}
-                    {Math.abs(Math.round(((costs.month_eur - costs.prev_month_eur) / costs.prev_month_eur) * 100))}%
-                  </span>
-                )}
-              </div>
-            </div>
-            {costs.top_drivers?.length > 0 && (
-              <>
-                <div className="h-10 w-px bg-dark-700/60 hidden sm:block" />
-                <div className="min-w-0">
-                  <div className="text-[11px] font-semibold uppercase tracking-wider text-dark-600">{t('dash.costs.top')}</div>
-                  <div className="mt-1 flex flex-wrap gap-2">
-                    {costs.top_drivers.slice(0, 3).map(d => (
-                      <span key={d.driver_id} className="rounded-full bg-dark-900/80 border border-dark-700 px-2.5 py-0.5 text-xs text-dark-300">
-                        {d.name} · <b className="text-red-400">{d.eur.toLocaleString('es-ES')}€</b>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </>
+        {/* ── 3 · Todo lo demás bajo control ── */}
+        <section className="py-7">
+          <h2 className="flex items-center gap-2 text-[15px] font-semibold text-dark-100">
+            <span className="text-emerald-400">●</span> {t('ops.control')}
+          </h2>
+          <p className="mt-3 text-[14px] leading-relaxed text-dark-400">
+            <b className="font-semibold text-dark-100">{active}</b> {t('ops.active.veh')}
+            <span className="mx-2 text-dark-700">·</span>
+            <b className="font-semibold text-dark-100">{data.total_drivers}</b> {t('nav.drivers').toLowerCase()}
+            {nowLive?.routes > 0 && (<><span className="mx-2 text-dark-700">·</span><b className="font-semibold text-dark-100">{nowLive.routes}</b> {t('ops.routes.live')}</>)}
+            <span className="mx-2 text-dark-700">·</span>
+            <b className="font-semibold text-dark-100">{todayInsp}</b> {t('ops.insp.today')}
+            {costs && costs.month_eur > 0 && (
+              <><span className="mx-2 text-dark-700">·</span>
+              <b className={`font-semibold ${costs.prev_month_eur && costs.month_eur < costs.prev_month_eur ? 'text-emerald-400' : 'text-amber-300'}`}>{Math.round(costs.month_eur).toLocaleString('es-ES')} €</b> {t('ops.damage.month')}</>
             )}
-          </div>
-          <p className="mt-3 text-[11px] text-dark-600">{t('dash.costs.note')}</p>
-        </div>
-      )}
+          </p>
+        </section>
 
-      {/* ── Middle row ── */}
-      <div className="grid gap-4 lg:grid-cols-5">
-        <div className="lg:col-span-2 rounded-2xl border border-dark-700/60 bg-dark-800/60 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-dark-200">{t('dash.fleet.state')}</h2>
-            <span className="text-xs text-dark-600">{data.total_inspections} {t('dash.fleet.total')}</span>
-          </div>
-          <FleetHealth breakdown={breakdown} />
-        </div>
-
-        <div className="lg:col-span-3 rounded-2xl border border-dark-700/60 bg-dark-800/60 p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-dark-200">{t('dash.activity')}</h2>
-            <div className="flex items-center gap-1.5 text-xs text-dark-600">
-              <TrendingUp size={12} />
-              {Object.values(data.weekly_activity || {}).reduce((a, d) => a + (d.inspecciones || 0), 0)} {t('dash.thisweek')}
+        {/* ── 4 · Estado de la flota + Actividad ── */}
+        <section className="grid gap-x-14 gap-y-8 py-7 lg:grid-cols-2">
+          <div>
+            <div className="mb-4 flex items-baseline justify-between">
+              <h2 className="text-[15px] font-semibold text-dark-100">{t('ops.fleet.state')}</h2>
+              <span className="text-[12px] tabular-nums text-dark-600">{data.total_inspections} {t('dash.fleet.total')}</span>
             </div>
+            <FleetHealth breakdown={breakdown} />
           </div>
-          <WeeklyChart data={data.weekly_activity || {}} />
-        </div>
-      </div>
+          <div>
+            <div className="mb-4 flex items-baseline justify-between">
+              <h2 className="text-[15px] font-semibold text-dark-100">{t('ops.recent')}</h2>
+              <button onClick={() => navTop('/panel/inspecciones')} className="text-[12px] text-dark-600 transition-colors hover:text-dark-300">
+                {t('dash.see.all')} →
+              </button>
+            </div>
+            <RecentInspections items={recent} />
+          </div>
+        </section>
 
-      {/* ── Bottom row ── */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="rounded-2xl border border-dark-700/60 bg-dark-800/60 p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-dark-200">
-              <Camera size={14} className="text-dark-500" /> {t('dash.recentinsp')}
-            </h2>
-            <button
-              onClick={() => window.location.assign('/panel/inspecciones')}
-              className="flex items-center gap-1 text-xs text-dark-600 hover:text-dark-300 transition"
-            >
-              {t('dash.see.all')} <ArrowRight size={11} />
-            </button>
-          </div>
-          <RecentInspections items={recent} />
-        </div>
+        {/* ── 5 · Próximos vencimientos ── */}
+        {itv.length > 0 && (
+          <section className="py-7">
+            <div className="mb-4 flex items-baseline justify-between">
+              <h2 className="text-[15px] font-semibold text-dark-100">{t('ops.upcoming')}</h2>
+              <button onClick={() => navTop('/panel/vencimientos')} className="text-[12px] text-dark-600 transition-colors hover:text-dark-300">
+                {t('dash.see.all')} →
+              </button>
+            </div>
+            <ItvAlerts items={itv} />
+          </section>
+        )}
 
-        <div className="rounded-2xl border border-dark-700/60 bg-dark-800/60 p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-dark-200">
-              <ShieldAlert size={14} className="text-dark-500" /> {t('dash.itv.upcoming')}
-            </h2>
-            <button
-              onClick={() => window.location.assign('/panel/avisos-itv')}
-              className="flex items-center gap-1 text-xs text-dark-600 hover:text-dark-300 transition"
-            >
-              {t('dash.see.all')} <ArrowRight size={11} />
-            </button>
-          </div>
-          <ItvAlerts items={itv} />
-        </div>
       </div>
+      )}
     </div>
   )
 }

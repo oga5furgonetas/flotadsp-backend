@@ -171,12 +171,12 @@ export default function PanelLayout() {
   return (
     <div className="flex min-h-screen bg-dark-950 text-dark-50">
       {/* Sidebar */}
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-dark-800/80 bg-gradient-to-b from-dark-900 to-dark-950 md:flex">
-        <div className="flex items-center gap-2.5 px-5 py-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 shadow-lg shadow-brand-500/30">
-            <Zap size={18} className="text-white" />
+      <aside className="hidden w-60 shrink-0 flex-col border-r border-dark-800/60 bg-dark-950 md:flex">
+        <div className="flex items-center gap-2.5 px-5 pb-3 pt-5">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-brand-400 to-brand-600">
+            <Zap size={15} className="text-white" />
           </div>
-          <b className="font-display text-base font-bold tracking-tight">FlotaDSP</b>
+          <b className="font-display text-[15px] font-semibold tracking-tight">FlotaDSP</b>
         </div>
 
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-1">
