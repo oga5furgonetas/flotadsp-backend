@@ -59,13 +59,13 @@ function Statecap({ s, sm }) {
 /* ── KPI ── */
 function Kpi({ icon: Icon, label, value, sub, accent = 'dark' }) {
   return (
-    <div className="rounded-xl border border-dark-800 bg-dark-900/60 p-4">
+    <div className="rounded-2xl border border-white/[0.05] bg-white/[0.02] p-4">
       <div className="flex items-center gap-2 text-dark-500">
         <Icon size={14} className={accent === 'red' ? 'text-red-400' : accent === 'emerald' ? 'text-emerald-400' : 'text-dark-500'} />
-        <span className="text-[11px] font-semibold uppercase tracking-wide">{label}</span>
+        <span className="font-mono text-[10px] font-bold uppercase tracking-[0.15em]">{label}</span>
       </div>
-      <div className="mt-2 flex items-baseline gap-2">
-        <span className="text-2xl font-black tabular-nums text-dark-50">{value ?? '—'}</span>
+      <div className="mt-2.5 flex items-baseline gap-2">
+        <span className="font-display text-[27px] font-semibold tabular-nums text-dark-50">{value ?? '—'}</span>
         {sub && <span className="text-xs text-dark-500">{sub}</span>}
       </div>
     </div>
@@ -115,7 +115,7 @@ function Investigator({ tba, onClose }) {
   const deliveredSameStop = (data.same_stop || []).filter(x => ['DELIVERED', 'RECOVERED'].includes(x.state)).length
 
   return (
-    <div className="animate-[fadeIn_.2s_ease] rounded-2xl border border-dark-800 bg-dark-900/60 p-5">
+    <div className="animate-[fadeIn_.2s_ease] rounded-2xl border border-white/[0.05] bg-white/[0.02] p-5">
       <div className="mb-3 flex items-start justify-between">
         <div>
           <div className="font-mono text-[10px] font-bold uppercase tracking-[0.15em] text-dark-500">Package Investigator</div>
@@ -173,8 +173,8 @@ function SetupCard({ onSeed, onReset, seeding }) {
   useEffect(() => { load() }, [])
   const copy = (txt, key) => { navigator.clipboard?.writeText(txt); setCopied(key); setTimeout(() => setCopied(''), 1500) }
   return (
-    <div className="rounded-2xl border border-dark-800 bg-dark-900/60 p-5">
-      <div className="flex items-center gap-2 text-dark-100"><Radar size={16} className="text-sky-400" /><span className="text-[15px] font-bold">Conecta Cortex</span></div>
+    <div className="rounded-2xl border border-white/[0.05] bg-white/[0.02] p-5">
+      <div className="flex items-center gap-2 text-dark-100"><Radar size={16} className="text-brand-400" /><span className="text-[15px] font-bold">Conecta Cortex</span></div>
       <p className="mt-1 text-[13px] leading-relaxed text-dark-400">
         Instala la extensión de navegador. Lee la API real de Cortex con tu sesión (nunca la pantalla) y envía los datos aquí cada 2 minutos.
       </p>
@@ -217,10 +217,10 @@ function RouteCard({ r, onOpen }) {
   )
   return (
     <button onClick={onOpen}
-      className="group flex flex-col rounded-2xl border border-dark-800 bg-dark-900/60 p-4 text-left transition hover:border-sky-500/40 hover:bg-dark-900">
+      className="float-row group flex flex-col rounded-2xl border border-white/[0.05] bg-white/[0.02] p-4 text-left hover:border-white/[0.1]">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-[15px] font-black text-dark-50">
-          <RouteIcon size={15} className="text-sky-400" /> {r.route_code}
+        <div className="flex items-center gap-2 text-[15px] font-bold text-dark-50">
+          <RouteIcon size={15} className="text-brand-400" /> {r.route_code}
           {r.critical > 0 && <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />}
         </div>
         <span className="font-mono text-[11px] font-bold tabular-nums text-dark-400">{r.total}</span>
@@ -304,24 +304,28 @@ export default function PackageIntel() {
   const filters = [['', 'Todos'], ['MISSING', 'Missing'], ['ATTEMPTED', 'Intentados'], ['RECOVERED', 'Recuperados'], ['DELIVERED', 'Entregados']]
 
   return (
-    <div className="min-h-full bg-dark-950 px-4 py-5 sm:px-6">
+    <div className="min-h-full px-4 py-6 sm:px-6">
       <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}`}</style>
 
       {/* Header */}
-      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="flex items-center gap-1.5 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-dark-500">
-            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Package Intelligence · en vivo
+          <div className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-dark-500">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            </span>
+            Package Intelligence · en vivo
           </div>
-          <h1 className="mt-1 flex items-center gap-2 text-2xl font-black tracking-tight text-dark-50">
-            <PackageSearch size={22} className="text-sky-400" /> Centro de Investigación de Paquetes
+          <h1 className="mt-2 font-display text-[clamp(24px,3vw,34px)] font-semibold tracking-[-0.03em] text-dark-50">
+            Centro de investigación de paquetes
           </h1>
         </div>
         <div className="flex items-center gap-2">
           <div className="relative">
             <Calendar size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dark-500" />
             <select value={day} onChange={e => { setDay(e.target.value); setSel(null) }}
-              className="appearance-none rounded-lg border border-dark-700 bg-dark-900 py-2 pl-8 pr-8 text-[13px] font-semibold text-dark-200 outline-none hover:border-dark-600 focus:border-sky-500/50">
+              className="appearance-none rounded-lg border border-dark-700 bg-dark-900 py-2 pl-8 pr-8 text-[13px] font-semibold text-dark-200 outline-none hover:border-dark-600 focus:border-brand-500/50">
               {(days.some(d => d.day === day) ? days : [{ day, n: 0 }, ...days]).map(d => (
                 <option key={d.day} value={d.day}>{fmtDay(d.day)}{d.n ? ` · ${d.n}` : ''}</option>
               ))}
@@ -334,7 +338,7 @@ export default function PackageIntel() {
             </button>
           )}
           <button onClick={() => setShowSetup(s => !s)} title="Token e instalación de la extensión"
-            className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-[13px] font-semibold ${showSetup ? 'border-sky-500/40 bg-sky-500/10 text-sky-300' : 'border-dark-700 bg-dark-900 text-dark-200 hover:border-dark-600'}`}>
+            className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-[13px] font-semibold ${showSetup ? 'border-brand-500/40 bg-brand-500/10 text-brand-300' : 'border-dark-700 bg-dark-900 text-dark-200 hover:border-dark-600'}`}>
             <Radar size={14} /> Extensión
           </button>
           <button onClick={load} className="inline-flex items-center gap-2 rounded-lg border border-dark-700 bg-dark-900 px-3 py-2 text-[13px] font-semibold text-dark-200 hover:border-dark-600">
@@ -399,12 +403,12 @@ export default function PackageIntel() {
               <div className="relative min-w-[200px] flex-1">
                 <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />
                 <input value={q} onChange={e => setQ(e.target.value)} placeholder="Buscar TBA, conductor, dirección, stop…"
-                  className="w-full rounded-lg border border-dark-700 bg-dark-900 py-2 pl-9 pr-3 text-[13px] text-dark-100 placeholder-dark-500 outline-none focus:border-sky-500/50" />
+                  className="w-full rounded-lg border border-dark-700 bg-dark-900 py-2 pl-9 pr-3 text-[13px] text-dark-100 placeholder-dark-500 outline-none focus:border-brand-500/50" />
               </div>
               {(activeRoute || searching) && (
                 <div className="flex flex-wrap gap-1.5">
                   {filters.map(([v, l]) => (
-                    <button key={v} onClick={() => setFilter(v)} className={`rounded-lg px-3 py-1.5 text-[12px] font-semibold ring-1 ${filter === v ? 'bg-sky-500/15 text-sky-300 ring-sky-500/30' : 'bg-dark-900 text-dark-400 ring-dark-700 hover:text-dark-200'}`}>{l}</button>
+                    <button key={v} onClick={() => setFilter(v)} className={`rounded-lg px-3 py-1.5 text-[12px] font-semibold ring-1 ${filter === v ? 'bg-brand-500/15 text-brand-300 ring-brand-500/30' : 'bg-dark-900 text-dark-400 ring-dark-700 hover:text-dark-200'}`}>{l}</button>
                   ))}
                 </div>
               )}
@@ -439,7 +443,7 @@ export default function PackageIntel() {
                     const mins = p.state === 'MISSING' ? sinceMin(p.updated_at) : null
                     return (
                       <button key={p.tba} onClick={() => setSel(p.tba)}
-                        className={`grid w-full grid-cols-[1.7fr_.8fr_.5fr] items-center gap-2 px-4 py-2.5 text-left transition ${active ? 'bg-sky-500/[.07]' : 'hover:bg-dark-900/60'}`}>
+                        className={`grid w-full grid-cols-[1.7fr_.8fr_.5fr] items-center gap-2 px-4 py-2.5 text-left transition ${active ? 'bg-brand-500/[.08]' : 'hover:bg-white/[0.025]'}`}>
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 truncate font-semibold text-dark-50">
                             {p.stop_id && <span className="shrink-0 rounded bg-dark-800 px-1.5 py-0.5 font-mono text-[10px] text-dark-400">#{p.stop_id}</span>}
@@ -464,7 +468,7 @@ export default function PackageIntel() {
           {/* Columna derecha: alertas + investigador */}
           <div className="space-y-4">
             {alerts.length > 0 && (
-              <div className="rounded-2xl border border-dark-800 bg-dark-900/60 p-4">
+              <div className="rounded-2xl border border-white/[0.05] bg-white/[0.02] p-4">
                 <div className="mb-3 flex items-center gap-2 text-[14px] font-bold text-dark-100"><ShieldAlert size={15} className="text-red-400" /> Alertas con evidencia</div>
                 <div className="space-y-2.5">
                   {alerts.slice(0, 6).map(a => {
