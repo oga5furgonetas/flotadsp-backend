@@ -134,6 +134,31 @@
   .btn-ghost {
     @apply rounded-lg text-dark-400 transition-colors duration-200 hover:bg-dark-800 hover:text-dark-200;
   }
+  /* ── Instrumento de titanio: atmósfera, luz y física ─────────────────── */
+  /* Carbón cálido iluminado desde arriba: profundidad sin sombras baratas */
+  .atmosphere {
+    background:
+      radial-gradient(1100px 560px at 16% -12%, rgba(255, 252, 246, 0.055), transparent 60%),
+      radial-gradient(820px 460px at 88% -6%, rgba(251, 146, 60, 0.05), transparent 55%),
+      radial-gradient(1400px 900px at 50% 118%, rgba(120, 120, 135, 0.05), transparent 60%),
+      linear-gradient(180deg, #0c0b0b 0%, #0a0a0b 42%, #090909 100%);
+  }
+  /* Raíl de navegación: panel flotante de vidrio sobre el carbón */
+  .rail {
+    @apply rounded-2xl border border-white/[0.06] bg-white/[0.025] backdrop-blur-xl;
+    box-shadow: 0 24px 60px -32px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  }
+  /* Fila flotante: vive al pasar el cursor (física suave, luz al elevarse) */
+  .float-row {
+    transition: transform 0.35s cubic-bezier(0.22, 1.15, 0.32, 1), background-color 0.2s ease, box-shadow 0.35s ease;
+  }
+  .float-row:hover {
+    transform: translateY(-1px);
+    background-color: rgba(255, 255, 255, 0.035);
+    box-shadow: 0 14px 34px -20px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  }
+  .float-row:active { transform: translateY(0) scale(0.995); }
+
   /* Tarjeta silenciosa: un solo tono, borde que susurra, sin sombras teatrales */
   .card {
     @apply rounded-2xl border border-dark-800/80 bg-dark-900/70;
@@ -186,6 +211,17 @@
 }
 
 @layer utilities {
+  /* Entrada con muelle: las secciones no cargan, aparecen */
+  .rise { animation: rise 0.6s cubic-bezier(0.22, 1.15, 0.32, 1) both; }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(16px) scale(0.995); }
+    to   { opacity: 1; transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .rise { animation: none; }
+    .float-row, .float-row:hover, .float-row:active { transition: none; transform: none; }
+  }
+
   /* Entrada de contenido (cambio de ruta, modales): fundido + elevación con curva suave.
      OJO: sin fill-mode "both" — un transform residual convierte al elemento en
      containing block y atrapa a los modales position:fixed de dentro. */

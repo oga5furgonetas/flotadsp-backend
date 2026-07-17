@@ -36,6 +36,30 @@ function fmtRelative(iso, t) {
   return t('time.dago').replace('{n}', Math.floor(h / 24))
 }
 
+/* Contador natural: los números no aparecen, cuentan (easing cúbico, ~700 ms).
+   Con prefers-reduced-motion el valor es instantáneo. */
+function useCountUp(value, ms = 700) {
+  const [n, setN] = useState(0)
+  useEffect(() => {
+    const target = Number(value) || 0
+    if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) { setN(target); return }
+    let raf
+    const t0 = performance.now()
+    const tick = (t) => {
+      const p = Math.min(1, (t - t0) / ms)
+      setN(Math.round(target * (1 - Math.pow(1 - p, 3))))
+      if (p < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    // Garantía de aterrizaje: si el navegador throttlea rAF (pestaña en segundo
+    // plano, ahorro de batería), el valor final se fija igualmente.
+    const land = setTimeout(() => setN(target), ms + 80)
+    return () => { cancelAnimationFrame(raf); clearTimeout(land) }
+  }, [value, ms])
+  return n
+}
+function Count({ v }) { return <>{useCountUp(v)}</> }
+
 const SEV_KEYS = {
   sin_danos: { key: 'sev.sin_danos', color: '#34d399', bg: 'bg-emerald-500/15', text: 'text-emerald-300' },
   leve:      { key: 'sev.leve',      color: '#fbbf24', bg: 'bg-yellow-500/15',  text: 'text-yellow-300' },
@@ -282,7 +306,7 @@ function ItvAlerts({ items }) {
 
 /* ── Main ── */
 export default function Dashboard() {
-  const { center } = useOutletContext?.() || {}
+  const { center, admin } = useOutletContext?.() || {}
   const { t, lang } = useT()
   const locale = LANG_LOCALE[lang] || 'es-ES'
   const [data,   setData]   = useState(null)
@@ -411,13 +435,24 @@ export default function Dashboard() {
     { n: itv.length, label: t('ops.review.exp'), to: '/panel/vencimientos' },
   ].filter((x) => x.n > 0)
 
+  const firstName = (admin?.name || '').trim().split(/\s+/)[0] || ''
+  const totalSev = SEV_ORDER.reduce((a, k) => a + (breakdown?.[k] || 0), 0)
+  const okPct = totalSev ? Math.round(((breakdown?.sin_danos || 0) / totalSev) * 100) : 100
+
   return (
-    <div className="mx-auto max-w-4xl">
-      {/* ── Cabecera: saludo grande, sin cajas ── */}
-      <header className="pb-2 pt-1">
-        <h1 className="text-[26px] font-semibold tracking-tight text-dark-50 sm:text-3xl">{greeting(t)}</h1>
-        <p className="mt-1 text-[13.5px] capitalize text-dark-500">
+    <div className="mx-auto max-w-5xl">
+      {/* ── Héroe editorial: la tipografía ES la interfaz ── */}
+      <header className="rise pb-8 pt-3">
+        <p className="font-mono text-[10px] font-bold uppercase tracking-[0.28em] text-dark-500">
           {fmtDate(locale)}{center && center !== 'Todos' ? ` · ${center}` : ''}
+        </p>
+        <h1 className="mt-2 font-display text-[clamp(30px,4.2vw,48px)] font-semibold leading-[1.05] tracking-[-0.03em] text-dark-50">
+          {greeting(t)}{firstName ? `, ${firstName}` : ''}.
+        </h1>
+        <p className="mt-3 max-w-xl text-[16.5px] leading-relaxed text-dark-400">
+          {urgentTotal > 0
+            ? (<><b className="font-semibold text-dark-50"><Count v={urgentTotal} /></b> {t('ops.brief.items')}.</>)
+            : t('ops.brief.calm')}
         </p>
       </header>
 
@@ -433,101 +468,127 @@ export default function Dashboard() {
           />
         </div>
       ) : (
-      <div className="divide-y divide-dark-800/60">
+      <div>
+      {/* ── Composición asimétrica 7/5: trabajo a la izquierda, pulso a la derecha ── */}
+      <div className="grid gap-x-14 lg:grid-cols-12">
 
-        {/* ── 1 · Requieren atención inmediata ── */}
-        {urgent.length > 0 && (
-          <section className="py-7">
-            <h2 className="flex items-baseline gap-2 text-[15px] font-semibold text-dark-100">
-              <span className="text-red-400">●</span> {t('ops.attention')}
-              <span className="text-[13px] font-normal tabular-nums text-dark-500">({urgentTotal})</span>
-            </h2>
+        <div className="divide-y divide-white/[0.05] lg:col-span-7">
+          {/* ── 1 · Requieren atención inmediata ── */}
+          {urgent.length > 0 && (
+            <section className="rise py-7" style={{ animationDelay: '60ms' }}>
+              <h2 className="flex items-baseline gap-2 text-[15px] font-semibold text-dark-100">
+                <span className="text-red-400">●</span> {t('ops.attention')}
+                <span className="text-[13px] font-normal tabular-nums text-dark-500">(<Count v={urgentTotal} />)</span>
+              </h2>
+              <div className="mt-2">
+                {urgent.map((u) => (
+                  <button key={u.label} onClick={() => navTop(u.to)}
+                    className="float-row group -mx-4 flex w-[calc(100%+2rem)] items-center gap-3 rounded-xl px-4 py-3.5 text-left">
+                    <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${u.color}`} />
+                    <span className="text-[14.5px] text-dark-200">
+                      <b className="font-semibold tabular-nums text-dark-50"><Count v={u.n} /></b> {u.label}
+                    </span>
+                    <ChevronRight size={15} className="ml-auto shrink-0 text-dark-600 transition-transform group-hover:translate-x-0.5 group-hover:text-dark-300" />
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* ── 2 · Tu trabajo de hoy ── */}
+          <section className="rise py-7" style={{ animationDelay: '120ms' }}>
+            <h2 className="text-[15px] font-semibold text-dark-100">{t('ops.today')}</h2>
             <div className="mt-2">
-              {urgent.map((u) => (
-                <button key={u.label} onClick={() => navTop(u.to)}
-                  className="group -mx-3 flex w-[calc(100%+1.5rem)] items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-white/[0.03]">
-                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${u.color}`} />
-                  <span className="text-[14.5px] text-dark-200">
-                    <b className="font-semibold tabular-nums text-dark-50">{u.n}</b> {u.label}
-                  </span>
-                  <ChevronRight size={15} className="ml-auto shrink-0 text-dark-600 transition-transform group-hover:translate-x-0.5 group-hover:text-dark-300" />
+              {todos.length === 0 ? (
+                <p className="flex items-center gap-2 py-2 text-[14px] text-emerald-400/90">
+                  <CheckCircle2 size={15} /> {t('ops.clear')}
+                </p>
+              ) : todos.map((x) => (
+                <button key={x.label} onClick={() => navTop(x.to)}
+                  className="float-row group -mx-4 flex w-[calc(100%+2rem)] items-center gap-3 rounded-xl px-4 py-3.5 text-left">
+                  <span className="flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-[5px] border border-dark-600 text-transparent transition-colors group-hover:border-dark-300" />
+                  <span className="text-[14.5px] text-dark-200">{x.label}</span>
+                  <span className="ml-auto text-[13px] font-medium tabular-nums text-dark-500"><Count v={x.n} /></span>
                 </button>
               ))}
             </div>
           </section>
-        )}
 
-        {/* ── 2 · Tu trabajo de hoy ── */}
-        <section className="py-7">
-          <h2 className="text-[15px] font-semibold text-dark-100">{t('ops.today')}</h2>
-          <div className="mt-2">
-            {todos.length === 0 ? (
-              <p className="flex items-center gap-2 py-2 text-[14px] text-emerald-400/90">
-                <CheckCircle2 size={15} /> {t('ops.clear')}
-              </p>
-            ) : todos.map((x) => (
-              <button key={x.label} onClick={() => navTop(x.to)}
-                className="group -mx-3 flex w-[calc(100%+1.5rem)] items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors hover:bg-white/[0.03]">
-                <span className="flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-[5px] border border-dark-600 text-transparent transition-colors group-hover:border-dark-400" />
-                <span className="text-[14.5px] text-dark-200">{x.label}</span>
-                <span className="ml-auto text-[13px] font-medium tabular-nums text-dark-500">{x.n}</span>
-              </button>
-            ))}
-          </div>
-        </section>
+          {/* ── 3 · Todo lo demás bajo control ── */}
+          <section className="rise py-7" style={{ animationDelay: '180ms' }}>
+            <h2 className="flex items-center gap-2 text-[15px] font-semibold text-dark-100">
+              <span className="text-emerald-400">●</span> {t('ops.control')}
+            </h2>
+            <p className="mt-3 text-[14px] leading-relaxed text-dark-400">
+              <b className="font-semibold text-dark-100"><Count v={active} /></b> {t('ops.active.veh')}
+              <span className="mx-2 text-dark-700">·</span>
+              <b className="font-semibold text-dark-100"><Count v={data.total_drivers} /></b> {t('nav.drivers').toLowerCase()}
+              {nowLive?.routes > 0 && (<><span className="mx-2 text-dark-700">·</span><b className="font-semibold text-dark-100"><Count v={nowLive.routes} /></b> {t('ops.routes.live')}</>)}
+              <span className="mx-2 text-dark-700">·</span>
+              <b className="font-semibold text-dark-100"><Count v={todayInsp} /></b> {t('ops.insp.today')}
+              {costs && costs.month_eur > 0 && (
+                <><span className="mx-2 text-dark-700">·</span>
+                <b className={`font-semibold ${costs.prev_month_eur && costs.month_eur < costs.prev_month_eur ? 'text-emerald-400' : 'text-amber-300'}`}>{Math.round(costs.month_eur).toLocaleString('es-ES')} €</b> {t('ops.damage.month')}</>
+              )}
+            </p>
+          </section>
+        </div>
 
-        {/* ── 3 · Todo lo demás bajo control ── */}
-        <section className="py-7">
-          <h2 className="flex items-center gap-2 text-[15px] font-semibold text-dark-100">
-            <span className="text-emerald-400">●</span> {t('ops.control')}
-          </h2>
-          <p className="mt-3 text-[14px] leading-relaxed text-dark-400">
-            <b className="font-semibold text-dark-100">{active}</b> {t('ops.active.veh')}
-            <span className="mx-2 text-dark-700">·</span>
-            <b className="font-semibold text-dark-100">{data.total_drivers}</b> {t('nav.drivers').toLowerCase()}
-            {nowLive?.routes > 0 && (<><span className="mx-2 text-dark-700">·</span><b className="font-semibold text-dark-100">{nowLive.routes}</b> {t('ops.routes.live')}</>)}
-            <span className="mx-2 text-dark-700">·</span>
-            <b className="font-semibold text-dark-100">{todayInsp}</b> {t('ops.insp.today')}
-            {costs && costs.month_eur > 0 && (
-              <><span className="mx-2 text-dark-700">·</span>
-              <b className={`font-semibold ${costs.prev_month_eur && costs.month_eur < costs.prev_month_eur ? 'text-emerald-400' : 'text-amber-300'}`}>{Math.round(costs.month_eur).toLocaleString('es-ES')} €</b> {t('ops.damage.month')}</>
-            )}
-          </p>
-        </section>
+        {/* ── Columna derecha: el instrumento ── */}
+        <div className="divide-y divide-white/[0.05] lg:col-span-5 lg:border-l lg:border-white/[0.05] lg:pl-12">
 
-        {/* ── 4 · Estado de la flota + Actividad ── */}
-        <section className="grid gap-x-14 gap-y-8 py-7 lg:grid-cols-2">
-          <div>
-            <div className="mb-4 flex items-baseline justify-between">
-              <h2 className="text-[15px] font-semibold text-dark-100">{t('ops.fleet.state')}</h2>
-              <span className="text-[12px] tabular-nums text-dark-600">{data.total_inspections} {t('dash.fleet.total')}</span>
+          {/* ── Fleet Pulse: un número que respira, una línea de luz ── */}
+          <section className="rise py-7" style={{ animationDelay: '160ms' }}>
+            <h2 className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-dark-500">{t('ops.pulse')}</h2>
+            <div className="mt-3 flex items-baseline gap-2">
+              <span className="font-display text-[52px] font-semibold leading-none tracking-[-0.03em] text-dark-50"><Count v={okPct} /></span>
+              <span className="text-xl font-medium text-dark-500">%</span>
             </div>
-            <FleetHealth breakdown={breakdown} />
-          </div>
-          <div>
+            <p className="mt-1 text-[13px] text-dark-500">{t('ops.pulse.clean')} · <span className="tabular-nums">{data.total_inspections}</span> {t('dash.fleet.total')}</p>
+            <div className="mt-4 flex h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]"
+              style={{ boxShadow: '0 0 24px rgba(52,211,153,0.12)' }}>
+              {SEV_ORDER.map((k) => {
+                const n = breakdown?.[k] || 0
+                const pct = totalSev ? (n / totalSev) * 100 : 0
+                return pct > 0 ? <div key={k} style={{ width: `${pct}%`, background: SEV_KEYS[k].color, opacity: 0.85 }} /> : null
+              })}
+            </div>
+            {((breakdown?.grave || 0) + (breakdown?.critico || 0)) > 0 && (
+              <p className="mt-3 text-[12.5px] text-red-300/90">⚠ {(breakdown?.grave || 0) + (breakdown?.critico || 0)} {t('fleet.critical')}</p>
+            )}
+          </section>
+
+          {/* ── Actividad en vivo ── */}
+          <section className="rise py-7" style={{ animationDelay: '220ms' }}>
             <div className="mb-4 flex items-baseline justify-between">
-              <h2 className="text-[15px] font-semibold text-dark-100">{t('ops.recent')}</h2>
+              <h2 className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-dark-500">
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                </span>
+                {t('ops.recent')}
+              </h2>
               <button onClick={() => navTop('/panel/inspecciones')} className="text-[12px] text-dark-600 transition-colors hover:text-dark-300">
                 {t('dash.see.all')} →
               </button>
             </div>
             <RecentInspections items={recent} />
-          </div>
-        </section>
-
-        {/* ── 5 · Próximos vencimientos ── */}
-        {itv.length > 0 && (
-          <section className="py-7">
-            <div className="mb-4 flex items-baseline justify-between">
-              <h2 className="text-[15px] font-semibold text-dark-100">{t('ops.upcoming')}</h2>
-              <button onClick={() => navTop('/panel/vencimientos')} className="text-[12px] text-dark-600 transition-colors hover:text-dark-300">
-                {t('dash.see.all')} →
-              </button>
-            </div>
-            <ItvAlerts items={itv} />
           </section>
-        )}
+        </div>
+      </div>
 
+      {/* ── Próximos vencimientos (ancho completo) ── */}
+      {itv.length > 0 && (
+        <section className="rise border-t border-white/[0.05] py-7" style={{ animationDelay: '260ms' }}>
+          <div className="mb-4 flex items-baseline justify-between">
+            <h2 className="text-[15px] font-semibold text-dark-100">{t('ops.upcoming')}</h2>
+            <button onClick={() => navTop('/panel/vencimientos')} className="text-[12px] text-dark-600 transition-colors hover:text-dark-300">
+              {t('dash.see.all')} →
+            </button>
+          </div>
+          <ItvAlerts items={itv} />
+        </section>
+      )}
       </div>
       )}
     </div>

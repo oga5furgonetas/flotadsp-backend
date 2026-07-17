@@ -169,9 +169,10 @@ export default function PanelLayout() {
   }
 
   return (
-    <div className="flex min-h-screen bg-dark-950 text-dark-50">
-      {/* Sidebar */}
-      <aside className="hidden w-60 shrink-0 flex-col border-r border-dark-800/60 bg-dark-950 md:flex">
+    <div className="atmosphere flex min-h-screen text-dark-50">
+      {/* Sidebar — raíl flotante de vidrio */}
+      <aside className="hidden w-[248px] shrink-0 flex-col p-3 pr-0 md:flex">
+      <div className="rail flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex items-center gap-2.5 px-5 pb-3 pt-5">
           <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-brand-400 to-brand-600">
             <Zap size={15} className="text-white" />
@@ -250,6 +251,7 @@ export default function PanelLayout() {
             <button onClick={doLogout} className="btn-ghost p-2" title={t('nav.logout')}><LogOut size={16} /></button>
           </div>
         </div>
+      </div>
       </aside>
 
       {/* Main */}
@@ -267,7 +269,7 @@ export default function PanelLayout() {
           </div>
         )}
         <TrialBanner />
-        <header className="glass flex items-center justify-between gap-3 border-b px-4 py-2.5">
+        <header className="flex items-center justify-between gap-3 border-b border-white/[0.05] bg-transparent px-4 py-2.5 backdrop-blur-md">
           <div className="hidden text-sm text-dark-400 md:block">
             {flatItems.find((it) => (it.end ? loc.pathname === it.to : loc.pathname.startsWith(it.to)))?.label || ''}
           </div>
