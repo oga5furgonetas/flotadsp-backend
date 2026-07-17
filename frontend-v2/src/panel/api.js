@@ -39,6 +39,7 @@ export const getLastInspections = (center) => api.get('/vehicles/last-inspection
 export const getVehicleDriver = (id) => api.get(`/vehicles/${id}/driver`)
 export const getVehicleInspections = (id) => api.get(`/inspections/vehicle/${id}`)
 export const getVehicleDamageLedger = (id) => api.get(`/vehicles/${id}/damage-ledger`)
+export const repairVehicleLedger = (id, body) => api.post(`/vehicles/${id}/ledger/repair`, body)
 export const resolveVehicleModel = (brand, model, year, version) =>
   api.get('/vehicle-models/resolve', { params: { brand: brand || '', model: model || '', ...(year ? { year } : {}), ...(version ? { version } : {}) } })
 export const identifyVehicleModel = (id) => api.post(`/vehicles/${id}/identify-model`)

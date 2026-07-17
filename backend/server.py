@@ -201,6 +201,7 @@ class Vehicle(BaseModel):
     fuel_type: Optional[str] = None
     workshop_status: Optional[str] = None
     workshop_reason: Optional[str] = None
+    body_repaired_at: Optional[str] = None  # "salió de chapa": daños previos ya no existen
     documents: List[str] = []
     # --- Bolsas ---
     bags_remaining: int = 0
@@ -2024,8 +2025,13 @@ async def _get_vehicle_ledger(vehicle_id: str, exclude_inspection_id: str = None
 
     # Tras una reconstrucción de flota el ledger es autoritativo: NO se
     # autorrellena desde el histórico viejo (se repobla con el modelo nuevo).
-    veh = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "ledger_reset_at": 1})
-    if veh and veh.get("ledger_reset_at"):
+    veh = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "ledger_reset_at": 1, "body_repaired_at": 1})
+    if veh and (veh.get("ledger_reset_at") or veh.get("body_repaired_at")):
+        return []
+    # Si el vehículo YA tiene entradas en el ledger (aunque estén todas
+    # reparadas), el ledger es la verdad: el backfill solo es para vehículos
+    # que nunca se migraron. Sin esto, reparar todo resucitaría daños viejos.
+    if await db.vehicle_damage_ledger.count_documents({"vehicle_id": vehicle_id}) > 0:
         return []
 
     # Backfill desde el historial (excluida la inspección en curso si reanaliza)
@@ -2070,10 +2076,22 @@ async def _known_damages_prompt(vehicle_id: str, exclude_inspection_id: str = No
     Cierra el agujero de la comparación visual (si la foto de referencia no
     muestra bien un panel, Gemini re-reportaba el daño viejo como nuevo)."""
     try:
+        # ¿Salió del taller de chapa? Los daños de fotos de REFERENCIA anteriores
+        # a esa fecha ya NO existen: solo cuenta lo visible en las fotos actuales.
+        rep_note = ""
+        veh = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "body_repaired_at": 1})
+        if veh and veh.get("body_repaired_at"):
+            rep_note = (f"\n=== VEHÍCULO REPARADO EN TALLER (chapa/pintura) el "
+                        f"{str(veh['body_repaired_at'])[:10]} ===\n"
+                        "El vehículo salió del taller COMO NUEVO en esa fecha. Si las fotos de "
+                        "REFERENCIA (estado anterior) muestran daños, esos daños YA NO EXISTEN. "
+                        "Reporta ÚNICAMENTE lo que veas en las fotos ACTUALES; no arrastres daños "
+                        "de referencias anteriores a la reparación.")
         entries = await _get_vehicle_ledger(vehicle_id, exclude_inspection_id)
         if not entries:
-            return ""
-        lines = ["\n=== DAÑOS YA REGISTRADOS DE ESTE VEHÍCULO (histórico del sistema) ==="]
+            return rep_note
+        lines = [rep_note, "\n=== DAÑOS YA REGISTRADOS DE ESTE VEHÍCULO (histórico del sistema) ==="] if rep_note else \
+                ["\n=== DAÑOS YA REGISTRADOS DE ESTE VEHÍCULO (histórico del sistema) ==="]
         for e in entries[:25]:
             lines.append(f"- {e.get('part') or e.get('panel')}: severidad {e.get('severity')}, "
                          f"registrado desde {e.get('first_seen')}")
@@ -6089,6 +6107,35 @@ async def get_vehicle_inspections(vehicle_id: str, user: dict = Depends(require_
                 insp["driver_name"] = name_map.get(insp["driver_id"], "")
 
     return inspections
+
+
+@api_router.post("/vehicles/{vehicle_id}/ledger/repair")
+async def vehicle_ledger_repair(vehicle_id: str, body: dict = Body(default={}), user: dict = Depends(require_admin)):
+    """Marca daños del registro como reparados.
+    body: {"panel": "puerta"} para un panel, o {"all": true, "note": "chapa completa"}
+    para el vehículo entero (salió del taller como nuevo). Un golpe futuro en esos
+    paneles vuelve a contar como daño NUEVO (lo justo para scoring y €)."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    q = {"vehicle_id": vehicle_id, "status": "open"}
+    if body.get("all"):
+        pass
+    elif body.get("panel"):
+        p = _canon_panel(str(body["panel"]))
+        if not p:
+            raise HTTPException(400, "Panel no reconocido")
+        q["panel"] = p
+    else:
+        raise HTTPException(400, "Indica 'panel' o 'all': true")
+    res = await db.vehicle_damage_ledger.update_many(q, {"$set": {
+        "status": "repaired", "repaired_at": now_iso,
+        "repaired_note": str(body.get("note") or "")[:200],
+        "repaired_by": user.get("name") or "",
+    }})
+    if body.get("all"):
+        # Marca de "salió de chapa": la IA sabrá que los daños de fotos de
+        # referencia anteriores a esta fecha YA NO EXISTEN.
+        await db.vehicles.update_one({"id": vehicle_id}, {"$set": {"body_repaired_at": now_iso}})
+    return {"ok": True, "repaired": res.modified_count}
 
 
 @api_router.get("/vehicles/{vehicle_id}/damage-ledger")

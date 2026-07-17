@@ -17,7 +17,7 @@ import {
   getVehicles, getLastInspections, getVehicleDriver, getVehicleInspections, updateVehicle, deleteVehicle, createIncident, getIncidents,
   getVehicleMaintenance, registerOilChange, registerMaintenanceChange,
   getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument, createVehicle,
-  getVehicleDamageLedger,
+  getVehicleDamageLedger, repairVehicleLedger,
 } from '../api'
 
 // El visor 3D (three.js ~400 kB) se carga solo al abrir la pestaña Gemelo 3D.
@@ -332,6 +332,19 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
       .finally(() => { if (!cancelled) setLedgerLoading(false) })
     return () => { cancelled = true }
   }, [activeTab, vehicle.id, ledger, ledgerLoading])
+
+  // Reparaciones del registro de daños: un panel o "salió de chapa" (todo).
+  const [repairing, setRepairing] = useState(false)
+  async function repairLedger(body) {
+    setRepairing(true)
+    try { await repairVehicleLedger(vehicle.id, body); setLedger(null) } // null → recarga
+    catch { /* red */ }
+    setRepairing(false)
+  }
+  function repairAll() {
+    if (!window.confirm(`¿Marcar TODOS los daños de ${vehicle.license_plate || 'este vehículo'} como reparados?\n\nÚsalo cuando vuelve del taller de chapa como nuevo. Un golpe futuro contará como daño NUEVO.`)) return
+    repairLedger({ all: true, note: 'chapa completa' })
+  }
 
   useEffect(() => {
     if (!vinOrPlate) return
@@ -842,7 +855,41 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
 
             {/* ══ TAB: GEMELO DIGITAL 3D ══ */}
             {activeTab === 'gemelo' && (
-              <div className="p-3" style={{ height: 'calc(100vh - 220px)', minHeight: 460 }}>
+              <div className="flex flex-col p-3" style={{ height: 'calc(100vh - 220px)', minHeight: 460 }}>
+                {/* Historial de daños + reparaciones (taller de chapa) */}
+                {ledger && (
+                  <div className="mb-2 rounded-xl border border-dark-800 bg-dark-900/60 px-3 py-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wide text-dark-500">Daños registrados</span>
+                      {(ledger.open || []).length === 0 && <span className="text-[12px] text-emerald-400">✓ Sin daños abiertos</span>}
+                      {(ledger.open || []).map((e) => (
+                        <span key={e.panel} className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-2 py-1 text-[11.5px] font-medium text-amber-300 ring-1 ring-amber-500/25">
+                          {e.part || e.panel} · {e.severity}
+                          <button
+                            title="Marcar este panel como reparado"
+                            disabled={repairing}
+                            onClick={() => repairLedger({ panel: e.panel })}
+                            className="rounded bg-emerald-500/20 px-1.5 text-emerald-300 hover:bg-emerald-500/40 disabled:opacity-50">✓</button>
+                        </span>
+                      ))}
+                      <span className="ml-auto flex items-center gap-2">
+                        {vehicle.body_repaired_at && (
+                          <span className="text-[11px] text-emerald-400/80">🔧 Chapa completa: {String(vehicle.body_repaired_at).slice(0, 10)}</span>
+                        )}
+                        {(ledger.repaired || []).length > 0 && (
+                          <span className="text-[11px] text-dark-500">{ledger.repaired.length} reparados</span>
+                        )}
+                        <button
+                          onClick={repairAll}
+                          disabled={repairing || (ledger.open || []).length === 0}
+                          className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-[12px] font-semibold text-emerald-300 hover:border-emerald-500/60 disabled:opacity-40">
+                          {repairing ? 'Guardando…' : '🔧 Salió de chapa — todo reparado'}
+                        </button>
+                      </span>
+                    </div>
+                  </div>
+                )}
+                <div className="min-h-0 flex-1">
                 {insps === null ? (
                   <div className="flex h-full items-center justify-center text-dark-500">
                     <Loader2 size={18} className="animate-spin" /> <span className="ml-2">Cargando…</span>
@@ -862,6 +909,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                     />
                   </Suspense>
                 )}
+                </div>
               </div>
             )}
 
