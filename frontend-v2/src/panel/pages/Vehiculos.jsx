@@ -520,9 +520,9 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
 
       <div className="fixed inset-0 z-40 flex justify-end" onClick={onClose}>
         <div
-          className="relative flex h-full w-full max-w-lg flex-col overflow-hidden bg-dark-950 shadow-2xl ring-1 ring-white/5"
+          className="relative flex h-full w-full max-w-lg flex-col overflow-hidden shadow-2xl ring-1 ring-white/[0.06]"
           onClick={e => e.stopPropagation()}
-          style={{ background: 'linear-gradient(160deg, #0d1526 0%, #0a0f1e 100%)' }}
+          style={{ background: 'linear-gradient(160deg, #100e0d 0%, #0a0908 100%)' }}
         >
           {/* Toast */}
           {toast && (
@@ -532,10 +532,10 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
           )}
 
           {/* ── HEADER HERO ── */}
-          <div className="relative overflow-hidden px-6 pb-6 pt-5" style={{ background: 'linear-gradient(135deg, #1a2744 0%, #0f1a33 100%)' }}>
-            {/* Decoración de fondo */}
-            <div className="pointer-events-none absolute -right-8 -top-8 h-40 w-40 rounded-full bg-blue-500/5" />
-            <div className="pointer-events-none absolute -bottom-4 left-24 h-24 w-24 rounded-full bg-indigo-500/5" />
+          <div className="relative overflow-hidden px-6 pb-6 pt-5" style={{ background: 'linear-gradient(135deg, #1c1512 0%, #100c0b 100%)' }}>
+            {/* Luz cálida de fondo: profundidad sin sombras teatrales */}
+            <div className="pointer-events-none absolute -right-8 -top-8 h-40 w-40 rounded-full bg-brand-500/[0.07] blur-2xl" />
+            <div className="pointer-events-none absolute -bottom-4 left-24 h-24 w-24 rounded-full bg-brand-400/[0.05] blur-xl" />
 
             <div className="relative flex items-start justify-between">
               <div className="flex-1">
@@ -599,13 +599,13 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-xs font-semibold transition border-b-2 ${
                   activeTab === tab.id
-                    ? 'border-blue-500 text-blue-400'
+                    ? 'border-brand-500 text-brand-400'
                     : 'border-transparent text-dark-500 hover:text-dark-300'
                 }`}
               >
                 {tab.label}
                 {tab.count != null && (
-                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${activeTab === tab.id ? 'bg-blue-500/20 text-blue-300' : 'bg-dark-800 text-dark-500'}`}>
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${activeTab === tab.id ? 'bg-brand-500/20 text-brand-300' : 'bg-dark-800 text-dark-500'}`}>
                     {tab.count}
                   </span>
                 )}
@@ -1098,7 +1098,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
           {/* Loading overlay */}
           {busy && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-[2px]">
-              <Loader2 size={24} className="animate-spin text-blue-400" />
+              <Loader2 size={24} className="animate-spin text-brand-400" />
             </div>
           )}
         </div>
@@ -1378,22 +1378,32 @@ export default function Vehiculos() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold">{t('veh.title')} {vehicles && <span className="text-dark-500">· {list.length}</span>}</h1>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />
-            <input className="input w-56 pl-9" placeholder={`${t('ui.search')} ${t('veh.plate')}, VIN…`} value={q} onChange={e => setQ(e.target.value)} />
+      <header className="rise mb-8">
+        {center && center !== 'Todos' && (
+          <p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-brand-400/80">{center}</p>
+        )}
+        <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
+          <h1 className="font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
+            {t('veh.title')}{vehicles && <span className="text-dark-600"> · {list.length}</span>}
+          </h1>
+          <div className="flex items-center gap-2.5">
+            <div className="relative">
+              <Search size={15} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-dark-500" />
+              <input
+                className="w-64 rounded-xl border border-white/[0.07] bg-white/[0.02] py-2.5 pl-10 pr-3 text-[13.5px] text-dark-50 placeholder:text-dark-600 transition-all duration-300 hover:border-white/[0.12] focus:border-brand-500/50 focus:bg-white/[0.045] focus:outline-none focus:ring-[3px] focus:ring-brand-500/15"
+                placeholder={`${t('ui.search')} ${t('veh.plate')}, VIN…`} value={q} onChange={e => setQ(e.target.value)}
+              />
+            </div>
+            <button
+              onClick={() => setAddOpen(true)}
+              className="group relative flex items-center gap-1.5 overflow-hidden rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 px-4 py-2.5 text-[13.5px] font-semibold text-white shadow-lg shadow-brand-500/25 transition-all duration-300 [text-shadow:0_1px_1px_rgba(0,0,0,0.15)] hover:-translate-y-px hover:shadow-xl hover:shadow-brand-500/30 hover:brightness-110 active:translate-y-0 active:scale-[0.98]"
+            >
+              <span className="pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/20 to-transparent" />
+              <Plus size={15} /> Añadir vehículo
+            </button>
           </div>
-          <button
-            onClick={() => setAddOpen(true)}
-            className="btn-primary flex items-center gap-1.5 text-sm"
-          >
-            <Plus size={14} />
-            Añadir vehículo
-          </button>
         </div>
-      </div>
+      </header>
 
       {addOpen && (
         <AddVehicleModal
@@ -1404,16 +1414,16 @@ export default function Vehiculos() {
       )}
 
       {vehicles && (
-        <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="rise mb-6 flex flex-wrap items-baseline gap-x-7 gap-y-2 border-y border-white/[0.05] py-3.5" style={{ animationDelay: '60ms' }}>
           {[
-            { val: kpis.total,   label: center !== 'Todos' ? `${t('veh.all')} · ${center}` : t('veh.all'), color: 'text-slate-100' },
-            { val: kpis.taller,  label: t('veh.workshop'),   color: 'text-orange-400' },
-            { val: kpis.itv,     label: 'ITV ≤ 30 días',    color: 'text-amber-400'  },
-            { val: kpis.sinInsp, label: t('veh.never.insp'), color: 'text-red-400'   },
-          ].map(({ val, label, color }) => (
-            <div key={label} className="card p-4">
-              <div className={`text-2xl font-extrabold ${color}`}>{val}</div>
-              <div className="mt-0.5 text-xs text-dark-400">{label}</div>
+            { val: kpis.total,   label: t('veh.all'),        color: 'text-dark-50' },
+            { val: kpis.taller,  label: t('veh.workshop'),   color: 'text-amber-300' },
+            { val: kpis.itv,     label: 'ITV ≤ 30 días',     color: 'text-amber-300' },
+            { val: kpis.sinInsp, label: t('veh.never.insp'), color: 'text-red-300' },
+          ].map(({ val, label, color }, i) => (
+            <div key={label} className="flex items-baseline gap-2">
+              <span className={`text-[19px] font-semibold tabular-nums ${(val > 0 || i === 0) ? color : 'text-dark-600'}`}>{val}</span>
+              <span className="text-[12.5px] text-dark-500">{label}</span>
             </div>
           ))}
         </div>
@@ -1437,53 +1447,40 @@ export default function Vehiculos() {
           </div>
         )
       ) : (
-        <div className="card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-dark-800 text-left text-xs uppercase tracking-wide text-dark-500">
-                  <th className="px-4 py-2.5">{t('veh.plate')}</th>
-                  <th className="px-4 py-2.5">{t('ui.vehicle')}</th>
-                  <th className="px-4 py-2.5">{t('ui.center')}</th>
-                  <th className="px-4 py-2.5">{t('ui.status')}</th>
-                  <th className="px-4 py-2.5">{t('veh.km')}</th>
-                  <th className="px-4 py-2.5">{t('veh.last.insp')}</th>
-                  <th className="px-4 py-2.5">{t('veh.next.itv')}</th>
-                  <th className="px-4 py-2.5 text-center">QR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.map(v => {
-                  const st = STATUS_MAP[v.status] || STATUS_MAP.baja
-                  const dot = lastInspDot(lastInsp[v.id])
-                  return (
-                    <tr key={v.id} onClick={() => setSel(v)} className="cursor-pointer border-b border-dark-800/60 hover:bg-dark-800/40 transition">
-                      <td className="px-4 py-2.5 font-mono font-semibold tracking-wider">{v.license_plate}</td>
-                      <td className="px-4 py-2.5 text-dark-300">{[v.brand, v.model].filter(Boolean).join(' ') || '—'}</td>
-                      <td className="px-4 py-2.5 text-dark-400">{v.center || '—'}</td>
-                      <td className="px-4 py-2.5">
-                        <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold ${st.badge}`}>
-                          <span className={`h-1.5 w-1.5 rounded-full ${st.dot}`} /> {t(st.labelKey)}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5 text-dark-400">{v.mileage != null ? `${v.mileage.toLocaleString('es')} km` : '—'}</td>
-                      <td className="px-4 py-2.5">
-                        <span className="flex items-center gap-1.5 text-xs text-dark-400">
-                          <span className={`h-2 w-2 rounded-full ${dot.cls}`} /> {dot.txt}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2.5">{itvBadge(v.itv_date)}</td>
-                      <td className="px-4 py-2.5 text-center">
-                        {v.vin
-                          ? <QrCode size={13} className="mx-auto text-blue-400/70" />
-                          : <span className="text-dark-700">—</span>
-                        }
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+        <div className="rise" style={{ animationDelay: '120ms' }}>
+          <div className="divide-y divide-white/[0.04]">
+            {list.map(v => {
+              const st = STATUS_MAP[v.status] || STATUS_MAP.baja
+              const dot = lastInspDot(lastInsp[v.id])
+              return (
+                <button
+                  key={v.id}
+                  onClick={() => setSel(v)}
+                  className="float-row group flex w-full items-center gap-4 rounded-xl px-4 py-3.5 text-left"
+                >
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${st.dot}`} title={t(st.labelKey)} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2.5">
+                      <span className="font-mono text-[15px] font-semibold tracking-wider text-dark-50">{v.license_plate}</span>
+                      <span className="truncate text-[13px] text-dark-500">{[v.brand, v.model].filter(Boolean).join(' ')}</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11.5px] text-dark-600">
+                      <span className="inline-flex items-center gap-1"><MapPin size={10} /> {v.center || '—'}</span>
+                      {v.mileage != null && <span className="inline-flex items-center gap-1"><Gauge size={10} /> {v.mileage.toLocaleString('es')} km</span>}
+                      <span className="inline-flex items-center gap-1"><span className={`h-1.5 w-1.5 rounded-full ${dot.cls}`} /> {dot.txt}</span>
+                      {v.vin && <span className="inline-flex items-center gap-1 text-dark-700"><QrCode size={10} /> VIN</span>}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-3">
+                    {v.status !== 'active' && (
+                      <span className={`hidden rounded-full px-2 py-0.5 text-[10px] font-semibold sm:inline ${st.badge}`}>{t(st.labelKey)}</span>
+                    )}
+                    {itvBadge(v.itv_date)}
+                    <ChevronRight size={15} className="text-dark-700 transition-transform group-hover:translate-x-0.5 group-hover:text-dark-400" />
+                  </div>
+                </button>
+              )
+            })}
           </div>
         </div>
       )}
