@@ -26,46 +26,48 @@ const ROUTE_FEATURE = {
   importaciones: 'export',
 }
 
-// Menú real (3 pestañas: operacional, equipo, furgonetas) — labels traducidos dinámicamente
-const TABS_DEF = {
-  operacional: {
-    labelKey: 'nav.tab.ops',
-    items: [
-      { to: '/panel', labelKey: 'nav.dashboard', icon: LayoutDashboard, end: true },
-      { to: '/panel/mi-dia', labelKey: 'nav.miDia', icon: Sun },
-      { to: '/panel/scorecard', labelKey: 'nav.scorecard', icon: Trophy },
-      { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
-      { to: '/panel/actividad', labelKey: 'nav.activity', icon: Activity },
-      { to: '/panel/paquetes', labelKey: 'nav.pkgintel', icon: PackageSearch },
-      { to: '/panel/contactos', labelKey: 'nav.contacts', icon: BookUser },
-    ],
-  },
-  equipo: {
-    labelKey: 'nav.tab.team',
-    items: [
-      { to: '/panel/asignacion', labelKey: 'nav.assign', icon: ClipboardCheck },
-      { to: '/panel/checklist-operativo', labelKey: 'nav.checklist', icon: CheckCircle2 },
-      { to: '/panel/chat', labelKey: 'nav.chat', icon: BellRing },
-      { to: '/panel/plantilla', labelKey: 'nav.template', icon: FileSpreadsheet },
-    ],
-  },
-  furgonetas: {
-    labelKey: 'nav.tab.vans',
-    items: [
-      { to: '/panel/revision', labelKey: 'nav.revision', icon: CheckCircle2, group: 'nav.grp.ops' },
-      { to: '/panel/inspecciones', labelKey: 'nav.inspections', icon: ClipboardList, group: 'nav.grp.ops' },
-      { to: '/panel/vehiculos', labelKey: 'nav.vehicles', icon: Truck, group: 'nav.grp.ops' },
-      { to: '/panel/talleres', labelKey: 'nav.workshops', icon: Wrench, group: 'nav.grp.ops' },
-      { to: '/panel/incidencias', labelKey: 'nav.incidents', icon: AlertTriangle, group: 'nav.grp.ops' },
-      { to: '/panel/ia-peritaje', labelKey: 'nav.ai', icon: BrainCircuit, group: 'nav.grp.ops' },
-      { to: '/panel/avisos-itv', labelKey: 'nav.itvalerts', icon: BellRing, group: 'nav.grp.expiry' },
-      { to: '/panel/renting', labelKey: 'nav.renting', icon: KeyRound, group: 'nav.grp.expiry' },
-      { to: '/panel/casas-alquiler', labelKey: 'nav.rental', icon: Building2, group: 'nav.grp.expiry' },
-      { to: '/panel/importaciones', labelKey: 'nav.imports', icon: FileUp, group: 'nav.grp.manage' },
-      { to: '/panel/configuracion', labelKey: 'nav.settings', icon: Settings, group: 'nav.grp.manage' },
-    ],
-  },
-}
+// Menú ÚNICO agrupado por intención (sin pestañas: todo el mapa visible siempre).
+// Vencimientos fusiona en una página ITV + Renting + Casas de alquiler; las rutas
+// antiguas siguen vivas (deep-links, paleta ⌘K) — solo cambia la navegación.
+const NAV_DEF = [
+  { g: 'nav.g.today', items: [
+    { to: '/panel', labelKey: 'nav.dashboard', icon: LayoutDashboard, end: true },
+    { to: '/panel/mi-dia', labelKey: 'nav.miDia', icon: Sun },
+    { to: '/panel/actividad', labelKey: 'nav.activity', icon: Activity },
+  ]},
+  { g: 'nav.g.dailyops', items: [
+    { to: '/panel/paquetes', labelKey: 'nav.pkgintel', icon: PackageSearch },
+    { to: '/panel/asignacion', labelKey: 'nav.assign', icon: ClipboardCheck },
+    { to: '/panel/checklist-operativo', labelKey: 'nav.checklist', icon: CheckCircle2 },
+    { to: '/panel/plantilla', labelKey: 'nav.template', icon: FileSpreadsheet },
+    { to: '/panel/chat', labelKey: 'nav.chat', icon: BellRing },
+  ]},
+  { g: 'nav.g.fleet', items: [
+    { to: '/panel/vehiculos', labelKey: 'nav.vehicles', icon: Truck },
+    { to: '/panel/revision', labelKey: 'nav.revision', icon: CheckCircle2 },
+    { to: '/panel/inspecciones', labelKey: 'nav.inspections', icon: ClipboardList },
+    { to: '/panel/incidencias', labelKey: 'nav.incidents', icon: AlertTriangle },
+    { to: '/panel/talleres', labelKey: 'nav.workshops', icon: Wrench },
+    { to: '/panel/vencimientos', labelKey: 'nav.grp.expiry', icon: CalendarClock },
+    { to: '/panel/importaciones', labelKey: 'nav.imports', icon: FileUp },
+  ]},
+  { g: 'nav.g.team', items: [
+    { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
+    { to: '/panel/scorecard', labelKey: 'nav.scorecard', icon: Trophy },
+    { to: '/panel/contactos', labelKey: 'nav.contacts', icon: BookUser },
+  ]},
+  { g: 'nav.g.system', items: [
+    { to: '/panel/ia-peritaje', labelKey: 'nav.ai', icon: BrainCircuit },
+    { to: '/panel/configuracion', labelKey: 'nav.settings', icon: Settings },
+  ]},
+]
+// Rutas que ya no están en el menú pero siguen accesibles vía paleta/URL
+const PALETTE_EXTRA = [
+  { to: '/panel/avisos-itv', labelKey: 'nav.itvalerts', icon: BellRing, key: 'avisos-itv' },
+  { to: '/panel/renting', labelKey: 'nav.renting', icon: KeyRound, key: 'renting' },
+  { to: '/panel/casas-alquiler', labelKey: 'nav.rental', icon: Building2, key: 'casas-alquiler' },
+]
+const EXPIRY_KEYS = ['avisos-itv', 'renting', 'casas-alquiler']
 
 export default function PanelLayout() {
   const nav = useNavigate()
@@ -73,7 +75,6 @@ export default function PanelLayout() {
   const admin = getAdmin()
   const { lang, setLang, t } = useT()
   const { limits } = usePlan()
-  const [tab, setTab] = useState(() => localStorage.getItem('panel_tab') || 'furgonetas')
   const [center, setCenter] = useState(() => localStorage.getItem('panel_center') || 'Todos')
   const [cmdOpen, setCmdOpen] = useState(false)
 
@@ -89,13 +90,7 @@ export default function PanelLayout() {
     return () => document.removeEventListener('keydown', h)
   }, [])
 
-  // Traduce los tabs dinámicamente según el idioma activo
-  const TABS = Object.fromEntries(
-    Object.entries(TABS_DEF).map(([k, v]) => [k, {
-      label: t(v.labelKey),
-      items: v.items.map(it => ({ ...it, label: t(it.labelKey) })),
-    }])
-  )
+  // (El menú se calcula más abajo, tras conocer permisos y plan)
 
   // Centros DINÁMICOS de este DSP (multi-tenant: nunca hardcodeado)
   // Centros visibles: si allowed_centers es una lista, filtra; si no, todos los de la org.
@@ -110,36 +105,42 @@ export default function PanelLayout() {
     if (singleCenter && center !== singleCenter) setCenter(singleCenter)
   }, [singleCenter]) // eslint-disable-line
 
-  useEffect(() => { localStorage.setItem('panel_tab', tab) }, [tab])
   useEffect(() => { localStorage.setItem('panel_center', center) }, [center])
 
   if (!isAuthed()) return <Navigate to="/panel/login" replace />
 
-  // Guard de ruta: impide acceder por URL a un módulo no permitido.
-  const curKey = keyOf(loc.pathname.replace(/\/+$/, '') || '/panel')
   const sa = isSuperAdmin()
   const cm = isCenterManager()
+  const EQUIPO_KEYS = new Set(['asignacion', 'checklist-operativo', 'chat', 'plantilla'])
+
+  // ¿Es visible este item con los permisos + plan actuales?
+  const itemVisible = (it) => {
+    const k = keyOf(it.to)
+    if (k === 'vencimientos') return EXPIRY_KEYS.some((ek) => canSee(ek))
+    if (!EQUIPO_KEYS.has(k) && !canSee(k)) return false
+    const feat = ROUTE_FEATURE[k]
+    if (feat && limits && limits[feat] === false) return false
+    return true
+  }
+  // Menú agrupado (traducido) + lista plana para guard/paleta/móvil
+  const groups = NAV_DEF
+    .map((g) => ({ g: t(g.g), items: g.items.filter(itemVisible).map((it) => ({ ...it, label: t(it.labelKey) })) }))
+    .filter((g) => g.items.length > 0)
+  const flatItems = groups.flatMap((g) => g.items)
+
+  // Guard de ruta: impide acceder por URL a un módulo no permitido.
+  const curKey = keyOf(loc.pathname.replace(/\/+$/, '') || '/panel')
   const routeAllowed = (k) => {
     if (k === 'perfil' || k === 'login' || k === 'portal-conductor' || k === 'checklist-operativo' || k === 'chat' || k === 'plantilla' || k === 'mi-dia') return true
+    if (k === 'vencimientos') return EXPIRY_KEYS.some((ek) => canSee(ek))
     if (k === 'admin' || k === 'bandeja') return sa
     if (k === 'usuarios') return sa || cm
     return canSee(k)
   }
   if (!routeAllowed(curKey)) {
-    const firstAllowed = [...TABS.operacional.items, ...TABS.furgonetas.items].find((it) => canSee(keyOf(it.to)))
-    return <Navigate to={firstAllowed ? firstAllowed.to : '/panel/perfil'} replace />
+    return <Navigate to={flatItems[0] ? flatItems[0].to : '/panel/perfil'} replace />
   }
 
-  // Portal Conductor ahora es una página interna del panel: /panel/portal-conductor
-
-  const EQUIPO_KEYS = new Set(['asignacion', 'checklist-operativo', 'chat', 'plantilla'])
-  const items = TABS[tab].items.filter((it) => {
-    const k = keyOf(it.to)
-    if (!EQUIPO_KEYS.has(k) && !canSee(k)) return false
-    const feat = ROUTE_FEATURE[k]
-    if (feat && limits && limits[feat] === false) return false
-    return true
-  })
   const showAdmin = sa
 
   function doLogout() {
@@ -147,15 +148,11 @@ export default function PanelLayout() {
     nav('/panel/login', { replace: true })
   }
 
-  // Páginas visibles para la paleta de comandos (mismos permisos que el menú)
-  const paletteBase = [...TABS.operacional.items, ...TABS.equipo.items, ...TABS.furgonetas.items]
-    .filter((it) => {
-      const k = keyOf(it.to)
-      if (!EQUIPO_KEYS.has(k) && !canSee(k)) return false
-      const feat = ROUTE_FEATURE[k]
-      if (feat && limits && limits[feat] === false) return false
-      return true
-    })
+  // Paleta ⌘K: menú + rutas fusionadas (ITV/Renting/Alquiler directas) + admin
+  const paletteBase = [
+    ...flatItems,
+    ...PALETTE_EXTRA.filter((p) => canSee(p.key)).map((p) => ({ ...p, label: t(p.labelKey) })),
+  ]
   const palettePages = showAdmin
     ? [...paletteBase, { to: '/panel/admin', label: t('nav.business'), icon: Shield }, { to: '/panel/bandeja', label: t('nav.inbox'), icon: Inbox }]
     : paletteBase
@@ -182,33 +179,15 @@ export default function PanelLayout() {
           <b className="font-display text-base font-bold tracking-tight">FlotaDSP</b>
         </div>
 
-        {/* Pestañas Operacional / Furgonetas */}
-        <div className="mx-3 mb-2 grid grid-cols-3 gap-1 rounded-lg bg-dark-950/60 p-1 ring-1 ring-white/5">
-          {Object.entries(TABS).map(([k, v]) => (
-            <button
-              key={k}
-              onClick={() => setTab(k)}
-              className={`rounded-md px-2 py-1.5 text-xs font-semibold transition-all duration-200 ${
-                tab === k ? 'bg-dark-700/80 text-white shadow-sm shadow-black/30' : 'text-dark-400 hover:text-dark-200'
-              }`}
-            >
-              {v.label}
-            </button>
-          ))}
-        </div>
-
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-1">
-          {items.map((it, i) => {
-            // Subtítulo de grupo cuando cambia el grupo (declutter del menú).
-            const showHeader = it.group && it.group !== (i > 0 ? items[i - 1].group : null)
-            return (
-              <div key={it.to}>
-                {showHeader && (
-                  <div className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-dark-600">
-                    {t(it.group)}
-                  </div>
-                )}
+          {groups.map((g) => (
+            <div key={g.g}>
+              <div className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-dark-600">
+                {g.g}
+              </div>
+              {g.items.map((it) => (
                 <NavLink
+                  key={it.to}
                   to={it.to}
                   end={it.end}
                   className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}
@@ -216,9 +195,9 @@ export default function PanelLayout() {
                   <it.icon size={16} />
                   {it.label}
                 </NavLink>
-              </div>
-            )
-          })}
+              ))}
+            </div>
+          ))}
           {showAdmin && (
             <NavLink
               to="/panel/admin"
@@ -289,13 +268,9 @@ export default function PanelLayout() {
         )}
         <TrialBanner />
         <header className="glass flex items-center justify-between gap-3 border-b px-4 py-2.5">
-          {/* selector de pestaña en móvil (sin sidebar) */}
-          <div className="flex items-center gap-2 md:hidden">
-            <select className="select w-auto py-1.5 text-sm" value={tab} onChange={(e) => setTab(e.target.value)}>
-              {Object.entries(TABS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-            </select>
+          <div className="hidden text-sm text-dark-400 md:block">
+            {flatItems.find((it) => (it.end ? loc.pathname === it.to : loc.pathname.startsWith(it.to)))?.label || ''}
           </div>
-          <div className="hidden text-sm text-dark-400 md:block">{TABS[tab].label}</div>
 
           {/* Paleta de comandos (Ctrl+K) */}
           <button
@@ -342,7 +317,7 @@ export default function PanelLayout() {
 
         {/* navegación móvil rápida */}
         <div className="flex gap-1 overflow-x-auto border-b border-dark-800 px-3 py-2 md:hidden">
-          {items.map((it) => (
+          {flatItems.map((it) => (
             <NavLink
               key={it.to}
               to={it.to}

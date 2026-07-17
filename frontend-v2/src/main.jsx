@@ -53,10 +53,24 @@ window.addEventListener('error', (e) => reportError(e.message, e.error?.stack))
 window.addEventListener('unhandledrejection', (e) => reportError(e.reason?.message || String(e.reason), e.reason?.stack))
 
 /* Un error de render no debe dejar la pantalla en blanco */
+// ¿Es el fallo típico de "chunk viejo tras un deploy"? (index cacheado pide un
+// JS con hash antiguo; el fallback SPA devuelve HTML → módulo undefined)
+const isStaleChunkError = (msg = '') =>
+  /reading 'default'|dynamically imported module|Importing a module script failed|Loading chunk/i.test(msg)
+
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { broken: false } }
   static getDerivedStateFromError() { return { broken: true } }
-  componentDidCatch(error, info) { reportError(error?.message, (error?.stack || '') + (info?.componentStack || '')) }
+  componentDidCatch(error, info) {
+    // Auto-curación: si el fallo es un chunk desactualizado, recarga UNA vez
+    // (trae el index nuevo con los nombres de chunk correctos) sin molestar.
+    if (isStaleChunkError(error?.message) && !sessionStorage.getItem('chunk_reloaded')) {
+      sessionStorage.setItem('chunk_reloaded', String(Date.now()))
+      window.location.reload()
+      return
+    }
+    reportError(error?.message, (error?.stack || '') + (info?.componentStack || ''))
+  }
   render() {
     if (!this.state.broken) return this.props.children
     return (
@@ -72,6 +86,9 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// Tras 15 s sanos, se rearma la auto-curación para el próximo deploy.
+setTimeout(() => { try { sessionStorage.removeItem('chunk_reloaded') } catch { /* privado */ } }, 15000)
+
 /* Code-splitting: la landing carga al instante; el resto de rutas se descargan
    solo cuando se visitan (panel, portal conductor, legal…). */
 const Login = lazy(() => import('./pages/Login'))
@@ -84,6 +101,7 @@ const PanelLayout = lazy(() => import('./panel/PanelLayout'))
 const PanelDashboard = lazy(() => import('./panel/pages/Dashboard'))
 const PanelMiDia = lazy(() => import('./panel/pages/MiDia'))
 const PanelVehiculos = lazy(() => import('./panel/pages/Vehiculos'))
+const PanelVencimientos = lazy(() => import('./panel/pages/Vencimientos'))
 const PanelRevision = lazy(() => import('./panel/pages/RevisionRapida'))
 const PanelNegocio = lazy(() => import('./panel/pages/Negocio'))
 const PanelPerfil = lazy(() => import('./panel/pages/Perfil'))
@@ -181,6 +199,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="revision" element={<PanelRevision />} />
                 <Route path="inspecciones" element={<PanelInspecciones />} />
                 <Route path="vehiculos" element={<PanelVehiculos />} />
+                <Route path="vencimientos" element={<PanelVencimientos />} />
                 <Route path="talleres" element={<PanelTalleres />} />
                 <Route path="avisos-itv" element={<PanelAvisosITV />} />
                 <Route path="renting" element={<PanelRenting />} />

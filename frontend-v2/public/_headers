@@ -9,3 +9,11 @@
 # El service worker no debe cachearse: así las actualizaciones llegan al momento
 /sw.js
   Cache-Control: no-cache, no-store, must-revalidate
+
+# La cáscara HTML tampoco: tras cada deploy cambian los nombres de chunk y un
+# index.html cacheado pedía JS viejos → fallback SPA devolvía HTML → crash
+# "Cannot read properties of undefined (reading 'default')".
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache

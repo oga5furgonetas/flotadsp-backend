@@ -6,7 +6,7 @@ import {
   Loader2, TrendingUp, Camera, ShieldAlert, CheckCircle2,
   ChevronRight, Clock, ArrowRight,
 } from 'lucide-react'
-import { getDashboardStats, getLastInspections, getItvAlerts, getVehicles, getDrivers, getDamageCosts } from '../api'
+import { getDashboardStats, getLastInspections, getItvAlerts, getVehicles, getDrivers, getDamageCosts, cortexOverview, cortexRoutes, getReviewQueue } from '../api'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { PageSkeleton } from '../components/Skeleton'
 import GuidedEmpty from '../components/GuidedEmpty'
@@ -297,6 +297,32 @@ export default function Dashboard() {
     getDamageCosts(center).then(r => setCosts(r.data)).catch(() => {})
   }, [center])
 
+  // "Ahora mismo": lo urgente en vivo (Cortex + cola de revisión), refresco 60 s.
+  const [nowLive, setNowLive] = useState(null)
+  const navTop = useNavigate()
+  useEffect(() => {
+    let stop = false
+    const load = () => {
+      const day = new Date().toISOString().slice(0, 10)
+      Promise.all([
+        cortexOverview(day, center).catch(() => ({ data: null })),
+        cortexRoutes(day, center).catch(() => ({ data: null })),
+        getReviewQueue(center).catch(() => ({ data: [] })),
+      ]).then(([o, r, q]) => {
+        if (stop) return
+        const queue = Array.isArray(q.data) ? q.data : (q.data?.items || [])
+        setNowLive({
+          missing: o.data?.missing_now ?? null,
+          routes: r.data ? (r.data.routes || []).length : null,
+          review: queue.length,
+        })
+      })
+    }
+    load()
+    const iv = setInterval(load, 60000)
+    return () => { stop = true; clearInterval(iv) }
+  }, [center])
+
   useEffect(() => {
     setData(null)
     setErr('')
@@ -387,6 +413,31 @@ export default function Dashboard() {
           </div>
         )}
       </div>
+
+      {/* ── Ahora mismo: lo que puede estropear el día, en vivo y clicable ── */}
+      {nowLive && (nowLive.routes > 0 || nowLive.review > 0 || nowLive.missing > 0 || itv.length > 0) && (
+        <div className="rounded-2xl border border-dark-800 bg-gradient-to-br from-dark-900/80 to-dark-950 p-3">
+          <div className="mb-2 flex items-center gap-2 px-1 text-[11px] font-bold uppercase tracking-wider text-dark-500">
+            <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> {t('dash.now')}
+          </div>
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+            {[
+              { v: nowLive.missing, label: t('dash.now.missing'), to: '/panel/paquetes', danger: (nowLive.missing || 0) > 0, show: nowLive.missing != null },
+              { v: nowLive.routes, label: t('dash.now.routes'), to: '/panel/paquetes', show: nowLive.routes != null },
+              { v: nowLive.review, label: t('dash.now.review'), to: '/panel/revision', warn: nowLive.review > 0, show: true },
+              { v: itv.length, label: t('dash.now.itv'), to: '/panel/vencimientos', warn: itv.length > 0, show: true },
+            ].filter(c => c.show).map((c) => (
+              <button key={c.label} onClick={() => navTop(c.to)}
+                className={`rounded-xl border px-3 py-2.5 text-left transition hover:border-brand-500/50 ${
+                  c.danger ? 'border-red-500/40 bg-red-500/[.06]' : c.warn ? 'border-amber-500/30 bg-amber-500/[.05]' : 'border-dark-800 bg-dark-900/60'
+                }`}>
+                <div className={`text-xl font-extrabold tabular-nums ${c.danger ? 'text-red-300' : c.warn ? 'text-amber-300' : 'text-dark-50'}`}>{c.v}</div>
+                <div className="text-[11px] font-semibold text-dark-400">{c.label}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Onboarding: flota vacía → guiar el primer paso ── */}
       {fleet === 0 && (
