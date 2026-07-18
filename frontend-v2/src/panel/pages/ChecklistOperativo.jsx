@@ -93,7 +93,7 @@ export default function ChecklistOperativo() {
   if (noCenter) {
     return (
       <div className="mx-auto max-w-3xl">
-        <h1 className="mb-3 text-xl font-bold">{t('chk.title')}</h1>
+        <h1 className="rise mb-5 font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('chk.title')}</h1>
         <div className="card flex flex-col items-center gap-3 p-10 text-center">
           <CheckSquare size={28} className="text-brand-400" />
           <p className="text-dark-200">Elige un centro arriba para ver su checklist.</p>
@@ -107,7 +107,7 @@ export default function ChecklistOperativo() {
     <div className="mx-auto max-w-3xl">
       <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold">{t('chk.title')} · {center}</h1>
+          <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('chk.title')} <span className="text-dark-600">· {center}</span></h1>
           <p className="text-sm text-dark-400">{t('chk.critical.tasks')}</p>
         </div>
         <div className="flex items-center gap-2">

@@ -399,11 +399,10 @@ export default function PlantillaGenerador() {
     <div className="mx-auto max-w-6xl">
       <div className="mb-5 flex items-start justify-between">
         <div>
-          <h1 className="flex items-center gap-2 text-xl font-bold">
-            <FileSpreadsheet size={20} className="text-brand-400" />
+          <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
             Plantilla de turno
           </h1>
-          <p className="mt-1 text-sm text-dark-400">
+          <p className="mt-3 text-sm text-dark-400">
             Sube capturas → edita → marca colores → descarga Excel. Se guarda automáticamente en el historial.
           </p>
         </div>

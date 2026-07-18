@@ -153,7 +153,7 @@ export default function IAPeritaje() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold"><BrainCircuit size={22} className="text-brand-400" /> {t('ia.title')}</h1>
+      <h1 className="rise mb-6 font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('ia.title')}</h1>
       {msg && (
         <div className={`mb-4 rounded-lg px-3 py-2.5 text-sm ${msg.ok ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-red-500/10 text-red-300'}`}>
           {msg.t}

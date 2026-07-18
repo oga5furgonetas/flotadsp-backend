@@ -26,7 +26,7 @@ export default function Importaciones() {
 
   return (
     <div className="mx-auto max-w-2xl">
-      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold"><FileUp size={20} /> {t('imp.title')}</h1>
+      <h1 className="rise mb-6 font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('imp.title')}</h1>
       {msg && <div className={`mb-4 rounded-lg px-3 py-2 text-sm ${msg.ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{msg.t}</div>}
 
       <div className="card p-5">

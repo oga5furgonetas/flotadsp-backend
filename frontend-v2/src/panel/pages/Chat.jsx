@@ -112,7 +112,7 @@ export default function Chat() {
   if (noCenter) {
     return (
       <div className="mx-auto max-w-3xl">
-        <h1 className="mb-3 text-xl font-bold">{t('chat.title')}</h1>
+        <h1 className="rise mb-5 font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('chat.title')}</h1>
         <div className="card flex flex-col items-center gap-3 p-10 text-center">
           <MessageSquare size={28} className="text-brand-400" />
           <p className="text-dark-200">{t('chat.center.hint')}</p>
@@ -126,7 +126,7 @@ export default function Chat() {
     <div className="mx-auto flex h-[calc(100vh-9rem)] max-w-3xl flex-col">
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <h1 className="flex items-center gap-2 text-xl font-bold"><MessageSquare size={20} /> {t('chat.title')} · {center}</h1>
+          <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('chat.title')} <span className="text-dark-600">· {center}</span></h1>
           <p className="text-xs text-dark-500">{t('chat.visibility').replace('{center}', center)}</p>
         </div>
         {canPush && (

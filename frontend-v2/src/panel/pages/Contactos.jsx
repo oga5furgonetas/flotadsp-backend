@@ -237,7 +237,7 @@ export default function Contactos() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold">{t('ct.title')}</h1>
+          <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('ct.title')}</h1>
           <p className="mt-0.5 text-xs text-dark-500">
             {contacts.length} {contacts.length === 1 ? t('ct.count.one') : t('ct.count.many')}
           </p>

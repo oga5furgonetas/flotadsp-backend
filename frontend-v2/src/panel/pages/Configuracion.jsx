@@ -56,7 +56,7 @@ export default function Configuracion() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
-      <h1 className="text-xl font-bold">{t('cfg.title')}</h1>
+      <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('cfg.title')}</h1>
       {msg && <div className={`rounded-lg px-3 py-2 text-sm ${msg.ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{msg.t}</div>}
 
       <p className="text-sm text-dark-400">Los enlaces para conductores están en la página <b>Portal Conductor</b> del menú lateral.</p>

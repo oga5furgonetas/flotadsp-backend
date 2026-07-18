@@ -651,7 +651,7 @@ export default function Scorecard() {
 
   if (noCenter) return (
     <div>
-      <h1 className="mb-4 text-xl font-bold">Scorecard</h1>
+      <h1 className="rise mb-6 font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">Scorecard</h1>
       <div className="card flex flex-col items-center gap-3 p-10 text-center">
         <Trophy size={30} className="text-brand-400" />
         <p className="text-dark-200">{t('sc.pick.center')}</p>
@@ -670,7 +670,7 @@ export default function Scorecard() {
       {/* Header + Week nav */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold">Scorecard · {center}</h1>
+          <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">Scorecard <span className="text-dark-600">· {center}</span></h1>
           {full && <p className="text-xs text-dark-500">{fmtDate(full.desde)} – {fmtDate(full.hasta)} · W{full.week_num}</p>}
         </div>
         <div className="flex items-center gap-2">
