@@ -520,9 +520,8 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
 
       <div className="fixed inset-0 z-40 flex justify-end" onClick={onClose}>
         <div
-          className="relative flex h-full w-full max-w-lg flex-col overflow-hidden shadow-2xl ring-1 ring-white/[0.06]"
+          className="relative flex h-full w-full max-w-lg flex-col overflow-hidden bg-dark-950 shadow-2xl ring-1 ring-white/[0.06]"
           onClick={e => e.stopPropagation()}
-          style={{ background: 'linear-gradient(160deg, #100e0d 0%, #0a0908 100%)' }}
         >
           {/* Toast */}
           {toast && (
@@ -532,7 +531,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
           )}
 
           {/* ── HEADER HERO ── */}
-          <div className="relative overflow-hidden px-6 pb-6 pt-5" style={{ background: 'linear-gradient(135deg, #1c1512 0%, #100c0b 100%)' }}>
+          <div className="relative overflow-hidden bg-dark-900 px-6 pb-6 pt-5">
             {/* Luz cálida de fondo: profundidad sin sombras teatrales */}
             <div className="pointer-events-none absolute -right-8 -top-8 h-40 w-40 rounded-full bg-brand-500/[0.07] blur-2xl" />
             <div className="pointer-events-none absolute -bottom-4 left-24 h-24 w-24 rounded-full bg-brand-400/[0.05] blur-xl" />
@@ -546,7 +545,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                   </span>
                   {itvBadge(vehicle.itv_date)}
                 </div>
-                <h2 className="font-mono text-3xl font-black tracking-[0.12em] text-white drop-shadow">
+                <h2 className="font-mono text-3xl font-black tracking-[0.12em] text-dark-50 drop-shadow">
                   {vehicle.license_plate || '—'}
                 </h2>
                 <div className="mt-1 text-sm text-slate-400">
@@ -1179,7 +1178,6 @@ function AddVehicleModal({ centers, onSaved, onClose }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onClose}>
       <div
         className="relative w-full max-w-xl rounded-2xl border border-dark-700 bg-dark-900 shadow-2xl"
-        style={{ background: 'linear-gradient(160deg,#0f1829 0%,#0a0f1e 100%)' }}
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}

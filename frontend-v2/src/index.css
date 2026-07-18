@@ -94,6 +94,25 @@ html[data-panel-theme='light'] .text-brand-400 { color: #ea580c; }
 html[data-panel-theme='light'] .text-brand-400\/80 { color: rgba(234, 88, 12, 0.85); }
 html[data-panel-theme='light'] .text-amber-600 { color: #92400e; }
 html[data-panel-theme='light'] .text-emerald-600 { color: #065f46; }
+html[data-panel-theme='light'] .text-amber-200 { color: #92400e; }
+html[data-panel-theme='light'] .text-emerald-200 { color: #065f46; }
+html[data-panel-theme='light'] .text-red-200 { color: #991b1b; }
+html[data-panel-theme='light'] .text-brand-200 { color: #9a3412; }
+
+/* Texto "slate" heredado (pensado para fondo oscuro) → tinta en modo día */
+html[data-panel-theme='light'] .text-slate-100, html[data-panel-theme='light'] .text-slate-200 { color: #27272d; }
+html[data-panel-theme='light'] .text-slate-300 { color: #33333c; }
+html[data-panel-theme='light'] .text-slate-400 { color: #4b4b55; }
+html[data-panel-theme='light'] .text-slate-500 { color: #5d5d68; }
+html[data-panel-theme='light'] .text-slate-600 { color: #73737e; }
+
+/* Blanco sobre superficies que en modo día son claras → tinta.
+   (Los botones de marca no llevan estas combinaciones y siguen en blanco.) */
+html[data-panel-theme='light'] .bg-dark-600.text-white,
+html[data-panel-theme='light'] .bg-dark-700.text-white,
+html[data-panel-theme='light'] .bg-dark-800.text-white,
+html[data-panel-theme='light'] .bg-dark-900.text-white { color: rgb(var(--dk-50)); }
+html[data-panel-theme='light'] [class*='hover:text-white']:hover { color: rgb(var(--dk-50)); }
 
 /* ── Tema claro/oscuro de la LANDING pública (solo .ld-root) ──────────────── */
 .ld-root {

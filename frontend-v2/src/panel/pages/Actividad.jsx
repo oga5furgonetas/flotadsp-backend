@@ -36,7 +36,7 @@ export default function Actividad() {
 
   return (
     <div className="mx-auto max-w-2xl">
-      <h1 className="mb-4 flex items-center gap-2 text-xl font-bold"><Activity size={20} /> {t('act.title')}</h1>
+      <h1 className="rise mb-6 font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('act.title')}</h1>
       <div className="card divide-y divide-dark-800">
         {list.map((i) => {
           const v = vmap[i.vehicle_id] || {}

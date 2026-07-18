@@ -38,7 +38,7 @@ export default function MiDia() {
   if (noCenter) {
     return (
       <div className="mx-auto max-w-3xl">
-        <h1 className="mb-3 flex items-center gap-2 text-xl font-bold"><Sun size={20} className="text-amber-400" /> {t('midia.title')}</h1>
+        <h1 className="rise mb-5 font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('midia.title')}</h1>
         <div className="card p-10 text-center text-dark-300">{t('midia.pick.center')}</div>
       </div>
     )
@@ -68,10 +68,11 @@ export default function MiDia() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
-      <div>
-        <h1 className="flex items-center gap-2 text-xl font-bold"><Sun size={20} className="text-amber-400" /> {t('midia.title')} · {center}</h1>
-        <p className="mt-0.5 text-sm text-dark-500">{new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
-      </div>
+      <header className="rise">
+        <p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-brand-400/80">{center}</p>
+        <h1 className="mt-2 font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('midia.title')}</h1>
+        <p className="mt-3 text-[13.5px] capitalize text-dark-500">{new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+      </header>
 
       {allClear && (
         <div className="card flex items-center gap-3 border-emerald-500/20 bg-emerald-500/5 p-5 text-emerald-300">

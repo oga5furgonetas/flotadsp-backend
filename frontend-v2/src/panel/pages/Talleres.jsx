@@ -392,9 +392,9 @@ export default function Talleres() {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold">{t('ws.title')}</h1>
-          <p className="mt-0.5 text-xs text-dark-500">
+        <div className="rise">
+          <h1 className="font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('ws.title')}</h1>
+          <p className="mt-3 text-[13.5px] text-dark-500">
             {t('ws.concerted')}
           </p>
         </div>

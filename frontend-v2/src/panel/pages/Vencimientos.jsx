@@ -24,9 +24,9 @@ export default function Vencimientos() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <h1 className="flex items-center gap-2 text-xl font-bold">
-          <CalendarClock size={20} className="text-brand-400" /> {t('nav.grp.expiry')}
+      <div className="rise mb-6 flex flex-wrap items-end gap-4">
+        <h1 className="font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
+          {t('nav.grp.expiry')}
         </h1>
         <div className="flex gap-1 rounded-lg bg-dark-900 p-1 ring-1 ring-dark-700">
           {tabs.map((x) => (
