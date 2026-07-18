@@ -61,6 +61,7 @@ html[data-panel-theme='light'] .float-row:hover {
   box-shadow: 0 14px 34px -24px rgba(20, 20, 30, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 html[data-panel-theme='light'] .nav-item:hover { background: rgba(20, 20, 30, 0.05); }
+html[data-panel-theme='light'] .nav-ghead:hover { background: rgba(20, 20, 30, 0.05); }
 html[data-panel-theme='light'] .nav-item-active,
 html[data-panel-theme='light'] .nav-item-active:hover { background: rgba(20, 20, 30, 0.07); }
 html[data-panel-theme='light'] .shimmer {
@@ -315,6 +316,12 @@ html[data-panel-theme='light'] [class*='hover:text-white']:hover { color: rgb(va
     from { transform: scaleY(0); opacity: 0; }
     to   { transform: scaleY(1); opacity: 1; }
   }
+
+  /* Cabecera de grupo del menú: fila completa clicable, con identidad */
+  .nav-ghead {
+    @apply flex w-full items-center gap-2.5 rounded-xl px-2 py-2 transition-colors duration-150;
+  }
+  .nav-ghead:hover { background: rgba(255, 255, 255, 0.045); }
 
   /* Superficie translúcida con blur (topbar, overlays) */
   .glass {

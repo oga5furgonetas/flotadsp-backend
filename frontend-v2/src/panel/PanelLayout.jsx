@@ -29,20 +29,21 @@ const ROUTE_FEATURE = {
 // Menú ÚNICO agrupado por intención (sin pestañas: todo el mapa visible siempre).
 // Vencimientos fusiona en una página ITV + Renting + Casas de alquiler; las rutas
 // antiguas siguen vivas (deep-links, paleta ⌘K) — solo cambia la navegación.
+// Cada grupo tiene identidad propia: icono en chip de color + etiqueta grande.
 const NAV_DEF = [
-  { g: 'nav.g.today', items: [
+  { g: 'nav.g.today', gIcon: Sun, iconCls: 'text-amber-400', iconBg: 'bg-amber-500/10', items: [
     { to: '/panel', labelKey: 'nav.dashboard', icon: LayoutDashboard, end: true },
     { to: '/panel/mi-dia', labelKey: 'nav.miDia', icon: Sun },
     { to: '/panel/actividad', labelKey: 'nav.activity', icon: Activity },
   ]},
-  { g: 'nav.g.dailyops', items: [
+  { g: 'nav.g.dailyops', gIcon: Zap, iconCls: 'text-sky-400', iconBg: 'bg-sky-500/10', items: [
     { to: '/panel/paquetes', labelKey: 'nav.pkgintel', icon: PackageSearch },
     { to: '/panel/asignacion', labelKey: 'nav.assign', icon: ClipboardCheck },
     { to: '/panel/checklist-operativo', labelKey: 'nav.checklist', icon: CheckCircle2 },
     { to: '/panel/plantilla', labelKey: 'nav.template', icon: FileSpreadsheet },
     { to: '/panel/chat', labelKey: 'nav.chat', icon: BellRing },
   ]},
-  { g: 'nav.g.fleet', items: [
+  { g: 'nav.g.fleet', gIcon: Truck, iconCls: 'text-emerald-400', iconBg: 'bg-emerald-500/10', items: [
     { to: '/panel/vehiculos', labelKey: 'nav.vehicles', icon: Truck },
     { to: '/panel/revision', labelKey: 'nav.revision', icon: CheckCircle2 },
     { to: '/panel/inspecciones', labelKey: 'nav.inspections', icon: ClipboardList },
@@ -51,12 +52,12 @@ const NAV_DEF = [
     { to: '/panel/vencimientos', labelKey: 'nav.grp.expiry', icon: CalendarClock },
     { to: '/panel/importaciones', labelKey: 'nav.imports', icon: FileUp },
   ]},
-  { g: 'nav.g.team', items: [
+  { g: 'nav.g.team', gIcon: Users, iconCls: 'text-violet-400', iconBg: 'bg-violet-500/10', items: [
     { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
     { to: '/panel/scorecard', labelKey: 'nav.scorecard', icon: Trophy },
     { to: '/panel/contactos', labelKey: 'nav.contacts', icon: BookUser },
   ]},
-  { g: 'nav.g.system', items: [
+  { g: 'nav.g.system', gIcon: Settings, iconCls: 'text-dark-300', iconBg: 'bg-white/[0.07]', items: [
     { to: '/panel/ia-peritaje', labelKey: 'nav.ai', icon: BrainCircuit },
     { to: '/panel/configuracion', labelKey: 'nav.settings', icon: Settings },
   ]},
@@ -144,7 +145,7 @@ export default function PanelLayout() {
   }
   // Menú agrupado (traducido) + lista plana para guard/paleta/móvil
   const groups = NAV_DEF
-    .map((g) => ({ key: g.g, g: t(g.g), items: g.items.filter(itemVisible).map((it) => ({ ...it, label: t(it.labelKey) })) }))
+    .map((g) => ({ ...g, key: g.g, g: t(g.g), items: g.items.filter(itemVisible).map((it) => ({ ...it, label: t(it.labelKey) })) }))
     .filter((g) => g.items.length > 0)
   const flatItems = groups.flatMap((g) => g.items)
 
@@ -207,40 +208,45 @@ export default function PanelLayout() {
             const holdsActive = isClosed && g.items.some((it) =>
               it.end ? loc.pathname === it.to : loc.pathname.startsWith(it.to))
             return (
-              <div key={g.key}>
-                <button
-                  onClick={() => toggleGroup(g.key)}
-                  className="group flex w-full items-center gap-1.5 px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-dark-600 transition-colors hover:text-dark-300"
-                >
+              <div key={g.key} className="pt-1.5 first:pt-0">
+                <button onClick={() => toggleGroup(g.key)} className="nav-ghead group">
+                  <span className={`flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-lg ${g.iconBg}`}>
+                    <g.gIcon size={14} className={g.iconCls} />
+                  </span>
+                  <span className={`text-[13px] font-semibold tracking-tight transition-colors ${isClosed ? 'text-dark-400 group-hover:text-dark-200' : 'text-dark-100'}`}>
+                    {g.g}
+                  </span>
+                  {holdsActive && <span className="h-1.5 w-1.5 rounded-full bg-brand-400" />}
                   <ChevronDown
-                    size={11}
-                    className={`shrink-0 transition-transform duration-300 ${isClosed ? '-rotate-90' : ''}`}
+                    size={14}
+                    className={`ml-auto shrink-0 text-dark-500 transition-transform duration-300 group-hover:text-dark-300 ${isClosed ? '-rotate-90' : ''}`}
                     style={{ transitionTimingFunction: 'cubic-bezier(0.22, 1.15, 0.32, 1)' }}
                   />
-                  {g.g}
-                  {holdsActive && <span className="ml-1 h-1 w-1 rounded-full bg-brand-400" />}
                 </button>
                 {/* Plegado con física vía max-height (grid-template-rows no
                     anima en todos los Chromium): nada aparece de golpe */}
                 <div
                   className="overflow-hidden transition-[max-height,opacity] duration-300"
                   style={{
-                    maxHeight: isClosed ? 0 : g.items.length * 40 + 8,
+                    maxHeight: isClosed ? 0 : g.items.length * 40 + 12,
                     opacity: isClosed ? 0 : 1,
                     transitionTimingFunction: 'cubic-bezier(0.22, 1.15, 0.32, 1)',
                   }}
                 >
-                  {g.items.map((it) => (
-                    <NavLink
-                      key={it.to}
-                      to={it.to}
-                      end={it.end}
-                      className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}
-                    >
-                      <it.icon size={16} />
-                      {it.label}
-                    </NavLink>
-                  ))}
+                  {/* Línea guía: los ítems cuelgan del grupo, como un árbol */}
+                  <div className="ml-[14px] space-y-0.5 border-l border-white/[0.06] pb-1 pl-2.5">
+                    {g.items.map((it) => (
+                      <NavLink
+                        key={it.to}
+                        to={it.to}
+                        end={it.end}
+                        className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}
+                      >
+                        <it.icon size={16} />
+                        {it.label}
+                      </NavLink>
+                    ))}
+                  </div>
                 </div>
               </div>
             )
