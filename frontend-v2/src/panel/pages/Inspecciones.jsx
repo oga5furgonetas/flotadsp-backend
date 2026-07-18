@@ -67,13 +67,18 @@ export default function Inspecciones() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold">{t('insp.title')} <span className="text-dark-500">· {list.length}</span></h1>
+      <header className="rise mb-6 flex flex-wrap items-end justify-between gap-4">
+        <h1 className="font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
+          {t('insp.title')} <span className="text-dark-600">· {list.length}</span>
+        </h1>
         <div className="relative">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />
-          <input className="input w-56 pl-9" placeholder={`${t('ui.search')} ${t('veh.plate')}…`} value={q} onChange={(e) => setQ(e.target.value)} />
+          <Search size={15} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-dark-500" />
+          <input
+            className="w-64 rounded-xl border border-white/[0.07] bg-white/[0.02] py-2.5 pl-10 pr-3 text-[13.5px] text-dark-50 placeholder:text-dark-600 transition-all duration-300 hover:border-white/[0.12] focus:border-brand-500/50 focus:bg-white/[0.045] focus:outline-none focus:ring-[3px] focus:ring-brand-500/15"
+            placeholder={`${t('ui.search')} ${t('veh.plate')}…`} value={q} onChange={(e) => setQ(e.target.value)}
+          />
         </div>
-      </div>
+      </header>
 
       <div className="mb-3 flex flex-wrap gap-1.5">
         {FILTERS.map((f) => (

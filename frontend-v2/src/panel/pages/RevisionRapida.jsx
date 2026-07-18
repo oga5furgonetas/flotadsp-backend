@@ -203,19 +203,19 @@ export default function RevisionRapida() {
   return (
     <div className="mx-auto max-w-3xl">
       {/* Cabecera */}
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <CheckCircle2 className="text-emerald-400" size={22} />
-          <h1 className="text-xl font-bold">{t('rev.title')}</h1>
-        </div>
-        <div className="flex items-center gap-2">
+      <header className="rise mb-5 flex flex-wrap items-end justify-between gap-3">
+        <h1 className="font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
+          {t('rev.title')}
+          <span className="text-dark-600"> · {displayQueue.length}</span>
+        </h1>
+        <div className="flex items-center gap-2.5">
           <button onClick={() => { setFilterIA(f => !f); setIdx(0) }}
-            className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold transition-colors ${filterIA ? 'bg-brand-500/20 text-brand-300 border border-brand-500/40' : 'bg-dark-800 text-dark-400 border border-dark-700 hover:text-dark-200'}`}>
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition ${filterIA ? 'bg-brand-500/15 text-brand-300 ring-brand-500/30' : 'text-dark-500 ring-white/[0.07] hover:text-dark-300'}`}>
             ⬡ Solo IA {filterIA && `(${displayQueue.length})`}
           </button>
-          <span className="text-sm text-dark-400">{displayQueue.length} {t('rev.pending')}</span>
+          <span className="text-[13px] text-dark-500">{t('rev.pending')}</span>
         </div>
-      </div>
+      </header>
 
       {/* Entrenando tu IA */}
       <div className="card mb-4 border-violet-500/30 bg-violet-500/5 p-4">
