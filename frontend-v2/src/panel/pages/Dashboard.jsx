@@ -436,6 +436,7 @@ export default function Dashboard() {
   ].filter((x) => x.n > 0)
 
   const firstName = (admin?.name || '').trim().split(/\s+/)[0] || ''
+  const availPct = fleet > 0 ? Math.round((active / fleet) * 100) : null
   const totalSev = SEV_ORDER.reduce((a, k) => a + (breakdown?.[k] || 0), 0)
   const okPct = totalSev ? Math.round(((breakdown?.sin_danos || 0) / totalSev) * 100) : 100
 
@@ -453,6 +454,9 @@ export default function Dashboard() {
           {urgentTotal > 0
             ? (<><b className="font-semibold text-dark-50"><Count v={urgentTotal} /></b> {t('ops.brief.items')}.</>)
             : t('ops.brief.calm')}
+          {availPct != null && (
+            <> <b className="font-semibold text-dark-50"><Count v={availPct} />%</b> {t('ops.avail')}.</>
+          )}
         </p>
       </header>
 

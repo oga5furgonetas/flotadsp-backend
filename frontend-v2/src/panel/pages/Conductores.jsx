@@ -525,29 +525,34 @@ export default function Conductores() {
   return (
     <div>
       {/* Header */}
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">{t('drv.title')}</h1>
-          <p className="mt-0.5 text-xs text-dark-500">
-            {(drivers || []).length} conductor{(drivers || []).length !== 1 ? 'es' : ''}
-            {center !== 'Todos' ? ` · ${center}` : ''}
-          </p>
-        </div>
-        {tab === 'directorio' && (
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />
-              <input className="input w-52 pl-9 text-sm" placeholder={t('drv.search')} value={q} onChange={e => setQ(e.target.value)} />
-            </div>
-            <button
-              onClick={() => setModal({ driver: null })}
-              className="flex items-center gap-1.5 rounded-lg bg-brand-500 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-brand-500/25 hover:bg-brand-600 transition-colors"
-            >
-              <Plus size={15} /> {t('drv.add')}
-            </button>
-          </div>
+      <header className="rise mb-6">
+        {center && center !== 'Todos' && (
+          <p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-brand-400/80">{center}</p>
         )}
-      </div>
+        <div className="mt-2 flex flex-wrap items-end justify-between gap-4">
+          <h1 className="font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
+            {t('drv.title')}{drivers && <span className="text-dark-600"> · {(drivers || []).length}</span>}
+          </h1>
+          {tab === 'directorio' && (
+            <div className="flex items-center gap-2.5">
+              <div className="relative">
+                <Search size={15} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-dark-500" />
+                <input
+                  className="w-56 rounded-xl border border-white/[0.07] bg-white/[0.02] py-2.5 pl-10 pr-3 text-[13.5px] text-dark-50 placeholder:text-dark-600 transition-all duration-300 hover:border-white/[0.12] focus:border-brand-500/50 focus:bg-white/[0.045] focus:outline-none focus:ring-[3px] focus:ring-brand-500/15"
+                  placeholder={t('drv.search')} value={q} onChange={e => setQ(e.target.value)}
+                />
+              </div>
+              <button
+                onClick={() => setModal({ driver: null })}
+                className="group relative flex items-center gap-1.5 overflow-hidden rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 px-4 py-2.5 text-[13.5px] font-semibold text-white shadow-lg shadow-brand-500/25 transition-all duration-300 [text-shadow:0_1px_1px_rgba(0,0,0,0.15)] hover:-translate-y-px hover:shadow-xl hover:shadow-brand-500/30 hover:brightness-110 active:translate-y-0 active:scale-[0.98]"
+              >
+                <span className="pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/20 to-transparent" />
+                <Plus size={15} /> {t('drv.add')}
+              </button>
+            </div>
+          )}
+        </div>
+      </header>
 
       {/* Tabs */}
       <div className="flex gap-0 border-b border-dark-800 mb-6">
@@ -585,7 +590,7 @@ export default function Conductores() {
                     <button
                       key={d.id}
                       onClick={() => setModal({ driver: d })}
-                      className="group flex flex-col rounded-2xl border border-dark-800 bg-dark-900 p-5 text-left transition-all hover:border-dark-700 hover:bg-dark-800/70 hover:shadow-xl hover:shadow-black/20 hover:-translate-y-0.5"
+                      className="float-row group flex flex-col rounded-2xl border border-white/[0.05] bg-white/[0.02] p-5 text-left hover:border-white/[0.1]"
                     >
                       <div className="flex items-start justify-between gap-3 mb-4">
                         <Avatar driver={d} size={12} />
@@ -606,7 +611,7 @@ export default function Conductores() {
                           <Building2 size={10} />{d.alojamiento}
                         </div>
                       )}
-                      <div className="mt-3 border-t border-dark-800 pt-3 flex flex-col gap-0.5">
+                      <div className="mt-3 border-t border-white/[0.05] pt-3 flex flex-col gap-0.5">
                         {d.phone && <span className="flex items-center gap-1.5 text-[11px] text-dark-500"><Phone size={10} />{d.phone}</span>}
                         {d.email && <span className="flex items-center gap-1.5 text-[11px] text-dark-500 truncate"><Mail size={10} />{d.email}</span>}
                         {!d.phone && !d.email && <span className="text-[11px] text-dark-700">{t('drv.no.contact')}</span>}

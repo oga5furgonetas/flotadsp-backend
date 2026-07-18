@@ -273,6 +273,7 @@ const DICT = {
   'ops.brief.calm':   { es: 'Nada urgente. La flota está en orden.', en: 'Nothing urgent. The fleet is in order.', fr: "Rien d'urgent. La flotte est en ordre.", de: 'Nichts Dringendes. Die Flotte ist in Ordnung.', it: 'Niente di urgente. La flotta è in ordine.', pt: 'Nada urgente. A frota está em ordem.' },
   'ops.pulse':        { es: 'Pulso de la flota', en: 'Fleet pulse', fr: 'Pouls de la flotte', de: 'Flottenpuls', it: 'Polso della flotta', pt: 'Pulso da frota' },
   'ops.pulse.clean':  { es: 'inspecciones limpias', en: 'clean inspections', fr: 'inspections propres', de: 'saubere Inspektionen', it: 'ispezioni pulite', pt: 'inspeções limpas' },
+  'ops.avail':        { es: 'de disponibilidad de flota', en: 'fleet availability', fr: 'de disponibilité de la flotte', de: 'Flottenverfügbarkeit', it: 'di disponibilità della flotta', pt: 'de disponibilidade da frota' },
   'nav.dashboard':  { es: 'Dashboard',        en: 'Dashboard',     fr: 'Tableau de bord', de: 'Übersicht',       it: 'Dashboard',      pt: 'Dashboard' },
   'nav.scorecard':  { es: 'Scorecard',        en: 'Scorecard',     fr: 'Scorecard',       de: 'Scorecard',       it: 'Scorecard',      pt: 'Scorecard' },
   'nav.drivers':    { es: 'Conductores',      en: 'Drivers',       fr: 'Chauffeurs',      de: 'Fahrer',          it: 'Autisti',        pt: 'Motoristas' },

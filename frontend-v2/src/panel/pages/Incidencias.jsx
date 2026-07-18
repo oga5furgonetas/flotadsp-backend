@@ -112,7 +112,7 @@ function IncModal({ inc, vehicles, onSave, onClose }) {
           <button
             onClick={submit}
             disabled={!valid || busy}
-            className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-bold text-white transition hover:bg-blue-500 disabled:opacity-40"
+            className="flex-1 rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 py-2.5 text-sm font-bold text-white shadow-lg shadow-brand-500/25 transition hover:brightness-110 disabled:opacity-40"
           >
             {busy ? <Loader2 size={14} className="mx-auto animate-spin" /> : isNew ? t('inc.create') : t('inc.save.changes')}
           </button>
@@ -166,7 +166,7 @@ function IncCard({ inc, vehicleMap, onEdit, onDelete, onResolve, onReopen }) {
   }
 
   return (
-    <div className={`overflow-hidden rounded-2xl border transition-all ${isOpen ? 'border-dark-700/60 bg-dark-800/60' : 'border-dark-800/40 bg-dark-900/40'}`}>
+    <div className={`float-row overflow-hidden rounded-2xl border ${isOpen ? 'border-white/[0.07] bg-white/[0.03]' : 'border-white/[0.04] bg-white/[0.015] opacity-80'}`}>
       <div className="flex items-start gap-3 p-4">
         <div className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ring-1 ${sevCls}`}>
           <AlertTriangle size={15} />
@@ -198,7 +198,7 @@ function IncCard({ inc, vehicleMap, onEdit, onDelete, onResolve, onReopen }) {
       </div>
 
       {expanded && (
-        <div className="border-t border-dark-800 bg-dark-900/50 px-4 py-3 space-y-3">
+        <div className="border-t border-white/[0.05] bg-black/20 px-4 py-3 space-y-3">
           {inc.description && (
             <div>
               <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-dark-700">{t('inc.field.desc.label')}</div>
@@ -312,28 +312,32 @@ export default function Incidencias() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold">{t('inc.title')}</h1>
-          <p className="mt-0.5 text-xs text-dark-500">
-            <span className="font-semibold text-red-400">{openCount}</span> {t('inc.open')} ·{' '}
-            <span className="font-semibold text-emerald-400">{resolvedCount}</span> {t('inc.closed')}
-          </p>
+      <header className="rise">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('inc.title')}</h1>
+            <p className="mt-3 text-[13.5px] text-dark-500">
+              <span className={`font-semibold tabular-nums ${openCount > 0 ? 'text-red-300' : 'text-dark-300'}`}>{openCount}</span> {t('inc.open')}
+              <span className="mx-2 text-dark-700">·</span>
+              <span className="font-semibold tabular-nums text-dark-300">{resolvedCount}</span> {t('inc.closed')}
+            </p>
+          </div>
+          <button
+            onClick={() => setModal('new')}
+            className="group relative flex items-center gap-1.5 overflow-hidden rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 px-4 py-2.5 text-[13.5px] font-semibold text-white shadow-lg shadow-brand-500/25 transition-all duration-300 [text-shadow:0_1px_1px_rgba(0,0,0,0.15)] hover:-translate-y-px hover:shadow-xl hover:shadow-brand-500/30 hover:brightness-110 active:translate-y-0 active:scale-[0.98]"
+          >
+            <span className="pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/20 to-transparent" />
+            <Plus size={15} /> {t('inc.add')}
+          </button>
         </div>
-        <button
-          onClick={() => setModal('new')}
-          className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-blue-500"
-        >
-          <Plus size={14} /> {t('inc.add')}
-        </button>
-      </div>
+      </header>
 
       <div className="flex flex-wrap items-center gap-2">
         {[['open', t('inc.open')],['resolved', t('inc.closed')],['all', t('ui.all')]].map(([v,l]) => (
           <button
             key={v}
             onClick={() => setFilter(v)}
-            className={`rounded-xl px-3 py-1.5 text-xs font-semibold transition ${filter === v ? 'bg-dark-700 text-dark-100' : 'text-dark-500 hover:text-dark-300'}`}
+            className={`rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition ${filter === v ? 'bg-brand-500/15 text-brand-300 ring-brand-500/30' : 'text-dark-500 ring-transparent hover:text-dark-300'}`}
           >
             {l}
           </button>
