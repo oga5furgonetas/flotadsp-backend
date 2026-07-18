@@ -77,7 +77,7 @@ function QrLightbox({ dataUrl, label, onClose }) {
         <a
           href={dataUrl}
           download={`QR_${label}.png`}
-          className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2 text-sm font-semibold text-white shadow hover:bg-blue-500 transition"
+          className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 px-5 py-2 text-sm font-semibold text-white shadow hover:brightness-110 transition"
         >
           <Download size={14} /> Descargar QR
         </a>
@@ -116,9 +116,9 @@ function EditableField({ label, value, onSave, type = 'text', icon, mono, childr
               value={draft}
               onChange={e => setDraft(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && confirm()}
-              className="min-w-0 flex-1 rounded-lg border border-blue-500/50 bg-dark-700 px-2.5 py-1.5 text-sm text-dark-50 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-500/20"
+              className="min-w-0 flex-1 rounded-lg border border-brand-500/50 bg-dark-700 px-2.5 py-1.5 text-sm text-dark-50 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-500/20"
             />
-            <button onClick={confirm} className="rounded-lg bg-blue-600 p-1.5 text-white hover:bg-blue-500 transition"><Check size={12} /></button>
+            <button onClick={confirm} className="rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 p-1.5 text-white hover:brightness-110 transition"><Check size={12} /></button>
             <button onClick={cancel}  className="rounded-lg bg-dark-700 p-1.5 text-dark-400 hover:text-dark-100 transition"><X size={12} /></button>
           </div>
         ) : (
@@ -130,7 +130,7 @@ function EditableField({ label, value, onSave, type = 'text', icon, mono, childr
       {onSave && !editing && (
         <button
           onClick={start}
-          className="mt-0.5 shrink-0 rounded-lg p-1 text-dark-600 opacity-0 transition hover:bg-dark-700 hover:text-blue-400 group-hover:opacity-100"
+          className="mt-0.5 shrink-0 rounded-lg p-1 text-dark-600 opacity-0 transition hover:bg-dark-700 hover:text-brand-400 group-hover:opacity-100"
           title={`Editar ${label}`}
         >
           <Pencil size={11} />
@@ -274,7 +274,7 @@ function MaintModal({ kind, currentKm, onSave, onClose }) {
         </div>
         <div className="mt-5 flex gap-2">
           <button onClick={onClose} className="flex-1 rounded-xl border border-dark-700 py-2.5 text-sm text-dark-400 hover:border-dark-600 transition">Cancelar</button>
-          <button onClick={submit} disabled={!km || busy} className="flex-1 rounded-xl bg-blue-600 py-2.5 text-sm font-bold text-white transition hover:bg-blue-500 disabled:opacity-40">
+          <button onClick={submit} disabled={!km || busy} className="flex-1 rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 py-2.5 text-sm font-bold text-white transition hover:brightness-110 disabled:opacity-40">
             {busy ? <Loader2 size={14} className="mx-auto animate-spin" /> : 'Guardar'}
           </button>
         </div>
@@ -558,7 +558,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
               <div className="ml-4 flex flex-col items-center gap-1.5">
                 <button
                   onClick={() => setQrOpen(true)}
-                  className="group relative flex h-[72px] w-[72px] items-center justify-center overflow-hidden rounded-xl bg-white p-1.5 shadow-lg ring-2 ring-white/20 transition hover:ring-blue-400/60"
+                  className="group relative flex h-[72px] w-[72px] items-center justify-center overflow-hidden rounded-xl bg-white p-1.5 shadow-lg ring-2 ring-white/20 transition hover:ring-brand-400/60"
                   title="Ampliar QR"
                 >
                   {qrDataUrl
@@ -696,7 +696,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
               <div className="px-3 pb-3">
                 <div className="flex items-center gap-4 rounded-2xl border border-dark-700/60 bg-dark-800/40 p-4">
                   <button onClick={() => setQrOpen(true)} className="group relative shrink-0">
-                    <div className="h-20 w-20 overflow-hidden rounded-xl bg-white p-1 shadow-md ring-1 ring-white/20 transition group-hover:ring-blue-400/50">
+                    <div className="h-20 w-20 overflow-hidden rounded-xl bg-white p-1 shadow-md ring-1 ring-white/20 transition group-hover:ring-brand-400/50">
                       {qrDataUrl
                         ? <img src={qrDataUrl} alt="QR" className="h-full w-full" />
                         : <Loader2 size={18} className="m-auto animate-spin text-slate-400" />
@@ -712,7 +712,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                     <div className="flex gap-2">
                       <button
                         onClick={() => setQrOpen(true)}
-                        className="flex items-center gap-1.5 rounded-lg border border-dark-600 px-3 py-1.5 text-[11px] font-medium text-dark-300 hover:border-blue-500/40 hover:text-blue-400 transition"
+                        className="flex items-center gap-1.5 rounded-lg border border-dark-600 px-3 py-1.5 text-[11px] font-medium text-dark-300 hover:border-brand-500/40 hover:text-brand-400 transition"
                       >
                         <Maximize2 size={10} /> Ampliar
                       </button>
@@ -720,14 +720,14 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                         href={qrDataUrl || '#'}
                         download={`QR_${vehicle.license_plate || vehicle.id}.png`}
                         onClick={e => !qrDataUrl && e.preventDefault()}
-                        className={`flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-500 transition ${!qrDataUrl ? 'opacity-40 pointer-events-none' : ''}`}
+                        className={`flex items-center gap-1.5 rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:brightness-110 transition ${!qrDataUrl ? 'opacity-40 pointer-events-none' : ''}`}
                       >
                         <Download size={10} /> QR
                       </a>
                       <button
                         onClick={downloadCard}
                         disabled={!qrDataUrl}
-                        className="flex items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-[11px] font-semibold text-indigo-300 hover:bg-indigo-500/20 transition disabled:opacity-40"
+                        className="flex items-center gap-1.5 rounded-lg border border-brand-500/30 bg-brand-500/10 px-3 py-1.5 text-[11px] font-semibold text-brand-300 hover:bg-brand-500/20 transition disabled:opacity-40"
                       >
                         <Download size={10} /> Tarjeta
                       </button>
@@ -1050,7 +1050,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                           <button
                             onClick={() => triggerUpload(type)}
                             disabled={uploadingDoc}
-                            className="flex items-center gap-1 rounded-lg border border-dark-700 px-2 py-0.5 text-[10px] font-medium text-dark-400 hover:border-blue-500/40 hover:text-blue-400 transition disabled:opacity-40"
+                            className="flex items-center gap-1 rounded-lg border border-dark-700 px-2 py-0.5 text-[10px] font-medium text-dark-400 hover:border-brand-500/40 hover:text-brand-400 transition disabled:opacity-40"
                           >
                             {uploadingDoc && pendingDocType === type ? <Loader2 size={9} className="animate-spin" /> : <Upload size={9} />}
                             Subir
@@ -1064,10 +1064,10 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                           <div className="space-y-1">
                             {typeDocs.map(doc => (
                               <div key={doc.id} className="flex items-center gap-2 rounded-lg border border-dark-700/50 bg-dark-800/40 px-3 py-2">
-                                <FileImage size={12} className="shrink-0 text-blue-400/70" />
+                                <FileImage size={12} className="shrink-0 text-brand-400/70" />
                                 <span className="flex-1 truncate text-[11px] text-dark-300" title={doc.name}>{doc.name}</span>
                                 <span className="shrink-0 text-[10px] text-dark-600">{(doc.uploaded_at || '').slice(0, 10)}</span>
-                                <a href={doc.url} target="_blank" rel="noopener noreferrer" className="shrink-0 rounded p-1 text-dark-500 hover:text-blue-400 transition" title="Abrir">
+                                <a href={doc.url} target="_blank" rel="noopener noreferrer" className="shrink-0 rounded p-1 text-dark-500 hover:text-brand-400 transition" title="Abrir">
                                   <ExternalLink size={11} />
                                 </a>
                                 <button onClick={() => handleDocDelete(doc.id)} className="shrink-0 rounded p-1 text-dark-600 hover:text-red-400 transition" title="Eliminar">
@@ -1183,8 +1183,8 @@ function AddVehicleModal({ centers, onSaved, onClose }) {
         {/* Header */}
         <div className="flex items-center justify-between border-b border-white/5 px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-500/15">
-              <Truck size={17} className="text-blue-400" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-500/15">
+              <Truck size={17} className="text-brand-400" />
             </div>
             <div>
               <h2 className="text-sm font-bold text-dark-50">Añadir vehículo</h2>
