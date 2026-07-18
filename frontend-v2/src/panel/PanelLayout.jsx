@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Trophy, Users, CalendarClock, BarChart3, Activity,
   CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
-  ChevronRight, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun,
+  ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon,
   PackageSearch,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken } from './auth'
@@ -78,6 +78,26 @@ export default function PanelLayout() {
   const [center, setCenter] = useState(() => localStorage.getItem('panel_center') || 'Todos')
   const [cmdOpen, setCmdOpen] = useState(false)
 
+  // Tema del panel: noche (por defecto) / día. La rampa vive en variables CSS.
+  const [theme, setTheme] = useState(() => localStorage.getItem('panel_theme') || 'dark')
+  useEffect(() => {
+    document.documentElement.setAttribute('data-panel-theme', theme)
+    localStorage.setItem('panel_theme', theme)
+  }, [theme])
+
+  // Grupos del menú plegables (persisten cerrados entre sesiones)
+  const [closedGroups, setClosedGroups] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem('nav_closed') || '[]')) } catch { return new Set() }
+  })
+  function toggleGroup(key) {
+    setClosedGroups((prev) => {
+      const next = new Set(prev)
+      next.has(key) ? next.delete(key) : next.add(key)
+      localStorage.setItem('nav_closed', JSON.stringify([...next]))
+      return next
+    })
+  }
+
   // Paleta de comandos global: Ctrl/Cmd+K
   useEffect(() => {
     const h = (e) => {
@@ -124,7 +144,7 @@ export default function PanelLayout() {
   }
   // Menú agrupado (traducido) + lista plana para guard/paleta/móvil
   const groups = NAV_DEF
-    .map((g) => ({ g: t(g.g), items: g.items.filter(itemVisible).map((it) => ({ ...it, label: t(it.labelKey) })) }))
+    .map((g) => ({ key: g.g, g: t(g.g), items: g.items.filter(itemVisible).map((it) => ({ ...it, label: t(it.labelKey) })) }))
     .filter((g) => g.items.length > 0)
   const flatItems = groups.flatMap((g) => g.items)
 
@@ -181,24 +201,50 @@ export default function PanelLayout() {
         </div>
 
         <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-1">
-          {groups.map((g) => (
-            <div key={g.g}>
-              <div className="px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-dark-600">
-                {g.g}
-              </div>
-              {g.items.map((it) => (
-                <NavLink
-                  key={it.to}
-                  to={it.to}
-                  end={it.end}
-                  className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}
+          {groups.map((g) => {
+            const isClosed = closedGroups.has(g.key)
+            // Si el grupo cerrado contiene la ruta activa, se marca con un punto
+            const holdsActive = isClosed && g.items.some((it) =>
+              it.end ? loc.pathname === it.to : loc.pathname.startsWith(it.to))
+            return (
+              <div key={g.key}>
+                <button
+                  onClick={() => toggleGroup(g.key)}
+                  className="group flex w-full items-center gap-1.5 px-3 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-dark-600 transition-colors hover:text-dark-300"
                 >
-                  <it.icon size={16} />
-                  {it.label}
-                </NavLink>
-              ))}
-            </div>
-          ))}
+                  <ChevronDown
+                    size={11}
+                    className={`shrink-0 transition-transform duration-300 ${isClosed ? '-rotate-90' : ''}`}
+                    style={{ transitionTimingFunction: 'cubic-bezier(0.22, 1.15, 0.32, 1)' }}
+                  />
+                  {g.g}
+                  {holdsActive && <span className="ml-1 h-1 w-1 rounded-full bg-brand-400" />}
+                </button>
+                {/* Plegado con física vía max-height (grid-template-rows no
+                    anima en todos los Chromium): nada aparece de golpe */}
+                <div
+                  className="overflow-hidden transition-[max-height,opacity] duration-300"
+                  style={{
+                    maxHeight: isClosed ? 0 : g.items.length * 40 + 8,
+                    opacity: isClosed ? 0 : 1,
+                    transitionTimingFunction: 'cubic-bezier(0.22, 1.15, 0.32, 1)',
+                  }}
+                >
+                  {g.items.map((it) => (
+                    <NavLink
+                      key={it.to}
+                      to={it.to}
+                      end={it.end}
+                      className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}
+                    >
+                      <it.icon size={16} />
+                      {it.label}
+                    </NavLink>
+                  ))}
+                </div>
+              </div>
+            )
+          })}
           {showAdmin && (
             <NavLink
               to="/panel/admin"
@@ -283,6 +329,15 @@ export default function PanelLayout() {
             <Search size={13} />
             <span className="hidden sm:inline">{t('cmdk.hint')}…</span>
             <kbd className="kbd hidden sm:inline-flex">Ctrl K</kbd>
+          </button>
+
+          {/* Día / noche */}
+          <button
+            onClick={() => setTheme((th) => (th === 'light' ? 'dark' : 'light'))}
+            className="rounded-lg border border-dark-700 bg-dark-800/70 p-1.5 text-dark-400 transition-colors hover:border-dark-600 hover:text-dark-200"
+            title={theme === 'light' ? 'Modo noche' : 'Modo día'}
+          >
+            {theme === 'light' ? <Moon size={14} /> : <Sun size={14} />}
           </button>
 
           {/* Selector de idioma */}

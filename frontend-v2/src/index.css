@@ -2,6 +2,99 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Tema del PANEL: rampa neutra por variables ───────────────────────────────
+   Modo noche (por defecto): carbón cálido. Modo día: la rampa se invierte
+   (dark-950 pasa a papel claro, dark-50 a tinta) y toda la app se retematiza
+   sola. Los ajustes que la inversión no cubre (vidrio blanco, hairlines
+   white/xx, semánticos pastel) van en el bloque [data-panel-theme='light']. */
+:root {
+  --dk-50: 245 245 247;
+  --dk-100: 231 231 234;
+  --dk-200: 207 207 212;
+  --dk-300: 176 176 184;
+  --dk-400: 143 143 152;
+  --dk-500: 115 115 124;
+  --dk-600: 75 75 83;
+  --dk-700: 51 51 56;
+  --dk-800: 34 34 38;
+  --dk-900: 19 19 21;
+  --dk-950: 10 10 11;
+}
+html[data-panel-theme='light'] {
+  --dk-50: 17 17 20;    /* tinta */
+  --dk-100: 34 34 40;
+  --dk-200: 48 48 54;
+  --dk-300: 64 64 72;
+  --dk-400: 96 96 106;
+  --dk-500: 120 120 130;
+  --dk-600: 128 128 138;
+  --dk-700: 210 209 205; /* bordes */
+  --dk-800: 233 232 228; /* rellenos suaves */
+  --dk-900: 251 250 248; /* superficies */
+  --dk-950: 244 243 240; /* papel cálido */
+  color-scheme: light;
+}
+
+/* Modo día: materiales y luz reinterpretados (mismo lenguaje, otra hora) */
+html[data-panel-theme='light'] body {
+  background-image:
+    radial-gradient(1100px 500px at 85% -10%, rgba(249, 115, 22, 0.05), transparent 60%),
+    radial-gradient(900px 600px at -10% 110%, rgba(120, 120, 140, 0.05), transparent 55%);
+}
+html[data-panel-theme='light'] .atmosphere {
+  background:
+    radial-gradient(1100px 560px at 16% -12%, rgba(255, 255, 255, 0.9), transparent 60%),
+    radial-gradient(820px 460px at 88% -6%, rgba(251, 146, 60, 0.06), transparent 55%),
+    linear-gradient(180deg, #f7f6f3 0%, #f3f2ef 55%, #efeeeb 100%);
+}
+html[data-panel-theme='light'] .rail {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(20, 20, 30, 0.08);
+  box-shadow: 0 24px 60px -36px rgba(20, 20, 30, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+html[data-panel-theme='light'] .glass {
+  background: rgba(255, 255, 255, 0.65);
+  border-color: rgba(20, 20, 30, 0.08);
+}
+html[data-panel-theme='light'] .float-row:hover {
+  background-color: rgba(20, 20, 30, 0.045);
+  box-shadow: 0 14px 34px -24px rgba(20, 20, 30, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+html[data-panel-theme='light'] .nav-item:hover { background: rgba(20, 20, 30, 0.05); }
+html[data-panel-theme='light'] .nav-item-active,
+html[data-panel-theme='light'] .nav-item-active:hover { background: rgba(20, 20, 30, 0.07); }
+html[data-panel-theme='light'] .shimmer {
+  background: linear-gradient(100deg, rgba(228, 227, 223, 0.9) 40%, rgba(206, 205, 200, 0.6) 50%, rgba(228, 227, 223, 0.9) 60%);
+  background-size: 200% 100%;
+}
+html[data-panel-theme='light'] * { scrollbar-color: rgba(120, 120, 130, 0.45) transparent; }
+html[data-panel-theme='light'] ::-webkit-scrollbar-thumb { background: rgba(120, 120, 130, 0.4); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+
+/* Hairlines y vidrio "white/xx" del sistema titanio → tinta suave en modo día.
+   Los selectores exigen que la clase empiece en límite de palabra para NO
+   pisar variantes hover:/focus: (esas conservan su valor). */
+html[data-panel-theme='light'] [class^='border-white/'],
+html[data-panel-theme='light'] [class*=' border-white/'] { border-color: rgba(20, 20, 30, 0.1); }
+html[data-panel-theme='light'] [class^='divide-white/'] > :not([hidden]) ~ :not([hidden]),
+html[data-panel-theme='light'] [class*=' divide-white/'] > :not([hidden]) ~ :not([hidden]) { border-color: rgba(20, 20, 30, 0.08); }
+html[data-panel-theme='light'] [class^='bg-white/'],
+html[data-panel-theme='light'] [class*=' bg-white/'] { background-color: rgba(20, 20, 30, 0.03); }
+
+/* Semánticos pastel (300/400) → tonos tinta legibles sobre papel */
+html[data-panel-theme='light'] .text-emerald-300, html[data-panel-theme='light'] .text-emerald-400 { color: #047857; }
+html[data-panel-theme='light'] .text-amber-300, html[data-panel-theme='light'] .text-amber-400 { color: #b45309; }
+html[data-panel-theme='light'] .text-red-300, html[data-panel-theme='light'] .text-red-400 { color: #b91c1c; }
+html[data-panel-theme='light'] .text-orange-300, html[data-panel-theme='light'] .text-orange-400 { color: #c2410c; }
+html[data-panel-theme='light'] .text-sky-300, html[data-panel-theme='light'] .text-sky-400 { color: #0369a1; }
+html[data-panel-theme='light'] .text-violet-300, html[data-panel-theme='light'] .text-violet-400 { color: #6d28d9; }
+html[data-panel-theme='light'] .text-purple-200, html[data-panel-theme='light'] .text-purple-300 { color: #6d28d9; }
+html[data-panel-theme='light'] .text-zinc-300 { color: #3f3f46; }
+html[data-panel-theme='light'] .text-brand-300 { color: #c2410c; }
+html[data-panel-theme='light'] .text-brand-400 { color: #ea580c; }
+html[data-panel-theme='light'] .text-brand-400\/80 { color: rgba(234, 88, 12, 0.85); }
+html[data-panel-theme='light'] .text-amber-600 { color: #92400e; }
+html[data-panel-theme='light'] .text-emerald-600 { color: #065f46; }
+
 /* ── Tema claro/oscuro de la LANDING pública (solo .ld-root) ──────────────── */
 .ld-root {
   --ld-bg: #080a0e;

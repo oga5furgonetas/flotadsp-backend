@@ -5,6 +5,11 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
    Space Grotesk para titulares. Vite las sirve desde el propio dominio. */
 import '@fontsource-variable/inter'
 import '@fontsource-variable/space-grotesk'
+
+// Tema del panel ANTES del primer render: sin destello oscuro→claro
+if (localStorage.getItem('panel_theme') === 'light') {
+  document.documentElement.setAttribute('data-panel-theme', 'light')
+}
 import './index.css'
 import { ToastProvider } from './lib/toast'
 import { LangProvider } from './i18n'

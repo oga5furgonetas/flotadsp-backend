@@ -11,20 +11,21 @@ export default {
           500: '#f97316',
           600: '#ea6800',
         },
-        /* Carbón neutro (sin sesgo azul): fondo negro carbón, texto secundario
-           con contraste AA, bordes que susurran. Estilo Linear/Apple. */
+        /* Carbón neutro (sin sesgo azul), servido por variables CSS: el modo
+           claro invierte la rampa en :root (index.css) y TODA la app se
+           retematiza sin tocar clases. Estilo Linear/Apple. */
         dark: {
-          50: '#f5f5f7',
-          100: '#e7e7ea',
-          200: '#cfcfd4',
-          300: '#b0b0b8',
-          400: '#8f8f98',
-          500: '#73737c',
-          600: '#4b4b53',
-          700: '#333338',
-          800: '#222226',
-          900: '#131315',
-          950: '#0a0a0b',
+          50: 'rgb(var(--dk-50) / <alpha-value>)',
+          100: 'rgb(var(--dk-100) / <alpha-value>)',
+          200: 'rgb(var(--dk-200) / <alpha-value>)',
+          300: 'rgb(var(--dk-300) / <alpha-value>)',
+          400: 'rgb(var(--dk-400) / <alpha-value>)',
+          500: 'rgb(var(--dk-500) / <alpha-value>)',
+          600: 'rgb(var(--dk-600) / <alpha-value>)',
+          700: 'rgb(var(--dk-700) / <alpha-value>)',
+          800: 'rgb(var(--dk-800) / <alpha-value>)',
+          900: 'rgb(var(--dk-900) / <alpha-value>)',
+          950: 'rgb(var(--dk-950) / <alpha-value>)',
         },
       },
       fontFamily: {
