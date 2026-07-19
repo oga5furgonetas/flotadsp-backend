@@ -283,6 +283,39 @@ function MaintModal({ kind, currentKm, onSave, onClose }) {
   )
 }
 
+/* ── Índice de salud 0-100: SIN caja negra ─────────────────────────────────
+   Cada punto restado sale de un hecho registrado y se lista con su motivo.
+   Un jefe de flota debe poder auditar el número de un vistazo. */
+function computeHealth({ vehicle, insps, incidents, maintenance, ledger, t }) {
+  const factors = []
+  const add = (pts, label) => factors.push({ pts, label })
+  const dmgPts = { leve: 5, moderado: 10, grave: 18, critico: 25 }
+  for (const e of (ledger?.open || [])) {
+    add(dmgPts[e.severity] ?? 8, `${t('vh.f.damage')}: ${e.part || e.panel}${e.severity ? ` (${e.severity})` : ''}`)
+  }
+  const incPts = { leve: 5, moderado: 8, grave: 12, critico: 18 }
+  for (const inc of (incidents || []).filter(i => i.status === 'open')) {
+    add(incPts[inc.severity] ?? 8, `${t('vh.f.incident')}: ${(inc.title || inc.description || '').slice(0, 42)}`)
+  }
+  const d = daysTo(vehicle.itv_date)
+  if (d != null && d < 0) add(20, t('vh.f.itv.exp'))
+  else if (d != null && d <= 30) add(8, t('vh.f.itv.soon').replace('{n}', d))
+  for (const k of Object.keys(MAINT_META)) {
+    const m = maintenance?.[k]
+    if (m?.overdue) add(10, `${t('vh.f.maint')}: ${MAINT_META[k].label}`)
+    else if (m?.warning) add(4, `${t('vh.f.maint.soon')}: ${MAINT_META[k].label}`)
+  }
+  if (Array.isArray(insps)) {
+    if (insps.length === 0) add(15, t('vh.f.insp.never'))
+    else {
+      const days = Math.floor((Date.now() - new Date(insps[0].created_at)) / 864e5)
+      if (days > 30) add(10, t('vh.f.insp.old').replace('{n}', days))
+    }
+  }
+  const score = Math.max(0, 100 - factors.reduce((a, f) => a + f.pts, 0))
+  return { score, factors }
+}
+
 /* ── Vehicle detail panel ── */
 function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
   const { t } = useT()
@@ -309,6 +342,11 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
   const vinOrPlate = vehicle.vin || vehicle.license_plate || ''
   const st = STATUS_MAP[vehicle.status] || STATUS_MAP.baja
 
+  // Salud: solo se calcula con TODOS los datos cargados (nunca un número a medias)
+  const healthReady = Array.isArray(insps) && vehicleIncidents !== null && ledger !== null
+  const health = healthReady ? computeHealth({ vehicle, insps, incidents: vehicleIncidents, maintenance, ledger, t }) : null
+  const healthCls = (s) => (s >= 85 ? 'text-emerald-400' : s >= 60 ? 'text-amber-300' : 'text-red-400')
+
   useEffect(() => {
     let cancelled = false
     setDriver(undefined); setInsps(null); setVehicleIncidents(null)
@@ -317,7 +355,12 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
     getIncidents({ vehicle_id: vehicle.id }).then(r => { if (!cancelled) setVehicleIncidents(Array.isArray(r.data) ? r.data : []) }).catch(() => { if (!cancelled) setVehicleIncidents([]) })
     getVehicleMaintenance(vehicle.id).then(r => { if (!cancelled) setMaintenance(r.data || null) }).catch(() => { if (!cancelled) setMaintenance(null) })
     getVehicleDocuments(vehicle.id).then(r => { if (!cancelled) setDocs(Array.isArray(r.data) ? r.data : []) }).catch(() => { if (!cancelled) setDocs([]) })
+    // Ledger desde el arranque: el índice de salud y el historial lo necesitan.
+    // Si falla (demo/red), vacío = sin daños registrados; no bloquear la salud.
     setLedger(null)
+    getVehicleDamageLedger(vehicle.id)
+      .then(r => { if (!cancelled) setLedger(r.data || { open: [], repaired: [] }) })
+      .catch(() => { if (!cancelled) setLedger({ open: [], repaired: [] }) })
     return () => { cancelled = true }
   }, [vehicle.id])
 
@@ -578,7 +621,8 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
             </div>
 
             {/* Stats rápidos */}
-            <div className="mt-4 grid grid-cols-3 gap-2">
+            <div className="mt-4 grid grid-cols-4 gap-2">
+              <StatChip icon={<Shield size={12} />} val={health ? <span className={healthCls(health.score)}>{health.score}</span> : '…'} label={t('vh.health.short')} />
               <StatChip icon={<Gauge size={12} />} val={vehicle.mileage != null ? `${vehicle.mileage.toLocaleString('es')} km` : '—'} label="Kilómetros" />
               <StatChip icon={<Package size={12} />} val={vehicle.bags_remaining ?? '—'} label="Bolsas" />
               <StatChip icon={<Camera size={12} />} val={insps ? insps.length : '…'} label="Inspecciones" />
@@ -591,6 +635,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
               { id: 'info',         label: 'Info',          count: null },
               { id: 'gemelo',       label: 'Gemelo 3D',     count: null },
               { id: 'inspecciones', label: 'Inspecciones',  count: insps?.length ?? null },
+              { id: 'historial',    label: t('vh.tab.history'), count: null },
               { id: 'docs',         label: 'Documentos',    count: docs?.length ?? null },
             ].map(tab => (
               <button
@@ -617,6 +662,43 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
 
             {/* ══ TAB: INFO ══ */}
             {activeTab === 'info' && <>
+
+            {/* Sección: Salud del vehículo — índice AUDITABLE, cada resta con motivo */}
+            <Section title={t('vh.health')} icon={<Shield size={13} />}>
+              <div className="px-3 pb-4 pt-1">
+                {!health ? (
+                  <div className="flex items-center gap-2 px-3 py-2 text-xs text-dark-500">
+                    <Loader2 size={12} className="animate-spin" /> …
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-baseline gap-3 px-3">
+                      <span className={`font-display text-[44px] font-semibold leading-none tracking-tight ${healthCls(health.score)}`}>{health.score}</span>
+                      <span className="text-sm text-dark-500">/ 100</span>
+                    </div>
+                    <div className="mx-3 mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                      <div
+                        className={`h-full rounded-full transition-[width] duration-500 ${health.score >= 85 ? 'bg-emerald-400/80' : health.score >= 60 ? 'bg-amber-400/80' : 'bg-red-400/80'}`}
+                        style={{ width: `${health.score}%` }}
+                      />
+                    </div>
+                    <div className="mt-3 space-y-1 px-3">
+                      {health.factors.length === 0 ? (
+                        <p className="text-[12.5px] text-emerald-400/90">✓ {t('vh.health.ok')}</p>
+                      ) : health.factors.map((f, i) => (
+                        <div key={i} className="flex items-baseline justify-between gap-3 text-[12.5px]">
+                          <span className="min-w-0 truncate text-dark-300">{f.label}</span>
+                          <span className="shrink-0 font-semibold tabular-nums text-red-300">−{f.pts}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {health.factors.length > 0 && (
+                      <p className="mt-2 px-3 text-[11px] leading-relaxed text-dark-600">{t('vh.health.hint')}</p>
+                    )}
+                  </>
+                )}
+              </div>
+            </Section>
 
             {/* Sección: Datos del vehículo */}
             <Section title={t('veh.title')} icon={<Truck size={13} />}>
@@ -1024,6 +1106,57 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                 <div className="h-4" />
               </div>
             )}
+
+            {/* ══ TAB: HISTORIAL — línea de vida cronológica del vehículo ══
+                Oro en disputas con el renting: qué pasó, cuándo y con quién,
+                todo desde datos ya registrados (nada inventado). */}
+            {activeTab === 'historial' && (() => {
+              const evs = []
+              for (const i of insps || []) {
+                const s = i.analysis?.severity
+                const nd = (i.analysis?.new_damages || []).length
+                const dot = s === 'grave' || s === 'critico' ? 'bg-red-400'
+                  : s === 'moderado' ? 'bg-orange-400'
+                  : s === 'leve' ? 'bg-amber-400'
+                  : s === 'sin_danos' ? 'bg-emerald-400' : 'bg-dark-600'
+                evs.push({
+                  at: i.created_at, dot, strong: nd > 0,
+                  txt: `${t('vh.ev.insp')}${s ? ` · ${s}` : ''}${nd ? ` · ${nd} ${t('vh.ev.new')}` : ''}${i.driver_name ? ` · ${i.driver_name}` : ''}`,
+                })
+              }
+              for (const inc of vehicleIncidents || []) {
+                if (inc.created_at) evs.push({ at: inc.created_at, dot: 'bg-amber-400', txt: `${t('vh.f.incident')}: ${(inc.title || inc.description || '').slice(0, 60)}` })
+                if (inc.resolved_at) evs.push({ at: inc.resolved_at, dot: 'bg-emerald-400', txt: `${t('vh.ev.inc.res')}: ${(inc.title || '').slice(0, 60)}` })
+              }
+              for (const e of (ledger?.repaired || [])) {
+                if (e.repaired_at) evs.push({ at: e.repaired_at, dot: 'bg-emerald-400', txt: `${t('vh.ev.repair')}: ${e.part || e.panel}` })
+              }
+              if (vehicle.body_repaired_at) evs.push({ at: vehicle.body_repaired_at, dot: 'bg-emerald-400', txt: `🔧 ${t('vh.ev.repair.all')}` })
+              evs.sort((a, b) => String(b.at).localeCompare(String(a.at)))
+              return (
+                <div className="px-5 py-4">
+                  {(insps === null || vehicleIncidents === null) ? (
+                    <div className="flex items-center gap-2 py-8 text-dark-500"><Loader2 size={14} className="animate-spin" /> …</div>
+                  ) : evs.length === 0 ? (
+                    <div className="rounded-xl border border-dark-700/40 p-10 text-center text-sm text-dark-500">
+                      <Clock size={26} className="mx-auto mb-3 opacity-25" />
+                      {t('rev.no.pending') /* sin eventos aún */}
+                    </div>
+                  ) : (
+                    <ol className="relative ml-1.5 border-l border-white/[0.08]">
+                      {evs.map((e, i) => (
+                        <li key={i} className="relative ml-5 pb-4 last:pb-0">
+                          <span className={`absolute -left-[25.5px] top-1 h-2.5 w-2.5 rounded-full ring-4 ring-dark-950 ${e.dot}`} />
+                          <div className="text-[11px] tabular-nums text-dark-500">{String(e.at).slice(0, 16).replace('T', ' · ')}</div>
+                          <div className={`text-[13px] leading-snug ${e.strong ? 'font-semibold text-dark-100' : 'text-dark-300'}`}>{e.txt}</div>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                  <div className="h-4" />
+                </div>
+              )
+            })()}
 
             {/* ══ TAB: DOCUMENTOS ══ */}
             {activeTab === 'docs' && (
