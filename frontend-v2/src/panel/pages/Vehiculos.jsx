@@ -19,6 +19,7 @@ import {
   getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument, createVehicle,
   getVehicleDamageLedger, repairVehicleLedger,
 } from '../api'
+import { getAdmin } from '../auth'
 
 // El visor 3D (three.js ~400 kB) se carga solo al abrir la pestaña Gemelo 3D.
 const Vehicle3DViewer = lazy(() => import('../twin3d/Vehicle3DViewer'))
@@ -464,6 +465,79 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
       onSaved?.()
     } catch { showToast('Error al guardar', false) }
     finally { setBusy(false) }
+  }
+
+  /* Parte de disputa 1-clic: documento formal imprimible (Ctrl+P → PDF) con
+     identidad del vehículo, cronología con marca de tiempo y evidencia
+     antes/después de cada daño nuevo. Para enviar al renting tal cual. */
+  function buildDisputeDoc(evs) {
+    const admin = getAdmin()
+    const esc = (s) => String(s ?? '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]))
+    const fmtAt = (at) => esc(String(at).slice(0, 16).replace('T', ' '))
+    const rows = evs.map((e) => `<tr><td class="dt">${fmtAt(e.at)}</td><td>${esc(e.txt)}</td></tr>`).join('')
+
+    // Evidencia: hasta 3 inspecciones con daño nuevo, cada una con su "antes"
+    const withNew = (insps || []).filter((i) => (i.analysis?.new_damages || []).length > 0).slice(0, 3)
+    const evidence = withNew.map((i) => {
+      const idx = insps.indexOf(i)
+      const prev = insps[idx + 1] // la siguiente en la lista es la anterior en el tiempo
+      const cur = i.annotated_photos?.[0] || i.photos?.[0]
+      const before = prev?.photos?.[0]
+      if (!cur) return ''
+      return `<div class="ev">
+        <div class="ev-h">Daño nuevo detectado el ${fmtAt(i.created_at)}${i.driver_name ? ` · Conductor: ${esc(i.driver_name)}` : ''}</div>
+        <div class="ev-imgs">
+          ${before ? `<figure><img src="${esc(before)}"><figcaption>Estado anterior — ${fmtAt(prev.created_at)}${prev.driver_name ? ` (${esc(prev.driver_name)})` : ''}</figcaption></figure>` : ''}
+          <figure><img src="${esc(cur)}"><figcaption>Daño documentado — ${fmtAt(i.created_at)}</figcaption></figure>
+        </div>
+      </div>`
+    }).join('')
+
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Parte de disputa — ${esc(vehicle.license_plate)}</title>
+<style>
+  body { font: 13px/1.5 -apple-system, 'Segoe UI', sans-serif; color: #111; margin: 40px auto; max-width: 760px; }
+  h1 { font-size: 19px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: #666; font-size: 11px; margin-top: 2px; }
+  .plate { font-family: ui-monospace, monospace; font-size: 30px; font-weight: 800; letter-spacing: 3px; margin: 18px 0 2px; }
+  .meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 18px; margin: 14px 0 4px; font-size: 12px; }
+  .meta b { display: block; color: #888; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1.5px solid #111; padding-bottom: 4px; margin: 26px 0 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  td { padding: 4.5px 8px 4.5px 0; border-bottom: 1px solid #e5e5e5; vertical-align: top; }
+  td.dt { white-space: nowrap; font-family: ui-monospace, monospace; font-size: 11px; color: #555; width: 118px; }
+  .ev { margin: 14px 0; page-break-inside: avoid; }
+  .ev-h { font-weight: 600; font-size: 12px; margin-bottom: 6px; }
+  .ev-imgs { display: flex; gap: 10px; }
+  figure { margin: 0; flex: 1; }
+  img { width: 100%; border: 1px solid #ddd; border-radius: 4px; }
+  figcaption { font-size: 10px; color: #666; margin-top: 3px; }
+  .foot { margin-top: 30px; padding-top: 10px; border-top: 1px solid #ddd; font-size: 10px; color: #888; }
+  @media print { body { margin: 10mm; } }
+</style></head><body>
+  <h1>Parte de disputa — Historial del vehículo</h1>
+  <div class="sub">Generado por FlotaDSP · ${esc(new Date().toLocaleString('es-ES'))}${admin?.name ? ` · ${esc(admin.name)}` : ''}</div>
+  <div class="plate">${esc(vehicle.license_plate || '—')}</div>
+  <div class="sub">${esc([vehicle.brand, vehicle.model, vehicle.year].filter(Boolean).join(' '))}</div>
+  <div class="meta">
+    <div><b>VIN / Bastidor</b>${esc(vehicle.vin || '—')}</div>
+    <div><b>Proveedor renting</b>${esc(vehicle.provider || '—')}</div>
+    <div><b>Centro</b>${esc(vehicle.center || '—')}</div>
+    <div><b>Kilómetros</b>${vehicle.mileage != null ? esc(vehicle.mileage.toLocaleString('es')) + ' km' : '—'}</div>
+    <div><b>ITV</b>${esc(vehicle.itv_date || '—')}</div>
+    <div><b>Fin renting</b>${esc(vehicle.renting_end_date || '—')}</div>
+  </div>
+  <h2>Cronología registrada</h2>
+  <table>${rows}</table>
+  ${evidence ? `<h2>Evidencia fotográfica</h2>${evidence}` : ''}
+  <div class="foot">Documento generado automáticamente a partir de registros con marca de tiempo de FlotaDSP
+  (inspecciones fotográficas, incidencias y reparaciones). Las inspecciones individuales disponen además de
+  informe forense firmado descargable desde la plataforma.</div>
+  <script>window.onload = () => setTimeout(() => window.print(), 400)</script>
+</body></html>`
+    const w = window.open('', '_blank')
+    if (!w) return
+    w.document.write(html)
+    w.document.close()
   }
 
   function downloadCard() {
@@ -1135,6 +1209,14 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
               evs.sort((a, b) => String(b.at).localeCompare(String(a.at)))
               return (
                 <div className="px-5 py-4">
+                  {evs.length > 0 && (
+                    <button
+                      onClick={() => buildDisputeDoc(evs)}
+                      className="mb-4 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 py-2.5 text-[13px] font-semibold text-white shadow-lg shadow-brand-500/25 transition hover:brightness-110 active:scale-[0.99]"
+                    >
+                      <FileText size={14} /> {t('vh.dispute')}
+                    </button>
+                  )}
                   {(insps === null || vehicleIncidents === null) ? (
                     <div className="flex items-center gap-2 py-8 text-dark-500"><Loader2 size={14} className="animate-spin" /> …</div>
                   ) : evs.length === 0 ? (
