@@ -258,44 +258,90 @@ export default function PackageIntel() {
   const [activeRoute, setActiveRoute] = useState(null) // ruta abierta (o null = vista de rutas)
   const qRef = useRef('')
 
-  const load = useCallback(async () => {
+  const [err, setErr] = useState('')             // error de carga SIEMPRE visible (nada silencioso)
+  const [toast, setToast] = useState(null)       // feedback de acciones { ok, msg }
+  const [pkgsLoading, setPkgsLoading] = useState(false)
+  const [assigning, setAssigning] = useState('') // service_area_id en curso
+  const invRef = useRef(null)
+  const flash = (ok, msg) => { setToast({ ok, msg }); setTimeout(() => setToast(null), 4000) }
+
+  // Marco (KPIs + rutas + alertas), SEPARADO de los paquetes: la petición
+  // pesada nunca vuelve a bloquear el entrar en una ruta.
+  const loadCore = useCallback(async () => {
     try {
-      const searching = (qRef.current || '').trim().length > 0
-      const inRoute = !!activeRoute
       const [o, r, a] = await Promise.all([cortexOverview(day, center), cortexRoutes(day, center), cortexAlerts(day, center)])
       setOv(o.data); setRoutes(r.data.routes || []); setAlerts(a.data.alerts || [])
-      // Solo pedimos paquetes cuando hace falta: buscando o dentro de una ruta.
-      if (searching || inRoute) {
-        const p = await cortexPackages({ q: qRef.current, state: filter, day, center, route: inRoute ? activeRoute : '', limit: inRoute ? 6000 : 300 })
-        setPkgs(p.data.packages || [])
-      } else {
-        setPkgs([])
-      }
-    } catch { /* red */ }
+      setErr('')
+    } catch {
+      setErr('No se pudieron cargar los datos de Cortex. Reintento automático en 30 s — o pulsa Actualizar.')
+    }
     setLoading(false)
+  }, [day, center])
+
+  // Paquetes (dentro de ruta o buscando), con su propio estado de carga.
+  const loadPkgs = useCallback(async () => {
+    const searching = (qRef.current || '').trim().length > 0
+    if (!searching && !activeRoute) { setPkgs([]); return }
+    setPkgsLoading(true)
+    try {
+      const p = await cortexPackages({ q: qRef.current, state: filter, day, center, route: activeRoute || '', limit: activeRoute ? 6000 : 300 })
+      setPkgs(p.data.packages || [])
+    } catch {
+      setErr('No se pudo cargar la lista de paquetes. Pulsa Actualizar.')
+    }
+    setPkgsLoading(false)
   }, [filter, day, activeRoute, center])
+
+  const load = useCallback(() => { loadCore(); loadPkgs() }, [loadCore, loadPkgs])
 
   // Cambiar de centro arriba: volver a la vista de rutas de ese centro.
   useEffect(() => { setActiveRoute(null); setSel(null) }, [center])
+  // Al abrir un paquete, el investigador entra en pantalla (antes quedaba
+  // por debajo de las alertas y parecía que el clic no hacía nada).
+  useEffect(() => {
+    if (sel) setTimeout(() => invRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60)
+  }, [sel])
 
   useEffect(() => { cortexDays(center).then(r => setDays(r.data.days || [])).catch(() => {}) }, [routes.length, center])
   const loadStations = useCallback(() => { cortexStations().then(r => setStations(r.data.stations || [])).catch(() => {}) }, [])
   useEffect(() => { loadStations() }, [routes.length, loadStations])
   const unmapped = stations.filter(s => !s.center)
-  const assignStation = async (sid, c) => { await cortexAssignStation(sid, c); loadStations(); load() }
+  const assignStation = async (sid, c) => {
+    setAssigning(sid)
+    try {
+      const r = await cortexAssignStation(sid, c)
+      flash(true, `Estación asignada a ${c} · ${r.data?.updated ?? 0} paquetes re-etiquetados`)
+      loadStations(); loadCore(); loadPkgs()
+    } catch (e) {
+      flash(false, e?.response?.data?.detail || 'No se pudo asignar la estación. Revisa tu conexión y reintenta.')
+    }
+    setAssigning('')
+  }
 
   useEffect(() => { qRef.current = q }, [q])
-  useEffect(() => { load() }, [load])
+  useEffect(() => { loadCore() }, [loadCore])
+  useEffect(() => { loadPkgs() }, [loadPkgs])   // entrar en una ruta = fetch inmediato
   // Búsqueda con debounce + auto-refresh en vivo cada 30 s
-  useEffect(() => { const t = setTimeout(load, 300); return () => clearTimeout(t) }, [q]) // eslint-disable-line
+  useEffect(() => { const t = setTimeout(loadPkgs, 300); return () => clearTimeout(t) }, [q]) // eslint-disable-line
   useEffect(() => { const iv = setInterval(load, 30000); return () => clearInterval(iv) }, [load])
 
-  const seed = async () => { setSeeding(true); try { await cortexSeedDemo(); await load() } finally { setSeeding(false) } }
-  const clearDemo = async () => { setSeeding(true); try { await cortexClearDemo(); setSel(null); await load() } finally { setSeeding(false) } }
+  const actionErr = (e, fb) => flash(false, e?.response?.data?.detail || fb)
+  const seed = async () => { setSeeding(true); try { await cortexSeedDemo(); await load() } catch (e) { actionErr(e, 'No se pudieron crear los datos de demostración') } finally { setSeeding(false) } }
+  const clearDemo = async () => { setSeeding(true); try { await cortexClearDemo(); setSel(null); await load() } catch (e) { actionErr(e, 'No se pudo limpiar la demo') } finally { setSeeding(false) } }
   const reset = async () => {
     if (!window.confirm('¿Borrar TODOS los paquetes de Cortex y empezar de cero?\nLa extensión los volverá a cargar solos al capturar las rutas.')) return
-    setSeeding(true); try { await cortexReset(); setSel(null); await load() } finally { setSeeding(false) }
+    setSeeding(true); try { await cortexReset(); setSel(null); await load() } catch (e) { actionErr(e, 'No se pudo borrar') } finally { setSeeding(false) }
   }
+
+  // Frescura de la captura: LA señal de confianza. Verde = extensión viva.
+  const freshMin = ov?.last_capture_at ? Math.max(0, Math.floor((Date.now() - new Date(ov.last_capture_at)) / 60000)) : null
+  const fresh = freshMin == null
+    ? { c: 'bg-dark-600', txt: 'sin capturas todavía', ping: false, warn: false }
+    : freshMin <= 6
+      ? { c: 'bg-emerald-400', txt: `en vivo · captura hace ${freshMin} min`, ping: true, warn: false }
+      : freshMin <= 20
+        ? { c: 'bg-amber-400', txt: `última captura hace ${freshMin} min`, ping: false, warn: false }
+        : { c: 'bg-red-400', txt: `sin datos desde hace ${freshMin >= 120 ? Math.floor(freshMin / 60) + ' h' : freshMin + ' min'}`, ping: false, warn: true }
   const searching = (q || '').trim().length > 0
   const empty = !loading && routes.length === 0 && days.length === 0
   const hasDemo = alerts.some(a => (a.tba || '').startsWith('TBADEMO')) ||
@@ -310,12 +356,12 @@ export default function PackageIntel() {
       {/* Header */}
       <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-dark-500">
+          <div className={`flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.2em] ${fresh.warn ? 'text-red-300' : 'text-dark-500'}`}>
             <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              {fresh.ping && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />}
+              <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${fresh.c}`} />
             </span>
-            Package Intelligence · en vivo
+            Package Intelligence · {fresh.txt}
           </div>
           <h1 className="mt-2 font-display text-[clamp(24px,3vw,34px)] font-semibold tracking-[-0.03em] text-dark-50">
             Centro de investigación de paquetes
@@ -342,10 +388,28 @@ export default function PackageIntel() {
             <Radar size={14} /> Extensión
           </button>
           <button onClick={load} className="inline-flex items-center gap-2 rounded-lg border border-dark-700 bg-dark-900 px-3 py-2 text-[13px] font-semibold text-dark-200 hover:border-dark-600">
-            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> Actualizar
+            <RefreshCw size={14} className={loading || pkgsLoading ? 'animate-spin' : ''} /> Actualizar
           </button>
         </div>
       </div>
+
+      {/* Nada falla en silencio: errores de carga y resultado de acciones, siempre visibles */}
+      {err && (
+        <div className="mb-4 flex items-center gap-2 rounded-xl border border-red-500/25 bg-red-500/[0.07] px-4 py-2.5 text-[13px] text-red-300">
+          <ShieldAlert size={14} className="shrink-0" /> {err}
+        </div>
+      )}
+      {toast && (
+        <div className={`mb-4 rounded-xl border px-4 py-2.5 text-[13px] ${toast.ok ? 'border-emerald-500/25 bg-emerald-500/[0.07] text-emerald-300' : 'border-red-500/25 bg-red-500/[0.07] text-red-300'}`}>
+          {toast.msg}
+        </div>
+      )}
+      {fresh.warn && !empty && (
+        <div className="mb-4 rounded-xl border border-red-500/25 bg-red-500/[0.07] px-4 py-2.5 text-[13px] text-red-300">
+          ⚠ La extensión Cortex lleva {fresh.txt.replace('sin datos desde hace ', '')} sin enviar datos: lo que ves puede estar desactualizado.
+          Abre Cortex en Chrome y comprueba que la extensión está activa.
+        </div>
+      )}
 
       {showSetup && (
         <div className="mb-5 mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={reset} seeding={seeding} /></div>
@@ -366,10 +430,11 @@ export default function PackageIntel() {
                   </div>
                   {s.sample_routes?.length > 0 && <div className="truncate font-mono text-[11px] text-dark-500">rutas: {s.sample_routes.join(', ')}…</div>}
                 </div>
-                <span className="ml-auto flex flex-wrap gap-1.5">
+                <span className="ml-auto flex flex-wrap items-center gap-1.5">
+                  {assigning === s.service_area_id && <Loader2 size={13} className="animate-spin text-brand-400" />}
                   {centers.filter(c => c !== 'Todos').map(c => (
-                    <button key={c} onClick={() => assignStation(s.service_area_id, c)}
-                      className={`rounded-lg px-2.5 py-1 text-[12px] font-semibold ${s.center === c ? 'bg-emerald-500/25 text-emerald-200' : 'bg-brand-500/20 text-brand-300 hover:bg-brand-500/40'}`}>{c}</button>
+                    <button key={c} disabled={!!assigning} onClick={() => assignStation(s.service_area_id, c)}
+                      className={`rounded-lg px-2.5 py-1 text-[12px] font-semibold transition disabled:opacity-50 ${s.center === c ? 'bg-emerald-500/25 text-emerald-200' : 'bg-brand-500/20 text-brand-300 hover:bg-brand-500/40'}`}>{c}</button>
                   ))}
                 </span>
               </div>
@@ -435,7 +500,9 @@ export default function PackageIntel() {
               <div className="overflow-hidden rounded-2xl border border-dark-800">
                 <div className="flex items-center justify-between border-b border-dark-800 bg-dark-900/60 px-4 py-2.5">
                   <span className="text-[12px] font-bold text-dark-100">{activeRoute ? `Ruta ${activeRoute}` : `Búsqueda: “${q}”`}</span>
-                  <span className="text-[11px] font-semibold text-dark-400">{pkgs.length} paq.</span>
+                  <span className="flex items-center gap-1.5 text-[11px] font-semibold text-dark-400">
+                    {pkgsLoading && <Loader2 size={11} className="animate-spin" />} {pkgs.length} paq.
+                  </span>
                 </div>
                 <div className="max-h-[64vh] divide-y divide-dark-800 overflow-y-auto">
                   {pkgs.map(p => {
@@ -459,14 +526,24 @@ export default function PackageIntel() {
                       </button>
                     )
                   })}
-                  {pkgs.length === 0 && <div className="px-4 py-8 text-center text-sm text-dark-500">{loading ? 'Cargando…' : 'Sin paquetes.'}</div>}
+                  {pkgs.length === 0 && (
+                    <div className="px-4 py-8 text-center text-sm text-dark-500">
+                      {pkgsLoading
+                        ? <span className="inline-flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Cargando paquetes…</span>
+                        : 'Sin paquetes con este filtro.'}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
           </div>
 
-          {/* Columna derecha: alertas + investigador */}
+          {/* Columna derecha: investigador PRIMERO (visible al clicar), alertas debajo */}
           <div className="space-y-4">
+            <div ref={invRef}>
+              {sel ? <Investigator tba={sel} onClose={() => setSel(null)} />
+                : <div className="rounded-2xl border border-dashed border-dark-800 p-8 text-center text-[13px] text-dark-500">Selecciona un paquete o una alerta para ver su historia completa y la conclusión del investigador.</div>}
+            </div>
             {alerts.length > 0 && (
               <div className="rounded-2xl border border-white/[0.05] bg-white/[0.02] p-4">
                 <div className="mb-3 flex items-center gap-2 text-[14px] font-bold text-dark-100"><ShieldAlert size={15} className="text-red-400" /> Alertas con evidencia</div>
@@ -490,8 +567,6 @@ export default function PackageIntel() {
                 </div>
               </div>
             )}
-            {sel ? <Investigator tba={sel} onClose={() => setSel(null)} />
-              : <div className="rounded-2xl border border-dashed border-dark-800 p-8 text-center text-[13px] text-dark-500">Selecciona un paquete para ver su historia completa y la conclusión del investigador.</div>}
           </div>
         </div>
       )}

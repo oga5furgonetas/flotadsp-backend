@@ -18157,7 +18157,17 @@ async def cortex_days(center: str = "", _=Depends(require_admin)):
 @api_router.get("/cortex/overview")
 async def cortex_overview(day: str = "", center: str = "", _=Depends(require_admin)):
     today = (day or datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-    pkgs = await db.cortex_packages.find(await _cortex_scope(today, center), {"_id": 0}).to_list(20000)
+    # Proyección MÍNIMA: con miles de paquetes reales, bajar los documentos
+    # completos (timelines enteros, direcciones…) pesaba megas y ahogaba al
+    # panel. Solo los campos que usa el cálculo.
+    pkgs = await db.cortex_packages.find(
+        await _cortex_scope(today, center),
+        {"_id": 0, "state": 1, "driver_name": 1, "route_code": 1,
+         "timeline.state": 1, "timeline.at": 1}).to_list(20000)
+    # Frescura de la captura (org completa, cualquier día): la señal de
+    # confianza del panel — "¿la extensión sigue viva?"
+    _last = await db.cortex_packages.find({}, {"_id": 0, "updated_at": 1}).sort("updated_at", -1).to_list(1)
+    last_capture_at = _last[0].get("updated_at") if _last else None
     n = len(pkgs)
     missing = [p for p in pkgs if p.get("state") == "MISSING"]
     recovered_today, lost, missing_today, rec_times, attempts_pre = [], [], [], [], []
@@ -18195,6 +18205,7 @@ async def cortex_overview(day: str = "", center: str = "", _=Depends(require_adm
         "avg_recovery_min": round(sum(rec_times) / len(rec_times)) if rec_times else None,
         "avg_attempts_before_missing": round(sum(attempts_pre) / len(attempts_pre), 1) if attempts_pre else None,
         "health": max(0, health),
+        "last_capture_at": last_capture_at,
         "by_driver": sorted([{"name": k, "n": v} for k, v in by_driver.items()], key=lambda x: -x["n"])[:8],
         "by_route": sorted([{"route": k, "n": v} for k, v in by_route.items()], key=lambda x: -x["n"])[:8],
     }
