@@ -160,6 +160,20 @@ function Investigator({ tba, onClose }) {
       <div className="mt-4">
         <div className="mb-2 flex items-center gap-1.5 text-[13px] font-bold text-dark-100"><Clock size={13} className="text-dark-500" /> Timeline</div>
         <Timeline events={p.timeline} />
+        {/* Procedencia: de dónde sale la traza y cuánta evidencia la respalda */}
+        <div className="mt-3 border-t border-white/[0.06] pt-2 text-[11px] leading-relaxed text-dark-500">
+          Traza construida por la extensión Cortex
+          {p.captures_n ? <> · <b className="text-dark-300">{p.captures_n}</b> capturas</> : null}
+          {p.first_seen && <> · primera {fmtTime(p.first_seen)}</>}
+          {p.updated_at && <> · última {fmtTime(p.updated_at)}</>}
+        </div>
+        {(p.timeline || []).length <= 1 && (
+          <p className="mt-1.5 text-[11px] leading-relaxed text-dark-600">
+            El paquete ya estaba en este estado en su primera captura: Cortex no expone el
+            historial previo a que la extensión empezara a verlo. Los estados nuevos desde
+            ahora sí quedarán registrados con su hora.
+          </p>
+        )}
       </div>
     </div>
   )

@@ -17954,20 +17954,29 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     said = str(obs.get("service_area_id") or "").strip() or None
     center = str(obs.get("center") or "").strip().upper() or None
     station_code = str(obs.get("station_code") or "").strip() or None
+    st_doc = None
+    if said:
+        st_doc = await db.cortex_stations.find_one(
+            {"service_area_id": said}, {"_id": 0, "center": 1, "manual": 1})
     if said and (center or station_code):
         try:
             setd = {}
-            if center:
+            # La asignación MANUAL del panel manda SIEMPRE: la etiqueta que la
+            # extensión lee de la UI de Cortex puede venir mezclada y antes
+            # pisaba el mapeo manual a cada captura ("reetiquetado no funciona").
+            if center and not (st_doc or {}).get("manual"):
                 setd["center"] = center
             if station_code:
                 setd["station_code"] = station_code
-            await db.cortex_stations.update_one(
-                {"service_area_id": said}, {"$set": setd}, upsert=True)
+            if setd:
+                await db.cortex_stations.update_one(
+                    {"service_area_id": said}, {"$set": setd}, upsert=True)
         except Exception:
             pass
-    if said and not center:
-        st = await db.cortex_stations.find_one({"service_area_id": said}, {"_id": 0, "center": 1})
-        center = (st or {}).get("center")
+    # Resolver el centro del paquete: el mapeo manual de la estación gana a la
+    # etiqueta de la captura; sin mapeo, la etiqueta rellena el hueco.
+    if st_doc and st_doc.get("center") and (st_doc.get("manual") or not center):
+        center = st_doc["center"]
     ident = {
         "reference_id": obs.get("reference_id"),
         "route_code": obs.get("route_code") or obs.get("route_id"),
@@ -18001,7 +18010,7 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         if not seed or seed[-1]["state"] != state:
             seed.append(ev)
         doc = {**common, "id": str(uuid.uuid4()), "first_seen": observed_at.isoformat(),
-               "timeline": seed}
+               "captures_n": 1, "timeline": seed}
         doc.setdefault("reference_id", tba)
         evalr = _cortex_evaluate(doc)
         doc.update({"priority": evalr["priority"], "reason": evalr["reason"]})
@@ -18011,7 +18020,7 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
 
     last = (pkg.get("timeline") or [{}])[-1]
     if last.get("state") == state:
-        await db.cortex_packages.update_one({"tba": tba}, {"$set": common})
+        await db.cortex_packages.update_one({"tba": tba}, {"$set": common, "$inc": {"captures_n": 1}})
         return "same"
     # Un Missing explícito es evidencia más fuerte que el taskState resumido de
     # route-details. Cortex puede seguir devolviendo "attempted" durante un
@@ -18020,15 +18029,15 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     # posterior puede cerrar el Missing.
     if pkg.get("state") in ("MISSING", "LOST") and state in ("LOADED", "ARRIVED", "ATTEMPTED", "OBSERVED"):
         meta = {k: v for k, v in common.items() if k not in ("state", "updated_at") and v not in (None, "")}
-        if meta:
-            await db.cortex_packages.update_one({"tba": tba}, {"$set": meta})
+        await db.cortex_packages.update_one(
+            {"tba": tba}, {"$set": meta, "$inc": {"captures_n": 1}} if meta else {"$inc": {"captures_n": 1}})
         return "same"
     # Una observación SIN estado (OBSERVED) nunca degrada un estado real ya
     # conocido: solo refresca metadatos (ruta, conductor, dirección…).
     if state == "OBSERVED" and last.get("state") not in (None, "", "OBSERVED"):
         meta = {k: v for k, v in common.items() if k not in ("state", "updated_at") and v not in (None, "")}
-        if meta:
-            await db.cortex_packages.update_one({"tba": tba}, {"$set": meta})
+        await db.cortex_packages.update_one(
+            {"tba": tba}, {"$set": meta, "$inc": {"captures_n": 1}} if meta else {"$inc": {"captures_n": 1}})
         return "same"
     # Cambio de estado real → histórico + timeline
     doc = {**pkg, **common, "timeline": (pkg.get("timeline") or []) + [ev]}
@@ -18036,7 +18045,7 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     await db.cortex_packages.update_one(
         {"tba": tba},
         {"$set": {**common, "priority": evalr["priority"], "reason": evalr["reason"]},
-         "$push": {"timeline": ev}})
+         "$inc": {"captures_n": 1}, "$push": {"timeline": ev}})
     await db.cortex_events.insert_one(serialize_doc({"id": str(uuid.uuid4()), **ev, "tba": tba}))
     return "changed"
 
@@ -18151,9 +18160,22 @@ async def cortex_assign_station(body: dict = Body(...), _=Depends(require_admin)
     center = str(body.get("center") or "").strip().upper()
     if not sid or not center:
         raise HTTPException(400, "Falta service_area_id o center")
-    await db.cortex_stations.update_one({"service_area_id": sid}, {"$set": {"center": center}}, upsert=True)
-    res = await db.cortex_packages.update_many({"service_area_id": sid}, {"$set": {"center": center}})
-    return {"ok": True, "updated": res.modified_count}
+    # manual=True: este mapeo lo decidió una persona y las capturas de la
+    # extensión ya no pueden pisarlo (antes se sobrescribía cada 2 minutos).
+    await db.cortex_stations.update_one(
+        {"service_area_id": sid}, {"$set": {"center": center, "manual": True}}, upsert=True)
+    # Re-sincronización GLOBAL: además de esta estación, corrige cualquier
+    # paquete histórico cuya etiqueta contradiga el mapeo manual de SU estación
+    # (cura las mezclas OGA5/DGA1 acumuladas de cuando el mapeo se pisaba).
+    total = 0
+    async for s in db.cortex_stations.find(
+            {"center": {"$nin": [None, ""]}}, {"_id": 0, "service_area_id": 1, "center": 1}):
+        if s.get("service_area_id"):
+            r = await db.cortex_packages.update_many(
+                {"service_area_id": s["service_area_id"], "center": {"$ne": s["center"]}},
+                {"$set": {"center": s["center"]}})
+            total += r.modified_count
+    return {"ok": True, "updated": total}
 
 
 @api_router.get("/cortex/days")
