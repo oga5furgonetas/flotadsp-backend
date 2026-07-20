@@ -645,8 +645,11 @@ async def get_current_user(
     # Modo demo: cuenta de solo lectura para probar el producto sin registro.
     # Cualquier mutación se bloquea aquí, cubra el endpoint que cubra.
     if payload.get("demo") and request.method not in ("GET", "HEAD", "OPTIONS"):
-        # El asistente IA es una "lectura" aunque viaje por POST
-        if not request.url.path.endswith("/assistant/ask"):
+        # Excepciones seguras en demo: el asistente IA (lectura vía POST) y los
+        # datos de ejemplo de Cortex (TBADEMO*, aislados en la BD de la demo) —
+        # así el visitante puede probar el tracker de paquetes de verdad.
+        _demo_ok = ("/assistant/ask", "/cortex/seed-demo", "/cortex/clear-demo")
+        if not any(request.url.path.endswith(p) for p in _demo_ok):
             raise HTTPException(status_code=403, detail="Modo demo: solo lectura. Crea tu cuenta gratis para editar.")
     # AÍSLA: fija la BD de la organización del token para TODA esta petición.
     # Tokens antiguos sin db_name → BD por defecto (tu data) = sin cambios.
@@ -18092,13 +18095,26 @@ async def _cortex_scope(day: str, center: str) -> dict:
         conds.append(dq)
     if center and center not in ("Todos", "todos", ""):
         c = center.upper()
-        saids = [s["service_area_id"] async for s in db.cortex_stations.find(
-            {"center": c}, {"_id": 0, "service_area_id": 1}) if s.get("service_area_id")]
+        stations = [s async for s in db.cortex_stations.find(
+            {}, {"_id": 0, "service_area_id": 1, "center": 1})]
+        saids = [s["service_area_id"] for s in stations
+                 if s.get("service_area_id") and s.get("center") == c]
+        mapped_ids = [s["service_area_id"] for s in stations
+                      if s.get("service_area_id") and s.get("center")]
         # Un paquete es de este centro si su estación está mapeada a él, o si ya
         # trae la etiqueta center (captura reciente que la leyó bien).
         or_c = [{"center": c}]
         if saids:
             or_c.append({"service_area_id": {"$in": saids}})
+        # HUÉRFANOS: sin etiqueta de centro Y sin estación mapeada a ningún
+        # centro. Antes desaparecían al filtrar por centro (parecía que "no
+        # había nada"); ahora se ven en TODOS los centros hasta que se asigna
+        # su estación — datos invisibles es peor que datos sin repartir.
+        if mapped_ids:
+            or_c.append({"$and": [{"center": {"$in": [None, ""]}},
+                                  {"service_area_id": {"$nin": mapped_ids}}]})
+        else:
+            or_c.append({"center": {"$in": [None, ""]}})
         conds.append({"$or": or_c})
     if not conds:
         return {}

@@ -63,15 +63,35 @@ window.addEventListener('unhandledrejection', (e) => reportError(e.reason?.messa
 const isStaleChunkError = (msg = '') =>
   /reading 'default'|dynamically imported module|Importing a module script failed|Loading chunk/i.test(msg)
 
+/* Reparación del caché HTTP: re-descarga cada asset del build saltándose el
+   caché del navegador y lo re-almacena. Cura el caso "asset envenenado" (una
+   carrera de deploy dejó cacheado un JS corrupto bajo su URL con hash): una
+   recarga normal NO lo arregla porque los assets tienen caché larga. */
+async function repairAssetCache() {
+  try {
+    const html = await (await fetch('/index.html', { cache: 'reload' })).text()
+    const indexJs = (html.match(/assets\/[^"]*index-[A-Za-z0-9_-]+\.js/) || [])[0]
+    if (!indexJs) return
+    const js = await (await fetch('/' + indexJs, { cache: 'reload' })).text()
+    const paths = [...new Set([...js.matchAll(/assets\/[A-Za-z0-9/_.-]+\.(?:js|css)/g)].map((m) => m[0]))]
+    await Promise.allSettled(paths.map((p) => fetch('/' + p, { cache: 'reload' })))
+  } catch { /* sin red: la recarga normal hará lo que pueda */ }
+}
+
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { broken: false } }
   static getDerivedStateFromError() { return { broken: true } }
   componentDidCatch(error, info) {
     // Auto-curación: si el fallo es un chunk desactualizado, recarga UNA vez
     // (trae el index nuevo con los nombres de chunk correctos) sin molestar.
-    if (isStaleChunkError(error?.message) && !sessionStorage.getItem('chunk_reloaded')) {
+    // Repetible cada 60 s (no una vez por sesión): tras cada deploy la pestaña
+    // puede envenenarse otra vez y debe poder curarse otra vez.
+    const _lastFix = Number(sessionStorage.getItem('chunk_reloaded') || 0)
+    if (isStaleChunkError(error?.message) && Date.now() - _lastFix > 60_000) {
       sessionStorage.setItem('chunk_reloaded', String(Date.now()))
-      window.location.reload()
+      // Repara el caché ANTES de recargar: cubre también el asset envenenado
+      // (recargar sin reparar serviría el mismo JS corrupto desde caché).
+      repairAssetCache().finally(() => window.location.reload())
       return
     }
     reportError(error?.message, (error?.stack || '') + (info?.componentStack || ''))
@@ -82,9 +102,9 @@ class ErrorBoundary extends React.Component {
       <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: '#0b0d10', color: '#eef1f6', fontFamily: 'Inter Variable,Inter,system-ui,sans-serif', padding: 24, textAlign: 'center' }}>
         <div style={{ fontSize: 34 }}>⚠️</div>
         <h1 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>Algo ha ido mal</h1>
-        <p style={{ margin: 0, color: '#8b94a3', fontSize: 14 }}>El error se ha reportado automáticamente. Recarga la página para continuar.</p>
-        <button onClick={() => window.location.reload()} style={{ marginTop: 8, padding: '11px 22px', border: 'none', borderRadius: 10, background: 'linear-gradient(135deg,#fb923c,#ea6800)', color: '#fff', fontWeight: 800, fontSize: 14, cursor: 'pointer' }}>
-          Recargar
+        <p style={{ margin: 0, color: '#8b94a3', fontSize: 14 }}>El error se ha reportado automáticamente. Pulsa el botón: repara y recarga.</p>
+        <button onClick={() => repairAssetCache().finally(() => window.location.reload())} style={{ marginTop: 8, padding: '11px 22px', border: 'none', borderRadius: 10, background: 'linear-gradient(135deg,#fb923c,#ea6800)', color: '#fff', fontWeight: 800, fontSize: 14, cursor: 'pointer' }}>
+          Reparar y recargar
         </button>
       </div>
     )

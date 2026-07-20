@@ -302,7 +302,18 @@ export default function PackageIntel() {
     if (sel) setTimeout(() => invRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60)
   }, [sel])
 
-  useEffect(() => { cortexDays(center).then(r => setDays(r.data.days || [])).catch(() => {}) }, [routes.length, center])
+  // Si el día actual no tiene datos pero otro sí (p. ej. fin de semana sin
+  // capturas), salta SOLO al día más reciente con datos — nunca a un vacío.
+  const dayPickedRef = useRef(false)
+  useEffect(() => {
+    cortexDays(center).then(r => {
+      const ds = r.data.days || []
+      setDays(ds)
+      if (!dayPickedRef.current && ds.length > 0 && !ds.some(d => d.day === day)) {
+        setDay(ds[0].day)
+      }
+    }).catch(() => {})
+  }, [routes.length, center]) // eslint-disable-line
   const loadStations = useCallback(() => { cortexStations().then(r => setStations(r.data.stations || [])).catch(() => {}) }, [])
   useEffect(() => { loadStations() }, [routes.length, loadStations])
   const unmapped = stations.filter(s => !s.center)
@@ -370,7 +381,7 @@ export default function PackageIntel() {
         <div className="flex items-center gap-2">
           <div className="relative">
             <Calendar size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dark-500" />
-            <select value={day} onChange={e => { setDay(e.target.value); setSel(null) }}
+            <select value={day} onChange={e => { dayPickedRef.current = true; setDay(e.target.value); setSel(null) }}
               className="appearance-none rounded-lg border border-dark-700 bg-dark-900 py-2 pl-8 pr-8 text-[13px] font-semibold text-dark-200 outline-none hover:border-dark-600 focus:border-brand-500/50">
               {(days.some(d => d.day === day) ? days : [{ day, n: 0 }, ...days]).map(d => (
                 <option key={d.day} value={d.day}>{fmtDay(d.day)}{d.n ? ` · ${d.n}` : ''}</option>
