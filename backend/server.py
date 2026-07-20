@@ -18445,5 +18445,228 @@ async def cortex_reset(_=Depends(require_admin)):
     return {"ok": True, "packages_deleted": p.deleted_count, "events_deleted": e.deleted_count}
 
 
+# ===================================================================
+# APARCAMIENTO - plano de plazas por centro + trazabilidad diaria
+# ===================================================================
+# Flujo real: la plantilla asigna plaza -> el conductor la ve al hacer su
+# auditoria y reporta donde aparco -> el coordinador confirma / deniega /
+# corrige. Al dia siguiente la plantilla sabe donde esta cada furgoneta.
+#
+# Sin falsos positivos: "spot" (lo que MANDAMOS) y "reported_spot" (lo que
+# DICE el conductor) son campos DISTINTOS. Solo confirmar los une. Si no
+# coinciden, se marca discrepancia en vez de elegir uno a ciegas.
+
+
+def _pk_grid(start, rows, cols, x0, y0, w, h, gx, gy, rot=0.0):
+    """Plazas en rejilla. Coordenadas en % del lienzo (0-100): el plano se ve
+    igual en cualquier pantalla."""
+    out, n = [], start
+    for r in range(rows):
+        for c in range(cols):
+            out.append({"code": str(n), "x": round(x0 + c * gx, 2), "y": round(y0 + r * gy, 2),
+                        "w": w, "h": h, "rot": rot})
+            n += 1
+    return out
+
+
+def _pk_default_layout(center):
+    """Plano inicial EDITABLE. La geometria replica la realidad del centro; el
+    numero de plazas es un punto de partida que el coordinador ajusta."""
+    c = (center or "").upper()
+    if c == "OGA5":
+        return {
+            "center": c, "name": "OGA5 - Santiago",
+            "zones": [
+                {"id": "nave", "name": "Dentro de la nave", "color": "violet",
+                 "note": "Interior de la nave",
+                 "spots": _pk_grid(1, 4, 4, 5, 16, 8.5, 13, 10.5, 19)},
+                {"id": "exterior", "name": "Exterior junto a la nave", "color": "sky",
+                 "note": "Franja de asfalto entre las rayas amarillas",
+                 "spots": _pk_grid(17, 8, 2, 40, 8, 8, 9.5, 10, 11)},
+                {"id": "tierra", "name": "Parking de tierra", "color": "emerald",
+                 "note": "Parcela publica frente a la nave",
+                 "spots": _pk_grid(33, 6, 4, 64, 12, 7.5, 11.5, 9, 14)},
+            ],
+        }
+    if c == "DGA1":
+        return {
+            "center": c, "name": "DGA1",
+            "zones": [
+                {"id": "exterior", "name": "Parking exterior", "color": "sky",
+                 "note": "Todo el recinto es aparcamiento exterior",
+                 "spots": _pk_grid(1, 6, 6, 8, 12, 10, 12, 14, 13)},
+            ],
+        }
+    # Centro nuevo: zona vacia lista para configurar (nunca inventamos plazas)
+    return {"center": c, "name": c, "zones": [
+        {"id": "general", "name": "Aparcamiento", "color": "sky", "note": "", "spots": []}]}
+
+
+async def _pk_get_layout(center):
+    c = (center or "").upper()
+    doc = await db.parking_layouts.find_one({"center": c}, {"_id": 0})
+    if doc:
+        return doc
+    doc = _pk_default_layout(c)
+    doc["seeded"] = True          # plano por defecto, aun sin revisar por humano
+    await db.parking_layouts.update_one({"center": c}, {"$set": doc}, upsert=True)
+    return doc
+
+
+def _pk_valid_codes(layout):
+    return {s.get("code") for z in layout.get("zones", []) for s in (z.get("spots") or [])}
+
+
+@api_router.get("/parking/layout")
+async def parking_layout(center: str = "", _=Depends(require_admin)):
+    if not center or center.upper() == "TODOS":
+        raise HTTPException(400, "Indica un centro concreto para ver su plano")
+    return await _pk_get_layout(center)
+
+
+@api_router.put("/parking/layout")
+async def parking_layout_save(body: dict = Body(...), _=Depends(require_admin)):
+    """Guarda el plano editado (zonas, nombres y posiciones de plazas)."""
+    c = str(body.get("center") or "").strip().upper()
+    zones = body.get("zones")
+    if not c or not isinstance(zones, list):
+        raise HTTPException(400, "Falta center o zones")
+    codes = [str(s.get("code")) for z in zones for s in (z.get("spots") or [])]
+    if len(codes) != len(set(codes)):
+        raise HTTPException(400, "Hay codigos de plaza repetidos: cada plaza debe ser unica")
+    doc = {"center": c, "name": str(body.get("name") or c), "zones": zones, "seeded": False,
+           "updated_at": datetime.now(timezone.utc).isoformat()}
+    await db.parking_layouts.update_one({"center": c}, {"$set": doc}, upsert=True)
+    return {"ok": True, "spots": len(codes)}
+
+
+@api_router.get("/parking/state")
+async def parking_state(center: str = "", day: str = "", _=Depends(require_admin)):
+    """Plano + ocupacion del dia + datos reales de vehiculo/conductor."""
+    c = (center or "").upper()
+    if not c or c == "TODOS":
+        raise HTTPException(400, "Indica un centro concreto")
+    d = (day or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
+    layout = await _pk_get_layout(c)
+    rows = await db.parking_assignments.find({"center": c, "day": d}, {"_id": 0}).to_list(500)
+    vids = [r["vehicle_id"] for r in rows if r.get("vehicle_id")]
+    dids = [r["driver_id"] for r in rows if r.get("driver_id")]
+    vmap, dmap = {}, {}
+    if vids:
+        async for v in db.vehicles.find({"id": {"$in": vids}},
+                                        {"_id": 0, "id": 1, "license_plate": 1, "brand": 1, "model": 1}):
+            vmap[v["id"]] = v
+    if dids:
+        async for dr in db.drivers.find({"id": {"$in": dids}}, {"_id": 0, "id": 1, "name": 1}):
+            dmap[dr["id"]] = dr
+    for r in rows:
+        r["vehicle"] = vmap.get(r.get("vehicle_id"))
+        r["driver"] = dmap.get(r.get("driver_id"))
+        # Discrepancia EXPLICITA: lo asignado no coincide con lo reportado
+        r["mismatch"] = bool(r.get("reported_spot") and r.get("spot")
+                             and r["reported_spot"] != r["spot"])
+    return {"layout": layout, "day": d, "assignments": rows}
+
+
+@api_router.post("/parking/assign")
+async def parking_assign(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Asigna una plaza a un vehiculo para un dia (lo que MANDAMOS)."""
+    c = str(body.get("center") or "").strip().upper()
+    d = str(body.get("day") or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
+    spot = str(body.get("spot") or "").strip()
+    vehicle_id = str(body.get("vehicle_id") or "").strip()
+    if not (c and spot and vehicle_id):
+        raise HTTPException(400, "Faltan center, spot o vehicle_id")
+    layout = await _pk_get_layout(c)
+    if spot not in _pk_valid_codes(layout):
+        raise HTTPException(400, "La plaza " + spot + " no existe en el plano de " + c)
+    # Una plaza, un vehiculo: si esta ocupada por otro se avisa, no se pisa
+    clash = await db.parking_assignments.find_one(
+        {"center": c, "day": d, "spot": spot, "vehicle_id": {"$ne": vehicle_id}}, {"_id": 0})
+    if clash:
+        raise HTTPException(409, "La plaza " + spot + " ya esta asignada a otro vehiculo ese dia")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.parking_assignments.update_one(
+        {"center": c, "day": d, "vehicle_id": vehicle_id},
+        {"$set": {"center": c, "day": d, "vehicle_id": vehicle_id, "spot": spot,
+                  "driver_id": body.get("driver_id"), "status": "asignada",
+                  "assigned_by": user.get("name") or user.get("sub"), "assigned_at": now},
+         "$setOnInsert": {"id": str(uuid.uuid4())}}, upsert=True)
+    return {"ok": True}
+
+
+@api_router.post("/parking/report")
+async def parking_report(body: dict = Body(...), user: dict = Depends(require_any_auth)):
+    """El conductor reporta donde ha aparcado (sin pisar lo asignado)."""
+    c = str(body.get("center") or "").strip().upper()
+    d = str(body.get("day") or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
+    spot = str(body.get("spot") or "").strip()
+    vehicle_id = str(body.get("vehicle_id") or "").strip()
+    if not (c and spot and vehicle_id):
+        raise HTTPException(400, "Faltan center, spot o vehicle_id")
+    layout = await _pk_get_layout(c)
+    if spot not in _pk_valid_codes(layout):
+        raise HTTPException(400, "La plaza " + spot + " no existe en el plano de " + c)
+    now = datetime.now(timezone.utc).isoformat()
+    await db.parking_assignments.update_one(
+        {"center": c, "day": d, "vehicle_id": vehicle_id},
+        {"$set": {"center": c, "day": d, "vehicle_id": vehicle_id,
+                  "reported_spot": spot, "status": "reportada",
+                  "driver_id": body.get("driver_id"), "inspection_id": body.get("inspection_id"),
+                  "reported_by": user.get("name") or user.get("sub"), "reported_at": now},
+         "$setOnInsert": {"id": str(uuid.uuid4())}}, upsert=True)
+    return {"ok": True}
+
+
+@api_router.post("/parking/resolve")
+async def parking_resolve(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Confirmar / denegar / corregir lo reportado, con rastro de quien y cuando."""
+    c = str(body.get("center") or "").strip().upper()
+    d = str(body.get("day") or datetime.now(timezone.utc).strftime("%Y-%m-%d"))[:10]
+    vehicle_id = str(body.get("vehicle_id") or "").strip()
+    action = str(body.get("action") or "").strip()
+    if not (c and vehicle_id and action in ("confirm", "deny", "edit")):
+        raise HTTPException(400, "Faltan datos o la accion no es valida")
+    cur = await db.parking_assignments.find_one(
+        {"center": c, "day": d, "vehicle_id": vehicle_id}, {"_id": 0})
+    if not cur:
+        raise HTTPException(404, "No hay registro de aparcamiento para ese vehiculo y dia")
+    now = datetime.now(timezone.utc).isoformat()
+    who = user.get("name") or user.get("sub")
+    if action == "confirm":
+        upd = {"spot": cur.get("reported_spot") or cur.get("spot"), "status": "confirmada",
+               "resolved_by": who, "resolved_at": now}
+    elif action == "deny":
+        upd = {"status": "denegada", "resolved_by": who, "resolved_at": now}
+    else:
+        spot = str(body.get("spot") or "").strip()
+        layout = await _pk_get_layout(c)
+        if spot not in _pk_valid_codes(layout):
+            raise HTTPException(400, "La plaza " + spot + " no existe en el plano de " + c)
+        upd = {"spot": spot, "status": "confirmada", "corrected": True,
+               "resolved_by": who, "resolved_at": now}
+    await db.parking_assignments.update_one(
+        {"center": c, "day": d, "vehicle_id": vehicle_id}, {"$set": upd})
+    return {"ok": True, **upd}
+
+
+@api_router.get("/parking/last-known")
+async def parking_last_known(center: str = "", _=Depends(require_admin)):
+    """Donde quedo cada furgoneta la ultima vez que se CONFIRMO: lo que necesita
+    la plantilla del dia siguiente para saber de donde sale cada una."""
+    c = (center or "").upper()
+    q = {"status": "confirmada"}
+    if c and c != "TODOS":
+        q["center"] = c
+    rows = await db.parking_assignments.find(q, {"_id": 0}).sort("day", -1).to_list(2000)
+    last = {}
+    for r in rows:
+        vid = r.get("vehicle_id")
+        if vid and vid not in last:
+            last[vid] = {"vehicle_id": vid, "spot": r.get("spot"), "day": r.get("day"),
+                         "center": r.get("center")}
+    return {"vehicles": list(last.values())}
+
+
 app.include_router(auth_router)
 app.include_router(api_router)

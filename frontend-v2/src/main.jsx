@@ -154,6 +154,7 @@ const PanelConductores = lazy(() => import('./panel/pages/Conductores'))
 const PanelAvisosITV = lazy(() => import('./panel/pages/AvisosITV'))
 const PanelRenting = lazy(() => import('./panel/pages/Renting'))
 const PanelTalleres = lazy(() => import('./panel/pages/Talleres'))
+const PanelAparcamiento = lazy(() => import('./panel/pages/Aparcamiento'))
 const PanelCasasAlquiler = lazy(() => import('./panel/pages/CasasAlquiler'))
 const PanelScorecard = lazy(() => import('./panel/pages/Scorecard'))
 const PanelConfiguracion = lazy(() => import('./panel/pages/Configuracion'))
@@ -245,6 +246,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="vehiculos" element={<PanelVehiculos />} />
                 <Route path="vencimientos" element={<PanelVencimientos />} />
                 <Route path="talleres" element={<PanelTalleres />} />
+                <Route path="aparcamiento" element={<PanelAparcamiento />} />
                 <Route path="avisos-itv" element={<PanelAvisosITV />} />
                 <Route path="renting" element={<PanelRenting />} />
                 <Route path="casas-alquiler" element={<PanelCasasAlquiler />} />

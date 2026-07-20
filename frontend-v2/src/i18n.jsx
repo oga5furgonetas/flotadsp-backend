@@ -293,6 +293,7 @@ const DICT = {
   'vh.ev.repair':     { es: 'Panel reparado', en: 'Panel repaired', fr: 'Panneau réparé', de: 'Panel repariert', it: 'Pannello riparato', pt: 'Painel reparado' },
   'vh.ev.repair.all': { es: 'Salió de chapa — daños reparados', en: 'Body shop done — damages repaired', fr: 'Sortie de carrosserie — dommages réparés', de: 'Karosserie fertig — Schäden repariert', it: 'Uscita da carrozzeria — danni riparati', pt: 'Saiu da funilaria — danos reparados' },
   'vh.dispute':       { es: 'Parte de disputa', en: 'Dispute report', fr: 'Rapport de litige', de: 'Streitfall-Bericht', it: 'Rapporto di contestazione', pt: 'Relatório de disputa' },
+  'nav.parking':      { es: 'Aparcamiento', en: 'Parking', fr: 'Stationnement', de: 'Parkplatz', it: 'Parcheggio', pt: 'Estacionamento' },
   'nav.dashboard':  { es: 'Dashboard',        en: 'Dashboard',     fr: 'Tableau de bord', de: 'Übersicht',       it: 'Dashboard',      pt: 'Dashboard' },
   'nav.scorecard':  { es: 'Scorecard',        en: 'Scorecard',     fr: 'Scorecard',       de: 'Scorecard',       it: 'Scorecard',      pt: 'Scorecard' },
   'nav.drivers':    { es: 'Conductores',      en: 'Drivers',       fr: 'Chauffeurs',      de: 'Fahrer',          it: 'Autisti',        pt: 'Motoristas' },

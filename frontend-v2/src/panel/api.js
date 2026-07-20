@@ -212,3 +212,12 @@ export const cortexIngestToken = () => api.get('/cortex/ingest-token')
 export const cortexSeedDemo = () => api.post('/cortex/seed-demo')
 export const cortexClearDemo = () => api.post('/cortex/clear-demo')
 export const cortexReset = () => api.post('/cortex/reset')
+
+// ── Aparcamiento: plano por centro + trazabilidad diaria ──
+export const parkingLayout = (center) => api.get('/parking/layout', { params: { center } })
+export const parkingSaveLayout = (body) => api.put('/parking/layout', body)
+export const parkingState = (center, day) => api.get('/parking/state', { params: { center, day } })
+export const parkingAssign = (body) => api.post('/parking/assign', body)
+export const parkingReport = (body) => api.post('/parking/report', body)
+export const parkingResolve = (body) => api.post('/parking/resolve', body)
+export const parkingLastKnown = (center) => api.get('/parking/last-known', { params: { center } })

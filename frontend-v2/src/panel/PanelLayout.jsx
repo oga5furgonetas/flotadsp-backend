@@ -5,7 +5,7 @@ import {
   CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon,
-  PackageSearch,
+  PackageSearch, MapPin,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken } from './auth'
 import TrialBanner from './TrialBanner'
@@ -49,6 +49,7 @@ const NAV_DEF = [
     { to: '/panel/inspecciones', labelKey: 'nav.inspections', icon: ClipboardList },
     { to: '/panel/incidencias', labelKey: 'nav.incidents', icon: AlertTriangle },
     { to: '/panel/talleres', labelKey: 'nav.workshops', icon: Wrench },
+    { to: '/panel/aparcamiento', labelKey: 'nav.parking', icon: MapPin },
     { to: '/panel/vencimientos', labelKey: 'nav.grp.expiry', icon: CalendarClock },
     { to: '/panel/importaciones', labelKey: 'nav.imports', icon: FileUp },
   ]},
@@ -132,7 +133,9 @@ export default function PanelLayout() {
 
   const sa = isSuperAdmin()
   const cm = isCenterManager()
-  const EQUIPO_KEYS = new Set(['asignacion', 'checklist-operativo', 'chat', 'plantilla'])
+  // Módulos operativos que ve cualquier admin/coordinador: no dependen de una
+  // lista de permisos antigua que no los contempla (si no, desaparecen sin avisar).
+  const EQUIPO_KEYS = new Set(['asignacion', 'checklist-operativo', 'chat', 'plantilla', 'aparcamiento'])
 
   // ¿Es visible este item con los permisos + plan actuales?
   const itemVisible = (it) => {
@@ -152,7 +155,7 @@ export default function PanelLayout() {
   // Guard de ruta: impide acceder por URL a un módulo no permitido.
   const curKey = keyOf(loc.pathname.replace(/\/+$/, '') || '/panel')
   const routeAllowed = (k) => {
-    if (k === 'perfil' || k === 'login' || k === 'portal-conductor' || k === 'checklist-operativo' || k === 'chat' || k === 'plantilla' || k === 'mi-dia') return true
+    if (k === 'perfil' || k === 'login' || k === 'portal-conductor' || k === 'checklist-operativo' || k === 'chat' || k === 'plantilla' || k === 'mi-dia' || k === 'aparcamiento') return true
     if (k === 'vencimientos') return EXPIRY_KEYS.some((ek) => canSee(ek))
     if (k === 'admin' || k === 'bandeja') return sa
     if (k === 'usuarios') return sa || cm
