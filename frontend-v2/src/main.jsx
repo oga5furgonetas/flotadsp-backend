@@ -79,8 +79,11 @@ async function repairAssetCache() {
 }
 
 class ErrorBoundary extends React.Component {
-  constructor(props) { super(props); this.state = { broken: false } }
-  static getDerivedStateFromError() { return { broken: true } }
+  constructor(props) { super(props); this.state = { broken: false, detail: '' } }
+  static getDerivedStateFromError(error) {
+    // Guardamos el mensaje REAL: un error escondido es un bug que nadie arregla.
+    return { broken: true, detail: String(error?.message || error || '').slice(0, 300) }
+  }
   componentDidCatch(error, info) {
     // Auto-curación: si el fallo es un chunk desactualizado, recarga UNA vez
     // (trae el index nuevo con los nombres de chunk correctos) sin molestar.
@@ -103,9 +106,25 @@ class ErrorBoundary extends React.Component {
         <div style={{ fontSize: 34 }}>⚠️</div>
         <h1 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>Algo ha ido mal</h1>
         <p style={{ margin: 0, color: '#8b94a3', fontSize: 14 }}>El error se ha reportado automáticamente. Pulsa el botón: repara y recarga.</p>
-        <button onClick={() => repairAssetCache().finally(() => window.location.reload())} style={{ marginTop: 8, padding: '11px 22px', border: 'none', borderRadius: 10, background: 'linear-gradient(135deg,#fb923c,#ea6800)', color: '#fff', fontWeight: 800, fontSize: 14, cursor: 'pointer' }}>
-          Reparar y recargar
-        </button>
+        {this.state.detail && (
+          <code style={{ maxWidth: 520, padding: '9px 12px', borderRadius: 8, background: '#131315', border: '1px solid #333338', color: '#b0b0b8', fontSize: 11.5, fontFamily: 'ui-monospace,monospace', wordBreak: 'break-word', lineHeight: 1.5 }}>
+            {this.state.detail}
+          </code>
+        )}
+        <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+          <button onClick={() => repairAssetCache().finally(() => window.location.reload())} style={{ padding: '11px 22px', border: 'none', borderRadius: 10, background: 'linear-gradient(135deg,#fb923c,#ea6800)', color: '#fff', fontWeight: 800, fontSize: 14, cursor: 'pointer' }}>
+            Reparar y recargar
+          </button>
+          <button
+            onClick={() => {
+              const txt = `FlotaDSP error\n${window.location.href}\n${new Date().toISOString()}\n\n${this.state.detail}`
+              navigator.clipboard?.writeText(txt)
+            }}
+            style={{ padding: '11px 18px', borderRadius: 10, border: '1px solid #333338', background: 'transparent', color: '#b0b0b8', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
+          >
+            Copiar detalle
+          </button>
+        </div>
       </div>
     )
   }
