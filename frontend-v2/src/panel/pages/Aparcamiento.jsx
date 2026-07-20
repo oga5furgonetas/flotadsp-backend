@@ -189,30 +189,12 @@ export default function Aparcamiento() {
                     </div>
                     <span className="shrink-0 font-mono text-[11px] tabular-nums text-dark-500">{(z.spots || []).length} plazas</span>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    {(z.spots || []).map((sp) => {
-                      const { status, row } = spotState(sp.code)
-                      const ui = SPOT_UI[status]
-                      const active = sel === sp.code
-                      return (
-                        <button
-                          key={sp.code}
-                          onClick={() => { setSel(active ? null : sp.code); setEditing(false) }}
-                          title={row?.vehicle?.license_plate ? `${row.vehicle.license_plate} · ${ui.label}` : ui.label}
-                          className={`relative flex h-[52px] w-[52px] flex-col items-center justify-center rounded-lg border text-center transition-all duration-200 ${ui.fill} ${active ? 'ring-2 ring-brand-400 ring-offset-2 ring-offset-dark-950 scale-105' : 'hover:scale-105'}`}
-                        >
-                          <span className={`font-mono text-[13px] font-bold ${ui.text}`}>{sp.code}</span>
-                          {row?.vehicle?.license_plate && (
-                            <span className="max-w-full truncate px-1 text-[8px] text-dark-400">{row.vehicle.license_plate}</span>
-                          )}
-                          {row?.mismatch && <span className="absolute -right-1 -top-1 h-2 w-2 rounded-full bg-red-400" />}
-                        </button>
-                      )
-                    })}
-                    {(z.spots || []).length === 0 && (
-                      <p className="py-4 text-[12.5px] text-dark-600">Esta zona aún no tiene plazas configuradas.</p>
-                    )}
-                  </div>
+                  {(z.spots || []).length === 0 ? (
+                    <p className="py-4 text-[12.5px] text-dark-600">Esta zona aún no tiene plazas configuradas.</p>
+                  ) : (
+                    <ZoneMap zone={z} spotState={spotState} sel={sel}
+                      onPick={(code) => { setSel(sel === code ? null : code); setEditing(false) }} />
+                  )}
                 </div>
               ))}
             </div>
@@ -334,6 +316,61 @@ export default function Aparcamiento() {
           </section>
         </>
       )}
+    </div>
+  )
+}
+
+/* Plano de una zona: las plazas se dibujan EN SU SITIO (x/y/w/h en % del
+   lienzo y rotación en grados), no en una rejilla. Así la nave sale con los
+   coches en horizontal contra las paredes y el exterior en diagonal hacia el
+   carril — igual que sobre el terreno. */
+function ZoneMap({ zone, spotState, sel, onPick }) {
+  const ratio = zone.ratio || 1
+  return (
+    <div
+      className="relative w-full overflow-hidden rounded-xl border border-white/[0.05] bg-black/25"
+      style={{ aspectRatio: String(ratio) }}
+    >
+      {/* Carril de circulación: da lectura de plano, no es decoración */}
+      {zone.aisle === 'vertical' ? (
+        <div className="pointer-events-none absolute inset-y-3 left-1/2 w-[9%] -translate-x-1/2 rounded-full bg-white/[0.035]" />
+      ) : (
+        <div className="pointer-events-none absolute inset-x-3 top-1/2 h-[7%] -translate-y-1/2 rounded-full bg-white/[0.035]" />
+      )}
+
+      {(zone.spots || []).map((sp) => {
+        const { status, row } = spotState(sp.code)
+        const ui = SPOT_UI[status]
+        const active = sel === sp.code
+        const occupied = !!row
+        return (
+          <button
+            key={sp.code}
+            onClick={() => onPick(sp.code)}
+            title={row?.vehicle?.license_plate ? `Plaza ${sp.code} · ${row.vehicle.license_plate} · ${ui.label}` : `Plaza ${sp.code} · ${ui.label}`}
+            className={`group absolute rounded-[3px] border transition-[filter,transform] duration-200 ${ui.fill} ${active ? 'z-20 brightness-150' : 'hover:brightness-125'}`}
+            style={{
+              left: `${sp.x}%`, top: `${sp.y}%`, width: `${sp.w}%`, height: `${sp.h}%`,
+              transform: `rotate(${sp.rot || 0}deg)${active ? ' scale(1.08)' : ''}`,
+              boxShadow: active ? '0 0 0 2px rgb(251 146 60), 0 0 22px rgba(251,146,60,.45)' : undefined,
+            }}
+          >
+            {/* Silueta de furgoneta cuando la plaza está ocupada */}
+            {occupied && (
+              <span className="pointer-events-none absolute inset-[13%] rounded-[2px] bg-white/[0.16]">
+                <span className="absolute inset-x-[14%] top-[12%] h-[26%] rounded-[1px] bg-white/[0.22]" />
+              </span>
+            )}
+            <span className={`pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[9px] font-bold leading-none ${ui.text}`}
+              style={{ transform: `rotate(${-(sp.rot || 0)}deg)` }}>
+              {sp.code}
+            </span>
+            {row?.mismatch && (
+              <span className="pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full bg-red-400 ring-2 ring-dark-950" />
+            )}
+          </button>
+        )
+      })}
     </div>
   )
 }

@@ -18457,55 +18457,110 @@ async def cortex_reset(_=Depends(require_admin)):
 # coinciden, se marca discrepancia en vez de elegir uno a ciegas.
 
 
-def _pk_grid(start, rows, cols, x0, y0, w, h, gx, gy, rot=0.0):
-    """Plazas en rejilla. Coordenadas en % del lienzo (0-100): el plano se ve
-    igual en cualquier pantalla."""
-    out, n = [], start
-    for r in range(rows):
-        for c in range(cols):
-            out.append({"code": str(n), "x": round(x0 + c * gx, 2), "y": round(y0 + r * gy, 2),
-                        "w": w, "h": h, "rot": rot})
-            n += 1
-    return out
+def _pk_bay(code, x, y, w, h, rot=0.0):
+    return {"code": str(code), "x": round(x, 2), "y": round(y, 2),
+            "w": round(w, 2), "h": round(h, 2), "rot": rot}
+
+
+# Version del plano generado. Si sube, los planos AUTO-GENERADOS se regeneran;
+# los que el coordinador ya ha editado a mano (seeded=False) NUNCA se tocan.
+_PK_LAYOUT_V = 3
 
 
 def _pk_default_layout(center):
-    """Plano inicial EDITABLE. La geometria replica la realidad del centro; el
-    numero de plazas es un punto de partida que el coordinador ajusta."""
+    """Plano inicial con la GEOMETRIA REAL de cada centro.
+
+    Coordenadas en % dentro del lienzo de su zona (0-100), con "ratio" =
+    ancho/alto de la zona para que las proporciones sean creibles. "rot" son
+    grados: una plaza ancha (w>h) sin rotar dibuja el coche en horizontal.
+    """
     c = (center or "").upper()
+
     if c == "OGA5":
+        # ── Nave: 17 plazas en horizontal contra las paredes, morro a pared.
+        #    11 pegadas a la pared derecha y 6 a la izquierda, pasillo central.
+        nave = []
+        for i in range(11):                       # pared derecha
+            nave.append(_pk_bay(i + 1, 54, 3.0 + i * 8.6, 42, 7.2))
+        for i in range(6):                        # pared izquierda
+            nave.append(_pk_bay(12 + i, 4, 3.0 + i * 8.6, 42, 7.2))
+
+        # ── Exterior junto a la nave: 8 + 8 en DIAGONAL, culo a la pared y
+        #    morro hacia el carril central (ambas filas "apuntan" hacia arriba).
+        ext = []
+        for i in range(8):                        # fila izquierda
+            ext.append(_pk_bay(18 + i, 4, 5.0 + i * 11.4, 37, 8.4, -40))
+        for i in range(8):                        # fila derecha (espejo)
+            ext.append(_pk_bay(26 + i, 59, 5.0 + i * 11.4, 37, 8.4, 40))
+
+        # ── Parking de tierra: 4 hileras de 6 en bateria, coches en vertical
+        #    y carriles entre hileras (disposicion estandar de parcela).
+        tierra = []
+        n = 34
+        for row in range(4):
+            for col in range(6):
+                tierra.append(_pk_bay(n, 4 + col * 15.8, 6 + row * 24, 13, 17))
+                n += 1
+
         return {
-            "center": c, "name": "OGA5 - Santiago",
+            "center": c, "name": "OGA5 - Santiago", "v": _PK_LAYOUT_V,
             "zones": [
                 {"id": "nave", "name": "Dentro de la nave", "color": "violet",
-                 "note": "Interior de la nave",
-                 "spots": _pk_grid(1, 4, 4, 5, 16, 8.5, 13, 10.5, 19)},
+                 "note": "17 plazas en horizontal contra las paredes (11 derecha + 6 izquierda)",
+                 "ratio": 0.62, "aisle": "vertical", "spots": nave},
                 {"id": "exterior", "name": "Exterior junto a la nave", "color": "sky",
-                 "note": "Franja de asfalto entre las rayas amarillas",
-                 "spots": _pk_grid(17, 8, 2, 40, 8, 8, 9.5, 10, 11)},
+                 "note": "16 plazas en diagonal, culo a la pared y morro al carril central",
+                 "ratio": 0.58, "aisle": "vertical", "spots": ext},
                 {"id": "tierra", "name": "Parking de tierra", "color": "emerald",
-                 "note": "Parcela publica frente a la nave",
-                 "spots": _pk_grid(33, 6, 4, 64, 12, 7.5, 11.5, 9, 14)},
+                 "note": "24 plazas en bateria, 4 hileras de 6",
+                 "ratio": 1.15, "aisle": "horizontal", "spots": tierra},
             ],
         }
+
     if c == "DGA1":
+        # Recinto exterior completo: 6 hileras de 6 en bateria con carriles.
+        spots, n = [], 1
+        for row in range(6):
+            for col in range(6):
+                spots.append(_pk_bay(n, 3 + col * 16, 4 + row * 16, 13.5, 12))
+                n += 1
         return {
-            "center": c, "name": "DGA1",
+            "center": c, "name": "DGA1", "v": _PK_LAYOUT_V,
             "zones": [
                 {"id": "exterior", "name": "Parking exterior", "color": "sky",
-                 "note": "Todo el recinto es aparcamiento exterior",
-                 "spots": _pk_grid(1, 6, 6, 8, 12, 10, 12, 14, 13)},
+                 "note": "Todo el recinto es aparcamiento exterior en bateria",
+                 "ratio": 1.0, "aisle": "horizontal", "spots": spots},
             ],
         }
-    # Centro nuevo: zona vacia lista para configurar (nunca inventamos plazas)
-    return {"center": c, "name": c, "zones": [
-        {"id": "general", "name": "Aparcamiento", "color": "sky", "note": "", "spots": []}]}
+
+    # Centro sin plano propio: PLANTILLA de partida (nave + exterior), marcada
+    # como borrador para que el coordinador la ajuste. No es un dato inventado:
+    # es un punto de partida editable, y la UI lo advierte en amarillo.
+    nave, ext = [], []
+    for i in range(8):
+        nave.append(_pk_bay(i + 1, 54, 4 + i * 11.8, 42, 9.5))
+    for i in range(6):
+        nave.append(_pk_bay(9 + i, 4, 4 + i * 11.8, 42, 9.5))
+    for i in range(6):
+        ext.append(_pk_bay(15 + i, 4, 6 + i * 15.2, 37, 11, -40))
+    for i in range(6):
+        ext.append(_pk_bay(21 + i, 59, 6 + i * 15.2, 37, 11, 40))
+    return {"center": c, "name": c, "v": _PK_LAYOUT_V, "zones": [
+        {"id": "nave", "name": "Dentro de la nave", "color": "violet",
+         "note": "Plantilla de partida - ajusta el numero de plazas",
+         "ratio": 0.7, "aisle": "vertical", "spots": nave},
+        {"id": "exterior", "name": "Exterior", "color": "sky",
+         "note": "Plantilla de partida - plazas en diagonal hacia el carril",
+         "ratio": 0.62, "aisle": "vertical", "spots": ext},
+    ]}
 
 
 async def _pk_get_layout(center):
     c = (center or "").upper()
     doc = await db.parking_layouts.find_one({"center": c}, {"_id": 0})
-    if doc:
+    # Un plano editado por una persona (seeded=False) es sagrado: no se toca.
+    # Uno auto-generado de version anterior se regenera con la geometria nueva.
+    if doc and not (doc.get("seeded") and doc.get("v", 1) < _PK_LAYOUT_V):
         return doc
     doc = _pk_default_layout(c)
     doc["seeded"] = True          # plano por defecto, aun sin revisar por humano
