@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Loader2, MapPin, Check, X, Pencil, ShieldAlert, Car, Calendar, Search, Maximize2, Image as ImageIcon } from 'lucide-react'
-import { parkingState, parkingResolve, parkingAssign, parkingZoneImage, getVehicles } from '../api'
+import { parkingState, parkingResolve, parkingAssign, parkingZoneImage, parkingSaveLayout, getVehicles } from '../api'
 
 /* El color comunica estado, no decora:
    gris = libre · ámbar = asignada (mandada) · azul = reportada por el conductor
@@ -87,6 +87,10 @@ export default function Aparcamiento() {
   const [editing, setEditing] = useState(false)
   const [q, setQ] = useState('')
   const [zoom, setZoom] = useState(false)
+  // ── Editor del plano: el coordinador coloca las plazas donde están de verdad ──
+  const [edit, setEdit] = useState(false)
+  const [draft, setDraft] = useState(null)     // copia de zones mientras se edita
+  const [drag, setDrag] = useState(null)       // { zi, si, startX, startY, ox, oy, rect }
   const flash = (ok, msg) => { setToast({ ok, msg }); setTimeout(() => setToast(null), 4000) }
 
   const noCenter = !center || center === 'Todos'
@@ -127,7 +131,82 @@ export default function Aparcamiento() {
     return { status: 'asignada', row }
   }, [byAssigned, byReported])
 
-  const zones = data?.layout?.zones || []
+  // En modo edición se pinta el borrador; fuera, lo guardado.
+  const zones = (edit && draft) ? draft : (data?.layout?.zones || [])
+
+  function startEdit() {
+    setDraft(JSON.parse(JSON.stringify(data?.layout?.zones || [])))
+    setEdit(true); setSel(null)
+  }
+  function cancelEdit() { setDraft(null); setEdit(false); setDrag(null) }
+
+  function patchSpot(zi, si, patch) {
+    setDraft((d) => {
+      const n = JSON.parse(JSON.stringify(d))
+      n[zi].spots[si] = { ...n[zi].spots[si], ...patch }
+      return n
+    })
+  }
+  function addSpot(zi) {
+    setDraft((d) => {
+      const n = JSON.parse(JSON.stringify(d))
+      const all = n.flatMap((z) => z.spots || []).map((s) => parseInt(s.code, 10)).filter((x) => !isNaN(x))
+      const next = String((all.length ? Math.max(...all) : 0) + 1)
+      n[zi].spots.push({ code: next, x: 40, y: 45, w: 30, h: 10, rot: 0 })
+      return n
+    })
+  }
+  function removeSpot(zi, si) {
+    setDraft((d) => {
+      const n = JSON.parse(JSON.stringify(d))
+      n[zi].spots.splice(si, 1)
+      return n
+    })
+    setSel(null)
+  }
+  async function saveLayout() {
+    setBusy(true)
+    try {
+      await parkingSaveLayout({ center, name: data?.layout?.name || center, zones: draft })
+      flash(true, 'Plano guardado')
+      setEdit(false); setDraft(null); await load()
+    } catch (e) { flash(false, e?.response?.data?.detail || 'No se pudo guardar el plano') }
+    setBusy(false)
+  }
+
+  // Arrastrar una plaza: píxeles → % del lienzo de su zona
+  function onSpotDown(e, zi, si) {
+    if (!edit) return
+    e.preventDefault(); e.stopPropagation()
+    const canvas = e.currentTarget.parentElement
+    const rect = canvas.getBoundingClientRect()
+    const sp = draft[zi].spots[si]
+    setSel(sp.code)
+    setDrag({ zi, si, startX: e.clientX, startY: e.clientY, ox: sp.x, oy: sp.y, rect })
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+  }
+  function onSpotMove(e) {
+    if (!drag) return
+    const dx = ((e.clientX - drag.startX) / drag.rect.width) * 100
+    const dy = ((e.clientY - drag.startY) / drag.rect.height) * 100
+    const sp = draft[drag.zi].spots[drag.si]
+    patchSpot(drag.zi, drag.si, {
+      x: Math.max(0, Math.min(100 - (sp.w || 10), Math.round((drag.ox + dx) * 10) / 10)),
+      y: Math.max(0, Math.min(100 - (sp.h || 10), Math.round((drag.oy + dy) * 10) / 10)),
+    })
+  }
+  function onSpotUp() { setDrag(null) }
+
+  // Plaza seleccionada dentro del borrador (para sus controles)
+  const draftIdx = useMemo(() => {
+    if (!edit || !draft || !sel) return null
+    for (let zi = 0; zi < draft.length; zi++) {
+      const si = (draft[zi].spots || []).findIndex((s) => s.code === sel)
+      if (si >= 0) return { zi, si }
+    }
+    return null
+  }, [edit, draft, sel])
+  const draftSpot = draftIdx ? draft[draftIdx.zi].spots[draftIdx.si] : null
   const stats = useMemo(() => {
     const all = zones.flatMap((z) => z.spots || [])
     const s = { total: all.length, libre: 0, asignada: 0, reportada: 0, confirmada: 0, denegada: 0 }
@@ -243,10 +322,28 @@ export default function Aparcamiento() {
                     </span>
                   ))}
                 </div>
-                <button onClick={() => setZoom((z) => !z)} title="Ampliar plano"
-                  className="rounded-lg border border-white/[0.08] p-1.5 text-dark-400 transition hover:text-dark-200">
-                  <Maximize2 size={13} />
-                </button>
+                <div className="flex items-center gap-2">
+                  {!edit ? (
+                    <button onClick={startEdit}
+                      className="flex items-center gap-1.5 rounded-lg border border-white/[0.1] px-2.5 py-1.5 text-[11.5px] font-semibold text-dark-300 transition hover:border-brand-500/40 hover:text-brand-300">
+                      <Pencil size={12} /> Editar plano
+                    </button>
+                  ) : (
+                    <>
+                      <span className="text-[11px] text-brand-300">Arrastra las plazas a su sitio</span>
+                      <button onClick={saveLayout} disabled={busy}
+                        className="flex items-center gap-1.5 rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 px-3 py-1.5 text-[11.5px] font-semibold text-white disabled:opacity-50">
+                        {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Guardar
+                      </button>
+                      <button onClick={cancelEdit}
+                        className="rounded-lg border border-white/[0.1] px-2.5 py-1.5 text-[11.5px] text-dark-400 hover:text-dark-200">Cancelar</button>
+                    </>
+                  )}
+                  <button onClick={() => setZoom((z) => !z)} title="Ampliar plano"
+                    className="rounded-lg border border-white/[0.08] p-1.5 text-dark-400 transition hover:text-dark-200">
+                    <Maximize2 size={13} />
+                  </button>
+                </div>
               </div>
 
               {(() => { const H = zoom ? 640 : 400; const canvasH = H - 30; return (
@@ -284,19 +381,24 @@ export default function Aparcamiento() {
                           {[0, 1, 2].map((i) => <span key={i} className="text-[9px] leading-none text-white/25">▶</span>)}
                         </div>
                       )}
-                      {(z.spots || []).map((sp) => {
+                      {(z.spots || []).map((sp, si) => {
                         const { status, row } = spotState(sp.code)
                         const ui = SPOT_UI[status]
                         const active = sel === sp.code
                         const horiz = (sp.w || 1) >= (sp.h || 1)
                         return (
-                          <button key={sp.code} onClick={() => { setSel(active ? null : sp.code); setEditing(false) }}
+                          <button key={sp.code}
+                            onPointerDown={(e) => onSpotDown(e, zi, si)}
+                            onPointerMove={onSpotMove}
+                            onPointerUp={onSpotUp}
+                            onClick={() => { if (!edit) { setSel(active ? null : sp.code); setEditing(false) } }}
                             title={row?.vehicle?.license_plate ? `Plaza ${sp.code} · ${row.vehicle.license_plate} · ${ui.label}` : `Plaza ${sp.code} · libre`}
                             className={`group absolute rounded-[3px] border transition-[filter,transform] duration-200 ${ui.fill} ${active ? 'z-20' : 'hover:brightness-125'}`}
                             style={{
                               left: `${sp.x}%`, top: `${sp.y}%`, width: `${sp.w}%`, height: `${sp.h}%`,
                               transform: `rotate(${sp.rot || 0}deg)${active ? ' scale(1.12)' : ''}`,
                               boxShadow: active ? '0 0 0 2px rgb(251 146 60), 0 0 22px rgba(251,146,60,.55)' : undefined,
+                              ...(edit ? { cursor: drag ? 'grabbing' : 'grab', touchAction: 'none' } : null),
                             }}>
                             {row && <Van horiz={horiz} tone={ui.van} />}
                             {/* El número siempre horizontal, aunque la plaza esté en diagonal */}
@@ -335,7 +437,49 @@ export default function Aparcamiento() {
           {/* ── PANEL ── */}
           <div className="rise" style={{ animationDelay: '110ms' }}>
             <div className="sticky top-4 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
-              {!sel ? (
+              {edit ? (
+                /* ── EDITOR: mover, girar, redimensionar, renombrar, añadir ── */
+                <div>
+                  <p className="mb-3 text-[12px] font-semibold text-brand-300">Editando el plano</p>
+                  {!draftSpot ? (
+                    <p className="text-[12.5px] leading-relaxed text-dark-500">
+                      Arrastra cualquier plaza para colocarla donde está en la realidad.
+                      Pulsa una para girarla, cambiar su tamaño o su número.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      <div>
+                        <p className="mb-1 text-[11px] text-dark-500">Número de plaza</p>
+                        <input value={draftSpot.code}
+                          onChange={(e) => patchSpot(draftIdx.zi, draftIdx.si, { code: e.target.value })}
+                          className="w-full rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2 font-mono text-[13px] font-semibold text-dark-50 focus:border-brand-500/50 focus:outline-none" />
+                      </div>
+                      <Stepper label="Giro" value={`${draftSpot.rot || 0}°`}
+                        onMinus={() => patchSpot(draftIdx.zi, draftIdx.si, { rot: (draftSpot.rot || 0) - 5 })}
+                        onPlus={() => patchSpot(draftIdx.zi, draftIdx.si, { rot: (draftSpot.rot || 0) + 5 })} />
+                      <Stepper label="Largo" value={`${draftSpot.w}`}
+                        onMinus={() => patchSpot(draftIdx.zi, draftIdx.si, { w: Math.max(3, +(draftSpot.w - 1).toFixed(1)) })}
+                        onPlus={() => patchSpot(draftIdx.zi, draftIdx.si, { w: Math.min(95, +(draftSpot.w + 1).toFixed(1)) })} />
+                      <Stepper label="Ancho" value={`${draftSpot.h}`}
+                        onMinus={() => patchSpot(draftIdx.zi, draftIdx.si, { h: Math.max(2, +(draftSpot.h - 0.5).toFixed(1)) })}
+                        onPlus={() => patchSpot(draftIdx.zi, draftIdx.si, { h: Math.min(95, +(draftSpot.h + 0.5).toFixed(1)) })} />
+                      <button onClick={() => removeSpot(draftIdx.zi, draftIdx.si)}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-red-500/30 bg-red-500/10 py-2 text-[12px] font-semibold text-red-300 hover:bg-red-500/20">
+                        <X size={12} /> Eliminar plaza
+                      </button>
+                    </div>
+                  )}
+                  <div className="mt-4 space-y-1.5 border-t border-white/[0.06] pt-3">
+                    <p className="text-[11px] text-dark-500">Añadir plaza a…</p>
+                    {(draft || []).map((z, zi) => (
+                      <button key={z.id} onClick={() => addSpot(zi)}
+                        className="flex w-full items-center justify-between rounded-lg border border-white/[0.07] px-3 py-1.5 text-[11.5px] text-dark-300 hover:border-brand-500/40 hover:text-brand-300">
+                        {z.name} <span className="font-mono text-[10px] text-dark-600">+</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : !sel ? (
                 <div className="py-10 text-center text-[12.5px] text-dark-500">
                   <Car size={22} className="mx-auto mb-3 opacity-30" />
                   Pulsa una plaza del plano.<br />Si está libre podrás asignarle un vehículo.
@@ -443,6 +587,20 @@ export default function Aparcamiento() {
           </div>
         </section>
       )}
+    </div>
+  )
+}
+
+/* Control −/+ del editor: girar, alargar y ensanchar sin escribir números */
+function Stepper({ label, value, onMinus, onPlus }) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-[11.5px] text-dark-400">{label}</span>
+      <div className="flex items-center gap-1">
+        <button onClick={onMinus} className="h-6 w-6 rounded-md border border-white/[0.1] text-[13px] leading-none text-dark-300 hover:border-brand-500/40 hover:text-brand-300">−</button>
+        <span className="w-12 text-center font-mono text-[11.5px] tabular-nums text-dark-200">{value}</span>
+        <button onClick={onPlus} className="h-6 w-6 rounded-md border border-white/[0.1] text-[13px] leading-none text-dark-300 hover:border-brand-500/40 hover:text-brand-300">+</button>
+      </div>
     </div>
   )
 }
