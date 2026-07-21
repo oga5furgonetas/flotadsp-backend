@@ -648,7 +648,10 @@ async def get_current_user(
         # Excepciones seguras en demo: el asistente IA (lectura vía POST) y los
         # datos de ejemplo de Cortex (TBADEMO*, aislados en la BD de la demo) —
         # así el visitante puede probar el tracker de paquetes de verdad.
-        _demo_ok = ("/assistant/ask", "/cortex/seed-demo", "/cortex/clear-demo")
+        # El aparcamiento tambien se puede tocar en demo: BD aislada, y deja que
+        # el visitante pruebe de verdad el plano (asignar, reportar, confirmar).
+        _demo_ok = ("/assistant/ask", "/cortex/seed-demo", "/cortex/clear-demo",
+                    "/parking/assign", "/parking/report", "/parking/resolve")
         if not any(request.url.path.endswith(p) for p in _demo_ok):
             raise HTTPException(status_code=403, detail="Modo demo: solo lectura. Crea tu cuenta gratis para editar.")
     # AÍSLA: fija la BD de la organización del token para TODA esta petición.
@@ -18593,6 +18596,65 @@ async def parking_layout_save(body: dict = Body(...), _=Depends(require_admin)):
            "updated_at": datetime.now(timezone.utc).isoformat()}
     await db.parking_layouts.update_one({"center": c}, {"$set": doc}, upsert=True)
     return {"ok": True, "spots": len(codes)}
+
+
+@api_router.post("/parking/zone-image")
+async def parking_zone_image(
+    center: str = Form(...),
+    zone_id: str = Form(...),
+    file: UploadFile = File(...),
+    _=Depends(require_admin),
+):
+    """Foto aerea de fondo para una zona (la captura de satelite del propio DSP).
+
+    No descargamos imagenes de terceros: la sube el cliente, es suya y queda en
+    su bucket. Asi el plano se ve sobre el terreno real de SU nave, y funciona
+    igual para cualquier centro futuro.
+    """
+    c = (center or "").strip().upper()
+    zid = (zone_id or "").strip()
+    if not c or not zid:
+        raise HTTPException(400, "Falta center o zone_id")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "Archivo vacio")
+    if len(content) > 8 * 1024 * 1024:
+        raise HTTPException(413, "Imagen demasiado grande (max 8 MB)")
+    ctype = (file.content_type or "").lower()
+    if not ctype.startswith("image/"):
+        raise HTTPException(400, "El archivo debe ser una imagen")
+
+    ext = (file.filename or "foto.jpg").rsplit(".", 1)[-1].lower()
+    if ext not in ("jpg", "jpeg", "png", "webp"):
+        ext = "jpg"
+    key = "parking/" + c + "/" + re.sub(r"[^a-zA-Z0-9_-]", "_", zid) + "_" + uuid.uuid4().hex[:8] + "." + ext
+
+    s3 = get_r2()
+    if not s3:
+        raise HTTPException(502, "Almacenamiento R2 no configurado")
+    try:
+        await asyncio.get_running_loop().run_in_executor(
+            _executor,
+            lambda: s3.put_object(Bucket=R2_BUCKET, Key=key, Body=content, ContentType=ctype))
+    except Exception as e:
+        raise HTTPException(500, "Error subiendo la imagen: " + str(e))
+
+    r2_public = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
+    url = (r2_public + "/" + key) if r2_public else key
+
+    layout = await _pk_get_layout(c)
+    found = False
+    for z in layout.get("zones", []):
+        if z.get("id") == zid:
+            z["bg"] = url
+            found = True
+    if not found:
+        raise HTTPException(404, "Zona " + zid + " no existe en el plano de " + c)
+    # Guardar el plano deja de considerarse auto-generado: es trabajo humano.
+    await db.parking_layouts.update_one(
+        {"center": c}, {"$set": {"zones": layout["zones"], "seeded": False}}, upsert=True)
+    return {"ok": True, "url": url}
 
 
 @api_router.get("/parking/state")

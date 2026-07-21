@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Loader2, MapPin, Check, X, Pencil, ShieldAlert, Car, Calendar, Search, Maximize2 } from 'lucide-react'
-import { parkingState, parkingResolve, parkingAssign, getVehicles } from '../api'
+import { Loader2, MapPin, Check, X, Pencil, ShieldAlert, Car, Calendar, Search, Maximize2, Image as ImageIcon } from 'lucide-react'
+import { parkingState, parkingResolve, parkingAssign, parkingZoneImage, getVehicles } from '../api'
 
 /* El color comunica estado, no decora:
    gris = libre · ámbar = asignada (mandada) · azul = reportada por el conductor
@@ -33,17 +33,44 @@ const ZONE_GROUND = {
   general: 'linear-gradient(#151517,#111113)',
 }
 
-/* Furgoneta vista desde arriba. Se estira a la plaza y orienta su morro según
-   la forma de la bahía: si es ancha, el coche va en horizontal. */
+/* Furgoneta vista cenital, dibujada en SVG: chapa con brillo longitudinal,
+   parabrisas y luneta, techo, retrovisores y ruedas asomando. El viewBox va
+   siempre en horizontal (morro a la derecha) y se rota para las plazas
+   verticales, así una sola pieza sirve para toda la flota. */
 function Van({ horiz, tone }) {
+  const id = tone.replace('#', '')
   return (
-    <span className="pointer-events-none absolute inset-[9%] rounded-[3px] shadow-[0_1px_3px_rgba(0,0,0,.6)]"
-      style={{ background: `linear-gradient(${horiz ? '180deg' : '90deg'}, ${tone}f2, ${tone}c8 55%, ${tone}9e)` }}>
-      {/* Parabrisas en el morro */}
-      <span className={`absolute rounded-[1.5px] bg-black/45 ${horiz ? 'inset-y-[20%] right-[7%] w-[20%]' : 'inset-x-[20%] top-[7%] h-[20%]'}`} />
-      {/* Techo */}
-      <span className={`absolute rounded-[1.5px] bg-black/[0.18] ${horiz ? 'inset-y-[16%] left-[12%] w-[52%]' : 'inset-x-[16%] bottom-[12%] h-[52%]'}`} />
-    </span>
+    <svg viewBox="0 0 100 46" preserveAspectRatio="none"
+      className="pointer-events-none absolute drop-shadow-[0_2px_3px_rgba(0,0,0,.75)]"
+      style={horiz
+        ? { inset: '20% 10%', opacity: 0.9 }
+        : { inset: '10% 20%', width: '60%', height: '80%', opacity: 0.9,
+            transform: 'rotate(90deg)', transformOrigin: 'center' }}>
+      <defs>
+        <linearGradient id={`vg${id}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={tone} stopOpacity=".38" />
+          <stop offset="45%" stopColor={tone} stopOpacity=".72" />
+          <stop offset="100%" stopColor={tone} stopOpacity=".42" />
+        </linearGradient>
+      </defs>
+      {/* Ruedas asomando por los laterales */}
+      <rect x="20" y="1" width="15" height="4" rx="1.6" fill="#0a0a0b" opacity=".85" />
+      <rect x="66" y="1" width="13" height="4" rx="1.6" fill="#0a0a0b" opacity=".85" />
+      <rect x="20" y="41" width="15" height="4" rx="1.6" fill="#0a0a0b" opacity=".85" />
+      <rect x="66" y="41" width="13" height="4" rx="1.6" fill="#0a0a0b" opacity=".85" />
+      {/* Carrocería */}
+      <rect x="2" y="3.5" width="96" height="39" rx="7" fill={`url(#vg${id})`} />
+      {/* Luneta trasera y parabrisas (morro a la derecha) */}
+      <rect x="6.5" y="9" width="7" height="28" rx="2" fill="#05070a" opacity=".5" />
+      <path d="M79 8.5 h9.5 a5 5 0 0 1 5 5 v19 a5 5 0 0 1 -5 5 H79 z" fill="#05070a" opacity=".55" />
+      {/* Techo de carga */}
+      <rect x="18" y="10" width="56" height="26" rx="3" fill="#000" opacity=".16" />
+      {/* Retrovisores */}
+      <rect x="74" y="0.5" width="6" height="3" rx="1.2" fill={tone} opacity=".9" />
+      <rect x="74" y="42.5" width="6" height="3" rx="1.2" fill={tone} opacity=".9" />
+      {/* Brillo de chapa */}
+      <rect x="6" y="7" width="88" height="4" rx="2" fill="#fff" opacity=".14" />
+    </svg>
   )
 }
 const todayISO = () => new Date().toISOString().slice(0, 10)
@@ -116,6 +143,17 @@ export default function Aparcamiento() {
 
   const selRow = sel ? spotState(sel).row : null
   const selStatus = sel ? spotState(sel).status : null
+
+  async function uploadBg(zoneId, file) {
+    setBusy(true)
+    try {
+      const fd = new FormData()
+      fd.append('center', center); fd.append('zone_id', zoneId); fd.append('file', file)
+      await parkingZoneImage(fd)
+      flash(true, 'Foto aérea guardada'); await load()
+    } catch (e) { flash(false, e?.response?.data?.detail || 'No se pudo subir la imagen') }
+    setBusy(false)
+  }
 
   async function doAssign(vehicleId) {
     setBusy(true)
@@ -223,9 +261,19 @@ export default function Aparcamiento() {
                       </span>
                       <span className={`truncate text-[11.5px] font-semibold ${ZONE_LABEL[z.color] || 'text-dark-300'}`}>{z.name}</span>
                       <span className="shrink-0 font-mono text-[10px] tabular-nums text-dark-600">{(z.spots || []).length}</span>
+                      <label title="Subir foto aérea de esta zona"
+                        className="shrink-0 cursor-pointer rounded p-0.5 text-dark-600 transition hover:text-brand-400">
+                        <ImageIcon size={12} />
+                        <input type="file" accept="image/*" className="hidden"
+                          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) uploadBg(z.id, f) }} />
+                      </label>
                     </div>
                     <div className={`relative min-h-0 w-full flex-1 overflow-hidden rounded-xl border-2 shadow-[inset_0_0_40px_rgba(0,0,0,.5)] ${ZONE_TINT[z.color] || 'border-white/[0.1]'}`}
-                      style={{ background: ZONE_GROUND[z.id] || ZONE_GROUND.general }}>
+                      style={z.bg
+                        ? { backgroundImage: `url(${z.bg})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+                        : { background: ZONE_GROUND[z.id] || ZONE_GROUND.general }}>
+                      {/* Velo sobre la foto aérea: las plazas siempre legibles */}
+                      {z.bg && <div className="pointer-events-none absolute inset-0 bg-black/45" />}
                       {/* Carril de circulación con sus flechas de sentido */}
                       {z.aisle === 'vertical' ? (
                         <div className="pointer-events-none absolute inset-y-3 left-1/2 flex w-[9%] -translate-x-1/2 flex-col items-center justify-around rounded-sm bg-white/[0.045]">
