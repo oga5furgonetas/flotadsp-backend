@@ -12012,20 +12012,34 @@ async def _odo_leer_foto(img_bytes: bytes, intentos: int = 2):
                 timeout=45.0)
         return json.loads(_strip_markdown_json(resp.text or ""))
 
-    lecturas = []
+    lecturas, servicio_caido = [], False
     for _ in range(max(1, intentos)):
         try:
             lecturas.append(await _una())
         except Exception as e:
+            # 429 (cuota), 5xx o timeout = problema NUESTRO, no de la foto del
+            # conductor. Hay que decirselo tal cual: culpar a su foto cuando el
+            # servicio esta caido le hace repetirla diez veces para nada.
+            txt = str(e)
+            if ("429" in txt or "RESOURCE_EXHAUSTED" in txt or "quota" in txt.lower()
+                    or "503" in txt or "500" in txt or "UNAVAILABLE" in txt
+                    or isinstance(e, asyncio.TimeoutError)):
+                servicio_caido = True
             logger.warning(f"Odometro: fallo una lectura — {e}")
-    return lecturas
+    return {"lecturas": lecturas, "servicio_caido": servicio_caido}
 
 
-def _odo_consenso(lecturas):
+def _odo_consenso(lecturas, servicio_caido: bool = False):
     """Une las lecturas. Solo hay numero si TODAS coinciden exactamente."""
+    if isinstance(lecturas, dict):        # forma nueva de _odo_leer_foto
+        servicio_caido = lecturas.get("servicio_caido", servicio_caido)
+        lecturas = lecturas.get("lecturas") or []
     if not lecturas:
         return {"km": None, "confianza": 0.0, "legible": False, "cuadro_encendido": True,
-                "es_parcial": False, "motivo": "No se pudo analizar la foto."}
+                "es_parcial": False, "servicio_caido": servicio_caido,
+                "motivo": ("El lector automatico no esta disponible en este momento. "
+                           "Escribe los km a mano; tu foto se guarda igual.")
+                          if servicio_caido else "No se pudo analizar la foto."}
     apagado = any(r.get("cuadro_encendido") is False for r in lecturas)
     parcial = any(r.get("es_parcial") is True for r in lecturas)
     ilegible = any(not r.get("legible") for r in lecturas)
@@ -12090,15 +12104,16 @@ async def read_odometer_photo(vehicle_id: str, file: UploadFile = File(...), use
         img.thumbnail((1280, 1280))
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
-        lecturas = await _odo_leer_foto(buf.getvalue())
+        lectura_raw = await _odo_leer_foto(buf.getvalue())
     except Exception as e:
         logger.error(f"Odometro: no se pudo procesar la foto — {e}")
         return {**base, "motivo": "No se ha podido analizar la foto ahora mismo."}
 
-    r = _odo_consenso(lecturas)
+    r = _odo_consenso(lectura_raw)
     if r["motivo"]:
         logger.info(f"Odometro {v.get('license_plate','')}: RECHAZADA — {r['motivo']}")
-        return {**base, "confianza": r["confianza"], "motivo": r["motivo"]}
+        return {**base, "confianza": r["confianza"], "motivo": r["motivo"],
+                "servicio_caido": bool(r.get("servicio_caido"))}
 
     # La lectura es limpia. ¿Es creible para ESTE vehiculo?
     ok, motivo, _info = _odo_validar(v, r["km"])

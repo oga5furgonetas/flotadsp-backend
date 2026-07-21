@@ -81,6 +81,8 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
   const [odoBloqueado, setOdoBloqueado] = useState(false)
   const [odoLimites, setOdoLimites] = useState(null)   // { min, max, dias, actual }
   const [odoManual, setOdoManual] = useState('')
+  // El lector esta caido (cuota/servicio): no es culpa de la foto del conductor.
+  const [odoServicioCaido, setOdoServicioCaido] = useState(false)
   const [checklist, setChecklist] = useState({})
   const [checklistPhotos, setChecklistPhotos] = useState({})
   const [notes, setNotes] = useState('')
@@ -157,7 +159,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
     e.target.value = ''
     if (!file) return
     const blob = await compressImage(file, 1280, 0.8)
-    setOdoBusy(true); setOdoError(''); setOdoKm(null); setOdoManual('')
+    setOdoBusy(true); setOdoError(''); setOdoKm(null); setOdoManual(''); setOdoServicioCaido(false)
     try {
       const r = await readOdometer(vehicleId, blob)
       const d = r.data || {}
@@ -170,16 +172,17 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
         // La foto no vale. Se guarda como prueba, pero sin km: hasta que no
         // haya un número válido no se puede enviar la auditoría.
         setOdoPhoto(blob); setOdoBloqueado(true)
+        setOdoServicioCaido(!!d.servicio_caido)
         setOdoError(d.motivo || 'No se pudo leer el cuentakilómetros.')
-        toast.error('❌ Los km no se han podido leer')
+        toast.error(d.servicio_caido ? '⚠️ Lector no disponible — pon los km a mano'
+                                     : '❌ Los km no se han podido leer')
       }
     } catch (err) {
       // Un fallo de red NO puede colar una auditoría sin km.
-      setOdoPhoto(blob); setOdoBloqueado(true)
-      const d = err?.response?.data
-      setOdoError(typeof d?.detail === 'string' ? d.detail
-        : 'No se ha podido leer la foto ahora mismo. Repítela o pon los km a mano.')
-      toast.error('❌ Los km no se han podido leer')
+      setOdoPhoto(blob); setOdoBloqueado(true); setOdoServicioCaido(true)
+      setOdoError('El lector automático no está disponible en este momento. '
+        + 'Escribe los km a mano; tu foto se guarda igual.')
+      toast.error('⚠️ Lector no disponible — pon los km a mano')
     }
     setOdoBusy(false)
   }
@@ -496,10 +499,12 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                 {odoError && (
                   <div className="mt-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2">
                     <p className="text-[11px] font-semibold leading-snug text-amber-200">{odoError}</p>
-                    <button onClick={() => odoRef.current?.click()}
-                      className="mt-2 w-full rounded-lg bg-amber-500/20 py-2 text-[11px] font-bold text-amber-200 ring-1 ring-amber-500/40 active:scale-[0.98]">
-                      📷 Repetir la foto
-                    </button>
+                    {!odoServicioCaido && (
+                      <button onClick={() => odoRef.current?.click()}
+                        className="mt-2 w-full rounded-lg bg-amber-500/20 py-2 text-[11px] font-bold text-amber-200 ring-1 ring-amber-500/40 active:scale-[0.98]">
+                        📷 Repetir la foto
+                      </button>
+                    )}
 
                     {/* A mano SOLO cuando la foto no ha servido, y con tope. */}
                     {odoBloqueado && odoLimites && (
