@@ -18602,6 +18602,7 @@ async def parking_layout_save(body: dict = Body(...), _=Depends(require_admin)):
 async def parking_zone_image(
     center: str = Form(...),
     zone_id: str = Form(...),
+    ratio: str = Form(""),
     file: UploadFile = File(...),
     _=Depends(require_admin),
 ):
@@ -18643,11 +18644,23 @@ async def parking_zone_image(
     r2_public = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
     url = (r2_public + "/" + key) if r2_public else key
 
+    # La FOTO manda sobre la forma de la zona: guardamos su proporcion real
+    # (ancho/alto) para que el lienzo la muestre entera, sin recortes ni
+    # deformacion. Si no, las plazas caen donde no toca sobre el terreno.
+    try:
+        r = float(ratio)
+        if not (0.15 <= r <= 8):
+            r = None
+    except (TypeError, ValueError):
+        r = None
+
     layout = await _pk_get_layout(c)
     found = False
     for z in layout.get("zones", []):
         if z.get("id") == zid:
             z["bg"] = url
+            if r:
+                z["ratio"] = round(r, 3)
             found = True
     if not found:
         raise HTTPException(404, "Zona " + zid + " no existe en el plano de " + c)

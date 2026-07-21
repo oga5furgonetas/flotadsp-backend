@@ -226,10 +226,20 @@ export default function Aparcamiento() {
   async function uploadBg(zoneId, file) {
     setBusy(true)
     try {
+      // Medimos la foto ANTES de subirla: su proporción pasa a ser la de la
+      // zona, así se ve entera (sin recortes ni estirones) y las plazas caen
+      // exactamente donde las arrastres sobre el terreno real.
+      const ratio = await new Promise((res) => {
+        const img = new Image()
+        img.onload = () => res(img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : null)
+        img.onerror = () => res(null)
+        img.src = URL.createObjectURL(file)
+      })
       const fd = new FormData()
       fd.append('center', center); fd.append('zone_id', zoneId); fd.append('file', file)
+      if (ratio) fd.append('ratio', String(ratio))
       await parkingZoneImage(fd)
-      flash(true, 'Foto aérea guardada'); await load()
+      flash(true, 'Foto colocada — el plano se ha ajustado a ella'); await load()
     } catch (e) { flash(false, e?.response?.data?.detail || 'No se pudo subir la imagen') }
     setBusy(false)
   }
@@ -367,12 +377,17 @@ export default function Aparcamiento() {
                     </div>
                     <div className={`relative min-h-0 w-full flex-1 overflow-hidden rounded-xl border-2 shadow-[inset_0_0_40px_rgba(0,0,0,.5)] ${ZONE_TINT[z.color] || 'border-white/[0.1]'}`}
                       style={z.bg
-                        ? { backgroundImage: `url(${z.bg})`, backgroundSize: 'cover', backgroundPosition: 'center' }
+                        /* contain, no cover: la foto se ve ENTERA. El lienzo ya
+                           tiene su misma proporción, así que llena el marco sin
+                           recortar nada y las plazas caen sobre el sitio real. */
+                        ? { backgroundImage: `url(${z.bg})`, backgroundSize: 'contain',
+                            backgroundPosition: 'center', backgroundRepeat: 'no-repeat', backgroundColor: '#0d0d0f' }
                         : { background: ZONE_GROUND[z.id] || ZONE_GROUND.general }}>
-                      {/* Velo sobre la foto aérea: las plazas siempre legibles */}
-                      {z.bg && <div className="pointer-events-none absolute inset-0 bg-black/45" />}
-                      {/* Carril de circulación con sus flechas de sentido */}
-                      {z.aisle === 'vertical' ? (
+                      {/* Velo suave: en modo edición casi desaparece para poder
+                          ver bien el asfalto mientras se colocan las plazas */}
+                      {z.bg && <div className={`pointer-events-none absolute inset-0 ${edit ? 'bg-black/10' : 'bg-black/30'}`} />}
+                      {/* Carril dibujado SOLO sin foto: sobre la real sobra */}
+                      {!z.bg && (z.aisle === 'vertical' ? (
                         <div className="pointer-events-none absolute inset-y-3 left-1/2 flex w-[9%] -translate-x-1/2 flex-col items-center justify-around rounded-sm bg-white/[0.045]">
                           {[0, 1, 2].map((i) => <span key={i} className="text-[9px] leading-none text-white/25">▲</span>)}
                         </div>
@@ -380,7 +395,7 @@ export default function Aparcamiento() {
                         <div className="pointer-events-none absolute inset-x-3 top-1/2 flex h-[7%] -translate-y-1/2 items-center justify-around rounded-sm bg-white/[0.045]">
                           {[0, 1, 2].map((i) => <span key={i} className="text-[9px] leading-none text-white/25">▶</span>)}
                         </div>
-                      )}
+                      ))}
                       {(z.spots || []).map((sp, si) => {
                         const { status, row } = spotState(sp.code)
                         const ui = SPOT_UI[status]
