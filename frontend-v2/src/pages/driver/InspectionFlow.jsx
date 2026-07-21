@@ -4,7 +4,7 @@ import {
   Gauge, Loader2, LogOut, Send, Truck, ArrowRight, Shield, Bell,
 } from 'lucide-react'
 import {
-  getAssignedVehicle, readOdometer, updateMileage, uploadInspection, validatePhoto,
+  getAssignedVehicle, readOdometer, uploadInspection, validatePhoto,
 } from '../../services/api'
 import { compressImage } from '../../lib/compressImage'
 import { useToast } from '../../lib/toast'
@@ -77,6 +77,10 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
   const [odoKm, setOdoKm] = useState(null)
   const [odoError, setOdoError] = useState('')
   const [odoBusy, setOdoBusy] = useState(false)
+  // Solo se abre el tecleo a mano cuando la foto NO sirve, y con tope.
+  const [odoBloqueado, setOdoBloqueado] = useState(false)
+  const [odoLimites, setOdoLimites] = useState(null)   // { min, max, dias, actual }
+  const [odoManual, setOdoManual] = useState('')
   const [checklist, setChecklist] = useState({})
   const [checklistPhotos, setChecklistPhotos] = useState({})
   const [notes, setNotes] = useState('')
@@ -153,23 +157,39 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
     e.target.value = ''
     if (!file) return
     const blob = await compressImage(file, 1280, 0.8)
-    setOdoBusy(true); setOdoError('')
+    setOdoBusy(true); setOdoError(''); setOdoKm(null); setOdoManual('')
     try {
       const r = await readOdometer(vehicleId, blob)
-      if (r.data?.success && r.data.km) {
-        setOdoPhoto(blob); setOdoKm(r.data.km)
-        if (r.data.warning) setOdoError(`⚠️ ${r.data.warning}`)
-        toast.success(`✅ ${r.data.km.toLocaleString()} km detectados`)
+      const d = r.data || {}
+      setOdoLimites({ min: d.manual_min ?? 0, max: d.manual_max ?? 0, dias: d.dias ?? 1, actual: d.current_mileage ?? 0 })
+      if (d.aceptada && d.km > 0) {
+        // Lectura fiable: se guarda y NO se puede tocar a mano.
+        setOdoPhoto(blob); setOdoKm(d.km); setOdoBloqueado(false)
+        toast.success(`✅ ${d.km.toLocaleString()} km leídos`)
       } else {
-        setOdoError('No se pudo leer el cuentakilómetros. Acércate más, enfoca bien y vuelve a intentar.')
-        toast.error('❌ Cuentakilómetros no legible')
+        // La foto no vale. Se guarda como prueba, pero sin km: hasta que no
+        // haya un número válido no se puede enviar la auditoría.
+        setOdoPhoto(blob); setOdoBloqueado(true)
+        setOdoError(d.motivo || 'No se pudo leer el cuentakilómetros.')
+        toast.error('❌ Los km no se han podido leer')
       }
-    } catch {
-      setOdoPhoto(blob); setOdoKm(null)
-      setOdoError('Foto guardada — lectura automática no disponible ahora mismo.')
+    } catch (err) {
+      // Un fallo de red NO puede colar una auditoría sin km.
+      setOdoPhoto(blob); setOdoBloqueado(true)
+      const d = err?.response?.data
+      setOdoError(typeof d?.detail === 'string' ? d.detail
+        : 'No se ha podido leer la foto ahora mismo. Repítela o pon los km a mano.')
+      toast.error('❌ Los km no se han podido leer')
     }
     setOdoBusy(false)
   }
+
+  // Km definitivos: los de la foto, o los tecleados a mano si la foto no valió.
+  const odoManualNum = parseInt(String(odoManual).replace(/\D/g, ''), 10)
+  const odoManualValido = odoBloqueado && odoLimites
+    && Number.isFinite(odoManualNum)
+    && odoManualNum >= odoLimites.min && odoManualNum <= odoLimites.max
+  const odoKmFinal = odoKm > 0 ? odoKm : (odoManualValido ? odoManualNum : null)
 
   const handleChecklistPhoto = async (itemId, e) => {
     const file = e.target.files?.[0]
@@ -179,13 +199,17 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
     setChecklistPhotos((p) => ({ ...p, [itemId]: blob }))
   }
 
-  const allRequiredPhotos = PHOTO_SLOTS.filter((s) => s.required).every((s) => photos[s.id]) && !!odoPhoto
+  // Sin km validos NO se envia auditoria. Es el requisito de flota.
+  const allRequiredPhotos = PHOTO_SLOTS.filter((s) => s.required).every((s) => photos[s.id])
+    && !!odoPhoto && odoKmFinal > 0
   const missingDamagePhotos = Object.entries(checklist).filter(
     ([id, st]) => (st === 'malo' || st === 'danado') && !checklistPhotos[id],
   )
 
   const submit = async () => {
     if (!vehicleId) return toast.error('Selecciona un vehículo')
+    if (!odoPhoto) return toast.error('Falta la foto del cuentakilómetros')
+    if (!(odoKmFinal > 0)) return toast.error('Sin los km no se puede enviar la auditoría')
     if (!allRequiredPhotos) return toast.error('Faltan fotos obligatorias')
     if (missingDamagePhotos.length > 0) return toast.error('Faltan fotos de los daños marcados')
     setSending(true)
@@ -198,7 +222,8 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
       fd.append('driver_id', driver.id)
       fd.append('notes', JSON.stringify({
         checklist, notes, driver_name: driver.name, center: driver.center,
-        odometer_km: odoKm,
+        odometer_km: odoKmFinal,
+        odometer_manual: !odoKm && odoManualValido,
         checklist_photo_items: Object.keys(checklistPhotos).map((id) => CHECKLIST.find((c) => c.id === id)?.label || id),
       }))
       PHOTO_SLOTS.forEach((slot, i) => {
@@ -230,7 +255,8 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
           await new Promise((resolve) => setTimeout(resolve, attempt * 3000))
         }
       }
-      if (odoKm > 0) updateMileage(vehicleId, odoKm).catch(() => {})
+      // Los km los graba el propio endpoint de inspección (un solo escritor,
+      // con sus reglas). Llamar aquí otra vez duplicaba el histórico.
       onComplete(r.data)
     } catch (err) {
       const detail = err?.response?.data?.detail
@@ -436,9 +462,9 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                   onClick={() => odoRef.current?.click()}
                   disabled={odoBusy}
                   className={`relative flex h-28 w-full flex-col items-center justify-center gap-1.5 overflow-hidden rounded-2xl border-2 border-dashed transition-all ${
-                    odoPhoto   ? 'border-emerald-500/50 bg-emerald-500/5' :
-                    odoError   ? 'border-amber-500/50 bg-amber-500/5' :
-                                 'border-brand-500/30 bg-brand-500/5 hover:border-brand-500/60'
+                    odoKmFinal > 0 ? 'border-emerald-500/50 bg-emerald-500/5' :
+                    odoError      ? 'border-amber-500/50 bg-amber-500/5' :
+                                    'border-brand-500/30 bg-brand-500/5 hover:border-brand-500/60'
                   }`}
                 >
                   {odoBusy ? (
@@ -450,14 +476,14 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                     <>
                       <img src={getBlobUrl(odoPhoto)} className="absolute inset-0 h-full w-full object-cover" alt="Cuentakilómetros" />
                       <div className="absolute inset-0 bg-black/40" />
-                      <div className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500">
-                        <Check size={13} className="text-white" />
+                      <div className={`absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full ${odoKmFinal > 0 ? 'bg-emerald-500' : 'bg-amber-500'}`}>
+                        {odoKmFinal > 0 ? <Check size={13} className="text-white" />
+                                        : <span className="text-[13px] font-black text-white">!</span>}
                       </div>
-                      {odoKm && (
-                        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-dark-900/90 px-4 py-1 text-xs font-black text-emerald-300 ring-1 ring-emerald-500/30">
-                          {odoKm.toLocaleString()} km
-                        </div>
-                      )}
+                      <div className={`absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-dark-900/90 px-4 py-1 text-xs font-black ring-1 ${
+                        odoKmFinal > 0 ? 'text-emerald-300 ring-emerald-500/30' : 'text-amber-300 ring-amber-500/30'}`}>
+                        {odoKmFinal > 0 ? `${odoKmFinal.toLocaleString()} km` : 'km sin leer'}
+                      </div>
                     </>
                   ) : (
                     <>
@@ -468,9 +494,50 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                   )}
                 </button>
                 {odoError && (
-                  <p className="mt-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[10px] leading-snug text-amber-300">
-                    {odoError}
-                  </p>
+                  <div className="mt-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                    <p className="text-[11px] font-semibold leading-snug text-amber-200">{odoError}</p>
+                    <button onClick={() => odoRef.current?.click()}
+                      className="mt-2 w-full rounded-lg bg-amber-500/20 py-2 text-[11px] font-bold text-amber-200 ring-1 ring-amber-500/40 active:scale-[0.98]">
+                      📷 Repetir la foto
+                    </button>
+
+                    {/* A mano SOLO cuando la foto no ha servido, y con tope. */}
+                    {odoBloqueado && odoLimites && (
+                      <div className="mt-3 border-t border-amber-500/20 pt-2.5">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-amber-400/80">
+                          O escribe los km a mano
+                        </p>
+                        <p className="mt-0.5 text-[10px] leading-snug text-amber-300/70">
+                          Esta furgoneta tenía <b>{odoLimites.actual.toLocaleString()} km</b>.
+                          {' '}Solo se admite entre {odoLimites.min.toLocaleString()} y{' '}
+                          {odoLimites.max.toLocaleString()} km
+                          {odoLimites.dias > 1 ? ` (${odoLimites.dias} días sin registrar)` : ''}.
+                        </p>
+                        <input
+                          type="tel" inputMode="numeric" value={odoManual}
+                          onChange={(e) => setOdoManual(e.target.value.replace(/\D/g, '').slice(0, 7))}
+                          placeholder={`${odoLimites.actual.toLocaleString()}`}
+                          className={`mt-2 w-full rounded-lg border-2 bg-dark-900/60 px-3 py-2.5 text-center text-lg font-black tabular-nums text-dark-50 outline-none ${
+                            odoManual === '' ? 'border-amber-500/30'
+                              : odoManualValido ? 'border-emerald-500/60' : 'border-red-500/60'
+                          }`}
+                        />
+                        {odoManual !== '' && !odoManualValido && (
+                          <p className="mt-1.5 text-[10px] font-semibold leading-snug text-red-300">
+                            {odoManualNum < odoLimites.min
+                              ? `No puede ser menor que los ${odoLimites.min.toLocaleString()} km que ya tiene registrados.`
+                              : `Son demasiados km de golpe. El máximo es ${odoLimites.max.toLocaleString()}.`}
+                            {' '}Si de verdad marca eso, avisa a tu responsable.
+                          </p>
+                        )}
+                        {odoManualValido && (
+                          <p className="mt-1.5 text-[10px] font-semibold text-emerald-300">
+                            ✓ {odoManualNum.toLocaleString()} km — listo para enviar
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -605,8 +672,10 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                 </div>
                 <div className="flex justify-between py-2.5 text-sm">
                   <span className="text-dark-400">Kilómetros</span>
-                  <span className={`font-bold ${odoKm ? 'text-emerald-400' : 'text-dark-500'}`}>
-                    {odoKm ? `${odoKm.toLocaleString()} km ✓` : '— no detectados'}
+                  <span className={`font-bold ${odoKmFinal > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {odoKmFinal > 0
+                      ? `${odoKmFinal.toLocaleString()} km ✓${!odoKm ? ' (a mano)' : ''}`
+                      : '— faltan los km'}
                   </span>
                 </div>
                 <div className="flex justify-between py-2.5 text-sm">

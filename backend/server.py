@@ -5884,19 +5884,17 @@ async def upload_inspection_photos(
             if isinstance(odo_km, str) and odo_km.strip().isdigit():
                 odo_km = int(odo_km.strip())
             if isinstance(odo_km, (int, float)) and odo_km > 0:
-                odo_km = int(odo_km)
-                veh = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "mileage": 1})
-                current = (veh or {}).get("mileage") or 0
-                # Solo si sube: evita retrocesos por lecturas OCR erróneas.
-                if odo_km >= current:
-                    await db.vehicles.update_one(
-                        {"id": vehicle_id},
-                        {"$set": {"mileage": odo_km, "updated_at": datetime.now(timezone.utc)},
-                         "$push": {"mileage_history": {
-                             "date": datetime.now(timezone.utc).isoformat(),
-                             "km": odo_km, "source": "inspection"}}}
-                    )
-                    logger.info(f"Km auto-actualizados por inspección: {vehicle_id} → {odo_km}")
+                _origen = "inspeccion_manual" if (isinstance(_n, dict) and _n.get("odometer_manual")) else "inspeccion_foto"
+                _aplicado, _motivo, _inf = await _odo_registrar(
+                    vehicle_id, int(odo_km), _origen,
+                    {"inspection_id": doc.get("id"), "driver_id": driver_id})
+                if not _aplicado:
+                    # No se escribe, pero queda constancia en la inspeccion para
+                    # que el jefe de flota lo vea y lo corrija a mano.
+                    await db.inspections.update_one(
+                        {"id": doc.get("id")},
+                        {"$set": {"odometer_rejected": {"km": int(odo_km),
+                                                        "reason": _motivo}}})
         except Exception as _km_e:
             logger.warning(f"Auto-km inspección: {_km_e}")
 
@@ -11850,88 +11848,268 @@ async def validate_inspection_photo(
         return {"valid": True, "checked": False, "reason": "validación no disponible — foto aceptada"}
 
 
-@api_router.post("/vehicles/{vehicle_id}/odometer-photo")
-async def read_odometer_photo(vehicle_id: str, file: UploadFile = File(...), user: dict = Depends(require_any_auth)):
-    """Lee los km del cuentakilómetros con Gemini a partir de una foto del salpicadero.
-    Devuelve el número leído. NO actualiza el kilometraje — el cliente confirma después."""
-    v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "license_plate": 1, "mileage": 1})
+# ══════════════════════════════════════════════════════════════════════════
+# ODOMETRO — reglas unicas. Todo km que entra al sistema pasa por aqui.
+# Regla de oro: ante la duda NO se escribe. Un km inventado corrompe el
+# historico para siempre (solo aceptamos subidas, asi que un valor alto
+# erroneo bloquea todas las lecturas buenas posteriores).
+# ══════════════════════════════════════════════════════════════════════════
+
+ODO_MAX_KM_DIA = 500          # tope diario que pidio flota (furgo DSP real: 150-250)
+ODO_MIN_CONFIANZA = 0.80      # por debajo, la lectura no vale
+ODO_MAX_ABSOLUTO = 2_000_000  # ningun odometro real pasa de aqui
+
+
+def _odo_ultima_fecha(v: dict):
+    """Fecha de la ultima lectura registrada del vehiculo."""
+    hist = v.get("mileage_history") or []
+    for e in reversed(hist):
+        d = e.get("date")
+        if not d:
+            continue
+        try:
+            return datetime.fromisoformat(str(d).replace("Z", "+00:00"))
+        except Exception:
+            continue
+    upd = v.get("updated_at")
+    if isinstance(upd, datetime):
+        return upd if upd.tzinfo else upd.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _odo_margen(v: dict):
+    """Cuanto puede subir como maximo el km desde el ultimo registrado.
+
+    Es 500 por dia transcurrido (minimo 1 dia). Asi el tope es el que pidio
+    flota en el caso normal, pero una furgoneta parada un fin de semana o de
+    vacaciones no se queda bloqueada al volver.
+    """
+    actual = int(v.get("mileage") or 0)
+    ultima = _odo_ultima_fecha(v)
+    dias = 1
+    if ultima:
+        dias = max(1, min(60, (datetime.now(timezone.utc) - ultima).days or 1))
+    return actual, dias, actual + ODO_MAX_KM_DIA * dias
+
+
+def _odo_validar(v: dict, km):
+    """¿Es creible este kilometraje para este vehiculo?
+
+    Devuelve (ok, motivo, info). Nunca lanza: es un juicio, no un error.
+    """
+    actual, dias, tope = _odo_margen(v)
+    info = {"actual": actual, "dias": dias, "maximo": tope, "minimo": actual}
+    if not isinstance(km, (int, float)) or isinstance(km, bool):
+        return False, "No se ha leido ningun numero.", info
+    km = int(km)
+    if km <= 0 or km > ODO_MAX_ABSOLUTO:
+        return False, "El numero leido no es un kilometraje valido.", info
+    if actual and km < actual:
+        return False, (
+            f"Marca {km:,} km, menos que los {actual:,} ya registrados. "
+            "Un cuentakilometros no baja: seguramente sea el parcial (trip) "
+            "o una lectura mal hecha."
+        ).replace(",", "."), info
+    if actual and km > tope:
+        margen = ODO_MAX_KM_DIA * dias
+        return False, (
+            f"Marca {km:,} km: son {km - actual:,} mas que los {actual:,} "
+            f"registrados, y el maximo creible es {margen:,} km "
+            f"({ODO_MAX_KM_DIA}/dia x {dias}). Lectura descartada."
+        ).replace(",", "."), info
+    return True, None, info
+
+
+async def _odo_registrar(vehicle_id: str, km: int, source: str, extra: dict = None):
+    """UNICO sitio que escribe el kilometraje. Valida siempre antes de tocar nada.
+
+    Devuelve (aplicado: bool, motivo: str|None, info: dict).
+    """
+    v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "mileage": 1,
+                                                       "mileage_history": 1,
+                                                       "updated_at": 1,
+                                                       "license_plate": 1})
     if not v:
-        raise HTTPException(status_code=404, detail="Furgoneta no encontrada")
-    content = await file.read()
-    if not content or len(content) > 15 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Imagen inválida o demasiado grande")
-    try:
-        # Comprimir para acelerar
-        img = Image.open(io.BytesIO(content)).convert("RGB")
-        img.thumbnail((1280, 1280))
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=80)
-        img_bytes = buf.getvalue()
+        return False, "Furgoneta no encontrada.", {}
+    ok, motivo, info = _odo_validar(v, km)
+    if not ok:
+        logger.warning(f"Odometro RECHAZADO {v.get('license_plate','')} ({source}): "
+                       f"{km} — {motivo}")
+        return False, motivo, info
+    km = int(km)
+    entrada = {"date": datetime.now(timezone.utc).isoformat(), "km": km, "source": source}
+    if extra:
+        entrada.update(extra)
+    await db.vehicles.update_one(
+        {"id": vehicle_id},
+        {"$set": {"mileage": km, "updated_at": datetime.now(timezone.utc)},
+         "$push": {"mileage_history": entrada}},
+    )
+    logger.info(f"Odometro OK {v.get('license_plate','')} ({source}): "
+                f"{info['actual']} -> {km}")
+    return True, None, info
 
-        from google import genai as genai_sdk
-        from google.genai import types as genai_types
 
-        use_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
-        if use_vertex:
-            from google.oauth2 import service_account
-            import json as _json
-            import base64 as _b64
-            sa_clean = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
-            if sa_clean and not sa_clean.startswith("{"):
-                sa_clean = _b64.b64decode(sa_clean).decode("utf-8")
-            credentials = service_account.Credentials.from_service_account_info(
-                _json.loads(sa_clean), scopes=["https://www.googleapis.com/auth/cloud-platform"]
-            ) if sa_clean else None
-            client = genai_sdk.Client(
-                vertexai=True, project=os.environ.get("GCP_PROJECT", ""),
-                location=os.environ.get("GCP_LOCATION", "us-central1"), credentials=credentials
-            )
-        else:
-            client = genai_sdk.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+async def _odo_leer_foto(img_bytes: bytes, intentos: int = 2):
+    """Lee el cuentakilometros de una foto. DOS lecturas independientes.
 
-        prompt = (
-            "Esta es una foto del salpicadero/cuadro de instrumentos de una furgoneta. "
-            "Lee el ODÓMETRO (kilometraje total acumulado, normalmente 5-6 dígitos, NO el parcial 'trip'). "
-            "Responde SOLO este JSON sin markdown: "
-            '{"km": <número entero o null si no es legible>, "confidence": <0.0-1.0>, "legible": <true|false>}'
+    Anti-falso-positivo principal: se pregunta dos veces con temperatura alta
+    y solo se acepta si las dos lecturas dan EXACTAMENTE el mismo numero. Si
+    la IA se inventa un digito, casi nunca se inventa el mismo dos veces.
+    """
+    from google import genai as genai_sdk
+    from google.genai import types as genai_types
+
+    use_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
+    if use_vertex:
+        from google.oauth2 import service_account
+        import json as _json
+        import base64 as _b64
+        sa_clean = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+        if sa_clean and not sa_clean.startswith("{"):
+            sa_clean = _b64.b64decode(sa_clean).decode("utf-8")
+        credentials = service_account.Credentials.from_service_account_info(
+            _json.loads(sa_clean), scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        ) if sa_clean else None
+        client = genai_sdk.Client(
+            vertexai=True, project=os.environ.get("GCP_PROJECT", ""),
+            location=os.environ.get("GCP_LOCATION", "us-central1"), credentials=credentials
         )
-        contents = [prompt, genai_types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")]
-        gen_config = genai_types.GenerateContentConfig(temperature=0.0, response_mime_type="application/json")
-        loop = asyncio.get_running_loop()
+    else:
+        client = genai_sdk.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
+
+    prompt = (
+        "Foto del cuadro de instrumentos de una furgoneta. Tu unica tarea es leer "
+        "el ODOMETRO TOTAL (kilometraje acumulado del vehiculo).\n"
+        "REGLAS ESTRICTAS:\n"
+        "1. Si el cuadro esta APAGADO (pantalla negra, sin luces, sin digitos), "
+        "cuadro_encendido=false y km=null. NO adivines.\n"
+        "2. El odometro TOTAL suele tener 5-6 digitos. El PARCIAL (trip/A/B) suele "
+        "tener 3-4 digitos y un punto decimal. Si solo ves el parcial, es_parcial=true "
+        "y km=null.\n"
+        "3. Si esta borroso, reflejado, cortado o no distingues TODOS los digitos con "
+        "total seguridad, legible=false y km=null. Es mejor no leer que equivocarse.\n"
+        "4. NO incluyas decimales ni separadores. Solo el entero.\n"
+        "5. confianza refleja lo seguro que estas de CADA digito.\n"
+        'Responde SOLO este JSON: {"km": <entero o null>, "confianza": <0.0-1.0>, '
+        '"legible": <true|false>, "cuadro_encendido": <true|false>, '
+        '"es_parcial": <true|false>, "digitos": <numero de digitos que ves o null>}'
+    )
+    gen_config = genai_types.GenerateContentConfig(
+        temperature=0.4, response_mime_type="application/json")
+    contents = [prompt, genai_types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg")]
+
+    loop = asyncio.get_running_loop()
+
+    async def _una():
         async with _gemini_sem:
-            response = await asyncio.wait_for(
+            resp = await asyncio.wait_for(
                 loop.run_in_executor(
                     _executor,
                     lambda: client.models.generate_content(
                         model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
-                        contents=contents, config=gen_config
-                    )
-                ),
-                timeout=45.0
-            )
-        raw = _strip_markdown_json(response.text or "")
-        data = json.loads(raw)
-        km_read = data.get("km")
-        legible = bool(data.get("legible", False)) and km_read is not None
-        current = v.get("mileage") or 0
-        warning = None
-        if legible and km_read is not None and current and km_read < current:
-            warning = f"El km leído ({km_read:,}) es MENOR que el registrado ({current:,}). Revisa la foto."
-        logger.info(f"Odómetro {v.get('license_plate','')}: leído={km_read} legible={legible}")
-        return {
-            "success": legible,
-            "km": km_read,
-            "confidence": float(data.get("confidence", 0)),
-            "current_mileage": current,
-            "warning": warning,
-        }
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="La lectura tardó demasiado. Inténtalo de nuevo.")
-    except HTTPException:
-        raise
+                        contents=contents, config=gen_config)),
+                timeout=45.0)
+        return json.loads(_strip_markdown_json(resp.text or ""))
+
+    lecturas = []
+    for _ in range(max(1, intentos)):
+        try:
+            lecturas.append(await _una())
+        except Exception as e:
+            logger.warning(f"Odometro: fallo una lectura — {e}")
+    return lecturas
+
+
+def _odo_consenso(lecturas):
+    """Une las lecturas. Solo hay numero si TODAS coinciden exactamente."""
+    if not lecturas:
+        return {"km": None, "confianza": 0.0, "legible": False, "cuadro_encendido": True,
+                "es_parcial": False, "motivo": "No se pudo analizar la foto."}
+    apagado = any(r.get("cuadro_encendido") is False for r in lecturas)
+    parcial = any(r.get("es_parcial") is True for r in lecturas)
+    ilegible = any(not r.get("legible") for r in lecturas)
+    kms = [r.get("km") for r in lecturas]
+    conf = min([float(r.get("confianza") or 0) for r in lecturas] or [0.0])
+    validos = [k for k in kms if isinstance(k, (int, float)) and not isinstance(k, bool)]
+
+    motivo = None
+    if apagado:
+        motivo = ("El cuadro esta apagado. Da el contacto para que se enciendan los "
+                  "km y repite la foto.")
+    elif parcial:
+        motivo = ("Eso es el cuentakilometros PARCIAL (trip). Necesito el total del "
+                  "vehiculo, el de 5-6 digitos.")
+    elif ilegible or not validos:
+        motivo = ("No se leen los km con claridad. Acercate mas, enfoca el cuadro y "
+                  "evita reflejos.")
+    elif len(validos) != len(lecturas) or len(set(int(k) for k in validos)) != 1:
+        motivo = ("La lectura no es fiable: al revisar la foto dos veces salen numeros "
+                  "distintos. Repitela mas cerca y enfocada.")
+    elif conf < ODO_MIN_CONFIANZA:
+        motivo = ("La foto no da seguridad suficiente para dar los km por buenos. "
+                  "Acercate y enfoca el cuadro.")
+    return {
+        "km": int(validos[0]) if validos and not motivo else None,
+        "confianza": round(conf, 2),
+        "legible": motivo is None,
+        "cuadro_encendido": not apagado,
+        "es_parcial": parcial,
+        "motivo": motivo,
+    }
+
+
+@api_router.post("/vehicles/{vehicle_id}/odometer-photo")
+async def read_odometer_photo(vehicle_id: str, file: UploadFile = File(...), user: dict = Depends(require_any_auth)):
+    """Lee los km del cuadro. NO escribe nada: solo dictamina si la foto vale.
+
+    Devuelve siempre la misma forma, tambien cuando falla:
+      aceptada       -> la lectura es fiable y plausible, se puede usar
+      motivo         -> por que se rechaza (texto para el conductor)
+      manual_permitido -> si el conductor puede teclear los km a mano
+      manual_min/max -> rango exacto permitido a mano
+    """
+    v = await db.vehicles.find_one({"id": vehicle_id},
+                                   {"_id": 0, "license_plate": 1, "mileage": 1,
+                                    "mileage_history": 1, "updated_at": 1})
+    if not v:
+        raise HTTPException(status_code=404, detail="Furgoneta no encontrada")
+    content = await file.read()
+    if not content or len(content) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Imagen invalida o demasiado grande")
+
+    actual, dias, tope = _odo_margen(v)
+    base = {
+        "aceptada": False, "km": None, "confianza": 0.0,
+        "current_mileage": actual, "manual_permitido": True,
+        "manual_min": actual, "manual_max": tope, "dias": dias,
+    }
+
+    try:
+        img = Image.open(io.BytesIO(content)).convert("RGB")
+        img.thumbnail((1280, 1280))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        lecturas = await _odo_leer_foto(buf.getvalue())
     except Exception as e:
-        logger.error(f"Error leyendo odómetro: {e}")
-        raise HTTPException(status_code=502, detail="No se pudo leer el cuentakilómetros. Introduce el km a mano.")
+        logger.error(f"Odometro: no se pudo procesar la foto — {e}")
+        return {**base, "motivo": "No se ha podido analizar la foto ahora mismo."}
+
+    r = _odo_consenso(lecturas)
+    if r["motivo"]:
+        logger.info(f"Odometro {v.get('license_plate','')}: RECHAZADA — {r['motivo']}")
+        return {**base, "confianza": r["confianza"], "motivo": r["motivo"]}
+
+    # La lectura es limpia. ¿Es creible para ESTE vehiculo?
+    ok, motivo, _info = _odo_validar(v, r["km"])
+    if not ok:
+        logger.info(f"Odometro {v.get('license_plate','')}: implausible — {motivo}")
+        return {**base, "km": r["km"], "confianza": r["confianza"], "motivo": motivo}
+
+    logger.info(f"Odometro {v.get('license_plate','')}: ACEPTADA {r['km']} "
+                f"(confianza {r['confianza']})")
+    return {**base, "aceptada": True, "km": r["km"], "confianza": r["confianza"],
+            "manual_permitido": False, "motivo": None}
 
 
 @api_router.post("/vehicles/{vehicle_id}/mileage")
@@ -11957,15 +12135,22 @@ async def update_mileage(vehicle_id: str, data: dict, user: dict = Depends(requi
             }, {"_id": 0, "id": 1})
         if not assigned_today and not inspected_today:
             raise HTTPException(status_code=403, detail="Solo tu vehículo asignado")
-    # No permitir km menores que los actuales (salvo admin)
-    if user["role"] != "admin" and km < (v.get("mileage") or 0):
-        raise HTTPException(status_code=400, detail="Los km no pueden ser menores que los actuales")
-
-    km_entry = {"date": datetime.now(timezone.utc).isoformat(), "km": km,
-                "source": user.get("role", "?")}
-    await db.vehicles.update_one({"id": vehicle_id},
-        {"$set": {"mileage": km, "updated_at": datetime.now(timezone.utc)},
-         "$push": {"mileage_history": km_entry}})
+    # Los admin mandan: pueden corregir a mano cualquier valor (p.ej. arreglar
+    # un historico corrompido). Conductores pasan por las reglas de plausibilidad.
+    if user.get("role") == "admin":
+        km_entry = {"date": datetime.now(timezone.utc).isoformat(), "km": km,
+                    "source": "admin"}
+        await db.vehicles.update_one({"id": vehicle_id},
+            {"$set": {"mileage": km, "updated_at": datetime.now(timezone.utc)},
+             "$push": {"mileage_history": km_entry}})
+    else:
+        fuente = str(data.get("source") or "manual")[:32]
+        aplicado, motivo, _inf = await _odo_registrar(
+            vehicle_id, km, fuente,
+            {"by": user.get("sub"), "by_role": user.get("role")})
+        if not aplicado:
+            raise HTTPException(status_code=400, detail=motivo or "Kilometraje no valido")
+        km_entry = {"km": km}
 
     # ¿Toca avisar de aceite?
     oil_km = v.get("oil_last_change_km")
