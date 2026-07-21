@@ -7,19 +7,45 @@ import { parkingState, parkingResolve, parkingAssign, getVehicles } from '../api
    gris = libre · ámbar = asignada (mandada) · azul = reportada por el conductor
    verde = confirmada · rojo = denegada o discrepancia asignada/reportada. */
 const SPOT_UI = {
-  libre:      { fill: 'bg-white/[0.04] border-white/[0.09]', text: 'text-dark-500', dot: 'bg-dark-600', label: 'Libre' },
-  asignada:   { fill: 'bg-amber-500/20 border-amber-500/50', text: 'text-amber-200', dot: 'bg-amber-400', label: 'Asignada' },
-  reportada:  { fill: 'bg-sky-500/20 border-sky-500/50',     text: 'text-sky-200',   dot: 'bg-sky-400',   label: 'Reportada' },
-  confirmada: { fill: 'bg-emerald-500/20 border-emerald-500/55', text: 'text-emerald-200', dot: 'bg-emerald-400', label: 'Confirmada' },
-  denegada:   { fill: 'bg-red-500/20 border-red-500/55',     text: 'text-red-200',   dot: 'bg-red-400',   label: 'A revisar' },
+  libre:      { fill: 'bg-white/[0.03] border-white/[0.1] border-dashed', text: 'text-dark-500', dot: 'bg-dark-600', van: '#8f8f98', label: 'Libre' },
+  asignada:   { fill: 'bg-amber-500/[0.07] border-amber-500/45', text: 'text-amber-200', dot: 'bg-amber-400', van: '#f59e0b', label: 'Asignada' },
+  reportada:  { fill: 'bg-sky-500/[0.07] border-sky-500/45',     text: 'text-sky-200',   dot: 'bg-sky-400',   van: '#38bdf8', label: 'Reportada' },
+  confirmada: { fill: 'bg-emerald-500/[0.07] border-emerald-500/50', text: 'text-emerald-200', dot: 'bg-emerald-400', van: '#34d399', label: 'Confirmada' },
+  denegada:   { fill: 'bg-red-500/[0.07] border-red-500/50',     text: 'text-red-200',   dot: 'bg-red-400',   van: '#f87171', label: 'A revisar' },
 }
 const ZONE_TINT = {
-  violet: 'border-violet-400/30 bg-violet-500/[0.04]',
-  sky: 'border-sky-400/30 bg-sky-500/[0.04]',
-  emerald: 'border-emerald-400/30 bg-emerald-500/[0.04]',
-  amber: 'border-amber-400/30 bg-amber-500/[0.04]',
+  violet: 'border-violet-400/45', sky: 'border-sky-400/45',
+  emerald: 'border-emerald-400/45', amber: 'border-amber-400/45',
 }
 const ZONE_LABEL = { violet: 'text-violet-300', sky: 'text-sky-300', emerald: 'text-emerald-300', amber: 'text-amber-300' }
+const ZONE_CHIP = {
+  violet: 'bg-violet-500/20 text-violet-200 ring-violet-400/40',
+  sky: 'bg-sky-500/20 text-sky-200 ring-sky-400/40',
+  emerald: 'bg-emerald-500/20 text-emerald-200 ring-emerald-400/40',
+  amber: 'bg-amber-500/20 text-amber-200 ring-amber-400/40',
+}
+/* Suelo real de cada zona: hormigón dentro de la nave, asfalto fuera y tierra
+   en la parcela. Da lectura de plano de un vistazo, sin necesidad de leer. */
+const ZONE_GROUND = {
+  nave: 'repeating-linear-gradient(90deg,#1b1b20 0 38px,#191a1e 38px 40px), linear-gradient(#1b1b20,#17171b)',
+  exterior: 'repeating-linear-gradient(0deg,#141416 0 26px,#131315 26px 28px), linear-gradient(#151517,#111113)',
+  tierra: 'radial-gradient(circle at 30% 25%,rgba(120,95,60,.16),transparent 55%), radial-gradient(circle at 70% 75%,rgba(120,95,60,.12),transparent 50%), linear-gradient(#1a1611,#15120e)',
+  general: 'linear-gradient(#151517,#111113)',
+}
+
+/* Furgoneta vista desde arriba. Se estira a la plaza y orienta su morro según
+   la forma de la bahía: si es ancha, el coche va en horizontal. */
+function Van({ horiz, tone }) {
+  return (
+    <span className="pointer-events-none absolute inset-[9%] rounded-[3px] shadow-[0_1px_3px_rgba(0,0,0,.6)]"
+      style={{ background: `linear-gradient(${horiz ? '180deg' : '90deg'}, ${tone}f2, ${tone}c8 55%, ${tone}9e)` }}>
+      {/* Parabrisas en el morro */}
+      <span className={`absolute rounded-[1.5px] bg-black/45 ${horiz ? 'inset-y-[20%] right-[7%] w-[20%]' : 'inset-x-[20%] top-[7%] h-[20%]'}`} />
+      {/* Techo */}
+      <span className={`absolute rounded-[1.5px] bg-black/[0.18] ${horiz ? 'inset-y-[16%] left-[12%] w-[52%]' : 'inset-x-[16%] bottom-[12%] h-[52%]'}`} />
+    </span>
+  )
+}
 const todayISO = () => new Date().toISOString().slice(0, 10)
 
 export default function Aparcamiento() {
@@ -185,22 +211,36 @@ export default function Aparcamiento() {
                 </button>
               </div>
 
-              <div className={`flex items-stretch justify-center gap-3 overflow-x-auto ${zoom ? 'h-[640px]' : 'h-[400px]'} transition-[height] duration-300`}>
-                {zones.map((z) => (
-                  <div key={z.id} className="flex h-full shrink-0 flex-col">
-                    <div className="mb-1.5 flex items-baseline justify-between gap-2 px-0.5">
+              {(() => { const H = zoom ? 640 : 400; const canvasH = H - 30; return (
+              <div className="flex items-stretch justify-center gap-3 overflow-x-auto transition-[height] duration-300" style={{ height: H }}>
+                {zones.map((z, zi) => (
+                  <div key={z.id} className="flex h-full shrink-0 flex-col"
+                    style={{ width: Math.round(canvasH * (z.ratio || 1)) }}>
+                    {/* Cabecera de zona tipo chip: se lee de un golpe */}
+                    <div className="mb-2 flex items-center justify-center gap-2">
+                      <span className={`rounded-md px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider ring-1 ${ZONE_CHIP[z.color] || 'bg-white/10 text-dark-300 ring-white/20'}`}>
+                        Zona {zi + 1}
+                      </span>
                       <span className={`truncate text-[11.5px] font-semibold ${ZONE_LABEL[z.color] || 'text-dark-300'}`}>{z.name}</span>
                       <span className="shrink-0 font-mono text-[10px] tabular-nums text-dark-600">{(z.spots || []).length}</span>
                     </div>
-                    <div className={`relative min-h-0 flex-1 overflow-hidden rounded-xl border ${ZONE_TINT[z.color] || 'border-white/[0.07]'}`}
-                      style={{ aspectRatio: String(z.ratio || 1) }}>
-                      {z.aisle === 'vertical'
-                        ? <div className="pointer-events-none absolute inset-y-2 left-1/2 w-[8%] -translate-x-1/2 rounded-full bg-white/[0.04]" />
-                        : <div className="pointer-events-none absolute inset-x-2 top-1/2 h-[6%] -translate-y-1/2 rounded-full bg-white/[0.04]" />}
+                    <div className={`relative min-h-0 w-full flex-1 overflow-hidden rounded-xl border-2 shadow-[inset_0_0_40px_rgba(0,0,0,.5)] ${ZONE_TINT[z.color] || 'border-white/[0.1]'}`}
+                      style={{ background: ZONE_GROUND[z.id] || ZONE_GROUND.general }}>
+                      {/* Carril de circulación con sus flechas de sentido */}
+                      {z.aisle === 'vertical' ? (
+                        <div className="pointer-events-none absolute inset-y-3 left-1/2 flex w-[9%] -translate-x-1/2 flex-col items-center justify-around rounded-sm bg-white/[0.045]">
+                          {[0, 1, 2].map((i) => <span key={i} className="text-[9px] leading-none text-white/25">▲</span>)}
+                        </div>
+                      ) : (
+                        <div className="pointer-events-none absolute inset-x-3 top-1/2 flex h-[7%] -translate-y-1/2 items-center justify-around rounded-sm bg-white/[0.045]">
+                          {[0, 1, 2].map((i) => <span key={i} className="text-[9px] leading-none text-white/25">▶</span>)}
+                        </div>
+                      )}
                       {(z.spots || []).map((sp) => {
                         const { status, row } = spotState(sp.code)
                         const ui = SPOT_UI[status]
                         const active = sel === sp.code
+                        const horiz = (sp.w || 1) >= (sp.h || 1)
                         return (
                           <button key={sp.code} onClick={() => { setSel(active ? null : sp.code); setEditing(false) }}
                             title={row?.vehicle?.license_plate ? `Plaza ${sp.code} · ${row.vehicle.license_plate} · ${ui.label}` : `Plaza ${sp.code} · libre`}
@@ -208,14 +248,11 @@ export default function Aparcamiento() {
                             style={{
                               left: `${sp.x}%`, top: `${sp.y}%`, width: `${sp.w}%`, height: `${sp.h}%`,
                               transform: `rotate(${sp.rot || 0}deg)${active ? ' scale(1.12)' : ''}`,
-                              boxShadow: active ? '0 0 0 2px rgb(251 146 60), 0 0 20px rgba(251,146,60,.5)' : undefined,
+                              boxShadow: active ? '0 0 0 2px rgb(251 146 60), 0 0 22px rgba(251,146,60,.55)' : undefined,
                             }}>
-                            {row && (
-                              <span className="pointer-events-none absolute inset-[14%] rounded-[2px] bg-white/[0.18]">
-                                <span className="absolute inset-x-[15%] top-[10%] h-[26%] rounded-[1px] bg-white/[0.24]" />
-                              </span>
-                            )}
-                            <span className={`pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[8.5px] font-bold leading-none ${ui.text}`}
+                            {row && <Van horiz={horiz} tone={ui.van} />}
+                            {/* El número siempre horizontal, aunque la plaza esté en diagonal */}
+                            <span className={`pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[8.5px] font-bold leading-none ${row ? 'text-white/85 [text-shadow:0_1px_2px_rgba(0,0,0,.9)]' : ui.text}`}
                               style={{ transform: `rotate(${-(sp.rot || 0)}deg)` }}>{sp.code}</span>
                             {row?.mismatch && <span className="pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full bg-red-400 ring-2 ring-dark-950" />}
                           </button>
@@ -228,6 +265,7 @@ export default function Aparcamiento() {
                   </div>
                 ))}
               </div>
+              ) })()}
             </div>
 
             {/* Pendientes de ubicar: el trabajo que queda, siempre a la vista */}
