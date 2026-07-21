@@ -17937,6 +17937,30 @@ def _cortex_evaluate(pkg: dict) -> dict:
             "investigator": investigator}
 
 
+def _cortex_addr_str(v):
+    """Direccion SIEMPRE como texto.
+
+    Cortex la manda de dos formas: texto en route-details, pero un OBJETO en el
+    informe de faltas ({address1, city, geocode, customerName, ...}). Al guardar
+    el objeto tal cual, React reventaba al pintarlo (error #31) y la pantalla de
+    Paquetes se caia al abrir un missing.
+
+    Ademas nos quedamos SOLO con el punto de entrega: customerName y
+    customerPhone son datos personales del cliente final que no necesitamos
+    para investigar un paquete, asi que no entran en nuestra base de datos.
+    """
+    if not v:
+        return None
+    if isinstance(v, str):
+        return v.strip() or None
+    if isinstance(v, dict):
+        cp_city = " ".join(str(x).strip() for x in (v.get("postalCode"), v.get("city")) if x)
+        parts = [v.get("address1"), v.get("address2"), v.get("address3"), cp_city]
+        out = ", ".join(str(x).strip() for x in parts if x and str(x).strip().lower() not in ("", "none"))
+        return out or None
+    return str(v)
+
+
 async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     """Aplica una observación canónica: crea o actualiza el paquete guardando
     solo los cambios de estado en el histórico. Devuelve 'new'|'changed'|'same'."""
@@ -17986,7 +18010,8 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         "route_id": obs.get("route_id"),
         "service_area_id": said, "center": center,
         "driver_name": obs.get("driver_name"), "driver_id": obs.get("driver_id"),
-        "stop_id": obs.get("stop_id"), "stop_address": obs.get("stop_address") or obs.get("address"),
+        "stop_id": obs.get("stop_id"),
+        "stop_address": _cortex_addr_str(obs.get("stop_address") or obs.get("address")),
         "container_id": obs.get("container_id"), "station": obs.get("station"),
         "lat": obs.get("lat"), "lng": obs.get("lng"),
     }
@@ -18312,6 +18337,8 @@ async def cortex_packages(q: str = "", state: str = "", priority: str = "", day:
     if ands:
         query["$and"] = ands
     pkgs = await db.cortex_packages.find(query, {"_id": 0, "timeline": 0}).sort("updated_at", -1).to_list(limit)
+    for _p in pkgs:                      # defensa: nunca devolver un objeto aqui
+        _p["stop_address"] = _cortex_addr_str(_p.get("stop_address"))
     if route:
         # Dentro de una ruta se lee mejor por orden de parada.
         def _stop_key(p):
@@ -18346,6 +18373,11 @@ async def cortex_package_detail(tba: str, _=Depends(require_admin)):
         # Cura permanente del registro (elimina el ruido legacy de una vez)
         await db.cortex_packages.update_one({"tba": pkg["tba"]}, {"$set": {"timeline": clean}})
     pkg["timeline"] = clean
+    # Cura permanente de direcciones guardadas como objeto (bug historico)
+    fixed_addr = _cortex_addr_str(pkg.get("stop_address"))
+    if fixed_addr != pkg.get("stop_address"):
+        pkg["stop_address"] = fixed_addr
+        await db.cortex_packages.update_one({"tba": pkg["tba"]}, {"$set": {"stop_address": fixed_addr}})
     evalr = _cortex_evaluate(pkg)
     # Paquetes del mismo stop (para la pista "otros del stop se entregaron")
     same_stop = []

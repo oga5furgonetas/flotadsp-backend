@@ -49,6 +49,20 @@ const pillCls = (c) => ({
 }[c] || 'bg-zinc-500/15 text-zinc-300 ring-zinc-500/25')
 
 const fmtTime = (iso) => { const d = iso && new Date(iso); return d && !isNaN(d) ? d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '—' }
+
+/* Cinturón de seguridad: Cortex manda la dirección como texto en unos sitios y
+   como OBJETO en otros ({address1, city, geocode…}). Pintar ese objeto tumbaba
+   la pantalla entera (React #31). El backend ya lo normaliza, pero aquí no
+   volvemos a fiarnos: un dato con forma rara nunca debe romper la app. */
+const asText = (v) => {
+  if (v == null) return ''
+  if (typeof v === 'string' || typeof v === 'number') return String(v)
+  if (typeof v === 'object') {
+    const cp = [v.postalCode, v.city].filter(Boolean).join(' ')
+    return [v.address1, v.address2, v.address3, cp].filter((x) => x && String(x).trim()).join(', ')
+  }
+  return String(v)
+}
 const sinceMin = (iso) => { const d = iso && new Date(iso); if (!d || isNaN(d)) return null; return Math.floor((Date.now() - d.getTime()) / 60000) }
 
 function Statecap({ s, sm }) {
@@ -137,7 +151,7 @@ function Investigator({ tba, onClose }) {
           </div>
         ))}
       </div>
-      {p.stop_address && <div className="mt-2 flex items-center gap-1.5 text-[12px] text-dark-400"><MapPin size={12} className="text-dark-500" /> {p.stop_address}</div>}
+      {asText(p.stop_address) && <div className="mt-2 flex items-center gap-1.5 text-[12px] text-dark-400"><MapPin size={12} className="text-dark-500" /> {asText(p.stop_address)}</div>}
 
       {/* Conclusión operativa */}
       {inv && (
@@ -542,7 +556,7 @@ export default function PackageIntel() {
                             {p.tba}
                             {p.priority === 'critical' && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-red-500" />}
                           </div>
-                          <div className="truncate text-[11px] text-dark-500">{searching && p.route_code ? `${p.route_code} · ` : ''}{p.stop_address || p.reference_id}</div>
+                          <div className="truncate text-[11px] text-dark-500">{searching && p.route_code ? `${p.route_code} · ` : ''}{asText(p.stop_address) || asText(p.reference_id)}</div>
                         </div>
                         <div><Statecap s={p.state} sm /></div>
                         <div className="text-right text-[12px] tabular-nums text-dark-400">
