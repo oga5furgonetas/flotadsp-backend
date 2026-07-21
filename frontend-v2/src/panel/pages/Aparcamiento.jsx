@@ -1,34 +1,39 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { Loader2, MapPin, Check, X, Pencil, ShieldAlert, Car, Calendar } from 'lucide-react'
-import { parkingState, parkingResolve, parkingAssign } from '../api'
+import { Loader2, MapPin, Check, X, Pencil, ShieldAlert, Car, Calendar, Search, Maximize2 } from 'lucide-react'
+import { parkingState, parkingResolve, parkingAssign, getVehicles } from '../api'
 
-/* Estados de una plaza. El color comunica, no decora:
-   gris = libre · ámbar = asignada (mandada, sin confirmar) · azul = reportada
-   por el conductor · verde = confirmada por el coordinador · rojo = denegada
-   o discrepancia entre lo asignado y lo reportado. */
+/* El color comunica estado, no decora:
+   gris = libre · ámbar = asignada (mandada) · azul = reportada por el conductor
+   verde = confirmada · rojo = denegada o discrepancia asignada/reportada. */
 const SPOT_UI = {
-  libre:      { fill: 'bg-white/[0.03] border-white/[0.07]', text: 'text-dark-500', label: 'Libre' },
-  asignada:   { fill: 'bg-amber-500/15 border-amber-500/40', text: 'text-amber-300', label: 'Asignada' },
-  reportada:  { fill: 'bg-sky-500/15 border-sky-500/40',     text: 'text-sky-300',   label: 'Reportada' },
-  confirmada: { fill: 'bg-emerald-500/15 border-emerald-500/45', text: 'text-emerald-300', label: 'Confirmada' },
-  denegada:   { fill: 'bg-red-500/15 border-red-500/45',     text: 'text-red-300',   label: 'Denegada' },
+  libre:      { fill: 'bg-white/[0.04] border-white/[0.09]', text: 'text-dark-500', dot: 'bg-dark-600', label: 'Libre' },
+  asignada:   { fill: 'bg-amber-500/20 border-amber-500/50', text: 'text-amber-200', dot: 'bg-amber-400', label: 'Asignada' },
+  reportada:  { fill: 'bg-sky-500/20 border-sky-500/50',     text: 'text-sky-200',   dot: 'bg-sky-400',   label: 'Reportada' },
+  confirmada: { fill: 'bg-emerald-500/20 border-emerald-500/55', text: 'text-emerald-200', dot: 'bg-emerald-400', label: 'Confirmada' },
+  denegada:   { fill: 'bg-red-500/20 border-red-500/55',     text: 'text-red-200',   dot: 'bg-red-400',   label: 'A revisar' },
 }
-const ZONE_RING = {
-  violet: 'border-violet-400/35', sky: 'border-sky-400/35',
-  emerald: 'border-emerald-400/35', amber: 'border-amber-400/35',
+const ZONE_TINT = {
+  violet: 'border-violet-400/30 bg-violet-500/[0.04]',
+  sky: 'border-sky-400/30 bg-sky-500/[0.04]',
+  emerald: 'border-emerald-400/30 bg-emerald-500/[0.04]',
+  amber: 'border-amber-400/30 bg-amber-500/[0.04]',
 }
+const ZONE_LABEL = { violet: 'text-violet-300', sky: 'text-sky-300', emerald: 'text-emerald-300', amber: 'text-amber-300' }
 const todayISO = () => new Date().toISOString().slice(0, 10)
 
 export default function Aparcamiento() {
   const { center } = useOutletContext()
   const [data, setData] = useState(null)
+  const [vehicles, setVehicles] = useState([])
   const [day, setDay] = useState(todayISO())
-  const [sel, setSel] = useState(null)          // código de plaza seleccionada
+  const [sel, setSel] = useState(null)
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const [toast, setToast] = useState(null)
-  const [editing, setEditing] = useState(false)  // corrigiendo plaza
+  const [editing, setEditing] = useState(false)
+  const [q, setQ] = useState('')
+  const [zoom, setZoom] = useState(false)
   const flash = (ok, msg) => { setToast({ ok, msg }); setTimeout(() => setToast(null), 4000) }
 
   const noCenter = !center || center === 'Todos'
@@ -44,10 +49,12 @@ export default function Aparcamiento() {
   }, [center, day, noCenter])
 
   useEffect(() => { load() }, [load])
-  useEffect(() => { setSel(null); setEditing(false) }, [center, day])
+  useEffect(() => {
+    if (noCenter) return
+    getVehicles(center).then((r) => setVehicles(r.data || [])).catch(() => setVehicles([]))
+  }, [center, noCenter])
+  useEffect(() => { setSel(null); setEditing(false); setQ('') }, [center, day])
 
-  // Índice plaza → asignación. Una plaza puede estar asignada a un vehículo y
-  // que OTRO haya reportado estar en ella: ambas cosas se ven.
   const { byAssigned, byReported } = useMemo(() => {
     const a = {}, rp = {}
     for (const x of (data?.assignments || [])) {
@@ -57,31 +64,42 @@ export default function Aparcamiento() {
     return { byAssigned: a, byReported: rp }
   }, [data])
 
-  const spotState = (code) => {
+  const spotState = useCallback((code) => {
     const rep = byReported[code], asg = byAssigned[code]
     const row = rep || asg
     if (!row) return { status: 'libre', row: null }
-    if (row.status === 'denegada') return { status: 'denegada', row }
-    if (row.mismatch) return { status: 'denegada', row }   // discrepancia: nunca la ocultamos
+    if (row.status === 'denegada' || row.mismatch) return { status: 'denegada', row }
     if (row.status === 'confirmada') return { status: 'confirmada', row }
     if (rep) return { status: 'reportada', row }
     return { status: 'asignada', row }
-  }
+  }, [byAssigned, byReported])
 
+  const zones = data?.layout?.zones || []
   const stats = useMemo(() => {
-    const all = (data?.layout?.zones || []).flatMap((z) => z.spots || [])
-    const s = { total: all.length, libre: 0, asignada: 0, reportada: 0, confirmada: 0, problema: 0 }
-    for (const sp of all) {
-      const st = spotState(sp.code).status
-      if (st === 'denegada') s.problema++
-      else s[st] = (s[st] || 0) + 1
-    }
+    const all = zones.flatMap((z) => z.spots || [])
+    const s = { total: all.length, libre: 0, asignada: 0, reportada: 0, confirmada: 0, denegada: 0 }
+    for (const sp of all) s[spotState(sp.code).status]++
     return s
-  }, [data]) // eslint-disable-line
+  }, [zones, spotState])
+
+  // Vehículos del centro que aún no tienen plaza hoy: "quién falta por ubicar"
+  const assignedIds = useMemo(
+    () => new Set((data?.assignments || []).map((a) => a.vehicle_id)), [data])
+  const pending = useMemo(
+    () => vehicles.filter((v) => !assignedIds.has(v.id) && v.status !== 'baja'), [vehicles, assignedIds])
 
   const selRow = sel ? spotState(sel).row : null
   const selStatus = sel ? spotState(sel).status : null
 
+  async function doAssign(vehicleId) {
+    setBusy(true)
+    try {
+      await parkingAssign({ center, day, spot: sel, vehicle_id: vehicleId })
+      flash(true, `Vehículo asignado a la plaza ${sel}`)
+      setQ(''); await load()
+    } catch (e) { flash(false, e?.response?.data?.detail || 'No se pudo asignar') }
+    setBusy(false)
+  }
   async function resolve(action, spot) {
     if (!selRow?.vehicle_id) return
     setBusy(true)
@@ -89,32 +107,26 @@ export default function Aparcamiento() {
       await parkingResolve({ center, day, vehicle_id: selRow.vehicle_id, action, spot })
       flash(true, action === 'deny' ? 'Ubicación denegada' : 'Ubicación confirmada')
       setEditing(false); await load()
-    } catch (e) {
-      flash(false, e?.response?.data?.detail || 'No se pudo guardar')
-    }
+    } catch (e) { flash(false, e?.response?.data?.detail || 'No se pudo guardar') }
     setBusy(false)
   }
-
   async function moveTo(spot) {
     if (!selRow?.vehicle_id) return
     setBusy(true)
     try {
-      await parkingAssign({ center, day, vehicle_id: selRow.vehicle_id, spot, driver_id: selRow.driver_id })
-      flash(true, `Vehículo movido a la plaza ${spot}`)
-      setEditing(false); setSel(spot); await load()
-    } catch (e) {
-      flash(false, e?.response?.data?.detail || 'No se pudo mover')
-    }
+      await parkingAssign({ center, day, vehicle_id: selRow.vehicle_id, spot })
+      flash(true, `Movido a la plaza ${spot}`); setEditing(false); setSel(spot); await load()
+    } catch (e) { flash(false, e?.response?.data?.detail || 'No se pudo mover') }
     setBusy(false)
   }
 
   if (noCenter) {
     return (
       <div className="mx-auto max-w-2xl">
-        <h1 className="rise font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">Aparcamiento</h1>
+        <h1 className="rise font-display text-[clamp(26px,3vw,38px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">Aparcamiento</h1>
         <div className="mt-6 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-10 text-center text-[14px] text-dark-400">
           <MapPin size={26} className="mx-auto mb-3 opacity-30" />
-          Elige un centro arriba para ver su plano de aparcamiento.
+          Elige un centro arriba para ver su plano.
         </div>
       </div>
     )
@@ -122,255 +134,229 @@ export default function Aparcamiento() {
 
   return (
     <div>
-      <header className="rise mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-brand-400/80">{center}</p>
-          <h1 className="mt-2 font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
-            Aparcamiento
-          </h1>
+      {/* Cabecera compacta: título, contadores y fecha en una sola línea */}
+      <header className="rise mb-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <div className="flex items-baseline gap-3">
+          <h1 className="font-display text-[clamp(24px,2.6vw,32px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">Aparcamiento</h1>
+          <span className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-brand-400/80">{center}</span>
         </div>
-        <div className="relative">
-          <Calendar size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />
-          <input
-            type="date" value={day} onChange={(e) => setDay(e.target.value)}
-            className="rounded-xl border border-white/[0.07] bg-white/[0.02] py-2.5 pl-9 pr-3 text-[13.5px] text-dark-50 transition-all hover:border-white/[0.12] focus:border-brand-500/50 focus:outline-none focus:ring-[3px] focus:ring-brand-500/15"
-          />
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          {[
+            { n: stats.libre, l: 'libres', c: 'text-dark-300' },
+            { n: stats.asignada, l: 'asignadas', c: 'text-amber-300' },
+            { n: stats.reportada, l: 'reportadas', c: 'text-sky-300' },
+            { n: stats.confirmada, l: 'confirmadas', c: 'text-emerald-300' },
+            { n: stats.denegada, l: 'a revisar', c: 'text-red-300' },
+          ].map(({ n, l, c }) => (
+            <div key={l} className="flex items-baseline gap-1.5">
+              <span className={`text-[16px] font-semibold tabular-nums ${n > 0 ? c : 'text-dark-600'}`}>{n}</span>
+              <span className="text-[11.5px] text-dark-500">{l}</span>
+            </div>
+          ))}
+          <div className="relative">
+            <Calendar size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dark-500" />
+            <input type="date" value={day} onChange={(e) => setDay(e.target.value)}
+              className="rounded-lg border border-white/[0.07] bg-white/[0.02] py-1.5 pl-8 pr-2 text-[12.5px] text-dark-50 focus:border-brand-500/50 focus:outline-none" />
+          </div>
         </div>
       </header>
 
-      {err && (
-        <div className="mb-4 flex items-center gap-2 rounded-xl border border-red-500/25 bg-red-500/[0.07] px-4 py-2.5 text-[13px] text-red-300">
-          <ShieldAlert size={14} className="shrink-0" /> {err}
-        </div>
-      )}
-      {toast && (
-        <div className={`mb-4 rounded-xl border px-4 py-2.5 text-[13px] ${toast.ok ? 'border-emerald-500/25 bg-emerald-500/[0.07] text-emerald-300' : 'border-red-500/25 bg-red-500/[0.07] text-red-300'}`}>
-          {toast.msg}
-        </div>
-      )}
+      {err && <div className="mb-3 flex items-center gap-2 rounded-xl border border-red-500/25 bg-red-500/[0.07] px-4 py-2.5 text-[13px] text-red-300"><ShieldAlert size={14} /> {err}</div>}
+      {toast && <div className={`mb-3 rounded-xl border px-4 py-2.5 text-[13px] ${toast.ok ? 'border-emerald-500/25 bg-emerald-500/[0.07] text-emerald-300' : 'border-red-500/25 bg-red-500/[0.07] text-red-300'}`}>{toast.msg}</div>}
 
       {!data ? (
         <div className="flex items-center gap-2 py-16 text-dark-500"><Loader2 size={16} className="animate-spin" /> Cargando plano…</div>
       ) : (
-        <>
-          {/* Tira de estado: sin cajas, los ceros se atenúan */}
-          <div className="rise mb-6 flex flex-wrap items-baseline gap-x-7 gap-y-2 border-y border-white/[0.05] py-3.5" style={{ animationDelay: '60ms' }}>
-            {[
-              { n: stats.total, l: 'plazas', c: 'text-dark-50' },
-              { n: stats.libre, l: 'libres', c: 'text-dark-300' },
-              { n: stats.asignada, l: 'asignadas', c: 'text-amber-300' },
-              { n: stats.reportada, l: 'reportadas', c: 'text-sky-300' },
-              { n: stats.confirmada, l: 'confirmadas', c: 'text-emerald-300' },
-              { n: stats.problema, l: 'a revisar', c: 'text-red-300' },
-            ].map(({ n, l, c }, i) => (
-              <div key={l} className="flex items-baseline gap-2">
-                <span className={`text-[19px] font-semibold tabular-nums ${(n > 0 || i === 0) ? c : 'text-dark-600'}`}>{n}</span>
-                <span className="text-[12.5px] text-dark-500">{l}</span>
-              </div>
-            ))}
-          </div>
-
-          {data.layout?.seeded && (
-            <div className="mb-5 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-2.5 text-[12.5px] text-amber-300">
-              Plano inicial generado automáticamente con la forma real de {center}. Ajusta el número de
-              plazas de cada zona cuando lo tengas medido — hasta entonces trátalo como un borrador.
-            </div>
-          )}
-
-          <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
-            {/* ── PLANO ── */}
-            <div className="rise space-y-4" style={{ animationDelay: '120ms' }}>
-              {(data.layout?.zones || []).map((z) => (
-                <div key={z.id} className={`rounded-2xl border bg-white/[0.015] p-4 ${ZONE_RING[z.color] || 'border-white/[0.07]'}`}>
-                  <div className="mb-3 flex items-baseline justify-between gap-3">
-                    <div>
-                      <h2 className="text-[14px] font-semibold text-dark-100">{z.name}</h2>
-                      {z.note && <p className="mt-0.5 text-[11.5px] text-dark-500">{z.note}</p>}
-                    </div>
-                    <span className="shrink-0 font-mono text-[11px] tabular-nums text-dark-500">{(z.spots || []).length} plazas</span>
-                  </div>
-                  {(z.spots || []).length === 0 ? (
-                    <p className="py-4 text-[12.5px] text-dark-600">Esta zona aún no tiene plazas configuradas.</p>
-                  ) : (
-                    <ZoneMap zone={z} spotState={spotState} sel={sel}
-                      onPick={(code) => { setSel(sel === code ? null : code); setEditing(false) }} />
-                  )}
+        <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+          {/* ── PLANO ÚNICO: las 3 zonas juntas y centradas ── */}
+          <div className="rise min-w-0" style={{ animationDelay: '60ms' }}>
+            <div className="rounded-2xl border border-white/[0.06] bg-black/25 p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="flex flex-wrap items-center gap-3">
+                  {Object.entries(SPOT_UI).map(([k, v]) => (
+                    <span key={k} className="flex items-center gap-1.5 text-[10.5px] text-dark-500">
+                      <span className={`h-2 w-2 rounded-full ${v.dot}`} /> {v.label}
+                    </span>
+                  ))}
                 </div>
-              ))}
-            </div>
+                <button onClick={() => setZoom((z) => !z)} title="Ampliar plano"
+                  className="rounded-lg border border-white/[0.08] p-1.5 text-dark-400 transition hover:text-dark-200">
+                  <Maximize2 size={13} />
+                </button>
+              </div>
 
-            {/* ── PANEL DE DETALLE ── */}
-            <div className="rise" style={{ animationDelay: '160ms' }}>
-              <div className="sticky top-4 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5">
-                {!sel ? (
-                  <div className="py-8 text-center text-[13px] text-dark-500">
-                    <Car size={24} className="mx-auto mb-3 opacity-30" />
-                    Pulsa una plaza del plano para ver quién está y confirmar su ubicación.
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-baseline justify-between">
-                      <div>
-                        <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-dark-500">Plaza</p>
-                        <p className="font-display text-[34px] font-semibold leading-none tracking-tight text-dark-50">{sel}</p>
-                      </div>
-                      <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${SPOT_UI[selStatus].fill} ${SPOT_UI[selStatus].text}`}>
-                        {SPOT_UI[selStatus].label}
-                      </span>
+              <div className={`flex items-stretch justify-center gap-3 overflow-x-auto ${zoom ? 'h-[640px]' : 'h-[400px]'} transition-[height] duration-300`}>
+                {zones.map((z) => (
+                  <div key={z.id} className="flex h-full shrink-0 flex-col">
+                    <div className="mb-1.5 flex items-baseline justify-between gap-2 px-0.5">
+                      <span className={`truncate text-[11.5px] font-semibold ${ZONE_LABEL[z.color] || 'text-dark-300'}`}>{z.name}</span>
+                      <span className="shrink-0 font-mono text-[10px] tabular-nums text-dark-600">{(z.spots || []).length}</span>
                     </div>
-
-                    {!selRow ? (
-                      <p className="mt-5 text-[13px] leading-relaxed text-dark-500">
-                        Plaza libre. Selecciona un vehículo desde la plantilla del día para asignársela.
-                      </p>
-                    ) : (
-                      <>
-                        <div className="mt-5 space-y-2.5 border-t border-white/[0.06] pt-4 text-[13px]">
-                          <Row k="Vehículo" v={selRow.vehicle?.license_plate || '—'} mono />
-                          <Row k="Modelo" v={[selRow.vehicle?.brand, selRow.vehicle?.model].filter(Boolean).join(' ') || '—'} />
-                          <Row k="Conductor" v={selRow.driver?.name || '—'} />
-                          <Row k="Asignada" v={selRow.spot || '—'} mono />
-                          <Row k="Reportada" v={selRow.reported_spot || '—'} mono />
-                          {selRow.reported_by && <Row k="Reportó" v={selRow.reported_by} />}
-                          {selRow.resolved_by && <Row k="Resolvió" v={selRow.resolved_by} />}
-                        </div>
-
-                        {selRow.mismatch && (
-                          <p className="mt-3 rounded-lg border border-red-500/25 bg-red-500/[0.07] px-3 py-2 text-[12px] leading-relaxed text-red-300">
-                            Discrepancia: le asignamos la <b>{selRow.spot}</b> pero reporta estar en la <b>{selRow.reported_spot}</b>.
-                            Confirma la reportada o corrígela — no damos ninguna por buena solos.
-                          </p>
-                        )}
-
-                        {editing ? (
-                          <div className="mt-4">
-                            <p className="mb-2 text-[12px] text-dark-400">Pulsa en el plano la plaza correcta, o escríbela:</p>
-                            <CorrectSpot onSubmit={(s) => moveTo(s)} busy={busy} />
-                            <button onClick={() => setEditing(false)} className="mt-2 w-full text-center text-[12px] text-dark-500 hover:text-dark-300">Cancelar</button>
-                          </div>
-                        ) : (
-                          <div className="mt-4 flex flex-wrap gap-2">
-                            <button
-                              onClick={() => resolve('confirm')} disabled={busy}
-                              className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-emerald-500/35 bg-emerald-500/12 py-2.5 text-[12.5px] font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50"
-                            >
-                              {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} Confirmar
-                            </button>
-                            <button
-                              onClick={() => resolve('deny')} disabled={busy}
-                              className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-red-500/30 bg-red-500/10 py-2.5 text-[12.5px] font-semibold text-red-300 transition hover:bg-red-500/20 disabled:opacity-50"
-                            >
-                              <X size={13} /> Denegar
-                            </button>
-                            <button
-                              onClick={() => setEditing(true)} disabled={busy}
-                              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-white/[0.1] py-2.5 text-[12.5px] font-semibold text-dark-300 transition hover:border-white/[0.18] disabled:opacity-50"
-                            >
-                              <Pencil size={13} /> Corregir plaza
-                            </button>
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </>
-                )}
+                    <div className={`relative min-h-0 flex-1 overflow-hidden rounded-xl border ${ZONE_TINT[z.color] || 'border-white/[0.07]'}`}
+                      style={{ aspectRatio: String(z.ratio || 1) }}>
+                      {z.aisle === 'vertical'
+                        ? <div className="pointer-events-none absolute inset-y-2 left-1/2 w-[8%] -translate-x-1/2 rounded-full bg-white/[0.04]" />
+                        : <div className="pointer-events-none absolute inset-x-2 top-1/2 h-[6%] -translate-y-1/2 rounded-full bg-white/[0.04]" />}
+                      {(z.spots || []).map((sp) => {
+                        const { status, row } = spotState(sp.code)
+                        const ui = SPOT_UI[status]
+                        const active = sel === sp.code
+                        return (
+                          <button key={sp.code} onClick={() => { setSel(active ? null : sp.code); setEditing(false) }}
+                            title={row?.vehicle?.license_plate ? `Plaza ${sp.code} · ${row.vehicle.license_plate} · ${ui.label}` : `Plaza ${sp.code} · libre`}
+                            className={`group absolute rounded-[3px] border transition-[filter,transform] duration-200 ${ui.fill} ${active ? 'z-20' : 'hover:brightness-125'}`}
+                            style={{
+                              left: `${sp.x}%`, top: `${sp.y}%`, width: `${sp.w}%`, height: `${sp.h}%`,
+                              transform: `rotate(${sp.rot || 0}deg)${active ? ' scale(1.12)' : ''}`,
+                              boxShadow: active ? '0 0 0 2px rgb(251 146 60), 0 0 20px rgba(251,146,60,.5)' : undefined,
+                            }}>
+                            {row && (
+                              <span className="pointer-events-none absolute inset-[14%] rounded-[2px] bg-white/[0.18]">
+                                <span className="absolute inset-x-[15%] top-[10%] h-[26%] rounded-[1px] bg-white/[0.24]" />
+                              </span>
+                            )}
+                            <span className={`pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[8.5px] font-bold leading-none ${ui.text}`}
+                              style={{ transform: `rotate(${-(sp.rot || 0)}deg)` }}>{sp.code}</span>
+                            {row?.mismatch && <span className="pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full bg-red-400 ring-2 ring-dark-950" />}
+                          </button>
+                        )
+                      })}
+                      {(z.spots || []).length === 0 && (
+                        <p className="absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] text-dark-600">Sin plazas configuradas</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
+
+            {/* Pendientes de ubicar: el trabajo que queda, siempre a la vista */}
+            {pending.length > 0 && (
+              <div className="mt-3 rounded-2xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
+                <p className="mb-2 text-[12px] text-dark-400">
+                  <b className="text-amber-300">{pending.length}</b> sin plaza hoy — pulsa una plaza libre del plano para asignarla.
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {pending.slice(0, 14).map((v) => (
+                    <span key={v.id} className="rounded-md bg-white/[0.05] px-2 py-1 font-mono text-[11px] text-dark-300">{v.license_plate}</span>
+                  ))}
+                  {pending.length > 14 && <span className="px-1 py-1 text-[11px] text-dark-600">+{pending.length - 14}</span>}
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* ── DIRECTORIO ── */}
-          <section className="rise mt-8 border-t border-white/[0.05] pt-6" style={{ animationDelay: '200ms' }}>
-            <h2 className="mb-4 text-[15px] font-semibold text-dark-100">
-              Directorio del día <span className="text-dark-600">· {(data.assignments || []).length}</span>
-            </h2>
-            {(data.assignments || []).length === 0 ? (
-              <p className="rounded-xl border border-dashed border-white/[0.08] px-4 py-8 text-center text-[13px] text-dark-500">
-                Aún no hay furgonetas ubicadas este día. Aparecerán cuando se asignen plazas o los conductores reporten dónde aparcaron.
-              </p>
-            ) : (
-              <div className="divide-y divide-white/[0.04]">
-                {(data.assignments || []).map((r) => {
-                  const st = r.mismatch ? 'denegada' : (r.status || 'asignada')
-                  const ui = SPOT_UI[st] || SPOT_UI.asignada
-                  const shown = r.reported_spot || r.spot
-                  return (
-                    <button
-                      key={r.vehicle_id}
-                      onClick={() => { setSel(shown); setEditing(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-                      className="float-row flex w-full items-center gap-4 rounded-xl px-4 py-3 text-left"
-                    >
-                      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border font-mono text-[13px] font-bold ${ui.fill} ${ui.text}`}>{shown || '—'}</span>
-                      <div className="min-w-0 flex-1">
-                        <div className="font-mono text-[14px] font-semibold text-dark-50">{r.vehicle?.license_plate || '—'}</div>
-                        <div className="mt-0.5 truncate text-[11.5px] text-dark-500">
-                          {r.driver?.name || 'Sin conductor'}
-                          {r.mismatch && <span className="ml-2 text-red-300">· asignada {r.spot} / reporta {r.reported_spot}</span>}
-                        </div>
+          {/* ── PANEL ── */}
+          <div className="rise" style={{ animationDelay: '110ms' }}>
+            <div className="sticky top-4 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
+              {!sel ? (
+                <div className="py-10 text-center text-[12.5px] text-dark-500">
+                  <Car size={22} className="mx-auto mb-3 opacity-30" />
+                  Pulsa una plaza del plano.<br />Si está libre podrás asignarle un vehículo.
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-baseline justify-between">
+                    <div>
+                      <p className="font-mono text-[9.5px] font-bold uppercase tracking-[0.2em] text-dark-500">Plaza</p>
+                      <p className="font-display text-[30px] font-semibold leading-none tracking-tight text-dark-50">{sel}</p>
+                    </div>
+                    <span className={`rounded-full border px-2.5 py-1 text-[10.5px] font-semibold ${SPOT_UI[selStatus].fill} ${SPOT_UI[selStatus].text}`}>
+                      {SPOT_UI[selStatus].label}
+                    </span>
+                  </div>
+
+                  {!selRow ? (
+                    /* PLAZA LIBRE → asignar vehículo */
+                    <div className="mt-4 border-t border-white/[0.06] pt-3">
+                      <p className="mb-2 text-[12px] font-semibold text-dark-200">Asignar vehículo</p>
+                      <div className="relative mb-2">
+                        <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dark-500" />
+                        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar matrícula…"
+                          className="w-full rounded-lg border border-white/[0.07] bg-white/[0.02] py-2 pl-8 pr-2 text-[12.5px] text-dark-50 placeholder:text-dark-600 focus:border-brand-500/50 focus:outline-none" />
                       </div>
-                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ${ui.fill} ${ui.text}`}>{ui.label}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </section>
-        </>
+                      <div className="max-h-[280px] space-y-1 overflow-y-auto">
+                        {pending
+                          .filter((v) => !q || (v.license_plate || '').toLowerCase().includes(q.toLowerCase()))
+                          .slice(0, 40)
+                          .map((v) => (
+                            <button key={v.id} onClick={() => doAssign(v.id)} disabled={busy}
+                              className="float-row flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left disabled:opacity-50">
+                              <span className="font-mono text-[12.5px] font-semibold text-dark-100">{v.license_plate}</span>
+                              <span className="truncate text-[11px] text-dark-500">{[v.brand, v.model].filter(Boolean).join(' ')}</span>
+                            </button>
+                          ))}
+                        {pending.length === 0 && <p className="py-4 text-center text-[12px] text-dark-600">Todos los vehículos ya tienen plaza hoy.</p>}
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="mt-4 space-y-2 border-t border-white/[0.06] pt-3 text-[12.5px]">
+                        <Row k="Vehículo" v={selRow.vehicle?.license_plate || '—'} mono />
+                        <Row k="Conductor" v={selRow.driver?.name || '—'} />
+                        <Row k="Asignada" v={selRow.spot || '—'} mono />
+                        <Row k="Reportada" v={selRow.reported_spot || '—'} mono />
+                        {selRow.reported_by && <Row k="Reportó" v={selRow.reported_by} />}
+                      </div>
+                      {selRow.mismatch && (
+                        <p className="mt-3 rounded-lg border border-red-500/25 bg-red-500/[0.07] px-3 py-2 text-[11.5px] leading-relaxed text-red-300">
+                          Le asignamos la <b>{selRow.spot}</b> pero reporta la <b>{selRow.reported_spot}</b>. Confirma o corrige.
+                        </p>
+                      )}
+                      {editing ? (
+                        <div className="mt-3">
+                          <p className="mb-2 text-[11.5px] text-dark-400">Nº de la plaza correcta:</p>
+                          <CorrectSpot onSubmit={moveTo} busy={busy} />
+                          <button onClick={() => setEditing(false)} className="mt-2 w-full text-center text-[11.5px] text-dark-500 hover:text-dark-300">Cancelar</button>
+                        </div>
+                      ) : (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button onClick={() => resolve('confirm')} disabled={busy}
+                            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-emerald-500/35 bg-emerald-500/12 py-2 text-[12px] font-semibold text-emerald-300 transition hover:bg-emerald-500/20 disabled:opacity-50">
+                            {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Confirmar
+                          </button>
+                          <button onClick={() => resolve('deny')} disabled={busy}
+                            className="flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-red-500/30 bg-red-500/10 py-2 text-[12px] font-semibold text-red-300 transition hover:bg-red-500/20 disabled:opacity-50">
+                            <X size={12} /> Denegar
+                          </button>
+                          <button onClick={() => setEditing(true)} disabled={busy}
+                            className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-white/[0.1] py-2 text-[12px] font-semibold text-dark-300 transition hover:border-white/[0.18] disabled:opacity-50">
+                            <Pencil size={12} /> Mover de plaza
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       )}
-    </div>
-  )
-}
 
-/* Plano de una zona: las plazas se dibujan EN SU SITIO (x/y/w/h en % del
-   lienzo y rotación en grados), no en una rejilla. Así la nave sale con los
-   coches en horizontal contra las paredes y el exterior en diagonal hacia el
-   carril — igual que sobre el terreno. */
-function ZoneMap({ zone, spotState, sel, onPick }) {
-  const ratio = zone.ratio || 1
-  return (
-    <div
-      className="relative w-full overflow-hidden rounded-xl border border-white/[0.05] bg-black/25"
-      style={{ aspectRatio: String(ratio) }}
-    >
-      {/* Carril de circulación: da lectura de plano, no es decoración */}
-      {zone.aisle === 'vertical' ? (
-        <div className="pointer-events-none absolute inset-y-3 left-1/2 w-[9%] -translate-x-1/2 rounded-full bg-white/[0.035]" />
-      ) : (
-        <div className="pointer-events-none absolute inset-x-3 top-1/2 h-[7%] -translate-y-1/2 rounded-full bg-white/[0.035]" />
+      {/* ── DIRECTORIO compacto ── */}
+      {data && (data.assignments || []).length > 0 && (
+        <section className="rise mt-6 border-t border-white/[0.05] pt-5" style={{ animationDelay: '150ms' }}>
+          <h2 className="mb-3 text-[13.5px] font-semibold text-dark-100">
+            Ubicadas hoy <span className="text-dark-600">· {(data.assignments || []).length}</span>
+          </h2>
+          <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3">
+            {(data.assignments || []).map((r) => {
+              const st = r.mismatch ? 'denegada' : (r.status || 'asignada')
+              const ui = SPOT_UI[st] || SPOT_UI.asignada
+              const shown = r.reported_spot || r.spot
+              return (
+                <button key={r.vehicle_id} onClick={() => { setSel(shown); setEditing(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+                  className="float-row flex items-center gap-2.5 rounded-xl px-3 py-2 text-left">
+                  <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border font-mono text-[11px] font-bold ${ui.fill} ${ui.text}`}>{shown || '—'}</span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] font-semibold text-dark-100">{r.vehicle?.license_plate || '—'}</span>
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${ui.dot}`} />
+                </button>
+              )
+            })}
+          </div>
+        </section>
       )}
-
-      {(zone.spots || []).map((sp) => {
-        const { status, row } = spotState(sp.code)
-        const ui = SPOT_UI[status]
-        const active = sel === sp.code
-        const occupied = !!row
-        return (
-          <button
-            key={sp.code}
-            onClick={() => onPick(sp.code)}
-            title={row?.vehicle?.license_plate ? `Plaza ${sp.code} · ${row.vehicle.license_plate} · ${ui.label}` : `Plaza ${sp.code} · ${ui.label}`}
-            className={`group absolute rounded-[3px] border transition-[filter,transform] duration-200 ${ui.fill} ${active ? 'z-20 brightness-150' : 'hover:brightness-125'}`}
-            style={{
-              left: `${sp.x}%`, top: `${sp.y}%`, width: `${sp.w}%`, height: `${sp.h}%`,
-              transform: `rotate(${sp.rot || 0}deg)${active ? ' scale(1.08)' : ''}`,
-              boxShadow: active ? '0 0 0 2px rgb(251 146 60), 0 0 22px rgba(251,146,60,.45)' : undefined,
-            }}
-          >
-            {/* Silueta de furgoneta cuando la plaza está ocupada */}
-            {occupied && (
-              <span className="pointer-events-none absolute inset-[13%] rounded-[2px] bg-white/[0.16]">
-                <span className="absolute inset-x-[14%] top-[12%] h-[26%] rounded-[1px] bg-white/[0.22]" />
-              </span>
-            )}
-            <span className={`pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[9px] font-bold leading-none ${ui.text}`}
-              style={{ transform: `rotate(${-(sp.rot || 0)}deg)` }}>
-              {sp.code}
-            </span>
-            {row?.mismatch && (
-              <span className="pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full bg-red-400 ring-2 ring-dark-950" />
-            )}
-          </button>
-        )
-      })}
     </div>
   )
 }
@@ -378,7 +364,7 @@ function ZoneMap({ zone, spotState, sel, onPick }) {
 function Row({ k, v, mono }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <span className="shrink-0 text-[11.5px] text-dark-500">{k}</span>
+      <span className="shrink-0 text-[11px] text-dark-500">{k}</span>
       <span className={`min-w-0 truncate text-right text-dark-200 ${mono ? 'font-mono font-semibold' : ''}`}>{v}</span>
     </div>
   )
@@ -388,17 +374,13 @@ function CorrectSpot({ onSubmit, busy }) {
   const [v, setV] = useState('')
   return (
     <div className="flex gap-2">
-      <input
-        value={v} onChange={(e) => setV(e.target.value)}
+      <input value={v} onChange={(e) => setV(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && v.trim() && onSubmit(v.trim())}
-        placeholder="Nº de plaza"
-        className="min-w-0 flex-1 rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2 font-mono text-[13px] text-dark-50 focus:border-brand-500/50 focus:outline-none"
-      />
-      <button
-        onClick={() => v.trim() && onSubmit(v.trim())} disabled={busy || !v.trim()}
-        className="rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 px-4 text-[12.5px] font-semibold text-white disabled:opacity-40"
-      >
-        {busy ? <Loader2 size={13} className="animate-spin" /> : 'Mover'}
+        placeholder="Nº"
+        className="min-w-0 flex-1 rounded-lg border border-white/[0.08] bg-white/[0.02] px-3 py-2 font-mono text-[12.5px] text-dark-50 focus:border-brand-500/50 focus:outline-none" />
+      <button onClick={() => v.trim() && onSubmit(v.trim())} disabled={busy || !v.trim()}
+        className="rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 px-3 text-[12px] font-semibold text-white disabled:opacity-40">
+        {busy ? <Loader2 size={12} className="animate-spin" /> : 'Mover'}
       </button>
     </div>
   )
