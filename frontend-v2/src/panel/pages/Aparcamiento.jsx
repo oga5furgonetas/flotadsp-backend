@@ -6,55 +6,85 @@ import {
 } from 'lucide-react'
 import { parkingState, parkingResolve, parkingAssign, parkingZoneImage, parkingSaveLayout, getVehicles } from '../api'
 
-/* Estado de una plaza. El color comunica, nunca decora. */
+/* Estado de una plaza. El color comunica, nunca decora.
+   `chip` = clases para insignias; fill/line/glow = pintura de la plaza en el plano. */
 const SPOT_UI = {
-  libre:      { fill: 'bg-white/[0.03] border-white/[0.10] border-dashed', text: 'text-dark-500', dot: 'bg-dark-600',    van: '#8f8f98', label: 'Libre' },
-  asignada:   { fill: 'bg-amber-500/[0.10] border-amber-500/50',           text: 'text-amber-200', dot: 'bg-amber-400',  van: '#f59e0b', label: 'Asignada' },
-  reportada:  { fill: 'bg-sky-500/[0.10] border-sky-500/50',               text: 'text-sky-200',   dot: 'bg-sky-400',    van: '#38bdf8', label: 'Reportada' },
-  confirmada: { fill: 'bg-emerald-500/[0.10] border-emerald-500/55',       text: 'text-emerald-200', dot: 'bg-emerald-400', van: '#34d399', label: 'Confirmada' },
-  denegada:   { fill: 'bg-red-500/[0.10] border-red-500/55',               text: 'text-red-200',   dot: 'bg-red-400',    van: '#f87171', label: 'A revisar' },
+  libre:      { text: 'text-dark-400', dot: 'bg-dark-500', van: '#9096a3', label: 'Libre',
+                chip: 'bg-white/[0.04] border-white/[0.12] text-dark-400',
+                fill: 'rgba(255,255,255,.035)', line: 'rgba(255,255,255,.26)', glow: null },
+  asignada:   { text: 'text-amber-100', dot: 'bg-amber-400', van: '#f59e0b', label: 'Asignada',
+                chip: 'bg-amber-500/[0.12] border-amber-500/45 text-amber-200',
+                fill: 'rgba(245,158,11,.16)', line: 'rgba(245,158,11,.65)', glow: 'rgba(245,158,11,.45)' },
+  reportada:  { text: 'text-sky-100', dot: 'bg-sky-400', van: '#38bdf8', label: 'Reportada',
+                chip: 'bg-sky-500/[0.12] border-sky-500/45 text-sky-200',
+                fill: 'rgba(56,189,248,.16)', line: 'rgba(56,189,248,.65)', glow: 'rgba(56,189,248,.45)' },
+  confirmada: { text: 'text-emerald-100', dot: 'bg-emerald-400', van: '#34d399', label: 'Confirmada',
+                chip: 'bg-emerald-500/[0.12] border-emerald-500/50 text-emerald-200',
+                fill: 'rgba(52,211,153,.18)', line: 'rgba(52,211,153,.68)', glow: 'rgba(52,211,153,.5)' },
+  denegada:   { text: 'text-red-100', dot: 'bg-red-400', van: '#f87171', label: 'A revisar',
+                chip: 'bg-red-500/[0.12] border-red-500/50 text-red-200',
+                fill: 'rgba(248,113,113,.18)', line: 'rgba(248,113,113,.68)', glow: 'rgba(248,113,113,.5)' },
 }
 const ZONE_ACCENT = {
-  violet: { br: 'border-violet-400/40', tx: 'text-violet-300', bar: 'bg-violet-400' },
-  sky:    { br: 'border-sky-400/40',    tx: 'text-sky-300',    bar: 'bg-sky-400' },
-  emerald:{ br: 'border-emerald-400/40',tx: 'text-emerald-300',bar: 'bg-emerald-400' },
-  amber:  { br: 'border-amber-400/40',  tx: 'text-amber-300',  bar: 'bg-amber-400' },
+  violet: { br: 'border-violet-400/30', tx: 'text-violet-300', bar: 'bg-violet-400', ring: 'rgba(167,139,250,.30)' },
+  sky:    { br: 'border-sky-400/30',    tx: 'text-sky-300',    bar: 'bg-sky-400',    ring: 'rgba(56,189,248,.28)' },
+  emerald:{ br: 'border-emerald-400/30',tx: 'text-emerald-300',bar: 'bg-emerald-400',ring: 'rgba(52,211,153,.28)' },
+  amber:  { br: 'border-amber-400/30',  tx: 'text-amber-300',  bar: 'bg-amber-400',  ring: 'rgba(245,158,11,.28)' },
 }
+/* Suelos realistas: hormigón pulido (nave), asfalto (exterior), grava (tierra). */
 const GROUND = {
-  nave: 'repeating-linear-gradient(90deg,#1b1b20 0 38px,#191a1e 38px 40px), linear-gradient(#1b1b20,#17171b)',
-  exterior: 'repeating-linear-gradient(0deg,#141416 0 26px,#131315 26px 28px), linear-gradient(#151517,#111113)',
-  tierra: 'radial-gradient(circle at 30% 25%,rgba(120,95,60,.16),transparent 55%), linear-gradient(#1a1611,#15120e)',
-  general: 'linear-gradient(#151517,#111113)',
+  nave: `radial-gradient(130% 95% at 50% -10%, rgba(180,170,255,.07), transparent 60%),
+         repeating-linear-gradient(0deg, rgba(0,0,0,.20) 0 1px, transparent 1px 82px),
+         repeating-linear-gradient(90deg, rgba(0,0,0,.20) 0 1px, transparent 1px 82px),
+         linear-gradient(160deg, #2c2c34, #1e1e24 55%, #17171d)`,
+  exterior: `radial-gradient(130% 95% at 50% -10%, rgba(120,190,255,.07), transparent 60%),
+             repeating-linear-gradient(90deg, rgba(255,255,255,.028) 0 2px, transparent 2px 44px),
+             linear-gradient(160deg, #23252b, #17181d 55%, #121318)`,
+  tierra: `radial-gradient(55% 45% at 22% 18%, rgba(158,116,64,.28), transparent 60%),
+           radial-gradient(50% 42% at 82% 84%, rgba(126,94,52,.20), transparent 60%),
+           radial-gradient(40% 40% at 60% 50%, rgba(100,74,40,.12), transparent 55%),
+           linear-gradient(160deg, #271f15, #1e1710 55%, #171009)`,
+  general: 'linear-gradient(160deg,#222329,#15161b)',
 }
 const todayISO = () => new Date().toISOString().slice(0, 10)
 
-/* Furgoneta cenital: chapa, parabrisas, luneta, retrovisores y ruedas. */
+/* Furgoneta cenital: chapa con volumen, parabrisas, costillas de caja,
+   retrovisores y ruedas. Se dibuja en 100×46 y se orienta según la plaza,
+   siempre DENTRO del recuadro (nunca se sale → no descuadra nada). */
 function Van({ horiz, tone }) {
-  const id = tone.replace('#', '')
+  const id = 'vg' + tone.replace('#', '')
   return (
     <svg viewBox="0 0 100 46" preserveAspectRatio="none"
-      className="pointer-events-none absolute drop-shadow-[0_2px_3px_rgba(0,0,0,.75)]"
-      style={horiz ? { inset: '20% 10%', opacity: .92 }
-                   : { inset: '10% 20%', width: '60%', height: '80%', opacity: .92,
-                       transform: 'rotate(90deg)', transformOrigin: 'center' }}>
+      className="pointer-events-none absolute drop-shadow-[0_2px_4px_rgba(0,0,0,.8)]"
+      style={horiz
+        ? { left: '7%', top: '15%', width: '86%', height: '70%' }
+        : { left: '15%', top: '7%', width: '70%', height: '86%', transform: 'rotate(90deg)', transformOrigin: 'center' }}>
       <defs>
-        <linearGradient id={`vg${id}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={tone} stopOpacity=".40" />
-          <stop offset="45%" stopColor={tone} stopOpacity=".78" />
-          <stop offset="100%" stopColor={tone} stopOpacity=".44" />
+        <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={tone} stopOpacity=".58" />
+          <stop offset="50%" stopColor={tone} stopOpacity=".92" />
+          <stop offset="100%" stopColor={tone} stopOpacity=".56" />
         </linearGradient>
       </defs>
-      <rect x="20" y="1" width="15" height="4" rx="1.6" fill="#0a0a0b" opacity=".85" />
-      <rect x="66" y="1" width="13" height="4" rx="1.6" fill="#0a0a0b" opacity=".85" />
-      <rect x="20" y="41" width="15" height="4" rx="1.6" fill="#0a0a0b" opacity=".85" />
-      <rect x="66" y="41" width="13" height="4" rx="1.6" fill="#0a0a0b" opacity=".85" />
-      <rect x="2" y="3.5" width="96" height="39" rx="7" fill={`url(#vg${id})`} />
-      <rect x="6.5" y="9" width="7" height="28" rx="2" fill="#05070a" opacity=".5" />
-      <path d="M79 8.5 h9.5 a5 5 0 0 1 5 5 v19 a5 5 0 0 1 -5 5 H79 z" fill="#05070a" opacity=".55" />
-      <rect x="18" y="10" width="56" height="26" rx="3" fill="#000" opacity=".16" />
-      <rect x="74" y="0.5" width="6" height="3" rx="1.2" fill={tone} opacity=".9" />
-      <rect x="74" y="42.5" width="6" height="3" rx="1.2" fill={tone} opacity=".9" />
-      <rect x="6" y="7" width="88" height="4" rx="2" fill="#fff" opacity=".14" />
+      {/* ruedas */}
+      <rect x="20" y="0.5" width="16" height="4.5" rx="1.6" fill="#0a0a0b" opacity=".82" />
+      <rect x="63" y="0.5" width="14" height="4.5" rx="1.6" fill="#0a0a0b" opacity=".82" />
+      <rect x="20" y="41" width="16" height="4.5" rx="1.6" fill="#0a0a0b" opacity=".82" />
+      <rect x="63" y="41" width="14" height="4.5" rx="1.6" fill="#0a0a0b" opacity=".82" />
+      {/* carrocería */}
+      <rect x="3" y="4" width="94" height="38" rx="8" fill={`url(#${id})`} stroke={tone} strokeOpacity=".55" strokeWidth="1" />
+      {/* parabrisas (morro a la derecha) */}
+      <path d="M80 8 h9 a5 5 0 0 1 5 5 v20 a5 5 0 0 1 -5 5 h-9 z" fill="#0b1016" opacity=".72" />
+      {/* caja de carga con costillas */}
+      <rect x="11" y="9" width="61" height="28" rx="3" fill="#000" opacity=".15" />
+      <line x1="26" y1="9.5" x2="26" y2="36.5" stroke="#000" strokeOpacity=".2" strokeWidth="1" />
+      <line x1="40" y1="9.5" x2="40" y2="36.5" stroke="#000" strokeOpacity=".2" strokeWidth="1" />
+      <line x1="54" y1="9.5" x2="54" y2="36.5" stroke="#000" strokeOpacity=".2" strokeWidth="1" />
+      {/* retrovisores */}
+      <rect x="78" y="2.5" width="6" height="3" rx="1.2" fill={tone} opacity=".95" />
+      <rect x="78" y="40.5" width="6" height="3" rx="1.2" fill={tone} opacity=".95" />
+      {/* brillo del techo */}
+      <rect x="6" y="7" width="88" height="3.5" rx="1.8" fill="#fff" opacity=".17" />
     </svg>
   )
 }
@@ -395,11 +425,13 @@ export default function Aparcamiento() {
                                 onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) uploadBg(z.id, f) }} />
                             </label>
                           </div>
-                          <div className={`relative min-h-0 w-full flex-1 overflow-hidden rounded-lg border-2 ${ac.br}`}
+                          <div className={`relative min-h-0 w-full flex-1 overflow-hidden rounded-xl border ${ac.br}`}
                             style={z.bg
-                              ? { backgroundImage: `url(${z.bg})`, backgroundSize: 'contain', backgroundPosition: 'center', backgroundRepeat: 'no-repeat', backgroundColor: '#0d0d0f' }
+                              ? { backgroundImage: `url(${z.bg})`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat', backgroundColor: '#0d0d0f' }
                               : { background: GROUND[z.id] || GROUND.general }}>
-                            {z.bg && <div className={`pointer-events-none absolute inset-0 ${edit ? 'bg-black/10' : 'bg-black/25'}`} />}
+                            {/* Profundidad: viñeta interior + brillo cenital */}
+                            <div className="pointer-events-none absolute inset-0 z-[1]" style={{ boxShadow: `inset 0 0 55px rgba(0,0,0,.6)` }} />
+                            {z.bg && <div className={`pointer-events-none absolute inset-0 z-[1] ${edit ? 'bg-black/5' : 'bg-gradient-to-b from-black/15 via-transparent to-black/50'}`} />}
                             {(z.spots || []).map((sp, si) => {
                               const { status, row } = spotState(sp.code)
                               const ui = SPOT_UI[status]
@@ -422,18 +454,32 @@ export default function Aparcamiento() {
                                     if (vid && !row) doAssign(vid, sp.code)
                                   }}
                                   title={row?.vehicle?.license_plate ? `Plaza ${sp.code} · ${row.vehicle.license_plate}` : `Plaza ${sp.code} · libre`}
-                                  className={`group absolute rounded-[3px] border transition-[filter,transform] duration-200 ${ui.fill} ${active || isDrop ? 'z-20' : 'hover:brightness-125'}`}
+                                  className={`group absolute z-[2] transition-[box-shadow,background] duration-200 ${active || isDrop ? 'z-20' : 'hover:brightness-[1.18]'}`}
                                   style={{
                                     left: `${sp.x}%`, top: `${sp.y}%`, width: `${sp.w}%`, height: `${sp.h}%`,
-                                    transform: `rotate(${sp.rot || 0}deg)${active || isDrop ? ' scale(1.12)' : ''}`,
-                                    boxShadow: isDrop ? '0 0 0 2px #34d399, 0 0 22px rgba(52,211,153,.6)'
-                                      : active ? '0 0 0 2px rgb(251 146 60), 0 0 22px rgba(251,146,60,.55)' : undefined,
+                                    transform: `rotate(${sp.rot || 0}deg)`,
+                                    borderRadius: 5,
+                                    background: row ? ui.fill : 'rgba(255,255,255,.03)',
+                                    border: `1.5px ${row ? 'solid' : 'dashed'} ${ui.line}`,
+                                    // Glow, nunca escala: así al colocar un coche nada se descuadra
+                                    boxShadow: isDrop
+                                      ? '0 0 0 2px #34d399, 0 0 22px rgba(52,211,153,.75)'
+                                      : active
+                                        ? `0 0 0 2px ${ui.line}, 0 0 20px ${ui.glow || 'rgba(255,255,255,.3)'}`
+                                        : row && ui.glow
+                                          ? `0 0 15px ${ui.glow}, inset 0 0 10px rgba(0,0,0,.28)`
+                                          : 'inset 0 1px 0 rgba(255,255,255,.05)',
                                     ...(edit ? { cursor: drag ? 'grabbing' : 'grab', touchAction: 'none' } : null),
                                   }}>
                                   {row && <Van horiz={horiz} tone={ui.van} />}
-                                  <span className={`pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[8.5px] font-bold leading-none ${row ? 'text-white/90 [text-shadow:0_1px_2px_rgba(0,0,0,.9)]' : ui.text}`}
-                                    style={{ transform: `rotate(${-(sp.rot || 0)}deg)` }}>{sp.code}</span>
-                                  {row?.mismatch && <span className="pointer-events-none absolute -right-1 -top-1 h-2 w-2 rounded-full bg-red-400 ring-2 ring-dark-950" />}
+                                  {row ? (
+                                    <span className="pointer-events-none absolute left-1/2 top-1/2 rounded bg-black/55 px-1 font-mono text-[8px] font-bold leading-none text-white/95 [text-shadow:0_1px_2px_rgba(0,0,0,.95)]"
+                                      style={{ transform: `translate(-50%,-50%) rotate(${-(sp.rot || 0)}deg)` }}>{sp.code}</span>
+                                  ) : (
+                                    <span className={`pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[9px] font-semibold leading-none ${ui.text}`}
+                                      style={{ transform: `rotate(${-(sp.rot || 0)}deg)` }}>{sp.code}</span>
+                                  )}
+                                  {row?.mismatch && <span className="pointer-events-none absolute -right-1 -top-1 z-30 h-2 w-2 rounded-full bg-red-400 ring-2 ring-dark-950" />}
                                 </button>
                               )
                             })}
@@ -539,7 +585,7 @@ export default function Aparcamiento() {
                   return (
                     <button key={r.vehicle_id} onClick={() => { setSel(shown); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
                       className="float-row flex items-center gap-2.5 rounded-xl px-3 py-2 text-left">
-                      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border font-mono text-[11px] font-bold ${ui.fill} ${ui.text}`}>{shown || '—'}</span>
+                      <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border font-mono text-[11px] font-bold ${ui.chip}`}>{shown || '—'}</span>
                       <span className="min-w-0 flex-1 truncate font-mono text-[12px] font-semibold text-dark-100">{r.vehicle?.license_plate || '—'}</span>
                       <span className={`h-2 w-2 shrink-0 rounded-full ${ui.dot}`} />
                     </button>
@@ -600,7 +646,7 @@ function DetailPanel({ sel, selRow, selStatus, busy, moving, setMoving, resolve,
           <p className="font-mono text-[9.5px] font-bold uppercase tracking-[0.2em] text-dark-500">Plaza</p>
           <p className="font-display text-[30px] font-semibold leading-none tracking-tight text-dark-50">{sel}</p>
         </div>
-        <span className={`rounded-full border px-2.5 py-1 text-[10.5px] font-semibold ${ui.fill} ${ui.text}`}>{ui.label}</span>
+        <span className={`rounded-full border px-2.5 py-1 text-[10.5px] font-semibold ${ui.chip}`}>{ui.label}</span>
       </div>
       {!selRow ? (
         <p className="mt-4 border-t border-white/[0.06] pt-3 text-[12.5px] leading-relaxed text-dark-500">
