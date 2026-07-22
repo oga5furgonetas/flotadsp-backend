@@ -122,6 +122,8 @@ export default function Aparcamiento() {
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const [az, setAz] = useState(0)                   // zona activa (una a la vez)
   const panRef = useRef(null)
+  const viewRef = useRef(null)                      // viewport del plano (para medirlo)
+  const [viewSize, setViewSize] = useState({ w: 0, h: 0 })
   // Editor
   const [edit, setEdit] = useState(false)
   const [draft, setDraft] = useState(null)
@@ -144,6 +146,17 @@ export default function Aparcamiento() {
     getVehicles(center).then((r) => setVehicles(r.data || [])).catch(() => setVehicles([]))
   }, [center, noCenter])
   useEffect(() => { setSel(null); setQ(''); setAz(0) }, [center, day])
+  // Medir el viewport del plano para calcular el tamaño exacto de la zona
+  useEffect(() => {
+    const el = viewRef.current
+    if (!el) return
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0].contentRect
+      setViewSize({ w: r.width, h: r.height })
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [data, noCenter])
 
   const { byAssigned, byReported } = useMemo(() => {
     const a = {}, rp = {}
@@ -185,6 +198,17 @@ export default function Aparcamiento() {
   const zone = zones[zIdx]
   const zAc = ZONE_ACCENT[zone?.color] || ZONE_ACCENT.sky
   const zStats = zone ? zoneStats(zone) : { total: 0, occ: 0, pct: 0 }
+
+  // Tamaño exacto de la zona dentro del viewport (contain: respeta la proporción)
+  const zBox = useMemo(() => {
+    const R = zone?.ratio || 1
+    const availW = Math.max(0, viewSize.w - 32)
+    const availH = Math.max(0, viewSize.h - 32)
+    if (!availW || !availH) return { w: 0, h: 0 }
+    let w = availW, h = availW / R
+    if (h > availH) { h = availH; w = availH * R }
+    return { w: Math.round(w), h: Math.round(h) }
+  }, [zone, viewSize])
 
   const assignedIds = useMemo(() => new Set((data?.assignments || []).map((a) => a.vehicle_id)), [data])
   const pending = useMemo(
@@ -433,15 +457,16 @@ export default function Aparcamiento() {
                 )}
 
                 {/* Lienzo: UNA zona, grande, ajustada a la foto */}
-                <div className="relative h-[560px] cursor-grab overflow-hidden bg-black/40 active:cursor-grabbing"
-                  onPointerDown={onPanDown} onPointerMove={onPanMove} onPointerUp={onPanUp} onPointerLeave={onPanUp}>
-                  <div className="grid h-full w-full place-items-center p-4 transition-transform duration-100"
+                <div ref={viewRef} className="relative h-[560px] cursor-grab overflow-hidden bg-black/40 active:cursor-grabbing"
+                  onPointerDown={onPanDown} onPointerMove={onPanMove} onPointerUp={onPanUp} onPointerLeave={onPanUp}
+                  onWheel={(e) => setZoom((z) => Math.min(3, Math.max(0.6, +(z - Math.sign(e.deltaY) * 0.15).toFixed(2))))}>
+                  <div className="grid h-full w-full place-items-center transition-transform duration-100"
                     style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: 'center' }}>
-                    {zone && (() => {
+                    {zone && zBox.w > 0 && (() => {
                       const z = zone, zi = zIdx, ac = zAc
                       return (
                         <div className="relative overflow-hidden rounded-2xl border shadow-[0_24px_70px_-20px_rgba(0,0,0,.85)]"
-                          style={{ aspectRatio: String(z.ratio || 1), width: '9999px', height: '9999px', maxWidth: '100%', maxHeight: '100%',
+                          style={{ width: zBox.w, height: zBox.h,
                             borderColor: 'rgba(255,255,255,.09)',
                             ...(z.bg
                               ? { backgroundImage: `url(${z.bg})`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat', backgroundColor: '#0d0d0f' }
@@ -510,8 +535,8 @@ export default function Aparcamiento() {
 
                   {/* Controles de vista */}
                   <div className="absolute right-3 top-3 flex flex-col gap-1 rounded-lg border border-white/[0.08] bg-black/70 p-1 backdrop-blur">
-                    <IconBtn onClick={() => setZoom((z) => Math.min(2.6, +(z + 0.2).toFixed(2)))} title="Acercar"><Plus size={13} /></IconBtn>
-                    <IconBtn onClick={() => setZoom((z) => Math.max(0.5, +(z - 0.2).toFixed(2)))} title="Alejar"><Minus size={13} /></IconBtn>
+                    <IconBtn onClick={() => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)))} title="Acercar"><Plus size={13} /></IconBtn>
+                    <IconBtn onClick={() => setZoom((z) => Math.max(0.6, +(z - 0.25).toFixed(2)))} title="Alejar"><Minus size={13} /></IconBtn>
                     <IconBtn onClick={resetView} title="Vista completa"><Maximize2 size={13} /></IconBtn>
                     <span className="pt-0.5 text-center font-mono text-[9px] text-dark-500">{Math.round(zoom * 100)}%</span>
                   </div>
