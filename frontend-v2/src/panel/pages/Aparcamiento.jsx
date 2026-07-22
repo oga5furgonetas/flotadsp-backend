@@ -9,9 +9,9 @@ import { parkingState, parkingResolve, parkingAssign, parkingZoneImage, parkingS
 /* Estado de una plaza. El color comunica, nunca decora.
    `chip` = clases para insignias; fill/line/glow = pintura de la plaza en el plano. */
 const SPOT_UI = {
-  libre:      { text: 'text-dark-400', dot: 'bg-dark-500', van: '#9096a3', label: 'Libre',
+  libre:      { text: 'text-white/85', dot: 'bg-dark-400', van: '#9096a3', label: 'Libre',
                 chip: 'bg-white/[0.04] border-white/[0.12] text-dark-400',
-                fill: 'rgba(255,255,255,.035)', line: 'rgba(255,255,255,.26)', glow: null },
+                fill: 'rgba(255,255,255,.07)', line: 'rgba(255,255,255,.62)', glow: null },
   asignada:   { text: 'text-amber-100', dot: 'bg-amber-400', van: '#f59e0b', label: 'Asignada',
                 chip: 'bg-amber-500/[0.12] border-amber-500/45 text-amber-200',
                 fill: 'rgba(245,158,11,.16)', line: 'rgba(245,158,11,.65)', glow: 'rgba(245,158,11,.45)' },
@@ -501,8 +501,8 @@ export default function Aparcamiento() {
                                     left: `${sp.x}%`, top: `${sp.y}%`, width: `${sp.w}%`, height: `${sp.h}%`,
                                     transform: `rotate(${sp.rot || 0}deg)`,
                                     borderRadius: 5,
-                                    background: row ? ui.fill : 'rgba(255,255,255,.03)',
-                                    border: `1.5px ${row ? 'solid' : 'dashed'} ${ui.line}`,
+                                    background: row ? ui.fill : 'rgba(255,255,255,.06)',
+                                    border: `2px ${row ? 'solid' : 'dashed'} ${ui.line}`,
                                     // Glow, nunca escala: así al colocar un coche nada se descuadra
                                     boxShadow: isDrop
                                       ? '0 0 0 2px #34d399, 0 0 22px rgba(52,211,153,.75)'
@@ -514,13 +514,8 @@ export default function Aparcamiento() {
                                     ...(edit ? { cursor: drag ? 'grabbing' : 'grab', touchAction: 'none' } : null),
                                   }}>
                                   {row && <Van horiz={horiz} tone={ui.van} />}
-                                  {row ? (
-                                    <span className="pointer-events-none absolute left-1/2 top-1/2 rounded bg-black/55 px-1 font-mono text-[8px] font-bold leading-none text-white/95 [text-shadow:0_1px_2px_rgba(0,0,0,.95)]"
-                                      style={{ transform: `translate(-50%,-50%) rotate(${-(sp.rot || 0)}deg)` }}>{sp.code}</span>
-                                  ) : (
-                                    <span className={`pointer-events-none absolute inset-0 flex items-center justify-center font-mono text-[9px] font-semibold leading-none ${ui.text}`}
-                                      style={{ transform: `rotate(${-(sp.rot || 0)}deg)` }}>{sp.code}</span>
-                                  )}
+                                  <span className="pointer-events-none absolute left-1/2 top-1/2 rounded bg-black/60 px-1 font-mono text-[8.5px] font-bold leading-none text-white/95 [text-shadow:0_1px_2px_rgba(0,0,0,.95)]"
+                                    style={{ transform: `translate(-50%,-50%) rotate(${-(sp.rot || 0)}deg)` }}>{sp.code}</span>
                                   {row?.mismatch && <span className="pointer-events-none absolute -right-1 -top-1 z-30 h-2 w-2 rounded-full bg-red-400 ring-2 ring-dark-950" />}
                                 </button>
                               )
