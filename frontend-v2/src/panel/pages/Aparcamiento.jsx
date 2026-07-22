@@ -120,6 +120,7 @@ export default function Aparcamiento() {
   // Vista: zoom y desplazamiento del plano
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [az, setAz] = useState(0)                   // zona activa (una a la vez)
   const panRef = useRef(null)
   // Editor
   const [edit, setEdit] = useState(false)
@@ -142,7 +143,7 @@ export default function Aparcamiento() {
     if (noCenter) return
     getVehicles(center).then((r) => setVehicles(r.data || [])).catch(() => setVehicles([]))
   }, [center, noCenter])
-  useEffect(() => { setSel(null); setQ('') }, [center, day])
+  useEffect(() => { setSel(null); setQ(''); setAz(0) }, [center, day])
 
   const { byAssigned, byReported } = useMemo(() => {
     const a = {}, rp = {}
@@ -179,6 +180,11 @@ export default function Aparcamiento() {
     const occ = sp.filter((x) => spotState(x.code).status !== 'libre').length
     return { total: sp.length, occ, pct: sp.length ? Math.round((occ / sp.length) * 100) : 0 }
   }, [spotState])
+
+  const zIdx = Math.min(az, Math.max(0, zones.length - 1))
+  const zone = zones[zIdx]
+  const zAc = ZONE_ACCENT[zone?.color] || ZONE_ACCENT.sky
+  const zStats = zone ? zoneStats(zone) : { total: 0, occ: 0, pct: 0 }
 
   const assignedIds = useMemo(() => new Set((data?.assignments || []).map((a) => a.vehicle_id)), [data])
   const pending = useMemo(
@@ -370,24 +376,28 @@ export default function Aparcamiento() {
         <div className="flex items-center gap-2 py-16 text-dark-500"><Loader2 size={16} className="animate-spin" /> Cargando plano…</div>
       ) : (
         <>
-          {/* ══ TARJETAS DE ZONA ══ */}
-          <div className="rise mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3" style={{ animationDelay: '50ms' }}>
-            {zones.map((z, zi) => {
+          {/* ══ SELECTOR DE ZONA (una a la vez) ══ */}
+          <div className="rise mb-3 flex flex-wrap gap-1.5 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-1.5" style={{ animationDelay: '50ms' }}>
+            {zones.map((z, i) => {
               const zs = zoneStats(z), ac = ZONE_ACCENT[z.color] || ZONE_ACCENT.sky
+              const on = i === zIdx
               return (
-                <div key={z.id} className={`rounded-xl border bg-white/[0.02] px-3.5 py-2.5 ${ac.br}`}>
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className={`text-[10px] font-bold uppercase tracking-wider ${ac.tx}`}>Zona {zi + 1}</span>
-                    <span className="font-mono text-[10.5px] tabular-nums text-dark-500">{zs.total} plazas</span>
-                  </div>
-                  <div className="mt-0.5 flex items-baseline justify-between gap-2">
-                    <span className="truncate text-[12.5px] text-dark-200">{z.name}</span>
-                    <span className={`shrink-0 text-[12px] font-semibold tabular-nums ${ac.tx}`}>{zs.pct}%</span>
-                  </div>
-                  <div className="mt-2 h-1 overflow-hidden rounded-full bg-white/[0.06]">
-                    <div className={`h-full rounded-full ${ac.bar} transition-[width] duration-500`} style={{ width: `${zs.pct}%` }} />
-                  </div>
-                </div>
+                <button key={z.id} onClick={() => { setAz(i); setSel(null); setMoving(false); resetView() }}
+                  className={`group relative flex flex-1 items-center gap-2.5 overflow-hidden rounded-xl px-3.5 py-2 text-left transition ${on ? 'bg-white/[0.06] ring-1 ring-inset ' + ac.br.replace('border-', 'ring-') : 'hover:bg-white/[0.03]'}`}>
+                  <span className={`h-8 w-1 shrink-0 rounded-full ${on ? ac.bar : 'bg-white/10'}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-baseline gap-1.5">
+                      <span className={`text-[9.5px] font-bold uppercase tracking-wider ${on ? ac.tx : 'text-dark-500'}`}>Zona {i + 1}</span>
+                      <span className={`truncate text-[12px] ${on ? 'text-dark-100' : 'text-dark-400'}`}>{z.name}</span>
+                    </span>
+                    <span className="mt-1 flex items-center gap-2">
+                      <span className="h-1 flex-1 overflow-hidden rounded-full bg-white/[0.07]">
+                        <span className={`block h-full rounded-full ${ac.bar} transition-[width] duration-500`} style={{ width: `${zs.pct}%` }} />
+                      </span>
+                      <span className={`shrink-0 font-mono text-[10.5px] tabular-nums ${on ? ac.tx : 'text-dark-600'}`}>{zs.occ}/{zs.total}</span>
+                    </span>
+                  </span>
+                </button>
               )
             })}
           </div>
@@ -396,42 +406,49 @@ export default function Aparcamiento() {
             {/* ══ PLANO ══ */}
             <div className="rise min-w-0" style={{ animationDelay: '90ms' }}>
               <div className="relative overflow-hidden rounded-2xl border border-white/[0.06] bg-black/30">
-                {/* Leyenda */}
-                <div className="flex flex-wrap items-center gap-3 border-b border-white/[0.05] px-3 py-2">
+                {/* Barra: zona activa + leyenda + foto */}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-white/[0.05] px-3 py-2">
+                  <span className="flex items-center gap-1.5">
+                    <span className={`h-2.5 w-2.5 rounded-full ${zAc.bar}`} />
+                    <span className="text-[12.5px] font-semibold text-dark-100">{zone?.name}</span>
+                    <span className="font-mono text-[10.5px] tabular-nums text-dark-500">· {zStats.occ}/{zStats.total} ocupadas</span>
+                  </span>
+                  <span className="mx-1 hidden h-4 w-px bg-white/10 md:block" />
                   {Object.entries(SPOT_UI).map(([k, v]) => (
-                    <span key={k} className="flex items-center gap-1.5 text-[10px] text-dark-500">
+                    <span key={k} className="hidden items-center gap-1.5 text-[10px] text-dark-500 lg:flex">
                       <span className={`h-2 w-2 rounded-full ${v.dot}`} /> {v.label}
                     </span>
                   ))}
-                  {edit && <span className="ml-auto text-[10.5px] font-semibold text-brand-300">Arrastra las plazas a su sitio</span>}
+                  <label title="Subir o cambiar la foto aérea de esta zona"
+                    className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-lg border border-white/[0.1] px-2.5 py-1 text-[11px] font-semibold text-dark-300 transition hover:border-brand-500/40 hover:text-brand-300">
+                    <ImageIcon size={12} /> {zone?.bg ? 'Cambiar foto' : 'Subir foto'}
+                    <input type="file" accept="image/*" className="hidden"
+                      onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f && zone) uploadBg(zone.id, f) }} />
+                  </label>
                 </div>
+                {edit && (
+                  <div className="border-b border-white/[0.05] bg-brand-500/[0.05] px-3 py-1.5 text-[11px] font-semibold leading-snug text-brand-300">
+                    Arrastra cada plaza sobre su marca en la foto. Pulsa una para girarla o cambiar su tamaño. Se guarda al pulsar «Guardar cambios».
+                  </div>
+                )}
 
-                {/* Lienzo con zoom + pan */}
-                <div className="relative h-[440px] cursor-grab overflow-hidden active:cursor-grabbing"
+                {/* Lienzo: UNA zona, grande, ajustada a la foto */}
+                <div className="relative h-[560px] cursor-grab overflow-hidden bg-black/40 active:cursor-grabbing"
                   onPointerDown={onPanDown} onPointerMove={onPanMove} onPointerUp={onPanUp} onPointerLeave={onPanUp}>
-                  <div className="flex h-full items-center justify-center gap-4 p-3 transition-transform duration-100"
+                  <div className="grid h-full w-full place-items-center p-4 transition-transform duration-100"
                     style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: 'center' }}>
-                    {zones.map((z, zi) => {
-                      const ac = ZONE_ACCENT[z.color] || ZONE_ACCENT.sky
-                      const H = 380
+                    {zone && (() => {
+                      const z = zone, zi = zIdx, ac = zAc
                       return (
-                        <div key={z.id} className="flex shrink-0 flex-col" style={{ height: H, width: Math.round((H - 22) * (z.ratio || 1)) }}>
-                          <div className="mb-1 flex items-center justify-center gap-1.5">
-                            <span className={`text-[10px] font-bold uppercase tracking-wider ${ac.tx}`}>Zona {zi + 1}</span>
-                            <span className="truncate text-[10.5px] text-dark-500">{z.name}</span>
-                            <label title="Subir foto aérea" className="cursor-pointer text-dark-600 hover:text-brand-400">
-                              <ImageIcon size={11} />
-                              <input type="file" accept="image/*" className="hidden"
-                                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) uploadBg(z.id, f) }} />
-                            </label>
-                          </div>
-                          <div className={`relative min-h-0 w-full flex-1 overflow-hidden rounded-xl border ${ac.br}`}
-                            style={z.bg
+                        <div className="relative overflow-hidden rounded-2xl border shadow-[0_24px_70px_-20px_rgba(0,0,0,.85)]"
+                          style={{ aspectRatio: String(z.ratio || 1), width: '9999px', height: '9999px', maxWidth: '100%', maxHeight: '100%',
+                            borderColor: 'rgba(255,255,255,.09)',
+                            ...(z.bg
                               ? { backgroundImage: `url(${z.bg})`, backgroundSize: 'cover', backgroundPosition: 'center', backgroundRepeat: 'no-repeat', backgroundColor: '#0d0d0f' }
-                              : { background: GROUND[z.id] || GROUND.general }}>
+                              : { background: GROUND[z.id] || GROUND.general }) }}>
                             {/* Profundidad: viñeta interior + brillo cenital */}
-                            <div className="pointer-events-none absolute inset-0 z-[1]" style={{ boxShadow: `inset 0 0 55px rgba(0,0,0,.6)` }} />
-                            {z.bg && <div className={`pointer-events-none absolute inset-0 z-[1] ${edit ? 'bg-black/5' : 'bg-gradient-to-b from-black/15 via-transparent to-black/50'}`} />}
+                            <div className="pointer-events-none absolute inset-0 z-[1]" style={{ boxShadow: `inset 0 0 75px rgba(0,0,0,.62)` }} />
+                            {z.bg && <div className={`pointer-events-none absolute inset-0 z-[1] ${edit ? 'bg-black/[0.04]' : 'bg-gradient-to-b from-black/15 via-transparent to-black/45'}`} />}
                             {(z.spots || []).map((sp, si) => {
                               const { status, row } = spotState(sp.code)
                               const ui = SPOT_UI[status]
@@ -484,12 +501,11 @@ export default function Aparcamiento() {
                               )
                             })}
                             {(z.spots || []).length === 0 && (
-                              <p className="absolute inset-0 flex items-center justify-center px-3 text-center text-[11px] text-dark-600">Sin plazas configuradas</p>
+                              <p className="absolute inset-0 z-[2] flex items-center justify-center px-3 text-center text-[11px] text-dark-500">Sin plazas configuradas. Entra en «Editar plano» para añadirlas.</p>
                             )}
-                          </div>
                         </div>
                       )
-                    })}
+                    })()}
                   </div>
 
                   {/* Controles de vista */}
