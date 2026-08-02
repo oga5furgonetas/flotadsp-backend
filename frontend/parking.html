@@ -1,0 +1,1816 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FlotaDSP — Planificador de Parking de Nave</title>
+<meta name="description" content="Diseña el aparcamiento de tu nave y calcula cuántas Toyota Proace caben y cómo colocarlas.">
+<style>
+:root{
+  --bg:#0b0d10; --card:#13161b; --card2:#181c22; --line:rgba(255,255,255,.09);
+  --txt:#e7ebf2; --mut:#8b94a3; --acc:#0ea5e9; --acc2:#0369a1;
+  --ok:#22c55e; --warn:#fbbf24; --bad:#ef4444; --org:#fb923c;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--txt);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:14px;overflow:hidden;
+}
+button,input,select,textarea{font-family:inherit;font-size:13px;color:var(--txt)}
+button{cursor:pointer}
+
+/* ---------- Layout ---------- */
+.app{display:flex;flex-direction:column;height:100vh}
+.topbar{
+  display:flex;align-items:center;gap:12px;padding:9px 14px;
+  background:var(--card);border-bottom:1px solid var(--line);flex-shrink:0;flex-wrap:wrap
+}
+.brand{display:flex;align-items:center;gap:9px;margin-right:6px}
+.logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#fb923c,#ea6800);
+  display:flex;align-items:center;justify-content:center;font-size:16px}
+.brand b{font-size:15px;letter-spacing:-.01em;white-space:nowrap}
+.brand small{display:block;color:var(--mut);font-size:11px;font-weight:600}
+.spacer{flex:1}
+.tbtn{
+  background:rgba(255,255,255,.05);border:1px solid var(--line);border-radius:9px;
+  padding:7px 11px;font-weight:650;display:inline-flex;align-items:center;gap:6px;white-space:nowrap
+}
+.tbtn:hover{background:rgba(255,255,255,.1)}
+.tbtn.primary{background:linear-gradient(135deg,var(--acc),var(--acc2));border-color:transparent;color:#fff}
+.tbtn.primary:hover{filter:brightness(1.12)}
+.tbtn.on{background:rgba(14,165,233,.22);border-color:rgba(14,165,233,.6);color:#7dd3fc}
+.tbtn.danger:hover{background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.5)}
+
+.main{display:flex;flex:1;min-height:0;position:relative}
+.side{
+  width:340px;flex-shrink:0;background:var(--card);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;min-height:0
+}
+.side.right{border-right:none;border-left:1px solid var(--line);width:320px}
+.tabs{display:flex;border-bottom:1px solid var(--line);flex-shrink:0;overflow-x:auto}
+.tabs button{
+  flex:1;background:none;border:none;padding:10px 4px;color:var(--mut);font-weight:700;font-size:12px;
+  border-bottom:2px solid transparent;white-space:nowrap
+}
+.tabs button.on{color:var(--acc);border-bottom-color:var(--acc);background:rgba(14,165,233,.06)}
+.panes{flex:1;overflow-y:auto;padding:14px}
+.pane{display:none}
+.pane.on{display:block}
+
+.stage{flex:1;position:relative;min-width:0;background:#0e1114}
+canvas{display:block;width:100%;height:100%;touch-action:none}
+.hint{
+  position:absolute;left:12px;bottom:12px;background:rgba(11,13,16,.9);border:1px solid var(--line);
+  border-radius:9px;padding:7px 11px;font-size:12px;color:var(--mut);pointer-events:none;max-width:60%
+}
+.zoombox{position:absolute;right:12px;bottom:12px;display:flex;gap:6px}
+.zoombox button{width:32px;height:32px;border-radius:8px;background:rgba(11,13,16,.92);
+  border:1px solid var(--line);font-size:15px;font-weight:800}
+
+/* ---------- Form bits ---------- */
+h4{margin:0 0 9px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut)}
+.grp{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
+.row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.row:last-child{margin-bottom:0}
+.row label{flex:1;color:var(--mut);font-size:12.5px}
+.row input[type=number],.row input[type=text],.row select{
+  width:88px;background:#0b0d10;border:1px solid var(--line);border-radius:7px;padding:6px 8px;text-align:right
+}
+.row select{width:100%;text-align:left}
+.row.wide input,.row.wide select{width:100%;text-align:left}
+input[type=checkbox]{width:16px;height:16px;accent-color:var(--acc);cursor:pointer}
+.chk{display:flex;align-items:center;gap:8px;margin-bottom:8px;color:var(--mut);font-size:12.5px;cursor:pointer}
+.chk:last-child{margin-bottom:0}
+.seg{display:flex;gap:4px;background:#0b0d10;border:1px solid var(--line);border-radius:9px;padding:3px}
+.seg button{flex:1;background:none;border:none;padding:6px 4px;border-radius:6px;color:var(--mut);font-weight:700;font-size:12px}
+.seg button.on{background:rgba(14,165,233,.2);color:#7dd3fc}
+.note{font-size:11.5px;color:var(--mut);line-height:1.5;margin-top:8px}
+.note b{color:#b8c1d1}
+.bigbtn{width:100%;padding:11px;border-radius:10px;border:none;font-weight:800;font-size:14px;
+  background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;margin-bottom:10px}
+.bigbtn:hover{filter:brightness(1.12)}
+.bigbtn.alt{background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--txt);font-size:13px}
+
+/* ---------- KPIs ---------- */
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.kpi{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:11px}
+.kpi .v{font-size:23px;font-weight:850;letter-spacing:-.02em;line-height:1.1}
+.kpi .l{font-size:11px;color:var(--mut);margin-top:3px;font-weight:600}
+.kpi.hero{grid-column:1/-1;background:linear-gradient(135deg,rgba(14,165,233,.16),rgba(3,105,161,.06));
+  border-color:rgba(14,165,233,.35)}
+.kpi.hero .v{font-size:38px;color:#7dd3fc}
+
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:right;padding:6px 5px;border-bottom:1px solid var(--line)}
+th{color:var(--mut);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+th:first-child,td:first-child{text-align:left}
+tr.best td{color:#7dd3fc;font-weight:800;background:rgba(14,165,233,.08)}
+tr.clickable{cursor:pointer}
+tr.clickable:hover td{background:rgba(255,255,255,.05)}
+
+.list{display:flex;flex-direction:column;gap:6px}
+.item{
+  display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--line);
+  border-radius:9px;padding:7px 9px;font-size:12.5px
+}
+.item.sel{border-color:rgba(14,165,233,.6);background:rgba(14,165,233,.1)}
+.item .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item .dim{color:var(--mut);font-size:11.5px;font-variant-numeric:tabular-nums}
+.item button{background:none;border:none;color:var(--mut);font-size:15px;padding:0 3px;line-height:1}
+.item button:hover{color:var(--bad)}
+.empty{color:var(--mut);font-size:12px;text-align:center;padding:14px 0}
+
+.msg{border-radius:9px;padding:9px 11px;font-size:12.5px;line-height:1.5;margin-bottom:9px}
+.msg.ok{background:rgba(34,197,94,.11);border:1px solid rgba(34,197,94,.32);color:#86efac}
+.msg.warn{background:rgba(251,191,36,.11);border:1px solid rgba(251,191,36,.32);color:#fcd34d}
+.msg.bad{background:rgba(239,68,68,.11);border:1px solid rgba(239,68,68,.32);color:#fca5a5}
+.msg.info{background:rgba(14,165,233,.1);border:1px solid rgba(14,165,233,.28);color:#7dd3fc}
+
+.rep h5{margin:16px 0 6px;font-size:13.5px;color:var(--txt)}
+.rep h5:first-child{margin-top:0}
+.rep p,.rep li{color:var(--mut);font-size:12.5px;line-height:1.6;margin:0 0 6px}
+.rep ul{padding-left:17px;margin:0 0 8px}
+.rep b{color:#cbd5e1}
+
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:99;padding:20px}
+.modal.on{display:flex}
+.modal .box{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;max-width:620px;width:100%;max-height:85vh;overflow:auto}
+.modal h3{margin:0 0 12px;font-size:17px}
+kbd{background:#0b0d10;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;
+  padding:1px 6px;font-size:11px;font-family:inherit;color:#cbd5e1}
+
+#btnPanel,#btnPanelR{display:none}
+@media (max-width:1200px){
+  #btnPanel,#btnPanelR{display:inline-flex}
+  .brand small{display:none}
+  .side{position:absolute;top:0;z-index:20;height:100%;box-shadow:0 0 40px rgba(0,0,0,.65)}
+  .side.right{right:0}
+  .side.hide{display:none}
+}
+@media (max-width:620px){ .side{width:100%!important} }
+@media print{
+  .topbar,.side,.hint,.zoombox{display:none!important}
+  body,.app,.stage{height:auto;overflow:visible}
+  .stage{background:#fff}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ TOPBAR ============ -->
+  <div class="topbar">
+    <button class="tbtn" id="btnPanel" title="Mostrar / ocultar panel">☰</button>
+    <div class="brand">
+      <div class="logo">🅿️</div>
+      <div><b>Planificador de Parking</b><small>FlotaDSP · nave logística</small></div>
+    </div>
+
+    <div class="seg" id="tools" style="width:330px">
+      <button data-tool="select" class="on" title="Seleccionar y mover (V)">✋ Mover</button>
+      <button data-tool="van" title="Añadir furgoneta (A)">🚐 Furgo</button>
+      <button data-tool="obs" title="Dibujar obstáculo (O)">🧱 Obstáculo</button>
+      <button data-tool="door" title="Colocar puerta (P)">🚪 Puerta</button>
+    </div>
+
+    <button class="tbtn" id="btnUndo" title="Deshacer (Ctrl+Z)">↶</button>
+    <button class="tbtn" id="btnRedo" title="Rehacer (Ctrl+Y)">↷</button>
+
+    <div class="spacer"></div>
+
+    <button class="tbtn" id="btnPanelR" title="Mostrar / ocultar resultados">📊</button>
+    <button class="tbtn" id="btnFit" title="Encajar vista (F)">⤢ Encajar</button>
+    <button class="tbtn" id="btnHelp">? Ayuda</button>
+    <button class="tbtn" id="btnPng">🖼 PNG</button>
+    <button class="tbtn" id="btnPrint">🖨 Imprimir</button>
+    <button class="tbtn primary" id="btnOpt">⚡ Optimizar</button>
+  </div>
+
+  <div class="main">
+    <!-- ============ PANEL IZQUIERDO ============ -->
+    <div class="side" id="sideL">
+      <div class="tabs" id="tabsL">
+        <button data-p="pNave" class="on">Nave</button>
+        <button data-p="pVeh">Furgoneta</button>
+        <button data-p="pOpt">Criterios</button>
+        <button data-p="pElem">Elementos</button>
+      </div>
+      <div class="panes">
+
+        <!-- NAVE -->
+        <div class="pane on" id="pNave">
+          <div class="grp">
+            <h4>Dimensiones interiores</h4>
+            <div class="row"><label>Ancho (eje X)</label><input type="number" id="naveW" step="0.1" min="3"> <span style="color:var(--mut)">m</span></div>
+            <div class="row"><label>Fondo (eje Y)</label><input type="number" id="naveH" step="0.1" min="3"> <span style="color:var(--mut)">m</span></div>
+            <div class="row"><label>Altura libre</label><input type="number" id="naveZ" step="0.05" min="1.5"> <span style="color:var(--mut)">m</span></div>
+            <div class="note">Mide <b>por dentro</b>, de pared a pared. La altura libre es hasta el punto más bajo (vigas, luminarias, tubos de rociadores).</div>
+          </div>
+
+          <div class="grp">
+            <h4>Plantillas rápidas</h4>
+            <div class="row wide"><select id="tplNave">
+              <option value="">— elige una medida típica —</option>
+              <option value="20,12,5">Nave pequeña 20 × 12 m</option>
+              <option value="25,15,6">Nave 25 × 15 m</option>
+              <option value="30,20,6">Nave 30 × 20 m</option>
+              <option value="40,20,7">Nave 40 × 20 m</option>
+              <option value="50,25,7">Nave 50 × 25 m</option>
+              <option value="60,30,8">Nave grande 60 × 30 m</option>
+              <option value="80,40,9">Nave XL 80 × 40 m</option>
+            </select></div>
+          </div>
+
+          <div class="grp">
+            <h4>Márgenes y seguridad</h4>
+            <div class="row"><label>Separación a paredes</label><input type="number" id="wallClear" step="0.05" min="0"> m</div>
+            <div class="row"><label>Pasillo peatonal perimetral</label><input type="number" id="pedLane" step="0.05" min="0"> m</div>
+            <div class="note">El pasillo peatonal es una franja libre extra pegada a la pared para poder <b>rodear la nave a pie</b> y llegar a extintores y salidas. Ponlo a 0 si no lo quieres.</div>
+          </div>
+
+          <div class="grp">
+            <h4>Forma irregular</h4>
+            <div class="note">Si tu nave no es rectangular (en L, con oficina en una esquina, altillo, muelle…), dibuja esas zonas como <b>obstáculos</b> con la herramienta 🧱. El cálculo las respeta.</div>
+          </div>
+        </div>
+
+        <!-- VEHÍCULO -->
+        <div class="pane" id="pVeh">
+          <div class="grp">
+            <h4>Modelo</h4>
+            <div class="row wide" style="margin-bottom:10px"><select id="preset"></select></div>
+            <div class="row"><label>Largo</label><input type="number" id="vL" step="0.01" min="2"> m</div>
+            <div class="row"><label>Ancho (carrocería)</label><input type="number" id="vW" step="0.01" min="1"> m</div>
+            <div class="row"><label>Ancho con retrovisores</label><input type="number" id="vWm" step="0.01" min="1"> m</div>
+            <div class="row"><label>Altura</label><input type="number" id="vH" step="0.01" min="1"> m</div>
+            <div class="row"><label>Diámetro de giro</label><input type="number" id="vT" step="0.1" min="5"> m</div>
+            <div class="note">Medidas <b>orientativas</b> de catálogo. Si tu flota lleva baca, portabicis, deflector o rotulación con salientes, mide una furgoneta real y corrige aquí.</div>
+          </div>
+
+          <div class="grp">
+            <h4>Holguras entre vehículos</h4>
+            <label class="chk"><input type="checkbox" id="useMirrors"> Contar el ancho <b style="color:#cbd5e1">con retrovisores</b></label>
+            <div class="row"><label>Holgura lateral</label><input type="number" id="gapSide" step="0.05" min="0"> m</div>
+            <div class="row"><label>Holgura delante/detrás</label><input type="number" id="gapEnd" step="0.05" min="0"> m</div>
+            <div class="msg info" style="margin:10px 0 0">
+              <b>Referencia:</b> 0,50 m solo para maniobrar y salir por delante · <b>0,70 m</b> equilibrio recomendado (abrir puerta de conductor) · 1,00 m si cargáis a diario por la <b>puerta lateral corredera</b>.
+            </div>
+          </div>
+
+          <div class="grp">
+            <h4>Plaza resultante</h4>
+            <div class="kpis" style="margin:0">
+              <div class="kpi"><div class="v" id="stallW">–</div><div class="l">Ancho de plaza</div></div>
+              <div class="kpi"><div class="v" id="stallL">–</div><div class="l">Fondo de plaza</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CRITERIOS -->
+        <div class="pane" id="pOpt">
+          <div class="grp">
+            <h4>Objetivo</h4>
+            <div class="row wide" style="margin-bottom:10px"><select id="goal">
+              <option value="max">Máxima capacidad (meter todas las que pueda)</option>
+              <option value="ops" selected>Operativa diaria (salidas y entradas rápidas)</option>
+              <option value="storage">Almacenaje / larga estancia (poco movimiento)</option>
+            </select></div>
+            <div class="note" id="goalNote"></div>
+          </div>
+
+          <div class="grp">
+            <h4>Ángulos permitidos</h4>
+            <div id="angles" style="display:grid;grid-template-columns:1fr 1fr;gap:5px"></div>
+            <div class="note">90° = perpendicular (más plazas por metro de pared). 45–60° = en espiga (maniobra mucho más fácil, pasillo estrecho). 0° = en línea.</div>
+          </div>
+
+          <div class="grp">
+            <h4>Circulación</h4>
+            <label class="chk"><input type="checkbox" id="twoWay"> Pasillos de <b style="color:#cbd5e1">doble sentido</b></label>
+            <label class="chk"><input type="checkbox" id="allowSingle" checked> Permitir filas simples (una fila por pasillo)</label>
+            <label class="chk"><input type="checkbox" id="allowDouble" checked> Permitir filas dobles (dos filas por pasillo)</label>
+            <div class="row" style="margin-top:10px"><label>Ancho de pasillo</label>
+              <select id="aisleMode" style="width:110px"><option value="auto">Automático</option><option value="man">Manual</option></select></div>
+            <div class="row"><label>Valor manual</label><input type="number" id="aisleMan" step="0.1" min="2.5"> m</div>
+            <div class="note" id="aisleNote"></div>
+          </div>
+
+          <div class="grp">
+            <h4>Marcha atrás</h4>
+            <div class="row wide"><select id="parkStyle">
+              <option value="back">Entrar marcha atrás (salir de frente) — recomendado</option>
+              <option value="front">Entrar de frente (salir marcha atrás)</option>
+            </select></div>
+            <div class="note">Aparcar marcha atrás y salir de frente reduce muchísimo los golpes en maniobra y acelera la salida por la mañana. Es la práctica estándar en flotas DSP.</div>
+          </div>
+        </div>
+
+        <!-- ELEMENTOS -->
+        <div class="pane" id="pElem">
+          <div class="grp">
+            <h4>Obstáculos y zonas <span style="float:right;color:var(--mut)" id="nObs">0</span></h4>
+            <div class="row wide" style="margin-bottom:8px">
+              <select id="obsType">
+                <option value="pilar">Pilar / columna</option>
+                <option value="oficina">Oficina</option>
+                <option value="taller">Zona de taller</option>
+                <option value="carga">Zona de carga / muelle</option>
+                <option value="estanteria">Estantería / almacén</option>
+                <option value="lavado">Zona de lavado</option>
+                <option value="carga_el">Punto de recarga eléctrica</option>
+                <option value="libre">Zona libre obligatoria</option>
+                <option value="otro">Otro</option>
+              </select>
+            </div>
+            <button class="bigbtn alt" id="btnAddObs">＋ Añadir obstáculo (o dibújalo con 🧱)</button>
+            <div class="list" id="obsList"></div>
+          </div>
+
+          <div class="grp">
+            <h4>Puertas y accesos <span style="float:right;color:var(--mut)" id="nDoor">0</span></h4>
+            <button class="bigbtn alt" id="btnAddDoor">＋ Añadir puerta</button>
+            <div class="list" id="doorList"></div>
+            <div class="note">Cada plaza debe poder <b>alcanzar una puerta</b> por los pasillos. El optimizador lo comprueba de verdad, recorriendo el espacio libre.</div>
+          </div>
+
+          <div class="grp">
+            <h4>Furgonetas colocadas <span style="float:right;color:var(--mut)" id="nVan">0</span></h4>
+            <button class="bigbtn alt" id="btnClearVans">🗑 Vaciar todas las furgonetas</button>
+            <div class="note">Puedes mover cualquier furgoneta a mano después de optimizar: arrástrala, gírala con <kbd>R</kbd> y duplícala con <kbd>Ctrl</kbd>+<kbd>D</kbd>.</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ============ LIENZO ============ -->
+    <div class="stage" id="stage">
+      <canvas id="cv"></canvas>
+      <div class="hint" id="hint"></div>
+      <div class="zoombox">
+        <button id="zIn">＋</button><button id="zOut">－</button><button id="zFit">⤢</button>
+      </div>
+    </div>
+
+    <!-- ============ PANEL DERECHO ============ -->
+    <div class="side right" id="sideR">
+      <div class="tabs" id="tabsR">
+        <button data-p="pRes" class="on">Resultado</button>
+        <button data-p="pComp">Comparativa</button>
+        <button data-p="pInf">Informe</button>
+        <button data-p="pFile">Archivo</button>
+      </div>
+      <div class="panes">
+
+        <div class="pane on" id="pRes">
+          <div class="kpis">
+            <div class="kpi hero"><div class="v" id="kCap">0</div><div class="l">FURGONETAS QUE CABEN</div></div>
+            <div class="kpi"><div class="v" id="kArea">–</div><div class="l">m² por furgoneta</div></div>
+            <div class="kpi"><div class="v" id="kUse">–</div><div class="l">Ocupación del suelo</div></div>
+            <div class="kpi"><div class="v" id="kAngle">–</div><div class="l">Ángulo</div></div>
+            <div class="kpi"><div class="v" id="kAisle">–</div><div class="l">Pasillo</div></div>
+          </div>
+          <div id="alerts"></div>
+          <div class="grp">
+            <h4>Distribución</h4>
+            <div id="rowsInfo" class="note" style="margin-top:0"></div>
+          </div>
+          <div class="grp">
+            <h4>Etiquetado de plazas</h4>
+            <div class="row"><label>Prefijo</label><input type="text" id="labelPrefix" value="P" style="width:60px;text-align:center"></div>
+            <div class="row wide"><select id="labelMode">
+              <option value="rowcol">Por fila y número (A-01, A-02…)</option>
+              <option value="seq">Correlativo (P01, P02…)</option>
+            </select></div>
+            <button class="bigbtn alt" id="btnRelabel" style="margin-top:8px">Renumerar plazas</button>
+          </div>
+        </div>
+
+        <div class="pane" id="pComp">
+          <div class="note" style="margin:0 0 10px">Capacidad máxima que consigue cada ángulo con <b>tu nave y tus criterios</b>. Pulsa una fila para aplicar esa distribución.</div>
+          <table id="cmpTable"><thead><tr><th>Ángulo</th><th>Plazas</th><th>Pasillo</th><th>m²/furgo</th></tr></thead><tbody></tbody></table>
+          <div class="note" id="cmpNote"></div>
+        </div>
+
+        <div class="pane" id="pInf"><div class="rep" id="report"></div></div>
+
+        <div class="pane" id="pFile">
+          <div class="grp">
+            <h4>Guardar y recuperar</h4>
+            <button class="bigbtn" id="btnSave">💾 Guardar en este navegador</button>
+            <button class="bigbtn alt" id="btnLoad">📂 Recuperar lo guardado</button>
+            <button class="bigbtn alt" id="btnExport">⬇ Exportar proyecto (.json)</button>
+            <button class="bigbtn alt" id="btnImport">⬆ Importar proyecto (.json)</button>
+            <input type="file" id="fileIn" accept=".json,application/json" hidden>
+            <div class="note">Se guarda automáticamente cada cambio en este navegador. Exporta el .json si quieres llevártelo a otro ordenador o pasárselo a alguien.</div>
+          </div>
+          <div class="grp">
+            <h4>Salida</h4>
+            <button class="bigbtn alt" id="btnPng2">🖼 Descargar plano en PNG</button>
+            <button class="bigbtn alt" id="btnPrint2">🖨 Imprimir / guardar en PDF</button>
+            <button class="bigbtn alt" id="btnCsv">📋 Listado de plazas (.csv)</button>
+          </div>
+          <div class="grp">
+            <h4>Empezar de cero</h4>
+            <button class="bigbtn alt" id="btnReset" style="color:#fca5a5">♻ Restablecer todo</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MODALES ============ -->
+<div class="modal" id="mHelp"><div class="box">
+  <h3>Cómo se usa</h3>
+  <div class="rep">
+    <h5>1 · Mide tu nave</h5>
+    <p>En la pestaña <b>Nave</b> pon el ancho, el fondo y la altura libre <b>por dentro</b>. Luego dibuja los pilares y las zonas ocupadas con la herramienta 🧱 y coloca las puertas con 🚪.</p>
+    <h5>2 · Ajusta la furgoneta</h5>
+    <p>Elige tu modelo de Toyota Proace y revisa las holguras. La holgura lateral es lo que más cambia el resultado final.</p>
+    <h5>3 · Pulsa Optimizar</h5>
+    <p>La app prueba cientos de distribuciones (ángulos, orientación de pasillos, filas simples y dobles, desplazamientos para esquivar pilares) y se queda con la mejor que además <b>tiene acceso real a una puerta</b>.</p>
+    <h5>4 · Retoca a mano</h5>
+    <p>Arrastra cualquier furgoneta. Si se solapa con otra, con un pilar o se sale, se pinta en rojo al instante.</p>
+    <h5>Atajos de teclado</h5>
+    <ul>
+      <li><kbd>V</kbd> mover · <kbd>A</kbd> añadir furgoneta · <kbd>O</kbd> obstáculo · <kbd>P</kbd> puerta</li>
+      <li><kbd>R</kbd> girar 15° · <kbd>Shift</kbd>+<kbd>R</kbd> girar −15° · <kbd>Q</kbd>/<kbd>E</kbd> girar 90°</li>
+      <li>Flechas: mover 10 cm · <kbd>Shift</kbd>+flechas: 1 cm</li>
+      <li><kbd>Ctrl</kbd>+<kbd>D</kbd> duplicar · <kbd>Supr</kbd> borrar · <kbd>Esc</kbd> deseleccionar</li>
+      <li><kbd>Ctrl</kbd>+<kbd>Z</kbd> deshacer · <kbd>F</kbd> encajar vista · rueda del ratón para zoom</li>
+    </ul>
+    <h5>Aviso</h5>
+    <p>Es una herramienta de <b>planificación</b>. Antes de pintar el suelo comprueba en obra los pilares reales, y consulta la normativa de incendios aplicable a tu nave (anchos de evacuación, distancias a salidas y sectorización) con un técnico.</p>
+  </div>
+  <button class="bigbtn" style="margin-top:14px" onclick="document.getElementById('mHelp').classList.remove('on')">Entendido</button>
+</div></div>
+
+
+<script>
+"use strict";
+/* =====================================================================
+   PLANIFICADOR DE PARKING DE NAVE — FlotaDSP
+   Todo en un único archivo, sin dependencias, funciona sin internet.
+   ===================================================================== */
+
+/* ---------------------------------------------------------------
+   1. Catálogo de vehículos (medidas orientativas de catálogo, m)
+   --------------------------------------------------------------- */
+const PRESETS = {
+  proace_medium: { label:"Toyota Proace Medium (L1)", L:4.98, W:1.92, Wm:2.20, H:1.94, T:11.5 },
+  proace_long:   { label:"Toyota Proace Long (L2)",   L:5.33, W:1.92, Wm:2.20, H:1.94, T:12.4 },
+  proace_compact:{ label:"Toyota Proace Compact (L0)",L:4.61, W:1.92, Wm:2.20, H:1.90, T:11.3 },
+  city_l1:       { label:"Toyota Proace City L1",     L:4.40, W:1.85, Wm:2.11, H:1.80, T:10.8 },
+  city_l2:       { label:"Toyota Proace City L2",     L:4.75, W:1.85, Wm:2.11, H:1.80, T:11.4 },
+  max_l2:        { label:"Toyota Proace Max L2",      L:5.41, W:2.05, Wm:2.26, H:2.52, T:12.5 },
+  max_l3:        { label:"Toyota Proace Max L3",      L:6.00, W:2.05, Wm:2.26, H:2.52, T:13.8 },
+  max_l4:        { label:"Toyota Proace Max L4",      L:6.36, W:2.05, Wm:2.26, H:2.52, T:15.0 },
+  custom:        { label:"Personalizado…",            L:5.33, W:1.92, Wm:2.20, H:1.94, T:12.4 }
+};
+
+const OBS_STYLE = {
+  pilar:      { c:"#64748b", n:"Pilar" },
+  oficina:    { c:"#8b5cf6", n:"Oficina" },
+  taller:     { c:"#f97316", n:"Taller" },
+  carga:      { c:"#eab308", n:"Zona de carga" },
+  estanteria: { c:"#0891b2", n:"Estantería" },
+  lavado:     { c:"#06b6d4", n:"Lavado" },
+  carga_el:   { c:"#22c55e", n:"Recarga eléctrica" },
+  libre:      { c:"#ef4444", n:"Zona libre" },
+  otro:       { c:"#94a3b8", n:"Otro" }
+};
+
+const ANGLES = [90, 75, 60, 45, 30, 0];
+
+/* ---------------------------------------------------------------
+   2. Estado
+   --------------------------------------------------------------- */
+function defaultState(){
+  return {
+    nave:{ w:30, h:20, z:6 },
+    veh:{ preset:"proace_long", L:5.33, W:1.92, Wm:2.20, H:1.94, T:12.4 },
+    par:{
+      useMirrors:true, gapSide:0.70, gapEnd:0.50,
+      wallClear:0.40, pedLane:0.00,
+      goal:"ops", angles:{90:true,75:false,60:true,45:true,30:false,0:true},
+      twoWay:false, allowSingle:true, allowDouble:true,
+      aisleMode:"auto", aisleMan:7.0, parkStyle:"back",
+      labelPrefix:"P", labelMode:"rowcol"
+    },
+    obs:[ {id:1, x:0.0, y:0.0, w:0.4, h:0.4, t:"pilar", n:"Pilar 1"} ],
+    doors:[ {id:1, wall:"S", pos:15, w:4.0, n:"Portón principal"} ],
+    vans:[],
+    meta:null
+  };
+}
+let S = defaultState();
+S.obs = [];
+
+let view = { s:20, ox:60, oy:60 };       // escala px/m y desplazamiento
+let tool = "select";
+let sel  = null;                          // {k:'van'|'obs'|'door', id}
+let drag = null;
+let undoStack = [], redoStack = [];
+
+/* ---------------------------------------------------------------
+   3. Utilidades geométricas
+   --------------------------------------------------------------- */
+const R2D = 180/Math.PI, D2R = Math.PI/180;
+const clamp = (v,a,b)=>Math.max(a,Math.min(b,v));
+const round2 = v=>Math.round(v*100)/100;
+const fmt = (v,d=2)=>Number(v).toLocaleString("es-ES",{minimumFractionDigits:d,maximumFractionDigits:d});
+
+// Esquinas de un rectángulo orientado (centro cx,cy · largo L · ancho W · ángulo grados)
+function corners(cx,cy,L,W,ang){
+  const a=ang*D2R, c=Math.cos(a), s=Math.sin(a), hl=L/2, hw=W/2;
+  return [[-hl,-hw],[hl,-hw],[hl,hw],[-hl,hw]].map(([x,y])=>[cx+x*c-y*s, cy+x*s+y*c]);
+}
+function aabbOf(pts){
+  let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+  for(const[x,y]of pts){x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x);y1=Math.max(y1,y);}
+  return {x0,y0,x1,y1};
+}
+// Separating Axis Theorem entre dos polígonos convexos
+function polyHit(A,B){
+  for(const P of [A,B]){
+    for(let i=0;i<P.length;i++){
+      const j=(i+1)%P.length;
+      const nx=-(P[j][1]-P[i][1]), ny=P[j][0]-P[i][0];
+      let a0=Infinity,a1=-Infinity,b0=Infinity,b1=-Infinity;
+      for(const[x,y]of A){const p=x*nx+y*ny;a0=Math.min(a0,p);a1=Math.max(a1,p);}
+      for(const[x,y]of B){const p=x*nx+y*ny;b0=Math.min(b0,p);b1=Math.max(b1,p);}
+      if(a1<=b0+1e-9||b1<=a0+1e-9) return false;
+    }
+  }
+  return true;
+}
+const rectPoly = r=>[[r.x,r.y],[r.x+r.w,r.y],[r.x+r.w,r.y+r.h],[r.x,r.y+r.h]];
+function pointInPoly(px,py,P){
+  let inside=false;
+  for(let i=0,j=P.length-1;i<P.length;j=i++){
+    const[xi,yi]=P[i],[xj,yj]=P[j];
+    if(((yi>py)!==(yj>py)) && px < (xj-xi)*(py-yi)/(yj-yi)+xi) inside=!inside;
+  }
+  return inside;
+}
+
+/* ---------------------------------------------------------------
+   4. Dimensiones derivadas (plaza, pasillo)
+   --------------------------------------------------------------- */
+function vehWidth(){ return S.par.useMirrors ? S.veh.Wm : S.veh.W; }
+function stallL(){ return S.veh.L + S.par.gapEnd; }          // fondo de plaza
+function stallW(){ return vehWidth() + S.par.gapSide; }      // ancho de plaza
+
+// Pasillo recomendado según ángulo, largo del vehículo y diámetro de giro
+function aisleFor(angle){
+  if(S.par.aisleMode==="man") return S.par.aisleMan;
+  const base = Math.max(6.0, S.veh.L*1.30, S.veh.T*0.60);
+  const f = {90:1.00, 75:0.86, 60:0.74, 45:0.63, 30:0.56, 0:0.52}[angle] ?? 1;
+  let a = base*f;
+  if(angle===0) a = Math.max(3.5, a);
+  if(S.par.twoWay && angle!==90) a = Math.max(a, 5.5);        // cruce de dos vehículos
+  if(!S.par.twoWay && angle===90) a = Math.max(a*0.95, 6.0);
+  return Math.round(a*20)/20;                                 // múltiplos de 5 cm
+}
+
+// Margen efectivo contra pared = separación + pasillo peatonal
+function margin(){ return S.par.wallClear + S.par.pedLane; }
+
+/* ---------------------------------------------------------------
+   5. Motor de optimización
+   --------------------------------------------------------------- */
+
+// Franjas alternas: fila(s) + pasillo, respetando que TODA fila toque un pasillo
+function makeBands(H, VP, A, startWithRow, doubleRow, off){
+  const b=[]; let y=off, guard=0;
+  if(startWithRow && y+VP<=H){ b.push({t:"R",y,h:VP}); y+=VP; }
+  while(y<H && guard++<400){
+    if(y+A>H) break;
+    const add=[]; let y2=y+A;
+    const n = doubleRow?2:1;
+    for(let i=0;i<n;i++){ if(y2+VP<=H){ add.push({t:"R",y:y2,h:VP}); y2+=VP; } else break; }
+    if(!add.length) break;
+    b.push({t:"A",y,h:A}, ...add); y=y2;
+  }
+  // Elimina filas huérfanas (sin pasillo a ningún lado)
+  for(let i=b.length-1;i>=0;i--){
+    if(b[i].t==="R"){
+      const p=b[i-1], n=b[i+1];
+      if(!(p&&p.t==="A") && !(n&&n.t==="A")) b.splice(i,1);
+    }
+  }
+  while(b.length && b[b.length-1].t==="A") b.pop();
+  return b;
+}
+
+// Zonas prohibidas: obstáculos + resguardo delante de cada puerta
+function forbiddenRects(aisle){
+  const out = S.obs.map(o=>({x:o.x,y:o.y,w:o.w,h:o.h}));
+  const depth = Math.max(aisle, S.veh.L+1.0);
+  for(const d of S.doors){
+    const half = d.w/2 + 0.5;
+    if(d.wall==="N") out.push({x:d.pos-half, y:0,               w:d.w+1, h:depth});
+    if(d.wall==="S") out.push({x:d.pos-half, y:S.nave.h-depth,   w:d.w+1, h:depth});
+    if(d.wall==="W") out.push({x:0,             y:d.pos-half,    w:depth, h:d.w+1});
+    if(d.wall==="E") out.push({x:S.nave.w-depth,y:d.pos-half,    w:depth, h:d.w+1});
+  }
+  return out;
+}
+
+/* Genera una distribución completa.
+   Trabajamos siempre con los pasillos en horizontal (eje X); si axis==="y"
+   transponemos la nave, resolvemos y devolvemos el resultado transpuesto. */
+function layout(cfg){
+  const tr = cfg.axis==="y";
+  const NW = tr ? S.nave.h : S.nave.w;
+  const NH = tr ? S.nave.w : S.nave.h;
+  const forb = forbiddenRects(cfg.aisle).map(r=> tr ? {x:r.y,y:r.x,w:r.h,h:r.w} : r);
+
+  const m = margin();
+  const SL = stallL(), SW = stallW();
+  const th = cfg.angle*D2R;
+  let VP, P;
+  if(cfg.angle===0){ VP = SW; P = SL + 1.10; }                 // en línea: hueco de maniobra
+  else { VP = SL*Math.sin(th) + SW*Math.cos(th); P = SW/Math.sin(th); }
+
+  const usableH = NH - 2*m, usableW = NW - 2*m;
+  if(usableH<=0 || usableW<=0 || VP>usableH) return null;
+
+  const bands = makeBands(usableH, VP, cfg.aisle, cfg.startWithRow, cfg.doubleRow, cfg.yoff);
+  if(!bands.some(b=>b.t==="R")) return null;
+
+  const vans=[], rows=[];
+  const halfX = cfg.angle===0 ? SL/2 : (SL*Math.cos(th)+SW*Math.sin(th))/2;
+  const nose = S.par.parkStyle==="back" ? 180 : 0;             // solo afecta al dibujo
+
+  for(let i=0;i<bands.length;i++){
+    const b=bands[i]; if(b.t!=="R") continue;
+    // ¿A qué pasillo da esta fila? La 1ª del par usa el de arriba, la 2ª el de abajo.
+    const aUp   = !!(bands[i-1] && bands[i-1].t==="A");
+    const aDown = !!(bands[i+1] && bands[i+1].t==="A");
+    const above = aUp || !aDown;
+    const cy = m + b.y + VP/2;
+    // morro apuntando en sentido contrario al pasillo
+    let phi;
+    if(cfg.angle===0) phi = 0;
+    else phi = above ? cfg.angle : -cfg.angle;
+
+    const rowVans=[];
+    let x = m + cfg.xoff + halfX;
+    let guard=0;
+    while(x + halfX <= NW - m && guard++<400){
+      const pts = corners(x, cy, SL, SW, phi);
+      const bb = aabbOf(pts);
+      let ok = bb.x0>=m-1e-6 && bb.x1<=NW-m+1e-6 && bb.y0>=m-1e-6 && bb.y1<=NH-m+1e-6;
+      if(ok) for(const r of forb){ if(polyHit(pts, rectPoly(r))){ ok=false; break; } }
+      if(ok) rowVans.push({ x, y:cy, a:phi, aisleAbove:above });
+      x += P;
+    }
+    if(rowVans.length){ rows.push({y:m+b.y, h:VP, n:rowVans.length, above}); vans.push(...rowVans); }
+  }
+  if(!vans.length) return null;
+
+  const aisleBands = bands.filter(b=>b.t==="A").map(b=>({y:m+b.y,h:b.h}));
+
+  // Destransponer si hace falta
+  const outVans = vans.map((v,i)=>{
+    let x=v.x, y=v.y, a=v.a;
+    if(tr){ const t=x; x=y; y=t; a = 90 - a; }
+    return { id:i+1, x:round2(x), y:round2(y), a:round2(((a+nose)%360+360)%360), lbl:"" };
+  });
+  const outAisles = aisleBands.map(b=> tr ? {x:b.y,y:0,w:b.h,h:S.nave.h,vert:true}
+                                          : {x:0,y:b.y,w:S.nave.w,h:b.h,vert:false});
+
+  // Sentido de circulación: en espiga sólo se puede entrar desde un lado.
+  // Entrando de frente se circula en +X; entrando marcha atrás, en −X.
+  const fw = S.par.parkStyle==="front" ? 1 : -1;
+  const flow = cfg.angle===90 || cfg.angle===0 ? null
+             : (tr ? {dx:0, dy:fw} : {dx:fw, dy:0});
+
+  return {
+    vans: outVans, aisles: outAisles, cfg, flow,
+    rows: rows.map(r=>r.n),
+    count: outVans.length,
+    stallW:SW, stallL:SL, VP, pitch:P
+  };
+}
+
+/* Comprobación real de acceso: rasteriza el suelo libre y hace un recorrido
+   desde las puertas; cada plaza debe tener su punto de salida alcanzable. */
+function accessOK(res){
+  if(!S.doors.length) return {ok:true, reachable:res.count, note:"sin puertas definidas"};
+  const cell=0.25;
+  const nx=Math.ceil(S.nave.w/cell), ny=Math.ceil(S.nave.h/cell);
+  const blocked=new Uint8Array(nx*ny);
+
+  const markRect=r=>{
+    const i0=clamp(Math.floor(r.x/cell),0,nx-1), i1=clamp(Math.ceil((r.x+r.w)/cell),0,nx);
+    const j0=clamp(Math.floor(r.y/cell),0,ny-1), j1=clamp(Math.ceil((r.y+r.h)/cell),0,ny);
+    for(let j=j0;j<j1;j++) for(let i=i0;i<i1;i++) blocked[j*nx+i]=1;
+  };
+  for(const o of S.obs) markRect(o);
+  for(const v of res.vans){
+    const pts=corners(v.x,v.y,res.stallL,res.stallW,v.a), bb=aabbOf(pts);
+    const i0=clamp(Math.floor(bb.x0/cell),0,nx-1), i1=clamp(Math.ceil(bb.x1/cell),0,nx);
+    const j0=clamp(Math.floor(bb.y0/cell),0,ny-1), j1=clamp(Math.ceil(bb.y1/cell),0,ny);
+    for(let j=j0;j<j1;j++) for(let i=i0;i<i1;i++){
+      if(!blocked[j*nx+i] && pointInPoly((i+.5)*cell,(j+.5)*cell,pts)) blocked[j*nx+i]=1;
+    }
+  }
+
+  const seen=new Uint8Array(nx*ny); const q=[];
+  const push=(i,j)=>{ if(i<0||j<0||i>=nx||j>=ny) return;
+    const k=j*nx+i; if(blocked[k]||seen[k]) return; seen[k]=1; q.push(k); };
+  for(const d of S.doors){
+    const a=d.pos-d.w/2, b=d.pos+d.w/2;
+    if(d.wall==="N"||d.wall==="S"){
+      const j = d.wall==="N" ? 0 : ny-1;
+      for(let x=a;x<=b;x+=cell) push(Math.floor(x/cell), j);
+    }else{
+      const i = d.wall==="W" ? 0 : nx-1;
+      for(let y=a;y<=b;y+=cell) push(i, Math.floor(y/cell));
+    }
+  }
+  for(let h=0;h<q.length;h++){
+    const k=q[h], i=k%nx, j=(k-i)/nx;
+    push(i+1,j); push(i-1,j); push(i,j+1); push(i,j-1);
+  }
+
+  let reach=0;
+  for(const v of res.vans){
+    const a=v.a*D2R;
+    let good=false;
+    // punto de salida: por detrás del vehículo y, si no, por delante
+    for(const sign of [-1, 1]){
+      const d = (res.stallL/2 + 0.45)*sign;
+      const px = v.x + Math.cos(a)*d, py = v.y + Math.sin(a)*d;
+      const i=Math.floor(px/cell), j=Math.floor(py/cell);
+      if(i>=0&&j>=0&&i<nx&&j<ny&&seen[j*nx+i]){ good=true; break; }
+    }
+    if(good) reach++;
+  }
+  return { ok: reach===res.count, reachable:reach, total:res.count };
+}
+
+function goalWeights(){
+  // Bonificación por comodidad de maniobra según el objetivo
+  if(S.par.goal==="max")     return a=>0;
+  if(S.par.goal==="storage") return a=>(a===90?0.8:a===0?0.4:0);
+  return a=>({90:0, 75:0.6, 60:1.6, 45:2.2, 30:1.4, 0:-1.2}[a] ?? 0);   // operativa
+}
+
+function optimize(onlyAngle){
+  const t0=performance.now();
+  const angles = ANGLES.filter(a => onlyAngle!=null ? a===onlyAngle : S.par.angles[a]);
+  if(!angles.length) return null;
+  const patterns=[];
+  if(S.par.allowDouble) patterns.push(true);
+  if(S.par.allowSingle) patterns.push(false);
+  if(!patterns.length) patterns.push(true);
+
+  const cands=[];
+  for(const axis of ["x","y"]){
+    for(const angle of angles){
+      const aisle = aisleFor(angle);
+      const SL=stallL(), SW=stallW(), th=angle*D2R;
+      const VP = angle===0 ? SW : SL*Math.sin(th)+SW*Math.cos(th);
+      for(const doubleRow of patterns){
+        const mod = (doubleRow?2*VP:VP) + aisle;
+        for(const startWithRow of [true,false]){
+          for(let ky=0; ky<6; ky++){
+            const yoff = mod*ky/6;
+            for(let kx=0; kx<4; kx++){
+              const pitch = angle===0 ? SL+1.10 : SW/Math.sin(th);
+              const xoff = pitch*kx/4;
+              const r = layout({axis,angle,aisle,doubleRow,startWithRow,yoff,xoff});
+              if(r) cands.push(r);
+            }
+          }
+        }
+      }
+    }
+  }
+  if(!cands.length) return null;
+
+  const bonus = goalWeights();
+  cands.sort((a,b)=>{
+    const sa = a.count + bonus(a.cfg.angle), sb = b.count + bonus(b.cfg.angle);
+    if(sb!==sa) return sb-sa;
+    if(a.cfg.angle!==b.cfg.angle) return b.cfg.angle-a.cfg.angle;   // a igualdad, más perpendicular
+    return a.aisles.length-b.aisles.length;
+  });
+
+  // Validar acceso sólo en los mejores candidatos (es lo caro)
+  let best=null, fallback=cands[0];
+  for(const c of cands.slice(0,26)){
+    const ac = accessOK(c);
+    c.access = ac;
+    if(ac.ok){ best=c; break; }
+  }
+  const chosen = best || fallback;
+  if(!chosen.access) chosen.access = accessOK(chosen);
+  chosen.ms = Math.round(performance.now()-t0);
+  return chosen;
+}
+
+function compareAngles(){
+  const out=[];
+  for(const a of ANGLES){
+    if(!S.par.angles[a]) continue;
+    const r = optimize(a);
+    if(r) out.push({ angle:a, count:r.count, aisle:r.cfg.aisle,
+                     m2: r.count? S.nave.w*S.nave.h/r.count : 0, res:r });
+  }
+  out.sort((x,y)=>y.count-x.count);
+  return out;
+}
+
+/* ---------------------------------------------------------------
+   6. Aplicar resultado
+   --------------------------------------------------------------- */
+function applyResult(r){
+  if(!r){ toast("No cabe ninguna furgoneta con estos criterios.","bad"); return; }
+  pushUndo();
+  S.vans = r.vans.map(v=>({...v}));
+  S.meta = {
+    angle:r.cfg.angle, aisle:r.cfg.aisle, axis:r.cfg.axis, doubleRow:r.cfg.doubleRow,
+    aisles:r.aisles, rows:r.rows, stallW:r.stallW, stallL:r.stallL,
+    flow:r.flow, access:r.access, ms:r.ms||0
+  };
+  relabel(); fitView(); renderAll();
+}
+
+function relabel(){
+  const pre = S.par.labelPrefix || "P";
+  if(S.par.labelMode==="seq"){
+    S.vans.forEach((v,i)=> v.lbl = pre + String(i+1).padStart(2,"0"));
+  }else{
+    // Agrupa por filas: por coordenada perpendicular al pasillo
+    const vert = S.meta && S.meta.axis==="y";
+    const key = v => Math.round((vert? v.x : v.y)*4)/4;
+    const groups = {};
+    S.vans.forEach(v=>{ (groups[key(v)] = groups[key(v)] || []).push(v); });
+    const ks = Object.keys(groups).map(Number).sort((a,b)=>a-b);
+    ks.forEach((k,gi)=>{
+      const letter = String.fromCharCode(65 + (gi%26)) + (gi>=26 ? Math.floor(gi/26) : "");
+      groups[k].sort((a,b)=> vert ? a.y-b.y : a.x-b.x)
+        .forEach((v,i)=> v.lbl = letter + "-" + String(i+1).padStart(2,"0"));
+    });
+  }
+}
+
+/* ---------------------------------------------------------------
+   7. Validación de la escena editada a mano
+   --------------------------------------------------------------- */
+function validate(){
+  const SL = (S.meta&&S.meta.stallL) || stallL();
+  const SW = (S.meta&&S.meta.stallW) || stallW();
+  const L=S.veh.L, W=vehWidth();
+  const polys = S.vans.map(v=>corners(v.x,v.y,L,W,v.a));      // carrocería real
+  const bad = new Set();
+  const m = S.par.wallClear;
+  for(let i=0;i<S.vans.length;i++){
+    const bb=aabbOf(polys[i]);
+    if(bb.x0< -1e-6 || bb.y0< -1e-6 || bb.x1>S.nave.w+1e-6 || bb.y1>S.nave.h+1e-6) bad.add(i);
+    for(const o of S.obs) if(polyHit(polys[i], rectPoly(o))) bad.add(i);
+    for(let j=i+1;j<S.vans.length;j++) if(polyHit(polys[i],polys[j])){ bad.add(i); bad.add(j); }
+  }
+  return { bad, SL, SW };
+}
+
+/* ---------------------------------------------------------------
+   8. Dibujo
+   --------------------------------------------------------------- */
+const cv = document.getElementById("cv"), ctx = cv.getContext("2d");
+let dpr = 1;
+function resize(){
+  const st=document.getElementById("stage");
+  dpr = window.devicePixelRatio||1;
+  cv.width = st.clientWidth*dpr; cv.height = st.clientHeight*dpr;
+  draw();
+}
+const X = wx => wx*view.s + view.ox;
+const Y = wy => wy*view.s + view.oy;
+const wX = px => (px - view.ox)/view.s;
+const wY = py => (py - view.oy)/view.s;
+
+function fitView(){
+  const st=document.getElementById("stage");
+  const pad=70;
+  const sx=(st.clientWidth-pad*2)/Math.max(S.nave.w,1);
+  const sy=(st.clientHeight-pad*2)/Math.max(S.nave.h,1);
+  view.s = Math.max(2, Math.min(sx,sy));
+  view.ox = (st.clientWidth - S.nave.w*view.s)/2;
+  view.oy = (st.clientHeight - S.nave.h*view.s)/2;
+  draw();
+}
+
+function draw(){
+  const w=cv.width/dpr, h=cv.height/dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle="#0e1114"; ctx.fillRect(0,0,w,h);
+
+  const s=view.s;
+  const val = validate();
+
+  // ---- Rejilla ----
+  ctx.save(); ctx.beginPath(); ctx.rect(X(0),Y(0),S.nave.w*s,S.nave.h*s); ctx.clip();
+  ctx.fillStyle="#141a1f"; ctx.fillRect(X(0),Y(0),S.nave.w*s,S.nave.h*s);
+  if(s>6){
+    ctx.lineWidth=1;
+    for(let i=0;i<=Math.ceil(S.nave.w);i++){
+      ctx.strokeStyle = i%5===0 ? "rgba(255,255,255,.10)" : "rgba(255,255,255,.035)";
+      if(i%5!==0 && s<11) continue;
+      ctx.beginPath(); ctx.moveTo(X(i),Y(0)); ctx.lineTo(X(i),Y(S.nave.h)); ctx.stroke();
+    }
+    for(let j=0;j<=Math.ceil(S.nave.h);j++){
+      ctx.strokeStyle = j%5===0 ? "rgba(255,255,255,.10)" : "rgba(255,255,255,.035)";
+      if(j%5!==0 && s<11) continue;
+      ctx.beginPath(); ctx.moveTo(X(0),Y(j)); ctx.lineTo(X(S.nave.w),Y(j)); ctx.stroke();
+    }
+  }
+
+  // ---- Pasillos de circulación ----
+  if(S.meta && S.meta.aisles){
+    for(const a of S.meta.aisles){
+      ctx.fillStyle="rgba(14,165,233,.07)";
+      ctx.fillRect(X(a.x),Y(a.y),a.w*s,a.h*s);
+      ctx.setLineDash([9,7]); ctx.strokeStyle="rgba(14,165,233,.35)"; ctx.lineWidth=1.5;
+      ctx.beginPath();
+      if(a.vert){ ctx.moveTo(X(a.x+a.w/2),Y(a.y)); ctx.lineTo(X(a.x+a.w/2),Y(a.y+a.h)); }
+      else      { ctx.moveTo(X(a.x),Y(a.y+a.h/2)); ctx.lineTo(X(a.x+a.w),Y(a.y+a.h/2)); }
+      ctx.stroke(); ctx.setLineDash([]);
+      // flechas de sentido único (sólo tiene sentido en espiga)
+      const F=S.meta.flow;
+      if(F && s>6){
+        const step=Math.max(3, 90/s);
+        const len=Math.min(1.6, step*0.45);
+        const cx0=a.x+a.w/2, cy0=a.y+a.h/2;
+        const n0 = a.vert ? a.y : a.x, n1 = a.vert ? a.y+a.h : a.x+a.w;
+        ctx.strokeStyle="rgba(125,211,252,.55)"; ctx.fillStyle="rgba(125,211,252,.55)"; ctx.lineWidth=2;
+        for(let t=n0+step/2; t<n1; t+=step){
+          const px = a.vert ? cx0 : t, py = a.vert ? t : cy0;
+          const ex = px + F.dx*len, ey = py + F.dy*len;
+          ctx.beginPath(); ctx.moveTo(X(px-F.dx*len),Y(py-F.dy*len)); ctx.lineTo(X(ex),Y(ey)); ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(X(ex),Y(ey));
+          ctx.lineTo(X(ex-F.dx*0.55-F.dy*0.32), Y(ey-F.dy*0.55-F.dx*0.32));
+          ctx.lineTo(X(ex-F.dx*0.55+F.dy*0.32), Y(ey-F.dy*0.55+F.dx*0.32));
+          ctx.closePath(); ctx.fill();
+        }
+      }
+      // cota del pasillo
+      if(s>9){
+        ctx.fillStyle="rgba(125,211,252,.85)"; ctx.font="600 11px system-ui"; ctx.textAlign="center";
+        const tx = a.vert ? X(a.x+a.w/2) : X(a.x + a.w*0.12);
+        const ty = a.vert ? Y(a.y + a.h*0.12) : Y(a.y+a.h/2)+4;
+        ctx.save(); if(a.vert){ ctx.translate(tx,ty); ctx.rotate(-Math.PI/2); ctx.fillText(fmt(a.w)+" m",0,-5); }
+        else ctx.fillText(fmt(a.h)+" m", tx, ty);
+        ctx.restore();
+      }
+    }
+  }
+
+  // ---- Margen perimetral ----
+  const m = margin();
+  if(m>0.01){
+    ctx.setLineDash([4,5]); ctx.strokeStyle="rgba(255,255,255,.16)"; ctx.lineWidth=1;
+    ctx.strokeRect(X(m),Y(m),(S.nave.w-2*m)*s,(S.nave.h-2*m)*s); ctx.setLineDash([]);
+  }
+
+  // ---- Obstáculos ----
+  for(const o of S.obs){
+    const st=OBS_STYLE[o.t]||OBS_STYLE.otro;
+    ctx.fillStyle=st.c+"33"; ctx.fillRect(X(o.x),Y(o.y),o.w*s,o.h*s);
+    ctx.strokeStyle=st.c; ctx.lineWidth = (sel&&sel.k==="obs"&&sel.id===o.id)?3:1.6;
+    ctx.strokeRect(X(o.x),Y(o.y),o.w*s,o.h*s);
+    // trama diagonal
+    ctx.save(); ctx.beginPath(); ctx.rect(X(o.x),Y(o.y),o.w*s,o.h*s); ctx.clip();
+    ctx.strokeStyle=st.c+"55"; ctx.lineWidth=1;
+    for(let k=-o.h*s; k<o.w*s; k+=9){
+      ctx.beginPath(); ctx.moveTo(X(o.x)+k,Y(o.y)); ctx.lineTo(X(o.x)+k+o.h*s,Y(o.y+o.h)); ctx.stroke();
+    }
+    ctx.restore();
+    if(s>9 && o.w*s>40){
+      ctx.fillStyle="#e7ebf2"; ctx.font="700 11px system-ui"; ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText(o.n||st.n, X(o.x+o.w/2), Y(o.y+o.h/2));
+    }
+    if(sel&&sel.k==="obs"&&sel.id===o.id){
+      ctx.fillStyle="#0ea5e9"; ctx.fillRect(X(o.x+o.w)-5,Y(o.y+o.h)-5,10,10);
+    }
+  }
+
+  // ---- Furgonetas ----
+  const L=S.veh.L, W=vehWidth(), SL=val.SL, SW=val.SW;
+  S.vans.forEach((v,i)=>{
+    const isBad = val.bad.has(i);
+    const isSel = sel&&sel.k==="van"&&sel.id===v.id;
+    // huella de plaza
+    ctx.save();
+    ctx.translate(X(v.x),Y(v.y)); ctx.rotate(v.a*D2R);
+    ctx.strokeStyle = isBad ? "rgba(239,68,68,.5)" : "rgba(255,255,255,.13)";
+    ctx.lineWidth=1; ctx.setLineDash([4,4]);
+    ctx.strokeRect(-SL/2*s,-SW/2*s,SL*s,SW*s); ctx.setLineDash([]);
+    // carrocería
+    const bw=L*s, bh=W*s, r=Math.min(5, bh*0.18);
+    ctx.beginPath();
+    ctx.moveTo(-bw/2+r,-bh/2);
+    ctx.arcTo(bw/2,-bh/2,bw/2,bh/2,r); ctx.arcTo(bw/2,bh/2,-bw/2,bh/2,r);
+    ctx.arcTo(-bw/2,bh/2,-bw/2,-bh/2,r); ctx.arcTo(-bw/2,-bh/2,bw/2,-bh/2,r);
+    ctx.closePath();
+    const g=ctx.createLinearGradient(0,-bh/2,0,bh/2);
+    if(isBad){ g.addColorStop(0,"#7f1d1d"); g.addColorStop(1,"#450a0a"); }
+    else if(isSel){ g.addColorStop(0,"#0ea5e9"); g.addColorStop(1,"#075985"); }
+    else { g.addColorStop(0,"#e2e8f0"); g.addColorStop(1,"#94a3b8"); }
+    ctx.fillStyle=g; ctx.fill();
+    ctx.strokeStyle = isBad?"#ef4444" : isSel?"#7dd3fc" : "#475569";
+    ctx.lineWidth = isSel?2.5:1.2; ctx.stroke();
+    if(bw>22){
+      // parabrisas (indica el morro) + puerta lateral corredera
+      ctx.fillStyle="rgba(15,23,42,.55)";
+      ctx.fillRect(bw/2-bw*0.20, -bh/2+bh*0.14, bw*0.13, bh*0.72);
+      ctx.strokeStyle="rgba(15,23,42,.35)"; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(-bw*0.02, bh/2); ctx.lineTo(bw*0.22, bh/2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(bw/2-1, -bh/2+2); ctx.lineTo(bw/2-1, bh/2-2); ctx.stroke();
+    }
+    if(s>11 && v.lbl){
+      ctx.rotate(v.a>90&&v.a<270 ? Math.PI : 0);
+      ctx.fillStyle= (isSel||isBad)?"#fff":"#1e293b";
+      ctx.font=`800 ${clamp(bh*0.42,8,14)}px system-ui`;
+      ctx.textAlign="center"; ctx.textBaseline="middle";
+      ctx.fillText(v.lbl, -bw*0.10, 0);
+    }
+    ctx.restore();
+  });
+
+  ctx.restore(); // fin clip nave
+
+  // ---- Muros ----
+  ctx.strokeStyle="#94a3b8"; ctx.lineWidth=3;
+  ctx.strokeRect(X(0),Y(0),S.nave.w*s,S.nave.h*s);
+
+  // ---- Puertas ----
+  for(const d of S.doors){
+    const isSel = sel&&sel.k==="door"&&sel.id===d.id;
+    ctx.strokeStyle = isSel?"#7dd3fc":"#22c55e"; ctx.lineWidth = isSel?7:6; ctx.lineCap="round";
+    ctx.beginPath();
+    let cx,cy,dx=0,dy=0;
+    if(d.wall==="N"){ ctx.moveTo(X(d.pos-d.w/2),Y(0)); ctx.lineTo(X(d.pos+d.w/2),Y(0)); cx=X(d.pos); cy=Y(0); dy=1; }
+    if(d.wall==="S"){ ctx.moveTo(X(d.pos-d.w/2),Y(S.nave.h)); ctx.lineTo(X(d.pos+d.w/2),Y(S.nave.h)); cx=X(d.pos); cy=Y(S.nave.h); dy=-1; }
+    if(d.wall==="W"){ ctx.moveTo(X(0),Y(d.pos-d.w/2)); ctx.lineTo(X(0),Y(d.pos+d.w/2)); cx=X(0); cy=Y(d.pos); dx=1; }
+    if(d.wall==="E"){ ctx.moveTo(X(S.nave.w),Y(d.pos-d.w/2)); ctx.lineTo(X(S.nave.w),Y(d.pos+d.w/2)); cx=X(S.nave.w); cy=Y(d.pos); dx=-1; }
+    ctx.stroke(); ctx.lineCap="butt";
+    // flecha de entrada
+    ctx.strokeStyle="rgba(34,197,94,.75)"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(cx+dx*26,cy+dy*26); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx+dx*26,cy+dy*26);
+    ctx.lineTo(cx+dx*18-dy*6, cy+dy*18-dx*6);
+    ctx.lineTo(cx+dx*18+dy*6, cy+dy*18+dx*6);
+    ctx.closePath(); ctx.fillStyle="rgba(34,197,94,.75)"; ctx.fill();
+    if(s>7){
+      ctx.fillStyle="#86efac"; ctx.font="700 11px system-ui"; ctx.textAlign="center";
+      ctx.fillText(fmt(d.w,1)+" m", cx+dx*44, cy+dy*44+4);
+    }
+  }
+
+  // ---- Cotas exteriores ----
+  ctx.fillStyle="#8b94a3"; ctx.font="700 13px system-ui"; ctx.textAlign="center";
+  ctx.fillText(fmt(S.nave.w)+" m", X(S.nave.w/2), Y(0)-16);
+  ctx.save(); ctx.translate(X(0)-18, Y(S.nave.h/2)); ctx.rotate(-Math.PI/2);
+  ctx.fillText(fmt(S.nave.h)+" m",0,0); ctx.restore();
+  ctx.strokeStyle="rgba(139,148,163,.4)"; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(X(0),Y(0)-9); ctx.lineTo(X(S.nave.w),Y(0)-9); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(X(0)-9,Y(0)); ctx.lineTo(X(0)-9,Y(S.nave.h)); ctx.stroke();
+
+  // ---- Caja de rectángulo en curso ----
+  if(drag && drag.mode==="newObs"){
+    const r=normRect(drag.x0,drag.y0,drag.x1,drag.y1);
+    ctx.setLineDash([6,4]); ctx.strokeStyle="#0ea5e9"; ctx.lineWidth=2;
+    ctx.strokeRect(X(r.x),Y(r.y),r.w*s,r.h*s); ctx.setLineDash([]);
+    ctx.fillStyle="#7dd3fc"; ctx.font="700 12px system-ui"; ctx.textAlign="left";
+    ctx.fillText(fmt(r.w)+" × "+fmt(r.h)+" m", X(r.x)+6, Y(r.y)-7);
+  }
+
+  // ---- Fantasma de la furgoneta al colocar ----
+  if(tool==="van" && mouseW){
+    ctx.save(); ctx.globalAlpha=.45;
+    ctx.translate(X(mouseW.x),Y(mouseW.y)); ctx.rotate(newVanAngle*D2R);
+    ctx.fillStyle="#0ea5e9"; ctx.fillRect(-L*s/2,-W*s/2,L*s,W*s);
+    ctx.restore();
+  }
+}
+function normRect(x0,y0,x1,y1){
+  return { x:Math.min(x0,x1), y:Math.min(y0,y1), w:Math.abs(x1-x0), h:Math.abs(y1-y0) };
+}
+
+/* ---------------------------------------------------------------
+   9. Interacción con el lienzo
+   --------------------------------------------------------------- */
+let mouseW=null, newVanAngle=0;
+const snap = v => Math.round(v*20)/20;   // 5 cm
+
+function hitVan(x,y){
+  const L=S.veh.L, W=vehWidth();
+  for(let i=S.vans.length-1;i>=0;i--){
+    if(pointInPoly(x,y,corners(S.vans[i].x,S.vans[i].y,L,W,S.vans[i].a))) return S.vans[i];
+  }
+  return null;
+}
+function hitObs(x,y){
+  for(let i=S.obs.length-1;i>=0;i--){
+    const o=S.obs[i];
+    if(x>=o.x&&x<=o.x+o.w&&y>=o.y&&y<=o.y+o.h) return o;
+  }
+  return null;
+}
+function hitObsHandle(x,y){
+  if(!sel||sel.k!=="obs") return null;
+  const o=S.obs.find(o=>o.id===sel.id); if(!o) return null;
+  const t=8/view.s;
+  return (Math.abs(x-(o.x+o.w))<t && Math.abs(y-(o.y+o.h))<t) ? o : null;
+}
+function hitDoor(x,y){
+  const t=0.6;
+  for(const d of S.doors){
+    if(d.wall==="N"&&y<t&&Math.abs(x-d.pos)<d.w/2) return d;
+    if(d.wall==="S"&&y>S.nave.h-t&&Math.abs(x-d.pos)<d.w/2) return d;
+    if(d.wall==="W"&&x<t&&Math.abs(y-d.pos)<d.w/2) return d;
+    if(d.wall==="E"&&x>S.nave.w-t&&Math.abs(y-d.pos)<d.w/2) return d;
+  }
+  return null;
+}
+function nearestWall(x,y){
+  const d=[{w:"N",v:y},{w:"S",v:S.nave.h-y},{w:"W",v:x},{w:"E",v:S.nave.w-x}]
+    .sort((a,b)=>a.v-b.v)[0];
+  return d.w;
+}
+
+cv.addEventListener("pointerdown", e=>{
+  cv.setPointerCapture(e.pointerId);
+  const r=cv.getBoundingClientRect();
+  const px=e.clientX-r.left, py=e.clientY-r.top;
+  const x=wX(px), y=wY(py);
+
+  if(e.button===1 || e.button===2 || e.altKey){
+    drag={mode:"pan", px, py, ox:view.ox, oy:view.oy}; return;
+  }
+
+  if(tool==="van"){
+    pushUndo();
+    S.vans.push({ id:nextId(S.vans), x:snap(x), y:snap(y), a:newVanAngle, lbl:"" });
+    sel={k:"van", id:S.vans[S.vans.length-1].id};
+    renderAll(); return;
+  }
+  if(tool==="obs"){ drag={mode:"newObs", x0:snap(x), y0:snap(y), x1:snap(x), y1:snap(y)}; return; }
+  if(tool==="door"){
+    pushUndo();
+    const wall=nearestWall(x,y);
+    const pos = (wall==="N"||wall==="S") ? clamp(snap(x),2,S.nave.w-2) : clamp(snap(y),2,S.nave.h-2);
+    S.doors.push({ id:nextId(S.doors), wall, pos, w:4.0, n:"Puerta "+(S.doors.length+1) });
+    sel={k:"door", id:S.doors[S.doors.length-1].id};
+    setTool("select"); renderAll(); return;
+  }
+
+  // Selección / arrastre
+  const hh=hitObsHandle(x,y);
+  if(hh){ drag={mode:"resObs", o:hh}; return; }
+  const d=hitDoor(x,y);
+  if(d){ sel={k:"door",id:d.id}; drag={mode:"door", d}; renderAll(); return; }
+  const v=hitVan(x,y);
+  if(v){ sel={k:"van",id:v.id}; drag={mode:"van", v, dx:x-v.x, dy:y-v.y, moved:false}; renderAll(); return; }
+  const o=hitObs(x,y);
+  if(o){ sel={k:"obs",id:o.id}; drag={mode:"obs", o, dx:x-o.x, dy:y-o.y, moved:false}; renderAll(); return; }
+  sel=null; drag={mode:"pan", px, py, ox:view.ox, oy:view.oy}; renderAll();
+});
+
+cv.addEventListener("pointermove", e=>{
+  const r=cv.getBoundingClientRect();
+  const px=e.clientX-r.left, py=e.clientY-r.top;
+  const x=wX(px), y=wY(py);
+  mouseW={x,y};
+  if(tool==="van") draw();
+
+  if(!drag) return;
+  if(drag.mode==="pan"){ view.ox=drag.ox+(px-drag.px); view.oy=drag.oy+(py-drag.py); draw(); return; }
+  if(drag.mode==="newObs"){ drag.x1=snap(x); drag.y1=snap(y); draw(); return; }
+  if(drag.mode==="van"){
+    if(!drag.moved){ pushUndo(); drag.moved=true; }
+    drag.v.x=snap(x-drag.dx); drag.v.y=snap(y-drag.dy); draw(); return;
+  }
+  if(drag.mode==="obs"){
+    if(!drag.moved){ pushUndo(); drag.moved=true; }
+    drag.o.x=snap(x-drag.dx); drag.o.y=snap(y-drag.dy); draw(); return;
+  }
+  if(drag.mode==="resObs"){
+    drag.o.w=Math.max(0.2, snap(x-drag.o.x));
+    drag.o.h=Math.max(0.2, snap(y-drag.o.y)); draw(); return;
+  }
+  if(drag.mode==="door"){
+    const d=drag.d, wall=nearestWall(x,y);
+    d.wall=wall;
+    d.pos = (wall==="N"||wall==="S") ? clamp(snap(x), d.w/2, S.nave.w-d.w/2)
+                                     : clamp(snap(y), d.w/2, S.nave.h-d.w/2);
+    draw(); return;
+  }
+});
+
+cv.addEventListener("pointerup", ()=>{
+  if(drag && drag.mode==="newObs"){
+    const r=normRect(drag.x0,drag.y0,drag.x1,drag.y1);
+    if(r.w>0.15 && r.h>0.15){
+      pushUndo();
+      const t=document.getElementById("obsType").value;
+      S.obs.push({ id:nextId(S.obs), x:round2(r.x), y:round2(r.y), w:round2(r.w), h:round2(r.h),
+                   t, n:OBS_STYLE[t].n+" "+(S.obs.filter(o=>o.t===t).length+1) });
+      sel={k:"obs", id:S.obs[S.obs.length-1].id};
+      setTool("select");
+    }
+  }
+  if(drag && (drag.mode==="obs"||drag.mode==="resObs"||drag.mode==="door"||drag.mode==="van")) renderAll();
+  drag=null;
+});
+cv.addEventListener("pointerleave", ()=>{ mouseW=null; if(tool==="van") draw(); });
+cv.addEventListener("contextmenu", e=>e.preventDefault());
+cv.addEventListener("wheel", e=>{
+  e.preventDefault();
+  const r=cv.getBoundingClientRect();
+  const px=e.clientX-r.left, py=e.clientY-r.top;
+  const wx=wX(px), wy=wY(py);
+  view.s = clamp(view.s * (e.deltaY<0?1.13:1/1.13), 1.5, 220);
+  view.ox = px - wx*view.s; view.oy = py - wy*view.s;
+  draw();
+},{passive:false});
+
+document.addEventListener("keydown", e=>{
+  if(/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
+  const k=e.key.toLowerCase();
+  if(e.ctrlKey||e.metaKey){
+    if(k==="z"){ e.preventDefault(); undo(); return; }
+    if(k==="y"){ e.preventDefault(); redo(); return; }
+    if(k==="d"){ e.preventDefault(); duplicate(); return; }
+    return;
+  }
+  if(k==="v") setTool("select");
+  else if(k==="a") setTool("van");
+  else if(k==="o") setTool("obs");
+  else if(k==="p") setTool("door");
+  else if(k==="f") fitView();
+  else if(k==="escape"){ sel=null; setTool("select"); renderAll(); }
+  else if(k==="r"||k==="q"||k==="e"){
+    const step = k==="r" ? (e.shiftKey?-15:15) : (k==="q"?-90:90);
+    if(sel&&sel.k==="van"){ pushUndo(); const v=S.vans.find(v=>v.id===sel.id); v.a=(v.a+step+360)%360; renderAll(); }
+    else { newVanAngle=(newVanAngle+step+360)%360; draw(); }
+  }
+  else if(k==="delete"||k==="backspace"){ e.preventDefault(); delSel(); }
+  else if(k.startsWith("arrow")){
+    e.preventDefault();
+    const d = e.shiftKey?0.01:0.1;
+    const dx = k==="arrowleft"?-d : k==="arrowright"?d : 0;
+    const dy = k==="arrowup"?-d : k==="arrowdown"?d : 0;
+    if(sel&&sel.k==="van"){ const v=S.vans.find(v=>v.id===sel.id); v.x=round2(v.x+dx); v.y=round2(v.y+dy); renderAll(); }
+    else if(sel&&sel.k==="obs"){ const o=S.obs.find(o=>o.id===sel.id); o.x=round2(o.x+dx); o.y=round2(o.y+dy); renderAll(); }
+  }
+});
+
+function delSel(){
+  if(!sel) return; pushUndo();
+  if(sel.k==="van")  S.vans = S.vans.filter(v=>v.id!==sel.id);
+  if(sel.k==="obs")  S.obs  = S.obs.filter(o=>o.id!==sel.id);
+  if(sel.k==="door") S.doors= S.doors.filter(d=>d.id!==sel.id);
+  sel=null; renderAll();
+}
+function duplicate(){
+  if(!sel) return; pushUndo();
+  if(sel.k==="van"){
+    const v=S.vans.find(v=>v.id===sel.id); if(!v) return;
+    const a=v.a*D2R, off=stallW();
+    const n={ id:nextId(S.vans), x:round2(v.x-Math.sin(a)*off), y:round2(v.y+Math.cos(a)*off), a:v.a, lbl:"" };
+    S.vans.push(n); sel={k:"van",id:n.id};
+  }else if(sel.k==="obs"){
+    const o=S.obs.find(o=>o.id===sel.id); if(!o) return;
+    const n={...o, id:nextId(S.obs), x:round2(o.x+o.w+0.5)}; S.obs.push(n); sel={k:"obs",id:n.id};
+  }
+  renderAll();
+}
+const nextId = arr => arr.reduce((m,o)=>Math.max(m,o.id),0)+1;
+function setTool(t){
+  tool=t;
+  document.querySelectorAll("#tools button").forEach(b=>b.classList.toggle("on", b.dataset.tool===t));
+  cv.style.cursor = t==="select" ? "default" : "crosshair";
+  updHint();
+}
+function updHint(){
+  const h={
+    select:"Arrastra para mover · rueda = zoom · <kbd>R</kbd> girar · <kbd>Supr</kbd> borrar",
+    van:"Haz clic para colocar una furgoneta · <kbd>R</kbd>/<kbd>Q</kbd>/<kbd>E</kbd> cambia el ángulo",
+    obs:"Arrastra para dibujar el obstáculo (pilar, oficina, estantería…)",
+    door:"Haz clic cerca de una pared para poner la puerta"
+  }[tool];
+  document.getElementById("hint").innerHTML = h;
+}
+
+/* ---------------------------------------------------------------
+   10. Deshacer / rehacer
+   --------------------------------------------------------------- */
+const snapshot = ()=>JSON.stringify({nave:S.nave,veh:S.veh,par:S.par,obs:S.obs,doors:S.doors,vans:S.vans,meta:S.meta});
+function pushUndo(){ undoStack.push(snapshot()); if(undoStack.length>60) undoStack.shift(); redoStack=[]; }
+function restore(str){ const o=JSON.parse(str); Object.assign(S,o); }
+function undo(){ if(!undoStack.length) return; redoStack.push(snapshot()); restore(undoStack.pop()); sel=null; syncInputs(); renderAll(); }
+function redo(){ if(!redoStack.length) return; undoStack.push(snapshot()); restore(redoStack.pop()); sel=null; syncInputs(); renderAll(); }
+
+/* ---------------------------------------------------------------
+   11. Paneles
+   --------------------------------------------------------------- */
+const $ = id=>document.getElementById(id);
+
+function renderAll(){ draw(); renderStats(); renderLists(); renderReport(); autosave(); }
+
+function renderStats(){
+  const n=S.vans.length;
+  const area=S.nave.w*S.nave.h;
+  $("kCap").textContent=n;
+  $("kArea").textContent = n? fmt(area/n,1) : "–";
+  const occ = n * S.veh.L * vehWidth();
+  $("kUse").textContent = area? Math.round(occ/area*100)+"%" : "–";
+  $("kAngle").textContent = S.meta ? S.meta.angle+"°" : "manual";
+  $("kAisle").textContent = S.meta ? fmt(S.meta.aisle,1)+" m" : "–";
+  $("stallW").textContent = fmt(stallW())+" m";
+  $("stallL").textContent = fmt(stallL())+" m";
+  $("nVan").textContent=n; $("nObs").textContent=S.obs.length; $("nDoor").textContent=S.doors.length;
+
+  // Distribución
+  let ri="Coloca furgonetas o pulsa <b>Optimizar</b>.";
+  if(S.meta){
+    const M=S.meta, nA = M.aisles ? M.aisles.length : 1;
+    const dir = M.axis==="x" ? "horizontales (a lo ancho)" : "verticales (a lo largo)";
+    ri = `<b>${M.rows.length}</b> filas y <b>${nA}</b> pasillo${nA===1?"":"s"} ${dir} · `+
+         `${M.rows.length>nA ? "dos filas por pasillo" : "una fila por pasillo"}<br>`+
+         `Furgonetas por fila: ${M.rows.join(" · ")}<br>`+
+         `${M.flow ? "Pasillos de <b>sentido único</b> (flechas en el plano)<br>" : ""}`+
+         `Plaza: ${fmt(M.stallW)} × ${fmt(M.stallL)} m · calculado en ${M.ms} ms`;
+  }
+  $("rowsInfo").innerHTML=ri;
+
+  // Alertas
+  const A=[]; const val=validate();
+  if(val.bad.size) A.push(["bad", `<b>${val.bad.size} furgoneta(s) en conflicto</b> (en rojo): se solapan, pisan un obstáculo o se salen de la nave.`]);
+  if(S.meta && S.meta.access && !S.meta.access.ok)
+    A.push(["warn", `Sólo <b>${S.meta.access.reachable} de ${S.meta.access.total}</b> plazas tienen salida despejada hasta una puerta. Revisa pasillos y obstáculos.`]);
+  if(!S.doors.length) A.push(["warn","No has definido ninguna <b>puerta</b>. Sin puertas no se puede comprobar el acceso real a las plazas."]);
+  if(S.nave.z && S.nave.z < S.veh.H+0.25)
+    A.push(["bad", `Altura libre <b>${fmt(S.nave.z)} m</b> frente a ${fmt(S.veh.H)} m del vehículo: margen insuficiente bajo vigas o luminarias.`]);
+  else if(S.nave.z && S.nave.z < S.veh.H+0.5)
+    A.push(["warn", `Altura libre justa (${fmt(S.nave.z)} m). Con baca, antena o portaescaleras te quedas sin margen.`]);
+  const doorNarrow = S.doors.filter(d=>d.w < vehWidth()+0.8);
+  if(doorNarrow.length) A.push(["warn", `${doorNarrow.length} puerta(s) de menos de ${fmt(vehWidth()+0.8,1)} m: paso muy justo para entrar sin rozar.`]);
+  if(S.par.gapSide < 0.55) A.push(["warn","Holgura lateral por debajo de 0,55 m: no se puede abrir del todo la puerta del conductor."]);
+  if(S.meta && S.meta.angle!==90 && S.par.twoWay)
+    A.push(["info","En espiga los pasillos deben ser de <b>sentido único</b>. Píntalo en el suelo con flechas."]);
+  if(!A.length && S.vans.length) A.push(["ok","Distribución válida: sin solapes, sin invasiones y con salida a puerta."]);
+  $("alerts").innerHTML = A.map(([c,t])=>`<div class="msg ${c}">${t}</div>`).join("");
+
+  $("aisleNote").innerHTML = S.par.aisleMode==="auto"
+    ? `Calculado a partir del largo (${fmt(S.veh.L)} m) y el diámetro de giro (${fmt(S.veh.T,1)} m). `+
+      `Ahora mismo: 90° → <b>${fmt(aisleFor(90),1)} m</b> · 60° → <b>${fmt(aisleFor(60),1)} m</b> · 45° → <b>${fmt(aisleFor(45),1)} m</b>.`
+    : "Se usará el valor manual para todos los ángulos.";
+
+  $("goalNote").innerHTML = {
+    max:"Prioriza el número de plazas por encima de todo. Puede salir apretado para el día a día.",
+    ops:"Penaliza las soluciones incómodas de maniobrar. Ideal si las furgonetas salen todas a la misma hora.",
+    storage:"Favorece el perpendicular y el aparcamiento en línea, óptimo si las mueves poco."
+  }[S.par.goal];
+}
+
+function renderLists(){
+  const ol=$("obsList");
+  ol.innerHTML = S.obs.length ? "" : '<div class="empty">Sin obstáculos. Dibuja los pilares con 🧱.</div>';
+  S.obs.forEach(o=>{
+    const st=OBS_STYLE[o.t]||OBS_STYLE.otro;
+    const el=document.createElement("div");
+    el.className="item"+(sel&&sel.k==="obs"&&sel.id===o.id?" sel":"");
+    el.innerHTML=`<span style="width:9px;height:9px;border-radius:3px;background:${st.c};flex-shrink:0"></span>
+      <span class="nm">${o.n}</span><span class="dim">${fmt(o.w,1)}×${fmt(o.h,1)}</span><button title="Borrar">✕</button>`;
+    el.onclick=e=>{ if(e.target.tagName==="BUTTON"){ pushUndo(); S.obs=S.obs.filter(z=>z.id!==o.id); sel=null; }
+                    else sel={k:"obs",id:o.id}; renderAll(); };
+    ol.appendChild(el);
+  });
+
+  const dl=$("doorList");
+  dl.innerHTML = S.doors.length ? "" : '<div class="empty">Sin puertas. Añade al menos una.</div>';
+  const WN={N:"Norte (arriba)",S:"Sur (abajo)",W:"Oeste (izq.)",E:"Este (dcha.)"};
+  S.doors.forEach(d=>{
+    const el=document.createElement("div");
+    el.className="item"+(sel&&sel.k==="door"&&sel.id===d.id?" sel":"");
+    el.innerHTML=`<span class="nm">🚪 ${WN[d.wall]}</span>
+      <input type="number" value="${d.w}" step="0.1" min="1" title="Ancho (m)"
+             style="width:56px;background:#0b0d10;border:1px solid var(--line);border-radius:6px;padding:3px 5px;text-align:right">
+      <button title="Borrar">✕</button>`;
+    el.querySelector("input").onchange=e=>{ pushUndo(); d.w=Math.max(1,parseFloat(e.target.value)||4); renderAll(); };
+    el.onclick=e=>{ if(e.target.tagName==="BUTTON"){ pushUndo(); S.doors=S.doors.filter(z=>z.id!==d.id); sel=null; renderAll(); }
+                    else if(e.target.tagName!=="INPUT"){ sel={k:"door",id:d.id}; renderAll(); } };
+    dl.appendChild(el);
+  });
+}
+
+function renderCompare(){
+  const tb=document.querySelector("#cmpTable tbody");
+  tb.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--mut)">Calculando…</td></tr>';
+  setTimeout(()=>{
+    const rows=compareAngles();
+    tb.innerHTML="";
+    if(!rows.length){ tb.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--mut)">Activa algún ángulo</td></tr>'; return; }
+    const best=rows[0].count;
+    rows.forEach(r=>{
+      const tr=document.createElement("tr");
+      tr.className="clickable"+(r.count===best?" best":"");
+      const nm = r.angle===90?"90° perpend.":r.angle===0?"0° en línea":r.angle+"° espiga";
+      tr.innerHTML=`<td>${nm}</td><td>${r.count}</td><td>${fmt(r.aisle,1)} m</td><td>${fmt(r.m2,1)}</td>`;
+      tr.onclick=()=>{ applyResult(r.res); toast("Aplicada la distribución a "+r.angle+"°","ok"); };
+      tb.appendChild(tr);
+    });
+    const w=rows[0], perp=rows.find(r=>r.angle===90);
+    let n="";
+    if(perp && w.angle!==90 && w.count>perp.count)
+      n=`El <b>${w.angle}°</b> te da ${w.count-perp.count} plaza(s) más que el perpendicular <i>y</i> maniobra más fácil.`;
+    else if(perp && w.angle===90)
+      n=`El <b>perpendicular</b> es el que más plazas te da. La espiga cabría menos, pero se entra y sale bastante más rápido.`;
+    $("cmpNote").innerHTML=n;
+  },20);
+}
+
+function renderReport(){
+  const n=S.vans.length, area=S.nave.w*S.nave.h;
+  const m=S.meta;
+  const back = S.par.parkStyle==="back";
+  const ang = m? m.angle : null;
+  const R=[];
+
+  R.push(`<h5>Resumen</h5><p>Nave de <b>${fmt(S.nave.w)} × ${fmt(S.nave.h)} m</b> (${fmt(area,0)} m²).
+    Vehículo: <b>${PRESETS[S.veh.preset]?PRESETS[S.veh.preset].label:"personalizado"}</b>
+    (${fmt(S.veh.L)} × ${fmt(vehWidth())} m${S.par.useMirrors?" con retrovisores":""}).
+    Plaza de <b>${fmt(stallW())} × ${fmt(stallL())} m</b>.
+    Capacidad actual del plano: <b>${n} furgonetas</b>${n?` — ${fmt(area/n,1)} m² por furgoneta`:""}.</p>`);
+
+  if(m){
+    R.push(`<h5>Distribución elegida</h5><ul>
+      <li>Ángulo de plaza: <b>${ang}°</b> ${ang===90?"(perpendicular a la fila)":ang===0?"(en línea)":"(en espiga)"}</li>
+      <li>Pasillo de circulación: <b>${fmt(m.aisle,1)} m</b>, ${S.par.twoWay&&ang===90?"doble sentido":"sentido único"}</li>
+      <li>${m.rows.length} filas ${m.doubleRow?"dobles enfrentadas":"simples"}, pasillos ${m.axis==="x"?"en horizontal":"en vertical"}</li>
+      <li>Reparto por fila: ${m.rows.join(" · ")}</li>
+    </ul>`);
+  }
+
+  R.push(`<h5>Cómo aparcarlas para que quede organizado</h5><ul>
+    <li><b>Siempre marcha atrás.</b> ${back?"Es lo que tienes configurado.":"Cámbialo en Criterios."} Entrar de culo y salir de frente elimina casi todos los golpes de maniobra y hace que por la mañana la nave se vacíe en minutos en lugar de en media hora.</li>
+    <li><b>Pinta el suelo.</b> Líneas de 10 cm en blanco o amarillo, con el número de plaza pintado en grande en el fondo de cada una. Sin marcas, en dos semanas cada uno aparca como quiere y pierdes plazas.</li>
+    <li><b>Topes de rueda</b> al fondo de cada plaza: la furgoneta queda siempre a la misma distancia y no te comes el pasillo.</li>
+    <li><b>Una furgoneta = una plaza fija</b> con el mismo número que la ruta o el conductor. Se localiza al instante y se sabe quién ha dejado un golpe.</li>
+    <li><b>Ordena por hora de salida.</b> Las que salen antes, las más cerca del portón; las de repuesto, taller o baja, al fondo. Es lo que más tiempo ahorra cada mañana.</li>
+    ${ang!==null&&ang!==90?`<li><b>Sentido único en los pasillos.</b> En espiga sólo se puede circular en un sentido; márcalo con flechas grandes en el suelo.</li>`:``}
+    <li><b>Deja libre la zona delante del portón</b> (ya está reservada en el plano). Es la que necesitas para maniobrar y para cargar.</li>
+  </ul>`);
+
+  R.push(`<h5>Qué ángulo te conviene</h5><ul>
+    <li><b>90° perpendicular:</b> la máxima densidad por metro de pared y permite doble sentido, pero necesita un pasillo de ~${fmt(aisleFor(90),1)} m. Ideal si la nave es ancha y las furgonetas se mueven poco.</li>
+    <li><b>60° / 45° en espiga:</b> se entra casi de un tirón, con pasillo de ~${fmt(aisleFor(60),1)} / ${fmt(aisleFor(45),1)} m. Pierdes algo de superficie útil en los extremos de cada fila, pero ganas muchísima agilidad. La mejor opción cuando las furgonetas salen todas a la vez.</li>
+    <li><b>0° en línea:</b> sólo merece la pena en franjas estrechas pegadas a una pared o en pasillos sobrantes.</li>
+  </ul>`);
+
+  R.push(`<h5>Seguridad y orden</h5><ul>
+    <li>Mantén un <b>paso peatonal libre</b> pegado a la pared para llegar a extintores, cuadro eléctrico y salidas sin cruzar entre furgonetas.</li>
+    <li>No bloquees nunca extintores, BIEs, salidas de emergencia ni cuadros eléctricos: dibújalos como <b>zona libre obligatoria</b> para que el optimizador los respete.</li>
+    <li>Altura libre: ${fmt(S.nave.z)} m frente a ${fmt(S.veh.H)} m del vehículo. Comprueba también la altura del <b>hueco de la puerta</b>, que casi siempre es menor que la de la nave.</li>
+    <li>Si metes furgonetas <b>eléctricas</b>, agrupa los puntos de recarga en una sola zona y ten en cuenta el largo de la manguera.</li>
+    <li>Antes de pintar, comprueba en obra la posición real de los pilares: un pilar mal medido se come una plaza entera.</li>
+  </ul>`);
+
+  R.push(`<p style="margin-top:14px;font-size:11.5px;opacity:.75">Herramienta de planificación orientativa. Los anchos de evacuación, la sectorización y la carga de fuego de tu nave debe validarlos un técnico según la normativa aplicable.</p>`);
+  $("report").innerHTML=R.join("");
+}
+
+/* ---------------------------------------------------------------
+   12. Enlazado de controles
+   --------------------------------------------------------------- */
+function bindNum(id, get, set){
+  const el=$(id);
+  el.value=get();
+  el.addEventListener("change",()=>{ pushUndo(); set(parseFloat(el.value)); syncInputs(); renderAll(); });
+}
+function syncInputs(){
+  $("naveW").value=S.nave.w; $("naveH").value=S.nave.h; $("naveZ").value=S.nave.z;
+  $("vL").value=S.veh.L; $("vW").value=S.veh.W; $("vWm").value=S.veh.Wm; $("vH").value=S.veh.H; $("vT").value=S.veh.T;
+  $("preset").value=S.veh.preset;
+  $("useMirrors").checked=S.par.useMirrors;
+  $("gapSide").value=S.par.gapSide; $("gapEnd").value=S.par.gapEnd;
+  $("wallClear").value=S.par.wallClear; $("pedLane").value=S.par.pedLane;
+  $("goal").value=S.par.goal; $("twoWay").checked=S.par.twoWay;
+  $("allowSingle").checked=S.par.allowSingle; $("allowDouble").checked=S.par.allowDouble;
+  $("aisleMode").value=S.par.aisleMode; $("aisleMan").value=S.par.aisleMan;
+  $("parkStyle").value=S.par.parkStyle;
+  $("labelPrefix").value=S.par.labelPrefix; $("labelMode").value=S.par.labelMode;
+  document.querySelectorAll("#angles button").forEach(b=>
+    b.classList.toggle("on", !!S.par.angles[b.dataset.a]));
+}
+
+// Presets de vehículo
+const psel=$("preset");
+Object.entries(PRESETS).forEach(([k,v])=>{
+  const o=document.createElement("option"); o.value=k; o.textContent=v.label; psel.appendChild(o);
+});
+psel.onchange=()=>{
+  pushUndo();
+  const p=PRESETS[psel.value];
+  S.veh={preset:psel.value, L:p.L, W:p.W, Wm:p.Wm, H:p.H, T:p.T};
+  syncInputs(); renderAll();
+};
+
+// Botones de ángulo
+const ab=$("angles");
+ANGLES.forEach(a=>{
+  const b=document.createElement("button");
+  b.className="tbtn"; b.dataset.a=a; b.style.justifyContent="center";
+  b.textContent = a===90?"90° perpend." : a===0?"0° en línea" : a+"° espiga";
+  b.onclick=()=>{ S.par.angles[a]=!S.par.angles[a]; b.classList.toggle("on"); renderStats(); autosave(); };
+  ab.appendChild(b);
+});
+
+// Numéricos
+bindNum("naveW",()=>S.nave.w,v=>S.nave.w=clamp(v||30,3,300));
+bindNum("naveH",()=>S.nave.h,v=>S.nave.h=clamp(v||20,3,300));
+bindNum("naveZ",()=>S.nave.z,v=>S.nave.z=clamp(v||6,1.5,30));
+bindNum("vL",()=>S.veh.L,v=>{S.veh.L=clamp(v||5,2,12); S.veh.preset="custom";});
+bindNum("vW",()=>S.veh.W,v=>{S.veh.W=clamp(v||1.9,1,4); S.veh.preset="custom";});
+bindNum("vWm",()=>S.veh.Wm,v=>{S.veh.Wm=clamp(v||2.2,1,4.5); S.veh.preset="custom";});
+bindNum("vH",()=>S.veh.H,v=>{S.veh.H=clamp(v||1.94,1,4.5); S.veh.preset="custom";});
+bindNum("vT",()=>S.veh.T,v=>{S.veh.T=clamp(v||12,5,30); S.veh.preset="custom";});
+bindNum("gapSide",()=>S.par.gapSide,v=>S.par.gapSide=clamp(v||0,0,3));
+bindNum("gapEnd",()=>S.par.gapEnd,v=>S.par.gapEnd=clamp(v||0,0,3));
+bindNum("wallClear",()=>S.par.wallClear,v=>S.par.wallClear=clamp(v||0,0,5));
+bindNum("pedLane",()=>S.par.pedLane,v=>S.par.pedLane=clamp(v||0,0,5));
+bindNum("aisleMan",()=>S.par.aisleMan,v=>S.par.aisleMan=clamp(v||6,2.5,25));
+
+$("useMirrors").onchange=e=>{ pushUndo(); S.par.useMirrors=e.target.checked; renderAll(); };
+$("twoWay").onchange=e=>{ S.par.twoWay=e.target.checked; renderStats(); autosave(); };
+$("allowSingle").onchange=e=>{ S.par.allowSingle=e.target.checked; autosave(); };
+$("allowDouble").onchange=e=>{ S.par.allowDouble=e.target.checked; autosave(); };
+$("goal").onchange=e=>{ S.par.goal=e.target.value; renderStats(); autosave(); };
+$("aisleMode").onchange=e=>{ S.par.aisleMode=e.target.value; renderStats(); autosave(); };
+$("parkStyle").onchange=e=>{ S.par.parkStyle=e.target.value; renderReport(); autosave(); };
+$("labelPrefix").onchange=e=>{ S.par.labelPrefix=e.target.value||"P"; relabel(); renderAll(); };
+$("labelMode").onchange=e=>{ S.par.labelMode=e.target.value; relabel(); renderAll(); };
+$("btnRelabel").onclick=()=>{ pushUndo(); relabel(); renderAll(); toast("Plazas renumeradas","ok"); };
+
+$("tplNave").onchange=e=>{
+  if(!e.target.value) return;
+  pushUndo();
+  const [w,h,z]=e.target.value.split(",").map(Number);
+  S.nave={w,h,z};
+  S.doors=[{id:1,wall:"S",pos:round2(w/2),w:4,n:"Portón principal"}];
+  syncInputs(); fitView(); renderAll(); e.target.value="";
+};
+
+$("btnAddObs").onclick=()=>{
+  pushUndo();
+  const t=$("obsType").value;
+  const size = t==="pilar" ? {w:0.4,h:0.4} : {w:4,h:3};
+  S.obs.push({ id:nextId(S.obs), x:round2(S.nave.w/2-size.w/2), y:round2(S.nave.h/2-size.h/2),
+               w:size.w, h:size.h, t, n:OBS_STYLE[t].n+" "+(S.obs.filter(o=>o.t===t).length+1) });
+  sel={k:"obs",id:S.obs[S.obs.length-1].id};
+  renderAll(); toast("Arrástralo y ajústalo por la esquina","info");
+};
+$("btnAddDoor").onclick=()=>{
+  pushUndo();
+  S.doors.push({ id:nextId(S.doors), wall:"S", pos:round2(S.nave.w/2), w:4, n:"Puerta "+(S.doors.length+1) });
+  sel={k:"door",id:S.doors[S.doors.length-1].id}; renderAll();
+};
+$("btnClearVans").onclick=()=>{ pushUndo(); S.vans=[]; S.meta=null; sel=null; renderAll(); };
+
+// Tabs
+function bindTabs(cont){
+  document.querySelectorAll("#"+cont+" button").forEach(b=>{
+    b.onclick=()=>{
+      const root=b.closest(".side");
+      root.querySelectorAll(".tabs button").forEach(x=>x.classList.remove("on"));
+      root.querySelectorAll(".pane").forEach(x=>x.classList.remove("on"));
+      b.classList.add("on"); $(b.dataset.p).classList.add("on");
+      if(b.dataset.p==="pComp") renderCompare();
+    };
+  });
+}
+bindTabs("tabsL"); bindTabs("tabsR");
+document.querySelectorAll("#tools button").forEach(b=> b.onclick=()=>setTool(b.dataset.tool));
+
+// Topbar
+$("btnOpt").onclick=()=>{
+  $("btnOpt").textContent="⏳ Calculando…"; $("btnOpt").disabled=true;
+  setTimeout(()=>{
+    const r=optimize();
+    applyResult(r);
+    $("btnOpt").textContent="⚡ Optimizar"; $("btnOpt").disabled=false;
+    if(r) toast(`${r.count} furgonetas · ${r.cfg.angle}° · pasillo ${fmt(r.cfg.aisle,1)} m`,"ok");
+    if(document.querySelector("#pComp").classList.contains("on")) renderCompare();
+  },30);
+};
+// Paneles plegables en pantallas estrechas
+const narrow = ()=>window.matchMedia("(max-width:1200px)").matches;
+function togglePanel(which){
+  const a=$(which==="L"?"sideL":"sideR"), b=$(which==="L"?"sideR":"sideL");
+  a.classList.toggle("hide");
+  if(narrow() && !a.classList.contains("hide")) b.classList.add("hide");
+  resize();
+}
+$("btnPanel").onclick =()=>togglePanel("L");
+$("btnPanelR").onclick=()=>togglePanel("R");
+function applyNarrow(){
+  if(narrow()){ $("sideL").classList.add("hide"); $("sideR").classList.add("hide"); }
+  else { $("sideL").classList.remove("hide"); $("sideR").classList.remove("hide"); }
+}
+window.addEventListener("resize", applyNarrow);
+
+$("btnUndo").onclick=undo; $("btnRedo").onclick=redo;
+$("btnFit").onclick=fitView; $("zFit").onclick=fitView;
+$("zIn").onclick=()=>{ view.s=clamp(view.s*1.25,1.5,220); draw(); };
+$("zOut").onclick=()=>{ view.s=clamp(view.s/1.25,1.5,220); draw(); };
+$("btnHelp").onclick=()=>$("mHelp").classList.add("on");
+$("btnPrint").onclick=$("btnPrint2").onclick=()=>window.print();
+$("btnPng").onclick=$("btnPng2").onclick=exportPNG;
+
+function exportPNG(){
+  const pad=90, s=Math.min(2400/S.nave.w, 1700/S.nave.h, 60);
+  const off=document.createElement("canvas");
+  off.width=S.nave.w*s+pad*2; off.height=S.nave.h*s+pad*2;
+  drawTo(off.getContext("2d"), off.width, off.height, s, pad);
+  const a=document.createElement("a");
+  a.download=`parking-nave-${S.nave.w}x${S.nave.h}-${S.vans.length}furgos.png`;
+  a.href=off.toDataURL("image/png"); a.click();
+  toast("Plano descargado","ok");
+}
+// Render independiente para exportar (fondo claro, apto para imprimir)
+function drawTo(c,W,H,s,pad){
+  const PX = x=>x*s+pad, PY = y=>y*s+pad;
+  c.fillStyle="#ffffff"; c.fillRect(0,0,W,H);
+  c.strokeStyle="#e2e8f0"; c.lineWidth=1;
+  for(let i=0;i<=Math.ceil(S.nave.w);i++){ c.beginPath(); c.moveTo(PX(i),PY(0)); c.lineTo(PX(i),PY(S.nave.h)); c.stroke(); }
+  for(let j=0;j<=Math.ceil(S.nave.h);j++){ c.beginPath(); c.moveTo(PX(0),PY(j)); c.lineTo(PX(S.nave.w),PY(j)); c.stroke(); }
+  if(S.meta&&S.meta.aisles) for(const a of S.meta.aisles){
+    c.fillStyle="#f1f5f9"; c.fillRect(PX(a.x),PY(a.y),a.w*s,a.h*s);
+  }
+  for(const o of S.obs){
+    const st=OBS_STYLE[o.t]||OBS_STYLE.otro;
+    c.fillStyle=st.c+"44"; c.fillRect(PX(o.x),PY(o.y),o.w*s,o.h*s);
+    c.strokeStyle=st.c; c.lineWidth=2; c.strokeRect(PX(o.x),PY(o.y),o.w*s,o.h*s);
+    c.fillStyle="#334155"; c.font="700 12px system-ui"; c.textAlign="center"; c.textBaseline="middle";
+    if(o.w*s>50) c.fillText(o.n, PX(o.x+o.w/2), PY(o.y+o.h/2));
+  }
+  const L=S.veh.L, W2=vehWidth();
+  for(const v of S.vans){
+    c.save(); c.translate(PX(v.x),PY(v.y)); c.rotate(v.a*D2R);
+    c.fillStyle="#cbd5e1"; c.strokeStyle="#334155"; c.lineWidth=1.5;
+    c.fillRect(-L*s/2,-W2*s/2,L*s,W2*s); c.strokeRect(-L*s/2,-W2*s/2,L*s,W2*s);
+    c.fillStyle="#475569"; c.fillRect(L*s/2-L*s*0.16,-W2*s/2+3,L*s*0.10,W2*s-6);
+    c.rotate(v.a>90&&v.a<270?Math.PI:0);
+    c.fillStyle="#0f172a"; c.font=`800 ${clamp(W2*s*0.4,7,15)}px system-ui`;
+    c.textAlign="center"; c.textBaseline="middle"; c.fillText(v.lbl||"", -L*s*0.08, 0);
+    c.restore();
+  }
+  c.strokeStyle="#0f172a"; c.lineWidth=4; c.strokeRect(PX(0),PY(0),S.nave.w*s,S.nave.h*s);
+  for(const d of S.doors){
+    c.strokeStyle="#16a34a"; c.lineWidth=7; c.lineCap="round"; c.beginPath();
+    if(d.wall==="N"){ c.moveTo(PX(d.pos-d.w/2),PY(0)); c.lineTo(PX(d.pos+d.w/2),PY(0)); }
+    if(d.wall==="S"){ c.moveTo(PX(d.pos-d.w/2),PY(S.nave.h)); c.lineTo(PX(d.pos+d.w/2),PY(S.nave.h)); }
+    if(d.wall==="W"){ c.moveTo(PX(0),PY(d.pos-d.w/2)); c.lineTo(PX(0),PY(d.pos+d.w/2)); }
+    if(d.wall==="E"){ c.moveTo(PX(S.nave.w),PY(d.pos-d.w/2)); c.lineTo(PX(S.nave.w),PY(d.pos+d.w/2)); }
+    c.stroke(); c.lineCap="butt";
+  }
+  // Sentido de circulación
+  if(S.meta && S.meta.flow && S.meta.aisles){
+    const F=S.meta.flow;
+    c.strokeStyle="#94a3b8"; c.fillStyle="#94a3b8"; c.lineWidth=3;
+    for(const a of S.meta.aisles){
+      const n0 = a.vert?a.y:a.x, n1 = a.vert?a.y+a.h:a.x+a.w;
+      const cx0=a.x+a.w/2, cy0=a.y+a.h/2;
+      for(let t=n0+3; t<n1-1; t+=6){
+        const px=a.vert?cx0:t, py=a.vert?t:cy0;
+        const ex=px+F.dx*1.4, ey=py+F.dy*1.4;
+        c.beginPath(); c.moveTo(PX(px-F.dx*1.4),PY(py-F.dy*1.4)); c.lineTo(PX(ex),PY(ey)); c.stroke();
+        c.beginPath(); c.moveTo(PX(ex),PY(ey));
+        c.lineTo(PX(ex-F.dx*0.7-F.dy*0.4), PY(ey-F.dy*0.7-F.dx*0.4));
+        c.lineTo(PX(ex-F.dx*0.7+F.dy*0.4), PY(ey-F.dy*0.7+F.dx*0.4));
+        c.closePath(); c.fill();
+      }
+    }
+  }
+  // Cotas exteriores
+  c.strokeStyle="#64748b"; c.lineWidth=1.5; c.fillStyle="#334155";
+  c.font="700 15px system-ui"; c.textAlign="center"; c.textBaseline="alphabetic";
+  const ty=pad-16;
+  c.beginPath(); c.moveTo(PX(0),ty); c.lineTo(PX(S.nave.w),ty);
+  c.moveTo(PX(0),ty-6); c.lineTo(PX(0),ty+6); c.moveTo(PX(S.nave.w),ty-6); c.lineTo(PX(S.nave.w),ty+6);
+  c.stroke();
+  c.fillStyle="#ffffff"; c.fillRect(PX(S.nave.w/2)-46, ty-11, 92, 18);
+  c.fillStyle="#334155"; c.fillText(fmt(S.nave.w)+" m", PX(S.nave.w/2), ty+5);
+  const tx=pad-16;
+  c.strokeStyle="#64748b"; c.beginPath(); c.moveTo(tx,PY(0)); c.lineTo(tx,PY(S.nave.h));
+  c.moveTo(tx-6,PY(0)); c.lineTo(tx+6,PY(0)); c.moveTo(tx-6,PY(S.nave.h)); c.lineTo(tx+6,PY(S.nave.h));
+  c.stroke();
+  c.save(); c.translate(tx, PY(S.nave.h/2)); c.rotate(-Math.PI/2);
+  c.fillStyle="#ffffff"; c.fillRect(-46,-11,92,18);
+  c.fillStyle="#334155"; c.fillText(fmt(S.nave.h)+" m",0,5); c.restore();
+
+  // Cartela
+  c.fillStyle="#0f172a"; c.font="800 19px system-ui"; c.textAlign="left";
+  c.fillText(`Parking de nave · ${fmt(S.nave.w)} × ${fmt(S.nave.h)} m · ${S.vans.length} furgonetas`+
+             (S.meta?` · ${S.meta.angle}° · pasillo ${fmt(S.meta.aisle,1)} m`:""), pad, 34);
+  c.font="500 13px system-ui"; c.fillStyle="#64748b";
+  c.fillText(`Plaza ${fmt(stallW())} × ${fmt(stallL())} m · `+
+             `${PRESETS[S.veh.preset]?PRESETS[S.veh.preset].label:"vehículo personalizado"} `+
+             `(${fmt(S.veh.L)} × ${fmt(vehWidth())} m) · `+
+             `${S.par.parkStyle==="back"?"entrada marcha atrás":"entrada de frente"}`+
+             `${S.meta&&S.meta.flow?" · pasillos de sentido único":""} · generado con FlotaDSP`,
+             pad, H-pad+42);
+}
+
+$("btnCsv").onclick=()=>{
+  if(!S.vans.length){ toast("No hay plazas que exportar","warn"); return; }
+  const rows=[["plaza","x_m","y_m","angulo_grados"]];
+  S.vans.forEach(v=>rows.push([v.lbl||"", v.x, v.y, v.a]));
+  const csv=rows.map(r=>r.join(";")).join("\n");
+  dl(new Blob(["﻿"+csv],{type:"text/csv;charset=utf-8"}), "plazas-parking.csv");
+};
+function dl(blob,name){
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+}
+
+/* ---------------------------------------------------------------
+   13. Persistencia
+   --------------------------------------------------------------- */
+const KEY="flotadsp.parking.v1";
+let saveT=null;
+function autosave(){ clearTimeout(saveT); saveT=setTimeout(()=>{
+  try{ localStorage.setItem(KEY, snapshot()); }catch(e){}
+},400); }
+$("btnSave").onclick=()=>{ try{ localStorage.setItem(KEY,snapshot()); toast("Guardado en este navegador","ok"); }
+                           catch(e){ toast("No se pudo guardar","bad"); } };
+$("btnLoad").onclick=()=>{
+  const s=localStorage.getItem(KEY);
+  if(!s){ toast("No hay nada guardado","warn"); return; }
+  pushUndo(); restore(s); syncInputs(); fitView(); renderAll(); toast("Proyecto recuperado","ok");
+};
+$("btnExport").onclick=()=> dl(new Blob([JSON.stringify(JSON.parse(snapshot()),null,2)],{type:"application/json"}),
+                               "parking-nave.json");
+$("btnImport").onclick=()=>$("fileIn").click();
+$("fileIn").onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const rd=new FileReader();
+  rd.onload=()=>{ try{ pushUndo(); restore(rd.result); syncInputs(); fitView(); renderAll(); toast("Proyecto importado","ok"); }
+                  catch(err){ toast("Archivo no válido","bad"); } };
+  rd.readAsText(f); e.target.value="";
+};
+$("btnReset").onclick=()=>{
+  if(!confirm("¿Borrar todo y empezar de cero?")) return;
+  pushUndo(); S=defaultState(); S.obs=[]; syncInputs(); fitView(); renderAll();
+};
+document.querySelectorAll(".modal").forEach(m=> m.onclick=e=>{ if(e.target===m) m.classList.remove("on"); });
+
+/* ---------------------------------------------------------------
+   14. Avisos flotantes
+   --------------------------------------------------------------- */
+let toastEl=null, toastT=null;
+function toast(msg,type="info"){
+  if(!toastEl){
+    toastEl=document.createElement("div");
+    toastEl.style.cssText="position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:200;"+
+      "padding:10px 18px;border-radius:11px;font-weight:700;font-size:13.5px;box-shadow:0 8px 30px rgba(0,0,0,.5);"+
+      "pointer-events:none;transition:opacity .25s";
+    document.body.appendChild(toastEl);
+  }
+  const col={ok:["rgba(34,197,94,.95)","#04250f"],warn:["rgba(251,191,36,.95)","#2b1c00"],
+              bad:["rgba(239,68,68,.95)","#2b0505"],info:["rgba(14,165,233,.95)","#04202e"]}[type];
+  toastEl.style.background=col[0]; toastEl.style.color=col[1];
+  toastEl.innerHTML=msg; toastEl.style.opacity="1";
+  clearTimeout(toastT); toastT=setTimeout(()=>toastEl.style.opacity="0",2600);
+}
+
+/* ---------------------------------------------------------------
+   15. Arranque
+   --------------------------------------------------------------- */
+window.addEventListener("resize", resize);
+(function init(){
+  const saved=localStorage.getItem(KEY);
+  if(saved){ try{ restore(saved); }catch(e){} }
+  syncInputs(); setTool("select"); applyNarrow(); resize(); fitView(); renderAll();
+  if(!S.vans.length){
+    // Primera vez: propuesta automática para que se vea algo útil al abrir
+    setTimeout(()=>{ const r=optimize(); if(r){ applyResult(r); toast(`Propuesta inicial: ${r.count} furgonetas`,"ok"); } },120);
+  }
+})();
+</script>
+</body>
+</html>
