@@ -8,6 +8,7 @@ import {
 import { getToken } from '../auth'
 import { getPlantillas, downloadPlantilla, deletePlantilla, getVehicles } from '../api'
 import { API_BASE as API } from '../../lib/apiBase'
+import { useT, LANG_LOCALE } from '../../i18n'
 
 async function apiFetch(path, opts = {}) {
   const resp = await fetch(`${API}${path}`, {
@@ -29,17 +30,17 @@ async function apiFetch(path, opts = {}) {
 }
 
 /* ── Agrupar plantillas por mes ── */
-function groupByMonth(plantillas) {
+function groupByMonth(plantillas, t, locale) {
   const map = {}
   for (const p of plantillas) {
     // date: "dd/mm/yyyy" o "yyyy-mm-dd"
-    let label = 'Sin fecha'
+    let label = t('pg.sinFecha')
     try {
       const d = p.date?.includes('/') ? p.date : p.date?.split('-').reverse().join('/')
       const [, mm, yyyy] = (d || '').split('/')
       if (mm && yyyy) {
-        const names = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
-        label = `${names[parseInt(mm, 10) - 1] || mm} ${yyyy}`
+        const raw = new Date(parseInt(yyyy, 10), parseInt(mm, 10) - 1, 1).toLocaleDateString(locale, { month: 'long', year: 'numeric' })
+        label = raw.charAt(0).toUpperCase() + raw.slice(1)
       }
     } catch {}
     if (!map[label]) map[label] = []
@@ -50,6 +51,8 @@ function groupByMonth(plantillas) {
 
 /* ── Historial de plantillas ── */
 function Historial({ center }) {
+  const { t, lang } = useT()
+  const locale = LANG_LOCALE[lang] || 'es-ES'
   const [open,       setOpen]       = useState(false)
   const [plantillas, setPlantillas] = useState([])
   const [loading,    setLoading]    = useState(false)
@@ -75,18 +78,18 @@ function Historial({ center }) {
       const a   = document.createElement('a')
       a.href = url; a.download = p.filename || 'plantilla.xlsx'; a.click()
       URL.revokeObjectURL(url)
-    } catch (e) { alert(`Error al descargar: ${e.message}`) }
+    } catch (e) { alert(`${t('pg.eDescargar')}: ${e.message}`) }
   }
 
   async function handleDelete(p) {
-    if (!confirm(`¿Eliminar la plantilla del ${p.date}?`)) return
+    if (!confirm(`${t('pg.confirmDel')} ${p.date}?`)) return
     setDeleting(p.id)
     try { await deletePlantilla(p.id); setPlantillas(ps => ps.filter(x => x.id !== p.id)) }
     catch (e) { alert(`Error: ${e.message}`) }
     finally { setDeleting(null) }
   }
 
-  const grouped = groupByMonth(plantillas)
+  const grouped = groupByMonth(plantillas, t, locale)
 
   return (
     <div className="mb-6 rounded-xl border border-dark-700 bg-dark-900/60">
@@ -97,7 +100,7 @@ function Historial({ center }) {
       >
         <div className="flex items-center gap-2">
           <FolderOpen size={16} className="text-brand-400" />
-          <span className="text-sm font-semibold text-dark-100">Historial de plantillas</span>
+          <span className="text-sm font-semibold text-dark-100">{t('pg.histTitulo')}</span>
           {!noCenter && (
             <span className="rounded-full bg-dark-700 px-2 py-0.5 text-[11px] text-dark-400">{center}</span>
           )}
@@ -108,14 +111,14 @@ function Historial({ center }) {
       {open && (
         <div className="border-t border-dark-700 px-4 pb-4 pt-3">
           {noCenter ? (
-            <p className="text-sm text-dark-500">Selecciona un centro arriba para ver su historial.</p>
+            <p className="text-sm text-dark-500">{t('pg.eligeCentroHist')}</p>
           ) : loading ? (
             <div className="flex items-center gap-2 py-4 text-dark-400">
-              <Loader2 size={15} className="animate-spin" /> Cargando…
+              <Loader2 size={15} className="animate-spin" /> {t('pg.cargando')}
             </div>
           ) : plantillas.length === 0 ? (
             <p className="py-4 text-center text-sm text-dark-500">
-              Aún no hay plantillas guardadas para <b>{center}</b>. Se guardarán automáticamente al descargar.
+              {t('pg.sinPlantillas1')} <b>{center}</b>. {t('pg.sinPlantillas2')}
             </p>
           ) : (
             <div className="flex flex-col gap-5">
@@ -127,14 +130,14 @@ function Historial({ center }) {
                       <div key={p.id} className="flex items-center justify-between gap-3 rounded-lg border border-dark-800 bg-dark-900 px-3 py-2 hover:border-dark-700">
                         <div className="min-w-0">
                           <span className="text-sm font-medium text-dark-100">{p.date}</span>
-                          <span className="ml-2 text-xs text-dark-500">Semana {p.week}</span>
+                          <span className="ml-2 text-xs text-dark-500">{t('pg.semana')} {p.week}</span>
                         </div>
                         <div className="flex shrink-0 items-center gap-1">
                           <button
                             onClick={() => handleDownload(p)}
                             className="btn-ghost flex items-center gap-1 px-2 py-1 text-xs text-dark-300 hover:text-brand-300"
                           >
-                            <Download size={13} /> Descargar
+                            <Download size={13} /> {t('pg.descargar')}
                           </button>
                           <button
                             onClick={() => handleDelete(p)}
@@ -160,6 +163,7 @@ function Historial({ center }) {
 /* ── Componente principal ── */
 export default function PlantillaGenerador() {
   const { center, centers } = useOutletContext()
+  const { t } = useT()
 
   const [cortexList, setCortexList] = useState([])
   const [platList,   setPlatList]   = useState([])
@@ -205,7 +209,7 @@ export default function PlantillaGenerador() {
     setRedSet(new Set(s.red_routes || [])); setYellowSet(new Set(s.yellow_routes || []))
     setPinkSet(new Set(s.pink_furgos || [])); setMarkedSet(new Set(s.marked_conductors || []))
     setSharedDraft({ id: draft.id, revision: draft.revision, updated_by: draft.updated_by })
-    setSharedNote(`Plantilla compartida · última edición: ${draft.updated_by || 'otro usuario'}`)
+    setSharedNote(`${t('pg.compartida')} ${draft.updated_by || t('pg.otroUsuario')}`)
     setStep('preview')
   }
 
@@ -248,9 +252,9 @@ export default function PlantillaGenerador() {
         const saved = await r.json()
         skipSharedSave.current = true
         setSharedDraft(p => p && ({ ...p, revision: saved.revision, updated_by: saved.updated_by }))
-        setSharedNote('Guardado y sincronizado con los demás dispositivos')
+        setSharedNote(t('pg.sync'))
       } catch (e) {
-        setSharedNote('Otro dispositivo guardó a la vez. Se ha recargado su versión para evitar sobrescribirla.')
+        setSharedNote(t('pg.conflicto'))
         try { const d = await (await apiFetch(`/tools/plantilla-compartida/${sharedDraft.id}`)).json(); applySharedDraft(d) } catch {}
       }
     }, 900)
@@ -325,9 +329,9 @@ export default function PlantillaGenerador() {
         })).json()
         suppressJoin.current = false // hay borrador nuevo: el auto-join vuelve a la normalidad
         setSharedDraft({ id: shared.id, revision: shared.revision, updated_by: shared.updated_by })
-        setSharedNote('Plantilla compartida creada: los demás equipos del mismo centro la verán automáticamente.')
+        setSharedNote(t('pg.creada'))
       }
-    } catch (e) { setErr(e?.message || 'Error desconocido') }
+    } catch (e) { setErr(e?.message || t('pg.eDesconocido')) }
     setLoading(false)
   }
 
@@ -360,7 +364,7 @@ export default function PlantillaGenerador() {
       a.href = url; a.download = name; a.click()
       URL.revokeObjectURL(url)
       setStep('done')
-    } catch (e) { setErr(e?.message || 'Error al generar Excel') }
+    } catch (e) { setErr(e?.message || t('pg.eExcel')) }
     setLoading(false)
   }
 
@@ -399,15 +403,15 @@ export default function PlantillaGenerador() {
       <div className="mb-5 flex items-start justify-between">
         <div>
           <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
-            Plantilla de turno
+            {t('pg.titulo')}
           </h1>
           <p className="mt-3 text-sm text-dark-400">
-            Sube capturas → edita → marca colores → descarga Excel. Se guarda automáticamente en el historial.
+            {t('pg.sub')}
           </p>
         </div>
         {step !== 'upload' && (
           <button onClick={reset} className="btn-ghost flex items-center gap-1.5 text-xs text-dark-400">
-            <RotateCcw size={13} /> Nueva plantilla
+            <RotateCcw size={13} /> {t('pg.nueva')}
           </button>
         )}
       </div>
@@ -425,10 +429,10 @@ export default function PlantillaGenerador() {
               className={`flex-1 rounded-lg border px-4 py-3 text-left transition ${!(cortexList.length || cortexText.trim()) ? 'border-brand-500 bg-brand-500/10' : 'border-dark-700 bg-dark-900/60 hover:border-dark-600'}`}
             >
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-sm font-semibold text-dark-100">Solo Plataforma</span>
-                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">RÁPIDO</span>
+                <span className="text-sm font-semibold text-dark-100">{t('pg.soloPlat')}</span>
+                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">{t('pg.rapido')}</span>
               </div>
-              <p className="text-xs text-dark-500">Genera la plantilla solo con furgos y conductores. Importa Cortex después manualmente.</p>
+              <p className="text-xs text-dark-500">{t('pg.soloPlatDesc')}</p>
             </button>
             <button
               onClick={() => refCortex.current?.click()}
@@ -436,9 +440,9 @@ export default function PlantillaGenerador() {
             >
               <div className="flex items-center gap-2 mb-1">
                 <span className="text-sm font-semibold text-dark-100">Cortex + Plataforma</span>
-                <span className="rounded-full bg-brand-500/20 px-2 py-0.5 text-[10px] font-semibold text-brand-400">COMPLETO</span>
+                <span className="rounded-full bg-brand-500/20 px-2 py-0.5 text-[10px] font-semibold text-brand-400">{t('pg.completo')}</span>
               </div>
-              <p className="text-xs text-dark-500">Cruce automático: rutas, horas de ola y conductores todo en uno.</p>
+              <p className="text-xs text-dark-500">{t('pg.completoDesc')}</p>
             </button>
           </div>
 
@@ -446,8 +450,8 @@ export default function PlantillaGenerador() {
             {/* Plataforma — siempre requerida */}
             <div>
               <MultiDropZone
-                label="Plataforma — furgonetas"
-                hint="Requerido · Puedes subir varias capturas"
+                label={t('pg.dzPlat')}
+                hint={t('pg.dzPlatHint')}
                 items={platList}
                 onAdd={files => addFiles(files, setPlatList)}
                 onRemove={i => removeFile(i, setPlatList)}
@@ -461,8 +465,8 @@ export default function PlantillaGenerador() {
             {/* Cortex — opcional */}
             <div>
               <MultiDropZone
-                label="Cortex — rutas + hora salida"
-                hint="Opcional · Añade para cruzar rutas automáticamente"
+                label={t('pg.dzCortex')}
+                hint={t('pg.dzCortexHint')}
                 items={cortexList}
                 onAdd={files => addFiles(files, setCortexList)}
                 onRemove={i => removeFile(i, setCortexList)}
@@ -479,13 +483,13 @@ export default function PlantillaGenerador() {
           {(platList.length > 0 || platText.trim()) && !(cortexList.length || cortexText.trim()) && (
             <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 text-xs text-amber-300">
               <span className="shrink-0 mt-0.5">💡</span>
-              <span>Se generará la plantilla con conductor + furgo + móvil. Las columnas <b>ruta y horas</b> quedarán vacías para rellenar manualmente o importar desde Cortex.</span>
+              <span>{t('pg.infoSolo')}</span>
             </div>
           )}
           {(platList.length > 0 || platText.trim()) && (cortexList.length || cortexText.trim()) && (
             <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2.5 text-xs text-emerald-300">
               <span className="shrink-0 mt-0.5">✓</span>
-              <span>Modo completo: se cruzarán rutas de Cortex con furgos de plataforma por nombre de conductor.</span>
+              <span>{t('pg.infoCompleto')}</span>
             </div>
           )}
 
@@ -493,7 +497,7 @@ export default function PlantillaGenerador() {
 
           <div className="mt-5 flex items-center justify-between gap-4">
             {noCenter && (
-              <p className="text-xs text-amber-400">⚠ Selecciona un centro arriba para guardar en el historial automáticamente.</p>
+              <p className="text-xs text-amber-400">⚠ {t('pg.avisoCentro')}</p>
             )}
             <div className="ml-auto">
               <button
@@ -502,8 +506,8 @@ export default function PlantillaGenerador() {
                 className="btn-primary flex items-center gap-2 disabled:opacity-40"
               >
                 {loading
-                  ? <><Loader2 size={16} className="animate-spin" /> Analizando…</>
-                  : <><FileSpreadsheet size={16} /> {(cortexList.length || cortexText.trim()) ? 'Extraer datos (completo)' : 'Extraer datos (plataforma)'}</>}
+                  ? <><Loader2 size={16} className="animate-spin" /> {t('pg.analizando')}</>
+                  : <><FileSpreadsheet size={16} /> {(cortexList.length || cortexText.trim()) ? t('pg.extraerCompleto') : t('pg.extraerPlat')}</>}
               </button>
             </div>
           </div>
@@ -526,7 +530,7 @@ export default function PlantillaGenerador() {
                 onChange={e => editMeta('week', e.target.value)}
                 className="w-16 rounded border border-dark-600 bg-dark-800 px-2 py-1 text-center text-xs font-bold text-brand-300 focus:outline-none focus:border-brand-500"
               />
-              <span className="text-xs text-dark-400">Fecha</span>
+              <span className="text-xs text-dark-400">{t('pg.fecha')}</span>
               <input
                 value={data.date}
                 onChange={e => editMeta('date', e.target.value)}
@@ -541,24 +545,24 @@ export default function PlantillaGenerador() {
                     <span key={i} className="h-3 w-3 rounded-sm border border-gray-300" style={{ background: c }} />
                   ))}
                 </span>
-                Horas por ola (auto)
+                {t('pg.legOla')}
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded-sm bg-[#FFF2CC] border border-yellow-300" /> Amarillo fila = incidencia
+                <span className="h-3 w-3 rounded-sm bg-[#FFF2CC] border border-yellow-300" /> {t('pg.legAmarillo')}
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded-sm bg-red-500 border border-red-400" /> Rojo = no vino
+                <span className="h-3 w-3 rounded-sm bg-red-500 border border-red-400" /> {t('pg.legRojo')}
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded-sm bg-pink-200 border border-pink-300" /> Rosa FURGO = especial
+                <span className="h-3 w-3 rounded-sm bg-pink-200 border border-pink-300" /> {t('pg.legRosa')}
               </span>
               <span className="flex items-center gap-1.5">
-                <span className="h-3 w-3 rounded-sm bg-[#FCE4D6] border border-orange-200" /> Naranja nombre = sin batch
+                <span className="h-3 w-3 rounded-sm bg-[#FCE4D6] border border-orange-200" /> {t('pg.legNaranja')}
               </span>
               <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-dark-300">
                 <input type="checkbox" checked={!hideNY} onChange={e => setHideNY(!e.target.checked)}
                   className="h-3.5 w-3.5 accent-brand-500" />
-                Columnas nave/yard
+                {t('pg.colNY')}
               </label>
             </div>
           </div>
@@ -568,7 +572,7 @@ export default function PlantillaGenerador() {
             <div className="mb-2 flex items-center gap-3 rounded-lg border border-brand-500/30 bg-brand-500/10 px-3 py-2 text-xs">
               <ClipboardPaste size={13} className="text-brand-400 shrink-0" />
               <span className="text-brand-300 font-medium">
-                Horas copiadas: <b>{copiedHours.h_llegada || '—'}</b> llegada · <b>{copiedHours.h_bajada || '—'}</b> bajada · <b>{copiedHours.h_salida || '—'}</b> wave
+                {t('pg.horasCopiadas')} <b>{copiedHours.h_llegada || '—'}</b> {t('pg.llegada')} · <b>{copiedHours.h_bajada || '—'}</b> {t('pg.bajada')} · <b>{copiedHours.h_salida || '—'}</b> wave
               </span>
               <button
                 onClick={() => {
@@ -584,7 +588,7 @@ export default function PlantillaGenerador() {
                 }}
                 className="ml-auto rounded bg-brand-500/20 px-2 py-0.5 text-brand-300 hover:bg-brand-500/40 transition font-semibold"
               >
-                Pegar a todos
+                {t('pg.pegarTodos')}
               </button>
               <button onClick={() => setCopiedHours(null)} className="text-dark-500 hover:text-dark-200">
                 <X size={13} />
@@ -630,7 +634,7 @@ export default function PlantillaGenerador() {
                         <div className="flex items-center gap-1">
                           <button
                             onClick={() => toggle(markedSet, setMarkedSet, row.conductor)}
-                            title="Marcar conductor (sin batch / necesita welcome)"
+                            title={t('pg.tMarcar')}
                             className={`h-3.5 w-3.5 shrink-0 rounded-sm border transition ${
                               isMarked
                                 ? 'bg-orange-300 border-orange-500'
@@ -693,12 +697,12 @@ export default function PlantillaGenerador() {
                         <div className="flex items-center justify-center gap-1">
                           <button
                             onClick={() => toggle(yellowSet, setYellowSet, rowKey)}
-                            title="Marcar fila amarilla (incidencia)"
+                            title={t('pg.tAmarilla')}
                             className={`h-3.5 w-3.5 rounded-sm border transition ${isYellow ? 'bg-yellow-300 border-yellow-500' : 'border-gray-300 hover:border-yellow-400'}`}
                           />
                           <button
                             onClick={() => toggle(redSet, setRedSet, rowKey)}
-                            title="Marcar fila roja (no vino)"
+                            title={t('pg.tRoja')}
                             className={`h-3.5 w-3.5 rounded-sm border transition ${isRed ? 'bg-red-500 border-red-300' : 'border-gray-300 hover:border-red-400'}`}
                           />
                         </div>
@@ -709,7 +713,7 @@ export default function PlantillaGenerador() {
                         <div className="flex items-center justify-center gap-0.5">
                           <button
                             onClick={() => setCopiedHours({ h_salida: row.h_salida, h_llegada: row.h_llegada, h_bajada: row.h_bajada })}
-                            title="Copiar horas de esta fila"
+                            title={t('pg.tCopiar')}
                             className="rounded p-0.5 text-gray-400 hover:text-blue-500 transition"
                           >
                             <Copy size={11} />
@@ -717,7 +721,7 @@ export default function PlantillaGenerador() {
                           {copiedHours && (
                             <button
                               onClick={() => editCell(i, '_paste_hours', copiedHours)}
-                              title="Pegar horas copiadas"
+                              title={t('pg.tPegar')}
                               className="rounded p-0.5 text-gray-400 hover:text-brand-500 transition"
                             >
                               <ClipboardPaste size={11} />
@@ -741,7 +745,7 @@ export default function PlantillaGenerador() {
 
           <div className="mt-2">
             <button onClick={addRow} className="btn-ghost flex items-center gap-1.5 text-xs text-dark-400 hover:text-brand-300">
-              <Plus size={13} /> Añadir fila
+              <Plus size={13} /> {t('pg.addFila')}
             </button>
           </div>
 
@@ -750,28 +754,28 @@ export default function PlantillaGenerador() {
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap gap-4 text-xs text-dark-500">
               {redSet.size > 0 && (
-                <span><span className="font-semibold text-red-400">{redSet.size} en rojo:</span> {[...redSet].join(', ')}</span>
+                <span><span className="font-semibold text-red-400">{redSet.size} {t('pg.enRojo')}</span> {[...redSet].join(', ')}</span>
               )}
               {yellowSet.size > 0 && (
-                <span><span className="font-semibold text-yellow-400">{yellowSet.size} en amarillo:</span> {[...yellowSet].join(', ')}</span>
+                <span><span className="font-semibold text-yellow-400">{yellowSet.size} {t('pg.enAmarillo')}</span> {[...yellowSet].join(', ')}</span>
               )}
               {pinkSet.size > 0 && (
-                <span><span className="font-semibold text-pink-400">{pinkSet.size} furgo rosa:</span> {[...pinkSet].join(', ')}</span>
+                <span><span className="font-semibold text-pink-400">{pinkSet.size} {t('pg.furgoRosa')}</span> {[...pinkSet].join(', ')}</span>
               )}
               {redSet.size === 0 && yellowSet.size === 0 && pinkSet.size === 0 && (
-                <span>Sin marcas — {data.rows.length} conductores</span>
+                <span>{t('pg.sinMarcas')} — {data.rows.length} {t('pg.conductores')}</span>
               )}
             </div>
             <div className="flex items-center gap-2">
-              {noCenter && <span className="text-xs text-amber-400">⚠ Sin centro → no se guardará en historial</span>}
+              {noCenter && <span className="text-xs text-amber-400">⚠ {t('pg.sinCentro')}</span>}
               <button
                 onClick={descargar}
                 disabled={loading}
                 className="btn-primary flex items-center gap-2 disabled:opacity-40"
               >
                 {loading
-                  ? <><Loader2 size={16} className="animate-spin" /> Generando…</>
-                  : <><Download size={16} /> Descargar{!noCenter ? ' y guardar' : ''}</>}
+                  ? <><Loader2 size={16} className="animate-spin" /> {t('pg.generando')}</>
+                  : <><Download size={16} /> {!noCenter ? t('pg.descargarGuardar') : t('pg.descargar')}</>}
               </button>
             </div>
           </div>
@@ -782,12 +786,12 @@ export default function PlantillaGenerador() {
       {step === 'done' && (
         <div className="flex flex-col items-center gap-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-12 text-center">
           <CheckCircle2 size={36} className="text-emerald-400" />
-          <p className="text-lg font-semibold text-emerald-300">Plantilla descargada{!noCenter ? ' y guardada' : ''}</p>
+          <p className="text-lg font-semibold text-emerald-300">{!noCenter ? t('pg.descargadaGuardada') : t('pg.descargada')}</p>
           {!noCenter && (
-            <p className="text-sm text-dark-400">Disponible en el historial de <b className="text-dark-200">{center}</b>.</p>
+            <p className="text-sm text-dark-400">{t('pg.disponibleEn')} <b className="text-dark-200">{center}</b>.</p>
           )}
           <button onClick={reset} className="btn-primary mt-2 flex items-center gap-2">
-            <RotateCcw size={15} /> Generar otra plantilla
+            <RotateCcw size={15} /> {t('pg.otra')}
           </button>
         </div>
       )}
@@ -796,6 +800,7 @@ export default function PlantillaGenerador() {
 }
 
 function FurgoCell({ value, onChange, isPink, isRed, furgosDisp, usedFurgos, onTogglePink, textCl }) {
+  const { t } = useT()
   const [open, setOpen] = useState(false)
   const ref = useRef()
 
@@ -821,7 +826,7 @@ function FurgoCell({ value, onChange, isPink, isRed, furgosDisp, usedFurgos, onT
         {furgosDisp.length > 0 && (
           <button
             onClick={() => setOpen(v => !v)}
-            title="Ver furgos disponibles"
+            title={t('pg.tVerFurgos')}
             className={`rounded p-0.5 transition ${open ? 'text-brand-400' : 'text-gray-300 hover:text-brand-400'}`}
           >
             <Car size={11} />
@@ -829,7 +834,7 @@ function FurgoCell({ value, onChange, isPink, isRed, furgosDisp, usedFurgos, onT
         )}
         <button
           onClick={onTogglePink}
-          title="Marcar furgo rosa"
+          title={t('pg.tRosa')}
           className={`h-3 w-3 rounded-sm border transition ${isPink ? 'bg-pink-300 border-pink-500' : 'border-gray-300 hover:border-pink-400'}`}
         />
       </div>
@@ -840,7 +845,7 @@ function FurgoCell({ value, onChange, isPink, isRed, furgosDisp, usedFurgos, onT
           {available.length > 0 && (
             <>
               <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-400 bg-dark-800">
-                Disponibles ({available.length})
+                {t('pg.disponibles')} ({available.length})
               </div>
               {available.map(f => (
                 <button key={f} onClick={() => { onChange(f); setOpen(false) }}
@@ -853,7 +858,7 @@ function FurgoCell({ value, onChange, isPink, isRed, furgosDisp, usedFurgos, onT
           {occupied.length > 0 && (
             <>
               <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-400 bg-dark-800 border-t border-dark-700">
-                Ya asignadas ({occupied.length})
+                {t('pg.yaAsignadas')} ({occupied.length})
               </div>
               {occupied.map(f => (
                 <button key={f} onClick={() => { onChange(f); setOpen(false) }}
@@ -864,7 +869,7 @@ function FurgoCell({ value, onChange, isPink, isRed, furgosDisp, usedFurgos, onT
             </>
           )}
           {furgosDisp.length === 0 && (
-            <div className="px-3 py-2 text-dark-500">Sin furgos en el centro</div>
+            <div className="px-3 py-2 text-dark-500">{t('pg.sinFurgos')}</div>
           )}
         </div>
       )}
@@ -895,12 +900,13 @@ function ErrBanner({ msg }) {
 }
 
 function PasteBox({ value, onChange, placeholder }) {
+  const { t } = useT()
   const [open, setOpen] = useState(false)
   if (!open && !value) {
     return (
       <button type="button" onClick={() => setOpen(true)}
         className="mt-2 text-xs font-medium text-brand-400 hover:text-brand-300">
-        …o pega el texto (si no cabe en una captura)
+        {t('pg.pegaTexto')}
       </button>
     )
   }
@@ -914,21 +920,22 @@ function PasteBox({ value, onChange, placeholder }) {
         className="w-full rounded-lg border border-dark-700 bg-dark-900/60 px-3 py-2 text-xs text-dark-100 placeholder-dark-600 outline-none focus:border-brand-500 font-mono"
       />
       <div className="mt-1 flex items-center justify-between text-[11px] text-dark-500">
-        <span>Pega tal cual (columnas separadas por tabs o espacios). La IA lo entiende.</span>
-        {value && <button type="button" onClick={() => onChange('')} className="text-dark-400 hover:text-red-400">Borrar</button>}
+        <span>{t('pg.pegaHint')}</span>
+        {value && <button type="button" onClick={() => onChange('')} className="text-dark-400 hover:text-red-400">{t('pg.borrar')}</button>}
       </div>
     </div>
   )
 }
 
 function MultiDropZone({ label, hint, items, onAdd, onRemove, inputRef, optional, required }) {
+  const { t } = useT()
   const [over, setOver] = useState(false)
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
         <p className="text-sm font-semibold text-dark-200">{label}</p>
-        {required && <span className="rounded-full bg-brand-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-brand-400">requerido</span>}
-        {optional && <span className="rounded-full bg-dark-700 px-1.5 py-0.5 text-[10px] text-dark-500">opcional</span>}
+        {required && <span className="rounded-full bg-brand-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-brand-400">{t('pg.requerido')}</span>}
+        {optional && <span className="rounded-full bg-dark-700 px-1.5 py-0.5 text-[10px] text-dark-500">{t('pg.opcional')}</span>}
       </div>
       {items.length > 0 && (
         <div className="flex flex-wrap gap-2">
@@ -951,7 +958,7 @@ function MultiDropZone({ label, hint, items, onAdd, onRemove, inputRef, optional
       >
         <div className="flex items-center gap-2 text-dark-500">
           <Upload size={18} />
-          <span className="text-xs">{items.length > 0 ? 'Añadir más capturas' : 'Arrastra o haz clic'}</span>
+          <span className="text-xs">{items.length > 0 ? t('pg.masCapturas') : t('pg.arrastra')}</span>
         </div>
         {items.length === 0 && <span className="mt-1 text-[10px] text-dark-600 text-center px-4">{hint}</span>}
         <input ref={inputRef} type="file" accept="image/*" multiple className="hidden" onChange={e => onAdd(e.target.files)} />
