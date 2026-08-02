@@ -1,0 +1,39 @@
+# STAGING — copia funcional de producción que cuesta ~0 €:
+#   · min_machines_running = 0 → la máquina se APAGA sola sin tráfico y arranca
+#     al primer request (tarda ~2-3 s ese primer golpe; para probar, perfecto).
+#   · BD staging_flotadsp / staging_flotadsp_global en el MISMO Atlas gratuito.
+#   · Sin volumen (los uploads de staging son efímeros; lo real va a R2).
+#   · Sin Telegram, sin Gemini y sin webhook de pagos: staging no avisa,
+#     no gasta cuota y no puede tocar dinero (el webhook responde 503).
+# Deploy:  cd backend && fly deploy -c fly.staging.toml --strategy immediate
+app = "flotadsp-backend-staging"
+primary_region = "cdg"
+
+[build]
+
+[env]
+  DB_NAME = "staging_flotadsp"
+  GEMINI_MODEL = "gemini-1.5-flash"
+  PUBLIC_BASE_URL = "https://flotadsp-backend-staging.fly.dev"
+  JWT_EXPIRE_HOURS = "72"
+  ADMIN_NAME = "Admin Staging"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+  kill_timeout = "90s"
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/api/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

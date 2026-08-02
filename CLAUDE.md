@@ -19,6 +19,20 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   `cd backend && fly deploy --strategy immediate`
   Smoke test tras deploy: `GET /api/health` debe dar `status=ok, mongo=True`.
 - `app.flotadsp.com` sirve la app antigua (legado, no tocar).
+
+### Staging (probar sin miedo antes de tocar producción)
+
+- Backend: **https://flotadsp-backend-staging.fly.dev** — app Fly aparte con
+  `min_machines_running=0` (se apaga sola en reposo, coste ~0 €; el primer
+  request tras dormir tarda ~2-3 s). BD `staging_flotadsp` +
+  `staging_flotadsp_global` en el MISMO Atlas. Sin Telegram/Gemini/webhook LS
+  a propósito. Login staging: usuario `admin` (password en secrets de Fly).
+  `cd backend && fly deploy -c fly.staging.toml --strategy immediate`
+- Frontend: **https://staging.flotadsp-v2.pages.dev** — alias de rama del mismo
+  proyecto Pages, compilado apuntando al backend de staging:
+  `cd frontend-v2 && VITE_API_URL=https://flotadsp-backend-staging.fly.dev/api npm run build -- --outDir dist-staging && npx wrangler pages deploy dist-staging --project-name flotadsp-v2 --branch staging --commit-dirty=true`
+  (usa `dist-staging/` para NO pisar el `dist/` de producción).
+- CORS ya admite `*.flotadsp-v2.pages.dev` por regex: no hay que tocar nada.
 - MongoDB Atlas + Cloudflare R2 (fotos/documentos) + Gemini (análisis) + ai-service YOLO11+SAM2.
 - Backup diario automático a R2 a las 04:00 (scheduler en startup de server.py).
 
