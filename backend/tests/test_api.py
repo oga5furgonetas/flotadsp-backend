@@ -196,3 +196,36 @@ async def test_webhook_ls_firma_valida_entra(client, monkeypatch):
     r = await client.post("/api/billing/lemonsqueezy/webhook", content=body,
                           headers={"X-Signature": firma})
     assert r.status_code not in (401, 503), r.text
+
+
+async def test_audit_log_registra_borrados(client):
+    """M21: borrar un vehículo deja rastro global que el super-admin puede leer."""
+    tok = await _admin_de_org("aud")
+    h = {"Authorization": f"Bearer {tok}"}
+    r = await client.post("/api/vehicles", headers=h, json={
+        "license_plate": f"AUD {uuid.uuid4().hex[:4].upper()}", "brand": "Toyota",
+        "model": "Proace", "center": "AUD1",
+    })
+    assert r.status_code == 200, r.text
+    vid = r.json()["id"]
+    r = await client.delete(f"/api/vehicles/{vid}", headers=h)
+    assert r.status_code == 200, r.text
+
+    # Super-admin (sa) lee el registro global
+    sa_id = str(uuid.uuid4())
+    await server.global_db.admin_users.insert_one({
+        "id": sa_id, "username": f"sa_{uuid.uuid4().hex[:6]}",
+        "hashed_password": server.hash_password("test-password-123"),
+        "name": "SA Test", "role": "admin", "org_id": None,
+    })
+    sa_tok = server.create_token(sa_id, "admin", "SA Test", super_admin=True)
+    r = await client.get("/api/admin/audit-log", headers={"Authorization": f"Bearer {sa_tok}"},
+                         params={"action": "vehicle_delete"})
+    assert r.status_code == 200, r.text
+    rows = r.json()["rows"]
+    assert any(x.get("detail", {}).get("vehicle_id") == vid for x in rows), \
+        "el borrado del vehículo no quedó en el audit log"
+
+    # Un admin NORMAL no puede leer el registro
+    r = await client.get("/api/admin/audit-log", headers=h)
+    assert r.status_code in (401, 403)

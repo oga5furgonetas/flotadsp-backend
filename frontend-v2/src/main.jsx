@@ -178,6 +178,7 @@ const Terminos = lazy(() => import('./legal/Terminos'))
 const CookiesPage = lazy(() => import('./legal/Cookies'))
 const AvisoLegal = lazy(() => import('./legal/AvisoLegal'))
 const Contacto = lazy(() => import('./legal/Contacto'))
+const Seguridad = lazy(() => import('./legal/Seguridad'))
 const PeritajeTecnico = lazy(() => import('./pages/PeritajeTecnico'))
 const Verify = lazy(() => import('./pages/Verify'))
 const NotFound = lazy(() => import('./pages/NotFound'))
@@ -217,6 +218,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/cookies" element={<CookiesPage />} />
               <Route path="/aviso-legal" element={<AvisoLegal />} />
               <Route path="/contacto" element={<Contacto />} />
+              <Route path="/security" element={<Seguridad />} />
+              <Route path="/seguridad" element={<Seguridad />} />
               <Route path="/peritaje-tecnico" element={<PeritajeTecnico />} />
               <Route path="/verify" element={<Verify />} />
               <Route path="/verify/:hash" element={<Verify />} />

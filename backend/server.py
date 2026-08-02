@@ -4196,6 +4196,34 @@ async def admin_org_stats(org_id: str, _: dict = Depends(require_superadmin)):
     }
 
 
+async def _audit(user, action: str, detail: dict = None):
+    """Registro de auditoria: quien hizo que y cuando.
+
+    Vive en la BD GLOBAL (fuera del tenant) para que quede constancia aunque
+    la organizacion se borre. Nunca rompe la peticion: si falla, log y punto.
+    """
+    try:
+        await global_db.audit_log.insert_one({
+            "at": datetime.now(timezone.utc).isoformat(),
+            "action": action,
+            "actor_id": (user or {}).get("sub"),
+            "actor_name": (user or {}).get("name"),
+            "actor_role": (user or {}).get("role"),
+            "org_id": (user or {}).get("org_id"),
+            "detail": detail or {},
+        })
+    except Exception as e:
+        logger.warning(f"Audit log fallo ({action}): {e}")
+
+
+@api_router.get("/admin/audit-log")
+async def admin_audit_log(limit: int = 200, action: str = "", _: dict = Depends(require_superadmin)):
+    """Ultimas acciones sensibles (impersonaciones, borrados). Solo super-admin."""
+    q = {"action": action} if action else {}
+    rows = await global_db.audit_log.find(q, {"_id": 0}).sort("at", -1).to_list(min(max(limit, 1), 500))
+    return {"rows": rows}
+
+
 @api_router.post("/admin/impersonate")
 async def admin_impersonate(data: dict = Body(...), user: dict = Depends(require_superadmin)):
     """Genera un token para ENTRAR COMO un DSP (ver su panel y datos). Solo super-admin."""
@@ -4206,12 +4234,13 @@ async def admin_impersonate(data: dict = Body(...), user: dict = Depends(require
                          org_id=org["id"], db_name=_tenant_db_name(org),
                          account_type="dsp", centers=org.get("centers"))
     logger.info("Super-admin entra como DSP %s", org.get("slug"))
+    await _audit(user, "impersonate", {"org_id": org["id"], "org": org.get("slug")})
     return {"token": token, "slug": org.get("slug"), "name": org.get("name"),
             "hidden_modules": org_hidden_modules(org), "centers": org.get("centers")}
 
 
 @api_router.delete("/admin/org/{org_id}")
-async def admin_delete_org(org_id: str, _: dict = Depends(require_superadmin)):
+async def admin_delete_org(org_id: str, user: dict = Depends(require_superadmin)):
     """Elimina un DSP por completo: su BD, sus usuarios y la organización. Irreversible."""
     org = await get_org(org_id)
     if not org or org.get("account_type") != "dsp":
@@ -4223,6 +4252,7 @@ async def admin_delete_org(org_id: str, _: dict = Depends(require_superadmin)):
     await global_db.admin_users.delete_many({"org_id": org_id})
     await global_db.organizations.delete_one({"id": org_id})
     logger.info("DSP eliminado: %s", org.get("slug"))
+    await _audit(user, "org_delete", {"org_id": org_id, "org": org.get("slug")})
     return {"ok": True}
 
 
@@ -6402,6 +6432,7 @@ async def delete_inspection(inspection_id: str, user: dict = Depends(get_current
     (fotos, análisis, fecha) junto con quién la borró y cuándo. Crítico para disputas."""
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Solo administradores")
+    await _audit(user, "inspection_delete", {"inspection_id": inspection_id})
     result = await db.inspections.update_one(
         {"id": inspection_id, "deleted": {"$ne": True}},
         {"$set": {
@@ -10032,24 +10063,26 @@ async def suggest_workshops_for_damage(
 # =========================
 
 @api_router.delete("/vehicles/{vehicle_id}")
-async def delete_vehicle(vehicle_id: str, _=Depends(require_admin)):
+async def delete_vehicle(vehicle_id: str, user=Depends(require_admin)):
     result = await db.vehicles.update_one(
         {"id": vehicle_id},
         {"$set": {"status": "deleted", "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Vehículo no encontrado")
+    await _audit(user, "vehicle_delete", {"vehicle_id": vehicle_id})
     return {"success": True}
 
 
 @api_router.delete("/drivers/{driver_id}")
-async def delete_driver(driver_id: str, _=Depends(require_admin)):
+async def delete_driver(driver_id: str, user=Depends(require_admin)):
     result = await db.drivers.update_one(
         {"id": driver_id},
         {"$set": {"active": False}}
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Conductor no encontrado")
+    await _audit(user, "driver_delete", {"driver_id": driver_id})
     return {"success": True}
 
 
