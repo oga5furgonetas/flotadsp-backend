@@ -675,6 +675,44 @@ async def get_current_user(
     return payload
 
 
+def _a_numero(valor, defecto=0.0):
+    """Un número a partir de lo que sea, sin lanzar. Para datos YA guardados:
+    no se pueden re-validar, pero tampoco deben tumbar una pantalla."""
+    if isinstance(valor, bool) or valor is None:
+        return defecto
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    try:
+        return float(str(valor).replace(",", ".").strip())
+    except (TypeError, ValueError):
+        return defecto
+
+
+def _decimal(valor, campo, defecto=None, minimo=None, maximo=None):
+    """Decimal validado que viene del cliente: 400 si no vale, nunca 500.
+
+    Acepta la coma decimal española ("12,50"): escribirla es lo normal aquí y
+    un 500 por eso sería de traca.
+    """
+    if valor is None or valor == "":
+        if defecto is None:
+            raise HTTPException(status_code=400, detail=f"Falta {campo}")
+        return defecto
+    if isinstance(valor, bool):
+        raise HTTPException(status_code=400, detail=f"{campo} debe ser un número")
+    try:
+        n = float(str(valor).replace(",", ".").strip()) if not isinstance(valor, (int, float)) else float(valor)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{campo} debe ser un número")
+    if n != n or n in (float("inf"), float("-inf")):      # NaN / infinito
+        raise HTTPException(status_code=400, detail=f"{campo} debe ser un número")
+    if minimo is not None and n < minimo:
+        raise HTTPException(status_code=400, detail=f"{campo} no puede ser menor que {minimo}")
+    if maximo is not None and n > maximo:
+        raise HTTPException(status_code=400, detail=f"{campo} no puede ser mayor que {maximo}")
+    return round(n, 2)
+
+
 def _entero(valor, campo: str, defecto=None, minimo=None, maximo=None) -> int:
     """Convierte a entero o lanza 400 con un mensaje util.
 
@@ -4246,16 +4284,12 @@ async def admin_update_org(data: dict = Body(...), _: dict = Depends(require_sup
     if "plan" in data:
         patch["plan"] = (data.get("plan") or "").strip() or None
     if "max_centers" in data:
-        try:
-            patch["max_centers"] = max(1, int(data["max_centers"]))
-        except Exception:
-            pass
+        patch["max_centers"] = _entero(data["max_centers"], "max_centers",
+                                       minimo=1, maximo=500)
     if data.get("extend_trial_days"):
-        try:
-            base = datetime.now(timezone.utc)
-            patch["trial_ends"] = (base + timedelta(days=int(data["extend_trial_days"]))).isoformat()
-        except Exception:
-            pass
+        dias = _entero(data["extend_trial_days"], "extend_trial_days",
+                       minimo=0, maximo=3650)
+        patch["trial_ends"] = (datetime.now(timezone.utc) + timedelta(days=dias)).isoformat()
     if data.get("add_center"):
         c = str(data["add_center"]).strip().upper()
         centers = org.get("centers") or []
@@ -10045,8 +10079,13 @@ async def update_damage(
 
     current = damages[damage_index] if isinstance(damages[damage_index], dict) else {}
     for k, v in (data or {}).items():
-        if k in allowed:
-            current[k] = v
+        if k not in allowed:
+            continue
+        if k == "actual_cost":
+            # Guardarlo tal cual permitia meter TEXTO ("150"): pasaba el float()
+            # de la suma y luego reventaba _vehicle_panel_cost para siempre.
+            v = _decimal(v, "actual_cost", minimo=0, maximo=1_000_000)
+        current[k] = v
 
     # Marcas de tiempo automáticas
     if "workshop_id" in data and data.get("workshop_id"):
@@ -10747,7 +10786,7 @@ def _vehicle_panel_cost(new_damages):
         sev = _norm_sev(nd.get("severity"))
         rank = _SEV_RANK[sev]
         cur = panels.get(panel)
-        actual = nd.get("actual_cost") or 0
+        actual = _a_numero(nd.get("actual_cost"))   # nunca confiar en lo ya guardado
         if cur is None:
             panels[panel] = {"rank": rank, "sev": sev, "actual": actual}
         else:
@@ -14750,8 +14789,8 @@ async def upload_amazon_report(file: UploadFile = File(...), center: str = Form(
                     "rescue": rt.get("rescue"),
                     "snapshot_at": datetime.now(timezone.utc).isoformat(),
                 })
-            except Exception:
-                pass
+            except Exception as _rh:
+                logger.warning(f"route_history no guardado ({rt.get('code')}): {_rh}")
 
     return {"success": True, "report": doc}
 
@@ -15890,10 +15929,9 @@ async def set_scorecard_targets(data: dict = Body(...), _=Depends(require_admin)
     upd = {"center": center}
     for k in _DEFAULT_TARGETS:
         if data.get(k) is not None:
-            try:
-                upd[k] = float(data[k])
-            except Exception:
-                pass
+            # Antes un valor no parseable se tiraba en silencio: la pantalla
+            # decia "guardado" y el objetivo seguia como estaba.
+            upd[k] = _decimal(data[k], k, minimo=0)
     upd["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db.scorecard_targets.update_one({"center": center}, {"$set": upd}, upsert=True)
     return {"success": True, "center": center}
@@ -16305,10 +16343,7 @@ async def scorecard_set_thresholds(data: dict = Body(...), _=Depends(require_adm
     band = {}
     for b in ("fantastic", "great", "fair"):
         if data.get(b) is not None:
-            try:
-                band[b] = float(data[b])
-            except Exception:
-                pass
+            band[b] = _decimal(data[b], b)
     await db.scorecard_thresholds.update_one(
         {"center": center}, {"$set": {"center": center, key: band}}, upsert=True)
     return {"success": True}
