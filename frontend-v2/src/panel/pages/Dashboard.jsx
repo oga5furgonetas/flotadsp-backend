@@ -9,7 +9,7 @@ import {
 import { getDashboardStats, getLastInspections, getItvAlerts, getVehicles, getDrivers, getDamageCosts, cortexOverview, cortexRoutes, getReviewQueue } from '../api'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { PageSkeleton } from '../components/Skeleton'
-import GuidedEmpty from '../components/GuidedEmpty'
+import Activacion from '../components/Activacion'
 
 /* ── helpers ── */
 function greeting(t) {
@@ -460,18 +460,12 @@ export default function Dashboard() {
         </p>
       </header>
 
-      {fleet === 0 ? (
-        <div className="mt-8">
-          <GuidedEmpty
-            emoji="👋"
-            title={t('empty.dash.title')}
-            hint={t('empty.dash.hint')}
-            actionLabel={t('empty.veh.import')}
-            to="/panel/importaciones"
-            secondary={{ to: '/panel/vehiculos', label: t('empty.veh.add') }}
-          />
-        </div>
-      ) : (
+      {/* Guía de activación: se pinta sola mientras falte algún paso y
+          desaparece cuando la flota ya está en marcha. Sustituye al estado
+          vacío de antes, que solo sabía decir "importa vehículos". */}
+      <Activacion />
+
+      {fleet === 0 ? null : (
       <div>
       {/* ── Composición asimétrica 7/5: trabajo a la izquierda, pulso a la derecha ── */}
       <div className="grid gap-x-14 lg:grid-cols-12">

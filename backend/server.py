@@ -18882,6 +18882,48 @@ async def parking_layout_save(body: dict = Body(...), _=Depends(require_admin)):
     return {"ok": True, "spots": len(codes)}
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# ACTIVACION (onboarding). El estado se DEDUCE de los datos reales, nunca de
+# una marca de "ya lo hice": si el DSP borra su flota, la guia vuelve a
+# aparecer honestamente. Un flag guardado mentiria.
+# ══════════════════════════════════════════════════════════════════════════
+
+@api_router.get("/onboarding")
+async def onboarding_status(user: dict = Depends(require_any_auth)):
+    """Que le falta a este DSP para sacarle partido al producto.
+
+    Cuenta barata (count_documents con filtro indexado). Una sola peticion
+    para toda la guia: no queremos 4 llamadas en el primer render del panel.
+    """
+    vehiculos = await db.vehicles.count_documents({"status": {"$ne": "deleted"}})
+    conductores = await db.drivers.count_documents({"active": {"$ne": False}})
+    inspecciones = await db.inspections.count_documents({"deleted": {"$ne": True}})
+    # "Equipo": mas de un usuario admin en la organizacion (opcional pero
+    # es la senal de que el DSP ya no lo lleva una sola persona).
+    equipo = 0
+    try:
+        org_id = user.get("org_id")
+        if org_id:
+            equipo = await global_db.admin_users.count_documents({"org_id": org_id})
+    except Exception:
+        equipo = 0
+
+    pasos = [
+        {"id": "vehiculos", "hecho": vehiculos > 0, "n": vehiculos},
+        {"id": "conductores", "hecho": conductores > 0, "n": conductores},
+        {"id": "inspeccion", "hecho": inspecciones > 0, "n": inspecciones},
+        {"id": "equipo", "hecho": equipo > 1, "n": equipo, "opcional": True},
+    ]
+    obligatorios = [x for x in pasos if not x.get("opcional")]
+    hechos = sum(1 for x in obligatorios if x["hecho"])
+    return {
+        "pasos": pasos,
+        "hechos": hechos,
+        "total": len(obligatorios),
+        "completo": hechos == len(obligatorios),
+    }
+
+
 @api_router.post("/parking/zone-image")
 async def parking_zone_image(
     center: str = Form(...),

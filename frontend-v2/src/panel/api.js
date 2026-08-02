@@ -31,6 +31,7 @@ export const getDamageCosts = (center) => api.get('/stats/damage-costs', { param
 export const getAttention = () => api.get('/stats/attention')
 
 /* ── Vehículos / Flota ── */
+export const getOnboarding = () => api.get('/onboarding')
 export const getVehicles = (center) => api.get('/vehicles', { params: centerParam(center) })
 export const createVehicle = (body) => api.post('/vehicles', body)
 export const getVehicle = (id) => api.get(`/vehicles/${id}`)
