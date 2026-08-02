@@ -76,4 +76,9 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
 - Commits en español, estilo `feat:`/`fix:`, y push a `main` (sincroniza 2 ordenadores).
-- Los checkers de `scripts/` deben quedar a cero antes de commitear.
+- Los checkers de `scripts/` deben quedar a cero antes de commitear:
+  `check-i18n.mjs`, `check-routes.mjs`, `check-huerfanas.mjs` y `check_contracts.py`.
+- `check-huerfanas.mjs` lista rutas del backend que no llama ningún cliente. Una
+  ruta sin UI no falla, simplemente no se usa: así estuvieron meses el módulo de
+  turnos entero y las subidas de métricas. Lleva trinquete (tolera el backlog
+  actual, falla si sube), así que si añades una ruta, engánchala.
