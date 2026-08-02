@@ -3957,11 +3957,16 @@ async def lemonsqueezy_webhook(request: Request):
     import hashlib as _hashlib
     secret = os.environ.get("LS_WEBHOOK_SECRET", "")
     raw = await request.body()
-    if secret:
-        sig = request.headers.get("X-Signature", "")
-        digest = _hmac.new(secret.encode(), raw, _hashlib.sha256).hexdigest()
-        if not _hmac.compare_digest(digest, sig):
-            raise HTTPException(status_code=401, detail="Firma inválida")
+    # FAIL-CLOSED: sin secreto configurado NO se acepta nada. Antes, si el
+    # secreto faltaba, cualquiera podia mandar un webhook sin firma y activar
+    # o suspender organizaciones (es el endpoint que toca el dinero).
+    if not secret:
+        logger.error("Webhook LS rechazado: LS_WEBHOOK_SECRET no configurada")
+        raise HTTPException(status_code=503, detail="Webhook no configurado")
+    sig = request.headers.get("X-Signature", "")
+    digest = _hmac.new(secret.encode(), raw, _hashlib.sha256).hexdigest()
+    if not _hmac.compare_digest(digest, sig):
+        raise HTTPException(status_code=401, detail="Firma inválida")
     try:
         payload = json.loads(raw)
     except Exception:

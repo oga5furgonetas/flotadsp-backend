@@ -7,8 +7,7 @@ import {
 } from 'lucide-react'
 import { getToken } from '../auth'
 import { getPlantillas, downloadPlantilla, deletePlantilla, getVehicles } from '../api'
-
-const API = import.meta.env.VITE_API_URL || 'https://flotadsp-backend.fly.dev/api'
+import { API_BASE as API } from '../../lib/apiBase'
 
 async function apiFetch(path, opts = {}) {
   const resp = await fetch(`${API}${path}`, {
