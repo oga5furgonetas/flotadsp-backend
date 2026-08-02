@@ -229,3 +229,36 @@ async def test_audit_log_registra_borrados(client):
     # Un admin NORMAL no puede leer el registro
     r = await client.get("/api/admin/audit-log", headers=h)
     assert r.status_code in (401, 403)
+
+
+async def test_no_se_expone_la_plantilla_de_conductores(client):
+    """SEGURIDAD: el portal ya no puede bajarse la lista de conductores.
+
+    Antes, GET /auth/conductor-list devolvía id+nombre+email+centro de TODA la
+    plantilla sin token, y con ese id se pedía un JWT del conductor. Este test
+    fija que el nuevo camino solo responde por el email preguntado.
+    """
+    r = await client.post("/api/auth/driver-lookup", json={"email": "no.existe@x.com"})
+    assert r.status_code == 404
+    cuerpo = r.text.lower()
+    # El error no puede filtrar datos de otros conductores
+    assert "@" not in r.json().get("detail", "").replace("no.existe@x.com", "")
+
+
+async def test_driver_token_exige_email_correcto(client, admin_token):
+    """Un id de conductor suelto ya NO basta para conseguir un token."""
+    h = {"Authorization": f"Bearer {admin_token}"}
+    r = await client.post("/api/drivers", headers=h, json={
+        "name": "Conductor Seguridad", "center": "SEC1",
+        "email": f"sec_{uuid.uuid4().hex[:6]}@test.com",
+    })
+    assert r.status_code == 200, r.text
+    did = r.json()["id"]
+
+    # Sin email -> rechazado
+    r = await client.post("/api/auth/driver-token", json={"driver_id": did})
+    assert r.status_code == 403, r.text
+    # Con email equivocado -> rechazado
+    r = await client.post("/api/auth/driver-token",
+                          json={"driver_id": did, "email": "otro@test.com"})
+    assert r.status_code == 403, r.text

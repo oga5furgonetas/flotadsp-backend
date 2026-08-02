@@ -4697,9 +4697,16 @@ async def assistant_ask(data: dict, user: dict = Depends(require_admin)):
 
 
 @auth_router.get("/conductor-list")
-async def conductor_list_public(center: Optional[str] = None, slug: Optional[str] = None):
-    """Lista pública de conductores (solo nombre, email, centro, id) para el
-    portal de login del conductor. NO requiere autenticación. Scoped al DSP por slug."""
+async def conductor_list_public(center: Optional[str] = None, slug: Optional[str] = None,
+                                _admin: dict = Depends(require_admin)):
+    """Plantilla de conductores. AHORA EXIGE SER ADMIN.
+
+    Hasta hoy era publica: devolvia id, nombre, email y centro de TODA la
+    plantilla a cualquiera sin token (datos personales de empleados), y con
+    esos ids se podia pedir un JWT de cualquier conductor sin contrasena.
+    El portal del conductor ya no la usa: pregunta solo por su email en
+    /auth/driver-lookup.
+    """
     await _set_tenant_by_slug(slug)
     query = {}
     if center and center != "Todos":
@@ -4719,6 +4726,50 @@ async def conductor_list_public(center: Optional[str] = None, slug: Optional[str
         for d in drivers:
             d["has_account"] = d["id"] in ids_with_account
     return drivers
+
+
+@auth_router.post("/driver-lookup")
+async def driver_lookup(data: dict, request: Request):
+    """Login del conductor por email, SIN exponer la plantilla.
+
+    Sustituye al antiguo flujo (bajarse la lista entera de conductores al
+    navegador y buscar el email en local), que filtraba nombre, email, centro
+    e id de TODA la plantilla a cualquiera sin autenticar, y permitia pedir
+    un token con un id cualquiera.
+
+    Solo responde por el email preguntado, con limite de intentos por IP.
+    """
+    rl_ip = f"dlk:{_rl_key_ip(request)}"
+    now_ts = datetime.now(timezone.utc).timestamp()
+    _login_fails[rl_ip] = [t for t in _login_fails[rl_ip] if now_ts - t < _LOGIN_WINDOW_S]
+    if len(_login_fails[rl_ip]) >= 20:
+        raise HTTPException(status_code=429, detail="Demasiados intentos. Espera unos minutos.")
+    _login_fails[rl_ip].append(now_ts)
+
+    email = str(data.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Email no valido")
+    org = await _set_tenant_by_slug(data.get("slug"))
+
+    driver = await db.drivers.find_one(
+        {"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}},
+        {"_id": 0, "id": 1, "name": 1, "center": 1})
+    if not driver:
+        # Mismo mensaje siempre: no confirmamos si el email existe o no.
+        raise HTTPException(status_code=404, detail="No encontramos ese email. Contacta con tu responsable de flota.")
+
+    cuenta = await db.driver_accounts.find_one({"driver_id": driver["id"], "active": True})
+    if cuenta:
+        # Tiene contrasena: no damos token aqui, solo decimos que la pida.
+        return {"has_account": True, "name": driver.get("name", "")}
+
+    token = create_token(driver["id"], "driver", driver.get("name", ""),
+                         org_id=(org or {}).get("id"), db_name=_tenant_db_name(org),
+                         account_type=(org or {}).get("account_type"))
+    logger.info(f"Portal conductor (lookup): {driver.get('name')} ({driver['id']})")
+    return {"has_account": False, "access_token": token, "token_type": "bearer",
+            "name": driver.get("name", ""), "center": driver.get("center", ""),
+            "driver_id": driver["id"]}
 
 
 @auth_router.post("/driver-token")
@@ -4744,6 +4795,13 @@ async def _driver_token_impl(data: dict):
     driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0})
     if not driver:
         raise HTTPException(status_code=404, detail="Conductor no encontrado")
+    # Defensa en profundidad: un id suelto ya no basta. Hay que aportar el email
+    # del conductor y tiene que coincidir. Asi, aunque alguien consiguiera un id,
+    # no puede canjearlo por un token.
+    email_dado = str(data.get("email") or "").strip().lower()
+    email_real = str(driver.get("email") or "").strip().lower()
+    if not email_dado or email_dado != email_real:
+        raise HTTPException(status_code=403, detail="Datos de acceso incorrectos")
     # Seguridad: si el conductor tiene contraseña configurada, debe usarla
     account = await db.driver_accounts.find_one({"driver_id": driver_id, "active": True})
     if account:

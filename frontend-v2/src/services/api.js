@@ -49,12 +49,16 @@ export function currentSlug() {
   return new URLSearchParams(window.location.search).get('slug') || undefined
 }
 
-/* ── Auth conductor (scoped al DSP por slug) ──────────────────── */
-export const getConductorList = (center) =>
-  api.get('/auth/conductor-list', { params: { slug: currentSlug(), ...(center ? { center } : {}) } })
+/* ── Auth conductor (scoped al DSP por slug) ────────────────────
+   Se pregunta SOLO por el email tecleado. Antes el portal se descargaba la
+   plantilla entera (nombre, email, centro e id de todos los conductores) sin
+   autenticar y buscaba en local: eso filtraba datos personales de toda la
+   empresa y permitía pedir un token con el id de cualquiera. */
+export const driverLookup = (email) =>
+  api.post('/auth/driver-lookup', { email, slug: currentSlug() })
 
-export const getDriverToken = (driverId) =>
-  api.post('/auth/driver-token', { driver_id: driverId, slug: currentSlug() })
+export const getDriverToken = (driverId, email) =>
+  api.post('/auth/driver-token', { driver_id: driverId, email, slug: currentSlug() })
 
 /* Info pública del DSP por su slug (para mostrar su nombre en el portal) */
 export const getOrgBySlug = (slug) => api.get(`/auth/org/${slug}`)

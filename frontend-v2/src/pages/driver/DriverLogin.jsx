@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Loader2, LogIn, Lock, Eye, EyeOff, ArrowLeft } from 'lucide-react'
-import { getConductorList, getDriverToken, currentSlug } from '../../services/api'
+import { driverLookup } from '../../services/api'
 import { api } from '../../services/api'
 import { useToast } from '../../lib/toast'
 
@@ -12,50 +12,33 @@ export default function DriverLogin({ onLogin }) {
   const [step, setStep] = useState('email') // 'email' | 'password'
   const [currentDriver, setCurrentDriver] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [drivers, setDrivers] = useState([])
   const [orgName] = useState('')
-  const [centers, setCenters] = useState([])
-  const [center, setCenter] = useState('')
 
   const urlCenter = (new URLSearchParams(window.location.search).get('c') || '').toUpperCase()
 
-  useEffect(() => {
-    if (urlCenter) setCenter(urlCenter)
-    getConductorList()
-      .then((r) => {
-        const list = r.data || []
-        setDrivers(list)
-        const uniq = [...new Set(list.map((d) => d.center).filter(Boolean))].sort()
-        setCenters(uniq)
-      })
-      .catch(() => setDrivers([]))
-    // org name intencionalmente no se muestra (privacidad)
-  }, [])
+  // El selector de estación se quitó a propósito: se alimentaba de la lista
+  // pública de conductores. La estación la resuelve el servidor con el email.
 
   const handleEmailSubmit = async () => {
     if (!email) return toast.warning('Introduce tu email')
     setBusy(true)
-    const driver = drivers.find((d) => d.email?.toLowerCase() === email.trim().toLowerCase())
-    if (!driver) {
-      toast.error('Email no encontrado. Contacta con tu administrador.')
-      setBusy(false)
-      return
-    }
-    // Si el conductor tiene cuenta con contraseña, pasar al paso de contraseña
-    if (driver.has_account) {
-      setCurrentDriver(driver)
-      setStep('password')
-      setBusy(false)
-      return
-    }
-    // Sin contraseña: login directo
     try {
-      const r = await getDriverToken(driver.id)
-      if (r.data?.access_token) localStorage.setItem('flotadsp_token', r.data.access_token)
-      onLogin({ ...driver, center: r.data?.center || driver.center })
-      toast.success(`Bienvenido, ${driver.name}`)
-    } catch {
-      toast.error('No se pudo iniciar sesión. Inténtalo de nuevo.')
+      // Una sola pregunta al servidor, solo por ESTE email.
+      const r = await driverLookup(email.trim())
+      const d = r.data || {}
+      if (d.has_account) {
+        setCurrentDriver({ name: d.name, email: email.trim() })
+        setStep('password')
+      } else if (d.access_token) {
+        localStorage.setItem('flotadsp_token', d.access_token)
+        onLogin({ id: d.driver_id, name: d.name, email: email.trim(), center: d.center })
+        toast.success(`Bienvenido, ${d.name}`)
+      } else {
+        toast.error('No se pudo iniciar sesión. Inténtalo de nuevo.')
+      }
+    } catch (ex) {
+      const msg = ex?.response?.data?.detail
+      toast.error(typeof msg === 'string' ? msg : 'No se pudo iniciar sesión. Inténtalo de nuevo.')
     }
     setBusy(false)
   }
@@ -79,7 +62,7 @@ export default function DriverLogin({ onLogin }) {
     setBusy(false)
   }
 
-  const displayCenter = urlCenter || center
+  const displayCenter = urlCenter
 
   return (
     <div className="flex min-h-[100dvh] flex-col items-center justify-center bg-dark-950 px-4"
@@ -113,16 +96,6 @@ export default function DriverLogin({ onLogin }) {
           {/* Paso 1: email */}
           {step === 'email' && (
             <div className="space-y-4">
-              {centers.length > 0 && !urlCenter && (
-                <div>
-                  <label className="label">Tu estación</label>
-                  <select className="select" value={center} onChange={(e) => setCenter(e.target.value)}>
-                    <option value="">Todas las estaciones</option>
-                    {centers.map((c) => <option key={c}>{c}</option>)}
-                  </select>
-                </div>
-              )}
-
               <div>
                 <label className="label">Email profesional</label>
                 <input
