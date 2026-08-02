@@ -7,6 +7,7 @@ import {
   getAssignedVehicle, readOdometer, uploadInspection, validatePhoto,
 } from '../../services/api'
 import { compressImage } from '../../lib/compressImage'
+import { useT } from '../../i18n'
 import { useToast } from '../../lib/toast'
 import { pushSupported, isPushEnabled, enablePush } from '../../lib/push'
 
@@ -68,6 +69,7 @@ function StepBar({ step }) {
 
 export default function InspectionFlow({ driver, vehicles, onComplete, onLogout }) {
   const toast = useToast()
+  const { t } = useT()
   const [step, setStep] = useState(0)
   const [vehicleId, setVehicleId] = useState('')
   const [photos, setPhotos] = useState({})
@@ -180,8 +182,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
     } catch (err) {
       // Un fallo de red NO puede colar una auditoría sin km.
       setOdoPhoto(blob); setOdoBloqueado(true); setOdoServicioCaido(true)
-      setOdoError('El lector automático no está disponible en este momento. '
-        + 'Escribe los km a mano; tu foto se guarda igual.')
+      setOdoError(t('dr.lectorCaido'))
       toast.error('⚠️ Lector no disponible — pon los km a mano')
     }
     setOdoBusy(false)
@@ -210,11 +211,11 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
   )
 
   const submit = async () => {
-    if (!vehicleId) return toast.error('Selecciona un vehículo')
-    if (!odoPhoto) return toast.error('Falta la foto del cuentakilómetros')
-    if (!(odoKmFinal > 0)) return toast.error('Sin los km no se puede enviar la auditoría')
-    if (!allRequiredPhotos) return toast.error('Faltan fotos obligatorias')
-    if (missingDamagePhotos.length > 0) return toast.error('Faltan fotos de los daños marcados')
+    if (!vehicleId) return toast.error(t('dr.eligeVeh'))
+    if (!odoPhoto) return toast.error(t('dr.faltaCuenta'))
+    if (!(odoKmFinal > 0)) return toast.error(t('dr.sinKm'))
+    if (!allRequiredPhotos) return toast.error(t('dr.faltanFotos'))
+    if (missingDamagePhotos.length > 0) return toast.error(t('dr.faltanDanos'))
     setSending(true)
     // Evitar que un cierre accidental de la pestaña pierda la inspección en curso
     const guard = (e) => { e.preventDefault(); e.returnValue = '' }
@@ -320,13 +321,13 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
         {step === 0 && (
           <div className="space-y-4">
             <div>
-              <h2 className="text-lg font-bold text-dark-50">Inspección diaria</h2>
-              <p className="text-xs text-dark-500">Selecciona tu furgoneta asignada para hoy</p>
+              <h2 className="text-lg font-bold text-dark-50">{t('dr.insDiaria')}</h2>
+              <p className="text-xs text-dark-500">{t('dr.eligeFurgo')}</p>
             </div>
 
             {assigned?.vehicle && (
               <div>
-                <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-brand-500">Tu asignación de hoy</p>
+                <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-brand-500">{t('dr.tuAsignacion')}</p>
                 <button
                   onClick={() => { setVehicleId(assigned.vehicle.id); setStep(1) }}
                   className="group flex w-full items-center gap-4 rounded-2xl border-2 border-brand-500/40 bg-gradient-to-r from-brand-500/10 to-transparent p-4 text-left transition-all hover:border-brand-500/70"
@@ -354,7 +355,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
 
             {otherVehicles.length > 0 && (
               <div>
-                {assigned?.vehicle && <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-dark-600">Otras furgonetas</p>}
+                {assigned?.vehicle && <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-dark-600">{t('dr.otrasFurgos')}</p>}
                 <div className="space-y-2">
                   {otherVehicles.map((v) => (
                     <button
@@ -379,8 +380,8 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
             {vehicles.length === 0 && !assigned?.vehicle && (
               <div className="flex flex-col items-center gap-3 rounded-2xl border border-dark-800 bg-dark-900/50 py-16 text-center">
                 <Truck size={32} className="text-dark-700" />
-                <p className="text-sm text-dark-500">No hay vehículos disponibles en tu centro</p>
-                <p className="text-xs text-dark-600">Contacta con tu responsable de flota</p>
+                <p className="text-sm text-dark-500">{t('dr.sinVehiculos')}</p>
+                <p className="text-xs text-dark-600">{t('dr.contactaFlota')}</p>
               </div>
             )}
 
@@ -405,8 +406,8 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                 <span className="font-mono text-sm font-bold text-brand-400">{selectedVehicle?.license_plate}</span>
                 {photosOk > 0 && <span className="text-[10px] text-dark-500">{photosOk + (odoPhoto ? 1 : 0)} / 5 fotos</span>}
               </div>
-              <h2 className="text-lg font-bold text-dark-50">Fotografías obligatorias</h2>
-              <p className="text-xs text-dark-500">La IA verifica que cada foto sea correcta y nítida</p>
+              <h2 className="text-lg font-bold text-dark-50">{t('dr.fotosObl')}</h2>
+              <p className="text-xs text-dark-500">{t('dr.iaVerifica')}</p>
             </div>
 
             {/* 4 ángulos + cuentakilómetros */}
@@ -431,7 +432,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                     {validating === slot.id ? (
                       <>
                         <Loader2 size={22} className="animate-spin text-brand-400" />
-                        <span className="text-[10px] font-semibold text-brand-400">Verificando IA…</span>
+                        <span className="text-[10px] font-semibold text-brand-400">{t('dr.verificandoIA')}</span>
                       </>
                     ) : photos[slot.id] ? (
                       <>
@@ -473,7 +474,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                   {odoBusy ? (
                     <>
                       <Loader2 size={22} className="animate-spin text-brand-400" />
-                      <span className="text-[11px] font-semibold text-brand-400">La IA está leyendo los km…</span>
+                      <span className="text-[11px] font-semibold text-brand-400">{t('dr.leyendoKm')}</span>
                     </>
                   ) : odoPhoto ? (
                     <>
@@ -485,14 +486,14 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                       </div>
                       <div className={`absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-dark-900/90 px-4 py-1 text-xs font-black ring-1 ${
                         odoKmFinal > 0 ? 'text-emerald-300 ring-emerald-500/30' : 'text-amber-300 ring-amber-500/30'}`}>
-                        {odoKmFinal > 0 ? `${odoKmFinal.toLocaleString()} km` : 'km sin leer'}
+                        {odoKmFinal > 0 ? `${odoKmFinal.toLocaleString()} km` : t('dr.kmSinLeer')}
                       </div>
                     </>
                   ) : (
                     <>
                       <Gauge size={24} className="text-brand-400" />
-                      <span className="text-xs font-semibold text-dark-300">Foto del cuentakilómetros</span>
-                      <span className="text-[9px] font-bold uppercase tracking-wider text-brand-500">Obligatorio · la IA lee los km automáticamente</span>
+                      <span className="text-xs font-semibold text-dark-300">{t('dr.fotoCuenta')}</span>
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-brand-500">{t('dr.oblKmAuto')}</span>
                     </>
                   )}
                 </button>
@@ -502,7 +503,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                     {!odoServicioCaido && (
                       <button onClick={() => odoRef.current?.click()}
                         className="mt-2 w-full rounded-lg bg-amber-500/20 py-2 text-[11px] font-bold text-amber-200 ring-1 ring-amber-500/40 active:scale-[0.98]">
-                        📷 Repetir la foto
+                        📷 {t('dr.repetirFoto')}
                       </button>
                     )}
 
@@ -563,8 +564,8 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
         {step === 2 && (
           <div className="space-y-4">
             <div>
-              <h2 className="text-lg font-bold text-dark-50">Estado del vehículo</h2>
-              <p className="text-xs text-dark-500">Revisa cada punto. Si hay daño, saca una foto obligatoriamente.</p>
+              <h2 className="text-lg font-bold text-dark-50">{t('dr.estadoVeh')}</h2>
+              <p className="text-xs text-dark-500">{t('dr.revisaPunto')}</p>
             </div>
 
             <div className="space-y-2">
@@ -630,7 +631,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
             </div>
 
             <div>
-              <label className="label">Observaciones adicionales</label>
+              <label className="label">{t('dr.observaciones')}</label>
               <textarea
                 className="input min-h-[80px] resize-none"
                 value={notes}
@@ -656,7 +657,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
           <div className="space-y-4">
             <div>
               <h2 className="text-lg font-bold text-dark-50">Confirmar y enviar</h2>
-              <p className="text-xs text-dark-500">Revisa el resumen antes de enviar la inspección</p>
+              <p className="text-xs text-dark-500">{t('dr.revisaResumen')}</p>
             </div>
 
             {/* Resumen */}
@@ -670,13 +671,13 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
               </div>
               <div className="divide-y divide-dark-800/60 px-4">
                 <div className="flex justify-between py-2.5 text-sm">
-                  <span className="text-dark-400">Fotos enviadas</span>
+                  <span className="text-dark-400">{t('dr.fotosEnviadas')}</span>
                   <span className="font-semibold text-dark-100">
                     {Object.keys(photos).length + (odoPhoto ? 1 : 0) + Object.keys(checklistPhotos).length}
                   </span>
                 </div>
                 <div className="flex justify-between py-2.5 text-sm">
-                  <span className="text-dark-400">Kilómetros</span>
+                  <span className="text-dark-400">{t('dr.kilometros')}</span>
                   <span className={`font-bold ${odoKmFinal > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                     {odoKmFinal > 0
                       ? `${odoKmFinal.toLocaleString()} km ✓${!odoKm ? ' (a mano)' : ''}`

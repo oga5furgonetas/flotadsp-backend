@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, Check, CheckCircle2, ExternalLink, FileSignature, Loader2, LogOut, Plus, ShieldCheck } from 'lucide-react'
 import { signInspection, getDriverOffers, clickDriverOffer } from '../../services/api'
+import { useT } from '../../i18n'
 
-const DECLARATION =
-  'Confirmo que el estado del vehículo es como aparece en las fotos. Firmo electrónicamente con mi nombre a la fecha y hora actuales.'
+/* La declaración de firma es un texto LEGAL: se firma en el idioma que el
+   conductor está usando, porque firmar algo que no entiendes no vale nada. */
 
 function SeverityBadge({ severity }) {
   const s = (severity || '').toLowerCase()
@@ -24,6 +25,7 @@ function SeverityBadge({ severity }) {
    (momento de atención libre). El backend cuenta views/clicks para poder vender
    el espacio con métricas reales; sin patrocinadores muestra la auto-promo. ── */
 function DriverOffers() {
+  const { t } = useT()
   const [offers, setOffers] = useState([])
 
   useEffect(() => {
@@ -51,7 +53,7 @@ function DriverOffers() {
             {o.description && <span className="mt-0.5 block text-xs leading-snug text-dark-400">{o.description}</span>}
           </span>
           <span className="flex shrink-0 items-center gap-1 text-[11px] font-semibold text-brand-400">
-            {o.cta || 'Ver'} <ExternalLink size={11} />
+            {o.cta || t('dr.ver')} <ExternalLink size={11} />
           </span>
         </button>
       ))}
@@ -60,6 +62,7 @@ function DriverOffers() {
 }
 
 export default function InspectionDone({ result, onNew, onLogout }) {
+  const { t } = useT()
   const analysis = result?.analysis
   const inspId = result?.id
   const [accepted, setAccepted] = useState(false)
@@ -73,11 +76,11 @@ export default function InspectionDone({ result, onNew, onLogout }) {
     if (!accepted || !inspId) return
     setSigning(true); setErr('')
     try {
-      const r = await signInspection(inspId, DECLARATION)
+      const r = await signInspection(inspId, t('dr.declaracion'))
       setHash(r.data?.hash || '')
       setSigned(true)
     } catch (e) {
-      setErr(e?.response?.data?.detail || 'No se pudo firmar. Puedes continuar y firmar después desde tu administrador.')
+      setErr(e?.response?.data?.detail || t('dr.eFirmar'))
     }
     setSigning(false)
   }
@@ -94,20 +97,20 @@ export default function InspectionDone({ result, onNew, onLogout }) {
           <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400/20 to-emerald-600/20 ring-4 ring-emerald-500/20">
             <ShieldCheck size={44} className="text-emerald-400" />
           </div>
-          <h2 className="mb-1 text-2xl font-black text-dark-50">¡Inspección firmada!</h2>
-          <p className="mb-6 text-sm text-dark-400">Peritaje técnico registrado con cadena de custodia digital.</p>
+          <h2 className="mb-1 text-2xl font-black text-dark-50">{t('dr.firmada')}</h2>
+          <p className="mb-6 text-sm text-dark-400">{t('dr.peritajeReg')}</p>
           {hash && (
             <div className="mb-6 rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-left">
-              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-emerald-600">Hash criptográfico de tu firma</p>
+              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-emerald-600">{t('dr.hashFirma')}</p>
               <code className="break-all text-[11px] leading-relaxed text-emerald-300">{hash.slice(0, 40)}…</code>
             </div>
           )}
           <div className="flex gap-3">
             <button onClick={onNew} className="btn-primary flex flex-1 items-center justify-center gap-2 py-3.5">
-              <Plus size={16} /> Nueva inspección
+              <Plus size={16} /> {t('dr.nuevaIns')}
             </button>
             <button onClick={onLogout} className="btn-ghost flex items-center justify-center gap-1.5 px-4 py-3.5 text-sm text-dark-400">
-              <LogOut size={15} /> Salir
+              <LogOut size={15} /> {t('dr.salir')}
             </button>
           </div>
           <DriverOffers />
@@ -142,10 +145,10 @@ export default function InspectionDone({ result, onNew, onLogout }) {
           )}
           <div className="flex gap-3">
             <button onClick={onNew} className="btn-primary flex flex-1 items-center justify-center gap-2 py-3.5">
-              <Plus size={16} /> Nueva inspección
+              <Plus size={16} /> {t('dr.nuevaIns')}
             </button>
             <button onClick={onLogout} className="btn-ghost flex items-center justify-center gap-1.5 px-4 py-3.5 text-sm text-dark-400">
-              <LogOut size={15} /> Salir
+              <LogOut size={15} /> {t('dr.salir')}
             </button>
           </div>
           <DriverOffers />
@@ -195,7 +198,7 @@ export default function InspectionDone({ result, onNew, onLogout }) {
           </div>
 
           <div className="mb-4 rounded-xl border border-dark-800 bg-dark-950/60 p-3 text-xs leading-relaxed text-dark-400">
-            «{DECLARATION}»
+            «{t('dr.declaracion')}»
           </div>
 
           <label className="mb-4 flex cursor-pointer items-start gap-3">
