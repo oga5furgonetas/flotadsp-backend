@@ -14656,9 +14656,22 @@ async def upload_amazon_report(file: UploadFile = File(...), center: str = Form(
         analysis = None
         # ¿Es el Excel de Rutas de Cortex? → panel operativo estructurado (sin IA)
         if fn.endswith(".xlsx") or fn.endswith(".xlsm"):
-            analysis = _parse_routes_excel(content, driver_info, file.filename)
+            try:
+                analysis = _parse_routes_excel(content, driver_info, file.filename)
+            except Exception as e:
+                # No es ESE Excel: no es un error, se intenta la vía general.
+                logger.info(f"Report: no es el Excel de rutas ({e}); pruebo extracción general")
+                analysis = None
         if analysis is None:
-            text, pdf_bytes = await _extract_report_text(content, file.filename or "report")
+            try:
+                text, pdf_bytes = await _extract_report_text(content, file.filename or "report")
+            except Exception as e:
+                # Archivo ilegible: culpa del fichero, no del servidor. Un 5xx aquí
+                # dispararía la alerta de errores por un Excel mal exportado.
+                logger.info(f"Report ilegible: {e}")
+                raise HTTPException(
+                    status_code=400,
+                    detail="No se pudo leer el archivo. ¿Es un informe de Amazon (Excel, PDF o HTML)?")
             analysis = await _analyze_report_with_gemini(text, pdf_bytes, driver_map)
         # Post-proceso: si algún 'name' sigue siendo un ID conocido, sustituir por el nombre
         for dr in (analysis.get("drivers_at_risk") or []):
@@ -14668,9 +14681,12 @@ async def upload_amazon_report(file: UploadFile = File(...), center: str = Form(
                 dr["name"] = driver_map[nm]
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="El análisis tardó demasiado. Inténtalo de nuevo.")
+    except HTTPException:
+        raise                      # el 400 de archivo ilegible no debe volverse 502
     except Exception as e:
         logger.error(f"Análisis report: {e}")
-        raise HTTPException(status_code=502, detail="No se pudo analizar el report. ¿Es un informe de Amazon válido?")
+        raise HTTPException(status_code=502,
+                            detail="El servicio de análisis no respondió. Vuelve a intentarlo en unos minutos.")
 
     doc = {
         "id": str(uuid.uuid4()),

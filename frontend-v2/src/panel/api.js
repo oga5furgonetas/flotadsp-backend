@@ -151,6 +151,20 @@ export const rebuildStatus = () => api.get('/inspections/rebuild-status')
 export const reanalyzeInspection = (id) => api.post(`/inspections/${id}/reanalyze?silent=true`, {}, { timeout: 120000 })
 export const submitAiFeedback = (body) => api.post('/ai-feedback', body)
 export const getMetricsReports = (center) => api.get('/metrics/reports', { params: centerParam(center) })
+/* Informes de Amazon: subida (plan de rutas de la mañana, report, daily de
+   Cortex) y el acumulado semanal que sale de ellos. */
+const _subir = (ruta, file, extra = {}) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  for (const [k, v] of Object.entries(extra)) fd.append(k, v)
+  return api.post(ruta, fd, { timeout: 180000, headers: { 'Content-Type': undefined } })
+}
+export const uploadRoutePlan = (file, center) => _subir('/metrics/upload-routeplan', file, { center })
+export const uploadAmazonReport = (file, center) => _subir('/metrics/upload-report', file, { center })
+export const uploadDailyReport = (file) => _subir('/metrics/upload-daily', file)
+export const getDailyWeek = (center, desde, hasta) => api.get('/metrics/daily-week', { params: { center, desde, hasta } })
+export const getRoutePlanAvailable = (center) => api.get('/metrics/routeplan-available', { params: { center } })
+export const getDriverRouteHistory = (tid) => api.get(`/metrics/driver-history/${encodeURIComponent(tid)}`)
 export const importVehicles = (file, center) => {
   const fd = new FormData()
   fd.append('file', file, file.name)

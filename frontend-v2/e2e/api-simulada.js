@@ -67,6 +67,16 @@ function respuesta(ruta, escenario) {
     '/assignments/daily': { date: HOY, slots: [] },
     '/checklist': { items: [], date: HOY },
     '/scorecard': { weeks: [], drivers: [] },
+    '/metrics/daily-week': lleno ? {
+      center: 'OGA5', dias: [dentroDe(-2), dentroDe(-1), HOY],
+      totals: { rts: 4, dnr: 2, pod: 7, cc: 1 },
+      ranking: [{ transporter_id: 'A1', name: 'Ana Lopez', rts: 2, dnr: 1, pod: 3, cc: 0 }],
+      pod_reasons: [['Sin foto', 4], ['Foto borrosa', 3]], cc_reasons: [],
+    } : { center: 'OGA5', dias: [], totals: {}, ranking: [], pod_reasons: [], cc_reasons: [] },
+    '/metrics/routeplan-available': { date: HOY, routes: lleno ? { CX1: { stops: 120 } } : {} },
+    '/metrics/upload-routeplan': { success: true, routes: 3, stops: 340, date: HOY },
+    '/metrics/upload-daily': { success: true, center: 'OGA5', date: HOY, conductores: 12, totales: {} },
+    '/metrics/upload-report': { success: true, report: { id: 'r9', name: 'Scorecard wk31' } },
     '/metrics/reports': [],
     '/chat': { messages: [] },
     '/shifts/mine': {
