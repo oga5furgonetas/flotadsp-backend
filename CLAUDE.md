@@ -68,7 +68,16 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    (instalado 2026-07; el alias `python` de la Store puede no funcionar en shells no interactivos).
    Validar backend antes de commitear: `python -m py_compile backend/server.py` +
    `python scripts/check_contracts.py`. server.py lleva BOM UTF-8 (leer con utf-8-sig).
-5. `frontend-v2/dist/` NO se versiona (está en .gitignore desde 2026-07). Es el build:
+5. **La BD del tenant principal se llama `flotadsp`, NO `dsp_<org_id>`.** Las orgs
+   nuevas sí usan `dsp_<id>`, pero la tuya es la original y se quedó con el nombre
+   viejo. Un script que recorra solo `dsp_*` para comprobar algo en producción se
+   salta TODOS tus datos y da un falso negativo (pasó: dije "0 documentos" de cosas
+   que tenían cientos). Recorre todas las BDs y excluye `admin/local/config`.
+6. **`center` está guardado sucio**: `'OGA5'`, `'OGA5 '` (con espacio), `'oga5'`,
+   `'AMZL OGA5 SANTIAGO XPT'`. Cualquier filtro por centro va por `$regex` sobre el
+   código, nunca por igualdad. Y `inspections`, `incidents` y `alerts` NO tienen
+   campo `center`: se acotan por `vehicle_id` contra las furgonetas del centro.
+7. `frontend-v2/dist/` NO se versiona (está en .gitignore desde 2026-07). Es el build:
    se regenera con `npm run build` antes de cada deploy. Antes se commiteaba y provocaba
    conflictos masivos al trabajar desde dos ordenadores; ya no.
 
