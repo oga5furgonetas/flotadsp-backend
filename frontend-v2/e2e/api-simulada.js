@@ -27,6 +27,8 @@ const INSPECCION = {
 
 /* Respuesta por defecto según el final de la ruta. Cualquier endpoint no
    contemplado devuelve algo inofensivo en vez de romper la pantalla. */
+const dentroDe = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10)
+
 function respuesta(ruta, escenario) {
   const lleno = escenario === 'lleno'
   const t = {
@@ -67,7 +69,17 @@ function respuesta(ruta, escenario) {
     '/scorecard': { weeks: [], drivers: [] },
     '/metrics/reports': [],
     '/chat': { messages: [] },
+    '/shifts/mine': {
+      shifts: [0, 1, 2, 4, 5].map((i) => ({ date: dentroDe(i), type: i === 4 ? 'extra' : 'trabaja' })),
+      requests: [{ id: 'r1', date: dentroDe(3), type: 'libre', status: 'pendiente' }],
+    },
+    '/shifts/coverage': { coverage: {}, min: 2 },
+    '/shifts/generate-auto': { success: true, assignments: [], resumen: 'Cuadrante de prueba', coverage: {} },
+    '/shifts/import': { success: true, saved: 0 },
+    '/shifts/bulk': { success: true, saved: 0 },
     '/shifts': { shifts: [] },
+    '/shift-requests': { requests: [] },
+    '/route-demand': { demand: {} },
     '/me': { id: 'a1', name: 'Admin Test', role: 'admin' },
   }
   for (const [clave, valor] of Object.entries(t)) {

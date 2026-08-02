@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle, Camera, Check, ChevronLeft, ChevronRight,
-  Gauge, Loader2, LogOut, Send, Truck, ArrowRight, Shield, Bell,
+  Gauge, Loader2, LogOut, Send, Truck, ArrowRight, Shield, Bell, CalendarDays,
 } from 'lucide-react'
 import {
   getAssignedVehicle, readOdometer, uploadInspection, validatePhoto,
@@ -67,7 +67,7 @@ function StepBar({ step }) {
   )
 }
 
-export default function InspectionFlow({ driver, vehicles, onComplete, onLogout }) {
+export default function InspectionFlow({ driver, vehicles, onComplete, onLogout, onShifts }) {
   const toast = useToast()
   const { t } = useT()
   const [step, setStep] = useState(0)
@@ -300,7 +300,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
               <button onClick={activateDriverPush} disabled={pushBusy}
                 className="mt-1 flex items-center gap-1.5 rounded-full border border-brand-500/30 bg-brand-500/10 px-2.5 py-1 text-[11px] font-semibold text-brand-300 disabled:opacity-50">
                 {pushBusy ? <Loader2 size={11} className="animate-spin" /> : <Bell size={11} />}
-                Activar avisos en este móvil
+                {t('dr.push.enable')}
               </button>
             )}
             {!driver.photo_url && (
@@ -308,7 +308,12 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
             )}
             <p className="text-[10px] capitalize text-dark-600">{today} · {driver.center}</p>
           </div>
-          <button onClick={onLogout} className="btn-ghost p-1.5 text-dark-500" title="Cerrar sesión">
+          {onShifts && (
+            <button onClick={onShifts} className="btn-ghost p-1.5 text-dark-500" title={t('dr.sh.title')}>
+              <CalendarDays size={15} />
+            </button>
+          )}
+          <button onClick={onLogout} className="btn-ghost p-1.5 text-dark-500" title={t('dr.logout')}>
             <LogOut size={15} />
           </button>
         </div>
@@ -447,7 +452,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                       <>
                         <Camera size={22} className={photoErrors[slot.id] ? 'text-red-400' : 'text-dark-500'} />
                         <span className="text-[11px] font-semibold text-dark-400">{slot.label}</span>
-                        <span className="text-[9px] font-bold uppercase tracking-wider text-brand-500">Obligatorio</span>
+                        <span className="text-[9px] font-bold uppercase tracking-wider text-brand-500">{t('dr.required')}</span>
                       </>
                     )}
                   </button>
@@ -478,7 +483,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                     </>
                   ) : odoPhoto ? (
                     <>
-                      <img src={getBlobUrl(odoPhoto)} className="absolute inset-0 h-full w-full object-cover" alt="Cuentakilómetros" />
+                      <img src={getBlobUrl(odoPhoto)} className="absolute inset-0 h-full w-full object-cover" alt={t('dr.odo.alt')} />
                       <div className="absolute inset-0 bg-black/40" />
                       <div className={`absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full ${odoKmFinal > 0 ? 'bg-emerald-500' : 'bg-amber-500'}`}>
                         {odoKmFinal > 0 ? <Check size={13} className="text-white" />
@@ -622,7 +627,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                     {needsPhoto && (
                       <p className="mt-2.5 flex items-center gap-1.5 rounded-xl border border-red-500/25 bg-red-500/8 p-2 text-[11px] text-red-300">
                         <AlertTriangle size={12} className="shrink-0" />
-                        Foto obligatoria cuando hay daño — pulsa el botón "Foto" para hacer una
+                        {t('dr.photo.required')}
                       </p>
                     )}
                   </div>
@@ -636,7 +641,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
                 className="input min-h-[80px] resize-none"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Escribe aquí cualquier comentario relevante sobre el estado del vehículo…"
+                placeholder={t('dr.notes.ph')}
               />
             </div>
 
@@ -647,7 +652,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
             >
               {missingDamagePhotos.length > 0
                 ? `Faltan ${missingDamagePhotos.length} foto(s) de daños`
-                : <>Revisar y enviar <ChevronRight size={16} /></>}
+                : <>{t('dr.review')} <ChevronRight size={16} /></>}
             </button>
           </div>
         )}
@@ -656,7 +661,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout 
         {step === 3 && (
           <div className="space-y-4">
             <div>
-              <h2 className="text-lg font-bold text-dark-50">Confirmar y enviar</h2>
+              <h2 className="text-lg font-bold text-dark-50">{t('dr.confirm.title')}</h2>
               <p className="text-xs text-dark-500">{t('dr.revisaResumen')}</p>
             </div>
 

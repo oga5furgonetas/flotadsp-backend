@@ -161,6 +161,19 @@ export const importVehicles = (file, center) => {
 /* ── Turnos ── */
 export const getShifts = (center, desde, hasta) => api.get('/shifts', { params: { center, desde, hasta } })
 export const getShiftCoverage = (center, desde, hasta) => api.get('/shifts/coverage', { params: { center, desde, hasta } })
+export const saveShiftsBulk = (items) => api.post('/shifts/bulk', { items })
+export const setShiftSettings = (center, min_cobertura) => api.post('/shifts/settings', { center, min_cobertura })
+export const generateShiftsAuto = (center, desde, hasta) => api.post('/shifts/generate-auto', { center, desde, hasta }, { timeout: 120000 })
+export const getRouteDemand = (center, desde, hasta) => api.get('/route-demand', { params: { center, desde, hasta } })
+export const setRouteDemand = (center, items) => api.post('/route-demand', { center, items })
+export const getShiftRequests = (center, status) => api.get('/shift-requests', { params: { center, ...(status ? { status } : {}) } })
+export const resolveShiftRequest = (id, action) => api.post(`/shift-requests/${id}/resolve`, { action })
+export function importShifts(file, center) {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('center', center)
+  return api.post('/shifts/import', fd, { timeout: 120000, headers: { 'Content-Type': undefined } })
+}
 
 /* ── Historial de plantillas ── */
 export const getPlantillas = (center) => api.get('/plantillas', { params: centerParam(center) })

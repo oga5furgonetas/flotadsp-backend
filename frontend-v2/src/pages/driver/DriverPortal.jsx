@@ -4,6 +4,7 @@ import { lista } from '../../lib/lista'
 import DriverLogin from './DriverLogin'
 import InspectionFlow from './InspectionFlow'
 import InspectionDone from './InspectionDone'
+import MisTurnos from './MisTurnos'
 
 const DRIVER_KEY = 'flotadsp_driver'
 
@@ -17,6 +18,7 @@ export default function DriverPortal() {
   })
   const [vehicles, setVehicles] = useState([])
   const [result, setResult] = useState(null)
+  const [verTurnos, setVerTurnos] = useState(false)
 
   useEffect(() => {
     if (!driver) return
@@ -37,9 +39,11 @@ export default function DriverPortal() {
   }
 
   if (!driver) return <DriverLogin onLogin={login} />
+  if (verTurnos) return <MisTurnos onBack={() => setVerTurnos(false)} />
   if (result)
     return <InspectionDone result={result} onNew={() => setResult(null)} onLogout={logout} />
   return (
-    <InspectionFlow driver={driver} vehicles={vehicles} onComplete={setResult} onLogout={logout} />
+    <InspectionFlow driver={driver} vehicles={vehicles} onComplete={setResult}
+      onLogout={logout} onShifts={() => setVerTurnos(true)} />
   )
 }

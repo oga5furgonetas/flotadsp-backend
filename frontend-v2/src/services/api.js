@@ -67,6 +67,9 @@ export const getAssignedVehicle = () => api.get('/auth/me/assigned-vehicle')
 
 /* ── Vehículos / inspecciones ─────────────────────────────── */
 export const getPortalVehicles = () => api.get('/vehicles/portal')
+/* Turnos del propio conductor: su calendario y sus peticiones de día. */
+export const getMyShifts = (desde, hasta) => api.get('/shifts/mine', { params: { desde, hasta } })
+export const createShiftRequest = (date, type, note) => api.post('/shift-requests', { date, type, note })
 
 export const validatePhoto = (vehicleId, expectedZone, file) => {
   const fd = new FormData()

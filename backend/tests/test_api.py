@@ -7,6 +7,7 @@ Cubren los contratos que más han dolido históricamente:
 - reset de contraseña sin enumeración de usuarios
 """
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -262,3 +263,64 @@ async def test_driver_token_exige_email_correcto(client, admin_token):
     r = await client.post("/api/auth/driver-token",
                           json={"driver_id": did, "email": "otro@test.com"})
     assert r.status_code == 403, r.text
+
+
+async def test_flujo_completo_de_turnos(client, admin_token):
+    """El módulo de turnos entero: demanda → cuadrante → solicitud → aprobación.
+
+    Estuvo construido en el backend y sin ninguna pantalla que lo llamara, así
+    que nadie se habría enterado si se rompía. Esta prueba recorre la cadena
+    igual que la usa el panel: si algún eslabón cae, CI lo canta.
+    """
+    h = {"Authorization": f"Bearer {admin_token}"}
+    centro = f"TEST{uuid.uuid4().hex[:4].upper()}"
+    hoy = datetime.now(timezone.utc)
+    dias = [(hoy + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+
+    # un conductor del centro (el generador necesita gente a la que asignar)
+    did = str(uuid.uuid4())
+    await server.db.drivers.insert_one(
+        {"id": did, "name": "Conductor Turnos", "center": centro, "active": True})
+
+    # 1. demanda de Amazon y mínimo de cobertura
+    r = await client.post("/api/route-demand", headers=h,
+                          json={"center": centro,
+                                "items": [{"date": d, "objetivo": 1} for d in dias]})
+    assert r.status_code == 200, r.text
+    assert (await client.post("/api/shifts/settings", headers=h,
+                              json={"center": centro, "min_cobertura": 1})).status_code == 200
+
+    # 2. el generador automático propone (no guarda)
+    r = await client.post("/api/shifts/generate-auto", headers=h,
+                          json={"center": centro, "desde": dias[0], "hasta": dias[-1]})
+    assert r.status_code == 200, r.text
+    asignaciones = r.json()["assignments"]
+    assert asignaciones, "el generador no propuso ni un turno"
+
+    # 3. el panel guarda la propuesta
+    r = await client.post("/api/shifts/bulk", headers=h, json={"items": asignaciones})
+    assert r.status_code == 200 and r.json()["saved"] == len(asignaciones)
+
+    # 4. la cobertura refleja lo guardado
+    r = await client.get(f"/api/shifts/coverage?center={centro}"
+                         f"&desde={dias[0]}&hasta={dias[-1]}", headers=h)
+    assert r.status_code == 200
+    assert sum(r.json()["coverage"].values()) == len(asignaciones)
+
+    # 5. el conductor ve sus turnos y pide un día libre
+    dtok = server.create_token(did, "driver", "Conductor Turnos")
+    dh = {"Authorization": f"Bearer {dtok}"}
+    r = await client.get(f"/api/shifts/mine?desde={dias[0]}&hasta={dias[-1]}", headers=dh)
+    assert r.status_code == 200 and r.json()["shifts"]
+
+    r = await client.post("/api/shift-requests", headers=dh,
+                          json={"date": dias[2], "type": "libre"})
+    assert r.status_code == 200, r.text
+    req_id = r.json()["request"]["id"]
+
+    # 6. el admin la aprueba y el turno queda en 'libre'
+    r = await client.post(f"/api/shift-requests/{req_id}/resolve", headers=h,
+                          json={"action": "aprobar"})
+    assert r.status_code == 200 and r.json()["status"] == "aprobado"
+    turno = await server.db.shifts.find_one({"driver_id": did, "date": dias[2]})
+    assert turno and turno["type"] == "libre"
