@@ -147,10 +147,21 @@ export default function Aparcamiento() {
   useEffect(() => () => clearTimeout(toastTimer.current), [])
   const noCenter = !center || center === 'Todos'
 
+  // La petición en curso se marca con el centro+día que la pidió. Si cambias
+  // de centro rápido y la respuesta vieja llega la última, se descarta: antes
+  // podías acabar viendo el plano de OTRO centro sin enterarte.
+  const peticionRef = useRef(0)
   const load = useCallback(async () => {
     if (noCenter) { setData(null); return }
-    try { const r = await parkingState(center, day); setData(r.data); setErr('') }
-    catch (e) { setErr(e?.response?.data?.detail || t('pk.eCarga')) }
+    const mia = ++peticionRef.current
+    try {
+      const r = await parkingState(center, day)
+      if (mia !== peticionRef.current) return   // llegó tarde: ya no vale
+      setData(r.data); setErr('')
+    } catch (e) {
+      if (mia !== peticionRef.current) return
+      setErr(e?.response?.data?.detail || t('pk.eCarga'))
+    }
   }, [center, day, noCenter, t])
 
   useEffect(() => { load() }, [load])

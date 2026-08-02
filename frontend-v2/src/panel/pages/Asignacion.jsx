@@ -383,10 +383,15 @@ export default function Asignacion() {
 
   const noCenter = center === 'Todos'
 
+  // Los temporizadores de los avisos se limpian al desmontar (si no, siguen
+  // vivos tras salir de la página y tocan estado de un componente muerto).
+  const toastTimers = useRef([])
+  useEffect(() => () => toastTimers.current.forEach(clearTimeout), [])
   function addToast(name) {
     const id = Date.now() + Math.random()
     setToasts(t => [...t, { id, name }])
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 5000)
+    toastTimers.current.push(
+      setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 5000))
   }
 
   /* ── Carga inicial ── */

@@ -675,6 +675,28 @@ async def get_current_user(
     return payload
 
 
+def _entero(valor, campo: str, defecto=None, minimo=None, maximo=None) -> int:
+    """Convierte a entero o lanza 400 con un mensaje util.
+
+    Antes se hacia int(data.get(...)) a pelo: un "abc" o un null reventaba con
+    ValueError, el usuario veia "Error interno del servidor" y encima saltaba
+    la alerta de Telegram por un simple dato mal escrito.
+    """
+    if valor is None or valor == "":
+        if defecto is None:
+            raise HTTPException(status_code=400, detail=f"Falta {campo}")
+        return int(defecto)
+    try:
+        n = int(float(str(valor).replace(",", ".").strip()))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"{campo} debe ser un numero")
+    if minimo is not None and n < minimo:
+        raise HTTPException(status_code=400, detail=f"{campo} no puede ser menor que {minimo}")
+    if maximo is not None and n > maximo:
+        raise HTTPException(status_code=400, detail=f"{campo} no puede ser mayor que {maximo}")
+    return n
+
+
 async def require_admin(user: dict = Depends(get_current_user)) -> dict:
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Acceso restringido a administradores")
@@ -6578,7 +6600,7 @@ async def missed_damage(inspection_id: str, data: dict, user: dict = Depends(get
         raise HTTPException(status_code=400, detail="Indica la pieza (ej: tulipa trasera)")
     if not (isinstance(box, list) and len(box) == 4):
         raise HTTPException(status_code=400, detail="Dibuja la caja del daño en la foto")
-    photo_index = int(data.get("photo_index") or 1)
+    photo_index = _entero(data.get("photo_index"), "photo_index", defecto=1, minimo=1, maximo=50)
 
     insp = await db.inspections.find_one({"id": inspection_id}, {"_id": 0})
     if not insp:
@@ -11689,7 +11711,7 @@ async def batch_upload_inspections(
 @api_router.post("/vehicles/{vehicle_id}/bags/set")
 async def set_bags(vehicle_id: str, data: dict, _=Depends(require_admin)):
     """Fija el stock de bolsas de una furgoneta."""
-    cantidad = int(data.get("bags", 0))
+    cantidad = _entero(data.get("bags"), "bags", defecto=0, minimo=0, maximo=100000)
     v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
     if not v:
         raise HTTPException(status_code=404, detail="Furgoneta no encontrada")
@@ -11704,7 +11726,7 @@ async def set_bags(vehicle_id: str, data: dict, _=Depends(require_admin)):
 @api_router.post("/vehicles/{vehicle_id}/bags/consume")
 async def consume_bags(vehicle_id: str, data: dict, _=Depends(require_admin)):
     """Descuenta bolsas gastadas y registra cuándo."""
-    gastadas = int(data.get("used", 1))
+    gastadas = _entero(data.get("used"), "used", defecto=1, minimo=0, maximo=100000)
     v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
     if not v:
         raise HTTPException(status_code=404, detail="Furgoneta no encontrada")
@@ -11727,10 +11749,10 @@ async def consume_bags(vehicle_id: str, data: dict, _=Depends(require_admin)):
 @api_router.post("/vehicles/{vehicle_id}/oil/change")
 async def register_oil_change(vehicle_id: str, data: dict, _=Depends(require_admin)):
     """Registra un cambio de aceite: km actuales + fecha + intervalo."""
-    km = int(data.get("km", 0))
+    km = _entero(data.get("km"), "km", defecto=0, minimo=0, maximo=2_000_000)
     fecha = data.get("date") or datetime.now(timezone.utc).date().isoformat()
-    intervalo = int(data.get("interval_km", 15000))
-    aviso_antes = int(data.get("warning_before_km", 2500))
+    intervalo = _entero(data.get("interval_km"), "interval_km", defecto=15000, minimo=1, maximo=500_000)
+    aviso_antes = _entero(data.get("warning_before_km"), "warning_before_km", defecto=2500, minimo=0, maximo=500_000)
     v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
     if not v:
         raise HTTPException(status_code=404, detail="Furgoneta no encontrada")
@@ -11755,10 +11777,10 @@ async def register_maintenance_change(vehicle_id: str, kind: str, data: dict, _=
     spec = _MAINT_KINDS.get(kind)
     if not spec:
         raise HTTPException(status_code=400, detail=f"Tipo desconocido. Válidos: {list(_MAINT_KINDS)}")
-    km = int(data.get("km", 0))
+    km = _entero(data.get("km"), "km", defecto=0, minimo=0, maximo=2_000_000)
     fecha = data.get("date") or datetime.now(timezone.utc).date().isoformat()
-    intervalo = int(data.get("interval_km", spec["default_interval"]))
-    aviso_antes = int(data.get("warning_before_km", spec["default_warning"]))
+    intervalo = _entero(data.get("interval_km"), "interval_km", defecto=spec["default_interval"], minimo=1, maximo=500_000)
+    aviso_antes = _entero(data.get("warning_before_km"), "warning_before_km", defecto=spec["default_warning"], minimo=0, maximo=500_000)
     v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
     if not v:
         raise HTTPException(status_code=404, detail="Furgoneta no encontrada")
@@ -11942,6 +11964,11 @@ def _odo_margen(v: dict):
     dias = 1
     if ultima:
         dias = max(1, min(60, (datetime.now(timezone.utc) - ultima).days or 1))
+    # PRIMERA lectura (furgoneta sin km registrados): no hay contra que
+    # comparar, asi que no hay techo de ritmo. Si no, dar de alta una furgoneta
+    # usada de 87.000 km era imposible: el movil solo dejaba escribir hasta 500.
+    if not actual:
+        return 0, dias, ODO_MAX_ABSOLUTO
     return actual, dias, actual + ODO_MAX_KM_DIA * dias
 
 
@@ -12183,7 +12210,7 @@ async def read_odometer_photo(vehicle_id: str, file: UploadFile = File(...), use
 @api_router.post("/vehicles/{vehicle_id}/mileage")
 async def update_mileage(vehicle_id: str, data: dict, user: dict = Depends(require_any_auth)):
     """Actualiza el kilometraje. Conductores solo su vehículo. Genera aviso de aceite si toca."""
-    km = int(data.get("km", 0))
+    km = _entero(data.get("km"), "km", minimo=0, maximo=2_000_000)
     v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
     if not v:
         raise HTTPException(status_code=404, detail="Furgoneta no encontrada")

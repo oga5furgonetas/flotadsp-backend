@@ -21,7 +21,7 @@ export default function Metricas() {
     <div>
       <h1 className="mb-4 flex items-center gap-2 text-xl font-bold"><BarChart3 size={20} /> {t('metrics.title')} {reports && <span className="text-dark-500">· {reports.length}</span>}</h1>
       {!reports ? <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> {t('ui.loading')}</div> :
-        reports.length === 0 ? <div className="card p-10 text-center text-dark-400">{t('metrics.no.reports')} {center !== 'Todos' && `en ${center}`}.</div> : (
+        reports.length === 0 ? <div className="card p-10 text-center text-dark-400">{center !== 'Todos' ? `${t('metrics.no.reports')} en ${center}.` : `${t('metrics.no.reports')}.`}</div> : (
           <div className="card divide-y divide-dark-800">
             {reports.map((r, i) => (
               <div key={r.id || i} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm">

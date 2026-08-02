@@ -400,9 +400,14 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
     }).then(setQrDataUrl).catch(() => {})
   }, [vinOrPlate])
 
+  // El temporizador se guarda para limpiarlo al desmontar y para que dos
+  // avisos seguidos no se pisen el cierre el uno al otro.
+  const toastTimer = useRef(null)
+  useEffect(() => () => clearTimeout(toastTimer.current), [])
   function showToast(msg, ok = true) {
     setToast({ msg, ok })
-    setTimeout(() => setToast(null), 3000)
+    clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 3000)
   }
 
   async function patch(fields) {
