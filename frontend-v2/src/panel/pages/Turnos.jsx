@@ -3,8 +3,9 @@ import { useOutletContext } from 'react-router-dom'
 import { Loader2, CalendarClock, Users } from 'lucide-react'
 import { getShiftCoverage } from '../api'
 import { useT } from '../../i18n'
+import { isoLocal } from '../../lib/fecha'
 
-function iso(d) { return d.toISOString().slice(0, 10) }
+const iso = isoLocal
 
 export default function Turnos() {
   const { center, centers } = useOutletContext()

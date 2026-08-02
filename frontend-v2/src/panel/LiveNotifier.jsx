@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { MessageSquare, CheckSquare, X, BellRing } from 'lucide-react'
 import { getChat, getChecklist } from './api'
 import { getAdmin } from './auth'
+import { hoyLocal } from '../lib/fecha'
 
 /* ── Avisos EN VIVO dentro del panel (PC) ─────────────────────────────────────
    Con la app abierta en cualquier página: si alguien escribe en el chat de tu
@@ -91,7 +92,7 @@ export default function LiveNotifier({ center, centers }) {
       (center === 'Todos' ? (centers || []) : [center]).filter(Boolean).slice(0, MAX_CENTERS)
 
     async function tick() {
-      const today = new Date().toISOString().slice(0, 10)
+      const today = hoyLocal()
       for (const c of targets()) {
         // ── CHAT: ¿mensaje nuevo de otra persona? ──
         try {

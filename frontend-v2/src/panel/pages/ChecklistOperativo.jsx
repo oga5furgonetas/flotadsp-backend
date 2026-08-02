@@ -5,8 +5,9 @@ import {
   Loader2, CheckSquare, Sun, Moon, Pencil, Plus, Trash2, Save, X, Calendar,
 } from 'lucide-react'
 import { getChecklist, upsertChecklist, toggleChecklistItem, saveChecklistTemplate } from '../api'
+import { hoyLocal } from '../../lib/fecha'
 
-const isoToday = () => new Date().toISOString().slice(0, 10)
+const isoToday = hoyLocal
 
 export default function ChecklistOperativo() {
   const { center, centers } = useOutletContext()

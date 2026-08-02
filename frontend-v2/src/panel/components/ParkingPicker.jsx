@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Loader2, MapPin, Check } from 'lucide-react'
 import { parkingState, parkingReport } from '../api'
+import { hoyLocal } from '../../lib/fecha'
 
 /* ═══════════════════════════════════════════════════════════════════════
    LADO DEL CONDUCTOR — "¿Dónde has aparcado?"
@@ -37,7 +38,7 @@ export default function ParkingPicker({ center, vehicleId, driverId, inspectionI
   const [busy, setBusy] = useState(false)
   const [sent, setSent] = useState(false)
   const [err, setErr] = useState('')
-  const theDay = day || new Date().toISOString().slice(0, 10)
+  const theDay = day || hoyLocal()
 
   useEffect(() => {
     let alive = true

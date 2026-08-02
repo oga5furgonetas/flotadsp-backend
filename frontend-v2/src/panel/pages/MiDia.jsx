@@ -4,6 +4,7 @@ import { useT } from '../../i18n'
 import { Sun, Camera, AlertTriangle, ClipboardCheck, BellRing, CheckCircle2, ChevronRight } from 'lucide-react'
 import { getDailyAssignment, getInspections, getIncidents, getItvAlerts } from '../api'
 import { PageSkeleton } from '../components/Skeleton'
+import { hoyLocal } from '../../lib/fecha'
 
 /* ── Torre de control "Mi día" ────────────────────────────────────────────────
    La pantalla de las 8:00 del jefe de turno: todo lo urgente de HOY en un solo
@@ -13,7 +14,7 @@ export default function MiDia() {
   const { t } = useT()
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
-  const today = new Date().toISOString().slice(0, 10)
+  const today = hoyLocal()
   const noCenter = center === 'Todos'
 
   useEffect(() => {

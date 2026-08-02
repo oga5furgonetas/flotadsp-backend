@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { useEscape } from '../../lib/useEscape'
+import { hoyLocal } from '../../lib/fecha'
 import { PageSkeleton } from '../components/Skeleton'
 import GuidedEmpty from '../components/GuidedEmpty'
 import QRCode from 'qrcode'
@@ -244,7 +245,7 @@ function MaintModal({ kind, currentKm, onSave, onClose }) {
   const meta = MAINT_META[kind] || {}
   useEscape(onClose)
   const [km, setKm] = useState(String(currentKm || ''))
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10))
+  const [date, setDate] = useState(hoyLocal())
   const [intervalKm, setIntervalKm] = useState(String(meta.defaultInterval || 15000))
   const [busy, setBusy] = useState(false)
 

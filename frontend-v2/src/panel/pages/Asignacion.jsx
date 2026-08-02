@@ -8,13 +8,14 @@ import {
   ClipboardPaste, Plus, X,
 } from 'lucide-react'
 import { getDailyAssignment, putDailyAssignment, getVehicles, getDrivers, getInspections } from '../api'
+import { hoyLocal, isoLocal } from '../../lib/fecha'
 
 /* ── Date helpers ── */
-function isoToday() { return new Date().toISOString().slice(0, 10) }
+const isoToday = hoyLocal
 function isoPrev(iso) {
   const d = new Date(iso + 'T12:00:00')
   d.setDate(d.getDate() - 1)
-  return d.toISOString().slice(0, 10)
+  return isoLocal(d)
 }
 
 /* ── Name normalization ── */

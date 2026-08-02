@@ -117,6 +117,21 @@ if not SECRET_KEY:
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = int(os.environ.get("JWT_EXPIRE_HOURS", "72"))
 
+
+def _dia_negocio():
+    """Fecha de HOY para operativa (cuadrante, rutas, "ya inspecciono hoy").
+
+    En hora ESPANOLA, no UTC: entre las 00:00 y las 02:00 locales el dia UTC
+    sigue siendo el anterior, y el conductor no encontraba su asignacion del
+    dia ni le cuadraba el plan de rutas. Si la imagen no trae base de datos
+    de zonas horarias, cae a UTC en vez de romper.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Europe/Madrid")).strftime("%Y-%m-%d")
+    except Exception:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
 # =========================
 # DATABASE
 # =========================
@@ -4729,7 +4744,7 @@ async def get_my_assigned_vehicle(user: dict = Depends(get_current_user)):
     if user.get("role") != "driver":
         raise HTTPException(status_code=403, detail="Solo conductores")
     driver_id = user["sub"]
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = _dia_negocio()
     docs = await db.daily_assignments.find({"date": today}, {"_id": 0}).to_list(50)
     for doc in docs:
         for slot in doc.get("slots", []):
@@ -5769,7 +5784,7 @@ async def upload_inspection_photos(
     # tap con mala cobertura, análisis duplicados y Telegram repetido).
     # Los admins pueden repetir (peritajes manuales desde el panel).
     if user.get("role") == "driver":
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = _dia_negocio()
         dup = await db.inspections.find_one({
             "deleted": {"$ne": True}, "vehicle_id": vehicle_id,
             "driver_id": driver_id or user.get("sub"),
@@ -8908,7 +8923,7 @@ async def send_daily_inspection_summary():
         if not chat_ids:
             return
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = _dia_negocio()
         assignments = await db.daily_assignments.find({"date": today}, {"_id": 0}).to_list(20)
         if not assignments:
             logger.info("Resumen diario: sin cuadrante hoy — nada que enviar")
@@ -9324,7 +9339,7 @@ async def _send_inspection_reminders():
     """Push a cada conductor con furgoneta asignada HOY que aún no subió inspección."""
     if not _push_enabled:
         return
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = _dia_negocio()
     orgs = await global_db.organizations.find(
         {"status": {"$nin": ["suspended", "deleted"]}},
         {"_id": 0, "id": 1, "db_name": 1}).to_list(500)
@@ -9514,7 +9529,7 @@ async def create_incident(data: IncidentCreate, user: dict = Depends(require_any
     incident = Incident(**data.model_dump())
     if user["role"] == "driver":
         incident.driver_id = user["sub"]
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = _dia_negocio()
         assigned_today = await db.daily_assignments.find_one({
             "date": today,
             "slots": {"$elemMatch": {"driver_id": user["sub"], "vehicle_id": incident.vehicle_id}}
@@ -12137,7 +12152,7 @@ async def update_mileage(vehicle_id: str, data: dict, user: dict = Depends(requi
     if user["role"] == "driver" and v.get("current_driver_id") != user["sub"]:
         # Los conductores rotan por cuadrante diario: aceptar si HOY tiene
         # asignada esta furgoneta, o si acaba de inspeccionarla hoy.
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = _dia_negocio()
         assigned_today = await db.daily_assignments.find_one({
             "date": today,
             "slots": {"$elemMatch": {"driver_id": user["sub"], "vehicle_id": vehicle_id}}
@@ -12165,7 +12180,6 @@ async def update_mileage(vehicle_id: str, data: dict, user: dict = Depends(requi
             {"by": user.get("sub"), "by_role": user.get("role")})
         if not aplicado:
             raise HTTPException(status_code=400, detail=motivo or "Kilometraje no valido")
-        km_entry = {"km": km}
 
     # ¿Toca avisar de aceite?
     oil_km = v.get("oil_last_change_km")
@@ -14366,7 +14380,7 @@ async def upload_route_plan(file: UploadFile = File(...), center: str = Form("OG
         raise HTTPException(status_code=400, detail="No es el archivo de rutas secuenciadas (CYCLE). Sube el que te llega por la mañana.")
     try:
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = _dia_negocio()
         # Limpiar plan anterior del mismo día/centro
         await db.route_plans.delete_many({"date": today, "center": center})
 
@@ -14457,7 +14471,7 @@ async def get_route_plan(code: str, center: str = "OGA5", date: Optional[str] = 
 @api_router.get("/metrics/routeplan-available")
 async def routeplan_available(center: str = "OGA5", _=Depends(require_admin)):
     """Lista de códigos de ruta con plan disponible hoy (para enlazar el mapa)."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = _dia_negocio()
     docs = await db.route_plans.find({"center": center, "date": today}, {"_id": 0, "code": 1, "stops_count": 1, "distance_km": 1}).to_list(200)
     return {"date": today, "routes": {d["code"]: {"stops": d.get("stops_count"), "km": d.get("distance_km")} for d in docs}}
 
@@ -14513,7 +14527,7 @@ async def upload_amazon_report(file: UploadFile = File(...), center: str = Form(
 
     # Acumular histórico por conductor/ruta (para construir el ritmo medio con el tiempo)
     if analysis and analysis.get("is_routes"):
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = _dia_negocio()
         for rt in analysis.get("routes", []):
             if not rt.get("transporter_id"):
                 continue
