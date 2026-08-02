@@ -9,6 +9,7 @@ import { getToken } from '../auth'
 import { getPlantillas, downloadPlantilla, deletePlantilla, getVehicles } from '../api'
 import { API_BASE as API } from '../../lib/apiBase'
 import { useT, LANG_LOCALE } from '../../i18n'
+import { lista } from '../../lib/lista'
 
 async function apiFetch(path, opts = {}) {
   const resp = await fetch(`${API}${path}`, {
@@ -267,7 +268,7 @@ export default function PlantillaGenerador() {
     if (noCenter) return
     getVehicles(center)
       .then(r => {
-        const plates = (r.data || [])
+        const plates = (lista(r.data))
           .filter(v => v.status === 'active' || v.status === 'activo')
           .map(v => (v.license_plate || v.id || '').replace(/\s/g, '').toUpperCase())
           .filter(Boolean)

@@ -118,7 +118,7 @@ class ErrorBoundary extends React.Component {
           <button
             onClick={() => {
               const txt = `FlotaDSP error\n${window.location.href}\n${new Date().toISOString()}\n\n${this.state.detail}`
-              navigator.clipboard?.writeText(txt)
+              navigator.clipboard?.writeText(txt).catch(() => {})
             }}
             style={{ padding: '11px 18px', borderRadius: 10, border: '1px solid #333338', background: 'transparent', color: '#b0b0b8', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}
           >

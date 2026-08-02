@@ -3,6 +3,7 @@ import { Loader2, UserPlus, Trash2, Save, ShieldCheck, Mail, KeyRound, ChevronDo
 import { getAdmins, createAdmin, updateAdmin, deleteAdmin } from '../api'
 import { getAdmin, isSuperAdmin } from '../auth'
 import { useT } from '../../i18n'
+import { lista } from '../../lib/lista'
 
 // Catálogo de módulos asignables (la clave = último segmento de la ruta del panel)
 const MODULES = [
@@ -146,7 +147,7 @@ export default function Usuarios() {
   const [editing, setEditing] = useState(null) // {id, perms, centers, admin_role, email, newPassword}
 
   function load() {
-    getAdmins().then((r) => setUsers(r.data || [])).catch(() => setErr(t('usr.load.error')))
+    getAdmins().then((r) => setUsers(lista(r.data))).catch(() => setErr(t('usr.load.error')))
   }
   useEffect(load, [])
 

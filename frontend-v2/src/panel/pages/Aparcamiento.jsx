@@ -7,6 +7,7 @@ import {
 import { parkingState, parkingResolve, parkingAssign, parkingZoneImage, parkingSaveLayout, getVehicles } from '../api'
 import { hoyLocal } from '../../lib/fecha'
 import { useT } from '../../i18n'
+import { lista } from '../../lib/lista'
 
 /* Estado de una plaza. El color comunica, nunca decora.
    `chip` = clases para insignias; fill/line/glow = pintura de la plaza en el plano. */
@@ -167,7 +168,7 @@ export default function Aparcamiento() {
   useEffect(() => { load() }, [load])
   useEffect(() => {
     if (noCenter) return
-    getVehicles(center).then((r) => setVehicles(r.data || [])).catch(() => setVehicles([]))
+    getVehicles(center).then((r) => setVehicles(lista(r.data))).catch(() => setVehicles([]))
   }, [center, noCenter])
   // Recordar la última zona vista de cada centro (vuelves donde estabas)
   useEffect(() => {

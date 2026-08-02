@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { getDashboardStats, getLastInspections, getItvAlerts, getVehicles, getDrivers, getDamageCosts, cortexOverview, cortexRoutes, getReviewQueue } from '../api'
 import { useT, LANG_LOCALE } from '../../i18n'
+import { lista } from '../../lib/lista'
 import { PageSkeleton } from '../components/Skeleton'
 import Activacion from '../components/Activacion'
 
@@ -364,8 +365,8 @@ export default function Dashboard() {
       let itvList    = Array.isArray(ra)  ? ra  : (ra?.items  || ra?.alerts       || [])
 
       if (isCentered) {
-        const centerVehicles = vehs.data || []
-        const centerDrivers  = drvs.data || []
+        const centerVehicles = lista(vehs.data)
+        const centerDrivers  = lista(drvs.data)
 
         // Construir set de IDs y matrículas del centro (fuente de verdad fiable)
         const idSet    = new Set(centerVehicles.map(v => v.id))

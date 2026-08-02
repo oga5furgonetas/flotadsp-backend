@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Search, Truck, User, CornerDownLeft, Sparkles, Loader2 } from 'lucide-react'
 import { getVehicles, getDrivers, askAssistant } from './api'
 import { useT } from '../i18n'
+import { lista } from '../lib/lista'
 
 /* ── Paleta de comandos (Ctrl/Cmd+K) ──────────────────────────────────────
    Salta a cualquier módulo, furgoneta (por matrícula/marca/modelo) o conductor
@@ -24,7 +25,7 @@ async function loadData() {
         getVehicles('Todos').catch(() => ({ data: [] })),
         getDrivers('Todos').catch(() => ({ data: [] })),
       ])
-      _cache = { at: Date.now(), vehicles: vs.data || [], drivers: ds.data || [] }
+      _cache = { at: Date.now(), vehicles: lista(vs.data), drivers: lista(ds.data) }
       return _cache
     } finally {
       _enCurso = null

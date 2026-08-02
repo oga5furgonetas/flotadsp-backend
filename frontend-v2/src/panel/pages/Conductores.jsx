@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT } from '../../i18n'
+import { lista } from '../../lib/lista'
 import { useEscape } from '../../lib/useEscape'
 import {
   Loader2, Search, Plus, X, Pencil, Trash2, UserCheck,
@@ -494,10 +495,10 @@ export default function Conductores() {
   async function load() {
     try {
       const [rd, ra] = await Promise.all([getDrivers(center), getDriverAccounts()])
-      setDrivers(rd.data || [])
-      setAccounts((ra.data || []).map(a => a.driver_id))
+      setDrivers(lista(rd.data))
+      setAccounts((lista(ra.data)).map(a => a.driver_id))
     } catch {
-      try { const r = await getDrivers(center); setDrivers(r.data || []) } catch { setDrivers([]) }
+      try { const r = await getDrivers(center); setDrivers(lista(r.data)) } catch { setDrivers([]) }
       setAccounts([])
     }
   }

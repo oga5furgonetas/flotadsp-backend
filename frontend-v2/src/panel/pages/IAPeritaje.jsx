@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useT } from '../../i18n'
+import { lista } from '../../lib/lista'
 import { Loader2, BrainCircuit, RefreshCw, CheckCircle2, AlertTriangle, Clock, Image, Sparkles, X, ChevronLeft, ChevronRight, ThumbsUp, ThumbsDown, Pencil } from 'lucide-react'
 import { getHealth, getInspections, reanalyzeFailed, reanalyzeInspection, submitAiFeedback, rebuildFleetDamages, rebuildStatus } from '../api'
 import BboxEditor from '../components/BboxEditor'
@@ -51,7 +52,7 @@ export default function IAPeritaje() {
   const [rebuild, setRebuild] = useState(null)
 
   function loadInsps() {
-    getInspections({ limit: 300 }).then((r) => setInsps(r.data || [])).catch(() => setInsps([]))
+    getInspections({ limit: 300 }).then((r) => setInsps(lista(r.data))).catch(() => setInsps([]))
   }
   const loadRebuild = () => rebuildStatus().then(r => setRebuild(r.data)).catch(() => {})
   useEffect(() => {

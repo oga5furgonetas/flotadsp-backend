@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
+import { lista } from '../../lib/lista'
 import { Loader2, Activity, Camera } from 'lucide-react'
 import { getInspections, getVehicles } from '../api'
 
@@ -20,8 +21,8 @@ export default function Actividad() {
   useEffect(() => {
     Promise.all([getInspections({ limit: 80 }), getVehicles('Todos')])
       .then(([ri, rv]) => {
-        const m = {}; (rv.data || []).forEach((v) => { m[v.id] = { plate: v.license_plate, center: v.center || '' } })
-        setVmap(m); setInsps(ri.data || [])
+        const m = {}; (lista(rv.data)).forEach((v) => { m[v.id] = { plate: v.license_plate, center: v.center || '' } })
+        setVmap(m); setInsps(lista(ri.data))
       })
       .catch(() => setErr(t('act.load.err')))
   }, [])

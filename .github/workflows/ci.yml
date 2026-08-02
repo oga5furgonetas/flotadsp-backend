@@ -28,7 +28,7 @@ jobs:
       - name: Instalar navegador para las pruebas
         working-directory: frontend-v2
         run: npx playwright install --with-deps chromium
-      - name: Pruebas de humo (44 pantallas x escritorio y movil)
+      - name: Pruebas E2E (humo de 44 pantallas + barrido de botones, escritorio y movil)
         working-directory: frontend-v2
         run: npm run e2e
       - name: Checker i18n (claves faltantes/duplicadas)

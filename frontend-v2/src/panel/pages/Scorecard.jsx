@@ -74,7 +74,11 @@ const TIPO_CFG = {
 }
 
 function addDays(dateStr, n) {
-  const d = new Date(dateStr + 'T12:00:00Z')
+  // Sin fecha valida, toISOString() LANZA "Invalid time value" y tumbaba la
+  // pantalla entera: le pasaba a cualquier DSP que aun no tuviera semanas de
+  // scorecard cargadas y pulsara las flechas de semana.
+  const d = new Date(`${dateStr}T12:00:00Z`)
+  if (isNaN(d.getTime())) return dateStr || ''
   d.setUTCDate(d.getUTCDate() + n)
   return d.toISOString().slice(0, 10)
 }

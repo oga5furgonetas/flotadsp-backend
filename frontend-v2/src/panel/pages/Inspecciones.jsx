@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT, LANG_LOCALE } from '../../i18n'
+import { lista } from '../../lib/lista'
 import {
   Loader2, Search, X, FileText, Image as ImageIcon, ShieldQuestion, User, ChevronDown,
   ShieldCheck, FileSignature, ShieldAlert, RefreshCw,
@@ -38,9 +39,9 @@ export default function Inspecciones() {
     setErr('')
     Promise.all([getInspections({ limit: 300 }), getVehicles('Todos'), getDrivers('Todos').catch(() => ({ data: [] }))])
       .then(([ri, rv, rd]) => {
-        const m = {}; (rv.data || []).forEach((v) => { m[v.id] = { plate: v.license_plate, center: v.center || '' } })
-        const dm = {}; (rd.data || []).forEach((d) => { dm[d.id] = d.name })
-        setVmap(m); setDmap(dm); setInsps(ri.data || [])
+        const m = {}; (lista(rv.data)).forEach((v) => { m[v.id] = { plate: v.license_plate, center: v.center || '' } })
+        const dm = {}; (lista(rd.data)).forEach((d) => { dm[d.id] = d.name })
+        setVmap(m); setDmap(dm); setInsps(lista(ri.data))
       })
       .catch(() => setErr('No se pudieron cargar las inspecciones.'))
   }, [])
@@ -331,7 +332,7 @@ function QuienTimeline({ vehicleId, dmap, currentId, fmtDay }) {
   const { t } = useT()
   const [insps, setInsps] = useState(null)
   useEffect(() => {
-    getVehicleInspections(vehicleId).then((r) => setInsps((r.data || []).filter((i) => i.analysis))).catch(() => setInsps([]))
+    getVehicleInspections(vehicleId).then((r) => setInsps((lista(r.data)).filter((i) => i.analysis))).catch(() => setInsps([]))
   }, [vehicleId])
 
   if (!insps) return <div className="mt-3 flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> {t('insp.history.loading')}</div>

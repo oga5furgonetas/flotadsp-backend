@@ -75,7 +75,7 @@ export default function Dashboard() {
           <p style={{ color: '#8b94a3', fontSize: 13, margin: '0 0 12px', lineHeight: 1.5 }}>{t('dash.linkD')}</p>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <input readOnly value={link} style={{ flex: 1, minWidth: 220, padding: '10px 12px', borderRadius: 10, border: '1px solid rgba(255,255,255,.12)', background: '#0e1116', color: '#eef1f6', fontSize: 13 }} />
-            <button onClick={() => { navigator.clipboard?.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 1800) }}
+            <button onClick={() => { navigator.clipboard?.writeText(link).catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 1800) }}
               style={{ ...btnPrimary, whiteSpace: 'nowrap' }}>{copied ? t('dash.copied') : t('dash.copy')}</button>
           </div>
         </div>

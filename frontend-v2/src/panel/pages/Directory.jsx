@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Loader2, Search, MapPin, Phone, Mail, Globe, BadgeCheck } from 'lucide-react'
 import { useT } from '../../i18n'
+import { lista } from '../../lib/lista'
 
 // Directorio de contactos (talleres / casas de alquiler). Renderiza los campos que existan.
 export default function Directory({ title, fetcher, icon: Icon }) {
@@ -13,7 +14,7 @@ export default function Directory({ title, fetcher, icon: Icon }) {
   const [err, setErr] = useState('')
 
   useEffect(() => {
-    fetcher().then((r) => setItems(r.data || [])).catch(() => setErr(t('dir.load.err')))
+    fetcher().then((r) => setItems(lista(r.data))).catch(() => setErr(t('dir.load.err')))
   }, [fetcher])
 
   const list = useMemo(() => (items || []).filter((it) => {

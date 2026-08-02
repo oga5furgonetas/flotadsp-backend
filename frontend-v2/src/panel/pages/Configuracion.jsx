@@ -14,7 +14,7 @@ function CopyRow({ label, url }) {
       {label && <div className="mb-1 text-xs font-medium text-dark-400">{label}</div>}
       <div className="flex gap-2">
         <input readOnly value={url} className="input flex-1 font-mono text-xs" onFocus={(e) => e.target.select()} />
-        <button onClick={() => { navigator.clipboard?.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
+        <button onClick={() => { navigator.clipboard?.writeText(url).catch(() => {}); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
           className="btn-secondary flex items-center gap-1.5 whitespace-nowrap text-sm">
           {copied ? <><Check size={14} /> {t('portal.copied')}</> : <><Copy size={14} /> {t('portal.copy')}</>}
         </button>

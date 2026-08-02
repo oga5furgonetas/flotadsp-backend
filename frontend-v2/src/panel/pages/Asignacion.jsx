@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
+import { lista } from '../../lib/lista'
 import { useEscape } from '../../lib/useEscape'
 import {
   Loader2, Save, ClipboardList, Truck, User, Calendar,
@@ -406,8 +407,8 @@ export default function Asignacion() {
         getDrivers('Todos'),
         getInspections({ center, date_from: date, date_to: date, limit: 500 }).catch(() => ({ data: [] })),
       ])
-      setVehicles(vs.data || [])
-      setDrivers(ds.data || [])
+      setVehicles(lista(vs.data))
+      setDrivers(lista(ds.data))
       const doc = Array.isArray(da.data) ? da.data[0] : da.data
       const loadedSlots = Array.isArray(doc?.slots) ? doc.slots : []
       setSlots(loadedSlots)

@@ -3,6 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import { Loader2, BarChart3, FileText } from 'lucide-react'
 import { getMetricsReports } from '../api'
 import { useT } from '../../i18n'
+import { lista } from '../../lib/lista'
 
 export default function Metricas() {
   const { center } = useOutletContext()
@@ -12,7 +13,7 @@ export default function Metricas() {
 
   useEffect(() => {
     setReports(null); setErr('')
-    getMetricsReports(center).then((r) => setReports(r.data || [])).catch(() => setErr(t('metrics.load.err')))
+    getMetricsReports(center).then((r) => setReports(lista(r.data))).catch(() => setErr(t('metrics.load.err')))
   }, [center])
 
   if (err) return <p className="text-red-400">{err}</p>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
+import { lista } from '../../lib/lista'
 import {
   Wrench, MapPin, Phone, Globe, BadgeCheck, Loader2, Navigation,
   AlertTriangle, Search, Filter, Star, Clock, ChevronDown, X,
@@ -253,7 +254,7 @@ export default function Talleres() {
   useEffect(() => {
     getVehicles(center).then(r => {
       const pvs = [...new Set(
-        (r.data || [])
+        (lista(r.data))
           .map(v => (v.provider || '').split('_')[0].trim().toUpperCase())
           .filter(Boolean)
       )].sort()

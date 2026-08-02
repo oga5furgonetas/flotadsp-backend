@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useT } from '../../i18n'
+import { lista } from '../../lib/lista'
 import { Loader2, CalendarClock } from 'lucide-react'
 
 const ST = {
@@ -15,7 +16,7 @@ export default function ExpiryAlerts({ title, fetcher, dateField, dateLabel, ext
   const [err, setErr] = useState('')
 
   useEffect(() => {
-    fetcher().then((r) => setRows(r.data || [])).catch(() => setErr(t('ui.error')))
+    fetcher().then((r) => setRows(lista(r.data))).catch(() => setErr(t('ui.error')))
   }, [fetcher])
 
   if (err) return <p className="text-red-400">{err}</p>

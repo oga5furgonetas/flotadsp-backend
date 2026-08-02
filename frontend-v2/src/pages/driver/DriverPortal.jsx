@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getPortalVehicles } from '../../services/api'
+import { lista } from '../../lib/lista'
 import DriverLogin from './DriverLogin'
 import InspectionFlow from './InspectionFlow'
 import InspectionDone from './InspectionDone'
@@ -20,7 +21,7 @@ export default function DriverPortal() {
   useEffect(() => {
     if (!driver) return
     getPortalVehicles()
-      .then((r) => setVehicles(r.data || []))
+      .then((r) => setVehicles(lista(r.data)))
       .catch(() => setVehicles([]))
   }, [driver])
 

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT, LANG_LOCALE } from '../../i18n'
+import { lista } from '../../lib/lista'
 import { useEscape } from '../../lib/useEscape'
 import { hoyLocal } from '../../lib/fecha'
 import { PageSkeleton } from '../components/Skeleton'
@@ -353,7 +354,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
     let cancelled = false
     setDriver(undefined); setInsps(null); setVehicleIncidents(null)
     getVehicleDriver(vehicle.id).then(r => { if (!cancelled) setDriver(r.data?.driver || null) }).catch(() => { if (!cancelled) setDriver(null) })
-    getVehicleInspections(vehicle.id).then(r => { if (!cancelled) setInsps(r.data || []) }).catch(() => { if (!cancelled) setInsps([]) })
+    getVehicleInspections(vehicle.id).then(r => { if (!cancelled) setInsps(lista(r.data)) }).catch(() => { if (!cancelled) setInsps([]) })
     getIncidents({ vehicle_id: vehicle.id }).then(r => { if (!cancelled) setVehicleIncidents(Array.isArray(r.data) ? r.data : []) }).catch(() => { if (!cancelled) setVehicleIncidents([]) })
     getVehicleMaintenance(vehicle.id).then(r => { if (!cancelled) setMaintenance(r.data || null) }).catch(() => { if (!cancelled) setMaintenance(null) })
     getVehicleDocuments(vehicle.id).then(r => { if (!cancelled) setDocs(Array.isArray(r.data) ? r.data : []) }).catch(() => { if (!cancelled) setDocs([]) })
@@ -1572,7 +1573,7 @@ export default function Vehiculos() {
 
   function load() {
     setVehicles(null); setErr('')
-    getVehicles(center).then(r => setVehicles(r.data || [])).catch(() => setErr('No se pudieron cargar los vehículos.'))
+    getVehicles(center).then(r => setVehicles(lista(r.data))).catch(() => setErr('No se pudieron cargar los vehículos.'))
     getLastInspections().then(r => setLastInsp(r.data || {})).catch(() => {})
   }
   useEffect(load, [center])

@@ -101,22 +101,29 @@ function jwtDePrueba(payload) {
   return `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64(payload)}.firma-de-prueba`
 }
 
-export async function entrarComoAdmin(page, { superAdmin = false } = {}) {
+export async function entrarComoAdmin(page, { superAdmin = false, centros = ['OGA5'] } = {}) {
   const exp = Math.floor(Date.now() / 1000) + 3600
   await page.addInitScript(
-    ({ token }) => {
+    ({ token, centros, superAdmin }) => {
       localStorage.setItem('flotadsp_token', token)
       localStorage.setItem('flotadsp_admin', JSON.stringify({
         id: 'a1', name: 'Admin Test', role: 'admin',
-        centers: ['OGA5', 'DGA1'], super_admin: false,
+        centers: centros, super_admin: superAdmin,
       }))
+      // UN SOLO centro a proposito: con varios, el selector se queda en
+      // "Todos" y media docena de pantallas solo dicen "elige un centro",
+      // asi que el barrido no probaria nada de su contenido real.
+      localStorage.setItem('panel_center', centros[0])
       localStorage.setItem('flota_lang', 'es')
       localStorage.setItem('cookies_ok', '1')
     },
     {
+      centros,
+      superAdmin,
       token: jwtDePrueba({
         sub: 'a1', role: 'admin', name: 'Admin Test', exp,
-        org_id: 'org1', db_name: 'test_db', ...(superAdmin ? { sa: true } : {}),
+        org_id: 'org1', db_name: 'test_db', centers: centros,
+        ...(superAdmin ? { sa: true } : {}),
       }),
     },
   )

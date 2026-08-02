@@ -201,7 +201,7 @@ function SetupCard({ onSeed, onReset, seeding }) {
   const [copied, setCopied] = useState('')
   const load = () => cortexIngestToken().then(r => setTok(r.data)).catch(() => {})
   useEffect(() => { load() }, [])
-  const copy = (txt, key) => { navigator.clipboard?.writeText(txt); setCopied(key); setTimeout(() => setCopied(''), 1500) }
+  const copy = (txt, key) => { navigator.clipboard?.writeText(txt).catch(() => {}); setCopied(key); setTimeout(() => setCopied(''), 1500) }
   return (
     <div className="rounded-2xl border border-white/[0.05] bg-white/[0.02] p-5">
       <div className="flex items-center gap-2 text-dark-100"><Radar size={16} className="text-brand-400" /><span className="text-[15px] font-bold">{t('px.conecta')}</span></div>
