@@ -884,58 +884,93 @@ async def seed_initial_admin():
         logger.warning("R2 NO configurado — usando almacenamiento local (no recomendado en producción)")
 
 
+async def _idx(coleccion, *args, **kwargs):
+    """Crea un indice sin que un fallo tumbe a los demas.
+
+    Casos reales que hay que tolerar:
+      · el indice ya existe con OTRO nombre (Atlas los auto-crea) -> error 85
+      · falta permiso o la coleccion aun no existe
+    Cualquiera de ellos deja de ser mortal: se anota y se sigue.
+    """
+    try:
+        await coleccion.create_index(*args, **kwargs)
+    except Exception as e:
+        codigo = getattr(e, "code", None)
+        if codigo == 85:      # ya existe con otro nombre: es equivalente
+            return
+        logger.warning(f"Indice {coleccion.name} {args}: {e}")
+
+
 async def _ensure_tenant_indexes(db_name: str):
     """Crea índices en la BD de un tenant. Idempotente. Llamar al registrar un DSP nuevo."""
     tdb = client[db_name]
-    await tdb.vehicles.create_index("id")
-    await tdb.vehicles.create_index("license_plate")
-    await tdb.vehicles.create_index("center")
-    await tdb.vehicles.create_index("current_driver_id")
-    await tdb.vehicles.create_index("status")
-    await tdb.drivers.create_index("id")
-    await tdb.drivers.create_index("driver_id")
-    await tdb.inspections.create_index("id")
-    await tdb.inspections.create_index("vehicle_id")
-    await tdb.inspections.create_index([("created_at", -1)])
-    await tdb.inspections.create_index("driver_id")
-    await tdb.inspections.create_index("reviewed")
-    await tdb.inspections.create_index("analysis_status")
-    await tdb.inspections.create_index("forensic_signed")
-    await tdb.inspections.create_index("forensic_hash")
-    await tdb.inspections.create_index("first_phash")
-    await tdb.inspections.create_index("fraud_score")
-    await tdb.daily_assignments.create_index([("date", -1), ("center", 1)])
-    await tdb.vehicle_damage_ledger.create_index([("vehicle_id", 1), ("status", 1)])
-    await tdb.alerts.create_index([("created_at", -1)])
-    await tdb.alerts.create_index("read")
-    await tdb.ai_feedback.create_index([("created_at", -1)])
-    await tdb.ai_feedback.create_index([("damage.part", 1)])
-    await tdb.ai_feedback.create_index([("damage.location_hint", 1)])
-    await tdb.ai_feedback.create_index([("verdict", 1)])
-    await tdb.ai_feedback.create_index(
+    await _idx(tdb.vehicles, "id")
+    await _idx(tdb.vehicles, "license_plate")
+    await _idx(tdb.vehicles, "center")
+    await _idx(tdb.vehicles, "current_driver_id")
+    await _idx(tdb.vehicles, "status")
+    await _idx(tdb.drivers, "id")
+    await _idx(tdb.drivers, "driver_id")
+    # ── Cortex: son las colecciones que mas crecen con diferencia ──────────
+    # Medido en produccion: cortex_packages 90.876 docs / 68 MB y
+    # cortex_events 133.528 docs / 30 MB SIN NINGUN INDICE.
+    # Estos son los campos por los que filtra de verdad _cortex_scope().
+    # 'tba' y 'updated_at' ya los auto-creo Atlas (con sufijo _autocreated):
+    # volver a pedirlos daba error 85 y abortaba el resto.
+    await _idx(tdb.cortex_packages, [("service_day", -1)])
+    await _idx(tdb.cortex_packages, "center")
+    await _idx(tdb.cortex_packages, "service_area_id")
+    await _idx(tdb.cortex_packages, "state")
+    await _idx(tdb.cortex_stations, "service_area_id")
+    # cortex_events es un registro que SOLO se escribe (0 lecturas en todo el
+    # codigo). Se le pone caducidad de 90 dias para que no crezca sin fin en un
+    # Atlas de 512 MB: conserva la traza reciente y libera el resto solo.
+    try:
+        await _idx(tdb.cortex_events, "expira_en", expireAfterSeconds=0)
+    except Exception as _e:
+        logger.warning(f"Indice TTL cortex_events: {_e}")
+    await _idx(tdb.inspections, "id")
+    await _idx(tdb.inspections, "vehicle_id")
+    await _idx(tdb.inspections, [("created_at", -1)])
+    await _idx(tdb.inspections, "driver_id")
+    await _idx(tdb.inspections, "reviewed")
+    await _idx(tdb.inspections, "analysis_status")
+    await _idx(tdb.inspections, "forensic_signed")
+    await _idx(tdb.inspections, "forensic_hash")
+    await _idx(tdb.inspections, "first_phash")
+    await _idx(tdb.inspections, "fraud_score")
+    await _idx(tdb.daily_assignments, [("date", -1), ("center", 1)])
+    await _idx(tdb.vehicle_damage_ledger, [("vehicle_id", 1), ("status", 1)])
+    await _idx(tdb.alerts, [("created_at", -1)])
+    await _idx(tdb.alerts, "read")
+    await _idx(tdb.ai_feedback, [("created_at", -1)])
+    await _idx(tdb.ai_feedback, [("damage.part", 1)])
+    await _idx(tdb.ai_feedback, [("damage.location_hint", 1)])
+    await _idx(tdb.ai_feedback, [("verdict", 1)])
+    await _idx(tdb.ai_feedback, 
         [("inspection_id", 1), ("damage_index", 1)], unique=True
     )
-    await tdb.incidents.create_index("vehicle_id")
-    await tdb.incidents.create_index("status")
-    await tdb.forensic_signatures.create_index([("inspection_id", 1), ("revision", 1)], unique=True)
-    await tdb.forensic_signatures.create_index("content_hash", unique=True)
-    await tdb.forensic_signatures.create_index([("signed_at", -1)])
-    await tdb.daily_checklists.create_index(
+    await _idx(tdb.incidents, "vehicle_id")
+    await _idx(tdb.incidents, "status")
+    await _idx(tdb.forensic_signatures, [("inspection_id", 1), ("revision", 1)], unique=True)
+    await _idx(tdb.forensic_signatures, "content_hash", unique=True)
+    await _idx(tdb.forensic_signatures, [("signed_at", -1)])
+    await _idx(tdb.daily_checklists, 
         [("center", 1), ("date", 1), ("shift", 1)], unique=True
     )
-    await tdb.chat_messages.create_index([("center", 1), ("created_at", -1)])
-    await tdb.driver_accounts.create_index("username")
-    await tdb.inspection_ai_results.create_index(
+    await _idx(tdb.chat_messages, [("center", 1), ("created_at", -1)])
+    await _idx(tdb.driver_accounts, "username")
+    await _idx(tdb.inspection_ai_results, 
         [("inspection_id", 1), ("photo_index", 1)], unique=True
     )
-    await tdb.workshops.create_index("id")
-    await tdb.workshops.create_index("center")
-    await tdb.workshops.create_index("convenios")
-    await tdb.workshops.create_index("categories")
-    await tdb.plantillas_diarias.create_index("id")
-    await tdb.plantillas_diarias.create_index([("center", 1), ("uploaded_at", -1)])
-    await tdb.plantillas_compartidas.create_index("id", unique=True)
-    await tdb.plantillas_compartidas.create_index([("center", 1), ("updated_at", -1)])
+    await _idx(tdb.workshops, "id")
+    await _idx(tdb.workshops, "center")
+    await _idx(tdb.workshops, "convenios")
+    await _idx(tdb.workshops, "categories")
+    await _idx(tdb.plantillas_diarias, "id")
+    await _idx(tdb.plantillas_diarias, [("center", 1), ("uploaded_at", -1)])
+    await _idx(tdb.plantillas_compartidas, "id", unique=True)
+    await _idx(tdb.plantillas_compartidas, [("center", 1), ("updated_at", -1)])
 
 
 @app.on_event("startup")
@@ -945,11 +980,11 @@ async def create_indexes():
         # Índices del owner (BD por defecto)
         await _ensure_tenant_indexes(_DEFAULT_DB_NAME)
         # Índices globales (compartidos entre tenants)
-        await global_db.admin_users.create_index("username")
-        await global_db.inbox_messages.create_index([("created_at", -1)])
-        await global_db.ls_webhook_events.create_index("event_uid", unique=True)
-        await global_db.forensic_index.create_index("content_hash", unique=True)
-        await global_db.forensic_index.create_index([("signed_at", -1)])
+        await _idx(global_db.admin_users, "username")
+        await _idx(global_db.inbox_messages, [("created_at", -1)])
+        await _idx(global_db.ls_webhook_events, "event_uid", unique=True)
+        await _idx(global_db.forensic_index, "content_hash", unique=True)
+        await _idx(global_db.forensic_index, [("signed_at", -1)])
         # Crear índices en BDs de DSPs ya existentes (por si arrancamos con DSPs sin índices)
         orgs = await global_db.organizations.find(
             {"account_type": "dsp", "db_name": {"$exists": True}}, {"db_name": 1}
@@ -18024,15 +18059,40 @@ class DriverOfferIn(BaseModel):
     active: bool = True
 
 
+_vistas_contadas: dict = {}
+
+
+def _ya_contado(clave: str, ventana_s: int = 3600) -> bool:
+    """¿Ya contamos este evento para esta clave hace poco?
+
+    Las metricas de las ofertas se venden a un anunciante: si cualquiera puede
+    inflarlas recargando la pagina, el numero no vale nada. Se cuenta una vez
+    por IP y hora. En memoria a proposito (aproximado y barato); si la maquina
+    reinicia, se vuelve a contar: preferible a una coleccion nueva.
+    """
+    ahora = datetime.now(timezone.utc).timestamp()
+    if len(_vistas_contadas) > 5000:            # poda: no crecer sin limite
+        for k in [k for k, t in _vistas_contadas.items() if ahora - t > ventana_s]:
+            _vistas_contadas.pop(k, None)
+    visto = _vistas_contadas.get(clave, 0)
+    if ahora - visto < ventana_s:
+        return True
+    _vistas_contadas[clave] = ahora
+    return False
+
+
 @api_router.get("/driver-offers")
-async def list_driver_offers():
+async def list_driver_offers(request: Request):
     """Público (portal conductor): ofertas patrocinadas activas.
     Cuenta impresiones para poder vender el espacio con métricas reales."""
     docs = await global_db.driver_offers.find(
         {"active": True}, {"_id": 0}).sort("created_at", -1).to_list(4)
     if docs:
-        await global_db.driver_offers.update_many(
-            {"id": {"$in": [d["id"] for d in docs]}}, {"$inc": {"views": 1}})
+        # Una impresion por IP y hora: si no, bastaba con recargar en bucle
+        # para inflar el numero que le ensenamos al anunciante.
+        if not _ya_contado(f"vista:{_rl_key_ip(request)}"):
+            await global_db.driver_offers.update_many(
+                {"id": {"$in": [d["id"] for d in docs]}}, {"$inc": {"views": 1}})
         return {"offers": docs}
     return {"offers": [_DEFAULT_DRIVER_OFFER]}
 
@@ -18041,12 +18101,13 @@ async def list_driver_offers():
 async def click_driver_offer(offer_id: str, request: Request):
     """Público: registra un clic en una oferta (métrica de venta del espacio)."""
     _rl_public_action(f"offer:{_rl_key_ip(request)}", max_count=30, window_s=600)
+    # SIN upsert: antes, un id inventado creaba un documento nuevo en la BD
+    # global, asi que cualquiera podia llenarla de basura desde fuera.
+    # Un clic sobre algo que no existe simplemente no se cuenta.
+    if _ya_contado(f"clic:{_rl_key_ip(request)}:{offer_id[:64]}", ventana_s=60):
+        return {"success": True}
     await global_db.driver_offers.update_one(
-        {"id": offer_id[:64]},
-        {"$inc": {"clicks": 1},
-         "$setOnInsert": {"active": False, "title": "(clics de la oferta por defecto)"}},
-        upsert=True,
-    )
+        {"id": offer_id[:64]}, {"$inc": {"clicks": 1}})
     return {"success": True}
 
 
@@ -18298,6 +18359,17 @@ def _cortex_addr_str(v):
     return str(v)
 
 
+def _cortex_evento_doc(ev: dict, tba: str) -> dict:
+    """Evento de Cortex con fecha de caducidad (90 dias).
+
+    El indice TTL necesita un campo de tipo fecha REAL, no una cadena ISO:
+    por eso expira_en se guarda como datetime y no pasa por serialize_doc.
+    """
+    doc = serialize_doc({"id": str(uuid.uuid4()), **ev, "tba": tba})
+    doc["expira_en"] = datetime.now(timezone.utc) + timedelta(days=90)
+    return doc
+
+
 async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     """Aplica una observación canónica: crea o actualiza el paquete guardando
     solo los cambios de estado en el histórico. Devuelve 'new'|'changed'|'same'."""
@@ -18380,7 +18452,7 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         evalr = _cortex_evaluate(doc)
         doc.update({"priority": evalr["priority"], "reason": evalr["reason"]})
         await db.cortex_packages.insert_one(serialize_doc(doc))
-        await db.cortex_events.insert_one(serialize_doc({"id": str(uuid.uuid4()), **ev, "tba": tba}))
+        await db.cortex_events.insert_one(_cortex_evento_doc(ev, tba))
         return "new"
 
     last = (pkg.get("timeline") or [{}])[-1]
@@ -18411,7 +18483,7 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         {"tba": tba},
         {"$set": {**common, "priority": evalr["priority"], "reason": evalr["reason"]},
          "$inc": {"captures_n": 1}, "$push": {"timeline": ev}})
-    await db.cortex_events.insert_one(serialize_doc({"id": str(uuid.uuid4()), **ev, "tba": tba}))
+    await db.cortex_events.insert_one(_cortex_evento_doc(ev, tba))
     return "changed"
 
 
