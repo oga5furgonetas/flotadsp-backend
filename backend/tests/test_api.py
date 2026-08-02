@@ -125,3 +125,74 @@ async def test_demo_is_strictly_read_only(client):
 
     r = await client.post("/api/vehicles", headers=h, json={"license_plate": "HACK 999"})
     assert r.status_code == 403  # candado de solo lectura
+
+
+async def _admin_de_org(sufijo):
+    """Admin de test con su propia organización (BD aislada test_dsp_iso_*)."""
+    user_id = str(uuid.uuid4())
+    await server.global_db.admin_users.insert_one({
+        "id": user_id, "username": f"iso_{sufijo}_{uuid.uuid4().hex[:6]}",
+        "hashed_password": server.hash_password("test-password-123"),
+        "name": f"Admin {sufijo}", "role": "admin", "org_id": f"org_iso_{sufijo}",
+    })
+    return server.create_token(user_id, "admin", f"Admin {sufijo}",
+                               org_id=f"org_iso_{sufijo}",
+                               db_name=f"test_dsp_iso_{sufijo}")
+
+
+async def test_aislamiento_entre_organizaciones(client):
+    """EL test multi-tenant: lo que crea la org A no existe para la org B.
+
+    Si alguien rompe el _TenantDBProxy o el set_current_org_db del token,
+    esto revienta en CI antes de que un DSP vea la flota de otro."""
+    ha = {"Authorization": f"Bearer {await _admin_de_org('a')}"}
+    hb = {"Authorization": f"Bearer {await _admin_de_org('b')}"}
+    plate = f"ISO {uuid.uuid4().hex[:4].upper()}"
+
+    r = await client.post("/api/vehicles", headers=ha, json={
+        "license_plate": plate, "brand": "Toyota", "model": "Proace",
+        "center": "ISO1", "fuel_type": "Diésel", "vehicle_type": "Furgoneta",
+    })
+    assert r.status_code == 200, r.text
+    vid = r.json()["id"]
+
+    r = await client.get("/api/vehicles", headers=ha)
+    assert any(v["id"] == vid for v in r.json()), "la org A no ve su propio vehículo"
+
+    r = await client.get("/api/vehicles", headers=hb)
+    assert r.status_code == 200
+    assert all(v["id"] != vid for v in r.json()), "FUGA: la org B ve un vehículo de la org A"
+
+    r = await client.patch(f"/api/vehicles/{vid}", headers=hb, json={"mileage": 999999})
+    assert r.status_code in (403, 404), "FUGA: la org B pudo editar un vehículo de la org A"
+
+    r = await client.get("/api/vehicles", headers=ha)
+    v = next((x for x in r.json() if x["id"] == vid), None)
+    assert v is not None and v.get("mileage") != 999999
+
+
+async def test_webhook_ls_sin_secreto_se_rechaza(client, monkeypatch):
+    """FAIL-CLOSED: sin LS_WEBHOOK_SECRET configurada no se acepta NADA.
+    Es el endpoint que activa/suspende organizaciones (dinero)."""
+    monkeypatch.delenv("LS_WEBHOOK_SECRET", raising=False)
+    r = await client.post("/api/billing/lemonsqueezy/webhook", content=b"{}")
+    assert r.status_code == 503
+
+
+async def test_webhook_ls_firma_invalida_es_401(client, monkeypatch):
+    monkeypatch.setenv("LS_WEBHOOK_SECRET", "secreto-de-test")
+    r = await client.post("/api/billing/lemonsqueezy/webhook", content=b"{}",
+                          headers={"X-Signature": "firma-falsa"})
+    assert r.status_code == 401
+
+
+async def test_webhook_ls_firma_valida_entra(client, monkeypatch):
+    import hashlib
+    import hmac as _hmac
+    import json as _json
+    monkeypatch.setenv("LS_WEBHOOK_SECRET", "secreto-de-test")
+    body = _json.dumps({"meta": {"event_name": "ping_test"}}).encode()
+    firma = _hmac.new(b"secreto-de-test", body, hashlib.sha256).hexdigest()
+    r = await client.post("/api/billing/lemonsqueezy/webhook", content=body,
+                          headers={"X-Signature": firma})
+    assert r.status_code not in (401, 503), r.text
