@@ -393,3 +393,57 @@ async def test_valores_numericos_no_se_tiran_en_silencio(client, admin_token):
     assert doc["dcr"] == 99.5, "el valor bueno se perdió al rechazar el malo"
 
     await srv.db.scorecard_targets.delete_one({"center": centro})
+
+
+async def test_admin_limitado_a_un_centro_no_ve_los_otros(client, admin_token):
+    """allowed_centers tiene que restringir de verdad.
+
+    El dato salía del JWT y create_token no lo metía, así que
+    _user_can_see_center leía None y devolvía True SIEMPRE: la restricción no
+    funcionaba en ninguna ruta. En producción había 7 dispatchers limitados a
+    un centro en una organización con tres.
+
+    Ojo: inspections/incidents/alerts NO guardan 'center' (0 de 2.380 docs en
+    producción), así que se acotan por las furgonetas del centro.
+    """
+    import server as srv
+    h = {"Authorization": f"Bearer {admin_token}"}
+    a, b = f"ZA{uuid.uuid4().hex[:3].upper()}", f"ZB{uuid.uuid4().hex[:3].upper()}"
+
+    for cod in (a, b):
+        await srv.db.vehicles.insert_one(
+            {"id": f"veh-{cod}", "license_plate": f"0000 {cod}",
+             "center": f"AMZL {cod} PRUEBA", "status": "active"})
+        await srv.db.incidents.insert_one(
+            {"id": f"inc-{cod}", "vehicle_id": f"veh-{cod}", "title": "x",
+             "status": "open", "created_at": datetime.now(timezone.utc).isoformat()})
+
+    uid = str(uuid.uuid4())
+    await srv.global_db.admin_users.insert_one(
+        {"id": uid, "username": f"test_c_{uuid.uuid4().hex[:6]}",
+         "hashed_password": srv.hash_password("x" * 10), "name": "Limitado",
+         "role": "admin", "org_id": None, "allowed_centers": [a]})
+    hl = {"Authorization": f"Bearer {srv.create_token(uid, 'admin', 'Limitado')}"}
+
+    # solo ve lo suyo
+    r = await client.get("/api/vehicles", headers=hl)
+    assert r.status_code == 200
+    centros = {v["center"] for v in r.json()}
+    assert centros == {f"AMZL {a} PRUEBA"}, centros
+
+    r = await client.get("/api/incidents", headers=hl)
+    assert [i["id"] for i in r.json()] == [f"inc-{a}"], r.json()
+
+    # y no puede colarse por la puerta de atrás
+    assert (await client.get(f"/api/vehicles?center={b}", headers=hl)).status_code == 403
+    assert (await client.get(f"/api/vehicles/veh-{b}", headers=hl)).status_code == 403
+    assert (await client.get(f"/api/incidents?vehicle_id=veh-{b}", headers=hl)).status_code == 403
+
+    # un admin sin restricción sigue viéndolo todo
+    r = await client.get("/api/vehicles", headers=h)
+    ids = {v["id"] for v in r.json()}
+    assert {f"veh-{a}", f"veh-{b}"} <= ids
+
+    await srv.db.vehicles.delete_many({"id": {"$in": [f"veh-{a}", f"veh-{b}"]}})
+    await srv.db.incidents.delete_many({"id": {"$in": [f"inc-{a}", f"inc-{b}"]}})
+    await srv.global_db.admin_users.delete_one({"id": uid})

@@ -591,7 +591,7 @@ def create_token(user_id: str, role: str, name: str,
                  org_id: Optional[str] = None, db_name: Optional[str] = None,
                  account_type: Optional[str] = None, centers: Optional[list] = None,
                  super_admin: bool = False, permissions: Optional[list] = None,
-                 demo: bool = False) -> str:
+                 demo: bool = False, allowed_centers: Optional[list] = None) -> str:
     expires = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
     payload = {
         "sub": user_id,
@@ -614,6 +614,8 @@ def create_token(user_id: str, role: str, name: str,
         payload["account_type"] = account_type
     if centers:
         payload["centers"] = centers
+    if allowed_centers:
+        payload["allowed_centers"] = allowed_centers
     return jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
@@ -627,20 +629,32 @@ def decode_token(token: str) -> dict:
 # Un JWT es válido hasta que caduca (72h) aunque el usuario haya sido borrado.
 # Para que borrar/deshabilitar un admin surta efecto YA, se comprueba que siga
 # existiendo en BD (con caché de 60s para no añadir una query a cada petición).
-_ADMIN_EXISTS_CACHE: dict = {}   # user_id -> (expira_ts, existe)
+# user_id -> (expira_ts, existe, allowed_centers)
+# Los centros permitidos viajan aqui y no solo en el JWT: asi un token ya
+# emitido queda restringido en cuanto se le asignan centros, sin esperar a
+# que caduque ni obligar a volver a entrar.
+_ADMIN_EXISTS_CACHE: dict = {}
 _ADMIN_EXISTS_TTL = 60.0
 
 
-async def _admin_still_exists(user_id: str) -> bool:
+async def _admin_cacheado(user_id: str):
+    """(existe, allowed_centers) con cache de 60 s. Una sola consulta."""
     now = time.time()
     hit = _ADMIN_EXISTS_CACHE.get(user_id)
     if hit and hit[0] > now:
-        return hit[1]
-    doc = await global_db.admin_users.find_one({"id": user_id}, {"_id": 0, "id": 1, "disabled": 1})
+        return hit[1], hit[2]
+    doc = await global_db.admin_users.find_one(
+        {"id": user_id}, {"_id": 0, "id": 1, "disabled": 1, "allowed_centers": 1})
     ok = bool(doc) and not doc.get("disabled")
+    centros = (doc or {}).get("allowed_centers")
     if len(_ADMIN_EXISTS_CACHE) > 2000:
         _ADMIN_EXISTS_CACHE.clear()
-    _ADMIN_EXISTS_CACHE[user_id] = (now + _ADMIN_EXISTS_TTL, ok)
+    _ADMIN_EXISTS_CACHE[user_id] = (now + _ADMIN_EXISTS_TTL, ok, centros)
+    return ok, centros
+
+
+async def _admin_still_exists(user_id: str) -> bool:
+    ok, _ = await _admin_cacheado(user_id)
     return ok
 
 
@@ -654,9 +668,13 @@ async def get_current_user(
     # Sesión revocada: el usuario ya no existe (o está deshabilitado) en BD.
     # Los tokens de demo y de mantenimiento no viven en admin_users.
     if (payload.get("role") == "admin" and not payload.get("demo")
-            and payload.get("sub") != "maintenance-claude"
-            and not await _admin_still_exists(payload.get("sub", ""))):
-        raise HTTPException(status_code=401, detail="Sesión revocada: el usuario ya no existe")
+            and payload.get("sub") != "maintenance-claude"):
+        existe, centros_permitidos = await _admin_cacheado(payload.get("sub", ""))
+        if not existe:
+            raise HTTPException(status_code=401, detail="Sesión revocada: el usuario ya no existe")
+        # La BD manda sobre el token: si le acaban de limitar los centros, se
+        # aplica ya. Antes esto no llegaba nunca y la restricción no existía.
+        payload["allowed_centers"] = centros_permitidos
     # Modo demo: cuenta de solo lectura para probar el producto sin registro.
     # Cualquier mutación se bloquea aquí, cubra el endpoint que cubra.
     if payload.get("demo") and request.method not in ("GET", "HEAD", "OPTIONS"):
@@ -5354,12 +5372,9 @@ async def create_vehicle(data: VehicleCreate, _=Depends(require_admin)):
 
 
 @api_router.get("/vehicles", response_model=List[Vehicle])
-async def get_vehicles(center: Optional[str] = None, _=Depends(require_admin)):
+async def get_vehicles(center: Optional[str] = None, user: dict = Depends(require_admin)):
     query = {"status": {"$ne": "deleted"}}
-    if center and center != "Todos":
-        if not re.match(r'^[A-Za-z0-9_\-]{1,30}$', center):
-            raise HTTPException(400, "Código de centro inválido")
-        query["center"] = {"$regex": re.escape(center), "$options": "i"}
+    query.update(_filtro_centro(user, center))
     vehicles = await db.vehicles.find(query, {"_id": 0}).to_list(1000)
     for v in vehicles:
         for k in ["created_at", "updated_at"]:
@@ -5369,10 +5384,12 @@ async def get_vehicles(center: Optional[str] = None, _=Depends(require_admin)):
 
 
 @api_router.get("/vehicles/{vehicle_id}", response_model=Vehicle)
-async def get_vehicle(vehicle_id: str, _=Depends(require_admin)):
+async def get_vehicle(vehicle_id: str, user: dict = Depends(require_admin)):
     v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
     if not v:
         raise HTTPException(status_code=404, detail="Vehículo no encontrado")
+    if not _user_can_see_center(user, v.get("center") or ""):
+        raise HTTPException(status_code=403, detail="No tienes acceso a ese vehículo")
     for k in ["created_at", "updated_at"]:
         if isinstance(v.get(k), str):
             v[k] = datetime.fromisoformat(v[k])
@@ -5927,12 +5944,9 @@ async def create_driver(data: DriverCreate, admin: dict = Depends(require_admin)
 
 
 @api_router.get("/drivers", response_model=List[Driver])
-async def get_drivers(center: Optional[str] = None, _=Depends(require_admin)):
+async def get_drivers(center: Optional[str] = None, user: dict = Depends(require_admin)):
     query = {"active": {"$ne": False}}
-    if center and center != "Todos":
-        if not re.match(r'^[A-Za-z0-9_\-]{1,30}$', center):
-            raise HTTPException(400, "Código de centro inválido")
-        query["center"] = {"$regex": re.escape(center), "$options": "i"}
+    query.update(_filtro_centro(user, center))
     drivers = await db.drivers.find(query, {"_id": 0}).to_list(1000)
     return drivers
 
@@ -6304,13 +6318,17 @@ async def get_inspections(
     date_to: Optional[str] = None,
     limit: int = 100,
     skip: int = 0,
-    _=Depends(require_admin),
+    user: dict = Depends(require_admin),
 ):
     query = {"deleted": {"$ne": True}}
+    permitido = await _filtro_por_vehiculos(user, center)
     if vehicle_id:
+        # Pedir por vehiculo no puede ser la puerta de atras a otro centro.
+        if permitido and vehicle_id not in permitido["vehicle_id"]["$in"]:
+            raise HTTPException(403, "No tienes acceso a ese vehículo")
         query["vehicle_id"] = vehicle_id
-    if center and center != "Todos":
-        query["center"] = center
+    else:
+        query.update(permitido)
     if date_from:
         query.setdefault("created_at", {})["$gte"] = date_from
     if date_to:
@@ -8170,9 +8188,53 @@ def _user_can_see_center(user: dict, center: str) -> bool:
     if user.get("sa") or user.get("account_type") == "owner":
         return True
     ac = user.get("allowed_centers")
-    if ac is None:
+    if not ac:
         return True   # sin restricción: ve todos los de la org
-    return (center or "") in ac
+    # Los centros en BD vienen sucios ('AMZL OGA5 SANTIAGO XPT'), así que se
+    # compara por código contenido, no por igualdad exacta.
+    c = (center or "").upper()
+    return any(p.upper() in c or c in p.upper() for p in ac if p)
+
+
+async def _filtro_por_vehiculos(user: dict, center: Optional[str] = None) -> dict:
+    """Igual que _filtro_centro pero para colecciones SIN campo 'center'.
+
+    inspections, incidents y alerts no guardan el centro (0 de 2.380 documentos
+    en producción) pero todas llevan vehicle_id, así que se acota por las
+    furgonetas de esos centros. Esto arregla de paso el filtro por centro de
+    inspecciones, que consultaba un campo inexistente y devolvía siempre vacío
+    (lo usa Asignación diaria).
+
+    Devuelve {} si no hay nada que acotar.
+    """
+    sub = _filtro_centro(user, center)          # valida permisos y devuelve el regex
+    if not sub:
+        return {}
+    ids = await db.vehicles.distinct("id", sub)
+    return {"vehicle_id": {"$in": ids}}
+
+
+def _filtro_centro(user: dict, center: Optional[str] = None) -> dict:
+    """Trozo de query con los centros que este usuario PUEDE ver.
+
+    Sin esto, un dispatcher limitado a OGA5 pedía ?center=DGA1 (o ninguno) y
+    veía los demás centros: allowed_centers estaba definido pero no llegaba a
+    filtrar ninguna consulta de datos.
+    """
+    permitidos = [p for p in (user.get("allowed_centers") or []) if p] \
+        if not (user.get("sa") or user.get("account_type") == "owner") else []
+
+    if center and center != "Todos":
+        if not re.match(r'^[A-Za-z0-9_\- ]{1,30}$', center):
+            raise HTTPException(400, "Código de centro inválido")
+        if not _user_can_see_center(user, center):
+            raise HTTPException(403, "No tienes acceso a ese centro")
+        return {"center": {"$regex": re.escape(center.strip()), "$options": "i"}}
+
+    if permitidos:
+        return {"center": {"$regex": "|".join(re.escape(p) for p in permitidos),
+                           "$options": "i"}}
+    return {}
 
 
 @api_router.get("/checklist")
@@ -8711,8 +8773,9 @@ async def recheck_fraud(inspection_id: str, _=Depends(require_admin)):
 # =========================
 
 @api_router.get("/alerts")
-async def get_alerts(unread_only: bool = False, _=Depends(require_admin)):
+async def get_alerts(unread_only: bool = False, user: dict = Depends(require_admin)):
     query = {"read": False} if unread_only else {}
+    query.update(await _filtro_por_vehiculos(user))
     alerts = await db.alerts.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
     return alerts
 
@@ -9733,10 +9796,18 @@ async def _auto_incident_on_workshop(vehicle_id: str, prev_status, new_status):
 @api_router.get("/incidents")
 async def get_incidents(vehicle_id: Optional[str] = None, user: dict = Depends(require_any_auth)):
     query = {}
-    if vehicle_id:
-        query["vehicle_id"] = vehicle_id
     if user["role"] == "driver":
         query["driver_id"] = user["sub"]
+        if vehicle_id:
+            query["vehicle_id"] = vehicle_id
+    else:
+        permitido = await _filtro_por_vehiculos(user)
+        if vehicle_id:
+            if permitido and vehicle_id not in permitido["vehicle_id"]["$in"]:
+                raise HTTPException(403, "No tienes acceso a ese vehículo")
+            query["vehicle_id"] = vehicle_id
+        else:
+            query.update(permitido)
     incidents = await db.incidents.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
     return incidents
 
