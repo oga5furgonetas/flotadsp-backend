@@ -324,3 +324,43 @@ async def test_flujo_completo_de_turnos(client, admin_token):
     assert r.status_code == 200 and r.json()["status"] == "aprobado"
     turno = await server.db.shifts.find_one({"driver_id": did, "date": dias[2]})
     assert turno and turno["type"] == "libre"
+
+
+async def test_no_se_puede_subir_de_plan_sin_pagar(client, admin_token):
+    """Subir de plan tiene que pasar por caja; bajar es self-service.
+
+    /org/change-plan escribía el plan que le pidieras. Como ninguna pantalla la
+    llamaba, nadie lo vio: pero es HTTP público y cualquier admin podía ponerse
+    en el plan más caro gratis. Ojo con 'enterprise' y 'owner': cuestan 0 € y
+    por precio parecen una bajada, así que el orden es por capacidad.
+    """
+    import server as srv
+    org_id = f"org-test-{uuid.uuid4().hex[:8]}"
+    await srv.global_db.organizations.insert_one(
+        {"id": org_id, "name": "DSP Test Plan", "plan": "basico",
+         "db_name": srv.db.name if hasattr(srv.db, "name") else None, "status": "active"})
+    uid = str(uuid.uuid4())
+    await srv.global_db.admin_users.insert_one(
+        {"id": uid, "username": f"test_plan_{uuid.uuid4().hex[:6]}",
+         "hashed_password": srv.hash_password("x" * 10), "name": "Admin Plan",
+         "role": "admin", "org_id": org_id})
+    tok = srv.create_token(uid, "admin", "Admin Plan")
+    h = {"Authorization": f"Bearer {tok}"}
+
+    async def plan_actual():
+        return (await srv.global_db.organizations.find_one({"id": org_id}))["plan"]
+
+    # Subir de plan: rechazado y el plan NO cambia
+    for destino in ("flota", "enterprise", "owner"):
+        r = await client.post("/api/org/change-plan", headers=h, json={"plan": destino})
+        assert r.status_code == 402, f"{destino}: {r.status_code} {r.text}"
+        assert await plan_actual() == "basico", f"{destino} coló sin pagar"
+
+    # Bajar de plan: permitido
+    await srv.global_db.organizations.update_one({"id": org_id}, {"$set": {"plan": "flota"}})
+    r = await client.post("/api/org/change-plan", headers=h, json={"plan": "basico"})
+    assert r.status_code == 200, r.text
+    assert await plan_actual() == "basico"
+
+    await srv.global_db.organizations.delete_one({"id": org_id})
+    await srv.global_db.admin_users.delete_one({"id": uid})

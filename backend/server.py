@@ -3922,6 +3922,11 @@ async def org_billing(user: dict = Depends(get_current_user)):
 # ===== UPGRADE PRORRATEADO =====
 
 PLAN_PRICES = {"basico": 99, "pro": 229, "flota": 399, "enterprise": 0, "owner": 0}
+# Orden por lo que DESBLOQUEA cada plan, no por lo que cuesta: enterprise
+# vale 0 € (precio a medida) pero lo incluye todo, así que por precio
+# pasaría por "bajada de plan". "owner" es interno: fuera del mapa a
+# propósito, nadie puede pedirlo (solo super-admin).
+_PLAN_RANGO = {"basico": 1, "pro": 2, "flota": 3, "enterprise": 4}
 
 @api_router.get("/org/upgrade-preview")
 async def upgrade_preview(new_plan: str, user: dict = Depends(require_admin)):
@@ -3969,18 +3974,45 @@ async def upgrade_preview(new_plan: str, user: dict = Depends(require_admin)):
 
 @api_router.post("/org/change-plan")
 async def change_plan(data: dict = Body(...), user: dict = Depends(require_admin)):
-    """Cambia el plan de la organización (solo downgrade o upgrades ya pagados vía Lemon Squeezy)."""
+    """Cambia el plan de la organización.
+
+    Bajar de plan es self-service. SUBIR no: lo aplica el webhook de Lemon
+    Squeezy cuando el pago entra de verdad. Antes esta ruta escribía el plan
+    que le pidieras, así que cualquier admin podía ponerse en el plan más caro
+    gratis — no se notaba porque ninguna pantalla la llamaba, pero es HTTP
+    público. El super-admin sí puede forzarlo (soporte) y queda auditado.
+    """
     new_plan = (data.get("plan") or "").lower().strip()
     if new_plan not in PLAN_LIMITS:
         raise HTTPException(400, "Plan no válido")
     org = await get_org(user.get("org_id"))
     if not org:
         raise HTTPException(404, "Organización no encontrada")
+
+    plan_actual = _org_billing(org).get("plan", "basico")
+    if new_plan == plan_actual:
+        raise HTTPException(400, "Ya estás en ese plan")
+
+    es_superadmin = user.get("role") == "sa"
+    # Sin rango conocido (p. ej. "owner") no es self-service jamás.
+    rango_nuevo = _PLAN_RANGO.get(new_plan)
+    sube = rango_nuevo is None or rango_nuevo > _PLAN_RANGO.get(plan_actual, 0)
+    if sube and not es_superadmin:
+        raise HTTPException(
+            status_code=402,
+            detail="Para subir de plan hay que completar el pago. "
+                   "El plan se activa solo cuando el pago se confirma.")
+
     await global_db.organizations.update_one(
         {"id": org["id"]},
         {"$set": {"plan": new_plan, "plan_changed_at": datetime.now(timezone.utc).isoformat()}}
     )
-    return {"success": True, "plan": new_plan}
+    await _audit(user, "cambio_de_plan", {
+        "org_id": org["id"], "org": org.get("name") or org.get("slug"),
+        "de": plan_actual, "a": new_plan,
+        "forzado_por_superadmin": bool(es_superadmin and sube),
+    })
+    return {"success": True, "plan": new_plan, "anterior": plan_actual}
 
 
 # ===== PAGOS: Lemon Squeezy (Merchant of Record) =====

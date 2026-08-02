@@ -35,6 +35,8 @@ jobs:
         run: node scripts/check-i18n.mjs
       - name: Checker rutas backend (duplicados)
         run: node scripts/check-routes.mjs
+      - name: Checker rutas sin consumidor (huerfanas)
+        run: node scripts/check-huerfanas.mjs
 
   backend:
     name: Backend (sintaxis + contratos + tests de API)
