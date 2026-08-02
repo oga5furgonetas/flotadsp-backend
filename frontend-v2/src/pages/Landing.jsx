@@ -181,7 +181,7 @@ function DualDemo() {
 
   /* ── Browser screens ── */
   const browserScreens = [
-    <div style={{ padding:'18px 16px', display:'flex', flexDirection:'column', gap:8 }}>
+    <div key="itv" style={{ padding:'18px 16px', display:'flex', flexDirection:'column', gap:8 }}>
       <div style={{ fontSize:10, fontWeight:700, color:'var(--ld-dim)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:2 }}>{lang==='es'?'Alertas ITV próximas':lang==='en'?'Upcoming MOT alerts':lang==='fr'?'Alertes CT à venir':lang==='de'?'TÜV-Warnungen':'Allerte revisione'}</div>
       {[{p:'2866 NGX',d:-3,c:'OGA5'},{p:'1304 NJS',d:-1,c:'DGA1'},{p:'5804 MVN',d:12,c:'OGA5'},{p:'3301 MKL',d:18,c:'DGA2'},{p:'7712 BPR',d:29,c:'DGA1'}].map(v => {
         const exp=v.d<0, urg=v.d>=0&&v.d<=14
@@ -198,7 +198,7 @@ function DualDemo() {
         )
       })}
     </div>,
-    <div style={{ padding:'14px', display:'flex', flexDirection:'column', gap:7 }}>
+    <div key="scorecard" style={{ padding:'14px', display:'flex', flexDirection:'column', gap:7 }}>
       <div style={{ display:'flex', alignItems:'center', gap:7, padding:'6px 11px', background:'var(--ld-surface2)', borderRadius:9, marginBottom:2 }}>
         <div style={{ width:7,height:7,borderRadius:'50%',background:'#34d399' }} />
         <span style={{ fontSize:10, fontWeight:700, color:'var(--ld-dim)' }}>Chat · OGA5</span>
@@ -219,7 +219,7 @@ function DualDemo() {
         </div>
       ))}
     </div>,
-    <div style={{ padding:'18px 16px', display:'flex', flexDirection:'column', gap:11 }}>
+    <div key="inspeccion" style={{ padding:'18px 16px', display:'flex', flexDirection:'column', gap:11 }}>
       <div style={{ fontSize:10, fontWeight:700, color:'var(--ld-dim)', textTransform:'uppercase', letterSpacing:'.07em' }}>{lang==='es'?'Estado flota — 88 vehículos':lang==='en'?'Fleet health — 88 vehicles':lang==='fr'?'État flotte — 88 véhicules':'Stato flotta — 88 veicoli'}</div>
       <div style={{ display:'flex', height:10, borderRadius:99, overflow:'hidden' }}>
         {[[22,'#34d399'],[41,'#fbbf24'],[26,'#fb923c'],[8,'#f87171'],[3,'#ef4444']].map(([p,c],i)=><div key={i} style={{ width:`${p}%`,background:c }} />)}
@@ -249,7 +249,7 @@ function DualDemo() {
         </div>
       </div>
     </div>,
-    <div style={{ padding:'14px 16px', display:'flex', flexDirection:'column', gap:9 }}>
+    <div key="paquetes" style={{ padding:'14px 16px', display:'flex', flexDirection:'column', gap:9 }}>
       <div style={{ fontSize:10, fontWeight:700, color:'var(--ld-dim)', textTransform:'uppercase', letterSpacing:'.07em' }}>{lang==='es'?'Revisión rápida — valida IA':lang==='en'?'Quick review — validate AI':'Revisione rapida — valida IA'}</div>
       <div style={{ position:'relative', background:'#0a0c10', borderRadius:11, overflow:'hidden', height:120 }}>
         <div style={{ position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:44 }}>🚐</div>

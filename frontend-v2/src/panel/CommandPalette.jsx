@@ -10,14 +10,27 @@ import { useT } from '../i18n'
 
 let _cache = { at: 0, vehicles: [], drivers: [] }
 
+let _enCurso = null   // peticion en vuelo, para no lanzarla dos veces
+
 async function loadData() {
   if (Date.now() - _cache.at < 60_000) return _cache
-  const [vs, ds] = await Promise.all([
-    getVehicles('Todos').catch(() => ({ data: [] })),
-    getDrivers('Todos').catch(() => ({ data: [] })),
-  ])
-  _cache = { at: Date.now(), vehicles: vs.data || [], drivers: ds.data || [] }
-  return _cache
+  // Abrir el buscador dos veces seguidas disparaba DOS descargas de toda la
+  // flota: ambas leian la cache caducada antes de que ninguna la escribiera.
+  // Ahora la segunda se engancha a la primera.
+  if (_enCurso) return _enCurso
+  _enCurso = (async () => {
+    try {
+      const [vs, ds] = await Promise.all([
+        getVehicles('Todos').catch(() => ({ data: [] })),
+        getDrivers('Todos').catch(() => ({ data: [] })),
+      ])
+      _cache = { at: Date.now(), vehicles: vs.data || [], drivers: ds.data || [] }
+      return _cache
+    } finally {
+      _enCurso = null
+    }
+  })()
+  return _enCurso
 }
 
 const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')

@@ -17,7 +17,10 @@ export default function Verify() {
   function cleanHash(input) {
     if (!input) return ''
     // Extrae el primer match de 64 hex chars consecutivos. Acepta paste con espacios, "Hash:", saltos de línea, mayúsculas, etc.
-    const compact = String(input).replace(/[\s ]+/g, '')
+    // \u00A0 (espacio duro) va escrito como c\u00F3digo a prop\u00F3sito: si se deja el
+    // car\u00E1cter literal es invisible en el fichero y cualquier editor que lo
+    // normalice romper\u00EDa el pegado de hashes sin que nadie se entere.
+    const compact = String(input).replace(/[\s\u00A0]+/g, '')
     const m = compact.match(/[0-9a-fA-F]{64}/)
     return (m ? m[0] : compact).toLowerCase()
   }

@@ -19,6 +19,9 @@ jobs:
       - name: Instalar dependencias
         working-directory: frontend-v2
         run: npm ci
+      - name: ESLint (errores de React, hooks, variables inexistentes)
+        working-directory: frontend-v2
+        run: npm run lint
       - name: Build de producción
         working-directory: frontend-v2
         run: npm run build
