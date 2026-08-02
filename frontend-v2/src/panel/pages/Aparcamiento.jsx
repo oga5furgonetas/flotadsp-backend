@@ -5,6 +5,7 @@ import {
   Maximize2, Image as ImageIcon, Plus, Minus, Trash2, RotateCw, Move,
 } from 'lucide-react'
 import { parkingState, parkingResolve, parkingAssign, parkingZoneImage, parkingSaveLayout, getVehicles } from '../api'
+import { hoyLocal } from '../../lib/fecha'
 
 /* Estado de una plaza. El color comunica, nunca decora.
    `chip` = clases para insignias; fill/line/glow = pintura de la plaza en el plano. */
@@ -46,7 +47,7 @@ const GROUND = {
            linear-gradient(160deg, #271f15, #1e1710 55%, #171009)`,
   general: 'linear-gradient(160deg,#222329,#15161b)',
 }
-const todayISO = () => new Date().toISOString().slice(0, 10)
+const todayISO = hoyLocal
 
 /* Furgoneta cenital: chapa con volumen, parabrisas, costillas de caja,
    retrovisores y ruedas. Se dibuja en 100×46 y se orienta según la plaza,
@@ -128,10 +129,20 @@ export default function Aparcamiento() {
   const [edit, setEdit] = useState(false)
   const [draft, setDraft] = useState(null)
   const [drag, setDrag] = useState(null)
+  const [snapOn, setSnapOn] = useState(true)        // imán de alineación
+  const [histN, setHistN] = useState(0)             // fuerza re-render de botones undo/redo
+  const histRef = useRef({ past: [], future: [] })  // historial de deshacer
+  const lastSnapRef = useRef(0)
   // Arrastrar vehículo → plaza
   const [dropTarget, setDropTarget] = useState(null)
 
-  const flash = (ok, msg) => { setToast({ ok, msg }); setTimeout(() => setToast(null), 4000) }
+  const toastTimer = useRef(null)
+  const flash = (ok, msg) => {
+    setToast({ ok, msg })
+    clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 4000)
+  }
+  useEffect(() => () => clearTimeout(toastTimer.current), [])
   const noCenter = !center || center === 'Todos'
 
   const load = useCallback(async () => {
@@ -145,8 +156,14 @@ export default function Aparcamiento() {
     if (noCenter) return
     getVehicles(center).then((r) => setVehicles(r.data || [])).catch(() => setVehicles([]))
   }, [center, noCenter])
-  useEffect(() => { setSel(null); setQ(''); setAz(0) }, [center, day])
-  // Medir el viewport del plano para calcular el tamaño exacto de la zona
+  // Recordar la última zona vista de cada centro (vuelves donde estabas)
+  useEffect(() => {
+    setSel(null); setQ('')
+    setAz(parseInt(localStorage.getItem('pk_zona_' + center), 10) || 0)
+  }, [center, day])
+  // Medir el viewport del plano + zoom con rueda. La rueda va con listener
+  // NATIVO no-pasivo: React registra onWheel como pasivo y preventDefault no
+  // surte efecto, con lo que la página entera hacía scroll mientras zoomeabas.
   useEffect(() => {
     const el = viewRef.current
     if (!el) return
@@ -155,7 +172,12 @@ export default function Aparcamiento() {
       setViewSize({ w: r.width, h: r.height })
     })
     ro.observe(el)
-    return () => ro.disconnect()
+    const onWheel = (e) => {
+      e.preventDefault()
+      setZoom((z) => Math.min(3, Math.max(0.6, +(z - Math.sign(e.deltaY) * 0.15).toFixed(2))))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => { ro.disconnect(); el.removeEventListener('wheel', onWheel) }
   }, [data, noCenter])
 
   const { byAssigned, byReported } = useMemo(() => {
@@ -266,12 +288,46 @@ export default function Aparcamiento() {
   }
 
   // ── Editor ──
-  function startEdit() { setDraft(JSON.parse(JSON.stringify(data?.layout?.zones || []))); setEdit(true); setSel(null) }
-  function cancelEdit() { setDraft(null); setEdit(false); setDrag(null) }
+  function startEdit() {
+    setDraft(JSON.parse(JSON.stringify(data?.layout?.zones || [])))
+    histRef.current = { past: [], future: [] }; setHistN(0)
+    setEdit(true); setSel(null)
+  }
+  function cancelEdit() { setDraft(null); setEdit(false); setDrag(null); histRef.current = { past: [], future: [] } }
+
+  // Historial: cada mutación guarda el estado anterior. Los cambios seguidos
+  // del mismo gesto (steppers, teclas, escribir el número) se agrupan.
+  const snapshot = useCallback((d) => {
+    const h = histRef.current
+    h.past.push(JSON.stringify(d))
+    if (h.past.length > 80) h.past.shift()
+    h.future = []
+    setHistN((n) => n + 1)
+  }, [])
+  function snapshotCoalesced(d) {
+    const now = Date.now()
+    if (now - lastSnapRef.current > 700) { snapshot(d); lastSnapRef.current = now }
+  }
+  function undo() {
+    const h = histRef.current
+    if (!h.past.length) return
+    setDraft((d) => { h.future.push(JSON.stringify(d)); return JSON.parse(h.past.pop()) })
+    setHistN((n) => n + 1)
+  }
+  function redo() {
+    const h = histRef.current
+    if (!h.future.length) return
+    setDraft((d) => { h.past.push(JSON.stringify(d)); return JSON.parse(h.future.pop()) })
+    setHistN((n) => n + 1)
+  }
+
   function patchSpot(zi, si, patch) {
     setDraft((d) => { const n = JSON.parse(JSON.stringify(d)); n[zi].spots[si] = { ...n[zi].spots[si], ...patch }; return n })
   }
+  // Igual que patchSpot pero dejando rastro en el historial (steppers, teclado)
+  function patchSpotH(zi, si, patch) { snapshotCoalesced(draft); patchSpot(zi, si, patch) }
   function addSpot(zi) {
+    snapshot(draft)
     setDraft((d) => {
       const n = JSON.parse(JSON.stringify(d))
       const all = n.flatMap((z) => z.spots || []).map((s) => parseInt(s.code, 10)).filter((x) => !isNaN(x))
@@ -280,15 +336,22 @@ export default function Aparcamiento() {
     })
   }
   function dupSpot(zi, si) {
+    snapshot(draft)
+    let nuevo = null
     setDraft((d) => {
       const n = JSON.parse(JSON.stringify(d))
       const s = n[zi].spots[si]
       const all = n.flatMap((z) => z.spots || []).map((x) => parseInt(x.code, 10)).filter((x) => !isNaN(x))
-      n[zi].spots.push({ ...s, code: String((all.length ? Math.max(...all) : 0) + 1), y: Math.min(95, s.y + (s.h || 8) + 1) })
+      nuevo = String((all.length ? Math.max(...all) : 0) + 1)
+      // Se duplica en paralelo: mismo giro, un hueco más abajo — así una fila
+      // entera se hace a base de Ctrl+D sin recolocar nada.
+      n[zi].spots.push({ ...s, code: nuevo, y: Math.min(95, s.y + (s.h || 8) + 1) })
       return n
     })
+    if (nuevo) setSel(nuevo)
   }
   function removeSpot(zi, si) {
+    snapshot(draft)
     setDraft((d) => { const n = JSON.parse(JSON.stringify(d)); n[zi].spots.splice(si, 1); return n }); setSel(null)
   }
   async function saveLayout() {
@@ -302,6 +365,7 @@ export default function Aparcamiento() {
   function onSpotDown(e, zi, si) {
     if (!edit) return
     e.preventDefault(); e.stopPropagation()
+    snapshot(draft)
     const rect = e.currentTarget.parentElement.getBoundingClientRect()
     const sp = draft[zi].spots[si]
     setSel(sp.code)
@@ -313,10 +377,18 @@ export default function Aparcamiento() {
     const dx = ((e.clientX - drag.startX) / drag.rect.width) * 100
     const dy = ((e.clientY - drag.startY) / drag.rect.height) * 100
     const sp = draft[drag.zi].spots[drag.si]
-    patchSpot(drag.zi, drag.si, {
-      x: Math.max(0, Math.min(100 - (sp.w || 10), Math.round((drag.ox + dx) * 10) / 10)),
-      y: Math.max(0, Math.min(100 - (sp.h || 10), Math.round((drag.oy + dy) * 10) / 10)),
-    })
+    let nx = Math.max(0, Math.min(100 - (sp.w || 10), Math.round((drag.ox + dx) * 10) / 10))
+    let ny = Math.max(0, Math.min(100 - (sp.h || 10), Math.round((drag.oy + dy) * 10) / 10))
+    // Imán: pega la plaza a la fila/columna de las vecinas (Alt lo desactiva)
+    if (snapOn && !e.altKey) {
+      const TOL = 0.8
+      for (const o of draft[drag.zi].spots) {
+        if (o === sp || o.code === sp.code) continue
+        if (Math.abs(o.x - nx) < TOL) nx = o.x
+        if (Math.abs(o.y - ny) < TOL) ny = o.y
+      }
+    }
+    patchSpot(drag.zi, drag.si, { x: nx, y: ny })
   }
   const draftIdx = useMemo(() => {
     if (!edit || !draft || !sel) return null
@@ -327,6 +399,33 @@ export default function Aparcamiento() {
     return null
   }, [edit, draft, sel])
   const draftSpot = draftIdx ? draft[draftIdx.zi].spots[draftIdx.si] : null
+
+  // Atajos del editor: flechas mueven, R gira, Supr borra, Ctrl+Z/Y deshace,
+  // Ctrl+D duplica. Con un input activo solo se atienden los de Ctrl.
+  useEffect(() => {
+    if (!edit) return
+    const onKey = (e) => {
+      const tag = (e.target?.tagName || '').toLowerCase()
+      const typing = tag === 'input' || tag === 'textarea'
+      const mod = e.ctrlKey || e.metaKey
+      if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return }
+      if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return }
+      if (typing || !draftIdx) return
+      const { zi, si } = draftIdx
+      const sp = draft?.[zi]?.spots?.[si]
+      if (!sp) return
+      const paso = e.shiftKey ? 1 : 0.25
+      if (e.key === 'ArrowLeft') { e.preventDefault(); patchSpotH(zi, si, { x: Math.max(0, +(sp.x - paso).toFixed(2)) }) }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); patchSpotH(zi, si, { x: Math.min(100 - (sp.w || 10), +(sp.x + paso).toFixed(2)) }) }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); patchSpotH(zi, si, { y: Math.max(0, +(sp.y - paso).toFixed(2)) }) }
+      else if (e.key === 'ArrowDown') { e.preventDefault(); patchSpotH(zi, si, { y: Math.min(100 - (sp.h || 10), +(sp.y + paso).toFixed(2)) }) }
+      else if (e.key.toLowerCase() === 'r') { patchSpotH(zi, si, { rot: ((sp.rot || 0) + (e.shiftKey ? -5 : 5)) }) }
+      else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); removeSpot(zi, si) }
+      else if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); dupSpot(zi, si) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   // ── Pan del plano (arrastrar el fondo) ──
   function onPanDown(e) {
@@ -406,7 +505,7 @@ export default function Aparcamiento() {
               const zs = zoneStats(z), ac = ZONE_ACCENT[z.color] || ZONE_ACCENT.sky
               const on = i === zIdx
               return (
-                <button key={z.id} onClick={() => { setAz(i); setSel(null); setMoving(false); resetView() }}
+                <button key={z.id} onClick={() => { setAz(i); setSel(null); setMoving(false); resetView(); localStorage.setItem('pk_zona_' + center, String(i)) }}
                   className={`group relative flex flex-1 items-center gap-2.5 overflow-hidden rounded-xl px-3.5 py-2 text-left transition ${on ? 'bg-white/[0.06] ring-1 ring-inset ' + ac.br.replace('border-', 'ring-') : 'hover:bg-white/[0.03]'}`}>
                   <span className={`h-8 w-1 shrink-0 rounded-full ${on ? ac.bar : 'bg-white/10'}`} />
                   <span className="min-w-0 flex-1">
@@ -458,8 +557,7 @@ export default function Aparcamiento() {
 
                 {/* Lienzo: UNA zona, grande, ajustada a la foto */}
                 <div ref={viewRef} className="relative h-[560px] cursor-grab overflow-hidden bg-black/40 active:cursor-grabbing"
-                  onPointerDown={onPanDown} onPointerMove={onPanMove} onPointerUp={onPanUp} onPointerLeave={onPanUp}
-                  onWheel={(e) => setZoom((z) => Math.min(3, Math.max(0.6, +(z - Math.sign(e.deltaY) * 0.15).toFixed(2))))}>
+                  onPointerDown={onPanDown} onPointerMove={onPanMove} onPointerUp={onPanUp} onPointerLeave={onPanUp}>
                   <div className="grid h-full w-full place-items-center transition-transform duration-100"
                     style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: 'center' }}>
                     {zone && zBox.w > 0 && (() => {
@@ -556,7 +654,10 @@ export default function Aparcamiento() {
               <div className="sticky top-4 space-y-3">
                 {edit ? (
                   <EditorPanel draftSpot={draftSpot} draftIdx={draftIdx} draft={draft}
-                    patchSpot={patchSpot} addSpot={addSpot} dupSpot={dupSpot} removeSpot={removeSpot} />
+                    patchSpot={patchSpotH} addSpot={addSpot} dupSpot={dupSpot} removeSpot={removeSpot}
+                    undo={undo} redo={redo}
+                    canUndo={histRef.current.past.length > 0} canRedo={histRef.current.future.length > 0}
+                    snapOn={snapOn} setSnapOn={setSnapOn} />
                 ) : sel ? (
                   <DetailPanel
                     sel={sel} selRow={selRow} selStatus={selStatus} busy={busy} moving={moving}
@@ -730,14 +831,31 @@ function DetailPanel({ sel, selRow, selStatus, busy, moving, setMoving, resolve,
   )
 }
 
-function EditorPanel({ draftSpot, draftIdx, draft, patchSpot, addSpot, dupSpot, removeSpot }) {
+function EditorPanel({ draftSpot, draftIdx, draft, patchSpot, addSpot, dupSpot, removeSpot,
+  undo, redo, canUndo, canRedo, snapOn, setSnapOn }) {
   return (
     <div className="rounded-2xl border border-brand-500/25 bg-brand-500/[0.04] p-4">
-      <p className="mb-3 text-[12px] font-semibold text-brand-300">Editando el plano</p>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <p className="text-[12px] font-semibold text-brand-300">Editando el plano</p>
+        <div className="flex items-center gap-1">
+          <button onClick={undo} disabled={!canUndo} title="Deshacer (Ctrl+Z)"
+            className="h-7 rounded-lg border border-white/[0.1] px-2 text-[11px] font-semibold text-dark-300 hover:border-brand-500/40 hover:text-brand-300 disabled:opacity-30">↩</button>
+          <button onClick={redo} disabled={!canRedo} title="Rehacer (Ctrl+Y)"
+            className="h-7 rounded-lg border border-white/[0.1] px-2 text-[11px] font-semibold text-dark-300 hover:border-brand-500/40 hover:text-brand-300 disabled:opacity-30">↪</button>
+          <button onClick={() => setSnapOn((s) => !s)} title="Imán: alinea con las plazas vecinas al arrastrar (Alt lo desactiva)"
+            className={`h-7 rounded-lg border px-2 text-[11px] font-semibold ${snapOn
+              ? 'border-brand-500/50 bg-brand-500/15 text-brand-300'
+              : 'border-white/[0.1] text-dark-500 hover:text-dark-300'}`}>Imán</button>
+        </div>
+      </div>
       {!draftSpot ? (
         <p className="text-[12.5px] leading-relaxed text-dark-400">
           Arrastra cualquier plaza para colocarla donde está en la realidad.
           Pulsa una para girarla, cambiar su tamaño o su número.
+          <span className="mt-2 block text-[11px] leading-relaxed text-dark-500">
+            Atajos: <b>flechas</b> mueven (Shift = rápido) · <b>R</b> gira ·
+            {' '}<b>Supr</b> borra · <b>Ctrl+D</b> duplica · <b>Ctrl+Z</b> deshace
+          </span>
         </p>
       ) : (
         <div className="space-y-3">
