@@ -216,6 +216,9 @@ export const getBillingConfig = () => api.get('/billing/config')
 export const adminGetPlanes = () => api.get('/admin/planes')
 export const adminSetPlanes = (body) => api.put('/admin/planes', body)
 /* Cobros: qué facturar cada mes y quién ha pagado. Sin pasarela. */
+/* Datos de quien emite las facturas. */
+export const adminGetEmisor = () => api.get('/admin/emisor')
+export const adminSetEmisor = (body) => api.put('/admin/emisor', body)
 export const adminGetCobros = (mes) => api.get('/admin/cobros', { params: mes ? { mes } : {} })
 export const adminMarcarCobro = (id, estado, referencia) =>
   api.post(`/admin/cobros/${id}`, { estado, ...(referencia ? { referencia } : {}) })

@@ -5,7 +5,7 @@ import {
   Loader2, Building2, CheckCircle2, Clock, Euro, Sparkles, Gift, PauseCircle,
   LogIn, Trash2, Database, BrainCircuit, ExternalLink, RefreshCw, Megaphone,
   Play, Pause, Plus, Star, Eye, MousePointerClick, Tag, Save,
-  Receipt, Upload, Check, Undo2,
+  Receipt, Upload, Check, Undo2, Building,
 } from 'lucide-react'
 import {
   getAdminOverview, getAdminOrgs, getLeads, updateOrg, impersonateOrg, deleteOrg,
@@ -13,6 +13,7 @@ import {
   adminDeleteDriverOffer, adminGetFounderReservations,
   adminGetPlanes, adminSetPlanes,
   adminGetCobros, adminMarcarCobro, adminConciliar,
+  adminGetEmisor, adminSetEmisor,
 } from '../api'
 import { API_BASE } from '../../services/api'
 
@@ -286,6 +287,116 @@ function Cobros() {
   )
 }
 
+
+/* Quién emite las facturas. Hace falta para el borrador y, cuando el banco dé
+   el identificador de acreedor, para el fichero de domiciliación SEPA. */
+function DatosEmisor() {
+  const [d, setD] = useState(null)
+  const [guardando, setGuardando] = useState(false)
+  const [aviso, setAviso] = useState('')
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    adminGetEmisor().then((r) => setD(r.data || {})).catch(() => setD({}))
+  }, [])
+
+  const set = (k, v) => { setD((x) => ({ ...x, [k]: v })); setAviso('') }
+
+  const guardar = async () => {
+    setGuardando(true); setErr(''); setAviso('')
+    try { await adminSetEmisor(d); setAviso('Datos guardados') }
+    catch (e) { setErr(e?.response?.data?.detail || 'No se pudo guardar') }
+    finally { setGuardando(false) }
+  }
+
+  if (!d) return null
+
+  return (
+    <div className="card mt-6 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-sm font-bold text-dark-100">
+          <Building size={16} /> Tus datos de facturación
+        </h2>
+        <button onClick={guardar} disabled={guardando}
+          className="btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs disabled:opacity-50">
+          {guardando ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} Guardar
+        </button>
+      </div>
+
+      {err && <p className="mb-2 text-xs text-red-300">{err}</p>}
+      {aviso && <p className="mb-2 text-xs text-emerald-300">{aviso}</p>}
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <label key="razon_social" className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">Razón social *</span>
+              <input value={d.razon_social || ''} placeholder="Mi Empresa SL"
+                onChange={(e) => set('razon_social', e.target.value)}
+                className="rounded-lg border border-dark-700 bg-dark-900 px-2.5 py-1.5 text-sm text-dark-100 placeholder:text-dark-700" />
+            </label>
+            <label key="nif" className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">NIF / CIF *</span>
+              <input value={d.nif || ''} placeholder="B12345678"
+                onChange={(e) => set('nif', e.target.value)}
+                className="rounded-lg border border-dark-700 bg-dark-900 px-2.5 py-1.5 text-sm text-dark-100 placeholder:text-dark-700" />
+            </label>
+            <label key="direccion" className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">Dirección</span>
+              <input value={d.direccion || ''} placeholder="C/ Ejemplo 1"
+                onChange={(e) => set('direccion', e.target.value)}
+                className="rounded-lg border border-dark-700 bg-dark-900 px-2.5 py-1.5 text-sm text-dark-100 placeholder:text-dark-700" />
+            </label>
+            <label key="cp" className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">C.P.</span>
+              <input value={d.cp || ''} placeholder="15701"
+                onChange={(e) => set('cp', e.target.value)}
+                className="rounded-lg border border-dark-700 bg-dark-900 px-2.5 py-1.5 text-sm text-dark-100 placeholder:text-dark-700" />
+            </label>
+            <label key="ciudad" className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">Ciudad</span>
+              <input value={d.ciudad || ''} placeholder="Santiago"
+                onChange={(e) => set('ciudad', e.target.value)}
+                className="rounded-lg border border-dark-700 bg-dark-900 px-2.5 py-1.5 text-sm text-dark-100 placeholder:text-dark-700" />
+            </label>
+            <label key="provincia" className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">Provincia</span>
+              <input value={d.provincia || ''} placeholder="A Coruña"
+                onChange={(e) => set('provincia', e.target.value)}
+                className="rounded-lg border border-dark-700 bg-dark-900 px-2.5 py-1.5 text-sm text-dark-100 placeholder:text-dark-700" />
+            </label>
+            <label key="email" className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">Email de facturación</span>
+              <input value={d.email || ''} placeholder="facturas@…"
+                onChange={(e) => set('email', e.target.value)}
+                className="rounded-lg border border-dark-700 bg-dark-900 px-2.5 py-1.5 text-sm text-dark-100 placeholder:text-dark-700" />
+            </label>
+            <label key="telefono" className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">Teléfono</span>
+              <input value={d.telefono || ''} placeholder="6…"
+                onChange={(e) => set('telefono', e.target.value)}
+                className="rounded-lg border border-dark-700 bg-dark-900 px-2.5 py-1.5 text-sm text-dark-100 placeholder:text-dark-700" />
+            </label>
+            <label key="iban" className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">IBAN donde cobras</span>
+              <input value={d.iban || ''} placeholder="ES00 0000 …"
+                onChange={(e) => set('iban', e.target.value)}
+                className="rounded-lg border border-dark-700 bg-dark-900 px-2.5 py-1.5 text-sm text-dark-100 placeholder:text-dark-700" />
+            </label>
+            <label key="identificador_acreedor" className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">Identificador de acreedor (para domiciliar)</span>
+              <input value={d.identificador_acreedor || ''} placeholder="ES00ZZZ…"
+                onChange={(e) => set('identificador_acreedor', e.target.value)}
+                className="rounded-lg border border-dark-700 bg-dark-900 px-2.5 py-1.5 text-sm text-dark-100 placeholder:text-dark-700" />
+            </label>
+      </div>
+
+      <p className="mt-3 text-[11px] text-dark-600">
+        El identificador de acreedor te lo da tu banco al contratar los adeudos
+        SEPA. Sin él no se puede generar la domiciliación.
+      </p>
+    </div>
+  )
+}
+
 export default function Negocio() {
   const nav = useNavigate()
   const { t } = useT()
@@ -389,6 +500,7 @@ export default function Negocio() {
 
       <EditorTarifas />
       <Cobros />
+      <DatosEmisor />
 
       {/* Facturación (honesto: facturas reales en Lemon Squeezy) */}
       <div className="card mt-4 flex flex-wrap items-center justify-between gap-3 p-4">

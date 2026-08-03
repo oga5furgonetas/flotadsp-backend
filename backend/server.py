@@ -4355,6 +4355,33 @@ async def _cobros_del_mes(mes: str, crear: bool = True):
     return sorted(creados, key=lambda c: c.get("org_nombre") or "")
 
 
+@api_router.get("/admin/emisor")
+async def admin_get_emisor(_: dict = Depends(require_superadmin)):
+    """Los datos de quien emite las facturas."""
+    doc = await global_db.app_meta.find_one({"_id": "emisor"}, {"_id": 0})
+    return doc or {}
+
+
+@api_router.put("/admin/emisor")
+async def admin_set_emisor(data: dict = Body(...), user: dict = Depends(require_superadmin)):
+    """Guarda los datos fiscales. Sin ellos no hay borrador de factura.
+
+    El identificador de acreedor lo da el banco al contratar los adeudos SEPA;
+    hasta tenerlo, la domiciliacion no se puede generar.
+    """
+    campos = ("razon_social", "nif", "direccion", "cp", "ciudad", "provincia",
+              "email", "telefono", "iban", "identificador_acreedor")
+    doc = {k: (str(data.get(k) or "").strip()[:120]) for k in campos}
+    if not doc["razon_social"] or not doc["nif"]:
+        raise HTTPException(400, "Hacen falta al menos la razón social y el NIF")
+    # El IBAN se guarda sin espacios: asi se compara y se escribe en el fichero.
+    doc["iban"] = re.sub(r"\s+", "", doc["iban"]).upper()
+    doc["actualizado_en"] = datetime.now(timezone.utc).isoformat()
+    await global_db.app_meta.update_one({"_id": "emisor"}, {"$set": doc}, upsert=True)
+    await _audit(user, "datos_de_emisor", {"nif": doc["nif"]})
+    return {"success": True, **doc}
+
+
 @api_router.get("/admin/cobros")
 async def admin_cobros(mes: Optional[str] = None, _: dict = Depends(require_superadmin)):
     """Qué hay que cobrar este mes y quién ha pagado ya."""
