@@ -4,17 +4,19 @@ import { Box, MousePointerClick } from 'lucide-react'
 const Vehicle3DViewer = lazy(() => import('../panel/twin3d/Vehicle3DViewer'))
 
 // Datos de ejemplo (no tocan la API): un vehículo real con daños de muestra.
+// Las fotos se sirven desde /public/demo — antes eran de Unsplash y resultaron
+// ser un Mercedes deportivo y un BMW, en un producto de gestión de FURGONETAS.
 const vehicle = { id: 'demo', brand: 'Toyota', model: 'Proace', license_plate: '3696 NBX' }
 const inspections = [
   { id: 'i1', created_at: '2026-05-18T09:00:00Z', driver_name: 'Carlos',
-    photos: ['https://images.unsplash.com/photo-1553440569-bcc63803a83d?w=640&q=70'],
-    annotated_photos: ['https://images.unsplash.com/photo-1553440569-bcc63803a83d?w=640&q=70'],
+    photos: ['/demo/van-lateral.jpg'],
+    annotated_photos: ['/demo/van-lateral.jpg'],
     analysis: { damages: [
       { part: 'puerta lateral', severity: 'moderado', description: 'Rayón profundo en la puerta corredera', location_hint: 'lateral izquierdo', photo_index: 1, estimated_cost: 220 },
     ] } },
   { id: 'i2', created_at: '2026-06-30T09:00:00Z', driver_name: 'María',
-    photos: ['https://images.unsplash.com/photo-1502877338535-766e1452684a?w=640&q=70'],
-    annotated_photos: ['https://images.unsplash.com/photo-1502877338535-766e1452684a?w=640&q=70'],
+    photos: ['/demo/van-frontal.jpg'],
+    annotated_photos: ['/demo/van-frontal.jpg'],
     analysis: { damages: [
       { part: 'aleta trasera', severity: 'grave', description: 'Abolladura por golpe en maniobra', location_hint: 'trasero derecho', photo_index: 1, estimated_cost: 480 },
       { part: 'paragolpes', severity: 'leve', description: 'Roce leve en el paragolpes delantero', location_hint: 'delantero', photo_index: 1, estimated_cost: 90 },
