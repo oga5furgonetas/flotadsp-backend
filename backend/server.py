@@ -544,10 +544,25 @@ class RegisterRequest(BaseModel):
 
 
 # Límites y features por plan
+# La IA va en TODOS los planes. Tenerla apagada en el de entrada significaba
+# que quien probaba el producto veia justo la version que NO se diferencia de
+# una hoja de calculo. Y ya no hay topes de flota: se cobra por furgoneta, asi
+# que crecer no se castiga, se factura.
+_LIM_OPERACION = {"max_vehicles": -1, "max_drivers": -1, "max_centers": 1,
+                  "ai": True, "scorecard": False, "chat": True, "forensics": False,
+                  "maintenance": True, "assignments": False, "export": False}
+_LIM_COMPLETO = {"max_vehicles": -1, "max_drivers": -1, "max_centers": -1,
+                 "ai": True, "scorecard": True, "chat": True, "forensics": True,
+                 "maintenance": True, "assignments": True, "export": True}
+
 PLAN_LIMITS = {
-    "basico":     {"max_vehicles": 20,  "max_drivers": 20,  "max_centers": 1,  "ai": False, "scorecard": False, "chat": False, "forensics": False, "maintenance": True,  "assignments": False, "export": False},
-    "pro":        {"max_vehicles": 75,  "max_drivers": -1,  "max_centers": 3,  "ai": True,  "scorecard": True,  "chat": True,  "forensics": False, "maintenance": True,  "assignments": True,  "export": False},
-    "flota":      {"max_vehicles": -1,  "max_drivers": -1,  "max_centers": -1, "ai": True,  "scorecard": True,  "chat": True,  "forensics": True,  "maintenance": True,  "assignments": True,  "export": True},
+    "operacion":  _LIM_OPERACION,
+    "completo":   _LIM_COMPLETO,
+    "holding":    _LIM_COMPLETO,
+    # Claves antiguas: las organizaciones existentes no se tocan.
+    "basico":     _LIM_OPERACION,
+    "pro":        _LIM_COMPLETO,
+    "flota":      _LIM_COMPLETO,
     "enterprise": {"max_vehicles": -1,  "max_drivers": -1,  "max_centers": -1, "ai": True,  "scorecard": True,  "chat": True,  "forensics": True,  "maintenance": True,  "assignments": True,  "export": True},
     "owner":      {"max_vehicles": -1,  "max_drivers": -1,  "max_centers": -1, "ai": True,  "scorecard": True,  "chat": True,  "forensics": True,  "maintenance": True,  "assignments": True,  "export": True},
 }
@@ -4008,12 +4023,49 @@ async def org_billing(user: dict = Depends(get_current_user)):
 
 # ===== UPGRADE PRORRATEADO =====
 
-PLAN_PRICES = {"basico": 99, "pro": 229, "flota": 399, "enterprise": 0, "owner": 0}
-# Orden por lo que DESBLOQUEA cada plan, no por lo que cuesta: enterprise
-# vale 0 € (precio a medida) pero lo incluye todo, así que por precio
-# pasaría por "bajada de plan". "owner" es interno: fuera del mapa a
-# propósito, nadie puede pedirlo (solo super-admin).
-_PLAN_RANGO = {"basico": 1, "pro": 2, "flota": 3, "enterprise": 4}
+# Precio POR FURGONETA y mes, con un minimo facturable. El minimo evita que una
+# flota de 5 furgonetas salga a 40 EUR: por debajo de cierto tamaño el soporte
+# cuesta lo mismo que en una grande.
+PLAN_TARIFAS = {
+    "operacion": {"por_vehiculo": 5, "minimo_vehiculos": 20, "rango": 1},
+    "completo":  {"por_vehiculo": 8, "minimo_vehiculos": 20, "rango": 2},
+    "holding":   {"por_vehiculo": 0, "minimo_vehiculos": 0,  "rango": 3},  # a medida
+}
+# Claves antiguas -> nuevas. Sin esto, una organizacion con plan "pro" se
+# quedaria sin tarifa y sin limites.
+_PLAN_ALIAS = {"basico": "operacion", "pro": "completo", "flota": "completo",
+               "enterprise": "holding"}
+
+
+def _plan_canon(plan) -> str:
+    """Nombre canonico del plan, aceptando las claves antiguas."""
+    p = (plan or "").lower().strip()
+    for a, b in (("á", "a"), ("é", "e"), ("í", "i"), ("ó", "o"), ("ú", "u")):
+        p = p.replace(a, b)
+    return _PLAN_ALIAS.get(p, p)
+
+
+def _precio_mensual(plan, n_vehiculos: int) -> int:
+    """Lo que paga al mes una flota de ese tamaño. 0 = precio a medida."""
+    t = PLAN_TARIFAS.get(_plan_canon(plan))
+    if not t or not t.get("por_vehiculo"):
+        return 0
+    return int(t["por_vehiculo"] * max(int(n_vehiculos or 0), t["minimo_vehiculos"]))
+
+
+# Compatibilidad: precio de referencia de una flota tipo (30 furgonetas), para
+# el codigo viejo que aun compara planes por precio.
+PLAN_PRICES = {k: _precio_mensual(k, 30) for k in
+               ("operacion", "completo", "holding", "basico", "pro", "flota")}
+PLAN_PRICES["enterprise"] = 0
+PLAN_PRICES["owner"] = 0
+# Orden por lo que DESBLOQUEA cada plan, no por lo que cuesta: holding se
+# factura a medida (0 €) pero lo incluye todo, así que por precio pasaría por
+# "bajada de plan". "owner" es interno: fuera del mapa a propósito, nadie
+# puede pedirlo (solo super-admin).
+_PLAN_RANGO = {k: v["rango"] for k, v in PLAN_TARIFAS.items()}
+_PLAN_RANGO.update({viejo: PLAN_TARIFAS[nuevo]["rango"]
+                    for viejo, nuevo in _PLAN_ALIAS.items()})
 
 @api_router.get("/org/upgrade-preview")
 async def upgrade_preview(new_plan: str, user: dict = Depends(require_admin)):
@@ -4026,11 +4078,13 @@ async def upgrade_preview(new_plan: str, user: dict = Depends(require_admin)):
 
     if new_plan not in PLAN_LIMITS:
         raise HTTPException(400, "Plan no válido")
-    if new_plan == current_plan:
+    if _plan_canon(new_plan) == _plan_canon(current_plan):
         raise HTTPException(400, "Ya estás en ese plan")
 
-    current_price = PLAN_PRICES.get(current_plan, 0)
-    new_price = PLAN_PRICES.get(new_plan, 0)
+    # El precio depende del tamaño de la flota, no es plano.
+    n_vehiculos = await db.vehicles.count_documents({"status": {"$ne": "deleted"}})
+    current_price = _precio_mensual(current_plan, n_vehiculos)
+    new_price = _precio_mensual(new_plan, n_vehiculos)
 
     if new_price <= current_price:
         return {"type": "downgrade", "current_plan": current_plan, "new_plan": new_plan,
@@ -4109,13 +4163,88 @@ async def change_plan(data: dict = Body(...), user: dict = Depends(require_admin
 # Se activa poniendo los secretos en Fly: LS_WEBHOOK_SECRET y las URLs de checkout
 # LS_CHECKOUT_STARTER / LS_CHECKOUT_PRO / LS_CHECKOUT_FLOTA.
 
+@api_router.get("/billing/planes")
+async def billing_planes():
+    """Tarifas vigentes. PUBLICO: lo lee la página de precios, que no tiene sesión.
+
+    Fuente unica de verdad: antes los precios estaban copiados en el backend y
+    en dos paginas del frontend, y cambiar uno dejaba a los otros mintiendo.
+    """
+    return {
+        "moneda": "EUR",
+        "descuento_anual_meses": 2,   # pagando un año, dos meses salen gratis
+        "planes": [
+            {
+                "clave": "operacion",
+                "nombre": "Operación",
+                "por_vehiculo": PLAN_TARIFAS["operacion"]["por_vehiculo"],
+                "minimo_vehiculos": PLAN_TARIFAS["operacion"]["minimo_vehiculos"],
+                "desde": _precio_mensual("operacion", 0),
+                "para": "Un centro",
+                "incluye": [
+                    "Inspecciones con foto y análisis de daños por IA",
+                    "Histórico de daños por furgoneta",
+                    "Reparaciones: taller, coste real y cierre",
+                    "Avisos de mantenimiento e ITV",
+                    "Portal del conductor",
+                    "Chat del centro",
+                ],
+                "no_incluye": ["Scorecard de Amazon", "Asignación diaria y turnos",
+                               "Métricas de Amazon", "Informe pericial firmado",
+                               "Exportar datos", "Varios centros"],
+            },
+            {
+                "clave": "completo",
+                "nombre": "Completo",
+                "por_vehiculo": PLAN_TARIFAS["completo"]["por_vehiculo"],
+                "minimo_vehiculos": PLAN_TARIFAS["completo"]["minimo_vehiculos"],
+                "desde": _precio_mensual("completo", 0),
+                "para": "Varios centros",
+                "recomendado": True,
+                "incluye": [
+                    "Todo lo de Operación, sin límite de centros",
+                    "Scorecard de Amazon con objetivos y umbrales",
+                    "Asignación diaria y cuadrante de turnos",
+                    "Métricas de Amazon y ritmo real por conductor",
+                    "Informe pericial firmado y cadena de custodia",
+                    "Exportar datos",
+                ],
+                "no_incluye": [],
+            },
+            {
+                "clave": "holding",
+                "nombre": "Holding",
+                "por_vehiculo": 0,
+                "minimo_vehiculos": 0,
+                "desde": 0,
+                "para": "Cinco estaciones o más",
+                "incluye": ["Todo lo de Completo", "Varias sociedades",
+                            "API para tus sistemas", "Soporte con SLA",
+                            "Alta asistida"],
+                "no_incluye": [],
+            },
+        ],
+    }
+
+
 @api_router.get("/billing/config")
 async def billing_config(user: dict = Depends(get_current_user)):
     """URLs de checkout por plan (Básico / Pro / Flota / Enterprise)."""
     return {
         "provider": "lemonsqueezy",
-        "ready": bool(os.environ.get("LS_CHECKOUT_BASICO") or os.environ.get("LS_CHECKOUT_PRO")),
+        "ready": bool(os.environ.get("LS_CHECKOUT_OPERACION")
+                      or os.environ.get("LS_CHECKOUT_COMPLETO")
+                      or os.environ.get("LS_CHECKOUT_BASICO")
+                      or os.environ.get("LS_CHECKOUT_PRO")),
         "checkout": {
+            # Claves nuevas (tarifa por furgoneta). Los productos de Lemon
+            # Squeezy tienen que ser de cantidad variable: la cantidad es el
+            # numero de furgonetas.
+            "operacion": os.environ.get("LS_CHECKOUT_OPERACION", ""),
+            "completo": os.environ.get("LS_CHECKOUT_COMPLETO", ""),
+            "operacion_annual": os.environ.get("LS_CHECKOUT_OPERACION_ANNUAL", ""),
+            "completo_annual": os.environ.get("LS_CHECKOUT_COMPLETO_ANNUAL", ""),
+            # Antiguas, mientras queden suscripciones vivas
             "basico": os.environ.get("LS_CHECKOUT_BASICO", ""),
             "pro": os.environ.get("LS_CHECKOUT_PRO", ""),
             "flota": os.environ.get("LS_CHECKOUT_FLOTA", ""),
@@ -4178,11 +4307,18 @@ async def lemonsqueezy_webhook(request: Request):
         s = (s or "").lower()
         for c, r in [("á","a"),("é","e"),("í","i"),("ó","o"),("ú","u")]:
             s = s.replace(c, r)
-        if "enterprise" in s: return "enterprise"
+        # Nombres nuevos primero. Sin esto, un producto "Operacion" no casaba
+        # con nada y caia en el fallback, dando el plan mas permisivo a quien
+        # paga el mas barato.
+        if "holding" in s or "enterprise" in s: return "holding"
+        if "completo" in s:   return "completo"
+        if "operacion" in s:  return "operacion"
+        # Nombres antiguos, mientras queden productos vivos en Lemon Squeezy
         if "flota" in s:      return "flota"
         if "pro" in s:        return "pro"
         if "basico" in s or "basic" in s: return "basico"
-        return "pro"  # fallback seguro: nunca menos permisos de los pagados
+        logger.warning("LS: producto '%s' no reconocido, se activa Completo", raw_plan)
+        return "completo"  # fallback seguro: nunca menos permisos de los pagados
     plan = _ls_plan_key(raw_plan)
     if not org_id:
         return {"ok": True, "ignored": "sin org_id"}

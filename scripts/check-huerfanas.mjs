@@ -104,7 +104,7 @@ const huerfanas = rutas.filter((r) => {
    alguien lo desactive. Así que se tolera el número ACTUAL y ni una más: si
    añades una ruta sin engancharla, CI se pone en rojo. Cuando bajes el
    backlog, baja también este número — el checker te avisa de que lo hagas. */
-const MAXIMO_TOLERADO = 30
+const MAXIMO_TOLERADO = 29
 
 if (huerfanas.length === 0) {
   console.log(`huerfanas OK: ${rutas.length} rutas, todas con consumidor ` +

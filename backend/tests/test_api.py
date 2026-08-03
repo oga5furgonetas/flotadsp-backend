@@ -477,3 +477,35 @@ async def test_superadmin_si_puede_forzar_el_plan(client):
 
     await srv.global_db.organizations.delete_one({"id": org_id})
     await srv.global_db.admin_users.delete_one({"id": uid})
+
+
+async def test_tarifa_por_furgoneta(client):
+    """La tarifa se calcula con el tamaño de la flota y respeta el mínimo.
+
+    Antes era plana: un DSP de 25 furgonetas pagaba lo mismo que uno de 75, y
+    el plan de entrada tenía la IA APAGADA — o sea, quien probaba el producto
+    veía justo la versión que no se diferencia de una hoja de cálculo.
+    """
+    import server as srv
+
+    # Precio: por furgoneta, con mínimo facturable
+    assert srv._precio_mensual("operacion", 40) == 200
+    assert srv._precio_mensual("completo", 40) == 320
+    assert srv._precio_mensual("completo", 120) == 960
+    assert srv._precio_mensual("operacion", 5) == 100      # mínimo de 20
+    assert srv._precio_mensual("holding", 500) == 0        # a medida
+
+    # Las claves antiguas siguen valiendo: ninguna organización se rompe
+    assert srv._plan_canon("pro") == "completo"
+    assert srv._plan_canon("basico") == "operacion"
+    assert srv._precio_mensual("pro", 40) == 320
+
+    # La IA va en TODOS los planes
+    for plan in ("operacion", "completo", "holding", "basico", "pro", "flota"):
+        assert srv.PLAN_LIMITS[plan]["ai"] is True, f"{plan} sin IA"
+
+    # Lemon Squeezy: un producto "Operación" no puede acabar dando Completo
+    r = await client.get("/api/billing/planes")
+    assert r.status_code == 200
+    claves = [p["clave"] for p in r.json()["planes"]]
+    assert claves == ["operacion", "completo", "holding"], claves
