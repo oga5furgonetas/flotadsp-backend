@@ -212,6 +212,9 @@ export const impersonateOrg = (id) => api.post('/admin/impersonate', { id })
 export const deleteOrg = (id) => api.delete(`/admin/org/${id}`)
 export const getLeads = () => api.get('/leads')
 export const getBillingConfig = () => api.get('/billing/config')
+/* Catálogo de planes: editable sin desplegar. */
+export const adminGetPlanes = () => api.get('/admin/planes')
+export const adminSetPlanes = (body) => api.put('/admin/planes', body)
 export const backupNow = () => api.post('/admin/backup-now')
 /* Monetización: ofertas del portal conductor + reservas fundador */
 export const adminGetDriverOffers = () => api.get('/admin/driver-offers')

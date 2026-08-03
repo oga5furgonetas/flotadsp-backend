@@ -4,12 +4,13 @@ import { useT } from '../../i18n'
 import {
   Loader2, Building2, CheckCircle2, Clock, Euro, Sparkles, Gift, PauseCircle,
   LogIn, Trash2, Database, BrainCircuit, ExternalLink, RefreshCw, Megaphone,
-  Play, Pause, Plus, Star, Eye, MousePointerClick,
+  Play, Pause, Plus, Star, Eye, MousePointerClick, Tag, Save,
 } from 'lucide-react'
 import {
   getAdminOverview, getAdminOrgs, getLeads, updateOrg, impersonateOrg, deleteOrg,
   backupNow, adminGetDriverOffers, adminCreateDriverOffer, adminToggleDriverOffer,
   adminDeleteDriverOffer, adminGetFounderReservations,
+  adminGetPlanes, adminSetPlanes,
 } from '../api'
 import { API_BASE } from '../../services/api'
 
@@ -20,6 +21,124 @@ function Kpi({ icon: Icon, label, value, accent }) {
     <div className="card p-4">
       <div className="mb-1 flex items-center gap-2"><Icon size={17} style={{ color: accent }} /><span className="text-2xl font-extrabold">{value}</span></div>
       <div className="text-sm text-dark-400">{label}</div>
+    </div>
+  )
+}
+
+
+/* Editor de tarifas. Antes los precios vivían en el código: cambiar 8 € por
+   7 € era un despliegue. Ahora se guardan en la base y la página de precios
+   los lee al momento. Los planes que existen NO se tocan desde aquí: si se
+   pudiera inventar uno nuevo, el cliente pagaría por algo que la app no le
+   abre, porque los permisos siguen atados a las tres claves conocidas. */
+function EditorTarifas() {
+  const [cat, setCat] = useState(null)
+  const [guardando, setGuardando] = useState(false)
+  const [aviso, setAviso] = useState('')
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    adminGetPlanes().then((r) => setCat(r.data)).catch(() => setErr('No se pudo cargar el catálogo'))
+  }, [])
+
+  const cambiar = (clave, campo, valor) => {
+    setCat((c) => ({
+      ...c,
+      planes: c.planes.map((p) => (p.clave === clave ? { ...p, [campo]: valor } : p)),
+    }))
+    setAviso('')
+  }
+
+  const guardar = async () => {
+    setGuardando(true); setErr(''); setAviso('')
+    try {
+      await adminSetPlanes({
+        planes: cat.planes,
+        moneda: cat.moneda,
+        descuento_anual_meses: cat.descuento_anual_meses,
+        iva_pct: cat.iva_pct,
+      })
+      setAviso('Tarifas guardadas. La página de precios ya las muestra.')
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo guardar')
+    } finally { setGuardando(false) }
+  }
+
+  if (err && !cat) return <p className="text-sm text-red-300">{err}</p>
+  if (!cat) return <div className="flex items-center gap-2 text-sm text-dark-400"><Loader2 size={14} className="animate-spin" /> Cargando tarifas…</div>
+
+  return (
+    <div className="card mt-6 p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-sm font-bold text-dark-100">
+          <Tag size={16} /> Tarifas
+        </h2>
+        <button onClick={guardar} disabled={guardando}
+          className="btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs disabled:opacity-50">
+          {guardando ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} Guardar
+        </button>
+      </div>
+
+      {err && <p className="mb-2 text-xs text-red-300">{err}</p>}
+      {aviso && <p className="mb-2 text-xs text-emerald-300">{aviso}</p>}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-[11px] uppercase tracking-wide text-dark-500">
+              <th className="pb-2 text-left font-semibold">Plan</th>
+              <th className="pb-2 text-right font-semibold">€ / furgoneta</th>
+              <th className="pb-2 text-right font-semibold">Mínimo</th>
+              <th className="pb-2 text-right font-semibold">Desde</th>
+              <th className="pb-2 text-right font-semibold">Con 40</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-dark-800">
+            {cat.planes.map((p) => {
+              const pv = Number(p.por_vehiculo) || 0
+              const min = Number(p.minimo_vehiculos) || 0
+              return (
+                <tr key={p.clave}>
+                  <td className="py-2 pr-3">
+                    <span className="font-medium text-dark-100">{p.nombre}</span>
+                    <span className="ml-2 text-[11px] text-dark-600">{p.para}</span>
+                  </td>
+                  <td className="py-2 text-right">
+                    <input type="text" inputMode="decimal" value={p.por_vehiculo ?? ''}
+                      onChange={(e) => cambiar(p.clave, 'por_vehiculo', e.target.value)}
+                      className="w-20 rounded-lg border border-dark-700 bg-dark-900 px-2 py-1 text-right text-dark-100" />
+                  </td>
+                  <td className="py-2 text-right">
+                    <input type="number" min="0" value={p.minimo_vehiculos ?? 0}
+                      onChange={(e) => cambiar(p.clave, 'minimo_vehiculos', e.target.value)}
+                      className="w-20 rounded-lg border border-dark-700 bg-dark-900 px-2 py-1 text-right text-dark-100" />
+                  </td>
+                  <td className="py-2 text-right text-dark-300">{pv ? `${Math.round(pv * min)} €` : 'a medida'}</td>
+                  <td className="py-2 text-right font-semibold text-dark-100">
+                    {pv ? `${Math.round(pv * Math.max(40, min))} €` : '—'}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-dark-400">
+        <label className="flex items-center gap-2">
+          Meses gratis al pagar el año
+          <input type="number" min="0" max="6" value={cat.descuento_anual_meses ?? 2}
+            onChange={(e) => { setCat((c) => ({ ...c, descuento_anual_meses: e.target.value })); setAviso('') }}
+            className="w-14 rounded-lg border border-dark-700 bg-dark-900 px-2 py-1 text-center text-dark-100" />
+        </label>
+        <label className="flex items-center gap-2">
+          IVA %
+          <input type="text" inputMode="decimal" value={cat.iva_pct ?? 21}
+            onChange={(e) => { setCat((c) => ({ ...c, iva_pct: e.target.value })); setAviso('') }}
+            className="w-14 rounded-lg border border-dark-700 bg-dark-900 px-2 py-1 text-center text-dark-100" />
+        </label>
+        <span className="text-dark-600">Se aplica a la página de precios en menos de un minuto.</span>
+      </div>
     </div>
   )
 }
@@ -124,6 +243,8 @@ export default function Negocio() {
         <Kpi icon={Euro} label={t('neg.kpi.mrr')} value={ov ? `${ov.mrr_estimado} €` : '—'} accent="#a78bfa" />
         <Kpi icon={Sparkles} label={t('neg.kpi.leads')} value={ov?.interesados ?? '—'} accent="#fb923c" />
       </div>
+
+      <EditorTarifas />
 
       {/* Facturación (honesto: facturas reales en Lemon Squeezy) */}
       <div className="card mt-4 flex flex-wrap items-center justify-between gap-3 p-4">

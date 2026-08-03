@@ -42,6 +42,14 @@ const dentroDe = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 
 function respuesta(ruta, escenario) {
   const lleno = escenario === 'lleno'
   const t = {
+    '/admin/planes': {
+      moneda: 'EUR', descuento_anual_meses: 2, iva_pct: 21,
+      planes: [
+        { clave: 'operacion', nombre: 'Operación', para: 'Un centro', por_vehiculo: 5, minimo_vehiculos: 20 },
+        { clave: 'completo', nombre: 'Completo', para: 'Varios centros', por_vehiculo: 8, minimo_vehiculos: 20, recomendado: true },
+        { clave: 'holding', nombre: 'Holding', para: 'Cinco estaciones o más', por_vehiculo: 0, minimo_vehiculos: 0 },
+      ],
+    },
     '/suggested-workshops': {
       workshops: [{ id: 'w1', name: 'Toyota Compostela' },
                   { id: 'w2', name: 'Chapistería Riazor' },

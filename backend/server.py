@@ -4037,6 +4037,58 @@ _PLAN_ALIAS = {"basico": "operacion", "pro": "completo", "flota": "completo",
                "enterprise": "holding"}
 
 
+# El catalogo vive en BD para poder cambiarlo sin desplegar. Cache de 60 s: se
+# consulta en cada pagina de precios y no hace falta ir a Mongo cada vez.
+_CATALOGO_CACHE = {"ts": 0.0, "datos": None}
+_CATALOGO_TTL = 60.0
+
+
+def _catalogo_por_defecto():
+    """Los valores del codigo. Respaldo si la BD no tiene nada."""
+    return {
+        "moneda": "EUR",
+        "descuento_anual_meses": 2,
+        "iva_pct": 21,
+        "planes": [
+            {"clave": "operacion", "nombre": "Operación", "para": "Un centro",
+             "por_vehiculo": PLAN_TARIFAS["operacion"]["por_vehiculo"],
+             "minimo_vehiculos": PLAN_TARIFAS["operacion"]["minimo_vehiculos"],
+             "recomendado": False},
+            {"clave": "completo", "nombre": "Completo", "para": "Varios centros",
+             "por_vehiculo": PLAN_TARIFAS["completo"]["por_vehiculo"],
+             "minimo_vehiculos": PLAN_TARIFAS["completo"]["minimo_vehiculos"],
+             "recomendado": True},
+            {"clave": "holding", "nombre": "Holding", "para": "Cinco estaciones o más",
+             "por_vehiculo": 0, "minimo_vehiculos": 0, "recomendado": False},
+        ],
+    }
+
+
+async def _catalogo_planes(forzar: bool = False):
+    """Catalogo vigente: BD si existe, codigo si no. Nunca lanza."""
+    ahora = time.time()
+    if not forzar and _CATALOGO_CACHE["datos"] and ahora - _CATALOGO_CACHE["ts"] < _CATALOGO_TTL:
+        return _CATALOGO_CACHE["datos"]
+    datos = _catalogo_por_defecto()
+    try:
+        doc = await global_db.plan_catalog.find_one({"_id": "vigente"}, {"_id": 0})
+        if doc and isinstance(doc.get("planes"), list) and doc["planes"]:
+            datos = {**datos, **doc}
+    except Exception as e:
+        logger.warning(f"Catalogo de planes: uso los valores del codigo ({e})")
+    _CATALOGO_CACHE.update({"ts": ahora, "datos": datos})
+    return datos
+
+
+def _tarifa_de(catalogo, plan):
+    """Tarifa de un plan dentro de un catalogo ya cargado."""
+    canon = _plan_canon(plan)
+    for p in catalogo.get("planes") or []:
+        if p.get("clave") == canon:
+            return p
+    return None
+
+
 def _plan_canon(plan) -> str:
     """Nombre canonico del plan, aceptando las claves antiguas."""
     p = (plan or "").lower().strip()
@@ -4046,11 +4098,24 @@ def _plan_canon(plan) -> str:
 
 
 def _precio_mensual(plan, n_vehiculos: int) -> int:
-    """Lo que paga al mes una flota de ese tamaño. 0 = precio a medida."""
+    """Lo que paga al mes una flota de ese tamaño, segun el CODIGO.
+
+    Para el precio real usa _precio_vigente: respeta lo que se haya editado
+    desde el panel. Esta se queda para los sitios sincronos.
+    """
     t = PLAN_TARIFAS.get(_plan_canon(plan))
     if not t or not t.get("por_vehiculo"):
         return 0
     return int(t["por_vehiculo"] * max(int(n_vehiculos or 0), t["minimo_vehiculos"]))
+
+
+async def _precio_vigente(plan, n_vehiculos: int) -> int:
+    """Precio con la tarifa que este puesta AHORA (editable desde el panel)."""
+    t = _tarifa_de(await _catalogo_planes(), plan)
+    if not t or not t.get("por_vehiculo"):
+        return 0
+    return int(float(t["por_vehiculo"]) * max(int(n_vehiculos or 0),
+                                              int(t.get("minimo_vehiculos") or 0)))
 
 
 # Compatibilidad: precio de referencia de una flota tipo (30 furgonetas), para
@@ -4167,64 +4232,111 @@ async def change_plan(data: dict = Body(...), user: dict = Depends(require_admin
 async def billing_planes():
     """Tarifas vigentes. PUBLICO: lo lee la página de precios, que no tiene sesión.
 
-    Fuente unica de verdad: antes los precios estaban copiados en el backend y
-    en dos paginas del frontend, y cambiar uno dejaba a los otros mintiendo.
+    Sale del catálogo (global_db.plan_catalog), editable desde el panel de
+    negocio. Si la base no tiene nada, se usan los valores del código: la
+    página de precios nunca puede aparecer sin precios.
     """
-    return {
-        "moneda": "EUR",
-        "descuento_anual_meses": 2,   # pagando un año, dos meses salen gratis
-        "planes": [
-            {
-                "clave": "operacion",
-                "nombre": "Operación",
-                "por_vehiculo": PLAN_TARIFAS["operacion"]["por_vehiculo"],
-                "minimo_vehiculos": PLAN_TARIFAS["operacion"]["minimo_vehiculos"],
-                "desde": _precio_mensual("operacion", 0),
-                "para": "Un centro",
-                "incluye": [
-                    "Inspecciones con foto y análisis de daños por IA",
-                    "Histórico de daños por furgoneta",
-                    "Reparaciones: taller, coste real y cierre",
-                    "Avisos de mantenimiento e ITV",
-                    "Portal del conductor",
-                    "Chat del centro",
-                ],
-                "no_incluye": ["Scorecard de Amazon", "Asignación diaria y turnos",
-                               "Métricas de Amazon", "Informe pericial firmado",
-                               "Exportar datos", "Varios centros"],
-            },
-            {
-                "clave": "completo",
-                "nombre": "Completo",
-                "por_vehiculo": PLAN_TARIFAS["completo"]["por_vehiculo"],
-                "minimo_vehiculos": PLAN_TARIFAS["completo"]["minimo_vehiculos"],
-                "desde": _precio_mensual("completo", 0),
-                "para": "Varios centros",
-                "recomendado": True,
-                "incluye": [
-                    "Todo lo de Operación, sin límite de centros",
-                    "Scorecard de Amazon con objetivos y umbrales",
-                    "Asignación diaria y cuadrante de turnos",
-                    "Métricas de Amazon y ritmo real por conductor",
-                    "Informe pericial firmado y cadena de custodia",
-                    "Exportar datos",
-                ],
-                "no_incluye": [],
-            },
-            {
-                "clave": "holding",
-                "nombre": "Holding",
-                "por_vehiculo": 0,
-                "minimo_vehiculos": 0,
-                "desde": 0,
-                "para": "Cinco estaciones o más",
-                "incluye": ["Todo lo de Completo", "Varias sociedades",
-                            "API para tus sistemas", "Soporte con SLA",
-                            "Alta asistida"],
-                "no_incluye": [],
-            },
-        ],
+    cat = await _catalogo_planes()
+    # Las descripciones no se editan desde el panel: son texto de producto.
+    detalle = {
+        "operacion": {
+            "incluye": [
+                "Inspecciones con foto y análisis de daños por IA",
+                "Histórico de daños por furgoneta",
+                "Reparaciones: taller, coste real y cierre",
+                "Avisos de mantenimiento e ITV",
+                "Portal del conductor",
+                "Chat del centro",
+            ],
+            "no_incluye": ["Scorecard de Amazon", "Asignación diaria y turnos",
+                           "Métricas de Amazon", "Informe pericial firmado",
+                           "Exportar datos", "Varios centros"],
+        },
+        "completo": {
+            "incluye": [
+                "Todo lo de Operación, sin límite de centros",
+                "Scorecard de Amazon con objetivos y umbrales",
+                "Asignación diaria y cuadrante de turnos",
+                "Métricas de Amazon y ritmo real por conductor",
+                "Informe pericial firmado y cadena de custodia",
+                "Exportar datos",
+            ],
+            "no_incluye": [],
+        },
+        "holding": {
+            "incluye": ["Todo lo de Completo", "Varias sociedades",
+                        "API para tus sistemas", "Soporte con SLA", "Alta asistida"],
+            "no_incluye": [],
+        },
     }
+    planes = []
+    for p in cat.get("planes") or []:
+        d = detalle.get(p.get("clave"), {"incluye": [], "no_incluye": []})
+        planes.append({
+            **p,
+            "desde": int(float(p.get("por_vehiculo") or 0) * int(p.get("minimo_vehiculos") or 0)),
+            "incluye": p.get("incluye") or d["incluye"],
+            "no_incluye": p.get("no_incluye") or d["no_incluye"],
+        })
+    return {
+        "moneda": cat.get("moneda", "EUR"),
+        "descuento_anual_meses": cat.get("descuento_anual_meses", 2),
+        "planes": planes,
+    }
+
+
+@api_router.get("/admin/planes")
+async def admin_get_planes(_: dict = Depends(require_superadmin)):
+    """El catálogo tal cual, para editarlo."""
+    cat = await _catalogo_planes(forzar=True)
+    return {**cat, "por_defecto": _catalogo_por_defecto()}
+
+
+@api_router.put("/admin/planes")
+async def admin_set_planes(data: dict = Body(...), user: dict = Depends(require_superadmin)):
+    """Cambia precios y mínimos sin desplegar.
+
+    Solo se aceptan las claves conocidas: inventarse un plan nuevo desde aquí
+    dejaría a PLAN_LIMITS sin saber qué desbloquear, y el cliente pagaría por
+    algo que la app no le abre.
+    """
+    entrantes = data.get("planes")
+    if not isinstance(entrantes, list) or not entrantes:
+        raise HTTPException(400, "Hace falta la lista de planes")
+
+    validos = {p["clave"] for p in _catalogo_por_defecto()["planes"]}
+    planes = []
+    for p in entrantes:
+        clave = (p.get("clave") or "").strip()
+        if clave not in validos:
+            raise HTTPException(400, f"Plan desconocido: {clave or '(vacío)'}")
+        planes.append({
+            "clave": clave,
+            "nombre": (p.get("nombre") or clave).strip()[:40],
+            "para": (p.get("para") or "").strip()[:80],
+            "por_vehiculo": _decimal(p.get("por_vehiculo"), f"precio de {clave}",
+                                     defecto=0, minimo=0, maximo=1000),
+            "minimo_vehiculos": _entero(p.get("minimo_vehiculos"), f"mínimo de {clave}",
+                                        defecto=0, minimo=0, maximo=10000),
+            "recomendado": bool(p.get("recomendado")),
+        })
+    if len({p["clave"] for p in planes}) != len(planes):
+        raise HTTPException(400, "Hay planes repetidos")
+
+    doc = {
+        "planes": planes,
+        "moneda": (data.get("moneda") or "EUR").strip()[:5],
+        "descuento_anual_meses": _entero(data.get("descuento_anual_meses"),
+                                         "meses gratis al año", defecto=2, minimo=0, maximo=6),
+        "iva_pct": _decimal(data.get("iva_pct"), "IVA", defecto=21, minimo=0, maximo=100),
+        "actualizado_en": datetime.now(timezone.utc).isoformat(),
+        "actualizado_por": user.get("name"),
+    }
+    await global_db.plan_catalog.update_one({"_id": "vigente"}, {"$set": doc}, upsert=True)
+    _CATALOGO_CACHE.update({"ts": 0.0, "datos": None})    # que se note ya
+    await _audit(user, "cambio_de_tarifas",
+                 {"planes": [{p["clave"]: p["por_vehiculo"]} for p in planes]})
+    return {"success": True, **doc}
 
 
 @api_router.get("/billing/config")
