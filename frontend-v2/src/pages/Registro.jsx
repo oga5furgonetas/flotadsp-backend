@@ -11,34 +11,44 @@ function slugify(s) {
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30)
 }
 
-/* Precios y features de cada plan */
+/* Tarifa POR FURGONETA — misma fuente que /planes y que el backend.
+   Si cambias esto, cambialo tambien en PLAN_TARIFAS de server.py. */
 const PLANS = [
   {
-    key: 'basico', name: 'Básico', color: '#64748b', priceM: 99, popular: false,
-    who: 'Flotas pequeñas · 1 estación',
-    feats: ['1 centro · hasta 20 vehículos', 'Inspecciones con fotos', 'Alertas de ITV', 'Gestión de incidencias', 'Portal conductor móvil', 'Soporte por email'],
-    no: ['Análisis IA', 'Scorecard Amazon', 'Chat', 'Asignación diaria'],
+    key: 'operacion', name: 'Operación', color: '#64748b',
+    porVehiculo: 5, minimo: 20, popular: false,
+    who: 'Un centro',
+    feats: ['Inspecciones con foto y análisis de daños por IA',
+            'Histórico de daños por furgoneta',
+            'Reparaciones: taller, coste real y cierre',
+            'Avisos de mantenimiento e ITV',
+            'Portal del conductor', 'Chat del centro'],
+    no: ['Scorecard de Amazon', 'Asignación diaria y turnos', 'Métricas de Amazon',
+         'Informe pericial firmado', 'Varios centros'],
   },
   {
-    key: 'pro', name: 'Pro', color: '#0ea5e9', priceM: 229, popular: true,
-    who: 'Flotas medianas · multi-estación',
-    feats: ['3 centros · 75 vehículos · conductores ilimitados', 'Todo lo del plan Básico', '🤖 Análisis IA de daños', '📊 Scorecard Amazon DSP', '💬 Chat por estación', '📋 Asignación diaria', 'Soporte prioritario'],
-    no: ['AI Forensics', 'Exportación de datos'],
-  },
-  {
-    key: 'flota', name: 'Flota', color: '#a855f7', priceM: 399, popular: false,
-    who: 'Flotas grandes · sin límites',
-    feats: ['Todo ilimitado', 'Todo lo del plan Pro', '🛡️ AI Forensics: peritaje firmado', '🔒 Cadena de custodia', '📤 Exportación de datos', 'Soporte dedicado + SLA'],
+    key: 'completo', name: 'Completo', color: '#fb923c',
+    porVehiculo: 8, minimo: 20, popular: true,
+    who: 'Varios centros',
+    feats: ['Todo lo de Operación, sin límite de centros',
+            'Scorecard de Amazon con objetivos y umbrales',
+            'Asignación diaria y cuadrante de turnos',
+            'Métricas de Amazon y ritmo real por conductor',
+            'Informe pericial firmado y cadena de custodia',
+            'Exportar datos'],
     no: [],
   },
 ]
 
-const ANNUAL_PRICE = { basico: 1040, pro: 2405, flota: 4190 }
-const annualM = (key) => Math.round(ANNUAL_PRICE[key] / 12)
-const annualSave = (priceM, key) => priceM * 12 - ANNUAL_PRICE[key]
+/* Lo que paga al mes esa flota. Pagando un año se pagan 10 meses. */
+const MESES_ANUAL = 10
+const precioMes = (p, furgonetas) =>
+  p.porVehiculo * Math.max(Number(furgonetas) || 0, p.minimo)
+const annualM = (p, furgonetas) => Math.round(precioMes(p, furgonetas) * MESES_ANUAL / 12)
+const annualSave = (p, furgonetas) => precioMes(p, furgonetas) * (12 - MESES_ANUAL)
 
 /* ── Selector de plan (paso 1) ── */
-function PlanPicker({ onSelect }) {
+function PlanPicker({ onSelect, furgonetas }) {
   const { lang, setLang } = useT()
   const [billing, setBilling] = useState('monthly')
 
@@ -79,8 +89,9 @@ function PlanPicker({ onSelect }) {
         {/* Plan cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 16, marginBottom: 20 }}>
           {PLANS.map((p) => {
-            const price = billing === 'annual' ? annualM(p.key) : p.priceM
-            const save = annualSave(p.priceM, p.key)
+            const mes = precioMes(p, furgonetas)
+            const price = billing === 'annual' ? annualM(p, furgonetas) : mes
+            const save = annualSave(p, furgonetas)
             return (
               <div key={p.key} style={{
                 background: p.popular ? 'linear-gradient(145deg,#0f172a,#0c1929)' : '#13161b',
@@ -104,11 +115,11 @@ function PlanPicker({ onSelect }) {
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 3, marginBottom: 4 }}>
                   <span style={{ fontSize: 38, fontWeight: 900 }}>{price}€</span>
                   <span style={{ color: '#64748b', fontSize: 13 }}>/mes</span>
-                  {billing === 'annual' && <span style={{ marginLeft: 6, fontSize: 12, color: '#475569', textDecoration: 'line-through' }}>{p.priceM}€</span>}
+                  {billing === 'annual' && <span style={{ marginLeft: 6, fontSize: 12, color: '#475569', textDecoration: 'line-through' }}>{mes}€</span>}
                 </div>
 
                 {billing === 'annual' && (
-                  <div style={{ fontSize: 11, color: '#34d399', fontWeight: 700, marginBottom: 4 }}>{ANNUAL_PRICE[p.key]}€/año · ahorras {save}€</div>
+                  <div style={{ fontSize: 11, color: '#34d399', fontWeight: 700, marginBottom: 4 }}>{precioMes(p, furgonetas) * MESES_ANUAL}€/año · ahorras {save}€</div>
                 )}
 
                 <ul style={{ listStyle: 'none', padding: 0, margin: '14px 0', display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
@@ -162,6 +173,9 @@ export default function Registro() {
   const params = new URLSearchParams(window.location.search)
   const paramPlan = params.get('plan') || ''
   const paramBilling = params.get('billing') || 'monthly'
+  // La calculadora de /planes manda el tamaño de flota en la URL. Si
+  // alguien entra directo, 40 es una flota tipica de DSP.
+  const furgonetas = Math.max(1, Number(params.get('flota')) || 40)
 
   const [selectedPlan, setSelectedPlan] = useState(paramPlan)
   const [billingMode, setBillingMode] = useState(paramBilling)
@@ -181,7 +195,7 @@ export default function Registro() {
 
   // Si no hay plan en URL, mostramos el picker primero
   if (!selectedPlan) {
-    return <PlanPicker onSelect={(key, billing) => {
+    return <PlanPicker furgonetas={furgonetas} onSelect={(key, billing) => {
       setSelectedPlan(key)
       setBillingMode(billing)
       window.history.replaceState({}, '', `/registro?plan=${key}&billing=${billing}`)
@@ -189,8 +203,9 @@ export default function Registro() {
   }
 
   const planInfo = PLANS.find(p => p.key === selectedPlan) || PLANS[1]
-  const displayPrice = billingMode === 'annual' ? annualM(planInfo.key) : planInfo.priceM
-  const yearSave = annualSave(planInfo.priceM, planInfo.key)
+  const displayPrice = billingMode === 'annual'
+    ? annualM(planInfo, furgonetas) : precioMes(planInfo, furgonetas)
+  const yearSave = annualSave(planInfo, furgonetas)
 
   function onOrg(v) { setOrg(v); if (!slugTouched) setSlug(slugify(v)) }
 
@@ -272,7 +287,7 @@ export default function Registro() {
             <div style={{ fontWeight: 900, fontSize: 16, color: '#eef1f6' }}>{planInfo.name}</div>
             <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
               {billingMode === 'annual'
-                ? `${displayPrice}€/mes · ${ANNUAL_PRICE[planInfo.key]}€/año · ahorras ${yearSave}€`
+                ? `${displayPrice}€/mes · ${precioMes(planInfo, furgonetas) * MESES_ANUAL}€/año · ahorras ${yearSave}€`
                 : `${displayPrice}€/mes`
               }
             </div>

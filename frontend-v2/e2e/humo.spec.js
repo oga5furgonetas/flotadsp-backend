@@ -34,6 +34,10 @@ const PUBLICAS = [
   ['/verify', 'Verificador'], ['/privacidad', 'Privacidad'],
   ['/terminos', 'Términos'], ['/cookies', 'Cookies'],
   ['/aviso-legal', 'Aviso legal'], ['/conductor', 'Portal del conductor'],
+  // El alta CON plan y flota elegidos: es lo que ve el cliente justo despues
+  // de pulsar contratar, y se rompio al cambiar la tarifa (una llamada con la
+  // firma vieja dejaba la pantalla en el aviso de error).
+  ['/registro?plan=completo&billing=monthly&flota=120', 'Alta con plan elegido'],
 ]
 
 /** Recoge los errores de consola y los fallos de JS de una página. */
