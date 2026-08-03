@@ -35,10 +35,10 @@ const LD = {
   'ld.n6':           { es: 'Asignación diaria conductor↔furgoneta', en: 'Daily driver↔van assignment', fr: 'Affectation quotidienne chauffeur↔camionnette', de: 'Tägliche Fahrer↔Transporter-Zuweisung', it: 'Assegnazione giornaliera autista↔furgone', pt: 'Atribuição diária motorista↔carrinha' },
   'ld.n7':           { es: 'Gestión de incidencias', en: 'Incident management', fr: 'Gestion des incidents', de: 'Vorfallverwaltung', it: 'Gestione incidenti', pt: 'Gestão de incidências' },
   'ld.n8':           { es: 'Portal conductor en móvil', en: 'Mobile driver portal', fr: 'Portail chauffeur mobile', de: 'Mobiles Fahrer-Portal', it: 'Portale autista mobile', pt: 'Portal motorista no telemóvel' },
-  'ld.stat.1n':      { es: '< 30s', en: '< 30s', fr: '< 30s', de: '< 30s', it: '< 30s', pt: '< 30s' },
-  'ld.stat.1l':      { es: 'para subir una inspección', en: 'to submit an inspection', fr: 'pour envoyer une inspection', de: 'für eine Inspektion', it: 'per inviare un\'ispezione', pt: 'para enviar uma inspeção' },
-  'ld.stat.2n':      { es: '300–1.500€', en: '€300–1,500', fr: '300–1 500 €', de: '300–1.500 €', it: '300–1.500 €', pt: '300–1.500 €' },
-  'ld.stat.2l':      { es: 'ahorrados por daño documentado', en: 'saved per documented damage', fr: 'économisés par dommage documenté', de: 'gespart pro dokumentiertem Schaden', it: 'risparmiati per danno documentato', pt: 'poupados por dano documentado' },
+  'ld.stat.1n':      { es: '2.380', en: '2,380', fr: '2 380', de: '2.380', it: '2.380', pt: '2.380' },
+  'ld.stat.1l':      { es: 'inspecciones analizadas en la flota donde nació', en: 'inspections analysed in the fleet it was built for', fr: 'inspections analysées dans la flotte d\'origine', de: 'Inspektionen in der Flotte analysiert, für die es gebaut wurde', it: 'ispezioni analizzate nella flotta dove è nato', pt: 'inspeções analisadas na frota onde nasceu' },
+  'ld.stat.2n':      { es: '51', en: '51', fr: '51', de: '51', it: '51', pt: '51' },
+  'ld.stat.2l':      { es: 'inspecciones al día, sin revisarlas una a una', en: 'inspections a day, without reviewing them one by one', fr: 'inspections par jour, sans les revoir une à une', de: 'Inspektionen pro Tag, ohne einzeln zu prüfen', it: 'ispezioni al giorno, senza rivederle una a una', pt: 'inspeções por dia, sem as rever uma a uma' },
   'ld.stat.3n':      { es: '6 idiomas', en: '6 languages', fr: '6 langues', de: '6 Sprachen', it: '6 lingue', pt: '6 idiomas' },
   'ld.stat.3l':      { es: 'panel y app del conductor', en: 'dashboard and driver app', fr: 'tableau de bord et app chauffeur', de: 'Dashboard und Fahrer-App', it: 'pannello e app autista', pt: 'painel e app motorista' },
   'ld.sh.title':     { es: 'Todo lo que necesita tu flota', en: 'Everything your fleet needs', fr: 'Tout ce dont votre flotte a besoin', de: 'Alles was deine Flotte braucht', it: 'Tutto ciò di cui ha bisogno la tua flotta', pt: 'Tudo o que a tua frota precisa' },
@@ -63,8 +63,8 @@ const LD = {
   'ld.ai.k2':        { es: 'tipos de daño detectados', en: 'damage types detected', fr: 'types de dégâts détectés', de: 'erkannte Schadensarten', it: 'tipi di danno rilevati', pt: 'tipos de dano detetados' },
   'ld.ai.k3':        { es: 'piezas de carrocería delimitadas', en: 'body panels outlined', fr: 'panneaux de carrosserie délimités', de: 'umrissene Karosserieteile', it: 'pannelli delimitati', pt: 'painéis delimitados' },
   'ld.ai.k4':        { es: 'la IA mejora con cada revisión', en: 'AI improves with every review', fr: 'l’IA s’améliore à chaque révision', de: 'KI verbessert sich mit jeder Prüfung', it: 'l’IA migliora a ogni revisione', pt: 'a IA melhora a cada revisão' },
-  'ld.stat.4n':      { es: '15.000+', en: '15,000+', fr: '15 000+', de: '15.000+', it: '15.000+', pt: '15.000+' },
-  'ld.stat.4l':      { es: 'daños reales entrenando nuestra IA', en: 'real damages training our AI', fr: 'dégâts réels entraînant notre IA', de: 'echte Schäden trainieren unsere KI', it: 'danni reali che addestrano la nostra IA', pt: 'danos reais a treinar a nossa IA' },
+  'ld.stat.4n':      { es: '21', en: '21', fr: '21', de: '21', it: '21', pt: '21' },
+  'ld.stat.4l':      { es: 'paneles de carrocería que la IA delimita', en: 'body panels the AI outlines', fr: 'panneaux de carrosserie délimités par l\'IA', de: 'Karosserieteile, die die KI umreißt', it: 'pannelli di carrozzeria delimitati dall\'IA', pt: 'painéis de carroçaria que a IA delimita' },
 }
 
 function useLD() {
@@ -407,10 +407,9 @@ function AiEngineSection() {
     { icon: '🧠', accent: '#a78bfa', t: tl('ld.ai.s3t'), d: tl('ld.ai.s3d') },
   ]
   const kpis = [
-    ['15.000+', tl('ld.ai.k1'), '#fb923c'],
-    ['10', tl('ld.ai.k2'), '#38bdf8'],
-    ['21', tl('ld.ai.k3'), '#a78bfa'],
-    ['∞', tl('ld.ai.k4'), '#34d399'],
+    // El 21 de paneles ya sale en la barra de arriba: aqui solo lo que añade.
+    ['10', tl('ld.ai.k2'), '#fb923c'],
+    ['∞', tl('ld.ai.k4'), '#fb923c'],
   ]
   return (
     <section style={{ position: 'relative', overflow: 'hidden' }}>
@@ -499,12 +498,12 @@ export default function Landing() {
               style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 8, background: 'var(--ld-fill)', color: 'var(--ld-muted)', border: '1px solid var(--ld-border)', cursor: 'pointer' }}>
               {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
             </button>
-            <select value={lang} onChange={e => setLang(e.target.value)} style={{ background: 'transparent', color: 'var(--ld-muted)', border: '1px solid var(--ld-border-strong)', borderRadius: 8, padding: '5px 8px', fontSize: 12, cursor: 'pointer' }}>
+            <select className="ld-solo-ancho" value={lang} onChange={e => setLang(e.target.value)} style={{ background: 'transparent', color: 'var(--ld-muted)', border: '1px solid var(--ld-border-strong)', borderRadius: 8, padding: '5px 8px', fontSize: 12, cursor: 'pointer' }}>
               {Object.entries(LANGS).map(([k, v]) => <option key={k} value={k} style={{ background: 'var(--ld-surface2)', color: 'var(--ld-text)' }}>{v}</option>)}
             </select>
-            <a href="/planes" style={{ color: 'var(--ld-muted)', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>{t('nav.plans')}</a>
-            <a href="/panel/login" style={{ color: 'var(--ld-muted)', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>{t('nav.login')}</a>
-            <a href="/registro" style={{ background: 'linear-gradient(135deg,#fb923c,#ea6800)', color: '#fff', textDecoration: 'none', padding: '7px 16px', borderRadius: 9, fontSize: 13, fontWeight: 800 }}>{t('nav.try')}</a>
+            <a className="ld-solo-ancho" href="/planes" style={{ color: 'var(--ld-muted)', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>{t('nav.plans')}</a>
+            <a href="/panel/login" style={{ color: 'var(--ld-muted)', textDecoration: 'none', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{t('nav.login')}</a>
+            <a href="/registro" style={{ background: 'linear-gradient(135deg,#fb923c,#ea6800)', color: '#fff', textDecoration: 'none', padding: '7px 16px', borderRadius: 9, fontSize: 13, fontWeight: 800, whiteSpace: 'nowrap' }}>{t('nav.try')}</a>
           </div>
         </div>
       </nav>
@@ -546,49 +545,15 @@ export default function Landing() {
             </div>
           </div>
 
-          {/* Hero visual — dashboard mockup */}
+          {/* Hero visual — el gemelo 3D REAL, no una maqueta.
+              Lo unico que no tiene ningun competidor merece estar arriba, y
+              una demo con la que se puede jugar vende mas que un dibujo. */}
           <div style={{ position: 'relative' }}>
-            <div style={{ position: 'absolute', inset: -40, background: 'radial-gradient(ellipse at center, rgba(14,165,233,.1), transparent 70%)', pointerEvents: 'none' }} />
-            <div style={{ background: 'var(--ld-surface)', border: '1px solid var(--ld-border-strong)', borderRadius: 20, overflow: 'hidden', boxShadow: '0 40px 100px -30px rgba(0,0,0,.9)', position: 'relative' }}>
-              {/* Title bar */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '12px 16px', borderBottom: '1px solid var(--ld-border)' }}>
-                {['#ef4444','#f59e0b','#22c55e'].map(c => <span key={c} style={{ width: 10, height: 10, borderRadius: '50%', background: c, display: 'inline-block' }} />)}
-                <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--ld-dim)', fontWeight: 600 }}>FlotaDSP — Panel</span>
-              </div>
-              <div style={{ padding: 16 }}>
-                {/* Stat cards */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 14 }}>
-                  {[['89', lang === 'es' ? 'Furgonetas' : lang === 'en' ? 'Vans' : lang === 'de' ? 'Transporter' : lang === 'fr' ? 'Camionnettes' : lang === 'it' ? 'Furgoni' : 'Carrinhas', '#38bdf8'],
-                    ['95', lang === 'es' ? 'Conductores' : lang === 'en' ? 'Drivers' : lang === 'de' ? 'Fahrer' : lang === 'fr' ? 'Chauffeurs' : lang === 'it' ? 'Autisti' : 'Motoristas', '#a78bfa'],
-                    ['4.8★', 'Score', '#34d399']].map(([v, l, c]) => (
-                    <div key={l} style={{ background: 'var(--ld-bg)', borderRadius: 12, padding: '12px 10px', textAlign: 'center' }}>
-                      <div style={{ fontSize: 22, fontWeight: 900, color: c }}>{v}</div>
-                      <div style={{ fontSize: 10, color: 'var(--ld-dim)', marginTop: 2 }}>{l}</div>
-                    </div>
-                  ))}
-                </div>
-                {/* Chart */}
-                <div style={{ background: 'var(--ld-bg)', borderRadius: 12, padding: '12px 14px', marginBottom: 12 }}>
-                  <div style={{ fontSize: 10, color: 'var(--ld-dim)', marginBottom: 8, fontWeight: 600 }}>{lang === 'es' ? 'Inspecciones · 7 días' : lang === 'en' ? 'Inspections · 7 days' : lang === 'de' ? 'Inspektionen · 7 Tage' : lang === 'fr' ? 'Inspections · 7 jours' : lang === 'it' ? 'Ispezioni · 7 giorni' : 'Inspeções · 7 dias'}</div>
-                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 5, height: 70 }}>
-                    {[50,70,55,88,62,95,78].map((h,i) => (
-                      <div key={i} style={{ flex: 1, height: `${h}%`, borderRadius: '4px 4px 0 0', background: i === 5 ? 'linear-gradient(180deg,#38bdf8,#0369a1)' : 'rgba(14,165,233,.25)' }} />
-                    ))}
-                  </div>
-                </div>
-                {/* Alert row */}
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <div style={{ flex: 1, background: 'rgba(239,68,68,.08)', border: '1px solid rgba(239,68,68,.2)', borderRadius: 10, padding: '8px 10px' }}>
-                    <div style={{ fontSize: 10, fontWeight: 800, color: '#f87171' }}>⚠ {lang === 'es' ? 'ITV próxima' : lang === 'en' ? 'MOT due' : lang === 'de' ? 'TÜV fällig' : lang === 'fr' ? 'CT à venir' : lang === 'it' ? 'Revisione' : 'Inspeção'}</div>
-                    <div style={{ fontSize: 9, color: 'var(--ld-dim)' }}>VAN-4421 · 5d</div>
-                  </div>
-                  <div style={{ flex: 1, background: 'rgba(245,158,11,.08)', border: '1px solid rgba(245,158,11,.2)', borderRadius: 10, padding: '8px 10px' }}>
-                    <div style={{ fontSize: 10, fontWeight: 800, color: '#fbbf24' }}>📸 {lang === 'es' ? 'Daño detectado' : lang === 'en' ? 'Damage found' : lang === 'de' ? 'Schaden erkannt' : lang === 'fr' ? 'Dommage trouvé' : lang === 'it' ? 'Danno rilevato' : 'Dano detetado'}</div>
-                    <div style={{ fontSize: 9, color: 'var(--ld-dim)' }}>VAN-8742 · 2min</div>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <div style={{ position: 'absolute', inset: -40, background: 'radial-gradient(ellipse at center, rgba(251,146,60,.10), transparent 70%)', pointerEvents: 'none' }} />
+            <Landing3DShowcase inline t={{ hint: tl('ld.twin.hint'), loading: tl('ld.twin.loading') }} />
+            <p style={{ fontSize: 12.5, color: 'var(--ld-dim)', textAlign: 'center', marginTop: 12 }}>
+              {tl('ld.twin.sub')}
+            </p>
           </div>
         </div>
       </header>
@@ -597,24 +562,19 @@ export default function Landing() {
       <div style={{ background: 'var(--ld-surface)', borderTop: '1px solid var(--ld-fill)', borderBottom: '1px solid var(--ld-fill)' }}>
         <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))' }}>
           {[
-            [tl('ld.stat.1n'), tl('ld.stat.1l'), '#38bdf8'],
-            [tl('ld.stat.2n'), tl('ld.stat.2l'), '#34d399'],
+            // Un solo acento. Cuatro colores neón hacen que ninguno destaque.
+            [tl('ld.stat.1n'), tl('ld.stat.1l'), '#fb923c'],
+            [tl('ld.stat.2n'), tl('ld.stat.2l'), '#fb923c'],
             [tl('ld.stat.4n'), tl('ld.stat.4l'), '#fb923c'],
-            [tl('ld.stat.3n'), tl('ld.stat.3l'), '#a78bfa'],
+            [tl('ld.stat.3n'), tl('ld.stat.3l'), '#fb923c'],
           ].map(([n, l, c]) => (
-            <div key={n} style={{ padding: '22px 20px', textAlign: 'center', borderRight: '1px solid var(--ld-fill)' }}>
-              <div style={{ fontSize: 22, fontWeight: 900, color: c }}>{n}</div>
-              <div style={{ fontSize: 12, color: 'var(--ld-dim)', marginTop: 3 }}>{l}</div>
+            <div key={n} style={{ padding: '28px 22px', textAlign: 'center', borderRight: '1px solid var(--ld-fill)' }}>
+              <div style={{ fontSize: 34, fontWeight: 900, color: c, letterSpacing: '-.02em' }}>{n}</div>
+              <div style={{ fontSize: 12.5, color: 'var(--ld-dim)', marginTop: 6, lineHeight: 1.45, maxWidth: 210, marginInline: 'auto' }}>{l}</div>
             </div>
           ))}
         </div>
       </div>
-
-      {/* ── SHOWCASE GEMELO 3D (el diferenciador visual) ── */}
-      <Landing3DShowcase t={{
-        badge: tl('ld.twin.badge'), title: tl('ld.twin.title'), sub: tl('ld.twin.sub'),
-        hint: tl('ld.twin.hint'), loading: tl('ld.twin.loading'),
-      }} />
 
       {/* ── MOTOR DE VISIÓN PROPIO (el diferenciador técnico) ── */}
       <AiEngineSection />
@@ -629,10 +589,10 @@ export default function Landing() {
             <h2 style={{ fontSize: 'clamp(22px,3vw,34px)', fontWeight: 900, margin: '0 0 10px' }}>💸 {t('roi.t')}</h2>
             <p style={{ color: 'var(--ld-muted)', fontSize: 15, margin: 0 }}>{t('roi.sub')}</p>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 14 }}>
-            <RoiRow icon={Shield} big="300–1.500€" title={t('roi.1t')} desc={t('roi.1d')} accent="#34d399" />
-            <RoiRow icon={Bell} big="0€" title={t('roi.2t')} desc={t('roi.2d')} accent="#38bdf8" />
-            <RoiRow icon={Trophy} big="−30%" title={t('roi.3t')} desc={t('roi.3d')} accent="#a78bfa" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(340px,1fr))', gap: 14 }}>
+            <RoiRow icon={Shield} big="300–1.500€" title={t('roi.1t')} desc={t('roi.1d')} accent="#fb923c" />
+            <RoiRow icon={Bell} big="0€" title={t('roi.2t')} desc={t('roi.2d')} accent="#fb923c" />
+            <RoiRow icon={Trophy} big="−30%" title={t('roi.3t')} desc={t('roi.3d')} accent="#fb923c" />
             <RoiRow icon={Clock} big="2h→5min" title={t('roi.4t')} desc={t('roi.4d')} accent="#fb923c" />
           </div>
         </div>
@@ -644,11 +604,35 @@ export default function Landing() {
           <h2 style={{ fontSize: 'clamp(22px,3vw,34px)', fontWeight: 900, margin: '0 0 10px' }}>{t('how.t')}</h2>
           <p style={{ color: 'var(--ld-muted)', fontSize: 15, margin: 0 }}>{tl('ld.trust.d')}</p>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))', gap: 10 }}>
+        {/* Bento: tiles de distinto tamaño. Ocho rectangulos iguales no
+            paran el ojo en ninguno; una rejilla asimetrica si. */}
+        <div className="ld-bento" style={{ display: 'grid', gap: 12 }}>
           {[
-            tl('ld.n1'), tl('ld.n2'), tl('ld.n3'), tl('ld.n4'),
-            tl('ld.n5'), tl('ld.n6'), tl('ld.n7'), tl('ld.n8'),
-          ].map(f => <FeatPill key={f}>{f}</FeatPill>)}
+            [tl('ld.n1'), 3], [tl('ld.n2'), 3],
+            [tl('ld.n3'), 2], [tl('ld.n4'), 2], [tl('ld.n5'), 2],
+            [tl('ld.n6'), 3], [tl('ld.n7'), 3],
+            [tl('ld.n8'), 6],
+          ].map(([f, cols], i) => (
+            <div key={f} style={{
+              gridColumn: `span ${cols}`,
+              background: 'var(--ld-surface)',
+              border: '1px solid var(--ld-border)',
+              borderRadius: 16,
+              padding: '16px 18px',
+              display: 'flex', alignItems: 'center', gap: 11,
+              fontSize: cols >= 3 ? 14.5 : 13.5,
+              fontWeight: 600,
+              color: 'var(--ld-text)',
+              lineHeight: 1.35,
+              minHeight: 58,
+            }}>
+              <span style={{
+                width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+                background: i === 7 ? '#fb923c' : 'var(--ld-border-strong)',
+              }} />
+              {f}
+            </div>
+          ))}
         </div>
       </section>
 
@@ -656,9 +640,10 @@ export default function Landing() {
       <section style={{ background: 'var(--ld-surface)', borderTop: '1px solid var(--ld-fill)', borderBottom: '1px solid var(--ld-fill)' }}>
         <div style={{ maxWidth: 1100, margin: '0 auto', padding: '72px 20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 32 }}>
           {[
-            [Camera, t('how.1t'), t('how.1d'), '#38bdf8'],
-            [Zap, t('how.2t'), t('how.2d'), '#a78bfa'],
-            [BarChart3, t('how.3t'), t('how.3d'), '#34d399'],
+            // El color aqui es decorativo: un solo acento y que mande el texto.
+            [Camera, t('how.1t'), t('how.1d'), '#fb923c'],
+            [Zap, t('how.2t'), t('how.2d'), '#fb923c'],
+            [BarChart3, t('how.3t'), t('how.3d'), '#fb923c'],
           ].map(([Icon, title, desc, color], i) => (
             <div key={i} style={{ textAlign: 'center' }}>
               <div style={{ width: 56, height: 56, borderRadius: 16, background: `${color}15`, border: `1px solid ${color}30`, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>

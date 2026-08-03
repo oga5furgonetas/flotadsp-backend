@@ -31,7 +31,7 @@ const debugModel = {
   body: { L: 5.31, H: 1.94, W: 1.92, cab: 0.37, roofDrop: 0.13, nose: 0.22 },
 }
 
-export default function Landing3DShowcase({ t }) {
+export default function Landing3DShowcase({ t, inline = false }) {
   const ref = useRef(null)
   const [show, setShow] = useState(false)
 
@@ -45,6 +45,24 @@ export default function Landing3DShowcase({ t }) {
     io.observe(el)
     return () => io.disconnect()
   }, [show])
+
+  const visor = (
+    <div ref={ref} style={{ height: inline ? 'min(64vh, 520px)' : 'min(62vh, 540px)', minHeight: inline ? 430 : 420, borderRadius: 18, overflow: 'hidden', border: '1px solid var(--ld-border)', boxShadow: '0 30px 80px -30px rgba(0,0,0,.55)', position: 'relative' }}>
+      {show ? (
+        <Suspense fallback={<ShowcaseLoader t={t} />}>
+          <Vehicle3DViewer vehicle={vehicle} inspections={inspections} ledger={ledger} loading={false} _debugModel={debugModel} publicMode />
+        </Suspense>
+      ) : <ShowcaseLoader t={t} />}
+      {!inline && (
+        <div style={{ position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 5, display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(0,0,0,.55)', color: '#e2e8f0', borderRadius: 20, padding: '5px 12px', fontSize: 12, pointerEvents: 'none', backdropFilter: 'blur(6px)' }}>
+          <MousePointerClick size={13} /> {t?.hint || 'Arrastra para girar · pincha un daño'}
+        </div>
+      )}
+    </div>
+  )
+
+  // En el hero va suelto, sin seccion ni titular propios.
+  if (inline) return visor
 
   return (
     <section style={{ background: 'var(--ld-surface)', borderTop: '1px solid var(--ld-border)', borderBottom: '1px solid var(--ld-border)' }}>
@@ -61,17 +79,7 @@ export default function Landing3DShowcase({ t }) {
           </p>
         </div>
 
-        <div ref={ref} style={{ height: 'min(62vh, 540px)', minHeight: 420, borderRadius: 18, overflow: 'hidden', border: '1px solid var(--ld-border)', boxShadow: '0 30px 80px -30px rgba(0,0,0,.55)', position: 'relative' }}>
-          {show ? (
-            <Suspense fallback={<ShowcaseLoader t={t} />}>
-              <Vehicle3DViewer vehicle={vehicle} inspections={inspections} ledger={ledger} loading={false} _debugModel={debugModel} publicMode />
-            </Suspense>
-          ) : <ShowcaseLoader t={t} />}
-          {/* Pista de interacción */}
-          <div style={{ position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)', zIndex: 5, display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(0,0,0,.55)', color: '#e2e8f0', borderRadius: 20, padding: '5px 12px', fontSize: 12, pointerEvents: 'none', backdropFilter: 'blur(6px)' }}>
-            <MousePointerClick size={13} /> {t?.hint || 'Arrastra para girar · pincha un daño'}
-          </div>
-        </div>
+        {visor}
       </div>
     </section>
   )

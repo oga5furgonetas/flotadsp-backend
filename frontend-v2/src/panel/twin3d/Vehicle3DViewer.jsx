@@ -10,6 +10,7 @@ import DamageSidebar from './DamageSidebar'
 import CameraController, { frameFromNormal } from './CameraController'
 import { useVehicleDamages } from './useVehicleDamages'
 import { dimsFromResolver } from './vanGeometry'
+import { useT, LANG_LOCALE } from '../../i18n'
 import { resolveVehicleModel, identifyVehicleModel } from '../api'
 
 const SEVERITIES = ['critico', 'grave', 'moderado', 'leve']
@@ -42,6 +43,7 @@ function VehicleLighting() {
 }
 
 export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading, _debugModel, publicMode }) {
+  const { t, lang } = useT()
   const controlsRef = useRef()
   const vanRef = useRef()   // modelo 3D → oclusión de pines detrás de la furgoneta
 
@@ -148,18 +150,18 @@ export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading,
       {/* ── Barra superior: vistas + modo inspección + filtros ── */}
       <div style={{ position: 'absolute', top: 10, left: 10, right: 10, zIndex: 20, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', gap: 2, background: 'rgba(15,18,26,.85)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 9, padding: 3 }}>
-          {[['iso', '3D'], ['frente', 'Frente'], ['izq', 'Izq.'], ['der', 'Der.'], ['detras', 'Detrás'], ['arriba', 'Arriba']].map(([k, lbl]) => (
+          {[['iso', '3D'], ['frente', t('twin.front')], ['izq', t('twin.left')], ['der', t('twin.right')], ['detras', t('twin.back')], ['arriba', t('twin.top')]].map(([k, lbl]) => (
             <button key={k} onClick={() => setView(k)} style={viewBtn}>{lbl}</button>
           ))}
         </div>
 
         <button onClick={() => setInspectionMode((v) => !v)}
           style={{ ...pillBtn, background: inspectionMode ? 'rgba(59,130,246,.22)' : 'rgba(15,18,26,.85)', color: inspectionMode ? '#93c5fd' : '#cbd5e1', borderColor: inspectionMode ? '#3b82f688' : 'rgba(255,255,255,.08)' }}>
-          {inspectionMode ? <Eye size={14} /> : <EyeOff size={14} />} Inspección
+          {inspectionMode ? <Eye size={14} /> : <EyeOff size={14} />} {t('twin.inspection')}
         </button>
 
         <button onClick={() => setShowFilters((v) => !v)} style={{ ...pillBtn, background: 'rgba(15,18,26,.85)', color: '#cbd5e1' }}>
-          <Filter size={14} /> Filtros
+          <Filter size={14} /> {t('twin.filters')}
         </button>
 
         {!publicMode && (
@@ -207,12 +209,12 @@ export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading,
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: '#fff', marginBottom: 2 }}>
           <Car size={13} /> {modelName || `${vehicle?.brand || ''} ${vehicle?.model || ''}`}
           {modelInfo && (modelInfo.glb_url
-            ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: 'rgba(34,197,94,.18)', color: '#86efac', borderRadius: 20, padding: '1px 7px', fontSize: 9, fontWeight: 700 }}><BadgeCheck size={9} /> modelo real</span>
+            ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, background: 'rgba(34,197,94,.18)', color: '#86efac', borderRadius: 20, padding: '1px 7px', fontSize: 9, fontWeight: 700 }}><BadgeCheck size={9} /> {t('twin.real.model')}</span>
             : <span style={{ background: 'rgba(148,163,184,.18)', color: '#cbd5e1', borderRadius: 20, padding: '1px 7px', fontSize: 9, fontWeight: 700 }}>modelo provisional</span>)}
         </div>
         <div style={{ color: '#94a3b8', fontSize: 11 }}>
-          <span style={{ color: '#fb923c' }}>{counts.open} abiertos</span>
-          {counts.repaired > 0 && <span> · <span style={{ color: '#22c55e' }}>{counts.repaired} reparados</span></span>}
+          <span style={{ color: '#fb923c' }}>{counts.open} {t('twin.open')}</span>
+          {counts.repaired > 0 && <span> · <span style={{ color: '#22c55e' }}>{counts.repaired} {t('twin.repaired')}</span></span>}
           {visible.length !== markers.length && <span> · {visible.length} en vista</span>}
           {aiModel && <span> · <span style={{ color: '#d8b4fe' }}>IA {Math.round((aiModel.confidence || 0) * 100)}%</span></span>}
         </div>
@@ -222,13 +224,13 @@ export default function Vehicle3DViewer({ vehicle, inspections, ledger, loading,
       {timeline.length > 1 && (
         <div style={{ position: 'absolute', bottom: 12, right: 12, zIndex: 20, background: 'rgba(15,18,26,.82)', border: '1px solid rgba(255,255,255,.08)', borderRadius: 10, padding: '8px 12px', width: 250 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: '#94a3b8', marginBottom: 6 }}>
-            <Layers size={12} /> Evolución en el tiempo
+            <Layers size={12} /> {t('twin.timeline')}
           </div>
           <input type="range" min={0} max={timeline.length} value={timeIdx}
             onChange={(e) => setTimeIdx(Number(e.target.value))}
             style={{ width: '100%', accentColor: '#3b82f6' }} />
           <div style={{ fontSize: 11, color: '#cbd5e1', textAlign: 'center', marginTop: 2 }}>
-            {cutoff ? new Date(cutoff).toLocaleDateString('es-ES', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Estado actual'}
+            {cutoff ? new Date(cutoff).toLocaleDateString(LANG_LOCALE[lang] || 'es-ES', { day: '2-digit', month: 'short', year: 'numeric' }) : t('twin.now')}
           </div>
         </div>
       )}

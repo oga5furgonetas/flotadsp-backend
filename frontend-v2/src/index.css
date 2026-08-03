@@ -116,6 +116,18 @@ html[data-panel-theme='light'] .bg-dark-900.text-white { color: rgb(var(--dk-50)
 html[data-panel-theme='light'] [class*='hover:text-white']:hover { color: rgb(var(--dk-50)); }
 
 /* ── Tema claro/oscuro de la LANDING pública (solo .ld-root) ──────────────── */
+/* En la barra de la landing no caben cinco elementos en un telefono: el boton
+   principal se salia de la pantalla y "Acceder" partia en dos lineas. */
+@media (max-width: 700px) { .ld-solo-ancho { display: none !important; } }
+
+/* Rejilla bento de la landing: seis columnas en escritorio, dos en movil.
+   Con seis en un telefono cada pieza quedaria en una tira ilegible. */
+.ld-bento { grid-template-columns: repeat(6, 1fr); }
+@media (max-width: 760px) {
+  .ld-bento { grid-template-columns: repeat(2, 1fr); }
+  .ld-bento > * { grid-column: span 2 !important; }
+}
+
 .ld-root {
   --ld-bg: #080a0e;
   --ld-surface: #0e1116;
