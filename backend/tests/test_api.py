@@ -344,7 +344,9 @@ async def test_no_se_puede_subir_de_plan_sin_pagar(client, admin_token):
         {"id": uid, "username": f"test_plan_{uuid.uuid4().hex[:6]}",
          "hashed_password": srv.hash_password("x" * 10), "name": "Admin Plan",
          "role": "admin", "org_id": org_id})
-    tok = srv.create_token(uid, "admin", "Admin Plan")
+    # El org_id tiene que ir en el token: sin el, change-plan responde 404
+    # antes de llegar siquiera a la comprobacion de pago.
+    tok = srv.create_token(uid, "admin", "Admin Plan", org_id=org_id)
     h = {"Authorization": f"Bearer {tok}"}
 
     async def plan_actual():
