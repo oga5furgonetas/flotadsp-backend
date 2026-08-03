@@ -449,3 +449,31 @@ async def test_admin_limitado_a_un_centro_no_ve_los_otros(client, admin_token):
     await srv.db.vehicles.delete_many({"id": {"$in": [f"veh-{a}", f"veh-{b}"]}})
     await srv.db.incidents.delete_many({"id": {"$in": [f"inc-{a}", f"inc-{b}"]}})
     await srv.global_db.admin_users.delete_one({"id": uid})
+
+
+async def test_superadmin_si_puede_forzar_el_plan(client):
+    """La via de soporte tiene que funcionar de verdad.
+
+    Se comprobaba con role == "sa", pero el super-admin se marca con el FLAG
+    "sa" (asi lo hace require_superadmin). El resultado era que ni siquiera el
+    super-admin podia cambiar un plan: lo canto el smoke de produccion.
+    """
+    import server as srv
+    org_id = f"org-test-{uuid.uuid4().hex[:8]}"
+    await srv.global_db.organizations.insert_one(
+        {"id": org_id, "name": "DSP Test SA", "plan": "basico", "status": "active"})
+    uid = str(uuid.uuid4())
+    await srv.global_db.admin_users.insert_one(
+        {"id": uid, "username": f"test_sa_{uuid.uuid4().hex[:6]}",
+         "hashed_password": srv.hash_password("x" * 10), "name": "Super",
+         "role": "admin", "org_id": org_id, "super_admin": True})
+    tok = srv.create_token(uid, "admin", "Super", org_id=org_id, super_admin=True)
+    r = await client.post("/api/org/change-plan",
+                          headers={"Authorization": f"Bearer {tok}"},
+                          json={"plan": "flota"})
+    assert r.status_code == 200, r.text
+    org = await srv.global_db.organizations.find_one({"id": org_id})
+    assert org["plan"] == "flota"
+
+    await srv.global_db.organizations.delete_one({"id": org_id})
+    await srv.global_db.admin_users.delete_one({"id": uid})

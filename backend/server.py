@@ -4080,7 +4080,10 @@ async def change_plan(data: dict = Body(...), user: dict = Depends(require_admin
     if new_plan == plan_actual:
         raise HTTPException(400, "Ya estás en ese plan")
 
-    es_superadmin = user.get("role") == "sa"
+    # El super-admin se marca con el flag "sa", NO con role=="sa" (asi lo
+    # comprueban require_superadmin y el resto del fichero). Con la version
+    # anterior la via de soporte no funcionaba nunca.
+    es_superadmin = bool(user.get("sa"))
     # Sin rango conocido (p. ej. "owner") no es self-service jamás.
     rango_nuevo = _PLAN_RANGO.get(new_plan)
     sube = rango_nuevo is None or rango_nuevo > _PLAN_RANGO.get(plan_actual, 0)
