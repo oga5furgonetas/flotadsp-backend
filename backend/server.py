@@ -4285,6 +4285,178 @@ async def billing_planes():
     }
 
 
+# =========================
+# COBROS — sin pasarela: factura y transferencia, con conciliacion por extracto
+# =========================
+
+def _mes_actual() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def _norm_texto(t: str) -> str:
+    """Minusculas, sin acentos ni signos: para casar conceptos del banco."""
+    t = (t or "").lower()
+    for a, b in (("á", "a"), ("é", "e"), ("í", "i"), ("ó", "o"), ("ú", "u"), ("ñ", "n")):
+        t = t.replace(a, b)
+    return re.sub(r"[^a-z0-9]+", " ", t).strip()
+
+
+async def _cobros_del_mes(mes: str, crear: bool = True):
+    """Los cobros de ese mes. Los crea si aun no existen.
+
+    El importe se calcula con las furgonetas que tiene HOY cada cliente y la
+    tarifa vigente. Una vez creado el cobro ya no se recalcula: si el cliente
+    crece a mitad de mes, se le cobra lo nuevo el mes siguiente, no a toro
+    pasado.
+    """
+    existentes = await global_db.cobros.find({"mes": mes}, {"_id": 0}).to_list(2000)
+    if existentes or not crear:
+        return sorted(existentes, key=lambda c: c.get("org_nombre") or "")
+
+    cat = await _catalogo_planes()
+    iva_pct = float(cat.get("iva_pct") or 21)
+    orgs = await global_db.organizations.find(
+        {"account_type": "dsp", "status": {"$in": ["active", "trial"]}}, {"_id": 0}).to_list(2000)
+
+    creados = []
+    for o in orgs:
+        plan = _plan_canon(o.get("plan"))
+        tarifa = _tarifa_de(cat, plan)
+        if not tarifa:
+            continue
+        try:
+            set_current_org_db(_tenant_db_name(o))
+            vehiculos = await db.vehicles.count_documents({"status": {"$ne": "deleted"}})
+        except Exception as e:
+            logger.warning(f"Cobros: no pude contar furgonetas de {o.get('name')}: {e}")
+            vehiculos = 0
+
+        por_veh = float(tarifa.get("por_vehiculo") or 0)
+        minimo = int(tarifa.get("minimo_vehiculos") or 0)
+        # Precio pactado a mano (holding, descuentos): manda sobre la tarifa.
+        pactado = _a_numero(o.get("precio_mes_pactado"))
+        base = round(pactado if pactado > 0 else por_veh * max(vehiculos, minimo), 2)
+        if base <= 0:
+            continue                      # a medida sin precio puesto: no se cobra solo
+
+        iva = round(base * iva_pct / 100, 2)
+        doc = {
+            "id": str(uuid.uuid4()), "mes": mes,
+            "org_id": o.get("id"), "org_nombre": o.get("name"),
+            "email": o.get("email"), "plan": plan,
+            "vehiculos": vehiculos, "precio_unitario": por_veh,
+            "concepto": f"FlotaDSP · {tarifa.get('nombre', plan)} · {vehiculos} furgonetas · {mes}",
+            "base": base, "iva_pct": iva_pct, "iva": iva, "total": round(base + iva, 2),
+            "estado": "en_prueba" if o.get("status") == "trial" else "pendiente",
+            "creado_en": datetime.now(timezone.utc).isoformat(),
+        }
+        await global_db.cobros.insert_one(dict(doc))
+        creados.append(doc)
+    return sorted(creados, key=lambda c: c.get("org_nombre") or "")
+
+
+@api_router.get("/admin/cobros")
+async def admin_cobros(mes: Optional[str] = None, _: dict = Depends(require_superadmin)):
+    """Qué hay que cobrar este mes y quién ha pagado ya."""
+    mes = (mes or _mes_actual())[:7]
+    if not re.match(r"^\d{4}-\d{2}$", mes):
+        raise HTTPException(400, "Mes con formato AAAA-MM")
+    cobros = await _cobros_del_mes(mes)
+    resumen = {
+        "facturado": round(sum(c["total"] for c in cobros if c["estado"] != "en_prueba"), 2),
+        "cobrado": round(sum(c["total"] for c in cobros if c["estado"] == "cobrado"), 2),
+        "pendiente": round(sum(c["total"] for c in cobros if c["estado"] == "pendiente"), 2),
+        "en_prueba": sum(1 for c in cobros if c["estado"] == "en_prueba"),
+    }
+    return {"mes": mes, "cobros": cobros, "resumen": resumen}
+
+
+# OJO con el orden: esta ruta literal va ANTES que /admin/cobros/{cobro_id}.
+# FastAPI casa por orden de declaracion, y con la comodin delante una
+# peticion a /conciliar entraba por ella con cobro_id="conciliar".
+@api_router.post("/admin/cobros/conciliar")
+async def admin_conciliar(file: UploadFile = File(...), mes: Optional[str] = Form(None),
+                          user: dict = Depends(require_superadmin)):
+    """Sube el extracto del banco y marca solos los cobros que ya han entrado.
+
+    Acepta el CSV/Excel que descarga cualquier banco español. Busca en cada
+    linea un importe y lo casa con un cobro pendiente del mismo total; si
+    ademas el concepto contiene el nombre del cliente, lo da por seguro.
+
+    Nunca marca a ciegas: si un importe cuadra con dos clientes distintos, lo
+    deja pendiente y lo dice. Cobrar por error a quien no ha pagado es peor
+    que no detectarlo.
+    """
+    mes = (mes or _mes_actual())[:7]
+    contenido = (await file.read())[:5 * 1024 * 1024]
+    try:
+        texto = contenido.decode("utf-8", errors="ignore")
+    except Exception:
+        raise HTTPException(400, "No se pudo leer el archivo")
+
+    pendientes = await global_db.cobros.find(
+        {"mes": mes, "estado": "pendiente"}, {"_id": 0}).to_list(2000)
+    if not pendientes:
+        return {"conciliados": 0, "dudosos": [], "detalle": "No hay cobros pendientes este mes"}
+
+    # Importes que aparecen en el extracto, con la linea donde salen.
+    lineas = []
+    for linea in texto.splitlines():
+        for m in re.finditer(r"(\d{1,3}(?:[.\s]\d{3})*|\d+)[,.](\d{2})(?!\d)", linea):
+            entero = re.sub(r"[.\s]", "", m.group(1))
+            try:
+                lineas.append((round(float(f"{entero}.{m.group(2)}"), 2), _norm_texto(linea)))
+            except ValueError:
+                pass
+
+    conciliados, dudosos = 0, []
+    for c in pendientes:
+        candidatas = [l for imp, l in lineas if abs(imp - c["total"]) < 0.01]
+        if not candidatas:
+            continue
+        nombre = _norm_texto(c.get("org_nombre") or "")
+        con_nombre = [l for l in candidatas if nombre and nombre.split()[0] in l]
+        # Un importe que cuadra con varios clientes distintos no se toca.
+        otros = [o for o in pendientes if o["id"] != c["id"] and abs(o["total"] - c["total"]) < 0.01]
+        if otros and not con_nombre:
+            dudosos.append({"org": c.get("org_nombre"), "total": c["total"],
+                            "motivo": "el mismo importe cuadra con otro cliente"})
+            continue
+        await global_db.cobros.update_one({"id": c["id"]}, {"$set": {
+            "estado": "cobrado",
+            "cobrado_en": datetime.now(timezone.utc).isoformat(),
+            "cobrado_por": f"extracto ({user.get('name')})",
+            "referencia": (con_nombre or candidatas)[0][:120],
+        }})
+        conciliados += 1
+
+    await _audit(user, "conciliacion_bancaria",
+                 {"mes": mes, "conciliados": conciliados, "dudosos": len(dudosos)})
+    return {"conciliados": conciliados, "dudosos": dudosos,
+            "pendientes_restantes": len(pendientes) - conciliados}
+
+
+@api_router.post("/admin/cobros/{cobro_id}")
+async def admin_marcar_cobro(cobro_id: str, data: dict = Body(...),
+                             user: dict = Depends(require_superadmin)):
+    """Marca un cobro como cobrado o lo devuelve a pendiente."""
+    estado = (data.get("estado") or "").strip()
+    if estado not in ("pendiente", "cobrado"):
+        raise HTTPException(400, "estado debe ser pendiente o cobrado")
+    patch = {"estado": estado}
+    if estado == "cobrado":
+        patch["cobrado_en"] = datetime.now(timezone.utc).isoformat()
+        patch["cobrado_por"] = user.get("name")
+        if data.get("referencia"):
+            patch["referencia"] = str(data["referencia"])[:120]
+    else:
+        patch["cobrado_en"] = None
+    r = await global_db.cobros.update_one({"id": cobro_id}, {"$set": patch})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Cobro no encontrado")
+    return {"success": True, "estado": estado}
+
+
 @api_router.get("/admin/planes")
 async def admin_get_planes(_: dict = Depends(require_superadmin)):
     """El catálogo tal cual, para editarlo."""

@@ -1,16 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
   Loader2, Building2, CheckCircle2, Clock, Euro, Sparkles, Gift, PauseCircle,
   LogIn, Trash2, Database, BrainCircuit, ExternalLink, RefreshCw, Megaphone,
   Play, Pause, Plus, Star, Eye, MousePointerClick, Tag, Save,
+  Receipt, Upload, Check, Undo2,
 } from 'lucide-react'
 import {
   getAdminOverview, getAdminOrgs, getLeads, updateOrg, impersonateOrg, deleteOrg,
   backupNow, adminGetDriverOffers, adminCreateDriverOffer, adminToggleDriverOffer,
   adminDeleteDriverOffer, adminGetFounderReservations,
   adminGetPlanes, adminSetPlanes,
+  adminGetCobros, adminMarcarCobro, adminConciliar,
 } from '../api'
 import { API_BASE } from '../../services/api'
 
@@ -143,6 +145,147 @@ function EditorTarifas() {
   )
 }
 
+
+/* Cobros del mes. Sin pasarela: cada cliente paga por transferencia y aquí se
+   lleva la cuenta. El botón de conciliar lee el extracto que descargas del
+   banco y marca solos los que ya han entrado — sin API ni claves. */
+function Cobros() {
+  const [mes, setMes] = useState(() => new Date().toISOString().slice(0, 7))
+  const [datos, setDatos] = useState(null)
+  const [err, setErr] = useState('')
+  const [aviso, setAviso] = useState('')
+  const [ocupado, setOcupado] = useState('')
+  const ficheroRef = useRef(null)
+
+  const cargar = (m) => {
+    setDatos(null); setErr('')
+    adminGetCobros(m).then((r) => setDatos(r.data))
+      .catch((e) => setErr(e?.response?.data?.detail || 'No se pudieron cargar los cobros'))
+  }
+  useEffect(() => { cargar(mes) }, [mes])
+
+  const marcar = async (c, estado) => {
+    setOcupado(c.id)
+    try { await adminMarcarCobro(c.id, estado); cargar(mes) }
+    catch { setErr('No se pudo guardar') }
+    finally { setOcupado('') }
+  }
+
+  const conciliar = async (e) => {
+    const f = e.target.files?.[0]
+    e.target.value = ''
+    if (!f) return
+    setOcupado('conciliar'); setErr(''); setAviso('')
+    try {
+      const r = await adminConciliar(f, mes)
+      const d = r.data || {}
+      setAviso(`${d.conciliados} cobro(s) marcados como cobrados`
+        + (d.dudosos?.length ? ` · ${d.dudosos.length} sin tocar por dudosos` : ''))
+      cargar(mes)
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'No se pudo leer el extracto')
+    } finally { setOcupado('') }
+  }
+
+  const EST = {
+    cobrado: { txt: 'Cobrado', cls: 'bg-emerald-500/15 text-emerald-300' },
+    pendiente: { txt: 'Pendiente', cls: 'bg-amber-500/15 text-amber-300' },
+    en_prueba: { txt: 'En prueba', cls: 'bg-dark-700 text-dark-400' },
+  }
+  const eur = (n) => `${Number(n || 0).toLocaleString('es-ES', { minimumFractionDigits: 2 })} €`
+
+  return (
+    <div className="card mt-6 p-4">
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <h2 className="flex items-center gap-2 text-sm font-bold text-dark-100">
+          <Receipt size={16} /> Cobros
+        </h2>
+        <input type="month" value={mes} onChange={(e) => setMes(e.target.value)}
+          className="rounded-lg border border-dark-700 bg-dark-900 px-2 py-1 text-xs text-dark-100" />
+        <div className="flex-1" />
+        <input ref={ficheroRef} type="file" accept=".csv,.txt,.xls,.xlsx,.q43,.n43"
+          className="hidden" onChange={conciliar} />
+        <button onClick={() => ficheroRef.current?.click()} disabled={!!ocupado}
+          className="btn-secondary flex items-center gap-1.5 px-3 py-1.5 text-xs disabled:opacity-50">
+          {ocupado === 'conciliar' ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+          Conciliar con el extracto
+        </button>
+      </div>
+
+      {err && <p className="mb-2 text-xs text-red-300">{err}</p>}
+      {aviso && <p className="mb-2 text-xs text-emerald-300">{aviso}</p>}
+
+      {!datos ? (
+        <div className="flex items-center gap-2 text-sm text-dark-400"><Loader2 size={14} className="animate-spin" /> Cargando…</div>
+      ) : datos.cobros.length === 0 ? (
+        <p className="text-sm text-dark-500">Todavía no hay clientes a los que cobrar.</p>
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap gap-4 text-xs">
+            <span className="text-dark-400">Facturado <b className="text-dark-100">{eur(datos.resumen.facturado)}</b></span>
+            <span className="text-emerald-300">Cobrado <b>{eur(datos.resumen.cobrado)}</b></span>
+            <span className="text-amber-300">Pendiente <b>{eur(datos.resumen.pendiente)}</b></span>
+            {datos.resumen.en_prueba > 0 && <span className="text-dark-500">{datos.resumen.en_prueba} en prueba</span>}
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[11px] uppercase tracking-wide text-dark-500">
+                  <th className="pb-2 text-left font-semibold">Cliente</th>
+                  <th className="pb-2 text-right font-semibold">Furgos</th>
+                  <th className="pb-2 text-right font-semibold">Base</th>
+                  <th className="pb-2 text-right font-semibold">Total</th>
+                  <th className="pb-2 text-left font-semibold">Estado</th>
+                  <th className="pb-2" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-dark-800">
+                {datos.cobros.map((c) => {
+                  const e = EST[c.estado] || EST.pendiente
+                  return (
+                    <tr key={c.id}>
+                      <td className="py-2 pr-3">
+                        <div className="font-medium text-dark-100">{c.org_nombre}</div>
+                        <div className="text-[11px] text-dark-600">{c.plan}</div>
+                      </td>
+                      <td className="py-2 text-right text-dark-300">{c.vehiculos}</td>
+                      <td className="py-2 text-right text-dark-400">{eur(c.base)}</td>
+                      <td className="py-2 text-right font-semibold text-dark-100">{eur(c.total)}</td>
+                      <td className="py-2">
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${e.cls}`}>{e.txt}</span>
+                      </td>
+                      <td className="py-2 text-right">
+                        {c.estado === 'pendiente' && (
+                          <button onClick={() => marcar(c, 'cobrado')} disabled={ocupado === c.id}
+                            className="flex items-center gap-1 rounded-lg bg-emerald-500/15 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 disabled:opacity-50">
+                            <Check size={12} /> Cobrado
+                          </button>
+                        )}
+                        {c.estado === 'cobrado' && (
+                          <button onClick={() => marcar(c, 'pendiente')} disabled={ocupado === c.id}
+                            className="flex items-center gap-1 rounded-lg px-2.5 py-1 text-[11px] text-dark-500 hover:text-dark-300 disabled:opacity-50">
+                            <Undo2 size={12} /> Deshacer
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <p className="mt-3 text-[11px] text-dark-600">
+            Esto lleva el control de qué cobrar, no emite la factura legal: esa la
+            haces con tu programa de facturación o tu gestoría.
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function Negocio() {
   const nav = useNavigate()
   const { t } = useT()
@@ -245,6 +388,7 @@ export default function Negocio() {
       </div>
 
       <EditorTarifas />
+      <Cobros />
 
       {/* Facturación (honesto: facturas reales en Lemon Squeezy) */}
       <div className="card mt-4 flex flex-wrap items-center justify-between gap-3 p-4">

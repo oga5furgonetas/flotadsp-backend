@@ -42,6 +42,15 @@ const dentroDe = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 
 function respuesta(ruta, escenario) {
   const lleno = escenario === 'lleno'
   const t = {
+    '/admin/cobros': {
+      mes: '2026-08',
+      resumen: { facturado: 732.05, cobrado: 387.2, pendiente: 344.85, en_prueba: 0 },
+      cobros: [
+        { id: 'c1', org_nombre: 'Transportes Ruiz SL', plan: 'completo', vehiculos: 40, base: 320, total: 387.2, estado: 'cobrado' },
+        { id: 'c2', org_nombre: 'Logística Vega', plan: 'operacion', vehiculos: 25, base: 125, total: 151.25, estado: 'pendiente' },
+        { id: 'c3', org_nombre: 'DSP Nuevo', plan: 'completo', vehiculos: 30, base: 240, total: 290.4, estado: 'en_prueba' },
+      ],
+    },
     '/admin/planes': {
       moneda: 'EUR', descuento_anual_meses: 2, iva_pct: 21,
       planes: [

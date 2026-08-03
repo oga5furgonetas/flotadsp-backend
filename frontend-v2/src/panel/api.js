@@ -215,6 +215,16 @@ export const getBillingConfig = () => api.get('/billing/config')
 /* Catálogo de planes: editable sin desplegar. */
 export const adminGetPlanes = () => api.get('/admin/planes')
 export const adminSetPlanes = (body) => api.put('/admin/planes', body)
+/* Cobros: qué facturar cada mes y quién ha pagado. Sin pasarela. */
+export const adminGetCobros = (mes) => api.get('/admin/cobros', { params: mes ? { mes } : {} })
+export const adminMarcarCobro = (id, estado, referencia) =>
+  api.post(`/admin/cobros/${id}`, { estado, ...(referencia ? { referencia } : {}) })
+export function adminConciliar(file, mes) {
+  const fd = new FormData()
+  fd.append('file', file)
+  if (mes) fd.append('mes', mes)
+  return api.post('/admin/cobros/conciliar', fd, { timeout: 120000, headers: { 'Content-Type': undefined } })
+}
 export const backupNow = () => api.post('/admin/backup-now')
 /* Monetización: ofertas del portal conductor + reservas fundador */
 export const adminGetDriverOffers = () => api.get('/admin/driver-offers')
