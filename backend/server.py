@@ -62,6 +62,37 @@ _GEMINI_EXHAUST_TTL = 4 * 3600
 def _mark_daily_exhausted(model: str):
     _gemini_daily_exhausted[model] = time.time()
     logger.warning(f"Gemini cuota DIARIA agotada en {model}: vetado {_GEMINI_EXHAUST_TTL // 3600}h")
+    # Persistir: si esto vive solo en memoria, cada despliegue olvida el veto y
+    # se vuelven a quemar llamadas para redescubrir que no hay cupo.
+    try:
+        asyncio.get_running_loop().create_task(_guardar_veto_gemini())
+    except RuntimeError:
+        pass                      # sin bucle (arranque/CLI): no pasa nada
+
+
+async def _guardar_veto_gemini():
+    try:
+        await global_db.app_meta.update_one(
+            {"_id": "gemini_exhausted"},
+            {"$set": {"modelos": dict(_gemini_daily_exhausted)}},
+            upsert=True)
+    except Exception as e:
+        logger.debug(f"No se pudo guardar el veto de Gemini: {e}")
+
+
+async def _cargar_veto_gemini():
+    """Recupera al arrancar qué modelos tenían el cupo agotado y siguen vetados."""
+    try:
+        doc = await global_db.app_meta.find_one({"_id": "gemini_exhausted"})
+        vivos = 0
+        for modelo, ts in ((doc or {}).get("modelos") or {}).items():
+            if time.time() - float(ts) < _GEMINI_EXHAUST_TTL:
+                _gemini_daily_exhausted[modelo] = float(ts)
+                vivos += 1
+        if vivos:
+            logger.info(f"Gemini: {vivos} modelo(s) siguen vetados por cupo diario tras el reinicio")
+    except Exception as e:
+        logger.warning(f"No se pudo recuperar el veto de Gemini: {e}")
 
 
 def _is_daily_exhausted(model: str) -> bool:
@@ -6908,15 +6939,24 @@ async def start_analysis_recovery():
     # Al arrancar, dar OTRA ronda de reintentos a las fallidas recientes: si el
     # reinicio viene de arreglar la config de Gemini (billing/clave caída), las
     # que agotaron sus 3 intentos contra un Gemini roto deben curarse solas.
+    # Todo dentro del try: el arranque nunca puede caerse por esto.
     try:
-        _reset = await db.inspections.update_many(
-            {"analysis_status": {"$in": ["error", "gemini_failed", "gemini_timeout"]},
-             "deleted": {"$ne": True}, "auto_retries": {"$gte": 3},
-             "created_at": {"$gt": (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()}},
-            {"$set": {"auto_retries": 0}},
-        )
-        if _reset.modified_count:
-            logger.info(f"Auto-recuperación: {_reset.modified_count} inspecciones fallidas reencoladas tras reinicio")
+        # Primero recuperar el veto: sin esto, cada despliegue olvidaba que el
+        # cupo estaba agotado y reencolaba trabajo para quemarlo de nuevo.
+        await _cargar_veto_gemini()
+        _cadena = ["gemini-2.5-flash", "gemini-flash-latest",
+                   "gemini-flash-lite-latest", "gemini-2.5-flash-lite"]
+        if all(_is_daily_exhausted(m) for m in _cadena):
+            logger.info("Arranque: cupo diario de Gemini agotado, no se reencolan reintentos")
+        else:
+            _reset = await db.inspections.update_many(
+                {"analysis_status": {"$in": ["error", "gemini_failed", "gemini_timeout"]},
+                 "deleted": {"$ne": True}, "auto_retries": {"$gte": 3},
+                 "created_at": {"$gt": (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()}},
+                {"$set": {"auto_retries": 0}},
+            )
+            if _reset.modified_count:
+                logger.info(f"Auto-recuperación: {_reset.modified_count} inspecciones fallidas reencoladas tras reinicio")
     except Exception as _rr:
         logger.warning(f"Reset de reintentos al arrancar: {_rr}")
 
