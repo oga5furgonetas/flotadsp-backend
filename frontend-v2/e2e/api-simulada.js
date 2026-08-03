@@ -22,7 +22,17 @@ const CONDUCTOR = {
 const INSPECCION = {
   id: 'i1', vehicle_id: 'v1', driver_id: 'd1', created_at: `${HOY}T08:30:00Z`,
   photos: [], analysis_status: 'ok', deleted: false,
-  analysis: { severity: 'sin_danos', damages: [], summary: 'Sin daños' },
+  analysis: {
+    severity: 'moderado', summary: 'Dos daños', total_damages_count: 2,
+    total_estimated_cost: 760,
+    // Uno por gestionar y otro ya cerrado: el barrido prueba los dos estados
+    damages: [
+      { part: 'Puerta lateral izquierda', severity: 'moderado', estimated_cost: 420,
+        description: 'Bollo con arañazo de unos 15 cm' },
+      { part: 'Paragolpes trasero', severity: 'leve', estimated_cost: 340,
+        actual_cost: 298, repair_status: 'done', workshop_id: 'w1' },
+    ],
+  },
 }
 
 /* Respuesta por defecto según el final de la ruta. Cualquier endpoint no
@@ -32,6 +42,12 @@ const dentroDe = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 
 function respuesta(ruta, escenario) {
   const lleno = escenario === 'lleno'
   const t = {
+    '/suggested-workshops': {
+      workshops: [{ id: 'w1', name: 'Toyota Compostela' },
+                  { id: 'w2', name: 'Chapistería Riazor' },
+                  { id: 'w3', name: 'Carglass Santiago' }],
+      total_matched: 3,
+    },
     '/vehicles': lleno ? [VEHICULO] : [],
     '/drivers': lleno ? [CONDUCTOR] : [],
     '/inspections': lleno ? [INSPECCION] : [],

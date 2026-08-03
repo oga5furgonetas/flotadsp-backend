@@ -530,6 +530,29 @@ export default function Dashboard() {
                 <b className={`font-semibold ${costs.prev_month_eur && costs.month_eur < costs.prev_month_eur ? 'text-emerald-400' : 'text-amber-300'}`}>{Math.round(costs.month_eur).toLocaleString('es-ES')} €</b> {t('ops.damage.month')}</>
               )}
             </p>
+
+            {/* El estimado sirve para priorizar; el real es el que se cobra.
+                Y lo que queda sin gestionar es dinero que nadie ha reclamado. */}
+            {costs && (costs.month_real_eur > 0 || costs.en_taller > 0 || costs.sin_gestionar > 0) && (
+              <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12.5px]">
+                {costs.month_real_eur > 0 && (
+                  <span className="text-dark-400">
+                    <b className="font-semibold text-emerald-300">{Math.round(costs.month_real_eur).toLocaleString('es-ES')} €</b> {t('eur.real')}
+                  </span>
+                )}
+                {costs.month_eur > 0 && (
+                  <span className="text-dark-600">
+                    {Math.round(costs.month_eur).toLocaleString('es-ES')} € {t('eur.estimated')}
+                  </span>
+                )}
+                {costs.en_taller > 0 && (
+                  <span className="text-sky-300/90">{t('eur.in.workshop').replace('{n}', costs.en_taller)}</span>
+                )}
+                {costs.sin_gestionar > 0 && (
+                  <span className="text-amber-300/90">{t('eur.unmanaged').replace('{n}', costs.sin_gestionar)}</span>
+                )}
+              </div>
+            )}
           </section>
         </div>
 

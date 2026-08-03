@@ -4,9 +4,9 @@ import { useT, LANG_LOCALE } from '../../i18n'
 import { lista } from '../../lib/lista'
 import {
   Loader2, Search, X, FileText, Image as ImageIcon, ShieldQuestion, User, ChevronDown,
-  ShieldCheck, FileSignature, ShieldAlert, RefreshCw,
+  ShieldCheck, FileSignature, ShieldAlert, RefreshCw, Wrench, Check, Euro, Undo2,
 } from 'lucide-react'
-import { getInspections, getVehicles, getDrivers, getVehicleInspections, fetchAuthedBlob, getForensicStatus, signInspectionAdmin, recheckFraud } from '../api'
+import { getInspections, getVehicles, getDrivers, getVehicleInspections, fetchAuthedBlob, getForensicStatus, signInspectionAdmin, recheckFraud, getSuggestedWorkshops, updateDamage } from '../api'
 
 const SEV_CLS = {
   leve: 'bg-amber-500/20 text-amber-300', moderado: 'bg-orange-500/20 text-orange-300',
@@ -45,6 +45,20 @@ export default function Inspecciones() {
       })
       .catch(() => setErr('No se pudieron cargar las inspecciones.'))
   }, [])
+
+  /* Tras mandar un daño al taller o cerrarlo, recarga SOLO esa inspección:
+     el panel abierto y la lista tienen que enseñar el estado nuevo, o parece
+     que no se ha guardado nada. */
+  const recargarInspeccion = async () => {
+    if (!sel) return
+    try {
+      const r = await getInspections({ limit: 300 })
+      const todas = lista(r.data)
+      setInsps(todas)
+      const fresca = todas.find((i) => i.id === sel.id)
+      if (fresca) setSel(fresca)
+    } catch { /* si falla la recarga, el guardado ya se hizo */ }
+  }
 
   const list = useMemo(() => {
     if (!insps) return []
@@ -118,12 +132,16 @@ export default function Inspecciones() {
         </div>
       )}
 
-      {sel && <Detail insp={sel} plate={vmap[sel.vehicle_id]?.plate} dmap={dmap} onClose={() => setSel(null)} onPdf={openForensicPdf} fmt={fmt} fmtDay={fmtDay} sevLabel={sevLabel} />}
+      {sel && (
+        <Detail insp={sel} plate={vmap[sel.vehicle_id]?.plate} dmap={dmap}
+          onClose={() => setSel(null)} onPdf={openForensicPdf} fmt={fmt} fmtDay={fmtDay}
+          sevLabel={sevLabel} onDamageSaved={recargarInspeccion} />
+      )}
     </div>
   )
 }
 
-function Detail({ insp, plate, dmap, onClose, onPdf, fmt, fmtDay, sevLabel }) {
+function Detail({ insp, plate, dmap, onClose, onPdf, fmt, fmtDay, sevLabel, onDamageSaved }) {
   const { t } = useT()
   const [pi, setPi] = useState(0)
   const [tab, setTab] = useState('danos') // 'danos' | 'quien'
@@ -176,7 +194,9 @@ function Detail({ insp, plate, dmap, onClose, onPdf, fmt, fmtDay, sevLabel }) {
           {tab === 'danos' ? (
             <div className="mt-3 space-y-2">
               {damages.length === 0 ? <div className="card p-4 text-center text-sm text-dark-500">{t('insp.no.damage')}</div> :
-                damages.map((d, k) => <DamageRow key={k} d={d} />)}
+                damages.map((d, k) => (
+                  <DamageRow key={k} d={d} inspId={insp.id} idx={k} onSaved={onDamageSaved} />
+                ))}
               {a.executive_summary && (
                 <details className="mt-2 text-sm text-dark-400">
                   <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-dark-500">{t('insp.summary')}</summary>
@@ -313,17 +333,126 @@ function ForensicSignBlock({ inspId, onPdf, fmt }) {
   )
 }
 
-function DamageRow({ d }) {
+/* Un daño detectado no vale de nada si ahí se acaba. Esta fila cierra el
+   bucle: mandarlo al taller, apuntar lo que ha costado DE VERDAD y darlo por
+   reparado. El backend ya lo soportaba; no había forma de llamarlo. */
+function DamageRow({ d, inspId, idx, onSaved }) {
+  const { t } = useT()
   const [open, setOpen] = useState(false)
+  const [panel, setPanel] = useState(false)
+  const [talleres, setTalleres] = useState(null)
+  const [coste, setCoste] = useState(d.actual_cost != null ? String(d.actual_cost) : '')
+  const [guardando, setGuardando] = useState('')
+  const [err, setErr] = useState('')
+
+  const estado = d.repair_status || (d.workshop_id ? 'assigned' : 'pending')
+  const reparado = estado === 'done'
+
+  const abrirPanel = async () => {
+    const abriendo = !panel
+    setPanel(abriendo)
+    if (!abriendo || talleres) return
+    try {
+      const r = await getSuggestedWorkshops(inspId, idx)
+      setTalleres(lista(r.data?.workshops))
+    } catch {
+      setTalleres([])
+      setErr(t('dmg.workshops.err'))
+    }
+  }
+
+  const guardar = async (cambios, marca) => {
+    setGuardando(marca); setErr('')
+    try {
+      await updateDamage(inspId, idx, cambios)
+      onSaved?.()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || t('dmg.save.err'))
+    } finally { setGuardando('') }
+  }
+
   return (
-    <div className="rounded-lg border border-dark-800 bg-dark-800/40 p-2.5">
+    <div className={`rounded-lg border p-2.5 ${reparado ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-dark-800 bg-dark-800/40'}`}>
       <div className="flex items-center gap-2">
         <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${SEV_DOT[d.severity] || SEV_DOT.sin_analisis}`} />
         <span className="flex-1 truncate text-sm font-medium">{d.part || 'Daño'}</span>
-        <span className="text-sm text-dark-300">{eur(d.estimated_cost)}</span>
-        {d.description && <button onClick={() => setOpen((o) => !o)} className="text-dark-500"><ChevronDown size={15} className={open ? 'rotate-180 transition' : 'transition'} /></button>}
+        {reparado
+          ? <span className="flex items-center gap-1 text-sm font-semibold text-emerald-300"><Check size={13} /> {eur(d.actual_cost)}</span>
+          : <span className="text-sm text-dark-300">{eur(d.estimated_cost)}</span>}
+        <button onClick={abrirPanel} title={t('dmg.manage')}
+          className={`rounded-md p-1 ${panel ? 'bg-dark-700 text-dark-200' : 'text-dark-500 hover:text-dark-300'}`}>
+          <Wrench size={14} />
+        </button>
+        {d.description && (
+          <button onClick={() => setOpen((o) => !o)} className="text-dark-500">
+            <ChevronDown size={15} className={open ? 'rotate-180 transition' : 'transition'} />
+          </button>
+        )}
       </div>
+
       {open && d.description && <p className="mt-2 pl-4 text-xs leading-relaxed text-dark-400">{d.description}</p>}
+
+      {!panel && estado !== 'pending' && (
+        <p className="mt-1.5 pl-4 text-[11px] text-dark-500">
+          {reparado ? t('dmg.st.done') : t('dmg.st.assigned')}
+        </p>
+      )}
+
+      {panel && (
+        <div className="mt-2.5 flex flex-col gap-2.5 border-t border-dark-700/60 pt-2.5">
+          {err && <p className="text-xs text-red-300">{err}</p>}
+
+          {!reparado && (
+            <div>
+              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-dark-500">{t('dmg.step.workshop')}</p>
+              {talleres === null ? (
+                <span className="flex items-center gap-1.5 text-xs text-dark-400"><Loader2 size={12} className="animate-spin" /> {t('ui.loading')}</span>
+              ) : talleres.length === 0 ? (
+                <p className="text-xs text-dark-500">{t('dmg.no.workshops')}</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {talleres.slice(0, 6).map((w) => (
+                    <button key={w.id} disabled={!!guardando}
+                      onClick={() => guardar({ workshop_id: w.id }, 'taller')}
+                      className={`rounded-lg border px-2.5 py-1 text-[11px] font-medium transition disabled:opacity-50 ${
+                        d.workshop_id === w.id
+                          ? 'border-brand-500/50 bg-brand-500/15 text-brand-300'
+                          : 'border-dark-700 text-dark-300 hover:border-dark-600'}`}>
+                      {w.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-end gap-2">
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">{t('dmg.step.cost')}</span>
+              <span className="flex items-center gap-1">
+                <input type="text" inputMode="decimal" value={coste} placeholder={String(d.estimated_cost ?? '')}
+                  onChange={(e) => setCoste(e.target.value)}
+                  className="w-24 rounded-lg border border-dark-700 bg-dark-900 px-2 py-1 text-sm text-dark-100" />
+                <Euro size={13} className="text-dark-500" />
+              </span>
+            </label>
+            <button disabled={!!guardando || coste === ''}
+              onClick={() => guardar({ actual_cost: coste, repair_status: 'done' }, 'cerrar')}
+              className="btn-primary flex items-center gap-1.5 px-3 py-1.5 text-xs disabled:opacity-40">
+              {guardando === 'cerrar' ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+              {t('dmg.close')}
+            </button>
+            {reparado && (
+              <button disabled={!!guardando}
+                onClick={() => guardar({ repair_status: 'assigned' }, 'reabrir')}
+                className="btn-ghost flex items-center gap-1.5 px-2.5 py-1.5 text-xs">
+                <Undo2 size={13} /> {t('dmg.reopen')}
+              </button>
+            )}
+          </div>
+          <p className="text-[11px] text-dark-600">{t('dmg.hint')}</p>
+        </div>
+      )}
     </div>
   )
 }

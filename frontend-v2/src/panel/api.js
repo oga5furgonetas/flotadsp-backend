@@ -86,6 +86,12 @@ export const fetchAuthedBlob = async (path) => {
 
 /* ── Talleres ── */
 export const getWorkshops = () => api.get('/workshops')
+/* Bucle del daño: mandar a taller, apuntar el coste real y cerrarlo.
+   El backend ya lo soportaba; lo que faltaba era llamarlo desde algún sitio. */
+export const getSuggestedWorkshops = (inspectionId, damageIndex) =>
+  api.get(`/inspections/${inspectionId}/damages/${damageIndex}/suggested-workshops`)
+export const updateDamage = (inspectionId, damageIndex, body) =>
+  api.patch(`/inspections/${inspectionId}/damages/${damageIndex}`, body)
 export const getWorkshopsNearby = (lat, lng, { provider, category, maxKm = 80 } = {}) =>
   api.get('/workshops/nearby', { params: { lat, lng, max_km: maxKm, ...(provider ? { provider } : {}), ...(category ? { category } : {}) } })
 

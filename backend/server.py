@@ -11064,7 +11064,8 @@ async def get_damage_costs(center: Optional[str] = None, _=Depends(require_admin
     if center and center != "Todos":
         query["center"] = center
     insps = await db.inspections.find(
-        query, {"_id": 0, "id": 1, "driver_id": 1, "created_at": 1, "analysis.new_damages": 1}
+        query, {"_id": 0, "id": 1, "driver_id": 1, "created_at": 1,
+                "analysis.new_damages": 1, "analysis.damages": 1, "vehicle_id": 1}
     ).to_list(5000)
 
     # Falsos positivos marcados por humanos → excluidos del cómputo
@@ -11105,6 +11106,27 @@ async def get_damage_costs(center: Optional[str] = None, _=Depends(require_admin
             e["eur"] += eur
             e["count"] += cnt
 
+    # ── Lado REAL: lo que se ha gastado y lo que queda por cerrar ──────────
+    # La estimacion de la IA sirve para priorizar; esto sirve para cobrar.
+    real = {"eur": 0.0, "count": 0}
+    en_taller = 0
+    sin_gestionar = 0
+    for i in insps:
+        es_de_este_mes = i.get("created_at", "") >= m_iso
+        for d in ((i.get("analysis") or {}).get("damages")) or []:
+            if not isinstance(d, dict):
+                continue
+            estado = d.get("repair_status")
+            coste = _a_numero(d.get("actual_cost"))
+            if estado == "done":
+                if es_de_este_mes and coste > 0:
+                    real["eur"] += coste
+                    real["count"] += 1
+            elif d.get("workshop_id"):
+                en_taller += 1
+            elif es_de_este_mes:
+                sin_gestionar += 1
+
     top = sorted(by_driver.items(), key=lambda kv: -kv[1]["eur"])[:5]
     names = {}
     if top:
@@ -11116,6 +11138,9 @@ async def get_damage_costs(center: Optional[str] = None, _=Depends(require_admin
     return {
         "month_eur": round(cur["eur"]), "month_count": cur["count"],
         "prev_month_eur": round(prev["eur"]), "prev_month_count": prev["count"],
+        # Lo que ha costado DE VERDAD, y lo que queda pendiente de cerrar
+        "month_real_eur": round(real["eur"]), "month_real_count": real["count"],
+        "en_taller": en_taller, "sin_gestionar": sin_gestionar,
         "top_drivers": [
             {"driver_id": k, "name": names.get(k, "?"), "eur": round(v["eur"]), "count": v["count"]}
             for k, v in top
