@@ -42,6 +42,56 @@ const dentroDe = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 
 function respuesta(ruta, escenario) {
   const lleno = escenario === 'lleno'
   const t = {
+    /* Cortex: calidad en vivo, portales y rutas. Las cifras son las REALES de
+       la operacion de OGA5 (DCR 99,06 %, 41.889 despachados, 392 fallos en la
+       semana 26/07-01/08) para que la captura de la landing sea a la vez
+       realista y cierta, no un numero inventado que quede bonito. */
+    '/cortex/calidad': lleno ? {
+      desde: '2026-07-26', hasta: '2026-08-01', center: 'OGA5', hay_datos: true,
+      total: { despachados: 41889, entregados: 41497, fallos: 392, rts: 322,
+               dcr: 99.06, rts_pct: 0.77, no_despachados: 82,
+               dias_cerrados: 6, dias_totales: 7 },
+      dias: {
+        '2026-07-26': { ok: 5560, vuelo: 0, nodesp: 4, fallo: 10, total: 5574, en_vuelo_pct: 0, cerrado: true },
+        '2026-07-27': { ok: 9440, vuelo: 306, nodesp: 12, fallo: 54, total: 9812, en_vuelo_pct: 3.12, cerrado: false },
+        '2026-07-28': { ok: 7080, vuelo: 1, nodesp: 21, fallo: 108, total: 7210, en_vuelo_pct: 0.01, cerrado: true },
+        '2026-07-29': { ok: 5554, vuelo: 0, nodesp: 7, fallo: 32, total: 5593, en_vuelo_pct: 0, cerrado: true },
+        '2026-07-30': { ok: 5771, vuelo: 1, nodesp: 5, fallo: 15, total: 5792, en_vuelo_pct: 0.02, cerrado: true },
+        '2026-07-31': { ok: 9777, vuelo: 0, nodesp: 20, fallo: 22, total: 9819, en_vuelo_pct: 0, cerrado: true },
+        '2026-08-01': { ok: 7940, vuelo: 1, nodesp: 13, fallo: 23, total: 7977, en_vuelo_pct: 0.01, cerrado: true },
+      },
+      conductores: [],
+      impacto: [
+        { driver_id: 'A1ENSMMQ', nombre: 'Ximena Seoane García', despachados: 276, dcr: 92.75, rts_pct: 4.3, fallos: 20, exceso: 17.4, muestra_corta: false },
+        { driver_id: 'A1OS1FR5', nombre: 'Ismael García Gómez', despachados: 361, dcr: 94.74, rts_pct: 3.6, fallos: 19, exceso: 15.6, muestra_corta: false },
+        { driver_id: 'A3KMJ51V', nombre: 'Jonnathan A. Fernández', despachados: 258, dcr: 93.8, rts_pct: 3.1, fallos: 16, exceso: 13.6, muestra_corta: false },
+        { driver_id: 'A2PQ8LMN', nombre: 'Geann C. Pereira', despachados: 272, dcr: 95.22, rts_pct: 2.6, fallos: 13, exceso: 10.5, muestra_corta: false },
+      ],
+      en_curso: null, dias_incompletos: ['2026-07-27'],
+      objetivos: { dcr: 99, dnr_dpmo: 950, pod: 97, cc: 98, rts_pct: 1.5, fdds: 98.5 },
+      referencia_fantastic: { dcr: 99, dnr_dpmo: 950, pod: 97, cc: 98 },
+      objetivo_blando: false,
+      margen: { objetivo_dcr: 99, fallos_hasta_ahora: 449, fallos_en_dias_cerrados: 392,
+                fallos_permitidos: 488, margen_restante: 39, prevision_paquetes: 48870,
+                dias_previstos: 7, en_objetivo: true },
+      sin_ficha: [],
+    } : { hay_datos: false, dias: {}, total: null, conductores: [], impacto: [], en_curso: null, objetivos: {}, margen: null },
+    '/cortex/portales': lleno ? {
+      resumen: { reincidentes: 38, fallos: 124, sin_nota: 36 },
+      portales: [
+        { celda: '107280:-17027', celdas: ['107280:-17027'], lat: 42.91191, lng: -8.5133, center: 'OGA5',
+          fallos: 16, dias_distintos: 9, no_recogidos: 28, ultimo_fallo: '2026-08-03', entregas_ok: 227,
+          tasa_fallo: 6.6, estados: ['ATTEMPTED', 'BACK_TO_ORIGIN'],
+          nota: 'Código de portal 1432#. El timbre del 3ºB no suena: llamar al móvil que consta en el pedido.', nota_autor: 'Laura', resuelto: false },
+        { celda: '108352:-16825', celdas: ['108352:-16825'], lat: 43.34074, lng: -8.41259, center: 'OGA5',
+          fallos: 10, dias_distintos: 3, no_recogidos: 0, ultimo_fallo: '2026-08-02', entregas_ok: 16,
+          tasa_fallo: 38.5, estados: ['ATTEMPTED', 'BACK_TO_ORIGIN'], nota: null, resuelto: false },
+        { celda: '108264:-16592', celdas: ['108264:-16592', '108265:-16592'], lat: 43.30555, lng: -8.29584, center: 'OGA5',
+          fallos: 8, dias_distintos: 4, no_recogidos: 15, ultimo_fallo: '2026-07-31', entregas_ok: 70,
+          tasa_fallo: 10.3, estados: ['BACK_TO_ORIGIN'], nota: null, resuelto: false },
+      ],
+    } : { portales: [], resumen: { reincidentes: 0, fallos: 0, sin_nota: 0 } },
+    '/cortex/emparejar': { pendientes: [], libres: [], resumen: { activos: 0, con_ficha: 0, sin_ficha: 0, con_nombre_conocido: 0, paquetes_sin_atribuir: 0 } },
     '/admin/cobros': {
       mes: '2026-08',
       resumen: { facturado: 732.05, cobrado: 387.2, pendiente: 344.85, en_prueba: 0 },

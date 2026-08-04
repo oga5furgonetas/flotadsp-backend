@@ -7,9 +7,17 @@ import {
   Sun, Moon, MessageSquare, Sparkles, AlertTriangle, Target, Ruler, Cpu,
 } from 'lucide-react'
 import Landing3DShowcase from './Landing3DShowcase'
+import ProductoReal from './ProductoReal'
 
 /* ─── i18n adicional solo para la Landing ─── */
 const LD = {
+  'ld.precio.desde': { es: 'Desde 5€', en: 'From €5', fr: 'À partir de 5€', de: 'Ab 5€', it: 'Da 5€', pt: 'Desde 5€' },
+  'ld.precio.unidad': { es: 'por furgoneta y mes · sin permanencia', en: 'per van per month · no lock-in', fr: 'par véhicule et par mois · sans engagement', de: 'pro Fahrzeug und Monat · ohne Bindung', it: 'per furgone al mese · senza vincoli', pt: 'por carrinha por mês · sem fidelização' },
+  'ld.prod.titulo': { es: 'Esto es lo que vas a usar cada día', en: 'This is what you will use every day', fr: 'Voici ce que vous utiliserez chaque jour', de: 'Das nutzt du jeden Tag', it: 'Questo è ciò che userai ogni giorno', pt: 'Isto é o que vais usar todos os dias' },
+  'ld.prod.sub': { es: 'Capturas reales de la aplicación, no maquetas. Las genera la propia app cada vez que cambia una pantalla.', en: 'Real screenshots of the app, not mockups. The app itself regenerates them whenever a screen changes.', fr: 'De vraies captures de l’application, pas des maquettes. L’app les regénère à chaque changement d’écran.', de: 'Echte Screenshots der App, keine Mockups. Die App erzeugt sie neu, sobald sich ein Bildschirm ändert.', it: 'Screenshot reali dell’app, non mockup. È l’app stessa a rigenerarli quando cambia una schermata.', pt: 'Capturas reais da aplicação, não maquetas. A própria app regenera-as sempre que muda um ecrã.' },
+  'ld.fund.eyebrow': { es: 'Quién está detrás', en: 'Who is behind this', fr: 'Qui est derrière', de: 'Wer dahinter steckt', it: 'Chi c’è dietro', pt: 'Quem está por trás' },
+  'ld.fund.texto': { es: 'Soy Dani. FlotaDSP nació gestionando una flota real de furgonetas de reparto para Amazon, no en una reunión de producto: cada pantalla existe porque me hizo falta a mí primero. Si escribes, te contesto yo — no un formulario ni un chatbot.', en: 'I am Dani. FlotaDSP was born running a real Amazon delivery van fleet, not in a product meeting: every screen exists because I needed it first. If you write, I answer — not a form, not a chatbot.', fr: 'Je suis Dani. FlotaDSP est né en gérant une vraie flotte de livraison Amazon, pas en réunion produit : chaque écran existe parce que j’en ai eu besoin. Si vous écrivez, c’est moi qui réponds.', de: 'Ich bin Dani. FlotaDSP entstand beim Betrieb einer echten Amazon-Lieferflotte, nicht in einem Produktmeeting: jeder Bildschirm existiert, weil ich ihn zuerst brauchte. Wenn du schreibst, antworte ich — kein Formular, kein Chatbot.', it: 'Sono Dani. FlotaDSP è nato gestendo una vera flotta di consegne Amazon, non in una riunione di prodotto: ogni schermata esiste perché prima serviva a me. Se scrivi, rispondo io — non un modulo né un chatbot.', pt: 'Sou o Dani. O FlotaDSP nasceu a gerir uma frota real de entregas da Amazon, não numa reunião de produto: cada ecrã existe porque primeiro fez falta a mim. Se escreveres, respondo eu — não um formulário nem um chatbot.' },
+  'ld.fund.cta': { es: 'Escríbeme directamente', en: 'Write to me directly', fr: 'Écrivez-moi directement', de: 'Schreib mir direkt', it: 'Scrivimi direttamente', pt: 'Escreve-me diretamente' },
   'ld.demo.title':   { es: 'Así funciona en la vida real', en: 'This is how it works in real life', fr: 'Voici comment ça marche vraiment', de: 'So funktioniert es im Alltag', it: 'Così funziona nella vita reale', pt: 'É assim que funciona na vida real' },
   'ld.demo.sub':     { es: 'El conductor sube las fotos desde el móvil. La IA analiza al instante. Tú lo ves todo desde el panel.', en: 'The driver uploads photos from their phone. AI analyses instantly. You see everything from the dashboard.', fr: "Le chauffeur envoie les photos depuis son mobile. L'IA analyse instantanément. Vous voyez tout depuis le tableau de bord.", de: 'Der Fahrer lädt Fotos vom Handy. Die KI analysiert sofort. Du siehst alles im Dashboard.', it: "L'autista invia le foto dal cellulare. L'IA analizza all'istante. Tu vedi tutto dal pannello.", pt: 'O motorista envia fotos do telemóvel. A IA analisa na hora. Vês tudo no painel.' },
   'ld.demo.s1':      { es: 'Inspección IA en 30s', en: 'AI inspection in 30s', fr: 'Inspection IA en 30s', de: 'KI-Inspektion in 30s', it: 'Ispezione IA in 30s', pt: 'Inspeção IA em 30s' },
@@ -339,7 +347,7 @@ function DualDemo() {
 
             {/* Step indicators debajo del teléfono */}
             <div style={{ width:'100%', maxWidth:340 }}>
-              <div style={{ display:'inline-flex', alignItems:'center', gap:6, background:'rgba(14,165,233,.1)', border:'1px solid rgba(14,165,233,.25)', borderRadius:99, padding:'4px 14px', fontSize:11, fontWeight:700, color:'#38bdf8', letterSpacing:'.06em', textTransform:'uppercase', marginBottom:16 }}>🎬 Demo</div>
+              <div style={{ display:'inline-flex', alignItems:'center', gap:6, background:'rgba(14,165,233,.1)', border:'1px solid rgba(14,165,233,.25)', borderRadius:99, padding:'4px 14px', fontSize:11, fontWeight:700, color:'#38bdf8', letterSpacing:'.06em', textTransform:'uppercase', marginBottom:16 }}>Demo</div>
               {demoLabels.map((label,i) => {
                 const active = activeLabel === i
                 return (
@@ -533,8 +541,18 @@ export default function Landing() {
               </a>
               <button onClick={openDemo} disabled={demoBusy}
                 style={{ background: 'transparent', color: 'var(--ld-muted)', padding: '14px 18px', borderRadius: 12, fontSize: 14, fontWeight: 700, border: '1px dashed var(--ld-border-strong)', cursor: 'pointer', opacity: demoBusy ? .6 : 1 }}>
-                {demoBusy ? '…' : `▶ ${t('hero.ctaDemo')}`}
+                {demoBusy ? '…' : t('hero.ctaDemo')}
               </button>
+            </div>
+            {/* El precio, delante. Cartrack abre con "R99pm" y funciona: quien
+                esconde el precio parece caro. 5 EUR/furgoneta al mes es
+                comprensible de un vistazo y descarta al que no encaja antes
+                de que gaste su tiempo y el tuyo. */}
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+              <span style={{ fontSize: 30, fontWeight: 950, color: 'var(--ld-text)', letterSpacing: '-.02em' }}>
+                {tl('ld.precio.desde')}
+              </span>
+              <span style={{ fontSize: 14, color: 'var(--ld-dim)' }}>{tl('ld.precio.unidad')}</span>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 18px' }}>
               {[t('hero.mini').split('·').filter(Boolean)].flat().map((s, i) => (
@@ -576,6 +594,12 @@ export default function Landing() {
         </div>
       </div>
 
+      {/* ── EL PRODUCTO, A LA VISTA ──
+          Va ARRIBA del todo a proposito: antes de explicar como funciona la IA,
+          el visitante tiene que ver la pantalla que va a usar. Esto es lo que
+          hace Cartrack con su video y por lo que su pagina parece de empresa. */}
+      <ProductoReal lang={lang} titulo={tl('ld.prod.titulo')} sub={tl('ld.prod.sub')} />
+
       {/* ── MOTOR DE VISIÓN PROPIO (el diferenciador técnico) ── */}
       <AiEngineSection />
 
@@ -586,7 +610,7 @@ export default function Landing() {
       <section style={{ borderTop: '1px solid var(--ld-fill)', borderBottom: '1px solid var(--ld-fill)' }}>
         <div style={{ maxWidth: 1100, margin: '0 auto', padding: '72px 20px' }}>
           <div style={{ textAlign: 'center', marginBottom: 44 }}>
-            <h2 style={{ fontSize: 'clamp(22px,3vw,34px)', fontWeight: 900, margin: '0 0 10px' }}>💸 {t('roi.t')}</h2>
+            <h2 style={{ fontSize: 'clamp(22px,3vw,34px)', fontWeight: 900, margin: '0 0 10px' }}>{t('roi.t')}</h2>
             <p style={{ color: 'var(--ld-muted)', fontSize: 15, margin: 0 }}>{t('roi.sub')}</p>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(340px,1fr))', gap: 14 }}>
@@ -688,6 +712,36 @@ export default function Landing() {
       </section>
 
       {/* ── CTA FINAL ── */}
+      {/* ── QUIÉN ESTÁ DETRÁS ──
+          Cartrack tiene 20 años y un premio del periódico; nosotros no, y no
+          se puede fingir. Lo que SÍ tenemos y ellos no: una persona con
+          nombre que coge el teléfono. Para un DSP de 40 furgonetas eso pesa
+          más que un logo corporativo, y es verdad, que es lo importante. */}
+      <section style={{ maxWidth: 780, margin: '0 auto', padding: '64px 20px' }}>
+        <div style={{ display: 'flex', gap: 22, alignItems: 'flex-start', flexWrap: 'wrap',
+                      background: 'var(--ld-surface)', border: '1px solid var(--ld-fill)',
+                      borderRadius: 16, padding: 26 }}>
+          <img src="/fundador.jpg" alt="" width={72} height={72}
+            onError={(e) => { e.currentTarget.style.display = 'none' }}
+            style={{ width: 72, height: 72, borderRadius: 16, objectFit: 'cover',
+                     border: '1px solid var(--ld-border-strong)', flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 240 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.09em',
+                          textTransform: 'uppercase', color: 'var(--ld-accent)', marginBottom: 8 }}>
+              {tl('ld.fund.eyebrow')}
+            </div>
+            <p style={{ fontSize: 15.5, lineHeight: 1.7, color: 'var(--ld-muted)', margin: '0 0 14px' }}>
+              {tl('ld.fund.texto')}
+            </p>
+            <a href="/contacto" style={{ display: 'inline-flex', alignItems: 'center', gap: 7,
+                 fontSize: 14, fontWeight: 700, color: 'var(--ld-text)', textDecoration: 'none',
+                 border: '1px solid var(--ld-border-strong)', borderRadius: 10, padding: '10px 16px' }}>
+              {tl('ld.fund.cta')} <ArrowRight size={15} />
+            </a>
+          </div>
+        </div>
+      </section>
+
       <section style={{ background: 'var(--ld-surface)', borderTop: '1px solid var(--ld-fill)' }}>
         <div style={{ maxWidth: 680, margin: '0 auto', padding: '80px 20px', textAlign: 'center' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(14,165,233,.1)', border: '1px solid rgba(14,165,233,.25)', borderRadius: 99, padding: '5px 16px', fontSize: 12, fontWeight: 700, color: '#38bdf8', marginBottom: 20 }}>
