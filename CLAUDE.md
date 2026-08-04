@@ -77,6 +77,24 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `'AMZL OGA5 SANTIAGO XPT'`. Cualquier filtro por centro va por `$regex` sobre el
    código, nunca por igualdad. Y `inspections`, `incidents` y `alerts` NO tienen
    campo `center`: se acotan por `vehicle_id` contra las furgonetas del centro.
+8. **Un asset que no existe devuelve `index.html` con HTTP 200**, no un 404
+   (`_redirects` es `/* /index.html 200` y Cloudflare Pages no admite 404 ahí
+   ni sintaxis de negación — probado y desplegado, se ignora). Al desplegar,
+   `index.html` (no-cache) trae los hashes nuevos al instante pero los chunks
+   tardan en propagarse: un navegador que pida uno en esa ventana se guarda ese
+   HTML bajo la URL `.js` durante 4 h y la app entera muere con
+   *"Cannot read properties of undefined (reading 'default')"*. Pasó el
+   2026-08-04: **un solo chunk** envenenado tumbaba flotadsp.com mientras curl
+   y `*.pages.dev` servían el JS correcto byte a byte. La defensa es
+   `repairAssetCache()` en `main.jsx`: re-descarga los assets con
+   `cache:'reload'`. Tiene que llamarse **antes** de cualquier recarga — una
+   recarga a secas vuelve a servir el fichero podrido desde caché. Está
+   enganchada al `ErrorBoundary` y a `vite:preloadError`.
+9. **Mongo OMITE la clave del `_id` en un `$group` cuando el campo no existe**
+   en el documento (no la pone a `null`). `r["_id"]["cond"]` revienta con
+   `KeyError` en cuanto hay un documento sin ese campo — pasó con los 94
+   paquetes de Cortex sin `driver_id`. Usar siempre `.get()`.
+
 7. `frontend-v2/dist/` NO se versiona (está en .gitignore desde 2026-07). Es el build:
    se regenera con `npm run build` antes de cada deploy. Antes se commiteaba y provocaba
    conflictos masivos al trabajar desde dos ordenadores; ya no.
