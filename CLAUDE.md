@@ -77,6 +77,9 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `'AMZL OGA5 SANTIAGO XPT'`. Cualquier filtro por centro va por `$regex` sobre el
    código, nunca por igualdad. Y `inspections`, `incidents` y `alerts` NO tienen
    campo `center`: se acotan por `vehicle_id` contra las furgonetas del centro.
+7. `frontend-v2/dist/` NO se versiona (está en .gitignore desde 2026-07). Es el build:
+   se regenera con `npm run build` antes de cada deploy. Antes se commiteaba y provocaba
+   conflictos masivos al trabajar desde dos ordenadores; ya no.
 8. **Un asset que no existe devuelve `index.html` con HTTP 200**, no un 404
    (`_redirects` es `/* /index.html 200` y Cloudflare Pages no admite 404 ahí
    ni sintaxis de negación — probado y desplegado, se ignora). Al desplegar,
@@ -94,10 +97,6 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    en el documento (no la pone a `null`). `r["_id"]["cond"]` revienta con
    `KeyError` en cuanto hay un documento sin ese campo — pasó con los 94
    paquetes de Cortex sin `driver_id`. Usar siempre `.get()`.
-
-7. `frontend-v2/dist/` NO se versiona (está en .gitignore desde 2026-07). Es el build:
-   se regenera con `npm run build` antes de cada deploy. Antes se commiteaba y provocaba
-   conflictos masivos al trabajar desde dos ordenadores; ya no.
 
 ## Reglas de trabajo
 
