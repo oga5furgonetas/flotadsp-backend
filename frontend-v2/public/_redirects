@@ -1,1 +1,20 @@
+# OJO antes de "mejorar" esto:
+#
+# Un asset que no existe devuelve el index.html con HTTP 200, no un 404. Eso es
+# lo que envenena la cache del navegador: guarda ese HTML BAJO LA URL DEL .js y
+# a partir de ahi import() falla y la app entera muere con
+#     "Cannot read properties of undefined (reading 'default')"
+# Comprobado en produccion en flotadsp.com el 2026-08-04.
+#
+# Lo logico seria excluir /assets/* del fallback. NO SE PUEDE con Cloudflare
+# Pages: _redirects solo admite 200/301/302/303/307/308 — una regla
+# "/assets/* 404" se ignora (probado y desplegado: el asset inexistente siguio
+# devolviendo 200 + HTML). Y Pages tampoco tiene sintaxis de negacion.
+#
+# La alternativa —listar aqui las rutas SPA una a una en vez de /*— haria que
+# cualquier ruta que se olvide devuelva 404 a un cliente. No compensa.
+#
+# Por eso la defensa vive en el cliente (src/main.jsx): repairAssetCache()
+# re-descarga los assets con cache:'reload' y se llama TANTO desde el
+# ErrorBoundary como desde vite:preloadError antes de recargar.
 /* /index.html 200

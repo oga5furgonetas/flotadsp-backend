@@ -26,7 +26,17 @@ window.addEventListener('vite:preloadError', (e) => {
   const last = Number(sessionStorage.getItem(k) || 0)
   if (Date.now() - last > 30_000) {           // guarda anti-bucle de recargas
     sessionStorage.setItem(k, String(Date.now()))
-    window.location.reload()
+    // Reparar ANTES de recargar, igual que hace el ErrorBoundary. Una recarga
+    // a secas NO cura un asset envenenado: los assets van con caché larga, así
+    // que el navegador vuelve a servir el mismo fichero malo, falla otra vez, y
+    // el guardia anti-bucle deja al usuario clavado en la pantalla de error.
+    //
+    // Pasó de verdad en flotadsp.com el 2026-08-04: un chunk de 410 bytes tenía
+    // el index.html cacheado bajo su URL .js. curl y el mismo build en
+    // *.pages.dev iban bien; ese navegador no cargaba la web NUNCA. Solo se
+    // curó forzando cache:'reload' a mano — que es justo lo que hace
+    // repairAssetCache y este manejador se estaba saltando.
+    repairAssetCache().finally(() => window.location.reload())
   }
 })
 
