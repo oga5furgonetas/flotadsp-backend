@@ -4,7 +4,7 @@ import { API_BASE } from '../lib/apiBase'
 import {
   Zap, Shield, Bell, Trophy, Clock, CheckCircle, ChevronRight,
   Camera, Truck, Users, BarChart3, Star, ArrowRight, Globe, Lock,
-  Sun, Moon, MessageSquare, Sparkles, AlertTriangle,
+  Sun, Moon, MessageSquare, Sparkles, AlertTriangle, Target, Ruler, Cpu,
 } from 'lucide-react'
 import Landing3DShowcase from './Landing3DShowcase'
 
@@ -328,7 +328,7 @@ function DualDemo() {
                         <span style={{ fontSize:9,color:r.c,fontWeight:900 }}>{r.e}</span>
                       </div>)}
                     <div style={{ display:'flex',justifyContent:'space-around',borderTop:'1px solid var(--ld-fill)',paddingTop:6 }}>
-                      {['▦','🚐','📋','⚙'].map((ic,i)=><span key={i} style={{ fontSize:11,opacity:i===0?1:.35,color:i===0?'#fb923c':'var(--ld-muted)' }}>{ic}</span>)}
+                      {[BarChart3, Truck, Camera, Users].map((Ic,i)=><span key={i} style={{ display:'inline-flex',opacity:i===0?1:.35,color:i===0?'#fb923c':'var(--ld-muted)' }}><Ic size={11} /></span>)}
                     </div>
                   </div>}
                   {step===4 && <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',gap:6,padding:11,background:'var(--ld-surface)' }}><div style={{ display:'flex',alignItems:'center',justifyContent:'space-between' }}><div style={{ fontSize:8,fontWeight:700,color:'var(--ld-dim)',textTransform:'uppercase' }}>Scorecard Amazon</div><div style={{ fontSize:7,background:'rgba(52,211,153,.15)',color:'#34d399',padding:'2px 6px',borderRadius:99,fontWeight:800 }}>Sem 23</div></div><div style={{ background:'linear-gradient(135deg,rgba(52,211,153,.12),rgba(52,211,153,.04))',border:'1px solid rgba(52,211,153,.25)',borderRadius:9,padding:'9px 11px' }}><div style={{ display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:5 }}><div style={{ fontSize:9,fontWeight:800,color:'#34d399' }}>Fantastic+</div><div style={{ fontSize:16,fontWeight:900,color:'#34d399' }}>96%</div></div><div style={{ height:4,background:'rgba(52,211,153,.2)',borderRadius:99 }}><div style={{ width:'96%',height:'100%',background:'#34d399',borderRadius:99 }} /></div></div>{[['DCR','99.2%','#34d399'],['POD','98.8%','#34d399'],['DPMO','1.2','#34d399'],['CC','0','#34d399']].map(([k,v,c])=><div key={k} style={{ display:'flex',alignItems:'center',justifyContent:'space-between',background:'var(--ld-surface2)',borderRadius:6,padding:'5px 9px' }}><div style={{ fontSize:8,color:'var(--ld-dim)',fontWeight:700 }}>{k}</div><div style={{ display:'flex',alignItems:'center',gap:3 }}><div style={{ fontSize:10,fontWeight:900,color:c }}>{v}</div><div style={{ fontSize:9,color:'#34d399' }}>✓</div></div></div>)}<div style={{ fontSize:8,color:'var(--ld-dim)',textAlign:'center',marginTop:2 }}>🏆 {lang==='es'?'Top: Juan G.':'Top driver: Juan G.'}</div></div>}
@@ -402,9 +402,9 @@ function DualDemo() {
 function AiEngineSection() {
   const tl = useLD()
   const steps = [
-    { icon: '🎯', accent: '#fb923c', t: tl('ld.ai.s1t'), d: tl('ld.ai.s1d') },
-    { icon: '📐', accent: '#38bdf8', t: tl('ld.ai.s2t'), d: tl('ld.ai.s2d') },
-    { icon: '🧠', accent: '#a78bfa', t: tl('ld.ai.s3t'), d: tl('ld.ai.s3d') },
+    { icon: Target, accent: '#fb923c', t: tl('ld.ai.s1t'), d: tl('ld.ai.s1d') },
+    { icon: Ruler, accent: '#38bdf8', t: tl('ld.ai.s2t'), d: tl('ld.ai.s2d') },
+    { icon: Sparkles, accent: '#a78bfa', t: tl('ld.ai.s3t'), d: tl('ld.ai.s3d') },
   ]
   const kpis = [
     // El 21 de paneles ya sale en la barra de arriba: aqui solo lo que añade.
@@ -417,7 +417,7 @@ function AiEngineSection() {
       <div style={{ maxWidth: 1100, margin: '0 auto', padding: '80px 20px', position: 'relative' }}>
         <div style={{ textAlign: 'center', marginBottom: 48 }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(251,146,60,.1)', border: '1px solid rgba(251,146,60,.3)', borderRadius: 99, padding: '5px 14px', fontSize: 12, fontWeight: 700, color: '#fb923c', marginBottom: 18 }}>
-            ⚙️ {tl('ld.ai.badge')}
+            <Cpu size={13} style={{ verticalAlign:'-2px', marginRight:6 }} />{tl('ld.ai.badge')}
           </div>
           <h2 style={{ fontSize: 'clamp(24px,3.4vw,40px)', fontWeight: 950, margin: '0 0 12px', letterSpacing: '-.025em' }}>{tl('ld.ai.title')}</h2>
           <p style={{ color: 'var(--ld-muted)', fontSize: 15.5, margin: '0 auto', maxWidth: 640, lineHeight: 1.65 }}>{tl('ld.ai.sub')}</p>
@@ -428,7 +428,7 @@ function AiEngineSection() {
           {steps.map((s, i) => (
             <div key={i} style={{ position: 'relative', background: 'var(--ld-surface2)', border: `1px solid ${s.accent}30`, borderRadius: 18, padding: '26px 22px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-                <div style={{ width: 44, height: 44, borderRadius: 12, background: `${s.accent}18`, border: `1px solid ${s.accent}35`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>{s.icon}</div>
+                <div style={{ width: 44, height: 44, borderRadius: 12, background: `${s.accent}18`, border: `1px solid ${s.accent}35`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: s.accent }}><s.icon size={20} /></div>
                 <div style={{ fontSize: 11, fontWeight: 900, color: s.accent, background: `${s.accent}14`, borderRadius: 99, padding: '3px 10px' }}>{i + 1}</div>
               </div>
               <h3 style={{ margin: '0 0 8px', fontSize: 17, fontWeight: 800 }}>{s.t}</h3>
@@ -517,7 +517,7 @@ export default function Landing() {
           <div>
             {/* Badge */}
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(251,191,36,.1)', border: '1px solid rgba(251,191,36,.3)', borderRadius: 99, padding: '5px 14px', fontSize: 12, fontWeight: 700, color: '#fbbf24', marginBottom: 22 }}>
-              🚀 {t('hero.badge')}
+              <Sparkles size={13} style={{ verticalAlign:'-2px', marginRight:6 }} />{t('hero.badge')}
             </div>
             <h1 style={{ fontSize: 'clamp(32px,5vw,54px)', lineHeight: 1.06, margin: '0 0 18px', fontWeight: 950, letterSpacing: '-.03em' }}>
               {t('hero.title1')}<br />
@@ -691,7 +691,7 @@ export default function Landing() {
       <section style={{ background: 'var(--ld-surface)', borderTop: '1px solid var(--ld-fill)' }}>
         <div style={{ maxWidth: 680, margin: '0 auto', padding: '80px 20px', textAlign: 'center' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(14,165,233,.1)', border: '1px solid rgba(14,165,233,.25)', borderRadius: 99, padding: '5px 16px', fontSize: 12, fontWeight: 700, color: '#38bdf8', marginBottom: 20 }}>
-            ✨ {tl('ld.plan.try')}
+            <Sparkles size={13} style={{ verticalAlign:'-2px', marginRight:6 }} />{tl('ld.plan.try')}
           </div>
           <h2 style={{ fontSize: 'clamp(26px,4vw,42px)', fontWeight: 950, margin: '0 0 14px', letterSpacing: '-.025em', lineHeight: 1.1 }}>{t('cta.t')}</h2>
           <p style={{ color: 'var(--ld-muted)', margin: '0 0 32px', fontSize: 16, lineHeight: 1.6 }}>{tl('ld.plan.sub')}</p>
