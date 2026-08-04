@@ -4,7 +4,7 @@ import { API_BASE } from '../lib/apiBase'
 import {
   Zap, Shield, Bell, Trophy, Clock, CheckCircle, ChevronRight,
   Camera, Truck, Users, BarChart3, Star, ArrowRight, Globe, Lock,
-  Sun, Moon,
+  Sun, Moon, MessageSquare, Sparkles, AlertTriangle,
 } from 'lucide-react'
 import Landing3DShowcase from './Landing3DShowcase'
 
@@ -166,10 +166,10 @@ function DualDemo() {
   const browserTimer = useRef(null)
 
   const FEATURES = [
-    { icon:'🔔', accent:'#ef4444', accentLight:'rgba(239,68,68,.12)', accentBorder:'rgba(239,68,68,.3)', label:tl('ld.sh.t1'), sub:lang==='es'?'Nunca más una multa por ITV vencida':lang==='en'?'Never miss an MOT deadline':lang==='fr'?'Plus jamais de CT manqué':lang==='de'?'Nie wieder TÜV verpassen':lang==='it'?'Mai più revisione scaduta':'Nunca perder uma inspeção' },
-    { icon:'💬', accent:'#38bdf8', accentLight:'rgba(56,189,248,.1)', accentBorder:'rgba(56,189,248,.25)', label:tl('ld.sh.t2'), sub:lang==='es'?'Tu equipo coordinado en tiempo real':lang==='en'?'Your team coordinated in real time':lang==='fr'?'Votre équipe en temps réel':lang==='de'?'Dein Team in Echtzeit':lang==='it'?'Il tuo team in tempo reale':'A tua equipa em tempo real' },
-    { icon:'🚛', accent:'#a78bfa', accentLight:'rgba(167,139,250,.1)', accentBorder:'rgba(167,139,250,.25)', label:tl('ld.sh.t3'), sub:lang==='es'?'El estado real de cada furgoneta':lang==='en'?'The real state of every van':lang==='fr'?'L\'état réel de chaque camionnette':lang==='de'?'Der echte Zustand jedes Transporters':lang==='it'?'Lo stato reale di ogni furgone':'O estado real de cada carrinha' },
-    { icon:'🤖', accent:'#34d399', accentLight:'rgba(52,211,153,.1)', accentBorder:'rgba(52,211,153,.25)', label:tl('ld.sh.t4'), sub:lang==='es'?'Una IA que aprende de tu flota':lang==='en'?'An AI that learns from your fleet':lang==='fr'?'Une IA qui apprend de votre flotte':lang==='de'?'Eine KI die von deiner Flotte lernt':lang==='it'?'Una IA che impara dalla tua flotta':'Uma IA que aprende com a tua frota' },
+    { icon: Bell, accent:'#ef4444', accentLight:'rgba(239,68,68,.12)', accentBorder:'rgba(239,68,68,.3)', label:tl('ld.sh.t1'), sub:lang==='es'?'Nunca más una multa por ITV vencida':lang==='en'?'Never miss an MOT deadline':lang==='fr'?'Plus jamais de CT manqué':lang==='de'?'Nie wieder TÜV verpassen':lang==='it'?'Mai più revisione scaduta':'Nunca perder uma inspeção' },
+    { icon: MessageSquare, accent:'#38bdf8', accentLight:'rgba(56,189,248,.1)', accentBorder:'rgba(56,189,248,.25)', label:tl('ld.sh.t2'), sub:lang==='es'?'Tu equipo coordinado en tiempo real':lang==='en'?'Your team coordinated in real time':lang==='fr'?'Votre équipe en temps réel':lang==='de'?'Dein Team in Echtzeit':lang==='it'?'Il tuo team in tempo reale':'A tua equipa em tempo real' },
+    { icon: Truck, accent:'#a78bfa', accentLight:'rgba(167,139,250,.1)', accentBorder:'rgba(167,139,250,.25)', label:tl('ld.sh.t3'), sub:lang==='es'?'El estado real de cada furgoneta':lang==='en'?'The real state of every van':lang==='fr'?'L\'état réel de chaque camionnette':lang==='de'?'Der echte Zustand jedes Transporters':lang==='it'?'Lo stato reale di ogni furgone':'O estado real de cada carrinha' },
+    { icon: Sparkles, accent:'#34d399', accentLight:'rgba(52,211,153,.1)', accentBorder:'rgba(52,211,153,.25)', label:tl('ld.sh.t4'), sub:lang==='es'?'Una IA que aprende de tu flota':lang==='en'?'An AI that learns from your fleet':lang==='fr'?'Une IA qui apprend de votre flotte':lang==='de'?'Eine KI die von deiner Flotte lernt':lang==='it'?'Una IA che impara dalla tua flotta':'Uma IA que aprende com a tua frota' },
   ]
 
   useEffect(() => {
@@ -188,7 +188,7 @@ function DualDemo() {
         const col=exp?'#ef4444':urg?'#f59e0b':'#34d399'
         return (
           <div key={v.p} style={{ display:'flex', alignItems:'center', gap:9, background:exp?'rgba(239,68,68,.07)':urg?'rgba(245,158,11,.06)':'rgba(52,211,153,.05)', border:`1px solid ${exp?'rgba(239,68,68,.22)':urg?'rgba(245,158,11,.18)':'rgba(52,211,153,.12)'}`, borderRadius:9, padding:'8px 12px' }}>
-            <span style={{ fontSize:14 }}>🛡</span>
+            <Shield size={14} style={{ color:col, flexShrink:0 }} />
             <div style={{ flex:1 }}>
               <div style={{ fontSize:12, fontWeight:700, color:'var(--ld-text)' }}>{v.p}</div>
               <div style={{ fontSize:10, color:'var(--ld-dim)' }}>{v.c}</div>
@@ -252,7 +252,7 @@ function DualDemo() {
     <div key="paquetes" style={{ padding:'14px 16px', display:'flex', flexDirection:'column', gap:9 }}>
       <div style={{ fontSize:10, fontWeight:700, color:'var(--ld-dim)', textTransform:'uppercase', letterSpacing:'.07em' }}>{lang==='es'?'Revisión rápida — valida IA':lang==='en'?'Quick review — validate AI':'Revisione rapida — valida IA'}</div>
       <div style={{ position:'relative', background:'#0a0c10', borderRadius:11, overflow:'hidden', height:120 }}>
-        <div style={{ position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',fontSize:44 }}>🚐</div>
+        <img src="/van.jpg" alt="" style={{ position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover',opacity:.85 }} />
         <div style={{ position:'absolute',left:'30%',top:'32%',width:'38%',height:'30%',border:'2.5px solid #f59e0b',borderRadius:6,boxShadow:'0 0 12px rgba(245,158,11,.4)' }} />
         <div style={{ position:'absolute',left:'30%',top:'23%',background:'#f59e0b',color:'#000',fontSize:8,fontWeight:900,padding:'2px 6px',borderRadius:4 }}>{lang==='es'?'Arañazo · puerta corredera · 92%':'Scratch · sliding door · 92%'}</div>
       </div>
@@ -272,7 +272,7 @@ function DualDemo() {
         </div>
       ))}
       <div style={{ background:'rgba(139,92,246,.1)', border:'1px solid rgba(139,92,246,.22)', borderRadius:9, padding:'7px 11px', display:'flex', alignItems:'center', gap:7 }}>
-        <span style={{ fontSize:13 }}>🧠</span>
+        <Sparkles size={13} style={{ color:'#a78bfa', flexShrink:0 }} />
         <span style={{ fontSize:11, color:'#a78bfa' }}>{lang==='es'?'Cada ✓/✗ entrena tu IA propia':lang==='en'?'Each ✓/✗ trains your own AI':'Jedes ✓/✗ trainiert deine KI'}</span>
       </div>
     </div>,
@@ -307,12 +307,12 @@ function DualDemo() {
                   {step===2 && <div style={{ position:'absolute',inset:0 }}><div style={{ position:'absolute',left:'38%',top:'48%',width:'38%',height:'8%',border:'2.5px solid #f59e0b',borderRadius:6,boxShadow:'0 0 10px rgba(245,158,11,.5)' }} /><div style={{ position:'absolute',left:'38%',top:'42%',background:'#f59e0b',color:'#000',fontSize:8,fontWeight:900,padding:'2px 6px',borderRadius:4,whiteSpace:'nowrap' }}>{tl('ld.demo.dmg')}</div><div style={{ position:'absolute',top:8,right:8,background:'rgba(239,68,68,.9)',borderRadius:20,padding:'3px 10px',fontSize:9,fontWeight:800,color:'#fff' }}>GRAVE</div><div style={{ position:'absolute',bottom:10,left:10,right:10 }}><div style={{ background:'rgba(0,0,0,.7)',borderRadius:10,padding:'8px 10px',backdropFilter:'blur(8px)' }}><div style={{ fontSize:9,fontWeight:700,color:'#f59e0b' }}>{tl('ld.demo.sev')}</div><div style={{ fontSize:8,color:'var(--ld-muted)',marginTop:2 }}>3 {lang==='es'?'zonas afectadas':lang==='en'?'areas affected':'Bereiche'}</div></div></div></div>}
                   {step===3 && <div style={{ position:'absolute',inset:0,display:'flex',flexDirection:'column',gap:6,padding:10,background:'var(--ld-surface)' }}>
                     <div style={{ display:'flex',alignItems:'center',justifyContent:'space-between' }}>
-                      <div style={{ fontSize:10,fontWeight:900,color:'var(--ld-text)' }}>⚡ FlotaDSP</div>
+                      <div style={{ fontSize:10,fontWeight:900,color:'var(--ld-text)' }}>FlotaDSP</div>
                       <div style={{ fontSize:7,color:'#34d399',background:'rgba(52,211,153,.12)',border:'1px solid rgba(52,211,153,.3)',padding:'2px 8px',borderRadius:99,fontWeight:800 }}>● {lang==='es'?'EN VIVO':'LIVE'}</div>
                     </div>
                     <div style={{ display:'flex',gap:5 }}>{[['48',lang==='es'?'Furgonetas':'Vans','#38bdf8'],['96%','Score','#34d399'],['2',lang==='es'?'Alertas':'Alerts','#f59e0b']].map(([v,l,c])=><div key={l} style={{ flex:1,background:`linear-gradient(160deg,${c}14,transparent)`,border:`1px solid ${c}30`,borderRadius:8,padding:'7px 5px',textAlign:'center' }}><div style={{ fontSize:14,fontWeight:900,color:c }}>{v}</div><div style={{ fontSize:7,color:'var(--ld-dim)' }}>{l}</div></div>)}</div>
                     <div style={{ background:'rgba(239,68,68,.12)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,padding:'7px 9px',display:'flex',alignItems:'center',gap:7 }}>
-                      <span style={{ fontSize:12 }}>🚨</span>
+                      <AlertTriangle size={12} style={{ color:'#f87171', flexShrink:0 }} />
                       <div style={{ flex:1 }}><div style={{ fontSize:9,fontWeight:800,color:'#f87171' }}>{tl('ld.demo.alert')}</div><div style={{ fontSize:8,color:'var(--ld-muted)',marginTop:1 }}>VAN-8742 · {tl('ld.demo.sev')}</div></div>
                       <span style={{ fontSize:9,color:'#f87171',fontWeight:900 }}>→</span>
                     </div>
@@ -323,7 +323,7 @@ function DualDemo() {
                     </div>
                     {[{p:'VAN-142',s:lang==='es'?'Leve · revisada':'Minor · reviewed',c:'#34d399',e:'✓'},{p:'VAN-089',s:lang==='es'?'Sin daños':'No damage',c:'#34d399',e:'✓'}].map(r=>
                       <div key={r.p} style={{ display:'flex',alignItems:'center',gap:7,background:'var(--ld-surface2)',border:'1px solid var(--ld-fill)',borderRadius:8,padding:'6px 9px' }}>
-                        <span style={{ fontSize:11 }}>🚐</span>
+                        <Truck size={11} style={{ color:'var(--ld-dim)', flexShrink:0 }} />
                         <div style={{ flex:1 }}><div style={{ fontSize:9,fontWeight:800,color:'var(--ld-text)' }}>{r.p}</div><div style={{ fontSize:7.5,color:'var(--ld-dim)' }}>{r.s}</div></div>
                         <span style={{ fontSize:9,color:r.c,fontWeight:900 }}>{r.e}</span>
                       </div>)}
@@ -365,7 +365,7 @@ function DualDemo() {
                   {['#ef4444','#f59e0b','#22c55e'].map(c=><span key={c} style={{ width:9,height:9,borderRadius:'50%',background:c,display:'inline-block' }} />)}
                   <span style={{ marginLeft:7, fontSize:11, color:'#334155', fontWeight:600 }}>flotadsp.com/panel</span>
                   <div style={{ marginLeft:'auto', display:'flex', alignItems:'center', gap:4, background:f.accentLight, border:`1px solid ${f.accentBorder}`, borderRadius:6, padding:'2px 8px' }}>
-                    <span style={{ fontSize:10, color:f.accent, fontWeight:700 }}>{f.icon} {f.label}</span>
+                    <span style={{ fontSize:10, color:f.accent, fontWeight:700, display:'inline-flex', alignItems:'center', gap:5 }}><f.icon size={11} /> {f.label}</span>
                   </div>
                 </div>
                 <div style={{ minHeight:340 }}>{browserScreens[tab]}</div>
@@ -375,13 +375,13 @@ function DualDemo() {
             {/* Feature tabs debajo del browser */}
             <div style={{ width:'100%', maxWidth:420 }}>
               <div style={{ display:'inline-flex', alignItems:'center', gap:6, background:f.accentLight, border:`1px solid ${f.accentBorder}`, borderRadius:99, padding:'4px 14px', fontSize:11, fontWeight:700, color:f.accent, letterSpacing:'.06em', textTransform:'uppercase', marginBottom:16, transition:'all .4s' }}>
-                {f.icon} {f.label}
+                <f.icon size={13} style={{ marginRight:6, verticalAlign:'-2px' }} />{f.label}
               </div>
               {FEATURES.map((feat,i) => {
                 const active = tab === i
                 return (
                   <div key={i} onClick={() => { clearInterval(browserTimer.current); setTab(i) }} style={{ display:'flex', alignItems:'flex-start', gap:12, marginBottom:13, cursor:'pointer', opacity:active?1:0.42, transition:'opacity .3s' }}>
-                    <div style={{ width:32,height:32,borderRadius:9,background:active?`linear-gradient(135deg,${feat.accent},${feat.accent}99)`:'var(--ld-surface2)',border:active?'none':'1px solid var(--ld-border-strong)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:15,flexShrink:0,transition:'background .3s',boxShadow:active?`0 3px 14px ${feat.accent}40`:'none' }}>{feat.icon}</div>
+                    <div style={{ width:32,height:32,borderRadius:9,background:active?`linear-gradient(135deg,${feat.accent},${feat.accent}99)`:'var(--ld-surface2)',border:active?'none':'1px solid var(--ld-border-strong)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,transition:'background .3s',boxShadow:active?`0 3px 14px ${feat.accent}40`:'none',color:active?'#fff':'var(--ld-dim)' }}><feat.icon size={16} /></div>
                     <div style={{ flex:1, paddingTop:4 }}>
                       <div style={{ fontWeight:700, fontSize:13, color:active?'var(--ld-text)':'var(--ld-muted)' }}>{feat.label}</div>
                       <div style={{ fontSize:11, color:'var(--ld-dim)', marginTop:1 }}>{feat.sub}</div>
