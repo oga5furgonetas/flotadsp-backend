@@ -1020,6 +1020,14 @@ async def _ensure_tenant_indexes(db_name: str):
     # 'tba' y 'updated_at' ya los auto-creo Atlas (con sufijo _autocreated):
     # volver a pedirlos daba error 85 y abortaba el resto.
     await _idx(tdb.cortex_packages, [("service_day", -1)])
+    # Compuesto para la calidad por conductor: sin el, cada consulta del
+    # scorecard en vivo recorre los ~100.000 paquetes del mes enteros.
+    await _idx(tdb.cortex_packages, [("driver_id", 1), ("service_day", -1)])
+    await _idx(tdb.cortex_packages, [("service_day", -1), ("state", 1)])
+    # El nombre del conductor se resuelve por estos dos: ambos van con $in.
+    await _idx(tdb.drivers, "driver_id")
+    await _idx(tdb.route_history, "transporter_id")
+    await _idx(tdb.portales, "celda")
     await _idx(tdb.cortex_packages, "center")
     await _idx(tdb.cortex_packages, "service_area_id")
     await _idx(tdb.cortex_packages, "state")
@@ -16489,8 +16497,18 @@ async def upload_daily_report(file: UploadFile = File(...), _=Depends(require_ad
 
 # Objetivos del scorecard (umbrales del tier) — los pone el usuario a mano.
 # Valores por defecto orientativos; cada DSP/centro ajusta los suyos.
-_DEFAULT_TARGETS = {"dcr": 98.5, "dnr_dpmo": 1500, "pod": 97.5, "cc": 95.0,
+# Umbrales del tier Fantastic segun las guias publicas de scorecard DSP (2026).
+# Amazon fija DCR y DNR a nivel de ESTACION, asi que son editables por centro
+# (/scorecard/targets): esto es el punto de partida, no un dogma.
+# Antes estaban en dcr 98,5 / dnr 1500 / pod 97,5 / cc 95, mas blandos que los
+# reales: un DSP al 98,6 % de DCR veia "en objetivo" sin tener Fantastic.
+_DEFAULT_TARGETS = {"dcr": 99.0, "dnr_dpmo": 950, "pod": 97.0, "cc": 98.0,
                     "rts_pct": 1.5, "fdds": 98.5}
+
+# Copia inmutable de la referencia oficial. Se devuelve junto a los objetivos
+# configurados para poder avisar cuando el objetivo propio es MAS BLANDO que el
+# de Amazon: el cliente puede querer su propia vara, pero no por accidente.
+_TARGETS_FANTASTIC = {"dcr": 99.0, "dnr_dpmo": 950, "pod": 97.0, "cc": 98.0}
 
 
 @api_router.get("/scorecard/targets")
@@ -19154,6 +19172,559 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
          "$inc": {"captures_n": 1}, "$push": {"timeline": ev}})
     await db.cortex_events.insert_one(_cortex_evento_doc(ev, tba))
     return "changed"
+
+
+# =========================================================================
+# CALIDAD DE ENTREGA EN VIVO — el scorecard antes de que Amazon lo publique
+# =========================================================================
+# Ver docs/CALIDAD_EN_VIVO.md para el porque de cada decision. Resumen:
+# Cortex entra solo y en el dia; el scorecard oficial llega 6 dias tarde.
+
+# Entregado bien.
+_CX_OK = ("DELIVERED",)
+
+# Todavia en juego: el paquete esta en la furgoneta o de camino. NO es un fallo,
+# es una jornada sin terminar. Si esto pesa mucho en un dia, ese dia no puntua.
+_CX_EN_VUELO = ("LOADED", "YOU_ARE_NEXT", "ARRIVED", "OBSERVED", "NONE", "PENDING_PICKUP")
+
+# Nunca salio a reparto: no se despacho, luego no entra en el denominador del
+# DCR. Meterlo seria castigar al conductor por un paquete que no llego a tocar.
+_CX_NO_DESPACHADO = ("UNCOLLECTED", "NOT_READY", "TR_CANCELLED")
+
+# Cualquier otro estado al cierre del dia es un fallo de entrega imputable:
+# BACK_TO_ORIGIN, CUSTOMER_UNAVAILABLE, ATTEMPTED, MISSING, DAMAGED,
+# ADDRESS_NOT_FOUND, LOCKER_ISSUE.
+
+# Porcentaje de paquetes en vuelo por encima del cual un dia se considera
+# incompleto y no puntua. Medido: dias cerrados 0,00-0,02 %; dia en curso 20 %.
+_CX_UMBRAL_EN_VUELO = 2.0
+
+
+def _cx_categoria_stage():
+    """Clasifica cada paquete en ok / vuelo / nodesp / fallo dentro de Mongo.
+
+    Se hace en el servidor de base de datos a proposito: son ~100.000 documentos
+    por mes y traerselos a Python para contarlos tarda segundos y se come la RAM
+    del contenedor. Asi el trabajo lo hace el indice.
+    """
+    return {"$switch": {"branches": [
+        {"case": {"$in": ["$state", list(_CX_OK)]}, "then": "ok"},
+        {"case": {"$in": ["$state", list(_CX_EN_VUELO)]}, "then": "vuelo"},
+        {"case": {"$in": ["$state", list(_CX_NO_DESPACHADO)]}, "then": "nodesp"},
+    ], "default": "fallo"}}
+
+
+async def _cx_bruto(desde: str, hasta: str, center: str = ""):
+    """Conteos por (dia, conductor) en UNA sola consulta agregada."""
+    match = {"service_day": {"$gte": desde, "$lte": hasta}}
+    if center:
+        # center viene sucio en la BD ('OGA5', 'OGA5 ', 'AMZL OGA5 ...'): regex.
+        match["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
+    cur = db.cortex_packages.aggregate([
+        {"$match": match},
+        # La categoria se calcula UNA vez por documento. Ponerla dentro de cada
+        # $sum obliga a Mongo a evaluar el $switch cuatro veces por paquete:
+        # sobre ~52.000 documentos de una semana eso son 156.000 evaluaciones
+        # de mas por consulta, y se nota.
+        {"$addFields": {"_cat": _cx_categoria_stage()}},
+        {"$group": {
+            "_id": {"dia": "$service_day", "cond": "$driver_id"},
+            "ok": {"$sum": {"$cond": [{"$eq": ["$_cat", "ok"]}, 1, 0]}},
+            "vuelo": {"$sum": {"$cond": [{"$eq": ["$_cat", "vuelo"]}, 1, 0]}},
+            "nodesp": {"$sum": {"$cond": [{"$eq": ["$_cat", "nodesp"]}, 1, 0]}},
+            "fallo": {"$sum": {"$cond": [{"$eq": ["$_cat", "fallo"]}, 1, 0]}},
+            "rts": {"$sum": {"$cond": [{"$eq": ["$state", "BACK_TO_ORIGIN"]}, 1, 0]}},
+        }},
+    ], allowDiskUse=True)
+    return await cur.to_list(20000)
+
+
+def _cx_dias(bruto: list) -> dict:
+    """Estado de cada dia: cerrado (puntua) o en curso (solo progreso)."""
+    dias = {}
+    for r in bruto:
+        # .get y no [...]: $group OMITE la clave cuando el campo no existe en el
+        # documento, no la pone a null. Un paquete sin service_day no se puede
+        # imputar a ningun dia, asi que se descarta en vez de tumbar la pantalla.
+        dia = r["_id"].get("dia")
+        if not dia:
+            continue
+        d = dias.setdefault(dia, {"ok": 0, "vuelo": 0, "nodesp": 0, "fallo": 0})
+        for k in ("ok", "vuelo", "nodesp", "fallo"):
+            d[k] += r[k]
+    for dia, d in dias.items():
+        total = d["ok"] + d["vuelo"] + d["nodesp"] + d["fallo"]
+        d["total"] = total
+        d["en_vuelo_pct"] = round(d["vuelo"] / total * 100, 2) if total else 0.0
+        d["cerrado"] = total > 0 and d["en_vuelo_pct"] <= _CX_UMBRAL_EN_VUELO
+    return dias
+
+
+def _cx_tasas(ok: int, fallo: int, rts: int) -> dict:
+    """DCR y RTS a partir de los despachados. Sin despachados no hay tasa.
+
+    Devolver 100 % cuando no hay datos seria el peor falso positivo posible:
+    un centro sin actividad se veria perfecto. Se devuelve None y la pantalla
+    dice 'sin datos'.
+    """
+    desp = ok + fallo
+    if desp <= 0:
+        return {"despachados": 0, "entregados": ok, "fallos": fallo, "rts": rts,
+                "dcr": None, "rts_pct": None}
+    return {"despachados": desp, "entregados": ok, "fallos": fallo, "rts": rts,
+            "dcr": round(ok / desp * 100, 2), "rts_pct": round(rts / desp * 100, 2)}
+
+
+async def _cx_nombres(ids: set) -> dict:
+    """ID de Amazon -> nombre. Primero la ficha; si no, el historico de rutas.
+
+    Medido en produccion: 84 de 127 IDs de Cortex ya cruzan con una ficha por
+    drivers.driver_id, y route_history rescata unos cuantos mas porque guarda
+    el par (transporter_id, driver_name) tal cual lo da Amazon.
+    """
+    if not ids:
+        return {}
+    mapa = {}
+    async for d in db.drivers.find({"driver_id": {"$in": list(ids)}},
+                                   {"_id": 0, "id": 1, "name": 1, "driver_id": 1, "active": 1}):
+        mapa[d["driver_id"]] = {"nombre": d.get("name"), "ficha_id": d.get("id"),
+                                "activo": d.get("active", True), "origen": "ficha"}
+    faltan = ids - set(mapa)
+    if faltan:
+        async for r in db.route_history.find({"transporter_id": {"$in": list(faltan)}},
+                                             {"_id": 0, "transporter_id": 1, "driver_name": 1}):
+            if r.get("driver_name") and r["transporter_id"] not in mapa:
+                mapa[r["transporter_id"]] = {"nombre": r["driver_name"], "ficha_id": None,
+                                             "activo": True, "origen": "historico"}
+    return mapa
+
+
+# Volumen minimo para que un conductor entre en el ranking de impacto. Con 20
+# paquetes, un solo fallo son 5 puntos de tasa: seria senalar a alguien por
+# ruido estadistico. Por debajo de _CX_MUESTRA_FIABLE se marca 'muestra corta'.
+_CX_MINIMO_RANKING = 40
+_CX_MUESTRA_FIABLE = 120
+
+
+def _cx_impacto(conductores: list, tasa_fallo_flota: float) -> list:
+    """Exceso de fallos de cada conductor sobre lo que haria la media con SUS
+    paquetes. Es lo unico que se le puede imputar de verdad.
+
+    Un conductor con 900 paquetes y 9 fallos (1 %) y otro con 200 y 6 (3 %)
+    tienen tasas muy distintas, pero si la media de flota es el 1 %, el primero
+    no sobra nada y el segundo sobra 4 fallos. Ordenar por tasa castigaria al
+    de poco volumen; ordenar por exceso senala al que de verdad cuesta dinero.
+    """
+    out = []
+    for c in conductores:
+        desp = c["despachados"]
+        if desp < _CX_MINIMO_RANKING:
+            continue
+        esperados = desp * tasa_fallo_flota
+        exceso = c["fallos"] - esperados
+        if exceso <= 0:
+            continue
+        out.append({**c, "fallos_esperados": round(esperados, 1),
+                    "exceso": round(exceso, 1),
+                    "muestra_corta": desp < _CX_MUESTRA_FIABLE})
+    return sorted(out, key=lambda x: x["exceso"], reverse=True)
+
+
+@api_router.get("/cortex/calidad")
+async def cortex_calidad(desde: str = "", hasta: str = "", center: str = "",
+                         _=Depends(require_admin)):
+    """Calidad de entrega real, calculada desde Cortex, sin subir nada.
+
+    Por defecto la semana scorecard en curso (domingo->sabado, como Amazon).
+    Solo puntuan los dias cerrados; el dia en curso va aparte como progreso.
+    """
+    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if not desde or not hasta:
+        desde, hasta = _sun_sat_week(hoy)
+    for v in (desde, hasta):
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", v):
+            raise HTTPException(400, "Fechas en formato AAAA-MM-DD")
+
+    bruto = await _cx_bruto(desde, hasta, center)
+    if not bruto:
+        return {"desde": desde, "hasta": hasta, "center": center, "hay_datos": False,
+                "dias": {}, "total": None, "conductores": [], "impacto": [],
+                "en_curso": None, "objetivos": {}, "margen": None}
+
+    dias = _cx_dias(bruto)
+    cerrados = {d for d, v in dias.items() if v["cerrado"]}
+
+    # --- agregado de los dias cerrados, por conductor ---
+    # OJO: si un paquete no trae driver_id, Mongo NO mete la clave en el _id del
+    # $group con valor null: la OMITE. Un r["_id"]["cond"] directo revienta con
+    # KeyError. Pasa de verdad: 94 paquetes sin conductor, y 70 de ellos son
+    # fallos, asi que tirarlos falsearia el DCR a la baja. Van a SIN_CONDUCTOR.
+    porc, tot = {}, {"ok": 0, "fallo": 0, "rts": 0, "nodesp": 0}
+    for r in bruto:
+        if r["_id"].get("dia") not in cerrados:
+            continue
+        cid = r["_id"].get("cond") or "SIN_CONDUCTOR"
+        a = porc.setdefault(cid, {"ok": 0, "fallo": 0, "rts": 0, "nodesp": 0})
+        for k in ("ok", "fallo", "rts", "nodesp"):
+            a[k] += r[k]
+            tot[k] += r[k]
+
+    total = _cx_tasas(tot["ok"], tot["fallo"], tot["rts"])
+    total["no_despachados"] = tot["nodesp"]
+    total["dias_cerrados"] = len(cerrados)
+    total["dias_totales"] = len(dias)
+
+    nombres = await _cx_nombres({c for c in porc if c != "SIN_CONDUCTOR"})
+    conductores = []
+    for cid, a in porc.items():
+        n = nombres.get(cid, {})
+        conductores.append({
+            "driver_id": cid, "nombre": n.get("nombre"), "ficha_id": n.get("ficha_id"),
+            "origen_nombre": n.get("origen"), "sin_ficha": cid != "SIN_CONDUCTOR" and not n,
+            **_cx_tasas(a["ok"], a["fallo"], a["rts"]),
+        })
+    conductores.sort(key=lambda c: (c["dcr"] if c["dcr"] is not None else 101))
+
+    tasa_fallo = (tot["fallo"] / (tot["ok"] + tot["fallo"])) if (tot["ok"] + tot["fallo"]) else 0
+    impacto = _cx_impacto([c for c in conductores if c["despachados"]], tasa_fallo)
+
+    # --- objetivos y margen que queda ---
+    obj = dict(_DEFAULT_TARGETS)
+    doc = await db.scorecard_targets.find_one({"center": center or "GLOBAL"}, {"_id": 0}) \
+        or await db.scorecard_targets.find_one({"center": "GLOBAL"}, {"_id": 0})
+    if doc:
+        for k in _DEFAULT_TARGETS:
+            if doc.get(k) is not None:
+                obj[k] = doc[k]
+
+    margen = None
+    if total["despachados"] and len(cerrados):
+        # Estimacion del volumen de la semana: media diaria de los dias cerrados
+        # por los dias de servicio que tiene la semana. Es una estimacion y se
+        # dice que lo es; el margen se recalcula solo cada dia que cierra.
+        media_dia = total["despachados"] / len(cerrados)
+        # Los dias que faltan por venir cuentan: si no, un martes se preveia una
+        # semana de 3 dias y el margen salia por los suelos (alarma falsa justo
+        # los dias en que mas se mira la pantalla).
+        por_venir = 0
+        try:
+            d_hoy = datetime.strptime(hoy, "%Y-%m-%d")
+            d_fin = datetime.strptime(hasta, "%Y-%m-%d")
+            por_venir = max(0, (d_fin - d_hoy).days)
+        except ValueError:
+            pass
+        dias_previstos = max(len(dias) + por_venir, len(cerrados))
+        prevision = media_dia * dias_previstos
+        max_fallos = prevision * (1 - float(obj["dcr"]) / 100)
+        # Los fallos de TODOS los dias del rango, no solo los cerrados: si se
+        # permiten 7 dias de fallos hay que contar 7 dias de fallos. Antes se
+        # permitian 7 y se contaban 6, y el margen salia inflado en un dia
+        # entero — optimista, que es la direccion que hace dano.
+        # Un BACK_TO_ORIGIN de hoy ya es un fallo aunque la jornada siga abierta.
+        fallos_del_rango = sum(v["fallo"] for v in dias.values())
+        margen = {
+            "objetivo_dcr": float(obj["dcr"]),
+            "fallos_hasta_ahora": fallos_del_rango,
+            "fallos_en_dias_cerrados": tot["fallo"],
+            "fallos_permitidos": int(max_fallos),
+            "margen_restante": int(max_fallos - fallos_del_rango),
+            "prevision_paquetes": int(prevision),
+            "dias_previstos": dias_previstos,
+            "en_objetivo": total["dcr"] is not None and total["dcr"] >= float(obj["dcr"]),
+        }
+
+    # --- dia en curso: progreso, NUNCA nota ---
+    en_curso = None
+    abiertos = sorted(d for d in dias if not dias[d]["cerrado"])
+    # Solo es "en curso" si el dia ES hoy. Un dia pasado que quedo sin cerrar no
+    # es una jornada en marcha: es un hueco de captura de la extension, y
+    # venderlo como "Jornada de hoy · 73 % de avance" es mentir con datos de
+    # anteayer. Paso de verdad el 2026-08-04 con el dia 2026-08-02 (25,65 %
+    # en vuelo). Los dias incompletos se listan aparte y se dicen como tales.
+    if abiertos and abiertos[-1] == hoy:
+        d = abiertos[-1]
+        v = dias[d]
+        en_curso = {"dia": d, "entregados": v["ok"], "en_vuelo": v["vuelo"],
+                    "fallos_provisionales": v["fallo"], "total": v["total"],
+                    "avance_pct": round(v["ok"] / v["total"] * 100, 1) if v["total"] else 0,
+                    "nota": "Jornada sin cerrar: no puntua todavia."}
+
+    return {"desde": desde, "hasta": hasta, "center": center, "hay_datos": True,
+            "dias": dias, "total": total, "conductores": conductores,
+            "impacto": impacto[:8], "en_curso": en_curso, "objetivos": obj,
+            # Dias del rango que no puntuan por captura incompleta. Que se vean:
+            # un scorecard calculado sobre datos con huecos hay que poder auditarlo.
+            "dias_incompletos": [d for d in abiertos if d != hoy],
+            "referencia_fantastic": _TARGETS_FANTASTIC,
+            # True si el objetivo configurado es MAS BLANDO que el de Amazon: la
+            # pantalla lo avisa en vez de dar por bueno un aprobado que Amazon
+            # no daria.
+            "objetivo_blando": float(obj["dcr"]) < _TARGETS_FANTASTIC["dcr"],
+            "margen": margen,
+            "sin_ficha": sorted({c["driver_id"] for c in conductores if c["sin_ficha"]})}
+
+
+@api_router.get("/cortex/simular")
+async def cortex_simular(desde: str = "", hasta: str = "", center: str = "",
+                         conductores: str = "", _=Depends(require_admin)):
+    """Si estos conductores bajaran a la media de la flota, ¿donde queda el DCR?
+
+    No es una promesa: es aritmetica sobre los paquetes que YA se han repartido.
+    Sirve para decidir a quien formar primero con un numero delante, en vez de
+    por corazonada.
+    """
+    ids = [x for x in (conductores or "").split(",") if x.strip()]
+    datos = await cortex_calidad(desde=desde, hasta=hasta, center=center)
+    if not datos["hay_datos"] or not datos["total"]["despachados"]:
+        raise HTTPException(400, "No hay datos suficientes en ese periodo")
+
+    elegidos = [c for c in datos["impacto"] if c["driver_id"] in ids] if ids else datos["impacto"][:3]
+    recuperables = sum(c["exceso"] for c in elegidos)
+    t = datos["total"]
+    dcr_nuevo = round((t["entregados"] + recuperables) / t["despachados"] * 100, 2)
+    return {
+        "dcr_actual": t["dcr"], "dcr_simulado": dcr_nuevo,
+        "ganancia_puntos": round(dcr_nuevo - t["dcr"], 2),
+        "paquetes_recuperables": int(round(recuperables)),
+        "objetivo": float(datos["objetivos"]["dcr"]),
+        "alcanza_objetivo": dcr_nuevo >= float(datos["objetivos"]["dcr"]),
+        "conductores": [{"driver_id": c["driver_id"], "nombre": c["nombre"],
+                         "exceso": c["exceso"], "dcr": c["dcr"]} for c in elegidos],
+    }
+
+
+# Rejilla de agrupacion de portales. 0,0004 grados de latitud son ~44 m y
+# 0,0005 de longitud ~40 m a la latitud de Galicia. Suficiente para que el
+# mismo portal caiga siempre en la misma celda pese a la deriva del GPS, y
+# bastante fino para no mezclar dos edificios distintos de la misma calle.
+_PORTAL_LAT = 0.0004
+_PORTAL_LNG = 0.0005
+
+# Estados que cuentan como "fallo en el portal": el conductor LLEGO y no pudo
+# entregar. ATTEMPTED entra porque un intento fallido en el mismo sitio dos dias
+# distintos es justo la senal que buscamos, aunque el paquete se entregara luego.
+#
+# UNCOLLECTED esta fuera a proposito: significa que el paquete no se recogio en
+# la estacion y nunca subio a la furgoneta. Medido en el peor punto: de 53
+# fallos, 34 eran UNCOLLECTED — un problema de carga disfrazado de portal
+# imposible. Ademas _CX_NO_DESPACHADO ya lo saca del DCR por lo mismo: contarlo
+# aqui como fallo de entrega seria darle dos significados a la misma cosa.
+# La senal no se pierde: se cuenta aparte como `no_recogidos`.
+_PORTAL_FALLOS = ("BACK_TO_ORIGIN", "CUSTOMER_UNAVAILABLE", "ADDRESS_NOT_FOUND",
+                  "ATTEMPTED")
+_PORTAL_NO_RECOGIDOS = ("UNCOLLECTED", "NOT_READY")
+
+
+def _celda(lat, lng):
+    """Coordenada -> identificador estable de celda. None si no es un numero."""
+    try:
+        return "%d:%d" % (round(float(lat) / _PORTAL_LAT), round(float(lng) / _PORTAL_LNG))
+    except (TypeError, ValueError):
+        return None
+
+
+def _celda_centro(celda: str):
+    a, b = celda.split(":")
+    return round(int(a) * _PORTAL_LAT, 6), round(int(b) * _PORTAL_LNG, 6)
+
+
+def _fusionar_celdas(claves):
+    """Agrupa celdas que se tocan (vecindad de 8). Devuelve [[celda, ...], ...].
+
+    Sin esto, un portal justo en el borde de la rejilla aparece dos veces y la
+    nota de una mitad no llega al conductor que entra por la otra. Pasa de
+    verdad: los dos peores portales de julio eran el mismo, a 16 metros.
+    """
+    padre = {k: k for k in claves}
+
+    def raiz(x):
+        while padre[x] != x:
+            padre[x] = padre[padre[x]]
+            x = padre[x]
+        return x
+
+    def unir(a, b):
+        ra, rb = raiz(a), raiz(b)
+        if ra != rb:
+            padre[rb] = ra
+
+    presentes = set(claves)
+    for k in claves:
+        a, b = (int(x) for x in k.split(":"))
+        for da in (0, 1):
+            for dbb in (-1, 0, 1):
+                if da == 0 and dbb <= 0:
+                    continue          # cada par se visita una sola vez
+                v = "%d:%d" % (a + da, b + dbb)
+                if v in presentes:
+                    unir(k, v)
+    grupos = {}
+    for k in claves:
+        grupos.setdefault(raiz(k), []).append(k)
+    return list(grupos.values())
+
+
+def _stage_celda():
+    """Agrupacion por celda dentro de Mongo. lat/lng vienen como TEXTO en los
+    documentos de Cortex, asi que hay que convertirlos y descartar los rotos
+    sin reventar la consulta ($convert con onError)."""
+    num = lambda c: {"$convert": {"input": c, "to": "double", "onError": None, "onNull": None}}
+    return [
+        {"$addFields": {"_la": num("$lat"), "_ln": num("$lng")}},
+        {"$match": {"_la": {"$ne": None}, "_ln": {"$ne": None}}},
+        {"$addFields": {"_celda": {"$concat": [
+            {"$toString": {"$round": [{"$divide": ["$_la", _PORTAL_LAT]}, 0]}}, ":",
+            {"$toString": {"$round": [{"$divide": ["$_ln", _PORTAL_LNG]}, 0]}}]}}},
+    ]
+
+
+@api_router.get("/cortex/portales")
+async def cortex_portales(dias: int = 60, center: str = "", minimo_dias: int = 2,
+                          _=Depends(require_admin)):
+    """Portales que fallan una y otra vez, con la nota que alguien dejo.
+
+    minimo_dias=2 por defecto: un fallo suelto es mala suerte, dos dias
+    distintos en el mismo portal es un patron. Con minimo_dias=1 se ve todo.
+    """
+    dias = max(7, min(int(dias or 60), 365))
+    desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
+    match = {"service_day": {"$gte": desde}, "state": {"$in": list(_PORTAL_FALLOS)}}
+    if center:
+        match["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
+
+    cur = db.cortex_packages.aggregate(
+        [{"$match": match}] + _stage_celda() + [
+            {"$group": {"_id": "$_celda",
+                        "fallos": {"$sum": 1},
+                        "dias": {"$addToSet": "$service_day"},
+                        "estados": {"$addToSet": "$state"},
+                        "lat": {"$first": "$_la"}, "lng": {"$first": "$_ln"},
+                        "center": {"$first": "$center"},
+                        "ultimo": {"$max": "$service_day"}}},
+            {"$match": {"$expr": {"$gte": [{"$size": "$dias"}, int(minimo_dias)]}}},
+            {"$sort": {"fallos": -1}}, {"$limit": 300},
+        ], allowDiskUse=True)
+    celdas = await cur.to_list(300)
+    if not celdas:
+        return {"portales": [], "resumen": {"reincidentes": 0, "fallos": 0}}
+
+    # Entregas correctas en esas mismas celdas: distingue "direccion imposible"
+    # de "aqui se entrega bien salvo en un piso concreto". Cambia la accion.
+    claves = [c["_id"] for c in celdas]
+    cur2 = db.cortex_packages.aggregate(
+        [{"$match": {"service_day": {"$gte": desde},
+                     "state": {"$in": ["DELIVERED"] + list(_PORTAL_NO_RECOGIDOS)},
+                     **({"center": match["center"]} if center else {})}}]
+        + _stage_celda() + [
+            {"$match": {"_celda": {"$in": claves}}},
+            {"$group": {"_id": "$_celda",
+                        "ok": {"$sum": {"$cond": [{"$eq": ["$state", "DELIVERED"]}, 1, 0]}},
+                        # Se quedaron en la estacion: no es culpa del portal,
+                        # pero el DSP quiere saberlo igual.
+                        "nr": {"$sum": {"$cond": [{"$eq": ["$state", "DELIVERED"]}, 0, 1]}}}},
+        ], allowDiskUse=True)
+    _c2 = await cur2.to_list(500)
+    ok_por_celda = {r["_id"]: r["ok"] for r in _c2}
+    nr_por_celda = {r["_id"]: r["nr"] for r in _c2}
+
+    notas = {n["celda"]: n async for n in db.portales.find({"celda": {"$in": claves}}, {"_id": 0})}
+    por_celda = {c["_id"]: c for c in celdas}
+
+    portales = []
+    for grupo in _fusionar_celdas(claves):
+        trozos = [por_celda[k] for k in grupo]
+        dias = set()
+        for t in trozos:
+            dias.update(t["dias"])
+        fallos = sum(t["fallos"] for t in trozos)
+        ok = sum(ok_por_celda.get(k, 0) for k in grupo)
+        no_recogidos = sum(nr_por_celda.get(k, 0) for k in grupo)
+        # La nota del grupo es la de cualquiera de sus celdas: al guardarla se
+        # escribe en todas, pero un grupo puede crecer despues (celda nueva con
+        # fallos) y entonces solo una la tiene.
+        n = next((notas[k] for k in grupo if k in notas), {})
+        principal = max(trozos, key=lambda t: t["fallos"])
+        portales.append({
+            "celda": principal["_id"], "celdas": sorted(grupo),
+            "lat": principal["lat"], "lng": principal["lng"],
+            "center": (principal.get("center") or "").strip(),
+            "fallos": fallos, "dias_distintos": len(dias),
+            "no_recogidos": no_recogidos,
+            "ultimo_fallo": max(t["ultimo"] for t in trozos), "entregas_ok": ok,
+            "tasa_fallo": round(fallos / (fallos + ok) * 100, 1) if (fallos + ok) else 100.0,
+            "estados": sorted({e for t in trozos for e in t["estados"]}),
+            "nota": n.get("nota"), "nota_autor": n.get("autor"),
+            "nota_fecha": n.get("actualizado_en"), "resuelto": bool(n.get("resuelto")),
+        })
+    portales.sort(key=lambda p: p["fallos"], reverse=True)
+    return {"portales": portales,
+            "resumen": {"reincidentes": len(portales),
+                        "fallos": sum(p["fallos"] for p in portales),
+                        "sin_nota": sum(1 for p in portales if not p["nota"])}}
+
+
+@api_router.post("/cortex/portales")
+async def cortex_portal_nota(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Guarda (o borra) la nota de un portal. body: {celda, nota, resuelto?}"""
+    celdas = data.get("celdas") or [data.get("celda")]
+    celdas = [str(c).strip() for c in celdas if c and re.match(r"^-?\d+:-?\d+$", str(c).strip())]
+    if not celdas:
+        raise HTTPException(400, "Celda no valida")
+    nota = (data.get("nota") or "").strip()[:600]
+    if not nota:
+        await db.portales.delete_many({"celda": {"$in": celdas}})
+        return {"success": True, "borrada": True}
+    ahora = datetime.now(timezone.utc).isoformat()
+    autor = user.get("name") or user.get("username")
+    # Se escribe en todas las celdas del grupo a proposito: asi el conductor la
+    # encuentra con una consulta por indice, entre por el lado que entre.
+    for c in celdas:
+        lat, lng = _celda_centro(c)
+        await db.portales.update_one({"celda": c}, {"$set": {
+            "celda": c, "lat": lat, "lng": lng, "nota": nota,
+            "grupo": celdas, "resuelto": bool(data.get("resuelto")),
+            "autor": autor, "actualizado_en": ahora,
+        }}, upsert=True)
+    return {"success": True, "celdas": len(celdas)}
+
+
+@api_router.get("/cortex/portales/mi-ruta")
+async def cortex_portales_mi_ruta(user: dict = Depends(require_any_auth)):
+    """Los avisos de portal de los paquetes que este conductor lleva HOY.
+
+    Esta es la parte que convierte la libreta en dinero: en cuanto la furgoneta
+    carga, los paquetes traen driver_id y coordenadas, asi que se sabe a que
+    portales va antes de que salga. El conductor abre la app y ve el codigo del
+    portal ANTES de plantarse delante, en vez de descubrirlo fallando.
+    """
+    # El JWT del conductor lleva su ficha en 'id' (create_token(driver_id, ...)
+    # en /auth/driver-token), no el ID de Amazon: hay que resolverlo contra la
+    # ficha. Un admin que llame a esto no tiene ficha y no recibe avisos, que es
+    # lo correcto: esta ruta es la vista personal del conductor.
+    ficha = await db.drivers.find_one({"id": user.get("id")}, {"_id": 0, "driver_id": 1})
+    did = ((ficha or {}).get("driver_id") or "").strip()
+    if not did:
+        return {"avisos": [], "motivo": "sin_id_amazon"}
+
+    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cur = db.cortex_packages.aggregate(
+        [{"$match": {"driver_id": did, "service_day": hoy}}] + _stage_celda() +
+        [{"$group": {"_id": "$_celda", "paquetes": {"$sum": 1},
+                     "stop": {"$first": "$stop_id"}}}], allowDiskUse=True)
+    celdas = await cur.to_list(500)
+    if not celdas:
+        return {"avisos": [], "motivo": "sin_paquetes_hoy"}
+
+    claves = [c["_id"] for c in celdas]
+    porc = {c["_id"]: c for c in celdas}
+    avisos = []
+    async for n in db.portales.find({"celda": {"$in": claves}, "resuelto": {"$ne": True}}, {"_id": 0}):
+        c = porc.get(n["celda"], {})
+        avisos.append({"nota": n.get("nota"), "lat": n.get("lat"), "lng": n.get("lng"),
+                       "stop": c.get("stop"), "paquetes": c.get("paquetes", 0),
+                       "autor": n.get("autor")})
+    avisos.sort(key=lambda a: a["paquetes"], reverse=True)
+    return {"avisos": avisos, "stops_con_aviso": len(avisos), "dia": hoy}
 
 
 @api_router.get("/cortex/ingest-token")

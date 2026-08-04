@@ -9,6 +9,7 @@ import {
   cortexIngestToken, cortexSeedDemo, cortexClearDemo, cortexDays, cortexReset,
   cortexStations, cortexAssignStation,
 } from '../api'
+import LibretaPortales from '../components/LibretaPortales'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { hoyLocal, isoLocal } from '../../lib/fecha'
 
@@ -287,6 +288,7 @@ export default function PackageIntel() {
   const [day, setDay] = useState(todayISO())
   const [days, setDays] = useState([])
   const [showSetup, setShowSetup] = useState(false)
+  const [vista, setVista] = useState('hoy')   // hoy | portales
   const [routes, setRoutes] = useState([])
   const [activeRoute, setActiveRoute] = useState(null) // ruta abierta (o null = vista de rutas)
   const qRef = useRef('')
@@ -449,6 +451,28 @@ export default function PackageIntel() {
           <ShieldAlert size={14} className="shrink-0" /> {err}
         </div>
       )}
+
+      {/* Dos formas de mirar lo mismo: lo que pasa hoy, y lo que lleva pasando
+          semanas en el mismo portal. La segunda es la que evita la primera. */}
+      <div className="mb-5 flex gap-1 rounded-xl border border-dark-800 bg-dark-900/50 p-1">
+        {[['hoy', t('px.tab.hoy')], ['portales', t('px.tab.portales')]].map(([k, etiqueta]) => (
+          <button key={k} onClick={() => setVista(k)}
+            className={`flex-1 rounded-lg px-3 py-1.5 text-[13px] font-semibold transition ${
+              vista === k ? 'bg-brand-500/15 text-brand-300' : 'text-dark-400 hover:text-dark-200'}`}>
+            {etiqueta}
+          </button>
+        ))}
+      </div>
+
+      {vista === 'portales' && (
+        <div className="rounded-xl border border-dark-800 bg-dark-900/30 p-4">
+          <LibretaPortales center={center} />
+        </div>
+      )}
+
+      {/* La vista de hoy se oculta, no se desmonta: volver a la pestaña no
+          recarga los paquetes ni pierde la ruta que tuvieras abierta. */}
+      <div className={vista === 'portales' ? 'hidden' : ''}>
       {toast && (
         <div className={`mb-4 rounded-xl border px-4 py-2.5 text-[13px] ${toast.ok ? 'border-emerald-500/25 bg-emerald-500/[0.07] text-emerald-300' : 'border-red-500/25 bg-red-500/[0.07] text-red-300'}`}>
           {toast.msg}
@@ -619,6 +643,7 @@ export default function PackageIntel() {
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }

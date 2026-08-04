@@ -15,6 +15,7 @@ import {
   calibrateScorecardThresholds,
   resetScorecardThresholds,
 } from '../api'
+import CalidadViva from '../components/CalidadViva'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const TIER_CFG = {
@@ -653,9 +654,13 @@ export default function Scorecard() {
     } catch {}
   }
 
+  /* Con "Todos" el scorecard oficial no se puede montar (es por centro), pero
+     la calidad en vivo sí: se agrega sobre toda la operación. Antes esta rama
+     era una pantalla vacía pidiendo elegir centro. */
   if (noCenter) return (
     <div>
       <h1 className="rise mb-6 font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">Scorecard</h1>
+      <CalidadViva center="" />
       <div className="card flex flex-col items-center gap-3 p-10 text-center">
         <Trophy size={30} className="text-brand-400" />
         <p className="text-dark-200">{t('sc.pick.center')}</p>
@@ -688,6 +693,12 @@ export default function Scorecard() {
       </div>
 
       {msg && <div className={`rounded-lg px-3 py-2 text-sm ${msg.ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{msg.t}</div>}
+
+      {/* Lo vivo va ARRIBA a propósito: es lo único que está actualizado hoy.
+          Lo de abajo depende de que alguien suba el PDF de Amazon del viernes,
+          y en producción eso no lo hace nadie — esta pantalla llevaba meses
+          vacía por eso mismo. */}
+      <CalidadViva center={center} />
 
       {loadingFull && !full && (
         <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> {t('ui.loading')}</div>

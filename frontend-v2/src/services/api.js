@@ -93,6 +93,10 @@ export const signInspection = (inspectionId, signatureText) =>
   api.post(`/inspections/${inspectionId}/sign`, { signature_text: signatureText })
 
 /* ── Ofertas patrocinadas del portal conductor (públicas) ── */
+/* Avisos de los portales problematicos de la ruta de hoy de este conductor.
+   Cierra el bucle de la Libreta de portales: lo que alguien aprendio fallando
+   le llega al siguiente ANTES de que vuelva a fallar. */
+export const getMisAvisosPortales = () => api.get('/cortex/portales/mi-ruta')
 export const getDriverOffers = () => api.get('/driver-offers')
 export const clickDriverOffer = (offerId) => api.post(`/driver-offers/${offerId}/click`)
 

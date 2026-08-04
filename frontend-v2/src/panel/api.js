@@ -263,6 +263,14 @@ export const cortexSeedDemo = () => api.post('/cortex/seed-demo')
 export const cortexClearDemo = () => api.post('/cortex/clear-demo')
 export const cortexReset = () => api.post('/cortex/reset')
 
+/* Calidad de entrega en vivo: el scorecard calculado desde Cortex, sin subir
+   nada y sin esperar al viernes de Amazon. */
+export const cortexCalidad = (params) => api.get('/cortex/calidad', { params })
+export const cortexSimular = (params) => api.get('/cortex/simular', { params })
+/* Libreta de portales: direcciones que fallan una y otra vez. */
+export const cortexPortales = (params) => api.get('/cortex/portales', { params })
+export const cortexPortalNota = (body) => api.post('/cortex/portales', body)
+
 // ── Aparcamiento: plano por centro + trazabilidad diaria ──
 export const parkingLayout = (center) => api.get('/parking/layout', { params: { center } })
 export const parkingSaveLayout = (body) => api.put('/parking/layout', body)

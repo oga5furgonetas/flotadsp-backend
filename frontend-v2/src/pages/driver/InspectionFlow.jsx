@@ -10,6 +10,7 @@ import { compressImage } from '../../lib/compressImage'
 import { useT } from '../../i18n'
 import { useToast } from '../../lib/toast'
 import { pushSupported, isPushEnabled, enablePush } from '../../lib/push'
+import AvisosPortales from './AvisosPortales'
 
 const PHOTO_SLOTS = [
   { id: 'frontal',      label: 'Frontal',            icon: '⬆', required: true },
@@ -325,6 +326,9 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
         {/* ── PASO 0: Selección de vehículo ── */}
         {step === 0 && (
           <div className="space-y-4">
+            {/* Los avisos van ARRIBA del todo y solo si los hay: es lo unico de
+                esta pantalla que le ahorra un fallo hoy mismo. */}
+            <AvisosPortales />
             <div>
               <h2 className="text-lg font-bold text-dark-50">{t('dr.insDiaria')}</h2>
               <p className="text-xs text-dark-500">{t('dr.eligeFurgo')}</p>
