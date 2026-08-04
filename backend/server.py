@@ -19330,6 +19330,86 @@ def _cx_impacto(conductores: list, tasa_fallo_flota: float) -> list:
     return sorted(out, key=lambda x: x["exceso"], reverse=True)
 
 
+def _parecido(a: str, b: str) -> float:
+    """Parecido entre dos nombres, 0..1, por palabras compartidas.
+
+    Nada de distancia de edicion: los nombres vienen con el orden cambiado
+    ("APELLIDO NOMBRE" vs "Nombre Apellido") y con tildes puestas o quitadas,
+    y ahi comparar cadenas enteras falla. Contar palabras en comun aguanta el
+    reordenado, que es el caso real.
+    """
+    pa = {w for w in _norm_texto(a).split() if len(w) > 2}
+    pb = {w for w in _norm_texto(b).split() if len(w) > 2}
+    if not pa or not pb:
+        return 0.0
+    return len(pa & pb) / min(len(pa), len(pb))
+
+
+@api_router.get("/cortex/emparejar")
+async def cortex_emparejar(dias: int = 30, _=Depends(require_admin)):
+    """IDs de Amazon que reparten sin ficha, con la ficha que probablemente son."""
+    dias = max(7, min(int(dias or 30), 120))
+    desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
+
+    cur = db.cortex_packages.aggregate([
+        {"$match": {"service_day": {"$gte": desde}, "driver_id": {"$nin": [None, ""]}}},
+        {"$group": {"_id": "$driver_id", "paquetes": {"$sum": 1},
+                    "ultimo": {"$max": "$service_day"},
+                    "centro": {"$first": "$center"}}},
+        {"$sort": {"paquetes": -1}},
+    ], allowDiskUse=True)
+    activos = await cur.to_list(2000)
+    ids = {a["_id"] for a in activos}
+
+    # Los que YA tienen ficha se descartan: aqui solo interesa lo que falta.
+    con_ficha = set()
+    async for dv in db.drivers.find({"driver_id": {"$in": list(ids)}}, {"_id": 0, "driver_id": 1}):
+        con_ficha.add(dv["driver_id"])
+
+    # Nombre que Amazon dio en el historico de rutas, si lo hay.
+    historico = {}
+    async for r in db.route_history.find({"transporter_id": {"$in": list(ids - con_ficha)}},
+                                         {"_id": 0, "transporter_id": 1, "driver_name": 1}):
+        if r.get("driver_name"):
+            historico.setdefault(r["transporter_id"], r["driver_name"])
+
+    # Fichas que aun no tienen ID asignado: son las candidatas.
+    libres = await db.drivers.find(
+        {"$or": [{"driver_id": {"$in": [None, ""]}}, {"driver_id": {"$exists": False}}]},
+        {"_id": 0, "id": 1, "name": 1, "center": 1, "active": 1}).to_list(500)
+
+    pendientes = []
+    for a in activos:
+        did = a["_id"]
+        if did in con_ficha:
+            continue
+        nombre = historico.get(did)
+        sug = []
+        if nombre:
+            for f in libres:
+                p = _parecido(nombre, f.get("name") or "")
+                if p >= 0.5:
+                    sug.append({"ficha_id": f["id"], "nombre": f.get("name"),
+                                "centro": f.get("center"), "parecido": round(p, 2)})
+            sug.sort(key=lambda x: x["parecido"], reverse=True)
+        pendientes.append({
+            "driver_id": did, "paquetes": a["paquetes"], "ultimo_dia": a["ultimo"],
+            "centro": (a.get("centro") or "").strip(),
+            "nombre_historico": nombre, "sugerencias": sug[:3],
+        })
+
+    return {
+        "pendientes": pendientes,
+        "libres": sorted(libres, key=lambda f: (f.get("name") or "")),
+        "resumen": {
+            "activos": len(activos), "con_ficha": len(con_ficha),
+            "sin_ficha": len(pendientes),
+            "con_nombre_conocido": sum(1 for p in pendientes if p["nombre_historico"]),
+            "paquetes_sin_atribuir": sum(p["paquetes"] for p in pendientes),
+        },
+    }
+
+
 @api_router.get("/cortex/calidad")
 async def cortex_calidad(desde: str = "", hasta: str = "", center: str = "",
                          _=Depends(require_admin)):
@@ -19930,15 +20010,19 @@ async def cortex_overview(day: str = "", center: str = "", _=Depends(require_adm
 async def cortex_routes(day: str = "", center: str = "", _=Depends(require_admin)):
     """Resumen agregado por ruta: la vista principal cuando hay miles de paquetes."""
     today = (day or datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    # OJO: el campo es driver_id, NO driver_name. cortex_packages nunca ha
+    # tenido driver_name, asi que la pantalla mostraba "Sin conductor" en TODAS
+    # las rutas teniendo el dato delante. El nombre se resuelve despues.
     pkgs = await db.cortex_packages.find(
         await _cortex_scope(today, center),
-        {"_id": 0, "route_code": 1, "driver_name": 1, "state": 1, "priority": 1, "updated_at": 1, "center": 1}).to_list(20000)
+        {"_id": 0, "route_code": 1, "driver_id": 1, "state": 1, "priority": 1, "updated_at": 1, "center": 1}).to_list(20000)
     routes = {}
     for p in pkgs:
         rc = p.get("route_code") or "—"
-        r = routes.setdefault(rc, {"route_code": rc, "driver_name": None, "total": 0, "delivered": 0,
+        r = routes.setdefault(rc, {"route_code": rc, "driver_name": None, "driver_id": None,
+                                   "total": 0, "delivered": 0,
                                    "missing": 0, "attempted": 0, "loaded": 0, "returned": 0, "other": 0,
-                                   "critical": 0, "updated_at": None})
+                                   "critical": 0, "updated_at": None, "ultima_entrega": None})
         r["total"] += 1
         st = p.get("state")
         if st == "DELIVERED":
@@ -19955,11 +20039,39 @@ async def cortex_routes(day: str = "", center: str = "", _=Depends(require_admin
             r["other"] += 1
         if p.get("priority") == "critical":
             r["critical"] += 1
-        if p.get("driver_name") and not r["driver_name"]:
-            r["driver_name"] = p["driver_name"]
+        if p.get("driver_id") and not r["driver_id"]:
+            r["driver_id"] = p["driver_id"]
         u = p.get("updated_at")
         if u and (not r["updated_at"] or u > r["updated_at"]):
             r["updated_at"] = u
+        # Hora de la ultima ENTREGA (no de la ultima actualizacion): es lo que
+        # dice si la furgoneta sigue moviendose. updated_at de un paquete
+        # entregado es su hora de entrega — comprobado contra cortex_events
+        # sobre 400 paquetes: desviacion mediana 0 s.
+        if st == "DELIVERED" and u and (not r["ultima_entrega"] or u > r["ultima_entrega"]):
+            r["ultima_entrega"] = u
+
+    nombres = await _cx_nombres({r["driver_id"] for r in routes.values() if r.get("driver_id")})
+    ahora = datetime.now(timezone.utc)
+    for r in routes.values():
+        n = nombres.get(r.get("driver_id") or "")
+        if n:
+            r["driver_name"] = n.get("nombre")
+            r["ficha_id"] = n.get("ficha_id")
+        r["pendientes"] = r["total"] - r["delivered"]
+        # Minutos desde la ultima entrega. Es un HECHO, no una prediccion: un
+        # predictor de hora de fin no se sostiene con estos datos (ver
+        # docs/PREDICTOR_RESCATES.md). Se muestra para que decida el gestor.
+        r["min_sin_entregar"] = None
+        if r["ultima_entrega"] and r["pendientes"] > 0:
+            ue = r["ultima_entrega"]
+            if not isinstance(ue, datetime):
+                ue = _cortex_parse_dt(ue)
+            if ue:
+                if ue.tzinfo is None:
+                    ue = ue.replace(tzinfo=timezone.utc)
+                r["min_sin_entregar"] = max(0, int((ahora - ue).total_seconds() // 60))
+
     out = sorted(routes.values(), key=lambda r: str(r["route_code"] or ""))
     return {"routes": out, "total_packages": len(pkgs)}
 

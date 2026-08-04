@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { cortexCalidad, cortexSimular } from '../api'
 import { lista } from '../../lib/lista'
+import Emparejar from './Emparejar'
 
 /* ────────────────────────────────────────────────────────────────────────────
    Calidad de entrega EN VIVO, calculada desde Cortex.
@@ -330,6 +331,11 @@ export default function CalidadViva({ center }) {
       <div className="mt-4">
         <Impacto datos={datos} center={center && center !== 'Todos' ? center : ''} t={t} />
       </div>
+
+      {/* Va aqui y no en un menu aparte: es justo donde se ve el sintoma
+          (conductores marcados "sin ficha" en la tabla de arriba). Se esconde
+          solo cuando no queda ninguno pendiente. */}
+      <Emparejar />
 
       <button onClick={() => setVerDias((v) => !v)}
         className="mt-3 flex items-center gap-1 text-[11px] text-dark-500 hover:text-dark-300">

@@ -270,6 +270,10 @@ export const cortexSimular = (params) => api.get('/cortex/simular', { params })
 /* Libreta de portales: direcciones que fallan una y otra vez. */
 export const cortexPortales = (params) => api.get('/cortex/portales', { params })
 export const cortexPortalNota = (body) => api.post('/cortex/portales', body)
+/* IDs de Amazon que reparten sin ficha de conductor, con sugerencia de a quien
+   corresponden. La asignacion reutiliza updateDriver: driver_id ya esta en la
+   whitelist del PATCH. */
+export const cortexEmparejar = () => api.get('/cortex/emparejar')
 
 // ── Aparcamiento: plano por centro + trazabilidad diaria ──
 export const parkingLayout = (center) => api.get('/parking/layout', { params: { center } })
