@@ -1037,8 +1037,13 @@ async def _ensure_tenant_indexes(db_name: str):
     # Atlas de 512 MB: conserva la traza reciente y libera el resto solo.
     try:
         await _idx(tdb.cortex_events, "expira_en", expireAfterSeconds=0)
+        # cortex_packages crecia SIN LIMITE mientras su coleccion hermana ya
+        # caducaba. Medido: 3.309 docs/dia, 812 bytes/doc = 77 MB/mes con UN
+        # cliente. Un Atlas de 512 MB se llena en 2,8 meses; con tres DSP, en
+        # menos de uno. Misma retencion que los eventos: 90 dias.
+        await _idx(tdb.cortex_packages, "expira_en", expireAfterSeconds=0)
     except Exception as _e:
-        logger.warning(f"Indice TTL cortex_events: {_e}")
+        logger.warning(f"Indice TTL de cortex: {_e}")
     await _idx(tdb.inspections, "id")
     await _idx(tdb.inspections, "vehicle_id")
     await _idx(tdb.inspections, [("created_at", -1)])
@@ -9795,53 +9800,105 @@ async def send_daily_inspection_summary():
 
 
 async def backup_database_to_r2() -> dict:
-    """Exporta TODAS las colecciones a un JSON.gz y lo sube a R2 (backups/).
-    Conserva los últimos 14 backups. El cluster Atlas es M0 (sin backups nativos):
-    esto es la red de seguridad contra corrupción o borrado accidental."""
+    """Copia TODAS las bases (global + cada inquilino) a un JSONL.gz en R2.
+
+    El cluster Atlas es M0: no tiene copias nativas. Esto es la unica red de
+    seguridad contra un borrado o una corrupcion, asi que tiene que funcionar
+    de verdad y tiene que gritar cuando no.
+
+    Se escribe en streaming a un fichero temporal: la memoria NO crece con el
+    tamano de la base. La version anterior montaba el volcado entero en RAM y
+    luego hacia otras tres copias (json.dumps, encode, gzip); con 149 MB de
+    datos en una maquina de 1 GB, moria y dejaba ficheros de 0 bytes.
+    """
     import gzip as _gzip
+    import tempfile
     r2 = get_r2()
     if not r2:
         return {"success": False, "error": "R2 no configurado"}
+
+    ruta = None
     try:
-        dump = {}
+        bases = [n for n in await client.list_database_names()
+                 if n not in ("admin", "local", "config", "sample_mflix")]
         total_docs = 0
-        names = await db.list_collection_names()
-        for cname in names:
-            docs = await db[cname].find({}, {"_id": 0}).to_list(100000)
-            dump[cname] = docs
-            total_docs += len(docs)
+        total_cols = 0
+        por_base = {}
 
-        raw = json.dumps(dump, default=str, ensure_ascii=False).encode("utf-8")
-        compressed = _gzip.compress(raw, compresslevel=6)
+        fd, ruta = tempfile.mkstemp(suffix=".jsonl.gz")
+        os.close(fd)
+        with _gzip.open(ruta, "wt", encoding="utf-8", compresslevel=6) as f:
+            for base in bases:
+                bdb = client[base]
+                n_base = 0
+                for cname in await bdb.list_collection_names():
+                    total_cols += 1
+                    # Cursor por lotes: NUNCA to_list con tope. El anterior
+                    # cortaba en 100.000 y perdia 59.189 eventos por copia.
+                    cur = bdb[cname].find({}, {"_id": 0}).batch_size(500)
+                    async for doc in cur:
+                        f.write(json.dumps({"_db": base, "_col": cname, "d": doc},
+                                           default=str, ensure_ascii=False))
+                        f.write("\n")
+                        n_base += 1
+                        total_docs += 1
+                por_base[base] = n_base
+
+        tam = os.path.getsize(ruta)
+        # Una copia sana ronda los 100 bytes comprimidos por documento. Muy por
+        # debajo de eso significa que se trunco o que fallo a mitad: eso NO se
+        # sube como si nada, se reporta como fallo para que salte el aviso.
+        minimo = max(1024, total_docs * 8)
+        if total_docs == 0 or tam < minimo:
+            return {"success": False,
+                    "error": f"Copia sospechosa: {tam} bytes para {total_docs} documentos"}
+
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M")
-        key = f"backups/flotadsp_{stamp}.json.gz"
-
+        key = f"backups/flotadsp_{stamp}.jsonl.gz"
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(_executor, lambda: r2.put_object(
-            Bucket=R2_BUCKET, Key=key, Body=compressed,
-            ContentType="application/gzip"
-        ))
 
-        # Rotación: conservar solo los 14 más recientes
-        deleted = 0
+        def _subir():
+            with open(ruta, "rb") as fh:
+                r2.put_object(Bucket=R2_BUCKET, Key=key, Body=fh,
+                              ContentType="application/gzip")
+            # Releer el tamano en R2: si lo subido no coincide con lo escrito,
+            # la copia no vale. Es justo el fallo que dejo un fichero de 0 MB
+            # pasando por bueno durante ocho dias.
+            return r2.head_object(Bucket=R2_BUCKET, Key=key).get("ContentLength", 0)
+
+        subido = await loop.run_in_executor(_executor, _subir)
+        if subido != tam:
+            return {"success": False,
+                    "error": f"Subida incompleta: {subido} de {tam} bytes"}
+
+        # Rotacion: conservar las 14 mas recientes.
+        borrados = 0
         try:
             listing = await loop.run_in_executor(_executor, lambda: r2.list_objects_v2(
-                Bucket=R2_BUCKET, Prefix="backups/"
-            ))
+                Bucket=R2_BUCKET, Prefix="backups/"))
             keys = sorted([o["Key"] for o in listing.get("Contents", [])], reverse=True)
             for old_key in keys[14:]:
-                await loop.run_in_executor(_executor, lambda k=old_key: r2.delete_object(Bucket=R2_BUCKET, Key=k))
-                deleted += 1
+                await loop.run_in_executor(_executor, lambda k=old_key: r2.delete_object(
+                    Bucket=R2_BUCKET, Key=k))
+                borrados += 1
         except Exception as _rot:
-            logger.warning(f"Rotación de backups falló (no crítico): {_rot}")
+            logger.warning(f"Rotacion de copias fallo (no critico): {_rot}")
 
-        size_mb = round(len(compressed) / 1024 / 1024, 2)
-        logger.info(f"Backup BD OK: {key} — {total_docs} docs, {size_mb}MB, {len(names)} colecciones, {deleted} antiguos borrados")
-        return {"success": True, "key": key, "collections": len(names),
-                "documents": total_docs, "size_mb": size_mb}
+        size_mb = round(tam / 1024 / 1024, 2)
+        logger.info(f"Backup OK: {key} - {total_docs} docs, {total_cols} colecciones, "
+                    f"{len(bases)} bases, {size_mb}MB, {borrados} antiguas borradas")
+        return {"success": True, "key": key, "bases": len(bases),
+                "collections": total_cols, "documents": total_docs,
+                "size_mb": size_mb, "por_base": por_base}
     except Exception as e:
-        logger.error(f"Backup BD FALLÓ: {e}", exc_info=True)
+        logger.error(f"Backup FALLO: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
+    finally:
+        if ruta:
+            try:
+                os.remove(ruta)
+            except OSError:
+                pass
 
 
 @api_router.post("/admin/backup-now")
@@ -19116,6 +19173,12 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     # ya conocido de otra fuente más rica.
     ident = {k: v for k, v in ident.items() if v not in (None, "")}
     common = {"tba": tba, "state": state, "updated_at": observed_at.isoformat(), **ident}
+    # Caducidad a 90 dias, igual que cortex_events. Sin esto la coleccion crecia
+    # sin techo: medido, 3.309 docs/dia = 77 MB/mes. Se reescribe en cada
+    # captura a proposito, asi el reloj se reinicia mientras el paquete siga
+    # vivo y solo caduca lo que lleva 90 dias sin verse.
+    # Va como datetime (no ISO): el indice TTL de Mongo solo entiende fechas.
+    common["expira_en"] = datetime.now(timezone.utc) + timedelta(days=90)
     # Día de servicio (el que el usuario tiene seleccionado en Cortex). Se guarda
     # una sola vez y no se pisa con null: cada paquete pertenece a un día.
     service_day = str(obs.get("service_day") or "").strip()[:10]
