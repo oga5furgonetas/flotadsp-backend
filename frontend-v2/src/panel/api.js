@@ -275,6 +275,10 @@ export const cortexPortalNota = (body) => api.post('/cortex/portales', body)
    whitelist del PATCH. */
 export const cortexEmparejar = () => api.get('/cortex/emparejar')
 
+/* WHC: horas de trabajo. Se pega el plan del portal y devuelve el margen que le
+   queda a cada conductor antes del limite semanal. */
+export const whcAnalizar = (body) => api.post('/whc/analizar', body)
+
 // ── Aparcamiento: plano por centro + trazabilidad diaria ──
 export const parkingLayout = (center) => api.get('/parking/layout', { params: { center } })
 export const parkingSaveLayout = (body) => api.put('/parking/layout', body)

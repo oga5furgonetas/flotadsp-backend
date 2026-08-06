@@ -183,6 +183,7 @@ const PanelBandeja = lazy(() => import('./panel/pages/Bandeja'))
 const PanelIncidencias = lazy(() => import('./panel/pages/Incidencias'))
 const PanelContactos = lazy(() => import('./panel/pages/Contactos'))
 const PanelPaquetes = lazy(() => import('./panel/pages/PackageIntel'))
+const PanelWHC = lazy(() => import('./panel/pages/WHC'))
 const Privacidad = lazy(() => import('./legal/Privacidad'))
 const Terminos = lazy(() => import('./legal/Terminos'))
 const CookiesPage = lazy(() => import('./legal/Cookies'))
@@ -274,6 +275,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="incidencias" element={<PanelIncidencias />} />
                 <Route path="contactos" element={<PanelContactos />} />
                 <Route path="paquetes" element={<PanelPaquetes />} />
+                <Route path="whc" element={<PanelWHC />} />
               </Route>
 
               <Route path="*" element={<NotFound />} />

@@ -19473,6 +19473,200 @@ async def cortex_emparejar(dias: int = 30, _=Depends(require_admin)):
     }
 
 
+# =========================================================================
+# WHC — WORKING HOURS COMPLIANCE
+# Ver docs/WHC.md: que se puede afirmar de estos datos y que no.
+# =========================================================================
+
+# Limite semanal por ciclo. El de ciclo 1 (rutas estandar de ~9 h) son 55 h y
+# lo confirma el DSP; los demas quedan a 0 = sin limite hasta que alguien los
+# confirme. NO se inventa un numero: un limite inventado marca gente que no ha
+# incumplido nada, y eso destruye la confianza en la pantalla el primer dia.
+_WHC_LIMITES = {"ciclo1": 55 * 60, "ciclo2": 0, "ciclo3": 0}
+
+# Aviso cuando queda menos de esto para el limite.
+_WHC_MARGEN_AVISO = 3 * 60
+
+# Duracion de bloque a partir de la cual se marca RIESGO diario (nunca
+# incumplimiento). 10 h es la referencia de una ruta estandar mas dos horas.
+_WHC_BLOQUE_RIESGO = 10 * 60
+
+
+def _whc_minutos(txt: str):
+    """'11:34am' / '11 AM' / '12:30' -> minutos desde medianoche. None si no cuela."""
+    t = (txt or "").strip().lower().replace(" ", "").replace(".", "")
+    m = re.match(r"^(\d{1,2}):(\d{2})(am|pm)?$", t) or re.match(r"^(\d{1,2})(am|pm)$", t)
+    if not m:
+        return None
+    g = m.groups()
+    h = int(g[0])
+    mi = int(g[1]) if len(g) > 2 and g[1] and g[1].isdigit() else 0
+    ap = g[-1]
+    if ap == "pm" and h != 12:
+        h += 12
+    if ap == "am" and h == 12:
+        h = 0
+    if h > 23 or mi > 59:
+        return None
+    return h * 60 + mi
+
+
+def _whc_dur(txt: str) -> int:
+    """'53h 34m' -> minutos."""
+    h = re.search(r"(\d+)\s*h", txt or "")
+    m = re.search(r"(\d+)\s*m", txt or "")
+    return (int(h.group(1)) if h else 0) * 60 + (int(m.group(1)) if m else 0)
+
+
+# Tipos de bloque que el portal escribe debajo de la hora.
+_WHC_TIPOS = ("standard parcel", "nursery route", "dsp initiated work",
+              "cycle 1", "cycle 2", "sameday", "multi-use")
+
+
+def _whc_parsear(texto: str) -> list:
+    """Convierte el pegado del plan semanal en conductores con sus bloques.
+
+    Formato del portal (validado con 61 conductores de la Semana 31):
+        NOMBRE
+        Estandar
+        53h 34m / 54h 45m        <- trabajado / planificado
+        10:35am - 9:05pm
+        Standard Parcel
+        11 AM                    <- bloque SIN hora de fin (si le sigue un tipo)
+        Standard Parcel
+        ...
+
+    Reglas deducidas y comprobadas:
+      · 'HH:MMam - HH:MMpm' + tipo -> bloque con horas conocidas
+      · hora suelta + tipo         -> bloque REAL cuya hora de fin no aparece.
+        Su duracion implicita medida es 8h59m-9h14m: una ruta estandar.
+      · hora suelta sin tipo       -> dia vacio, no cuenta
+    """
+    lineas = [l.strip() for l in (texto or "").replace("\r", "").split("\n")]
+    out, actual = [], None
+    i = 0
+    while i < len(lineas):
+        l = lineas[i]
+        if not l:
+            i += 1
+            continue
+        # "53h 34m / 54h 45m"  o  "/"  (sin horas esa semana)
+        mt = re.match(r"^(\d+h[\s\d]*m?)\s*/\s*(\d+h[\s\d]*m?)$", l)
+        if mt and actual:
+            actual["trabajado"] = _whc_dur(mt.group(1))
+            actual["planificado"] = _whc_dur(mt.group(2))
+            i += 1
+            continue
+        # Rango con horas: "10:35am - 9:05pm"
+        mr = re.match(r"^(\d{1,2}:\d{2}\s*[ap]m?)\s*[-–]\s*(\d{1,2}:\d{2}\s*[ap]m?)$", l, re.I)
+        if mr and actual:
+            a, z = _whc_minutos(mr.group(1)), _whc_minutos(mr.group(2))
+            if a is not None and z is not None:
+                if z < a:
+                    z += 1440
+                tipo = lineas[i + 1] if i + 1 < len(lineas) else ""
+                actual["bloques"].append({"inicio": mr.group(1), "fin": mr.group(2),
+                                          "minutos": z - a, "tipo": tipo[:40], "estimado": False})
+            i += 1
+            continue
+        # Hora suelta: bloque sin fin SOLO si la linea siguiente es un tipo
+        if actual and _whc_minutos(l) is not None:
+            sig = (lineas[i + 1] if i + 1 < len(lineas) else "").lower()
+            if any(t in sig for t in _WHC_TIPOS):
+                actual["bloques"].append({"inicio": l, "fin": None, "minutos": None,
+                                          "tipo": lineas[i + 1][:40], "estimado": True})
+            i += 1
+            continue
+        # Ruido conocido del pegado
+        if l.lower() in ("estandar", "estándar", "standard") or l.startswith("```") or l in ("DGA1", "DGA2", "OGA5"):
+            i += 1
+            continue
+        if any(t in l.lower() for t in _WHC_TIPOS):
+            i += 1
+            continue
+        # Cualquier otra cosa con letras es un nombre nuevo
+        if re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]{3}", l) and not re.match(r"^\d", l):
+            actual = {"nombre": l[:80], "trabajado": 0, "planificado": 0, "bloques": []}
+            out.append(actual)
+        i += 1
+    return [c for c in out if c["trabajado"] or c["bloques"]]
+
+
+def _whc_evaluar(conductores: list, limite_min: int) -> list:
+    """Añade a cada conductor su margen semanal y el riesgo diario.
+
+    OJO con la separacion: `supera_semanal` es un HECHO (el total trabajado lo
+    da el propio portal). `riesgo_diario` es un AVISO, no un incumplimiento —
+    ver el docstring del modulo para el porque.
+    """
+    out = []
+    for c in conductores:
+        con_hora = [b["minutos"] for b in c["bloques"] if b["minutos"] is not None]
+        sin_hora = sum(1 for b in c["bloques"] if b["minutos"] is None)
+        # Cuadre: si la suma de bloques con hora no explica el total, la
+        # diferencia son los bloques sin hora de fin. Se reparte entre ellos
+        # para poder estimarlos, y se marca como estimado.
+        resto = c["trabajado"] - sum(con_hora)
+        est = int(resto / sin_hora) if sin_hora and resto > 0 else 0
+        for b in c["bloques"]:
+            if b["minutos"] is None:
+                b["minutos"] = est
+
+        largos = [b for b in c["bloques"] if (b["minutos"] or 0) >= _WHC_BLOQUE_RIESGO]
+        margen = (limite_min - c["trabajado"]) if limite_min else None
+        out.append({
+            **c,
+            "dias_trabajados": len(c["bloques"]),
+            "margen_semanal": margen,
+            "supera_semanal": bool(limite_min and c["trabajado"] > limite_min),
+            "al_limite": bool(limite_min and 0 <= (margen or 0) <= _WHC_MARGEN_AVISO),
+            "riesgo_diario": [{"inicio": b["inicio"], "fin": b["fin"],
+                               "minutos": b["minutos"], "estimado": b["estimado"]}
+                              for b in largos],
+            "cuadra": abs(c["trabajado"] - sum(b["minutos"] or 0 for b in c["bloques"])) <= 10,
+        })
+    orden = {True: 0, False: 1}
+    out.sort(key=lambda c: (orden[c["supera_semanal"]], -(c["trabajado"] or 0)))
+    return out
+
+
+@api_router.post("/whc/analizar")
+async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
+    """Analiza el plan semanal pegado del portal y devuelve el estado de WHC."""
+    texto = data.get("texto") or ""
+    if len(texto.strip()) < 40:
+        raise HTTPException(400, "Pega el plan de la semana desde el portal")
+    ciclo = (data.get("ciclo") or "ciclo1").strip()
+    limite = _WHC_LIMITES.get(ciclo, 0)
+    if data.get("limite_horas"):
+        limite = int(_decimal(data["limite_horas"], "limite_horas", minimo=0, maximo=100) * 60)
+
+    conductores = _whc_parsear(texto)
+    if not conductores:
+        raise HTTPException(400, "No se ha reconocido ningún conductor en ese texto")
+    ev = _whc_evaluar(conductores, limite)
+
+    return {
+        "semana": (data.get("semana") or "")[:40],
+        "ciclo": ciclo,
+        "limite_min": limite,
+        "conductores": ev,
+        "resumen": {
+            "total": len(ev),
+            "superan": sum(1 for c in ev if c["supera_semanal"]),
+            "al_limite": sum(1 for c in ev if c["al_limite"]),
+            "con_riesgo_diario": sum(1 for c in ev if c["riesgo_diario"]),
+            "no_cuadran": sum(1 for c in ev if not c["cuadra"]),
+        },
+        # Que la pantalla pueda explicar por que no afirma nada de lo diario.
+        "aviso_diario": ("Los bloques largos son un AVISO DE RIESGO, no un "
+                         "incumplimiento: el plan da la hora PLANIFICADA y "
+                         "Amazon calcula la excepción diaria sobre lo FICHADO. "
+                         "Verificado contra una semana real: ningún umbral de "
+                         "duración de bloque reproduce las excepciones reales."),
+    }
+
+
 @api_router.get("/cortex/calidad")
 async def cortex_calidad(desde: str = "", hasta: str = "", center: str = "",
                          _=Depends(require_admin)):
