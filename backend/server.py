@@ -19478,11 +19478,16 @@ async def cortex_emparejar(dias: int = 30, _=Depends(require_admin)):
 # Ver docs/WHC.md: que se puede afirmar de estos datos y que no.
 # =========================================================================
 
-# Limite semanal por ciclo. El de ciclo 1 (rutas estandar de ~9 h) son 55 h y
-# lo confirma el DSP; los demas quedan a 0 = sin limite hasta que alguien los
-# confirme. NO se inventa un numero: un limite inventado marca gente que no ha
-# incumplido nada, y eso destruye la confianza en la pantalla el primer dia.
-_WHC_LIMITES = {"ciclo1": 55 * 60, "ciclo2": 0, "ciclo3": 0}
+# OJO: las 55 h de ciclo 1 son el limite CONTRACTUAL/LEGAL del DSP, NO el
+# umbral de WHC de Amazon. Comprobado con la Semana 31 de OGA5: XAQUIN
+# RIVADULLA trabajo 56h 30m y su fila del scorecard dice "Weekly Limit
+# Exceeded = NO". El umbral de Amazon es MAYOR de 56h 30m y no lo publica.
+# Marcar 56h30m como incumplimiento de Amazon seria un falso positivo.
+_WHC_LIMITE_PROPIO = 55 * 60          # el tuyo, editable en pantalla
+_WHC_SUELO_AMAZON_OBSERVADO = 56 * 60 + 30   # visto cumpliendo, luego el real es mayor
+
+# Cuando queda menos de esto para TU limite, se avisa.
+_WHC_MARGEN_AVISO_PROPIO = 3 * 60
 
 # Aviso cuando queda menos de esto para el limite.
 _WHC_MARGEN_AVISO = 3 * 60
@@ -19618,8 +19623,10 @@ def _whc_evaluar(conductores: list, limite_min: int) -> list:
             **c,
             "dias_trabajados": len(c["bloques"]),
             "margen_semanal": margen,
+            # OJO con el nombre: es TU limite, no el de Amazon. Amazon no marco
+            # excepcion semanal a quien hizo 56h30m.
             "supera_semanal": bool(limite_min and c["trabajado"] > limite_min),
-            "al_limite": bool(limite_min and 0 <= (margen or 0) <= _WHC_MARGEN_AVISO),
+            "al_limite": bool(limite_min and 0 <= (margen or 0) <= _WHC_MARGEN_AVISO_PROPIO),
             "riesgo_diario": [{"inicio": b["inicio"], "fin": b["fin"],
                                "minutos": b["minutos"], "estimado": b["estimado"]}
                               for b in largos],
@@ -19636,20 +19643,48 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
     texto = data.get("texto") or ""
     if len(texto.strip()) < 40:
         raise HTTPException(400, "Pega el plan de la semana desde el portal")
-    ciclo = (data.get("ciclo") or "ciclo1").strip()
-    limite = _WHC_LIMITES.get(ciclo, 0)
+    limite = _WHC_LIMITE_PROPIO
     if data.get("limite_horas"):
         limite = int(_decimal(data["limite_horas"], "limite_horas", minimo=0, maximo=100) * 60)
+    # Excepciones que Amazon ya reporto esta semana (de la hoja "Drivers With
+    # Working Hour Exceptions"). Si no se dan, se asume 0 y el WHC sale al 100 %.
+    try:
+        excepciones = max(0, int(data.get("excepciones") or 0))
+    except (TypeError, ValueError):
+        excepciones = 0
 
     conductores = _whc_parsear(texto)
     if not conductores:
         raise HTTPException(400, "No se ha reconocido ningún conductor en ese texto")
     ev = _whc_evaluar(conductores, limite)
 
+    # ── WHC: el porcentaje que Amazon publica, calculado igual que ellos ──
+    # El scorecard lo define textualmente: "The metric is calculated as % of
+    # drivers complying with working hour limits". El denominador son los
+    # conductores CON ACTIVIDAD esa semana (los que tienen horas en el plan).
+    # Validado: S31 de OGA5, 69 conductores con horas y 2 excepciones ->
+    # 67/69 = 97,101 %, que es el 97,1 % impreso en el PDF.
+    con_actividad = sum(1 for c in ev if c["trabajado"] > 0)
+    whc = None
+    if con_actividad:
+        cumplen = max(0, con_actividad - excepciones)
+        whc = {
+            "conductores_con_actividad": con_actividad,
+            "excepciones": excepciones,
+            "porcentaje": round(cumplen / con_actividad * 100, 1),
+            # Lo que de verdad hay que saber: cuanto cuesta UNA sola excepcion.
+            # Con 69 conductores son 1,45 puntos, y basta una para dejar de
+            # estar al 100 %. El WHC es practicamente todo o nada.
+            "coste_por_excepcion": round(100 / con_actividad, 2),
+            "porcentaje_si_una_mas": round(max(0, cumplen - 1) / con_actividad * 100, 1),
+        }
+
     return {
         "semana": (data.get("semana") or "")[:40],
-        "ciclo": ciclo,
+        "whc": whc,
         "limite_min": limite,
+        "limite_es_propio": True,
+        "suelo_amazon_observado_min": _WHC_SUELO_AMAZON_OBSERVADO,
         "conductores": ev,
         "resumen": {
             "total": len(ev),
@@ -19659,11 +19694,14 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
             "no_cuadran": sum(1 for c in ev if not c["cuadra"]),
         },
         # Que la pantalla pueda explicar por que no afirma nada de lo diario.
-        "aviso_diario": ("Los bloques largos son un AVISO DE RIESGO, no un "
-                         "incumplimiento: el plan da la hora PLANIFICADA y "
-                         "Amazon calcula la excepción diaria sobre lo FICHADO. "
-                         "Verificado contra una semana real: ningún umbral de "
-                         "duración de bloque reproduce las excepciones reales."),
+        "aviso_diario": ("El límite semanal de aquí es EL TUYO, no el de Amazon: "
+                         "en la semana 31 un conductor hizo 56 h 30 m y Amazon "
+                         "NO marcó excepción semanal, así que su umbral es mayor. "
+                         "Y los bloques largos son un aviso de riesgo, no un "
+                         "incumplimiento: en semanas con CERO excepciones hay "
+                         "bloques de 11 h 44 m, y sin embargo uno de 10 h 05 m sí "
+                         "generó excepción. La excepción se calcula sobre lo "
+                         "FICHADO, que no está en el plan."),
     }
 
 

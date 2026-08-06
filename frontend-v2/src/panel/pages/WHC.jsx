@@ -37,6 +37,7 @@ export default function WHC() {
   const { t } = useT()
   const [texto, setTexto] = useState('')
   const [limite, setLimite] = useState(55)
+  const [excepciones, setExcepciones] = useState(0)
   const [datos, setDatos] = useState(null)
   const [cargando, setCargando] = useState(false)
   const [err, setErr] = useState('')
@@ -45,7 +46,7 @@ export default function WHC() {
   const analizar = async () => {
     setCargando(true); setErr(''); setDatos(null)
     try {
-      const r = await whcAnalizar({ texto, ciclo: 'ciclo1', limite_horas: limite })
+      const r = await whcAnalizar({ texto, limite_horas: limite, excepciones })
       setDatos(r.data)
     } catch (e) {
       setErr(e?.response?.data?.detail || t('whc.error'))
@@ -79,6 +80,12 @@ export default function WHC() {
               className="w-20 rounded-lg border border-dark-700 bg-dark-900 px-2 py-1 text-sm text-dark-100" />
             <span className="text-dark-600">h</span>
           </label>
+          <label className="flex items-center gap-2 text-xs text-dark-400">
+            {t('whc.excep')}
+            <input type="number" value={excepciones} min={0} max={200}
+              onChange={(e) => setExcepciones(Number(e.target.value))}
+              className="w-16 rounded-lg border border-dark-700 bg-dark-900 px-2 py-1 text-sm text-dark-100" />
+          </label>
           <button onClick={analizar} disabled={cargando || texto.trim().length < 40}
             className="btn-primary flex items-center gap-2 px-4 py-2 text-sm disabled:opacity-40">
             {cargando ? <Loader2 size={14} className="animate-spin" /> : <Clock size={14} />}
@@ -91,6 +98,41 @@ export default function WHC() {
 
       {datos && (
         <>
+          {/* EL numero. Calculado con la misma formula que Amazon, que el
+              propio scorecard define: "% of drivers complying with working hour
+              limits". Validado al decimal contra 3 semanas reales de OGA5. */}
+          {datos.whc && (
+            <div className="card p-5">
+              <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">
+                    {t('whc.pct.titulo')}
+                  </div>
+                  <div className={`mt-1 text-4xl font-bold tabular-nums ${
+                    datos.whc.porcentaje >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>
+                    {datos.whc.porcentaje} %
+                  </div>
+                  <p className="mt-1 text-xs text-dark-400">
+                    {t('whc.pct.formula')
+                      .replace('{ok}', datos.whc.conductores_con_actividad - datos.whc.excepciones)
+                      .replace('{n}', datos.whc.conductores_con_actividad)}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-dark-800 bg-dark-900/60 p-3.5">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">
+                    {t('whc.pct.coste')}
+                  </div>
+                  <div className="mt-0.5 text-2xl font-bold tabular-nums text-dark-100">
+                    &minus;{datos.whc.coste_por_excepcion}
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-dark-500">
+                    {t('whc.pct.siuna').replace('{p}', datos.whc.porcentaje_si_una_mas)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="grid gap-3 sm:grid-cols-4">
             {[
               [r.superan, t('whc.kpi.superan'), r.superan ? 'text-red-300' : 'text-emerald-300'],
