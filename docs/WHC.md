@@ -119,26 +119,75 @@ El propio scorecard la define, textualmente:
 
 > *"The metric is calculated as **% of drivers complying with working hour limits**"*
 
-Y cuadra al decimal contra tres semanas reales de OGA5:
+Y cuadra al decimal contra **17 semanas reales de OGA5** (semanas 12 a 31 de
+2026), extraídas de los PDFs originales:
 
-| Semana | Excepciones | Conductores con horas | Cálculo | Amazon imprime |
-|---|---|---|---|---|
-| 29 | 0 (hoja en blanco) | — | 100 % | **100 % · Fantastic** |
-| 30 | 0 (hoja en blanco) | — | 100 % | **100 % · Fantastic** |
-| 31 | 2 | **69** | 67/69 = 97,101 % | **97,1 % · Great** |
+```
+WHC % = (conductores de la semana − conductores con excepción) / conductores
+```
+
+| Sem | Conductores | Excepciones | Cálculo | Amazon imprime | |
+|---|---|---|---|---|---|
+| 12 | 55 | 1 | 98,2 % | 98,2 % · Great | ✔ |
+| 13 | 51 | 0 | 100 % | 100 % · Fantastic | ✔ |
+| 16 | 53 | 1 | 98,1 % | 98,1 % · Great | ✔ |
+| 17 | 48 | 0 | 100 % | 100 % · Fantastic | ✔ |
+| 19 | 50 | 0 | 100 % | 100 % · Fantastic | ✔ |
+| 20 | 50 | *(hoja ausente)* | — | 98,0 % · Great | (1) |
+| 21 | 49 | 0 | 100 % | 100 % · Fantastic | ✔ |
+| 22 | 54 | 0 | 100 % | 100 % · Fantastic | ✔ |
+| 23 | 55 | 0 | 100 % | 100 % · Fantastic | ✔ |
+| 24 | 55 | 0 | 100 % | 100 % · Fantastic | ✔ |
+| 25 | 53 | 1 | 98,1 % | 98,1 % · Great | ✔ |
+| 26 | 53 | 0 | 100 % | 100 % · Fantastic | ✔ |
+| 27 | 65 | 0 | 100 % | 100 % · Fantastic | ✔ |
+| **28** | **65** | **12** | **81,5 %** | **81,5 % · Poor** | **✔** |
+| 29 | 69 | 0 | 100 % | 100 % · Fantastic | ✔ |
+| 30 | 73 | 0 | 100 % | 100 % · Fantastic | ✔ |
+| 31 | 69 | 2 | 97,1 % | 97,1 % · Great | ✔ |
+
+**16 de 17 al decimal.** La S28, con 12 excepciones de 65 conductores, es la
+prueba de fuego: 53/65 = 81,538 % → 81,5 %, exactamente lo impreso. Una fórmula
+equivocada no acierta un caso tan alejado del 100 %.
+
+(1) La S20 no la contradice, **la confirma**: su PDF tiene **7 páginas, no 8**, y
+carece de la hoja "Drivers With Working Hour Exceptions" (los scorecards
+antiguos no la traían). Pero su 98,0 % sobre 50 conductores es exactamente
+49/50 → hubo 1 excepción que el PDF no lista. **Cuidado al automatizar esto: un
+scorecard de 7 páginas no permite afirmar "0 excepciones".**
 
 **El denominador son los conductores CON ACTIVIDAD esa semana** (los que tienen
 horas en el plan), no la plantilla entera.
 
 ### Lo que de verdad importa de esto
 
-Con 69 conductores, **cada excepción cuesta 1,45 puntos**. Y **una sola** te baja
-de 100 % a 98,55 %: es decir, de Fantastic a Great. El WHC es prácticamente
-**todo o nada**, y por eso merece una pantalla propia.
+En las **17 semanas no hay ni una sola con Fantastic y alguna excepción**, ni una
+sola con 0 excepciones que no sea Fantastic. **Una excepción, una sola, te quita
+el Fantastic de la semana.** Con 69 conductores cada una cuesta 1,45 puntos. El
+WHC es prácticamente **todo o nada**, y por eso merece una pantalla propia.
 
 ---
 
 ## 6. Los umbrales de Amazon: lo que se sabe y lo que no
+
+### 6.1 Los tiers del WHC, medidos
+
+Amazon no publica los cortes. Esto es lo que demuestran las 17 semanas:
+
+| WHC | Tier | Semanas | Excepciones |
+|---|---|---|---|
+| **100 %** | Fantastic | 11 | siempre 0 |
+| **97,1 – 98,2 %** | Great | 5 | 1 ó 2 |
+| **81,5 %** | Poor | 1 | 12 |
+
+Entre **98,2 y 100**, y entre **81,5 y 97,1**, no hay ni un solo dato. El backend
+(`_whc_tier`) devuelve `None` en esas zonas y la pantalla dice *"Tier sin
+confirmar"* en vez de adivinar. Un tier inventado sería un falso positivo.
+
+Lo accionable: **0 excepciones ⇒ Fantastic; ≥1 excepción ⇒ Great o peor.** No se
+ha visto ninguna excepción a esa regla en 17 semanas.
+
+### 6.2 Los límites de horas
 
 Las semanas 29 y 30 tuvieron **cero excepciones**. Todo lo que pasó en ellas es,
 por definición, cumplimiento — y eso pone un **suelo** a los umbrales reales:

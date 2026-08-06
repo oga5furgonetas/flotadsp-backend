@@ -19496,6 +19496,39 @@ _WHC_MARGEN_AVISO = 3 * 60
 # incumplimiento). 10 h es la referencia de una ruta estandar mas dos horas.
 _WHC_BLOQUE_RIESGO = 10 * 60
 
+# ── Cortes de tier del WHC ────────────────────────────────────────────────
+# Medidos sobre 17 scorecards REALES de OGA5 (semanas 12 a 31 de 2026), no
+# publicados por Amazon. En las 17 semanas la formula
+# (conductores - excepciones) / conductores reproduce al decimal el
+# porcentaje impreso, incluido el caso extremo de la S28: 12 excepciones de
+# 65 conductores = 81,5 %, y el PDF pone 81,5 %.
+#
+#   100 %            -> Fantastic   11 semanas, TODAS con 0 excepciones
+#   97,1 % .. 98,2 % -> Great        5 semanas, con 1 o 2 excepciones
+#   81,5 %           -> Poor         1 semana, con 12 excepciones
+#
+# Entre 98,2 y 100, y entre 81,5 y 97,1, NO hay ni un solo dato observado.
+# Devolver un tier ahi seria inventarselo: se devuelve None y la pantalla
+# dice que no se sabe. Preferimos "no lo se" a un tier falso.
+#
+# El hallazgo que de verdad importa para un DSP: en 17 semanas no hay ni una
+# sola con Fantastic y alguna excepcion. UNA excepcion te quita el Fantastic.
+_WHC_TIER_OBSERVADO = (
+    (100.0, 100.0, "Fantastic"),
+    (97.1, 98.2, "Great"),
+    (81.5, 81.5, "Poor"),
+)
+
+
+def _whc_tier(pct):
+    """Tier del WHC solo si los scorecards reales lo respaldan; si no, None."""
+    if pct is None:
+        return None
+    for lo, hi, tier in _WHC_TIER_OBSERVADO:
+        if lo - 0.05 <= pct <= hi + 0.05:
+            return tier
+    return None
+
 
 def _whc_minutos(txt: str):
     """'11:34am' / '11 AM' / '12:30' -> minutos desde medianoche. None si no cuela."""
@@ -19668,10 +19701,15 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
     whc = None
     if con_actividad:
         cumplen = max(0, con_actividad - excepciones)
+        pct = round(cumplen / con_actividad * 100, 1)
         whc = {
             "conductores_con_actividad": con_actividad,
             "excepciones": excepciones,
-            "porcentaje": round(cumplen / con_actividad * 100, 1),
+            "porcentaje": pct,
+            # None cuando el porcentaje cae en una zona sin ningun scorecard
+            # observado: no nos inventamos el tier.
+            "tier": _whc_tier(pct),
+            "tier_si_una_mas": _whc_tier(round(max(0, cumplen - 1) / con_actividad * 100, 1)),
             # Lo que de verdad hay que saber: cuanto cuesta UNA sola excepcion.
             # Con 69 conductores son 1,45 puntos, y basta una para dejar de
             # estar al 100 %. El WHC es practicamente todo o nada.
