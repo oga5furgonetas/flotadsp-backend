@@ -80,12 +80,52 @@ const isStaleChunkError = (msg = '') =>
 async function repairAssetCache() {
   try {
     const html = await (await fetch('/index.html', { cache: 'reload' })).text()
+    // OJO: la hoja de estilos principal SOLO aparece en el <link> del
+    // index.html, nunca dentro del JS. Mirando solo el JS, esta función no
+    // reparaba el CSS principal — justo el asset que se envenenó el
+    // 2026-08-06 y dejó flotadsp.com en HTML crudo, sin un solo estilo.
+    const enHtml = [...html.matchAll(/assets\/[A-Za-z0-9/_.-]+\.(?:js|css)/g)].map((m) => m[0])
     const indexJs = (html.match(/assets\/[^"]*index-[A-Za-z0-9_-]+\.js/) || [])[0]
-    if (!indexJs) return
-    const js = await (await fetch('/' + indexJs, { cache: 'reload' })).text()
-    const paths = [...new Set([...js.matchAll(/assets\/[A-Za-z0-9/_.-]+\.(?:js|css)/g)].map((m) => m[0]))]
+    let enJs = []
+    if (indexJs) {
+      const js = await (await fetch('/' + indexJs, { cache: 'reload' })).text()
+      enJs = [...js.matchAll(/assets\/[A-Za-z0-9/_.-]+\.(?:js|css)/g)].map((m) => m[0])
+    }
+    const paths = [...new Set([...enHtml, ...enJs])]
     await Promise.allSettled(paths.map((p) => fetch('/' + p, { cache: 'reload' })))
   } catch { /* sin red: la recarga normal hará lo que pueda */ }
+}
+
+/* Tercera defensa: el CSS envenenado es SILENCIOSO.
+   No lanza vite:preloadError y no rompe React — la app monta perfecta y se ve
+   en HTML crudo, como un documento de 1995. Ni el ErrorBoundary ni el
+   manejador de preload se enteran, así que hace falta mirarlo a propósito. */
+function cssCargado() {
+  let reglas = 0
+  for (const hoja of document.styleSheets) {
+    // Una hoja de otro origen no se puede leer: se da por buena y no se toca.
+    try { reglas += hoja.cssRules?.length || 0 } catch { return true }
+    if (reglas > 20) return true
+  }
+  return false
+}
+
+if (import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    // Margen para que el navegador registre las hojas tras el load.
+    setTimeout(() => {
+      // El umbral es deliberadamente absurdo: el build real trae miles de
+      // reglas (el CSS pesa 111 KB). Menos de 20 no es "poco CSS", es que no
+      // hay CSS. Así no se recarga a nadie por error.
+      if (cssCargado()) return
+      // Una sola reparación por minuto: sin este freno, un fallo permanente
+      // (red caída) metería la pestaña en un bucle infinito de recargas.
+      const ultimo = Number(sessionStorage.getItem('css_reparado') || 0)
+      if (Date.now() - ultimo < 60_000) return
+      sessionStorage.setItem('css_reparado', String(Date.now()))
+      repairAssetCache().finally(() => window.location.reload())
+    }, 400)
+  })
 }
 
 class ErrorBoundary extends React.Component {

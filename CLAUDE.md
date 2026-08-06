@@ -93,6 +93,15 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `cache:'reload'`. Tiene que llamarse **antes** de cualquier recarga — una
    recarga a secas vuelve a servir el fichero podrido desde caché. Está
    enganchada al `ErrorBoundary` y a `vite:preloadError`.
+   **Y el 2026-08-06 volvió a pasar, esta vez con el CSS**, que es peor porque
+   es SILENCIOSO: la app monta perfecta, no lanza ningún error, y se ve en HTML
+   crudo sin un solo estilo. Ni el `ErrorBoundary` ni `vite:preloadError` se
+   enteran. Dos arreglos: (a) `repairAssetCache` solo miraba dentro del JS, y
+   **el CSS principal solo aparece en el `<link>` del index.html** — no lo
+   reparaba; ahora saca los assets de ambos. (b) Centinela nuevo en `main.jsx`:
+   tras el `load`, si `document.styleSheets` suma <20 reglas, repara y recarga
+   UNA vez por minuto (`sessionStorage.css_reparado`). Umbral con 68× de
+   margen: el build real trae 1362 reglas, medidas en producción.
 9. **Mongo OMITE la clave del `_id` en un `$group` cuando el campo no existe**
    en el documento (no la pone a `null`). `r["_id"]["cond"]` revienta con
    `KeyError` en cuanto hay un documento sin ese campo — pasó con los 94

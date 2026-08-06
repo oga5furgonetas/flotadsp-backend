@@ -296,6 +296,7 @@ const DICT = {
   'nav.parking':      { es: 'Aparcamiento', en: 'Parking', fr: 'Stationnement', de: 'Parkplatz', it: 'Parcheggio', pt: 'Estacionamento' },
   'nav.dashboard':  { es: 'Dashboard',        en: 'Dashboard',     fr: 'Tableau de bord', de: 'Übersicht',       it: 'Dashboard',      pt: 'Dashboard' },
   'nav.scorecard':  { es: 'Scorecard',        en: 'Scorecard',     fr: 'Scorecard',       de: 'Scorecard',       it: 'Scorecard',      pt: 'Scorecard' },
+  'nav.whc':        { es: 'Horas · WHC',      en: 'Hours · WHC',   fr: 'Heures · WHC',    de: 'Stunden · WHC',   it: 'Ore · WHC',      pt: 'Horas · WHC' },
   'nav.drivers':    { es: 'Conductores',      en: 'Drivers',       fr: 'Chauffeurs',      de: 'Fahrer',          it: 'Autisti',        pt: 'Motoristas' },
   'nav.activity':   { es: 'Actividad',        en: 'Activity',      fr: 'Activité',        de: 'Aktivität',       it: 'Attività',       pt: 'Atividade' },
   'nav.contacts':   { es: 'Contactos',        en: 'Contacts',      fr: 'Contacts',        de: 'Kontakte',        it: 'Contatti',       pt: 'Contactos' },
