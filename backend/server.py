@@ -19394,7 +19394,16 @@ def _cx_impacto(conductores: list, tasa_fallo_flota: float) -> list:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# DSC — DONDE SE DEJA CADA PAQUETE
+# DONDE SE DEJA CADA PAQUETE  (metrica PROPIA, NO el DSC DPMO de Amazon)
+#
+# CORRECCION 2026-08-07: este bloque se llamo "DSC" y se presento como si
+# midiera el Delivery Success Conditions DPMO de Amazon. ESO ERA FALSO y estuvo
+# desplegado. Extraidos los 17 valores reales de DSC DPMO de los scorecards
+# (por coordenadas fisicas del PDF, no por orden de texto): van de 598 a 1712
+# DPMO, o sea del 0,06 % al 0,17 % de los paquetes. Esta metrica marca un
+# 8,31 % = 83.100 DPMO. Noventa veces mas. No pueden ser lo mismo: si Amazon
+# contase "dejar en el jardin" como defecto DSC, el DPMO seria de decenas de
+# miles. La metrica sigue siendo util y real, pero es NUESTRA, no la de Amazon.
 #
 # Por que esto y no otra cosa: en las 17 scorecards reales de OGA5 (semanas 12
 # a 31 de 2026), "Delivery Success Conditions (DSC) DPMO" sale como area de
