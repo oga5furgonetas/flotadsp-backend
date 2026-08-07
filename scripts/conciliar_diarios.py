@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """Concilia los reportes diarios con la scorecard semanal.
 
 Uso:  python scripts/conciliar_diarios.py   (lee docs/diarios.json + docs/scorecards.json)
@@ -54,8 +54,8 @@ def main():
     di("   de 2 dias antes, asi que la semana W necesita los reportes del")
     di("   martes de W al lunes de W+1.")
     di("")
-    di("   %-11s %8s %5s %6s | %-22s %-14s"
-       % ("scorecard", "objetivo", "cob.", "clasif", "por CONCESION", "por ENTREGA"))
+    di("   %-11s %8s %5s %6s | %-22s %-14s | %s"
+       % ("scorecard", "objetivo", "cob.", "clasif", "por CONCESION", "por ENTREGA", "estimado"))
 
     ok = {"concesion": [], "entrega": []}
     for d in sorted(scs, key=lambda x: (x["centro"], x["semana"])):
@@ -81,6 +81,14 @@ def main():
         obj = d["dsc_dpmo"] * ent / 1e6
 
         n_c = sum(x["n_dsc"] for x in regs if x)
+        # Estimacion: si los dias sin clasificar hubieran tenido la misma tasa
+        # de Y que los dias buenos de ESA semana, cuantos defectos saldrian.
+        # Sirve para ver si el agujero se explica solo por eso.
+        buenos = [x for x in regs if x and not x["dsc_sin_clasificar"]]
+        malos = [x for x in regs if x and x["dsc_sin_clasificar"]]
+        base = sum(x["n_dnr"] for x in buenos)
+        tasa = (sum(x["n_dsc"] for x in buenos) / base) if base else None
+        est = (n_c + tasa * sum(x["n_dnr"] for x in malos)) if tasa is not None else None
         n_e = 0
         for r in dia:
             if r["centro"] != c:
@@ -94,9 +102,10 @@ def main():
         # semana 24 tenia un dia marcado y aun asi cuadro exacta, o sea que ese
         # dia realmente tuvo 0 defectos.
         completa = cob == 7
-        di("   %-11s %8.1f %4d/7 %5d/7 | %5d (%+7.1f) %s %5d (%+7.1f)"
+        di("   %-11s %8.1f %4d/7 %5d/7 | %5d (%+7.1f) %s %5d (%+7.1f) | %s"
            % ("%s-W%d" % (c, wk), obj, cob, clas, n_c, n_c - obj,
-              "<--" if completa else "   ", n_e, n_e - obj))
+              "<--" if completa else "   ", n_e, n_e - obj,
+              ("%5.1f (%+.1f)" % (est, est - obj)) if est is not None else "    -"))
         if completa:
             ok["concesion"].append(abs(n_c - obj))
             ok["entrega"].append(abs(n_e - obj))
@@ -116,9 +125,17 @@ def main():
     for c, wk, dud, dif in ok.get("_detalle", []):
         di("      %-12s %14d %+10.1f" % ("%s-W%d" % (c, wk), dud, dif))
     di("      -> las que fallan son justo las que traen dias sin clasificar.")
+    di("")
+    di("   La columna 'estimado' rellena los dias sin clasificar con la tasa de")
+    di("   Y de los dias buenos de esa misma semana. Si al hacerlo el numero se")
+    di("   acerca al de la scorecard, el agujero son esos dias y no la regla.")
     if n < 5:
-        di("      AVISO: con %d semanas esto NO demuestra nada todavia. Hacen" % n)
-        di("      falta re-descargar reportes viejos para tener mas semanas limpias.")
+        di("")
+        di("   AVISO: con %d semanas esto NO demuestra nada todavia. Y NO se" % n)
+        di("   arregla re-descargando: se probo el 2026-08-08 con 6 reportes")
+        di("   viejos y volvieron identicos (ver docs/REPORTES_DIARIOS.md).")
+        di("   Solo se puede ir sumando semanas nuevas, bajando cada reporte el")
+        di("   dia que sale y otra vez 1-3 dias despues.")
 
     # ---------------- material limpio para atacar la regla DSC=Y/N
     di("")
@@ -148,3 +165,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -72,14 +72,34 @@ sumar días distintos es seguro; lo que no se puede es acumular descargas del
 mismo día. `ingerir_diarios.py` indexa por tracking ID y se queda con la
 versión más informativa.
 
-**Consecuencia práctica: descargar el reporte dos veces.** Una el día que sale,
-para RTS, POD y CC, que sí vienen completos. Otra 3-4 días después, para que el
-DSC esté clasificado.
+Los tres casos son reales, no un fallo de parseo: los ficheros tienen md5
+distinto y el HTML crudo contiene literalmente más `>Y<` en la copia tardía
+(4→6, 34→41 y 76→80 apariciones).
 
-Aviso honesto: el retraso de la descarga **no explica todos** los días en
-blanco. Hay días descargados 5 días tarde que siguen enteros a `N`, y días con
-0 defectos que son 0 de verdad (la semana 24 tenía un día marcado como dudoso y
-aun así cuadró exacta). El flag `dsc_sin_clasificar` marca de más a propósito.
+### Pero la ventana se cierra — corrección del 2026-08-08
+
+Se volvieron a descargar 6 reportes viejos que estaban enteros a `N`
+(2026-06-09, 06-17, 07-29, 07-30, 08-01 y 08-02). **Ninguno cambió.** Cuatro de
+ellos son **byte a byte idénticos** al fichero de hace hasta dos meses; el del
+02/08 sí tiene md5 distinto, pero su columna DSC sigue entera a `N`.
+
+Los tres flips que sí ocurrieron fueron todos con **1-2 días** entre descargas,
+recién publicado el reporte. Los que se dejaron pasar no se recuperan.
+
+**Consecuencia práctica, corregida:**
+
+- **Sirve hacia delante:** descargar el reporte el día que sale (RTS, POD y CC
+  vienen completos) y **otra vez 1-3 días después**, para pillar la columna DSC
+  ya clasificada.
+- **No sirve hacia atrás:** un día que quedó entero a `N` está perdido. No se
+  recupera re-descargándolo.
+
+Por eso los días sin clasificar del histórico son un agujero permanente, no algo
+que se pueda arreglar bajando ficheros.
+
+Aviso honesto: hay días con 0 defectos que son 0 de verdad — la semana 24 tenía
+un día marcado como dudoso y aun así cuadró exacta. El flag
+`dsc_sin_clasificar` marca de más a propósito.
 
 ## Trampa 3 — la semana va de domingo a sábado
 

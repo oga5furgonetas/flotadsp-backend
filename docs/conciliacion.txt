@@ -5,32 +5,32 @@ CONCILIACION DIARIOS -> SCORECARD SEMANAL
    de 2 dias antes, asi que la semana W necesita los reportes del
    martes de W al lunes de W+1.
 
-   scorecard   objetivo  cob. clasif | por CONCESION          por ENTREGA   
-   DGA1-W20         9.0    3/7     0/7 |     0 (   -9.0)         0 (   -9.0)
-   DGA1-W21         6.0    3/7     1/7 |     0 (   -6.0)         2 (   -4.0)
-   DGA1-W23         3.0    4/7     2/7 |     2 (   -1.0)         5 (   +2.0)
-   DGA1-W24        11.0    5/7     5/7 |     8 (   -3.0)         5 (   -6.0)
-   DGA1-W25        11.0    2/7     2/7 |     5 (   -6.0)        13 (   +2.0)
-   DIC1-W24        41.0    2/7     2/7 |    11 (  -30.0)         6 (  -35.0)
-   DIC1-W28        51.0    2/7     1/7 |     7 (  -44.0)         9 (  -42.0)
-   DIC1-W30        61.0    3/7     2/7 |    18 (  -43.0)         7 (  -54.0)
-   DIC1-W31        45.0    1/7     1/7 |    10 (  -35.0)         1 (  -44.0)
-   OGA5-W12        26.3    2/7     2/7 |     0 (  -26.3)         0 (  -26.3)
-   OGA5-W13        26.0    4/7     4/7 |     0 (  -26.0)         0 (  -26.0)
-   OGA5-W17        15.0    2/7     2/7 |     0 (  -15.0)         0 (  -15.0)
-   OGA5-W19        26.0    1/7     1/7 |     0 (  -26.0)         2 (  -24.0)
-   OGA5-W20        17.1    6/7     1/7 |     0 (  -17.1)         2 (  -15.1)
-   OGA5-W21        16.0    2/7     0/7 |     0 (  -16.0)        12 (   -4.0)
-   OGA5-W22        25.1    5/7     5/7 |    21 (   -4.1)        22 (   -3.1)
-   OGA5-W23        28.0    7/7     7/7 |    28 (   -0.0) <--    23 (   -5.0)
-   OGA5-W24        21.0    7/7     6/7 |    21 (   -0.0) <--    25 (   +4.0)
-   OGA5-W25        25.0    7/7     6/7 |    20 (   -5.0) <--    19 (   -6.0)
-   OGA5-W26        23.0    5/7     5/7 |    18 (   -5.0)        24 (   +1.0)
-   OGA5-W27        25.0    6/7     4/7 |    19 (   -6.0)        24 (   -1.0)
-   OGA5-W28        43.0    6/7     4/7 |    32 (  -11.0)        33 (  -10.0)
-   OGA5-W29        56.0    6/7     5/7 |    43 (  -13.0)        27 (  -29.0)
-   OGA5-W30        33.0    3/7     2/7 |    10 (  -23.0)         6 (  -27.0)
-   OGA5-W31        29.0    7/7     3/7 |    11 (  -18.0) <--     8 (  -21.0)
+   scorecard   objetivo  cob. clasif | por CONCESION          por ENTREGA    | estimado
+   DGA1-W20         9.0    3/7     0/7 |     0 (   -9.0)         0 (   -9.0) |     -
+   DGA1-W21         6.0    3/7     1/7 |     0 (   -6.0)         2 (   -4.0) |     -
+   DGA1-W23         3.0    4/7     2/7 |     2 (   -1.0)         5 (   +2.0) |   4.0 (+1.0)
+   DGA1-W24        11.0    5/7     5/7 |     8 (   -3.0)         5 (   -6.0) |   8.0 (-3.0)
+   DGA1-W25        11.0    2/7     2/7 |     5 (   -6.0)        13 (   +2.0) |   5.0 (-6.0)
+   DIC1-W24        41.0    2/7     2/7 |    11 (  -30.0)         6 (  -35.0) |  11.0 (-30.0)
+   DIC1-W28        51.0    2/7     1/7 |     7 (  -44.0)         9 (  -42.0) |  11.9 (-39.1)
+   DIC1-W30        61.0    3/7     2/7 |    18 (  -43.0)         7 (  -54.0) |  27.0 (-34.0)
+   DIC1-W31        45.0    1/7     1/7 |    10 (  -35.0)         1 (  -44.0) |  10.0 (-35.0)
+   OGA5-W12        26.3    2/7     2/7 |     0 (  -26.3)         0 (  -26.3) |     -
+   OGA5-W13        26.0    4/7     4/7 |     0 (  -26.0)         0 (  -26.0) |     -
+   OGA5-W17        15.0    2/7     2/7 |     0 (  -15.0)         0 (  -15.0) |     -
+   OGA5-W19        26.0    1/7     1/7 |     0 (  -26.0)         2 (  -24.0) |     -
+   OGA5-W20        17.1    6/7     1/7 |     0 (  -17.1)         2 (  -15.1) |     -
+   OGA5-W21        16.0    2/7     0/7 |     0 (  -16.0)        12 (   -4.0) |     -
+   OGA5-W22        25.1    5/7     5/7 |    21 (   -4.1)        22 (   -3.1) |  21.0 (-4.1)
+   OGA5-W23        28.0    7/7     7/7 |    28 (   -0.0) <--    23 (   -5.0) |  28.0 (-0.0)
+   OGA5-W24        21.0    7/7     6/7 |    21 (   -0.0) <--    25 (   +4.0) |  23.1 (+2.1)
+   OGA5-W25        25.0    7/7     6/7 |    20 (   -5.0) <--    19 (   -6.0) |  25.4 (+0.4)
+   OGA5-W26        23.0    5/7     5/7 |    18 (   -5.0)        24 (   +1.0) |  18.0 (-5.0)
+   OGA5-W27        25.0    6/7     4/7 |    19 (   -6.0)        24 (   -1.0) |  25.8 (+0.8)
+   OGA5-W28        43.0    6/7     4/7 |    32 (  -11.0)        33 (  -10.0) |  49.5 (+6.4)
+   OGA5-W29        56.0    6/7     5/7 |    43 (  -13.0)        27 (  -29.0) |  53.9 (-2.1)
+   OGA5-W30        33.0    3/7     2/7 |    10 (  -23.0)         6 (  -27.0) |  14.7 (-18.3)
+   OGA5-W31        29.0    7/7     3/7 |    11 (  -18.0) <--     8 (  -21.0) |  33.5 (+4.5)
 
    Semanas con los 7 dias descargados: 4
       regla concesion  exactas 2/4   error medio 5.75 defectos   peor 18.0
@@ -42,8 +42,16 @@ CONCILIACION DIARIOS -> SCORECARD SEMANAL
       OGA5-W25                  1       -5.0
       OGA5-W31                  4      -18.0
       -> las que fallan son justo las que traen dias sin clasificar.
-      AVISO: con 4 semanas esto NO demuestra nada todavia. Hacen
-      falta re-descargar reportes viejos para tener mas semanas limpias.
+
+   La columna 'estimado' rellena los dias sin clasificar con la tasa de
+   Y de los dias buenos de esa misma semana. Si al hacerlo el numero se
+   acerca al de la scorecard, el agujero son esos dias y no la regla.
+
+   AVISO: con 4 semanas esto NO demuestra nada todavia. Y NO se
+   arregla re-descargando: se probo el 2026-08-08 con 6 reportes
+   viejos y volvieron identicos (ver docs/REPORTES_DIARIOS.md).
+   Solo se puede ir sumando semanas nuevas, bajando cada reporte el
+   dia que sale y otra vez 1-3 dias despues.
 
 ==============================================================================
 MATERIAL PARA DERIVAR LA REGLA DSC = Y/N

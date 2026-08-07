@@ -40257,7 +40257,7 @@
   "centro": "OGA5",
   "fecha_dnr": "2026-06-07",
   "fecha_reporte": "2026-06-09",
-  "bajado": "2026-06-15 18:52:10",
+  "bajado": "2026-08-08 01:34:47",
   "fichero": "ES-TDSL-OGA5-Daily-Report_2026-06-09_Tue.html",
   "semana": 24,
   "rts": [
@@ -40634,7 +40634,7 @@
     "dsc_crudo": "N"
    }
   ],
-  "redescargas": 4,
+  "redescargas": 5,
   "n_dnr": 3,
   "n_dsc": 0,
   "n_dsc_desconocido": 0,
@@ -44774,7 +44774,7 @@
   "centro": "OGA5",
   "fecha_dnr": "2026-06-15",
   "fecha_reporte": "2026-06-17",
-  "bajado": "2026-06-24 14:13:23",
+  "bajado": "2026-08-08 01:34:42",
   "fichero": "ES-TDSL-OGA5-Daily-Report_2026-06-17_Wed.html",
   "semana": 25,
   "rts": [
@@ -45266,7 +45266,7 @@
     "dsc_crudo": "N"
    }
   ],
-  "redescargas": 3,
+  "redescargas": 4,
   "n_dnr": 7,
   "n_dsc": 0,
   "n_dsc_desconocido": 0,
@@ -76346,7 +76346,7 @@
   "centro": "OGA5",
   "fecha_dnr": "2026-07-27",
   "fecha_reporte": "2026-07-29",
-  "bajado": "2026-08-03 17:37:43",
+  "bajado": "2026-08-08 01:34:33",
   "fichero": "ES-TDSL-OGA5-Daily-Report_2026-07-29_Wed.html",
   "semana": 31,
   "rts": [
@@ -77109,7 +77109,7 @@
     "dsc_crudo": "N"
    }
   ],
-  "redescargas": 2,
+  "redescargas": 3,
   "n_dnr": 10,
   "n_dsc": 0,
   "n_dsc_desconocido": 0,
@@ -77121,7 +77121,7 @@
   "centro": "OGA5",
   "fecha_dnr": "2026-07-28",
   "fecha_reporte": "2026-07-30",
-  "bajado": "2026-08-03 17:37:42",
+  "bajado": "2026-08-08 01:34:30",
   "fichero": "ES-TDSL-OGA5-Daily-Report_2026-07-30_Thu.html",
   "semana": 31,
   "rts": [
@@ -78126,7 +78126,7 @@
     "dsc_crudo": "N"
    }
   ],
-  "redescargas": 2,
+  "redescargas": 3,
   "n_dnr": 8,
   "n_dsc": 0,
   "n_dsc_desconocido": 0,
@@ -79435,7 +79435,7 @@
   "centro": "OGA5",
   "fecha_dnr": "2026-07-30",
   "fecha_reporte": "2026-08-01",
-  "bajado": "2026-08-03 12:18:56",
+  "bajado": "2026-08-08 01:34:29",
   "fichero": "ES-TDSL-OGA5-Daily-Report_2026-08-01_Sat.html",
   "semana": 31,
   "rts": [
@@ -79452,32 +79452,14 @@
     "cc": "-"
    },
    {
-    "tid": "ES2579698317",
-    "cond": "A13UCULN7RLXZT",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
     "tid": "ES2578158778",
     "cond": "A24CQTGZGNLZP1",
     "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
     "cc": "-"
    },
    {
-    "tid": "ES2577541339",
-    "cond": "A1F23DYT49EJBS",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2578963120",
-    "cond": "A2OJ476ER59AR7",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2577353960",
-    "cond": "A1F23DYT49EJBS",
+    "tid": "ES2579698317",
+    "cond": "A13UCULN7RLXZT",
     "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
    },
@@ -79488,8 +79470,8 @@
     "cc": "Y"
    },
    {
-    "tid": "ES2577594257",
-    "cond": "A2OJ476ER59AR7",
+    "tid": "ES2577541339",
+    "cond": "A1F23DYT49EJBS",
     "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
     "cc": "-"
    },
@@ -79500,9 +79482,27 @@
     "cc": "Y"
    },
    {
-    "tid": "ES2579863562",
-    "cond": "A3REUQ19YX8O9T",
+    "tid": "ES2577353960",
+    "cond": "A1F23DYT49EJBS",
     "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2578963120",
+    "cond": "A2OJ476ER59AR7",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2577244568",
+    "cond": "A13UCULN7RLXZT",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2577594257",
+    "cond": "A2OJ476ER59AR7",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
     "cc": "-"
    },
    {
@@ -79524,20 +79524,8 @@
     "cc": "-"
    },
    {
-    "tid": "ES2577244568",
-    "cond": "A13UCULN7RLXZT",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2577514489",
-    "cond": "A1P7IJ4QKEF0DM",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579826610",
-    "cond": "A2CWNY3NK04RFX",
+    "tid": "ES2579863562",
+    "cond": "A3REUQ19YX8O9T",
     "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
    },
@@ -79548,20 +79536,20 @@
     "cc": "-"
    },
    {
-    "tid": "ES2578025519",
-    "cond": "A12R8W06EUF3HM",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
     "tid": "ES2579437037",
     "cond": "A13UCULN7RLXZT",
     "motivo": "DEL ATT- BAD_WEATHER",
     "cc": "-"
    },
    {
-    "tid": "ES2577461106",
+    "tid": "ES2579826610",
     "cond": "A2CWNY3NK04RFX",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2577514489",
+    "cond": "A1P7IJ4QKEF0DM",
     "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
    },
@@ -79572,9 +79560,15 @@
     "cc": "-"
    },
    {
-    "tid": "ES2579828521",
-    "cond": "A22ZR8MKALSDWD",
-    "motivo": "No Attempt",
+    "tid": "ES2577461106",
+    "cond": "A2CWNY3NK04RFX",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2578025519",
+    "cond": "A12R8W06EUF3HM",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
    },
    {
@@ -79590,8 +79584,26 @@
     "cc": "-"
    },
    {
+    "tid": "ES2579828521",
+    "cond": "A22ZR8MKALSDWD",
+    "motivo": "No Attempt",
+    "cc": "-"
+   },
+   {
     "tid": "ES2579273168",
     "cond": "A2XOJWWX6T4MTO",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579186058",
+    "cond": "AY1K1A23529Z1",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579828680",
+    "cond": "A2N9AIWDQLPGFG",
     "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
     "cc": "Y"
    },
@@ -79608,28 +79620,10 @@
     "cc": "Y"
    },
    {
-    "tid": "ES2579186058",
-    "cond": "AY1K1A23529Z1",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
     "tid": "ES2578844458",
     "cond": "A24CQTGZGNLZP1",
     "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
     "cc": "Y"
-   },
-   {
-    "tid": "ES2579828680",
-    "cond": "A2N9AIWDQLPGFG",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2579397022",
-    "cond": "A22ZR8MKALSDWD",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
    },
    {
     "tid": "ES2577229012",
@@ -79638,16 +79632,10 @@
     "cc": "-"
    },
    {
-    "tid": "ES2579832996",
-    "cond": "A3EWR2GA9NCTEY",
+    "tid": "ES2579397022",
+    "cond": "A22ZR8MKALSDWD",
     "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
-   },
-   {
-    "tid": "ES2579777725",
-    "cond": "A3EMXJ0UGDI1TR",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
    },
    {
     "tid": "ES2579812807",
@@ -79656,10 +79644,28 @@
     "cc": "Y"
    },
    {
-    "tid": "ES2579851474",
-    "cond": "A3EWR2GA9NCTEY",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
-    "cc": "-"
+    "tid": "ES2577649854",
+    "cond": "A16UODRFZE2ZAD",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579771109",
+    "cond": "A2N9AIWDQLPGFG",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579822214",
+    "cond": "A2XOJWWX6T4MTO",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579824055",
+    "cond": "A2QAHOFOF2YON1",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "Y"
    },
    {
     "tid": "ES2579671325",
@@ -79668,7 +79674,13 @@
     "cc": "Y"
    },
    {
-    "tid": "ES2579822214",
+    "tid": "ES2579951921",
+    "cond": "A13UCULN7RLXZT",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579792755",
     "cond": "A2XOJWWX6T4MTO",
     "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
     "cc": "Y"
@@ -79680,10 +79692,10 @@
     "cc": "Y"
    },
    {
-    "tid": "ES2579070076",
-    "cond": "A12R8W06EUF3HM",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "Y"
+    "tid": "ES2577362214",
+    "cond": "A1SZJ8VEDRD95Z",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
+    "cc": "-"
    },
    {
     "tid": "ES2579022982",
@@ -79692,88 +79704,16 @@
     "cc": "-"
    },
    {
-    "tid": "ES2579832736",
-    "cond": "A2OJ476ER59AR7",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579824055",
-    "cond": "A2QAHOFOF2YON1",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2580104895",
-    "cond": "A2GH1OM90XUWP1",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2577649854",
-    "cond": "A16UODRFZE2ZAD",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2577108102",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579771109",
+    "tid": "ES2579491709",
     "cond": "A2N9AIWDQLPGFG",
     "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
     "cc": "Y"
-   },
-   {
-    "tid": "ES2579792755",
-    "cond": "A2XOJWWX6T4MTO",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2579938366",
-    "cond": "A15YDGGG38HX47",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2576109747",
-    "cond": "A2CWNY3NK04RFX",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579951921",
-    "cond": "A13UCULN7RLXZT",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2577362214",
-    "cond": "A1SZJ8VEDRD95Z",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
-    "cc": "-"
    },
    {
     "tid": "ES2579072340",
     "cond": "A2XOJWWX6T4MTO",
     "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
     "cc": "Y"
-   },
-   {
-    "tid": "ES2578637454",
-    "cond": "A3EWR2GA9NCTEY",
-    "motivo": "No Attempt",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2577360605",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
    },
    {
     "tid": "ES2579826877",
@@ -79788,32 +79728,8 @@
     "cc": "-"
    },
    {
-    "tid": "ES2580032925",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579804308",
-    "cond": "A3EMXJ0UGDI1TR",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2576400280",
-    "cond": "A3EMXJ0UGDI1TR",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
     "tid": "ES2580233515",
     "cond": "A13UCULN7RLXZT",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579830753",
-    "cond": "A12R8W06EUF3HM",
     "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
    },
@@ -79824,14 +79740,8 @@
     "cc": "Y"
    },
    {
-    "tid": "ES2577445006",
-    "cond": "A24CQTGZGNLZP1",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2579828637",
-    "cond": "AQ4114ZCPRFEY",
+    "tid": "ES2579734627",
+    "cond": "A2N9AIWDQLPGFG",
     "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
     "cc": "Y"
    },
@@ -79839,24 +79749,6 @@
     "tid": "ES2579968054",
     "cond": "A24HG0WX71P9T0",
     "motivo": "No Attempt",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579822276",
-    "cond": "A22ZR8MKALSDWD",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579837265",
-    "cond": "A38TCLMAACZW33",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2576007712",
-    "cond": "A15S5YMMBAHWSL",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
    },
    {
@@ -79872,22 +79764,16 @@
     "cc": "Y"
    },
    {
-    "tid": "ES2579829719",
-    "cond": "A12R8W06EUF3HM",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
+    "tid": "ES2579822276",
+    "cond": "A22ZR8MKALSDWD",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
    },
    {
-    "tid": "ES2579769012",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- OTP_NOT_AVAILABLE",
+    "tid": "ES2579837265",
+    "cond": "A38TCLMAACZW33",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
-   },
-   {
-    "tid": "ES2579880478",
-    "cond": "A3HPMD6S5SISKM",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
    },
    {
     "tid": "ES2579674340",
@@ -79896,32 +79782,8 @@
     "cc": "-"
    },
    {
-    "tid": "ES2577469620",
-    "cond": "A15YDGGG38HX47",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2580110642",
-    "cond": "A15S5YMMBAHWSL",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2576348654",
-    "cond": "A24HG0WX71P9T0",
-    "motivo": "No Attempt",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579491709",
-    "cond": "A2N9AIWDQLPGFG",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2579841331",
-    "cond": "A13UCULN7RLXZT",
+    "tid": "ES2577445006",
+    "cond": "A24CQTGZGNLZP1",
     "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
     "cc": "Y"
    },
@@ -79932,16 +79794,10 @@
     "cc": "-"
    },
    {
-    "tid": "ES2579804339",
-    "cond": "A3EMXJ0UGDI1TR",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "tid": "ES2576348654",
+    "cond": "A24HG0WX71P9T0",
+    "motivo": "No Attempt",
     "cc": "-"
-   },
-   {
-    "tid": "ES2579734627",
-    "cond": "A2N9AIWDQLPGFG",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
    },
    {
     "tid": "ES2579634351",
@@ -79950,142 +79806,22 @@
     "cc": "Y"
    },
    {
-    "tid": "ES2579907591",
-    "cond": "A2OJ476ER59AR7",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2574968487",
-    "cond": "A15YDGGG38HX47",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579828823",
-    "cond": "A3KCDTF9VF8854",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2579838944",
-    "cond": "A2OJ476ER59AR7",
-    "motivo": "DEL ATT- BAD_WEATHER",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2577828690",
-    "cond": "A15YDGGG38HX47",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579764099",
-    "cond": "A15S5YMMBAHWSL",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2580026583",
-    "cond": "A24CQTGZGNLZP1",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2579830133",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2579846988",
-    "cond": "A2OJ476ER59AR7",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579820043",
-    "cond": "A3EWR2GA9NCTEY",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579102980",
-    "cond": "A3EWR2GA9NCTEY",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2580029124",
-    "cond": "A38F8ALNWI97V4",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579765620",
-    "cond": "A2OJ476ER59AR7",
-    "motivo": "DEL ATT- BAD_WEATHER",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2578186099",
-    "cond": "A15YDGGG38HX47",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579603948",
+    "tid": "ES2579841331",
     "cond": "A13UCULN7RLXZT",
     "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
     "cc": "Y"
-   },
-   {
-    "tid": "ES2577112024",
-    "cond": "A3KCDTF9VF8854",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2578931885",
-    "cond": "A15S5YMMBAHWSL",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579231163",
-    "cond": "A3KCDTF9VF8854",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2579830684",
-    "cond": "A3EMXJ0UGDI1TR",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2577111216",
-    "cond": "A12R8W06EUF3HM",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579614501",
-    "cond": "A3HPMD6S5SISKM",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2579337828",
-    "cond": "A15S5YMMBAHWSL",
-    "motivo": "DEL ATT- OBJECT_MISSING",
-    "cc": "-"
    },
    {
     "tid": "ES2578124992",
     "cond": "A2N9AIWDQLPGFG",
     "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
     "cc": "Y"
+   },
+   {
+    "tid": "ES2580029124",
+    "cond": "A38F8ALNWI97V4",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
    },
    {
     "tid": "ES2578644133",
@@ -80100,32 +79836,44 @@
     "cc": "Y"
    },
    {
-    "tid": "ES2580000596",
+    "tid": "ES2579841915",
+    "cond": "A16UODRFZE2ZAD",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2580026583",
     "cond": "A24CQTGZGNLZP1",
     "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
     "cc": "Y"
    },
    {
-    "tid": "ES2579952759",
-    "cond": "A1VVNO9SFXZTZH",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "tid": "ES2579832996",
+    "cond": "A3EWR2GA9NCTEY",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579777725",
+    "cond": "A3EMXJ0UGDI1TR",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
     "cc": "Y"
    },
    {
-    "tid": "ES2579846662",
-    "cond": "A2GH1OM90XUWP1",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "tid": "ES2579603948",
+    "cond": "A13UCULN7RLXZT",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579851474",
+    "cond": "A3EWR2GA9NCTEY",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
     "cc": "-"
    },
    {
-    "tid": "ES2579829563",
-    "cond": "A3KCDTF9VF8854",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579850201",
-    "cond": "A3KCDTF9VF8854",
+    "tid": "ES2577282158",
+    "cond": "A16UODRFZE2ZAD",
     "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
    },
@@ -80136,10 +79884,64 @@
     "cc": "-"
    },
    {
+    "tid": "ES2579070076",
+    "cond": "A12R8W06EUF3HM",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "Y"
+   },
+   {
     "tid": "ES2578023023",
     "cond": "A2QAHOFOF2YON1",
     "motivo": "No Attempt",
     "cc": "-"
+   },
+   {
+    "tid": "ES2579776213",
+    "cond": "AZH5TZ53ZW3T2",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2577108102",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579938366",
+    "cond": "A15YDGGG38HX47",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2578637454",
+    "cond": "A3EWR2GA9NCTEY",
+    "motivo": "No Attempt",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579915421",
+    "cond": "A2N9AIWDQLPGFG",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579832736",
+    "cond": "A2OJ476ER59AR7",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2577360605",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579804308",
+    "cond": "A3EMXJ0UGDI1TR",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
    },
    {
     "tid": "ES2579801136",
@@ -80148,9 +79950,27 @@
     "cc": "-"
    },
    {
+    "tid": "ES2580032925",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2576400280",
+    "cond": "A3EMXJ0UGDI1TR",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
     "tid": "ES2578221272",
     "cond": "A3HSHOV9YMCESC",
     "motivo": "DEL ATT- OBJECT_MISSING",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579830753",
+    "cond": "A12R8W06EUF3HM",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
    },
    {
@@ -80158,6 +79978,12 @@
     "cond": "A2QAHOFOF2YON1",
     "motivo": "No Attempt",
     "cc": "-"
+   },
+   {
+    "tid": "ES2580000596",
+    "cond": "A24CQTGZGNLZP1",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "Y"
    },
    {
     "tid": "ES2579818528",
@@ -80172,88 +79998,22 @@
     "cc": "-"
    },
    {
-    "tid": "ES2580036043",
+    "tid": "ES2576109747",
     "cond": "A2CWNY3NK04RFX",
-    "motivo": "DEL ATT- INACCESSIBLE_DELIVERY_LOCATION",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2578178512",
-    "cond": "AHA8CLCCDWI1X",
     "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
    },
    {
-    "tid": "ES2579991541",
-    "cond": "A2OJ476ER59AR7",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "tid": "ES2579829719",
+    "cond": "A12R8W06EUF3HM",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
     "cc": "-"
    },
    {
-    "tid": "ES2579962514",
+    "tid": "ES2579769012",
     "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "motivo": "DEL ATT- OTP_NOT_AVAILABLE",
     "cc": "-"
-   },
-   {
-    "tid": "ES2578468840",
-    "cond": "A15YDGGG38HX47",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2577443617",
-    "cond": "A12R8W06EUF3HM",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579827035",
-    "cond": "A1P7IJ4QKEF0DM",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2579711282",
-    "cond": "A12R8W06EUF3HM",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579643406",
-    "cond": "A3EWR2GA9NCTEY",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579841915",
-    "cond": "A16UODRFZE2ZAD",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2577282158",
-    "cond": "A16UODRFZE2ZAD",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579776213",
-    "cond": "AZH5TZ53ZW3T2",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579915421",
-    "cond": "A2N9AIWDQLPGFG",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2579967344",
-    "cond": "A1F23DYT49EJBS",
-    "motivo": "DEL ATT- INACCESSIBLE_DELIVERY_LOCATION",
-    "cc": "Y"
    },
    {
     "tid": "ES2577417756",
@@ -80262,15 +80022,9 @@
     "cc": "Y"
    },
    {
-    "tid": "ES2579967506",
-    "cond": "A24CQTGZGNLZP1",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579780786",
-    "cond": "A22ZR8MKALSDWD",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
+    "tid": "ES2577469620",
+    "cond": "A15YDGGG38HX47",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
    },
    {
@@ -80280,14 +80034,104 @@
     "cc": "Y"
    },
    {
+    "tid": "ES2579804339",
+    "cond": "A3EMXJ0UGDI1TR",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
     "tid": "ES2577143224",
     "cond": "A2XOJWWX6T4MTO",
     "motivo": "No Attempt",
     "cc": "-"
    },
    {
+    "tid": "ES2579952759",
+    "cond": "A1VVNO9SFXZTZH",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579828637",
+    "cond": "AQ4114ZCPRFEY",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579780786",
+    "cond": "A22ZR8MKALSDWD",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2580104895",
+    "cond": "A2GH1OM90XUWP1",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2576007712",
+    "cond": "A15S5YMMBAHWSL",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2580057514",
+    "cond": "AY1K1A23529Z1",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2574968487",
+    "cond": "A15YDGGG38HX47",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2580110642",
+    "cond": "A15S5YMMBAHWSL",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
     "tid": "ES2578676109",
     "cond": "A38F8ALNWI97V4",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579820043",
+    "cond": "A3EWR2GA9NCTEY",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2577828690",
+    "cond": "A15YDGGG38HX47",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579102980",
+    "cond": "A3EWR2GA9NCTEY",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579830133",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579967344",
+    "cond": "A1F23DYT49EJBS",
+    "motivo": "DEL ATT- INACCESSIBLE_DELIVERY_LOCATION",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2578186099",
+    "cond": "A15YDGGG38HX47",
     "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
    },
@@ -80298,98 +80142,14 @@
     "cc": "-"
    },
    {
-    "tid": "ES2579764739",
-    "cond": "A2OJ476ER59AR7",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579974099",
-    "cond": "A2CWNY3NK04RFX",
-    "motivo": "DEL ATT- NO_SECURE_LOCATION",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2580039415",
-    "cond": "AHA8CLCCDWI1X",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2577530963",
-    "cond": "A15S5YMMBAHWSL",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2580146722",
-    "cond": "A15YDGGG38HX47",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579772134",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2578209179",
-    "cond": "A15YDGGG38HX47",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579832541",
-    "cond": "A3REUQ19YX8O9T",
+    "tid": "ES2576604936",
+    "cond": "A2XOJWWX6T4MTO",
     "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "Y"
+    "cc": "N"
    },
    {
-    "tid": "ES2575548514",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579853214",
-    "cond": "A2HHB21VDKIUMU",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579693727",
-    "cond": "A1P7IJ4QKEF0DM",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2577234777",
-    "cond": "A3EWR2GA9NCTEY",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579756957",
-    "cond": "A3EWR2GA9NCTEY",
-    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2576804436",
-    "cond": "A12R8W06EUF3HM",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579830188",
-    "cond": "A3EMXJ0UGDI1TR",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2580057514",
-    "cond": "AY1K1A23529Z1",
+    "tid": "ES2579967506",
+    "cond": "A24CQTGZGNLZP1",
     "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
     "cc": "N"
    },
@@ -80412,10 +80172,262 @@
     "cc": "N"
    },
    {
-    "tid": "ES2576604936",
-    "cond": "A2XOJWWX6T4MTO",
+    "tid": "ES2579830684",
+    "cond": "A3EMXJ0UGDI1TR",
     "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2577111216",
+    "cond": "A12R8W06EUF3HM",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579907591",
+    "cond": "A2OJ476ER59AR7",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579838944",
+    "cond": "A2OJ476ER59AR7",
+    "motivo": "DEL ATT- BAD_WEATHER",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579764099",
+    "cond": "A15S5YMMBAHWSL",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579846988",
+    "cond": "A2OJ476ER59AR7",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579765620",
+    "cond": "A2OJ476ER59AR7",
+    "motivo": "DEL ATT- BAD_WEATHER",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2578931885",
+    "cond": "A15S5YMMBAHWSL",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579337828",
+    "cond": "A15S5YMMBAHWSL",
+    "motivo": "DEL ATT- OBJECT_MISSING",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2580036043",
+    "cond": "A2CWNY3NK04RFX",
+    "motivo": "DEL ATT- INACCESSIBLE_DELIVERY_LOCATION",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579880478",
+    "cond": "A3HPMD6S5SISKM",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2577443617",
+    "cond": "A12R8W06EUF3HM",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2578178512",
+    "cond": "AHA8CLCCDWI1X",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579991541",
+    "cond": "A2OJ476ER59AR7",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579827035",
+    "cond": "A1P7IJ4QKEF0DM",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579711282",
+    "cond": "A12R8W06EUF3HM",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579643406",
+    "cond": "A3EWR2GA9NCTEY",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579962514",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2578468840",
+    "cond": "A15YDGGG38HX47",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579828823",
+    "cond": "A3KCDTF9VF8854",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579764739",
+    "cond": "A2OJ476ER59AR7",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2577112024",
+    "cond": "A3KCDTF9VF8854",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579231163",
+    "cond": "A3KCDTF9VF8854",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2580146722",
+    "cond": "A15YDGGG38HX47",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579614501",
+    "cond": "A3HPMD6S5SISKM",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2579693727",
+    "cond": "A1P7IJ4QKEF0DM",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2577234777",
+    "cond": "A3EWR2GA9NCTEY",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579846662",
+    "cond": "A2GH1OM90XUWP1",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579829563",
+    "cond": "A3KCDTF9VF8854",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579756957",
+    "cond": "A3EWR2GA9NCTEY",
+    "motivo": "DEL ATT- RESCHEDULED_BY_CUSTOMER",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579850201",
+    "cond": "A3KCDTF9VF8854",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579772134",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2578209179",
+    "cond": "A15YDGGG38HX47",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2576804436",
+    "cond": "A12R8W06EUF3HM",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579830188",
+    "cond": "A3EMXJ0UGDI1TR",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579974099",
+    "cond": "A2CWNY3NK04RFX",
+    "motivo": "DEL ATT- NO_SECURE_LOCATION",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2580039415",
+    "cond": "AHA8CLCCDWI1X",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2576441785",
+    "cond": "A3EWR2GA9NCTEY",
+    "motivo": "No Attempt",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579832541",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2575548514",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579853214",
+    "cond": "A2HHB21VDKIUMU",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2577530963",
+    "cond": "A15S5YMMBAHWSL",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579840436",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
    },
    {
     "tid": "ES2577700574",
@@ -80440,6 +80452,108 @@
     "cond": "A15S5YMMBAHWSL",
     "motivo": "DEL ATT- BUSINESS_CLOSED",
     "cc": "-"
+   },
+   {
+    "tid": "ES2579212371",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2580028313",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "Y"
+   },
+   {
+    "tid": "ES2577322988",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- BUSINESS_CLOSED",
+    "cc": "-"
+   },
+   {
+    "tid": "ES2579991140",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2580096115",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579806303",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579815879",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2580007841",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579800858",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579827053",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2576471425",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579828711",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579858155",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579099813",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579119893",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579898575",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2578928642",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "N"
    },
    {
     "tid": "ES2579882549",
@@ -80562,144 +80676,6 @@
     "cc": "N"
    },
    {
-    "tid": "ES2579840436",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579212371",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2580028313",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "Y"
-   },
-   {
-    "tid": "ES2577322988",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- BUSINESS_CLOSED",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579991140",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2580096115",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579806303",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579815879",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2580007841",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579800858",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579827053",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2576471425",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579828711",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579858155",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579099813",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579119893",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579898575",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2578928642",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579380943",
-    "cond": "A2HHB21VDKIUMU",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579840606",
-    "cond": "A3REUQ19YX8O9T",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579843986",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2576441785",
-    "cond": "A3EWR2GA9NCTEY",
-    "motivo": "No Attempt",
-    "cc": "-"
-   },
-   {
-    "tid": "ES2579898076",
-    "cond": "A2GH1OM90XUWP1",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "N"
-   },
-   {
     "tid": "ES2579817457",
     "cond": "A2CWNY3NK04RFX",
     "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
@@ -80736,6 +80712,42 @@
     "cc": "N"
    },
    {
+    "tid": "ES2579898076",
+    "cond": "A2GH1OM90XUWP1",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579380943",
+    "cond": "A2HHB21VDKIUMU",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579840606",
+    "cond": "A3REUQ19YX8O9T",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579843986",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2577288050",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
+    "cc": "N"
+   },
+   {
+    "tid": "ES2579856474",
+    "cond": "A2Z1JLC024AFIY",
+    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
+    "cc": "N"
+   },
+   {
     "tid": "ES2579662345",
     "cond": "A2CWNY3NK04RFX",
     "motivo": "DEL ATT- INACCESSIBLE_DELIVERY_LOCATION",
@@ -80764,79 +80776,11 @@
     "cond": "A2CWNY3NK04RFX",
     "motivo": "DEL ATT- INACCESSIBLE_DELIVERY_LOCATION",
     "cc": "N"
-   },
-   {
-    "tid": "ES2577288050",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- ADDRESS_NOT_FOUND",
-    "cc": "N"
-   },
-   {
-    "tid": "ES2579856474",
-    "cond": "A2Z1JLC024AFIY",
-    "motivo": "DEL ATT- CUSTOMER_UNAVAILABLE",
-    "cc": "N"
    }
   ],
   "pod_fails": 67,
   "cc_fails": 71,
   "resumen": [
-   {
-    "cond": "A24CQTGZGNLZP1",
-    "rts": "10",
-    "dnr": "None",
-    "pod_fails": "1",
-    "cc_fails": "4"
-   },
-   {
-    "cond": "A1VVNO9SFXZTZH",
-    "rts": "3",
-    "dnr": "None",
-    "pod_fails": "1",
-    "cc_fails": "3"
-   },
-   {
-    "cond": "A1F23DYT49EJBS",
-    "rts": "5",
-    "dnr": "None",
-    "pod_fails": "None",
-    "cc_fails": "None"
-   },
-   {
-    "cond": "AZH5TZ53ZW3T2",
-    "rts": "3",
-    "dnr": "None",
-    "pod_fails": "None",
-    "cc_fails": "None"
-   },
-   {
-    "cond": "AY4UBR6BMPJET",
-    "rts": "None",
-    "dnr": "None",
-    "pod_fails": "1",
-    "cc_fails": "None"
-   },
-   {
-    "cond": "A16UODRFZE2ZAD",
-    "rts": "3",
-    "dnr": "None",
-    "pod_fails": "None",
-    "cc_fails": "None"
-   },
-   {
-    "cond": "AY1K1A23529Z1",
-    "rts": "3",
-    "dnr": "None",
-    "pod_fails": "1",
-    "cc_fails": "2"
-   },
-   {
-    "cond": "A2N9AIWDQLPGFG",
-    "rts": "8",
-    "dnr": "None",
-    "pod_fails": "None",
-    "cc_fails": "1"
-   },
    {
     "cond": "A2XOJWWX6T4MTO",
     "rts": "21",
@@ -80863,6 +80807,27 @@
     "rts": "3",
     "dnr": "None",
     "pod_fails": "1",
+    "cc_fails": "None"
+   },
+   {
+    "cond": "A24CQTGZGNLZP1",
+    "rts": "10",
+    "dnr": "None",
+    "pod_fails": "1",
+    "cc_fails": "4"
+   },
+   {
+    "cond": "A1VVNO9SFXZTZH",
+    "rts": "3",
+    "dnr": "None",
+    "pod_fails": "1",
+    "cc_fails": "3"
+   },
+   {
+    "cond": "A1F23DYT49EJBS",
+    "rts": "5",
+    "dnr": "None",
+    "pod_fails": "None",
     "cc_fails": "None"
    },
    {
@@ -80915,6 +80880,104 @@
     "cc_fails": "None"
    },
    {
+    "cond": "AZH5TZ53ZW3T2",
+    "rts": "3",
+    "dnr": "None",
+    "pod_fails": "None",
+    "cc_fails": "None"
+   },
+   {
+    "cond": "AY4UBR6BMPJET",
+    "rts": "None",
+    "dnr": "None",
+    "pod_fails": "1",
+    "cc_fails": "None"
+   },
+   {
+    "cond": "A16UODRFZE2ZAD",
+    "rts": "3",
+    "dnr": "None",
+    "pod_fails": "None",
+    "cc_fails": "None"
+   },
+   {
+    "cond": "AY1K1A23529Z1",
+    "rts": "3",
+    "dnr": "None",
+    "pod_fails": "1",
+    "cc_fails": "2"
+   },
+   {
+    "cond": "A2N9AIWDQLPGFG",
+    "rts": "8",
+    "dnr": "None",
+    "pod_fails": "None",
+    "cc_fails": "1"
+   },
+   {
+    "cond": "A2CWNY3NK04RFX",
+    "rts": "21",
+    "dnr": "None",
+    "pod_fails": "3",
+    "cc_fails": "13"
+   },
+   {
+    "cond": "A2OJ476ER59AR7",
+    "rts": "15",
+    "dnr": "None",
+    "pod_fails": "None",
+    "cc_fails": "7"
+   },
+   {
+    "cond": "AHA8CLCCDWI1X",
+    "rts": "2",
+    "dnr": "1",
+    "pod_fails": "1",
+    "cc_fails": "None"
+   },
+   {
+    "cond": "A15S5YMMBAHWSL",
+    "rts": "22",
+    "dnr": "None",
+    "pod_fails": "2",
+    "cc_fails": "12"
+   },
+   {
+    "cond": "AQ4114ZCPRFEY",
+    "rts": "2",
+    "dnr": "None",
+    "pod_fails": "1",
+    "cc_fails": "None"
+   },
+   {
+    "cond": "A2GH1OM90XUWP1",
+    "rts": "3",
+    "dnr": "None",
+    "pod_fails": "1",
+    "cc_fails": "2"
+   },
+   {
+    "cond": "A5N3YSXVLJVI2",
+    "rts": "None",
+    "dnr": "4",
+    "pod_fails": "10",
+    "cc_fails": "None"
+   },
+   {
+    "cond": "A3HPMD6S5SISKM",
+    "rts": "2",
+    "dnr": "None",
+    "pod_fails": "1",
+    "cc_fails": "None"
+   },
+   {
+    "cond": "A3KCDTF9VF8854",
+    "rts": "5",
+    "dnr": "None",
+    "pod_fails": "None",
+    "cc_fails": "1"
+   },
+   {
     "cond": "A3REUQ19YX8O9T",
     "rts": "17",
     "dnr": "None",
@@ -80957,44 +81020,16 @@
     "cc_fails": "None"
    },
    {
-    "cond": "A2CWNY3NK04RFX",
-    "rts": "21",
-    "dnr": "None",
-    "pod_fails": "3",
-    "cc_fails": "13"
-   },
-   {
-    "cond": "A2OJ476ER59AR7",
-    "rts": "15",
-    "dnr": "None",
-    "pod_fails": "None",
-    "cc_fails": "7"
-   },
-   {
-    "cond": "AHA8CLCCDWI1X",
-    "rts": "2",
-    "dnr": "1",
-    "pod_fails": "1",
-    "cc_fails": "None"
-   },
-   {
-    "cond": "A15S5YMMBAHWSL",
-    "rts": "22",
-    "dnr": "None",
-    "pod_fails": "2",
-    "cc_fails": "12"
-   },
-   {
-    "cond": "AQ4114ZCPRFEY",
-    "rts": "2",
-    "dnr": "None",
-    "pod_fails": "1",
-    "cc_fails": "None"
-   },
-   {
     "cond": "A3EMXJ0UGDI1TR",
     "rts": "6",
     "dnr": "None",
+    "pod_fails": "None",
+    "cc_fails": "None"
+   },
+   {
+    "cond": "A36I19AENAS9E3",
+    "rts": "None",
+    "dnr": "1",
     "pod_fails": "None",
     "cc_fails": "None"
    },
@@ -81003,6 +81038,20 @@
     "rts": "3",
     "dnr": "None",
     "pod_fails": "3",
+    "cc_fails": "None"
+   },
+   {
+    "cond": "A2AOWYLN14017P",
+    "rts": "None",
+    "dnr": "1",
+    "pod_fails": "None",
+    "cc_fails": "None"
+   },
+   {
+    "cond": "A7LOUQ2PPYJDO",
+    "rts": "None",
+    "dnr": "1",
+    "pod_fails": "None",
     "cc_fails": "None"
    },
    {
@@ -81018,55 +81067,6 @@
     "dnr": "None",
     "pod_fails": "None",
     "cc_fails": "1"
-   },
-   {
-    "cond": "A2GH1OM90XUWP1",
-    "rts": "3",
-    "dnr": "None",
-    "pod_fails": "1",
-    "cc_fails": "2"
-   },
-   {
-    "cond": "A5N3YSXVLJVI2",
-    "rts": "None",
-    "dnr": "4",
-    "pod_fails": "10",
-    "cc_fails": "None"
-   },
-   {
-    "cond": "A36I19AENAS9E3",
-    "rts": "None",
-    "dnr": "1",
-    "pod_fails": "None",
-    "cc_fails": "None"
-   },
-   {
-    "cond": "A3HPMD6S5SISKM",
-    "rts": "2",
-    "dnr": "None",
-    "pod_fails": "1",
-    "cc_fails": "None"
-   },
-   {
-    "cond": "A3KCDTF9VF8854",
-    "rts": "5",
-    "dnr": "None",
-    "pod_fails": "None",
-    "cc_fails": "1"
-   },
-   {
-    "cond": "A2AOWYLN14017P",
-    "rts": "None",
-    "dnr": "1",
-    "pod_fails": "None",
-    "cc_fails": "None"
-   },
-   {
-    "cond": "A7LOUQ2PPYJDO",
-    "rts": "None",
-    "dnr": "1",
-    "pod_fails": "None",
-    "cc_fails": "None"
    }
   ],
   "dnr": [
@@ -81313,6 +81313,7 @@
     "dsc_crudo": "N"
    }
   ],
+  "redescargas": 2,
   "n_dnr": 11,
   "n_dsc": 0,
   "n_dsc_desconocido": 0,
@@ -81324,7 +81325,7 @@
   "centro": "OGA5",
   "fecha_dnr": "2026-07-31",
   "fecha_reporte": "2026-08-02",
-  "bajado": "2026-08-08 00:59:14",
+  "bajado": "2026-08-08 01:34:20",
   "fichero": "ES-TDSL-OGA5-Daily-Report_2026-08-02_Sun.html",
   "semana": 31,
   "rts": [
@@ -82674,7 +82675,7 @@
     "dsc_crudo": "N"
    }
   ],
-  "redescargas": 2,
+  "redescargas": 3,
   "n_dnr": 14,
   "n_dsc": 0,
   "n_dsc_desconocido": 0,

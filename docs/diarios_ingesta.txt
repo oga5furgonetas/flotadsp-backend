@@ -1,10 +1,10 @@
-Ficheros HTML: 199   dias unicos (centro, fecha): 131
+Ficheros HTML: 205   dias unicos (centro, fecha): 131
 
 centro   dias     DNR   DSC=Y sin clas.   redesc. rango
 DGA1       30      47      34        7         2  2026-03-21 .. 2026-06-23
 DIC1       14      82      46        2         0  2026-03-20 .. 2026-07-26
 DMA3        4       0       0        0         0  2026-03-20 .. 2026-03-23
-OGA5       83     458     227       20        66  2026-03-20 .. 2026-08-03
+OGA5       83     458     227       20        72  2026-03-20 .. 2026-08-03
 
 DIAS SOSPECHOSOS DE NO ESTAR CLASIFICADOS (hay DNR y ningun DSC=Y):
    DGA1 2026-05-11   1 concesiones, 0 marcadas   (bajado 2026-05-15, reporte 2026-05-13)
@@ -23,15 +23,15 @@ DIAS SOSPECHOSOS DE NO ESTAR CLASIFICADOS (hay DNR y ningun DSC=Y):
    OGA5 2026-05-16   1 concesiones, 0 marcadas   (bajado 2026-05-22, reporte 2026-05-18)
    OGA5 2026-05-17   1 concesiones, 0 marcadas   (bajado 2026-05-22, reporte 2026-05-19)
    OGA5 2026-05-19   6 concesiones, 0 marcadas   (bajado 2026-05-25, reporte 2026-05-21)
-   OGA5 2026-06-07   3 concesiones, 0 marcadas   (bajado 2026-06-15, reporte 2026-06-09)
-   OGA5 2026-06-15   7 concesiones, 0 marcadas   (bajado 2026-06-24, reporte 2026-06-17)
+   OGA5 2026-06-07   3 concesiones, 0 marcadas   (bajado 2026-08-08, reporte 2026-06-09)
+   OGA5 2026-06-15   7 concesiones, 0 marcadas   (bajado 2026-08-08, reporte 2026-06-17)
    OGA5 2026-07-02   5 concesiones, 0 marcadas   (bajado 2026-07-07, reporte 2026-07-04)
    OGA5 2026-07-03   5 concesiones, 0 marcadas   (bajado 2026-07-07, reporte 2026-07-05)
    OGA5 2026-07-09   9 concesiones, 0 marcadas   (bajado 2026-07-14, reporte 2026-07-11)
    OGA5 2026-07-11  15 concesiones, 0 marcadas   (bajado 2026-07-16, reporte 2026-07-13)
    OGA5 2026-07-17  15 concesiones, 0 marcadas   (bajado 2026-07-21, reporte 2026-07-19)
    OGA5 2026-07-21   7 concesiones, 0 marcadas   (bajado 2026-07-26, reporte 2026-07-23)
-   OGA5 2026-07-27  10 concesiones, 0 marcadas   (bajado 2026-08-03, reporte 2026-07-29)
+   OGA5 2026-07-27  10 concesiones, 0 marcadas   (bajado 2026-08-08, reporte 2026-07-29)
    total: 29 de 98 dias con concesiones
    -> vuelve a descargar esos reportes: la columna DSC se rellena despues.
 
