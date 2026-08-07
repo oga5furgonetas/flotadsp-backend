@@ -1,0 +1,121 @@
+scorecards: 85   centros: 10   semanas: 12..31
+
+============================================================================
+1) REGLA DE TIER — se intenta falsar con los umbrales del propio PDF
+============================================================================
+   Hipotesis A: Fantastic  <=>  el valor cumple el Target publicado
+   Hipotesis B: Poor       <=>  el valor no llega al Minimum publicado
+
+   metrica        n     A aciertos     B aciertos   contraejemplos
+   fico          84       84 100.0%       84 100.0%   
+   speeding      84       84 100.0%       84 100.0%   
+   mentor        84       84 100.0%       84 100.0%   
+   vsa           84       84 100.0%       84 100.0%   
+   whc           85       85 100.0%       85 100.0%   
+   ce_dpmo       84       84 100.0%       84 100.0%   
+   cdf           17       17 100.0%       17 100.0%   
+   dcr           85       85 100.0%       85 100.0%   
+   lor_dpmo      85       85 100.0%       85 100.0%   
+   dsc_dpmo      85       85 100.0%       85 100.0%   
+   pod           37       37 100.0%       37 100.0%   
+   cc            85       85 100.0%       85 100.0%   
+   capacity      85       85 100.0%       85 100.0%   
+
+   TOTAL: 984 observaciones. Regla A 984/984 (100.00%), regla B 984/984 (100.00%)
+   Nota: whc y mentor usan un Minimum supuesto, no publicado.
+
+============================================================================
+2) CORTES DE TIER
+============================================================================
+   Fantastic|Great y Fair|Poor estan PUBLICADOS (Target y Minimum) y
+   verificados arriba. El corte Great|Fair NO se publica: se ajusta.
+
+   metrica        n        q mal clasif  lectura
+   whc           21    0.380          0  corte limpio
+   ce_dpmo       40    0.711          0  corte limpio
+   dcr           46    0.714          8  NO hay q constante que funcione
+   lor_dpmo      26    0.506          0  corte limpio
+   dsc_dpmo      48    0.599          4  NO hay q constante que funcione
+   cc            62    0.657          0  corte limpio
+   vsa           13    0.406          0  corte limpio
+   mentor         4    0.500          0  sin datos, se usa 0.5
+   capacity       7    0.500          0  sin datos, se usa 0.5
+   fico           1    0.500          0  sin datos, se usa 0.5
+   pod           12    0.731          0  corte limpio
+   cdf            0    0.500          0  sin datos, se usa 0.5
+   speeding       0    0.500          0  sin datos, se usa 0.5
+
+   -> dcr y dsc_dpmo no admiten un q constante: sus umbrales son de
+      estacion (el PDF lo dice) y el corte intermedio no se publica.
+
+============================================================================
+2b) CORTES DEL PROPIO OVERALL
+============================================================================
+   Fair       n=28   52.53 .. 69.74
+   Great      n=36   70.17 .. 84.67
+   Fantastic  n=21   85.92 .. 94.69
+   corte Fair |Great      en (69.74 , 70.17]
+   corte Great|Fantastic  en (84.67 , 85.92]
+   La tabla SLS publica para 'Scorecard Performance': Target=85 Minimum=50
+
+============================================================================
+3) OVERALL — cada hipotesis se intenta DESTRUIR
+============================================================================
+   valores distintos de Overall: 85 sobre 85 scorecards
+
+   H1: el Overall es funcion SOLO del vector de tiers.
+       CONTRAEJEMPLO: ['OGA5-W12', 'OGA5-W25'] -> Overall [91.29, 91.86]
+       CONTRAEJEMPLO: ['DGA1-W15', 'DGA2-W28'] -> Overall [79.06, 83.61]
+       CONTRAEJEMPLO: ['DGA1-W20', 'OGA5-W22'] -> Overall [91.6, 92.92]
+       CONTRAEJEMPLO: ['DIC1-W23', 'DIC1-W31'] -> Overall [71.03, 74.82]
+       CONTRAEJEMPLO: ['OML1-W23', 'DQA4-W26'] -> Overall [70.17, 71.77]
+       CONTRAEJEMPLO: ['DCT9-W27', 'DQA4-W27'] -> Overall [62.86, 63.85]
+       CONTRAEJEMPLO: ['DQA4-W28', 'DQA4-W29'] -> Overall [58.34, 59.71]
+       VEREDICTO: FALSADA
+
+   Ajustes DENTRO de muestra (regimen sin POD ni CDF, n=47, k=11):
+       H2 lineal en el tier ordinal   MAE=1.941 RMSE=2.403 peor=5.73
+       H3 lineal en p (min->target)   MAE=3.482 RMSE=4.554 peor=11.13
+       H3b lineal en p recortada      MAE=2.875 RMSE=3.403 peor=8.67
+       H5 bandas 50/70/85             MAE=2.299 RMSE=2.965 peor=6.86
+       H4 multiplicativa (log-log)    MAE=1.662 RMSE=2.119 peor=5.15
+
+   H3 hacia una prediccion NUMERICA: si el Overall fuese la media
+   ponderada de puntuaciones donde el Target vale 85 y el Minimum 50,
+   al ajustar Overall = a + SUM b_i*p_i deberia salir a~50 y SUM b~35.
+       obtenido: a=46.00   SUM b=36.81
+
+   H5 con pesos en el simplex (w>=0, suma 1), que es lo que exigiria
+   una media ponderada de verdad:
+       MAE=2.282 RMSE=2.977 peor=6.82   suma w=1.000
+       whc=0.051  ce_dpmo=0.115  dcr=0.247  lor_dpmo=0.078  dsc_dpmo=0.188  cc=0.051  vsa=0.099  mentor=0.089  fico=0.083
+
+   CONTROL DNR (el PDF dice que no impacta): su etiqueta va en rojo en
+   85/85 y el aviso 'highlighted in red' aparece tambien en las 21
+   scorecards que no tienen ninguna metrica en Poor -> el aviso habla
+   de la etiqueta de DNR, no de los valores en rojo.
+
+============================================================================
+4) BACKTESTING CON VENTANA MOVIL (entrena con semanas < W, predice W)
+============================================================================
+   n predicciones = 61   rango real 52.53..92.59   desv.tipica 10.54
+
+   modelo                  MAE     RMSE     peor   acierto tier
+   persistencia          7.830   10.042    25.45          52.5%
+   media_historica      10.356   11.812    26.07          41.0%
+   tier_ols              2.986    3.813     9.62          75.4%
+   p_ols                 3.521    4.346    10.40          68.9%
+   bandas_ols            3.378    4.322     9.89          68.9%
+   bandas_simplex        3.102    3.997     9.62          70.5%
+   logp_ols              2.651    3.432     9.62          82.0%
+
+   Peores errores del mejor modelo (logp_ols):
+      DGA2-W25   real  88.22  pred  78.60  error  9.62
+      OML1-W28   real  66.23  pred  75.59  error  9.36
+      DIC1-W23   real  71.03  pred  78.26  error  7.23
+      DQA4-W25   real  52.53  pred  58.86  error  6.33
+      OGA5-W31   real  80.46  pred  86.19  error  5.73
+      DIC1-W24   real  61.72  pred  67.15  error  5.43
+
+   El Overall se publica con 2 decimales: tener la formula significaria
+   un error de ~0.005 puntos, como pasa con WHC. Estamos 500 veces peor.

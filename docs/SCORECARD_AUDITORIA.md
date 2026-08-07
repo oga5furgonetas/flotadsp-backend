@@ -1,182 +1,350 @@
-# Auditoría de la Scorecard — qué está demostrado y qué no
+# Auditoría de la Scorecard de Amazon — qué está demostrado y qué no
 
-Fecha: 2026-08-07. Fuente primaria: **17 scorecards reales de OGA5**, semanas 12
-a 31 de 2026, en PDF.
+Fecha: 2026-08-08. Sustituye a la versión del 2026-08-07.
 
-Reproducible: `scripts/extraer_scorecards.py` genera
-`docs/scorecard_17_semanas.json` desde los PDFs originales.
+**Fuente primaria: 85 scorecards reales** (97 PDFs, 12 duplicados exactos), DSP
+TDSL, **10 centros** (DCT4, DCT9, DGA1, DGA2, DIC1, DMA3, DQA4, DQB9, OGA5,
+OML1), semanas 12 a 31 de 2026. La versión anterior trabajaba con 17 scorecards
+de un solo centro.
+
+Reproducible:
+
+```bash
+python scripts/extraer_scorecards.py    # PDFs -> docs/scorecards.json
+```
+
+```bash
+python scripts/scorecard_analisis.py    # -> docs/scorecards_analisis.txt
+```
 
 ---
 
-## 0. CORRECCIÓN DE UN ERROR PROPIO (lo primero, porque estuvo en producción)
+## 0. QUÉ CAMBIA RESPECTO A LA AUDITORÍA ANTERIOR
 
-**El módulo "DSC" que se desplegó el 2026-08-07 estaba mal etiquetado.**
-
-Se presentó como si midiera el *Delivery Success Conditions DPMO* de Amazon.
-**Es falso.** La prueba:
-
-| | Valor |
+| Afirmación anterior | Estado |
 |---|---|
-| DSC DPMO real, 17 semanas | **598 – 1712** |
-| En % de paquetes | **0,06 % – 0,17 %** |
-| Métrica de Cortex "ubicación de riesgo" | **8,31 %** = **83.100 DPMO** |
-| **Factor de diferencia** | **90 ×** |
+| «Cobertura: 14 de 16 métricas. FICO, Speeding y VSA quedan fuera» | **Corregido.** 16/16, sin huecos. |
+| «El Overall no se puede reconstruir: faltan al menos 3 métricas y todos los pesos» | **Conclusión correcta, diagnóstico equivocado.** No faltaban esas 3 (ya se extraen). Lo que falta es otra cosa — ver §5. |
+| El enigma S26 vs S30 de OGA5 («gana en 5 de 6 métricas y saca 3,7 puntos menos») | **Resuelto, y era un artefacto.** Ver §4. |
+| «DSC DPMO: definición desconocida» | **Corregido.** El propio PDF la define (§2.4). Y confirma que el módulo DSC de FlotaDSP no mide el DSC de Amazon: sigue en pie la corrección del 2026-08-07. |
+| WHC: fórmula demostrada | **Se mantiene**, y ahora además se conoce su umbral de tier. |
 
-Si Amazon contase "dejar el paquete en el jardín" como defecto de DSC, el DPMO
-de este DSP sería de decenas de miles, no de 600-1700. **No pueden ser la misma
-cosa.**
-
-La métrica sigue siendo real y útil —mide un hecho comprobable y hay un factor
-15× entre conductores— pero es **nuestra**, no la de Amazon. Ya está corregido
-el texto de la pantalla, el subtítulo y los comentarios del código.
-
-Cómo se detectó: extrayendo el valor real de DSC DPMO de los PDFs por
-**coordenadas físicas** de la página, en vez de por orden del texto. El orden
-del texto entrelaza mal las dos columnas del scorecard y hace imposible saber
-qué valor pertenece a qué etiqueta.
+Lo importante: **la auditoría anterior no había leído las páginas 6, 7 y 8 del
+PDF**, donde Amazon publica sus propios umbrales y las definiciones de cada
+métrica. Ahí estaba casi todo lo que faltaba.
 
 ---
 
-## 1. MÉTODO DE EXTRACCIÓN (por qué es fiable)
+## 1. EXTRACCIÓN — 16/16 métricas, con dos controles de integridad
 
-`pypdf` devuelve el texto de la página 2 con las etiquetas en un bloque y los
-valores en otro, desordenados. Emparejarlos por proximidad en el texto **da
-resultados falsos** (en un intento anterior salieron WHC de 103,2 % y 104,3 %,
-imposibles para un porcentaje de cumplimiento).
+`extract_text()` entrelaza las **dos columnas** de la página 2 y pega el valor
+de una métrica a la etiqueta de otra. El extractor trabaja por **coordenadas**:
+parte la página en dos columnas por x=296, agrupa palabras en líneas por altura,
+y dentro de cada (línea, columna) la etiqueta es una secuencia contigua de
+tokens conocida y el valor es lo que queda a su derecha. Siempre casa la
+etiqueta **más larga** primero (`Capacity Reliability` es subsecuencia de
+`Next Day Capacity Reliability`; sin esto, dos centros daban valores cruzados).
 
-El método válido, con `pdfplumber`: se extraen las palabras **con sus
-coordenadas**, se agrupan en líneas por su altura, y el valor de una etiqueta es
-el primer token con forma de valor (`X|Tier`, `N/A`, `None`, `In Compliance`)
-que está a su derecha y antes de que empiece la siguiente etiqueta.
+Cobertura sobre las 85 scorecards:
 
-Cobertura conseguida: **14 de 16 métricas en las 17 semanas** (FICO, Speeding y
-VSA quedan fuera porque su valor se sitúa en otra posición del layout).
+| | Resultado |
+|---|---|
+| Tier presente | **16/16 métricas, 85/85 scorecards (100 %)** |
+| Valor numérico ausente pero con tier real | **0 casos** |
+| Métricas con pinta de valor sin etiqueta reconocida | **0 casos** |
+
+Los huecos numéricos que quedan **no son fallos de extracción**: son `N/A` en el
+propio PDF (CDF desaparece a partir de la semana 21, POD a partir de la 24;
+BOC siempre es `None` y CAS siempre `In Compliance`).
+
+**Control de integridad independiente:** el PDF pinta cada valor con el color de
+su tier (azul Fantastic, verde Great, naranja Fair, rojo Poor). Se leyó el color
+de relleno de cada carácter y se comparó con el tier escrito:
+**0 discrepancias en las 1.055 celdas comparables**. Si el emparejamiento
+etiqueta-valor estuviera mal en algún sitio, esto lo habría cazado.
 
 ---
 
 ## 2. LO QUE ESTÁ DEMOSTRADO
 
-### WHC — fórmula demostrada, confianza alta
+### 2.1 La regla de tier de cada métrica — confianza muy alta
+
+Cada PDF publica en su página de *Performance Standards and Service Levels* un
+**Target** y un **Minimum** para cada métrica. Hipótesis puesta a prueba:
 
 ```
-WHC % = (conductores de la semana − conductores con excepción) / conductores
+Fantastic  <=>  el valor cumple el Target
+Poor       <=>  el valor no llega al Minimum
 ```
 
-Test de falsación sobre las 16 semanas que traen hoja de excepciones:
+| Métrica | n | Fantastic⇔Target | Poor⇔bajo Minimum |
+|---|---|---|---|
+| fico, speeding, mentor, vsa, ce_dpmo | 84 c/u | 100 % | 100 % |
+| whc, dcr, lor_dpmo, dsc_dpmo, cc, capacity | 85 c/u | 100 % | 100 % |
+| pod | 37 | 100 % | 100 % |
+| cdf | 17 | 100 % | 100 % |
+| **TOTAL** | **984** | **984/984** | **984/984** |
 
-| Sem | Cond | Exc | Calculado | PDF | Desviación |
-|---|---|---|---|---|---|
-| 12 | 55 | 1 | 98,1818 | 98,18 | 0,0018 |
-| 16 | 53 | 1 | 98,1132 | 98,11 | 0,0032 |
-| 25 | 53 | 1 | 98,1132 | 98,11 | 0,0032 |
-| 28 | 65 | 12 | 81,5385 | 81,54 | 0,0015 |
-| 31 | 69 | 2 | 97,1014 | 97,10 | 0,0014 |
-| (11 más) | | 0 | 100,0000 | 100,00 | 0,0000 |
+**Cero contraejemplos en 984 observaciones.** No se ha podido falsar.
 
-**Peor desviación: 0,0032 puntos porcentuales**, que es exactamente el redondeo
-del PDF a dos decimales. **No se ha podido falsar.**
+Esto es lo que explica por qué los cortes «globales» de la auditoría anterior
+salían solapados: **los umbrales no son globales.** DCR, DSC y DNR llevan
+umbrales **por estación** (el PDF lo dice: *«Thresholds are set at the station
+level to account for regional differences»*) y cambian también por semana:
 
-La semana 20 no entra: su PDF tiene 7 páginas y carece de la hoja de
-excepciones. Su 98 % sobre 50 conductores es 49/50 exacto, coherente con la
-fórmula.
+| Métrica | Valores distintos de Target entre los 10 centros |
+|---|---|
+| DSC DPMO | **17** (de 500 a 1070) |
+| DCR | **7** (97,75 % a 99 %) |
+| DNR DPMO | **8** (1000 a 1300) |
+| POD, LoR, Capacity, CDF | 2 cada una (cambian a mitad de temporada) |
+| VSA, FICO, CC, Speeding, Mentor, CAS, WHC | 1 (fijos) |
 
-**Confianza: muy alta.** Fórmula reproducida al cuarto decimal en 16 de 16 casos
-comprobables, incluido el extremo de 12 excepciones.
+Salvedad honesta: WHC y Mentor **no aparecen** en la tabla SLS. Su Target sí
+está publicado en las definiciones (WHC 100 %, Mentor 90 %); el Minimum de WHC
+(95) es el corte medido, no publicado, y el de Mentor es un supuesto nuestro.
 
----
+### 2.2 El corte Great|Fair — parcial
 
-## 3. LO QUE NO ESTÁ DEMOSTRADO
+Amazon publica dos de los tres cortes. El intermedio no lo publica. Ajustando
+la posición `q` dentro de la banda Minimum→Target:
 
-### El Overall Score — NO reconstruido
+| Métrica | n | q | Errores |
+|---|---|---|---|
+| whc | 21 | 0,380 | **0** |
+| vsa | 13 | 0,406 | **0** |
+| lor_dpmo | 26 | 0,506 | **0** |
+| cc | 62 | 0,657 | **0** |
+| ce_dpmo | 40 | 0,711 | **0** |
+| pod | 12 | 0,731 | **0** |
+| **dsc_dpmo** | 48 | 0,599 | **4 — falsado** |
+| **dcr** | 46 | 0,714 | **8 — falsado** |
 
-Se buscaron contraejemplos de dominancia estricta (una semana mejor o igual en
-todas las métricas observadas y con menor Overall). **No se encontraron**, pero
-eso **no demuestra nada**: con 6+ métricas comparadas, la dominancia estricta es
-rara y el test tiene poca potencia. Es un resultado **neutro**, no positivo.
+Para seis métricas hay un corte limpio. Para **DCR y DSC no existe ningún `q`
+constante que funcione**: su tercer umbral tampoco es una fracción fija de la
+banda. Es un dato que no tenemos.
 
-Un caso que sí merece atención, aunque no sea dominancia estricta:
+### 2.3 Los cortes del propio Overall — demostrados
 
-| | S26 | S30 |
+| Tier | n | Rango observado |
 |---|---|---|
-| DCR | **98,95 %** | 98,14 % |
-| Contact Compliance | **98,07 %** | 95,35 % |
-| Customer escalation | **0** | 31 |
-| DNR DPMO | **914** | 1619 |
-| DSC DPMO | **678** | 1091 |
-| LoR DPMO | 32 | **0** |
-| **Overall** | **82,19 · Great** | **85,92 · Fantastic** |
+| Fair | 28 | 52,53 – 69,74 |
+| Great | 36 | 70,17 – 84,67 |
+| Fantastic | 21 | 85,92 – 94,69 |
 
-La S26 gana en 5 de 6 métricas observadas y saca **3,7 puntos menos** y peor
-tier. O LoR pesa muchísimo, o faltan variables (FICO, Speeding, VSA) que no
-hemos podido extraer, o ambas cosas.
+Cortes: **Fantastic ≥ 85**, **Great ≥ 70**, y la tabla SLS publica para
+*Scorecard Performance* **Target 85 / Minimum 50**. El 85 medido coincide
+exactamente con el 85 publicado. No hay ninguna scorecard en Poor, así que el
+corte 50 es del PDF, no medido.
 
-**Veredicto: el Overall NO se puede reconstruir con los datos disponibles.**
-Faltan al menos 3 métricas y todos los pesos. Cualquier fórmula que se
-propusiera ahora sería inventada.
+### 2.4 DNR DPMO NO cuenta para el Overall — demostrado
 
----
+El PDF avisa: *«Metrics highlighted in red are for visibility only and do not
+impact final DSP Scores/Tiers»*. Leyendo el color de las etiquetas:
 
-## 4. TABLA DE LAS 17 SEMANAS
+- **La etiqueta de DNR DPMO está en rojo puro en 85/85 scorecards.** Es la
+  única etiqueta roja que existe en todo el corpus.
+- El rojo también se usa para los *valores* de tier Poor, así que había
+  ambigüedad. **Test discriminante:** hay **21 scorecards sin ninguna métrica en
+  Poor** que llevan igualmente el aviso. Si el aviso hablara de los valores
+  Poor, en esas 21 no tendría a qué referirse. Habla de la etiqueta de DNR.
+- Coherente: DNR es la **única** métrica visible que no tiene fila propia en la
+  tabla SLS.
 
-El dataset completo está en `docs/scorecard_17_semanas.json`. Resumen de las
-métricas con cobertura 17/17:
+### 2.5 WHC — se mantiene lo anterior
 
-| Sem | Overall | Tier | WHC | DCR | CC | DSC DPMO | DNR DPMO | LoR | CE |
-|---|---|---|---|---|---|---|---|---|---|
-| 12 | 91,86 | Fantastic | 98,18 | 98,66 | 98,09 | 885 | 1089 | 0 | 0 |
-| 13 | 89,22 | Fantastic | 100 | 99,20 | 98,56 | 997 | 1151 | 0 | 81 |
-| 16 | 83,55 | Great | 98,11 | 99,13 | 98,66 | 1174 | 1566 | 0 | 0 |
-| 17 | 94,20 | Fantastic | 100 | 98,90 | 98,17 | 598 | 718 | 39 | 0 |
-| 19 | 90,70 | Fantastic | 100 | 99,08 | 98,29 | 923 | 1208 | 0 | 38 |
-| 20 | 94,69 | Fantastic | 98 | 99,04 | 97,84 | 666 | 1018 | 0 | 0 |
-| 21 | 91,99 | Fantastic | 100 | 99,13 | 98,33 | 632 | 869 | 77 | 0 |
-| 22 | 91,60 | Fantastic | 100 | 98,98 | 98,60 | 989 | 1187 | 0 | 0 |
-| 23 | 88,54 | Fantastic | 100 | 99,11 | 98,39 | 1029 | 1360 | 39 | 0 |
-| 24 | 91,15 | Fantastic | 100 | 99,11 | 98,08 | 767 | 1132 | 36 | 0 |
-| 25 | 91,29 | Fantastic | 98,11 | 99,12 | 98,27 | 817 | 1045 | 0 | 0 |
-| 26 | 82,19 | Great | 100 | 98,95 | 98,07 | 678 | 914 | 32 | 0 |
-| 27 | 86,92 | Fantastic | 100 | 98,93 | 98,06 | 695 | 1113 | 29 | 0 |
-| 28 | 69,01 | **Fair** | 81,54 | 98,19 | 95,38 | 1272 | 1774 | 0 | 76 |
-| 29 | 69,49 | **Fair** | 100 | 98,05 | 95,64 | 1712 | 2292 | 87 | 35 |
-| 30 | 85,92 | Fantastic | 100 | 98,14 | 95,35 | 1091 | 1619 | 0 | 31 |
-| 31 | 80,46 | Great | 97,10 | 97,91 | 94,97 | 814 | 1657 | 32 | 60 |
+```
+WHC % = (conductores − conductores con excepción) / conductores
+```
 
-Observación sobre las dos semanas Fair: la **S29 tuvo el WHC al 100 %** y aun
-así cerró en 69,49. Sus métricas malas fueron DSC 1712 (la peor de las 17), DNR
-2292 (la peor) y LoR 87 (la peor). **El WHC no explica esa semana.**
+16/16 semanas comprobables reproducidas al cuarto decimal, peor desviación
+0,0032 pp (el redondeo del PDF). Y ahora se sabe además que su Target es 100 %:
+**solo el 100 % da Fantastic**, confirmado en 85/85.
 
----
+### 2.6 Definiciones oficiales, ya no hace falta buscarlas fuera
 
-## 5. ESTADO DE CADA MÉTRICA
+Estaban en las páginas 7-8 de cada PDF. Las relevantes:
 
-| Métrica | ¿Fórmula? | ¿Datos? | ¿Predictor? | Confianza | Qué falta |
-|---|---|---|---|---|---|
-| WHC | ✅ demostrada | ✅ plan del portal | ✅ | **Muy alta** | nada |
-| DCR | 🟡 definición clara | ✅ Cortex | ✅ en vivo | Alta | validar semana a semana contra el PDF |
-| DSC DPMO | ❌ | ❌ | ❌ | — | qué cuenta Amazon como defecto |
-| DNR DPMO | ❌ | ❌ | ❌ | — | reclamaciones de cliente |
-| LoR DPMO | ❌ | 🟡 parcial | ❌ | — | definición y denominador |
-| Contact Compliance | ❌ | ❌ | ❌ | — | Cortex no capta contactos |
-| Customer escalation | ❌ | ❌ | ❌ | — | dato de Amazon |
-| POD / CDF | ❌ | ❌ | ❌ | — | lo audita Amazon |
-| FICO / Speeding / Mentor | ❌ | ❌ | ❌ | — | vienen de Netradyne/Mentor |
-| VSA | ❌ | 🟡 inspecciones | ❌ | — | cruzar con la auditoría real |
-| **Overall** | ❌ | 🟡 14/16 métricas | ❌ | — | 3 métricas + los pesos |
-
-**Resumen honesto: de 16 métricas, 1 está demostrada (WHC), 1 es observable en
-vivo con definición clara pero sin validar semana a semana (DCR), y 14 no son
-reconstruibles con lo que hay.**
+- **DSC DPMO**: concesiones DNR que caen en 8 causas raíz (entregado a un
+  vecino, a un familiar, a recepción, a más de 25 m, sin foto, sin seguir
+  preferencias del cliente, con parada de grupo simultánea), por millón de
+  paquetes **entregados**.
+- **LoR DPMO**: despachados y no entregados ni devueltos, por millón
+  **despachados**.
+- **VSA**: auditorías pasadas / auditorías totales de **las dos semanas
+  anteriores** (WK-2 y WK-1), no de la semana en curso.
+- **CE DPMO**: violaciones cuentan **triple**, defectos simple, y con **4
+  semanas de retraso** (la semana 45 refleja la 41).
+- **Contact Compliance**: llamadas y SMS por la app Flex sobre paquetes
+  entregados con contacto más los no entregados por UTA/UTL/NSL.
+- **Capacity Reliability**: % de días con ≥100 % de fiabilidad por tipo de
+  servicio, descontando cancelaciones causadas por Amazon.
 
 ---
 
-## 6. PRÓXIMOS PASOS CON VALOR REAL
+## 3. EL OVERALL SCORE — NO reconstruido
 
-1. **Validar DCR semana a semana** contra el valor del PDF, que ahora ya se
-   extrae. Es el único test pendiente que puede cerrar una segunda métrica.
-2. **Extraer FICO, Speeding y VSA** afinando el emparejamiento por coordenadas.
-   Sin las 16 métricas completas, el Overall no se puede ni intentar.
-3. **Guardar un histórico semanal** de predicción vs. real para poder medir el
-   error. Hoy no existe: sin él, cualquier "predictor" es una afirmación sin
-   comprobar.
-4. Contrastar las definiciones oficiales de Amazon con fuentes externas
-   (pendiente: la búsqueda web se agotó por límite semanal).
+Se formularon y atacaron cinco familias. Resultados **fuera de muestra**, con
+ventana móvil (entrenar solo con semanas anteriores, predecir la siguiente),
+61 predicciones:
+
+| Modelo | MAE | RMSE | Peor error | Acierto de tier |
+|---|---|---|---|---|
+| persistencia (semana anterior) | 7,830 | 10,042 | 25,45 | 52,5 % |
+| media histórica | 10,356 | 11,812 | 26,07 | 41,0 % |
+| lineal en p (min→target) | 3,521 | 4,346 | 10,40 | 68,9 % |
+| bandas 50/70/85, pesos libres | 3,378 | 4,322 | 9,89 | 68,9 % |
+| bandas 50/70/85, media ponderada real | 3,102 | 3,997 | 9,62 | 70,5 % |
+| lineal en el tier ordinal | 2,986 | 3,813 | 9,62 | 75,4 % |
+| **multiplicativa (log-log)** | **2,651** | **3,432** | **9,62** | **82,0 %** |
+
+Desviación típica del Overall: 10,54. Es decir, el mejor modelo explica bastante
+— pero **el Overall se publica con dos decimales**. Tener la fórmula significa
+un error de ~0,005 puntos, como pasa con WHC. Estamos **500 veces peor**.
+
+### Hipótesis destruidas
+
+**H1 — «el Overall es función solo del vector de tiers»: FALSADA.**
+Siete pares de scorecards con **tiers idénticos en las 10 métricas puntuables**
+y Overall distinto. Los más limpios:
+
+| Par | Overall |
+|---|---|
+| DCT9-W27 / DQA4-W27 | 62,86 vs 63,85 |
+| DQA4-W28 / DQA4-W29 | 58,34 vs 59,71 |
+| DGA1-W15 / DGA2-W28 | 83,61 vs 79,06 |
+
+Hay componente continua: el tier no basta.
+
+**H3 — «media ponderada donde el Target vale 85 y el Minimum 50»: no
+concluyente, y probablemente casualidad.**
+Era una predicción numérica limpia: al ajustar `Overall = a + Σ bᵢ·pᵢ` debía
+salir `a≈50` y `Σb≈35`. Salió **a = 46,00 y Σb = 36,81**, sospechosamente
+cerca. Pero el ajuste es malo (MAE 3,48 dentro de muestra, peor error 11,13) y
+tiene coeficientes negativos donde no debería (FICO −1,39). Con 11 parámetros y
+47 puntos, esa coincidencia no soporta peso. **No se acepta.**
+
+**H5 — «media ponderada de puntuaciones por bandas, pesos ≥0 que suman 1»:
+insuficiente.** MAE 2,28 dentro de muestra, 3,10 fuera. Los pesos que salen
+(DCR 0,25, DSC 0,19, CE 0,12, VSA 0,10…) son plausibles pero no reproducen nada.
+
+**Los «Recommended Focus Areas» no son las 3 métricas peor posicionadas:
+FALSADO.** El PDF lista las 3 métricas prioritarias — el ranking del propio
+Amazon. Predecirlas como «las 3 con menor p» acierta el **conjunto en el 49 %**
+de los casos y el **orden en el 13,7 %**. Sea cual sea la puntuación interna por
+métrica, **no es la posición lineal entre Minimum y Target**.
+
+---
+
+## 4. EL ENIGMA S26 vs S30 ERA UN ARTEFACTO
+
+La auditoría anterior lo presentaba como la prueba de que faltaba algo grande.
+Con las 16 métricas y sabiendo que DNR no puntúa:
+
+| Métrica | OGA5-W26 | OGA5-W30 |
+|---|---|---|
+| VSA | **94,44 · Poor** | **100 · Fantastic** |
+| LoR DPMO | 32 · Great | **0 · Fantastic** |
+| CE DPMO | **0 · Fantastic** | 31 · Great |
+| DSC DPMO | **678 · Great** | 1091 · Fair |
+| Contact Compliance | **98,07 · Fantastic** | 95,35 · Fair |
+| DCR | 98,95 · Fantastic | 98,14 · Fantastic |
+| DNR DPMO | 914 | 1619 | *(no puntúa)* |
+| **Overall** | 82,19 · Great | **85,92 · Fantastic** |
+
+La S26 no ganaba «5 de 6»: **estaba en Poor en VSA**, la métrica que la
+auditoría anterior no sabía extraer, y se le daba crédito por un DNR que no
+cuenta. Salto de tres niveles de tier en VSA y dos en LoR contra tres ventajas
+de un nivel. No hace falta ninguna variable oculta para explicarlo.
+
+---
+
+## 5. POR QUÉ NO SE CIERRA EL OVERALL (razones concretas, no excusas)
+
+1. **Hay una métrica puntuada que el scorecard no enseña.** *DVIC Compliance*
+   tiene Target 95 % y Minimum 90 % en la tabla SLS de **85/85** scorecards, y
+   aparece en las definiciones como parte del bloque de Safety. **No se muestra
+   en ninguna página de ninguna scorecard: 0/85.** Es una entrada del cálculo
+   que no podemos observar.
+2. **El tercer umbral (Great|Fair) no se publica**, y para DCR y DSC ni siquiera
+   es una fracción fija de la banda conocida.
+3. **El residuo depende del centro.** F entre centros = 3,35 sobre el mejor
+   modelo; DGA1 se queda sistemáticamente +2,17 puntos y DIC1 −1,74. Eso es la
+   firma de una variable de estación que no estamos viendo.
+4. **La escala del scorecard cambió a mitad de temporada.** CDF desaparece tras
+   la semana 20 y POD tras la 23; los umbrales de POD, LoR, Capacity y CDF
+   cambian a la vez. El conjunto de métricas puntuables no es el mismo en las 20
+   semanas, lo que parte el corpus en tres regímenes de 17, 20 y 48 scorecards.
+
+**Veredicto: el Overall NO está reconstruido y con estos datos no puede
+estarlo.** Lo que sí hay es un predictor con MAE 2,65 y 82 % de acierto de tier
+fuera de muestra — útil para avisar, insuficiente para afirmar un número.
+
+---
+
+## 6. HALLAZGO SIN CERRAR: las páginas 3-4
+
+Cada scorecard trae una tabla **por conductor** (Transporter ID, paquetes
+entregados, DCR, DSC DPMO, LoR DPMO, POD, CC, CE, CDF DPMO) que no se había
+usado. Agregándola sobre las 17 semanas de OGA5:
+
+| Métrica del DSP | Agregación probada | Desviación media | Peor |
+|---|---|---|---|
+| DCR | Σentregados / Σdespachados | 0,196 pp | 0,66 |
+| DSC DPMO | media ponderada por entregados | 39,1 DPMO | 183,7 |
+| LoR DPMO | media ponderada por despachados | 9,6 DPMO | 39,0 |
+
+Se acerca pero **no cuadra**, y no es un fallo de parseo (se comprobó: 0 filas
+descartadas). O la población de conductores de la tabla no es la misma que la
+del cálculo del DSP, o el denominador es otro. **Sin resolver.**
+
+---
+
+## 7. ESTADO DE CADA MÉTRICA
+
+| Métrica | ¿Umbral de tier? | ¿Fórmula? | ¿Datos propios? | Confianza |
+|---|---|---|---|---|
+| WHC | ✅ Target 100 % (85/85) | ✅ demostrada | ✅ plan del portal | **Muy alta** |
+| VSA | ✅ 98,5 / 96 (84/84) | ✅ definición oficial | 🟡 inspecciones | Alta |
+| DCR | ✅ por estación (85/85) | ✅ definición oficial | ✅ Cortex | Alta |
+| DSC DPMO | ✅ por estación (85/85) | ✅ definición oficial | ❌ concesiones | Media |
+| CC | ✅ 98 / 95 (85/85) | ✅ definición oficial | ❌ | Media |
+| LoR DPMO | ✅ (85/85) | ✅ definición oficial | 🟡 parcial | Media |
+| CE DPMO | ✅ (84/84) | ✅ definición oficial | ❌ dato de Amazon | Media |
+| POD | ✅ (37/37) | ✅ definición oficial | ❌ | Media |
+| FICO / Speeding / Mentor | ✅ (84/84) | ✅ definición oficial | ❌ Netradyne/Mentor | Media |
+| Capacity | ✅ (85/85) | ✅ definición oficial | ❌ Okami | Media |
+| CDF | ✅ (17/17) | ✅ definición oficial | ❌ | Media |
+| **DNR DPMO** | — | ✅ definición oficial | ❌ | **No puntúa** |
+| **DVIC** | ✅ 95 / 90 publicado | ✅ definición oficial | 🟡 inspecciones | **No visible** |
+| **Overall** | ✅ 85 / 70 / 50 | ❌ | 🟡 | **No reconstruible** |
+
+De 16 métricas visibles: **13 tienen su regla de tier demostrada al 100 %**,
+1 no puntúa (DNR), 2 son constantes (BOC siempre `None`, CAS siempre
+`In Compliance`).
+
+---
+
+## 8. QUÉ SE PUEDE HACER YA CON ESTO
+
+1. **Predecir el tier de cada métrica es ahora exacto**, no aproximado: basta
+   comparar el valor con el Target y el Minimum de la propia estación. Es la
+   parte del scorecard que FlotaDSP puede reproducir sin margen de error.
+2. **Guardar los umbrales por estación y semana.** Cambian, y son la mitad del
+   cálculo. Ya salen en `docs/scorecards.json`.
+3. **No prometer el Overall.** Como mucho, una banda: «entre X e Y, tier
+   probable Z», con el 82 % de acierto medido, no inventado.
+4. **VSA mira las dos semanas anteriores**, no la actual. Cualquier alerta que
+   se construya sobre inspecciones tiene que respetar ese desfase.
+5. **CE DPMO va con 4 semanas de retraso.** Un pico de escalaciones de esta
+   semana no aparece hasta dentro de un mes.
+
+### Siguientes pasos con valor real
+
+1. Cerrar la agregación por conductor de §6: es la vía para predecir DCR, DSC y
+   LoR **antes** de que llegue la scorecard.
+2. Conseguir scorecards de semanas donde alguna métrica caiga a Poor en DCR o
+   DSC dentro del mismo grupo de umbrales: acotaría el corte Great|Fair que hoy
+   está falsado.
+3. Comprobar si DVIC aparece en algún otro informe del portal. Es la única
+   entrada conocida del Overall que hoy no se ve.

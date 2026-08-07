@@ -1,0 +1,42 @@
+Ficheros: 97   scorecards unicas (dsp,centro,semana): 85
+
+CENTROS:
+  DCT4    1 semanas  [16]
+  DCT9   10 semanas  [20, 21, 22, 23, 24, 25, 26, 27, 29, 30]
+  DGA1    9 semanas  [15, 16, 17, 20, 21, 23, 24, 25, 28]
+  DGA2    2 semanas  [25, 28]
+  DIC1   12 semanas  [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+  DMA3    1 semanas  [14]
+  DQA4   11 semanas  [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+  DQB9   11 semanas  [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+  OGA5   17 semanas  [12, 13, 16, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+  OML1   11 semanas  [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+
+COBERTURA: valor numerico presente / tier presente
+  fico         num  84 ( 98.8%)   tier  85 (100.0%)
+  speeding     num  84 ( 98.8%)   tier  85 (100.0%)
+  mentor       num  84 ( 98.8%)   tier  85 (100.0%)
+  vsa          num  84 ( 98.8%)   tier  85 (100.0%)
+  boc          num   0 (  0.0%)   tier  85 (100.0%)
+  whc          num  85 (100.0%)   tier  85 (100.0%)
+  cas          num   0 (  0.0%)   tier  85 (100.0%)
+  ce_dpmo      num  84 ( 98.8%)   tier  85 (100.0%)
+  cdf          num  17 ( 20.0%)   tier  85 (100.0%)
+  dcr          num  85 (100.0%)   tier  85 (100.0%)
+  dnr_dpmo     num  85 (100.0%)   tier  85 (100.0%)
+  lor_dpmo     num  85 (100.0%)   tier  85 (100.0%)
+  dsc_dpmo     num  85 (100.0%)   tier  85 (100.0%)
+  pod          num  37 ( 43.5%)   tier  85 (100.0%)
+  cc           num  85 (100.0%)   tier  85 (100.0%)
+  capacity     num  85 (100.0%)   tier  85 (100.0%)
+  capacity_nd  num  32 ( 37.6%)   tier  32 ( 37.6%)
+  capacity_sd  num   4 (  4.7%)   tier   4 (  4.7%)
+
+QA-1 numerico ausente CON tier real (= fallo de extraccion):
+  fallos: 0
+
+QA-2 color del valor vs tier escrito (deben coincidir):
+  discrepancias: 0
+
+ETIQUETA EN ROJO ('for visibility only, do not impact'):
+  dnr_dpmo     85/85
