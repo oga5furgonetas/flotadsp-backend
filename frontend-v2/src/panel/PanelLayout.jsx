@@ -5,7 +5,7 @@ import {
   CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon,
-  PackageSearch, MapPin, Timer,
+  PackageSearch, MapPin, Timer, MapPinned,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken } from './auth'
 import TrialBanner from './TrialBanner'
@@ -57,6 +57,7 @@ const NAV_DEF = [
     { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
     { to: '/panel/scorecard', labelKey: 'nav.scorecard', icon: Trophy },
     { to: '/panel/whc', labelKey: 'nav.whc', icon: Timer },
+    { to: '/panel/dsc', labelKey: 'nav.dsc', icon: MapPinned },
     { to: '/panel/contactos', labelKey: 'nav.contacts', icon: BookUser },
   ]},
   { g: 'nav.g.system', gIcon: Settings, iconCls: 'text-dark-300', iconBg: 'bg-white/[0.07]', items: [

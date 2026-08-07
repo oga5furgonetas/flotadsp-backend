@@ -266,6 +266,7 @@ export const cortexReset = () => api.post('/cortex/reset')
 /* Calidad de entrega en vivo: el scorecard calculado desde Cortex, sin subir
    nada y sin esperar al viernes de Amazon. */
 export const cortexCalidad = (params) => api.get('/cortex/calidad', { params })
+export const cortexDsc = (params) => api.get('/cortex/dsc', { params })
 export const cortexSimular = (params) => api.get('/cortex/simular', { params })
 /* Libreta de portales: direcciones que fallan una y otra vez. */
 export const cortexPortales = (params) => api.get('/cortex/portales', { params })

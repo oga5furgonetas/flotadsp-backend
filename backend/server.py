@@ -19393,6 +19393,157 @@ def _cx_impacto(conductores: list, tasa_fallo_flota: float) -> list:
     return sorted(out, key=lambda x: x["exceso"], reverse=True)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# DSC — DONDE SE DEJA CADA PAQUETE
+#
+# Por que esto y no otra cosa: en las 17 scorecards reales de OGA5 (semanas 12
+# a 31 de 2026), "Delivery Success Conditions (DSC) DPMO" sale como area de
+# foco en 14, y es la numero 1 en 12 de ellas. Es LA metrica que le cuesta el
+# tier a este DSP, muy por encima del WHC (5 semanas) o del DCR (1).
+#
+# De donde salen los datos: del propio `timeline` de cortex_packages, campo
+# `context` del ultimo evento DELIVERED. NO hace falta cruzar con
+# cortex_events. Medido en produccion sobre 48 136 entregas de 7 dias:
+# 602 ms el desglose por conductor y 297 ms la distribucion, contra 6 974 ms
+# del mismo calculo con $lookup (y sin indice, directamente expiraba).
+#
+# LO QUE ESTO NO ES: no es el DPMO de Amazon. Amazon no publica que
+# ubicaciones penaliza ni con que peso, y no me lo invento. Lo que se mide es
+# un HECHO comprobable — donde deja los paquetes cada conductor — y el exceso
+# de cada uno sobre lo que haria la media de la flota con SUS entregas.
+_DSC_EN_MANO = ("DELIVERED_TO_HOUSEHOLD_MEMBER", "DELIVERED_TO_CUSTOMER",
+                "DELIVERED_TO_RECEPTIONIST", "DELIVERED_TO_MAIL_ROOM_CLERK")
+_DSC_SEGURO = ("DELIVERED_TO_STORE", "DELIVERED_TO_LOCKER",
+               "DELIVERED_TO_EVERYWHERE_LOCKER")
+# Dejado sin nadie delante. Medido en produccion: 8,31 % de la flota, pero de
+# 1,3 % a 21,8 % segun el conductor, con muestras de cientos de entregas.
+_DSC_RIESGO = ("DELIVERED_TO_GARDEN", "DELIVERED_TO_NEIGHBOR", "DELIVERED_TO_SHED",
+               "DELIVERED_TO_GARAGE", "DELIVERED_TO_REAR_DOOR",
+               "DELIVERED_TO_MAIL_SLOT", "DELIVERED_TO_SAFE_LOCATION")
+
+_DSC_ETIQUETA = {
+    "DELIVERED_TO_HOUSEHOLD_MEMBER": "En mano", "DELIVERED_TO_CUSTOMER": "Al cliente",
+    "DELIVERED_TO_RECEPTIONIST": "Recepción", "DELIVERED_TO_MAIL_ROOM_CLERK": "Conserjería",
+    "DELIVERED_TO_STORE": "Punto de recogida", "DELIVERED_TO_LOCKER": "Locker",
+    "DELIVERED_TO_EVERYWHERE_LOCKER": "Locker externo", "DELIVERED_TO_DOORSTEP": "En la puerta",
+    "DELIVERED_TO_GARDEN": "Jardín", "DELIVERED_TO_NEIGHBOR": "Vecino",
+    "DELIVERED_TO_SHED": "Cobertizo", "DELIVERED_TO_GARAGE": "Garaje",
+    "DELIVERED_TO_REAR_DOOR": "Puerta trasera", "DELIVERED_TO_MAIL_SLOT": "Buzón",
+    "DELIVERED_TO_SAFE_LOCATION": "Lugar seguro", "NONE": "Sin registrar",
+}
+
+# Minimo de entregas para aparecer en el ranking. Con menos, un porcentaje no
+# significa nada y senalar a alguien seria un falso positivo.
+_DSC_MINIMO = 80
+_DSC_MUESTRA_FIABLE = 250
+
+
+def _dsc_base(desde: str) -> list:
+    """Etapas comunes: saca de cada paquete entregado DONDE se dejo."""
+    return [
+        {"$match": {"service_day": {"$gte": desde}, "state": "DELIVERED",
+                    "driver_id": {"$nin": [None, ""]}}},
+        # El ultimo DELIVERED del timeline: un paquete puede tener varios
+        # eventos y el que cuenta es el que cerro la entrega.
+        {"$addFields": {"_e": {"$last": {"$filter": {
+            "input": {"$ifNull": ["$timeline", []]}, "as": "t",
+            "cond": {"$eq": ["$$t.state", "DELIVERED"]}}}}}},
+        {"$addFields": {"ctx": {"$ifNull": ["$_e.context", "NONE"]}, "rw": "$_e.raw"}},
+    ]
+
+
+@api_router.get("/cortex/dsc")
+async def cortex_dsc(dias: int = 7, _=Depends(require_admin)):
+    """Dónde deja los paquetes cada conductor y quién se sale de la media."""
+    dias = max(1, min(int(dias or 7), 30))
+    desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
+    base = _dsc_base(desde)
+
+    # Motor es async: aggregate() devuelve un cursor que hay que recorrer con
+    # await/to_list. Un list() a secas revienta con
+    # "AsyncIOMotorLatentCommandCursor object is not iterable".
+    # El length va holgado y explicito: son ~20 contextos y ~120 conductores,
+    # pero un to_list sin tope corta EN SILENCIO (ya paso con los backups).
+    reparto = await db.cortex_packages.aggregate(
+        base + [{"$group": {"_id": "$ctx", "n": {"$sum": 1}}}, {"$sort": {"n": -1}}],
+        maxTimeMS=25000).to_list(length=200)
+    total = sum(r["n"] for r in reparto)
+    if not total:
+        return {"dias": dias, "desde": desde, "total": 0, "reparto": [],
+                "conductores": [], "flota": None}
+
+    riesgo_tot = sum(r["n"] for r in reparto if r["_id"] in _DSC_RIESGO)
+    tasa_flota = riesgo_tot / total
+
+    crudo = await db.cortex_packages.aggregate(base + [
+        {"$group": {"_id": "$driver_id", "n": {"$sum": 1},
+                    "riesgo": {"$sum": {"$cond": [{"$in": ["$ctx", list(_DSC_RIESGO)]}, 1, 0]}},
+                    "mano": {"$sum": {"$cond": [{"$in": ["$ctx", list(_DSC_EN_MANO)]}, 1, 0]}},
+                    # Marcado como entregado pero con el evento crudo diciendo
+                    # lo contrario. Es una contradiccion del propio dato, no una
+                    # interpretacion mia: por eso se puede afirmar.
+                    "contradicciones": {"$sum": {"$cond": [{"$eq": ["$rw", "NOT_DELIVERED"]}, 1, 0]}}}},
+    ], maxTimeMS=25000).to_list(length=2000)
+
+    nombres = await _cx_nombres({r["_id"] for r in crudo if r.get("_id")})
+    conductores = []
+    for r in crudo:
+        n = r["n"]
+        if n < _DSC_MINIMO:
+            continue
+        esperado = n * tasa_flota
+        exceso = r["riesgo"] - esperado
+        # _cx_nombres devuelve un DICT por conductor (nombre/ficha_id/activo/
+        # origen), no una cadena. Usarlo tal cual metia el objeto entero en el
+        # campo `nombre` y la pantalla habria pintado [object Object].
+        info = nombres.get(r["_id"]) or {}
+        conductores.append({
+            "driver_id": r["_id"],
+            "nombre": info.get("nombre") or "Sin emparejar",
+            # Para enlazar con la ficha real: sin esto la tabla es un callejon
+            # sin salida y no sirve para actuar, que es de lo que se trata.
+            "ficha_id": info.get("ficha_id"),
+            "activo": info.get("activo", True),
+            "entregas": n,
+            "riesgo": r["riesgo"],
+            "en_mano": r["mano"],
+            "pct_riesgo": round(r["riesgo"] / n * 100, 1),
+            "pct_mano": round(r["mano"] / n * 100, 1),
+            "esperado": round(esperado, 1),
+            # Solo el exceso es imputable: un conductor con 700 entregas y un
+            # 9 % no sobra nada si la flota va al 8,3 %; otro con 200 y un 20 %
+            # sobra 23 paquetes. Ordenar por tasa bruta castigaria al de poco
+            # volumen, que es justo el falso positivo que hay que evitar.
+            "exceso": round(exceso, 1),
+            "contradicciones": r["contradicciones"],
+            "muestra_corta": n < _DSC_MUESTRA_FIABLE,
+        })
+    conductores.sort(key=lambda c: c["exceso"], reverse=True)
+
+    return {
+        "dias": dias, "desde": desde, "total": total,
+        "flota": {
+            "riesgo": riesgo_tot,
+            "pct_riesgo": round(tasa_flota * 100, 2),
+            "pct_mano": round(sum(r["n"] for r in reparto if r["_id"] in _DSC_EN_MANO) / total * 100, 1),
+            "sin_registrar": sum(r["n"] for r in reparto if r["_id"] == "NONE"),
+            "contradicciones": sum(c["contradicciones"] for c in conductores),
+            # Cuantas entregas habria que mover para que la flota baje 1 punto.
+            "por_punto": max(1, round(total / 100)),
+        },
+        "reparto": [{
+            "ctx": r["_id"],
+            "etiqueta": _DSC_ETIQUETA.get(r["_id"], r["_id"].replace("DELIVERED_TO_", "").title()),
+            "n": r["n"], "pct": round(r["n"] / total * 100, 2),
+            "grupo": ("riesgo" if r["_id"] in _DSC_RIESGO else
+                      "mano" if r["_id"] in _DSC_EN_MANO else
+                      "seguro" if r["_id"] in _DSC_SEGURO else "otro"),
+        } for r in reparto if r["n"]],
+        "conductores": conductores[:40],
+        "minimo_entregas": _DSC_MINIMO,
+    }
+
+
 def _parecido(a: str, b: str) -> float:
     """Parecido entre dos nombres, 0..1, por palabras compartidas.
 
