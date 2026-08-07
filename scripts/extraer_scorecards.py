@@ -18,7 +18,9 @@ os.chdir(r'C:\Users\Usuario\Downloads')
 # Etiquetas exactas tal y como salen en el PDF -> nombre corto
 ETIQ = [
     ("Safe Driving Metric (FICO)", "fico"),
-    ("Speeding Event Rate", "speeding"),
+    # La etiqueta COMPLETA incluye "(Per 100 Trips)". Con la corta, el limite
+    # derecho caia sobre "(Per" y el valor quedaba fuera del rango buscado.
+    ("Speeding Event Rate (Per 100 Trips)", "speeding"),
     ("Mentor Adoption Rate", "mentor"),
     ("Vehicle Audit (VSA) Compliance", "vsa"),
     ("Breach of Contract (BOC)", "boc"),
@@ -55,12 +57,20 @@ def leer(fichero):
     with pdfplumber.open(fichero) as pdf:
         p = pdf.pages[1]
         palabras = p.extract_words(use_text_flow=False)
-    lineas = {}
-    for w in palabras:
-        lineas.setdefault(round(w["top"] / 3.0), []).append(w)
+    # Agrupacion por PROXIMIDAD real, no por redondeo. Con round(top/3) los
+    # valores de FICO y VSA (top=208,5) caian en un grupo distinto que sus
+    # etiquetas (top=209,0) y se perdian: 0 de 17 semanas las traian. Medio
+    # punto de altura tumbaba tres metricas.
+    grupos, actual, ultimo = [], [], None
+    for w in sorted(palabras, key=lambda x: x["top"]):
+        if ultimo is not None and w["top"] - ultimo > 4.0:
+            grupos.append(actual); actual = []
+        actual.append(w); ultimo = w["top"]
+    if actual:
+        grupos.append(actual)
 
-    for clave in sorted(lineas):
-        ws = sorted(lineas[clave], key=lambda x: x["x0"])
+    for grupo in grupos:
+        ws = sorted(grupo, key=lambda x: x["x0"])
         texto = " ".join(w["text"] for w in ws)
         for etiqueta, corto in ETIQ:
             if etiqueta not in texto:
@@ -84,22 +94,31 @@ def leer(fichero):
 
 filas = []
 vistos = set()
-for f in sorted(glob.glob("ES-TDSL-OGA5-Week*-DSP-Scorecard*.pdf"),
+# Acepta CUALQUIER scorecard, no solo OGA5: el nombre trae pais, DSP y centro.
+# Preparado para procesar cientos de PDFs de varios centros a la vez.
+for f in sorted(glob.glob("*Week*-DSP-Scorecard*.pdf"),
                 key=lambda x: int(re.search(r"Week(\d+)", x).group(1))):
     wk = int(re.search(r"Week(\d+)", f).group(1))
-    if wk in vistos:
+    # El centro va en el nombre del fichero (ES-TDSL-OGA5-Week31-...). Sin esto,
+    # mezclar dos centros haria que uno pisara al otro por numero de semana.
+    partes = os.path.basename(f).split("-")
+    centro = partes[2] if len(partes) > 2 else "?"
+    clave = (centro, wk)
+    if clave in vistos:
         continue
-    vistos.add(wk)
+    vistos.add(clave)
     d = leer(f)
     with pdfplumber.open(f) as pdf:
         t2 = pdf.pages[1].extract_text() or ""
     m = re.search(r"Overall Score:\s*([\d.]+)\s*\|\s*(\w+)", t2)
     d["semana"] = wk
+    d["centro"] = centro
+    d["fichero"] = os.path.basename(f)
     d["overall"] = float(m.group(1)) if m else None
     d["overall_tier"] = m.group(2) if m else None
     filas.append(d)
 
-cols = ["semana", "overall", "overall_tier"] + [c for _, c in ETIQ]
+cols = ["centro", "semana", "overall", "overall_tier"] + [c for _, c in ETIQ]
 with io.open(SAL, "w", encoding="utf-8") as fh:
     fh.write(" | ".join("%-13s" % c for c in cols) + "\n")
     fh.write("-" * (16 * len(cols)) + "\n")
