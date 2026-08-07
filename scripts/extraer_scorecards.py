@@ -274,6 +274,33 @@ def umbrales(textos):
     return sls, fan
 
 
+def conductores(textos):
+    """Tabla por conductor de las paginas 3 y siguientes.
+
+    Transporter ID | Delivered | DCR | DSC DPMO | LoR DPMO | POD | CC | CE | CDF
+    El total de 'Delivered' es el denominador que convierte los DPMO de la
+    scorecard en numero de paquetes, que es la unidad en la que se puede
+    comprobar algo de verdad.
+    """
+    out = []
+    for t in textos[2:]:
+        for linea in (t or "").split("\n"):
+            c = linea.split()
+            if len(c) < 8 or not re.match(r"^A[A-Z0-9]{9,13}$", c[0]):
+                continue
+
+            def v(x):
+                x = (x or "").strip()
+                return None if x in ("-", "", "None") else float(x.rstrip("%"))
+            try:
+                out.append({"cond": c[0], "entregados": int(c[1]), "dcr": v(c[2]),
+                            "dsc": v(c[3]), "lor": v(c[4]), "pod": v(c[5]),
+                            "cc": v(c[6]), "ce": v(c[7])})
+            except (ValueError, IndexError):
+                continue
+    return out
+
+
 def focus_areas(texto_p2):
     m = re.search(r"Recommended Focus Areas(.*?)(?:Current Week Tips|Page 2)",
                   texto_p2, re.S)
@@ -341,6 +368,15 @@ def main():
             "sls": sls, "fantastic_doc": fan,
             "focus_areas": focus_areas(t2),
         }
+        cds = conductores(textos)
+        fila["conductores"] = cds
+        fila["n_conductores"] = len(cds)
+        # Solo cuentan los que tienen entregados y DCR: sin DCR no se puede
+        # deducir cuantos paquetes se despacharon.
+        utiles = [x for x in cds if x["entregados"] and x["dcr"]]
+        fila["entregados"] = sum(x["entregados"] for x in utiles) or None
+        fila["despachados"] = (round(sum(x["entregados"] / (x["dcr"] / 100.0)
+                                         for x in utiles), 1) if utiles else None)
         for _, corto in ETIQ:
             val, tier = normaliza(crudo.get(corto))
             fila[corto] = val

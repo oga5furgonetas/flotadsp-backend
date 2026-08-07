@@ -282,21 +282,29 @@ fuera de muestra — útil para avisar, insuficiente para afirmar un número.
 
 ---
 
-## 6. HALLAZGO SIN CERRAR: las páginas 3-4
+## 6. LAS PÁGINAS 3-4 Y LOS REPORTES DIARIOS
 
 Cada scorecard trae una tabla **por conductor** (Transporter ID, paquetes
-entregados, DCR, DSC DPMO, LoR DPMO, POD, CC, CE, CDF DPMO) que no se había
-usado. Agregándola sobre las 17 semanas de OGA5:
+entregados, DCR, DSC DPMO, LoR DPMO, POD, CC, CE, CDF DPMO). Agregada en
+**paquetes enteros**, no en DPMO —que es donde se ve algo— sobre las 85:
 
-| Métrica del DSP | Agregación probada | Desviación media | Peor |
-|---|---|---|---|
-| DCR | Σentregados / Σdespachados | 0,196 pp | 0,66 |
-| DSC DPMO | media ponderada por entregados | 39,1 DPMO | 183,7 |
-| LoR DPMO | media ponderada por despachados | 9,6 DPMO | 39,0 |
+| Métrica | Agregación | Resultado |
+|---|---|---|
+| **LoR** | media ponderada por despachados | **exacta en 66/85**, ±1 paquete en 15 más |
+| DSC | media ponderada por entregados | al DSP siempre le **sobran** defectos: mediana +1, máx +11 |
+| DCR | Σentregados / Σdespachados | el denominador por conductor es **+0,25 %** mayor |
 
-Se acerca pero **no cuadra**, y no es un fallo de parseo (se comprobó: 0 filas
-descartadas). O la población de conductores de la tabla no es la misma que la
-del cálculo del DSP, o el denominador es otro. **Sin resolver.**
+El sesgo del DCR encaja con que los paquetes cancelados antes de salir a reparto
+no entran en el denominador. Los defectos DSC de más y el paquete LoR huérfano
+son reales: **no** son conductores que falten (0 filas descartadas de 5.664) ni
+gente dada de baja (aparecen todos los que tocaron un paquete).
+
+Y hay una segunda fuente que no se estaba usando: el **Daily Report** de Cortex
+—199 ficheros descargados, 131 días únicos, 4 centros—, que trae la columna
+`DSC = Y/N` que Amazon asigna a cada concesión, el detalle de RTS por motivo y
+los fallos de POD y de contacto. Todo lo comprobado sobre él, incluido que esa
+columna **se rellena días después de publicarse la fila**, está en
+**[REPORTES_DIARIOS.md](REPORTES_DIARIOS.md)**.
 
 ---
 

@@ -1,0 +1,69 @@
+==============================================================================
+CONCILIACION DIARIOS -> SCORECARD SEMANAL
+==============================================================================
+   semana de Amazon: domingo a sabado. El bloque DNR de un reporte es
+   de 2 dias antes, asi que la semana W necesita los reportes del
+   martes de W al lunes de W+1.
+
+   scorecard   objetivo  cob. clasif | por CONCESION          por ENTREGA   
+   DGA1-W20         9.0    3/7     0/7 |     0 (   -9.0)         0 (   -9.0)
+   DGA1-W21         6.0    3/7     1/7 |     0 (   -6.0)         2 (   -4.0)
+   DGA1-W23         3.0    4/7     2/7 |     2 (   -1.0)         5 (   +2.0)
+   DGA1-W24        11.0    5/7     5/7 |     8 (   -3.0)         5 (   -6.0)
+   DGA1-W25        11.0    2/7     2/7 |     5 (   -6.0)        13 (   +2.0)
+   DIC1-W24        41.0    2/7     2/7 |    11 (  -30.0)         6 (  -35.0)
+   DIC1-W28        51.0    2/7     1/7 |     7 (  -44.0)         9 (  -42.0)
+   DIC1-W30        61.0    3/7     2/7 |    18 (  -43.0)         7 (  -54.0)
+   DIC1-W31        45.0    1/7     1/7 |    10 (  -35.0)         1 (  -44.0)
+   OGA5-W12        26.3    2/7     2/7 |     0 (  -26.3)         0 (  -26.3)
+   OGA5-W13        26.0    4/7     4/7 |     0 (  -26.0)         0 (  -26.0)
+   OGA5-W17        15.0    2/7     2/7 |     0 (  -15.0)         0 (  -15.0)
+   OGA5-W19        26.0    1/7     1/7 |     0 (  -26.0)         2 (  -24.0)
+   OGA5-W20        17.1    6/7     1/7 |     0 (  -17.1)         2 (  -15.1)
+   OGA5-W21        16.0    2/7     0/7 |     0 (  -16.0)        12 (   -4.0)
+   OGA5-W22        25.1    5/7     5/7 |    21 (   -4.1)        22 (   -3.1)
+   OGA5-W23        28.0    7/7     7/7 |    28 (   -0.0) <--    23 (   -5.0)
+   OGA5-W24        21.0    7/7     6/7 |    21 (   -0.0) <--    25 (   +4.0)
+   OGA5-W25        25.0    7/7     6/7 |    20 (   -5.0) <--    19 (   -6.0)
+   OGA5-W26        23.0    5/7     5/7 |    18 (   -5.0)        24 (   +1.0)
+   OGA5-W27        25.0    6/7     4/7 |    19 (   -6.0)        24 (   -1.0)
+   OGA5-W28        43.0    6/7     4/7 |    32 (  -11.0)        33 (  -10.0)
+   OGA5-W29        56.0    6/7     5/7 |    43 (  -13.0)        27 (  -29.0)
+   OGA5-W30        33.0    3/7     2/7 |    10 (  -23.0)         6 (  -27.0)
+   OGA5-W31        29.0    7/7     3/7 |    11 (  -18.0) <--     8 (  -21.0)
+
+   Semanas con los 7 dias descargados: 4
+      regla concesion  exactas 2/4   error medio 5.75 defectos   peor 18.0
+      regla entrega    exactas 0/4   error medio 9.00 defectos   peor 21.0
+
+      semana         dias dudosos        dif
+      OGA5-W23                  0       -0.0
+      OGA5-W24                  1       -0.0
+      OGA5-W25                  1       -5.0
+      OGA5-W31                  4      -18.0
+      -> las que fallan son justo las que traen dias sin clasificar.
+      AVISO: con 4 semanas esto NO demuestra nada todavia. Hacen
+      falta re-descargar reportes viejos para tener mas semanas limpias.
+
+==============================================================================
+MATERIAL PARA DERIVAR LA REGLA DSC = Y/N
+==============================================================================
+   filas con DSC clasificado: 552  (Y=307, N=245)
+
+   Reparto por tipo de scan:
+   Delivery Scan                             N      Y      % Y
+   DELIVERED_TO_HOUSEHOLD_MEMBER            46    166      78%
+   DELIVERED_TO_DOORSTEP                   113     74      40%
+   DELIVERED_TO_RECEPTIONIST                 5     34      87%
+   DELIVERED_TO_MAIL_SLOT                   34      4      11%
+   DELIVERED_TO_SAFE_LOCATION               16     12      43%
+   DELIVERED_TO_GARDEN                      18      1       5%
+   DELIVERED_TO_NEIGHBOR                     6     10      62%
+   DELIVERED_TO_SHED                         4      2      33%
+   DELIVERED_TO_GARAGE                       1      2      67%
+   DELIVERED_TO_REAR_DOOR                    0      2     100%
+   DELIVERED_TO_EVERYWHERE_LOCKER            1      0       0%
+   DELIVERED_TO_LOCKER                       1      0       0%
+
+   Un scan con 0% o 100% en toda la muestra es candidato a regla.
+   Uno con valores intermedios necesita otra columna que lo decida.
