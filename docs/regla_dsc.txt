@@ -1,0 +1,60 @@
+==============================================================================
+REGLA DSC = Y/N
+==============================================================================
+   filas etiquetadas y de dias FIABLES: 418  (Y=307, N=111)
+   filas descartadas por venir de dias sin clasificar: 134
+
+1) HAY FILAS IDENTICAS EN TODAS LAS COLUMNAS CON DSC DISTINTO?
+   Si las hay, NINGUNA regla sobre estas columnas puede ser exacta:
+   la decision depende de algo que no esta en la tabla.
+   combinaciones distintas: 76
+   combinaciones CONTRADICTORIAS: 17  ->  220 filas (53% de la muestra)
+      73 filas identicas: 69 Y / 4 N   [scan=DELIVERED_TO_HOUSEHOLD_MEMBER  nsd=Next]
+      28 filas identicas: 15 Y / 13 N   [scan=DELIVERED_TO_DOORSTEP  nsd=Next]
+      15 filas identicas: 7 Y / 8 N   [scan=DELIVERED_TO_DOORSTEP  cc=Y  nsd=Next]
+      15 filas identicas: 9 Y / 6 N   [scan=DELIVERED_TO_DOORSTEP  buzon=Y  nsd=Next]
+      14 filas identicas: 1 Y / 13 N   [scan=DELIVERED_TO_MAIL_SLOT  nsd=Next]
+   TECHO de cualquier regla sobre estas columnas: 85.6%
+   Regla trivial (contestar siempre lo mismo):      73.4%
+   -> las columnas solo aportan 12.2 puntos sobre no mirar nada.
+
+   Columnas que cambian el resultado manteniendo todo lo demas igual:
+      scan         15 de 23 pares comparables
+      m25          13 de 33 pares comparables
+      phr          13 de 36 pares comparables
+      simul        18 de 35 pares comparables
+      cc           15 de 33 pares comparables
+      buzon        13 de 38 pares comparables
+      alto_valor   17 de 42 pares comparables
+      nsd          17 de 42 pares comparables
+
+2) VALORES QUE SIEMPRE DAN EL MISMO RESULTADO (candidatos a regla)
+   columna      valor                               n      Y veredicto
+   scan         DELIVERED_TO_RECEPTIONIST          34     34 SIEMPRE Y
+   scan         DELIVERED_TO_NEIGHBOR              10     10 SIEMPRE Y
+
+3) ARBOL DE DECISION (minimo 12 filas por hoja)
+   cada hoja indica cuantas filas cubre y cuantas contradice
+      scan=DELIVERED_TO_HOUSEHOLD_MEM m25=N cc=N => Y   (82 filas, sin corte util)
+      scan=DELIVERED_TO_HOUSEHOLD_MEM m25=N cc=Y => Y   (22 filas, 0 contradicen, 100% puro)
+      scan=DELIVERED_TO_HOUSEHOLD_MEM m25=Y => Y   (66 filas, 0 contradicen, 100% puro)
+      scan=DELIVERED_TO_DOORSTEP cc=N simul=N phr=N => Y   (67 filas, 30 contradicen, 55% puro)
+      scan=DELIVERED_TO_DOORSTEP cc=N simul=N phr=Y => N   (22 filas, 7 contradicen, 68% puro)
+      scan=DELIVERED_TO_DOORSTEP cc=N simul=Y => N   (4 filas, 0 contradicen, 100% puro)
+      scan=DELIVERED_TO_DOORSTEP cc=Y simul=N buzon=N => Y   (30 filas, 14 contradicen, 53% puro)
+      scan=DELIVERED_TO_DOORSTEP cc=Y simul=N buzon=Y => Y   (9 filas, 1 contradicen, 89% puro)
+      scan=DELIVERED_TO_DOORSTEP cc=Y simul=Y => Y   (6 filas, 0 contradicen, 100% puro)
+      scan=DELIVERED_TO_RECEPTIONIST => Y   (34 filas, 0 contradicen, 100% puro)
+      scan=DELIVERED_TO_MAIL_SLOT m25=N => N   (16 filas, 1 contradicen, 94% puro)
+      scan=DELIVERED_TO_MAIL_SLOT m25=Y => N   (11 filas, 3 contradicen, 73% puro)
+      scan=DELIVERED_TO_SAFE_LOCATION => Y   (22 filas, 10 contradicen, 55% puro)
+      scan=DELIVERED_TO_NEIGHBOR => Y   (10 filas, 0 contradicen, 100% puro)
+      scan=DELIVERED_TO_GARDEN => N   (7 filas, 1 contradicen, 86% puro)
+      scan=DELIVERED_TO_SHED => N   (5 filas, 2 contradicen, 60% puro)
+      scan=DELIVERED_TO_REAR_DOOR => Y   (2 filas, 0 contradicen, 100% puro)
+      scan=DELIVERED_TO_GARAGE => Y   (2 filas, 0 contradicen, 100% puro)
+      scan=DELIVERED_TO_LOCKER => N   (1 filas, 0 contradicen, 100% puro)
+
+   contradicciones totales del arbol: 73 de 418 filas (17.5%)
+   Un arbol con contradicciones NO es la regla de Amazon: es una
+   aproximacion. La regla exacta daria 0.
