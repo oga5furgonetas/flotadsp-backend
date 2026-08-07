@@ -19434,6 +19434,27 @@ _DSC_ETIQUETA = {
 
 # Minimo de entregas para aparecer en el ranking. Con menos, un porcentaje no
 # significa nada y senalar a alguien seria un falso positivo.
+# Causas por las que un paquete vuelve a la estacion. La accion es lo que
+# cambia: sin ella el dato es una queja, no una herramienta.
+_DSC_CAUSA = {
+    "CUSTOMER_UNAVAILABLE": "Cliente ausente", "BUSINESS_CLOSED": "Comercio cerrado",
+    "ADDRESS_NOT_FOUND": "Dirección no encontrada", "NONE": "Sin causa registrada",
+    "RESCHEDULED_BY_CUSTOMER": "Reprogramado por el cliente",
+    "NO_ITEMS_DELIVERED": "Nada entregado en la parada",
+    "INACCESSIBLE_DELIVERY_LOCATION": "Acceso imposible",
+    "OBJECT_MISSING": "Paquete no encontrado", "TR_CANCELLED": "Cancelado",
+    "LOCKER_ISSUE": "Problema con el locker", "DAMAGED": "Dañado",
+    "BAD_WEATHER": "Meteorología", "OTP_NOT_AVAILABLE": "Sin código OTP",
+    "SELF_SERVICE_RETURN": "Devolución del cliente",
+}
+_DSC_ACCION = {
+    "BUSINESS_CLOSED": "Orden de ruta: mover esas paradas fuera del cierre comercial",
+    "ADDRESS_NOT_FOUND": "Libreta de portales: apuntar cómo se llega",
+    "INACCESSIBLE_DELIVERY_LOCATION": "Libreta de portales: anotar el acceso",
+    "OBJECT_MISSING": "Carga: el paquete no iba en la furgoneta",
+    "NONE": "Formación: el conductor no marcó el motivo",
+}
+
 _DSC_MINIMO = 80
 _DSC_MUESTRA_FIABLE = 250
 
@@ -19520,8 +19541,49 @@ async def cortex_dsc(dias: int = 7, _=Depends(require_admin)):
         })
     conductores.sort(key=lambda c: c["exceso"], reverse=True)
 
+    # ── Los que vuelven a la estacion, POR CAUSA ────────────────────────
+    # El motor de calidad ya los cuenta, pero solo como "fallo". Sin la causa
+    # no se puede actuar: no es lo mismo un cliente ausente (nada que hacer)
+    # que un comercio cerrado (orden de ruta) o una direccion no encontrada
+    # (libreta de portales). Medido en 14 dias: 767 retornos, y el 44 % de los
+    # BUSINESS_CLOSED cae entre las 14 y las 16 h — el cierre comercial
+    # espanol. Eso se arregla planificando, no rinendo a nadie.
+    ret_base = [
+        {"$match": {"service_day": {"$gte": desde},
+                    "state": {"$in": ["BACK_TO_ORIGIN", "ATTEMPTED", "CUSTOMER_UNAVAILABLE",
+                                      "ADDRESS_NOT_FOUND", "REJECTED"]}}},
+        {"$addFields": {"_r": {"$last": {"$filter": {
+            "input": {"$ifNull": ["$timeline", []]}, "as": "t",
+            "cond": {"$in": ["$$t.state", ["BACK_TO_ORIGIN", "ATTEMPTED"]]}}}}}},
+        {"$addFields": {"rctx": {"$ifNull": ["$_r.context", "NONE"]}, "rat": "$_r.at"}},
+    ]
+    causas = await db.cortex_packages.aggregate(ret_base + [
+        {"$group": {"_id": "$rctx", "n": {"$sum": 1}}}, {"$sort": {"n": -1}},
+    ], maxTimeMS=25000).to_list(length=60)
+    # Reparto horario del comercio cerrado: la unica causa con patron de hora.
+    horas = await db.cortex_packages.aggregate(ret_base + [
+        {"$match": {"rctx": "BUSINESS_CLOSED", "rat": {"$type": "string"}}},
+        {"$group": {"_id": {"$substr": ["$rat", 11, 2]}, "n": {"$sum": 1}}},
+        {"$sort": {"_id": 1}},
+    ], maxTimeMS=25000).to_list(length=30)
+    ret_total = sum(c["n"] for c in causas)
+    cerrado = next((c["n"] for c in causas if c["_id"] == "BUSINESS_CLOSED"), 0)
+    # Cuantos caen en la franja de cierre comercial (14:00-16:59).
+    en_siesta = sum(h["n"] for h in horas if h["_id"] in ("14", "15", "16"))
+
     return {
         "dias": dias, "desde": desde, "total": total,
+        "retornos": {
+            "total": ret_total,
+            "causas": [{"ctx": c["_id"],
+                        "etiqueta": _DSC_CAUSA.get(c["_id"], c["_id"].replace("_", " ").title()),
+                        "n": c["n"], "pct": round(c["n"] / max(1, ret_total) * 100, 1),
+                        "accion": _DSC_ACCION.get(c["_id"], "")} for c in causas if c["n"]],
+            "cerrado": cerrado,
+            "cerrado_horas": [{"h": h["_id"], "n": h["n"]} for h in horas],
+            "cerrado_en_siesta": en_siesta,
+            "cerrado_pct_siesta": round(en_siesta / cerrado * 100) if cerrado else 0,
+        },
         "flota": {
             "riesgo": riesgo_tot,
             "pct_riesgo": round(tasa_flota * 100, 2),

@@ -173,6 +173,66 @@ export default function DSC() {
             )}
           </div>
 
+          {/* Los que vuelven a la estación, por causa. El motor de calidad ya
+              los cuenta como "fallo"; sin la causa no se puede hacer nada con
+              ellos. Cada fila trae la acción concreta cuando la hay. */}
+          {d.retornos?.total > 0 && (
+            <div className="card p-5">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">
+                  {t('dsc.ret')}
+                </div>
+                <div className="text-sm text-dark-400">
+                  {t('dsc.ret.total').replace('{n}', d.retornos.total)}
+                </div>
+              </div>
+              <div className="mt-3 space-y-1.5">
+                {d.retornos.causas.slice(0, 8).map((c) => (
+                  <div key={c.ctx} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                    <span className="w-11 shrink-0 text-right tabular-nums font-semibold text-dark-200">
+                      {c.pct} %
+                    </span>
+                    <span className="w-44 shrink-0 truncate text-dark-300">{c.etiqueta}</span>
+                    <span className="tabular-nums text-dark-500">{c.n}</span>
+                    {c.accion && (
+                      <span className="rounded bg-sky-500/10 px-2 py-0.5 text-[11px] text-sky-300">
+                        {c.accion}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {/* El patrón horario del comercio cerrado: es lo que convierte
+                  "199 fallos" en "mueve esas paradas de las 15h". */}
+              {d.retornos.cerrado > 0 && (
+                <div className="mt-5 border-t border-dark-800 pt-4">
+                  <div className="text-sm text-dark-300">
+                    <span className="font-semibold text-amber-300">
+                      {d.retornos.cerrado_pct_siesta} %
+                    </span>{' '}
+                    {t('dsc.ret.siesta').replace('{n}', d.retornos.cerrado)}
+                  </div>
+                  <div className="mt-3 flex items-end gap-1">
+                    {d.retornos.cerrado_horas.map((h) => {
+                      const max = Math.max(...d.retornos.cerrado_horas.map((x) => x.n)) || 1
+                      const cierre = ['14', '15', '16'].includes(h.h)
+                      return (
+                        <div key={h.h} className="flex flex-1 flex-col items-center gap-1">
+                          <div className={`w-full rounded-t ${cierre ? 'bg-amber-500' : 'bg-dark-600'}`}
+                            style={{ height: `${Math.max(4, (h.n / max) * 56)}px` }}
+                            title={`${h.h}h: ${h.n}`} />
+                          <span className={`text-[10px] tabular-nums ${
+                            cierre ? 'font-semibold text-amber-300' : 'text-dark-500'}`}>{h.h}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <p className="px-1 text-xs leading-relaxed text-dark-500">
             {t('dsc.nota')}
           </p>

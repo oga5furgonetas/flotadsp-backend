@@ -96,3 +96,105 @@ escalaciones.
 3. **`cortex_events` no tenía índice por `tba`** — 186 656 documentos y solo
    `_id` y `expira_en`. Irrelevante para este módulo (que no lo lee), pero
    documentado por si algún día hace falta consultarlo.
+
+---
+
+# Los que vuelven a la estación, por causa
+
+El motor de calidad ya los contaba como "fallo". Sin la causa no se puede
+actuar: no es lo mismo un cliente ausente (nada que hacer) que un comercio
+cerrado (orden de ruta). Medido en 14 días, **773 retornos**:
+
+| Causa | n | % | Acción |
+|---|---|---|---|
+| Cliente ausente | 213 | 27,6 % | — |
+| **Comercio cerrado** | **199** | **25,7 %** | Orden de ruta |
+| **Sin causa registrada** | **144** | **18,6 %** | Formación: no marcan el motivo |
+| Dirección no encontrada | 80 | 10,3 % | Libreta de portales |
+| Reprogramado por el cliente | 39 | 5,0 % | — |
+| Nada entregado en la parada | 31 | 4,0 % | — |
+| Acceso imposible | 22 | 2,8 % | Libreta de portales |
+| Paquete no encontrado | 11 | 1,4 % | Carga |
+
+## El hallazgo del horario
+
+Los fallos por comercio cerrado repartidos por hora del intento:
+
+```
+09h  11  #####
+10h  26  #############
+11h  24  ############
+12h  25  ############
+13h  17  ########
+14h  26  #############   ← cierre
+15h  32  ################ ← cierre
+16h  29  ##############   ← cierre
+17h   8  ####
+18h   1
+```
+
+**El 44 % cae entre las 14 y las 16 h**, el cierre comercial del mediodía en
+España. Eso no se arregla riñendo a nadie: se arregla moviendo esas paradas de
+franja. Es 1 de cada 4 retornos.
+
+El segundo accionable es que **el 18,6 % vuelve sin causa marcada**. Eso sí es
+formación pura: el conductor no rellena el motivo y se pierde la información.
+
+Rendimiento verificado: `cortex_dsc(dias=14)` end-to-end en **1 595 ms**, con
+cuadre exacto (773 causas = 773 retornos).
+
+---
+
+# Lo que NO se puede hacer, y por qué
+
+Investigado con datos reales de producción. No se monta nada de esto porque
+sería hacer por hacer.
+
+## Lost on Road (LoR) — no hay volumen
+
+Aparece en 7 de las 17 semanas, así que importa. Pero los eventos de pérdida en
+todo el histórico de Cortex son:
+
+| Evento | n |
+|---|---|
+| `UNCOLLECTED` / `OBJECT_MISSING` | 256 |
+| `BACK_TO_ORIGIN` / `OBJECT_MISSING` | 22 |
+| `MISSING` / `OBJECT_MISSING` | 20 |
+| `DAMAGED` | 18 |
+
+Contra **116 102 entregados**. Una pantalla construida sobre 20 casos no
+permite gestionar nada, y el **predictor de rescates ya cubre los `MISSING`**.
+Duplicarlo no aporta.
+
+## Contact Compliance — no hay dato
+
+Cortex **no captura ni una llamada ni un SMS al cliente**. De las 48 colecciones
+de la base, la única con pinta de contacto es `chat_messages`, que es el chat
+interno de FlotaDSP entre gestor y conductor, no contacto con el cliente final.
+
+Sin dato de origen no hay métrica posible. No se inventa.
+
+## Las que dependen de sistemas ajenos
+
+DNR DPMO, Customer Escalation DPMO, Customer Delivery Feedback y POD los mide
+Amazon después, con reclamaciones y auditorías que no llegan al portal en
+tiempo real. FICO, Speeding Event Rate y Mentor Adoption vienen de
+Netradyne/Mentor, que son otro sistema. Ninguna es derivable desde Cortex.
+
+## Resumen del mapa
+
+| Métrica | Semanas en foco | Estado en FlotaDSP |
+|---|---|---|
+| DSC DPMO | 14 | ✅ **módulo nuevo** |
+| Lost on Road | 7 | 🟡 cubierto por el predictor de rescates |
+| WHC | 5 | ✅ validado 17/17 |
+| Customer escalation | 5 | ❌ dato de Amazon |
+| Contact Compliance | 3 | ❌ sin dato en Cortex |
+| VSA Compliance | 2 | 🟡 las inspecciones ya lo alimentan |
+| Mentor Adoption | 1 | ❌ otro sistema |
+| Photo-On-Delivery | 1 | ❌ lo audita Amazon |
+| DCR | 1 | ✅ en vivo desde Cortex |
+
+**De las 9 métricas que penalizan a este DSP, 3 están resueltas en vivo, 2
+parcialmente cubiertas y 4 son imposibles sin datos que Amazon no cede.** Las 3
+resueltas cubren las semanas de foco número 1, 3 y 9 del ranking.
