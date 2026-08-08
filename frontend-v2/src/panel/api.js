@@ -132,6 +132,9 @@ export const getScorecardDailyTrend = (center, week) => api.get('/scorecard/dail
 export const setScorecardThreshold = (body) => api.post('/scorecard/thresholds', body) // {center?, key, fantastic, great, fair}
 export const calibrateScorecardThresholds = (center) => api.post('/scorecard/calibrate-thresholds', { center })
 export const resetScorecardThresholds = (center) => api.delete('/scorecard/thresholds', { params: { center } })
+// De dónde salen los umbrales de esta nave: si el DSP no ha subido ninguna
+// scorecard suya, los tiers son orientativos y hay que decírselo.
+export const getScorecardUmbrales = (center, week) => api.get('/scorecard/umbrales', { params: { center, ...(week ? { week } : {}) } })
 export const toggleScorecardEstimacion = (body) => api.post('/scorecard/estimacion', body) // {center, week, on}
 export const resetScorecardWeek = (body) => api.post('/scorecard/reset', body) // {center, week?}
 export const deleteScorecardSource = (center, kind, ref, week) => api.delete('/scorecard/source', { params: { center, kind, ref, ...(week ? { week } : {}) } })

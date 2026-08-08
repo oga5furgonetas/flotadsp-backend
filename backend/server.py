@@ -17111,7 +17111,8 @@ async def scorecard_full(center: str, week: Optional[str] = None, user: dict = D
 
     to_improve = sorted(
         [{"key": m["key"], "label": m["label"], "group": m["group"], "tier": m["tier"],
-          "value": m["value"], "next": m["next"]}
+          "value": m["value"], "next": m["next"],
+          "cierto": m.get("cierto"), "motivo": m.get("motivo")}
          for m in out if m["tier"] and m["tier"] not in ("Fantastic", "Fantastic Plus") and m["next"]],
         key=lambda m: abs(m["next"]["gap"]) if m["next"] else 9e9)
 

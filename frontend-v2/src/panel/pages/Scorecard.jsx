@@ -9,7 +9,7 @@ import {
 import {
   getScorecardFull, setScorecardValue,
   getScorecardPredict, getScorecardDailyTrend,
-  getScorecardSources, uploadScorecard,
+  getScorecardSources, uploadScorecard, getScorecardUmbrales,
   setScorecardThreshold, toggleScorecardEstimacion,
   resetScorecardWeek, deleteScorecardSource,
   calibrateScorecardThresholds,
@@ -97,14 +97,67 @@ function fmtVal(v, unit) {
 }
 
 // ── TierBadge ─────────────────────────────────────────────────────────────────
-function TierBadge({ tier }) {
+// `cierto=false` NO se pinta igual que un tier confirmado: lleva borde
+// discontinuo, una virgulilla delante y el motivo a mano. Un tier estimado que
+// se vea como uno seguro es justo el falso positivo que no queremos.
+function TierBadge({ tier, cierto = true, motivo }) {
   const cfg = tierCfg(tier)
   if (!tier) return <span className="text-xs text-dark-600">Sin datos</span>
+  if (cierto) {
+    return (
+      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ${cfg.bg} ${cfg.text} ${cfg.ring}`}>
+        <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`} />
+        {tier}
+      </span>
+    )
+  }
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ${cfg.bg} ${cfg.text} ${cfg.ring}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`} />
+    <span
+      title={motivo ? `Estimado — ${motivo}` : 'Estimado'}
+      className={`inline-flex items-center gap-1 rounded-full border border-dashed px-2 py-0.5 text-xs font-semibold ${cfg.text} border-current/50 opacity-90`}
+    >
+      <span className="opacity-70">~</span>
       {tier}
+      <span className="text-[10px] font-normal opacity-70">estimado</span>
     </span>
+  )
+}
+
+// ── Aviso de umbrales ─────────────────────────────────────────────────────────
+// Cada nave tiene SUS propios baremos: entre 10 naves medidas hay 17 targets
+// distintos de DSC y 7 de DCR. Sin una scorecard de la nave, cualquier tier que
+// pintemos es orientativo, y hay que decirlo antes de que el DSP decida algo.
+function AvisoUmbrales({ info, onSubir }) {
+  if (!info || info.tiene_umbrales_propios) return null
+  return (
+    <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4">
+      <div className="flex items-start gap-3">
+        <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-400" />
+        <div className="min-w-0 flex-1">
+          <p className="font-semibold text-amber-200">
+            Los tiers que ves son orientativos
+          </p>
+          <p className="mt-1 text-sm text-amber-100/80">
+            Amazon pone un baremo distinto a cada nave. Todavía no tenemos ninguna
+            scorecard de <span className="font-semibold">{info.center}</span>, así
+            que estamos usando umbrales genéricos que <span className="font-semibold">no
+            son los tuyos</span>. Sube una scorecard reciente y los tiers pasan a ser exactos.
+          </p>
+          <p className="mt-1 text-xs text-amber-100/60">
+            Con una basta: los umbrales sólo cambian cuando Amazon cambia de temporada.
+          </p>
+          {onSubir && (
+            <button
+              onClick={onSubir}
+              className="mt-3 inline-flex items-center gap-2 rounded-lg bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-200 ring-1 ring-amber-500/40 hover:bg-amber-500/30"
+            >
+              <Upload className="h-4 w-4" />
+              Subir mi scorecard
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -210,7 +263,7 @@ function MetricRow({ m, weekSun, center, onSaved }) {
         </button>
       )}
 
-      <TierBadge tier={m.tier} />
+      <TierBadge tier={m.tier} cierto={m.cierto !== false} motivo={m.motivo} />
       {src && <span className={`hidden rounded px-1.5 py-0.5 text-[10px] sm:inline ${src.cls}`}>{t(src.labelKey)}</span>}
     </div>
   )
@@ -570,16 +623,18 @@ export default function Scorecard() {
   const [showSources, setShowSources] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
   const [resetBusy, setResetBusy] = useState(false)
+  const [umbrales, setUmbrales] = useState(null)
 
   const loadFull = useCallback(async (c, w) => {
     if (!c || c === 'Todos') return
     setLoadingFull(true)
     try {
-      const [rf, rp, rt, rs] = await Promise.allSettled([
+      const [rf, rp, rt, rs, ru] = await Promise.allSettled([
         getScorecardFull(c, w || undefined),
         getScorecardPredict(c, w || undefined),
         getScorecardDailyTrend(c, w || undefined),
         getScorecardSources(c, w || undefined),
+        getScorecardUmbrales(c),
       ])
       if (rf.status === 'fulfilled') {
         setFull(rf.value.data)
@@ -588,6 +643,7 @@ export default function Scorecard() {
       if (rp.status === 'fulfilled') setPredict(rp.value.data)
       if (rt.status === 'fulfilled') setTrend(rt.value.data)
       if (rs.status === 'fulfilled') setSources(rs.value.data?.items || [])
+      if (ru.status === 'fulfilled') setUmbrales(ru.value.data)
     } catch {}
     finally { setLoadingFull(false) }
   }, [])
@@ -703,6 +759,10 @@ export default function Scorecard() {
       {loadingFull && !full && (
         <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> {t('ui.loading')}</div>
       )}
+
+      {/* Cada nave tiene sus propios baremos: si no tenemos scorecard de ésta,
+          se dice ANTES de enseñar ningún tier. */}
+      <AvisoUmbrales info={umbrales} onSubir={() => fileRef.current?.click()} />
 
       {full && (
         <>
@@ -917,7 +977,7 @@ export default function Scorecard() {
                       <div key={i} className="flex items-center justify-between gap-2 text-xs">
                         <span className="truncate text-dark-400">{m.label}</span>
                         <div className="flex shrink-0 items-center gap-1">
-                          <TierBadge tier={m.tier} />
+                          <TierBadge tier={m.tier} cierto={m.cierto !== false} motivo={m.motivo} />
                           {m.next && <span className="text-orange-400 text-[10px]">+{m.next.gap}</span>}
                         </div>
                       </div>
