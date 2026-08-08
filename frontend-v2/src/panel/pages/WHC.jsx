@@ -101,6 +101,65 @@ export default function WHC() {
           {/* EL numero. Calculado con la misma formula que Amazon, que el
               propio scorecard define: "% of drivers complying with working hour
               limits". Validado al decimal contra 3 semanas reales de OGA5. */}
+          {/* El numero grande es EL TUYO: % de conductores que cumplen tus
+              normas (semana y jornada). El de Amazon va debajo, porque no se
+              sabe hasta que llega la scorecard con sus excepciones. */}
+          {datos.whc_propio && (
+              <div className="card p-5">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">
+                  {t('whc.propio.titulo')}
+                </div>
+                <div className="mt-1 flex flex-wrap items-baseline gap-3">
+                  <span className={`text-4xl font-bold tabular-nums ${
+                    datos.whc_propio.incumplen === 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                    {datos.whc_propio.porcentaje} %
+                  </span>
+                  {datos.whc_propio.incumplen > 0 && (
+                    <span className="rounded-lg bg-red-500/15 px-2 py-1 text-xs font-semibold text-red-300">
+                      {datos.whc_propio.incumplen} incumplen
+                    </span>
+                  )}
+                </div>
+                <p className="mt-1 text-xs text-dark-400">
+                  {t('whc.propio.formula')
+                    .replace('{ok}', datos.whc_propio.conductores - datos.whc_propio.incumplen)
+                    .replace('{n}', datos.whc_propio.conductores)
+                    .replace('{h}', Math.round(datos.whc_propio.limite_semanal_min / 60))
+                    .replace('{b}', Math.round(datos.whc_propio.limite_bloque_min / 60))}
+                </p>
+                {datos.whc_propio.incumplen > 0 && (
+                  <p className="mt-1 text-xs text-red-300/90">
+                    {t('whc.propio.desglose')
+                      .replace('{s}', datos.whc_propio.por_semanal)
+                      .replace('{b}', datos.whc_propio.por_bloque)
+                      .replace('{h}', Math.round(datos.whc_propio.limite_bloque_min / 60))}
+                  </p>
+                )}
+                {!!datos.whc_propio.quien?.length && (
+                  <ul className="mt-2.5 space-y-1">
+                    {datos.whc_propio.quien.slice(0, 12).map((q, i) => (
+                      <li key={i} className="flex items-center justify-between gap-3 text-xs">
+                        <span className="truncate text-dark-200">{q.nombre}</span>
+                        <span className="shrink-0 tabular-nums text-dark-400">
+                          {Math.floor(q.trabajado / 60)}h {String(q.trabajado % 60).padStart(2, '0')}m
+                          {q.supera_semanal && <span className="ml-2 text-red-300">semana</span>}
+                          {q.bloques_pasados > 0 && (
+                            <span className="ml-2 text-orange-300">
+                              {q.bloques_pasados} bloque{q.bloques_pasados > 1 ? 's' : ''} de +
+                              {Math.floor((q.peor_bloque || 0) / 60)}h
+                            </span>
+                          )}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="mt-3 border-t border-dark-800 pt-2 text-[11px] text-dark-500">
+                  {t('whc.propio.vsamazon')}
+                </p>
+              </div>
+            )}
+
           {datos.whc && (
             <div className="card p-5">
               <div className="flex flex-wrap items-end justify-between gap-4">

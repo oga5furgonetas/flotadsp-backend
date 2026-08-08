@@ -20015,6 +20015,11 @@ _WHC_MARGEN_AVISO = 3 * 60
 # Duracion de bloque a partir de la cual se marca RIESGO diario (nunca
 # incumplimiento). 10 h es la referencia de una ruta estandar mas dos horas.
 _WHC_BLOQUE_RIESGO = 10 * 60
+# Límite duro de jornada de la DSP: un bloque de 11 h o más se cuenta como
+# incumplimiento propio. Es TU norma, no la de Amazon — Amazon ha dejado pasar
+# bloques de 11 h 44 m sin excepción. Por eso alimenta el "WHC propio" y NO el
+# porcentaje que publicará Amazon, que se calcula con sus excepciones.
+_WHC_BLOQUE_LIMITE = 11 * 60
 
 # ── Cortes de tier del WHC ────────────────────────────────────────────────
 # Medidos sobre 17 scorecards REALES de OGA5 (semanas 12 a 31 de 2026), no
@@ -20150,7 +20155,7 @@ def _whc_parsear(texto: str) -> list:
     return [c for c in out if c["trabajado"] or c["bloques"]]
 
 
-def _whc_evaluar(conductores: list, limite_min: int) -> list:
+def _whc_evaluar(conductores: list, limite_min: int, bloque_limite: int = None) -> list:
     """Añade a cada conductor su margen semanal y el riesgo diario.
 
     OJO con la separacion: `supera_semanal` es un HECHO (el total trabajado lo
@@ -20170,23 +20175,35 @@ def _whc_evaluar(conductores: list, limite_min: int) -> list:
             if b["minutos"] is None:
                 b["minutos"] = est
 
+        blim = bloque_limite or _WHC_BLOQUE_LIMITE
         largos = [b for b in c["bloques"] if (b["minutos"] or 0) >= _WHC_BLOQUE_RIESGO]
+        pasados = [b for b in c["bloques"] if (b["minutos"] or 0) >= blim]
         margen = (limite_min - c["trabajado"]) if limite_min else None
+        supera = bool(limite_min and c["trabajado"] > limite_min)
         out.append({
             **c,
             "dias_trabajados": len(c["bloques"]),
             "margen_semanal": margen,
             # OJO con el nombre: es TU limite, no el de Amazon. Amazon no marco
             # excepcion semanal a quien hizo 56h30m.
-            "supera_semanal": bool(limite_min and c["trabajado"] > limite_min),
+            "supera_semanal": supera,
             "al_limite": bool(limite_min and 0 <= (margen or 0) <= _WHC_MARGEN_AVISO_PROPIO),
             "riesgo_diario": [{"inicio": b["inicio"], "fin": b["fin"],
                                "minutos": b["minutos"], "estimado": b["estimado"]}
                               for b in largos],
+            # Bloques que se pasan de TU limite de jornada (11 h por defecto).
+            "bloques_pasados": [{"inicio": b["inicio"], "fin": b["fin"],
+                                 "minutos": b["minutos"], "estimado": b["estimado"]}
+                                for b in pasados],
+            # Incumplimiento segun TUS normas: pasarse de la semana o de la
+            # jornada. Esto NO es la excepcion de Amazon, que se calcula sobre lo
+            # fichado y sale en su hoja de excepciones.
+            "incumple_propio": bool(supera or pasados),
             "cuadra": abs(c["trabajado"] - sum(b["minutos"] or 0 for b in c["bloques"])) <= 10,
         })
     orden = {True: 0, False: 1}
-    out.sort(key=lambda c: (orden[c["supera_semanal"]], -(c["trabajado"] or 0)))
+    out.sort(key=lambda c: (orden[c["incumple_propio"]], orden[c["supera_semanal"]],
+                            -(c["trabajado"] or 0)))
     return out
 
 
@@ -20206,10 +20223,15 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
     except (TypeError, ValueError):
         excepciones = 0
 
+    bloque_limite = _WHC_BLOQUE_LIMITE
+    if data.get("limite_bloque_horas"):
+        bloque_limite = int(_decimal(data["limite_bloque_horas"], "limite_bloque_horas",
+                                     minimo=0, maximo=24) * 60)
+
     conductores = _whc_parsear(texto)
     if not conductores:
         raise HTTPException(400, "No se ha reconocido ningún conductor en ese texto")
-    ev = _whc_evaluar(conductores, limite)
+    ev = _whc_evaluar(conductores, limite, bloque_limite)
 
     # ── WHC: el porcentaje que Amazon publica, calculado igual que ellos ──
     # El scorecard lo define textualmente: "The metric is calculated as % of
@@ -20237,16 +20259,49 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
             "porcentaje_si_una_mas": round(max(0, cumplen - 1) / con_actividad * 100, 1),
         }
 
+    # ── WHC PROPIO: el cumplimiento segun TUS normas ──────────────────────────
+    # Amazon publica su WHC con SUS excepciones, que no se saben hasta el martes.
+    # Esto es otra cosa y va aparte: el % de conductores que cumplen las normas
+    # de la DSP (no pasar del limite semanal ni de la jornada). Sirve para actuar
+    # HOY, mientras el numero de Amazon todavia no existe.
+    whc_propio = None
+    if con_actividad:
+        activos = [c for c in ev if c["trabajado"] > 0]
+        incumplen = [c for c in activos if c["incumple_propio"]]
+        por_semanal = [c for c in incumplen if c["supera_semanal"]]
+        por_bloque = [c for c in incumplen if c["bloques_pasados"]]
+        whc_propio = {
+            "conductores": len(activos),
+            "incumplen": len(incumplen),
+            "por_semanal": len(por_semanal),
+            "por_bloque": len(por_bloque),
+            "por_ambos": sum(1 for c in incumplen
+                             if c["supera_semanal"] and c["bloques_pasados"]),
+            "porcentaje": round((len(activos) - len(incumplen)) / len(activos) * 100, 1),
+            "limite_semanal_min": limite,
+            "limite_bloque_min": bloque_limite,
+            "quien": [{"nombre": c.get("nombre"), "trabajado": c["trabajado"],
+                       "supera_semanal": c["supera_semanal"],
+                       "bloques_pasados": len(c["bloques_pasados"]),
+                       "peor_bloque": max((b["minutos"] or 0)
+                                          for b in c["bloques_pasados"]) if c["bloques_pasados"] else None}
+                      for c in incumplen],
+        }
+
     return {
         "semana": (data.get("semana") or "")[:40],
         "whc": whc,
+        "whc_propio": whc_propio,
         "limite_min": limite,
+        "limite_bloque_min": bloque_limite,
         "limite_es_propio": True,
         "suelo_amazon_observado_min": _WHC_SUELO_AMAZON_OBSERVADO,
         "conductores": ev,
         "resumen": {
             "total": len(ev),
             "superan": sum(1 for c in ev if c["supera_semanal"]),
+            "bloque_pasado": sum(1 for c in ev if c["bloques_pasados"]),
+            "incumplen_propio": sum(1 for c in ev if c["incumple_propio"]),
             "al_limite": sum(1 for c in ev if c["al_limite"]),
             "con_riesgo_diario": sum(1 for c in ev if c["riesgo_diario"]),
             "no_cuadran": sum(1 for c in ev if not c["cuadra"]),
