@@ -2,10 +2,20 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "frontend",
+      "_comentario": "OJO: ~/.claude/launch.json (global) define 'flotadsp-frontend' y 'flotadsp-v2' apuntando a flotadsp_work, que es PRODUCCION. Arrancar cualquiera de esos dos desde aqui levanta un servidor sobre el repo real. Este de abajo lleva ruta ABSOLUTA al LAB y un nombre que no se puede confundir.",
+      "name": "LAB-frontend-5177",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "frontend-v2"],
-      "port": 5173
+      "runtimeArgs": [
+        "--prefix",
+        "C:/Users/Usuario/Downloads/flotadsp_lab/frontend-v2",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5177",
+        "--strictPort"
+      ],
+      "port": 5177
     }
   ]
 }

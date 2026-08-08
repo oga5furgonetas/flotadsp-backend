@@ -225,6 +225,14 @@ const PanelContactos = lazy(() => import('./panel/pages/Contactos'))
 const PanelPaquetes = lazy(() => import('./panel/pages/PackageIntel'))
 const PanelWHC = lazy(() => import('./panel/pages/WHC'))
 const PanelDSC = lazy(() => import('./panel/pages/DSC'))
+/* LAB — zona experimental. Sin entrada en el menú a propósito: se llega por
+   /panel/lab. Datos sintéticos, no llama a ninguna API. */
+const LabShell = lazy(() => import('./panel/lab/ui').then((m) => ({ default: m.LabShell })))
+const LabHub = lazy(() => import('./panel/lab/LabHub'))
+const LabSenales = lazy(() => import('./panel/lab/Senales'))
+const LabParte = lazy(() => import('./panel/lab/Parte'))
+const LabVehiculo = lazy(() => import('./panel/lab/Vehiculo'))
+const LabConfianza = lazy(() => import('./panel/lab/Confianza'))
 const Privacidad = lazy(() => import('./legal/Privacidad'))
 const Terminos = lazy(() => import('./legal/Terminos'))
 const CookiesPage = lazy(() => import('./legal/Cookies'))
@@ -318,6 +326,21 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="paquetes" element={<PanelPaquetes />} />
                 <Route path="whc" element={<PanelWHC />} />
                 <Route path="dsc" element={<PanelDSC />} />
+              </Route>
+
+              {/* ── ZONA EXPERIMENTAL ──────────────────────────────────────
+                  Va FUERA de /panel a propósito, por dos motivos:
+                  1) No pasa por el guardián de sesión, así que se puede abrir
+                     sin backend y sin credenciales. Los prototipos no llaman a
+                     ninguna API: se alimentan de fixtures sintéticos.
+                  2) Deja garantizado por construcción que esta zona no puede
+                     tocar datos reales, ni siquiera por accidente. */}
+              <Route path="/lab" element={<LabShell />}>
+                <Route index element={<LabHub />} />
+                <Route path="senales" element={<LabSenales />} />
+                <Route path="parte" element={<LabParte />} />
+                <Route path="vehiculo" element={<LabVehiculo />} />
+                <Route path="confianza" element={<LabConfianza />} />
               </Route>
 
               <Route path="*" element={<NotFound />} />
