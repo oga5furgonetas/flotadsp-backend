@@ -9,4 +9,5 @@ uploads/
 # NO versionarlo evita conflictos masivos al trabajar desde varios ordenadores.
 frontend-v2/dist/
 frontend-v2/dist-staging/
+frontend-v2/dist-lab/
 mobile.zip

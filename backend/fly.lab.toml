@@ -1,0 +1,52 @@
+# ─────────────────────────────────────────────────────────────
+# LAB — laboratorio experimental de FlotaDSP (copia aislada)
+# ─────────────────────────────────────────────────────────────
+# Propósito: experimentar en un entorno 100% separado de producción.
+#
+# Aislamiento garantizado:
+#   · App Fly DISTINTA:  flotadsp-backend-lab  (la producción es flotadsp-backend)
+#   · Base de datos DISTINTA:  lab_flotadsp / lab_flotadsp_global
+#     (la producción usa flotadsp / flotadsp_global y las dsp_<id>)
+#   · SIN Telegram, SIN webhook de pagos, SIN Gemini.
+#   · min_machines_running = 0 → se apaga sola sin uso, cuesta ~0 € y
+#     arranca sola al primer request (tarda ~2-3 s ese primer golpe).
+#   · Sin volumen: los uploads del LAB son efímeros (desaparecen al
+#     reiniciar la máquina). Para experimentos de UI es perfecto.
+#
+# Deploy (SOLO al LAB, nunca toca producción):
+#   cd backend && fly deploy -c fly.lab.toml --strategy immediate
+# ─────────────────────────────────────────────────────────────
+
+app = "flotadsp-backend-lab"
+primary_region = "cdg"
+
+[build]
+
+[env]
+  DB_NAME = "lab_flotadsp"
+  GLOBAL_DB_NAME = "lab_flotadsp_global"
+  GEMINI_MODEL = "gemini-1.5-flash"
+  PUBLIC_BASE_URL = "https://flotadsp-backend-lab.fly.dev"
+  JWT_EXPIRE_HOURS = "72"
+  ADMIN_NAME = "Admin LAB"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+  kill_timeout = "90s"
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/api/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # 1GB: mismo tamaño que staging; suficiente para experimentos.
+  memory = "1gb"
