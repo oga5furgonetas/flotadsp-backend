@@ -108,33 +108,48 @@ export default function WHC() {
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">
                     {t('whc.pct.titulo')}
                   </div>
+                  {/* Con 0 excepciones esto NO es una medición: es lo que saldría
+                      si Amazon no marca ninguna. Pintarlo en verde como un hecho
+                      mientras la tabla enseña conductores pasados es un falso
+                      positivo, aunque cada número por separado sea correcto. */}
                   <div className="mt-1 flex flex-wrap items-center gap-2.5">
                     <span className={`text-4xl font-bold tabular-nums ${
-                      datos.whc.porcentaje >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>
+                      datos.whc.excepciones === 0 ? 'text-dark-200'
+                        : datos.whc.porcentaje >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>
+                      {datos.whc.excepciones === 0 && <span className="opacity-60">~</span>}
                       {datos.whc.porcentaje} %
                     </span>
                     {/* El tier solo se pinta cuando hay scorecards reales que lo
                         respaldan. Si el backend manda null, se dice que no se
                         sabe en vez de adivinar un tier que no consta. */}
                     <span className={`rounded-lg px-2 py-1 text-xs font-semibold ${
-                      datos.whc.tier === 'Fantastic' ? 'bg-emerald-500/15 text-emerald-300'
+                      datos.whc.excepciones === 0 ? 'border border-dashed border-dark-600 text-dark-300'
+                        : datos.whc.tier === 'Fantastic' ? 'bg-emerald-500/15 text-emerald-300'
                         : datos.whc.tier === 'Great' ? 'bg-sky-500/15 text-sky-300'
                         : datos.whc.tier ? 'bg-red-500/15 text-red-300'
                         : 'bg-dark-800 text-dark-400'}`}>
                       {datos.whc.tier || t('whc.pct.tierdesconocido')}
                     </span>
+                    {datos.whc.excepciones === 0 && (
+                      <span className="text-xs text-amber-300/90">{t('whc.pct.condicional')}</span>
+                    )}
                   </div>
                   <p className="mt-1 text-xs text-dark-400">
                     {t('whc.pct.formula')
                       .replace('{ok}', datos.whc.conductores_con_actividad - datos.whc.excepciones)
                       .replace('{n}', datos.whc.conductores_con_actividad)}
                   </p>
-                  {/* Lo que de verdad decide la semana: en 17 scorecards no hay
-                      ni uno con Fantastic y alguna excepcion. */}
                   {datos.whc.excepciones === 0 && (
-                    <p className="mt-1.5 text-xs font-medium text-emerald-300/90">
-                      {t('whc.pct.aviso1')}
-                    </p>
+                    <>
+                      <p className="mt-1.5 text-xs text-amber-200/90">
+                        {t('whc.pct.nosabemos')}
+                      </p>
+                      {datos.resumen?.superan > 0 && (
+                        <p className="mt-1 text-xs text-dark-400">
+                          {t('whc.pct.riesgo').replace('{n}', datos.resumen.superan)}
+                        </p>
+                      )}
+                    </>
                   )}
                 </div>
                 <div className="rounded-xl border border-dark-800 bg-dark-900/60 p-3.5">
