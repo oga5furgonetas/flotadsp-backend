@@ -282,6 +282,9 @@ export const cortexEmparejar = () => api.get('/cortex/emparejar')
 /* WHC: horas de trabajo. Se pega el plan del portal y devuelve el margen que le
    queda a cada conductor antes del limite semanal. */
 export const whcAnalizar = (body) => api.post('/whc/analizar', body)
+// El plan pegado se guarda por (centro, semana) para no tener que repegarlo.
+export const getWhcPlan = (center) => api.get('/whc/plan', { params: { center } })
+export const deleteWhcPlan = (center) => api.delete('/whc/plan', { params: { center } })
 
 // ── Aparcamiento: plano por centro + trazabilidad diaria ──
 export const parkingLayout = (center) => api.get('/parking/layout', { params: { center } })

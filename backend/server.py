@@ -20024,6 +20024,37 @@ _WHC_BLOQUE_LIMITE = 11 * 60
 # 8 h 59 m – 9 h 14 m, una ruta estandar. Solo se usa para reconstruir el total
 # de un conductor cuyo pegado no trajo la linea de horas, y queda marcado.
 _WHC_BLOQUE_IMPLICITO = 9 * 60
+# Ritmo: la semana son 6 bloques de ~9 h. A mitad de semana lo que importa no es
+# el total (todavia bajo) sino si vas por encima de lo que te tocaria a estas
+# alturas: el miercoles llevas 4 dias, o sea 4 bloques y 36 h como maximo.
+_WHC_BLOQUES_SEMANA = 6
+_WHC_DIAS = ["dom", "lun", "mar", "mié", "mie", "jue", "vie", "sáb", "sab"]
+
+
+def _whc_dias_del_plan(texto: str):
+    """Días que trae la cabecera del pegado ("dom., ago. 02"). Devuelve cuántos
+    de esos días YA HAN PASADO (incluido hoy). Si no hay cabecera, se cae al día
+    de la semana de hoy, contando el domingo como día 1."""
+    from datetime import date
+    meses = {"ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6,
+             "jul": 7, "ago": 8, "sep": 9, "oct": 10, "nov": 11, "dic": 12}
+    hoy = datetime.now(timezone.utc).date()
+    fechas = []
+    for l in (texto or "").split("\n"):
+        m = re.match(r"^\s*(%s)\.?,?\s+([a-zé]{3})\.?\s+(\d{1,2})\s*$"
+                     % "|".join(_WHC_DIAS), l.strip(), re.I)
+        if m:
+            mes = meses.get(m.group(2)[:3].lower())
+            if mes:
+                try:
+                    fechas.append(date(hoy.year, mes, int(m.group(3))))
+                except ValueError:
+                    pass
+    if fechas:
+        pasados = sum(1 for f in sorted(set(fechas)) if f <= hoy)
+        return max(1, min(pasados or len(fechas), 7)), True
+    # Sin cabecera: domingo = 1 … sábado = 7
+    return ((hoy.weekday() + 1) % 7) + 1, False
 
 # ── Cortes de tier del WHC ────────────────────────────────────────────────
 # Medidos sobre 17 scorecards REALES de OGA5 (semanas 12 a 31 de 2026), no
@@ -20186,7 +20217,41 @@ def _whc_parsear(texto: str) -> list:
     return [c for c in out if c["trabajado"] or c["bloques"]]
 
 
-def _whc_evaluar(conductores: list, limite_min: int, bloque_limite: int = None) -> list:
+def _whc_ritmo(c: dict, dia: int, limite_min: int) -> dict:
+    """¿Va demasiado rápido para lo que llevamos de semana?
+
+    A mitad de semana el total todavía es bajo y no dice nada. Lo que avisa es
+    el RITMO: la semana son 6 bloques de ~9 h, así que el miércoles (día 4) lo
+    máximo razonable son 4 bloques = 36 h. Con 37 h ese día, acabar por debajo
+    del límite exige recortar en los que quedan.
+    """
+    bloques_ref = min(dia, _WHC_BLOQUES_SEMANA)
+    horas_ref = bloques_ref * _WHC_BLOQUE_IMPLICITO
+    exceso = c["trabajado"] - horas_ref
+    # Bloques que aún le caben: los que le faltan para 6, pero nunca más que los
+    # días que quedan de semana. Sin ese tope, un jueves con 4 bloques proyectaba
+    # sólo 1 día más cuando en realidad le quedan 2.
+    restantes = max(0, min(_WHC_BLOQUES_SEMANA - len(c["bloques"]), 7 - dia))
+    proyeccion = c["trabajado"] + restantes * _WHC_BLOQUE_IMPLICITO
+    if limite_min and c["trabajado"] > limite_min:
+        estado = "pasado"
+    elif limite_min and proyeccion > limite_min:
+        estado = "peligro"
+    elif exceso > 0:
+        estado = "peligro"
+    elif exceso > -60:
+        estado = "justo"
+    else:
+        estado = "ok"
+    return {"dia_semana": dia, "bloques_ref": bloques_ref, "horas_ref": horas_ref,
+            "exceso_ritmo": exceso, "bloques_restantes": restantes,
+            "proyeccion": proyeccion,
+            "proyeccion_pasa": bool(limite_min and proyeccion > limite_min),
+            "estado_ritmo": estado}
+
+
+def _whc_evaluar(conductores: list, limite_min: int, bloque_limite: int = None,
+                 dia: int = None) -> list:
     """Añade a cada conductor su margen semanal y el riesgo diario.
 
     OJO con la separacion: `supera_semanal` es un HECHO (el total trabajado lo
@@ -20235,8 +20300,9 @@ def _whc_evaluar(conductores: list, limite_min: int, bloque_limite: int = None) 
             # porque el pegado no traia el total; la pantalla debe decirlo.
             "trabajado_origen": origen,
             # Tiene un bloque "en curso": esta trabajando AHORA. Es justo lo que
-            # hay que saber de alguien que ya se ha pasado de horas.
+            # hay que saber de alguien que ya se ha pasado o esta al borde.
             "trabajando_ahora": any(b.get("en_curso") for b in c["bloques"]),
+            **(_whc_ritmo(c, dia, limite_min) if dia else {}),
             "al_limite": bool(limite_min and 0 <= (margen or 0) <= _WHC_MARGEN_AVISO_PROPIO),
             "riesgo_diario": [{"inicio": b["inicio"], "fin": b["fin"],
                                "minutos": b["minutos"], "estimado": b["estimado"]}
@@ -20278,10 +20344,26 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
         bloque_limite = int(_decimal(data["limite_bloque_horas"], "limite_bloque_horas",
                                      minimo=0, maximo=24) * 60)
 
+    dia, dia_del_plan = _whc_dias_del_plan(texto)
+
     conductores = _whc_parsear(texto)
     if not conductores:
         raise HTTPException(400, "No se ha reconocido ningún conductor en ese texto")
-    ev = _whc_evaluar(conductores, limite, bloque_limite)
+    ev = _whc_evaluar(conductores, limite, bloque_limite, dia)
+
+    # El plan se guarda para no tener que volver a pegarlo cada vez. Se guarda
+    # por (centro, semana): una semana nueva no pisa la anterior.
+    center = (data.get("center") or "").upper().strip()
+    if center and data.get("guardar") is not False:
+        sun, _sat = _sun_sat_week((datetime.now(timezone.utc)).strftime("%Y-%m-%d"))
+        await db.whc_planes.update_one(
+            {"center": center, "week": sun},
+            {"$set": {"center": center, "week": sun, "texto": texto[:400000],
+                      "limite_horas": round(limite / 60, 2),
+                      "limite_bloque_horas": round(bloque_limite / 60, 2),
+                      "excepciones": excepciones,
+                      "updated_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True)
 
     # ── WHC: el porcentaje que Amazon publica, calculado igual que ellos ──
     # El scorecard lo define textualmente: "The metric is calculated as % of
@@ -20340,10 +20422,38 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
                       for c in incumplen],
         }
 
+    # ── RITMO DE LA SEMANA ────────────────────────────────────────────────────
+    # Lo que sirve un miércoles: quién va por encima del ritmo, no quién ya se
+    # pasó (todavía no se ha pasado nadie).
+    en_ritmo = [c for c in ev if c["trabajado"] > 0]
+    ritmo = {
+        "dia_semana": dia,
+        "dia_leido_del_plan": dia_del_plan,
+        "bloques_ref": min(dia, _WHC_BLOQUES_SEMANA),
+        "horas_ref_min": min(dia, _WHC_BLOQUES_SEMANA) * _WHC_BLOQUE_IMPLICITO,
+        "pasados": sum(1 for c in en_ritmo if c.get("estado_ritmo") == "pasado"),
+        "peligro": sum(1 for c in en_ritmo if c.get("estado_ritmo") == "peligro"),
+        "justos": sum(1 for c in en_ritmo if c.get("estado_ritmo") == "justo"),
+        "en_ruta_ahora": sum(1 for c in en_ritmo if c["trabajando_ahora"]),
+        # Los que hay que mirar HOY: van mal de ritmo, ordenados por exceso, y
+        # marcando quién sigue en ruta ahora mismo (a ése aún se le puede cortar).
+        "avisos": sorted(
+            [{"nombre": c.get("nombre"), "trabajado": c["trabajado"],
+              "estado": c.get("estado_ritmo"), "exceso": c.get("exceso_ritmo"),
+              "proyeccion": c.get("proyeccion"),
+              "proyeccion_pasa": c.get("proyeccion_pasa"),
+              "bloques": len(c["bloques"]),
+              "bloques_restantes": c.get("bloques_restantes"),
+              "trabajando_ahora": c["trabajando_ahora"]}
+             for c in en_ritmo if c.get("estado_ritmo") in ("pasado", "peligro", "justo")],
+            key=lambda x: (-(x["trabajando_ahora"]), -(x["exceso"] or 0)))[:25],
+    }
+
     return {
         "semana": (data.get("semana") or "")[:40],
         "whc": whc,
         "whc_propio": whc_propio,
+        "ritmo": ritmo,
         "limite_min": limite,
         "limite_bloque_min": bloque_limite,
         "limite_es_propio": True,
@@ -21591,6 +21701,28 @@ async def parking_last_known(center: str = "", _=Depends(require_admin)):
             last[vid] = {"vehicle_id": vid, "spot": r.get("spot"), "day": r.get("day"),
                          "center": r.get("center")}
     return {"vehicles": list(last.values())}
+
+
+@api_router.get("/whc/plan")
+async def whc_plan_get(center: str, _=Depends(require_admin)):
+    """El plan pegado de la semana en curso, para no tener que volver a pegarlo.
+
+    Se guarda por (centro, semana): al cambiar de semana no se arrastra el plan
+    de la anterior, que seria el peor error posible — ver horas viejas creyendo
+    que son las de esta semana.
+    """
+    sun, _sat = _sun_sat_week(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    doc = await db.whc_planes.find_one(
+        {"center": (center or "").upper(), "week": sun}, {"_id": 0})
+    return {"hay": bool(doc), "semana": sun, **(doc or {})}
+
+
+@api_router.delete("/whc/plan")
+async def whc_plan_delete(center: str, _=Depends(require_admin)):
+    """Borra el plan guardado de la semana en curso de ese centro."""
+    sun, _sat = _sun_sat_week(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    r = await db.whc_planes.delete_many({"center": (center or "").upper(), "week": sun})
+    return {"ok": True, "borrados": r.deleted_count, "semana": sun}
 
 
 app.include_router(auth_router)

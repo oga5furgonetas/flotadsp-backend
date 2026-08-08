@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
   Loader2, Clock, AlertTriangle, CircleCheck, Info, ChevronDown, ChevronUp,
+  Trash2, RefreshCw,
 } from 'lucide-react'
-import { whcAnalizar } from '../api'
+import { whcAnalizar, getWhcPlan, deleteWhcPlan } from '../api'
 import { lista } from '../../lib/lista'
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -43,14 +44,47 @@ export default function WHC() {
   const [err, setErr] = useState('')
   const [abierto, setAbierto] = useState(null)
 
-  const analizar = async () => {
+  const [guardado, setGuardado] = useState(null)
+  const [editando, setEditando] = useState(false)
+
+  const analizar = useCallback(async (txt, lim, exc) => {
+    const cuerpo = txt ?? texto
     setCargando(true); setErr(''); setDatos(null)
     try {
-      const r = await whcAnalizar({ texto, limite_horas: limite, excepciones })
+      // `center` hace que el backend GUARDE el plan de esta semana.
+      const r = await whcAnalizar({
+        texto: cuerpo, limite_horas: lim ?? limite,
+        excepciones: exc ?? excepciones, center,
+      })
       setDatos(r.data)
+      setEditando(false)
     } catch (e) {
       setErr(e?.response?.data?.detail || t('whc.error'))
     } finally { setCargando(false) }
+  }, [texto, limite, excepciones, center, t])
+
+  // Al entrar, se recupera el plan de ESTA semana y se analiza solo. Nada de
+  // volver a pegarlo cada vez. Si cambia la semana, el backend no devuelve el
+  // de la anterior: seria ver horas viejas creyendo que son las de ahora.
+  useEffect(() => {
+    let vivo = true
+    setDatos(null); setGuardado(null); setTexto(''); setEditando(false)
+    if (!center || center === 'Todos') return
+    getWhcPlan(center).then(({ data }) => {
+      if (!vivo || !data?.hay || !data.texto) return
+      setGuardado(data)
+      setTexto(data.texto)
+      if (data.limite_horas) setLimite(data.limite_horas)
+      if (data.excepciones != null) setExcepciones(data.excepciones)
+      analizar(data.texto, data.limite_horas, data.excepciones)
+    }).catch(() => {})
+    return () => { vivo = false }
+  }, [center]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const borrar = async () => {
+    if (!center || center === 'Todos') return
+    try { await deleteWhcPlan(center) } catch {}
+    setGuardado(null); setTexto(''); setDatos(null); setEditando(true)
   }
 
   const filas = lista(datos?.conductores)
@@ -86,11 +120,28 @@ export default function WHC() {
               onChange={(e) => setExcepciones(Number(e.target.value))}
               className="w-16 rounded-lg border border-dark-700 bg-dark-900 px-2 py-1 text-sm text-dark-100" />
           </label>
-          <button onClick={analizar} disabled={cargando || texto.trim().length < 40}
+          <button onClick={() => analizar()} disabled={cargando || texto.trim().length < 40}
             className="btn-primary flex items-center gap-2 px-4 py-2 text-sm disabled:opacity-40">
             {cargando ? <Loader2 size={14} className="animate-spin" /> : <Clock size={14} />}
             {t('whc.analizar')}
           </button>
+          {/* El plan queda guardado por semana: aqui solo se decide si se
+              reemplaza (pegar de nuevo) o se tira. */}
+          {guardado && !editando && (
+            <>
+              <button onClick={() => { setEditando(true); setTexto('') }}
+                className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-3 py-2 text-xs text-dark-300 hover:bg-dark-800">
+                <RefreshCw size={13} /> Actualizar (pegar de nuevo)
+              </button>
+              <button onClick={borrar}
+                className="flex items-center gap-1.5 rounded-lg border border-red-500/30 px-3 py-2 text-xs text-red-300 hover:bg-red-500/10">
+                <Trash2 size={13} /> Borrar
+              </button>
+              <span className="text-[11px] text-dark-500">
+                guardado {String(guardado.updated_at || '').slice(0, 16).replace('T', ' ')}
+              </span>
+            </>
+          )}
           {err && <span className="text-xs text-red-300">{err}</span>}
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-dark-600">{t('whc.ayuda')}</p>
@@ -101,6 +152,66 @@ export default function WHC() {
           {/* EL numero. Calculado con la misma formula que Amazon, que el
               propio scorecard define: "% of drivers complying with working hour
               limits". Validado al decimal contra 3 semanas reales de OGA5. */}
+          {/* RITMO. Lo util a mitad de semana: el total todavia es bajo y no
+              dice nada, lo que avisa es ir por encima de lo que toca a estas
+              alturas. 6 bloques de ~9 h por semana -> el miercoles (dia 4) el
+              tope razonable son 4 bloques, 36 h. */}
+          {datos.ritmo && datos.ritmo.dia_semana < 7 && (
+            <div className="card p-5">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">
+                  Ritmo de la semana · día {datos.ritmo.dia_semana} de 7
+                </div>
+                <div className="text-[11px] text-dark-500">
+                  a estas alturas, como mucho {datos.ritmo.bloques_ref} bloques ={' '}
+                  <span className="font-semibold text-dark-300">{hm(datos.ritmo.horas_ref_min)}</span>
+                  {!datos.ritmo.dia_leido_del_plan && ' · día deducido de hoy, no del plan'}
+                </div>
+              </div>
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                {[['pasados', datos.ritmo.pasados, 'bg-red-500/15 text-red-300'],
+                  ['en peligro', datos.ritmo.peligro, 'bg-orange-500/15 text-orange-300'],
+                  ['justos', datos.ritmo.justos, 'bg-amber-500/15 text-amber-200'],
+                  ['en ruta ahora', datos.ritmo.en_ruta_ahora, 'bg-sky-500/15 text-sky-300']]
+                  .map(([lab, n, cls]) => (
+                    <span key={lab} className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${cls}`}>
+                      {n} {lab}
+                    </span>
+                  ))}
+              </div>
+              {!!datos.ritmo.avisos?.length && (
+                <ul className="mt-3 space-y-1.5">
+                  {datos.ritmo.avisos.map((a, i) => (
+                    <li key={i} className="flex flex-wrap items-center justify-between gap-2 border-t border-dark-800 pt-1.5 text-xs first:border-0 first:pt-0">
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-dark-200">{a.nombre}</span>
+                        {a.trabajando_ahora && (
+                          <span className="shrink-0 rounded bg-sky-500/20 px-1.5 py-0.5 text-[9px] font-semibold text-sky-200"
+                                title="Tiene un bloque en curso: está en ruta ahora mismo. Todavía se le puede cortar el día.">
+                            en ruta ahora
+                          </span>
+                        )}
+                      </span>
+                      <span className="shrink-0 tabular-nums text-dark-400">
+                        {hm(a.trabajado)} · {a.bloques} bloques
+                        {a.exceso > 0 && <span className="ml-2 text-orange-300">+{hm(a.exceso)} de más</span>}
+                        {a.bloques_restantes > 0 && (
+                          <span className={`ml-2 ${a.proyeccion_pasa ? 'text-red-300' : 'text-dark-500'}`}>
+                            acabaría en {hm(a.proyeccion)}
+                          </span>
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="mt-3 border-t border-dark-800 pt-2 text-[11px] text-dark-500">
+                «Acabaría en» supone que sigue trabajando los días que le quedan hasta
+                6 bloques, a {hm(9 * 60)} cada uno. Es una proyección, no un dato.
+              </p>
+            </div>
+          )}
+
           {/* El numero grande es EL TUYO: % de conductores que cumplen tus
               normas (semana y jornada). El de Amazon va debajo, porque no se
               sabe hasta que llega la scorecard con sus excepciones. */}
