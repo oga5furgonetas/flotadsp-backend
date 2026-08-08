@@ -16820,18 +16820,193 @@ def _sc_next_target(value, tier, thr, direction):
     return {"to_tier": label, "target": target, "gap": gap}
 
 
-async def _sc_thresholds(center):
-    """Umbrales: semilla + override del usuario (por centro o global)."""
+# ──────────────────────────────────────────────────────────────────────────────
+# UMBRALES REALES DE CADA NAVE, LEÍDOS DEL PROPIO PDF (deterministas, sin Gemini)
+#
+# Cada scorecard publica en su página "Performance Standards and Service Levels"
+# el Target y el Minimum de ESA nave y ESA semana. Medido sobre 85 scorecards de
+# 10 naves (ver docs/SCORECARD_AUDITORIA.md):
+#
+#     Fantastic  <=>  el valor cumple el Target        984/984, sin excepciones
+#     Poor       <=>  el valor no llega al Minimum     984/984, sin excepciones
+#
+# NO son iguales para todas las naves: DSC tiene 17 targets distintos entre 10
+# naves, DCR 7 y DNR 8. Aplicar los de una nave a otra da FALSOS POSITIVOS — a un
+# DSP de OGA5 con DCR 98,4 % le dirías que no llega a Fantastic cuando sí llega,
+# y a DCT9 (target DSC 1050) le aplicarías 606, casi el doble de exigente.
+#
+# Tampoco son eternos: cambian por temporada y de golpe. En 74 pares de semanas
+# consecutivas sólo hubo 7 cambios — uno por nave, todos en el mismo salto
+# (W21→W22) y afectando a DSC, POD, LoR, Capacity y CDF. Por eso se guardan CON
+# VIGENCIA y nunca se pisan los antiguos: el histórico se calcula con los suyos.
+# ──────────────────────────────────────────────────────────────────────────────
+_SLS_FILAS = [
+    ("Vehicle Audit Compliance (VSA)",        "vsa"),
+    ("Safe Driving (FICO)",                   "fico"),
+    ("Speeding Event Rate (per 100 trips)",   "speeding"),
+    ("Customer Escalation DPMO",              "cec_dpmo"),
+    ("Route Reliability",                     "ndcr"),
+    ("Delivery Completion Rate (DCR)",        "dcr"),
+    ("Delivery Success Conditions (DSC DPMO)", "dsc_dpmo"),
+    ("Photo On Delivery",                     "pod"),
+    ("Contact Compliance",                    "cc"),
+    ("Lost on Road DPMO",                     "lor_dpmo"),
+]
+# Amazon publica el Target y el Minimum, pero NO el corte entre Great y Fair.
+# Estos son constantes en las 10 naves y las 20 semanas medidas (0 cambios), y
+# el corte se verificó sin un solo fallo:
+# CEC va a 39 y no a 40: el corte medido cae en (38, 40], o sea que un CEC de 40
+# es Fair. Con 40 se colaba un caso de 40 como Great. Con 39 aciertan los 40/40.
+# (Entre 38 y 39 los datos no distinguen; no se observó ningún 39.)
+_SC_GREAT_FIJO = {"vsa": 97.0, "cc": 97.0, "cec_dpmo": 39.0, "whc": 97.0}
+# Para el resto el corte se saca como fracción de la banda Minimum→Target.
+# El bool dice si esa fracción está VERIFICADA (0 fallos) o es una estimación:
+# para DCR y DSC no existe ninguna fracción constante que funcione (8 fallos de
+# 46 y 4 de 48), así que ahí el tier intermedio se marca como estimado.
+_SC_MID_Q = {"lor_dpmo": (0.506, True), "pod": (0.731, True),
+             "dcr": (0.714, False), "dsc_dpmo": (0.599, False),
+             "ndcr": (0.5, False), "speeding": (0.5, False), "fico": (0.5, False)}
+
+
+def _parse_sls_bands(pdf_bytes):
+    """Tabla SLS del PDF → bandas por métrica. (None, None) si no la trae."""
+    try:
+        import pdfplumber
+    except ImportError:
+        logger.warning("[sls] pdfplumber no instalado: no se leen umbrales del PDF")
+        return None, None
+    pag = None
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for p in pdf.pages:
+                t = p.extract_text() or ""
+                if "Operational SLS Metrics" in t:
+                    pag = re.sub(r"\s+", " ", t)
+                    break
+    except Exception as e:
+        logger.error(f"[sls] no se pudo abrir el PDF: {type(e).__name__}: {repr(e)}")
+        return None, None
+    if not pag:
+        return None, None
+    num = r"(-?\d+(?:[.,]\d+)?)\s*%?"
+    bands, crudos = {}, {}
+    for etiqueta, key in _SLS_FILAS:
+        m = re.search(re.escape(etiqueta) + r"\s+" + num + r"\s+" + num, pag)
+        if not m:
+            continue
+        try:
+            target = float(m.group(1).replace(",", "."))
+            minimo = float(m.group(2).replace(",", "."))
+        except ValueError:
+            continue
+        if target == minimo:
+            continue
+        crudos[key] = {"target": target, "minimum": minimo}
+        if key in _SC_GREAT_FIJO:
+            great, verif = _SC_GREAT_FIJO[key], True
+        else:
+            q, verif = _SC_MID_Q.get(key, (0.5, False))
+            great = round(minimo + q * (target - minimo), 2)
+        bands[key] = {"fantastic": target, "great": great, "fair": minimo,
+                      "great_verificado": verif}
+    return (bands or None), (crudos or None)
+
+
+async def _store_sls_bands(center, week, bands, crudos):
+    """Guarda los umbrales CON VIGENCIA. Si coinciden con la vigencia anterior se
+    amplía; si cambian se abre una nueva. Nunca se pisan los viejos."""
+    week = int(week)
+    firma = {k: (v.get("fantastic"), v.get("fair")) for k, v in bands.items()}
+    prev = await db.scorecard_thresholds.find_one(
+        {"center": center, "tipo": "sls", "desde_semana": {"$lte": week}},
+        sort=[("desde_semana", -1)])
+    if prev:
+        pf = {k: (v.get("fantastic"), v.get("fair"))
+              for k, v in (prev.get("bands") or {}).items()}
+        if pf == firma:
+            await db.scorecard_thresholds.update_one(
+                {"_id": prev["_id"]},
+                {"$set": {"visto_hasta": max(week, int(prev.get("visto_hasta") or week))}})
+            return "sin_cambios"
+    await db.scorecard_thresholds.update_one(
+        {"center": center, "tipo": "sls", "desde_semana": week},
+        {"$set": {"center": center, "tipo": "sls", "desde_semana": week,
+                  "visto_hasta": week, "bands": bands, "sls": crudos,
+                  "updated_at": datetime.now(timezone.utc).isoformat()}}, upsert=True)
+    return "nueva_vigencia"
+
+
+async def _sc_thresholds(center, week=None):
+    """Devuelve (umbrales, meta). `meta[key]['fiable']` dice si el umbral es de
+    ESTA nave o es la semilla genérica, que viene de UNA sola nave (DGA1) y por
+    tanto no sirve para las demás.
+
+    Prioridad: umbrales de la scorecard del propio DSP (con la vigencia que cubra
+    la semana) > override manual del usuario > semilla genérica.
+    """
     thr = {k: dict(v) for k, v in _SC_SEED_THR.items()}
+    meta = {k: {"fuente": "semilla", "fiable": False} for k in thr}
+
+    if center:
+        q = {"center": center, "tipo": "sls"}
+        if week is not None:
+            try:
+                q["desde_semana"] = {"$lte": int(week)}
+            except (TypeError, ValueError):
+                pass
+        doc = await db.scorecard_thresholds.find_one(
+            q, {"_id": 0}, sort=[("desde_semana", -1)])
+        if doc:
+            for k, band in (doc.get("bands") or {}).items():
+                if not isinstance(band, dict):
+                    continue
+                # Sin fantastic_plus a propósito: en las 85 scorecards reales no
+                # aparece ni una sola vez. Los tiers son Poor/Fair/Great/Fantastic.
+                thr[k] = {b: band[b] for b in ("fantastic", "great", "fair")
+                          if band.get(b) is not None}
+                meta[k] = {"fuente": "scorecard", "fiable": True,
+                           "desde_semana": doc.get("desde_semana"),
+                           "great_verificado": bool(band.get("great_verificado")),
+                           "target": band.get("fantastic"), "minimum": band.get("fair")}
+
+    # Override manual: sólo donde NO hay dato de la propia scorecard, para que una
+    # calibración vieja no vuelva a pisar los umbrales buenos de la nave.
     for c in ("GLOBAL", center):
         if not c:
             continue
-        doc = await db.scorecard_thresholds.find_one({"center": c}, {"_id": 0})
-        if doc:
-            for k in thr:
-                if isinstance(doc.get(k), dict):
-                    thr[k].update({kk: vv for kk, vv in doc[k].items() if vv is not None})
-    return thr
+        doc = await db.scorecard_thresholds.find_one(
+            {"center": c, "tipo": {"$ne": "sls"}}, {"_id": 0})
+        if not doc:
+            continue
+        for k in thr:
+            if meta.get(k, {}).get("fuente") == "scorecard":
+                continue
+            if isinstance(doc.get(k), dict):
+                thr[k].update({kk: vv for kk, vv in doc[k].items() if vv is not None})
+                meta[k] = {"fuente": "manual", "fiable": False}
+    return thr, meta
+
+
+def _sc_tier_cert(value, band, meta, direction):
+    """(tier, cierto, motivo). Sólo se marca CIERTO lo que está demostrado:
+    cumplir el Target o no llegar al Minimum de la propia nave. El corte
+    intermedio de DCR y DSC no lo publica Amazon, así que ahí se avisa."""
+    t = _sc_tier(value, band, direction)
+    if value is None or t is None:
+        return None, False, "faltan los umbrales de esta nave para esta semana"
+    meta = meta or {}
+    if not meta.get("fiable"):
+        return t, False, ("estos umbrales no son de tu nave; sube una scorecard "
+                          "tuya y el tier pasa a ser exacto")
+    tgt, mn = meta.get("target"), meta.get("minimum")
+    if tgt is not None and ((value >= tgt) if direction > 0 else (value <= tgt)):
+        return t, True, None
+    if mn is not None and ((value < mn) if direction > 0 else (value > mn)):
+        return t, True, None
+    if meta.get("great_verificado"):
+        return t, True, None
+    return t, False, ("Amazon no publica el corte entre Great y Fair de esta "
+                      "métrica y el valor cae justo en esa franja")
 
 
 async def _latest_week_with_data(center):
@@ -16863,11 +17038,14 @@ async def scorecard_full(center: str, week: Optional[str] = None, user: dict = D
     if not week:
         week = await _latest_week_with_data(center)
     sun, sat = _sun_sat_week(week)
-    thr = await _sc_thresholds(center)
+    wnum = _sun_to_week_num(sun)
+    # Umbrales de ESTA nave y ESTA semana. Si el DSP no ha subido nunca una
+    # scorecard suya salen marcados como no fiables, y entonces el tier se
+    # devuelve como estimado en vez de afirmarlo.
+    thr, thr_meta = await _sc_thresholds(center, wnum)
     doc = await db.scorecard_live.find_one({"center": center, "week": sun}, {"_id": 0})
     values = (doc or {}).get("values", {})
     # ¿hay scorecard OFICIAL de esa semana? → valores+tiers REALES de Amazon
-    wnum = _sun_to_week_num(sun)
     off = await db.scorecard_official.find_one({"center": center, "week": wnum}, {"_id": 0})
     off_metrics = {mm.get("key"): mm for mm in (off.get("metrics") if off else [])}
     has_official = bool(off)
@@ -16915,8 +17093,20 @@ async def scorecard_full(center: str, week: Optional[str] = None, user: dict = D
             v = None
             t = None
             src = None
+        # Certeza del tier. Sólo se afirma lo demostrado: el tier que viene en la
+        # scorecard oficial, o cumplir el Target / no llegar al Minimum de la
+        # propia nave. Todo lo demás sale marcado con su motivo.
+        if src == "oficial" and om and om.get("tier"):
+            cierto, motivo = True, None
+        elif src == "estimado":
+            cierto, motivo = False, "arrastrado de tu última scorecard, no es de esta semana"
+        else:
+            _t, cierto, motivo = _sc_tier_cert(v, thr.get(m["key"]),
+                                               thr_meta.get(m["key"]), m["dir"])
         counts[t or "Sin datos"] = counts.get(t or "Sin datos", 0) + 1
         out.append({**m, "value": v, "tier": t, "thr": thr.get(m["key"]), "source": src,
+                    "cierto": bool(cierto), "motivo": motivo,
+                    "umbral": thr_meta.get(m["key"]),
                     "next": _sc_next_target(v, t, thr.get(m["key"]), m["dir"])})
 
     to_improve = sorted(
@@ -17012,14 +17202,51 @@ async def scorecard_set_thresholds(data: dict = Body(...), _=Depends(require_adm
 
 @api_router.delete("/scorecard/thresholds")
 async def scorecard_reset_thresholds(center: str, _=Depends(require_admin)):
-    """Escribe los seeds oficiales de Amazon directamente en MongoDB para el centro.
-    Sobreescribe cualquier calibración anterior con los valores verificados del Excel de targets."""
-    doc = {"center": center}
-    for key, bands in _SC_SEED_THR.items():
-        doc[key] = {b: v for b, v in bands.items() if v is not None}
-    await db.scorecard_thresholds.replace_one({"center": center}, doc, upsert=True)
-    return {"success": True, "center": center, "metricas": list(_SC_SEED_THR.keys()),
-            "mensaje": f"Umbrales de {center} escritos directamente desde los targets oficiales de Amazon."}
+    """Quita la calibración manual del centro y vuelve a los umbrales que trae la
+    scorecard del propio DSP.
+
+    ANTES esto escribía la semilla `_SC_SEED_THR` en el centro. Era un error: esa
+    semilla son los umbrales de UNA nave (DGA1) y no valen para las demás — DSC
+    tiene 17 targets distintos entre 10 naves y DCR 7. Escribirla en otro centro
+    producía falsos positivos (a OGA5, con target DCR 98, se le exigía 99).
+    """
+    r = await db.scorecard_thresholds.delete_many({"center": center, "tipo": {"$ne": "sls"}})
+    tiene = await db.scorecard_thresholds.count_documents({"center": center, "tipo": "sls"})
+    return {"success": True, "center": center, "borrados": r.deleted_count,
+            "vigencias_propias": tiene,
+            "mensaje": (f"Calibración manual de {center} borrada. "
+                        + (f"Se usarán los umbrales de tus {tiene} scorecard(s)."
+                           if tiene else
+                           "No hay ninguna scorecard tuya subida: sube una para "
+                           "tener los umbrales exactos de tu nave."))}
+
+
+@api_router.get("/scorecard/umbrales")
+async def scorecard_umbrales(center: str, week: Optional[int] = None,
+                             _=Depends(require_admin)):
+    """De dónde salen los umbrales de esta nave y si son de fiar.
+
+    Sirve para que la interfaz pueda ser honesta: si el DSP no ha subido nunca
+    una scorecard suya, los tiers que vea son orientativos y hay que decírselo.
+    """
+    thr, meta = await _sc_thresholds(center, week)
+    vig = await db.scorecard_thresholds.find(
+        {"center": center, "tipo": "sls"}, {"_id": 0}).sort("desde_semana", 1).to_list(50)
+    propios = [k for k, m in meta.items() if m.get("fuente") == "scorecard"]
+    return {
+        "center": center, "semana": week,
+        "tiene_umbrales_propios": bool(vig),
+        "vigencias": [{"desde_semana": v.get("desde_semana"),
+                       "visto_hasta": v.get("visto_hasta"),
+                       "sls": v.get("sls")} for v in vig],
+        "metricas": [{"key": k, "banda": thr.get(k), **(meta.get(k) or {})}
+                     for k in thr],
+        "propias": propios,
+        "aviso": (None if vig else
+                  "Esta nave no tiene ninguna scorecard subida. Los umbrales que "
+                  "se están usando son genéricos y NO son los de tu nave: los "
+                  "tiers son orientativos. Sube una scorecard tuya reciente."),
+    }
 
 
 _OFFICIAL_SC_PROMPT = """Eres un analista de Amazon DSP. Te paso la scorecard semanal OFICIAL (Scorecard 3.0) de un DSP.
@@ -17416,8 +17643,25 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
                         {"center": cen, "week": int(week), "metric": m["key"]},
                         {"$set": {"center": cen, "week": int(week), "metric": m["key"],
                                   "value": m["value"], "tier": m["tier"]}}, upsert=True)
+            # Los umbrales de ESTA nave salen de la tabla SLS del propio PDF, sin
+            # Gemini y sin gastar cuota. Se guardan con vigencia: si cambian
+            # respecto a la anterior se abre una nueva y la vieja se conserva,
+            # porque el histórico se tiene que seguir calculando con los suyos.
+            umbrales_msg = ""
+            try:
+                bands, crudos = _parse_sls_bands(content)
+                if bands:
+                    estado = await _store_sls_bands(cen, int(week), bands, crudos)
+                    umbrales_msg = (". Umbrales de tu nave actualizados"
+                                    if estado == "nueva_vigencia"
+                                    else ". Umbrales de tu nave confirmados")
+                else:
+                    logger.warning(f"[sls] {cen} W{week}: el PDF no trae la tabla SLS")
+            except Exception as e:
+                logger.error(f"[sls] {cen} W{week}: {type(e).__name__}: {repr(e)}")
             return {"tipo": "scorecard", "ok": True, "center": cen,
-                    "mensaje": f"Scorecard W{week}: {sc.get('overall_tier')} ({sc.get('overall_score')})",
+                    "mensaje": f"Scorecard W{week}: {sc.get('overall_tier')} ({sc.get('overall_score')}){umbrales_msg}",
+                    "umbrales": bool(umbrales_msg),
                     "metricas": len(sc.get("metrics") or [])}
 
         # HTML → reporte diario (fallos) o ratios (Descripción general)
@@ -17678,7 +17922,7 @@ async def scorecard_predict(center: str, week: Optional[str] = None, _=Depends(r
         week, _s = _sun_sat_week(last)
     sun, sat = _sun_sat_week(week)
     wnum = _sun_to_week_num(sun)
-    thr = await _sc_thresholds(center)
+    thr, thr_meta = await _sc_thresholds(center, wnum)
     weights = await _sc_weights(center)
 
     # Todas las fuentes disponibles (mismo orden de prioridad que /scorecard/full)
@@ -17720,9 +17964,18 @@ async def scorecard_predict(center: str, week: Optional[str] = None, _=Depends(r
         if src:
             fuentes_usadas.add(src)
         t = _sc_tier(v, thr.get(m["key"]), m["dir"]) if v is not None else None
+        if src == "oficial":
+            cierto, motivo = True, None
+        elif src == "estimado":
+            cierto, motivo = False, "arrastrado de tu última scorecard, no es de esta semana"
+        else:
+            _t, cierto, motivo = _sc_tier_cert(v, thr.get(m["key"]),
+                                               thr_meta.get(m["key"]), m["dir"])
         metrics_out.append({"key": m["key"], "label": m["label"], "group": m["group"],
                             "unit": m.get("unit"), "dir": m["dir"],
                             "value": v, "tier": t, "source": src,
+                            "cierto": bool(cierto), "motivo": motivo,
+                            "umbral": thr_meta.get(m["key"]),
                             "thr": thr.get(m["key"]),
                             "next": _sc_next_target(v, t, thr.get(m["key"]), m["dir"]) if t else None})
 
