@@ -139,7 +139,17 @@ export default function WHC() {
                   <ul className="mt-2.5 space-y-1">
                     {datos.whc_propio.quien.slice(0, 12).map((q, i) => (
                       <li key={i} className="flex items-center justify-between gap-3 text-xs">
-                        <span className="truncate text-dark-200">{q.nombre}</span>
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate text-dark-200">{q.nombre}</span>
+                          {/* Bloque "en curso" en el plan: esta en ruta AHORA.
+                              Es lo urgente de alguien que ya se ha pasado. */}
+                          {q.trabajando_ahora && (
+                            <span className="shrink-0 rounded bg-red-500/20 px-1.5 py-0.5 text-[9px] font-semibold text-red-200"
+                                  title="Tiene un bloque en curso: está trabajando ahora mismo">
+                              en ruta ahora
+                            </span>
+                          )}
+                        </span>
                         <span className="shrink-0 tabular-nums text-dark-400">
                           {Math.floor(q.trabajado / 60)}h {String(q.trabajado % 60).padStart(2, '0')}m
                           {q.supera_semanal && <span className="ml-2 text-red-300">semana</span>}

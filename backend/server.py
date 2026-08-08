@@ -20151,6 +20151,18 @@ def _whc_parsear(texto: str) -> list:
                                           "minutos": z - a, "tipo": tipo[:40], "estimado": False})
             i += 1
             continue
+        # "10:45am - en curso": el conductor ESTA TRABAJANDO AHORA MISMO. Es un
+        # bloque real sin hora de fin todavia. Tirarlo era el motivo de que el
+        # total del portal no cuadrase con la suma de bloques: la diferencia
+        # medida en el pegado real era de +8 h 58 m, exactamente una ruta.
+        mc = re.match(r"^(\d{1,2}:\d{2}\s*[ap]m?)\s*[-–]\s*en\s+curso$", l, re.I)
+        if mc and actual:
+            tipo = lineas[i + 1] if i + 1 < len(lineas) else ""
+            actual["bloques"].append({"inicio": mc.group(1), "fin": None,
+                                      "minutos": None, "tipo": tipo[:40],
+                                      "estimado": True, "en_curso": True})
+            i += 1
+            continue
         # Hora suelta: bloque sin fin SOLO si la linea siguiente es un tipo
         if actual and _whc_minutos(l) is not None:
             sig = (lineas[i + 1] if i + 1 < len(lineas) else "").lower()
@@ -20222,6 +20234,9 @@ def _whc_evaluar(conductores: list, limite_min: int, bloque_limite: int = None) 
             # "portal" = el total lo da Amazon. "bloques" = lo hemos reconstruido
             # porque el pegado no traia el total; la pantalla debe decirlo.
             "trabajado_origen": origen,
+            # Tiene un bloque "en curso": esta trabajando AHORA. Es justo lo que
+            # hay que saber de alguien que ya se ha pasado de horas.
+            "trabajando_ahora": any(b.get("en_curso") for b in c["bloques"]),
             "al_limite": bool(limite_min and 0 <= (margen or 0) <= _WHC_MARGEN_AVISO_PROPIO),
             "riesgo_diario": [{"inicio": b["inicio"], "fin": b["fin"],
                                "minutos": b["minutos"], "estimado": b["estimado"]}
@@ -20315,8 +20330,10 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
             "porcentaje": round((len(activos) - len(incumplen)) / len(activos) * 100, 1),
             "limite_semanal_min": limite,
             "limite_bloque_min": bloque_limite,
+            "trabajando_ahora": sum(1 for c in incumplen if c["trabajando_ahora"]),
             "quien": [{"nombre": c.get("nombre"), "trabajado": c["trabajado"],
                        "supera_semanal": c["supera_semanal"],
+                       "trabajando_ahora": c["trabajando_ahora"],
                        "bloques_pasados": len(c["bloques_pasados"]),
                        "peor_bloque": max((b["minutos"] or 0)
                                           for b in c["bloques_pasados"]) if c["bloques_pasados"] else None}
