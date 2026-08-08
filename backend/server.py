@@ -20020,6 +20020,10 @@ _WHC_BLOQUE_RIESGO = 10 * 60
 # bloques de 11 h 44 m sin excepción. Por eso alimenta el "WHC propio" y NO el
 # porcentaje que publicará Amazon, que se calcula con sus excepciones.
 _WHC_BLOQUE_LIMITE = 11 * 60
+# Duracion implicita de un bloque sin hora de fin. Medida en el propio plan:
+# 8 h 59 m – 9 h 14 m, una ruta estandar. Solo se usa para reconstruir el total
+# de un conductor cuyo pegado no trajo la linea de horas, y queda marcado.
+_WHC_BLOQUE_IMPLICITO = 9 * 60
 
 # ── Cortes de tier del WHC ────────────────────────────────────────────────
 # Medidos sobre 17 scorecards REALES de OGA5 (semanas 12 a 31 de 2026), no
@@ -20113,11 +20117,26 @@ def _whc_parsear(texto: str) -> list:
         if not l:
             i += 1
             continue
-        # "53h 34m / 54h 45m"  o  "/"  (sin horas esa semana)
-        mt = re.match(r"^(\d+h[\s\d]*m?)\s*/\s*(\d+h[\s\d]*m?)$", l)
+        # "53h 34m / 54h 45m"  ·  "45h 54m / ⚠ 45h"  ·  "9h 15m / 9h"  ·  "/"
+        #
+        # OJO: el portal mete un ICONO DE AVISO entre la barra y el limite
+        # cuando el conductor va justo ("45h 54m / ⚠ 45h"). El regex anterior
+        # exigia que tras la barra viniera ya el numero, asi que esas lineas NO
+        # casaban: el total se quedaba en 0, el conductor salia con "0h 00m" con
+        # sus bloques a la vista y ademas se caia del denominador del WHC.
+        # Por eso se toleran caracteres no numericos a ambos lados de la barra.
+        mt = re.match(r"^\D*?(\d+\s*h(?:\s*\d+\s*m)?)\s*/\s*\D*?(\d+\s*h(?:\s*\d+\s*m)?)\s*$", l)
         if mt and actual:
             actual["trabajado"] = _whc_dur(mt.group(1))
             actual["planificado"] = _whc_dur(mt.group(2))
+            actual["trabajado_origen"] = "portal"
+            i += 1
+            continue
+        # Solo el trabajado, sin limite detras: "45h 54m /"
+        ms = re.match(r"^\D*?(\d+\s*h(?:\s*\d+\s*m)?)\s*/\s*$", l)
+        if ms and actual:
+            actual["trabajado"] = _whc_dur(ms.group(1))
+            actual["trabajado_origen"] = "portal"
             i += 1
             continue
         # Rango con horas: "10:35am - 9:05pm"
@@ -20171,9 +20190,22 @@ def _whc_evaluar(conductores: list, limite_min: int, bloque_limite: int = None) 
         # para poder estimarlos, y se marca como estimado.
         resto = c["trabajado"] - sum(con_hora)
         est = int(resto / sin_hora) if sin_hora and resto > 0 else 0
+        origen = c.get("trabajado_origen") or ("portal" if c["trabajado"] else None)
+        if not c["trabajado"] and c["bloques"]:
+            # Red de seguridad: el portal no dio el total pero SI hay bloques.
+            # Dejarlo en 0 seria lo peor de todo — el conductor apareceria como
+            # que no ha trabajado, con sus bloques a la vista, y encima se caeria
+            # del denominador del WHC. Se reconstruye desde los bloques y se
+            # marca el origen para que la pantalla no lo presente como dato del
+            # portal. Los bloques sin hora de fin valen la duracion implicita
+            # medida en el propio plan (una ruta estandar, ~9 h).
+            est = _WHC_BLOQUE_IMPLICITO
+            origen = "bloques"
         for b in c["bloques"]:
             if b["minutos"] is None:
                 b["minutos"] = est
+        if origen == "bloques":
+            c["trabajado"] = sum(b["minutos"] or 0 for b in c["bloques"])
 
         blim = bloque_limite or _WHC_BLOQUE_LIMITE
         largos = [b for b in c["bloques"] if (b["minutos"] or 0) >= _WHC_BLOQUE_RIESGO]
@@ -20187,6 +20219,9 @@ def _whc_evaluar(conductores: list, limite_min: int, bloque_limite: int = None) 
             # OJO con el nombre: es TU limite, no el de Amazon. Amazon no marco
             # excepcion semanal a quien hizo 56h30m.
             "supera_semanal": supera,
+            # "portal" = el total lo da Amazon. "bloques" = lo hemos reconstruido
+            # porque el pegado no traia el total; la pantalla debe decirlo.
+            "trabajado_origen": origen,
             "al_limite": bool(limite_min and 0 <= (margen or 0) <= _WHC_MARGEN_AVISO_PROPIO),
             "riesgo_diario": [{"inicio": b["inicio"], "fin": b["fin"],
                                "minutos": b["minutos"], "estimado": b["estimado"]}

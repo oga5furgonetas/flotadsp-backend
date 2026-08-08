@@ -274,7 +274,18 @@ export default function WHC() {
                             {c.nombre}
                           </div>
                         </td>
-                        <td className="px-3 py-2.5 text-right tabular-nums text-dark-300">{hm(c.trabajado)}</td>
+                        {/* Si el pegado no traia la linea de horas, el total se
+                            reconstruye desde los bloques. Se marca para no
+                            presentarlo como dato del portal. */}
+                        <td className="px-3 py-2.5 text-right tabular-nums text-dark-300">
+                          {hm(c.trabajado)}
+                          {c.trabajado_origen === 'bloques' && (
+                            <span className="ml-1.5 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-medium text-amber-300"
+                                  title="El pegado no traía la línea de horas de este conductor; el total está sumado desde sus bloques.">
+                              de bloques
+                            </span>
+                          )}
+                        </td>
                         <td className={`px-3 py-2.5 text-right font-semibold tabular-nums ${
                           c.supera_semanal ? 'text-red-300' : c.al_limite ? 'text-amber-300' : 'text-emerald-300'}`}>
                           {signo(c.margen_semanal)}
