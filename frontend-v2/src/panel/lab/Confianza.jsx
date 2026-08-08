@@ -14,30 +14,38 @@
    afirmar, con la prueba de por qué. No es humildad decorativa: son resultados
    negativos documentados, y tenerlos a la vista es lo que impide que dentro de
    seis meses alguien vuelva a construir el predictor que ya se descartó. */
-import { fuentes } from './datos'
+import { DATOS_SINTETICOS } from './datos'
 import { NO_DEMOSTRABLE } from './motor'
 import { BandaSintetica, Cabecera, Clase } from './ui'
 
-export default function Confianza() {
+export default function Confianza({ datos = DATOS_SINTETICOS, cabecera = true }) {
+  const fuentes = datos.fuentes || {}
   const filas = Object.entries(fuentes).map(([k, f]) => {
-    const min = Math.round((Date.now() - Date.parse(f.actualizado)) / 60000)
+    // Sin fecha no se inventa una: "nunca" es una respuesta legítima y es
+    // justo la que hay que ver cuando una fuente manual lleva sin tocarse.
+    const min = f.actualizado ? Math.round((Date.now() - Date.parse(f.actualizado)) / 60000) : null
     return { k, ...f, min }
-  }).sort((a, b) => b.min - a.min)
+  }).sort((a, b) => (b.min ?? Infinity) - (a.min ?? Infinity))
 
   return (
     <div className="mx-auto max-w-3xl">
-      <Cabecera
-        titulo="Confianza"
-        bajada="De cuándo es cada número, cómo llega y qué pasa si nadie lo actualiza. Y debajo, lo que el producto no puede afirmar aunque lo parezca."
-      />
-      <BandaSintetica />
+      {cabecera && (
+        <>
+          <Cabecera
+            titulo="Confianza"
+            bajada="De cuándo es cada número, cómo llega y qué pasa si nadie lo actualiza. Y debajo, lo que el producto no puede afirmar aunque lo parezca."
+          />
+          <BandaSintetica />
+        </>
+      )}
 
       <section className="rise">
         <h2 className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-dark-500">Frescura de las fuentes</h2>
         <div className="mt-4 divide-y divide-white/[0.05]">
           {filas.map((f) => {
-            const viejo = f.min > 60 * 24 || f.desfase_dias > 0
-            const txt = f.min < 60 ? `hace ${f.min} min`
+            const viejo = f.min === null || f.min > 60 * 24 || f.desfase_dias > 0
+            const txt = f.min === null ? 'sin fecha conocida'
+              : f.min < 60 ? `hace ${f.min} min`
               : f.min < 60 * 36 ? `hace ${Math.round(f.min / 60)} h`
               : `hace ${Math.round(f.min / 1440)} días`
             return (

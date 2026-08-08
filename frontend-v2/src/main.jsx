@@ -228,6 +228,7 @@ const PanelDSC = lazy(() => import('./panel/pages/DSC'))
 /* LAB — zona experimental. Sin entrada en el menú a propósito: se llega por
    /panel/lab. Datos sintéticos, no llama a ninguna API. */
 const LabShell = lazy(() => import('./panel/lab/ui').then((m) => ({ default: m.LabShell })))
+const PanelLab = lazy(() => import('./panel/lab/PanelLab'))
 const LabHub = lazy(() => import('./panel/lab/LabHub'))
 const LabSenales = lazy(() => import('./panel/lab/Senales'))
 const LabParte = lazy(() => import('./panel/lab/Parte'))
@@ -326,6 +327,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="paquetes" element={<PanelPaquetes />} />
                 <Route path="whc" element={<PanelWHC />} />
                 <Route path="dsc" element={<PanelDSC />} />
+                {/* Laboratorio con datos REALES del LAB (hereda sesión y centro) */}
+                <Route path="lab" element={<PanelLab />} />
               </Route>
 
               {/* ── ZONA EXPERIMENTAL ──────────────────────────────────────

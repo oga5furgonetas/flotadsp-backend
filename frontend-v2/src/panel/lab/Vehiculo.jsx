@@ -17,27 +17,43 @@
    ventana. Si tiene tres turnos, tiene tres. La tentación de "el más probable"
    es exactamente la que fabrica falsos positivos caros con las personas. */
 import { useState } from 'react'
-import { vehiculos, ledger, inspecciones } from './datos'
+import { DATOS_SINTETICOS } from './datos'
 import { lineaVehiculo, fecha } from './motor'
 import { BandaSintetica, Cabecera, Clase } from './ui'
 
 const SEV = { leve: '#fbbf24', moderado: '#fb923c', grave: '#f87171', critico: '#ef4444', sin_danos: '#34d399' }
 
-export default function Vehiculo() {
-  const [sel, setSel] = useState(vehiculos[0].id)
+export default function Vehiculo({ datos = DATOS_SINTETICOS, cabecera = true }) {
+  const { vehiculos = [], ledger = [], inspecciones = [] } = datos
+  const [sel, setSel] = useState(vehiculos[0]?.id || null)
   const v = vehiculos.find((x) => x.id === sel)
-  const linea = lineaVehiculo(sel)
+  const linea = v ? lineaVehiculo(datos, sel) : []
   const abiertos = ledger.filter((l) => l.vehicle_id === sel && l.status === 'open')
   const reparados = ledger.filter((l) => l.vehicle_id === sel && l.status === 'repaired')
   const insp = inspecciones.filter((i) => i.vehicle_id === sel)
 
+  if (!v) {
+    return (
+      <div className="mx-auto max-w-4xl">
+        {cabecera && <Cabecera titulo="Memoria del vehículo" bajada="" />}
+        <p className="rounded-xl border border-amber-500/25 bg-amber-500/[0.07] p-4 text-[14px] text-amber-200">
+          No hay vehículos en esta fuente de datos. Sin flota no hay nada que recordar.
+        </p>
+      </div>
+    )
+  }
+
   return (
     <div className="mx-auto max-w-4xl">
-      <Cabecera
-        titulo="Memoria del vehículo"
-        bajada="Todo lo que le ha pasado a una furgoneta sobre un mismo eje de tiempo. Hoy esta información existe, pero repartida entre cuatro pantallas distintas y sin orden cronológico."
-      />
-      <BandaSintetica />
+      {cabecera && (
+        <>
+          <Cabecera
+            titulo="Memoria del vehículo"
+            bajada="Todo lo que le ha pasado a una furgoneta sobre un mismo eje de tiempo. Hoy esta información existe, pero repartida entre cuatro pantallas distintas y sin orden cronológico."
+          />
+          <BandaSintetica />
+        </>
+      )}
 
       <div className="mb-7 flex flex-wrap gap-1.5">
         {vehiculos.map((x) => (
@@ -59,7 +75,9 @@ export default function Vehiculo() {
           <section className="rise">
             <h2 className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-dark-500">Estado del cuerpo</h2>
             <p className="mt-2 text-[13.5px] leading-relaxed text-dark-400">
-              {v.brand} {v.model} · {v.mileage.toLocaleString('es-ES')} km · {v.provider}
+              {v.brand} {v.model}
+              {v.mileage ? ` · ${v.mileage.toLocaleString('es-ES')} km` : ''}
+              {v.provider ? ` · ${v.provider}` : ''}
             </p>
 
             <div className="mt-4 space-y-1.5">

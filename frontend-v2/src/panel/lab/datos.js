@@ -174,6 +174,14 @@ export const contadores = {
   cola_revision: 6,
   incidencias_abiertas: 2,
   inspecciones_fallidas: 1,           // analysis_status != 'ok'
+  // Del cuadrante de hoy, las que aún no han pasado inspección.
+  // Con datos reales sale de GET /stats/attention (missing_today).
+  asignadas_hoy: 5,
+  sin_inspeccion_hoy_total: 2,
+  sin_inspeccion_hoy: [
+    { plate: '1002 LAB', driver: 'Nuno Barreiro' },
+    { plate: '1003 LAB', driver: 'Héctor Lameiro' },
+  ],
 }
 
 /* ── Frescura declarada de cada fuente ───────────────────────────────────────
@@ -185,4 +193,14 @@ export const fuentes = {
   scorecard:  { etiqueta: 'Scorecard semanal (PDF)',   actualizado: d(2) + 'T10:00:00Z',            modo: 'manual',     desfase_dias: 2 },
   inspecciones: { etiqueta: 'Inspecciones',            actualizado: hace(465),                      modo: 'automático', desfase_dias: 0 },
   flota:      { etiqueta: 'Ficha de vehículos',        actualizado: d(3) + 'T08:00:00Z',            modo: 'manual',     desfase_dias: 0 },
+}
+
+/* ── El paquete que consume el motor ─────────────────────────────────────────
+   Misma forma exacta que devuelve apiLab.js con datos reales del LAB. Ése es
+   todo el truco: el motor no distingue uno de otro. */
+export const DATOS_SINTETICOS = {
+  hoy: HOY,
+  origen: 'sintetico',
+  vehiculos, conductores, ledger, inspecciones, asignaciones,
+  rutas, cortexOverview, whc, contadores, fuentes,
 }

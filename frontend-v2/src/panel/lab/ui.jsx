@@ -61,13 +61,14 @@ export function Clase({ id, mini = false }) {
 }
 
 export function Frescura({ fuente, fuentes }) {
-  const f = fuentes[fuente]
+  const f = (fuentes || {})[fuente]
   if (!f) return null
-  const min = Math.round((Date.now() - Date.parse(f.actualizado)) / 60000)
-  const txt = min < 60 ? `hace ${min} min`
+  const min = f.actualizado ? Math.round((Date.now() - Date.parse(f.actualizado)) / 60000) : null
+  const txt = min === null ? 'sin fecha conocida'
+    : min < 60 ? `hace ${min} min`
     : min < 60 * 36 ? `hace ${Math.round(min / 60)} h`
     : `hace ${Math.round(min / 1440)} días`
-  const viejo = min > 60 * 24 || f.desfase_dias > 0
+  const viejo = min === null || min > 60 * 24 || f.desfase_dias > 0
   return (
     <span className={`text-[11.5px] ${viejo ? 'text-amber-400/85' : 'text-dark-600'}`}>
       {f.etiqueta} · {txt}

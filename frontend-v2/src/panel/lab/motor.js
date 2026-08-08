@@ -5,6 +5,14 @@
    afirma algo, dice de qué clase de afirmación se trata, enseña la evidencia
    que la sostiene y admite qué la invalidaría.
 
+   El motor NO sabe de dónde vienen los datos. Recibe un paquete `D` y ya está.
+   Eso es lo que permite ejecutarlo contra fixtures sintéticos (datos.js) o
+   contra la API del LAB (apiLab.js) sin tocar una sola regla.
+
+   Forma del paquete D (los nombres son los del backend real):
+     { hoy, origen, vehiculos, conductores, ledger, inspecciones, asignaciones,
+       rutas, cortexOverview, whc, contadores, fuentes }
+
    LAS CUATRO CLASES (nunca se mezclan):
 
      HECHO        Está escrito en un campo de la base de datos. Se lee, no se
@@ -27,11 +35,6 @@
    ella hoy. Un número que no cambia ninguna decisión es ruido con estilo.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import {
-  HOY, vehiculos, conductores, ledger, inspecciones, asignaciones,
-  rutas, cortexOverview, whc, contadores, conductorPorId, vehiculoPorId,
-} from './datos'
-
 export const CLASES = {
   hecho:      { id: 'hecho',      etiqueta: 'HECHO',          color: '#34d399', ayuda: 'Leído de un campo de la base de datos. No se calcula nada.' },
   aritmetica: { id: 'aritmetica', etiqueta: 'ARITMÉTICA',     color: '#38bdf8', ayuda: 'Suma o resta de hechos. Determinista: se puede rehacer a mano.' },
@@ -39,10 +42,19 @@ export const CLASES = {
   nodem:      { id: 'nodem',      etiqueta: 'NO DEMOSTRABLE', color: '#f87171', ayuda: 'No se puede sostener con los datos actuales. No se afirma.' },
 }
 
-const dias = (iso) => Math.round((Date.parse(iso + 'T12:00:00Z') - Date.parse(HOY + 'T12:00:00Z')) / 86400000)
-const hm = (min) => `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, '0')}m`
-const fecha = (iso) => new Date(iso.length > 10 ? iso : iso + 'T12:00:00Z')
-  .toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
+const DIA = 86400000
+export const hm = (min) => `${Math.floor(min / 60)}h ${String(Math.round(min % 60)).padStart(2, '0')}m`
+export const fecha = (iso) => {
+  if (!iso) return '—'
+  const d = new Date(String(iso).length > 10 ? iso : iso + 'T12:00:00Z')
+  return isNaN(d) ? '—' : d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
+}
+/* Días que FALTAN hasta `iso` (negativo = ya pasó). Ojo con el signo: tenerlo
+   invertido hacía anunciar como caducada una ITV a 11 días vista. */
+export const diasHasta = (iso, hoy) =>
+  Math.round((Date.parse(String(iso).slice(0, 10) + 'T12:00:00Z') - Date.parse(hoy + 'T12:00:00Z')) / DIA)
+const minDesde = (iso) => (iso ? Math.round((Date.now() - Date.parse(iso)) / 60000) : null)
+const num = (x) => (typeof x === 'number' && isFinite(x) ? x : null)
 
 /* ═══════════════════════════════════════════════════════════════════════════
    LO QUE NO SE PUEDE AFIRMAR
@@ -85,47 +97,56 @@ export const NO_DEMOSTRABLE = [
 ]
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   REGLAS
-   Cada regla devuelve 0..n señales. Una regla es una función pura de los datos.
+   REGLAS · cada una es función pura de D y devuelve 0..n señales
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* R1 · WHC — proyección semanal.
-   Clase: ARITMÉTICA. Lo trabajado lo da el portal (hecho); el bloque que queda
-   dura ~9 h (mediana medida: 8h59m sobre 7 bloques sin hora). Sumarlos no es
-   predecir: es decir qué pasa SI se completa lo planificado.
-   OJO: el límite es el PROPIO (55 h), nunca "incumplimiento de Amazon". */
-function reglaWHC() {
+   ARITMÉTICA: lo trabajado lo da el portal (hecho); el bloque que queda dura
+   ~9 h (mediana medida: 8h59m). Sumarlos no es predecir, es decir qué pasa SI
+   se completa lo planificado.
+   El límite es el PROPIO (55 h), NUNCA "incumplimiento de Amazon": está
+   demostrado que el de Amazon está por encima de 56h30m y no se conoce. */
+function reglaWHC(D) {
+  const w = D.whc
+  if (!w || !Array.isArray(w.conductores) || !w.limite_min) return []
   const out = []
-  for (const c of whc.conductores) {
-    const margen = whc.limite_min - c.trabajado
+  for (const c of w.conductores) {
+    const trabajado = num(c.trabajado)
+    const proyeccion = num(c.proyeccion)
+    if (trabajado === null) continue
+    const margen = w.limite_min - trabajado
     const pasaYa = margen < 0
-    const proyPasa = c.proyeccion > whc.limite_min
+    const proyPasa = proyeccion !== null && proyeccion > w.limite_min
     if (!pasaYa && !proyPasa) continue
+    const nombre = c.nombre || c.name || c.conductor || 'Conductor sin nombre'
+    const extra = proyeccion !== null ? proyeccion - trabajado : 0
     out.push({
-      id: `whc-${c.driver_id}`,
+      id: `whc-${c.driver_id || nombre}`,
       clase: pasaYa ? 'hecho' : 'aritmetica',
       prioridad: pasaYa ? 95 : 80,
       area: 'Horas',
       titulo: pasaYa
-        ? `${c.nombre} ya ha pasado tu límite semanal`
-        : `${c.nombre} pasa tu límite semanal si completa lo planificado`,
+        ? `${nombre} ya ha pasado tu límite semanal`
+        : `${nombre} pasa tu límite semanal si completa lo planificado`,
       resumen: pasaYa
-        ? `${hm(c.trabajado)} trabajadas · ${hm(-margen)} por encima de las ${hm(whc.limite_min)}`
-        : `${hm(c.trabajado)} + ${hm(c.proyeccion - c.trabajado)} del bloque que queda = ${hm(c.proyeccion)}`,
+        ? `${hm(trabajado)} trabajadas · ${hm(-margen)} por encima de las ${hm(w.limite_min)}`
+        : `${hm(trabajado)} + ${hm(extra)} del bloque que queda = ${hm(proyeccion)}`,
       calculo: pasaYa
-        ? `${hm(c.trabajado)} − ${hm(whc.limite_min)} = ${hm(-margen)} de exceso`
-        : `${hm(c.trabajado)} (trabajado, dato del portal) + ${hm(c.proyeccion - c.trabajado)} (${c.bloques_restantes} bloque restante × 9 h de mediana) = ${hm(c.proyeccion)} · límite ${hm(whc.limite_min)}`,
+        ? `${hm(trabajado)} − ${hm(w.limite_min)} = ${hm(-margen)} de exceso`
+        : `${hm(trabajado)} (trabajado, dato del portal) + ${hm(extra)} (${c.bloques_restantes ?? '?'} bloque(s) restante(s) × 9 h de mediana) = ${hm(proyeccion)} · límite ${hm(w.limite_min)}`,
       evidencia: [
-        { k: 'Trabajado (lo da el portal)', v: hm(c.trabajado), clase: 'hecho' },
-        { k: 'Planificado', v: hm(c.planificado), clase: 'hecho' },
-        { k: 'Bloques que quedan', v: String(c.bloques_restantes), clase: 'hecho' },
+        { k: 'Trabajado (lo da el portal)', v: hm(trabajado), clase: 'hecho' },
+        c.planificado != null && { k: 'Planificado', v: hm(c.planificado), clase: 'hecho' },
+        { k: 'Bloques que quedan', v: String(c.bloques_restantes ?? '—'), clase: 'hecho' },
         { k: 'Duración implícita de bloque', v: '9h 00m (mediana medida)', clase: 'estimacion' },
-        { k: 'Tu límite (editable)', v: hm(whc.limite_min), clase: 'hecho' },
-      ],
+        { k: 'Tu límite (editable)', v: hm(w.limite_min), clase: 'hecho' },
+      ].filter(Boolean),
       invalidadores: [
         'Si el conductor no hace el bloque que queda, la proyección no ocurre.',
-        'El límite de 55 h es TUYO, no el de Amazon: se ha visto a alguien con 56h 30m sin generar excepción semanal (docs/WHC.md §6.2).',
-        `El plan se pegó a mano el ${fecha(whc.pegado_el)}. Si la semana ha cambiado desde entonces, estos números son viejos.`,
+        'El límite es TUYO, no el de Amazon: se ha visto a alguien con 56h 30m sin generar excepción semanal (docs/WHC.md §6.2).',
+        w.pegado_el
+          ? `El plan se pegó a mano el ${fecha(w.pegado_el)}. Si la semana ha cambiado desde entonces, estos números son viejos.`
+          : 'El plan se pega a mano: comprueba que el de esta semana está puesto.',
       ],
       fuente: 'whc',
       acciones: [{ txt: 'Ver el desglose de bloques' }, { txt: 'Reasignar el último bloque' }, { txt: 'Ignorar esta semana' }],
@@ -134,99 +155,98 @@ function reglaWHC() {
   return out
 }
 
-/* R2 · Ruta parada.
-   Clase: HECHO. min_sin_entregar sale de la hora de la última entrega, que se
-   comprobó contra cortex_events sobre 400 paquetes con desviación mediana 0 s.
-   NO dice "va a acabar tarde" — eso está demostrado que no se puede (§ NO_DEMOSTRABLE).
-   Dice: lleva X minutos sin entregar y le quedan Y. Y ya. */
+/* R2 · Ruta parada. HECHO.
+   min_sin_entregar sale de la hora de la última entrega, comprobada contra
+   cortex_events sobre 400 paquetes con desviación mediana 0 s.
+   NO dice "va a acabar tarde": eso está demostrado que no se puede. */
 const PARON_MIN = 120
-function reglaParon() {
-  return rutas
-    .filter((r) => (r.min_sin_entregar ?? 0) >= PARON_MIN && r.pendientes > 0)
+function reglaParon(D) {
+  return (D.rutas || [])
+    .filter((r) => (r.min_sin_entregar ?? 0) >= PARON_MIN && (r.pendientes ?? 0) > 0)
     .map((r) => ({
       id: `paron-${r.route_code}`,
       clase: 'hecho',
       prioridad: 88,
       area: 'Reparto',
-      titulo: `${r.route_code} lleva ${Math.floor(r.min_sin_entregar / 60)}h ${r.min_sin_entregar % 60}m sin entregar un paquete`,
-      resumen: `${r.pendientes} pendientes de ${r.total} · ${r.driver_name}`,
-      calculo: `Última entrega registrada: ${new Date(r.ultima_entrega).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}. Ahora menos esa hora = ${r.min_sin_entregar} min.`,
+      titulo: `${r.route_code} lleva ${Math.floor(r.min_sin_entregar / 60)}h ${String(r.min_sin_entregar % 60).padStart(2, '0')}m sin entregar un paquete`,
+      resumen: `${r.pendientes} pendientes de ${r.total} · ${r.driver_name || 'sin conductor emparejado'}`,
+      calculo: `Última entrega registrada: ${r.ultima_entrega ? new Date(r.ultima_entrega).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '—'}. Ahora menos esa hora = ${r.min_sin_entregar} min.`,
       evidencia: [
         { k: 'Entregados', v: `${r.delivered} de ${r.total}`, clase: 'hecho' },
         { k: 'Pendientes', v: String(r.pendientes), clase: 'hecho' },
-        { k: 'Intentados sin entregar', v: String(r.attempted), clase: 'hecho' },
+        { k: 'Intentados sin entregar', v: String(r.attempted ?? 0), clase: 'hecho' },
         { k: 'Minutos sin entregar', v: String(r.min_sin_entregar), clase: 'hecho' },
       ],
       invalidadores: [
         'Una parada larga puede ser una comida, una zona sin cobertura o un edificio grande con muchas entregas seguidas que se registran juntas.',
         'El parón caza el 70 % de las rutas que acaban mal, pero acierta sólo el 41 % de las veces: más de la mitad de los avisos serían rutas sanas. Por eso esto NO es una alerta automática (docs/PREDICTOR_RESCATES.md).',
-        `Cortex capturó por última vez hace ${Math.round((Date.now() - Date.parse(cortexOverview.last_capture_at)) / 60000)} min. Si la extensión se ha parado, el contador sigue subiendo solo.`,
+        'Si la extensión de Cortex se ha parado, el contador sigue subiendo solo.',
       ],
       fuente: 'cortex',
       acciones: [{ txt: 'Llamar al conductor' }, { txt: 'Ver los paquetes pendientes' }, { txt: 'Marcar como revisado' }],
     }))
 }
 
-/* R3 · Vencimientos (ITV / renting).
-   Clase: HECHO. Es una resta de fechas contra un campo de la ficha. */
-function reglaVencimientos() {
+/* R3 · Vencimientos (ITV). HECHO: resta de fechas contra un campo de la ficha. */
+function reglaVencimientos(D) {
   const out = []
-  for (const v of vehiculos) {
-    // dias() ya devuelve "días que faltan" (negativo = pasado). Invertirlo aquí
-    // hacía que una ITV a 11 días vista se anunciara como caducada.
-    const dITV = v.itv_date ? dias(v.itv_date) : null
-    if (dITV !== null && dITV <= 30) {
-      out.push({
-        id: `itv-${v.id}`,
-        clase: 'hecho',
-        prioridad: dITV <= 0 ? 99 : 84,
-        area: 'Flota',
-        titulo: dITV <= 0
-          ? `${v.license_plate} circula con la ITV caducada`
-          : `${v.license_plate} tiene la ITV a ${dITV} días`,
-        resumen: `${v.brand} ${v.model} · caduca el ${fecha(v.itv_date)}`,
-        calculo: `itv_date = ${v.itv_date}. Hoy = ${HOY}. Diferencia = ${dITV} días.`,
-        evidencia: [
-          { k: 'Matrícula', v: v.license_plate, clase: 'hecho' },
-          { k: 'Caducidad ITV', v: v.itv_date, clase: 'hecho' },
-          { k: 'Estado del vehículo', v: v.status, clase: 'hecho' },
-        ],
-        invalidadores: [
-          'La fecha se mete a mano en la ficha. Si nadie la actualizó tras pasar la ITV, esto es un falso positivo.',
-          'No hay comprobación contra ningún registro oficial: el sistema sólo sabe lo que alguien escribió.',
-        ],
-        fuente: 'flota',
-        acciones: [{ txt: 'Reservar cita' }, { txt: 'Actualizar la fecha' }, { txt: 'Sacar de circulación' }],
-      })
-    }
+  for (const v of D.vehiculos || []) {
+    if (!v.itv_date) continue
+    const d = diasHasta(v.itv_date, D.hoy)
+    if (!isFinite(d) || d > 30) continue
+    out.push({
+      id: `itv-${v.id}`,
+      clase: 'hecho',
+      prioridad: d <= 0 ? 99 : 84,
+      area: 'Flota',
+      titulo: d <= 0
+        ? `${v.license_plate} circula con la ITV caducada`
+        : `${v.license_plate} tiene la ITV a ${d} días`,
+      resumen: `${v.brand || ''} ${v.model || ''} · caduca el ${fecha(v.itv_date)}`.trim(),
+      calculo: `itv_date = ${String(v.itv_date).slice(0, 10)}. Hoy = ${D.hoy}. Diferencia = ${d} días.`,
+      evidencia: [
+        { k: 'Matrícula', v: v.license_plate, clase: 'hecho' },
+        { k: 'Caducidad ITV', v: String(v.itv_date).slice(0, 10), clase: 'hecho' },
+        { k: 'Estado del vehículo', v: v.status || '—', clase: 'hecho' },
+      ],
+      invalidadores: [
+        'La fecha se mete a mano en la ficha. Si nadie la actualizó tras pasar la ITV, esto es un falso positivo.',
+        'No hay comprobación contra ningún registro oficial: el sistema sólo sabe lo que alguien escribió.',
+      ],
+      fuente: 'flota',
+      acciones: [{ txt: 'Reservar cita' }, { txt: 'Actualizar la fecha' }, { txt: 'Sacar de circulación' }],
+    })
   }
   return out
 }
 
-/* R4 · Aceite.
-   Clase: ARITMÉTICA con una advertencia grande: el km de la ficha no se
+/* R4 · Aceite. ARITMÉTICA, con una advertencia grande: el km de la ficha no se
    actualiza solo. Si el cuentakilómetros es viejo, el cálculo es viejo. */
-function reglaAceite() {
+function reglaAceite(D) {
   const out = []
-  for (const v of vehiculos) {
-    if (!v.oil_last_change_km || !v.mileage) continue
-    const recorrido = v.mileage - v.oil_last_change_km
-    const restante = v.oil_interval_km - recorrido
-    if (restante > v.oil_warning_before_km) continue
+  for (const v of D.vehiculos || []) {
+    const km = num(v.mileage), base = num(v.oil_last_change_km)
+    if (km === null || base === null) continue
+    const intervalo = num(v.oil_interval_km) ?? 15000
+    const aviso = num(v.oil_warning_before_km) ?? 2500
+    const recorrido = km - base
+    const restante = intervalo - recorrido
+    if (restante > aviso) continue
+    const n = (x) => x.toLocaleString('es-ES')
     out.push({
       id: `aceite-${v.id}`,
       clase: 'aritmetica',
       prioridad: restante <= 0 ? 70 : 55,
       area: 'Flota',
       titulo: restante <= 0
-        ? `${v.license_plate} ha pasado el cambio de aceite en ${Math.abs(restante).toLocaleString('es-ES')} km`
-        : `${v.license_plate} llega al cambio de aceite en ${restante.toLocaleString('es-ES')} km`,
-      resumen: `${recorrido.toLocaleString('es-ES')} km desde el último cambio · intervalo ${v.oil_interval_km.toLocaleString('es-ES')} km`,
-      calculo: `${v.mileage.toLocaleString('es-ES')} (km actuales) − ${v.oil_last_change_km.toLocaleString('es-ES')} (km del último cambio) = ${recorrido.toLocaleString('es-ES')} km. Intervalo ${v.oil_interval_km.toLocaleString('es-ES')} → quedan ${restante.toLocaleString('es-ES')}.`,
+        ? `${v.license_plate} ha pasado el cambio de aceite en ${n(Math.abs(restante))} km`
+        : `${v.license_plate} llega al cambio de aceite en ${n(restante)} km`,
+      resumen: `${n(recorrido)} km desde el último cambio · intervalo ${n(intervalo)} km`,
+      calculo: `${n(km)} (km actuales) − ${n(base)} (km del último cambio) = ${n(recorrido)} km. Intervalo ${n(intervalo)} → quedan ${n(restante)}.`,
       evidencia: [
-        { k: 'Km actuales (ficha)', v: v.mileage.toLocaleString('es-ES'), clase: 'hecho' },
-        { k: 'Km del último cambio', v: v.oil_last_change_km.toLocaleString('es-ES'), clase: 'hecho' },
-        { k: 'Intervalo configurado', v: v.oil_interval_km.toLocaleString('es-ES'), clase: 'hecho' },
+        { k: 'Km actuales (ficha)', v: n(km), clase: 'hecho' },
+        { k: 'Km del último cambio', v: n(base), clase: 'hecho' },
+        { k: 'Intervalo configurado', v: n(intervalo), clase: 'hecho' },
       ],
       invalidadores: [
         'Los km salen de la ficha, que se actualiza con la foto del cuentakilómetros o a mano. Si lleva días sin actualizarse, el vehículo ya ha recorrido más de lo que dice esta cuenta.',
@@ -240,145 +260,135 @@ function reglaAceite() {
 }
 
 /* R5 · Daño nuevo con ventana de atribución.
-   Ésta es la señal más interesante del laboratorio y la que más cuidado pide.
+   La señal más interesante del laboratorio y la que más cuidado pide.
 
-   Clase: la EXISTENCIA del daño es ESTIMACIÓN (lo dijo un modelo, con su
-   confianza). La VENTANA es HECHO: entre la inspección donde se vio por
-   primera vez y la inspección limpia anterior sólo hubo unos turnos concretos,
-   y daily_assignments dice quién los hizo.
+   La EXISTENCIA del daño es ESTIMACIÓN (lo dijo un modelo, con su confianza).
+   La VENTANA es HECHO: entre la inspección que lo vio y la anterior que no lo
+   vio sólo hubo unos turnos, y daily_assignments dice quién los hizo.
 
-   Lo que NO se hace: nombrar un culpable. Se enseña la ventana y quién estuvo
-   dentro. Si la ventana tiene tres turnos, se dice que tiene tres. */
-function reglaAtribucion() {
+   Lo que NO se hace: nombrar un culpable. Se enseña la ventana. Si tiene tres
+   turnos, tiene tres. Si no tiene principio, se dice que no atribuye nada. */
+const ANCHA = 4          // más turnos que esto ya no señalan a nadie
+function reglaAtribucion(D) {
   const out = []
-  const abiertos = ledger.filter((l) => l.status === 'open')
-  for (const l of abiertos) {
-    const dAntig = -dias(l.first_seen)
-    if (dAntig > 7) continue                        // sólo lo reciente es accionable
-    const v = vehiculoPorId(l.vehicle_id)
-    const insp = inspecciones.find((i) => i.id === l.first_seen_inspection)
-    // Inspección anterior del mismo vehículo: cierra la ventana por abajo.
-    const previas = inspecciones
-      .filter((i) => i.vehicle_id === l.vehicle_id && Date.parse(i.created_at) < Date.parse(insp?.created_at || HOY))
-      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
-    const anterior = previas[0] || null
+  const vPorId = new Map((D.vehiculos || []).map((v) => [v.id, v]))
+  for (const l of (D.ledger || []).filter((x) => x.status === 'open')) {
+    if (!l.first_seen) continue
+    const antig = -diasHasta(l.first_seen, D.hoy)
+    if (!isFinite(antig) || antig > 7 || antig < 0) continue     // sólo lo reciente es accionable
+    const v = vPorId.get(l.vehicle_id)
+    const insp = (D.inspecciones || []).find((i) => i.id === l.first_seen_inspection)
+    const refT = insp ? Date.parse(insp.created_at) : Date.parse(l.first_seen + 'T12:00:00Z')
+    const anterior = (D.inspecciones || [])
+      .filter((i) => i.vehicle_id === l.vehicle_id && Date.parse(i.created_at) < refT)
+      .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0] || null
     const desde = anterior ? anterior.created_at.slice(0, 10) : null
-    const hasta = insp ? insp.created_at.slice(0, 10) : l.first_seen
-    // Turnos dentro de la ventana → quién llevó la furgoneta
-    const dentro = asignaciones
+    const hasta = insp ? insp.created_at.slice(0, 10) : String(l.first_seen).slice(0, 10)
+    const dentro = (D.asignaciones || [])
       .filter((a) => (!desde || a.date > desde) && a.date <= hasta)
-      .map((a) => ({ date: a.date, slot: a.slots.find((s) => s.vehicle_id === l.vehicle_id) }))
+      .map((a) => ({ date: a.date, slot: (a.slots || []).find((s) => s.vehicle_id === l.vehicle_id) }))
       .filter((x) => x.slot)
       .sort((a, b) => a.date.localeCompare(b.date))
-    const nombres = [...new Set(dentro.map((x) => x.slot.driver_name))]
-    const cerrada = nombres.length === 1
-    /* Sin inspección anterior la ventana no tiene suelo: se abre hasta el
-       principio del histórico. Pintar esos turnos sería teatro — con 57 turnos
-       y 3 conductores no se atribuye nada. Se dice, y punto.
-       (Lo descubrí construyéndolo: la primera versión dibujaba las 57 fichas.) */
-    const acotada = !!desde
-    const ANCHA = 4                                 // más de esto ya no señala a nadie
+    const nombres = [...new Set(dentro.map((x) => x.slot.driver_name).filter(Boolean))]
+    const acotada = !!desde && dentro.length > 0
+    const cerrada = acotada && nombres.length === 1
+    const ancha = dentro.length > ANCHA
 
     out.push({
       id: `dano-${l.vehicle_id}-${l.panel}`,
       clase: 'estimacion',
-      prioridad: l.rank >= 3 ? 90 : 65,
+      prioridad: (l.rank ?? 1) >= 3 ? 90 : 65,
       area: 'Daños',
-      titulo: `Daño ${l.severity} nuevo en ${v?.license_plate}: ${l.part}`,
+      titulo: `Daño ${l.severity} nuevo en ${v?.license_plate || l.vehicle_id}: ${l.part || l.panel}`,
       resumen: !acotada
-        ? 'No atribuible: no hay ninguna inspección anterior de este vehículo'
+        ? 'No atribuible: no hay inspección anterior con la que acotar la ventana'
         : cerrada
           ? `Apareció en un único turno — ${nombres[0]}, ${fecha(hasta)}`
           : `Ventana de ${dentro.length} turnos · ${nombres.length} conductores posibles`,
-      calculo: `El registro de daños no tenía nada en "${l.panel}" hasta la inspección del ${fecha(hasta)}${desde ? `, y la inspección anterior del ${fecha(desde)} salió sin ese daño` : ''}. La ventana son ${dentro.length} turno(s).`,
+      calculo: `El registro de daños no tenía nada en "${l.panel}" hasta la inspección del ${fecha(hasta)}${desde ? `, y la anterior del ${fecha(desde)} salió sin ese daño` : ''}. Turnos en la ventana: ${dentro.length}.`,
       evidencia: [
         { k: 'Panel', v: l.panel, clase: 'hecho' },
         { k: 'Severidad (la dijo el modelo)', v: l.severity, clase: 'estimacion' },
-        { k: 'Confianza del análisis', v: insp ? `${Math.round(insp.confidence * 100)} %` : '—', clase: 'estimacion' },
-        { k: 'Visto por primera vez', v: `${fecha(hasta)} (inspección ${l.first_seen_inspection})`, clase: 'hecho' },
-        { k: 'Inspección limpia anterior', v: desde ? fecha(desde) : 'no hay — el vehículo es nuevo en el sistema', clase: 'hecho' },
+        insp && { k: 'Confianza del análisis', v: `${Math.round((insp.confidence || 0) * 100)} %`, clase: 'estimacion' },
+        { k: 'Visto por primera vez', v: `${fecha(hasta)}${l.first_seen_inspection ? ` (inspección ${l.first_seen_inspection})` : ''}`, clase: 'hecho' },
+        { k: 'Inspección limpia anterior', v: desde ? fecha(desde) : 'no hay', clase: 'hecho' },
         { k: 'Turnos en la ventana',
-          v: !acotada ? `sin acotar (${dentro.length} turnos, ${nombres.length} conductores)`
+          v: !acotada ? 'sin acotar'
             : dentro.length <= ANCHA ? dentro.map((x) => `${fecha(x.date)} · ${x.slot.driver_name}`).join(' · ')
             : `${dentro.length} turnos entre el ${fecha(dentro[0].date)} y el ${fecha(dentro[dentro.length - 1].date)}`,
           clase: 'hecho' },
-        { k: 'Coste estimado', v: insp?.estimated_cost ? `${insp.estimated_cost} €` : '—', clase: 'estimacion' },
-      ],
+        insp?.estimated_cost ? { k: 'Coste estimado', v: `${insp.estimated_cost} €`, clase: 'estimacion' } : null,
+      ].filter(Boolean),
       invalidadores: [
         'El daño lo detecta un modelo. Puede ser un reflejo, barro o una sombra: hasta que un humano lo valide en Revisión Rápida es una sospecha.',
-        !acotada && 'No hay inspección anterior de este vehículo, así que la ventana no tiene principio: el daño pudo aparecer en cualquier momento. Esto NO señala a nadie.',
-        acotada && !cerrada && `La ventana tiene ${dentro.length} turnos, así que NO identifica a nadie. Sólo con una inspección por turno la ventana se cierra a una persona.`,
+        !acotada && 'Sin inspección anterior la ventana no tiene principio: el daño pudo aparecer en cualquier momento. Esto NO señala a nadie.',
+        acotada && !cerrada && `La ventana tiene ${dentro.length} turnos, así que NO identifica a nadie. Sólo con una inspección por turno se cierra a una persona.`,
         'El coste en € es una estimación del modelo, no un presupuesto.',
         'Si el vehículo pasó por chapa y no se registró, un daño viejo puede reaparecer como nuevo.',
       ].filter(Boolean),
       fuente: 'inspecciones',
       acciones: [{ txt: 'Validar en Revisión Rápida' }, { txt: 'Ver las dos fotos' }, { txt: 'Abrir parte con el renting' }],
-      atribucion: { desde, hasta, turnos: dentro, cerrada, nombres, acotada, ancha: dentro.length > ANCHA },
+      atribucion: { desde, hasta, turnos: dentro, cerrada, nombres, acotada, ancha },
     })
   }
   return out
 }
 
-/* R6 · Anomalía por concentración.
-   Clase: ARITMÉTICA (es un recuento y una comparación con la mediana), pero
-   con una compuerta dura: por debajo de N mínimo NO se emite. Una "anomalía"
-   sobre 3 inspecciones es una casualidad con gráfico.  */
+/* R6 · Compuerta de muestra. Una "anomalía" sobre 3 inspecciones es una
+   casualidad con gráfico. Por debajo del mínimo NO se emite nada. */
 const N_MINIMO = 8
-function reglaConcentracion() {
-  const porVehiculo = {}
-  for (const i of inspecciones) {
-    const e = (porVehiculo[i.vehicle_id] ||= { n: 0, nuevos: 0 })
-    e.n += 1
-    e.nuevos += i.new_damages
-  }
-  const total = Object.values(porVehiculo).reduce((a, e) => a + e.n, 0)
-  if (total < N_MINIMO) {
-    return [{
-      id: 'anomalia-sin-datos',
-      clase: 'nodem',
-      prioridad: 20,
-      area: 'Daños',
-      titulo: 'Todavía no hay datos suficientes para detectar concentraciones de daños',
-      resumen: `${total} inspecciones en el periodo · hacen falta al menos ${N_MINIMO}`,
-      calculo: `Con ${total} inspecciones, cualquier vehículo que destaque destaca por azar. La compuerta está en ${N_MINIMO}.`,
-      evidencia: [{ k: 'Inspecciones en el periodo', v: String(total), clase: 'hecho' },
-                  { k: 'Mínimo exigido', v: String(N_MINIMO), clase: 'hecho' }],
-      invalidadores: ['Esta señal desaparece sola en cuanto haya muestra. No hace falta hacer nada.'],
-      fuente: 'inspecciones',
-      acciones: [],
-    }]
-  }
-  return []
+function reglaConcentracion(D) {
+  const total = (D.inspecciones || []).length
+  if (total >= N_MINIMO) return []
+  return [{
+    id: 'anomalia-sin-datos',
+    clase: 'nodem',
+    prioridad: 20,
+    area: 'Daños',
+    titulo: 'Todavía no hay datos suficientes para detectar concentraciones de daños',
+    resumen: `${total} inspecciones en el periodo · hacen falta al menos ${N_MINIMO}`,
+    calculo: `Con ${total} inspecciones, cualquier vehículo que destaque destaca por azar. La compuerta está en ${N_MINIMO}.`,
+    evidencia: [{ k: 'Inspecciones en el periodo', v: String(total), clase: 'hecho' },
+                { k: 'Mínimo exigido', v: String(N_MINIMO), clase: 'hecho' }],
+    invalidadores: ['Esta señal desaparece sola en cuanto haya muestra. No hace falta hacer nada.'],
+    fuente: 'inspecciones',
+    acciones: [],
+  }]
 }
 
 /* R7 · Salud del propio sistema.
    Nadie mira si la tubería está viva hasta que lleva tres días muerta. Un
-   número viejo presentado como fresco es la peor mentira que puede contar un
-   panel, así que esto va como señal, no como pie de página. */
-function reglaSalud() {
+   número viejo presentado como fresco es la peor mentira de un panel. */
+function reglaSalud(D) {
   const out = []
-  const minCortex = Math.round((Date.now() - Date.parse(cortexOverview.last_capture_at)) / 60000)
-  if (minCortex > 45) {
+  const min = minDesde(D.cortexOverview?.last_capture_at)
+  if (min !== null && min > 45) {
     out.push({
       id: 'salud-cortex', clase: 'hecho', prioridad: 92, area: 'Sistema',
-      titulo: `Cortex lleva ${minCortex} minutos sin capturar`,
+      titulo: min > 1440
+        ? `Cortex lleva ${Math.round(min / 1440)} días sin capturar`
+        : `Cortex lleva ${min} minutos sin capturar`,
       resumen: 'Todo lo de la pantalla de reparto está congelado a esa hora',
-      calculo: `last_capture_at = ${cortexOverview.last_capture_at}. Ahora menos eso = ${minCortex} min.`,
-      evidencia: [{ k: 'Última captura', v: new Date(cortexOverview.last_capture_at).toLocaleTimeString('es-ES'), clase: 'hecho' },
-                  { k: 'Paquetes seguidos', v: String(cortexOverview.tracked), clase: 'hecho' }],
+      calculo: `last_capture_at = ${D.cortexOverview.last_capture_at}. Ahora menos eso = ${min} min.`,
+      evidencia: [
+        { k: 'Última captura', v: new Date(D.cortexOverview.last_capture_at).toLocaleString('es-ES'), clase: 'hecho' },
+        { k: 'Paquetes seguidos', v: String(D.cortexOverview.tracked ?? '—'), clase: 'hecho' },
+      ],
       invalidadores: ['Si la jornada ha terminado, es normal que no haya capturas nuevas.'],
       fuente: 'cortex',
       acciones: [{ txt: 'Comprobar la extensión' }],
     })
   }
-  if (contadores.inspecciones_fallidas > 0) {
+  const fallidas = (D.inspecciones || []).filter((i) => i.analysis_status && i.analysis_status !== 'ok')
+  if (fallidas.length) {
     out.push({
       id: 'salud-ia', clase: 'hecho', prioridad: 60, area: 'Sistema',
-      titulo: `${contadores.inspecciones_fallidas} inspección sin analizar`,
-      resumen: 'El análisis de IA falló — esas furgonetas no tienen parte de daños de hoy',
+      titulo: `${fallidas.length} inspección(es) sin analizar`,
+      resumen: 'El análisis de IA falló — esas furgonetas no tienen parte de daños',
       calculo: 'Inspecciones con analysis_status distinto de "ok".',
-      evidencia: inspecciones.filter((i) => i.analysis_status !== 'ok').map((i) => ({
-        k: vehiculoPorId(i.vehicle_id)?.license_plate || i.vehicle_id, v: i.analysis_status, clase: 'hecho',
+      evidencia: fallidas.slice(0, 8).map((i) => ({
+        k: (D.vehiculos || []).find((v) => v.id === i.vehicle_id)?.license_plate || i.vehicle_id,
+        v: i.analysis_status, clase: 'hecho',
       })),
       invalidadores: ['La causa más habitual es el cupo diario de Gemini agotado, no un fallo del vehículo ni del conductor.'],
       fuente: 'inspecciones',
@@ -390,67 +400,99 @@ function reglaSalud() {
 
 /* R8 · Conductor sin ID de Amazon.
    Pequeña, aburrida y con consecuencia real: sin driver_id no se puede cruzar
-   el informe de excepciones del scorecard con la ficha, y la persona que falló
-   se queda sin nombre (pasó de verdad — docs/WHC.md §4). */
-function reglaSinID() {
-  const sin = conductores.filter((c) => !c.driver_id)
+   el informe de excepciones del scorecard con la ficha, y quien falló se queda
+   sin nombre (pasó de verdad — docs/WHC.md §4). */
+function reglaSinID(D) {
+  const sin = (D.conductores || []).filter((c) => c.active !== false && !c.driver_id)
   if (!sin.length) return []
   return [{
     id: 'sin-id', clase: 'hecho', prioridad: 40, area: 'Equipo',
-    titulo: `${sin.length} conductor sin ID de Amazon en la ficha`,
-    resumen: sin.map((c) => c.name).join(', '),
-    calculo: 'Fichas de conductor con el campo driver_id vacío.',
-    evidencia: sin.map((c) => ({ k: c.name, v: 'driver_id vacío', clase: 'hecho' })),
+    titulo: `${sin.length} conductor(es) sin ID de Amazon en la ficha`,
+    resumen: sin.slice(0, 6).map((c) => c.name).join(', ') + (sin.length > 6 ? `, y ${sin.length - 6} más` : ''),
+    calculo: 'Fichas de conductor activas con el campo driver_id vacío.',
+    evidencia: sin.slice(0, 10).map((c) => ({ k: c.name, v: 'driver_id vacío', clase: 'hecho' })),
     invalidadores: ['Ninguno: o el campo está relleno o no lo está.'],
     fuente: 'flota',
     acciones: [{ txt: 'Emparejar desde Scorecard' }],
   }]
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════ */
+/* R9 · Furgonetas asignadas hoy que siguen sin inspeccionar. HECHO.
+   Cruce entre el cuadrante del día y las inspecciones de hoy. Es la señal más
+   accionable de todas porque tiene ventana corta: a las 20:00 ya no sirve.
 
-export function generarSenales() {
-  return [
-    ...reglaWHC(), ...reglaParon(), ...reglaVencimientos(), ...reglaAceite(),
-    ...reglaAtribucion(), ...reglaConcentracion(), ...reglaSalud(), ...reglaSinID(),
-  ].sort((a, b) => b.prioridad - a.prioridad)
+   Y es la mejor prueba de la tesis del laboratorio: esto YA lo calcula el
+   backend en GET /stats/attention, que se escribió para la app antigua y que
+   frontend-v2 no llama desde ninguna pantalla. El cálculo estaba hecho; lo que
+   faltaba era decirlo. */
+function reglaSinInspeccion(D) {
+  const c = D.contadores || {}
+  const n = c.sin_inspeccion_hoy_total
+  if (!n) return []
+  const faltan = c.sin_inspeccion_hoy || []
+  return [{
+    id: 'sin-inspeccion-hoy', clase: 'hecho', prioridad: 86, area: 'Flota',
+    titulo: `${n} furgoneta(s) asignada(s) hoy sin inspección`,
+    resumen: faltan.slice(0, 4).map((f) => f.plate).join(', ') + (n > 4 ? `, y ${n - 4} más` : ''),
+    calculo: `Del cuadrante de hoy (${c.asignadas_hoy ?? '?'} asignaciones), estas ${n} no tienen ninguna inspección con fecha de hoy.`,
+    evidencia: faltan.slice(0, 10).map((f) => ({ k: f.plate, v: f.driver || 'sin conductor', clase: 'hecho' })),
+    invalidadores: [
+      'Si la jornada acaba de empezar, es normal: todavía no han salido.',
+      'Una furgoneta del cuadrante que al final no salió aparece aquí igualmente.',
+    ],
+    fuente: 'inspecciones',
+    acciones: [{ txt: 'Avisar a los conductores' }, { txt: 'Ver el cuadrante' }],
+  }]
 }
 
-/* Línea de tiempo de un vehículo: ledger + inspecciones + vencimientos, todo
-   sobre un mismo eje. Sin inferencia: es un ordenamiento de hechos que hoy
-   viven repartidos en cuatro pantallas distintas. */
-export function lineaVehiculo(vehicleId) {
-  const v = vehiculoPorId(vehicleId)
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+export function generarSenales(D) {
+  if (!D) return []
+  const reglas = [reglaWHC, reglaParon, reglaVencimientos, reglaAceite,
+                  reglaAtribucion, reglaConcentracion, reglaSalud, reglaSinID,
+                  reglaSinInspeccion]
+  const out = []
+  for (const r of reglas) {
+    // Una regla que reviente por un dato raro no debe tumbar el resto del
+    // motor: con datos reales siempre aparece un documento que no cuadra.
+    try { out.push(...r(D)) } catch (e) { console.warn('[lab] regla fallida:', r.name, e) }
+  }
+  return out.sort((a, b) => b.prioridad - a.prioridad)
+}
+
+/* Línea de tiempo de un vehículo: ledger + inspecciones + vencimientos sobre un
+   mismo eje. Sin inferencia: es un ordenamiento de hechos que hoy viven
+   repartidos en cuatro pantallas distintas. */
+export function lineaVehiculo(D, vehicleId) {
+  const v = (D.vehiculos || []).find((x) => x.id === vehicleId)
   if (!v) return []
   const ev = []
-  for (const i of inspecciones.filter((x) => x.vehicle_id === vehicleId)) {
-    const cond = conductorPorId(i.driver_id)
+  for (const i of (D.inspecciones || []).filter((x) => x.vehicle_id === vehicleId)) {
+    const cond = (D.conductores || []).find((c) => c.id === i.driver_id)
     ev.push({
       fecha: i.created_at.slice(0, 10), tipo: 'inspeccion',
-      titulo: i.analysis_status !== 'ok' ? 'Inspección sin analizar' : `Inspección · ${i.severity}`,
+      titulo: i.analysis_status && i.analysis_status !== 'ok' ? 'Inspección sin analizar' : `Inspección · ${i.severity || 'sin datos'}`,
       detalle: `${cond?.name || 'sin conductor'}${i.new_damages ? ` · ${i.new_damages} daño nuevo` : ''}`,
-      clase: i.analysis_status !== 'ok' ? 'hecho' : 'estimacion',
+      clase: i.analysis_status && i.analysis_status !== 'ok' ? 'hecho' : 'estimacion',
       grave: i.severity === 'grave' || i.severity === 'critico',
     })
   }
-  for (const l of ledger.filter((x) => x.vehicle_id === vehicleId)) {
-    ev.push({
-      fecha: l.first_seen, tipo: 'dano',
-      titulo: `Daño registrado · ${l.part}`,
-      detalle: `severidad ${l.severity} · panel ${l.panel}`,
-      clase: 'estimacion', grave: l.rank >= 3,
-    })
+  for (const l of (D.ledger || []).filter((x) => x.vehicle_id === vehicleId)) {
+    if (l.first_seen) {
+      ev.push({ fecha: String(l.first_seen).slice(0, 10), tipo: 'dano',
+        titulo: `Daño registrado · ${l.part || l.panel}`,
+        detalle: `severidad ${l.severity} · panel ${l.panel}`, clase: 'estimacion', grave: (l.rank ?? 1) >= 3 })
+    }
     if (l.status === 'repaired' && l.repaired_at) {
-      ev.push({
-        fecha: l.repaired_at, tipo: 'reparacion',
-        titulo: `Reparado · ${l.part}`, detalle: l.repaired_note || '', clase: 'hecho', grave: false,
-      })
+      ev.push({ fecha: String(l.repaired_at).slice(0, 10), tipo: 'reparacion',
+        titulo: `Reparado · ${l.part || l.panel}`, detalle: l.repaired_note || '', clase: 'hecho', grave: false })
     }
   }
   if (v.itv_date) {
-    ev.push({ fecha: v.itv_date, tipo: 'itv', titulo: 'Caducidad de la ITV', detalle: '', clase: 'hecho', grave: dias(v.itv_date) <= 0, futuro: dias(v.itv_date) > 0 })
+    const d = diasHasta(v.itv_date, D.hoy)
+    ev.push({ fecha: String(v.itv_date).slice(0, 10), tipo: 'itv', titulo: 'Caducidad de la ITV',
+      detalle: '', clase: 'hecho', grave: d <= 0, futuro: d > 0 })
   }
   return ev.sort((a, b) => b.fecha.localeCompare(a.fecha))
 }
-
-export { hm, fecha, dias }

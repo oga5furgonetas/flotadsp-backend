@@ -11,11 +11,12 @@
    no escala — con 40 señales esto es ilegible. Está pensada para 3-6. */
 import { useMemo, useState } from 'react'
 import { generarSenales, NO_DEMOSTRABLE } from './motor'
-import { fuentes, whc, cortexOverview, rutas } from './datos'
+import { DATOS_SINTETICOS } from './datos'
 import { BandaSintetica, Cabecera, Clase, PorQue, Acciones, Frescura } from './ui'
 
-export default function Parte() {
-  const senales = useMemo(() => generarSenales(), [])
+export default function Parte({ datos = DATOS_SINTETICOS }) {
+  const { fuentes = {}, whc, cortexOverview = {}, rutas = [] } = datos
+  const senales = useMemo(() => generarSenales(datos), [datos])
   const criticas = senales.filter((s) => s.prioridad >= 84)
   const resto = senales.filter((s) => s.prioridad < 84 && s.clase !== 'nodem')
   const [abierta, setAbierta] = useState(criticas[0]?.id || null)
@@ -141,9 +142,17 @@ export default function Parte() {
         </div>
       </section>
 
-      <p className="pb-10 text-[12px] text-dark-600">
-        Plan de horas pegado el {new Date(whc.pegado_el).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })} · semana {whc.semana}
-      </p>
+      {whc?.pegado_el && (
+        <p className="pb-10 text-[12px] text-dark-600">
+          Plan de horas pegado el {new Date(whc.pegado_el).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' })}
+          {whc.semana ? ` · semana ${whc.semana}` : ''}
+        </p>
+      )}
+      {!whc && (
+        <p className="pb-10 text-[12px] text-amber-400/80">
+          No hay plan de horas pegado esta semana: el bloque de WHC está vacío por falta de datos, no porque todo vaya bien.
+        </p>
+      )}
     </div>
   )
 }

@@ -4,6 +4,7 @@
 import { Link } from 'react-router-dom'
 import { FlaskConical, ArrowRight } from 'lucide-react'
 import { generarSenales, NO_DEMOSTRABLE } from './motor'
+import { DATOS_SINTETICOS } from './datos'
 
 const EXPERIMENTOS = [
   {
@@ -37,7 +38,7 @@ const EXPERIMENTOS = [
 ]
 
 export default function LabHub() {
-  const senales = generarSenales()
+  const senales = generarSenales(DATOS_SINTETICOS)
 
   return (
     <div className="mx-auto max-w-3xl">

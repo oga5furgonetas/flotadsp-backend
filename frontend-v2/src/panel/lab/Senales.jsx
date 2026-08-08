@@ -8,13 +8,16 @@
    ARITMÉTICA / ESTIMACIÓN) se entiende de un vistazo o si estorba. */
 import { useMemo, useState } from 'react'
 import { generarSenales } from './motor'
-import { fuentes } from './datos'
+import { DATOS_SINTETICOS } from './datos'
 import { BandaSintetica, Cabecera, Clase, PorQue, Acciones, Frescura } from './ui'
 
 const AREAS = ['Todo', 'Horas', 'Reparto', 'Flota', 'Daños', 'Sistema', 'Equipo']
 
-export default function Senales() {
-  const senales = useMemo(() => generarSenales(), [])
+/* `datos` se recibe por prop: con fixtures desde /lab y con datos reales del
+   backend del LAB desde /panel/lab. El componente no sabe cuál es cuál. */
+export default function Senales({ datos = DATOS_SINTETICOS, cabecera = true }) {
+  const fuentes = datos.fuentes || {}
+  const senales = useMemo(() => generarSenales(datos), [datos])
   const [area, setArea] = useState('Todo')
   const [soloDuro, setSoloDuro] = useState(false)
 
@@ -28,11 +31,15 @@ export default function Senales() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <Cabecera
-        titulo="Señales"
-        bajada="Sólo lo que se sale de lo normal. Cada señal dice qué clase de afirmación es antes de que la leas: un hecho medido no se presenta igual que una estimación de un modelo."
-      />
-      <BandaSintetica />
+      {cabecera && (
+        <>
+          <Cabecera
+            titulo="Señales"
+            bajada="Sólo lo que se sale de lo normal. Cada señal dice qué clase de afirmación es antes de que la leas: un hecho medido no se presenta igual que una estimación de un modelo."
+          />
+          <BandaSintetica />
+        </>
+      )}
 
       {/* Resumen honesto de la composición: cuánto de lo que ves es medido */}
       <div className="mb-5 flex flex-wrap items-center gap-x-5 gap-y-2 border-y border-white/[0.06] py-3">
