@@ -129,7 +129,9 @@ function Lista({ titulo, filas, onAbrir }) {
   )
 }
 
-function Drawer({ D, sel, senales, onCerrar }) {
+/* Exportado: el shell nuevo (app/Shell.jsx) lo abre desde cualquier sitio.
+   Es la pieza central de la tesis — Intelligence como capa, no como página. */
+export function Drawer({ D, sel, senales, onCerrar }) {
   const esCond = sel.tipo === 'conductor'
   const c = esCond ? D.conductores.find((x) => x.id === sel.id) : null
   const v = !esCond ? D.vehiculos.find((x) => x.id === sel.id) : null

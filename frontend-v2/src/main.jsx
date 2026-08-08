@@ -238,6 +238,7 @@ const LabConfianza = lazy(() => import('./panel/lab/Confianza'))
 const LabFicha = lazy(() => import('./panel/lab/Ficha360'))
 const LabCambios = lazy(() => import('./panel/lab/Cambios'))
 const LabSimulador = lazy(() => import('./panel/lab/Simulador'))
+const LabCockpit = lazy(() => import('./panel/lab/app/Shell'))
 const Privacidad = lazy(() => import('./legal/Privacidad'))
 const Terminos = lazy(() => import('./legal/Terminos'))
 const CookiesPage = lazy(() => import('./legal/Cookies'))
@@ -345,6 +346,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                      ninguna API: se alimentan de fixtures sintéticos.
                   2) Deja garantizado por construcción que esta zona no puede
                      tocar datos reales, ni siquiera por accidente. */}
+              {/* COCKPIT: la app alternativa completa. Fuera de LabShell porque
+                  se trae su propia navegación y su propio marco. */}
+              <Route path="/lab/app" element={<LabCockpit />} />
               <Route path="/lab" element={<LabShell />}>
                 <Route index element={<LabHub />} />
                 <Route path="senales" element={<LabSenales />} />

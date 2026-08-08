@@ -90,7 +90,37 @@ export default function LabHub() {
         </p>
       </section>
 
-      <div className="mt-8 space-y-2.5">
+      {/* El cockpit va aparte y primero: no es un experimento más, es la app
+          entera reorganizada. */}
+      <Link
+        to="app"
+        className="rise float-row mt-8 block rounded-2xl border border-brand-500/25 bg-brand-500/[0.06] p-5"
+      >
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-[17px] font-semibold tracking-[-0.01em] text-dark-50">Cockpit</h3>
+              <span className="rounded-full bg-brand-500/20 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider text-brand-300">
+                La app entera
+              </span>
+            </div>
+            <p className="mt-1.5 text-[13.5px] leading-relaxed text-dark-300">
+              FlotaDSP reorganizada desde cero: <b className="font-semibold text-dark-50">4 superficies en vez de 35 pantallas</b>.
+              Navegación plana, la profundidad se abre en un panel lateral, y un buscador que trae la
+              furgoneta o la persona en vez de llevarte a una pantalla.
+            </p>
+            <p className="mt-2 text-[12.5px] text-dark-500">
+              Hoy · Flota · Cambios · ¿Y si…? — pruébala entera, se navega de verdad.
+            </p>
+          </div>
+          <ArrowRight size={17} className="mt-1 shrink-0 text-brand-400/70" />
+        </div>
+      </Link>
+
+      <h2 className="mt-9 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-dark-500">
+        Experimentos sueltos
+      </h2>
+      <div className="mt-3 space-y-2.5">
         {EXPERIMENTOS.map((e, i) => (
           <Link
             key={e.to} to={e.to}
