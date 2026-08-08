@@ -13,8 +13,8 @@
    una decisión sobre una furgoneta que no existe.
    ───────────────────────────────────────────────────────────────────────────── */
 import { useEffect, useState } from 'react'
-import { useOutletContext } from 'react-router-dom'
-import { FlaskConical, RefreshCw, Loader2 } from 'lucide-react'
+import { useOutletContext, Link } from 'react-router-dom'
+import { FlaskConical, RefreshCw, Loader2, ArrowRight } from 'lucide-react'
 import { cargarDatosReales } from './apiLab'
 import { generarSenales } from './motor'
 import Senales from './Senales'
@@ -56,14 +56,40 @@ export default function PanelLab() {
           </span>
         </div>
         <h1 className="font-display text-[clamp(26px,3.6vw,40px)] font-semibold leading-[1.06] tracking-[-0.03em] text-dark-50">
-          Capa de señales
+          Laboratorio
         </h1>
         <p className="mt-2.5 max-w-2xl text-[15px] leading-relaxed text-dark-400">
-          El mismo motor que en <code className="rounded bg-white/[0.06] px-1 py-0.5 text-[13px]">/lab</code>, pero
-          leyendo la base del laboratorio. Aquí se ve lo que las maquetas no pueden enseñar:
-          <b className="font-semibold text-dark-200"> cuántas señales salen de verdad</b>.
+          Experimentos con los datos reales del LAB. Arriba, los que se prueban
+          <b className="font-semibold text-dark-200"> sobre pantallas de la app</b> para ver cómo quedarían;
+          abajo, el motor de señales en crudo.
         </p>
       </header>
+
+      {/* Experimentos SOBRE pantallas reales. Es lo que de verdad permite
+          decidir: una maqueta aparte no dice cómo quedaría la app. */}
+      <section className="mb-7">
+        <h2 className="mb-3 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-dark-500">
+          Experimentos sobre pantallas de la app
+        </h2>
+        <Link
+          to="portada"
+          className="float-row group flex items-start gap-3 rounded-2xl border border-white/[0.07] bg-white/[0.02] p-5"
+        >
+          <div className="min-w-0 flex-1">
+            <h3 className="text-[16px] font-semibold tracking-[-0.01em] text-dark-50">La portada</h3>
+            <p className="mt-1.5 text-[13.5px] leading-relaxed text-dark-400">
+              La misma portada del panel, en su sitio, con un interruptor para ver
+              <b className="font-semibold text-dark-200"> cómo está hoy</b> y
+              <b className="font-semibold text-dark-200"> cómo quedaría</b> con la capa de señales. Mismos datos en las dos.
+            </p>
+            <p className="mt-2 text-[12.5px] text-dark-500">
+              Cambia una sola cosa: los contadores («4 vencimientos ITV») pasan a ser frases con evidencia
+              («1002 LAB circula con la ITV caducada»).
+            </p>
+          </div>
+          <ArrowRight size={16} className="mt-1 shrink-0 text-dark-600 transition-transform group-hover:translate-x-0.5 group-hover:text-dark-300" />
+        </Link>
+      </section>
 
       {/* Estado de la carga: peticiones y lo que NO se pudo traer. Un panel que
           calla lo que le falta acaba enseñando ceros con cara de buena noticia. */}

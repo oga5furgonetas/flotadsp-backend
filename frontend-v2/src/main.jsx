@@ -229,6 +229,7 @@ const PanelDSC = lazy(() => import('./panel/pages/DSC'))
    /panel/lab. Datos sintéticos, no llama a ninguna API. */
 const LabShell = lazy(() => import('./panel/lab/ui').then((m) => ({ default: m.LabShell })))
 const PanelLab = lazy(() => import('./panel/lab/PanelLab'))
+const PortadaExp = lazy(() => import('./panel/lab/PortadaExp'))
 const LabHub = lazy(() => import('./panel/lab/LabHub'))
 const LabSenales = lazy(() => import('./panel/lab/Senales'))
 const LabParte = lazy(() => import('./panel/lab/Parte'))
@@ -329,6 +330,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="dsc" element={<PanelDSC />} />
                 {/* Laboratorio con datos REALES del LAB (hereda sesión y centro) */}
                 <Route path="lab" element={<PanelLab />} />
+                {/* Experimentos SOBRE pantallas reales, con interruptor para
+                    comparar con la versión que hay hoy en la app. */}
+                <Route path="lab/portada" element={<PortadaExp />} />
               </Route>
 
               {/* ── ZONA EXPERIMENTAL ──────────────────────────────────────
