@@ -8,6 +8,27 @@ import { DATOS_SINTETICOS } from './datos'
 
 const EXPERIMENTOS = [
   {
+    to: 'ficha', nombre: 'E06 · Ficha 360',
+    idea: 'La lista de siempre, pero cada fila se abre en un panel lateral que reúne ruta de hoy, horas, scorecard, memoria, inspecciones y señales.',
+    prueba: '¿La inteligencia debe ser una capa sobre la lista en vez de una pantalla aparte?',
+    veredicto: 'La más prometedora de las siete. Colapsa 7 pantallas en 1 y no inventa ni un dato.',
+    tono: 'bien',
+  },
+  {
+    to: 'cambios', nombre: 'E07 · Qué ha cambiado',
+    idea: 'Lo que ha pasado desde ayer en una sola lista. Y la mitad honesta: lo que NO se puede diferenciar y por qué.',
+    prueba: '¿Se puede reconstruir la jornada sin historial de estados?',
+    veredicto: 'A medias, y el hallazgo vale más que la pantalla: falta un registro de eventos.',
+    tono: 'duda',
+  },
+  {
+    to: 'simulador', nombre: 'E08 · ¿Y si…?',
+    idea: 'Mover horas planificadas entre conductores y ver el efecto en el límite semanal. Con los supuestos a la vista.',
+    prueba: '¿Hay algún what-if que se sostenga sin inventar un modelo?',
+    veredicto: 'Sí, exactamente uno. El resto los enumero como no simulables.',
+    tono: 'bien',
+  },
+  {
     to: 'senales', nombre: 'A · Señales',
     idea: 'Una lista de excepciones. Cada una declara si es un hecho medido, una suma de hechos o la opinión de un modelo, y enseña la evidencia.',
     prueba: '¿Se entiende la clasificación de un vistazo o estorba?',

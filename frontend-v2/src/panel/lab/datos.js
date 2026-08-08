@@ -184,6 +184,35 @@ export const contadores = {
   ],
 }
 
+/* ── Incidencias ─────────────────────────────────────────────────────────────
+   Colección `incidents`. Campos reales: {id, vehicle_id, driver_id, type,
+   description, status, created_at, resolved_at}.
+   Ojo con el patrón: 1003 LAB acumula tres del mismo tipo. Eso es lo que hace
+   posible el experimento de MEMORIA — y también donde es fácil pasarse: tres
+   casos son un patrón débil, y la interfaz tiene que decirlo. */
+export const incidencias = [
+  { id: 'inc1', vehicle_id: 'v3', driver_id: 'c4', type: 'chapa', status: 'open',
+    description: 'Golpe en lateral izquierdo maniobrando en rampa', created_at: d(4) + 'T18:20:00Z' },
+  { id: 'inc2', vehicle_id: 'v3', driver_id: 'c1', type: 'chapa', status: 'resolved',
+    description: 'Roce lateral izquierdo al salir de la estación', created_at: d(47) + 'T17:10:00Z', resolved_at: d(40) + 'T09:00:00Z' },
+  { id: 'inc3', vehicle_id: 'v3', driver_id: 'c2', type: 'chapa', status: 'resolved',
+    description: 'Retrovisor izquierdo partido en calle estrecha', created_at: d(96) + 'T16:40:00Z', resolved_at: d(90) + 'T11:00:00Z' },
+  { id: 'inc4', vehicle_id: 'v1', driver_id: 'c3', type: 'mecanica', status: 'open',
+    description: 'Testigo de presión de neumáticos encendido', created_at: d(1) + 'T07:05:00Z' },
+  { id: 'inc5', vehicle_id: 'v2', driver_id: 'c5', type: 'lunas', status: 'resolved',
+    description: 'Impacto en parabrisas', created_at: d(30) + 'T12:00:00Z', resolved_at: d(28) + 'T10:00:00Z' },
+]
+
+/* ── Scorecard por conductor (semana en curso) ───────────────────────────────
+   Colección `driver_scorecard`. Sólo se usan los campos que la ficha enseña. */
+export const scorecardConductores = [
+  { driver_id: 'c1', semana: 32, dcr: 99.4, dnr_dpmo: 780,  pod: 98.9, tier: 'Great' },
+  { driver_id: 'c2', semana: 32, dcr: 99.8, dnr_dpmo: 210,  pod: 99.5, tier: 'Fantastic' },
+  { driver_id: 'c3', semana: 32, dcr: 96.1, dnr_dpmo: 2450, pod: 97.2, tier: 'Fair' },
+  { driver_id: 'c4', semana: 32, dcr: 99.1, dnr_dpmo: 640,  pod: 99.0, tier: 'Great' },
+  { driver_id: 'c5', semana: 32, dcr: 98.7, dnr_dpmo: 990,  pod: 98.1, tier: 'Great' },
+]
+
 /* ── Frescura declarada de cada fuente ───────────────────────────────────────
    Esto NO es adorno: es lo que permite decir "esto no lo sé" en vez de mentir.
    `desfase_dias` documenta retrasos ESTRUCTURALES conocidos de la fuente. */
@@ -203,4 +232,5 @@ export const DATOS_SINTETICOS = {
   origen: 'sintetico',
   vehiculos, conductores, ledger, inspecciones, asignaciones,
   rutas, cortexOverview, whc, contadores, fuentes,
+  incidencias, scorecardConductores,
 }

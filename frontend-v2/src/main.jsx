@@ -235,6 +235,9 @@ const LabSenales = lazy(() => import('./panel/lab/Senales'))
 const LabParte = lazy(() => import('./panel/lab/Parte'))
 const LabVehiculo = lazy(() => import('./panel/lab/Vehiculo'))
 const LabConfianza = lazy(() => import('./panel/lab/Confianza'))
+const LabFicha = lazy(() => import('./panel/lab/Ficha360'))
+const LabCambios = lazy(() => import('./panel/lab/Cambios'))
+const LabSimulador = lazy(() => import('./panel/lab/Simulador'))
 const Privacidad = lazy(() => import('./legal/Privacidad'))
 const Terminos = lazy(() => import('./legal/Terminos'))
 const CookiesPage = lazy(() => import('./legal/Cookies'))
@@ -348,6 +351,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="parte" element={<LabParte />} />
                 <Route path="vehiculo" element={<LabVehiculo />} />
                 <Route path="confianza" element={<LabConfianza />} />
+                <Route path="ficha" element={<LabFicha />} />
+                <Route path="cambios" element={<LabCambios />} />
+                <Route path="simulador" element={<LabSimulador />} />
               </Route>
 
               <Route path="*" element={<NotFound />} />

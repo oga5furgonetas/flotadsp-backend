@@ -461,6 +461,163 @@ export function generarSenales(D) {
   return out.sort((a, b) => b.prioridad - a.prioridad)
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   MEMORIA DE FLOTA
+   ---------------------------------------------------------------------------
+   "¿Esto ya había pasado?" es la pregunta que ninguna pantalla responde hoy.
+   Se puede contestar con `incidents` porque tienen tipo, vehículo y fecha.
+
+   Y aquí está el filo del cuchillo: llamar "patrón" a tres coincidencias es
+   exactamente lo que el brief prohíbe. Así que se separan dos cosas:
+
+     REPETICIÓN  hecho contable: "3 incidencias de chapa en 6 meses". Es un
+                 recuento, no una teoría.
+     PATRÓN      NO se afirma nunca. Con 5 vehículos y 5 incidencias no hay
+                 base de comparación para decir que uno se desvía.
+
+   La interfaz enseña la repetición y deja el juicio al gestor.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const MESES_MEMORIA = 6
+export const REPETICION_MINIMA = 3
+
+export function memoriaVehiculo(D, vehicleId) {
+  const corte = Date.now() - MESES_MEMORIA * 30 * DIA
+  const incs = (D.incidencias || [])
+    .filter((i) => i.vehicle_id === vehicleId && Date.parse(i.created_at) >= corte)
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+
+  const porTipo = {}
+  for (const i of incs) (porTipo[i.type] ||= []).push(i)
+
+  const repeticiones = Object.entries(porTipo)
+    .filter(([, xs]) => xs.length >= REPETICION_MINIMA)
+    .map(([tipo, xs]) => ({
+      tipo,
+      n: xs.length,
+      casos: xs,
+      // Conductores distintos implicados: si son varios, apunta al vehículo o
+      // a la ruta, no a una persona. Si es siempre el mismo, tampoco lo
+      // demuestra — pero es lo primero que miraría un gestor.
+      conductores: [...new Set(xs.map((x) => x.driver_id))],
+      resueltas: xs.filter((x) => x.status === 'resolved').length,
+    }))
+
+  return { incidencias: incs, repeticiones, meses: MESES_MEMORIA }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   QUÉ HA CAMBIADO
+   ---------------------------------------------------------------------------
+   LÍMITE ARQUITECTÓNICO IMPORTANTE, y conviene decirlo antes que el resultado:
+   FlotaDSP casi no guarda historial de estados. Se puede saber que algo se
+   CREÓ (todo lleva created_at) y que una incidencia se RESOLVIÓ (resolved_at),
+   pero NO se puede saber cuándo una furgoneta entró en taller, cuándo cambió
+   de conductor asignado o cuándo se editó una fecha de ITV: esos campos se
+   sobrescriben sin dejar rastro.
+
+   O sea: un diferencial de verdad no es un problema de interfaz, es un
+   problema de modelo de datos. Lo que sigue es lo que SÍ se puede calcular,
+   y la pantalla enseña además la lista de lo que no.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export const NO_DIFERENCIABLE = [
+  'Entradas y salidas de taller: `status` se sobrescribe, no hay historial.',
+  'Cambios de conductor asignado: `current_driver_id` se pisa; sólo hay rastro si alguien usó la ruta de asignación que sí registra historial.',
+  'Ediciones de fechas (ITV, renting): se guardan sin versión anterior.',
+  'Reparaciones marcadas desde la ficha del daño: `repair_status` cambia sin sello de hora propio.',
+]
+
+export function cambiosDesde(D, horas = 24) {
+  const corte = Date.now() - horas * 3600000
+  const ev = []
+  const plate = (id) => (D.vehiculos || []).find((v) => v.id === id)?.license_plate || id
+  const nom = (id) => (D.conductores || []).find((c) => c.id === id)?.name || '—'
+
+  for (const i of D.inspecciones || []) {
+    if (Date.parse(i.created_at) < corte) continue
+    ev.push({
+      cuando: i.created_at, tipo: 'inspeccion', clase: 'hecho',
+      titulo: `Inspección de ${plate(i.vehicle_id)}`,
+      detalle: `${nom(i.driver_id)}${i.severity ? ` · ${i.severity}` : ''}`,
+      malo: i.analysis_status !== 'ok',
+    })
+  }
+  for (const l of D.ledger || []) {
+    if (!l.first_seen) continue
+    const t = Date.parse(String(l.first_seen).length > 10 ? l.first_seen : l.first_seen + 'T12:00:00Z')
+    if (t < corte) continue
+    ev.push({
+      cuando: l.first_seen, tipo: 'dano', clase: 'estimacion',
+      titulo: `Daño nuevo en ${plate(l.vehicle_id)}`,
+      detalle: `${l.part || l.panel} · ${l.severity}`, malo: true,
+    })
+  }
+  for (const i of D.incidencias || []) {
+    if (Date.parse(i.created_at) >= corte) {
+      ev.push({ cuando: i.created_at, tipo: 'incidencia', clase: 'hecho',
+        titulo: `Incidencia abierta · ${plate(i.vehicle_id)}`, detalle: i.description, malo: true })
+    }
+    if (i.resolved_at && Date.parse(i.resolved_at) >= corte) {
+      ev.push({ cuando: i.resolved_at, tipo: 'resuelta', clase: 'hecho',
+        titulo: `Incidencia resuelta · ${plate(i.vehicle_id)}`, detalle: i.description, malo: false })
+    }
+  }
+  return ev.sort((a, b) => Date.parse(b.cuando) - Date.parse(a.cuando))
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SIMULADOR — el único "what if" que se sostiene
+   ---------------------------------------------------------------------------
+   Mover horas entre conductores es ARITMÉTICA: los totales trabajados son un
+   dato del portal y sumar o restar un bloque es una resta.
+
+   Lo que este simulador NO hace, y no debe hacer nadie con estos datos:
+   decir qué le pasa al DCR, al scorecard o al riesgo de la ruta si cambias a
+   una persona. Eso exigiría un modelo causal que no existe y que los datos
+   actuales no permiten entrenar.
+   ═══════════════════════════════════════════════════════════════════════════ */
+export function simularTraspaso(D, desdeId, haciaId, minutos) {
+  const w = D.whc
+  if (!w?.conductores) return null
+  const nombreDe = (c) => c.nombre || c.name || '—'
+  const clonar = (c) => ({ ...c })
+  const antes = w.conductores.map(clonar)
+  const despues = w.conductores.map(clonar)
+
+  const a = despues.find((c) => (c.driver_id || nombreDe(c)) === desdeId)
+  const b = despues.find((c) => (c.driver_id || nombreDe(c)) === haciaId)
+  if (!a || !b) return null
+
+  // Se mueve el bloque planificado: baja la PROYECCIÓN de uno y sube la del
+  // otro. Lo ya TRABAJADO no se toca — el pasado no se reasigna.
+  a.proyeccion = (a.proyeccion ?? a.trabajado) - minutos
+  b.proyeccion = (b.proyeccion ?? b.trabajado) + minutos
+
+  const evaluar = (lista) => lista.map((c) => ({
+    id: c.driver_id || nombreDe(c),
+    nombre: nombreDe(c),
+    trabajado: c.trabajado,
+    proyeccion: c.proyeccion ?? c.trabajado,
+    pasa: (c.proyeccion ?? c.trabajado) > w.limite_min,
+    margen: w.limite_min - (c.proyeccion ?? c.trabajado),
+  }))
+
+  const evAntes = evaluar(antes)
+  const evDespues = evaluar(despues)
+  return {
+    limite_min: w.limite_min,
+    antes: evAntes,
+    despues: evDespues,
+    pasaban: evAntes.filter((c) => c.pasa).length,
+    pasan: evDespues.filter((c) => c.pasa).length,
+    supuestos: [
+      'Se mueve tiempo PLANIFICADO, no trabajado: el pasado no se reasigna.',
+      `El límite de referencia es el TUYO (${hm(w.limite_min)}), no el de Amazon, que no se conoce y está por encima de 56h 30m.`,
+      'No dice nada sobre el DCR, el scorecard ni el riesgo de la ruta: eso exigiría un modelo causal que estos datos no permiten construir.',
+      'Da por hecho que quien recibe las horas está disponible y cualificado para esa ruta. El sistema no lo comprueba.',
+    ],
+  }
+}
+
 /* Línea de tiempo de un vehículo: ledger + inspecciones + vencimientos sobre un
    mismo eje. Sin inferencia: es un ordenamiento de hechos que hoy viven
    repartidos en cuatro pantallas distintas. */
