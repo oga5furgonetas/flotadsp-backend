@@ -16869,25 +16869,45 @@ _SC_MID_Q = {"lor_dpmo": (0.506, True), "pod": (0.731, True),
 
 
 def _parse_sls_bands(pdf_bytes):
-    """Tabla SLS del PDF → bandas por métrica. (None, None) si no la trae."""
+    """Tabla SLS del PDF → (bandas, crudos, identidad).
+
+    `identidad` = {center, week} leídos del propio PDF ("TDSL at OGA5",
+    "Week 31 - 2026"), para no depender del nombre del fichero ni de lo que
+    mande el formulario. (None, None, {}) si el PDF no trae la tabla.
+    """
     try:
         import pdfplumber
     except ImportError:
         logger.warning("[sls] pdfplumber no instalado: no se leen umbrales del PDF")
-        return None, None
-    pag = None
+        return None, None, {}
+    pag, ident = None, {}
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for p in pdf.pages:
+            for i, p in enumerate(pdf.pages):
                 t = p.extract_text() or ""
-                if "Operational SLS Metrics" in t:
+                # Cada campo se rellena por separado: el centro sale en la
+                # página 1 y la semana con año sólo en la 2, así que no se puede
+                # dejar de mirar en cuanto se encuentre uno de los dos.
+                if i < 3:
+                    if not ident.get("center"):
+                        mc = re.search(r"\bat\s+([A-Z]{3}\d)\b", t)
+                        if mc:
+                            ident["center"] = mc.group(1).upper()
+                    if not ident.get("week"):
+                        mw = (re.search(r"Week\s*(\d{1,2})\s*-\s*(\d{4})", t)
+                              or re.search(r"Week\s*(\d{1,2})\s*\n\s*(\d{4})", t))
+                        if mw:
+                            ident["week"] = int(mw.group(1))
+                            ident["year"] = int(mw.group(2))
+                if pag is None and "Operational SLS Metrics" in t:
                     pag = re.sub(r"\s+", " ", t)
+                if pag is not None and ident.get("center") and ident.get("week"):
                     break
     except Exception as e:
         logger.error(f"[sls] no se pudo abrir el PDF: {type(e).__name__}: {repr(e)}")
-        return None, None
+        return None, None, {}
     if not pag:
-        return None, None
+        return None, None, ident
     num = r"(-?\d+(?:[.,]\d+)?)\s*%?"
     bands, crudos = {}, {}
     for etiqueta, key in _SLS_FILAS:
@@ -16909,7 +16929,7 @@ def _parse_sls_bands(pdf_bytes):
             great = round(minimo + q * (target - minimo), 2)
         bands[key] = {"fantastic": target, "great": great, "fair": minimo,
                       "great_verificado": verif}
-    return (bands or None), (crudos or None)
+    return (bands or None), (crudos or None), ident
 
 
 async def _store_sls_bands(center, week, bands, crudos):
@@ -17626,7 +17646,39 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
     try:
         # PDF → scorecard oficial
         if ext == "pdf":
-            sc = await _parse_official_scorecard(content, file.filename or "")
+            # Los UMBRALES se sacan ANTES de llamar a Gemini y sin depender de él:
+            # se leen de la tabla SLS del propio PDF con pdfplumber. Si Gemini
+            # falla o se queda sin cuota, el DSP conserva igualmente los baremos
+            # de su nave, que es lo que hace que los tiers sean exactos.
+            umbrales_msg = ""
+            try:
+                bands, crudos, ident = _parse_sls_bands(content)
+                cen0 = (ident.get("center") or center or "").upper()
+                wk0 = ident.get("week")
+                if bands and cen0 and wk0:
+                    estado = await _store_sls_bands(cen0, wk0, bands, crudos)
+                    umbrales_msg = (". Umbrales de tu nave actualizados"
+                                    if estado == "nueva_vigencia"
+                                    else ". Umbrales de tu nave confirmados")
+                elif not bands:
+                    logger.warning(f"[sls] {fn}: el PDF no trae la tabla SLS")
+            except Exception as e:
+                logger.error(f"[sls] {fn}: {type(e).__name__}: {repr(e)}")
+
+            try:
+                sc = await _parse_official_scorecard(content, file.filename or "")
+            except Exception as e:
+                # Gemini caído o sin cuota: si al menos hemos guardado los
+                # umbrales de la nave, se dice y no se pierde el trabajo.
+                logger.error(f"[upload] gemini: {type(e).__name__}: {repr(e)}")
+                if umbrales_msg:
+                    return {"tipo": "umbrales", "ok": True,
+                            "center": (ident.get("center") or center or "").upper(),
+                            "umbrales": True,
+                            "mensaje": ("No pude leer las métricas del PDF, pero sí los "
+                                        "umbrales de tu nave" + umbrales_msg[1:] +
+                                        ". Vuelve a subirlo más tarde para las métricas.")}
+                raise
             cen = (sc.get("center") or center or "").upper() or "OGA5"
             week = sc.get("week")
             if not week:
@@ -17648,18 +17700,10 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
             # Gemini y sin gastar cuota. Se guardan con vigencia: si cambian
             # respecto a la anterior se abre una nueva y la vieja se conserva,
             # porque el histórico se tiene que seguir calculando con los suyos.
-            umbrales_msg = ""
-            try:
-                bands, crudos = _parse_sls_bands(content)
-                if bands:
-                    estado = await _store_sls_bands(cen, int(week), bands, crudos)
-                    umbrales_msg = (". Umbrales de tu nave actualizados"
-                                    if estado == "nueva_vigencia"
-                                    else ". Umbrales de tu nave confirmados")
-                else:
-                    logger.warning(f"[sls] {cen} W{week}: el PDF no trae la tabla SLS")
-            except Exception as e:
-                logger.error(f"[sls] {cen} W{week}: {type(e).__name__}: {repr(e)}")
+            # Los umbrales ya se guardaron ARRIBA, antes de llamar a Gemini, para
+            # que no se pierdan si Gemini falla o se queda sin cuota.
+            if umbrales_msg and cen0 and cen0 != cen:
+                logger.warning(f"[sls] centro del PDF ({cen0}) != centro usado ({cen})")
             return {"tipo": "scorecard", "ok": True, "center": cen,
                     "mensaje": f"Scorecard W{week}: {sc.get('overall_tier')} ({sc.get('overall_score')}){umbrales_msg}",
                     "umbrales": bool(umbrales_msg),
