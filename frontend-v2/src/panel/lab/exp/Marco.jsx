@@ -21,8 +21,9 @@
    ───────────────────────────────────────────────────────────────────────────── */
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { FlaskConical, Truck, SearchCheck, Banknote, Zap, ClipboardCheck, Send } from 'lucide-react'
+import { FlaskConical, Truck, SearchCheck, Banknote, Zap, ClipboardCheck, Send, Wrench } from 'lucide-react'
 import ParteTelegram from './ParteTelegram'
+import Proximos from './Proximos'
 import Expediente from './Expediente'
 import Investigacion from './Investigacion'
 import Fuga from './Fuga'
@@ -34,6 +35,8 @@ import { DATOS_SINTETICOS } from '../datos'
 const EXPS = [
   { id: 'parte', nombre: 'Cierre 22:00', ic: Send, comp: ParteTelegram,
     pitch: 'Sustituye lo que hoy se manda a Telegram' },
+  { id: 'proximos', nombre: 'Próximos cambios', ic: Wrench, comp: Proximos,
+    pitch: 'Mantenimiento de las 81, agrupado por taller' },
   { id: 'expediente', nombre: 'Expediente', ic: Truck, comp: Expediente,
     pitch: 'El vehículo como objeto con memoria' },
   { id: 'investigacion', nombre: 'Investigación', ic: SearchCheck, comp: Investigacion,
