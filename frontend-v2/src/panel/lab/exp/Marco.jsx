@@ -21,10 +21,11 @@
    ───────────────────────────────────────────────────────────────────────────── */
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { FlaskConical, Truck, SearchCheck, Banknote } from 'lucide-react'
+import { FlaskConical, Truck, SearchCheck, Banknote, Zap } from 'lucide-react'
 import Expediente from './Expediente'
 import Investigacion from './Investigacion'
 import Fuga from './Fuga'
+import Senales from './Senales'
 import { centros } from '../app2/datosPlus'
 
 const EXPS = [
@@ -34,6 +35,8 @@ const EXPS = [
     pitch: '¿Es la persona, el sitio o la hora?' },
   { id: 'fuga', nombre: 'La fuga', ic: Banknote, comp: Fuga,
     pitch: 'Dónde se escapa el dinero' },
+  { id: 'senales', nombre: 'Sistema nervioso', ic: Zap, comp: Senales,
+    pitch: 'Feed de señales: excepciones con evidencia y acción' },
 ]
 
 /* Montaje dentro del panel: hereda barra lateral, centro y sesión. */
