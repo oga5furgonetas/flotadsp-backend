@@ -21,13 +21,14 @@
    ───────────────────────────────────────────────────────────────────────────── */
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { FlaskConical, Truck, SearchCheck, Banknote, Zap } from 'lucide-react'
+import { FlaskConical, Truck, SearchCheck, Banknote, Zap, ClipboardCheck } from 'lucide-react'
 import Expediente from './Expediente'
 import Investigacion from './Investigacion'
 import Fuga from './Fuga'
 import Senales from './Senales'
 import Decisiones from './Decisiones'
 import { centros } from '../app2/datosPlus'
+import { DATOS_SINTETICOS } from '../datos'
 
 const EXPS = [
   { id: 'expediente', nombre: 'Expediente', ic: Truck, comp: Expediente,
@@ -100,7 +101,9 @@ function Contenido({ center }) {
         })}
       </nav>
 
-      <Actual center={center} />
+      {/* `datos` va también: Decisiones trabaja sobre el paquete sintético y sin
+          él se queda en "Cargando…" para siempre. */}
+      <Actual center={center} datos={DATOS_SINTETICOS} />
 
       <footer className="mt-12 border-t border-white/[0.05] pt-5 text-[11.5px] leading-relaxed text-dark-600">
         Tres prototipos del laboratorio sobre datos inventados (matrículas terminadas en «LAB»). La lógica está

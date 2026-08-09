@@ -23,10 +23,14 @@ import { generarSenales } from '../motor'
 const hm = (min) => `${Math.floor(min / 60)}h ${String(Math.round(min % 60)).padStart(2, '0')}m`
 
 export default function Decisiones({ datos }) {
-  if (!datos) return <p className="text-[13px] text-dark-500">Cargando…</p>
+  /* Los hooks van SIEMPRE antes de cualquier return condicional: un useMemo
+     detrás de un `if (!datos) return` cambia el orden de los hooks entre
+     renders y React revienta en cuanto `datos` llega. */
+  const decisiones = useMemo(
+    () => (datos ? transformar(generarSenales(datos), datos) : []),
+    [datos])
 
-  const senales = generarSenales(datos)
-  const decisiones = useMemo(() => transformar(senales, datos), [senales, datos])
+  if (!datos) return <p className="text-[13px] text-dark-500">Cargando…</p>
 
   if (decisiones.length === 0) {
     return (
@@ -170,20 +174,30 @@ function transformar(senales, datos) {
     /* ITV próxima a caducar */
     if (s.area === 'Flota' && s.titulo.includes('ITV')) {
       const matricula = s.evidencia?.find(e => e.k === 'Matrícula')?.v || '—'
-      const dias = s.titulo.match(/a (\d+) días/)?.[1] || s.titulo.includes('caducada') ? '0' : '?'
+      /* OJO con la precedencia: `a || b ? x : y` se evalúa como `(a || b) ? x : y`,
+         así que la versión anterior marcaba como CADUCADA cualquier ITV que
+         tuviera días. Una ITV a 12 días decía "sácala de circulación": falso
+         positivo que manda a parar una furgoneta que puede trabajar. */
+      const caducada = s.titulo.includes('caducada')
+      const m = s.titulo.match(/a (\d+) días/)
+      const dias = caducada ? 0 : (m ? Number(m[1]) : null)
       out.push({
         id: s.id, area: s.area, ...s,
-        titulo: dias === '0'
+        titulo: caducada
           ? `¿Sacas de circulación ${matricula}?`
           : `¿Reservas cita ITV para ${matricula}?`,
-        porque: dias === '0'
+        porque: caducada
           ? 'La ITV está caducada. El vehículo no debería circular.'
-          : `Quedan ${días} días. Si se pasa, el vehículo no puede circular y la flota se reduce.`,
+          : dias !== null
+            ? `Quedan ${dias} días. Si se pasa, el vehículo no puede circular y la flota se reduce.`
+            : 'La ITV vence pronto. Si se pasa, el vehículo no puede circular.',
         icono: Calendar, bg: 'bg-red-500/10', texto: 'text-red-300',
-        accion: { txt: dias === '0' ? 'Sacar de circulación' : 'Reservar cita', destino: 'Talleres' },
-        consecuencia: dias === '0'
+        accion: { txt: caducada ? 'Sacar de circulación' : 'Reservar cita', destino: 'Talleres' },
+        consecuencia: caducada
           ? 'Vehículo circulando sin ITV: multa y posible inmovilización.'
-          : `Si no se renueva en ${días} días, el vehículo queda fuera de servicio.`,
+          : dias !== null
+            ? `Si no se renueva en ${dias} días, el vehículo queda fuera de servicio.`
+            : 'Si no se renueva a tiempo, el vehículo queda fuera de servicio.',
         evidencia: s.evidencia,
       })
       continue

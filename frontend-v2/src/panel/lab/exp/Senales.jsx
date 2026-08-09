@@ -189,7 +189,9 @@ export default function Senales({ center }) {
           </span>
         )}
         <div className="ml-auto flex flex-wrap gap-1.5">
-          {(datos?.fuentes || meta?.fuentes || []).map((f, i) => (
+          {/* `fuentes` es un OBJETO indexado por clave ({cortex:{…}, whc:{…}}),
+              no un array: un .map() directo revienta la pantalla entera. */}
+          {Object.values(datos?.fuentes || meta?.fuentes || {}).map((f, i) => (
             <span key={i} className="text-[10.5px] text-dark-600">
               {f.etiqueta || f.label}: {f.actualizado ? new Date(f.actualizado).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' }) : '—'}
               {f.modo === 'manual' && ' (manual)'}
