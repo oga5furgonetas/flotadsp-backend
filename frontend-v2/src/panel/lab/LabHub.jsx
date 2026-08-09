@@ -90,18 +90,44 @@ export default function LabHub() {
         </p>
       </section>
 
-      {/* V2 primero: es la dirección que responde a "¿esto es lo que yo
-          querría comprar?" en vez de a "¿cómo reorganizo las pantallas?". */}
+      {/* Lo último y lo más importante: el foco de la semana. Contradice a
+          propósito a "La semana", que apuntaba al WHC — la métrica nº 3. */}
+      <Link
+        to="foco"
+        className="rise float-row mt-8 block rounded-2xl border border-brand-500/30 bg-brand-500/[0.07] p-5"
+      >
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-[17px] font-semibold tracking-[-0.01em] text-dark-50">El foco de la semana</h3>
+              <span className="rounded-full bg-brand-500/20 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider text-brand-300">
+                E09+E10 · lo mejor
+              </span>
+            </div>
+            <p className="mt-1.5 text-[13.5px] leading-relaxed text-dark-300">
+              En qué métrica de Amazon te estás dejando puntos, <b className="font-semibold text-dark-50">por qué</b> y
+              quién puede moverla. Con el peso medido sobre 17 scorecards reales: DSC pesa 40, el WHC pesa 10.
+            </p>
+            <p className="mt-2 text-[12.5px] text-dark-500">
+              Incluye el guardián de la ventana DSC: días de reporte que caducan y se pierden para siempre. Nadie
+              lo pediría, y protege justo la métrica que más penaliza.
+            </p>
+          </div>
+          <ArrowRight size={17} className="mt-1 shrink-0 text-brand-400/70" />
+        </div>
+      </Link>
+
+      {/* V2: apunta al WHC. Se mantiene para poder comparar el encuadre. */}
       <Link
         to="semana"
-        className="rise float-row mt-8 block rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.06] p-5"
+        className="rise float-row mt-3 block rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.06] p-5"
       >
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-[17px] font-semibold tracking-[-0.01em] text-dark-50">La semana</h3>
               <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider text-emerald-300">
-                V2 · lo último
+                V2 · apunta al WHC
               </span>
             </div>
             <p className="mt-1.5 text-[13.5px] leading-relaxed text-dark-300">

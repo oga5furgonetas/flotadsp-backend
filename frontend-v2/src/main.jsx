@@ -244,6 +244,7 @@ const LabCockpit = lazy(() => import('./panel/lab/app/Shell'))
    lógica —sin export default— y React reventaba al intentar avisarlo. De ahí
    que el componente se llame Semana.jsx. */
 const LabSemana = lazy(() => import('./panel/lab/v2/Semana'))
+const LabFoco = lazy(() => import('./panel/lab/v2/Foco'))
 const Privacidad = lazy(() => import('./legal/Privacidad'))
 const Terminos = lazy(() => import('./legal/Terminos'))
 const CookiesPage = lazy(() => import('./legal/Cookies'))
@@ -357,6 +358,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               {/* V2: la semana en una sola página, organizada por las preguntas
                   del dueño (tier, dinero, mañana) y no por sustantivos. */}
               <Route path="/lab/semana" element={<LabSemana />} />
+              {/* E09+E10: el foco de la semana (la metrica que penaliza) y el
+                  guardian de la ventana de clasificacion del DSC. */}
+              <Route path="/lab/foco" element={<LabFoco />} />
               <Route path="/lab" element={<LabShell />}>
                 <Route index element={<LabHub />} />
                 <Route path="senales" element={<LabSenales />} />
