@@ -1,0 +1,89 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   SISTEMA VISUAL "ÉLITE" — tokens del laboratorio
+   ---------------------------------------------------------------------------
+   Reglas tomadas de cómo construyen su modo oscuro Linear, Vercel y Supabase,
+   no de una plantilla:
+
+   1 · BASE GRIS REAL, nunca negro puro. #0E–#1A. El negro puro produce halación
+       y cansa la vista en una pantalla que se mira ocho horas.
+   2 · ELEVACIÓN POR LUMINOSIDAD, no por sombra. Cuatro niveles, cada uno un
+       3-6 % más claro que el anterior. Las sombras se ven baratas en oscuro.
+   3 · UN SOLO ACENTO SATURADO (el naranja de marca) sobre un sistema
+       desaturado. El acento se reserva para acción primaria y estado activo.
+   4 · TARJETAS SIN BORDE: el escalón de fondo y el aire definen el bloque.
+       El hairline sólo aparece cuando el escalón no basta.
+   5 · TEXTO AL 85-92 % DE BLANCO, no #FFF. En oscuro el mismo peso se ve más
+       grueso, así que se compensa bajando peso y abriendo el tracking.
+   6 · SEMÁNTICOS DESATURADOS para que el color se apoye EN la superficie y no
+       flote encima.
+   7 · GRÁFICOS PENSADOS PARA OSCURO: rejilla al 3-8 % sobre la base y series
+       con variación de luminancia, no de tono.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.elite {
+  --e-0: #0e0e10;            /* base */
+  --e-1: #151517;            /* superficie */
+  --e-2: #1c1c1f;            /* elevada */
+  --e-3: #232328;            /* overlay */
+  --e-line: rgba(255, 255, 255, 0.055);
+  --e-line-2: rgba(255, 255, 255, 0.09);
+
+  --e-tx: rgba(255, 255, 255, 0.90);
+  --e-tx-2: rgba(255, 255, 255, 0.58);
+  --e-tx-3: rgba(255, 255, 255, 0.36);
+
+  --e-acc: #ff7a3d;
+  --e-acc-dim: rgba(255, 122, 61, 0.16);
+  --e-ok: #4bb98a;
+  --e-warn: #d9a441;
+  --e-bad: #e5695f;
+
+  background: var(--e-0);
+  color: var(--e-tx);
+  letter-spacing: -0.006em;
+}
+
+/* Superficie sin borde: el escalón de luminosidad hace de contorno */
+.e-surf { background: var(--e-1); border-radius: 10px; }
+.e-elev { background: var(--e-2); border-radius: 8px; }
+
+/* Fila densa tipo Linear: 40 px, sin cromo, el hover apenas se insinúa */
+.e-row {
+  display: flex; align-items: center; gap: 14px;
+  min-height: 40px; padding: 7px 14px;
+  border-radius: 7px;
+  transition: background-color .14s ease;
+}
+.e-row:hover { background: var(--e-2); }
+
+/* Cifra: tabular y con tracking cerrado, que es lo que la hace parecer cara */
+.e-num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  font-weight: 500;
+}
+
+/* Etiqueta de sección: monoespaciada, diminuta, muy espaciada */
+.e-lab {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 9.5px; font-weight: 600;
+  letter-spacing: 0.19em; text-transform: uppercase;
+  color: var(--e-tx-3);
+}
+
+/* Pista de progreso: el "raíl" es la rejilla del gráfico, al 6 % sobre la base */
+.e-track { height: 3px; border-radius: 99px; background: rgba(255, 255, 255, 0.06); overflow: hidden; }
+.e-fill { height: 100%; border-radius: 99px; }
+
+/* Píldora semántica: el color se apoya en la superficie, no flota encima */
+.e-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 7px; border-radius: 5px;
+  font-size: 10.5px; font-weight: 500; letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+/* Entrada escalonada: 14 px y 320 ms. Suficiente para notarse, no para estorbar */
+.e-in { animation: e-in .32s cubic-bezier(.22, 1, .36, 1) backwards; }
+@keyframes e-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .e-in { animation: none; } }
