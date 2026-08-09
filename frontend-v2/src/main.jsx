@@ -239,6 +239,11 @@ const LabFicha = lazy(() => import('./panel/lab/Ficha360'))
 const LabCambios = lazy(() => import('./panel/lab/Cambios'))
 const LabSimulador = lazy(() => import('./panel/lab/Simulador'))
 const LabCockpit = lazy(() => import('./panel/lab/app/Shell'))
+/* OJO: al lado vive `negocio.js` (la lógica). En Windows el sistema de ficheros
+   no distingue mayúsculas, así que importar './v2/Negocio' resolvía al .js de
+   lógica —sin export default— y React reventaba al intentar avisarlo. De ahí
+   que el componente se llame Semana.jsx. */
+const LabSemana = lazy(() => import('./panel/lab/v2/Semana'))
 const Privacidad = lazy(() => import('./legal/Privacidad'))
 const Terminos = lazy(() => import('./legal/Terminos'))
 const CookiesPage = lazy(() => import('./legal/Cookies'))
@@ -349,6 +354,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               {/* COCKPIT: la app alternativa completa. Fuera de LabShell porque
                   se trae su propia navegación y su propio marco. */}
               <Route path="/lab/app" element={<LabCockpit />} />
+              {/* V2: la semana en una sola página, organizada por las preguntas
+                  del dueño (tier, dinero, mañana) y no por sustantivos. */}
+              <Route path="/lab/semana" element={<LabSemana />} />
               <Route path="/lab" element={<LabShell />}>
                 <Route index element={<LabHub />} />
                 <Route path="senales" element={<LabSenales />} />

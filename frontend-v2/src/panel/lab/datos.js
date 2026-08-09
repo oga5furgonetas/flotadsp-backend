@@ -184,6 +184,66 @@ export const contadores = {
   ],
 }
 
+/* ── Daños con su ESTADO DE GESTIÓN ──────────────────────────────────────────
+   Esto es lo que convierte una lista de daños en una cuenta de resultados.
+   Campos reales del modelo `Damage` (server.py:332): repair_status, workshop_id,
+   actual_cost, estimated_cost.
+
+   Tres estados que importan y que hoy no se miran juntos:
+     done + actual_cost  → dinero YA gastado. Hecho.
+     workshop_id, sin coste → comprometido, importe aún desconocido.
+     ni taller ni coste  → NADIE lo está gestionando. Es el cubo que duele.
+
+   OJO con el coste: `estimated_cost` NO lo inventa el modelo, sale de
+   `_PANEL_BAREMO` (una tarifa por panel y severidad, server.py:11402) y
+   `actual_cost` lo pisa en cuanto alguien teclea la factura. Es una tarifa,
+   no una adivinanza — pero sigue sin ser una factura. */
+export const danos = [
+  { id: 'dm1', vehicle_id: 'v3', panel: 'lateral_izquierdo', part: 'panel lateral izquierdo', severity: 'grave',
+    repair_status: 'assigned', workshop_id: 'w1', estimated_cost: 1180, actual_cost: null, first_seen: d(4) },
+  { id: 'dm2', vehicle_id: 'v1', panel: 'lateral_izquierdo', part: 'puerta lateral izquierda', severity: 'moderado',
+    repair_status: 'pending', workshop_id: null, estimated_cost: 420, actual_cost: null, first_seen: d(1) },
+  { id: 'dm3', vehicle_id: 'v1', panel: 'trasera', part: 'portón trasero', severity: 'leve',
+    repair_status: 'pending', workshop_id: null, estimated_cost: 130, actual_cost: null, first_seen: d(26) },
+  { id: 'dm4', vehicle_id: 'v2', panel: 'lateral_derecho', part: 'aleta trasera derecha', severity: 'leve',
+    repair_status: 'pending', workshop_id: null, estimated_cost: 95, actual_cost: null, first_seen: d(12) },
+  { id: 'dm5', vehicle_id: 'v4', panel: 'techo', part: 'techo', severity: 'leve',
+    repair_status: 'pending', workshop_id: null, estimated_cost: 160, actual_cost: null, first_seen: d(40) },
+  { id: 'dm6', vehicle_id: 'v1', panel: 'frontal', part: 'paragolpes delantero', severity: 'leve',
+    repair_status: 'done', workshop_id: 'w1', estimated_cost: 210, actual_cost: 268, first_seen: d(58) },
+  { id: 'dm7', vehicle_id: 'v2', panel: 'lunas', part: 'parabrisas', severity: 'moderado',
+    repair_status: 'done', workshop_id: 'w2', estimated_cost: 340, actual_cost: 295, first_seen: d(30) },
+]
+
+/* ── Scorecard semanal del DSP ───────────────────────────────────────────────
+   Colección `scorecard_official`. La regla del WHC está DEMOSTRADA sobre 17
+   semanas reales (docs/WHC.md §5): 0 excepciones ⇒ Fantastic; ≥1 ⇒ Great o
+   peor. Sin excepción conocida en 17 semanas. */
+export const scorecardSemanas = [
+  { semana: 28, whc: 81.5,  excepciones: 12, conductores: 65, tier: 'Poor' },
+  { semana: 29, whc: 100,   excepciones: 0,  conductores: 69, tier: 'Fantastic' },
+  { semana: 30, whc: 100,   excepciones: 0,  conductores: 73, tier: 'Fantastic' },
+  { semana: 31, whc: 97.1,  excepciones: 2,  conductores: 69, tier: 'Great' },
+]
+/* La semana en curso: aún sin cerrar. `excepciones` es lo que Amazon ha
+   reportado HASTA AHORA, no una predicción. */
+export const semanaEnCurso = { semana: 32, excepciones_hasta_ahora: 0, conductores: 5, cerrada: false }
+
+/* ── Mañana ──────────────────────────────────────────────────────────────────
+   Cuadrante del día siguiente. Si no existe, la pantalla lo dice: no se
+   rellena con el de hoy. */
+export const manana = {
+  fecha: d(-1),
+  rutas_previstas: 5,
+  slots: [
+    { vehicle_id: 'v1', driver_id: 'c1' },
+    { vehicle_id: 'v2', driver_id: 'c2' },
+    { vehicle_id: 'v3', driver_id: 'c3' },   // v3 está en taller
+    { vehicle_id: 'v4', driver_id: 'c4' },
+    { vehicle_id: 'v5', driver_id: 'c5' },
+  ],
+}
+
 /* ── Incidencias ─────────────────────────────────────────────────────────────
    Colección `incidents`. Campos reales: {id, vehicle_id, driver_id, type,
    description, status, created_at, resolved_at}.
@@ -233,4 +293,5 @@ export const DATOS_SINTETICOS = {
   vehiculos, conductores, ledger, inspecciones, asignaciones,
   rutas, cortexOverview, whc, contadores, fuentes,
   incidencias, scorecardConductores,
+  danos, scorecardSemanas, semanaEnCurso, manana,
 }

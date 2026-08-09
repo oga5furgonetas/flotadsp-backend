@@ -90,11 +90,37 @@ export default function LabHub() {
         </p>
       </section>
 
-      {/* El cockpit va aparte y primero: no es un experimento más, es la app
-          entera reorganizada. */}
+      {/* V2 primero: es la dirección que responde a "¿esto es lo que yo
+          querría comprar?" en vez de a "¿cómo reorganizo las pantallas?". */}
+      <Link
+        to="semana"
+        className="rise float-row mt-8 block rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.06] p-5"
+      >
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-[17px] font-semibold tracking-[-0.01em] text-dark-50">La semana</h3>
+              <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider text-emerald-300">
+                V2 · lo último
+              </span>
+            </div>
+            <p className="mt-1.5 text-[13.5px] leading-relaxed text-dark-300">
+              Una sola página, sin menú, organizada por las tres preguntas del <b className="font-semibold text-dark-50">dueño</b>:
+              ¿sigo siendo Fantastic?, ¿qué me está costando?, ¿cubro mañana?
+            </p>
+            <p className="mt-2 text-[12.5px] text-dark-500">
+              Superficie clara, un solo acento. Criba el riesgo de tier con el suelo medido de 56h 30m en vez de con
+              tu límite de 55 h — por eso la lista sale corta.
+            </p>
+          </div>
+          <ArrowRight size={17} className="mt-1 shrink-0 text-emerald-400/70" />
+        </div>
+      </Link>
+
+      {/* El cockpit va después: reorganiza pantallas, no cambia el encuadre. */}
       <Link
         to="app"
-        className="rise float-row mt-8 block rounded-2xl border border-brand-500/25 bg-brand-500/[0.06] p-5"
+        className="rise float-row mt-3 block rounded-2xl border border-brand-500/25 bg-brand-500/[0.06] p-5"
       >
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
