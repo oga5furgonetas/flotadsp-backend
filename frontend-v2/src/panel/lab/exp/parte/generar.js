@@ -42,20 +42,61 @@
 const pct = (n, d) => (d > 0 ? Math.round((n / d) * 1000) / 10 : null)
 const hm = (m) => `${Math.floor(m / 60)}h ${String(Math.round(m % 60)).padStart(2, '0')}m`
 
+/* ── CANCELADOS ANTES DE SALIR ────────────────────────────────────────────────
+   No hay estado de cancelación en Cortex, pero SÍ se pueden reconocer por su
+   huella, y es inconfundible:
+
+     · el fallo se registra en la DIRECCIÓN DE LA ESTACIÓN, no en casa de nadie
+     · a primera hora, antes de que la ruta esté rodando
+     · a menudo el conductor va 0/1: nunca llegó a salir con ese paquete
+
+   Un "imposible de entregar" a las 9:37 en la propia nave no es una entrega
+   fallida: es un paquete que se anuló antes de que el repartidor abriera la
+   app. Meterlo en el denominador del DCR es castigarse por algo que no pasó.
+
+   Y al revés: "el cliente ya no quiere el paquete" a las 14:45 en una calle
+   real SÍ es un fallo de entrega. La discriminación es la dirección, no el
+   motivo — por eso la regla mira dónde ocurrió y no cómo se llama el error. */
+export const HORA_LIMITE_ANULACION = 11        // antes de esta hora, en la nave
+const norm = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+
+export function esAnulacionEnNave(paquete, direccionesEstacion) {
+  if (paquete.estado === 'DELIVERED') return false
+  const dir = norm(paquete.stop_address)
+  if (!dir) return false
+  const enNave = (direccionesEstacion || []).some((d) => {
+    const n = norm(d)
+    return n && (dir.includes(n) || n.includes(dir))
+  })
+  if (!enNave) return false
+  const h = Number(String(paquete.at || '').slice(11, 13))
+  return !isFinite(h) || h < HORA_LIMITE_ANULACION
+}
+
 /* ── 1 · DCR ──────────────────────────────────────────────────────────────── */
 export function bloqueDCR(D) {
   const rutas = D.rutas || []
   const entregados = rutas.reduce((a, r) => a + r.delivered, 0)
   const total = rutas.reduce((a, r) => a + r.total, 0)
-  /* "Nunca salieron": los que no llegaron a estar en la furgoneta. Con datos
-     reales serían los que nunca pasaron de OBSERVED. Aquí se simula. */
-  const nuncaSalieron = D.cancelados ?? Math.round(total * 0.006)
+
+  /* Anulados en la nave: se descuentan del denominador porque nunca salieron */
+  const anulados = (D.paquetesFallidos || [])
+    .filter((p) => esAnulacionEnNave(p, D.direccionesEstacion))
+  const nuncaSalieron = D.cancelados ?? anulados.length
+
+  /* INTEGRIDAD DE ESTACIÓN. Un paquete sin service_area_id mapeado no se sabe
+     de qué centro es. Si se cuela en el DCR de DGA1 estando en OGA5, el número
+     es falso y nadie lo nota. Así que no se reparte: se aparta y se dice. */
+  const sinEstacion = D.paquetesSinEstacion ?? 0
+  const dudoso = total > 0 && sinEstacion / total > 0.02
+
   const salieron = total - nuncaSalieron
   const pendientes = rutas.reduce((a, r) => a + r.pendientes, 0)
   const noEntregados = salieron - entregados
 
   return {
     entregados, total, nuncaSalieron, salieron, pendientes, noEntregados,
+    anulados, sinEstacion, dudoso,
     dcrBruto: pct(entregados, total),
     dcrRuta: pct(entregados, salieron),
     diferencia: Math.round((pct(entregados, salieron) - pct(entregados, total)) * 100) / 100,

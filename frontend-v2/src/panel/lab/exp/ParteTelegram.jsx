@@ -17,8 +17,29 @@ import { generarCierre, comoTexto } from './parte/generar'
 
 /* Extras que hoy no están en las fixtures y que el cierre necesita.
    Cada uno lleva anotado de dónde saldría con datos reales. */
+/* La nave. Cualquier fallo registrado AQUÍ a primera hora no es una entrega
+   fallida: es un paquete anulado antes de que el repartidor abriera la app. */
+const DIRECCIONES_ESTACION = ['Rúa da Cidade do Transporte B, 671, Santiago de Compostela']
+
+/* Fallos del día tal y como llegan de Cortex. Fíjate en la mezcla: los de la
+   nave a primera hora son anulaciones; los de calle por la tarde son fallos
+   de verdad. La regla mira la DIRECCIÓN, no el motivo. */
+const FALLIDOS = [
+  { tba: 'ES2583223470', quien: 'Gerardo Porto', motivo: 'Imposible de entregar', at: '2026-08-09T07:00:00Z', stop_address: 'Rúa da Cidade do Transporte B, 671, Santiago de Compostela' },
+  { tba: 'ES2584185676', quien: 'Jose Ángel Calvo', motivo: 'Imposible de entregar', at: '2026-08-09T09:29:00Z', stop_address: 'Rúa da Cidade do Transporte B, 671, Santiago de Compostela' },
+  { tba: 'ES2586113688', quien: 'Pablo Otero', motivo: 'Imposible de entregar', at: '2026-08-09T09:37:00Z', stop_address: 'Rúa da Cidade do Transporte B, 671, Santiago de Compostela' },
+  { tba: 'ES2586181112', quien: 'Luis F. González', motivo: 'Imposible de entregar', at: '2026-08-09T09:44:00Z', stop_address: 'Rúa da Cidade do Transporte B, 671, Santiago de Compostela' },
+  { tba: 'ES2585916746', quien: 'Seidy E. Mardeni', motivo: 'Imposible de entregar', at: '2026-08-09T10:06:00Z', stop_address: 'Rúa da Cidade do Transporte B, 671, Santiago de Compostela' },
+  { tba: 'ES2582979130', quien: 'Gerson D. Santander', motivo: 'Imposible de entregar', at: '2026-08-09T12:50:00Z', stop_address: 'Urbanización A Gandariña, 31, Rois' },
+  { tba: 'ES2585968850', quien: 'Daniel Suárez', motivo: 'El cliente ya no quiere el paquete', at: '2026-08-09T14:11:00Z', stop_address: 'Calle Tras Santa Isabel 10, Santiago de Compostela' },
+  { tba: 'ES2586174834', quien: 'Álvaro Flores', motivo: 'El cliente ya no quiere el paquete', at: '2026-08-09T14:45:00Z', stop_address: 'Calle Arcai 47, Bembibre Val do Dubra' },
+]
+
 const EXTRA = {
-  cancelados: 19,                    // paquetes que nunca llegaron a la furgoneta
+  paquetesFallidos: FALLIDOS,
+  direccionesEstacion: DIRECCIONES_ESTACION,
+  paquetesSinEstacion: 0,            // sin service_area_id mapeado a un centro
+  cancelados: null,                  // se calcula solo desde los fallos de la nave
   flotaPct: 8.31,                    // media de la flota, docs/DSC.md
   cerradoMediodia: { n: 11, enFranja: 6 },   // causa "comercio cerrado" x hora del intento
   retornosSinCausa: 4,               // tabla RTS del reporte diario, motivo vacío
@@ -80,9 +101,34 @@ export default function ParteTelegram({ center }) {
               de <b className="font-semibold text-dark-50">{cierre.dcr.salieron}</b> que salieron a reparto.
             </p>
             <p className="mt-1.5 text-[12.5px] leading-relaxed text-dark-500">
-              {cierre.dcr.nuncaSalieron} paquetes nunca llegaron a la furgoneta y no cuentan en el denominador.
-              Contándolos saldría {cierre.dcr.dcrBruto} % — {Math.abs(cierre.dcr.diferencia)} puntos menos.
+              <b className="text-dark-300">{cierre.dcr.nuncaSalieron} se anularon en la nave</b> antes de que nadie
+              abriera la app: figuran como «imposible de entregar» en la propia dirección de la estación, a primera
+              hora. No son entregas fallidas, así que salen del denominador.
+              Contándolos, el DCR bajaría a {cierre.dcr.dcrBruto} % — {Math.abs(cierre.dcr.diferencia)} puntos de
+              castigo por algo que no pasó.
             </p>
+            {cierre.dcr.anulados?.length > 0 && (
+              <details className="mt-2">
+                <summary className="cursor-pointer text-[12px] text-dark-500 transition-colors hover:text-dark-300">
+                  Ver los {cierre.dcr.anulados.length} anulados
+                </summary>
+                <div className="mt-2 space-y-1">
+                  {cierre.dcr.anulados.map((p) => (
+                    <div key={p.tba} className="flex flex-wrap gap-x-2 text-[11.5px] text-dark-500">
+                      <span className="tabular-nums text-dark-600">{String(p.at).slice(11, 16)}</span>
+                      <span className="text-dark-300">{p.quien}</span>
+                      <span className="text-dark-600">{p.tba}</span>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            )}
+            {cierre.dcr.dudoso && (
+              <p className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.07] px-3 py-2 text-[12.5px] leading-relaxed text-amber-200">
+                {cierre.dcr.sinEstacion} paquetes no tienen estación reconocida. No se reparten entre centros a
+                ojo: hasta que la extensión mande el identificador, este DCR no es fiable.
+              </p>
+            )}
             {cierre.dcr.noEntregados > 0 && (
               <p className="mt-1.5 text-[13px] text-amber-300">
                 Se quedaron sin entregar {cierre.dcr.noEntregados}.
