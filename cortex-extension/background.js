@@ -39,13 +39,50 @@ async function setState(patch) {
   await chrome.storage.local.set({ state: { ...state, ...patch, at: new Date().toISOString() } });
 }
 
+/* ── COMPUERTA POR ESTACIÓN ───────────────────────────────────────────────────
+   Con dos pestañas abiertas de estaciones distintas —que es lo normal— la cola
+   mezclaba paquetes de OGA5 y DGA1 y se enviaba todo junto. Luego el panel los
+   reparte por `center`, pero si un paquete llegó sin estación reconocida acaba
+   contando en el centro que no es, y un DCR con paquetes de otra nave es un
+   número falso que nadie detecta.
+
+   Ahora: se captura TODO (nunca se pierde nada), pero sólo se envía lo de las
+   estaciones que tú marques. Y lo que llega sin estación no se envía jamás por
+   defecto: se aparta y se enseña. Preferimos no mandar a mandar mal. */
+function estacionDe(o) {
+  return (o && (o.center || o.station_code || o.station || o.service_area_id)) || null;
+}
+
+/* Recuento por estación de lo que hay en cola, para que el popup pueda elegir. */
+async function recuento(queue) {
+  const porEstacion = {};
+  let sinEstacion = 0;
+  for (const o of Object.values(queue || {})) {
+    const e = estacionDe(o);
+    if (!e) { sinEstacion += 1; continue; }
+    porEstacion[e] = (porEstacion[e] || 0) + 1;
+  }
+  await chrome.storage.local.set({ porEstacion, sinEstacion });
+  return { porEstacion, sinEstacion };
+}
+
 async function enqueue(packages) {
   const { queue = {} } = await chrome.storage.local.get({ queue: {} });
   for (const o of packages) if (o && o.tba) queue[o.tba] = o;
   await chrome.storage.local.set({ queue });
   const n = Object.keys(queue).length;
-  await setState({ lastMessage: `${n} paquetes en cola…`, buffered: n });
-  if (n >= MAX_BATCH) flush();
+  const { porEstacion, sinEstacion } = await recuento(queue);
+  const { enviarEstaciones = [] } = await chrome.storage.local.get({ enviarEstaciones: [] });
+  const nombres = Object.keys(porEstacion);
+  const msg = nombres.length === 0
+    ? `${n} paquetes en cola, sin estación reconocida.`
+    : enviarEstaciones.length === 0
+      ? `${n} en cola · elige qué estaciones enviar (${nombres.join(', ')}).`
+      : `${n} en cola · enviando sólo ${enviarEstaciones.join(', ')}.`;
+  await setState({ lastMessage: msg, buffered: n, sinEstacion });
+  /* Sólo se autoenvía si ya hay estaciones elegidas: si no, esperar es lo
+     correcto — el usuario todavía no ha dicho de qué nave son estos datos. */
+  if (n >= MAX_BATCH && enviarEstaciones.length) flush();
 }
 
 let flushing = false;
@@ -54,8 +91,29 @@ async function flush() {
   flushing = true;
   try {
     const { queue = {} } = await chrome.storage.local.get({ queue: {} });
-    const packages = Object.values(queue);
-    if (!packages.length) return;
+    const todos = Object.values(queue);
+    if (!todos.length) return;
+
+    /* La compuerta: sólo sale lo de las estaciones elegidas. Sin elección no se
+       envía nada — es lo que evita mezclar dos naves teniendo dos pestañas. */
+    const { enviarEstaciones = [] } = await chrome.storage.local.get({ enviarEstaciones: [] });
+    const { porEstacion, sinEstacion } = await recuento(queue);
+    if (!enviarEstaciones.length) {
+      const nombres = Object.keys(porEstacion);
+      await setState({
+        ok: false,
+        lastMessage: nombres.length
+          ? `Nada enviado: elige estación (${nombres.map((n) => `${n} ${porEstacion[n]}`).join(', ')}).`
+          : 'Nada enviado: ningún paquete trae estación reconocida.',
+      });
+      return;
+    }
+    const packages = todos.filter((o) => enviarEstaciones.includes(estacionDe(o)));
+    if (!packages.length) {
+      await setState({ ok: false, lastMessage: `En cola no hay nada de ${enviarEstaciones.join(', ')}.` });
+      return;
+    }
+
     const { ingestToken, ingestUrl } = await cfg();
     if (!ingestToken) { await setState({ lastMessage: 'Falta el token: pégalo y pulsa Guardar.', ok: false }); return; }
     // Envío por lotes de 500: con 40 rutas hay miles de paquetes y un solo POST
@@ -84,7 +142,15 @@ async function flush() {
       for (const o of packages) delete q2[o.tba];
       const { sent = 0 } = await chrome.storage.local.get({ sent: 0 });
       await chrome.storage.local.set({ queue: q2, sent: sent + sentNow });
-      await setState({ lastMessage: `Enviados ${sentNow} (${newN} nuevos, ${chgN} cambios).`, ok: true, buffered: Object.keys(q2).length });
+      await recuento(q2);
+      const resto = Object.keys(q2).length;
+      await setState({
+        ok: true,
+        buffered: resto,
+        sinEstacion,
+        lastMessage: `Enviados ${sentNow} de ${enviarEstaciones.join(', ')} (${newN} nuevos, ${chgN} cambios).`
+          + (resto ? ` Quedan ${resto} de otras estaciones sin enviar.` : ''),
+      });
     } catch (e) {
       await setState({ lastMessage: `Sin conexión, reintentando… (${String(e.message || e).slice(0, 50)})`, ok: false });
     }
@@ -125,6 +191,26 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     return false;
   }
   if (msg?.type === 'flushNow') { flush().then(() => reply?.({ ok: true })); return true; }
+  /* El popup manda aquí qué estaciones se envían. Lista vacía = no enviar nada. */
+  if (msg?.type === 'setEstaciones') {
+    const lista = Array.isArray(msg.estaciones) ? msg.estaciones : [];
+    chrome.storage.local.set({ enviarEstaciones: lista }).then(async () => {
+      await setState({ lastMessage: lista.length ? `Enviando sólo ${lista.join(', ')}.` : 'Envío en pausa: sin estación elegida.', ok: true });
+      reply?.({ ok: true });
+    });
+    return true;
+  }
+  /* Descarta de la cola lo de una estación que NO quieres mandar. */
+  if (msg?.type === 'descartarEstacion') {
+    chrome.storage.local.get({ queue: {} }).then(async ({ queue }) => {
+      for (const [tba, o] of Object.entries(queue)) if (estacionDe(o) === msg.estacion) delete queue[tba];
+      await chrome.storage.local.set({ queue });
+      await recuento(queue);
+      await setState({ lastMessage: `Descartado lo de ${msg.estacion}.`, ok: true, buffered: Object.keys(queue).length });
+      reply?.({ ok: true });
+    });
+    return true;
+  }
 });
 
 // Registro de listeners al final (nunca antes de que existan sus funciones) y

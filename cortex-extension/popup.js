@@ -9,7 +9,65 @@ function ago(ts) {
   return `${Math.floor(s / 3600)}h`;
 }
 
+/* Elegir estación antes de enviar. Con dos pestañas abiertas de naves distintas
+   —lo normal aquí— la cola las mezclaba y el panel acababa contando paquetes de
+   una estación en la otra. Ahora se captura todo y sólo sale lo que marques. */
+async function pintarEstaciones() {
+  const cont = document.getElementById('estaciones');
+  const aviso = document.getElementById('sinEstacion');
+  if (!cont) return;
+  const { porEstacion = {}, sinEstacion = 0, enviarEstaciones = [] } =
+    await chrome.storage.local.get({ porEstacion: {}, sinEstacion: 0, enviarEstaciones: [] });
+  const nombres = Object.keys(porEstacion).sort();
+
+  if (!nombres.length) {
+    cont.textContent = 'Todavía no hay nada en cola.';
+  } else {
+    cont.innerHTML = '';
+    for (const n of nombres) {
+      const fila = document.createElement('label');
+      fila.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = enviarEstaciones.includes(n);
+      cb.addEventListener('change', async () => {
+        const { enviarEstaciones: act = [] } = await chrome.storage.local.get({ enviarEstaciones: [] });
+        const nueva = cb.checked ? [...new Set([...act, n])] : act.filter((x) => x !== n);
+        chrome.runtime.sendMessage({ type: 'setEstaciones', estaciones: nueva }, () => render());
+      });
+      const txt = document.createElement('span');
+      txt.style.cssText = 'flex:1;color:#e2e8f0';
+      txt.textContent = n;
+      const cnt = document.createElement('span');
+      cnt.style.cssText = 'color:#64748b';
+      cnt.textContent = porEstacion[n];
+      const tirar = document.createElement('button');
+      tirar.textContent = 'descartar';
+      tirar.className = 'ghost';
+      tirar.style.cssText = 'padding:2px 7px;font-size:11px;width:auto';
+      tirar.addEventListener('click', (e) => {
+        e.preventDefault();
+        chrome.runtime.sendMessage({ type: 'descartarEstacion', estacion: n }, () => render());
+      });
+      fila.append(cb, txt, cnt, tirar);
+      cont.appendChild(fila);
+    }
+    if (!enviarEstaciones.length) {
+      const p = document.createElement('div');
+      p.style.cssText = 'margin-top:6px;color:#f59e0b';
+      p.textContent = 'No se envía nada hasta que marques al menos una.';
+      cont.appendChild(p);
+    }
+  }
+  if (aviso) {
+    aviso.textContent = sinEstacion
+      ? `${sinEstacion} paquetes sin estación reconocida. No se envían: irían al centro equivocado.`
+      : '';
+  }
+}
+
 async function render() {
+  await pintarEstaciones();
   const st = await chrome.storage.local.get(['ingestToken', 'ingestUrl', 'state', 'sent', 'activity']);
   const { ingestToken = '', ingestUrl = DEFAULT_URL, state = {}, sent = 0, activity = [] } = st;
   $('ver').textContent = 'v' + (chrome.runtime.getManifest().version);
