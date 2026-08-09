@@ -234,7 +234,8 @@ const PanelDSC = lazy(() => import('./panel/pages/DSC'))
    que un `app2.js` junto a `App2.jsx` haría que el import resolviera al de
    lógica —sin export default— y React revienta con "Cannot convert object to
    primitive value". Ya ha pasado dos veces en este laboratorio. */
-const LabApp = lazy(() => import('./panel/lab/app2/App2'))
+const LabMarco = lazy(() => import('./panel/lab/exp/Marco'))
+const LabSuelto = lazy(() => import('./panel/lab/exp/Marco').then((m) => ({ default: m.MarcoSuelto })))
 const Privacidad = lazy(() => import('./legal/Privacidad'))
 const Terminos = lazy(() => import('./legal/Terminos'))
 const CookiesPage = lazy(() => import('./legal/Cookies'))
@@ -328,6 +329,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="paquetes" element={<PanelPaquetes />} />
                 <Route path="whc" element={<PanelWHC />} />
                 <Route path="dsc" element={<PanelDSC />} />
+                {/* Experimentos DENTRO del panel: heredan barra lateral,
+                    selector de centro, tema y sesión. Sin entrada en el menú. */}
+                <Route path="lab" element={<LabMarco />} />
               </Route>
 
               {/* ── FLOTADSP 2.0 ───────────────────────────────────────────
@@ -337,7 +341,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                      backend y sin credenciales;
                   2) queda garantizado por construcción que no puede tocar
                      datos reales ni por accidente — se alimenta de fixtures. */}
-              <Route path="/lab" element={<LabApp />} />
+              <Route path="/lab" element={<LabSuelto />} />
 
               <Route path="*" element={<NotFound />} />
             </Routes>
