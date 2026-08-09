@@ -225,27 +225,16 @@ const PanelContactos = lazy(() => import('./panel/pages/Contactos'))
 const PanelPaquetes = lazy(() => import('./panel/pages/PackageIntel'))
 const PanelWHC = lazy(() => import('./panel/pages/WHC'))
 const PanelDSC = lazy(() => import('./panel/pages/DSC'))
-/* LAB — zona experimental. Sin entrada en el menú a propósito: se llega por
-   /panel/lab. Datos sintéticos, no llama a ninguna API. */
-const LabShell = lazy(() => import('./panel/lab/ui').then((m) => ({ default: m.LabShell })))
-const PanelLab = lazy(() => import('./panel/lab/PanelLab'))
-const PortadaExp = lazy(() => import('./panel/lab/PortadaExp'))
-const LabHub = lazy(() => import('./panel/lab/LabHub'))
-const LabSenales = lazy(() => import('./panel/lab/Senales'))
-const LabParte = lazy(() => import('./panel/lab/Parte'))
-const LabVehiculo = lazy(() => import('./panel/lab/Vehiculo'))
-const LabConfianza = lazy(() => import('./panel/lab/Confianza'))
-const LabFicha = lazy(() => import('./panel/lab/Ficha360'))
-const LabCambios = lazy(() => import('./panel/lab/Cambios'))
-const LabSimulador = lazy(() => import('./panel/lab/Simulador'))
-const LabCockpit = lazy(() => import('./panel/lab/app/Shell'))
-/* OJO: al lado vive `negocio.js` (la lógica). En Windows el sistema de ficheros
-   no distingue mayúsculas, así que importar './v2/Negocio' resolvía al .js de
-   lógica —sin export default— y React reventaba al intentar avisarlo. De ahí
-   que el componente se llame Semana.jsx. */
-const LabSemana = lazy(() => import('./panel/lab/v2/Semana'))
-const LabFoco = lazy(() => import('./panel/lab/v2/Foco'))
-const LabCasos = lazy(() => import('./panel/lab/v3/Casos'))
+/* FlotaDSP 2.0 — la aplicación entera reorganizada, sólo en el laboratorio.
+   Sustituye a los doce prototipos sueltos que había aquí: eran experimentos,
+   no un producto. Vive en /lab y no toca ni una pantalla de las de siempre.
+
+   OJO con los nombres de fichero: la lógica va en `fases.js` y el componente en
+   `App2.jsx`. En Windows el sistema de ficheros no distingue mayúsculas, así
+   que un `app2.js` junto a `App2.jsx` haría que el import resolviera al de
+   lógica —sin export default— y React revienta con "Cannot convert object to
+   primitive value". Ya ha pasado dos veces en este laboratorio. */
+const LabApp = lazy(() => import('./panel/lab/app2/App2'))
 const Privacidad = lazy(() => import('./legal/Privacidad'))
 const Terminos = lazy(() => import('./legal/Terminos'))
 const CookiesPage = lazy(() => import('./legal/Cookies'))
@@ -339,42 +328,16 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="paquetes" element={<PanelPaquetes />} />
                 <Route path="whc" element={<PanelWHC />} />
                 <Route path="dsc" element={<PanelDSC />} />
-                {/* Laboratorio con datos REALES del LAB (hereda sesión y centro) */}
-                <Route path="lab" element={<PanelLab />} />
-                {/* Experimentos SOBRE pantallas reales, con interruptor para
-                    comparar con la versión que hay hoy en la app. */}
-                <Route path="lab/portada" element={<PortadaExp />} />
               </Route>
 
-              {/* ── ZONA EXPERIMENTAL ──────────────────────────────────────
-                  Va FUERA de /panel a propósito, por dos motivos:
-                  1) No pasa por el guardián de sesión, así que se puede abrir
-                     sin backend y sin credenciales. Los prototipos no llaman a
-                     ninguna API: se alimentan de fixtures sintéticos.
-                  2) Deja garantizado por construcción que esta zona no puede
-                     tocar datos reales, ni siquiera por accidente. */}
-              {/* COCKPIT: la app alternativa completa. Fuera de LabShell porque
-                  se trae su propia navegación y su propio marco. */}
-              <Route path="/lab/app" element={<LabCockpit />} />
-              {/* V2: la semana en una sola página, organizada por las preguntas
-                  del dueño (tier, dinero, mañana) y no por sustantivos. */}
-              <Route path="/lab/semana" element={<LabSemana />} />
-              {/* E09+E10: el foco de la semana (la metrica que penaliza) y el
-                  guardian de la ventana de clasificacion del DSC. */}
-              <Route path="/lab/foco" element={<LabFoco />} />
-              {/* GEN 2: el producto deja de observar y cierra el circulo.
-                  Casos con veredicto, accion y medicion posterior. */}
-              <Route path="/lab/casos" element={<LabCasos />} />
-              <Route path="/lab" element={<LabShell />}>
-                <Route index element={<LabHub />} />
-                <Route path="senales" element={<LabSenales />} />
-                <Route path="parte" element={<LabParte />} />
-                <Route path="vehiculo" element={<LabVehiculo />} />
-                <Route path="confianza" element={<LabConfianza />} />
-                <Route path="ficha" element={<LabFicha />} />
-                <Route path="cambios" element={<LabCambios />} />
-                <Route path="simulador" element={<LabSimulador />} />
-              </Route>
+              {/* ── FLOTADSP 2.0 ───────────────────────────────────────────
+                  La aplicación entera, reorganizada por las horas del día en
+                  vez de por módulos. Va FUERA de /panel a propósito:
+                  1) no pasa por el guardián de sesión, así que se abre sin
+                     backend y sin credenciales;
+                  2) queda garantizado por construcción que no puede tocar
+                     datos reales ni por accidente — se alimenta de fixtures. */}
+              <Route path="/lab" element={<LabApp />} />
 
               <Route path="*" element={<NotFound />} />
             </Routes>
