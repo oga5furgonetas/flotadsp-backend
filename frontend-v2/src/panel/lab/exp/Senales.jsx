@@ -11,12 +11,11 @@
             por qué, y qué acción recomendada tiene — con la evidencia delante.
 
    CÓMO FUNCIONA
-            Carga el paquete de datos reales (o sintéticos) y ejecuta el
-            motor de señales (motor.js). Cada señal tiene:
-              · clase: HECHO / ARITMÉTICA / ESTIMACIÓN / NO DEMOSTRABLE
-              · área: Horas / Reparto / Flota / Daños / Sistema / Equipo
-              · prioridad: 0-100
-              · título, resumen, cálculo, evidencia, invalidadores, acciones
+            1. Carga el paquete de datos reales (o sintéticos) via apiLab.js
+            2. Ejecuta el motor de señales (motor.js) UNA vez
+            3. Separa señales accionables de NO DEMOSTRABLE
+            4. Muestra el foco de la semana destacado
+            5. Feed ordenado por prioridad con filtros
 
    DATOS REALES
             Se alimenta de cargarDatosReales(center) (apiLab.js), que llama
@@ -27,8 +26,8 @@
             señal NO DEMOSTRABLE que lo dice explícitamente. No se inventa.
    ───────────────────────────────────────────────────────────────────────────── */
 
-import { useEffect, useState, useMemo } from 'react'
-import { Zap, Clock, Wrench, AlertTriangle, Camera, ShieldAlert, Users, SearchCheck, HelpCircle, ChevronDown, ChevronUp, FlaskConical, RefreshCw } from 'lucide-react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
+import { Zap, Clock, Wrench, AlertTriangle, Camera, ShieldAlert, Users, SearchCheck, HelpCircle, ChevronDown, ChevronUp, FlaskConical, RefreshCw, Eye, EyeOff } from 'lucide-react'
 import { cargarDatosReales } from '../apiLab'
 import { generarSenales, CLASES } from '../motor'
 import { centros } from '../app2/datosPlus'
@@ -49,8 +48,10 @@ export default function Senales({ center }) {
   const [cualCenter, setCualCenter] = useState(center || 'Todos')
   const [datos, setDatos] = useState(null)
   const [senalAbierta, setSenalAbierta] = useState(null)
+  const [vistas, setVistas] = useState(new Set())
   const [filtroArea, setFiltroArea] = useState('todas')
   const [filtroClase, setFiltroClase] = useState('todas')
+  const [soloNuevas, setSoloNuevas] = useState(false)
   const [orden, setOrden] = useState('prioridad')
   const [cargando, setCargando] = useState(true)
   const [meta, setMeta] = useState(null)
@@ -59,10 +60,11 @@ export default function Senales({ center }) {
     if (center && center !== 'Todos' && center !== cualCenter) setCualCenter(center)
   }, [center])
 
-  const cargar = async () => {
+  const cargar = useCallback(async () => {
     setCargando(true)
     setDatos(null)
     setMeta(null)
+    setVistas(new Set())
     try {
       const d = await cargarDatosReales(cualCenter)
       setDatos(d)
@@ -71,33 +73,47 @@ export default function Senales({ center }) {
       setMeta({ errores: [String(e)] })
     }
     setCargando(false)
-  }
+  }, [cualCenter])
 
-  useEffect(() => { cargar() }, [cualCenter])
+  useEffect(() => { cargar() }, [cargar])
 
-  const senales = useMemo(() => {
-    if (!datos) return []
-    const todas = generarSenales(datos)
-    let out = todas
+  /* ── Motor: se ejecuta UNA vez por carga de datos ── */
+  const todas = useMemo(() => generarSenales(datos || { pet: null }), [datos])
+
+  const accionables = useMemo(() => {
+    let out = todas.filter(s => s.clase !== 'nodem')
     if (filtroArea !== 'todas') out = out.filter(s => s.area === filtroArea)
     if (filtroClase !== 'todas') out = out.filter(s => s.clase === filtroClase)
+    if (soloNuevas) out = out.filter(s => !vistas.has(s.id))
     if (orden === 'prioridad') out = [...out].sort((a, b) => b.prioridad - a.prioridad)
     else if (orden === 'area') out = [...out].sort((a, b) => a.area.localeCompare(b.area) || b.prioridad - a.prioridad)
     else if (orden === 'clase') out = [...out].sort((a, b) => a.clase.localeCompare(b.clase) || b.prioridad - a.prioridad)
     return out
-  }, [datos, filtroArea, filtroClase, orden])
+  }, [todas, filtroArea, filtroClase, soloNuevas, orden, vistas])
+
+  const noDemostrables = useMemo(() => {
+    let out = todas.filter(s => s.clase === 'nodem')
+    if (filtroArea !== 'todas') out = out.filter(s => s.area === filtroArea)
+    return out
+  }, [todas, filtroArea])
+
+  const stats = useMemo(() => {
+    return {
+      total: todas.length,
+      hecho: todas.filter(s => s.clase === 'hecho').length,
+      aritmetica: todas.filter(s => s.clase === 'aritmetica').length,
+      estimacion: todas.filter(s => s.clase === 'estimacion').length,
+      nodem: todas.filter(s => s.clase === 'nodem').length,
+    }
+  }, [todas])
 
   const areas = useMemo(() => {
-    if (!datos) return []
-    const todas = generarSenales(datos)
     const map = new Map()
     for (const s of todas) { map.set(s.area, (map.get(s.area) || 0) + 1) }
     return [{ id: 'todas', label: 'Todas', n: todas.length }, ...Array.from(map.entries()).sort().map(([id, n]) => ({ id, label: id, n }))]
-  }, [datos])
+  }, [todas])
 
   const clases = useMemo(() => {
-    if (!datos) return []
-    const todas = generarSenales(datos)
     const map = new Map()
     for (const s of todas) { map.set(s.clase, (map.get(s.clase) || 0) + 1) }
     return [
@@ -107,19 +123,38 @@ export default function Senales({ center }) {
         return o || a[1] - b[1]
       }).map(([id, n]) => ({ id, label: CLASES[id]?.etiqueta || id, n }))
     ]
-  }, [datos])
+  }, [todas])
 
-  const stats = useMemo(() => {
-    if (!datos) return null
-    const todas = generarSenales(datos)
-    return {
-      total: todas.length,
-      hecho: todas.filter(s => s.clase === 'hecho').length,
-      aritmetica: todas.filter(s => s.clase === 'aritmetica').length,
-      estimacion: todas.filter(s => s.clase === 'estimacion').length,
-      nodem: todas.filter(s => s.clase === 'nodem').length,
+  /* ── Foco de la semana: la señal más importante, destacada ── */
+  const foco = useMemo(() => {
+    if (!todas.length) return null
+    const porArea = new Map()
+    for (const s of todas) {
+      if (s.clase === 'nodem') continue
+      porArea.set(s.area, (porArea.get(s.area) || 0) + s.prioridad)
     }
-  }, [datos])
+    let mejorArea = null, mejorPunt = 0
+    for (const [area, punt] of porArea) {
+      if (punt > mejorPunt) { mejorPunt = punt; mejorArea = area }
+    }
+    if (!mejorArea) return null
+    const senalesArea = todas.filter(s => s.area === mejorArea && s.clase !== 'nodem')
+    const top = senalesArea.sort((a, b) => b.prioridad - a.prioridad)[0]
+    return { area: mejorArea, puntuacion: mejorPunt, n: senalesArea.length, top }
+  }, [todas])
+
+  const marcarVista = (id) => {
+    setVistas(prev => {
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+  }
+
+  const handleToggle = (id) => {
+    setSenalAbierta(abierto => abierto === id ? null : id)
+    marcarVista(id)
+  }
 
   return (
     <div className="animate-fade-in">
@@ -129,7 +164,7 @@ export default function Senales({ center }) {
         </p>
         <h1 className="mt-2 font-display text-[clamp(24px,3.4vw,34px)] font-semibold leading-[1.1] tracking-[-0.03em] text-dark-50">
           {stats ? (
-            <>Lo que necesita atención hoy:<br />
+            <>Lo que necesita atención:<br />
             <span className="text-brand-400">{stats.total} señales</span> detectadas</>
           ) : (
             'Cargando señales…'
@@ -173,14 +208,40 @@ export default function Senales({ center }) {
         </div>
       )}
 
+      {/* ── Foco de la semana ── */}
+      {foco && (
+        <div className="mb-6 rounded-2xl border border-brand-500/20 bg-brand-500/[0.04] p-5">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-500/15">
+              <Zap size={18} className="text-brand-400" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-brand-300">Foco de la semana</p>
+              <h3 className="mt-1 font-display text-[20px] font-semibold tracking-[-0.02em] text-dark-50">
+                {foco.area}: {foco.n} señales · puntuación {foco.puntuacion}
+              </h3>
+              <p className="mt-1 text-[13px] leading-relaxed text-dark-400">
+                Esta es el área con más señales accionables. La señal más importante es:
+              </p>
+              <div className="mt-2 rounded-lg bg-white/[0.03] p-3">
+                <p className="text-[14px] font-semibold text-dark-100">{foco.top.titulo}</p>
+                <p className="mt-1 text-[12.5px] text-dark-400">{foco.top.resumen}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Stats chips ── */}
       {stats && (
-        <div className="mb-5 flex flex-wrap gap-2">
-          <Chip label="Total" n={stats.total} activo />
-          <Chip label="Hecho" n={stats.hecho} color="text-emerald-300" />
-          <Chip label="Aritmética" n={stats.aritmetica} color="text-sky-300" />
-          <Chip label="Estimación" n={stats.estimacion} color="text-amber-300" />
-          <Chip label="No demostrable" n={stats.nodem} color="text-red-300" />
+        <div className="mb-5 flex flex-wrap items-center gap-2">
+          <Chip label="Accionables" n={stats.total - stats.nodem} activo />
+          {stats.nodem > 0 && <Chip label="No demostrable" n={stats.nodem} color="text-red-300" />}
+          <button onClick={() => setSoloNuevas(!soloNuevas)}
+            className={`ml-auto rounded-full px-2.5 py-1 text-[12px] font-medium transition-colors ${
+              soloNuevas ? 'bg-brand-500/20 text-brand-300' : 'text-dark-500 hover:bg-white/[0.04] hover:text-dark-300'}`}>
+            {soloNuevas ? <><Eye size={12} className="inline mr-1" />Ocultar vistas</> : <><EyeOff size={12} className="inline mr-1" />Solo nuevas</>}
+          </button>
         </div>
       )}
 
@@ -225,26 +286,27 @@ export default function Senales({ center }) {
         ))}
       </div>
 
-      {/* ── Feed de señales ── */}
+      {/* ── Feed: señales accionables ── */}
       {cargando && <p className="text-[13px] text-dark-500">Cargando datos reales…</p>}
       {!cargando && !datos && <p className="text-red-400">No se pudieron cargar los datos.</p>}
-      {!cargando && datos && senales.length === 0 && (
+      {!cargando && datos && accionables.length === 0 && noDemostrables.length === 0 && (
         <div className="flex flex-col items-center gap-2 py-10 text-dark-600">
           <CheckCircle2 size={24} />
-          <span className="text-sm">No hay señales con estos filtros.</span>
+          <span className="text-sm">Todo bajo control. No hay señales accionables.</span>
         </div>
       )}
-      {!cargando && datos && senales.length > 0 && (
+      {!cargando && datos && accionables.length > 0 && (
         <div className="space-y-2.5">
-          {senales.map((s, i) => {
+          {accionables.map((s, i) => {
             const cls = CLASE_CFG[s.clase] || CLASE_CFG.nodem
             const Ic = AREA_ICON[s.area] || HelpCircle
             const abierto = senalAbierta === s.id
+            const vista = vistas.has(s.id)
             return (
               <article key={s.id}
-                className="rise card overflow-hidden"
+                className={`rise card overflow-hidden ${!vista ? 'ring-1 ring-brand-500/20' : ''}`}
                 style={{ animationDelay: `${Math.min(i * 35, 300)}ms` }}>
-                <button onClick={() => setSenalAbierta(abierto ? null : s.id)}
+                <button onClick={() => handleToggle(s.id)}
                   className="float-row flex w-full flex-wrap items-center gap-3 px-5 py-4 text-left">
                   <span className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${cls.bg}`}>
                     <Ic size={15} className={cls.text} />
@@ -254,6 +316,7 @@ export default function Senales({ center }) {
                   </span>
                   <span className="text-[11px] font-medium text-dark-600">{s.area}</span>
                   <span className="ml-auto text-[11px] tabular-nums text-dark-600">#{s.prioridad}</span>
+                  {!vista && <span className="h-1.5 w-1.5 rounded-full bg-brand-400" title="Nueva" />}
                   <ChevronDown size={14} className={`shrink-0 text-dark-600 transition-transform duration-200 ${abierto ? 'rotate-180' : ''}`} />
                 </button>
 
@@ -295,10 +358,14 @@ export default function Senales({ center }) {
                     {s.acciones?.length > 0 && (
                       <div className="mt-3 flex flex-wrap gap-2">
                         {s.acciones.map((a, k) => (
-                          <button key={k} className="btn-primary text-[12px]" title="Prototipo: no ejecuta nada">
+                          <button key={k}
+                            onClick={(e) => { e.stopPropagation(); marcarVista(s.id) }}
+                            className="btn-primary text-[12px]"
+                            title="Prototipo: esta acción requiere backend">
                             {a.txt}
                           </button>
                         ))}
+                        <span className="ml-auto text-[10px] text-dark-700 self-center">prototipo</span>
                       </div>
                     )}
                   </div>
@@ -307,6 +374,39 @@ export default function Senales({ center }) {
             )
           })}
         </div>
+      )}
+
+      {/* ── Separador + señales NO DEMOSTRABLE ── */}
+      {noDemostrables.length > 0 && (
+        <>
+          <div className="mt-8 flex items-center gap-3 border-t border-white/[0.05] pt-6">
+            <HelpCircle size={14} className="text-dark-600" />
+            <h2 className="font-mono text-[10px] font-bold uppercase tracking-[0.2em] text-dark-600">
+              Lo que NO sabemos con estos datos ({noDemostrables.length})
+            </h2>
+          </div>
+          <p className="mt-2 text-[12.5px] text-dark-500">
+            Estas preguntas son interesantes, pero los datos actuales no permiten responderlas.
+            El sistema no las finge como señales. Si en el futuro se añade la fuente que falta,
+            pueden convertirse en señales accionables.
+          </p>
+          <div className="mt-3 space-y-2 opacity-70">
+            {noDemostrables.map((s, i) => {
+              const cls = CLASE_CFG[s.clase] || CLASE_CFG.nodem
+              const Ic = AREA_ICON[s.area] || HelpCircle
+              return (
+                <article key={s.id} className="card px-5 py-3">
+                  <div className="flex items-center gap-3">
+                    <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${cls.bg}`}>
+                      <Ic size={13} className={cls.text} />
+                    </span>
+                    <span className="text-[13px] text-dark-400">{s.titulo}</span>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        </>
       )}
 
       <footer className="mt-10 border-t border-white/[0.05] pt-5 text-[11.5px] leading-relaxed text-dark-600">
