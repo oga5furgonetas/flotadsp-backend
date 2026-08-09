@@ -26,6 +26,7 @@ import Expediente from './Expediente'
 import Investigacion from './Investigacion'
 import Fuga from './Fuga'
 import Senales from './Senales'
+import Decisiones from './Decisiones'
 import { centros } from '../app2/datosPlus'
 
 const EXPS = [
@@ -37,6 +38,8 @@ const EXPS = [
     pitch: 'Dónde se escapa el dinero' },
   { id: 'senales', nombre: 'Sistema nervioso', ic: Zap, comp: Senales,
     pitch: 'Feed de señales: excepciones con evidencia y acción' },
+  { id: 'decisiones', nombre: 'Decisiones', ic: ClipboardCheck, comp: Decisiones,
+    pitch: 'Las señales convertidas en acciones concretas' },
 ]
 
 /* Montaje dentro del panel: hereda barra lateral, centro y sesión. */
