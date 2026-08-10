@@ -3,8 +3,9 @@ import { useT } from '../../i18n'
 import {
   Loader2, MapPin, NotebookPen, Check, ExternalLink, Save, X, Search,
 } from 'lucide-react'
-import { cortexPortales, cortexPortalNota } from '../api'
+import { cortexPortales, cortexPortalNota, cortexPortalGeo } from '../api'
 import { lista } from '../../lib/lista'
+import { resolverCoordenada, compararDirecciones } from '../../lib/geoPortal'
 
 /* ────────────────────────────────────────────────────────────────────────────
    Libreta de portales.
@@ -29,10 +30,21 @@ import { lista } from '../../lib/lista'
 
 const mapa = (lat, lng) => `https://www.google.com/maps?q=${lat},${lng}`
 
-function Fila({ p, onGuardar, t }) {
+/* Veredicto del contraste entre las dos fuentes. Ninguno de los cuatro dice
+   cuál es la buena: sólo si están de acuerdo. */
+const VEREDICTO = {
+  coincide:      { k: 'lib.geo.match',  cls: 'text-emerald-300/90' },
+  otro_numero:   { k: 'lib.geo.num',    cls: 'text-amber-300' },
+  discrepa:      { k: 'lib.geo.diff',   cls: 'text-red-300' },
+  no_comparable: { k: 'lib.geo.nocmp',  cls: 'text-dark-500' },
+}
+
+function Fila({ p, onGuardar, onGeo, t }) {
   const [editando, setEditando] = useState(false)
   const [texto, setTexto] = useState(p.nota || '')
   const [guardando, setGuardando] = useState(false)
+  const [resolviendo, setResolviendo] = useState(false)
+  const [falloGeo, setFalloGeo] = useState(false)
 
   const guardar = async (resuelto = p.resuelto) => {
     setGuardando(true)
@@ -42,6 +54,20 @@ function Fila({ p, onGuardar, t }) {
     } finally { setGuardando(false) }
   }
 
+  /* Se pregunta al mapa por la coordenada REAL del portal, no por el centro de
+     la celda: la celda son ~25 m y su centro puede caer en la acera de
+     enfrente, que es justo el error que esto intenta detectar. */
+  const resolver = async () => {
+    setResolviendo(true); setFalloGeo(false)
+    try {
+      const g = await resolverCoordenada(p.lat, p.lng)
+      if (!g) { setFalloGeo(true); return }
+      await onGeo({ celdas: p.celdas, geo: g })
+    } finally { setResolviendo(false) }
+  }
+
+  const amazon = (p.direcciones || [])[0] || ''
+  const veredicto = p.geo ? compararDirecciones(amazon, p.geo) : null
   const grave = p.dias_distintos >= 4
   return (
     <div className={`rounded-lg border p-3 ${p.resuelto ? 'border-dark-800 bg-dark-900/30 opacity-60'
@@ -88,6 +114,47 @@ function Fila({ p, onGuardar, t }) {
               <span className="text-dark-700">{t('lib.unido').replace('{n}', p.celdas.length)}</span>
             )}
           </div>
+
+          {/* ── LAS DOS DIRECCIONES, UNA ENFRENTE DE OTRA ──────────────────
+              Arriba la que da Amazon; debajo lo que el mapa dice que hay en esa
+              coordenada. Ninguna de las dos se presenta como "la correcta":
+              lo que importa es si están de acuerdo, y ese veredicto es lo único
+              que aquí se afirma. */}
+          {(amazon || p.geo) && (
+            <div className="mt-2 space-y-1 rounded-md border border-dark-800 bg-dark-900/60 px-2.5 py-1.5">
+              {amazon && (
+                <div className="flex gap-2 text-[11px] leading-snug">
+                  <span className="shrink-0 font-mono text-[9.5px] uppercase tracking-wider text-dark-600">{t('lib.geo.amz')}</span>
+                  <span className="min-w-0 text-dark-300">{amazon}</span>
+                </div>
+              )}
+              {p.geo ? (
+                <>
+                  <div className="flex gap-2 text-[11px] leading-snug">
+                    <span className="shrink-0 font-mono text-[9.5px] uppercase tracking-wider text-dark-600">{t('lib.geo.osm')}</span>
+                    <span className="min-w-0 text-dark-300">
+                      {p.geo.display}
+                      <span className="ml-1 text-[10px] text-dark-600">
+                        ({t(`lib.geo.p.${p.geo.precision}`)})
+                      </span>
+                    </span>
+                  </div>
+                  {veredicto && (
+                    <p className={`text-[10.5px] ${VEREDICTO[veredicto].cls}`}>
+                      {t(VEREDICTO[veredicto].k)}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <button onClick={resolver} disabled={resolviendo}
+                  className="flex items-center gap-1 text-[11px] font-semibold text-brand-300 hover:underline disabled:opacity-50">
+                  {resolviendo ? <Loader2 size={11} className="animate-spin" /> : <Search size={11} />}
+                  {t('lib.geo.ask')}
+                </button>
+              )}
+              {falloGeo && <p className="text-[10.5px] text-dark-500">{t('lib.geo.fail')}</p>}
+            </div>
+          )}
 
           {!editando && p.nota && (
             <p className="mt-2 rounded-md border-l-2 border-brand-500/40 bg-dark-900 px-2.5 py-1.5 text-xs leading-relaxed text-dark-200">
@@ -159,6 +226,11 @@ export default function LibretaPortales({ center }) {
     cargar()
   }
 
+  const guardarGeo = async (body) => {
+    await cortexPortalGeo(body)
+    cargar()
+  }
+
   if (err) return <p className="text-sm text-red-300">{err}</p>
   if (!datos) {
     return (
@@ -219,7 +291,7 @@ export default function LibretaPortales({ center }) {
       ) : (
         <div className="space-y-2">
           {portales.map((p) => (
-            <Fila key={p.celda} p={p} onGuardar={guardar} t={t} />
+            <Fila key={p.celda} p={p} onGuardar={guardar} onGeo={guardarGeo} t={t} />
           ))}
         </div>
       )}

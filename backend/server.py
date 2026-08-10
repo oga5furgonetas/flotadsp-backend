@@ -21024,6 +21024,10 @@ async def cortex_portales(dias: int = 60, center: str = "", minimo_dias: int = 2
                         "fallos": {"$sum": 1},
                         "dias": {"$addToSet": "$service_day"},
                         "estados": {"$addToSet": "$state"},
+                        # La dirección que da Amazon. Es la MITAD de la historia:
+                        # sirve para contrastarla con lo que dice el mapa en esa
+                        # coordenada, que es de donde sale la señal de verdad.
+                        "direcciones": {"$addToSet": "$stop_address"},
                         "lat": {"$first": "$_la"}, "lng": {"$first": "$_ln"},
                         "center": {"$first": "$center"},
                         "ultimo": {"$max": "$service_day"}}},
@@ -21069,7 +21073,13 @@ async def cortex_portales(dias: int = 60, center: str = "", minimo_dias: int = 2
         # escribe en todas, pero un grupo puede crecer despues (celda nueva con
         # fallos) y entonces solo una la tiene.
         n = next((notas[k] for k in grupo if k in notas), {})
+        # La resolución del mapa se guarda por celda igual que la nota: la del
+        # grupo es la de cualquiera de sus celdas.
+        g = next((notas[k].get("geo") for k in grupo if notas.get(k, {}).get("geo")), None)
         principal = max(trozos, key=lambda t: t["fallos"])
+        # Una celda son ~25 m: puede cubrir más de un portal, y ver DOS
+        # direcciones distintas ahí es información, no un error que ocultar.
+        dirs = sorted({(d or "").strip() for t in trozos for d in (t.get("direcciones") or []) if (d or "").strip()})
         portales.append({
             "celda": principal["_id"], "celdas": sorted(grupo),
             "lat": principal["lat"], "lng": principal["lng"],
@@ -21079,6 +21089,8 @@ async def cortex_portales(dias: int = 60, center: str = "", minimo_dias: int = 2
             "ultimo_fallo": max(t["ultimo"] for t in trozos), "entregas_ok": ok,
             "tasa_fallo": round(fallos / (fallos + ok) * 100, 1) if (fallos + ok) else 100.0,
             "estados": sorted({e for t in trozos for e in t["estados"]}),
+            "direcciones": dirs[:3],
+            "geo": g,
             "nota": n.get("nota"), "nota_autor": n.get("autor"),
             "nota_fecha": n.get("actualizado_en"), "resuelto": bool(n.get("resuelto")),
         })
@@ -21098,7 +21110,12 @@ async def cortex_portal_nota(data: dict = Body(...), user: dict = Depends(requir
         raise HTTPException(400, "Celda no valida")
     nota = (data.get("nota") or "").strip()[:600]
     if not nota:
-        await db.portales.delete_many({"celda": {"$in": celdas}})
+        # Borrar la nota NO puede llevarse por delante la resolución del mapa,
+        # que vive en el mismo documento y la puso otra acción distinta.
+        await db.portales.update_many(
+            {"celda": {"$in": celdas}, "geo": {"$exists": True}},
+            {"$unset": {"nota": "", "autor": "", "actualizado_en": "", "resuelto": "", "grupo": ""}})
+        await db.portales.delete_many({"celda": {"$in": celdas}, "geo": {"$exists": False}})
         return {"success": True, "borrada": True}
     ahora = datetime.now(timezone.utc).isoformat()
     autor = user.get("name") or user.get("username")
@@ -21112,6 +21129,69 @@ async def cortex_portal_nota(data: dict = Body(...), user: dict = Depends(requir
             "autor": autor, "actualizado_en": ahora,
         }}, upsert=True)
     return {"success": True, "celdas": len(celdas)}
+
+
+_GEO_PRECISIONES = ("portal", "calle", "zona")
+
+
+@api_router.post("/cortex/portales/geo")
+async def cortex_portal_geo(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Guarda lo que el mapa dice que hay en la coordenada de un portal.
+
+    Quién geocodifica y por qué así: lo hace el NAVEGADOR contra Nominatim
+    (OpenStreetMap), a petición de una persona y de uno en uno. La política de
+    uso de Nominatim prohíbe barridos masivos, y un cron del backend recorriendo
+    300 portales sería exactamente eso. Aquí solo se persiste el resultado para
+    que se pida UNA vez y lo vean todos, incluido el conductor en su ruta.
+
+    Esto NO es "la dirección correcta". Es una SEGUNDA OPINIÓN sobre la misma
+    coordenada, que se guarda junto a la de Amazon para poder contrastarlas. La
+    señal útil es el desacuerdo entre las dos, no ninguna de las dos por
+    separado. Por eso viaja siempre con su precisión y su fecha.
+
+    Nunca pisa la nota escrita por una persona: va en su propio subdocumento.
+    """
+    celdas = data.get("celdas") or [data.get("celda")]
+    celdas = [str(c).strip() for c in celdas if c and re.match(r"^-?\d+:-?\d+$", str(c).strip())]
+    if not celdas:
+        raise HTTPException(400, "Celda no valida")
+
+    g = data.get("geo")
+    if g is None:
+        # Borrar la resolución es legítimo: si el mapa se equivocó, mejor sin
+        # dato que con uno malo.
+        for c in celdas:
+            await db.portales.update_one({"celda": c}, {"$unset": {"geo": ""}})
+        return {"success": True, "borrada": True}
+    if not isinstance(g, dict):
+        raise HTTPException(400, "geo debe ser un objeto")
+
+    precision = str(g.get("precision") or "").strip()
+    if precision not in _GEO_PRECISIONES:
+        # Sin precisión declarada no se guarda. Una dirección sin saber si es
+        # del portal, de la calle o del barrio no se puede usar para nada.
+        raise HTTPException(400, f"precision debe ser una de {_GEO_PRECISIONES}")
+
+    geo = {
+        "display": str(g.get("display") or "").strip()[:300],
+        "calle": str(g.get("calle") or "").strip()[:160],
+        "numero": str(g.get("numero") or "").strip()[:20],
+        "cp": str(g.get("cp") or "").strip()[:12],
+        "municipio": str(g.get("municipio") or "").strip()[:120],
+        "precision": precision,
+        "fuente": "openstreetmap",
+        "por": user.get("name") or user.get("username"),
+        "en": datetime.now(timezone.utc).isoformat(),
+    }
+    if not geo["display"]:
+        raise HTTPException(400, "geo.display vacio")
+
+    for c in celdas:
+        lat, lng = _celda_centro(c)
+        await db.portales.update_one({"celda": c}, {"$set": {
+            "celda": c, "lat": lat, "lng": lng, "geo": geo,
+        }}, upsert=True)
+    return {"success": True, "celdas": len(celdas), "geo": geo}
 
 
 @api_router.get("/cortex/portales/mi-ruta")
@@ -21145,10 +21225,21 @@ async def cortex_portales_mi_ruta(user: dict = Depends(require_any_auth)):
     porc = {c["_id"]: c for c in celdas}
     avisos = []
     async for n in db.portales.find({"celda": {"$in": claves}, "resuelto": {"$ne": True}}, {"_id": 0}):
+        geo = n.get("geo") or {}
+        # Un aviso sin nota y sin dirección resuelta no dice nada. Pintarlo
+        # entrenaría al conductor a ignorar este bloque, y el día que sí haya
+        # algo tampoco lo leería.
+        if not (n.get("nota") or geo.get("display")):
+            continue
         c = porc.get(n["celda"], {})
         avisos.append({"nota": n.get("nota"), "lat": n.get("lat"), "lng": n.get("lng"),
                        "stop": c.get("stop"), "paquetes": c.get("paquetes", 0),
-                       "autor": n.get("autor")})
+                       "autor": n.get("autor"),
+                       # La dirección del mapa se manda tal cual, con su
+                       # precisión: el conductor tiene que poder ver que es
+                       # "la calle", no "el portal exacto".
+                       "direccion": geo.get("display") or None,
+                       "precision": geo.get("precision") or None})
     avisos.sort(key=lambda a: a["paquetes"], reverse=True)
     return {"avisos": avisos, "stops_con_aviso": len(avisos), "dia": hoy}
 

@@ -59,7 +59,18 @@ export default function AvisosPortales() {
                   {t('av.paquetes').replace('{n}', a.paquetes)}
                 </span>
               </div>
-              <p className="text-[13px] leading-relaxed text-dark-100">{a.nota}</p>
+              {a.nota && <p className="text-[13px] leading-relaxed text-dark-100">{a.nota}</p>}
+              {/* La dirección del mapa va SIEMPRE con su precisión: el conductor
+                  tiene que poder ver que es "la calle" y no "el portal exacto",
+                  o se plantará delante del número equivocado confiado. */}
+              {a.direccion && (
+                <p className={`text-[12px] leading-relaxed text-dark-300 ${a.nota ? 'mt-1' : ''}`}>
+                  {a.direccion}
+                  {a.precision && a.precision !== 'portal' && (
+                    <span className="ml-1 text-[10px] text-amber-400/70">({t(`lib.geo.p.${a.precision}`)})</span>
+                  )}
+                </p>
+              )}
               <a href={`https://www.google.com/maps?q=${a.lat},${a.lng}`}
                 target="_blank" rel="noreferrer"
                 className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold text-brand-300">
