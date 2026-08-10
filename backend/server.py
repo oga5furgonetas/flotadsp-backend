@@ -13304,6 +13304,49 @@ def _build_maint_item(v: dict, kind: str, default_interval: int, default_warn: i
     }
 
 
+def _km_por_dia(v: dict) -> Optional[float]:
+    """Ritmo real de la furgoneta en km/día, o None si no se puede medir.
+
+    Pendiente entre el primer y el último apunte recientes de `mileage_history`.
+    Exige 2 apuntes separados 7+ días para no extrapolar ruido: con dos lecturas
+    del mismo día, un repostaje o un error de OCR se convertirían en un ritmo
+    disparatado y de ahí saldría una fecha de taller falsa.
+
+    Devolver None es una respuesta legítima y quien llama TIENE que respetarla:
+    sin ritmo medido no hay días estimados. Ponerlos a ojo sería inventarlos.
+    """
+    hist = sorted(
+        (h for h in (v.get("mileage_history") or [])
+         if isinstance(h, dict) and h.get("date") and isinstance(h.get("km"), (int, float))),
+        key=lambda h: str(h["date"]),
+    )
+    if len(hist) < 2:
+        return None
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d")
+    recent = [h for h in hist if str(h["date"])[:10] >= cutoff] or hist[-5:]
+    if len(recent) < 2:
+        return None
+    try:
+        d0 = datetime.fromisoformat(str(recent[0]["date"])[:10])
+        d1 = datetime.fromisoformat(str(recent[-1]["date"])[:10])
+        span = (d1 - d0).days
+        dk = recent[-1]["km"] - recent[0]["km"]
+        if span >= 7 and dk > 0:
+            return round(dk / span, 1)
+    except Exception:
+        return None
+    return None
+
+
+def _km_ultimo_apunte(v: dict) -> Optional[str]:
+    """Fecha del apunte de km más reciente. El km de la ficha puede llevar
+    semanas parado, y una cuenta atrás sobre un km viejo va adelantada sin que
+    se note: la vista tiene que poder decir de cuándo es el dato."""
+    fechas = [str(h.get("date"))[:10] for h in (v.get("mileage_history") or [])
+              if isinstance(h, dict) and h.get("date")]
+    return max(fechas) if fechas else None
+
+
 @api_router.get("/vehicles/{vehicle_id}/maintenance")
 async def get_maintenance_info(vehicle_id: str, _=Depends(require_admin)):
     """Devuelve info de mantenimiento completa de una furgoneta (aceite, ruedas, pastillas).
@@ -13313,27 +13356,7 @@ async def get_maintenance_info(vehicle_id: str, _=Depends(require_admin)):
     if not v:
         raise HTTPException(status_code=404, detail="Furgoneta no encontrada")
 
-    # km/día reales: pendiente entre el primer y último registro recientes.
-    # Mínimo 2 registros con 7+ días de separación para no extrapolar ruido.
-    km_per_day = None
-    hist = sorted(
-        (h for h in (v.get("mileage_history") or [])
-         if isinstance(h, dict) and h.get("date") and isinstance(h.get("km"), (int, float))),
-        key=lambda h: str(h["date"]),
-    )
-    if len(hist) >= 2:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d")
-        recent = [h for h in hist if str(h["date"])[:10] >= cutoff] or hist[-5:]
-        if len(recent) >= 2:
-            try:
-                d0 = datetime.fromisoformat(str(recent[0]["date"])[:10])
-                d1 = datetime.fromisoformat(str(recent[-1]["date"])[:10])
-                span = (d1 - d0).days
-                dk = recent[-1]["km"] - recent[0]["km"]
-                if span >= 7 and dk > 0:
-                    km_per_day = round(dk / span, 1)
-            except Exception:
-                km_per_day = None
+    km_per_day = _km_por_dia(v)
 
     def _with_estimate(item):
         if item and km_per_day and isinstance(item.get("km_until_change"), (int, float)):
@@ -13354,11 +13377,18 @@ async def get_maintenance_info(vehicle_id: str, _=Depends(require_admin)):
 
 @api_router.get("/alerts/maintenance")
 async def get_maintenance_alerts(_=Depends(require_admin)):
-    """Devuelve todas las furgonetas con mantenimiento vencido o próximo."""
+    """Todas las furgonetas con mantenimiento vencido o próximo, con la MISMA
+    predicción que la ficha individual: km/día reales y días estimados.
+
+    Con 81 furgonetas nadie entra una por una, y por eso los cambios se hacen
+    tarde. `mileage_history` entra en la proyección justo para esto; el km/día
+    lo calcula `_km_por_dia`, el mismo que usa /vehicles/{id}/maintenance, para
+    que la cola de flota y la ficha no puedan dar días distintos.
+    """
     vehicles = await db.vehicles.find(
         {"status": {"$ne": "baja"}},
         {"_id": 0, "id": 1, "license_plate": 1, "brand": 1, "model": 1, "center": 1,
-         "mileage": 1,
+         "mileage": 1, "mileage_history": 1, "status": 1, "provider": 1,
          "oil_last_change_km": 1, "oil_last_change_date": 1, "oil_interval_km": 1, "oil_warning_before_km": 1,
          "ruedas_last_change_km": 1, "ruedas_last_change_date": 1, "ruedas_interval_km": 1, "ruedas_warning_before_km": 1,
          "pastillas_last_change_km": 1, "pastillas_last_change_date": 1, "pastillas_interval_km": 1, "pastillas_warning_before_km": 1}
@@ -13366,6 +13396,8 @@ async def get_maintenance_alerts(_=Depends(require_admin)):
 
     alerts = []
     for v in vehicles:
+        kpd = _km_por_dia(v)                  # None = sin ritmo medible
+        km_at = _km_ultimo_apunte(v)
         for kind, default_i, default_w, label in [
             ("oil", 15000, 2500, "Aceite"),
             ("ruedas", 40000, 3000, "Ruedas"),
@@ -13373,12 +13405,22 @@ async def get_maintenance_alerts(_=Depends(require_admin)):
         ]:
             item = _build_maint_item(v, kind, default_i, default_w)
             if item and (item["overdue"] or item["warning"]):
+                # Sin km/día NO hay días: la clave viaja como None y quien pinta
+                # tiene que decir "faltan X km" en vez de inventarse una fecha.
+                item["days_left_estimate"] = (
+                    max(0, round(item["km_until_change"] / kpd))
+                    if kpd and isinstance(item.get("km_until_change"), (int, float)) else None)
                 alerts.append({
                     "vehicle_id": v["id"],
                     "license_plate": v.get("license_plate"),
                     "brand": v.get("brand"),
+                    "model": v.get("model"),
                     "center": v.get("center"),
                     "mileage": v.get("mileage"),
+                    "mileage_last_at": km_at,
+                    "vehicle_status": v.get("status"),
+                    "provider": v.get("provider"),
+                    "km_per_day": kpd,
                     "kind": kind,
                     "label": label,
                     **item,

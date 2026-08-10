@@ -9,11 +9,18 @@ import { canSee } from '../auth'
 const AvisosITV = lazy(() => import('./AvisosITV'))
 const Renting = lazy(() => import('./Renting'))
 const CasasAlquiler = lazy(() => import('./CasasAlquiler'))
+// Un mantenimiento vencido es un vencimiento como la ITV, solo que medido en
+// km en vez de en días: entra aquí y no como una entrada más en la barra
+// lateral, que ya tiene de sobra.
+const Mantenimiento = lazy(() => import('./Mantenimiento'))
 
 export default function Vencimientos() {
   const { t } = useT()
   const tabs = [
     canSee('avisos-itv') && { k: 'itv', label: t('nav.itvalerts'), C: AvisosITV },
+    // Mismo permiso que los avisos de ITV: quien vigila vencimientos de flota
+    // es quien tiene que ver los cambios que vencen.
+    canSee('avisos-itv') && { k: 'mant', label: t('mant.tab'), C: Mantenimiento },
     canSee('renting') && { k: 'renting', label: t('nav.renting'), C: Renting },
     canSee('casas-alquiler') && { k: 'casas', label: t('nav.rental'), C: CasasAlquiler },
   ].filter(Boolean)
