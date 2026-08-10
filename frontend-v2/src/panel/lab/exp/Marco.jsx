@@ -21,7 +21,7 @@
    ───────────────────────────────────────────────────────────────────────────── */
 import { useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
-import { FlaskConical, Truck, SearchCheck, Banknote, Zap, ClipboardCheck, Send, Wrench } from 'lucide-react'
+import { FlaskConical, Truck, SearchCheck, Banknote, Zap, ClipboardCheck, Send, Wrench, Activity } from 'lucide-react'
 import ParteTelegram from './ParteTelegram'
 import Proximos from './Proximos'
 import Expediente from './Expediente'
@@ -29,10 +29,15 @@ import Investigacion from './Investigacion'
 import Fuga from './Fuga'
 import Senales from './Senales'
 import Decisiones from './Decisiones'
+import VidaPreview from './VidaPreview'
 import { centros } from '../app2/datosPlus'
 import { DATOS_SINTETICOS } from '../datos'
 
 const EXPS = [
+  /* Único que NO es un experimento: es el componente YA integrado en la ficha
+     del vehículo, importado tal cual, para poder verlo sin credenciales. */
+  { id: 'vida', nombre: 'Vida (integrado)', ic: Activity, comp: VidaPreview,
+    pitch: 'Cuánto tiempo estuvo abierto cada daño' },
   { id: 'parte', nombre: 'Cierre 22:00', ic: Send, comp: ParteTelegram,
     pitch: 'Sustituye lo que hoy se manda a Telegram' },
   { id: 'proximos', nombre: 'Próximos cambios', ic: Wrench, comp: Proximos,
@@ -84,7 +89,7 @@ export function MarcoSuelto() {
 }
 
 function Contenido({ center }) {
-  const [cual, setCual] = useState('parte')
+  const [cual, setCual] = useState('vida')
   const Actual = EXPS.find((e) => e.id === cual).comp
 
   return (

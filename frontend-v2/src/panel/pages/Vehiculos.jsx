@@ -6,6 +6,7 @@ import { useEscape } from '../../lib/useEscape'
 import { hoyLocal } from '../../lib/fecha'
 import { PageSkeleton } from '../components/Skeleton'
 import GuidedEmpty from '../components/GuidedEmpty'
+import VidaVehiculo from '../components/VidaVehiculo'
 import QRCode from 'qrcode'
 import {
   Loader2, Search, Truck, X, Save, Download, QrCode,
@@ -1223,6 +1224,12 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                     >
                       <FileText size={14} /> {t('vh.dispute')}
                     </button>
+                  )}
+                  {/* Cuánto tiempo estuvo abierto cada daño. La lista de abajo
+                      dice QUÉ pasó y CUÁNDO; esto dice CUÁNTO DURÓ. Solo si el
+                      ledger trae algo: sin daños no hay nada que dibujar. */}
+                  {((ledger?.open?.length || 0) + (ledger?.repaired?.length || 0)) > 0 && (
+                    <div className="mb-4"><VidaVehiculo ledger={ledger} /></div>
                   )}
                   {(insps === null || vehicleIncidents === null) ? (
                     <div className="flex items-center gap-2 py-8 text-dark-500"><Loader2 size={14} className="animate-spin" /> …</div>
