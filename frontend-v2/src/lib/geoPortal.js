@@ -38,10 +38,28 @@ const TIPOS_VIA = new Set([
   'street', 'road', 'via', 'vía', 'de', 'del', 'da', 'do', 'la', 'el', 'los',
   'las', 'y', 'e', 'a', 'o',
 ])
+/* Código de carretera: N-550, AC-841, SC-20, CP-0204. Aquí el número NO sobra,
+   es el nombre de la vía. Sin esto una dirección de carretera se quedaba en
+   nada al normalizar y nunca se podía comparar — y en Galicia se reparte en
+   carretera todos los días. */
+const RE_CARRETERA = /\b([a-z]{1,3})\s*-\s*(\d{1,4})\b/g
+/* La misma vía se escribe 'AC-841' o 'AC 841'. Sin guion NO se puede
+   generalizar: 'Calle Sol 12' se convertiría en 'sol12' y dejaría de casar con
+   nada. Así que sin guion sólo valen los prefijos de carretera que existen de
+   verdad (red del Estado, Galicia y diputaciones). */
+const PREFIJOS_CARRETERA = 'n|a|ap|ac|ag|vg|cg|cp|dp|ep|ou|po|lu|sc|vrg|se|ce'
+const RE_CARRETERA_SIN_GUION = new RegExp(`\\b(${PREFIJOS_CARRETERA})\\s+(\\d{2,4})\\b`, 'g')
+
 export function nucleoVia(s) {
-  return String(s || '')
+  const base = String(s || '')
     .normalize('NFD').replace(/[̀-ͯ]/g, '')
     .toLowerCase()
+  // Los códigos se pegan (n-550 → n550) para que sobrevivan al filtro de
+  // números sueltos y al de palabras cortas.
+  const conCodigos = base
+    .replace(RE_CARRETERA, (_, l, n) => `${l}${n}`)
+    .replace(RE_CARRETERA_SIN_GUION, (_, l, n) => `${l}${n}`)
+  return conCodigos
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter((w) => w && !TIPOS_VIA.has(w) && !/^\d+$/.test(w))
@@ -69,17 +87,24 @@ function numeroDe(s) {
   if (!tramos.length) return ''
   // 's/n' = sin número. Decirlo es un dato; inventarle uno, no.
   if (/\bs\s*\/?\s*n\b/i.test(tramos[0])) return ''
+  /* Fuera lo que parece un portal y no lo es:
+     · 'KM 12' de una carretera es un punto kilométrico, no un número de puerta.
+     · 'N-550' es el nombre de la vía. */
+  const limpiar = (x) => String(x)
+    .replace(/\b[a-zA-ZÁ-ú]{1,3}\s*-\s*\d{1,4}\b/g, ' ')
+    .replace(/\bkm\.?\s*\d+([.,]\d+)?\b/gi, ' ')
   const enTramo = (x) => {
-    const todos = String(x).match(/\b\d{1,4}\b/g)
+    const todos = limpiar(x).match(/\b\d{1,4}\b/g)
     return todos ? todos[todos.length - 1] : ''
   }
   // Primer tramo: 'Rúa do Vilar 30' → 30, 'C/ 12 de Octubre 5' → 5.
   const n = enTramo(tramos[0])
   if (n) return n
-  // Patrón 'Avda. de Lugo, 12': el número quedó en el tramo siguiente. Solo se
-  // acepta si ese tramo es prácticamente el número solo — 'Bajo B' o '15705
-  // Santiago' no son portales.
-  if (tramos[1] && /^\d{1,4}\s*[a-zA-Z]?$/.test(tramos[1])) return enTramo(tramos[1])
+  /* Patrón 'Avda. de Lugo, 12' o 'Rúa X, Nº 5': el número quedó en el tramo
+     siguiente. Solo se acepta si ese tramo es prácticamente el número solo —
+     'Bajo B' o '15705 Santiago' no son portales. */
+  const seg = (tramos[1] || '').replace(/^(n[.ºo°]*|num\.?|numero)\s*/i, '').trim()
+  if (/^\d{1,4}\s*[a-zA-Z]?$/.test(seg)) return enTramo(seg)
   return ''
 }
 
