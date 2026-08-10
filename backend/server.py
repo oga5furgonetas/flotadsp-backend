@@ -5816,6 +5816,67 @@ async def vehicles_last_inspections(_=Depends(require_admin)):
     return out
 
 
+_RUEDA_VALIDA = {"si", "no", "no_se"}
+
+
+@api_router.get("/vehicles/spare-wheel")
+async def vehicles_spare_wheel(_=Depends(require_admin)):
+    """Última DECLARACIÓN de rueda de repuesto por vehículo.
+
+    Lo que devuelve es lo que dijo un conductor un día concreto, no un hecho
+    comprobado por nadie más. Por eso viaja siempre con quién lo dijo y cuándo:
+    el panel tiene que poder enseñarlo como testimonio, no como inventario.
+
+    Un vehículo que no aparece en el mapa es un vehículo del que NO SABEMOS
+    nada (nunca se preguntó, o la auditoría es anterior a esta pregunta). Eso
+    es distinto de 'no la lleva' y el frontend no debe mezclarlos.
+    """
+    # Solo las auditorías que traen la respuesta: el resto ni se lee.
+    pipeline = [
+        {"$match": {"deleted": {"$ne": True}, "notes": {"$regex": "rueda_repuesto"}}},
+        {"$sort": {"created_at": -1}},
+        {"$group": {"_id": "$vehicle_id",
+                    "notes": {"$first": "$notes"},
+                    "at": {"$first": "$created_at"},
+                    "inspection_id": {"$first": "$id"},
+                    "driver_id": {"$first": "$driver_id"}}},
+    ]
+    filas = []
+    async for row in db.inspections.aggregate(pipeline):
+        # Mongo OMITE la clave cuando el campo no existe (no la pone a null)
+        vid = row.get("_id")
+        if not vid:
+            continue
+        try:
+            n = json.loads(row.get("notes") or "")
+        except Exception:
+            continue           # notes que no es JSON (p.ej. subidas masivas)
+        if not isinstance(n, dict):
+            continue
+        estado = n.get("rueda_repuesto")
+        # Un valor que no reconocemos se descarta: mejor "sin datos" que un
+        # dato inventado por una versión futura del portal.
+        if estado not in _RUEDA_VALIDA:
+            continue
+        filas.append({"vid": vid, "estado": estado, "at": row.get("at"),
+                      "inspection_id": row.get("inspection_id"),
+                      "driver_id": row.get("driver_id"),
+                      "driver_name": (n.get("driver_name") or "").strip(),
+                      "foto": bool(n.get("rueda_repuesto_foto"))})
+
+    # El nombre del conductor lo manda el portal dentro de notes, pero si vino
+    # vacío se completa desde la ficha: sin nombre, el testimonio no se sostiene.
+    faltan = list({f["driver_id"] for f in filas if f["driver_id"] and not f["driver_name"]})
+    if faltan:
+        drv = await db.drivers.find({"id": {"$in": faltan}}, {"_id": 0, "id": 1, "name": 1}).to_list(500)
+        nombres = {d["id"]: d.get("name") or "" for d in drv}
+        for f in filas:
+            if not f["driver_name"]:
+                f["driver_name"] = nombres.get(f["driver_id"], "")
+
+    return {f.pop("vid"): f for f in filas}
+
+
 @api_router.get("/vehicles/portal")
 async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
     """Portal conductor: devuelve los vehículos que puede inspeccionar el conductor.

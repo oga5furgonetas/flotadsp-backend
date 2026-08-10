@@ -88,6 +88,11 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
   const [odoServicioCaido, setOdoServicioCaido] = useState(false)
   const [checklist, setChecklist] = useState({})
   const [checklistPhotos, setChecklistPhotos] = useState({})
+  // Rueda de repuesto: 'si' | 'no' | 'no_se'. No es un estado del checklist
+  // (bien/regular/mal), es una pregunta de PRESENCIA, y por eso va aparte.
+  // "No he podido mirar" existe para que nadie tenga que mentir para seguir.
+  const [rueda, setRueda] = useState(null)
+  const [ruedaPhoto, setRuedaPhoto] = useState(null)
   const [notes, setNotes] = useState('')
   const [sending, setSending] = useState(false)
   const [assigned, setAssigned] = useState(null)
@@ -110,6 +115,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
   }
   const odoRef = useRef(null)
   const checklistRefs = useRef({})
+  const ruedaRef = useRef(null)
 
   // Cache de blob URLs para evitar memory leaks: un URL por blob, revocado al desmontar
   const blobUrlCache = useRef(new Map())
@@ -204,6 +210,13 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
     setChecklistPhotos((p) => ({ ...p, [itemId]: blob }))
   }
 
+  const handleRuedaPhoto = async (e) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setRuedaPhoto(await compressImage(file, 1000, 0.65))
+  }
+
   // Sin km validos NO se envia auditoria. Es el requisito de flota.
   const allRequiredPhotos = PHOTO_SLOTS.filter((s) => s.required).every((s) => photos[s.id])
     && !!odoPhoto && odoKmFinal > 0
@@ -217,6 +230,9 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
     if (!(odoKmFinal > 0)) return toast.error(t('dr.sinKm'))
     if (!allRequiredPhotos) return toast.error(t('dr.faltanFotos'))
     if (missingDamagePhotos.length > 0) return toast.error(t('dr.faltanDanos'))
+    // Sin respuesta no se envía: "sin datos" y "no la lleva" no pueden
+    // acabar significando lo mismo en el panel.
+    if (!rueda) { setStep(2); return toast.error(t('dr.spare.req')) }
     setSending(true)
     // Evitar que un cierre accidental de la pestaña pierda la inspección en curso
     const guard = (e) => { e.preventDefault(); e.returnValue = '' }
@@ -230,6 +246,10 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
         odometer_km: odoKmFinal,
         odometer_manual: !odoKm && odoManualValido,
         checklist_photo_items: Object.keys(checklistPhotos).map((id) => CHECKLIST.find((c) => c.id === id)?.label || id),
+        // Declaración del conductor, no un hecho verificado: se guarda con
+        // quién lo dijo para que el panel pueda decirlo tal cual.
+        rueda_repuesto: rueda,
+        rueda_repuesto_foto: !!ruedaPhoto,
       }))
       PHOTO_SLOTS.forEach((slot, i) => {
         if (photos[slot.id]) fd.append('files', photos[slot.id], `angle_${i}_${slot.id}.jpg`)
@@ -237,6 +257,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
       if (odoPhoto) fd.append('files', odoPhoto, 'odometro.jpg')
       Object.entries(checklistPhotos).forEach(([itemId, blob]) =>
         fd.append('files', blob, `checklist_${itemId}.jpg`))
+      if (ruedaPhoto) fd.append('files', ruedaPhoto, 'checklist_rueda_repuesto.jpg')
 
       // Subida con reintentos: los conductores suben desde garajes con cobertura
       // mala. Red caída o 5xx → hasta 3 intentos; errores 4xx no se reintentan.
@@ -639,6 +660,56 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
               })}
             </div>
 
+            {/* ── RUEDA DE REPUESTO ──────────────────────────────────────
+                Fuera del checklist a propósito: los demás puntos se puntúan
+                (bien/regular/mal) y éste sólo puede estar o no estar.
+                Se pide siempre, pero con salida honesta: quien no ha podido
+                mirar lo dice, y así el silencio deja de confundirse con un no. */}
+            <div className={`rounded-2xl border p-4 transition-all ${
+              rueda === 'no'    ? 'border-red-500/40 bg-red-500/[0.06]' :
+              rueda === 'si'    ? 'border-emerald-500/25 bg-dark-900' :
+              rueda === 'no_se' ? 'border-dark-600 bg-dark-900' :
+                                  'border-brand-500/30 bg-dark-900'
+            }`}>
+              <div className="mb-1 flex items-center justify-between gap-3">
+                <span className="text-sm font-semibold text-dark-100">🛞 {t('dr.spare.title')}</span>
+                <div>
+                  <input
+                    ref={ruedaRef} type="file" accept="image/*" capture="environment"
+                    onChange={handleRuedaPhoto} className="hidden"
+                  />
+                  <button
+                    onClick={() => ruedaRef.current?.click()}
+                    className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                      ruedaPhoto
+                        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+                        : 'border-dark-700 text-dark-400 hover:border-brand-500/40 hover:text-brand-400'
+                    }`}
+                  >
+                    <Camera size={11} /> {ruedaPhoto ? 'Foto ✓' : 'Foto'}
+                  </button>
+                </div>
+              </div>
+              <p className="mb-3 text-[11px] leading-relaxed text-dark-500">{t('dr.spare.hint')}</p>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { id: 'si',    label: t('dr.spare.yes'),   cls: 'bg-emerald-500/20 border-emerald-500/60 text-emerald-400' },
+                  { id: 'no',    label: t('dr.spare.no'),    cls: 'bg-red-500/20 border-red-500/60 text-red-400' },
+                  { id: 'no_se', label: t('dr.spare.dunno'), cls: 'bg-dark-700/60 border-dark-500 text-dark-200' },
+                ].map((op) => (
+                  <button
+                    key={op.id}
+                    onClick={() => setRueda(op.id)}
+                    className={`rounded-xl border px-1 py-3 text-[11px] font-semibold leading-tight transition-all ${
+                      rueda === op.id ? op.cls : 'border-dark-700 text-dark-500 hover:border-dark-500 hover:text-dark-300'
+                    }`}
+                  >
+                    {op.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div>
               <label className="label">{t('dr.observaciones')}</label>
               <textarea
@@ -651,12 +722,14 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
 
             <button
               onClick={() => setStep(3)}
-              disabled={missingDamagePhotos.length > 0}
+              disabled={missingDamagePhotos.length > 0 || !rueda}
               className="btn-primary flex w-full items-center justify-center gap-2 py-3.5 text-sm disabled:opacity-60"
             >
               {missingDamagePhotos.length > 0
                 ? `Faltan ${missingDamagePhotos.length} foto(s) de daños`
-                : <>{t('dr.review')} <ChevronRight size={16} /></>}
+                : !rueda
+                  ? t('dr.spare.req')
+                  : <>{t('dr.review')} <ChevronRight size={16} /></>}
             </button>
           </div>
         )}

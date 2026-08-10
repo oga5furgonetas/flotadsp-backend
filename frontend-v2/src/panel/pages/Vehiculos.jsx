@@ -7,6 +7,7 @@ import { hoyLocal } from '../../lib/fecha'
 import { PageSkeleton } from '../components/Skeleton'
 import GuidedEmpty from '../components/GuidedEmpty'
 import VidaVehiculo from '../components/VidaVehiculo'
+import { ultimaRueda } from '../../lib/rueda'
 import QRCode from 'qrcode'
 import {
   Loader2, Search, Truck, X, Save, Download, QrCode,
@@ -20,7 +21,7 @@ import {
   getVehicles, getLastInspections, getVehicleDriver, getVehicleInspections, updateVehicle, deleteVehicle, createIncident, getIncidents,
   getVehicleMaintenance, registerOilChange, registerMaintenanceChange,
   getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument, createVehicle,
-  getVehicleDamageLedger, repairVehicleLedger,
+  getVehicleDamageLedger, repairVehicleLedger, getSpareWheels,
 } from '../api'
 import { getAdmin } from '../auth'
 
@@ -322,7 +323,7 @@ function computeHealth({ vehicle, insps, incidents, maintenance, ledger, t }) {
 
 /* ── Vehicle detail panel ── */
 function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
-  const { t } = useT()
+  const { t, lang } = useT()
   const [vehicle, setVehicle] = useState(initVehicle)
   const [driver, setDriver] = useState(undefined)
   const [insps, setInsps] = useState(null)
@@ -781,6 +782,43 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                 )}
               </div>
             </Section>
+
+            {/* ══ RUEDA DE REPUESTO ══
+                Sale del JSON de notes de las auditorías que ya están cargadas:
+                ni endpoint ni llamada extra. Se enseña como testimonio (quién
+                y cuándo), nunca como inventario, y "nunca se preguntó" tiene
+                su propio estado para no confundirse con "no la lleva". */}
+            {insps !== null && (() => {
+              const r = ultimaRueda(insps)
+              const tono = !r ? { c: 'text-dark-500', b: 'border-dark-700/50' }
+                : r.estado === 'no' ? { c: 'text-red-300', b: 'border-red-500/25 bg-red-500/[0.04]' }
+                : r.estado === 'si' ? { c: 'text-emerald-300', b: 'border-emerald-500/20' }
+                : { c: 'text-amber-300', b: 'border-amber-500/20' }
+              const fecha = r?.at ? new Date(r.at).toLocaleDateString(LANG_LOCALE[lang] || 'es-ES') : ''
+              const quien = r?.driver_name
+                ? t('vh.rueda.quien').replace('{n}', r.driver_name).replace('{d}', fecha)
+                : t('vh.rueda.anon').replace('{d}', fecha)
+              return (
+                <div className={`mx-3 mb-3 rounded-xl border px-3.5 py-3 ${tono.b}`}>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-[10px] font-medium uppercase tracking-wider text-dark-600">
+                      🛞 {t('vh.rueda.t')}
+                    </span>
+                    <span className={`text-[13px] font-semibold ${tono.c}`}>
+                      {t(r ? `vh.rueda.${r.estado}` : 'vh.rueda.nunca')}
+                    </span>
+                  </div>
+                  {r && (
+                    <>
+                      <p className="mt-1 text-[11.5px] text-dark-500">
+                        {quien}{r.foto ? ' · 📷' : ''}
+                      </p>
+                      <p className="mt-1 text-[10.5px] leading-relaxed text-dark-600">{t('vh.rueda.foot')}</p>
+                    </>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* Sección: Datos del vehículo */}
             <Section title={t('veh.title')} icon={<Truck size={13} />}>
@@ -1562,6 +1600,8 @@ export default function Vehiculos() {
   const { t, lang } = useT()
   const [vehicles, setVehicles] = useState(null)
   const [lastInsp, setLastInsp] = useState({})
+  const [spare, setSpare] = useState({})          // vehicle_id → última declaración
+  const [soloSinRueda, setSoloSinRueda] = useState(false)
   const [err, setErr] = useState('')
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(null)
@@ -1582,14 +1622,18 @@ export default function Vehiculos() {
     setVehicles(null); setErr('')
     getVehicles(center).then(r => setVehicles(lista(r.data))).catch(() => setErr('No se pudieron cargar los vehículos.'))
     getLastInspections().then(r => setLastInsp(r.data || {})).catch(() => {})
+    // Si falla, {} = no sabemos de ninguna. El KPI dirá 0, que es la verdad
+    // ("no consta ninguna declarada ausente"), nunca un número inventado.
+    getSpareWheels().then(r => setSpare(r.data || {})).catch(() => setSpare({}))
   }
   useEffect(load, [center])
 
   const list = useMemo(() => (vehicles || []).filter(v => {
+    if (soloSinRueda && spare[v.id]?.estado !== 'no') return false
     if (!q) return true
     const s = q.toLowerCase()
     return [v.license_plate, v.brand, v.model, v.center, v.vin].some(x => (x || '').toLowerCase().includes(s))
-  }), [vehicles, q])
+  }), [vehicles, q, soloSinRueda, spare])
 
   const kpis = useMemo(() => {
     const vs = vehicles || []
@@ -1598,8 +1642,11 @@ export default function Vehiculos() {
       taller: vs.filter(v => v.status === 'taller').length,
       itv: vs.filter(v => { const d = daysTo(v.itv_date); return d != null && d <= 30 }).length,
       sinInsp: vs.filter(v => !lastInsp[v.id]).length,
+      // SOLO las declaradas ausentes. Las que nunca se preguntaron no entran:
+      // no saber si la lleva no es lo mismo que saber que no la lleva.
+      sinRueda: vs.filter(v => spare[v.id]?.estado === 'no').length,
     }
-  }, [vehicles, lastInsp])
+  }, [vehicles, lastInsp, spare])
 
   if (err) return <p className="text-red-400">{err}</p>
 
@@ -1647,10 +1694,19 @@ export default function Vehiculos() {
             { val: kpis.taller,  label: t('veh.workshop'),   color: 'text-amber-300' },
             { val: kpis.itv,     label: 'ITV ≤ 30 días',     color: 'text-amber-300' },
             { val: kpis.sinInsp, label: t('veh.never.insp'), color: 'text-red-300' },
-          ].map(({ val, label, color }, i) => (
-            <div key={label} className="flex items-baseline gap-2">
+            // Clicable: filtra la lista. Solo se ofrece si hay alguna, para no
+            // dejar un filtro que no lleva a ningún sitio.
+            { val: kpis.sinRueda, label: t('vh.rueda.kpi'), color: 'text-red-300',
+              onClick: kpis.sinRueda > 0 ? () => setSoloSinRueda((s) => !s) : null,
+              on: soloSinRueda },
+          ].map(({ val, label, color, onClick, on }, i) => (
+            <div
+              key={label}
+              onClick={onClick || undefined}
+              className={`flex items-baseline gap-2 ${onClick ? 'cursor-pointer rounded-lg px-2 -mx-2 transition hover:bg-white/[0.04]' : ''} ${on ? 'bg-white/[0.06] rounded-lg px-2 -mx-2' : ''}`}
+            >
               <span className={`text-[19px] font-semibold tabular-nums ${(val > 0 || i === 0) ? color : 'text-dark-600'}`}>{val}</span>
-              <span className="text-[12.5px] text-dark-500">{label}</span>
+              <span className={`text-[12.5px] ${on ? 'text-dark-200' : 'text-dark-500'}`}>{label}</span>
             </div>
           ))}
         </div>
