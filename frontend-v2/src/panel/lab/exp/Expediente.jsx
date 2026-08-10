@@ -38,6 +38,7 @@ import {
   vehiculos, inspecciones, danos, incidencias, talleres,
   asignaciones, HOY, condPorId,
 } from '../app2/datosPlus'
+import Vida from './Vida'
 
 const eur = (n) => `${Math.round(n || 0).toLocaleString('es-ES')} €`
 const km = (n) => `${(n || 0).toLocaleString('es-ES')} km`
@@ -223,6 +224,7 @@ function Ficha({ id, onCerrar }) {
   const v = e.v
   const dITV = dias(v.itv_date)
   const [verTodo, setVerTodo] = useState(false)
+  const [selDano, setSelDano] = useState(null)
   const linea = verTodo ? e.linea : e.linea.slice(0, 14)
 
   return (
@@ -302,6 +304,11 @@ function Ficha({ id, onCerrar }) {
               </p>
             </Seccion>
           )}
+
+          {/* ── Línea de vida: cuánto tiempo estuvo así, no cuándo pasó ── */}
+          <Seccion titulo="Línea de vida · cuánto tiempo estuvo cada daño abierto">
+            <Vida danos={e.dañosV} hoy={HOY} sel={selDano} onSel={setSelDano} />
+          </Seccion>
 
           {/* ── El eje temporal: la memoria del vehículo ── */}
           <Seccion titulo={`Todo lo que le ha pasado · ${e.linea.length} eventos`}>

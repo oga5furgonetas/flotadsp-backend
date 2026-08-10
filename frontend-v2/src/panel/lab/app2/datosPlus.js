@@ -155,6 +155,9 @@ for (let i = 0; i < 46; i++) {
     estimated_cost: est,
     actual_cost: cerrado ? Math.round(est * (0.75 + rnd() * 0.6)) : null,
     first_seen: dia(edad),
+    /* Fecha de reparación: sin ella no se puede saber cuánto tiempo estuvo
+       abierto un daño, que es justo lo que hace visible la línea de vida. */
+    repaired_at: cerrado ? dia(Math.max(1, edad - entre(5, 30))) : null,
     first_seen_inspection: null,
   })
 }
