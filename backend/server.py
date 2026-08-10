@@ -9754,9 +9754,134 @@ async def send_telegram_damage_alert(plate, driver_name, analysis, photo_urls, i
         logger.warning(f"Error enviando alerta detallada Telegram: {e}")
 
 
+async def _cierre_entrega(center: str, dia: str) -> Optional[dict]:
+    """DCR del día para un centro, con el MISMO motor que la pantalla de calidad
+    en vivo (_cx_bruto / _cx_dias / _cx_tasas). No se reimplementa nada: si el
+    mensaje de las 22:00 calculara el DCR por su cuenta, acabaría diciendo un
+    número distinto al del panel y no habría forma de saber cuál miente.
+
+    Devuelve None si no hay ni un paquete de ese día: sin datos no hay tasa, y
+    un 100 % de un centro sin actividad sería el peor falso positivo posible.
+    """
+    try:
+        bruto = await _cx_bruto(dia, dia, center)
+        if not bruto:
+            return None
+        ok = sum(r["ok"] for r in bruto)
+        fallo = sum(r["fallo"] for r in bruto)
+        rts = sum(r["rts"] for r in bruto)
+        estado_dia = _cx_dias(bruto).get(dia) or {}
+        t = _cx_tasas(ok, fallo, rts)
+        t["cerrado"] = bool(estado_dia.get("cerrado"))
+        t["en_vuelo"] = estado_dia.get("vuelo", 0)
+        t["en_vuelo_pct"] = estado_dia.get("en_vuelo_pct", 0.0)
+        t["nodesp"] = sum(r["nodesp"] for r in bruto)
+        return t
+    except Exception as e:
+        logger.warning(f"Cierre 22:00 — DCR de {center}: {e}")
+        return None
+
+
+async def _cierre_recordatorios(center: str) -> list:
+    """Lo que hay que mirar mañana en ese centro. Todo sale de datos ya
+    guardados: ITV de la ficha, mantenimiento del mismo cálculo que usa la cola
+    de flota, y la última declaración de rueda de repuesto del conductor.
+
+    Nada de esto es una predicción. Son cosas que YA están vencidas o
+    declaradas, y por eso se pueden decir sin matizar.
+    """
+    avisos = []
+    try:
+        # center está sucio en la BD ('OGA5', 'OGA5 ', 'AMZL OGA5 …'): regex.
+        q = {"status": {"$ne": "baja"}}
+        if center and center != "—":
+            q["center"] = {"$regex": re.escape(center.strip()[:4]), "$options": "i"}
+        vehs = await db.vehicles.find(q, {"_id": 0}).to_list(500)
+        if not vehs:
+            return avisos
+
+        hoy = datetime.now(timezone.utc).date()
+        itv = []
+        for v in vehs:
+            f = v.get("itv_date") or v.get("next_itv")
+            if not f:
+                continue
+            try:
+                d = (datetime.fromisoformat(str(f)[:10]).date() - hoy).days
+            except Exception:
+                continue
+            if d <= 30:
+                itv.append((d, v.get("license_plate") or "—"))
+        if itv:
+            itv.sort()
+            venc = [p for d, p in itv if d < 0]
+            prox = [f"{p} ({d}d)" for d, p in itv if d >= 0]
+            if venc:
+                avisos.append(f"🔴 ITV VENCIDA: {', '.join(venc[:6])}")
+            if prox:
+                avisos.append(f"🟠 ITV en 30 días: {', '.join(prox[:6])}")
+
+        vencidos = []
+        for v in vehs:
+            for kind, i, w, label in [("oil", 15000, 2500, "aceite"),
+                                      ("ruedas", 40000, 3000, "ruedas"),
+                                      ("pastillas", 30000, 3000, "pastillas")]:
+                it = _build_maint_item(v, kind, i, w)
+                if it and it["overdue"]:
+                    vencidos.append(f"{v.get('license_plate') or '—'} ({label})")
+        if vencidos:
+            avisos.append(f"🔧 Mantenimiento pasado: {', '.join(vencidos[:6])}"
+                          + (f" y {len(vencidos) - 6} más" if len(vencidos) > 6 else ""))
+
+        # Rueda de repuesto: SOLO las declaradas ausentes. Las que nunca se
+        # preguntaron no se mencionan: no saberlo no es un problema que reportar.
+        ids = {v["id"] for v in vehs if v.get("id")}
+        sin_rueda = []
+        if ids:
+            cur = db.inspections.aggregate([
+                {"$match": {"deleted": {"$ne": True}, "vehicle_id": {"$in": list(ids)},
+                            "notes": {"$regex": "rueda_repuesto"}}},
+                {"$sort": {"created_at": -1}},
+                {"$group": {"_id": "$vehicle_id", "notes": {"$first": "$notes"}}},
+            ])
+            placas = {v["id"]: (v.get("license_plate") or "—") for v in vehs if v.get("id")}
+            async for row in cur:
+                vid = row.get("_id")           # $group omite la clave si no existe
+                if not vid:
+                    continue
+                try:
+                    n = json.loads(row.get("notes") or "")
+                except Exception:
+                    continue
+                if isinstance(n, dict) and n.get("rueda_repuesto") == "no":
+                    sin_rueda.append(placas.get(vid, "—"))
+        if sin_rueda:
+            avisos.append(f"🛞 Sin rueda de repuesto (declarado): {', '.join(sorted(sin_rueda)[:6])}")
+    except Exception as e:
+        logger.warning(f"Cierre 22:00 — recordatorios de {center}: {e}")
+    return avisos
+
+
 async def send_daily_inspection_summary():
-    """Resumen nocturno por centro: qué furgonetas del cuadrante de hoy tienen
-    inspección y cuáles no. Un mensaje de Telegram por centro con cuadrante."""
+    """Cierre nocturno por centro a las 22:00.
+
+    Antes era solo el recuento de auditorías. Ahora es el cierre del día:
+      · Entrega — DCR real de Cortex, con el motor de calidad en vivo.
+      · Auditorías — quién la hizo y quién no (lo de siempre).
+      · Daños nuevos de hoy, con quién conducía.
+      · Recordatorios para mañana: ITV, mantenimiento vencido, rueda ausente.
+
+    Lo que NO lleva, y es a propósito: descontar del DCR las anulaciones hechas
+    en la propia nave antes de salir. Cortex no tiene estado de anulación, así
+    que detectarlas exige comparar la dirección de la parada con la dirección
+    de la estación, y esas direcciones NO están guardadas en ninguna parte
+    (`cortex_stations` solo mapea serviceAreaId → centro). Con las direcciones
+    a ojo, el mensaje de cada noche estaría regalando o quitando décimas de DCR
+    sin que nadie pudiera comprobarlo. Se queda fuera hasta que existan.
+
+    Cuándo se dispara no cambia: sigue habiendo un mensaje por centro con
+    cuadrante, y sin cuadrante no se manda nada.
+    """
     try:
         config = await db.telegram_config.find_one({}, {"_id": 0})
         if not config or not config.get("enabled") or not config.get("bot_token"):
@@ -9781,7 +9906,7 @@ async def send_daily_inspection_summary():
         # Inspecciones de hoy (una consulta, agrupadas por vehículo)
         insps_today = await db.inspections.find(
             {"deleted": {"$ne": True}, "created_at": {"$regex": f"^{today}"}},
-            {"_id": 0, "vehicle_id": 1, "analysis": 1}
+            {"_id": 0, "vehicle_id": 1, "analysis": 1, "driver_id": 1, "notes": 1}
         ).to_list(1000)
         insp_by_vehicle = {}
         for i in insps_today:
@@ -9815,35 +9940,83 @@ async def send_daily_inspection_summary():
                     missing.append(slot)
 
             pct = round(len(done) / total * 100) if total else 0
-            lines = []
-            if not missing:
-                lines.append(f"✅ <b>RESUMEN DIARIO — {center}</b>")
-                lines.append(f"📅 {fecha_str}")
-                lines.append("")
-                lines.append("🎉 <b>¡Todas las inspecciones completadas!</b>")
-                lines.append("")
-                lines.append(f"🚐 Furgonetas asignadas: {total}")
-                lines.append(f"📸 Inspecciones recibidas: {len(done)} (100%)")
-                lines.append("")
-                lines.append(f"🟢 Sin daños: {sev_counts['sin']}")
-                lines.append(f"🟡 Leves: {sev_counts['leve']}")
-                lines.append(f"🔴 Graves/críticos: {sev_counts['grave']}")
-                lines.append("")
-                lines.append("💪 Día redondo. Sin pendientes.")
+
+            # ── 1 · ENTREGA ─────────────────────────────────────────────────
+            ent = await _cierre_entrega(center, today)
+
+            # ── 2 · DAÑOS NUEVOS DE HOY, con quién conducía ─────────────────
+            # Se cruza por el cuadrante: el conductor que llevaba ESA furgoneta
+            # hoy. Si el hueco no dice quién, no se pone un nombre a dedo.
+            cond_por_veh = {s["vehicle_id"]: (s.get("driver_name") or "")
+                            for s in slots if s.get("vehicle_id")}
+            danos = []
+            for slot in done:
+                insp = insp_by_vehicle.get(slot["vehicle_id"]) or {}
+                nuevos = ((insp.get("analysis") or {}).get("new_damages") or [])
+                for d in nuevos:
+                    if not isinstance(d, dict):
+                        continue
+                    quien = cond_por_veh.get(slot["vehicle_id"]) or ""
+                    danos.append((slot.get("vehicle_plate") or "—",
+                                  d.get("part") or "—",
+                                  (d.get("severity") or "").lower(),
+                                  quien))
+
+            cabecera = "✅" if not missing else "⚠️"
+            lines = [f"{cabecera} <b>CIERRE DEL DÍA — {center}</b>", f"📅 {fecha_str}", ""]
+
+            # ENTREGA
+            if ent and ent.get("dcr") is not None:
+                if ent["cerrado"]:
+                    lines.append(f"📦 <b>DCR {ent['dcr']}%</b> — {ent['entregados']}/{ent['despachados']} entregados")
+                else:
+                    # Jornada sin cerrar: dar el DCR como definitivo sería mentir,
+                    # porque los paquetes en vuelo aún pueden entregarse.
+                    lines.append(f"📦 Jornada sin cerrar ({ent['en_vuelo']} paquetes aún en vuelo)")
+                    lines.append(f"   Provisional: {ent['dcr']}% — {ent['entregados']}/{ent['despachados']}")
+                if ent.get("fallos"):
+                    lines.append(f"   ❌ {ent['fallos']} fallos · ↩️ {ent['rts']} RTS")
+                if ent.get("nodesp"):
+                    lines.append(f"   ⏸ {ent['nodesp']} no despachados (fuera del DCR)")
             else:
-                lines.append(f"⚠️ <b>RESUMEN DIARIO — {center}</b>")
-                lines.append(f"📅 {fecha_str}")
-                lines.append("")
-                lines.append(f"❌ <b>Faltan {len(missing)} inspecciones:</b>")
+                lines.append("📦 Sin datos de Cortex hoy")
+            lines.append("")
+
+            # AUDITORÍAS
+            if not missing:
+                lines.append(f"📸 <b>Auditorías {len(done)}/{total}</b> — todas hechas")
+            else:
+                lines.append(f"📸 <b>Auditorías {len(done)}/{total}</b> ({pct}%) — faltan {len(missing)}:")
                 for slot in missing[:15]:
                     drv = slot.get("driver_name") or "Sin conductor asignado"
                     lines.append(f"• {drv} — {slot.get('vehicle_plate', '—')}")
-                lines.append("")
-                lines.append(f"🚐 Asignadas: {total} · 📸 Recibidas: {len(done)} ({pct}%)")
-                lines.append("")
-                lines.append(f"🟢 Sin daños: {sev_counts['sin']} · 🟡 Leves: {sev_counts['leve']} · 🔴 Graves: {sev_counts['grave']}")
+                if len(missing) > 15:
+                    lines.append(f"• …y {len(missing) - 15} más")
+            lines.append(f"   🟢 {sev_counts['sin']} sin daños · 🟡 {sev_counts['leve']} leves · 🔴 {sev_counts['grave']} graves")
+            lines.append("")
 
-            text = "\n".join(lines)
+            # DAÑOS NUEVOS
+            if danos:
+                lines.append(f"🔨 <b>{len(danos)} daño(s) nuevo(s) hoy</b>")
+                for plate, part, sev, quien in danos[:8]:
+                    ico = "🔴" if sev in ("grave", "critico", "crítico") else "🟡"
+                    lines.append(f"{ico} {plate} — {part}" + (f" · {quien}" if quien else ""))
+                if len(danos) > 8:
+                    lines.append(f"• …y {len(danos) - 8} más")
+                lines.append("")
+
+            # RECORDATORIOS PARA MAÑANA
+            avisos = await _cierre_recordatorios(center)
+            if avisos:
+                lines.append("<b>Para mañana</b>")
+                lines.extend(avisos)
+
+            text = "\n".join(lines).rstrip()
+            # Telegram corta en 4096 caracteres y devuelve error: con un centro
+            # grande y muchos avisos se llega. Mejor recortar nosotros y decirlo
+            # que perder el mensaje entero.
+            if len(text) > 3900:
+                text = text[:3880].rsplit("\n", 1)[0] + "\n…(recortado)"
             async with _aiohttp.ClientSession() as session:
                 for chat_id in chat_ids:
                     try:
