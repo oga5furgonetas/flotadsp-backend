@@ -27,6 +27,7 @@
 import { useMemo, useState } from 'react'
 import { Wrench, CircleDot, Droplet, Disc, Check, ArrowUpRight } from 'lucide-react'
 import { vehiculos } from '../app2/datosPlus'
+import Runway from './Runway'
 import './elite.css'
 
 const TIPOS = [
@@ -34,7 +35,9 @@ const TIPOS = [
   { kind: 'pastillas', label: 'Pastillas de freno', ic: Disc, intervalo: 45000, aviso: 5000 },
   { kind: 'ruedas', label: 'Ruedas', ic: CircleDot, intervalo: 60000, aviso: 7000 },
 ]
-const HORIZONTE = 30
+/* Mismo horizonte que el eje del gráfico: si la lista y la pista miran ventanas
+   distintas, el usuario cuenta puntos que no están abajo y desconfía. */
+const HORIZONTE = 42
 const km = (n) => `${Math.round(n).toLocaleString('es-ES')}`
 
 const ritmoDe = (i) => (i % 7 === 3 ? null : 38 + ((i * 13) % 42))
@@ -69,6 +72,7 @@ function calcular() {
 export default function Proximos({ center }) {
   const [hechos, setHechos] = useState({})
   const [vista, setVista] = useState('taller')
+  const [sel, setSel] = useState(null)   // enlaza gráfico y lista en los dos sentidos
 
   const filas = useMemo(() => calcular()
     .filter((f) => !center || center === 'Todos' || f.centro === center), [center])
@@ -111,6 +115,12 @@ export default function Proximos({ center }) {
         </div>
       </header>
 
+      {/* ── La pista: dónde se te acumula el taller ── */}
+      <section className="e-in e-surf" style={{ padding: '16px 18px 10px', marginBottom: 14 }}>
+        <div className="e-lab" style={{ marginBottom: 12 }}>Los próximos 42 días</div>
+        <Runway filas={conRitmo} sinRitmo={sinRitmo.length} sel={sel} onSel={setSel} />
+      </section>
+
       {vista === 'taller' ? porTipo.map((g, gi) => {
         const I = g.ic
         return (
@@ -125,12 +135,12 @@ export default function Proximos({ center }) {
                 cada {km(g.intervalo)} km
               </span>
             </div>
-            {g.filas.map((f) => <Fila key={f.id} f={f} hechos={hechos} setHechos={setHechos} />)}
+            {g.filas.map((f) => <Fila key={f.id} f={f} hechos={hechos} setHechos={setHechos} sel={sel} onSel={setSel} />)}
           </section>
         )
       }) : (
         <section className="e-in e-surf" style={{ padding: '8px 4px' }}>
-          {conRitmo.map((f) => <Fila key={f.id} f={f} hechos={hechos} setHechos={setHechos} conTipo />)}
+          {conRitmo.map((f) => <Fila key={f.id} f={f} hechos={hechos} setHechos={setHechos} conTipo sel={sel} onSel={setSel} />)}
         </section>
       )}
 
@@ -173,14 +183,16 @@ function Metrica({ n, txt, tono }) {
   )
 }
 
-function Fila({ f, hechos, setHechos, conTipo }) {
+function Fila({ f, hechos, setHechos, conTipo, sel, onSel }) {
   const hecho = hechos[f.id]
   const I = f.tipo.ic
   const tono = f.pasado ? 'var(--e-bad)' : f.dias <= 7 ? 'var(--e-warn)' : 'var(--e-ok)'
   const viejo = f.kmViejo > 14
+  const activo = sel === f.id
 
   return (
-    <div className="e-row">
+    <div className="e-row" onMouseEnter={() => onSel?.(f.id)} onMouseLeave={() => onSel?.(null)}
+      style={activo ? { background: 'var(--e-2)', boxShadow: 'inset 2px 0 0 var(--e-acc)' } : undefined}>
       {conTipo && <I size={12} style={{ color: 'var(--e-tx-3)', flexShrink: 0 }} />}
 
       <div style={{ minWidth: 0, flex: '1 1 190px' }}>

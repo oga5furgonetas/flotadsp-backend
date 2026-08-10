@@ -39,7 +39,10 @@ const MODELOS = [
   ['MAN', 'TGE', 'AYVENS'], ['Peugeot', 'Boxer', 'SABADELL RENTING'],
   ['Fiat', 'Ducato', 'BANSACAR'], ['Iveco', 'Daily', 'ONE FURGO'],
 ]
-export const vehiculos = Array.from({ length: 24 }, (_, i) => {
+/* 81 furgonetas: el tamaño real de la flota de OGA5. Con 24 las listas y los
+   gráficos se ven engañosamente cómodos — la densidad sólo se puede juzgar con
+   el volumen de verdad. */
+export const vehiculos = Array.from({ length: 81 }, (_, i) => {
   const [brand, model, provider] = MODELOS[i % MODELOS.length]
   const km = entre(28000, 198000)
   const enTaller = i === 2 || i === 11 || i === 19
