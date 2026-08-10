@@ -30,9 +30,11 @@ const URL_BASE = 'https://nominatim.openstreetmap.org/reverse'
 
 /** Quita acentos, signos y el tipo de vía: 'Rúa da Peregrina' → 'peregrina'. */
 const TIPOS_VIA = new Set([
-  'calle', 'c', 'rua', 'rúa', 'avenida', 'avda', 'av', 'plaza', 'praza', 'pza',
-  'camino', 'camiño', 'carretera', 'ctra', 'paseo', 'travesia', 'travesía',
-  'lugar', 'urbanizacion', 'urbanización', 'poligono', 'polígono', 'estrada',
+  'calle', 'c', 'rua', 'rúa', 'avenida', 'avda', 'avd', 'av', 'plaza', 'praza',
+  'pza', 'pl', 'camino', 'camiño', 'carretera', 'ctra', 'paseo', 'po',
+  'travesia', 'travesía', 'trav', 'ronda', 'rda', 'alameda', 'canton', 'cantón',
+  'lugar', 'lg', 'barrio', 'bo', 'urbanizacion', 'urbanización', 'urb',
+  'poligono', 'polígono', 'pol', 'estrada', 'parque', 'costa', 'campo',
   'street', 'road', 'via', 'vía', 'de', 'del', 'da', 'do', 'la', 'el', 'los',
   'las', 'y', 'e', 'a', 'o',
 ])
@@ -47,10 +49,38 @@ export function nucleoVia(s) {
     .trim()
 }
 
-/** Primer número que parece un portal dentro de un texto de dirección. */
+/**
+ * Número de portal dentro de una dirección de Amazon.
+ *
+ * Cortex la entrega como "address1, address2, address3, CP ciudad"
+ * (_cortex_addr_str en el backend), así que el portal vive en el primer tramo
+ * y el piso, el CP y la ciudad vienen detrás.
+ *
+ * No vale con coger el primer número que aparezca: en 'C/ 12 de Octubre 5' ese
+ * número es parte del NOMBRE de la calle, y compararlo contra el portal que
+ * devuelve el mapa cantaría un desacuerdo que no existe. En español el portal
+ * va DESPUÉS del nombre, así que se coge el último número del primer tramo.
+ *
+ * Si no hay forma de saberlo se devuelve '' y la comparación se queda en el
+ * nombre de la vía. Mejor comparar menos que comparar mal.
+ */
 function numeroDe(s) {
-  const m = String(s || '').match(/\b(\d{1,4})\b/)
-  return m ? m[1] : ''
+  const tramos = String(s || '').split(',').map((x) => x.trim()).filter(Boolean)
+  if (!tramos.length) return ''
+  // 's/n' = sin número. Decirlo es un dato; inventarle uno, no.
+  if (/\bs\s*\/?\s*n\b/i.test(tramos[0])) return ''
+  const enTramo = (x) => {
+    const todos = String(x).match(/\b\d{1,4}\b/g)
+    return todos ? todos[todos.length - 1] : ''
+  }
+  // Primer tramo: 'Rúa do Vilar 30' → 30, 'C/ 12 de Octubre 5' → 5.
+  const n = enTramo(tramos[0])
+  if (n) return n
+  // Patrón 'Avda. de Lugo, 12': el número quedó en el tramo siguiente. Solo se
+  // acepta si ese tramo es prácticamente el número solo — 'Bajo B' o '15705
+  // Santiago' no son portales.
+  if (tramos[1] && /^\d{1,4}\s*[a-zA-Z]?$/.test(tramos[1])) return enTramo(tramos[1])
+  return ''
 }
 
 /**

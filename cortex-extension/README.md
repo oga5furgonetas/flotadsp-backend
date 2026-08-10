@@ -23,6 +23,23 @@ Extensión de navegador que alimenta el **Package Intelligence Center** de tu pa
 En el panel verás los paquetes aparecer en tiempo real, con su timeline, prioridad y
 la ficha del investigador. El popup muestra cuántos paquetes hay en cola y enviados.
 
+## Elegir estación antes de enviar (desde 2.10)
+
+Con dos pestañas de Cortex abiertas de estaciones distintas —que es como se trabaja
+aquí— la cola las mezclaba y el panel acababa repartiendo paquetes al centro que no
+era. Un DCR con paquetes de otra nave es un número falso que nadie detecta.
+
+Ahora el popup lista **qué estaciones hay en la cola y cuántos paquetes de cada una**,
+y tú marcas cuáles se envían:
+
+- **Sin ninguna marcada no se envía nada.** Esperar es mejor que contaminar.
+- Lo que llega **sin estación reconocible no se envía jamás**, ni marcando todo.
+- Cada estación tiene su botón de **descartar**, para tirar lo que no toca sin
+  esperar a que caduque.
+
+Marca tu estación la primera vez y se queda guardada. Si un día abres otra nave, el
+popup te lo dice antes de mandar nada.
+
 ## Privacidad
 
 El token solo permite **enviar** datos de paquetes a tu DSP (aislado del resto). No da
