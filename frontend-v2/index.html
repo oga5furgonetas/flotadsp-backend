@@ -20,6 +20,11 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="preconnect" href="https://flotadsp-backend.fly.dev" />
 
+    <!-- Google Ads (AW-18388111082). El arranque va en /gtag-init.js y no en
+         línea: un script inline exigiría 'unsafe-inline' en la CSP. -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=AW-18388111082"></script>
+    <script src="/gtag-init.js"></script>
+
     <!-- SEO -->
     <title>FlotaDSP — Gestión de flotas para Amazon DSP con IA</title>
     <meta name="description" content="Inspecciones con foto e IA de daños, alertas de ITV, scorecard, asignación diaria y control de aparcamiento. El panel de operaciones hecho para Delivery Service Partners de Amazon." />
