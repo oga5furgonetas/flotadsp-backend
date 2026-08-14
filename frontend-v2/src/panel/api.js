@@ -276,6 +276,7 @@ export const cortexSimular = (params) => api.get('/cortex/simular', { params })
 export const cortexPortales = (params) => api.get('/cortex/portales', { params })
 export const cortexPortalNota = (body) => api.post('/cortex/portales', body)
 export const cortexPortalGeo = (body) => api.post('/cortex/portales/geo', body)
+export const cortexDiagnostico = () => api.get('/cortex/diagnostico')
 /* IDs de Amazon que reparten sin ficha de conductor, con sugerencia de a quien
    corresponden. La asignacion reutiliza updateDriver: driver_id ya esta en la
    whitelist del PATCH. */

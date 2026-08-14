@@ -40,6 +40,22 @@ y tú marcas cuáles se envían:
 Marca tu estación la primera vez y se queda guardada. Si un día abres otra nave, el
 popup te lo dice antes de mandar nada.
 
+## El esquema de Cortex llega al panel (desde 2.11)
+
+La extensión llevaba tiempo capturando la **estructura** de las respuestas de Cortex
+(`route-details`, el sumario y el informe de faltas)… y guardándosela en el
+almacenamiento local del navegador, donde nadie podía verla. Ahora la envía al panel:
+**Paquetes IA → Portales → "Qué manda Cortex de verdad"**.
+
+Para qué sirve: para dar un DCR real hay que descontar las anulaciones hechas en la
+propia nave antes de salir, pero Cortex no tiene un estado de "anulado". Sin saber qué
+campo lo marca (`taskType`, `taskStateContext`, un tipo de parada), cualquier exclusión
+del DCR sería una suposición — y una suposición que mueve el DCR es peor que no tocarlo.
+
+Es **estructura, no datos**: los valores se sustituyen por su tipo y solo se conservan
+las cadenas cortas, que son justamente los códigos de estado. Ni nombres ni teléfonos.
+Se manda una sola vez por sesión, la primera vez que ves una ruta en Cortex.
+
 ## Privacidad
 
 El token solo permite **enviar** datos de paquetes a tu DSP (aislado del resto). No da

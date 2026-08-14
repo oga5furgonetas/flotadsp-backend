@@ -157,6 +157,22 @@ async function flush() {
   } finally { flushing = false; }
 }
 
+/* Diagnóstico al servidor: estructura, nunca paquetes.
+   Va por libre y de forma silenciosa — si falla no se reintenta ni se avisa: es
+   una foto del esquema, no un dato operativo, y no puede estorbar al envío de
+   paquetes ni ensuciar el estado que ve el usuario en el popup. */
+async function enviarDiagnostico(payload) {
+  try {
+    const { ingestToken, ingestUrl } = await cfg();
+    if (!ingestToken) return;
+    await fetch(ingestUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': ingestToken },
+      body: JSON.stringify(payload),
+    });
+  } catch (_) { /* silencio a propósito */ }
+}
+
 async function pushActivity(url, count) {
   const { activity = [] } = await chrome.storage.local.get({ activity: [] });
   activity.unshift({ url: (url || '').replace(/^https?:\/\/[^/]+/, '').slice(0, 60), count, at: Date.now() });
@@ -188,6 +204,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     const key = msg.which === 'summary' ? 'schemaSummary' : (msg.which === 'report' ? 'schemaReport' : 'schema');
     chrome.storage.local.get({ diag: {} }).then(({ diag }) =>
       chrome.storage.local.set({ diag: { ...diag, [key]: msg.schema || '', schemaUrl: msg.url || '', at: Date.now() } }));
+    /* Y AL SERVIDOR. Hasta ahora el esquema se quedaba aquí, en el navegador de
+       quien tuviera la extensión, donde nadie podía mirarlo. Es el único sitio
+       donde consta QUÉ CAMPOS da Cortex de verdad (schemaOf conserva los
+       valores de cadena cortos: taskType, taskState, taskStateContext...), y
+       sin eso cualquier regla para descontar del DCR las anulaciones en nave se
+       escribe a ojo. Es estructura, no datos de cliente. */
+    enviarDiagnostico({ kind: 'schema', which: msg.which || 'details', url: msg.url, schema: msg.schema });
     return false;
   }
   if (msg?.type === 'flushNow') { flush().then(() => reply?.({ ok: true })); return true; }

@@ -10,6 +10,7 @@ import {
   cortexStations, cortexAssignStation,
 } from '../api'
 import LibretaPortales from '../components/LibretaPortales'
+import EsquemaCortex from '../components/EsquemaCortex'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { hoyLocal, isoLocal } from '../../lib/fecha'
 
@@ -465,8 +466,11 @@ export default function PackageIntel() {
       </div>
 
       {vista === 'portales' && (
-        <div className="rounded-xl border border-dark-800 bg-dark-900/30 p-4">
-          <LibretaPortales center={center} />
+        <div className="space-y-4">
+          <div className="rounded-xl border border-dark-800 bg-dark-900/30 p-4">
+            <LibretaPortales center={center} />
+          </div>
+          <EsquemaCortex />
         </div>
       )}
 

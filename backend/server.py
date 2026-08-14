@@ -1042,6 +1042,9 @@ async def _ensure_tenant_indexes(db_name: str):
         # cliente. Un Atlas de 512 MB se llena en 2,8 meses; con tres DSP, en
         # menos de uno. Misma retencion que los eventos: 90 dias.
         await _idx(tdb.cortex_packages, "expira_en", expireAfterSeconds=0)
+        # El diagnostico de esquema es una foto, no un historico: caduca a 30
+        # dias y son unos pocos documentos (uno por tipo, con upsert).
+        await _idx(tdb.cortex_diagnostico, "expira_en", expireAfterSeconds=0)
     except Exception as _e:
         logger.warning(f"Indice TTL de cortex: {_e}")
     await _idx(tdb.inspections, "id")
@@ -21262,6 +21265,39 @@ async def cortex_ingest(request: Request):
     normalizado). No requiere JWT de usuario: se autentica por token de ingesta."""
     _cortex_ingest_org(request)
     body = await request.json()
+
+    # ── DIAGNÓSTICO DE ESQUEMA ────────────────────────────────────────────────
+    # La extensión lleva tiempo mandando el ESQUEMA REAL de route-details y del
+    # informe de faltas (kind='schema'), y esto lo tiraba a la basura: solo
+    # miraba body['packages']. Sin ese esquema no hay forma de saber qué campos
+    # da Cortex de verdad, y las reglas se acaban escribiendo a ojo — que es
+    # justo lo que no queremos para tocar el DCR.
+    #
+    # `schemaOf` del interceptor conserva los valores de cadena cortos, así que
+    # aquí llegan los códigos literales: taskType, taskState, taskStateContext,
+    # tipos de parada. Con eso se puede decidir con pruebas si una anulación en
+    # nave se distingue sola, en vez de inventar un umbral de hora y dirección.
+    kind = str(body.get("kind") or "").strip()
+    if kind in ("schema", "debug"):
+        try:
+            cual = str(body.get("which") or kind)[:40]
+            await db.cortex_diagnostico.update_one(
+                {"_id": f"{kind}:{cual}"},
+                {"$set": {
+                    "kind": kind, "which": cual,
+                    "url": str(body.get("url") or "")[:200],
+                    # El esquema, no los datos: llega ya recortado por la extensión.
+                    "schema": str(body.get("schema") or "")[:8000],
+                    "count": body.get("count"), "bytes": body.get("bytes"),
+                    "visto_en": datetime.now(timezone.utc).isoformat(),
+                    # TTL: es diagnóstico, no histórico. No debe crecer sin fin
+                    # (la colección hermana ya se desbocó una vez).
+                    "expira_en": datetime.now(timezone.utc) + timedelta(days=30),
+                }}, upsert=True)
+        except Exception as e:
+            logger.debug(f"Cortex diagnostico: {e}")
+        return {"ok": True, "guardado": kind}
+
     packages = body.get("packages") or []
     if not isinstance(packages, list):
         raise HTTPException(status_code=400, detail="Formato inválido: se espera 'packages': [...]")
@@ -21274,6 +21310,22 @@ async def cortex_ingest(request: Request):
             logger.warning(f"Cortex ingest obs: {e}")
     logger.info(f"Cortex ingest: {stats['new']} nuevos, {stats['changed']} cambios de {len(packages)} obs")
     return {"ok": True, **stats, "received": len(packages)}
+
+
+@api_router.get("/cortex/diagnostico")
+async def cortex_diagnostico(_=Depends(require_admin)):
+    """Lo que Cortex manda de verdad: esquema de route-details, del sumario y
+    del informe de faltas, tal y como los ve la extensión.
+
+    Existe para dejar de escribir reglas a ojo. Mientras no se sepa qué campo
+    marca una anulación en nave —un taskType, un taskStateContext, un tipo de
+    parada— cualquier exclusión del DCR es una suposición, y una suposición que
+    mueve el DCR es peor que no tocarlo.
+    """
+    docs = await db.cortex_diagnostico.find({}, {"_id": 0, "expira_en": 0}).to_list(50)
+    docs.sort(key=lambda d: str(d.get("visto_en") or ""), reverse=True)
+    return {"diagnostico": docs,
+            "hay_esquema": any(d.get("kind") == "schema" for d in docs)}
 
 
 def _cortex_day_query(day: str) -> dict:
