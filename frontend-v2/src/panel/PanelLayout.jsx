@@ -200,9 +200,11 @@ export default function PanelLayout() {
       <aside className="hidden w-[248px] shrink-0 flex-col p-3 pr-0 md:flex">
       <div className="rail flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex items-center gap-2.5 px-5 pb-3 pt-5">
-          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-brand-400 to-brand-600">
-            <Zap size={15} className="text-white" />
-          </div>
+          {/* El monograma FD de la marca, en vez del rayo genérico. */}
+          <img
+            src="/logo-fd-marca.png" alt="" width="28" height="28"
+            className="h-7 w-7 shrink-0 rounded-lg object-cover"
+          />
           <b className="font-display text-[15px] font-semibold tracking-tight">FlotaDSP</b>
         </div>
 

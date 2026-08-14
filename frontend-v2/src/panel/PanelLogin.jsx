@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowRight, Loader2, Zap } from 'lucide-react'
+import { ArrowRight, Loader2 } from 'lucide-react'
 import { API_BASE } from '../services/api'
 import { saveSession, isAuthed, getToken, logout } from './auth'
 
@@ -104,14 +104,14 @@ export default function PanelLogin() {
 
       <div className="relative grid w-full max-w-5xl items-center gap-16 lg:grid-cols-[1.05fr_0.95fr]">
 
-        {/* ── Columna editorial: identidad reconocible sin logo ── */}
+        {/* ── Columna editorial: ahora con el logo de la marca ── */}
         <div className="hidden lg:block">
-          <div className="rise flex items-center gap-3" style={{ animationDelay: '40ms' }}>
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 shadow-lg shadow-brand-500/25">
-              <Zap size={18} className="text-white" />
-            </div>
-            <span className="font-display text-[17px] font-semibold tracking-tight">FlotaDSP</span>
-          </div>
+          {/* Versión sin el lema: "Gestión de flotas con IA" ya lo cuenta el
+              texto de al lado, y repetirlo dos veces queda redundante. */}
+          <img
+            src="/logo-fd-sinlema.png" alt="FlotaDSP"
+            className="rise h-20 w-auto rounded-xl" style={{ animationDelay: '40ms' }}
+          />
 
           <h1 className="rise mt-10 font-display text-[clamp(38px,4.4vw,60px)] font-semibold leading-[1.02] tracking-[-0.035em] text-dark-50" style={{ animationDelay: '120ms' }}>
             Tu flota,<br />
@@ -137,9 +137,8 @@ export default function PanelLogin() {
           <div className="rail p-7 sm:p-9">
             {/* Marca compacta (visible sobre todo en móvil, sin columna editorial) */}
             <div className="mb-8 flex items-center gap-2.5 lg:hidden">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 shadow-lg shadow-brand-500/25">
-                <Zap size={16} className="text-white" />
-              </div>
+              <img src="/logo-fd-marca.png" alt="" width="32" height="32"
+                className="h-8 w-8 shrink-0 rounded-lg object-cover" />
               <span className="font-display text-[15px] font-semibold tracking-tight">FlotaDSP</span>
             </div>
 

@@ -14,7 +14,10 @@
     <!-- PWA: Android / General -->
     <link rel="manifest" href="/manifest.json" />
 
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- favicon.svg NUNCA existió: al no haber fichero, _redirects devolvía
+         index.html con HTTP 200 y el navegador se quedaba sin icono en
+         silencio. Ahora es un PNG real con el monograma FD. -->
+    <link rel="icon" type="image/png" href="/favicon.png" />
     <link rel="preconnect" href="https://flotadsp-backend.fly.dev" />
 
     <!-- SEO -->
@@ -26,7 +29,12 @@
     <meta property="og:title" content="FlotaDSP — Gestión de flotas para Amazon DSP con IA" />
     <meta property="og:description" content="Inspecciones con foto e IA de daños, alertas de ITV, scorecard y operaciones diarias en un solo panel. Hecho para DSPs de Amazon." />
     <meta property="og:url" content="https://flotadsp.com/" />
-    <meta property="og:image" content="https://flotadsp.com/van.jpg" />
+    <!-- La imagen que sale al pegar el enlace en WhatsApp o LinkedIn. Antes era
+         van.jpg: una furgoneta real de la flota, que no es la marca. -->
+    <meta property="og:image" content="https://flotadsp.com/og-flotadsp.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="FlotaDSP" />
     <meta property="og:locale" content="es_ES" />
     <meta name="twitter:card" content="summary_large_image" />
   </head>
