@@ -27,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor
 from jose import jwt, JWTError
 from pymongo.errors import DuplicateKeyError
 import bcrypt
+import functools
 import re
 import time
 
@@ -21376,27 +21377,215 @@ async def _cortex_scope(day: str, center: str) -> dict:
     return conds[0] if len(conds) == 1 else {"$and": conds}
 
 
+"""Reparto automático de estaciones Cortex por GEOGRAFÍA.
+
+El problema real: con dos pestañas de Cortex abiertas, la etiqueta de centro que
+la extensión saca del selector de la página se mezcla, y acaban dos estaciones
+distintas marcadas con el mismo centro. Pedirle al usuario que lo asigne a mano
+no es una solución: ya hay un botón para eso y no debería hacer falta.
+
+El discriminante bueno es dónde se entrega. El prefijo de ruta separa OGA5
+(XA_C) de la zona de A Coruña/Vigo (CA_A), pero NO separa DGA1 de DGA2 — las dos
+usan CA_A. Las coordenadas sí: Santiago, Cambre y Vigo están a 60-100 km unas de
+otras, así que no hay forma de confundirlas.
+
+Las referencias de cada centro no se inventan: salen de los talleres ya
+sembrados en este mismo fichero (_SEED_WORKSHOPS), que llevan `center` y
+coordenadas verificadas. Se toma la MEDIANA de cada centro, no la media, para
+que un taller aislado no arrastre el punto de referencia.
+"""
+_CENTRO_KM_MAX = 70.0       # más lejos que esto, no es de ese centro
+_CENTRO_MARGEN = 1.8        # el mejor debe estar 1,8× más cerca que el segundo
+
+
+def _mediana(xs: list) -> float:
+    ys = sorted(xs)
+    n = len(ys)
+    return ys[n // 2] if n % 2 else (ys[n // 2 - 1] + ys[n // 2]) / 2
+
+
+@functools.lru_cache(maxsize=1)
+def _centros_referencia() -> dict:
+    """centro → (lat, lng) mediano de sus talleres verificados."""
+    acc: dict = {}
+    for w in _SEED_WORKSHOPS:
+        c = (w.get("center") or "").strip().upper()
+        la, ln = w.get("latitude"), w.get("longitude")
+        if c and isinstance(la, (int, float)) and isinstance(ln, (int, float)):
+            acc.setdefault(c, []).append((float(la), float(ln)))
+    return {c: (_mediana([p[0] for p in ps]), _mediana([p[1] for p in ps]))
+            for c, ps in acc.items() if len(ps) >= 3}
+
+
+def _centro_por_coordenada(lat: float, lng: float) -> tuple:
+    """(centro, km) del centro más cercano, o (None, motivo) si no está claro.
+
+    Devolver None es una respuesta legítima: un punto a mitad de camino entre
+    dos centros no se asigna a ojo. Sin certeza, no se etiqueta.
+    """
+    refs = _centros_referencia()
+    if not refs:
+        return None, "sin_referencias"
+    dists = sorted(((_haversine_km((lat, lng), p) or 9e9, c) for c, p in refs.items()))
+    mejor_km, mejor = dists[0]
+    if mejor_km > _CENTRO_KM_MAX:
+        return None, f"lejos_de_todo_{round(mejor_km)}km"
+    if len(dists) > 1 and dists[1][0] < mejor_km * _CENTRO_MARGEN:
+        return None, f"ambiguo_{mejor}_vs_{dists[1][1]}"
+    return mejor, round(mejor_km, 1)
+
+
+async def _centro_de_estacion(sid: str) -> dict:
+    """Resuelve el centro de una estación por la mediana de sus entregas.
+
+    La mediana, no la media: una entrega mal geocodificada en mitad del Atlántico
+    movería la media y no mueve la mediana.
+    """
+    cur = db.cortex_packages.aggregate([
+        {"$match": {"service_area_id": sid, "lat": {"$nin": [None, ""]}}},
+        {"$sample": {"size": 400}},
+        {"$project": {"_id": 0, "lat": 1, "lng": 1, "route_code": 1}},
+    ], allowDiskUse=True)
+    lats, lngs, prefijos = [], [], set()
+    async for p in cur:
+        try:
+            lats.append(float(p["lat"])); lngs.append(float(p["lng"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+        m = re.match(r"^(.*?)(\d+)\s*$", str(p.get("route_code") or ""))
+        if m:
+            prefijos.add(m.group(1))
+    if len(lats) < 20:
+        return {"centro": None, "motivo": "pocas_coordenadas", "muestra": len(lats)}
+    centro, det = _centro_por_coordenada(_mediana(lats), _mediana(lngs))
+    return {"centro": centro, "motivo": None if centro else det,
+            "km": det if centro else None, "muestra": len(lats),
+            "prefijos": sorted(prefijos)[:6],
+            "lat": round(_mediana(lats), 5), "lng": round(_mediana(lngs), 5)}
+
+
+@api_router.post("/cortex/stations/auto")
+async def cortex_stations_auto(aplicar: bool = False, _=Depends(require_admin)):
+    """Propone (o aplica) el centro de cada estación por geografía.
+
+    Con `aplicar=false` solo dice qué haría: se puede mirar antes de tocar nada.
+    Con `aplicar=true` escribe el mapeo y re-etiqueta los paquetes, igual que el
+    botón manual — pero solo las estaciones que ha podido resolver SIN duda.
+    Una estación ambigua se queda como está: prefiero dejarla sin resolver a
+    repartir mal el DCR de un centro.
+    """
+    sids = await db.cortex_packages.distinct("service_area_id")
+    propuestas, aplicadas = [], 0
+    for sid in [s for s in sids if s]:
+        r = await _centro_de_estacion(sid)
+        actual = await db.cortex_stations.find_one({"service_area_id": sid}, {"_id": 0, "center": 1, "manual": 1})
+        r["service_area_id"] = sid
+        r["actual"] = (actual or {}).get("center")
+        r["cambia"] = bool(r["centro"] and r["centro"] != r["actual"])
+        propuestas.append(r)
+        if aplicar and r["centro"]:
+            await db.cortex_stations.update_one(
+                {"service_area_id": sid},
+                {"$set": {"center": r["centro"], "manual": True, "origen": "geografia",
+                          "resuelto_en": datetime.now(timezone.utc).isoformat()}},
+                upsert=True)
+            res = await db.cortex_packages.update_many(
+                {"service_area_id": sid, "center": {"$ne": r["centro"]}},
+                {"$set": {"center": r["centro"]}})
+            r["paquetes_reetiquetados"] = res.modified_count
+            aplicadas += 1
+    propuestas.sort(key=lambda x: -(x.get("muestra") or 0))
+    return {"propuestas": propuestas, "aplicadas": aplicadas,
+            "sin_resolver": [p["service_area_id"] for p in propuestas if not p["centro"]],
+            "referencias": {c: {"lat": round(p[0], 4), "lng": round(p[1], 4)}
+                            for c, p in _centros_referencia().items()}}
+
+
 @api_router.get("/cortex/stations")
 async def cortex_stations(_=Depends(require_admin)):
-    """Estaciones Cortex detectadas y su centro asignado (para el mapeo manual)."""
+    """Estaciones Cortex detectadas y su centro, con las MEZCLAS a la vista.
+
+    Antes esto tenía dos fallos que hacían inservible el reparto por centro:
+
+    1. La etiqueta que se enseñaba salía del PRIMER paquete que Mongo devolviera
+       (un `setdefault` que nunca se corregía). Bastaba un paquete despistado
+       para que una estación entera apareciera con un centro que no era — que es
+       exactamente lo que pasaba con la que salía como 'DGP1'.
+    2. Se traía los ~90.000 documentos a Python para contarlos. En una máquina
+       de 1 GB eso no falla: se muere en silencio.
+
+    Ahora agrupa en Mongo y devuelve el REPARTO real de centros de cada
+    estación. Si una estación tiene paquetes bajo dos centros distintos se dice
+    (`mezclado`), porque eso es justo lo que hay que arreglar y hasta ahora no
+    se veía. El mapeo manual sigue mandando sobre todo lo demás.
+    """
     stations = await db.cortex_stations.find({}, {"_id": 0}).to_list(200)
-    # Cuenta de paquetes por serviceAreaId sin etiqueta de centro resuelta
-    counts = {}
-    async for p in db.cortex_packages.find({}, {"_id": 0, "service_area_id": 1, "center": 1, "route_code": 1}):
-        sid = p.get("service_area_id")
-        if sid:
-            c = counts.setdefault(sid, {"n": 0, "center": p.get("center"), "routes": set()})
-            c["n"] += 1
-            if p.get("route_code") and len(c["routes"]) < 4:
-                c["routes"].add(p["route_code"])
-    smap = {s["service_area_id"]: s for s in stations}
-    out = [{"service_area_id": sid,
-            "center": (smap.get(sid) or {}).get("center") or c["center"],
-            "station_code": (smap.get(sid) or {}).get("station_code"),
-            "sample_routes": sorted(c["routes"])[:4],
-            "n": c["n"]}
-           for sid, c in counts.items()]
-    return {"stations": sorted(out, key=lambda x: -x["n"])}
+    smap = {s["service_area_id"]: s for s in stations if s.get("service_area_id")}
+
+    cur = db.cortex_packages.aggregate([
+        {"$match": {"service_area_id": {"$nin": [None, ""]}}},
+        {"$group": {
+            "_id": {"sid": "$service_area_id", "center": "$center"},
+            "n": {"$sum": 1},
+            "rutas": {"$addToSet": "$route_code"},
+            "ultimo": {"$max": "$service_day"},
+        }},
+    ], allowDiskUse=True)
+
+    porEstacion: dict = {}
+    async for row in cur:
+        # $group OMITE la clave del _id cuando el campo no existe (gotcha 9)
+        sid = (row.get("_id") or {}).get("sid")
+        if not sid:
+            continue
+        centro = ((row.get("_id") or {}).get("center") or "").strip()
+        e = porEstacion.setdefault(sid, {"n": 0, "centros": {}, "rutas": set(), "ultimo": None})
+        e["n"] += row["n"]
+        if centro:
+            e["centros"][centro] = e["centros"].get(centro, 0) + row["n"]
+        for r in (row.get("rutas") or []):
+            if r and len(e["rutas"]) < 400:
+                e["rutas"].add(r)
+        if row.get("ultimo") and (not e["ultimo"] or row["ultimo"] > e["ultimo"]):
+            e["ultimo"] = row["ultimo"]
+
+    def prefijo(rc):
+        m = re.match(r"^(.*?)(\d+)\s*$", str(rc or ""))
+        return m.group(1) if m else None
+
+    out = []
+    for sid, e in porEstacion.items():
+        manual = smap.get(sid) or {}
+        # El más frecuente, no el primero que salga. Y solo como SUGERENCIA:
+        # el mapeo manual, si existe, manda.
+        mayoritario = max(e["centros"].items(), key=lambda kv: kv[1])[0] if e["centros"] else None
+        prefijos = sorted({p for p in (prefijo(r) for r in e["rutas"]) if p})
+        out.append({
+            "service_area_id": sid,
+            "center": manual.get("center") or mayoritario,
+            "manual": bool(manual.get("manual")),
+            "station_code": manual.get("station_code"),
+            "sample_routes": sorted(e["rutas"])[:4],
+            # Los prefijos delatan la mezcla mejor que cuatro códigos sueltos:
+            # dos estaciones con el mismo prefijo no pueden ser centros distintos.
+            "prefijos": prefijos[:6],
+            "centros": dict(sorted(e["centros"].items(), key=lambda kv: -kv[1])),
+            "mezclado": len(e["centros"]) > 1,
+            "ultimo_dia": e["ultimo"],
+            "n": e["n"],
+        })
+
+    out.sort(key=lambda x: -x["n"])
+    # Un prefijo de ruta que aparece en dos estaciones con centros distintos es
+    # una contradicción: o el mapeo está mal, o Cortex reutiliza el prefijo.
+    porPrefijo: dict = {}
+    for s in out:
+        for p in s["prefijos"]:
+            porPrefijo.setdefault(p, set()).add(s["center"] or "—")
+    conflictos = sorted(p for p, cs in porPrefijo.items() if len(cs) > 1)
+    return {"stations": out,
+            "mezcladas": sum(1 for s in out if s["mezclado"]),
+            "prefijos_en_conflicto": conflictos}
 
 
 @api_router.post("/cortex/stations")

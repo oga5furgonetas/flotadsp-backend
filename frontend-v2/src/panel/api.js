@@ -262,6 +262,9 @@ export const cortexHeatmap = (day, center) => api.get('/cortex/heatmap', { param
 export const cortexDays = (center) => api.get('/cortex/days', { params: { center } })
 export const cortexStations = () => api.get('/cortex/stations')
 export const cortexAssignStation = (service_area_id, center) => api.post('/cortex/stations', { service_area_id, center })
+// Reparto automático por geografía. Sin `aplicar` solo propone: se puede mirar
+// antes de que toque nada.
+export const cortexStationsAuto = (aplicar = false) => api.post(`/cortex/stations/auto?aplicar=${aplicar ? 'true' : 'false'}`)
 export const cortexIngestToken = () => api.get('/cortex/ingest-token')
 export const cortexSeedDemo = () => api.post('/cortex/seed-demo')
 export const cortexClearDemo = () => api.post('/cortex/clear-demo')

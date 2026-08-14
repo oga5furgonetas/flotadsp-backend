@@ -7,7 +7,7 @@ import {
 import {
   cortexOverview, cortexPackages, cortexPackage, cortexAlerts, cortexRoutes,
   cortexIngestToken, cortexSeedDemo, cortexClearDemo, cortexDays, cortexReset,
-  cortexStations, cortexAssignStation,
+  cortexStations, cortexAssignStation, cortexStationsAuto,
 } from '../api'
 import LibretaPortales from '../components/LibretaPortales'
 import EsquemaCortex from '../components/EsquemaCortex'
@@ -495,7 +495,29 @@ export default function PackageIntel() {
       {/* Estaciones → centro. Mapeo duro por serviceAreaId (infalible). */}
       {stations.length > 0 && (centers?.length > 1) && (unmapped.length > 0 || stations.length > 1) && (
         <div className="mb-5 rounded-2xl border border-amber-500/30 bg-amber-500/[.06] p-4">
-          <div className="mb-1 text-[13px] font-bold text-amber-300">{t('px.asignaEst')}</div>
+          <div className="mb-1 flex flex-wrap items-center gap-3">
+            <span className="text-[13px] font-bold text-amber-300">{t('px.asignaEst')}</span>
+            {/* Repartir a mano estación por estación no debería hacer falta:
+                dónde se entrega ya lo dicen las coordenadas de los paquetes. */}
+            <button
+              onClick={async () => {
+                setAssigning('auto')
+                try {
+                  const r = await cortexStationsAuto(true)
+                  const d = r.data || {}
+                  alert(`${d.aplicadas || 0} estación(es) resueltas por geografía.`
+                    + (d.sin_resolver?.length ? `\n${d.sin_resolver.length} sin resolver (ambiguas): se quedan como estaban.` : ''))
+                  load()
+                } catch (e) {
+                  alert(e?.response?.data?.detail || 'No se pudo repartir automáticamente.')
+                } finally { setAssigning(null) }
+              }}
+              disabled={!!assigning}
+              className="ml-auto rounded-lg bg-brand-500/20 px-3 py-1 text-[12px] font-semibold text-brand-300 transition hover:bg-brand-500/40 disabled:opacity-50"
+            >
+              {assigning === 'auto' ? 'Resolviendo…' : 'Repartir automáticamente'}
+            </button>
+          </div>
           <p className="mb-3 text-[12px] text-dark-400">{t('px.asignaExpl')}</p>
           <div className="space-y-2">
             {stations.map(s => (
