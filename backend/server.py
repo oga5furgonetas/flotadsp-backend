@@ -21599,18 +21599,37 @@ async def cortex_assign_station(body: dict = Body(...), _=Depends(require_admin)
     # extensión ya no pueden pisarlo (antes se sobrescribía cada 2 minutos).
     await db.cortex_stations.update_one(
         {"service_area_id": sid}, {"$set": {"center": center, "manual": True}}, upsert=True)
-    # Re-sincronización GLOBAL: además de esta estación, corrige cualquier
-    # paquete histórico cuya etiqueta contradiga el mapeo manual de SU estación
-    # (cura las mezclas OGA5/DGA1 acumuladas de cuando el mapeo se pisaba).
-    total = 0
-    async for s in db.cortex_stations.find(
-            {"center": {"$nin": [None, ""]}}, {"_id": 0, "service_area_id": 1, "center": 1}):
-        if s.get("service_area_id"):
-            r = await db.cortex_packages.update_many(
-                {"service_area_id": s["service_area_id"], "center": {"$ne": s["center"]}},
-                {"$set": {"center": s["center"]}})
-            total += r.modified_count
-    return {"ok": True, "updated": total}
+
+    # SOLO esta estación, y se responde. Antes aquí se hacía una
+    # re-sincronización GLOBAL —un update_many por CADA estación, sobre ~165.000
+    # paquetes— dentro de la misma petición: tardaba tanto que al usuario le
+    # parecía que el botón no hacía nada. El mapeo, que es lo que se ve al
+    # instante en la pantalla, ya está escrito arriba.
+    r = await db.cortex_packages.update_many(
+        {"service_area_id": sid, "center": {"$ne": center}}, {"$set": {"center": center}})
+
+    # El repaso del resto (cura mezclas viejas de cuando el mapeo se pisaba
+    # cada 2 minutos) se hace después, sin que nadie espere por él.
+    _org = _current_db_name.get()
+
+    async def _resincronizar():
+        try:
+            set_current_org_db(_org)
+            n = 0
+            async for s in db.cortex_stations.find(
+                    {"center": {"$nin": [None, ""]}}, {"_id": 0, "service_area_id": 1, "center": 1}):
+                if s.get("service_area_id") and s["service_area_id"] != sid:
+                    rr = await db.cortex_packages.update_many(
+                        {"service_area_id": s["service_area_id"], "center": {"$ne": s["center"]}},
+                        {"$set": {"center": s["center"]}})
+                    n += rr.modified_count
+            if n:
+                logger.info(f"Cortex: resincronización de fondo, {n} paquetes re-etiquetados")
+        except Exception as e:
+            logger.warning(f"Cortex resincronización de fondo: {e}")
+
+    asyncio.create_task(_resincronizar())
+    return {"ok": True, "updated": r.modified_count, "resto_en_curso": True}
 
 
 @api_router.get("/cortex/days")
