@@ -135,6 +135,75 @@ export function compararDirecciones(amazon, geo) {
   return 'coincide'
 }
 
+/* ── SEGUNDA FUENTE: Cartociudad (IGN / CNIG) ────────────────────────────────
+   Es el callejero OFICIAL español. Importa que sea independiente de
+   OpenStreetMap: dos fuentes que beben de los mismos datos no se confirman
+   entre ellas, solo repiten el mismo error con más aplomo.
+
+   Con esto, «lo que hay en esta coordenada» deja de ser una opinión: o las dos
+   fuentes dicen lo mismo —y entonces se puede afirmar— o no coinciden, y
+   entonces lo honesto es decir que no lo sabemos.
+   ───────────────────────────────────────────────────────────────────────────── */
+const URL_CARTOCIUDAD = 'https://www.cartociudad.es/geocoder/api/geocoder/reverseGeocode'
+
+export async function resolverCartociudad(lat, lng, { signal } = {}) {
+  if (!isFinite(lat) || !isFinite(lng)) return null
+  const q = new URLSearchParams({ lat: String(lat), lon: String(lng), outputformat: 'geojson' })
+  let j
+  try {
+    const r = await fetch(`${URL_CARTOCIUDAD}?${q}`, { signal, headers: { Accept: 'application/json' } })
+    if (!r.ok) return null
+    j = await r.json()
+  } catch { return null }
+  if (!j || !j.address) return null
+
+  // `type` lo dice el propio servicio: 'portal' es número exacto; por debajo,
+  // como mucho llega a la vía. No se sube la precisión por nuestra cuenta.
+  const numero = (!j.noNumber && j.portalNumber != null) ? String(j.portalNumber) : ''
+  const precision = j.type === 'portal' && numero ? 'portal' : (j.address ? 'calle' : 'zona')
+  const calle = [j.tip_via, j.address].filter(Boolean).join(' ').trim()
+  return {
+    display: [calle + (numero ? ` ${numero}` : ''), j.postalCode, j.muni].filter(Boolean).join(', ').slice(0, 300),
+    calle: calle.slice(0, 160),
+    numero: numero.slice(0, 20),
+    cp: String(j.postalCode || '').slice(0, 12),
+    municipio: String(j.muni || '').slice(0, 120),
+    precision,
+    fuente: 'cartociudad',
+  }
+}
+
+/**
+ * Pregunta a LAS DOS fuentes qué hay en (lat, lng) y dice si están de acuerdo.
+ *
+ * Este es el único punto de todo esto que puede AFIRMAR una dirección, y solo
+ * lo hace cuando dos callejeros independientes coinciden en la calle. Si no
+ * coinciden devuelve `acuerdo: 'discrepan'` y no se queda con ninguna: entre
+ * dar una dirección que puede ser la equivocada y decir que no lo sabemos, la
+ * segunda es la única respuesta que no hace perder un viaje a nadie.
+ */
+export async function resolverDosFuentes(lat, lng, opciones = {}) {
+  const [osm, ign] = await Promise.all([
+    resolverCoordenada(lat, lng, opciones),
+    resolverCartociudad(lat, lng, opciones),
+  ])
+  if (!osm && !ign) return { acuerdo: 'sin_datos', osm: null, ign: null, confirmada: null }
+  if (!osm || !ign) {
+    // Una sola fuente NO confirma nada. Se devuelve para poder enseñarla, pero
+    // marcada como no confirmada.
+    return { acuerdo: 'una_fuente', osm, ign, confirmada: null }
+  }
+  const v = compararDirecciones(osm.display, ign)
+  if (v === 'coincide') {
+    // Las dos coinciden en la vía: se prefiere la que traiga número de portal.
+    const mejor = ign.precision === 'portal' ? ign : (osm.precision === 'portal' ? osm : ign)
+    return { acuerdo: 'confirmada', osm, ign, confirmada: mejor }
+  }
+  if (v === 'otro_numero') return { acuerdo: 'misma_calle_otro_numero', osm, ign, confirmada: null }
+  if (v === 'no_comparable') return { acuerdo: 'no_comparable', osm, ign, confirmada: null }
+  return { acuerdo: 'discrepan', osm, ign, confirmada: null }
+}
+
 /**
  * Pregunta al mapa qué hay en (lat, lng). Devuelve null si no se puede saber.
  * No lanza nunca: un fallo de red no puede tumbar la libreta.
