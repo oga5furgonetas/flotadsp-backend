@@ -210,6 +210,12 @@
       station: firstKey(node, KEYS.station) || ctx.station || null,
       state: firstKey(node, KEYS.state) || null,
       raw_state: firstKey(node, KEYS.state) || null,
+      /* El MOTIVO. En el informe de faltas viene como `reasonCode` y es el dato
+         que dice "no puedo encontrar la dirección" (ADDRESS_NOT_FOUND) sin
+         ambigüedad. Antes se tiraba, y el motivo había que deducirlo del
+         `context` del timeline de route-details, que llega más tarde y no
+         siempre. */
+      state_context: firstKey(node, ['reasonCode', 'taskStateContext', 'stateContext', 'reason']) || null,
       lat: firstKey(node, KEYS.lat) ?? ctx.lat ?? null,
       lng: firstKey(node, KEYS.lng) ?? ctx.lng ?? null,
       observed_at: firstKey(node, KEYS.time) || null,
@@ -273,6 +279,7 @@
   // Mapas aprendidos en vivo para etiquetar bien los replays y fuentes pobres:
   const saCenter = {};      // serviceAreaId → centro
   const prefixCenter = {};  // prefijo de ruta (XA_C, CA_A) → centro
+  const prefixSaid = {};    // prefijo de ruta → serviceAreaId
   const routePrefix = (rc) => { const m = String(rc || '').match(/^(.*?)(\d+)\s*$/); return m ? m[1] : null; };
 
   const extractRouteDetails = (json) => {
@@ -286,6 +293,9 @@
     const prefix = routePrefix(routeCode);
     if (said && pageCenter && !saCenter[said]) saCenter[said] = pageCenter; // 1ª vez = navegación real
     if (prefix && pageCenter && !prefixCenter[prefix]) prefixCenter[prefix] = pageCenter;
+    // El serviceAreaId del prefijo, para poder adoptar luego los paquetes del
+    // informe de faltas, que llegan sin estación ninguna.
+    if (prefix && said && !prefixSaid[prefix]) prefixSaid[prefix] = said;
     // Prioridad: mapa por estación (duro) → página → mapa por prefijo de ruta.
     const center = (said && saCenter[said]) || pageCenter || (prefix && prefixCenter[prefix]) || null;
     const stationCode = info.code || null;
@@ -365,6 +375,30 @@
       if (parsed && isSummary) harvestRoutes(parsed);
       let packages = [];
       if (parsed && (marked || isDetails)) packages = extractRouteDetails(parsed) || extract(parsed);
+
+      /* ── ADOPTAR LOS PAQUETES DEL INFORME DE FALTAS ──────────────────────
+         `packagesByStatus` es el ÚNICO sitio de Cortex que da la DIRECCIÓN de
+         texto (address1/city/postalCode) y el motivo (reasonCode). Pero sus
+         paquetes NO traen estación: ni serviceAreaId, ni centro, ni nada.
+
+         La compuerta de background.js aparta lo que llega sin estación y no lo
+         envía nunca —y hace bien: un paquete contado en el centro que no es
+         falsea el DCR de una nave entera—. El efecto colateral era que la
+         dirección se capturaba, se quedaba en la cola y no llegaba jamás al
+         panel: 0 de 3.019 paquetes con dirección, con el conductor marcando
+         "no puedo encontrar la dirección" y nosotros sin poder buscarla.
+
+         Se les adopta por el PREFIJO de su ruta (XA_C18 → XA_C), y sólo si ese
+         prefijo ya se aprendió navegando de verdad por route-details en esta
+         misma sesión. Si el prefijo no se conoce, el paquete se queda fuera
+         como hasta ahora: antes sin dirección que en el centro equivocado. */
+      for (const p of packages) {
+        if (p.center || p.service_area_id || !p.route_code) continue;
+        const pre = routePrefix(p.route_code);
+        if (!pre) continue;
+        if (prefixCenter[pre]) p.center = prefixCenter[pre];
+        if (prefixSaid[pre]) p.service_area_id = prefixSaid[pre];
+      }
       // Diagnóstico de estructura: esquema de route-details y de route-summaries.
       if (!schemaSent && isDetails && parsed) {
         try {
