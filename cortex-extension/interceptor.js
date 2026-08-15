@@ -98,7 +98,16 @@
      la misma: dos casillas que marcar, el mapeo de centro duplicado y la mitad
      de los paquetes sin centro. Una sola forma y se acabó el problema. */
   const normSa = (s) => (typeof s === 'string' && s.trim() ? s.trim().toLowerCase() : null);
-  let saId = null, histParam = 'false';
+  /* Se arranca con el de la BARRA DE DIRECCIONES. Si sólo se aprendiera de las
+     peticiones, una pestaña recién abierta se queda sin estación hasta que pase
+     una, y hasta entonces no se puede pedir el informe de direcciones — que es
+     justo lo que hay que pedir cuanto antes. Cortex siempre lo lleva en la URL
+     de esta pantalla, y es el de la estación que se está mirando. */
+  let saId = (() => {
+    try { return normSa(new URL(location.href).searchParams.get('serviceAreaId')); }
+    catch (_) { return null; }
+  })();
+  let histParam = 'false';
   const learnTemplate = (url) => {
     try {
       const u = new URL(url, location.origin);
@@ -142,6 +151,43 @@
       post({ kind: 'debug', url: `descubiertas ${nuevos} rutas → cargando todas…`, count: nuevos, bytes: 0 });
     }
   };
+
+  /* ── EL INFORME DE FALTAS, PEDIDO POR NOSOTROS ────────────────────────────
+     `packagesByStatus` es el ÚNICO sitio de Cortex con la DIRECCIÓN en texto, y
+     sólo se pide cuando alguien abre esa pantalla concreta. La lista de URLs que
+     refrescamos solos vive en memoria y se vacía al recargar la pestaña: basta
+     con un F5 —o reinstalar la extensión— para que ese informe deje de pedirse
+     y las direcciones dejen de llegar sin que nadie se entere. Pasó: rutas
+     entrando cada 3 minutos y CERO direcciones en 3.019 paquetes.
+
+     Así que se pide sola. Dos formas, y la buena manda:
+       · Si alguna vez hemos visto la petición de verdad, se guarda su URL con
+         la fecha por rellenar y se reutiliza tal cual — cero suposiciones.
+       · Si no la hemos visto todavía, se construye con los parámetros que usa
+         Cortex (vistos en su propia URL). Si alguno no fuera correcto, la
+         respuesta no traerá paquetes y no pasa nada: no se inventa ningún dato,
+         simplemente no habría direcciones hasta ver la petición real una vez.
+
+     No añade carga apreciable: una petición cada 3 minutos, la misma que hace
+     la página cuando la tienes abierta. */
+  let plantillaInforme = null;
+  const urlInforme = () => {
+    const dia = serviceDay() || new Date().toISOString().slice(0, 10);
+    if (plantillaInforme) return plantillaInforme.replace('__DIA__', dia);
+    if (!saId) return null;   // sin estación no se pide: iría al centro equivocado
+    return `${location.origin}/operations/execution/api/packages/packagesByStatus`
+      + `?historicalDay=false&localDate=${dia}&packageStatus=REATTEMPTABLE&serviceAreaId=${saId}`;
+  };
+  const aprenderInforme = (url) => {
+    try {
+      const u = new URL(url, location.origin);
+      u.searchParams.set('localDate', '__DIA__');
+      plantillaInforme = u.href;
+    } catch (_) {}
+  };
+  const pedirInforme = () => { const u = urlInforme(); if (u) syntheticFetch(u); };
+  setTimeout(pedirInforme, 9000);      // una vez al entrar, sin agobiar la carga
+  setInterval(pedirInforme, 180000);   // y al mismo ritmo que el resto
 
   const RELEVANT_URL = /route|task|stop|package|parcel|delivery|itinerary|summar|scan|assign|missing|falta|reason|exception|report/i;
 
@@ -412,6 +458,8 @@
       const isSummary = /route-summaries/i.test(url);
       const isDetails = /route-details/i.test(url);
       if (isDetails) learnTemplate(url);
+      // La petición REAL del informe manda sobre la que construimos nosotros.
+      if (/packagesByStatus/i.test(url)) { learnTemplate(url); aprenderInforme(url); }
       const marked = MARK.test(text);
       // Nos interesan respuestas de datos (por URL o por contenido) y el sumario.
       if (!marked && !isSummary && !RELEVANT_URL.test(url)) return;
