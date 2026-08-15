@@ -114,6 +114,21 @@ export function fraseVeredicto(g) {
   return { clave, metros: g.metros_amazon, alarma: true }
 }
 
+/** ¿Hablan las dos cadenas de la misma vía (o el mismo municipio)?
+ *
+ *  Comparación de TEXTO, y sólo se usa como contraste: nunca para decidir dónde
+ *  está algo —eso lo dicen las coordenadas— sino para descartar que un buscador
+ *  se haya ido a otra calle o a otro pueblo. Basta con que compartan una palabra
+ *  significativa: los nombres se escriben de mil maneras ('Rúa do Con' /
+ *  'Rúa o Con', 'RUA SANTAS MARIÑAS (DAS)' / 'Rua das Santas Mariñas').
+ */
+export function mismaVia(a, b) {
+  const ta = new Set(nucleoVia(a).split(' ').filter((w) => w.length > 2))
+  const tb = new Set(nucleoVia(b).split(' ').filter((w) => w.length > 2))
+  if (!ta.size || !tb.size) return false
+  return [...ta].some((w) => tb.has(w))
+}
+
 /** Metros entre dos coordenadas (haversine). Gemelo de `_haversine_km` del
     backend, pero en metros: aquí la señal está en decenas de metros. */
 export function metrosEntre(a, b) {
@@ -535,16 +550,49 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
      Es el único sitio donde se compara TEXTO, y se hace a propósito: no para
      decidir dónde está, sino para descartar que el servicio se haya ido a otro
      sitio. Dónde está lo siguen diciendo las coordenadas. */
+  /* ── CONFIRMAR A AMAZON NO ES LO MISMO QUE CONTRADECIRLE ──────────────────
+     Las dos afirmaciones tienen riesgos distintos y no pueden pedir la misma
+     prueba:
+
+       "la dirección está EN OTRO SITIO"  → manda al conductor a otro lado. Si
+          es falso, viaje perdido. Aquí sí hacen falta dos familias.
+       "la coordenada de Amazon es CORRECTA" → no mueve a nadie: confirma el
+          punto al que ya iba. Si se equivoca, el conductor sigue yendo donde
+          iba de todas formas.
+
+     Medido en las direcciones reales de hoy: 'Calle Pombais 1, Boiro' la
+     encuentra sólo Photon, a 237 m del punto de Amazon; 'Rúa o Con, Portosín',
+     sólo Photon, a 6 m. Exigirles dos familias dejaba en "no se ha podido
+     confirmar" un montón de casos donde la respuesta útil era justamente
+     "la coordenada está bien, el fallo es el portal: timbre, negocio cerrado,
+     puerta sin número". Eso es información accionable y se estaba tirando.
+
+     Cerrojos que SÍ se mantienen: la fuente tiene que llegar a calle o portal,
+     el nombre de vía tiene que ser el que se pidió (esto descarta que haya
+     encontrado otra calle cualquiera cerca), y tiene que caer dentro del margen
+     de coincidencia. Y NUNCA se afirma el número de portal. */
+  const cerca = resultados.find((v) => {
+    if (!PRECISIONES_QUE_VOTAN.has(v.precision)) return false
+    const m = metrosEntre(v, amazon)
+    return m != null && m <= UMBRAL_DESVIO_M.zona
+  })
+  if (cerca && !hayFino && mismaVia(cerca.calle, d.via)) {
+    return {
+      ...base,
+      punto: cerca,
+      metros_amazon: metrosEntre(cerca, amazon),
+      familias: [cerca.familia],
+      dispersion_m: 0,
+      precision_acuerdo: 'zona',
+      estado: 'confirma_amazon',
+      veredicto: 'coincide',
+    }
+  }
+
   const oficial = resultados.find((v) => v.familia === 'ign' && PRECISIONES_QUE_VOTAN.has(v.precision))
   if (oficial && !hayFino) {
-    const coincide = (a, b) => {
-      const ta = new Set(nucleoVia(a).split(' ').filter((w) => w.length > 2))
-      const tb = new Set(nucleoVia(b).split(' ').filter((w) => w.length > 2))
-      if (!ta.size || !tb.size) return false
-      return [...ta].some((w) => tb.has(w))
-    }
-    const muniOk = coincide(oficial.municipio, d.municipio || d.ciudad)
-    const viaOk = coincide(oficial.calle, d.via)
+    const muniOk = mismaVia(oficial.municipio, d.municipio || d.ciudad)
+    const viaOk = mismaVia(oficial.calle, d.via)
     if (muniOk && viaOk) {
       const r = {
         ...base,

@@ -195,7 +195,7 @@ export default function DireccionesHoy({ center, day }) {
       setBuscando(p.celda)          // para que la tarjeta lo diga
       buscarDireccion(p.direccion, { lat: p.lat, lng: p.lng })
         .then(async (r) => {
-          if ((!['confirmada', 'zona', 'oficial'].includes(r.estado)) || !r.punto) return
+          if ((!['confirmada', 'zona', 'oficial', 'confirma_amazon'].includes(r.estado)) || !r.punto) return
           await cortexPortalGeodir({
             celdas: [p.celda],
             geodir: {

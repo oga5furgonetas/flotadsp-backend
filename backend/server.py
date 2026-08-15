@@ -19785,6 +19785,24 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     _state_raw = obs.get("state") or obs.get("raw_state") or obs.get("taskState")
     sin_estado = not (isinstance(_state_raw, str) and _state_raw.strip())
     state = _cortex_canon_state(_state_raw)
+
+    # EXCEPCIÓN: "falta el paquete" SÍ es un estado.
+    #
+    # El informe de faltas no trae `taskState` —por eso se le trata como fuente
+    # sin estado, para que no pise el DELIVERED que sí sabe route-details—, pero
+    # su `reasonCode: OBJECT_MISSING` no es un matiz: es Cortex diciendo
+    # literalmente que el paquete falta, y es la ÚNICA fuente que lo dice. Sin
+    # esta excepción, un paquete que Cortex marca "Falta el paquete" no aparecía
+    # nunca como MISSING en el panel (pasó el 15/08 con ES2586309005: visible en
+    # Cortex, ausente aquí).
+    #
+    # Sólo estos códigos, y sólo hacia MISSING: es un estado terminal que ya
+    # tenía prioridad sobre el resumido de route-details ("un Missing explícito
+    # es evidencia más fuerte"), así que no puede degradar nada.
+    _ctx = str(obs.get("state_context") or "").strip().upper().replace(" ", "_").replace("-", "_")
+    if sin_estado and _ctx in ("OBJECT_MISSING", "PACKAGE_MISSING", "MISSING"):
+        state = "MISSING"
+        sin_estado = False
     observed_at = _cortex_parse_dt(obs.get("observed_at")) or _cortex_parse_dt(captured_at) or datetime.now(timezone.utc)
     ev = {
         "state": state, "at": observed_at.isoformat(),
@@ -21388,7 +21406,18 @@ async def cortex_portal_geodir(data: dict = Body(...), user: dict = Depends(requ
         # lo que caza los dos errores reales que se le vieron (un portal en
         # Guitiriz para una dirección de Lugo, y 'TRAS DO PILAR' por 'Rúa do
         # Vilar').
-        if not (familias == ["ign"] and nivel == "zona"):
+        #
+        # Y la segunda: CONFIRMAR el punto de Amazon no es lo mismo que
+        # contradecirle. Decir "está en otro sitio" mueve al conductor y por eso
+        # exige dos familias; decir "la coordenada es correcta" no mueve a
+        # nadie —sigue yendo donde ya iba— y una sola fuente que caiga encima
+        # del punto basta. Medido en las direcciones reales del 15/08: la mitad
+        # de los casos son exactamente esto (Photon a 6 m, a 20 m, a 238 m), y
+        # exigirles dos familias los dejaba en "no se ha podido confirmar"
+        # cuando la respuesta útil era "el fallo no es la coordenada, es el
+        # portal: timbre, negocio cerrado, puerta sin número".
+        confirma = g.get("veredicto") == "coincide"
+        if not (nivel == "zona" and (familias == ["ign"] or confirma)):
             raise HTTPException(400, "hacen falta 2 familias de fuentes distintas")
 
     try:
