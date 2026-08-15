@@ -1,5 +1,52 @@
 # Lo que queda — retomar desde aquí
 
+## 0 · LO PRIMERO: geolocalizar la dirección (va al revés de lo construido)
+
+**Me equivoqué de dirección y hay que corregirlo.** Lo que está hecho resuelve
+`coordenada → dirección` (comprobar si lo que dice Amazon cuadra con el mapa).
+Lo que Dani pide es lo contrario:
+
+> "si el conductor marca no puedo encontrar la dirección, al toque, mediante 5
+> buscadores o 20 o lo que sea, automáticamente me des la geolocalización de ese
+> no puedo encontrar la dirección"
+
+O sea: coger el TEXTO de la dirección (`stop_address`, que ya está en cada
+paquete) y buscar **dónde está de verdad**, en varios buscadores a la vez.
+
+**Por qué esto sí resuelve el problema del conductor.** El paquete ya trae una
+coordenada de Amazon, y es justo a donde le mandaron y no encontró nada. Si
+varios geocodificadores independientes coinciden en OTRO punto, ese es el bueno,
+y la distancia entre los dos puntos es la explicación del fallo: "la dirección
+está a 400 m de donde te mandaron".
+
+**Diseño propuesto (sin falsos positivos):**
+1. Entrada: `stop_address` del paquete + la coordenada de Amazon.
+2. Consultar N geocodificadores en paralelo (son servicios distintos, no hay
+   límite compartido):
+   - Nominatim `/search` — solo desde el NAVEGADOR (403 al servidor, probado).
+   - Photon `photon.komoot.io/api/?q=` — **PROBADO Y FUNCIONA**: devuelve
+     `street`, `housenumber` ("30-32") y coordenadas. Índice OSM distinto.
+   - Cartociudad (IGN): el endpoint bueno NO es `/candidates` (devuelve `[]`
+     con una dirección completa). Probar `/geocoder/api/geocoder/find?q=` y
+     `findJsonp`. Es la fuente oficial y la más valiosa para España.
+3. **Acuerdo por CERCANÍA, no por texto**: si dos o más resultados caen a menos
+   de ~150 m entre ellos, ese grupo es la ubicación confirmada. Con un solo
+   resultado NO se afirma nada.
+4. Devolver: coordenada confirmada, cuántas fuentes coincidieron, y la
+   **distancia a la coordenada de Amazon** — que es el dato accionable.
+5. Enseñárselo al conductor en su ruta (`/cortex/portales/mi-ruta`) y al gestor
+   en la Libreta, con enlace a Google Maps de la coordenada buena.
+
+**Ya reutilizable:** `_haversine_km` en el backend, y `nucleoVia` /
+`compararDirecciones` de `geoPortal.js` para cotejar los nombres de vía.
+
+**Lo que hay hecho y NO se tira:** el contraste `coordenada → dirección` sigue
+valiendo para diagnosticar (dice si Amazon manda a la calle equivocada), pero
+NO es lo que pidió. Es complementario, no sustituto.
+
+---
+
+
 Estado al cerrar la sesión del 2026-08-15. Todo lo de abajo está SIN hacer.
 `lab`, `main`, los dos worktrees y flotadsp.com están alineados en el mismo
 commit, así que se puede empezar por cualquiera.
