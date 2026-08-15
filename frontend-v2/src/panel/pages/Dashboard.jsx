@@ -77,6 +77,64 @@ function Mini({ n, label, alerta }) {
   )
 }
 
+/* ── ANILLO ───────────────────────────────────────────────────────────────────
+   Donut en SVG puro: sin librería de gráficos, sin peso extra en el bundle y
+   sin dependencias que mantener. Un `stroke-dasharray` sobre un círculo hace
+   exactamente lo mismo que una librería para este caso. */
+function Anillo({ segmentos, centro, sub, size = 132 }) {
+  const R = (size - 14) / 2
+  const C = 2 * Math.PI * R
+  const total = segmentos.reduce((a, s) => a + s.n, 0) || 1
+  let acc = 0
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={R} fill="none" stroke="rgba(255,255,255,.06)" strokeWidth="11" />
+        {segmentos.map((s) => {
+          const frac = s.n / total
+          const el = (
+            <circle key={s.k} cx={size / 2} cy={size / 2} r={R} fill="none"
+              stroke={s.color} strokeWidth="11" strokeLinecap="butt"
+              strokeDasharray={`${frac * C} ${C}`}
+              strokeDashoffset={-acc * C}
+              style={{ transition: 'stroke-dasharray .7s ease' }} />
+          )
+          acc += frac
+          return s.n > 0 ? el : null
+        })}
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="font-display text-[26px] font-semibold leading-none tracking-[-0.02em] text-dark-50">{centro}</span>
+        {sub && <span className="mt-1 text-[10.5px] text-dark-500">{sub}</span>}
+      </div>
+    </div>
+  )
+}
+
+/* Barras de los últimos 7 días. También SVG-libre: divs con altura relativa.
+   El día de hoy va marcado porque es el único sobre el que aún se puede
+   actuar. */
+function Barras({ dias, locale }) {
+  const max = Math.max(1, ...dias.map((d) => d.n))
+  return (
+    <div className="flex h-[110px] items-end gap-1.5">
+      {dias.map((d, i) => (
+        <div key={d.key} className="group flex flex-1 flex-col items-center gap-1.5">
+          <div className="relative flex w-full flex-1 items-end">
+            <div className={`w-full rounded-t transition-all duration-700 ${
+              i === dias.length - 1 ? 'bg-brand-400/80' : 'bg-brand-500/30 group-hover:bg-brand-500/50'}`}
+              style={{ height: `${Math.max(3, (d.n / max) * 100)}%` }} />
+            <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-[10px] font-semibold tabular-nums text-dark-400 opacity-0 transition-opacity group-hover:opacity-100">
+              {d.n}
+            </span>
+          </div>
+          <span className="text-[9.5px] uppercase tracking-wide text-dark-600">{d.label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /* ── MURO DE RUTAS ────────────────────────────────────────────────────────────
    Una tarjeta por ruta con su conductor y su avance. No es decoración: es la
    pantalla que un DSP enseña cuando le preguntan "¿cómo va el día?".
@@ -90,8 +148,11 @@ function Mini({ n, label, alerta }) {
    obliga a buscar a mano lo que acabas de ver. */
 function RutaCard({ r, onIr, t }) {
   const pct = r.total ? Math.round((r.delivered / r.total) * 100) : 0
-  const parada = r.min_sin_entregar != null && r.min_sin_entregar >= 40
-  const fin = r.pendientes === 0
+  /* La alarma sólo tiene sentido si la ruta sigue EN LA CALLE. Una terminada
+     acumula minutos desde su última entrega para siempre, y a la 1 AM todas
+     parecían paradas. */
+  const parada = r.en_reparto && r.min_sin_entregar != null && r.min_sin_entregar >= 40
+  const fin = !r.en_reparto
   const tono = fin ? 'emerald' : parada ? 'red' : r.critical > 0 ? 'amber' : 'brand'
   const C = {
     emerald: { b: 'border-emerald-500/25', bar: 'bg-emerald-400/80', t: 'text-emerald-300' },
@@ -117,6 +178,9 @@ function RutaCard({ r, onIr, t }) {
 
       <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[10px] text-dark-600">
         <span className="tabular-nums">{r.delivered}/{r.total}</span>
+        {/* Una ruta terminada lo dice, en vez de dejar al gestor deduciéndolo
+            de un porcentaje que no llega al 100 por los fallos del día. */}
+        {fin && <span className="text-emerald-400/80">{t('ops.route.done')}</span>}
         {parada && (
           <span className="font-semibold text-red-300">{t('ops.stalled').replace('{n}', r.min_sin_entregar)}</span>
         )}
@@ -410,9 +474,11 @@ export default function Dashboard() {
         const rutas = lista(r.data?.routes)
         const total = rutas.reduce((a, x) => a + (x.total || 0), 0)
         const entregados = rutas.reduce((a, x) => a + (x.delivered || 0), 0)
-        // "En curso" = rutas que aún tienen paquetes sin entregar. Una ruta
-        // terminada no pide nada a nadie y contarla infla la sensación de faena.
-        const enCurso = rutas.filter((x) => (x.total || 0) > (x.delivered || 0)).length
+        /* "En curso" = rutas con paquetes AÚN EN LA FURGONETA (`en_reparto`),
+           no rutas con paquetes sin entregar. Los intentados y devueltos no se
+           van a entregar hoy: el conductor ya volvió. Con el criterio viejo,
+           a la 1 de la madrugada seguían saliendo 27 rutas "en la calle". */
+        const enCurso = rutas.filter((x) => x.en_reparto).length
         setNowLive({
           missing: o.data?.missing_now ?? null,
           routes: rutas.length || null,
@@ -549,7 +615,28 @@ export default function Dashboard() {
   const urgentTotal = decisiones.filter((d) => d.tono !== 'dark')
     .reduce((a, u) => a + u.n, 0)
 
-  const pctEntrega = nowLive?.total ? Math.round((nowLive.entregados / nowLive.total) * 100) : null
+  /* El porcentaje EXACTO, con dos decimales. Redondeado a entero, 2.929 de
+     3.019 y 2.938 de 3.019 son "97%" los dos, y en una operación de 3.000
+     paquetes cada décima son tres paquetes. Delante de Amazon eso se nota. */
+  const pctEntrega = nowLive?.total ? (nowLive.entregados / nowLive.total) * 100 : null
+  const pctEnt = pctEntrega != null ? pctEntrega.toFixed(2) : null
+
+  /* Los 7 últimos días de inspecciones, del backend (`weekly_activity`). El día
+     de hoy va el último y es el único marcado: es sobre el que aún se actúa. */
+  const semana = (() => {
+    const out = []
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date()
+      d.setDate(d.getDate() - i)
+      const key = d.toISOString().slice(0, 10)
+      out.push({
+        key,
+        label: i === 0 ? t('chart.today') : d.toLocaleDateString(locale, { weekday: 'short' }).slice(0, 3),
+        n: data.weekly_activity?.[key]?.inspecciones || 0,
+      })
+    }
+    return out
+  })()
 
   const firstName = (admin?.name || '').trim().split(/\s+/)[0] || ''
   const availPct = fleet > 0 ? Math.round((active / fleet) * 100) : null
@@ -573,7 +660,7 @@ export default function Dashboard() {
             lo que se mueve y lo que mide Amazon. */}
         <p className="mt-3 max-w-2xl text-[16.5px] leading-relaxed text-dark-400">
           {pctEntrega != null ? (
-            <><b className="font-semibold text-dark-50"><Count v={pctEntrega} />%</b> {t('ops.brief.delivered')}
+            <><b className="font-semibold text-dark-50">{pctEnt}%</b> {t('ops.brief.delivered')}
               {nowLive.enCurso > 0 && (
                 <> · <b className="font-semibold text-dark-50"><Count v={nowLive.enCurso} /></b> {t('ops.brief.routes')}</>
               )}.
@@ -613,7 +700,10 @@ export default function Dashboard() {
             <div>
               <div className="flex items-baseline gap-1.5">
                 <span className="font-display text-[46px] font-semibold leading-none tracking-[-0.03em] text-dark-50">
-                  <Count v={pctEntrega} />
+                  {/* Entero animado + decimales fijos: el contador sube y la
+                      precisión no se pierde. */}
+                  <Count v={Math.floor(pctEntrega)} />
+                  <span className="text-[26px] text-dark-300">,{pctEnt.split('.')[1]}</span>
                 </span>
                 <span className="text-lg font-medium text-dark-500">%</span>
               </div>
@@ -700,6 +790,76 @@ export default function Dashboard() {
           </div>
         </section>
       )}
+
+      {/* ── 2-bis · LA FLOTA, EN IMÁGENES ────────────────────────────────────
+          Tres piezas y las tres con datos REALES. En el mockup de referencia
+          había tarjetas con "↑5%" y curvas de tendencia: eso aquí no se puede
+          calcular para casi ningún dato (no hay serie histórica de score ni de
+          daños por semana), y una flecha verde inventada en una pantalla que
+          se le enseña a Amazon es lo peor que podríamos poner. Va lo que hay. */}
+      <section className="rise border-t border-white/[0.05] py-7" style={{ animationDelay: '140ms' }}>
+        <h2 className="mb-4 text-[15px] font-semibold text-dark-100">{t('ops.fleet.state')}</h2>
+        <div className="grid gap-5 lg:grid-cols-3">
+
+          {/* Disponibilidad: cuántas furgonetas pueden salir mañana. */}
+          <div className="rounded-2xl border border-dark-800 bg-dark-900/40 p-5">
+            <p className="mb-3 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-dark-500">{t('ops.availability')}</p>
+            <div className="flex items-center gap-5">
+              <Anillo size={124}
+                centro={`${availPct ?? 0}%`} sub={t('ops.ready')}
+                segmentos={[
+                  { k: 'ok', n: active, color: '#34d399' },
+                  { k: 'shop', n: inShop, color: '#fbbf24' },
+                ]} />
+              <div className="space-y-2 text-[12.5px]">
+                <p className="flex items-center gap-2 text-dark-300">
+                  <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                  {t('ops.ready')} <b className="ml-auto tabular-nums text-dark-100">{active}</b>
+                </p>
+                <p className="flex items-center gap-2 text-dark-300">
+                  <span className="h-2 w-2 rounded-full bg-amber-400" />
+                  {t('dash.workshop')} <b className="ml-auto tabular-nums text-dark-100">{inShop}</b>
+                </p>
+                <p className="flex items-center gap-2 text-dark-500">
+                  <span className="h-2 w-2 rounded-full bg-dark-600" />
+                  {t('nav.drivers')} <b className="ml-auto tabular-nums text-dark-300">{data.total_drivers}</b>
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Severidad de los daños. Se dice CLARAMENTE que es el acumulado de
+              todas las inspecciones, no de esta semana: es lo que hay, y
+              etiquetarlo como semanal sería mentir. */}
+          <div className="rounded-2xl border border-dark-800 bg-dark-900/40 p-5">
+            <p className="mb-3 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-dark-500">{t('ops.damage.split')}</p>
+            <div className="flex items-center gap-5">
+              <Anillo size={124}
+                centro={data.total_inspections?.toLocaleString(locale) ?? '—'}
+                sub={t('ops.inspections')}
+                segmentos={SEV_ORDER.map((k) => ({ k, n: breakdown?.[k] || 0, color: SEV_KEYS[k].color }))} />
+              <div className="space-y-1.5 text-[12px]">
+                {SEV_ORDER.map((k) => (
+                  <p key={k} className="flex items-center gap-2 text-dark-400">
+                    <span className="h-2 w-2 rounded-full" style={{ background: SEV_KEYS[k].color }} />
+                    {t(SEV_KEYS[k].key)}
+                    <b className="ml-auto tabular-nums text-dark-200">{breakdown?.[k] || 0}</b>
+                  </p>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Actividad real de los últimos 7 días. */}
+          <div className="rounded-2xl border border-dark-800 bg-dark-900/40 p-5">
+            <p className="mb-1 font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-dark-500">{t('ops.week')}</p>
+            <p className="mb-4 text-[12.5px] text-dark-500">
+              <b className="text-dark-100">{semana.reduce((a, d) => a + d.n, 0)}</b> {t('ops.inspections')}
+            </p>
+            <Barras dias={semana} locale={locale} />
+          </div>
+        </div>
+      </section>
 
       {/* ── 3 · LA FLOTA, EN UNA LÍNEA ───────────────────────────────────── */}
       <section className="rise border-t border-white/[0.05] py-7" style={{ animationDelay: '160ms' }}>

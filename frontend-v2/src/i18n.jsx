@@ -1397,6 +1397,14 @@ const DICT = {
   // porcentaje: una ruta al 97% con el conductor parado hace 40 minutos.
   'ops.wall':           { es: 'Rutas en la calle', en: 'Routes out there', fr: 'Tournées en cours', de: 'Routen unterwegs', it: 'Giri in strada', pt: 'Rotas na rua' },
   'ops.wall.more':      { es: '+{n} rutas más en Paquetes IA', en: '+{n} more routes in Package Intelligence', fr: '+{n} tournées de plus dans Package Intelligence', de: '+{n} weitere Routen in Package Intelligence', it: '+{n} altri giri in Package Intelligence', pt: '+{n} rotas mais em Package Intelligence' },
+  // La franja de flota. Etiquetas honestas: el reparto de daños es de TODAS
+  // las inspecciones, no de la semana, y así se dice.
+  'ops.availability':   { es: 'Disponibilidad', en: 'Availability', fr: 'Disponibilité', de: 'Verfügbarkeit', it: 'Disponibilità', pt: 'Disponibilidade' },
+  'ops.ready':          { es: 'Listas para salir', en: 'Ready to go out', fr: 'Prêtes à sortir', de: 'Einsatzbereit', it: 'Pronte a uscire', pt: 'Prontas para sair' },
+  'ops.damage.split':   { es: 'Daños · todas las inspecciones', en: 'Damage · all inspections', fr: 'Dommages · toutes les inspections', de: 'Schäden · alle Prüfungen', it: 'Danni · tutte le ispezioni', pt: 'Danos · todas as inspeções' },
+  'ops.inspections':    { es: 'inspecciones', en: 'inspections', fr: 'inspections', de: 'Prüfungen', it: 'ispezioni', pt: 'inspeções' },
+  'ops.week':           { es: 'Últimos 7 días', en: 'Last 7 days', fr: '7 derniers jours', de: 'Letzte 7 Tage', it: 'Ultimi 7 giorni', pt: 'Últimos 7 dias' },
+  'ops.route.done':     { es: 'terminada', en: 'finished', fr: 'terminée', de: 'beendet', it: 'finito', pt: 'terminada' },
   'ops.stalled':        { es: '{n} min sin entregar', en: '{n} min without delivering', fr: '{n} min sans livrer', de: '{n} Min. ohne Zustellung', it: '{n} min senza consegnare', pt: '{n} min sem entregar' },
   'ops.crit':           { es: 'críticos', en: 'critical', fr: 'critiques', de: 'kritisch', it: 'critici', pt: 'críticos' },
   'ops.decisions':      { es: 'Decisiones pendientes', en: 'Pending decisions', fr: 'Décisions en attente', de: 'Offene Entscheidungen', it: 'Decisioni in sospeso', pt: 'Decisões pendentes' },

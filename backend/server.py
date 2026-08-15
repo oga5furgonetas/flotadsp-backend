@@ -22399,11 +22399,23 @@ async def cortex_routes(day: str = "", center: str = "", _=Depends(require_admin
             r["driver_name"] = n.get("nombre")
             r["ficha_id"] = n.get("ficha_id")
         r["pendientes"] = r["total"] - r["delivered"]
+
+        # ¿SIGUE ESTA RUTA EN LA CALLE? Sólo si le quedan paquetes DENTRO DE LA
+        # FURGONETA (LOADED/ARRIVED).
+        #
+        # `pendientes` no sirve para esto: cuenta también los intentados, los
+        # devueltos y los no recogidos, que son fallos del día y no van a
+        # entregarse ya porque el conductor volvió a nave hace horas. Usarlo
+        # hacía que una ruta terminada a las 17:00 apareciera a la 1:00 de la
+        # madrugada como "parada hace 480 minutos" — una alarma que sonaba toda
+        # la noche en rutas que estaban perfectas. Lo cazó Dani mirando la
+        # pantalla a la 1 AM: "está claro que ya terminaron hace horas".
+        r["en_reparto"] = r["loaded"] > 0
         # Minutos desde la ultima entrega. Es un HECHO, no una prediccion: un
         # predictor de hora de fin no se sostiene con estos datos (ver
         # docs/PREDICTOR_RESCATES.md). Se muestra para que decida el gestor.
         r["min_sin_entregar"] = None
-        if r["ultima_entrega"] and r["pendientes"] > 0:
+        if r["ultima_entrega"] and r["en_reparto"]:
             ue = r["ultima_entrega"]
             if not isinstance(ue, datetime):
                 ue = _cortex_parse_dt(ue)
