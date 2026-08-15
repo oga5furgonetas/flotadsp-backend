@@ -26,9 +26,13 @@ está a 400 m de donde te mandaron".
    - Nominatim `/search` — solo desde el NAVEGADOR (403 al servidor, probado).
    - Photon `photon.komoot.io/api/?q=` — **PROBADO Y FUNCIONA**: devuelve
      `street`, `housenumber` ("30-32") y coordenadas. Índice OSM distinto.
-   - Cartociudad (IGN): el endpoint bueno NO es `/candidates` (devuelve `[]`
-     con una dirección completa). Probar `/geocoder/api/geocoder/find?q=` y
-     `findJsonp`. Es la fuente oficial y la más valiosa para España.
+   - Cartociudad (IGN): el endpoint bueno es
+     **`https://www.cartociudad.es/geocoder/api/geocoder/find?q=`** — PROBADO Y
+     FUNCIONA: devuelve `type: "portal"` con municipio y coordenadas.
+     `/candidates` devuelve `[]` aunque le pases la dirección completa: no
+     usarlo. Es la fuente oficial y la más valiosa para España, y su CORS ya
+     viene abierto (`Access-Control-Allow-Origin: *`).
+     Ya está en la CSP (`connect-src`) del 2026-08-15.
 3. **Acuerdo por CERCANÍA, no por texto**: si dos o más resultados caen a menos
    de ~150 m entre ellos, ese grupo es la ubicación confirmada. Con un solo
    resultado NO se afirma nada.
