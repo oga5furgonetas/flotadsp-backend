@@ -3,9 +3,10 @@ import { useT } from '../../i18n'
 import {
   Loader2, MapPin, NotebookPen, Check, ExternalLink, Save, X, Search,
 } from 'lucide-react'
-import { cortexPortales, cortexPortalNota, cortexPortalGeo } from '../api'
+import { cortexPortales, cortexPortalNota, cortexPortalGeo, cortexPortalGeodir } from '../api'
 import { lista } from '../../lib/lista'
 import { resolverDosFuentes, compararDirecciones } from '../../lib/geoPortal'
+import { buscarDireccion } from '../../lib/geoDireccion'
 
 /* ────────────────────────────────────────────────────────────────────────────
    Libreta de portales.
@@ -39,12 +40,20 @@ const VEREDICTO = {
   no_comparable: { k: 'lib.geo.nocmp',  cls: 'text-dark-500' },
 }
 
-function Fila({ p, onGuardar, onResolver, t }) {
+/* Por debajo de esto, la dirección y el punto al que mandan al conductor son el
+   mismo sitio: la celda ya son ~25 m y su centro puede caer en la acera de
+   enfrente. Llamar "desplazada" a una diferencia así sería ruido, y el gestor
+   dejaría de leer los avisos que sí importan. */
+const UMBRAL_LEJOS_M = 75
+
+function Fila({ p, onGuardar, onResolver, onBuscarReal, t }) {
   const [editando, setEditando] = useState(false)
   const [texto, setTexto] = useState(p.nota || '')
   const [guardando, setGuardando] = useState(false)
   const [resolviendo, setResolviendo] = useState(false)
   const [falloGeo, setFalloGeo] = useState(false)
+  const [buscandoReal, setBuscandoReal] = useState(false)
+  const [falloReal, setFalloReal] = useState(false)
 
   const guardar = async (resuelto = p.resuelto) => {
     setGuardando(true)
@@ -65,8 +74,21 @@ function Fila({ p, onGuardar, onResolver, t }) {
     } finally { setResolviendo(false) }
   }
 
+  /* Al revés que `resolver`: coge el TEXTO de la dirección y busca dónde está,
+     en varios buscadores a la vez. Sólo se guarda lo que confirman dos familias
+     de fuentes independientes; el resto se queda en "no lo sé". */
+  const buscarReal = async () => {
+    setBuscandoReal(true); setFalloReal(false)
+    try {
+      const r = await onBuscarReal(p)
+      if (r?.estado !== 'confirmada') setFalloReal(true)
+    } finally { setBuscandoReal(false) }
+  }
+
   const amazon = (p.direcciones || [])[0] || ''
   const veredicto = p.geo ? compararDirecciones(amazon, p.geo) : null
+  const real = p.geodir
+  const lejos = real && real.metros_amazon != null && real.metros_amazon > UMBRAL_LEJOS_M
   const grave = p.dias_distintos >= 4
   return (
     <div className={`rounded-lg border p-3 ${p.resuelto ? 'border-dark-800 bg-dark-900/30 opacity-60'
@@ -152,6 +174,48 @@ function Fila({ p, onGuardar, onResolver, t }) {
                 </button>
               )}
               {falloGeo && <p className="text-[10.5px] text-dark-500">{t('lib.geo.fail')}</p>}
+
+              {/* ── DÓNDE ESTÁ DE VERDAD ────────────────────────────────────
+                  Lo de arriba contrasta la coordenada. Esto busca la DIRECCIÓN
+                  y dice a cuántos metros del sitio al que mandan al conductor
+                  está en realidad. Ese número es lo único accionable: con él se
+                  le puede decir "está aquí, a 400 m de donde te mandaron". */}
+              {amazon && (
+                <div className="mt-1.5 border-t border-dark-800 pt-1.5">
+                  {real ? (
+                    <>
+                      <div className="flex gap-2 text-[11px] leading-snug">
+                        <span className="shrink-0 font-mono text-[9.5px] uppercase tracking-wider text-dark-600">
+                          {t('lib.dir.tit')}
+                        </span>
+                        <a href={mapa(real.lat, real.lng)} target="_blank" rel="noreferrer"
+                          className="min-w-0 text-brand-300 hover:underline">
+                          {real.display} <ExternalLink size={9} className="inline opacity-60" />
+                        </a>
+                      </div>
+                      <p className={`text-[10.5px] ${lejos ? 'font-semibold text-amber-300' : 'text-emerald-300/90'}`}>
+                        {t(lejos ? 'lib.dir.dist' : 'lib.dir.cerca')
+                          .replace('{m}', real.metros_amazon ?? '?')}
+                      </p>
+                      <p className="text-[10px] text-dark-600">
+                        {t('lib.dir.conf')
+                          .replace('{n}', (real.familias || []).length)
+                          .replace('{f}', (real.fuentes || []).join(', '))}
+                        {real.precision_acuerdo !== 'portal' && ` ${t('lib.dir.solocalle')}`}
+                      </p>
+                    </>
+                  ) : (
+                    <button onClick={buscarReal} disabled={buscandoReal}
+                      className="flex items-center gap-1 text-[11px] font-semibold text-brand-300 hover:underline disabled:opacity-50">
+                      {buscandoReal ? <Loader2 size={11} className="animate-spin" /> : <MapPin size={11} />}
+                      {t('lib.dir.ask')}
+                    </button>
+                  )}
+                  {falloReal && !real && (
+                    <p className="mt-1 text-[10.5px] text-dark-500">{t('lib.dir.no')}</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -241,6 +305,34 @@ export default function LibretaPortales({ center }) {
     return r
   }, [cargar])
 
+  /* Busca DÓNDE ESTÁ la dirección del portal y guarda sólo si dos familias de
+     fuentes independientes coinciden. Los demás estados —una sola fuente, sin
+     acuerdo, acuerdo inverosímil— no se guardan a propósito: media confirmación
+     escrita en la base de datos acaba llegando al conductor como si fuera
+     certeza, y ahí es donde se pierde un viaje. */
+  const buscarRealPortal = useCallback(async (p) => {
+    const amazon = (p.direcciones || [])[0] || ''
+    const r = await buscarDireccion(amazon, { lat: p.lat, lng: p.lng })
+    if (r.estado === 'confirmada' && r.punto) {
+      await cortexPortalGeodir({
+        celdas: p.celdas,
+        geodir: {
+          display: r.punto.display,
+          lat: r.punto.lat,
+          lng: r.punto.lng,
+          direccion_amazon: amazon,
+          familias: r.familias,
+          fuentes: r.resultados.map((v) => v.fuente),
+          precision: r.punto.precision,
+          precision_acuerdo: r.precision_acuerdo,
+          dispersion_m: r.dispersion_m,
+        },
+      })
+      cargar()
+    }
+    return r
+  }, [cargar])
+
   /* ── BUCLE AUTOMÁTICO ──────────────────────────────────────────────────────
      Va resolviendo solo los portales que aún no tienen dirección, de UNO EN UNO
      y con 2 s entre medias. Ese ritmo no es decorativo: la política de uso de
@@ -259,23 +351,35 @@ export default function LibretaPortales({ center }) {
     let vivo = true
     const tic = async () => {
       if (!vivo || enCurso.current || document.hidden) return
-      const pend = lista(datos.portales).find(
-        (p) => !p.geo && !p.resuelto && !yaVistos.current.has(p.celda))
-      if (!pend) return
-      yaVistos.current.add(pend.celda)   // una sola vez por portal, coincidan o no
+      /* UNA sola tarea por tick, nunca las dos. Cada una gasta su petición a
+         Nominatim, y encadenarlas en el mismo tick doblaría el ritmo justo por
+         encima del límite de 1/s que exige su política de uso. */
+      const ps = lista(datos.portales)
+      const pendGeo = ps.find(
+        (p) => !p.geo && !p.resuelto && !yaVistos.current.has(`geo:${p.celda}`))
+      const pendDir = ps.find(
+        (p) => !p.geodir && !p.resuelto && (p.direcciones || [])[0]
+          && !yaVistos.current.has(`dir:${p.celda}`))
+      const tarea = pendGeo ? { k: 'geo', p: pendGeo, f: resolverPortal }
+        : pendDir ? { k: 'dir', p: pendDir, f: buscarRealPortal } : null
+      if (!tarea) return
+      // Una sola vez por portal y tarea, salga confirmada o no: reintentar en
+      // bucle una dirección que no se puede confirmar sólo gasta peticiones.
+      yaVistos.current.add(`${tarea.k}:${tarea.p.celda}`)
       // El cerrojo se pone y se quita sin `await` de por medio: con await entre
       // la lectura y la escritura, dos ticks podrían colarse a la vez y
       // saltarse el límite de una petición por segundo de Nominatim.
       enCurso.current = true
-      resolverPortal(pend)
+      tarea.f(tarea.p)
         .catch(() => { /* la red falla: se sigue con el siguiente */ })
         .finally(() => { enCurso.current = false })
     }
     const id = setInterval(tic, 2000)
     return () => { vivo = false; clearInterval(id) }
-  }, [autoOn, datos, resolverPortal])
+  }, [autoOn, datos, resolverPortal, buscarRealPortal])
 
-  const pendientes = lista(datos?.portales).filter((p) => !p.geo && !p.resuelto).length
+  const pendientes = lista(datos?.portales)
+    .filter((p) => !p.resuelto && (!p.geo || (!p.geodir && (p.direcciones || [])[0]))).length
 
   if (err) return <p className="text-sm text-red-300">{err}</p>
   if (!datos) {
@@ -350,7 +454,8 @@ export default function LibretaPortales({ center }) {
       ) : (
         <div className="space-y-2">
           {portales.map((p) => (
-            <Fila key={p.celda} p={p} onGuardar={guardar} onResolver={resolverPortal} t={t} />
+            <Fila key={p.celda} p={p} onGuardar={guardar} onResolver={resolverPortal}
+              onBuscarReal={buscarRealPortal} t={t} />
           ))}
         </div>
       )}

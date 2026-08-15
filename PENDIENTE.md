@@ -1,6 +1,55 @@
 # Lo que queda — retomar desde aquí
 
-## 0 · LO PRIMERO: geolocalizar la dirección (va al revés de lo construido)
+## 0 · HECHO Y DESPLEGADO (2026-08-15) — geolocalizar la dirección
+
+`frontend-v2/src/lib/geoDireccion.js` + `POST /cortex/portales/geodir`. Se
+busca el TEXTO de `stop_address` en Nominatim, Photon y Cartociudad a la vez y
+se confirma por CERCANÍA entre coordenadas. Sale en la Libreta (gestor) y en
+`/cortex/portales/mi-ruta` (conductor), con la distancia al punto de Amazon.
+Corre solo en el bucle de la Libreta, 1 portal cada 2 s.
+
+**Lo aprendido probando contra los servicios reales — no volver a tropezar:**
+
+- **Photon y Nominatim son LA MISMA FUENTE.** Los dos leen OpenStreetMap. En
+  una prueba real devolvieron la coordenada idéntica, a **0 m**. Si cuentan como
+  dos, cualquier error de OSM se "confirma" a sí mismo. Por eso se vota por
+  FAMILIA (`osm` / `ign`) y no por servicio, y hacen falta dos familias. En la
+  práctica: confirmar exige que Cartociudad esté de acuerdo con OSM.
+- **Photon devuelve 400 con `lang=es`** (sólo admite default/de/en/fr). Costaba
+  la fuente entera y el fallo se veía como "no lo sé", no como error.
+- **Photon marca las calles con `type:'street'` y el nombre en `name`, no en
+  `street`.** Mirando sólo `street` se tiraban aciertos buenos y no se
+  confirmaba casi nada.
+- **Cartociudad NO admite la dirección completa.** Con coma + código postal
+  devuelve VACÍO; con el CP pegado sin comas devuelve **otra calle distinta**
+  marcada `type:portal`. Sólo responde bien a "vía número, municipio", y por eso
+  la dirección se despieza antes de preguntar.
+- **Cartociudad se equivoca de municipio y lo afirma igual:** a "AVENIDA DA
+  CORUÑA 12, 27003 LUGO" contestó un portal en **Guitiriz**, a 40 km. Photon
+  acertó en Lugo, no coincidieron y no se afirmó nada. Es la prueba de que una
+  sola fuente produciría falsos positivos.
+- **El resultado más peligroso es el centro del municipio.** Un buscador que no
+  encuentra la dirección devuelve el pueblo; tres haciendo eso caen a metros
+  entre sí y fabrican un acuerdo perfecto sobre un punto que no es ninguna
+  dirección. Por eso nada por debajo de 'calle' vota.
+
+**Medido (10 direcciones gallegas reales, formato Cortex, sólo 2 fuentes porque
+Nominatim da 403 al servidor): 5 confirmadas, 5 no.** Los 5 rechazos son
+correctos uno por uno. En el navegador vota también Nominatim.
+
+**SIN COMPROBAR (dicho a propósito):** no se ha podido probar con `stop_address`
+REALES de la BD — no hay credenciales de Mongo en este equipo. El despiece está
+probado contra el formato que produce `_cortex_addr_str`, pero las direcciones
+de verdad traerán casos que estas no tienen (rural gallego con lugar y
+parroquia, sobre todo). Tampoco se ha visto la pantalla con datos reales
+dentro: hace falta sesión de admin. **Primera comprobación al abrir el panel:**
+entrar en Paquetes IA → Portales y mirar cuántos portales quedan en "no se ha
+podido confirmar"; si son casi todos, el problema estará en el despiece de las
+direcciones rurales, no en el consenso.
+
+---
+
+## 0-bis · El diseño original (queda como referencia)
 
 **Me equivoqué de dirección y hay que corregirlo.** Lo que está hecho resuelve
 `coordenada → dirección` (comprobar si lo que dice Amazon cuadra con el mapa).

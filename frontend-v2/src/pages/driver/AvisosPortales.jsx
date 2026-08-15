@@ -71,6 +71,33 @@ export default function AvisosPortales() {
                   )}
                 </p>
               )}
+              {/* ── DÓNDE ESTÁ DE VERDAD ────────────────────────────────────
+                  Sólo llega aquí lo que confirmaron dos fuentes independientes
+                  entre sí; lo dudoso se queda en el panel del gestor. Lo que el
+                  conductor necesita en la calle no es la dirección, que ya la
+                  tiene: es CUÁNTO se ha desplazado respecto al punto al que le
+                  manda la app, y un enlace para ir al bueno. */}
+              {a.real && (
+                <div className="mt-2 rounded-lg border border-emerald-500/25 bg-emerald-500/[0.07] p-2">
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-300/80">
+                    {t('av.real.tit')}
+                  </p>
+                  <p className="text-[12.5px] leading-relaxed text-dark-100">{a.real.display}</p>
+                  {a.real.metros != null && (
+                    <p className="text-[11px] font-semibold text-emerald-300">
+                      {t('av.real.dist').replace('{m}', a.real.metros)}
+                    </p>
+                  )}
+                  {a.real.precision_acuerdo !== 'portal' && (
+                    <p className="text-[10px] text-amber-400/70">{t('lib.dir.solocalle')}</p>
+                  )}
+                  <a href={`https://www.google.com/maps?q=${a.real.lat},${a.real.lng}`}
+                    target="_blank" rel="noreferrer"
+                    className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-300">
+                    <MapPin size={11} /> {t('av.real.ir')}
+                  </a>
+                </div>
+              )}
               <a href={`https://www.google.com/maps?q=${a.lat},${a.lng}`}
                 target="_blank" rel="noreferrer"
                 className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold text-brand-300">
