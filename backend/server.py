@@ -987,6 +987,79 @@ async def seed_initial_admin():
         logger.warning("R2 NO configurado — usando almacenamiento local (no recomendado en producción)")
 
 
+async def _dedupe_cortex_stations(tdb):
+    """Deja UN solo documento por service_area_id en cortex_stations.
+
+    De dónde salían los duplicados: la ingesta de la extensión escribe el mapeo
+    con `update_one(..., upsert=True)` y llega en rafagas (miles de paquetes en
+    cola). Dos upserts a la vez que no encuentran documento INSERTAN los dos, y
+    el índice de service_area_id no era único, así que nadie lo impedía.
+
+    Lo que provocaba, y costó encontrar porque todo respondía 200:
+      · La asignación manual del panel hace `update_one`: tocaba UNO de los
+        duplicados. La lectura arma `{sid: doc}` recorriendo todos, así que se
+        quedaba con el ÚLTIMO — a veces el otro. Resultado: pulsabas el centro,
+        el backend devolvía 200 y en pantalla no cambiaba nada.
+      · Peor: como el duplicado que ganaba no tenía `manual`, la extensión lo
+        volvía a pisar en cada captura, y la resincronización propagaba ese
+        centro a decenas de miles de paquetes. El mapeo oscilaba solo.
+
+    Se conserva el documento MANUAL si lo hay: es el único que decidió una
+    persona, y es justo el que la extensión no puede tocar.
+    """
+    try:
+        vistos: dict = {}
+        sobran: list = []
+        async for d in tdb.cortex_stations.find({}):
+            sid = (d.get("service_area_id") or "").strip()
+            if not sid:
+                continue
+            previo = vistos.get(sid)
+            if previo is None:
+                vistos[sid] = d
+                continue
+            # Gana el manual; a igualdad, el que ya estaba.
+            if d.get("manual") and not previo.get("manual"):
+                sobran.append(previo["_id"])
+                vistos[sid] = d
+            else:
+                sobran.append(d["_id"])
+        if sobran:
+            await tdb.cortex_stations.delete_many({"_id": {"$in": sobran}})
+            logger.warning(f"cortex_stations: {len(sobran)} duplicados eliminados")
+    except Exception as e:
+        logger.error(f"dedupe cortex_stations: {e}")
+
+
+async def _idx_unico(coleccion, campo: str):
+    """Índice ÚNICO sobre un campo, aunque ya exista uno normal con ese nombre.
+
+    `create_index(..., unique=True)` sobre una colección que ya tiene el índice
+    NO único con el mismo nombre no lo convierte: falla con el código 86
+    (IndexKeySpecsConflict) y se queda todo como estaba. Pasó aquí: el índice
+    seguía sin ser único y los duplicados podían volver a aparecer en cuanto la
+    extensión mandara otra ráfaga.
+
+    Así que hay que tirar el viejo y crearlo de nuevo. Se hace DESPUÉS de haber
+    limpiado los duplicados; si aún quedara alguno, la creación falla y se
+    queda sin índice único, que es como estaba: nunca peor.
+    """
+    nombre = f"{campo}_1"
+    try:
+        await coleccion.create_index(campo, unique=True)
+        return
+    except Exception as e:
+        if getattr(e, "code", None) not in (85, 86):
+            logger.error(f"Indice unico {coleccion.name}.{campo}: {e}")
+            return
+    try:
+        await coleccion.drop_index(nombre)
+        await coleccion.create_index(campo, unique=True)
+        logger.warning(f"Indice {coleccion.name}.{campo} recreado como UNICO")
+    except Exception as e:
+        logger.error(f"Indice unico {coleccion.name}.{campo} (recrear): {e}")
+
+
 async def _idx(coleccion, *args, **kwargs):
     """Crea un indice sin que un fallo tumbe a los demas.
 
@@ -1032,7 +1105,10 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.cortex_packages, "center")
     await _idx(tdb.cortex_packages, "service_area_id")
     await _idx(tdb.cortex_packages, "state")
-    await _idx(tdb.cortex_stations, "service_area_id")
+    # OJO: primero se limpian los duplicados y LUEGO se pone el índice único.
+    # Al revés, la creación falla (ya hay duplicados) y todo se queda igual.
+    await _dedupe_cortex_stations(tdb)
+    await _idx_unico(tdb.cortex_stations, "service_area_id")
     # cortex_events es un registro que SOLO se escribe (0 lecturas en todo el
     # codigo). Se le pone caducidad de 90 dias para que no crezca sin fin en un
     # Atlas de 512 MB: conserva la traza reciente y libera el resto solo.
@@ -21631,7 +21707,18 @@ async def cortex_stations(_=Depends(require_admin)):
     se veía. El mapeo manual sigue mandando sobre todo lo demás.
     """
     stations = await db.cortex_stations.find({}, {"_id": 0}).to_list(200)
-    smap = {s["service_area_id"]: s for s in stations if s.get("service_area_id")}
+    # Si por lo que sea quedan dos documentos con el mismo service_area_id,
+    # MANDA EL MANUAL. Un `{s["service_area_id"]: s for s in ...}` se quedaba
+    # con el último que devolviera Mongo, que podía ser el que escribió la
+    # extensión: por eso una asignación hecha a mano parecía no guardarse.
+    smap: dict = {}
+    for s in stations:
+        sid = s.get("service_area_id")
+        if not sid:
+            continue
+        previo = smap.get(sid)
+        if previo is None or (s.get("manual") and not previo.get("manual")):
+            smap[sid] = s
 
     cur = db.cortex_packages.aggregate([
         {"$match": {"service_area_id": {"$nin": [None, ""]}}},
@@ -21708,8 +21795,17 @@ async def cortex_assign_station(body: dict = Body(...), _=Depends(require_admin)
         raise HTTPException(400, "Falta service_area_id o center")
     # manual=True: este mapeo lo decidió una persona y las capturas de la
     # extensión ya no pueden pisarlo (antes se sobrescribía cada 2 minutos).
-    await db.cortex_stations.update_one(
-        {"service_area_id": sid}, {"$set": {"center": center, "manual": True}}, upsert=True)
+    #
+    # update_MANY, no update_one: si quedara algún duplicado de service_area_id
+    # (los creaba una carrera de upserts de la ingesta), update_one tocaba sólo
+    # uno y la lectura podía quedarse con el otro. El botón devolvía 200 y no
+    # cambiaba nada en pantalla. Con update_many, si hay dos documentos se
+    # quedan los dos diciendo lo mismo y la ambigüedad desaparece.
+    r_map = await db.cortex_stations.update_many(
+        {"service_area_id": sid}, {"$set": {"center": center, "manual": True}})
+    if r_map.matched_count == 0:
+        await db.cortex_stations.update_one(
+            {"service_area_id": sid}, {"$set": {"center": center, "manual": True}}, upsert=True)
 
     # SOLO esta estación, y se responde. Antes aquí se hacía una
     # re-sincronización GLOBAL —un update_many por CADA estación, sobre ~165.000
@@ -21745,15 +21841,41 @@ async def cortex_assign_station(body: dict = Body(...), _=Depends(require_admin)
 
 @api_router.get("/cortex/days")
 async def cortex_days(center: str = "", _=Depends(require_admin)):
-    """Días con datos, para el selector del panel (más reciente primero)."""
+    """Días con datos, para el selector del panel (más reciente primero).
+
+    Se agrupa EN MONGO. Antes se bajaban los paquetes a Python con
+    `.to_list(20000)` y se contaban aquí, y eso tenía un fallo que se notaba
+    justo cuando más duele: con ~167.000 paquetes en la colección, el corte de
+    20.000 se quedaba con los documentos MÁS VIEJOS en orden natural, así que
+    **el día de hoy no aparecía nunca en el selector**. El panel, al no
+    encontrar hoy en la lista, saltaba solo a la fecha más reciente que sí
+    salía y enseñaba "Ayer". Los contadores por día también eran falsos (1 ó 2
+    paquetes en días de 3.000).
+
+    Es el mismo antipatrón que ya se corrigió en /cortex/stations: contar en
+    Python lo que Mongo cuenta solo. Sin límite de documentos y sin traerse
+    nada, no vuelve a degradarse según crezca la colección.
+    """
     q = await _cortex_scope("", center)
-    pkgs = await db.cortex_packages.find(q, {"_id": 0, "service_day": 1, "updated_at": 1}).to_list(20000)
-    counts = {}
-    for p in pkgs:
-        d = (p.get("service_day") or str(p.get("updated_at") or "")[:10]) or None
-        if d:
-            counts[d] = counts.get(d, 0) + 1
-    days = sorted(({"day": k, "n": v} for k, v in counts.items()), key=lambda x: x["day"], reverse=True)
+    cur = db.cortex_packages.aggregate([
+        {"$match": q},
+        # El día bueno es `service_day`; si falta, la fecha de captura. Se
+        # normaliza aquí para que el $group no tenga que decidir nada.
+        {"$project": {"d": {"$cond": [
+            {"$and": [{"$ne": ["$service_day", None]}, {"$ne": ["$service_day", ""]}]},
+            "$service_day",
+            {"$substr": [{"$ifNull": [{"$toString": "$updated_at"}, ""]}, 0, 10]},
+        ]}}},
+        {"$match": {"d": {"$nin": [None, ""]}}},
+        {"$group": {"_id": "$d", "n": {"$sum": 1}}},
+        {"$sort": {"_id": -1}},
+        # Un selector de días no necesita más de medio año; el resto sería
+        # peso muerto en cada carga del panel.
+        {"$limit": 180},
+    ], allowDiskUse=True)
+    # `.get()` siempre: $group omite la clave _id cuando el campo no existe
+    # (gotcha 9), y un KeyError aquí tumbaría el selector entero.
+    days = [{"day": r.get("_id"), "n": r.get("n", 0)} async for r in cur if r.get("_id")]
     return {"days": days, "today": datetime.now(timezone.utc).strftime("%Y-%m-%d")}
 
 

@@ -114,7 +114,28 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    no aparece y `#root` sigue vacío, repara la caché y recarga UNA vez (cerrojo
    en `sessionStorage.arranque_reparado`: un bucle de recargas en manos de
    alguien repartiendo sería peor que la pantalla en blanco).
-9. **Mongo OMITE la clave del `_id` en un `$group` cuando el campo no existe**
+9. **`update_one(..., upsert=True)` sin índice ÚNICO crea duplicados** en cuanto
+   hay concurrencia: dos upserts que no encuentran documento insertan los dos.
+   Pasó en `cortex_stations` (la extensión ingesta en ráfagas de miles). El
+   síntoma no se parece a la causa: la asignación manual del panel hacía
+   `update_one` y tocaba UNO de los duplicados, mientras la lectura montaba
+   `{sid: doc}` recorriéndolos todos y **se quedaba con el último**, que podía
+   ser el otro. Resultado: pulsabas el centro, el backend devolvía **200** y en
+   pantalla no cambiaba nada; y como el ganador no tenía `manual`, la extensión
+   lo repisaba en cada captura y la resincronización propagaba ese centro a
+   53.000 paquetes — el mapeo oscilaba solo. Reglas: índice único en todo campo
+   que sea clave de negocio, `update_many` cuando puedan existir duplicados, y
+   al leer preferir explícitamente el documento manual.
+   **Ojo al crear el único**: `create_index(campo, unique=True)` sobre un índice
+   normal que ya existe con ese nombre NO lo convierte, falla con el código 86
+   y se queda todo igual (hay que `drop_index` y recrear — `_idx_unico`). Y
+   primero se limpian los duplicados: si no, la creación falla.
+10. **Contar en Python lo que Mongo cuenta solo**: `find(...).to_list(20000)` y
+   agrupar a mano. `/cortex/days` lo hacía y con ~167.000 paquetes el corte se
+   quedaba con los MÁS VIEJOS, así que **el día de hoy no salía nunca** en el
+   selector y el panel se abría en "Ayer"; los contadores por día también eran
+   falsos (1 paquete en días de 3.000). Se agrupa con `$group` y sin límite.
+11. **Mongo OMITE la clave del `_id` en un `$group` cuando el campo no existe**
    en el documento (no la pone a `null`). `r["_id"]["cond"]` revienta con
    `KeyError` en cuanto hay un documento sin ese campo — pasó con los 94
    paquetes de Cortex sin `driver_id`. Usar siempre `.get()`.

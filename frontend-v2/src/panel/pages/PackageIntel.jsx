@@ -350,12 +350,15 @@ export default function PackageIntel() {
       .catch(() => {})
   }, [])
 
-  /* `loadStations` va DENTRO de load: sin esto, "Repartir automáticamente"
-     reasignaba las estaciones en el servidor, avisaba de cuántas había
-     resuelto… y dejaba la pantalla enseñando el reparto viejo. Parecía que no
-     había hecho nada. El refresco de cada 30 s tampoco las miraba nunca. */
-  const load = useCallback(() => { loadCore(); loadPkgs(); loadStations() },
-    [loadCore, loadPkgs, loadStations])
+  /* `load` NO refresca las estaciones a propósito, aunque lo pida el cuerpo.
+     Corre cada 30 s, y el backend ordena las estaciones por número de paquetes;
+     ese número cambia en cuanto la resincronización re-etiqueta, así que las
+     filas SE REORDENAN solas. Si eso pasa mientras alguien va a pulsar el
+     centro de una estación, el clic aterriza en otra fila o en ninguna — que es
+     exactamente el "pulso el botón y no pasa nada" de siempre.
+     Quien sí las refresca es cada acción que las cambia: asignar una estación
+     y "Repartir automáticamente". */
+  const load = useCallback(() => { loadCore(); loadPkgs() }, [loadCore, loadPkgs])
 
   // Cambiar de centro arriba: volver a la vista de rutas de ese centro.
   useEffect(() => { setActiveRoute(null); setSel(null) }, [center])
@@ -394,7 +397,14 @@ export default function PackageIntel() {
      ('supuesto') dentro del panel y ahí se queda. */
   const unmapped = stations.filter(s => !s.center)
   const mezcladas = stations.filter(s => s.mezclado)
-  const conflictos = estInfo.prefijos_en_conflicto || []
+  /* Un prefijo repartido entre dos centros sólo es sospechoso mientras alguna
+     de esas estaciones esté SIN confirmar. Si una persona ya ratificó las dos,
+     no es un fallo: Amazon reutiliza prefijos entre estaciones de verdad —
+     medido aquí, CA_A existe a la vez en DGA1 (A Coruña) y en DGA2, a 130 km.
+     Sin este filtro el aviso se quedaba fijo para siempre denunciando algo
+     correcto, que es como se pierde la costumbre de leer los avisos. */
+  const conflictos = (estInfo.prefijos_en_conflicto || []).filter(
+    (p) => stations.some((s) => (s.prefijos || []).includes(p) && !s.manual))
   const pendientesEst = unmapped.length + mezcladas.length + conflictos.length
   const assignStation = async (sid, c) => {
     setAssigning(sid)
@@ -564,7 +574,10 @@ export default function PackageIntel() {
                   const d = r.data || {}
                   alert(`${d.aplicadas || 0} estación(es) resueltas por geografía.`
                     + (d.sin_resolver?.length ? `\n${d.sin_resolver.length} sin resolver (ambiguas): se quedan como estaban.` : ''))
-                  load()
+                  // loadStations() explícito: `load` ya no las refresca, y sin
+                  // esto el reparto se aplicaba en el servidor y la pantalla
+                  // seguía enseñando el mapeo viejo.
+                  load(); loadStations()
                 } catch (e) {
                   alert(e?.response?.data?.detail || 'No se pudo repartir automáticamente.')
                 } finally { setAssigning(null) }

@@ -164,6 +164,35 @@ resuelto. Lo que sí está arreglado es que el resultado se vea. Ojo a que
 `disabled={!!assigning}` deshabilita los botones de TODAS las estaciones
 mientras una está en curso, y en la de 112.311 paquetes eso puede tardar.
 
+## 2-ter · RESUELTO de raíz (2026-08-15, con el navegador de Dani)
+
+El botón SÍ mandaba la petición y SÍ devolvía 200. Lo que fallaba es que **no
+persistía**: había un DUPLICADO en `cortex_stations` para el mismo
+`service_area_id` (índice no único + upserts concurrentes de la extensión). El
+POST hacía `update_one` sobre uno y la lectura se quedaba con el otro. Como el
+que ganaba no tenía `manual`, la extensión lo repisaba en cada captura y
+`_resincronizar` propagaba ese centro: se vio EN DIRECTO cómo 53.000 paquetes
+de la estación 2bf00778 se movían entre DGA1 y OGA5.
+
+Arreglado: dedupe al arrancar + índice ÚNICO (con `drop_index` previo, porque
+convertir uno existente falla con código 86) + `update_many` al asignar + la
+lectura prefiere el documento manual. Verificado en producción: las tres
+estaciones quedan `manual=true`, cada una con sus paquetes en un solo centro, y
+aguanta con la extensión ingiriendo.
+
+La estación 2bf00778 (rutas CA_A) era **DGA1**, confirmado por Dani: su
+centroide está a 2,2 km de DGA1 y a ~52 km de OGA5.
+
+También: el `CA_A` en conflicto es legítimo (DGA1 y DGA2 usan el mismo prefijo
+y están a 130 km). El aviso ahora sólo cuenta si alguna de las estaciones
+implicadas está SIN confirmar.
+
+**Pendiente de mirar algún día:** el reordenamiento de filas. El backend ordena
+las estaciones por nº de paquetes y ese nº cambia al re-etiquetar, así que las
+filas bailan y un clic puede caer en otra. Por eso `load()` (cada 30 s) ya NO
+refresca las estaciones. Si algún día vuelve a dar guerra, el arreglo de verdad
+es ordenar por algo estable (service_area_id).
+
 ## 2 · El botón de asignar estación no responde
 
 En Paquetes IA, los botones OGA5/DGA1/DGA2 de cada estación: Dani clica y no
