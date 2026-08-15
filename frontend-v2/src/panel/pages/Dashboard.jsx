@@ -77,6 +77,56 @@ function Mini({ n, label, alerta }) {
   )
 }
 
+/* ── MURO DE RUTAS ────────────────────────────────────────────────────────────
+   Una tarjeta por ruta con su conductor y su avance. No es decoración: es la
+   pantalla que un DSP enseña cuando le preguntan "¿cómo va el día?".
+
+   Lo que la hace útil y no un adorno es `min_sin_entregar`, que ya calculaba el
+   backend y nadie estaba usando: los minutos que lleva una ruta sin entregar
+   nada teniendo paquetes pendientes. Un conductor parado no aparece en ningún
+   porcentaje —su ruta puede ir al 97%— y aquí salta a la vista.
+
+   Se pincha y lleva a Paquetes IA. Una tarjeta que no lleva a ningún sitio
+   obliga a buscar a mano lo que acabas de ver. */
+function RutaCard({ r, onIr, t }) {
+  const pct = r.total ? Math.round((r.delivered / r.total) * 100) : 0
+  const parada = r.min_sin_entregar != null && r.min_sin_entregar >= 40
+  const fin = r.pendientes === 0
+  const tono = fin ? 'emerald' : parada ? 'red' : r.critical > 0 ? 'amber' : 'brand'
+  const C = {
+    emerald: { b: 'border-emerald-500/25', bar: 'bg-emerald-400/80', t: 'text-emerald-300' },
+    red:     { b: 'border-red-500/40',     bar: 'bg-red-400/80',     t: 'text-red-300' },
+    amber:   { b: 'border-amber-500/30',   bar: 'bg-amber-400/80',   t: 'text-amber-300' },
+    brand:   { b: 'border-dark-800',       bar: 'bg-brand-400/70',   t: 'text-dark-400' },
+  }[tono]
+
+  return (
+    <button onClick={onIr}
+      className={`group overflow-hidden rounded-xl border ${C.b} bg-dark-900/50 p-3 text-left transition-all hover:border-dark-600 hover:bg-dark-900`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="font-mono text-[11px] font-bold tracking-wide text-dark-200">{r.route_code}</span>
+        <span className={`text-[11px] font-semibold tabular-nums ${C.t}`}>{pct}%</span>
+      </div>
+      <div className="mt-0.5 truncate text-[11px] text-dark-500">
+        {r.driver_name || t('dh.sinConductor')}
+      </div>
+
+      <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-white/[0.06]">
+        <div className={`h-full rounded-full ${C.bar} transition-all duration-700`} style={{ width: `${pct}%` }} />
+      </div>
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[10px] text-dark-600">
+        <span className="tabular-nums">{r.delivered}/{r.total}</span>
+        {parada && (
+          <span className="font-semibold text-red-300">{t('ops.stalled').replace('{n}', r.min_sin_entregar)}</span>
+        )}
+        {r.missing > 0 && <span className="font-semibold text-red-300">{r.missing} missing</span>}
+        {r.critical > 0 && !parada && <span className="text-amber-300/90">{r.critical} {t('ops.crit')}</span>}
+      </div>
+    </button>
+  )
+}
+
 const SEV_KEYS = {
   sin_danos: { key: 'sev.sin_danos', color: '#34d399', bg: 'bg-emerald-500/15', text: 'text-emerald-300' },
   leve:      { key: 'sev.leve',      color: '#fbbf24', bg: 'bg-yellow-500/15',  text: 'text-yellow-300' },
@@ -366,6 +416,18 @@ export default function Dashboard() {
         setNowLive({
           missing: o.data?.missing_now ?? null,
           routes: rutas.length || null,
+          /* El muro de rutas. Se ordena por lo que hay que MIRAR, no por
+             nombre: primero las paradas (minutos desde la última entrega),
+             luego las que van más retrasadas. Por código alfabético, lo
+             urgente queda en cualquier sitio de la lista. */
+          lista: [...rutas].sort((a, b) => {
+            const pa = a.min_sin_entregar ?? -1
+            const pb = b.min_sin_entregar ?? -1
+            if (pb !== pa) return pb - pa
+            const ra = a.total ? a.delivered / a.total : 1
+            const rb = b.total ? b.delivered / b.total : 1
+            return ra - rb
+          }),
           enCurso,
           total,
           entregados,
@@ -575,6 +637,34 @@ export default function Dashboard() {
             <div className="h-full rounded-full bg-emerald-400/80 transition-all duration-700"
               style={{ width: `${pctEntrega}%` }} />
           </div>
+        </section>
+      )}
+
+      {/* ── 1-bis · EL MURO DE RUTAS ─────────────────────────────────────────
+          Las rutas del día a la vez, ordenadas por lo que hay que mirar: las
+          paradas primero. Cada tarjeta lleva a su ruta. */}
+      {nowLive?.lista?.length > 0 && (
+        <section className="rise border-t border-white/[0.05] py-7" style={{ animationDelay: '70ms' }}>
+          <div className="mb-3 flex items-baseline justify-between gap-3">
+            <h2 className="text-[15px] font-semibold text-dark-100">
+              {t('ops.wall')}
+              <span className="ml-2 text-[13px] font-normal tabular-nums text-dark-500">{nowLive.lista.length}</span>
+            </h2>
+            <button onClick={() => navTop('/panel/paquetes')}
+              className="text-[12px] text-dark-600 transition-colors hover:text-dark-300">
+              {t('dash.see.all')} →
+            </button>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {nowLive.lista.slice(0, 12).map((r) => (
+              <RutaCard key={r.route_code} r={r} t={t} onIr={() => navTop('/panel/paquetes')} />
+            ))}
+          </div>
+          {nowLive.lista.length > 12 && (
+            <p className="mt-2.5 text-[11.5px] text-dark-600">
+              {t('ops.wall.more').replace('{n}', nowLive.lista.length - 12)}
+            </p>
+          )}
         </section>
       )}
 

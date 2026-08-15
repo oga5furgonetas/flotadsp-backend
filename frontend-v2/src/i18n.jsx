@@ -1393,6 +1393,12 @@ const DICT = {
   'ops.nodir':          { es: 'sin dirección resuelta', en: 'with unresolved address', fr: 'sans adresse résolue', de: 'ohne geklärte Adresse', it: 'senza indirizzo risolto', pt: 'sem morada resolvida' },
   // Cada decisión dice POR QUÉ importa. Sin eso, una lista de números no
   // permite priorizar y todo acaba pareciendo igual de urgente.
+  // El muro de rutas. `ops.stalled` es la alarma que no sale en ningún
+  // porcentaje: una ruta al 97% con el conductor parado hace 40 minutos.
+  'ops.wall':           { es: 'Rutas en la calle', en: 'Routes out there', fr: 'Tournées en cours', de: 'Routen unterwegs', it: 'Giri in strada', pt: 'Rotas na rua' },
+  'ops.wall.more':      { es: '+{n} rutas más en Paquetes IA', en: '+{n} more routes in Package Intelligence', fr: '+{n} tournées de plus dans Package Intelligence', de: '+{n} weitere Routen in Package Intelligence', it: '+{n} altri giri in Package Intelligence', pt: '+{n} rotas mais em Package Intelligence' },
+  'ops.stalled':        { es: '{n} min sin entregar', en: '{n} min without delivering', fr: '{n} min sans livrer', de: '{n} Min. ohne Zustellung', it: '{n} min senza consegnare', pt: '{n} min sem entregar' },
+  'ops.crit':           { es: 'críticos', en: 'critical', fr: 'critiques', de: 'kritisch', it: 'critici', pt: 'críticos' },
   'ops.decisions':      { es: 'Decisiones pendientes', en: 'Pending decisions', fr: 'Décisions en attente', de: 'Offene Entscheidungen', it: 'Decisioni in sospeso', pt: 'Decisões pendentes' },
   'ops.cannot.wait':    { es: 'no aguantan a mañana', en: 'can’t wait until tomorrow', fr: 'ne peuvent pas attendre demain', de: 'können nicht bis morgen warten', it: 'non possono aspettare domani', pt: 'não aguentam até amanhã' },
   'ops.why.itv':        { es: 'Con la ITV vencida la furgoneta no puede salir a ruta.', en: 'With the inspection expired the van cannot go out on route.', fr: 'Contrôle technique périmé : la camionnette ne peut pas rouler.', de: 'Mit abgelaufener HU darf der Transporter nicht raus.', it: 'Con la revisione scaduta il furgone non può uscire.', pt: 'Com a inspeção vencida a carrinha não pode sair.' },
