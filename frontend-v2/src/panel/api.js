@@ -282,6 +282,8 @@ export const cortexPortalGeo = (body) => api.post('/cortex/portales/geo', body)
 /* Dónde está DE VERDAD la dirección, buscada por texto en varios geocodificadores
    a la vez. Guarda sólo lo confirmado por dos familias de fuentes distintas. */
 export const cortexPortalGeodir = (body) => api.post('/cortex/portales/geodir', body)
+/* Los "no puedo encontrar la dirección" de HOY, uno a uno y en vivo. */
+export const cortexDireccionesHoy = (params) => api.get('/cortex/direcciones-hoy', { params })
 export const cortexDiagnostico = () => api.get('/cortex/diagnostico')
 /* IDs de Amazon que reparten sin ficha de conductor, con sugerencia de a quien
    corresponden. La asignacion reutiliza updateDriver: driver_id ya esta en la

@@ -10,6 +10,7 @@ import {
   cortexStations, cortexAssignStation, cortexStationsAuto,
 } from '../api'
 import LibretaPortales from '../components/LibretaPortales'
+import DireccionesHoy from '../components/DireccionesHoy'
 import EsquemaCortex from '../components/EsquemaCortex'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { hoyLocal, isoLocal } from '../../lib/fecha'
@@ -630,6 +631,11 @@ export default function PackageIntel() {
           </div>
         </div>
       )}
+
+      {/* Los "no puedo encontrar la dirección" del día, en vivo. Va ARRIBA de
+          los KPIs a propósito: es lo único de esta pantalla sobre lo que aún se
+          puede actuar hoy; los KPIs se miran, esto se atiende. */}
+      {vista !== 'portales' && <DireccionesHoy center={center} day={day} />}
 
       {/* KPIs */}
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">

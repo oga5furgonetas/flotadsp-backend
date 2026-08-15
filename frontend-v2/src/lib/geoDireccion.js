@@ -51,6 +51,30 @@ export const RADIO_ACUERDO_M = 150
    distancia tampoco sería accionable para quien está repartiendo. */
 export const MAX_KM_PLAUSIBLE = 25
 
+/* ── NIVEL ZONA ───────────────────────────────────────────────────────────────
+   Son DOS preguntas distintas y hasta ahora sólo se contestaba la difícil:
+
+     a) ¿dónde está EXACTAMENTE el portal?  → hace falta acuerdo fino (150 m).
+     b) ¿me están mandando al sitio equivocado?  → basta con saber en qué calle
+        está la dirección, aunque no se sepa en qué número.
+
+   La (b) es la que hace perder el viaje, y se puede responder con mucha menos
+   precisión. Medido en los portales reales: 'Manuel Beiras 1B' (25 fallos en 12
+   días) sale en las tres fuentes en la misma calle de Santiago, pero repartidas
+   349 m — OpenStreetMap da el centro de una calle larga y el IGN da el portal 1,
+   así que nunca bajan de 150 m. Mientras tanto Amazon manda al conductor a
+   5,6 km, al Polígono do Tambre. El sistema lo sabía y se callaba.
+
+   Con el nivel zona se dice lo que se sabe y sólo lo que se sabe: "la calle está
+   aquí, a X de donde te mandan", etiquetado como zona y NUNCA como portal
+   exacto. No inventa una coordenada de portal; avisa de que el viaje va mal.
+   ───────────────────────────────────────────────────────────────────────────── */
+export const RADIO_ZONA_M = 1000
+
+/* Por debajo de esto el punto de Amazon ya está DENTRO de la zona: no hay nada
+   que avisar, y decir algo sería ruido sobre un viaje que estaba bien. */
+export const UMBRAL_DESVIO_M = 500
+
 /** Metros entre dos coordenadas (haversine). Gemelo de `_haversine_km` del
     backend, pero en metros: aquí la señal está en decenas de metros. */
 export function metrosEntre(a, b) {
@@ -98,37 +122,63 @@ export function analizarDireccion(txt) {
 
   let cp = ''
   let ciudad = ''
-  // El último tramo suele ser 'CP ciudad'. Sólo se acepta como tal si trae el
-  // código postal de 5 cifras o si es texto sin números: cualquier otra cosa
-  // (un 'Bajo B' final) no es un municipio y tratarlo como tal envenena la
-  // consulta.
+  /* El código postal aparece en LOS DOS ÓRDENES, y esto costó dos paquetes
+     reales: Cortex entrega unas veces '15705 Santiago de Compostela' y otras
+     'La coruña 15614' — con el CP al final. Mirando sólo el primer orden, la
+     dirección se quedaba sin municipio y ni se intentaba buscar
+     ('no_buscable'), que es lo que pasaba con los dos "No puedo encontrar la
+     dirección" del 15/08. */
   if (tramos.length > 1) {
     const ult = tramos[tramos.length - 1]
-    const m = ult.match(/^(\d{5})\s*(.*)$/)
-    if (m) {
-      cp = m[1]
-      ciudad = m[2].trim()
-      tramos.pop()
+    const cpDelante = ult.match(/^(\d{5})\s*(.*)$/)
+    const cpDetras = ult.match(/^(.*?)\s+(\d{5})$/)
+    if (cpDelante) {
+      cp = cpDelante[1]; ciudad = cpDelante[2].trim(); tramos.pop()
+    } else if (cpDetras) {
+      ciudad = cpDetras[1].trim(); cp = cpDetras[2]; tramos.pop()
+    } else if (/^\d{5}$/.test(ult)) {
+      cp = ult; tramos.pop()
     } else if (/^[^\d]+$/.test(ult) && ult.length > 2 && !RE_PISO.test(ult)) {
-      ciudad = ult
-      tramos.pop()
+      ciudad = ult; tramos.pop()
     }
+  }
+
+  /* El primer tramo NO siempre es la calle: Cortex trae `address1` tal cual lo
+     escribió el cliente, y ahí aparece el nombre del negocio. Visto en un portal
+     real con 15 fallos: "reparalotodo.net, Avenida Ferrol 40 en el 15703…" —
+     buscando "reparalotodo.net" no hay geocodificador que devuelva nada, y ese
+     portal no se resolvía nunca. Si el primer tramo parece web o correo y hay
+     otro tramo detrás que sí parece vía, se usa ése. */
+  const PARECE_WEB = /(^|\s)(www\.|https?:\/\/)|@|\.(com|net|es|org|gal|eu|info)\b/i
+  const PARECE_VIA = /\b(calle|c\/|rua|rúa|avenida|avda|av|plaza|praza|camino|camiño|carretera|ctra|paseo|travesia|travesía|ronda|alameda|lugar|urbanizacion|urbanización|poligono|polígono|estrada|parque|via|vía)\b/i
+  while (tramos.length > 1 && PARECE_WEB.test(tramos[0]) && !PARECE_VIA.test(tramos[0])
+    && PARECE_VIA.test(tramos[1])) {
+    tramos.shift()
   }
 
   const via = tramos.shift() || ''
   // Lo que quede en medio y no sea piso/puerta es lugar o parroquia, y en el
   // rural es justo lo que localiza la casa. Se conserva aparte para poder
   // preguntar con y sin ello.
-  const lugar = tramos.filter((s) => !RE_PISO.test(s)).join(', ')
+  const trozos = tramos.filter((s) => !RE_PISO.test(s))
+  const lugar = trozos.join(', ')
 
-  return { via, lugar, cp, ciudad, bruto }
+  /* EL MUNICIPIO ES EL PRIMER TRAMO INTERMEDIO, no lo que va con el código
+     postal. En las direcciones reales el final trae la PROVINCIA:
+       'Calle El Barro 34, 3 B, Pontedeume, A Coruña, La coruña 15614'
+     Buscar "Calle El Barro 34, La coruña" no lleva a ningún sitio; con
+     "Calle El Barro 34, Pontedeume" sí. Si no hay tramos intermedios, el del
+     código postal es lo mejor que hay. */
+  const municipio = trozos[0] || ciudad
+
+  return { via, lugar, cp, ciudad, municipio, bruto }
 }
 
 /** ¿Tiene esta dirección lo mínimo para buscarla? Sin vía no hay nada que
     buscar, y sin municipio se corre el riesgo de acertar la calle del pueblo
     equivocado. */
 export function esBuscable(d) {
-  return !!(d && d.via && /[a-zA-ZÁ-ÿ]{3}/.test(d.via) && (d.ciudad || d.cp))
+  return !!(d && d.via && /[a-zA-ZÁ-ÿ]{3}/.test(d.via) && (d.municipio || d.ciudad || d.cp))
 }
 
 /* Consultas. Se construyen dos porque los servicios no aceptan lo mismo:
@@ -137,7 +187,7 @@ export function esBuscable(d) {
    · larga  → añade lugar/parroquia y CP. Photon y Nominatim la digieren bien y
      en el rural es lo que distingue una casa. */
 export function consultaCorta(d) {
-  return [d.via, d.ciudad].filter(Boolean).join(', ')
+  return [d.via, d.municipio || d.ciudad].filter(Boolean).join(', ')
 }
 export function consultaLarga(d) {
   return [d.via, d.lugar, [d.cp, d.ciudad].filter(Boolean).join(' ')]
@@ -298,12 +348,12 @@ export const BUSCADORES = [buscarNominatim, buscarPhoton, buscarCartociudad]
    Se agrupa por cercanía: para cada resultado se mira cuántos caen a menos de
    RADIO_ACUERDO_M. Gana el grupo más grande, y sólo vale si dentro hay dos
    FAMILIAS distintas. */
-function mejorGrupo(votos) {
+function mejorGrupo(votos, radio) {
   let mejor = null
   for (const centro of votos) {
     const grupo = votos.filter((v) => {
       const m = metrosEntre(centro, v)
-      return m != null && m <= RADIO_ACUERDO_M
+      return m != null && m <= radio
     })
     const familias = new Set(grupo.map((v) => v.familia))
     const cand = { grupo, familias }
@@ -366,31 +416,53 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
   const votos = resultados.filter((v) => PRECISIONES_QUE_VOTAN.has(v.precision))
   if (votos.length < 2) return { ...base, estado: 'sin_acuerdo' }
 
-  const mejor = mejorGrupo(votos)
-  if (!mejor || mejor.grupo.length < 2) return { ...base, estado: 'sin_acuerdo' }
-
-  const punto = representante(mejor.grupo)
-  const dispersion = Math.max(...mejor.grupo.map((v) => metrosEntre(punto, v) ?? 0))
-  const metros = metrosEntre(punto, amazon)
-  /* Con qué fuerza se confirma el NÚMERO de portal. Que una fuente dé el portal
-     y la otra sólo el centro de la vía confirma la calle —que es lo que
-     descarta el error grave: otra calle u otro municipio— pero no el número.
-     Se dice, en vez de dejar que parezca lo mismo que dos portales de acuerdo. */
-  const portales = mejor.grupo.filter((v) => v.precision === 'portal')
-  const conAcuerdo = {
-    ...base,
-    punto,
-    metros_amazon: metros,
-    familias: [...mejor.familias].sort(),
-    dispersion_m: dispersion,
-    precision_acuerdo: portales.length >= 2 ? 'portal' : 'calle',
+  /* Arma el resultado de un grupo ya elegido. `nivel` dice qué se está
+     afirmando: 'portal'/'calle' es un punto concreto; 'zona', sólo el área. */
+  const resultadoDe = (g, nivel) => {
+    const punto = representante(g.grupo)
+    return {
+      ...base,
+      punto,
+      metros_amazon: metrosEntre(punto, amazon),
+      familias: [...g.familias].sort(),
+      dispersion_m: Math.max(...g.grupo.map((v) => metrosEntre(punto, v) ?? 0)),
+      precision_acuerdo: nivel,
+    }
   }
 
-  // Cerrojo 3: acuerdo pero inverosímil. No se afirma.
-  if (metros != null && metros > MAX_KM_PLAUSIBLE * 1000) {
-    return { ...conAcuerdo, estado: 'demasiado_lejos' }
+  /* PRIMERO el acuerdo fino: es el único que permite señalar un portal.
+     Con qué fuerza se confirma el NÚMERO: que una fuente dé el portal y la otra
+     sólo el centro de la vía confirma la calle —que es lo que descarta el error
+     grave: otra calle u otro municipio— pero no el número. Se dice. */
+  const fino = mejorGrupo(votos, RADIO_ACUERDO_M)
+  const hayFino = fino && fino.grupo.length >= 2
+  if (hayFino && fino.familias.size >= 2) {
+    const r = resultadoDe(fino, fino.grupo.filter((v) => v.precision === 'portal').length >= 2 ? 'portal' : 'calle')
+    // Cerrojo 3: acuerdo pero inverosímil. No se afirma.
+    if (r.metros_amazon != null && r.metros_amazon > MAX_KM_PLAUSIBLE * 1000) {
+      return { ...r, estado: 'demasiado_lejos' }
+    }
+    return { ...r, estado: 'confirmada' }
   }
+
+  /* NIVEL ZONA: no se sabe el portal, pero si dos familias independientes ponen
+     la dirección en la misma zona y el punto de Amazon queda MUY fuera de ella,
+     eso ya es la respuesta a "¿me mandan al sitio equivocado?". */
+  const ancho = mejorGrupo(votos, RADIO_ZONA_M)
+  if (ancho && ancho.grupo.length >= 2 && ancho.familias.size >= 2) {
+    const r = resultadoDe(ancho, 'zona')
+    if (r.metros_amazon != null && r.metros_amazon > MAX_KM_PLAUSIBLE * 1000) {
+      return { ...r, estado: 'demasiado_lejos' }
+    }
+    // Amazon ya está DENTRO de la zona: el viaje no va mal por aquí y no hay
+    // nada que avisar. Decir algo sería ruido.
+    if (r.metros_amazon != null && r.metros_amazon > UMBRAL_DESVIO_M) {
+      return { ...r, estado: 'zona' }
+    }
+    return { ...base, estado: 'sin_acuerdo' }
+  }
+
   // Cerrojo 1: dos servicios de la MISMA familia no son dos fuentes.
-  if (mejor.familias.size < 2) return { ...conAcuerdo, estado: 'indicio' }
-  return { ...conAcuerdo, estado: 'confirmada' }
+  if (hayFino) return { ...resultadoDe(fino, 'calle'), estado: 'indicio' }
+  return { ...base, estado: 'sin_acuerdo' }
 }

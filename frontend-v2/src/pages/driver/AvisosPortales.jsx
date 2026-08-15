@@ -88,9 +88,11 @@ export default function AvisosPortales() {
                       {t('av.real.dist').replace('{m}', a.real.metros)}
                     </p>
                   )}
-                  {a.real.precision_acuerdo !== 'portal' && (
+                  {a.real.precision_acuerdo === 'zona' ? (
+                    <p className="text-[10px] text-amber-400/70">{t('lib.dir.solozona')}</p>
+                  ) : a.real.precision_acuerdo !== 'portal' ? (
                     <p className="text-[10px] text-amber-400/70">{t('lib.dir.solocalle')}</p>
-                  )}
+                  ) : null}
                   <a href={`https://www.google.com/maps?q=${a.real.lat},${a.real.lng}`}
                     target="_blank" rel="noreferrer"
                     className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-300">

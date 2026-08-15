@@ -81,7 +81,7 @@ function Fila({ p, onGuardar, onResolver, onBuscarReal, t }) {
     setBuscandoReal(true); setFalloReal(false)
     try {
       const r = await onBuscarReal(p)
-      if (r?.estado !== 'confirmada') setFalloReal(true)
+      if (r?.estado !== 'confirmada' && r?.estado !== 'zona') setFalloReal(true)
     } finally { setBuscandoReal(false) }
   }
 
@@ -201,7 +201,10 @@ function Fila({ p, onGuardar, onResolver, onBuscarReal, t }) {
                         {t('lib.dir.conf')
                           .replace('{n}', (real.familias || []).length)
                           .replace('{f}', (real.fuentes || []).join(', '))}
-                        {real.precision_acuerdo !== 'portal' && ` ${t('lib.dir.solocalle')}`}
+                        {/* Qué se afirma exactamente. 'zona' no señala portal:
+                            decirlo evita que nadie se plante en un número. */}
+                        {real.precision_acuerdo === 'zona' ? ` ${t('lib.dir.solozona')}`
+                          : real.precision_acuerdo !== 'portal' ? ` ${t('lib.dir.solocalle')}` : ''}
                       </p>
                     </>
                   ) : (
@@ -313,7 +316,10 @@ export default function LibretaPortales({ center }) {
   const buscarRealPortal = useCallback(async (p) => {
     const amazon = (p.direcciones || [])[0] || ''
     const r = await buscarDireccion(amazon, { lat: p.lat, lng: p.lng })
-    if (r.estado === 'confirmada' && r.punto) {
+    // 'zona' también se guarda: no señala el portal, pero dice que el punto al
+    // que mandan al conductor queda fuera de la zona donde está la dirección, y
+    // eso es lo que evita el viaje perdido. Viaja etiquetado como zona.
+    if ((r.estado === 'confirmada' || r.estado === 'zona') && r.punto) {
       await cortexPortalGeodir({
         celdas: p.celdas,
         geodir: {

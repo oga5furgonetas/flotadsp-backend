@@ -21354,10 +21354,17 @@ async def cortex_portal_geodir(data: dict = Body(...), user: dict = Depends(requ
         "familias": familias,
         "fuentes": [str(f).strip()[:20] for f in (g.get("fuentes") or [])][:6],
         "precision": precision,
-        # 'portal' sólo si DOS fuentes dieron número de portal. Si una dio el
-        # portal y la otra el centro de la vía, se confirma la calle, no el
-        # número, y hay que poder decirlo.
-        "precision_acuerdo": "portal" if g.get("precision_acuerdo") == "portal" else "calle",
+        # Qué se está afirmando exactamente:
+        #   'portal' → DOS fuentes dieron número de portal.
+        #   'calle'  → coinciden en la vía, no en el número.
+        #   'zona'   → sólo coinciden en el área (<1 km). NO señala un portal;
+        #              sirve para avisar de que el punto de Amazon queda fuera.
+        # Se guarda tal cual porque el aviso que ve el conductor cambia según
+        # esto: mandarle al "portal exacto" cuando sólo se sabe la zona es
+        # justo el falso positivo que no puede pasar.
+        "precision_acuerdo": (g.get("precision_acuerdo")
+                              if g.get("precision_acuerdo") in ("portal", "calle", "zona")
+                              else "calle"),
         "dispersion_m": int(g.get("dispersion_m") or 0),
         "por": user.get("name") or user.get("username"),
         "en": datetime.now(timezone.utc).isoformat(),
@@ -21371,6 +21378,96 @@ async def cortex_portal_geodir(data: dict = Body(...), user: dict = Depends(requ
             "celda": c, "lat": clat, "lng": clng, "geodir": geodir,
         }}, upsert=True)
     return {"success": True, "celdas": len(celdas), "geodir": geodir}
+
+
+@api_router.get("/cortex/direcciones-hoy")
+async def cortex_direcciones_hoy(day: str = "", center: str = "", _=Depends(require_admin)):
+    """Los paquetes de HOY que el conductor marcó "no puedo encontrar la dirección".
+
+    Esto NO es la Libreta de portales. La Libreta mira 60 días hacia atrás y
+    agrupa por zona: sirve para decidir qué portales arreglar, y se lee una vez
+    a la semana. Aquí se quiere lo contrario y para otro momento: los paquetes
+    de HOY, uno a uno, con su TBA, su conductor y su hora, mientras la ruta
+    todavía está en marcha y aún se puede hacer algo con ellos.
+
+    DÓNDE VIVE "no puedo encontrar la dirección": NO en `state`. El estado que
+    guarda Cortex es el genérico `ATTEMPTED` (raw `DELIVERY_ATTEMPTED`), y el
+    motivo va en el `context` del evento del timeline:
+
+        {"state": "ATTEMPTED", "raw": "DELIVERY_ATTEMPTED",
+         "context": "ADDRESS_NOT_FOUND", "at": "..."}
+
+    Filtrar por `state == "ADDRESS_NOT_FOUND"` devuelve CERO siempre, aunque en
+    la pantalla de Cortex se estén viendo. Comprobado el 2026-08-15: 71
+    ATTEMPTED ese día y ni un solo paquete con ese estado.
+
+    Y el evento se busca POR FECHA, no vale con que el paquete sea de hoy: un
+    mismo paquete arrastra intentos de días anteriores en su timeline (este
+    mismo tenía uno del día 13 y otro del 15). Sin filtrar por día saldrían
+    todos los del historial, que es justo lo que no se quiere aquí.
+
+    La dirección real NO se resuelve aquí: la calcula el navegador (Nominatim
+    responde 403 al servidor) y la guarda por celda con /cortex/portales/geodir.
+    Este endpoint sólo junta el paquete con lo que ya se sepa de su celda, para
+    que al recargar no haya que volver a buscar nada.
+    """
+    dia = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    match = {"service_day": dia, "timeline.context": "ADDRESS_NOT_FOUND"}
+    if center and center not in ("Todos", "todos"):
+        match["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
+
+    cur = db.cortex_packages.aggregate(
+        [{"$match": match}] + _stage_celda() + [
+            {"$project": {"_id": 0, "tba": 1, "stop_address": 1, "stop_id": 1,
+                          "driver_name": 1, "route_code": 1, "center": 1,
+                          "state": 1, "timeline": 1, "_la": 1, "_ln": 1, "_celda": 1}},
+            {"$limit": 400},
+        ], allowDiskUse=True)
+    pkgs = await cur.to_list(400)
+    if not pkgs:
+        return {"dia": dia, "paquetes": [], "total": 0}
+
+    # Lo que ya se sabe de esas celdas: si otro paquete de la misma puerta ya se
+    # resolvió, este sale resuelto de entrada y el navegador no repite la busqueda.
+    celdas = sorted({p["_celda"] for p in pkgs})
+    notas = {n["celda"]: n async for n in db.portales.find(
+        {"celda": {"$in": celdas}}, {"_id": 0, "celda": 1, "geodir": 1, "nota": 1})}
+
+    out = []
+    for p in pkgs:
+        n = notas.get(p["_celda"], {})
+        # La hora del intento de HOY. `at` puede llegar como fecha o como
+        # cadena, asi que se compara por los 10 primeros caracteres de su texto.
+        # Un paquete con un ADDRESS_NOT_FOUND de otro dia y ninguno de hoy no
+        # entra: hoy no ha fallado.
+        hora, intentos_hoy = None, 0
+        for ev in (p.get("timeline") or []):
+            if ev.get("context") != "ADDRESS_NOT_FOUND" or not ev.get("at"):
+                continue
+            if str(ev["at"])[:10] != dia:
+                continue
+            intentos_hoy += 1
+            hora = ev["at"]
+        if not intentos_hoy:
+            continue
+        out.append({
+            "intentos_hoy": intentos_hoy,
+            "tba": p.get("tba"),
+            "stop_id": p.get("stop_id"),
+            "direccion": _cortex_addr_str(p.get("stop_address")),
+            "conductor": p.get("driver_name"),
+            "ruta": p.get("route_code"),
+            "center": (p.get("center") or "").strip(),
+            "lat": p.get("_la"), "lng": p.get("_ln"),
+            "celda": p.get("_celda"),
+            "hora": hora,
+            "nota": n.get("nota"),
+            "real": n.get("geodir"),
+        })
+    # Lo mas reciente arriba: es el que todavia da tiempo a rescatar.
+    out.sort(key=lambda x: (x["hora"] or ""), reverse=True)
+    return {"dia": dia, "paquetes": out, "total": len(out),
+            "sin_resolver": sum(1 for p in out if not p["real"])}
 
 
 @api_router.get("/cortex/portales/mi-ruta")
