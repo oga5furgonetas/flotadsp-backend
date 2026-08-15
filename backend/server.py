@@ -19849,6 +19849,22 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     if service_day:
         common["service_day"] = service_day
     pkg = await db.cortex_packages.find_one({"tba": tba}, {"_id": 0})
+
+    # UNA FUENTE SIN ESTADO NO CREA PAQUETES, SÓLO COMPLETA LOS QUE YA HAY.
+    #
+    # El informe de faltas (packagesByStatus) es de donde sale la DIRECCIÓN, y
+    # se pide con la fecha de HOY. Pero devuelve también paquetes que arrastran
+    # de días anteriores —los "se puede volver a intentar" siguen ahí hasta que
+    # se entregan—, y no trae estado ni día propio. Si con eso se crearan
+    # paquetes, entrarían como del día de hoy y el contador de "rastreados"
+    # subiría por encima de los que salieron de verdad a ruta: un número
+    # inflado, que en una pantalla de operación es peor que no tener el dato.
+    #
+    # Quien decide qué paquetes son de hoy es route-details, que sí trae día y
+    # estado. El informe sólo aporta la dirección de los que ya conocemos.
+    if not pkg and sin_estado:
+        return "same"
+
     if not pkg:
         # Sembrar timeline con recentTaskEvents si vienen, más el estado actual
         seed = []
@@ -21468,13 +21484,42 @@ async def cortex_direcciones_hoy(day: str = "", center: str = "", _=Depends(requ
     cur = db.cortex_packages.aggregate(
         [{"$match": match}] + _stage_celda() + [
             {"$project": {"_id": 0, "tba": 1, "stop_address": 1, "stop_id": 1,
-                          "driver_name": 1, "route_code": 1, "center": 1,
+                          "driver_name": 1, "driver_id": 1, "route_code": 1, "center": 1,
                           "state": 1, "timeline": 1, "_la": 1, "_ln": 1, "_celda": 1}},
             {"$limit": 400},
         ], allowDiskUse=True)
     pkgs = await cur.to_list(400)
     if not pkgs:
         return {"dia": dia, "paquetes": [], "total": 0}
+
+
+    # QUIÉN LLEVA EL PAQUETE — lo primero que hace falta para poder llamarle.
+    #
+    # Dos trampas juntas:
+    #  · `cortex_packages` NO tiene driver_name, tiene driver_id (el ID de
+    #    Amazon). El nombre se resuelve aparte con _cx_nombres, igual que hace
+    #    /cortex/routes. Buscar driver_name aquí devolvía siempre vacío.
+    #  · El informe de faltas —de donde sale la dirección— tampoco trae
+    #    conductor, así que estos paquetes ni siquiera tienen driver_id. Se
+    #    coge el de la RUTA: cualquier otro paquete del mismo route_code ese día
+    #    sí lo trae, porque viene de route-details.
+    rutas = sorted({(p.get("route_code") or "").strip() for p in pkgs if p.get("route_code")})
+    did_por_ruta: dict = {}
+    if rutas:
+        cur_c = db.cortex_packages.aggregate([
+            {"$match": {"service_day": dia, "route_code": {"$in": rutas},
+                        "driver_id": {"$nin": [None, ""]}}},
+            {"$group": {"_id": "$route_code", "d": {"$first": "$driver_id"}}},
+        ], allowDiskUse=True)
+        async for r in cur_c:
+            if r.get("_id"):
+                did_por_ruta[r["_id"]] = r.get("d")
+
+    def _did(p):
+        return (p.get("driver_id")
+                or did_por_ruta.get((p.get("route_code") or "").strip()))
+
+    nombres = await _cx_nombres({d for d in (_did(p) for p in pkgs) if d})
 
     # Lo que ya se sabe de esas celdas: si otro paquete de la misma puerta ya se
     # resolvió, este sale resuelto de entrada y el navegador no repite la busqueda.
@@ -21505,7 +21550,7 @@ async def cortex_direcciones_hoy(day: str = "", center: str = "", _=Depends(requ
             "tba": p.get("tba"),
             "stop_id": p.get("stop_id"),
             "direccion": _cortex_addr_str(p.get("stop_address")),
-            "conductor": p.get("driver_name"),
+            "conductor": (nombres.get(_did(p)) or {}).get("nombre") or p.get("driver_name"),
             "ruta": p.get("route_code"),
             "center": (p.get("center") or "").strip(),
             "lat": p.get("_la"), "lng": p.get("_ln"),

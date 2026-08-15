@@ -501,10 +501,12 @@ export default function PackageIntel() {
         </div>
       )}
 
-      {/* Dos formas de mirar lo mismo: lo que pasa hoy, y lo que lleva pasando
-          semanas en el mismo portal. La segunda es la que evita la primera. */}
+      {/* Tres formas de mirar lo mismo, y cada una se lee en otro momento:
+          lo que pasa hoy · los que no encuentran la dirección AHORA (mientras
+          la ruta está en marcha y aún se puede llamar al conductor) · y lo que
+          lleva semanas fallando en el mismo portal. */}
       <div className="mb-5 flex gap-1 rounded-xl border border-dark-800 bg-dark-900/50 p-1">
-        {[['hoy', t('px.tab.hoy')], ['portales', t('px.tab.portales')]].map(([k, etiqueta]) => (
+        {[['hoy', t('px.tab.hoy')], ['sindir', t('px.tab.sindir')], ['portales', t('px.tab.portales')]].map(([k, etiqueta]) => (
           <button key={k} onClick={() => setVista(k)}
             className={`flex-1 rounded-lg px-3 py-1.5 text-[13px] font-semibold transition ${
               vista === k ? 'bg-brand-500/15 text-brand-300' : 'text-dark-400 hover:text-dark-200'}`}>
@@ -522,9 +524,17 @@ export default function PackageIntel() {
         </div>
       )}
 
+      {/* Los "no puedo encontrar la dirección" del día. Se monta sólo en su
+          pestaña: su bucle de búsqueda no debe correr mientras miras otra cosa. */}
+      {vista === 'sindir' && (
+        <div className="rounded-xl border border-dark-800 bg-dark-900/30 p-4">
+          <DireccionesHoy center={center} day={day} />
+        </div>
+      )}
+
       {/* La vista de hoy se oculta, no se desmonta: volver a la pestaña no
           recarga los paquetes ni pierde la ruta que tuvieras abierta. */}
-      <div className={vista === 'portales' ? 'hidden' : ''}>
+      <div className={vista !== 'hoy' ? 'hidden' : ''}>
       {toast && (
         <div className={`mb-4 rounded-xl border px-4 py-2.5 text-[13px] ${toast.ok ? 'border-emerald-500/25 bg-emerald-500/[0.07] text-emerald-300' : 'border-red-500/25 bg-red-500/[0.07] text-red-300'}`}>
           {toast.msg}
@@ -631,11 +641,6 @@ export default function PackageIntel() {
           </div>
         </div>
       )}
-
-      {/* Los "no puedo encontrar la dirección" del día, en vivo. Va ARRIBA de
-          los KPIs a propósito: es lo único de esta pantalla sobre lo que aún se
-          puede actuar hoy; los KPIs se miran, esto se atiende. */}
-      {vista !== 'portales' && <DireccionesHoy center={center} day={day} />}
 
       {/* KPIs */}
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">

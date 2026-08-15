@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { MapPin, Loader2, ExternalLink, SearchX } from 'lucide-react'
+import { MapPin, Loader2, ExternalLink, SearchX, ChevronDown, ChevronUp, User, Navigation } from 'lucide-react'
 import { useT } from '../../i18n'
 import { cortexDireccionesHoy, cortexPortalGeodir } from '../api'
 import { lista } from '../../lib/lista'
@@ -8,24 +8,25 @@ import { buscarDireccion, fraseVeredicto } from '../../lib/geoDireccion'
 /* ────────────────────────────────────────────────────────────────────────────
    "NO PUEDO ENCONTRAR LA DIRECCIÓN" — HOY, EN VIVO
    ---------------------------------------------------------------------------
-   Esto NO es la Libreta de portales. La Libreta mira 60 días atrás y agrupa por
-   zona: sirve para decidir qué arreglar, y se lee una vez a la semana. Aquí se
-   quiere lo contrario: los paquetes de HOY, uno a uno, con su TBA y su hora,
-   mientras la ruta sigue en marcha y todavía se puede hacer algo.
+   Tiene pestaña propia a propósito. No es la Libreta de portales (60 días,
+   agrupada por zona, para decidir qué arreglar) ni un bloque perdido entre los
+   KPIs: es la lista de HOY, paquete a paquete, mientras la ruta está en marcha.
+   Se lee de otra manera y en otro momento, así que va en otro sitio.
 
-   Se refresca solo cada 2 minutos, al ritmo al que la extensión va mandando.
+   Cada tarjeta se abre y dice las tres cosas que hacen falta para actuar:
+     · QUIÉN lo lleva (a quién llamas),
+     · qué dirección le dio Cortex,
+     · dónde está esa dirección DE VERDAD, contrastada, y a cuántos metros del
+       punto al que le mandaron.
 
-   ── DÓNDE SE BUSCA LA DIRECCIÓN Y POR QUÉ AQUÍ ───────────────────────────────
-   La geolocalización la hace el NAVEGADOR, no el servidor: Nominatim responde
-   403 a las peticiones del backend. Se busca de una en una y se guarda por
-   celda, así que un portal que ya se resolvió no se vuelve a pedir nunca.
+   La búsqueda la hace el NAVEGADOR: Nominatim responde 403 al servidor. Se
+   busca de una en una, se guarda por celda y no se repite jamás.
    ──────────────────────────────────────────────────────────────────────────── */
 
 const mapa = (lat, lng) => `https://www.google.com/maps?q=${lat},${lng}`
 
-/* Cada cuánto se vuelve a preguntar al servidor. Dos minutos es el ritmo al que
-   la extensión sube capturas: pedirlo más a menudo sólo gasta batería y no
-   trae nada nuevo. */
+/* Al ritmo al que la extensión sube capturas. Pedirlo más a menudo gasta
+   batería y no trae nada nuevo. */
 const REFRESCO_MS = 120000
 
 const hhmm = (iso) => {
@@ -34,65 +35,98 @@ const hhmm = (iso) => {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
-function Paquete({ p, t }) {
+function Tarjeta({ p, t, abierta, onAbrir }) {
   const real = p.real
   const frase = fraseVeredicto(real)
   return (
-    <div className="rounded-lg border border-dark-800 bg-dark-950/40 p-2.5">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
-        <span className="font-mono font-semibold text-dark-100">{p.tba}</span>
-        {p.hora && <span className="text-amber-300">{hhmm(p.hora)}</span>}
-        {p.ruta && <span className="rounded bg-dark-800 px-1.5 py-px text-[10px] text-dark-400">{p.ruta}</span>}
-        {p.conductor && <span className="text-dark-400">{p.conductor}</span>}
-        {p.stop_id && <span className="text-dark-600">{t('dh.parada')} {p.stop_id}</span>}
-        {p.intentos_hoy > 1 && (
-          <span className="rounded bg-red-500/15 px-1.5 py-px text-[10px] font-bold text-red-300">
-            {t('dh.intentos').replace('{n}', p.intentos_hoy)}
+    <div className={`overflow-hidden rounded-xl border transition ${frase?.alarma
+      ? 'border-amber-500/40 bg-amber-500/[0.05]'
+      : real ? 'border-emerald-500/25 bg-emerald-500/[0.04]'
+        : 'border-dark-800 bg-dark-900/50'}`}>
+      <button onClick={onAbrir} className="flex w-full items-center gap-2 px-3 py-2.5 text-left">
+        <span className="shrink-0 text-[11px] font-semibold text-amber-300">{hhmm(p.hora)}</span>
+        <span className="min-w-0 flex-1">
+          {/* Lo primero, el conductor: es a quien hay que llamar. */}
+          <span className="block truncate text-[12.5px] font-semibold text-dark-100">
+            {p.conductor || t('dh.sinConductor')}
+            {p.ruta && <span className="ml-1.5 rounded bg-dark-800 px-1.5 py-px text-[10px] font-normal text-dark-400">{p.ruta}</span>}
+          </span>
+          <span className="block truncate text-[11px] text-dark-400">
+            {p.direccion || t('dh.sinDireccion')}
+          </span>
+        </span>
+        {real && (
+          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${frase?.alarma
+            ? 'bg-amber-500/20 text-amber-200' : 'bg-emerald-500/20 text-emerald-200'}`}>
+            {frase?.alarma ? `+${real.metros_amazon} m` : t('dh.ok')}
           </span>
         )}
-      </div>
+        {abierta ? <ChevronUp size={14} className="shrink-0 text-dark-500" />
+          : <ChevronDown size={14} className="shrink-0 text-dark-500" />}
+      </button>
 
-      {/* La dirección que dio Amazon. Puede no venir: Cortex no la manda en la
-          captura de ruta, sólo en el informe de faltas. Se dice en claro en vez
-          de dejar el hueco, porque es LA razón de que no se pueda buscar. */}
-      <p className="mt-1 text-[11.5px] leading-snug text-dark-300">
-        {p.direccion || <span className="text-dark-600">{t('dh.sinDireccion')}</span>}
-      </p>
+      {abierta && (
+        <div className="space-y-2.5 border-t border-dark-800 px-3 py-2.5">
+          <Dato icono={User} etiqueta={t('dh.d.conductor')}
+            valor={p.conductor || t('dh.sinConductor')} />
+          <Dato icono={MapPin} etiqueta={t('dh.d.cortex')}
+            valor={p.direccion || t('dh.sinDireccion')}
+            extra={<a href={mapa(p.lat, p.lng)} target="_blank" rel="noreferrer"
+              className="text-[10.5px] text-dark-500 hover:text-brand-300">
+              {t('dh.verPunto')} <ExternalLink size={9} className="inline opacity-60" />
+            </a>} />
 
-      {/* El borde dice de un vistazo si hay que actuar: ámbar si la dirección
-          está desplazada, verde si la coordenada era correcta. */}
-      {real ? (
-        <div className={`mt-1.5 rounded-md border px-2 py-1.5 ${frase?.alarma
-          ? 'border-amber-500/40 bg-amber-500/[0.07]' : 'border-emerald-500/25 bg-emerald-500/[0.06]'}`}>
-          <p className="text-[9.5px] font-semibold uppercase tracking-wider text-dark-500">
-            {t('lib.dir.tit')}
-          </p>
-          <a href={mapa(real.lat, real.lng)} target="_blank" rel="noreferrer"
-            className="text-[11.5px] text-brand-300 hover:underline">
-            {real.display} <ExternalLink size={9} className="inline opacity-60" />
-          </a>
-          {/* La frase la elige la librería, no esta pantalla: el conductor lee
-              exactamente la misma en su móvil. */}
-          {frase && (
-            <p className={`text-[11px] font-semibold ${frase.alarma ? 'text-amber-300' : 'text-emerald-300'}`}>
-              {t(frase.clave).replace('{m}', frase.metros)}
+          {real ? (
+            <Dato icono={Navigation} etiqueta={t('dh.d.real')} destacado={frase?.alarma}
+              valor={real.display}
+              extra={<>
+                {frase && (
+                  <span className={`block text-[11px] font-semibold ${frase.alarma ? 'text-amber-300' : 'text-emerald-300'}`}>
+                    {t(frase.clave).replace('{m}', frase.metros)}
+                  </span>
+                )}
+                <span className="block text-[10px] text-dark-600">
+                  {t('lib.dir.conf')
+                    .replace('{n}', (real.familias || []).length)
+                    .replace('{f}', (real.fuentes || []).join(', '))}
+                </span>
+                <a href={mapa(real.lat, real.lng)} target="_blank" rel="noreferrer"
+                  className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-semibold text-brand-300">
+                  <MapPin size={10} /> {t('av.real.ir')}
+                </a>
+              </>} />
+          ) : (
+            <p className="text-[11px] text-dark-500">
+              {p.direccion ? t('dh.buscando') : t('dh.sinDireccion')}
             </p>
           )}
-          <p className="text-[10px] text-dark-600">
-            {t('lib.dir.conf')
-              .replace('{n}', (real.familias || []).length)
-              .replace('{f}', (real.fuentes || []).join(', '))}
+
+          {p.nota && (
+            <p className="border-l-2 border-brand-500/40 pl-2 text-[11.5px] text-dark-200">{p.nota}</p>
+          )}
+          <p className="flex flex-wrap gap-x-3 text-[10px] text-dark-600">
+            <span className="font-mono">{p.tba}</span>
+            {p.stop_id && <span>{t('dh.parada')} {p.stop_id}</span>}
+            {p.center && <span>{p.center}</span>}
+            {p.intentos_hoy > 1 && (
+              <span className="font-semibold text-red-300">{t('dh.intentos').replace('{n}', p.intentos_hoy)}</span>
+            )}
           </p>
         </div>
-      ) : (
-        <a href={mapa(p.lat, p.lng)} target="_blank" rel="noreferrer"
-          className="mt-1 inline-flex items-center gap-1 text-[10.5px] text-dark-500 hover:text-brand-300">
-          <MapPin size={10} /> {t('dh.verPunto')}
-        </a>
       )}
-      {p.nota && (
-        <p className="mt-1 border-l-2 border-brand-500/40 pl-2 text-[11px] text-dark-200">{p.nota}</p>
-      )}
+    </div>
+  )
+}
+
+function Dato({ icono: Icono, etiqueta, valor, extra, destacado }) {
+  return (
+    <div className="flex gap-2">
+      <Icono size={13} className={`mt-0.5 shrink-0 ${destacado ? 'text-amber-400' : 'text-dark-600'}`} />
+      <div className="min-w-0">
+        <p className="text-[9.5px] font-semibold uppercase tracking-wider text-dark-600">{etiqueta}</p>
+        <p className={`text-[12.5px] leading-snug ${destacado ? 'font-semibold text-amber-100' : 'text-dark-100'}`}>{valor}</p>
+        {extra}
+      </div>
     </div>
   )
 }
@@ -100,24 +134,22 @@ function Paquete({ p, t }) {
 export default function DireccionesHoy({ center, day }) {
   const { t } = useT()
   const [datos, setDatos] = useState(null)
+  const [abierta, setAbierta] = useState(null)
 
   const cargar = useCallback(() => {
     cortexDireccionesHoy({ day: day || '', center: center && center !== 'Todos' ? center : '' })
       .then((r) => setDatos(r.data))
-      .catch(() => { /* el bloque simplemente no aparece: no se molesta con un error */ })
+      .catch(() => {})
   }, [center, day])
 
   useEffect(() => { cargar() }, [cargar])
-  // Refresco en vivo: la gracia de esta pantalla es enterarse mientras la ruta
-  // está en marcha. Se para si la pestaña no se está viendo.
   useEffect(() => {
     const id = setInterval(() => { if (!document.hidden) cargar() }, REFRESCO_MS)
     return () => clearInterval(id)
   }, [cargar])
 
-  /* Busca la dirección de UNO por tick. De uno en uno y con 2 s de separación
-     porque Nominatim exige como máximo 1 petición/segundo; y sólo una vez por
-     celda, coincida o no, para no gastar peticiones repitiendo lo que ya se
+  /* Uno por tick: Nominatim admite 1 petición/segundo, y sólo una vez por celda
+     —salga confirmada o no— para no gastar peticiones repitiendo lo que ya se
      sabe que no se puede confirmar. */
   const enCurso = useRef(false)
   const yaVistos = useRef(new Set())
@@ -145,7 +177,7 @@ export default function DireccionesHoy({ center, day }) {
           })
           cargar()
         })
-        .catch(() => { /* la red falla: se sigue con el siguiente */ })
+        .catch(() => {})
         .finally(() => { enCurso.current = false })
     }
     const id = setInterval(tic, 2000)
@@ -153,35 +185,56 @@ export default function DireccionesHoy({ center, day }) {
   }, [datos, cargar])
 
   const paquetes = lista(datos?.paquetes)
-  // Sin fallos de dirección hoy no se pinta NADA. Un bloque vacío todos los
-  // días enseña a no mirar esta zona de la pantalla.
-  if (!datos || !paquetes.length) return null
 
-  // Cortex manda la coordenada pero no el texto de la dirección en la captura
-  // de ruta. Sin ese texto no hay nada que buscar, y hay que decir por qué.
+  if (!datos) {
+    return (
+      <div className="flex items-center gap-2 text-sm text-dark-400">
+        <Loader2 size={14} className="animate-spin" /> {t('lib.cargando')}
+      </div>
+    )
+  }
+  if (!paquetes.length) {
+    return (
+      <div className="rounded-2xl border border-dark-800 bg-dark-900/40 p-6 text-center">
+        <SearchX size={22} className="mx-auto mb-2 text-dark-600" />
+        <p className="text-[13px] font-semibold text-dark-300">{t('dh.vacio')}</p>
+        <p className="mt-0.5 text-[11.5px] text-dark-500">{t('dh.vacio.sub')}</p>
+      </div>
+    )
+  }
+
   const sinTexto = paquetes.filter((p) => !p.direccion).length
+  const resueltos = paquetes.filter((p) => p.real).length
 
   return (
-    <div className="mb-5 rounded-2xl border border-red-500/25 bg-red-500/[.05] p-4">
-      <div className="mb-1 flex flex-wrap items-center gap-2">
-        <SearchX size={15} className="text-red-300" />
-        <span className="text-[13px] font-bold text-red-200">
-          {t('dh.titulo').replace('{n}', paquetes.length)}
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <SearchX size={16} className="text-red-300" />
+        <div>
+          <h3 className="text-[13.5px] font-bold text-dark-100">
+            {t('dh.titulo').replace('{n}', paquetes.length)}
+          </h3>
+          <p className="text-[11px] text-dark-500">{t('dh.subtitulo')}</p>
+        </div>
+        <span className="ml-auto text-[11px] text-dark-500">
+          {t('dh.resueltos').replace('{n}', resueltos).replace('{t}', paquetes.length)}
         </span>
-        {datos.sin_resolver > 0 && (
-          <span className="flex items-center gap-1 text-[10.5px] text-dark-500">
-            <Loader2 size={10} className="animate-spin" /> {t('dh.buscando')}
-          </span>
-        )}
       </div>
-      <p className="mb-2.5 text-[11.5px] text-dark-400">{t('dh.subtitulo')}</p>
+
+      {/* Por qué algunos no se pueden buscar. Sin decirlo, parecería que el
+          buscador no sabe hacer su trabajo. */}
       {sinTexto > 0 && (
         <p className="mb-2.5 rounded-lg border border-amber-500/30 bg-amber-500/[.07] px-2.5 py-1.5 text-[11px] text-amber-200">
           {t('dh.avisoSinTexto').replace('{n}', sinTexto)}
         </p>
       )}
+
       <div className="space-y-2">
-        {paquetes.map((p) => <Paquete key={p.tba} p={p} t={t} />)}
+        {paquetes.map((p) => (
+          <Tarjeta key={p.tba} p={p} t={t}
+            abierta={abierta === p.tba}
+            onAbrir={() => setAbierta(abierta === p.tba ? null : p.tba)} />
+        ))}
       </div>
     </div>
   )
