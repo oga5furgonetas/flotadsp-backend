@@ -1366,6 +1366,7 @@ const DICT = {
   'lib.placeholder': { es: 'Ej.: código de portal 1432#, el timbre del 3ºB no suena, dejar en la peluquería de al lado', en: 'E.g.: door code 1432#, doorbell 3B doesn\'t work, leave at the hairdresser next door', fr: 'Ex. : code 1432#, la sonnette du 3B ne marche pas, laisser chez le coiffeur d\'à côté', de: 'Z. B.: Türcode 1432#, Klingel 3B geht nicht, beim Friseur nebenan abgeben', it: 'Es.: codice portone 1432#, il campanello del 3B non suona, lasciare dal parrucchiere accanto', pt: 'Ex.: código de porta 1432#, a campainha do 3ºB não toca, deixar no cabeleireiro ao lado' },
   // Las dos direcciones enfrentadas. Ningún texto dice cuál es la buena:
   // sólo si coinciden, que es lo único que se puede afirmar.
+  'lib.auto':      { es: 'Resolver solo', en: 'Resolve automatically', fr: 'Résoudre tout seul', de: 'Automatisch auflösen', it: 'Risolvi da solo', pt: 'Resolver sozinho' },
   'lib.geo.amz':   { es: 'Amazon', en: 'Amazon', fr: 'Amazon', de: 'Amazon', it: 'Amazon', pt: 'Amazon' },
   'lib.geo.osm':   { es: 'Mapa', en: 'Map', fr: 'Carte', de: 'Karte', it: 'Mappa', pt: 'Mapa' },
   'lib.geo.ask':   { es: '¿Qué hay en esta coordenada?', en: 'What is at this coordinate?', fr: 'Qu’y a-t-il à cette coordonnée ?', de: 'Was liegt an dieser Koordinate?', it: 'Cosa c’è a questa coordinata?', pt: 'O que há nesta coordenada?' },

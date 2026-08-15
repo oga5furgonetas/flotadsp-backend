@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useT } from '../../i18n'
 import {
   Loader2, MapPin, NotebookPen, Check, ExternalLink, Save, X, Search,
 } from 'lucide-react'
 import { cortexPortales, cortexPortalNota, cortexPortalGeo } from '../api'
 import { lista } from '../../lib/lista'
-import { resolverCoordenada, compararDirecciones } from '../../lib/geoPortal'
+import { resolverDosFuentes, compararDirecciones } from '../../lib/geoPortal'
 
 /* ────────────────────────────────────────────────────────────────────────────
    Libreta de portales.
@@ -39,7 +39,7 @@ const VEREDICTO = {
   no_comparable: { k: 'lib.geo.nocmp',  cls: 'text-dark-500' },
 }
 
-function Fila({ p, onGuardar, onGeo, t }) {
+function Fila({ p, onGuardar, onResolver, t }) {
   const [editando, setEditando] = useState(false)
   const [texto, setTexto] = useState(p.nota || '')
   const [guardando, setGuardando] = useState(false)
@@ -60,9 +60,8 @@ function Fila({ p, onGuardar, onGeo, t }) {
   const resolver = async () => {
     setResolviendo(true); setFalloGeo(false)
     try {
-      const g = await resolverCoordenada(p.lat, p.lng)
-      if (!g) { setFalloGeo(true); return }
-      await onGeo({ celdas: p.celdas, geo: g })
+      const r = await onResolver(p)
+      if (!r?.confirmada) setFalloGeo(r?.acuerdo || 'sin_datos')
     } finally { setResolviendo(false) }
   }
 
@@ -226,10 +225,57 @@ export default function LibretaPortales({ center }) {
     cargar()
   }
 
-  const guardarGeo = async (body) => {
-    await cortexPortalGeo(body)
-    cargar()
-  }
+  /* Resuelve UN portal contra las dos fuentes y guarda SOLO si coinciden.
+     Un desacuerdo no se guarda a propósito: dejar escrita una dirección que las
+     dos fuentes no confirman convertiría esta pantalla en la que reparte
+     direcciones equivocadas, que es justo lo contrario de para lo que está. */
+  const resolverPortal = useCallback(async (p) => {
+    const r = await resolverDosFuentes(p.lat, p.lng)
+    if (r.confirmada) {
+      await cortexPortalGeo({
+        celdas: p.celdas,
+        geo: { ...r.confirmada, fuente: 'dos_fuentes', acuerdo: r.acuerdo },
+      })
+      cargar()
+    }
+    return r
+  }, [cargar])
+
+  /* ── BUCLE AUTOMÁTICO ──────────────────────────────────────────────────────
+     Va resolviendo solo los portales que aún no tienen dirección, de UNO EN UNO
+     y con 2 s entre medias. Ese ritmo no es decorativo: la política de uso de
+     Nominatim exige como máximo una petición por segundo, y un barrido en
+     paralelo nos ganaría un bloqueo. Cada portal se pide una sola vez en la
+     vida — el resultado queda guardado en el servidor para todos.
+
+     Solo corre mientras esta pestaña está abierta y visible: si el gestor se va
+     a otra pestaña, se para. */
+  const [autoOn, setAutoOn] = useState(true)
+  const enCurso = useRef(false)
+  const yaVistos = useRef(new Set())
+
+  useEffect(() => {
+    if (!autoOn || !datos) return undefined
+    let vivo = true
+    const tic = async () => {
+      if (!vivo || enCurso.current || document.hidden) return
+      const pend = lista(datos.portales).find(
+        (p) => !p.geo && !p.resuelto && !yaVistos.current.has(p.celda))
+      if (!pend) return
+      yaVistos.current.add(pend.celda)   // una sola vez por portal, coincidan o no
+      // El cerrojo se pone y se quita sin `await` de por medio: con await entre
+      // la lectura y la escritura, dos ticks podrían colarse a la vez y
+      // saltarse el límite de una petición por segundo de Nominatim.
+      enCurso.current = true
+      resolverPortal(pend)
+        .catch(() => { /* la red falla: se sigue con el siguiente */ })
+        .finally(() => { enCurso.current = false })
+    }
+    const id = setInterval(tic, 2000)
+    return () => { vivo = false; clearInterval(id) }
+  }, [autoOn, datos, resolverPortal])
+
+  const pendientes = lista(datos?.portales).filter((p) => !p.geo && !p.resuelto).length
 
   if (err) return <p className="text-sm text-red-300">{err}</p>
   if (!datos) {
@@ -268,6 +314,19 @@ export default function LibretaPortales({ center }) {
             className="h-3.5 w-3.5 accent-brand-500" />
           {t('lib.solo.sin.nota')}
         </label>
+        {/* El bucle solo corre con esta pestaña abierta y visible. Se dice
+            cuántos quedan para que nadie se pregunte si está haciendo algo. */}
+        <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-dark-400">
+          <input type="checkbox" checked={autoOn} onChange={(e) => setAutoOn(e.target.checked)}
+            className="h-3.5 w-3.5 accent-brand-500" />
+          {t('lib.auto')}
+          {autoOn && pendientes > 0 && (
+            <span className="flex items-center gap-1 text-dark-600">
+              <Loader2 size={10} className="animate-spin" />
+              {String(pendientes)}
+            </span>
+          )}
+        </label>
       </div>
 
       {datos.resumen?.reincidentes > 0 && (
@@ -291,7 +350,7 @@ export default function LibretaPortales({ center }) {
       ) : (
         <div className="space-y-2">
           {portales.map((p) => (
-            <Fila key={p.celda} p={p} onGuardar={guardar} onGeo={guardarGeo} t={t} />
+            <Fila key={p.celda} p={p} onGuardar={guardar} onResolver={resolverPortal} t={t} />
           ))}
         </div>
       )}

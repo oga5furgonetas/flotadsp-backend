@@ -21183,7 +21183,10 @@ async def cortex_portal_geo(data: dict = Body(...), user: dict = Depends(require
         "cp": str(g.get("cp") or "").strip()[:12],
         "municipio": str(g.get("municipio") or "").strip()[:120],
         "precision": precision,
-        "fuente": "openstreetmap",
+        # Con qué se confirmó. 'dos_fuentes' significa que OpenStreetMap y el
+        # callejero oficial del IGN coincidieron en la vía; sin eso no se afirma.
+        "fuente": str(g.get("fuente") or "openstreetmap")[:40],
+        "acuerdo": str(g.get("acuerdo") or "")[:40],
         "por": user.get("name") or user.get("username"),
         "en": datetime.now(timezone.utc).isoformat(),
     }
