@@ -86,6 +86,11 @@ export const RADIO_ZONA_M = 1000
    geolocalizada" y mandaba al gestor a buscar el problema donde no estaba. */
 export const UMBRAL_DESVIO_M = { portal: 150, calle: 250, zona: 500 }
 
+/* Desvío máximo que se puede afirmar con UNA SOLA fuente (el callejero oficial,
+   en pueblos donde OpenStreetMap no llega). Dos fuentes independientes de
+   acuerdo hacen creíbles varios kilómetros; una sola, no. */
+export const MAX_M_FUENTE_UNICA = 2000
+
 /**
  * La frase que se le enseña a la persona, elegida por lo que REALMENTE se sabe.
  *
@@ -549,7 +554,14 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
         dispersion_m: 0,
         precision_acuerdo: 'zona',
       }
-      if (r.metros_amazon != null && r.metros_amazon > MAX_KM_PLAUSIBLE * 1000) {
+      /* Con UNA sola fuente, el desvío que se puede afirmar es mucho menor.
+         Dos callejeros independientes coincidiendo hacen creíble un desvío
+         grande; uno solo, no: a partir de cierta distancia es más probable que
+         se haya equivocado él a que Amazon mande a 11 km. Pasó de verdad —un
+         'LUGAR ALDEA BAIXO 22' a 11,1 km, sólo del IGN—, y una cifra así en una
+         pantalla de operación se lee como un hecho. Por encima de esto se
+         prefiere callar. */
+      if (r.metros_amazon == null || r.metros_amazon > MAX_M_FUENTE_UNICA) {
         return { ...r, estado: 'demasiado_lejos', veredicto: 'no_lo_se' }
       }
       return { ...r, estado: 'oficial', veredicto: veredictoDe(r.metros_amazon, 'zona') }
