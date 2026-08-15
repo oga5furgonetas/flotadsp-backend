@@ -19774,7 +19774,17 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     tba = (obs.get("tba") or obs.get("package_id") or "").strip().upper()
     if not tba:
         return "same"
-    state = _cortex_canon_state(obs.get("state") or obs.get("raw_state") or obs.get("taskState"))
+    # ¿Trae ESTADO esta observación, o sólo datos de relleno?
+    # El informe de faltas (packagesByStatus) es la única fuente con la
+    # DIRECCIÓN en texto, pero no trae estado de entrega: su `packageStatus` es
+    # un objeto y su `reasonCode` es un motivo, no un estado. Sin esta
+    # distinción, `_cortex_canon_state(None)` devuelve 'OBSERVED' y esa fuente
+    # pisaría el estado bueno — un paquete DELIVERED por route-details pasaría a
+    # OBSERVED sólo por venir en el informe. Con 757 entregados hoy, eso es
+    # falsear la operación entera.
+    _state_raw = obs.get("state") or obs.get("raw_state") or obs.get("taskState")
+    sin_estado = not (isinstance(_state_raw, str) and _state_raw.strip())
+    state = _cortex_canon_state(_state_raw)
     observed_at = _cortex_parse_dt(obs.get("observed_at")) or _cortex_parse_dt(captured_at) or datetime.now(timezone.utc)
     ev = {
         "state": state, "at": observed_at.isoformat(),
@@ -19858,6 +19868,22 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         await db.cortex_packages.insert_one(serialize_doc(doc))
         await db.cortex_events.insert_one(_cortex_evento_doc(ev, tba))
         return "new"
+
+    # Fuente SIN estado sobre un paquete que ya existe: enriquece y calla.
+    # Se guardan sus datos buenos (la dirección, sobre todo) y no se toca ni el
+    # estado ni el timeline, que los sabe mejor route-details.
+    if sin_estado:
+        enriquecer = {k: v for k, v in common.items() if k not in ("state",)}
+        # El contexto (el motivo: ADDRESS_NOT_FOUND) sí se anota en el ÚLTIMO
+        # evento si aún no lo tenía: es justo el dato que dice por qué falló.
+        ctx = ev.get("context")
+        tl = pkg.get("timeline") or []
+        if ctx and tl and not tl[-1].get("context"):
+            tl[-1]["context"] = ctx
+            enriquecer["timeline"] = tl
+        await db.cortex_packages.update_one(
+            {"tba": tba}, {"$set": enriquecer, "$inc": {"captures_n": 1}})
+        return "same"
 
     last = (pkg.get("timeline") or [{}])[-1]
     if last.get("state") == state:
@@ -21428,7 +21454,14 @@ async def cortex_direcciones_hoy(day: str = "", center: str = "", _=Depends(requ
     que al recargar no haya que volver a buscar nada.
     """
     dia = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    match = {"service_day": dia, "timeline.context": "ADDRESS_NOT_FOUND"}
+    # Cortex escribe el mismo motivo de dos formas según de dónde salga:
+    # 'ADDRESS_NOT_FOUND' en el timeline de route-details y 'ADDRESS NOT FOUND'
+    # (con espacios) en el informe de faltas — se ve en su propia URL:
+    # `&reasonCode=ADDRESS%20NOT%20FOUND`. Se aceptan las dos, y también lo ya
+    # guardado antes de normalizarlo en la extensión.
+    _RE_SIN_DIR = r"^ADDRESS[ _-]?NOT[ _-]?FOUND$"
+    match = {"service_day": dia,
+             "timeline.context": {"$regex": _RE_SIN_DIR, "$options": "i"}}
     if center and center not in ("Todos", "todos"):
         match["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
 
@@ -21458,7 +21491,8 @@ async def cortex_direcciones_hoy(day: str = "", center: str = "", _=Depends(requ
         # entra: hoy no ha fallado.
         hora, intentos_hoy = None, 0
         for ev in (p.get("timeline") or []):
-            if ev.get("context") != "ADDRESS_NOT_FOUND" or not ev.get("at"):
+            if not ev.get("at") or not re.match(
+                    _RE_SIN_DIR, str(ev.get("context") or ""), re.I):
                 continue
             if str(ev["at"])[:10] != dia:
                 continue

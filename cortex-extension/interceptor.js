@@ -92,11 +92,17 @@
   // Descubrimiento de TODAS las rutas: de route-summaries sacamos la lista de
   // routeIds y pedimos el detalle de cada una nosotros mismos. Así se cargan
   // todas las rutas del día sin que el usuario entre en ninguna.
+  /* El serviceAreaId SIEMPRE en minúsculas. Cortex lo escribe con una caja en
+     la URL y puede escribirlo con otra dentro del JSON de route-details; si se
+     guardan las dos, el panel ve DOS estaciones distintas que en realidad son
+     la misma: dos casillas que marcar, el mapeo de centro duplicado y la mitad
+     de los paquetes sin centro. Una sola forma y se acabó el problema. */
+  const normSa = (s) => (typeof s === 'string' && s.trim() ? s.trim().toLowerCase() : null);
   let saId = null, histParam = 'false';
   const learnTemplate = (url) => {
     try {
       const u = new URL(url, location.origin);
-      const s = u.searchParams.get('serviceAreaId'); if (s) saId = s;
+      const s = normSa(u.searchParams.get('serviceAreaId')); if (s) saId = s;
       const h = u.searchParams.get('historicalDay'); if (h != null) histParam = h;
     } catch (_) {}
   };
@@ -120,7 +126,7 @@
   const fetchedRoutes = new Set();
   const harvestRoutes = (summaryJson) => {
     const { ids, sa } = collectRoutes(summaryJson);
-    if (sa && !saId) saId = sa;
+    if (sa && !saId) saId = normSa(sa);
     let i = 0, nuevos = 0;
     for (const id of ids) {
       if (fetchedRoutes.has(id)) continue;
@@ -146,6 +152,10 @@
   const KEYS = {
     tba: ['containerScannableId', 'scannableId', 'trackingId', 'trackingNumber', 'tba', 'packageId', 'parcelId', 'shipmentId', 'addressId'],
     state: ['taskState', 'executionStatus', 'deliveryStatus', 'status', 'state', 'packageStatus', 'stopState', 'taskStatus', 'reasonCode', 'missingReason', 'exceptionReason', 'reason', 'reasonDescription', 'exceptionCode', 'issueType'],
+    /* Estados DE VERDAD, sin `packageStatus` (llega como objeto en el informe
+       de faltas) y sin los campos de motivo (que son otra cosa y van a
+       state_context). Ver la nota en buildObs. */
+    stateReal: ['taskState', 'executionStatus', 'deliveryStatus', 'status', 'state', 'stopState', 'taskStatus'],
     stop: ['stopId', 'stopNumber', 'sequenceId', 'sequenceNumber', 'stopSequence', 'stop', 'stopKey'],
     address: ['address', 'formattedAddress', 'addressLine', 'destinationAddress', 'shortAddress', 'addressLine1'],
     container: ['containerId', 'toteId', 'binId', 'bagId', 'overrideContainerId', 'containerLabel'],
@@ -162,6 +172,16 @@
 
   const firstKey = (obj, names) => {
     for (const k of names) if (obj && obj[k] != null && obj[k] !== '') return obj[k];
+    return null;
+  };
+  /* Como firstKey pero SÓLO cadenas. Para campos donde un objeto colado hace
+     daño: un `packageStatus: {...}` tomado por estado acaba guardándose como
+     'OBSERVED' y borrando el estado real del paquete. */
+  const firstStr = (obj, names) => {
+    for (const k of names) {
+      const v = obj && obj[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
     return null;
   };
   const pickTba = (obj) => {
@@ -205,17 +225,47 @@
       driver_name: firstKey(node, KEYS.driverName) || ctx.driverName || null,
       driver_id: firstKey(node, KEYS.driverId) || ctx.driverId || null,
       stop_id: String(firstKey(node, KEYS.stop) ?? ctx.stop ?? '') || null,
-      stop_address: firstKey(node, KEYS.address) || ctx.address || null,
+      stop_address: (() => {
+        const a = firstKey(node, KEYS.address) || ctx.address || null;
+        if (!a || typeof a !== 'object') return a;
+        /* SÓLO el punto de entrega. El informe de faltas trae dentro de
+           `address` el nombre y el teléfono del cliente final, y no nos hacen
+           falta para nada: lo que se investiga es el portal, no la persona.
+           El backend ya los descartaba al guardar, pero lo correcto es que ni
+           salgan del navegador. */
+        return {
+          address1: a.address1, address2: a.address2, address3: a.address3,
+          city: a.city, state: a.state, postalCode: a.postalCode,
+        };
+      })(),
       container_id: firstKey(node, KEYS.container) || ctx.container || null,
       station: firstKey(node, KEYS.station) || ctx.station || null,
-      state: firstKey(node, KEYS.state) || null,
-      raw_state: firstKey(node, KEYS.state) || null,
+      /* ESTADO: sólo de campos que son ESTADOS de verdad, y sólo si son texto.
+         Dos trampas reales del informe de faltas (packagesByStatus):
+           · `packageStatus` viene como OBJETO. Cogido como estado, el backend
+             no lo reconoce y lo deja en 'OBSERVED' — y eso pisaría el estado
+             bueno de paquetes que route-details ya había dado por entregados.
+           · `reasonCode` es un MOTIVO, no un estado. Va a `state_context`.
+         Si aquí no hay estado, se manda null a propósito: el backend conserva
+         el que ya tuviera. Una fuente que no sabe el estado no debe cambiarlo. */
+      state: firstStr(node, KEYS.stateReal),
+      raw_state: firstStr(node, KEYS.stateReal),
       /* El MOTIVO. En el informe de faltas viene como `reasonCode` y es el dato
          que dice "no puedo encontrar la dirección" (ADDRESS_NOT_FOUND) sin
          ambigüedad. Antes se tiraba, y el motivo había que deducirlo del
          `context` del timeline de route-details, que llega más tarde y no
          siempre. */
-      state_context: firstKey(node, ['reasonCode', 'taskStateContext', 'stateContext', 'reason']) || null,
+      state_context: (() => {
+        const v = firstKey(node, ['reasonCode', 'taskStateContext', 'stateContext', 'reason']);
+        if (typeof v !== 'string' || !v.trim()) return null;
+        /* Cortex escribe el MISMO motivo de dos formas según de dónde salga:
+           'ADDRESS_NOT_FOUND' en el timeline de route-details y
+           'ADDRESS NOT FOUND' (con espacios) en el informe de faltas — se ve en
+           la propia URL de Cortex: `&reasonCode=ADDRESS%20NOT%20FOUND`.
+           Se normaliza aquí para que sea UNA sola cosa; si no, el panel filtra
+           por una forma y se le escapan los paquetes que llegaron con la otra. */
+        return v.trim().toUpperCase().replace(/[\s-]+/g, '_').slice(0, 80);
+      })(),
       lat: firstKey(node, KEYS.lat) ?? ctx.lat ?? null,
       lng: firstKey(node, KEYS.lng) ?? ctx.lng ?? null,
       observed_at: firstKey(node, KEYS.time) || null,
@@ -279,7 +329,6 @@
   // Mapas aprendidos en vivo para etiquetar bien los replays y fuentes pobres:
   const saCenter = {};      // serviceAreaId → centro
   const prefixCenter = {};  // prefijo de ruta (XA_C, CA_A) → centro
-  const prefixSaid = {};    // prefijo de ruta → serviceAreaId
   const routePrefix = (rc) => { const m = String(rc || '').match(/^(.*?)(\d+)\s*$/); return m ? m[1] : null; };
 
   const extractRouteDetails = (json) => {
@@ -287,15 +336,12 @@
     if (!root || !Array.isArray(root.stops)) return null;
     const routeCode = root.routeCode || null;
     const routeId = root.routeId || null;
-    const said = root.serviceAreaId || saId || null;
+    const said = normSa(root.serviceAreaId) || saId || null;
     const info = stationInfo();
     const pageCenter = info.center;
     const prefix = routePrefix(routeCode);
     if (said && pageCenter && !saCenter[said]) saCenter[said] = pageCenter; // 1ª vez = navegación real
     if (prefix && pageCenter && !prefixCenter[prefix]) prefixCenter[prefix] = pageCenter;
-    // El serviceAreaId del prefijo, para poder adoptar luego los paquetes del
-    // informe de faltas, que llegan sin estación ninguna.
-    if (prefix && said && !prefixSaid[prefix]) prefixSaid[prefix] = said;
     // Prioridad: mapa por estación (duro) → página → mapa por prefijo de ruta.
     const center = (said && saCenter[said]) || pageCenter || (prefix && prefixCenter[prefix]) || null;
     const stationCode = info.code || null;
@@ -388,16 +434,25 @@
          panel: 0 de 3.019 paquetes con dirección, con el conductor marcando
          "no puedo encontrar la dirección" y nosotros sin poder buscarla.
 
-         Se les adopta por el PREFIJO de su ruta (XA_C18 → XA_C), y sólo si ese
-         prefijo ya se aprendió navegando de verdad por route-details en esta
-         misma sesión. Si el prefijo no se conoce, el paquete se queda fuera
-         como hasta ahora: antes sin dirección que en el centro equivocado. */
-      for (const p of packages) {
-        if (p.center || p.service_area_id || !p.route_code) continue;
-        const pre = routePrefix(p.route_code);
-        if (!pre) continue;
-        if (prefixCenter[pre]) p.center = prefixCenter[pre];
-        if (prefixSaid[pre]) p.service_area_id = prefixSaid[pre];
+         El serviceAreaId NO se adivina: viene en la URL de la MISMA petición
+         que ha devuelto estos paquetes —
+           …/packagesByStatus?…&serviceAreaId=10ef2406-a250-45ce-8fa5-…
+         y también en la barra de direcciones de Cortex. Se lee de ahí y punto.
+
+         (Antes esto se deducía del prefijo de la ruta, que era una suposición:
+         si el prefijo estuviera mal aprendido, los paquetes se irían al centro
+         equivocado sin que nadie lo notara. Leer el identificador que Cortex ya
+         pone en la URL no admite ese error.)
+
+         Si la petición no trae serviceAreaId, se usa el de la página; y si
+         tampoco, el paquete se queda fuera como hasta ahora. */
+      let saDeEstaUrl = null;
+      try { saDeEstaUrl = new URL(url, location.origin).searchParams.get('serviceAreaId'); } catch (_) {}
+      const saParaEstos = normSa(saDeEstaUrl) || saId;
+      if (saParaEstos) {
+        for (const p of packages) {
+          if (!p.service_area_id && !p.center) p.service_area_id = saParaEstos;
+        }
       }
       // Diagnóstico de estructura: esquema de route-details y de route-summaries.
       if (!schemaSent && isDetails && parsed) {

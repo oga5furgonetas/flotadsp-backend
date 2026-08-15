@@ -72,8 +72,26 @@ async function enqueue(packages) {
   await chrome.storage.local.set({ queue });
   const n = Object.keys(queue).length;
   const { porEstacion, sinEstacion } = await recuento(queue);
-  const { enviarEstaciones = [] } = await chrome.storage.local.get({ enviarEstaciones: [] });
+  let { enviarEstaciones = [] } = await chrome.storage.local.get({ enviarEstaciones: [] });
   const nombres = Object.keys(porEstacion);
+
+  /* ── PRIMERA VEZ Y UNA SOLA ESTACIÓN: se elige sola ───────────────────────
+     La compuerta existe para no mezclar dos naves. Con UNA sola estación en
+     cola no hay dos naves que mezclar, así que ahí no protege de nada y lo
+     único que hace es dejar la extensión capturando SIN ENVIAR, en silencio,
+     hasta que alguien abre el popup y marca la casilla.
+
+     Pasó de verdad, y por eso está esto aquí: tras reinstalar, Chrome vacía el
+     almacenamiento y con él la elección de estaciones; 2.579 paquetes se
+     quedaron 20 minutos en cola con "0 enviados" y sin ninguna señal evidente.
+
+     Sólo se auto-elige si el usuario NO ha elegido nunca. Si alguien desmarca a
+     propósito, `eleccionHecha` queda puesto y no se le vuelve a marcar solo. */
+  const { eleccionHecha = false } = await chrome.storage.local.get({ eleccionHecha: false });
+  if (!enviarEstaciones.length && !eleccionHecha && nombres.length === 1) {
+    enviarEstaciones = [nombres[0]];
+    await chrome.storage.local.set({ enviarEstaciones });
+  }
   const msg = nombres.length === 0
     ? `${n} paquetes en cola, sin estación reconocida.`
     : enviarEstaciones.length === 0
@@ -217,7 +235,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   /* El popup manda aquí qué estaciones se envían. Lista vacía = no enviar nada. */
   if (msg?.type === 'setEstaciones') {
     const lista = Array.isArray(msg.estaciones) ? msg.estaciones : [];
-    chrome.storage.local.set({ enviarEstaciones: lista }).then(async () => {
+    // `eleccionHecha` marca que la decisión la tomó una persona: a partir de
+    // aquí no se auto-elige nada, ni aunque quede una sola estación. Desmarcar
+    // a propósito tiene que aguantar.
+    chrome.storage.local.set({ enviarEstaciones: lista, eleccionHecha: true }).then(async () => {
       await setState({ lastMessage: lista.length ? `Enviando sólo ${lista.join(', ')}.` : 'Envío en pausa: sin estación elegida.', ok: true });
       reply?.({ ok: true });
     });
