@@ -129,6 +129,29 @@ export function mismaVia(a, b) {
   return [...ta].some((w) => tb.has(w))
 }
 
+/* ── EL CÓDIGO POSTAL COMO SEGUNDA PRUEBA ─────────────────────────────────────
+   El CP es un campo independiente del nombre de la calle y lo devuelven los
+   tres buscadores. Que coincida con el de la dirección no es un detalle: es una
+   segunda comprobación sobre un dato distinto, y es barata.
+
+   Cazan, uno por uno, los cuatro falsos vistos hoy con direcciones reales:
+     · 'Calle El Barro 34, Pontedeume (15614)' → Cartociudad devolvía BARRIO
+       BARROS en Camargo, Cantabria: CP 39xxx.
+     · 'Rúa o Con, Portosín' → O Grove, a 30 km.
+     · 'AVENIDA DA CORUÑA 12, LUGO' → un portal en Guitiriz.
+     · 'Barro, Rianxo' → 'A Barraca', a 270 m del punto de Amazon: habría
+       colado como "bien geolocalizada" siendo otra calle.
+
+   Se usa SIEMPRE en positivo, nunca para descartar: los CP de Cortex vienen mal
+   a menudo (15999 no existe; 15614 para un paquete que va a Rianxo). Que no
+   coincida no prueba que el buscador se equivoque —puede ser el CP del texto el
+   que está mal—, así que sólo cuenta cuando coincide. */
+export function mismoCP(a, b) {
+  const x = String(a || '').match(/\d{5}/)
+  const y = String(b || '').match(/\d{5}/)
+  return !!(x && y && x[0] === y[0])
+}
+
 /** Metros entre dos coordenadas (haversine). Gemelo de `_haversine_km` del
     backend, pero en metros: aquí la señal está en decenas de metros. */
 export function metrosEntre(a, b) {
@@ -350,6 +373,7 @@ export async function buscarPhoton(d, opciones = {}) {
     lng,
     calle: String(calle).slice(0, 160),
     numero: String(numero).slice(0, 20),
+    cp: String(p.postcode || '').slice(0, 12),
     municipio: String(p.city || p.county || '').slice(0, 120),
     display: [calle && `${calle} ${numero}`.trim(), p.postcode, p.city]
       .filter(Boolean).join(', ').slice(0, 300),
@@ -387,6 +411,11 @@ export async function buscarCartociudad(d, opciones = {}) {
     lng,
     calle: calle.slice(0, 160),
     numero: numero.slice(0, 20),
+    // El CP del callejero OFICIAL: es el contraste más fiable que tenemos, y
+    // faltaba. Sin él, la fuente que más se despista de municipio (Camargo por
+    // Pontedeume, O Grove por Portosín, Guitiriz por Lugo) era justo la que no
+    // se podía cotejar por código postal.
+    cp: String(j.postalCode || '').slice(0, 12),
     municipio: String(j.muni || '').slice(0, 120),
     display: [calle + (numero ? ` ${numero}` : ''), j.postalCode, j.muni]
       .filter(Boolean).join(', ').slice(0, 300),
@@ -576,7 +605,13 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
     const m = metrosEntre(v, amazon)
     return m != null && m <= UMBRAL_DESVIO_M.zona
   })
-  if (cerca && !hayFino && mismaVia(cerca.calle, d.via)) {
+  /* Ojo con el nombre parecido: buscando 'Barro' en Rianxo salió 'A Barraca' a
+     270 m del punto de Amazon. Comparte una palabra corta y habría pasado por
+     "bien geolocalizada" siendo otra calle. Si el buscador da CP y NO es el de
+     la dirección, no vale como confirmación. (Si no da CP, se deja pasar: hay
+     resultados legítimos sin él.) */
+  const cpNoContradice = (v) => !v.cp || !d.cp || mismoCP(v.cp, d.cp)
+  if (cerca && !hayFino && mismaVia(cerca.calle, d.via) && cpNoContradice(cerca)) {
     return {
       ...base,
       punto: cerca,
@@ -586,6 +621,29 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
       precision_acuerdo: 'zona',
       estado: 'confirma_amazon',
       veredicto: 'coincide',
+    }
+  }
+
+  /* Una sola fuente que CONTRADICE a Amazon. Es la afirmación cara —mueve al
+     conductor— así que tiene que traer tres coincidencias sobre campos
+     distintos: la vía, el municipio y el CÓDIGO POSTAL. Con las tres, ya no es
+     "una fuente": es una fuente cuadrando en tres datos independientes.
+     Se sigue etiquetando 'zona': nunca se afirma el número de portal. */
+  const unaSola = resultados.find((v) => PRECISIONES_QUE_VOTAN.has(v.precision)
+    && mismaVia(v.calle, d.via)
+    && mismaVia(v.municipio, d.municipio || d.ciudad)
+    && mismoCP(v.cp, d.cp))
+  if (unaSola && !hayFino) {
+    const r = {
+      ...base,
+      punto: unaSola,
+      metros_amazon: metrosEntre(unaSola, amazon),
+      familias: [unaSola.familia],
+      dispersion_m: 0,
+      precision_acuerdo: 'zona',
+    }
+    if (r.metros_amazon != null && r.metros_amazon <= MAX_KM_PLAUSIBLE * 1000) {
+      return { ...r, estado: 'oficial', veredicto: veredictoDe(r.metros_amazon, 'zona') }
     }
   }
 
