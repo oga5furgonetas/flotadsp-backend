@@ -1,3 +1,9 @@
+/* `nucleoVia` normaliza nombres de vía y municipio (quita acentos, tipos de vía
+   y ruido). Sólo se usa para el CONTRASTE de una fuente oficial sola —ver el
+   bloque del pueblo pequeño al final—, nunca para decidir dónde está algo: eso
+   lo dicen siempre las coordenadas. */
+import { nucleoVia } from './geoPortal'
+
 /* ─────────────────────────────────────────────────────────────────────────────
    DÓNDE ESTÁ DE VERDAD ESTA DIRECCIÓN — varios buscadores a la vez
    ---------------------------------------------------------------------------
@@ -71,9 +77,37 @@ export const MAX_KM_PLAUSIBLE = 25
    ───────────────────────────────────────────────────────────────────────────── */
 export const RADIO_ZONA_M = 1000
 
-/* Por debajo de esto el punto de Amazon ya está DENTRO de la zona: no hay nada
-   que avisar, y decir algo sería ruido sobre un viaje que estaba bien. */
-export const UMBRAL_DESVIO_M = 500
+/* A partir de cuántos metros se considera que a Amazon se le fue el punto. NO
+   puede ser un número único: depende de lo que se haya podido confirmar.
+   Si sabemos el PORTAL exacto, 150 m ya es un desvío de verdad —el conductor no
+   encuentra nada a 150 m—; si sólo sabemos la zona, 150 m no significan nada
+   porque nuestra propia respuesta tiene ese margen.
+   Con un umbral único de 500 m, un portal confirmado a 383 m salía como "bien
+   geolocalizada" y mandaba al gestor a buscar el problema donde no estaba. */
+export const UMBRAL_DESVIO_M = { portal: 150, calle: 250, zona: 500 }
+
+/**
+ * La frase que se le enseña a la persona, elegida por lo que REALMENTE se sabe.
+ *
+ * Vive aquí y no en cada pantalla a propósito: el gestor y el conductor tienen
+ * que leer exactamente lo mismo. Si la Libreta dice "es aquí" y la app del
+ * conductor dice "el sitio es este pero el número no", uno de los dos está
+ * mintiendo, y el que se lo come es el que está en la calle.
+ *
+ * @param {{veredicto?:string, precision_acuerdo?:string, metros_amazon?:number}} g
+ * @returns {{clave:string, metros:number|null, alarma:boolean}|null}
+ */
+export function fraseVeredicto(g) {
+  if (!g || g.metros_amazon == null) return null
+  if (g.veredicto === 'coincide') {
+    return { clave: 'lib.ver.bien', metros: g.metros_amazon, alarma: false }
+  }
+  if (g.veredicto !== 'desplazada') return null
+  const clave = g.precision_acuerdo === 'portal' ? 'lib.ver.exacta'
+    : g.precision_acuerdo === 'calle' ? 'lib.ver.calle'
+      : 'lib.ver.zona'
+  return { clave, metros: g.metros_amazon, alarma: true }
+}
 
 /** Metros entre dos coordenadas (haversine). Gemelo de `_haversine_km` del
     backend, pero en metros: aquí la señal está en decenas de metros. */
@@ -401,7 +435,8 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
   const d = analizarDireccion(texto)
   const vacio = {
     punto: null, metros_amazon: null, familias: [], dispersion_m: null,
-    precision_acuerdo: null, resultados: [], consultada: d ? consultaLarga(d) : '',
+    precision_acuerdo: null, veredicto: 'no_lo_se',
+    resultados: [], consultada: d ? consultaLarga(d) : '',
   }
   if (!esBuscable(d)) return { ...vacio, estado: 'no_buscable' }
 
@@ -414,7 +449,10 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
   // Cerrojo 2: lo que no llega a la calle no vota. Se conserva en `resultados`
   // para poder enseñarlo, pero no cuenta para el acuerdo.
   const votos = resultados.filter((v) => PRECISIONES_QUE_VOTAN.has(v.precision))
-  if (votos.length < 2) return { ...base, estado: 'sin_acuerdo' }
+  /* Con un solo voto NO se corta aquí. Antes había un `return` en este punto y
+     se comía el caso del pueblo pequeño: si el único que responde es el
+     callejero oficial, todavía queda la salida contrastada del final. Los
+     cerrojos siguen puestos; simplemente se decide más abajo. */
 
   /* Arma el resultado de un grupo ya elegido. `nivel` dice qué se está
      afirmando: 'portal'/'calle' es un punto concreto; 'zona', sólo el área. */
@@ -434,15 +472,25 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
      Con qué fuerza se confirma el NÚMERO: que una fuente dé el portal y la otra
      sólo el centro de la vía confirma la calle —que es lo que descarta el error
      grave: otra calle u otro municipio— pero no el número. Se dice. */
+  /* El VEREDICTO es lo que se le acaba diciendo a la persona, y son dos cosas
+     distintas que hay que separar:
+       · qué se ha podido averiguar  → `precision_acuerdo` (portal/calle/zona)
+       · si el punto de Amazon está bien → `veredicto`
+     Que la dirección esté BIEN geolocalizada también es una respuesta útil, y
+     antes se callaba: significa "la coordenada no es el problema, no pierdas
+     tiempo por ahí". */
+  const veredictoDe = (m, nivel) => (
+    m == null ? 'no_lo_se' : m <= (UMBRAL_DESVIO_M[nivel] ?? 500) ? 'coincide' : 'desplazada')
+
   const fino = mejorGrupo(votos, RADIO_ACUERDO_M)
   const hayFino = fino && fino.grupo.length >= 2
   if (hayFino && fino.familias.size >= 2) {
     const r = resultadoDe(fino, fino.grupo.filter((v) => v.precision === 'portal').length >= 2 ? 'portal' : 'calle')
     // Cerrojo 3: acuerdo pero inverosímil. No se afirma.
     if (r.metros_amazon != null && r.metros_amazon > MAX_KM_PLAUSIBLE * 1000) {
-      return { ...r, estado: 'demasiado_lejos' }
+      return { ...r, estado: 'demasiado_lejos', veredicto: 'no_lo_se' }
     }
-    return { ...r, estado: 'confirmada' }
+    return { ...r, estado: 'confirmada', veredicto: veredictoDe(r.metros_amazon, r.precision_acuerdo) }
   }
 
   /* NIVEL ZONA: no se sabe el portal, pero si dos familias independientes ponen
@@ -452,17 +500,66 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
   if (ancho && ancho.grupo.length >= 2 && ancho.familias.size >= 2) {
     const r = resultadoDe(ancho, 'zona')
     if (r.metros_amazon != null && r.metros_amazon > MAX_KM_PLAUSIBLE * 1000) {
-      return { ...r, estado: 'demasiado_lejos' }
+      return { ...r, estado: 'demasiado_lejos', veredicto: 'no_lo_se' }
     }
-    // Amazon ya está DENTRO de la zona: el viaje no va mal por aquí y no hay
-    // nada que avisar. Decir algo sería ruido.
-    if (r.metros_amazon != null && r.metros_amazon > UMBRAL_DESVIO_M) {
-      return { ...r, estado: 'zona' }
+    /* Aquí se sabe el sitio pero NO el número, y se dice tal cual: "es este
+       pueblo/esta calle, pero el número no es exacto". Callarlo por no tener el
+       portal dejaba sin respuesta justo los pueblos pequeños, que es donde
+       OpenStreetMap no llega y donde más falta hace. */
+    return { ...r, estado: 'zona', veredicto: veredictoDe(r.metros_amazon, 'zona') }
+  }
+
+  /* ── EL PUEBLO PEQUEÑO: UNA SOLA FUENTE, PERO OFICIAL Y CONTRASTADA ────────
+     En Pontedeume o A Estrada, OpenStreetMap sencillamente NO tiene la calle:
+     responde sólo Cartociudad, el callejero oficial del IGN. Con la regla de
+     dos familias eso es "no lo sé" — y se queda mudo justo en los pueblos, que
+     es donde el conductor más se pierde.
+
+     Aquí no hay una segunda fuente que la corrobore, así que se corrobora
+     CONTRA LA PROPIA PREGUNTA: lo que devuelve tiene que ser el municipio que
+     pedimos y la calle que pedimos. No es tan fuerte como dos callejeros
+     independientes, y por eso NUNCA se afirma el portal: se etiqueta 'zona'
+     ("el sitio es este, el número no es exacto").
+
+     Estas dos comprobaciones no son teóricas; cazan los dos errores reales que
+     se le vieron a Cartociudad:
+       · 'AVENIDA DA CORUÑA 12, LUGO' → devolvió un portal en GUITIRIZ, a 40 km
+         (el municipio no cuadra).
+       · el CP metido en la consulta → devolvió 'TRAS DO PILAR' por 'Rúa do
+         Vilar' (la calle no cuadra).
+     Es el único sitio donde se compara TEXTO, y se hace a propósito: no para
+     decidir dónde está, sino para descartar que el servicio se haya ido a otro
+     sitio. Dónde está lo siguen diciendo las coordenadas. */
+  const oficial = resultados.find((v) => v.familia === 'ign' && PRECISIONES_QUE_VOTAN.has(v.precision))
+  if (oficial && !hayFino) {
+    const coincide = (a, b) => {
+      const ta = new Set(nucleoVia(a).split(' ').filter((w) => w.length > 2))
+      const tb = new Set(nucleoVia(b).split(' ').filter((w) => w.length > 2))
+      if (!ta.size || !tb.size) return false
+      return [...ta].some((w) => tb.has(w))
     }
-    return { ...base, estado: 'sin_acuerdo' }
+    const muniOk = coincide(oficial.municipio, d.municipio || d.ciudad)
+    const viaOk = coincide(oficial.calle, d.via)
+    if (muniOk && viaOk) {
+      const r = {
+        ...base,
+        punto: oficial,
+        metros_amazon: metrosEntre(oficial, amazon),
+        familias: ['ign'],
+        dispersion_m: 0,
+        precision_acuerdo: 'zona',
+      }
+      if (r.metros_amazon != null && r.metros_amazon > MAX_KM_PLAUSIBLE * 1000) {
+        return { ...r, estado: 'demasiado_lejos', veredicto: 'no_lo_se' }
+      }
+      return { ...r, estado: 'oficial', veredicto: veredictoDe(r.metros_amazon, 'zona') }
+    }
   }
 
   // Cerrojo 1: dos servicios de la MISMA familia no son dos fuentes.
-  if (hayFino) return { ...resultadoDe(fino, 'calle'), estado: 'indicio' }
-  return { ...base, estado: 'sin_acuerdo' }
+  if (hayFino) {
+    const r = resultadoDe(fino, 'calle')
+    return { ...r, estado: 'indicio', veredicto: 'no_lo_se' }
+  }
+  return { ...base, estado: 'sin_acuerdo', veredicto: 'no_lo_se' }
 }

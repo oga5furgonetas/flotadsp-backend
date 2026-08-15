@@ -3,6 +3,7 @@ import { MapPin, ChevronDown, ChevronUp } from 'lucide-react'
 import { useT } from '../../i18n'
 import { getMisAvisosPortales } from '../../services/api'
 import { lista } from '../../lib/lista'
+import { fraseVeredicto } from '../../lib/geoDireccion'
 
 /* ────────────────────────────────────────────────────────────────────────────
    Los avisos de portal de la ruta de HOY de este conductor.
@@ -83,16 +84,19 @@ export default function AvisosPortales() {
                     {t('av.real.tit')}
                   </p>
                   <p className="text-[12.5px] leading-relaxed text-dark-100">{a.real.display}</p>
-                  {a.real.metros != null && (
-                    <p className="text-[11px] font-semibold text-emerald-300">
-                      {t('av.real.dist').replace('{m}', a.real.metros)}
-                    </p>
-                  )}
-                  {a.real.precision_acuerdo === 'zona' ? (
-                    <p className="text-[10px] text-amber-400/70">{t('lib.dir.solozona')}</p>
-                  ) : a.real.precision_acuerdo !== 'portal' ? (
-                    <p className="text-[10px] text-amber-400/70">{t('lib.dir.solocalle')}</p>
-                  ) : null}
+                  {/* EXACTAMENTE la misma frase que ve el gestor en el panel: la
+                      elige la librería a partir de lo que se pudo confirmar. Si
+                      cada pantalla redactara la suya, un día dirían cosas
+                      distintas del mismo dato y el que se lo come es el que está
+                      en la calle. */}
+                  {(() => {
+                    const f = fraseVeredicto({ ...a.real, metros_amazon: a.real.metros })
+                    return f ? (
+                      <p className={`text-[11.5px] font-semibold ${f.alarma ? 'text-amber-300' : 'text-emerald-300'}`}>
+                        {t(f.clave).replace('{m}', f.metros)}
+                      </p>
+                    ) : null
+                  })()}
                   <a href={`https://www.google.com/maps?q=${a.real.lat},${a.real.lng}`}
                     target="_blank" rel="noreferrer"
                     className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-300">

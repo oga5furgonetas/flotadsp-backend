@@ -21322,8 +21322,19 @@ async def cortex_portal_geodir(data: dict = Body(...), user: dict = Depends(requ
     # no una confirmación.
     familias = [str(f).strip().lower()[:20] for f in (g.get("familias") or []) if str(f).strip()]
     familias = sorted(set(familias))
+    nivel = g.get("precision_acuerdo")
     if len(familias) < 2:
-        raise HTTPException(400, "hacen falta 2 familias de fuentes distintas")
+        # EXCEPCIÓN, y sólo una: el callejero OFICIAL (IGN) solo, y únicamente
+        # para afirmar la ZONA, nunca el portal. En los pueblos pequeños
+        # OpenStreetMap no tiene la calle y no hay segunda fuente posible; sin
+        # esta salida el sistema se queda mudo justo donde el conductor más se
+        # pierde. El navegador ya ha comprobado antes que el municipio y el
+        # nombre de vía que devuelve el IGN son los que se le pidieron — que es
+        # lo que caza los dos errores reales que se le vieron (un portal en
+        # Guitiriz para una dirección de Lugo, y 'TRAS DO PILAR' por 'Rúa do
+        # Vilar').
+        if not (familias == ["ign"] and nivel == "zona"):
+            raise HTTPException(400, "hacen falta 2 familias de fuentes distintas")
 
     try:
         lat = float(g.get("lat"))
@@ -21365,6 +21376,11 @@ async def cortex_portal_geodir(data: dict = Body(...), user: dict = Depends(requ
         "precision_acuerdo": (g.get("precision_acuerdo")
                               if g.get("precision_acuerdo") in ("portal", "calle", "zona")
                               else "calle"),
+        # Y esto es lo que se le dice a la persona: si el punto de Amazon está
+        # BIEN ('coincide') o desplazado. Que esté bien también es una respuesta
+        # útil —"la coordenada no es el problema"— y antes no se guardaba.
+        "veredicto": (g.get("veredicto")
+                      if g.get("veredicto") in ("coincide", "desplazada") else "no_lo_se"),
         "dispersion_m": int(g.get("dispersion_m") or 0),
         "por": user.get("name") or user.get("username"),
         "en": datetime.now(timezone.utc).isoformat(),
@@ -21526,6 +21542,7 @@ async def cortex_portales_mi_ruta(user: dict = Depends(require_any_auth)):
                                  "lat": gd.get("lat"), "lng": gd.get("lng"),
                                  "metros": gd.get("metros_amazon"),
                                  "precision_acuerdo": gd.get("precision_acuerdo"),
+                                 "veredicto": gd.get("veredicto"),
                                  "fuentes": gd.get("fuentes") or []}
                                 if gd.get("display") and gd.get("lat") is not None else None)})
     avisos.sort(key=lambda a: a["paquetes"], reverse=True)

@@ -6,7 +6,7 @@ import {
 import { cortexPortales, cortexPortalNota, cortexPortalGeo, cortexPortalGeodir } from '../api'
 import { lista } from '../../lib/lista'
 import { resolverDosFuentes, compararDirecciones } from '../../lib/geoPortal'
-import { buscarDireccion } from '../../lib/geoDireccion'
+import { buscarDireccion, fraseVeredicto } from '../../lib/geoDireccion'
 
 /* ────────────────────────────────────────────────────────────────────────────
    Libreta de portales.
@@ -39,12 +39,6 @@ const VEREDICTO = {
   discrepa:      { k: 'lib.geo.diff',   cls: 'text-red-300' },
   no_comparable: { k: 'lib.geo.nocmp',  cls: 'text-dark-500' },
 }
-
-/* Por debajo de esto, la dirección y el punto al que mandan al conductor son el
-   mismo sitio: la celda ya son ~25 m y su centro puede caer en la acera de
-   enfrente. Llamar "desplazada" a una diferencia así sería ruido, y el gestor
-   dejaría de leer los avisos que sí importan. */
-const UMBRAL_LEJOS_M = 75
 
 function Fila({ p, onGuardar, onResolver, onBuscarReal, t }) {
   const [editando, setEditando] = useState(false)
@@ -81,14 +75,14 @@ function Fila({ p, onGuardar, onResolver, onBuscarReal, t }) {
     setBuscandoReal(true); setFalloReal(false)
     try {
       const r = await onBuscarReal(p)
-      if (r?.estado !== 'confirmada' && r?.estado !== 'zona') setFalloReal(true)
+      if (!['confirmada', 'zona', 'oficial'].includes(r?.estado)) setFalloReal(true)
     } finally { setBuscandoReal(false) }
   }
 
   const amazon = (p.direcciones || [])[0] || ''
   const veredicto = p.geo ? compararDirecciones(amazon, p.geo) : null
   const real = p.geodir
-  const lejos = real && real.metros_amazon != null && real.metros_amazon > UMBRAL_LEJOS_M
+  const frase = fraseVeredicto(real)
   const grave = p.dias_distintos >= 4
   return (
     <div className={`rounded-lg border p-3 ${p.resuelto ? 'border-dark-800 bg-dark-900/30 opacity-60'
@@ -193,10 +187,15 @@ function Fila({ p, onGuardar, onResolver, onBuscarReal, t }) {
                           {real.display} <ExternalLink size={9} className="inline opacity-60" />
                         </a>
                       </div>
-                      <p className={`text-[10.5px] ${lejos ? 'font-semibold text-amber-300' : 'text-emerald-300/90'}`}>
-                        {t(lejos ? 'lib.dir.dist' : 'lib.dir.cerca')
-                          .replace('{m}', real.metros_amazon ?? '?')}
-                      </p>
+                      {/* La frase sale de la librería, igual que en la vista de
+                          hoy y en el móvil del conductor: si cada pantalla se
+                          inventara la suya, acabarían diciendo cosas distintas
+                          del mismo dato. */}
+                      {frase && (
+                        <p className={`text-[10.5px] ${frase.alarma ? 'font-semibold text-amber-300' : 'text-emerald-300/90'}`}>
+                          {t(frase.clave).replace('{m}', frase.metros)}
+                        </p>
+                      )}
                       <p className="text-[10px] text-dark-600">
                         {t('lib.dir.conf')
                           .replace('{n}', (real.familias || []).length)
@@ -319,7 +318,7 @@ export default function LibretaPortales({ center }) {
     // 'zona' también se guarda: no señala el portal, pero dice que el punto al
     // que mandan al conductor queda fuera de la zona donde está la dirección, y
     // eso es lo que evita el viaje perdido. Viaja etiquetado como zona.
-    if ((r.estado === 'confirmada' || r.estado === 'zona') && r.punto) {
+    if (['confirmada', 'zona', 'oficial'].includes(r.estado) && r.punto) {
       await cortexPortalGeodir({
         celdas: p.celdas,
         geodir: {
@@ -331,6 +330,7 @@ export default function LibretaPortales({ center }) {
           fuentes: r.resultados.map((v) => v.fuente),
           precision: r.punto.precision,
           precision_acuerdo: r.precision_acuerdo,
+          veredicto: r.veredicto,
           dispersion_m: r.dispersion_m,
         },
       })

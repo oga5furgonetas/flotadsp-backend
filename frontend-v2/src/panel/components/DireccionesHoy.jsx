@@ -3,7 +3,7 @@ import { MapPin, Loader2, ExternalLink, SearchX } from 'lucide-react'
 import { useT } from '../../i18n'
 import { cortexDireccionesHoy, cortexPortalGeodir } from '../api'
 import { lista } from '../../lib/lista'
-import { buscarDireccion } from '../../lib/geoDireccion'
+import { buscarDireccion, fraseVeredicto } from '../../lib/geoDireccion'
 
 /* ────────────────────────────────────────────────────────────────────────────
    "NO PUEDO ENCONTRAR LA DIRECCIÓN" — HOY, EN VIVO
@@ -36,6 +36,7 @@ const hhmm = (iso) => {
 
 function Paquete({ p, t }) {
   const real = p.real
+  const frase = fraseVeredicto(real)
   return (
     <div className="rounded-lg border border-dark-800 bg-dark-950/40 p-2.5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px]">
@@ -58,26 +59,29 @@ function Paquete({ p, t }) {
         {p.direccion || <span className="text-dark-600">{t('dh.sinDireccion')}</span>}
       </p>
 
+      {/* El borde dice de un vistazo si hay que actuar: ámbar si la dirección
+          está desplazada, verde si la coordenada era correcta. */}
       {real ? (
-        <div className="mt-1.5 rounded-md border border-emerald-500/25 bg-emerald-500/[0.06] px-2 py-1.5">
-          <p className="text-[9.5px] font-semibold uppercase tracking-wider text-emerald-300/80">
+        <div className={`mt-1.5 rounded-md border px-2 py-1.5 ${frase?.alarma
+          ? 'border-amber-500/40 bg-amber-500/[0.07]' : 'border-emerald-500/25 bg-emerald-500/[0.06]'}`}>
+          <p className="text-[9.5px] font-semibold uppercase tracking-wider text-dark-500">
             {t('lib.dir.tit')}
           </p>
           <a href={mapa(real.lat, real.lng)} target="_blank" rel="noreferrer"
             className="text-[11.5px] text-brand-300 hover:underline">
             {real.display} <ExternalLink size={9} className="inline opacity-60" />
           </a>
-          {real.metros_amazon != null && (
-            <p className="text-[11px] font-semibold text-amber-300">
-              {t('lib.dir.dist').replace('{m}', real.metros_amazon)}
+          {/* La frase la elige la librería, no esta pantalla: el conductor lee
+              exactamente la misma en su móvil. */}
+          {frase && (
+            <p className={`text-[11px] font-semibold ${frase.alarma ? 'text-amber-300' : 'text-emerald-300'}`}>
+              {t(frase.clave).replace('{m}', frase.metros)}
             </p>
           )}
           <p className="text-[10px] text-dark-600">
             {t('lib.dir.conf')
               .replace('{n}', (real.familias || []).length)
               .replace('{f}', (real.fuentes || []).join(', '))}
-            {real.precision_acuerdo === 'zona' ? ` ${t('lib.dir.solozona')}`
-              : real.precision_acuerdo !== 'portal' ? ` ${t('lib.dir.solocalle')}` : ''}
           </p>
         </div>
       ) : (
@@ -128,7 +132,7 @@ export default function DireccionesHoy({ center, day }) {
       enCurso.current = true
       buscarDireccion(p.direccion, { lat: p.lat, lng: p.lng })
         .then(async (r) => {
-          if ((r.estado !== 'confirmada' && r.estado !== 'zona') || !r.punto) return
+          if ((!['confirmada', 'zona', 'oficial'].includes(r.estado)) || !r.punto) return
           await cortexPortalGeodir({
             celdas: [p.celda],
             geodir: {
@@ -136,7 +140,7 @@ export default function DireccionesHoy({ center, day }) {
               direccion_amazon: p.direccion, familias: r.familias,
               fuentes: r.resultados.map((v) => v.fuente),
               precision: r.punto.precision, precision_acuerdo: r.precision_acuerdo,
-              dispersion_m: r.dispersion_m,
+              veredicto: r.veredicto, dispersion_m: r.dispersion_m,
             },
           })
           cargar()
