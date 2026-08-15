@@ -45,6 +45,12 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Red de seguridad por DEBAJO del bundle: si el propio index-<hash>.js
+         llega envenenado (MIME text/html tras un deploy), main.jsx no se
+         ejecuta y con él se caen sus tres defensas. Este script es clásico y
+         externo a propósito: la CSP no admite inline. Va ANTES del módulo para
+         estar ya armado si el módulo ni siquiera carga. -->
+    <script src="/arranque.js"></script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

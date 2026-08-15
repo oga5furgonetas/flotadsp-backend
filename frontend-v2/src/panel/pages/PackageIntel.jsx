@@ -278,6 +278,8 @@ export default function PackageIntel() {
   const { t, lang } = useT()
   const locale = LANG_LOCALE[lang] || 'es-ES'
   const [stations, setStations] = useState([])
+  const [estInfo, setEstInfo] = useState({})   // mezcladas + prefijos_en_conflicto
+  const [estAbierto, setEstAbierto] = useState(false)
   const [ov, setOv] = useState(null)
   const [pkgs, setPkgs] = useState([])
   const [alerts, setAlerts] = useState([])
@@ -334,7 +336,26 @@ export default function PackageIntel() {
     setPkgsLoading(false)
   }, [filter, day, activeRoute, center, t])
 
-  const load = useCallback(() => { loadCore(); loadPkgs() }, [loadCore, loadPkgs])
+  /* Se guarda la respuesta ENTERA, no sólo `stations`: el backend ya calcula
+     qué estaciones están mezcladas y qué prefijos de ruta se contradicen, y eso
+     se estaba tirando a la basura. Era la única señal que decía si aquí queda
+     algo por hacer o no.
+
+     Va declarado AQUÍ, antes de `load`, y no puede bajar: `load` lo nombra en
+     su lista de dependencias, que se evalúa en cada render. Declarado después,
+     el render revienta con ReferenceError y se cae la pantalla entera. */
+  const loadStations = useCallback(() => {
+    cortexStations()
+      .then(r => { setStations(r.data.stations || []); setEstInfo(r.data || {}) })
+      .catch(() => {})
+  }, [])
+
+  /* `loadStations` va DENTRO de load: sin esto, "Repartir automáticamente"
+     reasignaba las estaciones en el servidor, avisaba de cuántas había
+     resuelto… y dejaba la pantalla enseñando el reparto viejo. Parecía que no
+     había hecho nada. El refresco de cada 30 s tampoco las miraba nunca. */
+  const load = useCallback(() => { loadCore(); loadPkgs(); loadStations() },
+    [loadCore, loadPkgs, loadStations])
 
   // Cambiar de centro arriba: volver a la vista de rutas de ese centro.
   useEffect(() => { setActiveRoute(null); setSel(null) }, [center])
@@ -356,9 +377,25 @@ export default function PackageIntel() {
       }
     }).catch(() => {})
   }, [routes.length, center]) // eslint-disable-line
-  const loadStations = useCallback(() => { cortexStations().then(r => setStations(r.data.stations || [])).catch(() => {}) }, [])
   useEffect(() => { loadStations() }, [routes.length, loadStations])
+
+  /* Qué está ROTO de verdad, que es lo único que justifica el aviso grande:
+     · sin centro   → no se sabe a qué centro va. Los paquetes acaban en el
+                      sitio equivocado.
+     · mezclada     → sus paquetes están repartidos entre dos centros. Esto es
+                      lo que hay que arreglar, y hasta ahora ni se enseñaba.
+     · conflicto    → el mismo prefijo de ruta en estaciones de centros
+                      distintos: uno de los dos mapeos está mal.
+
+     `manual` NO entra en la cuenta a propósito. Que el centro venga de la
+     mayoría de los paquetes en vez de un clic no es un fallo: es lo que dicen
+     los propios datos. Contarlo como pendiente devolvía el banner permanente
+     que ya había, sólo que con otra excusa. Se marca con una etiqueta
+     ('supuesto') dentro del panel y ahí se queda. */
   const unmapped = stations.filter(s => !s.center)
+  const mezcladas = stations.filter(s => s.mezclado)
+  const conflictos = estInfo.prefijos_en_conflicto || []
+  const pendientesEst = unmapped.length + mezcladas.length + conflictos.length
   const assignStation = async (sid, c) => {
     setAssigning(sid)
     try {
@@ -492,11 +529,31 @@ export default function PackageIntel() {
         <div className="mb-5 mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={reset} seeding={seeding} /></div>
       )}
 
-      {/* Estaciones → centro. Mapeo duro por serviceAreaId (infalible). */}
-      {stations.length > 0 && (centers?.length > 1) && (unmapped.length > 0 || stations.length > 1) && (
-        <div className="mb-5 rounded-2xl border border-amber-500/30 bg-amber-500/[.06] p-4">
+      {/* ── ESTACIONES → CENTRO ────────────────────────────────────────────
+          Mapeo duro por serviceAreaId. El aviso grande sale SÓLO si queda algo
+          por hacer: sin centro, sin confirmar, mezclada o con prefijos en
+          conflicto. Antes la condición llevaba `|| stations.length > 1`, así
+          que con dos o más estaciones no se iba nunca, estuviera todo resuelto
+          o no — media pantalla pidiendo algo que ya estaba hecho. Un aviso que
+          no se puede terminar enseña a ignorar todos los avisos.
+
+          Cuando no queda nada, el bloque no desaparece del todo: se queda una
+          línea para poder corregir un centro mal puesto sin ir a buscarlo. */}
+      {stations.length > 0 && (centers?.length > 1) && pendientesEst === 0 && (
+        <button onClick={() => setEstAbierto(a => !a)}
+          className="mb-5 flex w-full items-center gap-2 rounded-xl border border-dark-800 bg-dark-900/40 px-3 py-2 text-left text-[12px] text-dark-500 hover:text-dark-300">
+          <Check size={13} className="text-emerald-400/70" />
+          {t('px.estOk').replace('{n}', stations.length)}
+          <span className="ml-auto text-dark-600">{estAbierto ? '▲' : '▼'}</span>
+        </button>
+      )}
+      {stations.length > 0 && (centers?.length > 1) && (pendientesEst > 0 || estAbierto) && (
+        <div className={`mb-5 rounded-2xl border p-4 ${pendientesEst > 0
+          ? 'border-amber-500/30 bg-amber-500/[.06]' : 'border-dark-800 bg-dark-900/40'}`}>
           <div className="mb-1 flex flex-wrap items-center gap-3">
-            <span className="text-[13px] font-bold text-amber-300">{t('px.asignaEst')}</span>
+            <span className={`text-[13px] font-bold ${pendientesEst > 0 ? 'text-amber-300' : 'text-dark-300'}`}>
+              {t('px.asignaEst')}
+            </span>
             {/* Repartir a mano estación por estación no debería hacer falta:
                 dónde se entrega ya lo dicen las coordenadas de los paquetes. */}
             <button
@@ -519,6 +576,13 @@ export default function PackageIntel() {
             </button>
           </div>
           <p className="mb-3 text-[12px] text-dark-400">{t('px.asignaExpl')}</p>
+          {/* Un mismo prefijo de ruta en dos estaciones con centros distintos es
+              una contradicción: el backend ya la detectaba y nadie la veía. */}
+          {conflictos.length > 0 && (
+            <p className="mb-3 rounded-lg border border-red-500/30 bg-red-500/[.07] px-2.5 py-1.5 text-[11.5px] text-red-200">
+              {t('px.estConflicto').replace('{p}', conflictos.join(', '))}
+            </p>
+          )}
           <div className="space-y-2">
             {stations.map(s => (
               <div key={s.service_area_id} className="flex flex-wrap items-center gap-2 rounded-lg border border-dark-800 bg-dark-950/40 px-3 py-2">
@@ -526,6 +590,18 @@ export default function PackageIntel() {
                   <div className="text-[12px] font-semibold text-dark-100">
                     {t('px.estacion')} {s.station_code || s.service_area_id.slice(0, 10)} · {s.n} {t('px.paq')}
                     {s.center && <span className="ml-2 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">{s.center}</span>}
+                    {/* Por qué sigue pidiendo algo esta estación. Sin esto, el
+                        aviso salía sin decir qué le pasaba a cada una. */}
+                    {s.center && !s.manual && (
+                      <span className="ml-1.5 rounded bg-dark-800 px-1.5 py-0.5 text-[10px] font-semibold text-dark-400">
+                        {t('px.estSupuesto')}
+                      </span>
+                    )}
+                    {s.mezclado && (
+                      <span className="ml-1.5 rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-bold text-red-300">
+                        {t('px.estMezclada')} {Object.entries(s.centros || {}).map(([c, n]) => `${c} ${n}`).join(' · ')}
+                      </span>
+                    )}
                   </div>
                   {s.sample_routes?.length > 0 && <div className="truncate font-mono text-[11px] text-dark-500">{t('px.rutasLbl')} {s.sample_routes.join(', ')}…</div>}
                 </div>

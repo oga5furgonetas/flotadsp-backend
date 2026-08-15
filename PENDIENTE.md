@@ -135,6 +135,35 @@ y "sin ningún falso positivo" a la vez es imposible. Lo honesto es un sistema
 que **o da una dirección confirmada por dos fuentes, o dice "no lo sé"**. Nunca
 una dirección equivocada con aire de certeza.
 
+## 2-bis · Panel de estaciones: arreglado el refresco y el banner (2026-08-15)
+
+Dani: "algo falla, no actualiza bien, y ese panel no vale para nada". Eran dos
+bugs de verdad, los dos en `PackageIntel.jsx`:
+
+- **`load()` no llamaba a `loadStations()`.** "Repartir automáticamente" sólo
+  llamaba a `load()`: reasignaba en el servidor, avisaba de cuántas había
+  resuelto y dejaba la pantalla con el reparto VIEJO. El refresco de 30 s
+  tampoco miraba nunca las estaciones. (Al meterlo hubo que subir la
+  declaración de `loadStations` por encima de `load`: va en su array de
+  dependencias, que se evalúa en cada render, y declarado después tumbaba la
+  pantalla con un ReferenceError.)
+- **El banner no se iba nunca.** La condición llevaba `|| stations.length > 1`,
+  así que con dos o más estaciones salía siempre, estuviera todo resuelto o no.
+  Ahora sale sólo si hay algo roto: sin centro, mezclada o prefijos en
+  conflicto. Con todo correcto queda una línea desplegable para corregir.
+- De paso: el backend ya calculaba `mezclado`, `mezcladas` y
+  `prefijos_en_conflicto` y **el frontend los tiraba**. Ahora se ven, con el
+  reparto de paquetes por centro de cada estación mezclada.
+- `manual: false` (centro deducido por mayoría) NO cuenta como pendiente a
+  propósito: es lo que dicen los propios paquetes, y contarlo devolvía el mismo
+  banner permanente con otra excusa. Se marca 'supuesto' y ya.
+
+**SIN COMPROBAR:** no se ha podido abrir el panel con sesión de admin, así que
+el bug original ("clico OGA5/DGA1/DGA2 y no pasa nada") NO está confirmado como
+resuelto. Lo que sí está arreglado es que el resultado se vea. Ojo a que
+`disabled={!!assigning}` deshabilita los botones de TODAS las estaciones
+mientras una está en curso, y en la de 112.311 paquetes eso puede tardar.
+
 ## 2 · El botón de asignar estación no responde
 
 En Paquetes IA, los botones OGA5/DGA1/DGA2 de cada estación: Dani clica y no

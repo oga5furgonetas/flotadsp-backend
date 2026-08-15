@@ -6,6 +6,13 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import '@fontsource-variable/inter'
 import '@fontsource-variable/space-grotesk'
 
+/* Señal de vida para /arranque.js. Ese vigilante espera 10 s y, si esta marca
+   no aparece, da por hecho que el bundle llegó envenenado (pantalla en blanco)
+   y repara la caché antes de recargar. Tiene que ponerse lo ANTES posible:
+   cualquier cosa que falle más abajo ya no es un problema de carga del asset,
+   y para eso está el ErrorBoundary. */
+window.__flotaArrancada = true
+
 // Tema del panel ANTES del primer render: sin destello oscuro→claro
 if (localStorage.getItem('panel_theme') === 'light') {
   document.documentElement.setAttribute('data-panel-theme', 'light')

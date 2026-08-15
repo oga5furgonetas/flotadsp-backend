@@ -102,6 +102,18 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    tras el `load`, si `document.styleSheets` suma <20 reglas, repara y recarga
    UNA vez por minuto (`sessionStorage.css_reparado`). Umbral con 68× de
    margen: el build real trae 1362 reglas, medidas en producción.
+   **Y el 2026-08-15, tercer caso: el envenenado fue el PROPIO
+   `index-<hash>.js`.** Ahí no salva ninguna de las tres defensas anteriores,
+   porque las tres viven DENTRO de ese fichero: el navegador rechaza el módulo
+   por MIME `text/html`, React no monta nunca y queda una pantalla EN BLANCO,
+   sin error y sin recuperación, hasta 4 h. Otra vez `curl` servía el JS
+   correcto byte a byte mientras el navegador tenía HTML cacheado bajo la URL
+   `.js`. Cuarta defensa: `public/arranque.js`, script CLÁSICO y externo (la
+   CSP no admite inline, igual que con `gtag-init.js`), cargado ANTES del
+   módulo y servido con `no-cache`. Espera 10 s y, si `window.__flotaArrancada`
+   no aparece y `#root` sigue vacío, repara la caché y recarga UNA vez (cerrojo
+   en `sessionStorage.arranque_reparado`: un bucle de recargas en manos de
+   alguien repartiendo sería peor que la pantalla en blanco).
 9. **Mongo OMITE la clave del `_id` en un `$group` cuando el campo no existe**
    en el documento (no la pone a `null`). `r["_id"]["cond"]` revienta con
    `KeyError` en cuanto hay un documento sin ese campo — pasó con los 94

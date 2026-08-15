@@ -10,6 +10,12 @@
 /sw.js
   Cache-Control: no-cache, no-store, must-revalidate
 
+# El vigilante de arranque tampoco: es la red que recupera la app cuando el
+# bundle llega envenenado, así que él es justo el que no puede quedarse
+# cacheado en mal estado.
+/arranque.js
+  Cache-Control: no-cache, no-store, must-revalidate
+
 # La cáscara HTML tampoco: tras cada deploy cambian los nombres de chunk y un
 # index.html cacheado pedía JS viejos → fallback SPA devolvía HTML → crash
 # "Cannot read properties of undefined (reading 'default')".
