@@ -90,6 +90,30 @@ async function render() {
   s.className = 'status' + (state.ok === true ? ' ok' : state.ok === false ? ' err' : '');
   if (!ingestToken) { s.textContent = 'Pega tu token de ingesta y pulsa Guardar y activar.'; s.className = 'status err'; }
 
+  /* ── POR QUÉ NO SE ENVÍA, ARRIBA DEL TODO ─────────────────────────────────
+     Las dos causas por las que la extensión se queda capturando sin enviar son
+     las dos que se borran al reinstalarla: el token y la elección de
+     estaciones. Las dos se avisaban… al final del popup, fuera de pantalla.
+     Aquí se dicen arriba, con el número de paquetes parados, para que no haya
+     que deducir nada mirando un "0 enviados". */
+  const alerta = $('alerta');
+  const enCola = state.buffered || 0;
+  // Se leen aquí del almacenamiento: `porEstacion` y `enviarEstaciones` viven
+  // en pintarEstaciones(), que es otra función — usarlas sin más reventaría el
+  // popup entero con un ReferenceError.
+  const { porEstacion = {}, enviarEstaciones = [] } =
+    await chrome.storage.local.get({ porEstacion: {}, enviarEstaciones: [] });
+  let aviso = '';
+  if (!ingestToken) {
+    aviso = `Falta el TOKEN: ${enCola} paquetes capturados sin enviar. `
+      + 'Cópialo en el panel (Paquetes IA → Extensión), pégalo aquí abajo y pulsa "Guardar y activar".';
+  } else if (!enviarEstaciones.length && Object.keys(porEstacion).length) {
+    aviso = `Ninguna estación marcada: ${enCola} paquetes capturados sin enviar. `
+      + 'Marca abajo la estación que quieras enviar.';
+  }
+  alerta.textContent = aviso;
+  alerta.style.display = aviso ? 'block' : 'none';
+
   // Actividad
   const ul = $('activity');
   if (!activity.length) { ul.innerHTML = '<li class="empty">Nada aún. Recarga la pestaña de Cortex y navega por una ruta.</li>'; return; }

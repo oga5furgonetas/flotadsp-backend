@@ -444,11 +444,25 @@
          equivocado sin que nadie lo notara. Leer el identificador que Cortex ya
          pone en la URL no admite ese error.)
 
-         Si la petición no trae serviceAreaId, se usa el de la página; y si
-         tampoco, el paquete se queda fuera como hasta ahora. */
-      let saDeEstaUrl = null;
-      try { saDeEstaUrl = new URL(url, location.origin).searchParams.get('serviceAreaId'); } catch (_) {}
-      const saParaEstos = normSa(saDeEstaUrl) || saId;
+         TRES SITIOS, por orden de fiabilidad, y ninguno es una suposición:
+           1. la URL de la propia petición;
+           2. la BARRA DE DIRECCIONES de Cortex, que en esta pantalla siempre lo
+              lleva: …/dv/routes?…&serviceAreaId=10ef2406-a250-45ce-8fa5-…
+              Es la estación que la persona está mirando en ese momento, y cada
+              pestaña tiene la suya, así que con dos pestañas abiertas no se
+              mezclan;
+           3. el aprendido navegando por route-details.
+
+         El punto 2 no estaba y era el que hacía falta: 83 paquetes se quedaban
+         sin estación —los 82 reintentos y la falta del día— porque la petición
+         del informe no lleva el parámetro y en esa pestaña no se había cargado
+         ningún route-details del que aprenderlo. Sin estación no se envían, así
+         que la dirección no salía del navegador. */
+      const saDeUrl = (u) => {
+        try { return normSa(new URL(u, location.origin).searchParams.get('serviceAreaId')); }
+        catch (_) { return null; }
+      };
+      const saParaEstos = saDeUrl(url) || saDeUrl(location.href) || saId;
       if (saParaEstos) {
         for (const p of packages) {
           if (!p.service_area_id && !p.center) p.service_area_id = saParaEstos;

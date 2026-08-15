@@ -39,6 +39,13 @@
 
   <div id="conn" class="conn"><span class="dot"></span><span id="connText">Comprobando…</span></div>
 
+  <!-- Por qué NO se está enviando, arriba del todo. El mismo aviso existía al
+       final del popup, debajo de la lista de estaciones, y ahí queda fuera de
+       pantalla: se perdieron dos ratos largos con la extensión capturando y sin
+       enviar nada mientras el motivo estaba escrito donde no se ve. -->
+  <div id="alerta" style="display:none;margin:8px 0;padding:8px 10px;border-radius:8px;
+       background:#7f1d1d;color:#fecaca;font-size:12px;font-weight:600;line-height:1.35"></div>
+
   <label for="token">Token de ingesta</label>
   <input id="token" placeholder="Pégalo desde el panel → Paquetes IA" />
   <label for="url">URL de ingesta (avanzado)</label>
