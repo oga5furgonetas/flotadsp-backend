@@ -284,6 +284,9 @@ export const cortexPortalGeo = (body) => api.post('/cortex/portales/geo', body)
 export const cortexPortalGeodir = (body) => api.post('/cortex/portales/geodir', body)
 /* Los "no puedo encontrar la dirección" de HOY, uno a uno y en vivo. */
 export const cortexDireccionesHoy = (params) => api.get('/cortex/direcciones-hoy', { params })
+/* Los MISSING de hoy, con el conductor ya resuelto. Pestaña propia: un paquete
+   perdido se atiende llamando a alguien, no buscando en un mapa. */
+export const cortexMissingHoy = (params) => api.get('/cortex/missing-hoy', { params })
 export const cortexDiagnostico = () => api.get('/cortex/diagnostico')
 /* IDs de Amazon que reparten sin ficha de conductor, con sugerencia de a quien
    corresponden. La asignacion reutiliza updateDriver: driver_id ya esta en la

@@ -19889,7 +19889,20 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     # Se guardan sus datos buenos (la dirección, sobre todo) y no se toca ni el
     # estado ni el timeline, que los sabe mejor route-details.
     if sin_estado:
-        enriquecer = {k: v for k, v in common.items() if k not in ("state",)}
+
+        # NI EL ESTADO NI EL DÍA. El informe de faltas devuelve los paquetes que
+        # siguen pendientes de reintento, y esos ARRASTRAN de días anteriores;
+        # como se pide con la fecha de hoy, todos vienen etiquetados como de
+        # hoy. Dejar que eso pisara `service_day` reescribía el pasado: el 11 de
+        # agosto pasó de 10.491 paquetes a 5.783 en una tarde, porque los que
+        # seguían reintentándose se mudaban al día de hoy. Un histórico que
+        # cambia solo no vale para nada, y menos delante de Amazon.
+        #
+        # `first_seen` tampoco se toca: es la fecha en que el paquete apareció
+        # por primera vez y es lo único que permite reconstruir a qué día
+        # pertenece si algo se tuerce.
+        enriquecer = {k: v for k, v in common.items()
+                      if k not in ("state", "service_day", "first_seen")}
         # El contexto (el motivo: ADDRESS_NOT_FOUND) sí se anota en el ÚLTIMO
         # evento si aún no lo tenía: es justo el dato que dice por qué falló.
         ctx = ev.get("context")
@@ -21436,6 +21449,90 @@ async def cortex_portal_geodir(data: dict = Body(...), user: dict = Depends(requ
             "celda": c, "lat": clat, "lng": clng, "geodir": geodir,
         }}, upsert=True)
     return {"success": True, "celdas": len(celdas), "geodir": geodir}
+
+
+@api_router.get("/cortex/missing-hoy")
+async def cortex_missing_hoy(day: str = "", center: str = "", _=Depends(require_admin)):
+    """Los paquetes que HOY están en MISSING, con quién los lleva.
+
+    Pestaña propia, aparte de los "no puedo encontrar la dirección": son dos
+    problemas distintos y se atienden distinto. Un MISSING es un paquete que no
+    aparece —hay que llamar al conductor y que mire la furgoneta— y una
+    dirección que no se encuentra es un problema de mapa. Mezclarlos en una
+    lista obliga a leer cada línea para saber de qué va.
+
+    Se resuelve el nombre del conductor igual que en /cortex/routes: en
+    cortex_packages sólo hay `driver_id`, y sin nombre esta pantalla no sirve
+    para lo único que hace falta hacer con un missing, que es llamar a alguien.
+
+    Se adjunta también la dirección REAL si ya se conoce de esa celda: un
+    paquete perdido en un portal que además está mal geolocalizado explica
+    bastante de por qué se perdió.
+    """
+    dia = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    match = {"service_day": dia, "state": "MISSING"}
+    if center and center not in ("Todos", "todos"):
+        match["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
+
+    cur = db.cortex_packages.aggregate(
+        [{"$match": match}] + _stage_celda() + [
+            {"$project": {"_id": 0, "tba": 1, "stop_address": 1, "stop_id": 1,
+                          "driver_name": 1, "driver_id": 1, "route_code": 1, "center": 1,
+                          "priority": 1, "reason": 1, "timeline": 1, "first_seen": 1,
+                          "updated_at": 1, "_la": 1, "_ln": 1, "_celda": 1}},
+            {"$limit": 300},
+        ], allowDiskUse=True)
+    pkgs = await cur.to_list(300)
+    if not pkgs:
+        return {"dia": dia, "paquetes": [], "total": 0}
+
+    rutas = sorted({(p.get("route_code") or "").strip() for p in pkgs if p.get("route_code")})
+    did_por_ruta: dict = {}
+    if rutas:
+        cur_c = db.cortex_packages.aggregate([
+            {"$match": {"service_day": dia, "route_code": {"$in": rutas},
+                        "driver_id": {"$nin": [None, ""]}}},
+            {"$group": {"_id": "$route_code", "d": {"$first": "$driver_id"}}},
+        ], allowDiskUse=True)
+        async for r in cur_c:
+            if r.get("_id"):
+                did_por_ruta[r["_id"]] = r.get("d")
+
+    def _did(p):
+        return p.get("driver_id") or did_por_ruta.get((p.get("route_code") or "").strip())
+
+    nombres = await _cx_nombres({d for d in (_did(p) for p in pkgs) if d})
+    celdas = sorted({p["_celda"] for p in pkgs})
+    notas = {n["celda"]: n async for n in db.portales.find(
+        {"celda": {"$in": celdas}}, {"_id": 0, "celda": 1, "geodir": 1, "nota": 1})}
+
+    out = []
+    for p in pkgs:
+        n = notas.get(p["_celda"], {})
+        # Cuándo se marcó MISSING: es la antigüedad, y con un paquete perdido
+        # el tiempo que lleva perdido es la mitad de la información.
+        hora = None
+        for ev in (p.get("timeline") or []):
+            if ev.get("state") == "MISSING" and ev.get("at"):
+                hora = ev["at"]
+        out.append({
+            "tba": p.get("tba"),
+            "stop_id": p.get("stop_id"),
+            "direccion": _cortex_addr_str(p.get("stop_address")),
+            "conductor": (nombres.get(_did(p)) or {}).get("nombre") or p.get("driver_name"),
+            "ruta": p.get("route_code"),
+            "center": (p.get("center") or "").strip(),
+            "lat": p.get("_la"), "lng": p.get("_ln"),
+            "celda": p.get("_celda"),
+            "hora": hora or p.get("updated_at"),
+            "prioridad": p.get("priority"),
+            "motivo": p.get("reason"),
+            "nota": n.get("nota"),
+            "real": (n.get("geodir") or None),
+        })
+    out.sort(key=lambda x: (x["hora"] or ""), reverse=True)
+    return {"dia": dia, "paquetes": out, "total": len(out),
+            "criticos": sum(1 for p in out if p.get("prioridad") == "critical")}
 
 
 @api_router.get("/cortex/direcciones-hoy")

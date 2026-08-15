@@ -11,6 +11,7 @@ import {
 } from '../api'
 import LibretaPortales from '../components/LibretaPortales'
 import DireccionesHoy from '../components/DireccionesHoy'
+import MissingHoy from '../components/MissingHoy'
 import EsquemaCortex from '../components/EsquemaCortex'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { hoyLocal, isoLocal } from '../../lib/fecha'
@@ -506,7 +507,7 @@ export default function PackageIntel() {
           la ruta está en marcha y aún se puede llamar al conductor) · y lo que
           lleva semanas fallando en el mismo portal. */}
       <div className="mb-5 flex gap-1 rounded-xl border border-dark-800 bg-dark-900/50 p-1">
-        {[['hoy', t('px.tab.hoy')], ['sindir', t('px.tab.sindir')], ['portales', t('px.tab.portales')]].map(([k, etiqueta]) => (
+        {[['hoy', t('px.tab.hoy')], ['sindir', t('px.tab.sindir')], ['missing', t('px.tab.missing')], ['portales', t('px.tab.portales')]].map(([k, etiqueta]) => (
           <button key={k} onClick={() => setVista(k)}
             className={`flex-1 rounded-lg px-3 py-1.5 text-[13px] font-semibold transition ${
               vista === k ? 'bg-brand-500/15 text-brand-300' : 'text-dark-400 hover:text-dark-200'}`}>
@@ -529,6 +530,14 @@ export default function PackageIntel() {
       {vista === 'sindir' && (
         <div className="rounded-xl border border-dark-800 bg-dark-900/30 p-4">
           <DireccionesHoy center={center} day={day} />
+        </div>
+      )}
+
+      {/* Los MISSING del día. Otro problema y otra forma de atenderlo: aquí se
+          llama al conductor, no se busca en un mapa. */}
+      {vista === 'missing' && (
+        <div className="rounded-xl border border-dark-800 bg-dark-900/30 p-4">
+          <MissingHoy center={center} day={day} />
         </div>
       )}
 
