@@ -183,10 +183,18 @@ export default function DireccionesHoy({ center, day }) {
 
   const enCurso = useRef(false)
   const yaVistos = useRef(new Set())
+  const tics = useRef(0)
   useEffect(() => {
     if (!datos) return undefined
     const tic = () => {
-      if (enCurso.current || document.hidden) return
+      /* Con la pestaña en segundo plano NO se para: se va más despacio.
+         Antes se detenía del todo, y bastaba con mirar otra pestaña para que
+         dejara de buscar sin avisar —lo justo para llegar a una reunión con la
+         lista a medias—. Uno cada 6 s sigue estando muy por debajo del límite
+         de 1 petición/segundo de Nominatim. */
+      tics.current += 1
+      if (document.hidden && tics.current % 3 !== 0) return
+      if (enCurso.current) return
       const p = lista(datos.paquetes).find(
         (x) => !x.real && x.direccion && x.celda && !yaVistos.current.has(x.celda))
       if (!p) { setBuscando(null); return }

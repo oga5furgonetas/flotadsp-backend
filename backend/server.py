@@ -21480,6 +21480,97 @@ async def cortex_portal_geodir(data: dict = Body(...), user: dict = Depends(requ
     return {"success": True, "celdas": len(celdas), "geodir": geodir}
 
 
+@api_router.get("/cortex/geocode")
+async def cortex_geocode(q: str, _=Depends(require_admin)):
+    """Geocodifica una dirección con Google. CUARTA FAMILIA de fuentes.
+
+    ── POR QUÉ PASA POR AQUÍ Y NO POR EL NAVEGADOR ──────────────────────────
+    Dos motivos, y los dos importan:
+      · El servicio de geocodificación de Google NO admite CORS: desde el
+        navegador no se puede llamar. (Al revés que Nominatim, que sólo funciona
+        desde el navegador porque al servidor le responde 403. Cada fuente tiene
+        su lado.)
+      · Y sobre todo: así la clave vive SÓLO en los secretos de Fly. Metida en
+        el navegador estaría a la vista de cualquiera que abra el código.
+
+    ── LO QUE SE MIRA DE LA RESPUESTA ───────────────────────────────────────
+    Google contesta SIEMPRE algo. Cuando no encuentra la dirección devuelve el
+    centro del municipio, y ése es su resultado peligroso: parece una respuesta
+    y no lo es. Pero lo avisa, y hay que hacerle caso:
+      · `location_type`: ROOFTOP es el portal exacto; RANGE_INTERPOLATED,
+        interpolado sobre el tramo; GEOMETRIC_CENTER y APPROXIMATE, el centro
+        de algo (una vía entera o un pueblo).
+      · `partial_match: true`: "he entendido sólo una parte de lo que me has
+        pedido". Medido con direcciones reales: en 'Calle El Barro 34,
+        Pontedeume' devuelve el centro de Pontedeume con las dos señales
+        puestas, y en 'Calzada de Santo Antonio 22, A Estrada' acierta el portal
+        con ROOFTOP y sin partial_match.
+
+    Aquí no se decide nada: se traduce la respuesta y se declara su precisión.
+    Quien decide si dos fuentes coinciden es el navegador, con las mismas reglas
+    que aplica a las otras tres.
+    """
+    clave = os.environ.get("GOOGLE_GEOCODING_KEY", "").strip()
+    if not clave:
+        raise HTTPException(503, "Google no configurado")
+    texto = (q or "").strip()[:300]
+    if len(texto) < 5:
+        raise HTTPException(400, "consulta demasiado corta")
+
+    try:
+        # httpx se importa dentro de la función, como en el resto del fichero:
+        # aquí no es un módulo global.
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=12) as c:
+            r = await c.get("https://maps.googleapis.com/maps/api/geocode/json",
+                            params={"address": texto, "region": "es",
+                                    "language": "es", "key": clave})
+        j = r.json()
+    except Exception as e:
+        logger.warning(f"google geocode: {e}")
+        return {"ok": False, "motivo": "sin_respuesta"}
+
+    estado = j.get("status")
+    if estado != "OK" or not j.get("results"):
+        # ZERO_RESULTS es una respuesta legítima. REQUEST_DENIED / OVER_QUERY_LIMIT
+        # son problemas de la cuenta y conviene verlos en el log, no tragárselos.
+        if estado not in ("OK", "ZERO_RESULTS"):
+            logger.warning(f"google geocode {estado}: {j.get('error_message', '')[:200]}")
+        return {"ok": False, "motivo": estado or "sin_datos"}
+
+    res = j["results"][0]
+    comp = {t: c.get("long_name") for c in res.get("address_components", []) for t in c.get("types", [])}
+    loc = (res.get("geometry") or {}).get("location") or {}
+    tipo = (res.get("geometry") or {}).get("location_type") or ""
+    parcial = bool(res.get("partial_match"))
+
+    # La precisión se declara por lo que dice Google, nunca por lo que nos
+    # convendría. `partial_match` degrada a zona aunque diga ROOFTOP: significa
+    # que no ha entendido la dirección entera, y entonces el punto es de otra
+    # cosa parecida, no de lo que se pidió.
+    if parcial:
+        precision = "zona"
+    elif tipo == "ROOFTOP":
+        precision = "portal"
+    elif tipo in ("RANGE_INTERPOLATED", "GEOMETRIC_CENTER"):
+        precision = "calle"
+    else:
+        precision = "zona"
+
+    return {
+        "ok": True,
+        "lat": loc.get("lat"), "lng": loc.get("lng"),
+        "display": res.get("formatted_address"),
+        "calle": comp.get("route") or "",
+        "numero": comp.get("street_number") or "",
+        "cp": comp.get("postal_code") or "",
+        "municipio": comp.get("locality") or comp.get("administrative_area_level_3") or "",
+        "precision": precision,
+        "location_type": tipo,
+        "partial": parcial,
+    }
+
+
 @api_router.get("/cortex/missing-hoy")
 async def cortex_missing_hoy(day: str = "", center: str = "", _=Depends(require_admin)):
     """Los paquetes que HOY están en MISSING, con quién los lleva.

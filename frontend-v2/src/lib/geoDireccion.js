@@ -3,6 +3,7 @@
    bloque del pueblo pequeño al final—, nunca para decidir dónde está algo: eso
    lo dicen siempre las coordenadas. */
 import { nucleoVia } from './geoPortal'
+import { API_BASE } from './apiBase'
 
 /* ─────────────────────────────────────────────────────────────────────────────
    DÓNDE ESTÁ DE VERDAD ESTA DIRECCIÓN — varios buscadores a la vez
@@ -282,13 +283,20 @@ export function consultaLarga(d) {
 const TIEMPO_MAX_MS = 8000
 
 /** fetch que no puede colgar la pantalla ni lanzar: o trae JSON, o null. */
-async function pedirJSON(url, { signal } = {}) {
+async function pedirJSON(url, { signal, conAuth } = {}) {
   const corte = new AbortController()
   const reloj = setTimeout(() => corte.abort(), TIEMPO_MAX_MS)
   const abortar = () => corte.abort()
   if (signal) signal.addEventListener('abort', abortar, { once: true })
   try {
-    const r = await fetch(url, { signal: corte.signal, headers: { Accept: 'application/json' } })
+    // Sólo las llamadas a NUESTRO backend llevan el token. A los buscadores de
+    // fuera no se les manda nada nuestro, faltaría más.
+    const cab = { Accept: 'application/json' }
+    if (conAuth) {
+      const t = localStorage.getItem('flotadsp_token')
+      if (t) cab.Authorization = `Bearer ${t}`
+    }
+    const r = await fetch(url, { signal: corte.signal, headers: cab })
     if (!r.ok) return null
     return await r.json()
   } catch {
@@ -423,9 +431,41 @@ export async function buscarCartociudad(d, opciones = {}) {
   }
 }
 
+/* Google, CUARTA FAMILIA y la única con callejero propio además del IGN.
+   Va por NUESTRO backend, no directo: su servicio de geocodificación no admite
+   CORS (justo al revés que Nominatim, que sólo funciona desde el navegador), y
+   además así la clave se queda en los secretos de Fly en vez de quedar a la
+   vista en el código de la página.
+
+   Google contesta SIEMPRE algo: cuando no encuentra la dirección devuelve el
+   centro del municipio. El backend ya traduce esa señal (`partial_match` y
+   `location_type`) a nuestra precisión, así que aquí sólo hay que respetarla:
+   lo que llega como 'zona' no vota, igual que en las otras tres. */
+export async function buscarGoogle(d, opciones = {}) {
+  const j = await pedirJSON(
+    `${API_BASE}/cortex/geocode?q=${encodeURIComponent(consultaLarga(d))}`,
+    { ...opciones, conAuth: true })
+  if (!j || !j.ok) return null
+  const lat = Number(j.lat)
+  const lng = Number(j.lng)
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+  return {
+    fuente: 'google',
+    familia: 'google',
+    lat,
+    lng,
+    calle: String(j.calle || '').slice(0, 160),
+    numero: String(j.numero || '').slice(0, 20),
+    cp: String(j.cp || '').slice(0, 12),
+    municipio: String(j.municipio || '').slice(0, 120),
+    display: String(j.display || '').slice(0, 300),
+    precision: j.precision === 'portal' ? 'portal' : j.precision === 'calle' ? 'calle' : 'zona',
+  }
+}
+
 /* El orden no importa: se preguntan todos a la vez. Son servicios distintos,
    no comparten límite de uso. */
-export const BUSCADORES = [buscarNominatim, buscarPhoton, buscarCartociudad]
+export const BUSCADORES = [buscarNominatim, buscarPhoton, buscarCartociudad, buscarGoogle]
 
 /* ── EL ACUERDO ───────────────────────────────────────────────────────────────
    Se agrupa por cercanía: para cada resultado se mira cuántos caen a menos de
