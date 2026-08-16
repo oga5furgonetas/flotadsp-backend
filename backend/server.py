@@ -9203,7 +9203,11 @@ async def guardar_destinatario(data: dict = Body(...), user: dict = Depends(requ
         if not _user_can_see_center(user, c):
             raise HTTPException(403, f"No tienes acceso a {c}")
     avisos = [a for a in (data.get("avisos") or []) if a in _AVISOS_TIPOS] or ["resumen_diario"]
+    email = str(data.get("email") or "").strip().lower()[:120]
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[a-z]{2,}", email):
+        raise HTTPException(400, f"Correo no válido: {email}")
     doc = {"nombre": nombre, "telefono": _tel_normaliza(data.get("telefono")),
+           "email": email or None,
            "centers": centers, "avisos": avisos, "activo": bool(data.get("activo", True)),
            "updated_at": datetime.now(timezone.utc).isoformat(), "updated_by": user.get("name")}
     did = str(data.get("id") or "")
@@ -9422,6 +9426,87 @@ async def _telegram_aviso(texto: str) -> bool:
         return False
 
 
+def _html_resumen(r: dict) -> str:
+    """El resumen en un correo que se lee de un vistazo en el móvil.
+
+    Estilos en línea y sin CSS externo a propósito: Gmail y Outlook tiran las
+    hojas de estilo, y un correo que llega sin formato es peor que uno feo.
+
+    El correo es la vía que no depende de nadie: sin plantillas que aprobar,
+    sin restricciones de cuenta y sin coste por mensaje. Y a diferencia de una
+    plantilla de WhatsApp, aquí sí cabe el detalle entero.
+    """
+    esc = lambda s: (str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    G = "#0b0d10"; T = "#e9edf3"; S = "#8b94a3"; L = "#1c2027"
+    P = []
+    P.append(f'<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:{G};'
+             f'color:{T};padding:24px;max-width:640px;margin:0 auto;border-radius:14px">')
+    P.append(f'<div style="font-size:13px;color:{S};letter-spacing:.12em;text-transform:uppercase">'
+             f'{esc(r["fecha"])}</div>')
+    P.append(f'<h1 style="margin:4px 0 20px;font-size:26px;font-weight:700">{esc(r["center"])}</h1>')
+
+    # Entrega
+    P.append(f'<div style="background:{L};border-radius:10px;padding:16px;margin-bottom:14px">')
+    P.append(f'<div style="font-size:12px;color:{S};margin-bottom:4px">ENTREGA</div>')
+    P.append(f'<div style="font-size:19px;font-weight:600">{esc(r["entrega"])}</div>')
+    inc = r.get("incidencias") or {}
+    prob = []
+    if inc.get("sin_direccion"):
+        prob.append(f'{inc["sin_direccion"]} sin encontrar la dirección')
+    if inc.get("missing"):
+        prob.append(f'{inc["missing"]} no estaban en la furgoneta')
+    if inc.get("lost"):
+        prob.append(f'{inc["lost"]} extraviados')
+    if prob:
+        P.append(f'<div style="margin-top:8px;color:#fbbf24;font-size:14px">⚠️ {esc(" · ".join(prob))}</div>')
+    P.append('</div>')
+
+    # Golpes
+    danos = r.get("danos") or []
+    P.append(f'<div style="background:{L};border-radius:10px;padding:16px;margin-bottom:14px">')
+    P.append(f'<div style="font-size:12px;color:{S};margin-bottom:8px">'
+             f'GOLPES NUEVOS ({len(danos)})</div>')
+    if danos:
+        for d in danos[:15]:
+            grav = f' <span style="color:{S}">({esc(d["gravedad"])})</span>' if d.get("gravedad") else ""
+            quien = (f'<div style="font-size:13px;color:{S}">{esc(d["conductor"])}</div>'
+                     if d.get("conductor") else
+                     f'<div style="font-size:13px;color:{S}">sin conductor en el cuadrante</div>')
+            P.append(f'<div style="padding:8px 0;border-top:1px solid #2a2f38">'
+                     f'<b style="font-family:monospace">{esc(d["matricula"])}</b> — {esc(d["parte"])}{grav}'
+                     f'{quien}</div>')
+    else:
+        P.append('<div style="font-size:15px;color:#34d399">Ninguno ✓</div>')
+    P.append('</div>')
+
+    # Checklist, tarea por tarea
+    for t in (r.get("turnos") or []):
+        ok = t["hechas"] == t["total"]
+        P.append(f'<div style="background:{L};border-radius:10px;padding:16px;margin-bottom:14px">')
+        P.append(f'<div style="font-size:12px;color:{S};margin-bottom:8px">'
+                 f'CHECKLIST {esc(t["turno"]).upper()} — '
+                 f'<b style="color:{"#34d399" if ok else "#fbbf24"}">{t["hechas"]}/{t["total"]}</b></div>')
+        for it in t["items"]:
+            if it.get("done"):
+                P.append(f'<div style="padding:5px 0;font-size:14px">'
+                         f'<span style="color:#34d399">✓</span> {esc(it.get("text"))} '
+                         f'<span style="color:{S};font-size:13px">· {esc(it.get("done_by") or "—")} '
+                         f'{esc((it.get("done_at") or "")[11:16])}</span></div>')
+            else:
+                P.append(f'<div style="padding:5px 0;font-size:14px;color:#fca5a5">'
+                         f'✗ {esc(it.get("text"))} — sin hacer</div>')
+        P.append('</div>')
+
+    P.append(f'<a href="https://flotadsp.com/panel" style="display:inline-block;margin-top:6px;'
+             f'background:#ea6800;color:#fff;text-decoration:none;padding:11px 20px;'
+             f'border-radius:9px;font-weight:600;font-size:14px">Abrir el panel</a>')
+    P.append(f'<div style="margin-top:18px;font-size:12px;color:{S}">'
+             f'Resumen automático de FlotaDSP. Si no quieres seguir recibiéndolo, '
+             f'dilo y se quita en Configuración.</div>')
+    P.append('</div>')
+    return "".join(P)
+
+
 async def enviar_resumen_diario(dia: Optional[str] = None) -> list:
     """El resumen corto del día a cada destinatario de su centro.
 
@@ -9451,10 +9536,25 @@ async def enviar_resumen_diario(dia: Optional[str] = None) -> list:
         # plantillas y sí admiten saltos de línea.
         await _telegram_aviso(_texto_resumen_largo(r)
                               + "\n\n<i>Para: " + ", ".join(d["nombre"] for d in quienes) + "</i>")
+
+        # Correo: la vía que no depende de nadie. Sin plantillas que aprobar,
+        # sin restricciones de cuenta de Meta y sin coste por mensaje.
+        html = _html_resumen(r)
+        asunto = f"{r['center']} — {r['fecha']} · entrega {r['entrega'].split(' (')[0]}"
+        correos = []
+        for d in quienes:
+            if not d.get("email"):
+                continue
+            if await _send_resend_email(d["email"], asunto, html):
+                correos.append(d["email"])
+            else:
+                logger.warning("Resumen diario: no se pudo enviar a %s", d["email"])
+
         salida.append({**{k: r[k] for k in ("center", "fecha", "entrega", "checklist", "golpes")},
                        "incidencias": r["incidencias"], "danos": r["danos"],
                        "turnos": [{k: t[k] for k in ("turno", "hechas", "total")} for t in r["turnos"]],
-                       "destinatarios": [d["nombre"] for d in quienes]})
+                       "destinatarios": [d["nombre"] for d in quienes],
+                       "correos": correos})
     return salida
 
 

@@ -55,6 +55,7 @@ function Destinatarios({ centers }) {
             ...(x.danos || []).slice(0, 6).map((d) => `  • ${d.matricula} — ${d.parte}${d.gravedad ? ` (${d.gravedad})` : ''}${d.conductor ? ` · ${d.conductor}` : ''}`),
             ...(x.turnos || []).map((t) => `Checklist ${t.turno}: ${t.hechas}/${t.total}`),
             `Para: ${x.destinatarios.join(', ')}`,
+            x.correos?.length ? `✉️ Correo enviado a: ${x.correos.join(', ')}` : '(nadie con correo configurado)',
           ].join('\n')).join('\n\n')
         : 'Nadie tiene centros asignados, así que no se ha mandado nada.')
     } catch (e) {
@@ -68,7 +69,7 @@ function Destinatarios({ centers }) {
 
   const abrir = (d) => setForm(d
     ? { ...d }
-    : { nombre: '', telefono: '', centers: [], avisos: ['resumen_diario'], activo: true })
+    : { nombre: '', email: '', telefono: '', centers: [], avisos: ['resumen_diario'], activo: true })
 
   async function guardar() {
     setBusy(true); setErr('')
@@ -96,8 +97,8 @@ function Destinatarios({ centers }) {
       </div>
       <p className="mb-3 text-xs leading-relaxed text-dark-500">
         Un mensaje al día por persona con la entrega, el checklist y los golpes nuevos de sus
-        centros. Ahora sale por Telegram; cuando WhatsApp esté conectado saldrá por ahí sin
-        tocar nada más.
+        centros, tarea por tarea y golpe a golpe. Sale por correo a cada persona y al grupo
+        de Telegram. El teléfono se queda guardado para el día que WhatsApp esté conectado.
       </p>
 
       {rows === null ? (
@@ -110,7 +111,7 @@ function Destinatarios({ centers }) {
               <span className="min-w-0 flex-1">
                 <span className="block text-sm text-dark-100">{d.nombre}</span>
                 <span className="block font-mono text-[11px] text-dark-500">
-                  {d.telefono} · {d.centers?.join(' · ') || 'todos los centros'}
+                  {d.email || d.telefono} · {d.centers?.join(' · ') || 'todos los centros'}
                 </span>
               </span>
               {!d.activo && <span className="rounded bg-dark-800 px-1.5 text-[10px] text-dark-500">en pausa</span>}
@@ -140,9 +141,14 @@ function Destinatarios({ centers }) {
           <div className="grid gap-2 sm:grid-cols-2">
             <input className="input text-sm" placeholder="Nombre" value={form.nombre}
               onChange={(e) => setForm({ ...form, nombre: e.target.value })} />
-            <input className="input text-sm" placeholder="+34 600 00 00 00" value={form.telefono}
-              onChange={(e) => setForm({ ...form, telefono: e.target.value })} />
+            <input className="input text-sm" placeholder="correo@ejemplo.com" value={form.email || ''}
+              onChange={(e) => setForm({ ...form, email: e.target.value })} />
           </div>
+          {/* El teléfono se queda para el día que WhatsApp esté conectado. Hoy
+              el que hace falta es el correo, que es por donde sale. */}
+          <input className="input text-sm" placeholder="Teléfono (para WhatsApp, opcional)"
+            value={form.telefono || ''}
+            onChange={(e) => setForm({ ...form, telefono: e.target.value })} />
           <div>
             <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-dark-500">Centros</p>
             <div className="flex flex-wrap gap-1.5">
@@ -161,7 +167,7 @@ function Destinatarios({ centers }) {
           </label>
           {err && <p className="text-[12px] text-red-300">{err}</p>}
           <div className="flex gap-2">
-            <button onClick={guardar} disabled={busy || !form.nombre.trim() || !form.telefono.trim()}
+            <button onClick={guardar} disabled={busy || !form.nombre.trim() || !(form.email || '').trim()}
               className="btn-primary flex items-center gap-1.5 text-sm disabled:opacity-40">
               {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} Guardar
             </button>
