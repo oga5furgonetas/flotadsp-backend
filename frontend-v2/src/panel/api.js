@@ -32,6 +32,8 @@ export const listarDestinatarios = () => api.get('/avisos/destinatarios')
 export const guardarDestinatario = (body) => api.post('/avisos/destinatarios', body)
 export const borrarDestinatario = (id) => api.delete(`/avisos/destinatarios/${id}`)
 export const enviarResumenDiario = (body) => api.post('/avisos/enviar-resumen-diario', body)
+export const getHorariosAvisos = () => api.get('/avisos/horarios')
+export const setHorariosAvisos = (body) => api.put('/avisos/horarios', body)
 export const chatToChecklist = (center, messageId, body = {}) =>
   api.post(`/chat/${center}/${messageId}/to-checklist`, body)
 

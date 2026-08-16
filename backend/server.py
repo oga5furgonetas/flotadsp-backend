@@ -9564,34 +9564,95 @@ async def trigger_resumen_diario(data: dict = Body(default={}), _=Depends(requir
     return {"enviados": await enviar_resumen_diario(data.get("date"))}
 
 
+_HORARIOS_DEF = {"resumen_diario": 21, "turno_manana": 15, "turno_tarde": 22}
+
+
+async def _horarios_avisos() -> dict:
+    """A qué hora sale cada aviso. Se lee de la BD en CADA vuelta del bucle.
+
+    Leerlo una sola vez al arrancar obligaría a redesplegar el servidor para
+    cambiar una hora, que es justo lo que no puede hacer quien la necesita
+    cambiar. Así se toca en Configuración y surte efecto ese mismo día.
+    """
+    doc = await db.app_meta.find_one({"_id": "horarios_avisos"}) or {}
+    out = dict(_HORARIOS_DEF)
+    for k in out:
+        v = doc.get(k)
+        if isinstance(v, int) and 0 <= v <= 23:
+            out[k] = v
+    return out
+
+
+@api_router.get("/avisos/horarios")
+async def get_horarios_avisos(_=Depends(require_admin)):
+    return await _horarios_avisos()
+
+
+@api_router.put("/avisos/horarios")
+async def set_horarios_avisos(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Cambia las horas de envío. Surte efecto sin redesplegar."""
+    cambios = {}
+    for k in _HORARIOS_DEF:
+        if k in data:
+            try:
+                h = int(data[k])
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{k} debe ser una hora (0-23)")
+            if not 0 <= h <= 23:
+                raise HTTPException(400, f"{k} debe estar entre 0 y 23")
+            cambios[k] = h
+    if not cambios:
+        raise HTTPException(400, "Nada que cambiar")
+    cambios["updated_by"] = user.get("name")
+    cambios["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.app_meta.update_one({"_id": "horarios_avisos"}, {"$set": cambios}, upsert=True)
+    return await _horarios_avisos()
+
+
+async def _ya_enviado_hoy(clave: str, dia: str) -> bool:
+    """Cerrojo para no mandar dos veces el mismo día.
+
+    Vive en la BD y no en memoria porque Fly reinicia la máquina cuando le
+    parece: con el cerrojo en memoria, un reinicio a las 21:05 volvería a
+    mandar el resumen a todo el mundo.
+    """
+    r = await db.app_meta.update_one(
+        {"_id": f"envio_{clave}", "dia": {"$ne": dia}},
+        {"$set": {"dia": dia, "at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True,
+    )
+    return not (r.modified_count or r.upserted_id)
+
+
+async def _bucle_aviso(clave: str, hora_key: str, accion):
+    """Mira el reloj cada minuto y dispara cuando toca.
+
+    Se comprueba cada minuto en vez de dormir hasta la hora exacta para que un
+    cambio de horario en Configuración se note el mismo día, sin reiniciar.
+    """
+    from zoneinfo import ZoneInfo
+    madrid = ZoneInfo("Europe/Madrid")
+    while True:
+        try:
+            horas = await _horarios_avisos()
+            now = datetime.now(madrid)
+            if now.hour == horas[hora_key] and not await _ya_enviado_hoy(clave, now.strftime("%Y-%m-%d")):
+                logger.info("Aviso %s: disparando (hora %02d)", clave, horas[hora_key])
+                await accion()
+        except Exception as e:
+            logger.error("Bucle de aviso %s: %s", clave, e)
+        await asyncio.sleep(60)
+
+
 @app.on_event("startup")
 async def start_resumen_diario_scheduler():
-    """Resumen corto por centro. Por defecto a las 21:00, antes del cierre
-    largo de las 22:00 que va al grupo: son mensajes distintos para gente
-    distinta y no tienen por qué coincidir."""
-    try:
-        hora = int(os.environ.get("RESUMEN_DIARIO_H", 21))
-    except ValueError:
-        hora = 21
+    """Resumen corto por centro, a la hora que diga Configuración.
 
-    async def _loop():
-        from zoneinfo import ZoneInfo
-        madrid = ZoneInfo("Europe/Madrid")
-        while True:
-            try:
-                now = datetime.now(madrid)
-                target = now.replace(hour=hora, minute=0, second=0, microsecond=0)
-                if now >= target:
-                    target += timedelta(days=1)
-                await asyncio.sleep((target - now).total_seconds())
-                await enviar_resumen_diario()
-                await asyncio.sleep(70)
-            except Exception as e:
-                logger.error(f"Scheduler resumen diario centro: {e}")
-                await asyncio.sleep(300)
-
-    logger.info("Resumen diario por centro programado a las %02d:00 (Madrid)", hora)
-    asyncio.create_task(_loop())
+    Por defecto a las 21:00, antes del cierre largo de las 22:00 que va al
+    grupo: son mensajes distintos para gente distinta y no tienen por qué
+    coincidir.
+    """
+    asyncio.create_task(_bucle_aviso("resumen_diario", "resumen_diario", enviar_resumen_diario))
 
 
 @api_router.post("/checklist/enviar-resumen")
@@ -9612,33 +9673,10 @@ async def start_checklist_summary_scheduler():
     las 14:00 y otro a las 15:30 dan resúmenes distintos, y mandarlo antes de
     tiempo cuenta como "sin hacer" lo que aún da tiempo a hacer.
     """
-    horas = []
-    for shift, env, defecto in (("manana", "RESUMEN_TURNO_MANANA_H", 15),
-                                ("tarde", "RESUMEN_TURNO_TARDE_H", 22)):
-        try:
-            horas.append((shift, int(os.environ.get(env, defecto))))
-        except ValueError:
-            horas.append((shift, defecto))
-
-    async def _loop(shift: str, hora: int):
-        from zoneinfo import ZoneInfo
-        madrid = ZoneInfo("Europe/Madrid")
-        while True:
-            try:
-                now = datetime.now(madrid)
-                target = now.replace(hour=hora, minute=0, second=0, microsecond=0)
-                if now >= target:
-                    target += timedelta(days=1)
-                await asyncio.sleep((target - now).total_seconds())
-                await enviar_resumen_turno(shift)
-                await asyncio.sleep(70)   # margen: no disparar dos veces
-            except Exception as e:
-                logger.error(f"Scheduler resumen turno {shift}: {e}")
-                await asyncio.sleep(300)
-
-    for shift, hora in horas:
-        logger.info("Resumen de turno %s programado a las %02d:00 (Madrid)", shift, hora)
-        asyncio.create_task(_loop(shift, hora))
+    for shift, hora_key in (("manana", "turno_manana"), ("tarde", "turno_tarde")):
+        asyncio.create_task(_bucle_aviso(
+            f"turno_{shift}", hora_key,
+            functools.partial(enviar_resumen_turno, shift)))
 
 
 # =========================

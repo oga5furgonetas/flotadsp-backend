@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useT } from '../../i18n'
-import { Loader2, Plus, Building, Send, CreditCard, Check, Copy, ExternalLink, BellRing, Pencil, Trash2 } from 'lucide-react'
-import { getOrgCenters, addOrgCenter, getTelegramConfig, getOrgBilling, listarDestinatarios, guardarDestinatario, borrarDestinatario, enviarResumenDiario } from '../api'
+import { Loader2, Plus, Building, Send, CreditCard, Check, Copy, ExternalLink, BellRing, Pencil, Trash2, Clock } from 'lucide-react'
+import { getOrgCenters, addOrgCenter, getTelegramConfig, getOrgBilling, listarDestinatarios, guardarDestinatario, borrarDestinatario, enviarResumenDiario, getHorariosAvisos, setHorariosAvisos } from '../api'
 import { lista } from '../../lib/lista'
 import { getAdmin } from '../auth'
 
@@ -32,6 +32,60 @@ function CopyRow({ label, url }) {
    código acabarían en GitHub y en el historial de git, que es para siempre —
    y son números de personas reales, no configuración.
    ──────────────────────────────────────────────────────────────────────────── */
+/* A qué hora sale cada aviso. Se guarda en la base y el servidor lo relee cada
+   minuto, así que el cambio surte efecto ese mismo día sin redesplegar nada. */
+const AVISOS = [
+  { k: 'resumen_diario', label: 'Resumen del día', ayuda: 'Correo a cada persona con la entrega, los golpes y el checklist de sus centros.' },
+  { k: 'turno_manana', label: 'Cierre del turno de mañana', ayuda: 'Qué quedó sin hacer. Ponlo a la hora en que acaba el turno, no antes: lo que aún da tiempo a hacer saldría como pendiente.' },
+  { k: 'turno_tarde', label: 'Cierre del turno de tarde', ayuda: 'Igual que el de mañana, para el segundo turno.' },
+]
+
+function Horarios() {
+  const [h, setH] = useState(null)
+  const [guardando, setGuardando] = useState(false)
+  const [ok, setOk] = useState(false)
+
+  useEffect(() => { getHorariosAvisos().then((r) => setH(r.data)).catch(() => setH(null)) }, [])
+
+  async function guardar(clave, valor) {
+    const v = Math.max(0, Math.min(23, Number(valor)))
+    setH((x) => ({ ...x, [clave]: v }))
+    setGuardando(true); setOk(false)
+    try {
+      const r = await setHorariosAvisos({ [clave]: v })
+      setH(r.data); setOk(true); setTimeout(() => setOk(false), 2000)
+    } catch { /* se queda lo que había al recargar */ } finally { setGuardando(false) }
+  }
+
+  if (!h) return null
+  return (
+    <div className="mb-4 rounded-lg border border-dark-800 bg-dark-900/40 p-3">
+      <p className="mb-2.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-dark-500">
+        <Clock size={12} /> A qué hora sale cada aviso
+        {guardando && <Loader2 size={11} className="animate-spin" />}
+        {ok && <span className="normal-case tracking-normal text-emerald-400">guardado</span>}
+      </p>
+      <div className="space-y-2">
+        {AVISOS.map((a) => (
+          <div key={a.k} className="flex items-start gap-3">
+            <select value={h[a.k]} onChange={(e) => guardar(a.k, e.target.value)}
+              className="input w-[74px] shrink-0 py-1 text-center text-sm tabular-nums">
+              {Array.from({ length: 24 }, (_, i) => (
+                <option key={i} value={i}>{String(i).padStart(2, '0')}:00</option>
+              ))}
+            </select>
+            <div className="min-w-0">
+              <p className="text-[13px] text-dark-200">{a.label}</p>
+              <p className="text-[11px] leading-relaxed text-dark-600">{a.ayuda}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2.5 text-[11px] text-dark-600">Hora de España. El cambio vale desde hoy mismo.</p>
+    </div>
+  )
+}
+
 function Destinatarios({ centers }) {
   const [rows, setRows] = useState(null)
   const [form, setForm] = useState(null)   // null = cerrado
@@ -121,6 +175,8 @@ function Destinatarios({ centers }) {
           ))}
         </div>
       )}
+
+      <Horarios />
 
       {!form ? (
         <div className="flex flex-wrap items-center gap-2">
