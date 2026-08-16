@@ -7,7 +7,7 @@ import {
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon,
   PackageSearch, MapPin, Timer, MapPinned,
 } from 'lucide-react'
-import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken } from './auth'
+import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters } from './auth'
 import TrialBanner from './TrialBanner'
 import CommandPalette from './CommandPalette'
 import LiveNotifier from './LiveNotifier'
@@ -116,11 +116,11 @@ export default function PanelLayout() {
 
   // (El menú se calcula más abajo, tras conocer permisos y plan)
 
-  // Centros DINÁMICOS de este DSP (multi-tenant: nunca hardcodeado)
-  // Centros visibles: si allowed_centers es una lista, filtra; si no, todos los de la org.
-  const allCenters = Array.isArray(admin?.centers) ? admin.centers : []
-  const allowed = Array.isArray(admin?.allowed_centers) ? admin.allowed_centers : null
-  const centers = allowed ? allCenters.filter((c) => allowed.includes(c)) : allCenters
+  // Centros DINÁMICOS de este DSP (multi-tenant: nunca hardcodeado).
+  // El cálculo vive en auth.js porque tiene que salir del JWT: el blob de
+  // localStorage se puede haber quedado a medias y aquí eso se traducía en un
+  // panel con un solo botón "Todos" y sin datos.
+  const centers = getVisibleCenters()
 
   // Si el usuario tiene exactamente 1 centro asignado, forzamos ese centro automáticamente
   const singleCenter = centers.length === 1 ? centers[0] : null
@@ -128,6 +128,14 @@ export default function PanelLayout() {
   useEffect(() => {
     if (singleCenter && center !== singleCenter) setCenter(singleCenter)
   }, [singleCenter]) // eslint-disable-line
+
+  // Un centro guardado que ya no se puede ver (otro usuario en el mismo
+  // ordenador, o permisos recortados) dejaba al panel pidiendo un centro
+  // prohibido: 403 en todo y pantallas vacías, sin forma de arreglarlo desde la
+  // interfaz porque ese centro ni siquiera aparecía como botón.
+  useEffect(() => {
+    if (center !== 'Todos' && centers.length && !centers.includes(center)) setCenter('Todos')
+  }, [center, centers.join('|')]) // eslint-disable-line
 
   useEffect(() => { localStorage.setItem('panel_center', center) }, [center])
 

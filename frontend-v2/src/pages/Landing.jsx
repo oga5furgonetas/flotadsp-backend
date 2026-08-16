@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useT, LANGS } from '../i18n'
 import { API_BASE } from '../lib/apiBase'
+import { saveSession } from '../panel/auth'
 import {
   Zap, Shield, Bell, Trophy, Clock, CheckCircle, ChevronRight,
   Camera, Truck, Users, BarChart3, Star, ArrowRight, Globe, Lock,
@@ -477,11 +478,7 @@ export default function Landing() {
       const r = await fetch(`${API_BASE}/auth/demo-login`, { method: 'POST' })
       const j = await r.json()
       if (j?.access_token) {
-        localStorage.setItem('flotadsp_token', j.access_token)
-        localStorage.setItem('flotadsp_admin', JSON.stringify({
-          name: j.name, role: j.role, id: j.id, account_type: j.account_type,
-          slug: j.slug, centers: j.centers || [],
-        }))
+        saveSession(j)   // misma función que el login normal: guarda TODO
         window.location.href = '/panel'
         return
       }

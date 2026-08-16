@@ -141,7 +141,24 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    día tarde: las 5 ITV del 17 salían dentro del recuadro del 18, en silencio y
    sin error. Para una clave `YYYY-MM-DD` de una fecha local hay que componerla
    a mano con `getFullYear/getMonth/getDate`, nunca por ISO.
-12. **Mongo OMITE la clave del `_id` en un `$group` cuando el campo no existe**
+12. **La sesión del panel se guarda en DOS sitios y solo uno es fiable.** El JWT
+   lo firma el servidor; el blob `flotadsp_admin` de localStorage lo escribe el
+   cliente. `pages/Login.jsx` (la pantalla vieja de `/login`, que sigue viva y
+   enlazada) guardaba a mano solo `name/role/id/account_type/slug`: sin
+   `centers`, `allowed_centers`, `permissions` ni `admin_role`. Consecuencia en
+   producción: el selector de centro se quedaba con UN solo botón "Todos" —
+   `allCenters.filter(c => allowed.includes(c))` sobre una lista vacía — y como
+   `getChat`, `getChecklist` y todo Scorecard mandan el centro CRUDO, pedían
+   literalmente el centro llamado "Todos" y devolvían vacío. Un dispatcher veía
+   el panel entero sin datos y sin ningún error. Reglas: la sesión se guarda
+   SIEMPRE con `saveSession()` (un único escritor), y lo que el JWT sepa se lee
+   del JWT (`getPermissions`, `getVisibleCenters`), no del blob.
+13. **Una furgoneta `status: "baja"` está devuelta: no cuenta en nada.** Eran 16
+   de 138 y salían en listas y contadores. `GET /vehicles` las excluye salvo
+   `?estado=baja`, que es la pestaña "De baja" de la página de Vehículos. Al
+   añadir una consulta nueva sobre `vehicles`, el filtro es
+   `{"status": {"$nin": ["deleted", "baja"]}}`, nunca `$ne: "deleted"` a secas.
+14. **Mongo OMITE la clave del `_id` en un `$group` cuando el campo no existe**
    en el documento (no la pone a `null`). `r["_id"]["cond"]` revienta con
    `KeyError` en cuanto hay un documento sin ese campo — pasó con los 94
    paquetes de Cortex sin `driver_id`. Usar siempre `.get()`.

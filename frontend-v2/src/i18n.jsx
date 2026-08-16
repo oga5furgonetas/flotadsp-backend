@@ -1436,7 +1436,8 @@ const DICT = {
   'cal.adelantar':    { es: 'Adelantar o mover', en: 'Bring forward or move', fr: 'Avancer ou déplacer', de: 'Vorziehen oder verschieben', it: 'Anticipa o sposta', pt: 'Adiantar ou mover' },
   'cal.adelantar.exp':{ es: 'La previsión dice cuándo TOCARÍA. Aquí se dice cuándo VA: la fecha que pongas sustituye a la prevista y deja de moverse sola.', en: 'The forecast says when it WOULD be due. Here you say when it actually goes: your date replaces the forecast and stops drifting.', fr: 'La prévision dit quand ce SERAIT dû. Ici vous dites quand ça part vraiment : votre date remplace la prévision.', de: 'Die Prognose sagt, wann es fällig WÄRE. Hier legst du fest, wann es tatsächlich geht: dein Datum ersetzt die Prognose.', it: 'La previsione dice quando TOCCHEREBBE. Qui dici quando va davvero: la tua data sostituisce quella prevista.', pt: 'A previsão diz quando TOCARIA. Aqui dizes quando vai mesmo: a tua data substitui a prevista.' },
   'cal.f.veh':        { es: 'Furgoneta', en: 'Van', fr: 'Camionnette', de: 'Fahrzeug', it: 'Furgone', pt: 'Carrinha' },
-  'cal.f.veh.ph':     { es: 'Busca por matrícula…', en: 'Search by plate…', fr: 'Chercher par plaque…', de: 'Nach Kennzeichen suchen…', it: 'Cerca per targa…', pt: 'Procurar por matrícula…' },
+  'cal.f.veh.ph':     { es: 'Escribe para filtrar…', en: 'Type to filter…', fr: 'Tapez pour filtrer…', de: 'Tippen zum Filtern…', it: 'Scrivi per filtrare…', pt: 'Escreve para filtrar…' },
+  'cal.f.veh.nada':   { es: 'Ninguna matrícula coincide.', en: 'No plate matches.', fr: 'Aucune plaque ne correspond.', de: 'Kein Kennzeichen passt.', it: 'Nessuna targa corrisponde.', pt: 'Nenhuma matrícula corresponde.' },
   'cal.f.tipo':       { es: 'Qué se le hace', en: 'What for', fr: 'Pour quoi', de: 'Wofür', it: 'Per cosa', pt: 'Para quê' },
   'cal.f.fecha':      { es: 'Día', en: 'Day', fr: 'Jour', de: 'Tag', it: 'Giorno', pt: 'Dia' },
   'cal.f.taller':     { es: 'Taller (opcional)', en: 'Garage (optional)', fr: 'Garage (facultatif)', de: 'Werkstatt (optional)', it: 'Officina (facoltativo)', pt: 'Oficina (opcional)' },
@@ -1453,6 +1454,12 @@ const DICT = {
   'cal.endias':       { es: 'dentro de {n} días', en: 'in {n} days', fr: 'dans {n} jours', de: 'in {n} Tagen', it: 'tra {n} giorni', pt: 'dentro de {n} dias' },
   'cal.filtra':       { es: 'Filtra por tipo', en: 'Filter by type', fr: 'Filtrer par type', de: 'Nach Typ filtern', it: 'Filtra per tipo', pt: 'Filtrar por tipo' },
   'cal.pasada':       { es: 'La fecha ya pasó y sigue sin cerrarse.', en: 'The date has passed and it\'s still open.', fr: 'La date est passée et rien n\'est clôturé.', de: 'Das Datum ist vorbei und nichts ist erledigt.', it: 'La data è passata e non è chiusa.', pt: 'A data passou e continua por fechar.' },
+  // Flota activa vs. de baja. Una furgoneta devuelta no se borra (a veces
+  // vuelve) pero no puede salir en listas ni contadores de operación.
+  'veh.tab.activas':  { es: 'En flota', en: 'In fleet', fr: 'En flotte', de: 'In der Flotte', it: 'In flotta', pt: 'Na frota' },
+  'veh.tab.baja':     { es: 'De baja', en: 'Retired', fr: 'Retirées', de: 'Abgemeldet', it: 'Dismesse', pt: 'De baixa' },
+  'veh.baja.exp':     { es: 'Devueltas o inactivas. No cuentan en ningún contador ni salen en ITV, mantenimientos ni asignación. Para devolver una a la flota, ábrela y ponle el estado «Activo».', en: 'Returned or inactive. They count in nothing and never show up in MOT, maintenance or assignment. To bring one back, open it and set its status to “Active”.', fr: 'Rendues ou inactives. Elles ne comptent nulle part. Pour en réintégrer une, ouvrez-la et mettez le statut « Actif ».', de: 'Zurückgegeben oder inaktiv. Sie zählen nirgends. Zum Reaktivieren öffnen und Status auf „Aktiv“ setzen.', it: 'Restituite o inattive. Non contano da nessuna parte. Per riattivarne una, aprila e imposta lo stato «Attivo».', pt: 'Devolvidas ou inativas. Não contam em lado nenhum. Para reativar, abre-a e põe o estado «Ativo».' },
+  'veh.baja.ninguna': { es: 'Ninguna furgoneta de baja.', en: 'No retired vans.', fr: 'Aucune camionnette retirée.', de: 'Keine abgemeldeten Fahrzeuge.', it: 'Nessun furgone dismesso.', pt: 'Nenhuma carrinha de baixa.' },
   'ops.open':           { es: 'abiertas', en: 'open', fr: 'ouvertes', de: 'offen', it: 'aperte', pt: 'abertas' },
   'nav.expiries':       { es: 'Vencimientos', en: 'Expiries', fr: 'Échéances', de: 'Fristen', it: 'Scadenze', pt: 'Vencimentos' },
   // Cuando aún no hay operación hoy (de madrugada), se enseña el último día con

@@ -109,12 +109,12 @@ function FormCita({ t, vehiculos, inicial, onGuardado }) {
   const [err, setErr] = useState('')
 
   const elegida = vehiculos.find((v) => v.id === vid)
+  // Con el campo vacío se ven TODAS, en orden alfanumérico: escribir de memoria
+  // una matrícula que no recuerdas no es una forma de elegir. Escribir filtra.
   const sugerencias = useMemo(() => {
-    const s = q.trim().toLowerCase()
-    if (!s) return []
-    return vehiculos
-      .filter((v) => String(v.license_plate || '').toLowerCase().replace(/\s/g, '').includes(s.replace(/\s/g, '')))
-      .slice(0, 6)
+    const s = q.trim().toLowerCase().replace(/\s/g, '')
+    return vehiculos.filter((v) => !s ||
+      String(v.license_plate || '').toLowerCase().replace(/\s/g, '').includes(s))
   }, [q, vehiculos])
 
   const guardar = async () => {
@@ -151,20 +151,24 @@ function FormCita({ t, vehiculos, inicial, onGuardado }) {
           ) : (
             <>
               <input className={inputCls} value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('cal.f.veh.ph')} />
-              {sugerencias.length > 0 && (
-                <div className="mt-1 overflow-hidden rounded-lg border border-dark-700">
-                  {sugerencias.map((v) => (
-                    <button
-                      key={v.id}
-                      onClick={() => { setVid(v.id); setQ('') }}
-                      className="flex w-full items-center gap-2 border-b border-dark-800 px-2.5 py-1.5 text-left last:border-0 hover:bg-dark-800"
-                    >
-                      <span className="font-mono text-[12px] text-dark-100">{v.license_plate}</span>
-                      <span className="truncate text-[10.5px] text-dark-600">{[v.brand, v.model].filter(Boolean).join(' ')}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
+              <div className="mt-1 max-h-52 overflow-y-auto rounded-lg border border-dark-700">
+                {sugerencias.map((v) => (
+                  <button
+                    key={v.id}
+                    onClick={() => { setVid(v.id); setQ('') }}
+                    className="flex w-full items-center gap-2 border-b border-dark-800 px-2.5 py-1.5 text-left last:border-0 hover:bg-dark-800"
+                  >
+                    <span className="font-mono text-[12px] text-dark-100">{v.license_plate}</span>
+                    <span className="truncate text-[10.5px] text-dark-600">{[v.brand, v.model].filter(Boolean).join(' ')}</span>
+                    {v.status === 'taller' && (
+                      <span className="ml-auto shrink-0 rounded px-1.5 text-[9.5px] font-semibold text-amber-300">{t('veh.workshop')}</span>
+                    )}
+                  </button>
+                ))}
+                {sugerencias.length === 0 && (
+                  <p className="px-2.5 py-2 text-[11.5px] text-dark-600">{t('cal.f.veh.nada')}</p>
+                )}
+              </div>
             </>
           )}
         </div>
@@ -247,7 +251,11 @@ export default function CalendarioFlota() {
   // Las matrículas para el buscador del formulario. Se piden una vez por centro.
   useEffect(() => {
     getVehicles(centro || 'Todos')
-      .then((r) => setVehiculos(lista(r.data).map((v) => ({ id: v.id, license_plate: v.license_plate, brand: v.brand, model: v.model }))))
+      // Orden alfanumérico por matrícula, y sin las de baja (el backend ya no
+      // las manda): en un desplegable de 100 furgonetas, el orden ES el índice.
+      .then((r) => setVehiculos(lista(r.data)
+        .map((v) => ({ id: v.id, license_plate: v.license_plate, brand: v.brand, model: v.model, status: v.status }))
+        .sort((a, b) => String(a.license_plate || '').localeCompare(String(b.license_plate || ''), 'es', { numeric: true }))))
       .catch(() => setVehiculos([]))
   }, [centro])
 

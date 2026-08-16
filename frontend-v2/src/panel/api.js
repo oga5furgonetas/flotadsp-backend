@@ -32,7 +32,10 @@ export const getAttention = () => api.get('/stats/attention')
 
 /* ── Vehículos / Flota ── */
 export const getOnboarding = () => api.get('/onboarding')
-export const getVehicles = (center) => api.get('/vehicles', { params: centerParam(center) })
+// `estado: 'baja'` es la ÚNICA forma de ver las furgonetas devueltas: por
+// defecto no salen ni cuentan en ninguna parte (están fuera de la operación).
+export const getVehicles = (center, estado) =>
+  api.get('/vehicles', { params: { ...centerParam(center), ...(estado ? { estado } : {}) } })
 export const createVehicle = (body) => api.post('/vehicles', body)
 export const getVehicle = (id) => api.get(`/vehicles/${id}`)
 export const getVehicleHistory = (id) => api.get(`/vehicles/${id}/history`)

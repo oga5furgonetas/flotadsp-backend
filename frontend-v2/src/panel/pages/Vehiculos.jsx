@@ -1606,6 +1606,10 @@ export default function Vehiculos() {
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(null)
   const [addOpen, setAddOpen] = useState(false)
+  // Las de baja están devueltas al renting: no se les hace la ITV, no se les
+  // cambia el aceite y no se asignan. Viven aquí, aparte, por si vuelven.
+  const [verBaja, setVerBaja] = useState(false)
+  const [nBaja, setNBaja] = useState(0)
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Deep-link desde la paleta de comandos: /panel/vehiculos?open=<id>
@@ -1620,13 +1624,17 @@ export default function Vehiculos() {
 
   function load() {
     setVehicles(null); setErr('')
-    getVehicles(center).then(r => setVehicles(lista(r.data))).catch(() => setErr('No se pudieron cargar los vehículos.'))
+    getVehicles(center, verBaja ? 'baja' : '')
+      .then(r => setVehicles(lista(r.data))).catch(() => setErr('No se pudieron cargar los vehículos.'))
     getLastInspections().then(r => setLastInsp(r.data || {})).catch(() => {})
     // Si falla, {} = no sabemos de ninguna. El KPI dirá 0, que es la verdad
     // ("no consta ninguna declarada ausente"), nunca un número inventado.
     getSpareWheels().then(r => setSpare(r.data || {})).catch(() => setSpare({}))
+    // Cuántas hay de baja se pide siempre, aunque se esté viendo la flota
+    // activa: es el número que va en la pestaña.
+    getVehicles(center, 'baja').then(r => setNBaja(lista(r.data).length)).catch(() => setNBaja(0))
   }
-  useEffect(load, [center])
+  useEffect(load, [center, verBaja])
 
   const list = useMemo(() => (vehicles || []).filter(v => {
     if (soloSinRueda && spare[v.id]?.estado !== 'no') return false
@@ -1687,7 +1695,26 @@ export default function Vehiculos() {
         />
       )}
 
-      {vehicles && (
+      {/* ── Flota activa / de baja ────────────────────────────────────────
+          Separadas a propósito: una furgoneta devuelta no puede engordar los
+          contadores ni salir en las listas de mantenimiento, pero tampoco se
+          borra, porque a veces vuelve. */}
+      <div className="rise mb-5 flex gap-1 rounded-lg bg-dark-900 p-1 ring-1 ring-dark-700 w-fit">
+        {[{ k: false, label: t('veh.tab.activas') }, { k: true, label: t('veh.tab.baja'), n: nBaja }].map((x) => (
+          <button key={String(x.k)} onClick={() => setVerBaja(x.k)}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+              verBaja === x.k ? 'bg-brand-500/20 text-brand-300' : 'text-dark-400 hover:text-dark-200'}`}>
+            {x.label}
+            {x.n > 0 && <span className="rounded-full bg-dark-800 px-1.5 text-[10px] tabular-nums text-dark-400">{x.n}</span>}
+          </button>
+        ))}
+      </div>
+
+      {verBaja && (
+        <p className="mb-4 text-[12px] leading-relaxed text-dark-500">{t('veh.baja.exp')}</p>
+      )}
+
+      {vehicles && !verBaja && (
         <div className="rise mb-6 flex flex-wrap items-baseline gap-x-7 gap-y-2 border-y border-white/[0.05] py-3.5" style={{ animationDelay: '60ms' }}>
           {[
             { val: kpis.total,   label: t('veh.all'),        color: 'text-dark-50' },
@@ -1715,7 +1742,11 @@ export default function Vehiculos() {
       {!vehicles ? (
         <PageSkeleton kpis={4} rows={9} />
       ) : list.length === 0 ? (
-        vehicles.length === 0 ? (
+        verBaja ? (
+          <div className="card flex flex-col items-center gap-2 p-10 text-center text-dark-400">
+            <Truck size={28} /> {t('veh.baja.ninguna')}
+          </div>
+        ) : vehicles.length === 0 ? (
           <GuidedEmpty
             emoji="🚐"
             title={t('empty.veh.title')}

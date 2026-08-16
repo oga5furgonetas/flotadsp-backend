@@ -60,9 +60,39 @@ export function isSuperAdmin() {
 }
 
 // Permisos por usuario: array de claves de módulo, o null = sin restricción (ve todo).
+// El JWT manda sobre el blob de localStorage: el token lo firma el servidor en
+// cada login, mientras que el blob lo puede haber dejado escrito a medias una
+// pantalla de login vieja (pasó: /login guardaba solo name/role/id y el panel
+// se quedaba sin permisos, sin centros y sin rol).
 export function getPermissions() {
+  const p = decodeToken()
+  if (Array.isArray(p?.permissions)) return p.permissions
   const a = getAdmin()
   return Array.isArray(a?.permissions) ? a.permissions : null
+}
+
+/* Centros que este usuario VE, en orden de la organización.
+
+   Sale del JWT siempre que se pueda, porque es lo único que no se puede quedar
+   a medias. Y el cruce entre los centros de la org y los del usuario se hace
+   con la misma tolerancia que el backend (`_user_can_see_center`): en BD los
+   centros están sucios ('OGA5', 'oga5 ', 'AMZL OGA5 SANTIAGO XPT'), así que
+   comparar con `includes` exacto dejaba la lista VACÍA y el panel se quedaba
+   con un único botón "Todos" — que para chat, checklist y scorecard significa
+   literalmente pedir el centro llamado "Todos" y no ver nada. */
+const _norm = (s) => String(s || '').trim().toUpperCase()
+
+export function getVisibleCenters() {
+  const p = decodeToken() || {}
+  const a = getAdmin() || {}
+  const todos = (Array.isArray(p.centers) && p.centers.length ? p.centers
+    : Array.isArray(a.centers) ? a.centers : []).filter(Boolean)
+  const mios = (Array.isArray(p.allowed_centers) && p.allowed_centers.length ? p.allowed_centers
+    : Array.isArray(a.allowed_centers) ? a.allowed_centers : null)
+  if (!mios || !mios.length) return todos            // sin restricción: los de la org
+  const cruce = todos.filter((c) => mios.some((m) => _norm(c).includes(_norm(m)) || _norm(m).includes(_norm(c))))
+  // Si la org no los lista (datos viejos), mejor los suyos que ninguno.
+  return cruce.length ? cruce : mios.filter(Boolean)
 }
 
 // ¿Puede ver este módulo? Super-admin ve todo. Sin permisos definidos = ve todo

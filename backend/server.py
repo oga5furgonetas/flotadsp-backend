@@ -4248,7 +4248,7 @@ async def upgrade_preview(new_plan: str, user: dict = Depends(require_admin)):
         raise HTTPException(400, "Ya estás en ese plan")
 
     # El precio depende del tamaño de la flota, no es plano.
-    n_vehiculos = await db.vehicles.count_documents({"status": {"$ne": "deleted"}})
+    n_vehiculos = await db.vehicles.count_documents({"status": {"$nin": ["deleted", "baja"]}})
     current_price = _precio_mensual(current_plan, n_vehiculos)
     new_price = _precio_mensual(new_plan, n_vehiculos)
 
@@ -4427,7 +4427,7 @@ async def _cobros_del_mes(mes: str, crear: bool = True):
             continue
         try:
             set_current_org_db(_tenant_db_name(o))
-            vehiculos = await db.vehicles.count_documents({"status": {"$ne": "deleted"}})
+            vehiculos = await db.vehicles.count_documents({"status": {"$nin": ["deleted", "baja"]}})
         except Exception as e:
             logger.warning(f"Cobros: no pude contar furgonetas de {o.get('name')}: {e}")
             vehiculos = 0
@@ -5306,7 +5306,7 @@ async def assistant_ask(data: dict, user: dict = Depends(require_admin)):
     month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc).isoformat()
     recent_start = (now - timedelta(days=14)).isoformat()
     vehicles = await db.vehicles.find(
-        {"status": {"$ne": "deleted"}},
+        {"status": {"$nin": ["deleted", "baja"]}},
         {"_id": 0, "id": 1, "license_plate": 1, "brand": 1, "model": 1, "center": 1,
          "status": 1, "mileage": 1, "itv_date": 1, "renting_end_date": 1}
     ).to_list(300)
@@ -5973,13 +5973,13 @@ async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
     Este endpoint NO requiere rol admin para que los conductores puedan usarlo."""
     if user.get("role") == "admin":
         vehicles = await db.vehicles.find(
-            {"status": {"$ne": "deleted"}}, {"_id": 0}
+            {"status": {"$nin": ["deleted", "baja"]}}, {"_id": 0}
         ).to_list(1000)
     else:
         driver_id = user["sub"]
         # 1) Vehículo asignado directamente al conductor
         assigned = await db.vehicles.find(
-            {"status": {"$ne": "deleted"}, "current_driver_id": driver_id}, {"_id": 0}
+            {"status": {"$nin": ["deleted", "baja"]}, "current_driver_id": driver_id}, {"_id": 0}
         ).to_list(10)
 
         if assigned:
@@ -5990,7 +5990,7 @@ async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
             center = (driver.get("center") or "")[:4] if driver else ""
             if center:
                 vehicles = await db.vehicles.find(
-                    {"status": {"$ne": "deleted"}, "center": {"$regex": re.escape(center), "$options": "i"}},
+                    {"status": {"$nin": ["deleted", "baja"]}, "center": {"$regex": re.escape(center), "$options": "i"}},
                     {"_id": 0}
                 ).to_list(100)
             else:
@@ -6015,8 +6015,20 @@ async def create_vehicle(data: VehicleCreate, _=Depends(require_admin)):
 
 
 @api_router.get("/vehicles", response_model=List[Vehicle])
-async def get_vehicles(center: Optional[str] = None, user: dict = Depends(require_admin)):
-    query = {"status": {"$ne": "deleted"}}
+async def get_vehicles(center: Optional[str] = None, estado: Optional[str] = None,
+                       user: dict = Depends(require_admin)):
+    """La flota. Por defecto SIN las de baja.
+
+    Una furgoneta de baja está devuelta al renting: no se le hace la ITV, no se
+    le cambia el aceite, no se asigna a nadie y no debe engordar ningún
+    contador. Salían en todas partes (16 de 138) y ensuciaban las listas y las
+    cuentas de flota. Se conservan a propósito, por si vuelven a activarse:
+    `?estado=baja` las devuelve, y esa es la única forma de verlas.
+    """
+    if estado == "baja":
+        query = {"status": "baja"}
+    else:
+        query = {"status": {"$nin": ["deleted", "baja"]}}
     query.update(_filtro_centro(user, center))
     vehicles = await db.vehicles.find(query, {"_id": 0}).to_list(1000)
     for v in vehicles:
@@ -10410,7 +10422,7 @@ async def send_weekly_email_digest():
     for org in orgs:
         try:
             set_current_org_db(org.get("db_name"))
-            n_vehicles = await db.vehicles.count_documents({"status": {"$ne": "deleted"}})
+            n_vehicles = await db.vehicles.count_documents({"status": {"$nin": ["deleted", "baja"]}})
             if n_vehicles == 0:
                 continue  # sin flota aún: un digest vacío no aporta
             n_taller = await db.vehicles.count_documents({"status": "taller"})
@@ -10423,7 +10435,7 @@ async def send_weekly_email_digest():
             hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             limite = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")
             itvs = await db.vehicles.find(
-                {"status": {"$ne": "deleted"}, "itv_date": {"$gte": hoy, "$lte": limite}},
+                {"status": {"$nin": ["deleted", "baja"]}, "itv_date": {"$gte": hoy, "$lte": limite}},
                 {"_id": 0, "license_plate": 1, "itv_date": 1}
             ).sort("itv_date", 1).to_list(5)
 
@@ -11985,7 +11997,7 @@ async def get_damage_costs(center: Optional[str] = None, _=Depends(require_admin
 @api_router.get("/stats/dashboard")
 async def stats_dashboard(_=Depends(require_admin)):
     """Devuelve los contadores y metricas del dashboard principal."""
-    total_vehicles = await db.vehicles.count_documents({"status": {"$ne": "deleted"}})
+    total_vehicles = await db.vehicles.count_documents({"status": {"$nin": ["deleted", "baja"]}})
     vehicles_in_workshop = await db.vehicles.count_documents({"status": "taller"})
     total_drivers = await db.drivers.count_documents({"active": {"$ne": False}})
     total_inspections = await db.inspections.count_documents({})
@@ -12415,7 +12427,7 @@ async def import_roster_text(
         return set(w for w in re.sub(r'[^a-z ]', ' ', _fold(name)).split() if len(w) > 1)
 
     vehicles = await db.vehicles.find(
-        {"center": {"$regex": re.escape(center[:4]), "$options": "i"}, "status": {"$ne": "deleted"}},
+        {"center": {"$regex": re.escape(center[:4]), "$options": "i"}, "status": {"$nin": ["deleted", "baja"]}},
         {"_id": 0}
     ).to_list(500)
     drivers = await db.drivers.find({"center": {"$regex": re.escape(center[:4]), "$options": "i"}}, {"_id": 0}).to_list(500)
@@ -12594,7 +12606,7 @@ async def import_roster_image(
     # --- Cruzar con vehículos y conductores de la BD ---
     # Usar regex igual que en el resto del API (coincidencia flexible de centros)
     vehicles = await db.vehicles.find(
-        {"center": {"$regex": re.escape(center), "$options": "i"}, "status": {"$ne": "deleted"}},
+        {"center": {"$regex": re.escape(center), "$options": "i"}, "status": {"$nin": ["deleted", "baja"]}},
         {"_id": 0}
     ).to_list(500)
     drivers = await db.drivers.find({"center": {"$regex": re.escape(center), "$options": "i"}}, {"_id": 0}).to_list(500)
@@ -12656,7 +12668,7 @@ async def import_roster_image(
 @api_router.get("/reports/fleet-pdf")
 async def fleet_report_pdf(_=Depends(require_admin)):
     """Genera un informe PDF del estado de la flota, listo para enviar al coordinador."""
-    total_vehicles = await db.vehicles.count_documents({"status": {"$ne": "deleted"}})
+    total_vehicles = await db.vehicles.count_documents({"status": {"$nin": ["deleted", "baja"]}})
     total_inspections = await db.inspections.count_documents({})
     alerts = await db.alerts.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
 
@@ -13700,7 +13712,7 @@ async def get_itv_alerts(_=Depends(require_admin)):
     """Lista furgonetas con ITV próxima a caducar (30 días) o caducada."""
     from datetime import date as _date
     hoy = _date.today()
-    vehicles = await db.vehicles.find({"status": {"$ne": "deleted"}}, {"_id": 0}).to_list(2000)
+    vehicles = await db.vehicles.find({"status": {"$nin": ["deleted", "baja"]}}, {"_id": 0}).to_list(2000)
     result = []
     for v in vehicles:
         itv = v.get("itv_date")
@@ -13728,7 +13740,7 @@ async def get_renting_alerts(_=Depends(require_admin)):
     """Lista furgonetas con vencimiento de renting próximo (30 días) o vencido."""
     from datetime import date as _date
     hoy = _date.today()
-    vehicles = await db.vehicles.find({"status": {"$ne": "deleted"}}, {"_id": 0}).to_list(2000)
+    vehicles = await db.vehicles.find({"status": {"$nin": ["deleted", "baja"]}}, {"_id": 0}).to_list(2000)
     result = []
     for v in vehicles:
         rent = v.get("renting_end_date")
@@ -22999,7 +23011,7 @@ async def onboarding_status(user: dict = Depends(require_any_auth)):
     Cuenta barata (count_documents con filtro indexado). Una sola peticion
     para toda la guia: no queremos 4 llamadas en el primer render del panel.
     """
-    vehiculos = await db.vehicles.count_documents({"status": {"$ne": "deleted"}})
+    vehiculos = await db.vehicles.count_documents({"status": {"$nin": ["deleted", "baja"]}})
     conductores = await db.drivers.count_documents({"active": {"$ne": False}})
     inspecciones = await db.inspections.count_documents({"deleted": {"$ne": True}})
     # "Equipo": mas de un usuario admin en la organizacion (opcional pero

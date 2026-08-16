@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '../services/api'
+import { saveSession } from '../panel/auth'
 import { useT, LANGS } from '../i18n'
 
 export default function Login() {
@@ -20,8 +21,13 @@ export default function Login() {
       })
       const j = await r.json()
       if (!r.ok || !j.access_token) { setErr(t('login.err')); setBusy(false); return }
-      localStorage.setItem('flotadsp_token', j.access_token)
-      localStorage.setItem('flotadsp_admin', JSON.stringify({ name: j.name, role: j.role, id: j.id, account_type: j.account_type, slug: j.slug }))
+      // Una sola función guarda la sesión, y guarda TODO. Esta pantalla escribía
+      // a mano un blob con solo name/role/id/account_type/slug: al panel le
+      // faltaban `centers`, `allowed_centers`, `permissions` y `admin_role`, así
+      // que el selector de centro se quedaba con un único botón "Todos" y chat,
+      // checklist y scorecard pedían el centro literal "Todos" — pantallas
+      // vacías sin ningún error visible.
+      saveSession(j)
       window.location.href = '/panel'
     } catch { setErr(t('login.err')); setBusy(false) }
   }

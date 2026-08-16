@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '../services/api'
+import { saveSession } from '../panel/auth'
 import { useT, LANGS } from '../i18n'
 import { Check, Zap } from 'lucide-react'
 
@@ -235,12 +236,7 @@ export default function Registro() {
         setErr(j.detail || 'No se pudo crear la cuenta. Prueba con otro usuario o URL.')
         setBusy(false); return
       }
-      localStorage.setItem('flotadsp_token', j.access_token)
-      localStorage.setItem('flotadsp_admin', JSON.stringify({
-        name: j.name, role: j.role, id: j.id, account_type: j.account_type,
-        slug: j.slug, super_admin: j.super_admin, permissions: j.permissions ?? null,
-        allowed_centers: j.allowed_centers ?? null, centers: j.centers || [],
-      }))
+      saveSession(j)   // le faltaba admin_role; una sola función lo guarda todo
       localStorage.setItem('flota_plan', selectedPlan)
       localStorage.setItem('flota_billing', billingMode)
       setDone(true)
