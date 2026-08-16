@@ -135,7 +135,13 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    quedaba con los MÁS VIEJOS, así que **el día de hoy no salía nunca** en el
    selector y el panel se abría en "Ayer"; los contadores por día también eran
    falsos (1 paquete en días de 3.000). Se agrupa con `$group` y sin límite.
-11. **Mongo OMITE la clave del `_id` en un `$group` cuando el campo no existe**
+11. **`toISOString()` sobre una fecha LOCAL corre el día en España.** `new Date(y, m, d)`
+   es medianoche local; en UTC+2 su `toISOString()` cae en el día ANTERIOR. El
+   calendario de flota montaba las claves de sus celdas así y pintaba todo un
+   día tarde: las 5 ITV del 17 salían dentro del recuadro del 18, en silencio y
+   sin error. Para una clave `YYYY-MM-DD` de una fecha local hay que componerla
+   a mano con `getFullYear/getMonth/getDate`, nunca por ISO.
+12. **Mongo OMITE la clave del `_id` en un `$group` cuando el campo no existe**
    en el documento (no la pone a `null`). `r["_id"]["cond"]` revienta con
    `KeyError` en cuanto hay un documento sin ese campo — pasó con los 94
    paquetes de Cortex sin `driver_id`. Usar siempre `.get()`.

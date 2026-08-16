@@ -1166,6 +1166,14 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.plantillas_diarias, [("center", 1), ("uploaded_at", -1)])
     await _idx(tdb.plantillas_compartidas, "id", unique=True)
     await _idx(tdb.plantillas_compartidas, [("center", 1), ("updated_at", -1)])
+    # Citas de taller del calendario de flota. El único PARCIAL es la regla de
+    # negocio en sí: una furgoneta no puede tener dos citas ABIERTAS del mismo
+    # tipo. Sin él, dos clics a la vez dejarían dos citas y el calendario
+    # pintaría el mismo cambio dos días distintos (gotcha 9 del CLAUDE.md).
+    await _idx(tdb.fleet_appointments, "id", unique=True)
+    await _idx(tdb.fleet_appointments, [("vehicle_id", 1), ("tipo", 1)], unique=True,
+               partialFilterExpression={"estado": "pendiente"})
+    await _idx(tdb.fleet_appointments, [("fecha", 1)])
 
 
 @app.on_event("startup")
@@ -13476,6 +13484,16 @@ async def fleet_calendar(mes: str = "", center: Optional[str] = None,
     Lo ya vencido tampoco se coloca en un día futuro: va en `vencidos`, que es
     una lista de cosas que ya deberían estar hechas, no una cita del calendario.
 
+    ── CITAS PUESTAS A MANO ──────────────────────────────────────────────────
+    Una previsión dice cuándo TOCARÍA; una cita dice cuándo VA. Si alguien
+    aparta la furgoneta para el día 5 porque ese día hay hueco en el taller,
+    esa fecha manda sobre la estimada y la SUSTITUYE: si no, saldrían las dos
+    y el calendario diría dos cosas distintas del mismo cambio.
+
+    Una cita cuyo día ya pasó y que nadie marcó como hecha no se queda en la
+    rejilla como si aún fuese a pasar: cae a `vencidos`, que es donde va lo
+    que debería estar hecho y no lo está.
+
     El filtro por centro se aplica AQUÍ, con `_filtro_centro`, que es el mismo
     que usa /vehicles: las de DGA1 no pueden aparecer en OGA5 ni al revés.
     """
@@ -13499,9 +13517,18 @@ async def fleet_calendar(mes: str = "", center: Optional[str] = None,
                 "modelo": " ".join(x for x in (v.get("brand"), v.get("model")) if x) or None,
                 "center": v.get("center")}
 
+    # Citas manuales pendientes de estas furgonetas. Se leen ANTES de calcular
+    # nada: lo que tiene cita ya no se estima, se sabe.
+    ids_veh = [v.get("id") for v in vehiculos if v.get("id")]
+    citas = await db.fleet_appointments.find(
+        {"vehicle_id": {"$in": ids_veh}, "estado": "pendiente"}, {"_id": 0}).to_list(5000)
+    fijadas = {(c.get("vehicle_id"), c.get("tipo")) for c in citas}
+
     for v in vehiculos:
         # ── Fechas reales ────────────────────────────────────────────────────
         for campo, tipo in (("itv_date", "itv"), ("renting_end_date", "renting")):
+            if (v.get("id"), tipo) in fijadas:
+                continue                      # hay cita: manda la cita
             crudo = v.get(campo)
             if not crudo:
                 if tipo == "itv":
@@ -13524,6 +13551,8 @@ async def fleet_calendar(mes: str = "", center: Optional[str] = None,
         kpd = _km_por_dia(v)
         for kind, di, dw in (("oil", 15000, 2500), ("ruedas", 40000, 3000),
                              ("pastillas", 30000, 3000)):
+            if (v.get("id"), kind) in fijadas:
+                continue                      # hay cita: manda la cita
             item = _build_maint_item(v, kind, di, dw)
             if not item:
                 continue
@@ -13541,12 +13570,129 @@ async def fleet_calendar(mes: str = "", center: Optional[str] = None,
             if primero <= f <= ultimo:
                 eventos.append({**base, "fecha": f.isoformat(), "dias": dias})
 
+    # ── Las citas, ya con la ficha de su furgoneta ───────────────────────────
+    por_id = {v.get("id"): v for v in vehiculos}
+    for c in citas:
+        v = por_id.get(c.get("vehicle_id"))
+        if not v:
+            continue
+        try:
+            y, m, d = (int(x) for x in str(c.get("fecha"))[:10].split("-"))
+            f = _date(y, m, d)
+        except Exception:
+            continue
+        fila = {**_ficha(v), "tipo": c.get("tipo"), "fecha": f.isoformat(),
+                "dias": (f - hoy).days, "exacto": True, "cita": True,
+                "cita_id": c.get("id"), "nota": c.get("nota") or None,
+                "taller": c.get("taller") or None}
+        if f < hoy:
+            # Una cita que ya pasó y nadie cerró no es una cita, es un olvido.
+            vencidos.append(fila)
+        elif primero <= f <= ultimo:
+            eventos.append(fila)
+
     eventos.sort(key=lambda e: (e["fecha"], e["tipo"]))
     vencidos.sort(key=lambda e: (e.get("dias") is None, e.get("dias") or 0))
     return {"mes": f"{anio:04d}-{mesn:02d}", "desde": primero.isoformat(),
             "hasta": ultimo.isoformat(), "vehiculos": len(vehiculos),
             "eventos": eventos, "vencidos": vencidos,
-            "sin_estimacion": sin_estimacion}
+            "sin_estimacion": sin_estimacion,
+            "citas": sum(1 for c in citas if c.get("vehicle_id") in por_id)}
+
+
+# ── Citas de taller puestas a mano ───────────────────────────────────────────
+# El calendario sabe cuándo TOCARÍA cada cosa. Esto es para decirle cuándo VA:
+# adelantar un cambio porque el taller tiene hueco el martes, juntar el aceite
+# con las pastillas en el mismo viaje, o apuntar una revisión que no sale de
+# ningún kilometraje. Sin esto el calendario solo se puede mirar.
+_TIPOS_CITA = {"itv", "renting", "oil", "ruedas", "pastillas", "taller", "otro"}
+
+
+def _valida_fecha_cita(crudo) -> str:
+    from datetime import date as _date
+    try:
+        y, m, d = (int(x) for x in str(crudo)[:10].split("-"))
+        return _date(y, m, d).isoformat()
+    except Exception:
+        raise HTTPException(400, "fecha debe ser YYYY-MM-DD")
+
+
+async def _vehiculo_visible(vehicle_id: str, user: dict) -> dict:
+    """La furgoneta, sólo si este usuario puede verla. Si no, 404.
+
+    El filtro por centro del calendario no serviría de nada si luego se
+    pudieran crear citas sobre furgonetas de otro centro mandando su id.
+    """
+    q = {"id": vehicle_id}
+    q.update(_filtro_centro(user, None))
+    v = await db.vehicles.find_one(q, {"_id": 0})
+    if not v:
+        raise HTTPException(404, "Furgoneta no encontrada")
+    return v
+
+
+@api_router.post("/fleet/calendar/citas")
+async def crear_cita_flota(data: dict, user: dict = Depends(require_admin)):
+    """Aparta un día para una furgoneta. Sustituye a la previsión de ese tipo."""
+    vehicle_id = str(data.get("vehicle_id") or "").strip()
+    tipo = str(data.get("tipo") or "").strip().lower()
+    if not vehicle_id:
+        raise HTTPException(400, "Falta vehicle_id")
+    if tipo not in _TIPOS_CITA:
+        raise HTTPException(400, f"tipo debe ser uno de: {', '.join(sorted(_TIPOS_CITA))}")
+    fecha = _valida_fecha_cita(data.get("fecha"))
+    v = await _vehiculo_visible(vehicle_id, user)
+
+    # Una furgoneta no puede tener dos citas abiertas del mismo tipo: la segunda
+    # mueve la primera, que es lo que de verdad se quiere al reprogramar.
+    doc = {"vehicle_id": vehicle_id, "tipo": tipo, "fecha": fecha,
+           "nota": str(data.get("nota") or "")[:300] or None,
+           "taller": str(data.get("taller") or "")[:120] or None,
+           "estado": "pendiente", "updated_at": datetime.now(timezone.utc),
+           "updated_by": user.get("sub")}
+    ya = await db.fleet_appointments.find_one(
+        {"vehicle_id": vehicle_id, "tipo": tipo, "estado": "pendiente"}, {"_id": 0, "id": 1})
+    if ya:
+        await db.fleet_appointments.update_many(
+            {"vehicle_id": vehicle_id, "tipo": tipo, "estado": "pendiente"}, {"$set": doc})
+        return {"success": True, "id": ya["id"], "movida": True}
+    doc.update({"id": str(uuid.uuid4()), "created_at": datetime.now(timezone.utc),
+                "created_by": user.get("sub"), "matricula": v.get("license_plate")})
+    await db.fleet_appointments.insert_one(dict(doc))
+    return {"success": True, "id": doc["id"], "movida": False}
+
+
+@api_router.patch("/fleet/calendar/citas/{cita_id}")
+async def editar_cita_flota(cita_id: str, data: dict, user: dict = Depends(require_admin)):
+    """Mueve la fecha, cambia la nota o la cierra (`estado: hecho`)."""
+    c = await db.fleet_appointments.find_one({"id": cita_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(404, "Cita no encontrada")
+    await _vehiculo_visible(c.get("vehicle_id"), user)
+
+    cambios = {"updated_at": datetime.now(timezone.utc), "updated_by": user.get("sub")}
+    if data.get("fecha"):
+        cambios["fecha"] = _valida_fecha_cita(data["fecha"])
+    if "nota" in data:
+        cambios["nota"] = str(data.get("nota") or "")[:300] or None
+    if "taller" in data:
+        cambios["taller"] = str(data.get("taller") or "")[:120] or None
+    if data.get("estado") in ("pendiente", "hecho"):
+        cambios["estado"] = data["estado"]
+        cambios["done_at"] = datetime.now(timezone.utc) if data["estado"] == "hecho" else None
+    await db.fleet_appointments.update_one({"id": cita_id}, {"$set": cambios})
+    return {"success": True}
+
+
+@api_router.delete("/fleet/calendar/citas/{cita_id}")
+async def borrar_cita_flota(cita_id: str, user: dict = Depends(require_admin)):
+    """Quita la cita. La previsión por kilómetros vuelve a salir sola."""
+    c = await db.fleet_appointments.find_one({"id": cita_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(404, "Cita no encontrada")
+    await _vehiculo_visible(c.get("vehicle_id"), user)
+    await db.fleet_appointments.delete_one({"id": cita_id})
+    return {"success": True}
 
 
 @api_router.get("/alerts/itv")

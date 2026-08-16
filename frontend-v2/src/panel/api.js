@@ -102,6 +102,9 @@ export const getItvAlerts = (center) => api.get('/alerts/itv', { params: centerP
 /* Todo lo que vence en un mes (ITV, renting y los cambios previstos por km),
    ya filtrado por centro en el servidor. */
 export const fleetCalendar = (params) => api.get('/fleet/calendar', { params })
+export const crearCitaFlota = (body) => api.post('/fleet/calendar/citas', body)
+export const editarCitaFlota = (id, body) => api.patch(`/fleet/calendar/citas/${id}`, body)
+export const borrarCitaFlota = (id) => api.delete(`/fleet/calendar/citas/${id}`)
 export const getMaintenanceAlerts = () => api.get('/alerts/maintenance')
 export const getRentingAlerts = () => api.get('/alerts/renting')
 
