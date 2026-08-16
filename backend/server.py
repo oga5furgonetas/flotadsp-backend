@@ -1174,6 +1174,8 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.fleet_appointments, [("vehicle_id", 1), ("tipo", 1)], unique=True,
                partialFilterExpression={"estado": "pendiente"})
     await _idx(tdb.fleet_appointments, [("fecha", 1)])
+    await _idx(tdb.maintenance_log, "id", unique=True)
+    await _idx(tdb.maintenance_log, [("vehicle_id", 1), ("fecha", -1)])
 
 
 @app.on_event("startup")
@@ -9926,9 +9928,11 @@ async def _cierre_recordatorios(center: str) -> list:
             for kind, i, w, label in [("oil", 15000, 2500, "aceite"),
                                       ("ruedas", 40000, 3000, "ruedas"),
                                       ("pastillas", 30000, 3000, "pastillas")]:
-                it = _build_maint_item(v, kind, i, w)
-                if it and it["overdue"]:
-                    vencidos.append(f"{v.get('license_plate') or '—'} ({label})")
+                for pos in _ejes_de(v, kind):
+                    it = _build_maint_item(v, kind, i, w, pos)
+                    if it and it["overdue"]:
+                        que = f"{label} {pos}" if pos else label
+                        vencidos.append(f"{v.get('license_plate') or '—'} ({que})")
         if vencidos:
             avisos.append(f"🔧 Mantenimiento pasado: {', '.join(vencidos[:6])}"
                           + (f" y {len(vencidos) - 6} más" if len(vencidos) > 6 else ""))
@@ -12909,6 +12913,8 @@ async def register_oil_change(vehicle_id: str, data: dict, _=Depends(require_adm
         "oil_last_change_km": km, "oil_last_change_date": fecha,
         "oil_interval_km": intervalo, "oil_warning_before_km": aviso_antes,
         "mileage": max(km, v.get("mileage") or 0), "updated_at": datetime.now(timezone.utc)}})
+    await _log_mantenimiento(v, "oil", km, str(data.get("nota") or ""),
+                             str(data.get("taller") or ""), origen="manual", fecha=fecha)
     return {"success": True, "next_change_km": km + intervalo,
             "warning_at_km": km + intervalo - aviso_antes}
 
@@ -12937,6 +12943,10 @@ async def register_maintenance_change(vehicle_id: str, kind: str, data: dict, _=
         f"{kind}_last_change_km": km, f"{kind}_last_change_date": fecha,
         f"{kind}_interval_km": intervalo, f"{kind}_warning_before_km": aviso_antes,
         "mileage": max(km, v.get("mileage") or 0), "updated_at": datetime.now(timezone.utc)}})
+    # Al historial también: da igual desde dónde se registre el cambio, en la
+    # ficha de la furgoneta tiene que constar.
+    await _log_mantenimiento(v, kind, km, str(data.get("nota") or ""),
+                             str(data.get("taller") or ""), origen="manual", fecha=fecha)
     return {"success": True, "kind": kind, "label": spec["label"],
             "next_change_km": km + intervalo, "warning_at_km": km + intervalo - aviso_antes}
 
@@ -13525,21 +13535,33 @@ async def fleet_calendar(mes: str = "", center: Optional[str] = None,
     eventos, vencidos, sin_estimacion = [], [], []
 
     def _ficha(v):
+        # El kilometraje viaja para que al cerrar una cita el campo de km venga
+        # ya puesto: pedirlo en blanco invita a inventárselo, y de ese número
+        # sale la siguiente previsión.
         return {"vehicle_id": v.get("id"), "matricula": v.get("license_plate"),
                 "modelo": " ".join(x for x in (v.get("brand"), v.get("model")) if x) or None,
-                "center": v.get("center")}
+                "center": v.get("center"), "mileage": v.get("mileage")}
 
     # Citas manuales pendientes de estas furgonetas. Se leen ANTES de calcular
     # nada: lo que tiene cita ya no se estima, se sabe.
     ids_veh = [v.get("id") for v in vehiculos if v.get("id")]
     citas = await db.fleet_appointments.find(
         {"vehicle_id": {"$in": ids_veh}, "estado": "pendiente"}, {"_id": 0}).to_list(5000)
-    fijadas = {(c.get("vehicle_id"), c.get("tipo")) for c in citas}
+    # Una cita tapa la previsión de lo que cubre, y sólo de eso: si se han
+    # apartado las ruedas de DELANTE, las de atrás siguen contando sus km.
+    fijadas: dict = {}
+    for c in citas:
+        clave = (c.get("vehicle_id"), c.get("tipo"))
+        fijadas.setdefault(clave, set()).update(c.get("posiciones") or [None])
+
+    def _tapado(vid, tipo, pos=None) -> bool:
+        cubre = fijadas.get((vid, tipo))
+        return cubre is not None and (pos is None or pos in cubre or None in cubre)
 
     for v in vehiculos:
         # ── Fechas reales ────────────────────────────────────────────────────
         for campo, tipo in (("itv_date", "itv"), ("renting_end_date", "renting")):
-            if (v.get("id"), tipo) in fijadas:
+            if _tapado(v.get("id"), tipo):
                 continue                      # hay cita: manda la cita
             crudo = v.get(campo)
             if not crudo:
@@ -13563,24 +13585,27 @@ async def fleet_calendar(mes: str = "", center: Optional[str] = None,
         kpd = _km_por_dia(v)
         for kind, di, dw in (("oil", 15000, 2500), ("ruedas", 40000, 3000),
                              ("pastillas", 30000, 3000)):
-            if (v.get("id"), kind) in fijadas:
-                continue                      # hay cita: manda la cita
-            item = _build_maint_item(v, kind, di, dw)
-            if not item:
-                continue
-            base = {**_ficha(v), "tipo": kind, "exacto": False,
-                    "km_restantes": item.get("km_until_change")}
-            if item.get("overdue"):
-                vencidos.append({**base, "fecha": None, "dias": None})
-                continue
-            if not kpd:
-                # Sin km/día no hay forma honesta de poner esto en un día.
-                sin_estimacion.append({**base, "motivo": "sin_ritmo"})
-                continue
-            dias = max(0, round(item["km_until_change"] / kpd))
-            f = hoy + timedelta(days=dias)
-            if primero <= f <= ultimo:
-                eventos.append({**base, "fecha": f.isoformat(), "dias": dias})
+            # El aceite es uno; ruedas y pastillas son dos ejes que se gastan
+            # a ritmos distintos y se cambian por separado.
+            for pos in _ejes_de(v, kind):
+                if _tapado(v.get("id"), kind, pos):
+                    continue                  # hay cita: manda la cita
+                item = _build_maint_item(v, kind, di, dw, pos)
+                if not item:
+                    continue
+                base = {**_ficha(v), "tipo": kind, "posicion": pos, "exacto": False,
+                        "km_restantes": item.get("km_until_change")}
+                if item.get("overdue"):
+                    vencidos.append({**base, "fecha": None, "dias": None})
+                    continue
+                if not kpd:
+                    # Sin km/día no hay forma honesta de poner esto en un día.
+                    sin_estimacion.append({**base, "motivo": "sin_ritmo"})
+                    continue
+                dias = max(0, round(item["km_until_change"] / kpd))
+                f = hoy + timedelta(days=dias)
+                if primero <= f <= ultimo:
+                    eventos.append({**base, "fecha": f.isoformat(), "dias": dias})
 
     # ── Las citas, ya con la ficha de su furgoneta ───────────────────────────
     por_id = {v.get("id"): v for v in vehiculos}
@@ -13618,6 +13643,43 @@ async def fleet_calendar(mes: str = "", center: Optional[str] = None,
 # con las pastillas en el mismo viaje, o apuntar una revisión que no sale de
 # ningún kilometraje. Sin esto el calendario solo se puede mirar.
 _TIPOS_CITA = {"itv", "renting", "oil", "ruedas", "pastillas", "taller", "otro"}
+# Ruedas y pastillas van por ejes. Las de delante y las de atrás no se gastan
+# igual (frenar carga el tren delantero), y en un reparto casi nunca se cambian
+# las cuatro: contarlas juntas hacía que cambiar dos reiniciase el contador de
+# las otras dos, que seguían gastadas y ya no avisaban.
+_EJES = ("delante", "detras")
+_POR_EJES = {"ruedas", "pastillas"}
+
+
+def _ejes_de(v: dict, kind: str) -> tuple:
+    """Por qué ejes hay que contar este mantenimiento en ESTA furgoneta.
+
+    Mientras nadie haya apuntado un cambio por ejes, lo único que consta es un
+    cambio "de ruedas" sin decir cuáles: partirlo en dos daría DOS avisos
+    idénticos para un solo dato, que es inventarse información. Se cuenta como
+    uno solo, sin eje, hasta que alguien resuelva un cambio marcando cuáles —
+    y a partir de ahí ya sí van por separado.
+    """
+    if kind not in _POR_EJES:
+        return (None,)
+    if any(v.get(f"{kind}_{p}_last_change_km") is not None for p in _EJES):
+        return _EJES
+    return (None,)
+
+
+def _valida_posiciones(crudo, tipo: str) -> Optional[list]:
+    """Normaliza la lista de ejes. Vacía o ausente en un tipo por ejes = las 4."""
+    if tipo not in _POR_EJES:
+        return None
+    if not crudo:
+        return list(_EJES)
+    if isinstance(crudo, str):
+        crudo = [crudo]
+    vals = [str(p).strip().lower() for p in crudo]
+    malas = [p for p in vals if p not in _EJES]
+    if malas:
+        raise HTTPException(400, f"Posición inválida: {', '.join(malas)}")
+    return [p for p in _EJES if p in vals]   # siempre en el mismo orden
 
 
 def _valida_fecha_cita(crudo) -> str:
@@ -13658,6 +13720,7 @@ async def crear_cita_flota(data: dict, user: dict = Depends(require_admin)):
     # Una furgoneta no puede tener dos citas abiertas del mismo tipo: la segunda
     # mueve la primera, que es lo que de verdad se quiere al reprogramar.
     doc = {"vehicle_id": vehicle_id, "tipo": tipo, "fecha": fecha,
+           "posiciones": _valida_posiciones(data.get("posiciones"), tipo),
            "nota": str(data.get("nota") or "")[:300] or None,
            "taller": str(data.get("taller") or "")[:120] or None,
            "estado": "pendiente", "updated_at": datetime.now(timezone.utc),
@@ -13689,10 +13752,189 @@ async def editar_cita_flota(cita_id: str, data: dict, user: dict = Depends(requi
         cambios["nota"] = str(data.get("nota") or "")[:300] or None
     if "taller" in data:
         cambios["taller"] = str(data.get("taller") or "")[:120] or None
+    if "posiciones" in data:
+        cambios["posiciones"] = _valida_posiciones(data.get("posiciones"), c.get("tipo"))
     if data.get("estado") in ("pendiente", "hecho"):
         cambios["estado"] = data["estado"]
         cambios["done_at"] = datetime.now(timezone.utc) if data["estado"] == "hecho" else None
     await db.fleet_appointments.update_one({"id": cita_id}, {"$set": cambios})
+    return {"success": True}
+
+
+async def _log_mantenimiento(v: dict, tipo: str, km: Optional[int], nota: str = "",
+                             taller: str = "", origen: str = "manual",
+                             cita_id: Optional[str] = None, por: Optional[str] = None,
+                             fecha: Optional[str] = None,
+                             posiciones: Optional[list] = None) -> dict:
+    """Apunta en el historial QUÉ se le hizo a una furgoneta y cuándo.
+
+    Hasta ahora sólo se guardaba en el vehículo el km del ÚLTIMO cambio de cada
+    cosa. Eso sirve para prever el siguiente, pero borra el anterior: no había
+    forma de responder "¿cuándo se le cambiaron las ruedas y qué se le hizo?".
+    Un mantenimiento sin historial es un mantenimiento que hay que recordar de
+    memoria, y con 122 furgonetas eso no se sostiene.
+
+    La nota es lo que de verdad se hizo ("ruedas traseras"), que casi nunca es
+    exactamente el título de la cita.
+    """
+    doc = {
+        "id": str(uuid.uuid4()),
+        "vehicle_id": v.get("id"), "matricula": v.get("license_plate"),
+        "center": v.get("center"), "tipo": tipo,
+        "fecha": (fecha or datetime.now(timezone.utc).date().isoformat())[:10],
+        "km": km, "nota": (nota or "").strip()[:300] or None,
+        "taller": (taller or "").strip()[:120] or None,
+        "origen": origen, "cita_id": cita_id, "posiciones": posiciones or None,
+        # Qué había ANTES de este cambio, eje por eje. Es lo que permite
+        # deshacerlo: un apunte equivocado que solo se borrase de la lista
+        # dejaría el contador de km puesto a un cambio que no ocurrió, y esa
+        # furgoneta pasaría 40.000 km sin avisar de nada.
+        "prev": {
+            (p or "_"): {"km": v.get(f"{tipo}_{p}_last_change_km" if p else f"{tipo}_last_change_km"),
+                         "fecha": v.get(f"{tipo}_{p}_last_change_date" if p else f"{tipo}_last_change_date")}
+            for p in (posiciones or [None])
+        },
+        "prev_km": v.get(f"{tipo}_last_change_km"),
+        "prev_fecha": v.get(f"{tipo}_last_change_date"),
+        "created_at": datetime.now(timezone.utc), "created_by": por,
+    }
+    await db.maintenance_log.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.post("/fleet/calendar/citas/{cita_id}/resolver")
+async def resolver_cita_flota(cita_id: str, data: dict, user: dict = Depends(require_admin)):
+    """Cierra una cita diciendo qué se hizo, y lo deja hecho de verdad.
+
+    Marcar "hecho" a secas sería mentir a medias: la cita desaparecería del
+    calendario pero la furgoneta seguiría contando los kilómetros desde el
+    cambio ANTERIOR, así que al día siguiente volvería a salir que le toca. Al
+    resolver se hacen las tres cosas a la vez:
+
+      1. se pone a cero el contador del tipo que sea (el km de ahora pasa a ser
+         el del último cambio, y de ahí sale la siguiente previsión),
+      2. se apunta en el historial de la furgoneta lo que se le hizo,
+      3. y se cierra la cita.
+
+    Para la ITV no hay kilómetros que reiniciar: lo que reinicia el ciclo es la
+    fecha de la próxima, y por eso se pide (`itv_date`). Si no se da, se apunta
+    lo hecho y la fecha se queda como estaba — nunca se inventa una.
+    """
+    c = await db.fleet_appointments.find_one({"id": cita_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(404, "Cita no encontrada")
+    v = await _vehiculo_visible(c.get("vehicle_id"), user)
+
+    tipo = c.get("tipo")
+    fecha = _valida_fecha_cita(data.get("fecha") or datetime.now(timezone.utc).date().isoformat())
+    nota = str(data.get("nota") or "")[:300]
+    taller = str(data.get("taller") or c.get("taller") or "")[:120]
+    km = data.get("km")
+    km = _entero(km, "km", defecto=0, minimo=0, maximo=2_000_000) if km not in (None, "") else None
+
+    # Qué ejes se han tocado. Se reinicia el contador SOLO de esos: si se han
+    # cambiado las de delante, las de atrás siguen con los km que llevaban.
+    posiciones = _valida_posiciones(
+        data.get("posiciones") if "posiciones" in data else c.get("posiciones"), tipo)
+
+    cambios: dict = {"updated_at": datetime.now(timezone.utc)}
+    if tipo in ("oil", "ruedas", "pastillas"):
+        # Sin km no se puede reiniciar el contador. Se cae al kilometraje
+        # conocido de la furgoneta antes que dejarlo sin reiniciar.
+        base = km if km is not None else (v.get("mileage") or None)
+        if base is None:
+            raise HTTPException(400, "Hacen falta los kilómetros para reiniciar el contador")
+        for p in (posiciones or [None]):
+            pref = f"{tipo}_{p}" if p else tipo
+            cambios[f"{pref}_last_change_km"] = base
+            cambios[f"{pref}_last_change_date"] = fecha
+        if posiciones and len(posiciones) == len(_EJES):
+            # Las cuatro: el dato sin eje deja de significar nada distinto y se
+            # actualiza también, que es de donde tiran las pantallas viejas.
+            cambios[f"{tipo}_last_change_km"] = base
+            cambios[f"{tipo}_last_change_date"] = fecha
+        cambios["mileage"] = max(base, v.get("mileage") or 0)
+        km = base
+    elif tipo == "itv" and data.get("itv_date"):
+        cambios["itv_date"] = _valida_fecha_cita(data["itv_date"])
+    elif tipo == "renting" and data.get("renting_end_date"):
+        cambios["renting_end_date"] = _valida_fecha_cita(data["renting_end_date"])
+    elif km is not None:
+        cambios["mileage"] = max(km, v.get("mileage") or 0)
+
+    await db.vehicles.update_one({"id": v["id"]}, {"$set": cambios})
+    entrada = await _log_mantenimiento(v, tipo, km, nota, taller, origen="cita",
+                                       cita_id=cita_id, por=user.get("sub"), fecha=fecha,
+                                       posiciones=posiciones)
+    await db.fleet_appointments.update_one({"id": cita_id}, {"$set": {
+        "estado": "hecho", "done_at": datetime.now(timezone.utc),
+        "nota": nota or c.get("nota"), "taller": taller or None,
+        "updated_at": datetime.now(timezone.utc), "updated_by": user.get("sub")}})
+    return {"success": True, "entrada": entrada}
+
+
+@api_router.get("/vehicles/{vehicle_id}/maintenance-log")
+async def get_maintenance_log(vehicle_id: str, user: dict = Depends(require_admin)):
+    """Todo lo que se le ha hecho a esta furgoneta, lo último primero."""
+    await _vehiculo_visible(vehicle_id, user)
+    rows = await db.maintenance_log.find({"vehicle_id": vehicle_id}, {"_id": 0}) \
+        .sort("fecha", -1).to_list(200)
+    return {"rows": rows}
+
+
+@api_router.delete("/vehicles/{vehicle_id}/maintenance-log/{entry_id}")
+async def borrar_apunte_mantenimiento(vehicle_id: str, entry_id: str,
+                                      user: dict = Depends(require_admin)):
+    """Quita un apunte del historial y DESHACE lo que hizo.
+
+    Un apunte equivocado que solo desapareciera de la lista sería peor que no
+    poder borrarlo: el contador de kilómetros seguiría creyendo que el cambio
+    se hizo, y esa furgoneta se pasaría un intervalo entero sin avisar. Por eso
+    cada apunte guarda qué había antes y aquí se restaura — si antes no había
+    nada, se quita el dato, que es lo que había.
+    """
+    await _vehiculo_visible(vehicle_id, user)
+    e = await db.maintenance_log.find_one({"id": entry_id, "vehicle_id": vehicle_id}, {"_id": 0})
+    if not e:
+        raise HTTPException(404, "Apunte no encontrado")
+
+    tipo = e.get("tipo")
+    if tipo in ("oil", "ruedas", "pastillas"):
+        v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0}) or {}
+        prev = e.get("prev") or {}
+        poner, quitar = {}, {}
+        claves = [(p, f"{tipo}_{p}") for p in (e.get("posiciones") or [])] or [(None, tipo)]
+        if e.get("posiciones") and len(e["posiciones"]) == len(_EJES):
+            claves.append((None, tipo))       # se tocó también el dato sin eje
+        for p, pref in claves:
+            # Solo se deshace si este apunte es el que manda ahora: borrar uno
+            # antiguo no puede pisar un cambio posterior que sí se hizo.
+            if v.get(f"{pref}_last_change_km") != e.get("km"):
+                continue
+            antes = prev.get(p or "_") or {}
+            km_antes = antes.get("km", e.get("prev_km") if p is None else None)
+            if km_antes is not None:
+                poner[f"{pref}_last_change_km"] = km_antes
+                poner[f"{pref}_last_change_date"] = antes.get("fecha") or e.get("prev_fecha")
+            else:
+                quitar[f"{pref}_last_change_km"] = ""
+                quitar[f"{pref}_last_change_date"] = ""
+        ops = {}
+        if poner:
+            ops["$set"] = poner
+        if quitar:
+            ops["$unset"] = quitar
+        if ops:
+            await db.vehicles.update_one({"id": vehicle_id}, ops)
+
+    await db.maintenance_log.delete_one({"id": entry_id})
+    # La cita vuelve a estar pendiente: si el apunte era mentira, el cambio
+    # sigue sin hacerse y tiene que volver al calendario.
+    if e.get("cita_id"):
+        await db.fleet_appointments.update_one({"id": e["cita_id"]}, {"$set": {
+            "estado": "pendiente", "done_at": None,
+            "updated_at": datetime.now(timezone.utc), "updated_by": user.get("sub")}})
     return {"success": True}
 
 
@@ -13790,9 +14032,23 @@ async def get_vehicle_history(vehicle_id: str, _=Depends(require_admin)):
     }
 
 
-def _build_maint_item(v: dict, kind: str, default_interval: int, default_warn: int) -> Optional[dict]:
-    """Construye el objeto de estado de un ítem de mantenimiento a partir del documento de vehículo."""
-    last_km = v.get(f"{kind}_last_change_km")
+def _build_maint_item(v: dict, kind: str, default_interval: int, default_warn: int,
+                      pos: Optional[str] = None) -> Optional[dict]:
+    """Estado de un mantenimiento. Con `pos`, el de UN eje (delante/detrás).
+
+    Ruedas y pastillas casi nunca se cambian de cuatro en cuatro, y los ejes no
+    se gastan igual: contar los dos juntos hacía que cambiar las de delante
+    reiniciara también el contador de las de atrás, que seguían gastadas.
+
+    Compatibilidad: las furgonetas que ya tenían un cambio apuntado sin eje
+    (`ruedas_last_change_km`) usan ese dato como punto de partida de AMBOS ejes.
+    Es lo único honesto que se puede hacer: sabemos cuándo se cambiaron algo,
+    no cuáles.
+    """
+    last_km = v.get(f"{kind}_{pos}_last_change_km") if pos else None
+    fecha_key = f"{kind}_{pos}_last_change_date" if pos and last_km is not None else f"{kind}_last_change_date"
+    if last_km is None:
+        last_km = v.get(f"{kind}_last_change_km")
     if last_km is None:
         return None
     km_actual = v.get("mileage") or last_km
@@ -13801,8 +14057,9 @@ def _build_maint_item(v: dict, kind: str, default_interval: int, default_warn: i
     recorridos = km_actual - last_km
     restantes = interval - recorridos
     return {
+        "posicion": pos,
         "last_change_km": last_km,
-        "last_change_date": v.get(f"{kind}_last_change_date"),
+        "last_change_date": v.get(fecha_key),
         "interval_km": interval,
         "warning_before_km": warn,
         "km_until_change": restantes,
@@ -13871,15 +14128,29 @@ async def get_maintenance_info(vehicle_id: str, _=Depends(require_admin)):
             item["days_left_estimate"] = max(0, round(item["km_until_change"] / km_per_day))
         return item
 
+    def _kind(kind, di, dw):
+        """El estado de un mantenimiento. Con ejes separados, el que manda es
+        el que antes toca: si las delanteras están vencidas y las traseras no,
+        lo que hay que ver en la ficha es que TOCAN RUEDAS."""
+        ejes = _ejes_de(v, kind)
+        items = [x for x in (_build_maint_item(v, kind, di, dw, p) for p in ejes) if x]
+        if not items:
+            return None
+        principal = min(items, key=lambda x: x.get("km_until_change", 0))
+        principal = dict(principal)
+        if len(items) > 1:
+            principal["por_eje"] = [_with_estimate(dict(x)) for x in items]
+        return _with_estimate(principal)
+
     return {
         "mileage": v.get("mileage"),
         "bags_remaining": v.get("bags_remaining", 0),
         "bags_history": v.get("bags_history", [])[-10:],
         "provider": v.get("provider"),
         "km_per_day": km_per_day,
-        "oil":       _with_estimate(_build_maint_item(v, "oil",       15000, 2500)),
-        "ruedas":    _with_estimate(_build_maint_item(v, "ruedas",    40000, 3000)),
-        "pastillas": _with_estimate(_build_maint_item(v, "pastillas", 30000, 3000)),
+        "oil":       _kind("oil",       15000, 2500),
+        "ruedas":    _kind("ruedas",    40000, 3000),
+        "pastillas": _kind("pastillas", 30000, 3000),
     }
 
 
@@ -13893,14 +14164,10 @@ async def get_maintenance_alerts(_=Depends(require_admin)):
     lo calcula `_km_por_dia`, el mismo que usa /vehicles/{id}/maintenance, para
     que la cola de flota y la ficha no puedan dar días distintos.
     """
-    vehicles = await db.vehicles.find(
-        {"status": {"$ne": "baja"}},
-        {"_id": 0, "id": 1, "license_plate": 1, "brand": 1, "model": 1, "center": 1,
-         "mileage": 1, "mileage_history": 1, "status": 1, "provider": 1,
-         "oil_last_change_km": 1, "oil_last_change_date": 1, "oil_interval_km": 1, "oil_warning_before_km": 1,
-         "ruedas_last_change_km": 1, "ruedas_last_change_date": 1, "ruedas_interval_km": 1, "ruedas_warning_before_km": 1,
-         "pastillas_last_change_km": 1, "pastillas_last_change_date": 1, "pastillas_interval_km": 1, "pastillas_warning_before_km": 1}
-    ).to_list(500)
+    # Sin lista de campos: con ruedas y pastillas por ejes, una proyección
+    # cerrada se deja fuera los campos nuevos en silencio y los cambios por eje
+    # dejarían de contar aquí sin que nada fallara.
+    vehicles = await db.vehicles.find({"status": {"$nin": ["deleted", "baja"]}}, {"_id": 0}).to_list(500)
 
     alerts = []
     for v in vehicles:
@@ -13911,28 +14178,29 @@ async def get_maintenance_alerts(_=Depends(require_admin)):
             ("ruedas", 40000, 3000, "Ruedas"),
             ("pastillas", 30000, 3000, "Pastillas de freno"),
         ]:
-            item = _build_maint_item(v, kind, default_i, default_w)
-            if item and (item["overdue"] or item["warning"]):
-                # Sin km/día NO hay días: la clave viaja como None y quien pinta
-                # tiene que decir "faltan X km" en vez de inventarse una fecha.
-                item["days_left_estimate"] = (
-                    max(0, round(item["km_until_change"] / kpd))
-                    if kpd and isinstance(item.get("km_until_change"), (int, float)) else None)
-                alerts.append({
-                    "vehicle_id": v["id"],
-                    "license_plate": v.get("license_plate"),
-                    "brand": v.get("brand"),
-                    "model": v.get("model"),
-                    "center": v.get("center"),
-                    "mileage": v.get("mileage"),
-                    "mileage_last_at": km_at,
-                    "vehicle_status": v.get("status"),
-                    "provider": v.get("provider"),
-                    "km_per_day": kpd,
-                    "kind": kind,
-                    "label": label,
-                    **item,
-                })
+            for pos in _ejes_de(v, kind):
+                item = _build_maint_item(v, kind, default_i, default_w, pos)
+                if item and (item["overdue"] or item["warning"]):
+                    # Sin km/día NO hay días: la clave viaja como None y quien pinta
+                    # tiene que decir "faltan X km" en vez de inventarse una fecha.
+                    item["days_left_estimate"] = (
+                        max(0, round(item["km_until_change"] / kpd))
+                        if kpd and isinstance(item.get("km_until_change"), (int, float)) else None)
+                    alerts.append({
+                        "vehicle_id": v["id"],
+                        "license_plate": v.get("license_plate"),
+                        "brand": v.get("brand"),
+                        "model": v.get("model"),
+                        "center": v.get("center"),
+                        "mileage": v.get("mileage"),
+                        "mileage_last_at": km_at,
+                        "vehicle_status": v.get("status"),
+                        "provider": v.get("provider"),
+                        "km_per_day": kpd,
+                        "kind": kind,
+                        "label": f"{label} ({pos})" if pos else label,
+                        **item,
+                    })
     alerts.sort(key=lambda a: a["km_until_change"])
     return alerts
 

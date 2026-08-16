@@ -1454,6 +1454,28 @@ const DICT = {
   'cal.endias':       { es: 'dentro de {n} días', en: 'in {n} days', fr: 'dans {n} jours', de: 'in {n} Tagen', it: 'tra {n} giorni', pt: 'dentro de {n} dias' },
   'cal.filtra':       { es: 'Filtra por tipo', en: 'Filter by type', fr: 'Filtrer par type', de: 'Nach Typ filtern', it: 'Filtra per tipo', pt: 'Filtrar por tipo' },
   'cal.pasada':       { es: 'La fecha ya pasó y sigue sin cerrarse.', en: 'The date has passed and it\'s still open.', fr: 'La date est passée et rien n\'est clôturé.', de: 'Das Datum ist vorbei und nichts ist erledigt.', it: 'La data è passata e non è chiusa.', pt: 'A data passou e continua por fechar.' },
+  // Cerrar la cita contando lo que se hizo: reinicia el contador de km y queda
+  // apuntado en el historial de la furgoneta.
+  // Ruedas y pastillas por ejes: casi nunca son las cuatro.
+  'cal.eje.delante':  { es: 'Delanteras', en: 'Front', fr: 'Avant', de: 'Vorne', it: 'Anteriori', pt: 'Dianteiras' },
+  'cal.eje.detras':   { es: 'Traseras', en: 'Rear', fr: 'Arrière', de: 'Hinten', it: 'Posteriori', pt: 'Traseiras' },
+  'cal.eje.delante.ab': { es: 'DEL', en: 'FR', fr: 'AV', de: 'VO', it: 'ANT', pt: 'DIA' },
+  'cal.eje.detras.ab':  { es: 'TRA', en: 'RE', fr: 'AR', de: 'HI', it: 'POST', pt: 'TRA' },
+  'cal.eje.todas':    { es: '= las 4', en: '= all 4', fr: '= les 4', de: '= alle 4', it: '= tutte e 4', pt: '= as 4' },
+  'cal.eje.solo':     { es: 'solo ese eje', en: 'that axle only', fr: 'cet essieu seulement', de: 'nur diese Achse', it: 'solo quell\'asse', pt: 'só esse eixo' },
+  'cal.f.ejes':       { es: '¿Cuáles?', en: 'Which ones?', fr: 'Lesquelles ?', de: 'Welche?', it: 'Quali?', pt: 'Quais?' },
+  'cal.res.ejes':     { es: '¿Cuáles se cambiaron?', en: 'Which ones were changed?', fr: 'Lesquelles ont été changées ?', de: 'Welche wurden gewechselt?', it: 'Quali sono state cambiate?', pt: 'Quais foram trocadas?' },
+  'cal.res.tit':      { es: '¿Qué se le hizo?', en: 'What was done?', fr: 'Qu\'a-t-on fait ?', de: 'Was wurde gemacht?', it: 'Cosa è stato fatto?', pt: 'O que se fez?' },
+  'cal.res.nota':     { es: 'Trabajo realizado', en: 'Work done', fr: 'Travail effectué', de: 'Ausgeführte Arbeit', it: 'Lavoro svolto', pt: 'Trabalho realizado' },
+  'cal.res.nota.ph':  { es: 'Ruedas traseras cambiadas', en: 'Rear tyres replaced', fr: 'Pneus arrière remplacés', de: 'Hinterreifen gewechselt', it: 'Gomme posteriori sostituite', pt: 'Pneus traseiros trocados' },
+  'cal.res.fecha':    { es: 'Cuándo', en: 'When', fr: 'Quand', de: 'Wann', it: 'Quando', pt: 'Quando' },
+  'cal.res.km':       { es: 'Km al hacerlo', en: 'Km at the time', fr: 'Km au moment', de: 'Km dabei', it: 'Km al momento', pt: 'Km na altura' },
+  'cal.res.proxitv':  { es: 'Próxima ITV', en: 'Next MOT', fr: 'Prochain CT', de: 'Nächste HU', it: 'Prossima revisione', pt: 'Próxima IPO' },
+  'cal.res.proxrent': { es: 'Nuevo fin de renting', en: 'New lease end', fr: 'Nouvelle fin de location', de: 'Neues Leasingende', it: 'Nuova fine noleggio', pt: 'Novo fim de renting' },
+  'cal.res.exp':      { es: 'Desde estos km se cuenta el siguiente cambio: la previsión se reinicia aquí.', en: 'The next change is counted from these km: the forecast restarts here.', fr: 'Le prochain changement se compte à partir de ces km.', de: 'Ab diesen km zählt der nächste Wechsel.', it: 'Il prossimo cambio si conta da questi km.', pt: 'A próxima mudança conta-se a partir destes km.' },
+  'cal.res.ok':       { es: 'Hecho y apuntado', en: 'Done and logged', fr: 'Fait et enregistré', de: 'Erledigt und erfasst', it: 'Fatto e registrato', pt: 'Feito e registado' },
+  'vh.ev.maint':      { es: 'Mantenimiento', en: 'Maintenance', fr: 'Entretien', de: 'Wartung', it: 'Manutenzione', pt: 'Manutenção' },
+  'vh.maint.del':     { es: 'Quitar el apunte y deshacerlo (los km vuelven a como estaban)', en: 'Remove the entry and undo it (km go back to what they were)', fr: 'Retirer l\'entrée et l\'annuler', de: 'Eintrag entfernen und rückgängig machen', it: 'Rimuovi la voce e annullala', pt: 'Remover o registo e desfazê-lo' },
   // Flota activa vs. de baja. Una furgoneta devuelta no se borra (a veces
   // vuelve) pero no puede salir en listas ni contadores de operación.
   'veh.tab.activas':  { es: 'En flota', en: 'In fleet', fr: 'En flotte', de: 'In der Flotte', it: 'In flotta', pt: 'Na frota' },

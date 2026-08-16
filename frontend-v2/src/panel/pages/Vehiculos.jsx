@@ -21,7 +21,7 @@ import {
   getVehicles, getLastInspections, getVehicleDriver, getVehicleInspections, updateVehicle, deleteVehicle, createIncident, getIncidents,
   getVehicleMaintenance, registerOilChange, registerMaintenanceChange,
   getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument, createVehicle,
-  getVehicleDamageLedger, repairVehicleLedger, getSpareWheels,
+  getVehicleDamageLedger, repairVehicleLedger, getSpareWheels, getMaintenanceLog, borrarApunteMantenimiento,
 } from '../api'
 import { getAdmin } from '../auth'
 
@@ -33,6 +33,14 @@ const STATUS_MAP = {
   taller: { label: 'En taller',   labelKey: 'veh.workshop',  dot: 'bg-orange-400',  badge: 'bg-orange-500/10 text-orange-400 ring-1 ring-orange-500/30' },
   baja:   { label: 'Baja',        labelKey: 'veh.inactive',  dot: 'bg-slate-500',   badge: 'bg-slate-700/60 text-slate-400 ring-1 ring-slate-600/40' },
 }
+
+// Etiquetas de lo que se le hace a una furgoneta, para el historial.
+const MAINT_LABEL = {
+  oil: 'Aceite', ruedas: 'Ruedas', pastillas: 'Pastillas',
+  itv: 'ITV', renting: 'Renting', taller: 'Taller', otro: 'Otro',
+}
+
+const EJE_LABEL = { delante: 'Delanteras', detras: 'Traseras' }
 
 const daysTo = (d) => d ? Math.ceil((new Date(d) - new Date()) / 86400000) : null
 
@@ -335,6 +343,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
   const [tallerModal, setTallerModal] = useState(null) // holds target status while modal open
   const [vehicleIncidents, setVehicleIncidents] = useState(null)
   const [maintenance, setMaintenance] = useState(null)
+  const [maintLog, setMaintLog] = useState(null)     // qué se le ha hecho ya
   const [maintModal, setMaintModal] = useState(null) // 'oil' | 'ruedas' | 'pastillas' | null
   const [docs, setDocs] = useState(null)
   const [uploadingDoc, setUploadingDoc] = useState(false)
@@ -359,6 +368,10 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
     getVehicleInspections(vehicle.id).then(r => { if (!cancelled) setInsps(lista(r.data)) }).catch(() => { if (!cancelled) setInsps([]) })
     getIncidents({ vehicle_id: vehicle.id }).then(r => { if (!cancelled) setVehicleIncidents(Array.isArray(r.data) ? r.data : []) }).catch(() => { if (!cancelled) setVehicleIncidents([]) })
     getVehicleMaintenance(vehicle.id).then(r => { if (!cancelled) setMaintenance(r.data || null) }).catch(() => { if (!cancelled) setMaintenance(null) })
+    // Lo que se le ha HECHO, no lo que le toca: la ficha guardaba solo el km
+    // del último cambio de cada cosa, que al siguiente cambio se pisa y borra
+    // el anterior. Esto es el registro que queda.
+    getMaintenanceLog(vehicle.id).then(r => { if (!cancelled) setMaintLog(lista(r.data?.rows)) }).catch(() => { if (!cancelled) setMaintLog([]) })
     getVehicleDocuments(vehicle.id).then(r => { if (!cancelled) setDocs(Array.isArray(r.data) ? r.data : []) }).catch(() => { if (!cancelled) setDocs([]) })
     // Ledger desde el arranque: el índice de salud y el historial lo necesitan.
     // Si falla (demo/red), vacío = sin daños registrados; no bloquear la salud.
@@ -1252,6 +1265,21 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                 if (e.repaired_at) evs.push({ at: e.repaired_at, dot: 'bg-emerald-400', txt: `${t('vh.ev.repair')}: ${e.part || e.panel}` })
               }
               if (vehicle.body_repaired_at) evs.push({ at: vehicle.body_repaired_at, dot: 'bg-emerald-400', txt: `🔧 ${t('vh.ev.repair.all')}` })
+              // Mantenimientos hechos. La nota es lo que de verdad se hizo
+              // ("ruedas traseras"), que casi nunca es el título del cambio, y
+              // es justo lo que hace falta leer dentro de seis meses.
+              for (const m of (maintLog || [])) {
+                const et = MAINT_LABEL[m.tipo] || m.tipo
+                // Qué ejes: "Ruedas" a secas y "Ruedas delanteras" no dicen lo
+                // mismo, y es lo primero que se pregunta al mirar atrás.
+                const ejes = (m.posiciones || []).map((p) => EJE_LABEL[p] || p)
+                const cual = ejes.length && ejes.length < 2 ? ` ${ejes[0].toLowerCase()}` : ''
+                evs.push({
+                  at: m.fecha, dot: 'bg-sky-400', strong: true, apunte: m.id,
+                  txt: [`🔧 ${et}${cual}`, m.nota, m.km != null ? `${Number(m.km).toLocaleString('es')} km` : null, m.taller]
+                    .filter(Boolean).join(' · '),
+                })
+              }
               evs.sort((a, b) => String(b.at).localeCompare(String(a.at)))
               return (
                 <div className="px-5 py-4">
@@ -1279,9 +1307,29 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                   ) : (
                     <ol className="relative ml-1.5 border-l border-white/[0.08]">
                       {evs.map((e, i) => (
-                        <li key={i} className="relative ml-5 pb-4 last:pb-0">
+                        <li key={i} className="group/ev relative ml-5 pb-4 last:pb-0">
                           <span className={`absolute -left-[25.5px] top-1 h-2.5 w-2.5 rounded-full ring-4 ring-dark-950 ${e.dot}`} />
-                          <div className="text-[11px] tabular-nums text-dark-500">{String(e.at).slice(0, 16).replace('T', ' · ')}</div>
+                          <div className="flex items-center gap-2">
+                            <div className="text-[11px] tabular-nums text-dark-500">{String(e.at).slice(0, 16).replace('T', ' · ')}</div>
+                            {/* Un apunte de mantenimiento se puede quitar, y al
+                                quitarlo se deshace: el contador de km vuelve a
+                                donde estaba y la cita vuelve a pendiente. */}
+                            {e.apunte && (
+                              <button
+                                title={t('vh.maint.del')}
+                                onClick={async () => {
+                                  await borrarApunteMantenimiento(vehicle.id, e.apunte)
+                                  const [l, m] = await Promise.all([
+                                    getMaintenanceLog(vehicle.id), getVehicleMaintenance(vehicle.id),
+                                  ])
+                                  setMaintLog(lista(l.data?.rows)); setMaintenance(m.data || null)
+                                }}
+                                className="rounded p-0.5 text-dark-700 opacity-0 transition hover:text-red-300 group-hover/ev:opacity-100"
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            )}
+                          </div>
                           <div className={`text-[13px] leading-snug ${e.strong ? 'font-semibold text-dark-100' : 'text-dark-300'}`}>{e.txt}</div>
                         </li>
                       ))}

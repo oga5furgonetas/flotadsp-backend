@@ -108,6 +108,14 @@ export const fleetCalendar = (params) => api.get('/fleet/calendar', { params })
 export const crearCitaFlota = (body) => api.post('/fleet/calendar/citas', body)
 export const editarCitaFlota = (id, body) => api.patch(`/fleet/calendar/citas/${id}`, body)
 export const borrarCitaFlota = (id) => api.delete(`/fleet/calendar/citas/${id}`)
+// Resolver ≠ marcar hecho: además de cerrar la cita, pone a cero el contador de
+// km de ese cambio y lo apunta en el historial de la furgoneta.
+export const resolverCitaFlota = (id, body) => api.post(`/fleet/calendar/citas/${id}/resolver`, body)
+export const getMaintenanceLog = (id) => api.get(`/vehicles/${id}/maintenance-log`)
+// Borrar un apunte DESHACE lo que hizo (devuelve el contador de km a como
+// estaba y la cita a pendiente); si no, sería peor que no poder borrarlo.
+export const borrarApunteMantenimiento = (id, entryId) =>
+  api.delete(`/vehicles/${id}/maintenance-log/${entryId}`)
 export const getMaintenanceAlerts = () => api.get('/alerts/maintenance')
 export const getRentingAlerts = () => api.get('/alerts/renting')
 

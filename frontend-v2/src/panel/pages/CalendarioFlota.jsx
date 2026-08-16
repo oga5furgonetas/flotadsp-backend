@@ -5,7 +5,7 @@ import {
   X, Plus, Check, Trash2, Pin, ArrowRight, Wrench,
 } from 'lucide-react'
 import { useT, LANG_LOCALE } from '../../i18n'
-import { fleetCalendar, crearCitaFlota, editarCitaFlota, borrarCitaFlota, getVehicles } from '../api'
+import { fleetCalendar, crearCitaFlota, editarCitaFlota, borrarCitaFlota, resolverCitaFlota, getVehicles } from '../api'
 import { lista } from '../../lib/lista'
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -48,13 +48,51 @@ const ORDEN = ['itv', 'renting', 'oil', 'ruedas', 'pastillas', 'taller', 'otro']
 const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 const cfgDe = (tipo) => TIPOS[tipo] || TIPOS.otro
 
+/* Ruedas y pastillas van por ejes: casi nunca se cambian las cuatro, y las de
+   delante se gastan antes. Marcar cuáles no es un detalle cosmético — es lo que
+   decide QUÉ contador se reinicia. */
+const EJES = ['delante', 'detras']
+const POR_EJES = ['ruedas', 'pastillas']
+const abrevEje = (p, t) => (p ? t(`cal.eje.${p}`) : '')
+
+/* Casillas de eje. Sin ninguna marcada no se puede resolver nada, así que
+   quitar la última vuelve a marcar las dos: "ninguna" no es una respuesta. */
+function Ejes({ valor, onChange, t }) {
+  const alternar = (p) => {
+    const s = new Set(valor)
+    s.has(p) ? s.delete(p) : s.add(p)
+    onChange(s.size ? EJES.filter((x) => s.has(x)) : EJES)
+  }
+  const todas = valor.length === EJES.length
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {EJES.map((p) => {
+        const on = valor.includes(p)
+        return (
+          <button key={p} onClick={() => alternar(p)}
+            className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11.5px] transition-colors ${
+              on ? 'border-brand-500/50 bg-brand-500/10 text-brand-200' : 'border-dark-700 text-dark-500'}`}>
+            <span className={`flex h-3 w-3 items-center justify-center rounded-[3px] border ${
+              on ? 'border-brand-400 bg-brand-500' : 'border-dark-600'}`}>
+              {on && <Check size={8} className="text-white" strokeWidth={3.5} />}
+            </span>
+            {t(`cal.eje.${p}`)}
+          </button>
+        )
+      })}
+      <span className="text-[10.5px] text-dark-600">{todas ? t('cal.eje.todas') : t('cal.eje.solo')}</span>
+    </div>
+  )
+}
+
 /* Chip de un evento dentro de una celda del mes. */
 function Chip({ ev, t, onClick }) {
   const cfg = cfgDe(ev.tipo)
+  const eje = ev.posicion || (ev.posiciones?.length === 1 ? ev.posiciones[0] : null)
   return (
     <button
       onClick={onClick}
-      title={`${ev.matricula} · ${t(cfg.k)}${ev.exacto ? '' : ' · ' + t('cal.estimado')}`}
+      title={`${ev.matricula} · ${t(cfg.k)}${eje ? ' ' + t(`cal.eje.${eje}`) : ''}${ev.exacto ? '' : ' · ' + t('cal.estimado')}`}
       className="group/chip flex w-full items-center gap-1 rounded-[5px] px-1 py-[3px] text-left transition-all hover:brightness-125"
       style={{
         borderLeft: `2px ${ev.exacto ? 'solid' : 'dashed'} ${cfg.color}`,
@@ -64,7 +102,7 @@ function Chip({ ev, t, onClick }) {
       {ev.cita && <Pin size={8} style={{ color: cfg.color }} className="shrink-0" />}
       <span className="truncate font-mono text-[9.5px] leading-tight text-dark-100">{ev.matricula}</span>
       <span className="ml-auto shrink-0 text-[8.5px] font-semibold uppercase tracking-wide" style={{ color: cfg.color }}>
-        {t(cfg.k).slice(0, 3)}
+        {t(cfg.k).slice(0, 3)}{eje ? ` ${t(`cal.eje.${eje}.ab`)}` : ''}
       </span>
     </button>
   )
@@ -105,6 +143,7 @@ function FormCita({ t, vehiculos, inicial, onGuardado }) {
   const [fecha, setFecha] = useState(inicial.fecha || '')
   const [taller, setTaller] = useState(inicial.taller || '')
   const [nota, setNota] = useState(inicial.nota || '')
+  const [ejes, setEjes] = useState(inicial.posiciones?.length ? inicial.posiciones : EJES)
   const [guardando, setGuardando] = useState(false)
   const [err, setErr] = useState('')
 
@@ -121,8 +160,9 @@ function FormCita({ t, vehiculos, inicial, onGuardado }) {
     if (!vid || !fecha) return
     setGuardando(true); setErr('')
     try {
-      if (inicial.cita_id) await editarCitaFlota(inicial.cita_id, { fecha, nota, taller })
-      else await crearCitaFlota({ vehicle_id: vid, tipo, fecha, nota, taller })
+      const pos = POR_EJES.includes(tipo) ? { posiciones: ejes } : {}
+      if (inicial.cita_id) await editarCitaFlota(inicial.cita_id, { fecha, nota, taller, ...pos })
+      else await crearCitaFlota({ vehicle_id: vid, tipo, fecha, nota, taller, ...pos })
       onGuardado()
     } catch {
       setErr(t('lib.error')); setGuardando(false)
@@ -197,6 +237,14 @@ function FormCita({ t, vehiculos, inicial, onGuardado }) {
         </div>
       )}
 
+      {/* Cuáles. En un reparto casi nunca son las cuatro. */}
+      {POR_EJES.includes(tipo) && (
+        <div>
+          <label className={labelCls}>{t('cal.f.ejes')}</label>
+          <Ejes valor={ejes} onChange={setEjes} t={t} />
+        </div>
+      )}
+
       <div>
         <label className={labelCls}>{t('cal.f.fecha')}</label>
         <input type="date" className={inputCls} value={fecha} onChange={(e) => setFecha(e.target.value)} />
@@ -220,6 +268,102 @@ function FormCita({ t, vehiculos, inicial, onGuardado }) {
         {guardando ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
         {t('cal.guardar')}
       </button>
+    </div>
+  )
+}
+
+/* Cerrar una cita contando lo que se hizo de verdad.
+
+   Los kilómetros no son un adorno: son el dato del que sale la siguiente
+   previsión. Por eso vienen puestos con el kilometraje que consta de la
+   furgoneta y se pueden corregir, pero no se pueden dejar en blanco en un
+   cambio que se mide en km.
+
+   La nota es lo que se hizo ("ruedas traseras"), que casi nunca coincide
+   exactamente con el título de la cita — y es justo lo que hace falta leer
+   dentro de seis meses. */
+function FormResolver({ ev, t, onHecho, onCancelar }) {
+  const porKm = ['oil', 'ruedas', 'pastillas'].includes(ev.tipo)
+  const porEjes = POR_EJES.includes(ev.tipo)
+  const [ejes, setEjes] = useState(ev.posiciones?.length ? ev.posiciones : EJES)
+  const [km, setKm] = useState(ev.mileage != null ? String(ev.mileage) : '')
+  const [nota, setNota] = useState('')
+  const [fecha, setFecha] = useState(() => {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  })
+  const [prox, setProx] = useState('')
+  const [taller, setTaller] = useState(ev.taller || '')
+  const [ocupado, setOcupado] = useState(false)
+  const [err, setErr] = useState('')
+
+  const guardar = async () => {
+    setOcupado(true); setErr('')
+    try {
+      await resolverCitaFlota(ev.cita_id, {
+        km: km === '' ? null : Number(km), nota, taller, fecha,
+        ...(porEjes ? { posiciones: ejes } : {}),
+        ...(ev.tipo === 'itv' && prox ? { itv_date: prox } : {}),
+        ...(ev.tipo === 'renting' && prox ? { renting_end_date: prox } : {}),
+      })
+      onHecho()
+    } catch { setErr(t('lib.error')); setOcupado(false) }
+  }
+
+  return (
+    <div className="mb-4 space-y-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.04] p-3.5">
+      <p className="text-[12.5px] font-semibold text-emerald-200">{t('cal.res.tit')}</p>
+      {/* Cuáles se han cambiado de verdad. De esto depende qué contador se
+          pone a cero: marcar las cuatro cuando solo se tocaron las de delante
+          dejaría las de atrás gastadas y sin avisar durante 40.000 km. */}
+      {porEjes && (
+        <div>
+          <label className={labelCls}>{t('cal.res.ejes')}</label>
+          <Ejes valor={ejes} onChange={setEjes} t={t} />
+        </div>
+      )}
+      <div>
+        <label className={labelCls}>{t('cal.res.nota')}</label>
+        <textarea rows={2} className={`${inputCls} resize-none`} value={nota}
+          onChange={(e) => setNota(e.target.value)} placeholder={t('cal.res.nota.ph')} />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className={labelCls}>{t('cal.res.fecha')}</label>
+          <input type="date" className={inputCls} value={fecha} onChange={(e) => setFecha(e.target.value)} />
+        </div>
+        {porKm && (
+          <div>
+            <label className={labelCls}>{t('cal.res.km')}</label>
+            <input type="number" inputMode="numeric" className={inputCls} value={km}
+              onChange={(e) => setKm(e.target.value)} placeholder="0" />
+          </div>
+        )}
+        {(ev.tipo === 'itv' || ev.tipo === 'renting') && (
+          <div>
+            <label className={labelCls}>{ev.tipo === 'itv' ? t('cal.res.proxitv') : t('cal.res.proxrent')}</label>
+            <input type="date" className={inputCls} value={prox} onChange={(e) => setProx(e.target.value)} />
+          </div>
+        )}
+      </div>
+      <div>
+        <label className={labelCls}>{t('cal.f.taller')}</label>
+        <input className={inputCls} value={taller} onChange={(e) => setTaller(e.target.value)} />
+      </div>
+      {porKm && (
+        <p className="text-[11px] leading-relaxed text-dark-500">{t('cal.res.exp')}</p>
+      )}
+      {err && <p className="text-[12px] text-red-300">{err}</p>}
+      <div className="flex gap-2">
+        <button onClick={guardar} disabled={ocupado || (porKm && km === '')}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-2 text-[12.5px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
+          {ocupado ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {t('cal.res.ok')}
+        </button>
+        <button onClick={onCancelar} disabled={ocupado}
+          className="rounded-lg border border-dark-700 px-3 py-2 text-[12px] text-dark-400 transition-colors hover:text-dark-200">
+          {t('ui.cancel')}
+        </button>
+      </div>
     </div>
   )
 }
@@ -525,12 +669,9 @@ export default function CalendarioFlota() {
    y una fecha oficial (ITV) se puede apartar para llevarla antes. */
 function PanelEvento({ ev, t, locale, nav, vehiculos, fechaLarga, onClose, onCambio }) {
   const [ocupado, setOcupado] = useState(false)
+  const [resolviendo, setResolviendo] = useState(false)
   const cfg = cfgDe(ev.tipo)
 
-  const cerrar = async () => {
-    setOcupado(true)
-    try { await editarCitaFlota(ev.cita_id, { estado: 'hecho' }); onCambio() } finally { setOcupado(false) }
-  }
   const quitar = async () => {
     setOcupado(true)
     try { await borrarCitaFlota(ev.cita_id); onCambio() } finally { setOcupado(false) }
@@ -541,7 +682,11 @@ function PanelEvento({ ev, t, locale, nav, vehiculos, fechaLarga, onClose, onCam
       <div className="mb-4 space-y-2">
         <div className="flex items-center gap-2">
           <span className="rounded-md px-2 py-1 text-[11.5px] font-semibold"
-            style={{ background: `${cfg.color}18`, color: cfg.color }}>{t(cfg.k)}</span>
+            style={{ background: `${cfg.color}18`, color: cfg.color }}>
+            {t(cfg.k)}
+            {ev.posicion && ` · ${abrevEje(ev.posicion, t)}`}
+            {!ev.posicion && ev.posiciones?.length === 1 && ` · ${abrevEje(ev.posiciones[0], t)}`}
+          </span>
           {ev.cita
             ? <span className="flex items-center gap-1 text-[11px] text-dark-500"><Pin size={10} /> {t('cal.cita')}</span>
             : !ev.exacto && <span className="text-[11px] text-dark-500">{t('cal.estimado')}</span>}
@@ -562,9 +707,9 @@ function PanelEvento({ ev, t, locale, nav, vehiculos, fechaLarga, onClose, onCam
         {ev.nota && <p className="rounded-lg border border-dark-800 bg-dark-900/50 px-3 py-2 text-[12px] text-dark-300">{ev.nota}</p>}
       </div>
 
-      {ev.cita && (
+      {ev.cita && !resolviendo && (
         <div className="mb-4 flex gap-2">
-          <button onClick={cerrar} disabled={ocupado}
+          <button onClick={() => setResolviendo(true)} disabled={ocupado}
             className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[12px] font-semibold text-emerald-300 transition-colors hover:bg-emerald-500/20 disabled:opacity-40">
             <Check size={13} /> {t('cal.hecho')}
           </button>
@@ -573,6 +718,14 @@ function PanelEvento({ ev, t, locale, nav, vehiculos, fechaLarga, onClose, onCam
             <Trash2 size={13} /> {t('cal.quitar')}
           </button>
         </div>
+      )}
+
+      {/* ── Cerrarla diciendo QUÉ se hizo ────────────────────────────────
+          Marcar "hecho" a secas dejaría la furgoneta contando kilómetros
+          desde el cambio anterior, así que al día siguiente volvería a salir
+          que le toca. Aquí se reinicia el contador y queda en su historial. */}
+      {ev.cita && resolviendo && (
+        <FormResolver ev={ev} t={t} onHecho={onCambio} onCancelar={() => setResolviendo(false)} />
       )}
 
       <div className="border-t border-dark-800 pt-4">
@@ -586,6 +739,7 @@ function PanelEvento({ ev, t, locale, nav, vehiculos, fechaLarga, onClose, onCam
             vehicle_id: ev.vehicle_id, matricula: ev.matricula, modelo: ev.modelo,
             tipo: ev.tipo, tipoFijo: true, fecha: ev.fecha || '',
             nota: ev.nota || '', taller: ev.taller || '', cita_id: ev.cita_id,
+            posiciones: ev.posiciones || (ev.posicion ? [ev.posicion] : null),
           }}
           onGuardado={onCambio}
         />
