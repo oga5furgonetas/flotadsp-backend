@@ -9227,11 +9227,16 @@ async def borrar_destinatario(did: str, _=Depends(require_admin)):
 
 
 async def _danos_nuevos_hoy(center: str, dia: str) -> list:
-    """Matrículas de ese centro con daños nuevos detectados hoy.
+    """Golpes nuevos de hoy en ese centro: qué golpe, en qué furgoneta y quién.
 
     Sale de las inspecciones del día cruzadas con las furgonetas del centro:
     `inspections` no guarda el centro (gotcha 6), así que se acota por
     vehicle_id, igual que hace el resto del panel.
+
+    El conductor sale del CUADRANTE del día, no de quien hizo la foto: quien
+    revisa por la mañana no tiene por qué ser quien luego lleva la furgoneta.
+    Si el cuadrante no dice quién, se queda sin nombre — poner uno a dedo en un
+    parte de daños es exactamente lo que no se puede hacer.
     """
     ids = await db.vehicles.distinct(
         "id", {"center": {"$regex": re.escape(center), "$options": "i"},
@@ -9241,14 +9246,60 @@ async def _danos_nuevos_hoy(center: str, dia: str) -> list:
     insps = await db.inspections.find(
         {"deleted": {"$ne": True}, "vehicle_id": {"$in": ids},
          "created_at": {"$regex": f"^{dia}"}},
-        {"_id": 0, "vehicle_id": 1, "analysis": 1}).to_list(2000)
-    con_dano = {i["vehicle_id"] for i in insps
-                if ((i.get("analysis") or {}).get("new_damages") or [])}
+        {"_id": 0, "vehicle_id": 1, "analysis": 1, "driver_name": 1}).to_list(2000)
+
+    asig = await db.daily_assignments.find_one(
+        {"date": dia, "center": {"$regex": re.escape(center), "$options": "i"}}, {"_id": 0})
+    cond_por_veh = {s.get("vehicle_id"): (s.get("driver_name") or "")
+                    for s in (asig or {}).get("slots", []) if s.get("vehicle_id")}
+
+    con_dano = {}
+    for i in insps:
+        nuevos = [d for d in ((i.get("analysis") or {}).get("new_damages") or [])
+                  if isinstance(d, dict)]
+        if nuevos:
+            con_dano.setdefault(i["vehicle_id"], []).extend(nuevos)
     if not con_dano:
         return []
-    vs = await db.vehicles.find({"id": {"$in": list(con_dano)}},
-                                {"_id": 0, "license_plate": 1}).to_list(200)
-    return sorted(v.get("license_plate") or "—" for v in vs)
+
+    placas = {v["id"]: v.get("license_plate") or "—" for v in await db.vehicles.find(
+        {"id": {"$in": list(con_dano)}}, {"_id": 0, "id": 1, "license_plate": 1}).to_list(200)}
+    out = []
+    for vid, danos in con_dano.items():
+        for d in danos:
+            out.append({
+                "matricula": placas.get(vid, "—"),
+                "parte": d.get("part") or d.get("panel") or "—",
+                "gravedad": (d.get("severity") or "").lower() or None,
+                "conductor": cond_por_veh.get(vid) or None,
+            })
+    return sorted(out, key=lambda x: (x["matricula"], x["parte"]))
+
+
+async def _cx_incidencias_dia(center: str, dia: str) -> dict:
+    """Paquetes problemáticos de hoy: perdidos, faltantes y sin dirección.
+
+    Los tres son cosas distintas y mezclarlas sería inútil: un LOST está
+    extraviado de verdad, un MISSING no apareció en la furgoneta al cargar, y
+    "no puedo encontrar la dirección" es un paquete que sigue en la furgoneta
+    porque el conductor no dio con el portal — ese se puede rescatar HOY, que
+    es justo por lo que va en un mensaje de la tarde y no en un informe.
+    """
+    base = {"service_day": dia,
+            "center": {"$regex": re.escape(center.strip()), "$options": "i"}}
+    lost = await db.cortex_packages.count_documents({**base, "state": "LOST"})
+    missing = await db.cortex_packages.count_documents({**base, "state": "MISSING"})
+    # "No puedo encontrar la dirección" NO es un estado: vive en el `context`
+    # del evento del timeline, y se busca por FECHA del evento porque un paquete
+    # arrastra intentos de días anteriores (ver /cortex/direcciones-hoy).
+    sin_dir = await db.cortex_packages.count_documents({
+        **base,
+        "timeline": {"$elemMatch": {
+            "context": {"$regex": r"^ADDRESS[ _-]?NOT[ _-]?FOUND", "$options": "i"},
+            "at": {"$regex": f"^{dia}"},
+        }},
+    })
+    return {"lost": lost, "missing": missing, "sin_direccion": sin_dir}
 
 
 async def resumen_dia_centro(center: str, dia: str) -> dict:
@@ -9270,20 +9321,81 @@ async def resumen_dia_centro(center: str, dia: str) -> dict:
     else:
         entrega = "sin datos de reparto"
 
+    turnos = []
     partes = []
     for shift in ("manana", "tarde"):
         r = await _resumen_turno(center, dia, shift)
-        if r:
-            partes.append(f"{'mañana' if shift == 'manana' else 'tarde'} {r['hechas']}/{r['total']}")
+        if not r:
+            continue
+        doc = await db.daily_checklists.find_one(
+            {"center": center, "date": dia, "shift": shift}, {"_id": 0, "items": 1})
+        turnos.append({"turno": "mañana" if shift == "manana" else "tarde",
+                       "hechas": r["hechas"], "total": r["total"],
+                       "items": (doc or {}).get("items") or []})
+        partes.append(f"{'mañana' if shift == 'manana' else 'tarde'} {r['hechas']}/{r['total']}")
     checklist = " · ".join(partes) or "sin checklist"
 
-    placas = await _danos_nuevos_hoy(center, dia)
-    golpes = f"{len(placas)} · {', '.join(placas[:6])}" if placas else "ninguno"
+    danos = await _danos_nuevos_hoy(center, dia)
+    placas = sorted({d["matricula"] for d in danos})
+    golpes = f"{len(danos)} · {', '.join(placas[:6])}" if danos else "ninguno"
+    inc = await _cx_incidencias_dia(center, dia) if ent else {"lost": 0, "missing": 0, "sin_direccion": 0}
 
     d, m, y = dia[8:10], dia[5:7], dia[0:4]
     return {"center": center, "fecha": f"{d}/{m}/{y}",
             "entrega": entrega, "checklist": checklist, "golpes": golpes,
-            "placas": placas}
+            "placas": placas, "danos": danos, "turnos": turnos,
+            "incidencias": inc, "dcr": (ent or {}).get("dcr")}
+
+
+def _texto_resumen_largo(r: dict) -> str:
+    """La versión detallada, para Telegram y push.
+
+    La corta (cinco campos) sigue existiendo para la plantilla de WhatsApp: los
+    parámetros de plantilla de Meta NO admiten saltos de línea, así que un
+    mensaje con listas no cabe ahí de ninguna manera. Son dos formatos del
+    mismo dato a propósito, no una duplicación por descuido.
+    """
+    L = [f"📋 <b>{r['center']} — {r['fecha']}</b>", ""]
+
+    L.append(f"📦 <b>Entrega:</b> {r['entrega']}")
+    inc = r.get("incidencias") or {}
+    problemas = []
+    if inc.get("sin_direccion"):
+        problemas.append(f"{inc['sin_direccion']} sin encontrar la dirección")
+    if inc.get("missing"):
+        problemas.append(f"{inc['missing']} no estaban en la furgoneta")
+    if inc.get("lost"):
+        problemas.append(f"{inc['lost']} extraviados")
+    L.append("   ⚠️ " + " · ".join(problemas) if problemas else "   Sin incidencias de paquetes")
+
+    L.append("")
+    danos = r.get("danos") or []
+    if danos:
+        L.append(f"🔧 <b>Golpes nuevos ({len(danos)})</b>")
+        for d in danos[:10]:
+            grav = f" ({d['gravedad']})" if d.get("gravedad") else ""
+            quien = f" · {d['conductor']}" if d.get("conductor") else " · sin conductor en el cuadrante"
+            L.append(f"   • {d['matricula']} — {d['parte']}{grav}{quien}")
+        if len(danos) > 10:
+            L.append(f"   …y {len(danos) - 10} más")
+    else:
+        L.append("🔧 <b>Golpes nuevos:</b> ninguno")
+
+    for t in (r.get("turnos") or []):
+        L.append("")
+        ok = t["hechas"] == t["total"]
+        L.append(f"{'✅' if ok else '⚠️'} <b>Checklist {t['turno']} — {t['hechas']}/{t['total']}</b>")
+        for it in t["items"]:
+            if it.get("done"):
+                hora = (it.get("done_at") or "")[11:16]
+                quien = it.get("done_by") or "—"
+                L.append(f"   ✓ {it.get('text', '')} · {quien} {hora}")
+            else:
+                L.append(f"   ✗ {it.get('text', '')} — <b>sin hacer</b>")
+    if not r.get("turnos"):
+        L.append("")
+        L.append("📝 <b>Checklist:</b> no hay ninguno creado hoy")
+    return "\n".join(L)
 
 
 async def _telegram_aviso(texto: str) -> bool:
@@ -9333,14 +9445,15 @@ async def enviar_resumen_diario(dia: Optional[str] = None) -> list:
     for center in centros:
         r = await resumen_dia_centro(center, dia)
         quienes = [d for d in dest if center in (d.get("centers") or [])]
-        texto = (f"📋 <b>{r['center']} — {r['fecha']}</b>\n"
-                 f"Entrega: {r['entrega']}\n"
-                 f"Checklist: {r['checklist']}\n"
-                 f"Golpes nuevos hoy: {r['golpes']}")
         # TODO WhatsApp: falta la clave de Superchat y la plantilla aprobada por
-        # Meta. Los cinco campos de `r` son exactamente sus cinco variables.
-        await _telegram_aviso(texto + "\n<i>Para: " + ", ".join(d["nombre"] for d in quienes) + "</i>")
+        # Meta. Los cinco campos cortos de `r` son sus cinco variables; esta
+        # versión larga es la que va por Telegram y push, que no tienen
+        # plantillas y sí admiten saltos de línea.
+        await _telegram_aviso(_texto_resumen_largo(r)
+                              + "\n\n<i>Para: " + ", ".join(d["nombre"] for d in quienes) + "</i>")
         salida.append({**{k: r[k] for k in ("center", "fecha", "entrega", "checklist", "golpes")},
+                       "incidencias": r["incidencias"], "danos": r["danos"],
+                       "turnos": [{k: t[k] for k in ("turno", "hechas", "total")} for t in r["turnos"]],
                        "destinatarios": [d["nombre"] for d in quienes]})
     return salida
 

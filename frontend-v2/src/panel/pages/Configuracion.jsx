@@ -45,7 +45,17 @@ function Destinatarios({ centers }) {
       const r = await enviarResumenDiario({})
       const e = r.data?.enviados || []
       alert(e.length
-        ? e.map((x) => `${x.center} — ${x.fecha}\nEntrega: ${x.entrega}\nChecklist: ${x.checklist}\nGolpes nuevos: ${x.golpes}\nPara: ${x.destinatarios.join(', ')}`).join('\n\n')
+        ? e.map((x) => [
+            `${x.center} — ${x.fecha}`,
+            `Entrega: ${x.entrega}`,
+            (x.incidencias?.sin_direccion || x.incidencias?.missing || x.incidencias?.lost)
+              ? `  ${x.incidencias.sin_direccion} sin dirección · ${x.incidencias.missing} no en furgoneta · ${x.incidencias.lost} extraviados`
+              : '  Sin incidencias de paquetes',
+            `Golpes nuevos: ${x.golpes}`,
+            ...(x.danos || []).slice(0, 6).map((d) => `  • ${d.matricula} — ${d.parte}${d.gravedad ? ` (${d.gravedad})` : ''}${d.conductor ? ` · ${d.conductor}` : ''}`),
+            ...(x.turnos || []).map((t) => `Checklist ${t.turno}: ${t.hechas}/${t.total}`),
+            `Para: ${x.destinatarios.join(', ')}`,
+          ].join('\n')).join('\n\n')
         : 'Nadie tiene centros asignados, así que no se ha mandado nada.')
     } catch (e) {
       alert(e?.response?.data?.detail || 'No se pudo enviar')
