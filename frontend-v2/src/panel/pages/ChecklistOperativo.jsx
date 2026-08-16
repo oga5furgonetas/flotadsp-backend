@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
-  Loader2, CheckSquare, Sun, Moon, Pencil, Plus, Trash2, Save, X, Calendar, Send,
+  Loader2, CheckSquare, Sun, Moon, Pencil, Plus, Trash2, Save, X, Calendar, Send, Pin,
 } from 'lucide-react'
 import { getChecklist, upsertChecklist, toggleChecklistItem, saveChecklistTemplate, enviarResumenTurno } from '../api'
 import { hoyLocal } from '../../lib/fecha'
@@ -40,11 +40,12 @@ export default function ChecklistOperativo() {
   async function saveAsTemplate() {
     const items = data?.[shift]?.items || []
     if (items.length === 0) return
-    if (!confirm(`¿Usar estas ${items.length} tareas como plantilla recurrente de ${center} (${shift === 'manana' ? 'mañana' : 'tarde'})?\nCada día nuevo de ${center} nacerá con ellas. Los demás centros no cambian.`)) return
+    if (!confirm(`¿Dejar fijas las ${items.length} tareas de ${center} (${shift === 'manana' ? 'mañana' : 'tarde'})?\nSaldrán todos los días. Los demás centros no cambian.`)) return
     setTplSaving(true)
     try {
-      await saveChecklistTemplate({ center, shift, items })
-      alert(`✅ Plantilla de ${center} guardada. Desde mañana, sus checklists nacen con estas tareas.`)
+      await saveChecklistTemplate({ center, shift, date, items })
+      await load()
+      alert(`✅ Las ${items.length} tareas de ${center} quedan fijas: salen todos los días.`)
     } catch (e) {
       alert(e?.response?.data?.detail || 'No se pudo guardar la plantilla')
     } finally { setTplSaving(false) }
@@ -82,14 +83,27 @@ export default function ChecklistOperativo() {
     setDraft(items.map((i) => ({ ...i })))
     setEditing(true)
   }
-  function addRow() { setDraft((d) => [...d, { id: crypto.randomUUID(), text: '', done: false }]) }
+  // Una tarea nueva nace SOLO PARA HOY. Al revés (nacer fija) haría que un
+  // recado suelto de un martes se colara en la lista de todos los días sin que
+  // nadie lo decidiera, y esas son las que nadie se atreve a borrar después.
+  function addRow() { setDraft((d) => [...d, { id: crypto.randomUUID(), text: '', done: false, fija: false }]) }
   function rmRow(id) { setDraft((d) => d.filter((x) => x.id !== id)) }
   function setItemText(id, text) { setDraft((d) => d.map((x) => x.id === id ? { ...x, text } : x)) }
+  function toggleFija(id) { setDraft((d) => d.map((x) => x.id === id ? { ...x, fija: !x.fija } : x)) }
 
   async function saveEdit() {
     setSaving(true); setErr('')
     try {
-      const clean = draft.map((d) => ({ id: d.id, text: (d.text || '').trim(), done: !!d.done, done_by: d.done_by || null, done_at: d.done_at || null })).filter((d) => d.text)
+      const clean = draft.map((d) => ({ id: d.id, text: (d.text || '').trim(), done: !!d.done, done_by: d.done_by || null, done_at: d.done_at || null, fija: !!d.fija })).filter((d) => d.text)
+      // Quitar una tarea fija la quita de TODOS los días, no solo de hoy. Se
+      // avisa porque desde dentro de la lista de hoy no se ve esa consecuencia.
+      const perdidas = items.filter((i) => i.fija && !clean.some((c) => c.id === i.id && c.fija))
+      if (perdidas.length && !confirm(
+        `Estas tareas dejarán de salir todos los días en ${center}:\n\n` +
+        perdidas.map((p) => `• ${p.text}`).join('\n') +
+        `\n\n¿Seguro? Para quitarlas solo hoy, déjalas fijas y márcalas como hechas.`)) {
+        setSaving(false); return
+      }
       await upsertChecklist({ center, date, shift, items: clean })
       setEditing(false)
       await load()
@@ -153,7 +167,7 @@ export default function ChecklistOperativo() {
         {!editing ? (
           <div className="flex items-center gap-2">
             <button onClick={saveAsTemplate} disabled={tplSaving}
-              title={`Las tareas actuales pasan a ser la plantilla recurrente de ${center} (${shift === 'manana' ? 'mañana' : 'tarde'}): cada día nuevo nacerá con ellas. Cada centro tiene la suya.`}
+              title={`Deja fijas todas las tareas de ${center} (${shift === "manana" ? "mañana" : "tarde"}): saldrán todos los días. Cada centro tiene las suyas.`}
               className="btn-ghost flex items-center gap-1.5 text-xs text-dark-400 hover:text-brand-300">
               {tplSaving ? <Loader2 size={13} className="animate-spin" /> : '📌'} Plantilla de {center}
             </button>
@@ -189,11 +203,22 @@ export default function ChecklistOperativo() {
           {draft.map((d) => (
             <div key={d.id} className="flex items-center gap-2 px-3 py-2">
               <input className="input flex-1 text-sm" value={d.text} placeholder="Tarea…" onChange={(e) => setItemText(d.id, e.target.value)} />
+              {/* Para siempre o solo hoy, decidido al escribirla, que es cuando
+                  se sabe. Con texto, no solo un icono: una chincheta sola no
+                  dice si está puesta o quitada. */}
+              <button onClick={() => toggleFija(d.id)} title={t('chk.fija.exp')}
+                className={`flex shrink-0 items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-medium transition-colors ${
+                  d.fija ? 'border-brand-500/50 bg-brand-500/10 text-brand-200'
+                         : 'border-dark-700 text-dark-500 hover:text-dark-300'}`}>
+                <Pin size={11} className={d.fija ? '' : 'opacity-50'} />
+                {d.fija ? t('chk.fija.si') : t('chk.fija.no')}
+              </button>
               <button onClick={() => rmRow(d.id)} className="btn-ghost p-1.5 text-red-400" title="Quitar"><Trash2 size={14} /></button>
             </div>
           ))}
           <div className="px-3 py-2">
             <button onClick={addRow} className="btn-ghost flex w-full items-center justify-center gap-1.5 text-sm text-dark-300 hover:text-brand-300"><Plus size={14} /> {t('chk.add.task')}</button>
+            <p className="mt-2 text-center text-[11px] leading-relaxed text-dark-600">{t('chk.fija.pie')}</p>
           </div>
         </div>
       ) : (
@@ -206,7 +231,12 @@ export default function ChecklistOperativo() {
                 {it.done && <CheckSquare size={14} className="text-white" />}
               </div>
               <div className="min-w-0 flex-1">
-                <div className={`text-sm ${it.done ? 'text-dark-500 line-through' : 'text-dark-100'}`}>{it.text}</div>
+                <div className={`flex items-center gap-1.5 text-sm ${it.done ? 'text-dark-500 line-through' : 'text-dark-100'}`}>
+                  {it.text}
+                  {/* Saber de un vistazo cuáles son de todos los días y cuáles
+                      son de hoy: sin esto, borrar una parece igual de barato. */}
+                  {it.fija && <Pin size={10} className="shrink-0 text-dark-600" title={t('chk.fija.si')} />}
+                </div>
                 {it.done && it.done_by && (
                   <div className="mt-0.5 text-[11px] text-dark-500">
                     {t('chk.done.at').replace('{time}', (it.done_at || '').slice(11, 16)).replace('{name}', it.done_by)}

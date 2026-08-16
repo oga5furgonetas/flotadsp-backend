@@ -8821,17 +8821,25 @@ async def _template_items_for(center: str, shift: str) -> list:
         {"center": center, "shift": shift}, {"_id": 0, "texts": 1})
     texts = (tpl or {}).get("texts")
     if not texts:
-        return _default_items_for_shift(shift)
-    return [{"id": str(uuid.uuid4()), "text": t, "done": False, "done_by": None, "done_at": None}
+        # Las de fábrica nacen fijas: si no, el primer día que alguien edite la
+        # lista se borrarían todas de la plantilla sin haberlo pedido.
+        return [{**i, "fija": True} for i in _default_items_for_shift(shift)]
+    return [{"id": str(uuid.uuid4()), "text": t, "done": False, "done_by": None,
+             "done_at": None, "fija": True}
             for t in texts if (t or "").strip()]
 
 
 @api_router.post("/checklist/template")
 async def save_checklist_template(data: dict = Body(...), user: dict = Depends(require_admin)):
-    """Guarda la lista actual como plantilla recurrente DE ESE CENTRO y turno:
-    a partir de mañana, sus checklists nacen con estas tareas."""
+    """Marca TODAS las tareas de hoy como fijas, de una vez.
+
+    Es el atajo para cuando la lista entera es recurrente: con nueve tareas,
+    poner nueve chinchetas a mano cansa. La chincheta por tarea sigue siendo lo
+    que manda — esto solo las pone todas.
+    """
     center = data.get("center")
     shift = data.get("shift")
+    date = data.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if not center or shift not in ("manana", "tarde"):
         raise HTTPException(400, "Faltan center/shift válidos")
     if not _user_can_see_center(user, center):
@@ -8839,12 +8847,18 @@ async def save_checklist_template(data: dict = Body(...), user: dict = Depends(r
     texts = [(it.get("text") or "").strip()[:300] if isinstance(it, dict) else str(it).strip()[:300]
              for it in (data.get("items") or [])]
     texts = [t for t in texts if t][:50]
+    now = datetime.now(timezone.utc).isoformat()
     await db.checklist_templates.update_one(
         {"center": center, "shift": shift},
         {"$set": {"center": center, "shift": shift, "texts": texts,
-                  "updated_by": user.get("name"),
-                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+                  "updated_by": user.get("name"), "updated_at": now}},
         upsert=True,
+    )
+    # Y en la lista de hoy, para que la chincheta se vea al momento: si no, la
+    # pantalla diría "solo hoy" de tareas que acaban de quedar fijas.
+    await db.daily_checklists.update_many(
+        {"center": center, "date": date, "shift": shift},
+        {"$set": {"items.$[].fija": True, "updated_at": now}},
     )
     return {"ok": True, "count": len(texts)}
 
@@ -8963,6 +8977,8 @@ async def upsert_checklist(data: dict = Body(...), user: dict = Depends(require_
             "done": bool(it.get("done")),
             "done_by": it.get("done_by"),
             "done_at": it.get("done_at"),
+            # Fija = sale todos los días. Sin marcar = solo hoy.
+            "fija": bool(it.get("fija")),
         })
     # Detectar tareas NUEVAS (para avisar por push a los del centro)
     _prev = await db.daily_checklists.find_one(
@@ -8978,12 +8994,28 @@ async def upsert_checklist(data: dict = Body(...), user: dict = Depends(require_
                           "created_at": now}},
         upsert=True,
     )
+    # ── La plantilla del centro SON las tareas marcadas como fijas ───────────
+    # Antes había que acordarse de pulsar un botón aparte ("guardar como
+    # plantilla") que además reemplazaba la lista entera: o todas recurrentes o
+    # ninguna. Ahora cada tarea lleva su chincheta y la plantilla sale de ahí,
+    # así que "para siempre" y "solo hoy" se deciden al escribirla, que es
+    # cuando se sabe.
+    fijas = [i["text"] for i in items if i.get("fija")][:50]
+    await db.checklist_templates.update_one(
+        {"center": center, "shift": shift},
+        {"$set": {"center": center, "shift": shift, "texts": fijas,
+                  "updated_by": user.get("name"),
+                  "updated_at": now}},
+        upsert=True,
+    )
+
     # Push a los coordinadores del centro por cada tarea nueva (máx 3 avisos)
     for _ni in _new_items[:3]:
         await push_center_event(
             center, f"📝 Nueva tarea · {center}", _ni.get("text", ""),
             url="/panel/checklist-operativo", exclude_id=user.get("sub"))
-    return {"ok": True, "count": len(items), "new_items": len(_new_items)}
+    return {"ok": True, "count": len(items), "new_items": len(_new_items),
+            "fijas": len(fijas)}
 
 
 @api_router.delete("/chat/{center}/{message_id}")
