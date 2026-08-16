@@ -24,6 +24,14 @@ export const deleteChatMessage = (center, messageId) => api.delete(`/chat/${cent
 export const saveChecklistTemplate = (body) => api.post('/checklist/template', body) // {center, shift, items}
 // Cierre de turno: sale solo a su hora, esto lo dispara ahora para probarlo.
 export const enviarResumenTurno = (body) => api.post('/checklist/enviar-resumen', body)
+
+/* ── Quién recibe el resumen de cada centro ──
+   Los teléfonos viven en la BD, nunca en el código: son datos de personas
+   reales y el repositorio acaba en GitHub. */
+export const listarDestinatarios = () => api.get('/avisos/destinatarios')
+export const guardarDestinatario = (body) => api.post('/avisos/destinatarios', body)
+export const borrarDestinatario = (id) => api.delete(`/avisos/destinatarios/${id}`)
+export const enviarResumenDiario = (body) => api.post('/avisos/enviar-resumen-diario', body)
 export const chatToChecklist = (center, messageId, body = {}) =>
   api.post(`/chat/${center}/${messageId}/to-checklist`, body)
 

@@ -9159,6 +9159,133 @@ async def enviar_resumen_turno(shift: str, date: Optional[str] = None) -> list:
     return enviados
 
 
+# =========================
+# A QUIÉN SE AVISA — destinatarios de los resúmenes por centro
+# =========================
+# Los teléfonos NO van en el código. Son datos personales de gente real y el
+# repositorio se sincroniza entre ordenadores y sube a GitHub: un número escrito
+# en un fichero .py se queda ahí para siempre y en el historial de git. Viven en
+# la base, editables desde Configuración.
+_AVISOS_TIPOS = {"resumen_diario", "cierre_turno"}
+
+
+def _tel_normaliza(crudo: str) -> str:
+    """+34 seguido de dígitos. Sin esto entra '625 84 70 35' y WhatsApp lo
+    rechaza: la API exige el número en formato internacional, sin espacios."""
+    t = re.sub(r"[^\d+]", "", str(crudo or ""))
+    if not t:
+        return ""
+    if t.startswith("00"):
+        t = "+" + t[2:]
+    if not t.startswith("+"):
+        t = ("+34" + t) if len(t) == 9 else ("+" + t)
+    if not re.fullmatch(r"\+\d{8,15}", t):
+        raise HTTPException(400, f"Teléfono no válido: {crudo}")
+    return t
+
+
+@api_router.get("/avisos/destinatarios")
+async def listar_destinatarios(user: dict = Depends(require_admin)):
+    """Quién recibe cada resumen. Sólo de los centros que este usuario ve."""
+    rows = await db.aviso_destinatarios.find({}, {"_id": 0}).sort("nombre", 1).to_list(200)
+    return {"rows": [r for r in rows
+                     if not r.get("centers") or any(_user_can_see_center(user, c) for c in r["centers"])]}
+
+
+@api_router.post("/avisos/destinatarios")
+async def guardar_destinatario(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Alta o edición de un destinatario."""
+    nombre = str(data.get("nombre") or "").strip()[:80]
+    if not nombre:
+        raise HTTPException(400, "Falta el nombre")
+    centers = [str(c).strip()[:30] for c in (data.get("centers") or []) if str(c).strip()]
+    for c in centers:
+        if not _user_can_see_center(user, c):
+            raise HTTPException(403, f"No tienes acceso a {c}")
+    avisos = [a for a in (data.get("avisos") or []) if a in _AVISOS_TIPOS] or ["resumen_diario"]
+    doc = {"nombre": nombre, "telefono": _tel_normaliza(data.get("telefono")),
+           "centers": centers, "avisos": avisos, "activo": bool(data.get("activo", True)),
+           "updated_at": datetime.now(timezone.utc).isoformat(), "updated_by": user.get("name")}
+    did = str(data.get("id") or "")
+    if did:
+        r = await db.aviso_destinatarios.update_one({"id": did}, {"$set": doc})
+        if not r.matched_count:
+            raise HTTPException(404, "Destinatario no encontrado")
+        return {"ok": True, "id": did}
+    doc["id"] = str(uuid.uuid4())
+    doc["created_at"] = doc["updated_at"]
+    await db.aviso_destinatarios.insert_one(dict(doc))
+    return {"ok": True, "id": doc["id"]}
+
+
+@api_router.delete("/avisos/destinatarios/{did}")
+async def borrar_destinatario(did: str, _=Depends(require_admin)):
+    r = await db.aviso_destinatarios.delete_one({"id": did})
+    if not r.deleted_count:
+        raise HTTPException(404, "Destinatario no encontrado")
+    return {"ok": True}
+
+
+async def _danos_nuevos_hoy(center: str, dia: str) -> list:
+    """Matrículas de ese centro con daños nuevos detectados hoy.
+
+    Sale de las inspecciones del día cruzadas con las furgonetas del centro:
+    `inspections` no guarda el centro (gotcha 6), así que se acota por
+    vehicle_id, igual que hace el resto del panel.
+    """
+    ids = await db.vehicles.distinct(
+        "id", {"center": {"$regex": re.escape(center), "$options": "i"},
+               "status": {"$nin": ["deleted", "baja"]}})
+    if not ids:
+        return []
+    insps = await db.inspections.find(
+        {"deleted": {"$ne": True}, "vehicle_id": {"$in": ids},
+         "created_at": {"$regex": f"^{dia}"}},
+        {"_id": 0, "vehicle_id": 1, "analysis": 1}).to_list(2000)
+    con_dano = {i["vehicle_id"] for i in insps
+                if ((i.get("analysis") or {}).get("new_damages") or [])}
+    if not con_dano:
+        return []
+    vs = await db.vehicles.find({"id": {"$in": list(con_dano)}},
+                                {"_id": 0, "license_plate": 1}).to_list(200)
+    return sorted(v.get("license_plate") or "—" for v in vs)
+
+
+async def resumen_dia_centro(center: str, dia: str) -> dict:
+    """El día de un centro en cinco datos, listos para una plantilla.
+
+    Es el resumen corto que pidieron las responsables de centro: entrega,
+    checklist y golpes nuevos. Nada más — la versión larga ya existe y va al
+    grupo a las 22:00.
+
+    Ninguno de los cinco campos puede quedar vacío: WhatsApp rechaza el envío
+    si un parámetro de plantilla va en blanco, así que donde no hay dato se
+    dice que no lo hay ("sin datos", "ninguno") en vez de mandar "".
+    """
+    ent = await _cierre_entrega(center, dia)
+    if ent and ent.get("dcr") is not None:
+        entrega = f"{str(ent['dcr']).replace('.', ',')} % ({ent.get('entregados', 0)} de {ent.get('despachados', 0)})"
+        if not ent.get("cerrado"):
+            entrega += f" · {ent.get('en_vuelo', 0)} aún en ruta"
+    else:
+        entrega = "sin datos de reparto"
+
+    partes = []
+    for shift in ("manana", "tarde"):
+        r = await _resumen_turno(center, dia, shift)
+        if r:
+            partes.append(f"{'mañana' if shift == 'manana' else 'tarde'} {r['hechas']}/{r['total']}")
+    checklist = " · ".join(partes) or "sin checklist"
+
+    placas = await _danos_nuevos_hoy(center, dia)
+    golpes = f"{len(placas)} · {', '.join(placas[:6])}" if placas else "ninguno"
+
+    d, m, y = dia[8:10], dia[5:7], dia[0:4]
+    return {"center": center, "fecha": f"{d}/{m}/{y}",
+            "entrega": entrega, "checklist": checklist, "golpes": golpes,
+            "placas": placas}
+
+
 async def _telegram_aviso(texto: str) -> bool:
     """Manda un texto al grupo de Telegram. False si no está configurado.
 
@@ -9181,6 +9308,77 @@ async def _telegram_aviso(texto: str) -> bool:
     except Exception as e:
         logger.warning(f"Telegram aviso: {e}")
         return False
+
+
+async def enviar_resumen_diario(dia: Optional[str] = None) -> list:
+    """El resumen corto del día a cada destinatario de su centro.
+
+    Un mensaje por persona y día, no uno por cada cosa que pasa: en WhatsApp se
+    paga por mensaje y por destinatario, así que tres avisos sueltos a dos
+    personas son seis mensajes donde cabe uno.
+
+    Mientras la salida de WhatsApp no exista, el mismo texto va a Telegram, que
+    es lo que hay hoy. Cuando esté la clave y la plantilla aprobada, lo único
+    que cambia es por dónde sale — el contenido ya es este.
+    """
+    dia = dia or _dia_negocio()
+    dest = await db.aviso_destinatarios.find(
+        {"activo": True, "avisos": "resumen_diario"}, {"_id": 0}).to_list(200)
+    if not dest:
+        logger.info("Resumen diario: sin destinatarios configurados")
+        return []
+
+    centros = sorted({c for d in dest for c in (d.get("centers") or [])})
+    salida = []
+    for center in centros:
+        r = await resumen_dia_centro(center, dia)
+        quienes = [d for d in dest if center in (d.get("centers") or [])]
+        texto = (f"📋 <b>{r['center']} — {r['fecha']}</b>\n"
+                 f"Entrega: {r['entrega']}\n"
+                 f"Checklist: {r['checklist']}\n"
+                 f"Golpes nuevos hoy: {r['golpes']}")
+        # TODO WhatsApp: falta la clave de Superchat y la plantilla aprobada por
+        # Meta. Los cinco campos de `r` son exactamente sus cinco variables.
+        await _telegram_aviso(texto + "\n<i>Para: " + ", ".join(d["nombre"] for d in quienes) + "</i>")
+        salida.append({**{k: r[k] for k in ("center", "fecha", "entrega", "checklist", "golpes")},
+                       "destinatarios": [d["nombre"] for d in quienes]})
+    return salida
+
+
+@api_router.post("/avisos/enviar-resumen-diario")
+async def trigger_resumen_diario(data: dict = Body(default={}), _=Depends(require_admin)):
+    """Dispara el resumen del día ahora, para verlo sin esperar a la hora."""
+    return {"enviados": await enviar_resumen_diario(data.get("date"))}
+
+
+@app.on_event("startup")
+async def start_resumen_diario_scheduler():
+    """Resumen corto por centro. Por defecto a las 21:00, antes del cierre
+    largo de las 22:00 que va al grupo: son mensajes distintos para gente
+    distinta y no tienen por qué coincidir."""
+    try:
+        hora = int(os.environ.get("RESUMEN_DIARIO_H", 21))
+    except ValueError:
+        hora = 21
+
+    async def _loop():
+        from zoneinfo import ZoneInfo
+        madrid = ZoneInfo("Europe/Madrid")
+        while True:
+            try:
+                now = datetime.now(madrid)
+                target = now.replace(hour=hora, minute=0, second=0, microsecond=0)
+                if now >= target:
+                    target += timedelta(days=1)
+                await asyncio.sleep((target - now).total_seconds())
+                await enviar_resumen_diario()
+                await asyncio.sleep(70)
+            except Exception as e:
+                logger.error(f"Scheduler resumen diario centro: {e}")
+                await asyncio.sleep(300)
+
+    logger.info("Resumen diario por centro programado a las %02d:00 (Madrid)", hora)
+    asyncio.create_task(_loop())
 
 
 @api_router.post("/checklist/enviar-resumen")

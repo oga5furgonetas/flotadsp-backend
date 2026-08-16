@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useT } from '../../i18n'
-import { Loader2, Plus, Building, Send, CreditCard, Check, Copy, ExternalLink } from 'lucide-react'
-import { getOrgCenters, addOrgCenter, getTelegramConfig, getOrgBilling } from '../api'
+import { Loader2, Plus, Building, Send, CreditCard, Check, Copy, ExternalLink, BellRing, Pencil, Trash2 } from 'lucide-react'
+import { getOrgCenters, addOrgCenter, getTelegramConfig, getOrgBilling, listarDestinatarios, guardarDestinatario, borrarDestinatario, enviarResumenDiario } from '../api'
+import { lista } from '../../lib/lista'
 import { getAdmin } from '../auth'
 
 const PORTAL_BASE = 'https://flotadsp.com'
@@ -20,6 +21,144 @@ function CopyRow({ label, url }) {
         </button>
         <a href={url} target="_blank" rel="noreferrer" className="btn-ghost px-2" title="Abrir"><ExternalLink size={15} /></a>
       </div>
+    </div>
+  )
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+   QUIÉN RECIBE EL RESUMEN DE CADA CENTRO
+   ---------------------------------------------------------------------------
+   Los teléfonos se editan AQUÍ y viven en la base de datos. Escritos en el
+   código acabarían en GitHub y en el historial de git, que es para siempre —
+   y son números de personas reales, no configuración.
+   ──────────────────────────────────────────────────────────────────────────── */
+function Destinatarios({ centers }) {
+  const [rows, setRows] = useState(null)
+  const [form, setForm] = useState(null)   // null = cerrado
+  const [busy, setBusy] = useState(false)
+  const [probando, setProbando] = useState(false)
+  const [err, setErr] = useState('')
+
+  async function probar() {
+    setProbando(true)
+    try {
+      const r = await enviarResumenDiario({})
+      const e = r.data?.enviados || []
+      alert(e.length
+        ? e.map((x) => `${x.center} — ${x.fecha}\nEntrega: ${x.entrega}\nChecklist: ${x.checklist}\nGolpes nuevos: ${x.golpes}\nPara: ${x.destinatarios.join(', ')}`).join('\n\n')
+        : 'Nadie tiene centros asignados, así que no se ha mandado nada.')
+    } catch (e) {
+      alert(e?.response?.data?.detail || 'No se pudo enviar')
+    } finally { setProbando(false) }
+  }
+
+  const load = () => listarDestinatarios()
+    .then((r) => setRows(lista(r.data?.rows))).catch(() => setRows([]))
+  useEffect(() => { load() }, [])
+
+  const abrir = (d) => setForm(d
+    ? { ...d }
+    : { nombre: '', telefono: '', centers: [], avisos: ['resumen_diario'], activo: true })
+
+  async function guardar() {
+    setBusy(true); setErr('')
+    try {
+      await guardarDestinatario(form)
+      setForm(null); await load()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo guardar')
+    } finally { setBusy(false) }
+  }
+
+  async function borrar(d) {
+    if (!confirm(`¿Quitar a ${d.nombre}? Dejará de recibir el resumen.`)) return
+    await borrarDestinatario(d.id); await load()
+  }
+
+  const alternarCentro = (c) => setForm((f) => ({
+    ...f, centers: f.centers.includes(c) ? f.centers.filter((x) => x !== c) : [...f.centers, c],
+  }))
+
+  return (
+    <div className="card p-5">
+      <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-dark-200">
+        <BellRing size={16} /> Resumen diario por centro
+      </div>
+      <p className="mb-3 text-xs leading-relaxed text-dark-500">
+        Un mensaje al día por persona con la entrega, el checklist y los golpes nuevos de sus
+        centros. Ahora sale por Telegram; cuando WhatsApp esté conectado saldrá por ahí sin
+        tocar nada más.
+      </p>
+
+      {rows === null ? (
+        <div className="flex items-center gap-2 text-sm text-dark-400"><Loader2 size={14} className="animate-spin" /> …</div>
+      ) : (
+        <div className="mb-3 divide-y divide-dark-800 rounded-lg border border-dark-800">
+          {rows.length === 0 && <p className="px-3 py-3 text-sm text-dark-500">Nadie configurado todavía.</p>}
+          {rows.map((d) => (
+            <div key={d.id} className="flex items-center gap-3 px-3 py-2">
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm text-dark-100">{d.nombre}</span>
+                <span className="block font-mono text-[11px] text-dark-500">
+                  {d.telefono} · {d.centers?.join(' · ') || 'todos los centros'}
+                </span>
+              </span>
+              {!d.activo && <span className="rounded bg-dark-800 px-1.5 text-[10px] text-dark-500">en pausa</span>}
+              <button onClick={() => abrir(d)} className="btn-ghost p-1.5 text-dark-400" title="Editar"><Pencil size={13} /></button>
+              <button onClick={() => borrar(d)} className="btn-ghost p-1.5 text-red-400" title="Quitar"><Trash2 size={13} /></button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!form ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={() => abrir(null)} className="btn-secondary inline-flex items-center gap-1.5 text-sm">
+            <Plus size={14} /> Añadir persona
+          </button>
+          {/* Sale solo cada tarde; esto es para ver el mensaje ahora y
+              comprobar que dice lo que tiene que decir. */}
+          {rows?.length > 0 && (
+            <button onClick={probar} disabled={probando}
+              className="btn-ghost inline-flex items-center gap-1.5 text-xs text-dark-400 hover:text-brand-300">
+              {probando ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />} Enviarlo ahora
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2.5 rounded-lg border border-dark-700 bg-dark-900/50 p-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <input className="input text-sm" placeholder="Nombre" value={form.nombre}
+              onChange={(e) => setForm({ ...form, nombre: e.target.value })} />
+            <input className="input text-sm" placeholder="+34 600 00 00 00" value={form.telefono}
+              onChange={(e) => setForm({ ...form, telefono: e.target.value })} />
+          </div>
+          <div>
+            <p className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-dark-500">Centros</p>
+            <div className="flex flex-wrap gap-1.5">
+              {centers.map((c) => (
+                <button key={c} onClick={() => alternarCentro(c)}
+                  className={`rounded-lg border px-2 py-1 text-[11.5px] transition-colors ${
+                    form.centers.includes(c) ? 'border-brand-500/50 bg-brand-500/10 text-brand-200'
+                                             : 'border-dark-700 text-dark-500'}`}>{c}</button>
+              ))}
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-[12px] text-dark-400">
+            <input type="checkbox" checked={form.activo}
+              onChange={(e) => setForm({ ...form, activo: e.target.checked })} />
+            Recibe los avisos (desmárcalo para pausarla sin borrarla)
+          </label>
+          {err && <p className="text-[12px] text-red-300">{err}</p>}
+          <div className="flex gap-2">
+            <button onClick={guardar} disabled={busy || !form.nombre.trim() || !form.telefono.trim()}
+              className="btn-primary flex items-center gap-1.5 text-sm disabled:opacity-40">
+              {busy ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} Guardar
+            </button>
+            <button onClick={() => { setForm(null); setErr('') }} className="btn-ghost text-sm">Cancelar</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -94,6 +233,8 @@ export default function Configuracion() {
         )}
         <p className="mt-2 text-xs text-dark-500">Recibe alertas de daños graves, ITV y coberturas directamente en Telegram.</p>
       </div>
+
+      <Destinatarios centers={centers || []} />
 
       {/* Plan */}
       <div className="card p-5">
