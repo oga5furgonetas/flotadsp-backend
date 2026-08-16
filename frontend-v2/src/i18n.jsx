@@ -1399,6 +1399,12 @@ const DICT = {
   'ops.wall.more':      { es: '+{n} rutas más en Paquetes IA', en: '+{n} more routes in Package Intelligence', fr: '+{n} tournées de plus dans Package Intelligence', de: '+{n} weitere Routen in Package Intelligence', it: '+{n} altri giri in Package Intelligence', pt: '+{n} rotas mais em Package Intelligence' },
   // La franja de flota. Etiquetas honestas: el reparto de daños es de TODAS
   // las inspecciones, no de la semana, y así se dice.
+  'ops.open':           { es: 'abiertas', en: 'open', fr: 'ouvertes', de: 'offen', it: 'aperte', pt: 'abertas' },
+  'nav.expiries':       { es: 'Vencimientos', en: 'Expiries', fr: 'Échéances', de: 'Fristen', it: 'Scadenze', pt: 'Vencimentos' },
+  // Cuando aún no hay operación hoy (de madrugada), se enseña el último día con
+  // datos y se dice cuál: un panel vacío a las 7 de la mañana no sirve, y un
+  // panel que enseña datos de ayer SIN decirlo es peor todavía.
+  'ops.lastday':        { es: 'Último día con datos: {d}', en: 'Last day with data: {d}', fr: 'Dernier jour avec données : {d}', de: 'Letzter Tag mit Daten: {d}', it: 'Ultimo giorno con dati: {d}', pt: 'Último dia com dados: {d}' },
   'ops.availability':   { es: 'Disponibilidad', en: 'Availability', fr: 'Disponibilité', de: 'Verfügbarkeit', it: 'Disponibilità', pt: 'Disponibilidade' },
   'ops.ready':          { es: 'Listas para salir', en: 'Ready to go out', fr: 'Prêtes à sortir', de: 'Einsatzbereit', it: 'Pronte a uscire', pt: 'Prontas para sair' },
   'ops.damage.split':   { es: 'Daños · todas las inspecciones', en: 'Damage · all inspections', fr: 'Dommages · toutes les inspections', de: 'Schäden · alle Prüfungen', it: 'Danni · tutte le ispezioni', pt: 'Danos · todas as inspeções' },

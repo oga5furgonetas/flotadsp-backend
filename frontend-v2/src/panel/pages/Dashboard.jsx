@@ -6,7 +6,7 @@ import {
   Loader2, TrendingUp, Camera, ShieldAlert, CheckCircle2,
   ChevronRight, Clock, ArrowRight,
 } from 'lucide-react'
-import { getDashboardStats, getItvAlerts, getVehicles, getDrivers, getDamageCosts, cortexOverview, cortexRoutes, getReviewQueue, cortexDireccionesHoy } from '../api'
+import { getDashboardStats, getItvAlerts, getVehicles, getDrivers, getDamageCosts, cortexOverview, cortexRoutes, getReviewQueue, cortexDireccionesHoy, cortexDays } from '../api'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { lista } from '../../lib/lista'
 import { PageSkeleton } from '../components/Skeleton'
@@ -81,6 +81,44 @@ function Mini({ n, label, alerta }) {
    Donut en SVG puro: sin librería de gráficos, sin peso extra en el bundle y
    sin dependencias que mantener. Un `stroke-dasharray` sobre un círculo hace
    exactamente lo mismo que una librería para este caso. */
+/* ── TARJETA DE CIFRA ─────────────────────────────────────────────────────────
+   La fila de arriba: lo que hay que saber sin leer nada más.
+
+   `serie` es OPCIONAL y sólo se pasa cuando existe de verdad. En el mockup de
+   referencia las cinco tarjetas llevaban curva y un "↑5%", pero de casi ninguno
+   de esos datos hay histórico (no se guarda una foto diaria del score ni de los
+   daños), así que esas curvas serían dibujos. Aquí sólo lleva curva la única
+   que tiene serie real: las inspecciones por día. */
+function Cifra({ icono: Icono, n, label, sub, color, serie, onIr, alerta }) {
+  const max = serie ? Math.max(1, ...serie) : 1
+  const pts = serie && serie.length > 1
+    ? serie.map((v, i) => `${(i / (serie.length - 1)) * 100},${28 - (v / max) * 24}`).join(' ')
+    : null
+  return (
+    <button onClick={onIr} disabled={!onIr}
+      className={`group overflow-hidden rounded-2xl border border-dark-800 bg-dark-900/40 p-4 text-left transition-all ${
+        onIr ? 'hover:border-dark-600 hover:bg-dark-900' : 'cursor-default'}`}>
+      <div className="flex items-center gap-2">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg" style={{ background: color + '1f' }}>
+          <Icono size={14} style={{ color }} />
+        </span>
+        <span className="truncate text-[12px] font-medium text-dark-400">{label}</span>
+      </div>
+      <div className={`mt-2.5 font-display text-[30px] font-semibold leading-none tracking-[-0.03em] ${
+        alerta ? 'text-red-300' : 'text-dark-50'}`}>
+        <Count v={n} />
+      </div>
+      {sub && <div className="mt-1 text-[11px] text-dark-600">{sub}</div>}
+      {pts && (
+        <svg viewBox="0 0 100 30" preserveAspectRatio="none" className="mt-2 h-7 w-full">
+          <polyline points={pts} fill="none" stroke={color} strokeWidth="2"
+            strokeLinecap="round" strokeLinejoin="round" opacity="0.85" vectorEffect="non-scaling-stroke" />
+        </svg>
+      )}
+    </button>
+  )
+}
+
 function Anillo({ segmentos, centro, sub, size = 132 }) {
   const R = (size - 14) / 2
   const C = 2 * Math.PI * R
@@ -114,20 +152,24 @@ function Anillo({ segmentos, centro, sub, size = 132 }) {
 /* Barras de los últimos 7 días. También SVG-libre: divs con altura relativa.
    El día de hoy va marcado porque es el único sobre el que aún se puede
    actuar. */
-function Barras({ dias, locale }) {
+function Barras({ dias }) {
   const max = Math.max(1, ...dias.map((d) => d.n))
+  /* ALTURA EN PÍXELES, no en %. Con `height: X%` dentro de un contenedor cuya
+     altura la decide flexbox, el navegador no tiene contra qué resolver el
+     porcentaje y las barras salían con altura CERO: el panel enseñaba "321
+     inspecciones" y debajo un hueco vacío. Con píxeles calculados no hay
+     ambigüedad posible. */
+  const ALTO = 84
   return (
-    <div className="flex h-[110px] items-end gap-1.5">
+    <div className="flex items-end gap-1.5" style={{ height: ALTO + 22 }}>
       {dias.map((d, i) => (
-        <div key={d.key} className="group flex flex-1 flex-col items-center gap-1.5">
-          <div className="relative flex w-full flex-1 items-end">
-            <div className={`w-full rounded-t transition-all duration-700 ${
-              i === dias.length - 1 ? 'bg-brand-400/80' : 'bg-brand-500/30 group-hover:bg-brand-500/50'}`}
-              style={{ height: `${Math.max(3, (d.n / max) * 100)}%` }} />
-            <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-[10px] font-semibold tabular-nums text-dark-400 opacity-0 transition-opacity group-hover:opacity-100">
-              {d.n}
-            </span>
-          </div>
+        <div key={d.key} className="group flex flex-1 flex-col items-center justify-end gap-1.5">
+          <span className="text-[10px] font-semibold tabular-nums text-dark-400">
+            {d.n > 0 ? d.n : ''}
+          </span>
+          <div className={`w-full rounded-t transition-all duration-700 ${
+            i === dias.length - 1 ? 'bg-brand-400/80' : 'bg-brand-500/35 group-hover:bg-brand-500/60'}`}
+            style={{ height: Math.max(2, Math.round((d.n / max) * ALTO)) }} />
           <span className="text-[9.5px] uppercase tracking-wide text-dark-600">{d.label}</span>
         </div>
       ))}
@@ -456,8 +498,20 @@ export default function Dashboard() {
   const navTop = useNavigate()
   useEffect(() => {
     let stop = false
-    const load = () => {
-      const day = new Date().toISOString().slice(0, 10)
+    const load = async () => {
+      /* QUÉ DÍA SE ENSEÑA. A las 6:45 de la mañana todavía no ha salido nadie
+         a ruta: pedir "hoy" devuelve cero paquetes y la mitad del panel
+         desaparecía —el usuario abre su dashboard y no hay nada—. Si hoy aún
+         no tiene datos, se enseña el último día que sí los tiene y se dice
+         cuál es. Un panel que sólo sirve a media tarde no sirve. */
+      let day = new Date().toISOString().slice(0, 10)
+      let esHoy = true
+      try {
+        const d = await cortexDays(center && center !== 'Todos' ? center : '')
+        const dias = lista(d.data?.days)
+        const hoy = dias.find((x) => x.day === day)
+        if ((!hoy || !hoy.n) && dias.length) { day = dias[0].day; esHoy = false }
+      } catch { /* sin lista de días se sigue con hoy */ }
       Promise.all([
         cortexOverview(day, center).catch(() => ({ data: null })),
         cortexRoutes(day, center).catch(() => ({ data: null })),
@@ -480,6 +534,8 @@ export default function Dashboard() {
            a la 1 de la madrugada seguían saliendo 27 rutas "en la calle". */
         const enCurso = rutas.filter((x) => x.en_reparto).length
         setNowLive({
+          dia: day,
+          esHoy,
           missing: o.data?.missing_now ?? null,
           routes: rutas.length || null,
           /* El muro de rutas. Se ordena por lo que hay que MIRAR, no por
@@ -679,6 +735,27 @@ export default function Dashboard() {
           vacío de antes, que solo sabía decir "importa vehículos". */}
       <Activacion />
 
+      {/* ── FILA DE CIFRAS ───────────────────────────────────────────────────
+          Lo que hay que saber de un vistazo, a cualquier hora del día. Antes
+          arriba no había NADA hasta que empezaba la operación: a las 6:45 de la
+          mañana el panel se abría prácticamente vacío. */}
+      {fleet > 0 && (
+        <div className="rise mb-2 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5" style={{ animationDelay: '20ms' }}>
+          <Cifra icono={Truck} color="#60a5fa" n={active} label={t('ops.active.veh')}
+            sub={`${t('ops.of')} ${fleet}`} onIr={() => navTop('/panel/vehiculos')} />
+          <Cifra icono={ClipboardList} color="#34d399" n={semana.reduce((a, d) => a + d.n, 0)}
+            label={t('ops.inspections')} sub={t('ops.week')}
+            serie={semana.map((d) => d.n)} onIr={() => navTop('/panel/inspecciones')} />
+          <Cifra icono={AlertTriangle} color="#fbbf24" n={data.open_incidents || 0}
+            label={t('ops.incidents')} sub={t('ops.open')} onIr={() => navTop('/panel/incidencias')} />
+          <Cifra icono={ShieldAlert} color="#f87171" n={(breakdown?.grave || 0) + (breakdown?.critico || 0)}
+            label={t('fleet.critical')} sub={t('ops.damage.split')}
+            onIr={() => navTop('/panel/inspecciones')} />
+          <Cifra icono={BellRing} color="#fb923c" n={itv.length} label={t('ops.itv.due')}
+            sub={t('nav.expiries')} alerta={itv.length > 0} onIr={() => navTop('/panel/vencimientos')} />
+        </div>
+      )}
+
       {fleet === 0 ? null : (
       <div>
       {/* ── 1 · LA OPERACIÓN DE HOY ─────────────────────────────────────────
@@ -694,6 +771,13 @@ export default function Dashboard() {
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
             </span>
             {t('ops.hoy')}
+            {/* Si lo que se enseña NO es de hoy, se dice. Enseñar los datos de
+                ayer como si fueran de hoy sería mentir en la portada. */}
+            {nowLive.esHoy === false && (
+              <span className="ml-2 normal-case tracking-normal text-amber-300/80">
+                {t('ops.lastday').replace('{d}', nowLive.dia)}
+              </span>
+            )}
           </h2>
 
           <div className="mt-4 flex flex-wrap items-end gap-x-10 gap-y-4">
