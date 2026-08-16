@@ -1396,6 +1396,12 @@ const DICT = {
   'ops.of':             { es: 'de', en: 'of', fr: 'sur', de: 'von', it: 'di', pt: 'de' },
   'ops.delivered.sub':  { es: 'paquetes entregados', en: 'packages delivered', fr: 'colis livrés', de: 'Pakete zugestellt', it: 'pacchi consegnati', pt: 'pacotes entregues' },
   'ops.brief.delivered': { es: 'de los paquetes de hoy ya está entregado', en: 'of today’s packages already delivered', fr: 'des colis du jour déjà livrés', de: 'der heutigen Pakete sind schon zugestellt', it: 'dei pacchi di oggi già consegnato', pt: 'dos pacotes de hoje já entregue' },
+  // Cuando lo que se enseña no es de hoy, el titular tiene que decirlo: "de
+  // hoy" y "siguen en la calle" sobre datos de hace cinco días es mentir en
+  // la portada, y encima con el número más visible del panel.
+  'ops.brief.delivered.dia': { es: 'de los paquetes del {d} se entregó', en: 'of the packages from {d} were delivered', fr: 'des colis du {d} ont été livrés', de: 'der Pakete vom {d} wurden zugestellt', it: 'dei pacchi del {d} è stato consegnato', pt: 'dos pacotes de {d} foi entregue' },
+  'ops.brief.sindatos': { es: 'hoy todavía no ha entrado nada', en: 'nothing has come in today yet', fr: 'rien n\'est encore arrivé aujourd\'hui', de: 'heute ist noch nichts eingegangen', it: 'oggi non è ancora arrivato nulla', pt: 'hoje ainda não entrou nada' },
+  'ops.hoy.no':         { es: 'ÚLTIMA OPERACIÓN CON DATOS', en: 'LAST OPERATION WITH DATA', fr: 'DERNIÈRE OPÉRATION AVEC DONNÉES', de: 'LETZTER BETRIEB MIT DATEN', it: 'ULTIMA OPERAZIONE CON DATI', pt: 'ÚLTIMA OPERAÇÃO COM DADOS' },
   'ops.brief.routes':   { es: 'rutas siguen en la calle', en: 'routes still out', fr: 'tournées encore dehors', de: 'Routen noch unterwegs', it: 'giri ancora in strada', pt: 'rotas ainda na rua' },
   'ops.nodir':          { es: 'sin dirección resuelta', en: 'with unresolved address', fr: 'sans adresse résolue', de: 'ohne geklärte Adresse', it: 'senza indirizzo risolto', pt: 'sem morada resolvida' },
   // Cada decisión dice POR QUÉ importa. Sin eso, una lista de números no

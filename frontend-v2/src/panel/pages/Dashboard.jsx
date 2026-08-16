@@ -61,6 +61,15 @@ function useCountUp(value, ms = 700) {
 }
 function Count({ v }) { return <>{useCountUp(v)}</> }
 
+// "2026-08-11" → "11 de agosto". Se compone a mano y no con Date: un
+// `new Date('2026-08-11')` se interpreta en UTC y en España sale el día 10.
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+const fechaCorta = (iso) => {
+  const [, m, d] = String(iso || '').split('-')
+  return m && d ? `${Number(d)} de ${MESES[Number(m) - 1]}` : String(iso || '')
+}
+
 /* Cifra suelta de la franja de hoy. En rojo SOLO cuando hay algo que hacer:
    un cero en rojo entrena a ignorar el color, y entonces el día que hay un
    missing de verdad tampoco se mira. */
@@ -716,9 +725,19 @@ export default function Dashboard() {
             lo que se mueve y lo que mide Amazon. */}
         <p className="mt-3 max-w-2xl text-[16.5px] leading-relaxed text-dark-400">
           {pctEntrega != null ? (
-            <><b className="font-semibold text-dark-50">{pctEnt}%</b> {t('ops.brief.delivered')}
-              {nowLive.enCurso > 0 && (
+            /* Si el día que se enseña NO es hoy, el titular no puede decir
+               "hoy" ni "siguen en la calle": esas rutas terminaron hace días.
+               Es el mismo falso positivo de las rutas que "seguían repartiendo"
+               a la 1 de la madrugada, pero en la portada y a cinco días vista. */
+            <><b className="font-semibold text-dark-50">{pctEnt}%</b>{' '}
+              {nowLive.esHoy === false
+                ? t('ops.brief.delivered.dia').replace('{d}', fechaCorta(nowLive.dia))
+                : t('ops.brief.delivered')}
+              {nowLive.enCurso > 0 && nowLive.esHoy !== false && (
                 <> · <b className="font-semibold text-dark-50"><Count v={nowLive.enCurso} /></b> {t('ops.brief.routes')}</>
+              )}
+              {nowLive.esHoy === false && (
+                <> · <span className="text-amber-300/90">{t('ops.brief.sindatos')}</span></>
               )}.
             </>
           ) : urgentTotal > 0
@@ -766,11 +785,17 @@ export default function Dashboard() {
       {nowLive?.total > 0 && (
         <section className="rise border-t border-white/[0.05] py-7" style={{ animationDelay: '40ms' }}>
           <h2 className="flex items-center gap-2 font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-dark-500">
+            {/* El punto verde que late significa "esto está pasando ahora". Con
+                datos de hace cinco días late igual y dice lo contrario de la
+                verdad: si no es de hoy, se queda quieto y en ámbar. */}
             <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              {nowLive.esHoy !== false && (
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+              )}
+              <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${
+                nowLive.esHoy === false ? 'bg-amber-400' : 'bg-emerald-400'}`} />
             </span>
-            {t('ops.hoy')}
+            {nowLive.esHoy === false ? t('ops.hoy.no') : t('ops.hoy')}
             {/* Si lo que se enseña NO es de hoy, se dice. Enseñar los datos de
                 ayer como si fueran de hoy sería mentir en la portada. */}
             {nowLive.esHoy === false && (
