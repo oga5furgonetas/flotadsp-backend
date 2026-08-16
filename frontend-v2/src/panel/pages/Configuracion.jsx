@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useT } from '../../i18n'
 import { Loader2, Plus, Building, Send, CreditCard, Check, Copy, ExternalLink, BellRing, Pencil, Trash2, Clock } from 'lucide-react'
-import { getOrgCenters, addOrgCenter, getTelegramConfig, getOrgBilling, listarDestinatarios, guardarDestinatario, borrarDestinatario, enviarResumenDiario, getHorariosAvisos, setHorariosAvisos } from '../api'
+import { getOrgCenters, addOrgCenter, getTelegramConfig, getOrgBilling, getBillingUso, listarDestinatarios, guardarDestinatario, borrarDestinatario, enviarResumenDiario, getHorariosAvisos, setHorariosAvisos } from '../api'
 import { lista } from '../../lib/lista'
 import { getAdmin } from '../auth'
 
@@ -253,6 +253,7 @@ export default function Configuracion() {
   const [centers, setCenters] = useState(null)
   const [tg, setTg] = useState(null)
   const [billing, setBilling] = useState(null)
+  const [uso, setUso] = useState(null)
   const [nuevo, setNuevo] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null)
@@ -261,6 +262,7 @@ export default function Configuracion() {
     getOrgCenters().then((r) => setCenters(r.data?.centers || [])).catch(() => setCenters([]))
     getTelegramConfig().then((r) => setTg(r.data)).catch(() => setTg({}))
     getOrgBilling().then((r) => setBilling(r.data)).catch(() => setBilling(null))
+    getBillingUso().then((r) => setUso(r.data)).catch(() => setUso(null))
   }
   useEffect(load, [])
 
@@ -329,6 +331,40 @@ export default function Configuracion() {
             Estado: <b>{billing.status || billing.estado || '—'}</b>{billing.plan ? ` · Plan ${billing.plan}` : ''}
           </div>
         ) : <span className="text-sm text-dark-500">Información de plan no disponible.</span>}
+
+        {/* Lo que se paga y lo que se usa, SIEMPRE a la vista — no solo cuando
+            hay desfase. Un número que solo aparece cuando hay problema se lee
+            como una regañina; viéndolo cada día, la gente regulariza sola. */}
+        {uso && (
+          <div className="mt-3 rounded-lg border border-dark-800 bg-dark-900/40 p-3">
+            <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+              <span className="text-[13px] text-dark-400">
+                En flota: <b className="text-dark-100 tabular-nums">{uso.en_flota}</b> furgonetas
+              </span>
+              {uso.pagadas != null && (
+                <span className="text-[13px] text-dark-400">
+                  Pagadas: <b className="text-dark-100 tabular-nums">{uso.pagadas}</b>
+                </span>
+              )}
+            </div>
+            {uso.desfase > 0 && (
+              <p className="mt-2 text-[12px] leading-relaxed text-amber-300">
+                Tienes {uso.desfase} furgoneta{uso.desfase > 1 ? 's' : ''} más de las que pagas.
+                No se bloquea nada: se ajustará en la próxima factura.
+              </p>
+            )}
+            {uso.desfase < 0 && (
+              <p className="mt-2 text-[12px] leading-relaxed text-dark-500">
+                Pagas {Math.abs(uso.desfase)} de más. Se ajustará en la próxima factura.
+              </p>
+            )}
+            {uso.pagadas == null && (
+              <p className="mt-2 text-[12px] leading-relaxed text-dark-600">
+                Sin suscripción medida todavía. Se cobra por furgoneta en flota: las de baja no cuentan.
+              </p>
+            )}
+          </div>
+        )}
         <a href="/planes" className="btn-secondary mt-3 inline-flex text-sm">{t('cfg.see.plans')}</a>
       </div>
     </div>

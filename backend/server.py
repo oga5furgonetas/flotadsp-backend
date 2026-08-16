@@ -4736,17 +4736,68 @@ async def lemonsqueezy_webhook(request: Request):
     plan = _ls_plan_key(raw_plan)
     if not org_id:
         return {"ok": True, "ignored": "sin org_id"}
+    # CUÁNTAS furgonetas se han pagado. Se cobra por furgoneta y los productos
+    # de Lemon Squeezy son de cantidad variable, pero hasta ahora esa cantidad
+    # se tiraba: la app activaba la cuenta y no volvía a mirar el número. Un
+    # precio por furgoneta que no guarda las furgonetas pagadas no es un
+    # precio, es una sugerencia.
+    _attr = ((payload.get("data") or {}).get("attributes") or {})
+    pagadas = _attr.get("first_subscription_item", {}).get("quantity")
+    if not isinstance(pagadas, int) or pagadas < 0:
+        pagadas = None
+
     # activo si la suscripción está viva; suspendido/cancelado si no
     if event.startswith("subscription_") and status in ("active", "on_trial", "paid"):
-        await global_db.organizations.update_one(
-            {"id": org_id}, {"$set": {"status": "active", "plan": plan,
-                                      "ls_status": status, "ls_subscription_id": (payload.get("data") or {}).get("id")}})
-        logger.info("LS pago OK → DSP %s activo (%s)", org_id, plan)
+        campos = {"status": "active", "plan": plan, "ls_status": status,
+                  "ls_subscription_id": (payload.get("data") or {}).get("id")}
+        if pagadas is not None:
+            campos["vehiculos_pagados"] = pagadas
+            campos["vehiculos_pagados_at"] = datetime.now(timezone.utc).isoformat()
+        await global_db.organizations.update_one({"id": org_id}, {"$set": campos})
+        logger.info("LS pago OK → DSP %s activo (%s, %s furgonetas)", org_id, plan, pagadas)
     elif event in ("subscription_cancelled", "subscription_expired", "subscription_paused"):
         await global_db.organizations.update_one(
             {"id": org_id}, {"$set": {"status": "suspended", "ls_status": status}})
         logger.info("LS → DSP %s suspendido (%s)", org_id, event)
     return {"ok": True}
+
+
+async def _vehiculos_facturables(db_name: str) -> int:
+    """Furgonetas que se facturan: las que están EN FLOTA.
+
+    Activas y en taller cuentan; las de baja no. Una furgoneta devuelta al
+    renting no da trabajo, no sale a ruta y no se le hace mantenimiento —
+    cobrarla sería cobrar por un hueco en una lista. Y es un criterio que se
+    puede explicar en una frase a un cliente, que es lo que tiene que aguantar
+    un precio: "pagas por las que trabajan".
+    """
+    try:
+        return await client[db_name].vehicles.count_documents(
+            {"status": {"$nin": ["deleted", "baja"]}})
+    except Exception as e:
+        logger.warning("Conteo facturable de %s: %s", db_name, e)
+        return 0
+
+
+@api_router.get("/billing/uso")
+async def billing_uso(user: dict = Depends(get_current_user)):
+    """Qué se paga y qué se usa. La cuenta que sostiene la factura.
+
+    Se enseña SIEMPRE, se pase o no: un número que solo aparece cuando hay
+    problema se lee como una regañina. Viéndolo cada día, el desfase se
+    regulariza solo casi siempre.
+    """
+    org = await get_org(user.get("org_id")) or {}
+    en_flota = await _vehiculos_facturables(_tenant_db_name(org))
+    pagadas = org.get("vehiculos_pagados")
+    return {
+        "en_flota": en_flota,
+        "pagadas": pagadas,                       # None = sin suscripción medida
+        "desfase": (en_flota - pagadas) if isinstance(pagadas, int) else None,
+        "plan": org.get("plan"),
+        "estado": org.get("status"),
+        "medido_at": org.get("vehiculos_pagados_at"),
+    }
 
 
 @api_router.get("/org/centers")
@@ -9655,6 +9706,50 @@ async def _bucle_aviso(clave: str, hora_key: str, accion):
         except Exception as e:
             logger.error("Bucle de aviso %s: %s", clave, e)
         await asyncio.sleep(60)
+
+
+async def revisar_facturacion() -> list:
+    """Compara lo pagado con lo usado en TODOS los DSP y avisa de los desfases.
+
+    Va al grupo de Telegram del dueño, no al cliente: la app le dice al cliente
+    cuántas tiene (eso lo ve en su panel), pero la conversación de "estás
+    pagando 20 y llevas 24" es una conversación comercial, y esas no las tiene
+    un robot por su cuenta.
+    """
+    orgs = await global_db.organizations.find(
+        {"account_type": "dsp", "status": {"$in": ["active", "trial"]}},
+        {"_id": 0, "id": 1, "name": 1, "slug": 1, "plan": 1,
+         "db_name": 1, "vehiculos_pagados": 1}).to_list(500)
+    desfases = []
+    for o in orgs:
+        pagadas = o.get("vehiculos_pagados")
+        if not isinstance(pagadas, int):
+            continue                       # sin cantidad medida no hay nada que comparar
+        en_flota = await _vehiculos_facturables(_tenant_db_name(o))
+        if en_flota != pagadas:
+            desfases.append({"dsp": o.get("name") or o.get("slug") or o["id"],
+                             "pagadas": pagadas, "en_flota": en_flota,
+                             "diferencia": en_flota - pagadas})
+    if desfases:
+        lineas = ["💶 <b>Furgonetas facturadas vs. reales</b>"]
+        for d in sorted(desfases, key=lambda x: -abs(x["diferencia"])):
+            signo = "+" if d["diferencia"] > 0 else ""
+            lineas.append(f"• {d['dsp']}: paga {d['pagadas']} · tiene {d['en_flota']} "
+                          f"({signo}{d['diferencia']})")
+        await _telegram_aviso("\n".join(lineas))
+    return desfases
+
+
+@app.on_event("startup")
+async def start_facturacion_scheduler():
+    """Revisión diaria de lo facturado, a la misma hora que el resumen."""
+    asyncio.create_task(_bucle_aviso("facturacion", "resumen_diario", revisar_facturacion))
+
+
+@api_router.post("/billing/revisar")
+async def trigger_revisar_facturacion(_=Depends(require_superadmin)):
+    """Compara ahora lo pagado con lo real en todos los DSP."""
+    return {"desfases": await revisar_facturacion()}
 
 
 @app.on_event("startup")

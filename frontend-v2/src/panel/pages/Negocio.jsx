@@ -5,7 +5,7 @@ import {
   Loader2, Building2, CheckCircle2, Clock, Euro, Sparkles, Gift, PauseCircle,
   LogIn, Trash2, Database, BrainCircuit, ExternalLink, RefreshCw, Megaphone,
   Play, Pause, Plus, Star, Eye, MousePointerClick, Tag, Save,
-  Receipt, Upload, Check, Undo2, Building,
+  Receipt, Upload, Check, Undo2, Building, Coins,
 } from 'lucide-react'
 import {
   getAdminOverview, getAdminOrgs, getLeads, updateOrg, impersonateOrg, deleteOrg,
@@ -13,7 +13,7 @@ import {
   adminDeleteDriverOffer, adminGetFounderReservations,
   adminGetPlanes, adminSetPlanes,
   adminGetCobros, adminMarcarCobro, adminConciliar,
-  adminGetEmisor, adminSetEmisor,
+  adminGetEmisor, adminSetEmisor, revisarFacturacion as revisarFacturacionApi,
 } from '../api'
 import { API_BASE } from '../../services/api'
 
@@ -414,6 +414,23 @@ export default function Negocio() {
   const [offerForm, setOfferForm] = useState(null)   // null = cerrado
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
+  const [revisando, setRevisando] = useState(false)
+
+  // Se cobra por furgoneta: esto compara lo pagado con lo que hay en flota,
+  // que es la cuenta que sostiene la factura.
+  async function revisarFacturacion() {
+    setRevisando(true)
+    try {
+      const r = await revisarFacturacionApi()
+      const d = r.data?.desfases || []
+      alert(d.length
+        ? 'Desfases entre lo pagado y lo real:\n\n' + d.map((x) =>
+            `${x.dsp}: paga ${x.pagadas} · tiene ${x.en_flota} (${x.diferencia > 0 ? '+' : ''}${x.diferencia})`).join('\n')
+        : 'Todo cuadra: nadie tiene más ni menos furgonetas de las que paga.\n\n(Los DSP sin cantidad medida en su suscripción no se comparan.)')
+    } catch (e) {
+      alert(e?.response?.data?.detail || 'No se pudo revisar')
+    } finally { setRevisando(false) }
+  }
 
   function load() {
     getAdminOverview().then((r) => setOv(r.data)).catch(() => {})
@@ -508,7 +525,17 @@ export default function Negocio() {
           <h2 className="text-sm font-semibold">{t('neg.billing')}</h2>
           <p className="text-sm text-dark-400">{t('neg.billing.desc')} <b className="text-dark-100">{ov?.mrr_estimado ?? '—'} €/mes</b>. {t('neg.billing.lemon')}</p>
         </div>
-        <a href="https://app.lemonsqueezy.com" target="_blank" rel="noreferrer" className="btn-secondary flex items-center gap-1.5 text-sm">{t('neg.billing.panel')} <ExternalLink size={14} /></a>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Se cobra por furgoneta, así que antes de facturar hay que saber
+              cuántas hay de verdad. Se revisa solo cada día; esto es para
+              mirarlo ahora, que es cuando se factura. */}
+          <button onClick={revisarFacturacion} disabled={revisando}
+            className="btn-ghost flex items-center gap-1.5 text-sm text-dark-400 hover:text-brand-300"
+            title="Compara las furgonetas pagadas con las que hay en flota, en todos los DSP">
+            {revisando ? <Loader2 size={14} className="animate-spin" /> : <Coins size={14} />} Revisar furgonetas facturadas
+          </button>
+          <a href="https://app.lemonsqueezy.com" target="_blank" rel="noreferrer" className="btn-secondary flex items-center gap-1.5 text-sm">{t('neg.billing.panel')} <ExternalLink size={14} /></a>
+        </div>
       </div>
 
       {/* Clientes / DSPs */}

@@ -180,6 +180,8 @@ export const getOrgCenters = () => api.get('/org/centers')
 export const addOrgCenter = (name) => api.post('/org/centers', { name })
 export const getTelegramConfig = () => api.get('/telegram/config')
 export const getOrgBilling = () => api.get('/org/billing')
+export const getBillingUso = () => api.get('/billing/uso')
+export const revisarFacturacion = () => api.post('/billing/revisar')
 export const getMe = () => api.get('/auth/me')
 
 /* ── IA Peritaje / Métricas / Importaciones ── */
