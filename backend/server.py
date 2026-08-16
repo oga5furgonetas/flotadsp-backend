@@ -9040,7 +9040,162 @@ async def toggle_checklist_item(data: dict = Body(...), user: dict = Depends(req
         {"center": center, "date": date, "shift": shift},
         {"$set": {"items": items, "updated_at": now}}
     )
+
+    # ── Avisar a los coordinadores del centro ────────────────────────────────
+    # La queja de fondo no era que no se apuntara quién y cuándo (eso ya se
+    # guardaba y se veía), sino tener que ENTRAR a mirarlo. Quien lleva el
+    # centro se entera en el momento, sin abrir nada.
+    #
+    # Sólo al marcar: destildar suele ser corregir un toque mal dado, y avisar
+    # de eso convertiría el aviso en ruido, que es como se acaban silenciando.
+    if done:
+        hechas = sum(1 for x in items if x.get("done"))
+        texto = next((x.get("text") for x in items if x.get("id") == item_id), "")
+        await push_center_event(
+            center,
+            f"{center} · {'mañana' if shift == 'manana' else 'tarde'} · {hechas}/{len(items)}",
+            f"{user.get('name') or 'Alguien'} ✓ {texto}",
+            "/panel/checklist-operativo",
+            exclude_id=user.get("sub"),          # a quien la marca no se le avisa
+        )
     return {"ok": True}
+
+
+async def _resumen_turno(center: str, date: str, shift: str) -> Optional[dict]:
+    """Cómo ha quedado el checklist de un turno. None si ese turno no existe.
+
+    Devolver None cuando no hay checklist es deliberado: un centro que ese día
+    no abrió turno no debe generar un "0 de 0 hechas" que parece un problema.
+    """
+    doc = await db.daily_checklists.find_one(
+        {"center": center, "date": date, "shift": shift}, {"_id": 0})
+    items = (doc or {}).get("items") or []
+    if not items:
+        return None
+    hechas = [i for i in items if i.get("done")]
+    faltan = [i for i in items if not i.get("done")]
+    return {
+        "center": center, "date": date, "shift": shift,
+        "total": len(items), "hechas": len(hechas),
+        "faltan": [i.get("text") or "—" for i in faltan],
+        "quien": sorted({i.get("done_by") for i in hechas if i.get("done_by")}),
+        "ultima": max((i.get("done_at") or "" for i in hechas), default=""),
+    }
+
+
+async def enviar_resumen_turno(shift: str, date: Optional[str] = None) -> list:
+    """Manda el cierre de turno de cada centro: qué se hizo y qué quedó colgado.
+
+    Es la otra mitad de los avisos al marcar. Ver los ticks según caen dice si
+    la cosa avanza; esto dice cómo acabó, que es lo que hace falta para tirar
+    de alguien al día siguiente sin ir de memoria.
+
+    Va por push a los coordinadores del centro (gratis, inmediato) y por
+    Telegram al grupo. El aviso por WhatsApp usará este mismo texto: lo que
+    falta ahí no es el mensaje, son las credenciales de la API de Meta.
+    """
+    date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    centros = await db.daily_checklists.distinct("center", {"date": date, "shift": shift})
+    turno = "mañana" if shift == "manana" else "tarde"
+    enviados = []
+
+    for center in sorted(c for c in centros if c):
+        r = await _resumen_turno(center, date, shift)
+        if not r:
+            continue
+        todo_hecho = not r["faltan"]
+        titulo = f"{center} · {turno}: {r['hechas']}/{r['total']}"
+        cuerpo = ("Todo hecho ✓" if todo_hecho
+                  else "Falta: " + ", ".join(r["faltan"][:3])
+                       + (f" y {len(r['faltan']) - 3} más" if len(r["faltan"]) > 3 else ""))
+        await push_center_event(center, titulo, cuerpo, "/panel/checklist-operativo")
+
+        # Telegram: el mismo contenido pero sin recortar, que ahí sí cabe.
+        lineas = [f"{'✅' if todo_hecho else '⚠️'} <b>{center} · turno de {turno}</b>",
+                  f"{r['hechas']} de {r['total']} tareas hechas"]
+        if r["quien"]:
+            lineas.append("Las marcaron: " + ", ".join(r["quien"]))
+        if r["faltan"]:
+            lineas.append("\n<b>Sin hacer:</b>")
+            lineas += [f"• {t}" for t in r["faltan"]]
+        await _telegram_aviso("\n".join(lineas))
+        enviados.append({"center": center, **{k: r[k] for k in ("hechas", "total")},
+                         "faltan": len(r["faltan"])})
+
+    if not enviados:
+        logger.info("Resumen de turno %s %s: ningún centro con checklist", shift, date)
+    return enviados
+
+
+async def _telegram_aviso(texto: str) -> bool:
+    """Manda un texto al grupo de Telegram. False si no está configurado.
+
+    Existía la misma llamada copiada en cinco sitios; cada copia con su propio
+    manejo de errores y sus propios olvidos.
+    """
+    try:
+        config = await db.telegram_config.find_one({}, {"_id": 0})
+        if not config or not config.get("enabled") or not config.get("bot_token"):
+            return False
+        import aiohttp as _ai
+        async with _ai.ClientSession() as s:
+            for cid in config.get("chat_ids", []):
+                if cid.strip():
+                    await s.post(
+                        f"https://api.telegram.org/bot{config['bot_token']}/sendMessage",
+                        json={"chat_id": cid, "text": texto[:4000], "parse_mode": "HTML"},
+                        timeout=_ai.ClientTimeout(total=10))
+        return True
+    except Exception as e:
+        logger.warning(f"Telegram aviso: {e}")
+        return False
+
+
+@api_router.post("/checklist/enviar-resumen")
+async def checklist_enviar_resumen(data: dict = Body(default={}),
+                                   _=Depends(require_admin)):
+    """Dispara el cierre de turno ahora, para probarlo sin esperar a la hora."""
+    shift = data.get("shift") or "manana"
+    if shift not in ("manana", "tarde"):
+        raise HTTPException(400, "shift debe ser manana o tarde")
+    return {"enviados": await enviar_resumen_turno(shift, data.get("date"))}
+
+
+@app.on_event("startup")
+async def start_checklist_summary_scheduler():
+    """Cierre de turno a la hora en que cada turno acaba.
+
+    Las horas son configurables porque no las puedo saber: un turno que acaba a
+    las 14:00 y otro a las 15:30 dan resúmenes distintos, y mandarlo antes de
+    tiempo cuenta como "sin hacer" lo que aún da tiempo a hacer.
+    """
+    horas = []
+    for shift, env, defecto in (("manana", "RESUMEN_TURNO_MANANA_H", 15),
+                                ("tarde", "RESUMEN_TURNO_TARDE_H", 22)):
+        try:
+            horas.append((shift, int(os.environ.get(env, defecto))))
+        except ValueError:
+            horas.append((shift, defecto))
+
+    async def _loop(shift: str, hora: int):
+        from zoneinfo import ZoneInfo
+        madrid = ZoneInfo("Europe/Madrid")
+        while True:
+            try:
+                now = datetime.now(madrid)
+                target = now.replace(hour=hora, minute=0, second=0, microsecond=0)
+                if now >= target:
+                    target += timedelta(days=1)
+                await asyncio.sleep((target - now).total_seconds())
+                await enviar_resumen_turno(shift)
+                await asyncio.sleep(70)   # margen: no disparar dos veces
+            except Exception as e:
+                logger.error(f"Scheduler resumen turno {shift}: {e}")
+                await asyncio.sleep(300)
+
+    for shift, hora in horas:
+        logger.info("Resumen de turno %s programado a las %02d:00 (Madrid)", shift, hora)
+        asyncio.create_task(_loop(shift, hora))
 
 
 # =========================

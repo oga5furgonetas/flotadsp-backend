@@ -2,9 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
-  Loader2, CheckSquare, Sun, Moon, Pencil, Plus, Trash2, Save, X, Calendar,
+  Loader2, CheckSquare, Sun, Moon, Pencil, Plus, Trash2, Save, X, Calendar, Send,
 } from 'lucide-react'
-import { getChecklist, upsertChecklist, toggleChecklistItem, saveChecklistTemplate } from '../api'
+import { getChecklist, upsertChecklist, toggleChecklistItem, saveChecklistTemplate, enviarResumenTurno } from '../api'
 import { hoyLocal } from '../../lib/fecha'
 
 const isoToday = hoyLocal
@@ -20,7 +20,22 @@ export default function ChecklistOperativo() {
   const [draft, setDraft] = useState([])
   const [saving, setSaving] = useState(false)
   const [tplSaving, setTplSaving] = useState(false)
+  const [enviando, setEnviando] = useState(false)
   const [err, setErr] = useState('')
+
+  // El cierre de turno se manda solo a su hora; esto es para verlo ahora.
+  async function enviarResumen() {
+    setEnviando(true)
+    try {
+      const r = await enviarResumenTurno({ shift, date })
+      const mio = (r.data?.enviados || []).find((x) => x.center === center)
+      alert(mio
+        ? `Resumen enviado: ${center} ${mio.hechas}/${mio.total}${mio.faltan ? ` · ${mio.faltan} sin hacer` : ' · todo hecho'}`
+        : 'No hay checklist de este turno, así que no se ha mandado nada.')
+    } catch (e) {
+      alert(e?.response?.data?.detail || 'No se pudo enviar el resumen')
+    } finally { setEnviando(false) }
+  }
 
   async function saveAsTemplate() {
     const items = data?.[shift]?.items || []
@@ -141,6 +156,13 @@ export default function ChecklistOperativo() {
               title={`Las tareas actuales pasan a ser la plantilla recurrente de ${center} (${shift === 'manana' ? 'mañana' : 'tarde'}): cada día nuevo nacerá con ellas. Cada centro tiene la suya.`}
               className="btn-ghost flex items-center gap-1.5 text-xs text-dark-400 hover:text-brand-300">
               {tplSaving ? <Loader2 size={13} className="animate-spin" /> : '📌'} Plantilla de {center}
+            </button>
+            {/* El cierre de turno sale solo a su hora. Este botón es para
+                verlo ahora sin esperar — y para comprobar que llega. */}
+            <button onClick={enviarResumen} disabled={enviando}
+              title={t('chk.resumen.exp')}
+              className="btn-ghost flex items-center gap-1.5 text-xs text-dark-400 hover:text-brand-300">
+              {enviando ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />} {t('chk.resumen')}
             </button>
             <button onClick={startEdit} className="btn-secondary flex items-center gap-1.5 text-sm"><Pencil size={14} /> {t('ui.edit')}</button>
           </div>

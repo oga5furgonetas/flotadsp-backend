@@ -22,6 +22,8 @@ export const getChat = (center, since) => api.get(`/chat/${center}`, { params: s
 export const postChat = (center, text) => api.post(`/chat/${center}`, { text })
 export const deleteChatMessage = (center, messageId) => api.delete(`/chat/${center}/${messageId}`)
 export const saveChecklistTemplate = (body) => api.post('/checklist/template', body) // {center, shift, items}
+// Cierre de turno: sale solo a su hora, esto lo dispara ahora para probarlo.
+export const enviarResumenTurno = (body) => api.post('/checklist/enviar-resumen', body)
 export const chatToChecklist = (center, messageId, body = {}) =>
   api.post(`/chat/${center}/${messageId}/to-checklist`, body)
 
