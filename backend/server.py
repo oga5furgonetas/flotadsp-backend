@@ -9507,7 +9507,7 @@ def _html_resumen(r: dict) -> str:
     return "".join(P)
 
 
-async def enviar_resumen_diario(dia: Optional[str] = None) -> list:
+async def enviar_resumen_diario(dia: Optional[str] = None, solo_id: Optional[str] = None) -> list:
     """El resumen corto del día a cada destinatario de su centro.
 
     Un mensaje por persona y día, no uno por cada cosa que pasa: en WhatsApp se
@@ -9519,8 +9519,14 @@ async def enviar_resumen_diario(dia: Optional[str] = None) -> list:
     que cambia es por dónde sale — el contenido ya es este.
     """
     dia = dia or _dia_negocio()
-    dest = await db.aviso_destinatarios.find(
-        {"activo": True, "avisos": "resumen_diario"}, {"_id": 0}).to_list(200)
+    q = {"avisos": "resumen_diario"}
+    if solo_id:
+        # Prueba dirigida: va aunque esté en pausa — se está comprobando que
+        # llega, no repartiendo el aviso de verdad.
+        q["id"] = solo_id
+    else:
+        q["activo"] = True
+    dest = await db.aviso_destinatarios.find(q, {"_id": 0}).to_list(200)
     if not dest:
         logger.info("Resumen diario: sin destinatarios configurados")
         return []
@@ -9534,8 +9540,11 @@ async def enviar_resumen_diario(dia: Optional[str] = None) -> list:
         # Meta. Los cinco campos cortos de `r` son sus cinco variables; esta
         # versión larga es la que va por Telegram y push, que no tienen
         # plantillas y sí admiten saltos de línea.
-        await _telegram_aviso(_texto_resumen_largo(r)
-                              + "\n\n<i>Para: " + ", ".join(d["nombre"] for d in quienes) + "</i>")
+        # Una prueba dirigida a una persona NO va al grupo: probar que algo
+        # llega no puede costarle un mensaje a todo el mundo.
+        if not solo_id:
+            await _telegram_aviso(_texto_resumen_largo(r)
+                                  + "\n\n<i>Para: " + ", ".join(d["nombre"] for d in quienes) + "</i>")
 
         # Correo: la vía que no depende de nadie. Sin plantillas que aprobar,
         # sin restricciones de cuenta de Meta y sin coste por mensaje.
@@ -9560,8 +9569,12 @@ async def enviar_resumen_diario(dia: Optional[str] = None) -> list:
 
 @api_router.post("/avisos/enviar-resumen-diario")
 async def trigger_resumen_diario(data: dict = Body(default={}), _=Depends(require_admin)):
-    """Dispara el resumen del día ahora, para verlo sin esperar a la hora."""
-    return {"enviados": await enviar_resumen_diario(data.get("date"))}
+    """Dispara el resumen del día ahora, para verlo sin esperar a la hora.
+
+    Con `id` va SOLO a esa persona y sin copia al grupo: es la prueba de "¿le
+    llega a Judyt?" sin molestar a nadie más.
+    """
+    return {"enviados": await enviar_resumen_diario(data.get("date"), data.get("id"))}
 
 
 _HORARIOS_DEF = {"resumen_diario": 21, "turno_manana": 15, "turno_tarde": 22}

@@ -90,14 +90,20 @@ function Destinatarios({ centers }) {
   const [rows, setRows] = useState(null)
   const [form, setForm] = useState(null)   // null = cerrado
   const [busy, setBusy] = useState(false)
-  const [probando, setProbando] = useState(false)
+  const [probando, setProbando] = useState(null)   // null | true (todos) | id
   const [err, setErr] = useState('')
 
-  async function probar() {
-    setProbando(true)
+  // Con `d` va sólo a esa persona y sin copia al grupo: es la prueba de
+  // "¿le llega a Judyt?" sin molestar a los demás.
+  async function probar(d) {
+    setProbando(d?.id || true)
     try {
-      const r = await enviarResumenDiario({})
+      const r = await enviarResumenDiario(d ? { id: d.id } : {})
       const e = r.data?.enviados || []
+      if (d && !e.length) {
+        alert(`${d.nombre} no tiene ningún centro asignado, así que no hay nada que mandarle.`)
+        return
+      }
       alert(e.length
         ? e.map((x) => [
             `${x.center} — ${x.fecha}`,
@@ -114,7 +120,7 @@ function Destinatarios({ centers }) {
         : 'Nadie tiene centros asignados, así que no se ha mandado nada.')
     } catch (e) {
       alert(e?.response?.data?.detail || 'No se pudo enviar')
-    } finally { setProbando(false) }
+    } finally { setProbando(null) }
   }
 
   const load = () => listarDestinatarios()
@@ -169,6 +175,13 @@ function Destinatarios({ centers }) {
                 </span>
               </span>
               {!d.activo && <span className="rounded bg-dark-800 px-1.5 text-[10px] text-dark-500">en pausa</span>}
+              {/* Mandárselo sólo a esta persona, para comprobar que le llega
+                  antes de dejarlo funcionando. No va copia al grupo. */}
+              <button onClick={() => probar(d)} disabled={probando === d.id || !d.email}
+                className="btn-ghost p-1.5 text-dark-400 hover:text-brand-300 disabled:opacity-30"
+                title={d.email ? `Enviarle el resumen ahora sólo a ${d.nombre}` : 'Sin correo: no se le puede enviar'}>
+                {probando === d.id ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              </button>
               <button onClick={() => abrir(d)} className="btn-ghost p-1.5 text-dark-400" title="Editar"><Pencil size={13} /></button>
               <button onClick={() => borrar(d)} className="btn-ghost p-1.5 text-red-400" title="Quitar"><Trash2 size={13} /></button>
             </div>
@@ -186,9 +199,9 @@ function Destinatarios({ centers }) {
           {/* Sale solo cada tarde; esto es para ver el mensaje ahora y
               comprobar que dice lo que tiene que decir. */}
           {rows?.length > 0 && (
-            <button onClick={probar} disabled={probando}
+            <button onClick={() => probar()} disabled={probando === true}
               className="btn-ghost inline-flex items-center gap-1.5 text-xs text-dark-400 hover:text-brand-300">
-              {probando ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />} Enviarlo ahora
+              {probando === true ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />} Enviárselo a todos
             </button>
           )}
         </div>
