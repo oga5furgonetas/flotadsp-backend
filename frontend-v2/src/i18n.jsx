@@ -1399,6 +1399,33 @@ const DICT = {
   'ops.wall.more':      { es: '+{n} rutas más en Paquetes IA', en: '+{n} more routes in Package Intelligence', fr: '+{n} tournées de plus dans Package Intelligence', de: '+{n} weitere Routen in Package Intelligence', it: '+{n} altri giri in Package Intelligence', pt: '+{n} rotas mais em Package Intelligence' },
   // La franja de flota. Etiquetas honestas: el reparto de daños es de TODAS
   // las inspecciones, no de la semana, y así se dice.
+  // ── CALENDARIO DE FLOTA ────────────────────────────────────────────────
+  // Distingue FECHA de PREVISIÓN a propósito: la ITV es un compromiso con
+  // Tráfico y un cambio de aceite previsto es una división de kilómetros
+  // entre km/día. Pintarlos igual llevaría a tratarlos igual.
+  'cal.tab':          { es: 'Calendario', en: 'Calendar', fr: 'Calendrier', de: 'Kalender', it: 'Calendario', pt: 'Calendário' },
+  'cal.t.itv':        { es: 'ITV', en: 'MOT', fr: 'CT', de: 'HU', it: 'Revisione', pt: 'IPO' },
+  'cal.t.renting':    { es: 'Renting', en: 'Lease', fr: 'Location', de: 'Leasing', it: 'Noleggio', pt: 'Renting' },
+  'cal.t.oil':        { es: 'Aceite', en: 'Oil', fr: 'Huile', de: 'Öl', it: 'Olio', pt: 'Óleo' },
+  'cal.t.ruedas':     { es: 'Ruedas', en: 'Tyres', fr: 'Pneus', de: 'Reifen', it: 'Gomme', pt: 'Pneus' },
+  'cal.t.pastillas':  { es: 'Pastillas', en: 'Brake pads', fr: 'Plaquettes', de: 'Bremsbeläge', it: 'Pastiglie', pt: 'Pastilhas' },
+  'cal.estimado':     { es: 'fecha prevista', en: 'forecast date', fr: 'date prévue', de: 'voraussichtliches Datum', it: 'data prevista', pt: 'data prevista' },
+  'cal.leyenda':      { es: 'Borde discontinuo = fecha prevista a partir de los km que faltan y los km/día que hace esa furgoneta. Se recalcula sola: si un día se rueda menos, la fecha se corre hacia delante.', en: 'Dashed border = date forecast from remaining km and that van’s km/day. It recalculates itself: drive less one day and the date moves forward.', fr: 'Bordure pointillée = date prévue à partir des km restants et des km/jour de la camionnette. Elle se recalcule seule.', de: 'Gestrichelter Rand = Datum geschätzt aus Rest-km und den km/Tag des Fahrzeugs. Es berechnet sich selbst neu.', it: 'Bordo tratteggiato = data prevista dai km rimanenti e dai km/giorno del furgone. Si ricalcola da sola.', pt: 'Borda tracejada = data prevista a partir dos km que faltam e dos km/dia da carrinha. Recalcula-se sozinha.' },
+  'cal.resumen':      { es: '{n} vencimientos · {v} furgonetas', en: '{n} due · {v} vans', fr: '{n} échéances · {v} camionnettes', de: '{n} Fälligkeiten · {v} Fahrzeuge', it: '{n} scadenze · {v} furgoni', pt: '{n} vencimentos · {v} carrinhas' },
+  'cal.vencidos':     { es: '{n} ya vencidos — deberían estar hechos', en: '{n} already overdue — should already be done', fr: '{n} déjà en retard', de: '{n} bereits überfällig', it: '{n} già scaduti', pt: '{n} já vencidos' },
+  'cal.hace':         { es: 'hace {n} días', en: '{n} days ago', fr: 'il y a {n} jours', de: 'vor {n} Tagen', it: '{n} giorni fa', pt: 'há {n} dias' },
+  'cal.mesvacio':    { es: 'Este mes no vence nada.', en: 'Nothing due this month.', fr: 'Rien à échéance ce mois-ci.', de: 'Diesen Monat ist nichts fällig.', it: 'Questo mese non scade nulla.', pt: 'Este mês não vence nada.' },
+  'cal.sinfecha':     { es: '{n} sin fecha que prever', en: '{n} with no date to forecast', fr: '{n} sans date prévisible', de: '{n} ohne vorhersagbares Datum', it: '{n} senza data da prevedere', pt: '{n} sem data para prever' },
+  'cal.sinfecha.exp': { es: 'Les falta el dato de partida: la ITV sin fecha puesta, o el último cambio sin registrar. En cuanto se anote, aparecen solas en el mes que les toque.', en: 'They lack the starting point: no MOT date set, or the last change never recorded. Once entered, they appear on their own.', fr: 'Il leur manque le point de départ : pas de date de CT, ou dernier changement non enregistré.', de: 'Ihnen fehlt der Ausgangswert: kein HU-Datum oder der letzte Wechsel wurde nie erfasst.', it: 'Manca il dato di partenza: nessuna data di revisione o ultimo cambio non registrato.', pt: 'Falta-lhes o ponto de partida: sem data de inspeção ou última mudança por registar.' },
+  'cal.prev':         { es: 'Mes anterior', en: 'Previous month', fr: 'Mois précédent', de: 'Vorheriger Monat', it: 'Mese precedente', pt: 'Mês anterior' },
+  'cal.next':         { es: 'Mes siguiente', en: 'Next month', fr: 'Mois suivant', de: 'Nächster Monat', it: 'Mese successivo', pt: 'Mês seguinte' },
+  'cal.lun': { es: 'Lun', en: 'Mon', fr: 'Lun', de: 'Mo', it: 'Lun', pt: 'Seg' },
+  'cal.mar': { es: 'Mar', en: 'Tue', fr: 'Mar', de: 'Di', it: 'Mar', pt: 'Ter' },
+  'cal.mie': { es: 'Mié', en: 'Wed', fr: 'Mer', de: 'Mi', it: 'Mer', pt: 'Qua' },
+  'cal.jue': { es: 'Jue', en: 'Thu', fr: 'Jeu', de: 'Do', it: 'Gio', pt: 'Qui' },
+  'cal.vie': { es: 'Vie', en: 'Fri', fr: 'Ven', de: 'Fr', it: 'Ven', pt: 'Sex' },
+  'cal.sab': { es: 'Sáb', en: 'Sat', fr: 'Sam', de: 'Sa', it: 'Sab', pt: 'Sáb' },
+  'cal.dom': { es: 'Dom', en: 'Sun', fr: 'Dim', de: 'So', it: 'Dom', pt: 'Dom' },
   'ops.open':           { es: 'abiertas', en: 'open', fr: 'ouvertes', de: 'offen', it: 'aperte', pt: 'abertas' },
   'nav.expiries':       { es: 'Vencimientos', en: 'Expiries', fr: 'Échéances', de: 'Fristen', it: 'Scadenze', pt: 'Vencimentos' },
   // Cuando aún no hay operación hoy (de madrugada), se enseña el último día con

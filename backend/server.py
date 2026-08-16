@@ -13452,6 +13452,103 @@ async def update_mileage(vehicle_id: str, data: dict, user: dict = Depends(requi
     return {"success": True, "mileage": km, "oil_alert": oil_alert}
 
 
+@api_router.get("/fleet/calendar")
+async def fleet_calendar(mes: str = "", center: Optional[str] = None,
+                         user: dict = Depends(require_admin)):
+    """Todo lo que vence en un MES, por furgoneta, para verlo de una vez.
+
+    Nace de una queja concreta: para saber qué toca hay que entrar furgoneta por
+    furgoneta, y con 84 nadie lo hace. Aquí se ve el mes entero.
+
+    ── LO QUE TIENE FECHA Y LO QUE NO ────────────────────────────────────────
+    No todo lo que vence vence en una fecha, y mezclarlo sería mentir:
+
+      · ITV y fin de renting son FECHAS REALES (`itv_date`, `renting_end_date`).
+        Van al día que les toca y punto.
+      · Aceite, ruedas y pastillas se miden en KILÓMETROS. Su "fecha" sale de
+        dividir los km que faltan entre los km/día que hace esa furgoneta: es
+        una ESTIMACIÓN. Viaja marcada como tal (`exacto: false`) para que la
+        pantalla pueda pintarla distinta. Un cambio de aceite estimado no es un
+        compromiso con Tráfico como lo es una ITV.
+      · Y si una furgoneta no tiene ritmo medible (sin histórico de km), NO se
+        le inventa una fecha: se devuelve aparte, en `sin_estimacion`.
+
+    Lo ya vencido tampoco se coloca en un día futuro: va en `vencidos`, que es
+    una lista de cosas que ya deberían estar hechas, no una cita del calendario.
+
+    El filtro por centro se aplica AQUÍ, con `_filtro_centro`, que es el mismo
+    que usa /vehicles: las de DGA1 no pueden aparecer en OGA5 ni al revés.
+    """
+    from datetime import date as _date
+    hoy = _date.today()
+    try:
+        anio, mesn = (int(x) for x in (mes or hoy.strftime("%Y-%m")).split("-"))
+        primero = _date(anio, mesn, 1)
+    except Exception:
+        raise HTTPException(400, "mes debe ser YYYY-MM")
+    ultimo = _date(anio + (mesn == 12), (mesn % 12) + 1, 1) - timedelta(days=1)
+
+    query = {"status": {"$nin": ["deleted", "baja"]}}
+    query.update(_filtro_centro(user, center))
+    vehiculos = await db.vehicles.find(query, {"_id": 0}).to_list(1000)
+
+    eventos, vencidos, sin_estimacion = [], [], []
+
+    def _ficha(v):
+        return {"vehicle_id": v.get("id"), "matricula": v.get("license_plate"),
+                "modelo": " ".join(x for x in (v.get("brand"), v.get("model")) if x) or None,
+                "center": v.get("center")}
+
+    for v in vehiculos:
+        # ── Fechas reales ────────────────────────────────────────────────────
+        for campo, tipo in (("itv_date", "itv"), ("renting_end_date", "renting")):
+            crudo = v.get(campo)
+            if not crudo:
+                if tipo == "itv":
+                    sin_estimacion.append({**_ficha(v), "tipo": "itv", "motivo": "sin_fecha"})
+                continue
+            try:
+                y, m, d = (int(x) for x in str(crudo)[:10].split("-"))
+                f = _date(y, m, d)
+            except Exception:
+                continue
+            dias = (f - hoy).days
+            fila = {**_ficha(v), "tipo": tipo, "fecha": f.isoformat(),
+                    "dias": dias, "exacto": True}
+            if dias < 0:
+                vencidos.append(fila)
+            elif primero <= f <= ultimo:
+                eventos.append(fila)
+
+        # ── Kilómetros: fecha ESTIMADA, y sólo si hay ritmo medible ──────────
+        kpd = _km_por_dia(v)
+        for kind, di, dw in (("oil", 15000, 2500), ("ruedas", 40000, 3000),
+                             ("pastillas", 30000, 3000)):
+            item = _build_maint_item(v, kind, di, dw)
+            if not item:
+                continue
+            base = {**_ficha(v), "tipo": kind, "exacto": False,
+                    "km_restantes": item.get("km_until_change")}
+            if item.get("overdue"):
+                vencidos.append({**base, "fecha": None, "dias": None})
+                continue
+            if not kpd:
+                # Sin km/día no hay forma honesta de poner esto en un día.
+                sin_estimacion.append({**base, "motivo": "sin_ritmo"})
+                continue
+            dias = max(0, round(item["km_until_change"] / kpd))
+            f = hoy + timedelta(days=dias)
+            if primero <= f <= ultimo:
+                eventos.append({**base, "fecha": f.isoformat(), "dias": dias})
+
+    eventos.sort(key=lambda e: (e["fecha"], e["tipo"]))
+    vencidos.sort(key=lambda e: (e.get("dias") is None, e.get("dias") or 0))
+    return {"mes": f"{anio:04d}-{mesn:02d}", "desde": primero.isoformat(),
+            "hasta": ultimo.isoformat(), "vehiculos": len(vehiculos),
+            "eventos": eventos, "vencidos": vencidos,
+            "sin_estimacion": sin_estimacion}
+
+
 @api_router.get("/alerts/itv")
 async def get_itv_alerts(_=Depends(require_admin)):
     """Lista furgonetas con ITV próxima a caducar (30 días) o caducada."""

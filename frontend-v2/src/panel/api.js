@@ -99,6 +99,9 @@ export const getWorkshopsNearby = (lat, lng, { provider, category, maxKm = 80 } 
 /* ── Avisos / Alertas ── */
 export const getAlerts = () => api.get('/alerts')
 export const getItvAlerts = (center) => api.get('/alerts/itv', { params: centerParam(center) })
+/* Todo lo que vence en un mes (ITV, renting y los cambios previstos por km),
+   ya filtrado por centro en el servidor. */
+export const fleetCalendar = (params) => api.get('/fleet/calendar', { params })
 export const getMaintenanceAlerts = () => api.get('/alerts/maintenance')
 export const getRentingAlerts = () => api.get('/alerts/renting')
 

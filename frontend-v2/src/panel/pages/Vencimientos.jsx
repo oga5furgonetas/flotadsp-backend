@@ -6,6 +6,10 @@ import { canSee } from '../auth'
 // Fusión de las 3 pantallas de vencimientos en una sola con pestañas.
 // Las páginas originales se reutilizan intactas (cero regresión); sus rutas
 // antiguas siguen funcionando para deep-links y la paleta ⌘K.
+// El calendario va PRIMERO: es la vista que evita entrar furgoneta por
+// furgoneta, que era justo el problema. Las listas siguen detrás para el
+// detalle.
+const CalendarioFlota = lazy(() => import('./CalendarioFlota'))
 const AvisosITV = lazy(() => import('./AvisosITV'))
 const Renting = lazy(() => import('./Renting'))
 const CasasAlquiler = lazy(() => import('./CasasAlquiler'))
@@ -17,6 +21,7 @@ const Mantenimiento = lazy(() => import('./Mantenimiento'))
 export default function Vencimientos() {
   const { t } = useT()
   const tabs = [
+    canSee('avisos-itv') && { k: 'cal', label: t('cal.tab'), C: CalendarioFlota },
     canSee('avisos-itv') && { k: 'itv', label: t('nav.itvalerts'), C: AvisosITV },
     // Mismo permiso que los avisos de ITV: quien vigila vencimientos de flota
     // es quien tiene que ver los cambios que vencen.
