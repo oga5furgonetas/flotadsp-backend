@@ -239,7 +239,11 @@ export default function PedirDias({ onBack }) {
                     className={`aspect-square rounded-lg text-[13px] tabular-nums transition-colors ${
                       marcado ? 'bg-brand-500 font-bold text-white'
                         : est === 'pasado' ? 'text-dark-700'
-                          : est === 'pedido' ? 'bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/40'
+                          // Esperando respuesta va en AZUL, no en otro naranja:
+                          // en la pantalla del móvil el ámbar y el naranja de
+                          // "lo pides" se veían iguales y no se distinguía cuál
+                          // acababa de marcar y cuál ya estaba mandado.
+                          : est === 'pedido' ? 'bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/50'
                             : est === 'libre' ? 'bg-dark-800/60 text-dark-600 line-through'
                               : `text-dark-100 hover:bg-dark-800 ${esHoy ? 'ring-1 ring-brand-500/60' : ''}`
                     }`}
@@ -252,10 +256,19 @@ export default function PedirDias({ onBack }) {
           )}
 
           {/* Qué significa cada color. Sin esto, un día tachado parece un fallo. */}
+          {/* Los cuadraditos de la leyenda se pintan IGUAL que los días del
+              calendario, no aproximados: si no coinciden, la leyenda confunde
+              más de lo que aclara. */}
           <div className="mt-3 flex flex-wrap gap-x-3.5 gap-y-1.5 border-t border-dark-800 pt-3 text-[10.5px] text-dark-500">
-            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded bg-brand-500" /> Lo pides</span>
-            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded bg-amber-500/40" /> Esperando respuesta</span>
-            <span className="flex items-center gap-1.5"><span className="h-2.5 w-2.5 rounded bg-dark-700" /> Ya libre</span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-3 w-3 rounded bg-brand-500" /> Lo estás pidiendo ahora
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-3 w-3 rounded bg-sky-500/15 ring-1 ring-sky-500/50" /> Ya pedido, esperando respuesta
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-3 w-3 rounded bg-dark-800/60 ring-1 ring-dark-700" /> Ya lo tienes libre
+            </span>
           </div>
         </div>
 

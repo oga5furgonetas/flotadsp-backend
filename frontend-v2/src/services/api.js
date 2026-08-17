@@ -8,9 +8,32 @@ export const api = axios.create({
   timeout: 30000,
 })
 
-// Token en cada petición (mismo storage que la app actual para convivir durante la migración)
+/* ── DOS SESIONES QUE NO SE PISAN ──────────────────────────────────────────
+   El panel y el portal del conductor viven en el mismo navegador y hasta ahora
+   compartían la misma llave `flotadsp_token`. Consecuencia real, vista en
+   producción: alguien con el panel abierto entraba al portal para probar, el
+   login del conductor pisaba el token del admin, las pestañas del panel
+   empezaban a dar 401 y el interceptor de abajo BORRABA el token —dejando sin
+   sesión también al conductor, que veía "Se requiere autenticación" en mitad
+   de una petición de días.
+
+   La sesión del conductor tiene ahora su propia llave. Se elige por la URL:
+   /conductor es suyo, el resto es del panel. */
+export const DRIVER_TOKEN_KEY = 'flotadsp_driver_token'
+export const enPortalConductor = () =>
+  typeof window !== 'undefined' && window.location.pathname.startsWith('/conductor')
+
+export function tokenActual() {
+  if (enPortalConductor()) {
+    // Se acepta el token viejo como respaldo: quien tenga la sesión abierta de
+    // antes no se queda fuera al desplegar esto.
+    return localStorage.getItem(DRIVER_TOKEN_KEY) || localStorage.getItem('flotadsp_token') || ''
+  }
+  return localStorage.getItem('flotadsp_token') || ''
+}
+
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('flotadsp_token')
+  const token = tokenActual()
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
@@ -28,6 +51,9 @@ api.interceptors.response.use(
       status === 401 &&
       path.startsWith('/panel') &&
       path !== '/panel/login' &&
+      // Nunca desde el portal del conductor: un 401 suyo no puede llevarse por
+      // delante la sesión del panel (ni al revés). Son dos sesiones distintas.
+      !enPortalConductor() &&
       !url.includes('/auth/change-my-password')
     ) {
       localStorage.removeItem('flotadsp_token')

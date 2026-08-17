@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ClipboardCheck, CalendarDays, CalendarClock, LogOut, Lock, Ban } from 'lucide-react'
-import { getPortalVehicles, getMyShifts } from '../../services/api'
+import { getPortalVehicles, getMyShifts, DRIVER_TOKEN_KEY } from '../../services/api'
 import { lista } from '../../lib/lista'
 import DriverLogin from './DriverLogin'
 import InspectionFlow from './InspectionFlow'
@@ -108,7 +108,7 @@ export default function DriverPortal() {
   }
   const logout = () => {
     localStorage.removeItem(DRIVER_KEY)
-    localStorage.removeItem('flotadsp_token')
+    localStorage.removeItem(DRIVER_TOKEN_KEY)
     setDriver(null)
     setResult(null)
     setVista('inicio')

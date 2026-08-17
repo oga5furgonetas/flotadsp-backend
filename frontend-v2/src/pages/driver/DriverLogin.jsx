@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Loader2, LogIn, Lock, Eye, EyeOff, ArrowLeft } from 'lucide-react'
-import { driverLookup } from '../../services/api'
+import { driverLookup, DRIVER_TOKEN_KEY } from '../../services/api'
 import { api } from '../../services/api'
 import { useToast } from '../../lib/toast'
 import { useT } from '../../i18n'
@@ -32,7 +32,7 @@ export default function DriverLogin({ onLogin }) {
         setCurrentDriver({ name: d.name, email: email.trim() })
         setStep('password')
       } else if (d.access_token) {
-        localStorage.setItem('flotadsp_token', d.access_token)
+        localStorage.setItem(DRIVER_TOKEN_KEY, d.access_token)
         onLogin({ id: d.driver_id, name: d.name, email: email.trim(), center: d.center })
         toast.success(`${t('dr.bienvenido')}, ${d.name}`)
       } else {
@@ -50,7 +50,7 @@ export default function DriverLogin({ onLogin }) {
     setBusy(true)
     try {
       const r = await api.post('/auth/driver-login', { email: email.trim(), password })
-      if (r.data?.access_token) localStorage.setItem('flotadsp_token', r.data.access_token)
+      if (r.data?.access_token) localStorage.setItem(DRIVER_TOKEN_KEY, r.data.access_token)
       onLogin({
         ...currentDriver,
         name: r.data?.name || currentDriver.name,
