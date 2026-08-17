@@ -5817,13 +5817,31 @@ async def delete_admin(admin_id: str, _admin: dict = Depends(require_admin)):
 
 @auth_router.post("/change-my-password")
 async def change_my_password(data: dict, user: dict = Depends(get_current_user)):
-    """Cualquier admin cambia SU PROPIA contraseña verificando la actual."""
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Solo administradores")
+    """Cambiar TU PROPIA contraseña, verificando la actual.
+
+    Vale para admins y para conductores. Antes solo para admins, así que un
+    conductor que quisiera cambiarla tenía que pedírselo a la oficina y decirle
+    cuál quería — o sea, contar su contraseña en voz alta a otra persona.
+    """
     current = data.get("current_password") or ""
     new = data.get("new_password") or ""
     if len(new) < 6:
         raise HTTPException(status_code=400, detail="La nueva contraseña debe tener al menos 6 caracteres")
+
+    if user.get("role") == "driver":
+        cuenta = await db.driver_accounts.find_one({"driver_id": user["sub"]})
+        if not cuenta or not verify_password(current, cuenta["hashed_password"]):
+            await asyncio.sleep(0.8)
+            raise HTTPException(status_code=401, detail="La contraseña actual no es correcta")
+        await db.driver_accounts.update_one(
+            {"driver_id": user["sub"]},
+            {"$set": {"hashed_password": hash_password(new),
+                      "password_changed_at": datetime.now(timezone.utc).isoformat()}})
+        logger.info("Conductor %s cambió su contraseña", user["sub"][:8])
+        return {"success": True}
+
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="No autorizado")
     doc = await global_db.admin_users.find_one({"id": user["sub"]})
     if not doc or not verify_password(current, doc["hashed_password"]):
         await asyncio.sleep(0.8)
@@ -6018,45 +6036,83 @@ async def vehicles_spare_wheel(_=Depends(require_admin)):
     return {f.pop("vid"): f for f in filas}
 
 
-@api_router.get("/vehicles/portal")
-async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
-    """Portal conductor: devuelve los vehículos que puede inspeccionar el conductor.
-    - Admin → todos los activos
-    - Driver → su vehículo asignado; si no tiene, los de su centro
-    Este endpoint NO requiere rol admin para que los conductores puedan usarlo."""
-    if user.get("role") == "admin":
-        vehicles = await db.vehicles.find(
-            {"status": {"$nin": ["deleted", "baja"]}}, {"_id": 0}
-        ).to_list(1000)
-    else:
-        driver_id = user["sub"]
-        # 1) Vehículo asignado directamente al conductor
-        assigned = await db.vehicles.find(
-            {"status": {"$nin": ["deleted", "baja"]}, "current_driver_id": driver_id}, {"_id": 0}
-        ).to_list(10)
+def _portal_payload(vehicles: list, permitido: bool, motivo: Optional[str]) -> dict:
+    """Respuesta del portal: las furgonetas Y si hoy puede auditar o no.
 
-        if assigned:
-            vehicles = assigned
-        else:
-            # 2) Fallback: todos los vehículos del centro del conductor
-            driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "center": 1})
-            center = (driver.get("center") or "")[:4] if driver else ""
-            if center:
-                vehicles = await db.vehicles.find(
-                    {"status": {"$nin": ["deleted", "baja"]}, "center": {"$regex": re.escape(center), "$options": "i"}},
-                    {"_id": 0}
-                ).to_list(100)
-            else:
-                vehicles = []
-
+    Se devuelve un objeto y no una lista pelada porque la pantalla necesita
+    distinguir "no te toca hoy" de "no hay furgonetas": son cosas distintas y
+    merecen mensajes distintos. La lista antigua no permitía diferenciarlas.
+    """
     for v in vehicles:
-        for k in ["created_at", "updated_at"]:
+        for k in ("created_at", "updated_at"):
             if isinstance(v.get(k), str):
                 try:
                     v[k] = datetime.fromisoformat(v[k])
                 except Exception:
                     pass
-    return vehicles
+    return {"vehicles": vehicles, "puede_auditar": permitido, "motivo": motivo}
+
+
+@api_router.get("/vehicles/portal")
+async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
+    """Portal conductor: las furgonetas que ESE conductor puede inspeccionar hoy.
+
+    ── QUIÉN PUEDE AUDITAR ──────────────────────────────────────────────────
+    Sólo quien sale a ruta hoy. Una auditoría hecha por quien no lleva esa
+    furgoneta ensucia el historial de daños: al día siguiente aparece un golpe
+    "nuevo" que ya estaba, y el que sí conducía carga con él.
+
+    ── Y CUÁNDO NO SE BLOQUEA, QUE ES LO IMPORTANTE ─────────────────────────
+    Sólo se bloquea cuando CONSTA que no le toca: hay cuadrante de hoy para su
+    centro y él no está en él. Si el cuadrante no está cargado todavía —a las
+    seis de la mañana muchas veces no lo está— no se sabe, y no saberlo no
+    puede dejar a toda la nave sin poder auditar. En ese caso se abre igual.
+
+    Bloquear por falta de datos sería el peor fallo posible de esta pantalla:
+    pararía la operación entera un lunes a las seis de la mañana.
+    """
+    if user.get("role") == "admin":
+        vehicles = await db.vehicles.find(
+            {"status": {"$nin": ["deleted", "baja"]}}, {"_id": 0}
+        ).to_list(1000)
+        return _portal_payload(vehicles, permitido=True, motivo=None)
+
+    driver_id = user["sub"]
+    driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "center": 1, "name": 1})
+    center = (driver.get("center") or "") if driver else ""
+
+    # ¿Hay cuadrante de hoy para su centro? Y si lo hay, ¿está él?
+    hoy = _dia_negocio()
+    asigs = await db.daily_assignments.find(
+        {"date": hoy, **({"center": {"$regex": re.escape(center[:4]), "$options": "i"}} if center else {})},
+        {"_id": 0, "slots": 1}).to_list(50)
+    hay_cuadrante = any(a.get("slots") for a in asigs)
+    mis_slots = [s for a in asigs for s in (a.get("slots") or [])
+                 if s.get("driver_id") == driver_id and s.get("vehicle_id")]
+
+    if hay_cuadrante and not mis_slots:
+        # Consta el cuadrante y no está: hoy no le toca.
+        return _portal_payload([], permitido=False, motivo="no_en_ruta")
+
+    if mis_slots:
+        # Le toca: SÓLO su furgoneta. Nada de elegir de una lista.
+        ids = [s["vehicle_id"] for s in mis_slots]
+        vehicles = await db.vehicles.find(
+            {"id": {"$in": ids}, "status": {"$nin": ["deleted", "baja"]}}, {"_id": 0}).to_list(10)
+        return _portal_payload(vehicles, permitido=True, motivo=None)
+
+    # Sin cuadrante cargado: no se sabe. Se abre, acotado a su centro.
+    asignadas = await db.vehicles.find(
+        {"status": {"$nin": ["deleted", "baja"]}, "current_driver_id": driver_id}, {"_id": 0}).to_list(10)
+    if asignadas:
+        return _portal_payload(asignadas, permitido=True, motivo=None)
+    if center:
+        vehicles = await db.vehicles.find(
+            {"status": {"$nin": ["deleted", "baja"]},
+             "center": {"$regex": re.escape(center[:4]), "$options": "i"}}, {"_id": 0}).to_list(100)
+    else:
+        vehicles = []
+    return _portal_payload(vehicles, permitido=True, motivo="sin_cuadrante")
 
 
 @api_router.post("/vehicles", response_model=Vehicle)
@@ -17262,10 +17318,10 @@ async def _coverage_for_date(center: str, date: str) -> int:
 
 @api_router.get("/shifts")
 async def get_shifts(center: Optional[str] = None, desde: Optional[str] = None,
-                     hasta: Optional[str] = None, _=Depends(require_admin)):
-    q = {}
-    if center:
-        q["center"] = center
+                     hasta: Optional[str] = None, user: dict = Depends(require_admin)):
+    # Los centros NO se mezclan. Sin esto, quien lleva DGA1 abría la pantalla
+    # sin elegir centro y veía —y podía tocar— el cuadrante entero de OGA5.
+    q = dict(_filtro_centro(user, center))
     if desde or hasta:
         rng = {}
         if desde:
@@ -17278,7 +17334,7 @@ async def get_shifts(center: Optional[str] = None, desde: Optional[str] = None,
 
 
 @api_router.post("/shifts/bulk")
-async def save_shifts_bulk(data: dict = Body(...), _=Depends(require_admin)):
+async def save_shifts_bulk(data: dict = Body(...), user: dict = Depends(require_admin)):
     """Guarda/actualiza varios turnos. body: {items:[{driver_id,driver_name,center,date,type}]}"""
     items = data.get("items") or []
     saved = 0
@@ -17288,6 +17344,12 @@ async def save_shifts_bulk(data: dict = Body(...), _=Depends(require_admin)):
         center = it.get("center")
         typ = it.get("type")
         if not (did and date and center and typ in VALID_SHIFT_TYPE):
+            continue
+        # Un turno de otro centro se ignora en silencio pero se deja anotado:
+        # el cuadrante se envía entero desde la pantalla, y un 403 a mitad
+        # dejaría la mitad guardada y la otra mitad no.
+        if not _user_can_see_center(user, center):
+            logger.warning("Turnos: %s intentó guardar en %s, sin acceso", user.get("name"), center)
             continue
         await db.shifts.update_one(
             {"driver_id": did, "date": date},
@@ -17391,10 +17453,10 @@ async def create_shift_request(data: dict = Body(...), user: dict = Depends(requ
 
 @api_router.get("/shift-requests")
 async def list_shift_requests(center: Optional[str] = None, status: Optional[str] = None,
-                              _=Depends(require_admin)):
-    q = {}
-    if center:
-        q["center"] = center
+                              user: dict = Depends(require_admin)):
+    # Igual que el cuadrante: sin filtro por centro, quien lleva un centro veía
+    # las peticiones de días de TODA la empresa, con nombre y motivo.
+    q = dict(_filtro_centro(user, center))
     if status:
         q["status"] = status
     reqs = await db.shift_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
@@ -17404,18 +17466,43 @@ async def list_shift_requests(center: Optional[str] = None, status: Optional[str
 @api_router.post("/shift-requests/{req_id}/resolve")
 async def resolve_shift_request(req_id: str, data: dict = Body(...),
                                 admin: dict = Depends(require_admin)):
-    """Aprobar o rechazar. body: {action: aprobar|rechazar}"""
+    """Aprobar o rechazar. body: {action: aprobar|rechazar, motivo}
+
+    Rechazar EXIGE motivo. Un "no" a secas manda al conductor a preguntar por
+    WhatsApp por qué, y la discusión vuelve al sitio del que se la quería sacar
+    — que es el problema entero que resuelve tener esto por escrito.
+    """
     action = data.get("action")
     if action not in {"aprobar", "rechazar"}:
         raise HTTPException(status_code=400, detail="action debe ser aprobar|rechazar")
     req = await db.shift_requests.find_one({"id": req_id}, {"_id": 0})
     if not req:
         raise HTTPException(status_code=404, detail="Solicitud no encontrada")
+    if not _user_can_see_center(admin, req.get("center") or ""):
+        raise HTTPException(status_code=403, detail="Esa petición es de otro centro")
+    motivo = (data.get("motivo") or "").strip()[:300]
+    if action == "rechazar" and len(motivo) < 3:
+        raise HTTPException(status_code=400,
+                            detail="Para rechazar hay que escribir el motivo: lo va a leer el conductor")
     new_status = "aprobado" if action == "aprobar" else "rechazado"
     await db.shift_requests.update_one(
         {"id": req_id},
-        {"$set": {"status": new_status, "resolved_by": admin.get("name", "admin")}},
+        # `resolved_at` faltaba: se guardaba QUIÉN contestó pero no CUÁNDO, así
+        # que "¿cuándo me dijiste que no?" no tenía respuesta.
+        {"$set": {"status": new_status, "resolved_by": admin.get("name", "admin"),
+                  "resolved_at": datetime.now(timezone.utc).isoformat(),
+                  "motivo_respuesta": motivo or None}},
     )
+    # Que se entere: si la respuesta no llega, el conductor vuelve a preguntar
+    # de palabra y no hemos arreglado nada.
+    try:
+        await send_web_push_to_users(
+            [req["driver_id"]],
+            f"Tu petición del {req['date']}: {'aprobada' if new_status == 'aprobado' else 'rechazada'}",
+            motivo or ("Ya puedes verlo en tus turnos." if new_status == "aprobado" else ""),
+            "/panel/portal-conductor")
+    except Exception as e:
+        logger.debug("Push respuesta petición: %s", e)
     if new_status == "aprobado":
         await db.shifts.update_one(
             {"driver_id": req["driver_id"], "date": req["date"]},

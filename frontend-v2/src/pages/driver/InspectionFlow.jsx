@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle, Camera, Check, ChevronLeft, ChevronRight,
-  Gauge, Loader2, LogOut, Send, Truck, ArrowRight, Shield, Bell, CalendarDays,
+  Gauge, Loader2, LogOut, Send, Truck, ArrowRight, ArrowLeft, Shield, Bell, CalendarDays,
 } from 'lucide-react'
 import {
   getAssignedVehicle, readOdometer, uploadInspection, validatePhoto,
@@ -68,7 +68,7 @@ function StepBar({ step }) {
   )
 }
 
-export default function InspectionFlow({ driver, vehicles, onComplete, onLogout, onShifts }) {
+export default function InspectionFlow({ driver, vehicles, onComplete, onLogout, onShifts, onBack }) {
   const toast = useToast()
   const { t } = useT()
   const [step, setStep] = useState(0)
@@ -330,6 +330,14 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
             )}
             <p className="text-[10px] capitalize text-dark-600">{today} · {driver.center}</p>
           </div>
+          {/* Volver al inicio del portal. Ahora que hay una pantalla de inicio,
+              sin esto la auditoría era un callejón sin salida: para salir de
+              ella había que cerrar sesión. */}
+          {onBack && (
+            <button onClick={onBack} className="btn-ghost p-1.5 text-dark-500" title="Volver">
+              <ArrowLeft size={15} />
+            </button>
+          )}
           {onShifts && (
             <button onClick={onShifts} className="btn-ghost p-1.5 text-dark-500" title={t('dr.sh.title')}>
               <CalendarDays size={15} />

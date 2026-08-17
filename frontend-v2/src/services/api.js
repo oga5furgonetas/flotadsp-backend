@@ -70,6 +70,10 @@ export const getPortalVehicles = () => api.get('/vehicles/portal')
 /* Turnos del propio conductor: su calendario y sus peticiones de día. */
 export const getMyShifts = (desde, hasta) => api.get('/shifts/mine', { params: { desde, hasta } })
 export const createShiftRequest = (date, type, note) => api.post('/shift-requests', { date, type, note })
+// El conductor se cambia su propia contraseña. Antes tenía que decirle a la
+// oficina cuál quería, o sea contársela a otra persona.
+export const changeMyPassword = (current_password, new_password) =>
+  api.post('/auth/change-my-password', { current_password, new_password })
 
 export const validatePhoto = (vehicleId, expectedZone, file) => {
   const fd = new FormData()

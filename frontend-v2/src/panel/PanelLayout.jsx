@@ -39,6 +39,11 @@ const NAV_DEF = [
   { g: 'nav.g.dailyops', gIcon: Zap, iconCls: 'text-sky-400', iconBg: 'bg-sky-500/10', items: [
     { to: '/panel/paquetes', labelKey: 'nav.pkgintel', icon: PackageSearch },
     { to: '/panel/asignacion', labelKey: 'nav.assign', icon: ClipboardCheck },
+    // El cuadrante y las peticiones de días llevaban meses construidos y sin
+    // entrada en el menú: la ruta existía, la página también, y sólo se
+    // llegaba escribiendo la URL. Una pantalla que no está en el menú no
+    // existe para quien la necesita.
+    { to: '/panel/turnos', labelKey: 'nav.shifts', icon: CalendarDays },
     { to: '/panel/checklist-operativo', labelKey: 'nav.checklist', icon: CheckCircle2 },
     { to: '/panel/plantilla', labelKey: 'nav.template', icon: FileSpreadsheet },
     { to: '/panel/chat', labelKey: 'nav.chat', icon: BellRing },
