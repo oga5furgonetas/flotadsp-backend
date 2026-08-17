@@ -11,6 +11,7 @@ import {
 } from '../api'
 import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
+import { canSee } from '../auth'
 import { isoLocal } from '../../lib/fecha'
 
 const DIAS = 14
@@ -54,6 +55,12 @@ export default function Turnos() {
   const [cargando, setCargando] = useState(true)
   const [ocupado, setOcupado] = useState('')    // '' | 'guardar' | 'auto' | 'importar'
   const ficheroRef = useRef(null)
+
+  /* Ver las peticiones lo puede hacer cualquiera del centro; decidirlas no.
+     Quién puede se configura por usuario en Usuarios → permisos, porque cada
+     empresa reparte esto de una manera. El servidor lo comprueba también: un
+     botón escondido no protege nada. */
+  const puedeAprobar = canSee('aprobar-dias')
 
   const dias = useMemo(
     () => Array.from({ length: DIAS }, (_, i) => sumaDias(desde, i)),
@@ -184,13 +191,43 @@ export default function Turnos() {
     } finally { setOcupado('') }
   }
 
-  const resolver = async (id, accion) => {
+  /* Aprobar es un clic. RECHAZAR pide motivo, y sin él no se manda.
+     Un "no" a secas deja al conductor preguntando por WhatsApp por qué, que es
+     justo el sitio del que se le quiere sacar. El motivo lo lee él tal cual. */
+  const resolver = async (grupo, accion) => {
+    let motivo = ''
+    if (accion === 'rechazar') {
+      motivo = (window.prompt(
+        `¿Por qué no puede ser?\n\nLo va a leer ${grupo.driver_name} tal cual, así que dilo claro.`,
+        '') || '').trim()
+      if (motivo.length < 3) return          // cancelado o vacío: no se hace nada
+    }
+    setErr('')
     try {
-      await resolveShiftRequest(id, accion)
-      setSolicitudes((s) => s.filter((x) => x.id !== id))
+      for (const id of grupo.ids) await resolveShiftRequest(id, accion, motivo)
+      setSolicitudes((s) => s.filter((x) => !grupo.ids.includes(x.id)))
       await cargar()
-    } catch { setErr(t('turns.req.err')) }
+    } catch (e) {
+      setErr(e?.response?.data?.detail || t('turns.req.err'))
+    }
   }
+
+  /* Las peticiones llegan de una en una por día, pero el conductor las pidió
+     de golpe. Se agrupan por `grupo` para verlas como las mandó: "Razavi, 3
+     días", y no tres filas sueltas que se aprueban por separado sin querer. */
+  const grupos = useMemo(() => {
+    const m = new Map()
+    for (const s of solicitudes) {
+      const k = s.grupo || s.id
+      if (!m.has(k)) m.set(k, { key: k, driver_name: s.driver_name, type: s.type,
+        motivo_label: s.motivo_label, note: s.note, created_at: s.created_at,
+        fechas: [], ids: [] })
+      const g = m.get(k)
+      g.fechas.push(s.date); g.ids.push(s.id)
+    }
+    for (const g of m.values()) g.fechas.sort()
+    return [...m.values()].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+  }, [solicitudes])
 
   if (noCenter) {
     return (
@@ -378,22 +415,43 @@ export default function Turnos() {
           <p className="text-sm text-dark-500">{t('turns.no.requests')}</p>
         ) : (
           <div className="divide-y divide-dark-800">
-            {solicitudes.map((s) => (
-              <div key={s.id} className="flex flex-wrap items-center gap-3 py-2.5">
-                <span className="text-sm font-medium text-dark-200">{s.driver_name}</span>
-                <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${s.type === 'libre' ? 'bg-sky-500/15 text-sky-300' : 'bg-amber-500/15 text-amber-300'}`}>
-                  {t(s.type === 'libre' ? 'turns.t.libre' : 'turns.t.extra')}
-                </span>
-                <span className="text-sm text-dark-400">{fmtNum(s.date)}</span>
-                {s.note && <span className="text-xs italic text-dark-500">“{s.note}”</span>}
-                <div className="ml-auto flex gap-2">
-                  <button onClick={() => resolver(s.id, 'aprobar')} className="flex items-center gap-1 rounded-lg bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25">
-                    <Check size={13} /> {t('turns.approve')}
-                  </button>
-                  <button onClick={() => resolver(s.id, 'rechazar')} className="flex items-center gap-1 rounded-lg bg-red-500/15 px-2.5 py-1 text-xs font-semibold text-red-300 hover:bg-red-500/25">
-                    <X size={13} /> {t('turns.reject')}
-                  </button>
+            {grupos.map((g) => (
+              <div key={g.key} className="flex flex-wrap items-start gap-x-3 gap-y-2 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-dark-100">{g.driver_name}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${g.type === 'libre' ? 'bg-sky-500/15 text-sky-300' : 'bg-amber-500/15 text-amber-300'}`}>
+                      {g.motivo_label || t(g.type === 'libre' ? 'turns.t.libre' : 'turns.t.extra')}
+                    </span>
+                    <span className="font-mono text-[12px] text-brand-300">
+                      {g.fechas.length} día{g.fechas.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[12.5px] text-dark-400">{g.fechas.map(fmtNum).join(' · ')}</p>
+                  {g.note && <p className="mt-1 text-[12.5px] italic text-dark-500">“{g.note}”</p>}
+                  {g.created_at && (
+                    <p className="mt-1 font-mono text-[10.5px] text-dark-600">
+                      pedido el {g.created_at.slice(8, 10)}/{g.created_at.slice(5, 7)} a las {g.created_at.slice(11, 16)}
+                    </p>
+                  )}
                 </div>
+                {puedeAprobar ? (
+                  <div className="flex gap-2">
+                    <button onClick={() => resolver(g, 'aprobar')} className="flex items-center gap-1 rounded-lg bg-emerald-500/15 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25">
+                      <Check size={13} /> {t('turns.approve')}
+                    </button>
+                    <button onClick={() => resolver(g, 'rechazar')} className="flex items-center gap-1 rounded-lg bg-red-500/15 px-2.5 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-500/25">
+                      <X size={13} /> {t('turns.reject')}
+                    </button>
+                  </div>
+                ) : (
+                  /* Quien no puede decidir lo ve igual: enterarse de quién ha
+                     pedido qué es media función, y esconderlo solo genera
+                     preguntas. Lo que no puede es contestar. */
+                  <span className="self-center rounded-lg border border-dark-700 px-2.5 py-1.5 text-[11px] text-dark-500">
+                    Solo lectura
+                  </span>
+                )}
               </div>
             ))}
           </div>

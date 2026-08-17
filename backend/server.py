@@ -17293,6 +17293,36 @@ async def import_driver_ids(data: dict, _=Depends(require_admin)):
 
 VALID_SHIFT_TYPE = {"trabaja", "libre", "extra"}
 
+# Motivos por los que un conductor pide un día. El motivo cambia la decisión,
+# así que se pide siempre y no se deja escribir libre a secas: con texto libre
+# acaban poniendo "personal" y hay que preguntar igual.
+MOTIVOS_PETICION = {
+    "asuntos": "Asuntos propios",
+    "medico": "Médico",
+    "familia": "Asunto familiar",
+    "viaje": "Viaje",
+    "otro": "Otro",
+}
+
+
+def _puede(user: dict, clave: str) -> bool:
+    """¿Tiene este usuario el permiso `clave`? Comprobado en el SERVIDOR.
+
+    El panel esconde los botones según los permisos, pero esconder un botón no
+    es proteger nada: quien sepa la dirección de la API llega igual. Para
+    aprobar días —que decide si alguien trabaja o no— hace falta comprobarlo
+    aquí, no solo en la pantalla.
+
+    `permissions = None` significa sin restricción, que es como están los
+    usuarios antiguos: quitarles el acceso de golpe sería peor que el problema.
+    """
+    if user.get("sa") or user.get("account_type") == "owner":
+        return True
+    perms = user.get("permissions")
+    if perms is None:
+        return True
+    return clave in perms
+
 
 async def _user_center(user: dict) -> Optional[str]:
     """Centro del usuario. Admin -> None (ve todos)."""
@@ -17404,51 +17434,108 @@ async def get_my_shifts(desde: Optional[str] = None, hasta: Optional[str] = None
     reqs = await db.shift_requests.find(
         {"driver_id": did}, {"_id": 0}
     ).sort("date", 1).to_list(500)
-    return {"shifts": shifts, "requests": reqs}
+    # Respuestas que todavía no ha leído. Van aparte para que la pantalla
+    # pueda enseñarlas arriba del todo sin que el conductor tenga que ir a
+    # buscarlas entre las suyas.
+    sin_ver = [r for r in reqs
+               if r.get("status") in ("aprobado", "rechazado") and not r.get("visto_at")]
+    return {"shifts": shifts, "requests": reqs, "sin_ver": sin_ver}
+
+
+@api_router.post("/shift-requests/vistas")
+async def marcar_respuestas_vistas(data: dict = Body(default={}),
+                                   user: dict = Depends(require_any_auth)):
+    """El conductor ha leído las respuestas: dejan de salir como novedad.
+
+    Se marcan sólo las SUYAS y sólo las ya resueltas, y se pasa por `grupo` o
+    por lista de ids para no borrar el aviso de una respuesta que no ha visto.
+    """
+    q = {"driver_id": user.get("sub"), "status": {"$in": ["aprobado", "rechazado"]},
+         "visto_at": None}
+    if data.get("grupo"):
+        q["grupo"] = str(data["grupo"])
+    elif data.get("ids"):
+        q["id"] = {"$in": [str(x) for x in data["ids"]][:200]}
+    r = await db.shift_requests.update_many(
+        q, {"$set": {"visto_at": datetime.now(timezone.utc).isoformat()}})
+    return {"ok": True, "marcadas": r.modified_count}
 
 
 @api_router.post("/shift-requests")
 async def create_shift_request(data: dict = Body(...), user: dict = Depends(require_any_auth)):
-    """El conductor solicita un día (libre o extra). Auto-aprueba si hay cobertura."""
-    date = data.get("date")
+    """El conductor pide uno o varios días.
+
+    Se manda `dates: ["YYYY-MM-DD", ...]` y se guarda UNA FILA POR DÍA, todas
+    con el mismo `grupo`. Así la oficina lo ve como una sola petición ("Razavi,
+    3 días") pero cada día sigue siendo su propio registro — que es lo que hace
+    falta para poder aprobar unos días sí y otros no, y para que el día
+    aprobado pueda ir al cuadrante por su cuenta.
+
+    Se acepta `date` suelto por compatibilidad con la pantalla antigua.
+
+    NADA se auto-aprueba. El cuadrante lo lleva la oficina, y una aprobación
+    automática calculada sobre un cuadrante que puede no estar cargado sería
+    exactamente el falso positivo que no se quiere: aprobar por no tener datos.
+    """
+    dates = data.get("dates") or ([data["date"]] if data.get("date") else [])
     typ = data.get("type", "libre")
-    if not date or typ not in {"libre", "extra"}:
-        raise HTTPException(status_code=400, detail="date y type(libre|extra) requeridos")
+    if typ not in {"libre", "extra"}:
+        raise HTTPException(status_code=400, detail="type debe ser libre o extra")
+    vistas, limpias = set(), []
+    for d in dates:
+        s = str(d)[:10]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+            raise HTTPException(status_code=400, detail=f"Fecha no válida: {d}")
+        if s not in vistas:
+            vistas.add(s); limpias.append(s)
+    if not limpias:
+        raise HTTPException(status_code=400, detail="Marca al menos un día")
+    if len(limpias) > 31:
+        raise HTTPException(status_code=400, detail="Demasiados días en una sola petición (máx. 31)")
+
+    motivo = data.get("motivo") or "otro"
+    if motivo not in MOTIVOS_PETICION:
+        raise HTTPException(status_code=400, detail="Motivo no válido")
+
     did = user.get("sub")
     drv = await db.drivers.find_one({"id": did}, {"_id": 0, "name": 1, "center": 1})
     if not drv:
         raise HTTPException(status_code=404, detail="Conductor no encontrado")
-    center = drv.get("center")
-    name = drv.get("name", "")
-    note = (data.get("note") or "").strip()[:200]
 
-    # ¿auto-aprobar? solo para 'libre' y si tras quitarlo aún queda cobertura mínima
-    status = "pendiente"
-    resolved_by = None
-    mn = await _min_cobertura(center)
-    if typ == "libre" and mn > 0:
-        cov = await _coverage_for_date(center, date)
-        if (cov - 1) >= mn:
-            status = "aprobado"
-            resolved_by = "auto"
+    # Un día ya pedido y sin resolver no se pide dos veces: si no, la oficina
+    # ve la misma petición repetida y no sabe cuál contestar.
+    ya = await db.shift_requests.distinct(
+        "date", {"driver_id": did, "date": {"$in": limpias}, "status": "pendiente"})
+    nuevas = [d for d in limpias if d not in ya]
+    if not nuevas:
+        raise HTTPException(status_code=409, detail="Ya has pedido esos días y están sin contestar")
 
-    req = {
-        "id": str(uuid.uuid4()), "center": center, "driver_id": did,
-        "driver_name": name, "date": date, "type": typ, "status": status,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "resolved_by": resolved_by, "note": note,
-    }
-    await db.shift_requests.insert_one(req)
-    # si se auto-aprobó, refleja el turno
-    if status == "aprobado":
-        await db.shifts.update_one(
-            {"driver_id": did, "date": date},
-            {"$set": {"driver_id": did, "driver_name": name, "center": center,
-                      "date": date, "type": typ}},
-            upsert=True,
-        )
-    req.pop("_id", None)
-    return {"success": True, "request": req, "auto": status == "aprobado"}
+    grupo = str(uuid.uuid4())
+    ahora = datetime.now(timezone.utc).isoformat()
+    filas = [{
+        "id": str(uuid.uuid4()), "grupo": grupo, "center": drv.get("center"),
+        "driver_id": did, "driver_name": drv.get("name", ""),
+        "date": d, "type": typ, "status": "pendiente",
+        "motivo": motivo, "motivo_label": MOTIVOS_PETICION[motivo],
+        "note": (data.get("note") or "").strip()[:300],
+        "created_at": ahora, "resolved_by": None, "resolved_at": None,
+    } for d in nuevas]
+    await db.shift_requests.insert_many([dict(f) for f in filas])
+
+    # Que la oficina se entere sin tener que estar mirando la pantalla.
+    try:
+        await push_center_event(
+            drv.get("center") or "",
+            f"📅 {drv.get('name', 'Un conductor')} pide {len(nuevas)} día{'s' if len(nuevas) > 1 else ''}",
+            f"{MOTIVOS_PETICION[motivo]} · {', '.join(nuevas[:4])}",
+            "/panel/turnos")
+    except Exception as e:
+        logger.debug("Push petición de días: %s", e)
+
+    for f in filas:
+        f.pop("_id", None)
+    return {"success": True, "grupo": grupo, "dias": nuevas,
+            "ignorados": [d for d in limpias if d in ya], "requests": filas}
 
 
 @api_router.get("/shift-requests")
@@ -17480,6 +17567,10 @@ async def resolve_shift_request(req_id: str, data: dict = Body(...),
         raise HTTPException(status_code=404, detail="Solicitud no encontrada")
     if not _user_can_see_center(admin, req.get("center") or ""):
         raise HTTPException(status_code=403, detail="Esa petición es de otro centro")
+    # Ver las peticiones lo puede hacer cualquiera del centro; DECIDIR no.
+    if not _puede(admin, "aprobar-dias"):
+        raise HTTPException(status_code=403,
+                            detail="No tienes permiso para aprobar o rechazar días")
     motivo = (data.get("motivo") or "").strip()[:300]
     if action == "rechazar" and len(motivo) < 3:
         raise HTTPException(status_code=400,
@@ -17489,9 +17580,13 @@ async def resolve_shift_request(req_id: str, data: dict = Body(...),
         {"id": req_id},
         # `resolved_at` faltaba: se guardaba QUIÉN contestó pero no CUÁNDO, así
         # que "¿cuándo me dijiste que no?" no tenía respuesta.
+        # `visto_at: None` = el conductor todavía no ha leído la respuesta. El
+        # push puede no llegar (avisos desactivados, iOS, móvil apagado), así
+        # que la respuesta TAMBIÉN espera dentro de la app hasta que la abra.
+        # Fiar el aviso sólo al push sería fiarlo a algo que falla en silencio.
         {"$set": {"status": new_status, "resolved_by": admin.get("name", "admin"),
                   "resolved_at": datetime.now(timezone.utc).isoformat(),
-                  "motivo_respuesta": motivo or None}},
+                  "motivo_respuesta": motivo or None, "visto_at": None}},
     )
     # Que se entere: si la respuesta no llega, el conductor vuelve a preguntar
     # de palabra y no hemos arreglado nada.

@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import { ClipboardCheck, CalendarDays, CalendarClock, LogOut, Lock, Ban } from 'lucide-react'
-import { getPortalVehicles } from '../../services/api'
+import { getPortalVehicles, getMyShifts } from '../../services/api'
 import { lista } from '../../lib/lista'
 import DriverLogin from './DriverLogin'
 import InspectionFlow from './InspectionFlow'
 import InspectionDone from './InspectionDone'
 import MisTurnos from './MisTurnos'
 import MiClave from './MiClave'
+import PedirDias from './PedirDias'
 
 const DRIVER_KEY = 'flotadsp_driver'
 
@@ -22,7 +23,7 @@ const DRIVER_KEY = 'flotadsp_driver'
    hace todos los días antes de salir. Lo demás está debajo, a un toque.
    ──────────────────────────────────────────────────────────────────────────── */
 
-function Opcion({ icono: Icono, titulo, sub, onClick, principal, bloqueado, pronto }) {
+function Opcion({ icono: Icono, titulo, sub, onClick, principal, bloqueado, pronto, aviso }) {
   const off = bloqueado || pronto
   return (
     <button
@@ -41,6 +42,14 @@ function Opcion({ icono: Icono, titulo, sub, onClick, principal, bloqueado, pron
       {pronto && (
         <span className="absolute right-3 top-3 rounded-full border border-dark-600 px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-wider text-dark-400">
           Pronto
+        </span>
+      )}
+      {/* Respuestas sin leer. El aviso al móvil puede no llegar nunca —avisos
+          desactivados, iOS, el móvil apagado—, así que la señal que de verdad
+          se ve es esta, dentro de la app. */}
+      {aviso > 0 && (
+        <span className="absolute right-3 top-3 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-bold text-white">
+          {aviso}
         </span>
       )}
       <Icono size={22} className={principal && !off ? 'text-white' : 'text-dark-300'} />
@@ -66,7 +75,8 @@ export default function DriverPortal() {
   })
   const [portal, setPortal] = useState(null)   // {vehicles, puede_auditar, motivo}
   const [result, setResult] = useState(null)
-  const [vista, setVista] = useState('inicio') // inicio | auditoria | turnos | clave
+  const [sinVer, setSinVer] = useState(0)      // respuestas que aún no ha leído
+  const [vista, setVista] = useState('inicio') // inicio | auditoria | dias | turnos | clave
 
   useEffect(() => {
     if (!driver) return
@@ -83,6 +93,15 @@ export default function DriverPortal() {
       .catch(() => setPortal({ vehicles: [], puede_auditar: true, motivo: null }))
   }, [driver])
 
+  // Cuántas respuestas tiene sin leer. Se recarga al volver al inicio para que
+  // el aviso desaparezca en cuanto las lee, sin tener que refrescar la página.
+  useEffect(() => {
+    if (!driver || vista !== 'inicio') return
+    getMyShifts()
+      .then((r) => setSinVer(lista(r.data?.sin_ver).length))
+      .catch(() => setSinVer(0))
+  }, [driver, vista])
+
   const login = (d) => {
     localStorage.setItem(DRIVER_KEY, JSON.stringify(d))
     setDriver(d)
@@ -96,6 +115,7 @@ export default function DriverPortal() {
   }
 
   if (!driver) return <DriverLogin onLogin={login} />
+  if (vista === 'dias') return <PedirDias onBack={() => setVista('inicio')} />
   if (vista === 'turnos') return <MisTurnos onBack={() => setVista('inicio')} />
   if (vista === 'clave') return <MiClave onBack={() => setVista('inicio')} />
   if (result) {
@@ -153,8 +173,11 @@ export default function DriverPortal() {
           <Opcion
             icono={CalendarDays}
             titulo="Pedir días libres"
-            sub="Marca los días y di para qué"
-            onClick={() => setVista('turnos')}
+            sub={sinVer > 0
+              ? `Tienes ${sinVer} respuesta${sinVer > 1 ? 's' : ''} sin leer`
+              : 'Marca los días y di para qué'}
+            aviso={sinVer}
+            onClick={() => setVista('dias')}
           />
           {/* Se deja a la vista y apagado a propósito: el cuadrante todavía no
               se publica a los conductores, y una opción que no está genera más

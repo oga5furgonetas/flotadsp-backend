@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
-  LayoutDashboard, Trophy, Users, CalendarClock, BarChart3, Activity,
+  LayoutDashboard, Trophy, Users, CalendarClock, CalendarCheck, BarChart3, Activity,
   CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon,
@@ -43,7 +43,7 @@ const NAV_DEF = [
     // entrada en el menú: la ruta existía, la página también, y sólo se
     // llegaba escribiendo la URL. Una pantalla que no está en el menú no
     // existe para quien la necesita.
-    { to: '/panel/turnos', labelKey: 'nav.shifts', icon: CalendarDays },
+    { to: '/panel/turnos', labelKey: 'nav.shifts', icon: CalendarCheck },
     { to: '/panel/checklist-operativo', labelKey: 'nav.checklist', icon: CheckCircle2 },
     { to: '/panel/plantilla', labelKey: 'nav.template', icon: FileSpreadsheet },
     { to: '/panel/chat', labelKey: 'nav.chat', icon: BellRing },

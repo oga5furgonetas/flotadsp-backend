@@ -222,7 +222,9 @@ export const generateShiftsAuto = (center, desde, hasta) => api.post('/shifts/ge
 export const getRouteDemand = (center, desde, hasta) => api.get('/route-demand', { params: { center, desde, hasta } })
 export const setRouteDemand = (center, items) => api.post('/route-demand', { center, items })
 export const getShiftRequests = (center, status) => api.get('/shift-requests', { params: { center, ...(status ? { status } : {}) } })
-export const resolveShiftRequest = (id, action) => api.post(`/shift-requests/${id}/resolve`, { action })
+// Rechazar exige motivo: lo lee el conductor tal cual.
+export const resolveShiftRequest = (id, action, motivo) =>
+  api.post(`/shift-requests/${id}/resolve`, { action, motivo })
 export function importShifts(file, center) {
   const fd = new FormData()
   fd.append('file', file)

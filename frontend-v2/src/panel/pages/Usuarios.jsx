@@ -9,7 +9,8 @@ import { lista } from '../../lib/lista'
 const MODULES = [
   { g: 'Operacional', items: [
     ['dashboard', 'Dashboard'], ['scorecard', 'Scorecard'], ['conductores', 'Conductores'],
-    ['turnos', 'Turnos'], ['metricas', 'Métricas'], ['actividad', 'Actividad'],
+    ['turnos', 'Turnos y días libres'], ['aprobar-dias', 'Aprobar días libres'],
+    ['metricas', 'Métricas'], ['actividad', 'Actividad'],
   ]},
   { g: 'Equipo', items: [
     ['asignacion', 'Asignación diaria'], ['checklist-operativo', 'Checklist turno'],

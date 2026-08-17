@@ -69,7 +69,14 @@ export const getAssignedVehicle = () => api.get('/auth/me/assigned-vehicle')
 export const getPortalVehicles = () => api.get('/vehicles/portal')
 /* Turnos del propio conductor: su calendario y sus peticiones de día. */
 export const getMyShifts = (desde, hasta) => api.get('/shifts/mine', { params: { desde, hasta } })
-export const createShiftRequest = (date, type, note) => api.post('/shift-requests', { date, type, note })
+/* Pedir días. Admite las dos formas a propósito:
+     createShiftRequest({ dates:[...], motivo, note })   ← calendario nuevo
+     createShiftRequest('2026-09-23', 'libre', '')       ← pantalla antigua
+   La antigua sigue viva en Mis turnos; cambiar la firma a secas la habría
+   roto en silencio, porque JavaScript no avisa de un argumento de más. */
+export const createShiftRequest = (a, type, note) =>
+  api.post('/shift-requests', (a && typeof a === 'object') ? a : { date: a, type, note })
+export const marcarRespuestasVistas = (body) => api.post('/shift-requests/vistas', body)
 // El conductor se cambia su propia contraseña. Antes tenía que decirle a la
 // oficina cuál quería, o sea contársela a otra persona.
 export const changeMyPassword = (current_password, new_password) =>
