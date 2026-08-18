@@ -17661,6 +17661,73 @@ def _clave_nombre(s: str) -> str:
     return re.sub(r"\s+", " ", _sin_tildes(str(s or ""))).strip()
 
 
+@api_router.get("/route-demand")
+async def get_route_demand(center: str, desde: str, hasta: str,
+                           user: dict = Depends(require_admin)):
+    """Rutas que pide Amazon cada día. Es de lo que cuelga el cuadrante entero.
+
+    Estas dos rutas NO EXISTÍAN. La pantalla de Turnos las llamaba, el
+    generador leía la colección, pero nadie las había escrito nunca: devolvían
+    404 y, como la pantalla pide las cinco cosas a la vez, ese 404 tumbaba la
+    carga completa. Resultado: "No se pudo cargar la cobertura" y ni un
+    conductor en pantalla, en un centro con 61. Llevaba así desde siempre y no
+    se había visto porque la pantalla tampoco estaba en el menú.
+    """
+    if not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+    docs = await db.route_demand.find(
+        {"center": center, "date": {"$gte": desde, "$lte": hasta}}, {"_id": 0}).to_list(400)
+    return {"demand": {d["date"]: {"objetivo": d.get("objetivo"), "maximo": d.get("maximo")}
+                       for d in docs}}
+
+
+@api_router.post("/route-demand")
+async def set_route_demand(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Guarda las rutas objetivo de cada día. `null` borra el dato del día.
+
+    Se borra en vez de guardar un cero porque no son lo mismo: cero rutas es
+    un día sin operación, y "no lo sé todavía" es un día sin rellenar. El
+    generador exige que haya objetivo para funcionar, así que confundirlos
+    haría que generase un cuadrante vacío creyendo que ese día no se trabaja.
+    """
+    center = (data.get("center") or "").strip()
+    if not center:
+        raise HTTPException(400, "Falta el centro")
+    if not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+
+    ops, borrar = [], []
+    for it in (data.get("items") or []):
+        fecha = str(it.get("date") or "")[:10]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fecha):
+            continue
+        crudo = it.get("objetivo")
+        if crudo in (None, ""):
+            borrar.append(fecha)
+            continue
+        try:
+            objetivo = int(str(crudo).strip())
+        except ValueError:
+            raise HTTPException(400, f"El objetivo del {fecha} tiene que ser un número")
+        if not 0 <= objetivo <= 999:
+            raise HTTPException(400, f"El objetivo del {fecha} está fuera de rango")
+        doc = {"center": center, "date": fecha, "objetivo": objetivo,
+               "updated_at": datetime.now(timezone.utc).isoformat(),
+               "updated_by": user.get("name")}
+        if it.get("maximo") not in (None, ""):
+            try:
+                doc["maximo"] = int(str(it["maximo"]).strip())
+            except ValueError:
+                pass
+        ops.append(UpdateOne({"center": center, "date": fecha}, {"$set": doc}, upsert=True))
+
+    if ops:
+        await db.route_demand.bulk_write(ops)
+    if borrar:
+        await db.route_demand.delete_many({"center": center, "date": {"$in": borrar}})
+    return {"ok": True, "guardados": len(ops), "borrados": len(borrar)}
+
+
 @api_router.get("/shifts/codigos")
 async def get_codigos_cuadrante(_=Depends(require_admin)):
     """Qué significa cada código del Excel mensual."""
