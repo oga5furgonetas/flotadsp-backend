@@ -17635,8 +17635,19 @@ async def resolve_shift_request(req_id: str, data: dict = Body(...),
 # Códigos del cuadrante mensual de Amazon. Se editan desde el panel porque
 # cada nave usa los suyos; esto es sólo el punto de partida conocido.
 CODIGOS_CUADRANTE_DEF = {
+    # Trabaja: sale a ruta o esta en la nave currando.
     "1": "trabaja", "T": "trabaja", "X": "trabaja",
+    "BKP": "trabaja",        # support backup de paquetes: esta trabajando
+    "S": "trabaja",          # Site: en la estacion
+    # Libre: ese dia no trabaja, por el motivo que sea.
     "N/T": "libre", "N/T APROB": "libre", "N/D": "libre", "L": "libre",
+    "V": "libre",            # vacaciones
+    "COMP": "libre",         # compensacion
+    # No presentado. Cae en "libre" porque es lo unico que hay y ese dia no
+    # trabajo, pero NO es un dia libre: estaba puesto y no vino. El cuadrante
+    # de tres estados no sabe decir eso, y conviene recordarlo antes de sacar
+    # conclusiones de un recuento de dias libres.
+    "N/P": "libre",
 }
 
 
@@ -17768,7 +17779,8 @@ async def import_shifts(file: UploadFile = File(...), center: str = Form(...),
             f"o el Excel no es el que crees. No se ha guardado nada.")
 
     doc = await db.app_meta.find_one({"_id": "codigos_cuadrante"}) or {}
-    mapa = {str(k).upper(): v for k, v in (doc.get("mapa") or CODIGOS_CUADRANTE_DEF).items()}
+    mapa = dict(CODIGOS_CUADRANTE_DEF)
+    mapa.update({str(k).upper(): v for k, v in (doc.get("mapa") or {}).items()})
 
     drivers = await db.drivers.find(
         {"center": {"$regex": re.escape(center), "$options": "i"}, "active": {"$ne": False}},
