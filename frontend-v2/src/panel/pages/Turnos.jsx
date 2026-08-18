@@ -7,7 +7,7 @@ import {
 import {
   getShifts, getShiftCoverage, getDrivers, saveShiftsBulk, setShiftSettings,
   generateShiftsAuto, getRouteDemand, setRouteDemand, getShiftRequests,
-  resolveShiftRequest, importShifts,
+  resolveShiftRequest, importShifts, getCodigosCuadrante, setCodigosCuadrante,
 } from '../api'
 import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
@@ -55,6 +55,10 @@ export default function Turnos() {
   const [cargando, setCargando] = useState(true)
   const [ocupado, setOcupado] = useState('')    // '' | 'guardar' | 'auto' | 'importar'
   const ficheroRef = useRef(null)
+  const [previa, setPrevia] = useState(null)    // resumen del Excel antes de guardar
+  // El mes NO sale del fichero: la plantilla de Amazon arrastra en la cabecera
+  // el texto del mes anterior ("Desde: 01-06-2026" en un fichero de agosto).
+  const [mesImport, setMesImport] = useState(() => new Date().toISOString().slice(0, 7))
 
   /* Ver las peticiones lo puede hacer cualquiera del centro; decidirlas no.
      Quién puede se configura por usuario en Usuarios → permisos, porque cada
@@ -177,18 +181,49 @@ export default function Turnos() {
     try { await setShiftSettings(center, n) } catch { setErr(t('turns.min.err')) }
   }
 
+  /* Importar el cuadrante en dos pasos: primero se enseña lo que va a hacer y
+     sólo se guarda al confirmar. Con 61 conductores y 31 días son casi 1.900
+     turnos: escribirlos sin que nadie los haya mirado es demasiado. */
   const subirExcel = async (e) => {
     const f = e.target.files?.[0]
     e.target.value = ''
     if (!f) return
-    setOcupado('importar'); setErr(''); setAviso('')
+    setOcupado('importar'); setErr(''); setAviso(''); setPrevia(null)
     try {
-      const r = await importShifts(f, center)
+      const r = await importShifts(f, center, mesImport, false)
+      setPrevia({ ...r.data, fichero: f })
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || t('turns.import.err'))
+    } finally { setOcupado('') }
+  }
+
+  const confirmarImport = async () => {
+    if (!previa?.fichero) return
+    setOcupado('importar'); setErr('')
+    try {
+      const r = await importShifts(previa.fichero, center, mesImport, true)
+      setPrevia(null)
       setAviso(t('turns.import.ok').replace('{n}', r.data?.saved ?? 0))
       await cargar()
     } catch (e2) {
       setErr(e2?.response?.data?.detail || t('turns.import.err'))
     } finally { setOcupado('') }
+  }
+
+  /* Traducir un código del Excel que la app no conocía. Se guarda para
+     siempre, así que sólo hay que hacerlo la primera vez. */
+  const traducir = async (cod, tipo) => {
+    try {
+      const actual = (await getCodigosCuadrante()).data?.codigos || {}
+      const r = await setCodigosCuadrante({ ...actual, [cod]: tipo })
+      setPrevia((p) => p && ({
+        ...p,
+        codigos_desconocidos: Object.fromEntries(
+          Object.entries(p.codigos_desconocidos || {}).filter(([k]) => k !== cod)),
+        codigos_traducidos: { ...(p.codigos_traducidos || {}), [cod]: tipo },
+      }))
+      return r
+    } catch (e2) { setErr(e2?.response?.data?.detail || 'No se pudo guardar el código') }
   }
 
   /* Aprobar es un clic. RECHAZAR pide motivo, y sin él no se manda.
@@ -275,10 +310,18 @@ export default function Turnos() {
           {ocupado === 'auto' ? <Loader2 size={15} className="animate-spin" /> : <Zap size={15} />}
           {t('turns.auto')}
         </button>
-        <button className="btn-ghost flex items-center gap-2" onClick={() => ficheroRef.current?.click()} disabled={!!ocupado}>
-          {ocupado === 'importar' ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
-          {t('turns.import')}
-        </button>
+        {/* El mes va PEGADO al botón de importar, no escondido en ajustes: es
+            la decisión que hay que tomar justo antes de subir el fichero. */}
+        <div className="flex items-center gap-1.5 rounded-lg border border-dark-700 bg-dark-900 pl-2.5">
+          <span className="text-[11px] text-dark-500">Mes</span>
+          <input type="month" value={mesImport} onChange={(e) => setMesImport(e.target.value)}
+            className="bg-transparent py-1.5 text-[12.5px] text-dark-100 outline-none" />
+          <button className="btn-ghost flex items-center gap-1.5 rounded-l-none"
+            onClick={() => ficheroRef.current?.click()} disabled={!!ocupado || !mesImport}>
+            {ocupado === 'importar' ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+            {t('turns.import')}
+          </button>
+        </div>
         <input ref={ficheroRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={subirExcel} />
         <label className="flex items-center gap-2 text-xs text-dark-400">
           <Settings2 size={14} /> {t('turns.min.label')}
@@ -402,6 +445,81 @@ export default function Turnos() {
         ))}
         <span className="text-dark-600">· {t('turns.hint')}</span>
       </div>
+
+      {/* ── Lo que va a hacer el Excel, ANTES de escribirlo ─────────────────
+          Con 61 conductores y 31 días son casi 1.900 turnos. Escribirlos sin
+          que nadie los mire es demasiado, y deshacerlo después no es trivial. */}
+      {previa && (
+        <div className="card border border-brand-500/30 p-4">
+          <h2 className="mb-1 flex items-center gap-2 text-sm font-bold text-dark-100">
+            <Upload size={16} /> Esto es lo que voy a importar
+          </h2>
+          <p className="mb-3 text-xs text-dark-500">Todavía no se ha guardado nada.</p>
+
+          <div className="mb-3 flex flex-wrap gap-x-7 gap-y-2">
+            {[['Mes', previa.mes], ['Conductores', previa.conductores],
+              ['Días', previa.dias], ['Trabaja', previa.trabaja],
+              ['Libre', previa.libre]].map(([k, v]) => (
+              <span key={k} className="flex items-baseline gap-1.5">
+                <b className="text-lg font-bold tabular-nums text-dark-50">{v}</b>
+                <span className="text-[12px] text-dark-500">{k}</span>
+              </span>
+            ))}
+          </div>
+
+          {previa.n_sin_conductor > 0 && (
+            <div className="mb-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] p-3">
+              <p className="text-[12.5px] font-semibold text-amber-200">
+                {previa.n_sin_conductor} nombre{previa.n_sin_conductor > 1 ? 's' : ''} del Excel no
+                {previa.n_sin_conductor > 1 ? ' están' : ' está'} en {center}
+              </p>
+              <p className="mt-1 text-[11.5px] leading-relaxed text-amber-200/70">
+                Se quedan fuera. Suele ser que el nombre está escrito distinto o que son de otro
+                centro: {previa.sin_conductor?.slice(0, 8).join(' · ')}
+                {previa.n_sin_conductor > 8 ? ` y ${previa.n_sin_conductor - 8} más` : ''}
+              </p>
+            </div>
+          )}
+
+          {/* Códigos que la app no conoce. Traducirlos aquí y se recuerda para
+              siempre: un código sin traducir es un día que se quedaría vacío. */}
+          {Object.keys(previa.codigos_desconocidos || {}).length > 0 && (
+            <div className="mb-3 rounded-lg border border-red-500/25 bg-red-500/[0.06] p-3">
+              <p className="mb-2 text-[12.5px] font-semibold text-red-200">
+                No sé qué significan estos códigos. Dímelo y los recordaré siempre:
+              </p>
+              <div className="flex flex-col gap-2">
+                {Object.entries(previa.codigos_desconocidos).map(([cod, n]) => (
+                  <div key={cod} className="flex flex-wrap items-center gap-2">
+                    <code className="rounded bg-dark-800 px-2 py-1 font-mono text-[12.5px] text-dark-100">{cod}</code>
+                    <span className="text-[11.5px] text-dark-500">{n} {n > 1 ? 'veces' : 'vez'}</span>
+                    <div className="flex gap-1.5">
+                      {[['trabaja', 'Trabaja'], ['libre', 'Libre'], ['extra', 'Extra'], ['ignorar', 'Ignorar']].map(([k, lbl]) => (
+                        <button key={k} onClick={() => traducir(cod, k)}
+                          className="rounded-lg border border-dark-700 px-2 py-1 text-[11.5px] text-dark-300 hover:border-brand-500/50 hover:text-brand-300">
+                          {lbl}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] text-dark-500">
+                Después de traducirlos, vuelve a subir el Excel para que entren esos días.
+              </p>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            <button onClick={confirmarImport} disabled={ocupado === 'importar' || !previa.turnos}
+              className="btn-primary flex items-center gap-1.5 text-sm disabled:opacity-40">
+              {ocupado === 'importar' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+              Guardar {previa.turnos} turnos
+            </button>
+            <button onClick={() => setPrevia(null)} className="btn-ghost text-sm">Cancelar</button>
+          </div>
+        </div>
+      )}
 
       {/* Solicitudes de los conductores */}
       <div className="card p-4">

@@ -225,12 +225,19 @@ export const getShiftRequests = (center, status) => api.get('/shift-requests', {
 // Rechazar exige motivo: lo lee el conductor tal cual.
 export const resolveShiftRequest = (id, action, motivo) =>
   api.post(`/shift-requests/${id}/resolve`, { action, motivo })
-export function importShifts(file, center) {
+/* Importar el cuadrante mensual. El MES lo pone quien importa, no el fichero:
+   el Excel de Amazon arrastra en la cabecera el texto del mes anterior cuando
+   se reutiliza la plantilla. Sin `confirmar` sólo devuelve el resumen. */
+export function importShifts(file, center, mes, confirmar) {
   const fd = new FormData()
   fd.append('file', file)
   fd.append('center', center)
+  fd.append('mes', mes)
+  if (confirmar) fd.append('confirmar', '1')
   return api.post('/shifts/import', fd, { timeout: 120000, headers: { 'Content-Type': undefined } })
 }
+export const getCodigosCuadrante = () => api.get('/shifts/codigos')
+export const setCodigosCuadrante = (codigos) => api.put('/shifts/codigos', { codigos })
 
 /* ── Historial de plantillas ── */
 export const getPlantillas = (center) => api.get('/plantillas', { params: centerParam(center) })

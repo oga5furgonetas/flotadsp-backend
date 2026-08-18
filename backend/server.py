@@ -20,7 +20,9 @@ from typing import List, Optional, Tuple
 
 from pathlib import Path
 
-from datetime import datetime, timezone, timedelta
+import calendar
+from datetime import datetime, timezone, timedelta, date as date_cls
+from pymongo import UpdateOne
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -17630,211 +17632,213 @@ async def resolve_shift_request(req_id: str, data: dict = Body(...),
     return {"success": True, "status": new_status}
 
 
+# Códigos del cuadrante mensual de Amazon. Se editan desde el panel porque
+# cada nave usa los suyos; esto es sólo el punto de partida conocido.
+CODIGOS_CUADRANTE_DEF = {
+    "1": "trabaja", "T": "trabaja", "X": "trabaja",
+    "N/T": "libre", "N/T APROB": "libre", "N/D": "libre", "L": "libre",
+}
+
+
+def _sin_tildes(s: str) -> str:
+    tabla = str.maketrans("ÁÀÄÂÉÈËÊÍÌÏÎÓÒÖÔÚÙÜÛÑÇ", "AAAAEEEEIIIIOOOOUUUUNC")
+    return (s or "").upper().translate(tabla)
+
+
+def _clave_nombre(s: str) -> str:
+    """Nombre comparable: sin tildes, sin espacios dobles, en mayúsculas."""
+    return re.sub(r"\s+", " ", _sin_tildes(str(s or ""))).strip()
+
+
+@api_router.get("/shifts/codigos")
+async def get_codigos_cuadrante(_=Depends(require_admin)):
+    """Qué significa cada código del Excel mensual."""
+    doc = await db.app_meta.find_one({"_id": "codigos_cuadrante"}) or {}
+    return {"codigos": doc.get("mapa") or CODIGOS_CUADRANTE_DEF,
+            "tipos": sorted(VALID_SHIFT_TYPE)}
+
+
+@api_router.put("/shifts/codigos")
+async def set_codigos_cuadrante(data: dict = Body(...), _=Depends(require_admin)):
+    """Traduce los códigos del Excel a turnos. Vacío = reconocido y se ignora."""
+    mapa = {}
+    for k, v in (data.get("codigos") or {}).items():
+        k = str(k).strip().upper()[:20]
+        if not k:
+            continue
+        if v in (None, "", "ignorar"):
+            mapa[k] = None
+        elif v in VALID_SHIFT_TYPE:
+            mapa[k] = v
+        else:
+            raise HTTPException(400, f"Tipo no válido para {k}")
+    await db.app_meta.update_one({"_id": "codigos_cuadrante"},
+                                 {"$set": {"mapa": mapa}}, upsert=True)
+    return {"codigos": mapa}
+
+
 @api_router.post("/shifts/import")
 async def import_shifts(file: UploadFile = File(...), center: str = Form(...),
-                        _=Depends(require_admin)):
-    """Importa un cuadrante desde Excel.
-    Formato esperado: 1ª columna = nombre del conductor; cabeceras de las
-    siguientes columnas = fechas (YYYY-MM-DD o día del mes); celdas = T/L/E
-    (trabaja/libre/extra). Tolerante: reconoce 't','trabaja','x' -> trabaja,
-    'l','libre','-' -> libre, 'e','extra' -> extra."""
+                        mes: str = Form(...), confirmar: str = Form(default=""),
+                        user: dict = Depends(require_admin)):
+    """Importa el cuadrante mensual de Amazon (hoja MENSUAL).
+
+    ── POR QUÉ NO SE FÍA DEL FICHERO ────────────────────────────────────────
+    El Excel real trae dos cosas que, tomadas al pie de la letra, meten un
+    cuadrante equivocado para toda la nave:
+
+      1. La cabecera pone "Desde: 01-06-2026 hasta: 30-06-2026" en un fichero
+         que es de AGOSTO — el texto se queda del mes anterior al reutilizar
+         la plantilla. Por eso el mes lo pone QUIEN IMPORTA, no el fichero.
+
+      2. La fila de números de día viene rota: repite el 22, se salta el 23 y
+         pone 1, 2, 3, 4 donde van 27, 28, 29 y 30. Fiarse de esos números
+         escribiría turnos en días que no son. Se usa la POSICIÓN de la
+         columna, que sí es correlativa, y el bloque de días se delimita con
+         la fila de días de la semana, la única fiable de la cabecera.
+
+    Y antes de escribir nada se comprueba que el día 1 del mes elegido caiga
+    en el día de la semana que dice el Excel. Si no cuadra, se para: con 61
+    conductores, un mes de desfase son más de 1.800 turnos mal puestos.
+
+    Sin `confirmar` no guarda nada: primero devuelve el resumen de lo que hará.
+    """
+    if not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})", (mes or "").strip())
+    if not m:
+        raise HTTPException(400, "Elige el mes del cuadrante (YYYY-MM)")
+    anio, mesn = int(m.group(1)), int(m.group(2))
+    if not 1 <= mesn <= 12:
+        raise HTTPException(400, "Mes fuera de rango")
+
     content = await file.read()
-    fname = (file.filename or "").lower()
-    rows = []
     try:
-        if fname.endswith(".xls"):
-            import xlrd
-            book = xlrd.open_workbook(file_contents=content)
-            sh = book.sheet_by_index(0)
-            for r in range(sh.nrows):
-                rows.append([sh.cell_value(r, c) for c in range(sh.ncols)])
-        else:
-            import openpyxl, io
-            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-            ws = wb[wb.sheetnames[0]]
-            for row in ws.iter_rows(values_only=True):
-                rows.append(list(row))
+        import openpyxl, io
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+        ws = wb["MENSUAL"] if "MENSUAL" in wb.sheetnames else wb[wb.sheetnames[0]]
+        celdas = [[ws.cell(r, c).value for c in range(1, ws.max_column + 1)]
+                  for r in range(1, min(ws.max_row, 400) + 1)]
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"No se pudo leer el Excel: {e}")
+        raise HTTPException(400, f"No se pudo leer el Excel: {e}")
 
-    if len(rows) < 2:
-        raise HTTPException(status_code=400, detail="Excel vacío o sin cabecera de fechas")
+    # ── Cabecera: la fila que tiene "Nombre" ─────────────────────────────────
+    fila_cab = col_nombre = None
+    for i, fila in enumerate(celdas):
+        for j, v in enumerate(fila):
+            if _sin_tildes(str(v or "")).strip() == "NOMBRE":
+                fila_cab, col_nombre = i, j
+                break
+        if fila_cab is not None:
+            break
+    if not fila_cab:
+        raise HTTPException(400, "No encontré la fila de cabecera con la columna Nombre")
 
-    def norm_type(v):
-        s = str(v or "").strip().lower()
-        if s in {"t", "trabaja", "x", "tr", "w", "1"}:
-            return "trabaja"
-        if s in {"e", "extra", "ex"}:
-            return "extra"
-        if s in {"l", "libre", "-", "0", "off", "d"}:
-            return "libre"
-        return None
-
-    def norm_date(v):
-        s = str(v).strip()
-        if not s:
-            return None
-        if hasattr(v, "strftime"):
-            return v.strftime("%Y-%m-%d")
-        m = re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", s)
-        if m:
-            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-        return None
-
-    header = rows[0]
-    date_cols = {}  # idx -> 'YYYY-MM-DD'
-    for ci in range(1, len(header)):
-        d = norm_date(header[ci])
-        if d:
-            date_cols[ci] = d
-    if not date_cols:
-        raise HTTPException(status_code=400,
-                            detail="No encontré fechas válidas (YYYY-MM-DD) en la cabecera")
-
-    drivers = await db.drivers.find({"center": center}, {"_id": 0, "id": 1, "name": 1}).to_list(1000)
-    by_name = {(d.get("name") or "").strip().lower(): d for d in drivers}
-
-    saved, unmatched = 0, []
-    for r in rows[1:]:
-        if not r or not str(r[0]).strip():
+    # ── Días: el bloque que tiene día de la semana en la fila de encima ──────
+    DOW = {"LUN": 0, "MAR": 1, "MIE": 2, "MIER": 2, "JUE": 3, "VIE": 4, "SAB": 5, "DOM": 6}
+    fila_dow = celdas[fila_cab - 1]
+    cols_dia, dow_primero = [], None
+    for j in range(col_nombre + 1, len(fila_dow)):
+        etiqueta = _sin_tildes(str(fila_dow[j] or "")).strip().rstrip(".")
+        if etiqueta not in DOW:
+            if cols_dia:
+                break
             continue
-        nm = str(r[0]).strip()
-        drv = by_name.get(nm.lower())
+        if dow_primero is None:
+            dow_primero = DOW[etiqueta]
+        cols_dia.append(j)
+    if len(cols_dia) < 28:
+        raise HTTPException(400,
+            "No encontré la fila de días de la semana encima de la cabecera. "
+            "Comprueba que es la hoja MENSUAL del cuadrante de Amazon.")
+
+    dias_mes = calendar.monthrange(anio, mesn)[1]
+    if len(cols_dia) > dias_mes:
+        cols_dia = cols_dia[:dias_mes]
+
+    # ── La comprobación que evita el desastre ────────────────────────────────
+    DIAS_SEM = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    MESES_ES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+                "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+    dow_real = date_cls(anio, mesn, 1).weekday()
+    if dow_primero != dow_real:
+        raise HTTPException(400,
+            f"Este cuadrante empieza en {DIAS_SEM[dow_primero]} y el 1 de {MESES_ES[mesn]} "
+            f"de {anio} cae en {DIAS_SEM[dow_real]}. O el mes elegido no es el del fichero, "
+            f"o el Excel no es el que crees. No se ha guardado nada.")
+
+    doc = await db.app_meta.find_one({"_id": "codigos_cuadrante"}) or {}
+    mapa = {str(k).upper(): v for k, v in (doc.get("mapa") or CODIGOS_CUADRANTE_DEF).items()}
+
+    drivers = await db.drivers.find(
+        {"center": {"$regex": re.escape(center), "$options": "i"}, "active": {"$ne": False}},
+        {"_id": 0, "id": 1, "name": 1}).to_list(1000)
+    por_nombre = {_clave_nombre(d.get("name")): d for d in drivers}
+
+    items, sin_conductor, sin_codigo = [], [], {}
+    for fila in celdas[fila_cab + 1:]:
+        if col_nombre >= len(fila):
+            continue
+        nombre = str(fila[col_nombre] or "").strip()
+        if not nombre:
+            continue
+        drv = por_nombre.get(_clave_nombre(nombre))
         if not drv:
-            unmatched.append(nm)
+            sin_conductor.append(nombre)
             continue
-        for ci, date in date_cols.items():
-            if ci >= len(r):
+        for n, j in enumerate(cols_dia, start=1):
+            if j >= len(fila):
                 continue
-            typ = norm_type(r[ci])
-            if not typ:
+            crudo = fila[j]
+            if crudo in (None, ""):
                 continue
-            await db.shifts.update_one(
-                {"driver_id": drv["id"], "date": date},
-                {"$set": {"driver_id": drv["id"], "driver_name": drv["name"],
-                          "center": center, "date": date, "type": typ}},
-                upsert=True,
-            )
-            saved += 1
-    return {"success": True, "saved": saved, "dias": len(date_cols),
-            "unmatched": unmatched[:20]}
+            # "V (05:43)" queda en "V": la hora de entrada no cambia si trabaja.
+            cod = re.sub(r"\s*\(.*?\)", "", str(crudo)).strip().upper()
+            if cod not in mapa:
+                sin_codigo[cod] = sin_codigo.get(cod, 0) + 1
+                continue
+            tipo = mapa[cod]
+            if not tipo:
+                continue
+            items.append({"driver_id": drv["id"], "driver_name": drv["name"],
+                          "center": center, "date": f"{anio:04d}-{mesn:02d}-{n:02d}",
+                          "type": tipo})
 
+    resumen = {
+        "mes": f"{anio:04d}-{mesn:02d}", "center": center,
+        "dias": len(cols_dia), "conductores": len({i["driver_id"] for i in items}),
+        "turnos": len(items),
+        "trabaja": sum(1 for i in items if i["type"] == "trabaja"),
+        "libre": sum(1 for i in items if i["type"] == "libre"),
+        "extra": sum(1 for i in items if i["type"] == "extra"),
+        "sin_conductor": sorted(set(sin_conductor))[:40],
+        "n_sin_conductor": len(set(sin_conductor)),
+        "codigos_desconocidos": dict(sorted(sin_codigo.items(), key=lambda x: -x[1])),
+        "guardado": False,
+    }
 
-@api_router.get("/route-demand")
-async def get_route_demand(center: str, desde: str, hasta: str, _=Depends(require_admin)):
-    """Rutas que pide Amazon por día: objetivo y máximo."""
-    docs = await db.route_demand.find(
-        {"center": center, "date": {"$gte": desde, "$lte": hasta}}, {"_id": 0}
-    ).to_list(400)
-    demand = {d["date"]: {"objetivo": d.get("objetivo"), "maximo": d.get("maximo")} for d in docs}
-    return {"demand": demand}
+    # Un código sin traducir es un día que se quedaría sin poner. Se avisa
+    # ANTES: un cuadrante a medias es peor que uno sin importar, porque parece
+    # completo y ya nadie vuelve a mirarlo.
+    if sin_codigo and not confirmar:
+        resumen["aviso"] = ("Hay códigos que no sé qué significan. Tradúcelos antes de guardar, "
+                            "o confirma para importar sólo el resto.")
+        return resumen
+    if not confirmar:
+        return resumen
 
-
-@api_router.post("/route-demand")
-async def set_route_demand(data: dict = Body(...), _=Depends(require_admin)):
-    """body: {center, items:[{date, objetivo, maximo}]}"""
-    center = data.get("center")
-    items = data.get("items") or []
-    if not center:
-        raise HTTPException(status_code=400, detail="center requerido")
-    saved = 0
-    for it in items:
-        date = it.get("date")
-        if not date:
-            continue
-        obj = it.get("objetivo")
-        mx = it.get("maximo")
-        await db.route_demand.update_one(
-            {"center": center, "date": date},
-            {"$set": {"center": center, "date": date,
-                      "objetivo": int(obj) if obj not in (None, "") else None,
-                      "maximo": int(mx) if mx not in (None, "") else None}},
-            upsert=True,
-        )
-        saved += 1
-    return {"success": True, "saved": saved}
-
-
-def _date_range(desde: str, hasta: str):
-    out = []
-    d0 = datetime.strptime(desde, "%Y-%m-%d")
-    d1 = datetime.strptime(hasta, "%Y-%m-%d")
-    cur = d0
-    while cur <= d1:
-        out.append(cur.strftime("%Y-%m-%d"))
-        cur += timedelta(days=1)
-    return out
-
-
-_SCHEDULER_PROMPT = """Eres el planificador de turnos de una empresa DSP de reparto Amazon.
-Tu objetivo es montar el cuadrante semanal MÁS EFICIENTE posible (NO equitativo):
-los mejores repartidores cubren el trabajo, garantizando que TODOS los días
-queden cubiertos con al menos la cobertura mínima indicada.
-
-REGLAS DE CONTRATO (obligatorias):
-- contrato "empresa": trabaja SOLO de lunes a viernes. NUNCA sábado ni domingo
-  (esos dos días van siempre 'libre' para ellos).
-- contrato "ett": puede trabajar cualquier día de la semana, incluido finde.
-
-NIVELES DE NOVATO (carga progresiva) — van PROTEGIDOS APARTE:
-- Coloca PRIMERO a los novatos (L1/L2/L3) asegurándoles días de trabajo para que
-  cojan experiencia. NO los metas en el ranking de eficiencia y NUNCA los dejes
-  sin trabajar por falta de datos: es injusto, tienen que empezar a rodar.
-- L1 = recién entra: rutas cortas/fáciles y acompañado, carga ligera.
-- L2 = ruta normal en zona ya conocida.
-- L3 = casi autónomo, carga casi completa.
-- nivel "pleno" = ya formado: entra al ranking normal de eficiencia.
-
-EFICIENCIA (solo para los 'pleno'):
-- Usa SOLO datos reales. Dos señales: la "scorecard tier" (Fantastic+ > Fantastic >
-  Great > Fair > Poor > At Risk; media 1-6, más alto = mejor) y el "ritmo" =
-  paradas/hora reales. Da más peso a la scorecard si está; el ritmo desempata.
-  Si un 'pleno' no tiene ninguna de las dos, trátalo como medio; NO inventes cifras.
-- Prioriza a los de mayor ritmo para los días de trabajo; los de menor ritmo
-  son los primeros en librar cuando sobra capacidad. No busques reparto equitativo.
-
-GENERAL:
-- Respeta SIEMPRE las instrucciones extra del usuario. Cruza por el nombre.
-- Cada conductor ~5 días/semana salvo que el usuario o su contrato digan otra cosa.
-- OBLIGATORIO: cada día debe tener en 'trabaja'+'extra' tantos conductores como
-  rutas objetivo pide Amazon ese día (1 conductor = 1 ruta). No superes el máximo.
-  Si no hay gente suficiente para el objetivo, avísalo en el resumen.
-- Usa 'extra' para llegar al objetivo del día cuando con los habituales no alcanza.
-- Tipos válidos: "trabaja", "libre", "extra".
-
-Devuelve EXCLUSIVAMENTE JSON:
-{"assignments":[{"driver_id":"<id>","date":"YYYY-MM-DD","type":"trabaja|libre|extra"}],
- "resumen":"2-3 frases: criterio seguido, cómo colocaste a los novatos y avisos de cobertura"}"""
-
-
-async def _generate_schedule_with_gemini(context_text: str, user_prompt: str):
-    from google import genai as genai_sdk
-    from google.genai import types as genai_types
-    use_vertex = os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes")
-    if use_vertex:
-        from google.oauth2 import service_account
-        import json as _json, base64 as _b64
-        sa = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
-        if sa and not sa.startswith("{"):
-            sa = _b64.b64decode(sa).decode("utf-8")
-        creds = service_account.Credentials.from_service_account_info(
-            _json.loads(sa), scopes=["https://www.googleapis.com/auth/cloud-platform"]) if sa else None
-        client = genai_sdk.Client(vertexai=True, project=os.environ.get("GCP_PROJECT", ""),
-                                  location=os.environ.get("GCP_LOCATION", "us-central1"), credentials=creds)
-    else:
-        client = genai_sdk.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
-
-    full = (_SCHEDULER_PROMPT + "\n\n=== INSTRUCCIONES DEL USUARIO ===\n" +
-            (user_prompt or "(sin instrucciones extra: prioriza eficiencia y cobertura)") +
-            "\n\n=== DATOS ===\n" + context_text)
-    cfg = genai_types.GenerateContentConfig(temperature=0.2, response_mime_type="application/json")
-    loop = asyncio.get_running_loop()
-    async with _gemini_sem:
-        resp = await asyncio.wait_for(
-            loop.run_in_executor(_executor, lambda: client.models.generate_content(
-                model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"), contents=[full], config=cfg)),
-            timeout=170.0)
-    return json.loads(_strip_markdown_json(resp.text or "{}"))
+    guardados = 0
+    for i in range(0, len(items), 500):
+        lote = items[i:i + 500]
+        if lote:
+            await db.shifts.bulk_write([
+                UpdateOne({"driver_id": it["driver_id"], "date": it["date"]},
+                          {"$set": it}, upsert=True) for it in lote])
+            guardados += len(lote)
+    resumen["guardado"] = True
+    resumen["saved"] = guardados
+    logger.info("Cuadrante importado: %s %s - %s turnos", center, resumen["mes"], guardados)
+    return resumen
 
 
 @api_router.post("/shifts/generate")
