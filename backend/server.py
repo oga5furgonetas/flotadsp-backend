@@ -6790,26 +6790,48 @@ async def upload_inspection_photos(
                 detail="Ya enviaste la inspección de esta furgoneta hoy. Si necesitas repetirla, avisa a tu coordinador."
             )
 
-    # Un conductor solo puede subir inspecciones de vehículos de su centro
+    # ── ¿Puede este conductor inspeccionar ESTA furgoneta? ───────────────────
+    # Mandaba el centro del conductor contra el de la furgoneta, y punto. Pero
+    # los conductores se prestan entre naves: uno de DGA2 trabajando hoy en
+    # OGA5 hacía las cinco fotos, el cuentakilómetros y el checklist entero, y
+    # al darle a enviar se comía un "solo puedes subir inspecciones de
+    # vehículos de tu centro". Todo el trabajo a la basura por una regla que no
+    # miraba lo único que importa.
+    #
+    # Lo que manda es la ASIGNACIÓN: si alguien de la oficina le ha puesto esa
+    # furgoneta hoy, es la suya, venga del centro que venga. El centro sólo
+    # decide cuando no consta ninguna asignación, y ahí sí protege de que
+    # alguien inspeccione una furgoneta de otra nave por error.
     if user["role"] == "driver":
         driver_id = user["sub"]
-        driver_doc = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "center": 1})
-        driver_center = (driver_doc.get("center") or "")[:4] if driver_doc else ""
-        vehicle_doc = await db.vehicles.find_one({"id": vehicle_id, "status": {"$ne": "deleted"}}, {"_id": 0, "center": 1})
+        vehicle_doc = await db.vehicles.find_one(
+            {"id": vehicle_id, "status": {"$ne": "deleted"}}, {"_id": 0, "center": 1, "current_driver_id": 1})
         if not vehicle_doc:
             raise HTTPException(status_code=404, detail="Vehículo no encontrado")
-        vehicle_center = (vehicle_doc.get("center") or "")[:4]
-        # Verificar que el conductor pertenece al mismo centro que el vehículo
-        # El centro del conductor es corto (ej: "OGA5") y el del vehículo puede ser largo
-        # (ej: "AMZL OGA5 SANTIAGO XPT") — basta con que uno contenga al otro
-        if driver_center and vehicle_center:
-            dc = driver_center.upper()
-            vc = vehicle_doc.get("center", "").upper()
-            if dc not in vc and vc[:4] not in dc:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Solo puedes subir inspecciones de vehículos de tu centro"
-                )
+
+        asignada_hoy = await db.daily_assignments.find_one(
+            {"date": _dia_negocio(),
+             "slots": {"$elemMatch": {"driver_id": driver_id, "vehicle_id": vehicle_id}}},
+            {"_id": 0, "center": 1})
+        asignada_fija = vehicle_doc.get("current_driver_id") == driver_id
+
+        if not (asignada_hoy or asignada_fija):
+            driver_doc = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "center": 1})
+            driver_center = (driver_doc.get("center") or "")[:4] if driver_doc else ""
+            vehicle_center = (vehicle_doc.get("center") or "")[:4]
+            # El centro del conductor es corto ("OGA5") y el de la furgoneta
+            # puede ser largo ("AMZL OGA5 SANTIAGO XPT"): basta con que uno
+            # contenga al otro (gotcha 6: el centro está sucio en la BD).
+            if driver_center and vehicle_center:
+                dc = driver_center.upper()
+                vc = (vehicle_doc.get("center") or "").upper()
+                if dc not in vc and vc[:4] not in dc:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=("Esta furgoneta es de otro centro y hoy no te la han asignado. "
+                                "Si estás cubriendo en otra nave, pide que te la asignen en el "
+                                "cuadrante de hoy y vuelve a enviarla."),
+                    )
 
     try:
         photo_urls = []
