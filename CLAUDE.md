@@ -163,6 +163,23 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `KeyError` en cuanto hay un documento sin ese campo — pasó con los 94
    paquetes de Cortex sin `driver_id`. Usar siempre `.get()`.
 
+15. **Hay conductores dados de alta DOS veces y el login cae en la ficha que
+   no toca.** La importación creaba ficha nueva cuando el nombre venía con un
+   espacio de más, un tabulador o en minúsculas: `'SERGIO LUIS ROJAS PEREZ '` y
+   `'SERGIO LUIS ROJAS PEREZ'` son dos personas para Mongo. En producción: 202
+   conductores, **17 personas repetidas** (21 fichas de más) y 26 nombres con
+   espacios sobrantes. El daño no es el duplicado en sí, es que el cuadrante
+   apunta a UNA ficha y el login del portal resuelve por email con `find_one`,
+   que devuelve la que Mongo tenga primero — normalmente la otra. Resultado el
+   19-08-2026: **5 conductores en ruta viendo "no tienes furgoneta asignada"**,
+   y por pantalla parecía un fallo de separación por centros. Al tocar
+   cualquier cosa que empareje conductor con cuadrante, asignación, inspección
+   o daños, usar `_fichas_misma_persona()` y comparar contra el CONJUNTO de sus
+   ids, nunca contra `user["sub"]` a secas. Se empareja por **correo**, nunca
+   por nombre: dos tocayos distintos acabarían auditando el uno la furgoneta
+   del otro. Pendiente aparte: fusionar las fichas (el historial de daños de
+   esas personas está partido en dos).
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
