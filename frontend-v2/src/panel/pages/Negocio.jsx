@@ -13,7 +13,7 @@ import {
   adminDeleteDriverOffer, adminGetFounderReservations,
   adminGetPlanes, adminSetPlanes,
   adminGetCobros, adminMarcarCobro, adminConciliar,
-  adminGetEmisor, adminSetEmisor, revisarFacturacion as revisarFacturacionApi,
+  adminGetEmisor, adminSetEmisor, revisarFacturacion as revisarFacturacionApi, getSaludSistema,
 } from '../api'
 import { API_BASE } from '../../services/api'
 
@@ -24,6 +24,85 @@ function Kpi({ icon: Icon, label, value, accent }) {
     <div className="card p-4">
       <div className="mb-1 flex items-center gap-2"><Icon size={17} style={{ color: accent }} /><span className="text-2xl font-extrabold">{value}</span></div>
       <div className="text-sm text-dark-400">{label}</div>
+    </div>
+  )
+}
+
+
+/* ¿Hay que ampliar servidores?
+
+   La pregunta no se podía responder sin entrar en tres paneles distintos, y
+   estas dos piezas fallan de la peor manera: no avisan. Se ponen lentas
+   primero y dejan de aceptar escrituras después.
+
+   Lo importante no es el porcentaje, son los MESES QUE QUEDAN: un 60 % no dice
+   si corre prisa, y "te quedan 3 meses" sí. */
+function SaludSistema() {
+  const [s, setS] = useState(null)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    getSaludSistema().then((r) => setS(r.data))
+      .catch((e) => setErr(e?.response?.data?.detail || 'No se pudo medir'))
+  }, [])
+
+  if (err) return <div className="card mt-6 p-4 text-sm text-red-300">{err}</div>
+  if (!s) return null
+
+  const m = s.mongo
+  const COLOR = { critico: '#f87171', aviso: '#fbbf24', bien: '#34d399' }
+  const c = COLOR[s.urgencia] || COLOR.bien
+
+  return (
+    <div className="card mt-6 p-4">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-bold text-dark-100">
+        <Database size={16} /> ¿Hay que ampliar?
+      </h2>
+
+      <p className="mb-3 text-[15px] font-semibold" style={{ color: c }}>{s.veredicto}</p>
+
+      <div className="mb-2 flex items-baseline justify-between text-[12.5px] text-dark-400">
+        <span>Base de datos · {m.plan}</span>
+        <span className="tabular-nums">
+          <b className="text-dark-100">{m.usado_mb} MB</b> de {m.limite_mb} MB ({m.porcentaje} %)
+        </span>
+      </div>
+      <div className="h-2.5 overflow-hidden rounded-full bg-dark-800">
+        <div className="h-full rounded-full transition-all"
+          style={{ width: `${Math.min(100, m.porcentaje)}%`, background: c }} />
+      </div>
+
+      {m.meses_restantes != null && (
+        <p className="mt-2.5 text-[13px] text-dark-300">
+          Crece <b className="text-dark-100">{m.crece_mb_mes} MB al mes</b> — al ritmo de ahora te
+          quedan <b style={{ color: c }}>{m.meses_restantes} meses</b> antes de llenarla.
+        </p>
+      )}
+
+      {/* Dónde mirar primero si hay que recortar. */}
+      <div className="mt-3 space-y-2">
+        {(m.bases || []).slice(0, 3).map((b) => (
+          <div key={b.base} className="rounded-lg border border-dark-800 bg-dark-900/40 p-2.5">
+            <div className="flex items-baseline justify-between text-[12px]">
+              <span className="font-mono text-dark-200">{b.base}</span>
+              <span className="tabular-nums text-dark-500">{(b.datos_mb + b.indices_mb).toFixed(1)} MB</span>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5">
+              {(b.top || []).slice(0, 4).map((t) => (
+                <span key={t.coleccion} className="text-[11px] text-dark-500">
+                  {t.coleccion} <b className="tabular-nums text-dark-400">{t.mb} MB</b>
+                  <span className="text-dark-600"> · {t.docs.toLocaleString('es')} docs</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-3 text-[11.5px] leading-relaxed text-dark-600">
+        Servidor: {s.servidor.plan} · {s.servidor.ram_mb} MB de RAM · {s.servidor.vcpus} vCPU.
+        {' '}{s.servidor.nota}
+      </p>
     </div>
   )
 }
@@ -515,6 +594,7 @@ export default function Negocio() {
         <Kpi icon={Sparkles} label={t('neg.kpi.leads')} value={ov?.interesados ?? '—'} accent="#fb923c" />
       </div>
 
+      <SaludSistema />
       <EditorTarifas />
       <Cobros />
       <DatosEmisor />

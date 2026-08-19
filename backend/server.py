@@ -4994,6 +4994,107 @@ async def _audit(user, action: str, detail: dict = None):
         logger.warning(f"Audit log fallo ({action}): {e}")
 
 
+# Límites reales de los planes contratados. Si algún día se amplían, se cambian
+# aquí y los avisos se recalculan solos.
+LIMITE_ATLAS_MB = 512      # MongoDB Atlas M0 (capa gratuita)
+LIMITE_FLY_MB = 1024       # Fly.io: 1 GB de RAM, 1 vCPU compartida
+
+
+@api_router.get("/admin/salud")
+async def admin_salud(_: dict = Depends(require_superadmin)):
+    """Cuánto sitio queda antes de que algo se rompa.
+
+    Nace de una pregunta muy concreta —"¿tengo que ampliar servidores?"— que no
+    se podía responder sin entrar en tres paneles distintos. Y de la forma en
+    que fallan estas dos piezas: Atlas M0 y una máquina de 1 GB no avisan, se
+    quedan lentos primero y dejan de aceptar escrituras después.
+
+    Devuelve el tamaño real de cada base, las colecciones que más ocupan y
+    cuántos meses quedan al ritmo actual — que es lo único accionable: un
+    porcentaje no dice si corre prisa, y "faltan 3 meses" sí.
+    """
+    bases, total_mb = [], 0.0
+    try:
+        nombres = [n for n in await client.list_database_names()
+                   if n not in ("admin", "local", "config")]
+    except Exception as e:
+        raise HTTPException(503, f"No se pudo consultar Mongo: {e}")
+
+    for nombre in nombres:
+        try:
+            st = await client[nombre].command("dbStats", scale=1024 * 1024)
+        except Exception:
+            continue
+        mb = round(float(st.get("dataSize") or 0), 1)
+        idx = round(float(st.get("indexSize") or 0), 1)
+        total_mb += mb + idx
+
+        # Las colecciones más pesadas de esa base, que es donde se mira primero.
+        gordas = []
+        try:
+            for col in await client[nombre].list_collection_names():
+                try:
+                    cs = await client[nombre].command("collStats", col, scale=1024 * 1024)
+                except Exception:
+                    continue
+                gordas.append({"coleccion": col,
+                               "mb": round(float(cs.get("size") or 0), 1),
+                               "docs": int(cs.get("count") or 0)})
+        except Exception:
+            pass
+        gordas.sort(key=lambda c: -c["mb"])
+
+        bases.append({"base": nombre, "datos_mb": mb, "indices_mb": idx,
+                      "colecciones": int(st.get("collections") or 0),
+                      "top": gordas[:6]})
+
+    total_mb = round(total_mb, 1)
+    libre_mb = round(LIMITE_ATLAS_MB - total_mb, 1)
+    pct = round(total_mb / LIMITE_ATLAS_MB * 100, 1)
+
+    # Crecimiento medido, no estimado: se pesa lo que ha entrado en los últimos
+    # 30 días en la colección que más crece, y de ahí salen los meses que quedan.
+    crece_mb_mes = None
+    meses_restantes = None
+    try:
+        hace30 = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+        recientes = await db.cortex_packages.count_documents({"service_day": {"$gte": hace30}})
+        cs = await db.command("collStats", "cortex_packages", scale=1)
+        total_docs = int(cs.get("count") or 0)
+        if total_docs:
+            bytes_doc = float(cs.get("size") or 0) / total_docs
+            crece_mb_mes = round(recientes * bytes_doc / 1024 / 1024, 1)
+            if crece_mb_mes > 0:
+                meses_restantes = round(libre_mb / crece_mb_mes, 1)
+    except Exception:
+        pass
+
+    # El veredicto se da en palabras, no en un número: quien lo lee quiere
+    # saber si tiene que hacer algo esta semana o puede olvidarse.
+    if pct >= 85:
+        veredicto, urgencia = "Amplía ya. A punto de dejar de aceptar escrituras.", "critico"
+    elif pct >= 70 or (meses_restantes is not None and meses_restantes < 2):
+        veredicto, urgencia = "Planifica la ampliación este mes.", "aviso"
+    else:
+        veredicto, urgencia = "Vas sobrado. No toques nada.", "bien"
+
+    return {
+        "mongo": {
+            "plan": "Atlas M0 (gratuito)", "limite_mb": LIMITE_ATLAS_MB,
+            "usado_mb": total_mb, "libre_mb": libre_mb, "porcentaje": pct,
+            "crece_mb_mes": crece_mb_mes, "meses_restantes": meses_restantes,
+            "bases": sorted(bases, key=lambda b: -(b["datos_mb"] + b["indices_mb"])),
+        },
+        "servidor": {
+            "plan": "Fly.io shared-cpu-1x", "ram_mb": LIMITE_FLY_MB, "vcpus": 1,
+            # La RAM no se mide desde dentro del proceso de forma fiable: lo que
+            # se ve aquí es el contenedor, no la máquina. Se dice lo que hay.
+            "nota": "1 vCPU compartida. Si las pantallas van lentas con la base holgada, el cuello es este.",
+        },
+        "veredicto": veredicto, "urgencia": urgencia,
+    }
+
+
 @api_router.get("/admin/audit-log")
 async def admin_audit_log(limit: int = 200, action: str = "", _: dict = Depends(require_superadmin)):
     """Ultimas acciones sensibles (impersonaciones, borrados). Solo super-admin."""

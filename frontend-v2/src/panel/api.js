@@ -182,6 +182,9 @@ export const getTelegramConfig = () => api.get('/telegram/config')
 export const getOrgBilling = () => api.get('/org/billing')
 export const getBillingUso = () => api.get('/billing/uso')
 export const revisarFacturacion = () => api.post('/billing/revisar')
+// Cuánto sitio queda antes de que algo se rompa. Atlas M0 y una máquina de 1 GB
+// no avisan: se ponen lentos primero y dejan de aceptar escrituras después.
+export const getSaludSistema = () => api.get('/admin/salud')
 export const getMe = () => api.get('/auth/me')
 
 /* ── IA Peritaje / Métricas / Importaciones ── */
