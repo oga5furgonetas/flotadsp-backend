@@ -6,24 +6,44 @@ import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
 
 // Catálogo de módulos asignables (la clave = último segmento de la ruta del panel)
+/* Los permisos, en el MISMO orden y con los MISMOS nombres que la barra
+   lateral. Antes esta lista iba por su cuenta y se había quedado atrás: siete
+   pantallas del menú —Paquetes IA, Mi día, Incidencias, Horas·WHC, Dónde se
+   entrega y Contactos— no aparecían aquí, así que no se le podían dar a nadie.
+   No es que estuvieran escondidas: es que la casilla no existía.
+
+   Marcadas con `fijo` van las que TODO admin ve pase lo que pase (son las de
+   la operación diaria; está así a propósito para que no desaparezcan de golpe
+   a quien tenga una lista de permisos antigua). Se enseñan igual, en gris:
+   una casilla que no hace nada al pulsarla es peor que no tenerla. */
 const MODULES = [
-  { g: 'Operacional', items: [
-    ['dashboard', 'Dashboard'], ['scorecard', 'Scorecard'], ['conductores', 'Conductores'],
-    ['turnos', 'Turnos y días libres'], ['aprobar-dias', 'Aprobar días libres'],
-    ['metricas', 'Métricas'], ['actividad', 'Actividad'],
+  { g: 'Hoy', items: [
+    ['dashboard', 'Dashboard'], ['mi-dia', 'Mi día'], ['actividad', 'Actividad'],
+  ]},
+  { g: 'Operación diaria', items: [
+    ['paquetes', 'Paquetes IA'],
+    ['asignacion', 'Asignación diaria', true], ['turnos', 'Días libres'],
+    ['aprobar-dias', 'Aprobar días libres'],
+    ['checklist-operativo', 'Checklist turno', true],
+    ['plantilla', 'Plantilla turno', true], ['chat', 'Chat interno', true],
+  ]},
+  { g: 'Flota', items: [
+    ['vehiculos', 'Vehículos'], ['revision', 'Revisión rápida'],
+    ['inspecciones', 'Inspecciones'], ['incidencias', 'Incidencias'],
+    ['talleres', 'Talleres'], ['aparcamiento', 'Aparcamiento', true],
+    ['avisos-itv', 'Vencimientos · ITV'], ['renting', 'Vencimientos · Renting'],
+    ['casas-alquiler', 'Vencimientos · Casas'], ['importaciones', 'Importaciones'],
   ]},
   { g: 'Equipo', items: [
-    ['asignacion', 'Asignación diaria'], ['checklist-operativo', 'Checklist turno'],
-    ['chat', 'Chat interno'], ['plantilla', 'Plantilla turno'],
+    ['conductores', 'Conductores'], ['scorecard', 'Scorecard'],
+    ['whc', 'Horas · WHC'], ['dsc', 'Dónde se entrega'], ['contactos', 'Contactos'],
   ]},
-  { g: 'Furgonetas', items: [
-    ['revision', 'Revisión rápida'], ['inspecciones', 'Inspecciones'], ['vehiculos', 'Vehículos'],
-    ['talleres', 'Talleres'], ['avisos-itv', 'Avisos ITV'], ['renting', 'Renting'],
-    ['casas-alquiler', 'Casas de alquiler'], ['ia-peritaje', 'IA Peritaje'],
-    ['importaciones', 'Importaciones'], ['configuracion', 'Configuración'],
+  { g: 'Sistema', items: [
+    ['ia-peritaje', 'IA Peritaje'], ['configuracion', 'Configuración'],
   ]},
 ]
 const ALL_KEYS = MODULES.flatMap((g) => g.items.map(([k]) => k))
+const FIJOS = new Set(MODULES.flatMap((g) => g.items.filter(([, , f]) => f).map(([k]) => k)))
 
 /* ── Piezas de UI ── */
 
@@ -72,8 +92,16 @@ function ModulePicker({ perms, onChange }) {
             <div className="flex flex-wrap gap-1.5">
               {g.items.map(([k, lbl]) => (
                 <button key={k} type="button" onClick={() => toggle(k)}
-                  className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${set.has(k) ? 'bg-brand-500/20 text-brand-300 ring-1 ring-brand-500/40' : 'bg-dark-800 text-dark-500 hover:text-dark-300'}`}>
+                  title={FIJOS.has(k)
+                    ? 'Esta pantalla la ve todo el mundo aunque la desmarques: es de la operación diaria.'
+                    : undefined}
+                  className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
+                    set.has(k) ? 'bg-brand-500/20 text-brand-300 ring-1 ring-brand-500/40'
+                      : 'bg-dark-800 text-dark-500 hover:text-dark-300'}`}>
                   {lbl}
+                  {/* Se dice que da igual desmarcarla. Callarlo hace que alguien
+                      la quite, crea que la ha quitado, y no sea verdad. */}
+                  {FIJOS.has(k) && <span className="ml-1 text-[9.5px] text-dark-600">·siempre</span>}
                 </button>
               ))}
             </div>
