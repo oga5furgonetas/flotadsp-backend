@@ -7098,7 +7098,11 @@ async def upload_inspection_photos(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@api_router.get("/inspections", response_model=List[Inspection])
+# Sin response_model a proposito. FastAPI revalidaba con Pydantic las 100
+# inspecciones enteras —cada una con su analisis anidado, sus danos y sus
+# cajas— antes de mandarlas, y ese paso solo se comia mas de los 30 segundos
+# que espera el navegador. Los documentos ya salen limpios de Mongo.
+@api_router.get("/inspections")
 async def get_inspections(
     vehicle_id: Optional[str] = None,
     center: Optional[str] = None,
@@ -7346,7 +7350,21 @@ async def get_review_queue(center: Optional[str] = None, _=Depends(require_admin
     """Cola de inspecciones pendientes de revisar (reviewed != true), enriquecidas
     con matrícula y nombre del conductor. Más recientes primero."""
     query = {"reviewed": {"$ne": True}, "deleted": {"$ne": True}}
-    insps = await db.inspections.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+    # Solo los campos que usa la pantalla. Traerse el documento entero de 200
+    # inspecciones significa arrastrar el analisis completo de cada una —todos
+    # los danos, sus cajas y sus descripciones— cuando aqui solo hacen falta
+    # los nuevos. Con la coleccion crecida, esa respuesta tardaba mas de los 30
+    # segundos que espera el navegador y la pantalla moria sin decir por que.
+    CAMPOS = {
+        "_id": 0, "id": 1, "created_at": 1, "vehicle_id": 1, "driver_id": 1,
+        "photos": 1, "annotated_photos": 1, "reference_photos": 1,
+        "analysis_status": 1,
+        "analysis.severity": 1, "analysis.total_damages_count": 1,
+        "analysis.executive_summary": 1, "analysis.new_damages": 1,
+        "analysis.detected_plate": 1, "analysis.image_quality_warnings": 1,
+        "analysis.dirt_level": 1, "analysis.fraud_warnings": 1,
+    }
+    insps = await db.inspections.find(query, CAMPOS).sort("created_at", -1).to_list(200)
 
     # Enriquecer con matrícula y conductor (lookups en lote)
     veh_ids = list({i.get("vehicle_id") for i in insps if i.get("vehicle_id")})

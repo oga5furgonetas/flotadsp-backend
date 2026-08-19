@@ -37,7 +37,7 @@ export default function Inspecciones() {
 
   useEffect(() => {
     setErr('')
-    Promise.all([getInspections({ limit: 300 }), getVehicles('Todos'), getDrivers('Todos').catch(() => ({ data: [] }))])
+    Promise.all([getInspections({ limit: 100 }), getVehicles('Todos'), getDrivers('Todos').catch(() => ({ data: [] }))])
       .then(([ri, rv, rd]) => {
         const m = {}; (lista(rv.data)).forEach((v) => { m[v.id] = { plate: v.license_plate, center: v.center || '' } })
         const dm = {}; (lista(rd.data)).forEach((d) => { dm[d.id] = d.name })
@@ -52,7 +52,7 @@ export default function Inspecciones() {
   const recargarInspeccion = async () => {
     if (!sel) return
     try {
-      const r = await getInspections({ limit: 300 })
+      const r = await getInspections({ limit: 100 })
       const todas = lista(r.data)
       setInsps(todas)
       const fresca = todas.find((i) => i.id === sel.id)
