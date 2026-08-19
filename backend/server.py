@@ -5717,17 +5717,24 @@ async def get_my_assigned_vehicle(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Solo conductores")
     driver_id = user["sub"]
     today = _dia_negocio()
+    # Sus fichas, no su ficha: si está duplicado, el cuadrante apunta a una y
+    # el login puede haber caído en la otra (ver _fichas_misma_persona). Si
+    # aquí no se mira igual que en el portal, se le abre la auditoría y luego
+    # no le sale ninguna furgoneta, que es peor que bloquearle.
+    _ficha = await db.drivers.find_one(
+        {"id": driver_id}, {"_id": 0, "id": 1, "center": 1, "email": 1})
+    mis_ids, _ = await _fichas_misma_persona(_ficha or {"id": driver_id})
     docs = await db.daily_assignments.find({"date": today}, {"_id": 0}).to_list(50)
     for doc in docs:
         for slot in doc.get("slots", []):
-            if slot.get("driver_id") == driver_id and slot.get("vehicle_id"):
+            if slot.get("driver_id") in mis_ids and slot.get("vehicle_id"):
                 vehicle = await db.vehicles.find_one(
                     {"id": slot["vehicle_id"]}, {"_id": 0}
                 )
                 if vehicle:
                     insp = await db.inspections.find_one(
                         {"deleted": {"$ne": True}, "vehicle_id": slot["vehicle_id"],
-                         "driver_id": driver_id,
+                         "driver_id": {"$in": list(mis_ids)},
                          "created_at": {"$regex": f"^{today}"}},
                         {"_id": 0, "id": 1}
                     )
@@ -6139,6 +6146,40 @@ async def vehicles_spare_wheel(_=Depends(require_admin)):
     return {f.pop("vid"): f for f in filas}
 
 
+async def _fichas_misma_persona(driver: dict) -> tuple:
+    """Todos los ids de ficha de una misma persona, y el centro que le consta.
+
+    En la base hay conductores dados de alta DOS veces: la importación creaba
+    ficha nueva cuando el nombre venía con un espacio de más, con tabulador o
+    en minúsculas ('SERGIO LUIS ROJAS PEREZ ' y 'SERGIO LUIS ROJAS PEREZ' son
+    dos personas para Mongo). El correo es el único identificador fuerte que
+    tienen: dos fichas con el mismo correo son la misma persona, siempre.
+
+    Importa porque el cuadrante apunta a UNA de las fichas y el login, que
+    resuelve por email con find_one, puede caer en la OTRA. El portal creía
+    entonces que no salía a ruta y le cerraba la auditoría a alguien que ya
+    estaba cargando la furgoneta. El 19-08-2026 le pasó a 5 conductores a la
+    vez, entre ellos dos de DGA1, y por pantalla parecía un fallo de centro.
+
+    Se empareja sólo por correo, nunca por nombre: dos tocayos distintos no
+    pueden acabar auditando el uno la furgoneta del otro.
+    """
+    ids = {driver.get("id")}
+    centro = (driver.get("center") or "").strip()
+    email = (driver.get("email") or "").strip().lower()
+    if email:
+        gemelas = await db.drivers.find(
+            {"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}},
+            {"_id": 0, "id": 1, "center": 1}).to_list(20)
+        for g in gemelas:
+            if g.get("id"):
+                ids.add(g["id"])
+            # Si su ficha de acceso se quedó sin centro, vale el de la gemela.
+            if not centro:
+                centro = (g.get("center") or "").strip()
+    return {i for i in ids if i}, centro
+
+
 def _portal_payload(vehicles: list, permitido: bool, motivo: Optional[str]) -> dict:
     """Respuesta del portal: las furgonetas Y si hoy puede auditar o no.
 
@@ -6181,8 +6222,11 @@ async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
         return _portal_payload(vehicles, permitido=True, motivo=None)
 
     driver_id = user["sub"]
-    driver = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "center": 1, "name": 1})
-    center = (driver.get("center") or "") if driver else ""
+    driver = await db.drivers.find_one(
+        {"id": driver_id}, {"_id": 0, "id": 1, "center": 1, "name": 1, "email": 1})
+    # Sus fichas, no su ficha: puede estar duplicado y el cuadrante apuntar a
+    # la otra. Ver _fichas_misma_persona.
+    mis_ids, center = await _fichas_misma_persona(driver or {"id": driver_id})
 
     # ¿Hay cuadrante de hoy para su centro? Y si lo hay, ¿está él?
     hoy = _dia_negocio()
@@ -6191,7 +6235,7 @@ async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
         {"_id": 0, "slots": 1}).to_list(50)
     hay_cuadrante = any(a.get("slots") for a in asigs)
     mis_slots = [s for a in asigs for s in (a.get("slots") or [])
-                 if s.get("driver_id") == driver_id and s.get("vehicle_id")]
+                 if s.get("driver_id") in mis_ids and s.get("vehicle_id")]
 
     if hay_cuadrante and not mis_slots:
         # Consta el cuadrante y no está: hoy no le toca.
@@ -6206,7 +6250,8 @@ async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
 
     # Sin cuadrante cargado: no se sabe. Se abre, acotado a su centro.
     asignadas = await db.vehicles.find(
-        {"status": {"$nin": ["deleted", "baja"]}, "current_driver_id": driver_id}, {"_id": 0}).to_list(10)
+        {"status": {"$nin": ["deleted", "baja"]},
+         "current_driver_id": {"$in": list(mis_ids)}}, {"_id": 0}).to_list(10)
     if asignadas:
         return _portal_payload(asignadas, permitido=True, motivo=None)
     if center:
