@@ -283,9 +283,9 @@ export function consultaLarga(d) {
 const TIEMPO_MAX_MS = 8000
 
 /** fetch que no puede colgar la pantalla ni lanzar: o trae JSON, o null. */
-async function pedirJSON(url, { signal, conAuth } = {}) {
+async function pedirJSON(url, { signal, conAuth, msMax } = {}) {
   const corte = new AbortController()
-  const reloj = setTimeout(() => corte.abort(), TIEMPO_MAX_MS)
+  const reloj = setTimeout(() => corte.abort(), msMax || TIEMPO_MAX_MS)
   const abortar = () => corte.abort()
   if (signal) signal.addEventListener('abort', abortar, { once: true })
   try {
@@ -463,6 +463,38 @@ export async function buscarGoogle(d, opciones = {}) {
   }
 }
 
+/* Catastro y Overpass: las dos fuentes que el NAVEGADOR no puede pedir.
+
+   Las dos rechazan al navegador por CORS y las dos contestan al servidor, justo
+   al revés que Nominatim. Van por nuestro backend en una sola llamada, que
+   devuelve entre cero y dos resultados con esta misma forma.
+
+   Por qué hacen falta, con un caso real: 'Calle belvís de paleo, 15175 Carral'.
+   Nominatim devuelve CERO. En el Catastro no existe ninguna CALLE con ese
+   nombre — existe el LUGAR 'LG BELVIS. PALEO', y traducir eso es lo que ningún
+   geocodificador sabe hacer. Overpass encuentra los 4 tramos de la vía en
+   OpenStreetMap que el buscador de Nominatim no encuentra.
+
+   Ninguna de las dos afloja una sola regla: el Catastro entra como familia
+   'ign' (es el mismo callejero oficial que Cartociudad, así que no se confirman
+   entre ellos) y Overpass como 'osm' (mismo dato que Nominatim y Photon). Suman
+   ALCANCE, no confianza. Lo que se puede afirmar se decide exactamente igual
+   que antes. */
+export async function buscarRescate(d, opciones = {}) {
+  const q = new URLSearchParams({
+    via: d.via || '', municipio: d.municipio || d.ciudad || '', cp: d.cp || '',
+  })
+  /* 20 s y no los 8 de siempre: el Catastro son TRES saltos encadenados y la
+     primera consulta de una direccion tarda de verdad. Cortarla a los 8 s
+     dejaba fuera justo la fuente que se ha anadido para el caso dificil. El
+     backend la cachea, asi que esta espera se paga una sola vez por portal. */
+  const j = await pedirJSON(`${API_BASE}/cortex/geo/rescate?${q}`,
+    { ...opciones, conAuth: true, msMax: 20000 })
+  const lista = Array.isArray(j?.resultados) ? j.resultados : []
+  return lista.filter((r) => Number.isFinite(Number(r?.lat)) && Number.isFinite(Number(r?.lng)))
+    .map((r) => ({ ...r, lat: Number(r.lat), lng: Number(r.lng) }))
+}
+
 /* El orden no importa: se preguntan todos a la vez. Son servicios distintos,
    no comparten límite de uso. */
 export const BUSCADORES = [buscarNominatim, buscarPhoton, buscarCartociudad, buscarGoogle]
@@ -529,9 +561,14 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
   }
   if (!esBuscable(d)) return { ...vacio, estado: 'no_buscable' }
 
-  const crudos = await Promise.all(
-    BUSCADORES.map((f) => f(d, opciones).catch(() => null)))
-  const resultados = crudos.filter(Boolean)
+  /* Los cuatro del navegador y, a la vez, los del servidor. Van juntos a
+     proposito: si el rescate se pidiera solo cuando los otros fallan, no podria
+     CONFIRMAR a nadie, que es la mitad de lo que aporta el Catastro. */
+  const [crudos, extra] = await Promise.all([
+    Promise.all(BUSCADORES.map((f) => f(d, opciones).catch(() => null))),
+    buscarRescate(d, opciones).catch(() => []),
+  ])
+  const resultados = [...crudos, ...extra].filter(Boolean)
   if (!resultados.length) return { ...vacio, estado: 'sin_resultados' }
 
   const base = { ...vacio, resultados }

@@ -23289,6 +23289,364 @@ async def cortex_geocode(q: str, _=Depends(require_admin)):
     }
 
 
+# ─── RESCATE DE DIRECCIONES: LAS DOS FUENTES QUE EL NAVEGADOR NO PUEDE PEDIR ───
+#
+# Los cuatro buscadores del panel (Nominatim, Photon, Cartociudad y Google) se
+# preguntan desde el navegador. Hay dos más que sólo se pueden preguntar desde
+# aquí, y son justo los que salvan el caso difícil:
+#
+#   · CATASTRO — el registro oficial de direcciones de España. Tiene TODOS los
+#     portales, incluidos los pueblos donde OpenStreetMap no tiene ni la calle.
+#     Y hace algo que ningún geocodificador hace: buscar por nombre aproximado y
+#     devolver el nombre OFICIAL. Amazon manda "Calle belvís de paleo"; en el
+#     Catastro no existe ninguna CALLE con ese nombre, existe el LUGAR
+#     "LG BELVIS. PALEO". Esa traducción es la que desbloquea el rural gallego,
+#     donde las direcciones son lugares y parroquias, no calles con número.
+#
+#   · OVERPASS — pregunta a OpenStreetMap por la GEOMETRÍA de la vía en vez de
+#     por el texto. Encuentra calles que el buscador de Nominatim no encuentra:
+#     medido contra 'Calle belvís de paleo, 15175 Carral', Nominatim devuelve
+#     CERO resultados y Overpass devuelve los 4 tramos de la vía con sus
+#     coordenadas. Sigue siendo OpenStreetMap, así que cuenta como la MISMA
+#     familia que Nominatim y Photon: suma alcance, no suma confirmación.
+#
+# Los dos rechazan al navegador por CORS, y ninguno de los dos rechaza al
+# servidor (probado el 2026-08-20 desde la máquina de Fly). Es exactamente al
+# revés que Nominatim, que sólo responde al navegador. Por eso la búsqueda vive
+# repartida entre los dos sitios: no es una decisión de gusto.
+#
+# AQUÍ NO SE DECIDE NADA. Igual que /cortex/geocode, esto sólo consulta y
+# traduce. Quién coincide con quién y qué se puede afirmar lo sigue decidiendo
+# el navegador con las mismas reglas de siempre (dos familias independientes).
+
+_CATASTRO = "https://ovc.catastro.meh.es/OVCServWeb/OVCSWLocalizacionRC"
+_OVERPASS = "https://overpass-api.de/api/interpreter"
+_UA_GEO = {"User-Agent": "FlotaDSP/1.0 (+https://flotadsp.com)"}
+
+# El Catastro pide la PROVINCIA por su nombre, y de la dirección sólo tenemos el
+# código postal. Los dos primeros dígitos la dan sin ambigüedad.
+# Ojo: Navarra (31) y las tres vascas (01, 20, 48) tienen catastro foral propio
+# y NO están en este servicio. Allí sólo responderán las otras fuentes.
+_PROV_POR_CP = {
+    "01": "ARABA/ALAVA", "02": "ALBACETE", "03": "ALICANTE", "04": "ALMERIA",
+    "05": "AVILA", "06": "BADAJOZ", "07": "BALEARS, ILLES", "08": "BARCELONA",
+    "09": "BURGOS", "10": "CACERES", "11": "CADIZ", "12": "CASTELLON",
+    "13": "CIUDAD REAL", "14": "CORDOBA", "15": "A CORUÑA", "16": "CUENCA",
+    "17": "GIRONA", "18": "GRANADA", "19": "GUADALAJARA", "20": "GIPUZKOA",
+    "21": "HUELVA", "22": "HUESCA", "23": "JAEN", "24": "LEON", "25": "LLEIDA",
+    "26": "RIOJA, LA", "27": "LUGO", "28": "MADRID", "29": "MALAGA",
+    "30": "MURCIA", "31": "NAVARRA", "32": "OURENSE", "33": "ASTURIAS",
+    "34": "PALENCIA", "35": "PALMAS, LAS", "36": "PONTEVEDRA",
+    "37": "SALAMANCA", "38": "SANTA CRUZ DE TENERIFE", "39": "CANTABRIA",
+    "40": "SEGOVIA", "41": "SEVILLA", "42": "SORIA", "43": "TARRAGONA",
+    "44": "TERUEL", "45": "TOLEDO", "46": "VALENCIA", "47": "VALLADOLID",
+    "48": "BIZKAIA", "49": "ZAMORA", "50": "ZARAGOZA", "51": "CEUTA",
+    "52": "MELILLA",
+}
+
+# Lo que va delante del nombre y no forma parte de él. Se quita para preguntar,
+# porque el Catastro guarda el tipo de vía en un campo aparte y buscar
+# "CALLE BELVIS" no encuentra el lugar "BELVIS. PALEO".
+#
+# El `c/` va en su propia rama y no dentro del grupo con `\b`: detrás de la
+# barra no hay frontera de palabra, así que `c/`, la forma más corta y de las
+# más frecuentes, no se quitaba nunca. 'C/ Nova 12' se preguntaba tal cual y no
+# lo encuentra ningún callejero.
+_RE_TIPO_VIA = re.compile(
+    r"^(?:c\s*/\s*|(?:calle|rua|rúa|avenida|avda\.?|av\.?|plaza|praza|pza\.?|"
+    r"camino|camiño|carretera|ctra\.?|paseo|travesia|travesía|trav\.?|ronda|"
+    r"alameda|lugar|lg\.?|urbanizacion|urbanización|urb\.?|poligono|polígono|"
+    r"estrada|parque|via|vía|barrio|bº|aldea|parroquia)\b\.?\s*)", re.I)
+
+
+def _geo_sin_acentos(s: str) -> str:
+    # unicodedata se importa dentro, como el resto de importaciones puntuales
+    # de este fichero: no es un modulo global aqui.
+    import unicodedata
+    return "".join(ch for ch in unicodedata.normalize("NFKD", s or "")
+                   if not unicodedata.combining(ch))
+
+
+def _geo_via_limpia(via: str) -> tuple:
+    """Separa el nombre de la vía del número de portal.
+
+    'Calle El Barro 34' → ('EL BARRO', '34'). El número va aparte porque el
+    Catastro lo pide en su propio parámetro, y porque saber si lo tenemos o no
+    es lo que decide después si podemos hablar de portal o sólo de calle.
+    """
+    t = _RE_TIPO_VIA.sub("", str(via or "").strip())
+
+    # PRIMERO se quitan los pisos, y NO se toman por número de portal. '1ºA' es
+    # un primero A, no el portal 1. Confundirlos sería el peor falso positivo de
+    # todos: el Catastro devolvería el portal 1 de esa vía con coordenadas
+    # exactas y lo daríamos por bueno. Visto en una dirección real de Carral:
+    # 'Calle belvís de paleo 1ºA 1ºA' no lleva número de portal por ningún lado.
+    t = re.sub(r"[\s,]*\b\d{1,3}\s*[ºª°]\s*[A-Za-z]?\b", " ", t)
+
+    # Lo que queda al final y es un número (con letra opcional: '34', '12 B')
+    # sí es el portal.
+    m = re.search(r"[\s,]+(\d{1,4})\s*[A-Za-z]?\s*$", " " + t)
+    numero = m.group(1) if m else ""
+    if m:
+        t = (" " + t)[:m.start()]
+    return _geo_sin_acentos(t).upper().strip(" ,.-"), numero
+
+
+def _geo_parecido(a: str, b: str) -> float:
+    import difflib
+    return difflib.SequenceMatcher(
+        None, _geo_sin_acentos(a).upper(), _geo_sin_acentos(b).upper()).ratio()
+
+
+def _xml_tag(xml: str, tag: str) -> list:
+    return re.findall(rf"<{tag}>(.*?)</{tag}>", xml or "", re.S)
+
+
+async def _geo_pide(c, url, params=None, cuerpo=None, intentos=3):
+    """El Catastro se cae a ratos: sin reintento fallan la mitad de las consultas.
+
+    No es una suposición — la primera tanda de pruebas dio ReadError en las tres
+    llamadas y la misma consulta funcionó al minuto siguiente. Un fallo de red
+    aquí se vería en pantalla como "no encuentro la dirección", que es
+    exactamente la respuesta que no queremos dar por un problema nuestro.
+    """
+    ultimo = None
+    for i in range(intentos):
+        try:
+            if cuerpo is not None:
+                return await c.post(url, content=cuerpo.encode("utf-8"))
+            return await c.get(url, params=params)
+        except Exception as e:
+            ultimo = e
+            await asyncio.sleep(1.2 * (i + 1))
+    raise ultimo
+
+
+async def _geo_catastro(c, via: str, municipio: str, cp: str) -> Optional[dict]:
+    """Catastro: nombre aproximado → vía oficial → portal → coordenadas.
+
+    Tres saltos, y cada uno tiene su motivo:
+      1. ConsultaVia   busca por nombre PARCIAL y devuelve los nombres oficiales
+                       con su sigla (CL calle, LG lugar, RU rúa, PQ parroquia).
+                       Éste es el paso que traduce lo que escribe el cliente a
+                       lo que existe en el callejero.
+      2. ConsultaNumero con la vía oficial y el número → referencias catastrales.
+      3. Consulta_CPMRC referencia → latitud y longitud.
+    """
+    nombre, numero = _geo_via_limpia(via)
+    mun = _geo_sin_acentos(municipio).upper().strip()
+    prov = _PROV_POR_CP.get(str(cp or "")[:2], "")
+    if not nombre or not mun or not prov:
+        return None
+
+    # Se pregunta por el nombre entero y, si no hay suerte, por sus palabras
+    # sueltas de mayor a menor. 'BELVIS DE PALEO' no existe; 'BELVIS' sí, y de
+    # ahí sale 'LG BELVIS. PALEO'. Sin esta escalera el rural no se resuelve.
+    palabras = [p for p in re.split(r"[\s,\.]+", nombre) if len(p) >= 4]
+    palabras.sort(key=len, reverse=True)
+    intentos = [nombre] + palabras[:2]
+
+    vias = []
+    for t in intentos:
+        r = await _geo_pide(c, f"{_CATASTRO}/OVCCallejero.asmx/ConsultaVia",
+                            {"Provincia": prov, "Municipio": mun,
+                             "TipoVia": "", "NombreVia": t})
+        vias = list(zip(_xml_tag(r.text, "tv"), _xml_tag(r.text, "nv")))
+        if vias:
+            break
+    if not vias:
+        return None
+
+    # Las que más se parecen a lo que pidió el cliente, de mayor a menor. Se
+    # prueban VARIAS y no sólo la primera: en Pontedeume, 'EL BARRO' casa mejor
+    # con 'LG BARRO', pero esa vía no tiene ni un portal numerado en el Catastro
+    # y la consulta se quedaba en nada teniendo al lado 'CL BARRO' con todos sus
+    # números. Quedarse con la primera candidata tiraba la respuesta a la basura.
+    candidatas = sorted(vias, key=lambda v: -_geo_parecido(nombre, v[1]))
+    candidatas = [v for v in candidatas if _geo_parecido(nombre, v[1]) >= 0.45][:3]
+    if not candidatas:
+        # Se parecen tan poco que serían otra vía. Mejor no decir nada.
+        return None
+
+    # EL CATASTRO EXIGE UN NÚMERO. Pedirle la vía entera con Numero="" contesta
+    # "EL NÚMERO ES OBLIGATORIO" y devuelve cero, así que la vía existía, se
+    # sabía su nombre oficial, y aun así la respuesta era "no lo sé". Y con un
+    # número que no existe —'EL BARRO 34' en Pontedeume— contesta "EL NUMERO NO
+    # EXISTE" y pasa lo mismo.
+    #
+    # Por eso, cuando el número pedido no da nada, se tantea con unos pocos
+    # portales bajos: cualquiera de ellos sirve para situar la VÍA, que es lo
+    # que se está buscando. Lo que NUNCA se hace es presentar ese punto como el
+    # portal del cliente: si el número que respondió no es el que se pidió, esto
+    # sale marcado como 'calle' y se dice que el número no está confirmado.
+    async def _consulta(sig_c, ofi_c, num):
+        r = await _geo_pide(c, f"{_CATASTRO}/OVCCallejero.asmx/ConsultaNumero",
+                            {"Provincia": prov, "Municipio": mun,
+                             "TipoVia": sig_c.strip(), "NomVia": ofi_c,
+                             "Numero": num})
+        pc1, pc2 = _xml_tag(r.text, "pc1"), _xml_tag(r.text, "pc2")
+        nums = [n.strip().lstrip("0") for n in _xml_tag(r.text, "pnp")]
+        return [a + b for a, b in zip(pc1, pc2)], nums
+
+    rcs, con_numero, sigla, oficial = [], False, "", ""
+
+    # 1) El número que pidió el cliente, en cada vía candidata.
+    if numero:
+        for sig_c, ofi_c in candidatas:
+            rcs, nums = await _consulta(sig_c, ofi_c, numero)
+            if rcs:
+                con_numero = numero.lstrip("0") in nums
+                sigla, oficial = sig_c, ofi_c
+                break
+
+    # 2) Si no, tanteo para situar la vía. Sólo sobre la candidata que más se
+    #    parece: probar las tres por cinco números serían quince consultas a un
+    #    servicio lento, y la ganancia no lo paga.
+    if not rcs:
+        sig_c, ofi_c = candidatas[0]
+        for sonda in ("1", "2", "3", "5", "10"):
+            rcs, _ = await _consulta(sig_c, ofi_c, sonda)
+            if rcs:
+                con_numero = False   # sitúa la vía, NO el portal del cliente
+                sigla, oficial = sig_c, ofi_c
+                break
+    if not rcs:
+        return None
+
+    r = await _geo_pide(c, f"{_CATASTRO}/OVCCoordenadas.asmx/Consulta_CPMRC",
+                        {"Provincia": "", "Municipio": "", "SRS": "EPSG:4326",
+                         "RC": rcs[0]})
+    xs, ys = _xml_tag(r.text, "xcen"), _xml_tag(r.text, "ycen")
+    if not xs or not ys:
+        return None
+    try:
+        lng, lat = float(xs[0]), float(ys[0])
+    except ValueError:
+        return None
+
+    return {
+        "fuente": "catastro",
+        # MISMA familia que Cartociudad a propósito: los dos son el callejero
+        # oficial del Estado y beben de los mismos datos de direcciones. Que
+        # coincidan no es una confirmación independiente, es la misma opinión
+        # dicha dos veces, y tratarla como confirmación sería el falso positivo
+        # más caro de todos: manda a un conductor a una coordenada.
+        "familia": "ign",
+        "lat": lat, "lng": lng,
+        "calle": f"{sigla.strip()} {oficial}".strip()[:160],
+        "numero": (numero if con_numero else "")[:20],
+        "cp": str(cp or "")[:12],
+        "municipio": municipio[:120],
+        "display": ((_xml_tag(r.text, "ldt") or [""])[0]).strip()[:300],
+        "precision": "portal" if con_numero else "calle",
+    }
+
+
+async def _geo_overpass(c, via: str, municipio: str) -> Optional[dict]:
+    """OpenStreetMap preguntado por geometría en vez de por texto.
+
+    Encuentra vías que el buscador de Nominatim no encuentra. El punto que
+    devuelve es el centro de los tramos que llevan ese nombre, así que es
+    precisión de CALLE y nunca de portal: se declara tal cual.
+    """
+    nombre, _ = _geo_via_limpia(via)
+    mun = str(municipio or "").strip()
+    if len(nombre) < 4 or not mun:
+        return None
+    # La palabra más larga: la que menos se equivoca al abreviar. Se escapan las
+    # comillas para que no se pueda inyectar nada en la consulta.
+    palabra = max(re.split(r"[\s,\.]+", nombre), key=len).replace('"', "")
+    mun_q = mun.replace('"', "")
+    if len(palabra) < 4:
+        return None
+
+    q = (f'[out:json][timeout:20];'
+         f'area["name"~"^{mun_q}$",i]["boundary"="administrative"]->.a;'
+         f'way(area.a)["highway"]["name"~"{palabra}",i];out center 60;')
+    r = await _geo_pide(c, _OVERPASS, cuerpo=q, intentos=2)
+    try:
+        elementos = r.json().get("elements", [])
+    except Exception:
+        return None
+    if not elementos:
+        return None
+
+    # Puede haber varias vías distintas que contengan la palabra. Se elige el
+    # NOMBRE más parecido y se promedian sólo sus tramos: mezclar dos calles
+    # distintas daría un punto en mitad de ninguna parte.
+    porn = {}
+    for e in elementos:
+        n = (e.get("tags") or {}).get("name")
+        cen = e.get("center") or {}
+        if n and cen.get("lat") is not None:
+            porn.setdefault(n, []).append((cen["lat"], cen["lon"]))
+    if not porn:
+        return None
+    mejor = max(porn, key=lambda n: _geo_parecido(nombre, n))
+    if _geo_parecido(nombre, mejor) < 0.45:
+        return None
+    puntos = porn[mejor]
+    lat = sum(p[0] for p in puntos) / len(puntos)
+    lng = sum(p[1] for p in puntos) / len(puntos)
+
+    return {
+        "fuente": "overpass",
+        # OpenStreetMap otra vez: no confirma a Nominatim ni a Photon.
+        "familia": "osm",
+        "lat": lat, "lng": lng,
+        "calle": str(mejor)[:160], "numero": "", "cp": "",
+        "municipio": mun[:120],
+        "display": f"{mejor}, {mun}"[:300],
+        "precision": "calle",
+    }
+
+
+@api_router.get("/cortex/geo/rescate")
+async def cortex_geo_rescate(via: str, municipio: str = "", cp: str = "",
+                             _=Depends(require_admin)):
+    """Las dos fuentes que sólo se pueden preguntar desde el servidor.
+
+    Devuelve una LISTA de resultados con la misma forma que los buscadores del
+    navegador, para que se sumen a la votación sin ningún trato especial. Puede
+    venir vacía: no encontrar nada es una respuesta y hay que poder darla.
+
+    Se cachea en `geo_rescate` porque el Catastro es lento (tres saltos, varios
+    segundos) y porque la misma dirección se consulta una y otra vez: el mismo
+    portal falla muchos días seguidos, que es justo por lo que está en esta
+    pantalla.
+    """
+    via = (via or "").strip()[:200]
+    municipio = (municipio or "").strip()[:120]
+    cp = re.sub(r"\D", "", cp or "")[:5]
+    if len(via) < 3:
+        raise HTTPException(400, "via demasiado corta")
+
+    clave = f"{_geo_sin_acentos(via).upper()}|{_geo_sin_acentos(municipio).upper()}|{cp}"
+    guardado = await db.geo_rescate.find_one({"_id": clave}, {"_id": 0, "res": 1})
+    if guardado is not None:
+        return {"resultados": guardado.get("res") or [], "cache": True}
+
+    import httpx as _httpx
+    resultados = []
+    async with _httpx.AsyncClient(timeout=25, headers=_UA_GEO,
+                                  follow_redirects=True) as c:
+        salidas = await asyncio.gather(
+            _geo_catastro(c, via, municipio, cp),
+            _geo_overpass(c, via, municipio),
+            return_exceptions=True)
+    for s in salidas:
+        if isinstance(s, dict):
+            resultados.append(s)
+        elif isinstance(s, Exception):
+            logger.warning(f"rescate geo: {type(s).__name__}: {str(s)[:120]}")
+
+    await db.geo_rescate.update_one(
+        {"_id": clave},
+        {"$set": {"res": resultados, "en": datetime.now(timezone.utc)}},
+        upsert=True)
+    return {"resultados": resultados, "cache": False}
+
+
 @api_router.get("/cortex/missing-hoy")
 async def cortex_missing_hoy(day: str = "", center: str = "", _=Depends(require_admin)):
     """Los paquetes que HOY están en MISSING, con quién los lleva.
