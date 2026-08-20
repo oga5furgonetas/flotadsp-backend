@@ -307,6 +307,10 @@ export const cortexPackage = (tba) => api.get(`/cortex/package/${tba}`)
 export const cortexAlerts = (day, center) => api.get('/cortex/alerts', { params: { day, center } })
 export const cortexHeatmap = (day, center) => api.get('/cortex/heatmap', { params: { day, center } })
 export const cortexDays = (center) => api.get('/cortex/days', { params: { center } })
+// Que hay en una coordenada. Para los paquetes en los que Cortex manda el punto
+// pero no el texto de la direccion: sin esto la pantalla se rendia teniendo un
+// dato en la mano.
+export const getGeoInverso = (lat, lng) => api.get('/cortex/geo/inverso', { params: { lat, lng } })
 export const cortexStations = () => api.get('/cortex/stations')
 export const cortexAssignStation = (service_area_id, center) => api.post('/cortex/stations', { service_area_id, center })
 // Reparto automático por geografía. Sin `aplicar` solo propone: se puede mirar

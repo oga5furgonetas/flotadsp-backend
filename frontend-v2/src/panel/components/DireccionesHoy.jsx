@@ -3,7 +3,7 @@ import {
   MapPin, Loader2, ExternalLink, SearchX, ChevronDown, User, Navigation, CheckCircle2, HelpCircle,
 } from 'lucide-react'
 import { useT } from '../../i18n'
-import { cortexDireccionesHoy, cortexPortalGeodir } from '../api'
+import { cortexDireccionesHoy, cortexPortalGeodir, getGeoInverso } from '../api'
 import { lista } from '../../lib/lista'
 import { buscarDireccion, fraseVeredicto } from '../../lib/geoDireccion'
 
@@ -46,7 +46,19 @@ function estadoDe(p, buscandoAhora) {
     }
     return { k: 'bien', pill: null, tono: 'emerald', Icono: CheckCircle2, frase: f }
   }
-  if (!p.direccion) return { k: 'sintexto', pill: null, tono: 'dark', Icono: HelpCircle }
+  /* Sin texto NO es lo mismo que sin respuesta. Si Cortex mando la coordenada,
+     se puede mirar que hay en ese punto; sigue sin ser la direccion del cliente,
+     pero saber que le mandaron a Lugar Pesqueira (Boiro) es infinitamente mejor
+     que "sin direccion que buscar", que es rendirse teniendo un dato. */
+  if (!p.direccion) {
+    if (p.inv === undefined && p.lat != null) {
+      return { k: 'punto', pill: null, tono: 'brand', Icono: Loader2, mirando: true }
+    }
+    if (p.inv?.precision) {
+      return { k: 'punto', pill: null, tono: 'dark', Icono: MapPin, inv: p.inv }
+    }
+    return { k: 'sintexto', pill: null, tono: 'dark', Icono: HelpCircle }
+  }
   if (buscandoAhora) return { k: 'buscando', pill: null, tono: 'brand', Icono: Loader2 }
   return { k: 'nose', pill: null, tono: 'dark', Icono: HelpCircle }
 }
@@ -56,6 +68,63 @@ const TONO = {
   emerald: { borde: 'border-emerald-500/30', fondo: 'bg-emerald-500/[0.04]', txt: 'text-emerald-300', pill: 'bg-emerald-500/20 text-emerald-100' },
   brand:   { borde: 'border-brand-500/30',   fondo: 'bg-brand-500/[0.04]',  txt: 'text-brand-300',   pill: 'bg-brand-500/20 text-brand-100' },
   dark:    { borde: 'border-dark-800',       fondo: 'bg-dark-900/40',       txt: 'text-dark-500',    pill: 'bg-dark-800 text-dark-400' },
+}
+
+/* ── LO QUE HAY DONDE LE MANDARON ────────────────────────────────────────────
+   Se enseña con tres cosas que no se pueden separar sin mentir:
+
+     · QUÉ se sabe            calle si se puede afirmar, y si no, municipio y CP.
+     · CON CUÁNTA FUERZA      "coinciden dos callejeros independientes" no es lo
+                              mismo que "lo dice el oficial y nadie más". El
+                              usuario tiene derecho a saber cuál de las dos.
+     · QUÉ DICEN LOS DEMÁS    en Boiro el Catastro dice 'Lugar Pesqueira' (la
+                              dirección) y OpenStreetMap 'Estrada Xeral' (la
+                              carretera). Las dos son verdad; esconder una sería
+                              fabricar una certeza que no existe.
+
+   Y arriba del todo, el aviso: esto NO es la dirección del cliente. Es lo que
+   hay en el punto al que mandaron al conductor, que es justo el punto que puede
+   estar mal. Sin esa frase, la pantalla invita a llamar a una puerta al azar. */
+function BloqueInverso({ inv, t }) {
+  const frase = inv.confianza === 'dos_fuentes' ? t('dh.inv.dos')
+    : inv.confianza === 'solo_oficial' ? t('dh.inv.oficial')
+      : t('dh.inv.solozona')
+  return (
+    <div className="rounded-xl border border-dark-800 bg-dark-950/40 p-3.5">
+      <p className="flex items-center gap-2 text-[12.5px] font-semibold text-dark-200">
+        <MapPin size={14} className="text-brand-400/80" /> {t('dh.inv.tit')}
+      </p>
+
+      <p className="mt-2 text-[14px] font-semibold leading-snug text-dark-50">
+        {[inv.calle, inv.municipio, inv.cp].filter(Boolean).join(', ') || t('dh.inv.nada')}
+      </p>
+      <p className="mt-1 text-[11px] leading-relaxed text-dark-500">{frase}</p>
+
+      <p className="mt-2.5 border-l-2 border-amber-500/50 pl-2.5 text-[11px] leading-relaxed text-amber-200/80">
+        {t('dh.inv.aviso')}
+      </p>
+
+      {inv.discrepancia?.length > 0 && (
+        <p className="mt-2 text-[11px] leading-relaxed text-dark-500">
+          <span className="font-semibold text-dark-400">{t('dh.inv.otros')}:</span>{' '}
+          {inv.discrepancia.join(' · ')}
+        </p>
+      )}
+
+      {inv.alrededor?.length > 0 && (
+        <div className="mt-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-dark-600">
+            {t('dh.inv.cerca')}
+          </p>
+          <ul className="mt-1 space-y-0.5">
+            {inv.alrededor.map((d) => (
+              <li key={d} className="text-[11.5px] text-dark-400">{d}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
 }
 
 function Tarjeta({ p, t, abierta, onAbrir, buscandoAhora }) {
@@ -79,7 +148,10 @@ function Tarjeta({ p, t, abierta, onAbrir, buscandoAhora }) {
             {p.conductor || t('dh.sinConductor')}
           </div>
           <div className="mt-0.5 truncate text-[11.5px] text-dark-400">
-            {p.direccion || t('dh.sinDireccion')}
+            {p.direccion
+              || (p.inv?.precision
+                ? [p.inv.calle, p.inv.municipio, p.inv.cp].filter(Boolean).join(', ')
+                : t('dh.sinDireccion'))}
           </div>
         </div>
 
@@ -123,13 +195,17 @@ function Tarjeta({ p, t, abierta, onAbrir, buscandoAhora }) {
                     .replace('{f}', (real.fuentes || []).join(', '))}
                 </p>
               </div>
+            ) : e.inv ? (
+              <BloqueInverso inv={e.inv} t={t} />
             ) : (
               <div className="rounded-xl border border-dark-800 bg-dark-950/40 p-3.5">
                 <p className={`flex items-center gap-2 text-[12.5px] font-semibold ${c.txt}`}>
-                  <e.Icono size={14} className={e.k === 'buscando' ? 'animate-spin' : ''} />
-                  {t(`dh.e.${e.k}`)}
+                  <e.Icono size={14} className={(e.k === 'buscando' || e.mirando) ? 'animate-spin' : ''} />
+                  {e.mirando ? t('dh.inv.mirando') : t(`dh.e.${e.k}`)}
                 </p>
-                <p className="mt-1 text-[11.5px] leading-relaxed text-dark-500">{t(`dh.exp.${e.k}`)}</p>
+                {!e.mirando && (
+                  <p className="mt-1 text-[11.5px] leading-relaxed text-dark-500">{t(`dh.exp.${e.k}`)}</p>
+                )}
               </div>
             )}
           </div>
@@ -168,6 +244,10 @@ export default function DireccionesHoy({ center, day }) {
   const [datos, setDatos] = useState(null)
   const [abierta, setAbierta] = useState(null)
   const [buscando, setBuscando] = useState(null)   // celda que se está buscando AHORA
+  /* tba → qué hay en su coordenada. Sólo para los paquetes en los que Cortex no
+     mandó el texto. No se guarda en la base: el backend ya cachea por
+     coordenada, así que repetirlo sale gratis y aquí no se ensucia nada. */
+  const [inversos, setInversos] = useState({})
 
   const cargar = useCallback(() => {
     cortexDireccionesHoy({ day: day || '', center: center && center !== 'Todos' ? center : '' })
@@ -197,7 +277,22 @@ export default function DireccionesHoy({ center, day }) {
       if (enCurso.current) return
       const p = lista(datos.paquetes).find(
         (x) => !x.real && x.direccion && x.celda && !yaVistos.current.has(x.celda))
-      if (!p) { setBuscando(null); return }
+      if (!p) {
+        setBuscando(null)
+        /* Nada que buscar por texto: le toca a los que no lo tienen. Van
+           DESPUÉS a propósito — una dirección de verdad siempre vale más que
+           saber qué hay en el punto, y la cola es de uno en uno. */
+        const s = lista(datos.paquetes).find(
+          (x) => !x.direccion && x.lat != null && inversos[x.tba] === undefined)
+        if (!s) return
+        enCurso.current = true
+        setInversos((m) => ({ ...m, [s.tba]: null }))   // null = en marcha
+        getGeoInverso(s.lat, s.lng)
+          .then((r) => setInversos((m) => ({ ...m, [s.tba]: r.data || {} })))
+          .catch(() => setInversos((m) => ({ ...m, [s.tba]: {} })))
+          .finally(() => { enCurso.current = false })
+        return
+      }
       yaVistos.current.add(p.celda)
       enCurso.current = true
       setBuscando(p.celda)          // para que la tarjeta lo diga
@@ -221,7 +316,7 @@ export default function DireccionesHoy({ center, day }) {
     }
     const id = setInterval(tic, 2000)
     return () => clearInterval(id)
-  }, [datos, cargar])
+  }, [datos, cargar, inversos])
 
   const paquetes = lista(datos?.paquetes)
 
@@ -293,7 +388,7 @@ export default function DireccionesHoy({ center, day }) {
 
       <div className="space-y-2.5">
         {paquetes.map((p) => (
-          <Tarjeta key={p.tba} p={p} t={t}
+          <Tarjeta key={p.tba} p={{ ...p, inv: inversos[p.tba] ?? undefined }} t={t}
             abierta={abierta === p.tba}
             buscandoAhora={buscando === p.celda}
             onAbrir={() => setAbierta(abierta === p.tba ? null : p.tba)} />

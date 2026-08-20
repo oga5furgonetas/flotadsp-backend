@@ -14,7 +14,9 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
 ## Producción y deploy
 
 - Frontend: Cloudflare Pages → **flotadsp.com**
-  `cd frontend-v2 && npm run build && npx wrangler pages deploy dist --project-name flotadsp-v2 --commit-dirty=true`
+  `cd frontend-v2 && npm run build && npx wrangler pages deploy dist --project-name flotadsp-v2 --branch main --commit-dirty=true`
+  **`--branch main` no es opcional** (gotcha 16): sin él el despliegue entra como
+  Preview de la rama `lab` y flotadsp.com no cambia, sin ningún error.
 - Backend: Fly.io → **https://flotadsp-backend.fly.dev**
   `cd backend && fly deploy --strategy immediate`
   Smoke test tras deploy: `GET /api/health` debe dar `status=ok, mongo=True`.
@@ -179,6 +181,43 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    por nombre: dos tocayos distintos acabarían auditando el uno la furgoneta
    del otro. Pendiente aparte: fusionar las fichas (el historial de daños de
    esas personas está partido en dos).
+
+16. **`wrangler pages deploy` sin `--branch main` NO toca flotadsp.com.** Coge
+   el nombre de la rama de git, y en `flotadsp_lab` esa rama se llama `lab`, así
+   que el despliegue entra como **Preview** de la rama `lab` y produccion se
+   queda con el build anterior. No falla, no avisa: dice "Deployment complete",
+   da una URL que funciona (`https://<hash>.flotadsp-v2.pages.dev`) y **el
+   usuario sigue viendo la version vieja**. El unico sintoma es humano: "no lo
+   veo". Pasó el 2026-08-20 con dos despliegues seguidos —el rescate de
+   direcciones y la pestaña de Documentacion—: los dos "desplegados", ninguno en
+   flotadsp.com, que llevaba 21 h con el build de la vispera. El comando bueno es
+   `npx wrangler pages deploy dist --project-name flotadsp-v2 --branch main
+   --commit-dirty=true`, y se comprueba con
+   `npx wrangler pages deployment list --project-name flotadsp-v2` (la fila tiene
+   que poner **Production / main**) o comparando el hash del bundle:
+   `curl -s https://flotadsp.com/ | grep -o 'assets/v2/index-[A-Za-z0-9_-]*\.js'`.
+17. **Un documento cuyo `doc_type` no encaje EXACTAMENTE no se pintaba en
+   ninguna parte.** La pestaña Documentos de una furgoneta agrupaba comparando
+   contra cinco cajones fijos, y el mismo papel esta guardado de seis maneras
+   ('seguro'/'Seguro', 'contrato'/'Contrato renting'). Eran **60 de 140
+   documentos invisibles** (43%), 38 de ellos en furgonetas activas. El tipo se
+   normaliza ahora en el backend (`_doc_tipo_norm`) y el cajon 'otro' recoge
+   TODO lo que no case: una pantalla que agrupa por categorias necesita SIEMPRE
+   un cajon de sobras, porque lo que no entra en ninguno desaparece sin error.
+   Los que colgaban de furgonetas de baja o borradas se llegan por
+   `GET /documents` (pestaña Documentacion, sin filtro por estado a proposito).
+18. **En geocodificacion INVERSA el acuerdo no se mide por distancia.** Todas
+   las fuentes devuelven aproximadamente el punto que les diste, asi que
+   "coinciden" siempre y la regla de cercania de `geoDireccion.js` no vale: hay
+   que contrastar el NOMBRE. Y la regla dura de "dos familias o nada" tampoco
+   sirve tal cual — en un punto real de Boiro ocho respuestas del Catastro
+   decian 'LG PESQUEIRA' y no se afirmaba nada por ser todas de la misma
+   familia. `/cortex/geo/inverso` usa tres niveles (`dos_fuentes`,
+   `solo_oficial`, nada) y **nunca devuelve numero de portal**: el numero que da
+   la inversa es el del edificio mas cercano al punto, y si el punto estuviera
+   bien el conductor habria encontrado la direccion. Ojo tambien con inflar
+   votos: dar peso doble a las respuestas "exactas" hacia que CartoCiudad, sola,
+   ganara con 'AVENIDA RAXOI' en plena Praza do Obradoiro.
 
 ## Reglas de trabajo
 

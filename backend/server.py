@@ -23774,6 +23774,353 @@ async def cortex_geo_rescate(via: str, municipio: str = "", cp: str = "",
     return {"resultados": resultados, "cache": False}
 
 
+# ─── QUÉ HAY EN LA COORDENADA (GEOCODIFICACIÓN INVERSA) ───────────────────────
+#
+# Para el caso en que Cortex manda el punto pero NO el texto de la dirección.
+# Sin texto no hay nada que buscar y la pantalla se quedaba en "sin dirección
+# que buscar", que es rendirse teniendo un dato en la mano.
+#
+# ── ESTO NO ES LA DIRECCIÓN DEL CLIENTE, Y ES IMPORTANTE ─────────────────────
+# Es lo que hay DONDE MANDARON AL CONDUCTOR. La razón por la que el paquete está
+# en esta pantalla es justamente que ese punto puede estar mal. Así que esto
+# responde "¿a dónde te mandaron?", nunca "¿dónde vive el cliente?". Presentarlo
+# como lo segundo sería el falso positivo más caro de esta pantalla, porque
+# mandaría a alguien a llamar a una puerta que no es. Los textos de la UI dicen
+# exactamente eso y no otra cosa.
+#
+# ── POR QUÉ EL ACUERDO SE MIDE DISTINTO QUE EN LA BÚSQUEDA NORMAL ────────────
+# Buscando una dirección, el acuerdo se mide por CERCANÍA: dos fuentes que caen
+# a 40 m hablan del mismo portal. Aquí eso no vale para nada — todas las fuentes
+# devuelven aproximadamente el punto que les diste, así que "coinciden" siempre.
+# Lo que hay que contrastar es el NOMBRE de lo que dicen que hay.
+#
+# Medido sobre el paquete real del 20-08-2026 (42.6168, -8.8840):
+#     Catastro     LG PESQUEIRA 77, BOIRO
+#     CartoCiudad  LUGAR PESQUEIRA, Boiro
+#     Nominatim    Estrada Xeral, 15939 O Cabo da Cruz
+#     Photon       (sin calle), 15939 O Cabo da Cruz
+#     Overpass     Estrada Xeral
+# Las dos familias dicen cosas distintas y las dos tienen razón: la DIRECCIÓN
+# es Lugar Pesqueira y la CARRETERA por la que se llega es la Estrada Xeral.
+# Dar una de las dos por buena a la brava sería inventar. Se afirma la calle
+# sólo cuando dos familias independientes coinciden en el nombre; si no, se
+# afirma el municipio y el código postal —que es lo que sí está claro— y se
+# enseña lo que dice cada fuente para que lo juzgue una persona.
+
+_CAT_COORD = "https://ovc.catastro.meh.es/OVCServWeb/OVCSWLocalizacionRC/OVCCoordenadas.asmx"
+
+# Prefijos de tipo de vía que sobran al comparar nombres: 'LG PESQUEIRA' y
+# 'LUGAR PESQUEIRA' son lo mismo, y compararlos en crudo daría desacuerdo.
+_RE_SIGLA_VIA = re.compile(
+    r"^(?:lg|lugar|cl|calle|ru|rua|av|avda|avenida|pz|plaza|praza|cr|carretera|"
+    r"ctra|cm|camino|camino|tr|travesia|pq|parroquia|ba|barrio|ur|urbanizacion|"
+    r"po|paseo|gl|glorieta|sd|senda|estrada|aldea)\b\.?\s*", re.I)
+
+
+def _nucleo_via(s: str) -> str:
+    """El nombre de una vía reducido a lo que se puede comparar.
+
+    Quita acentos, la sigla del tipo de vía, los números y las palabras de
+    relleno. 'LG PESQUEIRA 77' y 'LUGAR PESQUEIRA' acaban los dos en
+    'pesqueira'.
+    """
+    t = _geo_sin_acentos(str(s or "")).lower().strip()
+    t = _RE_SIGLA_VIA.sub("", t)
+    t = re.sub(r"\b\d+\b", " ", t)
+    t = re.sub(r"\b(de|del|da|do|la|el|los|las|os|as|a|o|y|e)\b", " ", t)
+    return " ".join(re.sub(r"[^a-z0-9 ]+", " ", t).split())
+
+
+def _mismo_nombre(a: str, b: str) -> bool:
+    """¿Hablan las dos de la misma vía?
+
+    Basta con que compartan una palabra significativa: los callejeros escriben
+    lo mismo de mil maneras ('RUA SANTAS MARIÑAS (DAS)' / 'Rua das Santas
+    Mariñas'). Palabras de tres letras o menos no cuentan, que si no 'San'
+    emparejaría media Galicia.
+    """
+    ta = {w for w in _nucleo_via(a).split() if len(w) > 3}
+    tb = {w for w in _nucleo_via(b).split() if len(w) > 3}
+    return bool(ta and tb and (ta & tb))
+
+
+async def _inv_catastro(c, lat: float, lng: float) -> list:
+    """Catastro: qué hay en el punto y, si ahí no hay nada, qué hay a 50 m.
+
+    El `_Distancia` es el que salva el rural: un punto caído en la carretera no
+    tiene referencia catastral propia, pero las casas de al lado sí. Devuelve
+    hasta una docena de direcciones OFICIALES de alrededor, que es justo lo que
+    necesita quien está intentando averiguar a qué puerta iba el paquete.
+    """
+    salidas = []
+    try:
+        r = await _geo_pide(c, f"{_CAT_COORD}/Consulta_RCCOOR",
+                            {"SRS": "EPSG:4326", "Coordenada_X": str(lng),
+                             "Coordenada_Y": str(lat)})
+        exacta = (_xml_tag(r.text, "ldt") or [""])[0].strip()
+        # Dos cosas que NO son una dirección: la frase que devuelve cuando no
+        # encuentra nada, y una parcela rústica ('Polígono 7 Parcela 9023'), que
+        # es un trozo de monte y no una puerta a la que llamar.
+        if (exacta and "NO HAY REFERENCIA" not in exacta.upper()
+                and not re.match(r"^pol[ií]gono\s", exacta, re.I)):
+            salidas.append({"fuente": "catastro", "familia": "ign",
+                            "texto": exacta[:200], "metros": 0})
+    except Exception:
+        pass
+
+    try:
+        r = await _geo_pide(c, f"{_CAT_COORD}/Consulta_RCCOOR_Distancia",
+                            {"SRS": "EPSG:4326", "Coordenada_X": str(lng),
+                             "Coordenada_Y": str(lat)})
+        for d in _xml_tag(r.text, "ldt")[:12]:
+            d = d.strip()
+            # Las parcelas rústicas ('Polígono 7 Parcela 9023') no son una
+            # dirección a la que se pueda llamar: se descartan.
+            if d and not re.match(r"^pol[ií]gono\s", d, re.I):
+                salidas.append({"fuente": "catastro_50m", "familia": "ign",
+                                "texto": d[:200], "metros": 50})
+    except Exception:
+        pass
+    return salidas
+
+
+async def _inv_cartociudad(c, lat: float, lng: float) -> Optional[dict]:
+    """CartoCiudad (IGN). Pide EPSG:4258, que para este uso es igual que 4326."""
+    try:
+        r = await _geo_pide(c, "https://www.cartociudad.es/geocoder/api/geocoder/reverseGeocode",
+                            {"lon": str(lng), "lat": str(lat)})
+        j = r.json()
+    except Exception:
+        return None
+    if not isinstance(j, dict):
+        return None
+    via = " ".join(str(x).strip() for x in (j.get("tip_via"), j.get("address")) if x)
+    if not via.strip():
+        return None
+    return {"fuente": "cartociudad", "familia": "ign", "texto": via[:200],
+            "calle": str(j.get("address") or "")[:160],
+            "cp": str(j.get("postalCode") or "")[:12],
+            "municipio": str(j.get("muni") or "")[:120], "metros": 0}
+
+
+async def _inv_osm(c, lat: float, lng: float) -> list:
+    """Las tres voces de OpenStreetMap. Cuentan como UNA sola familia.
+
+    Se preguntan las tres porque cada una falla en sitios distintos —en el punto
+    de Boiro, Photon no dio calle y Nominatim sí— pero coincidir entre ellas no
+    confirma nada: leen la misma base.
+    """
+    out = []
+    try:
+        r = await _geo_pide(c, "https://nominatim.openstreetmap.org/reverse",
+                            {"lat": str(lat), "lon": str(lng), "format": "jsonv2"}, 2)
+        a = (r.json() or {}).get("address") or {}
+        via = a.get("road") or a.get("pedestrian") or a.get("residential") or ""
+        if via or a.get("postcode"):
+            out.append({"fuente": "nominatim", "familia": "osm",
+                        "texto": str(via)[:200], "calle": str(via)[:160],
+                        "cp": str(a.get("postcode") or "")[:12],
+                        "municipio": str(a.get("city") or a.get("town")
+                                         or a.get("village") or "")[:120],
+                        "metros": 0})
+    except Exception:
+        pass
+
+    try:
+        r = await _geo_pide(c, "https://photon.komoot.io/reverse",
+                            {"lat": str(lat), "lon": str(lng), "limit": "1"}, 2)
+        p = ((r.json().get("features") or [{}])[0] or {}).get("properties") or {}
+        via = p.get("street") or ""
+        if via or p.get("postcode"):
+            out.append({"fuente": "photon", "familia": "osm",
+                        "texto": str(via)[:200], "calle": str(via)[:160],
+                        "cp": str(p.get("postcode") or "")[:12],
+                        "municipio": str(p.get("city") or p.get("county") or "")[:120],
+                        "metros": 0})
+    except Exception:
+        pass
+
+    try:
+        q = (f'[out:json][timeout:20];way(around:120,{lat},{lng})["highway"]["name"];'
+             f'out center 6;')
+        r = await _geo_pide(c, _OVERPASS, cuerpo=q, intentos=2)
+        vistos = []
+        for e in (r.json().get("elements") or []):
+            n = (e.get("tags") or {}).get("name")
+            if n and n not in vistos:
+                vistos.append(n)
+        if vistos:
+            out.append({"fuente": "overpass", "familia": "osm",
+                        "texto": vistos[0][:200], "calle": vistos[0][:160],
+                        "cp": "", "municipio": "", "metros": 120,
+                        "cerca": vistos[:5]})
+    except Exception:
+        pass
+    return out
+
+
+@api_router.get("/cortex/geo/inverso")
+async def cortex_geo_inverso(lat: float, lng: float, _=Depends(require_admin)):
+    """Qué hay en el punto al que mandaron al conductor.
+
+    Devuelve lo que dice CADA fuente y, aparte, lo único que se puede AFIRMAR:
+    la calle sólo si dos familias independientes coinciden en el nombre, y el
+    municipio y el código postal cuando eso es todo lo que está claro.
+
+    Nunca devuelve un número de portal. La geocodificación inversa da el portal
+    del edificio más cercano al punto, que no tiene por qué ser el del cliente
+    —de hecho, si el punto estuviera bien, el conductor habría encontrado la
+    dirección—. Decir un número aquí sería inventarlo.
+    """
+    if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+        raise HTTPException(400, "coordenada fuera de rango")
+
+    # Caché por coordenada redondeada a ~1 m. El mismo portal falla muchos días
+    # seguidos y estas consultas son lentas (el Catastro, sobre todo).
+    clave = f"inv:{lat:.5f},{lng:.5f}"
+    guardado = await db.geo_rescate.find_one({"_id": clave}, {"_id": 0, "res": 1})
+    if guardado is not None:
+        return {**(guardado.get("res") or {}), "cache": True}
+
+    import httpx as _httpx
+    async with _httpx.AsyncClient(timeout=25, headers=_UA_GEO,
+                                  follow_redirects=True) as c:
+        cat, carto, osm = await asyncio.gather(
+            _inv_catastro(c, lat, lng), _inv_cartociudad(c, lat, lng),
+            _inv_osm(c, lat, lng), return_exceptions=True)
+
+    fuentes = []
+    for s in (cat, osm):
+        if isinstance(s, list):
+            fuentes.extend(s)
+    if isinstance(carto, dict):
+        fuentes.append(carto)
+
+    # ── QUÉ SE PUEDE AFIRMAR, Y CON CUÁNTA FUERZA ──────────────────────────
+    #
+    # Aquí no vale el "o dos familias o no digo nada" de la búsqueda normal, y
+    # se vio en cuanto se probó: en el punto real de Boiro OCHO respuestas del
+    # Catastro decían 'LG PESQUEIRA' y la regla dura no afirmaba nada, porque
+    # todas eran de la misma familia. Callar eso no es prudencia, es tirar la
+    # única respuesta que había.
+    #
+    # Se dice lo que se sabe Y de quién se sabe, en tres niveles:
+    #   dos_fuentes    OpenStreetMap y el callejero oficial coinciden. Lo mejor.
+    #   solo_oficial   sólo el callejero oficial, pero de acuerdo consigo mismo.
+    #                  Se afirma diciendo que viene de ahí y de ningún sitio más.
+    #   (nada)         las fuentes se contradicen. Entonces sólo municipio y CP.
+    #
+    # La discrepancia NO se esconde: se devuelve aparte. En Boiro el Catastro
+    # dice 'Lugar Pesqueira' (la dirección) y OpenStreetMap 'Estrada Xeral' (la
+    # carretera por la que se llega). Las dos son verdad y quien mira la
+    # pantalla tiene que ver las dos.
+    def _nom(f):
+        return f.get("calle") or f.get("texto") or ""
+
+    con_nombre = [f for f in fuentes if _nom(f).strip()]
+    osm = [f for f in con_nombre if f["familia"] == "osm"]
+    exactas = [f for f in con_nombre if f["fuente"] in ("catastro", "cartociudad")]
+    vecinas = [f for f in con_nombre if f["fuente"] == "catastro_50m"]
+
+    calle, familias_calle, confianza = "", [], None
+
+    # Nivel 1: acuerdo entre familias distintas.
+    for a in con_nombre:
+        fams = {a["familia"]} | {b["familia"] for b in con_nombre
+                                 if b is not a and _mismo_nombre(_nom(a), _nom(b))}
+        if len(fams) >= 2 and len(fams) > len(familias_calle):
+            calle, familias_calle, confianza = _nom(a), sorted(fams), "dos_fuentes"
+
+    # Nivel 2: sólo el callejero oficial, y coherente consigo mismo. El acierto
+    # EXACTO sobre el punto pesa doble: es la parcela que contiene la coordenada,
+    # no una de al lado.
+    if not calle:
+        from collections import Counter
+        # Se cuentan RESPUESTAS DISTINTAS, no votos inflados. Duplicar el peso
+        # de las respuestas "exactas" ya se probó y salió mal: en la Praza do
+        # Obradoiro, CartoCiudad contesta 'AVENIDA RAXOI' —la plaza de al lado—
+        # y con el voto doble ganaba él solo a un Catastro que decía
+        # 'PZ OBRADOIRO'. Una fuente sola no puede ganarle a otra fuente sola.
+        respuestas, texto_de = Counter(), {}
+        for f in exactas + vecinas:
+            n = _nucleo_via(_nom(f))
+            if n:
+                respuestas[n] += 1
+                texto_de.setdefault(n, _nom(f))
+        # El acierto EXACTO del Catastro (la parcela que contiene el punto, no
+        # una de al lado) desempata, pero no vale por dos: suma medio punto.
+        exacta_cat = next((f for f in exactas if f["fuente"] == "catastro"), None)
+        bonus = _nucleo_via(_nom(exacta_cat)) if exacta_cat else None
+
+        if respuestas:
+            def peso(n):
+                return respuestas[n] + (0.5 if n == bonus else 0)
+            top = max(respuestas, key=peso)
+            total = sum(respuestas.values())
+            # Dos condiciones, y las dos hacen falta:
+            #  · al menos DOS respuestas distintas dicen lo mismo — una sola
+            #    fuente no afirma nada, por oficial que sea;
+            #  · y son mayoría — en una esquina el Catastro devuelve tres calles
+            #    de alrededor y ninguna es "la" dirección.
+            if respuestas[top] >= 2 and peso(top) >= max(2, (total + 1) / 2):
+                calle, familias_calle, confianza = texto_de[top], ["ign"], "solo_oficial"
+
+    # El municipio y el CP son el suelo: casi siempre se sabe, y es lo que pide
+    # quien está mirando la pantalla cuando no hay nada más.
+    def _mas_repetido(campo):
+        # collections no es global en este fichero: se importa donde se usa,
+        # como el resto de importaciones puntuales.
+        from collections import Counter
+        vals = [str(f.get(campo) or "").strip() for f in fuentes if f.get(campo)]
+        return Counter(vals).most_common(1)[0][0] if vals else ""
+
+    municipio, cp = _mas_repetido("municipio"), _mas_repetido("cp")
+    alrededor = [f["texto"] for f in fuentes if f["fuente"] == "catastro_50m"]
+
+    # SIN NÚMERO DE PORTAL. El Catastro devuelve 'LG PESQUEIRA 77', y ese 77 es
+    # la casa más cercana al punto, no la del cliente — si el punto estuviera
+    # bien, el conductor habría encontrado la dirección. Enseñar el número aquí
+    # sería mandar a alguien a llamar a una puerta al azar. Los números siguen
+    # estando en la lista de "alrededor", que es lo que son.
+    if calle:
+        calle = re.sub(r"\s*\([^)]*\)\s*$", " ", calle)      # ' (A CORUÑA)'
+        calle = re.sub(r"\b\d+\s*(?:\([A-Za-z]\))?", " ", calle)  # '77', '2(D)'
+        calle = " ".join(calle.split()).strip(" ,.-")
+        if municipio:
+            calle = re.sub(r"[\s,]*" + re.escape(municipio) + r"\s*$", "",
+                           calle, flags=re.I).strip(" ,.-")
+
+    # Lo que dicen los demás y no encaja. Se enseña, no se descarta.
+    discrepancia = sorted({_nom(f) for f in con_nombre
+                           if calle and not _mismo_nombre(calle, _nom(f))})
+
+    if calle:
+        precision = "calle"
+    elif municipio or cp:
+        precision = "zona"
+    else:
+        precision = None
+
+    res = {
+        "precision": precision,
+        "calle": calle, "familias": familias_calle,
+        # Con cuánta fuerza se afirma la calle. La pantalla escribe una frase
+        # distinta para cada valor: no es lo mismo "coinciden dos callejeros
+        # independientes" que "lo dice el oficial y nadie más".
+        "confianza": confianza,
+        "discrepancia": discrepancia[:4],
+        "municipio": municipio, "cp": cp,
+        # Direcciones oficiales de alrededor. Se enseñan como lo que son —lo que
+        # hay cerca— y jamás como la dirección del paquete.
+        "alrededor": alrededor[:8],
+        "fuentes": [{k: v for k, v in f.items() if k != "metros"} for f in fuentes],
+    }
+    await db.geo_rescate.update_one(
+        {"_id": clave}, {"$set": {"res": res, "en": datetime.now(timezone.utc)}},
+        upsert=True)
+    return {**res, "cache": False}
+
+
 @api_router.get("/cortex/missing-hoy")
 async def cortex_missing_hoy(day: str = "", center: str = "", _=Depends(require_admin)):
     """Los paquetes que HOY están en MISSING, con quién los lleva.
