@@ -28,12 +28,22 @@ primary_region = "cdg"
   processes = ["app"]
   kill_timeout = "90s"
 
+  # OJO: aquí va /api/vivo y NO /api/health, a propósito.
+  #
+  # /api/health hace ping a Mongo. El 20-08-2026, al ampliar el plan de Atlas,
+  # el clúster se quedó sin primario unos minutos y ese ping pasó a tardar los
+  # 30 s de selección de servidor. Esta comprobación corta a los 5 s, Fly marcó
+  # la máquina como enferma y dejó de mandarle tráfico: la aplicación ENTERA
+  # caída, login incluido, y sin recuperarse sola cuando Mongo volvió. 2 h 26.
+  #
+  # Fly no pregunta "¿va todo bien?", pregunta "¿le mando peticiones a esta
+  # máquina?". Esa pregunta la contesta /api/vivo, que no toca la base.
   [[http_service.checks]]
     interval = "30s"
     timeout = "5s"
     grace_period = "15s"
     method = "GET"
-    path = "/api/health"
+    path = "/api/vivo"
 
 [[vm]]
   size = "shared-cpu-1x"

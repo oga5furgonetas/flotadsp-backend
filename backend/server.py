@@ -10477,10 +10477,43 @@ async def r2_test(_=Depends(require_admin)):
                 "bucket": R2_BUCKET, "endpoint": R2_ENDPOINT}
 
 
+@api_router.get("/vivo")
+async def vivo():
+    """¿Está vivo el proceso? Nada más. NO toca Mongo, y ése es todo el motivo.
+
+    Es lo que mira el balanceador de Fly para decidir si manda tráfico aquí, y
+    tiene que responder a la pregunta correcta. Fly no pregunta "¿va todo bien?",
+    pregunta "¿le mando las peticiones a esta máquina o la saco de la rotación?".
+
+    QUÉ PASÓ EL 20-08-2026, que es de donde sale este endpoint. Al ampliar el
+    plan de Atlas el clúster se quedó sin nodo primario unos minutos —normal
+    durante un escalado—. `/api/health` hace un ping a Mongo, y sin primario ese
+    ping no falla: se queda esperando los 30 s de selección de servidor. La
+    comprobación de Fly corta a los 5 s, marcó la máquina como enferma y dejó de
+    mandarle tráfico. A partir de ahí **la aplicación entera devolvía error de
+    conexión**, incluido el login y todo lo que no necesita la base de datos.
+
+    Y lo peor: no se recuperó sola. Mongo volvió en minutos, pero para entonces
+    el proceso arrastraba cientos de operaciones encoladas de 30 s (los bucles
+    de avisos, la ingesta de Cortex y sus reintentos), así que la comprobación
+    seguía pasándose de los 5 s. Fueron 2 h 26 min de caída y hubo que
+    reiniciar a mano una máquina que llevaba todo el rato viva.
+
+    Con esta separación, un tropiezo de Mongo hace que fallen las consultas que
+    necesitan datos —no hay forma de evitar eso— pero la aplicación sigue
+    accesible y vuelve sola en cuanto la base responde.
+    """
+    return {"vivo": True}
+
+
 @api_router.get("/health")
 async def health():
+    # El ping va acotado. Sin primario, Mongo no contesta "no": se queda
+    # esperando su tiempo de selección de servidor, que son 30 s. Este endpoint
+    # es el que mira una persona para saber qué pasa, y tardar medio minuto en
+    # decir "Mongo no está" no es informar, es sumarse al atasco.
     try:
-        await db.command("ping")
+        await asyncio.wait_for(db.command("ping"), timeout=3)
         mongo_ok = True
     except Exception:
         mongo_ok = False

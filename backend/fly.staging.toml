@@ -32,7 +32,9 @@ primary_region = "cdg"
     timeout = "5s"
     grace_period = "15s"
     method = "GET"
-    path = "/api/health"
+    # Igual que en produccion: /api/vivo no toca Mongo. Ver el comentario
+    # largo en fly.toml (caida del 20-08-2026).
+    path = "/api/vivo"
 
 [[vm]]
   size = "shared-cpu-1x"
