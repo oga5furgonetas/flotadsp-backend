@@ -6312,12 +6312,106 @@ async def get_vehicle(vehicle_id: str, user: dict = Depends(require_admin)):
 # VEHICLE DOCUMENTS
 # =========================
 
+# ── TIPOS DE DOCUMENTO: EL MISMO PAPEL ESCRITO DE SEIS MANERAS ───────────────
+#
+# `doc_type` se guarda tal cual llega, y ha llegado de todo: 'seguro' y 'Seguro',
+# 'contrato' y 'Contrato renting', 'ficha_tecnica' y 'Ficha tecnica'. La pantalla
+# agrupaba por igualdad exacta contra cinco cajones fijos, así que todo lo que no
+# encajaba EXACTAMENTE no se pintaba en ninguna parte. No daba error: sencillamente
+# no aparecía.
+#
+# Medido en producción el 20-08-2026: de 140 documentos subidos, **60 no se veían**
+# (43%), y 38 de ellos en furgonetas activas. Diez permisos de circulación, nueve
+# fichas técnicas, seis pólizas... todos subidos, todos guardados, todos invisibles.
+# Por eso María entraba "varias veces" y no encontraba lo que ella misma había
+# subido: estaba mirando donde debía.
+_DOC_SINONIMOS = {
+    "seguro": "seguro", "poliza": "seguro", "seguros": "seguro",
+    "itv": "itv", "certificado_itv": "itv",
+    "ficha_tecnica": "ficha_tecnica", "fichatecnica": "ficha_tecnica",
+    "contrato": "contrato", "contrato_renting": "contrato",
+    "contrato_alquiler": "contrato", "renting": "contrato",
+    "permiso_circulacion": "permiso", "permiso_de_circulacion": "permiso",
+    "autorizacion_circulacion": "permiso",
+    "autorizacion_de_circulacion": "permiso", "circulacion": "permiso",
+}
+
+
+def _doc_tipo_norm(v) -> str:
+    """El cajón al que pertenece un documento. Nunca devuelve vacío.
+
+    Lo que no reconoce cae en 'otro' A PROPÓSITO: un documento que no se
+    reconoce tiene que salir de todas formas. Perderlo de vista es peor que
+    ponerlo en el cajón equivocado, porque nadie sabe que le falta.
+    """
+    s = _geo_sin_acentos(str(v or "")).lower().strip()
+    s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+    return _DOC_SINONIMOS.get(s, s if s in ("seguro", "itv", "ficha_tecnica",
+                                            "contrato", "permiso") else "otro")
+
+
 @api_router.get("/vehicles/{vehicle_id}/documents")
 async def list_vehicle_documents(vehicle_id: str, _=Depends(require_admin)):
     docs = await db.vehicle_documents.find(
         {"vehicle_id": vehicle_id}, {"_id": 0}
     ).sort("uploaded_at", -1).to_list(100)
+    for d in docs:
+        d["tipo"] = _doc_tipo_norm(d.get("doc_type"))
     return docs
+
+
+@api_router.get("/documents")
+async def list_all_documents(q: str = "", _=Depends(require_admin)):
+    """TODA la documentación subida alguna vez, esté como esté la furgoneta.
+
+    Existe porque la documentación sólo se veía entrando en la ficha de su
+    furgoneta, y una furgoneta devuelta ya no sale en la lista. Resultado: 22
+    documentos —contratos de renting, fichas técnicas, seguros— guardados,
+    intactos en R2, y sin ninguna forma de llegar a ellos desde la aplicación.
+    Cuatro de ellos colgaban de una furgoneta ya borrada de la base.
+
+    Que una furgoneta se devuelva no significa que su papeleo deje de hacer
+    falta: un seguro o una ITV se reclaman meses después de soltar el vehículo.
+    Aquí sale todo, con su matrícula y su estado, y se puede buscar.
+
+    No hay filtro por estado a propósito. El sentido de esta pantalla es que
+    nada quede escondido.
+    """
+    docs = await db.vehicle_documents.find({}, {"_id": 0}).sort(
+        "uploaded_at", -1).to_list(5000)
+    if not docs:
+        return {"documentos": [], "total": 0}
+
+    vids = list({d.get("vehicle_id") for d in docs if d.get("vehicle_id")})
+    vehiculos = {v["id"]: v for v in await db.vehicles.find(
+        {"id": {"$in": vids}},
+        {"_id": 0, "id": 1, "license_plate": 1, "status": 1, "center": 1}
+    ).to_list(5000)}
+
+    out = []
+    for d in docs:
+        v = vehiculos.get(d.get("vehicle_id")) or {}
+        out.append({
+            **d,
+            "tipo": _doc_tipo_norm(d.get("doc_type")),
+            "matricula": v.get("license_plate") or "",
+            # 'borrada' no es un estado del vehículo: es que su ficha ya no
+            # existe. Se dice con esa palabra para que se entienda que el
+            # documento sigue ahí aunque la furgoneta no.
+            "estado": v.get("status") or ("borrada" if not v else "active"),
+            "center": v.get("center") or "",
+        })
+
+    termino = _geo_sin_acentos(q or "").lower().strip()
+    if termino:
+        def casa(x):
+            campos = (x.get("matricula"), x.get("name"), x.get("doc_type"),
+                      x.get("tipo"), x.get("center"))
+            return any(termino in _geo_sin_acentos(str(c or "")).lower()
+                       for c in campos)
+        out = [x for x in out if casa(x)]
+
+    return {"documentos": out, "total": len(out)}
 
 
 @api_router.post("/vehicles/{vehicle_id}/documents")

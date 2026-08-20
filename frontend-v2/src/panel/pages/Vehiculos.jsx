@@ -22,6 +22,7 @@ import {
   getVehicleMaintenance, registerOilChange, registerMaintenanceChange,
   getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument, createVehicle,
   getVehicleDamageLedger, repairVehicleLedger, getSpareWheels, getMaintenanceLog, borrarApunteMantenimiento,
+  getAllDocuments,
 } from '../api'
 import { getAdmin } from '../auth'
 
@@ -1346,16 +1347,32 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                 {/* Input oculto para subir */}
                 <input ref={docInputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp" className="hidden" onChange={handleDocUpload} />
 
-                {/* Tipos de documentos */}
+                {/* Tipos de documentos.
+
+                    Se agrupa por `tipo`, que lo normaliza el backend, y NO por
+                    `doc_type` en crudo. Antes se comparaba por igualdad exacta
+                    contra estos cajones, y como el mismo papel se ha guardado
+                    de seis maneras ('seguro' y 'Seguro', 'contrato' y 'Contrato
+                    renting'), todo lo que no encajaba EXACTAMENTE no se pintaba
+                    en ninguna parte. Sin error y sin aviso: simplemente no
+                    estaba. Eran 60 de 140 documentos, el 43%.
+
+                    El cajón 'otro' recoge además todo lo que no case con
+                    ninguno, así que ya no hay forma de que un documento subido
+                    desaparezca de la pantalla. */}
                 <div className="space-y-4">
                   {[
                     { type: 'seguro',        label: 'Seguro',           Icon: Shield },
                     { type: 'itv',           label: 'Certificado ITV',  Icon: FileCheck },
                     { type: 'ficha_tecnica', label: 'Ficha técnica',    Icon: FileBadge },
                     { type: 'contrato',      label: 'Contrato renting', Icon: FileText },
+                    { type: 'permiso',       label: 'Permiso de circulación', Icon: FileCheck },
                     { type: 'otro',          label: 'Otro documento',   Icon: File },
                   ].map(({ type, label, Icon }) => {
-                    const typeDocs = (docs || []).filter(d => d.doc_type === type)
+                    const CAJONES = ['seguro', 'itv', 'ficha_tecnica', 'contrato', 'permiso']
+                    const tipoDe = (d) => d.tipo || d.doc_type
+                    const typeDocs = (docs || []).filter(d => (
+                      type === 'otro' ? !CAJONES.includes(tipoDe(d)) : tipoDe(d) === type))
                     return (
                       <div key={type}>
                         <div className="mb-1.5 flex items-center justify-between">
@@ -1643,6 +1660,129 @@ function AddVehicleModal({ centers, onSaved, onClose }) {
 }
 
 /* ── Tabla principal ── */
+/* ── TODA LA DOCUMENTACIÓN, PASE LO QUE PASE CON LA FURGONETA ────────────────
+   Hasta ahora el papeleo sólo se veía entrando en la ficha de su furgoneta.
+   Parece razonable hasta que la furgoneta se devuelve: entonces desaparece de
+   la lista y su documentación se vuelve inalcanzable, aunque siga guardada.
+
+   Medido en producción el 20-08-2026, sobre 140 documentos subidos:
+     · 22 colgaban de furgonetas de baja o borradas — sin forma de abrirlos.
+     · 38 más no se pintaban ni estando la furgoneta activa, porque su tipo
+       ('Permiso circulacion', 'Poliza'…) no casaba con ninguno de los cinco
+       cajones fijos de la ficha.
+   Total: 60 de 140 invisibles. Los 22 ficheros se comprobaron uno a uno contra
+   R2 y estaban TODOS ahí, con su tamaño. No se había perdido nada: no había por
+   dónde llegar. Por eso María entraba varias veces y no encontraba lo suyo.
+
+   Aquí no hay filtro por estado, y es el sentido de la pantalla: si se subió
+   alguna vez, aparece. El estado de la furgoneta se enseña como etiqueta —
+   devuelta, en taller, ficha borrada — porque saber de qué furgoneta es y en
+   qué situación está forma parte de la respuesta. */
+function PanelDocumentos() {
+  const t = useT()
+  const [docs, setDocs] = useState(null)
+  const [q, setQ] = useState('')
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    getAllDocuments()
+      .then((r) => setDocs(r.data?.documentos || []))
+      .catch(() => setErr('No se pudo cargar la documentación.'))
+  }, [])
+
+  /* El filtro se hace aquí y no pidiéndoselo al servidor en cada tecla: son
+     unos cientos de documentos y así se escribe sin esperas ni parpadeos. */
+  const filtrados = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    if (!s) return docs || []
+    const limpia = (x) => String(x || '').toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    const term = s.normalize('NFD').replace(/[̀-ͯ]/g, '')
+    return (docs || []).filter((d) => [d.matricula, d.name, d.doc_type, d.tipo, d.center]
+      .some((c) => limpia(c).includes(term)))
+  }, [docs, q])
+
+  const ETIQUETA = {
+    seguro: 'Seguro', itv: 'ITV', ficha_tecnica: 'Ficha técnica',
+    contrato: 'Contrato renting', permiso: 'Permiso de circulación', otro: 'Otro',
+  }
+  const ESTADO = {
+    baja: { txt: t('doc.devuelta'), cls: 'bg-amber-500/15 text-amber-300' },
+    deleted: { txt: t('doc.borrada'), cls: 'bg-red-500/15 text-red-300' },
+    borrada: { txt: t('doc.borrada'), cls: 'bg-red-500/15 text-red-300' },
+    taller: { txt: t('doc.taller'), cls: 'bg-sky-500/15 text-sky-300' },
+  }
+
+  if (err) return <p className="text-red-400">{err}</p>
+
+  return (
+    <div className="rise">
+      <p className="mb-4 max-w-3xl text-[12px] leading-relaxed text-dark-500">{t('doc.exp')}</p>
+
+      <div className="relative mb-4 w-full max-w-md">
+        <Search size={15} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-dark-500" />
+        <input
+          className="w-full rounded-xl border border-white/[0.07] bg-white/[0.02] py-2.5 pl-10 pr-3 text-[13.5px] text-dark-50 placeholder:text-dark-600 transition-all duration-300 hover:border-white/[0.12] focus:border-brand-500/50 focus:bg-white/[0.045] focus:outline-none focus:ring-[3px] focus:ring-brand-500/15"
+          placeholder={t('doc.buscar')} value={q} onChange={(e) => setQ(e.target.value)}
+        />
+      </div>
+
+      {docs === null ? (
+        <PageSkeleton kpis={0} rows={8} />
+      ) : filtrados.length === 0 ? (
+        <div className="card flex flex-col items-center gap-2 p-10 text-center text-dark-400">
+          <FileText size={28} /> {t('doc.vacio')}
+        </div>
+      ) : (
+        <>
+          <div className="mb-2 text-[11px] text-dark-600">
+            {filtrados.length}{filtrados.length !== docs.length && ` de ${docs.length}`}
+          </div>
+          <div className="divide-y divide-white/[0.04]">
+            {filtrados.map((d) => {
+              const est = ESTADO[d.estado]
+              return (
+                <a
+                  key={d.id}
+                  href={d.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="float-row group flex w-full items-center gap-4 rounded-xl px-4 py-3 text-left"
+                >
+                  <FileImage size={14} className="shrink-0 text-brand-400/70" />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <span className="font-mono text-[14px] font-semibold tracking-wider text-dark-50">
+                        {d.matricula || '—'}
+                      </span>
+                      <span className="text-[12.5px] text-dark-400">
+                        {ETIQUETA[d.tipo] || d.doc_type || 'Documento'}
+                      </span>
+                      {est && (
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${est.cls}`}>
+                          {est.txt}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11.5px] text-dark-600">
+                      <span className="truncate" title={d.name}>{d.name}</span>
+                      {d.center && <span className="inline-flex items-center gap-1"><MapPin size={10} /> {d.center}</span>}
+                      <span>{(d.uploaded_at || '').slice(0, 10)}</span>
+                    </div>
+                  </div>
+                  <ExternalLink size={14} className="shrink-0 text-dark-700 transition group-hover:text-brand-400" />
+                </a>
+              )
+            })}
+          </div>
+        </>
+      )}
+      <div className="h-6" />
+    </div>
+  )
+}
+
+
 export default function Vehiculos() {
   const { center, centers } = useOutletContext()
   const { t, lang } = useT()
@@ -1658,6 +1798,7 @@ export default function Vehiculos() {
   // cambia el aceite y no se asignan. Viven aquí, aparte, por si vuelven.
   const [verBaja, setVerBaja] = useState(false)
   const [nBaja, setNBaja] = useState(0)
+  const [verDocs, setVerDocs] = useState(false)
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Deep-link desde la paleta de comandos: /panel/vehiculos?open=<id>
@@ -1748,21 +1889,33 @@ export default function Vehiculos() {
           contadores ni salir en las listas de mantenimiento, pero tampoco se
           borra, porque a veces vuelve. */}
       <div className="rise mb-5 flex gap-1 rounded-lg bg-dark-900 p-1 ring-1 ring-dark-700 w-fit">
-        {[{ k: false, label: t('veh.tab.activas') }, { k: true, label: t('veh.tab.baja'), n: nBaja }].map((x) => (
-          <button key={String(x.k)} onClick={() => setVerBaja(x.k)}
-            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
-              verBaja === x.k ? 'bg-brand-500/20 text-brand-300' : 'text-dark-400 hover:text-dark-200'}`}>
-            {x.label}
-            {x.n > 0 && <span className="rounded-full bg-dark-800 px-1.5 text-[10px] tabular-nums text-dark-400">{x.n}</span>}
-          </button>
-        ))}
+        {[
+          { id: 'activas', label: t('veh.tab.activas') },
+          { id: 'baja', label: t('veh.tab.baja'), n: nBaja },
+          // La documentación es su propia pestaña y no cuelga de ninguna
+          // furgoneta: ver el comentario de PanelDocumentos.
+          { id: 'docs', label: t('veh.tab.docs') },
+        ].map((x) => {
+          const activa = x.id === 'docs' ? verDocs : (!verDocs && verBaja === (x.id === 'baja'))
+          return (
+            <button key={x.id}
+              onClick={() => { setVerDocs(x.id === 'docs'); if (x.id !== 'docs') setVerBaja(x.id === 'baja') }}
+              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                activa ? 'bg-brand-500/20 text-brand-300' : 'text-dark-400 hover:text-dark-200'}`}>
+              {x.label}
+              {x.n > 0 && <span className="rounded-full bg-dark-800 px-1.5 text-[10px] tabular-nums text-dark-400">{x.n}</span>}
+            </button>
+          )
+        })}
       </div>
 
-      {verBaja && (
+      {verDocs && <PanelDocumentos />}
+
+      {!verDocs && verBaja && (
         <p className="mb-4 text-[12px] leading-relaxed text-dark-500">{t('veh.baja.exp')}</p>
       )}
 
-      {vehicles && !verBaja && (
+      {vehicles && !verBaja && !verDocs && (
         <div className="rise mb-6 flex flex-wrap items-baseline gap-x-7 gap-y-2 border-y border-white/[0.05] py-3.5" style={{ animationDelay: '60ms' }}>
           {[
             { val: kpis.total,   label: t('veh.all'),        color: 'text-dark-50' },
@@ -1787,7 +1940,7 @@ export default function Vehiculos() {
         </div>
       )}
 
-      {!vehicles ? (
+      {verDocs ? null : !vehicles ? (
         <PageSkeleton kpis={4} rows={9} />
       ) : list.length === 0 ? (
         verBaja ? (
