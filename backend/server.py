@@ -4863,6 +4863,24 @@ async def capture_lead(data: dict = Body(...), request: Request = None):
         "body": plan, "ip": ip, "ua": (request.headers.get("user-agent") if request else None),
         "created_at": now,
     })
+    # AVISAR. Sin esto, el mensaje se guardaba y no se enteraba nadie, mientras
+    # a quien escribe se le prometia respuesta en 24 h. Dos personas escribieron
+    # el 15-08-2026 -los dos preguntando por un puesto de trabajo- y el aviso no
+    # salio de la base de datos. Un buzon que nadie abre es peor que no tenerlo:
+    # promete algo que no se cumple.
+    try:
+        lineas = [
+            "Nuevo mensaje en flotadsp.com",
+            f"De: {name or '(sin nombre)'} <{email}>",
+            f"Empresa: {company or '-'}",
+            "",
+            (plan or "(sin mensaje)")[:600],
+        ]
+        await _telegram_aviso(chr(10).join(lineas))
+    except Exception as e:
+        # Que falle el aviso no puede tumbar la recogida del mensaje: lo
+        # importante es no perderlo. Pero se deja en el log para poder verlo.
+        logger.warning(f"aviso de lead no enviado: {type(e).__name__}: {e}")
     return {"ok": True, "mensaje": "¡Recibido! Te respondemos en menos de 24 horas hábiles."}
 
 
@@ -4996,7 +5014,13 @@ async def _audit(user, action: str, detail: dict = None):
 
 # Límites reales de los planes contratados. Si algún día se amplían, se cambian
 # aquí y los avisos se recalculan solos.
-LIMITE_ATLAS_MB = 512      # MongoDB Atlas M0 (capa gratuita)
+# El límite del plan de Atlas NO se puede preguntar desde dentro: la base sabe
+# lo que ocupa, no lo que le dejan ocupar. Estaba clavado en 512 (el gratuito),
+# así que al ampliar el plan la tarjeta siguió diciendo "amplía ya, a punto de
+# dejar de aceptar escrituras" con 10 GB contratados. Un aviso rojo que es
+# mentira gasta la confianza en todos los demás avisos.
+# Se cambia con:  fly secrets set ATLAS_LIMITE_MB=10240
+LIMITE_ATLAS_MB = int(os.environ.get("ATLAS_LIMITE_MB") or 512)
 LIMITE_FLY_MB = 1024       # Fly.io: 1 GB de RAM, 1 vCPU compartida
 
 
@@ -5080,7 +5104,13 @@ async def admin_salud(_: dict = Depends(require_superadmin)):
 
     return {
         "mongo": {
-            "plan": "Atlas M0 (gratuito)", "limite_mb": LIMITE_ATLAS_MB,
+            # Se dice el plan que consta y si el límite es el que hay puesto a
+            # mano: quien lee la tarjeta tiene que poder distinguir un dato
+            # medido de uno configurado.
+            "plan": ("Atlas · límite configurado"
+                     if os.environ.get("ATLAS_LIMITE_MB") else "Atlas M0 (gratuito)"),
+            "limite_configurado": bool(os.environ.get("ATLAS_LIMITE_MB")),
+            "limite_mb": LIMITE_ATLAS_MB,
             "usado_mb": total_mb, "libre_mb": libre_mb, "porcentaje": pct,
             "crece_mb_mes": crece_mb_mes, "meses_restantes": meses_restantes,
             "bases": sorted(bases, key=lambda b: -(b["datos_mb"] + b["indices_mb"])),
