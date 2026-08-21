@@ -1679,7 +1679,10 @@ function AddVehicleModal({ centers, onSaved, onClose }) {
    devuelta, en taller, ficha borrada — porque saber de qué furgoneta es y en
    qué situación está forma parte de la respuesta. */
 function PanelDocumentos() {
-  const t = useT()
+  // `useT()` devuelve el contexto entero ({ lang, setLang, t }), no la funcion.
+  // Sin desestructurar, `t('...')` es "t is not a function" y la pantalla se
+  // cae entera en cuanto pinta la primera etiqueta.
+  const { t } = useT()
   const [docs, setDocs] = useState(null)
   const [q, setQ] = useState('')
   const [err, setErr] = useState('')
