@@ -36,7 +36,14 @@ if (dups.length) {
 
 const used = new Map()
 for (const f of walk(ROOT)) {
-  const src = fs.readFileSync(f, 'utf8')
+  const crudo = fs.readFileSync(f, 'utf8')
+  // Los COMENTARIOS no cuentan. Un comentario que explica un fallo escribiendo
+  // t('...') hacia fallar el checker por una clave que no existe ni pretende
+  // existir, y con ello se caia el CI entero. Paso el 21-08-2026 con dos
+  // comentarios identicos en DSC.jsx y Vehiculos.jsx.
+  const src = crudo
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')   // bloques /* ... */
+    .replace(/(^|[^:])\/\/.*$/gm, '$1 ')  // linea //, sin comerse http://
   const rel = path.relative(ROOT, f)
   for (const re of [/\bt\(\s*'([^']+)'/g, /\bt\(\s*"([^"]+)"/g, /labelKey:\s*'([^']+)'/g]) {
     for (const m of src.matchAll(re)) {
