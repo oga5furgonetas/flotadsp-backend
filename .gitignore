@@ -11,3 +11,8 @@ frontend-v2/dist/
 frontend-v2/dist-staging/
 frontend-v2/dist-lab/
 mobile.zip
+
+# Entorno de Python local para correr los tests del backend (pytest).
+# Son ~200 MB y dependen del sistema operativo: jamas al repositorio.
+backend/.venv/
+.venv/

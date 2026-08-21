@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Loader2, UserPlus, Trash2, Save, ShieldCheck, Mail, KeyRound, ChevronDown, Users as UsersIcon, X, Check } from 'lucide-react'
 import { getAdmins, createAdmin, updateAdmin, deleteAdmin } from '../api'
-import { getAdmin, isSuperAdmin } from '../auth'
+import { getAdmin, isSuperAdmin, SIEMPRE_VISIBLES } from '../auth'
 import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
 
@@ -12,25 +12,26 @@ import { lista } from '../../lib/lista'
    entrega y Contactos— no aparecían aquí, así que no se le podían dar a nadie.
    No es que estuvieran escondidas: es que la casilla no existía.
 
-   Marcadas con `fijo` van las que TODO admin ve pase lo que pase (son las de
-   la operación diaria; está así a propósito para que no desaparezcan de golpe
-   a quien tenga una lista de permisos antigua). Se enseñan igual, en gris:
-   una casilla que no hace nada al pulsarla es peor que no tenerla. */
+   Las que TODO admin ve pase lo que pase (las de la operación diaria) salen de
+   `SIEMPRE_VISIBLES`, en auth.js, que es la MISMA lista que usan el menú y el
+   guardián de ruta. Antes se marcaban a mano aquí con un `true` y era una
+   tercera copia que podía irse quedando atrás. Se enseñan igual, en gris: una
+   casilla que no hace nada al pulsarla es peor que no tenerla. */
 const MODULES = [
   { g: 'Hoy', items: [
     ['dashboard', 'Dashboard'], ['mi-dia', 'Mi día'], ['actividad', 'Actividad'],
   ]},
   { g: 'Operación diaria', items: [
     ['paquetes', 'Paquetes IA'],
-    ['asignacion', 'Asignación diaria', true], ['turnos', 'Días libres'],
+    ['asignacion', 'Asignación diaria'], ['turnos', 'Días libres'],
     ['aprobar-dias', 'Aprobar días libres'],
-    ['checklist-operativo', 'Checklist turno', true],
-    ['plantilla', 'Plantilla turno', true], ['chat', 'Chat interno', true],
+    ['checklist-operativo', 'Checklist turno'],
+    ['plantilla', 'Plantilla turno'], ['chat', 'Chat interno'],
   ]},
   { g: 'Flota', items: [
     ['vehiculos', 'Vehículos'], ['revision', 'Revisión rápida'],
     ['inspecciones', 'Inspecciones'], ['incidencias', 'Incidencias'],
-    ['talleres', 'Talleres'], ['aparcamiento', 'Aparcamiento', true],
+    ['talleres', 'Talleres'], ['aparcamiento', 'Aparcamiento'],
     ['avisos-itv', 'Vencimientos · ITV'], ['renting', 'Vencimientos · Renting'],
     ['casas-alquiler', 'Vencimientos · Casas'], ['importaciones', 'Importaciones'],
   ]},
@@ -43,7 +44,7 @@ const MODULES = [
   ]},
 ]
 const ALL_KEYS = MODULES.flatMap((g) => g.items.map(([k]) => k))
-const FIJOS = new Set(MODULES.flatMap((g) => g.items.filter(([, , f]) => f).map(([k]) => k)))
+const FIJOS = SIEMPRE_VISIBLES
 
 /* ── Piezas de UI ── */
 

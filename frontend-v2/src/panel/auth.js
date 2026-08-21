@@ -3,6 +3,48 @@
 const TOKEN_KEY = 'flotadsp_token'
 const ADMIN_KEY = 'flotadsp_admin'
 
+/* Lo ultimo que el SERVIDOR ha dicho sobre el acceso de este usuario.
+
+   Existe porque los permisos viajaban solo dentro del JWT, que dura 72 h: se le
+   quitaba un modulo a alguien, la pantalla decia "guardado", y esa persona
+   seguia viendolo hasta que cerraba sesion. Ahora el panel pregunta a
+   /auth/me al abrir y lo que conteste manda.
+
+   Se guarda con el id del usuario dentro y solo se usa si coincide con el del
+   token en curso: asi un blob del usuario anterior en el mismo ordenador no
+   puede colarse. Y solo se escribe con una respuesta completa del servidor,
+   nunca a medias — que fue lo que rompio el localStorage la otra vez. */
+const ACCESO_KEY = 'flotadsp_acceso'
+
+function accesoFresco() {
+  try {
+    const a = JSON.parse(localStorage.getItem(ACCESO_KEY))
+    if (!a || !a.id) return null
+    return a.id === decodeToken()?.sub ? a : null
+  } catch { return null }
+}
+
+// Devuelve true si algo ha cambiado respecto a lo que ya teniamos guardado
+// (el panel lo usa para re-pintarse solo cuando hace falta).
+export function guardarAccesoFresco(me) {
+  if (!me || !me.id || me.id !== decodeToken()?.sub) return false
+  // Si la respuesta no trae el campo —backend viejo todavia en produccion, o un
+  // despliegue a medias— NO se guarda nada. Guardar `permissions: null` aqui
+  // significa "sin restriccion", o sea abrirle el panel entero justo a quien lo
+  // tiene recortado. Ante la duda, mandan el JWT y el blob de siempre.
+  if (!('permissions' in me)) return false
+  const nuevo = {
+    id: me.id,
+    permissions: Array.isArray(me.permissions) ? me.permissions : null,
+    admin_role: me.admin_role ?? null,
+    allowed_centers: Array.isArray(me.allowed_centers) ? me.allowed_centers : null,
+  }
+  const antes = localStorage.getItem(ACCESO_KEY)
+  const ahora = JSON.stringify(nuevo)
+  localStorage.setItem(ACCESO_KEY, ahora)
+  return antes !== ahora
+}
+
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY) || ''
 }
@@ -65,6 +107,9 @@ export function isSuperAdmin() {
 // pantalla de login vieja (pasó: /login guardaba solo name/role/id y el panel
 // se quedaba sin permisos, sin centros y sin rol).
 export function getPermissions() {
+  // 1) Lo que dijo el servidor hace un momento. 2) El JWT. 3) El blob viejo.
+  const fresco = accesoFresco()
+  if (fresco) return fresco.permissions
   const p = decodeToken()
   if (Array.isArray(p?.permissions)) return p.permissions
   const a = getAdmin()
@@ -87,13 +132,33 @@ export function getVisibleCenters() {
   const a = getAdmin() || {}
   const todos = (Array.isArray(p.centers) && p.centers.length ? p.centers
     : Array.isArray(a.centers) ? a.centers : []).filter(Boolean)
-  const mios = (Array.isArray(p.allowed_centers) && p.allowed_centers.length ? p.allowed_centers
+  // Los centros propios, con la misma preferencia que los permisos: primero lo
+  // que acaba de decir el servidor. En el JWT del login no viajan (create_token
+  // no los recibe alli), asi que sin esto se dependia del blob de localStorage.
+  const fresco = accesoFresco()
+  const mios = (fresco && Array.isArray(fresco.allowed_centers) && fresco.allowed_centers.length
+    ? fresco.allowed_centers
+    : Array.isArray(p.allowed_centers) && p.allowed_centers.length ? p.allowed_centers
     : Array.isArray(a.allowed_centers) ? a.allowed_centers : null)
   if (!mios || !mios.length) return todos            // sin restricción: los de la org
   const cruce = todos.filter((c) => mios.some((m) => _norm(c).includes(_norm(m)) || _norm(m).includes(_norm(c))))
   // Si la org no los lista (datos viejos), mejor los suyos que ninguno.
   return cruce.length ? cruce : mios.filter(Boolean)
 }
+
+/* Módulos de la operación diaria que ve cualquier admin pase lo que pase, aunque
+   arrastre una lista de permisos vieja que no los contemple.
+
+   Vive AQUÍ, en un solo sitio, porque antes eran dos listas separadas —una en el
+   menú del panel y otra en el guardián de ruta— y no coincidían:
+     · 'asignacion' salía en el menú y al pulsarla te expulsaba;
+     · 'mi-dia' desaparecía del menú pero seguía abriéndose escribiendo la URL,
+       y encima su casilla en Usuarios parecía que hacía algo.
+   La pantalla de Usuarios también saca de aquí las etiquetas "·siempre", así que
+   lo que se le promete al que reparte permisos es exactamente lo que ocurre. */
+export const SIEMPRE_VISIBLES = new Set([
+  'asignacion', 'checklist-operativo', 'chat', 'plantilla', 'aparcamiento',
+])
 
 // ¿Puede ver este módulo? Super-admin ve todo. Sin permisos definidos = ve todo
 // (salvo lo que sea exclusivo de super-admin, que se filtra aparte).
@@ -106,6 +171,10 @@ export function canSee(moduleKey) {
 
 export function saveSession(j) {
   if (j?.access_token) localStorage.setItem(TOKEN_KEY, j.access_token)
+  // Un login recien hecho manda sobre cualquier acceso guardado antes: si no,
+  // un resto de la sesion anterior del mismo usuario ganaria al token nuevo
+  // hasta que /auth/me contestara.
+  localStorage.removeItem(ACCESO_KEY)
   localStorage.setItem(
     ADMIN_KEY,
     JSON.stringify({
@@ -124,7 +193,11 @@ export function saveSession(j) {
 }
 
 export function getAdminRole() {
-  return getAdmin()?.admin_role ?? null   // "center_manager" | "dispatcher" | null
+  // "center_manager" | "dispatcher" | null. El servidor manda: el rol no viaja
+  // en el JWT y el blob de localStorage se queda viejo en cuanto se lo cambian.
+  const fresco = accesoFresco()
+  if (fresco) return fresco.admin_role
+  return getAdmin()?.admin_role ?? null
 }
 
 export function isCenterManager() {
@@ -138,4 +211,5 @@ export function isDispatcher() {
 export function logout() {
   localStorage.removeItem(TOKEN_KEY)
   localStorage.removeItem(ADMIN_KEY)
+  localStorage.removeItem(ACCESO_KEY)
 }

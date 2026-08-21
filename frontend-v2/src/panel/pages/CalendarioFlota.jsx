@@ -421,6 +421,15 @@ export default function CalendarioFlota() {
   const visible = useCallback((e) => !ocultos.has(e.tipo), [ocultos])
   const eventos = useMemo(() => lista(datos?.eventos).filter(visible), [datos, visible])
   const vencidos = useMemo(() => lista(datos?.vencidos).filter(visible), [datos, visible])
+  /* `datos` puede llegar sin estas claves —respuesta antigua, endpoint que aun
+     no las manda, o un mes sin nada— y `datos && ...` no protege de eso: un
+     objeto vacio es "verdadero", y leer .length de lo que no esta revienta la
+     pantalla entera. Es justo lo que avisa el comentario de lib/lista.js, que
+     ya paso una vez en Usuarios. Aqui se colo por la puerta de atras: el
+     resumen del mes y el bloque de "sin fecha" leian las listas a pelo mientras
+     el resto del componente ya usaba `lista()`. */
+  const totalEventos = useMemo(() => lista(datos?.eventos).length, [datos])
+  const sinEstimacion = useMemo(() => lista(datos?.sin_estimacion), [datos])
 
   const porDia = useMemo(() => {
     const m = {}
@@ -471,7 +480,7 @@ export default function CalendarioFlota() {
         <h2 className="font-display text-[19px] font-semibold capitalize tracking-[-0.02em] text-dark-50">{nombreMes}</h2>
         {datos && (
           <span className="text-[12px] text-dark-500">
-            {t('cal.resumen').replace('{n}', datos.eventos.length).replace('{v}', datos.vehiculos)}
+            {t('cal.resumen').replace('{n}', totalEventos).replace('{v}', datos.vehiculos ?? 0)}
           </span>
         )}
 
@@ -595,22 +604,22 @@ export default function CalendarioFlota() {
           )}
 
           {/* ── De qué NO se puede prever la fecha ─────────────────────────── */}
-          {datos.sin_estimacion.length > 0 && (
+          {sinEstimacion.length > 0 && (
             <div className="mt-5 rounded-xl border border-dark-800 bg-dark-900/30 p-4">
               <p className="mb-1.5 flex items-center gap-2 text-[12.5px] font-semibold text-dark-300">
                 <CalendarDays size={13} className="text-dark-600" />
-                {t('cal.sinfecha').replace('{n}', datos.sin_estimacion.length)}
+                {t('cal.sinfecha').replace('{n}', sinEstimacion.length)}
               </p>
               <p className="mb-2.5 text-[11.5px] leading-relaxed text-dark-600">{t('cal.sinfecha.exp')}</p>
               <div className="flex flex-wrap gap-1.5">
-                {datos.sin_estimacion.slice(0, 40).map((e, i) => (
+                {sinEstimacion.slice(0, 40).map((e, i) => (
                   <button key={i} onClick={() => nav(`/panel/vehiculos?v=${e.vehicle_id}`)}
                     className="rounded border border-dark-800 px-1.5 py-0.5 font-mono text-[10.5px] text-dark-400 transition-colors hover:border-dark-600 hover:text-dark-200">
                     {e.matricula}
                   </button>
                 ))}
-                {datos.sin_estimacion.length > 40 && (
-                  <span className="px-1 text-[10.5px] text-dark-600">+{datos.sin_estimacion.length - 40}</span>
+                {sinEstimacion.length > 40 && (
+                  <span className="px-1 text-[10.5px] text-dark-600">+{sinEstimacion.length - 40}</span>
                 )}
               </div>
             </div>

@@ -688,32 +688,51 @@ def decode_token(token: str) -> dict:
 # Un JWT es válido hasta que caduca (72h) aunque el usuario haya sido borrado.
 # Para que borrar/deshabilitar un admin surta efecto YA, se comprueba que siga
 # existiendo en BD (con caché de 60s para no añadir una query a cada petición).
-# user_id -> (expira_ts, existe, allowed_centers)
+# user_id -> (expira_ts, existe, allowed_centers, permissions, admin_role)
 # Los centros permitidos viajan aqui y no solo en el JWT: asi un token ya
 # emitido queda restringido en cuanto se le asignan centros, sin esperar a
 # que caduque ni obligar a volver a entrar.
+#
+# Los PERMISOS y el ROL viajan aqui por lo mismo, y se anadieron despues:
+#   - Los permisos solo vivian en el JWT, asi que dar o quitar un modulo no
+#     surtia efecto hasta 72 h despues o hasta que el usuario volvia a entrar.
+#     Se guardaba, decia "OK", y el otro seguia viendo lo mismo.
+#   - `admin_role` NO se metia nunca en el token (create_token no lo pone),
+#     asi que `_is_center_manager()` lo leia del payload y salia siempre False.
+#     Consecuencia: los gestores de centro recibian 403 al crear usuarios y al
+#     tocar permisos, y ademas veian la plantilla ENTERA de la organizacion
+#     porque el filtro por centros de `list_admins` tampoco llegaba a aplicarse.
+# La BD manda sobre el token en las tres cosas.
 _ADMIN_EXISTS_CACHE: dict = {}
 _ADMIN_EXISTS_TTL = 60.0
 
 
 async def _admin_cacheado(user_id: str):
-    """(existe, allowed_centers) con cache de 60 s. Una sola consulta."""
+    """(existe, allowed_centers, permissions, admin_role) con cache de 60 s.
+
+    Una sola consulta: los cuatro datos salen del mismo documento.
+    """
     now = time.time()
     hit = _ADMIN_EXISTS_CACHE.get(user_id)
     if hit and hit[0] > now:
-        return hit[1], hit[2]
+        return hit[1], hit[2], hit[3], hit[4]
     doc = await global_db.admin_users.find_one(
-        {"id": user_id}, {"_id": 0, "id": 1, "disabled": 1, "allowed_centers": 1})
+        {"id": user_id}, {"_id": 0, "id": 1, "disabled": 1, "allowed_centers": 1,
+                          "permissions": 1, "admin_role": 1})
     ok = bool(doc) and not doc.get("disabled")
     centros = (doc or {}).get("allowed_centers")
+    # Ausente y None significan lo mismo aqui: sin restriccion. Es como estan
+    # los usuarios antiguos y no se les puede cerrar el panel de golpe.
+    permisos = (doc or {}).get("permissions")
+    rol = (doc or {}).get("admin_role")
     if len(_ADMIN_EXISTS_CACHE) > 2000:
         _ADMIN_EXISTS_CACHE.clear()
-    _ADMIN_EXISTS_CACHE[user_id] = (now + _ADMIN_EXISTS_TTL, ok, centros)
-    return ok, centros
+    _ADMIN_EXISTS_CACHE[user_id] = (now + _ADMIN_EXISTS_TTL, ok, centros, permisos, rol)
+    return ok, centros, permisos, rol
 
 
 async def _admin_still_exists(user_id: str) -> bool:
-    ok, _ = await _admin_cacheado(user_id)
+    ok, _centros, _permisos, _rol = await _admin_cacheado(user_id)
     return ok
 
 
@@ -728,12 +747,18 @@ async def get_current_user(
     # Los tokens de demo y de mantenimiento no viven en admin_users.
     if (payload.get("role") == "admin" and not payload.get("demo")
             and payload.get("sub") != "maintenance-claude"):
-        existe, centros_permitidos = await _admin_cacheado(payload.get("sub", ""))
+        existe, centros_permitidos, permisos, rol_admin = await _admin_cacheado(payload.get("sub", ""))
         if not existe:
             raise HTTPException(status_code=401, detail="Sesión revocada: el usuario ya no existe")
         # La BD manda sobre el token: si le acaban de limitar los centros, se
         # aplica ya. Antes esto no llegaba nunca y la restricción no existía.
         payload["allowed_centers"] = centros_permitidos
+        # Lo mismo con los permisos y el rol. Los permisos solo estaban en el
+        # token: quitarle un módulo a alguien no hacía nada hasta que volvía a
+        # entrar. Y `admin_role` no estaba ni en el token, así que el rol de
+        # gestor de centro no existía para el servidor.
+        payload["permissions"] = permisos
+        payload["admin_role"] = rol_admin
     # Modo demo: cuenta de solo lectura para probar el producto sin registro.
     # Cualquier mutación se bloquea aquí, cubra el endpoint que cubra.
     if payload.get("demo") and request.method not in ("GET", "HEAD", "OPTIONS"):
@@ -5803,6 +5828,14 @@ async def get_me(user: dict = Depends(get_current_user)):
         "name": user["name"],
         "theme": theme,
         "email": email,
+        # Permisos, rol y centros TAL COMO ESTAN AHORA en la base de datos
+        # (get_current_user ya los ha refrescado). El panel los relee al abrir
+        # para no quedarse con lo que dijera un JWT emitido hace hasta 72 h:
+        # antes, quitarle un modulo a alguien no se le notaba hasta que volvia
+        # a entrar, aunque la pantalla de Usuarios dijera "guardado".
+        "permissions": user.get("permissions"),
+        "admin_role": user.get("admin_role"),
+        "allowed_centers": user.get("allowed_centers"),
     }
 
 
@@ -5938,8 +5971,12 @@ async def update_admin_permissions(admin_id: str, data: dict = Body(...), _admin
     if not patch:
         raise HTTPException(status_code=400, detail="Nada que actualizar")
     await global_db.admin_users.update_one({"id": admin_id}, {"$set": patch})
+    # Se tire lo que se tire (permisos, centros, rol o contraseña), la caché de
+    # `_admin_cacheado` queda vieja. Antes solo se limpiaba al resetear la clave,
+    # así que quitarle un módulo a alguien tardaba hasta 60 s en notarse. Ahora
+    # se nota en la siguiente petición.
+    _ADMIN_EXISTS_CACHE.pop(admin_id, None)
     if "hashed_password" in patch:
-        _ADMIN_EXISTS_CACHE.pop(admin_id, None)
         logger.info(f"Contraseña de '{target.get('username')}' restablecida por {_admin.get('name')}")
     return {"success": True}
 
@@ -5954,6 +5991,18 @@ async def delete_admin(admin_id: str, _admin: dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
     if target.get("super_admin"):
         raise HTTPException(status_code=403, detail="No puedes eliminar a un super-admin")
+
+    # Borrar exigía MENOS que editar: aquí no había ningún control, así que un
+    # dispatcher sin un solo permiso podía eliminar a un compañero llamando a la
+    # API. Se pide exactamente lo mismo que para modificarlo.
+    if not _admin.get("sa") and _is_center_manager(_admin):
+        if not _can_manage_user(_admin, target.get("allowed_centers")):
+            raise HTTPException(403, "No tienes acceso para eliminar este usuario")
+        if target.get("admin_role") == "center_manager":
+            raise HTTPException(403, "No puedes eliminar a otro gestor de centro")
+    elif not _admin.get("sa") and not _is_center_manager(_admin):
+        raise HTTPException(403, "Sin permisos para eliminar usuarios")
+
     await global_db.admin_users.delete_one({"id": admin_id})
     # Lápida: los seeds/migraciones de arranque no deben resucitarlo jamás,
     # y sus tokens vivos dejan de valer al momento (no en 60s de caché).

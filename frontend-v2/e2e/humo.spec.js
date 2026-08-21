@@ -24,6 +24,9 @@ const PANEL = [
   ['contactos', 'Contactos'], ['importaciones', 'Importaciones'],
   ['ia-peritaje', 'IA Peritaje'], ['configuracion', 'Configuración'],
   ['usuarios', 'Usuarios'], ['perfil', 'Perfil'],
+  // Faltaban las dos, y por eso el "t is not a function" de DSC llevaba
+  // meses en produccion sin que ninguna prueba dijera nada.
+  ['dsc', 'Donde se entrega'], ['whc', 'Horas WHC'],
   ['portal-conductor', 'Portal conductor'], ['bandeja', 'Bandeja'],
 ]
 

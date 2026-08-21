@@ -19,7 +19,10 @@ const COLOR = {
 }
 
 export default function DSC() {
-  const t = useT()
+  // `useT()` devuelve el contexto entero ({ lang, setLang, t }), no la funcion.
+  // Sin desestructurar, `t('...')` es "t is not a function" y la pantalla se
+  // cae entera en cuanto pinta la primera etiqueta.
+  const { t } = useT()
   const [dias, setDias] = useState(7)
   const [d, setD] = useState(null)
   const [cargando, setCargando] = useState(true)
