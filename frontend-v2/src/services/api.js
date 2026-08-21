@@ -121,6 +121,8 @@ export const getAssignedVehicle = () => api.get('/auth/me/assigned-vehicle')
 export const getPortalVehicles = () => api.get('/vehicles/portal')
 /* Turnos del propio conductor: su calendario y sus peticiones de día. */
 export const getMyShifts = (desde, hasta) => api.get('/shifts/mine', { params: { desde, hasta } })
+// Dias que este conductor NO puede pedir, y por que.
+export const getMisBloqueos = () => api.get('/shift-blocks/mios')
 /* Pedir días. Admite las dos formas a propósito:
      createShiftRequest({ dates:[...], motivo, note })   ← calendario nuevo
      createShiftRequest('2026-09-23', 'libre', '')       ← pantalla antigua

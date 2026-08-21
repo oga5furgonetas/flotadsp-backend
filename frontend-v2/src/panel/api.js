@@ -225,6 +225,17 @@ export const getShifts = (center, desde, hasta) => api.get('/shifts', { params: 
 export const getShiftCoverage = (center, desde, hasta) => api.get('/shifts/coverage', { params: { center, desde, hasta } })
 export const saveShiftsBulk = (items) => api.post('/shifts/bulk', { items })
 export const setShiftSettings = (center, min_cobertura) => api.post('/shifts/settings', { center, min_cobertura })
+// Cuadrante pegado desde Sheets: mas fiable que el Excel porque lo que se ve es
+// lo que entra, sin depender de donde este cada cosa en el fichero.
+export const importShiftsPegado = (body) => api.post('/shifts/import-pegado', body, { timeout: 120000 })
+export const getAliasNombres = () => api.get('/shifts/alias-nombres')
+export const setAliasNombres = (mapa) => api.put('/shifts/alias-nombres', { mapa })
+
+// Bloqueos: dias en los que no se pueden pedir libres.
+export const getShiftBlocks = (center) => api.get('/shift-blocks', { params: { center } })
+export const createShiftBlock = (body) => api.post('/shift-blocks', body)
+export const deleteShiftBlock = (id) => api.delete(`/shift-blocks/${id}`)
+
 export const generateShiftsAuto = (center, desde, hasta) => api.post('/shifts/generate-auto', { center, desde, hasta }, { timeout: 120000 })
 export const getRouteDemand = (center, desde, hasta) => api.get('/route-demand', { params: { center, desde, hasta } })
 export const setRouteDemand = (center, items) => api.post('/route-demand', { center, items })

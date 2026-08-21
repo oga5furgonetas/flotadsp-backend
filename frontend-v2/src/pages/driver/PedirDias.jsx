@@ -3,7 +3,7 @@ import {
   ArrowLeft, ChevronLeft, ChevronRight, Loader2, Check, Send, Clock, X,
   Bell, BellOff,
 } from 'lucide-react'
-import { getMyShifts, createShiftRequest, marcarRespuestasVistas } from '../../services/api'
+import { getMyShifts, createShiftRequest, marcarRespuestasVistas, getMisBloqueos } from '../../services/api'
 import { lista } from '../../lib/lista'
 import { pushSupported, isPushEnabled, enablePush, disablePush } from '../../lib/push'
 
@@ -187,9 +187,20 @@ export default function PedirDias({ onBack }) {
          un dia que te toca libre que uno que PEDISTE y te han dado. */
       const aprobados = new Set(
         lista(r.data?.requests).filter((x) => x.status === 'aprobado').map((x) => x.date))
-      setDatos({ turnos, pendientes, aprobados, respuestas: lista(r.data?.sin_ver) })
+      /* Dias que la oficina ha cerrado (pico de Navidad, Prime Day...). Se piden
+         aparte y si fallan NO se cae la pantalla: sin bloqueos se puede pedir
+         igual y el servidor lo rechazaria; con la pantalla caida, no se puede
+         pedir nada. */
+      let bloqueos = []
+      try {
+        const b = await getMisBloqueos()
+        bloqueos = lista(b.data?.bloqueos)
+      } catch { /* sin bloqueos, se sigue */ }
+      setDatos({ turnos, pendientes, aprobados, bloqueos,
+                 respuestas: lista(r.data?.sin_ver) })
     } catch {
-      setDatos({ turnos: {}, pendientes: new Set(), aprobados: new Set(), respuestas: [] })
+      setDatos({ turnos: {}, pendientes: new Set(), aprobados: new Set(),
+                 bloqueos: [], respuestas: [] })
     }
   }, [rango])
   useEffect(() => { cargar() }, [cargar])
@@ -211,7 +222,15 @@ export default function PedirDias({ onBack }) {
     // libre, y si se mirara primero eso, el dia concedido se veria gris.
     if (datos?.aprobados?.has(f)) return 'aprobado'
     if (datos?.turnos?.[f] === 'libre') return 'libre'
+    if (bloqueoDe(f)) return 'bloqueado'
     return 'libre_de_marcar'
+  }
+
+  /* El bloqueo que pisa ese dia, si lo hay. Se busca el rango, no el dia
+     suelto: asi la pantalla puede enseñar el motivo tal y como lo escribio la
+     oficina. */
+  function bloqueoDe(f) {
+    return (datos?.bloqueos || []).find((b) => b.desde <= f && f <= b.hasta) || null
   }
 
   const alternar = (f) => {
@@ -374,6 +393,7 @@ export default function PedirDias({ onBack }) {
                     disabled={est !== 'libre_de_marcar'}
                     title={est === 'pedido' ? 'Ya lo has pedido, esperando respuesta'
                       : est === 'aprobado' ? 'Te lo han aprobado'
+                        : est === 'bloqueado' ? ('No se pueden pedir: ' + (bloqueoDe(f)?.motivo || ''))
                         : est === 'libre' ? 'Ya lo tienes libre'
                         : est === 'pasado' ? 'Día pasado' : ''}
                     className={`aspect-square rounded-lg text-[13px] tabular-nums transition-colors ${
@@ -384,6 +404,7 @@ export default function PedirDias({ onBack }) {
                           // "lo pides" se veían iguales y no se distinguía cuál
                           // acababa de marcar y cuál ya estaba mandado.
                           : est === 'pedido' ? 'bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/50'
+                            : est === 'bloqueado' ? 'bg-dark-900 text-dark-700 ring-1 ring-red-500/25'
                             : est === 'aprobado' ? 'bg-emerald-500/20 font-bold text-emerald-300 ring-1 ring-emerald-500/60'
                               : est === 'libre' ? 'bg-dark-800/60 text-dark-600 line-through'
                               : `text-dark-100 hover:bg-dark-800 ${esHoy ? 'ring-1 ring-brand-500/60' : ''}`
@@ -413,7 +434,18 @@ export default function PedirDias({ onBack }) {
             <span className="flex items-center gap-1.5">
               <span className="h-3 w-3 rounded bg-dark-800/60 ring-1 ring-dark-700" /> Ya lo tienes libre
             </span>
+            {(datos?.bloqueos || []).length > 0 && (
+              <span className="flex items-center gap-1.5">
+                <span className="h-3 w-3 rounded bg-dark-900 ring-1 ring-red-500/25" /> Cerrado por la oficina
+              </span>
+            )}
           </div>
+          {(datos?.bloqueos || []).map((b) => (
+            <p key={b.id} className="mt-2 rounded-lg bg-red-500/[0.07] px-3 py-2 text-[12px] leading-relaxed text-red-200/80">
+              <span className="font-semibold">Del {b.desde.slice(8, 10)}/{b.desde.slice(5, 7)} al {b.hasta.slice(8, 10)}/{b.hasta.slice(5, 7)} no se pueden pedir días.</span>{' '}
+              {b.motivo}
+            </p>
+          ))}
         </div>
 
         {sel.size > 0 && (

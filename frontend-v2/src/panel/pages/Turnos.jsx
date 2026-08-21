@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, CalendarClock, Users, ChevronLeft, ChevronRight, Save, Zap,
-  Upload, Check, X, Settings2, AlertTriangle, Inbox,
+  Upload, Check, X, Settings2, AlertTriangle, Inbox, ClipboardPaste, Ban, Trash2,
 } from 'lucide-react'
 import {
   getShifts, getShiftCoverage, getDrivers, saveShiftsBulk, setShiftSettings,
   generateShiftsAuto, getRouteDemand, setRouteDemand, getShiftRequests,
   resolveShiftRequest, importShifts, getCodigosCuadrante, setCodigosCuadrante,
+  importShiftsPegado, getShiftBlocks, createShiftBlock, deleteShiftBlock,
 } from '../api'
 import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
@@ -56,6 +57,11 @@ export default function Turnos() {
   const [ocupado, setOcupado] = useState('')    // '' | 'guardar' | 'auto' | 'importar'
   const ficheroRef = useRef(null)
   const [previa, setPrevia] = useState(null)    // resumen del Excel antes de guardar
+  const [pegado, setPegado] = useState('')      // el cuadrante copiado de Sheets
+  const [verPegar, setVerPegar] = useState(false)
+  const [bloqueos, setBloqueos] = useState([])
+  const [verBloqueos, setVerBloqueos] = useState(false)
+  const [nuevoBloqueo, setNuevoBloqueo] = useState({ desde: '', hasta: '', motivo: '', driver_id: '' })
   // El mes NO sale del fichero: la plantilla de Amazon arrastra en la cabecera
   // el texto del mes anterior ("Desde: 01-06-2026" en un fichero de agosto).
   const [mesImport, setMesImport] = useState(() => new Date().toISOString().slice(0, 7))
@@ -184,6 +190,69 @@ export default function Turnos() {
   /* Importar el cuadrante en dos pasos: primero se enseña lo que va a hacer y
      sólo se guarda al confirmar. Con 61 conductores y 31 días son casi 1.900
      turnos: escribirlos sin que nadie los haya mirado es demasiado. */
+  /* PEGAR EL CUADRANTE. Es mas fiable que el Excel porque lo que se ve es lo
+     que entra: no depende de donde este la fila de dias ni la columna del
+     nombre en el fichero original. Mismos dos pasos — se enseña lo que va a
+     hacer y solo se guarda al confirmar. */
+  const previsualizarPegado = async () => {
+    if (!pegado.trim()) { setErr('Pega el cuadrante primero'); return }
+    setOcupado('importar'); setErr(''); setAviso(''); setPrevia(null)
+    try {
+      const r = await importShiftsPegado({ center, mes: mesImport, texto: pegado })
+      setPrevia({ ...r.data, pegado: true })
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'No se pudo leer lo pegado.')
+    } finally { setOcupado('') }
+  }
+
+  const confirmarPegado = async () => {
+    setOcupado('importar'); setErr('')
+    try {
+      const r = await importShiftsPegado({ center, mes: mesImport, texto: pegado, confirmar: true })
+      setPrevia(null); setPegado('')
+      setAviso(t('turns.import.ok').replace('{n}', r.data?.saved ?? 0))
+      await cargar()
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'No se pudo guardar.')
+    } finally { setOcupado('') }
+  }
+
+  const cargarBloqueos = useCallback(async () => {
+    try {
+      const r = await getShiftBlocks(center)
+      setBloqueos(lista(r.data?.bloqueos))
+    } catch { setBloqueos([]) }
+  }, [center])
+  useEffect(() => { cargarBloqueos() }, [cargarBloqueos])
+
+  // Fuera del JSX a proposito: un salto de linea escapado dentro del
+  // marcado es justo lo que se cuela mal al generar este fichero.
+  const lineasPegadas = pegado.trim()
+    ? pegado.trim().split(String.fromCharCode(10)).length : 0
+
+  const crearBloqueo = async () => {
+    const b = nuevoBloqueo
+    if (!b.desde || !b.hasta || b.motivo.trim().length < 4) {
+      setErr('Pon las dos fechas y el motivo: lo lee el conductor.')
+      return
+    }
+    setOcupado('bloqueo'); setErr('')
+    try {
+      await createShiftBlock({ center, desde: b.desde, hasta: b.hasta,
+        motivo: b.motivo.trim(), driver_id: b.driver_id || undefined })
+      setNuevoBloqueo({ desde: '', hasta: '', motivo: '', driver_id: '' })
+      setAviso('Bloqueo creado. Los conductores ya no pueden pedir esos días.')
+      await cargarBloqueos()
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'No se pudo crear el bloqueo.')
+    } finally { setOcupado('') }
+  }
+
+  const quitarBloqueo = async (id) => {
+    try { await deleteShiftBlock(id); await cargarBloqueos() }
+    catch (e2) { setErr(e2?.response?.data?.detail || 'No se pudo quitar.') }
+  }
+
   const subirExcel = async (e) => {
     const f = e.target.files?.[0]
     e.target.value = ''
@@ -334,6 +403,17 @@ export default function Turnos() {
           </button>
         </div>
         <input ref={ficheroRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={subirExcel} />
+        <button className="btn-ghost flex items-center gap-1.5"
+          onClick={() => { setVerPegar((v) => !v); setPrevia(null) }} disabled={!!ocupado}>
+          <ClipboardPaste size={15} /> Pegar desde Sheets
+        </button>
+        <button className="btn-ghost flex items-center gap-1.5"
+          onClick={() => setVerBloqueos((v) => !v)}>
+          <Ban size={15} /> Bloquear días
+          {bloqueos.length > 0 && (
+            <span className="rounded-full bg-red-500/20 px-1.5 text-[10px] font-bold text-red-300">{bloqueos.length}</span>
+          )}
+        </button>
         <label className="flex items-center gap-2 text-xs text-dark-400">
           <Settings2 size={14} /> {t('turns.min.label')}
           <input
@@ -460,6 +540,108 @@ export default function Turnos() {
       {/* ── Lo que va a hacer el Excel, ANTES de escribirlo ─────────────────
           Con 61 conductores y 31 días son casi 1.900 turnos. Escribirlos sin
           que nadie los mire es demasiado, y deshacerlo después no es trivial. */}
+      {verPegar && (
+        <div className="card p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <ClipboardPaste size={16} className="text-brand-400" />
+            <h3 className="text-sm font-bold text-dark-100">Pegar el cuadrante desde Sheets</h3>
+          </div>
+          <p className="mb-2 text-[12.5px] leading-relaxed text-dark-400">
+            Selecciona en tu hoja el bloque con <b>la fila de días de la semana</b> y las filas de
+            conductores, cópialo y pégalo aquí. La primera columna es el nombre; las siguientes,
+            los días 1, 2, 3… del mes que hayas elegido arriba.
+          </p>
+          <p className="mb-2 text-[11.5px] text-dark-500">
+            Si pegas la fila de días (LUN, MAR…), se comprueba que el bloque empieza donde debe.
+            Un mes a medias vale: se guarda lo que haya.
+          </p>
+          <textarea rows={7} value={pegado} onChange={(e) => setPegado(e.target.value)}
+            placeholder="Pega aquí el bloque copiado de tu hoja de cálculo"
+            className="w-full resize-y rounded-lg border border-dark-700 bg-dark-950 p-2.5 font-mono text-[11.5px] text-dark-100 outline-none focus:border-brand-500/60" />
+          <div className="mt-2 flex items-center gap-2">
+            <button className="btn-primary flex items-center gap-1.5"
+              onClick={previsualizarPegado} disabled={!!ocupado || !pegado.trim() || !mesImport}>
+              {ocupado === 'importar' ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
+              Ver qué va a entrar
+            </button>
+            <button className="btn-ghost" onClick={() => { setPegado(''); setPrevia(null) }}>Limpiar</button>
+            <span className="text-[11.5px] text-dark-500">{lineasPegadas} líneas pegadas</span>
+          </div>
+        </div>
+      )}
+
+      {verBloqueos && (
+        <div className="card p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <Ban size={16} className="text-red-400" />
+            <h3 className="text-sm font-bold text-dark-100">Días que no se pueden pedir</h3>
+          </div>
+          <p className="mb-3 text-[12.5px] leading-relaxed text-dark-400">
+            El conductor los ve cerrados en su calendario, con el motivo, y no puede ni marcarlos.
+            <b> No toca lo ya pedido</b>: las peticiones de antes se siguen contestando a mano.
+          </p>
+
+          {puedeAprobar ? (
+            <div className="flex flex-wrap items-end gap-2 rounded-lg border border-dark-700 bg-dark-900/60 p-3">
+              <label className="flex flex-col gap-1 text-[11px] text-dark-500">Desde
+                <input type="date" value={nuevoBloqueo.desde}
+                  onChange={(e) => setNuevoBloqueo((b) => ({ ...b, desde: e.target.value }))}
+                  className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12.5px] text-dark-100 outline-none" />
+              </label>
+              <label className="flex flex-col gap-1 text-[11px] text-dark-500">Hasta
+                <input type="date" value={nuevoBloqueo.hasta}
+                  onChange={(e) => setNuevoBloqueo((b) => ({ ...b, hasta: e.target.value }))}
+                  className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12.5px] text-dark-100 outline-none" />
+              </label>
+              <label className="flex flex-col gap-1 text-[11px] text-dark-500">A quién
+                <select value={nuevoBloqueo.driver_id}
+                  onChange={(e) => setNuevoBloqueo((b) => ({ ...b, driver_id: e.target.value }))}
+                  className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12.5px] text-dark-100 outline-none">
+                  <option value="">A todo el centro</option>
+                  {lista(drivers).map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex min-w-[14rem] flex-1 flex-col gap-1 text-[11px] text-dark-500">Motivo (lo lee el conductor)
+                <input value={nuevoBloqueo.motivo}
+                  onChange={(e) => setNuevoBloqueo((b) => ({ ...b, motivo: e.target.value }))}
+                  placeholder="Pico de Navidad, no se dan días"
+                  className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12.5px] text-dark-100 outline-none placeholder:text-dark-600" />
+              </label>
+              <button className="btn-primary flex items-center gap-1.5" onClick={crearBloqueo}
+                disabled={ocupado === 'bloqueo'}>
+                {ocupado === 'bloqueo' ? <Loader2 size={15} className="animate-spin" /> : <Ban size={15} />}
+                Bloquear
+              </button>
+            </div>
+          ) : (
+            <p className="text-[12.5px] text-dark-500">Solo quien puede aprobar días puede bloquearlos.</p>
+          )}
+
+          <div className="mt-3 divide-y divide-white/[0.04]">
+            {bloqueos.length === 0 ? (
+              <p className="py-3 text-[12.5px] text-dark-500">No hay ningún día bloqueado.</p>
+            ) : bloqueos.map((b) => (
+              <div key={b.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+                <span className="font-mono text-[12.5px] text-dark-100">{b.desde} → {b.hasta}</span>
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                  b.driver_id ? 'bg-amber-500/15 text-amber-300' : 'bg-red-500/15 text-red-300'}`}>
+                  {b.driver_name || 'Todo el centro'}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[12.5px] text-dark-400">{b.motivo}</span>
+                {puedeAprobar && (
+                  <button onClick={() => quitarBloqueo(b.id)}
+                    className="rounded p-1 text-dark-600 hover:text-red-400" title="Quitar">
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {previa && (
         <div className="card border border-brand-500/30 p-4">
           <h2 className="mb-1 flex items-center gap-2 text-sm font-bold text-dark-100">
@@ -522,7 +704,12 @@ export default function Turnos() {
           )}
 
           <div className="flex flex-wrap gap-2">
-            <button onClick={confirmarImport} disabled={ocupado === 'importar' || !previa.turnos}
+            {/* La misma previa sirve para el Excel y para lo pegado. Sin este
+                reparto, confirmar un cuadrante pegado llamaba al camino del
+                Excel, que no tiene fichero, y no pasaba NADA: ni guardaba ni
+                daba error. */}
+            <button onClick={previa.pegado ? confirmarPegado : confirmarImport}
+              disabled={ocupado === 'importar' || !previa.turnos}
               className="btn-primary flex items-center gap-1.5 text-sm disabled:opacity-40">
               {ocupado === 'importar' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
               Guardar {previa.turnos} turnos
