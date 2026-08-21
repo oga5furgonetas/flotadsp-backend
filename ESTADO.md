@@ -85,25 +85,49 @@ fly auth login
 npx wrangler login
 ```
 
-Y luego, lo de siempre:
+Y luego el frontend, con una sola orden. Compila, despliega **a la rama main**
+y comprueba que flotadsp.com sirve lo recién compilado:
+
+```powershell
+.\scripts\deploy-frontend.ps1
+```
+
+El backend sigue igual:
 
 ```bash
 cd backend && fly deploy --strategy immediate
 ```
 
-```bash
-cd frontend-v2 && npm run build && npx wrangler pages deploy dist --project-name flotadsp-v2 --branch main --commit-dirty=true
-```
-
 > **`--branch main` no es opcional.** Sin él el despliegue entra como Preview de
-> la rama `lab` y flotadsp.com no cambia, sin dar ningún error. Es el gotcha 16
-> y hoy costó que dos cosas parecieran no funcionar.
+> la rama `lab` y flotadsp.com no cambia, sin dar ningún error. Es el gotcha 16 y
+> el 20-08 costó que dos cosas parecieran no funcionar. En `deploy-frontend.ps1`
+> va cosido y no se puede olvidar: para eso existe.
 
-Comprobación después de desplegar:
+## La comprobación de después (21-08)
 
-```bash
-curl -s https://flotadsp-backend.fly.dev/api/vivo && curl -s https://flotadsp.com/ | grep -o 'assets/v2/index-[A-Za-z0-9_-]*\.js'
+Esto es lo que faltaba el 20-08: el despliegue se iba a Preview y nadie lo miraba.
+
+```powershell
+.\scripts\verificar-produccion.ps1
 ```
 
-El hash del bundle tiene que cambiar cuando despliegues frontend. Si no cambia,
-el despliegue se fue a Preview.
+Compara el hash del bundle de `frontend-v2\dist` con el que sirve flotadsp.com,
+y mira `/api/health` (backend vivo + Mongo conectado). Si producción se quedó con
+lo viejo sale en rojo, dice que casi seguro es el gotcha 16 y **devuelve código 1**
+—o sea, en CI o en un `&&` se para ahí—. Probado en los dos sentidos el 21-08:
+pasa cuando coincide y grita cuando no.
+
+Admite `-Esperar <segundos>` para reintentar mientras el edge propaga (el deploy
+lo llama con 90) y `-SoloBackend` si no has tocado el frontend.
+
+## La primera vez en un ordenador
+
+Además de los dos logins de arriba:
+
+```bash
+cd frontend-v2 && npm ci
+```
+
+El 21-08, en un clon que llevaba parado desde julio, `node_modules` era viejo y le faltaban
+dependencias nuevas (`@react-three/fiber`): la compilación fallaba sin más pista
+que un "Rollup failed to resolve import". `npm ci` y listo.

@@ -14,12 +14,20 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
 ## Producción y deploy
 
 - Frontend: Cloudflare Pages → **flotadsp.com**
-  `cd frontend-v2 && npm run build && npx wrangler pages deploy dist --project-name flotadsp-v2 --branch main --commit-dirty=true`
+  **`.\scripts\deploy-frontend.ps1`** — compila, despliega y **comprueba** que
+  flotadsp.com sirve de verdad el bundle recién compilado. Usa esto, no el
+  comando a mano.
+  A mano sería: `cd frontend-v2 && npm run build && npx wrangler pages deploy dist --project-name flotadsp-v2 --branch main --commit-dirty=true`
   **`--branch main` no es opcional** (gotcha 16): sin él el despliegue entra como
-  Preview de la rama `lab` y flotadsp.com no cambia, sin ningún error.
+  Preview de la rama `lab` y flotadsp.com no cambia, sin ningún error. Por eso
+  existe el script: ahí va cosido y no se puede olvidar.
 - Backend: Fly.io → **https://flotadsp-backend.fly.dev**
   `cd backend && fly deploy --strategy immediate`
   Smoke test tras deploy: `GET /api/health` debe dar `status=ok, mongo=True`.
+- **Comprobación después de cualquier despliegue**: `.\scripts\verificar-produccion.ps1`
+  Compara el hash del bundle de `frontend-v2/dist` con el que sirve flotadsp.com
+  y mira `/api/health`. Sale con código 1 y grita en rojo si producción se quedó
+  con lo viejo. Es la red que faltaba el 20-08: nadie comprobaba el despliegue.
 - `app.flotadsp.com` sirve la app antigua (legado, no tocar).
 
 ### Staging (probar sin miedo antes de tocar producción)
