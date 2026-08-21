@@ -17901,6 +17901,18 @@ async def create_shift_request(data: dict = Body(...), user: dict = Depends(requ
     if motivo not in MOTIVOS_PETICION:
         raise HTTPException(status_code=400, detail="Motivo no válido")
 
+    # LA EXPLICACION ES OBLIGATORIA, y se exige AQUI ademas de en la pantalla.
+    # Comprobarlo solo en el navegador no es exigirlo: una pestaña vieja abierta
+    # de antes, o una llamada a mano, entrarian igual. El motivo de la chapa dice
+    # la categoria ("Asuntos propios"); esto dice el caso, que es lo que necesita
+    # quien tiene que decidir. Sin ello la oficina acaba preguntando por
+    # WhatsApp, que es la conversacion que este modulo venia a quitar.
+    nota = (data.get("note") or data.get("nota") or "").strip()
+    if len(nota) < 4:
+        raise HTTPException(
+            status_code=400,
+            detail="Cuenta un poco de qué va: quien lo aprueba necesita saberlo")
+
     did = user.get("sub")
     drv = await db.drivers.find_one({"id": did}, {"_id": 0, "name": 1, "center": 1})
     if not drv:
@@ -17999,7 +18011,10 @@ async def resolve_shift_request(req_id: str, data: dict = Body(...),
             [req["driver_id"]],
             f"Tu petición del {req['date']}: {'aprobada' if new_status == 'aprobado' else 'rechazada'}",
             motivo or ("Ya puedes verlo en tus turnos." if new_status == "aprobado" else ""),
-            "/panel/portal-conductor")
+            # Al CONDUCTOR se le manda a SU portal. Estaba apuntando a
+            # /panel/portal-conductor, que es la pantalla de administracion:
+            # tocar el aviso le llevaba a un sitio donde no puede entrar.
+            "/conductor")
     except Exception as e:
         logger.debug("Push respuesta petición: %s", e)
     if new_status == "aprobado":

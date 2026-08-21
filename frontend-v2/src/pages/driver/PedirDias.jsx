@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowLeft, ChevronLeft, ChevronRight, Loader2, Check, Send, Clock, X,
+  Bell, BellOff,
 } from 'lucide-react'
 import { getMyShifts, createShiftRequest, marcarRespuestasVistas } from '../../services/api'
 import { lista } from '../../lib/lista'
+import { pushSupported, isPushEnabled, enablePush, disablePush } from '../../lib/push'
 
 /* ────────────────────────────────────────────────────────────────────────────
    PEDIR DÍAS LIBRES
@@ -40,6 +42,119 @@ const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
 const iso = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
+/* ── LA CAMPANA ───────────────────────────────────────────────────────────────
+   El aviso de que te han contestado ya se manda desde el servidor, pero el
+   navegador no deja mandar nada a nadie que no lo haya pedido antes. Sin este
+   interruptor, el push existia y no llegaba nunca.
+
+   Se pregunta aqui, en la pantalla de pedir dias, porque es el momento en el
+   que al conductor le interesa: acaba de pedir algo y quiere saber la
+   respuesta. Pedir permiso de notificaciones nada mas abrir la aplicacion, sin
+   venir a cuento, es lo que hace que la gente le de a "bloquear" para siempre.
+
+   Si el navegador no lo admite —Safari en iOS sin instalar la app, por
+   ejemplo— no se enseña nada. Un interruptor que no puede funcionar es peor
+   que ninguno. Y la respuesta sigue esperando dentro de la app de todas
+   formas: el push es un extra, nunca el unico camino. */
+function Campana() {
+  const [estado, setEstado] = useState('cargando')  // cargando|no|si|bloqueado|nada
+  const [ocupado, setOcupado] = useState(false)
+  const [aviso, setAviso] = useState('')
+
+  useEffect(() => {
+    if (!pushSupported()) { setEstado('nada'); return }
+    if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
+      setEstado('bloqueado'); return
+    }
+    isPushEnabled().then((si) => setEstado(si ? 'si' : 'no')).catch(() => setEstado('no'))
+  }, [])
+
+  if (estado === 'nada' || estado === 'cargando') return null
+
+  if (estado === 'bloqueado') {
+    return (
+      <div className="mt-4 flex items-start gap-2.5 rounded-xl border border-dark-800 bg-dark-900/60 px-3.5 py-3">
+        <BellOff size={15} className="mt-0.5 shrink-0 text-dark-600" />
+        <div>
+          <p className="text-[13px] font-semibold text-dark-300">Avisos bloqueados</p>
+          <p className="mt-0.5 text-[12px] leading-relaxed text-dark-500">
+            Los bloqueaste en este navegador. Puedes volver a permitirlos en los ajustes
+            del navegador. Mientras tanto, la respuesta te espera aquí dentro igual.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  const activo = estado === 'si'
+
+  /* enablePush() NO devuelve un si/no: devuelve 'ok', 'denied', 'unsupported',
+     'server-disabled' o 'error'. Tratarlo como booleano ponia el interruptor en
+     verde aunque el navegador hubiera denegado el permiso — prometiendole al
+     conductor un aviso que no le iba a llegar nunca. Se mira el valor exacto. */
+  const alternar = async () => {
+    setOcupado(true)
+    setAviso('')
+    try {
+      if (activo) {
+        await disablePush()
+        setEstado('no')
+        return
+      }
+      const r = await enablePush()
+      if (r === 'ok') setEstado('si')
+      else if (r === 'denied') setEstado('bloqueado')
+      else {
+        setEstado('no')
+        setAviso(r === 'server-disabled'
+          ? 'Los avisos no están configurados en el servidor. Díselo a la oficina.'
+          : 'No se han podido activar en este móvil. La respuesta te espera aquí dentro igual.')
+      }
+    } finally {
+      setOcupado(false)
+    }
+  }
+
+  return (
+    <>
+    <button
+      onClick={alternar}
+      disabled={ocupado}
+      className={`mt-4 flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors disabled:opacity-60 ${
+        activo
+          ? 'border-emerald-500/40 bg-emerald-500/[0.07]'
+          : 'border-dark-800 bg-dark-900/60 hover:border-dark-700'}`}
+    >
+      {ocupado
+        ? <Loader2 size={16} className="shrink-0 animate-spin text-dark-400" />
+        : activo
+          ? <Bell size={16} className="shrink-0 text-emerald-400" />
+          : <BellOff size={16} className="shrink-0 text-dark-500" />}
+      <div className="min-w-0 flex-1">
+        <p className={`text-[13.5px] font-semibold ${activo ? 'text-emerald-300' : 'text-dark-200'}`}>
+          {activo ? 'Te avisaremos en el móvil' : 'Avisarme en el móvil'}
+        </p>
+        <p className="mt-0.5 text-[12px] leading-relaxed text-dark-500">
+          {activo
+            ? 'Recibirás un aviso en cuanto aprueben o rechacen tus días. Toca para desactivarlo.'
+            : 'Activa los avisos y sabrás al momento si te aprueban o te rechazan los días.'}
+        </p>
+      </div>
+      <span className={`ml-1 h-5 w-9 shrink-0 rounded-full p-0.5 transition-colors ${
+        activo ? 'bg-emerald-500' : 'bg-dark-700'}`}>
+        <span className={`block h-4 w-4 rounded-full bg-white transition-transform ${
+          activo ? 'translate-x-4' : ''}`} />
+      </span>
+    </button>
+    {aviso && (
+      <p className="mt-2 rounded-lg bg-amber-500/10 px-3 py-2 text-[12px] leading-relaxed text-amber-200/80">
+        {aviso}
+      </p>
+    )}
+    </>
+  )
+}
+
 export default function PedirDias({ onBack }) {
   const hoyIso = iso(new Date())
   const [ref, setRef] = useState(() => { const d = new Date(); d.setDate(1); return d })
@@ -66,9 +181,15 @@ export default function PedirDias({ onBack }) {
       for (const s of lista(r.data?.shifts)) turnos[s.date] = s.type
       const pendientes = new Set(
         lista(r.data?.requests).filter((x) => x.status === 'pendiente').map((x) => x.date))
-      setDatos({ turnos, pendientes, respuestas: lista(r.data?.sin_ver) })
+      /* Los aprobados van aparte de los turnos libres del cuadrante. Al aprobar,
+         el servidor escribe el turno como 'libre', asi que un dia concedido
+         acababa pintado igual que un domingo: gris y tachado. Y no es lo mismo
+         un dia que te toca libre que uno que PEDISTE y te han dado. */
+      const aprobados = new Set(
+        lista(r.data?.requests).filter((x) => x.status === 'aprobado').map((x) => x.date))
+      setDatos({ turnos, pendientes, aprobados, respuestas: lista(r.data?.sin_ver) })
     } catch {
-      setDatos({ turnos: {}, pendientes: new Set(), respuestas: [] })
+      setDatos({ turnos: {}, pendientes: new Set(), aprobados: new Set(), respuestas: [] })
     }
   }, [rango])
   useEffect(() => { cargar() }, [cargar])
@@ -86,6 +207,9 @@ export default function PedirDias({ onBack }) {
   const estadoDe = (f) => {
     if (f < hoyIso) return 'pasado'
     if (datos?.pendientes?.has(f)) return 'pedido'
+    // Antes que 'libre' a proposito: al aprobarlo tambien queda como turno
+    // libre, y si se mirara primero eso, el dia concedido se veria gris.
+    if (datos?.aprobados?.has(f)) return 'aprobado'
     if (datos?.turnos?.[f] === 'libre') return 'libre'
     return 'libre_de_marcar'
   }
@@ -106,8 +230,21 @@ export default function PedirDias({ onBack }) {
     || (ref.getFullYear() === hoy.getFullYear() && ref.getMonth() > hoy.getMonth())
   const mover = (n) => { if (n < 0 && !puedeAtras) return; setRef((d) => new Date(d.getFullYear(), d.getMonth() + n, 1)) }
 
+  /* La explicacion es OBLIGATORIA. El motivo de la chapa ('Asuntos propios')
+     dice la categoria, no el caso: quien tiene que decidir necesita saber de
+     que va. Sin esto, la oficina acaba preguntando por WhatsApp y la
+     conversacion vuelve al sitio del que se la queria sacar.
+     El minimo son 4 caracteres: corta los '.', las 'x' y los 'aa', y deja
+     pasar respuestas cortas de verdad como 'cita'. */
+  const MIN_NOTA = 4
+  const notaOk = nota.trim().length >= MIN_NOTA
+
   async function enviar() {
     if (!sel.size) return
+    if (!notaOk) {
+      setErr('Escribe un poco de qué va: quien lo aprueba necesita saberlo.')
+      return
+    }
     setEnviando(true); setErr('')
     try {
       const dates = [...sel].sort()
@@ -193,6 +330,8 @@ export default function PedirDias({ onBack }) {
         <h1 className="font-display text-[22px] font-bold tracking-[-.02em] text-dark-50">Pedir días libres</h1>
         <p className="mt-1 text-[13px] text-dark-500">Toca los días que quieras. Puedes pasar de mes.</p>
 
+        <Campana />
+
         {/* Calendario */}
         <div className="mt-5 rounded-2xl border border-dark-800 bg-dark-900/60 p-3.5">
           <div className="mb-3 flex items-center justify-between">
@@ -234,7 +373,8 @@ export default function PedirDias({ onBack }) {
                     onClick={() => alternar(f)}
                     disabled={est !== 'libre_de_marcar'}
                     title={est === 'pedido' ? 'Ya lo has pedido, esperando respuesta'
-                      : est === 'libre' ? 'Ya lo tienes libre'
+                      : est === 'aprobado' ? 'Te lo han aprobado'
+                        : est === 'libre' ? 'Ya lo tienes libre'
                         : est === 'pasado' ? 'Día pasado' : ''}
                     className={`aspect-square rounded-lg text-[13px] tabular-nums transition-colors ${
                       marcado ? 'bg-brand-500 font-bold text-white'
@@ -244,7 +384,8 @@ export default function PedirDias({ onBack }) {
                           // "lo pides" se veían iguales y no se distinguía cuál
                           // acababa de marcar y cuál ya estaba mandado.
                           : est === 'pedido' ? 'bg-sky-500/15 text-sky-300 ring-1 ring-sky-500/50'
-                            : est === 'libre' ? 'bg-dark-800/60 text-dark-600 line-through'
+                            : est === 'aprobado' ? 'bg-emerald-500/20 font-bold text-emerald-300 ring-1 ring-emerald-500/60'
+                              : est === 'libre' ? 'bg-dark-800/60 text-dark-600 line-through'
                               : `text-dark-100 hover:bg-dark-800 ${esHoy ? 'ring-1 ring-brand-500/60' : ''}`
                     }`}
                   >
@@ -265,6 +406,9 @@ export default function PedirDias({ onBack }) {
             </span>
             <span className="flex items-center gap-1.5">
               <span className="h-3 w-3 rounded bg-sky-500/15 ring-1 ring-sky-500/50" /> Ya pedido, esperando respuesta
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-3 w-3 rounded bg-emerald-500/20 ring-1 ring-emerald-500/60" /> Aprobado
             </span>
             <span className="flex items-center gap-1.5">
               <span className="h-3 w-3 rounded bg-dark-800/60 ring-1 ring-dark-700" /> Ya lo tienes libre
@@ -297,16 +441,24 @@ export default function PedirDias({ onBack }) {
 
             <div className="mt-3">
               <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">
-                Cuéntalo un poco <span className="normal-case tracking-normal text-dark-600">(opcional)</span>
+                Cuéntalo un poco <span className="normal-case tracking-normal text-brand-400">(obligatorio)</span>
               </label>
-              <textarea rows={3} value={nota} onChange={(e) => setNota(e.target.value)}
+              <textarea rows={3} value={nota}
+                onChange={(e) => { setNota(e.target.value); if (err) setErr('') }}
                 placeholder="Así la oficina sabe de qué va y no tiene que preguntarte."
-                className="w-full resize-none rounded-xl border border-dark-700 bg-dark-900 px-3.5 py-3 text-[14px] text-dark-50 outline-none placeholder:text-dark-600 focus:border-brand-500/60" />
+                className={`w-full resize-none rounded-xl border bg-dark-900 px-3.5 py-3 text-[14px] text-dark-50 outline-none placeholder:text-dark-600 ${
+                  notaOk ? 'border-dark-700 focus:border-brand-500/60'
+                    : 'border-amber-500/40 focus:border-amber-500/70'}`} />
+              {!notaOk && (
+                <p className="mt-1.5 text-[12px] text-dark-500">
+                  Escribe al menos unas palabras. Sin esto no se puede enviar.
+                </p>
+              )}
             </div>
 
             {err && <p className="mt-3 rounded-lg bg-red-500/10 px-3 py-2 text-[13px] text-red-300">{err}</p>}
 
-            <button onClick={enviar} disabled={enviando}
+            <button onClick={enviar} disabled={enviando || !notaOk}
               className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-brand-500 py-3.5 text-[15px] font-bold text-white disabled:opacity-50">
               {enviando ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
               Enviar petición
