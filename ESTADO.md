@@ -56,7 +56,13 @@ que reapuntar inspecciones, incidencias, cuadrantes y scorecard, y decidir qué
 ficha sobrevive. Enseñar la lista antes de tocar nada.
 
 ### 5. Rotar la clave de Google Geocoding
-`AIzaSyCd45TtmAoPBvDUsvmvAeQeSlCKjQ3s2l4` se pegó en un chat. Sigue viva.
+La clave de Google Geocoding que se pegó en un chat sigue viva. **Estaba escrita
+aquí, en claro, y este repositorio es PÚBLICO** — o sea que llevaba desde el
+20-08 publicada en GitHub, en el fichero que avisaba de que estaba filtrada.
+Se ha quitado de aquí el 21-08, pero sigue en el historial de git y puede estar
+ya rastreada: quitarla del texto no la desactiva. **Hay que rotarla en la consola
+de Google Cloud**, que es lo único que sirve. Empieza por `AIzaSyCd45` (los
+cuatro primeros bloques bastan para reconocerla en la consola).
 
 ### 6. Direcciones: las 55 que no se sitúan
 De 173 que han fallado alguna vez, quedan 55 sin situar ni siquiera con el
