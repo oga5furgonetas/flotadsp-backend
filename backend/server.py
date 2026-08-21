@@ -1133,6 +1133,9 @@ async def _ensure_tenant_indexes(db_name: str):
     # duplicados dentro FALLA y se queda sin indice — o sea, peor que ahora.
     # El unico se pone cuando se fusionen las fichas, con _idx_unico().
     await _idx(tdb.drivers, "email")
+    # Bloqueos de dias: se consultan en CADA peticion del conductor.
+    await _idx(tdb.shift_blocks, [("hasta", 1), ("desde", 1)])
+    await _idx(tdb.shift_blocks, "driver_id")
     # ── Cortex: son las colecciones que mas crecen con diferencia ──────────
     # Medido en produccion: cortex_packages 90.876 docs / 68 MB y
     # cortex_events 133.528 docs / 30 MB SIN NINGUN INDICE.
@@ -17812,6 +17815,154 @@ async def get_my_shifts(desde: Optional[str] = None, hasta: Optional[str] = None
     return {"shifts": shifts, "requests": reqs, "sin_ver": sin_ver}
 
 
+
+
+# ─── BLOQUEAR LA PETICIÓN DE DÍAS ────────────────────────────────────────────
+#
+# Hay semanas en las que no se puede dar ni un día: pico de volumen, Navidad,
+# Prime Day. Hasta ahora la única forma de gestionarlo era dejar que pidieran y
+# rechazar uno por uno, que es trabajo para la oficina y un "no" para el
+# conductor después de haberse hecho ilusiones.
+#
+# Un bloqueo dice ANTES que ese día no se puede pedir, y dice por qué. El
+# conductor lo ve en su calendario y no lo marca siquiera.
+#
+# DOS ALCANCES, y la diferencia importa:
+#   · de centro  → afecta a toda la nave.
+#   · de persona → sólo a ese conductor. Sirve para el que ya ha gastado sus
+#     días, o para quien está en un plan de mejora.
+#
+# Lo que NO hace: tocar las peticiones ya hechas. Un bloqueo puesto hoy no
+# rechaza lo que se pidió ayer — eso sigue decidiéndolo una persona. Bloquear
+# hacia atrás sería cambiarle a alguien una respuesta que ya estaba dada.
+
+
+def _bloqueo_doc(b: dict) -> dict:
+    return {
+        "id": b.get("id") or str(uuid.uuid4()),
+        "center": (b.get("center") or "").strip(),
+        "driver_id": (b.get("driver_id") or "").strip() or None,
+        "desde": (b.get("desde") or "").strip(),
+        "hasta": (b.get("hasta") or "").strip(),
+        "motivo": (b.get("motivo") or "").strip()[:200],
+        "creado_por": b.get("creado_por"),
+        "creado_en": b.get("creado_en") or datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def _bloqueos_que_afectan(driver_id: str, center: str, fechas: list) -> list:
+    """Los bloqueos que pisan alguna de esas fechas para ese conductor."""
+    if not fechas:
+        return []
+    docs = await db.shift_blocks.find(
+        {"$and": [
+            {"$or": [{"center": {"$regex": re.escape((center or "")[:4]), "$options": "i"}},
+                     {"center": ""}]},
+            {"$or": [{"driver_id": None}, {"driver_id": driver_id}]},
+            {"desde": {"$lte": max(fechas)}},
+            {"hasta": {"$gte": min(fechas)}},
+        ]}, {"_id": 0}).to_list(200)
+    fuera = []
+    for b in docs:
+        pisadas = [f for f in fechas if b["desde"] <= f <= b["hasta"]]
+        if pisadas:
+            fuera.append({**b, "dias_afectados": sorted(pisadas)})
+    return fuera
+
+
+@api_router.get("/shift-blocks")
+async def listar_bloqueos(center: str = "", admin: dict = Depends(require_admin)):
+    """Los bloqueos vigentes. Cada uno con a quién afecta."""
+    q = {}
+    if center and center not in ("Todos", "todos"):
+        q["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
+    docs = await db.shift_blocks.find(q, {"_id": 0}).sort("desde", 1).to_list(500)
+    # Sólo los de los centros que este admin puede ver: un bloqueo de otra nave
+    # no es asunto suyo, igual que sus peticiones.
+    docs = [d for d in docs if _user_can_see_center(admin, d.get("center") or "")]
+    ids = [d["driver_id"] for d in docs if d.get("driver_id")]
+    nombres = {}
+    if ids:
+        nombres = {d["id"]: d.get("name", "") for d in await db.drivers.find(
+            {"id": {"$in": ids}}, {"_id": 0, "id": 1, "name": 1}).to_list(500)}
+    for d in docs:
+        d["driver_name"] = nombres.get(d.get("driver_id")) if d.get("driver_id") else None
+    return {"bloqueos": docs, "total": len(docs)}
+
+
+@api_router.post("/shift-blocks")
+async def crear_bloqueo(data: dict = Body(...), admin: dict = Depends(require_admin)):
+    """Bloquea un rango de días. body: {center, desde, hasta, motivo, driver_id?}
+
+    El motivo es obligatorio y lo lee el conductor. Un bloqueo sin explicación
+    es un "no" sin cara: manda a preguntar por WhatsApp, que es lo que este
+    módulo viene a quitar.
+    """
+    if not _puede(admin, "aprobar-dias"):
+        raise HTTPException(status_code=403,
+                            detail="No tienes permiso para bloquear días")
+    b = _bloqueo_doc({**data, "creado_por": admin.get("name", "admin")})
+    if not b["center"]:
+        raise HTTPException(400, "Falta el centro")
+    if not _user_can_see_center(admin, b["center"]):
+        raise HTTPException(403, "Ese centro no es tuyo")
+    for campo in ("desde", "hasta"):
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", b[campo] or ""):
+            raise HTTPException(400, f"{campo} va en formato AAAA-MM-DD")
+    if b["hasta"] < b["desde"]:
+        raise HTTPException(400, "La fecha de fin es anterior a la de inicio")
+    if len(b["motivo"]) < 4:
+        raise HTTPException(400, "Escribe el motivo: lo va a leer el conductor")
+    if b["driver_id"]:
+        existe = await db.drivers.find_one({"id": b["driver_id"]}, {"_id": 0, "id": 1})
+        if not existe:
+            raise HTTPException(404, "Ese conductor no existe")
+    await db.shift_blocks.insert_one(dict(b))
+    logger.info("Bloqueo de dias: %s %s..%s (%s)", b["center"], b["desde"], b["hasta"],
+                b["driver_id"] or "todo el centro")
+    return {"success": True, "bloqueo": b}
+
+
+@api_router.delete("/shift-blocks/{block_id}")
+async def borrar_bloqueo(block_id: str, admin: dict = Depends(require_admin)):
+    if not _puede(admin, "aprobar-dias"):
+        raise HTTPException(status_code=403, detail="No tienes permiso")
+    b = await db.shift_blocks.find_one({"id": block_id}, {"_id": 0})
+    if not b:
+        raise HTTPException(404, "Ese bloqueo ya no existe")
+    if not _user_can_see_center(admin, b.get("center") or ""):
+        raise HTTPException(403, "Ese bloqueo es de otro centro")
+    await db.shift_blocks.delete_one({"id": block_id})
+    return {"success": True}
+
+
+@api_router.get("/shift-blocks/mios")
+async def bloqueos_del_conductor(user: dict = Depends(get_current_user)):
+    """Para el portal: qué días NO puede pedir, y por qué.
+
+    Se devuelven los rangos tal cual, no día a día: la pantalla los pinta y
+    enseña el motivo al tocarlos. Sólo de hoy en adelante — los de antes ya no
+    le sirven para nada.
+    """
+    if user.get("role") != "driver":
+        raise HTTPException(status_code=403, detail="Solo conductores")
+    did = user["sub"]
+    drv = await db.drivers.find_one({"id": did}, {"_id": 0, "center": 1, "email": 1, "id": 1})
+    # Sus otras fichas cuentan igual: si esta duplicado, un bloqueo puesto sobre
+    # la otra ficha tiene que valerle (gotcha 15).
+    mis_ids, centro = await _fichas_misma_persona(drv or {"id": did})
+    hoy = _dia_negocio()
+    docs = await db.shift_blocks.find(
+        {"hasta": {"$gte": hoy},
+         "$or": [{"driver_id": None}, {"driver_id": {"$in": list(mis_ids)}}]},
+        {"_id": 0}).sort("desde", 1).to_list(200)
+    if centro:
+        docs = [d for d in docs
+                if not d.get("center")
+                or re.search(re.escape(centro[:4]), d.get("center") or "", re.I)]
+    return {"bloqueos": docs}
+
+
 @api_router.post("/shift-requests/vistas")
 async def marcar_respuestas_vistas(data: dict = Body(default={}),
                                    user: dict = Depends(require_any_auth)):
@@ -17883,6 +18034,17 @@ async def create_shift_request(data: dict = Body(...), user: dict = Depends(requ
     drv = await db.drivers.find_one({"id": did}, {"_id": 0, "name": 1, "center": 1})
     if not drv:
         raise HTTPException(status_code=404, detail="Conductor no encontrado")
+
+    # DIAS BLOQUEADOS: se comprueba AQUI, que es donde se decide de verdad.
+    # La pantalla ya no los deja marcar, pero una pestaña abierta de antes del
+    # bloqueo, o una llamada a mano, entrarian igual.
+    choques = await _bloqueos_que_afectan(did, drv.get("center") or "", limpias)
+    if choques:
+        b = choques[0]
+        dias = ", ".join(b["dias_afectados"][:5])
+        raise HTTPException(
+            status_code=409,
+            detail=f"Esos dias estan bloqueados ({dias}): {b.get('motivo') or 'sin motivo'}")
 
     # Un día ya pedido y sin resolver no se pide dos veces: si no, la oficina
     # ve la misma petición repetida y no sabe cuál contestar.
