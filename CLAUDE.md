@@ -227,6 +227,19 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    votos: dar peso doble a las respuestas "exactas" hacia que CartoCiudad, sola,
    ganara con 'AVENIDA RAXOI' en plena Praza do Obradoiro.
 
+19. **Pasa `pyflakes` sobre `server.py` antes de dar nada por bueno.** Python no
+   se queja de un nombre que no existe hasta que se ejecuta esa línea, así que un
+   `NameError` puede vivir meses en una ruta que nadie prueba. El 22-08-2026
+   había **cuatro**: `_date_range` (dos veces), `_generate_schedule_with_gemini`
+   e `img_bytes` (tres veces). Dos de ellos tumbaban endpoints reales —
+   "Generar cuadrante" en Turnos llevaba devolviendo 500 desde siempre— y uno
+   estaba escondido dentro de un `try/except Exception` que lo convertía en un
+   502 con un mensaje FALSO ("la IA no pudo generar el cuadrante; reintenta").
+   Un `except Exception` ancho se traga los errores de programación igual que
+   los de red: si envuelves una llamada, comprueba antes que existe.
+   `python -m pyflakes backend/server.py | grep "undefined name"` tiene que dar
+   CERO. Ahora lo da, y por eso el próximo se notará.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

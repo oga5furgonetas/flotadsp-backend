@@ -72,18 +72,15 @@ entra, sobre todo con `permissions: null` mezclado con listas viejas
 incompletas. **Antes de tocar nada, sacar la lista de qué permisos tiene cada
 usuario en BD y mirarla.** Después, ir por fases.
 
-### 3. Saber si el job de backend del CI pasa
-El CI llevaba 35 commits en rojo, desde `91f6e9b` ("calendario mensual de
-flota"). El 21-08 se arreglaron los 6 fallos del frontend (144 pruebas en verde
-en local).
+### 3. ~~Saber si el job de backend del CI pasa~~ — RESUELTO 22-08
+Se ejecutaron los tests contra una base `test_` del propio Atlas (borrada
+después). Fallaba **un solo test**, y estaba destapando un fallo de producción:
+`_date_range` no existía, así que `/shifts/generate` y `/shifts/generate-auto`
+reventaban con `NameError`. El botón "Generar cuadrante" de Turnos llevaba
+devolviendo 500 desde siempre.
 
-Queda el job de **Backend**, que también fallaba ANTES de tocarlo (se comprobó
-con el commit `8ef64d9`, que solo tocaba ficheros .ps1 y documentación). No se
-ha podido leer su log: GitHub pide iniciar sesión para verlo, y en el PC de
-Downloads no hay ni Mongo ni Docker para reproducirlo.
-
-Dos maneras: entrar en GitHub y leer el final del log del job "Backend", o
-instalar MongoDB en local y correr `pytest backend/tests`.
+Arreglado. **23 de 23 en verde.** De paso, `pyflakes` sacó otros dos nombres
+inexistentes (ver gotcha 19 en CLAUDE.md); ahora da cero.
 
 ### 4. Ponerle un cerrojo a `capturas.spec.js`
 Reescribe las 5 imágenes de la landing (`frontend-v2/public/capturas/`) CADA VEZ
@@ -92,17 +89,14 @@ las sustituyó por unas 7 veces más pesadas (93 KB → 794 KB) y hubo que
 revertirlas. Está pensado para lanzarlo a propósito con `--update-snapshots`,
 pero no se protege. Son dos líneas.
 
-### 5. Confirmar el plan de Atlas
-`hostInfo` está bloqueado en el clúster al que se conecta la app, que es lo que
-pasa en la capa gratuita. Dos explicaciones y hay que saber cuál es:
+### 5. Confirmar el plan de Atlas — medio resuelto
+`hostInfo` está bloqueado porque **el usuario de la base no tiene permisos de
+admin**, no porque el clúster siga siendo gratuito. Se comprobó el 22-08 al
+intentar borrar las bases `test_`: `not authorized ... to execute command
+dropDatabase`. O sea que **desde dentro no se puede saber el plan**, y punto.
 
-- el usuario de la base no tiene permiso de admin (entonces no pasa nada), **o**
-- se creó un clúster **nuevo** y la app sigue apuntando al viejo — y entonces la
-  ampliación no le sirve de nada a la aplicación.
-
-Los datos (334 MB) están en el clúster al que apunta `MONGO_URL`. Mirar en el
-panel de Atlas qué tier tiene **WiniwWinw** y si hay más de un clúster.
-Si el límite real no son 10 GB: `fly secrets set ATLAS_LIMITE_MB=<mb>`.
+Queda mirarlo en el panel de Atlas: qué tier tiene **WiniwWinw** y si hay más de
+un clúster. Si el límite real no son 10 GB: `fly secrets set ATLAS_LIMITE_MB=<mb>`.
 
 ### 6. Contestar a los dos mensajes de la web
 Llevan esperando desde el 15-08 y los dos son **candidaturas de empleo**, no
@@ -130,6 +124,26 @@ planta" y las de lugares que no están en ningún callejero. El siguiente paso
 razonable **no** es pagar otro geocodificador —está medido, no aportaría— sino
 un botón de "confirmar ubicación" para que una persona la fije una vez y quede
 para siempre.
+
+### 9b. Lo que sacó la auditoría de datos del 22-08
+Cero referencias rotas: ni un solo documento apunta a una furgoneta o un
+conductor que ya no exista. La base está sana. Lo que sí hay:
+
+- **Centros escritos de cuatro formas.** `'OGA5'` (65), `'AMZL OGA5 SANTIAGO XPT'`
+  (37), `'oga5'` (5) y `'OGA5 '` con espacio (2). Funciona porque todos los
+  filtros van por regex (gotcha 6), pero cualquier recuento por centro que
+  alguien escriba sin acordarse sale mal. Normalizarlo es una migración de
+  datos: hace falta el OK de Dani.
+- **14 matrículas y 12 correos duplicados.** Los índices existen pero NO son
+  únicos, y no pueden serlo hasta fusionar las fichas (gotcha 9: crear el único
+  con duplicados dentro falla y te deja sin índice).
+- **17 conductores sin centro y 12 sin correo** — los 12 no pueden entrar al
+  portal.
+- **10 peticiones pendientes sin explicación**, de antes de exigirla. No pasa
+  nada, son antiguas.
+
+Arreglado ya: `drivers.email` no tenía **ningún** índice y es la llave del
+portal. Cada login recorría las 202 fichas enteras; ahora examina 2.
 
 ### 10. El cuadrante
 Diseñado y hablado, sin construir. Dani ofreció mandar el Sheets entero.

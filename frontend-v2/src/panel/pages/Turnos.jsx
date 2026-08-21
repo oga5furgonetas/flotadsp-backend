@@ -260,8 +260,19 @@ export default function Turnos() {
       const g = m.get(k)
       g.fechas.push(s.date); g.ids.push(s.id)
     }
-    for (const g of m.values()) g.fechas.sort()
-    return [...m.values()].sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))
+    /* Una peticion cuyo dia YA PASO y sigue sin contestar es una persona que se
+       quedo sin respuesta: o vino a trabajar sin saberlo, o no vino sin
+       permiso. Se marca y se pone la primera, porque enterrada entre las demas
+       no la ve nadie — habia una asi en produccion el 22-08-2026. */
+    const hoyIso = new Date().toISOString().slice(0, 10)
+    for (const g of m.values()) {
+      g.fechas.sort()
+      g.caducada = g.fechas[0] < hoyIso
+    }
+    return [...m.values()].sort((a, b) => (
+      (a.caducada === b.caducada)
+        ? String(a.created_at).localeCompare(String(b.created_at))
+        : (a.caducada ? -1 : 1)))
   }, [solicitudes])
 
   if (noCenter) {
@@ -534,10 +545,16 @@ export default function Turnos() {
         ) : (
           <div className="divide-y divide-dark-800">
             {grupos.map((g) => (
-              <div key={g.key} className="flex flex-wrap items-start gap-x-3 gap-y-2 py-3">
+              <div key={g.key} className={`flex flex-wrap items-start gap-x-3 gap-y-2 py-3 ${
+                g.caducada ? 'rounded-lg bg-red-500/[0.06] px-2' : ''}`}>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-semibold text-dark-100">{g.driver_name}</span>
+                    {g.caducada && (
+                      <span className="rounded-full bg-red-500/20 px-2 py-0.5 text-[11px] font-semibold text-red-300">
+                        Sin contestar y el día ya pasó
+                      </span>
+                    )}
                     <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${g.type === 'libre' ? 'bg-sky-500/15 text-sky-300' : 'bg-amber-500/15 text-amber-300'}`}>
                       {g.motivo_label || t(g.type === 'libre' ? 'turns.t.libre' : 'turns.t.extra')}
                     </span>

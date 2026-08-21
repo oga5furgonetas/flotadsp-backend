@@ -1124,6 +1124,15 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.vehicles, "status")
     await _idx(tdb.drivers, "id")
     await _idx(tdb.drivers, "driver_id")
+    # EL CORREO ES LA LLAVE DEL PORTAL y no tenia indice ninguno: cada vez que
+    # un conductor entra, Mongo recorria las 202 fichas enteras. Medido el
+    # 22-08-2026 con la auditoria de datos.
+    #
+    # Va SIN unique a proposito. Hay 12 correos compartidos por varias fichas
+    # (los duplicados de conductores, gotcha 15) y crear el unico con
+    # duplicados dentro FALLA y se queda sin indice — o sea, peor que ahora.
+    # El unico se pone cuando se fusionen las fichas, con _idx_unico().
+    await _idx(tdb.drivers, "email")
     # ── Cortex: son las colecciones que mas crecen con diferencia ──────────
     # Medido en produccion: cortex_packages 90.876 docs / 68 MB y
     # cortex_events 133.528 docs / 30 MB SIN NINGUN INDICE.
