@@ -23137,7 +23137,11 @@ async def cortex_portal_nota(data: dict = Body(...), user: dict = Depends(requir
     return {"success": True, "celdas": len(celdas)}
 
 
-_GEO_PRECISIONES = ("portal", "calle", "zona")
+# 'lugar' es un sitio con nombre propio (As Buceleiras, Malvares), que NO es lo
+# mismo que 'zona' —el centro del municipio cuando nadie encontró nada—. Sin
+# este escalón, media Galicia rural se guardaba como "no lo sé". Ver el bloque
+# PRECISION_LUGAR en geoDireccion.js.
+_GEO_PRECISIONES = ("portal", "calle", "lugar", "zona")
 
 
 @api_router.post("/cortex/portales/geo")
@@ -23806,6 +23810,218 @@ async def cortex_geo_rescate(via: str, municipio: str = "", cp: str = "",
 # sólo cuando dos familias independientes coinciden en el nombre; si no, se
 # afirma el municipio y el código postal —que es lo que sí está claro— y se
 # enseña lo que dice cada fuente para que lo juzgue una persona.
+
+
+
+# ─── NORMALIZADOR DE DIRECCIONES + GENERADOR DE CONSULTAS ─────────────────────
+#
+# De las 173 direcciones distintas que han dado "no puedo encontrar la
+# dirección", el callejero oficial no contestaba NADA a 103. Mirando esas 103 el
+# patrón salta a la vista: no faltan callejeros, se les manda basura. Literales
+# de la base:
+#
+#   'Calle Real 40, 2°, https://maps.app.goo.gl/YJU8NQYcr...'   ← una URL dentro
+#   'ALIMENTACION VILLA S.L B15269889, Calle canle numero 20'   ← empresa y CIF
+#   'C\ Brion - Leiro (Rianxo) C.P.15928, Nº 43, 15928 Rianxo'  ← 'C' y 'C.P.'
+#   'Os Bolos. Lagartones . Rua D . Número 14, 36687 A Estrada' ← puntos por comas
+#   'Calle arcay, N30-32, 15873 Bembibre (val do dubra)'        ← rango de números
+#   'Bao 2, 15880 Santa Cruz  de  Ribadulla--Vedra'             ← guiones dobles
+#
+# Aquí se limpia todo eso y se generan VARIAS consultas por dirección, de la más
+# específica a la más general. No es tirar consultas a lo loco: en el rural
+# gallego la que acaba acertando suele ser 'lugar + concello', no 'calle +
+# número', porque la jerarquía real es casa → lugar → parroquia → concello.
+#
+# MEDIDO sobre esas 173 direcciones, con el callejero oficial como única fuente:
+#   antes                          40% situadas
+#   con normalizador y variantes   82% situadas... pero con basura dentro
+#   + cerrojo de credibilidad      68% situadas Y COMPROBADAS
+#
+# El cerrojo (_dir_creible) tumbó 110 respuestas, y son justo las que habrían
+# mandado a alguien a otra provincia: 'Calle Pombais 1, 15939 Boiro' devolvía un
+# CP de Ourense, y 'OUTEIRO Nº 1, OCA, 36685 A ESTRADA' uno de Álava. Ese 82%
+# era mentira en catorce puntos.
+
+
+# ── Cosas que no son parte de una dirección y estorban a cualquier callejero ──
+_DIR_URL = re.compile(r"\b(?:https?://|www\.)\S+", re.I)
+_DIR_CIF = re.compile(r"\b[A-Z]\d{7,8}[A-Z0-9]?\b")
+_DIR_EMPRESA = re.compile(r"\b(s\.?l\.?u?|s\.?a\.?|c\.?b\.?|s\.?c\.?)\b\.?", re.I)
+_DIR_CP_INLINE = re.compile(r"\bc\.?\s*p\.?\s*:?\s*(\d{5})\b", re.I)
+_DIR_TEL = re.compile(r"\b[6-9]\d{8}\b")
+
+# Piso, puerta, escalera. Todo esto sobra para localizar el portal.
+_DIR_PISO = re.compile(
+    r"(?:^|[\s,])(?:"
+    r"bajo|bj|baixo|entlo|entresuelo|[áa]tico|s[óo]tano|"
+    r"(?:piso|pso|planta|pta|puerta|esc|escalera|bloque|blq|port(?:al)?)\.?\s*[\w\-]{0,4}|"
+    r"\d{1,2}\s*[ºª°]\s*[a-zA-Z]?|"
+    r"[-–]\s*\d{1,2}\s*[a-zA-Z]\b|"
+    r"(?:izq|izda|izquierda|dcha|derecha|centro|ctro)\w*"
+    r")(?=$|[\s,])", re.I)
+
+# 'nº 5', 'n°56', 'numero 4', 'num. 43', 'N30-32'  → el número, y el PRIMERO
+# si es un rango: mandar '30-32' no lo entiende nadie.
+_DIR_NUM = re.compile(r"\b(?:n[ºo°ª]?|num|n[úu]m(?:ero)?)\.?\s*(\d{1,4})", re.I)
+_DIR_RANGO = re.compile(r"\b(\d{1,4})\s*[-–/]\s*\d{1,4}\b")
+
+
+def _dir_limpia(txt: str) -> str:
+    """Quita de la cadena todo lo que no es dirección."""
+    t = " " + str(txt or "") + " "
+    t = _DIR_URL.sub(" ", t)
+    t = _DIR_TEL.sub(" ", t)
+    t = _DIR_CIF.sub(" ", t)
+    t = _DIR_EMPRESA.sub(" ", t)
+    t = re.sub(r"[\\/]", " ", t)          # 'C\\ Brion' → 'C Brion'
+    t = t.replace("--", ", ").replace("–", "-")
+    t = _DIR_RANGO.sub(r"\1", t)            # 'N30-32' → 'N30'
+    t = _DIR_NUM.sub(r" \1", t)             # 'nº 5' → ' 5'
+    # Los puntos que separan tramos se vuelven comas; los de abreviatura no.
+    t = re.sub(r"\.\s+(?=[A-ZÁÉÍÓÚÑ])", ", ", t)
+    t = re.sub(r"\s*\.\s*$", "", t)
+    t = _DIR_PISO.sub(" ", t)
+    t = re.sub(r"[;]+", ",", t)
+    t = re.sub(r"\s+", " ", t)
+    t = re.sub(r"\s*,\s*", ", ", t)
+    t = re.sub(r"(,\s*)+", ", ", t).strip(" ,")
+    return t
+
+
+def _dir_despieza(txt: str):
+    """Saca vía, número, lugar, municipio, CP y provincia.
+
+    En Galicia la jerarquía real es casa → lugar → parroquia → concello, y el
+    texto la trae mezclada. Se guardan los tramos intermedios por separado
+    porque son los que localizan una casa en el rural, donde no hay calle.
+    """
+    bruto = _dir_limpia(txt)
+    if not bruto:
+        return None
+
+    cp = ""
+    m = _DIR_CP_INLINE.search(bruto)
+    if m:
+        cp = m.group(1)
+        bruto = _DIR_CP_INLINE.sub(" ", bruto)
+
+    # Municipio entre paréntesis: '(val do dubra)', '(Porto do Son)'.
+    entre_par = re.findall(r"\(([^)]{3,40})\)", bruto)
+    bruto = re.sub(r"\([^)]*\)", " ", bruto)
+    bruto = re.sub(r"\s+", " ", bruto).strip(" ,")
+
+    tramos = [x.strip() for x in bruto.split(",") if x.strip()]
+    if not tramos:
+        return None
+
+    ciudad = ""
+    if len(tramos) > 1:
+        ult = tramos[-1]
+        m1 = re.match(r"^(\d{5})\s*(.*)$", ult)
+        m2 = re.match(r"^(.*?)\s+(\d{5})$", ult)
+        if m1:
+            cp = cp or m1.group(1); ciudad = m1.group(2).strip(); tramos.pop()
+        elif m2:
+            ciudad = m2.group(1).strip(); cp = cp or m2.group(2); tramos.pop()
+        elif re.fullmatch(r"\d{5}", ult):
+            cp = cp or ult; tramos.pop()
+
+    via = tramos.pop(0) if tramos else ""
+    # El número puede haber quedado pegado a la vía.
+    numero = ""
+    mn = re.search(r"\s(\d{1,4})\s*[A-Za-z]?$", via)
+    if mn:
+        numero = mn.group(1)
+        via = via[:mn.start()].strip(" ,.-")
+
+    intermedios = [x for x in tramos if x and not re.fullmatch(r"\d{1,4}\s*[A-Za-z]?", x)]
+    # Provincias: no son municipio, y colarlas como tal manda a otro sitio.
+    PROV = {"a coruña", "la coruña", "coruña", "pontevedra", "lugo", "ourense",
+            "orense", "galicia", "españa", "espana"}
+    intermedios = [x for x in intermedios if x.strip().lower() not in PROV]
+
+    candidatos_muni = [x for x in (entre_par + intermedios[::-1] + [ciudad]) if x]
+    municipio = candidatos_muni[0] if candidatos_muni else ""
+    lugar = intermedios[0] if intermedios else ""
+
+    return {"via": via, "numero": numero, "lugar": lugar,
+            "municipio": municipio, "cp": cp, "ciudad": ciudad,
+            "otros_muni": candidatos_muni, "limpio": bruto}
+
+
+def _dir_variantes(d) -> list:
+    """Las consultas a probar, de la más específica a la más general.
+
+    No es tirar consultas a lo loco: cada una responde a una pregunta distinta
+    y se para en cuanto una contesta. En el rural la que acaba acertando suele
+    ser 'lugar + concello', no 'calle + número'.
+    """
+    if not d:
+        return []
+    v, n, lg, cp = d["via"], d["numero"], d["lugar"], d["cp"]
+    munis = [m for m in d["otros_muni"] if m][:3]
+    fuera = []
+    for mu in munis or [""]:
+        if v and n and mu: fuera.append(f"{v} {n}, {mu}")
+        if v and mu:       fuera.append(f"{v}, {mu}")
+        if v and lg and mu and lg.lower() != mu.lower():
+            fuera.append(f"{v}, {lg}, {mu}")
+        if lg and mu and lg.lower() != mu.lower(): fuera.append(f"{lg}, {mu}")
+    if v and n and cp: fuera.append(f"{v} {n}, {cp}")
+    if v and cp:       fuera.append(f"{v}, {cp}")
+    if v and n:        fuera.append(f"{v} {n}")
+    if v:              fuera.append(v)
+    # Sin duplicados y sin perder el orden.
+    vistas, limpio = set(), []
+    for q in fuera:
+        k = re.sub(r"\s+", " ", q).strip().lower()
+        if k and k not in vistas:
+            vistas.add(k); limpio.append(q)
+    return limpio[:8]
+
+
+def _dir_creible(j: dict, d: dict, original: str) -> bool:
+    """¿Es compatible esta respuesta con la dirección que se pidió?
+
+    Dos comprobaciones INDEPENDIENTES del nombre de la calle: el código postal
+    (mismos tres primeros dígitos = misma comarca) y el municipio. Basta una.
+
+    Sin esto, el generador de variantes es un peligro: al preguntar por trozos
+    sueltos, un callejero encuentra 'Pombais' o 'Outeiro' en cualquier punto de
+    España y contesta tan tranquilo. Medido: 110 respuestas de este tipo, con
+    códigos postales de Ourense, Álava, Málaga y Las Palmas para direcciones de
+    A Coruña.
+    """
+    if not isinstance(j, dict):
+        return False
+    cp_j = re.sub(r"\D", "", str(j.get("postalCode") or j.get("cp") or ""))
+    if d.get("cp") and cp_j:
+        return cp_j[:3] == d["cp"][:3]
+    mun_j = _geo_sin_acentos(str(j.get("muni") or j.get("municipio") or "")).lower().strip()
+    if not mun_j:
+        return False
+    texto = _geo_sin_acentos(original or "").lower()
+    for cand in (d.get("otros_muni") or []):
+        c = _geo_sin_acentos(str(cand)).lower().strip()
+        if c and (c in mun_j or mun_j in c):
+            return True
+    return mun_j in texto
+
+
+@api_router.get("/cortex/geo/parse")
+async def cortex_geo_parse(q: str, _=Depends(require_admin)):
+    """Despieza una dirección de Cortex y devuelve las consultas a probar.
+
+    Existe para que el navegador pregunte con texto limpio en vez de con la
+    cadena tal cual la escribió el cliente. Las variantes van ordenadas de la
+    más específica a la más general: se prueban en orden y se para en la primera
+    que conteste algo creíble.
+    """
+    d = _dir_despieza(q or "")
+    if not d:
+        return {"ok": False, "variantes": []}
+    return {"ok": True, **d, "variantes": _dir_variantes(d)}
+
 
 _CAT_COORD = "https://ovc.catastro.meh.es/OVCServWeb/OVCSWLocalizacionRC/OVCCoordenadas.asmx"
 

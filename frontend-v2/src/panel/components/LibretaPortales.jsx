@@ -75,7 +75,7 @@ function Fila({ p, onGuardar, onResolver, onBuscarReal, t }) {
     setBuscandoReal(true); setFalloReal(false)
     try {
       const r = await onBuscarReal(p)
-      if (!['confirmada', 'zona', 'oficial', 'confirma_amazon'].includes(r?.estado)) setFalloReal(true)
+      if (!['confirmada', 'zona', 'lugar', 'oficial', 'confirma_amazon'].includes(r?.estado)) setFalloReal(true)
     } finally { setBuscandoReal(false) }
   }
 
@@ -318,7 +318,7 @@ export default function LibretaPortales({ center }) {
     // 'zona' también se guarda: no señala el portal, pero dice que el punto al
     // que mandan al conductor queda fuera de la zona donde está la dirección, y
     // eso es lo que evita el viaje perdido. Viaja etiquetado como zona.
-    if (['confirmada', 'zona', 'oficial', 'confirma_amazon'].includes(r.estado) && r.punto) {
+    if (['confirmada', 'zona', 'lugar', 'oficial', 'confirma_amazon'].includes(r.estado) && r.punto) {
       await cortexPortalGeodir({
         celdas: p.celdas,
         geodir: {

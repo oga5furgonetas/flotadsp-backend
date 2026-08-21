@@ -85,7 +85,29 @@ export const RADIO_ZONA_M = 1000
    porque nuestra propia respuesta tiene ese margen.
    Con un umbral único de 500 m, un portal confirmado a 383 m salía como "bien
    geolocalizada" y mandaba al gestor a buscar el problema donde no estaba. */
-export const UMBRAL_DESVIO_M = { portal: 150, calle: 250, zona: 500 }
+export const UMBRAL_DESVIO_M = { portal: 150, calle: 250, lugar: 1200, zona: 500 }
+
+/* ── EL ESCALÓN QUE FALTABA: EL LUGAR ─────────────────────────────────────────
+   'zona' juntaba dos cosas que no se parecen en nada:
+
+     a) "no he encontrado la dirección, toma el centro del municipio" — inútil y
+        además peligroso, porque tres fuentes rindiéndose sobre el mismo centro
+        fabrican un acuerdo perfecto sobre un punto donde no vive nadie;
+     b) "es As Buceleiras" — un sitio concreto, con nombre propio, que es
+        exactamente la respuesta que hace falta en el rural gallego.
+
+   Meterlas en el mismo cajón hacía que (b) no votara nunca, y (b) es la
+   respuesta a media Galicia. Medido contra Cartociudad el 2026-08-20:
+   'Gondomar de Abaixo, A Estrada', 'Malvares, Val do Dubra' y 'As Buceleiras,
+   Ames' devuelven las tres su LUGAR con nombre propio, y la app las tiraba a la
+   basura como si fueran "no lo sé".
+
+   Y se puede distinguir con una regla exacta, no con una corazonada: cuando
+   Cartociudad se rinde NO contesta el centro del pueblo, contesta VACÍO
+   (probado con calles inventadas y con basura). Así que `type: 'poblacion'` con
+   un nombre DISTINTO del municipio es un lugar de verdad; con el mismo nombre
+   que el municipio, es sólo el pueblo y sigue sin votar. */
+export const PRECISION_LUGAR = 'lugar'
 
 /* Desvío máximo que se puede afirmar con UNA SOLA fuente (el callejero oficial,
    en pueblos donde OpenStreetMap no llega). Dos fuentes independientes de
@@ -111,7 +133,8 @@ export function fraseVeredicto(g) {
   if (g.veredicto !== 'desplazada') return null
   const clave = g.precision_acuerdo === 'portal' ? 'lib.ver.exacta'
     : g.precision_acuerdo === 'calle' ? 'lib.ver.calle'
-      : 'lib.ver.zona'
+      : g.precision_acuerdo === 'lugar' ? 'lib.ver.lugar'
+        : 'lib.ver.zona'
   return { clave, metros: g.metros_amazon, alarma: true }
 }
 
@@ -310,6 +333,11 @@ async function pedirJSON(url, { signal, conAuth, msMax } = {}) {
 /** Precisión declarada por lo que devuelve el servicio, nunca por lo que nos
     convendría. Sólo 'portal' y 'calle' votan (ver cerrojo 2 arriba). */
 const PRECISIONES_QUE_VOTAN = new Set(['portal', 'calle'])
+/* En el acuerdo ANCHO (1 km) también cuenta el lugar: ahí no se está señalando
+   un portal, se está contestando "¿de qué sitio hablamos?", y para eso un lugar
+   con nombre propio es una respuesta perfectamente válida. En el acuerdo FINO
+   (150 m) no entra: un lugar puede medir un kilómetro y no señala una puerta. */
+const PRECISIONES_ANCHAS = new Set(['portal', 'calle', 'lugar'])
 
 /* Nominatim (OpenStreetMap). Ojo: al SERVIDOR le contesta 403 — sólo funciona
    desde el navegador. Por eso todo esto vive en el navegador del panel y no en
@@ -369,11 +397,20 @@ export async function buscarPhoton(d, opciones = {}) {
        'zona' aciertos de calle perfectamente buenos, y con ellos fuera la
        dirección se quedaba con un solo voto y no se confirmaba nunca. */
   const AMBITO = new Set(['city', 'district', 'locality', 'county', 'state', 'country', 'region'])
+  /* Aldeas y lugares: son la respuesta buena en el rural, pero SÓLO si el
+     nombre que devuelve es el que se preguntó. Sin esa comprobación, Photon
+     contestando la aldea de al lado se colaría como acierto. */
+  const LUGARES = new Set(['hamlet', 'village', 'isolated_dwelling', 'farm', 'neighbourhood'])
+  const nom = String(p.name || '').toLowerCase()
+  const pedido = String(d.via || '').toLowerCase()
+  const esLugarPedido = LUGARES.has(tipo) && nom.length > 3
+    && (pedido.includes(nom) || nom.includes(pedido.replace(/^(lugar|aldea|lg\.?)\s+/, '')))
   const esVia = tipo === 'street'
   const calle = p.street || (esVia ? p.name : '') || ''
-  const precision = AMBITO.has(tipo) ? 'zona'
-    : (numero && p.street) ? 'portal'
-      : ((p.street || esVia) ? 'calle' : 'zona')
+  const precision = esLugarPedido ? 'lugar'
+    : AMBITO.has(tipo) ? 'zona'
+      : (numero && p.street) ? 'portal'
+        : ((p.street || esVia) ? 'calle' : 'zona')
   return {
     fuente: 'photon',
     familia: 'osm',
@@ -409,9 +446,16 @@ export async function buscarCartociudad(d, opciones = {}) {
   // exacto, 'callejero'/'via' llega a la vía, 'municipio'/'poblacion' es el
   // centro del pueblo — y ése no vota.
   const tipo = String(j.type || '').toLowerCase()
+  /* 'poblacion'/'toponimo' con nombre PROPIO es un lugar concreto (As
+     Buceleiras, Malvares); con el mismo nombre que el municipio es sólo el
+     centro del pueblo y no vale. Ver PRECISION_LUGAR arriba. */
+  const nombreEntidad = String(j.address || '').trim().toLowerCase()
+  const nombreMuni = String(j.muni || '').trim().toLowerCase()
+  const esLugarPropio = !!nombreEntidad && nombreEntidad !== nombreMuni
   const precision = (tipo === 'portal' && numero) ? 'portal'
     : (tipo === 'portal' || tipo === 'callejero' || tipo === 'via' || tipo === 'vial') ? 'calle'
-      : 'zona'
+      : ((tipo === 'poblacion' || tipo === 'toponimo' || tipo === 'entidad') && esLugarPropio) ? 'lugar'
+        : 'zona'
   return {
     fuente: 'cartociudad',
     familia: 'ign',
@@ -552,7 +596,7 @@ function representante(grupo) {
  *                     seguro la misma calle en otro municipio.
  *   los demás         no se sabe.
  */
-export async function buscarDireccion(texto, amazon, opciones = {}) {
+async function buscarUnaVez(texto, amazon, opciones = {}) {
   const d = analizarDireccion(texto)
   const vacio = {
     punto: null, metros_amazon: null, familias: [], dispersion_m: null,
@@ -622,9 +666,13 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
   /* NIVEL ZONA: no se sabe el portal, pero si dos familias independientes ponen
      la dirección en la misma zona y el punto de Amazon queda MUY fuera de ella,
      eso ya es la respuesta a "¿me mandan al sitio equivocado?". */
-  const ancho = mejorGrupo(votos, RADIO_ZONA_M)
+  const votosAnchos = resultados.filter((v) => PRECISIONES_ANCHAS.has(v.precision))
+  const ancho = mejorGrupo(votosAnchos, RADIO_ZONA_M)
   if (ancho && ancho.grupo.length >= 2 && ancho.familias.size >= 2) {
-    const r = resultadoDe(ancho, 'zona')
+    /* Si lo que coincide son LUGARES, se dice 'lugar' y no 'zona': son cosas
+       distintas y el conductor merece saber cuál le están dando. */
+    const soloLugares = ancho.grupo.every((v) => v.precision === 'lugar')
+    const r = resultadoDe(ancho, soloLugares ? 'lugar' : 'zona')
     if (r.metros_amazon != null && r.metros_amazon > MAX_KM_PLAUSIBLE * 1000) {
       return { ...r, estado: 'demasiado_lejos', veredicto: 'no_lo_se' }
     }
@@ -632,7 +680,8 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
        pueblo/esta calle, pero el número no es exacto". Callarlo por no tener el
        portal dejaba sin respuesta justo los pueblos pequeños, que es donde
        OpenStreetMap no llega y donde más falta hace. */
-    return { ...r, estado: 'zona', veredicto: veredictoDe(r.metros_amazon, 'zona') }
+    return { ...r, estado: r.precision_acuerdo === 'lugar' ? 'lugar' : 'zona',
+      veredicto: veredictoDe(r.metros_amazon, r.precision_acuerdo) }
   }
 
   /* ── EL PUEBLO PEQUEÑO: UNA SOLA FUENTE, PERO OFICIAL Y CONTRASTADA ────────
@@ -757,4 +806,56 @@ export async function buscarDireccion(texto, amazon, opciones = {}) {
     return { ...r, estado: 'indicio', veredicto: 'no_lo_se' }
   }
   return { ...base, estado: 'sin_acuerdo', veredicto: 'no_lo_se' }
+}
+
+
+/* ── SEGUNDA OPORTUNIDAD: PREGUNTAR OTRA VEZ, PERO BIEN ───────────────────────
+   La primera vuelta manda la dirección tal cual la escribió el cliente. Cuando
+   eso no da nada, casi nunca es porque falte callejero: es porque el texto no
+   es una dirección. Medido sobre las 173 direcciones que de verdad han fallado,
+   el callejero oficial no contestaba NADA a 103, y eran cosas como:
+
+     'Calle Real 40, 2°, https://maps.app.goo.gl/YJU8NQYcr...'
+     'ALIMENTACION VILLA S.L B15269889, Calle canle numero 20'
+     'Os Bolos. Lagartones . Rua D . Número 14, 36687 A Estrada'
+
+   Así que si la primera vuelta no confirma, se le pide al backend que despiece
+   la dirección y devuelva varias consultas limpias —de la más específica a la
+   más general— y se prueba con ellas hasta que una confirme. En el rural la que
+   acierta suele ser 'lugar + concello', no 'calle + número'.
+
+   MEDIDO con el callejero oficial como única fuente: 40% → 68% de direcciones
+   situadas Y comprobadas. (Sin comprobar salía 82%, pero catorce de esos puntos
+   eran mentira: 'Calle Pombais 1, 15939 Boiro' resolvía a un código postal de
+   Ourense. Por eso los cerrojos de familia y de CP siguen puestos en cada
+   vuelta, exactamente igual que en la primera.)
+
+   Como mucho tres variantes: cada una son cuatro peticiones a servicios de
+   fuera, y a partir de ahí lo que se gana no paga la espera. */
+const MAX_VARIANTES = 3
+const BUENOS = new Set(['confirmada', 'zona', 'lugar', 'oficial', 'confirma_amazon'])
+
+export async function buscarDireccion(texto, amazon, opciones = {}) {
+  const primera = await buscarUnaVez(texto, amazon, opciones)
+  if (BUENOS.has(primera.estado)) return primera
+
+  let variantes = []
+  try {
+    const j = await pedirJSON(
+      `${API_BASE}/cortex/geo/parse?q=${encodeURIComponent(String(texto || '').slice(0, 300))}`,
+      { ...opciones, conAuth: true })
+    variantes = Array.isArray(j?.variantes) ? j.variantes : []
+  } catch { /* sin variantes, se devuelve lo de la primera vuelta */ }
+
+  const original = String(texto || '').trim().toLowerCase()
+  for (const q of variantes.slice(0, MAX_VARIANTES)) {
+    if (!q || q.trim().toLowerCase() === original) continue
+    const r = await buscarUnaVez(q, amazon, opciones)
+    if (BUENOS.has(r.estado)) {
+      // Se deja constancia de con qué se acertó: si mañana alguien duda de una
+      // dirección, la consulta que la resolvió es la mitad de la explicación.
+      return { ...r, consultada: q, variante_usada: q }
+    }
+  }
+  return primera
 }
