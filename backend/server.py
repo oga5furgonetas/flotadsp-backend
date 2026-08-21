@@ -17993,6 +17993,237 @@ async def resolve_shift_request(req_id: str, data: dict = Body(...),
     return {"success": True, "status": new_status}
 
 
+
+
+# ─── IMPORTAR EL CUADRANTE PEGÁNDOLO DESDE SHEETS ────────────────────────────
+#
+# El importador de Excel funciona, pero depende de que el fichero tenga la fila
+# de días de la semana justo encima de la cabecera y la columna del nombre donde
+# toca. Cuando el fichero no es exactamente ése —y en una nave real nunca lo
+# es— falla o se deja filas por el camino.
+#
+# Pegar es más tosco y por eso más fiable: se selecciona el bloque en Sheets,
+# se copia, se pega. Lo que se ve es lo que entra. Sin macros, sin formatos y
+# sin que importe dónde esté cada cosa en el fichero original.
+#
+# ── LO QUE DE VERDAD FALLA AL IMPORTAR: LOS NOMBRES ──────────────────────────
+# Medido con el cuadrante de agosto: el fichero traía 61 conductores y se
+# guardaron 47. Los otros 14 se cayeron porque su nombre en el Sheets no es
+# exactamente el de su ficha. Y con 17 personas dadas de alta dos veces y 26
+# nombres con espacios de más (gotcha 15), eso va a pasar TODOS los meses.
+#
+# Por eso los alias: cuando dices una vez que "ROJAS PEREZ, SERGIO L." es
+# Sergio Luis Rojas Pérez, queda guardado y el mes que viene entra solo.
+
+_ALIAS_DOC = "alias_nombres_cuadrante"
+
+
+async def _alias_cuadrante() -> dict:
+    """Nombre tal y como viene en el cuadrante → id del conductor."""
+    doc = await db.app_meta.find_one({"_id": _ALIAS_DOC}) or {}
+    return {k: v for k, v in (doc.get("mapa") or {}).items() if v}
+
+
+def _celdas_pegadas(texto: str) -> list:
+    """Convierte lo pegado en una rejilla.
+
+    Sheets y Excel copian con TABULADOR entre columnas. Se admite también el
+    punto y coma por si alguien pega desde un CSV exportado a la española.
+    """
+    filas = []
+    for linea in str(texto or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if not linea.strip():
+            continue
+        sep = "\t" if "\t" in linea else (";" if linea.count(";") >= 3 else "\t")
+        filas.append([c.strip() for c in linea.split(sep)])
+    return filas
+
+
+@api_router.post("/shifts/import-pegado")
+async def import_shifts_pegado(data: dict = Body(...), _=Depends(require_admin)):
+    """Importa el cuadrante pegado desde Sheets. body: {center, mes, texto, confirmar}
+
+    Cada línea es un conductor: la primera celda es el nombre y las siguientes
+    son los días 1, 2, 3… del mes, en orden.
+
+    Si la primera línea son días de la semana (LUN, MAR…) se usa para COMPROBAR
+    que el bloque empieza donde dice el mes elegido, igual que hace el
+    importador de Excel. Si no viene, se avisa de que no se ha podido comprobar
+    en vez de callarlo: un cuadrante corrido un día es peor que ninguno.
+
+    Un mes a medias es legítimo — el cuadrante de agosto estaba relleno sólo
+    hasta el día 23 — así que no se exige el mes entero. Lo que no se admite es
+    pasarse de los días que tiene el mes.
+    """
+    center = (data.get("center") or "").strip()
+    mes = (data.get("mes") or "").strip()
+    confirmar = bool(data.get("confirmar"))
+    if not center:
+        raise HTTPException(400, "Falta el centro")
+    m = re.fullmatch(r"(\d{4})-(\d{2})", mes)
+    if not m:
+        raise HTTPException(400, "El mes va como AAAA-MM")
+    anio, mesn = int(m.group(1)), int(m.group(2))
+    if not (1 <= mesn <= 12):
+        raise HTTPException(400, "Mes fuera de rango")
+
+    filas = _celdas_pegadas(data.get("texto"))
+    if len(filas) < 2:
+        raise HTTPException(400, "Pega al menos la cabecera y una fila de conductor")
+
+    dias_mes = calendar.monthrange(anio, mesn)[1]
+
+    # ¿La primera línea son días de la semana? Entonces sirve de comprobación.
+    DOW = {"LUN": 0, "MAR": 1, "MIE": 2, "MIER": 2, "JUE": 3, "VIE": 4,
+           "SAB": 5, "DOM": 6, "L": 0, "M": 1, "X": 2, "J": 3, "V": 4, "S": 5, "D": 6}
+    aviso_alineacion = None
+    primera = filas[0]
+    etiquetas = [_sin_tildes(str(c)).strip().rstrip(".").upper() for c in primera[1:]]
+    reconocidas = [e for e in etiquetas if e in DOW]
+    if len(reconocidas) >= max(5, len(etiquetas) // 2):
+        real = date_cls(anio, mesn, 1).weekday()
+        DIAS_SEM = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+        MESES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+                 "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+        if DOW[reconocidas[0]] != real:
+            raise HTTPException(400,
+                f"Lo pegado empieza en {DIAS_SEM[DOW[reconocidas[0]]]} y el 1 de "
+                f"{MESES[mesn]} de {anio} cae en {DIAS_SEM[real]}. O el mes no es "
+                f"ése, o has pegado el bloque corrido. No se ha guardado nada.")
+        filas = filas[1:]
+    else:
+        aviso_alineacion = ("No has pegado la fila de días de la semana, así que no he "
+                            "podido comprobar que el bloque empiece en el día 1. "
+                            "Mira el resumen antes de guardar.")
+
+    doc = await db.app_meta.find_one({"_id": "codigos_cuadrante"}) or {}
+    mapa = dict(CODIGOS_CUADRANTE_DEF)
+    mapa.update({str(k).upper(): v for k, v in (doc.get("mapa") or {}).items()})
+
+    # Se traen TAMBIEN los dados de baja. Hay 71 fichas con active=False de 202,
+    # y varias son gente que sigue saliendo en el cuadrante: excluirlas hacia
+    # desaparecer sus filas sin decir nada. Se encuentran, y se avisa.
+    drivers = await db.drivers.find(
+        {"center": {"$regex": re.escape(center), "$options": "i"}},
+        {"_id": 0, "id": 1, "name": 1, "active": 1}).to_list(2000)
+    por_nombre = {_clave_nombre(d.get("name")): d for d in drivers}
+    por_id = {d["id"]: d for d in drivers}
+    alias = await _alias_cuadrante()
+
+    items, sin_conductor, sin_codigo, de_baja = [], [], {}, set()
+    for fila in filas:
+        if not fila:
+            continue
+        nombre = (fila[0] or "").strip()
+        if not nombre:
+            continue
+        drv, motivo = _empareja_conductor(nombre, drivers, alias)
+        if not drv:
+            sin_conductor.append({"nombre": nombre, "motivo": motivo})
+            continue
+        if drv.get("active") is False:
+            de_baja.add(drv["name"])
+        for n, crudo in enumerate(fila[1:], start=1):
+            if n > dias_mes:
+                break
+            if crudo in (None, ""):
+                continue
+            cod = re.sub(r"\s*\(.*?\)", "", str(crudo)).strip().upper()
+            if cod not in mapa:
+                sin_codigo[cod] = sin_codigo.get(cod, 0) + 1
+                continue
+            tipo = mapa[cod]
+            if not tipo:
+                continue
+            items.append({"driver_id": drv["id"], "driver_name": drv["name"],
+                          "center": center, "date": f"{anio:04d}-{mesn:02d}-{n:02d}",
+                          "type": tipo})
+
+    dias_con_datos = sorted({i["date"] for i in items})
+    resumen = {
+        "mes": f"{anio:04d}-{mesn:02d}", "center": center,
+        "dias": len(dias_con_datos),
+        "primer_dia": dias_con_datos[0] if dias_con_datos else None,
+        "ultimo_dia": dias_con_datos[-1] if dias_con_datos else None,
+        "conductores": len({i["driver_id"] for i in items}),
+        "turnos": len(items),
+        "trabaja": sum(1 for i in items if i["type"] == "trabaja"),
+        "libre": sum(1 for i in items if i["type"] == "libre"),
+        "extra": sum(1 for i in items if i["type"] == "extra"),
+        "sin_conductor": sin_conductor[:60],
+        "n_sin_conductor": len(sin_conductor),
+        "de_baja": sorted(de_baja),
+        "codigos_desconocidos": dict(sorted(sin_codigo.items(), key=lambda x: -x[1])),
+        "guardado": False,
+    }
+    if aviso_alineacion:
+        resumen["aviso_alineacion"] = aviso_alineacion
+    if sin_codigo and not confirmar:
+        resumen["aviso"] = ("Hay códigos que no sé qué significan. Tradúcelos antes de "
+                            "guardar, o confirma para importar sólo el resto.")
+        return resumen
+    if not confirmar:
+        return resumen
+    if not items:
+        raise HTTPException(400, "No hay ni un turno que guardar")
+
+    guardados = 0
+    for i in range(0, len(items), 500):
+        lote = items[i:i + 500]
+        await db.shifts.bulk_write([
+            UpdateOne({"driver_id": it["driver_id"], "date": it["date"]},
+                      {"$set": it}, upsert=True) for it in lote])
+        guardados += len(lote)
+    resumen["guardado"] = True
+    resumen["saved"] = guardados
+    logger.info("Cuadrante pegado: %s %s - %s turnos", center, resumen["mes"], guardados)
+    return resumen
+
+
+@api_router.get("/shifts/alias-nombres")
+async def listar_alias_cuadrante(_=Depends(require_admin)):
+    """Los nombres del cuadrante que ya se han emparejado a mano con su ficha."""
+    return {"mapa": await _alias_cuadrante()}
+
+
+@api_router.put("/shifts/alias-nombres")
+async def guardar_alias_cuadrante(data: dict = Body(...), _=Depends(require_admin)):
+    """Guarda 'este nombre del cuadrante es este conductor'. body: {mapa: {...}}
+
+    Se guarda una vez y sirve para siempre: es lo que hace que el mes que viene
+    no haya que volver a emparejar a los mismos catorce.
+    """
+    mapa = data.get("mapa")
+    if not isinstance(mapa, dict):
+        raise HTTPException(400, "mapa debe ser un objeto {nombre: driver_id}")
+    limpio = {}
+    for k, v in mapa.items():
+        nombre = str(k).strip()[:120]
+        did = str(v or "").strip()
+        if not nombre:
+            continue
+        if did:
+            limpio[nombre] = did      # emparejado
+        # Un valor vacío borra el alias, que es como se deshace un error.
+    if len(limpio) > 2000:
+        raise HTTPException(400, "Demasiados alias")
+    # Comprobar que los conductores existen: un alias a un id fantasma haría que
+    # esas filas se perdieran en silencio, que es justo lo que se quiere evitar.
+    ids = list({v for v in limpio.values()})
+    existen = set()
+    if ids:
+        existen = {d["id"] for d in await db.drivers.find(
+            {"id": {"$in": ids}}, {"_id": 0, "id": 1}).to_list(2000)}
+    malos = sorted({k for k, v in limpio.items() if v not in existen})
+    if malos:
+        raise HTTPException(400, f"Estos alias apuntan a un conductor que no existe: {malos[:5]}")
+    await db.app_meta.update_one(
+        {"_id": _ALIAS_DOC},
+        {"$set": {"mapa": limpio, "actualizado_en": datetime.now(timezone.utc).isoformat()}},
+        upsert=True)
+    return {"success": True, "alias": len(limpio)}
+
+
 # Códigos del cuadrante mensual de Amazon. Se editan desde el panel porque
 # cada nave usa los suyos; esto es sólo el punto de partida conocido.
 CODIGOS_CUADRANTE_DEF = {
@@ -18020,6 +18251,87 @@ def _sin_tildes(s: str) -> str:
 def _clave_nombre(s: str) -> str:
     """Nombre comparable: sin tildes, sin espacios dobles, en mayúsculas."""
     return re.sub(r"\s+", " ", _sin_tildes(str(s or ""))).strip()
+
+
+# ─── EMPAREJAR EL NOMBRE DEL CUADRANTE CON SU FICHA ──────────────────────────
+#
+# Aquí es donde se pierde el cuadrante. Medido con el de agosto: el fichero
+# traía 61 conductores y se guardaron 47. Los otros 14 se cayeron en silencio.
+# Dos motivos, ninguno tiene que ver con el Excel:
+#
+#  1. EL ORDEN DEL NOMBRE. La comparación era por igualdad del nombre
+#     normalizado, y `_clave_nombre` casi no normaliza: 'ROJAS PEREZ, SERGIO L.'
+#     se queda tal cual. Un cuadrante escrito "APELLIDOS, NOMBRE" no casa NUNCA
+#     con una ficha que pone "NOMBRE APELLIDOS".
+#
+#  2. LOS DADOS DE BAJA. El importador sólo miraba fichas con `active != False`,
+#     y hay 71 de 202 con `active: False` — 16 sólo en OGA5, varios de ellos
+#     gente que sigue en el cuadrante. Sus filas desaparecían sin decir nada.
+#
+# Lo que se hace ahora:
+#   · se comparan las PALABRAS del nombre, no la cadena entera;
+#   · si el nombre corto está entero dentro del largo, es la misma persona;
+#   · si encajan DOS fichas, no se elige ninguna — se dice que es ambiguo. Meter
+#     los turnos de un hermano en la ficha del otro es peor que no meterlos;
+#   · a los dados de baja se les encuentra igual, pero se avisa de que lo están
+#     en vez de tragárselos.
+
+_RELLENO_NOMBRE = {"DE", "DEL", "DA", "DO", "LA", "LAS", "LOS", "Y", "E", "SAN"}
+
+
+def _palabras_nombre(s: str) -> set:
+    """Las palabras que identifican a una persona, sin ruido.
+
+    Fuera acentos, comas, puntos, iniciales sueltas y palabras de relleno.
+    'ROJAS PEREZ, SERGIO L.' y 'Sergio Luis Rojas Pérez' acaban compartiendo
+    {ROJAS, PEREZ, SERGIO}.
+    """
+    t = _sin_tildes(str(s or "")).upper()
+    t = re.sub(r"[^A-Z0-9 ]+", " ", t)
+    return {p for p in t.split()
+            if len(p) > 1 and p not in _RELLENO_NOMBRE}
+
+
+def _empareja_conductor(nombre: str, fichas: list, alias: dict):
+    """Devuelve (ficha, motivo). La ficha es None si no se puede afirmar.
+
+    motivo: 'alias' | 'exacto' | 'palabras' | 'no_encontrado' | 'ambiguo'
+    """
+    # 1. Lo que dijo una persona manda sobre cualquier heurística.
+    did = alias.get((nombre or "").strip())
+    if did:
+        for f in fichas:
+            if f["id"] == did:
+                return f, "alias"
+
+    clave = _clave_nombre(nombre)
+    exactas = [f for f in fichas if _clave_nombre(f.get("name")) == clave]
+    if len(exactas) == 1:
+        return exactas[0], "exacto"
+    if len(exactas) > 1:
+        return None, "ambiguo"
+
+    # 2. Por palabras. El nombre corto tiene que estar ENTERO dentro del largo,
+    #    y con al menos dos palabras: con una sola, 'GARCIA' emparejaría media
+    #    plantilla.
+    pal = _palabras_nombre(nombre)
+    if len(pal) < 2:
+        return None, "no_encontrado"
+    candidatas = []
+    for f in fichas:
+        pf = _palabras_nombre(f.get("name"))
+        if len(pf) < 2:
+            continue
+        corto, largo = (pal, pf) if len(pal) <= len(pf) else (pf, pal)
+        if corto and corto <= largo and len(corto) >= 2:
+            candidatas.append(f)
+    if len(candidatas) == 1:
+        return candidatas[0], "palabras"
+    if len(candidatas) > 1:
+        # Dos personas encajan: no se elige. Meter los turnos de uno en la ficha
+        # del otro es peor que dejarlos fuera y decirlo.
+        return None, "ambiguo"
+    return None, "no_encontrado"
 
 
 @api_router.get("/route-demand")
@@ -18210,22 +18522,28 @@ async def import_shifts(file: UploadFile = File(...), center: str = Form(...),
     mapa = dict(CODIGOS_CUADRANTE_DEF)
     mapa.update({str(k).upper(): v for k, v in (doc.get("mapa") or {}).items()})
 
+    # Se traen TAMBIEN los dados de baja. Hay 71 fichas con active=False de 202,
+    # y varias son gente que sigue saliendo en el cuadrante: excluirlas hacia
+    # desaparecer sus filas sin decir nada. Se encuentran, y se avisa.
     drivers = await db.drivers.find(
-        {"center": {"$regex": re.escape(center), "$options": "i"}, "active": {"$ne": False}},
-        {"_id": 0, "id": 1, "name": 1}).to_list(1000)
+        {"center": {"$regex": re.escape(center), "$options": "i"}},
+        {"_id": 0, "id": 1, "name": 1, "active": 1}).to_list(2000)
     por_nombre = {_clave_nombre(d.get("name")): d for d in drivers}
+    alias = await _alias_cuadrante()
 
-    items, sin_conductor, sin_codigo = [], [], {}
+    items, sin_conductor, sin_codigo, de_baja = [], [], {}, set()
     for fila in celdas[fila_cab + 1:]:
         if col_nombre >= len(fila):
             continue
         nombre = str(fila[col_nombre] or "").strip()
         if not nombre:
             continue
-        drv = por_nombre.get(_clave_nombre(nombre))
+        drv, motivo = _empareja_conductor(nombre, drivers, alias)
         if not drv:
-            sin_conductor.append(nombre)
+            sin_conductor.append({"nombre": nombre, "motivo": motivo})
             continue
+        if drv.get("active") is False:
+            de_baja.add(drv["name"])
         for n, j in enumerate(cols_dia, start=1):
             if j >= len(fila):
                 continue
@@ -18251,8 +18569,9 @@ async def import_shifts(file: UploadFile = File(...), center: str = Form(...),
         "trabaja": sum(1 for i in items if i["type"] == "trabaja"),
         "libre": sum(1 for i in items if i["type"] == "libre"),
         "extra": sum(1 for i in items if i["type"] == "extra"),
-        "sin_conductor": sorted(set(sin_conductor))[:40],
-        "n_sin_conductor": len(set(sin_conductor)),
+        "sin_conductor": sin_conductor[:40],
+        "n_sin_conductor": len(sin_conductor),
+        "de_baja": sorted(de_baja),
         "codigos_desconocidos": dict(sorted(sin_codigo.items(), key=lambda x: -x[1])),
         "guardado": False,
     }
