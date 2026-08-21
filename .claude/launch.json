@@ -16,6 +16,22 @@
         "--strictPort"
       ],
       "port": 5177
+    },
+    {
+      "_comentario": "Sirve el frontend de ESTE clon (flotadsp_work = el repo real). Ruta RELATIVA, asi funciona en cualquier ordenador, a diferencia de LAB-frontend-5177 que lleva cosida la ruta del otro PC. Es solo un servidor local de desarrollo: no despliega nada ni toca flotadsp.com.",
+      "name": "flotadsp_work-frontend-5173",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "frontend-v2",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5173",
+        "--strictPort"
+      ],
+      "port": 5173
     }
   ]
 }

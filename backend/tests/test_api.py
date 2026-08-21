@@ -509,3 +509,103 @@ async def test_tarifa_por_furgoneta(client):
     assert r.status_code == 200
     claves = [p["clave"] for p in r.json()["planes"]]
     assert claves == ["operacion", "completo", "holding"], claves
+
+
+# ---------------------------------------------------------------------------
+# PERMISOS Y ROLES
+#
+# Nada de esto estaba cubierto, y por eso se pudo romper sin que CI dijera ni
+# mu. El fallo de origen: `create_token` nunca metia `admin_role` en el JWT,
+# pero `_is_center_manager()` lo leia de ahi — asi que salia False SIEMPRE.
+# Un gestor de centro recibia 403 al crear usuarios y al tocar permisos, y de
+# paso veia la plantilla entera de la organizacion. Ahora el rol y los permisos
+# se leen de la BD en cada peticion (con la cache de 60 s), como ya se hacia
+# con los centros. Ojo: estos tests crean el token con `create_token`, que
+# sigue SIN poner admin_role — es a proposito: prueban que el servidor no
+# depende de lo que traiga el token.
+# ---------------------------------------------------------------------------
+
+
+async def _crear_admin(org_id, *, admin_role=None, centros=None, permisos=None):
+    """Inserta un admin en la BD global y devuelve (id, username)."""
+    uid = str(uuid.uuid4())
+    username = f"test_perm_{uuid.uuid4().hex[:8]}"
+    await server.global_db.admin_users.insert_one({
+        "id": uid, "username": username,
+        "hashed_password": server.hash_password("test-password-123"),
+        "name": "Usuario Test", "role": "admin", "org_id": org_id,
+        "admin_role": admin_role, "allowed_centers": centros,
+        "permissions": permisos,
+    })
+    server._ADMIN_EXISTS_CACHE.pop(uid, None)
+    return uid, username
+
+
+async def test_gestor_de_centro_puede_cambiar_permisos(client):
+    """Antes: 403 'Sin permisos para modificar usuarios' para todo el que no
+    fuera super-admin, gestores de centro incluidos."""
+    org = f"org-{uuid.uuid4().hex[:8]}"
+    jefe, _ = await _crear_admin(org, admin_role="center_manager",
+                                 centros=["CENTRO1"], permisos=["chat", "vehiculos"])
+    curra, _ = await _crear_admin(org, centros=["CENTRO1"], permisos=["chat"])
+    token = server.create_token(jefe, "admin", "Gestor", org_id=org)
+
+    r = await client.patch(f"/api/auth/admins/{curra}",
+                           json={"permissions": ["chat", "vehiculos"]},
+                           headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, r.text
+    doc = await server.global_db.admin_users.find_one({"id": curra}, {"_id": 0, "permissions": 1})
+    assert doc["permissions"] == ["chat", "vehiculos"]
+
+
+async def test_gestor_de_centro_no_toca_usuarios_de_otro_centro(client):
+    """El recorte por centros tampoco llegaba a aplicarse nunca."""
+    org = f"org-{uuid.uuid4().hex[:8]}"
+    jefe, _ = await _crear_admin(org, admin_role="center_manager",
+                                 centros=["CENTRO1"], permisos=["chat"])
+    ajeno, _ = await _crear_admin(org, centros=["CENTRO2"], permisos=["chat"])
+    token = server.create_token(jefe, "admin", "Gestor", org_id=org)
+
+    r = await client.patch(f"/api/auth/admins/{ajeno}", json={"permissions": []},
+                           headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 403
+
+
+async def test_dispatcher_no_puede_borrar_usuarios(client):
+    """Borrar exigia MENOS que editar: no habia ningun control y un dispatcher
+    sin un solo permiso podia eliminar a un companero por API."""
+    org = f"org-{uuid.uuid4().hex[:8]}"
+    curra, _ = await _crear_admin(org, admin_role="dispatcher", centros=["CENTRO1"], permisos=[])
+    victima, _ = await _crear_admin(org, centros=["CENTRO1"], permisos=["chat"])
+    token = server.create_token(curra, "admin", "Dispatcher", org_id=org)
+
+    r = await client.delete(f"/api/auth/admins/{victima}",
+                            headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 403
+    assert await server.global_db.admin_users.find_one({"id": victima}) is not None
+
+
+async def test_quitar_un_permiso_se_nota_sin_volver_a_entrar(client):
+    """Los permisos vivian SOLO en el JWT: quitarle un modulo a alguien no hacia
+    nada hasta 72 h despues o hasta que volvia a entrar. Aqui el token se emite
+    con los permisos amplios y se recortan en BD despues; el recorte de
+    `_clamp_permissions` tiene que usar ya los nuevos."""
+    org = f"org-{uuid.uuid4().hex[:8]}"
+    jefe, _ = await _crear_admin(org, admin_role="center_manager",
+                                 centros=["CENTRO1"], permisos=["chat", "vehiculos"])
+    curra, _ = await _crear_admin(org, centros=["CENTRO1"], permisos=["chat"])
+    token = server.create_token(jefe, "admin", "Gestor", org_id=org,
+                                permissions=["chat", "vehiculos"])
+
+    # Al jefe le quitan 'vehiculos' EN BD, con su token ya emitido en la mano.
+    await server.global_db.admin_users.update_one(
+        {"id": jefe}, {"$set": {"permissions": ["chat"]}})
+    server._ADMIN_EXISTS_CACHE.pop(jefe, None)
+
+    # Ya no puede repartir lo que el no tiene: 'vehiculos' se cae.
+    r = await client.patch(f"/api/auth/admins/{curra}",
+                           json={"permissions": ["chat", "vehiculos"]},
+                           headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, r.text
+    doc = await server.global_db.admin_users.find_one({"id": curra}, {"_id": 0, "permissions": 1})
+    assert doc["permissions"] == ["chat"]

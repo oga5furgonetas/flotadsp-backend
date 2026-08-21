@@ -7,7 +7,8 @@ import {
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon,
   PackageSearch, MapPin, Timer, MapPinned,
 } from 'lucide-react'
-import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters } from './auth'
+import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
+import { getMe } from './api'
 import TrialBanner from './TrialBanner'
 import CommandPalette from './CommandPalette'
 import LiveNotifier from './LiveNotifier'
@@ -144,19 +145,33 @@ export default function PanelLayout() {
 
   useEffect(() => { localStorage.setItem('panel_center', center) }, [center])
 
+  /* Permisos frescos al abrir el panel.
+
+     El JWT dura 72 h y lleva dentro los permisos del momento del login, asi que
+     quitarle un modulo a alguien no se le notaba hasta que cerraba sesion: la
+     pantalla de Usuarios decia "guardado" y el menu del otro seguia igual.
+     Aqui se le pregunta al servidor y se re-pinta solo si algo ha cambiado.
+     Un 401 aqui ya lo trata el interceptor de axios (cierra sesion). */
+  const [, setAccesoTick] = useState(0)
+  useEffect(() => {
+    if (!isAuthed()) return
+    let vivo = true
+    getMe()
+      .then((r) => { if (vivo && guardarAccesoFresco(r.data)) setAccesoTick((n) => n + 1) })
+      .catch(() => {})
+    return () => { vivo = false }
+  }, [])
+
   if (!isAuthed()) return <Navigate to="/panel/login" replace />
 
   const sa = isSuperAdmin()
   const cm = isCenterManager()
-  // Módulos operativos que ve cualquier admin/coordinador: no dependen de una
-  // lista de permisos antigua que no los contempla (si no, desaparecen sin avisar).
-  const EQUIPO_KEYS = new Set(['asignacion', 'checklist-operativo', 'chat', 'plantilla', 'aparcamiento'])
 
   // ¿Es visible este item con los permisos + plan actuales?
   const itemVisible = (it) => {
     const k = keyOf(it.to)
     if (k === 'vencimientos') return EXPIRY_KEYS.some((ek) => canSee(ek))
-    if (!EQUIPO_KEYS.has(k) && !canSee(k)) return false
+    if (!SIEMPRE_VISIBLES.has(k) && !canSee(k)) return false
     const feat = ROUTE_FEATURE[k]
     if (feat && limits && limits[feat] === false) return false
     return true
@@ -170,7 +185,11 @@ export default function PanelLayout() {
   // Guard de ruta: impide acceder por URL a un módulo no permitido.
   const curKey = keyOf(loc.pathname.replace(/\/+$/, '') || '/panel')
   const routeAllowed = (k) => {
-    if (k === 'perfil' || k === 'login' || k === 'portal-conductor' || k === 'checklist-operativo' || k === 'chat' || k === 'plantilla' || k === 'mi-dia' || k === 'aparcamiento') return true
+    // Pantallas propias del usuario, sin permiso que valga.
+    if (k === 'perfil' || k === 'login' || k === 'portal-conductor') return true
+    // Y las de la operación diaria, de la MISMA lista que usa el menú: si el
+    // menú la enseña, la ruta abre; si el menú la esconde, la ruta no abre.
+    if (SIEMPRE_VISIBLES.has(k)) return true
     if (k === 'vencimientos') return EXPIRY_KEYS.some((ek) => canSee(ek))
     if (k === 'admin' || k === 'bandeja') return sa
     if (k === 'usuarios') return sa || cm
