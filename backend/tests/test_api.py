@@ -313,10 +313,21 @@ async def test_flujo_completo_de_turnos(client, admin_token):
     r = await client.get(f"/api/shifts/mine?desde={dias[0]}&hasta={dias[-1]}", headers=dh)
     assert r.status_code == 200 and r.json()["shifts"]
 
+    # Sin explicacion NO se puede pedir: se comprueba aqui porque es la regla
+    # que mas facil se cae de un refactor, y sin ella la oficina vuelve a
+    # preguntar por WhatsApp de que va cada peticion.
     r = await client.post("/api/shift-requests", headers=dh,
                           json={"date": dias[2], "type": "libre"})
+    assert r.status_code == 400, "una peticion sin explicacion no puede colarse"
+
+    r = await client.post("/api/shift-requests", headers=dh,
+                          json={"date": dias[2], "type": "libre",
+                                "note": "Cita medica por la manana"})
     assert r.status_code == 200, r.text
-    req_id = r.json()["request"]["id"]
+    # La respuesta trae `requests` (en plural) desde que se puede pedir un rango
+    # de dias de una vez con un `grupo` comun. El test seguia leyendo `request`
+    # en singular, de cuando se pedia dia a dia.
+    req_id = r.json()["requests"][0]["id"]
 
     # 6. el admin la aprueba y el turno queda en 'libre'
     r = await client.post(f"/api/shift-requests/{req_id}/resolve", headers=h,

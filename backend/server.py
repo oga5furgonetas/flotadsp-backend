@@ -16126,53 +16126,10 @@ async def inspection_annotated(inspection_id: str, photo_index: int = 0, _=Depen
         },
     )
 
-    boxes = []
-    detection_source = "none"
-
-    # 1. Stored AI detections (YOLO or location_hint from previous /ai/detect call)
-    ai_result = await db.inspection_ai_results.find_one(
-        {"inspection_id": inspection_id, "photo_index": photo_index}, {"_id": 0}
-    )
-    if ai_result and ai_result.get("detections"):
-        for det in ai_result["detections"]:
-            if len(det.get("box_2d", [])) == 4:
-                boxes.append(det)
-        detection_source = ai_result.get("source", "stored")
-
-    # 2. location_hint fallback from stored analysis.damages
-    if not boxes:
-        damages = (insp.get("analysis") or {}).get("damages", [])
-        if damages:
-            detections = _damages_to_detections(damages)
-            for det in detections:
-                boxes.append({
-                    "label": det.label, "severity": det.severity,
-                    "box_2d": det.box_2d,
-                })
-            detection_source = "location_hint"
-
-    # 3. Legacy Gemini call — only when absolutely no damage data available
-    if not boxes:
-        boxes = await _detectar_cajas_danos(img_bytes)
-        detection_source = "gemini_legacy"
-
-    annotated, n = _dibujar_numeros(img_bytes, boxes)
-    leyenda = []
-    idx = 0
-    for b in boxes:
-        if len((b.get("box_2d") or b.get("box") or [])) == 4:
-            idx += 1
-            leyenda.append({"n": idx, "label": b.get("label", ""), "severity": b.get("severity", "")})
-
-    return Response(
-        content=annotated, media_type="image/jpeg",
-        headers={
-            "X-Boxes-Found": str(n),
-            "X-Detection-Source": detection_source,
-            "X-Img-Bytes": str(len(img_bytes)),
-            "X-Legend": base64.b64encode(_json.dumps(leyenda, ensure_ascii=False).encode()).decode(),
-        },
-    )
+    # (Aqui habia 46 lineas de una version anterior de esta funcion, detras del
+    #  return de arriba: no se ejecutaban NUNCA. Se borraron el 22-08-2026. Las
+    #  delataba pyflakes con 'undefined name img_bytes' tres veces, un aviso que
+    #  parecia un fallo grave y solo era un resto de una refactorizacion.)
 
 
 @api_router.get("/inspections/{inspection_id}/pdf")
@@ -18315,148 +18272,48 @@ async def import_shifts(file: UploadFile = File(...), center: str = Form(...),
     return resumen
 
 
-@api_router.post("/shifts/generate")
-async def generate_schedule(data: dict = Body(...), _=Depends(require_admin)):
-    """Genera un cuadrante con IA a partir de un prompt + datos reales.
-    No guarda nada: devuelve la propuesta para que el admin la revise y guarde."""
-    center = data.get("center")
-    desde = data.get("desde")
-    hasta = data.get("hasta")
-    user_prompt = (data.get("prompt") or "").strip()
-    if not (center and desde and hasta):
-        raise HTTPException(status_code=400, detail="center, desde y hasta requeridos")
-    days = _date_range(desde, hasta)
-    min_cov = data.get("min_cobertura")
-    if not isinstance(min_cov, int):
-        min_cov = await _min_cobertura(center)
+def _date_range(desde: str, hasta: str) -> list:
+    """Los dias, en ISO, entre dos fechas incluidas las dos.
 
-    drivers = await db.drivers.find(
-        {"center": {"$regex": re.escape(center), "$options": "i"}, "active": {"$ne": False}},
-        {"_id": 0, "id": 1, "name": 1, "driver_id": 1, "contrato": 1, "zona": 1, "nivel": 1},
-    ).to_list(1000)
-    if not drivers:
-        raise HTTPException(status_code=404, detail=f"No hay conductores en {center}")
+    NO EXISTIA. La llamaban /shifts/generate y /shifts/generate-auto, asi que
+    las dos reventaban con NameError en la primera linea util. Y una de ellas
+    tiene un boton detras: "Generar cuadrante" en la pantalla de Turnos llevaba
+    devolviendo 500 desde siempre. Lo destapo el unico test que fallaba del CI,
+    que llevaba semanas en rojo sin que nadie pudiera leer el log.
 
-    # ── ritmo real (paradas/hora) por transporter_id desde route_history ──
-    tids = [d.get("driver_id") for d in drivers if d.get("driver_id")]
-    pace = {}
-    if tids:
-        cur = db.route_history.find(
-            {"transporter_id": {"$in": [t.upper() for t in tids]}},
-            {"_id": 0, "transporter_id": 1, "date": 1, "rate": 1},
-        )
-        tmp = {}
-        async for s in cur:
-            t = s.get("transporter_id")
-            if s.get("rate"):
-                tmp.setdefault(t, {})[s.get("date")] = s["rate"]  # último por día
-        for t, byday in tmp.items():
-            vals = list(byday.values())
-            if vals:
-                pace[t] = round(sum(vals) / len(vals), 1)
-
-    # ── días ya trabajados en los últimos 14 días (para no recargar siempre a los mismos) ──
-    d14 = (datetime.strptime(desde, "%Y-%m-%d") - timedelta(days=14)).strftime("%Y-%m-%d")
-    worked = {}
-    cur2 = db.shifts.find(
-        {"center": {"$regex": re.escape(center), "$options": "i"}, "date": {"$gte": d14, "$lt": desde},
-         "type": {"$in": ["trabaja", "extra"]}},
-        {"_id": 0, "driver_id": 1},
-    )
-    async for s in cur2:
-        worked[s["driver_id"]] = worked.get(s["driver_id"], 0) + 1
-
-    # ── rendimiento de scorecard (últimas semanas) por conductor ──
-    sc = {}  # driver_id -> {"tier": último, "avg": media tier_score}
-    sc_cur = db.driver_scorecard.find(
-        {"$or": [{"driver_id": {"$in": [d["id"] for d in drivers]}},
-                 {"transporter_id": {"$in": [t.upper() for t in tids]}}]},
-        {"_id": 0, "driver_id": 1, "transporter_id": 1, "tier": 1, "tier_score": 1, "imported_at": 1},
-    ).sort("imported_at", -1)
-    tid_to_id = {(d.get("driver_id") or "").upper(): d["id"] for d in drivers if d.get("driver_id")}
-    tmp_sc = {}
-    async for s in sc_cur:
-        did = s.get("driver_id") or tid_to_id.get((s.get("transporter_id") or "").upper())
-        if not did:
-            continue
-        e = tmp_sc.setdefault(did, {"tiers": [], "scores": []})
-        if len(e["tiers"]) < 4:
-            if s.get("tier"):
-                e["tiers"].append(s["tier"])
-            if isinstance(s.get("tier_score"), (int, float)):
-                e["scores"].append(s["tier_score"])
-    for did, e in tmp_sc.items():
-        sc[did] = {"tier": e["tiers"][0] if e["tiers"] else None,
-                   "avg": round(sum(e["scores"]) / len(e["scores"]), 1) if e["scores"] else None}
-
-    # ── demanda de Amazon por día (rutas objetivo / máximo) ──
-    dem_docs = await db.route_demand.find(
-        {"center": center, "date": {"$gte": desde, "$lte": hasta}}, {"_id": 0}
-    ).to_list(400)
-    demand = {d["date"]: d for d in dem_docs}
-    if not any(demand.get(dd, {}).get("objetivo") for dd in days):
-        raise HTTPException(
-            status_code=400,
-            detail="Falta la demanda de Amazon: pon las rutas objetivo de cada día antes de generar el cuadrante.")
-
-    # ── construir contexto para la IA ──
-    dem_lines = []
-    for dd in days:
-        o = demand.get(dd, {}).get("objetivo")
-        mx = demand.get(dd, {}).get("maximo")
-        dem_lines.append(f"  {dd}: objetivo {o if o is not None else '—'} rutas"
-                         + (f", máximo {mx}" if mx is not None else ""))
-    lines = [f"Centro: {center}", f"Días a planificar: {', '.join(days)}",
-             "Rutas que pide Amazon por día (1 conductor = 1 ruta; cubre el objetivo, no superes el máximo):",
-             "\n".join(dem_lines),
-             f"Total conductores disponibles: {len(drivers)}", "",
-             "Conductores (id | nombre | contrato | nivel | scorecard tier (media 1-6) | ritmo real p/h | días trabajados últimas 2 sem | zona):"]
-    for d in drivers:
-        tid = (d.get("driver_id") or "").upper()
-        r = pace.get(tid)
-        contrato = (d.get("contrato") or "ett").lower()
-        nivel = (d.get("nivel") or "pleno")
-        scd = sc.get(d["id"])
-        sc_txt = (f"{scd['tier']} (med {scd['avg']})" if scd and scd.get("tier")
-                  else (f"med {scd['avg']}" if scd and scd.get("avg") is not None else "sin scorecard"))
-        lines.append(
-            f"- {d['id']} | {d.get('name','')} | "
-            f"{contrato} | {nivel} | {sc_txt} | "
-            f"{(str(r)+' p/h') if r else 'sin ritmo'} | "
-            f"{worked.get(d['id'],0)} días | {d.get('zona') or '—'}"
-        )
-    context_text = "\n".join(lines)
-
+    Aqui no aplica el lio de husos horarios del gotcha 11: se entra y se sale en
+    texto ISO, sin pasar por fechas locales en ningun momento.
+    """
     try:
-        result = await _generate_schedule_with_gemini(context_text, user_prompt)
-    except Exception as e:
-        logger.error(f"generate_schedule gemini error: {type(e).__name__}: {repr(e)}")
-        raise HTTPException(status_code=502, detail="La IA no pudo generar el cuadrante; reintenta.")
+        a = datetime.strptime(desde, "%Y-%m-%d")
+        b = datetime.strptime(hasta, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400,
+                            detail="Las fechas van en formato AAAA-MM-DD")
+    if b < a:
+        raise HTTPException(status_code=400,
+                            detail="La fecha de fin es anterior a la de inicio")
+    # Un tope, porque el que llama manda las fechas y un rango de anos montaria
+    # un cuadrante enorme y tumbaria la maquina por memoria.
+    if (b - a).days > 366:
+        raise HTTPException(status_code=400,
+                            detail="Como mucho un ano de una vez")
+    return [(a + timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range((b - a).days + 1)]
 
-    # validar/filtrar assignments contra ids y días reales
-    valid_ids = {d["id"] for d in drivers}
-    name_by_id = {d["id"]: d.get("name", "") for d in drivers}
-    day_set = set(days)
-    clean = []
-    for a in (result.get("assignments") or []):
-        did = a.get("driver_id")
-        date = a.get("date")
-        typ = a.get("type")
-        if did in valid_ids and date in day_set and typ in VALID_SHIFT_TYPE:
-            clean.append({"driver_id": did, "driver_name": name_by_id.get(did, ""),
-                          "center": center, "date": date, "type": typ})
 
-    # cobertura resultante por día (para avisar)
-    cov = {dd: 0 for dd in days}
-    for a in clean:
-        if a["type"] in ("trabaja", "extra"):
-            cov[a["date"]] = cov.get(a["date"], 0) + 1
-
-    return {"success": True, "assignments": clean,
-            "resumen": result.get("resumen", ""),
-            "coverage": cov, "min_cobertura": min_cov,
-            "con_datos_ritmo": len(pace)}
-
+# EL GENERADOR CON IA SE HA BORRADO (22-08-2026).
+#
+# Eran 155 lineas que no funcionaron jamas: llamaban a
+# `_generate_schedule_with_gemini`, una funcion que nunca se escribio, dentro
+# de un try que convertia el NameError en un 502 diciendo "la IA no pudo
+# generar el cuadrante; reintenta". Un mensaje falso — no era la IA, y
+# reintentar no iba a servir de nada.
+#
+# Ninguna pantalla la llamaba. Y el generador AUTOMATICO de aqui abajo hace lo
+# mismo mejor: es instantaneo, deterministra, gratis y no gasta cuota de IA,
+# que ademas se agota a diario. Esta en el historial de git por si algun dia
+# se quiere retomar.
 
 # Presupuesto de días/semana por nivel (carga progresiva de novatos)
 _NIVEL_BUDGET = {"L1": 3, "L2": 4, "L3": 5, "pleno": 5}
