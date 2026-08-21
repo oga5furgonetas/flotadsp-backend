@@ -60,6 +60,32 @@ api.interceptors.response.use(
       localStorage.removeItem('flotadsp_admin')
       window.location.replace('/panel/login')
     }
+
+    /* EL PORTAL DEL CONDUCTOR TIENE SU PROPIA SALIDA.
+       Estaba excluido del bloque de arriba para no tocar la sesión del panel, y
+       con eso se quedó SIN NINGÚN tratamiento: cuando a un conductor le
+       caducaba el token, la pantalla le soltaba en crudo "Token inválido:
+       Signature has expired" y ahí se quedaba. Le pasó a Estela el 21-08-2026
+       intentando pedir días libres: el botón no hacía nada y el error no le
+       decía qué hacer.
+
+       Aquí se borra SOLO su llave —la del panel no se toca— y se le devuelve a
+       su pantalla de entrada conservando el slug del DSP, que va en el hash. */
+    if (status === 401 && enPortalConductor()
+      && !url.includes('/auth/driver-login')
+      && !url.includes('/auth/driver-lookup')
+      && !url.includes('/auth/change-my-password')) {
+      localStorage.removeItem(DRIVER_TOKEN_KEY)
+      localStorage.removeItem('flotadsp_token')
+      // Y TAMBIÉN su ficha. Sin esto el portal cree que sigue dentro —la ficha
+      // es lo que mira para decidir si enseña el login— y vuelve a la pantalla
+      // de inicio para fallar otra vez: un bucle en vez de un aviso.
+      localStorage.removeItem('flotadsp_driver')
+      // Para que la pantalla de entrada pueda explicarle por qué está ahí.
+      try { sessionStorage.setItem('driver_sesion_caducada', '1') } catch { /* modo privado */ }
+      const slug = (window.location.hash || '')
+      window.location.replace('/conductor' + slug)
+    }
     return Promise.reject(error)
   }
 )

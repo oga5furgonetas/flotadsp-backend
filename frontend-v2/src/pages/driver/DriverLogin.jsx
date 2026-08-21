@@ -18,6 +18,19 @@ export default function DriverLogin({ onLogin }) {
 
   const urlCenter = (new URLSearchParams(window.location.search).get('c') || '').toUpperCase()
 
+  /* Si ha llegado aqui porque se le caduco la sesion, hay que decirselo. Sin
+     esto aparece de golpe en la pantalla de entrada sin saber por que, y lo
+     normal es pensar que la aplicacion se ha roto. */
+  const [caducada] = useState(() => {
+    try {
+      const hay = sessionStorage.getItem('driver_sesion_caducada') === '1'
+      if (hay) sessionStorage.removeItem('driver_sesion_caducada')
+      return hay
+    } catch {
+      return false
+    }
+  })
+
   // El selector de estación se quitó a propósito: se alimentaba de la lista
   // pública de conductores. La estación la resuelve el servidor con el email.
 
@@ -76,6 +89,12 @@ export default function DriverLogin({ onLogin }) {
       </div>
 
       <div className="relative w-full max-w-sm">
+        {caducada && (
+          <div className="mb-5 rounded-xl border border-amber-500/40 bg-amber-500/[0.08] px-4 py-3">
+            <p className="text-[13.5px] font-semibold text-amber-200">{t('dr.caducada')}</p>
+            <p className="mt-0.5 text-[12.5px] leading-relaxed text-amber-200/70">{t('dr.caducada.sub')}</p>
+          </div>
+        )}
         {/* Logo / Brand */}
         <div className="mb-8 text-center">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 shadow-xl shadow-brand-500/30">

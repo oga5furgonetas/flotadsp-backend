@@ -641,7 +641,17 @@ def create_token(user_id: str, role: str, name: str,
                  account_type: Optional[str] = None, centers: Optional[list] = None,
                  super_admin: bool = False, permissions: Optional[list] = None,
                  demo: bool = False, allowed_centers: Optional[list] = None) -> str:
-    expires = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
+    # El conductor entra en su portal una vez cada muchos dias: pedir dias libres
+    # o mirar sus turnos no es algo diario. Con las 72 h del panel, el token le
+    # caducaba entre visita y visita y la pantalla le soltaba
+    # "Token invalido: Signature has expired" en crudo, sin decirle que vuelva a
+    # entrar. Le paso a Estela el 21-08-2026 al intentar pedir dias.
+    #
+    # Se le da un mes. El riesgo es bajo: un token de conductor solo alcanza a
+    # SUS datos —sus turnos, sus peticiones, su furgoneta del dia—, nunca al
+    # panel ni a los datos de nadie mas.
+    horas = (24 * 30) if role == "driver" else JWT_EXPIRE_HOURS
+    expires = datetime.now(timezone.utc) + timedelta(hours=horas)
     payload = {
         "sub": user_id,
         "role": role,
