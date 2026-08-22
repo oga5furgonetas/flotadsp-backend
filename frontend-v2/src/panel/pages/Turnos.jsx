@@ -3,6 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, CalendarClock, Users, ChevronLeft, ChevronRight, Save, Zap,
   Upload, Check, X, Settings2, AlertTriangle, Inbox, ClipboardPaste, Ban, Trash2,
+  Brush, Undo2, Search, CalendarRange, Eraser,
 } from 'lucide-react'
 import {
   getShifts, getShiftCoverage, getDrivers, saveShiftsBulk, setShiftSettings,
@@ -62,6 +63,21 @@ export default function Turnos() {
   const [bloqueos, setBloqueos] = useState([])
   const [verBloqueos, setVerBloqueos] = useState(false)
   const [nuevoBloqueo, setNuevoBloqueo] = useState({ desde: '', hasta: '', motivo: '', driver_id: '' })
+
+  /* ── LA REJILLA ─────────────────────────────────────────────────────────
+     `pincel` es el modo de trabajo. Con un pincel elegido, tocar una celda la
+     pone de ese tipo y arrastrar pinta seguido — que es como se rellena un mes
+     entero sin morir a clics. Sin pincel se mantiene el comportamiento de
+     antes (cada clic pasa al siguiente tipo), para quien ya estaba
+     acostumbrado. */
+  const [pincel, setPincel] = useState('trabaja')
+  const pintando = useRef(false)
+  const [busca, setBusca] = useState('')
+  const [vistaMes, setVistaMes] = useState(false)
+  const [aprobados, setAprobados] = useState(new Set())  // 'did|fecha' con día libre CONCEDIDO
+  const historial = useRef([])                            // para deshacer
+  const [puedeDeshacer, setPuedeDeshacer] = useState(false)
+  const gridOriginal = useRef({})                         // lo que había al cargar
   // El mes NO sale del fichero: la plantilla de Amazon arrastra en la cabecera
   // el texto del mes anterior ("Desde: 01-06-2026" en un fichero de agosto).
   const [mesImport, setMesImport] = useState(() => new Date().toISOString().slice(0, 7))
@@ -72,27 +88,43 @@ export default function Turnos() {
      botón escondido no protege nada. */
   const puedeAprobar = canSee('aprobar-dias')
 
-  const dias = useMemo(
-    () => Array.from({ length: DIAS }, (_, i) => sumaDias(desde, i)),
-    [desde],
-  )
-  const hasta = dias[DIAS - 1]
+  /* Quincena o mes completo. El mes entero cabe: la columna del nombre se
+     queda fija y los días se desplazan en horizontal. */
+  const dias = useMemo(() => {
+    if (!vistaMes) return Array.from({ length: DIAS }, (_, i) => sumaDias(desde, i))
+    const d = new Date(desde + 'T12:00:00')
+    const y = d.getFullYear()
+    const m = d.getMonth()
+    const total = new Date(y, m + 1, 0).getDate()
+    return Array.from({ length: total }, (_, i) => isoLocal(new Date(y, m, i + 1)))
+  }, [desde, vistaMes])
+  const hasta = dias[dias.length - 1]
 
   const cargar = useCallback(async () => {
     if (noCenter) return
     setCargando(true); setErr(''); setAviso('')
     try {
-      const [rd, rs, rc, rdem, rreq] = await Promise.all([
+      const [rd, rs, rc, rdem, rreq, rapr] = await Promise.all([
         getDrivers(center),
         getShifts(center, desde, hasta),
         getShiftCoverage(center, desde, hasta),
         getRouteDemand(center, desde, hasta),
         getShiftRequests(center, 'pendiente'),
+        // Los días YA CONCEDIDOS. Sin esto, la rejilla te deja poner a trabajar
+        // a alguien el día que le aprobaste libre y no dice nada — el peor
+        // fallo posible aquí, porque se descubre el día que no aparece.
+        getShiftRequests(center, 'aprobado'),
       ])
       setDrivers(lista(rd.data).filter((d) => d.active !== false))
       const g = {}
       for (const s of lista(rs.data?.shifts)) g[`${s.driver_id}|${s.date}`] = s.type
       setGrid(g); setSucio(false)
+      gridOriginal.current = { ...g }
+      historial.current = []; setPuedeDeshacer(false)
+      setAprobados(new Set(
+        lista(rapr.data?.requests)
+          .filter((r) => r.type === 'libre')
+          .map((r) => `${r.driver_id}|${r.date}`)))
       setMin(rc.data?.min || 0)
       const dm = {}
       for (const [f, v] of Object.entries(rdem.data?.demand || {})) {
@@ -128,14 +160,113 @@ export default function Turnos() {
     return c
   }, [grid])
 
-  const ciclar = (did, fecha) => {
+  /* Los que se ven ahora mismo. Con 85 conductores, buscar por nombre no es un
+     lujo: es la diferencia entre encontrar a alguien y rendirse. */
+  const visibles = useMemo(() => {
+    const q = busca.trim().toLowerCase()
+    const ds = drivers || []
+    if (!q) return ds
+    return ds.filter((d) => (d.name || '').toLowerCase().includes(q))
+  }, [drivers, busca])
+
+  /* CHOQUES: alguien puesto a trabajar un día que se le CONCEDIÓ libre.
+     Es el fallo que más caro sale, porque no se descubre al hacerlo — se
+     descubre el día que esa persona no aparece. Se marca la celda y se cuenta
+     arriba; no se corrige solo, porque a veces se hace a propósito y hablado. */
+  const choques = useMemo(() => {
+    const s = new Set()
+    for (const [k, v] of Object.entries(grid)) {
+      if ((v === 'trabaja' || v === 'extra') && aprobados.has(k)) s.add(k)
+    }
+    return s
+  }, [grid, aprobados])
+
+  /* Días de trabajo de cada uno en lo que se está viendo. Sin esto no hay forma
+     de ver de un vistazo que a uno le has puesto 14 y a otro 3. */
+  const totales = useMemo(() => {
+    const m = {}
+    for (const d of (drivers || [])) {
+      let n = 0
+      for (const f of dias) {
+        const v = grid[`${d.id}|${f}`]
+        if (v === 'trabaja' || v === 'extra') n += 1
+      }
+      m[d.id] = n
+    }
+    return m
+  }, [drivers, dias, grid])
+
+  /* Cuántas celdas han cambiado respecto a lo cargado. "Sin guardar" a secas no
+     dice si has tocado una casilla o doscientas. */
+  const nCambios = useMemo(() => {
+    const o = gridOriginal.current || {}
+    const claves = new Set([...Object.keys(o), ...Object.keys(grid)])
+    let n = 0
+    for (const k of claves) if ((o[k] || 'libre') !== (grid[k] || 'libre')) n += 1
+    return n
+  }, [grid, sucio])
+
+  const descartar = () => {
+    setGrid({ ...gridOriginal.current })
+    historial.current = []; setPuedeDeshacer(false)
+    setSucio(false)
+  }
+
+  /* Guarda el estado ANTES de tocar nada, para poder deshacer. Se limita a 30
+     pasos: más no hace falta y ocuparía memoria con 85 conductores × 31 días. */
+  const recordar = () => {
+    historial.current.push(grid)
+    if (historial.current.length > 30) historial.current.shift()
+    setPuedeDeshacer(true)
+  }
+
+  const deshacer = () => {
+    const previo = historial.current.pop()
+    if (!previo) return
+    setGrid(previo)
+    setPuedeDeshacer(historial.current.length > 0)
+    setSucio(true)
+  }
+
+  /* Una celda. Con pincel pone ese tipo; sin pincel, cicla como antes. */
+  const aplicar = (did, fecha, conHistorial = true) => {
     const k = `${did}|${fecha}`
-    setGrid((g) => ({ ...g, [k]: CICLO[g[k] || 'libre'] }))
+    if (conHistorial) recordar()
+    setGrid((g) => ({ ...g, [k]: pincel || CICLO[g[k] || 'libre'] }))
+    setSucio(true)
+  }
+
+  const ciclar = (did, fecha) => aplicar(did, fecha)
+
+  /* Arrastrar para pintar. El mouseup se escucha en la ventana entera: si se
+     suelta el ratón fuera de la tabla, hay que dejar de pintar igualmente —
+     si no, se sigue pintando al volver a entrar sin tener el botón pulsado. */
+  useEffect(() => {
+    const soltar = () => { pintando.current = false }
+    window.addEventListener('mouseup', soltar)
+    window.addEventListener('mouseleave', soltar)
+    return () => {
+      window.removeEventListener('mouseup', soltar)
+      window.removeEventListener('mouseleave', soltar)
+    }
+  }, [])
+
+  /* Un día entero para todos los que se ven. Respeta el filtro de búsqueda a
+     propósito: si has filtrado por "ETT", rellenas sólo a los ETT. */
+  const columnaEntera = (fecha) => {
+    if (!pincel) return
+    recordar()
+    setGrid((g) => {
+      const n = { ...g }
+      for (const d of visibles) n[`${d.id}|${fecha}`] = pincel
+      return n
+    })
     setSucio(true)
   }
 
   /* Pinta una fila entera (toda la quincena de un conductor) de una vez. */
   const filaEntera = (did, tipo) => {
+    recordar()
     setGrid((g) => {
       const n = { ...g }
       for (const f of dias) n[`${did}|${f}`] = tipo
@@ -433,6 +564,76 @@ export default function Turnos() {
       {err && <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{err}</p>}
       {aviso && <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">{aviso}</p>}
 
+      {!cargando && drivers?.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-dark-800 bg-dark-900/60 px-3 py-2.5">
+          <div className="flex items-center gap-1.5">
+            <Brush size={15} className="text-dark-500" />
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-dark-500">Pincel</span>
+          </div>
+          <div className="flex gap-1">
+            {Object.entries(TIPOS).map(([k, v]) => (
+              <button key={k} onClick={() => setPincel(k)}
+                title={`Pintar ${t(v.k)}`}
+                className={`h-7 w-9 rounded-lg border text-[12px] font-bold transition ${
+                  pincel === k ? v.cls + ' ring-2 ring-brand-500/60' : 'border-dark-700 text-dark-500 hover:text-dark-200'}`}>
+                {v.letra}
+              </button>
+            ))}
+            <button onClick={() => setPincel(null)} title="Sin pincel: cada clic pasa al siguiente tipo"
+              className={`flex h-7 items-center gap-1 rounded-lg border px-2 text-[11px] font-semibold transition ${
+                pincel === null ? 'border-brand-500/60 bg-brand-500/15 text-brand-300' : 'border-dark-700 text-dark-500 hover:text-dark-200'}`}>
+              <Eraser size={12} /> Ciclar
+            </button>
+          </div>
+
+          <span className="hidden text-[11.5px] text-dark-600 sm:inline">
+            Arrastra para pintar varias · toca el día para toda la columna
+          </span>
+
+          <div className="relative ml-auto">
+            <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dark-600" />
+            <input value={busca} onChange={(e) => setBusca(e.target.value)}
+              placeholder="Buscar conductor"
+              className="w-44 rounded-lg border border-dark-700 bg-dark-950 py-1.5 pl-7 pr-2 text-[12.5px] text-dark-100 outline-none placeholder:text-dark-600 focus:border-brand-500/60" />
+          </div>
+
+          <button onClick={() => setVistaMes((v) => !v)}
+            className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition ${
+              vistaMes ? 'border-brand-500/50 bg-brand-500/15 text-brand-300' : 'border-dark-700 text-dark-400 hover:text-dark-200'}`}>
+            <CalendarRange size={14} /> {vistaMes ? 'Mes completo' : 'Quincena'}
+          </button>
+
+          <button onClick={deshacer} disabled={!puedeDeshacer}
+            className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-2.5 py-1.5 text-[12px] font-semibold text-dark-400 transition hover:text-dark-100 disabled:opacity-30">
+            <Undo2 size={14} /> Deshacer
+          </button>
+
+          {nCambios > 0 && (
+            <span className="flex items-center gap-2 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[12px] font-semibold text-amber-300">
+              {nCambios} sin guardar
+              <button onClick={descartar} className="text-[11px] font-normal text-amber-200/70 underline underline-offset-2 hover:text-amber-100">
+                descartar
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
+      {choques.size > 0 && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-red-500/40 bg-red-500/[0.08] px-3.5 py-3">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0 text-red-400" />
+          <div>
+            <p className="text-[13px] font-semibold text-red-200">
+              {choques.size} {choques.size === 1 ? 'día puesto a trabajar' : 'días puestos a trabajar'} a quien le aprobaste libre
+            </p>
+            <p className="mt-0.5 text-[12px] leading-relaxed text-red-200/70">
+              Están marcados en rojo en la rejilla. No se corrigen solos: a veces se hace a
+              propósito y hablado con la persona. Pero conviene mirarlos antes de guardar.
+            </p>
+          </div>
+        </div>
+      )}
+
       {cargando ? (
         <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> {t('ui.loading')}</div>
       ) : !drivers?.length ? (
@@ -450,8 +651,12 @@ export default function Turnos() {
                 </th>
                 {dias.map((f) => (
                   <th key={f} className={`px-1 py-2 text-center ${finde(f) ? 'bg-dark-800/40' : ''}`}>
-                    <div className="text-[10px] uppercase text-dark-500">{fmtDia(f)}</div>
-                    <div className="text-[11px] font-semibold text-dark-300">{fmtNum(f)}</div>
+                    <button onClick={() => columnaEntera(f)} disabled={!pincel}
+                      title={pincel ? `Poner ${t(TIPOS[pincel].k)} a todos este día` : 'Elige un pincel para rellenar la columna'}
+                      className="rounded px-1 py-0.5 transition enabled:hover:bg-brand-500/15 disabled:cursor-default">
+                      <div className="text-[10px] uppercase text-dark-500">{fmtDia(f)}</div>
+                      <div className="text-[11px] font-semibold text-dark-300">{fmtNum(f)}</div>
+                    </button>
                   </th>
                 ))}
               </tr>
@@ -491,10 +696,14 @@ export default function Turnos() {
               </tr>
             </thead>
             <tbody>
-              {drivers.map((d) => (
+              {visibles.map((d) => (
                 <tr key={d.id} className="group border-b border-dark-800/50 last:border-0">
                   <td className="sticky left-0 z-10 flex items-center gap-2 bg-dark-900 px-3 py-1.5">
-                    <span className="max-w-[11rem] truncate text-[13px] text-dark-200" title={d.name}>{d.name}</span>
+                    <span className="max-w-[10rem] truncate text-[13px] text-dark-200" title={d.name}>{d.name}</span>
+                    <span className="shrink-0 rounded bg-dark-800 px-1.5 text-[10px] font-bold tabular-nums text-dark-400"
+                      title="Días de trabajo en lo que estás viendo">
+                      {totales[d.id] ?? 0}
+                    </span>
                     <span className="ml-auto hidden shrink-0 gap-0.5 group-hover:flex">
                       {Object.entries(TIPOS).map(([k, v]) => (
                         <button
@@ -505,16 +714,36 @@ export default function Turnos() {
                     </span>
                   </td>
                   {dias.map((f) => {
-                    const tipo = grid[`${d.id}|${f}`] || 'libre'
+                    const k = `${d.id}|${f}`
+                    const tipo = grid[k] || 'libre'
                     const ui = TIPOS[tipo]
+                    const choca = choques.has(k)          // trabaja un día que tiene concedido
+                    const concedido = aprobados.has(k)    // día libre aprobado
                     return (
                       <td key={f} className={`px-1 py-1 text-center ${finde(f) ? 'bg-dark-800/40' : ''}`}>
                         <button
-                          onClick={() => ciclar(d.id, f)}
-                          title={`${d.name} · ${fmtNum(f)} · ${t(ui.k)}`}
-                          className={`h-6 w-7 rounded border text-[11px] font-bold transition hover:brightness-125 ${ui.cls}`}
+                          onMouseDown={(e) => {
+                            // Sólo el botón izquierdo: con el derecho se abre el
+                            // menú del navegador y quedaría pintando sin querer.
+                            if (e.button !== 0) return
+                            e.preventDefault()
+                            pintando.current = true
+                            aplicar(d.id, f)
+                          }}
+                          onMouseEnter={() => {
+                            // Al arrastrar no se apila un paso de deshacer por
+                            // celda: se deshace la pincelada entera, que es lo
+                            // que espera quien la ha dado.
+                            if (pintando.current && pincel) aplicar(d.id, f, false)
+                          }}
+                          title={`${d.name} · ${fmtNum(f)} · ${t(ui.k)}${
+                            choca ? ' — OJO: tiene este día APROBADO libre' : (concedido ? ' — día libre aprobado' : '')}`}
+                          className={`h-6 w-7 select-none rounded border text-[11px] font-bold transition hover:brightness-125 ${
+                            choca ? 'border-red-500 bg-red-500/25 text-red-200 ring-1 ring-red-500/70'
+                              : concedido ? 'border-emerald-500/50 bg-emerald-500/[0.07] text-emerald-400/80'
+                                : ui.cls}`}
                         >
-                          {ui.letra}
+                          {choca ? '!' : ui.letra}
                         </button>
                       </td>
                     )
@@ -639,6 +868,26 @@ export default function Turnos() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {!cargando && drivers?.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-1 text-[11px] text-dark-500">
+          {Object.entries(TIPOS).map(([k, v]) => (
+            <span key={k} className="flex items-center gap-1.5">
+              <span className={`inline-flex h-4 w-5 items-center justify-center rounded border text-[9px] font-bold ${v.cls}`}>{v.letra}</span>
+              {t(v.k)}
+            </span>
+          ))}
+          <span className="flex items-center gap-1.5">
+            <span className="inline-flex h-4 w-5 items-center justify-center rounded border border-emerald-500/50 bg-emerald-500/[0.07] text-[9px] font-bold text-emerald-400/80">L</span>
+            Día libre aprobado
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-flex h-4 w-5 items-center justify-center rounded border border-red-500 bg-red-500/25 text-[9px] font-bold text-red-200">!</span>
+            Trabaja un día que tiene concedido
+          </span>
+          <span className="ml-auto text-dark-600">El número junto al nombre son sus días de trabajo aquí</span>
         </div>
       )}
 
