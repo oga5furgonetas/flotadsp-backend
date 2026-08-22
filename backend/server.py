@@ -18507,6 +18507,9 @@ async def exportar_cuadrante(center: str, desde: str, hasta: str,
     q["date"] = {"$gte": desde, "$lte": hasta}
     turnos = await db.shifts.find(q, {"_id": 0}).to_list(20000)
 
+    dem = {d["date"]: d for d in await db.route_demand.find(
+        {"center": center, "date": {"$gte": desde, "$lte": hasta}}, {"_id": 0}).to_list(400)}
+
     doc = await db.app_meta.find_one({"_id": "codigos_cuadrante"}) or {}
     mapa = dict(CODIGOS_CUADRANTE_DEF)
     mapa.update({str(k).upper(): v for k, v in (doc.get("mapa") or {}).items()})
@@ -18589,20 +18592,42 @@ async def exportar_cuadrante(center: str, desde: str, hasta: str,
                 if hora:
                     cel.comment = Comment(f"{etiqueta} - entra a las {hora}", "FlotaDSP")
 
-    # Cobertura: cuanta gente sale cada dia. Es la fila que primero se mira.
+    # Las tres cifras del dia, juntas y en el mismo orden que en la hoja de la
+    # que sale esto. Solas no dicen nada: 39 personas es mucho o poco segun lo
+    # que pidan, y no llegar al maximo comprometido es lo que hace que la
+    # proxima vez no te ofrezcan rutas.
     rcob = 4 + len(filas) + 1
-    cc = ws.cell(row=rcob, column=1, value="Salen a trabajar")
-    cc.font = Font(bold=True, size=9, color="606060")
+    cobs = []
     for j, f in enumerate(dias):
         n = sum(1 for fila in filas
                 if mapa.get(fila["dias"].get(f, ("", ""))[0]) in ("trabaja", "extra"))
-        c = ws.cell(row=rcob, column=3 + j, value=n)
-        c.font = Font(bold=True, size=10)
-        c.alignment = centro
-        c.border = Border(top=medio, bottom=medio, left=fino, right=fino)
+        cobs.append(n)
+
+    for k, (titulo, saca, bg) in enumerate([
+        ("Salen a trabajar", lambda j, f: cobs[j], "DCEAF7"),
+        ("Rutas que piden", lambda j, f: dem.get(f, {}).get("objetivo"), None),
+        ("Maximas comprometidas", lambda j, f: dem.get(f, {}).get("maximo"), "FBE3C8"),
+    ]):
+        r = rcob + k
+        ct = ws.cell(row=r, column=1, value=titulo)
+        ct.font = Font(bold=True, size=9, color="606060")
+        for j, f in enumerate(dias):
+            v = saca(j, f)
+            c = ws.cell(row=r, column=3 + j, value=v)
+            c.font = Font(bold=True, size=10)
+            c.alignment = centro
+            c.border = Border(top=medio if k == 0 else fino,
+                              bottom=medio if k == 2 else fino, left=fino, right=fino)
+            if bg:
+                c.fill = PatternFill("solid", fgColor=bg)
+            # Rojo si ese dia no llegas a lo que piden: es una ruta sin cubrir.
+            if k == 0:
+                piden = dem.get(f, {}).get("objetivo")
+                if piden is not None and cobs[j] < piden:
+                    c.font = Font(bold=True, size=10, color="C00000")
 
     # Leyenda, por familias. Debajo de la tabla para que salga al imprimir.
-    rl = rcob + 2
+    rl = rcob + 4
     ws.cell(row=rl, column=1, value="LEYENDA").font = Font(bold=True, size=9, color="606060")
     for k, (fam, nombre) in enumerate(FAMILIA_NOMBRE_XLSX.items()):
         codigos = [c for c, v in CODIGOS_CUADRANTE_INFO.items() if v[2] == fam]
@@ -18886,7 +18911,21 @@ async def get_route_demand(center: str, desde: str, hasta: str,
 
 @api_router.post("/route-demand")
 async def set_route_demand(data: dict = Body(...), user: dict = Depends(require_admin)):
-    """Guarda las rutas objetivo de cada día. `null` borra el dato del día.
+    """Guarda las rutas de cada día. `null` borra ese dato.
+
+    Son DOS numeros independientes y no se pueden tratar como uno:
+
+      · `maximo`   — el techo comprometido con Amazon: lo que habria que poder
+                     cubrir si lo pidieran todo. Se rellena con semanas de
+                     antelacion, cuando todavia no se sabe lo que van a pedir.
+      · `objetivo` — las rutas que piden ESE dia. Llega mucho mas tarde.
+
+    Antes bastaba con que `objetivo` viniera vacio para BORRAR el documento
+    entero, y con el se iba el maximo que ya estaba puesto. Como el maximo se
+    rellena primero y el objetivo despues, ese era exactamente el orden en que
+    se usa: rellenar las maximas del mes y verlas desaparecer. Ahora cada uno
+    se guarda o se quita por su cuenta, y el dia solo se borra cuando no queda
+    ninguno de los dos.
 
     Se borra en vez de guardar un cero porque no son lo mismo: cero rutas es
     un día sin operación, y "no lo sé todavía" es un día sin rellenar. El
@@ -18899,30 +18938,40 @@ async def set_route_demand(data: dict = Body(...), user: dict = Depends(require_
     if not _user_can_see_center(user, center):
         raise HTTPException(403, "No tienes acceso a ese centro")
 
+    def _numero(crudo, fecha, que):
+        if crudo in (None, ""):
+            return None
+        try:
+            n = int(str(crudo).strip())
+        except ValueError:
+            raise HTTPException(400, f"{que} del {fecha} tiene que ser un número")
+        if not 0 <= n <= 999:
+            raise HTTPException(400, f"{que} del {fecha} está fuera de rango")
+        return n
+
     ops, borrar = [], []
     for it in (data.get("items") or []):
         fecha = str(it.get("date") or "")[:10]
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", fecha):
             continue
-        crudo = it.get("objetivo")
-        if crudo in (None, ""):
+        objetivo = _numero(it.get("objetivo"), fecha, "Las rutas que piden")
+        maximo = _numero(it.get("maximo"), fecha, "El máximo")
+        if objetivo is None and maximo is None:
             borrar.append(fecha)
             continue
-        try:
-            objetivo = int(str(crudo).strip())
-        except ValueError:
-            raise HTTPException(400, f"El objetivo del {fecha} tiene que ser un número")
-        if not 0 <= objetivo <= 999:
-            raise HTTPException(400, f"El objetivo del {fecha} está fuera de rango")
-        doc = {"center": center, "date": fecha, "objetivo": objetivo,
+        doc = {"center": center, "date": fecha,
                "updated_at": datetime.now(timezone.utc).isoformat(),
                "updated_by": user.get("name")}
-        if it.get("maximo") not in (None, ""):
-            try:
-                doc["maximo"] = int(str(it["maximo"]).strip())
-            except ValueError:
-                pass
-        ops.append(UpdateOne({"center": center, "date": fecha}, {"$set": doc}, upsert=True))
+        quitar = {}
+        for clave, valor in (("objetivo", objetivo), ("maximo", maximo)):
+            if valor is None:
+                quitar[clave] = ""
+            else:
+                doc[clave] = valor
+        cambio = {"$set": doc}
+        if quitar:
+            cambio["$unset"] = quitar
+        ops.append(UpdateOne({"center": center, "date": fecha}, cambio, upsert=True))
 
     if ops:
         await db.route_demand.bulk_write(ops)

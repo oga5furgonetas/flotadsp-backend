@@ -126,7 +126,17 @@ export default function Turnos() {
   const [drivers, setDrivers] = useState(null)
   const [grid, setGrid] = useState({})          // 'driverId|fecha' -> tipo
   const [sucio, setSucio] = useState(false)     // hay cambios sin guardar
-  const [demanda, setDemanda] = useState({})    // fecha -> objetivo (string, se edita)
+  /* TRES numeros por dia, y son cosas distintas:
+       · maximas  — el techo comprometido con Amazon: lo que habria que poder
+                    cubrir si lo pidieran todo. Se rellena con antelacion.
+       · demanda  — las rutas que piden ESE dia. Llega mucho mas tarde.
+       · cobertura— la gente que estas poniendo. Sale de la rejilla, no se
+                    escribe.
+     Mirar solo la cobertura no dice nada: 39 personas es mucho o poco segun
+     lo que pidan, y quedarse corto respecto al maximo es lo que hace que
+     Amazon no te ofrezca rutas la proxima vez. */
+  const [demanda, setDemanda] = useState({})    // fecha -> rutas que piden (string)
+  const [maximas, setMaximas] = useState({})    // fecha -> techo comprometido (string)
   const [min, setMin] = useState(0)
   const [solicitudes, setSolicitudes] = useState([])
   const [err, setErr] = useState('')
@@ -253,10 +263,13 @@ export default function Turnos() {
           .map((r) => `${r.driver_id}|${r.date}`)))
       setMin(rc.data?.min || 0)
       const dm = {}
+      const mx = {}
       for (const [f, v] of Object.entries(rdem.data?.demand || {})) {
         if (v?.objetivo != null) dm[f] = String(v.objetivo)
+        if (v?.maximo != null) mx[f] = String(v.maximo)
       }
       setDemanda(dm)
+      setMaximas(mx)
       setSolicitudes(lista(rreq.data?.requests))
     } catch {
       setErr(t('turns.error'))
@@ -599,9 +612,29 @@ export default function Turnos() {
     } finally { setOcupado('') }
   }
 
-  const guardarDemanda = async () => {
-    const items = dias.map((f) => ({ date: f, objetivo: demanda[f] === '' ? null : demanda[f] }))
+  /* Se mandan los dos numeros SIEMPRE, aunque solo hayas tocado uno. Si se
+     mandara solo el editado, el otro llegaria vacio al servidor y se borraria:
+     rellenar las maximas del mes y perderlas al escribir la primera demanda. */
+  const guardarDemanda = async (dm = demanda, mx = maximas) => {
+    const items = dias.map((f) => ({
+      date: f,
+      objetivo: dm[f] === '' || dm[f] == null ? null : dm[f],
+      maximo: mx[f] === '' || mx[f] == null ? null : mx[f],
+    }))
     try { await setRouteDemand(center, items) } catch { setErr(t('turns.demand.err')) }
+  }
+
+  /* Copia el primer maximo que encuentre a los dias que esten en blanco. Las
+     maximas suelen ser el mismo numero casi todo el mes, y escribirlo treinta
+     y una veces a mano es exactamente el tipo de cosa por la que se sigue
+     usando la hoja de calculo. */
+  const rellenarMaximas = () => {
+    const base = dias.map((f) => maximas[f]).find((v) => v != null && v !== '')
+    if (!base) { setErr('Escribe primero un máximo en un día y luego pulsa rellenar.'); return }
+    const mx = { ...maximas }
+    for (const f of dias) if (mx[f] == null || mx[f] === '') mx[f] = base
+    setMaximas(mx)
+    guardarDemanda(demanda, mx)
   }
 
   const generar = async () => {
@@ -1078,35 +1111,84 @@ export default function Turnos() {
                   </th>
                 ))}
               </tr>
-              {/* Demanda de Amazon: rutas objetivo del día (la usa el generador) */}
+              {/* MÁXIMAS: el techo comprometido con Amazon. Va la primera porque es
+                  la que se rellena antes y la que no cambia. */}
               <tr>
-                <th className="sticky left-0 z-10 bg-dark-900 px-3 py-1 text-left text-[11px] font-medium text-dark-500">
-                  {t('turns.demand')}
+                <th className="sticky left-0 z-10 border-r border-dark-700 bg-dark-900 px-3 py-1 text-left text-[11px] font-medium text-dark-500">
+                  <span className="flex items-center gap-1.5">
+                    Máximas
+                    <button onClick={rellenarMaximas} title="Copia el primer máximo que haya escrito a todos los días que estén en blanco"
+                      className="rounded border border-dark-700 px-1 text-[9px] font-bold text-dark-600 hover:text-dark-200">
+                      rellenar
+                    </button>
+                  </span>
                 </th>
-                {dias.map((f) => (
-                  <td key={f} className={`px-1 py-1 text-center ${finde(f) ? 'bg-dark-800/40' : ''}`}>
+                {dias.map((f, ci) => (
+                  <td key={f} data-col={ci}
+                    className={`border-r border-dark-800/70 px-1 py-1 text-center ${
+                      finde(f) ? 'bg-dark-800/40' : ''} ${lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
                     <input
-                      type="number" min="0" value={demanda[f] ?? ''} placeholder="—"
-                      onChange={(e) => setDemanda((d) => ({ ...d, [f]: e.target.value }))}
-                      onBlur={guardarDemanda}
-                      className="w-11 rounded border border-dark-700/70 bg-dark-900 px-1 py-0.5 text-center text-[11px] text-dark-200 placeholder:text-dark-700"
+                      type="number" min="0" value={maximas[f] ?? ''} placeholder="—"
+                      onChange={(e) => setMaximas((m) => ({ ...m, [f]: e.target.value }))}
+                      onBlur={() => guardarDemanda()}
+                      title="Rutas que podrían pedirnos ese día"
+                      className="w-10 rounded border border-amber-500/25 bg-amber-500/[0.06] px-1 py-0.5 text-center text-[11px] font-semibold text-amber-200/90 placeholder:font-normal placeholder:text-dark-700"
                     />
                   </td>
                 ))}
               </tr>
-              {/* Cobertura real vs objetivo */}
-              <tr className="border-b border-dark-800">
-                <th className="sticky left-0 z-10 bg-dark-900 px-3 py-1 text-left text-[11px] font-medium text-dark-500">
-                  {t('turns.coverage')}
+              {/* PIDEN: las rutas de ese día. Es lo que usa el generador. */}
+              <tr>
+                <th className="sticky left-0 z-10 border-r border-dark-700 bg-dark-900 px-3 py-1 text-left text-[11px] font-medium text-dark-500">
+                  Piden
                 </th>
-                {dias.map((f) => {
+                {dias.map((f, ci) => (
+                  <td key={f} data-col={ci}
+                    className={`border-r border-dark-800/70 px-1 py-1 text-center ${
+                      finde(f) ? 'bg-dark-800/40' : ''} ${lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
+                    <input
+                      type="number" min="0" value={demanda[f] ?? ''} placeholder="—"
+                      onChange={(e) => setDemanda((d) => ({ ...d, [f]: e.target.value }))}
+                      onBlur={() => guardarDemanda()}
+                      title="Rutas que Amazon pide ese día"
+                      className="w-10 rounded border border-dark-700/70 bg-dark-900 px-1 py-0.5 text-center text-[11px] text-dark-200 placeholder:text-dark-700"
+                    />
+                  </td>
+                ))}
+              </tr>
+              {/* PONEMOS: sale de la rejilla. El color compara con las otras dos. */}
+              <tr className="border-b border-dark-700">
+                <th className="sticky left-0 z-10 border-r border-dark-700 bg-dark-900 px-3 py-1 text-left text-[11px] font-medium text-dark-500">
+                  Ponemos
+                </th>
+                {dias.map((f, ci) => {
                   const n = cobertura[f] || 0
-                  const obj = Number(demanda[f]) || 0
-                  const falta = (obj > 0 && n < obj) || (min > 0 && n < min)
+                  const piden = Number(demanda[f]) || 0
+                  const max = Number(maximas[f]) || 0
+                  // Rojo: no llegas a lo que piden hoy — eso es una ruta sin
+                  // cubrir. Ámbar: llegas a lo de hoy pero no al techo, así que
+                  // si Amazon pide más no lo puedes coger. Verde: cubierto.
+                  const corto = (piden > 0 && n < piden) || (min > 0 && n < min)
+                  // Lo que te faltaría si HOY te pidieran el máximo. Va como
+                  // número pequeño y no como color: estar por debajo del techo
+                  // es lo normal —nunca se pone a toda la plantilla— así que
+                  // pintarlo de ámbar dejaba la fila entera en ámbar, y una
+                  // alerta que sale siempre no es una alerta.
+                  const hueco = max > 0 && n < max ? max - n : 0
                   return (
-                    <td key={f} className={`px-1 py-1 text-center ${finde(f) ? 'bg-dark-800/40' : ''}`}>
-                      <span className={`text-[12px] font-bold ${falta ? 'text-red-400' : 'text-dark-200'}`}>
-                        {n}{obj > 0 && <span className="text-[10px] font-normal text-dark-600">/{obj}</span>}
+                    <td key={f} data-col={ci}
+                      className={`border-r border-dark-800/70 px-1 py-1 text-center ${
+                        finde(f) ? 'bg-dark-800/40' : ''} ${lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
+                      <span className="flex items-baseline justify-center gap-0.5"
+                        title={`${n} ${n === 1 ? 'persona' : 'personas'} a ruta${
+                          piden > 0 ? ` · piden ${piden}` : ''}${max > 0 ? ` · máximo ${max}` : ''}${
+                          corto ? ' — FALTAN ' + (Math.max(piden, min) - n) : ''}${
+                          hueco ? ` · te faltarían ${hueco} para cubrir el máximo` : ''}`}>
+                        <span className={`text-[12px] font-bold tabular-nums ${
+                          corto ? 'text-red-400' : 'text-emerald-300'}`}>{n}</span>
+                        {hueco > 0 && (
+                          <span className="text-[9px] font-medium tabular-nums text-amber-500/60">−{hueco}</span>
+                        )}
                       </span>
                     </td>
                   )
