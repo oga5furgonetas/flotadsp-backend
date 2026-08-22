@@ -397,6 +397,12 @@ html[data-panel-theme='light'] [class*='hover:text-white']:hover { color: rgb(va
     to   { background-position: -200% 0; }
   }
 
+  /* La cruz del cuadrante: fila y columna de la celda por la que se pasa.
+     Se pone y se quita tocando el DOM a mano (Turnos.jsx), no con estado de
+     React: son 2.600 celdas y repintarlas en cada movimiento del ratón deja
+     la pantalla pegajosa. */
+  .xr { background-color: rgb(var(--dk-800) / 0.75); }
+
   /* Texto con degradado de marca (cifras hero, titulares destacados) */
   .text-gradient {
     @apply bg-gradient-to-br from-brand-400 to-brand-600 bg-clip-text text-transparent;

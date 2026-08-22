@@ -17657,8 +17657,13 @@ async def import_driver_ids(data: dict, _=Depends(require_admin)):
 
 # =========================
 # CUADRANTE DE TURNOS (shifts) + solicitudes de días
-#   shifts:        {center, driver_id, driver_name, date "YYYY-MM-DD", type}
-#                  type ∈ trabaja | libre | extra
+#   shifts:        {center, driver_id, driver_name, date "YYYY-MM-DD", type,
+#                   cod?, hora?}
+#                  type ∈ trabaja | libre | extra   (lo que entiende la app)
+#                  cod  = el codigo tal cual venia del cuadrante ("BKP", "V",
+#                         "N/D"…). Opcional: los turnos guardados antes de que
+#                         se empezara a guardar no lo tienen.
+#                  hora = la hora entre parentesis de la celda ("05:43").
 #   shift_requests:{id, center, driver_id, driver_name, date, type(libre|extra),
 #                   status(pendiente|aprobado|rechazado), created_at, resolved_by, note}
 #   shift_settings:{center, min_cobertura}  -> para auto-aprobar si sobra gente
@@ -17738,8 +17743,17 @@ async def get_shifts(center: Optional[str] = None, desde: Optional[str] = None,
 
 @api_router.post("/shifts/bulk")
 async def save_shifts_bulk(data: dict = Body(...), user: dict = Depends(require_admin)):
-    """Guarda/actualiza varios turnos. body: {items:[{driver_id,driver_name,center,date,type}]}"""
+    """Guarda/actualiza varios turnos.
+
+    body: {items:[{driver_id, driver_name, center, date, type, cod?, hora?}]}
+    `cod` es el codigo del cuadrante ("BKP", "V", "N/D"...) y manda sobre
+    `type` cuando los dos vienen y no cuadran: el codigo es lo que se vio en la
+    pantalla al pintarlo.
+    """
     items = data.get("items") or []
+    doc = await db.app_meta.find_one({"_id": "codigos_cuadrante"}) or {}
+    mapa_cod = dict(CODIGOS_CUADRANTE_DEF)
+    mapa_cod.update({str(k).upper(): v for k, v in (doc.get("mapa") or {}).items()})
     saved = 0
     for it in items:
         did = it.get("driver_id")
@@ -17748,18 +17762,36 @@ async def save_shifts_bulk(data: dict = Body(...), user: dict = Depends(require_
         typ = it.get("type")
         if not (did and date and center and typ in VALID_SHIFT_TYPE):
             continue
+        # El codigo que se pinto en la rejilla. Se comprueba contra el mapa: si
+        # no cuadra con el tipo, manda el codigo, porque es lo que se vio al
+        # pintarlo. Sin codigo se guarda igual —turnos viejos y la app movil no
+        # lo mandan— y la pantalla cae al color generico del tipo.
+        cod = str(it.get("cod") or "").strip().upper()[:20]
+        if cod and cod in mapa_cod and mapa_cod[cod]:
+            typ = mapa_cod[cod]
         # Un turno de otro centro se ignora en silencio pero se deja anotado:
         # el cuadrante se envía entero desde la pantalla, y un 403 a mitad
         # dejaría la mitad guardada y la otra mitad no.
         if not _user_can_see_center(user, center):
             logger.warning("Turnos: %s intentó guardar en %s, sin acceso", user.get("name"), center)
             continue
-        await db.shifts.update_one(
-            {"driver_id": did, "date": date},
-            {"$set": {"driver_id": did, "driver_name": it.get("driver_name", ""),
-                      "center": center, "date": date, "type": typ}},
-            upsert=True,
-        )
+        campos = {"driver_id": did, "driver_name": it.get("driver_name", ""),
+                  "center": center, "date": date, "type": typ}
+        # Lo que no viene se QUITA, no se guarda a vacio: si una celda que era
+        # "V (05:43)" se repinta como "1", esa hora ya no significa nada y
+        # dejarla ahi seria mentira. Y un campo no puede ir en $set y $unset a
+        # la vez: Mongo rechaza la operacion entera y no se guardaria ni un
+        # turno.
+        cambio, quitar = {"$set": campos}, {}
+        hora = str(it.get("hora") or "").strip()[:5]
+        for clave, valor in (("cod", cod), ("hora", hora)):
+            if valor:
+                campos[clave] = valor
+            else:
+                quitar[clave] = ""
+        if quitar:
+            cambio["$unset"] = quitar
+        await db.shifts.update_one({"driver_id": did, "date": date}, cambio, upsert=True)
         saved += 1
     return {"success": True, "saved": saved}
 
@@ -18373,16 +18405,19 @@ async def import_shifts_pegado(data: dict = Body(...), _=Depends(require_admin))
             crudo = fila[j] if j < len(fila) else None
             if crudo in (None, ""):
                 continue
-            cod = re.sub(r"\s*\(.*?\)", "", str(crudo)).strip().upper()
+            cod, hora = _despieza_codigo(crudo)
             if cod not in mapa:
                 sin_codigo[cod] = sin_codigo.get(cod, 0) + 1
                 continue
             tipo = mapa[cod]
             if not tipo:
                 continue
-            items.append({"driver_id": drv["id"], "driver_name": drv["name"],
-                          "center": center, "date": f"{anio:04d}-{mesn:02d}-{n:02d}",
-                          "type": tipo})
+            it = {"driver_id": drv["id"], "driver_name": drv["name"],
+                  "center": center, "date": f"{anio:04d}-{mesn:02d}-{n:02d}",
+                  "type": tipo, "cod": cod}
+            if hora:
+                it["hora"] = hora
+            items.append(it)
 
     dias_con_datos = sorted({i["date"] for i in items})
     resumen = {
@@ -18471,21 +18506,74 @@ async def guardar_alias_cuadrante(data: dict = Body(...), _=Depends(require_admi
 
 # Códigos del cuadrante mensual de Amazon. Se editan desde el panel porque
 # cada nave usa los suyos; esto es sólo el punto de partida conocido.
-CODIGOS_CUADRANTE_DEF = {
-    # Trabaja: sale a ruta o esta en la nave currando.
-    "1": "trabaja", "T": "trabaja", "X": "trabaja",
-    "BKP": "trabaja",        # support backup de paquetes: esta trabajando
-    "S": "trabaja",          # Site: en la estacion
-    # Libre: ese dia no trabaja, por el motivo que sea.
-    "N/T": "libre", "N/T APROB": "libre", "N/D": "libre", "L": "libre",
-    "V": "libre",            # vacaciones
-    "COMP": "libre",         # compensacion
-    # No presentado. Cae en "libre" porque es lo unico que hay y ese dia no
-    # trabajo, pero NO es un dia libre: estaba puesto y no vino. El cuadrante
-    # de tres estados no sabe decir eso, y conviene recordarlo antes de sacar
-    # conclusiones de un recuento de dias libres.
-    "N/P": "libre",
+# Cada codigo del cuadrante: (tipo, etiqueta, color).
+#
+# El TIPO es lo unico que entiende el resto de la app (cobertura, peticiones de
+# dias, portal del conductor) y son solo tres. La ETIQUETA y el COLOR existen
+# porque el tipo, solo, no basta para nadie que mire la pantalla: 'V',
+# 'COMP', 'N/D' y 'N/P' son los cuatro "libre", y significan cosas muy
+# distintas. Hasta que se guardo el codigo, pegar el cuadrante de OGA5 daba una
+# pared de dos letras que no se parecia a la hoja de la que salio.
+#
+# El color es un nombre, no una clase de CSS: el backend no sabe de Tailwind y
+# la pantalla no deberia tener que saberse los codigos de memoria.
+#
+# SON CINCO COLORES PARA DIECISEIS CODIGOS, Y ES A PROPOSITO. Con un color por
+# codigo la rejilla era un arcoiris en el que no se distinguia nada: la
+# recomendacion que se repite en todas las guias de accesibilidad y de
+# visualizacion (Okabe-Ito, IBM, AudioEye) es NO PASAR DE SEIS colores
+# categoricos, porque a partir de ahi dejan de diferenciarse a tamano pequeno
+# —y una celda de cuadrante son 22 px—. El color dice de que FAMILIA es el dia
+# y el texto del codigo, que siempre se ve, dice cual es exactamente. Asi el
+# color se lee de un vistazo desde lejos y el detalle esta ahi cuando hace
+# falta. Las familias:
+#   ruta     -> sale a repartir
+#   apoyo    -> trabaja, pero no en ruta (backup, oficina, ride along, extra)
+#   libre    -> dia libre normal
+#   previsto -> ausencia planificada y aceptada (vacaciones, compensa, aprobado)
+#   aviso    -> ausencia NO prevista (no disponible, no presentado, suspendido)
+CODIGOS_CUADRANTE_INFO = {
+    # ── TRABAJA ────────────────────────────────────────────────────────────
+    "1":         ("trabaja", "Trabaja", "ruta"),
+    "T":         ("trabaja", "Trabaja", "ruta"),
+    "X":         ("trabaja", "Trabaja", "ruta"),
+    "BKP":       ("trabaja", "Backup", "apoyo"),
+    "S":         ("trabaja", "Site (oficina)", "apoyo"),
+    "RIDE":      ("trabaja", "Ride along", "apoyo"),
+    "RA":        ("trabaja", "Ride along", "apoyo"),
+    "EXTRA":     ("extra", "Extra", "apoyo"),
+    # ── LIBRE ──────────────────────────────────────────────────────────────
+    "N/T":       ("libre", "No trabaja", "libre"),
+    "L":         ("libre", "Libre", "libre"),
+    "V":         ("libre", "Vacaciones", "previsto"),
+    "COMP":      ("libre", "Compensa", "previsto"),
+    "N/T APROB": ("libre", "Libre aprobado", "previsto"),
+    # ── AUSENCIAS QUE NO ESTABAN PREVISTAS ────────────────────────────────
+    "N/D":       ("libre", "No disponible", "aviso"),
+    "N/P":       ("libre", "No presentado", "aviso"),
+    "SUSP":      ("libre", "Suspendido", "aviso"),
 }
+
+CODIGOS_CUADRANTE_DEF = {k: v[0] for k, v in CODIGOS_CUADRANTE_INFO.items()}
+
+
+def _despieza_codigo(crudo) -> tuple:
+    """'V (05:43)' -> ('V', '05:43'). Devuelve (codigo, hora o '').
+
+    Antes el parentesis se tiraba a la basura. Es la hora de entrada, y en el
+    cuadrante de OGA5 aparece en la mitad de las celdas de vacaciones y de
+    trabajo. Al conductor le importa mas esa hora que el codigo, asi que se
+    guarda aparte en vez de perderla.
+    """
+    txt = str(crudo or "").strip()
+    m = re.search(r"\(([^)]*)\)", txt)
+    hora = ""
+    if m:
+        dentro = m.group(1).strip()
+        if re.fullmatch(r"\d{1,2}[:.]\d{2}", dentro):
+            hora = dentro.replace(".", ":")
+        txt = re.sub(r"\s*\(.*?\)", "", txt)
+    return re.sub(r"\s+", " ", txt).strip().upper(), hora
 
 
 def _sin_tildes(s: str) -> str:
@@ -18650,7 +18738,19 @@ async def set_route_demand(data: dict = Body(...), user: dict = Depends(require_
 async def get_codigos_cuadrante(_=Depends(require_admin)):
     """Qué significa cada código del Excel mensual."""
     doc = await db.app_meta.find_one({"_id": "codigos_cuadrante"}) or {}
+    mapa = dict(CODIGOS_CUADRANTE_DEF)
+    mapa.update({str(k).upper(): v for k, v in (doc.get("mapa") or {}).items()})
+    # `info` lleva la etiqueta y el color de cada codigo. Los que anadio el
+    # usuario a mano no estan en la tabla de arriba, asi que se les da una
+    # etiqueta con su propio nombre y el color gris: mejor eso que no salir.
+    info = {}
+    for cod, tipo in mapa.items():
+        base = CODIGOS_CUADRANTE_INFO.get(cod)
+        info[cod] = {"tipo": tipo,
+                     "etiqueta": base[1] if base else cod,
+                     "color": base[2] if base else "gris"}
     return {"codigos": doc.get("mapa") or CODIGOS_CUADRANTE_DEF,
+            "mapa": mapa, "info": info,
             "tipos": sorted(VALID_SHIFT_TYPE)}
 
 
@@ -18795,17 +18895,19 @@ async def import_shifts(file: UploadFile = File(...), center: str = Form(...),
             crudo = fila[j]
             if crudo in (None, ""):
                 continue
-            # "V (05:43)" queda en "V": la hora de entrada no cambia si trabaja.
-            cod = re.sub(r"\s*\(.*?\)", "", str(crudo)).strip().upper()
+            cod, hora = _despieza_codigo(crudo)
             if cod not in mapa:
                 sin_codigo[cod] = sin_codigo.get(cod, 0) + 1
                 continue
             tipo = mapa[cod]
             if not tipo:
                 continue
-            items.append({"driver_id": drv["id"], "driver_name": drv["name"],
-                          "center": center, "date": f"{anio:04d}-{mesn:02d}-{n:02d}",
-                          "type": tipo})
+            it = {"driver_id": drv["id"], "driver_name": drv["name"],
+                  "center": center, "date": f"{anio:04d}-{mesn:02d}-{n:02d}",
+                  "type": tipo, "cod": cod}
+            if hora:
+                it["hora"] = hora
+            items.append(it)
 
     resumen = {
         "mes": f"{anio:04d}-{mesn:02d}", "center": center,

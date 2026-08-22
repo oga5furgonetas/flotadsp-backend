@@ -3,14 +3,14 @@ import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, CalendarClock, Users, ChevronLeft, ChevronRight, Save, Zap,
   Upload, Check, X, Settings2, AlertTriangle, Inbox, ClipboardPaste, Ban, Trash2,
-  Brush, Undo2, Search, CalendarRange, Eraser,
+  Brush, Undo2, Search, CalendarRange, Eraser, Rows3, CopyPlus, UserMinus,
 } from 'lucide-react'
 import {
   getShifts, getShiftCoverage, getDrivers, saveShiftsBulk, setShiftSettings,
   generateShiftsAuto, getRouteDemand, setRouteDemand, getShiftRequests,
   resolveShiftRequest, importShifts, getCodigosCuadrante, setCodigosCuadrante,
   importShiftsPegado, getShiftBlocks, createShiftBlock, deleteShiftBlock,
-  setAliasNombres,
+  setAliasNombres, updateDriver,
 } from '../api'
 import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
@@ -19,14 +19,90 @@ import { isoLocal } from '../../lib/fecha'
 
 const DIAS = 14
 
-/* Tipos de turno. El backend solo admite estos tres (VALID_SHIFT_TYPE);
-   la celda cicla entre ellos al pulsar. */
-const TIPOS = {
-  libre:   { letra: 'L', k: 'turns.t.libre',   cls: 'bg-dark-800/60 text-dark-500 border-dark-700/60' },
-  trabaja: { letra: 'T', k: 'turns.t.trabaja', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35' },
-  extra:   { letra: 'E', k: 'turns.t.extra',   cls: 'bg-amber-500/15 text-amber-300 border-amber-500/35' },
+/* ── EL CÓDIGO, NO EL TIPO ─────────────────────────────────────────────────
+   La app entiende tres tipos (trabaja / libre / extra) y con eso decide
+   cobertura, peticiones y lo que ve el conductor. Pero el cuadrante que sale
+   de Amazon tiene DOCE códigos, y siete de ellos caen en "libre": V, COMP,
+   N/D, N/P, SUSP, N/T y N/T APROB significan cosas muy distintas.
+
+   Pintar sólo el tipo convertía el cuadrante en una pared de dos letras que no
+   se parecía a la hoja de la que había salido. Por eso la rejilla trabaja con
+   el CÓDIGO: `grid['id|fecha']` guarda 'BKP', 'V', 'N/D'… y el tipo se deduce
+   de él al guardar. */
+
+/* CINCO COLORES PARA DIECISÉIS CÓDIGOS, y es a propósito.
+
+   Con un color por código la rejilla era un arcoíris donde no se distinguía
+   nada. Todas las guías serias de color categórico —Okabe-Ito, la paleta de
+   IBM, las recomendaciones de accesibilidad— dicen lo mismo: NO PASAR DE SEIS.
+   A partir de ahí los colores dejan de diferenciarse a tamaño pequeño, y una
+   celda de cuadrante mide 22 px.
+
+   Así que el COLOR dice de qué familia es el día —se lee de lejos, de un
+   vistazo— y el TEXTO DEL CÓDIGO, que siempre está dentro de la celda, dice
+   cuál es exactamente. Dos canales: el que funciona en diagonal desde el otro
+   lado de la mesa, y el que funciona cuando te acercas.
+
+   El nombre de la familia lo manda el servidor; aquí sólo se traduce a clases. */
+const COLORES = {
+  ruta:     'bg-emerald-500/20 text-emerald-200 border-emerald-500/40',
+  apoyo:    'bg-teal-500/[0.12] text-teal-300 border-teal-500/30',
+  libre:    'bg-dark-800/70 text-dark-400 border-dark-700/70',
+  previsto: 'bg-sky-500/15 text-sky-300 border-sky-500/35',
+  aviso:    'bg-red-500/15 text-red-300 border-red-500/35',
 }
-const CICLO = { libre: 'trabaja', trabaja: 'extra', extra: 'libre' }
+/* El mismo color, pero plano y sin borde: para los cuadraditos de la leyenda y
+   de la paleta, donde no hay rejilla que acompañe. */
+const FAMILIA_NOMBRE = {
+  ruta: 'Sale a ruta', apoyo: 'Trabaja sin ruta', libre: 'Día libre',
+  previsto: 'Ausencia prevista', aviso: 'Ausencia no prevista',
+}
+
+/* Lo que se usa si el servidor no contesta. La rejilla NO puede quedarse en
+   blanco por eso: sería peor que el problema. */
+const COD_DEF = {
+  '1':         { tipo: 'trabaja', etiqueta: 'Trabaja',        color: 'ruta' },
+  'BKP':       { tipo: 'trabaja', etiqueta: 'Backup',         color: 'apoyo' },
+  'S':         { tipo: 'trabaja', etiqueta: 'Site (oficina)', color: 'apoyo' },
+  'RIDE':      { tipo: 'trabaja', etiqueta: 'Ride along',     color: 'apoyo' },
+  'EXTRA':     { tipo: 'extra',   etiqueta: 'Extra',          color: 'apoyo' },
+  'N/T':       { tipo: 'libre',   etiqueta: 'No trabaja',     color: 'libre' },
+  'L':         { tipo: 'libre',   etiqueta: 'Libre',          color: 'libre' },
+  'V':         { tipo: 'libre',   etiqueta: 'Vacaciones',     color: 'previsto' },
+  'COMP':      { tipo: 'libre',   etiqueta: 'Compensa',       color: 'previsto' },
+  'N/T APROB': { tipo: 'libre',   etiqueta: 'Libre aprobado', color: 'previsto' },
+  'N/D':       { tipo: 'libre',   etiqueta: 'No disponible',  color: 'aviso' },
+  'N/P':       { tipo: 'libre',   etiqueta: 'No presentado',  color: 'aviso' },
+  'SUSP':      { tipo: 'libre',   etiqueta: 'Suspendido',     color: 'aviso' },
+}
+
+/* En la CELDA no caben nueve caracteres. Se acorta sólo ahí: en la paleta y en
+   la leyenda va el código entero, porque abreviado salían dos botones 'N/T'
+   —'N/T' y 'N/T APROB'— y no había manera de saber cuál era cuál. En la celda
+   no hay confusión posible: el aprobado lleva anillo verde y el tooltip dice
+   cuál es. */
+const ABREV = { 'N/T APROB': 'N/T', EXTRA: 'EX', 'RIDE ALONG': 'RIDE' }
+const corto = (c) => ABREV[c] || c
+
+/* Turnos guardados ANTES de que se empezara a guardar el código: sólo tienen
+   tipo. Se les pone el código más probable para que se puedan ver y pintar,
+   en vez de dejarlos en blanco. */
+const TIPO_A_COD = { trabaja: '1', libre: 'N/T', extra: 'EXTRA' }
+
+/* Ordenar por nombre SIN que las mayúsculas y las tildes manden.
+
+   Las fichas están escritas de todas las maneras: 'BERNARDO PUENTE', 'belen
+   fernandez lariño', 'Borja Salvado Varela'. Un `sort()` normal compara por
+   código de carácter, así que todas las minúsculas caían detrás de todas las
+   mayúsculas y la lista parecía cualquier cosa menos alfabética. `localeCompare`
+   con sensitivity 'base' iguala mayúsculas y tildes, que es como lo ordenaría
+   una persona. */
+const porNombre = (a, b) =>
+  (a?.name || '').localeCompare(b?.name || '', 'es', { sensitivity: 'base' })
+
+/* ¿Es lunes? Marca el corte de semana en la rejilla: en 31 columnas seguidas
+   no hay forma de saber dónde empieza una semana sin una línea. */
+const lunes = (iso) => new Date(iso + 'T12:00:00').getDay() === 1
 
 /* Lunes de la semana de una fecha (la semana laboral empieza en lunes). */
 function lunesDe(d) {
@@ -75,14 +151,28 @@ export default function Turnos() {
      entero sin morir a clics. Sin pincel se mantiene el comportamiento de
      antes (cada clic pasa al siguiente tipo), para quien ya estaba
      acostumbrado. */
-  const [pincel, setPincel] = useState('trabaja')
+  const [codigos, setCodigos] = useState(COD_DEF)
+  const [pincel, setPincel] = useState('1')
   const pintando = useRef(false)
   const [busca, setBusca] = useState('')
+  /* 'cuadrante' = sólo quien tiene algún turno puesto en lo que se está viendo.
+     Es el modo por defecto porque el problema real no es que falte gente: es
+     que SOBRA. En OGA5 hay 71 fichas activas y en el cuadrante de agosto
+     estaban 61 — las otras 10 son bajas que nadie marcó, y en la rejilla
+     ocupaban diez filas vacías que no se podían distinguir de un olvido. */
+  const [quien, setQuien] = useState('cuadrante')   // 'cuadrante' | 'todos'
+  const [denso, setDenso] = useState(false)
+  const [confirmarBaja, setConfirmarBaja] = useState(null)  // conductor a sacar
   const [vistaMes, setVistaMes] = useState(false)
   const [aprobados, setAprobados] = useState(new Set())  // 'did|fecha' con día libre CONCEDIDO
   const historial = useRef([])                            // para deshacer
   const [puedeDeshacer, setPuedeDeshacer] = useState(false)
   const gridOriginal = useRef({})                         // lo que había al cargar
+  /* La hora entre paréntesis de la celda ("V (05:43)"). No se pinta —no cabe—
+     pero se enseña al pasar por encima y se conserva al guardar: al conductor
+     le importa más esa hora que el código. */
+  const horas = useRef({})
+  const tablaRef = useRef(null)
   // El mes NO sale del fichero: la plantilla de Amazon arrastra en la cabecera
   // el texto del mes anterior ("Desde: 01-06-2026" en un fichero de agosto).
   const [mesImport, setMesImport] = useState(() => new Date().toISOString().slice(0, 7))
@@ -103,26 +193,57 @@ export default function Turnos() {
     const total = new Date(y, m + 1, 0).getDate()
     return Array.from({ length: total }, (_, i) => isoLocal(new Date(y, m, i + 1)))
   }, [desde, vistaMes])
+  /* El rango que se PIDE al servidor sale de los días que se van a pintar, no
+     de `desde`. En "mes completo" `dias` empieza el día 1 aunque la quincena
+     empiece el 3: pidiendo desde el 3 los días 1 y 2 salían vacíos teniendo
+     turnos guardados, y la cobertura de esos dos días marcaba 0. */
+  const primerDia = dias[0]
   const hasta = dias[dias.length - 1]
+
+  /* Se PIDE el mes entero aunque sólo se pinten catorce días.
+
+     Porque "quién está en el cuadrante" es una pregunta del mes, no de la
+     quincena: alguien que sólo trabaja del 1 al 10 aparecería como "sobra" si
+     estás mirando del 17 al 30, y eso es justo el falso positivo que hace que
+     no te puedas fiar del aviso. Son 61 × 31 documentos, unos 1.900: nada. */
+  const mesDesde = useMemo(() => primerDia.slice(0, 8) + '01', [primerDia])
+  const mesHasta = useMemo(() => {
+    const d = new Date(hasta + 'T12:00:00')
+    return isoLocal(new Date(d.getFullYear(), d.getMonth() + 1, 0))
+  }, [hasta])
 
   const cargar = useCallback(async () => {
     if (noCenter) return
     setCargando(true); setErr(''); setAviso('')
     try {
-      const [rd, rs, rc, rdem, rreq, rapr] = await Promise.all([
+      const [rd, rs, rc, rdem, rreq, rapr, rcod] = await Promise.all([
         getDrivers(center),
-        getShifts(center, desde, hasta),
-        getShiftCoverage(center, desde, hasta),
-        getRouteDemand(center, desde, hasta),
+        getShifts(center, mesDesde, mesHasta),
+        getShiftCoverage(center, primerDia, hasta),
+        getRouteDemand(center, primerDia, hasta),
         getShiftRequests(center, 'pendiente'),
         // Los días YA CONCEDIDOS. Sin esto, la rejilla te deja poner a trabajar
         // a alguien el día que le aprobaste libre y no dice nada — el peor
         // fallo posible aquí, porque se descubre el día que no aparece.
         getShiftRequests(center, 'aprobado'),
+        // Los códigos y sus colores. Si esto falla se sigue con COD_DEF: la
+        // rejilla no se queda en blanco por no poder leer una tabla de colores.
+        getCodigosCuadrante().catch(() => null),
       ])
-      setDrivers(lista(rd.data).filter((d) => d.active !== false))
+      const info = rcod?.data?.info
+      setCodigos(info && Object.keys(info).length ? info : COD_DEF)
+      // Alfabético. La lista venía en el orden en que están en la base de
+      // datos, que no es ninguno, y con 71 fichas eso hace imposible buscar a
+      // nadie con la vista.
+      setDrivers(lista(rd.data).filter((d) => d.active !== false).sort(porNombre))
       const g = {}
-      for (const s of lista(rs.data?.shifts)) g[`${s.driver_id}|${s.date}`] = s.type
+      for (const s of lista(rs.data?.shifts)) {
+        g[`${s.driver_id}|${s.date}`] = s.cod || TIPO_A_COD[s.type] || 'N/T'
+      }
+      horas.current = {}
+      for (const s of lista(rs.data?.shifts)) {
+        if (s.hora) horas.current[`${s.driver_id}|${s.date}`] = s.hora
+      }
       setGrid(g); setSucio(false)
       gridOriginal.current = { ...g }
       historial.current = []; setPuedeDeshacer(false)
@@ -142,7 +263,7 @@ export default function Turnos() {
     } finally {
       setCargando(false)
     }
-  }, [center, desde, hasta, noCenter])
+  }, [center, primerDia, hasta, mesDesde, mesHasta, noCenter])
 
   useEffect(() => { cargar() }, [cargar])
 
@@ -154,37 +275,98 @@ export default function Turnos() {
     return () => window.removeEventListener('beforeunload', h)
   }, [sucio])
 
-  const cobertura = useMemo(() => {
-    const c = {}
-    for (const [k, v] of Object.entries(grid)) {
-      if (v === 'trabaja' || v === 'extra') {
-        const f = k.split('|')[1]
-        c[f] = (c[f] || 0) + 1
-      }
-    }
-    return c
-  }, [grid])
-
   /* Los que se ven ahora mismo. Con 85 conductores, buscar por nombre no es un
      lujo: es la diferencia entre encontrar a alguien y rendirse. */
+  /* La paleta: un botón por significado, no por código. 'T' y 'X' quieren
+     decir lo mismo que '1', y 'RA' lo mismo que 'RIDE'; poner los cuatro sólo
+     alarga la fila y hace dudar de cuál pulsar. Se queda el primero de cada
+     etiqueta, que es el que se usa de verdad en la hoja. */
+  const paleta = useMemo(() => {
+    const vistas = new Set()
+    const out = []
+    for (const [cod, ui] of Object.entries(codigos)) {
+      if (vistas.has(ui.etiqueta)) continue
+      vistas.add(ui.etiqueta)
+      out.push({ cod, ui })
+    }
+    return out
+  }, [codigos])
+
+  /* Quién tiene algo puesto en lo que se está viendo. */
+  const enCuadrante = useMemo(() => {
+    const s = new Set()
+    for (const k of Object.keys(grid)) s.add(k.split('|')[0])
+    return s
+  }, [grid])
+
   const visibles = useMemo(() => {
     const q = busca.trim().toLowerCase()
-    const ds = drivers || []
-    if (!q) return ds
-    return ds.filter((d) => (d.name || '').toLowerCase().includes(q))
-  }, [drivers, busca])
+    let ds = drivers || []
+    if (quien === 'cuadrante') ds = ds.filter((d) => enCuadrante.has(d.id))
+    if (q) ds = ds.filter((d) => (d.name || '').toLowerCase().includes(q))
+    return ds
+  }, [drivers, busca, quien, enCuadrante])
+
+  /* Los que están en la ficha pero no en el cuadrante. Se cuentan aunque estén
+     escondidos: si no, esconderlos sería taparlos. */
+  const sobran = useMemo(
+    () => (drivers || []).filter((d) => !enCuadrante.has(d.id)),
+    [drivers, enCuadrante])
+
+  /* Saca a alguien del cuadrante de verdad: le marca la ficha como no activa.
+     Es lo mismo que hacer la baja en Conductores, pero desde donde se nota el
+     problema — que es aquí, viendo su fila vacía mes tras mes. */
+  const darDeBaja = async (d) => {
+    setConfirmarBaja(null); setErr(''); setAviso('')
+    try {
+      await updateDriver(d.id, { active: false })
+      setDrivers((ds) => (ds || []).filter((x) => x.id !== d.id))
+      setAviso(`${d.name} ya no sale en el cuadrante. Sigue en Conductores, dado de baja.`)
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo dar de baja.')
+    }
+  }
 
   /* CHOQUES: alguien puesto a trabajar un día que se le CONCEDIÓ libre.
      Es el fallo que más caro sale, porque no se descubre al hacerlo — se
      descubre el día que esa persona no aparece. Se marca la celda y se cuenta
      arriba; no se corrige solo, porque a veces se hace a propósito y hablado. */
+  /* Del código al tipo. Un código que ya no esté en la tabla (porque se
+     borró en la pantalla de códigos) no puede tumbar la rejilla: cae en
+     'libre', que es lo que menos daño hace. */
+  const tipoDe = useCallback(
+    (cod) => (codigos[cod] || COD_DEF[cod] || {}).tipo || 'libre', [codigos])
+  const uiDe = useCallback(
+    (cod) => codigos[cod] || COD_DEF[cod] || { tipo: 'libre', etiqueta: cod, color: 'gris' },
+    [codigos])
+
+  /* Cuánta gente sale a ruta cada día. Va DEBAJO de `tipoDe` a propósito: un
+     useMemo se ejecuta al pintar, y si se declara antes revienta al usarlo. */
+  const cobertura = useMemo(() => {
+    const c = {}
+    for (const [k, v] of Object.entries(grid)) {
+      const tp = tipoDe(v)
+      if (tp === 'trabaja' || tp === 'extra') {
+        const f = k.split('|')[1]
+        c[f] = (c[f] || 0) + 1
+      }
+    }
+    return c
+  }, [grid, tipoDe])   // se indexa por fecha, así que sobra filtrar
+
   const choques = useMemo(() => {
+    // Sólo los días que se ven. El aviso de arriba dice "están marcados en rojo
+    // en la rejilla": contar uno que cae fuera de la vista lo convertiría en
+    // mentira, y en un aviso que no se puede resolver.
+    const enVista = new Set(dias)
     const s = new Set()
     for (const [k, v] of Object.entries(grid)) {
-      if ((v === 'trabaja' || v === 'extra') && aprobados.has(k)) s.add(k)
+      if (!enVista.has(k.split('|')[1])) continue
+      const tp = tipoDe(v)
+      if ((tp === 'trabaja' || tp === 'extra') && aprobados.has(k)) s.add(k)
     }
     return s
-  }, [grid, aprobados])
+  }, [grid, aprobados, tipoDe, dias])
 
   /* Días de trabajo de cada uno en lo que se está viendo. Sin esto no hay forma
      de ver de un vistazo que a uno le has puesto 14 y a otro 3. */
@@ -193,13 +375,13 @@ export default function Turnos() {
     for (const d of (drivers || [])) {
       let n = 0
       for (const f of dias) {
-        const v = grid[`${d.id}|${f}`]
-        if (v === 'trabaja' || v === 'extra') n += 1
+        const tp = tipoDe(grid[`${d.id}|${f}`])
+        if (tp === 'trabaja' || tp === 'extra') n += 1
       }
       m[d.id] = n
     }
     return m
-  }, [drivers, dias, grid])
+  }, [drivers, dias, grid, tipoDe])
 
   /* Cuántas celdas han cambiado respecto a lo cargado. "Sin guardar" a secas no
      dice si has tocado una casilla o doscientas. */
@@ -207,7 +389,7 @@ export default function Turnos() {
     const o = gridOriginal.current || {}
     const claves = new Set([...Object.keys(o), ...Object.keys(grid)])
     let n = 0
-    for (const k of claves) if ((o[k] || 'libre') !== (grid[k] || 'libre')) n += 1
+    for (const k of claves) if ((o[k] || '') !== (grid[k] || '')) n += 1
     return n
   }, [grid, sucio])
 
@@ -233,15 +415,51 @@ export default function Turnos() {
     setSucio(true)
   }
 
-  /* Una celda. Con pincel pone ese tipo; sin pincel, cicla como antes. */
+  /* Una celda. El pincel es un código; con la goma (pincel = null) se vacía,
+     que es distinto de poner "libre": vacío es "no hay nada puesto ese día". */
   const aplicar = (did, fecha, conHistorial = true) => {
     const k = `${did}|${fecha}`
     if (conHistorial) recordar()
-    setGrid((g) => ({ ...g, [k]: pincel || CICLO[g[k] || 'libre'] }))
+    setGrid((g) => {
+      if (!pincel) { const n = { ...g }; delete n[k]; return n }
+      return { ...g, [k]: pincel }
+    })
     setSucio(true)
   }
 
-  const ciclar = (did, fecha) => aplicar(did, fecha)
+  /* Teclado. Con 12 códigos, ir al ratón a la paleta cada vez que cambias de
+     código es la mitad del trabajo; las teclas 1..9 y 0 eligen pincel y la
+     tecla . coge la goma. No se activa mientras se escribe en un campo. */
+  useEffect(() => {
+    const teclas = (e) => {
+      const el = e.target
+      if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const orden = Object.keys(codigos)
+      if (e.key === '.' || e.key === 'Delete') { setPincel(null); return }
+      const i = e.key === '0' ? 9 : '123456789'.indexOf(e.key)
+      if (i >= 0 && orden[i]) setPincel(orden[i])
+    }
+    window.addEventListener('keydown', teclas)
+    return () => window.removeEventListener('keydown', teclas)
+  }, [codigos])
+
+  /* La cruz: al pasar por una celda se marcan su fila y su columna enteras.
+     En 31 columnas es lo único que evita leer el día equivocado.
+
+     Se hace tocando el DOM a mano y NO con estado de React a propósito: con 85
+     conductores × 31 días son 2.600 celdas, y volver a pintarlas en cada
+     movimiento del ratón deja la pantalla pegajosa. */
+  const cruz = useCallback((td) => {
+    const tb = tablaRef.current
+    if (!tb) return
+    tb.querySelectorAll('.xr').forEach((x) => x.classList.remove('xr'))
+    if (!td) return
+    const col = td.dataset.col
+    if (col == null) return
+    tb.querySelectorAll(`[data-col="${col}"]`).forEach((x) => x.classList.add('xr'))
+    td.closest('tr')?.querySelectorAll('td').forEach((x) => x.classList.add('xr'))
+  }, [])
 
   /* Arrastrar para pintar. El mouseup se escucha en la ventana entera: si se
      suelta el ratón fuera de la tabla, hay que dejar de pintar igualmente —
@@ -263,18 +481,71 @@ export default function Turnos() {
     recordar()
     setGrid((g) => {
       const n = { ...g }
-      for (const d of visibles) n[`${d.id}|${fecha}`] = pincel
+      for (const d of visibles) {
+        if (pincel) n[`${d.id}|${fecha}`] = pincel
+        else delete n[`${d.id}|${fecha}`]
+      }
       return n
     })
     setSucio(true)
   }
 
-  /* Pinta una fila entera (toda la quincena de un conductor) de una vez. */
-  const filaEntera = (did, tipo) => {
+  /* COPIAR LA SEMANA ANTERIOR. Es la herramienta que más se usa en cualquier
+     programa de cuadrantes serio (When I Work, Homebase): un cuadrante real
+     cambia poco de una semana a la siguiente, así que se copia y se retocan
+     cuatro celdas, en vez de rellenar 61 × 7 a mano.
+
+     Copia sobre lo que se ve: si has filtrado por un nombre, sólo mueve el
+     suyo. Y no toca los días que ya tienen algo puesto salvo que se pida. */
+  const copiarSemanaAnterior = (pisar) => {
     recordar()
     setGrid((g) => {
       const n = { ...g }
-      for (const f of dias) n[`${did}|${f}`] = tipo
+      for (const d of visibles) {
+        for (const f of dias) {
+          const k = `${d.id}|${f}`
+          if (!pisar && n[k]) continue
+          const previo = g[`${d.id}|${sumaDias(f, -7)}`]
+          if (previo) n[k] = previo
+          else if (pisar) delete n[k]
+        }
+      }
+      return n
+    })
+    setSucio(true)
+  }
+
+  /* REPETIR UN PATRÓN. 'Trabaja 5, libra 2' y variantes: se elige el patrón y
+     se estampa desde el primer día que se ve hasta el último, para todos los
+     que se ven. Es como se montan los cuadrantes rotativos a mano en Excel,
+     sólo que sin arrastrar la fórmula. */
+  const aplicarPatron = (trabaja, libra) => {
+    if (!pincel) return
+    recordar()
+    const libreCod = codigos['N/T'] ? 'N/T' : 'L'
+    setGrid((g) => {
+      const n = { ...g }
+      visibles.forEach((d, iDriver) => {
+        // Cada persona empieza el ciclo un día más tarde que la anterior. Sin
+        // esto, un patrón 5/2 pone a TODOS a librar los mismos dos días y el
+        // cuadrante se queda sin nadie ese fin de semana.
+        let paso = iDriver % (trabaja + libra)
+        for (const f of dias) {
+          n[`${d.id}|${f}`] = paso < trabaja ? pincel : libreCod
+          paso = (paso + 1) % (trabaja + libra)
+        }
+      })
+      return n
+    })
+    setSucio(true)
+  }
+
+  /* Pinta una fila entera (todo lo que se ve de un conductor) de una vez. */
+  const filaEntera = (did, cod) => {
+    recordar()
+    setGrid((g) => {
+      const n = { ...g }
+      for (const f of dias) n[`${did}|${f}`] = cod
       return n
     })
     setSucio(true)
@@ -286,8 +557,13 @@ export default function Turnos() {
       const items = []
       for (const d of drivers || []) {
         for (const f of dias) {
-          const tipo = grid[`${d.id}|${f}`]
-          if (tipo) items.push({ driver_id: d.id, driver_name: d.name, center, date: f, type: tipo })
+          const k = `${d.id}|${f}`
+          const cod = grid[k]
+          if (!cod) continue
+          const it = { driver_id: d.id, driver_name: d.name, center, date: f,
+                       type: tipoDe(cod), cod }
+          if (horas.current[k]) it.hora = horas.current[k]
+          items.push(it)
         }
       }
       const r = await saveShiftsBulk(items)
@@ -307,10 +583,12 @@ export default function Turnos() {
     setOcupado('auto'); setErr(''); setAviso('')
     try {
       await guardarDemanda()                    // el generador lee la demanda de la BD
-      const r = await generateShiftsAuto(center, desde, hasta)
+      const r = await generateShiftsAuto(center, primerDia, hasta)
       const g = {}
-      for (const f of dias) for (const d of drivers || []) g[`${d.id}|${f}`] = 'libre'
-      for (const a of lista(r.data?.assignments)) g[`${a.driver_id}|${a.date}`] = a.type
+      for (const f of dias) for (const d of drivers || []) g[`${d.id}|${f}`] = 'N/T'
+      for (const a of lista(r.data?.assignments)) {
+        g[`${a.driver_id}|${a.date}`] = TIPO_A_COD[a.type] || 'N/T'
+      }
       setGrid(g); setSucio(true)
       setAviso(r.data?.resumen || t('turns.auto.ok'))
     } catch (e) {
@@ -525,7 +803,7 @@ export default function Turnos() {
             <ChevronLeft size={16} />
           </button>
           <span className="min-w-[9.5rem] text-center text-sm font-semibold text-dark-200">
-            {fmtNum(desde)} – {fmtNum(hasta)}
+            {fmtNum(primerDia)} – {fmtNum(hasta)}
           </span>
           <button className="btn-ghost p-2" onClick={() => setDesde((d) => sumaDias(d, DIAS))} aria-label={t('turns.next')}>
             <ChevronRight size={16} />
@@ -591,31 +869,59 @@ export default function Turnos() {
             <Brush size={15} className="text-dark-500" />
             <span className="text-[11px] font-semibold uppercase tracking-wider text-dark-500">Pincel</span>
           </div>
-          <div className="flex gap-1">
-            {Object.entries(TIPOS).map(([k, v]) => (
-              <button key={k} onClick={() => setPincel(k)}
-                title={`Pintar ${t(v.k)}`}
-                className={`h-7 w-9 rounded-lg border text-[12px] font-bold transition ${
-                  pincel === k ? v.cls + ' ring-2 ring-brand-500/60' : 'border-dark-700 text-dark-500 hover:text-dark-200'}`}>
-                {v.letra}
+          <div className="flex flex-wrap gap-1">
+            {paleta.map(({ cod, ui }, i) => (
+              <button key={cod} onClick={() => setPincel(cod)}
+                title={`${ui.etiqueta} — ${ui.tipo}${i < 10 ? ` · tecla ${i === 9 ? 0 : i + 1}` : ''}`}
+                className={`h-7 min-w-[2.4rem] rounded-lg border px-1.5 text-[11px] font-bold transition ${
+                  pincel === cod ? COLORES[ui.color] + ' ring-2 ring-brand-500/70' : 'border-dark-700 text-dark-500 hover:text-dark-200'}`}>
+                {cod}
               </button>
             ))}
-            <button onClick={() => setPincel(null)} title="Sin pincel: cada clic pasa al siguiente tipo"
+            <button onClick={() => setPincel(null)} title="Goma: vacía la celda (tecla .)"
               className={`flex h-7 items-center gap-1 rounded-lg border px-2 text-[11px] font-semibold transition ${
                 pincel === null ? 'border-brand-500/60 bg-brand-500/15 text-brand-300' : 'border-dark-700 text-dark-500 hover:text-dark-200'}`}>
-              <Eraser size={12} /> Ciclar
+              <Eraser size={12} /> Vaciar
             </button>
           </div>
 
-          <span className="hidden text-[11.5px] text-dark-600 sm:inline">
-            Arrastra para pintar varias · toca el día para toda la columna
+          <span className="hidden text-[11.5px] text-dark-600 xl:inline">
+            Arrastra para pintar seguido · teclas 1–9 cambian de código
           </span>
 
-          <div className="relative ml-auto">
+          {nCambios > 0 && (
+            <span className="ml-auto flex items-center gap-2 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[12px] font-semibold text-amber-300">
+              {nCambios} sin guardar
+              <button onClick={descartar} className="text-[11px] font-normal text-amber-200/70 underline underline-offset-2 hover:text-amber-100">
+                descartar
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* ── SEGUNDA FILA: montar el cuadrante ────────────────────────────────
+          Separada de la paleta a propósito. Arriba se elige QUÉ se pinta;
+          aquí, SOBRE QUIÉN y CÓMO. Mezclarlo todo en una barra era la mitad
+          de la sensación de lío. */}
+      {!cargando && drivers?.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-xl border border-dark-800 bg-dark-900/60 px-3 py-2.5">
+          <div className="flex overflow-hidden rounded-lg border border-dark-700">
+            {[['cuadrante', `Del cuadrante (${(drivers || []).length - sobran.length})`],
+              ['todos', `Todos (${(drivers || []).length})`]].map(([k, lbl]) => (
+              <button key={k} onClick={() => setQuien(k)}
+                className={`px-2.5 py-1.5 text-[12px] font-semibold transition ${
+                  quien === k ? 'bg-brand-500/20 text-brand-200' : 'text-dark-500 hover:text-dark-200'}`}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+
+          <div className="relative">
             <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dark-600" />
             <input value={busca} onChange={(e) => setBusca(e.target.value)}
               placeholder="Buscar conductor"
-              className="w-44 rounded-lg border border-dark-700 bg-dark-950 py-1.5 pl-7 pr-2 text-[12.5px] text-dark-100 outline-none placeholder:text-dark-600 focus:border-brand-500/60" />
+              className="w-40 rounded-lg border border-dark-700 bg-dark-950 py-1.5 pl-7 pr-2 text-[12.5px] text-dark-100 outline-none placeholder:text-dark-600 focus:border-brand-500/60" />
           </div>
 
           <button onClick={() => setVistaMes((v) => !v)}
@@ -624,19 +930,75 @@ export default function Turnos() {
             <CalendarRange size={14} /> {vistaMes ? 'Mes completo' : 'Quincena'}
           </button>
 
-          <button onClick={deshacer} disabled={!puedeDeshacer}
-            className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-2.5 py-1.5 text-[12px] font-semibold text-dark-400 transition hover:text-dark-100 disabled:opacity-30">
-            <Undo2 size={14} /> Deshacer
+          <button onClick={() => setDenso((v) => !v)} title="Filas más juntas: caben más personas de una vez"
+            className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition ${
+              denso ? 'border-brand-500/50 bg-brand-500/15 text-brand-300' : 'border-dark-700 text-dark-400 hover:text-dark-200'}`}>
+            <Rows3 size={14} /> {denso ? 'Compacto' : 'Cómodo'}
           </button>
 
-          {nCambios > 0 && (
-            <span className="flex items-center gap-2 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[12px] font-semibold text-amber-300">
-              {nCambios} sin guardar
-              <button onClick={descartar} className="text-[11px] font-normal text-amber-200/70 underline underline-offset-2 hover:text-amber-100">
-                descartar
+          <span className="mx-1 hidden h-5 w-px bg-dark-700 sm:block" />
+
+          <button onClick={() => copiarSemanaAnterior(false)}
+            title="Trae lo de la semana de antes a los días que estén vacíos. Lo ya puesto no se toca."
+            className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-2.5 py-1.5 text-[12px] font-semibold text-dark-400 transition hover:text-dark-100">
+            <CopyPlus size={14} /> Copiar semana anterior
+          </button>
+
+          <div className="flex items-center gap-1 rounded-lg border border-dark-700 px-2 py-1">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-dark-600">Patrón</span>
+            {[[5, 2], [6, 1], [4, 3]].map(([tr, li]) => (
+              <button key={`${tr}/${li}`} onClick={() => aplicarPatron(tr, li)} disabled={!pincel}
+                title={`Trabaja ${tr} y libra ${li}, seguido, a todos los que se ven. Cada persona arranca un día después que la anterior para que no libren todos a la vez. Se puede deshacer.`}
+                className="rounded px-1.5 py-0.5 text-[12px] font-bold text-dark-400 transition hover:bg-brand-500/15 hover:text-brand-200 disabled:opacity-30">
+                {tr}/{li}
               </button>
-            </span>
-          )}
+            ))}
+          </div>
+
+          <button onClick={deshacer} disabled={!puedeDeshacer}
+            className="ml-auto flex items-center gap-1.5 rounded-lg border border-dark-700 px-2.5 py-1.5 text-[12px] font-semibold text-dark-400 transition hover:text-dark-100 disabled:opacity-30">
+            <Undo2 size={14} /> Deshacer
+          </button>
+        </div>
+      )}
+
+      {/* Gente con ficha activa que no aparece en el cuadrante. Es la queja
+          real: 'hay gente que no está en la empresa'. No se puede adivinar
+          quién es baja, pero sí se puede señalar y dar el botón. */}
+      {!cargando && quien === 'cuadrante' && sobran.length > 0 && (
+        <div className="rounded-xl border border-dark-800 bg-dark-900/40 px-3.5 py-2.5">
+          <p className="text-[12.5px] text-dark-400">
+            <b className="text-dark-200">{sobran.length}</b> {sobran.length === 1 ? 'persona tiene' : 'personas tienen'} ficha
+            activa pero ni un día puesto en {vistaMes ? 'este mes' : 'el mes'}.
+            {sobran.length === 1 ? ' Está escondida.' : ' Están escondidas.'}
+            {' '}
+            <button onClick={() => setQuien('todos')} className="underline underline-offset-2 hover:text-dark-100">
+              {sobran.length === 1 ? 'Verla' : 'Verlas'}
+            </button>
+            {sobran.length === 1 ? ' y darle de baja si ya no está.' : ' y darles de baja si ya no están.'}
+          </p>
+          <p className="mt-1 text-[11.5px] leading-relaxed text-dark-600">
+            {sobran.slice(0, 8).map((d) => d.name).join(' · ')}
+            {sobran.length > 8 ? ` y ${sobran.length - 8} más` : ''}
+          </p>
+        </div>
+      )}
+
+      {confirmarBaja && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-red-500/40 bg-red-500/[0.08] px-3.5 py-3">
+          <AlertTriangle size={16} className="shrink-0 text-red-400" />
+          <p className="flex-1 text-[13px] text-red-100">
+            ¿Dar de baja a <b>{confirmarBaja.name}</b>? Desaparece del cuadrante y de la
+            asignación diaria. Su historial se queda: no se borra nada.
+          </p>
+          <button onClick={() => darDeBaja(confirmarBaja)}
+            className="rounded-lg bg-red-500/20 px-3 py-1.5 text-[12px] font-semibold text-red-200 hover:bg-red-500/30">
+            Sí, dar de baja
+          </button>
+          <button onClick={() => setConfirmarBaja(null)}
+            className="rounded-lg px-3 py-1.5 text-[12px] font-semibold text-dark-400 hover:text-dark-100">
+            Cancelar
+          </button>
         </div>
       )}
 
@@ -664,17 +1026,21 @@ export default function Turnos() {
         </div>
       ) : (
         <div className="card overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
+          <table ref={tablaRef} onMouseLeave={() => cruz(null)}
+            className="w-full border-collapse text-sm">
             <thead>
               <tr>
                 <th className="sticky left-0 z-10 bg-dark-900 px-3 py-2 text-left text-xs font-semibold uppercase text-dark-500">
                   {t('turns.driver')}
                 </th>
-                {dias.map((f) => (
-                  <th key={f} className={`px-1 py-2 text-center ${finde(f) ? 'bg-dark-800/40' : ''}`}>
-                    <button onClick={() => columnaEntera(f)} disabled={!pincel}
-                      title={pincel ? `Poner ${t(TIPOS[pincel].k)} a todos este día` : 'Elige un pincel para rellenar la columna'}
-                      className="rounded px-1 py-0.5 transition enabled:hover:bg-brand-500/15 disabled:cursor-default">
+                {dias.map((f, ci) => (
+                  <th key={f} data-col={ci}
+                    className={`border-r border-dark-800/70 px-1 py-2 text-center ${
+                      finde(f) ? 'bg-dark-800/40' : ''} ${
+                      lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
+                    <button onClick={() => columnaEntera(f)}
+                      title={pincel ? `Poner ${uiDe(pincel).etiqueta} a todos este día` : 'Vaciar este día a todos'}
+                      className="rounded px-1 py-0.5 transition hover:bg-brand-500/15">
                       <div className="text-[10px] uppercase text-dark-500">{fmtDia(f)}</div>
                       <div className="text-[11px] font-semibold text-dark-300">{fmtNum(f)}</div>
                     </button>
@@ -717,31 +1083,54 @@ export default function Turnos() {
               </tr>
             </thead>
             <tbody>
-              {visibles.map((d) => (
-                <tr key={d.id} className="group border-b border-dark-800/50 last:border-0">
-                  <td className="sticky left-0 z-10 flex items-center gap-2 bg-dark-900 px-3 py-1.5">
-                    <span className="max-w-[10rem] truncate text-[13px] text-dark-200" title={d.name}>{d.name}</span>
-                    <span className="shrink-0 rounded bg-dark-800 px-1.5 text-[10px] font-bold tabular-nums text-dark-400"
+              {visibles.map((d, iFila) => (
+                <tr key={d.id}
+                  /* Filas alternas. En una tabla de 31 columnas es lo que evita
+                     leer el día de la fila de al lado — y es la única mejora de
+                     legibilidad en tablas densas que sale medida en los
+                     estudios de usabilidad, no por gusto. */
+                  className={`group ${iFila % 2 ? 'bg-dark-800/[0.18]' : ''}`}>
+                  <td className={`sticky left-0 z-10 flex items-center gap-2 border-r border-dark-700 px-3 ${
+                    iFila % 2 ? 'bg-[#17171a]' : 'bg-dark-900'} ${denso ? 'py-0.5' : 'py-1.5'}`}>
+                    <span className={`shrink-0 rounded px-1.5 text-[10px] font-bold tabular-nums ${
+                      (totales[d.id] ?? 0) === 0 ? 'bg-dark-800 text-dark-600' : 'bg-dark-800 text-dark-300'}`}
                       title="Días de trabajo en lo que estás viendo">
                       {totales[d.id] ?? 0}
                     </span>
-                    <span className="ml-auto hidden shrink-0 gap-0.5 group-hover:flex">
-                      {Object.entries(TIPOS).map(([k, v]) => (
-                        <button
-                          key={k} onClick={() => filaEntera(d.id, k)} title={t('turns.fill').replace('{t}', t(v.k))}
-                          className="h-4 w-4 rounded border border-dark-700 text-[9px] font-bold text-dark-500 hover:text-dark-200"
-                        >{v.letra}</button>
-                      ))}
+                    <span className={`max-w-[11rem] truncate text-[13px] ${
+                      enCuadrante.has(d.id) ? 'text-dark-200' : 'text-dark-500 italic'}`} title={d.name}>
+                      {d.name}
+                    </span>
+                    <span className="ml-auto hidden shrink-0 items-center gap-1 group-hover:flex">
+                      <button onClick={() => filaEntera(d.id, pincel)}
+                        title={pincel
+                          ? `Poner ${uiDe(pincel).etiqueta} a ${d.name} en todos los días que se ven`
+                          : 'Elige un código arriba para rellenar la fila'}
+                        disabled={!pincel}
+                        className="rounded border border-dark-700 px-1 text-[9px] font-bold text-dark-500 hover:text-dark-200 disabled:opacity-30">
+                        rellenar
+                      </button>
+                      {!enCuadrante.has(d.id) && (
+                        <button onClick={() => setConfirmarBaja(d)} title={`Dar de baja a ${d.name}`}
+                          className="rounded border border-dark-700 p-0.5 text-dark-500 hover:border-red-500/50 hover:text-red-300">
+                          <UserMinus size={11} />
+                        </button>
+                      )}
                     </span>
                   </td>
-                  {dias.map((f) => {
+                  {dias.map((f, ci) => {
                     const k = `${d.id}|${f}`
-                    const tipo = grid[k] || 'libre'
-                    const ui = TIPOS[tipo]
+                    const cod = grid[k]
+                    const ui = cod ? uiDe(cod) : null
                     const choca = choques.has(k)          // trabaja un día que tiene concedido
                     const concedido = aprobados.has(k)    // día libre aprobado
+                    const hora = horas.current[k]
                     return (
-                      <td key={f} className={`px-1 py-1 text-center ${finde(f) ? 'bg-dark-800/40' : ''}`}>
+                      <td key={f} data-col={ci}
+                        className={`border-r border-dark-800/70 px-0.5 text-center ${
+                          denso ? 'py-0' : 'py-0.5'} ${finde(f) ? 'bg-dark-800/40' : ''} ${
+                          lunes(f) ? 'border-l border-l-dark-600' : ''}`}
+                        onMouseEnter={(e) => cruz(e.currentTarget)}>
                         <button
                           onMouseDown={(e) => {
                             // Sólo el botón izquierdo: con el derecho se abre el
@@ -755,16 +1144,19 @@ export default function Turnos() {
                             // Al arrastrar no se apila un paso de deshacer por
                             // celda: se deshace la pincelada entera, que es lo
                             // que espera quien la ha dado.
-                            if (pintando.current && pincel) aplicar(d.id, f, false)
+                            if (pintando.current) aplicar(d.id, f, false)
                           }}
-                          title={`${d.name} · ${fmtNum(f)} · ${t(ui.k)}${
-                            choca ? ' — OJO: tiene este día APROBADO libre' : (concedido ? ' — día libre aprobado' : '')}`}
-                          className={`h-6 w-7 select-none rounded border text-[11px] font-bold transition hover:brightness-125 ${
-                            choca ? 'border-red-500 bg-red-500/25 text-red-200 ring-1 ring-red-500/70'
-                              : concedido ? 'border-emerald-500/50 bg-emerald-500/[0.07] text-emerald-400/80'
-                                : ui.cls}`}
+                          title={`${d.name} · ${fmtNum(f)} · ${ui ? ui.etiqueta : 'sin poner'}${
+                            hora ? ` · entra a las ${hora}` : ''}${
+                            choca ? ' — OJO: tiene este día APROBADO libre'
+                              : (concedido ? ' — día libre aprobado' : '')}`}
+                          className={`w-[2.15rem] select-none rounded-[3px] border text-[10px] font-bold leading-none transition hover:brightness-125 ${
+                            denso ? 'h-[1.15rem]' : 'h-6'} ${
+                            choca ? 'border-red-500 bg-red-500/25 text-red-100 ring-1 ring-red-500/70'
+                              : !ui ? 'border-dashed border-dark-800 text-dark-700 hover:border-dark-600'
+                                : COLORES[ui.color] + (concedido ? ' ring-1 ring-emerald-400/70' : '')}`}
                         >
-                          {choca ? '!' : ui.letra}
+                          {ui ? corto(cod) : '·'}
                         </button>
                       </td>
                     )
@@ -776,16 +1168,10 @@ export default function Turnos() {
         </div>
       )}
 
-      {/* Leyenda */}
-      <div className="flex flex-wrap items-center gap-3 text-[11px] text-dark-500">
-        {Object.entries(TIPOS).map(([k, v]) => (
-          <span key={k} className="flex items-center gap-1.5">
-            <span className={`inline-flex h-4 w-5 items-center justify-center rounded border text-[9px] font-bold ${v.cls}`}>{v.letra}</span>
-            {t(v.k)}
-          </span>
-        ))}
-        <span className="text-dark-600">· {t('turns.hint')}</span>
-      </div>
+      {/* (La leyenda vieja estaba aqui, entre la tabla y los paneles. Se quito
+          el 22-08-2026: duplicaba la de abajo y decia 'pulsa una celda para
+          cambiar el turno', que dejo de ser verdad en cuanto hubo pincel. Una
+          leyenda que miente es peor que ninguna.) */}
 
       {/* ── Lo que va a hacer el Excel, ANTES de escribirlo ─────────────────
           Con 61 conductores y 31 días son casi 1.900 turnos. Escribirlos sin
@@ -894,15 +1280,23 @@ export default function Turnos() {
 
       {!cargando && drivers?.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-1 text-[11px] text-dark-500">
-          {Object.entries(TIPOS).map(([k, v]) => (
-            <span key={k} className="flex items-center gap-1.5">
-              <span className={`inline-flex h-4 w-5 items-center justify-center rounded border text-[9px] font-bold ${v.cls}`}>{v.letra}</span>
-              {t(v.k)}
-            </span>
-          ))}
+          {/* Agrupada por FAMILIA de color, que es como se lee: primero ves de
+              qué color es y luego, si hace falta, qué pone. Una leyenda de
+              dieciséis entradas sueltas no la mira nadie. */}
+          {Object.entries(FAMILIA_NOMBRE).map(([fam, nombre]) => {
+            const suyos = paleta.filter(({ ui }) => ui.color === fam)
+            if (!suyos.length) return null
+            return (
+              <span key={fam} className="flex items-center gap-1.5">
+                <span className={`inline-flex h-4 w-4 rounded border ${COLORES[fam]}`} />
+                <span className="text-dark-400">{nombre}:</span>
+                <span className="text-dark-500">{suyos.map(({ cod }) => cod).join(', ')}</span>
+              </span>
+            )
+          })}
           <span className="flex items-center gap-1.5">
-            <span className="inline-flex h-4 w-5 items-center justify-center rounded border border-emerald-500/50 bg-emerald-500/[0.07] text-[9px] font-bold text-emerald-400/80">L</span>
-            Día libre aprobado
+            <span className="inline-flex h-4 min-w-[1.6rem] items-center justify-center rounded border border-dashed border-dark-800 px-1 text-[9px] font-bold text-dark-700">·</span>
+            Sin poner
           </span>
           <span className="flex items-center gap-1.5">
             <span className="inline-flex h-4 w-5 items-center justify-center rounded border border-red-500 bg-red-500/25 text-[9px] font-bold text-red-200">!</span>
