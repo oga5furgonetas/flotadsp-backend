@@ -1,0 +1,450 @@
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { useOutletContext } from 'react-router-dom'
+import {
+  Loader2, ClipboardPaste, Check, X, AlertTriangle, IdCard, Search, Users,
+} from 'lucide-react'
+import { pegarDiario, diariosPorConductor, vincularTransporterIds } from '../api'
+import { lista } from '../../lib/lista'
+import { isoLocal } from '../../lib/fecha'
+
+/* ── CONTADOR DE DNRs ────────────────────────────────────────────────────────
+
+   Lo que cuenta como defecto es DSC = 'Y'. No al revés, y no es una opinión:
+   está conciliado contra 4 scorecards reales de Amazon en
+   docs/REPORTES_DIARIOS.md. Las filas con DSC = 'N' son DNRs que existen pero
+   NO puntúan, y por eso se enseñan las dos cifras separadas — sumarlas en una
+   sola daría un número que no cuadra con lo que Amazon te factura.
+
+   Y hay dos trampas que la pantalla tiene que respetar, las dos medidas:
+     · el reporte del día F trae el bloque DNR de F−2;
+     · la columna DSC se rellena 2-4 días TARDE, así que un bloque recién
+       bajado viene entero a 'N' y parecería un día perfecto. */
+
+const domingoDe = (d) => {
+  const x = new Date(d)
+  x.setHours(12, 0, 0, 0)
+  x.setDate(x.getDate() - x.getDay())
+  return x
+}
+
+export default function Diarios() {
+  const { center } = useOutletContext()
+  const noCenter = center === 'Todos'
+
+  const [rango, setRango] = useState(() => {
+    const d = domingoDe(new Date())
+    return { desde: isoLocal(d), hasta: isoLocal(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 6)) }
+  })
+  const [datos, setDatos] = useState(null)
+  const [cargando, setCargando] = useState(false)
+  const [err, setErr] = useState('')
+  const [aviso, setAviso] = useState('')
+  const [ocupado, setOcupado] = useState('')
+  const [busca, setBusca] = useState('')
+  const [abierto, setAbierto] = useState(null)      // transporter_id desplegado
+
+  const [verPegar, setVerPegar] = useState(false)
+  const [texto, setTexto] = useState('')
+  const [previa, setPrevia] = useState(null)
+
+  const [verIds, setVerIds] = useState(false)
+  const [textoIds, setTextoIds] = useState('')
+  const [previaIds, setPreviaIds] = useState(null)
+
+  const cargar = useCallback(async () => {
+    if (noCenter) return
+    setCargando(true); setErr('')
+    try {
+      const r = await diariosPorConductor(center, rango.desde, rango.hasta)
+      setDatos(r.data)
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudieron cargar los diarios.')
+    } finally { setCargando(false) }
+  }, [center, rango, noCenter])
+
+  useEffect(() => { cargar() }, [cargar])
+
+  const previsualizar = async () => {
+    setOcupado('previa'); setErr(''); setAviso('')
+    try {
+      const r = await pegarDiario({ texto, center })
+      setPrevia(r.data)
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo leer lo pegado.')
+    } finally { setOcupado('') }
+  }
+
+  const confirmar = async () => {
+    setOcupado('guardar'); setErr('')
+    try {
+      const r = await pegarDiario({ texto, center, confirmar: true })
+      setPrevia(null); setTexto(''); setVerPegar(false)
+      setAviso(`Guardado: ${r.data.dnr_guardados} filas DNR del ${r.data.fecha_dnr}`
+        + `${r.data.clasificados_ahora ? ` · ${r.data.clasificados_ahora} pasaron a defecto al reclasificarse` : ''}`)
+      await cargar()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo guardar.')
+    } finally { setOcupado('') }
+  }
+
+  const previsualizarIds = async () => {
+    setOcupado('ids'); setErr('')
+    try {
+      const r = await vincularTransporterIds({ texto: textoIds })
+      setPreviaIds(r.data)
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo leer la lista.')
+    } finally { setOcupado('') }
+  }
+
+  const confirmarIds = async () => {
+    setOcupado('ids'); setErr('')
+    try {
+      const r = await vincularTransporterIds({ texto: textoIds, confirmar: true })
+      setPreviaIds(null); setTextoIds(''); setVerIds(false)
+      setAviso(`${r.data.n_vinculan} conductores vinculados con su Transporter ID.`)
+      await cargar()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudieron guardar.')
+    } finally { setOcupado('') }
+  }
+
+  const filas = useMemo(() => {
+    const q = busca.trim().toLowerCase()
+    const cs = lista(datos?.conductores)
+    if (!q) return cs
+    return cs.filter((c) => (c.driver_name || c.transporter_id || '').toLowerCase().includes(q))
+  }, [datos, busca])
+
+  if (noCenter) {
+    return (
+      <div className="card flex flex-col items-center gap-3 p-10 text-center">
+        <Users size={28} className="text-dark-500" />
+        <p className="text-dark-300">Elige un centro arriba para ver sus DNRs.</p>
+      </div>
+    )
+  }
+
+  const t = datos?.totales || {}
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="flex items-center gap-2 text-xl font-bold">
+          <AlertTriangle size={20} /> DNR · {center}
+        </h1>
+        <div className="flex items-center gap-1.5">
+          <input type="date" value={rango.desde}
+            onChange={(e) => e.target.value && setRango((r) => ({ ...r, desde: e.target.value }))}
+            className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1 text-[12.5px] font-semibold text-dark-100" />
+          <span className="text-dark-600">→</span>
+          <input type="date" value={rango.hasta}
+            onChange={(e) => e.target.value && setRango((r) => ({ ...r, hasta: e.target.value }))}
+            className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1 text-[12.5px] font-semibold text-dark-100" />
+          <span className="ml-1 text-[11px] text-dark-600">por fecha de concesión</span>
+        </div>
+        <div className="ml-auto flex gap-2">
+          <button onClick={() => setVerIds((v) => !v)}
+            className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-3 py-1.5 text-[12.5px] font-semibold text-dark-300 hover:text-dark-100">
+            <IdCard size={15} /> Transporter IDs
+          </button>
+          <button onClick={() => setVerPegar((v) => !v)} className="btn-primary flex items-center gap-1.5 text-[12.5px]">
+            <ClipboardPaste size={15} /> Pegar Daily Report
+          </button>
+        </div>
+      </div>
+
+      {err && <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{err}</p>}
+      {aviso && <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">{aviso}</p>}
+
+      {/* Las cuatro cifras. Separadas a propósito: el total y los defectos NO
+          son lo mismo y juntarlos daría un número que no cuadra con Amazon. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[['DNRs en total', t.dnr_total, 'text-dark-100'],
+          ['Defectos (DSC = Y)', t.defectos, 'text-red-300'],
+          ['No puntúan (DSC = N)', t.limpias, 'text-emerald-300'],
+          ['Sin clasificar', t.sin_clasificar, 'text-amber-300']].map(([lbl, v, cls]) => (
+          <div key={lbl} className="rounded-xl border border-dark-800 bg-dark-900/60 px-3.5 py-3">
+            <p className="text-[11px] uppercase tracking-wider text-dark-500">{lbl}</p>
+            <p className={`text-2xl font-bold tabular-nums ${cls}`}>{v ?? 0}</p>
+          </div>
+        ))}
+      </div>
+
+      {datos?.sin_nombre?.length > 0 && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-3.5 py-2.5">
+          <p className="text-[12.5px] text-amber-200">
+            <b>{datos.sin_nombre.length}</b> {datos.sin_nombre.length === 1 ? 'ID no tiene' : 'IDs no tienen'} nombre:
+            salen como código. {' '}
+            <button onClick={() => setVerIds(true)} className="underline underline-offset-2 hover:text-amber-100">
+              Vincularlos
+            </button>
+          </p>
+          <p className="mt-1 font-mono text-[11px] text-amber-200/60">{datos.sin_nombre.join(' · ')}</p>
+        </div>
+      )}
+
+      {datos?.dias_con_datos?.length > 0 && (
+        <p className="px-1 text-[11.5px] text-dark-600">
+          Días cargados en este rango: {datos.dias_con_datos.length} ({datos.dias_con_datos.join(' · ')})
+        </p>
+      )}
+
+      {/* ── PEGAR EL REPORTE ──────────────────────────────────────────────── */}
+      {verPegar && (
+        <div className="card p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <ClipboardPaste size={16} className="text-brand-400" />
+            <h3 className="text-sm font-bold text-dark-100">Pegar el Daily Report de Cortex</h3>
+            <button onClick={() => { setVerPegar(false); setPrevia(null) }}
+              className="ml-auto text-dark-500 hover:text-dark-200"><X size={16} /></button>
+          </div>
+          <p className="mb-2 text-[12.5px] leading-relaxed text-dark-400">
+            Copia y pega las dos tablas: el resumen (Transporter ID · RTS · DNR · POD · CC)
+            y el detalle de DNR con su título. Puedes pegarlas juntas y en cualquier orden.
+            El día del bloque DNR sale de su propio título, y si no está se calcula: el
+            reporte del día F trae siempre el bloque de F−2.
+          </p>
+          <textarea value={texto} onChange={(e) => { setTexto(e.target.value); setPrevia(null) }}
+            rows={7} placeholder="Pega aquí el reporte entero"
+            className="w-full rounded-lg border border-dark-700 bg-dark-950 p-2.5 font-mono text-[11px] text-dark-200 outline-none placeholder:text-dark-700" />
+          <div className="mt-2 flex items-center gap-3">
+            <button onClick={previsualizar} disabled={!texto.trim() || !!ocupado}
+              className="btn-primary flex items-center gap-1.5 text-sm disabled:opacity-40">
+              {ocupado === 'previa' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+              Ver qué va a entrar
+            </button>
+            <span className="text-[11.5px] text-dark-600">
+              {texto ? `${texto.trim().split('\n').length} líneas` : ''}
+            </span>
+          </div>
+
+          {previa && (
+            <div className="mt-3 rounded-lg border border-dark-700 bg-dark-900/60 p-3">
+              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                {[['Reporte', previa.fecha_reporte], ['Bloque DNR', previa.fecha_dnr],
+                  ['Semana Amazon', previa.semana], ['Conductores', previa.conductores],
+                  ['Filas DNR', previa.filas_dnr]].map(([k, v]) => (
+                  <div key={k}>
+                    <p className="text-[10.5px] uppercase tracking-wider text-dark-600">{k}</p>
+                    <p className="text-[13px] font-semibold text-dark-100">{v ?? '—'}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* EL CRUCE. Es lo único que dice si lo pegado está completo. */}
+              <div className={`mt-3 rounded-lg px-3 py-2 text-[12.5px] ${
+                previa.descuadres?.length
+                  ? 'border border-red-500/40 bg-red-500/[0.08] text-red-200'
+                  : 'border border-emerald-500/30 bg-emerald-500/[0.07] text-emerald-200'}`}>
+                {previa.descuadres?.length ? (
+                  <>
+                    <b>{previa.descuadres.length} no cuadran</b> entre el resumen y el detalle.
+                    Suele ser que falta media tabla por copiar:
+                    <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-red-200/80">
+                      {previa.descuadres.map((d) => (
+                        <li key={d.transporter_id}>
+                          {d.transporter_id}: el resumen dice {d.dice_el_resumen}, hay {d.filas_de_detalle} filas
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <>Cuadra: el resumen suma <b>{previa.dnr_resumen}</b> DNRs y el detalle trae{' '}
+                    <b>{previa.dnr_detalle}</b> filas, conductor a conductor.</>
+                )}
+              </div>
+
+              {(previa.avisos || []).map((a) => (
+                <p key={a} className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[12px] leading-relaxed text-amber-200">
+                  {a}
+                </p>
+              ))}
+
+              <button onClick={confirmar} disabled={!!ocupado}
+                className="btn-primary mt-3 flex items-center gap-1.5 text-sm disabled:opacity-40">
+                {ocupado === 'guardar' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                Guardar {previa.filas_dnr} filas
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── VINCULAR IDs ──────────────────────────────────────────────────── */}
+      {verIds && (
+        <div className="card p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <IdCard size={16} className="text-brand-400" />
+            <h3 className="text-sm font-bold text-dark-100">Transporter ID de cada conductor</h3>
+            <button onClick={() => { setVerIds(false); setPreviaIds(null) }}
+              className="ml-auto text-dark-500 hover:text-dark-200"><X size={16} /></button>
+          </div>
+          <p className="mb-2 text-[12.5px] leading-relaxed text-dark-400">
+            Una persona por línea: nombre, tabulador, ID. Los nombres no tienen que estar
+            escritos igual que en las fichas — se emparejan por palabras. Antes de guardar
+            se comprueba contra el historial de rutas, que trae el ID y el nombre juntos y
+            viene de Amazon.
+          </p>
+          <textarea value={textoIds} onChange={(e) => { setTextoIds(e.target.value); setPreviaIds(null) }}
+            rows={6} placeholder={'NOMBRE APELLIDOS\tA1B2C3D4E5F6G7'}
+            className="w-full rounded-lg border border-dark-700 bg-dark-950 p-2.5 font-mono text-[11px] text-dark-200 outline-none placeholder:text-dark-700" />
+          <button onClick={previsualizarIds} disabled={!textoIds.trim() || !!ocupado}
+            className="btn-primary mt-2 flex items-center gap-1.5 text-sm disabled:opacity-40">
+            {ocupado === 'ids' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+            Comprobar
+          </button>
+
+          {previaIds && (
+            <div className="mt-3 space-y-2">
+              <p className="text-[12.5px] text-dark-300">
+                {previaIds.pares_leidos} parejas leídas · <b className="text-emerald-300">{previaIds.n_vinculan} se vinculan</b>
+                {previaIds.ya_estaban > 0 && ` · ${previaIds.ya_estaban} ya estaban`}
+              </p>
+              {previaIds.discrepan?.length > 0 && (
+                <div className="rounded-lg border border-red-500/40 bg-red-500/[0.08] px-3 py-2 text-[12px] text-red-200">
+                  <b>{previaIds.discrepan.length} no coinciden con el historial de Amazon.</b> No se tocan:
+                  un ID mal puesto le cuelga los defectos de uno a otro.
+                  <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-red-200/80">
+                    {previaIds.discrepan.map((d) => (
+                      <li key={d.transporter_id}>{d.transporter_id}: tú dices «{d.tu_lista}», el historial «{d.el_historial}»</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {previaIds.conflictos?.length > 0 && (
+                <p className="rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[12px] text-amber-200">
+                  {previaIds.conflictos.length} ya tenían OTRO ID guardado y no se pisan:{' '}
+                  {previaIds.conflictos.map((c) => `${c.nombre} (${c.tenia} → ${c.quieres})`).join(' · ')}
+                </p>
+              )}
+              {previaIds.sin_ficha?.length > 0 && (
+                <p className="rounded-lg border border-dark-700 bg-dark-900/60 px-3 py-2 text-[12px] text-dark-400">
+                  {previaIds.sin_ficha.length} sin ficha de conductor en la app (oficina, bajas o nombres nuevos):{' '}
+                  {previaIds.sin_ficha.slice(0, 10).map((s) => s.nombre).join(' · ')}
+                  {previaIds.sin_ficha.length > 10 ? ` y ${previaIds.sin_ficha.length - 10} más` : ''}
+                </p>
+              )}
+              {previaIds.sin_cubrir?.length > 0 && (
+                <p className="rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[12px] text-amber-200">
+                  Salen en los reportes y esta lista no los cubre:{' '}
+                  <span className="font-mono">{previaIds.sin_cubrir.map((s) => s.transporter_id).join(' · ')}</span>
+                </p>
+              )}
+              <button onClick={confirmarIds} disabled={!previaIds.n_vinculan || !!ocupado}
+                className="btn-primary flex items-center gap-1.5 text-sm disabled:opacity-40">
+                <Check size={14} /> Vincular {previaIds.n_vinculan}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── LA TABLA ──────────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-2">
+        <div className="relative">
+          <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dark-600" />
+          <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar conductor"
+            className="w-52 rounded-lg border border-dark-700 bg-dark-950 py-1.5 pl-7 pr-2 text-[12.5px] text-dark-100 placeholder:text-dark-600" />
+        </div>
+        <span className="text-[11.5px] text-dark-600">{filas.length} conductores</span>
+      </div>
+
+      {cargando ? (
+        <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> Cargando…</div>
+      ) : !filas.length ? (
+        <div className="card flex flex-col items-center gap-3 p-10 text-center">
+          <AlertTriangle size={26} className="text-dark-600" />
+          <p className="text-dark-400">No hay diarios cargados en estas fechas.</p>
+          <p className="text-[12.5px] text-dark-600">Pega el Daily Report de Cortex para empezar.</p>
+        </div>
+      ) : (
+        <div className="card overflow-x-auto">
+          <table className="w-full text-left text-[13px]">
+            <thead>
+              <tr className="text-[10.5px] uppercase tracking-wider text-dark-600">
+                <th className="px-3 py-2 font-semibold">Conductor</th>
+                <th className="px-2 py-2 text-center font-semibold">DNRs</th>
+                <th className="px-2 py-2 text-center font-semibold text-red-400/80">Defectos</th>
+                <th className="px-2 py-2 text-center font-semibold">No puntúan</th>
+                <th className="px-2 py-2 text-center font-semibold">Sin clasif.</th>
+                <th className="px-2 py-2 text-center font-semibold">RTS</th>
+                <th className="px-2 py-2 text-center font-semibold">POD</th>
+                <th className="px-2 py-2 text-center font-semibold">CC</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((c, i) => (
+                <Fragment key={c.transporter_id}>
+                  <tr
+                    onClick={() => setAbierto(abierto === c.transporter_id ? null : c.transporter_id)}
+                    className={`cursor-pointer border-t border-dark-800/70 hover:bg-dark-800/30 ${i % 2 ? 'bg-dark-800/[0.15]' : ''}`}>
+                    <td className="px-3 py-1.5">
+                      <span className={c.driver_name ? 'text-dark-200' : 'font-mono text-[11px] text-amber-300/80'}>
+                        {c.driver_name || c.transporter_id}
+                      </span>
+                      {c.solo_historial && (
+                        <span className="ml-1.5 rounded bg-dark-800 px-1 text-[9px] text-dark-500" title="El nombre sale del historial de rutas: esta persona no tiene ficha activa">
+                          sin ficha
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5 text-center font-semibold tabular-nums text-dark-200">{c.dnr_total}</td>
+                    <td className={`px-2 py-1.5 text-center font-bold tabular-nums ${c.defectos ? 'text-red-300' : 'text-dark-600'}`}>
+                      {c.defectos}
+                    </td>
+                    <td className="px-2 py-1.5 text-center tabular-nums text-dark-500">{c.limpias}</td>
+                    <td className={`px-2 py-1.5 text-center tabular-nums ${c.sin_clasificar ? 'text-amber-300' : 'text-dark-700'}`}>
+                      {c.sin_clasificar || '—'}
+                    </td>
+                    <td className="px-2 py-1.5 text-center tabular-nums text-dark-400">{c.rts ?? '—'}</td>
+                    <td className="px-2 py-1.5 text-center tabular-nums text-dark-400">{c.pod_fails ?? '—'}</td>
+                    <td className="px-2 py-1.5 text-center tabular-nums text-dark-400">{c.cc_fails ?? '—'}</td>
+                  </tr>
+                  {abierto === c.transporter_id && c.detalle?.length > 0 && (
+                    <tr className="bg-dark-950/60">
+                      <td colSpan={8} className="px-3 py-2">
+                        <p className="mb-1 font-mono text-[10.5px] text-dark-600">{c.transporter_id}</p>
+                        <table className="w-full text-left text-[11.5px]">
+                          <thead>
+                            <tr className="text-[10px] uppercase tracking-wider text-dark-600">
+                              <th className="py-1 pr-3 font-semibold">Concesión</th>
+                              <th className="py-1 pr-3 font-semibold">Entrega</th>
+                              <th className="py-1 pr-3 font-semibold">Tracking</th>
+                              <th className="py-1 pr-3 font-semibold">Dónde se dejó</th>
+                              <th className="py-1 pr-3 font-semibold">Valor</th>
+                              <th className="py-1 font-semibold">DSC</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {c.detalle.map((d) => (
+                              <tr key={d.tracking_id} className="text-dark-400">
+                                <td className="py-0.5 pr-3 tabular-nums">{d.fecha_concesion}</td>
+                                <td className="py-0.5 pr-3 tabular-nums text-dark-600">{d.fecha_entrega || '—'}</td>
+                                <td className="py-0.5 pr-3 font-mono text-[10.5px]">{d.tracking_id}</td>
+                                <td className="py-0.5 pr-3">{(d.scan || '').replace('DELIVERED_TO_', '').replace(/_/g, ' ').toLowerCase()}</td>
+                                <td className="py-0.5 pr-3 tabular-nums">{d.valor || '—'}</td>
+                                <td className="py-0.5">
+                                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                                    d.dsc === 'Y' ? 'bg-red-500/20 text-red-300'
+                                      : d.dsc === 'N' ? 'bg-emerald-500/15 text-emerald-300'
+                                        : 'bg-amber-500/15 text-amber-300'}`}>
+                                    {d.dsc || 'sin clasificar'}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}

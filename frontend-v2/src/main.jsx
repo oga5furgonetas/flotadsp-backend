@@ -214,6 +214,7 @@ const PanelTalleres = lazy(() => import('./panel/pages/Talleres'))
 const PanelAparcamiento = lazy(() => import('./panel/pages/Aparcamiento'))
 const PanelCasasAlquiler = lazy(() => import('./panel/pages/CasasAlquiler'))
 const PanelScorecard = lazy(() => import('./panel/pages/Scorecard'))
+const PanelDiarios = lazy(() => import('./panel/pages/Diarios'))
 const PanelConfiguracion = lazy(() => import('./panel/pages/Configuracion'))
 const PanelTurnos = lazy(() => import('./panel/pages/Turnos'))
 const PanelUsuarios = lazy(() => import('./panel/pages/Usuarios'))
@@ -305,6 +306,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route index element={<PanelDashboard />} />
                 <Route path="mi-dia" element={<PanelMiDia />} />
                 <Route path="scorecard" element={<PanelScorecard />} />
+                <Route path="diarios" element={<PanelDiarios />} />
                 <Route path="conductores" element={<PanelConductores />} />
                 <Route path="turnos" element={<PanelTurnos />} />
                 <Route path="asignacion" element={<PanelAsignacion />} />

@@ -257,6 +257,12 @@ export function importShifts(file, center, mes, confirmar) {
 }
 /* El cuadrante en .xlsx. Se pide como blob porque el endpoint exige Bearer:
    un <a href> normal no manda la cabecera y devolveria un 401. */
+/* ── Reportes diarios de Cortex (DNR, RTS, POD, CC) ── */
+export const pegarDiario = (body) => api.post('/diarios/pegar', body)
+export const diariosPorConductor = (center, desde, hasta) =>
+  api.get('/diarios/conductores', { params: { center, desde, hasta } })
+export const vincularTransporterIds = (body) => api.post('/diarios/ids', body)
+
 export const exportarCuadrante = (center, desde, hasta) =>
   api.get('/shifts/export', { params: { center, desde, hasta }, responseType: 'blob' })
 
