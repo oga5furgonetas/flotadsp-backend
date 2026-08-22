@@ -19176,6 +19176,33 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
     }
 
 
+def _dia_parece_nombre(s: str) -> bool:
+    """¿Esto es el nombre de una persona, o una fila de datos con un ID dentro?
+
+    Sin esta comprobacion, cada fila del detalle de DNR —que lleva su
+    Transporter ID en medio— pasaba por una pareja valida y se guardaba como
+    "nombre" un churro de cuarenta campos.
+
+    Se pide lo minimo que cumple cualquier nombre y no cumple ninguna fila de
+    datos: solo letras y separadores, entre dos y seis palabras, y nada de
+    cifras (los codigos postales, los importes y las fechas caen aqui).
+    """
+    s = (s or "").strip()
+    if not (4 <= len(s) <= 60):
+        return False
+    if re.search(r"\d", s):
+        return False
+    # Se parte SOLO por espacios y puntos. El apostrofo y el guion van DENTRO
+    # de la palabra: partiendo por ellos, "O'Donnell" daba un trozo de una sola
+    # letra y el nombre entero se rechazaba.
+    palabras = [p for p in re.split(r"[\s.]+", s) if p]
+    if not (2 <= len(palabras) <= 6):
+        return False
+    LETRA = "A-Za-zÁÉÍÓÚÜÑÀÂÊÔÇáéíóúüñàâêôç"
+    return all(re.fullmatch(f"[{LETRA}]+(?:['’-][{LETRA}]+)*", p) and len(p) >= 2
+               for p in palabras)
+
+
 @api_router.post("/diarios/ids")
 async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_admin)):
     """Vincula Transporter IDs pegando una lista 'NOMBRE<tab>ID'.
@@ -19196,22 +19223,43 @@ async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_adm
     Un id mal puesto le cuelga los defectos de uno a otro, y eso no se descubre
     nunca porque el numero siempre parece razonable.
     """
-    lineas = str(data.get("texto") or "").replace(chr(13), "").split(chr(10))
-    pares, mal = [], []
+    texto = str(data.get("texto") or "")
+
+    # ¿Esto es un Daily Report en vez de una lista de IDs? Se mira ANTES de
+    # intentar leerlo. Cada fila de DNR trae un Transporter ID y un monton de
+    # texto detras, asi que sin esta guarda el lector se lo tragaba y contestaba
+    # "4 parejas leidas", con la fila entera puesta como si fuera el nombre de
+    # una persona. Un mensaje equivocado es peor que un error: manda a buscar el
+    # fallo donde no esta.
+    bajo = texto.lower()
+    if ("tracking id" in bajo and "delivery" in bajo) or "daily report" in bajo:
+        raise HTTPException(400,
+            "Eso es un Daily Report, no una lista de IDs. Pegalo en el boton "
+            "«Pegar Daily Report». Aqui va una persona por linea: el nombre, "
+            "un tabulador y su Transporter ID.")
+
+    lineas = texto.replace(chr(13), "").split(chr(10))
+    pares, mal, no_parecen = [], [], []
     for l in lineas:
         if not l.strip():
             continue
         trozos = [c.strip() for c in re.split(r"[\t;,]|\s{2,}", l) if c.strip()]
         ids = [c.upper() for c in trozos if _DIA_TID.match(c.upper())]
         nombre = " ".join(c for c in trozos if not _DIA_TID.match(c.upper())).strip()
-        if len(ids) == 1 and nombre:
+        if len(ids) == 1 and _dia_parece_nombre(nombre):
             pares.append({"nombre": nombre, "tid": ids[0]})
+        elif len(ids) == 1 and nombre:
+            no_parecen.append(nombre[:60])
         elif nombre:
-            mal.append(nombre)      # sin id, o con dos: se dice, no se adivina
+            mal.append(nombre[:60])   # sin id, o con dos: se dice, no se adivina
     if not pares:
-        raise HTTPException(400, "No he encontrado ninguna pareja nombre + ID. "
-                                 "Pega una persona por linea: el nombre, un "
-                                 "tabulador y el ID.")
+        detalle = "No he encontrado ninguna pareja nombre + ID."
+        if no_parecen:
+            detalle += (f" Hay {len(no_parecen)} lineas con un ID pero lo de al lado "
+                        f"no parece el nombre de una persona, por ejemplo: "
+                        f"«{no_parecen[0]}».")
+        detalle += (" Pega una persona por linea: el nombre, un tabulador y el ID.")
+        raise HTTPException(400, detalle)
 
     # Dos personas con el MISMO id es imposible, y hay que verlo antes de escribir.
     vistos, repetidos = {}, []
@@ -19279,6 +19327,7 @@ async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_adm
 
     salida = {
         "pares_leidos": len(pares), "sin_id": mal[:30],
+        "no_parecen_nombre": no_parecen[:10], "n_no_parecen": len(no_parecen),
         "vinculan": vinculan, "n_vinculan": len(vinculan), "ya_estaban": iguales,
         "sin_ficha": sin_ficha, "ambiguos": ambiguos,
         "conflictos": conflictos, "repetidos": repetidos, "discrepan": discrepan,

@@ -358,6 +358,25 @@ export default function Diarios() {
                   {previaIds.conflictos.map((c) => `${c.nombre} (${c.tenia} → ${c.quieres})`).join(' · ')}
                 </p>
               )}
+              {previaIds.sin_id?.length > 0 && (
+                <p className="rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[12px] leading-relaxed text-amber-200">
+                  {previaIds.sin_id.length} {previaIds.sin_id.length === 1 ? 'línea no traía' : 'líneas no traían'} ningún
+                  ID (o traían dos) y {previaIds.sin_id.length === 1 ? 'se ha' : 'se han'} dejado fuera:{' '}
+                  <span className="font-mono text-[11px] text-amber-200/60">
+                    «{previaIds.sin_id[0]}»{previaIds.sin_id.length > 1 ? ` y ${previaIds.sin_id.length - 1} más` : ''}
+                  </span>
+                </p>
+              )}
+              {previaIds.n_no_parecen > 0 && (
+                <p className="rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[12px] leading-relaxed text-amber-200">
+                  {previaIds.n_no_parecen} {previaIds.n_no_parecen === 1 ? 'línea tiene' : 'líneas tienen'} un
+                  ID pero lo de al lado no parece el nombre de una persona, así que
+                  {previaIds.n_no_parecen === 1 ? ' se ha' : ' se han'} dejado fuera:{' '}
+                  <span className="font-mono text-[11px] text-amber-200/60">
+                    «{previaIds.no_parecen_nombre?.[0]}»
+                  </span>
+                </p>
+              )}
               {previaIds.sin_ficha?.length > 0 && (
                 <p className="rounded-lg border border-dark-700 bg-dark-900/60 px-3 py-2 text-[12px] text-dark-400">
                   {previaIds.sin_ficha.length} sin ficha de conductor en la app (oficina, bajas o nombres nuevos):{' '}
