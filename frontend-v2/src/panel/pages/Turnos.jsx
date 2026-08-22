@@ -109,6 +109,15 @@ const TIPO_A_COD = { trabaja: '1', libre: 'N/T', extra: 'EXTRA' }
    mayúsculas y la lista parecía cualquier cosa menos alfabética. `localeCompare`
    con sensitivity 'base' iguala mayúsculas y tildes, que es como lo ordenaría
    una persona. */
+/* El fondo de una columna. Hoy manda sobre el fin de semana: si el sabado es
+   hoy, lo que hace falta saber es que es hoy.
+
+   Se devuelve UNA sola clase de fondo y no dos encadenadas a proposito: con
+   `bg-x bg-y` en la misma celda gana la que Tailwind haya puesto despues en la
+   hoja generada, que no se controla desde aqui y cambia entre compilaciones. */
+const fondoCol = (esHoy, esFinde) =>
+  esHoy ? 'bg-amber-400/[0.055]' : esFinde ? 'bg-dark-800/40' : ''
+
 const porNombre = (a, b) =>
   (a?.name || '').localeCompare(b?.name || '', 'es', { sensitivity: 'base' })
 
@@ -227,6 +236,10 @@ export default function Turnos() {
      de `desde`. En "mes completo" `dias` empieza el día 1 aunque la quincena
      empiece el 3: pidiendo desde el 3 los días 1 y 2 salían vacíos teniendo
      turnos guardados, y la cobertura de esos dos días marcaba 0. */
+  /* Hoy, para marcar su columna. Se calcula una vez: recalcularlo en cada
+     pintada no cambia nada y la fecha no se mueve mientras miras la pantalla. */
+  const hoy = useMemo(() => isoLocal(new Date()), [])
+
   const primerDia = dias[0]
   const hasta = dias[dias.length - 1]
 
@@ -1186,14 +1199,18 @@ export default function Turnos() {
                 </th>
                 {dias.map((f, ci) => (
                   <th key={f} data-col={ci}
-                    className={`border-r border-dark-800/70 px-1 py-2 text-center ${
-                      finde(f) ? 'bg-dark-800/40' : ''} ${
-                      lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
+                    className={`border-r border-dark-800/70 px-1 py-2 text-center ${fondoCol(f === hoy, finde(f))} ${
+                      f === hoy ? 'border-x border-x-amber-400/35'
+                        : lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
                     <button onClick={() => columnaEntera(f)}
                       title={pincel ? `Poner ${uiDe(pincel).etiqueta} a todos este día` : 'Vaciar este día a todos'}
                       className="rounded px-1 py-0.5 transition hover:bg-brand-500/15">
-                      <div className="text-[10px] uppercase text-dark-500">{fmtDia(f)}</div>
-                      <div className="text-[11px] font-semibold text-dark-300">{fmtNum(f)}</div>
+                      <div className={`text-[10px] uppercase ${f === hoy ? 'font-bold text-amber-400/90' : 'text-dark-500'}`}>
+                        {f === hoy ? 'hoy' : fmtDia(f)}
+                      </div>
+                      <div className={`text-[11px] font-semibold ${f === hoy ? 'text-amber-200' : 'text-dark-300'}`}>
+                        {fmtNum(f)}
+                      </div>
                     </button>
                   </th>
                 ))}
@@ -1212,8 +1229,8 @@ export default function Turnos() {
                 </th>
                 {dias.map((f, ci) => (
                   <td key={f} data-col={ci}
-                    className={`border-r border-dark-800/70 px-1 py-1 text-center ${
-                      finde(f) ? 'bg-dark-800/40' : ''} ${lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
+                    className={`border-r border-dark-800/70 px-1 py-1 text-center ${fondoCol(f === hoy, finde(f))} ${
+                      f === hoy ? 'border-x border-x-amber-400/35' : lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
                     <input
                       type="number" min="0" value={maximas[f] ?? ''} placeholder="—"
                       onChange={(e) => setMaximas((m) => ({ ...m, [f]: e.target.value }))}
@@ -1231,8 +1248,8 @@ export default function Turnos() {
                 </th>
                 {dias.map((f, ci) => (
                   <td key={f} data-col={ci}
-                    className={`border-r border-dark-800/70 px-1 py-1 text-center ${
-                      finde(f) ? 'bg-dark-800/40' : ''} ${lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
+                    className={`border-r border-dark-800/70 px-1 py-1 text-center ${fondoCol(f === hoy, finde(f))} ${
+                      f === hoy ? 'border-x border-x-amber-400/35' : lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
                     <input
                       type="number" min="0" value={demanda[f] ?? ''} placeholder="—"
                       onChange={(e) => setDemanda((d) => ({ ...d, [f]: e.target.value }))}
@@ -1271,8 +1288,8 @@ export default function Turnos() {
                   const dif = contra > 0 ? n - contra : 0
                   return (
                     <td key={f} data-col={ci}
-                      className={`border-r border-dark-800/70 px-1 py-1 text-center ${
-                        finde(f) ? 'bg-dark-800/40' : ''} ${lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
+                      className={`border-r border-dark-800/70 px-1 py-1 text-center ${fondoCol(f === hoy, finde(f))} ${
+                        f === hoy ? 'border-x border-x-amber-400/35' : lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
                       <span className="flex items-baseline justify-center gap-0.5"
                         title={`${n} ${n === 1 ? 'persona sale' : 'personas salen'} a ruta (BKP, Site y ride along no cuentan)${
                           piden > 0 ? ` · piden ${piden}` : ''}${max > 0 ? ` · máximo ${max}` : ''}${
@@ -1338,8 +1355,8 @@ export default function Turnos() {
                     return (
                       <td key={f} data-col={ci}
                         className={`border-r border-dark-800/70 px-0.5 text-center ${
-                          denso ? 'py-0' : 'py-0.5'} ${finde(f) ? 'bg-dark-800/40' : ''} ${
-                          lunes(f) ? 'border-l border-l-dark-600' : ''}`}
+                          denso ? 'py-0' : 'py-0.5'} ${fondoCol(f === hoy, finde(f))} ${
+                          f === hoy ? 'border-x border-x-amber-400/35' : lunes(f) ? 'border-l border-l-dark-600' : ''}`}
                         onMouseEnter={(e) => cruz(e.currentTarget)}>
                         <button
                           onMouseDown={(e) => {
