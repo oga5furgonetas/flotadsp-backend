@@ -98,7 +98,7 @@ export default function Diarios() {
   const previsualizarIds = async () => {
     setOcupado('ids'); setErr('')
     try {
-      const r = await vincularTransporterIds({ texto: textoIds })
+      const r = await vincularTransporterIds({ texto: textoIds, center })
       setPreviaIds(r.data)
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se pudo leer la lista.')
@@ -111,7 +111,7 @@ export default function Diarios() {
   const vincularDesdeHistorial = async (confirmar) => {
     setOcupado('auto'); setErr('')
     try {
-      const r = await vincularTransporterIds({ desde_historial: true, confirmar })
+      const r = await vincularTransporterIds({ desde_historial: true, center, confirmar })
       if (confirmar) {
         setPreviaIds(null)
         setAviso(`${r.data.n_vinculan} conductores vinculados desde el historial de Amazon.`)
@@ -127,7 +127,7 @@ export default function Diarios() {
   const confirmarIds = async () => {
     setOcupado('ids'); setErr('')
     try {
-      const r = await vincularTransporterIds({ texto: textoIds, confirmar: true })
+      const r = await vincularTransporterIds({ texto: textoIds, center, confirmar: true })
       setPreviaIds(null); setTextoIds(''); setVerIds(false)
       setAviso(`${r.data.n_vinculan} conductores vinculados con su Transporter ID.`)
       await cargar()
@@ -366,9 +366,38 @@ export default function Diarios() {
           {previaIds && (
             <div className="mt-3 space-y-2">
               <p className="text-[12.5px] text-dark-300">
-                {previaIds.pares_leidos} parejas leídas · <b className="text-emerald-300">{previaIds.n_vinculan} se vinculan</b>
+                {previaIds.pares_leidos} parejas leídas en {previaIds.centro} ·{' '}
+                <b className="text-emerald-300">{previaIds.n_vinculan} se vinculan</b>
                 {previaIds.ya_estaban > 0 && ` · ${previaIds.ya_estaban} ya estaban`}
               </p>
+              {previaIds.formato === 'dos columnas emparejadas por orden' && (
+                <p className="rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[12px] leading-relaxed text-amber-200">
+                  Lo has pegado en <b>dos bloques</b>: primero todos los nombres y después todos los
+                  IDs. Los he emparejado <b>por orden</b> — el primer nombre con el primer ID, y así.
+                  Míralo antes de confirmar: si el orden de las dos columnas no era el mismo,
+                  los defectos se le colgarían a quien no es.
+                </p>
+              )}
+              {/* Lo que SÍ se va a escribir, a la vista. Un emparejamiento por
+                  orden no se puede confirmar sin poder comprobarlo. */}
+              {previaIds.vinculan?.length > 0 && (
+                <div className="max-h-52 overflow-y-auto rounded-lg border border-dark-800">
+                  <table className="w-full text-left text-[12px]">
+                    <tbody>
+                      {previaIds.vinculan.map((v, i) => (
+                        <tr key={v.transporter_id} className={i % 2 ? 'bg-dark-800/[0.15]' : ''}>
+                          <td className="px-2 py-1 text-dark-200">{v.nombre}</td>
+                          <td className="px-2 py-1 font-mono text-[11px] text-dark-500">{v.transporter_id}</td>
+                          <td className="px-2 py-1 text-[11px] text-dark-600">
+                            {v.escrito && v.escrito !== v.nombre ? `escrito «${v.escrito}»` : ''}
+                            {v.de_baja ? ' · de baja' : ''}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
               {previaIds.discrepan?.length > 0 && (
                 <div className="rounded-lg border border-red-500/40 bg-red-500/[0.08] px-3 py-2 text-[12px] text-red-200">
                   <b>{previaIds.discrepan.length} no coinciden con el historial de Amazon.</b> No se tocan:

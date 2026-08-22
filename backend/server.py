@@ -19224,7 +19224,7 @@ def _dia_parece_nombre(s: str) -> bool:
 
 
 @api_router.post("/diarios/ids")
-async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_admin)):
+async def vincular_transporter_ids(data: dict = Body(...), user: dict = Depends(require_admin)):
     """Vincula Transporter IDs pegando una lista 'NOMBRE<tab>ID'.
 
     Sin esto el contador de DNRs muestra codigos como 'A2H4XH0AEQTVZY' en vez
@@ -19250,9 +19250,19 @@ async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_adm
     # las usara, mientras las 86 fichas de DGA1 seguian sin un solo ID y sus
     # DNR salian como codigo. Pedir una lista escrita a mano para un dato que
     # ya se tiene, y encima de mejor fuente, no tiene sentido.
+    # EL CENTRO ACOTA. Estando en DGA1 no tiene sentido proponer las parejas de
+    # OGA5: son gente de otro centro y sus DNR se cuentan aparte. Antes se
+    # recorria el historial entero y salian nombres de todas partes.
+    centro = (data.get("center") or "").strip()
+    if centro and centro.lower() != "todos" and not _user_can_see_center(user, centro):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+    filtro_centro = {}
+    if centro and centro.lower() != "todos":
+        filtro_centro = {"center": {"$regex": re.escape(centro), "$options": "i"}}
+
     if data.get("desde_historial"):
         cuenta = {}
-        async for r in db.route_history.find({}, {"_id": 0, "transporter_id": 1, "driver_name": 1}):
+        async for r in db.route_history.find(filtro_centro, {"_id": 0, "transporter_id": 1, "driver_name": 1}):
             tid = (r.get("transporter_id") or "").upper()
             nm = (r.get("driver_name") or "").strip()
             if tid and nm:
@@ -19278,20 +19288,58 @@ async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_adm
             "«Pegar Daily Report». Aqui va una persona por linea: el nombre, "
             "un tabulador y su Transporter ID.")
 
-    lineas = texto.replace(chr(13), "").split(chr(10))
+    # SE LEE POR TROZOS, NO POR LINEAS.
+    #
+    # Leer linea a linea daba por hecho un formato —un nombre, un tabulador, un
+    # id— que no es el unico que sale al copiar de sitios distintos. La lista de
+    # DGA1 venia separada por barras y con VARIAS personas en la misma linea, y
+    # el lector la rechazaba entera diciendo "no traian ningun ID", con un
+    # churro de sesenta caracteres como ejemplo. El dato estaba bien; el que no
+    # sabia leerlo era yo.
+    #
+    # Ahora se parte por CUALQUIER separador —barra, tabulador, punto y coma,
+    # coma, salto de linea o dos espacios— y se recorre la lista de trozos: cada
+    # vez que aparece un id, su nombre es lo que venia justo antes. Da igual si
+    # hay uno por linea, cinco por linea o todo seguido.
+    trozos = [c.strip() for c in re.split(r"[|\t;,\n\r]|\s{2,}", texto) if c.strip()]
+    es_id = [bool(_DIA_TID.match(c.upper())) for c in trozos]
+
+    # ── DOS COLUMNAS: todos los nombres y DESPUES todos los ids ────────────
+    # Sale asi al copiar dos columnas de una hoja que no estan pegadas. Leido
+    # "cada id va con lo de antes" se juntarian dos personas en un nombre y se
+    # emparejaria mal, que es peor que no leerlo. Se detecta el caso exacto
+    # —ningun id antes del ultimo nombre y misma cantidad de cada— y se
+    # empareja POR ORDEN, diciendo que se ha hecho asi para que se pueda mirar.
+    nombres_sueltos = [c for c, e in zip(trozos, es_id) if not e]
+    ids_sueltos = [c.upper() for c, e in zip(trozos, es_id) if e]
+    formato = "seguidos"
+    if (ids_sueltos and nombres_sueltos
+            and len(ids_sueltos) == len(nombres_sueltos)
+            and all(_dia_parece_nombre(n) for n in nombres_sueltos)
+            and (not any(es_id[:len(nombres_sueltos)]))
+            and all(es_id[len(nombres_sueltos):])):
+        return await _dia_vincula(
+            [{"nombre": n, "tid": i} for n, i in zip(nombres_sueltos, ids_sueltos)],
+            [], [], "dos columnas emparejadas por orden", data, user)
+
     pares, mal, no_parecen = [], [], []
-    for l in lineas:
-        if not l.strip():
-            continue
-        trozos = [c.strip() for c in re.split(r"[\t;,]|\s{2,}", l) if c.strip()]
-        ids = [c.upper() for c in trozos if _DIA_TID.match(c.upper())]
-        nombre = " ".join(c for c in trozos if not _DIA_TID.match(c.upper())).strip()
-        if len(ids) == 1 and _dia_parece_nombre(nombre):
-            pares.append({"nombre": nombre, "tid": ids[0]})
-        elif len(ids) == 1 and nombre:
-            no_parecen.append(nombre[:60])
-        elif nombre:
-            mal.append(nombre[:60])   # sin id, o con dos: se dice, no se adivina
+    pendiente = []
+    for c in trozos:
+        if _DIA_TID.match(c.upper()):
+            nombre = " ".join(pendiente).strip()
+            if _dia_parece_nombre(nombre):
+                pares.append({"nombre": nombre, "tid": c.upper()})
+            elif nombre:
+                no_parecen.append(nombre[:60])
+            else:
+                mal.append(c.upper())        # un id suelto, sin nombre delante
+            pendiente = []
+        else:
+            pendiente.append(c)
+    # Lo que quede al final no llego a tener id.
+    resto = " ".join(pendiente).strip()
+    if resto:
+        mal.append(resto[:60])
     if not pares:
         detalle = "No he encontrado ninguna pareja nombre + ID."
         if no_parecen:
@@ -19300,6 +19348,16 @@ async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_adm
                         f"«{no_parecen[0]}».")
         detalle += (" Pega una persona por linea: el nombre, un tabulador y el ID.")
         raise HTTPException(400, detalle)
+
+    return await _dia_vincula(pares, mal, no_parecen, formato, data, user)
+
+
+async def _dia_vincula(pares, mal, no_parecen, formato, data, user):
+    """Empareja los pares ya leidos con las fichas y, si se confirma, los guarda."""
+    centro = (data.get("center") or "").strip()
+    filtro_centro = {}
+    if centro and centro.lower() != "todos":
+        filtro_centro = {"center": {"$regex": re.escape(centro), "$options": "i"}}
 
     # Dos personas con el MISMO id es imposible, y hay que verlo antes de escribir.
     vistos, repetidos = {}, []
@@ -19323,7 +19381,8 @@ async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_adm
     # Las activas van primero para que, ante dos fichas con el mismo nombre,
     # `_empareja_conductor` se quede con la que sigue trabajando.
     todas = await db.drivers.find(
-        {}, {"_id": 0, "id": 1, "name": 1, "transporter_id": 1, "center": 1, "active": 1}
+        dict(filtro_centro),
+        {"_id": 0, "id": 1, "name": 1, "transporter_id": 1, "center": 1, "active": 1}
     ).to_list(3000)
     drivers = ([d for d in todas if d.get("active") is not False]
                + [d for d in todas if d.get("active") is False])
@@ -19366,6 +19425,7 @@ async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_adm
     sin_cubrir = sorted(en_reportes - set(vistos) - ya_en_fichas)
 
     salida = {
+        "centro": centro or "todos", "formato": formato,
         "pares_leidos": len(pares), "sin_id": mal[:30],
         "no_parecen_nombre": no_parecen[:10], "n_no_parecen": len(no_parecen),
         "vinculan": vinculan, "n_vinculan": len(vinculan), "ya_estaban": iguales,
