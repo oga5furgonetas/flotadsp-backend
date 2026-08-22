@@ -275,6 +275,28 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    mayúsculas y la lista parecía aleatoria. Siempre
    `localeCompare(b, 'es', { sensitivity: 'base' })`, que además iguala tildes.
 
+24. **En un fichero de 25.000 líneas, un `def` nuevo puede estar PISANDO otro.**
+   Al añadir el módulo de diarios se definieron `_celda(v)` y `_entero(v)`, y
+   las dos ya existían: `_entero(valor, campo, ...)` es el validador que usa
+   medio backend y `_celda(lat, lng)` es del geocodificador. Python no avisa —
+   la última definición gana en silencio— así que quedaron sustituidas y
+   habrían reventado todo lo que las llama, con un `TypeError` que no se parece
+   en nada a la causa. Salió a la primera petición de prueba. Los helpers
+   nuevos van con prefijo del módulo (`_dia_celda`, `_dia_num`), y esto lo
+   detecta de golpe:
+   `python -c "import ast,io,collections; ..."` — contar los nombres definidos
+   a nivel de módulo y listar los que salgan más de una vez. Hoy da cero.
+
+25. **Los diarios de Cortex tienen dos trampas medidas, y las dos invierten el
+   resultado.** (a) El reporte del día F trae el bloque DNR de **F−2**: la fecha
+   que cuenta es la de concesión, no la de entrega ni la del reporte —asignando
+   por fecha de entrega, la conciliación con la scorecard falla en las 4 semanas
+   probadas. (b) La columna **DSC se rellena 2-4 días tarde**: un bloque recién
+   bajado viene entero a `N` y saldrían CERO defectos. Por eso una fila nunca
+   baja de `Y` a `N` al volver a pegar un reporte viejo, y un bloque 100 % `N`
+   se marca *sin clasificar* en vez de contarse como un día perfecto. Y el
+   defecto es **DSC = `Y`**, no al revés. Todo en `docs/REPORTES_DIARIOS.md`.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

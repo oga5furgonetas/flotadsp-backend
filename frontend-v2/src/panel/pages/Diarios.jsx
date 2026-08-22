@@ -20,6 +20,14 @@ import { isoLocal } from '../../lib/fecha'
      · la columna DSC se rellena 2-4 días TARDE, así que un bloque recién
        bajado viene entero a 'N' y parecería un día perfecto. */
 
+/* El dinero SIEMPRE formateado por Intl. Concatenar '€' a un float deja cosas
+   como '130.5700000000001 €' en pantalla, y en una cifra de dinero eso destruye
+   la confianza en el resto del numero. */
+const eur = (n) => new Intl.NumberFormat('es-ES',
+  { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n || 0)
+const eur2 = (n) => new Intl.NumberFormat('es-ES',
+  { style: 'currency', currency: 'EUR' }).format(n || 0)
+
 const domingoDe = (d) => {
   const x = new Date(d)
   x.setHours(12, 0, 0, 0)
@@ -159,7 +167,16 @@ export default function Diarios() {
 
       {/* Las cuatro cifras. Separadas a propósito: el total y los defectos NO
           son lo mismo y juntarlos daría un número que no cuadra con Amazon. */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+        {/* El dinero primero y en grande: es la cifra que decide si esto
+            importa esta semana o no. Y son los DEFECTOS, no todos los DNRs:
+            los que no puntúan no restan nada. */}
+        <div className="rounded-xl border border-red-500/30 bg-red-500/[0.07] px-3.5 py-3"
+          title="Suma del valor de los paquetes de los DNR que SÍ puntúan (DSC = Y). Es el valor de la mercancía concedida al cliente, tal y como lo da Cortex.">
+          <p className="text-[11px] uppercase tracking-wider text-red-300/70">En paquetes que puntúan</p>
+          <p className="text-2xl font-bold tabular-nums text-red-300">{eur(t.euros_defectos)}</p>
+          <p className="mt-0.5 text-[11px] text-red-200/50">de {eur(t.euros)} en DNRs totales</p>
+        </div>
         {[['DNRs en total', t.dnr_total, 'text-dark-100'],
           ['Defectos (DSC = Y)', t.defectos, 'text-red-300'],
           ['No puntúan (DSC = N)', t.limpias, 'text-emerald-300'],
@@ -170,6 +187,29 @@ export default function Diarios() {
           </div>
         ))}
       </div>
+
+      {/* Desglose por semana de Amazon: es como se factura y como se mira la
+          scorecard. Solo se enseña si el rango pisa mas de una. */}
+      {datos?.por_semana?.length > 1 && (
+        <div className="rounded-xl border border-dark-800 bg-dark-900/60 px-3.5 py-3">
+          <p className="mb-2 text-[11px] uppercase tracking-wider text-dark-500">
+            Por semana de Amazon (domingo a sábado)
+          </p>
+          <div className="flex flex-wrap gap-x-8 gap-y-2">
+            {datos.por_semana.map((s2) => (
+              <div key={s2.semana}>
+                <p className="text-[11.5px] text-dark-500">Semana del {s2.semana.slice(8)}/{s2.semana.slice(5, 7)}</p>
+                <p className="text-[15px] font-bold tabular-nums text-red-300">
+                  {eur(s2.euros_defectos)}
+                  <span className="ml-1.5 text-[11.5px] font-normal text-dark-500">
+                    {s2.defectos} de {s2.dnr} DNRs
+                  </span>
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {datos?.sin_nombre?.length > 0 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.07] px-3.5 py-2.5">
@@ -366,6 +406,7 @@ export default function Diarios() {
                 <th className="px-3 py-2 font-semibold">Conductor</th>
                 <th className="px-2 py-2 text-center font-semibold">DNRs</th>
                 <th className="px-2 py-2 text-center font-semibold text-red-400/80">Defectos</th>
+                <th className="px-2 py-2 text-right font-semibold text-red-400/80">€ que puntúan</th>
                 <th className="px-2 py-2 text-center font-semibold">No puntúan</th>
                 <th className="px-2 py-2 text-center font-semibold">Sin clasif.</th>
                 <th className="px-2 py-2 text-center font-semibold">RTS</th>
@@ -396,6 +437,10 @@ export default function Diarios() {
                     <td className={`px-2 py-1.5 text-center font-bold tabular-nums ${c.defectos ? 'text-red-300' : 'text-dark-600'}`}>
                       {c.defectos}
                     </td>
+                    <td className={`px-2 py-1.5 text-right font-bold tabular-nums ${c.euros_defectos ? 'text-red-300' : 'text-dark-700'}`}
+                      title={`${eur2(c.euros_defectos)} de los ${eur2(c.euros)} que suman todos sus DNRs`}>
+                      {c.euros_defectos ? eur(c.euros_defectos) : '—'}
+                    </td>
                     <td className="px-2 py-1.5 text-center tabular-nums text-dark-500">{c.limpias}</td>
                     <td className={`px-2 py-1.5 text-center tabular-nums ${c.sin_clasificar ? 'text-amber-300' : 'text-dark-700'}`}>
                       {c.sin_clasificar || '—'}
@@ -406,7 +451,7 @@ export default function Diarios() {
                   </tr>
                   {abierto === c.transporter_id && c.detalle?.length > 0 && (
                     <tr className="bg-dark-950/60">
-                      <td colSpan={8} className="px-3 py-2">
+                      <td colSpan={9} className="px-3 py-2">
                         <p className="mb-1 font-mono text-[10.5px] text-dark-600">{c.transporter_id}</p>
                         <table className="w-full text-left text-[11.5px]">
                           <thead>

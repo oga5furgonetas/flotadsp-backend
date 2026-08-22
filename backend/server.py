@@ -18844,6 +18844,27 @@ def _dia_num(v):
         return 0
 
 
+def _dia_euros(v) -> float:
+    """'€130.57' -> 130.57. Devuelve 0.0 si no hay numero.
+
+    Se acepta coma y punto porque Cortex ha cambiado de formato antes y un
+    valor mal leido aqui no da error: da una cifra de dinero equivocada, que
+    es peor. Con las dos separaciones ('1.234,56') manda la ultima: es la
+    decimal en los dos convenios.
+    """
+    s = re.sub(r"[^0-9.,-]", "", str(v or "").strip())
+    if not s:
+        return 0.0
+    if "," in s and "." in s:
+        s = s.replace(",", "") if s.rfind(".") > s.rfind(",") else s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return round(float(s), 2)
+    except ValueError:
+        return 0.0
+
+
 def _dia_menos(iso: str, n: int) -> str:
     return (datetime.strptime(iso, "%Y-%m-%d") - timedelta(days=n)).strftime("%Y-%m-%d")
 
@@ -18932,6 +18953,7 @@ def _parsea_diario(texto: str) -> dict:
                 "contacto": _dia_celda(col("contact compliance")),
                 "excepcion": _dia_celda(col("delivery exception")),
                 "valor": _dia_celda(col("value")),
+                "valor_eur": _dia_euros(col("value")),
                 "cp": _dia_celda(col("postal code")),
             })
 
@@ -19076,21 +19098,32 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
     for f in filas:
         tid = f["transporter_id"]
         e = por_tid.setdefault(tid, {"transporter_id": tid, "dnr_total": 0, "defectos": 0,
-                                     "limpias": 0, "sin_clasificar": 0, "detalle": []})
+                                     "limpias": 0, "sin_clasificar": 0,
+                                     "euros": 0.0, "euros_defectos": 0.0, "detalle": []})
         e["dnr_total"] += 1
+        # Las filas guardadas antes de que se guardara el numero solo tienen el
+        # texto ('€10.74'). Se lee de ahi en vez de dar cero: un cero en una
+        # cifra de dinero no se distingue de "ese dia no hubo nada".
+        eur = f.get("valor_eur")
+        if eur is None:
+            eur = _dia_euros(f.get("valor"))
+        e["euros"] += eur
         if f.get("dsc") == "Y":
             e["defectos"] += 1
+            e["euros_defectos"] += eur
         elif f.get("dsc") == "N":
             e["limpias"] += 1
         else:
             e["sin_clasificar"] += 1
-        e["detalle"].append({k: f.get(k) for k in
-                             ("tracking_id", "fecha_concesion", "fecha_entrega", "dsc",
-                              "scan", "valor", "cp")})
+        e["detalle"].append({**{k: f.get(k) for k in
+                                ("tracking_id", "fecha_concesion", "fecha_entrega", "dsc",
+                                 "scan", "valor", "cp")},
+                             "valor_eur": eur})
     for r in reportes:
         e = por_tid.setdefault(r["transporter_id"], {
             "transporter_id": r["transporter_id"], "dnr_total": 0, "defectos": 0,
-            "limpias": 0, "sin_clasificar": 0, "detalle": []})
+            "limpias": 0, "sin_clasificar": 0, "euros": 0.0, "euros_defectos": 0.0,
+            "detalle": []})
         e["rts"] = e.get("rts", 0) + (r.get("rts") or 0)
         e["pod_fails"] = e.get("pod_fails", 0) + (r.get("pod_fails") or 0)
         e["cc_fails"] = e.get("cc_fails", 0) + (r.get("cc_fails") or 0)
@@ -19104,8 +19137,14 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
         e["de_baja"] = bool((n or {}).get("de_baja"))
         e["sin_ficha"] = bool((n or {}).get("sin_ficha"))
         e["detalle"].sort(key=lambda x: x.get("fecha_concesion") or "")
+        e["euros"] = round(e["euros"], 2)
+        e["euros_defectos"] = round(e["euros_defectos"], 2)
         salida.append(e)
-    salida.sort(key=lambda x: (-x["defectos"], -x["dnr_total"], x["driver_name"] or x["transporter_id"]))
+    # Se ordena por DINERO de los defectos, no por numero de DNRs. Cuatro
+    # paquetes de 10 euros y uno de 130 no son el mismo problema, y el que hay
+    # que mirar primero es el segundo.
+    salida.sort(key=lambda x: (-x["euros_defectos"], -x["defectos"], -x["dnr_total"],
+                               x["driver_name"] or x["transporter_id"]))
 
     dias = sorted({r["fecha_dnr"] for r in reportes if r.get("fecha_dnr")})
     return {
@@ -19115,7 +19154,23 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
             "defectos": sum(e["defectos"] for e in salida),
             "limpias": sum(e["limpias"] for e in salida),
             "sin_clasificar": sum(e["sin_clasificar"] for e in salida),
+            "euros": round(sum(e["euros"] for e in salida), 2),
+            "euros_defectos": round(sum(e["euros_defectos"] for e in salida), 2),
         },
+        # Por semana de Amazon (domingo a sabado), que es como se factura y como
+        # se mira la scorecard. Un rango a caballo de dos semanas mezclaria dos
+        # cosas que se deciden por separado.
+        "por_semana": [
+            {"semana": s,
+             "dnr": sum(1 for f in filas if _dia_semana(f["fecha_concesion"]) == s),
+             "defectos": sum(1 for f in filas
+                             if _dia_semana(f["fecha_concesion"]) == s and f.get("dsc") == "Y"),
+             "euros_defectos": round(sum(
+                 (f.get("valor_eur") if f.get("valor_eur") is not None else _dia_euros(f.get("valor")))
+                 for f in filas
+                 if _dia_semana(f["fecha_concesion"]) == s and f.get("dsc") == "Y"), 2)}
+            for s in sorted({_dia_semana(f["fecha_concesion"]) for f in filas})
+        ],
         "dias_con_datos": dias,
         "sin_nombre": sorted({e["transporter_id"] for e in salida if not e["driver_name"]}),
     }
