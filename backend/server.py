@@ -19083,16 +19083,30 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
     doc_alias = await db.app_meta.find_one({"_id": "transporter_alias"}) or {}
     for tid, nm in (doc_alias.get("mapa") or {}).items():
         nombres.setdefault(tid.upper(), {"name": nm, "id": None, "sin_ficha": True})
-    # Los que no tienen ficha: se saca el nombre del historial de rutas, que
-    # trae las dos cosas. Mejor un nombre viejo que un codigo.
+    # Los ids que ninguna ficha reclama: el nombre se saca del historial de
+    # rutas, que trae las dos cosas. Mejor un nombre viejo que un codigo.
+    #
+    # Y AQUI SE MIRA SI ESA PERSONA TIENE FICHA. Antes se daba por hecho que no
+    # y se pintaba "sin ficha", que era FALSO: Nicolas Rey Jimenez y Angel
+    # Manuel Seoane Grille tienen ficha activa en DGA1: lo que faltaba era el
+    # enlace, no la persona. Etiquetar mal un dato es peor que no etiquetarlo,
+    # porque manda a dar de alta a alguien que ya esta.
     faltan = {f["transporter_id"] for f in filas} - set(nombres)
     if faltan:
+        por_clave = {}
+        async for d in db.drivers.find({}, {"_id": 0, "id": 1, "name": 1, "active": 1}):
+            por_clave.setdefault(_clave_nombre(d.get("name")), []).append(d)
         async for r in db.route_history.find(
                 {"transporter_id": {"$in": sorted(faltan)}},
                 {"_id": 0, "transporter_id": 1, "driver_name": 1}):
             tid = (r.get("transporter_id") or "").upper()
-            if tid and r.get("driver_name") and tid not in nombres:
-                nombres[tid] = {"name": r["driver_name"], "id": None, "solo_historial": True}
+            nm = (r.get("driver_name") or "").strip()
+            if not (tid and nm) or tid in nombres:
+                continue
+            fichas = por_clave.get(_clave_nombre(nm), [])
+            nombres[tid] = {"name": nm, "id": None, "solo_historial": True,
+                            "ficha_sin_vincular": len(fichas) == 1,
+                            "ficha_id": fichas[0]["id"] if len(fichas) == 1 else None}
 
     por_tid = {}
     for f in filas:
@@ -19136,6 +19150,9 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
         e["solo_historial"] = bool((n or {}).get("solo_historial"))
         e["de_baja"] = bool((n or {}).get("de_baja"))
         e["sin_ficha"] = bool((n or {}).get("sin_ficha"))
+        # Tiene ficha, pero el id no esta puesto en ella. Es un enlace que
+        # falta, no una persona que falta.
+        e["ficha_sin_vincular"] = bool((n or {}).get("ficha_sin_vincular"))
         e["detalle"].sort(key=lambda x: x.get("fecha_concesion") or "")
         e["euros"] = round(e["euros"], 2)
         e["euros_defectos"] = round(e["euros_defectos"], 2)
@@ -19173,6 +19190,9 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
         ],
         "dias_con_datos": dias,
         "sin_nombre": sorted({e["transporter_id"] for e in salida if not e["driver_name"]}),
+        # Los que tienen ficha esperando a que se les ponga el id. Se cuenta
+        # para poder ofrecer el arreglo en vez de solo señalar el problema.
+        "vinculables": sum(1 for e in salida if e.get("ficha_sin_vincular")),
     }
 
 
@@ -19223,7 +19243,27 @@ async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_adm
     Un id mal puesto le cuelga los defectos de uno a otro, y eso no se descubre
     nunca porque el numero siempre parece razonable.
     """
-    texto = str(data.get("texto") or "")
+    # SIN PEGAR NADA: los pares salen del historial de rutas.
+    #
+    # Cada snapshot de ruta trae el Transporter ID y el nombre juntos, y viene
+    # de Amazon. Son 73 parejas que ya estaban en la base de datos sin que nadie
+    # las usara, mientras las 86 fichas de DGA1 seguian sin un solo ID y sus
+    # DNR salian como codigo. Pedir una lista escrita a mano para un dato que
+    # ya se tiene, y encima de mejor fuente, no tiene sentido.
+    if data.get("desde_historial"):
+        cuenta = {}
+        async for r in db.route_history.find({}, {"_id": 0, "transporter_id": 1, "driver_name": 1}):
+            tid = (r.get("transporter_id") or "").upper()
+            nm = (r.get("driver_name") or "").strip()
+            if tid and nm:
+                cuenta.setdefault(tid, {})[nm] = cuenta.setdefault(tid, {}).get(nm, 0) + 1
+        # Si un id aparece con dos nombres distintos, manda el que mas veces
+        # sale: un snapshot suelto puede llevar el nombre del que le cubrio.
+        texto = chr(10).join(
+            f"{max(nombres.items(), key=lambda x: x[1])[0]}\t{tid}"
+            for tid, nombres in cuenta.items())
+    else:
+        texto = str(data.get("texto") or "")
 
     # ¿Esto es un Daily Report en vez de una lista de IDs? Se mira ANTES de
     # intentar leerlo. Cada fila de DNR trae un Transporter ID y un monton de

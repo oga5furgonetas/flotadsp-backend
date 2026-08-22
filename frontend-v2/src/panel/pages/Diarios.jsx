@@ -105,6 +105,25 @@ export default function Diarios() {
     } finally { setOcupado('') }
   }
 
+  /* Vincular sin pegar nada, sacando las parejas del historial de rutas. Ese
+     dato ya estaba en la base de datos —y viene de Amazon, no de una hoja
+     escrita a mano— mientras las 86 fichas de DGA1 seguían sin un solo ID. */
+  const vincularDesdeHistorial = async (confirmar) => {
+    setOcupado('auto'); setErr('')
+    try {
+      const r = await vincularTransporterIds({ desde_historial: true, confirmar })
+      if (confirmar) {
+        setPreviaIds(null)
+        setAviso(`${r.data.n_vinculan} conductores vinculados desde el historial de Amazon.`)
+        await cargar()
+      } else {
+        setPreviaIds(r.data); setVerIds(true)
+      }
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo leer el historial.')
+    } finally { setOcupado('') }
+  }
+
   const confirmarIds = async () => {
     setOcupado('ids'); setErr('')
     try {
@@ -217,7 +236,7 @@ export default function Diarios() {
             <b>{datos.sin_nombre.length}</b> {datos.sin_nombre.length === 1 ? 'ID no tiene' : 'IDs no tienen'} nombre:
             salen como código. {' '}
             <button onClick={() => setVerIds(true)} className="underline underline-offset-2 hover:text-amber-100">
-              Vincularlos
+              Pegar la lista
             </button>
           </p>
           <p className="mt-1 font-mono text-[11px] text-amber-200/60">{datos.sin_nombre.join(' · ')}</p>
@@ -329,11 +348,20 @@ export default function Diarios() {
           <textarea value={textoIds} onChange={(e) => { setTextoIds(e.target.value); setPreviaIds(null) }}
             rows={6} placeholder={'NOMBRE APELLIDOS\tA1B2C3D4E5F6G7'}
             className="w-full rounded-lg border border-dark-700 bg-dark-950 p-2.5 font-mono text-[11px] text-dark-200 outline-none placeholder:text-dark-700" />
-          <button onClick={previsualizarIds} disabled={!textoIds.trim() || !!ocupado}
-            className="btn-primary mt-2 flex items-center gap-1.5 text-sm disabled:opacity-40">
-            {ocupado === 'ids' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-            Comprobar
-          </button>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <button onClick={previsualizarIds} disabled={!textoIds.trim() || !!ocupado}
+              className="btn-primary flex items-center gap-1.5 text-sm disabled:opacity-40">
+              {ocupado === 'ids' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+              Comprobar lo pegado
+            </button>
+            <span className="text-[11.5px] text-dark-600">o</span>
+            <button onClick={() => vincularDesdeHistorial(false)} disabled={!!ocupado}
+              title="Saca las parejas nombre + ID del historial de rutas, que ya está en la base de datos y viene de Amazon. No hay que pegar nada."
+              className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-3 py-1.5 text-sm font-semibold text-dark-300 hover:text-dark-100 disabled:opacity-40">
+              {ocupado === 'auto' ? <Loader2 size={14} className="animate-spin" /> : <IdCard size={14} />}
+              Sacarlos del historial de Amazon
+            </button>
+          </div>
 
           {previaIds && (
             <div className="mt-3 space-y-2">
@@ -390,7 +418,9 @@ export default function Diarios() {
                   <span className="font-mono">{previaIds.sin_cubrir.map((s) => s.transporter_id).join(' · ')}</span>
                 </p>
               )}
-              <button onClick={confirmarIds} disabled={!previaIds.n_vinculan || !!ocupado}
+              <button
+                onClick={() => (textoIds.trim() ? confirmarIds() : vincularDesdeHistorial(true))}
+                disabled={!previaIds.n_vinculan || !!ocupado}
                 className="btn-primary flex items-center gap-1.5 text-sm disabled:opacity-40">
                 <Check size={14} /> Vincular {previaIds.n_vinculan}
               </button>
@@ -443,12 +473,15 @@ export default function Diarios() {
                       <span className={c.driver_name ? 'text-dark-200' : 'font-mono text-[11px] text-amber-300/80'}>
                         {c.driver_name || c.transporter_id}
                       </span>
-                      {(c.de_baja || c.sin_ficha || c.solo_historial) && (
-                        <span className="ml-1.5 rounded bg-dark-800 px-1 text-[9px] text-dark-500"
+                      {(c.de_baja || c.ficha_sin_vincular || c.sin_ficha || c.solo_historial) && (
+                        <span className={`ml-1.5 rounded px-1 text-[9px] ${
+                          c.ficha_sin_vincular ? 'bg-amber-500/15 text-amber-300/80' : 'bg-dark-800 text-dark-500'}`}
                           title={c.de_baja
                             ? 'Ficha dada de baja: ya no trabaja aquí, pero este DNR es suyo'
-                            : 'Sin ficha de conductor en la app (oficina, o alguien que se fue antes)'}>
-                          {c.de_baja ? 'ya no está' : 'sin ficha'}
+                            : c.ficha_sin_vincular
+                              ? 'SÍ tiene ficha: lo que falta es ponerle el Transporter ID. Pulsa "Vincular desde el historial".'
+                              : 'Sin ficha de conductor en la app (oficina, o alguien que se fue antes)'}>
+                          {c.de_baja ? 'ya no está' : c.ficha_sin_vincular ? 'ID sin vincular' : 'sin ficha'}
                         </span>
                       )}
                     </td>
