@@ -254,6 +254,11 @@ export function importShifts(file, center, mes, confirmar) {
   if (confirmar) fd.append('confirmar', '1')
   return api.post('/shifts/import', fd, { timeout: 120000, headers: { 'Content-Type': undefined } })
 }
+/* El cuadrante en .xlsx. Se pide como blob porque el endpoint exige Bearer:
+   un <a href> normal no manda la cabecera y devolveria un 401. */
+export const exportarCuadrante = (center, desde, hasta) =>
+  api.get('/shifts/export', { params: { center, desde, hasta }, responseType: 'blob' })
+
 export const getCodigosCuadrante = () => api.get('/shifts/codigos')
 export const setCodigosCuadrante = (codigos) => api.put('/shifts/codigos', { codigos })
 

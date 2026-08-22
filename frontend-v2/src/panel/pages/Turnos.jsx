@@ -3,14 +3,14 @@ import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, CalendarClock, Users, ChevronLeft, ChevronRight, Save, Zap,
   Upload, Check, X, Settings2, AlertTriangle, Inbox, ClipboardPaste, Ban, Trash2,
-  Brush, Undo2, Search, CalendarRange, Eraser, Rows3, CopyPlus, UserMinus,
+  Brush, Undo2, Search, CalendarRange, Eraser, Rows3, CopyPlus, UserMinus, Download,
 } from 'lucide-react'
 import {
   getShifts, getShiftCoverage, getDrivers, saveShiftsBulk, setShiftSettings,
   generateShiftsAuto, getRouteDemand, setRouteDemand, getShiftRequests,
   resolveShiftRequest, importShifts, getCodigosCuadrante, setCodigosCuadrante,
   importShiftsPegado, getShiftBlocks, createShiftBlock, deleteShiftBlock,
-  setAliasNombres, updateDriver,
+  setAliasNombres, updateDriver, exportarCuadrante,
 } from '../api'
 import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
@@ -574,6 +574,31 @@ export default function Turnos() {
     } finally { setOcupado('') }
   }
 
+  /* Descargar el cuadrante en .xlsx.
+
+     Se pide como blob y se dispara el <a> a mano porque el endpoint exige el
+     token: un enlace normal no manda la cabecera y se comería un 401 sin decir
+     por qué. Y se avisa si hay cambios sin guardar, porque el fichero sale de
+     la BASE DE DATOS, no de lo que se ve en pantalla — bajarse una hoja sin lo
+     que acabas de pintar y no enterarte sería el peor final posible. */
+  const descargar = async () => {
+    if (sucio && !window.confirm(
+      'Tienes cambios sin guardar. El Excel sale de lo guardado, así que no los llevará. ¿Descargar de todas formas?')) return
+    setOcupado('descargar'); setErr('')
+    try {
+      const r = await exportarCuadrante(center, primerDia, hasta)
+      const url = URL.createObjectURL(r.data)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `cuadrante-${center}-${primerDia}-a-${hasta}.xlsx`
+      document.body.appendChild(a); a.click(); a.remove()
+      // Sin esto el blob se queda en memoria hasta recargar la página.
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo generar el Excel.')
+    } finally { setOcupado('') }
+  }
+
   const guardarDemanda = async () => {
     const items = dias.map((f) => ({ date: f, objetivo: demanda[f] === '' ? null : demanda[f] }))
     try { await setRouteDemand(center, items) } catch { setErr(t('turns.demand.err')) }
@@ -854,6 +879,12 @@ export default function Turnos() {
         </label>
         <div className="flex-1" />
         {sucio && <span className="text-xs font-semibold text-amber-400">{t('turns.unsaved')}</span>}
+        <button onClick={descargar} disabled={!!ocupado}
+          title="Baja el cuadrante en Excel: la rejilla con sus colores y, en otra hoja, una fila por persona y día para filtrar o mandar"
+          className="flex items-center gap-2 rounded-lg border border-dark-700 px-3 py-2 text-sm font-semibold text-dark-300 transition hover:text-dark-100 disabled:opacity-40">
+          {ocupado === 'descargar' ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+          Descargar Excel
+        </button>
         <button className="btn-primary flex items-center gap-2" onClick={guardar} disabled={!!ocupado || !sucio}>
           {ocupado === 'guardar' ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
           {t('turns.save')}

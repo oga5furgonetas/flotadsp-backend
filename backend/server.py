@@ -18460,6 +18460,203 @@ async def import_shifts_pegado(data: dict = Body(...), _=Depends(require_admin))
     return resumen
 
 
+# Los mismos cinco colores de la pantalla, pero para papel blanco. En la app el
+# fondo es oscuro y valen tintes translucidos; en Excel hay que dar el color
+# opaco y un texto que se lea encima. Se mantienen las cinco familias: si aqui
+# hubiera dieciseis colores, la hoja descargada seria justo el arcoiris del que
+# se venia huyendo.
+COLOR_FAMILIA_XLSX = {
+    "ruta":     ("D6EAD7", "1E5B2A"),
+    "apoyo":    ("D5EFEC", "12554E"),
+    "libre":    ("F1F1EF", "72726C"),
+    "previsto": ("DBEAF7", "12456F"),
+    "aviso":    ("FADCDC", "8C1D1D"),
+}
+FAMILIA_NOMBRE_XLSX = {
+    "ruta": "Sale a ruta", "apoyo": "Trabaja sin ruta", "libre": "Dia libre",
+    "previsto": "Ausencia prevista", "aviso": "Ausencia no prevista",
+}
+DIAS_SEM_CORTO = ["lun", "mar", "mie", "jue", "vie", "sab", "dom"]
+MESES_ES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+            "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
+
+
+@api_router.get("/shifts/export")
+async def exportar_cuadrante(center: str, desde: str, hasta: str,
+                             user: dict = Depends(require_admin)):
+    """El cuadrante, en un .xlsx que se abre en Excel y en Sheets.
+
+    Se genera aqui y no en el navegador a proposito: asi la hoja lleva colores,
+    cabeceras congeladas y anchos de columna sin meter una libreria de Excel en
+    el bundle del panel, y sale igual desde cualquier ordenador.
+
+    Dos hojas:
+      · "Cuadrante" — la rejilla tal cual se ve, para mirarla o imprimirla.
+      · "Por conductor" — una fila por persona y dia. Es la que sirve para
+        filtrar, ordenar o mandarle a alguien solo lo suyo; una rejilla no se
+        puede filtrar.
+    """
+    import openpyxl, io as _io
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from openpyxl.comments import Comment
+
+    dias = _date_range(desde, hasta)
+
+    q = dict(_filtro_centro(user, center))
+    q["date"] = {"$gte": desde, "$lte": hasta}
+    turnos = await db.shifts.find(q, {"_id": 0}).to_list(20000)
+
+    doc = await db.app_meta.find_one({"_id": "codigos_cuadrante"}) or {}
+    mapa = dict(CODIGOS_CUADRANTE_DEF)
+    mapa.update({str(k).upper(): v for k, v in (doc.get("mapa") or {}).items()})
+
+    def info(cod):
+        base = CODIGOS_CUADRANTE_INFO.get(cod)
+        if base:
+            return base[1], base[2]
+        return cod, "libre"
+
+    # Solo sale quien tenga algo puesto. Bajar una hoja con veinte filas vacias
+    # de gente que ya no esta es exactamente el problema que se acaba de quitar
+    # de la pantalla.
+    por_id = {}
+    for s in turnos:
+        did = s.get("driver_id")
+        if not did:
+            continue
+        f = por_id.setdefault(did, {"nombre": s.get("driver_name") or "", "dias": {}})
+        cod = s.get("cod") or {"trabaja": "1", "libre": "N/T", "extra": "EXTRA"}.get(s.get("type"), "")
+        f["dias"][s["date"]] = (cod, s.get("hora") or "")
+        if s.get("driver_name"):
+            f["nombre"] = s["driver_name"]
+    filas = sorted(por_id.values(), key=lambda x: _clave_nombre(x["nombre"]))
+
+    fino = Side(style="thin", color="D9D9D9")
+    medio = Side(style="thin", color="9C9C9C")
+    borde = Border(left=fino, right=fino, top=fino, bottom=fino)
+    centro = Alignment(horizontal="center", vertical="center")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Cuadrante"
+
+    d0 = datetime.strptime(dias[0], "%Y-%m-%d")
+    ws.cell(row=1, column=1,
+            value=f"Cuadrante {center} - {MESES_ES[d0.month]} de {d0.year}").font = Font(bold=True, size=14)
+    ws.cell(row=1, column=3, value=f"{dias[0]} a {dias[-1]}").font = Font(color="808080", size=10)
+
+    ws.cell(row=2, column=1, value="CONDUCTOR").font = Font(bold=True, size=9, color="606060")
+    ws.cell(row=2, column=2, value="Dias").font = Font(bold=True, size=9, color="606060")
+    for j, f in enumerate(dias):
+        d = datetime.strptime(f, "%Y-%m-%d")
+        finde = d.weekday() >= 5
+        c1 = ws.cell(row=2, column=3 + j, value=DIAS_SEM_CORTO[d.weekday()])
+        c1.font = Font(size=8, color="A00000" if finde else "808080")
+        c1.alignment = centro
+        c2 = ws.cell(row=3, column=3 + j, value=d.day)
+        c2.font = Font(bold=True, size=10, color="A00000" if finde else "303030")
+        c2.alignment = centro
+        if finde:
+            for r in (2, 3):
+                ws.cell(row=r, column=3 + j).fill = PatternFill("solid", fgColor="F2F2F2")
+    ws.cell(row=3, column=1, value="Nombre").font = Font(bold=True, size=9, color="606060")
+
+    for i, fila in enumerate(filas):
+        r = 4 + i
+        cn = ws.cell(row=r, column=1, value=fila["nombre"])
+        cn.font = Font(size=10)
+        cn.border = borde
+        trabajados = sum(1 for cod, _ in fila["dias"].values()
+                         if mapa.get(cod) in ("trabaja", "extra"))
+        ct = ws.cell(row=r, column=2, value=trabajados)
+        ct.font = Font(bold=True, size=10, color="606060")
+        ct.alignment = centro
+        ct.border = borde
+        for j, f in enumerate(dias):
+            cod, hora = fila["dias"].get(f, ("", ""))
+            cel = ws.cell(row=r, column=3 + j, value=cod)
+            cel.alignment = centro
+            cel.border = borde
+            if cod:
+                etiqueta, fam = info(cod)
+                bg, fg = COLOR_FAMILIA_XLSX.get(fam, COLOR_FAMILIA_XLSX["libre"])
+                cel.fill = PatternFill("solid", fgColor=bg)
+                cel.font = Font(bold=True, size=9, color=fg)
+                # La hora no cabe en la celda, pero no se tira: va al
+                # comentario, que se ve al pasar por encima y no ensucia
+                # la rejilla.
+                if hora:
+                    cel.comment = Comment(f"{etiqueta} - entra a las {hora}", "FlotaDSP")
+
+    # Cobertura: cuanta gente sale cada dia. Es la fila que primero se mira.
+    rcob = 4 + len(filas) + 1
+    cc = ws.cell(row=rcob, column=1, value="Salen a trabajar")
+    cc.font = Font(bold=True, size=9, color="606060")
+    for j, f in enumerate(dias):
+        n = sum(1 for fila in filas
+                if mapa.get(fila["dias"].get(f, ("", ""))[0]) in ("trabaja", "extra"))
+        c = ws.cell(row=rcob, column=3 + j, value=n)
+        c.font = Font(bold=True, size=10)
+        c.alignment = centro
+        c.border = Border(top=medio, bottom=medio, left=fino, right=fino)
+
+    # Leyenda, por familias. Debajo de la tabla para que salga al imprimir.
+    rl = rcob + 2
+    ws.cell(row=rl, column=1, value="LEYENDA").font = Font(bold=True, size=9, color="606060")
+    for k, (fam, nombre) in enumerate(FAMILIA_NOMBRE_XLSX.items()):
+        codigos = [c for c, v in CODIGOS_CUADRANTE_INFO.items() if v[2] == fam]
+        bg, fg = COLOR_FAMILIA_XLSX[fam]
+        c = ws.cell(row=rl + 1 + k, column=1, value=", ".join(codigos))
+        c.fill = PatternFill("solid", fgColor=bg)
+        c.font = Font(bold=True, size=9, color=fg)
+        c.alignment = centro
+        c.border = borde
+        ws.cell(row=rl + 1 + k, column=2, value=nombre).font = Font(size=9, color="606060")
+
+    ws.freeze_panes = "C4"
+    ws.column_dimensions["A"].width = 32
+    ws.column_dimensions["B"].width = 6
+    for j in range(len(dias)):
+        ws.column_dimensions[get_column_letter(3 + j)].width = 5.5
+    ws.sheet_view.showGridLines = False
+
+    # ── Hoja 2: una fila por persona y dia ────────────────────────────────
+    ws2 = wb.create_sheet("Por conductor")
+    for j, cab in enumerate(["Conductor", "Fecha", "Dia", "Codigo", "Significado", "Entra a las"]):
+        c = ws2.cell(row=1, column=1 + j, value=cab)
+        c.font = Font(bold=True, size=9, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="595959")
+        c.alignment = centro
+    r = 2
+    for fila in filas:
+        for f in dias:
+            cod, hora = fila["dias"].get(f, ("", ""))
+            if not cod:
+                continue
+            etiqueta, _fam = info(cod)
+            d = datetime.strptime(f, "%Y-%m-%d")
+            for j, v in enumerate([fila["nombre"], f, DIAS_SEM_CORTO[d.weekday()],
+                                   cod, etiqueta, hora]):
+                ws2.cell(row=r, column=1 + j, value=v).font = Font(size=10)
+            r += 1
+    ws2.freeze_panes = "A2"
+    ws2.auto_filter.ref = f"A1:F{max(1, r - 1)}"
+    for col, ancho in zip("ABCDEF", (32, 12, 6, 11, 20, 12)):
+        ws2.column_dimensions[col].width = ancho
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    nombre = f"cuadrante-{re.sub(r'[^A-Za-z0-9]+', '', center) or 'centro'}-{dias[0]}-a-{dias[-1]}.xlsx"
+    logger.info("Cuadrante exportado: %s %s a %s, %d conductores", center, dias[0], dias[-1], len(filas))
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+    )
+
+
 @api_router.get("/shifts/alias-nombres")
 async def listar_alias_cuadrante(_=Depends(require_admin)):
     """Los nombres del cuadrante que ya se han emparejado a mano con su ficha."""
