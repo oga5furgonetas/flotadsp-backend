@@ -1169,12 +1169,17 @@ export default function Turnos() {
                   // cubrir. Ámbar: llegas a lo de hoy pero no al techo, así que
                   // si Amazon pide más no lo puedes coger. Verde: cubierto.
                   const corto = (piden > 0 && n < piden) || (min > 0 && n < min)
-                  // Lo que te faltaría si HOY te pidieran el máximo. Va como
-                  // número pequeño y no como color: estar por debajo del techo
-                  // es lo normal —nunca se pone a toda la plantilla— así que
-                  // pintarlo de ámbar dejaba la fila entera en ámbar, y una
-                  // alerta que sale siempre no es una alerta.
-                  const hueco = max > 0 && n < max ? max - n : 0
+
+                  /* La diferencia se mide contra LO QUE PIDEN, y sólo contra el
+                     máximo mientras todavía no han pedido nada.
+
+                     El máximo es el techo que podrían pedirte; en cuanto te
+                     dicen el número del día, ese techo ya no manda. Si piden 41
+                     y pones 43 te SOBRAN 2, no te faltan 3 para llegar a 46:
+                     los 46 ya no van a venir ese día. Medirlo contra el máximo
+                     hacía que un día de sobra apareciera como un día corto. */
+                  const contra = piden > 0 ? piden : max
+                  const dif = contra > 0 ? n - contra : 0
                   return (
                     <td key={f} data-col={ci}
                       className={`border-r border-dark-800/70 px-1 py-1 text-center ${
@@ -1182,12 +1187,15 @@ export default function Turnos() {
                       <span className="flex items-baseline justify-center gap-0.5"
                         title={`${n} ${n === 1 ? 'persona' : 'personas'} a ruta${
                           piden > 0 ? ` · piden ${piden}` : ''}${max > 0 ? ` · máximo ${max}` : ''}${
-                          corto ? ' — FALTAN ' + (Math.max(piden, min) - n) : ''}${
-                          hueco ? ` · te faltarían ${hueco} para cubrir el máximo` : ''}`}>
+                          dif < 0 ? ` — FALTAN ${-dif}${piden > 0 ? '' : ' para el máximo'}`
+                            : dif > 0 ? ` — sobran ${dif}` : ''}`}>
                         <span className={`text-[12px] font-bold tabular-nums ${
                           corto ? 'text-red-400' : 'text-emerald-300'}`}>{n}</span>
-                        {hueco > 0 && (
-                          <span className="text-[9px] font-medium tabular-nums text-amber-500/60">−{hueco}</span>
+                        {dif !== 0 && (
+                          <span className={`text-[9px] font-medium tabular-nums ${
+                            dif < 0 ? 'text-amber-500/70' : 'text-emerald-500/60'}`}>
+                            {dif > 0 ? '+' : '−'}{Math.abs(dif)}
+                          </span>
                         )}
                       </span>
                     </td>
