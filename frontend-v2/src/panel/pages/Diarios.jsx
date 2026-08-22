@@ -383,9 +383,12 @@ export default function Diarios() {
                       <span className={c.driver_name ? 'text-dark-200' : 'font-mono text-[11px] text-amber-300/80'}>
                         {c.driver_name || c.transporter_id}
                       </span>
-                      {c.solo_historial && (
-                        <span className="ml-1.5 rounded bg-dark-800 px-1 text-[9px] text-dark-500" title="El nombre sale del historial de rutas: esta persona no tiene ficha activa">
-                          sin ficha
+                      {(c.de_baja || c.sin_ficha || c.solo_historial) && (
+                        <span className="ml-1.5 rounded bg-dark-800 px-1 text-[9px] text-dark-500"
+                          title={c.de_baja
+                            ? 'Ficha dada de baja: ya no trabaja aquí, pero este DNR es suyo'
+                            : 'Sin ficha de conductor en la app (oficina, o alguien que se fue antes)'}>
+                          {c.de_baja ? 'ya no está' : 'sin ficha'}
                         </span>
                       )}
                     </td>

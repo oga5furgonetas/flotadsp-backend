@@ -19050,9 +19050,17 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
         {"_id": 0}).to_list(5000)
 
     nombres = {}
-    async for d in db.drivers.find({"transporter_id": {"$nin": [None, ""]}},
-                                   {"_id": 0, "name": 1, "transporter_id": 1, "id": 1}):
-        nombres[(d.get("transporter_id") or "").upper()] = {"name": d["name"], "id": d["id"]}
+    # Las de baja primero para que una activa con el mismo id la pise: si dos
+    # fichas comparten id, manda la que sigue trabajando.
+    async for d in db.drivers.find(
+            {"transporter_id": {"$nin": [None, ""]}},
+            {"_id": 0, "name": 1, "transporter_id": 1, "id": 1, "active": 1}).sort("active", 1):
+        nombres[(d.get("transporter_id") or "").upper()] = {
+            "name": d["name"], "id": d["id"], "de_baja": d.get("active") is False}
+    # Etiquetas sueltas: gente sin ficha de conductor (oficina, o que se fue).
+    doc_alias = await db.app_meta.find_one({"_id": "transporter_alias"}) or {}
+    for tid, nm in (doc_alias.get("mapa") or {}).items():
+        nombres.setdefault(tid.upper(), {"name": nm, "id": None, "sin_ficha": True})
     # Los que no tienen ficha: se saca el nombre del historial de rutas, que
     # trae las dos cosas. Mejor un nombre viejo que un codigo.
     faltan = {f["transporter_id"] for f in filas} - set(nombres)
@@ -19093,6 +19101,8 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
         e["driver_name"] = n["name"] if n else ""
         e["driver_id"] = (n or {}).get("id")
         e["solo_historial"] = bool((n or {}).get("solo_historial"))
+        e["de_baja"] = bool((n or {}).get("de_baja"))
+        e["sin_ficha"] = bool((n or {}).get("sin_ficha"))
         e["detalle"].sort(key=lambda x: x.get("fecha_concesion") or "")
         salida.append(e)
     salida.sort(key=lambda x: (-x["defectos"], -x["dnr_total"], x["driver_name"] or x["transporter_id"]))
@@ -19164,10 +19174,16 @@ async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_adm
         if tid and nm:
             hist.setdefault(tid, set()).add(nm)
 
-    drivers = await db.drivers.find(
-        {"active": {"$ne": False}},
-        {"_id": 0, "id": 1, "name": 1, "transporter_id": 1, "center": 1, "active": 1}
-    ).to_list(2000)
+    # TODAS las fichas, tambien las de baja. Un DNR de hace tres semanas es de
+    # quien lo hizo, aunque esa persona ya no trabaje aqui: dejarlo como codigo
+    # porque se fue seria perder el dato justo cuando se va a mirar hacia atras.
+    # Las activas van primero para que, ante dos fichas con el mismo nombre,
+    # `_empareja_conductor` se quede con la que sigue trabajando.
+    todas = await db.drivers.find(
+        {}, {"_id": 0, "id": 1, "name": 1, "transporter_id": 1, "center": 1, "active": 1}
+    ).to_list(3000)
+    drivers = ([d for d in todas if d.get("active") is not False]
+               + [d for d in todas if d.get("active") is False])
     alias = await _alias_cuadrante()
 
     vinculan, sin_ficha, ambiguos, conflictos, discrepan = [], [], [], [], []
@@ -19197,7 +19213,7 @@ async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_adm
             continue
         vinculan.append({"nombre": drv["name"], "escrito": p["nombre"],
                          "transporter_id": p["tid"], "driver_id": drv["id"],
-                         "como": motivo})
+                         "como": motivo, "de_baja": drv.get("active") is False})
 
     # Ids que ya salen en los reportes y que esta lista NO cubre: son los que
     # seguirian apareciendo como codigo en vez de como persona.
@@ -19220,6 +19236,19 @@ async def vincular_transporter_ids(data: dict = Body(...), _=Depends(require_adm
     for v in vinculan:
         await db.drivers.update_one({"id": v["driver_id"]},
                                     {"$set": {"transporter_id": v["transporter_id"]}})
+
+    # Los que no tienen ficha ninguna —gente de oficina, o que se fue antes de
+    # que existiera la app— se guardan como simple etiqueta id -> nombre. No se
+    # les crea una ficha de conductor falsa por eso: no lo son, y saldrian en el
+    # cuadrante y en la asignacion. Pero su nombre se enseña, que es de lo que
+    # se trata: un DNR de hace tres semanas sigue siendo de alguien.
+    if sin_ficha:
+        etiquetas = {s["transporter_id"]: s["nombre"] for s in sin_ficha}
+        await db.app_meta.update_one(
+            {"_id": "transporter_alias"},
+            {"$set": {f"mapa.{k}": v for k, v in etiquetas.items()}},
+            upsert=True)
+        salida["etiquetados"] = len(etiquetas)
     salida["guardado"] = True
     logger.info("Transporter IDs vinculados: %d de %d pares", len(vinculan), len(pares))
     return salida
