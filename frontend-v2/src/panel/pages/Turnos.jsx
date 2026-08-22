@@ -121,15 +121,20 @@ const fondoCol = (esHoy, esFinde) =>
 const porNombre = (a, b) =>
   (a?.name || '').localeCompare(b?.name || '', 'es', { sensitivity: 'base' })
 
-/* ¿Es lunes? Marca el corte de semana en la rejilla: en 31 columnas seguidas
-   no hay forma de saber dónde empieza una semana sin una línea. */
-const lunes = (iso) => new Date(iso + 'T12:00:00').getDay() === 1
+/* ¿Empieza semana? Marca el corte en la rejilla: en 31 columnas seguidas no
+   hay forma de saber dónde empieza una semana sin una línea.
 
-/* Lunes de la semana de una fecha (la semana laboral empieza en lunes). */
-function lunesDe(d) {
+   DOMINGO, no lunes. La semana de Amazon va de domingo a sábado, y es la que
+   manda para todo lo que se cuadra con ellos. Cortando en lunes, la línea caía
+   en medio de cada semana de Amazon y las cuentas de la semana no cuadraban
+   con las suyas. */
+const empiezaSemana = (iso) => new Date(iso + 'T12:00:00').getDay() === 0
+
+/* Domingo de la semana de una fecha. */
+function domingoDe(d) {
   const x = new Date(d)
   x.setHours(12, 0, 0, 0)
-  x.setDate(x.getDate() - ((x.getDay() + 6) % 7))
+  x.setDate(x.getDate() - x.getDay())
   return x
 }
 function sumaDias(iso, n) {
@@ -143,7 +148,7 @@ export default function Turnos() {
   const { t, lang } = useT()
   const noCenter = center === 'Todos'
 
-  const [desde, setDesde] = useState(() => isoLocal(lunesDe(new Date())))
+  const [desde, setDesde] = useState(() => isoLocal(domingoDe(new Date())))
   const [drivers, setDrivers] = useState(null)
   const [grid, setGrid] = useState({})          // 'driverId|fecha' -> tipo
   const [sucio, setSucio] = useState(false)     // hay cambios sin guardar
@@ -941,17 +946,32 @@ export default function Turnos() {
           <CalendarClock size={20} /> {t('turns.title')} · {center}
         </h1>
         <div className="flex items-center gap-1">
-          <button className="btn-ghost p-2" onClick={() => setDesde((d) => sumaDias(d, -DIAS))} aria-label={t('turns.prev')}>
+          {/* Una semana por clic, no dos. Con saltos de quincena el bloque
+              visible sólo podía caer en unas pocas posiciones y el final de
+              mes se quedaba partido: no había manera de ver el 31 junto a los
+              días con los que hay que cuadrarlo. */}
+          <button className="btn-ghost p-2" onClick={() => setDesde((d) => sumaDias(d, -7))} aria-label={t('turns.prev')}>
             <ChevronLeft size={16} />
           </button>
           <span className="min-w-[9.5rem] text-center text-sm font-semibold text-dark-200">
             {fmtNum(primerDia)} – {fmtNum(hasta)}
           </span>
-          <button className="btn-ghost p-2" onClick={() => setDesde((d) => sumaDias(d, DIAS))} aria-label={t('turns.next')}>
+          <button className="btn-ghost p-2" onClick={() => setDesde((d) => sumaDias(d, 7))} aria-label={t('turns.next')}>
             <ChevronRight size={16} />
           </button>
-          <button className="btn-ghost ml-1 px-3 py-1.5 text-xs" onClick={() => setDesde(isoLocal(lunesDe(new Date())))}>
+          <button className="btn-ghost ml-1 px-3 py-1.5 text-xs" onClick={() => setDesde(isoLocal(domingoDe(new Date())))}>
             {t('turns.today')}
+          </button>
+          {/* El final de mes es lo que más se cuadra y lo que peor se veía:
+              coloca el bloque para que el último día del mes quede dentro,
+              con la semana entera de antes. */}
+          <button className="btn-ghost px-3 py-1.5 text-xs" title="Ver el final del mes, con la última semana entera"
+            onClick={() => {
+              const d = new Date(primerDia + 'T12:00:00')
+              const ultimo = new Date(d.getFullYear(), d.getMonth() + 1, 0)
+              setDesde(isoLocal(domingoDe(sumaDias(isoLocal(ultimo), -7))))
+            }}>
+            Fin de mes
           </button>
         </div>
       </div>
@@ -1201,7 +1221,7 @@ export default function Turnos() {
                   <th key={f} data-col={ci}
                     className={`border-r border-dark-800/70 px-1 py-2 text-center ${fondoCol(f === hoy, finde(f))} ${
                       f === hoy ? 'border-x border-x-amber-400/35'
-                        : lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
+                        : empiezaSemana(f) ? 'border-l border-l-dark-600' : ''}`}>
                     <button onClick={() => columnaEntera(f)}
                       title={pincel ? `Poner ${uiDe(pincel).etiqueta} a todos este día` : 'Vaciar este día a todos'}
                       className="rounded px-1 py-0.5 transition hover:bg-brand-500/15">
@@ -1230,7 +1250,7 @@ export default function Turnos() {
                 {dias.map((f, ci) => (
                   <td key={f} data-col={ci}
                     className={`border-r border-dark-800/70 px-1 py-1 text-center ${fondoCol(f === hoy, finde(f))} ${
-                      f === hoy ? 'border-x border-x-amber-400/35' : lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
+                      f === hoy ? 'border-x border-x-amber-400/35' : empiezaSemana(f) ? 'border-l border-l-dark-600' : ''}`}>
                     <input
                       type="number" min="0" value={maximas[f] ?? ''} placeholder="—"
                       onChange={(e) => setMaximas((m) => ({ ...m, [f]: e.target.value }))}
@@ -1249,7 +1269,7 @@ export default function Turnos() {
                 {dias.map((f, ci) => (
                   <td key={f} data-col={ci}
                     className={`border-r border-dark-800/70 px-1 py-1 text-center ${fondoCol(f === hoy, finde(f))} ${
-                      f === hoy ? 'border-x border-x-amber-400/35' : lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
+                      f === hoy ? 'border-x border-x-amber-400/35' : empiezaSemana(f) ? 'border-l border-l-dark-600' : ''}`}>
                     <input
                       type="number" min="0" value={demanda[f] ?? ''} placeholder="—"
                       onChange={(e) => setDemanda((d) => ({ ...d, [f]: e.target.value }))}
@@ -1289,7 +1309,7 @@ export default function Turnos() {
                   return (
                     <td key={f} data-col={ci}
                       className={`border-r border-dark-800/70 px-1 py-1 text-center ${fondoCol(f === hoy, finde(f))} ${
-                        f === hoy ? 'border-x border-x-amber-400/35' : lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
+                        f === hoy ? 'border-x border-x-amber-400/35' : empiezaSemana(f) ? 'border-l border-l-dark-600' : ''}`}>
                       <span className="flex items-baseline justify-center gap-0.5"
                         title={`${n} ${n === 1 ? 'persona sale' : 'personas salen'} a ruta (BKP, Site y ride along no cuentan)${
                           piden > 0 ? ` · piden ${piden}` : ''}${max > 0 ? ` · máximo ${max}` : ''}${
@@ -1356,7 +1376,7 @@ export default function Turnos() {
                       <td key={f} data-col={ci}
                         className={`border-r border-dark-800/70 px-0.5 text-center ${
                           denso ? 'py-0' : 'py-0.5'} ${fondoCol(f === hoy, finde(f))} ${
-                          f === hoy ? 'border-x border-x-amber-400/35' : lunes(f) ? 'border-l border-l-dark-600' : ''}`}
+                          f === hoy ? 'border-x border-x-amber-400/35' : empiezaSemana(f) ? 'border-l border-l-dark-600' : ''}`}
                         onMouseEnter={(e) => cruz(e.currentTarget)}>
                         <button
                           onMouseDown={(e) => {

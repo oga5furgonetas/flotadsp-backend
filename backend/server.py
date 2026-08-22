@@ -18653,6 +18653,9 @@ async def exportar_cuadrante(center: str, desde: str, hasta: str,
         c1 = ws.cell(row=2, column=3 + j, value=DIAS_SEM_CORTO[d.weekday()])
         c1.font = Font(size=8, color="A00000" if finde else "808080")
         c1.alignment = centro
+        if d.weekday() == 6:
+            c1.border = Border(left=medio)
+            ws.cell(row=3, column=3 + j).border = Border(left=medio)
         c2 = ws.cell(row=3, column=3 + j, value=d.day)
         c2.font = Font(bold=True, size=10, color="A00000" if finde else "303030")
         c2.alignment = centro
@@ -18676,7 +18679,11 @@ async def exportar_cuadrante(center: str, desde: str, hasta: str,
             cod, hora = fila["dias"].get(f, ("", ""))
             cel = ws.cell(row=r, column=3 + j, value=cod)
             cel.alignment = centro
-            cel.border = borde
+            # Linea mas marcada donde empieza la semana. La semana de Amazon va
+            # de DOMINGO a sabado: cortando en lunes, la raya cae en medio de
+            # cada una de sus semanas y las cuentas no cuadran con las suyas.
+            cel.border = (Border(left=medio, right=fino, top=fino, bottom=fino)
+                          if datetime.strptime(f, "%Y-%m-%d").weekday() == 6 else borde)
             if cod:
                 etiqueta, fam = info(cod)
                 bg, fg = COLOR_FAMILIA_XLSX.get(fam, COLOR_FAMILIA_XLSX["libre"])
