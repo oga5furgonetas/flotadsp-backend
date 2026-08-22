@@ -240,6 +240,41 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `python -m pyflakes backend/server.py | grep "undefined name"` tiene que dar
    CERO. Ahora lo da, y por eso el próximo se notará.
 
+20. **Si cambias lo que guarda una estructura, busca TODOS los que la leen.**
+   La rejilla del cuadrante pasó de guardar el tipo (`'trabaja'`) a guardar el
+   código (`'1'`, `'BKP'`, `'V'`). Se cambiaron la celda, el pincel y el
+   guardado — y se quedó atrás `cobertura`, que seguía comparando
+   `v === 'trabaja'`. Resultado: la fila de cobertura marcaba **0 con 39
+   personas trabajando**. No falla, no avisa, y por pantalla parece que no hay
+   datos. Ni el build ni el linter lo ven, porque comparar dos strings que
+   nunca coinciden es JavaScript perfectamente válido. Tras un cambio así:
+   `grep -n "'trabaja'\|'libre'\|'extra'"` sobre el fichero entero y mirar
+   uno por uno.
+
+21. **En una rejilla, el rango que se PINTA y el que se PIDE no son el mismo.**
+   Dos fallos seguidos por esto: en "mes completo" se pedían los turnos desde
+   el inicio de la quincena, así que los días 1 y 2 salían vacíos teniendo
+   datos; y "quién sobra en el cuadrante" se calculaba sobre los catorce días
+   visibles, así que quien no trabajaba esas dos semanas salía marcado como
+   baja. Los dos son falsos negativos silenciosos. El rango que se pide sale de
+   `dias[0]`/`dias[último]`, y las preguntas del mes ("¿está esta persona en el
+   cuadrante?") se contestan con el mes entero, no con lo que se ve.
+
+22. **Máximo seis colores categóricos, y nunca el color solo.** Un color por
+   código convertía el cuadrante en un arcoíris ilegible. Okabe-Ito, la paleta
+   de IBM y las guías de accesibilidad coinciden: por encima de seis dejan de
+   distinguirse a tamaño pequeño, y una celda de cuadrante mide 22 px. Los
+   dieciséis códigos van en **cinco familias** (`ruta`, `apoyo`, `libre`,
+   `previsto`, `aviso`) y el texto del código, siempre visible dentro de la
+   celda, es el segundo canal. El nombre de la familia lo manda el backend
+   (`CODIGOS_CUADRANTE_INFO`); las clases de CSS viven en `Turnos.jsx`.
+
+23. **`sort()` sobre nombres escritos por personas no ordena nada.** Las 204
+   fichas están en MAYÚSCULAS, minúsculas y Mixtas. `sort()` compara por código
+   de carácter, así que todas las minúsculas caían detrás de todas las
+   mayúsculas y la lista parecía aleatoria. Siempre
+   `localeCompare(b, 'es', { sensitivity: 'base' })`, que además iguala tildes.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
