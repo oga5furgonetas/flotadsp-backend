@@ -239,7 +239,8 @@ export const deleteShiftBlock = (id) => api.delete(`/shift-blocks/${id}`)
 export const generateShiftsAuto = (center, desde, hasta) => api.post('/shifts/generate-auto', { center, desde, hasta }, { timeout: 120000 })
 export const getRouteDemand = (center, desde, hasta) => api.get('/route-demand', { params: { center, desde, hasta } })
 export const setRouteDemand = (center, items) => api.post('/route-demand', { center, items })
-export const getShiftRequests = (center, status) => api.get('/shift-requests', { params: { center, ...(status ? { status } : {}) } })
+export const getShiftRequests = (center, status, extra = {}) =>
+  api.get('/shift-requests', { params: { ...centerParam(center), ...(status ? { status } : {}), ...extra } })
 // Rechazar exige motivo: lo lee el conductor tal cual.
 export const resolveShiftRequest = (id, action, motivo) =>
   api.post(`/shift-requests/${id}/resolve`, { action, motivo })

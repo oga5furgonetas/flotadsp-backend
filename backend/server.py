@@ -17754,7 +17754,35 @@ async def save_shifts_bulk(data: dict = Body(...), user: dict = Depends(require_
     doc = await db.app_meta.find_one({"_id": "codigos_cuadrante"}) or {}
     mapa_cod = dict(CODIGOS_CUADRANTE_DEF)
     mapa_cod.update({str(k).upper(): v for k, v in (doc.get("mapa") or {}).items()})
-    saved = 0
+
+    # ── LOS DIAS APROBADOS NO SE PISAN ─────────────────────────────────────
+    # Un dia libre aprobado es un compromiso con una persona: se lo dijiste, se
+    # organizo. Que cualquiera con acceso al panel pueda repintar esa casilla
+    # —a mano, arrastrando, o sin querer al pegar el cuadrante del mes— y que
+    # nadie se entere hasta que esa persona no aparece, es el fallo mas caro
+    # que puede tener esta pantalla.
+    #
+    # Se comprueba AQUI y no solo escondiendo el boton: esconder un boton no
+    # protege nada, quien sepa la direccion de la API llega igual.
+    #
+    # Quien SI puede quitarlo es quien puede aprobarlo (el permiso
+    # 'aprobar-dias'), porque cambiar de opinion sobre un dia que tu mismo
+    # concediste es una decision legitima, y porque si no lo pudiera tocar
+    # nadie la unica salida seria editar la base de datos a mano.
+    puede_tocar_aprobados = _puede(user, "aprobar-dias")
+    protegidos = {}
+    if not puede_tocar_aprobados and items:
+        fechas = sorted({str(it.get("date") or "")[:10] for it in items if it.get("date")})
+        conductores = sorted({it.get("driver_id") for it in items if it.get("driver_id")})
+        if fechas and conductores:
+            cur = db.shift_requests.find(
+                {"status": "aprobado", "driver_id": {"$in": conductores},
+                 "date": {"$gte": fechas[0], "$lte": fechas[-1]}},
+                {"_id": 0, "driver_id": 1, "date": 1, "type": 1, "driver_name": 1})
+            async for r in cur:
+                protegidos[f"{r['driver_id']}|{r['date']}"] = r
+
+    saved, bloqueados = 0, []
     for it in items:
         did = it.get("driver_id")
         date = it.get("date")
@@ -17769,6 +17797,27 @@ async def save_shifts_bulk(data: dict = Body(...), user: dict = Depends(require_
         cod = str(it.get("cod") or "").strip().upper()[:20]
         if cod and cod in mapa_cod and mapa_cod[cod]:
             typ = mapa_cod[cod]
+        # Lo que se bloquea es el cambio que HACE DANO, no cualquier cambio.
+        #
+        # Comparar el codigo exacto ('N/T APROB') parecia lo obvio y era un
+        # falso positivo garantizado: los turnos guardados antes de que se
+        # empezara a guardar el codigo no lo tienen, asi que llegan como 'N/T'
+        # y se habrian rechazado todos — la pantalla acusando de pisar dias
+        # aprobados a quien solo estaba guardando el cuadrante sin tocarlos.
+        #
+        # Lo unico que no puede pasar es que un dia libre concedido se
+        # convierta en dia de trabajo (o al reves con un extra concedido). Que
+        # la celda ponga 'N/T' o 'N/T APROB' es cosmetico; que esa persona
+        # aparezca puesta a ruta el dia que le diste libre, no.
+        prot = protegidos.get(f"{did}|{date}")
+        if prot is not None:
+            aprobado = prot.get("type")
+            rompe = ((aprobado == "libre" and typ in ("trabaja", "extra"))
+                     or (aprobado == "extra" and typ == "libre"))
+            if rompe:
+                bloqueados.append({"driver_name": prot.get("driver_name") or "",
+                                   "date": date, "type": aprobado})
+                continue
         # Un turno de otro centro se ignora en silencio pero se deja anotado:
         # el cuadrante se envía entero desde la pantalla, y un 403 a mitad
         # dejaría la mitad guardada y la otra mitad no.
@@ -17793,7 +17842,11 @@ async def save_shifts_bulk(data: dict = Body(...), user: dict = Depends(require_
             cambio["$unset"] = quitar
         await db.shifts.update_one({"driver_id": did, "date": date}, cambio, upsert=True)
         saved += 1
-    return {"success": True, "saved": saved}
+    if bloqueados:
+        logger.info("Turnos: %s intento cambiar %d dias aprobados sin permiso",
+                    user.get("name"), len(bloqueados))
+    return {"success": True, "saved": saved, "bloqueados": bloqueados[:20],
+            "n_bloqueados": len(bloqueados)}
 
 
 @api_router.get("/shifts/coverage")
@@ -18116,13 +18169,37 @@ async def create_shift_request(data: dict = Body(...), user: dict = Depends(requ
 
 @api_router.get("/shift-requests")
 async def list_shift_requests(center: Optional[str] = None, status: Optional[str] = None,
+                              desde: Optional[str] = None, hasta: Optional[str] = None,
+                              driver_id: Optional[str] = None, q: Optional[str] = None,
+                              limit: int = 1000,
                               user: dict = Depends(require_admin)):
+    """Las peticiones de dias. Sirve para la bandeja y para el historial.
+
+    `status` admite varios separados por coma ("aprobado,rechazado"), y hay
+    rango de fechas, conductor y busqueda por nombre: sin eso, el historial de
+    un ano son mil filas y encontrar "cuando le di el dia a Estela" es
+    imposible.
+    """
     # Igual que el cuadrante: sin filtro por centro, quien lleva un centro veía
     # las peticiones de días de TODA la empresa, con nombre y motivo.
-    q = dict(_filtro_centro(user, center))
+    filtro = dict(_filtro_centro(user, center))
     if status:
-        q["status"] = status
-    reqs = await db.shift_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+        estados = [s.strip() for s in str(status).split(",") if s.strip()]
+        filtro["status"] = estados[0] if len(estados) == 1 else {"$in": estados}
+    if desde or hasta:
+        rango = {}
+        if desde:
+            rango["$gte"] = str(desde)[:10]
+        if hasta:
+            rango["$lte"] = str(hasta)[:10]
+        filtro["date"] = rango
+    if driver_id:
+        filtro["driver_id"] = driver_id
+    if q:
+        # Escapado: un nombre con un parentesis no puede tumbar la consulta.
+        filtro["driver_name"] = {"$regex": re.escape(str(q).strip()), "$options": "i"}
+    reqs = await db.shift_requests.find(filtro, {"_id": 0}).sort(
+        "date", -1).to_list(max(1, min(int(limit or 1000), 3000)))
     return {"requests": reqs}
 
 
@@ -18178,11 +18255,26 @@ async def resolve_shift_request(req_id: str, data: dict = Body(...),
     except Exception as e:
         logger.debug("Push respuesta petición: %s", e)
     if new_status == "aprobado":
+        # Entra en el cuadrante en el acto, y con el CODIGO que le corresponde.
+        # Sin `cod` la celda caia en el 'N/T' generico y en la rejilla no habia
+        # forma de distinguir "libra porque toca" de "libra porque se lo
+        # aprobaste" — que es justo lo que no se puede confundir, porque lo
+        # segundo no se puede cambiar sin hablar con la persona.
+        cod = "N/T APROB" if req["type"] == "libre" else "EXTRA"
         await db.shifts.update_one(
             {"driver_id": req["driver_id"], "date": req["date"]},
             {"$set": {"driver_id": req["driver_id"], "driver_name": req.get("driver_name", ""),
-                      "center": req["center"], "date": req["date"], "type": req["type"]}},
+                      "center": req["center"], "date": req["date"], "type": req["type"],
+                      "cod": cod, "aprobado_req": req_id},
+             "$unset": {"hora": ""}},
             upsert=True,
+        )
+    elif req.get("status") == "aprobado":
+        # Se ha desaprobado algo que ya estaba aprobado: la marca del cuadrante
+        # tiene que irse con ello, o la celda seguiria bloqueada para siempre.
+        await db.shifts.update_one(
+            {"driver_id": req["driver_id"], "date": req["date"], "aprobado_req": req_id},
+            {"$unset": {"aprobado_req": ""}},
         )
     return {"success": True, "status": new_status}
 
@@ -18447,6 +18539,8 @@ async def import_shifts_pegado(data: dict = Body(...), _=Depends(require_admin))
     if not items:
         raise HTTPException(400, "No hay ni un turno que guardar")
 
+    items, respetados = await _respeta_aprobados(items)
+
     guardados = 0
     for i in range(0, len(items), 500):
         lote = items[i:i + 500]
@@ -18456,6 +18550,8 @@ async def import_shifts_pegado(data: dict = Body(...), _=Depends(require_admin))
         guardados += len(lote)
     resumen["guardado"] = True
     resumen["saved"] = guardados
+    resumen["respetados"] = respetados[:30]
+    resumen["n_respetados"] = len(respetados)
     logger.info("Cuadrante pegado: %s %s - %s turnos", center, resumen["mes"], guardados)
     return resumen
 
@@ -18777,6 +18873,54 @@ CODIGOS_CUADRANTE_INFO = {
 }
 
 CODIGOS_CUADRANTE_DEF = {k: v[0] for k, v in CODIGOS_CUADRANTE_INFO.items()}
+
+
+async def _respeta_aprobados(items: list) -> tuple:
+    """Quita de `items` los dias que romperian una peticion ya aprobada.
+
+    Devuelve (items_que_si_van, [{driver_name, date, type}, ...]).
+
+    Existe porque el candado de la rejilla no bastaba. Pegar el cuadrante del
+    mes desde Sheets escribe DIRECTO en la coleccion, sin pasar por
+    /shifts/bulk, asi que se saltaba la proteccion entera: la hoja de Sheets no
+    sabe nada de los dias que se aprobaron en la app, y al pegarla el mes que
+    viene los borraba a todos de una vez y en silencio. Es el mismo fallo, pero
+    peor, porque en vez de una celda son sesenta a la vez.
+
+    Aqui se respeta SIEMPRE, tenga o no permiso quien pega. Pegar el cuadrante
+    no es decidir sobre el dia de nadie: es traer la hoja del mes. Si de verdad
+    hay que quitarle el dia a alguien, se hace en su casilla, a proposito y
+    dejando rastro.
+    """
+    if not items:
+        return items, []
+    fechas = sorted({it["date"] for it in items})
+    conductores = sorted({it["driver_id"] for it in items})
+    aprobados = {}
+    cur = db.shift_requests.find(
+        {"status": "aprobado", "driver_id": {"$in": conductores},
+         "date": {"$gte": fechas[0], "$lte": fechas[-1]}},
+        {"_id": 0, "driver_id": 1, "date": 1, "type": 1, "driver_name": 1})
+    async for r in cur:
+        aprobados[f"{r['driver_id']}|{r['date']}"] = r
+    if not aprobados:
+        return items, []
+
+    limpios, respetados = [], []
+    for it in items:
+        prot = aprobados.get(f"{it['driver_id']}|{it['date']}")
+        if prot is None:
+            limpios.append(it)
+            continue
+        aprobado = prot.get("type")
+        rompe = ((aprobado == "libre" and it.get("type") in ("trabaja", "extra"))
+                 or (aprobado == "extra" and it.get("type") == "libre"))
+        if rompe:
+            respetados.append({"driver_name": prot.get("driver_name") or it.get("driver_name") or "",
+                               "date": it["date"], "type": aprobado})
+        else:
+            limpios.append(it)
+    return limpios, respetados
 
 
 def _despieza_codigo(crudo) -> tuple:
@@ -19179,6 +19323,8 @@ async def import_shifts(file: UploadFile = File(...), center: str = Form(...),
     if not confirmar:
         return resumen
 
+    items, respetados = await _respeta_aprobados(items)
+
     guardados = 0
     for i in range(0, len(items), 500):
         lote = items[i:i + 500]
@@ -19189,6 +19335,8 @@ async def import_shifts(file: UploadFile = File(...), center: str = Form(...),
             guardados += len(lote)
     resumen["guardado"] = True
     resumen["saved"] = guardados
+    resumen["respetados"] = respetados[:30]
+    resumen["n_respetados"] = len(respetados)
     logger.info("Cuadrante importado: %s %s - %s turnos", center, resumen["mes"], guardados)
     return resumen
 

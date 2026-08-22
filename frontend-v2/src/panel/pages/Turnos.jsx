@@ -4,6 +4,7 @@ import {
   Loader2, CalendarClock, Users, ChevronLeft, ChevronRight, Save, Zap,
   Upload, Check, X, Settings2, AlertTriangle, Inbox, ClipboardPaste, Ban, Trash2,
   Brush, Undo2, Search, CalendarRange, Eraser, Rows3, CopyPlus, UserMinus, Download,
+  ChevronDown, History, Lock,
 } from 'lucide-react'
 import {
   getShifts, getShiftCoverage, getDrivers, saveShiftsBulk, setShiftSettings,
@@ -173,6 +174,14 @@ export default function Turnos() {
   const [quien, setQuien] = useState('cuadrante')   // 'cuadrante' | 'todos'
   const [denso, setDenso] = useState(false)
   const [confirmarBaja, setConfirmarBaja] = useState(null)  // conductor a sacar
+  /* Plegar la rejilla. Con 61 filas y 31 columnas, mirar cuatro peticiones
+     obliga a bajar toda la pantalla; plegada, lo de abajo queda a la vista. */
+  const [verRejilla, setVerRejilla] = useState(true)
+  const [verHistorial, setVerHistorial] = useState(false)
+  const [historialDias, setHistorialDias] = useState(null)
+  const [filtroHist, setFiltroHist] = useState(
+    { estado: 'aprobado', desde: '', hasta: '', q: '' })
+  const [cargandoHist, setCargandoHist] = useState(false)
   const [vistaMes, setVistaMes] = useState(false)
   const [aprobados, setAprobados] = useState(new Set())  // 'did|fecha' con día libre CONCEDIDO
   const historial = useRef([])                            // para deshacer
@@ -432,6 +441,13 @@ export default function Turnos() {
      que es distinto de poner "libre": vacío es "no hay nada puesto ese día". */
   const aplicar = (did, fecha, conHistorial = true) => {
     const k = `${did}|${fecha}`
+    /* Día concedido y sin permiso para tocarlo: no se pinta. El servidor lo
+       rechaza igualmente, pero dejar que se pinte y avisar sólo al guardar
+       significa perder todo el rato que hayas estado editando encima. */
+    if (aprobados.has(k) && !puedeAprobar) {
+      setErr('Ese día está aprobado. Sólo quien puede aprobar días puede quitarlo.')
+      return
+    }
     if (conHistorial) recordar()
     setGrid((g) => {
       if (!pincel) { const n = { ...g }; delete n[k]; return n }
@@ -581,7 +597,20 @@ export default function Turnos() {
       }
       const r = await saveShiftsBulk(items)
       setSucio(false)
-      setAviso(t('turns.saved').replace('{n}', r.data?.saved ?? items.length))
+      const n = r.data?.n_bloqueados || 0
+      if (n > 0) {
+        // El servidor ha rechazado celdas de días aprobados. Se dice cuáles y
+        // se recarga: dejar en pantalla lo que NO se ha guardado sería peor
+        // que el propio intento, porque pareceria que quedo hecho.
+        const q = (r.data?.bloqueados || [])
+          .slice(0, 4).map((b) => `${b.driver_name} el ${fmtNum(b.date)}`).join(' · ')
+        setErr(`${n} ${n === 1 ? 'día no se ha guardado' : 'días no se han guardado'}: `
+          + `están aprobados y no tienes permiso para quitarlos. ${q}`
+          + `${n > 4 ? ` y ${n - 4} más` : ''}`)
+        await cargar()
+      } else {
+        setAviso(t('turns.saved').replace('{n}', r.data?.saved ?? items.length))
+      }
     } catch {
       setErr(t('turns.save.err'))
     } finally { setOcupado('') }
@@ -615,6 +644,30 @@ export default function Turnos() {
   /* Se mandan los dos numeros SIEMPRE, aunque solo hayas tocado uno. Si se
      mandara solo el editado, el otro llegaria vacio al servidor y se borraria:
      rellenar las maximas del mes y perderlas al escribir la primera demanda. */
+  /* El historial. Se pide aparte y sólo cuando se abre: son hasta tres mil
+     filas y no tienen por qué viajar con cada carga del cuadrante. */
+  const cargarHistorial = useCallback(async (f = filtroHist) => {
+    setCargandoHist(true); setErr('')
+    try {
+      const r = await getShiftRequests(center, f.estado || undefined, {
+        ...(f.desde ? { desde: f.desde } : {}),
+        ...(f.hasta ? { hasta: f.hasta } : {}),
+        ...(f.q.trim() ? { q: f.q.trim() } : {}),
+      })
+      setHistorialDias(lista(r.data?.requests))
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo cargar el historial.')
+    } finally { setCargandoHist(false) }
+  }, [center, filtroHist])
+
+  /* Se espera un poco antes de buscar: el filtro cambia con cada tecla del
+     buscador, y sin esto escribir "Estela" son seis consultas seguidas. */
+  useEffect(() => {
+    if (!verHistorial) return undefined
+    const id = setTimeout(() => cargarHistorial(), 300)
+    return () => clearTimeout(id)
+  }, [verHistorial, cargarHistorial])
+
   const guardarDemanda = async (dm = demanda, mx = maximas) => {
     const items = dias.map((f) => ({
       date: f,
@@ -1081,6 +1134,22 @@ export default function Turnos() {
         </div>
       )}
 
+      {!cargando && drivers?.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={() => setVerRejilla((v) => !v)}
+            className="flex items-center gap-1.5 rounded-lg border border-dark-800 bg-dark-900/60 px-3 py-1.5 text-[12.5px] font-semibold text-dark-300 transition hover:text-dark-100">
+            {verRejilla ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+            {verRejilla ? 'Ocultar el cuadrante' : `Ver el cuadrante (${visibles.length})`}
+          </button>
+          <button onClick={() => setVerHistorial((v) => !v)}
+            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12.5px] font-semibold transition ${
+              verHistorial ? 'border-brand-500/50 bg-brand-500/15 text-brand-300'
+                : 'border-dark-800 bg-dark-900/60 text-dark-300 hover:text-dark-100'}`}>
+            <History size={15} /> Historial de días
+          </button>
+        </div>
+      )}
+
       {cargando ? (
         <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> {t('ui.loading')}</div>
       ) : !drivers?.length ? (
@@ -1088,7 +1157,7 @@ export default function Turnos() {
           <Users size={28} className="text-dark-500" />
           <p className="text-dark-300">{t('turns.no.drivers')}</p>
         </div>
-      ) : (
+      ) : !verRejilla ? null : (
         <div className="card overflow-x-auto">
           <table ref={tablaRef} onMouseLeave={() => cruz(null)}
             className="w-full border-collapse text-sm">
@@ -1279,6 +1348,13 @@ export default function Turnos() {
                         >
                           {ui ? corto(cod) : '·'}
                         </button>
+                        {concedido && !choca && (
+                          // Marca de esquina: la celda ya va con anillo verde,
+                          // pero el anillo dice "aprobado" y esto dice "y no lo
+                          // puedes tocar", que no es lo mismo.
+                          <Lock size={7} className={`pointer-events-none -mt-[1.35rem] ml-[1.5rem] block ${
+                            puedeAprobar ? 'text-emerald-400/40' : 'text-emerald-300/80'}`} />
+                        )}
                       </td>
                     )
                   })}
@@ -1297,6 +1373,128 @@ export default function Turnos() {
       {/* ── Lo que va a hacer el Excel, ANTES de escribirlo ─────────────────
           Con 61 conductores y 31 días son casi 1.900 turnos. Escribirlos sin
           que nadie los mire es demasiado, y deshacerlo después no es trivial. */}
+      {/* ── HISTORIAL DE DIAS ────────────────────────────────────────────
+          Vive aparte de la bandeja de pendientes a proposito: la bandeja es
+          para decidir y se vacia; esto es para consultar y no se vacia nunca.
+          Mezclarlas hacia que lo ya decidido tapara lo que falta por decidir. */}
+      {verHistorial && (
+        <div className="card p-4">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <History size={16} className="text-brand-400" />
+            <h3 className="text-sm font-bold text-dark-100">Historial de días</h3>
+            {historialDias && (
+              <span className="rounded-full bg-dark-800 px-2 py-0.5 text-[11px] font-semibold text-dark-400">
+                {historialDias.length} {historialDias.length === 1 ? 'petición' : 'peticiones'}
+              </span>
+            )}
+            <button onClick={() => setVerHistorial(false)}
+              className="ml-auto text-dark-500 hover:text-dark-200"><X size={16} /></button>
+          </div>
+
+          <div className="mb-3 flex flex-wrap items-end gap-2">
+            <div className="flex overflow-hidden rounded-lg border border-dark-700">
+              {[['aprobado', 'Aprobados'], ['rechazado', 'Rechazados'],
+                ['pendiente', 'Pendientes'], ['', 'Todos']].map(([k, lbl]) => (
+                <button key={k || 'todos'}
+                  onClick={() => setFiltroHist((f) => ({ ...f, estado: k }))}
+                  className={`px-2.5 py-1.5 text-[12px] font-semibold transition ${
+                    filtroHist.estado === k ? 'bg-brand-500/20 text-brand-200'
+                      : 'text-dark-500 hover:text-dark-200'}`}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
+            <label className="flex flex-col gap-0.5 text-[10.5px] uppercase tracking-wider text-dark-600">
+              Desde
+              <input type="date" value={filtroHist.desde}
+                onChange={(e) => setFiltroHist((f) => ({ ...f, desde: e.target.value }))}
+                className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1 text-[12.5px] text-dark-100" />
+            </label>
+            <label className="flex flex-col gap-0.5 text-[10.5px] uppercase tracking-wider text-dark-600">
+              Hasta
+              <input type="date" value={filtroHist.hasta}
+                onChange={(e) => setFiltroHist((f) => ({ ...f, hasta: e.target.value }))}
+                className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1 text-[12.5px] text-dark-100" />
+            </label>
+            <div className="relative">
+              <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dark-600" />
+              <input value={filtroHist.q} placeholder="Buscar conductor"
+                onChange={(e) => setFiltroHist((f) => ({ ...f, q: e.target.value }))}
+                className="w-44 rounded-lg border border-dark-700 bg-dark-950 py-1.5 pl-7 pr-2 text-[12.5px] text-dark-100 placeholder:text-dark-600" />
+            </div>
+            {(filtroHist.desde || filtroHist.hasta || filtroHist.q) && (
+              <button onClick={() => setFiltroHist({ estado: filtroHist.estado, desde: '', hasta: '', q: '' })}
+                className="py-1.5 text-[12px] text-dark-500 underline underline-offset-2 hover:text-dark-200">
+                limpiar
+              </button>
+            )}
+          </div>
+
+          {cargandoHist ? (
+            <p className="flex items-center gap-2 py-6 text-[13px] text-dark-500">
+              <Loader2 size={15} className="animate-spin" /> Buscando…
+            </p>
+          ) : !historialDias?.length ? (
+            <p className="py-6 text-center text-[13px] text-dark-500">
+              No hay nada con esos filtros.
+            </p>
+          ) : (
+            <div className="max-h-[26rem] overflow-y-auto rounded-lg border border-dark-800">
+              <table className="w-full text-left text-[12.5px]">
+                <thead className="sticky top-0 z-10 bg-dark-900">
+                  <tr className="text-[10.5px] uppercase tracking-wider text-dark-600">
+                    <th className="px-3 py-2 font-semibold">Conductor</th>
+                    <th className="px-2 py-2 font-semibold">Día</th>
+                    <th className="px-2 py-2 font-semibold">Pide</th>
+                    <th className="px-2 py-2 font-semibold">Motivo</th>
+                    <th className="px-2 py-2 font-semibold">Estado</th>
+                    <th className="px-3 py-2 font-semibold">Quién y cuándo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historialDias.map((r, i) => (
+                    <tr key={r.id || i} className={`border-t border-dark-800/70 ${i % 2 ? 'bg-dark-800/[0.15]' : ''}`}>
+                      <td className="max-w-[12rem] truncate px-3 py-1.5 text-dark-200" title={r.driver_name}>
+                        {r.driver_name}
+                      </td>
+                      <td className="whitespace-nowrap px-2 py-1.5 tabular-nums text-dark-300">{fmtNum(r.date)}</td>
+                      <td className="px-2 py-1.5 text-dark-400">
+                        {r.type === 'libre' ? 'Día libre' : 'Extra'}
+                      </td>
+                      <td className="max-w-[14rem] truncate px-2 py-1.5 text-dark-500"
+                        title={[r.motivo_label || r.motivo, r.note].filter(Boolean).join(' — ')}>
+                        {[r.motivo_label || r.motivo, r.note].filter(Boolean).join(' — ') || '—'}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                          r.status === 'aprobado' ? 'bg-emerald-500/15 text-emerald-300'
+                            : r.status === 'rechazado' ? 'bg-red-500/15 text-red-300'
+                              : 'bg-amber-500/15 text-amber-300'}`}>
+                          {r.status}
+                        </span>
+                        {/* Un rechazo sin motivo a la vista obliga a preguntar
+                            por WhatsApp, que es de lo que se huia. */}
+                        {r.status === 'rechazado' && r.motivo_respuesta && (
+                          <span className="ml-1.5 text-[11px] text-red-300/70" title={r.motivo_respuesta}>
+                            «{r.motivo_respuesta.slice(0, 28)}{r.motivo_respuesta.length > 28 ? '…' : ''}»
+                          </span>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-1.5 text-[11.5px] text-dark-500">
+                        {r.resolved_by || '—'}
+                        {r.resolved_at && (
+                          <span className="ml-1 text-dark-600">· {r.resolved_at.slice(8, 10)}/{r.resolved_at.slice(5, 7)}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {verPegar && (
         <div className="card p-4">
           <div className="mb-2 flex items-center gap-2">
@@ -1497,6 +1695,22 @@ export default function Turnos() {
                   Guardar {Object.values(emparejando).filter(Boolean).length} y volver a leer
                 </button>
               )}
+            </div>
+          )}
+
+          {previa.n_respetados > 0 && (
+            <div className="mb-3 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.07] px-3 py-2.5">
+              <p className="text-[12.5px] font-semibold text-emerald-200">
+                <Lock size={12} className="mr-1 inline align-[-1px]" />
+                {previa.n_respetados} {previa.n_respetados === 1 ? 'día aprobado se ha respetado' : 'días aprobados se han respetado'}
+              </p>
+              <p className="mt-1 text-[11.5px] leading-relaxed text-emerald-200/70">
+                La hoja de Sheets no sabe nada de los días que aprobaste aquí, así que
+                {previa.n_respetados === 1 ? ' ese día se ha quedado' : ' esos días se han quedado'} como
+                {previa.n_respetados === 1 ? ' estaba' : ' estaban'}: {(previa.respetados || []).slice(0, 6)
+                  .map((r) => `${r.driver_name} el ${fmtNum(r.date)}`).join(' · ')}
+                {previa.n_respetados > 6 ? ` y ${previa.n_respetados - 6} más` : ''}
+              </p>
             </div>
           )}
 
