@@ -27,6 +27,11 @@ const SIN_UI_A_PROPOSITO = new Set([
   'POST /telegram/send-daily-summary',
   'POST /telegram/send-weekly-summary',
   'GET /r2-test',
+  // Buzon de errores del navegador. Se consulta a mano cuando alguien reporta
+  // "se me queda la pantalla en negro": hasta ahora esos errores solo iban a
+  // Telegram y a una linea de log que dura minutos, asi que no habia nada que
+  // leer. No lleva pantalla a proposito: nadie deberia mirar esto a diario.
+  'GET /client-errors',
   'POST /vehicles/fix-centers',
   'POST /drivers/import-ids',
   'GET /ai-dataset/export',

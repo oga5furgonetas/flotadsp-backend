@@ -1160,6 +1160,14 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.daily_reports, [("center", 1), ("fecha", 1), ("transporter_id", 1)])
     await _idx(tdb.daily_reports, [("center", 1), ("fecha_dnr", 1)])
     await _idx(tdb.drivers, "transporter_id")
+    # Errores de navegador: se consultan por fecha y se purgan solos a los 30
+    # dias. Un buzon de errores que crece sin techo acaba siendo otro problema.
+    await _idx(tdb.client_errors, [("ts", -1)])
+    try:
+        await tdb.client_errors.create_index("ts", expireAfterSeconds=30 * 24 * 3600,
+                                             name="ts_ttl")
+    except Exception:
+        pass
     await _idx(tdb.portales, "celda")
     await _idx(tdb.cortex_packages, "center")
     await _idx(tdb.cortex_packages, "service_area_id")
@@ -7697,10 +7705,36 @@ async def identify_vehicle_model(vehicle_id: str, _admin: dict = Depends(require
 
 
 @api_router.get("/inspections/review-queue")
-async def get_review_queue(center: Optional[str] = None, _=Depends(require_admin)):
+async def get_review_queue(center: Optional[str] = None, user: dict = Depends(require_admin)):
     """Cola de inspecciones pendientes de revisar (reviewed != true), enriquecidas
-    con matrícula y nombre del conductor. Más recientes primero."""
+    con matrícula y nombre del conductor. Más recientes primero.
+
+    EL CENTRO FILTRA EN LA CONSULTA, NO DESPUES DEL LIMITE.
+
+    Antes se cogian las 200 mas recientes de TODA la empresa y se descartaban
+    en Python las de otros centros. Con 1.773 pendientes eso significaba que
+    quien lleva DGA1 veia 64 de sus 834 —el 92% invisible— y quien lleva DGA2
+    veia CERO, siempre, teniendo inspecciones suyas sin revisar. Y por pantalla
+    no habia ninguna diferencia entre "no hay nada pendiente" y "hay 834 y no
+    te caben en la ventana": las dos cosas son una lista vacia.
+
+    Es el mismo fallo que el del cuadrante (gotcha 21): el rango que se PIDE y
+    el que se PINTA tienen que ser el mismo.
+
+    Y de paso se cierra un agujero: esta ruta no miraba `allowed_centers`. Con
+    el selector en "Todos", alguien limitado a un centro veia la cola entera de
+    la empresa. Ahora `_filtro_centro` decide, igual que en el resto.
+    """
     query = {"reviewed": {"$ne": True}, "deleted": {"$ne": True}}
+
+    # La inspeccion no guarda el centro (0 de 2.380 documentos): se saca del
+    # conductor o del vehiculo, asi que hay que traducir el centro a los ids de
+    # los dos y meterlos en la consulta.
+    sub = _filtro_centro(user, center)
+    if sub:
+        vids = await db.vehicles.distinct("id", sub)
+        dids = await db.drivers.distinct("id", sub)
+        query["$or"] = [{"vehicle_id": {"$in": vids}}, {"driver_id": {"$in": dids}}]
     # Solo los campos que usa la pantalla. Traerse el documento entero de 200
     # inspecciones significa arrastrar el analisis completo de cada una —todos
     # los danos, sus cajas y sus descripciones— cuando aqui solo hacen falta
@@ -7731,8 +7765,16 @@ async def get_review_queue(center: Optional[str] = None, _=Depends(require_admin
     for i in insps:
         v = vehicles.get(i.get("vehicle_id"), {})
         dr = drivers.get(i.get("driver_id"), {})
-        i_center = _normalize_center_code(dr.get("center") or v.get("center") or "")
-        if center and center != "Todos" and i_center != center:
+        # El centro que se ENSEÑA sale del conductor y, si no lo tiene, del
+        # vehiculo. Pero para DECIDIR si entra valen los dos: la consulta acepta
+        # la inspeccion si el vehiculo O el conductor son del centro, y si aqui
+        # se mirara solo el conductor se caerian las que hizo alguien de otro
+        # centro con una furgoneta de este. Medido: DGA2 decia "8 pendientes" y
+        # devolvia CERO, porque sus ocho las hicieron conductores de DGA1.
+        c_dr = _normalize_center_code(dr.get("center") or "")
+        c_v = _normalize_center_code(v.get("center") or "")
+        i_center = c_dr or c_v
+        if center and center != "Todos" and center not in (c_dr, c_v):
             continue
         analysis = i.get("analysis") or {}
         # Verificación de matrícula: la leída en las fotos vs la del vehículo
@@ -7771,7 +7813,12 @@ async def get_review_queue(center: Optional[str] = None, _=Depends(require_admin
             "dirt_level": analysis.get("dirt_level"),
             "fraud_warnings": list(analysis.get("fraud_warnings") or [])[:5],
         })
-    return {"queue": out, "total": len(out)}
+    # Cuantas hay DE VERDAD pendientes en este centro. Sin este numero, una
+    # cola de 200 y una de 834 se ven exactamente igual, y quien revisa cree
+    # que ha terminado cuando le quedan seiscientas.
+    pendientes = await db.inspections.count_documents(query)
+    return {"queue": out, "total": len(out), "pendientes": pendientes,
+            "hay_mas": pendientes > len(out)}
 
 
 @api_router.get("/inspections/{inspection_id}", response_model=Inspection)
@@ -10967,8 +11014,49 @@ async def report_client_error(data: dict, request: Request):
     stack = str(data.get("stack") or "")[:800]
     url = str(data.get("url") or "")[:200]
     ua = (request.headers.get("user-agent") or "")[:120]
+
+    # SE GUARDA, no solo se avisa.
+    #
+    # Hasta ahora un error del navegador iba a Telegram y a una linea de log.
+    # El aviso se puede perder y el log de Fly dura minutos, asi que cuando
+    # alguien dice "se me queda la pantalla en negro" no queda ni rastro de
+    # QUE error fue: hay que reproducirlo a ciegas. Pasó el 23-08-2026 con la
+    # pantalla de Inspecciones y no habia nada que leer.
+    #
+    # Se guarda tambien QUIEN lo sufrio si viene sesion. El endpoint es publico
+    # a proposito —un error puede ocurrir antes de tener token— asi que el
+    # usuario se saca del Bearer si lo hay, sin exigirlo.
+    quien = None
+    try:
+        auth = request.headers.get("authorization") or ""
+        if auth.lower().startswith("bearer "):
+            quien = (decode_token(auth[7:]) or {}).get("name")
+    except Exception:
+        pass          # un token caducado no puede impedir guardar el error
+
+    try:
+        await db.client_errors.insert_one({
+            "id": str(uuid.uuid4()), "message": message, "stack": stack,
+            "url": url, "ua": ua, "usuario": quien,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.warning("No se pudo guardar el error de cliente: %s", e)
+
     await _notify_error_once("frontend", message, f"URL: {url}\nStack: {stack[:300]}\nUA: {ua}")
     return {"success": True}
+
+
+@api_router.get("/client-errors")
+async def listar_client_errors(limit: int = 100, _=Depends(require_admin)):
+    """Los errores de navegador guardados, del mas reciente al mas viejo.
+
+    Existe para no tener que preguntar "¿y que ponia exactamente?": el mensaje,
+    la pantalla donde paso, quien lo sufrio y con que navegador.
+    """
+    docs = await db.client_errors.find({}, {"_id": 0}).sort("ts", -1).to_list(
+        max(1, min(int(limit or 100), 500)))
+    return {"errores": docs, "total": len(docs)}
 
 
 @app.exception_handler(Exception)

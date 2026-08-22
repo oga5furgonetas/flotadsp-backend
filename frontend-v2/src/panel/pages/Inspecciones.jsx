@@ -35,16 +35,26 @@ export default function Inspecciones() {
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(null)
 
+  /* El centro va en la PETICIÓN, no solo en el filtro de después.
+
+     Antes se pedían las 100 más recientes de toda la empresa y se descartaban
+     en el navegador las de otros centros. Con 3.405 inspecciones eso significa
+     que esas 100 cubrían dos días: quien mira DGA2 —que tiene 14 inspecciones,
+     ninguna reciente— veía SIEMPRE la lista vacía, y por pantalla no hay
+     diferencia entre "no hay ninguna" y "las tuyas no entran en la ventana".
+
+     Y depende de `center`: sin eso, cambiar de centro arriba no volvía a
+     pedir nada y se seguía filtrando sobre los mismos 100 de antes. */
   useEffect(() => {
-    setErr('')
-    Promise.all([getInspections({ limit: 100 }), getVehicles('Todos'), getDrivers('Todos').catch(() => ({ data: [] }))])
+    setErr(''); setInsps(null); setSel(null)
+    Promise.all([getInspections({ limit: 200, ...(center && center !== 'Todos' ? { center } : {}) }), getVehicles('Todos'), getDrivers('Todos').catch(() => ({ data: [] }))])
       .then(([ri, rv, rd]) => {
         const m = {}; (lista(rv.data)).forEach((v) => { m[v.id] = { plate: v.license_plate, center: v.center || '' } })
         const dm = {}; (lista(rd.data)).forEach((d) => { dm[d.id] = d.name })
         setVmap(m); setDmap(dm); setInsps(lista(ri.data))
       })
       .catch(() => setErr('No se pudieron cargar las inspecciones.'))
-  }, [])
+  }, [center])
 
   /* Tras mandar un daño al taller o cerrarlo, recarga SOLO esa inspección:
      el panel abierto y la lista tienen que enseñar el estado nuevo, o parece
@@ -52,7 +62,7 @@ export default function Inspecciones() {
   const recargarInspeccion = async () => {
     if (!sel) return
     try {
-      const r = await getInspections({ limit: 100 })
+      const r = await getInspections({ limit: 200, ...(center && center !== 'Todos' ? { center } : {}) })
       const todas = lista(r.data)
       setInsps(todas)
       const fresca = todas.find((i) => i.id === sel.id)
