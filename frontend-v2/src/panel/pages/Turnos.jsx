@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, CalendarClock, Users, ChevronLeft, ChevronRight, Save, Zap,
   Upload, Check, X, Settings2, AlertTriangle, Inbox, ClipboardPaste, Ban, Trash2,
-  Brush, Undo2, Search, CalendarRange, Eraser, Rows3, CopyPlus, UserMinus, Download,
+  Brush, Undo2, Search, Eraser, Rows3, CopyPlus, UserMinus, Download,
   ChevronDown, History, Lock,
 } from 'lucide-react'
 import {
@@ -18,7 +18,9 @@ import { lista } from '../../lib/lista'
 import { canSee } from '../auth'
 import { isoLocal } from '../../lib/fecha'
 
-const DIAS = 14
+/* Cuantos dias se pueden pintar de una vez. 92 es un trimestre: por encima
+   son miles de celdas y la pantalla se arrastra sin que nadie lo necesite. */
+const TOPE_DIAS = 92
 
 /* ── EL CÓDIGO, NO EL TIPO ─────────────────────────────────────────────────
    La app entiende tres tipos (trabaja / libre / extra) y con eso decide
@@ -118,6 +120,34 @@ const TIPO_A_COD = { trabaja: '1', libre: 'N/T', extra: 'EXTRA' }
 const fondoCol = (esHoy, esFinde) =>
   esHoy ? 'bg-amber-400/[0.055]' : esFinde ? 'bg-dark-800/40' : ''
 
+/* Los atajos de rango. Existen porque el 90% de las veces se quiere una de
+   estas cuatro cosas, y porque escribir dos fechas para ver la semana que
+   viene es más trabajo del que ahorra. Pero NINGUNO es obligatorio: las dos
+   fechas se pueden escribir a mano y llegar hasta donde haga falta. */
+const ATAJOS = [
+  { k: 'semana', lbl: 'Semana', titulo: 'La semana de Amazon en curso: de domingo a sábado' },
+  { k: 'dos', lbl: '2 semanas', titulo: 'Las dos semanas de Amazon en curso' },
+  { k: 'mes', lbl: 'Este mes', titulo: 'Del día 1 al último del mes, entero' },
+  { k: 'siguiente', lbl: 'Mes que viene', titulo: 'El mes siguiente entero: para los días que ya se piden con antelación' },
+]
+
+function atajo(k, ref = new Date()) {
+  const y = ref.getFullYear()
+  const m = ref.getMonth()
+  if (k === 'mes') {
+    return { desde: isoLocal(new Date(y, m, 1)), hasta: isoLocal(new Date(y, m + 1, 0)) }
+  }
+  if (k === 'siguiente') {
+    return { desde: isoLocal(new Date(y, m + 1, 1)), hasta: isoLocal(new Date(y, m + 2, 0)) }
+  }
+  const d = domingoDe(ref)
+  const largo = k === 'dos' ? 13 : 6
+  return {
+    desde: isoLocal(d),
+    hasta: isoLocal(new Date(d.getFullYear(), d.getMonth(), d.getDate() + largo)),
+  }
+}
+
 const porNombre = (a, b) =>
   (a?.name || '').localeCompare(b?.name || '', 'es', { sensitivity: 'base' })
 
@@ -148,7 +178,17 @@ export default function Turnos() {
   const { t, lang } = useT()
   const noCenter = center === 'Todos'
 
-  const [desde, setDesde] = useState(() => isoLocal(domingoDe(new Date())))
+  /* EL RANGO LO ELIGE QUIEN MIRA.
+
+     Antes era un ancla y un ancho fijo de catorce dias: la pantalla decidia
+     que se podia ver y que no. Con eso el final de mes quedaba siempre
+     partido, y si alguien pedia dias de septiembre no habia manera de llegar
+     hasta alli sin ir saltando de quincena en quincena. Un cuadrante tiene que
+     poder mirarse por donde haga falta. */
+  const [rango, setRango] = useState(() => {
+    const d = domingoDe(new Date())
+    return { desde: isoLocal(d), hasta: isoLocal(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 13)) }
+  })
   const [drivers, setDrivers] = useState(null)
   const [grid, setGrid] = useState({})          // 'driverId|fecha' -> tipo
   const [sucio, setSucio] = useState(false)     // hay cambios sin guardar
@@ -207,7 +247,6 @@ export default function Turnos() {
   const [filtroHist, setFiltroHist] = useState(
     { estado: 'aprobado', desde: '', hasta: '', q: '' })
   const [cargandoHist, setCargandoHist] = useState(false)
-  const [vistaMes, setVistaMes] = useState(false)
   const [aprobados, setAprobados] = useState(new Set())  // 'did|fecha' con día libre CONCEDIDO
   const historial = useRef([])                            // para deshacer
   const [puedeDeshacer, setPuedeDeshacer] = useState(false)
@@ -230,13 +269,18 @@ export default function Turnos() {
   /* Quincena o mes completo. El mes entero cabe: la columna del nombre se
      queda fija y los días se desplazan en horizontal. */
   const dias = useMemo(() => {
-    if (!vistaMes) return Array.from({ length: DIAS }, (_, i) => sumaDias(desde, i))
-    const d = new Date(desde + 'T12:00:00')
-    const y = d.getFullYear()
-    const m = d.getMonth()
-    const total = new Date(y, m + 1, 0).getDate()
-    return Array.from({ length: total }, (_, i) => isoLocal(new Date(y, m, i + 1)))
-  }, [desde, vistaMes])
+    const a = new Date(rango.desde + 'T12:00:00')
+    const b = new Date(rango.hasta + 'T12:00:00')
+    if (isNaN(a) || isNaN(b)) return [isoLocal(new Date())]
+    // Al reves se arregla solo en vez de dar error: si escribes la fecha de fin
+    // antes que la de inicio, lo que querias era ese rango.
+    const [ini, fin] = a <= b ? [a, b] : [b, a]
+    const n = Math.round((fin - ini) / 86400000) + 1
+    // Tope de 92 dias (un trimestre). Pintar mas son miles de celdas y la
+    // pantalla se arrastra; y nadie cuadra un cuadrante de medio ano de una vez.
+    return Array.from({ length: Math.min(n, TOPE_DIAS) },
+      (_, i) => isoLocal(new Date(ini.getFullYear(), ini.getMonth(), ini.getDate() + i)))
+  }, [rango])
   /* El rango que se PIDE al servidor sale de los días que se van a pintar, no
      de `desde`. En "mes completo" `dias` empieza el día 1 aunque la quincena
      empiece el 3: pidiendo desde el 3 los días 1 y 2 salían vacíos teniendo
@@ -259,6 +303,12 @@ export default function Turnos() {
     const d = new Date(hasta + 'T12:00:00')
     return isoLocal(new Date(d.getFullYear(), d.getMonth() + 1, 0))
   }, [hasta])
+
+  /* Mueve el bloque entero, sin cambiar de tamaño. */
+  const mueveRango = (n) => setRango({
+    desde: sumaDias(dias[0], n),
+    hasta: sumaDias(dias[dias.length - 1], n),
+  })
 
   const cargar = useCallback(async () => {
     if (noCenter) return
@@ -945,34 +995,41 @@ export default function Turnos() {
         <h1 className="flex items-center gap-2 text-xl font-bold">
           <CalendarClock size={20} /> {t('turns.title')} · {center}
         </h1>
-        <div className="flex items-center gap-1">
-          {/* Una semana por clic, no dos. Con saltos de quincena el bloque
-              visible sólo podía caer en unas pocas posiciones y el final de
-              mes se quedaba partido: no había manera de ver el 31 junto a los
-              días con los que hay que cuadrarlo. */}
-          <button className="btn-ghost p-2" onClick={() => setDesde((d) => sumaDias(d, -7))} aria-label={t('turns.prev')}>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {/* Las flechas mueven el bloque ENTERO tantos días como tenga. Así
+              el salto siempre encaja con lo que estás mirando: si ves dos
+              semanas avanzas dos, si ves un mes avanzas un mes. */}
+          <button className="btn-ghost p-2" onClick={() => mueveRango(-dias.length)} aria-label={t('turns.prev')}>
             <ChevronLeft size={16} />
           </button>
-          <span className="min-w-[9.5rem] text-center text-sm font-semibold text-dark-200">
-            {fmtNum(primerDia)} – {fmtNum(hasta)}
-          </span>
-          <button className="btn-ghost p-2" onClick={() => setDesde((d) => sumaDias(d, 7))} aria-label={t('turns.next')}>
+          <input type="date" value={rango.desde} max="2100-12-31"
+            onChange={(e) => e.target.value && setRango((r) => ({ ...r, desde: e.target.value }))}
+            className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1 text-[12.5px] font-semibold text-dark-100" />
+          <span className="text-dark-600">→</span>
+          <input type="date" value={rango.hasta} max="2100-12-31"
+            onChange={(e) => e.target.value && setRango((r) => ({ ...r, hasta: e.target.value }))}
+            className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1 text-[12.5px] font-semibold text-dark-100" />
+          <button className="btn-ghost p-2" onClick={() => mueveRango(dias.length)} aria-label={t('turns.next')}>
             <ChevronRight size={16} />
           </button>
-          <button className="btn-ghost ml-1 px-3 py-1.5 text-xs" onClick={() => setDesde(isoLocal(domingoDe(new Date())))}>
-            {t('turns.today')}
-          </button>
-          {/* El final de mes es lo que más se cuadra y lo que peor se veía:
-              coloca el bloque para que el último día del mes quede dentro,
-              con la semana entera de antes. */}
-          <button className="btn-ghost px-3 py-1.5 text-xs" title="Ver el final del mes, con la última semana entera"
-            onClick={() => {
-              const d = new Date(primerDia + 'T12:00:00')
-              const ultimo = new Date(d.getFullYear(), d.getMonth() + 1, 0)
-              setDesde(isoLocal(domingoDe(sumaDias(isoLocal(ultimo), -7))))
-            }}>
-            Fin de mes
-          </button>
+          <span className="ml-1 hidden text-[11px] text-dark-600 sm:inline">
+            {dias.length} {dias.length === 1 ? 'día' : 'días'}
+          </span>
+          {/* Si el rango pedido no cabe entero se dice. Recortar en silencio
+              haría creer que se está viendo todo, y se cuadraría de menos. */}
+          {dias.length >= TOPE_DIAS && hasta !== rango.hasta && rango.hasta > hasta && (
+            <span className="rounded bg-amber-500/15 px-2 py-1 text-[11px] font-semibold text-amber-300"
+              title={`De una vez se pintan como mucho ${TOPE_DIAS} días. Se ve hasta el ${fmtNum(hasta)}.`}>
+              recortado al {fmtNum(hasta)}
+            </span>
+          )}
+          <span className="mx-1 hidden h-5 w-px bg-dark-800 sm:block" />
+          {ATAJOS.map(({ k, lbl, titulo }) => (
+            <button key={k} onClick={() => setRango(atajo(k))} title={titulo}
+              className="btn-ghost px-2.5 py-1.5 text-xs">
+              {lbl}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -1092,12 +1149,6 @@ export default function Turnos() {
               className="w-40 rounded-lg border border-dark-700 bg-dark-950 py-1.5 pl-7 pr-2 text-[12.5px] text-dark-100 outline-none placeholder:text-dark-600 focus:border-brand-500/60" />
           </div>
 
-          <button onClick={() => setVistaMes((v) => !v)}
-            className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition ${
-              vistaMes ? 'border-brand-500/50 bg-brand-500/15 text-brand-300' : 'border-dark-700 text-dark-400 hover:text-dark-200'}`}>
-            <CalendarRange size={14} /> {vistaMes ? 'Mes completo' : 'Quincena'}
-          </button>
-
           <button onClick={() => setDenso((v) => !v)} title="Filas más juntas: caben más personas de una vez"
             className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold transition ${
               denso ? 'border-brand-500/50 bg-brand-500/15 text-brand-300' : 'border-dark-700 text-dark-400 hover:text-dark-200'}`}>
@@ -1137,7 +1188,7 @@ export default function Turnos() {
         <div className="rounded-xl border border-dark-800 bg-dark-900/40 px-3.5 py-2.5">
           <p className="text-[12.5px] text-dark-400">
             <b className="text-dark-200">{sobran.length}</b> {sobran.length === 1 ? 'persona tiene' : 'personas tienen'} ficha
-            activa pero ni un día puesto en {vistaMes ? 'este mes' : 'el mes'}.
+            activa pero ni un día puesto en el mes.
             {sobran.length === 1 ? ' Está escondida.' : ' Están escondidas.'}
             {' '}
             <button onClick={() => setQuien('todos')} className="underline underline-offset-2 hover:text-dark-100">
