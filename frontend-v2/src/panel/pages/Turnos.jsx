@@ -10,6 +10,7 @@ import {
   generateShiftsAuto, getRouteDemand, setRouteDemand, getShiftRequests,
   resolveShiftRequest, importShifts, getCodigosCuadrante, setCodigosCuadrante,
   importShiftsPegado, getShiftBlocks, createShiftBlock, deleteShiftBlock,
+  setAliasNombres,
 } from '../api'
 import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
@@ -58,6 +59,10 @@ export default function Turnos() {
   const [ocupado, setOcupado] = useState('')    // '' | 'guardar' | 'auto' | 'importar'
   const ficheroRef = useRef(null)
   const [previa, setPrevia] = useState(null)    // resumen del Excel antes de guardar
+  /* Nombre del cuadrante → id del conductor, mientras se emparejan a mano en la
+     vista previa. Al guardarlos quedan para siempre y el mes que viene entran
+     solos. */
+  const [emparejando, setEmparejando] = useState({})
   const [pegado, setPegado] = useState('')      // el cuadrante copiado de Sheets
   const [verPegar, setVerPegar] = useState(false)
   const [bloqueos, setBloqueos] = useState([])
@@ -382,6 +387,22 @@ export default function Turnos() {
   const quitarBloqueo = async (id) => {
     try { await deleteShiftBlock(id); await cargarBloqueos() }
     catch (e2) { setErr(e2?.response?.data?.detail || 'No se pudo quitar.') }
+  }
+
+  /* Guarda los emparejamientos hechos a mano y vuelve a leer lo mismo, para
+     que la previa se actualice con esos nombres ya reconocidos. */
+  const guardarEmparejados = async () => {
+    const mapa = Object.fromEntries(Object.entries(emparejando).filter(([, v]) => v))
+    if (!Object.keys(mapa).length) return
+    setOcupado('importar'); setErr('')
+    try {
+      await setAliasNombres(mapa)
+      setEmparejando({})
+      if (previa?.pegado) await previsualizarPegado()
+      else setAviso('Emparejados. Vuelve a subir el Excel para que entren.')
+    } catch (e2) {
+      setErr(e2?.response?.data?.detail || 'No se pudieron guardar los emparejamientos.')
+    } finally { setOcupado('') }
   }
 
   const subirExcel = async (e) => {
@@ -900,7 +921,10 @@ export default function Turnos() {
 
           <div className="mb-3 flex flex-wrap gap-x-7 gap-y-2">
             {[['Mes', previa.mes], ['Conductores', previa.conductores],
-              ['Días', previa.dias], ['Trabaja', previa.trabaja],
+              ['Días', previa.primer_dia
+                ? `${previa.primer_dia.slice(8)}–${previa.ultimo_dia.slice(8)}`
+                : previa.dias],
+              ['Turnos', previa.turnos], ['Trabaja', previa.trabaja],
               ['Libre', previa.libre]].map(([k, v]) => (
               <span key={k} className="flex items-baseline gap-1.5">
                 <b className="text-lg font-bold tabular-nums text-dark-50">{v}</b>
@@ -909,18 +933,70 @@ export default function Turnos() {
             ))}
           </div>
 
+          {/* NO se listan los nombres en una frase: se ponen en una lista con un
+              desplegable al lado para decir quién es cada uno. Antes salían
+              como texto —y desde que el servidor manda el motivo, salían como
+              "[object Object]"— y encima no se podía hacer nada con ellos.
+              Ahora se emparejan una vez y quedan guardados para siempre. */}
           {previa.n_sin_conductor > 0 && (
             <div className="mb-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] p-3">
               <p className="text-[12.5px] font-semibold text-amber-200">
-                {previa.n_sin_conductor} nombre{previa.n_sin_conductor > 1 ? 's' : ''} del Excel no
-                {previa.n_sin_conductor > 1 ? ' están' : ' está'} en {center}
+                {previa.n_sin_conductor} {previa.n_sin_conductor > 1 ? 'nombres' : 'nombre'} sin
+                emparejar {previa.n_sin_conductor > 1 ? 'se quedan' : 'se queda'} fuera
               </p>
-              <p className="mt-1 text-[11.5px] leading-relaxed text-amber-200/70">
-                Se quedan fuera. Suele ser que el nombre está escrito distinto o que son de otro
-                centro: {previa.sin_conductor?.slice(0, 8).join(' · ')}
-                {previa.n_sin_conductor > 8 ? ` y ${previa.n_sin_conductor - 8} más` : ''}
+              <p className="mb-2 mt-1 text-[11.5px] leading-relaxed text-amber-200/70">
+                Dime quién es cada uno y lo recordaré: el mes que viene entrarán solos.
               </p>
+              <div className="flex flex-col gap-1.5">
+                {(previa.sin_conductor || []).map((s) => {
+                  const nombre = typeof s === 'string' ? s : s.nombre
+                  const motivo = typeof s === 'string' ? '' : s.motivo
+                  return (
+                    <div key={nombre} className="flex flex-wrap items-center gap-2">
+                      <span className="min-w-[13rem] flex-1 truncate text-[12.5px] text-dark-200" title={nombre}>
+                        {nombre}
+                      </span>
+                      {motivo === 'ambiguo' && (
+                        <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-[10.5px] font-semibold text-red-300"
+                          title="Encajan dos fichas: hay que decir cuál, no se adivina">
+                          dos fichas iguales
+                        </span>
+                      )}
+                      <select
+                        value={emparejando[nombre] || ''}
+                        onChange={(e) => setEmparejando((m) => ({ ...m, [nombre]: e.target.value }))}
+                        className="min-w-[12rem] rounded-lg border border-dark-700 bg-dark-950 px-2 py-1 text-[12px] text-dark-100 outline-none">
+                        <option value="">— es…</option>
+                        {(drivers || []).map((d) => (
+                          <option key={d.id} value={d.id}>{d.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )
+                })}
+              </div>
+              {Object.values(emparejando).filter(Boolean).length > 0 && (
+                <button onClick={guardarEmparejados} disabled={ocupado === 'importar'}
+                  className="btn-primary mt-2.5 flex items-center gap-1.5">
+                  {ocupado === 'importar' ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                  Guardar {Object.values(emparejando).filter(Boolean).length} y volver a leer
+                </button>
+              )}
             </div>
+          )}
+
+          {previa.aviso_alineacion && (
+            <p className="mb-3 rounded-lg border border-dark-700 bg-dark-900/60 px-3 py-2 text-[11.5px] leading-relaxed text-dark-400">
+              {previa.aviso_alineacion}
+            </p>
+          )}
+
+          {previa.de_baja?.length > 0 && (
+            <p className="mb-3 rounded-lg border border-sky-500/25 bg-sky-500/[0.06] px-3 py-2 text-[11.5px] leading-relaxed text-sky-200/80">
+              <b>{previa.de_baja.length}</b> de estas personas están dadas de baja en la app y aun
+              así salen en el cuadrante: {previa.de_baja.slice(0, 6).join(' · ')}. Sus turnos se
+              guardan igual, pero conviene mirar si siguen o no.
+            </p>
           )}
 
           {/* Códigos que la app no conoce. Traducirlos aquí y se recuerda para

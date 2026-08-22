@@ -18201,6 +18201,66 @@ def _celdas_pegadas(texto: str) -> list:
     return filas
 
 
+def _rejilla_pegada(filas: list) -> tuple:
+    """Se orienta sola dentro de lo pegado. Devuelve (col_nombre, {col: dia}, i_datos).
+
+    NO se puede dar por hecho que la primera celda sea el nombre. El cuadrante
+    real de OGA5 tiene DOS columnas antes —'Orden' y 'Nombre'— y DOS filas de
+    cabecera: una con los días de la semana y otra con los números del día. Al
+    suponer que la primera celda era el nombre, se leían los números de orden
+    ('1', '2', '3'…) como si fueran personas: 62 nombres sin encontrar y cero
+    turnos guardados.
+
+    La pista buena es la FILA DE NÚMEROS DE DÍA: es la única que tiene una
+    tirada larga de enteros del 1 al 31 subiendo. De ella salen dos cosas:
+
+      · dónde empieza el bloque de días, y por tanto dónde está el nombre
+        (la última celda con texto justo antes);
+      · QUÉ DÍA es cada columna. Esto es mejor que contar posiciones: si se pega
+        media hoja, del 10 al 20, los números lo dicen y no hay que adivinarlo.
+    """
+    mejor = None
+    for i, fila in enumerate(filas[:8]):        # la cabecera está arriba
+        seguidos, ini = [], None
+        for j, c in enumerate(fila):
+            txt = str(c or "").strip()
+            if txt.isdigit() and 1 <= int(txt) <= 31:
+                n = int(txt)
+                if seguidos and n == seguidos[-1][1] + 1:
+                    seguidos.append((j, n))
+                else:
+                    if len(seguidos) >= 5:
+                        break
+                    seguidos, ini = [(j, n)], j
+            elif seguidos:
+                if len(seguidos) >= 5:
+                    break
+                seguidos, ini = [], None
+        if len(seguidos) >= 5 and (mejor is None or len(seguidos) > len(mejor[1])):
+            mejor = (i, seguidos)
+    if not mejor:
+        return None, None, None
+
+    i_num, seguidos = mejor
+    cols_dia = {j: n for j, n in seguidos}
+    primera_col = min(cols_dia)
+
+    # El nombre: la cabecera que ponga "NOMBRE", y si no, la última celda con
+    # texto antes del bloque de días.
+    col_nombre = None
+    for fila in filas[:i_num + 1]:
+        for j in range(min(primera_col, len(fila))):
+            if "NOMBRE" in _sin_tildes(str(fila[j] or "")).upper():
+                col_nombre = j
+                break
+        if col_nombre is not None:
+            break
+    if col_nombre is None:
+        col_nombre = primera_col - 1 if primera_col > 0 else 0
+
+    return col_nombre, cols_dia, i_num + 1
+
+
 @api_router.post("/shifts/import-pegado")
 async def import_shifts_pegado(data: dict = Body(...), _=Depends(require_admin)):
     """Importa el cuadrante pegado desde Sheets. body: {center, mes, texto, confirmar}
@@ -18235,28 +18295,50 @@ async def import_shifts_pegado(data: dict = Body(...), _=Depends(require_admin))
 
     dias_mes = calendar.monthrange(anio, mesn)[1]
 
-    # ¿La primera línea son días de la semana? Entonces sirve de comprobación.
+    col_nombre, cols_dia, i_datos = _rejilla_pegada(filas)
+    if not cols_dia:
+        raise HTTPException(400,
+            "No encuentro la fila con los números de los días (1, 2, 3…). "
+            "Copia también las cabeceras de tu hoja, no sólo las filas de gente.")
+    fuera_de_mes = [n for n in cols_dia.values() if n > dias_mes]
+    if fuera_de_mes:
+        raise HTTPException(400,
+            f"Lo pegado llega al día {max(fuera_de_mes)} y {mes} sólo tiene {dias_mes}.")
+
+    # ── LA COMPROBACIÓN QUE EVITA EL DESASTRE ───────────────────────────────
+    # Con los números de día ya no hace falta adivinar dónde empieza nada. Lo
+    # que sí se comprueba, si la hoja trae la fila de días de la semana, es que
+    # el mes elegido sea el del cuadrante: 'sáb' encima del día 1 sólo cuadra
+    # con los meses que empiezan en sábado. Cuadrar 20 columnas por casualidad
+    # es imposible, así que un fallo aquí es que el mes está mal.
     DOW = {"LUN": 0, "MAR": 1, "MIE": 2, "MIER": 2, "JUE": 3, "VIE": 4,
-           "SAB": 5, "DOM": 6, "L": 0, "M": 1, "X": 2, "J": 3, "V": 4, "S": 5, "D": 6}
+           "SAB": 5, "DOM": 6, "X": 2}
     aviso_alineacion = None
-    primera = filas[0]
-    etiquetas = [_sin_tildes(str(c)).strip().rstrip(".").upper() for c in primera[1:]]
-    reconocidas = [e for e in etiquetas if e in DOW]
-    if len(reconocidas) >= max(5, len(etiquetas) // 2):
-        real = date_cls(anio, mesn, 1).weekday()
-        DIAS_SEM = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+    fila_dow = None
+    for fila in filas[:i_datos]:
+        etiquetas = [_sin_tildes(str(c or "")).strip().rstrip(".").upper() for c in fila]
+        if sum(1 for e in etiquetas if e in DOW) >= 5:
+            fila_dow = etiquetas
+            break
+    if fila_dow:
         MESES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
                  "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
-        if DOW[reconocidas[0]] != real:
+        DIAS_SEM = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+        fallos = []
+        for j, n in sorted(cols_dia.items()):
+            etq = fila_dow[j] if j < len(fila_dow) else ""
+            if etq in DOW and DOW[etq] != date_cls(anio, mesn, n).weekday():
+                fallos.append((n, etq))
+        if len(fallos) > 1:
+            n, etq = fallos[0]
             raise HTTPException(400,
-                f"Lo pegado empieza en {DIAS_SEM[DOW[reconocidas[0]]]} y el 1 de "
-                f"{MESES[mesn]} de {anio} cae en {DIAS_SEM[real]}. O el mes no es "
-                f"ése, o has pegado el bloque corrido. No se ha guardado nada.")
-        filas = filas[1:]
+                f"En tu hoja el día {n} es {etq.lower()}, pero el {n} de "
+                f"{MESES[mesn]} de {anio} cae en {DIAS_SEM[date_cls(anio, mesn, n).weekday()]}. "
+                f"El mes elegido no es el de este cuadrante. No se ha guardado nada.")
     else:
-        aviso_alineacion = ("No has pegado la fila de días de la semana, así que no he "
-                            "podido comprobar que el bloque empiece en el día 1. "
-                            "Mira el resumen antes de guardar.")
+        aviso_alineacion = ("No has pegado la fila de días de la semana (lun, mar…), así que "
+                            "no he podido comprobar que el mes sea el correcto. Mira el "
+                            "resumen antes de guardar.")
 
     doc = await db.app_meta.find_one({"_id": "codigos_cuadrante"}) or {}
     mapa = dict(CODIGOS_CUADRANTE_DEF)
@@ -18273,11 +18355,13 @@ async def import_shifts_pegado(data: dict = Body(...), _=Depends(require_admin))
     alias = await _alias_cuadrante()
 
     items, sin_conductor, sin_codigo, de_baja = [], [], {}, set()
-    for fila in filas:
-        if not fila:
+    for fila in filas[i_datos:]:
+        if not fila or col_nombre >= len(fila):
             continue
-        nombre = (fila[0] or "").strip()
-        if not nombre:
+        nombre = (fila[col_nombre] or "").strip()
+        # Una fila cuyo "nombre" es un número es la de totales o un resto de la
+        # hoja, no una persona.
+        if not nombre or nombre.isdigit():
             continue
         drv, motivo = _empareja_conductor(nombre, drivers, alias)
         if not drv:
@@ -18285,9 +18369,8 @@ async def import_shifts_pegado(data: dict = Body(...), _=Depends(require_admin))
             continue
         if drv.get("active") is False:
             de_baja.add(drv["name"])
-        for n, crudo in enumerate(fila[1:], start=1):
-            if n > dias_mes:
-                break
+        for j, n in sorted(cols_dia.items()):
+            crudo = fila[j] if j < len(fila) else None
             if crudo in (None, ""):
                 continue
             cod = re.sub(r"\s*\(.*?\)", "", str(crudo)).strip().upper()
