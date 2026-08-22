@@ -3,7 +3,9 @@ import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, ClipboardPaste, Check, X, AlertTriangle, IdCard, Search, Users,
 } from 'lucide-react'
-import { pegarDiario, diariosPorConductor, vincularTransporterIds } from '../api'
+import {
+  pegarDiario, diariosPorConductor, vincularTransporterIds, asignarIdConductor, getDrivers,
+} from '../api'
 import { lista } from '../../lib/lista'
 import { isoLocal } from '../../lib/fecha'
 
@@ -55,6 +57,12 @@ export default function Diarios() {
   const [texto, setTexto] = useState('')
   const [previa, setPrevia] = useState(null)
 
+  /* Los conductores del centro, para poder poner el nombre desde la propia
+     fila. Es la salida cuando no hay lista que pegar ni historial del que
+     sacarlo: los IDs se ven en la tabla, se elige la persona y ya. */
+  const [conductores, setConductores] = useState([])
+  const [asignando, setAsignando] = useState('')
+
   const [verIds, setVerIds] = useState(false)
   const [textoIds, setTextoIds] = useState('')
   const [previaIds, setPreviaIds] = useState(null)
@@ -63,8 +71,14 @@ export default function Diarios() {
     if (noCenter) return
     setCargando(true); setErr('')
     try {
-      const r = await diariosPorConductor(center, rango.desde, rango.hasta)
+      const [r, rd] = await Promise.all([
+        diariosPorConductor(center, rango.desde, rango.hasta),
+        getDrivers(center),
+      ])
       setDatos(r.data)
+      setConductores(lista(rd.data)
+        .filter((d) => d.active !== false)
+        .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es', { sensitivity: 'base' })))
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se pudieron cargar los diarios.')
     } finally { setCargando(false) }
@@ -134,6 +148,17 @@ export default function Diarios() {
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se pudieron guardar.')
     } finally { setOcupado('') }
+  }
+
+  const ponerNombre = async (tid, driverId) => {
+    setAsignando(tid); setErr('')
+    try {
+      const r = await asignarIdConductor({ transporter_id: tid, driver_id: driverId })
+      setAviso(`${tid} → ${r.data.driver_name}`)
+      await cargar()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo asignar.')
+    } finally { setAsignando('') }
   }
 
   const filas = useMemo(() => {
@@ -502,6 +527,24 @@ export default function Diarios() {
                       <span className={c.driver_name ? 'text-dark-200' : 'font-mono text-[11px] text-amber-300/80'}>
                         {c.driver_name || c.transporter_id}
                       </span>
+                      {!c.driver_name && (
+                        // Sin nombre: se elige aquí mismo. Con el `select` no
+                        // hay nada que emparejar ni adivinar — se señala la
+                        // ficha a dedo, que es lo único que no puede fallar.
+                        <select
+                          value=""
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => e.target.value && ponerNombre(c.transporter_id, e.target.value)}
+                          disabled={asignando === c.transporter_id}
+                          className="ml-2 max-w-[13rem] rounded border border-amber-500/40 bg-dark-950 px-1.5 py-0.5 text-[11.5px] text-amber-200 outline-none">
+                          <option value="">
+                            {asignando === c.transporter_id ? 'guardando…' : '¿quién es?'}
+                          </option>
+                          {conductores.map((d) => (
+                            <option key={d.id} value={d.id}>{d.name}</option>
+                          ))}
+                        </select>
+                      )}
                       {(c.de_baja || c.ficha_sin_vincular || c.sin_ficha || c.solo_historial) && (
                         <span className={`ml-1.5 rounded px-1 text-[9px] ${
                           c.ficha_sin_vincular ? 'bg-amber-500/15 text-amber-300/80' : 'bg-dark-800 text-dark-500'}`}

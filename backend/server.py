@@ -19223,6 +19223,47 @@ def _dia_parece_nombre(s: str) -> bool:
                for p in palabras)
 
 
+@api_router.post("/diarios/id-conductor")
+async def asignar_id_conductor(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Pone un Transporter ID en la ficha de un conductor. body: {transporter_id, driver_id}
+
+    Es la salida cuando no hay lista que pegar ni historial del que sacarlo:
+    los ids se ven en la tabla, se elige la persona de un desplegable y ya.
+    Sin emparejar nombres, sin formatos y sin adivinar nada — se elige la ficha
+    a dedo, que es la unica forma que no puede equivocarse.
+
+    `driver_id` vacio QUITA el id de quien lo tuviera: hace falta para arreglar
+    uno mal puesto sin tener que ir a la ficha.
+    """
+    tid = str(data.get("transporter_id") or "").strip().upper()
+    if not _DIA_TID.match(tid):
+        raise HTTPException(400, "Ese no parece un Transporter ID")
+    did = str(data.get("driver_id") or "").strip()
+
+    if not did:
+        r = await db.drivers.update_many({"transporter_id": tid},
+                                         {"$unset": {"transporter_id": ""}})
+        return {"ok": True, "quitado_de": r.modified_count}
+
+    drv = await db.drivers.find_one({"id": did}, {"_id": 0, "id": 1, "name": 1, "center": 1})
+    if not drv:
+        raise HTTPException(404, "Ese conductor no existe")
+    if not _user_can_see_center(user, drv.get("center") or ""):
+        raise HTTPException(403, "Ese conductor es de otro centro")
+
+    # Un id no puede estar en dos fichas: se quita de donde estuviera antes.
+    # Si no, la busqueda por transporter_id devolveria dos y el nombre que
+    # saliera dependeria del orden en que Mongo los tuviera guardados.
+    await db.drivers.update_many({"transporter_id": tid, "id": {"$ne": did}},
+                                 {"$unset": {"transporter_id": ""}})
+    await db.drivers.update_one({"id": did}, {"$set": {"transporter_id": tid}})
+    # Y si el id estaba puesto como etiqueta suelta, sobra: manda la ficha.
+    await db.app_meta.update_one({"_id": "transporter_alias"},
+                                 {"$unset": {f"mapa.{tid}": ""}})
+    logger.info("Transporter ID %s asignado a %s", tid, drv["name"])
+    return {"ok": True, "driver_name": drv["name"], "transporter_id": tid}
+
+
 @api_router.post("/diarios/ids")
 async def vincular_transporter_ids(data: dict = Body(...), user: dict = Depends(require_admin)):
     """Vincula Transporter IDs pegando una lista 'NOMBRE<tab>ID'.

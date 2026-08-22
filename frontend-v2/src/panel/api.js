@@ -261,6 +261,7 @@ export function importShifts(file, center, mes, confirmar) {
 export const pegarDiario = (body) => api.post('/diarios/pegar', body)
 export const diariosPorConductor = (center, desde, hasta) =>
   api.get('/diarios/conductores', { params: { center, desde, hasta } })
+export const asignarIdConductor = (body) => api.post('/diarios/id-conductor', body)
 export const vincularTransporterIds = (body) => api.post('/diarios/ids', body)
 
 export const exportarCuadrante = (center, desde, hasta) =>
