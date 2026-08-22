@@ -50,31 +50,42 @@ const COLORES = {
   apoyo:    'bg-teal-500/[0.12] text-teal-300 border-teal-500/30',
   libre:    'bg-dark-800/70 text-dark-400 border-dark-700/70',
   previsto: 'bg-sky-500/15 text-sky-300 border-sky-500/35',
+  // Rosa, y sólo para el día concedido. Es el sexto color y ahí se para: por
+  // encima de seis dejan de diferenciarse a 22 px, que es lo que mide la
+  // celda. Se gasta uno entero en esto porque es la única casilla del
+  // cuadrante que NO se puede tocar sin hablar con la persona.
+  aprobado: 'bg-pink-500/25 text-pink-200 border-pink-400/50',
   aviso:    'bg-red-500/15 text-red-300 border-red-500/35',
 }
 /* El mismo color, pero plano y sin borde: para los cuadraditos de la leyenda y
    de la paleta, donde no hay rejilla que acompañe. */
 const FAMILIA_NOMBRE = {
   ruta: 'Sale a ruta', apoyo: 'Trabaja sin ruta', libre: 'Día libre',
-  previsto: 'Ausencia prevista', aviso: 'Ausencia no prevista',
+  previsto: 'Ausencia prevista', aprobado: 'Concedido (no se toca)',
+  aviso: 'Ausencia no prevista',
 }
 
 /* Lo que se usa si el servidor no contesta. La rejilla NO puede quedarse en
    blanco por eso: sería peor que el problema. */
+/* `ruta` NO es lo mismo que `tipo: 'trabaja'`. BKP y Site trabajan —cobran,
+   están en la nave— pero no sacan furgoneta, y el ride along va de
+   acompañante en la de otro. Contarlos hacía que la fila de cobertura dijera
+   39 cuando a la calle salían 36, que es justo el número que se compara con
+   lo que pide Amazon. */
 const COD_DEF = {
-  '1':         { tipo: 'trabaja', etiqueta: 'Trabaja',        color: 'ruta' },
-  'BKP':       { tipo: 'trabaja', etiqueta: 'Backup',         color: 'apoyo' },
-  'S':         { tipo: 'trabaja', etiqueta: 'Site (oficina)', color: 'apoyo' },
-  'RIDE':      { tipo: 'trabaja', etiqueta: 'Ride along',     color: 'apoyo' },
-  'EXTRA':     { tipo: 'extra',   etiqueta: 'Extra',          color: 'apoyo' },
-  'N/T':       { tipo: 'libre',   etiqueta: 'No trabaja',     color: 'libre' },
-  'L':         { tipo: 'libre',   etiqueta: 'Libre',          color: 'libre' },
-  'V':         { tipo: 'libre',   etiqueta: 'Vacaciones',     color: 'previsto' },
-  'COMP':      { tipo: 'libre',   etiqueta: 'Compensa',       color: 'previsto' },
-  'N/T APROB': { tipo: 'libre',   etiqueta: 'Libre aprobado', color: 'previsto' },
-  'N/D':       { tipo: 'libre',   etiqueta: 'No disponible',  color: 'aviso' },
-  'N/P':       { tipo: 'libre',   etiqueta: 'No presentado',  color: 'aviso' },
-  'SUSP':      { tipo: 'libre',   etiqueta: 'Suspendido',     color: 'aviso' },
+  '1':         { tipo: 'trabaja', etiqueta: 'Trabaja',        color: 'ruta',     ruta: true },
+  'BKP':       { tipo: 'trabaja', etiqueta: 'Backup',         color: 'apoyo',    ruta: false },
+  'S':         { tipo: 'trabaja', etiqueta: 'Site (oficina)', color: 'apoyo',    ruta: false },
+  'RIDE':      { tipo: 'trabaja', etiqueta: 'Ride along',     color: 'apoyo',    ruta: false },
+  'EXTRA':     { tipo: 'extra',   etiqueta: 'Extra',          color: 'apoyo',    ruta: true },
+  'N/T':       { tipo: 'libre',   etiqueta: 'No trabaja',     color: 'libre',    ruta: false },
+  'L':         { tipo: 'libre',   etiqueta: 'Libre',          color: 'libre',    ruta: false },
+  'V':         { tipo: 'libre',   etiqueta: 'Vacaciones',     color: 'previsto', ruta: false },
+  'COMP':      { tipo: 'libre',   etiqueta: 'Compensa',       color: 'previsto', ruta: false },
+  'N/T APROB': { tipo: 'libre',   etiqueta: 'Libre aprobado', color: 'aprobado', ruta: false },
+  'N/D':       { tipo: 'libre',   etiqueta: 'No disponible',  color: 'aviso',    ruta: false },
+  'N/P':       { tipo: 'libre',   etiqueta: 'No presentado',  color: 'aviso',    ruta: false },
+  'SUSP':      { tipo: 'libre',   etiqueta: 'Suspendido',     color: 'aviso',    ruta: false },
 }
 
 /* En la CELDA no caben nueve caracteres. Se acorta sólo ahí: en la paleta y en
@@ -359,22 +370,29 @@ export default function Turnos() {
   const tipoDe = useCallback(
     (cod) => (codigos[cod] || COD_DEF[cod] || {}).tipo || 'libre', [codigos])
   const uiDe = useCallback(
-    (cod) => codigos[cod] || COD_DEF[cod] || { tipo: 'libre', etiqueta: cod, color: 'gris' },
+    (cod) => codigos[cod] || COD_DEF[cod] || { tipo: 'libre', etiqueta: cod, color: 'libre' },
     [codigos])
+  /* ¿Ese código saca furgoneta a la calle? Es lo único que cuenta para
+     comparar con lo que pide Amazon. */
+  const esRuta = useCallback((cod) => {
+    if (!cod) return false
+    const ui = codigos[cod] || COD_DEF[cod]
+    if (ui && 'ruta' in ui) return !!ui.ruta
+    // Código añadido a mano y sin bandera: cuenta si es de trabajar.
+    return ['trabaja', 'extra'].includes((ui || {}).tipo)
+  }, [codigos])
 
   /* Cuánta gente sale a ruta cada día. Va DEBAJO de `tipoDe` a propósito: un
      useMemo se ejecuta al pintar, y si se declara antes revienta al usarlo. */
   const cobertura = useMemo(() => {
     const c = {}
     for (const [k, v] of Object.entries(grid)) {
-      const tp = tipoDe(v)
-      if (tp === 'trabaja' || tp === 'extra') {
-        const f = k.split('|')[1]
-        c[f] = (c[f] || 0) + 1
-      }
+      if (!esRuta(v)) continue
+      const f = k.split('|')[1]
+      c[f] = (c[f] || 0) + 1
     }
     return c
-  }, [grid, tipoDe])   // se indexa por fecha, así que sobra filtrar
+  }, [grid, esRuta])   // se indexa por fecha, así que sobra filtrar
 
   const choques = useMemo(() => {
     // Sólo los días que se ven. El aviso de arriba dice "están marcados en rojo
@@ -1228,7 +1246,9 @@ export default function Turnos() {
               {/* PONEMOS: sale de la rejilla. El color compara con las otras dos. */}
               <tr className="border-b border-dark-700">
                 <th className="sticky left-0 z-10 border-r border-dark-700 bg-dark-900 px-3 py-1 text-left text-[11px] font-medium text-dark-500">
-                  Ponemos
+                  <span title="Los que sacan furgoneta. BKP, Site y ride along trabajan, pero no cuentan como ruta.">
+                    A ruta
+                  </span>
                 </th>
                 {dias.map((f, ci) => {
                   const n = cobertura[f] || 0
@@ -1254,7 +1274,7 @@ export default function Turnos() {
                       className={`border-r border-dark-800/70 px-1 py-1 text-center ${
                         finde(f) ? 'bg-dark-800/40' : ''} ${lunes(f) ? 'border-l border-l-dark-600' : ''}`}>
                       <span className="flex items-baseline justify-center gap-0.5"
-                        title={`${n} ${n === 1 ? 'persona' : 'personas'} a ruta${
+                        title={`${n} ${n === 1 ? 'persona sale' : 'personas salen'} a ruta (BKP, Site y ride along no cuentan)${
                           piden > 0 ? ` · piden ${piden}` : ''}${max > 0 ? ` · máximo ${max}` : ''}${
                           dif < 0 ? ` — FALTAN ${-dif}${piden > 0 ? '' : ' para el máximo'}`
                             : dif > 0 ? ` — sobran ${dif}` : ''}`}>
@@ -1284,7 +1304,7 @@ export default function Turnos() {
                     iFila % 2 ? 'bg-[#17171a]' : 'bg-dark-900'} ${denso ? 'py-0.5' : 'py-1.5'}`}>
                     <span className={`shrink-0 rounded px-1.5 text-[10px] font-bold tabular-nums ${
                       (totales[d.id] ?? 0) === 0 ? 'bg-dark-800 text-dark-600' : 'bg-dark-800 text-dark-300'}`}
-                      title="Días de trabajo en lo que estás viendo">
+                      title="Días trabajados en lo que estás viendo (incluye BKP y Site: son días de trabajo aunque no saquen ruta)">
                       {totales[d.id] ?? 0}
                     </span>
                     <span className={`max-w-[11rem] truncate text-[13px] ${
@@ -1339,12 +1359,15 @@ export default function Turnos() {
                           title={`${d.name} · ${fmtNum(f)} · ${ui ? ui.etiqueta : 'sin poner'}${
                             hora ? ` · entra a las ${hora}` : ''}${
                             choca ? ' — OJO: tiene este día APROBADO libre'
-                              : (concedido ? ' — día libre aprobado' : '')}`}
+                              : (concedido
+                                ? (puedeAprobar ? ' — concedido: sólo tú puedes quitarlo'
+                                  : ' — concedido: no se puede cambiar sin permiso')
+                                : '')}`}
                           className={`w-[2.15rem] select-none rounded-[3px] border text-[10px] font-bold leading-none transition hover:brightness-125 ${
                             denso ? 'h-[1.15rem]' : 'h-6'} ${
                             choca ? 'border-red-500 bg-red-500/25 text-red-100 ring-1 ring-red-500/70'
                               : !ui ? 'border-dashed border-dark-800 text-dark-700 hover:border-dark-600'
-                                : COLORES[ui.color] + (concedido ? ' ring-1 ring-emerald-400/70' : '')}`}
+                                : COLORES[ui.color] + (concedido ? ' ring-1 ring-pink-400/70' : '')}`}
                         >
                           {ui ? corto(cod) : '·'}
                         </button>
@@ -1353,7 +1376,7 @@ export default function Turnos() {
                           // pero el anillo dice "aprobado" y esto dice "y no lo
                           // puedes tocar", que no es lo mismo.
                           <Lock size={7} className={`pointer-events-none -mt-[1.35rem] ml-[1.5rem] block ${
-                            puedeAprobar ? 'text-emerald-400/40' : 'text-emerald-300/80'}`} />
+                            puedeAprobar ? 'text-pink-300/50' : 'text-pink-200/90'}`} />
                         )}
                       </td>
                     )

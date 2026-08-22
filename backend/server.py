@@ -17718,10 +17718,9 @@ async def _min_cobertura(center: str) -> int:
 
 
 async def _coverage_for_date(center: str, date: str) -> int:
-    """Conductores que ese día están 'trabaja' o 'extra'."""
+    """Conductores que ese día SACAN RUTA (no los que simplemente trabajan)."""
     return await db.shifts.count_documents(
-        {"center": center, "date": date, "type": {"$in": ["trabaja", "extra"]}}
-    )
+        {"center": center, "date": date, **_FILTRO_RUTA})
 
 
 @api_router.get("/shifts")
@@ -17853,8 +17852,7 @@ async def save_shifts_bulk(data: dict = Body(...), user: dict = Depends(require_
 async def get_coverage(center: str, desde: str, hasta: str, _=Depends(require_admin)):
     """Nº de conductores disponibles (trabaja+extra) por día en el rango."""
     cur = db.shifts.find(
-        {"center": center, "date": {"$gte": desde, "$lte": hasta},
-         "type": {"$in": ["trabaja", "extra"]}},
+        {"center": center, "date": {"$gte": desde, "$lte": hasta}, **_FILTRO_RUTA},
         {"_id": 0, "date": 1},
     )
     counts: dict = {}
@@ -18566,11 +18564,13 @@ COLOR_FAMILIA_XLSX = {
     "apoyo":    ("D5EFEC", "12554E"),
     "libre":    ("F1F1EF", "72726C"),
     "previsto": ("DBEAF7", "12456F"),
+    "aprobado": ("F8DCE8", "7A2447"),
     "aviso":    ("FADCDC", "8C1D1D"),
 }
 FAMILIA_NOMBRE_XLSX = {
     "ruta": "Sale a ruta", "apoyo": "Trabaja sin ruta", "libre": "Dia libre",
-    "previsto": "Ausencia prevista", "aviso": "Ausencia no prevista",
+    "previsto": "Ausencia prevista", "aprobado": "Dia concedido (no se toca)",
+    "aviso": "Ausencia no prevista",
 }
 DIAS_SEM_CORTO = ["lun", "mar", "mie", "jue", "vie", "sab", "dom"]
 MESES_ES = ["", "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
@@ -18696,11 +18696,11 @@ async def exportar_cuadrante(center: str, desde: str, hasta: str,
     cobs = []
     for j, f in enumerate(dias):
         n = sum(1 for fila in filas
-                if mapa.get(fila["dias"].get(f, ("", ""))[0]) in ("trabaja", "extra"))
+                if fila["dias"].get(f, ("", ""))[0] in CODIGOS_QUE_SACAN_RUTA)
         cobs.append(n)
 
     for k, (titulo, saca, bg) in enumerate([
-        ("Salen a trabajar", lambda j, f: cobs[j], "DCEAF7"),
+        ("Salen a ruta", lambda j, f: cobs[j], "DCEAF7"),
         ("Rutas que piden", lambda j, f: dem.get(f, {}).get("objetivo"), None),
         ("Maximas comprometidas", lambda j, f: dem.get(f, {}).get("maximo"), "FBE3C8"),
     ]):
@@ -18848,31 +18848,59 @@ async def guardar_alias_cuadrante(data: dict = Body(...), _=Depends(require_admi
 #   ruta     -> sale a repartir
 #   apoyo    -> trabaja, pero no en ruta (backup, oficina, ride along, extra)
 #   libre    -> dia libre normal
-#   previsto -> ausencia planificada y aceptada (vacaciones, compensa, aprobado)
+#   previsto -> ausencia planificada (vacaciones, compensa)
+#   aprobado -> dia concedido por la oficina: el unico que no se puede tocar
 #   aviso    -> ausencia NO prevista (no disponible, no presentado, suspendido)
+# La cuarta columna es SI ESE DIA SACA RUTA, y no es lo mismo que "trabaja".
+#
+# BKP y Site trabajan —cobran, estan en la nave— pero no sacan furgoneta, y
+# el ride along va de acompanante en la de otro. Meterlos en la cuenta hacia
+# que la fila de cobertura dijera 39 cuando a la calle salian 36, justo el
+# numero que se compara con lo que pide Amazon. Un numero que se usa para
+# decidir y que esta inflado es peor que no tenerlo.
 CODIGOS_CUADRANTE_INFO = {
     # ── TRABAJA ────────────────────────────────────────────────────────────
-    "1":         ("trabaja", "Trabaja", "ruta"),
-    "T":         ("trabaja", "Trabaja", "ruta"),
-    "X":         ("trabaja", "Trabaja", "ruta"),
-    "BKP":       ("trabaja", "Backup", "apoyo"),
-    "S":         ("trabaja", "Site (oficina)", "apoyo"),
-    "RIDE":      ("trabaja", "Ride along", "apoyo"),
-    "RA":        ("trabaja", "Ride along", "apoyo"),
-    "EXTRA":     ("extra", "Extra", "apoyo"),
+    #              tipo        etiqueta            color      ¿saca ruta?
+    "1":         ("trabaja", "Trabaja", "ruta", True),
+    "T":         ("trabaja", "Trabaja", "ruta", True),
+    "X":         ("trabaja", "Trabaja", "ruta", True),
+    "BKP":       ("trabaja", "Backup", "apoyo", False),
+    "S":         ("trabaja", "Site (oficina)", "apoyo", False),
+    "RIDE":      ("trabaja", "Ride along", "apoyo", False),
+    "RA":        ("trabaja", "Ride along", "apoyo", False),
+    # El extra SI cuenta: es un dia de mas que alguien hace, y lo hace en ruta.
+    "EXTRA":     ("extra", "Extra", "apoyo", True),
     # ── LIBRE ──────────────────────────────────────────────────────────────
-    "N/T":       ("libre", "No trabaja", "libre"),
-    "L":         ("libre", "Libre", "libre"),
-    "V":         ("libre", "Vacaciones", "previsto"),
-    "COMP":      ("libre", "Compensa", "previsto"),
-    "N/T APROB": ("libre", "Libre aprobado", "previsto"),
+    "N/T":       ("libre", "No trabaja", "libre", False),
+    "L":         ("libre", "Libre", "libre", False),
+    "V":         ("libre", "Vacaciones", "previsto", False),
+    "COMP":      ("libre", "Compensa", "previsto", False),
+    # Familia propia, no "previsto" con las vacaciones. Un dia concedido no es
+    # una ausencia mas: es la unica casilla del cuadrante que NO se puede tocar
+    # sin hablar con la persona, y tiene que distinguirse desde el otro lado de
+    # la mesa. Es el sexto color, y ahi se para: seis es el limite por encima
+    # del cual dejan de diferenciarse a tamano de celda.
+    "N/T APROB": ("libre", "Libre aprobado", "aprobado", False),
     # ── AUSENCIAS QUE NO ESTABAN PREVISTAS ────────────────────────────────
-    "N/D":       ("libre", "No disponible", "aviso"),
-    "N/P":       ("libre", "No presentado", "aviso"),
-    "SUSP":      ("libre", "Suspendido", "aviso"),
+    "N/D":       ("libre", "No disponible", "aviso", False),
+    "N/P":       ("libre", "No presentado", "aviso", False),
+    "SUSP":      ("libre", "Suspendido", "aviso", False),
 }
 
 CODIGOS_CUADRANTE_DEF = {k: v[0] for k, v in CODIGOS_CUADRANTE_INFO.items()}
+
+# Los codigos que cuentan como ruta. Un codigo que no este aqui NO suma en la
+# cobertura, aunque su tipo sea "trabaja".
+CODIGOS_QUE_SACAN_RUTA = {k for k, v in CODIGOS_CUADRANTE_INFO.items() if v[3]}
+
+# Como se cuenta un turno guardado ANTES de que hubiera codigos: solo tiene
+# tipo. Se cuenta como ruta si trabajaba, que es lo que se venia haciendo; asi
+# los meses viejos no cambian de numero de golpe sin motivo.
+_FILTRO_RUTA = {"$or": [
+    {"cod": {"$in": sorted(CODIGOS_QUE_SACAN_RUTA)}},
+    {"cod": {"$exists": False}, "type": {"$in": ["trabaja", "extra"]}},
+    {"cod": None, "type": {"$in": ["trabaja", "extra"]}},
+]}
 
 
 async def _respeta_aprobados(items: list) -> tuple:
@@ -19138,7 +19166,10 @@ async def get_codigos_cuadrante(_=Depends(require_admin)):
         base = CODIGOS_CUADRANTE_INFO.get(cod)
         info[cod] = {"tipo": tipo,
                      "etiqueta": base[1] if base else cod,
-                     "color": base[2] if base else "gris"}
+                     "color": base[2] if base else "libre",
+                     # Sin base, un codigo anadido a mano cuenta como ruta si
+                     # es de trabajar: es lo que espera quien lo anadio.
+                     "ruta": bool(base[3]) if base else tipo in ("trabaja", "extra")}
     return {"codigos": doc.get("mapa") or CODIGOS_CUADRANTE_DEF,
             "mapa": mapa, "info": info,
             "tipos": sorted(VALID_SHIFT_TYPE)}
