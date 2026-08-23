@@ -9,7 +9,18 @@ import { defineConfig, devices } from '@playwright/test'
    anterior detectaba. */
 export default defineConfig({
   testDir: './e2e',
-  timeout: 30_000,
+  /* 90 s y no 30.
+
+     El barrido de botones pulsa hasta 45 por pantalla, y el cuadrante ha
+     pasado a tener la paleta de códigos, los patrones y las herramientas de
+     copiado: son muchos más que cuando se fijó el presupuesto. El test NO
+     fallaba por romperse la pantalla —comprobado, con más tiempo pasa en
+     35 s— sino porque se le acababa el reloj a mitad del barrido.
+
+     Se sube el tiempo, que es lo que sobraba; NO se recorta el barrido ni se
+     debilita lo que comprueba. Un test que pasa porque mira menos cosas no
+     sirve para nada. */
+  timeout: 90_000,
   expect: { timeout: 8_000 },
   fullyParallel: true,
   retries: process.env.CI ? 1 : 0,

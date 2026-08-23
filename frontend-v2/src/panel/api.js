@@ -258,6 +258,15 @@ export function importShifts(file, center, mes, confirmar) {
 /* El cuadrante en .xlsx. Se pide como blob porque el endpoint exige Bearer:
    un <a href> normal no manda la cabecera y devolveria un 401. */
 /* ── Reportes diarios de Cortex (DNR, RTS, POD, CC) ── */
+/* Sube los .html tal cual se descargan de Cortex. Multipart porque son
+   ficheros de verdad; con `confirmar` en falso solo se enseña lo que entraría. */
+export const subirDiarios = (files, center, confirmar) => {
+  const fd = new FormData()
+  for (const f of files) fd.append('files', f)
+  if (center && center !== 'Todos') fd.append('center', center)
+  if (confirmar) fd.append('confirmar', '1')
+  return api.post('/diarios/subir', fd, { timeout: 180000 })
+}
 export const pegarDiario = (body) => api.post('/diarios/pegar', body)
 export const diariosPorConductor = (center, desde, hasta) =>
   api.get('/diarios/conductores', { params: { center, desde, hasta } })

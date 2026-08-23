@@ -1,10 +1,12 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, ClipboardPaste, Check, X, AlertTriangle, IdCard, Search, Users,
+  Upload, FileText,
 } from 'lucide-react'
 import {
   pegarDiario, diariosPorConductor, vincularTransporterIds, asignarIdConductor, getDrivers,
+  subirDiarios,
 } from '../api'
 import { lista } from '../../lib/lista'
 import { isoLocal } from '../../lib/fecha'
@@ -53,6 +55,23 @@ export default function Diarios() {
   const [busca, setBusca] = useState('')
   const [abierto, setAbierto] = useState(null)      // transporter_id desplegado
 
+  /* La semana que contiene un día. El bloque DNR de un reporte es F−2, así que
+     lo que acabas de subir casi nunca cae en la semana en curso: sin esto se
+     guardaban 14 filas del día 19 y la pantalla seguía enseñando el 23-29,
+     vacía y sin decir por qué. */
+  const semanaDe = (iso) => {
+    const d = domingoDe(new Date(iso + 'T12:00:00'))
+    return { desde: isoLocal(d), hasta: isoLocal(new Date(d.getFullYear(), d.getMonth(), d.getDate() + 6)) }
+  }
+  /* Sólo se coloca solo UNA vez, al abrir. Si saltara cada vez que el rango
+     queda vacío, no se podría mirar una semana sin datos a propósito. */
+  const yaColocado = useRef(false)
+
+  const ficheroRef = useRef(null)
+  const [subiendo, setSubiendo] = useState(false)
+  const [previaSubida, setPreviaSubida] = useState(null)
+  const [ficheros, setFicheros] = useState([])
+
   const [verPegar, setVerPegar] = useState(false)
   const [texto, setTexto] = useState('')
   const [previa, setPrevia] = useState(null)
@@ -85,6 +104,47 @@ export default function Diarios() {
   }, [center, rango, noCenter])
 
   useEffect(() => { cargar() }, [cargar])
+
+  /* Si al abrir no hay nada en la ventana pero SÍ hay datos en otra fecha, se
+     salta a la última semana con datos y se dice. Vale más enseñar algo y
+     explicar dónde estás que una pantalla vacía que parece un fallo. */
+  useEffect(() => {
+    if (yaColocado.current || !datos) return
+    const ult = datos?.disponible?.ultimo_dia
+    if (!ult || datos.totales?.dnr_total > 0) return
+    yaColocado.current = true
+    setRango(semanaDe(ult))
+    setAviso(`No había nada en esas fechas. Te he llevado a la última semana con datos (${ult.slice(8)}/${ult.slice(5, 7)}).`)
+  }, [datos])
+
+  const elegirFicheros = async (lista) => {
+    const fs = Array.from(lista || []).filter((f) => /\.html?$/i.test(f.name))
+    setFicheros(fs); setPreviaSubida(null); setErr(''); setAviso('')
+    if (!fs.length) { setErr('Elige ficheros .html descargados de Cortex.'); return }
+    setSubiendo(true)
+    try {
+      const r = await subirDiarios(fs, center, false)
+      setPreviaSubida(r.data)
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudieron leer los ficheros.')
+    } finally { setSubiendo(false) }
+  }
+
+  const confirmarSubida = async () => {
+    setSubiendo(true); setErr('')
+    try {
+      const r = await subirDiarios(ficheros, center, true)
+      const tot = r.data.totales || {}
+      setPreviaSubida(null); setFicheros([])
+      if (ficheroRef.current) ficheroRef.current.value = ''
+      setAviso(`${tot.reportes} reportes guardados: ${tot.dnr} DNR y ${tot.otras} filas de RTS, POD y contacto.`)
+      // Colocarse donde están los datos que se acaban de subir.
+      if (r.data.ultimo_dia) { yaColocado.current = true; setRango(semanaDe(r.data.ultimo_dia)) }
+      else await cargar()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo guardar.')
+    } finally { setSubiendo(false) }
+  }
 
   const previsualizar = async () => {
     setOcupado('previa'); setErr(''); setAviso('')
@@ -200,9 +260,17 @@ export default function Diarios() {
             className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-3 py-1.5 text-[12.5px] font-semibold text-dark-300 hover:text-dark-100">
             <IdCard size={15} /> Transporter IDs
           </button>
-          <button onClick={() => setVerPegar((v) => !v)} className="btn-primary flex items-center gap-1.5 text-[12.5px]">
-            <ClipboardPaste size={15} /> Pegar Daily Report
+          <button onClick={() => setVerPegar((v) => !v)}
+            className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-3 py-1.5 text-[12.5px] font-semibold text-dark-300 hover:text-dark-100">
+            <ClipboardPaste size={15} /> Pegar
           </button>
+          <button onClick={() => ficheroRef.current?.click()} disabled={subiendo}
+            className="btn-primary flex items-center gap-1.5 text-[12.5px] disabled:opacity-50">
+            {subiendo ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+            Subir Daily Report
+          </button>
+          <input ref={ficheroRef} type="file" accept=".html,.htm" multiple className="hidden"
+            onChange={(e) => elegirFicheros(e.target.files)} />
         </div>
       </div>
 
@@ -272,6 +340,96 @@ export default function Diarios() {
         <p className="px-1 text-[11.5px] text-dark-600">
           Días cargados en este rango: {datos.dias_con_datos.length} ({datos.dias_con_datos.join(' · ')})
         </p>
+      )}
+
+      {/* ── LO QUE TRAEN LOS FICHEROS, ANTES DE GUARDAR ──────────────────── */}
+      {previaSubida && (
+        <div className="card p-4">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <FileText size={16} className="text-brand-400" />
+            <h3 className="text-sm font-bold text-dark-100">
+              {previaSubida.ficheros} {previaSubida.ficheros === 1 ? 'fichero leído' : 'ficheros leídos'}
+            </h3>
+            {previaSubida.con_error > 0 && (
+              <span className="rounded bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-300">
+                {previaSubida.con_error} con error
+              </span>
+            )}
+            <button onClick={() => { setPreviaSubida(null); setFicheros([]) }}
+              className="ml-auto text-dark-500 hover:text-dark-200"><X size={16} /></button>
+          </div>
+
+          <div className="mb-3 flex flex-wrap gap-x-6 gap-y-2">
+            {[['Reportes', previaSubida.totales?.reportes], ['DNR', previaSubida.totales?.dnr],
+              ['RTS · POD · contacto', previaSubida.totales?.otras],
+              ['Desde', previaSubida.primer_dia], ['Hasta', previaSubida.ultimo_dia]].map(([k, v]) => (
+              <div key={k}>
+                <p className="text-[10.5px] uppercase tracking-wider text-dark-600">{k}</p>
+                <p className="text-[14px] font-semibold text-dark-100">{v ?? '—'}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="max-h-72 overflow-y-auto rounded-lg border border-dark-800">
+            <table className="w-full text-left text-[12px]">
+              <thead className="sticky top-0 bg-dark-900">
+                <tr className="text-[10px] uppercase tracking-wider text-dark-600">
+                  <th className="px-2 py-1.5 font-semibold">Fichero</th>
+                  <th className="px-2 py-1.5 font-semibold">Reporte</th>
+                  <th className="px-2 py-1.5 font-semibold">Bloque DNR</th>
+                  <th className="px-2 py-1.5 text-right font-semibold">DNR</th>
+                  <th className="px-2 py-1.5 text-right font-semibold">RTS</th>
+                  <th className="px-2 py-1.5 text-right font-semibold">POD</th>
+                  <th className="px-2 py-1.5 text-right font-semibold">CC</th>
+                  <th className="px-2 py-1.5 font-semibold">Cruce</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(previaSubida.resultados || []).map((r, i) => (
+                  <tr key={r.fichero + i} className={`border-t border-dark-800/70 ${i % 2 ? 'bg-dark-800/[0.15]' : ''}`}>
+                    <td className="max-w-[15rem] truncate px-2 py-1 text-dark-300" title={r.fichero}>{r.fichero}</td>
+                    {r.error ? (
+                      <td colSpan={7} className="px-2 py-1 text-red-300">{r.error}</td>
+                    ) : (
+                      <>
+                        <td className="whitespace-nowrap px-2 py-1 tabular-nums text-dark-300">{r.fecha_reporte}</td>
+                        <td className="whitespace-nowrap px-2 py-1 tabular-nums text-dark-400">{r.fecha_dnr}</td>
+                        <td className="px-2 py-1 text-right tabular-nums text-dark-200">{r.dnr}</td>
+                        <td className="px-2 py-1 text-right tabular-nums text-dark-500">{r.rts}</td>
+                        <td className="px-2 py-1 text-right tabular-nums text-dark-500">{r.pod}</td>
+                        <td className="px-2 py-1 text-right tabular-nums text-dark-500">{r.cc}</td>
+                        <td className="px-2 py-1">
+                          {r.descuadres ? (
+                            <span className="text-red-300">{r.descuadres} no cuadran</span>
+                          ) : <span className="text-emerald-400/70">cuadra</span>}
+                        </td>
+                      </>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Los avisos de los reportes viejos, agrupados: uno por fichero
+              llenaría la pantalla y dicen todos lo mismo. */}
+          {(() => {
+            const viejos = (previaSubida.resultados || []).filter((r) => (r.avisos || []).length)
+            return viejos.length ? (
+              <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[12px] leading-relaxed text-amber-200">
+                {viejos.length} {viejos.length === 1 ? 'reporte es' : 'reportes son'} anteriores al 13-05-2026 y no
+                traen la columna DSC. Sus DNR se guardan <b>sin clasificar</b>: existen, pero no se
+                puede saber cuáles puntúan. No cuentan como defectos.
+              </p>
+            ) : null
+          })()}
+
+          <button onClick={confirmarSubida} disabled={subiendo || !previaSubida.totales?.reportes}
+            className="btn-primary mt-3 flex items-center gap-1.5 text-sm disabled:opacity-40">
+            {subiendo ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+            Guardar {previaSubida.totales?.reportes} reportes
+          </button>
+        </div>
       )}
 
       {/* ── PEGAR EL REPORTE ──────────────────────────────────────────────── */}

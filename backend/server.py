@@ -1159,6 +1159,13 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.dnr_rows, "transporter_id")
     await _idx(tdb.daily_reports, [("center", 1), ("fecha", 1), ("transporter_id", 1)])
     await _idx(tdb.daily_reports, [("center", 1), ("fecha_dnr", 1)])
+    # Las otras tres tablas del diario. La clave es (tracking, fecha del
+    # reporte): 763 trackings de RTS salen en mas de un dia, asi que el tracking
+    # solo perderia filas.
+    for _col in (tdb.rts_rows, tdb.pod_rows, tdb.cc_rows):
+        await _idx(_col, [("tracking_id", 1), ("fecha_reporte", 1)], unique=True)
+        await _idx(_col, [("center", 1), ("fecha_reporte", -1)])
+        await _idx(_col, "transporter_id")
     await _idx(tdb.drivers, "transporter_id")
     # Errores de navegador: se consultan por fecha y se purgan solos a los 30
     # dias. Un buzon de errores que crece sin techo acaba siendo otro problema.
@@ -18964,6 +18971,174 @@ def _dia_semana(iso: str) -> str:
     return dom.strftime("%Y-%m-%d")
 
 
+# ── EL REPORTE EN HTML, TAL CUAL SE DESCARGA DE CORTEX ──────────────────────
+#
+# Copiar y pegar de la pantalla se pierde tres de las cinco tablas y depende de
+# como el navegador convierta la seleccion a texto. El fichero .html las trae
+# todas y siempre igual. Validado contra 92 reportes reales de marzo a agosto
+# de 2026: los 92 se leen sin un solo fallo de parseo.
+#
+# LAS CINCO TABLAS:
+#   1. resumen  Transporter ID | RTS | DNR | POD Fails | CC Fails
+#   2. rts      un devuelto por fila, CON SU MOTIVO
+#   3. dnr      una concesion por fila, con DSC y el valor en euros
+#   4. pod      un fallo de foto por fila, con el motivo
+#   5. cc       un fallo de contacto por fila, con tipo y duracion de llamada
+#
+# DOS TRAMPAS DEL FORMATO, las dos comprobadas:
+#
+#   · En las tablas 2 a 5 el unico <th> es el boton "Download This Table" y los
+#     nombres de columna DE VERDAD estan en la primera fila del cuerpo. Tomando
+#     el <th> como cabecera, todas las columnas se leen desplazadas.
+#
+#   · Los reportes anteriores al 13-05-2026 NO TIENEN columna DSC. Tienen su
+#     seccion DNR igual, pero sin clasificar. Por eso la tabla DNR se reconoce
+#     por 'delivery date' + 'delivery scan' y NO por la presencia de DSC: si se
+#     exigiera DSC, medio ano de reportes se leeria como si no tuviera DNRs.
+
+_DIA_FILA = re.compile(r"<tr.*?</tr>", re.S | re.I)
+_DIA_CELDA = re.compile(r"<t[dh][^>]*>(.*?)</t[dh]>", re.S | re.I)
+_DIA_TABLA = re.compile(r"<table.*?</table>", re.S | re.I)
+_DIA_H = re.compile(r"<h([12])[^>]*>(.*?)</h\1>", re.S | re.I)
+
+
+def _dia_texto_html(s: str) -> str:
+    import html as _html
+    return _html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s or ""))).strip()
+
+
+def _dia_tablas_html(texto: str):
+    """Devuelve (cabecera_en_minusculas, filas) por cada tabla del documento."""
+    for tb in _DIA_TABLA.findall(texto):
+        filas = _DIA_FILA.findall(tb)
+        if not filas:
+            continue
+        celdas = [[_dia_texto_html(c) for c in _DIA_CELDA.findall(f)] for f in filas]
+        cab, datos = celdas[0], celdas[1:]
+        # El boton de descarga no es una cabecera: la de verdad va debajo.
+        if len(cab) <= 1 and datos:
+            cab, datos = datos[0], datos[1:]
+        yield [c.lower() for c in cab], [d for d in datos if any(d)]
+
+
+def _parsea_diario_html(texto: str) -> dict:
+    """Lee un Daily Report descargado de Cortex (.html). Las cinco tablas."""
+    titulo = ""
+    fecha_dnr = None
+    for nivel, cuerpo in _DIA_H.findall(texto):
+        txt = _dia_texto_html(cuerpo)
+        if nivel == "1" and not titulo:
+            titulo = txt
+        md = re.match(r"DNR\s*\((\d{4}-\d{2}-\d{2})\)", txt, re.I)
+        if md:
+            fecha_dnr = md.group(1)
+
+    m = re.search(r"(\d{4}-\d{2}-\d{2})", titulo)
+    fecha_rep = m.group(1) if m else None
+    mc = re.search(r"\bES\s+TDSL\s+([A-Z0-9]{3,6})\b", titulo, re.I)
+    centro = mc.group(1).upper() if mc else None
+    if not fecha_dnr and fecha_rep:
+        fecha_dnr = _dia_menos(fecha_rep, 2)
+
+    out = {"centro": centro, "fecha_reporte": fecha_rep, "fecha_dnr": fecha_dnr,
+           "resumen": [], "dnr": [], "rts": [], "pod": [], "cc": [], "avisos": []}
+    sin_dsc = False
+
+    for cab, filas in _dia_tablas_html(texto):
+        tiene = set(cab)
+
+        def col(f, *nombres):
+            for n in nombres:
+                if n in cab:
+                    i = cab.index(n)
+                    if i < len(f):
+                        return f[i]
+            return ""
+
+        def par(f):
+            """(transporter_id, tracking_id) si los dos son validos."""
+            tid = col(f, "transporter id").upper()
+            tr = _dia_celda(col(f, "tracking id")).upper()
+            return (tid, tr) if (_DIA_TID.match(tid) and tr) else (None, None)
+
+        if {"transporter id", "rts", "dnr"} <= tiene:
+            for f in filas:
+                tid = col(f, "transporter id").upper()
+                if _DIA_TID.match(tid):
+                    out["resumen"].append({
+                        "transporter_id": tid, "rts": _dia_num(col(f, "rts")),
+                        "dnr": _dia_num(col(f, "dnr")),
+                        "pod_fails": _dia_num(col(f, "pod fails")),
+                        "cc_fails": _dia_num(col(f, "cc fails"))})
+
+        elif "delivery date" in tiene and "delivery scan" in tiene:
+            if "dsc" not in tiene:
+                sin_dsc = True
+            for f in filas:
+                tid, tr = par(f)
+                if not tid:
+                    continue
+                dsc = _dia_celda(col(f, "dsc")).upper()
+                fila = {"tracking_id": tr, "transporter_id": tid,
+                        "fecha_entrega": _dia_celda(col(f, "delivery date")),
+                        "dsc": dsc if dsc in ("Y", "N") else "",
+                        "scan": _dia_celda(col(f, "delivery scan")),
+                        "phr": _dia_celda(col(f, "phr")),
+                        "mas_25m": _dia_celda(col(f, "delivered \u2265 25m", "delivered >= 25m")),
+                        "simultaneas": _dia_celda(col(f, "simultaneous deliveries")),
+                        "contacto": _dia_celda(col(f, "contact compliance")),
+                        "excepcion": _dia_celda(col(f, "delivery exception")),
+                        "valor": _dia_celda(col(f, "value")),
+                        "valor_eur": _dia_euros(col(f, "value")),
+                        "cp": _dia_celda(col(f, "postal code"))}
+                # El '1' de los reportes de mayo NO se traduce a 'Y'. Es lo mas
+                # probable, pero no esta demostrado (docs/REPORTES_DIARIOS.md) y
+                # convertirlo inventaria defectos que nadie ha confirmado.
+                if dsc and dsc not in ("Y", "N"):
+                    fila["dsc_crudo"] = dsc
+                out["dnr"].append(fila)
+
+        elif "rts reason" in tiene:
+            for f in filas:
+                tid, tr = par(f)
+                if tid:
+                    out["rts"].append({"tracking_id": tr, "transporter_id": tid,
+                                       "motivo": _dia_celda(col(f, "rts reason")),
+                                       "cp": _dia_celda(col(f, "postal code")),
+                                       "lejos_100m": _dia_celda(
+                                           col(f, "scanned \u2265 100m away", "scanned >= 100m away"))})
+
+        elif "pod audit" in tiene:
+            for f in filas:
+                tid, tr = par(f)
+                if tid:
+                    out["pod"].append({"tracking_id": tr, "transporter_id": tid,
+                                       "motivo": _dia_celda(col(f, "delivery/attempt reason")),
+                                       "fallo": _dia_celda(col(f, "pod audit"))})
+
+        elif "cc type" in tiene or "call duration (seconds)" in tiene:
+            for f in filas:
+                tid, tr = par(f)
+                if tid:
+                    out["cc"].append({"tracking_id": tr, "transporter_id": tid,
+                                      "motivo": _dia_celda(col(f, "delivery/attempt reason")),
+                                      "tipo": _dia_celda(col(f, "cc type")),
+                                      "segundos": _dia_num(col(f, "call duration (seconds)"))})
+
+    if not out["resumen"] and not out["dnr"]:
+        raise HTTPException(400, "Ese HTML no parece un Daily Report de Cortex: "
+                                 "no encuentro ni la tabla resumen ni la de DNR.")
+    # Igual que en el pegado: un bloque entero sin una sola 'Y' casi nunca es un
+    # dia perfecto, es Amazon que todavia no ha clasificado.
+    out["sin_clasificar"] = bool(out["dnr"]) and all(r["dsc"] != "Y" for r in out["dnr"])
+    if sin_dsc and out["dnr"]:
+        out["avisos"].append(
+            f"Este reporte es de antes del 13-05-2026 y no trae la columna DSC. "
+            f"Sus {len(out['dnr'])} DNR se guardan SIN CLASIFICAR: existen, pero "
+            f"no se puede saber cuáles puntúan.")
+    return out
+
+
 def _parsea_diario(texto: str) -> dict:
     """Despieza lo pegado de Cortex. Devuelve {centro, fecha, resumen, dnr, ...}.
 
@@ -19071,8 +19246,20 @@ def _parsea_diario(texto: str) -> dict:
 @api_router.post("/diarios/pegar")
 async def pegar_diario(data: dict = Body(...), user: dict = Depends(require_admin)):
     """Ingesta el Daily Report pegado de Cortex. body: {texto, center?, confirmar?}"""
-    p = _parsea_diario(data.get("texto") or "")
-    center = (data.get("center") or p["centro"] or "").strip()
+    crudo = data.get("texto") or ""
+    # Un fichero .html entero o un pegado normal: se decide por lo que hay.
+    # El pegado sigue funcionando exactamente igual que antes.
+    es_html = "<table" in crudo.lower() or "<h1" in crudo.lower()
+    p = _parsea_diario_html(crudo) if es_html else _parsea_diario(crudo)
+    # EL CENTRO DEL FICHERO MANDA sobre el que este seleccionado en pantalla.
+    #
+    # El titulo dice "ES TDSL OGA5 Daily Report ...": es el propio documento
+    # quien declara de que centro es, y eso es mas fiable que el selector. Al
+    # reves —el selector mandando— subir el reporte de DGA1 estando en OGA5 lo
+    # guardaba entero como OGA5, en silencio, y esos DNR se le colgaban a la
+    # gente equivocada. El selector solo se usa cuando el fichero no lo dice
+    # (por ejemplo en un pegado suelto sin titulo).
+    center = (p.get("centro") or data.get("center") or "").strip()
     if not center:
         raise HTTPException(400, "No sé de qué centro es. Elige el centro arriba.")
     if not _user_can_see_center(user, center):
@@ -19082,7 +19269,9 @@ async def pegar_diario(data: dict = Body(...), user: dict = Depends(require_admi
         "center": center, "fecha_reporte": p["fecha_reporte"], "fecha_dnr": p["fecha_dnr"],
         "semana": _dia_semana(p["fecha_dnr"]) if p["fecha_dnr"] else None,
         "conductores": len(p["resumen"]), "filas_dnr": len(p["dnr"]),
-        "sin_clasificar": p["sin_clasificar"], "avisos": list(p["avisos"]),
+        "filas_rts": len(p.get("rts") or []), "filas_pod": len(p.get("pod") or []),
+        "filas_cc": len(p.get("cc") or []),
+        "sin_clasificar": p.get("sin_clasificar", False), "avisos": list(p["avisos"]),
     }
 
     # EL CRUCE. La columna DNR del resumen tiene que cuadrar con las filas del
@@ -19134,11 +19323,97 @@ async def pegar_diario(data: dict = Body(...), user: dict = Depends(require_admi
                                      {"$set": doc}, upsert=True)
         guardados_dnr += 1
 
+    # ── LAS OTRAS TRES TABLAS ───────────────────────────────────────────
+    # RTS, POD y Contact Compliance NO llevan fecha propia en el reporte, asi
+    # que se guardan con la del REPORTE y el campo se llama asi para que nadie
+    # lo confunda con la fecha del hecho: no sabemos cuando ocurrio, sabemos en
+    # que reporte salio.
+    #
+    # La clave es (tracking, fecha del reporte) y NO el tracking solo: medido
+    # sobre 92 reportes, 763 trackings de RTS aparecen en mas de un dia. Con el
+    # tracking como clave unica se perderian esas 763 filas en silencio.
+    otras = 0
+    for clave, coleccion in (("rts", db.rts_rows), ("pod", db.pod_rows), ("cc", db.cc_rows)):
+        filas = p.get(clave) or []
+        if not filas or not p["fecha_reporte"]:
+            continue
+        ops = [UpdateOne(
+            {"tracking_id": f["tracking_id"], "fecha_reporte": p["fecha_reporte"]},
+            {"$set": {**f, "center": center, "fecha_reporte": p["fecha_reporte"],
+                      "actualizado": datetime.now(timezone.utc).isoformat()}},
+            upsert=True) for f in filas]
+        for i in range(0, len(ops), 500):
+            await coleccion.bulk_write(ops[i:i + 500])
+        otras += len(ops)
+
     resumen.update({"guardado": True, "resumen_guardados": guardados_res,
-                    "dnr_guardados": guardados_dnr, "clasificados_ahora": subidos})
+                    "dnr_guardados": guardados_dnr, "clasificados_ahora": subidos,
+                    "otras_guardadas": otras})
     logger.info("Diario pegado: %s reporte=%s dnr=%s (%s filas, %s recien clasificadas)",
                 center, p["fecha_reporte"], p["fecha_dnr"], guardados_dnr, subidos)
     return resumen
+
+
+@api_router.post("/diarios/subir")
+async def subir_diarios(files: List[UploadFile] = File(...),
+                        center: Optional[str] = Form(default=None),
+                        confirmar: str = Form(default=""),
+                        user: dict = Depends(require_admin)):
+    """Sube uno o varios Daily Report .html tal cual se descargan de Cortex.
+
+    Es la via buena y el pegado se queda como respaldo. Copiando de la pantalla
+    se pierden TRES de las cinco tablas —RTS con su motivo, los fallos de foto y
+    los de contacto— porque solo se selecciona lo que se ve, y ademas depende de
+    como el navegador convierta esa seleccion a texto. El fichero las trae todas
+    y siempre igual.
+
+    Se aceptan varios de una vez: son 92 dias de historico y subirlos de uno en
+    uno no lo hace nadie.
+    """
+    if not files:
+        raise HTTPException(400, "No has adjuntado ningún fichero")
+    if len(files) > 120:
+        raise HTTPException(400, "Como mucho 120 ficheros de una vez")
+
+    hecho = str(confirmar).lower() in ("1", "true", "si", "sí", "yes")
+    resultados, total = [], {"dnr": 0, "otras": 0, "resumen": 0, "reportes": 0}
+    for f in files:
+        nombre = (f.filename or "sin nombre")[:120]
+        try:
+            crudo = (await f.read())[:8_000_000].decode("utf-8", errors="replace")
+        except Exception as e:
+            resultados.append({"fichero": nombre, "error": f"no se pudo leer: {e}"})
+            continue
+        try:
+            r = await pegar_diario({"texto": crudo, "center": center,
+                                    "confirmar": hecho}, user)
+        except HTTPException as e:
+            resultados.append({"fichero": nombre, "error": e.detail})
+            continue
+        resultados.append({
+            "fichero": nombre, "centro": r.get("center"),
+            "fecha_reporte": r.get("fecha_reporte"), "fecha_dnr": r.get("fecha_dnr"),
+            "dnr": r.get("filas_dnr"), "rts": r.get("filas_rts"),
+            "pod": r.get("filas_pod"), "cc": r.get("filas_cc"),
+            "conductores": r.get("conductores"),
+            "descuadres": len(r.get("descuadres") or []),
+            "avisos": r.get("avisos") or [],
+            "guardado": bool(r.get("guardado"))})
+        total["reportes"] += 1
+        total["dnr"] += r.get("dnr_guardados") or r.get("filas_dnr") or 0
+        total["otras"] += r.get("otras_guardadas") or 0
+        total["resumen"] += r.get("resumen_guardados") or r.get("conductores") or 0
+
+    fechas = sorted({x.get("fecha_dnr") for x in resultados if x.get("fecha_dnr")})
+    con_error = [x for x in resultados if x.get("error")]
+    logger.info("Diarios subidos: %d ficheros, %d con error, guardado=%s",
+                len(files), len(con_error), hecho)
+    return {"guardado": hecho, "ficheros": len(files), "resultados": resultados,
+            "totales": total, "con_error": len(con_error),
+            # Para que la pantalla pueda saltar a donde estan los datos en vez
+            # de dejar al usuario mirando una semana vacia.
+            "primer_dia": fechas[0] if fechas else None,
+            "ultimo_dia": fechas[-1] if fechas else None}
 
 
 @api_router.get("/diarios/conductores")
@@ -19251,7 +19526,39 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
     salida.sort(key=lambda x: (-x["euros_defectos"], -x["defectos"], -x["dnr_total"],
                                x["driver_name"] or x["transporter_id"]))
 
+    # RTS, POD y CC del rango, contados por conductor. Van por fecha del
+    # REPORTE (esas tablas no traen fecha propia), asi que se piden con el mismo
+    # rango pero por ese campo. Es una aproximacion honesta y esta dicho en la
+    # pantalla; inventar una fecha de hecho que el reporte no da seria peor.
+    for coleccion, clave in ((db.rts_rows, "rts_filas"), (db.pod_rows, "pod_filas"),
+                             (db.cc_rows, "cc_filas")):
+        async for g in coleccion.aggregate([
+                {"$match": {"center": center, "fecha_reporte": {"$gte": desde, "$lte": hasta}}},
+                {"$group": {"_id": "$transporter_id", "n": {"$sum": 1}}}]):
+            tid = g.get("_id")
+            if not tid:
+                continue
+            e = por_tid.setdefault(tid, {"transporter_id": tid, "dnr_total": 0,
+                                         "defectos": 0, "limpias": 0, "sin_clasificar": 0,
+                                         "euros": 0.0, "euros_defectos": 0.0, "detalle": []})
+            e[clave] = g["n"]
+
     dias = sorted({r["fecha_dnr"] for r in reportes if r.get("fecha_dnr")})
+
+    # DONDE HAY DATOS, mires donde mires.
+    #
+    # La pantalla arranca en la semana en curso y el desfase de Amazon es de dos
+    # dias, asi que por diseno casi nunca cae dentro lo que se acaba de subir:
+    # se guardaban 14 filas del dia 19 y la vista estaba en el 23-29. Guardaba
+    # bien y ensenaba una ventana vacia, sin decir nada. Con este par de fechas
+    # la pantalla puede colocarse sola donde hay algo que ver.
+    extremos = await db.dnr_rows.aggregate([
+        {"$match": {"center": center}},
+        {"$group": {"_id": None, "min": {"$min": "$fecha_concesion"},
+                    "max": {"$max": "$fecha_concesion"}}}]).to_list(1)
+    disponible = ({"primer_dia": extremos[0].get("min"), "ultimo_dia": extremos[0].get("max")}
+                  if extremos else {"primer_dia": None, "ultimo_dia": None})
+
     return {
         "conductores": salida,
         "totales": {
@@ -19281,6 +19588,7 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
         # Los que tienen ficha esperando a que se les ponga el id. Se cuenta
         # para poder ofrecer el arreglo en vez de solo señalar el problema.
         "vinculables": sum(1 for e in salida if e.get("ficha_sin_vincular")),
+        "disponible": disponible,
     }
 
 
