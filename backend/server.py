@@ -22,7 +22,7 @@ from pathlib import Path
 
 import calendar
 from datetime import datetime, timezone, timedelta, date as date_cls
-from pymongo import UpdateOne
+from pymongo import UpdateOne, ReturnDocument
 
 from concurrent.futures import ThreadPoolExecutor
 
@@ -38,6 +38,7 @@ import os
 import io
 import json
 import uuid
+import secrets
 import base64
 import logging
 
@@ -1159,6 +1160,11 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.dnr_rows, "transporter_id")
     await _idx(tdb.daily_reports, [("center", 1), ("fecha", 1), ("transporter_id", 1)])
     await _idx(tdb.daily_reports, [("center", 1), ("fecha_dnr", 1)])
+    # Ordenes de trabajo
+    await _idx(tdb.ordenes_trabajo, "id", unique=True)
+    await _idx(tdb.ordenes_trabajo, [("center", 1), ("estado", 1), ("creada_en", -1)])
+    await _idx(tdb.ordenes_trabajo, [("vehicle_id", 1), ("creada_en", -1)])
+    await _idx(tdb.ordenes_trabajo, [("workshop_id", 1), ("creada_en", -1)])
     # Las otras tres tablas del diario. La clave es (tracking, fecha del
     # reporte): 763 trackings de RTS salen en mas de un dia, asi que el tracking
     # solo perderia filas.
@@ -1264,6 +1270,10 @@ async def create_indexes():
         await _idx(global_db.ls_webhook_events, "event_uid", unique=True)
         await _idx(global_db.forensic_index, "content_hash", unique=True)
         await _idx(global_db.forensic_index, [("signed_at", -1)])
+        # Enlaces del portal de talleres. El token es la unica llave que hay:
+        # unico, y indexado por orden para poder revocarlos de golpe.
+        await _idx(global_db.taller_enlaces, "token", unique=True)
+        await _idx(global_db.taller_enlaces, [("orden_id", 1), ("revocado", 1)])
         # Crear índices en BDs de DSPs ya existentes (por si arrancamos con DSPs sin índices)
         orgs = await global_db.organizations.find(
             {"account_type": "dsp", "db_name": {"$exists": True}}, {"db_name": 1}
@@ -12214,6 +12224,552 @@ def _provider_matches(workshop: dict, provider: str) -> bool:
         if cup and (cup in pup or pup in cup):
             return True
     return False
+
+
+# ==========================================================================
+# ORDENES DE TRABAJO Y PORTAL DEL TALLER
+# ==========================================================================
+#
+# El objetivo es quitar las llamadas y los correos: el taller escribe EL MISMO
+# y la informacion cae en la app. Para que eso ocurra de verdad, la barrera de
+# entrada tiene que ser CERO -> un enlace que se abre en el movil, sin usuario,
+# sin contrasena y sin instalar nada. Un taller de tres mecanicos no se da de
+# alta en un portal, eso esta comprobado en cualquier sector.
+#
+# OJO CON LA MULTIEMPRESA. `db` resuelve la organizacion desde el token de
+# sesion y, si no hay contexto, cae en la BD POR DEFECTO sin fallar. Un
+# endpoint publico no tiene sesion, asi que escribiria en la BD principal
+# pasara lo que pasara: hoy acertaria por casualidad (la de Dani ES la
+# principal) y el dia que haya un segundo cliente, el enlace de un taller
+# suyo tocaria datos ajenos, en silencio y sin ningun error.
+# Por eso el registro de enlaces vive en `global_db` y guarda el nombre de la
+# BD: el endpoint publico lo lee y fija el contexto A MANO antes de tocar `db`.
+
+OT_ESTADOS = {
+    "abierta": "Abierta",
+    "recibido": "Vehiculo recibido",
+    "diagnostico": "Diagnosticando",
+    "esperando_piezas": "Esperando piezas",
+    "reparando": "En reparacion",
+    "listo": "Listo para recoger",
+    "entregado": "Entregado",
+    "anulada": "Anulada",
+}
+
+# Lo que puede poner EL TALLER. 'entregado' y 'anulada' las pone la oficina a
+# proposito: el taller no decide que un vehiculo ya esta devuelto ni que un
+# trabajo se cancela, porque eso mueve el estado de la furgoneta en la flota.
+OT_ESTADOS_TALLER = ("recibido", "diagnostico", "esperando_piezas", "reparando", "listo")
+OT_ABIERTAS = ("abierta", "recibido", "diagnostico", "esperando_piezas", "reparando", "listo")
+
+# Cambios que merecen aviso inmediato. El resto se ve en la pantalla y ya:
+# avisar de todo es no avisar de nada.
+OT_AVISA = ("listo", "esperando_piezas")
+
+
+class OrdenTrabajoCrear(BaseModel):
+    vehicle_id: str
+    workshop_id: str
+    problema: str = ""
+    fecha_entrada: Optional[str] = None
+    fecha_entrega_estimada: Optional[str] = None
+    incident_id: Optional[str] = None
+
+
+def _ot_ahora() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _ot_apunte(quien: str, que: str, detalle: str = "") -> dict:
+    """Una linea del historial. Es lo unico que no se puede editar nunca."""
+    return {"cuando": _ot_ahora(), "quien": quien[:80], "que": que[:60],
+            "detalle": (detalle or "")[:400]}
+
+
+def _ot_fecha_valida(v) -> Optional[str]:
+    """Acepta 'YYYY-MM-DD' y nada mas. Devuelve None si no vale."""
+    s = str(v or "").strip()[:10]
+    if len(s) != 10:
+        return None
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+        return s
+    except ValueError:
+        return None
+
+
+def _ot_importe(v) -> Optional[float]:
+    """Importe en euros. Coma o punto, y nunca negativo."""
+    if v is None or str(v).strip() == "":
+        return None
+    try:
+        n = float(str(v).replace(",", ".").replace(" ", ""))
+    except ValueError:
+        return None
+    if n < 0 or n > 1_000_000:
+        return None
+    return round(n, 2)
+
+
+async def _ot_numero() -> str:
+    """Numero correlativo por empresa: OT-1001, OT-1002...
+
+    Con `find_one_and_update` y upsert el contador es atomico: dos ordenes
+    creadas a la vez NO pueden llevarse el mismo numero.
+    """
+    doc = await db.contadores.find_one_and_update(
+        {"_id": "ordenes_trabajo"}, {"$inc": {"valor": 1}},
+        upsert=True, return_document=ReturnDocument.AFTER)
+    return "OT-%d" % (1000 + int((doc or {}).get("valor") or 1))
+
+
+async def _ot_publica(orden: dict) -> dict:
+    """Lo que ve el TALLER. Lista blanca a proposito, no lista negra.
+
+    Aqui no puede salir NADA de la persona que conduce: el enlace se reenvia
+    por WhatsApp y acaba en telefonos que no controlamos. El taller necesita
+    la matricula y el problema; el nombre del conductor no le hace falta para
+    cambiar unos frenos.
+    """
+    return {
+        "numero": orden.get("numero"),
+        "matricula": orden.get("matricula"),
+        "modelo": orden.get("modelo"),
+        "taller": orden.get("taller_nombre"),
+        "estado": orden.get("estado"),
+        "estado_txt": OT_ESTADOS.get(orden.get("estado"), orden.get("estado")),
+        "problema": orden.get("problema"),
+        "descripcion_trabajo": orden.get("descripcion_trabajo"),
+        "fecha_entrada": orden.get("fecha_entrada"),
+        "fecha_entrega_estimada": orden.get("fecha_entrega_estimada"),
+        "importe_estimado": orden.get("importe_estimado"),
+        "importe_final": orden.get("importe_final"),
+        "presupuesto": orden.get("presupuesto", "sin_presupuesto"),
+        "fotos": orden.get("fotos") or [],
+        "historial": orden.get("historial") or [],
+        "estados_posibles": [{"id": e, "txt": OT_ESTADOS[e]} for e in OT_ESTADOS_TALLER],
+        "cerrada": orden.get("estado") in ("entregado", "anulada"),
+    }
+
+
+async def _ot_por_token(token: str) -> dict:
+    """Resuelve el enlace publico y DEJA FIJADA la empresa correcta.
+
+    Devuelve la orden. Lanza 404 si el enlace no vale: nunca se distingue
+    'no existe' de 'revocado' de 'caducado', porque decirlo ayuda a quien
+    este probando tokens a ciegas.
+    """
+    tok = (token or "").strip()
+    if len(tok) < 20 or len(tok) > 120:
+        raise HTTPException(404, "Este enlace no es válido")
+    enlace = await global_db.taller_enlaces.find_one({"token": tok}, {"_id": 0})
+    if not enlace or enlace.get("revocado"):
+        raise HTTPException(404, "Este enlace no es válido")
+    if enlace.get("expira_en") and enlace["expira_en"] < _ot_ahora():
+        raise HTTPException(404, "Este enlace ha caducado. Pídele uno nuevo a la oficina.")
+
+    # LA LINEA QUE EVITA EL DESASTRE MULTIEMPRESA.
+    set_current_org_db(enlace.get("db_name"))
+
+    orden = await db.ordenes_trabajo.find_one({"id": enlace["orden_id"]}, {"_id": 0})
+    if not orden:
+        raise HTTPException(404, "Este enlace no es válido")
+    return orden
+
+
+def _ot_puede_escribir(orden: dict):
+    """Una orden entregada o anulada es historia: no se toca mas."""
+    if orden.get("estado") in ("entregado", "anulada"):
+        raise HTTPException(409, "Esta orden ya está cerrada. Si hay algo más, "
+                                 "avisa a la oficina y te abren una nueva.")
+
+
+# Freno para los endpoints publicos. No hay login, asi que lo unico que
+# separa un taller de un bot es esto. En memoria y por token: con una sola
+# maquina basta, y si algun dia hay dos, lo peor que pasa es que el limite
+# sea el doble de generoso — nunca que deje de existir.
+_OT_GOLPES: dict = {}
+
+
+def _ot_freno(token: str, limite: int = 40):
+    ahora = datetime.now(timezone.utc).timestamp()
+    golpes = [x for x in _OT_GOLPES.get(token, []) if ahora - x < 60]
+    if len(golpes) >= limite:
+        raise HTTPException(429, "Demasiadas peticiones seguidas. Espera un minuto.")
+    golpes.append(ahora)
+    _OT_GOLPES[token] = golpes
+    if len(_OT_GOLPES) > 5000:            # que no crezca sin fin
+        for k in [k for k, v in _OT_GOLPES.items() if not v or ahora - v[-1] > 300]:
+            _OT_GOLPES.pop(k, None)
+
+
+async def _ot_avisa(orden: dict, texto: str):
+    """Avisa a la oficina por Telegram. Que falle no puede tumbar la peticion:
+    el taller ya ha hecho su parte y perder su cambio seria mucho peor."""
+    try:
+        await _telegram_aviso("%s · %s\n%s" % (orden.get("numero"), orden.get("matricula"), texto))
+    except Exception as e:
+        logger.warning("OT: no se pudo avisar por Telegram: %s", e)
+
+
+# ── ADMIN ─────────────────────────────────────────────────────────────────
+
+@api_router.post("/work-orders")
+async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admin)):
+    v = await db.vehicles.find_one({"id": data.vehicle_id},
+                                   {"_id": 0, "license_plate": 1, "model": 1, "center": 1})
+    if not v:
+        raise HTTPException(404, "Esa furgoneta no existe")
+    w = await db.workshops.find_one({"id": data.workshop_id}, {"_id": 0, "name": 1, "phone": 1})
+    if not w:
+        raise HTTPException(404, "Ese taller no existe")
+
+    quien = user.get("name") or user.get("username") or "oficina"
+    orden = {
+        "id": str(uuid.uuid4()),
+        "numero": await _ot_numero(),
+        "vehicle_id": data.vehicle_id,
+        "matricula": v.get("license_plate") or data.vehicle_id,
+        "modelo": v.get("model") or "",
+        "center": v.get("center") or "",
+        "workshop_id": data.workshop_id,
+        "taller_nombre": w.get("name") or "",
+        "taller_telefono": w.get("phone") or "",
+        "incident_id": data.incident_id or None,
+        "estado": "abierta",
+        "problema": (data.problema or "").strip()[:2000],
+        "descripcion_trabajo": "",
+        "fecha_entrada": _ot_fecha_valida(data.fecha_entrada) or _ot_ahora()[:10],
+        "fecha_entrega_estimada": _ot_fecha_valida(data.fecha_entrega_estimada),
+        "fecha_entrega_real": None,
+        "importe_estimado": None,
+        "importe_final": None,
+        "presupuesto": "sin_presupuesto",
+        "presupuesto_por": None,
+        "presupuesto_en": None,
+        "fotos": [],
+        "historial": [_ot_apunte(quien, "Orden creada", w.get("name") or "")],
+        "creada_por": quien,
+        "creada_en": _ot_ahora(),
+        "actualizada_en": _ot_ahora(),
+    }
+    await db.ordenes_trabajo.insert_one(dict(orden))
+    orden.pop("_id", None)
+    logger.info("OT creada %s (%s -> %s)", orden["numero"], orden["matricula"], orden["taller_nombre"])
+    return orden
+
+
+@api_router.get("/work-orders")
+async def listar_ordenes(center: Optional[str] = None, estado: Optional[str] = None,
+                         workshop_id: Optional[str] = None, vehicle_id: Optional[str] = None,
+                         abiertas: bool = False, limit: int = 200,
+                         _=Depends(require_admin)):
+    q: dict = {}
+    if center and center != "Todos":
+        q["center"] = {"$regex": re.escape(center), "$options": "i"}
+    if estado:
+        q["estado"] = estado
+    elif abiertas:
+        q["estado"] = {"$in": list(OT_ABIERTAS)}
+    if workshop_id:
+        q["workshop_id"] = workshop_id
+    if vehicle_id:
+        q["vehicle_id"] = vehicle_id
+    filas = await db.ordenes_trabajo.find(q, {"_id": 0}) \
+        .sort("creada_en", -1).to_list(max(1, min(limit, 500)))
+    return {"ordenes": filas, "total": len(filas), "estados": OT_ESTADOS}
+
+
+@api_router.get("/work-orders/resumen")
+async def resumen_ordenes(center: Optional[str] = None, _=Depends(require_admin)):
+    """Los cuatro numeros de arriba y el reparto por estado."""
+    q: dict = {}
+    if center and center != "Todos":
+        q["center"] = {"$regex": re.escape(center), "$options": "i"}
+
+    por_estado = {}
+    async for g in db.ordenes_trabajo.aggregate([{"$match": q},
+                                                 {"$group": {"_id": "$estado", "n": {"$sum": 1}}}]):
+        por_estado[g["_id"] or "?"] = g["n"]
+
+    hoy = _ot_ahora()[:10]
+    completadas_hoy = await db.ordenes_trabajo.count_documents(
+        dict(q, estado="entregado", fecha_entrega_real={"$regex": "^" + hoy}))
+
+    # Tiempo medio en taller, en dias, solo de las entregadas que tienen las
+    # dos fechas. Sin ese filtro saldria un numero inventado.
+    dias, n = 0.0, 0
+    async for o in db.ordenes_trabajo.find(
+            dict(q, estado="entregado"),
+            {"_id": 0, "fecha_entrada": 1, "fecha_entrega_real": 1}).limit(500):
+        try:
+            d1 = datetime.strptime(o["fecha_entrada"][:10], "%Y-%m-%d")
+            d2 = datetime.strptime(o["fecha_entrega_real"][:10], "%Y-%m-%d")
+            dias += (d2 - d1).days
+            n += 1
+        except Exception:
+            continue
+
+    return {
+        "activas": sum(por_estado.get(e, 0) for e in OT_ABIERTAS),
+        "esperando_piezas": por_estado.get("esperando_piezas", 0),
+        "completadas_hoy": completadas_hoy,
+        "dias_medios": round(dias / n, 1) if n else None,
+        "medidas_sobre": n,
+        "presupuestos_pendientes": await db.ordenes_trabajo.count_documents(
+            dict(q, presupuesto="pendiente")),
+        "por_estado": por_estado,
+    }
+
+
+@api_router.get("/work-orders/{orden_id}")
+async def ver_orden(orden_id: str, _=Depends(require_admin)):
+    o = await db.ordenes_trabajo.find_one({"id": orden_id}, {"_id": 0})
+    if not o:
+        raise HTTPException(404, "Esa orden no existe")
+    enlace = await global_db.taller_enlaces.find_one(
+        {"orden_id": orden_id, "revocado": {"$ne": True}}, {"_id": 0, "token": 1, "expira_en": 1})
+    o["enlace"] = ("%s/taller/%s" % (_PORTAL_BASE_FRONT.rstrip("/"), enlace["token"])) if enlace else None
+    o["enlace_expira"] = (enlace or {}).get("expira_en")
+    return o
+
+
+@api_router.post("/work-orders/{orden_id}/enlace")
+async def enlace_orden(orden_id: str, dias: int = 60, user: dict = Depends(require_admin)):
+    """Crea (o rehace) el enlace del taller y devuelve el texto listo para WhatsApp.
+
+    Rehacerlo REVOCA el anterior a proposito: si se manda a quien no era, la
+    forma de arreglarlo es que el viejo deje de abrir.
+    """
+    o = await db.ordenes_trabajo.find_one({"id": orden_id}, {"_id": 0})
+    if not o:
+        raise HTTPException(404, "Esa orden no existe")
+
+    await global_db.taller_enlaces.update_many(
+        {"orden_id": orden_id}, {"$set": {"revocado": True}})
+
+    token = secrets.token_urlsafe(32)
+    caduca = (datetime.now(timezone.utc) + timedelta(days=max(1, min(dias, 365)))).isoformat()
+    await global_db.taller_enlaces.insert_one({
+        "token": token,
+        "orden_id": orden_id,
+        # El nombre de la BD, no el id de la organizacion: es lo que hace falta
+        # para fijar el contexto sin volver a consultar nada.
+        "db_name": _current_db_name.get(),
+        "numero": o.get("numero"),
+        "creado_por": user.get("name") or user.get("username") or "oficina",
+        "creado_en": _ot_ahora(),
+        "expira_en": caduca,
+        "revocado": False,
+    })
+    url = "%s/taller/%s" % (_PORTAL_BASE_FRONT.rstrip("/"), token)
+    texto = (
+        "Hola, os dejamos la furgoneta %s.\n\n"
+        "%s\n\n"
+        "En este enlace podéis ir poniendo el estado, subir fotos y decirnos "
+        "para cuándo estará. No hace falta registrarse:\n%s\n\n"
+        "Así nos evitamos las llamadas. Gracias."
+    ) % (o.get("matricula") or "", (o.get("problema") or "").strip() or "Revisión.", url)
+
+    await db.ordenes_trabajo.update_one(
+        {"id": orden_id},
+        {"$push": {"historial": _ot_apunte(user.get("name") or "oficina", "Enlace generado")},
+         "$set": {"actualizada_en": _ot_ahora()}})
+    return {"url": url, "expira_en": caduca, "texto_whatsapp": texto,
+            "telefono_taller": o.get("taller_telefono") or ""}
+
+
+@api_router.patch("/work-orders/{orden_id}")
+async def editar_orden(orden_id: str, data: dict = Body(...), user: dict = Depends(require_admin)):
+    """La oficina. Lista blanca: lo que no este aqui se ignora."""
+    o = await db.ordenes_trabajo.find_one({"id": orden_id}, {"_id": 0})
+    if not o:
+        raise HTTPException(404, "Esa orden no existe")
+
+    quien = user.get("name") or user.get("username") or "oficina"
+    campos, apuntes = {}, []
+
+    if "estado" in data:
+        nuevo = str(data["estado"])
+        if nuevo not in OT_ESTADOS:
+            raise HTTPException(400, "Ese estado no existe")
+        if nuevo != o.get("estado"):
+            campos["estado"] = nuevo
+            apuntes.append(_ot_apunte(quien, "Estado: " + OT_ESTADOS[nuevo]))
+            if nuevo == "entregado":
+                campos["fecha_entrega_real"] = _ot_ahora()[:10]
+
+    for campo, etiqueta in (("problema", "Problema"), ("descripcion_trabajo", "Trabajo")):
+        if campo in data:
+            campos[campo] = str(data[campo] or "").strip()[:2000]
+            apuntes.append(_ot_apunte(quien, etiqueta + " actualizado"))
+
+    for campo in ("fecha_entrada", "fecha_entrega_estimada"):
+        if campo in data:
+            f = _ot_fecha_valida(data[campo])
+            if data[campo] and not f:
+                raise HTTPException(400, "La fecha tiene que ser AAAA-MM-DD")
+            campos[campo] = f
+            apuntes.append(_ot_apunte(quien, "Fecha cambiada", f or "sin fecha"))
+
+    for campo in ("importe_estimado", "importe_final"):
+        if campo in data:
+            campos[campo] = _ot_importe(data[campo])
+
+    if "presupuesto" in data:
+        p = str(data["presupuesto"])
+        if p not in ("sin_presupuesto", "pendiente", "aprobado", "rechazado"):
+            raise HTTPException(400, "Ese estado de presupuesto no existe")
+        campos["presupuesto"] = p
+        campos["presupuesto_por"] = quien
+        campos["presupuesto_en"] = _ot_ahora()
+        apuntes.append(_ot_apunte(quien, "Presupuesto " + p,
+                                  ("%.2f EUR" % o["importe_estimado"]) if o.get("importe_estimado") else ""))
+
+    if not campos:
+        return {"cambios": 0, "orden": o}
+
+    campos["actualizada_en"] = _ot_ahora()
+    cambio: dict = {"$set": campos}
+    if apuntes:
+        cambio["$push"] = {"historial": {"$each": apuntes}}
+    await db.ordenes_trabajo.update_one({"id": orden_id}, cambio)
+    return {"cambios": len(campos), "orden": await db.ordenes_trabajo.find_one({"id": orden_id}, {"_id": 0})}
+
+
+# ── PORTAL DEL TALLER (publico, solo con el token) ────────────────────────
+
+@api_router.get("/taller/{token}")
+async def portal_taller(token: str):
+    _ot_freno(token, limite=120)                 # leer es barato
+    return await _ot_publica(await _ot_por_token(token))
+
+
+@api_router.post("/taller/{token}/estado")
+async def portal_taller_estado(token: str, data: dict = Body(...)):
+    _ot_freno(token)
+    orden = await _ot_por_token(token)
+    _ot_puede_escribir(orden)
+    nuevo = str(data.get("estado") or "")
+    if nuevo not in OT_ESTADOS_TALLER:
+        raise HTTPException(400, "Ese estado no se puede poner desde aquí")
+    if nuevo == orden.get("estado"):
+        return await _ot_publica(orden)
+
+    nota = str(data.get("nota") or "").strip()[:400]
+    await db.ordenes_trabajo.update_one(
+        {"id": orden["id"]},
+        {"$set": {"estado": nuevo, "actualizada_en": _ot_ahora()},
+         "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller",
+                                           "Estado: " + OT_ESTADOS[nuevo], nota)}})
+    if nuevo in OT_AVISA:
+        await _ot_avisa(orden, "El taller lo ha puesto en: %s%s"
+                        % (OT_ESTADOS[nuevo], (" — " + nota) if nota else ""))
+    return await _ot_publica(await db.ordenes_trabajo.find_one({"id": orden["id"]}, {"_id": 0}))
+
+
+@api_router.post("/taller/{token}/entrega")
+async def portal_taller_entrega(token: str, data: dict = Body(...)):
+    _ot_freno(token)
+    orden = await _ot_por_token(token)
+    _ot_puede_escribir(orden)
+    f = _ot_fecha_valida(data.get("fecha"))
+    if not f:
+        raise HTTPException(400, "Dinos la fecha en formato AAAA-MM-DD")
+    antes = orden.get("fecha_entrega_estimada")
+    await db.ordenes_trabajo.update_one(
+        {"id": orden["id"]},
+        {"$set": {"fecha_entrega_estimada": f, "actualizada_en": _ot_ahora()},
+         "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller",
+                                           "Fecha de entrega: " + f,
+                                           ("antes: " + antes) if antes and antes != f else "")}})
+    # Un retraso es exactamente la llamada que este modulo venia a quitar:
+    # si la fecha se mueve, se avisa. Si se pone por primera vez, no.
+    if antes and antes != f:
+        await _ot_avisa(orden, "La entrega se mueve del %s al %s" % (antes, f))
+    return await _ot_publica(await db.ordenes_trabajo.find_one({"id": orden["id"]}, {"_id": 0}))
+
+
+@api_router.post("/taller/{token}/presupuesto")
+async def portal_taller_presupuesto(token: str, data: dict = Body(...)):
+    """El taller PROPONE, la oficina aprueba. Nunca al reves."""
+    _ot_freno(token)
+    orden = await _ot_por_token(token)
+    _ot_puede_escribir(orden)
+    importe = _ot_importe(data.get("importe"))
+    if importe is None:
+        raise HTTPException(400, "Pon un importe válido, en euros")
+    final = bool(data.get("final"))
+    detalle = str(data.get("detalle") or "").strip()[:600]
+
+    campos = {"actualizada_en": _ot_ahora()}
+    if final:
+        campos["importe_final"] = importe
+        que = "Importe final: %.2f EUR" % importe
+    else:
+        campos["importe_estimado"] = importe
+        campos["presupuesto"] = "pendiente"    # vuelve a pendiente si lo cambia
+        que = "Presupuesto: %.2f EUR" % importe
+
+    await db.ordenes_trabajo.update_one(
+        {"id": orden["id"]},
+        {"$set": campos,
+         "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller", que, detalle)}})
+    await _ot_avisa(orden, que + ((" — " + detalle) if detalle else "")
+                    + ("" if final else " (pendiente de aprobar)"))
+    return await _ot_publica(await db.ordenes_trabajo.find_one({"id": orden["id"]}, {"_id": 0}))
+
+
+@api_router.post("/taller/{token}/nota")
+async def portal_taller_nota(token: str, data: dict = Body(...)):
+    _ot_freno(token)
+    orden = await _ot_por_token(token)
+    _ot_puede_escribir(orden)
+    nota = str(data.get("nota") or "").strip()[:1000]
+    if not nota:
+        raise HTTPException(400, "Escribe algo antes de enviar")
+    await db.ordenes_trabajo.update_one(
+        {"id": orden["id"]},
+        {"$set": {"actualizada_en": _ot_ahora()},
+         "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller", "Nota", nota)}})
+    await _ot_avisa(orden, "Nota del taller: " + nota[:200])
+    return await _ot_publica(await db.ordenes_trabajo.find_one({"id": orden["id"]}, {"_id": 0}))
+
+
+@api_router.post("/taller/{token}/fotos")
+async def portal_taller_fotos(token: str, files: List[UploadFile] = File(...)):
+    _ot_freno(token, limite=25)
+    orden = await _ot_por_token(token)
+    _ot_puede_escribir(orden)
+    if len(files) > 10:
+        raise HTTPException(400, "Como mucho 10 fotos a la vez")
+
+    urls = []
+    for f in files:
+        contenido = await f.read()
+        if not contenido:
+            continue
+        if len(contenido) > 12_000_000:
+            raise HTTPException(400, "Alguna foto pesa demasiado (máximo 12 MB)")
+        # Se reprocesa SIEMPRE con la misma funcion que el resto de la app: eso
+        # normaliza el formato y, de paso, tira cualquier cosa que no sea una
+        # imagen de verdad, que en un endpoint sin login importa bastante.
+        try:
+            url, _b = await process_and_save_image(contenido, orden.get("vehicle_id") or "ot")
+        except Exception as e:
+            logger.warning("OT %s: foto descartada (%s)", orden.get("numero"), e)
+            raise HTTPException(400, "Ese archivo no es una foto válida")
+        urls.append(url)
+
+    if not urls:
+        raise HTTPException(400, "No has adjuntado ninguna foto")
+    await db.ordenes_trabajo.update_one(
+        {"id": orden["id"]},
+        {"$push": {"fotos": {"$each": urls},
+                   "historial": _ot_apunte(orden.get("taller_nombre") or "Taller",
+                                           "%d foto%s" % (len(urls), "s" if len(urls) > 1 else ""))},
+         "$set": {"actualizada_en": _ot_ahora()}})
+    return await _ot_publica(await db.ordenes_trabajo.find_one({"id": orden["id"]}, {"_id": 0}))
 
 
 @api_router.get("/workshops", response_model=List[Workshop])

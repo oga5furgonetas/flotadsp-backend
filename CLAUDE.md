@@ -297,6 +297,21 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    se marca *sin clasificar* en vez de contarse como un día perfecto. Y el
    defecto es **DSC = `Y`**, no al revés. Todo en `docs/REPORTES_DIARIOS.md`.
 
+26. **Un endpoint PÚBLICO en una app multiempresa escribe en la BD que no es,
+   y no falla.** `_current_db_name` es un contextvar **con valor por defecto**
+   (`flotadsp`), y `db` lo resuelve sin quejarse. Todo endpoint sin sesión
+   —el portal del taller es el primero— cae por tanto en la BD principal
+   pasara lo que pasara: hoy acierta por casualidad porque la de Dani ES la
+   principal, y el día que haya un segundo cliente el enlace de un taller suyo
+   leería y escribiría datos ajenos, en silencio, con HTTP 200 y sin un solo
+   error en los logs. La regla: **lo que identifica al que llama vive en
+   `global_db` y lleva dentro el `db_name`**, y el endpoint hace
+   `set_current_org_db(...)` A MANO antes de tocar `db`
+   (`_ot_por_token` es el ejemplo). Nunca confiar en el valor por defecto.
+   Y lo que devuelva ese endpoint va por **lista blanca de campos**, nunca por
+   lista negra: el enlace se reenvía por WhatsApp y acaba en teléfonos que no
+   controlamos, así que ni nombres de conductores ni ids internos.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

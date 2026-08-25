@@ -344,6 +344,7 @@ const DICT = {
   'nav.parking':      { es: 'Aparcamiento', en: 'Parking', fr: 'Stationnement', de: 'Parkplatz', it: 'Parcheggio', pt: 'Estacionamento' },
   'nav.dashboard':  { es: 'Dashboard',        en: 'Dashboard',     fr: 'Tableau de bord', de: 'Übersicht',       it: 'Dashboard',      pt: 'Dashboard' },
   'nav.scorecard':  { es: 'Scorecard',        en: 'Scorecard',     fr: 'Scorecard',       de: 'Scorecard',       it: 'Scorecard',      pt: 'Scorecard' },
+  'nav.ordenes':    { es: 'Órdenes de taller', en: 'Work orders', fr: 'Ordres de travail', de: 'Werkstattaufträge', it: 'Ordini di lavoro', pt: 'Ordens de trabalho' },
   'nav.diarios':    { es: 'DNR · Diarios',   en: 'DNR · Daily',   fr: 'DNR · Quotidien', de: 'DNR · Täglich',   it: 'DNR · Giornaliero', pt: 'DNR · Diários' },
   'nav.whc':        { es: 'Horas · WHC',      en: 'Hours · WHC',   fr: 'Heures · WHC',    de: 'Stunden · WHC',   it: 'Ore · WHC',      pt: 'Horas · WHC' },
   'nav.dsc':        { es: 'Dónde se entrega', en: 'Delivery spot', fr: 'Lieu de livraison', de: 'Ablageort',     it: 'Luogo consegna', pt: 'Onde se entrega' },

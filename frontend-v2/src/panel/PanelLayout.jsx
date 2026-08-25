@@ -64,6 +64,7 @@ const NAV_DEF = [
     { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
     { to: '/panel/scorecard', labelKey: 'nav.scorecard', icon: Trophy },
     { to: '/panel/diarios', labelKey: 'nav.diarios', icon: PackageX },
+    { to: '/panel/ordenes', labelKey: 'nav.ordenes', icon: ClipboardList },
     { to: '/panel/whc', labelKey: 'nav.whc', icon: Timer },
     { to: '/panel/dsc', labelKey: 'nav.dsc', icon: MapPinned },
     { to: '/panel/contactos', labelKey: 'nav.contacts', icon: BookUser },

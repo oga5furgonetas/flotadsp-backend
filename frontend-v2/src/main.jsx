@@ -215,6 +215,8 @@ const PanelAparcamiento = lazy(() => import('./panel/pages/Aparcamiento'))
 const PanelCasasAlquiler = lazy(() => import('./panel/pages/CasasAlquiler'))
 const PanelScorecard = lazy(() => import('./panel/pages/Scorecard'))
 const PanelDiarios = lazy(() => import('./panel/pages/Diarios'))
+const PanelOrdenes = lazy(() => import('./panel/pages/OrdenesTrabajo'))
+const PortalTaller = lazy(() => import('./pages/PortalTaller'))
 const PanelConfiguracion = lazy(() => import('./panel/pages/Configuracion'))
 const PanelTurnos = lazy(() => import('./panel/pages/Turnos'))
 const PanelUsuarios = lazy(() => import('./panel/pages/Usuarios'))
@@ -295,6 +297,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/verify" element={<Verify />} />
               <Route path="/verify/:hash" element={<Verify />} />
               <Route path="/app" element={<AppRedirect />} />
+              <Route path="/taller/:token" element={<PortalTaller />} />
               <Route path="/conductor" element={<DriverPortal />} />
               <Route path="/conductor/:slug" element={<DriverPortal />} />
 
@@ -307,6 +310,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="mi-dia" element={<PanelMiDia />} />
                 <Route path="scorecard" element={<PanelScorecard />} />
                 <Route path="diarios" element={<PanelDiarios />} />
+                <Route path="ordenes" element={<PanelOrdenes />} />
                 <Route path="conductores" element={<PanelConductores />} />
                 <Route path="turnos" element={<PanelTurnos />} />
                 <Route path="asignacion" element={<PanelAsignacion />} />

@@ -267,6 +267,18 @@ export const subirDiarios = (files, center, confirmar) => {
   if (confirmar) fd.append('confirmar', '1')
   return api.post('/diarios/subir', fd, { timeout: 180000 })
 }
+/* ── Órdenes de trabajo ── */
+export const getOrdenes = (params) => api.get('/work-orders', { params })
+export const getResumenOrdenes = (center) =>
+  api.get('/work-orders/resumen', { params: centerParam(center) })
+export const getOrden = (id) => api.get(`/work-orders/${id}`)
+export const crearOrden = (body) => api.post('/work-orders', body)
+export const editarOrden = (id, body) => api.patch(`/work-orders/${id}`, body)
+// Rehace el enlace y REVOCA el anterior: es la forma de arreglar un envío
+// al taller equivocado.
+export const enlaceOrden = (id, dias) =>
+  api.post(`/work-orders/${id}/enlace`, null, { params: dias ? { dias } : {} })
+
 export const pegarDiario = (body) => api.post('/diarios/pegar', body)
 export const diariosPorConductor = (center, desde, hasta) =>
   api.get('/diarios/conductores', { params: { center, desde, hasta } })
