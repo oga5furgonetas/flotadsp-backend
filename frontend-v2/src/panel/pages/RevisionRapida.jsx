@@ -4,11 +4,160 @@ import { useT } from '../../i18n'
 import {
   Loader2, CheckCircle2, Check, X, ChevronLeft, ChevronRight, User, Clock,
   AlertTriangle, BrainCircuit, Pencil, Plus, FileText, TrendingUp, EyeOff,
+  Zap, HelpCircle,
 } from 'lucide-react'
-import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback, fetchAuthedBlob, autoexamenIA } from '../api'
+import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback, fetchAuthedBlob, autoexamenIA, iaParaRevisar } from '../api'
 import PolygonEditor from '../components/PolygonEditor'
 import BboxEditor from '../components/BboxEditor'
 import CompareSlider from '../components/CompareSlider'
+
+/* REVISION EXPRES
+   ─────────────────────────────────────────────────────────────────────────
+   El problema no era que nadie quisiera revisar: era el coste. Revisar una
+   inspeccion es abrirla, mirar cinco fotos y navegar; en 30 dias se hicieron
+   11 revisiones sobre 1.568 inspecciones.
+
+   Aqui se revisa UN DAÑO, no una inspeccion: la foto con el recuadro donde
+   la IA dice que esta, y tres botones. Cinco segundos.
+
+   El tercer boton —"No se ve"— no es un "no se". Es informacion distinta y
+   valiosa: sin el, quien revisa tiene que marcar "no existe" cuando lo que
+   pasa es que la foto no deja verlo, y eso entra en el aprendizaje como un
+   falso positivo que no lo es. */
+function RevisionExpres({ center, alCerrar, alGuardar }) {
+  const [lista, setLista] = useState(null)
+  const [i, setI] = useState(0)
+  const [total, setTotal] = useState(0)
+  const [hechas, setHechas] = useState(0)
+  const [ocupado, setOcupado] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    iaParaRevisar(center, 25)
+      .then((r) => { setLista(r.data?.pendientes || []); setTotal(r.data?.total_sin_revisar || 0) })
+      .catch(() => setLista([]))
+  }, [center])
+
+  const actual = lista?.[i]
+
+  const responder = async (verdict) => {
+    if (!actual || ocupado) return
+    setOcupado(true); setErr('')
+    try {
+      await damageFeedback(actual.inspection_id, {
+        verdict, damage_index: actual.damage_index, scope: actual.scope || 'new',
+      })
+      setHechas((n) => n + 1)
+      setI((n) => n + 1)
+      alGuardar?.()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo guardar. Inténtalo otra vez.')
+    } finally { setOcupado(false) }
+  }
+
+  /* Teclado para el que revisa desde el ordenador: 1 sí, 2 no, 3 no se ve.
+     Con raton son 25 clics; con teclado, 25 pulsaciones sin mover la mano. */
+  useEffect(() => {
+    const h = (e) => {
+      if (e.key === 'Escape') return alCerrar?.()
+      if (e.key === '1') responder('correct')
+      if (e.key === '2') responder('wrong')
+      if (e.key === '3') responder('no_evaluable')
+    }
+    document.addEventListener('keydown', h)
+    return () => document.removeEventListener('keydown', h)
+  })
+
+  const caja = actual?.box && actual.box.length === 4 ? {
+    // box_2d viene [ymin, xmin, ymax, xmax] normalizado 0-1000
+    top: `${actual.box[0] / 10}%`, left: `${actual.box[1] / 10}%`,
+    height: `${(actual.box[2] - actual.box[0]) / 10}%`,
+    width: `${(actual.box[3] - actual.box[1]) / 10}%`,
+  } : null
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-dark-950/95 backdrop-blur">
+      <div className="flex items-center gap-3 border-b border-dark-800 px-4 py-3">
+        <Zap size={17} className="text-violet-400" />
+        <span className="text-sm font-semibold text-dark-100">Revisión exprés</span>
+        {!!hechas && <span className="text-[13px] text-emerald-400">{hechas} revisadas</span>}
+        <span className="ml-auto text-[13px] text-dark-500">
+          {lista ? `${Math.min(i + 1, lista.length)} de ${lista.length}` : ''}
+          {total > (lista?.length || 0) && ` · ${total} sin revisar`}
+        </span>
+        <button onClick={alCerrar} className="text-dark-400 hover:text-dark-100"><X size={20} /></button>
+      </div>
+
+      <div className="flex flex-1 items-center justify-center overflow-y-auto p-4">
+        {!lista ? (
+          <Loader2 size={26} className="animate-spin text-violet-400" />
+        ) : !actual ? (
+          <div className="max-w-sm text-center">
+            <CheckCircle2 size={34} className="mx-auto mb-3 text-emerald-400" />
+            <p className="text-[15px] font-semibold text-dark-100">
+              {hechas ? `Listo — ${hechas} revisadas.` : 'No hay daños pendientes de revisar.'}
+            </p>
+            {total > hechas && (
+              <p className="mt-1 text-[13px] text-dark-400">Quedan {total - hechas} para otro rato.</p>
+            )}
+            <button onClick={alCerrar} className="btn-primary mt-4 text-sm">Cerrar</button>
+          </div>
+        ) : (
+          <div className="w-full max-w-lg">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="text-[15px] font-bold text-dark-50">{actual.matricula}</span>
+              <span className="rounded bg-dark-800 px-2 py-0.5 text-[12px] capitalize text-dark-300">
+                {actual.pieza}
+              </span>
+              <span className="text-[12px] text-dark-500">{actual.fecha}</span>
+              {/* Por qué esta y no otra: el orden es por lo que enseña. */}
+              {actual.validaciones_pieza < 5 && (
+                <span className="rounded bg-violet-500/15 px-2 py-0.5 text-[11.5px] text-violet-300">
+                  pieza poco vista ({actual.validaciones_pieza})
+                </span>
+              )}
+            </div>
+
+            <div className="relative overflow-hidden rounded-xl border border-dark-800 bg-dark-900">
+              <img src={actual.foto} alt="" className="w-full object-contain" style={{ maxHeight: '52vh' }} />
+              {caja && (
+                <div className="pointer-events-none absolute border-2 border-red-400 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]"
+                  style={caja} />
+              )}
+            </div>
+
+            {actual.descripcion && (
+              <p className="mt-2 text-[13.5px] leading-snug text-dark-300">{actual.descripcion}</p>
+            )}
+
+            {err && (
+              <p className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-200">{err}</p>
+            )}
+
+            <p className="mt-4 text-center text-[14px] text-dark-400">¿Existe este daño?</p>
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              <button disabled={ocupado} onClick={() => responder('correct')}
+                className="flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-xl border border-emerald-600/50 bg-emerald-600/10 text-[15px] font-semibold text-emerald-300 disabled:opacity-40">
+                <Check size={20} /> Sí <span className="text-[11px] text-emerald-400/60">1</span>
+              </button>
+              <button disabled={ocupado} onClick={() => responder('wrong')}
+                className="flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-xl border border-red-600/50 bg-red-600/10 text-[15px] font-semibold text-red-300 disabled:opacity-40">
+                <X size={20} /> No <span className="text-[11px] text-red-400/60">2</span>
+              </button>
+              <button disabled={ocupado} onClick={() => responder('no_evaluable')}
+                className="flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-xl border border-dark-700 text-[15px] font-semibold text-dark-300 disabled:opacity-40">
+                <HelpCircle size={20} /> No se ve <span className="text-[11px] text-dark-500">3</span>
+              </button>
+            </div>
+            <p className="mt-2 text-center text-[11.5px] text-dark-600">
+              «No se ve» no es un fallo de la IA: es que la foto no deja juzgarlo.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 const GOAL = 3000
 
@@ -23,7 +172,7 @@ const GOAL = 3000
    baja— y enseña tambien la letra pequeña, porque un porcentaje sin su
    contexto es peor que no tener ninguno: aqui solo se mide lo REVISADO, y
    se revisa sobre todo cuando la IA reporta algo. */
-function Autoexamen({ datos, total }) {
+function Autoexamen({ datos, total, alRevisar }) {
   const [abierto, setAbierto] = useState(false)
   if (!datos) return null
 
@@ -74,10 +223,16 @@ function Autoexamen({ datos, total }) {
         </p>
       )}
 
-      <button onClick={() => setAbierto((v) => !v)}
-        className="mt-3 text-[12.5px] font-semibold text-violet-300 hover:text-violet-200">
-        {abierto ? 'Ocultar detalle' : 'Ver en qué falla'}
-      </button>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <button onClick={alRevisar}
+          className="flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-[13px] font-semibold text-white hover:bg-violet-500">
+          <Zap size={15} /> Revisar en 5 segundos
+        </button>
+        <button onClick={() => setAbierto((v) => !v)}
+          className="text-[12.5px] font-semibold text-violet-300 hover:text-violet-200">
+          {abierto ? 'Ocultar detalle' : 'Ver en qué falla'}
+        </button>
+      </div>
 
       {abierto && (
         <div className="mt-3 space-y-4 border-t border-white/[0.07] pt-3">
@@ -181,6 +336,7 @@ export default function RevisionRapida() {
   const [partName, setPartName] = useState('')
   const [filterIA, setFilterIA] = useState(false)
   const [autoex, setAutoex] = useState(null)
+  const [expres, setExpres] = useState(false)
   // Modal editor de polígono/bbox
   const [polyEdit, setPolyEdit] = useState(null) // { dmgIndex, damage, photoUrl, editorMode }
   const [polyEditorMode, setPolyEditorMode] = useState('polygon') // 'bbox' | 'polygon'
@@ -357,7 +513,11 @@ export default function RevisionRapida() {
         </div>
       </header>
 
-      <Autoexamen datos={autoex} total={total} />
+      <Autoexamen datos={autoex} total={total} alRevisar={() => setExpres(true)} />
+      {expres && (
+        <RevisionExpres center={center} alCerrar={() => { setExpres(false); loadStats() }}
+          alGuardar={loadStats} />
+      )}
 
       {queue.length === 0 ? (
         <div className="card flex flex-col items-center gap-2 p-12 text-center text-dark-300">

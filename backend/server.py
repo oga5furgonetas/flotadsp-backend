@@ -7936,8 +7936,14 @@ async def damage_feedback(inspection_id: str, data: dict, user: dict = Depends(g
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Solo administradores")
     verdict = data.get("verdict")
-    if verdict not in ("correct", "wrong", "corrected"):
-        raise HTTPException(status_code=400, detail="verdict debe ser 'correct', 'wrong' o 'corrected'")
+    # 'no_evaluable' es la respuesta humana equivalente a la tercera salida que
+    # se le dio a la IA: la foto no permite juzgar. Sin esta opcion, quien
+    # revisa tiene que mentir —marcar "se equivoco" cuando en realidad no se
+    # ve nada— y esa mentira entra en el aprendizaje como si fuera un falso
+    # positivo, enseñandole a callarse en sitios donde a lo mejor si hay daño.
+    if verdict not in ("correct", "wrong", "corrected", "no_evaluable"):
+        raise HTTPException(status_code=400,
+                            detail="verdict debe ser 'correct', 'wrong', 'corrected' o 'no_evaluable'")
     damage_index = data.get("damage_index")
     scope = data.get("scope", "new")  # 'new' = new_damages, 'all' = damages
 
@@ -12715,6 +12721,87 @@ async def resumen_ordenes(center: Optional[str] = None, _=Depends(require_admin)
     }
 
 
+@api_router.get("/ai/para-revisar")
+async def ia_para_revisar(limit: int = 20, center: Optional[str] = None,
+                          user: dict = Depends(require_admin)):
+    """Daños SUELTOS pendientes de validar, no inspecciones enteras.
+
+    Es el arreglo de la señal muerta. Revisar una inspeccion cuesta abrirla,
+    mirar cinco fotos y navegar; revisar un daño es mirar una foto y pulsar un
+    boton. Con 1.568 inspecciones al mes y la IA callandose en el 86 %, lo que
+    hay que revisar no son las inspecciones: son los ~14 % en los que habla.
+
+    EL ORDEN NO ES CRONOLOGICO, ES POR LO QUE ENSEÑA. Primero las piezas de
+    las que menos sabemos: una revision sobre una pieza con 2 ejemplos mueve
+    la leccion mucho mas que la numero 94 del paragolpes trasero. Cuando ya
+    hay 90 falsos positivos de una pieza, el 91 no aporta nada.
+    """
+    limit = max(1, min(limit, 50))
+
+    # Cuantas validaciones tiene ya cada pieza: es el peso del orden.
+    sabido: dict = {}
+    async for g in db.ai_feedback.aggregate([
+            {"$group": {"_id": {"$toLower": {"$trim": {"input": {"$ifNull": ["$damage.part", ""]}}}},
+                        "n": {"$sum": 1}}}]):
+        sabido[(g["_id"] or "").strip()] = g["n"]
+
+    q: dict = {"analysis.new_damages": {"$exists": True, "$ne": []}}
+    if center and center != "Todos":
+        # `inspections` no tiene campo center (gotcha 6): se acota por las
+        # furgonetas de ese centro.
+        ids = [v["id"] async for v in db.vehicles.find(
+            {"center": {"$regex": re.escape(center), "$options": "i"}}, {"_id": 0, "id": 1})]
+        q["vehicle_id"] = {"$in": ids}
+
+    # Se miran bastantes mas de las que se devuelven porque la mayoria ya
+    # estaran revisadas y hay que descartarlas.
+    inspecciones = await db.inspections.find(
+        q, {"_id": 0, "id": 1, "vehicle_id": 1, "photos": 1, "created_at": 1,
+            "analysis.new_damages": 1}).sort("created_at", -1).to_list(400)
+    if not inspecciones:
+        return {"pendientes": [], "total_sin_revisar": 0}
+
+    # Lo ya revisado, de una sola consulta: (inspeccion, indice).
+    ya = set()
+    async for f in db.ai_feedback.find(
+            {"inspection_id": {"$in": [i["id"] for i in inspecciones]}},
+            {"_id": 0, "inspection_id": 1, "damage_index": 1}):
+        ya.add((f.get("inspection_id"), f.get("damage_index")))
+
+    # Matriculas de una sola vez, para no consultar por cada daño.
+    vids = list({i.get("vehicle_id") for i in inspecciones if i.get("vehicle_id")})
+    matriculas = {v["id"]: v.get("license_plate") async for v in db.vehicles.find(
+        {"id": {"$in": vids}}, {"_id": 0, "id": 1, "license_plate": 1})}
+
+    sueltos = []
+    for insp in inspecciones:
+        fotos = insp.get("photos") or []
+        for idx, dmg in enumerate((insp.get("analysis") or {}).get("new_damages") or []):
+            if not isinstance(dmg, dict) or (insp["id"], idx) in ya:
+                continue
+            pi = dmg.get("photo_index")
+            foto = fotos[pi - 1] if (isinstance(pi, int) and 1 <= pi <= len(fotos)) else (fotos[0] if fotos else None)
+            if not foto:
+                continue                      # sin foto no hay nada que juzgar
+            pieza = str(dmg.get("part") or "").strip()
+            sueltos.append({
+                "inspection_id": insp["id"], "damage_index": idx, "scope": "new",
+                "matricula": matriculas.get(insp.get("vehicle_id")) or "",
+                "foto": foto, "pieza": pieza,
+                "severidad": dmg.get("severity"),
+                "descripcion": dmg.get("description"),
+                "box": dmg.get("box_2d"),
+                "confianza": dmg.get("confidence"),
+                "fecha": (insp.get("created_at") or "")[:10],
+                # Lo que sabemos ya de esa pieza. Se manda para poder decir en
+                # pantalla POR QUE se pregunta esto y no otra cosa.
+                "validaciones_pieza": sabido.get(pieza.lower(), 0),
+            })
+
+    sueltos.sort(key=lambda x: (x["validaciones_pieza"], x["fecha"]))
+    return {"pendientes": sueltos[:limit], "total_sin_revisar": len(sueltos)}
+
+
 @api_router.get("/ai/autoexamen")
 async def ia_autoexamen(semanas: int = 12, _=Depends(require_admin)):
     """Como de bien lo esta haciendo la IA, medido con lo que marcasteis vosotros.
@@ -12736,7 +12823,10 @@ async def ia_autoexamen(semanas: int = 12, _=Depends(require_admin)):
     semanas = max(1, min(semanas, 52))
 
     def vacio():
-        return {"correct": 0, "wrong": 0, "corrected": 0, "missed": 0}
+        # 'no_evaluable' cuenta aparte a proposito: no es ni un acierto ni un
+        # fallo de la IA, es una foto que no permitia juzgar. Mezclarlo con
+        # los fallos culparia a la IA de la calidad de las fotos.
+        return {"correct": 0, "wrong": 0, "corrected": 0, "missed": 0, "no_evaluable": 0}
 
     # ── Global ────────────────────────────────────────────────────────
     total = vacio()
