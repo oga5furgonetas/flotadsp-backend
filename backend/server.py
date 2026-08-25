@@ -12369,6 +12369,28 @@ async def _ot_numero() -> str:
     return "OT-%d" % (1000 + int((doc or {}).get("valor") or 1))
 
 
+async def _ot_historial_vehiculo(orden: dict) -> list:
+    """Por que ha pasado antes esta furgoneta. Para el TALLER.
+
+    Ahorra el trabajo de diagnosticar dos veces lo mismo: si hace tres meses
+    se cambiaron los discos, eso explica la mitad de los ruidos de hoy.
+
+    NO se dice en que taller estuvo, a proposito. Es informacion comercial de
+    la flota y a Midas no le incumbe que unas lunas las hiciera Carglass; lo
+    util para reparar es QUE se hizo, no quien lo hizo.
+    """
+    filas = await db.ordenes_trabajo.find(
+        {"vehicle_id": orden.get("vehicle_id"), "id": {"$ne": orden.get("id")},
+         "estado": "entregado"},
+        {"_id": 0, "fecha_entrada": 1, "fecha_entrega_real": 1,
+         "problema": 1, "descripcion_trabajo": 1}
+    ).sort("fecha_entrada", -1).to_list(5)
+    return [{
+        "fecha": f.get("fecha_entrega_real") or f.get("fecha_entrada"),
+        "que": (f.get("descripcion_trabajo") or f.get("problema") or "")[:180],
+    } for f in filas if (f.get("descripcion_trabajo") or f.get("problema"))]
+
+
 async def _ot_publica(orden: dict) -> dict:
     """Lo que ve el TALLER. Lista blanca a proposito, no lista negra.
 
@@ -12397,6 +12419,12 @@ async def _ot_publica(orden: dict) -> dict:
         "historial": orden.get("historial") or [],
         "estados_posibles": [{"id": e, "txt": OT_ESTADOS[e]} for e in OT_ESTADOS_TALLER],
         "cerrada": orden.get("estado") in ("entregado", "anulada"),
+        # El paso en el que va, para pintarlo como un recorrido y no como una
+        # etiqueta suelta: de un vistazo se ve cuanto queda.
+        "paso": (list(OT_ESTADOS_TALLER).index(orden.get("estado")) + 1)
+                if orden.get("estado") in OT_ESTADOS_TALLER else 0,
+        "pasos": [{"id": e, "txt": OT_ESTADOS[e]} for e in OT_ESTADOS_TALLER],
+        "ya_estuvo": await _ot_historial_vehiculo(orden),
     }
 
 
@@ -12473,6 +12501,23 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
         raise HTTPException(404, "Ese taller no existe")
 
     quien = user.get("name") or user.get("username") or "oficina"
+
+    # DESDE UNA INCIDENCIA YA ABIERTA.
+    # En produccion hay decenas de incidencias con sus fotos del dano. Volver a
+    # escribir lo mismo para el taller es trabajo tirado, y mandar la furgoneta
+    # sin las fotos obliga al taller a buscar el golpe. Se arrastran las dos
+    # cosas; el problema escrito a mano, si lo hay, manda sobre el de la
+    # incidencia (quien crea la orden sabe mejor que le pasa hoy).
+    fotos_previas: list = []
+    problema = (data.problema or "").strip()
+    if data.incident_id:
+        inc = await db.incidents.find_one({"id": data.incident_id},
+                                          {"_id": 0, "description": 1, "title": 1, "photos": 1})
+        if inc:
+            fotos_previas = list(inc.get("photos") or [])[:12]
+            if not problema:
+                problema = (inc.get("description") or inc.get("title") or "").strip()
+
     orden = {
         "id": str(uuid.uuid4()),
         "numero": await _ot_numero(),
@@ -12485,7 +12530,7 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
         "taller_telefono": w.get("phone") or "",
         "incident_id": data.incident_id or None,
         "estado": "abierta",
-        "problema": (data.problema or "").strip()[:2000],
+        "problema": problema[:2000],
         "descripcion_trabajo": "",
         "fecha_entrada": _ot_fecha_valida(data.fecha_entrada) or _ot_ahora()[:10],
         "fecha_entrega_estimada": _ot_fecha_valida(data.fecha_entrega_estimada),
@@ -12495,8 +12540,10 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
         "presupuesto": "sin_presupuesto",
         "presupuesto_por": None,
         "presupuesto_en": None,
-        "fotos": [],
-        "historial": [_ot_apunte(quien, "Orden creada", w.get("name") or "")],
+        "fotos": fotos_previas,
+        "historial": [_ot_apunte(quien, "Orden creada", w.get("name") or "")]
+                     + ([_ot_apunte(quien, "%d fotos de la incidencia" % len(fotos_previas))]
+                        if fotos_previas else []),
         "creada_por": quien,
         "creada_en": _ot_ahora(),
         "actualizada_en": _ot_ahora(),
@@ -12693,6 +12740,61 @@ async def exportar_ordenes(center: Optional[str] = None, estado: Optional[str] =
         headers={"Content-Disposition": 'attachment; filename="%s"' % nombre})
 
 
+@api_router.get("/work-orders/por-taller")
+async def ordenes_por_taller(center: Optional[str] = None, _=Depends(require_admin)):
+    """Cual tarda menos y cual cobra mas. Para decidir a donde mandar la
+    siguiente, que hoy se decide de memoria.
+
+    Solo cuenta ordenes ENTREGADAS y con las dos fechas: la media de dias de
+    una orden abierta no significa nada, y meterla ensuciaria el unico numero
+    que sirve para comparar.
+
+    Va declarada ANTES que /work-orders/{orden_id} — si no, 'por-taller'
+    entraria como un id y esto daria 404.
+    """
+    q: dict = {"estado": "entregado"}
+    if center and center != "Todos":
+        q["center"] = {"$regex": re.escape(center), "$options": "i"}
+
+    por: dict = {}
+    # `async for` sobre el CURSOR, o `for` sobre el resultado de `to_list()`.
+    # Mezclarlos revienta con "got _asyncio.Future" y no lo ve ni el compilador
+    # ni pyflakes: solo salta al pedir la ruta.
+    for o in await db.ordenes_trabajo.find(q, {"_id": 0, "workshop_id": 1, "taller_nombre": 1,
+                                               "fecha_entrada": 1, "fecha_entrega_real": 1,
+                                               "importe_final": 1, "importe_estimado": 1,
+                                               "abierto_en": 1}).to_list(3000):
+        e = por.setdefault(o.get("workshop_id") or "?", {
+            "taller": o.get("taller_nombre") or "(sin nombre)", "ordenes": 0,
+            "_dias": [], "_importes": [], "abrieron": 0})
+        e["ordenes"] += 1
+        if o.get("abierto_en"):
+            e["abrieron"] += 1
+        try:
+            d1 = datetime.strptime((o.get("fecha_entrada") or "")[:10], "%Y-%m-%d")
+            d2 = datetime.strptime((o.get("fecha_entrega_real") or "")[:10], "%Y-%m-%d")
+            e["_dias"].append((d2 - d1).days)
+        except Exception:
+            pass
+        imp = o.get("importe_final") if o.get("importe_final") is not None else o.get("importe_estimado")
+        if imp is not None:
+            e["_importes"].append(imp)
+
+    salida = []
+    for wid, e in por.items():
+        salida.append({
+            "workshop_id": wid, "taller": e["taller"], "ordenes": e["ordenes"],
+            # None y no 0: "no lo sabemos" y "tarda cero dias" no son lo mismo.
+            "dias_medios": round(sum(e["_dias"]) / len(e["_dias"]), 1) if e["_dias"] else None,
+            "medidas_sobre": len(e["_dias"]),
+            "gasto_total": round(sum(e["_importes"]), 2) if e["_importes"] else None,
+            "importe_medio": round(sum(e["_importes"]) / len(e["_importes"]), 2) if e["_importes"] else None,
+            "usan_el_enlace": round(100 * e["abrieron"] / e["ordenes"]) if e["ordenes"] else 0,
+        })
+    salida.sort(key=lambda x: (x["dias_medios"] is None, x["dias_medios"] or 0))
+    return {"talleres": salida}
+
+
 @api_router.get("/work-orders/{orden_id}")
 async def ver_orden(orden_id: str, _=Depends(require_admin)):
     o = await db.ordenes_trabajo.find_one({"id": orden_id}, {"_id": 0})
@@ -12802,6 +12904,9 @@ async def editar_orden(orden_id: str, data: dict = Body(...), user: dict = Depen
         if p not in ("sin_presupuesto", "pendiente", "aprobado", "rechazado"):
             raise HTTPException(400, "Ese estado de presupuesto no existe")
         campos["presupuesto"] = p
+        # El taller esta PARADO esperando esto. Si no se entera, espera un dia
+        # y luego llama a preguntar: la llamada que este modulo venia a quitar.
+        # Se apunta en el historial, que es lo primero que ve al abrir.
         campos["presupuesto_por"] = quien
         campos["presupuesto_en"] = _ot_ahora()
         apuntes.append(_ot_apunte(quien, "Presupuesto " + p,

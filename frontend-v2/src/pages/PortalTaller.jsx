@@ -3,7 +3,7 @@ import axios from 'axios'
 import { useParams } from 'react-router-dom'
 import {
   Loader2, Camera, Check, Euro, MessageSquare, Wrench, AlertTriangle,
-  CalendarClock,
+  CalendarClock, History, ThumbsUp, Clock3,
 } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
 
@@ -61,6 +61,16 @@ const masDias = (iso, n) => {
   const base = iso ? new Date(iso + 'T12:00:00') : new Date()
   base.setDate(base.getDate() + n)
   return `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-${String(base.getDate()).padStart(2, '0')}`
+}
+
+const MES_CORTO = ['ene', 'feb', 'mar', 'abr', 'may', 'jun',
+  'jul', 'ago', 'sep', 'oct', 'nov', 'dic']
+
+const fechaCorta = (iso) => {
+  if (!iso) return ''
+  const d = new Date(String(iso).slice(0, 10) + 'T12:00:00')
+  if (Number.isNaN(d.getTime())) return String(iso).slice(0, 10)
+  return `${d.getDate()} ${MES_CORTO[d.getMonth()]}`
 }
 
 const cuando = (iso) => {
@@ -177,6 +187,25 @@ export default function PortalTaller() {
           <span className={`mt-3 inline-block rounded-full border px-3 py-1 text-[12.5px] font-semibold ${COLOR_ESTADO[orden.estado] || COLOR_ESTADO.abierta}`}>
             {orden.estado_txt}
           </span>
+
+          {/* EL RECORRIDO. Una etiqueta suelta dice dónde estás; esto dice
+              además cuánto queda, que es lo que de verdad se pregunta todo el
+              mundo. Cinco segmentos porque son cinco estados: no es adorno,
+              cada tramo es un paso real. */}
+          {!!orden.paso && (
+            <div className="mt-4">
+              <div className="flex gap-1">
+                {(orden.pasos || []).map((p, i) => (
+                  <span key={p.id}
+                    className={`h-1.5 flex-1 rounded-full ${
+                      i < orden.paso ? 'bg-brand-500' : 'bg-dark-700'}`} />
+                ))}
+              </div>
+              <p className="mt-1.5 text-[11.5px] text-dark-500">
+                Paso {orden.paso} de {(orden.pasos || []).length}
+              </p>
+            </div>
+          )}
         </div>
       </header>
 
@@ -186,6 +215,47 @@ export default function PortalTaller() {
         )}
         {ok && (
           <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[13.5px] text-emerald-200">{ok}</p>
+        )}
+
+        {/* ¿PUEDEN EMPEZAR O NO?
+            Un taller con un presupuesto sin contestar está parado, y como no
+            tiene forma de enterarse, al día siguiente llama a preguntar. Eso
+            es exactamente la llamada que sobra, así que la respuesta va aquí
+            arriba, antes que nada. */}
+        {orden.presupuesto === 'aprobado' && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-emerald-500/50 bg-emerald-500/[0.09] px-4 py-3.5">
+            <ThumbsUp size={19} className="mt-0.5 flex-none text-emerald-400" />
+            <div>
+              <p className="text-[15.5px] font-bold text-emerald-200">Presupuesto aprobado</p>
+              <p className="text-[13.5px] leading-snug text-emerald-200/80">
+                Podéis seguir adelante. No hace falta que llaméis.
+              </p>
+            </div>
+          </div>
+        )}
+        {orden.presupuesto === 'pendiente' && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/50 bg-amber-500/[0.08] px-4 py-3.5">
+            <Clock3 size={19} className="mt-0.5 flex-none text-amber-400" />
+            <div>
+              <p className="text-[15.5px] font-bold text-amber-200">
+                Presupuesto enviado, pendiente de aprobar
+              </p>
+              <p className="text-[13.5px] leading-snug text-amber-200/80">
+                Lo estamos mirando. En cuanto se apruebe lo veréis aquí mismo.
+              </p>
+            </div>
+          </div>
+        )}
+        {orden.presupuesto === 'rechazado' && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-red-500/50 bg-red-500/[0.08] px-4 py-3.5">
+            <AlertTriangle size={19} className="mt-0.5 flex-none text-red-400" />
+            <div>
+              <p className="text-[15.5px] font-bold text-red-200">Presupuesto no aprobado</p>
+              <p className="text-[13.5px] leading-snug text-red-200/80">
+                No sigáis hasta hablarlo con la oficina.
+              </p>
+            </div>
+          </div>
         )}
 
         {bloqueada && (
@@ -474,6 +544,29 @@ export default function PortalTaller() {
             >
               {ocupado === 'nota' ? <Loader2 size={17} className="animate-spin" /> : 'Enviar'}
             </button>
+          </section>
+        )}
+
+        {/* LO QUE YA SE LE HIZO.
+            Un mecánico que sabe que hace tres meses se cambiaron los discos no
+            vuelve a diagnosticar el ruido desde cero. Se dice QUÉ se hizo pero
+            NUNCA en qué taller: eso es información de la flota y a este taller
+            no le incumbe quién hizo el trabajo anterior. */}
+        {!!(orden.ya_estuvo || []).length && (
+          <section className="card p-4">
+            <h2 className="mb-3 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-dark-500">
+              <History size={13} /> Esta furgoneta ya pasó por taller
+            </h2>
+            <ul className="space-y-2.5">
+              {orden.ya_estuvo.map((h, i) => (
+                <li key={h.fecha + i} className="flex gap-3">
+                  <span className="w-[3.6rem] flex-none whitespace-nowrap text-[12.5px] tabular-nums text-dark-500">
+                    {fechaCorta(h.fecha)}
+                  </span>
+                  <span className="text-[13.5px] leading-snug text-dark-300">{h.que}</span>
+                </li>
+              ))}
+            </ul>
           </section>
         )}
 

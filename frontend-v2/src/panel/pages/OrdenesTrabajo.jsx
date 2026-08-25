@@ -3,11 +3,12 @@ import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, Plus, Link2, Copy, Check, X, Wrench, Euro, Clock,
   AlertTriangle, MessageCircle, Package, Search, Eye, EyeOff, PhoneCall,
-  Download, CalendarClock, HelpCircle,
+  Download, CalendarClock, HelpCircle, Images, BarChart3,
 } from 'lucide-react'
 import {
   getOrdenes, getResumenOrdenes, getOrden, crearOrden, editarOrden, enlaceOrden,
-  getVehicles, getWorkshops, crearTaller, exportarOrdenes,
+  getVehicles, getWorkshops, crearTaller, exportarOrdenes, ordenesPorTaller,
+  getIncidents,
 } from '../api'
 
 /* ÓRDENES DE TRABAJO — el lado de la oficina.
@@ -141,6 +142,8 @@ export default function OrdenesTrabajo() {
 
   const [nueva, setNueva] = useState(null)          // formulario de alta
   const [tallerNuevo, setTallerNuevo] = useState(null)  // alta al vuelo
+  const [incidencias, setIncidencias] = useState([])
+  const [comparativa, setComparativa] = useState(null)
   const [vehiculos, setVehiculos] = useState([])
   const [talleres, setTalleres] = useState([])
 
@@ -235,6 +238,26 @@ export default function OrdenesTrabajo() {
     } finally { setGuardando('') }
   }
 
+  /* Las incidencias YA ABIERTAS de esa furgoneta. Casi siempre la orden nace
+     de una: el daño ya está descrito y fotografiado, y volver a escribirlo es
+     trabajo tirado — además de que el taller acaba sin las fotos. */
+  useEffect(() => {
+    if (!nueva?.vehicle_id) { setIncidencias([]); return }
+    getIncidents({ vehicle_id: nueva.vehicle_id })
+      .then((r) => setIncidencias((r.data || []).filter((x) => x.status === 'open')))
+      .catch(() => setIncidencias([]))
+  }, [nueva?.vehicle_id])
+
+  const verComparativa = async () => {
+    if (comparativa) { setComparativa(null); return }
+    try {
+      const r = await ordenesPorTaller(center)
+      setComparativa(r.data?.talleres || [])
+    } catch {
+      setErr('No se pudo calcular la comparativa.')
+    }
+  }
+
   const crear = async () => {
     setGuardando('crear')
     try {
@@ -296,6 +319,10 @@ export default function OrdenesTrabajo() {
           <button onClick={() => setVerComo((v) => !v)}
             className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-2.5 py-1.5 text-[12.5px] font-semibold text-dark-400 hover:text-dark-200">
             <HelpCircle size={14} /> Cómo funciona
+          </button>
+          <button onClick={verComparativa}
+            className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-2.5 py-1.5 text-[12.5px] font-semibold text-dark-400 hover:text-dark-200">
+            <BarChart3 size={14} /> Comparar talleres
           </button>
           <button onClick={descargar} disabled={bajando}
             className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-2.5 py-1.5 text-[12.5px] font-semibold text-dark-400 hover:text-dark-200 disabled:opacity-50">
@@ -385,6 +412,72 @@ export default function OrdenesTrabajo() {
           {pendientes === 1
             ? 'Hay 1 presupuesto esperando tu aprobación.'
             : `Hay ${pendientes} presupuestos esperando tu aprobación.`}
+        </div>
+      )}
+
+      {/* COMPARATIVA ENTRE TALLERES.
+          Hoy se decide de memoria a dónde mandar la siguiente. Aquí se ve
+          cuál tarda menos y cuál cobra más, contado solo sobre las ENTREGADAS:
+          la media de días de una orden abierta no significa nada. */}
+      {comparativa && (
+        <div className="card p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <BarChart3 size={16} className="text-brand-400" />
+            <h2 className="text-[14px] font-bold text-dark-100">Comparativa de talleres</h2>
+            <span className="text-[12px] text-dark-500">solo órdenes ya entregadas</span>
+            <button onClick={() => setComparativa(null)} className="ml-auto text-dark-500 hover:text-dark-200">
+              <X size={16} />
+            </button>
+          </div>
+          {!comparativa.length ? (
+            <p className="py-3 text-[13.5px] text-dark-500">
+              Todavía no hay ninguna orden entregada. En cuanto cierres unas cuantas,
+              aquí verás cuál tarda menos y cuál cobra más.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-[13px]">
+                <thead className="border-b border-dark-800">
+                  <tr className="text-[10.5px] uppercase tracking-wider text-dark-600">
+                    <th className="px-2 py-2 font-semibold">Taller</th>
+                    <th className="px-2 py-2 text-right font-semibold">Órdenes</th>
+                    <th className="px-2 py-2 text-right font-semibold">Días de media</th>
+                    <th className="px-2 py-2 text-right font-semibold">Importe medio</th>
+                    <th className="px-2 py-2 text-right font-semibold">Gasto total</th>
+                    <th className="px-2 py-2 text-right font-semibold">Usan el enlace</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparativa.map((x, i) => (
+                    <tr key={x.workshop_id} className={`border-t border-dark-800/70 ${i % 2 ? 'bg-dark-800/[0.12]' : ''}`}>
+                      <td className="px-2 py-2 text-dark-100">{x.taller}</td>
+                      <td className="px-2 py-2 text-right tabular-nums text-dark-300">{x.ordenes}</td>
+                      <td className="px-2 py-2 text-right tabular-nums text-dark-200">
+                        {/* 'sin datos' y '0 días' no son lo mismo, y confundirlos
+                            haría parecer instantáneo al que no hemos medido. */}
+                        {x.dias_medios == null
+                          ? <span className="text-dark-600">sin datos</span>
+                          : <><b>{x.dias_medios}</b>
+                              <span className="ml-1 text-[11px] text-dark-600">de {x.medidas_sobre}</span></>}
+                      </td>
+                      <td className="px-2 py-2 text-right tabular-nums text-dark-300">{eur(x.importe_medio)}</td>
+                      <td className="px-2 py-2 text-right tabular-nums text-dark-200">{eur(x.gasto_total)}</td>
+                      <td className={`px-2 py-2 text-right tabular-nums ${
+                        x.usan_el_enlace >= 80 ? 'text-emerald-400/80'
+                          : x.usan_el_enlace >= 40 ? 'text-dark-300' : 'text-red-300'}`}>
+                        {x.usan_el_enlace}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="mt-2 text-[12px] leading-relaxed text-dark-500">
+                «Usan el enlace» es cuántas de sus órdenes llegaron a abrir. Por debajo
+                del 40 % no es que el taller sea malo: es que a ese hay que seguir
+                llamándole, y conviene saberlo.
+              </p>
+            </div>
+          )}
         </div>
       )}
 
@@ -841,6 +934,45 @@ export default function OrdenesTrabajo() {
                   </button>
                 )}
               />
+            )}
+
+            {!!incidencias.length && !nueva.incident_id && (
+              <div className="mb-3 rounded-lg border border-dark-700 bg-dark-900/60 p-3">
+                <p className="mb-2 flex items-center gap-1.5 text-[12.5px] font-semibold text-dark-300">
+                  <Images size={14} className="text-brand-400" />
+                  Esta furgoneta tiene {incidencias.length === 1
+                    ? '1 incidencia abierta' : `${incidencias.length} incidencias abiertas`}
+                </p>
+                <div className="space-y-1.5">
+                  {incidencias.slice(0, 4).map((inc) => (
+                    <button key={inc.id}
+                      onClick={() => setNueva({
+                        ...nueva, incident_id: inc.id,
+                        problema: nueva.problema || inc.description || inc.title || '',
+                      })}
+                      className="flex w-full items-start gap-2 rounded-lg border border-dark-800 px-2.5 py-2 text-left hover:border-dark-600"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] text-dark-200">
+                          {inc.title || inc.description}
+                        </span>
+                        {!!(inc.photos || []).length && (
+                          <span className="text-[11.5px] text-brand-400">
+                            {inc.photos.length} foto{inc.photos.length > 1 ? 's' : ''} — se las lleva la orden
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {nueva.incident_id && (
+              <p className="mb-3 flex items-center gap-2 rounded-lg border border-brand-500/50 bg-brand-500/[0.07] px-3 py-2 text-[12.5px] text-brand-200">
+                <Check size={14} /> Se creará desde la incidencia, con sus fotos.
+                <button onClick={() => setNueva({ ...nueva, incident_id: null })}
+                  className="ml-auto text-[12px] text-dark-400 hover:text-dark-200">quitar</button>
+              </p>
             )}
 
             <label className="mb-1 block text-[12px] font-semibold text-dark-400">Qué le pasa</label>
