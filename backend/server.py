@@ -12602,6 +12602,95 @@ async def resumen_ordenes(center: Optional[str] = None, _=Depends(require_admin)
     }
 
 
+@api_router.get("/work-orders/export")
+async def exportar_ordenes(center: Optional[str] = None, estado: Optional[str] = None,
+                           workshop_id: Optional[str] = None, abiertas: bool = False,
+                           _=Depends(require_admin)):
+    """Las ordenes en un .xlsx, con los mismos filtros que la pantalla.
+
+    OJO CON EL ORDEN DE LAS RUTAS: esto tiene que declararse ANTES que
+    /work-orders/{orden_id}. FastAPI casa por orden de declaracion, asi que
+    puesto despues, la palabra 'export' entraria como si fuera un id y la
+    descarga devolveria un 404 sin que nadie entienda por que.
+    """
+    q: dict = {}
+    if center and center != "Todos":
+        q["center"] = {"$regex": re.escape(center), "$options": "i"}
+    if estado:
+        q["estado"] = estado
+    elif abiertas:
+        q["estado"] = {"$in": list(OT_ABIERTAS)}
+    if workshop_id:
+        q["workshop_id"] = workshop_id
+
+    filas = await db.ordenes_trabajo.find(q, {"_id": 0}).sort("creada_en", -1).to_list(3000)
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Ordenes de taller"
+    cabeceras = ["Orden", "Matricula", "Modelo", "Centro", "Taller", "Estado",
+                 "Entrada", "Entrega prevista", "Entrega real", "Dias en taller",
+                 "Presupuesto", "Importe estimado", "Importe final",
+                 "El taller lo abrio", "Ultima novedad", "Problema"]
+    fino = Side(style="thin", color="D9D9D9")
+    for j, c in enumerate(cabeceras, 1):
+        cel = ws.cell(row=1, column=j, value=c)
+        cel.font = Font(bold=True, size=10, color="FFFFFF")
+        cel.fill = PatternFill("solid", fgColor="1F3864")
+        cel.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    def _dias(o):
+        """Dias que estuvo (o lleva) fuera. Sin las dos fechas no se inventa."""
+        ini = (o.get("fecha_entrada") or "")[:10]
+        fin = (o.get("fecha_entrega_real") or "")[:10] or datetime.now(timezone.utc).isoformat()[:10]
+        try:
+            return (datetime.strptime(fin, "%Y-%m-%d") - datetime.strptime(ini, "%Y-%m-%d")).days
+        except Exception:
+            return None
+
+    for i, o in enumerate(filas, 2):
+        vals = [
+            o.get("numero"), o.get("matricula"), o.get("modelo"), o.get("center"),
+            o.get("taller_nombre"), OT_ESTADOS.get(o.get("estado"), o.get("estado")),
+            o.get("fecha_entrada"), o.get("fecha_entrega_estimada"), o.get("fecha_entrega_real"),
+            _dias(o),
+            {"sin_presupuesto": "", "pendiente": "pendiente",
+             "aprobado": "aprobado", "rechazado": "no aprobado"}.get(o.get("presupuesto"), ""),
+            o.get("importe_estimado"), o.get("importe_final"),
+            # Un "no" aqui es informacion, no un hueco: significa que el taller
+            # ni miro el enlace.
+            "si" if o.get("abierto_en") else "NO",
+            (o.get("ultima_novedad_taller") or "")[:16].replace("T", " "),
+            (o.get("problema") or "")[:300],
+        ]
+        for j, v in enumerate(vals, 1):
+            cel = ws.cell(row=i, column=j, value=v)
+            cel.font = Font(size=10)
+            cel.border = Border(left=fino, right=fino, top=fino, bottom=fino)
+        for col in (12, 13):
+            ws.cell(row=i, column=col).number_format = '#,##0.00 "EUR"'
+        if not o.get("abierto_en") and o.get("estado") in OT_ABIERTAS:
+            ws.cell(row=i, column=14).font = Font(size=10, bold=True, color="C00000")
+
+    for col, ancho in zip("ABCDEFGHIJKLMNOP",
+                          [10, 11, 16, 8, 26, 17, 12, 14, 12, 9, 12, 13, 12, 12, 16, 50]):
+        ws.column_dimensions[col].width = ancho
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = "A1:P%d" % max(1, len(filas) + 1)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    nombre = "ordenes-taller-%s.xlsx" % datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="%s"' % nombre})
+
+
 @api_router.get("/work-orders/{orden_id}")
 async def ver_orden(orden_id: str, _=Depends(require_admin)):
     o = await db.ordenes_trabajo.find_one({"id": orden_id}, {"_id": 0})

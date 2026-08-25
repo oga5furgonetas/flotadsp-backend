@@ -270,6 +270,8 @@ export const subirDiarios = (files, center, confirmar) => {
 /* ── Órdenes de trabajo ── */
 // Alta rapida desde el formulario de la orden: el taller nuevo aparece
 // cuando hace falta, que es justo cuando descubres que no estaba.
+export const exportarOrdenes = (params) =>
+  api.get('/work-orders/export', { params, responseType: 'blob' })
 export const crearTaller = (body) => api.post('/workshops', body)
 export const getOrdenes = (params) => api.get('/work-orders', { params })
 export const getResumenOrdenes = (center) =>

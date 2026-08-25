@@ -3,10 +3,11 @@ import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, Plus, Link2, Copy, Check, X, Wrench, Euro, Clock,
   AlertTriangle, MessageCircle, Package, Search, Eye, EyeOff, PhoneCall,
+  Download, CalendarClock, HelpCircle,
 } from 'lucide-react'
 import {
   getOrdenes, getResumenOrdenes, getOrden, crearOrden, editarOrden, enlaceOrden,
-  getVehicles, getWorkshops, crearTaller,
+  getVehicles, getWorkshops, crearTaller, exportarOrdenes,
 } from '../api'
 
 /* ÓRDENES DE TRABAJO — el lado de la oficina.
@@ -26,6 +27,19 @@ const COLOR = {
   anulada: 'bg-dark-700/40 text-dark-500 border-dark-700',
 }
 
+/* El orden NO es alfabetico: es el camino que recorre una furgoneta por el
+   taller. Asi el reparto se lee como un embudo y se ve donde se atasca. */
+const OT_ABIERTAS_ORDEN = ['abierta', 'recibido', 'diagnostico', 'esperando_piezas', 'reparando', 'listo']
+
+const BARRA = {
+  abierta: 'bg-dark-600',
+  recibido: 'bg-sky-500',
+  diagnostico: 'bg-violet-500',
+  esperando_piezas: 'bg-amber-500',
+  reparando: 'bg-blue-500',
+  listo: 'bg-emerald-500',
+}
+
 const eur = (n) => (n == null ? '—'
   : new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n))
 
@@ -33,6 +47,19 @@ const cuando = (iso) => {
   if (!iso) return ''
   const d = new Date(iso)
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+/* "hace 2 h" en vez de una fecha: lo que se quiere saber de un vistazo no es
+   cuándo fue, es si es reciente. */
+const haceCuanto = (iso) => {
+  if (!iso) return 'nunca'
+  const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
+  if (min < 1) return 'ahora'
+  if (min < 60) return `hace ${min} min`
+  const h = Math.round(min / 60)
+  if (h < 24) return `hace ${h} h`
+  const d = Math.round(h / 24)
+  return d === 1 ? 'ayer' : `hace ${d} días`
 }
 
 /* Días que lleva fuera. Con esto se ve de un vistazo la que se ha quedado
@@ -103,6 +130,9 @@ export default function OrdenesTrabajo() {
   const [cargando, setCargando] = useState(true)
   const [err, setErr] = useState('')
   const [filtro, setFiltro] = useState('abiertas')
+  const [filtroTaller, setFiltroTaller] = useState('')
+  const [verComo, setVerComo] = useState(false)
+  const [bajando, setBajando] = useState(false)
 
   const [abierta, setAbierta] = useState(null)      // orden del panel lateral
   const [enlace, setEnlace] = useState(null)
@@ -120,15 +150,22 @@ export default function OrdenesTrabajo() {
       const params = { ...(center && center !== 'Todos' ? { center } : {}) }
       if (filtro === 'abiertas') params.abiertas = true
       else if (filtro !== 'todas') params.estado = filtro
+      if (filtroTaller) params.workshop_id = filtroTaller
       const [l, r] = await Promise.all([getOrdenes(params), getResumenOrdenes(center)])
       setDatos(l.data)
       setResumen(r.data)
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se pudieron cargar las órdenes.')
     } finally { setCargando(false) }
-  }, [center, filtro])
+  }, [center, filtro, filtroTaller])
 
   useEffect(() => { cargar() }, [cargar])
+
+  /* Los talleres se cargan al entrar, no solo al crear una orden: hacen falta
+     para el filtro de arriba. */
+  useEffect(() => {
+    getWorkshops().then((r) => setTalleres(r.data || [])).catch(() => {})
+  }, [])
 
   const estados = datos?.estados || {}
 
@@ -210,6 +247,25 @@ export default function OrdenesTrabajo() {
     } finally { setGuardando('') }
   }
 
+  const descargar = async () => {
+    setBajando(true); setErr('')
+    try {
+      const params = { ...(center && center !== 'Todos' ? { center } : {}) }
+      if (filtro === 'abiertas') params.abiertas = true
+      else if (filtro !== 'todas') params.estado = filtro
+      if (filtroTaller) params.workshop_id = filtroTaller
+      const r = await exportarOrdenes(params)
+      const url = URL.createObjectURL(r.data)
+      const el = document.createElement('a')
+      el.href = url
+      el.download = `ordenes-taller-${new Date().toISOString().slice(0, 10)}.xlsx`
+      el.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      setErr('No se pudo generar el Excel.')
+    } finally { setBajando(false) }
+  }
+
   const copiar = async (texto) => {
     try {
       await navigator.clipboard.writeText(texto)
@@ -236,10 +292,42 @@ export default function OrdenesTrabajo() {
             Lo que está en el taller, sin llamar a nadie.
           </p>
         </div>
-        <button onClick={abrirAlta} className="btn-primary ml-auto flex items-center gap-1.5 text-[13px]">
-          <Plus size={15} /> Nueva orden
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <button onClick={() => setVerComo((v) => !v)}
+            className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-2.5 py-1.5 text-[12.5px] font-semibold text-dark-400 hover:text-dark-200">
+            <HelpCircle size={14} /> Cómo funciona
+          </button>
+          <button onClick={descargar} disabled={bajando}
+            className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-2.5 py-1.5 text-[12.5px] font-semibold text-dark-400 hover:text-dark-200 disabled:opacity-50">
+            {bajando ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Excel
+          </button>
+          <button onClick={abrirAlta} className="btn-primary flex items-center gap-1.5 text-[13px]">
+            <Plus size={15} /> Nueva orden
+          </button>
+        </div>
       </div>
+
+      {/* Los cinco pasos. Plegado por defecto: sirve la primera vez y para
+          enseñárselo a alguien, no todos los días. */}
+      {verComo && (
+        <div className="card p-4">
+          <div className="grid gap-3 md:grid-cols-5">
+            {[
+              ['1', 'Creas la orden', 'Furgoneta, taller y qué le pasa. La furgoneta se marca en taller sola.'],
+              ['2', 'Mandas el enlace', 'Por WhatsApp, con un botón. El taller no se registra ni instala nada.'],
+              ['3', 'El taller escribe', 'Estado, fotos, fecha de entrega y presupuesto, desde su móvil.'],
+              ['4', 'Te avisa', 'Telegram cuando está lista, falta una pieza o se mueve la fecha.'],
+              ['5', 'Se cierra', 'Marcas entregada, la furgoneta vuelve a activa y queda el historial.'],
+            ].map(([n, tit, txt]) => (
+              <div key={n} className="rounded-lg border border-dark-800 bg-dark-900/60 p-3">
+                <span className="text-[11px] font-bold text-brand-400">{n}</span>
+                <p className="mt-1 text-[13.5px] font-bold text-dark-100">{tit}</p>
+                <p className="mt-0.5 text-[12.5px] leading-snug text-dark-400">{txt}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {err && (
         <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-200">{err}</p>
@@ -300,6 +388,83 @@ export default function OrdenesTrabajo() {
         </div>
       )}
 
+      {/* ── Reparto por estado y próximas entregas ── */}
+      <div className="grid gap-3 lg:grid-cols-2">
+        <div className="card p-4">
+          <h2 className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-dark-500">
+            Órdenes por estado
+          </h2>
+          {(() => {
+            const reparto = OT_ABIERTAS_ORDEN
+              .map((id) => ({ id, txt: estados[id] || id, n: resumen?.por_estado?.[id] || 0 }))
+              .filter((x) => x.n)
+            const total = reparto.reduce((s, x) => s + x.n, 0)
+            if (!total) return <p className="py-4 text-[13px] text-dark-500">No hay órdenes abiertas.</p>
+            return (
+              <div className="space-y-2">
+                {reparto.map((x) => (
+                  <button key={x.id} onClick={() => setFiltro(x.id)}
+                    className="flex w-full items-center gap-3 text-left">
+                    <span className="w-36 flex-none truncate text-[13px] text-dark-300">{x.txt}</span>
+                    <span className="h-3 flex-1 overflow-hidden rounded-sm bg-dark-800">
+                      <span className={`block h-full rounded-sm ${BARRA[x.id] || 'bg-dark-600'}`}
+                        style={{ width: `${Math.round((x.n / total) * 100)}%` }} />
+                    </span>
+                    <span className="w-7 flex-none text-right text-[13px] font-semibold tabular-nums text-dark-200">
+                      {x.n}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )
+          })()}
+        </div>
+
+        <div className="card p-4">
+          <h2 className="mb-3 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-dark-500">
+            <CalendarClock size={13} /> Próximas entregas
+          </h2>
+          {(() => {
+            /* Solo abiertas y CON fecha: una lista de "próximas entregas" que
+               incluyera las que no tienen fecha estaría mintiendo. */
+            const hoy = new Date().toISOString().slice(0, 10)
+            const prox = ordenes
+              .filter((o) => o.fecha_entrega_estimada && !['entregado', 'anulada'].includes(o.estado))
+              .sort((x, y) => x.fecha_entrega_estimada.localeCompare(y.fecha_entrega_estimada))
+              .slice(0, 6)
+            if (!prox.length) {
+              return (
+                <p className="py-4 text-[13px] leading-relaxed text-dark-500">
+                  Ninguna orden abierta tiene fecha de entrega todavía. Es lo primero
+                  que conviene pedirle al taller.
+                </p>
+              )
+            }
+            return (
+              <ul className="space-y-1.5">
+                {prox.map((o) => {
+                  const tarde = o.fecha_entrega_estimada < hoy
+                  return (
+                    <li key={o.id}>
+                      <button onClick={() => abrirFicha(o.id)}
+                        className="flex w-full items-center gap-3 rounded-lg px-1 py-1 text-left hover:bg-dark-800/40">
+                        <span className="text-[13.5px] font-semibold text-dark-100">{o.matricula}</span>
+                        <span className="truncate text-[12.5px] text-dark-500">{o.taller_nombre}</span>
+                        <span className={`ml-auto flex-none text-[13px] tabular-nums ${
+                          tarde ? 'font-bold text-red-300' : 'text-dark-300'}`}>
+                          {o.fecha_entrega_estimada === hoy ? 'hoy' : o.fecha_entrega_estimada}
+                          {tarde && ' · pasada'}
+                        </span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )
+          })()}
+        </div>
+      </div>
+
       {/* ── Filtros ── */}
       <div className="flex flex-wrap gap-1.5">
         {[['abiertas', 'Abiertas'], ['todas', 'Todas'],
@@ -318,6 +483,14 @@ export default function OrdenesTrabajo() {
           </button>
         ))}
       </div>
+
+      {talleres.length > 1 && (
+        <select value={filtroTaller} onChange={(e) => setFiltroTaller(e.target.value)}
+          className="rounded-lg border border-dark-700 bg-dark-900 px-3 py-1.5 text-[12.5px] text-dark-200">
+          <option value="">Todos los talleres</option>
+          {talleres.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+        </select>
+      )}
 
       {/* ── Lista ── */}
       <div className="card overflow-hidden">
@@ -338,6 +511,7 @@ export default function OrdenesTrabajo() {
                   <th className="px-3 py-2.5 font-semibold">Estado</th>
                   <th className="px-3 py-2.5 font-semibold">Taller</th>
                   <th className="px-3 py-2.5 font-semibold">Entrega</th>
+                  <th className="px-3 py-2.5 font-semibold">Actualizada</th>
                   <th className="px-3 py-2.5 text-right font-semibold">Días fuera</th>
                   <th className="px-3 py-2.5 text-right font-semibold">Importe</th>
                 </tr>
@@ -376,6 +550,9 @@ export default function OrdenesTrabajo() {
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5 tabular-nums text-dark-400">
                         {o.fecha_entrega_estimada || '—'}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-[12px] text-dark-500">
+                        {haceCuanto(o.actualizada_en)}
                       </td>
                       <td className={`px-3 py-2.5 text-right tabular-nums ${!cerrada && d > 10 ? 'font-bold text-amber-300' : 'text-dark-400'}`}>
                         {cerrada ? '—' : (d ?? '—')}
@@ -532,6 +709,21 @@ export default function OrdenesTrabajo() {
                   <p className="text-[10.5px] uppercase tracking-wider text-dark-600">Entrega prevista</p>
                   <p className="text-dark-200">{abierta.fecha_entrega_estimada || 'sin fecha'}</p>
                 </div>
+              </div>
+              <div className="mb-3">
+                <p className="mb-1 text-[10.5px] uppercase tracking-wider text-dark-600">
+                  Descripción del trabajo
+                </p>
+                <textarea
+                  rows={2} defaultValue={abierta.descripcion_trabajo || ''}
+                  placeholder="Qué se va a hacer (lo puedes escribir tú o dictártelo el taller)"
+                  onBlur={(e) => {
+                    if ((e.target.value || '') !== (abierta.descripcion_trabajo || '')) {
+                      cambiar({ descripcion_trabajo: e.target.value }, 'desc')
+                    }
+                  }}
+                  className="w-full rounded-lg border border-dark-800 bg-dark-900 px-3 py-2 text-[13.5px] text-dark-200"
+                />
               </div>
               {abierta.problema && (
                 <p className="mb-3 rounded-lg border border-dark-800 bg-dark-900 px-3 py-2 text-[13.5px] leading-relaxed text-dark-300">
