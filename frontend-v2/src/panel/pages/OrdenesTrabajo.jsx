@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, Plus, Link2, Copy, Check, X, Wrench, Euro, Clock,
-  AlertTriangle, MessageCircle, Package,
+  AlertTriangle, MessageCircle, Package, Search, Eye, EyeOff, PhoneCall,
 } from 'lucide-react'
 import {
   getOrdenes, getResumenOrdenes, getOrden, crearOrden, editarOrden, enlaceOrden,
-  getVehicles, getWorkshops,
+  getVehicles, getWorkshops, crearTaller,
 } from '../api'
 
 /* ÓRDENES DE TRABAJO — el lado de la oficina.
@@ -44,6 +44,58 @@ const diasFuera = (entrada) => {
   return Math.max(0, Math.round((Date.now() - d.getTime()) / 86400000))
 }
 
+/* Un desplegable normal con 176 furgonetas dentro es inservible: hay que
+   bajar rodando hasta encontrar la matricula. Esto filtra según escribes. */
+function Buscador({ etiqueta, valor, opciones, onElegir, placeholder, pie }) {
+  const [txt, setTxt] = useState('')
+  const [abierto, setAbierto] = useState(false)
+  const elegida = opciones.find((o) => o.id === valor)
+  const filtradas = txt.trim()
+    ? opciones.filter((o) => o.txt.toLowerCase().includes(txt.trim().toLowerCase())).slice(0, 40)
+    : opciones.slice(0, 40)
+
+  return (
+    <div className="mb-3">
+      <label className="mb-1 block text-[12px] font-semibold text-dark-400">{etiqueta}</label>
+      {elegida && !abierto ? (
+        <button
+          onClick={() => { setAbierto(true); setTxt('') }}
+          className="flex w-full items-center gap-2 rounded-lg border border-brand-500/60 bg-brand-500/10 px-3 py-2.5 text-left text-[14px] text-dark-100"
+        >
+          <Check size={14} className="flex-none text-brand-400" />
+          <span className="truncate">{elegida.txt}</span>
+          <span className="ml-auto text-[12px] text-dark-500">cambiar</span>
+        </button>
+      ) : (
+        <>
+          <div className="flex items-center gap-2 rounded-lg border border-dark-700 bg-dark-900 px-3">
+            <Search size={14} className="flex-none text-dark-500" />
+            <input
+              autoFocus={abierto} value={txt} placeholder={placeholder}
+              onChange={(e) => setTxt(e.target.value)}
+              className="w-full bg-transparent py-2.5 text-[14px] text-dark-100 outline-none"
+            />
+          </div>
+          <div className="mt-1 max-h-48 overflow-y-auto rounded-lg border border-dark-800">
+            {filtradas.length ? filtradas.map((o) => (
+              <button
+                key={o.id}
+                onClick={() => { onElegir(o.id); setAbierto(false); setTxt('') }}
+                className="block w-full px-3 py-2 text-left text-[13.5px] text-dark-200 hover:bg-dark-800"
+              >
+                {o.txt}
+              </button>
+            )) : (
+              <p className="px-3 py-3 text-[13px] text-dark-500">Nada con ese nombre.</p>
+            )}
+          </div>
+          {pie}
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function OrdenesTrabajo() {
   const { center } = useOutletContext()
   const [datos, setDatos] = useState(null)
@@ -58,6 +110,7 @@ export default function OrdenesTrabajo() {
   const [guardando, setGuardando] = useState('')
 
   const [nueva, setNueva] = useState(null)          // formulario de alta
+  const [tallerNuevo, setTallerNuevo] = useState(null)  // alta al vuelo
   const [vehiculos, setVehiculos] = useState([])
   const [talleres, setTalleres] = useState([])
 
@@ -120,6 +173,29 @@ export default function OrdenesTrabajo() {
         setTalleres(w.data || [])
       } catch { /* el formulario avisa solo si quedan vacíos */ }
     }
+  }
+
+  /* Midas no estaba en la lista y habia que irse a otra pantalla a darlo de
+     alta, perdiendo lo escrito. Ahora se crea aqui con lo minimo —nombre y
+     telefono— y queda seleccionado. El resto de la ficha se rellena luego en
+     Talleres si hace falta. */
+  const guardarTallerNuevo = async () => {
+    const nombre = (tallerNuevo?.name || '').trim()
+    if (!nombre) return
+    setGuardando('taller')
+    try {
+      const r = await crearTaller({
+        name: nombre,
+        phone: (tallerNuevo.phone || '').trim(),
+        ...(center && center !== 'Todos' ? { center } : {}),
+      })
+      const creado = r.data
+      setTalleres((prev) => [creado, ...prev])
+      setNueva((n) => ({ ...n, workshop_id: creado.id }))
+      setTallerNuevo(null)
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo crear el taller.')
+    } finally { setGuardando('') }
   }
 
   const crear = async () => {
@@ -195,6 +271,26 @@ export default function OrdenesTrabajo() {
         ))}
       </div>
 
+      {/* Lo que de verdad quita llamadas: saber cuál no se mueve y cuál ni
+          han abierto. Son dos avisos distintos porque piden cosas distintas
+          —una es esperar, la otra es coger el teléfono. */}
+      {!!resumen?.sin_abrir && (
+        <div className="flex items-center gap-2 rounded-lg border border-red-500/40 bg-red-500/[0.08] px-3 py-2.5 text-[13.5px] text-red-200">
+          <EyeOff size={16} className="flex-none" />
+          {resumen.sin_abrir === 1
+            ? 'Hay 1 orden que el taller no ha abierto todavía.'
+            : `Hay ${resumen.sin_abrir} órdenes que el taller no ha abierto todavía.`}
+          {' '}Comprueba que les llegó el enlace.
+        </div>
+      )}
+      {!!resumen?.paradas && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/[0.08] px-3 py-2.5 text-[13.5px] text-amber-200">
+          <Clock size={16} className="flex-none" />
+          {resumen.paradas === 1 ? '1 orden lleva' : `${resumen.paradas} órdenes llevan`}
+          {' '}más de {resumen.dias_parada} días sin novedades del taller.
+        </div>
+      )}
+
       {!!pendientes && (
         <div className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/[0.08] px-3 py-2.5 text-[13.5px] text-amber-200">
           <AlertTriangle size={16} className="flex-none" />
@@ -240,6 +336,7 @@ export default function OrdenesTrabajo() {
                   <th className="px-3 py-2.5 font-semibold">Furgoneta</th>
                   <th className="px-3 py-2.5 font-semibold">Taller</th>
                   <th className="px-3 py-2.5 font-semibold">Estado</th>
+                  <th className="px-3 py-2.5 font-semibold">Taller</th>
                   <th className="px-3 py-2.5 font-semibold">Entrega</th>
                   <th className="px-3 py-2.5 text-right font-semibold">Días fuera</th>
                   <th className="px-3 py-2.5 text-right font-semibold">Importe</th>
@@ -266,6 +363,16 @@ export default function OrdenesTrabajo() {
                             presupuesto
                           </span>
                         )}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5">
+                        {cerrada ? <span className="text-dark-600">—</span>
+                          : o.abierto_en
+                            ? <span className="flex items-center gap-1 text-[12px] text-emerald-400/80">
+                                <Eye size={12} /> lo ve
+                              </span>
+                            : <span className="flex items-center gap-1 text-[12px] text-red-300">
+                                <EyeOff size={12} /> sin abrir
+                              </span>}
                       </td>
                       <td className="whitespace-nowrap px-3 py-2.5 tabular-nums text-dark-400">
                         {o.fecha_entrega_estimada || '—'}
@@ -314,6 +421,24 @@ export default function OrdenesTrabajo() {
                 Se abre sin usuario ni contraseña. Desde ahí ponen el estado, suben fotos,
                 dicen la fecha y mandan el presupuesto.
               </p>
+              {/* Antes de nada: ¿lo han abierto siquiera? */}
+              {enlace && (
+                <p className={`mb-3 flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[12.5px] ${
+                  abierta.abierto_en
+                    ? 'border-emerald-600/40 bg-emerald-600/[0.08] text-emerald-200'
+                    : 'border-red-500/40 bg-red-500/[0.08] text-red-200'}`}>
+                  {abierta.abierto_en ? <Eye size={14} /> : <EyeOff size={14} />}
+                  {abierta.abierto_en
+                    ? `El taller lo abrió el ${cuando(abierta.abierto_en)}${abierta.visitas > 1 ? ` · ${abierta.visitas} visitas` : ''}`
+                    : 'El taller todavía no lo ha abierto.'}
+                </p>
+              )}
+              {enlace && !abierta.abierto_en && abierta.taller_telefono && (
+                <a href={`tel:${abierta.taller_telefono}`}
+                  className="mb-3 flex items-center justify-center gap-2 rounded-lg border border-dark-700 py-2 text-[13px] font-semibold text-dark-300">
+                  <PhoneCall size={14} /> Llamar al taller ({abierta.taller_telefono})
+                </a>
+              )}
               {enlace ? (
                 <>
                   <div className="mb-2 flex gap-2">
@@ -336,6 +461,12 @@ export default function OrdenesTrabajo() {
                       <MessageCircle size={15} /> Mandarlo por WhatsApp
                     </button>
                   )}
+                  <button
+                    onClick={() => window.open(enlace.url, '_blank', 'noopener')}
+                    className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-dark-700 py-2 text-[13px] font-semibold text-dark-300 hover:text-dark-100"
+                  >
+                    <Eye size={14} /> Ver lo que verá el taller
+                  </button>
                   {enlace.expira_en && (
                     <p className="mt-2 text-[11.5px] text-dark-600">
                       Caduca el {String(enlace.expira_en).slice(0, 10)}
@@ -471,29 +602,54 @@ export default function OrdenesTrabajo() {
               </button>
             </div>
 
-            <label className="mb-1 block text-[12px] font-semibold text-dark-400">Furgoneta</label>
-            <select
-              value={nueva.vehicle_id}
-              onChange={(e) => setNueva({ ...nueva, vehicle_id: e.target.value })}
-              className="mb-3 w-full rounded-lg border border-dark-700 bg-dark-900 px-3 py-2.5 text-[14px] text-dark-100"
-            >
-              <option value="">Elige una…</option>
-              {vehiculos.map((v) => (
-                <option key={v.id} value={v.id}>{v.license_plate} · {v.model || 'sin modelo'}</option>
-              ))}
-            </select>
+            <Buscador
+              etiqueta="Furgoneta" valor={nueva.vehicle_id}
+              placeholder="Escribe la matrícula…"
+              opciones={vehiculos.map((v) => ({ id: v.id, txt: `${v.license_plate} · ${v.model || 'sin modelo'}` }))}
+              onElegir={(id) => setNueva({ ...nueva, vehicle_id: id })}
+            />
 
-            <label className="mb-1 block text-[12px] font-semibold text-dark-400">Taller</label>
-            <select
-              value={nueva.workshop_id}
-              onChange={(e) => setNueva({ ...nueva, workshop_id: e.target.value })}
-              className="mb-3 w-full rounded-lg border border-dark-700 bg-dark-900 px-3 py-2.5 text-[14px] text-dark-100"
-            >
-              <option value="">Elige uno…</option>
-              {talleres.map((w) => (
-                <option key={w.id} value={w.id}>{w.name}</option>
-              ))}
-            </select>
+            {tallerNuevo ? (
+              <div className="mb-3 rounded-lg border border-brand-500/50 bg-brand-500/[0.07] p-3">
+                <p className="mb-2 text-[12px] font-semibold text-brand-200">Taller nuevo</p>
+                <input
+                  autoFocus value={tallerNuevo.name} placeholder="Nombre (p. ej. Midas Santiago)"
+                  onChange={(e) => setTallerNuevo({ ...tallerNuevo, name: e.target.value })}
+                  className="mb-2 w-full rounded-lg border border-dark-700 bg-dark-900 px-3 py-2 text-[14px] text-dark-100"
+                />
+                <input
+                  value={tallerNuevo.phone} placeholder="Teléfono (para mandarle el enlace)"
+                  onChange={(e) => setTallerNuevo({ ...tallerNuevo, phone: e.target.value })}
+                  className="mb-2 w-full rounded-lg border border-dark-700 bg-dark-900 px-3 py-2 text-[14px] text-dark-100"
+                />
+                <div className="flex gap-2">
+                  <button onClick={guardarTallerNuevo}
+                    disabled={!tallerNuevo.name.trim() || guardando === 'taller'}
+                    className="btn-primary flex-1 text-[13px] disabled:opacity-40">
+                    {guardando === 'taller' ? <Loader2 size={14} className="animate-spin" /> : 'Guardar taller'}
+                  </button>
+                  <button onClick={() => setTallerNuevo(null)}
+                    className="rounded-lg border border-dark-700 px-3 text-[13px] text-dark-400">
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <Buscador
+                etiqueta="Taller" valor={nueva.workshop_id}
+                placeholder="Escribe el nombre del taller…"
+                opciones={talleres.map((w) => ({ id: w.id, txt: w.name }))}
+                onElegir={(id) => setNueva({ ...nueva, workshop_id: id })}
+                pie={(
+                  <button
+                    onClick={() => setTallerNuevo({ name: '', phone: '' })}
+                    className="mt-1.5 flex items-center gap-1.5 text-[12.5px] font-semibold text-brand-400 hover:text-brand-300"
+                  >
+                    <Plus size={13} /> No está en la lista, darlo de alta
+                  </button>
+                )}
+              />
+            )}
 
             <label className="mb-1 block text-[12px] font-semibold text-dark-400">Qué le pasa</label>
             <textarea

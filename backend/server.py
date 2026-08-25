@@ -12266,6 +12266,12 @@ OT_ABIERTAS = ("abierta", "recibido", "diagnostico", "esperando_piezas", "repara
 # avisar de todo es no avisar de nada.
 OT_AVISA = ("listo", "esperando_piezas")
 
+# A partir de aqui una orden esta "parada": el taller no ha tocado nada en
+# todo este tiempo. No es un fallo del taller necesariamente —puede estar
+# esperando una pieza— pero es exactamente la furgoneta de la que nadie se
+# acuerda, y esa es la que cuesta dinero.
+OT_DIAS_PARADA = 4
+
 
 class OrdenTrabajoCrear(BaseModel):
     vehicle_id: str
@@ -12453,6 +12459,20 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
         "creada_en": _ot_ahora(),
         "actualizada_en": _ot_ahora(),
     }
+    # LA FURGONETA SE PONE EN TALLER SOLA.
+    # Sin esto habia dos verdades a la vez: una orden abierta y la furgoneta
+    # marcada como activa en la flota, asi que podia salir asignada a alguien
+    # una manana estando en un taller. Se guarda el estado anterior para poder
+    # devolverla a el —y no a un "activo" inventado— cuando se entregue.
+    previo = await db.vehicles.find_one({"id": data.vehicle_id}, {"_id": 0, "status": 1})
+    orden["vehiculo_estado_previo"] = (previo or {}).get("status") or "activo"
+    if orden["vehiculo_estado_previo"] != "taller":
+        await db.vehicles.update_one({"id": data.vehicle_id}, {"$set": {"status": "taller"}})
+        # La misma funcion que usa la pagina de Vehiculos: asi la incidencia se
+        # abre igual venga de donde venga y no hay dos caminos que mantener.
+        await _auto_incident_on_workshop(data.vehicle_id,
+                                         orden["vehiculo_estado_previo"], "taller")
+
     await db.ordenes_trabajo.insert_one(dict(orden))
     orden.pop("_id", None)
     logger.info("OT creada %s (%s -> %s)", orden["numero"], orden["matricula"], orden["taller_nombre"])
@@ -12510,7 +12530,27 @@ async def resumen_ordenes(center: Optional[str] = None, _=Depends(require_admin)
         except Exception:
             continue
 
+    # Paradas: abiertas y sin una sola novedad del taller en OT_DIAS_PARADA.
+    # Se compara contra la novedad del taller o, si nunca ha habido ninguna,
+    # contra la creacion — que es el caso peor: ni la ha mirado.
+    corte = (datetime.now(timezone.utc) - timedelta(days=OT_DIAS_PARADA)).isoformat()
+    q_parada = dict(q)
+    q_parada["estado"] = {"$in": list(OT_ABIERTAS)}
+    q_parada["$or"] = [
+        {"ultima_novedad_taller": {"$lt": corte}},
+        {"ultima_novedad_taller": {"$exists": False}, "creada_en": {"$lt": corte}},
+    ]
+    paradas = await db.ordenes_trabajo.count_documents(q_parada)
+
+    q_sin = dict(q)
+    q_sin["estado"] = {"$in": list(OT_ABIERTAS)}
+    q_sin["abierto_en"] = {"$exists": False}
+    sin_abrir = await db.ordenes_trabajo.count_documents(q_sin)
+
     return {
+        "paradas": paradas,
+        "sin_abrir": sin_abrir,
+        "dias_parada": OT_DIAS_PARADA,
         "activas": sum(por_estado.get(e, 0) for e in OT_ABIERTAS),
         "esperando_piezas": por_estado.get("esperando_piezas", 0),
         "completadas_hoy": completadas_hoy,
@@ -12598,6 +12638,16 @@ async def editar_orden(orden_id: str, data: dict = Body(...), user: dict = Depen
             apuntes.append(_ot_apunte(quien, "Estado: " + OT_ESTADOS[nuevo]))
             if nuevo == "entregado":
                 campos["fecha_entrega_real"] = _ot_ahora()[:10]
+            # Al cerrar, la furgoneta vuelve a donde estaba. Solo si sigue en
+            # 'taller': si alguien ya la movio a mano (o esta de baja), mandar
+            # lo que decida esa persona, no lo que recuerde esta orden.
+            if nuevo in ("entregado", "anulada"):
+                v = await db.vehicles.find_one({"id": o.get("vehicle_id")}, {"_id": 0, "status": 1})
+                if (v or {}).get("status") == "taller":
+                    vuelve = o.get("vehiculo_estado_previo") or "activo"
+                    await db.vehicles.update_one({"id": o["vehicle_id"]},
+                                                 {"$set": {"status": vuelve}})
+                    apuntes.append(_ot_apunte(quien, "Furgoneta de vuelta", vuelve))
 
     for campo, etiqueta in (("problema", "Problema"), ("descripcion_trabajo", "Trabajo")):
         if campo in data:
@@ -12641,8 +12691,27 @@ async def editar_orden(orden_id: str, data: dict = Body(...), user: dict = Depen
 
 @api_router.get("/taller/{token}")
 async def portal_taller(token: str):
+    """Abrir el portal DEJA HUELLA, y esa huella vale mucho.
+
+    Sin esto, mandas el enlace y te quedas a ciegas: no sabes si no hay
+    novedades porque no las hay o porque el taller ni lo ha abierto. Son dos
+    situaciones opuestas —en una esperas, en la otra llamas— y por pantalla se
+    veian igual.
+
+    El contador no escribe en el historial en cada visita (lo llenaria de
+    ruido); solo la PRIMERA vez, que es la que de verdad significa algo.
+    """
     _ot_freno(token, limite=120)                 # leer es barato
-    return await _ot_publica(await _ot_por_token(token))
+    orden = await _ot_por_token(token)
+    campos = {"ultima_visita": _ot_ahora()}
+    cambio: dict = {"$inc": {"visitas": 1}}
+    if not orden.get("abierto_en"):
+        campos["abierto_en"] = _ot_ahora()
+        cambio["$push"] = {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller",
+                                                   "Ha abierto el enlace")}
+    cambio["$set"] = campos
+    await db.ordenes_trabajo.update_one({"id": orden["id"]}, cambio)
+    return await _ot_publica(orden)
 
 
 @api_router.post("/taller/{token}/estado")
@@ -12659,7 +12728,8 @@ async def portal_taller_estado(token: str, data: dict = Body(...)):
     nota = str(data.get("nota") or "").strip()[:400]
     await db.ordenes_trabajo.update_one(
         {"id": orden["id"]},
-        {"$set": {"estado": nuevo, "actualizada_en": _ot_ahora()},
+        {"$set": {"estado": nuevo, "actualizada_en": _ot_ahora(),
+                   "ultima_novedad_taller": _ot_ahora()},
          "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller",
                                            "Estado: " + OT_ESTADOS[nuevo], nota)}})
     if nuevo in OT_AVISA:
@@ -12679,7 +12749,8 @@ async def portal_taller_entrega(token: str, data: dict = Body(...)):
     antes = orden.get("fecha_entrega_estimada")
     await db.ordenes_trabajo.update_one(
         {"id": orden["id"]},
-        {"$set": {"fecha_entrega_estimada": f, "actualizada_en": _ot_ahora()},
+        {"$set": {"fecha_entrega_estimada": f, "actualizada_en": _ot_ahora(),
+                   "ultima_novedad_taller": _ot_ahora()},
          "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller",
                                            "Fecha de entrega: " + f,
                                            ("antes: " + antes) if antes and antes != f else "")}})
@@ -12702,7 +12773,7 @@ async def portal_taller_presupuesto(token: str, data: dict = Body(...)):
     final = bool(data.get("final"))
     detalle = str(data.get("detalle") or "").strip()[:600]
 
-    campos = {"actualizada_en": _ot_ahora()}
+    campos = {"actualizada_en": _ot_ahora(), "ultima_novedad_taller": _ot_ahora()}
     if final:
         campos["importe_final"] = importe
         que = "Importe final: %.2f EUR" % importe
@@ -12730,7 +12801,7 @@ async def portal_taller_nota(token: str, data: dict = Body(...)):
         raise HTTPException(400, "Escribe algo antes de enviar")
     await db.ordenes_trabajo.update_one(
         {"id": orden["id"]},
-        {"$set": {"actualizada_en": _ot_ahora()},
+        {"$set": {"actualizada_en": _ot_ahora(), "ultima_novedad_taller": _ot_ahora()},
          "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller", "Nota", nota)}})
     await _ot_avisa(orden, "Nota del taller: " + nota[:200])
     return await _ot_publica(await db.ordenes_trabajo.find_one({"id": orden["id"]}, {"_id": 0}))
@@ -12768,7 +12839,7 @@ async def portal_taller_fotos(token: str, files: List[UploadFile] = File(...)):
         {"$push": {"fotos": {"$each": urls},
                    "historial": _ot_apunte(orden.get("taller_nombre") or "Taller",
                                            "%d foto%s" % (len(urls), "s" if len(urls) > 1 else ""))},
-         "$set": {"actualizada_en": _ot_ahora()}})
+         "$set": {"actualizada_en": _ot_ahora(), "ultima_novedad_taller": _ot_ahora()}})
     return await _ot_publica(await db.ordenes_trabajo.find_one({"id": orden["id"]}, {"_id": 0}))
 
 

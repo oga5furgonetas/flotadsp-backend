@@ -268,6 +268,9 @@ export const subirDiarios = (files, center, confirmar) => {
   return api.post('/diarios/subir', fd, { timeout: 180000 })
 }
 /* ── Órdenes de trabajo ── */
+// Alta rapida desde el formulario de la orden: el taller nuevo aparece
+// cuando hace falta, que es justo cuando descubres que no estaba.
+export const crearTaller = (body) => api.post('/workshops', body)
 export const getOrdenes = (params) => api.get('/work-orders', { params })
 export const getResumenOrdenes = (center) =>
   api.get('/work-orders/resumen', { params: centerParam(center) })
