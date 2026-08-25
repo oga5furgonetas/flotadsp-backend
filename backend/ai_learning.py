@@ -126,9 +126,23 @@ def build_few_shot_prompt_parts_multimodal(examples: list[dict]) -> list:
                 f"Daños de este tipo se te escapan: búscalos activamente en las fotos actuales.\n"
             )
         else:
+            # 'corrected' llega de DOS sitios y no dicen lo mismo:
+            #  · del editor de cajas, con la caja buena dibujada a mano;
+            #  · de la revision expres ("si, pero no ahi"), donde el inspector
+            #    confirma que el daño existe y que el sitio esta mal, pero no
+            #    dibuja nada.
+            # Sin distinguirlos, el segundo caso metia en el prompt la frase
+            # "corrigio la bbox real a None": una leccion que enseña basura
+            # literal. Cada caso tiene ahora su propio texto.
             original_box = ex.get("original_box", [])
-            corrected_box = ex.get("corrected_box", [])
+            corrected_box = ex.get("corrected_box")
             lesson = (
+                f"CASO {i} — DAÑO REAL, SITIO EQUIVOCADO:" + chr(10) +
+                f"El daño '{ex['original_part']}' SÍ existe en esta imagen, pero la IA lo "
+                f"situó en la bbox {original_box or '?'}, que no es donde está. El fallo NO "
+                f"fue detectarlo: fue localizarlo. Antes de fijar una bbox, comprueba que la "
+                f"pieza que nombras está de verdad en esas coordenadas." + chr(10)
+            ) if not corrected_box else (
                 f"CASO {i} — BBOX INCORRECTA (zona equivocada):\n"
                 f"La IA marcó '{ex['original_part']}' en bbox {original_box} "
                 f"pero el inspector corrigió la bbox real a {corrected_box}. "
@@ -179,10 +193,14 @@ def build_few_shot_prompt_text(examples: list) -> str:
         elif ex["verdict"] == "missed":
             lines.append("  · La IA no lo detectó; el inspector confirmó que el daño SÍ existía.")
             lines.append("  · Lección: examina esta pieza activamente, daños así se te escapan.")
-        elif ex["corrected_box"]:
+        elif ex.get("corrected_box"):
             lines.append(f"  · Bbox original (incorrecta): {ex['original_box']}")
             lines.append(f"  · Bbox corregida por inspector: {ex['corrected_box']}")
             lines.append("  · Lección: ajusta mejor el bbox al área dañada visible, no al contorno de la pieza.")
+        else:
+            # 'corrected' sin caja: el daño existe, el sitio no.
+            lines.append("  · El daño existe, pero NO estaba donde lo marcó la IA.")
+            lines.append("  · Lección: el fallo fue localizarlo, no detectarlo.")
         lines.append("")
 
     lines.append("--- FIN DE CORRECCIONES ---")

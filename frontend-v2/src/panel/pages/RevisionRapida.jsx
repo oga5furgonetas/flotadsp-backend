@@ -32,6 +32,7 @@ function RevisionExpres({ center, alCerrar, alGuardar }) {
   const [ocupado, setOcupado] = useState(false)
   const [err, setErr] = useState('')
   const [descartados, setDescartados] = useState(0)
+  const [ampliada, setAmpliada] = useState(false)
 
   useEffect(() => {
     iaParaRevisar(center, 25)
@@ -73,10 +74,11 @@ function RevisionExpres({ center, alCerrar, alGuardar }) {
      Con raton son 25 clics; con teclado, 25 pulsaciones sin mover la mano. */
   useEffect(() => {
     const h = (e) => {
-      if (e.key === 'Escape') return alCerrar?.()
+      if (e.key === 'Escape') return ampliada ? setAmpliada(false) : alCerrar?.()
       if (e.key === '1') responder('correct')
-      if (e.key === '2') responder('wrong')
-      if (e.key === '3') responder('no_evaluable')
+      if (e.key === '2') responder('corrected')
+      if (e.key === '3') responder('wrong')
+      if (e.key === '4') responder('no_evaluable')
     }
     document.addEventListener('keydown', h)
     return () => document.removeEventListener('keydown', h)
@@ -138,43 +140,111 @@ function RevisionExpres({ center, alCerrar, alGuardar }) {
               )}
             </div>
 
-            <div className="relative overflow-hidden rounded-xl border border-dark-800 bg-dark-900">
-              <img src={actual.foto} alt="" className="w-full object-contain" style={{ maxHeight: '52vh' }} />
-              {caja && (
-                <div className="pointer-events-none absolute border-2 border-red-400 shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]"
-                  style={caja} />
-              )}
+            {/* LA DESCRIPCION VA ANTES QUE LA FOTO, y no al reves.
+                Lo que se valida es la AFIRMACION de la IA ("carcasa del
+                retrovisor izquierdo rota"), no el rectangulo. Con el recuadro
+                arriba, la vista va primero ahi y se contesta sobre el sitio
+                marcado — que puede estar mal— en vez de sobre el daño. */}
+            {actual.descripcion && (
+              <p className="mb-2 text-[15px] leading-snug text-dark-100">{actual.descripcion}</p>
+            )}
+
+            {/* El contenedor se ajusta a la imagen (inline-block + la imagen
+                como bloque): asi el recuadro, que va en porcentajes, cae sobre
+                la imagen y no sobre las bandas negras que deja `object-contain`
+                cuando la proporcion no coincide. */}
+            <div className="flex justify-center">
+              <button onClick={() => setAmpliada(true)}
+                className="relative inline-block cursor-zoom-in overflow-hidden rounded-xl border border-dark-800 bg-dark-900">
+                <img src={actual.foto} alt="" className="block max-h-[46vh] w-auto max-w-full" />
+                {caja && (
+                  <span className="pointer-events-none absolute border-2 border-dashed border-amber-400"
+                    style={caja} />
+                )}
+                <span className="absolute bottom-1.5 right-1.5 rounded bg-black/70 px-2 py-0.5 text-[11px] text-dark-200">
+                  tocar para ampliar
+                </span>
+              </button>
             </div>
 
-            {actual.descripcion && (
-              <p className="mt-2 text-[13.5px] leading-snug text-dark-300">{actual.descripcion}</p>
+            {/* El recuadro es una PISTA, no una certeza. Medido: la IA situo
+                un retrovisor izquierdo en la trasera del vehiculo. Decirlo
+                aqui es lo que evita que alguien conteste "No existe" cuando
+                lo que falla es el sitio. */}
+            {caja && (
+              <p className="mt-1.5 text-center text-[12px] text-dark-500">
+                El recuadro es donde <b className="text-dark-400">la IA cree</b> que está. A veces se equivoca de sitio:
+                mira la furgoneta entera antes de contestar.
+              </p>
             )}
 
             {err && (
               <p className="mt-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-[13px] text-red-200">{err}</p>
             )}
 
-            <p className="mt-4 text-center text-[14px] text-dark-400">¿Existe este daño?</p>
-            <div className="mt-2 grid grid-cols-3 gap-2">
+            <p className="mt-4 text-center text-[14px] text-dark-400">
+              ¿Existe este daño en la furgoneta?
+            </p>
+            <div className="mt-2 grid grid-cols-2 gap-2">
               <button disabled={ocupado} onClick={() => responder('correct')}
-                className="flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-xl border border-emerald-600/50 bg-emerald-600/10 text-[15px] font-semibold text-emerald-300 disabled:opacity-40">
-                <Check size={20} /> Sí <span className="text-[11px] text-emerald-400/60">1</span>
+                className="flex min-h-[62px] items-center justify-center gap-2 rounded-xl border border-emerald-600/50 bg-emerald-600/10 px-2 text-[14.5px] font-semibold text-emerald-300 disabled:opacity-40">
+                <Check size={19} /> Sí, y está ahí <span className="text-[11px] text-emerald-400/60">1</span>
+              </button>
+              {/* La respuesta que faltaba. Se guarda como 'corrected', que NO
+                  cuenta como falso positivo en las lecciones: el daño existe,
+                  lo que falla es donde lo puso. */}
+              <button disabled={ocupado} onClick={() => responder('corrected')}
+                className="flex min-h-[62px] items-center justify-center gap-2 rounded-xl border border-amber-600/50 bg-amber-600/10 px-2 text-[14.5px] font-semibold text-amber-300 disabled:opacity-40">
+                <Pencil size={19} /> Sí, pero no ahí <span className="text-[11px] text-amber-400/60">2</span>
               </button>
               <button disabled={ocupado} onClick={() => responder('wrong')}
-                className="flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-xl border border-red-600/50 bg-red-600/10 text-[15px] font-semibold text-red-300 disabled:opacity-40">
-                <X size={20} /> No <span className="text-[11px] text-red-400/60">2</span>
+                className="flex min-h-[62px] items-center justify-center gap-2 rounded-xl border border-red-600/50 bg-red-600/10 px-2 text-[14.5px] font-semibold text-red-300 disabled:opacity-40">
+                <X size={19} /> No existe <span className="text-[11px] text-red-400/60">3</span>
               </button>
               <button disabled={ocupado} onClick={() => responder('no_evaluable')}
-                className="flex min-h-[64px] flex-col items-center justify-center gap-1 rounded-xl border border-dark-700 text-[15px] font-semibold text-dark-300 disabled:opacity-40">
-                <HelpCircle size={20} /> No se ve <span className="text-[11px] text-dark-500">3</span>
+                className="flex min-h-[62px] items-center justify-center gap-2 rounded-xl border border-dark-700 px-2 text-[14.5px] font-semibold text-dark-300 disabled:opacity-40">
+                <HelpCircle size={19} /> No se ve <span className="text-[11px] text-dark-500">4</span>
               </button>
             </div>
-            <p className="mt-2 text-center text-[11.5px] text-dark-600">
-              «No se ve» no es un fallo de la IA: es que la foto no deja juzgarlo.
+            <p className="mt-2 text-center text-[11.5px] leading-relaxed text-dark-600">
+              «Sí, pero no ahí» = el daño existe y el recuadro está mal puesto.
+              «No se ve» = la foto no deja juzgarlo. Ninguna de las dos cuenta como
+              fallo de la IA en el sitio equivocado.
             </p>
           </div>
         )}
       </div>
+
+      {/* AMPLIAR. Sin esto no se puede juzgar una rozadura de 10 cm en una
+          foto de la furgoneta entera: la imagen se sirve a tamaño completo y
+          el contenedor hace scroll, que en un movil es pellizcar para hacer
+          zoom. */}
+      {ampliada && actual && (
+        <div className="fixed inset-0 z-[60] overflow-auto bg-black/95"
+          onClick={() => setAmpliada(false)}>
+          <button onClick={() => setAmpliada(false)}
+            className="fixed right-3 top-3 z-10 rounded-full bg-black/70 p-2 text-dark-200">
+            <X size={22} />
+          </button>
+          {/* SIN `min-w-full`. Con el, este div medía el ancho de la pantalla
+              (1280 px) mientras la foto medía 1000, y como el recuadro se
+              posiciona en PORCENTAJES sobre su contenedor, caía desplazado:
+              medido, salía al 23 % cuando el dato decía 18 %. El contenedor
+              tiene que medir EXACTAMENTE lo que la imagen. */}
+          <div className="relative inline-block">
+            {/* TAMAÑO NATURAL, sin `w-full`. Con el ancho al 100 % la foto se
+                veia igual de pequeña que antes en un movil —no ampliaba nada—
+                y no se podia juzgar una rozadura de 10 cm. A tamaño natural
+                (las fotos vienen de 1000 px para arriba) la imagen desborda y
+                el contenedor hace scroll: eso es poder mirar de cerca. */}
+            <img src={actual.foto} alt="" className="block max-w-none" />
+            {caja && (
+              <span className="pointer-events-none absolute border-2 border-dashed border-amber-400"
+                style={caja} />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
