@@ -12,7 +12,7 @@ import {
 import { getDrivers, createDriver, updateDriver, deleteDriver, uploadDriverPhoto, getDriversScoring, getScoringLeaderboard, getDriverAccounts, setDriverPassword, deleteDriverAccount } from '../api'
 
 const EMPTY = {
-  name: '', dni: '', phone: '', email: '', driver_id: '',
+  name: '', dni: '', phone: '', email: '', driver_id: '', transporter_id: '',
   license_number: '', contrato: '', nivel: '', center: '', alojamiento: '', notas: '',
 }
 
@@ -805,6 +805,7 @@ function DriverModal({ driver, centers, hasAccount, onSave, onDelete, onClose, o
                 <Detail icon={Mail}      label="Email"            value={driver.email} span={2} />
                 <Detail icon={Car}       label="Nº carnet"        value={driver.license_number} />
                 <Detail icon={FileText}  label="ID Amazon"        value={driver.driver_id} mono />
+                <Detail icon={FileText}  label="Transporter ID"   value={driver.transporter_id} mono />
                 <Detail icon={MapPin}    label="Centro"           value={driver.center} />
                 <Detail icon={Building2} label="Alojamiento"      value={driver.alojamiento} />
                 {driver.notas && (
@@ -967,6 +968,20 @@ function DriverModal({ driver, centers, hasAccount, onSave, onDelete, onClose, o
                 <div>
                   <Label>ID Amazon</Label>
                   <input className="input w-full font-mono" value={form.driver_id || ''} onChange={e => set('driver_id', e.target.value)} placeholder="AMZN-XXXX" />
+                </div>
+
+                {/* El código con el que vienen firmados los DNR en los reportes
+                    de Cortex. Es OTRO distinto del ID de Amazon de arriba, y
+                    hasta ahora solo se podía tocar desde la pantalla de DNR:
+                    aquí es donde la gente lo va a buscar. */}
+                <div>
+                  <Label>Transporter ID (Cortex)</Label>
+                  <input className="input w-full font-mono uppercase" value={form.transporter_id || ''}
+                    onChange={e => set('transporter_id', e.target.value.toUpperCase())}
+                    placeholder="A2H4XH0AEQTVZY" />
+                  <p className="mt-1 text-[11px] text-dark-500">
+                    Con esto se le asignan sus DNR. Si se lo pones a otra persona, se le quita a esta.
+                  </p>
                 </div>
 
                 <div className="col-span-2">

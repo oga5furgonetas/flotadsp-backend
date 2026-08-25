@@ -80,7 +80,11 @@ export default function Diarios() {
      fila. Es la salida cuando no hay lista que pegar ni historial del que
      sacarlo: los IDs se ven en la tabla, se elige la persona y ya. */
   const [conductores, setConductores] = useState([])
-  const [asignando, setAsignando] = useState('')
+  const [asignando, setAsignando] = useState(null)
+  /* Que fila se esta re-asignando. Antes, una vez puesto el nombre el
+     desplegable desaparecia y un dedazo se quedaba para siempre: no habia
+     ningun camino en la pantalla para deshacerlo. */
+  const [corrigiendo, setCorrigiendo] = useState(null)
 
   const [verIds, setVerIds] = useState(false)
   const [textoIds, setTextoIds] = useState('')
@@ -665,6 +669,7 @@ export default function Diarios() {
             <thead>
               <tr className="text-[10.5px] uppercase tracking-wider text-dark-600">
                 <th className="px-3 py-2 font-semibold">Conductor</th>
+                <th className="px-3 py-2 font-semibold">Transporter ID</th>
                 <th className="px-2 py-2 text-center font-semibold">DNRs</th>
                 <th className="px-2 py-2 text-center font-semibold text-red-400/80">Defectos</th>
                 <th className="px-2 py-2 text-right font-semibold text-red-400/80">€ que puntúan</th>
@@ -685,6 +690,42 @@ export default function Diarios() {
                       <span className={c.driver_name ? 'text-dark-200' : 'font-mono text-[11px] text-amber-300/80'}>
                         {c.driver_name || c.transporter_id}
                       </span>
+                      {c.driver_name && corrigiendo !== c.transporter_id && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setCorrigiendo(c.transporter_id) }}
+                          title={`Transporter ID ${c.transporter_id} — pulsa si no es esta persona`}
+                          className="ml-2 rounded border border-dark-700 px-1.5 py-0.5 text-[10px] font-semibold text-dark-500 hover:text-dark-200">
+                          no es él
+                        </button>
+                      )}
+                      {c.driver_name && corrigiendo === c.transporter_id && (
+                        <>
+                          <select
+                            value=""
+                            autoFocus
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              if (!e.target.value) return
+                              // '' quita el id de quien lo tuviera; el backend ya
+                              // lo contempla y es lo que deja la fila como estaba.
+                              ponerNombre(c.transporter_id, e.target.value === '__quitar' ? '' : e.target.value)
+                              setCorrigiendo(null)
+                            }}
+                            disabled={asignando === c.transporter_id}
+                            className="ml-2 max-w-[13rem] rounded border border-amber-500/40 bg-dark-950 px-1.5 py-0.5 text-[11.5px] text-amber-200 outline-none">
+                            <option value="">
+                              {asignando === c.transporter_id ? 'guardando…' : '¿quién es en realidad?'}
+                            </option>
+                            <option value="__quitar">— quitarlo, ya lo asigno luego —</option>
+                            {conductores.map((d) => (
+                              <option key={d.id} value={d.id}>{d.name}</option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setCorrigiendo(null) }}
+                            className="ml-1 text-[10px] text-dark-500 hover:text-dark-200">cancelar</button>
+                        </>
+                      )}
                       {!c.driver_name && (
                         // Sin nombre: se elige aquí mismo. Con el `select` no
                         // hay nada que emparejar ni adivinar — se señala la
@@ -715,6 +756,7 @@ export default function Diarios() {
                         </span>
                       )}
                     </td>
+                    <td className="px-3 py-1.5 font-mono text-[10.5px] text-dark-600">{c.transporter_id}</td>
                     <td className="px-2 py-1.5 text-center font-semibold tabular-nums text-dark-200">{c.dnr_total}</td>
                     <td className={`px-2 py-1.5 text-center font-bold tabular-nums ${c.defectos ? 'text-red-300' : 'text-dark-600'}`}>
                       {c.defectos}
@@ -733,7 +775,7 @@ export default function Diarios() {
                   </tr>
                   {abierto === c.transporter_id && c.detalle?.length > 0 && (
                     <tr className="bg-dark-950/60">
-                      <td colSpan={9} className="px-3 py-2">
+                      <td colSpan={10} className="px-3 py-2">
                         <p className="mb-1 font-mono text-[10.5px] text-dark-600">{c.transporter_id}</p>
                         <table className="w-full text-left text-[11.5px]">
                           <thead>

@@ -306,6 +306,10 @@ class Driver(BaseModel):
     license_number: Optional[str] = None
     login: Optional[str] = None        # login del conductor
     driver_id: Optional[str] = None    # ID de Amazon
+    # Transporter ID de Cortex (el de los reportes diarios). NO es lo mismo
+    # que `driver_id`: aquel es el numero interno de Amazon que aparece en la
+    # ficha, este es el codigo con el que vienen firmados los DNR.
+    transporter_id: Optional[str] = None
     photo_url: Optional[str] = None    # foto de perfil (R2)
     center: Optional[str] = None
     active: bool = True
@@ -7102,9 +7106,45 @@ async def update_driver(driver_id: str, data: dict, _=Depends(require_admin)):
         # Campos del formulario del panel (antes se filtraban y el guardado
         # fallaba en silencio): contrato/nivel/zona + ficha extendida.
         "contrato","nivel","zona","driver_id","alojamiento","notas","login",
+        "transporter_id",
     }
     data = {k: v for k, v in data.items() if k in _DRIVER_ALLOWED}
-    result = await db.drivers.update_one({"id": driver_id}, {"$set": data})
+
+    # EL TRANSPORTER ID NO ES UN CAMPO DE TEXTO CUALQUIERA.
+    # Es la llave con la que se reparten los DNR, asi que:
+    #  · se guarda en MAYUSCULAS (en los reportes viene asi y la busqueda es
+    #    exacta: 'a2h4...' en minusculas no encontraria nada y el conductor
+    #    apareceria a cero teniendo defectos),
+    #  · se valida el formato, para que un dedazo no cree un id fantasma,
+    #  · y se quita de cualquier otra ficha. Si dos personas tuvieran el mismo,
+    #    el nombre que saliera en el contador dependeria del orden en que Mongo
+    #    los tuviera guardados: los DNR de uno apareceriean bajo el otro.
+    quitar = {}
+    if "transporter_id" in data:
+        tid = str(data["transporter_id"] or "").strip().upper()
+        if not tid:
+            data.pop("transporter_id")
+            quitar["transporter_id"] = ""
+        elif not _DIA_TID.match(tid):
+            raise HTTPException(400, "Ese no parece un Transporter ID de Cortex "
+                                     "(empieza por A, sin espacios)")
+        else:
+            data["transporter_id"] = tid
+            await db.drivers.update_many(
+                {"transporter_id": tid, "id": {"$ne": driver_id}},
+                {"$unset": {"transporter_id": ""}})
+            # Y si estaba como etiqueta suelta, sobra: manda la ficha.
+            await db.app_meta.update_one({"_id": "transporter_alias"},
+                                         {"$unset": {f"mapa.{tid}": ""}})
+
+    cambio = {}
+    if data:
+        cambio["$set"] = data
+    if quitar:
+        cambio["$unset"] = quitar
+    if not cambio:
+        return {"success": True, "sin_cambios": True}
+    result = await db.drivers.update_one({"id": driver_id}, cambio)
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Conductor no encontrado")
     return {"success": True}
