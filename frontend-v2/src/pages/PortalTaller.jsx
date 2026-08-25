@@ -3,30 +3,32 @@ import axios from 'axios'
 import { useParams } from 'react-router-dom'
 import {
   Loader2, Camera, Check, Euro, MessageSquare, AlertTriangle,
-  CalendarClock, History, ThumbsUp, Clock3, X,
+  CalendarClock, History, ThumbsUp, Clock3, X, ChevronLeft, ChevronRight, Wrench,
 } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
 
-/* PORTAL DEL TALLER — sin usuario y sin contraseña.
+/* PORTAL DEL TALLER — sin usuario y sin contraseña, y de UNO EN UNO.
    ═══════════════════════════════════════════════════════════════════════
    Quien abre esto es un mecánico con el móvil en una mano, de pie al lado de
-   la furgoneta y con prisa. Todo lo que exija recordar algo, escribir mucho o
-   navegar por menús no se usa: se coge el teléfono y se llama, que es justo
-   lo que esta pantalla viene a evitar.
+   la furgoneta y con prisa. Antes era un scroll largo con seis bloques: se
+   veía todo pero no se sabía por dónde empezar, y lo de abajo no lo miraba
+   nadie. Ahora es UNA COSA POR PANTALLA con atrás / siguiente / finalizar.
 
-   De ahí las decisiones que a primera vista parecen raras:
-     · va en CLARO, porque se mira a menudo con luz de nave o de calle;
-     · una sola columna y botones de 56 px, para dedos con guantes;
-     · cada acción se guarda sola — no hay un "Guardar" final que nadie
-       pulsaría y que dejaría el trabajo a medias;
-     · lo que se consulta (¿qué furgoneta?, ¿para cuándo?, ¿puedo empezar?)
-       va ARRIBA; lo que se escribe, debajo.
+   Dos reglas que hacen que un paso a paso no estorbe:
+
+     · NADA se guarda al pulsar "Siguiente". Cada acción se guarda sola en el
+       momento. Si el taller se va a mitad, lo que ya hizo está guardado —un
+       asistente que solo guarda al final es una trampa.
+     · SE PUEDE SALTAR CUALQUIER PASO. "Siguiente" nunca está bloqueado. El
+       que solo entra a cambiar la fecha no tiene que pasar por las fotos ni
+       por el presupuesto.
+
+   Y va en CLARO porque se mira con luz de nave o de calle, con botones de
+   56 px para dedos con guantes.
 
    Cliente HTTP PROPIO, sin interceptores. El `api` del resto de la app mete
    el token de sesión en cada petición y, si algo devuelve 401 dentro de
-   /panel, borra la sesión. Aquí no hay sesión que meter ni que borrar, y si
-   el taller abre el enlace en el móvil de alguien de oficina no tiene ningún
-   sentido mandar sus credenciales a un endpoint público. */
+   /panel, borra la sesión. Aquí no hay sesión que meter ni que borrar. */
 const apiTaller = axios.create({ baseURL: API_BASE, timeout: 60000 })
 
 const CHIP = {
@@ -83,21 +85,13 @@ const cuando = (iso) => {
   return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-/* Una tarjeta y nada más. Existe para que las ocho secciones se vean iguales
-   sin repetir doce clases cada vez. */
-function Bloque({ titulo, icono: Icono, ayuda, children, aro }) {
-  return (
-    <section className={`rounded-2xl border bg-white p-5 ${aro || 'border-slate-200'}`}>
-      {titulo && (
-        <h2 className="mb-1 flex items-center gap-2 text-[16px] font-bold text-slate-900">
-          {Icono && <Icono size={18} className="text-blue-600" />} {titulo}
-        </h2>
-      )}
-      {ayuda && <p className="mb-3 text-[13.5px] leading-relaxed text-slate-500">{ayuda}</p>}
-      {children}
-    </section>
-  )
-}
+const PASOS = [
+  { id: 'estado', titulo: '¿Cómo va?', icono: Wrench },
+  { id: 'fecha', titulo: '¿Para cuándo?', icono: CalendarClock },
+  { id: 'fotos', titulo: 'Fotos', icono: Camera },
+  { id: 'presupuesto', titulo: 'Presupuesto', icono: Euro },
+  { id: 'fin', titulo: 'Resumen', icono: Check },
+]
 
 export default function PortalTaller() {
   const { token } = useParams()
@@ -106,17 +100,16 @@ export default function PortalTaller() {
   const [err, setErr] = useState('')
   const [ok, setOk] = useState('')
   const [ocupado, setOcupado] = useState('')
+  const [paso, setPaso] = useState(0)
 
   const [fecha, setFecha] = useState('')
-  /* El bloque de fecha tiene dos momentos: enseñar lo prometido y cambiarlo.
-     Mezclarlos en un formulario siempre abierto hacía que no se viera lo que
-     habían dicho, que es el dato que más se consulta. */
   const [cambiandoFecha, setCambiandoFecha] = useState(false)
   const [motivo, setMotivo] = useState('')
   const [importe, setImporte] = useState('')
   const [detalle, setDetalle] = useState('')
   const [nota, setNota] = useState('')
   const fotoRef = useRef(null)
+  const arriba = useRef(null)
 
   const cargar = useCallback(async () => {
     setCargando(true); setErr('')
@@ -131,9 +124,12 @@ export default function PortalTaller() {
 
   useEffect(() => { cargar() }, [cargar])
 
-  /* Un único camino para todo lo que escribe: así el aviso de "guardado", el
-     bloqueo del botón y el refresco se comportan igual en las cinco acciones
-     y no hay una que se olvide de refrescar. */
+  /* Al cambiar de paso se sube arriba. Sin esto, en un móvil te quedas a
+     media pantalla y parece que no ha pasado nada. */
+  useEffect(() => {
+    arriba.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [paso])
+
   const enviar = async (clave, ruta, cuerpo, mensaje) => {
     setOcupado(clave); setErr(''); setOk('')
     try {
@@ -191,50 +187,42 @@ export default function PortalTaller() {
   }
 
   const bloqueada = orden.cerrada
-  const pasos = orden.pasos || []
-  const paso = orden.paso || 0
   const tarde = orden.fecha_entrega_estimada && orden.fecha_entrega_estimada < hoyIso()
   /* "Dijisteis que estaría el..." sólo si la fecha la puso EL TALLER. Cuando la
      escribe la oficina al abrir la orden, atribuirles esa promesa es mentir. */
   const laDijeron = orden.entrega_la_dijo_taller
+  const actual = PASOS[paso]
+  const ultimo = paso === PASOS.length - 1
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] pb-16 text-slate-900">
+    <div className="min-h-screen bg-[#F8FAFC] pb-32 text-slate-900">
+      <span ref={arriba} />
 
-      {/* ── Cabecera: de qué furgoneta hablamos y por dónde va ────────── */}
-      <header className="border-b border-slate-200 bg-white px-4 pb-5 pt-6">
+      {/* ── Cabecera: siempre visible, es el "dónde estoy" ────────────── */}
+      <header className="border-b border-slate-200 bg-white px-4 pb-4 pt-6">
         <div className="mx-auto max-w-lg">
           <p className="text-[11.5px] font-semibold uppercase tracking-[0.16em] text-blue-600">
             {orden.numero} · {orden.taller}
           </p>
-          <h1 className="mt-1 text-[34px] font-extrabold leading-none tracking-tight">
-            {orden.matricula}
-          </h1>
-          {orden.modelo && <p className="mt-1 text-[14.5px] text-slate-500">{orden.modelo}</p>}
-          <span className={`mt-3 inline-block rounded-full px-3 py-1.5 text-[13px] font-semibold ring-1 ring-inset ${CHIP[orden.estado] || CHIP.abierta}`}>
-            {orden.estado_txt}
-          </span>
+          <div className="flex items-end gap-3">
+            <h1 className="text-[32px] font-extrabold leading-none tracking-tight">
+              {orden.matricula}
+            </h1>
+            <span className={`mb-1 rounded-full px-2.5 py-1 text-[12px] font-semibold ring-1 ring-inset ${CHIP[orden.estado] || CHIP.abierta}`}>
+              {orden.estado_txt}
+            </span>
+          </div>
+          {orden.modelo && <p className="mt-1 text-[14px] text-slate-500">{orden.modelo}</p>}
 
-          {/* EL RECORRIDO. Una etiqueta dice dónde estás; esto dice además
-              cuánto queda, que es lo que pregunta todo el mundo. */}
-          {!!paso && (
-            <div className="mt-5">
-              <div className="flex items-center">
-                {pasos.map((p, i) => (
-                  <div key={p.id} className="flex flex-1 items-center last:flex-none">
-                    <span className={`flex h-7 w-7 flex-none items-center justify-center rounded-full text-[12px] font-bold ${
-                      i < paso ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-500'}`}>
-                      {i < paso - 1 ? <Check size={14} /> : i + 1}
-                    </span>
-                    {i < pasos.length - 1 && (
-                      <span className={`h-1 flex-1 ${i < paso - 1 ? 'bg-blue-600' : 'bg-slate-200'}`} />
-                    )}
-                  </div>
-                ))}
-              </div>
-              <p className="mt-2 text-[12.5px] text-slate-500">
-                Paso {paso} de {pasos.length} · {orden.estado_txt}
-              </p>
+          {/* Los pasos, pulsables: el que sólo viene a una cosa va directo. */}
+          {!bloqueada && (
+            <div className="mt-4 flex items-center gap-1.5">
+              {PASOS.map((p, i) => (
+                <button key={p.id} onClick={() => setPaso(i)}
+                  aria-label={p.titulo}
+                  className={`h-2 flex-1 rounded-full transition ${
+                    i === paso ? 'bg-blue-600' : i < paso ? 'bg-blue-300' : 'bg-slate-200'}`} />
+              ))}
             </div>
           )}
         </div>
@@ -242,7 +230,6 @@ export default function PortalTaller() {
 
       <main className="mx-auto max-w-lg space-y-4 px-4 pt-4">
 
-        {/* Avisos, pegados arriba para que no se pierdan al hacer scroll */}
         {err && (
           <p className="sticky top-2 z-20 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[14px] text-red-700 shadow-sm">
             <AlertTriangle size={17} className="mt-0.5 flex-none" /> {err}
@@ -255,315 +242,370 @@ export default function PortalTaller() {
           </p>
         )}
 
-        {/* ¿PUEDEN EMPEZAR O NO?
-            Un taller con un presupuesto sin contestar está parado, y como no
-            tiene forma de enterarse, al día siguiente llama a preguntar. La
-            respuesta va aquí arriba, antes que nada. */}
+        {/* ¿PUEDEN EMPEZAR? Va en TODOS los pasos, no en uno: un taller parado
+            esperando una aprobación que no ve acaba llamando por teléfono. */}
         {orden.presupuesto === 'aprobado' && (
-          <div className="flex items-start gap-3 rounded-2xl border border-emerald-300 bg-emerald-50 px-4 py-4">
-            <ThumbsUp size={20} className="mt-0.5 flex-none text-emerald-600" />
-            <div>
-              <p className="text-[16px] font-bold text-emerald-900">Presupuesto aprobado</p>
-              <p className="text-[13.5px] leading-snug text-emerald-800">
+          <div className="flex items-start gap-3 rounded-2xl border border-emerald-300 bg-emerald-50 px-4 py-3.5">
+            <ThumbsUp size={19} className="mt-0.5 flex-none text-emerald-600" />
+            <p className="text-[15px] font-bold text-emerald-900">
+              Presupuesto aprobado
+              <span className="block text-[13.5px] font-normal leading-snug text-emerald-800">
                 Podéis seguir adelante. No hace falta que llaméis.
-              </p>
-            </div>
+              </span>
+            </p>
           </div>
         )}
         {orden.presupuesto === 'pendiente' && (
-          <div className="flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-4">
-            <Clock3 size={20} className="mt-0.5 flex-none text-amber-600" />
-            <div>
-              <p className="text-[16px] font-bold text-amber-900">Presupuesto enviado, pendiente de aprobar</p>
-              <p className="text-[13.5px] leading-snug text-amber-800">
-                Lo estamos mirando. En cuanto se apruebe lo veréis aquí mismo.
-              </p>
-            </div>
+          <div className="flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3.5">
+            <Clock3 size={19} className="mt-0.5 flex-none text-amber-600" />
+            <p className="text-[15px] font-bold text-amber-900">
+              Presupuesto pendiente de aprobar
+              <span className="block text-[13.5px] font-normal leading-snug text-amber-800">
+                Lo estamos mirando. En cuanto se apruebe lo veréis aquí.
+              </span>
+            </p>
           </div>
         )}
         {orden.presupuesto === 'rechazado' && (
-          <div className="flex items-start gap-3 rounded-2xl border border-red-300 bg-red-50 px-4 py-4">
-            <AlertTriangle size={20} className="mt-0.5 flex-none text-red-600" />
-            <div>
-              <p className="text-[16px] font-bold text-red-900">Presupuesto no aprobado</p>
-              <p className="text-[13.5px] leading-snug text-red-800">
+          <div className="flex items-start gap-3 rounded-2xl border border-red-300 bg-red-50 px-4 py-3.5">
+            <AlertTriangle size={19} className="mt-0.5 flex-none text-red-600" />
+            <p className="text-[15px] font-bold text-red-900">
+              Presupuesto no aprobado
+              <span className="block text-[13.5px] font-normal leading-snug text-red-800">
                 No sigáis hasta hablarlo con la oficina.
-              </p>
-            </div>
+              </span>
+            </p>
           </div>
         )}
 
-        {bloqueada && (
-          <p className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-[14px] leading-relaxed text-slate-600">
-            Esta orden ya está cerrada. Podéis consultarla, pero no cambiar nada.
-            Si hace falta algo más, avisad a la oficina.
-          </p>
-        )}
-
-        {orden.problema && (
-          <Bloque>
-            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-              Lo que nos han reportado
+        {bloqueada ? (
+          <>
+            <p className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-[14.5px] leading-relaxed text-slate-600">
+              Esta orden ya está cerrada. Podéis consultarla, pero no cambiar nada.
+              Si hace falta algo más, avisad a la oficina.
             </p>
-            <p className="text-[16px] leading-relaxed text-slate-800">{orden.problema}</p>
-          </Bloque>
-        )}
+            <Historial orden={orden} />
+          </>
+        ) : (
+          <>
+            {/* ── El paso ─────────────────────────────────────────────── */}
+            <section className="rounded-2xl border border-slate-200 bg-white p-5">
+              <p className="mb-1 text-[11.5px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+                Paso {paso + 1} de {PASOS.length}
+              </p>
+              <h2 className="mb-4 flex items-center gap-2 text-[20px] font-bold">
+                <actual.icono size={20} className="text-blue-600" /> {actual.titulo}
+              </h2>
 
-        {/* ── 1. ¿PARA CUÁNDO? ──────────────────────────────────────── */}
-        {!bloqueada && (
-          <Bloque titulo="¿Para cuándo estará?" icono={CalendarClock}
-            aro={tarde ? 'border-amber-300' : ''}>
-
-            {orden.fecha_entrega_estimada && !cambiandoFecha && (
-              <>
-                <p className="text-[13.5px] text-slate-500">
-                  {laDijeron ? 'Dijisteis que estaría el' : 'La entrega prevista es el'}
-                </p>
-                <p className="text-[26px] font-bold leading-tight tracking-tight">
-                  {enCristiano(orden.fecha_entrega_estimada)}
-                </p>
-                {orden.motivo_retraso && (
-                  <p className="mt-1 text-[14px] font-medium text-amber-700">{orden.motivo_retraso}</p>
-                )}
-                {tarde && (
-                  <p className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-3 text-[14px] leading-snug text-amber-900">
-                    Esa fecha ya pasó. Si se ha retrasado, decídnoslo aquí y nos ahorramos la llamada.
-                  </p>
-                )}
-
-                {/* Tres atajos de un toque: sin teclado. Con las manos sucias
-                    y el móvil en una mano, nadie escribe una fecha. */}
-                <div className="mt-4 grid grid-cols-3 gap-2">
-                  {[['Un día más', 1], ['Dos días', 2], ['Una semana', 7]].map(([txt, n]) => (
-                    <button key={n} disabled={!!ocupado}
-                      onClick={() => {
-                        const base = tarde ? hoyIso() : orden.fecha_entrega_estimada
-                        setFecha(masDias(base, n)); setCambiandoFecha(true)
-                      }}
-                      className="min-h-[56px] rounded-xl border border-slate-300 bg-white px-1 text-[14.5px] font-semibold text-slate-700 active:bg-slate-100 disabled:opacity-50">
-                      +{txt}
-                    </button>
-                  ))}
-                </div>
-                <button
-                  onClick={() => { setFecha(orden.fecha_entrega_estimada); setCambiandoFecha(true) }}
-                  className="mt-2 min-h-[48px] w-full rounded-xl border border-slate-200 text-[14px] font-semibold text-slate-500">
-                  Poner otra fecha
-                </button>
-              </>
-            )}
-
-            {(!orden.fecha_entrega_estimada || cambiandoFecha) && (
-              <>
-                {!orden.fecha_entrega_estimada && (
-                  <p className="mb-3 text-[14px] leading-relaxed text-slate-500">
-                    Es lo que más nos ayuda. Y si luego cambia, se cambia aquí — no pasa nada.
-                  </p>
-                )}
-                {cambiandoFecha && orden.fecha_entrega_estimada && (
-                  <p className="mb-2 text-[13.5px] text-slate-500">
-                    Antes: {enCristiano(orden.fecha_entrega_estimada)}
-                  </p>
-                )}
-                <input type="date" value={fecha} min={hoyIso()}
-                  onChange={(e) => setFecha(e.target.value)}
-                  className="mb-1 min-h-[56px] w-full rounded-xl border border-slate-300 bg-white px-3 text-[17px]" />
-                {fecha && (
-                  <p className="mb-3 text-[15px] font-semibold text-blue-700">{enCristiano(fecha)}</p>
-                )}
-
-                {/* El motivo, sólo si es un CAMBIO: la primera vez nadie tiene
-                    que justificar nada. */}
-                {cambiandoFecha && orden.fecha_entrega_estimada && (
-                  <>
-                    <p className="mb-2 text-[13.5px] text-slate-500">¿Por qué? (opcional)</p>
-                    <div className="mb-4 flex flex-wrap gap-2">
-                      {(orden.motivos || []).map((m) => (
-                        <button key={m.id} onClick={() => setMotivo(motivo === m.id ? '' : m.id)}
-                          className={`min-h-[44px] rounded-full border px-4 text-[14px] font-semibold ${
-                            motivo === m.id
-                              ? 'border-blue-600 bg-blue-50 text-blue-700'
-                              : 'border-slate-300 text-slate-600'}`}>
-                          {m.txt}
+              {/* 1 · ESTADO */}
+              {actual.id === 'estado' && (
+                <>
+                  {orden.problema && (
+                    <div className="mb-4 rounded-xl bg-slate-50 px-3.5 py-3">
+                      <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                        Lo que nos han reportado
+                      </p>
+                      <p className="text-[15px] leading-relaxed text-slate-800">{orden.problema}</p>
+                    </div>
+                  )}
+                  <div className="grid gap-2">
+                    {(orden.estados_posibles || []).map((e) => {
+                      const activo = e.id === orden.estado
+                      return (
+                        <button key={e.id} disabled={!!ocupado}
+                          onClick={() => enviar(e.id, 'estado', { estado: e.id }, `Puesto en «${e.txt}». La oficina ya lo ve.`)}
+                          className={`flex min-h-[58px] items-center justify-between rounded-xl border px-4 text-left text-[16px] font-semibold transition disabled:opacity-50 ${
+                            activo ? 'border-blue-600 bg-blue-50 text-blue-800'
+                              : 'border-slate-300 bg-white text-slate-700 active:bg-slate-50'}`}>
+                          {e.txt}
+                          {ocupado === e.id ? <Loader2 size={19} className="animate-spin" />
+                            : activo && <Check size={20} className="text-blue-600" />}
                         </button>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+
+              {/* 2 · FECHA */}
+              {actual.id === 'fecha' && (
+                <>
+                  {orden.fecha_entrega_estimada && !cambiandoFecha && (
+                    <>
+                      <p className="text-[13.5px] text-slate-500">
+                        {laDijeron ? 'Dijisteis que estaría el' : 'La entrega prevista es el'}
+                      </p>
+                      <p className="text-[26px] font-bold leading-tight tracking-tight">
+                        {enCristiano(orden.fecha_entrega_estimada)}
+                      </p>
+                      {orden.motivo_retraso && (
+                        <p className="mt-1 text-[14px] font-medium text-amber-700">{orden.motivo_retraso}</p>
+                      )}
+                      {tarde && (
+                        <p className="mt-3 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-3 text-[14px] leading-snug text-amber-900">
+                          Esa fecha ya pasó. Si se ha retrasado, decídnoslo aquí y nos ahorramos la llamada.
+                        </p>
+                      )}
+                      <div className="mt-4 grid grid-cols-3 gap-2">
+                        {[['Un día más', 1], ['Dos días', 2], ['Una semana', 7]].map(([txt, n]) => (
+                          <button key={n} disabled={!!ocupado}
+                            onClick={() => {
+                              const base = tarde ? hoyIso() : orden.fecha_entrega_estimada
+                              setFecha(masDias(base, n)); setCambiandoFecha(true)
+                            }}
+                            className="min-h-[56px] rounded-xl border border-slate-300 bg-white px-1 text-[14.5px] font-semibold text-slate-700 active:bg-slate-100 disabled:opacity-50">
+                            +{txt}
+                          </button>
+                        ))}
+                      </div>
+                      <button onClick={() => { setFecha(orden.fecha_entrega_estimada); setCambiandoFecha(true) }}
+                        className="mt-2 min-h-[48px] w-full rounded-xl border border-slate-200 text-[14px] font-semibold text-slate-500">
+                        Poner otra fecha
+                      </button>
+                    </>
+                  )}
+
+                  {(!orden.fecha_entrega_estimada || cambiandoFecha) && (
+                    <>
+                      {!orden.fecha_entrega_estimada && (
+                        <p className="mb-3 text-[14.5px] leading-relaxed text-slate-500">
+                          Es lo que más nos ayuda. Y si luego cambia, se cambia aquí — no pasa nada.
+                        </p>
+                      )}
+                      {cambiandoFecha && orden.fecha_entrega_estimada && (
+                        <p className="mb-2 text-[13.5px] text-slate-500">
+                          Antes: {enCristiano(orden.fecha_entrega_estimada)}
+                        </p>
+                      )}
+                      <input type="date" value={fecha} min={hoyIso()}
+                        onChange={(e) => setFecha(e.target.value)}
+                        className="mb-1 min-h-[56px] w-full rounded-xl border border-slate-300 bg-white px-3 text-[17px]" />
+                      {fecha && (
+                        <p className="mb-3 text-[15px] font-semibold text-blue-700">{enCristiano(fecha)}</p>
+                      )}
+                      {cambiandoFecha && orden.fecha_entrega_estimada && (
+                        <>
+                          <p className="mb-2 text-[13.5px] text-slate-500">¿Por qué? (opcional)</p>
+                          <div className="mb-4 flex flex-wrap gap-2">
+                            {(orden.motivos || []).map((m) => (
+                              <button key={m.id} onClick={() => setMotivo(motivo === m.id ? '' : m.id)}
+                                className={`min-h-[44px] rounded-full border px-4 text-[14px] font-semibold ${
+                                  motivo === m.id ? 'border-blue-600 bg-blue-50 text-blue-700'
+                                    : 'border-slate-300 text-slate-600'}`}>
+                                {m.txt}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                      <div className="flex gap-2">
+                        <button disabled={!fecha || ocupado === 'fecha'}
+                          onClick={async () => {
+                            const hecho = await enviar('fecha', 'entrega', { fecha, motivo },
+                              'Apuntado. La oficina ya lo sabe, no hace falta que llaméis.')
+                            if (hecho) { setCambiandoFecha(false); setMotivo('') }
+                          }}
+                          className="min-h-[56px] flex-1 rounded-xl bg-blue-600 text-[16px] font-semibold text-white active:bg-blue-700 disabled:opacity-40">
+                          {ocupado === 'fecha' ? <Loader2 size={18} className="mx-auto animate-spin" /> : 'Confirmar fecha'}
+                        </button>
+                        {cambiandoFecha && (
+                          <button onClick={() => { setCambiandoFecha(false); setMotivo('') }}
+                            className="min-h-[56px] rounded-xl border border-slate-300 px-5 text-[14.5px] font-semibold text-slate-500">
+                            Cancelar
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+
+              {/* 3 · FOTOS */}
+              {actual.id === 'fotos' && (
+                <>
+                  <p className="mb-3 text-[14.5px] leading-relaxed text-slate-500">
+                    Lo que veáis: la pieza, el daño, cómo va quedando.
+                  </p>
+                  <button disabled={ocupado === 'fotos'} onClick={() => fotoRef.current?.click()}
+                    className="flex min-h-[96px] w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 text-[16px] font-semibold text-slate-600 active:bg-slate-100 disabled:opacity-50">
+                    {ocupado === 'fotos'
+                      ? <><Loader2 size={20} className="animate-spin" /> Enviando…</>
+                      : <><Camera size={20} /> Hacer foto o elegir</>}
+                  </button>
+                  {/* `capture` abre la cámara directamente en el móvil, que es
+                      donde se va a usar esto el 100 % de las veces. */}
+                  <input ref={fotoRef} type="file" accept="image/*" capture="environment" multiple
+                    className="hidden" onChange={(e) => subirFotos(e.target.files)} />
+                  {!!(orden.fotos || []).length && (
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      {orden.fotos.map((u, i) => (
+                        <a key={u + i} href={u} target="_blank" rel="noreferrer">
+                          <img src={u} alt="" loading="lazy"
+                            className="aspect-square w-full rounded-xl border border-slate-200 object-cover" />
+                        </a>
                       ))}
                     </div>
-                  </>
-                )}
-
-                <div className="flex gap-2">
-                  <button disabled={!fecha || ocupado === 'fecha'}
-                    onClick={async () => {
-                      const hecho = await enviar('fecha', 'entrega', { fecha, motivo },
-                        'Apuntado. La oficina ya lo sabe, no hace falta que llaméis.')
-                      if (hecho) { setCambiandoFecha(false); setMotivo('') }
-                    }}
-                    className="min-h-[56px] flex-1 rounded-xl bg-blue-600 text-[16px] font-semibold text-white active:bg-blue-700 disabled:opacity-40">
-                    {ocupado === 'fecha' ? <Loader2 size={18} className="mx-auto animate-spin" /> : 'Confirmar fecha'}
-                  </button>
-                  {cambiandoFecha && (
-                    <button onClick={() => { setCambiandoFecha(false); setMotivo('') }}
-                      className="min-h-[56px] rounded-xl border border-slate-300 px-5 text-[14.5px] font-semibold text-slate-500">
-                      Cancelar
-                    </button>
                   )}
-                </div>
-              </>
-            )}
-          </Bloque>
-        )}
+                </>
+              )}
 
-        {/* ── 2. ¿CÓMO VA? ──────────────────────────────────────────── */}
-        {!bloqueada && (
-          <Bloque titulo="¿Cómo va?" icono={Check}>
-            <div className="grid gap-2">
-              {(orden.estados_posibles || []).map((e) => {
-                const activo = e.id === orden.estado
-                return (
-                  <button key={e.id} disabled={!!ocupado}
-                    onClick={() => enviar(e.id, 'estado', { estado: e.id }, `Puesto en «${e.txt}». La oficina ya lo ve.`)}
-                    className={`flex min-h-[58px] items-center justify-between rounded-xl border px-4 text-left text-[16px] font-semibold transition disabled:opacity-50 ${
-                      activo ? 'border-blue-600 bg-blue-50 text-blue-800'
-                        : 'border-slate-300 bg-white text-slate-700 active:bg-slate-50'}`}>
-                    {e.txt}
-                    {ocupado === e.id ? <Loader2 size={19} className="animate-spin" />
-                      : activo && <Check size={20} className="text-blue-600" />}
+              {/* 4 · PRESUPUESTO */}
+              {actual.id === 'presupuesto' && (
+                <>
+                  <p className="mb-3 text-[14.5px] leading-relaxed text-slate-500">
+                    Mandad el importe y la oficina lo aprueba desde su lado. No hace falta que llaméis.
+                  </p>
+                  {orden.importe_estimado != null && (
+                    <p className="mb-3 rounded-xl bg-slate-50 px-3.5 py-3 text-[14px] text-slate-600">
+                      Enviado: <b className="text-slate-900">{eur(orden.importe_estimado)}</b>
+                      {orden.presupuesto === 'pendiente' && ' · pendiente de aprobar'}
+                      {orden.presupuesto === 'aprobado' && ' · aprobado'}
+                      {orden.presupuesto === 'rechazado' && ' · no aprobado'}
+                    </p>
+                  )}
+                  <input type="text" inputMode="decimal" value={importe} placeholder="0,00 €"
+                    onChange={(e) => setImporte(e.target.value)}
+                    className="mb-2 min-h-[56px] w-full rounded-xl border border-slate-300 px-3 text-[19px] font-semibold" />
+                  <input type="text" value={detalle} placeholder="Qué incluye (opcional)"
+                    onChange={(e) => setDetalle(e.target.value)}
+                    className="mb-3 min-h-[56px] w-full rounded-xl border border-slate-300 px-3 text-[15px]" />
+                  <div className="flex gap-2">
+                    <button disabled={!importe || ocupado === 'presu'}
+                      onClick={async () => {
+                        if (await enviar('presu', 'presupuesto', { importe, detalle, final: false },
+                          'Presupuesto enviado. Os avisamos en cuanto lo aprueben.')) {
+                          setImporte(''); setDetalle('')
+                        }
+                      }}
+                      className="min-h-[56px] flex-1 rounded-xl bg-blue-600 text-[16px] font-semibold text-white active:bg-blue-700 disabled:opacity-40">
+                      {ocupado === 'presu' ? <Loader2 size={18} className="mx-auto animate-spin" /> : 'Enviar presupuesto'}
+                    </button>
+                    <button disabled={!importe || ocupado === 'final'}
+                      onClick={async () => {
+                        if (await enviar('final', 'presupuesto', { importe, detalle, final: true },
+                          'Importe final enviado.')) { setImporte(''); setDetalle('') }
+                      }}
+                      className="min-h-[56px] rounded-xl border border-slate-300 px-4 text-[14.5px] font-semibold text-slate-600 disabled:opacity-40">
+                      Es el final
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* 5 · RESUMEN + NOTA */}
+              {actual.id === 'fin' && (
+                <>
+                  <div className="mb-4 grid grid-cols-2 gap-2">
+                    {[['Estado', orden.estado_txt],
+                      ['Entrega', orden.fecha_entrega_estimada ? enCristiano(orden.fecha_entrega_estimada) : 'sin decir'],
+                      ['Fotos', String((orden.fotos || []).length)],
+                      ['Presupuesto', orden.importe_estimado != null ? eur(orden.importe_estimado) : 'sin mandar']].map(([k, v]) => (
+                      <div key={k} className="rounded-xl bg-slate-50 px-3 py-2.5">
+                        <p className="text-[10.5px] uppercase tracking-wider text-slate-400">{k}</p>
+                        <p className="text-[14.5px] font-semibold leading-snug">{v}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <p className="mb-2 flex items-center gap-2 text-[15px] font-bold">
+                    <MessageSquare size={17} className="text-blue-600" /> ¿Algo más que contarnos?
+                  </p>
+                  <textarea rows={3} value={nota} onChange={(e) => setNota(e.target.value)}
+                    placeholder="Lo que sea: una pieza que no llega, algo que habéis visto…"
+                    className="w-full rounded-xl border border-slate-300 px-3 py-3 text-[15.5px]" />
+                  <button disabled={!nota.trim() || ocupado === 'nota'}
+                    onClick={async () => { if (await enviar('nota', 'nota', { nota }, 'Enviado.')) setNota('') }}
+                    className="mt-2 min-h-[56px] w-full rounded-xl border border-slate-300 text-[15.5px] font-semibold text-slate-700 disabled:opacity-40">
+                    {ocupado === 'nota' ? <Loader2 size={18} className="mx-auto animate-spin" /> : 'Enviar nota'}
                   </button>
-                )
-              })}
-            </div>
-          </Bloque>
-        )}
+                </>
+              )}
+            </section>
 
-        {/* ── 3. FOTOS ──────────────────────────────────────────────── */}
-        {!bloqueada && (
-          <Bloque titulo="Fotos del trabajo" icono={Camera}
-            ayuda="Lo que veáis: la pieza, el daño, cómo va quedando.">
-            <button disabled={ocupado === 'fotos'} onClick={() => fotoRef.current?.click()}
-              className="flex min-h-[80px] w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 text-[16px] font-semibold text-slate-600 active:bg-slate-100 disabled:opacity-50">
-              {ocupado === 'fotos'
-                ? <><Loader2 size={20} className="animate-spin" /> Enviando…</>
-                : <><Camera size={20} /> Hacer foto o elegir</>}
-            </button>
-            {/* `capture` abre la cámara directamente en el móvil, que es donde
-                se va a usar esto el 100 % de las veces. */}
-            <input ref={fotoRef} type="file" accept="image/*" capture="environment" multiple
-              className="hidden" onChange={(e) => subirFotos(e.target.files)} />
-            {!!(orden.fotos || []).length && (
-              <div className="mt-3 grid grid-cols-3 gap-2">
-                {orden.fotos.map((u, i) => (
-                  <a key={u + i} href={u} target="_blank" rel="noreferrer">
-                    <img src={u} alt="" loading="lazy"
-                      className="aspect-square w-full rounded-xl border border-slate-200 object-cover" />
-                  </a>
-                ))}
-              </div>
+            {/* LO QUE YA SE LE HIZO — sólo en el paso del estado, que es donde
+                un mecánico está decidiendo qué le pasa a la furgoneta.
+                Se dice QUÉ se hizo pero NUNCA en qué taller: eso es
+                información de la flota y a este taller no le incumbe. */}
+            {actual.id === 'estado' && !!(orden.ya_estuvo || []).length && (
+              <section className="rounded-2xl border border-slate-200 bg-white p-5">
+                <h3 className="mb-3 flex items-center gap-2 text-[15px] font-bold">
+                  <History size={17} className="text-blue-600" /> Esta furgoneta ya pasó por taller
+                </h3>
+                <ul className="space-y-3">
+                  {orden.ya_estuvo.map((h, i) => (
+                    <li key={h.fecha + i} className="flex gap-3">
+                      <span className="w-[3.6rem] flex-none whitespace-nowrap text-[13px] tabular-nums text-slate-400">
+                        {fechaCorta(h.fecha)}
+                      </span>
+                      <span className="text-[14.5px] leading-snug text-slate-700">{h.que}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
             )}
-          </Bloque>
+
+            {ultimo && <Historial orden={orden} />}
+          </>
         )}
 
-        {/* ── 4. PRESUPUESTO ────────────────────────────────────────── */}
-        {!bloqueada && (
-          <Bloque titulo="Presupuesto" icono={Euro}
-            ayuda="Mandad el importe y la oficina lo aprueba desde su lado. No hace falta que llaméis.">
-            {orden.importe_estimado != null && (
-              <p className="mb-3 rounded-xl bg-slate-50 px-3.5 py-3 text-[14px] text-slate-600">
-                Enviado: <b className="text-slate-900">{eur(orden.importe_estimado)}</b>
-                {orden.presupuesto === 'pendiente' && ' · pendiente de aprobar'}
-                {orden.presupuesto === 'aprobado' && ' · aprobado'}
-                {orden.presupuesto === 'rechazado' && ' · no aprobado'}
-              </p>
-            )}
-            <div className="mb-2 flex gap-2">
-              <input type="text" inputMode="decimal" value={importe} placeholder="0,00 €"
-                onChange={(e) => setImporte(e.target.value)}
-                className="min-h-[56px] w-32 rounded-xl border border-slate-300 px-3 text-[17px]" />
-              <input type="text" value={detalle} placeholder="Qué incluye (opcional)"
-                onChange={(e) => setDetalle(e.target.value)}
-                /* min-w-0: sin esto un input con flex-1 NO encoge por debajo de su
-                   ancho natural y se sale de la tarjeta en un movil. */
-                className="min-h-[56px] min-w-0 flex-1 rounded-xl border border-slate-300 px-3 text-[15px]" />
-            </div>
-            <div className="flex gap-2">
-              <button disabled={!importe || ocupado === 'presu'}
-                onClick={async () => {
-                  if (await enviar('presu', 'presupuesto', { importe, detalle, final: false },
-                    'Presupuesto enviado. Os avisamos en cuanto lo aprueben.')) {
-                    setImporte(''); setDetalle('')
-                  }
-                }}
-                className="min-h-[56px] flex-1 rounded-xl bg-blue-600 text-[16px] font-semibold text-white active:bg-blue-700 disabled:opacity-40">
-                {ocupado === 'presu' ? <Loader2 size={18} className="mx-auto animate-spin" /> : 'Enviar presupuesto'}
-              </button>
-              <button disabled={!importe || ocupado === 'final'}
-                onClick={async () => {
-                  if (await enviar('final', 'presupuesto', { importe, detalle, final: true },
-                    'Importe final enviado.')) { setImporte(''); setDetalle('') }
-                }}
-                className="min-h-[56px] rounded-xl border border-slate-300 px-4 text-[14.5px] font-semibold text-slate-600 disabled:opacity-40">
-                Es el final
-              </button>
-            </div>
-          </Bloque>
-        )}
-
-        {/* ── 5. NOTA LIBRE ─────────────────────────────────────────── */}
-        {!bloqueada && (
-          <Bloque titulo="Contarnos algo" icono={MessageSquare}>
-            <textarea rows={3} value={nota} onChange={(e) => setNota(e.target.value)}
-              placeholder="Lo que sea: una pieza que no llega, algo que habéis visto…"
-              className="w-full rounded-xl border border-slate-300 px-3 py-3 text-[15.5px]" />
-            <button disabled={!nota.trim() || ocupado === 'nota'}
-              onClick={async () => { if (await enviar('nota', 'nota', { nota }, 'Enviado.')) setNota('') }}
-              className="mt-2 min-h-[56px] w-full rounded-xl bg-blue-600 text-[16px] font-semibold text-white active:bg-blue-700 disabled:opacity-40">
-              {ocupado === 'nota' ? <Loader2 size={18} className="mx-auto animate-spin" /> : 'Enviar'}
-            </button>
-          </Bloque>
-        )}
-
-        {/* LO QUE YA SE LE HIZO.
-            Un mecánico que sabe que hace tres meses se cambiaron los discos no
-            vuelve a diagnosticar el ruido desde cero. Se dice QUÉ se hizo pero
-            NUNCA en qué taller: eso es información de la flota y a este taller
-            no le incumbe quién hizo el trabajo anterior. */}
-        {!!(orden.ya_estuvo || []).length && (
-          <Bloque titulo="Esta furgoneta ya pasó por taller" icono={History}>
-            <ul className="space-y-3">
-              {orden.ya_estuvo.map((h, i) => (
-                <li key={h.fecha + i} className="flex gap-3">
-                  <span className="w-[3.6rem] flex-none whitespace-nowrap text-[13px] tabular-nums text-slate-400">
-                    {fechaCorta(h.fecha)}
-                  </span>
-                  <span className="text-[14.5px] leading-snug text-slate-700">{h.que}</span>
-                </li>
-              ))}
-            </ul>
-          </Bloque>
-        )}
-
-        {/* El historial es la prueba de que lo que escriben llega. */}
-        <Bloque>
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-            Todo lo que ha pasado
-          </p>
-          <ol className="space-y-3.5">
-            {[...(orden.historial || [])].reverse().map((h, i) => (
-              <li key={h.cuando + i} className="flex gap-3">
-                <span className="mt-1.5 h-2 w-2 flex-none rounded-full bg-blue-500" />
-                <div className="min-w-0">
-                  <p className="text-[14.5px] font-semibold text-slate-800">{h.que}</p>
-                  {h.detalle && <p className="text-[14px] leading-snug text-slate-500">{h.detalle}</p>}
-                  <p className="text-[12.5px] text-slate-400">{cuando(h.cuando)} · {h.quien}</p>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </Bloque>
-
-        <p className="pt-2 text-center text-[12.5px] text-slate-400">
+        <p className="pb-2 pt-1 text-center text-[12.5px] text-slate-400">
           FlotaDSP · esta página es sólo para esta furgoneta
         </p>
       </main>
+
+      {/* ── Barra de navegación, fija abajo ────────────────────────────
+          Fija y no al final del scroll: si hay que buscarla, la mitad de la
+          gente se queda en el primer paso. */}
+      {!bloqueada && (
+        <nav className="fixed inset-x-0 bottom-0 border-t border-slate-200 bg-white/95 px-4 py-3 backdrop-blur">
+          <div className="mx-auto flex max-w-lg items-center gap-2">
+            <button onClick={() => setPaso((p) => Math.max(0, p - 1))} disabled={paso === 0}
+              className="flex min-h-[52px] items-center gap-1 rounded-xl border border-slate-300 px-4 text-[15px] font-semibold text-slate-600 disabled:opacity-30">
+              <ChevronLeft size={18} /> Atrás
+            </button>
+            {ultimo ? (
+              <button onClick={() => window.close()}
+                className="flex min-h-[52px] flex-1 items-center justify-center gap-1.5 rounded-xl bg-emerald-600 text-[16px] font-semibold text-white active:bg-emerald-700">
+                <Check size={19} /> Finalizar
+              </button>
+            ) : (
+              <button onClick={() => setPaso((p) => Math.min(PASOS.length - 1, p + 1))}
+                className="flex min-h-[52px] flex-1 items-center justify-center gap-1 rounded-xl bg-blue-600 text-[16px] font-semibold text-white active:bg-blue-700">
+                Siguiente <ChevronRight size={18} />
+              </button>
+            )}
+          </div>
+          {!ultimo && (
+            <p className="mx-auto mt-1.5 max-w-lg text-center text-[12px] text-slate-400">
+              Puedes saltarte lo que no aplique — se guarda solo, no al final.
+            </p>
+          )}
+        </nav>
+      )}
     </div>
+  )
+}
+
+/* El historial es la prueba de que lo que escriben llega. Se saca a su propio
+   componente porque aparece en dos sitios: en el resumen y en las cerradas. */
+function Historial({ orden }) {
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-5">
+      <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+        Todo lo que ha pasado
+      </p>
+      <ol className="space-y-3.5">
+        {[...(orden.historial || [])].reverse().map((h, i) => (
+          <li key={h.cuando + i} className="flex gap-3">
+            <span className="mt-1.5 h-2 w-2 flex-none rounded-full bg-blue-500" />
+            <div className="min-w-0">
+              <p className="text-[14.5px] font-semibold text-slate-800">{h.que}</p>
+              {h.detalle && <p className="text-[14px] leading-snug text-slate-500">{h.detalle}</p>}
+              <p className="text-[12.5px] text-slate-400">{cuando(h.cuando)} · {h.quien}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
   )
 }
