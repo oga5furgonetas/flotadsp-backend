@@ -37,6 +37,8 @@ jobs:
         run: node scripts/check-routes.mjs
       - name: Checker rutas sin consumidor (huerfanas)
         run: node scripts/check-huerfanas.mjs
+      - name: Checker permisos (pantallas que nadie puede conceder)
+        run: node scripts/check-permisos.mjs
 
   backend:
     name: Backend (sintaxis + contratos + tests de API)

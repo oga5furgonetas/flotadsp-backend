@@ -159,10 +159,34 @@ export default function PanelLayout() {
   useEffect(() => {
     if (!isAuthed()) return
     let vivo = true
-    getMe()
-      .then((r) => { if (vivo && guardarAccesoFresco(r.data)) setAccesoTick((n) => n + 1) })
-      .catch(() => {})
-    return () => { vivo = false }
+    const mirar = () => {
+      if (!vivo || !isAuthed() || document.hidden) return
+      getMe()
+        .then((r) => { if (vivo && guardarAccesoFresco(r.data)) setAccesoTick((n) => n + 1) })
+        .catch(() => {})
+    }
+    mirar()
+    /* NO SOLO AL ABRIR. Antes esto corria una vez al montar el panel, asi que
+       quien tuviera la pestaña abierta seguia con los permisos viejos hasta
+       recargar: se le daba acceso a un modulo, no le aparecia, y parecia que
+       el guardado no habia funcionado.
+
+       Dos disparadores baratos y suficientes:
+        · al volver a la pestaña, que es cuando la gente mira despues de que
+          le digan "ya te lo he puesto";
+        · y cada 2 minutos de fondo, para el que la deja abierta todo el dia.
+       Solo se re-pinta si algo CAMBIA de verdad (`guardarAccesoFresco`
+       devuelve false si la respuesta es identica), asi que no parpadea. */
+    const alVolver = () => { if (!document.hidden) mirar() }
+    document.addEventListener('visibilitychange', alVolver)
+    window.addEventListener('focus', alVolver)
+    const reloj = setInterval(mirar, 120000)
+    return () => {
+      vivo = false
+      document.removeEventListener('visibilitychange', alVolver)
+      window.removeEventListener('focus', alVolver)
+      clearInterval(reloj)
+    }
   }, [])
 
   if (!isAuthed()) return <Navigate to="/panel/login" replace />

@@ -312,12 +312,30 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    lista negra: el enlace se reenvía por WhatsApp y acaba en teléfonos que no
    controlamos, así que ni nombres de conductores ni ids internos.
 
+27. **Una pantalla nueva sin su casilla de permiso es INVISIBLE, y no avisa.**
+   El menú filtra cada entrada con `canSee(clave)`, y `canSee` devuelve false
+   si la clave no está en la lista de permisos del usuario. Si la pantalla no
+   tiene casilla en `Usuarios.jsx`, **nadie puede concedérsela**: desaparece
+   del menú para todo el que tenga permisos definidos —aunque lo tenga todo
+   marcado— y la ruta tampoco abre, porque el guard usa la misma comprobación.
+   Pasó dos veces: `ordenes` (Órdenes de taller) y `diarios` (DNR · Diarios).
+   Mery tenía las 27 casillas marcadas y aun así no veía Diarios; el síntoma
+   desde fuera es siempre el mismo y engaña: «no me sale», que parece caché.
+   Al añadir una pantalla, una de estas tres: casilla en `MODULES` de
+   `Usuarios.jsx`, herencia a mano en PanelLayout —**en `itemVisible` Y en
+   `routeAllowed`**, o el menú la enseña y la ruta te echa—, o
+   `SIEMPRE_VISIBLES`. Lo comprueba `scripts/check-permisos.mjs` en CI.
+   Y ojo con lo otro: los permisos del JWT duran 72 h. `PanelLayout` pregunta
+   a `/auth/me` al montar, al volver a la pestaña y cada 2 min; sin eso, dar
+   un permiso no se nota hasta recargar y parece que el guardado falló.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
 - Commits en español, estilo `feat:`/`fix:`, y push a `main` (sincroniza 2 ordenadores).
 - Los checkers de `scripts/` deben quedar a cero antes de commitear:
-  `check-i18n.mjs`, `check-routes.mjs`, `check-huerfanas.mjs` y `check_contracts.py`.
+  `check-i18n.mjs`, `check-routes.mjs`, `check-huerfanas.mjs`, `check-permisos.mjs`
+  y `check_contracts.py`.
 - `check-huerfanas.mjs` lista rutas del backend que no llama ningún cliente. Una
   ruta sin UI no falla, simplemente no se usa: así estuvieron meses el módulo de
   turnos entero y las subidas de métricas. Lleva trinquete (tolera el backlog

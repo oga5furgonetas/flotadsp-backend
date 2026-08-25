@@ -38,6 +38,11 @@ const MODULES = [
   { g: 'Equipo', items: [
     ['conductores', 'Conductores'], ['scorecard', 'Scorecard'],
     ['whc', 'Horas · WHC'], ['dsc', 'Dónde se entrega'], ['contactos', 'Contactos'],
+    // Faltaba desde que se creo la pantalla: sin casilla, `canSee('diarios')`
+    // era false para cualquiera con permisos definidos y la entrada del menu
+    // desaparecia sin decir nada. Mery tenia las 27 casillas marcadas y aun
+    // asi no la veia. Lo detecta ahora `scripts/check-permisos.mjs`.
+    ['diarios', 'DNR · Diarios'],
   ]},
   { g: 'Sistema', items: [
     ['ia-peritaje', 'IA Peritaje'], ['configuracion', 'Configuración'],
