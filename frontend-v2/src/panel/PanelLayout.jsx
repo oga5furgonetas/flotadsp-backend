@@ -56,6 +56,7 @@ const NAV_DEF = [
     { to: '/panel/inspecciones', labelKey: 'nav.inspections', icon: ClipboardList },
     { to: '/panel/incidencias', labelKey: 'nav.incidents', icon: AlertTriangle },
     { to: '/panel/talleres', labelKey: 'nav.workshops', icon: Wrench },
+    { to: '/panel/ordenes', labelKey: 'nav.ordenes', icon: Wrench },
     { to: '/panel/aparcamiento', labelKey: 'nav.parking', icon: MapPin },
     { to: '/panel/vencimientos', labelKey: 'nav.grp.expiry', icon: CalendarClock },
     { to: '/panel/importaciones', labelKey: 'nav.imports', icon: FileUp },
@@ -64,7 +65,6 @@ const NAV_DEF = [
     { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
     { to: '/panel/scorecard', labelKey: 'nav.scorecard', icon: Trophy },
     { to: '/panel/diarios', labelKey: 'nav.diarios', icon: PackageX },
-    { to: '/panel/ordenes', labelKey: 'nav.ordenes', icon: ClipboardList },
     { to: '/panel/whc', labelKey: 'nav.whc', icon: Timer },
     { to: '/panel/dsc', labelKey: 'nav.dsc', icon: MapPinned },
     { to: '/panel/contactos', labelKey: 'nav.contacts', icon: BookUser },
@@ -174,6 +174,11 @@ export default function PanelLayout() {
   const itemVisible = (it) => {
     const k = keyOf(it.to)
     if (k === 'vencimientos') return EXPIRY_KEYS.some((ek) => canSee(ek))
+    // Las órdenes de taller van con Talleres: quien puede ver los talleres
+    // puede ver lo que está en ellos. Sin esto, `canSee('ordenes')` es false
+    // para todo el que tenga permisos definidos —el permiso no existe en
+    // ninguna lista— y la entrada desaparecía del menú sin ningún error.
+    if (k === 'ordenes') return canSee('talleres')
     if (!SIEMPRE_VISIBLES.has(k) && !canSee(k)) return false
     const feat = ROUTE_FEATURE[k]
     if (feat && limits && limits[feat] === false) return false
@@ -194,6 +199,7 @@ export default function PanelLayout() {
     // menú la enseña, la ruta abre; si el menú la esconde, la ruta no abre.
     if (SIEMPRE_VISIBLES.has(k)) return true
     if (k === 'vencimientos') return EXPIRY_KEYS.some((ek) => canSee(ek))
+    if (k === 'ordenes') return canSee('talleres')
     if (k === 'admin' || k === 'bandeja') return sa
     if (k === 'usuarios') return sa || cm
     return canSee(k)
