@@ -31,14 +31,26 @@ function RevisionExpres({ center, alCerrar, alGuardar }) {
   const [hechas, setHechas] = useState(0)
   const [ocupado, setOcupado] = useState(false)
   const [err, setErr] = useState('')
+  const [descartados, setDescartados] = useState(0)
 
   useEffect(() => {
     iaParaRevisar(center, 25)
-      .then((r) => { setLista(r.data?.pendientes || []); setTotal(r.data?.total_sin_revisar || 0) })
+      .then((r) => {
+        setLista(r.data?.pendientes || [])
+        setTotal(r.data?.total_sin_revisar || 0)
+        setDescartados(r.data?.no_validables || 0)
+      })
       .catch(() => setLista([]))
   }, [center])
 
-  const actual = lista?.[i]
+  /* DEFENSA EN PROFUNDIDAD. El backend ya filtra lo que no se puede juzgar,
+     pero esta pantalla no puede fiarse: preguntar por un daño sin señalar
+     donde esta es peor que no preguntar —quien revisa contesta "no existe"
+     porque no lo ve, y esa respuesta entra en el aprendizaje como un falso
+     positivo que no lo es—. Si llega uno sin recuadro utilizable, se salta. */
+  const cajaValida = (b) => Array.isArray(b) && b.length === 4
+    && b.every((x) => typeof x === 'number') && b[2] > b[0] && b[3] > b[1]
+  const actual = (lista || []).slice(i).find((x) => x.foto && cajaValida(x.box))
 
   const responder = async (verdict) => {
     if (!actual || ocupado) return
@@ -48,7 +60,9 @@ function RevisionExpres({ center, alCerrar, alGuardar }) {
         verdict, damage_index: actual.damage_index, scope: actual.scope || 'new',
       })
       setHechas((n) => n + 1)
-      setI((n) => n + 1)
+      // Se avanza desde la posicion del que se acaba de contestar, que no
+      // tiene por que ser `i` si por el camino se salto alguno.
+      setI((lista || []).findIndex((x) => x === actual) + 1)
       alGuardar?.()
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se pudo guardar. Inténtalo otra vez.')
@@ -82,7 +96,7 @@ function RevisionExpres({ center, alCerrar, alGuardar }) {
         <span className="text-sm font-semibold text-dark-100">Revisión exprés</span>
         {!!hechas && <span className="text-[13px] text-emerald-400">{hechas} revisadas</span>}
         <span className="ml-auto text-[13px] text-dark-500">
-          {lista ? `${Math.min(i + 1, lista.length)} de ${lista.length}` : ''}
+          {lista ? `${hechas + 1} de ${(lista || []).filter((x) => x.foto && cajaValida(x.box)).length}` : ''}
           {total > (lista?.length || 0) && ` · ${total} sin revisar`}
         </span>
         <button onClick={alCerrar} className="text-dark-400 hover:text-dark-100"><X size={20} /></button>
@@ -99,6 +113,12 @@ function RevisionExpres({ center, alCerrar, alGuardar }) {
             </p>
             {total > hechas && (
               <p className="mt-1 text-[13px] text-dark-400">Quedan {total - hechas} para otro rato.</p>
+            )}
+            {!!descartados && (
+              <p className="mx-auto mt-3 max-w-xs text-[12.5px] leading-relaxed text-dark-500">
+                Otros {descartados} daños no se preguntan aquí: la IA no dijo en qué foto
+                están ni marcó dónde, así que no se pueden confirmar de un vistazo.
+              </p>
             )}
             <button onClick={alCerrar} className="btn-primary mt-4 text-sm">Cerrar</button>
           </div>

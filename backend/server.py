@@ -2178,6 +2178,27 @@ Repasa tu lista de daños UNA POR UNA y elimina las entradas que no superen TODA
 Es MEJOR devolver 1 daño cierto que 5 dudosos: cada falso positivo cuesta tiempo de revisión
 y credibilidad. Un vehículo limpio y sin daños con "sin_danos" es una respuesta perfectamente válida.
 
+=== SI NO PUEDES SEÑALARLO, NO LO REPORTES ===
+Todo daño de "new_damages" y "damages" DEBE llevar `photo_index` (en que foto
+se ve, empezando en 1) y `box_2d` (el rectangulo donde esta). Los dos. No son
+campos opcionales ni decorativos: sin ellos NADIE puede comprobar lo que
+dices, ni el mecanico ni quien revisa, y un daño que nadie puede comprobar no
+sirve para nada — vale menos que no haberlo reportado, porque hace perder el
+tiempo a alguien.
+
+Medido en esta flota: el 45 % de tus hallazgos llegaban sin `photo_index` ni
+`box_2d`, y uno de ellos decia "testigo de presion encendido en el cuadro de
+instrumentos" sobre un vehiculo del que solo hay fotos EXTERIORES. Eso no es
+un daño detectado: es una suposicion.
+
+Regla, sin excepciones:
+  · Si ves el daño -> di en que foto y marca el rectangulo.
+  · Si crees que hay algo pero no puedes señalarlo en ninguna foto -> NO va
+    en "new_damages". Va en "zonas_no_evaluables", que es exactamente para eso.
+  · Y NUNCA reportes nada que no se pueda ver en las fotos que te han dado:
+    testigos del salpicadero, niveles, ruidos o averias mecanicas no salen en
+    una foto exterior. Si no esta en la imagen, no existe para ti.
+
 === TIENES UNA TERCERA SALIDA: "NO LO PUEDO JUZGAR" ===
 Hasta ahora solo podías reportar un daño o callarte, y ante una foto mala lo
 barato era reportar por si acaso. Eso se acabó: si una zona NO se puede
@@ -12774,15 +12795,40 @@ async def ia_para_revisar(limit: int = 20, center: Optional[str] = None,
         {"id": {"$in": vids}}, {"_id": 0, "id": 1, "license_plate": 1})}
 
     sueltos = []
+    # Lo que se descarta y POR QUE. No se esconde: que casi la mitad de los
+    # hallazgos de la IA lleguen sin señalar donde estan es en si mismo el
+    # dato mas importante de esta pantalla.
+    descartes = {"sin_foto": 0, "sin_recuadro": 0, "recuadro_invalido": 0}
+
     for insp in inspecciones:
         fotos = insp.get("photos") or []
         for idx, dmg in enumerate((insp.get("analysis") or {}).get("new_damages") or []):
             if not isinstance(dmg, dict) or (insp["id"], idx) in ya:
                 continue
+
+            # ── REGLA DURA: si no se puede señalar QUE mirar, no se pregunta.
+            # Antes, un daño sin `photo_index` caia en `fotos[0]` y se enseñaba
+            # esa foto como si fuera la evidencia. Eso es mentir al que revisa
+            # y envenenar el aprendizaje con su respuesta.
             pi = dmg.get("photo_index")
-            foto = fotos[pi - 1] if (isinstance(pi, int) and 1 <= pi <= len(fotos)) else (fotos[0] if fotos else None)
-            if not foto:
-                continue                      # sin foto no hay nada que juzgar
+            if not (isinstance(pi, int) and 1 <= pi <= len(fotos)):
+                descartes["sin_foto"] += 1
+                continue
+            caja = dmg.get("box_2d")
+            if not (isinstance(caja, (list, tuple)) and len(caja) == 4
+                    and all(isinstance(x, (int, float)) for x in caja)):
+                descartes["sin_recuadro"] += 1
+                continue
+            # [ymin, xmin, ymax, xmax] 0-1000. Un recuadro de area cero o
+            # invertido no señala nada, y uno que ocupa casi toda la foto
+            # tampoco: "esta en algun sitio de la furgoneta" no es una pista.
+            y0, x0, y1, x1 = caja
+            alto, ancho = y1 - y0, x1 - x0
+            if alto <= 0 or ancho <= 0 or (alto / 1000.0) * (ancho / 1000.0) > 0.75:
+                descartes["recuadro_invalido"] += 1
+                continue
+
+            foto = fotos[pi - 1]
             pieza = str(dmg.get("part") or "").strip()
             sueltos.append({
                 "inspection_id": insp["id"], "damage_index": idx, "scope": "new",
@@ -12790,7 +12836,7 @@ async def ia_para_revisar(limit: int = 20, center: Optional[str] = None,
                 "foto": foto, "pieza": pieza,
                 "severidad": dmg.get("severity"),
                 "descripcion": dmg.get("description"),
-                "box": dmg.get("box_2d"),
+                "box": caja,
                 "confianza": dmg.get("confidence"),
                 "fecha": (insp.get("created_at") or "")[:10],
                 # Lo que sabemos ya de esa pieza. Se manda para poder decir en
@@ -12799,7 +12845,15 @@ async def ia_para_revisar(limit: int = 20, center: Optional[str] = None,
             })
 
     sueltos.sort(key=lambda x: (x["validaciones_pieza"], x["fecha"]))
-    return {"pendientes": sueltos[:limit], "total_sin_revisar": len(sueltos)}
+    return {
+        "pendientes": sueltos[:limit],
+        "total_sin_revisar": len(sueltos),
+        # Lo descartado va en la respuesta a proposito: es una medida de la
+        # calidad de la IA, no basura que ocultar. Si este numero es alto, el
+        # problema no es la cola — es que la IA no esta diciendo donde mira.
+        "no_validables": sum(descartes.values()),
+        "descartes": descartes,
+    }
 
 
 @api_router.get("/ai/autoexamen")
