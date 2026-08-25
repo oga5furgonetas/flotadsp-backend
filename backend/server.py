@@ -12287,10 +12287,10 @@ def _provider_matches(workshop: dict, provider: str) -> bool:
 
 OT_ESTADOS = {
     "abierta": "Abierta",
-    "recibido": "Vehiculo recibido",
+    "recibido": "Vehículo recibido",
     "diagnostico": "Diagnosticando",
     "esperando_piezas": "Esperando piezas",
-    "reparando": "En reparacion",
+    "reparando": "En reparación",
     "listo": "Listo para recoger",
     "entregado": "Entregado",
     "anulada": "Anulada",
@@ -12388,6 +12388,8 @@ async def _ot_publica(orden: dict) -> dict:
         "descripcion_trabajo": orden.get("descripcion_trabajo"),
         "fecha_entrada": orden.get("fecha_entrada"),
         "fecha_entrega_estimada": orden.get("fecha_entrega_estimada"),
+        "motivo_retraso": orden.get("motivo_retraso"),
+        "motivos": [{"id": k, "txt": v} for k, v in OT_MOTIVOS.items()],
         "importe_estimado": orden.get("importe_estimado"),
         "importe_final": orden.get("importe_final"),
         "presupuesto": orden.get("presupuesto", "sin_presupuesto"),
@@ -12867,26 +12869,69 @@ async def portal_taller_estado(token: str, data: dict = Body(...)):
     return await _ot_publica(await db.ordenes_trabajo.find_one({"id": orden["id"]}, {"_id": 0}))
 
 
+# Motivos de retraso, en un toque. Escribir con las manos sucias y el movil
+# en una mano no lo hace nadie: si el motivo hay que teclearlo, no se pone, y
+# entonces la oficina llama para preguntar "¿por que?" — que es justo la
+# llamada que sobra. Con cuatro botones se pone siempre.
+OT_MOTIVOS = {
+    "pieza": "Falta una pieza",
+    "mas_trabajo": "Ha salido más trabajo del previsto",
+    "saturado": "El taller va cargado",
+    "espera_ok": "Esperando que aprobéis el presupuesto",
+    "otro": "Otro motivo",
+}
+
+
 @api_router.post("/taller/{token}/entrega")
 async def portal_taller_entrega(token: str, data: dict = Body(...)):
+    """La fecha de entrega, que es el dato que MAS se mueve.
+
+    Este endpoint se llama muchas veces sobre la misma orden y eso no es un
+    fallo: el taller dice el martes, llega el martes, falta una pieza y hay
+    que decir el jueves. Que rehacerlo sea facil es la diferencia entre que lo
+    actualicen o que descuelguen el telefono.
+    """
     _ot_freno(token)
     orden = await _ot_por_token(token)
     _ot_puede_escribir(orden)
     f = _ot_fecha_valida(data.get("fecha"))
     if not f:
         raise HTTPException(400, "Dinos la fecha en formato AAAA-MM-DD")
+
+    motivo = OT_MOTIVOS.get(str(data.get("motivo") or ""), "")
+    detalle_libre = str(data.get("detalle") or "").strip()[:300]
     antes = orden.get("fecha_entrega_estimada")
+
+    # Cuantos dias se mueve. Decir "se retrasa 2 dias" es informacion; decir
+    # "del 2 al 4" obliga a hacer la cuenta a quien lo lee.
+    desfase = None
+    if antes and antes != f:
+        try:
+            desfase = (datetime.strptime(f, "%Y-%m-%d") - datetime.strptime(antes, "%Y-%m-%d")).days
+        except Exception:
+            desfase = None
+
+    partes = [p for p in (motivo, detalle_libre) if p]
+    if antes and antes != f:
+        que = "Entrega: %s (antes %s)" % (f, antes)
+    else:
+        que = "Fecha de entrega: " + f
+
     await db.ordenes_trabajo.update_one(
         {"id": orden["id"]},
         {"$set": {"fecha_entrega_estimada": f, "actualizada_en": _ot_ahora(),
-                   "ultima_novedad_taller": _ot_ahora()},
+                  "ultima_novedad_taller": _ot_ahora(),
+                  "motivo_retraso": motivo or detalle_libre or None},
          "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller",
-                                           "Fecha de entrega: " + f,
-                                           ("antes: " + antes) if antes and antes != f else "")}})
+                                           que, " · ".join(partes))}})
+
     # Un retraso es exactamente la llamada que este modulo venia a quitar:
     # si la fecha se mueve, se avisa. Si se pone por primera vez, no.
     if antes and antes != f:
-        await _ot_avisa(orden, "La entrega se mueve del %s al %s" % (antes, f))
+        cuanto = ("se retrasa %d dias" % desfase) if desfase and desfase > 0 else (
+            "se adelanta %d dias" % abs(desfase)) if desfase else "cambia"
+        await _ot_avisa(orden, "La entrega %s: del %s al %s%s"
+                        % (cuanto, antes, f, (" — " + " · ".join(partes)) if partes else ""))
     return await _ot_publica(await db.ordenes_trabajo.find_one({"id": orden["id"]}, {"_id": 0}))
 
 

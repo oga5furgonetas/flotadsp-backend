@@ -7,6 +7,15 @@ import { Link } from 'react-router-dom'
 export default function CookieBanner() {
   const [show, setShow] = useState(false)
   useEffect(() => {
+    /* EN EL PORTAL DEL TALLER, NO.
+       Esa pantalla no guarda absolutamente nada —no hay sesion, no hay
+       preferencias, el token va en la URL— asi que no hay nada que informar.
+       Y sobre todo: quien la abre es un mecanico al que le acaba de llegar un
+       enlace por WhatsApp; encontrarse un aviso legal tapando media pantalla
+       antes de poder tocar nada es exactamente la excusa para cerrar y llamar
+       por telefono, que es lo que esa pantalla venia a evitar. Comprobado en
+       staging: el banner tapaba los botones y bloqueaba el scroll. */
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/taller/')) return
     try { if (!localStorage.getItem('cookie_consent')) setShow(true) } catch {}
   }, [])
   function accept() {

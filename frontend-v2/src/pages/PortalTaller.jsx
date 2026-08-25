@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import axios from 'axios'
 import { useParams } from 'react-router-dom'
 import {
-  Loader2, Camera, Check, Calendar, Euro, MessageSquare, Wrench, AlertTriangle,
+  Loader2, Camera, Check, Euro, MessageSquare, Wrench, AlertTriangle,
+  CalendarClock,
 } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
 
@@ -36,6 +37,32 @@ const COLOR_ESTADO = {
 const eur = (n) => (n == null ? null
   : new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n))
 
+const DIAS = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado']
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
+  'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre']
+
+/* "martes 2 de septiembre" y no "2026-09-02". Quien lee esto está de pie al
+   lado de una furgoneta, no delante de una hoja de cálculo. */
+const enCristiano = (iso) => {
+  if (!iso) return ''
+  const d = new Date(iso + 'T12:00:00')
+  if (Number.isNaN(d.getTime())) return iso
+  return `${DIAS[d.getDay()]} ${d.getDate()} de ${MESES[d.getMonth()]}`
+}
+
+const hoyIso = () => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/* Suma días a una fecha SIN pasar por UTC: `toISOString()` sobre una fecha
+   local corre el día en España y la promesa saldría un día antes. */
+const masDias = (iso, n) => {
+  const base = iso ? new Date(iso + 'T12:00:00') : new Date()
+  base.setDate(base.getDate() + n)
+  return `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-${String(base.getDate()).padStart(2, '0')}`
+}
+
 const cuando = (iso) => {
   if (!iso) return ''
   const d = new Date(iso)
@@ -51,6 +78,11 @@ export default function PortalTaller() {
   const [ocupado, setOcupado] = useState('')
 
   const [fecha, setFecha] = useState('')
+  /* El bloque de fecha tiene dos momentos: enseñar lo prometido, y cambiarlo.
+     Mezclarlos en un formulario siempre abierto hacía que no se viera lo que
+     habías dicho, que es el dato que más se consulta. */
+  const [cambiandoFecha, setCambiandoFecha] = useState(false)
+  const [motivo, setMotivo] = useState('')
   const [importe, setImporte] = useState('')
   const [detalle, setDetalle] = useState('')
   const [nota, setNota] = useState('')
@@ -173,7 +205,132 @@ export default function PortalTaller() {
           </section>
         )}
 
-        {/* ── 1. Estado ── */}
+        {/* ── 1. Para cuándo ── */}
+        {!bloqueada && (
+          <section className={`card p-4 ${
+            orden.fecha_entrega_estimada && orden.fecha_entrega_estimada < hoyIso()
+              ? 'border-amber-500/50' : ''}`}>
+            <h2 className="mb-3 flex items-center gap-2 text-[15px] font-bold text-dark-100">
+              <CalendarClock size={17} className="text-brand-400" /> ¿Para cuándo estará?
+            </h2>
+
+            {/* LO PROMETIDO, GRANDE. Es lo que se viene a consultar, y hasta
+                ahora estaba escondido dentro de un campo de formulario. */}
+            {orden.fecha_entrega_estimada && !cambiandoFecha && (
+              <>
+                <p className="text-[13px] text-dark-500">Dijisteis que estaría el</p>
+                <p className="text-[24px] font-bold leading-tight text-dark-50">
+                  {enCristiano(orden.fecha_entrega_estimada)}
+                </p>
+                {orden.motivo_retraso && (
+                  <p className="mt-1 text-[13px] text-amber-300/90">{orden.motivo_retraso}</p>
+                )}
+                {orden.fecha_entrega_estimada < hoyIso() && (
+                  <p className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/[0.08] px-3 py-2 text-[13.5px] text-amber-200">
+                    Esa fecha ya pasó. Si se ha retrasado, dínoslo aquí y nos ahorramos la llamada.
+                  </p>
+                )}
+
+                {/* Los tres atajos de retraso. Un toque, sin teclado. */}
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  {[['Un día más', 1], ['Dos días', 2], ['Una semana', 7]].map(([txt, n]) => (
+                    <button
+                      key={n}
+                      disabled={!!ocupado}
+                      onClick={() => {
+                        const base = orden.fecha_entrega_estimada < hoyIso()
+                          ? hoyIso() : orden.fecha_entrega_estimada
+                        setFecha(masDias(base, n))
+                        setCambiandoFecha(true)
+                      }}
+                      className="rounded-xl border border-dark-700 bg-dark-900 py-3 text-[14px] font-semibold text-dark-200 disabled:opacity-50"
+                    >
+                      +{txt}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => { setFecha(orden.fecha_entrega_estimada); setCambiandoFecha(true) }}
+                  className="mt-2 w-full rounded-xl border border-dark-800 py-2.5 text-[13.5px] font-semibold text-dark-400"
+                >
+                  Poner otra fecha
+                </button>
+              </>
+            )}
+
+            {/* Primera vez, o cambiándola */}
+            {(!orden.fecha_entrega_estimada || cambiandoFecha) && (
+              <>
+                {!orden.fecha_entrega_estimada && (
+                  <p className="mb-3 text-[13px] text-dark-500">
+                    Es lo que más nos ayuda. Y si luego cambia, se cambia aquí — no pasa nada.
+                  </p>
+                )}
+                {cambiandoFecha && orden.fecha_entrega_estimada && (
+                  <p className="mb-2 text-[13px] text-dark-500">
+                    Antes: {enCristiano(orden.fecha_entrega_estimada)}
+                  </p>
+                )}
+                <input
+                  type="date" value={fecha} min={hoyIso()}
+                  onChange={(e) => setFecha(e.target.value)}
+                  className="mb-1 w-full rounded-lg border border-dark-700 bg-dark-900 px-3 py-3 text-[17px] text-dark-100"
+                />
+                {fecha && (
+                  <p className="mb-3 text-[14px] font-semibold text-brand-300">
+                    {enCristiano(fecha)}
+                  </p>
+                )}
+
+                {/* El motivo, solo si es un CAMBIO: la primera vez nadie tiene
+                    que justificar nada. */}
+                {cambiandoFecha && orden.fecha_entrega_estimada && (
+                  <>
+                    <p className="mb-1.5 text-[12.5px] text-dark-500">¿Por qué? (opcional)</p>
+                    <div className="mb-3 flex flex-wrap gap-1.5">
+                      {(orden.motivos || []).map((m) => (
+                        <button
+                          key={m.id}
+                          onClick={() => setMotivo(motivo === m.id ? '' : m.id)}
+                          className={`rounded-full border px-3 py-1.5 text-[13px] font-semibold ${
+                            motivo === m.id
+                              ? 'border-brand-500 bg-brand-500/15 text-brand-200'
+                              : 'border-dark-700 text-dark-400'}`}
+                        >
+                          {m.txt}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                <div className="flex gap-2">
+                  <button
+                    disabled={!fecha || ocupado === 'fecha'}
+                    onClick={async () => {
+                      const ok = await enviar('fecha', 'entrega', { fecha, motivo },
+                        'Apuntado. La oficina ya lo sabe, no hace falta que llaméis.')
+                      if (ok) { setCambiandoFecha(false); setMotivo('') }
+                    }}
+                    className="btn-primary flex-1 py-3 text-[15px] disabled:opacity-40"
+                  >
+                    {ocupado === 'fecha' ? <Loader2 size={17} className="animate-spin" /> : 'Confirmar fecha'}
+                  </button>
+                  {cambiandoFecha && (
+                    <button
+                      onClick={() => { setCambiandoFecha(false); setMotivo('') }}
+                      className="rounded-lg border border-dark-700 px-4 text-[14px] font-semibold text-dark-400"
+                    >
+                      Cancelar
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </section>
+        )}
+
+        {/* ── 2. Estado ── */}
         {!bloqueada && (
           <section className="card p-4">
             <h2 className="mb-3 flex items-center gap-2 text-[15px] font-bold text-dark-100">
@@ -200,31 +357,6 @@ export default function PortalTaller() {
                   </button>
                 )
               })}
-            </div>
-          </section>
-        )}
-
-        {/* ── 2. Para cuándo ── */}
-        {!bloqueada && (
-          <section className="card p-4">
-            <h2 className="mb-1 flex items-center gap-2 text-[15px] font-bold text-dark-100">
-              <Calendar size={17} className="text-brand-400" /> ¿Para cuándo estará?
-            </h2>
-            <p className="mb-3 text-[13px] text-dark-500">
-              Es lo que más nos ayuda. Si se retrasa, cámbialo aquí y nos enteramos solos.
-            </p>
-            <div className="flex gap-2">
-              <input
-                type="date" value={fecha} onChange={(e) => setFecha(e.target.value)}
-                className="flex-1 rounded-lg border border-dark-700 bg-dark-900 px-3 py-3 text-[16px] text-dark-100"
-              />
-              <button
-                disabled={!fecha || ocupado === 'fecha'}
-                onClick={() => enviar('fecha', 'entrega', { fecha }, 'Fecha enviada. Gracias.')}
-                className="btn-primary px-5 text-[15px] disabled:opacity-40"
-              >
-                {ocupado === 'fecha' ? <Loader2 size={17} className="animate-spin" /> : 'Enviar'}
-              </button>
             </div>
           </section>
         )}
