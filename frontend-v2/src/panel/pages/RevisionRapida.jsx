@@ -3,14 +3,150 @@ import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
   Loader2, CheckCircle2, Check, X, ChevronLeft, ChevronRight, User, Clock,
-  AlertTriangle, BrainCircuit, Pencil, Plus, FileText,
+  AlertTriangle, BrainCircuit, Pencil, Plus, FileText, TrendingUp, EyeOff,
 } from 'lucide-react'
-import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback, fetchAuthedBlob } from '../api'
+import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback, fetchAuthedBlob, autoexamenIA } from '../api'
 import PolygonEditor from '../components/PolygonEditor'
 import BboxEditor from '../components/BboxEditor'
 import CompareSlider from '../components/CompareSlider'
 
 const GOAL = 3000
+
+/* AUTOEXAMEN DE LA IA
+   ─────────────────────────────────────────────────────────────────────────
+   La tarjeta que habia aqui solo contaba ejemplos hacia una meta de 3.000.
+   Eso dice cuanto has trabajado TU, no si la IA esta mejorando: se puede
+   llegar a 3.000 con la IA acertando cada vez menos y la barra se veria
+   igual de llena.
+
+   Esto enseña lo otro —si acierta, donde falla y si la tendencia sube o
+   baja— y enseña tambien la letra pequeña, porque un porcentaje sin su
+   contexto es peor que no tener ninguno: aqui solo se mide lo REVISADO, y
+   se revisa sobre todo cuando la IA reporta algo. */
+function Autoexamen({ datos, total }) {
+  const [abierto, setAbierto] = useState(false)
+  if (!datos) return null
+
+  const cob = datos.cobertura || {}
+  const sinSenal = (cob.porcentaje ?? 100) < 5
+  // Semanas con menos de 5 revisiones no se pintan: con 2 casos, uno solo
+  // mueve el porcentaje 50 puntos y la linea contaria una historia falsa.
+  const ult = (datos.tendencia || []).filter((x) => x.total >= 5).slice(-8)
+  const pct = (k) => Math.round((100 * (datos.global?.[k] || 0)) / Math.max(1, datos.revisadas))
+
+  return (
+    <div className="card mb-4 border-violet-500/30 bg-violet-500/5 p-4">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <span className="flex items-center gap-2 text-sm font-semibold text-violet-300">
+          <BrainCircuit size={16} /> Cómo lo está haciendo la IA
+        </span>
+        <span className="text-sm font-bold text-dark-100">
+          {total} / {GOAL.toLocaleString('es-ES')} ejemplos
+        </span>
+      </div>
+      <div className="mb-3 h-2 overflow-hidden rounded-full bg-dark-800">
+        <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500"
+          style={{ width: `${Math.min(100, (total / GOAL) * 100)}%` }} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {[
+          ['Acierta', datos.acierto == null ? '—' : `${datos.acierto}%`, 'de lo que reporta'],
+          ['Se inventa', `${pct('wrong')}%`, 'daños que no están'],
+          ['Se le escapan', `${pct('missed')}%`, 'daños reales'],
+          ['Dice «sin daños»', `${datos.cuando_calla?.porcentaje ?? '—'}%`, 'de las inspecciones'],
+        ].map(([k, v, pie]) => (
+          <div key={k}>
+            <p className="text-[10.5px] uppercase tracking-wider text-dark-500">{k}</p>
+            <p className="text-[22px] font-bold leading-none tabular-nums text-dark-50">{v}</p>
+            <p className="text-[11px] leading-tight text-dark-600">{pie}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Sin señal no hay aprendizaje posible. Es lo más importante de la
+          tarjeta, así que va en rojo y por delante del detalle. */}
+      {sinSenal && (
+        <p className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/[0.08] px-3 py-2 text-[12.5px] leading-snug text-red-200">
+          <EyeOff size={15} className="mt-0.5 flex-none" />
+          Solo se revisa el {cob.porcentaje}% de las inspecciones ({cob.revisadas_30d} de{' '}
+          {cob.inspecciones_30d} en 30 días). Sin revisiones la IA no aprende nada nuevo.
+        </p>
+      )}
+
+      <button onClick={() => setAbierto((v) => !v)}
+        className="mt-3 text-[12.5px] font-semibold text-violet-300 hover:text-violet-200">
+        {abierto ? 'Ocultar detalle' : 'Ver en qué falla'}
+      </button>
+
+      {abierto && (
+        <div className="mt-3 space-y-4 border-t border-white/[0.07] pt-3">
+          {!!ult.length && (
+            <div>
+              <p className="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-dark-500">
+                <TrendingUp size={12} /> Acierto por semana
+              </p>
+              <div className="flex items-end gap-1.5" style={{ height: 68 }}>
+                {ult.map((s) => (
+                  <div key={s.semana} className="flex flex-1 flex-col justify-end text-center"
+                    title={`${s.semana}: ${s.acierto}% sobre ${s.total} revisiones`}>
+                    <div className="w-full rounded-t bg-violet-500/70"
+                      style={{ height: `${Math.max(3, s.acierto * 0.5)}px` }} />
+                    <p className="mt-1 text-[10px] tabular-nums text-dark-600">{s.acierto}%</p>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-1 text-[11px] text-dark-600">
+                Solo semanas con 5 o más revisiones: con menos, un caso mueve el porcentaje 20 puntos.
+              </p>
+            </div>
+          )}
+
+          {!!(datos.piezas || []).length && (
+            <div>
+              <p className="mb-2 text-[11px] uppercase tracking-wider text-dark-500">
+                Dónde más se equivoca
+              </p>
+              <ul className="space-y-1">
+                {datos.piezas.slice(0, 6).map((p) => {
+                  /* Cada pieza falla a SU manera y hay que decir cuál. Un
+                     "0 inventados / 0% ok" hacía parecer pésima a una pieza
+                     cuyo problema es justo el contrario: que se le escapan. */
+                  const inventa = p.wrong >= p.missed
+                  const juzgadas = p.correct + p.wrong
+                  return (
+                    <li key={p.pieza} className="flex items-center gap-2 text-[12.5px]">
+                      <span className="flex-1 truncate capitalize text-dark-300">{p.pieza}</span>
+                      <span className={`tabular-nums ${inventa ? 'text-red-300' : 'text-amber-300'}`}>
+                        {inventa ? `${p.wrong} inventados` : `${p.missed} se le escapan`}
+                      </span>
+                      <span className="w-16 text-right tabular-nums text-dark-500">
+                        {juzgadas ? `${p.acierto}% ok` : '—'}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
+
+          {!!Object.keys(datos.no_evaluables || {}).length && (
+            <div>
+              <p className="mb-1.5 text-[11px] uppercase tracking-wider text-dark-500">
+                Fotos que no ha podido juzgar
+              </p>
+              <p className="text-[12.5px] text-dark-300">
+                {Object.entries(datos.no_evaluables).map(([m, n]) => `${m}: ${n}`).join(' · ')}
+              </p>
+            </div>
+          )}
+
+          <p className="text-[11.5px] leading-relaxed text-dark-500">{datos.aviso}</p>
+        </div>
+      )}
+    </div>
+  )
+}
 
 const SEV_CLS = {
   leve: 'bg-amber-500/20 text-amber-300', moderado: 'bg-orange-500/20 text-orange-300',
@@ -44,6 +180,7 @@ export default function RevisionRapida() {
   const [compareMode, setCompareMode] = useState(false)     // slider antes/después vs referencia
   const [partName, setPartName] = useState('')
   const [filterIA, setFilterIA] = useState(false)
+  const [autoex, setAutoex] = useState(null)
   // Modal editor de polígono/bbox
   const [polyEdit, setPolyEdit] = useState(null) // { dmgIndex, damage, photoUrl, editorMode }
   const [polyEditorMode, setPolyEditorMode] = useState('polygon') // 'bbox' | 'polygon'
@@ -51,6 +188,9 @@ export default function RevisionRapida() {
 
   const loadStats = useCallback(() => {
     getAiDatasetStats().then((r) => setStats(r.data)).catch(() => {})
+    // Que falle el autoexamen no puede dejar a nadie sin cola de revision:
+    // es informacion de apoyo, no el trabajo.
+    autoexamenIA().then((r) => setAutoex(r.data)).catch(() => {})
   }, [])
 
   // Calcular item actual antes de cualquier return para poder usar hooks
@@ -217,19 +357,7 @@ export default function RevisionRapida() {
         </div>
       </header>
 
-      {/* Entrenando tu IA */}
-      <div className="card mb-4 border-violet-500/30 bg-violet-500/5 p-4">
-        <div className="mb-2 flex items-center justify-between">
-          <span className="flex items-center gap-2 text-sm font-semibold text-violet-300">
-            <BrainCircuit size={16} /> {t('rev.ai.training')}
-          </span>
-          <span className="text-sm font-bold">{total} / {GOAL.toLocaleString('es-ES')} {t('rev.ai.examples')}</span>
-        </div>
-        <div className="h-2 overflow-hidden rounded-full bg-dark-800">
-          <div className="h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500" style={{ width: `${Math.min(100, (total / GOAL) * 100)}%` }} />
-        </div>
-        <p className="mt-2 text-xs text-dark-400">{t('rev.ai.training.hint').replace('{goal}', GOAL.toLocaleString('es-ES'))}</p>
-      </div>
+      <Autoexamen datos={autoex} total={total} />
 
       {queue.length === 0 ? (
         <div className="card flex flex-col items-center gap-2 p-12 text-center text-dark-300">

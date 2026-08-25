@@ -94,6 +94,8 @@ export const getInspections = (params = {}) => api.get('/inspections', { params 
 export const getInspection = (id) => api.get(`/inspections/${id}`)
 export const getReviewQueue = (center) => api.get('/inspections/review-queue', { params: centerParam(center) })
 export const getAiDatasetStats = () => api.get('/ai-dataset/stats')
+// Como de bien lo esta haciendo la IA, medido con las validaciones humanas.
+export const autoexamenIA = () => api.get('/ai/autoexamen')
 export const markReviewed = (id) => api.post(`/inspections/${id}/mark-reviewed`)
 export const damageFeedback = (id, body) => api.post(`/inspections/${id}/damage-feedback`, body)
 export const missedDamage = (id, body) => api.post(`/inspections/${id}/missed-damage`, body)

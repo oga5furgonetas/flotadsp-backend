@@ -277,8 +277,15 @@ async def get_part_lesson(db, part: str) -> str:
     historial humano de esa pieza (falsos positivos vs aciertos vs escapados)."""
     if not (part or "").strip():
         return ""
-    token = re.escape(part.split()[0])
-    q = {"damage.part": {"$regex": token, "$options": "i"}}
+    # LA PIEZA ENTERA, NO SU PRIMERA PALABRA.
+    # Antes se buscaba `part.split()[0]`, asi que la leccion de "paragolpes
+    # trasero" contaba tambien el delantero —y la de cualquier puerta sumaba
+    # las seis—. Medido en produccion el 25-08-2026: al prompt le llegaba
+    # "200 falsos positivos" cuando los reales de esa pieza eran 93.
+    # No es un detalle: la leccion por pieza existe justo para distinguir
+    # unas piezas de otras, y asi las estaba mezclando todas.
+    q = {"damage.part": {"$regex": "^\\s*" + re.escape((part or "").strip()) + "\\s*$",
+                         "$options": "i"}}
     wrong = await db.ai_feedback.count_documents({**q, "verdict": "wrong"})
     correct = await db.ai_feedback.count_documents({**q, "verdict": "correct"})
     missed = await db.ai_feedback.count_documents({**q, "verdict": "missed"})

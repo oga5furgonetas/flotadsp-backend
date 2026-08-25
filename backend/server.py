@@ -501,6 +501,10 @@ class InspectionAnalysis(BaseModel):
     confidence: float = 0.0
     executive_summary: str = ""
     image_quality_warnings: List[str] = []
+    # Zonas que la IA declara que NO puede juzgar. Ni daño ni limpio: "hace
+    # falta otra foto". Es la tercera salida que le faltaba y que la empujaba
+    # a inventarse daños ante una foto mala.
+    zonas_no_evaluables: List[dict] = []
     affected_parts: List[str] = []
     critical_damages: list = []
     new_damages: List[Damage] = []
@@ -2174,6 +2178,20 @@ Repasa tu lista de daños UNA POR UNA y elimina las entradas que no superen TODA
 Es MEJOR devolver 1 daño cierto que 5 dudosos: cada falso positivo cuesta tiempo de revisión
 y credibilidad. Un vehículo limpio y sin daños con "sin_danos" es una respuesta perfectamente válida.
 
+=== TIENES UNA TERCERA SALIDA: "NO LO PUEDO JUZGAR" ===
+Hasta ahora solo podías reportar un daño o callarte, y ante una foto mala lo
+barato era reportar por si acaso. Eso se acabó: si una zona NO se puede
+evaluar —foto borrosa, oscura, demasiado lejos, la pieza tapada por otra cosa,
+o tan sucia que no se distingue pintura de barro— NO inventes un daño ahí.
+Decláralo en "zonas_no_evaluables" y sigue.
+
+Declarar una zona no evaluable NO es fallar: es la respuesta correcta y evita
+que alguien pierda el tiempo comprobando un reflejo. Una zona ahí NO cuenta
+como daño ni como vehículo limpio: cuenta como "hace falta otra foto".
+
+Formato, con motivo de la lista cerrada (nada de textos largos):
+  {"foto": 2, "zona": "paragolpes trasero", "motivo": "borrosa|oscura|lejos|tapada|sucia"}
+
 Responde ÚNICAMENTE con este JSON exacto (sin markdown, sin bloques de código, sin texto extra):
 {
   "severity": "sin_danos|leve|moderado|grave|critico",
@@ -2191,6 +2209,7 @@ Responde ÚNICAMENTE con este JSON exacto (sin markdown, sin bloques de código,
   "confidence": 0.85,
   "executive_summary": "Descripción ejecutiva clara del estado del vehículo para un no-experto",
   "image_quality_warnings": [],
+  "zonas_no_evaluables": [],
   "affected_parts": [],
   "critical_damages": [],
   "new_damages": [
@@ -3063,6 +3082,7 @@ async def analyze_images_with_gemini(
             confidence=float(data.get("confidence", 0)),
             executive_summary=str(data.get("executive_summary", "")),
             image_quality_warnings=list(data.get("image_quality_warnings", [])),
+            zonas_no_evaluables=_zonas_no_evaluables(data),
             affected_parts=list(data.get("affected_parts", [])),
             critical_damages=list(data.get("critical_damages", [])),
             new_damages=new_damages,
@@ -12234,6 +12254,34 @@ def _normalize_center_code(center_raw: Optional[str]) -> str:
     return ""
 
 
+_MOTIVOS_NO_EVALUABLE = ("borrosa", "oscura", "lejos", "tapada", "sucia")
+
+
+def _zonas_no_evaluables(data: dict) -> list:
+    """Sanea lo que devuelve la IA en `zonas_no_evaluables`.
+
+    Se filtra a una lista CERRADA de motivos y se recorta a 12 porque un LLM,
+    si le dejas, escribe parrafos: los `image_quality_warnings` que ya hay en
+    produccion son ensayos de tres lineas que nadie lee. Un motivo de una
+    palabra se puede contar, agrupar y enseñar; un parrafo no.
+    """
+    salida = []
+    for z in (data.get("zonas_no_evaluables") or [])[:12]:
+        if not isinstance(z, dict):
+            continue
+        motivo = str(z.get("motivo") or "").strip().lower()
+        if motivo not in _MOTIVOS_NO_EVALUABLE:
+            # Un motivo fuera de la lista no se tira: se guarda como "otra",
+            # porque perder el aviso seria peor que no clasificarlo.
+            motivo = "otra"
+        try:
+            foto = int(z.get("foto") or 0)
+        except (TypeError, ValueError):
+            foto = 0
+        salida.append({"foto": foto, "zona": str(z.get("zona") or "")[:80], "motivo": motivo})
+    return salida
+
+
 def _damage_category(damage: dict) -> str:
     """Infiere la categoría de trabajo necesaria a partir del daño.
     Devuelve: 'lunas' | 'mecanica' | 'chapa' (default)."""
@@ -12664,6 +12712,123 @@ async def resumen_ordenes(center: Optional[str] = None, _=Depends(require_admin)
         "presupuestos_pendientes": await db.ordenes_trabajo.count_documents(
             dict(q, presupuesto="pendiente")),
         "por_estado": por_estado,
+    }
+
+
+@api_router.get("/ai/autoexamen")
+async def ia_autoexamen(semanas: int = 12, _=Depends(require_admin)):
+    """Como de bien lo esta haciendo la IA, medido con lo que marcasteis vosotros.
+
+    Existe porque hasta ahora esto NO SE VEIA EN NINGUN SITIO: para saber si
+    la IA acierta habia que abrir una consola y agregar a mano. Y lo que no se
+    ve no se arregla — se cambian cosas del prompt sin saber si mejoran o
+    empeoran, que es exactamente como se llega a un 7 % de acierto sin que
+    salte ninguna alarma.
+
+    DOS AVISOS QUE VAN EN LA PROPIA RESPUESTA, porque sin ellos los numeros
+    se leen mal:
+      · Solo cuenta lo REVISADO. Nadie revisa las inspecciones en las que la
+        IA dijo "sin daños", asi que el porcentaje de acierto de aqui es el de
+        cuando HABLA, no el de su trabajo entero.
+      · Si la cobertura es baja, los numeros son de una muestra pequeña y
+        posiblemente sesgada. Se devuelve para poder decirlo en pantalla.
+    """
+    semanas = max(1, min(semanas, 52))
+
+    def vacio():
+        return {"correct": 0, "wrong": 0, "corrected": 0, "missed": 0}
+
+    # ── Global ────────────────────────────────────────────────────────
+    total = vacio()
+    async for g in db.ai_feedback.aggregate([
+            {"$group": {"_id": "$verdict", "n": {"$sum": 1}}}]):
+        if g["_id"] in total:
+            total[g["_id"]] = g["n"]
+    n = sum(total.values())
+
+    # ── Por pieza ─────────────────────────────────────────────────────
+    piezas: dict = {}
+    async for g in db.ai_feedback.aggregate([
+            {"$group": {"_id": {"p": {"$toLower": {"$trim": {"input": {"$ifNull": ["$damage.part", ""]}}}},
+                                "v": "$verdict"},
+                        "n": {"$sum": 1}}}]):
+        p = (g["_id"].get("p") or "").strip()
+        if not p:
+            continue
+        piezas.setdefault(p, vacio())
+        if g["_id"].get("v") in piezas[p]:
+            piezas[p][g["_id"]["v"]] = g["n"]
+
+    lista = []
+    for p, v in piezas.items():
+        tot = sum(v.values())
+        if tot < 3:              # 1 o 2 casos no son un patron, son ruido
+            continue
+        lista.append({"pieza": p, "total": tot, **v,
+                      "acierto": round(100 * v["correct"] / tot, 1)})
+    lista.sort(key=lambda x: (-x["wrong"], -x["total"]))
+
+    # ── Tendencia por semana ──────────────────────────────────────────
+    desde = (datetime.now(timezone.utc) - timedelta(weeks=semanas)).isoformat()
+    por_semana: dict = {}
+    # `for` y no `async for`: `to_list()` devuelve una LISTA, no un cursor.
+    for f in await db.ai_feedback.find(
+            {"created_at": {"$gte": desde}},
+            {"_id": 0, "created_at": 1, "verdict": 1}).to_list(20000):
+        try:
+            d = datetime.fromisoformat(str(f["created_at"]).replace("Z", "+00:00"))
+        except Exception:
+            continue
+        # Lunes de esa semana. La clave es la FECHA, no el numero de semana ISO:
+        # el numero se reinicia en enero y ordenar por el mezclaria dos años.
+        lunes = (d - timedelta(days=d.weekday())).strftime("%Y-%m-%d")
+        por_semana.setdefault(lunes, vacio())
+        if f.get("verdict") in por_semana[lunes]:
+            por_semana[lunes][f["verdict"]] += 1
+    tendencia = []
+    for k in sorted(por_semana):
+        v = por_semana[k]
+        tot = sum(v.values())
+        tendencia.append({"semana": k, "total": tot, **v,
+                          "acierto": round(100 * v["correct"] / tot, 1) if tot else 0})
+
+    # ── Cobertura: cuanto de lo que analiza llega a revisarse ─────────
+    corte30 = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    insp30 = await db.inspections.count_documents({"created_at": {"$gte": corte30}})
+    rev30 = await db.ai_feedback.count_documents({"created_at": {"$gte": corte30}})
+
+    # ── Cuando calla, ¿acierta? ───────────────────────────────────────
+    # El dato que mas se malinterpreta: la IA dice "sin daños" en la gran
+    # mayoria de inspecciones, y eso NO entra en los porcentajes de arriba.
+    con_analisis = await db.inspections.count_documents({"analysis": {"$exists": True, "$ne": None}})
+    sin_danos = await db.inspections.count_documents(
+        {"analysis.new_damages": {"$in": [None, []]}, "analysis": {"$exists": True, "$ne": None}})
+
+    # ── Zonas que la IA declara que no puede juzgar ───────────────────
+    motivos: dict = {}
+    async for g in db.inspections.aggregate([
+            {"$match": {"analysis.zonas_no_evaluables": {"$exists": True, "$ne": []}}},
+            {"$unwind": "$analysis.zonas_no_evaluables"},
+            {"$group": {"_id": "$analysis.zonas_no_evaluables.motivo", "n": {"$sum": 1}}},
+            {"$sort": {"n": -1}}]):
+        motivos[g["_id"] or "otra"] = g["n"]
+
+    return {
+        "revisadas": n,
+        "global": total,
+        "acierto": round(100 * total["correct"] / n, 1) if n else None,
+        "piezas": lista[:20],
+        "tendencia": tendencia,
+        "cobertura": {"inspecciones_30d": insp30, "revisadas_30d": rev30,
+                      "porcentaje": round(100 * rev30 / insp30, 2) if insp30 else 0},
+        "cuando_calla": {"con_analisis": con_analisis, "dijo_sin_danos": sin_danos,
+                         "porcentaje": round(100 * sin_danos / con_analisis, 1) if con_analisis else 0},
+        "no_evaluables": motivos,
+        # Se manda el aviso desde el backend para que ninguna pantalla pueda
+        # enseñar el porcentaje suelto sin la letra pequeña.
+        "aviso": ("Estos porcentajes son solo de lo REVISADO, y se revisa sobre todo "
+                  "cuando la IA reporta algo. No incluyen las inspecciones en las que "
+                  "dijo 'sin daños', que son la mayoria."),
     }
 
 
