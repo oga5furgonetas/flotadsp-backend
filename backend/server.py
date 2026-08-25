@@ -12333,15 +12333,30 @@ def _ot_apunte(quien: str, que: str, detalle: str = "") -> dict:
 
 
 def _ot_fecha_valida(v) -> Optional[str]:
-    """Acepta 'YYYY-MM-DD' y nada mas. Devuelve None si no vale."""
+    """'YYYY-MM-DD' Y ADEMAS una fecha que pueda ser de verdad.
+
+    El formato no basta. Un `<input type="date">` va emitiendo el valor a
+    medio escribir mientras se teclea, asi que llegan cosas como
+    '0002-02-02' — y eso es una fecha PERFECTAMENTE VALIDA para strptime
+    (el ano 2 existe), asi que entraba tal cual y quedaba guardada. Paso en
+    produccion el 25-08-2026: el historial de la OT-1002 tiene dos
+    "Fecha de entrega: 0002-02-02".
+
+    El rango es ancho a proposito —esta funcion valida tambien la fecha de
+    ENTRADA, que puede ser de hace meses si se registra una orden antigua—:
+    solo tiene que matar lo imposible, no acotar lo raro.
+    """
     s = str(v or "").strip()[:10]
     if len(s) != 10:
         return None
     try:
-        datetime.strptime(s, "%Y-%m-%d")
-        return s
+        d = datetime.strptime(s, "%Y-%m-%d")
     except ValueError:
         return None
+    hoy = datetime.now(timezone.utc).replace(tzinfo=None)
+    if d.year < 2015 or d > hoy + timedelta(days=365 * 5):
+        return None
+    return s
 
 
 def _ot_importe(v) -> Optional[float]:
@@ -12411,6 +12426,7 @@ async def _ot_publica(orden: dict) -> dict:
         "fecha_entrada": orden.get("fecha_entrada"),
         "fecha_entrega_estimada": orden.get("fecha_entrega_estimada"),
         "motivo_retraso": orden.get("motivo_retraso"),
+        "entrega_la_dijo_taller": bool(orden.get("entrega_la_dijo_taller")),
         "motivos": [{"id": k, "txt": v} for k, v in OT_MOTIVOS.items()],
         "importe_estimado": orden.get("importe_estimado"),
         "importe_final": orden.get("importe_final"),
@@ -13007,6 +13023,12 @@ async def portal_taller_entrega(token: str, data: dict = Body(...)):
     detalle_libre = str(data.get("detalle") or "").strip()[:300]
     antes = orden.get("fecha_entrega_estimada")
 
+    # Confirmar la fecha que ya estaba no es una novedad: sin esto cada
+    # toque metia una linea igual en el historial. En la OT-1002 salieron
+    # dos seguidas identicas y parecia que habia pasado algo dos veces.
+    if antes == f and not motivo and not detalle_libre:
+        return await _ot_publica(orden)
+
     # Cuantos dias se mueve. Decir "se retrasa 2 dias" es informacion; decir
     # "del 2 al 4" obliga a hacer la cuenta a quien lo lee.
     desfase = None
@@ -13016,6 +13038,10 @@ async def portal_taller_entrega(token: str, data: dict = Body(...)):
         except Exception:
             desfase = None
 
+    # "Otro motivo" sin explicar no informa de nada: ocupa sitio y encima
+    # parece que te han dicho algo. Solo cuenta si trae el detalle.
+    if motivo == OT_MOTIVOS["otro"] and not detalle_libre:
+        motivo = ""
     partes = [p for p in (motivo, detalle_libre) if p]
     if antes and antes != f:
         que = "Entrega: %s (antes %s)" % (f, antes)
@@ -13026,6 +13052,11 @@ async def portal_taller_entrega(token: str, data: dict = Body(...)):
         {"id": orden["id"]},
         {"$set": {"fecha_entrega_estimada": f, "actualizada_en": _ot_ahora(),
                   "ultima_novedad_taller": _ot_ahora(),
+                  # Quien la puso. La pantalla del taller decia "Dijisteis
+                  # que estaria el..." tambien cuando la fecha la habia
+                  # escrito la oficina al abrir la orden: les atribuia una
+                  # promesa que no habian hecho.
+                  "entrega_la_dijo_taller": True,
                   "motivo_retraso": motivo or detalle_libre or None},
          "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller",
                                            que, " · ".join(partes))}})
