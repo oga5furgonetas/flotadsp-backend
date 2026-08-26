@@ -81,13 +81,47 @@
         .catch(() => post({ kind: 'debug', url: `sin respuesta · ${url.replace(/^https?:\/\/[^/]+/, '').slice(0, 100)}`, count: 0, bytes: 0 }));
     } catch (_) {}
   };
+  /* ── BARRIDO ENCADENADO, NO A RELOJ FIJO ─────────────────────────────────
+     Se pide 1 ruta por segundo, asi que el barrido dura tantos segundos como
+     rutas haya. Medido en produccion sobre 30 dias: mediana 45 rutas, maximo
+     71, y 8 dias por encima de 60. Con un setInterval de 60 s, esos 8 dias
+     —los de mas volumen, 9.800 paquetes— el barrido no habria acabado cuando
+     empieza el siguiente: se solapan y las peticiones se amontonan.
+
+     Encadenando, el ritmo se adapta solo: ~65 s con 45 rutas, ~91 s con 71,
+     y nunca se pisa. El pico sigue siendo 1 req/s, que es lo unico que Cortex
+     podria notar. */
+  const PAUSA_ENTRE = 20000;   // respiro entre barridos
+  const CERROJO_MAX = 360000;  // si el cerrojo lleva 6 min puesto, algo fue mal
+  let barriendo = 0;           // marca de tiempo de inicio, 0 = libre
+
   const replay = () => {
+    /* EL VIGILANTE, ANTES QUE EL CERROJO. Un cerrojo que se queda puesto
+       —pestaña dormida, service worker reciclado a media tanda— dejaria la
+       captura muerta y EN SILENCIO, que es justo el fallo del 22-08: 712
+       paquetes sin observar y nadie enterandose hasta tres dias despues. */
+    if (barriendo && Date.now() - barriendo > CERROJO_MAX) {
+      post({ kind: 'debug', url: 'barrido atascado > 6 min · se reanuda', count: 0, bytes: 0 });
+      barriendo = 0;
+    }
+    if (barriendo) return;
+    barriendo = Date.now();
+
+    const urls = [...knownGets];
     let i = 0;
-    for (const url of knownGets) {
+    for (const url of urls) {
       setTimeout(() => syntheticFetch(url), (i++) * 1000); // 1 req/s: ritmo suave
     }
+    /* El informe de faltas viaja en el mismo tren: es la categoria "se puede
+       volver a intentar" del debrief y la unica fuente con la direccion en
+       texto. A 3 min mientras el resto va a 65 s seria lo mas mirado y lo mas
+       viejo. */
+    setTimeout(pedirInforme, i * 1000);
+
+    const dura = (i + 1) * 1000;
+    setTimeout(() => { barriendo = 0; replay(); }, dura + PAUSA_ENTRE);
   };
-  setInterval(replay, 180000); // cada 3 min
+  setTimeout(replay, 12000);   // el primero, tras dejar cargar la pagina
 
   // Descubrimiento de TODAS las rutas: de route-summaries sacamos la lista de
   // routeIds y pedimos el detalle de cada una nosotros mismos. Así se cargan
@@ -187,7 +221,9 @@
   };
   const pedirInforme = () => { const u = urlInforme(); if (u) syntheticFetch(u); };
   setTimeout(pedirInforme, 9000);      // una vez al entrar, sin agobiar la carga
-  setInterval(pedirInforme, 180000);   // y al mismo ritmo que el resto
+  /* Ya NO tiene reloj propio: lo dispara el barrido al final de cada tanda.
+     Tenerlo aparte a 180 s hacia que la pantalla mas mirada del debrief
+     ("se puede volver a intentar") fuera la que peor se refrescaba. */
 
   const RELEVANT_URL = /route|task|stop|package|parcel|delivery|itinerary|summar|scan|assign|missing|falta|reason|exception|report/i;
 
