@@ -303,6 +303,9 @@ function Conductor({ c, dia, alMarcar }) {
               <span className="text-slate-400">· {c.sin_cerrar.length} aún en la furgoneta</span>
             )}
             {c.no_salio > 0 && <span className="text-slate-400">· {c.no_salio} no salieron de la nave</span>}
+            {c.arrastrados > 0 && (
+              <span className="text-slate-400">· {c.arrastrados} arrastran de otro día</span>
+            )}
             {c.no_observado > 0 && <span className="text-slate-400">· {c.no_observado} sin observar</span>}
             <span className="tabular-nums text-slate-400">· última captura {fmtHora(c.ultima_captura)}</span>
           </div>
@@ -639,6 +642,10 @@ export default function Debrief() {
               <Kpi n={r.sin_cerrar ?? 0} et="Sigue en la furgoneta" tono="gris"
                    sub={datos?.en_curso ? 'el día no ha terminado' : 'inventario'} />
               <Kpi n={r.no_salio ?? 0} et="No salieron" tono="gris" sub="se quedaron en nave" />
+              {/* Se enseña aunque sea cero: si desapareciera sin mas, alguien
+                  echaria en falta esos paquetes y desconfiaria de la cuenta. */}
+              <Kpi n={r.arrastrados ?? 0} et="De días anteriores" tono="gris"
+                   sub="no los lleva hoy nadie" />
               <Kpi n={r.no_observado ?? 0} et="Sin observar" tono="gris" sub="no es fallo de nadie" />
             </div>
 

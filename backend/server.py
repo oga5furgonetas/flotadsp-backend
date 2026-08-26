@@ -25057,6 +25057,34 @@ def _cortex_canon_state(raw) -> str:
     return "OBSERVED"
 
 
+def _cx_estado_vigente(timeline: list):
+    """(estado, hora) del evento MAS RECIENTE POR HORA de un timeline.
+
+    No vale coger el ultimo del array: el timeline se llena con `$push` y
+    Cortex manda eventos historicos con su propia hora, asi que el orden del
+    array es el de llegada, no el de los hechos.
+
+    EMPATES. Cuando dos eventos comparten el segundo exacto —pasa una vez
+    cada tres dias, medido— gana el mas informativo para quien esta en la
+    nave: si Cortex dice que el paquete no aparece, eso es lo que hay que
+    atender aunque llegue empatado con un "se intento".
+    """
+    if not timeline:
+        return None, None
+    mejor, mejor_at = None, None
+    for e in timeline:
+        at = _cortex_parse_dt(e.get("at"))
+        if at is None:
+            continue
+        if mejor_at is None or at > mejor_at:
+            mejor, mejor_at = e, at
+        elif at == mejor_at and mejor is not None:
+            orden = {"MISSING": 3, "DELIVERED": 2, "BACK_TO_ORIGIN": 1}
+            if orden.get(e.get("state"), 0) > orden.get(mejor.get("state"), 0):
+                mejor = e
+    return (mejor or {}).get("state"), mejor_at
+
+
 def _cortex_parse_dt(v):
     if not v:
         return None
@@ -25304,6 +25332,19 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         common["service_day"] = service_day
     pkg = await db.cortex_packages.find_one({"tba": tba}, {"_id": 0})
 
+    # ¿ES ESTE EVENTO EL MAS RECIENTE QUE CONOCEMOS?
+    # Se decide aqui, una sola vez, porque hay cuatro caminos distintos mas
+    # abajo que escriben `common` y todos tienen el mismo problema: si el
+    # evento es viejo, ni su estado ni su hora pueden mandar.
+    _ult_estado, _ult_at = _cx_estado_vigente((pkg or {}).get("timeline") or [])
+    _es_el_mas_nuevo = _ult_at is None or observed_at >= _ult_at
+    if not _es_el_mas_nuevo:
+        # `updated_at` es "cuando lo vimos por ultima vez" y NO puede
+        # retroceder: es lo que alimenta la regla del hueco del cuadre del
+        # debrief, y un paquete con la hora echada atras parece llevar horas
+        # sin observarse y cambia de cajon sin que haya pasado nada.
+        common.pop("updated_at", None)
+
     # UNA FUENTE SIN ESTADO NO CREA PAQUETES, SÓLO COMPLETA LOS QUE YA HAY.
     #
     # El informe de faltas (packagesByStatus) es de donde sale la DIRECCIÓN, y
@@ -25389,6 +25430,26 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         await db.cortex_packages.update_one(
             {"tba": tba}, {"$set": meta, "$inc": {"captures_n": 1}} if meta else {"$inc": {"captures_n": 1}})
         return "same"
+    # ── UN EVENTO VIEJO NO PUEDE CAMBIAR EL ESTADO ───────────────────────────
+    # Cortex manda `recentTaskEvents` con su propia hora: una captura de las
+    # 15:00 puede traer un evento de las 10:51. Al hacer `$push` ese evento
+    # queda el ultimo del array y, con la logica anterior, pasaba a ser el
+    # estado actual — pisando un DELIVERED de las 11:36. Medido: 24 paquetes
+    # entregados en tres dias que el cuadre reclamaba al conductor.
+    #
+    # El evento se guarda igual en el historico (es informacion buena), pero
+    # el estado solo se mueve si el evento es el mas reciente que conocemos.
+    if not _es_el_mas_nuevo:
+        # Al historico si; al estado no. Y los metadatos tambien, que un
+        # evento viejo puede traer la direccion que faltaba.
+        meta = {k: v for k, v in common.items()
+                if k not in ("state", "updated_at") and v not in (None, "")}
+        await db.cortex_packages.update_one(
+            {"tba": tba},
+            {"$set": meta, "$inc": {"captures_n": 1}, "$push": {"timeline": ev}})
+        await db.cortex_events.insert_one(_cortex_evento_doc(ev, tba))
+        return "same"
+
     # Cambio de estado real → histórico + timeline
     doc = {**pkg, **common, "timeline": (pkg.get("timeline") or []) + [ev]}
     evalr = _cortex_evaluate(doc)
@@ -28049,7 +28110,8 @@ def _cx_minutos(a: str, b: str):
     return (da - dbb).total_seconds() / 60.0
 
 
-def _cx_debrief_reparto(paquetes: list, ultima_por_ruta: dict, en_curso: bool = False) -> dict:
+def _cx_debrief_reparto(paquetes: list, ultima_por_ruta: dict, en_curso: bool = False,
+                        dia: str = "") -> dict:
     """Reparte los paquetes de UN conductor en los cinco cajones.
 
     `ultima_por_ruta` es la ultima captura vista en CADA ruta. El hueco se
@@ -28063,12 +28125,30 @@ def _cx_debrief_reparto(paquetes: list, ultima_por_ruta: dict, en_curso: bool = 
     """
     cajones = {"entregados": [], "cancelados": [], "no_observado": [],
                "perdidos": [], "sin_cerrar": [], "reprogramados": [],
-               "cliente": [], "no_salio": [],
+               "cliente": [], "no_salio": [], "arrastrados": [],
                # Los cuatro que se miran de primeras
                "reintento": [], "no_entrega": [], "no_recogido": []}
     for p in paquetes:
-        st = (p.get("state") or "").upper()
+        # EL ESTADO SE LEE DEL TIMELINE, NO DEL CAMPO `state`.
+        # El campo guardado era el del ultimo evento que LLEGO, y Cortex manda
+        # eventos historicos con su propia hora: uno de las 10:51 podia pisar
+        # un DELIVERED de las 11:36. La ingesta ya no lo permite, pero los
+        # paquetes que se guardaron mal antes siguen mal en la base, y esta
+        # pantalla es la que le reclama cosas a una persona: aqui se recalcula
+        # para que este bien HOY, sin esperar a que se vuelvan a capturar ni
+        # tocar datos historicos.
+        vigente, vigente_at = _cx_estado_vigente(p.get("timeline") or [])
+        st = (vigente or p.get("state") or "").upper()
         ctx = _cx_contexto(p)
+        # ¿ARRASTRA DE OTRO DIA?
+        # El informe de faltas devuelve los paquetes que siguen pendientes de
+        # reintento, y esos vienen de dias anteriores aunque se pidan con la
+        # fecha de hoy. Medido: de 145 en los cajones de reclamar, 141 eran del
+        # mismo dia; los otros 4 tenian su ultimo evento de hace 1 a 21 dias.
+        # Un paquete cuyo ultimo movimiento fue hace tres semanas NO lo lleva
+        # hoy nadie en la furgoneta, y reclamarselo a quien llega es el peor
+        # tipo de falso positivo: el que hace que dejen de mirar la pantalla.
+        arrastra = bool(dia and vigente_at and vigente_at.strftime("%Y-%m-%d") < dia)
         fila = {
             "tba": p.get("tba"),
             "stop_id": p.get("stop_id"),
@@ -28080,6 +28160,12 @@ def _cx_debrief_reparto(paquetes: list, ultima_por_ruta: dict, en_curso: bool = 
         }
         if st == "DELIVERED":
             cajones["entregados"].append(fila)
+        elif arrastra:
+            # Aparte y sin reclamar. Se enseña para que se vea que existe: si
+            # desapareciera sin mas, alguien lo echaria en falta y desconfiaria
+            # del resto de la cuenta.
+            fila["visto_el"] = vigente_at.strftime("%Y-%m-%d")
+            cajones["arrastrados"].append(fila)
         # ── El contexto se mira ANTES que el estado ──────────────────────────
         # Un NOT_READY cuyo contexto es TR_CANCELLED es un cancelado, no un
         # paquete que reclamar. El estado se queda corto y el contexto es el
@@ -28244,7 +28330,7 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
     filas = []
     for did, pk in porconductor.items():
         rutas = sorted(rutas_de.get(did) or [])
-        caj = _cx_debrief_reparto(pk, ultima_por_ruta, en_curso)
+        caj = _cx_debrief_reparto(pk, ultima_por_ruta, en_curso, dia)
         for grupo in ("reintento", "no_entrega", "no_recogido", "perdidos", "sin_cerrar"):
             for f in caj[grupo]:
                 m = marcas.get(f"{dia}:{f['tba']}")
@@ -28286,6 +28372,7 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
             "reprogramados": caj["reprogramados"],
             "cliente": caj["cliente"],
             "no_salio": len(caj["no_salio"]),
+            "arrastrados": len(caj["arrastrados"]),
             "no_observado": len(caj["no_observado"]),
             # El contador: de N que hay que comprobar, cuantos van
             "a_comprobar": len(comprobar),
@@ -28326,6 +28413,7 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
         "reprogramados": sum(len(f["reprogramados"]) for f in filas),
         "cliente": sum(len(f["cliente"]) for f in filas),
         "no_salio": sum(f["no_salio"] for f in filas),
+        "arrastrados": sum(f["arrastrados"] for f in filas),
         "no_observado": sum(f["no_observado"] for f in filas),
         "perdidos": sum(len(f["perdidos"]) for f in filas),
         "cuadran": sum(1 for f in filas if f["cuadra"]),
