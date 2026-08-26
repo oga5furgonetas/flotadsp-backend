@@ -27993,10 +27993,18 @@ async def cortex_geo_inverso(lat: float, lng: float, _=Depends(require_admin)):
 # "no se entrego, tiene que volver" de "no lo hemos visto", porque en pantalla
 # son iguales y confundirlos significa acusar a alguien sin pruebas.
 
+# LAS CUATRO CATEGORIAS QUE SE MIRAN DE PRIMERAS.
+# Son las mismas que Cortex enseña en su propia pantalla, con sus nombres:
+# separarlas importa porque cada una se atiende distinto. Un "se puede volver
+# a intentar" vuelve a salir mañana; un "falta" es una llamada AHORA.
+CX_REINTENTO = ("ATTEMPTED",)
+CX_NO_ENTREGA = ("BACK_TO_ORIGIN", "CUSTOMER_UNAVAILABLE", "ADDRESS_NOT_FOUND",
+                 "DAMAGED", "LOCKER_ISSUE")
+CX_NO_RECOGIDO = ("UNCOLLECTED", "NOT_READY")
+CX_FALTA = ("MISSING",)
+
 # Cortex lo ha dicho: no se entrego. El conductor lo trae en la furgoneta.
-CX_DEVUELVE = ("ATTEMPTED", "CUSTOMER_UNAVAILABLE", "ADDRESS_NOT_FOUND",
-               "DAMAGED", "LOCKER_ISSUE", "UNCOLLECTED", "BACK_TO_ORIGIN",
-               "NOT_READY")
+CX_DEVUELVE = CX_REINTENTO + CX_NO_ENTREGA + CX_NO_RECOGIDO
 # Cancelado por Amazon: sale en Cortex y NO en la cuenta del conductor.
 CX_CANCELADO = ("TR_CANCELLED",)
 
@@ -28041,7 +28049,7 @@ def _cx_minutos(a: str, b: str):
     return (da - dbb).total_seconds() / 60.0
 
 
-def _cx_debrief_reparto(paquetes: list, ultima_ruta: str) -> dict:
+def _cx_debrief_reparto(paquetes: list, ultima_ruta: str, en_curso: bool = False) -> dict:
     """Reparte los paquetes de UN conductor en los cinco cajones.
 
     `ultima_ruta` es la ultima captura vista en esa ruta, y es la referencia
@@ -28049,9 +28057,11 @@ def _cx_debrief_reparto(paquetes: list, ultima_ruta: str) -> dict:
     porque las rutas no terminan a la vez: usar el final del dia haria que
     toda ruta que cierra pronto pareciera llena de paquetes sin cerrar.
     """
-    cajones = {"entregados": [], "devolver": [], "cancelados": [],
-               "no_observado": [], "perdidos": [], "sin_cerrar": [],
-               "reprogramados": [], "cliente": [], "no_salio": []}
+    cajones = {"entregados": [], "cancelados": [], "no_observado": [],
+               "perdidos": [], "sin_cerrar": [], "reprogramados": [],
+               "cliente": [], "no_salio": [],
+               # Los cuatro que se miran de primeras
+               "reintento": [], "no_entrega": [], "no_recogido": []}
     for p in paquetes:
         st = (p.get("state") or "").upper()
         ctx = _cx_contexto(p)
@@ -28083,13 +28093,23 @@ def _cx_debrief_reparto(paquetes: list, ultima_ruta: str) -> dict:
         elif st in CX_NO_SALIO:
             # Se quedo en la nave. No es del conductor.
             cajones["no_salio"].append(fila)
-        elif st in CX_DEVUELVE:
-            # Cortex lo afirma. No se discute con la regla del hueco.
-            cajones["devolver"].append(fila)
+        elif st in CX_REINTENTO:
+            cajones["reintento"].append(fila)
+        elif st in CX_NO_ENTREGA:
+            cajones["no_entrega"].append(fila)
+        elif st in CX_NO_RECOGIDO:
+            cajones["no_recogido"].append(fila)
         elif st in CX_AMBIGUO:
             hueco = _cx_minutos(ultima_ruta, p.get("updated_at"))
             fila["hueco_min"] = None if hueco is None else round(hueco)
-            if hueco is None or hueco <= CX_HUECO_MIN:
+            if en_curso:
+                # EL DIA NO HA TERMINADO. Un paquete cargado a las 09h en una
+                # ruta que sigue capturando a las 18:34 no esta "sin cerrar":
+                # esta en reparto, o el conductor todavia no ha vuelto. Llamar
+                # a eso un problema pinta 40 lineas rojas por ruta y hace que
+                # la pantalla no se mire. Se cuenta como inventario y ya.
+                cajones["sin_cerrar"].append(fila)
+            elif hueco is None or hueco <= CX_HUECO_MIN:
                 # La captura se paro con este paquete a medias. No sabemos nada.
                 cajones["no_observado"].append(fila)
             else:
@@ -28168,6 +28188,7 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
     tal: es nuestra ceguera, no su descuido.
     """
     dia = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    en_curso = dia >= datetime.now(timezone.utc).strftime("%Y-%m-%d")
     match = {"service_day": dia}
     if center and center not in ("Todos", "todos"):
         match["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
@@ -28210,13 +28231,19 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
 
     filas = []
     for (did, ruta), pk in porconductor.items():
-        caj = _cx_debrief_reparto(pk, ultima_por_ruta.get(ruta, ""))
-        for grupo in ("devolver", "sin_cerrar", "perdidos"):
+        caj = _cx_debrief_reparto(pk, ultima_por_ruta.get(ruta, ""), en_curso)
+        for grupo in ("reintento", "no_entrega", "no_recogido", "perdidos", "sin_cerrar"):
             for f in caj[grupo]:
                 m = marcas.get(f"{dia}:{f['tba']}")
                 f["marca"] = (m or {}).get("marca")
                 f["marca_nota"] = (m or {}).get("nota")
-        pendientes = [f for f in caj["devolver"] + caj["sin_cerrar"] if not f.get("marca")]
+        # LO PENDIENTE SON LOS CUATRO, NO EL INVENTARIO.
+        # Contar aqui lo que sigue cargado en la furgoneta ponia rutas con "42
+        # pendientes" que en realidad tenian dos problemas y cuarenta paquetes
+        # todavia en reparto.
+        pendientes = [f for f in (caj["reintento"] + caj["no_entrega"] +
+                                  caj["no_recogido"] + caj["perdidos"])
+                      if not f.get("marca")]
         filas.append({
             "driver_id": did,
             "conductor": (nombres.get(did) or {}).get("nombre") or "Sin identificar",
@@ -28224,10 +28251,14 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
             "center": (pk[0].get("center") or "").strip(),
             "total": len(pk),
             "entregados": len(caj["entregados"]),
-            # Lo que cuenta para el cuadre
-            "devolver": caj["devolver"],
-            "sin_cerrar": caj["sin_cerrar"],
+            # Los cuatro que se miran de primeras
+            "reintento": caj["reintento"],
+            "no_entrega": caj["no_entrega"],
+            "no_recogido": caj["no_recogido"],
             "perdidos": caj["perdidos"],
+            # El inventario: lo que sigue en la furgoneta. Util para cuadrar
+            # del todo, pero no es lo primero que se mira.
+            "sin_cerrar": caj["sin_cerrar"],
             # Lo que NO cuenta, y se enseña aparte para que se vea que no cuenta
             "cancelados": caj["cancelados"],
             "reprogramados": caj["reprogramados"],
@@ -28244,7 +28275,11 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
         "rutas": len(filas),
         "paquetes": sum(f["total"] for f in filas),
         "entregados": sum(f["entregados"] for f in filas),
-        "a_devolver": sum(len(f["devolver"]) for f in filas),
+        "reintento": sum(len(f["reintento"]) for f in filas),
+        "no_entrega": sum(len(f["no_entrega"]) for f in filas),
+        "no_recogido": sum(len(f["no_recogido"]) for f in filas),
+        "a_devolver": sum(len(f["reintento"]) + len(f["no_entrega"]) +
+                          len(f["no_recogido"]) for f in filas),
         "sin_cerrar": sum(len(f["sin_cerrar"]) for f in filas),
         "cancelados": sum(len(f["cancelados"]) for f in filas),
         "reprogramados": sum(len(f["reprogramados"]) for f in filas),
@@ -28259,7 +28294,9 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
     tot = max(1, resumen["paquetes"])
     resumen["ciego_pct"] = round(100.0 * resumen["no_observado"] / tot, 1)
     resumen["fiable"] = resumen["ciego_pct"] < 5.0
-    return {"dia": dia, "conductores": filas, "total": len(filas), "resumen": resumen}
+    resumen["en_curso"] = en_curso
+    return {"dia": dia, "conductores": filas, "total": len(filas),
+            "resumen": resumen, "en_curso": en_curso}
 
 
 class DebriefMarca(BaseModel):

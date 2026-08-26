@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
-  Loader2, PackageCheck, PackageX, AlertTriangle, EyeOff, Search,
+  Loader2, PackageX, AlertTriangle, EyeOff, Search,
   Check, X, ChevronRight, CalendarDays, Ban, UserCheck, Clock, Undo2,
+  RotateCcw,
 } from 'lucide-react'
 import { getDebrief, marcarDebrief } from '../api'
 
@@ -27,22 +28,39 @@ import { getDebrief, marcarDebrief } from '../api'
 
    Por eso la cabecera enseña el % de ciego antes que ningún número bueno. */
 
+/* LOS NOMBRES SON LOS DE CORTEX, NO LOS MIOS.
+   Quien usa esta pantalla lee la de Amazon todos los dias. Inventar
+   sinonimos ("no entregado", "pendiente") obliga a traducir mentalmente cada
+   linea y a dudar de si es lo mismo. El orden tambien es el de urgencia real:
+   un "falta" es una llamada ahora, un "se puede volver a intentar" sale
+   mañana solo. */
 const T = {
-  devolver: {
-    et: 'Te lo tiene que dar', icono: PackageX,
-    cls: 'border-amber-300 bg-amber-50 text-amber-900',
-    punto: 'bg-amber-500',
-  },
-  sin_cerrar: {
-    et: 'Sin cerrar', icono: AlertTriangle,
-    cls: 'border-rose-300 bg-rose-50 text-rose-900',
-    punto: 'bg-rose-500',
-  },
   perdidos: {
-    et: 'Amazon lo da por perdido', icono: Ban,
+    et: 'Falta', icono: Ban,
     cls: 'border-rose-400 bg-rose-100 text-rose-950',
-    punto: 'bg-rose-600',
+    ayuda: 'Cortex dice que el paquete no aparece. Es lo único que hay que resolver hoy.',
   },
+  no_entrega: {
+    et: 'No se puede entregar', icono: PackageX,
+    cls: 'border-orange-300 bg-orange-50 text-orange-900',
+    ayuda: 'Vuelve a la nave. Dirección mala, cliente ausente o sitio inaccesible.',
+  },
+  no_recogido: {
+    et: 'No se ha podido recoger', icono: Undo2,
+    cls: 'border-violet-300 bg-violet-50 text-violet-900',
+    ayuda: 'Era una recogida y no salió.',
+  },
+  reintento: {
+    et: 'Se puede volver a intentar', icono: RotateCcw,
+    cls: 'border-amber-300 bg-amber-50 text-amber-900',
+    ayuda: 'Sale otra vez mañana. Solo hay que asegurarse de que vuelve a la nave.',
+  },
+}
+/* El inventario va aparte y con otro peso visual: es "todo lo que deberia
+   traer", no una lista de problemas. */
+const INVENTARIO = {
+  et: 'Todo lo que sigue en la furgoneta', icono: AlertTriangle,
+  cls: 'border-slate-300 bg-slate-100 text-slate-700',
 }
 
 /* Los cajones que NO cuentan. Se enseñan para que se vea que se han tenido
@@ -136,9 +154,13 @@ function Paquete({ f, dia, alMarcar }) {
 
 function Conductor({ c, dia, alMarcar }) {
   const [abierto, setAbierto] = useState(c.pendientes > 0)
+  const [verTodo, setVerTodo] = useState(false)
+  /* El orden importa y es el de urgencia, no el alfabetico ni el del backend. */
   const grupos = [
-    ['devolver', c.devolver], ['sin_cerrar', c.sin_cerrar], ['perdidos', c.perdidos],
+    ['perdidos', c.perdidos], ['no_entrega', c.no_entrega],
+    ['no_recogido', c.no_recogido], ['reintento', c.reintento],
   ].filter(([, l]) => (l || []).length)
+  const inventario = c.sin_cerrar || []
 
   const noCuentan = NO_CUENTAN
     .map(([k, et, ex]) => [k, et, ex, c[k] || []])
@@ -159,6 +181,9 @@ function Conductor({ c, dia, alMarcar }) {
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-slate-500">
             <span className="tabular-nums">{c.entregados}/{c.total} entregados</span>
+            {!!(c.sin_cerrar || []).length && (
+              <span className="text-slate-400">· {c.sin_cerrar.length} aún en la furgoneta</span>
+            )}
             {c.no_salio > 0 && <span className="text-slate-400">· {c.no_salio} no salieron de la nave</span>}
             {c.no_observado > 0 && <span className="text-slate-400">· {c.no_observado} sin observar</span>}
             <span className="tabular-nums text-slate-400">· última captura {fmtHora(c.ultima_captura)}</span>
@@ -187,9 +212,12 @@ function Conductor({ c, dia, alMarcar }) {
             const cfg = T[k]
             const Ico = cfg.icono
             return (
-              <div key={k} className="mb-3 last:mb-0">
-                <div className={`mb-1.5 inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11.5px] font-semibold ${cfg.cls}`}>
-                  <Ico size={13} /> {cfg.et} · {lista.length}
+              <div key={k} className="mb-3.5 last:mb-0">
+                <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11.5px] font-semibold ${cfg.cls}`}>
+                    <Ico size={13} /> {cfg.et} · {lista.length}
+                  </span>
+                  <span className="text-[11.5px] text-slate-400">{cfg.ayuda}</span>
                 </div>
                 <div className="grid gap-1.5">
                   {lista.map((f) => (
@@ -199,6 +227,34 @@ function Conductor({ c, dia, alMarcar }) {
               </div>
             )
           })}
+
+          {/* EL INVENTARIO, PLEGADO.
+              Son los paquetes que siguen cargados. Sirve para cuadrar del
+              todo al final del dia, pero abierto de golpe entierra los cuatro
+              de arriba: una ruta normal trae dos problemas y cuarenta
+              paquetes en reparto, y si se pintan igual, no se ve ninguno. */}
+          {inventario.length > 0 && (
+            <div className="mt-3">
+              <button
+                onClick={() => setVerTodo((v) => !v)}
+                className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11.5px] font-semibold ${INVENTARIO.cls}`}>
+                <ChevronRight size={12} className={`transition-transform ${verTodo ? 'rotate-90' : ''}`} />
+                {INVENTARIO.et} · {inventario.length}
+              </button>
+              {verTodo && (
+                <div className="mt-1.5 grid gap-1.5">
+                  {inventario.slice(0, 60).map((f) => (
+                    <Paquete key={f.tba} f={f} dia={dia} alMarcar={alMarcar} />
+                  ))}
+                  {inventario.length > 60 && (
+                    <p className="px-1 text-[12px] text-slate-400">
+                      y {inventario.length - 60} más.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* LO QUE NO SE LE PUEDE PEDIR. Va aparte, en gris y con la razón
               escrita: si no aparece, alguien lo echa en falta y deja de
@@ -260,12 +316,19 @@ export default function Debrief() {
           tocado = true
           return { ...f, marca }
         })
-        const devolver = mapa(c.devolver)
-        const sinCerrar = mapa(c.sin_cerrar)
+        const reintento = mapa(c.reintento)
+        const noEntrega = mapa(c.no_entrega)
+        const noRecogido = mapa(c.no_recogido)
         const perdidos = mapa(c.perdidos)
+        const sinCerrar = mapa(c.sin_cerrar)
         if (!tocado) return c
-        const pend = [...devolver, ...sinCerrar].filter((f) => !f.marca).length
-        return { ...c, devolver, sin_cerrar: sinCerrar, perdidos, pendientes: pend, cuadra: pend === 0 }
+        /* Lo pendiente son los cuatro, igual que en el backend. El inventario
+           se puede marcar pero no cuenta: si contara, ninguna ruta cuadraria
+           nunca hasta escanear 140 paquetes. */
+        const pend = [...reintento, ...noEntrega, ...noRecogido, ...perdidos]
+          .filter((f) => !f.marca).length
+        return { ...c, reintento, no_entrega: noEntrega, no_recogido: noRecogido,
+          perdidos, sin_cerrar: sinCerrar, pendientes: pend, cuadra: pend === 0 }
       })
       return { ...d, conductores }
     })
@@ -280,7 +343,8 @@ export default function Debrief() {
       l = l.filter((c) =>
         (c.ruta || '').toLowerCase().includes(t) ||
         (c.conductor || '').toLowerCase().includes(t) ||
-        [...(c.devolver || []), ...(c.sin_cerrar || []), ...(c.perdidos || [])]
+        [...(c.reintento || []), ...(c.no_entrega || []), ...(c.no_recogido || []),
+          ...(c.perdidos || []), ...(c.sin_cerrar || [])]
           .some((f) => (f.tba || '').toLowerCase().includes(t)))
     }
     return l
@@ -322,6 +386,20 @@ export default function Debrief() {
         {/* EL AVISO VA ANTES QUE LOS NÚMEROS BUENOS. Si la captura se paró,
             el cuadre de ese día no vale y hay que decirlo, no dejar que se
             deduzca de un porcentaje escondido abajo. */}
+        {/* EL DIA DE HOY NO SE PUEDE CUADRAR TODAVIA, y hay que decirlo:
+            si no, alguien mira a las 11h, ve 40 paquetes en la furgoneta y
+            cree que hay un problema. */}
+        {datos?.en_curso && (
+          <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3">
+            <Clock size={17} className="mt-0.5 shrink-0 text-sky-600" />
+            <div className="text-[13.5px] text-sky-900">
+              <b>El día está en curso.</b> Lo que sigue cargado en la furgoneta es
+              reparto normal, no un problema. Los cuatro de arriba sí valen ya:
+              esos los dice Cortex en el momento.
+            </div>
+          </div>
+        )}
+
         {datos && !r.fiable && (
           <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
             <EyeOff size={17} className="mt-0.5 shrink-0 text-amber-600" />
@@ -346,11 +424,18 @@ export default function Debrief() {
           </div>
         ) : (
           <>
-            <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-              <Kpi n={r.a_devolver ?? 0} et="Te lo tienen que dar" tono="ambar" />
-              <Kpi n={r.sin_cerrar ?? 0} et="Sin cerrar" tono="rosa" sub="la captura seguía" />
-              <Kpi n={r.perdidos ?? 0} et="Perdidos" tono="rosa" />
+            {/* Los cuatro de Cortex, en el orden en que hay que atenderlos. */}
+            <div className="mb-2 grid grid-cols-2 gap-2 lg:grid-cols-4">
+              <Kpi n={r.perdidos ?? 0} et="Falta" tono="rosa" sub="llamar hoy" />
+              <Kpi n={r.no_entrega ?? 0} et="No se puede entregar" tono="ambar" />
+              <Kpi n={r.no_recogido ?? 0} et="No se ha podido recoger" tono="ambar" />
+              <Kpi n={r.reintento ?? 0} et="Se puede volver a intentar" tono="ambar" sub="vuelve a salir mañana" />
+            </div>
+            {/* Y el resto, mas pequeño: contexto, no tarea. */}
+            <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Kpi n={`${r.cuadran ?? 0}/${r.rutas ?? 0}`} et="Rutas que cuadran" tono="verde" />
+              <Kpi n={r.sin_cerrar ?? 0} et="Sigue en la furgoneta" tono="gris"
+                   sub={datos?.en_curso ? 'el día no ha terminado' : 'inventario'} />
               <Kpi n={r.no_salio ?? 0} et="No salieron" tono="gris" sub="se quedaron en nave" />
               <Kpi n={r.no_observado ?? 0} et="Sin observar" tono="gris" sub="no es fallo de nadie" />
             </div>
