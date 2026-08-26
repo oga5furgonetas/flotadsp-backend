@@ -12403,6 +12403,9 @@ class OrdenTrabajoCrear(BaseModel):
     fecha_entrada: Optional[str] = None
     fecha_entrega_estimada: Optional[str] = None
     incident_id: Optional[str] = None
+    # Apunte del libro de daños del que sale esta orden. Al crearla se marca
+    # ese daño como "en taller" para que no salga otra vez en la lista.
+    ledger_id: Optional[str] = None
 
 
 def _ot_ahora() -> str:
@@ -12589,6 +12592,70 @@ async def _ot_avisa(orden: dict, texto: str):
 
 # ── ADMIN ─────────────────────────────────────────────────────────────────
 
+@api_router.get("/work-orders/danos-pendientes")
+async def ot_danos_pendientes(center: str = "", solo_graves: bool = False,
+                              _=Depends(require_admin)):
+    """Daños abiertos que todavia no han ido al taller, los peores primero.
+
+    Sale de `vehicle_damage_ledger`, que es el libro donde se acumula lo que
+    ven las inspecciones y las personas. Se excluyen los que ya tienen orden:
+    la lista existe para actuar, y una lista con cosas ya hechas deja de
+    mirarse a los tres dias.
+    """
+    q = {"status": "open", "orden_id": {"$in": [None, ""]}}
+    if solo_graves:
+        q["severity"] = {"$in": ["grave", "critico"]}
+    danos = await db.vehicle_damage_ledger.find(q).sort("updated_at", -1).to_list(400)
+    if not danos:
+        return {"danos": [], "total": 0, "graves": 0}
+
+    ids = {d.get("vehicle_id") for d in danos if d.get("vehicle_id")}
+    vs = {v["id"]: v async for v in db.vehicles.find(
+        {"id": {"$in": list(ids)}},
+        {"_id": 0, "id": 1, "license_plate": 1, "model": 1, "center": 1, "status": 1})}
+
+    # El orden importa: primero lo que puede dejar una furgoneta parada.
+    peso = {"critico": 0, "grave": 1, "moderado": 2, "leve": 3}
+    out = []
+    for d in danos:
+        v = vs.get(d.get("vehicle_id")) or {}
+        if center and center not in ("Todos", "todos"):
+            if not re.search(re.escape(center.strip()), str(v.get("center") or ""), re.I):
+                continue
+        # Una furgoneta de baja no se manda al taller.
+        if (v.get("status") or "") in ("baja", "deleted"):
+            continue
+        out.append({
+            "ledger_id": str(d.get("_id")),
+            "vehicle_id": d.get("vehicle_id"),
+            "matricula": v.get("license_plate") or "?",
+            "modelo": v.get("model"),
+            "center": (v.get("center") or "").strip(),
+            "pieza": d.get("part"),
+            "panel": d.get("panel"),
+            "severidad": d.get("severity"),
+            "origen": d.get("source"),
+            "visto": d.get("first_seen"),
+            "dias": _ot_dias_desde(d.get("first_seen")),
+        })
+    out.sort(key=lambda x: (peso.get(x["severidad"], 9), -(x["dias"] or 0)))
+    return {"danos": out, "total": len(out),
+            "graves": sum(1 for x in out if x["severidad"] in ("grave", "critico"))}
+
+
+def _ot_dias_desde(f) -> int:
+    """Dias desde una fecha 'YYYY-MM-DD'. 0 si no se puede leer.
+
+    Un daño que lleva 40 dias abierto no es el mismo problema que uno de ayer,
+    y en la lista tiene que notarse.
+    """
+    try:
+        d = datetime.strptime(str(f)[:10], "%Y-%m-%d")
+        return max(0, (datetime.now(timezone.utc).replace(tzinfo=None) - d).days)
+    except Exception:
+        return 0
+
+
 @api_router.post("/work-orders")
 async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admin)):
     v = await db.vehicles.find_one({"id": data.vehicle_id},
@@ -12609,6 +12676,30 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
     # incidencia (quien crea la orden sabe mejor que le pasa hoy).
     fotos_previas: list = []
     problema = (data.problema or "").strip()
+
+    # DESDE UN DAÑO DEL LIBRO.
+    # Si quien crea la orden no escribio nada, se redacta solo con la pieza y
+    # la gravedad: 'Paragolpes trasero — grave (visto el 2026-08-12)'. Es
+    # exactamente lo que el taller necesita leer, y evita que la orden salga
+    # con el problema en blanco por pereza.
+    dano_doc = None
+    if data.ledger_id:
+        try:
+            from bson import ObjectId as _OId
+            dano_doc = await db.vehicle_damage_ledger.find_one(
+                {"_id": _OId(data.ledger_id)})
+        except Exception:
+            dano_doc = await db.vehicle_damage_ledger.find_one({"_id": data.ledger_id})
+        if dano_doc and not problema:
+            trozos = [str(dano_doc.get("part") or "").strip() or "Daño sin describir"]
+            if dano_doc.get("severity"):
+                trozos.append(str(dano_doc["severity"]))
+            if dano_doc.get("first_seen"):
+                trozos.append(f"visto el {str(dano_doc['first_seen'])[:10]}")
+            problema = " — ".join(trozos[:2])
+            if len(trozos) > 2:
+                problema += f" ({trozos[2]})"
+
     if data.incident_id:
         inc = await db.incidents.find_one({"id": data.incident_id},
                                           {"_id": 0, "description": 1, "title": 1, "photos": 1})
@@ -12663,6 +12754,11 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
 
     await db.ordenes_trabajo.insert_one(dict(orden))
     orden.pop("_id", None)
+    # El daño queda marcado DESPUES de guardar la orden, no antes: si el
+    # insert fallara, un daño marcado como "en taller" sin orden que lo
+    # respalde desapareceria de la lista de pendientes y no lo veria nadie.
+    if data.ledger_id:
+        await _ot_marcar_dano(data.ledger_id, orden["id"], orden.get("numero"))
     logger.info("OT creada %s (%s -> %s)", orden["numero"], orden["matricula"], orden["taller_nombre"])
     return orden
 
@@ -13169,6 +13265,28 @@ async def ver_orden(orden_id: str, _=Depends(require_admin)):
     o["enlace"] = ("%s/taller/%s" % (_PORTAL_BASE_FRONT.rstrip("/"), enlace["token"])) if enlace else None
     o["enlace_expira"] = (enlace or {}).get("expira_en")
     return o
+
+
+async def _ot_marcar_dano(ledger_id: str, orden_id: str, numero) -> None:
+    """Deja escrito en el daño que ya esta en el taller.
+
+    Va en su propia funcion y con su try: que falle marcar el daño NO puede
+    tumbar la creacion de la orden, que es lo importante. Si esto falla, lo
+    peor que pasa es que el daño siga saliendo en la lista de pendientes.
+    """
+    if not ledger_id:
+        return
+    try:
+        from bson import ObjectId as _OId
+        try:
+            clave = {"_id": _OId(ledger_id)}
+        except Exception:
+            clave = {"_id": ledger_id}
+        await db.vehicle_damage_ledger.update_one(
+            clave, {"$set": {"orden_id": orden_id, "orden_numero": numero,
+                             "updated_at": _ot_ahora()}})
+    except Exception as e:
+        logger.warning(f"No se pudo marcar el daño {ledger_id}: {e}")
 
 
 @api_router.post("/work-orders/{orden_id}/enlace")
@@ -26893,6 +27011,16 @@ async def cortex_geocode(q: str, _=Depends(require_admin)):
     }
 
 
+# El Nomenclator va en su propio modulo y se importa con red: si el fichero de
+# datos faltara en la imagen, el geocodificador tiene que seguir funcionando
+# exactamente como antes, no caerse.
+try:
+    import geo_nomenclator as _nomen
+except Exception as _e:  # pragma: no cover
+    _nomen = None
+    logger.warning(f"Nomenclator no disponible: {_e}")
+
+
 # ─── RESCATE DE DIRECCIONES: LAS DOS FUENTES QUE EL NAVEGADOR NO PUEDE PEDIR ───
 #
 # Los cuatro buscadores del panel (Nominatim, Photon, Cartociudad y Google) se
@@ -27225,30 +27353,78 @@ async def cortex_geo_rescate(via: str, municipio: str = "", cp: str = "",
     if len(via) < 3:
         raise HTTPException(400, "via demasiado corta")
 
-    clave = f"{_geo_sin_acentos(via).upper()}|{_geo_sin_acentos(municipio).upper()}|{cp}"
-    guardado = await db.geo_rescate.find_one({"_id": clave}, {"_id": 0, "res": 1})
+    # ── EL CONCELLO, ANTES DE PREGUNTAR A NADIE ──────────────────────────────
+    # El Catastro busca dentro de un municipio, no "en Galicia". Con el campo
+    # vacio o con basura la consulta sale mal formada y devuelve cero, que es
+    # lo que pasaba en el 90% de los casos. Esto no adivina: si no puede
+    # afirmar el concello devuelve None y se sigue como antes.
+    nomen = {"concello": None, "motivo": "sin_modulo"}
+    if _nomen is not None:
+        try:
+            nomen = _nomen.situar(via, municipio, cp)
+        except Exception as e:
+            logger.warning(f"Nomenclator: {type(e).__name__}: {str(e)[:100]}")
+    municipio_busqueda = nomen.get("concello") or municipio
+
+    # La clave lleva version: sin ella, las 149 busquedas ya guardadas como
+    # "cero resultados" seguirian devolviendo cero y esto no se notaria.
+    clave = (f"v2|{_geo_sin_acentos(via).upper()}|"
+             f"{_geo_sin_acentos(municipio).upper()}|{cp}")
+    guardado = await db.geo_rescate.find_one({"_id": clave}, {"_id": 0, "res": 1, "nomen": 1})
     if guardado is not None:
-        return {"resultados": guardado.get("res") or [], "cache": True}
+        return {"resultados": guardado.get("res") or [], "cache": True,
+                "nomenclator": guardado.get("nomen") or nomen}
+
+    # ── TAMBIEN CON EL TOPONIMO LIMPIO ───────────────────────────────────────
+    # Medido contra el Catastro real: 'LUGAR DE AGUIEIRA | Porto do Son'
+    # devuelve cero y 'TEAIO | Dodro' devuelve el punto. Lo que rompe la
+    # consulta es el prefijo y el numero de portal pegados al nombre, no el
+    # municipio. Se pregunta por las dos formas: van en el mismo gather, asi
+    # que no cuesta ni un segundo mas, y los resultados se suman a la misma
+    # votacion sin trato especial.
+    via_limpia = ""
+    if _nomen is not None:
+        try:
+            via_limpia = _nomen.limpiar(via)
+        except Exception:
+            via_limpia = ""
+    formas = [via]
+    if via_limpia and via_limpia.upper() != via.upper() and len(via_limpia) >= 3:
+        formas.append(via_limpia)
 
     import httpx as _httpx
     resultados = []
     async with _httpx.AsyncClient(timeout=25, headers=_UA_GEO,
                                   follow_redirects=True) as c:
-        salidas = await asyncio.gather(
-            _geo_catastro(c, via, municipio, cp),
-            _geo_overpass(c, via, municipio),
-            return_exceptions=True)
+        tareas = []
+        for f in formas:
+            tareas.append(_geo_catastro(c, f, municipio_busqueda, cp))
+            tareas.append(_geo_overpass(c, f, municipio_busqueda))
+        salidas = await asyncio.gather(*tareas, return_exceptions=True)
+    _vistos = set()
     for s in salidas:
         if isinstance(s, dict):
+            # Preguntar por dos formas puede traer el MISMO punto dos veces, y
+            # eso inflaria la votacion: dos votos de la misma fuente parecerian
+            # dos fuentes de acuerdo. Se deduplica por fuente y coordenada.
+            k = (s.get("fuente"), round(float(s.get("lat") or 0), 6),
+                 round(float(s.get("lng") or 0), 6))
+            if k in _vistos:
+                continue
+            _vistos.add(k)
             resultados.append(s)
         elif isinstance(s, Exception):
             logger.warning(f"rescate geo: {type(s).__name__}: {str(s)[:120]}")
 
     await db.geo_rescate.update_one(
         {"_id": clave},
-        {"$set": {"res": resultados, "en": datetime.now(timezone.utc)}},
+        {"$set": {"res": resultados, "en": datetime.now(timezone.utc),
+                  "nomen": nomen}},
         upsert=True)
-    return {"resultados": resultados, "cache": False}
+    # El Nomenclator viaja en la respuesta aunque no haya resultados: saber
+    # que la direccion esta en Ribeira ya es util para quien la mira, incluso
+    # si ninguna fuente da el punto exacto.
+    return {"resultados": resultados, "cache": False, "nomenclator": nomen}
 
 
 # ─── QUÉ HAY EN LA COORDENADA (GEOCODIFICACIÓN INVERSA) ───────────────────────
@@ -27808,6 +27984,316 @@ async def cortex_geo_inverso(lat: float, lng: float, _=Depends(require_admin)):
         {"_id": clave}, {"$set": {"res": res, "en": datetime.now(timezone.utc)}},
         upsert=True)
     return {**res, "cache": False}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EL CUADRE DEL DEBRIEF
+# ─────────────────────────────────────────────────────────────────────────────
+# Ver la explicacion larga arriba de _cx_debrief_reparto. En corto: separar
+# "no se entrego, tiene que volver" de "no lo hemos visto", porque en pantalla
+# son iguales y confundirlos significa acusar a alguien sin pruebas.
+
+# Cortex lo ha dicho: no se entrego. El conductor lo trae en la furgoneta.
+CX_DEVUELVE = ("ATTEMPTED", "CUSTOMER_UNAVAILABLE", "ADDRESS_NOT_FOUND",
+               "DAMAGED", "LOCKER_ISSUE", "UNCOLLECTED", "BACK_TO_ORIGIN",
+               "NOT_READY")
+# Cancelado por Amazon: sale en Cortex y NO en la cuenta del conductor.
+CX_CANCELADO = ("TR_CANCELLED",)
+
+# ── EL CONTEXTO MANDA SOBRE EL ESTADO ────────────────────────────────────────
+# Medido: la cancelacion casi nunca esta en `state`. Vive en el contexto del
+# ultimo evento, y el estado se queda en NOT_READY o BACK_TO_ORIGIN. Mirando
+# solo el estado salian 6 cancelados en 30 dias; mirando el contexto son 50.
+CX_CTX_CANCELADO = ("TR_CANCELLED", "CANCELLED", "ORDER_CANCELLED")
+# Lo movio el cliente. Vuelve a la nave, pero NO es un fallo del conductor y
+# no debe pintarse como tal.
+CX_CTX_REPROGRAMADO = ("RESCHEDULED_BY_CUSTOMER", "RESCHEDULED")
+# El cliente lo recogio el mismo. NO viene en la furgoneta: pedirselo al
+# conductor es reclamarle algo que nunca llevo.
+CX_CTX_CLIENTE = ("COLLECTED_BY_CUSTOMER", "PICKED_BY_CUSTOMER",
+                  "PICKED_UP_BY_CUSTOMER")
+# Cortex ya dice que el paquete no aparece. No es "devuelvemelo", es un aviso.
+CX_CTX_PERDIDO = ("OBJECT_MISSING", "PACKAGE_MISSING")
+# Nunca salio de la nave. No es del conductor en absoluto.
+CX_NO_SALIO = ("PENDING_PICKUP",)
+# Estados a medias. Un paquete aqui puede estar en la furgoneta o puede ser que
+# dejaramos de mirar. Solo estos pasan por la regla del hueco.
+# PENDING_PICKUP NO entra aqui: no es ambiguo, es que no salio (ver CX_NO_SALIO).
+CX_AMBIGUO = ("LOADED", "YOU_ARE_NEXT", "OBSERVED", "NONE")
+
+# Minutos de margen. Por debajo, se entiende que la captura murio ahi.
+# 45 min no es un numero redondo elegido a ojo: con captura viva, un paquete
+# cambia de estado varias veces por hora (100-131 capturas por paquete y dia).
+# Se puede ajustar sin tocar codigo por si cambia el ritmo de la extension.
+CX_HUECO_MIN = int(os.environ.get("CORTEX_HUECO_MIN") or 45)
+
+
+def _cx_minutos(a: str, b: str):
+    """Minutos entre dos marcas ISO. None si alguna no se puede leer.
+
+    Devuelve None en vez de 0 a proposito: un 0 por no saber leer la fecha
+    haria que un paquete sin fecha pareciera recien capturado, que es
+    justo la conclusion peligrosa.
+    """
+    da, dbb = _cortex_parse_dt(a), _cortex_parse_dt(b)
+    if not da or not dbb:
+        return None
+    return (da - dbb).total_seconds() / 60.0
+
+
+def _cx_debrief_reparto(paquetes: list, ultima_ruta: str) -> dict:
+    """Reparte los paquetes de UN conductor en los cinco cajones.
+
+    `ultima_ruta` es la ultima captura vista en esa ruta, y es la referencia
+    contra la que se mide el hueco. Se calcula por RUTA y no por dia entero
+    porque las rutas no terminan a la vez: usar el final del dia haria que
+    toda ruta que cierra pronto pareciera llena de paquetes sin cerrar.
+    """
+    cajones = {"entregados": [], "devolver": [], "cancelados": [],
+               "no_observado": [], "perdidos": [], "sin_cerrar": [],
+               "reprogramados": [], "cliente": [], "no_salio": []}
+    for p in paquetes:
+        st = (p.get("state") or "").upper()
+        ctx = _cx_contexto(p)
+        fila = {
+            "tba": p.get("tba"),
+            "stop_id": p.get("stop_id"),
+            "estado": st,
+            "contexto": ctx or None,
+            "motivo": _cx_motivo_legible(p),
+            "direccion": _cortex_addr_str(p.get("stop_address")),
+            "visto": p.get("updated_at"),
+        }
+        if st == "DELIVERED":
+            cajones["entregados"].append(fila)
+        # ── El contexto se mira ANTES que el estado ──────────────────────────
+        # Un NOT_READY cuyo contexto es TR_CANCELLED es un cancelado, no un
+        # paquete que reclamar. El estado se queda corto y el contexto es el
+        # que dice la verdad.
+        elif ctx in CX_CTX_CANCELADO:
+            cajones["cancelados"].append(fila)
+        elif ctx in CX_CTX_CLIENTE:
+            cajones["cliente"].append(fila)
+        elif ctx in CX_CTX_PERDIDO or st == "MISSING":
+            cajones["perdidos"].append(fila)
+        elif ctx in CX_CTX_REPROGRAMADO:
+            cajones["reprogramados"].append(fila)
+        elif st in CX_CANCELADO:
+            cajones["cancelados"].append(fila)
+        elif st in CX_NO_SALIO:
+            # Se quedo en la nave. No es del conductor.
+            cajones["no_salio"].append(fila)
+        elif st in CX_DEVUELVE:
+            # Cortex lo afirma. No se discute con la regla del hueco.
+            cajones["devolver"].append(fila)
+        elif st in CX_AMBIGUO:
+            hueco = _cx_minutos(ultima_ruta, p.get("updated_at"))
+            fila["hueco_min"] = None if hueco is None else round(hueco)
+            if hueco is None or hueco <= CX_HUECO_MIN:
+                # La captura se paro con este paquete a medias. No sabemos nada.
+                cajones["no_observado"].append(fila)
+            else:
+                # La captura siguio y este no se movio: eso si es raro.
+                cajones["sin_cerrar"].append(fila)
+        else:
+            cajones["no_observado"].append(fila)
+    return cajones
+
+
+def _cx_contexto(p: dict) -> str:
+    """El contexto del ultimo evento que lo traiga, en mayusculas y normalizado.
+
+    Se recorre el timeline hacia atras porque el contexto no siempre viene en
+    el ultimo evento: la fuente que trae el motivo (el informe de faltas) y la
+    que trae el estado (route-details) son distintas y no llegan a la vez.
+    'NONE' se trata como ausencia: Cortex lo usa como relleno, no como motivo.
+    """
+    for ev in reversed(p.get("timeline") or []):
+        c = str(ev.get("context") or "").strip().upper().replace(" ", "_").replace("-", "_")
+        if c and c != "NONE":
+            return c
+    return ""
+
+
+def _cx_motivo_legible(p: dict) -> str:
+    """El porque, en cristiano, sacado del ultimo evento con contexto.
+
+    El estado dice QUE paso; el contexto dice POR QUE. Un 'ATTEMPTED' a secas
+    no le sirve a quien esta en la puerta con el conductor delante.
+    """
+    ctx = _cx_contexto(p)
+    legible_ctx = {
+        "CUSTOMER_UNAVAILABLE": "no estaba el cliente",
+        "BUSINESS_CLOSED": "negocio cerrado",
+        "ADDRESS_NOT_FOUND": "no encontro la direccion",
+        "OBJECT_MISSING": "el paquete no aparece",
+        "COLLECTED_BY_CUSTOMER": "lo recogio el cliente",
+        "RESCHEDULED_BY_CUSTOMER": "el cliente lo aplazo",
+        "TR_CANCELLED": "cancelado",
+        "NO_ITEMS_DELIVERED": "no se entrego nada en la parada",
+        "INACCESSIBLE_DELIVERY_LOCATION": "no se puede llegar",
+        "INACCESSIBLE_PICKUP_LOCATION": "no se puede llegar a recogerlo",
+        "LOCKER_ISSUE": "problema con el locker",
+        "SHIPMENT_NOT_READY": "el envio no estaba listo",
+        "NO_SECURE_LOCATION": "sin sitio seguro donde dejarlo",
+        "DAMAGED": "dañado",
+    }.get(ctx, ctx.lower().replace("_", " ") if ctx else "")
+    base = {
+        "ATTEMPTED": "Se intento y no se pudo",
+        "CUSTOMER_UNAVAILABLE": "El cliente no estaba",
+        "ADDRESS_NOT_FOUND": "No encontro la direccion",
+        "DAMAGED": "Llego dañado",
+        "LOCKER_ISSUE": "Problema con el locker",
+        "UNCOLLECTED": "Sin recoger",
+        "BACK_TO_ORIGIN": "Marcado para devolver",
+        "NOT_READY": "No estaba listo",
+        "TR_CANCELLED": "Cancelado por Amazon",
+        "MISSING": "Amazon lo da por perdido",
+        "LOADED": "Cargado en la furgoneta",
+        "PENDING_PICKUP": "Pendiente de recoger",
+        "YOU_ARE_NEXT": "En reparto",
+    }.get((p.get("state") or "").upper(), (p.get("state") or ""))
+    return f"{base} · {legible_ctx}" if legible_ctx else base
+
+
+@api_router.get("/cortex/debrief")
+async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admin)):
+    """Que tiene que devolver cada conductor, antes de que se vaya a casa.
+
+    Devuelve una fila por conductor con los TBA exactos que trae en la
+    furgoneta, el motivo de cada uno, y —en un cajon aparte y bien separado—
+    lo que no podemos afirmar porque dejamos de mirar.
+
+    El cajon `no_observado` NO es un fallo de nadie y no debe pintarse como
+    tal: es nuestra ceguera, no su descuido.
+    """
+    dia = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    match = {"service_day": dia}
+    if center and center not in ("Todos", "todos"):
+        match["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
+
+    cur = db.cortex_packages.find(
+        match,
+        {"_id": 0, "tba": 1, "state": 1, "stop_id": 1, "stop_address": 1,
+         "updated_at": 1, "driver_id": 1, "driver_name": 1, "route_code": 1,
+         "center": 1, "timeline": 1})
+    paquetes = await cur.to_list(20000)
+    if not paquetes:
+        return {"dia": dia, "conductores": [], "total": 0, "resumen": {}}
+
+    # Ultima captura POR RUTA: la referencia del hueco.
+    ultima_por_ruta: dict = {}
+    for p in paquetes:
+        r = (p.get("route_code") or "").strip()
+        u = p.get("updated_at") or ""
+        if u > ultima_por_ruta.get(r, ""):
+            ultima_por_ruta[r] = u
+
+    # El conductor no viene en todos los paquetes (el informe de faltas no lo
+    # trae). Se completa por ruta, igual que hace /cortex/missing-hoy.
+    did_por_ruta: dict = {}
+    for p in paquetes:
+        r = (p.get("route_code") or "").strip()
+        if p.get("driver_id") and r and r not in did_por_ruta:
+            did_por_ruta[r] = p["driver_id"]
+
+    porconductor: dict = {}
+    for p in paquetes:
+        r = (p.get("route_code") or "").strip()
+        did = p.get("driver_id") or did_por_ruta.get(r) or "sin-asignar"
+        porconductor.setdefault((did, r), []).append(p)
+
+    nombres = await _cx_nombres({d for (d, _r) in porconductor if d and d != "sin-asignar"})
+
+    # Lo ya marcado a mano en el debrief de ese dia.
+    marcas = {m["_id"]: m async for m in db.cortex_debrief.find({"service_day": dia})}
+
+    filas = []
+    for (did, ruta), pk in porconductor.items():
+        caj = _cx_debrief_reparto(pk, ultima_por_ruta.get(ruta, ""))
+        for grupo in ("devolver", "sin_cerrar", "perdidos"):
+            for f in caj[grupo]:
+                m = marcas.get(f"{dia}:{f['tba']}")
+                f["marca"] = (m or {}).get("marca")
+                f["marca_nota"] = (m or {}).get("nota")
+        pendientes = [f for f in caj["devolver"] + caj["sin_cerrar"] if not f.get("marca")]
+        filas.append({
+            "driver_id": did,
+            "conductor": (nombres.get(did) or {}).get("nombre") or "Sin identificar",
+            "ruta": ruta,
+            "center": (pk[0].get("center") or "").strip(),
+            "total": len(pk),
+            "entregados": len(caj["entregados"]),
+            # Lo que cuenta para el cuadre
+            "devolver": caj["devolver"],
+            "sin_cerrar": caj["sin_cerrar"],
+            "perdidos": caj["perdidos"],
+            # Lo que NO cuenta, y se enseña aparte para que se vea que no cuenta
+            "cancelados": caj["cancelados"],
+            "reprogramados": caj["reprogramados"],
+            "cliente": caj["cliente"],
+            "no_salio": len(caj["no_salio"]),
+            "no_observado": len(caj["no_observado"]),
+            "pendientes": len(pendientes),
+            "cuadra": len(pendientes) == 0,
+            "ultima_captura": ultima_por_ruta.get(ruta),
+        })
+
+    filas.sort(key=lambda f: (-f["pendientes"], -len(f["perdidos"]), f["ruta"]))
+    resumen = {
+        "rutas": len(filas),
+        "paquetes": sum(f["total"] for f in filas),
+        "entregados": sum(f["entregados"] for f in filas),
+        "a_devolver": sum(len(f["devolver"]) for f in filas),
+        "sin_cerrar": sum(len(f["sin_cerrar"]) for f in filas),
+        "cancelados": sum(len(f["cancelados"]) for f in filas),
+        "reprogramados": sum(len(f["reprogramados"]) for f in filas),
+        "cliente": sum(len(f["cliente"]) for f in filas),
+        "no_salio": sum(f["no_salio"] for f in filas),
+        "no_observado": sum(f["no_observado"] for f in filas),
+        "perdidos": sum(len(f["perdidos"]) for f in filas),
+        "cuadran": sum(1 for f in filas if f["cuadra"]),
+    }
+    # Aviso de captura muerta: si casi todo el dia esta sin observar, el cuadre
+    # de hoy no vale y hay que decirlo ARRIBA, no dejar que se deduzca.
+    tot = max(1, resumen["paquetes"])
+    resumen["ciego_pct"] = round(100.0 * resumen["no_observado"] / tot, 1)
+    resumen["fiable"] = resumen["ciego_pct"] < 5.0
+    return {"dia": dia, "conductores": filas, "total": len(filas), "resumen": resumen}
+
+
+class DebriefMarca(BaseModel):
+    marca: str          # 'devuelto' | 'no_aparece'
+    nota: str = ""
+
+
+@api_router.post("/cortex/debrief/{tba}")
+async def cortex_debrief_marcar(tba: str, body: DebriefMarca,
+                                day: str = "", user=Depends(require_admin)):
+    """Marcar un paquete como devuelto en mano, o como que no aparece.
+
+    Se guarda en coleccion APARTE y no sobre el paquete: `cortex_packages` lo
+    reescribe la extension en cada captura, asi que una marca puesta ahi se
+    perderia sola y sin avisar.
+    """
+    marca = (body.marca or "").strip().lower()
+    if marca not in ("devuelto", "no_aparece", ""):
+        raise HTTPException(status_code=400, detail="Marca no valida")
+    dia = day or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    tba = (tba or "").strip().upper()
+    if not tba:
+        raise HTTPException(status_code=400, detail="Falta el paquete")
+    if not marca:
+        await db.cortex_debrief.delete_one({"_id": f"{dia}:{tba}"})
+        return {"ok": True, "marca": None}
+    await db.cortex_debrief.update_one(
+        {"_id": f"{dia}:{tba}"},
+        {"$set": {"tba": tba, "service_day": dia, "marca": marca,
+                  "nota": (body.nota or "")[:300],
+                  "quien": (user or {}).get("name") or (user or {}).get("sub"),
+                  "en": datetime.now(timezone.utc).isoformat()}},
+        upsert=True)
+    return {"ok": True, "marca": marca}
 
 
 @api_router.get("/cortex/missing-hoy")

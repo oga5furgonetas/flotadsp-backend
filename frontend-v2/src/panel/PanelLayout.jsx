@@ -6,7 +6,7 @@ import {
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon,
   PackageX,
-  PackageSearch, MapPin, Timer, MapPinned,
+  PackageSearch, PackageCheck, MapPin, Timer, MapPinned,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
 import { getMe } from './api'
@@ -40,6 +40,7 @@ const NAV_DEF = [
   ]},
   { g: 'nav.g.dailyops', gIcon: Zap, iconCls: 'text-sky-400', iconBg: 'bg-sky-500/10', items: [
     { to: '/panel/paquetes', labelKey: 'nav.pkgintel', icon: PackageSearch },
+    { to: '/panel/debrief', labelKey: 'nav.debrief', icon: PackageCheck },
     { to: '/panel/asignacion', labelKey: 'nav.assign', icon: ClipboardCheck },
     // El cuadrante y las peticiones de días llevaban meses construidos y sin
     // entrada en el menú: la ruta existía, la página también, y sólo se

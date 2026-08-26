@@ -417,3 +417,13 @@ export const parkingReport = (body) => api.post('/parking/report', body)
 export const parkingResolve = (body) => api.post('/parking/resolve', body)
 export const parkingLastKnown = (center) => api.get('/parking/last-known', { params: { center } })
 export const parkingZoneImage = (formData) => api.post('/parking/zone-image', formData)
+
+/* Cuadre del debrief. `center` se manda crudo, como el resto del panel: el
+   backend filtra por regex porque el centro esta guardado de cuatro formas
+   distintas (gotcha 6). */
+export const getDebrief = (params) => api.get('/cortex/debrief', { params })
+/* Daños abiertos que aun no han ido al taller. */
+export const getDanosPendientes = (params) =>
+  api.get('/work-orders/danos-pendientes', { params })
+export const marcarDebrief = (tba, body, day) =>
+  api.post(`/cortex/debrief/${encodeURIComponent(tba)}`, body, { params: { day } })

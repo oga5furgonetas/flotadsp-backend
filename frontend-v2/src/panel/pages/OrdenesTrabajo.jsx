@@ -8,7 +8,7 @@ import {
 import {
   getOrdenes, getResumenOrdenes, getOrden, crearOrden, editarOrden, enlaceOrden,
   getVehicles, getWorkshops, crearTaller, exportarOrdenes, ordenesPorTaller,
-  getIncidents,
+  getIncidents, getDanosPendientes,
 } from '../api'
 
 /* ÓRDENES DE TALLER
@@ -175,6 +175,8 @@ export default function OrdenesTrabajo() {
   const [copiado, setCopiado] = useState(false)
   const [guardando, setGuardando] = useState('')
   const [bajando, setBajando] = useState(false)
+  const [danos, setDanos] = useState(null)
+  const [verDanos, setVerDanos] = useState(false)
   const [verComo, setVerComo] = useState(false)
   const [comparativa, setComparativa] = useState(null)
 
@@ -248,6 +250,27 @@ export default function OrdenesTrabajo() {
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se pudo guardar.')
     } finally { setGuardando('') }
+  }
+
+  /* Los daños abiertos sin orden. Falla en silencio a proposito: es
+     informacion de apoyo, y si el endpoint no responde, la pantalla de
+     ordenes tiene que seguir funcionando igual que antes. */
+  useEffect(() => {
+    let vivo = true
+    getDanosPendientes({ ...(center && center !== 'Todos' ? { center } : {}) })
+      .then((r) => { if (vivo) setDanos(r.data) })
+      .catch(() => {})
+    return () => { vivo = false }
+  }, [center])
+
+  const desdeDano = (d) => {
+    setNueva({
+      vehicle_id: d.vehicle_id, workshop_id: '', problema: '',
+      fecha_entrega_estimada: '', ledger_id: d.ledger_id,
+    })
+    if (!vehiculos.length) {
+      getVehicles(center).then((r) => setVehiculos(r.data || [])).catch(() => {})
+    }
   }
 
   const abrirAlta = async () => {
@@ -406,6 +429,63 @@ export default function OrdenesTrabajo() {
           </p>
         )}
       </div>
+
+      {/* ── Daños esperando taller ──────────────────────────────────
+          El puente que faltaba. Sin esto, ver un daño y crear la orden son
+          dos pantallas distintas y el daño se queda ahi: 203 abiertos y 2
+          ordenes. El boton no crea nada solo — abre el alta con la matricula
+          y la pieza puestas, y quien decide sigue siendo una persona. */}
+      {!!danos?.total && (
+        <div className="mb-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <button
+            onClick={() => setVerDanos((v) => !v)}
+            className="flex w-full items-center gap-2.5 px-4 py-3 text-left hover:bg-slate-50">
+            <AlertTriangle size={17} className={danos.graves ? 'text-red-600' : 'text-amber-500'} />
+            <h2 className="text-[15px] font-bold">Daños esperando taller</h2>
+            <span className="text-[13px] text-slate-500">
+              {danos.total} abierto{danos.total === 1 ? '' : 's'}
+              {!!danos.graves && <b className="text-red-600"> · {danos.graves} grave{danos.graves === 1 ? '' : 's'}</b>}
+            </span>
+            <ChevronRight size={16}
+              className={`ml-auto text-slate-400 transition-transform ${verDanos ? 'rotate-90' : ''}`} />
+          </button>
+          {verDanos && (
+            <div className="border-t border-slate-100">
+              {danos.danos.slice(0, 40).map((d) => (
+                <div key={d.ledger_id}
+                  className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5 last:border-b-0">
+                  <span className={`h-2 w-2 flex-none rounded-full ${
+                    d.severidad === 'critico' ? 'bg-red-600'
+                      : d.severidad === 'grave' ? 'bg-red-500'
+                        : d.severidad === 'moderado' ? 'bg-amber-500' : 'bg-slate-300'}`} />
+                  <span className="font-mono text-[13px] font-semibold">{d.matricula}</span>
+                  <span className="min-w-0 flex-1 truncate text-[13.5px] text-slate-700">
+                    {d.pieza}
+                    <span className="text-slate-400"> · {d.severidad}</span>
+                    {d.origen === 'ai' && <span className="text-slate-400"> · lo vio la IA</span>}
+                  </span>
+                  {d.dias > 0 && (
+                    <span className={`text-[12px] tabular-nums ${
+                      d.dias > 30 ? 'font-semibold text-red-600' : 'text-slate-400'}`}>
+                      {d.dias} día{d.dias === 1 ? '' : 's'}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => desdeDano(d)}
+                    className="flex-none rounded-lg border border-blue-300 bg-blue-50 px-2.5 py-1 text-[12.5px] font-semibold text-blue-700 hover:bg-blue-100">
+                    Mandar al taller
+                  </button>
+                </div>
+              ))}
+              {danos.total > 40 && (
+                <p className="px-4 py-2 text-[12.5px] text-slate-400">
+                  y {danos.total - 40} más. Se enseñan primero los graves y los que llevan más tiempo abiertos.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Comparativa ────────────────────────────────────────────── */}
       {comparativa && (

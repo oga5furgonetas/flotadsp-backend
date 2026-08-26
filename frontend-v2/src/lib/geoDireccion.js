@@ -535,8 +535,18 @@ export async function buscarRescate(d, opciones = {}) {
   const j = await pedirJSON(`${API_BASE}/cortex/geo/rescate?${q}`,
     { ...opciones, conAuth: true, msMax: 20000 })
   const lista = Array.isArray(j?.resultados) ? j.resultados : []
-  return lista.filter((r) => Number.isFinite(Number(r?.lat)) && Number.isFinite(Number(r?.lng)))
+  const puntos = lista
+    .filter((r) => Number.isFinite(Number(r?.lat)) && Number.isFinite(Number(r?.lng)))
     .map((r) => ({ ...r, lat: Number(r.lat), lng: Number(r.lng) }))
+  /* EL CONCELLO VIAJA APARTE, Y NO ES UN VOTO.
+     El Nomenclator de Galicia dice en que concello cae la direccion, pero NO
+     da coordenadas: no puede entrar en la votacion de puntos porque no tiene
+     punto. Se cuelga de la lista para que quien la pinte pueda decir "esto
+     esta en Ribeira" aunque ninguna fuente haya dado el portal — que es
+     justo el caso frecuente aqui: 149 de 166 busquedas devolvian CERO, y
+     saber el concello ya ahorra la llamada al cliente. */
+  puntos.nomenclator = j?.nomenclator?.concello ? j.nomenclator : null
+  return puntos
 }
 
 /* El orden no importa: se preguntan todos a la vez. Son servicios distintos,

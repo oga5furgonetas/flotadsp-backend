@@ -42,7 +42,7 @@ const MODULES = [
     // era false para cualquiera con permisos definidos y la entrada del menu
     // desaparecia sin decir nada. Mery tenia las 27 casillas marcadas y aun
     // asi no la veia. Lo detecta ahora `scripts/check-permisos.mjs`.
-    ['diarios', 'DNR · Diarios'],
+    ['diarios', 'DNR · Diarios'], ['debrief', 'Cuadre del debrief'],
   ]},
   { g: 'Sistema', items: [
     ['ia-peritaje', 'IA Peritaje'], ['configuracion', 'Configuración'],

@@ -347,6 +347,7 @@ const DICT = {
   'nav.ordenes':    { es: 'Órdenes de taller', en: 'Work orders', fr: 'Ordres de travail', de: 'Werkstattaufträge', it: 'Ordini di lavoro', pt: 'Ordens de trabalho' },
   'nav.diarios':    { es: 'DNR · Diarios',   en: 'DNR · Daily',   fr: 'DNR · Quotidien', de: 'DNR · Täglich',   it: 'DNR · Giornaliero', pt: 'DNR · Diários' },
   'nav.whc':        { es: 'Horas · WHC',      en: 'Hours · WHC',   fr: 'Heures · WHC',    de: 'Stunden · WHC',   it: 'Ore · WHC',      pt: 'Horas · WHC' },
+  'nav.debrief':    { es: 'Cuadre del debrief', en: 'Debrief check', fr: 'Contrôle debrief', de: 'Debrief-Abgleich', it: 'Controllo debrief', pt: 'Conferência do debrief' },
   'nav.dsc':        { es: 'Dónde se entrega', en: 'Delivery spot', fr: 'Lieu de livraison', de: 'Ablageort',     it: 'Luogo consegna', pt: 'Onde se entrega' },
   'dsc.title': { es: 'Dónde se deja cada paquete', en: 'Where each parcel is left', fr: 'Où chaque colis est laissé', de: 'Wo jedes Paket abgelegt wird', it: 'Dove viene lasciato ogni pacco', pt: 'Onde se deixa cada encomenda' },
   'dsc.sub': { es: 'Métrica propia de FlotaDSP. NO es el DSC DPMO de Amazon: ver la nota.', en: 'FlotaDSP’s own metric. NOT Amazon’s DSC DPMO: see the note below.', fr: "C'est ce que mesure le DSC, la métrique qui pénalise le plus.", de: 'Das misst DSC, die Kennzahl mit der größten Auswirkung.', it: 'È ciò che misura il DSC, la metrica che penalizza di più.', pt: 'É o que mede o DSC, a métrica que mais penaliza.' },
