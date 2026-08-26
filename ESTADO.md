@@ -1,8 +1,12 @@
-# Estado a 21-08-2026 — para retomar desde otro sitio
+# Estado a 26-08-2026 — para retomar desde otro sitio
 
 Este fichero es el relevo. Si abres una sesión nueva (otro ordenador, Claude en
-la web), lee **CLAUDE.md** primero —ahí están las reglas y los 18 gotchas— y
+la web), lee **CLAUDE.md** primero —ahí están las reglas y los 27 gotchas— y
 luego esto, que es lo que está a medias hoy.
+
+> Este repositorio es **PÚBLICO**. Nada de claves, contraseñas, teléfonos ni
+> correos de personas aquí dentro. Ya pasó una vez con una clave de Google y
+> sigue en el historial de git; ver el punto 1.
 
 ---
 
@@ -44,6 +48,32 @@ aplicarse porque `admin_role` no llegaba nunca al servidor.
 
 ---
 
+## Hecho del 22 al 26-08 y ya en producción
+
+Cuatro días parados por facturas de Fly sin pagar: el código estaba escrito y
+probado desde el 22 pero **Fly bloquea la compilación**, no la ejecución, así
+que producción seguía viva con la versión vieja. Desbloqueado el 25 y desplegado
+todo de golpe.
+
+| Qué | Dónde se ve |
+|---|---|
+| Cuadrante rehecho: códigos con hora, orden alfabético, máximas / piden / a ruta, días aprobados bloqueados en rosa, rango de fechas libre, descarga a Excel | Turnos |
+| Módulo DNR: lee los Daily Report en `.html` tal cual se bajan de Cortex (las 5 tablas, hasta 120 de golpe) y cruza con el historial | DNR · Diarios |
+| El Transporter ID vive en la ficha del conductor y se puede corregir | Conductores · DNR |
+| Inspecciones y Revisión Rápida en negro para quien tiene centros limitados | El centro se filtraba DESPUÉS del límite |
+| Órdenes de taller + portal del taller sin usuario ni contraseña, por pasos | Flota → Órdenes de taller |
+| La IA se autoexamina, puede decir "no lo puedo juzgar", y revisión exprés | Revisión rápida |
+| `check-permisos.mjs`: una pantalla sin su casilla ya no puede colarse | CI |
+
+Ocho commits, de `752e8ed` a `b4806c3`. Todo en `main`.
+
+**Lo que más cambia el día a día:** el portal del taller. Se manda un enlace por
+WhatsApp, el taller lo abre en el móvil sin registrarse y va poniendo estado,
+fotos, fecha de entrega y presupuesto. Te avisa por Telegram cuando está lista,
+falta una pieza o **se mueve la fecha de entrega**.
+
+---
+
 ## Lo que está PENDIENTE, por orden de lo que más duele
 
 ### 1. Rotar la clave de Google Geocoding — LO QUE MÁS CORRE
@@ -62,10 +92,14 @@ Cloud.** Empieza por `AIzaSyCd45`, suficiente para reconocerla allí.
 Lo del 21-08 arregló que dar y quitar permisos FUNCIONE. No arregló que los
 permisos PROTEJAN algo.
 
-`_puede()` está definido una vez en server.py y llamado UNA sola vez en 13.000
-líneas (`aprobar-dias`). Todo lo demás es esconder botones del menú: quien sepa
-la dirección de la API entra igual, tenga el módulo o no. Y esa única
-comprobación se salta entera si la organización es `owner` — la tuya.
+`_puede()` está definido una vez en server.py y, en 29.201 líneas, se llama en
+**cuatro sitios — los cuatro para lo mismo**, `aprobar-dias`. Todo lo demás es
+esconder botones del menú: quien sepa la dirección de la API entra igual, tenga
+el módulo o no. Y esa única comprobación se salta entera si la organización es
+`owner` — la tuya.
+
+(Medido de nuevo el 26-08: `grep -n "_puede(" backend/server.py`. Si algún día
+esa cuenta sube de verdad, actualiza este párrafo.)
 
 No es un arreglo de una tarde: empezar a exigirlos deja fuera a gente que hoy
 entra, sobre todo con `permissions: null` mezclado con listas viejas
@@ -100,10 +134,11 @@ un clúster. Si el límite real no son 10 GB: `fly secrets set ATLAS_LIMITE_MB=<
 
 ### 6. Contestar a los dos mensajes de la web
 Llevan esperando desde el 15-08 y los dos son **candidaturas de empleo**, no
-clientes:
-- David García Sáez — `d.garciasz03@gmail.com`, jefe de tráfico/flota, vio una
-  oferta en LinkedIn, quiere mandar el CV.
-- `arsgphillies@gmail.com` — solo dejó el correo, asunto "Empleo".
+clientes. Uno es jefe de tráfico/flota y vio una oferta en LinkedIn; el otro
+solo dejó el correo con asunto "Empleo".
+
+Los nombres y correos estaban escritos aquí y **este repositorio es público**:
+se han quitado el 26-08. Están en el panel, en **Bandeja**, que es su sitio.
 
 ### 7. Borrar `sample_mflix`
 115 MB de la base de datos de ejemplo de MongoDB (21.349 películas). No es
@@ -145,12 +180,43 @@ conductor que ya no exista. La base está sana. Lo que sí hay:
 Arreglado ya: `drivers.email` no tenía **ningún** índice y es la llave del
 portal. Cada login recorría las 202 fichas enteras; ahora examina 2.
 
-### 10. El cuadrante
-Diseñado y hablado, sin construir. Dani ofreció mandar el Sheets entero.
+### 10. ~~El cuadrante~~ — HECHO 22-08
+En Turnos, con los 16 códigos reales, hora por celda, días aprobados que nadie
+puede mover salvo quien tenga `aprobar-dias`, y descarga a Excel.
 
-### 11. Módulo de taller
-Idea del 20-08, con diagrama hecho. Nivel 0 = enlace mágico con tres campos
-y reloj por dueño de cada hora parada. Sin empezar.
+### 11. ~~Módulo de taller~~ — HECHO 25/26-08
+Órdenes de trabajo + portal del taller por pasos, sin usuario ni contraseña.
+Lo que NO está y es decisión tuya: **el bot de WhatsApp**. Necesita verificar la
+empresa en Meta y plantillas aprobadas; son semanas y no depende del código. Lo
+que hay funciona hoy sin depender de nadie.
+
+### 12. Marcar la casilla "DNR · Diarios" a quien deba verla
+La casilla no existía, así que **nadie la tiene**. Se creó el 26-08. Usuarios →
+la persona → marcar. Crear la casilla no concede nada: eso lo decides tú.
+
+### 13. Los 450 daños esperando validación
+Revisión rápida → "Revisar en 5 segundos". Salen ordenados por lo que enseñan,
+no por fecha: primero las piezas de las que no hay ni un ejemplo.
+
+Es lo único que hace que la IA mejore. Medido el 25-08: acierta el **7,1 %** de
+lo que reporta, pero dice "sin daños" en el **86 %** de las inspecciones y ahí
+casi nunca falla. O sea: **cuando calla acierta, cuando habla suele fallar.** Y
+la señal está muerta — 11 validaciones en 30 días sobre 1.568 inspecciones.
+
+Aviso para leerlo bien: sus recuadros **se equivocan de sitio a menudo** (hay un
+retrovisor izquierdo marcado en la trasera del vehículo). Por eso hay un botón
+"Sí, pero no ahí": si el daño existe y el recuadro está mal, ESE es el botón. El
+"No existe" solo cuando de verdad no hay daño.
+
+### 14. Cargar los 144 Daily Report que están en Descargas
+DNR · Diarios → "Subir Daily Report", arrastrando los `.html`. Son de cuatro
+centros (OGA5, DGA1, DIC1 y DMA3) y suman 10.790 € en fallos de entrega que
+hoy no están en la app. Los anteriores al 13-05 no traen columna DSC: sus DNR
+se guardan **sin clasificar**, ni acierto ni fallo.
+
+### 15. Cinco talleres sin teléfono
+Los dos Carglass y los tres Toyota. Sin teléfono, el botón de "mandar por
+WhatsApp" abre la app pero hay que elegir el contacto a mano.
 
 ---
 
