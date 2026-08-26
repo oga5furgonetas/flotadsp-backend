@@ -61,6 +61,12 @@ function RevisionExpres({ center, alCerrar, alGuardar }) {
         verdict, damage_index: actual.damage_index, scope: actual.scope || 'new',
       })
       setHechas((n) => n + 1)
+      /* Al pasar de daño se cierra el zoom. Con las teclas 1-4 se puede
+         contestar desde la foto ampliada, y la ampliacion no ensena ni
+         matricula ni descripcion: si se quedara abierta, pasaria a mostrar
+         la foto del SIGUIENTE daño sin avisar y la siguiente pulsacion
+         validaria uno que nadie ha leido. Vuelve siempre a la ficha. */
+      setAmpliada(false)
       // Se avanza desde la posicion del que se acaba de contestar, que no
       // tiene por que ser `i` si por el camino se salto alguno.
       setI((lista || []).findIndex((x) => x === actual) + 1)
@@ -70,11 +76,15 @@ function RevisionExpres({ center, alCerrar, alGuardar }) {
     } finally { setOcupado(false) }
   }
 
-  /* Teclado para el que revisa desde el ordenador: 1 sí, 2 no, 3 no se ve.
-     Con raton son 25 clics; con teclado, 25 pulsaciones sin mover la mano. */
+  /* Teclado para el que revisa desde el ordenador: 1 sí y está ahí, 2 sí pero
+     no ahí, 3 no existe, 4 no se ve. Con raton son 25 clics; con teclado, 25
+     pulsaciones sin mover la mano. */
   useEffect(() => {
     const h = (e) => {
       if (e.key === 'Escape') return ampliada ? setAmpliada(false) : alCerrar?.()
+      // Ctrl+1 / Cmd+1 es "ir a la primera pestaña del navegador", no una
+      // respuesta: sin esto, cambiar de pestaña validaba un daño de paso.
+      if (e.ctrlKey || e.metaKey || e.altKey) return
       if (e.key === '1') responder('correct')
       if (e.key === '2') responder('corrected')
       if (e.key === '3') responder('wrong')
@@ -268,10 +278,19 @@ function Autoexamen({ datos, total, alRevisar }) {
 
   const cob = datos.cobertura || {}
   const sinSenal = (cob.porcentaje ?? 100) < 5
-  // Semanas con menos de 5 revisiones no se pintan: con 2 casos, uno solo
-  // mueve el porcentaje 50 puntos y la linea contaria una historia falsa.
-  const ult = (datos.tendencia || []).filter((x) => x.total >= 5).slice(-8)
-  const pct = (k) => Math.round((100 * (datos.global?.[k] || 0)) / Math.max(1, datos.revisadas))
+  // Semanas con menos de 5 daños REPORTADOS no se pintan: con 2 casos, uno
+  // solo mueve el porcentaje 50 puntos y la linea contaria una historia
+  // falsa. El corte va sobre el mismo denominador que el porcentaje —si se
+  // mira `total`, una semana entera de daños que se le escaparon pasa el
+  // filtro y llega sin acierto que pintar.
+  const ult = (datos.tendencia || []).filter((x) => x.reportados >= 5).slice(-8)
+  /* CADA PORCENTAJE SOBRE SU DENOMINADOR, que el backend manda ya contado.
+     "Se inventa" es una parte de lo que la IA REPORTÓ; "se le escapan", una
+     parte de los daños que EXISTEN. Son dos preguntas distintas: dividir las
+     dos entre el total de revisiones daba números que no significaban nada
+     —y hundía a la pieza que acierta todo lo que dice pero no ve mucho—. */
+  const pct = (k, den) => (den ? Math.round((100 * (datos.global?.[k] || 0)) / den) : null)
+  const conSigno = (v) => (v == null ? '—' : `${v}%`)
 
   return (
     <div className="card mb-4 border-violet-500/30 bg-violet-500/5 p-4">
@@ -290,10 +309,10 @@ function Autoexamen({ datos, total, alRevisar }) {
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
-          ['Acierta', datos.acierto == null ? '—' : `${datos.acierto}%`, 'de lo que reporta'],
-          ['Se inventa', `${pct('wrong')}%`, 'daños que no están'],
-          ['Se le escapan', `${pct('missed')}%`, 'daños reales'],
-          ['Dice «sin daños»', `${datos.cuando_calla?.porcentaje ?? '—'}%`, 'de las inspecciones'],
+          ['Acierta', conSigno(datos.acierto), 'de lo que reporta'],
+          ['Se inventa', conSigno(pct('wrong', datos.reportados)), 'de lo que reporta'],
+          ['Se le escapan', conSigno(pct('missed', datos.reales)), 'de los daños reales'],
+          ['Dice «sin daños»', conSigno(datos.cuando_calla?.porcentaje), 'de las inspecciones'],
         ].map(([k, v, pie]) => (
           <div key={k}>
             <p className="text-[10.5px] uppercase tracking-wider text-dark-500">{k}</p>
@@ -334,7 +353,7 @@ function Autoexamen({ datos, total, alRevisar }) {
               <div className="flex items-end gap-1.5" style={{ height: 68 }}>
                 {ult.map((s) => (
                   <div key={s.semana} className="flex flex-1 flex-col justify-end text-center"
-                    title={`${s.semana}: ${s.acierto}% sobre ${s.total} revisiones`}>
+                    title={`${s.semana}: ${s.acierto}% sobre ${s.reportados} daños reportados`}>
                     <div className="w-full rounded-t bg-violet-500/70"
                       style={{ height: `${Math.max(3, s.acierto * 0.5)}px` }} />
                     <p className="mt-1 text-[10px] tabular-nums text-dark-600">{s.acierto}%</p>
@@ -342,7 +361,7 @@ function Autoexamen({ datos, total, alRevisar }) {
                 ))}
               </div>
               <p className="mt-1 text-[11px] text-dark-600">
-                Solo semanas con 5 o más revisiones: con menos, un caso mueve el porcentaje 20 puntos.
+                Solo semanas con 5 o más daños reportados: con menos, un caso mueve el porcentaje 20 puntos.
               </p>
             </div>
           )}
@@ -358,15 +377,20 @@ function Autoexamen({ datos, total, alRevisar }) {
                      "0 inventados / 0% ok" hacía parecer pésima a una pieza
                      cuyo problema es justo el contrario: que se le escapan. */
                   const inventa = p.wrong >= p.missed
-                  const juzgadas = p.correct + p.wrong
                   return (
                     <li key={p.pieza} className="flex items-center gap-2 text-[12.5px]">
                       <span className="flex-1 truncate capitalize text-dark-300">{p.pieza}</span>
                       <span className={`tabular-nums ${inventa ? 'text-red-300' : 'text-amber-300'}`}>
                         {inventa ? `${p.wrong} inventados` : `${p.missed} se le escapan`}
                       </span>
+                      {/* El "% ok" es de lo que la pieza REPORTÓ, y por eso se
+                          enseña solo si reportó algo: `p.reportados`. Antes se
+                          decidía con `correct + wrong` pero se pintaba un
+                          número calculado sobre TODOS los veredictos, así que
+                          una pieza con 3 aciertos, 0 inventados y 7 escapados
+                          salía como "30 % ok" acertando el 100 % de lo suyo. */}
                       <span className="w-16 text-right tabular-nums text-dark-500">
-                        {juzgadas ? `${p.acierto}% ok` : '—'}
+                        {p.reportados ? `${p.acierto}% ok` : '—'}
                       </span>
                     </li>
                   )
@@ -486,6 +510,17 @@ export default function RevisionRapida() {
   useEffect(() => {
     const h = (e) => {
       if (!queue) return
+      /* CON UNA CAPA ENCIMA, ESTE TECLADO NO EXISTE.
+         El overlay tapa la pantalla pero NO para los eventos: este listener
+         vive en `document` y RevisionRapida sigue montada debajo. Sin este
+         corte, pulsar Enter con la Revisión exprés o el editor de zona
+         abiertos llamaba a reviewDone(), que hace markReviewed() contra el
+         backend y saca de la cola la inspección que hay DETRÁS del overlay,
+         sin que se vea nada; y ←/→ movían esa cola oculta, así que al cerrar
+         aparecías en otra inspección. El filtro por tagName de abajo no
+         valía: solo evita chocar con lo que se escribe, no con lo que se
+         tapa. Toda capa nueva a pantalla completa se añade aquí. */
+      if (polyEdit || expres) return
       const tag = (e.target.tagName || '').toLowerCase()
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable) return
       if (e.key === 'ArrowRight') { e.preventDefault(); go(1) }

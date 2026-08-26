@@ -105,6 +105,9 @@ export default function PortalTaller() {
   const [fecha, setFecha] = useState('')
   const [cambiandoFecha, setCambiandoFecha] = useState(false)
   const [motivo, setMotivo] = useState('')
+  /* Estado PROPIO, no el `detalle` de abajo: ese es el "qué incluye" del
+     presupuesto, y compartirlo colaría el texto de un paso en el otro. */
+  const [detalleMotivo, setDetalleMotivo] = useState('')
   const [importe, setImporte] = useState('')
   const [detalle, setDetalle] = useState('')
   const [nota, setNota] = useState('')
@@ -386,9 +389,14 @@ export default function PortalTaller() {
                       {cambiandoFecha && orden.fecha_entrega_estimada && (
                         <>
                           <p className="mb-2 text-[13.5px] text-slate-500">¿Por qué? (opcional)</p>
-                          <div className="mb-4 flex flex-wrap gap-2">
+                          <div className={`flex flex-wrap gap-2 ${motivo === 'otro' ? 'mb-2' : 'mb-4'}`}>
                             {(orden.motivos || []).map((m) => (
-                              <button key={m.id} onClick={() => setMotivo(motivo === m.id ? '' : m.id)}
+                              <button key={m.id}
+                                onClick={() => {
+                                  const quitar = motivo === m.id
+                                  setMotivo(quitar ? '' : m.id)
+                                  if (quitar || m.id !== 'otro') setDetalleMotivo('')
+                                }}
                                 className={`min-h-[44px] rounded-full border px-4 text-[14px] font-semibold ${
                                   motivo === m.id ? 'border-blue-600 bg-blue-50 text-blue-700'
                                     : 'border-slate-300 text-slate-600'}`}>
@@ -396,20 +404,33 @@ export default function PortalTaller() {
                               </button>
                             ))}
                           </div>
+                          {/* «Otro motivo» SIN explicación el backend lo tira
+                              —y hace bien: un motivo que no dice nada ocupa
+                              sitio y encima parece que te han contado algo—.
+                              Sin esta caja no había forma de escribirla desde
+                              aquí, así que elegir «Otro motivo» no guardaba
+                              absolutamente nada y el taller no se enteraba. */}
+                          {motivo === 'otro' && (
+                            <input type="text" value={detalleMotivo} maxLength={300}
+                              placeholder="¿Qué ha pasado? (si no, no se guarda)"
+                              onChange={(e) => setDetalleMotivo(e.target.value)}
+                              className="mb-4 min-h-[56px] w-full rounded-xl border border-slate-300 bg-white px-3 text-[15px]" />
+                          )}
                         </>
                       )}
                       <div className="flex gap-2">
                         <button disabled={!fecha || ocupado === 'fecha'}
                           onClick={async () => {
-                            const hecho = await enviar('fecha', 'entrega', { fecha, motivo },
+                            const hecho = await enviar('fecha', 'entrega',
+                              { fecha, motivo, detalle: detalleMotivo },
                               'Apuntado. La oficina ya lo sabe, no hace falta que llaméis.')
-                            if (hecho) { setCambiandoFecha(false); setMotivo('') }
+                            if (hecho) { setCambiandoFecha(false); setMotivo(''); setDetalleMotivo('') }
                           }}
                           className="min-h-[56px] flex-1 rounded-xl bg-blue-600 text-[16px] font-semibold text-white active:bg-blue-700 disabled:opacity-40">
                           {ocupado === 'fecha' ? <Loader2 size={18} className="mx-auto animate-spin" /> : 'Confirmar fecha'}
                         </button>
                         {cambiandoFecha && (
-                          <button onClick={() => { setCambiandoFecha(false); setMotivo('') }}
+                          <button onClick={() => { setCambiandoFecha(false); setMotivo(''); setDetalleMotivo('') }}
                             className="min-h-[56px] rounded-xl border border-slate-300 px-5 text-[14.5px] font-semibold text-slate-500">
                             Cancelar
                           </button>

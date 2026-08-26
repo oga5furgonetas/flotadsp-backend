@@ -8163,8 +8163,16 @@ async def ai_dataset_stats(_=Depends(require_admin)):
     total = await db.ai_feedback.count_documents({})
     correct = await db.ai_feedback.count_documents({"verdict": "correct"})
     wrong = await db.ai_feedback.count_documents({"verdict": "wrong"})
+    corrected = await db.ai_feedback.count_documents({"verdict": "corrected"})
+    # `total` es el progreso del dataset —cuantos ejemplos llevamos de 3.000— y
+    # ahi si entra todo. Pero como DENOMINADOR de una precision no vale: mete
+    # los daños que se le escaparon (que la IA nunca reporto) y las fotos que
+    # no se podian juzgar, ninguno de los dos culpa suya. Mismo fallo que tenia
+    # /ai/autoexamen. Lo que se reporto es correct + wrong + corrected.
+    reportados = correct + wrong + corrected
     return {"total": total, "correct": correct, "wrong": wrong,
-            "precision_ia": round(correct / total * 100, 1) if total else None,
+            "reportados": reportados,
+            "precision_ia": round(correct / reportados * 100, 1) if reportados else None,
             "goal": 3000,
             "progress_pct": round(total / 3000 * 100, 1)}
 
@@ -12882,6 +12890,26 @@ async def ia_autoexamen(semanas: int = 12, _=Depends(require_admin)):
         # los fallos culparia a la IA de la calidad de las fotos.
         return {"correct": 0, "wrong": 0, "corrected": 0, "missed": 0, "no_evaluable": 0}
 
+    def reportados(v: dict) -> int:
+        """Lo que la IA DIJO: aciertos + inventados + visto pero mal situado.
+
+        Es el denominador de "acierta" y de "se inventa", y NO el total de
+        veredictos. Un `missed` es un daño que la IA no reporto: meterlo aqui
+        mezcla dos preguntas distintas y hunde a la pieza que acierta todo lo
+        que dice — 3 correct / 0 wrong / 7 missed daba "30 % ok" cuando de lo
+        que reporto acerto el 100 %, y la tarjeta se titula "donde mas se
+        equivoca". Y `no_evaluable` no es ni acierto ni fallo suyo: es una
+        foto que no dejaba juzgar.
+        """
+        return v["correct"] + v["wrong"] + v["corrected"]
+
+    def reales(v: dict) -> int:
+        """Los daños que EXISTEN, segun el humano: los que vio —aunque situara
+        mal la caja— mas los que se le escaparon. Es el denominador de "se le
+        escapan", que es otra pregunta (cuanto VE) y no se puede medir sobre
+        lo que reporto: los que no reporto son justamente los que faltan."""
+        return v["correct"] + v["corrected"] + v["missed"]
+
     # ── Global ────────────────────────────────────────────────────────
     total = vacio()
     async for g in db.ai_feedback.aggregate([
@@ -12908,8 +12936,10 @@ async def ia_autoexamen(semanas: int = 12, _=Depends(require_admin)):
         tot = sum(v.values())
         if tot < 3:              # 1 o 2 casos no son un patron, son ruido
             continue
+        rep = reportados(v)
         lista.append({"pieza": p, "total": tot, **v,
-                      "acierto": round(100 * v["correct"] / tot, 1)})
+                      "reportados": rep, "reales": reales(v),
+                      "acierto": round(100 * v["correct"] / rep, 1) if rep else None})
     lista.sort(key=lambda x: (-x["wrong"], -x["total"]))
 
     # ── Tendencia por semana ──────────────────────────────────────────
@@ -12933,8 +12963,10 @@ async def ia_autoexamen(semanas: int = 12, _=Depends(require_admin)):
     for k in sorted(por_semana):
         v = por_semana[k]
         tot = sum(v.values())
+        rep = reportados(v)
         tendencia.append({"semana": k, "total": tot, **v,
-                          "acierto": round(100 * v["correct"] / tot, 1) if tot else 0})
+                          "reportados": rep, "reales": reales(v),
+                          "acierto": round(100 * v["correct"] / rep, 1) if rep else None})
 
     # ── Cobertura: cuanto de lo que analiza llega a revisarse ─────────
     corte30 = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
@@ -12957,10 +12989,17 @@ async def ia_autoexamen(semanas: int = 12, _=Depends(require_admin)):
             {"$sort": {"n": -1}}]):
         motivos[g["_id"] or "otra"] = g["n"]
 
+    rep_total, reales_total = reportados(total), reales(total)
     return {
         "revisadas": n,
         "global": total,
-        "acierto": round(100 * total["correct"] / n, 1) if n else None,
+        # Los DOS denominadores, explicitos y en la respuesta, para que ninguna
+        # pantalla tenga que elegir uno por su cuenta: "acierta" y "se inventa"
+        # se miden sobre lo que la IA reporto; "se le escapan", sobre los daños
+        # que existen de verdad. Son preguntas distintas y no comparten divisor.
+        "reportados": rep_total,
+        "reales": reales_total,
+        "acierto": round(100 * total["correct"] / rep_total, 1) if rep_total else None,
         "piezas": lista[:20],
         "tendencia": tendencia,
         "cobertura": {"inspecciones_30d": insp30, "revisadas_30d": rev30,
@@ -13332,6 +13371,16 @@ async def portal_taller_entrega(token: str, data: dict = Body(...)):
     detalle_libre = str(data.get("detalle") or "").strip()[:300]
     antes = orden.get("fecha_entrega_estimada")
 
+    # "Otro motivo" sin explicar no informa de nada: ocupa sitio y encima
+    # parece que te han dicho algo. Solo cuenta si trae el detalle.
+    # VA ANTES DEL GUARD DE ABAJO, y no despues: si se normaliza al final,
+    # "Otro motivo" a secas sigue siendo truthy cuando el guard mira, se
+    # cuela por el, y se apunta una linea de historial IDENTICA a la
+    # anterior y ademas sin ninguna razon dentro — justo el duplicado que el
+    # guard existe para evitar.
+    if motivo == OT_MOTIVOS["otro"] and not detalle_libre:
+        motivo = ""
+
     # Confirmar la fecha que ya estaba no es una novedad: sin esto cada
     # toque metia una linea igual en el historial. En la OT-1002 salieron
     # dos seguidas identicas y parecia que habia pasado algo dos veces.
@@ -13347,10 +13396,6 @@ async def portal_taller_entrega(token: str, data: dict = Body(...)):
         except Exception:
             desfase = None
 
-    # "Otro motivo" sin explicar no informa de nada: ocupa sitio y encima
-    # parece que te han dicho algo. Solo cuenta si trae el detalle.
-    if motivo == OT_MOTIVOS["otro"] and not detalle_libre:
-        motivo = ""
     partes = [p for p in (motivo, detalle_libre) if p]
     if antes and antes != f:
         que = "Entrega: %s (antes %s)" % (f, antes)
@@ -13366,7 +13411,11 @@ async def portal_taller_entrega(token: str, data: dict = Body(...)):
                   # escrito la oficina al abrir la orden: les atribuia una
                   # promesa que no habian hecho.
                   "entrega_la_dijo_taller": True,
-                  "motivo_retraso": motivo or detalle_libre or None},
+                  # El motivo Y su explicacion, no solo el motivo. Con "Otro
+                  # motivo" lo unico que informa es el texto libre: guardar
+                  # solo la etiqueta dejaba en pantalla un "Otro motivo" a
+                  # secas, que es exactamente no decir nada.
+                  "motivo_retraso": " · ".join(partes) or None},
          "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller",
                                            que, " · ".join(partes))}})
 
