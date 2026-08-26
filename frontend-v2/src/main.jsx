@@ -13,9 +13,15 @@ import '@fontsource-variable/space-grotesk'
    y para eso está el ErrorBoundary. */
 window.__flotaArrancada = true
 
-// Tema del panel ANTES del primer render: sin destello oscuro→claro
-if (localStorage.getItem('panel_theme') === 'light') {
-  document.documentElement.setAttribute('data-panel-theme', 'light')
+/* Tema del panel ANTES del primer render: sin destello oscuro→claro.
+   Solo miraba 'light', y al pasar el defecto a 'hibrido' eso significaba que
+   quien no hubiera elegido nunca tema —o sea, todo el mundo la primera vez—
+   veía el panel en negro y luego saltaba a claro de golpe. */
+{
+  const guardado = localStorage.getItem('panel_theme') || 'hibrido'
+  if (guardado === 'light' || guardado === 'hibrido') {
+    document.documentElement.setAttribute('data-panel-theme', guardado)
+  }
 }
 import './index.css'
 import { ToastProvider } from './lib/toast'

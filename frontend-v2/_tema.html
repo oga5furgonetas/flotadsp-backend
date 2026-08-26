@@ -1,0 +1,35 @@
+<!doctype html>
+<html data-panel-theme="hibrido">
+<head>
+  <meta charset="utf-8">
+  <title>Banco de pruebas del tema</title>
+  <link rel="stylesheet" href="/src/index.css">
+</head>
+<body>
+  <!-- Reproduce la estructura real del panel: el rail y la cabecera FUERA de
+       <main>, que es lo que hace que el modo hibrido funcione. -->
+  <div class="atmosphere flex min-h-screen text-dark-50">
+    <aside class="w-[248px] shrink-0 flex-col p-3 pr-0 flex">
+      <div class="rail flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div class="px-5 py-5">
+          <p class="text-dark-50 font-bold" id="rail-titulo">FlotaDSP</p>
+          <p class="text-dark-400 text-sm" id="rail-suave">Operación diaria</p>
+          <div class="mt-3 rounded bg-dark-800 p-2 text-dark-300" id="rail-caja">Vehículos</div>
+        </div>
+      </div>
+    </aside>
+    <div class="flex min-w-0 flex-1 flex-col">
+      <header class="border-b border-white/[0.05] px-4 py-2.5" id="cabecera">
+        <span class="text-dark-200">Cuadre del debrief</span>
+      </header>
+      <main class="flex-1 p-5" id="principal">
+        <h1 class="text-dark-50 text-2xl font-bold" id="main-titulo">Título del contenido</h1>
+        <p class="text-dark-400" id="main-suave">Texto secundario</p>
+        <div class="mt-3 rounded border border-dark-700 bg-dark-900 p-4" id="main-caja">
+          <span class="text-dark-300" id="main-caja-texto">Una tarjeta</span>
+        </div>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

@@ -4,7 +4,7 @@ import {
   LayoutDashboard, Trophy, Users, CalendarClock, CalendarCheck, BarChart3, Activity,
   CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
-  ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon,
+  ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX,
   PackageSearch, PackageCheck, MapPin, Timer, MapPinned,
 } from 'lucide-react'
@@ -92,8 +92,13 @@ export default function PanelLayout() {
   const [center, setCenter] = useState(() => localStorage.getItem('panel_center') || 'Todos')
   const [cmdOpen, setCmdOpen] = useState(false)
 
-  // Tema del panel: noche (por defecto) / día. La rampa vive en variables CSS.
-  const [theme, setTheme] = useState(() => localStorage.getItem('panel_theme') || 'dark')
+  /* Tres temas, y la rampa vive en variables CSS:
+       hibrido — raíl y cabecera en negro, contenido en claro (por defecto)
+       dark    — todo oscuro
+       light   — todo claro, raíl incluido
+     El híbrido es el que se pidió al ver el cuadre del debrief, y es el que
+     mejor separa "dónde estoy" (el raíl) de "qué estoy mirando" (el papel). */
+  const [theme, setTheme] = useState(() => localStorage.getItem('panel_theme') || 'hibrido')
   useEffect(() => {
     document.documentElement.setAttribute('data-panel-theme', theme)
     localStorage.setItem('panel_theme', theme)
@@ -410,13 +415,21 @@ export default function PanelLayout() {
             <kbd className="kbd hidden sm:inline-flex">Ctrl K</kbd>
           </button>
 
-          {/* Día / noche */}
+          {/* Tema: híbrido → noche → día → híbrido.
+              Tres estados en un botón necesitan que el título diga a dónde
+              vas, no dónde estás: si no, hay que pulsar para averiguarlo. */}
           <button
-            onClick={() => setTheme((th) => (th === 'light' ? 'dark' : 'light'))}
-            className="rounded-lg border border-dark-700 bg-dark-800/70 p-1.5 text-dark-400 transition-colors hover:border-dark-600 hover:text-dark-200"
-            title={theme === 'light' ? 'Modo noche' : 'Modo día'}
+            onClick={() => setTheme((th) =>
+              (th === 'hibrido' ? 'dark' : th === 'dark' ? 'light' : 'hibrido'))}
+            className="flex items-center gap-1.5 rounded-lg border border-dark-700 bg-dark-800/70 px-2 py-1.5 text-dark-400 transition-colors hover:border-dark-600 hover:text-dark-200"
+            title={theme === 'hibrido' ? 'Cambiar a modo noche'
+              : theme === 'dark' ? 'Cambiar a modo día' : 'Volver al modo mixto'}
           >
-            {theme === 'light' ? <Moon size={14} /> : <Sun size={14} />}
+            {theme === 'dark' ? <Moon size={14} />
+              : theme === 'light' ? <Sun size={14} /> : <Contrast size={14} />}
+            <span className="hidden text-[11px] font-medium lg:inline">
+              {theme === 'hibrido' ? 'Mixto' : theme === 'dark' ? 'Noche' : 'Día'}
+            </span>
           </button>
 
           {/* Selector de idioma */}

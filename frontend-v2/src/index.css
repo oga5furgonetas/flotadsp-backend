@@ -420,3 +420,101 @@ html[data-panel-theme='light'] [class*='hover:text-white']:hover { color: rgb(va
   .stagger > *:nth-child(6) { animation-delay: 0.22s; }
   .stagger > *:nth-child(n + 7) { animation-delay: 0.26s; }
 }
+
+
+/* ═══ MODO HIBRIDO: contenido en claro, raíl y cabecera en negro ═══════════
+   Lo que se ve en el cuadre del debrief, para toda la app.
+
+   Funciona sin tocar ninguna clase de ningún componente. La rampa `--dk-*`
+   son variables CSS heredadas y el raíl y la cabecera están FUERA de <main>,
+   así que declarándola clara sobre <main> se retematizan solos los 3.180
+   usos de `dark-*` que hay repartidos por 76 ficheros — y lo de fuera de
+   <main> sigue exactamente igual de negro que estaba.
+
+   Las reglas de compensación de abajo NO están escritas a mano: se derivan
+   del bloque del modo día. `scripts/check-tema.mjs` avisa si alguien toca
+   ese bloque y se olvida de este: sin ese aviso, las dos versiones se
+   separan en silencio y el modo híbrido se queda con colores viejos. */
+html[data-panel-theme='hibrido'] main {
+  --dk-50: 17 17 20;    /* tinta */
+  --dk-100: 34 34 40;
+  --dk-200: 48 48 54;
+  --dk-300: 64 64 72;
+  --dk-400: 96 96 106;
+  --dk-500: 120 120 130;
+  --dk-600: 128 128 138;
+  --dk-700: 210 209 205; /* bordes */
+  --dk-800: 233 232 228; /* rellenos suaves */
+  --dk-900: 251 250 248; /* superficies */
+  --dk-950: 244 243 240; /* papel cálido */
+  color-scheme: light;
+  color: rgb(var(--dk-50));
+  /* Fondo propio: la atmósfera de detrás sigue siendo oscura, así que sin
+     esto el contenido se vería sobre negro.
+
+     EN LONGHAND, Y CON COLOR DE SUELO. `main` es el contenedor que hace
+     scroll: con `background-attachment: local` el degradado se desplaza con
+     el contenido y en una página larga SE ACABA. Debajo no hay nada — la
+     atmósfera es oscura—, así que sin un color de fondo liso el final de
+     cualquier pantalla larga saldría negro con tinta negra encima. Con el
+     atajo `background:` no vale, porque resetea el color a transparente. */
+  background-image:
+    radial-gradient(1100px 560px at 16% -12%, rgba(255, 255, 255, 0.9), transparent 60%),
+    linear-gradient(180deg, #f7f6f3 0%, #f3f2ef 55%, #efeeeb 100%);
+  background-color: #efeeeb;
+  background-attachment: local;
+}
+/* La costura entre el raíl oscuro y el papel: una línea, no una sombra.
+   Sin ella los dos planos se tocan y parece un error de pintado. */
+html[data-panel-theme='hibrido'] main {
+  border-top-left-radius: 14px;
+  box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+/* ── Compensaciones del modo día, acotadas a <main> (generadas) ─────────── */
+html[data-panel-theme='hibrido'] main .glass { background: rgba(255, 255, 255, 0.65);
+  border-color: rgba(20, 20, 30, 0.08); }
+html[data-panel-theme='hibrido'] main .float-row:hover { background-color: rgba(20, 20, 30, 0.045);
+  box-shadow: 0 14px 34px -24px rgba(20, 20, 30, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.6); }
+html[data-panel-theme='hibrido'] main * { scrollbar-color: rgba(120, 120, 130, 0.45) transparent; }
+html[data-panel-theme='hibrido'] main [class^='border-white/'],
+html[data-panel-theme='hibrido'] main [class*=' border-white/'] { border-color: rgba(20, 20, 30, 0.1); }
+html[data-panel-theme='hibrido'] main [class^='divide-white/'] > :not([hidden]) ~ :not([hidden]),
+html[data-panel-theme='hibrido'] main [class*=' divide-white/'] > :not([hidden]) ~ :not([hidden]) { border-color: rgba(20, 20, 30, 0.08); }
+html[data-panel-theme='hibrido'] main [class^='bg-white/'],
+html[data-panel-theme='hibrido'] main [class*=' bg-white/'] { background-color: rgba(20, 20, 30, 0.03); }
+html[data-panel-theme='hibrido'] main .text-emerald-300,
+html[data-panel-theme='hibrido'] main .text-emerald-400 { color: #047857; }
+html[data-panel-theme='hibrido'] main .text-amber-300,
+html[data-panel-theme='hibrido'] main .text-amber-400 { color: #b45309; }
+html[data-panel-theme='hibrido'] main .text-red-300,
+html[data-panel-theme='hibrido'] main .text-red-400 { color: #b91c1c; }
+html[data-panel-theme='hibrido'] main .text-orange-300,
+html[data-panel-theme='hibrido'] main .text-orange-400 { color: #c2410c; }
+html[data-panel-theme='hibrido'] main .text-sky-300,
+html[data-panel-theme='hibrido'] main .text-sky-400 { color: #0369a1; }
+html[data-panel-theme='hibrido'] main .text-violet-300,
+html[data-panel-theme='hibrido'] main .text-violet-400 { color: #6d28d9; }
+html[data-panel-theme='hibrido'] main .text-purple-200,
+html[data-panel-theme='hibrido'] main .text-purple-300 { color: #6d28d9; }
+html[data-panel-theme='hibrido'] main .text-zinc-300 { color: #3f3f46; }
+html[data-panel-theme='hibrido'] main .text-brand-300 { color: #c2410c; }
+html[data-panel-theme='hibrido'] main .text-brand-400 { color: #ea580c; }
+html[data-panel-theme='hibrido'] main .text-brand-400\/80 { color: rgba(234, 88, 12, 0.85); }
+html[data-panel-theme='hibrido'] main .text-amber-600 { color: #92400e; }
+html[data-panel-theme='hibrido'] main .text-emerald-600 { color: #065f46; }
+html[data-panel-theme='hibrido'] main .text-amber-200 { color: #92400e; }
+html[data-panel-theme='hibrido'] main .text-emerald-200 { color: #065f46; }
+html[data-panel-theme='hibrido'] main .text-red-200 { color: #991b1b; }
+html[data-panel-theme='hibrido'] main .text-brand-200 { color: #9a3412; }
+html[data-panel-theme='hibrido'] main .text-slate-100,
+html[data-panel-theme='hibrido'] main .text-slate-200 { color: #27272d; }
+html[data-panel-theme='hibrido'] main .text-slate-300 { color: #33333c; }
+html[data-panel-theme='hibrido'] main .text-slate-400 { color: #4b4b55; }
+html[data-panel-theme='hibrido'] main .text-slate-500 { color: #5d5d68; }
+html[data-panel-theme='hibrido'] main .text-slate-600 { color: #73737e; }
+html[data-panel-theme='hibrido'] main .bg-dark-600.text-white,
+html[data-panel-theme='hibrido'] main .bg-dark-700.text-white,
+html[data-panel-theme='hibrido'] main .bg-dark-800.text-white,
+html[data-panel-theme='hibrido'] main .bg-dark-900.text-white { color: rgb(var(--dk-50)); }
+html[data-panel-theme='hibrido'] main [class*='hover:text-white']:hover { color: rgb(var(--dk-50)); }
