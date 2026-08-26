@@ -41,6 +41,8 @@ jobs:
         run: node scripts/check-permisos.mjs
       - name: Checker tema (el hibrido tiene que seguir al modo dia)
         run: node scripts/check-tema.mjs
+      - name: Checker ayuda (pantallas que no se explican)
+        run: node scripts/check-ayuda.mjs
 
   backend:
     name: Backend (sintaxis + contratos + tests de API)

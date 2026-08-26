@@ -18,7 +18,11 @@ window.__flotaArrancada = true
    quien no hubiera elegido nunca tema —o sea, todo el mundo la primera vez—
    veía el panel en negro y luego saltaba a claro de golpe. */
 {
-  const guardado = localStorage.getItem('panel_theme') || 'hibrido'
+  // Misma migracion que PanelLayout: sin la marca de eleccion a mano, el
+  // valor guardado es basura que escribio el codigo viejo, no una preferencia.
+  const guardado = localStorage.getItem('panel_theme_elegido')
+    ? (localStorage.getItem('panel_theme') || 'hibrido')
+    : 'hibrido'
   if (guardado === 'light' || guardado === 'hibrido') {
     document.documentElement.setAttribute('data-panel-theme', guardado)
   }

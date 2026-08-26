@@ -12,6 +12,7 @@ import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, deco
 import { getMe } from './api'
 import TrialBanner from './TrialBanner'
 import CommandPalette from './CommandPalette'
+import { BotonAyuda, PanelAyuda, PrimerosPasos } from './Ayuda'
 import LiveNotifier from './LiveNotifier'
 import { useT, LANGS } from '../i18n'
 import { usePlan } from '../lib/usePlan'
@@ -91,6 +92,22 @@ export default function PanelLayout() {
   const { limits } = usePlan()
   const [center, setCenter] = useState(() => localStorage.getItem('panel_center') || 'Todos')
   const [cmdOpen, setCmdOpen] = useState(false)
+  const [ayudaOpen, setAyudaOpen] = useState(false)
+  /* La tecla `?` abre la ficha de la pantalla actual. Se ignora si el foco
+     esta en un campo de texto: en un buscador, `?` es un caracter, no un
+     atajo, y robarselo hace que la app parezca rota. */
+  useEffect(() => {
+    const h = (e) => {
+      if (e.key !== '?' || e.ctrlKey || e.metaKey || e.altKey) return
+      const el = document.activeElement
+      const tag = (el?.tagName || '').toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || el?.isContentEditable) return
+      e.preventDefault()
+      setAyudaOpen(true)
+    }
+    document.addEventListener('keydown', h)
+    return () => document.removeEventListener('keydown', h)
+  }, [])
 
   /* Tres temas, y la rampa vive en variables CSS:
        hibrido — raíl y cabecera en negro, contenido en claro (por defecto)
@@ -98,7 +115,21 @@ export default function PanelLayout() {
        light   — todo claro, raíl incluido
      El híbrido es el que se pidió al ver el cuadre del debrief, y es el que
      mejor separa "dónde estoy" (el raíl) de "qué estoy mirando" (el papel). */
-  const [theme, setTheme] = useState(() => localStorage.getItem('panel_theme') || 'hibrido')
+  const [theme, setTheme] = useState(() => {
+    /* MIGRACION DE UNA SOLA VEZ, Y HACE FALTA.
+       El codigo anterior guardaba 'dark' en localStorage AL MONTAR, sin que
+       nadie eligiera nada. Asi que todo el mundo tiene un tema guardado
+       aunque nunca haya tocado el boton, y un simple `|| 'hibrido'` como
+       defecto no lo habria visto NADIE: el valor guardado gana siempre.
+       Se distingue lo elegido a mano —que se respeta— de lo que se escribio
+       solo, con una marca aparte que solo pone el boton. */
+    try {
+      const elegido = localStorage.getItem('panel_theme_elegido')
+      const guardado = localStorage.getItem('panel_theme')
+      if (elegido) return guardado || 'hibrido'
+      return 'hibrido'
+    } catch { return 'hibrido' }
+  })
   useEffect(() => {
     document.documentElement.setAttribute('data-panel-theme', theme)
     localStorage.setItem('panel_theme', theme)
@@ -415,12 +446,17 @@ export default function PanelLayout() {
             <kbd className="kbd hidden sm:inline-flex">Ctrl K</kbd>
           </button>
 
+          <BotonAyuda abrir={() => setAyudaOpen(true)} />
+
           {/* Tema: híbrido → noche → día → híbrido.
               Tres estados en un botón necesitan que el título diga a dónde
               vas, no dónde estás: si no, hay que pulsar para averiguarlo. */}
           <button
-            onClick={() => setTheme((th) =>
-              (th === 'hibrido' ? 'dark' : th === 'dark' ? 'light' : 'hibrido'))}
+            onClick={() => {
+              // A partir de aqui la eleccion es SUYA y se respeta siempre.
+              try { localStorage.setItem('panel_theme_elegido', '1') } catch { /* incognito */ }
+              setTheme((th) => (th === 'hibrido' ? 'dark' : th === 'dark' ? 'light' : 'hibrido'))
+            }}
             className="flex items-center gap-1.5 rounded-lg border border-dark-700 bg-dark-800/70 px-2 py-1.5 text-dark-400 transition-colors hover:border-dark-600 hover:text-dark-200"
             title={theme === 'hibrido' ? 'Cambiar a modo noche'
               : theme === 'dark' ? 'Cambiar a modo día' : 'Volver al modo mixto'}
@@ -509,6 +545,16 @@ export default function PanelLayout() {
       </nav>
 
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} pages={palettePages} />
+      <PanelAyuda
+        abierto={ayudaOpen} cerrar={() => setAyudaOpen(false)}
+        titulo={t(NAV_DEF.flatMap((g) => g.items)
+          .find((it) => keyOf(it.to) === keyOf(loc.pathname))?.labelKey || 'nav.dashboard')} />
+      {/* Los primeros pasos se filtran con el MISMO `itemVisible` que el menu:
+          asi nadie ve un paso que luego no puede abrir, que es la forma mas
+          rapida de que la bienvenida parezca rota. */}
+      <PrimerosPasos
+        puedeVer={(k) => itemVisible({ to: k === 'dashboard' ? '/panel' : `/panel/${k}` })}
+        idUsuario={admin?.id || admin?.sub} />
       <LiveNotifier center={center} centers={centers} />
     </div>
   )
