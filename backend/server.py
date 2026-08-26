@@ -28049,13 +28049,17 @@ def _cx_minutos(a: str, b: str):
     return (da - dbb).total_seconds() / 60.0
 
 
-def _cx_debrief_reparto(paquetes: list, ultima_ruta: str, en_curso: bool = False) -> dict:
+def _cx_debrief_reparto(paquetes: list, ultima_por_ruta: dict, en_curso: bool = False) -> dict:
     """Reparte los paquetes de UN conductor en los cinco cajones.
 
-    `ultima_ruta` es la ultima captura vista en esa ruta, y es la referencia
-    contra la que se mide el hueco. Se calcula por RUTA y no por dia entero
-    porque las rutas no terminan a la vez: usar el final del dia haria que
-    toda ruta que cierra pronto pareciera llena de paquetes sin cerrar.
+    `ultima_por_ruta` es la ultima captura vista en CADA ruta. El hueco se
+    mide siempre contra la ruta del propio paquete, nunca contra la persona:
+    un support que ayuda en dos rutas tiene dos relojes distintos, y usar el
+    mas tardio convertiria sus paquetes de la otra ruta en una acusacion.
+
+    Tampoco vale el final del dia: las rutas no terminan a la vez, y usarlo
+    haria que toda ruta que cierra pronto pareciera llena de paquetes sin
+    cerrar.
     """
     cajones = {"entregados": [], "cancelados": [], "no_observado": [],
                "perdidos": [], "sin_cerrar": [], "reprogramados": [],
@@ -28100,7 +28104,9 @@ def _cx_debrief_reparto(paquetes: list, ultima_ruta: str, en_curso: bool = False
         elif st in CX_NO_RECOGIDO:
             cajones["no_recogido"].append(fila)
         elif st in CX_AMBIGUO:
-            hueco = _cx_minutos(ultima_ruta, p.get("updated_at"))
+            hueco = _cx_minutos(
+                ultima_por_ruta.get((p.get("route_code") or "").strip(), ""),
+                p.get("updated_at"))
             fila["hueco_min"] = None if hueco is None else round(hueco)
             if en_curso:
                 # EL DIA NO HA TERMINADO. Un paquete cargado a las 09h en una
@@ -28218,20 +28224,27 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
         if p.get("driver_id") and r and r not in did_por_ruta:
             did_por_ruta[r] = p["driver_id"]
 
+    # UNA FILA POR PERSONA. Es quien esta delante con los paquetes.
+    # Agrupar por (conductor, ruta) partia en dos a quien ayuda en otra ruta,
+    # y ninguna de las dos mitades era "lo que lleva en la furgoneta".
     porconductor: dict = {}
+    rutas_de: dict = {}
     for p in paquetes:
         r = (p.get("route_code") or "").strip()
         did = p.get("driver_id") or did_por_ruta.get(r) or "sin-asignar"
-        porconductor.setdefault((did, r), []).append(p)
+        porconductor.setdefault(did, []).append(p)
+        if r:
+            rutas_de.setdefault(did, set()).add(r)
 
-    nombres = await _cx_nombres({d for (d, _r) in porconductor if d and d != "sin-asignar"})
+    nombres = await _cx_nombres({d for d in porconductor if d and d != "sin-asignar"})
 
     # Lo ya marcado a mano en el debrief de ese dia.
     marcas = {m["_id"]: m async for m in db.cortex_debrief.find({"service_day": dia})}
 
     filas = []
-    for (did, ruta), pk in porconductor.items():
-        caj = _cx_debrief_reparto(pk, ultima_por_ruta.get(ruta, ""), en_curso)
+    for did, pk in porconductor.items():
+        rutas = sorted(rutas_de.get(did) or [])
+        caj = _cx_debrief_reparto(pk, ultima_por_ruta, en_curso)
         for grupo in ("reintento", "no_entrega", "no_recogido", "perdidos", "sin_cerrar"):
             for f in caj[grupo]:
                 m = marcas.get(f"{dia}:{f['tba']}")
@@ -28241,13 +28254,22 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
         # Contar aqui lo que sigue cargado en la furgoneta ponia rutas con "42
         # pendientes" que en realidad tenian dos problemas y cuarenta paquetes
         # todavia en reparto.
-        pendientes = [f for f in (caj["reintento"] + caj["no_entrega"] +
-                                  caj["no_recogido"] + caj["perdidos"])
-                      if not f.get("marca")]
+        # Los cuatro cajones, juntos, son "lo que hay que comprobar con el
+        # conductor delante". El inventario no entra: si entrara, ninguna ruta
+        # se daria por comprobada sin escanear 140 paquetes.
+        comprobar = (caj["reintento"] + caj["no_entrega"] +
+                     caj["no_recogido"] + caj["perdidos"])
+        pendientes = [f for f in comprobar if not f.get("marca")]
+        recogidos = sum(1 for f in comprobar if f.get("marca") == "devuelto")
+        no_aparecen = sum(1 for f in comprobar if f.get("marca") == "no_aparece")
         filas.append({
             "driver_id": did,
             "conductor": (nombres.get(did) or {}).get("nombre") or "Sin identificar",
-            "ruta": ruta,
+            # `ruta` sigue existiendo para pintar y buscar; `rutas` es la
+            # verdad cuando alguien ha tocado mas de una.
+            "ruta": " + ".join(rutas) if rutas else "Sin ruta",
+            "rutas": rutas,
+            "es_apoyo": len(rutas) > 1,
             "center": (pk[0].get("center") or "").strip(),
             "total": len(pk),
             "entregados": len(caj["entregados"]),
@@ -28265,14 +28287,33 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
             "cliente": caj["cliente"],
             "no_salio": len(caj["no_salio"]),
             "no_observado": len(caj["no_observado"]),
+            # El contador: de N que hay que comprobar, cuantos van
+            "a_comprobar": len(comprobar),
+            "recogidos": recogidos,
+            "no_aparecen": no_aparecen,
             "pendientes": len(pendientes),
-            "cuadra": len(pendientes) == 0,
-            "ultima_captura": ultima_por_ruta.get(ruta),
+            # "cuadra" NO es "no queda nada por mirar": es "esta todo mirado Y
+            # ademas aparecio todo". Un paquete confirmado como perdido deja la
+            # ruta comprobada, pero no cuadrada.
+            "comprobada": len(pendientes) == 0,
+            "cuadra": len(pendientes) == 0 and no_aparecen == 0,
+            # La ultima captura que le afecta: la mas tardia de SUS rutas.
+            # Aqui si vale la mas tardia, porque es informativa y no decide
+            # nada — la regla del hueco ya se aplico paquete a paquete.
+            "ultima_captura": max((ultima_por_ruta.get(r) or "" for r in rutas),
+                                  default=None) or None,
         })
 
     filas.sort(key=lambda f: (-f["pendientes"], -len(f["perdidos"]), f["ruta"]))
+    # RUTAS son route_code distintos, no filas. Contando filas salian 61 con
+    # 45 rutas y 2 supports en la nave: el numero mas facil de mirar de la
+    # pantalla y estaba mal.
+    todas_rutas = {(p.get("route_code") or "").strip()
+                   for p in paquetes if (p.get("route_code") or "").strip()}
     resumen = {
-        "rutas": len(filas),
+        "rutas": len(todas_rutas),
+        "conductores": len(filas),
+        "apoyos": sum(1 for f in filas if f["es_apoyo"]),
         "paquetes": sum(f["total"] for f in filas),
         "entregados": sum(f["entregados"] for f in filas),
         "reintento": sum(len(f["reintento"]) for f in filas),
@@ -28288,13 +28329,33 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
         "no_observado": sum(f["no_observado"] for f in filas),
         "perdidos": sum(len(f["perdidos"]) for f in filas),
         "cuadran": sum(1 for f in filas if f["cuadra"]),
+        # ── EL CONTADOR DEL DIA ──────────────────────────────────────────────
+        "a_comprobar": sum(f["a_comprobar"] for f in filas),
+        "recogidos": sum(f["recogidos"] for f in filas),
+        "no_aparecen": sum(f["no_aparecen"] for f in filas),
+        "sin_comprobar": sum(f["pendientes"] for f in filas),
+        "rutas_comprobadas": sum(1 for f in filas if f["comprobada"]),
     }
+    # "cuadran" se contaba sobre filas y se comparaba contra "rutas": dos
+    # unidades distintas en la misma fraccion. Ahora las dos son conductores.
+    resumen["cuadran_de"] = len(filas)
     # Aviso de captura muerta: si casi todo el dia esta sin observar, el cuadre
     # de hoy no vale y hay que decirlo ARRIBA, no dejar que se deduzca.
     tot = max(1, resumen["paquetes"])
     resumen["ciego_pct"] = round(100.0 * resumen["no_observado"] / tot, 1)
     resumen["fiable"] = resumen["ciego_pct"] < 5.0
     resumen["en_curso"] = en_curso
+    # EL VEREDICTO. Se calcula aqui y no en la pantalla para que no haya dos
+    # versiones de la misma regla. Y solo hay un camino a "todo_recogido":
+    # que este TODO mirado y que ademas apareciera todo.
+    if resumen["a_comprobar"] == 0:
+        resumen["veredicto"] = "nada_que_comprobar"
+    elif resumen["sin_comprobar"] > 0:
+        resumen["veredicto"] = "a_medias"
+    elif resumen["no_aparecen"] > 0:
+        resumen["veredicto"] = "faltan"
+    else:
+        resumen["veredicto"] = "todo_recogido"
     return {"dia": dia, "conductores": filas, "total": len(filas),
             "resumen": resumen, "en_curso": en_curso}
 
