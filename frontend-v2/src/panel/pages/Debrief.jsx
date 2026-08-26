@@ -214,12 +214,18 @@ function Recuento({ r }) {
 
 function Paquete({ f, dia, alMarcar }) {
   const [ocupado, setOcupado] = useState(false)
+  const [aviso, setAviso] = useState(null)
   const marca = f.marca
 
   const pulsar = async (m) => {
     setOcupado(true)
     try {
-      await marcarDebrief(f.tba, { marca: marca === m ? '' : m }, dia)
+      const { data } = await marcarDebrief(f.tba, { marca: marca === m ? '' : m }, dia)
+      /* Si Cortex ya lo daba por entregado, el backend lo dice. Se enseña
+         AQUI, en la propia fila y en el momento: un aviso que sale arriba o
+         en un toast pasajero no lo asocia nadie con la linea que acaba de
+         pulsar, y este avisa justo de eso. */
+      setAviso(data?.aviso || null)
       alMarcar(f.tba, marca === m ? null : m)
     } finally { setOcupado(false) }
   }
@@ -240,6 +246,11 @@ function Paquete({ f, dia, alMarcar }) {
         </div>
         <div className="truncate text-[12.5px] text-slate-600">{f.motivo}</div>
         {f.direccion && <div className="truncate text-[11.5px] text-slate-400">{f.direccion}</div>}
+        {aviso && (
+          <div className="mt-1 flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[11.5px] leading-snug text-amber-900">
+            <AlertTriangle size={12} className="mt-0.5 shrink-0" /> {aviso}
+          </div>
+        )}
       </div>
       <div className="flex shrink-0 gap-1.5">
         <button

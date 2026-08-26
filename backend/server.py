@@ -28472,14 +28472,42 @@ async def cortex_debrief_marcar(tba: str, body: DebriefMarca,
     if not marca:
         await db.cortex_debrief.delete_one({"_id": f"{dia}:{tba}"})
         return {"ok": True, "marca": None}
+    # ── ¿SE HA ENTREGADO MIENTRAS MIRABAS? ───────────────────────────────────
+    # Medido el 26-08: cinco marcas de "lo trae" puestas entre 1 y 5 minutos
+    # DESPUES de que Cortex registrara la entrega al cliente. No es que nadie
+    # marcara sin mirar: la captura tarda 65-90 s y la pantalla refresca cada
+    # 45, asi que durante el debrief se puede estar viendo una lista de hace
+    # dos minutos — justo cuando el conductor cierra las ultimas paradas.
+    #
+    # La marca se guarda igual (quien esta delante puede tener razon y Cortex
+    # equivocarse), pero se avisa en el momento. Guardar en silencio que un
+    # paquete "volvio a la nave" cuando esta entregado es meter un dato falso
+    # en el unico sitio donde no se puede.
+    aviso = None
+    try:
+        pk = await db.cortex_packages.find_one(
+            {"tba": tba}, {"_id": 0, "timeline": 1, "state": 1})
+        if pk:
+            vig, vig_at = _cx_estado_vigente(pk.get("timeline") or [])
+            if (vig or pk.get("state")) == "DELIVERED":
+                cuando = vig_at.strftime("%H:%M") if vig_at else None
+                aviso = ("Cortex dice que este paquete se entregó"
+                         + (f" a las {cuando}" if cuando else "")
+                         + ". Se ha guardado igual, pero comprueba antes de reclamarlo.")
+    except Exception as e:
+        logger.debug(f"debrief aviso: {e}")
+
     await db.cortex_debrief.update_one(
         {"_id": f"{dia}:{tba}"},
         {"$set": {"tba": tba, "service_day": dia, "marca": marca,
                   "nota": (body.nota or "")[:300],
                   "quien": (user or {}).get("name") or (user or {}).get("sub"),
-                  "en": datetime.now(timezone.utc).isoformat()}},
+                  "en": datetime.now(timezone.utc).isoformat(),
+                  # Queda escrito que se marco sobre un paquete ya entregado:
+                  # sirve para saber despues si la lista iba retrasada.
+                  **({"entregado_ya": True} if aviso else {})}},
         upsert=True)
-    return {"ok": True, "marca": marca}
+    return {"ok": True, "marca": marca, "aviso": aviso}
 
 
 @api_router.get("/cortex/missing-hoy")
