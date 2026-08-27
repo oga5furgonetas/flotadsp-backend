@@ -284,6 +284,36 @@ function Conductor({ c, dia, alMarcar }) {
   ].filter(([, l]) => (l || []).length)
   const inventario = c.sin_cerrar || []
 
+  /* SEPARAR LO SUYO DE LO QUE TRAE POR HABER IDO A AYUDAR.
+     Solo cuando hay mas de una ruta: para el 80 % de los conductores, que
+     hacen una sola, meter una cabecera de ruta seria ruido puro. El orden es
+     la suya primero —es lo que espera ver— y despues las de apoyo. */
+  const porRuta = (() => {
+    if (!c.es_apoyo) return null
+    const m = new Map()
+    for (const [k, lista] of grupos) {
+      for (const f of lista) {
+        const r = f.ruta || 'Sin ruta'
+        if (!m.has(r)) m.set(r, [])
+        m.get(r).push([k, f])
+      }
+    }
+    if (m.size < 2) return null   // todo lo que trae viene de una sola ruta
+    const orden = [...m.keys()].sort((a, b) => {
+      if (a === c.ruta_propia) return -1
+      if (b === c.ruta_propia) return 1
+      return a.localeCompare(b)
+    })
+    return orden.map((r) => ({
+      ruta: r,
+      propia: r === c.ruta_propia,
+      // Cuantos paquetes lleva de esa ruta en total, no solo a reclamar:
+      // es lo que explica por que trae tres de una ruta que no es la suya.
+      total: (c.paquetes_por_ruta || {})[r],
+      items: m.get(r),
+    }))
+  })()
+
   const noCuentan = NO_CUENTAN
     .map(([k, et, ex]) => [k, et, ex, c[k] || []])
     .filter(([, , , l]) => l.length)
@@ -302,8 +332,12 @@ function Conductor({ c, dia, alMarcar }) {
             {/* Quien ha tocado mas de una ruta es un apoyo, y conviene que se
                 vea: sus paquetes vienen de sitios distintos. */}
             {c.es_apoyo && (
+              /* Dice DONDE fue a ayudar, no solo que ayudo: "+ CA_A43" se
+                 entiende de un vistazo y "apoyo · 2 rutas" obliga a abrir. */
               <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-700">
-                apoyo · {c.rutas.length} rutas
+                {c.ruta_propia
+                  ? `+ ayudó en ${(c.rutas_apoyo || []).map((x) => x.ruta).join(', ')}`
+                  : `${c.rutas.length} rutas`}
               </span>
             )}
             <span className="truncate text-[13px] text-slate-500">{c.conductor}</span>
@@ -353,7 +387,50 @@ function Conductor({ c, dia, alMarcar }) {
             </p>
           )}
 
-          {grupos.map(([k, lista]) => {
+          {/* Cuando alguien fue a ayudar, sus paquetes se separan por ruta:
+              primero los suyos y despues los de la ruta que fue a cubrir. Sin
+              esto salian los siete mezclados y habia que preguntar de donde
+              venia cada uno — justo lo que la pantalla viene a evitar. */}
+          {porRuta && (
+            <div className="mb-3 grid gap-3">
+              {porRuta.map((g) => (
+                <div key={g.ruta}>
+                  <div className={`mb-1.5 flex flex-wrap items-center gap-2 rounded-lg border px-2.5 py-1.5 ${
+                    g.propia ? 'border-slate-300 bg-white' : 'border-sky-300 bg-sky-50'}`}>
+                    <span className="font-semibold text-slate-900">{g.ruta}</span>
+                    <span className={`text-[11.5px] font-semibold ${
+                      g.propia ? 'text-slate-500' : 'text-sky-700'}`}>
+                      {g.propia ? 'su ruta' : 'fue a ayudar aquí'}
+                    </span>
+                    {g.total != null && (
+                      <span className="text-[11.5px] text-slate-400">{g.total} paquetes en total</span>
+                    )}
+                    <span className="ml-auto text-[12px] font-bold tabular-nums text-slate-700">
+                      {g.items.length} que dar
+                    </span>
+                  </div>
+                  <div className="grid gap-1.5">
+                    {g.items.map(([k, f]) => (
+                      <div key={f.tba}>
+                        <span className={`mb-0.5 inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${T[k].cls}`}>
+                          {T[k].et}
+                        </span>
+                        <Paquete f={f} dia={dia} alMarcar={alMarcar} />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {c.reparto_dudoso && (
+                <p className="text-[11.5px] leading-snug text-slate-400">
+                  Lleva parecido de cada ruta, así que no se puede decir cuál es la suya.
+                  Se enseñan las dos sin etiquetar.
+                </p>
+              )}
+            </div>
+          )}
+
+          {!porRuta && grupos.map(([k, lista]) => {
             const cfg = T[k]
             const Ico = cfg.icono
             return (

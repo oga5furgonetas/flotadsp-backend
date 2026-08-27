@@ -28316,6 +28316,9 @@ def _cx_debrief_reparto(paquetes: list, ultima_por_ruta: dict, en_curso: bool = 
         fila = {
             "tba": p.get("tba"),
             "stop_id": p.get("stop_id"),
+            # De que ruta viene. Es lo que permite separar lo suyo de lo que
+            # trae por haber ido a ayudar a otra.
+            "ruta": (p.get("route_code") or "").strip() or None,
             "estado": st,
             "contexto": ctx or None,
             "motivo": _cx_motivo_legible(p),
@@ -28494,6 +28497,24 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
     filas = []
     for did, pk in porconductor.items():
         rutas = sorted(rutas_de.get(did) or [])
+
+        # ── ¿CUAL ES SU RUTA? ────────────────────────────────────────────────
+        # La que mas paquetes le pone, pero SOLO si dobla a la siguiente.
+        # Medido sobre 37 casos de apoyo en dos dias: 34 tienen un reparto
+        # clarisimo (227 vs 27, 225 vs 1) y 3 quedan parejos. En esos tres no
+        # se afirma nada: etiquetar como "de apoyo" la ruta propia de alguien
+        # es peor que no etiquetar.
+        _cuenta: dict = {}
+        for _p in pk:
+            _r = (_p.get("route_code") or "").strip()
+            if _r:
+                _cuenta[_r] = _cuenta.get(_r, 0) + 1
+        _orden = sorted(_cuenta.items(), key=lambda x: -x[1])
+        ruta_propia = None
+        if len(_orden) == 1:
+            ruta_propia = _orden[0][0]
+        elif len(_orden) > 1 and _orden[0][1] >= _orden[1][1] * 2:
+            ruta_propia = _orden[0][0]
         caj = _cx_debrief_reparto(pk, ultima_por_ruta, en_curso, dia)
         for grupo in ("reintento", "no_entrega", "no_recogido", "perdidos", "sin_cerrar"):
             for f in caj[grupo]:
@@ -28517,8 +28538,20 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
             "conductor": (nombres.get(did) or {}).get("nombre") or "Sin identificar",
             # `ruta` sigue existiendo para pintar y buscar; `rutas` es la
             # verdad cuando alguien ha tocado mas de una.
-            "ruta": " + ".join(rutas) if rutas else "Sin ruta",
+            # `ruta` es lo que se pinta de cabecera: la suya si se sabe, y si
+            # no, todas juntas (que es lo unico honesto cuando no esta claro).
+            "ruta": ruta_propia or (" + ".join(rutas) if rutas else "Sin ruta"),
             "rutas": rutas,
+            "ruta_propia": ruta_propia,
+            # Las de apoyo, con cuantos paquetes trae de cada una. Sirve para
+            # pintar "fue a ayudar en XA_C20 · 3 paquetes" sin tener que
+            # contarlos en la pantalla.
+            "rutas_apoyo": [{"ruta": r, "paquetes": n} for r, n in _orden
+                            if ruta_propia and r != ruta_propia],
+            # Cuando no se puede afirmar cual es la suya, se dice: la pantalla
+            # enseña las dos sin etiquetarlas y quien mira decide.
+            "reparto_dudoso": bool(len(_orden) > 1 and not ruta_propia),
+            "paquetes_por_ruta": dict(_orden),
             "es_apoyo": len(rutas) > 1,
             "center": (pk[0].get("center") or "").strip(),
             "total": len(pk),
