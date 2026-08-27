@@ -1,4 +1,6 @@
 ﻿from damage_segmentation import segment_damage, preload_sam
+import fiabilidad
+import piezas
 from ai_learning import (
     get_few_shot_examples, build_few_shot_prompt_parts_multimodal,
     get_pattern_lessons, get_part_lesson, save_feedback as _save_ai_feedback,
@@ -8112,6 +8114,12 @@ async def damage_feedback(inspection_id: str, data: dict, user: dict = Depends(g
         {"$set": sample}, upsert=True
     )
 
+    # AQUI SE CIERRA EL BUCLE. La correccion que acaba de hacer una persona
+    # entra en el modelo que decide de que fiarse, sin que nadie tenga que
+    # acordarse de reentrenar nada. Antes el feedback se guardaba y se quedaba
+    # ahi hasta que alguien mirara: por eso revisar no parecia servir para nada.
+    await _ia_reentrenar_si_toca()
+
     # ── Sincronizar el LEDGER del vehículo con el veredicto humano ──
     try:
         _p = _canon_panel(dmg.get("part") or "")
@@ -12971,6 +12979,9 @@ async def ia_para_revisar(limit: int = 20, center: Optional[str] = None,
     hay 90 falsos positivos de una pieza, el 91 no aporta nada.
     """
     limit = max(1, min(limit, 50))
+    # El modelo de fiabilidad, si ya esta entrenado. Sirve para dos cosas: para
+    # que la pantalla diga de que se fia y de que no, y para ORDENAR la cola.
+    modelo = await fiabilidad.cargar(db)
 
     # Cuantas validaciones tiene ya cada pieza: es el peso del orden.
     sabido: dict = {}
@@ -13055,9 +13066,22 @@ async def ia_para_revisar(limit: int = 20, center: Optional[str] = None,
                 # Lo que sabemos ya de esa pieza. Se manda para poder decir en
                 # pantalla POR QUE se pregunta esto y no otra cosa.
                 "validaciones_pieza": sabido.get(pieza.lower(), 0),
+                # Lo que la IA opina de si misma sobre ESTE dano.
+                "fiabilidad": fiabilidad.puntuar(
+                    modelo, dmg, (insp.get("analysis") or {}).get("total_damages_count"), idx),
+                "pieza_canonica": (piezas.canon(pieza) or [(None, None, None)])[0][0],
             })
 
-    sueltos.sort(key=lambda x: (x["validaciones_pieza"], x["fecha"]))
+    for x in sueltos:
+        x["veredicto_auto"] = fiabilidad.veredicto(x["fiabilidad"])
+
+    # ── EL ORDEN LO MANDA LA DUDA, NO LA FECHA ───────────────────────────────
+    # Con 44 revisiones en 30 dias, gastarlas al azar es tirarlas. Primero va
+    # aquello sobre lo que el modelo esta mas indeciso, que es lo unico que le
+    # ensena algo; a igualdad de duda, la pieza de la que menos sabemos.
+    # Sin modelo entrenado todavia, se cae al orden de antes y no pasa nada.
+    sueltos.sort(key=lambda x: (-fiabilidad.incertidumbre(x["fiabilidad"]),
+                                x["validaciones_pieza"], x["fecha"]))
     return {
         "pendientes": sueltos[:limit],
         "total_sin_revisar": len(sueltos),
@@ -13066,7 +13090,64 @@ async def ia_para_revisar(limit: int = 20, center: Optional[str] = None,
         # problema no es la cola — es que la IA no esta diciendo donde mira.
         "no_validables": sum(descartes.values()),
         "descartes": descartes,
+        # Como de bien se conoce a si misma. Va en la respuesta para que la
+        # pantalla no tenga que jurarlo: son numeros de validacion cruzada.
+        "modelo": (modelo[2] if modelo else None),
+        "reparto_auto": {v: sum(1 for x in sueltos if x["veredicto_auto"] == v)
+                         for v in ("confirmado", "dudoso", "descartado")},
     }
+
+
+@api_router.get("/ai/modelo")
+async def ia_modelo(_=Depends(require_admin)):
+    """Como se juzga la IA a si misma, y con que derecho.
+
+    Devuelve SIEMPRE metricas de validacion cruzada, nunca de entrenamiento: un
+    modelo puntuandose con los datos que ya vio da un numero bonito y falso, y
+    ese numero acaba en una pantalla delante de alguien que decide con el.
+    """
+    m = await fiabilidad.cargar(db)
+    if not m:
+        n = await db.ai_feedback.count_documents(
+            {"verdict": {"$in": ["correct", "corrected", "wrong"]}})
+        return {"entrenado": False, "revisiones": n,
+                "hacen_falta": fiabilidad._MIN_MUESTRAS,
+                "motivo": "sin_entrenar" if n >= fiabilidad._MIN_MUESTRAS else "pocas_revisiones"}
+    return {"entrenado": True, **m[2]}
+
+
+@api_router.post("/ai/modelo/entrenar")
+async def ia_modelo_entrenar(_=Depends(require_admin)):
+    """Reentrena a mano. Normalmente no hace falta: se reentrena solo."""
+    return await fiabilidad.entrenar(db)
+
+
+# Cada cuantas revisiones nuevas se vuelve a entrenar. 25 y no 1 porque
+# entrenar recorre todo `ai_feedback` y una revision de mas no mueve el modelo;
+# y no 500 porque entonces las correcciones de alguien no se notarian en su
+# propia sesion y pareceria que revisar no sirve de nada — que es exactamente
+# la razon por la que solo se revisa el 2,8 %.
+_IA_REENTRENA_CADA = 25
+
+
+async def _ia_reentrenar_si_toca():
+    """Reentrena en cuanto hay suficientes revisiones nuevas.
+
+    Es lo que cierra el bucle: cada correccion de una persona entra en el
+    modelo que decide de que fiarse, sin que nadie tenga que acordarse de
+    pulsar nada. Si falla, se traga el error a proposito: guardar el feedback
+    del usuario nunca puede romperse porque el reentreno vaya mal.
+    """
+    try:
+        n = await db.ai_feedback.count_documents(
+            {"verdict": {"$in": ["correct", "corrected", "wrong"]}})
+        m = await fiabilidad.cargar(db)
+        ultimo = (m[2] or {}).get("muestras", 0) if m else 0
+        if n - ultimo >= _IA_REENTRENA_CADA or (m is None and n >= fiabilidad._MIN_MUESTRAS):
+            r = await fiabilidad.entrenar(db)
+            logger.info(f"Modelo de fiabilidad reentrenado: {r}")
+    except Exception as e:
+        logger.warning(f"Reentreno de fiabilidad: {e}")
 
 
 @api_router.get("/ai/autoexamen")
@@ -13267,6 +13348,12 @@ async def ia_autoexamen(semanas: int = 12, _=Depends(require_admin)):
         "cuando_calla": {"con_analisis": con_analisis, "dijo_sin_danos": sin_danos,
                          "porcentaje": round(100 * sin_danos / con_analisis, 1) if con_analisis else 0},
         "no_evaluables": motivos,
+        # ── LO QUE LA IA HACE PARA COMPROBARSE SOLA ──────────────────────────
+        # El bucle ya no depende de que alguien revise: cada dano se puntua
+        # antes de que lo vea nadie, y el modelo se reentrena con cada tanda de
+        # revisiones. Las metricas son de validacion cruzada, asi que se pueden
+        # enseñar sin mentir.
+        "modelo": ((await fiabilidad.cargar(db)) or [None, None, None])[2],
         # Se manda el aviso desde el backend para que ninguna pantalla pueda
         # enseñar el porcentaje suelto sin la letra pequeña.
         "aviso": ("Estos porcentajes son solo de lo REVISADO, y se revisa sobre todo "

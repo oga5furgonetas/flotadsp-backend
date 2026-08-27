@@ -6,7 +6,7 @@ import {
   AlertTriangle, BrainCircuit, Pencil, Plus, FileText, TrendingUp, EyeOff,
   Zap, HelpCircle,
 } from 'lucide-react'
-import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback, fetchAuthedBlob, autoexamenIA, iaParaRevisar, fiabilidadIA } from '../api'
+import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback, fetchAuthedBlob, autoexamenIA, iaParaRevisar, fiabilidadIA, entrenarModeloIA } from '../api'
 import PolygonEditor from '../components/PolygonEditor'
 import BboxEditor from '../components/BboxEditor'
 import CompareSlider from '../components/CompareSlider'
@@ -272,7 +272,7 @@ const GOAL = 3000
    baja— y enseña tambien la letra pequeña, porque un porcentaje sin su
    contexto es peor que no tener ninguno: aqui solo se mide lo REVISADO, y
    se revisa sobre todo cuando la IA reporta algo. */
-function Autoexamen({ datos, total, alRevisar }) {
+function Autoexamen({ datos, total, alRevisar, recargar }) {
   const [abierto, setAbierto] = useState(false)
   /* TODOS LOS HOOKS ANTES DEL PRIMER `return`, sin excepción.
      Este `useState` y su `useEffect` estaban debajo del `if (!datos) return
@@ -281,6 +281,14 @@ function Autoexamen({ datos, total, alRevisar }) {
      revienta el componente con un error que no señala la causa. Lo cazó
      eslint (`react-hooks/rules-of-hooks`), no la pantalla. */
   const [fiab, setFiab] = useState(null)
+  // Y este igual: arriba, nunca detras del `if (!datos) return null`.
+  const [entrenando, setEntrenando] = useState(false)
+  /* Reentrena y recarga: sin recargar, la tarjeta seguiria enseñando las
+     metricas viejas y pareceria que el boton no hace nada. */
+  const reentrenar = async () => {
+    setEntrenando(true)
+    try { await entrenarModeloIA(); await recargar?.() } finally { setEntrenando(false) }
+  }
   useEffect(() => {
     // Solo al desplegar el detalle: no hace falta para el resumen.
     if (!abierto || fiab) return
@@ -309,6 +317,7 @@ function Autoexamen({ datos, total, alRevisar }) {
      ¿existe el daño? y ¿acerto tambien donde estaba? */
   const rec = datos.cuentas_30d
   const hist = datos.cuentas
+  const modelo = datos.modelo
 
   return (
     <div className="card mb-4 border-violet-500/30 bg-violet-500/5 p-4">
@@ -354,13 +363,59 @@ function Autoexamen({ datos, total, alRevisar }) {
         ))}
       </div>
 
-      {/* Sin señal no hay aprendizaje posible. Es lo más importante de la
-          tarjeta, así que va en rojo y por delante del detalle. */}
-      {sinSenal && (
+      {/* ── LO QUE LA IA HACE PARA COMPROBARSE SOLA ────────────────────────
+          Aqui ponia, en rojo, "solo se revisa el 2,8 %: sin revisiones la IA
+          no aprende nada nuevo". Era verdad y no tenia salida: el bucle
+          dependia de que alguien se sentara a revisar, y nadie lo hace.
+
+          Ahora cada daño se puntua ANTES de que lo vea nadie, con lo que la
+          propia IA emite (gravedad, cuantos ve, en que puesto de la lista va y
+          que pieza), y el modelo se reentrena solo cada 25 revisiones. Los
+          numeros son de validacion cruzada —el modelo puntuando casos que no
+          vio al entrenar—, no del propio entrenamiento, que daria un numero
+          bonito y falso. */}
+      {modelo?.auc ? (
+        <div className="mt-3 rounded-lg border border-violet-500/30 bg-violet-500/[0.07] px-3 py-2.5">
+          <p className="mb-2 flex items-center gap-2 text-[12.5px] font-semibold text-violet-200">
+            <BrainCircuit size={14} className="flex-none" />
+            Se está comprobando sola, con {modelo.muestras?.toLocaleString('es-ES')} revisiones vuestras
+          </p>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            <div>
+              <p className="text-[10.5px] uppercase tracking-wider text-dark-500">Lo que descarta</p>
+              <p className="text-[19px] font-bold leading-none tabular-nums text-dark-50">
+                {modelo.descarte_acierto_pct}%
+              </p>
+              <p className="text-[11px] leading-tight text-dark-600">era inventado de verdad</p>
+            </div>
+            <div>
+              <p className="text-[10.5px] uppercase tracking-wider text-dark-500">Lo que confirma</p>
+              <p className="text-[19px] font-bold leading-none tabular-nums text-dark-50">
+                {modelo.confirma_acierto_pct}%
+              </p>
+              <p className="text-[11px] leading-tight text-dark-600">era real de verdad</p>
+            </div>
+            <div>
+              <p className="text-[10.5px] uppercase tracking-wider text-dark-500">Capacidad de separar</p>
+              <p className="text-[19px] font-bold leading-none tabular-nums text-dark-50">
+                {String(modelo.auc).replace('.', ',')}
+              </p>
+              <p className="text-[11px] leading-tight text-dark-600">0,5 sería no saber nada</p>
+            </div>
+          </div>
+          {/* El limite, dicho por delante y no en una nota al pie: lo que no se
+              puede decidir solo se manda a una persona, y eso NO es un fallo. */}
+          <p className="mt-2 text-[11.5px] leading-snug text-dark-500">
+            En el medio no decide: cuando no lo tiene claro lo manda a revisar, y
+            la cola sale ordenada por lo que más le enseña, no por fecha. Así las
+            pocas revisiones que se hacen valen mucho más.
+          </p>
+        </div>
+      ) : sinSenal && (
         <p className="mt-3 flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/[0.08] px-3 py-2 text-[12.5px] leading-snug text-red-200">
           <EyeOff size={15} className="mt-0.5 flex-none" />
           Solo se revisa el {cob.porcentaje}% de las inspecciones ({cob.revisadas_30d} de{' '}
-          {cob.inspecciones_30d} en 30 días). Sin revisiones la IA no aprende nada nuevo.
+          {cob.inspecciones_30d} en 30 días). Todavía no hay modelo entrenado.
         </p>
       )}
 
@@ -372,6 +427,13 @@ function Autoexamen({ datos, total, alRevisar }) {
         <button onClick={() => setAbierto((v) => !v)}
           className="text-[12.5px] font-semibold text-violet-300 hover:text-violet-200">
           {abierto ? 'Ocultar detalle' : 'Ver en qué falla'}
+        </button>
+        {/* Normalmente no hace falta: el modelo se reentrena solo cada 25
+            revisiones. Esta aqui para poder forzarlo al terminar una tanda y
+            ver el efecto en el momento, en vez de tener que fiarse. */}
+        <button onClick={reentrenar} disabled={entrenando}
+          className="text-[12.5px] font-semibold text-dark-400 hover:text-dark-200 disabled:opacity-50">
+          {entrenando ? 'Reentrenando…' : 'Reentrenar ahora'}
         </button>
       </div>
 
@@ -699,7 +761,8 @@ export default function RevisionRapida() {
         </div>
       </header>
 
-      <Autoexamen datos={autoex} total={total} alRevisar={() => setExpres(true)} />
+      <Autoexamen datos={autoex} total={total} alRevisar={() => setExpres(true)}
+                  recargar={() => autoexamenIA().then((r) => setAutoex(r.data)).catch(() => {})} />
       {expres && (
         <RevisionExpres center={center} alCerrar={() => { setExpres(false); loadStats() }}
           alGuardar={loadStats} />

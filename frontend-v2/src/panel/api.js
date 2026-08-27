@@ -96,6 +96,8 @@ export const getReviewQueue = (center) => api.get('/inspections/review-queue', {
 export const getAiDatasetStats = () => api.get('/ai-dataset/stats')
 // Como de bien lo esta haciendo la IA, medido con las validaciones humanas.
 export const autoexamenIA = () => api.get('/ai/autoexamen')
+export const modeloIA = () => api.get('/ai/modelo')
+export const entrenarModeloIA = () => api.post('/ai/modelo/entrenar')
 /* Lo que la IA ha aprendido sobre si misma: en que piezas se calla y por que.
    Existe para que el filtro no sea una caja negra. */
 export const fiabilidadIA = () => api.get('/ai/fiabilidad')
