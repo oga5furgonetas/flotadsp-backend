@@ -746,7 +746,7 @@ export default function Diarios() {
                       )}
                       {(c.de_baja || c.ficha_sin_vincular || c.sin_ficha || c.solo_historial) && (
                         <span className={`ml-1.5 rounded px-1 text-[9px] ${
-                          c.ficha_sin_vincular ? 'bg-amber-500/15 text-amber-300/80' : 'bg-dark-800 text-dark-500'}`}
+                          c.ficha_sin_vincular ? 'bg-amber-500/15 text-amber-300/80' : 'bg-dark-800 text-dark-300'}`}
                           title={c.de_baja
                             ? 'Ficha dada de baja: ya no trabaja aquí, pero este DNR es suyo'
                             : c.ficha_sin_vincular

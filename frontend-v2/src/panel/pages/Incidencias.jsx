@@ -56,7 +56,7 @@ function IncModal({ inc, vehicles, onSave, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
       <div className="relative mx-4 w-full max-w-lg rounded-2xl border border-dark-700 bg-dark-900 p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
-        <button onClick={onClose} className="absolute right-4 top-4 rounded-lg p-1.5 text-dark-500 hover:bg-dark-800 hover:text-white transition"><X size={15} /></button>
+        <button onClick={onClose} className="absolute right-4 top-4 rounded-lg p-1.5 text-dark-300 hover:bg-dark-800 hover:text-white transition"><X size={15} /></button>
 
         <h2 className="mb-5 text-base font-bold text-dark-50">{isNew ? t('inc.new') : t('inc.edit')}</h2>
 
@@ -134,7 +134,7 @@ function DelModal({ onConfirm, onClose }) {
         <p className="mb-5 text-xs text-dark-500">{t('inc.delete.warning')}</p>
         <div className="flex gap-2">
           <button onClick={onClose} className="flex-1 rounded-xl border border-dark-700 py-2.5 text-sm text-dark-400 hover:border-dark-600 transition">{t('ui.cancel')}</button>
-          <button onClick={onConfirm} className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-bold text-white transition hover:bg-red-500">{t('inc.delete')}</button>
+          <button onClick={onConfirm} className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-bold text-white transition hover:bg-red-700">{t('inc.delete')}</button>
         </div>
       </div>
     </div>

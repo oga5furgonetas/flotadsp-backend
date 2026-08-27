@@ -777,7 +777,7 @@ export default function Negocio() {
                   <MousePointerClick size={13} className="text-dark-500" /> {o.clicks ?? 0}
                 </span>
                 <span className="text-xs text-dark-500" title="Ratio de clics">{ctr}% CTR</span>
-                <span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${o.active ? 'bg-emerald-500/15 text-emerald-400' : 'bg-dark-700 text-dark-400'}`}>
+                <span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${o.active ? 'bg-emerald-500/15 text-emerald-400' : 'bg-dark-700 text-dark-200'}`}>
                   {o.active ? 'Activa' : 'Pausada'}
                 </span>
                 <button disabled={isBusy} onClick={() => toggleOffer(o)} className="btn-ghost p-1.5" title={o.active ? 'Pausar' : 'Activar'}>

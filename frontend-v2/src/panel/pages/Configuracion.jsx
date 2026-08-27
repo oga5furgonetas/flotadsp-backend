@@ -174,7 +174,7 @@ function Destinatarios({ centers }) {
                   {d.email || d.telefono} · {d.centers?.join(' · ') || 'todos los centros'}
                 </span>
               </span>
-              {!d.activo && <span className="rounded bg-dark-800 px-1.5 text-[10px] text-dark-500">en pausa</span>}
+              {!d.activo && <span className="rounded bg-dark-800 px-1.5 text-[10px] text-dark-300">en pausa</span>}
               {/* Mandárselo sólo a esta persona, para comprobar que le llega
                   antes de dejarlo funcionando. No va copia al grupo. */}
               <button onClick={() => probar(d)} disabled={probando === d.id || !d.email}
@@ -312,7 +312,7 @@ export default function Configuracion() {
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-dark-200"><Send size={16} /> {t('cfg.telegram')}</div>
         {!tg ? <Loader2 className="animate-spin text-dark-400" size={16} /> : (
           <div className="flex items-center gap-3 text-sm">
-            <span className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${tg.enabled ? 'bg-emerald-500/15 text-emerald-300' : 'bg-dark-700 text-dark-400'}`}>
+            <span className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${tg.enabled ? 'bg-emerald-500/15 text-emerald-300' : 'bg-dark-700 text-dark-200'}`}>
               {tg.enabled ? <><Check size={12} /> {t('cfg.tg.enabled')}</> : t('cfg.tg.disabled')}
             </span>
             <span className="text-dark-400">{(tg.chat_ids || []).filter(Boolean).length} {t('cfg.tg.chats')}</span>

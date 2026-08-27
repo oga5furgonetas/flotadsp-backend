@@ -111,7 +111,7 @@ function RentalCard({ r, userCoords, rank }) {
     <div className="group relative flex flex-col overflow-hidden rounded-2xl border border-dark-700/60 bg-dark-800/70 shadow-sm transition-all hover:border-dark-600 hover:shadow-lg hover:shadow-black/20">
       {/* Rank ribbon for top 3 */}
       {rank <= 3 && (
-        <div className="absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full bg-dark-700 text-[10px] font-bold text-dark-400">
+        <div className="absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full bg-dark-700 text-[10px] font-bold text-dark-200">
           {rank}
         </div>
       )}

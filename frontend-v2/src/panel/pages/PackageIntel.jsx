@@ -146,7 +146,7 @@ function Investigator({ tba, onClose }) {
           </div>
           {p.reference_id && <div className="text-xs text-dark-500">{p.reference_id}</div>}
         </div>
-        <button onClick={onClose} className="rounded-lg p-1.5 text-dark-500 hover:bg-dark-800 hover:text-dark-200"><X size={16} /></button>
+        <button onClick={onClose} className="rounded-lg p-1.5 text-dark-300 hover:bg-dark-800 hover:text-dark-200"><X size={16} /></button>
       </div>
 
       {/* Ficha de datos */}

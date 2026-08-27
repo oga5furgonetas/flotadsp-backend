@@ -145,7 +145,7 @@ function Impacto({ datos, center, t }) {
                   </div>
                   <div className="flex items-center gap-1.5 text-[10px] text-dark-600">
                     {c.muestra_corta && (
-                      <span className="rounded bg-dark-800 px-1 py-px text-dark-500">
+                      <span className="rounded bg-dark-800 px-1 py-px text-dark-300">
                         {t('cal.muestra.corta')}
                       </span>
                     )}

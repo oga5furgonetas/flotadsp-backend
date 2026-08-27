@@ -43,6 +43,8 @@ jobs:
         run: node scripts/check-tema.mjs
       - name: Checker ayuda (pantallas que no se explican)
         run: node scripts/check-ayuda.mjs
+      - name: Checker contraste (texto que no se lee)
+        run: node scripts/check-contraste.mjs
 
   backend:
     name: Backend (sintaxis + contratos + tests de API)

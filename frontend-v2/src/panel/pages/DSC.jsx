@@ -55,7 +55,7 @@ export default function DSC() {
           {[7, 14, 30].map((n) => (
             <button key={n} onClick={() => setDias(n)}
               className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${
-                dias === n ? 'bg-orange-500 text-white' : 'bg-dark-800 text-dark-300 hover:bg-dark-700'}`}>
+                dias === n ? 'bg-orange-700 text-white' : 'bg-dark-800 text-dark-300 hover:bg-dark-700'}`}>
               {n} d
             </button>
           ))}

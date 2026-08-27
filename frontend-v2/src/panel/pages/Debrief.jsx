@@ -239,7 +239,7 @@ function Paquete({ f, dia, alMarcar }) {
         <div className="flex items-center gap-2">
           <span className="font-mono text-[13px] font-semibold tabular-nums text-slate-900">{f.tba}</span>
           {f.stop_id != null && (
-            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
               parada {f.stop_id}
             </span>
           )}
@@ -257,7 +257,7 @@ function Paquete({ f, dia, alMarcar }) {
           disabled={ocupado} onClick={() => pulsar('devuelto')}
           className={`flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-[12px] font-semibold disabled:opacity-40 ${
             marca === 'devuelto'
-              ? 'border-emerald-500 bg-emerald-500 text-white'
+              ? 'border-emerald-500 bg-emerald-700 text-white'
               : 'border-slate-300 text-slate-600 hover:border-emerald-400 hover:text-emerald-700'}`}>
           <Check size={14} /> Lo trae
         </button>
@@ -363,7 +363,7 @@ function Conductor({ c, dia, alMarcar }) {
           </span>
         )}
         {c.pendientes > 0 ? (
-          <span className="shrink-0 rounded-lg bg-amber-500 px-2.5 py-1 text-[12px] font-bold text-white tabular-nums">
+          <span className="shrink-0 rounded-lg bg-amber-500 px-2.5 py-1 text-[12px] font-bold text-amber-950 tabular-nums">
             {c.pendientes} sin mirar
           </span>
         ) : c.no_aparecen > 0 ? (
@@ -526,6 +526,11 @@ export default function Debrief() {
      cargando, no se borra el error visible y se FUSIONA en vez de
      reemplazar, para que no se mueva nada de sitio. */
   const cargar = useCallback(async (silencioso = false) => {
+    /* El cerrojo se pone y se comprueba ANTES de cualquier `await`, en el
+       mismo turno síncrono. Si se leyera después, dos llamadas seguidas —el
+       reloj y una pulsación— podrían pasar las dos y pedir el día dos veces.
+       eslint avisa de `require-atomic-updates` aquí; en este orden no puede
+       darse, pero conviene que se lea el motivo antes de moverlo. */
     if (cargandoRef.current) return
     cargandoRef.current = true
     if (!silencioso) { setCargando(true); setError('') }
@@ -536,6 +541,12 @@ export default function Debrief() {
     } catch (e) {
       if (!silencioso) setError(e?.response?.data?.detail || 'No se pudo cargar el cuadre')
     } finally {
+      /* eslint-disable-next-line require-atomic-updates --
+         Falso positivo de la regla, y conviene dejarlo escrito. La regla avisa
+         de asignar a algo compartido DESPUÉS de un `await`, por si otra
+         ejecución lo cambió en medio. Aquí no puede pasar: la comprobación y
+         la puesta del cerrojo son síncronas y van juntas antes del primer
+         `await`, así que solo una llamada entra y solo esa lo suelta. */
       cargandoRef.current = false
       if (!silencioso) setCargando(false)
     }

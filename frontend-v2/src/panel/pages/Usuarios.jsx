@@ -90,7 +90,7 @@ function ModulePicker({ perms, onChange }) {
           <div key={g.g}>
             <button type="button" onClick={() => toggleGroup(g)}
               className="mb-1.5 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-dark-400 hover:text-dark-200">
-              <span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${onCount === keys.length ? 'border-brand-500 bg-brand-500 text-white' : 'border-dark-600'}`}>
+              <span className={`flex h-3.5 w-3.5 items-center justify-center rounded border ${onCount === keys.length ? 'border-brand-500 bg-brand-700 text-white' : 'border-dark-600'}`}>
                 {onCount === keys.length && <Check size={10} />}
               </span>
               {g.g} <span className="font-normal text-dark-600">{onCount}/{keys.length}</span>
@@ -102,8 +102,8 @@ function ModulePicker({ perms, onChange }) {
                     ? 'Esta pantalla la ve todo el mundo aunque la desmarques: es de la operación diaria.'
                     : undefined}
                   className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${
-                    set.has(k) ? 'bg-brand-500/20 text-brand-300 ring-1 ring-brand-500/40'
-                      : 'bg-dark-800 text-dark-500 hover:text-dark-300'}`}>
+                    set.has(k) ? 'bg-brand-500/20 text-brand-200 ring-1 ring-brand-500/40'
+                      : 'bg-dark-800 text-dark-300 hover:text-dark-300'}`}>
                   {lbl}
                   {/* Se dice que da igual desmarcarla. Callarlo hace que alguien
                       la quite, crea que la ha quitado, y no sea verdad. */}
@@ -128,7 +128,7 @@ function CenterPicker({ centers, value, onChange, t }) {
   return (
     <div className="flex flex-wrap gap-1.5">
       <button type="button" onClick={() => onChange(null)}
-        className={`rounded-lg px-2.5 py-1 text-xs font-medium ${value === null ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40' : 'bg-dark-800 text-dark-500 hover:text-dark-300'}`}>
+        className={`rounded-lg px-2.5 py-1 text-xs font-medium ${value === null ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40' : 'bg-dark-800 text-dark-300 hover:text-dark-300'}`}>
         {t('usr.all.centers')}
       </button>
       {centers.map((c) => {
@@ -139,7 +139,7 @@ function CenterPicker({ centers, value, onChange, t }) {
               const curr = Array.isArray(value) ? value : []
               onChange(active ? curr.filter((x) => x !== c) : [...curr, c])
             }}
-            className={`rounded-lg px-2.5 py-1 text-xs font-medium ${active ? 'bg-brand-500/20 text-brand-300 ring-1 ring-brand-500/40' : 'bg-dark-800 text-dark-500 hover:text-dark-300'}`}>
+            className={`rounded-lg px-2.5 py-1 text-xs font-medium ${active ? 'bg-brand-500/20 text-brand-200 ring-1 ring-brand-500/40' : 'bg-dark-800 text-dark-300 hover:text-dark-300'}`}>
             {c}
           </button>
         )
@@ -314,7 +314,7 @@ export default function Usuarios() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate font-semibold text-dark-50">{u.name || u.username}</span>
                       <RoleBadge u={u} t={t} />
-                      {u.id === me?.id && <span className="rounded-full bg-dark-700 px-2 py-0.5 text-[10px] text-dark-400">{t('usr.you')}</span>}
+                      {u.id === me?.id && <span className="rounded-full bg-dark-700 px-2 py-0.5 text-[10px] text-dark-200">{t('usr.you')}</span>}
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-dark-500">
                       <span className="font-mono">/{u.username}</span>

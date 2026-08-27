@@ -66,7 +66,7 @@ function ContactModal({ contact, onSave, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
       <div className="relative mx-4 w-full max-w-md rounded-2xl border border-dark-700 bg-dark-900 p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
-        <button onClick={onClose} className="absolute right-4 top-4 rounded-lg p-1.5 text-dark-500 hover:bg-dark-800 hover:text-white transition">
+        <button onClick={onClose} className="absolute right-4 top-4 rounded-lg p-1.5 text-dark-300 hover:bg-dark-800 hover:text-white transition">
           <X size={15} />
         </button>
 
@@ -143,7 +143,7 @@ function ContactCard({ contact, onEdit, onDelete }) {
             {contact.role && <div className="text-[11px] text-dark-500">{contact.role}</div>}
           </div>
           {contact.center && (
-            <span className="shrink-0 rounded-full bg-dark-700 px-2 py-0.5 text-[10px] font-semibold text-dark-400">
+            <span className="shrink-0 rounded-full bg-dark-700 px-2 py-0.5 text-[10px] font-semibold text-dark-200">
               {contact.center}
             </span>
           )}

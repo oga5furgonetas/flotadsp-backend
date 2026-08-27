@@ -107,7 +107,7 @@ export default function Inspecciones() {
 
       <div className="mb-3 flex flex-wrap gap-1.5">
         {FILTERS.map((f) => (
-          <button key={f} onClick={() => setSev(f)} className={`rounded-full px-3 py-1 text-xs font-semibold ${sev === f ? 'bg-brand-500/20 text-brand-300' : 'bg-dark-800 text-dark-400 hover:text-dark-200'}`}>
+          <button key={f} onClick={() => setSev(f)} className={`rounded-full px-3 py-1 text-xs font-semibold ${sev === f ? 'bg-brand-500/20 text-brand-200' : 'bg-dark-800 text-dark-400 hover:text-dark-200'}`}>
             {f === 'Todas' ? t('ui.all') : sevLabel(f)}
           </button>
         ))}
@@ -127,7 +127,7 @@ export default function Inspecciones() {
                   <span className={`absolute left-2 top-2 rounded px-2 py-0.5 text-[11px] font-bold ${SEV_CLS[s]}`}>{sevLabel(s)}</span>
                   {i.forensic_signed && <span className="absolute right-2 top-2 flex items-center gap-0.5 rounded bg-emerald-500/90 px-1.5 py-0.5 text-[10px] font-bold text-white" title={t('insp.sign.done')}><ShieldCheck size={10} /> {t('insp.signed')}</span>}
                   {typeof i.fraud_score === 'number' && i.fraud_score >= 70 && (
-                    <span className={`absolute left-2 bottom-2 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold text-white ${i.fraud_score >= 85 ? 'bg-red-600' : 'bg-amber-500'}`} title={`Score ${i.fraud_score}/100`}>
+                    <span className={`absolute left-2 bottom-2 flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-bold text-amber-950 ${i.fraud_score >= 85 ? 'bg-red-600' : 'bg-amber-500'}`} title={`Score ${i.fraud_score}/100`}>
                       <ShieldAlert size={10} /> {i.fraud_score >= 85 ? t('insp.fraud.high') : t('insp.fraud.mid')}
                     </span>
                   )}
@@ -390,7 +390,7 @@ function DamageRow({ d, inspId, idx, onSaved }) {
           ? <span className="flex items-center gap-1 text-sm font-semibold text-emerald-300"><Check size={13} /> {eur(d.actual_cost)}</span>
           : <span className="text-sm text-dark-300">{eur(d.estimated_cost)}</span>}
         <button onClick={abrirPanel} title={t('dmg.manage')}
-          className={`rounded-md p-1 ${panel ? 'bg-dark-700 text-dark-200' : 'text-dark-500 hover:text-dark-300'}`}>
+          className={`rounded-md p-1 ${panel ? 'bg-dark-700 text-dark-200' : 'text-dark-200 hover:text-dark-300'}`}>
           <Wrench size={14} />
         </button>
         {d.description && (

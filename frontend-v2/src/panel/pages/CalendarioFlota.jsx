@@ -121,7 +121,7 @@ function Panel({ titulo, sub, onClose, children }) {
             <h3 className="font-display text-[16px] font-semibold capitalize tracking-[-0.01em] text-dark-50">{titulo}</h3>
             {sub && <p className="mt-0.5 text-[11.5px] text-dark-500">{sub}</p>}
           </div>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-dark-500 transition-colors hover:bg-dark-800 hover:text-dark-100">
+          <button onClick={onClose} className="rounded-lg p-1.5 text-dark-300 transition-colors hover:bg-dark-800 hover:text-dark-100">
             <X size={15} />
           </button>
         </div>
@@ -263,7 +263,7 @@ function FormCita({ t, vehiculos, inicial, onGuardado }) {
       <button
         onClick={guardar}
         disabled={!vid || !fecha || guardando}
-        className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-500 px-3 py-2.5 text-[13px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+        className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-700 px-3 py-2.5 text-[13px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
       >
         {guardando ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
         {t('cal.guardar')}
@@ -356,7 +356,7 @@ function FormResolver({ ev, t, onHecho, onCancelar }) {
       {err && <p className="text-[12px] text-red-300">{err}</p>}
       <div className="flex gap-2">
         <button onClick={guardar} disabled={ocupado || (porKm && km === '')}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-2 text-[12.5px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-2 text-[12.5px] font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
           {ocupado ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />} {t('cal.res.ok')}
         </button>
         <button onClick={onCancelar} disabled={ocupado}

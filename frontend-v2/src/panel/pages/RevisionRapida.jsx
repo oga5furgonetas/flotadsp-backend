@@ -274,6 +274,19 @@ const GOAL = 3000
    se revisa sobre todo cuando la IA reporta algo. */
 function Autoexamen({ datos, total, alRevisar }) {
   const [abierto, setAbierto] = useState(false)
+  /* TODOS LOS HOOKS ANTES DEL PRIMER `return`, sin excepción.
+     Este `useState` y su `useEffect` estaban debajo del `if (!datos) return
+     null` de aquí abajo: en el primer render, sin datos, React registraba UN
+     hook y en el siguiente TRES. Eso desalinea la lista interna de hooks y
+     revienta el componente con un error que no señala la causa. Lo cazó
+     eslint (`react-hooks/rules-of-hooks`), no la pantalla. */
+  const [fiab, setFiab] = useState(null)
+  useEffect(() => {
+    // Solo al desplegar el detalle: no hace falta para el resumen.
+    if (!abierto || fiab) return
+    fiabilidadIA().then((r) => setFiab(r.data)).catch(() => {})
+  }, [abierto, fiab])
+
   if (!datos) return null
 
   const cob = datos.cobertura || {}
@@ -296,13 +309,6 @@ function Autoexamen({ datos, total, alRevisar }) {
      ¿existe el daño? y ¿acerto tambien donde estaba? */
   const rec = datos.cuentas_30d
   const hist = datos.cuentas
-  /* Se pide solo al desplegar el detalle: no hace falta para el resumen y
-     asi no se paga en cada carga de la pantalla. */
-  const [fiab, setFiab] = useState(null)
-  useEffect(() => {
-    if (!abierto || fiab) return
-    fiabilidadIA().then((r) => setFiab(r.data)).catch(() => {})
-  }, [abierto, fiab])
 
   return (
     <div className="card mb-4 border-violet-500/30 bg-violet-500/5 p-4">
@@ -736,7 +742,7 @@ export default function RevisionRapida() {
                   <div className="absolute right-2 top-2 z-10 flex overflow-hidden rounded-lg border border-dark-600 text-xs font-semibold shadow-lg">
                     <button
                       onClick={() => setShowAnnotated(false)}
-                      className={`px-2.5 py-1.5 transition ${!showAnnotated ? 'bg-dark-700 text-white' : 'bg-dark-900/80 text-dark-400 hover:text-dark-200'}`}
+                      className={`px-2.5 py-1.5 transition ${!showAnnotated ? 'bg-dark-700 text-white' : 'bg-dark-900/80 text-dark-200 hover:text-dark-200'}`}
                     >{t('rev.original')}</button>
                     <button
                       onClick={() => setShowAnnotated(true)}
@@ -756,7 +762,7 @@ export default function RevisionRapida() {
                     <button
                       onClick={() => setCompareMode((c) => !c)}
                       className={`absolute left-2 top-2 z-10 rounded-lg border px-2.5 py-1.5 text-xs font-semibold shadow-lg transition ${
-                        compareMode ? 'border-emerald-500 bg-emerald-600 text-white' : 'border-dark-600 bg-dark-900/80 text-dark-300 hover:text-white'
+                        compareMode ? 'border-emerald-500 bg-emerald-700 text-white' : 'border-dark-600 bg-dark-900/80 text-dark-300 hover:text-white'
                       }`}
                     >
                       ⇄ {t('rev.compare')}
@@ -922,7 +928,7 @@ export default function RevisionRapida() {
 
             {/* Daños ya en el ledger del vehículo: informativo, sin re-validar */}
             {knownCount > 0 && (
-              <div className="mt-3 flex items-center gap-1.5 rounded-lg bg-dark-800/40 px-2.5 py-2 text-xs text-dark-500">
+              <div className="mt-3 flex items-center gap-1.5 rounded-lg bg-dark-800/40 px-2.5 py-2 text-xs text-dark-300">
                 <Check size={13} className="shrink-0 text-emerald-500/70" />
                 {knownCount === 1
                   ? '1 daño ya registrado anteriormente en este vehículo — no requiere nueva validación'

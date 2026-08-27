@@ -133,7 +133,7 @@ function EditableField({ label, value, onSave, type = 'text', icon, mono, childr
               className="min-w-0 flex-1 rounded-lg border border-brand-500/50 bg-dark-700 px-2.5 py-1.5 text-sm text-dark-50 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-500/20"
             />
             <button onClick={confirm} className="rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 p-1.5 text-white hover:brightness-110 transition"><Check size={12} /></button>
-            <button onClick={cancel}  className="rounded-lg bg-dark-700 p-1.5 text-dark-400 hover:text-dark-100 transition"><X size={12} /></button>
+            <button onClick={cancel}  className="rounded-lg bg-dark-700 p-1.5 text-dark-200 hover:text-dark-100 transition"><X size={12} /></button>
           </div>
         ) : (
           <div className={`text-sm font-medium text-dark-100 ${mono ? 'font-mono tracking-wider' : ''}`}>
@@ -184,7 +184,7 @@ function TallerModal({ vehicle, onConfirm, onCancel }) {
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onCancel}>
       <div className="relative mx-4 w-full max-w-md rounded-2xl border border-dark-700 bg-dark-900 p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
-        <button onClick={onCancel} className="absolute right-4 top-4 rounded-lg p-1.5 text-dark-500 hover:bg-dark-800 hover:text-white transition"><X size={15} /></button>
+        <button onClick={onCancel} className="absolute right-4 top-4 rounded-lg p-1.5 text-dark-300 hover:bg-dark-800 hover:text-white transition"><X size={15} /></button>
 
         <div className="mb-5 flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-orange-500/15">
@@ -237,7 +237,7 @@ function TallerModal({ vehicle, onConfirm, onCancel }) {
           <button
             onClick={() => { if (!valid || submitting) return; setSubmitting(true); onConfirm(form) }}
             disabled={!valid || submitting}
-            className="flex-1 rounded-xl bg-orange-600 py-2.5 text-sm font-bold text-white transition hover:bg-orange-500 disabled:opacity-40"
+            className="flex-1 rounded-xl bg-orange-700 py-2.5 text-sm font-bold text-white transition hover:bg-orange-700 disabled:opacity-40"
           >
             {submitting ? <Loader2 size={14} className="mx-auto animate-spin" /> : 'Confirmar y registrar'}
           </button>
@@ -270,7 +270,7 @@ function MaintModal({ kind, currentKm, onSave, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm" onClick={onClose}>
       <div className="relative mx-4 w-full max-w-sm rounded-2xl border border-dark-700 bg-dark-900 p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
-        <button onClick={onClose} className="absolute right-4 top-4 rounded-lg p-1.5 text-dark-500 hover:bg-dark-800 hover:text-white transition"><X size={15} /></button>
+        <button onClick={onClose} className="absolute right-4 top-4 rounded-lg p-1.5 text-dark-300 hover:bg-dark-800 hover:text-white transition"><X size={15} /></button>
         <h2 className="mb-4 text-sm font-bold text-dark-50">Registrar: {meta.label}</h2>
         <div className="space-y-3">
           <div>
@@ -746,7 +746,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
               >
                 {tab.label}
                 {tab.count != null && (
-                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${activeTab === tab.id ? 'bg-brand-500/20 text-brand-300' : 'bg-dark-800 text-dark-500'}`}>
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold ${activeTab === tab.id ? 'bg-brand-500/20 text-brand-200' : 'bg-dark-800 text-dark-300'}`}>
                     {tab.count}
                   </span>
                 )}
@@ -848,7 +848,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                           key={key}
                           disabled={busy}
                           onClick={() => vehicle.status !== key && handleStatusChange(key)}
-                          className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold transition ${vehicle.status === key ? m.badge + ' cursor-default' : 'bg-dark-700 text-dark-500 hover:bg-dark-600 hover:text-dark-200'}`}
+                          className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold transition ${vehicle.status === key ? m.badge + ' cursor-default' : 'bg-dark-700 text-dark-200 hover:bg-dark-600 hover:text-dark-200'}`}
                         >
                           {t(m.labelKey)}
                         </button>
@@ -1049,7 +1049,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                           onClose()
                         } catch { showToast('No se pudo eliminar', false); setBusy(false) }
                       }}
-                      className="rounded-lg bg-red-500/90 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-red-500 disabled:opacity-50"
+                      className="rounded-lg bg-red-500/90 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-red-700 disabled:opacity-50"
                     >
                       {busy ? 'Eliminando…' : 'Sí, eliminar'}
                     </button>
@@ -1523,7 +1523,7 @@ function AddVehicleModal({ centers, onSaved, onClose }) {
               <p className="text-[11px] text-dark-500">Nuevo vehículo en la flota</p>
             </div>
           </div>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-dark-500 hover:bg-dark-800 hover:text-white transition">
+          <button onClick={onClose} className="rounded-lg p-1.5 text-dark-300 hover:bg-dark-800 hover:text-white transition">
             <X size={15} />
           </button>
         </div>

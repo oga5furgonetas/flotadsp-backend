@@ -58,7 +58,7 @@ export default function EsquemaCortex() {
       </p>
 
       {!cargando && esquemas.length === 0 ? (
-        <p className="mt-3 rounded-lg border border-dark-800 bg-dark-950/40 px-3 py-2 text-[11.5px] leading-relaxed text-dark-500">
+        <p className="mt-3 rounded-lg border border-dark-800 bg-dark-950/40 px-3 py-2 text-[11.5px] leading-relaxed text-dark-300">
           Todavía no ha llegado ninguno. Se manda solo la primera vez que la extensión ve una
           respuesta de Cortex: abre una ruta en Cortex con la extensión activa y vuelve aquí.
           Hace falta la versión 2.11 o superior — las anteriores lo guardaban en el navegador

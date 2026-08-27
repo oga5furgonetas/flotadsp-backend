@@ -160,7 +160,7 @@ export function PrimerosPasos({ puedeVer, idUsuario }) {
                 onClick={() => { cerrar(); nav(p.clave === 'dashboard' ? '/panel' : `/panel/${p.clave}`) }}
                 className="flex w-full items-start gap-3 px-6 py-3.5 text-left hover:bg-slate-50"
               >
-                <span className="mt-0.5 flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+                <span className="mt-0.5 flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
                   <Clock size={11} /> {p.cuando}
                 </span>
                 <span className="min-w-0 flex-1 text-[14px] text-slate-700">{p.texto}</span>

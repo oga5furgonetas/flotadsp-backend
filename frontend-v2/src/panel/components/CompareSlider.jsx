@@ -35,10 +35,16 @@ export default function CompareSlider({ beforeUrl, afterUrl }) {
         </div>
       </div>
 
-      <span className="pointer-events-none absolute left-2 top-2 rounded bg-black/75 px-2 py-0.5 text-[10px] font-bold text-orange-300">
+      {/* COLOR LITERAL, NO `text-orange-300`, Y ES A PROPOSITO.
+          Estas dos chapas van sobre la FOTO, en un fondo negro al 75 %, asi
+          que tienen que seguir claras en los tres temas. El modo claro
+          compensa los pasteles 300 a tonos oscuros —para que se lean sobre
+          papel— y eso aqui las dejaba en 2:1, ilegibles. Un valor literal no
+          lo toca ninguna compensacion. Medido por `check-contraste.mjs`. */}
+      <span className="pointer-events-none absolute left-2 top-2 rounded bg-black/75 px-2 py-0.5 text-[10px] font-bold text-[#fdba74]">
         AHORA
       </span>
-      <span className="pointer-events-none absolute right-2 top-2 rounded bg-black/75 px-2 py-0.5 text-[10px] font-bold text-emerald-300">
+      <span className="pointer-events-none absolute right-2 top-2 rounded bg-black/75 px-2 py-0.5 text-[10px] font-bold text-[#6ee7b7]">
         ANTES (referencia)
       </span>
     </div>

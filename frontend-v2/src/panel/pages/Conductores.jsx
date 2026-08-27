@@ -179,7 +179,7 @@ function DriverRow({ s, rank, showCenter, expanded, onToggle }) {
           <div className="flex items-center gap-1.5">
             <span className="font-semibold text-dark-100 text-sm truncate max-w-[160px]">{s.name}</span>
             {s.prize_eligible === false && (
-              <span className="shrink-0 rounded-full bg-dark-800 px-1.5 py-0.5 text-[9px] font-semibold text-dark-500" title="No elegible para el premio del mes: pocos días asignados">
+              <span className="shrink-0 rounded-full bg-dark-800 px-1.5 py-0.5 text-[9px] font-semibold text-dark-300" title="No elegible para el premio del mes: pocos días asignados">
                 no elegible
               </span>
             )}
@@ -828,7 +828,7 @@ function DriverModal({ driver, centers, hasAccount, onSave, onDelete, onClose, o
                         ? <ShieldCheck size={15} className="text-emerald-400" />
                         : <LockOpen size={15} className="text-dark-500" />}
                       <span className="text-sm font-semibold text-dark-200">Acceso con contraseña</span>
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${hasAccount ? 'bg-emerald-500/15 text-emerald-400' : 'bg-dark-800 text-dark-500'}`}>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${hasAccount ? 'bg-emerald-500/15 text-emerald-400' : 'bg-dark-800 text-dark-300'}`}>
                         {hasAccount ? 'Activado' : 'Sin contraseña'}
                       </span>
                     </div>
@@ -889,7 +889,7 @@ function DriverModal({ driver, centers, hasAccount, onSave, onDelete, onClose, o
                       <button
                         onClick={handleSetPassword}
                         disabled={pwBusy || !pwValue || !pwConfirm}
-                        className="flex items-center gap-1.5 rounded-lg bg-brand-500 px-4 py-2 text-xs font-bold text-white hover:bg-brand-600 disabled:opacity-50 transition-colors"
+                        className="flex items-center gap-1.5 rounded-lg bg-brand-700 px-4 py-2 text-xs font-bold text-white hover:bg-brand-600 disabled:opacity-50 transition-colors"
                       >
                         {pwBusy ? <Loader2 size={12} className="animate-spin" /> : <Lock size={12} />}
                         {hasAccount ? 'Cambiar contraseña' : 'Guardar contraseña'}
@@ -1003,7 +1003,7 @@ function DriverModal({ driver, centers, hasAccount, onSave, onDelete, onClose, o
               type="submit"
               form="driver-form"
               disabled={busy}
-              className="flex items-center gap-2 rounded-lg bg-brand-500 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-brand-500/25 hover:bg-brand-600 disabled:opacity-50 transition-colors"
+              className="flex items-center gap-2 rounded-lg bg-brand-700 px-5 py-2 text-sm font-semibold text-white shadow-lg shadow-brand-500/25 hover:bg-brand-600 disabled:opacity-50 transition-colors"
             >
               {busy ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
               {busy ? t('ui.saving') : t('ui.save')}

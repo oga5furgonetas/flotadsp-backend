@@ -74,7 +74,7 @@ function RoadsideBanner({ roadside, provider }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-dark-400">{t('ws.roadside')}</span>
-            {provider && <span className="rounded-full bg-dark-700 px-1.5 py-0.5 text-[9px] text-dark-400">{provider.split('_')[0]}</span>}
+            {provider && <span className="rounded-full bg-dark-700 px-1.5 py-0.5 text-[9px] text-dark-200">{provider.split('_')[0]}</span>}
           </div>
           <div className={`mt-0.5 text-sm font-semibold ${hasPhone ? 'text-orange-200' : 'text-dark-500'}`}>
             {roadside.label}
@@ -83,7 +83,7 @@ function RoadsideBanner({ roadside, provider }) {
         {hasPhone && (
           <a
             href={`tel:${roadside.phone.replace(/\s/g, '')}`}
-            className="flex shrink-0 items-center gap-2 rounded-xl bg-orange-500 px-3 py-2 text-sm font-bold text-white shadow-lg shadow-orange-500/20 transition hover:bg-orange-400 active:scale-95"
+            className="flex shrink-0 items-center gap-2 rounded-xl bg-orange-700 px-3 py-2 text-sm font-bold text-white shadow-lg shadow-orange-500/20 transition hover:bg-orange-400 active:scale-95"
           >
             <Phone size={14} /> {roadside.phone}
           </a>
@@ -160,7 +160,7 @@ function WorkshopCard({ w, userCoords }) {
       {cats.length > 0 && (
         <div className="flex flex-wrap gap-1 px-4 pb-3">
           {cats.map(c => (
-            <span key={c} className="rounded-full bg-dark-700 px-2 py-0.5 text-[10px] text-dark-400">{c}</span>
+            <span key={c} className="rounded-full bg-dark-700 px-2 py-0.5 text-[10px] text-dark-200">{c}</span>
           ))}
         </div>
       )}

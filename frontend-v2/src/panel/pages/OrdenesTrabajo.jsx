@@ -549,7 +549,7 @@ export default function OrdenesTrabajo() {
             {[['abiertas', 'Abiertas'], ['todas', 'Todas'], ...Object.entries(estados)].map(([id, txt]) => (
               <button key={id} onClick={() => setFiltro(id)}
                 className={`rounded-lg px-2.5 py-1.5 text-[12.5px] font-semibold transition ${
-                  filtro === id ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-100'}`}>
+                  filtro === id ? 'bg-blue-600 text-white' : 'text-slate-700 hover:bg-slate-100'}`}>
                 {txt}
                 {resumen?.por_estado?.[id] != null && (
                   <span className={filtro === id ? 'ml-1.5 text-blue-100' : 'ml-1.5 text-slate-400'}>
@@ -708,7 +708,7 @@ export default function OrdenesTrabajo() {
                   {abierta.presupuesto === 'pendiente' && (
                     <div className="mt-3 flex gap-2">
                       <button onClick={() => cambiar({ presupuesto: 'aprobado' }, 'ap')} disabled={!!guardando}
-                        className="flex-1 rounded-lg bg-emerald-600 py-2.5 text-[13.5px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
+                        className="flex-1 rounded-lg bg-emerald-700 py-2.5 text-[13.5px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">
                         Aprobar
                       </button>
                       <button onClick={() => cambiar({ presupuesto: 'rechazado' }, 're')} disabled={!!guardando}
@@ -762,7 +762,7 @@ export default function OrdenesTrabajo() {
                       <button onClick={() => window.open(
                         `https://wa.me/${(enlace.telefono_taller || '').replace(/[^0-9]/g, '')}?text=${encodeURIComponent(enlace.texto_whatsapp)}`,
                         '_blank', 'noopener')}
-                        className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 py-2.5 text-[13.5px] font-semibold text-white hover:bg-emerald-700">
+                        className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-700 py-2.5 text-[13.5px] font-semibold text-white hover:bg-emerald-700">
                         <MessageCircle size={15} /> Mandarlo por WhatsApp
                       </button>
                     )}

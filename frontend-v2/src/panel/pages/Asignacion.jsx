@@ -268,7 +268,7 @@ function SlotRow({ slot, vehicles, drivers, usedV, usedD, onChange, onDelete, in
               ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300 focus:ring-emerald-500'
               : slot.vehicle_id
                 ? 'border-dark-600 bg-dark-800 text-white hover:border-dark-500 focus:ring-brand-500'
-                : 'border-amber-500/40 bg-amber-500/8 text-amber-400 focus:ring-amber-500'
+                : 'border-amber-500/40 bg-amber-500/8 text-amber-200 focus:ring-amber-500'
           }`}
         >
           <option value="">{t('asgn.plate.ph')}</option>
@@ -613,7 +613,7 @@ export default function Asignacion() {
 
       {/* Issues warning */}
       {!loading && issues > 0 && (
-        <div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-sm text-amber-300">
+        <div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-sm text-amber-200">
           <AlertTriangle size={14} className="shrink-0" />
           {issues} {t('asgn.incomplete.rows')} — {t('asgn.complete.before.save')}
         </div>

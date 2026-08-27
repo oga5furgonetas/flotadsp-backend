@@ -103,7 +103,7 @@ function Historial({ center }) {
           <FolderOpen size={16} className="text-brand-400" />
           <span className="text-sm font-semibold text-dark-100">{t('pg.histTitulo')}</span>
           {!noCenter && (
-            <span className="rounded-full bg-dark-700 px-2 py-0.5 text-[11px] text-dark-400">{center}</span>
+            <span className="rounded-full bg-dark-700 px-2 py-0.5 text-[11px] text-dark-200">{center}</span>
           )}
         </div>
         {open ? <ChevronUp size={15} className="text-dark-500" /> : <ChevronDown size={15} className="text-dark-500" />}
@@ -529,7 +529,7 @@ export default function PlantillaGenerador() {
               <input
                 value={data.week}
                 onChange={e => editMeta('week', e.target.value)}
-                className="w-16 rounded border border-dark-600 bg-dark-800 px-2 py-1 text-center text-xs font-bold text-brand-300 focus:outline-none focus:border-brand-500"
+                className="w-16 rounded border border-dark-600 bg-dark-800 px-2 py-1 text-center text-xs font-bold text-brand-200 focus:outline-none focus:border-brand-500"
               />
               <span className="text-xs text-dark-400">{t('pg.fecha')}</span>
               <input
@@ -858,7 +858,7 @@ function FurgoCell({ value, onChange, isPink, isRed, furgosDisp, usedFurgos, onT
           )}
           {occupied.length > 0 && (
             <>
-              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-400 bg-dark-800 border-t border-dark-700">
+              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-200 bg-dark-800 border-t border-dark-700">
                 {t('pg.yaAsignadas')} ({occupied.length})
               </div>
               {occupied.map(f => (
@@ -936,7 +936,7 @@ function MultiDropZone({ label, hint, items, onAdd, onRemove, inputRef, optional
       <div className="flex items-center gap-2">
         <p className="text-sm font-semibold text-dark-200">{label}</p>
         {required && <span className="rounded-full bg-brand-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-brand-400">{t('pg.requerido')}</span>}
-        {optional && <span className="rounded-full bg-dark-700 px-1.5 py-0.5 text-[10px] text-dark-500">{t('pg.opcional')}</span>}
+        {optional && <span className="rounded-full bg-dark-700 px-1.5 py-0.5 text-[10px] text-dark-200">{t('pg.opcional')}</span>}
       </div>
       {items.length > 0 && (
         <div className="flex flex-wrap gap-2">
