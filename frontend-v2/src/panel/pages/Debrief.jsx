@@ -347,8 +347,10 @@ function Conductor({ c, dia, alMarcar }) {
             <span className={`truncate text-[13px] ${c.sin_ficha ? 'font-mono text-[11.5px] text-slate-400' : 'text-slate-500'}`}>
               {c.conductor}
             </span>
+            {/* slate-700 y no slate-500: el checker de contraste midio slate-500
+                sobre este relleno en 4,34:1, por debajo del 4,5 de la WCAG. */}
             {c.sin_ficha && c.transporter_id && (
-              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700">
                 sin ficha
               </span>
             )}
@@ -358,12 +360,28 @@ function Conductor({ c, dia, alMarcar }) {
             {!!(c.sin_cerrar || []).length && (
               <span className="text-slate-400">· {c.sin_cerrar.length} aún en la furgoneta</span>
             )}
+            {c.recogidas > 0 && (
+              <span className="text-slate-500">· {c.recogidas} recogidas que trae</span>
+            )}
             {c.no_salio > 0 && <span className="text-slate-400">· {c.no_salio} no salieron de la nave</span>}
             {c.arrastrados > 0 && (
               <span className="text-slate-400">· {c.arrastrados} arrastran de otro día</span>
             )}
             {c.no_observado > 0 && <span className="text-slate-400">· {c.no_observado} sin observar</span>}
-            <span className="tabular-nums text-slate-400">· última captura {fmtHora(c.ultima_captura)}</span>
+            {/* DOS COSAS DISTINTAS, Y ANTES SE ENSEÑABA UNA CON EL NOMBRE DE LA
+                OTRA. `ultima_captura` es la hora del ultimo MOVIMIENTO en Cortex:
+                una ruta que termino a las 19:00 se queda ahi para siempre por
+                mucho que la sigamos bajando, y llamar a eso "ultima captura"
+                hacia parecer viejos unos datos que estaban al dia. Los minutos
+                salen de `seen_at`, que lo escribe la ingesta cada vez que baja la
+                ruta, y esa es la pregunta que hay que poder contestar antes de
+                reclamarle nada a nadie: ¿esto vale? */}
+            <span className="tabular-nums text-slate-400">· último movimiento {fmtHora(c.ultima_captura)}</span>
+            {c.capturado_hace_min != null && (
+              <span className={`tabular-nums ${c.capturado_hace_min > 45 ? 'font-semibold text-amber-700' : 'text-slate-400'}`}>
+                · {c.capturado_hace_min <= 1 ? 'al día' : `bajado hace ${c.capturado_hace_min} min`}
+              </span>
+            )}
           </div>
         </div>
         {/* El contador de la ruta: cuantos van de los que hay que comprobar.
@@ -751,6 +769,13 @@ export default function Debrief() {
                    sub={`${r.rutas ?? 0} rutas${r.apoyos ? ` · ${r.apoyos} de apoyo` : ''}`} />
               <Kpi n={r.sin_cerrar ?? 0} et="Sigue en la furgoneta" tono="gris"
                    sub={datos?.en_curso ? 'el día no ha terminado' : 'inventario'} />
+              {/* LAS RECOGIDAS, APARTE. Iban dentro de "sigue en la furgoneta" y
+                  eran la mayor parte de ese numero (121 de 138 el 27-08), asi que
+                  el inventario parecia enorme y la tarjeta no se miraba. Son
+                  bultos reales que el conductor descarga en la nave, pero no son
+                  reparto suyo sin hacer: merecen su propia linea. */}
+              <Kpi n={r.recogidas ?? 0} et="Recogidas que traen" tono="gris"
+                   sub="las descargan en la nave" />
               <Kpi n={r.no_salio ?? 0} et="No salieron" tono="gris" sub="se quedaron en nave" />
               {/* Se enseña aunque sea cero: si desapareciera sin mas, alguien
                   echaria en falta esos paquetes y desconfiaria de la cuenta. */}

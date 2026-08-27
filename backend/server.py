@@ -25170,7 +25170,22 @@ async def admin_delete_driver_offer(offer_id: str, _=Depends(require_superadmin)
 _CORTEX_STATES = {
     # crudo (Cortex/es) → canónico
     "loaded": "LOADED", "out_for_delivery": "LOADED", "on_road": "LOADED", "en_route": "LOADED",
-    "picked_up": "LOADED", "in_transit": "LOADED",
+    "in_transit": "LOADED",
+    # PICKED_UP NO ES "CARGADO PARA ENTREGAR". Es una RECOGIDA que el conductor
+    # ya ha subido a la furgoneta y trae de vuelta a la nave. Traducirlo a
+    # LOADED lo metia en el mismo saco que un paquete sin entregar, y el cuadre
+    # del debrief lo reclamaba como si le faltara por repartir.
+    # Medido el 27-08-2026 sobre el dia completo de OGA5: de los 281 paquetes
+    # que figuraban LOADED, los 281 tenian `PICKED_UP` como evento vigente y
+    # los 281 venian de un `PENDING_PICKUP` previo. Ni uno solo era reparto.
+    # Cortex decia 104 pendientes y la app 320: esa era la diferencia.
+    # Se guarda con el nombre que usa Cortex, sin inventar ninguno.
+    "picked_up": "PICKED_UP",
+    # Y NOT_DELIVERED es lo contrario de DELIVERED, no un matiz. Sin esta
+    # entrada caia en el emparejador por texto, donde "delivered" es subcadena
+    # de "not_delivered", y 7 paquetes de hoy figuraban ENTREGADOS diciendo
+    # Cortex que no se entregaron. Un falso positivo que ademas inflaba el DCR.
+    "not_delivered": "NOT_DELIVERED", "undelivered": "NOT_DELIVERED",
     # taskState reales de Cortex que significan "aún por hacer / en la furgoneta"
     "not_started": "LOADED", "not_attempted": "LOADED", "assigned": "LOADED",
     "pending": "LOADED", "ready": "LOADED", "incomplete": "LOADED", "in_progress": "LOADED",
@@ -25211,9 +25226,19 @@ def _cortex_canon_state(raw) -> str:
     if s in _CORTEX_STATES:
         return _CORTEX_STATES[s]
     low = str(raw).strip().lower()
-    for canon, kws in _CORTEX_STATE_TEXT:
-        if any(k in low for k in kws):
-            return canon
+    # NEGACION: "not_delivered" contiene "delivered", y por subcadena se
+    # convertia en DELIVERED — exactamente al reves de lo que dice Cortex.
+    # Cualquier codigo desconocido que empiece por una negacion NO pasa por el
+    # emparejador por texto: se devuelve tal cual y se ve que no lo conocemos,
+    # que es infinitamente mejor que afirmar lo contrario de la verdad.
+    # Solo sobre CODIGOS (sin espacios). El texto libre en espanol empieza por
+    # "no se ha podido entregar", que es una frase que el emparejador SI debe
+    # reconocer; bloquearla la dejaba sin clasificar. Probado con los dos casos.
+    _negado = (" " not in low) and re.match(r"^(not|non|un|no)[_-]", low) is not None
+    if not _negado:
+        for canon, kws in _CORTEX_STATE_TEXT:
+            if any(k in low for k in kws):
+                return canon
     # No reconocido: si parece un código de estado (letras/underscore), lo
     # mostramos tal cual (verdad de Cortex) en vez de "OBSERVED" genérico.
     if re.fullmatch(r"[A-Za-z_]{2,28}", s):
@@ -25489,6 +25514,15 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     # vivo y solo caduca lo que lleva 90 dias sin verse.
     # Va como datetime (no ISO): el indice TTL de Mongo solo entiende fechas.
     common["expira_en"] = datetime.now(timezone.utc) + timedelta(days=90)
+    # CUANDO LO VIMOS NOSOTROS, que no es cuando paso en Cortex.
+    # No habia forma de distinguir un paquete que sigue de verdad en la
+    # furgoneta de otro cuya ruta llevabamos dos horas sin bajar: `updated_at`
+    # y `first_seen` son la hora del EVENTO en Cortex, y una ruta terminada a
+    # las 19:00 no vuelve a moverla aunque la pidamos cincuenta veces. Con eso
+    # me equivoque yo mismo diagnosticando: mirando `updated_at` parecia que el
+    # barrido estaba muerto y estaba funcionando. Sin este campo, "esta al dia"
+    # no se puede ni preguntar.
+    common["seen_at"] = datetime.now(timezone.utc).isoformat()
     # Día de servicio (el que el usuario tiene seleccionado en Cortex). Se guarda
     # una sola vez y no se pisa con null: cada paquete pertenece a un día.
     service_day = str(obs.get("service_day") or "").strip()[:10]
@@ -25573,6 +25607,23 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
             {"tba": tba}, {"$set": enriquecer, "$inc": {"captures_n": 1}})
         return "same"
 
+    # ── UN EVENTO QUE YA ESTA NO SE VUELVE A GUARDAR ─────────────────────────
+    # El timeline hacia PING-PONG y crecia sin tope. Cortex reenvia sus eventos
+    # historicos en cada respuesta; la unica guarda que habia comparaba con el
+    # ULTIMO del array, asi que dos eventos alternandose se colaban los dos, una
+    # y otra vez: medido el 27-08, 658 eventos duplicados en un dia y un paquete
+    # con 88 entradas para 2 eventos reales, mas una fila basura en
+    # `cortex_events` por cada repeticion.
+    # La identidad de un evento es (estado, hora, crudo, contexto): si eso ya
+    # esta guardado, no es informacion nueva.
+    def _ya_guardado(tl, e):
+        clave = (e.get("state"), str(e.get("at")), str(e.get("raw") or ""),
+                 str(e.get("context") or ""))
+        return any((x.get("state"), str(x.get("at")), str(x.get("raw") or ""),
+                    str(x.get("context") or "")) == clave for x in tl)
+
+    _repetido = _ya_guardado(pkg.get("timeline") or [], ev)
+
     last = (pkg.get("timeline") or [{}])[-1]
     if last.get("state") == state:
         await db.cortex_packages.update_one({"tba": tba}, {"$set": common, "$inc": {"captures_n": 1}})
@@ -25608,20 +25659,24 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         # evento viejo puede traer la direccion que faltaba.
         meta = {k: v for k, v in common.items()
                 if k not in ("state", "updated_at") and v not in (None, "")}
-        await db.cortex_packages.update_one(
-            {"tba": tba},
-            {"$set": meta, "$inc": {"captures_n": 1}, "$push": {"timeline": ev}})
-        await db.cortex_events.insert_one(_cortex_evento_doc(ev, tba))
+        upd = {"$set": meta, "$inc": {"captures_n": 1}}
+        if not _repetido:
+            upd["$push"] = {"timeline": ev}
+        await db.cortex_packages.update_one({"tba": tba}, upd)
+        if not _repetido:
+            await db.cortex_events.insert_one(_cortex_evento_doc(ev, tba))
         return "same"
 
     # Cambio de estado real → histórico + timeline
     doc = {**pkg, **common, "timeline": (pkg.get("timeline") or []) + [ev]}
     evalr = _cortex_evaluate(doc)
-    await db.cortex_packages.update_one(
-        {"tba": tba},
-        {"$set": {**common, "priority": evalr["priority"], "reason": evalr["reason"]},
-         "$inc": {"captures_n": 1}, "$push": {"timeline": ev}})
-    await db.cortex_events.insert_one(_cortex_evento_doc(ev, tba))
+    upd = {"$set": {**common, "priority": evalr["priority"], "reason": evalr["reason"]},
+           "$inc": {"captures_n": 1}}
+    if not _repetido:
+        upd["$push"] = {"timeline": ev}
+    await db.cortex_packages.update_one({"tba": tba}, upd)
+    if not _repetido:
+        await db.cortex_events.insert_one(_cortex_evento_doc(ev, tba))
     return "changed"
 
 
@@ -25640,7 +25695,11 @@ _CX_EN_VUELO = ("LOADED", "YOU_ARE_NEXT", "ARRIVED", "OBSERVED", "NONE", "PENDIN
 
 # Nunca salio a reparto: no se despacho, luego no entra en el denominador del
 # DCR. Meterlo seria castigar al conductor por un paquete que no llego a tocar.
-_CX_NO_DESPACHADO = ("UNCOLLECTED", "NOT_READY", "TR_CANCELLED")
+# PICKED_UP va aqui y no en "fallo": una recogida no es una entrega que salio
+# mal, es que nunca hubo entrega que hacer. Dejarla caer al cajon por defecto
+# convertiria 281 recogidas de un dia normal en 281 fallos de entrega y hundiria
+# el DCR en vivo con un numero falso.
+_CX_NO_DESPACHADO = ("UNCOLLECTED", "NOT_READY", "TR_CANCELLED", "PICKED_UP")
 
 # Cualquier otro estado al cierre del dia es un fallo de entrega imputable:
 # BACK_TO_ORIGIN, CUSTOMER_UNAVAILABLE, ATTEMPTED, MISSING, DAMAGED,
@@ -28223,7 +28282,9 @@ async def cortex_geo_inverso(lat: float, lng: float, _=Depends(require_admin)):
 # separarlas importa porque cada una se atiende distinto. Un "se puede volver
 # a intentar" vuelve a salir mañana; un "falta" es una llamada AHORA.
 CX_REINTENTO = ("ATTEMPTED",)
-CX_NO_ENTREGA = ("BACK_TO_ORIGIN", "CUSTOMER_UNAVAILABLE", "ADDRESS_NOT_FOUND",
+# NOT_DELIVERED entra aqui: Cortex dice que no se entrego, luego vuelve.
+CX_NO_ENTREGA = ("NOT_DELIVERED", "NO_ITEMS_DELIVERED",
+                 "BACK_TO_ORIGIN", "CUSTOMER_UNAVAILABLE", "ADDRESS_NOT_FOUND",
                  "DAMAGED", "LOCKER_ISSUE")
 CX_NO_RECOGIDO = ("UNCOLLECTED", "NOT_READY")
 CX_FALTA = ("MISSING",)
@@ -28249,6 +28310,10 @@ CX_CTX_CLIENTE = ("COLLECTED_BY_CUSTOMER", "PICKED_BY_CUSTOMER",
 CX_CTX_PERDIDO = ("OBJECT_MISSING", "PACKAGE_MISSING")
 # Nunca salio de la nave. No es del conductor en absoluto.
 CX_NO_SALIO = ("PENDING_PICKUP",)
+# RECOGIDAS QUE SI TRAE. El conductor las ha subido a la furgoneta y tiene que
+# entregarlas en la nave. No son un fallo suyo y no son reparto, pero SI hay que
+# reclamarselas en el debrief, asi que tienen cajon propio en vez de esconderse.
+CX_RECOGIDO = ("PICKED_UP",)
 # Estados a medias. Un paquete aqui puede estar en la furgoneta o puede ser que
 # dejaramos de mirar. Solo estos pasan por la regla del hueco.
 # PENDING_PICKUP NO entra aqui: no es ambiguo, es que no salio (ver CX_NO_SALIO).
@@ -28289,7 +28354,7 @@ def _cx_debrief_reparto(paquetes: list, ultima_por_ruta: dict, en_curso: bool = 
     """
     cajones = {"entregados": [], "cancelados": [], "no_observado": [],
                "perdidos": [], "sin_cerrar": [], "reprogramados": [],
-               "cliente": [], "no_salio": [], "arrastrados": [],
+               "cliente": [], "no_salio": [], "arrastrados": [], "recogidas": [],
                # Los cuatro que se miran de primeras
                "reintento": [], "no_entrega": [], "no_recogido": []}
     for p in paquetes:
@@ -28350,6 +28415,9 @@ def _cx_debrief_reparto(paquetes: list, ultima_por_ruta: dict, en_curso: bool = 
         elif st in CX_NO_SALIO:
             # Se quedo en la nave. No es del conductor.
             cajones["no_salio"].append(fila)
+        elif st in CX_RECOGIDO:
+            # Las trae de vuelta: hay que contarlas al descargar.
+            cajones["recogidas"].append(fila)
         elif st in CX_REINTENTO:
             cajones["reintento"].append(fila)
         elif st in CX_NO_ENTREGA:
@@ -28456,7 +28524,7 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
         match,
         {"_id": 0, "tba": 1, "state": 1, "stop_id": 1, "stop_address": 1,
          "updated_at": 1, "driver_id": 1, "driver_name": 1, "route_code": 1,
-         "center": 1, "timeline": 1})
+         "center": 1, "timeline": 1, "seen_at": 1})
     paquetes = await cur.to_list(20000)
     if not paquetes:
         return {"dia": dia, "conductores": [], "total": 0, "resumen": {}}
@@ -28468,6 +28536,24 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
         u = p.get("updated_at") or ""
         if u > ultima_por_ruta.get(r, ""):
             ultima_por_ruta[r] = u
+
+    # ── CUANDO BAJAMOS ESTA RUTA POR ULTIMA VEZ ──────────────────────────────
+    # Esto NO es `updated_at`. `updated_at` es la hora del ultimo EVENTO en
+    # Cortex, y una ruta que termino a las 19:00 no vuelve a moverla aunque la
+    # pidamos cincuenta veces mas. La pantalla lo llamaba "ultima captura" y por
+    # eso parecia que los datos estaban viejos cuando no lo estaban: con ese
+    # numero me equivoque yo mismo al diagnosticar esto.
+    # `seen_at` lo escribe la ingesta en cada captura, asi que responde a la
+    # unica pregunta que importa antes de reclamarle nada a nadie: ¿esto esta al
+    # dia? Los paquetes guardados antes de existir el campo no lo traen y salen
+    # como desconocido, que es la verdad, no como cero.
+    _ahora_iso = datetime.now(timezone.utc).isoformat()
+    visto_por_ruta: dict = {}
+    for p in paquetes:
+        r = (p.get("route_code") or "").strip()
+        v = p.get("seen_at") or ""
+        if v > visto_por_ruta.get(r, ""):
+            visto_por_ruta[r] = v
 
     # El conductor no viene en todos los paquetes (el informe de faltas no lo
     # trae). Se completa por ruta, igual que hace /cortex/missing-hoy.
@@ -28578,6 +28664,13 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
             "reprogramados": caj["reprogramados"],
             "cliente": caj["cliente"],
             "no_salio": len(caj["no_salio"]),
+            # LAS RECOGIDAS QUE TRAE DE VUELTA. Las subio a la furgoneta en
+            # ruta y las descarga en la nave. No son un fallo suyo y no son
+            # reparto, pero son bultos reales que hay que contar al descargar.
+            # Iban en el mismo saco que "sigue en la furgoneta" y eran la mayor
+            # parte de ese numero (113 de 130 hoy), asi que el inventario del
+            # dia parecia enorme y no se miraba.
+            "recogidas": len(caj["recogidas"]),
             "arrastrados": len(caj["arrastrados"]),
             "no_observado": len(caj["no_observado"]),
             # El contador: de N que hay que comprobar, cuantos van
@@ -28593,8 +28686,13 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
             # La ultima captura que le afecta: la mas tardia de SUS rutas.
             # Aqui si vale la mas tardia, porque es informativa y no decide
             # nada — la regla del hueco ya se aplico paquete a paquete.
+            # El ultimo MOVIMIENTO en Cortex (lo que paso), y aparte los
+            # minutos desde que bajamos sus rutas (si lo que vemos vale).
             "ultima_captura": max((ultima_por_ruta.get(r) or "" for r in rutas),
                                   default=None) or None,
+            "capturado_hace_min": (lambda m: None if m is None else round(m))(
+                _cx_minutos(_ahora_iso,
+                            max((visto_por_ruta.get(r) or "" for r in rutas), default="") or None)),
         })
 
     # ORDEN NATURAL POR RUTA, no por numero de pendientes.
@@ -28629,6 +28727,7 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
         "reprogramados": sum(len(f["reprogramados"]) for f in filas),
         "cliente": sum(len(f["cliente"]) for f in filas),
         "no_salio": sum(f["no_salio"] for f in filas),
+        "recogidas": sum(f["recogidas"] for f in filas),
         "arrastrados": sum(f["arrastrados"] for f in filas),
         "no_observado": sum(f["no_observado"] for f in filas),
         "perdidos": sum(len(f["perdidos"]) for f in filas),
