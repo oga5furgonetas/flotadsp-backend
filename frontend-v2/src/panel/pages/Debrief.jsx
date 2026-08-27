@@ -340,7 +340,18 @@ function Conductor({ c, dia, alMarcar }) {
                   : `${c.rutas.length} rutas`}
               </span>
             )}
-            <span className="truncate text-[13px] text-slate-500">{c.conductor}</span>
+            {/* Sin ficha se enseña el Transporter ID, no un "Sin identificar"
+                que no dice que hacer. Cortex no manda nombres (0 de 7.171
+                paquetes), asi que la unica forma de poner cara a alguien es
+                rellenar su ID en Conductores — y para eso hay que saber cual. */}
+            <span className={`truncate text-[13px] ${c.sin_ficha ? 'font-mono text-[11.5px] text-slate-400' : 'text-slate-500'}`}>
+              {c.conductor}
+            </span>
+            {c.sin_ficha && c.transporter_id && (
+              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                sin ficha
+              </span>
+            )}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-slate-500">
             <span className="tabular-nums">{c.entregados}/{c.total} entregados</span>

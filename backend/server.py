@@ -28535,7 +28535,16 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
         no_aparecen = sum(1 for f in comprobar if f.get("marca") == "no_aparece")
         filas.append({
             "driver_id": did,
-            "conductor": (nombres.get(did) or {}).get("nombre") or "Sin identificar",
+            # SIN FICHA NO ES "SIN IDENTIFICAR".
+            # Cortex NO manda nombres (medido: 0 de 7.171 paquetes de hoy), asi
+            # que lo unico que pone cara a un conductor es su Transporter ID en
+            # la ficha. Hoy 13 de los 53 que salieron a ruta no lo tienen puesto.
+            # Poner "Sin identificar" no dice que hacer; poner el ID y avisar de
+            # que le falta la ficha, si: se arregla en Conductores en 20 s.
+            "conductor": ((nombres.get(did) or {}).get("nombre")
+                          or (did if did and did != "sin-asignar" else "Sin asignar")),
+            "sin_ficha": not (nombres.get(did) or {}).get("nombre"),
+            "transporter_id": did if did != "sin-asignar" else None,
             # `ruta` sigue existiendo para pintar y buscar; `rutas` es la
             # verdad cuando alguien ha tocado mas de una.
             # `ruta` es lo que se pinta de cabecera: la suya si se sabe, y si
@@ -28588,7 +28597,17 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
                                   default=None) or None,
         })
 
-    filas.sort(key=lambda f: (-f["pendientes"], -len(f["perdidos"]), f["ruta"]))
+    # ORDEN NATURAL POR RUTA, no por numero de pendientes.
+    # Ordenar por pendientes hacia que la lista se reordenara sola segun se iba
+    # marcando, y quien busca "la C21" tenia que rastrearla. Ahora salen en el
+    # mismo orden que en Cortex, que es como las lee quien esta en la nave. Y
+    # natural, no alfabetico: sin esto XA_C10 iria antes que XA_C2.
+    def _orden_ruta(f):
+        import re as _re
+        r = f.get("ruta_propia") or f.get("ruta") or ""
+        partes = _re.split(r"(\d+)", r)
+        return [int(p) if p.isdigit() else p.lower() for p in partes]
+    filas.sort(key=_orden_ruta)
     # RUTAS son route_code distintos, no filas. Contando filas salian 61 con
     # 45 rutas y 2 supports en la nave: el numero mas facil de mirar de la
     # pantalla y estaba mal.
