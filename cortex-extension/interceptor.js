@@ -49,12 +49,36 @@
   // Auto-refresco: memorizamos las URLs GET de Cortex que devuelven paquetes y
   // las volvemos a pedir nosotros cada pocos minutos. Así todas las rutas se
   // cargan y actualizan solas sin que el usuario entre en cada una.
-  const knownGets = new Set();
+  /* DOS LISTAS, Y ESA ES LA CLAVE.
+     ─────────────────────────────────────────────────────────────────────
+     Antes había una sola con tope de 100 que expulsaba la más antigua. Ahí
+     dentro competían las ~50 rutas del día con TODAS las demás llamadas que
+     hace Cortex (resúmenes, informes, catálogos, cada navegación del
+     usuario). Al llenarse, las URLs de ruta se iban cayendo del barrido EN
+     SILENCIO: la ruta dejaba de refrescarse, sus paquetes se quedaban
+     congelados en el último estado visto, y el cuadre del debrief seguía
+     pidiendo paquetes que ya se habían entregado hacía horas.
+
+     MEDIDO el 27-08 a las 18:00: solo 23 de 52 rutas habían recibido algún
+     evento en los últimos 10 minutos. La app decía 376 paquetes "aún en la
+     furgoneta" y Cortex 240 — la diferencia eran justo las rutas expulsadas.
+     Una de ellas, XA_C15, llevaba 97 minutos sin un solo evento con 52
+     paquetes sin resolver.
+
+     Las rutas van ahora en su propia lista SIN TOPE: son las del día, unas
+     70 como mucho, y son exactamente lo que no puede perderse. El tope se
+     queda solo para lo demás, que sí es ilimitado y sí conviene acotar. */
+  const knownGets = new Set();   // llamadas sueltas de la página
+  const rutaGets = new Set();    // route-details: el barrido vive de esto
+  const esRuta = (u) => /\/route-details\//i.test(u);
+  const todasLasUrls = () => [...rutaGets, ...knownGets];
+
   const rememberGet = (url, method) => {
     if ((method || 'GET').toUpperCase() !== 'GET') return;
     let abs;
     try { abs = new URL(url, location.origin).href; } catch (_) { return; }
     if (!/amazon\.es\//i.test(abs)) return;
+    if (esRuta(abs)) { rutaGets.add(abs); return; }
     knownGets.add(abs);
     if (knownGets.size > 100) knownGets.delete(knownGets.values().next().value);
   };
@@ -107,7 +131,7 @@
     if (barriendo) return;
     barriendo = Date.now();
 
-    const urls = [...knownGets];
+    const urls = todasLasUrls();
     let i = 0;
     for (const url of urls) {
       setTimeout(() => syntheticFetch(url), (i++) * 1000); // 1 req/s: ritmo suave
@@ -177,7 +201,7 @@
       nuevos++;
       const url = `${location.origin}/operations/execution/api/route-details/${id}`
         + `?historicalDay=${histParam}&routeId=${id}${saId ? `&serviceAreaId=${saId}` : ''}`;
-      knownGets.add(url); // el replay periódico lo mantendrá fresco
+      rutaGets.add(url); // lista sin tope: una ruta no puede caerse del barrido
       setTimeout(() => syntheticFetch(url), (i++) * 1500); // 1 ruta cada 1,5 s
     }
     if (nuevos) {
