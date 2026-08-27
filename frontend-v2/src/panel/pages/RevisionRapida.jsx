@@ -6,7 +6,7 @@ import {
   AlertTriangle, BrainCircuit, Pencil, Plus, FileText, TrendingUp, EyeOff,
   Zap, HelpCircle,
 } from 'lucide-react'
-import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback, fetchAuthedBlob, autoexamenIA, iaParaRevisar } from '../api'
+import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback, fetchAuthedBlob, autoexamenIA, iaParaRevisar, fiabilidadIA } from '../api'
 import PolygonEditor from '../components/PolygonEditor'
 import BboxEditor from '../components/BboxEditor'
 import CompareSlider from '../components/CompareSlider'
@@ -292,6 +292,18 @@ function Autoexamen({ datos, total, alRevisar }) {
   const pct = (k, den) => (den ? Math.round((100 * (datos.global?.[k] || 0)) / den) : null)
   const conSigno = (v) => (v == null ? '—' : `${v}%`)
 
+  /* `cuentas` separa las dos preguntas que el numero viejo mezclaba:
+     ¿existe el daño? y ¿acerto tambien donde estaba? */
+  const rec = datos.cuentas_30d
+  const hist = datos.cuentas
+  /* Se pide solo al desplegar el detalle: no hace falta para el resumen y
+     asi no se paga en cada carga de la pantalla. */
+  const [fiab, setFiab] = useState(null)
+  useEffect(() => {
+    if (!abierto || fiab) return
+    fiabilidadIA().then((r) => setFiab(r.data)).catch(() => {})
+  }, [abierto, fiab])
+
   return (
     <div className="card mb-4 border-violet-500/30 bg-violet-500/5 p-4">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -307,11 +319,25 @@ function Autoexamen({ datos, total, alRevisar }) {
           style={{ width: `${Math.min(100, (total / GOAL) * 100)}%` }} />
       </div>
 
+      {/* LOS DOS NUMEROS DE ARRIBA SON DE LOS ULTIMOS 30 DIAS, no de siempre.
+          El acumulado decia "acierta el 8,7 %" y era falso por dos motivos: (a)
+          contaba `corrected` como fallo, cuando eso significa que el daño SI
+          existe y lo que fallo fue el recuadro; (b) era una media de por vida
+          dominada por 1.128 revisiones de julio, de antes de arreglar las
+          lecciones por pieza. Con las cuentas bien: 34 % historico, 80 % en los
+          ultimos 30 dias. Enseñar el numero viejo era tomar decisiones de
+          negocio con un dato roto. */}
+      {rec?.muestra_corta && (
+        <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[11.5px] text-amber-300">
+          Los porcentajes de 30 días salen de solo {rec.reportados} revisiones. Es un
+          indicio, no una medida: revisa más para que el número signifique algo.
+        </p>
+      )}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {[
-          ['Acierta', conSigno(datos.acierto), 'de lo que reporta'],
-          ['Se inventa', conSigno(pct('wrong', datos.reportados)), 'de lo que reporta'],
-          ['Se le escapan', conSigno(pct('missed', datos.reales)), 'de los daños reales'],
+          ['El daño existe', conSigno(rec?.existe ?? hist?.existe), 'de lo que reporta · 30 d'],
+          ['Se lo inventa', conSigno(rec?.inventa ?? hist?.inventa), 'de lo que reporta · 30 d'],
+          ['Acierta el sitio', conSigno(rec?.sitio ?? hist?.sitio), 'de los que sí existen'],
           ['Dice «sin daños»', conSigno(datos.cuando_calla?.porcentaje), 'de las inspecciones'],
         ].map(([k, v, pie]) => (
           <div key={k}>
@@ -345,6 +371,35 @@ function Autoexamen({ datos, total, alRevisar }) {
 
       {abierto && (
         <div className="mt-3 space-y-4 border-t border-white/[0.07] pt-3">
+          {/* LO QUE LA IA HA APRENDIDO DE SI MISMA.
+              Si se calla en una pieza, aqui se ve por que y con cuantos casos.
+              Un filtro que no se puede auditar es un filtro en el que nadie
+              confia, y el primero que desconfia es quien lo mantiene. */}
+          {!!fiab?.piezas?.length && (
+            <div>
+              <p className="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-dark-500">
+                <BrainCircuit size={12} /> Dónde ha aprendido a callarse
+                <span className="ml-1 normal-case tracking-normal text-dark-600">
+                  {fiab.se_calla_en} de {fiab.de} piezas · por debajo del {fiab.umbral}% de acierto
+                </span>
+              </p>
+              <div className="grid gap-1 sm:grid-cols-2">
+                {fiab.piezas.slice(0, 10).map((p) => (
+                  <div key={p.pieza}
+                    className={`flex items-center gap-2 rounded-md px-2 py-1 text-[12px] ${
+                      p.se_calla ? 'bg-red-500/10 text-red-300' : 'bg-white/[0.03] text-dark-300'}`}>
+                    <span className="min-w-0 flex-1 truncate">{p.pieza}</span>
+                    <span className="tabular-nums font-semibold">{p.existe}%</span>
+                    <span className="tabular-nums text-dark-600">{p.casos}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[11px] leading-snug text-dark-600">
+                En las rojas la IA ya no afirma un daño leve o moderado: lo manda a
+                revisar. Un daño grave se sigue avisando siempre.
+              </p>
+            </div>
+          )}
           {!!ult.length && (
             <div>
               <p className="mb-2 flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-dark-500">

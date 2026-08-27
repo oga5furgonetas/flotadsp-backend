@@ -2542,6 +2542,11 @@ async def _apply_vehicle_memory(vehicle_id: str, analysis, inspection_id: str = 
         known = {e["panel"]: e for e in ledger}
 
         bad_panels: set = set()
+        # La fiabilidad de cada pieza EN TODA LA FLOTA, no solo en esta
+        # furgoneta: es donde esta la señal (429 de los 666 inventos se
+        # concentran en 15 piezas).
+        fiab = await _ia_fiabilidad_piezas()
+
         try:
             fb = await db.ai_feedback.find(
                 {"vehicle_id": vehicle_id, "verdict": "wrong"},
@@ -2581,6 +2586,28 @@ async def _apply_vehicle_memory(vehicle_id: str, analysis, inspection_id: str = 
                 d.confirmed = False
                 d.description = (d.description or "") + " · [patrón rechazado ✗ previamente — revisar]"
                 downgraded += 1
+
+            # ── LO QUE LA IA HA APRENDIDO SOBRE SI MISMA ─────────────────────
+            # En algunas piezas se inventa casi todo lo que dice: en el
+            # paragolpes trasero, 93 de 104 reportes no existian. No es un
+            # defecto del modelo, es que esas piezas van siempre rozadas y
+            # sucias en una furgoneta de reparto, y la textura se parece a un
+            # daño. Aqui no se afirma: se manda a que lo mire una persona.
+            #
+            # Un GRAVE o un CRITICO pasa igual. El coste de equivocarse no es
+            # simetrico: perderse una puerta reventada por estadistica es peor
+            # que un falso positivo que alguien descarta en cinco segundos.
+            elif (p and getattr(d, "confirmed", True)
+                    and _norm_sev(d.severity) in ("leve", "moderado")
+                    and (d.confidence or 0) < 0.90):
+                _f = fiab.get(_canon_pieza_fiab(d.part or ""))
+                if _f and _f["existe"] < _IA_FIAB_UMBRAL:
+                    d.confirmed = False
+                    d.description = (
+                        (d.description or "")
+                        + f" · [en esta pieza la IA acierta el {_f['existe']:.0f}%"
+                          f" de {_f['n']} casos — sin confirmar]")
+                    downgraded += 1
 
             # Daño genuinamente nuevo (o escalada) → REGISTRAR en el ledger
             if p and getattr(d, "confirmed", True):
@@ -7638,6 +7665,88 @@ async def vehicle_ledger_repair(vehicle_id: str, body: dict = Body(default={}), 
         # referencia anteriores a esta fecha YA NO EXISTEN.
         await db.vehicles.update_one({"id": vehicle_id}, {"$set": {"body_repaired_at": now_iso}})
     return {"ok": True, "repaired": res.modified_count}
+
+
+# ─── LO QUE LA IA SABE DE SI MISMA ───────────────────────────────────────────
+# Por debajo de este porcentaje de aciertos, un daño leve o moderado en esa
+# pieza no se afirma: se manda a revisar. 35 % sale de la medicion — separa
+# limpiamente el grupo de piezas siempre-rozadas (paragolpes, pasos de rueda,
+# umbrales: 10-33 %) del resto (39-53 %).
+_IA_FIAB_UMBRAL = float(os.environ.get("IA_FIABILIDAD_MIN") or 35.0)
+# Con menos casos no hay estadistica, hay ruido: la pieza pasa sin filtro.
+_IA_FIAB_MIN_CASOS = int(os.environ.get("IA_FIABILIDAD_CASOS") or 10)
+_IA_FIAB_CACHE: dict = {}
+
+
+def _canon_pieza_fiab(s: str) -> str:
+    """La misma forma con la que se agrupa en el autoexamen: minusculas y sin
+    espacios de sobra. Si las dos no coinciden, la tabla no encuentra nada y
+    el filtro no hace nada — en silencio, que es lo peor."""
+    return " ".join((s or "").strip().lower().split())
+
+
+async def _ia_fiabilidad_piezas() -> dict:
+    """Por pieza: cuantas veces el daño que la IA reporto EXISTIA de verdad.
+
+    Sale de los veredictos humanos de la revision expres. Un `corrected`
+    cuenta como que SI existia —el daño estaba, lo que fallo fue el
+    recuadro—, que es justo lo que la metrica vieja se comia.
+
+    Se recalcula cada media hora, asi que cada boton que alguien pulsa mueve
+    la tabla sola. No hay nada que reentrenar ni que mantener a mano.
+
+    LA CACHE VA POR BASE DE DATOS (gotcha: multiempresa). Una tabla global
+    mezclaria la experiencia de dos clientes y le aplicaria a uno el sesgo
+    del otro.
+    """
+    clave = _current_db_name.get()
+    ent = _IA_FIAB_CACHE.get(clave)
+    ahora = time.time()
+    if ent and ahora - ent["en"] < 1800:
+        return ent["datos"]
+
+    datos: dict = {}
+    try:
+        cur = db.ai_feedback.aggregate([
+            {"$group": {"_id": {"p": {"$toLower": {"$trim": {"input": {"$ifNull": ["$damage.part", ""]}}}},
+                                "v": "$verdict"},
+                        "n": {"$sum": 1}}}])
+        crudo: dict = {}
+        async for g in cur:
+            p = (g["_id"].get("p") or "").strip()
+            if not p:
+                continue
+            crudo.setdefault(p, {})[g["_id"].get("v")] = g["n"]
+        for p, v in crudo.items():
+            rep = v.get("correct", 0) + v.get("wrong", 0) + v.get("corrected", 0)
+            if rep < _IA_FIAB_MIN_CASOS:
+                continue
+            existe = v.get("correct", 0) + v.get("corrected", 0)
+            datos[p] = {"existe": 100.0 * existe / rep, "n": rep}
+    except Exception as e:
+        # Que falle esto no puede dejar de analizar fotos: sin tabla, no filtra.
+        logger.warning(f"fiabilidad por pieza: {type(e).__name__}: {str(e)[:120]}")
+        return {}
+
+    _IA_FIAB_CACHE[clave] = {"en": ahora, "datos": datos}
+    return datos
+
+
+@api_router.get("/ai/fiabilidad")
+async def ia_fiabilidad(_=Depends(require_admin)):
+    """Lo que la IA ha aprendido sobre si misma, para poder mirarlo.
+
+    Existe para que el filtro no sea una caja negra: si se calla en una
+    pieza, tiene que poder enseñarse por que y con cuantos casos.
+    """
+    d = await _ia_fiabilidad_piezas()
+    filas = sorted(({"pieza": p, "existe": round(v["existe"], 1), "casos": v["n"],
+                     "se_calla": v["existe"] < _IA_FIAB_UMBRAL}
+                    for p, v in d.items()), key=lambda x: x["existe"])
+    return {"umbral": _IA_FIAB_UMBRAL, "min_casos": _IA_FIAB_MIN_CASOS,
+            "piezas": filas,
+            "se_calla_en": sum(1 for f in filas if f["se_calla"]),
+            "de": len(filas)}
 
 
 @api_router.get("/vehicles/{vehicle_id}/damage-ledger")
@@ -13014,6 +13123,50 @@ async def ia_autoexamen(semanas: int = 12, _=Depends(require_admin)):
             total[g["_id"]] = g["n"]
     n = sum(total.values())
 
+    # ── LA MISMA CUENTA, PERO RECIENTE ───────────────────────────────
+    # La media de por vida entierra cualquier mejora. Medido: junio 9 %,
+    # julio 6 % (1.128 revisiones, antes de arreglar las lecciones por
+    # pieza) y agosto 57 %. Enseñar solo el acumulado decia que la IA
+    # estaba al 8,7 % cuando la de ahora esta muy por encima.
+    # 30 dias, no 90: TODOS los veredictos que hay son de los ultimos 90, asi
+    # que esa ventana devolvia el acumulado entero y no separaba nada. 30 aisla
+    # lo posterior a los arreglos de las lecciones por pieza, que es lo que
+    # cambio el comportamiento del modelo.
+    _corte_rec = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    reciente = vacio()
+    async for g in db.ai_feedback.aggregate([
+            {"$match": {"created_at": {"$gte": _corte_rec}}},
+            {"$group": {"_id": "$verdict", "n": {"$sum": 1}}}]):
+        if g["_id"] in reciente:
+            reciente[g["_id"]] = g["n"]
+
+    def _cuentas(v: dict) -> dict:
+        """Las dos preguntas, separadas, y sin fingir precision.
+
+        `existe` responde a lo unico que importa de verdad —¿hay un daño ahi
+        o se lo ha inventado?— y ahi un `corrected` cuenta como acierto: el
+        daño estaba, lo que fallo fue el recuadro. `sitio` responde a la otra,
+        y solo se calcula sobre los que SI existen.
+
+        Con menos de 30 veredictos no se devuelve porcentaje: 44 revisiones
+        son un indicio, no una medida, y un numero redondo sobre una muestra
+        asi es tan falso como el que se venia a arreglar.
+        """
+        rep = v["correct"] + v["wrong"] + v["corrected"]
+        reales_n = v["correct"] + v["corrected"]
+        fiable = rep >= 30
+        return {
+            "reportados": rep,
+            "existe_n": reales_n,
+            "inventados": v["wrong"],
+            # ¿El daño existe? Es la pregunta que decide si esto se puede vender.
+            "existe": round(100 * reales_n / rep, 1) if (rep and fiable) else None,
+            "inventa": round(100 * v["wrong"] / rep, 1) if (rep and fiable) else None,
+            # De los que existen, ¿acerto tambien donde?
+            "sitio": round(100 * v["correct"] / reales_n, 1) if (reales_n >= 20) else None,
+            "muestra_corta": not fiable,
+        }
+
     # ── Por pieza ─────────────────────────────────────────────────────
     piezas: dict = {}
     async for g in db.ai_feedback.aggregate([
@@ -13035,7 +13188,12 @@ async def ia_autoexamen(semanas: int = 12, _=Depends(require_admin)):
         rep = reportados(v)
         lista.append({"pieza": p, "total": tot, **v,
                       "reportados": rep, "reales": reales(v),
-                      "acierto": round(100 * v["correct"] / rep, 1) if rep else None})
+                      "acierto": round(100 * v["correct"] / rep, 1) if rep else None,
+                      # La pregunta buena por pieza: ¿EXISTE el daño? Un
+                      # `corrected` cuenta como que si: el daño estaba, lo que
+                      # fallo fue el recuadro.
+                      "existe": (round(100 * (v["correct"] + v["corrected"]) / rep, 1)
+                                 if rep else None)})
     lista.sort(key=lambda x: (-x["wrong"], -x["total"]))
 
     # ── Tendencia por semana ──────────────────────────────────────────
@@ -13096,6 +13254,12 @@ async def ia_autoexamen(semanas: int = 12, _=Depends(require_admin)):
         "reportados": rep_total,
         "reales": reales_total,
         "acierto": round(100 * total["correct"] / rep_total, 1) if rep_total else None,
+        # LAS DOS PREGUNTAS, SEPARADAS. `acierto` de arriba se queda por
+        # compatibilidad, pero mezclaba dos cosas y hacia parecer a la IA
+        # cuatro veces peor de lo que es en lo unico que importa: si el daño
+        # existe. Un `corrected` es una deteccion buena con la caja torcida.
+        "cuentas": _cuentas(total),
+        "cuentas_30d": _cuentas(reciente),
         "piezas": lista[:20],
         "tendencia": tendencia,
         "cobertura": {"inspecciones_30d": insp30, "revisadas_30d": rev30,

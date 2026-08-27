@@ -96,6 +96,9 @@ export const getReviewQueue = (center) => api.get('/inspections/review-queue', {
 export const getAiDatasetStats = () => api.get('/ai-dataset/stats')
 // Como de bien lo esta haciendo la IA, medido con las validaciones humanas.
 export const autoexamenIA = () => api.get('/ai/autoexamen')
+/* Lo que la IA ha aprendido sobre si misma: en que piezas se calla y por que.
+   Existe para que el filtro no sea una caja negra. */
+export const fiabilidadIA = () => api.get('/ai/fiabilidad')
 // Daños sueltos pendientes de validar, ordenados por lo que enseñan.
 export const iaParaRevisar = (center, limit) =>
   api.get('/ai/para-revisar', { params: { ...centerParam(center), ...(limit ? { limit } : {}) } })
