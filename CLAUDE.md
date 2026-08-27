@@ -329,6 +329,40 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    a `/auth/me` al montar, al volver a la pestaña y cada 2 min; sin eso, dar
    un permiso no se nota hasta recargar y parece que el guardado falló.
 
+28. **Un estado de Cortex traducido de mas es un numero falso que nadie ve.**
+   Dos casos el 27-08-2026, con Cortex diciendo 101 pendientes y la app 320.
+   (a) `PICKED_UP` se guardaba como `LOADED`. Pero PICKED_UP es una RECOGIDA que
+   el conductor ya subio a la furgoneta, no reparto pendiente: de los 281
+   paquetes que figuraban LOADED, los 281 tenian PICKED_UP como evento vigente y
+   los 281 venian de un PENDING_PICKUP previo. (b) `NOT_DELIVERED` se guardaba
+   como `DELIVERED`, porque el emparejador por texto busca subcadenas y
+   "delivered" esta dentro de "not_delivered" — 301 paquetes en el historico
+   dados por entregados diciendo Cortex lo contrario, e inflando el DCR hacia
+   arriba. La guarda de negacion solo puede mirar CODIGOS (sin espacios): el
+   texto libre en espanol empieza por "no se ha podido entregar" y esa frase SI
+   hay que reconocerla. Todo en `backend/tests/test_estados_cortex.py`.
+   Y al meter un estado nuevo hay que decidir SIEMPRE su sitio en
+   `_CX_NO_DESPACHADO` / `_CX_EN_VUELO` / `_CX_OK`: lo que no encaje cae al
+   cajon por defecto, que es "fallo de entrega", y 107 recogidas de un dia
+   normal habrian entrado como 107 fallos y hundido el DCR en vivo.
+
+29. **`updated_at` NO dice cuando capturamos: dice cuando paso en Cortex.**
+   Midiendo la antiguedad de una ruta por `max(updated_at)` parece que la
+   captura esta muerta cuando funciona perfectamente — una ruta terminada a las
+   19:00 no vuelve a mover esa hora aunque la bajemos cincuenta veces mas. Con
+   ese numero llegue a afirmar que el barrido estaba parado; el dato bueno era
+   que ningun paquete abierto tenia menos de 8 capturas, media 67 y maximo 932.
+   Por eso existe `seen_at`, que lo escribe la ingesta en cada captura, y por eso
+   la pantalla dice "ultimo movimiento" y aparte "bajado hace N min". Antes
+   llamaba "ultima captura" a lo primero, que es justo la confusion.
+
+30. **Una pantalla que reparte en cajones tiene que CUADRAR, y hay que
+   comprobarlo.** El debrief contaba 7.171 paquetes y sus cajones sumaban 7.050:
+   121 paquetes contados en el total pero en ningun cajon, invisibles y sin que
+   nada fallara. Eran las recogidas, que no tenian sitio. Es el mismo fallo que
+   el gotcha 17 con los documentos: **siempre un cajon de sobras, y ademas la
+   suma comprobada**, porque lo que no entra en ninguno desaparece sin error.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
