@@ -73,6 +73,13 @@
   const esRuta = (u) => /\/route-details\//i.test(u);
   const todasLasUrls = () => [...rutaGets, ...knownGets];
 
+  /* La URL del resumen de rutas, guardada aparte para poder volver a pedirla.
+     Es la que descubre las rutas del día: sin ella, una ruta que no esté ya
+     en la lista no se descubre nunca. Se aprende de la petición real de la
+     página —no se construye a mano— para no inventar parámetros. */
+  let urlResumen = null;
+  const pedirResumen = () => { if (urlResumen) syntheticFetch(urlResumen); };
+
   const rememberGet = (url, method) => {
     if ((method || 'GET').toUpperCase() !== 'GET') return;
     let abs;
@@ -142,7 +149,20 @@
        viejo. */
     setTimeout(pedirInforme, i * 1000);
 
-    const dura = (i + 1) * 1000;
+    /* Y EL RESUMEN DE RUTAS, QUE ES DE DONDE SALEN LAS RUTAS.
+       El descubrimiento dependia de que la pagina pidiera `route-summaries`
+       por su cuenta. Cortex es una SPA: si nadie navega ni recarga, esa
+       peticion no se repite, y una ruta que no este en la lista NO SE
+       DESCUBRE NUNCA — ni aunque el barrido funcione perfectamente.
+       Pidiendolo nosotros en cada tanda, el interceptor ve la respuesta,
+       `harvestRoutes` se ejecuta y cualquier ruta que falte entra sola. Es lo
+       que hace que esto se arregle sin depender de que alguien recargue. */
+    setTimeout(pedirResumen, (i + 1) * 1000);
+
+    /* +2 y no +1: en la tanda van las rutas, el informe de faltas Y el resumen.
+       Si el reloj del encadenado no los contara, el barrido siguiente
+       arrancaria antes de que salieran los dos ultimos. */
+    const dura = (i + 2) * 1000;
     setTimeout(() => { barriendo = 0; replay(); }, dura + PAUSA_ENTRE);
   };
   setTimeout(replay, 12000);   // el primero, tras dejar cargar la pagina
@@ -518,6 +538,11 @@
       const isSummary = /route-summaries/i.test(url);
       const isDetails = /route-details/i.test(url);
       if (isDetails) learnTemplate(url);
+      /* Guardar la URL REAL del resumen para poder volver a pedirla en cada
+         barrido. Se toma la que hace la página, con sus parámetros tal cual:
+         construirla a mano significaría adivinar el serviceAreaId y la fecha,
+         y una URL mal montada devuelve vacío sin avisar. */
+      if (isSummary) { try { urlResumen = new URL(url, location.origin).href } catch (_) {} }
       // La petición REAL del informe manda sobre la que construimos nosotros.
       if (/packagesByStatus/i.test(url)) { learnTemplate(url); aprenderInforme(url); }
       const marked = MARK.test(text);
