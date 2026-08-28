@@ -12198,7 +12198,24 @@ class IncidentCreate(BaseModel):
 
 async def _auto_incident_on_workshop(vehicle_id: str, prev_status, new_status):
     """Al marcar un vehículo 'en taller', crea (o reabre) su incidencia automáticamente
-    para que siempre quede en el histórico."""
+    para que siempre quede en el histórico. Y le pone el reloj en marcha."""
+    # ── EL RELOJ DEL TALLER ──────────────────────────────────────────────────
+    # `status: "taller"` era una etiqueta sin fecha: nadie sabia desde cuando
+    # estaba parada una furgoneta. Medido el 28-08-2026: 14 paradas, tres de
+    # ellas desde hacia 52 dias, 319 dias-furgoneta acumulados y ni un solo
+    # sitio donde se viera. Una furgoneta parada no cuesta menos por no mirarla.
+    # Se escribe aqui porque esta funcion es el paso obligado de las tres rutas
+    # que meten una furgoneta en taller (PATCH de vehiculos, el de super-admin y
+    # la creacion de una orden), asi que no hay forma de entrar sin reloj.
+    if new_status == "taller" and prev_status != "taller":
+        await db.vehicles.update_one(
+            {"id": vehicle_id},
+            {"$set": {"taller_desde": datetime.now(timezone.utc).isoformat()}})
+    elif prev_status == "taller" and new_status != "taller":
+        # Al salir se borra: si se quedara, la proxima entrada heredaria la
+        # fecha vieja y la furgoneta apareceria parada desde hace meses.
+        await db.vehicles.update_one({"id": vehicle_id}, {"$unset": {"taller_desde": ""}})
+
     if new_status != "taller" or prev_status == "taller":
         return
     v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "license_plate": 1})
@@ -12756,8 +12773,44 @@ async def ot_danos_pendientes(center: str = "", solo_graves: bool = False,
             "dias": _ot_dias_desde(d.get("first_seen")),
         })
     out.sort(key=lambda x: (peso.get(x["severidad"], 9), -(x["dias"] or 0)))
+
+    # ── AGRUPADO POR FURGONETA ───────────────────────────────────────────────
+    # UN DAÑO NO ES UN PARTE; UNA FURGONETA SI. Va al taller una vez y le
+    # arreglan todo lo que lleva encima, no cinco viajes para cinco golpes.
+    # La lista suelta tenia 170 lineas y por eso no la vaciaba nadie; agrupada
+    # son 83 furgonetas, y solo 30 llevan algo grave. Eso ya se puede terminar.
+    #
+    # Ademas evita el fallo caro: crear cinco ordenes de la misma matricula y
+    # mandarla cinco veces, o peor, arreglar el golpe leve y devolverla con el
+    # grave todavia puesto.
+    grupos: dict = {}
+    for d in out:
+        g = grupos.setdefault(d["vehicle_id"], {
+            "vehicle_id": d["vehicle_id"], "matricula": d["matricula"],
+            "modelo": d["modelo"], "center": d["center"], "danos": [],
+        })
+        g["danos"].append(d)
+    for g in grupos.values():
+        sevs = [x["severidad"] for x in g["danos"]]
+        g["n"] = len(g["danos"])
+        g["peor"] = min(sevs, key=lambda x: peso.get(x, 9)) if sevs else None
+        g["graves"] = sum(1 for x in sevs if x in ("grave", "critico"))
+        g["dias"] = max((x["dias"] or 0) for x in g["danos"])
+        # El texto que va al taller, ya redactado: es lo que hace que crear el
+        # parte sea un clic y no un rato escribiendo.
+        g["problema"] = " · ".join(
+            "%s (%s)" % (x["pieza"] or "sin describir", x["severidad"] or "?")
+            for x in g["danos"][:8])
+        # De donde sale cada cosa, para que quien decide sepa cuanto fiarse.
+        g["confirmados"] = sum(1 for x in g["danos"] if x["origen"] == "human")
+    lista_g = sorted(grupos.values(),
+                     key=lambda x: (peso.get(x["peor"], 9), -x["graves"], -x["dias"]))
+
     return {"danos": out, "total": len(out),
-            "graves": sum(1 for x in out if x["severidad"] in ("grave", "critico"))}
+            "graves": sum(1 for x in out if x["severidad"] in ("grave", "critico")),
+            "por_furgoneta": lista_g,
+            "furgonetas": len(lista_g),
+            "furgonetas_graves": sum(1 for g in lista_g if g["graves"] > 0)}
 
 
 def _ot_dias_desde(f) -> int:
@@ -12771,6 +12824,64 @@ def _ot_dias_desde(f) -> int:
         return max(0, (datetime.now(timezone.utc).replace(tzinfo=None) - d).days)
     except Exception:
         return 0
+
+
+@api_router.get("/work-orders/paradas")
+async def ot_furgonetas_paradas(center: str = "", _=Depends(require_admin)):
+    """Las furgonetas que no estan trabajando, con el reloj corriendo.
+
+    Es la pantalla que faltaba. `status: "taller"` era una etiqueta sin fecha:
+    nadie sabia desde cuando ni quien llamo por ultima vez. Medido el
+    28-08-2026: 14 paradas, tres desde hacia 52 dias, 319 dias-furgoneta
+    acumulados y ni un sitio donde se viera.
+
+    Para las que ya estaban dentro antes de existir `taller_desde` se usa
+    `updated_at` como aproximacion y se marca `fecha_estimada: true`, para que
+    la pantalla pueda decir "desde el 7 de julio (aprox.)" en vez de inventarse
+    una precision que no tiene.
+    """
+    q = {"status": "taller"}
+    vs = await db.vehicles.find(q, {"_id": 0}).to_list(500)
+    ordenes = {}
+    async for o in db.ordenes_trabajo.find(
+            {"estado": {"$nin": ["cerrada", "anulada"]}},
+            {"_id": 0, "vehicle_id": 1, "numero": 1, "taller_nombre": 1,
+             "fecha_entrega_estimada": 1, "estado": 1}):
+        ordenes.setdefault(o.get("vehicle_id"), o)
+
+    out = []
+    for v in vs:
+        if center and center not in ("Todos", "todos"):
+            if not re.search(re.escape(center.strip()), str(v.get("center") or ""), re.I):
+                continue
+        desde = v.get("taller_desde")
+        estimada = False
+        if not desde:
+            desde = v.get("updated_at") or v.get("created_at")
+            estimada = True
+        o = ordenes.get(v.get("id")) or {}
+        out.append({
+            "vehicle_id": v.get("id"),
+            "matricula": v.get("license_plate") or "?",
+            "modelo": v.get("model") or "",
+            "center": (v.get("center") or "").strip(),
+            "desde": str(desde)[:10] if desde else None,
+            "fecha_estimada": estimada,
+            "dias": _ot_dias_desde(desde) if desde else None,
+            # Si no hay orden abierta, la furgoneta esta parada y ademas NADIE
+            # la esta gestionando. Eso es peor que llevar 50 dias con parte.
+            "orden": o.get("numero"),
+            "taller": o.get("taller_nombre"),
+            "entrega_estimada": o.get("fecha_entrega_estimada"),
+        })
+    out.sort(key=lambda x: -(x["dias"] or 0))
+    return {
+        "paradas": out,
+        "total": len(out),
+        "dias_acumulados": sum(x["dias"] or 0 for x in out),
+        "sin_orden": sum(1 for x in out if not x["orden"]),
+        "mas_de_30": sum(1 for x in out if (x["dias"] or 0) > 30),
+    }
 
 
 @api_router.post("/work-orders")
@@ -16377,6 +16488,15 @@ async def update_mileage(vehicle_id: str, data: dict, user: dict = Depends(requi
     # Los admin mandan: pueden corregir a mano cualquier valor (p.ej. arreglar
     # un historico corrompido). Conductores pasan por las reglas de plausibilidad.
     if user.get("role") == "admin":
+        # UN ADMIN TAMBIEN SE EQUIVOCA TECLEANDO, y aqui no habia ni una
+        # comprobacion. De ahi salio la ultima alerta que genero el sistema:
+        # "se ha pasado 61.677.151 km del cambio de aceite". Ninguna furgoneta
+        # de reparto llega al millon; por encima de eso son digitos de mas.
+        if km > _KM_MAXIMO_CREIBLE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{km:,} km no es un kilometraje creible. Revisa el numero."
+                       .replace(",", "."))
         km_entry = {"date": datetime.now(timezone.utc).isoformat(), "km": km,
                     "source": "admin"}
         await db.vehicles.update_one({"id": vehicle_id},
@@ -16398,7 +16518,18 @@ async def update_mileage(vehicle_id: str, data: dict, user: dict = Depends(requi
         aviso_antes = v.get("oil_warning_before_km", 2500)
         recorridos = km - oil_km
         restantes = intervalo - recorridos
-        if restantes <= aviso_antes:
+        # NO SE AVISA CON UN NUMERO IMPOSIBLE. Si el kilometraje del ultimo
+        # cambio esta mal —o lo estaba el de hoy—, `recorridos` sale absurdo y
+        # la alerta dice una barbaridad. Y una alerta falsa hace mas dano que
+        # ninguna: ensena a ignorarlas todas, que es exactamente lo que paso
+        # aqui (50 alertas en total, la ultima en junio, y decia 61 millones de
+        # kilometros). Mejor callar y que alguien arregle el dato.
+        if recorridos < 0 or recorridos > _KM_SALTO_ABSURDO:
+            logger.warning(
+                "Aviso de aceite descartado en %s: %s km desde el ultimo cambio "
+                "no es creible (actual %s, ultimo cambio %s)",
+                v.get("license_plate"), recorridos, km, oil_km)
+        elif restantes <= aviso_antes:
             if restantes <= 0:
                 titulo = f"CAMBIO DE ACEITE VENCIDO en {v.get('license_plate','')}"
                 desc = f"Se ha pasado {abs(restantes)} km del cambio de aceite."
@@ -16934,31 +17065,72 @@ async def borrar_cita_flota(cita_id: str, user: dict = Depends(require_admin)):
     return {"success": True}
 
 
+# 60 dias y no 30: las furgonetas de carga de mas de 10 anos pasan ITV cada seis
+# meses, y con 30 dias de aviso no daba tiempo a coger cita en temporada alta.
+_ITV_AVISO_DIAS = int(os.environ.get("ITV_AVISO_DIAS") or 60)
+
+
+# Ninguna furgoneta de reparto llega al millon de kilometros; por encima de eso
+# son digitos de mas al teclear. Y entre dos cambios de aceite no caben 300.000
+# km ni haciendo 800 al dia durante un ano.
+_KM_MAXIMO_CREIBLE = int(os.environ.get("KM_MAXIMO_CREIBLE") or 1_000_000)
+_KM_SALTO_ABSURDO = int(os.environ.get("KM_SALTO_ABSURDO") or 300_000)
+
+
 @api_router.get("/alerts/itv")
 async def get_itv_alerts(_=Depends(require_admin)):
-    """Lista furgonetas con ITV próxima a caducar (30 días) o caducada."""
+    """Furgonetas con la ITV caducada, a punto, o SIN FECHA NINGUNA.
+
+    LAS QUE NO TIENEN FECHA SON EL HALLAZGO, no un detalle. Antes habia aqui un
+    `if not itv: continue` y esas furgonetas se saltaban el bucle: no salian
+    como "pendiente de rellenar", salian como si estuvieran bien. Medido el
+    28-08-2026: de 127 activas, 67 tenian fecha y **60 no** — el 47 % de la
+    flota, invisible. Es el mismo fallo del gotcha 17 (lo que no entra en
+    ningun cajon desaparece sin error) y aqui cuesta 200 EUR sin margen, la
+    inmovilizacion del vehiculo en plena ruta y que la aseguradora te repita lo
+    que pague si hay accidente.
+
+    No saber si una ITV esta en regla NO es lo mismo que estar en regla. Sale
+    con `status: "sin_fecha"` y `days_left: None` —nunca 0, que pareceria "hoy"—
+    y se ordena justo detras de las caducadas, porque en la practica hay que
+    tratarla igual hasta comprobarlo.
+
+    Las furgonetas de carga de mas de 10 anos pasan ITV cada 6 meses en Espana,
+    asi que la ventana de aviso es de 60 dias y no de 30: con 30 no daba tiempo
+    a coger cita en temporada alta.
+    """
     from datetime import date as _date
     hoy = _date.today()
     vehicles = await db.vehicles.find({"status": {"$nin": ["deleted", "baja"]}}, {"_id": 0}).to_list(2000)
     result = []
     for v in vehicles:
+        base = {"vehicle_id": v.get("id"), "license_plate": v.get("license_plate"),
+                "brand": v.get("brand"), "model": v.get("model"), "center": v.get("center")}
         itv = v.get("itv_date")
-        if not itv:
-            continue
-        try:
-            y, m, d = [int(x) for x in itv.split("-")]
-            fecha = _date(y, m, d)
-        except Exception:
+        fecha = None
+        if itv:
+            try:
+                y, m, d = [int(x) for x in str(itv).split("-")]
+                fecha = _date(y, m, d)
+            except (ValueError, TypeError):
+                fecha = None
+        if fecha is None:
+            # Sin fecha, o con una fecha que no se puede leer: las dos cosas son
+            # lo mismo para quien tiene que actuar — no se sabe.
+            result.append({**base, "itv_date": itv or None, "days_left": None,
+                           "status": "sin_fecha"})
             continue
         dias = (fecha - hoy).days
-        if dias <= 30:  # caducada o caduca en <=30 días
-            result.append({
-                "vehicle_id": v.get("id"), "license_plate": v.get("license_plate"),
-                "brand": v.get("brand"), "model": v.get("model"), "center": v.get("center"),
-                "itv_date": itv, "days_left": dias,
-                "status": "caducada" if dias < 0 else ("urgente" if dias <= 7 else "proxima"),
-            })
-    result.sort(key=lambda x: x["days_left"])
+        if dias <= _ITV_AVISO_DIAS:
+            result.append({**base, "itv_date": itv, "days_left": dias,
+                           "status": "caducada" if dias < 0
+                           else ("urgente" if dias <= 7 else "proxima")})
+    # Caducadas primero (la mas vencida arriba), luego las que no se saben, y
+    # despues por dias que quedan. `sin_fecha` no puede ir al final: es
+    # justamente lo que llevaba meses sin que nadie lo mirara.
+    _orden = {"caducada": 0, "sin_fecha": 1, "urgente": 2, "proxima": 3}
+    result.sort(key=lambda x: (_orden.get(x["status"], 9),
+                               x["days_left"] if x["days_left"] is not None else 0))
     return result
 
 
@@ -23271,7 +23443,36 @@ async def scorecard_full(center: str, week: Optional[str] = None, user: dict = D
             "score_calculado": score_calc, "cobertura_peso": cobertura,
             "estimada_desde": (base.get("week") if base else None),
             "dias_ratios": len(ratio_dias), "estimacion_on": estimar,
-            "has_official": has_official, "overall_method": overall_method}
+            "has_official": has_official, "overall_method": overall_method,
+            # ── CUANTO HACE QUE NO LLEGA UNA SCORECARD OFICIAL ────────────────
+            # Un dato viejo sin fecha al lado es un dato que engana. Medido el
+            # 28-08-2026: la ultima oficial cargada era la semana 29 y corria la
+            # 35 — seis semanas a ciegas sobre lo unico que mira Amazon para
+            # decidir si eres Fantastic Plus, y en pantalla no se notaba.
+            **(await _sc_retraso_oficial(center))}
+
+
+async def _sc_retraso_oficial(center: str) -> dict:
+    """(ultima semana oficial cargada, cuantas van de retraso).
+
+    Se cuenta contra la semana PASADA y no contra la actual: la scorecard de la
+    semana en curso todavia no existe, asi que medir contra ella daria siempre
+    un retraso de uno y el aviso saltaria siempre. Un aviso que salta siempre
+    deja de leerse.
+    """
+    try:
+        o = await db.scorecard_official.find_one(
+            {"center": center}, {"_id": 0, "week": 1}, sort=[("week", -1)])
+        ultima = int((o or {}).get("week") or 0)
+        actual = int(datetime.now(timezone.utc).strftime("%V"))
+        retraso = max(0, (actual - 1) - ultima) if ultima else None
+        return {"oficial_ultima_semana": ultima or None,
+                "oficial_semana_actual": actual,
+                "oficial_semanas_retraso": retraso}
+    except (ValueError, TypeError) as e:
+        logger.debug("Retraso de scorecard: %s", e)
+        return {"oficial_ultima_semana": None, "oficial_semana_actual": None,
+                "oficial_semanas_retraso": None}
 
 
 @api_router.post("/scorecard/full")

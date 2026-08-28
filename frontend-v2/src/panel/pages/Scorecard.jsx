@@ -828,6 +828,19 @@ export default function Scorecard() {
                   {t('sc.official.loaded')}
                 </span>
               )}
+              {/* CUÁNTO HACE QUE NO LLEGA UNA OFICIAL. Un dato viejo sin fecha
+                  al lado es un dato que engaña: se puede estar mirando la
+                  semana 29 en septiembre y tomar decisiones con ella creyendo
+                  que es de ahora. Solo salta a partir de dos semanas, porque
+                  una de retraso es lo normal. */}
+              {full.oficial_semanas_retraso >= 2 && (
+                <span className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10.5px] font-semibold text-amber-300"
+                  title={`La última scorecard oficial cargada es la semana ${full.oficial_ultima_semana}. Va la ${full.oficial_semana_actual}.`}>
+                  <AlertCircle size={11} />
+                  {full.oficial_semanas_retraso} semanas sin cargar la oficial
+                  {' '}(última: la {full.oficial_ultima_semana})
+                </span>
+              )}
               {confirmReset ? (
                 <div className="ml-auto flex items-center gap-2">
                   <span className="text-xs text-red-300">{t('sc.reset.week')}</span>

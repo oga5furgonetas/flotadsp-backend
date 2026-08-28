@@ -83,6 +83,32 @@ function parseRoster(text) {
 }
 
 /* ── Fuzzy match ── */
+/* ── ¿SE PUEDE SACAR ESTA FURGONETA A RUTA? ───────────────────────────────
+   Circular con la ITV caducada en España son 200 € sin margen de un solo día y
+   la Guardia Civil puede INMOVILIZAR el vehículo donde lo pare: eso es una ruta
+   a medias, paquetes de vuelta a nave y un golpe al DCR. Si además hay
+   accidente, la aseguradora paga al tercero y luego puede repetir contra la
+   empresa. Por eso el aviso va AQUÍ, en el momento de dársela a alguien, y no
+   solo en una pantalla de vencimientos a la que hay que ir a mirar.
+
+   'sin_fecha' avisa igual que 'caducada' a propósito: no saber si una ITV está
+   en regla no es lo mismo que estarlo, y medido el 28-08-2026 eran 60 de 127
+   furgonetas activas — el 47 % de la flota, sin que apareciera en ningún sitio. */
+const ITV_AVISO_DIAS = 60
+
+function estadoItv(v) {
+  if (!v) return null
+  const f = v.itv_date
+  if (!f) return { clase: 'sin_fecha', etiqueta: 'ITV sin fecha', dias: null }
+  const d = new Date(`${f}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return { clase: 'sin_fecha', etiqueta: 'ITV sin fecha', dias: null }
+  const hoy = new Date(); hoy.setHours(0, 0, 0, 0)
+  const dias = Math.round((d - hoy) / 86400000)
+  if (dias < 0) return { clase: 'caducada', etiqueta: `ITV caducada hace ${-dias} d`, dias }
+  if (dias <= ITV_AVISO_DIAS) return { clase: 'proxima', etiqueta: `ITV en ${dias} d`, dias }
+  return null
+}
+
 function matchRoster(parsed, drivers, vehicles) {
   return parsed.map(row => {
     const normSearch = amazonToNorm(row.rawName)
@@ -245,6 +271,7 @@ function SlotRow({ slot, vehicles, drivers, usedV, usedD, onChange, onDelete, in
   // Find driver object to get photo_url
   const driverObj = slot.driver_id ? drivers.find(d => d.id === slot.driver_id) : null
   const photoUrl = driverObj?.photo_url || null
+  const itv = estadoItv(slot.vehicle_id ? vehicles.find(v => v.id === slot.vehicle_id) : null)
 
   return (
     <div className={`group flex items-center gap-3 rounded-lg border px-3 py-2.5 transition-all duration-300 ${
@@ -278,6 +305,19 @@ function SlotRow({ slot, vehicles, drivers, usedV, usedD, onChange, onDelete, in
             </option>
           ))}
         </select>
+        {/* Debajo de la matrícula y no al final de la fila: el aviso tiene que
+            leerse mirando la furgoneta, que es lo que se está eligiendo. */}
+        {itv && (
+          <p className={`mt-1 text-center text-[10px] font-bold leading-tight ${
+            itv.clase === 'proxima' ? 'text-amber-300' : 'text-red-300'}`}
+            title={itv.clase === 'caducada'
+              ? 'Circular así son 200 € y pueden inmovilizar la furgoneta en ruta'
+              : itv.clase === 'sin_fecha'
+                ? 'No hay fecha de ITV registrada: no se sabe si está en regla'
+                : 'Conviene pedir cita ya'}>
+            {itv.etiqueta}
+          </p>
+        )}
       </div>
 
       {/* Driver avatar + name */}
@@ -479,6 +519,18 @@ export default function Asignacion() {
       .map(x => x.i)
   }, [slots, inspMap])
 
+  /* Cuántas de las que se van a repartir HOY no pueden salir. Se cuenta sobre
+     los slots asignados, no sobre la flota: aquí importa lo que va a la calle. */
+  const avisoItv = useMemo(() => {
+    const r = { caducada: 0, sin_fecha: 0, total: 0 }
+    for (const sl of slots) {
+      if (!sl.vehicle_id) continue
+      const e = estadoItv(vehicles.find(v => v.id === sl.vehicle_id))
+      if (e && (e.clase === 'caducada' || e.clase === 'sin_fecha')) { r[e.clase] += 1; r.total += 1 }
+    }
+    return r
+  }, [slots, vehicles])
+
   const usedV = useMemo(() => new Set(slots.map(s => s.vehicle_id).filter(Boolean)), [slots])
   const usedD = useMemo(() => new Set(slots.map(s => s.driver_id).filter(Boolean)), [slots])
 
@@ -646,6 +698,30 @@ export default function Asignacion() {
         </div>
       ) : (
         <>
+          {/* ── EL AVISO, ANTES DE REPARTIR ────────────────────────────────
+              Puesto arriba y no dentro de las filas porque la pregunta que
+              contesta es "¿puedo sacar esto a la calle?", y esa se hace una vez
+              mirando el conjunto, no furgoneta por furgoneta. */}
+          {avisoItv.total > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-red-500/40 bg-red-500/[0.08] px-3 py-2 text-[12.5px] leading-snug text-red-200">
+              <AlertTriangle size={15} className="flex-none" />
+              <span>
+                {avisoItv.caducada > 0 && (
+                  <b>{avisoItv.caducada} {avisoItv.caducada === 1 ? 'furgoneta asignada tiene' : 'furgonetas asignadas tienen'} la ITV caducada</b>
+                )}
+                {avisoItv.caducada > 0 && avisoItv.sin_fecha > 0 && ' · '}
+                {avisoItv.sin_fecha > 0 && (
+                  <b>{avisoItv.sin_fecha} sin fecha de ITV</b>
+                )}
+                .{' '}
+                <span className="text-red-300/80">
+                  Circular con la ITV caducada son 200 € sin margen y pueden inmovilizar
+                  la furgoneta en plena ruta.
+                </span>
+              </span>
+            </div>
+          )}
+
           <div className="mb-2 grid grid-cols-12 gap-3 px-3 text-[11px] font-semibold uppercase tracking-wider text-dark-600">
             <div className="col-span-3 flex items-center gap-1"><Truck size={10} /> {t('asgn.col.van')}</div>
             <div className="col-span-6 flex items-center gap-1"><User size={10} /> {t('asgn.col.driver')}</div>

@@ -60,7 +60,12 @@ const NAV_DEF = [
     { to: '/panel/turnos', labelKey: 'nav.shifts', icon: CalendarCheck },
     { to: '/panel/checklist-operativo', labelKey: 'nav.checklist', icon: CheckCircle2 },
     { to: '/panel/plantilla', labelKey: 'nav.template', icon: FileSpreadsheet },
-    { to: '/panel/chat', labelKey: 'nav.chat', icon: BellRing },
+    /* El chat interno sale del menú: 8 mensajes desde que existe y 0 en los
+       últimos 30 días. No es un fallo, es una respuesta — ese trabajo se hace
+       por WhatsApp. La página y la ruta siguen vivas y se llega por ⌘K, así
+       que no se pierde nada; lo que se quita es una entrada permanente que
+       nadie pulsa. Descomentar si algún día se usa de verdad.
+    { to: '/panel/chat', labelKey: 'nav.chat', icon: BellRing }, */
   ]},
   { g: 'nav.g.fleet', gIcon: Truck, iconCls: 'text-emerald-400', iconBg: 'bg-emerald-500/10', items: [
     { to: '/panel/vehiculos', labelKey: 'nav.vehicles', icon: Truck },

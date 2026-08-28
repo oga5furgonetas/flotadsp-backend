@@ -3,12 +3,12 @@ import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, Plus, Link2, Copy, Check, X, Wrench, Euro, Clock, Search,
   AlertTriangle, MessageCircle, Package, Eye, EyeOff, PhoneCall,
-  Download, CalendarClock, HelpCircle, Images, BarChart3, ChevronRight,
+  Download, CalendarClock, HelpCircle, Images, BarChart3, ChevronRight, Truck,
 } from 'lucide-react'
 import {
   getOrdenes, getResumenOrdenes, getOrden, crearOrden, editarOrden, enlaceOrden,
   getVehicles, getWorkshops, crearTaller, exportarOrdenes, ordenesPorTaller,
-  getIncidents, getDanosPendientes,
+  getIncidents, getDanosPendientes, getFurgonetasParadas,
 } from '../api'
 
 /* ÓRDENES DE TALLER
@@ -176,6 +176,9 @@ export default function OrdenesTrabajo() {
   const [guardando, setGuardando] = useState('')
   const [bajando, setBajando] = useState(false)
   const [danos, setDanos] = useState(null)
+  const [paradas, setParadas] = useState(null)
+  const [verParadas, setVerParadas] = useState(true)
+  const [furgAbierta, setFurgAbierta] = useState(null)   // qué furgoneta está desplegada en la lista de daños
   const [verDanos, setVerDanos] = useState(false)
   const [verComo, setVerComo] = useState(false)
   const [comparativa, setComparativa] = useState(null)
@@ -260,13 +263,24 @@ export default function OrdenesTrabajo() {
     getDanosPendientes({ ...(center && center !== 'Todos' ? { center } : {}) })
       .then((r) => { if (vivo) setDanos(r.data) })
       .catch(() => {})
+    getFurgonetasParadas(center)
+      .then((r) => { if (vivo) setParadas(r.data) })
+      .catch(() => {})
     return () => { vivo = false }
   }, [center])
 
-  const desdeDano = (d) => {
+  /* Desde una furgoneta entera: el parte se abre con TODOS sus daños escritos.
+     Antes se creaba uno por daño y eso son cinco viajes de la misma furgoneta
+     al taller — o peor, arreglar el golpe leve y devolverla con el grave
+     puesto. `ledger_id` sigue siendo el peor de los suyos, que es el que se
+     marca como enviado; los demás se enseñan en el texto para que el taller
+     los vea todos. */
+  const desdeFurgoneta = (g) => {
+    const peor = g.danos[0]
     setNueva({
-      vehicle_id: d.vehicle_id, workshop_id: '', problema: '',
-      fecha_entrega_estimada: '', ledger_id: d.ledger_id,
+      vehicle_id: g.vehicle_id, workshop_id: '',
+      problema: g.problema || '', fecha_entrega_estimada: '',
+      ledger_id: peor?.ledger_id,
     })
     if (!vehiculos.length) {
       getVehicles(center).then((r) => setVehiculos(r.data || [])).catch(() => {})
@@ -435,6 +449,67 @@ export default function OrdenesTrabajo() {
           dos pantallas distintas y el daño se queda ahi: 203 abiertos y 2
           ordenes. El boton no crea nada solo — abre el alta con la matricula
           y la pieza puestas, y quien decide sigue siendo una persona. */}
+      {/* ── FURGONETAS PARADAS ─────────────────────────────────────────
+          Va lo primero porque es lo que cuesta dinero ahora mismo. `status:
+          "taller"` era una etiqueta sin fecha: nadie sabía desde cuándo estaba
+          parada una furgoneta ni quién la estaba gestionando. Medido el
+          28-08-2026: 14 paradas, tres desde hacía 52 días, 319 días-furgoneta
+          acumulados y trece SIN NINGÚN PARTE ABIERTO — no es que tardaran, es
+          que nadie las llevaba. */}
+      {!!paradas?.total && (
+        <div className="mb-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <button onClick={() => setVerParadas((v) => !v)}
+            className="flex w-full flex-wrap items-center gap-2.5 px-4 py-3 text-left hover:bg-slate-50">
+            <Truck size={17} className={paradas.mas_de_30 ? 'text-red-600' : 'text-slate-500'} />
+            <h2 className="text-[15px] font-bold">Furgonetas paradas</h2>
+            <span className="text-[13px] text-slate-500">
+              {paradas.total} sin trabajar · <b className="tabular-nums text-slate-700">{paradas.dias_acumulados} días</b> acumulados
+              {!!paradas.sin_orden && <b className="text-red-600"> · {paradas.sin_orden} sin parte abierto</b>}
+            </span>
+            <ChevronRight size={16}
+              className={`ml-auto text-slate-400 transition-transform ${verParadas ? 'rotate-90' : ''}`} />
+          </button>
+          {verParadas && (
+            <div className="border-t border-slate-100">
+              {paradas.paradas.map((v) => (
+                <div key={v.vehicle_id}
+                  className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5 last:border-b-0">
+                  <span className="font-mono text-[13px] font-semibold">{v.matricula}</span>
+                  {/* Los días son el dato, así que van grandes y en rojo pasados
+                      treinta. Un número pequeño y gris no mueve a nadie a
+                      llamar al taller. */}
+                  <span className={`tabular-nums text-[14px] font-bold ${
+                    v.dias > 30 ? 'text-red-600' : v.dias > 14 ? 'text-amber-600' : 'text-slate-600'}`}>
+                    {v.dias} día{v.dias === 1 ? '' : 's'}
+                  </span>
+                  <span className="text-[12.5px] text-slate-400">
+                    desde el {v.desde}{v.fecha_estimada ? ' (aprox.)' : ''}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[13px] text-slate-500">{v.center}</span>
+                  {/* slate-700 y no slate-600: sobre este relleno el checker de
+                      contraste lo midió en 4,28:1, por debajo del 4,5 de la WCAG. */}
+                  {v.orden ? (
+                    <span className="rounded-lg bg-slate-100 px-2 py-1 text-[12px] font-semibold text-slate-700">
+                      {v.orden}{v.taller ? ` · ${v.taller}` : ''}
+                    </span>
+                  ) : (
+                    <span className="rounded-lg bg-red-50 px-2 py-1 text-[12px] font-semibold text-red-700"
+                      title="Está parada y no hay ningún parte abierto: nadie la está gestionando">
+                      sin parte
+                    </span>
+                  )}
+                </div>
+              ))}
+              <p className="px-4 py-2 text-[12.5px] text-slate-400">
+                Las que ponen «aprox.» entraron antes de que se guardara la fecha de
+                entrada, y se calcula con el último cambio de su ficha. Las que entren a
+                partir de ahora llevan la fecha exacta.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       {!!danos?.total && (
         <div className="mb-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
           <button
@@ -443,43 +518,74 @@ export default function OrdenesTrabajo() {
             <AlertTriangle size={17} className={danos.graves ? 'text-red-600' : 'text-amber-500'} />
             <h2 className="text-[15px] font-bold">Daños esperando taller</h2>
             <span className="text-[13px] text-slate-500">
-              {danos.total} abierto{danos.total === 1 ? '' : 's'}
-              {!!danos.graves && <b className="text-red-600"> · {danos.graves} grave{danos.graves === 1 ? '' : 's'}</b>}
+              {danos.furgonetas ?? danos.total} furgoneta{(danos.furgonetas ?? danos.total) === 1 ? '' : 's'}
+              {' · '}{danos.total} daño{danos.total === 1 ? '' : 's'}
+              {!!danos.furgonetas_graves && <b className="text-red-600"> · {danos.furgonetas_graves} con algo grave</b>}
             </span>
             <ChevronRight size={16}
               className={`ml-auto text-slate-400 transition-transform ${verDanos ? 'rotate-90' : ''}`} />
           </button>
+          {/* UNA FILA POR FURGONETA, NO POR DAÑO. Una furgoneta va al taller
+                UNA vez y le arreglan todo lo que lleva encima. La lista suelta
+                tenía 170 líneas y por eso no la vaciaba nadie; agrupada son 83
+                furgonetas, y solo 30 llevan algo grave: eso sí se puede
+                terminar. Y evita el fallo caro de mandarla, arreglarle el
+                rasguño y devolverla con el golpe grave todavía puesto. */}
           {verDanos && (
             <div className="border-t border-slate-100">
-              {danos.danos.slice(0, 40).map((d) => (
-                <div key={d.ledger_id}
-                  className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-2.5 last:border-b-0">
-                  <span className={`h-2 w-2 flex-none rounded-full ${
-                    d.severidad === 'critico' ? 'bg-red-600'
-                      : d.severidad === 'grave' ? 'bg-red-500'
-                        : d.severidad === 'moderado' ? 'bg-amber-500' : 'bg-slate-300'}`} />
-                  <span className="font-mono text-[13px] font-semibold">{d.matricula}</span>
-                  <span className="min-w-0 flex-1 truncate text-[13.5px] text-slate-700">
-                    {d.pieza}
-                    <span className="text-slate-400"> · {d.severidad}</span>
-                    {d.origen === 'ai' && <span className="text-slate-400"> · lo vio la IA</span>}
-                  </span>
-                  {d.dias > 0 && (
-                    <span className={`text-[12px] tabular-nums ${
-                      d.dias > 30 ? 'font-semibold text-red-600' : 'text-slate-400'}`}>
-                      {d.dias} día{d.dias === 1 ? '' : 's'}
-                    </span>
+              {(danos.por_furgoneta || []).slice(0, 40).map((g) => (
+                <div key={g.vehicle_id} className="border-b border-slate-100 last:border-b-0">
+                  <div className="flex flex-wrap items-center gap-2 px-4 py-2.5">
+                    <span className={`h-2 w-2 flex-none rounded-full ${
+                      g.peor === 'critico' ? 'bg-red-600'
+                        : g.peor === 'grave' ? 'bg-red-500'
+                          : g.peor === 'moderado' ? 'bg-amber-500' : 'bg-slate-300'}`} />
+                    <span className="font-mono text-[13px] font-semibold">{g.matricula}</span>
+                    <button onClick={() => setFurgAbierta((x) => (x === g.vehicle_id ? null : g.vehicle_id))}
+                      className="min-w-0 flex-1 truncate text-left text-[13.5px] text-slate-700 hover:text-slate-900">
+                      {g.n} daño{g.n === 1 ? '' : 's'}
+                      {!!g.graves && <b className="text-red-600"> · {g.graves} grave{g.graves === 1 ? '' : 's'}</b>}
+                      {!!g.confirmados && <span className="text-slate-400"> · {g.confirmados} confirmado{g.confirmados === 1 ? '' : 's'} por una persona</span>}
+                      <ChevronRight size={13} className={`ml-1 inline text-slate-400 transition-transform ${furgAbierta === g.vehicle_id ? 'rotate-90' : ''}`} />
+                    </button>
+                    {g.dias > 0 && (
+                      <span className={`text-[12px] tabular-nums ${
+                        g.dias > 30 ? 'font-semibold text-red-600' : 'text-slate-400'}`}>
+                        {g.dias} día{g.dias === 1 ? '' : 's'}
+                      </span>
+                    )}
+                    <button
+                      onClick={() => desdeFurgoneta(g)}
+                      className="flex-none rounded-lg border border-blue-300 bg-blue-50 px-2.5 py-1 text-[12.5px] font-semibold text-blue-700 hover:bg-blue-100">
+                      Un parte con todo
+                    </button>
+                  </div>
+                  {furgAbierta === g.vehicle_id && (
+                    <div className="bg-slate-50 px-4 pb-2.5">
+                      {g.danos.map((d) => (
+                        <div key={d.ledger_id} className="flex flex-wrap items-center gap-2 py-1 text-[13px]">
+                          <span className={`h-1.5 w-1.5 flex-none rounded-full ${
+                            d.severidad === 'critico' ? 'bg-red-600'
+                              : d.severidad === 'grave' ? 'bg-red-500'
+                                : d.severidad === 'moderado' ? 'bg-amber-500' : 'bg-slate-300'}`} />
+                          <span className="min-w-0 flex-1 truncate text-slate-700">
+                            {d.pieza}
+                            <span className="text-slate-400"> · {d.severidad}</span>
+                            <span className="text-slate-400">
+                              {d.origen === 'ai' ? ' · lo vio la IA' : ' · lo confirmó una persona'}
+                            </span>
+                          </span>
+                          <span className="tabular-nums text-[12px] text-slate-400">{d.dias} d</span>
+                        </div>
+                      ))}
+                    </div>
                   )}
-                  <button
-                    onClick={() => desdeDano(d)}
-                    className="flex-none rounded-lg border border-blue-300 bg-blue-50 px-2.5 py-1 text-[12.5px] font-semibold text-blue-700 hover:bg-blue-100">
-                    Mandar al taller
-                  </button>
                 </div>
               ))}
-              {danos.total > 40 && (
+              {(danos.furgonetas || 0) > 40 && (
                 <p className="px-4 py-2 text-[12.5px] text-slate-400">
-                  y {danos.total - 40} más. Se enseñan primero los graves y los que llevan más tiempo abiertos.
+                  y {danos.furgonetas - 40} furgonetas más. Se enseñan primero las que
+                  llevan algo grave y las que llevan más tiempo esperando.
                 </p>
               )}
             </div>

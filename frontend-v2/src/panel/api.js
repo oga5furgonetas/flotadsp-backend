@@ -434,5 +434,8 @@ export const getDebrief = (params) => api.get('/cortex/debrief', { params })
 /* Daños abiertos que aun no han ido al taller. */
 export const getDanosPendientes = (params) =>
   api.get('/work-orders/danos-pendientes', { params })
+/* Las furgonetas que no estan trabajando, con los dias que llevan paradas. */
+export const getFurgonetasParadas = (center) =>
+  api.get('/work-orders/paradas', { params: centerParam(center) })
 export const marcarDebrief = (tba, body, day) =>
   api.post(`/cortex/debrief/${encodeURIComponent(tba)}`, body, { params: { day } })
