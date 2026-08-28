@@ -1913,8 +1913,15 @@ export default function Turnos() {
       <div className="card p-4">
         <h2 className="mb-3 flex items-center gap-2 text-sm font-bold text-dark-100">
           <Inbox size={16} /> {t('turns.requests')}
-          {solicitudes.length > 0 && (
-            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-300">{solicitudes.length}</span>
+          {/* GRUPOS, NO DOCUMENTOS. En la base hay una fila por dia; aqui se ven
+              agrupadas como las mando el conductor ("4 dias, del 16 al 19"), asi
+              que contar `solicitudes` decia 17 donde se veian 7 filas. El aviso
+              del menu cuenta lo mismo, y tiene que seguir siendo lo mismo. */}
+          {grupos.length > 0 && (
+            <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-300"
+              title={`${grupos.length} ${grupos.length === 1 ? 'petición' : 'peticiones'} · ${solicitudes.length} ${solicitudes.length === 1 ? 'día' : 'días'} en total`}>
+              {grupos.length}
+            </span>
           )}
           {/* El boton del historial vivia en la barra del cuadrante, que ahora
               esta escondida: sin esto, el historial existia y no habia forma

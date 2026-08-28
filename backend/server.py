@@ -19939,9 +19939,19 @@ async def contar_peticiones_pendientes(center: Optional[str] = None,
                                        user: dict = Depends(require_admin)):
     """Cuantas peticiones de dias estan sin contestar. Para el aviso del menu.
 
-    Se cuentan PETICIONES, no personas: dos conductores con tres peticiones
-    entre los dos son 3, porque hay que contestar tres veces. `personas` va
-    aparte por si alguna pantalla quiere decir "2 personas, 3 peticiones".
+    SE CUENTAN PETICIONES, NO DIAS. En la base hay un documento POR DIA, pero
+    el conductor las pidio de golpe y en pantalla salen como una sola fila:
+    "4 dias, del 16 al 19". Contando documentos, siete peticiones de verdad
+    daban 17 y el numero del menu no cuadraba con lo que se ve — pasó, y el
+    aviso deja de servir en cuanto no coincide con la pantalla.
+
+    La clave del grupo es `grupo`, y `id` cuando falta: exactamente la misma
+    que usa la pantalla para juntar las filas. Si se cambia alli, hay que
+    cambiarla aqui.
+
+    Tampoco son personas: dos conductores con tres peticiones entre los dos son
+    3, porque hay que contestar tres veces. `personas` va aparte por si alguna
+    pantalla quiere decir "2 personas, 3 peticiones".
 
     Endpoint propio y no `/shift-requests?status=pendiente` porque esto lo pide
     el menu cada dos minutos en TODAS las pantallas: la lista devuelve hasta
@@ -19954,9 +19964,20 @@ async def contar_peticiones_pendientes(center: Optional[str] = None,
     """
     filtro = dict(_filtro_centro(user, center))
     filtro["status"] = "pendiente"
-    n = await db.shift_requests.count_documents(filtro)
-    personas = len(await db.shift_requests.distinct("driver_id", filtro)) if n else 0
-    return {"pendientes": n, "personas": personas}
+    filas = await db.shift_requests.aggregate([
+        {"$match": filtro},
+        {"$group": {"_id": {"$ifNull": ["$grupo", "$id"]},
+                    "conductor": {"$first": "$driver_id"}}},
+        {"$group": {"_id": None, "peticiones": {"$sum": 1},
+                    "personas": {"$addToSet": "$conductor"}}},
+    ]).to_list(1)
+    if not filas:
+        return {"pendientes": 0, "personas": 0, "dias": 0}
+    r = filas[0]
+    return {"pendientes": r["peticiones"],
+            "personas": len([p for p in r["personas"] if p]),
+            # Los dias sueltos, por si hacen falta: es el numero de documentos.
+            "dias": await db.shift_requests.count_documents(filtro)}
 
 
 @api_router.get("/shift-requests")
