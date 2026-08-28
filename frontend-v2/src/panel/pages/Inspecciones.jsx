@@ -5,8 +5,9 @@ import { lista } from '../../lib/lista'
 import {
   Loader2, Search, X, FileText, Image as ImageIcon, ShieldQuestion, User, ChevronDown,
   ShieldCheck, FileSignature, ShieldAlert, RefreshCw, Wrench, Check, Euro, Undo2,
+  ClipboardList, ChevronRight,
 } from 'lucide-react'
-import { getInspections, getVehicles, getDrivers, getVehicleInspections, fetchAuthedBlob, getForensicStatus, signInspectionAdmin, recheckFraud, getSuggestedWorkshops, updateDamage } from '../api'
+import { getInspections, getCoberturaInspecciones, getVehicles, getDrivers, getVehicleInspections, fetchAuthedBlob, getForensicStatus, signInspectionAdmin, recheckFraud, getSuggestedWorkshops, updateDamage } from '../api'
 
 const SEV_CLS = {
   leve: 'bg-amber-500/20 text-amber-300', moderado: 'bg-orange-500/20 text-orange-300',
@@ -34,6 +35,8 @@ export default function Inspecciones() {
   const [sev, setSev] = useState('Todas')
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(null)
+  const [cobertura, setCobertura] = useState(null)
+  const [verSinMirar, setVerSinMirar] = useState(false)
 
   /* El centro va en la PETICIÓN, no solo en el filtro de después.
 
@@ -54,6 +57,9 @@ export default function Inspecciones() {
         setVmap(m); setDmap(dm); setInsps(lista(ri.data))
       })
       .catch(() => setErr('No se pudieron cargar las inspecciones.'))
+    /* Falla en silencio: es informacion de apoyo y la lista de inspecciones
+       tiene que seguir funcionando aunque esto no responda. */
+    getCoberturaInspecciones(center).then((r) => setCobertura(r.data)).catch(() => {})
   }, [center])
 
   /* Tras mandar un daño al taller o cerrarlo, recarga SOLO esa inspección:
@@ -104,6 +110,74 @@ export default function Inspecciones() {
           />
         </div>
       </header>
+
+      {/* ── LO QUE FALTA, NO LO QUE SE HIZO ────────────────────────────────
+          Esta pantalla es una lista de inspecciones hechas, así que una
+          furgoneta que lleva un mes sin que nadie la abra no sale en ninguna
+          parte: no hay fila que enseñar. Medido el 28-08-2026 sobre 113
+          activas, 35 llevaban más de una semana sin mirarse y 20 no se habían
+          inspeccionado NUNCA. La lista de lo hecho no puede contestar eso, y
+          por eso hace falta darle la vuelta. */}
+      {cobertura?.total > 0 && (
+        <div className="mb-4 overflow-hidden rounded-xl border border-white/[0.07] bg-white/[0.02]">
+          <button onClick={() => setVerSinMirar((v) => !v)}
+            className="flex w-full flex-wrap items-center gap-2.5 px-4 py-3 text-left hover:bg-white/[0.03]">
+            <ClipboardList size={16} className={cobertura.descuidadas ? 'text-amber-400' : 'text-dark-500'} />
+            <h2 className="text-[14.5px] font-bold text-dark-100">Sin mirar</h2>
+            {/* TITULA CON LO QUE NO DEPENDE DE LA HORA. Las inspecciones se
+                hacen entre las 16 y las 19 (medido: pico de 681 a las 18 h), así
+                que a las nueve de la mañana «113 sin inspeccionar hoy» es cierto
+                y no sirve para nada — y un número que grita todas las mañanas
+                deja de mirarse a la semana. Lo que sí es un problema a cualquier
+                hora son las que llevan más de una semana. */}
+            <span className="text-[13px] text-dark-400">
+              {cobertura.descuidadas > 0 ? (
+                <>
+                  <b className="text-amber-300">{cobertura.descuidadas} llevan más de una semana</b>
+                  {!!cobertura.resumen.nunca && ` · ${cobertura.resumen.nunca} sin inspeccionar nunca`}
+                </>
+              ) : (
+                <>todas revisadas esta semana</>
+              )}
+              <span className="text-dark-600"> · {cobertura.sin_mirar_hoy} pendientes hoy</span>
+            </span>
+            <ChevronRight size={15}
+              className={`ml-auto text-dark-500 transition-transform ${verSinMirar ? 'rotate-90' : ''}`} />
+          </button>
+          {verSinMirar && (
+            <div className="border-t border-white/[0.06]">
+              {cobertura.furgonetas
+                .filter((f) => f.cajon !== 'hoy' && f.cajon !== 'en_taller')
+                .slice(0, 60)
+                .map((f) => (
+                  <div key={f.vehicle_id}
+                    className="flex flex-wrap items-center gap-2 border-b border-white/[0.04] px-4 py-2 last:border-b-0">
+                    <span className="font-mono text-[13px] font-semibold text-dark-100">{f.matricula}</span>
+                    <span className={`text-[12.5px] font-semibold ${
+                      f.cajon === 'nunca' || f.cajon === 'mas_30' ? 'text-amber-300'
+                        : f.cajon === '8_30' ? 'text-dark-300' : 'text-dark-400'}`}>
+                      {f.cajon === 'nunca' ? 'nunca se ha inspeccionado'
+                        : f.dias === 1 ? 'ayer'
+                          : `hace ${f.dias} días`}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[12px] text-dark-500">{f.center}</span>
+                    {f.ultima && (
+                      <span className="tabular-nums text-[12px] text-dark-600">última: {f.ultima}</span>
+                    )}
+                  </div>
+                ))}
+              {/* Las de taller se dicen y no se reclaman: nadie puede
+                  inspeccionar una furgoneta que no está en la nave. */}
+              {!!cobertura.resumen.en_taller && (
+                <p className="px-4 py-2 text-[12px] text-dark-500">
+                  {cobertura.resumen.en_taller} en taller, que no se cuentan: no se puede
+                  inspeccionar una furgoneta que no está.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mb-3 flex flex-wrap gap-1.5">
         {FILTERS.map((f) => (

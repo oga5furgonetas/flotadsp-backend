@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ClipboardCheck, CalendarDays, CalendarClock, LogOut, Lock, Ban } from 'lucide-react'
-import { getPortalVehicles, getMyShifts, DRIVER_TOKEN_KEY } from '../../services/api'
+import { getPortalVehicles, getMyShifts, getMiFicha, guardarMiTelefono, DRIVER_TOKEN_KEY } from '../../services/api'
 import { lista } from '../../lib/lista'
 import DriverLogin from './DriverLogin'
 import InspectionFlow from './InspectionFlow'
@@ -77,6 +77,28 @@ export default function DriverPortal() {
   const [result, setResult] = useState(null)
   const [sinVer, setSinVer] = useState(0)      // respuestas que aún no ha leído
   const [vista, setVista] = useState('inicio') // inicio | auditoria | dias | turnos | clave
+  const [faltaTel, setFaltaTel] = useState(false)
+  const [tel, setTel] = useState('')
+  const [telOk, setTelOk] = useState(false)
+  const [guardandoTel, setGuardandoTel] = useState(false)
+  const [errTel, setErrTel] = useState('')
+
+  /* Si falla, no se pregunta: es mejor no pedir el telefono que ensenar un
+     formulario roto a alguien que solo queria hacer su inspeccion. */
+  useEffect(() => {
+    if (!driver) return
+    getMiFicha().then((r) => setFaltaTel(!!r.data?.falta_telefono)).catch(() => {})
+  }, [driver])
+
+  const guardarTel = async () => {
+    setGuardandoTel(true); setErrTel('')
+    try {
+      await guardarMiTelefono(tel)
+      setTelOk(true); setFaltaTel(false)
+    } catch (e) {
+      setErrTel(e?.response?.data?.detail || 'No se pudo guardar.')
+    } finally { setGuardandoTel(false) }
+  }
 
   useEffect(() => {
     if (!driver) return
@@ -147,6 +169,37 @@ export default function DriverPortal() {
             <LogOut size={15} />
           </button>
         </header>
+
+        {/* ── EL TELÉFONO, PEDIDO A QUIEN LO SABE ──────────────────────────
+            150 de los 212 conductores no tienen número en su ficha, así que no
+            hay forma de llamar a alguien que se ha quedado tirado a mitad de
+            ruta. Pedirlo desde la oficina lleva meses sin funcionar; aquí lo
+            pide quien entra todos los días, una sola vez y en diez segundos.
+            No bloquea nada: se puede seguir sin darlo. */}
+        {faltaTel && !telOk && (
+          <div className="mb-4 rounded-2xl border border-brand-500/30 bg-brand-500/[0.07] p-4">
+            <p className="text-[14px] font-semibold text-dark-50">¿Cuál es tu teléfono?</p>
+            <p className="mt-0.5 text-[12.5px] leading-snug text-dark-400">
+              Es para poder llamarte si te quedas tirado en ruta. Solo lo ve la oficina.
+            </p>
+            <div className="mt-2.5 flex gap-2">
+              <input
+                type="tel" inputMode="tel" value={tel} onChange={(e) => setTel(e.target.value)}
+                placeholder="600 000 000"
+                className="min-w-0 flex-1 rounded-xl border border-dark-700 bg-dark-900 px-3 py-2.5 text-[15px] text-dark-50 placeholder:text-dark-600 focus:border-brand-500 focus:outline-none" />
+              <button onClick={guardarTel} disabled={guardandoTel || tel.trim().length < 9}
+                className="shrink-0 rounded-xl bg-brand-500 px-4 py-2.5 text-[14px] font-semibold text-white disabled:opacity-40">
+                {guardandoTel ? '…' : 'Guardar'}
+              </button>
+            </div>
+            {errTel && <p className="mt-1.5 text-[12.5px] text-red-300">{errTel}</p>}
+          </div>
+        )}
+        {telOk && (
+          <p className="mb-4 rounded-2xl border border-emerald-500/30 bg-emerald-500/[0.07] px-4 py-3 text-[13.5px] text-emerald-300">
+            Guardado, gracias.
+          </p>
+        )}
 
         <div className="flex flex-col gap-2.5">
           <Opcion

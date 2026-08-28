@@ -6407,6 +6407,45 @@ def _portal_payload(vehicles: list, permitido: bool, motivo: Optional[str]) -> d
     return {"vehicles": vehicles, "puede_auditar": permitido, "motivo": motivo}
 
 
+@api_router.get("/portal/mi-ficha")
+async def portal_mi_ficha(user: dict = Depends(require_any_auth)):
+    """Que le falta a la ficha del propio conductor. Solo lo que el puede dar.
+
+    Hoy: el telefono. 150 de 212 conductores no tienen numero, asi que no hay
+    forma de llamar a alguien que se ha quedado tirado a mitad de ruta. Pedirlo
+    en la oficina no funciona —lleva meses sin rellenarse—; pedirselo a el, que
+    entra aqui todos los dias, si.
+
+    Devuelve SOLO campos suyos y nunca datos de otros: este endpoint lo abre
+    gente en su movil y la respuesta no puede llevar nada que no sea de quien
+    pregunta (gotcha 26).
+    """
+    d = await db.drivers.find_one({"id": user.get("sub")},
+                                  {"_id": 0, "phone": 1, "telefono": 1, "name": 1})
+    if not d:
+        return {"falta_telefono": False}
+    tel = (d.get("phone") or d.get("telefono") or "").strip()
+    return {"falta_telefono": not tel, "nombre": d.get("name")}
+
+
+@api_router.post("/portal/mi-telefono")
+async def portal_mi_telefono(data: dict = Body(...), user: dict = Depends(require_any_auth)):
+    """El conductor guarda su propio telefono. Solo el suyo.
+
+    Se valida de verdad y no se guarda cualquier cosa: un numero mal escrito es
+    peor que ninguno, porque se llama y no contesta nadie y se da por hecho que
+    esa persona no coge el telefono.
+    """
+    bruto = re.sub(r"[^0-9+]", "", str(data.get("telefono") or ""))
+    solo = bruto.lstrip("+")
+    if not solo.isdigit() or not (9 <= len(solo) <= 15):
+        raise HTTPException(400, "Ese numero no parece correcto. Escribelo con los 9 digitos.")
+    await db.drivers.update_one({"id": user.get("sub")}, {"$set": {
+        "phone": bruto, "telefono_por": "portal",
+        "telefono_en": datetime.now(timezone.utc).isoformat()}})
+    return {"ok": True}
+
+
 @api_router.get("/vehicles/portal")
 async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
     """Portal conductor: las furgonetas que ESE conductor puede inspeccionar hoy.
@@ -6476,6 +6515,8 @@ async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
 @api_router.post("/vehicles", response_model=Vehicle)
 async def create_vehicle(data: VehicleCreate, _=Depends(require_admin)):
     vehicle = Vehicle(**data.model_dump())
+    if getattr(vehicle, "center", None):
+        vehicle.center = _centro_norm(vehicle.center, await _centros_conocidos())
     doc = serialize_doc(vehicle.model_dump())
     await db.vehicles.insert_one(doc)
     return vehicle
@@ -7119,7 +7160,12 @@ async def update_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
         "provider","workshop_status","workshop_reason",
     }
     data = {k: v for k, v in data.items() if k in _VEHICLE_ALLOWED}
-    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    # EL CENTRO SE GUARDA LIMPIO. Aqui entraba 'AMZL OGA5 SANTIAGO XPT' y
+    # convivia con 'OGA5', asi que cualquier recuento que agrupe por centro
+    # partia OGA5 en dos mitades (gotcha 6). Solo se toca si el codigo ya existe
+    # limpio en la base: un centro nuevo se queda tal cual.
+    if "center" in data:
+        data["center"] = _centro_norm(data["center"], await _centros_conocidos())
     prev = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "status": 1})
     result = await db.vehicles.update_one({"id": vehicle_id}, {"$set": data})
     if result.matched_count == 0:
@@ -7157,6 +7203,192 @@ async def create_driver(data: DriverCreate, admin: dict = Depends(require_admin)
         logger.info(f"Conductor y cuenta creados: {driver.email}")
 
     return driver
+
+
+_CENTRO_RE = re.compile(r"\b([A-Z]{2,4}\d{1,2})\b")
+
+
+def _centro_norm(valor, conocidos=None) -> str:
+    """Deja el centro en su codigo: 'AMZL OGA5 SANTIAGO XPT' -> 'OGA5'.
+
+    El mismo centro esta guardado de siete formas en `vehicles`: 'OGA5' (76),
+    'AMZL OGA5 SANTIAGO XPT' (37), 'oga5' (5), 'OGA5 ' (2)... El gotcha 6 lo
+    documenta y por eso los filtros van por `$regex`, pero eso arregla la
+    LECTURA, no el dato: cualquier recuento nuevo que agrupe por centro parte
+    OGA5 en dos mitades sin avisar. Paso el 28-08-2026 contando la flota.
+
+    NO ADIVINA. Solo reescribe cuando dentro del texto aparece EXACTAMENTE UN
+    codigo que ya existe limpio en la base. Un centro nuevo que nadie haya
+    escrito bien todavia se queda como esta, que es mejor que renombrarlo a algo
+    que no es. Devuelve el original —solo recortado y en mayusculas— si no lo
+    tiene claro.
+    """
+    t = str(valor or "").strip().upper()
+    if not t:
+        return ""
+    if conocidos and t in conocidos:
+        return t
+    hallados = {c for c in _CENTRO_RE.findall(t) if not conocidos or c in conocidos}
+    return hallados.pop() if len(hallados) == 1 else t
+
+
+async def _centros_conocidos() -> set:
+    """Los codigos de centro que ya existen escritos limpios.
+
+    Se sacan de `drivers`, que es la coleccion que los tiene bien (medido: 4
+    formas y todas limpias), y no de `vehicles`, que es justo la sucia. Sin esta
+    lista, `_centro_norm` no puede distinguir un codigo de verdad de tres letras
+    y un numero que aparezcan por casualidad en un texto libre.
+    """
+    fuera = set()
+    for col in ("drivers", "cortex_stations", "workshops"):
+        for v in await db[col].distinct("center"):
+            t = str(v or "").strip().upper()
+            if t and _CENTRO_RE.fullmatch(t):
+                fuera.add(t)
+    return fuera
+
+
+@api_router.get("/drivers/duplicados")
+async def drivers_duplicados(_=Depends(require_admin)):
+    """La misma persona dada de alta dos veces, emparejada por CORREO.
+
+    Por correo y nunca por nombre: dos tocayos distintos acabarian fusionados y
+    uno auditando la furgoneta del otro. El correo lo pone la empresa y es unico
+    por persona (gotcha 15).
+
+    Esto ya costo un dia de operacion. El 19-08-2026 hubo cinco conductores en
+    ruta viendo "no tienes furgoneta asignada": el cuadrante apuntaba a una
+    ficha y el login del portal resuelve por correo con `find_one`, que devuelve
+    la que Mongo tenga primero — normalmente la otra. Medido el 28-08-2026
+    seguian 13 correos con dos fichas, 14 fichas de mas.
+
+    De cada ficha se cuenta lo que cuelga de ella para poder decidir cual se
+    queda: la que tiene el historial, no la que se creo antes.
+
+    OJO AL ORDEN: declarado ANTES de /drivers/{driver_id}/... o 'duplicados'
+    entraria como si fuera un id.
+    """
+    porcorreo: dict = {}
+    async for d in db.drivers.find({}, {"_id": 0}):
+        e = (d.get("email") or "").strip().lower()
+        if not e or d.get("merged_into"):
+            continue
+        porcorreo.setdefault(e, []).append(d)
+    grupos = {e: v for e, v in porcorreo.items() if len(v) > 1}
+    if not grupos:
+        return {"grupos": [], "total": 0, "fichas_de_mas": 0}
+
+    ids = [d["id"] for v in grupos.values() for d in v if d.get("id")]
+    async def _cuenta(col, campo):
+        out: dict = {}
+        async for r in db[col].aggregate([
+            {"$match": {campo: {"$in": ids}}},
+            {"$group": {"_id": "$" + campo, "n": {"$sum": 1}}},
+        ]):
+            out[r["_id"]] = r["n"]
+        return out
+    insp = await _cuenta("inspections", "driver_id")
+    turnos = await _cuenta("shifts", "driver_id")
+    pets = await _cuenta("shift_requests", "driver_id")
+    asig: dict = {}
+    async for a_doc in db.daily_assignments.find({}, {"_id": 0, "slots": 1}):
+        for sl in (a_doc.get("slots") or []):
+            if sl.get("driver_id") in ids:
+                asig[sl["driver_id"]] = asig.get(sl["driver_id"], 0) + 1
+
+    fuera = []
+    for e, fichas in sorted(grupos.items()):
+        filas = []
+        for d in fichas:
+            i = d["id"]
+            filas.append({
+                "id": i, "nombre": d.get("name"), "center": d.get("center"),
+                "creada": str(d.get("created_at") or "")[:10],
+                "transporter_id": d.get("transporter_id"),
+                "telefono": d.get("phone") or d.get("telefono"),
+                "inspecciones": insp.get(i, 0), "turnos": turnos.get(i, 0),
+                "peticiones": pets.get(i, 0), "asignaciones": asig.get(i, 0),
+            })
+            filas[-1]["total"] = sum(filas[-1][k] for k in
+                                     ("inspecciones", "turnos", "peticiones", "asignaciones"))
+        # La que mas historial tiene primero: es la que conviene conservar.
+        filas.sort(key=lambda x: -x["total"])
+        fuera.append({"email": e, "fichas": filas, "sugerida": filas[0]["id"]})
+    return {"grupos": fuera, "total": len(fuera),
+            "fichas_de_mas": sum(len(g["fichas"]) - 1 for g in fuera)}
+
+
+@api_router.post("/drivers/fusionar")
+async def drivers_fusionar(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Une dos fichas de la misma persona en una.
+
+    NO BORRA NADA. La ficha absorbida se marca `merged_into` y se desactiva,
+    asi que si el emparejamiento estuviera mal se puede deshacer mirando el
+    campo. Borrarla dejaria huerfano cualquier documento que se nos hubiera
+    escapado, y eso no se ve hasta que alguien lo echa en falta.
+
+    Se repuntan los CUATRO sitios que apuntan a un conductor, contados sobre la
+    base de produccion: inspections, shifts, shift_requests y los slots de
+    daily_assignments. Se comprueban en un test, no de memoria.
+    """
+    conservar = str(data.get("conservar") or "").strip()
+    absorber = [str(x).strip() for x in (data.get("absorber") or []) if str(x).strip()]
+    if not conservar or not absorber:
+        raise HTTPException(400, "Hace falta cual se conserva y cual se absorbe")
+    if conservar in absorber:
+        raise HTTPException(400, "Una ficha no se puede absorber a si misma")
+
+    buena = await db.drivers.find_one({"id": conservar}, {"_id": 0})
+    if not buena:
+        raise HTTPException(404, "La ficha que se conserva no existe")
+    otras = await db.drivers.find({"id": {"$in": absorber}}, {"_id": 0}).to_list(20)
+    if len(otras) != len(absorber):
+        raise HTTPException(404, "Alguna de las fichas a absorber no existe")
+    # Mismo correo o no se toca: es la unica prueba de que son la misma persona.
+    correo = (buena.get("email") or "").strip().lower()
+    for o in otras:
+        if (o.get("email") or "").strip().lower() != correo or not correo:
+            raise HTTPException(400,
+                                "Solo se fusionan fichas con el MISMO correo. "
+                                "Por nombre no: dos tocayos acabarian mezclados.")
+
+    movidos = {}
+    for col, campo in (("inspections", "driver_id"), ("shifts", "driver_id"),
+                       ("shift_requests", "driver_id")):
+        r = await db[col].update_many({campo: {"$in": absorber}},
+                                      {"$set": {campo: conservar}})
+        movidos[col] = r.modified_count
+    r = await db.daily_assignments.update_many(
+        {"slots.driver_id": {"$in": absorber}},
+        {"$set": {"slots.$[s].driver_id": conservar,
+                  "slots.$[s].driver_name": buena.get("name")}},
+        array_filters=[{"s.driver_id": {"$in": absorber}}])
+    movidos["daily_assignments"] = r.modified_count
+
+    # Lo que le falte a la buena se lo queda de las otras: telefono, transporter
+    # id, foto... Nunca al reves — la buena manda.
+    def _vacio(v):
+        return v is None or (isinstance(v, str) and not v.strip())
+
+    relleno = {}
+    for campo in ("transporter_id", "phone", "telefono", "photo_url", "dni", "center"):
+        if not _vacio(buena.get(campo)):
+            continue                      # la buena ya lo tiene: manda ella
+        for o in otras:
+            v = o.get(campo)
+            if isinstance(v, str) and v.strip():
+                relleno[campo] = v.strip()
+                break
+    ahora = datetime.now(timezone.utc).isoformat()
+    if relleno:
+        await db.drivers.update_one({"id": conservar}, {"$set": relleno})
+    await db.drivers.update_many({"id": {"$in": absorber}}, {"$set": {
+        "merged_into": conservar, "active": False, "status": "fusionada",
+        "merged_at": ahora, "merged_by": user.get("name") or "oficina"}})
+    logger.info("Fichas fusionadas en %s: %s (movidos %s)", conservar, absorber, movidos)
+    return {"ok": True, "conservada": conservar, "absorbidas": absorber,
+            "movidos": movidos, "rellenado": relleno}
 
 
 @api_router.get("/drivers", response_model=List[Driver])
@@ -7615,6 +7847,93 @@ async def get_inspections(
     skip = max(0, skip)
     inspections = await db.inspections.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).to_list(limit)
     return inspections
+
+
+@api_router.get("/inspections/cobertura")
+async def inspecciones_cobertura(center: Optional[str] = None,
+                                 user: dict = Depends(require_admin)):
+    """QUE FURGONETAS NO SE HAN MIRADO. Al reves que la pantalla de siempre.
+
+    La lista de inspecciones ensena lo que SI se hizo, y por eso una furgoneta
+    que lleva un mes sin que nadie la abra no aparece en ninguna parte: no hay
+    fila que ensenar. Medido el 28-08-2026 sobre 113 activas: 58 miradas hoy o
+    ayer, 20 entre 2 y 7 dias, 13 entre 8 y 30, 2 por encima de 30 y **20 sin
+    una sola inspeccion en toda su vida**. Treinta y cinco furgonetas fuera de
+    control y ni un sitio donde se vieran.
+
+    Las que estan en taller se cuentan aparte y no se reclaman: nadie puede
+    inspeccionar una furgoneta que no esta.
+
+    OJO AL ORDEN: va declarado ANTES que /inspections/{inspection_id}. Puesto
+    despues, la palabra 'cobertura' entraria como si fuera un id.
+    """
+    q = {"status": {"$nin": ["deleted", "baja"]}}
+    if center and center not in ("Todos", "todos"):
+        q["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
+    vehiculos = await db.vehicles.find(
+        q, {"_id": 0, "id": 1, "license_plate": 1, "center": 1, "status": 1}).to_list(500)
+    if not vehiculos:
+        return {"furgonetas": [], "total": 0, "resumen": {}}
+
+    ids = [v["id"] for v in vehiculos if v.get("id")]
+    ultima: dict = {}
+    async for r in db.inspections.aggregate([
+        {"$match": {"deleted": {"$ne": True}, "vehicle_id": {"$in": ids}}},
+        {"$group": {"_id": "$vehicle_id", "ult": {"$max": "$created_at"},
+                    "n": {"$sum": 1}}},
+    ]):
+        ultima[r["_id"]] = (str(r.get("ult") or "")[:10], r.get("n") or 0)
+
+    hoy = datetime.now(timezone.utc).date()
+    resumen = {"hoy": 0, "ayer": 0, "2_7": 0, "8_30": 0, "mas_30": 0,
+               "nunca": 0, "en_taller": 0}
+    filas = []
+    for v in vehiculos:
+        f, n = ultima.get(v.get("id"), (None, 0))
+        dias = None
+        if f:
+            try:
+                dias = (hoy - datetime.strptime(f, "%Y-%m-%d").date()).days
+            except ValueError:
+                dias = None
+        if (v.get("status") or "") == "taller":
+            resumen["en_taller"] += 1
+            cajon = "en_taller"
+        elif dias is None:
+            resumen["nunca"] += 1
+            cajon = "nunca"
+        elif dias <= 0:
+            resumen["hoy"] += 1
+            cajon = "hoy"
+        elif dias == 1:
+            resumen["ayer"] += 1
+            cajon = "ayer"
+        elif dias <= 7:
+            resumen["2_7"] += 1
+            cajon = "2_7"
+        elif dias <= 30:
+            resumen["8_30"] += 1
+            cajon = "8_30"
+        else:
+            resumen["mas_30"] += 1
+            cajon = "mas_30"
+        filas.append({"vehicle_id": v.get("id"), "matricula": v.get("license_plate") or "?",
+                      "center": (v.get("center") or "").strip(), "estado": v.get("status"),
+                      "ultima": f, "dias": dias, "inspecciones": n, "cajon": cajon})
+
+    # Lo mas abandonado arriba. Las que no se han mirado NUNCA van las primeras
+    # de todo: son las unicas de las que no se sabe absolutamente nada.
+    _peso = {"nunca": 0, "mas_30": 1, "8_30": 2, "2_7": 3, "ayer": 4, "hoy": 5,
+             "en_taller": 6}
+    filas.sort(key=lambda x: (_peso.get(x["cajon"], 9), -(x["dias"] or 9999)))
+    return {
+        "furgonetas": filas,
+        "total": len(filas),
+        "resumen": resumen,
+        # Las que hay que reclamar hoy: ni miradas hoy, ni en taller.
+        "sin_mirar_hoy": sum(1 for x in filas if x["cajon"] not in ("hoy", "en_taller")),
+        "descuidadas": sum(1 for x in filas if x["cajon"] in ("nunca", "mas_30", "8_30")),
+    }
 
 
 @api_router.get("/inspections/vehicle/{vehicle_id}")
@@ -15356,6 +15675,14 @@ async def upsert_daily_assignment(request: Request, user: dict = Depends(require
             "vehicle_plate": s.get("vehicle_plate", ""),
             "driver_id": s.get("driver_id", "") or "",
             "driver_name": s.get("driver_name", "") or "",
+            # LA RUTA, QUE SE ESTABA TIRANDO. El importador del cuadrante YA la
+            # lee del texto pegado y la lleva hasta el slot; aqui se descartaba,
+            # y con ella el unico puente que enlaza a una persona con una ruta.
+            # Sin ese puente no se puede emparejar el Transporter ID solo:
+            # Cortex sabe que ID hizo la XA_C12 y nosotros sabiamos quien la
+            # llevaba, pero no habia donde juntarlo. Guardarla no cuesta nada y
+            # a partir de manana el emparejamiento se hace sin que nadie teclee.
+            "route": str(s.get("route") or "").strip().upper()[:24],
         })
 
     now = datetime.now(timezone.utc).isoformat()
@@ -17075,6 +17402,117 @@ _ITV_AVISO_DIAS = int(os.environ.get("ITV_AVISO_DIAS") or 60)
 # km ni haciendo 800 al dia durante un ano.
 _KM_MAXIMO_CREIBLE = int(os.environ.get("KM_MAXIMO_CREIBLE") or 1_000_000)
 _KM_SALTO_ABSURDO = int(os.environ.get("KM_SALTO_ABSURDO") or 300_000)
+
+
+@api_router.get("/transporter-ids/propuestas")
+async def transporter_id_propuestas(dias: int = 30, minimo: int = 2,
+                                    _=Depends(require_admin)):
+    """Empareja solo el Transporter ID de cada conductor, con pruebas.
+
+    COMO. Cortex sabe QUE ID condujo la ruta XA_C12 el martes. La asignacion
+    diaria sabe QUIEN llevaba la XA_C12 ese martes. Cruzando (dia, ruta) sale
+    el par, y con varios dias distintos deja de ser casualidad.
+
+    NO SE PROPONE NADA DUDOSO. Se exige que el mismo ID salga en `minimo` dias
+    distintos y que NINGUN otro ID compita por esa persona; si dos ids se
+    reparten los dias —un apoyo que cambio de ruta a media manana, dos personas
+    en la misma ruta— no se propone y se dice por que. Un emparejamiento malo
+    aqui le cuelga a alguien las entregas de otro.
+
+    OJO: hasta el 28-08-2026 la asignacion NO guardaba la ruta (se leia del
+    texto pegado y se tiraba al guardar), asi que esto empieza a dar resultados
+    con las asignaciones de hoy en adelante. Devuelve `dias_con_ruta` para que
+    la pantalla pueda decir "todavia no hay con que cruzar" en vez de parecer
+    que no encuentra a nadie.
+    """
+    desde = (datetime.now(timezone.utc) - timedelta(days=max(1, min(dias, 120)))).strftime("%Y-%m-%d")
+
+    # 1) Quien llevaba cada ruta, segun NUESTRA asignacion.
+    nuestro: dict = {}          # (dia, ruta) -> driver_id
+    dias_con_ruta = set()
+    async for a_doc in db.daily_assignments.find(
+            {"date": {"$gte": desde}}, {"_id": 0, "date": 1, "slots": 1}):
+        for sl in (a_doc.get("slots") or []):
+            r = str(sl.get("route") or "").strip().upper()
+            if r and sl.get("driver_id"):
+                nuestro[(a_doc["date"], r)] = sl["driver_id"]
+                dias_con_ruta.add(a_doc["date"])
+
+    # 2) Que Transporter ID hizo cada ruta, segun Cortex.
+    votos: dict = {}            # driver_id -> {transporter_id: {dias}}
+    if nuestro:
+        async for r in db.cortex_packages.aggregate([
+            {"$match": {"service_day": {"$gte": desde},
+                        "driver_id": {"$nin": [None, "", "sin-asignar"]}}},
+            {"$group": {"_id": {"d": "$service_day", "r": "$route_code",
+                                "t": "$driver_id"}, "n": {"$sum": 1}}},
+        ]):
+            k = r["_id"]
+            dia, ruta, tid = k.get("d"), str(k.get("r") or "").strip().upper(), k.get("t")
+            # Menos de 5 paquetes en una ruta es alguien que paso por ahi, no
+            # quien la llevaba. Sin este corte, un apoyo de 2 paquetes compite
+            # de tu a tu con el titular y el par se descarta por "ambiguo".
+            if r.get("n", 0) < 5:
+                continue
+            did = nuestro.get((dia, ruta))
+            if did:
+                votos.setdefault(did, {}).setdefault(tid, set()).add(dia)
+
+    # 3) Solo los que faltan, y solo si no hay competencia.
+    ocupados = set()
+    sin_id = {}
+    async for d in db.drivers.find({}, {"_id": 0, "id": 1, "name": 1, "transporter_id": 1}):
+        t = (d.get("transporter_id") or "").strip()
+        if t:
+            ocupados.add(t)
+        else:
+            sin_id[d["id"]] = d
+
+    propuestas, ambiguos = [], []
+    for did, cand in votos.items():
+        if did not in sin_id:
+            continue
+        cand = {t: ds for t, ds in cand.items() if t not in ocupados}
+        buenos = {t: ds for t, ds in cand.items() if len(ds) >= minimo}
+        if len(buenos) == 1:
+            tid, ds = next(iter(buenos.items()))
+            propuestas.append({
+                "driver_id": did, "nombre": sin_id[did].get("name"),
+                "transporter_id": tid, "dias": len(ds),
+                "prueba": sorted(ds)[-4:],
+            })
+        elif len(buenos) > 1:
+            ambiguos.append({"driver_id": did, "nombre": sin_id[did].get("name"),
+                             "candidatos": {t: len(ds) for t, ds in buenos.items()}})
+    propuestas.sort(key=lambda x: -x["dias"])
+    return {"propuestas": propuestas, "ambiguos": ambiguos,
+            "sin_id": len(sin_id), "dias_con_ruta": len(dias_con_ruta),
+            "minimo_dias": minimo}
+
+
+@api_router.post("/transporter-ids/confirmar")
+async def transporter_id_confirmar(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Guarda un emparejamiento que una persona ha confirmado.
+
+    Se comprueba que el ID no lo tenga ya otro AQUI y no solo al proponer: entre
+    ver la propuesta y pulsar pueden pasar minutos, y dos ids repetidos harian
+    que las entregas de uno se le colgaran al otro.
+    """
+    did = str(data.get("driver_id") or "").strip()
+    tid = str(data.get("transporter_id") or "").strip().upper()
+    if not did or not tid:
+        raise HTTPException(400, "Faltan el conductor o el Transporter ID")
+    otro = await db.drivers.find_one({"transporter_id": tid, "id": {"$ne": did}},
+                                     {"_id": 0, "name": 1})
+    if otro:
+        raise HTTPException(409, f"Ese Transporter ID ya lo tiene {otro.get('name')}")
+    r = await db.drivers.update_one({"id": did}, {"$set": {
+        "transporter_id": tid,
+        "transporter_id_por": user.get("name") or "oficina",
+        "transporter_id_en": datetime.now(timezone.utc).isoformat()}})
+    if not r.matched_count:
+        raise HTTPException(404, "Ese conductor no existe")
+    return {"ok": True, "driver_id": did, "transporter_id": tid}
 
 
 @api_router.get("/alerts/itv")

@@ -561,7 +561,10 @@ export default function Asignacion() {
   async function save() {
     const clean = slots
       .filter(s => s.vehicle_id || s.driver_id)
-      .map(({ vehicle_id, vehicle_plate, driver_id, driver_name }) => ({ vehicle_id, vehicle_plate, driver_id, driver_name }))
+      // `route` viaja: es lo que enlaza a la persona con la ruta, y sin eso
+      // el Transporter ID no se puede emparejar solo. Se leía del texto pegado
+      // y se tiraba justo aquí.
+      .map(({ vehicle_id, vehicle_plate, driver_id, driver_name, route }) => ({ vehicle_id, vehicle_plate, driver_id, driver_name, route: route || '' }))
     setBusy(true); setMsg(null)
     try {
       await putDailyAssignment({ center, date, slots: clean })

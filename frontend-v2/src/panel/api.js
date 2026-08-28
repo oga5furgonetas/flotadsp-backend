@@ -85,12 +85,20 @@ export const deleteDriver = (id) => api.delete(`/drivers/${id}`)
 export const uploadDriverPhoto = (id, file) => { const fd = new FormData(); fd.append('file', file); return api.post(`/drivers/${id}/photo`, fd) }
 
 /* ── Cuentas de conductor (acceso con contraseña) ── */
+/* Salud de las fichas: duplicadas por correo y Transporter IDs que faltan. */
+export const getDriversDuplicados = () => api.get('/drivers/duplicados')
+export const fusionarConductores = (body) => api.post('/drivers/fusionar', body)
+export const getPropuestasTransporterId = () => api.get('/transporter-ids/propuestas')
+export const confirmarTransporterId = (body) => api.post('/transporter-ids/confirmar', body)
 export const getDriverAccounts = () => api.get('/auth/driver-accounts')
 export const setDriverPassword = (driverId, password) => api.post('/auth/set-driver-password', { driver_id: driverId, password })
 export const deleteDriverAccount = (driverId) => api.delete(`/auth/driver-account/${driverId}`)
 
 /* ── Inspecciones ── */
 export const getInspections = (params = {}) => api.get('/inspections', { params })
+/* Al reves: que furgonetas NO se han mirado. */
+export const getCoberturaInspecciones = (center) =>
+  api.get('/inspections/cobertura', { params: centerParam(center) })
 export const getInspection = (id) => api.get(`/inspections/${id}`)
 export const getReviewQueue = (center) => api.get('/inspections/review-queue', { params: centerParam(center) })
 export const getAiDatasetStats = () => api.get('/ai-dataset/stats')

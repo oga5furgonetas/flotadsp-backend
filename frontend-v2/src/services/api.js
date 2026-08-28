@@ -119,6 +119,9 @@ export const getAssignedVehicle = () => api.get('/auth/me/assigned-vehicle')
 
 /* ── Vehículos / inspecciones ─────────────────────────────── */
 export const getPortalVehicles = () => api.get('/vehicles/portal')
+/* Lo que le falta a su propia ficha, y como rellenarlo el mismo. */
+export const getMiFicha = () => api.get('/portal/mi-ficha')
+export const guardarMiTelefono = (telefono) => api.post('/portal/mi-telefono', { telefono })
 /* Turnos del propio conductor: su calendario y sus peticiones de día. */
 export const getMyShifts = (desde, hasta) => api.get('/shifts/mine', { params: { desde, hasta } })
 // Dias que este conductor NO puede pedir, y por que.

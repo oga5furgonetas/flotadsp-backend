@@ -9,7 +9,13 @@ import {
   Trophy, TrendingUp, TrendingDown, Minus, Flame, BarChart2, ChevronDown, ChevronUp, AlertCircle,
   Lock, LockOpen, Eye, EyeOff, ShieldCheck, Share2,
 } from 'lucide-react'
-import { getDrivers, createDriver, updateDriver, deleteDriver, uploadDriverPhoto, getDriversScoring, getScoringLeaderboard, getDriverAccounts, setDriverPassword, deleteDriverAccount } from '../api'
+import {
+  getDrivers, createDriver, updateDriver, deleteDriver, uploadDriverPhoto,
+  getDriversScoring, getScoringLeaderboard, getDriverAccounts, setDriverPassword,
+  deleteDriverAccount,
+  getDriversDuplicados, fusionarConductores,
+  getPropuestasTransporterId, confirmarTransporterId,
+} from '../api'
 
 const EMPTY = {
   name: '', dni: '', phone: '', email: '', driver_id: '', transporter_id: '',
@@ -253,6 +259,160 @@ function DriverRow({ s, rank, showCenter, expanded, onToggle }) {
         </tr>
       )}
     </>
+  )
+}
+
+/* ── SALUD DE LAS FICHAS ───────────────────────────────────────────────────
+   Dos tareas de mantenimiento que nadie hace porque no había dónde hacerlas.
+
+   1. FICHAS DUPLICADAS. La importación creaba ficha nueva cuando el nombre
+      venía con un espacio de más o en minúsculas, así que hay gente dada de
+      alta dos veces. No es cosmético: el cuadrante apunta a una ficha y el
+      login del portal resuelve por correo y cae en la otra — el 19-08-2026
+      hubo cinco conductores en ruta viendo «no tienes furgoneta asignada» y
+      por pantalla parecía un fallo de centros.
+
+   2. TRANSPORTER IDs. Son lo que hace que en el debrief salga «sin ficha».
+      Se emparejan solos cruzando lo que sabe Cortex (qué ID hizo la XA_C12)
+      con lo que sabe la asignación (quién llevaba la XA_C12), pero la
+      asignación no guardaba la ruta hasta hoy: empieza a dar resultados con
+      las asignaciones de mañana en adelante, y la pantalla lo dice en vez de
+      parecer que no encuentra a nadie. */
+function SaludFichas({ onCambio }) {
+  const [dups, setDups] = useState(null)
+  const [ids, setIds] = useState(null)
+  const [ocupado, setOcupado] = useState('')
+  const [err, setErr] = useState('')
+  const [elegida, setElegida] = useState({})   // email -> id que se conserva
+
+  const cargar = () => {
+    getDriversDuplicados().then((r) => setDups(r.data)).catch(() => setErr('No se pudieron cargar las fichas duplicadas.'))
+    getPropuestasTransporterId().then((r) => setIds(r.data)).catch(() => {})
+  }
+  useEffect(cargar, [])
+
+  const fusionar = async (grupo) => {
+    const conservar = elegida[grupo.email] || grupo.sugerida
+    const absorber = grupo.fichas.filter((f) => f.id !== conservar).map((f) => f.id)
+    setOcupado(grupo.email); setErr('')
+    try {
+      await fusionarConductores({ conservar, absorber })
+      cargar(); onCambio?.()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo fusionar.')
+    } finally { setOcupado('') }
+  }
+
+  const confirmarId = async (p) => {
+    setOcupado(p.driver_id); setErr('')
+    try {
+      await confirmarTransporterId({ driver_id: p.driver_id, transporter_id: p.transporter_id })
+      cargar(); onCambio?.()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo guardar el ID.')
+    } finally { setOcupado('') }
+  }
+
+  if (!dups) return <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> …</div>
+
+  return (
+    <div className="space-y-6">
+      {err && <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{err}</p>}
+
+      {/* ── Duplicadas ─────────────────────────────────────────────── */}
+      <section>
+        <h2 className="mb-1 text-[15px] font-bold text-dark-100">
+          Fichas duplicadas
+          {dups.total > 0 && <span className="ml-2 rounded-full bg-amber-500/20 px-2 py-0.5 text-[11.5px] font-bold text-amber-300">{dups.fichas_de_mas} de más</span>}
+        </h2>
+        <p className="mb-3 max-w-[70ch] text-[13px] text-dark-400">
+          Se emparejan por <b className="text-dark-200">correo</b>, nunca por nombre: dos
+          tocayos distintos acabarían mezclados y uno auditando la furgoneta del otro.
+          Se conserva la ficha con más historial y la otra se marca fusionada — no se
+          borra, así que se puede deshacer.
+        </p>
+        {dups.total === 0 ? (
+          <div className="card p-6 text-center text-[13.5px] text-dark-400">Ninguna. Todas las fichas son de personas distintas.</div>
+        ) : (
+          <div className="space-y-2">
+            {dups.grupos.map((g) => {
+              const conservar = elegida[g.email] || g.sugerida
+              return (
+                <div key={g.email} className="card p-3">
+                  <p className="mb-2 font-mono text-[12px] text-dark-500">{g.email}</p>
+                  <div className="space-y-1">
+                    {g.fichas.map((f) => (
+                      <label key={f.id}
+                        className={`flex cursor-pointer flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-[13px] ${
+                          f.id === conservar ? 'border-emerald-500/40 bg-emerald-500/[0.07]' : 'border-dark-800 hover:border-dark-700'}`}>
+                        <input type="radio" name={`c-${g.email}`} checked={f.id === conservar}
+                          onChange={() => setElegida((e) => ({ ...e, [g.email]: f.id }))}
+                          className="accent-emerald-500" />
+                        <span className="font-semibold text-dark-100">{f.nombre}</span>
+                        <span className="text-dark-500">
+                          {f.inspecciones} insp · {f.asignaciones} asign · {f.turnos} turnos · {f.peticiones} pet.
+                        </span>
+                        {f.transporter_id && <span className="font-mono text-[11px] text-dark-500">{f.transporter_id}</span>}
+                        {f.id === conservar && <span className="ml-auto text-[12px] font-semibold text-emerald-400">se conserva</span>}
+                      </label>
+                    ))}
+                  </div>
+                  <button onClick={() => fusionar(g)} disabled={ocupado === g.email}
+                    className="mt-2 rounded-lg bg-brand-500/20 px-3 py-1.5 text-[13px] font-semibold text-brand-200 hover:bg-brand-500/30 disabled:opacity-50">
+                    {ocupado === g.email ? 'Fusionando…' : `Fusionar ${g.fichas.length} fichas en una`}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* ── Transporter IDs ────────────────────────────────────────── */}
+      <section>
+        <h2 className="mb-1 text-[15px] font-bold text-dark-100">Transporter IDs que faltan</h2>
+        {ids && (
+          <p className="mb-3 max-w-[70ch] text-[13px] text-dark-400">
+            {ids.sin_id} conductores sin ID. Es lo que hace que en el debrief salgan
+            como «sin ficha».{' '}
+            {ids.dias_con_ruta === 0 ? (
+              <b className="text-amber-300">
+                Todavía no hay con qué cruzarlo: la asignación diaria no guardaba la ruta
+                hasta hoy. En cuanto se guarde una asignación con rutas, las propuestas
+                aparecen solas aquí.
+              </b>
+            ) : (
+              <>Se cruzan {ids.dias_con_ruta} días de asignaciones con lo que dice Cortex.
+                Solo se propone cuando el mismo ID sale en {ids.minimo_dias} días distintos
+                y ningún otro compite.</>
+            )}
+          </p>
+        )}
+        {!!ids?.propuestas?.length && (
+          <div className="space-y-1.5">
+            {ids.propuestas.map((p) => (
+              <div key={p.driver_id} className="card flex flex-wrap items-center gap-2 p-3 text-[13px]">
+                <span className="font-semibold text-dark-100">{p.nombre}</span>
+                <span className="font-mono text-[12.5px] text-brand-300">{p.transporter_id}</span>
+                <span className="text-dark-500">coinciden {p.dias} días ({p.prueba.join(', ')})</span>
+                <button onClick={() => confirmarId(p)} disabled={ocupado === p.driver_id}
+                  className="ml-auto rounded-lg bg-brand-500/20 px-3 py-1 text-[12.5px] font-semibold text-brand-200 hover:bg-brand-500/30 disabled:opacity-50">
+                  {ocupado === p.driver_id ? 'Guardando…' : 'Es correcto'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {!!ids?.ambiguos?.length && (
+          <p className="mt-2 text-[12.5px] text-dark-500">
+            {ids.ambiguos.length} sin proponer porque hay varios IDs compitiendo por la
+            misma persona — normalmente alguien que cambió de ruta a media mañana. Se
+            dejan a mano a propósito: un emparejamiento malo le cuelga a alguien las
+            entregas de otro.
+          </p>
+        )}
+      </section>
+    </div>
   )
 }
 
@@ -521,6 +681,9 @@ export default function Conductores() {
   const TABS = [
     { id: 'directorio', label: t('drv.title') },
     { id: 'ranking',    label: `🏆 ${t('sc.ranking')}` },
+    // Pestaña y no entrada de menú: son dos tareas de mantenimiento de las
+    // fichas que se hacen de vez en cuando, y el menú ya tiene treinta.
+    { id: 'fichas',     label: 'Fichas duplicadas e IDs' },
   ]
 
   return (
@@ -625,6 +788,8 @@ export default function Conductores() {
 
       {/* Ranking + scoring unificado */}
       {tab === 'ranking' && <ScoringView center={center} />}
+
+      {tab === 'fichas' && <SaludFichas onCambio={load} />}
 
       {/* Modal */}
       {modal && (
