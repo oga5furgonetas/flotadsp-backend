@@ -251,6 +251,10 @@ export const getRouteDemand = (center, desde, hasta) => api.get('/route-demand',
 export const setRouteDemand = (center, items) => api.post('/route-demand', { center, items })
 export const getShiftRequests = (center, status, extra = {}) =>
   api.get('/shift-requests', { params: { ...centerParam(center), ...(status ? { status } : {}), ...extra } })
+// Solo el numero, para el aviso del menu: la lista de arriba devuelve hasta
+// mil documentos enteros y esto lo pide el panel cada dos minutos.
+export const contarPeticionesPendientes = (center) =>
+  api.get('/shift-requests/pendientes', { params: centerParam(center) })
 // Rechazar exige motivo: lo lee el conductor tal cual.
 export const resolveShiftRequest = (id, action, motivo) =>
   api.post(`/shift-requests/${id}/resolve`, { action, motivo })

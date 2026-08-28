@@ -173,6 +173,22 @@ function sumaDias(iso, n) {
   return isoLocal(d)
 }
 
+/* ── EL CUADRANTE, ESCONDIDO ───────────────────────────────────────────────
+   Dani, 28-08-2026: "el apartado del cuadrante por ahora escondelo, no me
+   gusta mucho la integracion; ponme que solo apruebe y deniegue los dias de
+   los conductores".
+
+   Escondido y NO borrado, a proposito. Es codigo que funciona —rejilla,
+   pincel, generacion automatica, importacion de Excel y de texto pegado,
+   bloqueos, cobertura— y borrarlo para volver a escribirlo dentro de un mes
+   seria tirar semanas de trabajo y todos los fallos ya cazados con el
+   (gotchas 20, 21, 22 y 23 salieron justo de aqui). Con la bandera a `true`
+   vuelve entero y sin tocar nada mas.
+
+   Lo que queda en pantalla es lo unico que se pidio: aprobar y denegar dias,
+   y el historial para consultarlos. */
+const MOSTRAR_CUADRANTE = false
+
 export default function Turnos() {
   const { center, centers } = useOutletContext()
   const { t, lang } = useT()
@@ -995,6 +1011,8 @@ export default function Turnos() {
         <h1 className="flex items-center gap-2 text-xl font-bold">
           <CalendarClock size={20} /> {t('turns.title')} · {center}
         </h1>
+      {/* la navegacion por quincenas */}
+      {MOSTRAR_CUADRANTE && (<>
         <div className="flex flex-wrap items-center gap-1.5">
           {/* Las flechas mueven el bloque ENTERO tantos días como tenga. Así
               el salto siempre encaja con lo que estás mirando: si ves dos
@@ -1031,8 +1049,11 @@ export default function Turnos() {
             </button>
           ))}
         </div>
+      </>)}
       </div>
 
+      {/* la barra de acciones del cuadrante */}
+      {MOSTRAR_CUADRANTE && (<>
       {/* Barra de acciones */}
       <div className="flex flex-wrap items-center gap-2">
         <button className="btn-primary flex items-center gap-2" onClick={generar} disabled={!!ocupado || !drivers?.length}>
@@ -1084,11 +1105,12 @@ export default function Turnos() {
           {t('turns.save')}
         </button>
       </div>
+      </>)}
 
       {err && <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{err}</p>}
       {aviso && <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">{aviso}</p>}
 
-      {!cargando && drivers?.length > 0 && (
+      {MOSTRAR_CUADRANTE && !cargando && drivers?.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-dark-800 bg-dark-900/60 px-3 py-2.5">
           <div className="flex items-center gap-1.5">
             <Brush size={15} className="text-dark-500" />
@@ -1129,7 +1151,7 @@ export default function Turnos() {
           Separada de la paleta a propósito. Arriba se elige QUÉ se pinta;
           aquí, SOBRE QUIÉN y CÓMO. Mezclarlo todo en una barra era la mitad
           de la sensación de lío. */}
-      {!cargando && drivers?.length > 0 && (
+      {MOSTRAR_CUADRANTE && !cargando && drivers?.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-xl border border-dark-800 bg-dark-900/60 px-3 py-2.5">
           <div className="flex overflow-hidden rounded-lg border border-dark-700">
             {[['cuadrante', `Del cuadrante (${(drivers || []).length - sobran.length})`],
@@ -1184,7 +1206,7 @@ export default function Turnos() {
       {/* Gente con ficha activa que no aparece en el cuadrante. Es la queja
           real: 'hay gente que no está en la empresa'. No se puede adivinar
           quién es baja, pero sí se puede señalar y dar el botón. */}
-      {!cargando && quien === 'cuadrante' && sobran.length > 0 && (
+      {MOSTRAR_CUADRANTE && !cargando && quien === 'cuadrante' && sobran.length > 0 && (
         <div className="rounded-xl border border-dark-800 bg-dark-900/40 px-3.5 py-2.5">
           <p className="text-[12.5px] text-dark-400">
             <b className="text-dark-200">{sobran.length}</b> {sobran.length === 1 ? 'persona tiene' : 'personas tienen'} ficha
@@ -1203,7 +1225,7 @@ export default function Turnos() {
         </div>
       )}
 
-      {confirmarBaja && (
+      {MOSTRAR_CUADRANTE && confirmarBaja && (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-red-500/40 bg-red-500/[0.08] px-3.5 py-3">
           <AlertTriangle size={16} className="shrink-0 text-red-400" />
           <p className="flex-1 text-[13px] text-red-100">
@@ -1221,7 +1243,7 @@ export default function Turnos() {
         </div>
       )}
 
-      {choques.size > 0 && (
+      {MOSTRAR_CUADRANTE && choques.size > 0 && (
         <div className="flex items-start gap-2.5 rounded-xl border border-red-500/40 bg-red-500/[0.08] px-3.5 py-3">
           <AlertTriangle size={16} className="mt-0.5 shrink-0 text-red-400" />
           <div>
@@ -1236,7 +1258,7 @@ export default function Turnos() {
         </div>
       )}
 
-      {!cargando && drivers?.length > 0 && (
+      {MOSTRAR_CUADRANTE && !cargando && drivers?.length > 0 && (
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={() => setVerRejilla((v) => !v)}
             className="flex items-center gap-1.5 rounded-lg border border-dark-800 bg-dark-900/60 px-3 py-1.5 text-[12.5px] font-semibold text-dark-300 transition hover:text-dark-100">
@@ -1252,6 +1274,8 @@ export default function Turnos() {
         </div>
       )}
 
+      {/* la rejilla del cuadrante */}
+      {MOSTRAR_CUADRANTE && (<>
       {cargando ? (
         <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={18} /> {t('ui.loading')}</div>
       ) : !drivers?.length ? (
@@ -1475,6 +1499,7 @@ export default function Turnos() {
           </table>
         </div>
       )}
+      </>)}
 
       {/* (La leyenda vieja estaba aqui, entre la tabla y los paneles. Se quito
           el 22-08-2026: duplicaba la de abajo y decia 'pulsa una celda para
@@ -1606,7 +1631,7 @@ export default function Turnos() {
         </div>
       )}
 
-      {verPegar && (
+      {MOSTRAR_CUADRANTE && verPegar && (
         <div className="card p-4">
           <div className="mb-2 flex items-center gap-2">
             <ClipboardPaste size={16} className="text-brand-400" />
@@ -1636,7 +1661,7 @@ export default function Turnos() {
         </div>
       )}
 
-      {verBloqueos && (
+      {MOSTRAR_CUADRANTE && verBloqueos && (
         <div className="card p-4">
           <div className="mb-2 flex items-center gap-2">
             <Ban size={16} className="text-red-400" />
@@ -1708,7 +1733,7 @@ export default function Turnos() {
         </div>
       )}
 
-      {!cargando && drivers?.length > 0 && (
+      {MOSTRAR_CUADRANTE && !cargando && drivers?.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-1 text-[11px] text-dark-500">
           {/* Agrupada por FAMILIA de color, que es como se lee: primero ves de
               qué color es y luego, si hace falta, qué pone. Una leyenda de
@@ -1736,7 +1761,7 @@ export default function Turnos() {
         </div>
       )}
 
-      {previa && (
+      {MOSTRAR_CUADRANTE && previa && (
         <div className="card border border-brand-500/30 p-4">
           <h2 className="mb-1 flex items-center gap-2 text-sm font-bold text-dark-100">
             <Upload size={16} /> Esto es lo que voy a importar
@@ -1891,6 +1916,16 @@ export default function Turnos() {
           {solicitudes.length > 0 && (
             <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[11px] font-bold text-amber-300">{solicitudes.length}</span>
           )}
+          {/* El boton del historial vivia en la barra del cuadrante, que ahora
+              esta escondida: sin esto, el historial existia y no habia forma
+              humana de abrirlo. Es el mismo fallo del gotcha 27 —una pantalla
+              a la que no se llega no existe— y por eso se mueve aqui. */}
+          <button onClick={() => setVerHistorial((v) => !v)}
+            className={`ml-auto flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[12px] font-semibold transition ${
+              verHistorial ? 'border-brand-500/50 bg-brand-500/15 text-brand-300'
+                : 'border-dark-800 bg-dark-900/60 text-dark-300 hover:text-dark-100'}`}>
+            <History size={14} /> Historial
+          </button>
         </h2>
         {solicitudes.length === 0 ? (
           <p className="text-sm text-dark-500">{t('turns.no.requests')}</p>
@@ -1945,7 +1980,7 @@ export default function Turnos() {
         )}
       </div>
 
-      {min > 0 && (
+      {MOSTRAR_CUADRANTE && min > 0 && (
         <p className="flex items-center gap-1.5 text-xs text-dark-600">
           <AlertTriangle size={12} /> {t('turns.min').replace('{n}', min)}
         </p>

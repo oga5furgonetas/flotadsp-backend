@@ -19934,6 +19934,31 @@ async def create_shift_request(data: dict = Body(...), user: dict = Depends(requ
             "ignorados": [d for d in limpias if d in ya], "requests": filas}
 
 
+@api_router.get("/shift-requests/pendientes")
+async def contar_peticiones_pendientes(center: Optional[str] = None,
+                                       user: dict = Depends(require_admin)):
+    """Cuantas peticiones de dias estan sin contestar. Para el aviso del menu.
+
+    Se cuentan PETICIONES, no personas: dos conductores con tres peticiones
+    entre los dos son 3, porque hay que contestar tres veces. `personas` va
+    aparte por si alguna pantalla quiere decir "2 personas, 3 peticiones".
+
+    Endpoint propio y no `/shift-requests?status=pendiente` porque esto lo pide
+    el menu cada dos minutos en TODAS las pantallas: la lista devuelve hasta
+    mil documentos enteros —con nombre y motivo— para acabar mirando su
+    longitud. Aqui lo cuenta Mongo y viajan dos numeros.
+
+    OJO AL ORDEN: va declarado ANTES que cualquier `/shift-requests/{algo}`.
+    FastAPI casa por orden de declaracion y, puesto despues, la palabra
+    'pendientes' entraria como si fuera un id (gotcha del /work-orders/export).
+    """
+    filtro = dict(_filtro_centro(user, center))
+    filtro["status"] = "pendiente"
+    n = await db.shift_requests.count_documents(filtro)
+    personas = len(await db.shift_requests.distinct("driver_id", filtro)) if n else 0
+    return {"pendientes": n, "personas": personas}
+
+
 @api_router.get("/shift-requests")
 async def list_shift_requests(center: Optional[str] = None, status: Optional[str] = None,
                               desde: Optional[str] = None, hasta: Optional[str] = None,

@@ -9,7 +9,7 @@ import {
   PackageSearch, PackageCheck, MapPin, Timer, MapPinned,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
-import { getMe } from './api'
+import { getMe, contarPeticionesPendientes } from './api'
 import TrialBanner from './TrialBanner'
 import CommandPalette from './CommandPalette'
 import { BotonAyuda, PanelAyuda, PrimerosPasos } from './Ayuda'
@@ -33,12 +33,22 @@ const ROUTE_FEATURE = {
 // Vencimientos fusiona en una página ITV + Renting + Casas de alquiler; las rutas
 // antiguas siguen vivas (deep-links, paleta ⌘K) — solo cambia la navegación.
 // Cada grupo tiene identidad propia: icono en chip de color + etiqueta grande.
+/* ── AVISOS DEL MENU ───────────────────────────────────────────────────────
+   Ruta -> cuantas cosas hay esperando respuesta en ella. Se pinta en rojo al
+   lado del nombre. Vive aparte del menu para que anadir un aviso nuevo sea una
+   linea y no haya que tocar el render. */
+const AVISOS = {
+  '/panel/turnos': ({ peticionesPend }) => peticionesPend,
+}
+
 const NAV_DEF = [
   { g: 'nav.g.today', gIcon: Sun, iconCls: 'text-amber-400', iconBg: 'bg-amber-500/10', items: [
     { to: '/panel', labelKey: 'nav.dashboard', icon: LayoutDashboard, end: true },
     { to: '/panel/mi-dia', labelKey: 'nav.miDia', icon: Sun },
     { to: '/panel/actividad', labelKey: 'nav.activity', icon: Activity },
   ]},
+  // Nada mas: aqui solo va lo que hay que CONTESTAR, no lo que hay que hacer.
+  // Un numero rojo permanente en el menu deja de mirarse a los dos dias.
   { g: 'nav.g.dailyops', gIcon: Zap, iconCls: 'text-sky-400', iconBg: 'bg-sky-500/10', items: [
     { to: '/panel/paquetes', labelKey: 'nav.pkgintel', icon: PackageSearch },
     { to: '/panel/debrief', labelKey: 'nav.debrief', icon: PackageCheck },
@@ -185,6 +195,39 @@ export default function PanelLayout() {
 
   useEffect(() => { localStorage.setItem('panel_center', center) }, [center])
 
+  /* ── PETICIONES DE DIAS SIN CONTESTAR, EN EL MENU ────────────────────────
+     Dani: "si tengo 1 persona por contestar pon 1, si tengo 2 personas pero 3
+     solicitudes pon 3, en rojo, para que nunca se me pase".
+
+     Se cuentan PETICIONES y no personas: hay que contestar tres veces. El aviso
+     tiene que verse desde CUALQUIER pantalla —por eso vive aqui y no en la
+     pagina de Días libres, donde solo lo veria quien ya ha entrado a mirar, que
+     es justo el que no lo necesita.
+
+     Se vuelve a preguntar cada 2 minutos y al volver a la pestana, con el mismo
+     patron que los permisos. Si la peticion falla NO se pone a cero: se deja el
+     ultimo numero bueno, porque un cero falso es la unica respuesta que hace
+     que alguien deje de mirar. */
+  const [peticionesPend, setPeticionesPend] = useState(0)
+  useEffect(() => {
+    if (!isAuthed()) return
+    let vivo = true
+    const mirar = () => {
+      if (!vivo || !isAuthed() || document.hidden) return
+      contarPeticionesPendientes(center)
+        .then((r) => { if (vivo) setPeticionesPend(r.data?.pendientes || 0) })
+        .catch(() => {})
+    }
+    mirar()
+    const id = setInterval(mirar, 120000)
+    document.addEventListener('visibilitychange', mirar)
+    return () => {
+      vivo = false
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', mirar)
+    }
+  }, [center])
+
   /* Permisos frescos al abrir el panel.
 
      El JWT dura 72 h y lleva dentro los permisos del momento del login, asi que
@@ -247,7 +290,12 @@ export default function PanelLayout() {
   }
   // Menú agrupado (traducido) + lista plana para guard/paleta/móvil
   const groups = NAV_DEF
-    .map((g) => ({ ...g, key: g.g, g: t(g.g), items: g.items.filter(itemVisible).map((it) => ({ ...it, label: t(it.labelKey) })) }))
+    .map((g) => ({ ...g, key: g.g, g: t(g.g), items: g.items.filter(itemVisible).map((it) => ({
+      ...it, label: t(it.labelKey),
+      // El aviso se cuelga aqui, del sitio donde ya se traduce el menu, para
+      // que cualquier entrada futura solo tenga que anadir su clave a AVISOS.
+      aviso: AVISOS[it.to] ? AVISOS[it.to]({ peticionesPend }) : 0,
+    })) }))
     .filter((g) => g.items.length > 0)
   const flatItems = groups.flatMap((g) => g.items)
 
@@ -353,6 +401,20 @@ export default function PanelLayout() {
                       >
                         <it.icon size={16} />
                         {it.label}
+                        {/* En rojo y no en ambar a proposito: esto es trabajo
+                            parado esperando una respuesta, no un aviso de que
+                            algo va justo. `ml-auto` lo manda al borde derecho
+                            para que la columna de numeros se lea de un vistazo
+                            sin tener que buscarlos entre los nombres.
+                            Y red-600, no red-500: el checker de contraste midio
+                            el blanco sobre red-500 en 3,76:1, por debajo del 4,5
+                            de la WCAG, y a 11 px eso se lee mal de verdad. */}
+                        {it.aviso > 0 && (
+                          <span className="ml-auto min-w-[20px] rounded-full bg-red-600 px-1.5 py-0.5 text-center text-[11px] font-bold leading-none text-white"
+                            title={`${it.aviso} ${it.aviso === 1 ? 'petición sin contestar' : 'peticiones sin contestar'}`}>
+                            {it.aviso > 99 ? '99+' : it.aviso}
+                          </span>
+                        )}
                       </NavLink>
                     ))}
                   </div>
