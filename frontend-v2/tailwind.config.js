@@ -4,12 +4,22 @@ export default {
   theme: {
     extend: {
       colors: {
+        /* LA RAMPA SALE DEL LOGO, medida sobre el propio archivo:
+           cian #14E7D8, azul #0AACD3, fondo #040710. Antes era el naranja que
+           trae Tailwind de serie, que no aparece en ninguna parte de la marca:
+           el logo y el producto no se parecían en nada.
+
+           El 400 es EL cian del logo y va en el botón principal. Ojo con el
+           texto que lleva encima: es tan claro que en blanco da 1,7:1 y no se
+           lee — tiene que ser tinta oscura, que da 11:1. Por eso existe
+           `--brand-tinta`, con valor FIJO: no puede salir de la rampa `dark`,
+           que se invierte en modo día y dejaría texto claro sobre cian claro. */
         brand: {
-          200: '#fed7aa',
-          300: '#fdba74',
-          400: '#fb923c',
-          500: '#f97316',
-          600: '#ea6800',
+          200: '#B8F5EE',
+          300: '#5FE3D8',
+          400: '#14E7D8',
+          500: '#0FC2BC',
+          600: '#0AACD3',
         },
         /* Carbón neutro (sin sesgo azul), servido por variables CSS: el modo
            claro invierte la rampa en :root (index.css) y TODA la app se

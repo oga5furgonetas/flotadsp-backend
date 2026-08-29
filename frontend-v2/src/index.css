@@ -14,30 +14,43 @@
    hallazgos de una sola vez. Si alguien lo aclara "porque queda mejor", el
    checker lo caza. */
 :root {
-  --dk-50: 245 245 247;
-  --dk-100: 231 231 234;
-  --dk-200: 207 207 212;
-  --dk-300: 176 176 184;
-  --dk-400: 143 143 152;
-  --dk-500: 128 128 137;
-  --dk-600: 75 75 83;
-  --dk-700: 51 51 56;
-  --dk-800: 34 34 38;
-  --dk-900: 19 19 21;
-  --dk-950: 10 10 11;
+  /* Rampa con el TINTE AZUL del logo (#040710 es su fondo, un carbon azulado,
+     no un negro neutro). Se mantiene el brillo de cada escalon y solo se
+     desplaza el tono: asi la marca y el producto parecen la misma cosa sin
+     tocar un solo contraste. `check-contraste.mjs` lo verifica en los 3 temas. */
+  --dk-50: 243 246 250;
+  --dk-100: 228 233 240;
+  --dk-200: 204 211 221;
+  --dk-300: 173 182 195;
+  --dk-400: 140 150 165;
+  --dk-500: 125 134 149;
+  --dk-600: 72 81 95;
+  --dk-700: 48 56 67;
+  --dk-800: 31 38 49;
+  --dk-900: 16 22 32;
+  --dk-950: 6 10 20;
+  /* Tinta del boton de marca. FIJA a proposito: si saliera de la rampa `dark`
+     se invertiria en modo dia y quedaria texto claro sobre cian claro. */
+  --brand-tinta: 4 22 26;
 }
 html[data-panel-theme='light'] {
-  --dk-50: 17 17 20;    /* tinta */
-  --dk-100: 34 34 40;
-  --dk-200: 48 48 54;
-  --dk-300: 64 64 72;
-  --dk-400: 96 96 106;
-  --dk-500: 110 110 120;
-  --dk-600: 128 128 138;
-  --dk-700: 210 209 205; /* bordes */
-  --dk-800: 233 232 228; /* rellenos suaves */
-  --dk-900: 251 250 248; /* superficies */
-  --dk-950: 244 243 240; /* papel cálido */
+  /* Papel FRIO, no calido. El beige de antes peleaba con el cian del logo:
+     dos temperaturas distintas en la misma pantalla. */
+  --dk-50: 15 19 26;    /* tinta */
+  --dk-100: 31 37 47;
+  --dk-200: 45 52 63;
+  --dk-300: 60 68 81;
+  --dk-400: 92 101 116;
+  /* Oscurecido tras tenir la rampa de azul: en 106 116 131 se quedaba en
+     4,40:1 sobre `bg-dark-900/40`, justo por debajo del 4,5:1 de la AA.
+     Lo cazo `check-contraste.mjs`, no el ojo — es el gris de texto
+     secundario y afecta a las 30 pantallas por igual. */
+  --dk-500: 96 106 121;
+  --dk-600: 124 134 149;
+  --dk-700: 208 212 219; /* bordes */
+  --dk-800: 231 235 241; /* rellenos suaves */
+  --dk-900: 250 252 254; /* superficies */
+  --dk-950: 243 246 250; /* papel frio */
   color-scheme: light;
 }
 
@@ -88,15 +101,15 @@ html[data-panel-theme='light'] .text-sky-300, html[data-panel-theme='light'] .te
 html[data-panel-theme='light'] .text-violet-300, html[data-panel-theme='light'] .text-violet-400 { color: #6d28d9; }
 html[data-panel-theme='light'] .text-purple-200, html[data-panel-theme='light'] .text-purple-300 { color: #6d28d9; }
 html[data-panel-theme='light'] .text-zinc-300 { color: #3f3f46; }
-html[data-panel-theme='light'] .text-brand-300 { color: #c2410c; }
-html[data-panel-theme='light'] .text-brand-400 { color: #ea580c; }
-html[data-panel-theme='light'] .text-brand-400\/80 { color: rgba(234, 88, 12, 0.85); }
+html[data-panel-theme='light'] .text-brand-300 { color: #076E7C; }
+html[data-panel-theme='light'] .text-brand-400 { color: #0A8195; }
+html[data-panel-theme='light'] .text-brand-400\/80 { color: rgba(10, 129, 149, 0.9); }
 html[data-panel-theme='light'] .text-amber-600 { color: #92400e; }
 html[data-panel-theme='light'] .text-emerald-600 { color: #065f46; }
 html[data-panel-theme='light'] .text-amber-200 { color: #92400e; }
 html[data-panel-theme='light'] .text-emerald-200 { color: #065f46; }
 html[data-panel-theme='light'] .text-red-200 { color: #991b1b; }
-html[data-panel-theme='light'] .text-brand-200 { color: #9a3412; }
+html[data-panel-theme='light'] .text-brand-200 { color: #075965; }
 
 /* Texto "slate" heredado (pensado para fondo oscuro) → tinta en modo día */
 html[data-panel-theme='light'] .text-slate-100, html[data-panel-theme='light'] .text-slate-200 { color: #27272d; }
@@ -177,8 +190,8 @@ html[data-panel-theme='light'] [class*='hover:text-white']:hover { color: rgb(va
   th, td, .tabular { font-variant-numeric: tabular-nums; }
 
   ::selection {
-    background: rgba(249, 115, 22, 0.35);
-    color: #fff;
+    background: rgba(20, 231, 216, 0.28);
+    color: rgb(var(--dk-50));
   }
 
   /* Scrollbars finos y discretos (webkit + firefox) */
@@ -243,11 +256,13 @@ html[data-panel-theme='light'] [class*='hover:text-white']:hover { color: rgb(va
      y distinguirse del secundario, y eso lo hace el color de fondo solo.
      El movimiento al pasar por encima estorbaba al recorrer listas largas:
      con 129 furgonetas o 200 conductores, cada fila saltando es ruido. */
+  /* Cian del logo con TINTA OSCURA. En blanco daria 1,7:1 y no se leeria. */
   .btn-primary {
-    @apply rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white
+    @apply rounded-md bg-brand-400 px-4 py-2 text-sm font-semibold
            transition-colors duration-100
-           hover:bg-brand-500 active:bg-brand-600
+           hover:bg-brand-300 active:bg-brand-500
            disabled:cursor-not-allowed disabled:opacity-45;
+    color: rgb(var(--brand-tinta));
   }
   .btn-secondary {
     @apply rounded-md border border-dark-700 bg-dark-800 px-4 py-2 text-sm font-medium
@@ -504,15 +519,15 @@ html[data-panel-theme='hibrido'] main .text-violet-400 { color: #6d28d9; }
 html[data-panel-theme='hibrido'] main .text-purple-200,
 html[data-panel-theme='hibrido'] main .text-purple-300 { color: #6d28d9; }
 html[data-panel-theme='hibrido'] main .text-zinc-300 { color: #3f3f46; }
-html[data-panel-theme='hibrido'] main .text-brand-300 { color: #c2410c; }
-html[data-panel-theme='hibrido'] main .text-brand-400 { color: #ea580c; }
-html[data-panel-theme='hibrido'] main .text-brand-400\/80 { color: rgba(234, 88, 12, 0.85); }
+html[data-panel-theme='hibrido'] main .text-brand-300 { color: #076E7C; }
+html[data-panel-theme='hibrido'] main .text-brand-400 { color: #0A8195; }
+html[data-panel-theme='hibrido'] main .text-brand-400\/80 { color: rgba(10, 129, 149, 0.9); }
 html[data-panel-theme='hibrido'] main .text-amber-600 { color: #92400e; }
 html[data-panel-theme='hibrido'] main .text-emerald-600 { color: #065f46; }
 html[data-panel-theme='hibrido'] main .text-amber-200 { color: #92400e; }
 html[data-panel-theme='hibrido'] main .text-emerald-200 { color: #065f46; }
 html[data-panel-theme='hibrido'] main .text-red-200 { color: #991b1b; }
-html[data-panel-theme='hibrido'] main .text-brand-200 { color: #9a3412; }
+html[data-panel-theme='hibrido'] main .text-brand-200 { color: #075965; }
 html[data-panel-theme='hibrido'] main .text-slate-100,
 html[data-panel-theme='hibrido'] main .text-slate-200 { color: #27272d; }
 html[data-panel-theme='hibrido'] main .text-slate-300 { color: #33333c; }

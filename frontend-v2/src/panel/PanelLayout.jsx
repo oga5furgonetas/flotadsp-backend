@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Trophy, Users, CalendarClock, CalendarCheck, BarChart3, Activity,
@@ -6,7 +6,7 @@ import {
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX,
-  PackageSearch, PackageCheck, MapPin, Timer, MapPinned,
+  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, UserCircle2, Languages,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
 import { getMe, contarPeticionesPendientes } from './api'
@@ -98,6 +98,100 @@ const PALETTE_EXTRA = [
   { to: '/panel/casas-alquiler', labelKey: 'nav.rental', icon: Building2, key: 'casas-alquiler' },
 ]
 const EXPIRY_KEYS = ['avisos-itv', 'renting', 'casas-alquiler']
+
+/* ── MENU DE USUARIO ───────────────────────────────────────────────────────
+   Arriba a la derecha, que es donde lo busca todo el mundo. Antes vivia al
+   FONDO del sidebar, debajo de treinta entradas de menu: para cerrar sesion o
+   cambiar de idioma habia que bajar toda la barra.
+
+   Se cierra al pulsar fuera y con Escape. Sin lo segundo, en un portatil con
+   el trackpad ocupado hay que buscar un hueco vacio de la pantalla para
+   cerrarlo, y en esta app casi no hay huecos vacios. */
+function MenuUsuario({ admin, showAdmin, lang, setLang, langs, onLogout, t }) {
+  const [abierto, setAbierto] = useState(false)
+  const caja = useRef(null)
+
+  useEffect(() => {
+    if (!abierto) return
+    const fuera = (e) => { if (caja.current && !caja.current.contains(e.target)) setAbierto(false) }
+    const esc = (e) => { if (e.key === 'Escape') setAbierto(false) }
+    document.addEventListener('mousedown', fuera)
+    document.addEventListener('keydown', esc)
+    return () => {
+      document.removeEventListener('mousedown', fuera)
+      document.removeEventListener('keydown', esc)
+    }
+  }, [abierto])
+
+  // Iniciales del nombre. Con una sola palabra se cogen sus dos primeras
+  // letras: 'D' solo en un circulo no identifica a nadie.
+  const nombre = admin?.name || 'Admin'
+  const trozos = nombre.trim().split(/\s+/).filter(Boolean)
+  const iniciales = (trozos.length > 1
+    ? trozos[0][0] + trozos[1][0]
+    : nombre.slice(0, 2)).toUpperCase()
+
+  return (
+    <div className="relative" ref={caja}>
+      <button
+        onClick={() => setAbierto((v) => !v)}
+        aria-haspopup="menu"
+        aria-expanded={abierto}
+        className={`flex items-center gap-2 rounded-lg border px-1.5 py-1 transition-colors ${
+          abierto ? 'border-dark-600 bg-dark-800' : 'border-transparent hover:bg-dark-800/70'}`}
+      >
+        <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-brand-400 text-[11px] font-bold"
+              style={{ color: 'rgb(var(--brand-tinta))' }}>
+          {iniciales}
+        </span>
+        <span className="hidden text-left leading-tight sm:block">
+          <span className="block max-w-[130px] truncate text-[12.5px] font-semibold text-dark-100">{nombre}</span>
+          <span className="block text-[10.5px] text-dark-500">
+            {showAdmin ? 'Super-admin' : t('nav.admin')}
+          </span>
+        </span>
+        <ChevronDown size={13} className={`flex-none text-dark-400 transition-transform ${abierto ? 'rotate-180' : ''}`} />
+      </button>
+
+      {abierto && (
+        <div role="menu"
+             className="absolute right-0 z-50 mt-1.5 w-60 overflow-hidden rounded-lg border border-dark-700 bg-dark-900 shadow-xl shadow-black/40">
+          <div className="border-b border-dark-800 px-3 py-2.5">
+            <p className="truncate text-[13px] font-semibold text-dark-100">{nombre}</p>
+            <p className="truncate text-[11px] text-dark-500">
+              {showAdmin ? 'Super-admin' : t('nav.admin')}
+            </p>
+          </div>
+
+          <NavLink to="/panel/perfil" onClick={() => setAbierto(false)} role="menuitem"
+            className="flex items-center gap-2.5 px-3 py-2 text-[13px] text-dark-200 hover:bg-dark-800">
+            <UserCircle2 size={15} className="text-dark-400" /> {t('nav.profile')}
+          </NavLink>
+          <NavLink to="/panel/portal-conductor" onClick={() => setAbierto(false)} role="menuitem"
+            className="flex items-center gap-2.5 px-3 py-2 text-[13px] text-dark-200 hover:bg-dark-800">
+            <Shield size={15} className="text-dark-400" /> {t('nav.portal')}
+          </NavLink>
+
+          {/* El idioma vive aqui y no suelto en la barra: se cambia una vez y
+              ocupaba sitio fijo en una cabecera que ya iba llena. */}
+          <div className="flex items-center gap-2.5 border-t border-dark-800 px-3 py-2">
+            <Languages size={15} className="flex-none text-dark-400" />
+            <select value={lang} onChange={(e) => setLang(e.target.value)}
+              className="w-full rounded-md border border-dark-700 bg-dark-800 px-2 py-1 text-[12.5px] font-medium text-dark-200 focus:outline-none">
+              {Object.entries(langs).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          </div>
+
+          <button onClick={() => { setAbierto(false); onLogout() }} role="menuitem"
+            className="flex w-full items-center gap-2.5 border-t border-dark-800 px-3 py-2 text-left text-[13px] text-dark-200 hover:bg-dark-800">
+            <LogOut size={15} className="text-dark-400" /> {t('nav.logout')}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 
 export default function PanelLayout() {
   const nav = useNavigate()
@@ -471,13 +565,6 @@ export default function PanelLayout() {
             <span className="flex items-center gap-2"><Shield size={15} /> {t('nav.portal')}</span>
             <ChevronRight size={14} />
           </NavLink>
-          <div className="mt-2 flex items-center justify-between">
-            <NavLink to="/panel/perfil" className="min-w-0 rounded-lg px-1 hover:bg-dark-800">
-              <div className="truncate text-sm font-medium text-dark-100">{admin?.name || 'Admin'}</div>
-              <div className="text-[11px] text-dark-500">{showAdmin ? `Super-admin · ${t('nav.profile')}` : `${t('nav.admin')} · ${t('nav.profile')}`}</div>
-            </NavLink>
-            <button onClick={doLogout} className="btn-ghost p-2" title={t('nav.logout')}><LogOut size={16} /></button>
-          </div>
         </div>
       </div>
       </aside>
@@ -535,16 +622,6 @@ export default function PanelLayout() {
             </span>
           </button>
 
-          {/* Selector de idioma */}
-          <select
-            value={lang}
-            onChange={(e) => setLang(e.target.value)}
-            className="rounded-lg border border-dark-700 bg-dark-800 px-2 py-1 text-xs font-semibold text-dark-300 focus:outline-none"
-            title="Idioma"
-          >
-            {Object.entries(LANGS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
-
           {/* Filtro de CENTRO — si solo tiene 1 centro asignado se muestra fijo */}
           <div className="flex items-center gap-1 rounded-lg bg-dark-800/60 p-1">
             {singleCenter ? (
@@ -565,6 +642,9 @@ export default function PanelLayout() {
               ))
             )}
           </div>
+
+          <MenuUsuario admin={admin} showAdmin={showAdmin} lang={lang} setLang={setLang}
+            langs={LANGS} onLogout={doLogout} t={t} />
         </header>
 
         {/* navegación móvil rápida */}
