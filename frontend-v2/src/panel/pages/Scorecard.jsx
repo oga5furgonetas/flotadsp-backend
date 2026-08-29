@@ -7,7 +7,7 @@ import {
   ChevronDown, ChevronUp, RotateCcw, ExternalLink, BookOpen, AlertCircle,
 } from 'lucide-react'
 import {
-  getScorecardFull, setScorecardValue,
+  getScorecardFull, setScorecardValue, getScorecardEnVivo,
   getScorecardPredict, getScorecardDailyTrend,
   getScorecardSources, uploadScorecard, getScorecardUmbrales,
   setScorecardThreshold, toggleScorecardEstimacion,
@@ -696,6 +696,133 @@ function BaremosEditor({ full, center, onSaved }) {
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
+/* ── CÓMO VA LA SEMANA, HOY ────────────────────────────────────────────────
+   La scorecard oficial de Amazon llega con semanas de retraso: la última
+   cargada es la 29 y estamos en la 35. Cuando ves que el DCR se hundió, esa
+   semana lleva un mes cerrada.
+
+   Esto NO predice: cuenta lo que YA ha pasado, con los paquetes de Cortex, y
+   lo compara contra los umbrales oficiales que la app ya tiene. Un acumulado
+   real no se equivoca; una predicción con cinco semanas de histórico sí. */
+function ComoVaLaSemana({ center }) {
+  const [d, setD] = useState(null)
+  const [cargando, setCargando] = useState(true)
+
+  useEffect(() => {
+    setCargando(true)
+    getScorecardEnVivo(center, 6)
+      .then((r) => setD(r.data))
+      .catch(() => setD(null))
+      .finally(() => setCargando(false))
+  }, [center])
+
+  if (cargando) {
+    return (
+      <div className="card flex items-center gap-2 p-5 text-[13px] text-dark-400">
+        <Loader2 size={14} className="animate-spin" /> Contando los paquetes de esta semana…
+      </div>
+    )
+  }
+  if (!d?.semanas?.length) return null
+
+  const actual = d.semanas.find((s) => s.es_la_actual) || d.semanas[0]
+  const dias = d.dias || []
+  const cerrados = dias.filter((x) => x.cerrado && x.dcr != null)
+  // La referencia es la MEDIANA de los días cerrados, no la media: un solo día
+  // malo arrastra la media y entonces el día malo deja de parecer malo.
+  const orden = [...cerrados].map((x) => x.dcr).sort((a, b) => a - b)
+  const mediana = orden.length ? orden[Math.floor(orden.length / 2)] : null
+  const ultimos = cerrados.slice(-3)
+  // Un día por debajo de la mediana menos punto y medio no es ruido: con 5.000
+  // paquetes al día, eso son 75 entregas que no salieron.
+  const malos = mediana != null ? ultimos.filter((x) => x.dcr < mediana - 1.5) : []
+
+  const tierCls = (t) => t === 'Fantastic Plus' || t === 'Fantastic' ? 'text-lime-300'
+    : t === 'Great' ? 'text-yellow-300' : t === 'Fair' ? 'text-orange-300'
+      : t === 'Poor' ? 'text-red-300' : 'text-dark-500'
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-dark-800 px-4 py-2.5">
+        <span className="text-xs font-semibold uppercase tracking-wide text-dark-300">
+          Cómo va la semana {actual.semana}
+        </span>
+        <span className="cifra text-[22px] font-semibold leading-none text-dark-50">{actual.dcr}%</span>
+        <span className={`text-[11px] font-semibold uppercase tracking-wide ${tierCls(actual.tier)}`}>
+          {actual.tier || '—'}
+        </span>
+        <span className="ml-auto text-[11.5px] text-dark-500">
+          <span className="cifra">{actual.entregados.toLocaleString('es')}</span> entregados ·{' '}
+          <span className="cifra text-orange-300">{actual.fallos}</span> fallos
+          {actual.en_vuelo > 0 && <> · <span className="cifra">{actual.en_vuelo}</span> aún en la calle</>}
+        </span>
+      </div>
+
+      {/* El aviso solo sale cuando hay algo que decir. Un panel que siempre
+          enseña una alerta deja de leerse a la semana. */}
+      {malos.length > 0 && (
+        <div className="border-b border-dark-800 bg-orange-500/[0.07] px-4 py-2.5">
+          <p className="text-[12.5px] text-orange-200">
+            {malos.length === 1 ? 'El ' : 'Los días '}
+            {malos.map((x, i) => (
+              <span key={x.fecha}>
+                {i > 0 && ', '}
+                <span className="cifra font-semibold">{x.fecha.slice(8)}/{x.fecha.slice(5, 7)}</span>
+                {' '}(<span className="cifra">{x.dcr}%</span>)
+              </span>
+            ))}
+            {' '}por debajo de lo normal, que ronda el <span className="cifra">{mediana}%</span>.
+            {' '}Son <span className="cifra font-semibold">{malos.reduce((s, x) => s + x.fallos, 0)}</span> paquetes
+            que no salieron.
+          </p>
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[520px] text-[13px]">
+          <thead>
+            <tr className="border-b border-dark-800">
+              <th className="px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Día</th>
+              <th className="px-3 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">Entregados</th>
+              <th className="px-3 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">Fallos</th>
+              <th className="px-3 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">DCR</th>
+              <th className="px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {dias.slice(-10).reverse().map((x) => {
+              const malo = mediana != null && x.cerrado && x.dcr != null && x.dcr < mediana - 1.5
+              return (
+                <tr key={x.fecha} className="border-b border-dark-800/50 last:border-0">
+                  <td className="cifra px-3 py-1.5 text-dark-300">{x.fecha}</td>
+                  <td className="cifra px-3 py-1.5 text-right text-dark-300">{x.entregados.toLocaleString('es')}</td>
+                  <td className={`cifra px-3 py-1.5 text-right ${x.fallos > 40 ? 'text-orange-300' : 'text-dark-500'}`}>
+                    {x.fallos || '—'}
+                  </td>
+                  <td className={`cifra px-3 py-1.5 text-right font-semibold ${malo ? 'text-orange-300' : 'text-dark-200'}`}>
+                    {x.dcr != null ? `${x.dcr}%` : '—'}
+                  </td>
+                  <td className="px-3 py-1.5 text-[11px] text-dark-600">
+                    {!x.cerrado && `${x.en_vuelo} en la calle`}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <p className="border-t border-dark-800 px-3 py-2 text-[11.5px] leading-relaxed text-dark-500">
+        Contado sobre los paquetes de Cortex, no es una predicción. Los días con paquetes
+        aún en la furgoneta no cuentan para el acumulado: todavía pueden entregarse.
+        {d.umbral_dcr?.fantastic && <> El umbral de Fantastic de tu nave es{' '}
+          <span className="cifra">{d.umbral_dcr.fantastic}%</span>.</>}
+      </p>
+    </div>
+  )
+}
+
+
 export default function Scorecard() {
   const { center } = useOutletContext()
   const { t } = useT()
@@ -968,6 +1095,10 @@ export default function Scorecard() {
                   )
                 })}
               </div>
+
+              {/* Lo primero: como va la semana EN CURSO. La tabla de abajo
+                  es la ultima oficial, que puede tener un mes. */}
+              <ComoVaLaSemana center={center} />
 
               <TablaMetricas metricas={full.metrics || []} weekSun={full.week}
                 center={center} onSaved={reload} />

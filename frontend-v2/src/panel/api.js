@@ -325,6 +325,11 @@ export const dispararSeguimientoTalleres = () => api.post('/work-orders/seguimie
 /* Las furgonetas ordenadas por lo que arrastran. Los golpes y los dias son
    HECHOS; los euros los estima la IA sobre las fotos y no estan calibrados con
    ninguna factura — la pantalla lo dice. */
+/* El DCR real de esta semana contado desde Cortex, contra el umbral de la nave.
+   NO predice: la scorecard oficial llega con semanas de retraso y esto cuenta
+   lo que ya ha pasado. */
+export const getScorecardEnVivo = (center, semanas) =>
+  api.get('/scorecard/en-vivo', { params: { ...centerParam(center), ...(semanas ? { semanas } : {}) } })
 export const getExposicionVehiculos = (center) =>
   api.get('/vehicles/exposicion', { params: centerParam(center) })
 export const getAtribucionDanos = (center, dias) =>

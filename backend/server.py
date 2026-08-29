@@ -44,6 +44,7 @@ import uuid
 import secrets
 import base64
 import logging
+import math
 
 # =========================
 # PATHS + ENV
@@ -25554,6 +25555,122 @@ async def scorecard_estimacion(data: dict = Body(...), _=Depends(require_admin))
         {"center": center, "week": sun},
         {"$set": {"center": center, "week": sun, "estimar": on}}, upsert=True)
     return {"ok": True, "estimacion": on}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# COMO VA LA SEMANA, HOY
+# ═══════════════════════════════════════════════════════════════════════════
+# EL PROBLEMA. La scorecard de Amazon llega con semanas de retraso: la ultima
+# oficial cargada es la 29 y estamos en la 35. Cuando por fin ves que el DCR se
+# hundio, esa semana lleva un mes cerrada y no hay nada que hacer.
+#
+# ESTO NO PREDICE NADA, Y ESA ES LA GRACIA. No hay modelo, no hay tendencia
+# extrapolada, no hay "vas camino de". Se cuenta lo que YA ha pasado esta
+# semana con los paquetes de Cortex —256.663 guardados, con su estado y su
+# dia— y se compara contra los umbrales oficiales que ya tiene la app.
+# Un acumulado real no se equivoca; una prediccion con 5 semanas de historico
+# si, y mucho.
+#
+# `daily_ratios` esta VACIA y por eso `/scorecard/daily-trend` no devolvia nada:
+# depende de que alguien suba el Resumen diario a mano. Cortex ya trae lo mismo
+# y se actualiza solo cada pocos minutos.
+#
+# EL DIA DE HOY NO CUENTA para el acumulado si todavia hay paquetes en vuelo.
+# A media tarde hay miles cargados en furgonetas: contarlos como fallo hunde el
+# numero y da un susto falso todas las tardes. Sale aparte, marcado.
+
+
+def _sc_dcr(entregados: int, fallos: int) -> Optional[float]:
+    """DCR = entregados / (entregados + fallos). Sin los no despachados."""
+    base = entregados + fallos
+    return round(entregados / base * 100, 2) if base else None
+
+
+@api_router.get("/scorecard/en-vivo")
+async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(require_admin)):
+    """El DCR real de esta semana contado desde Cortex, contra su umbral."""
+    hoy = datetime.now(timezone.utc).date()
+    # La semana de Amazon va de domingo a sabado.
+    dom = hoy - timedelta(days=(hoy.weekday() + 1) % 7)
+    desde = (dom - timedelta(days=7 * max(1, min(semanas, 12)))).strftime("%Y-%m-%d")
+
+    q: dict = {"service_day": {"$gte": desde}}
+    if center and center not in ("Todos", "todos"):
+        q["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
+
+    cur = db.cortex_packages.aggregate([
+        {"$match": q},
+        {"$group": {"_id": {"d": "$service_day", "s": "$state"}, "n": {"$sum": 1}}}])
+    dias: dict = {}
+    async for r in cur:
+        dias.setdefault(r["_id"]["d"], {})[r["_id"]["s"] or "NONE"] = r["n"]
+
+    def _reparte(estados: dict) -> dict:
+        ok = sum(n for s, n in estados.items() if s in _CX_OK)
+        vuelo = sum(n for s, n in estados.items() if s in _CX_EN_VUELO)
+        fuera = sum(n for s, n in estados.items() if s in _CX_NO_DESPACHADO)
+        fallos = sum(n for s, n in estados.items()
+                     if s not in _CX_OK and s not in _CX_EN_VUELO and s not in _CX_NO_DESPACHADO)
+        return {"entregados": ok, "en_vuelo": vuelo, "no_despachados": fuera,
+                "fallos": fallos, "total": ok + vuelo + fuera + fallos}
+
+    # Umbrales de esta nave para poder decir en que nivel cae.
+    wnum = _sun_to_week_num(dom.strftime("%Y-%m-%d"))
+    thr, _meta = await _sc_thresholds(center or "OGA5", wnum)
+    thr_dcr = (thr or {}).get("dcr") or {}
+
+    semanas_out, dias_out = [], []
+    porsem: dict = {}
+    for d in sorted(dias):
+        rep = _reparte(dias[d])
+        rep["fecha"] = d
+        rep["dcr"] = _sc_dcr(rep["entregados"], rep["fallos"])
+        # Un dia con muchos paquetes aun en la furgoneta no esta cerrado.
+        rep["cerrado"] = rep["en_vuelo"] <= max(5, rep["total"] * 0.02)
+        dias_out.append(rep)
+        try:
+            f = datetime.strptime(d, "%Y-%m-%d").date()
+            sd = (f - timedelta(days=(f.weekday() + 1) % 7)).strftime("%Y-%m-%d")
+        except Exception:                                    # noqa: BLE001
+            continue
+        acc = porsem.setdefault(sd, {"entregados": 0, "fallos": 0, "en_vuelo": 0,
+                                     "no_despachados": 0, "dias": 0, "abiertos": 0})
+        acc["dias"] += 1
+        for k in ("entregados", "fallos", "en_vuelo", "no_despachados"):
+            acc[k] += rep[k]
+        if not rep["cerrado"]:
+            acc["abiertos"] += 1
+
+    for sd in sorted(porsem, reverse=True):
+        a = porsem[sd]
+        dcr = _sc_dcr(a["entregados"], a["fallos"])
+        semanas_out.append({
+            "domingo": sd,
+            "semana": _sun_to_week_num(sd),
+            "es_la_actual": sd == dom.strftime("%Y-%m-%d"),
+            "dias_con_datos": a["dias"],
+            "dias_sin_cerrar": a["abiertos"],
+            **{k: a[k] for k in ("entregados", "fallos", "en_vuelo", "no_despachados")},
+            "dcr": dcr,
+            "tier": _sc_tier(dcr, thr_dcr, 1) if dcr is not None else None,
+            # Cuantos paquetes MAS habria que entregar para llegar a Fantastic.
+            # Es el numero que sirve para decidir hoy, no el porcentaje.
+            "faltan_para_fantastic": (
+                max(0, math.ceil((thr_dcr["fantastic"] / 100 * (a["entregados"] + a["fallos"])
+                                  - a["entregados"]) / max(1e-9, 1 - thr_dcr["fantastic"] / 100)))
+                if dcr is not None and thr_dcr.get("fantastic") and dcr < thr_dcr["fantastic"]
+                else 0),
+        })
+
+    return {
+        "center": center or "Todos",
+        "umbral_dcr": thr_dcr,
+        "semanas": semanas_out,
+        "dias": dias_out[-21:],
+        "nota": ("Contado sobre los paquetes de Cortex, no es una predicción. "
+                 "Los días con paquetes aún en la furgoneta salen marcados "
+                 "porque todavía pueden entregarse."),
+    }
 
 
 @api_router.get("/scorecard/daily-trend")
