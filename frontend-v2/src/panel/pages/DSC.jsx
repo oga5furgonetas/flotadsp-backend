@@ -90,6 +90,22 @@ function FilaDireccion({ d, onGuardar }) {
             ))}
           </div>
 
+          {/* La sugerencia sale del patron, no de una plantilla: el motivo que
+              manda y, cuando importa, la hora media. Solo aparece si hay
+              patron — una para cada direccion seria ruido justo donde alguien
+              va a decidir algo. */}
+          {d.sugerencia && (
+            <div className="rounded-lg border border-brand-500/25 bg-brand-500/[0.07] px-3 py-2">
+              <p className="text-[12.5px] leading-relaxed text-dark-200">{d.sugerencia}</p>
+              {txt !== d.sugerencia && (
+                <button onClick={() => setTxt(d.sugerencia)}
+                  className="mt-1.5 text-[11.5px] font-medium text-brand-300 hover:text-brand-200">
+                  Usar como nota y editarla
+                </button>
+              )}
+            </div>
+          )}
+
           <div>
             <label className="mb-1 block text-[11.5px] font-semibold text-dark-400">
               Qué hay que saber de esta dirección

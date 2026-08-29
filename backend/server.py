@@ -28055,6 +28055,57 @@ def _dir_clave(direccion: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def _dir_sugerencia(motivos: dict, horas: list) -> Optional[str]:
+    """Que hacer con esta direccion, deducido del patron. None si no hay patron.
+
+    NO se inventa una sugerencia para todo. Solo sale cuando el motivo manda
+    de verdad (la mitad de los fallos o mas) y, cuando la hora importa, cuando
+    hay horas suficientes para ver un patron. Una sugerencia para cada
+    direccion seria ruido, y ruido en el sitio donde alguien va a tomar una
+    decision es peor que un hueco vacio.
+
+    LO DEL HORARIO SALE DE LOS DATOS, no de una intuicion. Medido sobre 90
+    dias: BUSINESS_CLOSED tiene hora media 15:24 y su pico a las 17:00 con 79
+    fallos, cuando a esa hora solo se entrega el 9% del volumen del dia. O sea
+    que entregar en negocios por la tarde falla mucho mas de lo que le tocaria.
+    """
+    if not motivos:
+        return None
+    total = sum(motivos.values())
+    dom, n = max(motivos.items(), key=lambda x: x[1])
+    if n < max(2, total * 0.5):
+        return None
+
+    if dom == "BUSINESS_CLOSED":
+        if len(horas) >= 2:
+            media = sum(horas) / len(horas)
+            if media >= 14.5:
+                return ("Negocio cerrado %d veces, casi siempre por la tarde "
+                        "(sobre las %02d:00). Ponla antes de comer." % (n, round(media)))
+            return ("Negocio cerrado %d veces, y ya se intenta por la mañana: "
+                    "hace falta el horario o un teléfono." % n)
+        return "Negocio cerrado %d veces. Apunta su horario." % n
+
+    if dom == "ADDRESS_NOT_FOUND":
+        return ("No se encuentra %d veces. La dirección está mal o el portal no se ve: "
+                "hace falta una referencia (al lado de qué, qué color)." % n)
+
+    if dom == "INACCESSIBLE_DELIVERY_LOCATION":
+        return ("No se puede acceder %d veces. Suele ser una barrera, un código o una "
+                "entrada por otro lado: apunta cómo se entra." % n)
+
+    if dom == "NO_SECURE_LOCATION":
+        return "Sin sitio donde dejarlo %d veces. Mira si hay un vecino o un comercio." % n
+
+    if dom == "CUSTOMER_UNAVAILABLE" and n >= 4:
+        # Con muchos intentos fallidos ya no es mala suerte, pero tampoco es
+        # culpa del reparto: lo unico honesto es sugerir hablar con la persona.
+        return ("Cliente ausente %d veces: no se arregla repartiendo mejor. "
+                "Un teléfono o una indicación de dónde dejarlo sí." % n)
+
+    return None
+
+
 @api_router.get("/cortex/direcciones-problema")
 async def direcciones_problema(dias: int = 90, center: str = "", _=Depends(require_admin)):
     """Las direcciones que fallan una y otra vez, con su motivo y su nota."""
@@ -28082,7 +28133,16 @@ async def direcciones_problema(dias: int = 90, center: str = "", _=Depends(requi
                 ctx = e.get("context")
                 break
         g = grupos.setdefault(k, {"texto": dirtxt, "n": 0, "motivos": {}, "dias": set(),
-                                  "rutas": set(), "lat": None, "lng": None})
+                                  "rutas": set(), "lat": None, "lng": None, "horas": []})
+        # La hora del fallo, en hora local. Es lo que permite distinguir "el
+        # negocio esta cerrado" de "llegamos cuando ya habia cerrado".
+        for e in reversed(p.get("timeline") or []):
+            if e.get("state") == p.get("state") and e.get("at"):
+                try:
+                    g["horas"].append((int(str(e["at"])[11:13]) + 2) % 24)
+                except Exception:                            # noqa: BLE001
+                    pass
+                break
         g["n"] += 1
         m = str(ctx or "SIN_MOTIVO")
         g["motivos"][m] = g["motivos"].get(m, 0) + 1
@@ -28118,6 +28178,12 @@ async def direcciones_problema(dias: int = 90, center: str = "", _=Depends(requi
             "nota": nota.get("nota"),
             "nota_por": nota.get("por"),
             "nota_en": nota.get("en"),
+            # Que hacer, deducido del patron. Sale vacia si no hay patron: una
+            # sugerencia para cada direccion seria ruido justo donde alguien va
+            # a decidir algo.
+            "sugerencia": _dir_sugerencia(g["motivos"], g["horas"]),
+            "hora_media": (round(sum(g["horas"]) / len(g["horas"]), 1)
+                           if g["horas"] else None),
         })
     out.sort(key=lambda x: (-x["prioridad"], -x["fallos"]))
     return {
