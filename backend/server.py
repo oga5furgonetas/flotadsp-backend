@@ -10922,11 +10922,24 @@ async def _ya_enviado_hoy(clave: str, dia: str) -> bool:
     parece: con el cerrojo en memoria, un reinicio a las 21:05 volvería a
     mandar el resumen a todo el mundo.
     """
-    r = await db.app_meta.update_one(
-        {"_id": f"envio_{clave}", "dia": {"$ne": dia}},
-        {"$set": {"dia": dia, "at": datetime.now(timezone.utc).isoformat()}},
-        upsert=True,
-    )
+    try:
+        r = await db.app_meta.update_one(
+            {"_id": f"envio_{clave}", "dia": {"$ne": dia}},
+            {"$set": {"dia": dia, "at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True,
+        )
+    except DuplicateKeyError:
+        # YA ESTABA ENVIADO. Con el documento ya puesto a ese dia, el filtro
+        # (`dia != dia`) no casa con nada y el upsert intenta INSERTAR otro con
+        # el mismo _id: Mongo lanza duplicado. Eso no es un fallo, es
+        # exactamente la respuesta que se estaba preguntando — pero como
+        # excepcion tumbaba el endpoint entero con un 500.
+        #
+        # Solo se veia si la clave llevaba dentro la fecha (`dcr_OGA5_2026-08-29`),
+        # porque entonces la pareja clave+dia no cambia nunca de un dia para
+        # otro. Con las claves de siempre el `dia` cambiaba y el update casaba.
+        # Un cerrojo que revienta es peor que no tener cerrojo.
+        return True
     return not (r.modified_count or r.upserted_id)
 
 
@@ -25747,7 +25760,7 @@ async def revisar_dcr_diario() -> list:
             continue
         if ultimo["dcr"] >= mediana - DCR_CAIDA_MIN or ultimo["fallos"] < DCR_FALLOS_MIN:
             continue
-        if await _ya_enviado_hoy("dcr_%s_%s" % (centro, ultimo["fecha"]), ultimo["fecha"]):
+        if await _ya_enviado_hoy("dcr_%s" % centro, ultimo["fecha"]):
             continue
 
         # QUE les paso, no solo que fallaron. Es la diferencia entre un aviso

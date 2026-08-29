@@ -363,6 +363,47 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    el gotcha 17 con los documentos: **siempre un cajon de sobras, y ademas la
    suma comprobada**, porque lo que no entra en ninguno desaparece sin error.
 
+31. **Un multiplo con el denominador cerca de cero MIENTE, aunque el numero
+   sea correcto.** La pantalla de exposicion comparaba cada furgoneta con la
+   media de su modelo, y una Citroen Jumpy con UN golpe salia "6 veces peor"
+   porque las otras cinco no tenian ninguno. El calculo estaba bien y la
+   lectura era falsa: parecia una furgoneta problematica cuando lo que pasaba
+   es que su grupo esta impecable. Cualquier ratio contra una media necesita
+   un suelo en el denominador (`_EXP_MEDIA_MIN`) y, por debajo, decir lo que
+   pasa de verdad en vez de dar el numero.
+
+32. **`_ya_enviado_hoy` revienta si la clave lleva la fecha dentro.** El
+   cerrojo busca `{_id: envio_X, dia: {$ne: hoy}}` y hace upsert. Con una clave
+   que ya incluye el dia (`dcr_OGA5_2026-08-29`), la pareja clave+dia no cambia
+   nunca: el filtro no casa, el upsert intenta insertar el mismo `_id` y Mongo
+   lanza `DuplicateKeyError` — que subia como 500 y tumbaba el endpoint entero.
+   Con las claves de siempre no se veia porque el `dia` cambiaba cada dia. Dos
+   reglas: la clave NO lleva la fecha, y el cerrojo captura el duplicado y
+   devuelve True, porque un duplicado ahi significa "ya enviado", que es
+   justo lo que se preguntaba. Un cerrojo que revienta es peor que no tenerlo.
+
+33. **`analysis_status` vale `"ok"`, no `"done"`.** Contando por `"done"` salia
+   que CERO de 1.570 inspecciones estaban analizadas por la IA, y estaban las
+   1.569. Un filtro por un valor que no existe no da error: da cero, y cero
+   parece un hallazgo. Antes de afirmar que algo esta a cero, mirar que valores
+   tiene de verdad el campo (`$group` por el, sin filtrar).
+
+34. **`daily_ratios` esta VACIA en produccion**, y por eso
+   `/scorecard/daily-trend` no devuelve nada: depende de que alguien suba el
+   Resumen diario a mano y no lo sube nadie. Lo mismo se calcula desde
+   `cortex_packages`, que se actualiza solo — es lo que hace
+   `/scorecard/en-vivo`. Un endpoint que responde 200 con una lista vacia
+   parece que funciona.
+
+35. **Las direcciones de Amazon vienen sin normalizar y hay que unirlas con
+   cuidado en las DOS direcciones.** 'Rua Isaac Peral, 14' y 'RUA ISAAC PERAL
+   14 BAJO' son el mismo portal: si cuentan por separado, ninguna llega al
+   minimo de fallos y el problema no lo ve nadie. Pero el 14 y el 41 NO son el
+   mismo portal, y juntarlos pondria la nota de uno en la puerta del otro. Ojo
+   con letra pegada a numero: 'n°43' se queda en 'n43' al quitar acentos y no
+   casa con 'n 43' — pasa de verdad en 'Calle Campanario n°43'. Cubierto en
+   `backend/tests/test_direcciones.py`.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
