@@ -29990,6 +29990,22 @@ async def cortex_ingest(request: Request):
     _cortex_ingest_org(request)
     body = await request.json()
 
+    # QUE VERSION DE LA EXTENSION HABLA. Repartida a varias naves, sin esto no
+    # hay forma de saber quien tiene cual, y un fallo arreglado hace tres
+    # versiones se investiga otra vez desde cero. Es una sola linea por
+    # estacion y se ve en /cortex/diagnostico.
+    _ver = str(request.headers.get("x-ext-version") or "")[:16]
+    if _ver:
+        try:
+            await db.cortex_diagnostico.update_one(
+                {"_id": "version:extension"},
+                {"$set": {"kind": "version", "which": "extension", "url": _ver,
+                          "visto_en": datetime.now(timezone.utc).isoformat(),
+                          "expira_en": datetime.now(timezone.utc) + timedelta(days=30)}},
+                upsert=True)
+        except Exception:
+            pass
+
     # ── DIAGNÓSTICO DE ESQUEMA ────────────────────────────────────────────────
     # La extensión lleva tiempo mandando el ESQUEMA REAL de route-details y del
     # informe de faltas (kind='schema'), y esto lo tiraba a la basura: solo

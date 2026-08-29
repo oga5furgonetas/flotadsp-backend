@@ -78,8 +78,29 @@
      en la lista no se descubre nunca. Se aprende de la petición real de la
      página —no se construye a mano— para no inventar parámetros. */
   let urlResumen = null;
+  /* Y SI NO LA HEMOS VISTO, SE CONSTRUYE. Antes, sin haber visto la peticion
+     real de la pagina, no se pedia el resumen — y el resumen es de donde salen
+     las rutas del dia. Al recargar la extension esa URL se pierde, asi que
+     hasta que la SPA la volviera a pedir por su cuenta, una ruta nueva NO SE
+     DESCUBRIA NUNCA. Medido el 29-08: Cortex 41 rutas y 5.326 paquetes,
+     nosotros 39 y 5.202 — las dos rutas que faltaban eran exactamente esos 124
+     paquetes.
+
+     La aprendida manda siempre; la construida es solo la red de seguridad. Si
+     algun parametro no fuera correcto, la respuesta vendria vacia y no pasa
+     nada: no se inventa ningun dato, simplemente no habria resumen hasta ver la
+     peticion buena una vez. */
+  const urlResumenFallback = () => {
+    if (!saId) return null;   // sin estacion iria a la nave equivocada
+    const dia = serviceDay() || new Date().toISOString().slice(0, 10);
+    return `${location.origin}/operations/execution/api/route-summaries`
+      + `?historicalDay=${histParam}&localDate=${dia}&serviceAreaId=${saId}`;
+  };
   // Devuelve la promesa: el barrido la espera antes de cerrar la vuelta.
-  const pedirResumen = () => (urlResumen ? syntheticFetch(urlResumen) : Promise.resolve());
+  const pedirResumen = () => {
+    const u = urlResumen || urlResumenFallback();
+    return u ? syntheticFetch(u) : Promise.resolve();
+  };
 
   const rememberGet = (url, method) => {
     if ((method || 'GET').toUpperCase() !== 'GET') return;

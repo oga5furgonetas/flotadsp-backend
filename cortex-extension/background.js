@@ -180,15 +180,31 @@ async function flush() {
    una foto del esquema, no un dato operativo, y no puede estorbar al envío de
    paquetes ni ensuciar el estado que ve el usuario en el popup. */
 async function enviarDiagnostico(payload) {
+  /* SI FALLA, SE DICE. Antes se tragaba el error entero y por eso el resumen de
+     Cortex estuvo un dia entero sin llegar sin que nada lo delatara: el mensaje
+     salia, alguien por el camino lo descartaba y la coleccion seguia vacia.
+     Un fallo silencioso en el unico canal que trae los contadores de Amazon es
+     justo el que no puede quedarse callado. Se apunta en la actividad, que es
+     lo que se mira en el popup cuando algo no cuadra. */
+  const que = payload?.kind || 'diagnostico';
   try {
     const { ingestToken, ingestUrl } = await cfg();
-    if (!ingestToken) return;
-    await fetch(ingestUrl, {
+    if (!ingestToken) { await pushActivity(`${que}: sin token de ingesta`, 0); return; }
+    const r = await fetch(ingestUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': ingestToken },
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Ingest-Token': ingestToken,
+        // Que version esta corriendo en cada nave. Con la extension repartida a
+        // varias estaciones, sin esto no hay forma de saber quien tiene cual.
+        'X-Ext-Version': chrome.runtime.getManifest().version,
+      },
       body: JSON.stringify(payload),
     });
-  } catch (_) { /* silencio a propósito */ }
+    if (!r.ok) await pushActivity(`${que}: HTTP ${r.status}`, 0);
+  } catch (e) {
+    await pushActivity(`${que}: no salio (${String(e).slice(0, 40)})`, 0);
+  }
 }
 
 async function pushActivity(url, count) {
