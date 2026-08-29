@@ -10903,6 +10903,10 @@ async def start_itv_whatsapp_scheduler():
     organizar la cita para el dia siguiente.
     """
     asyncio.create_task(_bucle_aviso("itv_whatsapp", "resumen_diario", avisar_itv_por_whatsapp))
+    # El seguimiento del taller va a MEDIA MANANA, no con el resto: es cuando
+    # el taller ya ha abierto y ha visto lo que tiene, y le da todo el dia para
+    # contestar. A la hora del resumen (tarde) muchos ya han cerrado.
+    asyncio.create_task(_bucle_aviso("seguimiento_talleres", "turno_manana", seguimiento_talleres))
 
 
 @api_router.post("/whatsapp/avisar-itv")
@@ -14396,6 +14400,135 @@ async def ia_autoexamen(semanas: int = 12, _=Depends(require_admin)):
                   "cuando la IA reporta algo. No incluyen las inspecciones en las que "
                   "dijo 'sin daños', que son la mayoria."),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SEGUIMIENTO AUTOMATICO DEL TALLER
+# ═══════════════════════════════════════════════════════════════════════════
+# EL PROBLEMA REAL. Una furgoneta entra al taller y desaparece. Nadie llama
+# hasta que hace falta, y entonces resulta que llevaba dos semanas lista o que
+# el taller esperaba una respuesta que nunca llego. Medido el 28-08-2026: 14
+# furgonetas paradas, tres desde hacia 52 dias, 319 dias-furgoneta acumulados.
+#
+# LO QUE HACE. Cada dia mira las ordenes abiertas en las que el taller no ha
+# tocado nada en N dias y le manda UN recordatorio con su enlace. No pide que
+# escriba: el enlace tiene los botones.
+#
+# POR QUE ESTO NO ES SPAM.
+#  - Un toque por orden cada `OT_DIAS_TOQUE` dias, no uno diario. Un taller que
+#    recibe un mensaje al dia deja de leerlos al tercero.
+#  - El reloj se reinicia con CUALQUIER movimiento suyo: si contesta, no se le
+#    vuelve a escribir hasta que pasen otros N dias en silencio.
+#  - No se toca una orden en estado 'listo': ahi el que tiene que moverse
+#    somos nosotros, y darle prisa al taller seria absurdo.
+#  - Nunca de noche ni en fin de semana. Un aviso a las 22:00 del sabado no lo
+#    lee nadie y quema el canal.
+#
+# EL CANAL. Hoy queda apuntado y sale por Telegram a la oficina con el enlace
+# listo para reenviar; en cuanto WhatsApp tenga credenciales sale solo. El
+# motor —a quien, cuando, que decir, cuando callarse— es el mismo.
+
+OT_DIAS_TOQUE = 3          # silencio del taller que dispara el recordatorio
+OT_TOQUES_MAX = 4          # a partir de aqui el problema no es el recordatorio
+
+
+def _ot_texto_toque(o: dict, dias: int, url: str) -> str:
+    """Corto y con UNA pregunta. Un recordatorio largo no se lee."""
+    return (
+        "Hola, ¿cómo va la %s? Lleva %d días sin novedades.\n\n"
+        "Con un toque en este enlace nos decís el estado o para cuándo estará, "
+        "y así no os llamamos:\n%s"
+    ) % (o.get("matricula") or "furgoneta", dias, url)
+
+
+async def _ot_url_taller(orden_id: str) -> str:
+    """El enlace vivo de esa orden, o uno nuevo si no tiene."""
+    e = await global_db.taller_enlaces.find_one(
+        {"orden_id": orden_id, "revocado": {"$ne": True}}, {"_id": 0, "token": 1})
+    if not e:
+        token = secrets.token_urlsafe(32)
+        await global_db.taller_enlaces.insert_one({
+            "token": token, "orden_id": orden_id, "db_name": _current_db_name.get(),
+            "creado_por": "seguimiento automático", "creado_en": _ot_ahora(),
+            "expira_en": (datetime.now(timezone.utc) + timedelta(days=90)).isoformat(),
+            "revocado": False})
+        e = {"token": token}
+    return "%s/taller/%s" % (_PORTAL_BASE_FRONT.rstrip("/"), e["token"])
+
+
+async def seguimiento_talleres(forzar: bool = False) -> list:
+    """Un recordatorio a los talleres que llevan dias sin decir nada."""
+    from zoneinfo import ZoneInfo
+    ahora = datetime.now(ZoneInfo("Europe/Madrid"))
+    # Ni de noche ni en fin de semana: quema el canal y no lo lee nadie.
+    if not forzar and (ahora.weekday() >= 5 or not (9 <= ahora.hour <= 19)):
+        return []
+
+    corte = (datetime.now(timezone.utc) - timedelta(days=OT_DIAS_TOQUE)).isoformat()
+    abiertas = await db.ordenes_trabajo.find(
+        {"estado": {"$in": [e for e in OT_ABIERTAS if e != "listo"]}},
+        {"_id": 0}).to_list(300)
+
+    salida = []
+    for o in abiertas:
+        # El reloj cuenta desde lo ULTIMO que hizo el taller, y si nunca ha
+        # hecho nada, desde que se creo la orden.
+        ultimo = (o.get("ultima_novedad_taller") or o.get("ultima_visita")
+                  or o.get("creada_en") or "")
+        if ultimo >= corte:
+            continue
+        # Ya se le escribio hace poco: no se repite.
+        if (o.get("ultimo_toque") or "") >= corte:
+            continue
+        n = int(o.get("toques") or 0)
+        if n >= OT_TOQUES_MAX:
+            # Cuatro recordatorios sin respuesta ya no es un despiste del
+            # taller: es una conversacion que tiene que tener una persona.
+            continue
+
+        try:
+            dias = max(1, (datetime.now(timezone.utc)
+                           - datetime.fromisoformat(ultimo)).days)
+        except Exception:                                    # noqa: BLE001
+            dias = OT_DIAS_TOQUE
+
+        url = await _ot_url_taller(o["id"])
+        texto = _ot_texto_toque(o, dias, url)
+        enviado = False
+
+        tel = (o.get("taller_telefono") or "").strip()
+        if tel and await whatsapp.puede_avisar(db, "avisar_incidencia"):
+            r = await whatsapp.enviar_plantilla(
+                db, tel, "taller_seguimiento",
+                [o.get("matricula") or "", str(dias), url],
+                motivo="seguimiento OT %s" % o.get("numero"))
+            enviado = bool(r.get("ok"))
+
+        if not enviado:
+            # Sin WhatsApp, el recordatorio va a la oficina con el texto ya
+            # escrito para reenviar. Que no salga solo no puede significar que
+            # no salga: seria volver al silencio que esto viene a arreglar.
+            await _ot_avisa(o, "Lleva %d días sin novedades del taller.\n\n%s" % (dias, texto))
+
+        await db.ordenes_trabajo.update_one(
+            {"id": o["id"]},
+            {"$set": {"ultimo_toque": _ot_ahora()}, "$inc": {"toques": 1},
+             "$push": {"historial": _ot_apunte(
+                 "seguimiento", "Recordatorio al taller",
+                 "%d días sin novedades%s" % (dias, "" if enviado else " · por WhatsApp no salió"))}})
+        salida.append({"numero": o.get("numero"), "matricula": o.get("matricula"),
+                       "taller": o.get("taller_nombre"), "dias": dias,
+                       "por_whatsapp": enviado, "toque": n + 1})
+
+    if salida:
+        logger.info("Seguimiento de talleres: %d recordatorios", len(salida))
+    return salida
+
+
+@api_router.post("/work-orders/seguimiento")
+async def disparar_seguimiento(_=Depends(require_admin)):
+    """Lanza el seguimiento ahora, sin esperar a su hora."""
+    return {"recordatorios": await seguimiento_talleres(forzar=True)}
 
 
 @api_router.get("/work-orders/export")

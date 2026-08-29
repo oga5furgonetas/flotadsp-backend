@@ -241,6 +241,17 @@ PLANTILLAS_BASE = [
         }],
     },
     {
+        "name": "taller_seguimiento",
+        "language": "es",
+        "category": "UTILITY",
+        "components": [{
+            "type": "BODY",
+            "text": ("Hola, ¿cómo va la {{1}}? Lleva {{2}} días sin novedades. "
+                     "Con un toque aquí nos decís el estado y así no os llamamos: {{3}}"),
+            "example": {"body_text": [["1234 ABC", "5", "https://flotadsp.com/taller/abc123"]]},
+        }],
+    },
+    {
         "name": "resumen_diario",
         "language": "es",
         "category": "UTILITY",
