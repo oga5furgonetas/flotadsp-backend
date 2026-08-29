@@ -703,6 +703,96 @@ function ScoringView({ center }) {
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
+/* ── TABLA DE CONDUCTORES ───────────────────────────────────────────────────
+   Era una rejilla de fichas de cuatro en cuatro. Con doscientas personas eso
+   son cincuenta filas de tarjetas y, sobre todo, no hay forma de BUSCAR a
+   alguien: el ojo tiene que barrer en zigzag en vez de bajar una columna.
+
+   Ordena por columna, y los nombres con `localeCompare` en español porque
+   están escritos en MAYÚSCULAS, minúsculas y Mixtas: un `sort()` normal manda
+   todas las minúsculas detrás de todas las mayúsculas y la lista parece
+   aleatoria (gotcha 23). */
+function TablaConductores({ list, accounts, onAbrir, t }) {
+  const [orden, setOrden] = useState({ col: 'name', asc: true })
+
+  const filas = useMemo(() => {
+    const { col, asc } = orden
+    const txt = (d) => String(d?.[col] ?? '')
+    const ms = [...list].sort((a, b) => {
+      const r = txt(a).localeCompare(txt(b), 'es', { sensitivity: 'base', numeric: true })
+      return asc ? r : -r
+    })
+    return ms
+  }, [list, orden])
+
+  const Cab = ({ col, children, alinea = 'text-left' }) => (
+    <th className={`px-2 py-2 ${alinea} text-[10px] font-medium uppercase tracking-wider text-dark-500`}>
+      <button
+        onClick={() => setOrden((o) => ({ col, asc: o.col === col ? !o.asc : true }))}
+        className={`inline-flex items-center gap-1 hover:text-dark-300 ${orden.col === col ? 'text-dark-300' : ''}`}>
+        {children}
+        {orden.col === col && <span className="text-[8px]">{orden.asc ? '▲' : '▼'}</span>}
+      </button>
+    </th>
+  )
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[760px] text-[13px]">
+          <thead className="sticky top-0 z-10 bg-dark-900">
+            <tr className="border-b border-dark-800">
+              <th className="w-8 px-2 py-2"></th>
+              <Cab col="name">Nombre</Cab>
+              <Cab col="center">Centro</Cab>
+              <Cab col="alojamiento">Alojamiento</Cab>
+              <Cab col="phone">Teléfono</Cab>
+              <Cab col="email">Correo</Cab>
+              <Cab col="contrato">Contrato</Cab>
+              <Cab col="nivel">Nivel</Cab>
+              <th className="px-2 py-2 text-center text-[10px] font-medium uppercase tracking-wider text-dark-500">PIN</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map((d) => {
+              const [nl, nc] = NIVEL[d.nivel] || []
+              const [cl, cc] = CONTRATO[d.contrato] || []
+              const hasAcc = accounts.includes(d.id)
+              return (
+                <tr key={d.id} onClick={() => onAbrir(d)}
+                  className="float-row cursor-pointer border-b border-dark-800/50 last:border-0">
+                  <td className="px-2 py-1"><Avatar driver={d} size={7} /></td>
+                  <td className="max-w-[220px] truncate px-2 py-1 font-medium text-dark-100">{d.name}</td>
+                  <td className="px-2 py-1 text-dark-400">{d.center || '—'}</td>
+                  <td className="max-w-[150px] truncate px-2 py-1 text-dark-500">{d.alojamiento || '—'}</td>
+                  <td className="cifra px-2 py-1 text-dark-400">{d.phone || '—'}</td>
+                  <td className="max-w-[210px] truncate px-2 py-1 text-dark-500">{d.email || '—'}</td>
+                  <td className="whitespace-nowrap px-2 py-1">
+                    {cc ? <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${cc}`}>{cl}</span>
+                        : <span className="text-dark-600">—</span>}
+                  </td>
+                  <td className="whitespace-nowrap px-2 py-1">
+                    {nc ? <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${nc}`}>{nl}</span>
+                        : <span className="text-dark-600">—</span>}
+                  </td>
+                  <td className="px-2 py-1 text-center">
+                    {hasAcc ? <Lock size={11} className="inline text-lime-400" title="Tiene acceso al portal" />
+                            : <span className="text-dark-700">—</span>}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="border-t border-dark-800 px-3 py-1.5 text-[11px] text-dark-500">
+        {filas.length} {filas.length === 1 ? 'conductor' : 'conductores'} · pulsa una fila para abrir la ficha
+      </p>
+    </div>
+  )
+}
+
+
 export default function Conductores() {
   const { center, centers } = useOutletContext()
   const { t } = useT()
@@ -816,45 +906,7 @@ export default function Conductores() {
                   <Plus size={14} /> {t('drv.add')}
                 </button>
               </div>
-            : <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {list.map(d => {
-                  const [nl, nc] = NIVEL[d.nivel] || []
-                  const [cl, cc] = CONTRATO[d.contrato] || []
-                  const hasAcc = accounts.includes(d.id)
-                  return (
-                    <button
-                      key={d.id}
-                      onClick={() => setModal({ driver: d })}
-                      className="float-row group flex flex-col rounded-2xl border border-white/[0.05] bg-white/[0.02] p-5 text-left hover:border-white/[0.1]"
-                    >
-                      <div className="flex items-start justify-between gap-3 mb-4">
-                        <Avatar driver={d} size={12} />
-                        <div className="flex flex-wrap gap-1 justify-end">
-                          {hasAcc && <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 flex items-center gap-1"><Lock size={9} />PIN</span>}
-                          {cc && <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${cc}`}>{cl}</span>}
-                          {nc && <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${nc}`}>{nl}</span>}
-                        </div>
-                      </div>
-                      <div className="font-semibold text-dark-50 truncate">{d.name}</div>
-                      {d.center && (
-                        <div className="mt-1 flex items-center gap-1 text-xs text-dark-500">
-                          <MapPin size={10} />{d.center}
-                        </div>
-                      )}
-                      {d.alojamiento && (
-                        <div className="mt-1 flex items-center gap-1 text-xs text-dark-500">
-                          <Building2 size={10} />{d.alojamiento}
-                        </div>
-                      )}
-                      <div className="mt-3 border-t border-white/[0.05] pt-3 flex flex-col gap-0.5">
-                        {d.phone && <span className="flex items-center gap-1.5 text-[11px] text-dark-500"><Phone size={10} />{d.phone}</span>}
-                        {d.email && <span className="flex items-center gap-1.5 text-[11px] text-dark-500 truncate"><Mail size={10} />{d.email}</span>}
-                        {!d.phone && !d.email && <span className="text-[11px] text-dark-700">{t('drv.no.contact')}</span>}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
+            : <TablaConductores list={list} accounts={accounts} onAbrir={(d) => setModal({ driver: d })} t={t} />
       )}
 
       {/* Ranking + scoring unificado */}

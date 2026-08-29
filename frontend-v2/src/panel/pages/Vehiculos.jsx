@@ -1966,39 +1966,68 @@ export default function Vehiculos() {
         )
       ) : (
         <div className="rise" style={{ animationDelay: '120ms' }}>
-          <div className="divide-y divide-white/[0.04]">
-            {list.map(v => {
-              const st = STATUS_MAP[v.status] || STATUS_MAP.baja
-              const dot = lastInspDot(lastInsp[v.id])
-              return (
-                <button
-                  key={v.id}
-                  onClick={() => setSel(v)}
-                  className="float-row group flex w-full items-center gap-4 rounded-xl px-4 py-3.5 text-left"
-                >
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${st.dot}`} title={t(st.labelKey)} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2.5">
-                      <span className="font-mono text-[15px] font-semibold tracking-wider text-dark-50">{v.license_plate}</span>
-                      <span className="truncate text-[13px] text-dark-500">{[v.brand, v.model].filter(Boolean).join(' ')}</span>
-                    </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11.5px] text-dark-600">
-                      <span className="inline-flex items-center gap-1"><MapPin size={10} /> {v.center || '—'}</span>
-                      {v.mileage != null && <span className="inline-flex items-center gap-1"><Gauge size={10} /> {v.mileage.toLocaleString('es')} km</span>}
-                      <span className="inline-flex items-center gap-1"><span className={`h-1.5 w-1.5 rounded-full ${dot.cls}`} /> {dot.txt}</span>
-                      {v.vin && <span className="inline-flex items-center gap-1 text-dark-700"><QrCode size={10} /> VIN</span>}
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-3">
-                    {v.status !== 'active' && (
-                      <span className={`hidden rounded-full px-2 py-0.5 text-[10px] font-semibold sm:inline ${st.badge}`}>{t(st.labelKey)}</span>
-                    )}
-                    {itvBadge(v.itv_date)}
-                    <ChevronRight size={15} className="text-dark-700 transition-transform group-hover:translate-x-0.5 group-hover:text-dark-400" />
-                  </div>
-                </button>
-              )
-            })}
+          {/* TABLA, no lista de fichas a dos lineas. Con 129 furgonetas cada
+              ficha de 60 px son 7.700 px de scroll, y los datos que se comparan
+              —km, ITV, ultima revision— quedaban a alturas distintas en cada
+              una. En columna se leen en vertical y cabe el triple por pantalla.
+              La cabecera se queda pegada arriba: sin eso, a la fila 40 ya no
+              sabes que columna estas mirando. */}
+          <div className="card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-[13px]">
+                <thead className="sticky top-0 z-10 bg-dark-900">
+                  <tr className="border-b border-dark-800">
+                    <th className="w-6 px-2 py-2"></th>
+                    <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Matrícula</th>
+                    <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Modelo</th>
+                    <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Centro</th>
+                    <th className="px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">Km</th>
+                    <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Revisión</th>
+                    <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">ITV</th>
+                    <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Estado</th>
+                    <th className="w-6 px-2 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {list.map(v => {
+                    const st = STATUS_MAP[v.status] || STATUS_MAP.baja
+                    const dot = lastInspDot(lastInsp[v.id])
+                    return (
+                      <tr key={v.id} onClick={() => setSel(v)}
+                        className="float-row group cursor-pointer border-b border-dark-800/50 last:border-0">
+                        <td className="px-2 py-1.5">
+                          <span className={`block h-2 w-2 rounded-full ${st.dot}`} title={t(st.labelKey)} />
+                        </td>
+                        <td className="cifra px-2 py-1.5 font-semibold tracking-wider text-dark-50">
+                          {v.license_plate}
+                          {v.vin && <QrCode size={9} className="ml-1.5 inline text-dark-700" title="Tiene VIN" />}
+                        </td>
+                        <td className="max-w-[190px] truncate px-2 py-1.5 text-dark-400">
+                          {[v.brand, v.model].filter(Boolean).join(' ') || '—'}
+                        </td>
+                        <td className="px-2 py-1.5 text-dark-400">{v.center || '—'}</td>
+                        <td className="cifra px-2 py-1.5 text-right text-dark-300">
+                          {v.mileage != null ? v.mileage.toLocaleString('es') : '—'}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-1.5">
+                          <span className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle ${dot.cls}`} />
+                          <span className="text-[12px] text-dark-400">{dot.txt}</span>
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-1.5">{itvBadge(v.itv_date)}</td>
+                        <td className="whitespace-nowrap px-2 py-1.5">
+                          {v.status !== 'active'
+                            ? <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${st.badge}`}>{t(st.labelKey)}</span>
+                            : <span className="text-[12px] text-dark-600">activa</span>}
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <ChevronRight size={14} className="text-dark-700 transition-transform group-hover:translate-x-0.5 group-hover:text-dark-400" />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
