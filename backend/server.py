@@ -17404,6 +17404,82 @@ _KM_MAXIMO_CREIBLE = int(os.environ.get("KM_MAXIMO_CREIBLE") or 1_000_000)
 _KM_SALTO_ABSURDO = int(os.environ.get("KM_SALTO_ABSURDO") or 300_000)
 
 
+@api_router.get("/transporter-ids/sin-ficha")
+async def transporter_ids_sin_ficha(dias: int = 30, _=Depends(require_admin)):
+    """Los Transporter ID que salen a ruta y no tienen ficha de conductor.
+
+    Es lo que hace que en el debrief aparezca "SIN FICHA" y que no se pueda
+    poner nombre a nadie. Medido el 29-08-2026: de 161 IDs vistos en 30 dias,
+    **58 no tenian ficha**, y el primero llevaba 3.669 paquetes en 24 dias — una
+    persona a jornada completa de la que la app no sabia el nombre.
+
+    De cada uno se da con QUE se le puede reconocer, porque un codigo como
+    `A20PS9T9WIF7WN` no le dice nada a nadie: sus rutas mas repetidas, cuantos
+    dias y el ultimo. Con "hace la XA_C14 casi todos los dias" cualquiera de la
+    nave sabe quien es en dos segundos; con el codigo solo, nadie.
+
+    Ordenados por paquetes: el que mas mueve es el que mas duele no tener.
+    """
+    dias = max(1, min(dias, 120))
+    desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
+
+    conocidos = set()
+    async for d in db.drivers.find({}, {"_id": 0, "transporter_id": 1}):
+        t = (d.get("transporter_id") or "").strip()
+        if t:
+            conocidos.add(t)
+
+    vistos: dict = {}
+    async for r in db.cortex_packages.aggregate([
+        {"$match": {"service_day": {"$gte": desde},
+                    "driver_id": {"$nin": [None, "", "sin-asignar"]}}},
+        {"$group": {"_id": {"t": "$driver_id", "d": "$service_day", "r": "$route_code"},
+                    "n": {"$sum": 1}}},
+    ]):
+        k = r["_id"]
+        t = k.get("t")
+        if not t or t in conocidos:
+            continue
+        v = vistos.setdefault(t, {"paquetes": 0, "dias": set(), "rutas": {}})
+        v["paquetes"] += r.get("n", 0)
+        if k.get("d"):
+            v["dias"].add(k["d"])
+        ruta = (k.get("r") or "").strip()
+        if ruta:
+            v["rutas"][ruta] = v["rutas"].get(ruta, 0) + r.get("n", 0)
+
+    fuera = []
+    for t, v in vistos.items():
+        rutas = sorted(v["rutas"].items(), key=lambda x: -x[1])
+        fuera.append({
+            "transporter_id": t,
+            "paquetes": v["paquetes"],
+            "dias": len(v["dias"]),
+            "ultimo_dia": max(v["dias"]) if v["dias"] else None,
+            "primer_dia": min(v["dias"]) if v["dias"] else None,
+            # Las tres mas repetidas: es con lo que se le reconoce.
+            "rutas": [r for r, _ in rutas[:3]],
+            "ruta_habitual": rutas[0][0] if rutas else None,
+        })
+    fuera.sort(key=lambda x: -x["paquetes"])
+
+    # Los candidatos: los conductores que TODAVIA no tienen id. Si se ofreciera
+    # la lista entera, el primer despiste asigna el id de uno a otro y a partir
+    # de ahi las entregas de una persona se le cuelgan a la otra.
+    libres = []
+    async for d in db.drivers.find(
+            {"$or": [{"transporter_id": {"$in": [None, ""]}},
+                     {"transporter_id": {"$exists": False}}],
+             "merged_into": {"$exists": False}},
+            {"_id": 0, "id": 1, "name": 1, "center": 1}):
+        if d.get("name"):
+            libres.append(d)
+    libres.sort(key=lambda x: str(x.get("name") or "").upper())
+
+    return {"sin_ficha": fuera, "total": len(fuera),
+            "con_ficha": len(conocidos), "candidatos": libres, "dias": dias}
+
+
 @api_router.get("/transporter-ids/propuestas")
 async def transporter_id_propuestas(dias: int = 30, minimo: int = 2,
                                     _=Depends(require_admin)):

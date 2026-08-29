@@ -89,6 +89,9 @@ export const uploadDriverPhoto = (id, file) => { const fd = new FormData(); fd.a
 export const getDriversDuplicados = () => api.get('/drivers/duplicados')
 export const fusionarConductores = (body) => api.post('/drivers/fusionar', body)
 export const getPropuestasTransporterId = () => api.get('/transporter-ids/propuestas')
+/* Los IDs que salen a ruta y no tienen ficha, con sus rutas para reconocerlos. */
+export const getTransporterIdsSinFicha = (dias) =>
+  api.get('/transporter-ids/sin-ficha', { params: dias ? { dias } : {} })
 export const confirmarTransporterId = (body) => api.post('/transporter-ids/confirmar', body)
 export const getDriverAccounts = () => api.get('/auth/driver-accounts')
 export const setDriverPassword = (driverId, password) => api.post('/auth/set-driver-password', { driver_id: driverId, password })

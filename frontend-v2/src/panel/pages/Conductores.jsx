@@ -14,7 +14,7 @@ import {
   getDriversScoring, getScoringLeaderboard, getDriverAccounts, setDriverPassword,
   deleteDriverAccount,
   getDriversDuplicados, fusionarConductores,
-  getPropuestasTransporterId, confirmarTransporterId,
+  getPropuestasTransporterId, confirmarTransporterId, getTransporterIdsSinFicha,
 } from '../api'
 
 const EMPTY = {
@@ -281,6 +281,7 @@ function DriverRow({ s, rank, showCenter, expanded, onToggle }) {
 function SaludFichas({ onCambio }) {
   const [dups, setDups] = useState(null)
   const [ids, setIds] = useState(null)
+  const [sinFicha, setSinFicha] = useState(null)
   const [ocupado, setOcupado] = useState('')
   const [err, setErr] = useState('')
   const [elegida, setElegida] = useState({})   // email -> id que se conserva
@@ -288,6 +289,7 @@ function SaludFichas({ onCambio }) {
   const cargar = () => {
     getDriversDuplicados().then((r) => setDups(r.data)).catch(() => setErr('No se pudieron cargar las fichas duplicadas.'))
     getPropuestasTransporterId().then((r) => setIds(r.data)).catch(() => {})
+    getTransporterIdsSinFicha().then((r) => setSinFicha(r.data)).catch(() => {})
   }
   useEffect(cargar, [])
 
@@ -303,8 +305,12 @@ function SaludFichas({ onCambio }) {
     } finally { setOcupado('') }
   }
 
+  /* Vale para las dos: la propuesta automática y el par elegido a mano en el
+     desplegable. El cerrojo se pone sobre el ID y no sobre el conductor porque
+     la lista de arriba va por ID; si no, al elegir en un desplegable se
+     bloquearía una fila que no es. */
   const confirmarId = async (p) => {
-    setOcupado(p.driver_id); setErr('')
+    setOcupado(p.transporter_id || p.driver_id); setErr('')
     try {
       await confirmarTransporterId({ driver_id: p.driver_id, transporter_id: p.transporter_id })
       cargar(); onCambio?.()
@@ -368,9 +374,74 @@ function SaludFichas({ onCambio }) {
         )}
       </section>
 
+      {/* ── IDS QUE SALEN A RUTA Y NO TIENEN FICHA ──────────────────────
+          Es lo que hace que en el debrief salga "SIN FICHA" y que no se pueda
+          poner nombre a nadie. De cada uno se enseña CON QUÉ reconocerlo: un
+          código como `A20PS9T9WIF7WN` no le dice nada a nadie, pero "hace la
+          XA_C14 casi todos los días" lo identifica en dos segundos.
+
+          Los candidatos son solo los conductores que todavía no tienen ID. Con
+          la lista entera, el primer despiste asigna el ID de uno a otro y a
+          partir de ahí las entregas de una persona se le cuelgan a la otra. */}
+      <section>
+        <h2 className="mb-1 text-[15px] font-bold text-dark-100">
+          Salen a ruta y no tienen ficha
+          {sinFicha?.total > 0 && (
+            <span className="ml-2 rounded-full bg-red-500/20 px-2 py-0.5 text-[11.5px] font-bold text-red-300">
+              {sinFicha.total}
+            </span>
+          )}
+        </h2>
+        {sinFicha && (
+          <p className="mb-3 max-w-[72ch] text-[13px] text-dark-400">
+            {sinFicha.total} IDs han hecho rutas en los últimos {sinFicha.dias} días sin
+            ninguna ficha detrás, frente a {sinFicha.con_ficha} que sí la tienen. Se
+            enseñan sus rutas más repetidas para poder reconocerlos: el código no dice
+            nada, la ruta sí. Ordenados por paquetes — el que más mueve es el que más
+            duele no tener.
+          </p>
+        )}
+        {sinFicha?.total === 0 ? (
+          <div className="card p-6 text-center text-[13.5px] text-dark-400">
+            Ninguno. Todos los que salen a ruta tienen su ficha.
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {(sinFicha?.sin_ficha || []).map((x) => (
+              <div key={x.transporter_id} className="card flex flex-wrap items-center gap-2 p-3 text-[13px]">
+                <span className="font-mono text-[12.5px] font-semibold text-dark-100">{x.transporter_id}</span>
+                <span className="text-dark-400">
+                  {x.ruta_habitual && <b className="text-brand-300">{x.ruta_habitual}</b>}
+                  {x.rutas.length > 1 && <span className="text-dark-500"> · {x.rutas.slice(1).join(', ')}</span>}
+                </span>
+                <span className="tabular-nums text-dark-500">
+                  {x.paquetes.toLocaleString('es-ES')} paquetes · {x.dias} día{x.dias === 1 ? '' : 's'}
+                  {x.ultimo_dia && ` · último ${x.ultimo_dia.slice(8)}/${x.ultimo_dia.slice(5, 7)}`}
+                </span>
+                <select
+                  value=""
+                  onChange={(e) => e.target.value && confirmarId({
+                    driver_id: e.target.value, transporter_id: x.transporter_id })}
+                  disabled={ocupado === x.transporter_id}
+                  className="ml-auto max-w-[15rem] rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12.5px] text-dark-100 outline-none disabled:opacity-50">
+                  <option value="">
+                    {ocupado === x.transporter_id ? 'Guardando…' : '¿Quién es? — elegir'}
+                  </option>
+                  {(sinFicha?.candidatos || []).map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}{d.center ? ` · ${d.center}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* ── Transporter IDs ────────────────────────────────────────── */}
       <section>
-        <h2 className="mb-1 text-[15px] font-bold text-dark-100">Transporter IDs que faltan</h2>
+        <h2 className="mb-1 text-[15px] font-bold text-dark-100">Emparejado automático</h2>
         {ids && (
           <p className="mb-3 max-w-[70ch] text-[13px] text-dark-400">
             {ids.sin_id} conductores sin ID. Es lo que hace que en el debrief salgan
@@ -395,9 +466,9 @@ function SaludFichas({ onCambio }) {
                 <span className="font-semibold text-dark-100">{p.nombre}</span>
                 <span className="font-mono text-[12.5px] text-brand-300">{p.transporter_id}</span>
                 <span className="text-dark-500">coinciden {p.dias} días ({p.prueba.join(', ')})</span>
-                <button onClick={() => confirmarId(p)} disabled={ocupado === p.driver_id}
+                <button onClick={() => confirmarId(p)} disabled={ocupado === p.transporter_id}
                   className="ml-auto rounded-lg bg-brand-500/20 px-3 py-1 text-[12.5px] font-semibold text-brand-200 hover:bg-brand-500/30 disabled:opacity-50">
-                  {ocupado === p.driver_id ? 'Guardando…' : 'Es correcto'}
+                  {ocupado === p.transporter_id ? 'Guardando…' : 'Es correcto'}
                 </button>
               </div>
             ))}
