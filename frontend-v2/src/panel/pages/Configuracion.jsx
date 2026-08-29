@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useT } from '../../i18n'
-import { Loader2, Plus, Building, Send, CreditCard, Check, Copy, ExternalLink, BellRing, Pencil, Trash2, Clock } from 'lucide-react'
-import { getOrgCenters, addOrgCenter, getTelegramConfig, getOrgBilling, getBillingUso, listarDestinatarios, guardarDestinatario, borrarDestinatario, enviarResumenDiario, getHorariosAvisos, setHorariosAvisos } from '../api'
+import { Loader2, Plus, Building, Send, CreditCard, Check, Copy, ExternalLink, BellRing, Pencil, Trash2, Clock, MessageCircle } from 'lucide-react'
+import { getOrgCenters, addOrgCenter, getTelegramConfig,
+  getWhatsappEstado, setWhatsappConfig, probarWhatsapp, getOrgBilling, getBillingUso, listarDestinatarios, guardarDestinatario, borrarDestinatario, enviarResumenDiario, getHorariosAvisos, setHorariosAvisos } from '../api'
 import { lista } from '../../lib/lista'
 import { getAdmin } from '../auth'
 
@@ -82,6 +83,159 @@ function Horarios() {
         ))}
       </div>
       <p className="mt-2.5 text-[11px] text-dark-600">Hora de España. El cambio vale desde hoy mismo.</p>
+    </div>
+  )
+}
+
+/* ── WHATSAPP BUSINESS ─────────────────────────────────────────────────────
+   Aquí NO se pegan credenciales. El token de Meta vive en los secretos de Fly
+   y no puede pasar por un formulario web: lo que se escribe en una pantalla
+   acaba en el historial del navegador, en una captura y en la base de datos.
+   Esta tarjeta solo dice qué falta, enciende cada aviso y prueba el envío.
+
+   Todo empieza APAGADO. En cuanto se pongan las credenciales, esto escribe a
+   números de personas reales: que lo encienda alguien a propósito, no el hecho
+   de haber pegado un token. */
+function WhatsAppCard() {
+  const [est, setEst] = useState(null)
+  const [tel, setTel] = useState('')
+  const [msg, setMsg] = useState(null)
+  const [busy, setBusy] = useState('')
+
+  const cargar = () => getWhatsappEstado().then((r) => setEst(r.data)).catch(() => setEst({ error: true }))
+  useEffect(cargar, [])
+
+  const toggle = async (clave, valor) => {
+    setBusy(clave); setMsg(null)
+    try {
+      const r = await setWhatsappConfig({ [clave]: valor })
+      setEst((e) => ({ ...e, config: r.data.config }))
+    } catch (e) {
+      setMsg({ mal: true, txt: e?.response?.data?.detail || 'No se pudo guardar.' })
+    } finally { setBusy('') }
+  }
+
+  const probar = async () => {
+    setBusy('prueba'); setMsg(null)
+    try {
+      const r = await probarWhatsapp({ telefono: tel })
+      setMsg(r.data?.ok
+        ? { txt: 'Enviado. Míralo en el móvil.' }
+        : { mal: true, txt: `No salió: ${r.data?.error || 'sin detalle'}` })
+      cargar()
+    } catch (e) {
+      setMsg({ mal: true, txt: e?.response?.data?.detail || 'No se pudo enviar.' })
+    } finally { setBusy('') }
+  }
+
+  const c = est?.config || {}
+  const listo = est?.configurado
+
+  return (
+    <div className="card p-5">
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-sm font-semibold text-dark-200">
+        <MessageCircle size={16} /> WhatsApp Business
+        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+          listo ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>
+          {listo ? 'conectado' : 'falta conectarlo'}
+        </span>
+        {listo && c.activo && (
+          <span className="rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-semibold text-emerald-300">avisos encendidos</span>
+        )}
+      </div>
+
+      {!est ? <Loader2 className="animate-spin text-dark-400" size={16} /> : !listo ? (
+        <>
+          {/* Lo que falta, con el comando exacto. Una lista de nombres de
+              variables sin decir qué hacer con ellas no la usa nadie. */}
+          <p className="mb-2 text-xs text-dark-400">
+            Faltan {est.faltan?.length} datos de Meta. Se ponen como secretos del
+            servidor —nunca aquí— con este comando:
+          </p>
+          <pre className="overflow-x-auto rounded-lg border border-dark-800 bg-dark-950 p-3 text-[11.5px] leading-relaxed text-dark-300">
+{`fly secrets set -a flotadsp-backend \\
+  WHATSAPP_ACCESS_TOKEN=... \\
+  WHATSAPP_PHONE_NUMBER_ID=... \\
+  WHATSAPP_BUSINESS_ACCOUNT_ID=... \\
+  WHATSAPP_VERIFY_TOKEN=${'flota-' + Math.random().toString(36).slice(2, 10)}`}
+          </pre>
+          <p className="mt-2 text-xs text-dark-500">
+            Los tres primeros salen de tu app en developers.facebook.com. El cuarto
+            lo eliges tú: es la contraseña con la que Meta comprueba que el webhook
+            es nuestro. Ese de ahí sirve.
+          </p>
+        </>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-4 text-xs text-dark-400">
+            <span>Número: <b className="font-mono text-dark-200">{est.phone_number_id}</b></span>
+            <span>Enviados 30 d: <b className="text-dark-200">{est.enviados_30d}</b></span>
+            {est.fallidos_30d > 0 && (
+              <span className="text-amber-300">{est.fallidos_30d} sin salir</span>
+            )}
+          </div>
+
+          {/* Los interruptores. El general primero: apagarlo corta los tres de
+              golpe sin tener que acordarse de cuál estaba encendido. */}
+          <div className="space-y-1.5">
+            {[['activo', 'Mandar WhatsApp (interruptor general)'],
+              ['avisar_itv', 'ITV caducada — al conductor que la lleva'],
+              ['avisar_incidencia', 'Incidencia grave — al taller'],
+              ['avisar_resumen', 'Resumen del día — a los responsables de centro']].map(([k, txt]) => (
+              <label key={k} className={`flex items-center gap-2 text-[13px] ${
+                k !== 'activo' && !c.activo ? 'text-dark-600' : 'text-dark-300'}`}>
+                <input type="checkbox" checked={!!c[k]} disabled={busy === k || (k !== 'activo' && !c.activo)}
+                  onChange={(e) => toggle(k, e.target.checked)} className="accent-emerald-500" />
+                {txt}
+              </label>
+            ))}
+          </div>
+
+          {/* Probar ANTES de encenderlo para conductores reales: una plantilla
+              mal montada se envía igual y llega con los huecos en blanco a
+              doscientas personas. */}
+          <div className="flex flex-wrap items-center gap-2 border-t border-dark-800 pt-3">
+            <input value={tel} onChange={(e) => setTel(e.target.value)}
+              placeholder="Tu móvil, para probar"
+              className="input w-56 text-[13px]" />
+            <button onClick={probar} disabled={busy === 'prueba' || tel.trim().length < 9}
+              className="btn-ghost text-[13px] disabled:opacity-40">
+              {busy === 'prueba' ? 'Enviando…' : 'Mandar una de prueba'}
+            </button>
+          </div>
+          {msg && (
+            <p className={`text-[12.5px] ${msg.mal ? 'text-red-300' : 'text-emerald-300'}`}>{msg.txt}</p>
+          )}
+
+          {/* Las plantillas y su estado los dice META, no nosotros: una
+              rechazada sigue existiendo en nuestro código y el único sitio
+              donde consta que no se puede usar es su respuesta. */}
+          {est.plantillas?.ok && (
+            <div className="border-t border-dark-800 pt-3">
+              <p className="mb-1.5 text-xs font-semibold text-dark-400">Plantillas en Meta</p>
+              <div className="flex flex-wrap gap-1.5">
+                {(est.plantillas.plantillas || []).map((p) => (
+                  <span key={p.nombre + p.idioma}
+                    className={`rounded px-2 py-0.5 font-mono text-[11.5px] ${
+                      p.estado === 'APPROVED' ? 'bg-emerald-500/15 text-emerald-300'
+                        : p.estado === 'REJECTED' ? 'bg-red-500/15 text-red-300'
+                          : 'bg-amber-500/15 text-amber-300'}`}>
+                    {p.nombre} · {p.estado?.toLowerCase()}
+                  </span>
+                ))}
+                {!(est.plantillas.plantillas || []).length && (
+                  <span className="text-[12.5px] text-dark-500">Ninguna todavía. Se crean en Meta y las aprueba en unas horas.</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <p className="mt-3 text-xs text-dark-500">
+        URL del webhook para pegar en Meta:{' '}
+        <span className="font-mono text-dark-400">{est?.webhook_url || '—'}</span>
+      </p>
     </div>
   )
 }
@@ -320,6 +474,8 @@ export default function Configuracion() {
         )}
         <p className="mt-2 text-xs text-dark-500">Recibe alertas de daños graves, ITV y coberturas directamente en Telegram.</p>
       </div>
+
+      <WhatsAppCard />
 
       <Destinatarios centers={centers || []} />
 

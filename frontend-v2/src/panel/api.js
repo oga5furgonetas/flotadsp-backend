@@ -203,6 +203,12 @@ export const uploadScorecard = (file, center) => {
 /* ── Org / Config ── */
 export const getOrgCenters = () => api.get('/org/centers')
 export const addOrgCenter = (name) => api.post('/org/centers', { name })
+/* WhatsApp Business. Las credenciales NO pasan por aqui: viven en los secretos
+   de Fly. Estos endpoints solo dicen que falta, encienden cada aviso y prueban. */
+export const getWhatsappEstado = () => api.get('/whatsapp/estado')
+export const setWhatsappConfig = (body) => api.post('/whatsapp/config', body)
+export const probarWhatsapp = (body) => api.post('/whatsapp/prueba', body)
+export const avisarItvWhatsapp = () => api.post('/whatsapp/avisar-itv')
 export const getTelegramConfig = () => api.get('/telegram/config')
 export const getOrgBilling = () => api.get('/org/billing')
 export const getBillingUso = () => api.get('/billing/uso')

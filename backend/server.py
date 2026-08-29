@@ -1,12 +1,13 @@
 ﻿from damage_segmentation import segment_damage, preload_sam
 import fiabilidad
 import piezas
+import whatsapp
 from ai_learning import (
     get_few_shot_examples, build_few_shot_prompt_parts_multimodal,
     get_pattern_lessons, get_part_lesson, save_feedback as _save_ai_feedback,
 )
 from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Depends, Body, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
@@ -312,6 +313,8 @@ class Driver(BaseModel):
     # que `driver_id`: aquel es el numero interno de Amazon que aparece en la
     # ficha, este es el codigo con el que vienen firmados los DNR.
     transporter_id: Optional[str] = None
+    # None = no se ha decidido; se trata como SI. False lo apaga para esa persona.
+    whatsapp_opt_in: Optional[bool] = None
     photo_url: Optional[str] = None    # foto de perfil (R2)
     center: Optional[str] = None
     active: bool = True
@@ -1212,6 +1215,11 @@ async def _ensure_tenant_indexes(db_name: str):
         # El diagnostico de esquema es una foto, no un historico: caduca a 30
         # dias y son unos pocos documentos (uno por tipo, con upsert).
         await _idx(tdb.cortex_diagnostico, "expira_en", expireAfterSeconds=0)
+        # El registro de WhatsApp caduca solo a los 90 dias: es operacion, no
+        # historico, y una coleccion de avisos sin techo crece hasta que alguien
+        # la descubre. Y se consulta por fecha desde el panel.
+        await _idx(tdb.whatsapp_envios, "expira_en", expireAfterSeconds=0)
+        await _idx(tdb.whatsapp_envios, [("at", -1)])
     except Exception as _e:
         logger.warning(f"Indice TTL de cortex: {_e}")
     await _idx(tdb.inspections, "id")
@@ -7409,6 +7417,10 @@ async def update_driver(driver_id: str, data: dict, _=Depends(require_admin)):
         # fallaba en silencio): contrato/nivel/zona + ficha extendida.
         "contrato","nivel","zona","driver_id","alojamiento","notas","login",
         "transporter_id",
+        # Poder apagar el WhatsApp de UNA persona sin apagarlo para todos.
+        # Sin esto en la whitelist, el campo se descartaria en silencio al
+        # guardar y la casilla del panel no haria nada (gotcha 1).
+        "whatsapp_opt_in",
     }
     data = {k: v for k, v in data.items() if k in _DRIVER_ALLOWED}
 
@@ -10654,11 +10666,42 @@ async def enviar_resumen_diario(dia: Optional[str] = None, solo_id: Optional[str
             else:
                 logger.warning("Resumen diario: no se pudo enviar a %s", d["email"])
 
+        # ── Y POR WHATSAPP, si esta encendido y hay numero ────────────────────
+        # La version CORTA, no la larga: los parametros de plantilla de Meta no
+        # admiten saltos de linea, asi que el texto con listas no cabe ahi de
+        # ninguna manera. Son dos formatos del mismo dato, no una duplicacion.
+        #
+        # Se manda uno por persona y dia: en WhatsApp se paga por mensaje y por
+        # destinatario, asi que tres avisos sueltos a dos personas son seis
+        # mensajes donde cabe uno.
+        wasap = []
+        if await whatsapp.puede_avisar(db, "avisar_resumen"):
+            cfgw = await whatsapp.config(db)
+            for d in quienes:
+                tel = d.get("telefono") or d.get("phone")
+                if not tel or d.get("whatsapp_opt_in") is False:
+                    continue
+                # `golpes` es TEXTO ('3 · 1234ABC, 5678DEF' o 'ninguno'), no un
+                # numero: se saca la cifra de delante. Tratarlo como diccionario
+                # revienta con AttributeError dentro del cron de las 21:00, que
+                # es donde peor se ve.
+                _g = str(r.get("golpes") or "ninguno")
+                _n_golpes = _g.split(" ·")[0] if _g != "ninguno" else "0"
+                rw = await whatsapp.enviar_plantilla(
+                    db, tel, cfgw["plantilla_resumen"],
+                    [f"{r['center']} {r['fecha']}",
+                     str(r.get("entrega") or "").split(" (")[0],
+                     _n_golpes,
+                     str(r.get("checklist") or "—")],
+                    motivo="resumen_diario")
+                if rw.get("ok"):
+                    wasap.append(d.get("nombre") or tel)
+
         salida.append({**{k: r[k] for k in ("center", "fecha", "entrega", "checklist", "golpes")},
                        "incidencias": r["incidencias"], "danos": r["danos"],
                        "turnos": [{k: t[k] for k in ("turno", "hechas", "total")} for t in r["turnos"]],
                        "destinatarios": [d["nombre"] for d in quienes],
-                       "correos": correos})
+                       "correos": correos, "whatsapp": wasap})
     return salida
 
 
@@ -10782,6 +10825,90 @@ async def revisar_facturacion() -> list:
                           f"({signo}{d['diferencia']})")
         await _telegram_aviso("\n".join(lineas))
     return desfases
+
+
+async def avisar_itv_por_whatsapp() -> list:
+    """Un WhatsApp al conductor de cada furgoneta con la ITV caducada.
+
+    UNA VEZ AL DIA Y NO AL ABRIR LA PANTALLA. Enganchado a la pantalla de
+    Vencimientos, cada refresco mandaria mensajes otra vez: en WhatsApp eso son
+    mensajes cobrados y, sobre todo, gente que deja de leerlos a los dos dias.
+
+    Solo CADUCADAS, no las que estan por vencer. Lo que hay que decirle al
+    conductor es "esta no puede salir", y eso solo es cierto cuando ya venció.
+    Las proximas son trabajo de oficina —pedir cita— y para eso esta la
+    pantalla; molestar al conductor con ellas convierte el aviso en ruido.
+
+    Circular con la ITV caducada son 200 EUR sin margen de un dia y la Guardia
+    Civil puede inmovilizar el vehiculo donde lo pare, asi que la persona que
+    tiene que enterarse es la que la va a conducir.
+    """
+    if not await whatsapp.puede_avisar(db, "avisar_itv"):
+        return []
+    from datetime import date as _date
+    hoy = _date.today()
+    cfgw = await whatsapp.config(db)
+
+    # A quien se le dio hoy cada furgoneta. La asignacion del dia manda sobre
+    # `current_driver_id`, que puede llevar semanas sin tocarse.
+    hoy_iso = hoy.strftime("%Y-%m-%d")
+    conductor_de = {}
+    async for a_doc in db.daily_assignments.find({"date": hoy_iso}, {"_id": 0, "slots": 1}):
+        for sl in (a_doc.get("slots") or []):
+            if sl.get("vehicle_id") and sl.get("driver_id"):
+                conductor_de[sl["vehicle_id"]] = sl["driver_id"]
+
+    salida = []
+    async for v in db.vehicles.find(
+            {"status": {"$nin": ["deleted", "baja", "taller"]},
+             "itv_date": {"$nin": [None, ""]}},
+            {"_id": 0, "id": 1, "license_plate": 1, "itv_date": 1, "current_driver_id": 1}):
+        try:
+            y, m, d = [int(x) for x in str(v["itv_date"]).split("-")]
+            dias = (hoy - _date(y, m, d)).days
+        except (ValueError, TypeError):
+            continue
+        if dias <= 0:
+            continue                      # aun en regla: no es cosa del conductor
+        did = conductor_de.get(v["id"]) or v.get("current_driver_id")
+        if not did:
+            continue
+        drv = await db.drivers.find_one({"id": did},
+                                        {"_id": 0, "name": 1, "phone": 1, "telefono": 1,
+                                         "whatsapp_opt_in": 1})
+        if not drv or drv.get("whatsapp_opt_in") is False:
+            continue
+        tel = drv.get("phone") or drv.get("telefono")
+        if not tel:
+            continue
+        r = await whatsapp.enviar_plantilla(
+            db, tel, cfgw["plantilla_itv"],
+            [v.get("license_plate") or v["id"], str(dias)],
+            motivo="itv_vencida")
+        salida.append({"matricula": v.get("license_plate"), "dias": dias,
+                       "conductor": drv.get("name"), "ok": r.get("ok"),
+                       "error": r.get("error")})
+    if salida:
+        logger.info("WhatsApp ITV: %d avisos (%d con fallo)",
+                    len(salida), sum(1 for x in salida if not x["ok"]))
+    return salida
+
+
+@app.on_event("startup")
+async def start_itv_whatsapp_scheduler():
+    """Los avisos de ITV salen a la misma hora que el resumen del dia.
+
+    A la hora del resumen y no por la manana a proposito: por la manana la gente
+    esta cargando y no va a parar a leer un WhatsApp; por la tarde da tiempo a
+    organizar la cita para el dia siguiente.
+    """
+    asyncio.create_task(_bucle_aviso("itv_whatsapp", "resumen_diario", avisar_itv_por_whatsapp))
+
+
+@api_router.post("/whatsapp/avisar-itv")
+async def trigger_itv_whatsapp(_=Depends(require_admin)):
+    """Dispara los avisos de ITV ahora, sin esperar a la hora."""
+    return {"avisos": await avisar_itv_por_whatsapp()}
 
 
 @app.on_event("startup")
@@ -11413,6 +11540,118 @@ if __name__ == "__main__":
 # =============================================================
 
 import aiohttp as _aiohttp
+
+# =========================
+# WHATSAPP BUSINESS (Cloud API de Meta)
+# =========================
+# El envio vive en `backend/whatsapp.py`. Aqui solo van los endpoints: el
+# webhook que verifica Meta, el interruptor de cada aviso y la prueba.
+#
+# LA URL QUE HAY QUE PEGAR EN META es, con el prefijo del router incluido:
+#     https://flotadsp-backend.fly.dev/api/webhooks/whatsapp
+# y el "token de verificacion" es el valor de WHATSAPP_VERIFY_TOKEN.
+
+
+@api_router.get("/webhooks/whatsapp")
+async def whatsapp_webhook_verificar(request: Request):
+    """El reto de verificacion de Meta. Publico y sin sesion, a la fuerza.
+
+    Meta llama con ?hub.mode=subscribe&hub.verify_token=X&hub.challenge=Y y hay
+    que devolver el challenge TAL CUAL y en texto plano. Si se devuelve JSON o
+    con comillas, Meta lo da por fallido sin decir por que.
+
+    OJO AL ORDEN DE RUTAS: esta es estatica y va declarada antes que cualquier
+    `/webhooks/{algo}`. Puesta despues, la palabra 'whatsapp' entraria como si
+    fuera un parametro (el mismo fallo del /work-orders/export).
+    """
+    p = request.query_params
+    esperado = os.environ.get("WHATSAPP_VERIFY_TOKEN") or ""
+    if p.get("hub.mode") == "subscribe" and esperado and p.get("hub.verify_token") == esperado:
+        return PlainTextResponse(p.get("hub.challenge") or "")
+    logger.warning("WhatsApp webhook: verificacion rechazada (token no coincide)")
+    raise HTTPException(status_code=403, detail="Token de verificacion incorrecto")
+
+
+@api_router.post("/webhooks/whatsapp")
+async def whatsapp_webhook_recibir(request: Request):
+    """Mensajes entrantes y acuses de entrega. De momento solo se apuntan.
+
+    SE DEVUELVE 200 PASE LO QUE PASE. Meta reintenta lo que no responde 200 y,
+    tras varios fallos, DESACTIVA la suscripcion del webhook entera. Un error
+    nuestro procesando un mensaje no puede acabar en quedarnos sin webhook.
+
+    Se guarda en `global_db` y no en la base del DSP a proposito: este endpoint
+    no lleva sesion, y `db` resolveria a la base por defecto pasara lo que
+    pasara (gotcha 26). Cuando haga falta repartirlo por empresa, el
+    `phone_number_id` del propio mensaje es la clave para saber de quien es.
+    """
+    try:
+        cuerpo = await request.json()
+    except Exception:                                        # noqa: BLE001
+        return {"ok": True}
+    try:
+        await global_db.whatsapp_webhook_events.insert_one({
+            "recibido_en": datetime.now(timezone.utc).isoformat(),
+            "cuerpo": json.loads(json.dumps(cuerpo)[:20000]),
+            "expira_en": datetime.now(timezone.utc) + timedelta(days=30),
+        })
+    except Exception as e:                                   # noqa: BLE001
+        logger.warning(f"WhatsApp webhook: no se pudo guardar: {e}")
+    return {"ok": True}
+
+
+@api_router.get("/whatsapp/estado")
+async def whatsapp_estado(_=Depends(require_admin)):
+    """Que hay conectado, que plantillas hay y cuantos avisos han salido.
+
+    Nunca devuelve el token: solo si esta puesto y cuales faltan.
+    """
+    est = whatsapp.estado()
+    cfg = await whatsapp.config(db)
+    desde = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    enviados = await db[whatsapp.COLECCION_ENVIOS].count_documents({"at": {"$gte": desde}})
+    fallidos = await db[whatsapp.COLECCION_ENVIOS].count_documents(
+        {"at": {"$gte": desde}, "ok": False})
+    ultimos = await db[whatsapp.COLECCION_ENVIOS].find(
+        {}, {"_id": 0}).sort("at", -1).to_list(10)
+    return {**est, "config": cfg,
+            "enviados_30d": enviados, "fallidos_30d": fallidos,
+            "ultimos": ultimos,
+            "webhook_url": "https://flotadsp-backend.fly.dev/api/webhooks/whatsapp",
+            "plantillas": await whatsapp.plantillas()}
+
+
+@api_router.post("/whatsapp/config")
+async def whatsapp_guardar_config(data: dict = Body(...), _=Depends(require_admin)):
+    """Enciende o apaga cada aviso. Las credenciales NO se tocan desde aqui."""
+    permitido = ("activo", "avisar_itv", "avisar_incidencia", "avisar_resumen",
+                 "plantilla_itv", "plantilla_incidencia", "plantilla_resumen")
+    doc = {k: data[k] for k in permitido if k in data}
+    for k in ("activo", "avisar_itv", "avisar_incidencia", "avisar_resumen"):
+        if k in doc:
+            doc[k] = bool(doc[k])
+    doc["actualizado_en"] = datetime.now(timezone.utc).isoformat()
+    await db[whatsapp.COLECCION_CONFIG].update_one({}, {"$set": doc}, upsert=True)
+    return {"ok": True, "config": await whatsapp.config(db)}
+
+
+@api_router.post("/whatsapp/prueba")
+async def whatsapp_prueba(data: dict = Body(...), _=Depends(require_admin)):
+    """Manda una plantilla a UN numero, para probar antes de encenderlo.
+
+    Se prueba a un numero propio ANTES de activarlo para conductores reales: una
+    plantilla mal montada se manda igual y llega con los huecos en blanco a
+    doscientas personas.
+    """
+    tel = str(data.get("telefono") or "").strip()
+    if not tel:
+        raise HTTPException(400, "Escribe el numero al que mandar la prueba")
+    cfg = await whatsapp.config(db)
+    plantilla = str(data.get("plantilla") or cfg["plantilla_itv"]).strip()
+    params = data.get("parametros") or ["0000ABC", "3"]
+    r = await whatsapp.enviar_plantilla(db, tel, plantilla, params, motivo="prueba")
+    return r
+
 
 # =========================
 # TELEGRAM
@@ -12618,6 +12857,29 @@ async def create_incident(data: IncidentCreate, user: dict = Depends(require_any
             url="/panel/incidencias", exclude_id=user.get("sub"))
     except Exception as _pe:
         logger.debug(f"push incidencia: {_pe}")
+
+    # ── Y UN WHATSAPP AL TALLER, si es grave y esta encendido ────────────────
+    # Solo grave o critica: mandarlas todas convierte el aviso en ruido y el
+    # taller deja de mirarlo, que es peor que no avisar.
+    # Va dentro de su propio try: una incidencia se guarda pase lo que pase con
+    # el aviso, y la persona que la esta creando esta en la calle esperando.
+    try:
+        if str(getattr(incident, "severity", "") or "").lower() in ("critica", "crítica", "grave", "critical", "high")                 and await whatsapp.puede_avisar(db, "avisar_incidencia"):
+            _veh = await db.vehicles.find_one(
+                {"id": incident.vehicle_id},
+                {"_id": 0, "license_plate": 1, "workshop_id": 1, "center": 1})
+            _tallerid = (_veh or {}).get("workshop_id")
+            _taller = await db.workshops.find_one({"id": _tallerid}, {"_id": 0, "name": 1, "phone": 1})                 if _tallerid else None
+            if _taller and _taller.get("phone"):
+                _cfgw = await whatsapp.config(db)
+                await whatsapp.enviar_plantilla(
+                    db, _taller["phone"], _cfgw["plantilla_incidencia"],
+                    [(_veh or {}).get("license_plate") or incident.vehicle_id,
+                     (incident.title or incident.description or "")[:200]],
+                    motivo="incidencia_critica")
+    except Exception as _we:                                 # noqa: BLE001
+        logger.warning(f"WhatsApp incidencia: {_we}")
+
     return serialize_doc(incident.model_dump())
 
 

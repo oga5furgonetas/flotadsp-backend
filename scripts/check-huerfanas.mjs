@@ -27,6 +27,12 @@ const SIN_UI_A_PROPOSITO = new Set([
   'POST /telegram/send-daily-summary',
   'POST /telegram/send-weekly-summary',
   'GET /r2-test',
+  // Los llama META, no nuestro frontend. Sin esta excepción salen como
+  // huérfanos para siempre y el trinquete acaba subiendo por rutas que sí
+  // tienen consumidor — solo que está fuera. La URL se pega en la consola de
+  // Meta for Developers y es la que verifica el webhook de WhatsApp.
+  'GET /webhooks/whatsapp',
+  'POST /webhooks/whatsapp',
   // Buzon de errores del navegador. Se consulta a mano cuando alguien reporta
   // "se me queda la pantalla en negro": hasta ahora esos errores solo iban a
   // Telegram y a una linea de log que dura minutos, asi que no habia nada que
