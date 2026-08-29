@@ -275,7 +275,11 @@ function Paquete({ f, dia, alMarcar }) {
 }
 
 function Conductor({ c, dia, alMarcar }) {
-  const [abierto, setAbierto] = useState(c.pendientes > 0)
+  /* Cerrada de entrada, aunque tenga cosas pendientes. Abiertas ocupan la fila
+     entera, así que con siete rutas por reclamar la rejilla se convertía otra
+     vez en la lista larga de antes. La tarjeta ya dice cuántas quedan sin
+     mirar; se abre la que se está haciendo. */
+  const [abierto, setAbierto] = useState(false)
   const [verTodo, setVerTodo] = useState(false)
   /* El orden importa y es el de urgencia, no el alfabetico ni el del backend. */
   const grupos = [
@@ -319,16 +323,23 @@ function Conductor({ c, dia, alMarcar }) {
     .filter(([, , , l]) => l.length)
 
   return (
-    <div className={`overflow-hidden rounded-xl border ${
-      c.pendientes ? 'border-amber-300' : 'border-slate-200'} bg-white`}>
+    /* La tarjeta abierta ocupa la fila entera: dentro van los TBA con su
+       dirección y los botones de marcar, y eso en un tercio de ancho se parte
+       en cuatro líneas y deja de leerse. Cerrada, una de cada tres. */
+    <div className={`overflow-hidden rounded-xl border bg-white ${
+      abierto ? 'border-slate-300 shadow-sm sm:col-span-2 xl:col-span-3'
+        : c.pendientes ? 'border-amber-300' : 'border-slate-200'}`}>
       <button
         onClick={() => setAbierto((v) => !v)}
-        className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50">
+        className="flex w-full items-start gap-2.5 px-3.5 py-3 text-left hover:bg-slate-50">
         <ChevronRight size={16}
-          className={`shrink-0 text-slate-400 transition-transform ${abierto ? 'rotate-90' : ''}`} />
+          className={`mt-0.5 shrink-0 text-slate-400 transition-transform ${abierto ? 'rotate-90' : ''}`} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="font-semibold text-slate-900">{c.ruta || 'Sin ruta'}</span>
+            {/* La RUTA es lo que se busca con la vista, así que va grande y
+                sola en su renglón visual. El nombre debajo: se necesita para
+                dirigirse a la persona, pero no para encontrar la tarjeta. */}
+            <span className="text-[15px] font-bold tracking-tight text-slate-900">{c.ruta || 'Sin ruta'}</span>
             {/* Quien ha tocado mas de una ruta es un apoyo, y conviene que se
                 vea: sus paquetes vienen de sitios distintos. */}
             {c.es_apoyo && (
@@ -355,27 +366,21 @@ function Conductor({ c, dia, alMarcar }) {
               </span>
             )}
           </div>
-          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-slate-500">
+          {/* CERRADA, SOLO LO QUE SE MIRA DE UN VISTAZO. Antes iban aquí seis
+              datos seguidos —entregados, en la furgoneta, arrastrados, sin
+              observar, último movimiento y la frescura— y en una tarjeta de un
+              tercio de ancho eso son tres renglones de texto gris que nadie
+              lee. El resto se ve al abrir, que es cuando importa. */}
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px] text-slate-500">
             <span className="tabular-nums">{c.entregados}/{c.total} entregados</span>
-            {!!(c.sin_cerrar || []).length && (
-              <span className="text-slate-400">· {c.sin_cerrar.length} aún en la furgoneta</span>
-            )}
-            {c.arrastrados > 0 && (
-              <span className="text-slate-400">· {c.arrastrados} arrastran de otro día</span>
-            )}
-            {c.no_observado > 0 && <span className="text-slate-400">· {c.no_observado} sin observar</span>}
-            {/* DOS COSAS DISTINTAS, Y ANTES SE ENSEÑABA UNA CON EL NOMBRE DE LA
-                OTRA. `ultima_captura` es la hora del ultimo MOVIMIENTO en Cortex:
-                una ruta que termino a las 19:00 se queda ahi para siempre por
-                mucho que la sigamos bajando, y llamar a eso "ultima captura"
-                hacia parecer viejos unos datos que estaban al dia. Los minutos
-                salen de `seen_at`, que lo escribe la ingesta cada vez que baja la
-                ruta, y esa es la pregunta que hay que poder contestar antes de
-                reclamarle nada a nadie: ¿esto vale? */}
-            <span className="tabular-nums text-slate-400">· último movimiento {fmtHora(c.ultima_captura)}</span>
-            {c.capturado_hace_min != null && (
-              <span className={`tabular-nums ${c.capturado_hace_min > 45 ? 'font-semibold text-amber-700' : 'text-slate-400'}`}>
-                · {c.capturado_hace_min <= 1 ? 'al día' : `bajado hace ${c.capturado_hace_min} min`}
+            {/* La frescura solo cuando es mala: si el dato está al día no hace
+                falta decirlo, y un aviso que sale siempre deja de leerse. Pero
+                cuando la ruta lleva una hora sin bajarse hay que verlo ANTES de
+                reclamarle nada a nadie, porque lo que se ve puede ser de antes. */}
+            {c.capturado_hace_min > 45 && (
+              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10.5px] font-semibold tabular-nums text-amber-800"
+                title="Hace tanto que no bajamos esta ruta que lo que se ve puede haber cambiado ya">
+                dato de hace {c.capturado_hace_min} min
               </span>
             )}
           </div>
@@ -406,6 +411,29 @@ function Conductor({ c, dia, alMarcar }) {
 
       {abierto && (
         <div className="border-t border-slate-100 bg-slate-50/60 px-4 py-3">
+          {/* Lo que se quitó de la tarjeta cerrada aparece aquí, que es cuando
+              hace falta: el inventario, lo que arrastra y desde cuándo vale lo
+              que se está viendo. */}
+          <div className="mb-2.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11.5px] text-slate-500">
+            {!!(c.sin_cerrar || []).length && (
+              <span>{c.sin_cerrar.length} aún en la furgoneta</span>
+            )}
+            {c.arrastrados > 0 && <span>· {c.arrastrados} arrastran de otro día</span>}
+            {c.no_observado > 0 && <span>· {c.no_observado} sin observar</span>}
+            {/* DOS COSAS DISTINTAS, Y ANTES SE ENSEÑABA UNA CON EL NOMBRE DE LA
+                OTRA. `ultima_captura` es la hora del último MOVIMIENTO en Cortex:
+                una ruta que terminó a las 19:00 se queda ahí para siempre por
+                mucho que la sigamos bajando. Los minutos salen de `seen_at`, que
+                lo escribe la ingesta cada vez que baja la ruta, y esa es la
+                pregunta que hay que contestar antes de reclamarle nada a nadie:
+                ¿esto vale? */}
+            <span className="tabular-nums">· último movimiento {fmtHora(c.ultima_captura)}</span>
+            {c.capturado_hace_min != null && (
+              <span className={`tabular-nums ${c.capturado_hace_min > 45 ? 'font-semibold text-amber-700' : ''}`}>
+                · {c.capturado_hace_min <= 1 ? 'al día' : `bajado hace ${c.capturado_hace_min} min`}
+              </span>
+            )}
+          </div>
           {!grupos.length && !noCuentan.length && (
             <p className="text-[13px] text-slate-500">
               Entregó todo. No trae nada de vuelta.
@@ -651,9 +679,19 @@ export default function Debrief() {
   }, [])
 
   const r = datos?.resumen || {}
-  const lista = useMemo(() => {
+  /* ── LO TERMINADO SE QUITA DE EN MEDIO ──────────────────────────────────
+     Con 42 rutas en pantalla y 35 ya cerradas, las 7 que faltan se pierden
+     entre las demás: hay que ir leyendo tarjeta por tarjeta para encontrar
+     cuál queda. Una ruta cerrada no tiene nada que hacer ahí — lo único que
+     hace es alargar la lista.
+
+     Se ocultan, NO se borran: el contador de arriba las sigue contando y un
+     botón las trae de vuelta. Desaparecer del todo haría dudar de si se
+     perdieron, y esa duda obliga a comprobarlo por otro lado. */
+  const [verTerminadas, setVerTerminadas] = useState(false)
+
+  const [lista, terminadas] = useMemo(() => {
     let l = datos?.conductores || []
-    if (soloPend) l = l.filter((c) => c.pendientes > 0)
     const t = q.trim().toLowerCase()
     if (t) {
       l = l.filter((c) =>
@@ -663,8 +701,13 @@ export default function Debrief() {
           ...(c.perdidos || []), ...(c.sin_cerrar || [])]
           .some((f) => (f.tba || '').toLowerCase().includes(t)))
     }
-    return l
-  }, [datos, q, soloPend])
+    // Terminada = no queda nada por comprobar. Es lo que marca la oficina al
+    // ir dando los paquetes por recogidos, y también la ruta que nunca tuvo
+    // nada que reclamar.
+    const fin = l.filter((c) => !(c.pendientes > 0))
+    if (soloPend || !verTerminadas) l = l.filter((c) => c.pendientes > 0)
+    return [l, fin]
+  }, [datos, q, soloPend, verTerminadas])
 
   return (
     <div className="-m-4 -mb-24 min-h-full bg-[#F2F4F7] p-4 text-slate-900 md:-m-5 md:mb-[-1.25rem] md:p-6">
@@ -781,16 +824,40 @@ export default function Debrief() {
               <Kpi n={r.no_observado ?? 0} et="Sin observar" tono="gris" sub="no es fallo de nadie" />
             </div>
 
-            <div className="grid gap-2">
+            {/* ── REJILLA, NO LISTA ────────────────────────────────────────
+                Una fila por ruta a lo ancho de la pantalla desperdicia el
+                espacio y obliga a bajar mucho: con 42 rutas eran cinco
+                pantallazos de scroll para ver cuáles quedan. En tarjetas
+                caben tres por fila y se abarca todo de una vez.
+
+                La abierta ocupa la fila entera: dentro van los TBA con su
+                dirección y los botones, y eso en un tercio de ancho se parte
+                en cuatro líneas y no se lee. */}
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {lista.map((c) => (
                 <Conductor key={c.driver_id} c={c} dia={dia} alMarcar={alMarcar} />
               ))}
               {!lista.length && (
-                <div className="rounded-xl border border-slate-200 bg-white px-4 py-8 text-center text-[14px] text-slate-500">
-                  Nada que enseñar con este filtro.
+                <div className="rounded-xl border border-slate-200 bg-white px-4 py-8 text-center text-[14px] text-slate-500 sm:col-span-2 xl:col-span-3">
+                  {terminadas.length && !verTerminadas
+                    ? 'Todas las rutas están cerradas. Buen trabajo.'
+                    : 'Nada que enseñar con este filtro.'}
                 </div>
               )}
             </div>
+
+            {/* Las terminadas no desaparecen del todo: se dice cuántas son y
+                se pueden traer de vuelta. Que se esfumen sin decir nada haría
+                dudar de si se han perdido, y esa duda obliga a comprobarlo
+                por otro lado — que es justo lo que esta pantalla evita. */}
+            {terminadas.length > 0 && !soloPend && (
+              <button onClick={() => setVerTerminadas((v) => !v)}
+                className="mt-3 w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[13.5px] font-semibold text-slate-600 hover:bg-slate-50">
+                {verTerminadas
+                  ? `Ocultar las ${terminadas.length} rutas ya cerradas`
+                  : `${terminadas.length} rutas cerradas · verlas`}
+              </button>
+            )}
 
             <div className="mt-4 grid gap-1.5 text-[12px] leading-relaxed text-slate-400">
               <p className="flex items-start gap-1.5">
