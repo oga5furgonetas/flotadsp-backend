@@ -336,6 +336,10 @@ export const revisarDiaScorecard = () => api.post('/scorecard/revisar-dia')
 export const getDireccionesProblema = (dias, center) =>
   api.get('/cortex/direcciones-problema', { params: { ...(dias ? { dias } : {}), ...centerParam(center) } })
 export const guardarNotaDireccion = (body) => api.post('/cortex/direcciones-problema/nota', body)
+/* Guarda el recuento por direccion ANTES de que el TTL de Cortex borre los
+   paquetes: sin esto el analisis empieza de cero cada dos meses. Corre solo
+   cada tarde; esto es para no esperar. */
+export const consolidarDirecciones = () => api.post('/cortex/direcciones-problema/consolidar')
 export const getScorecardEnVivo = (center, semanas) =>
   api.get('/scorecard/en-vivo', { params: { ...centerParam(center), ...(semanas ? { semanas } : {}) } })
 export const getExposicionVehiculos = (center) =>

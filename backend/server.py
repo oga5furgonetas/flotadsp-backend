@@ -11078,6 +11078,9 @@ async def start_itv_whatsapp_scheduler():
     # La revision del DCR sale con el resumen del dia, cuando la jornada ya ha
     # cerrado. Antes, media flota sigue en la calle y todo parece un desastre.
     asyncio.create_task(_bucle_aviso("dcr_diario", "resumen_diario", revisar_dcr_diario))
+    # Consolidar las direcciones ANTES de que el TTL de Cortex borre los
+    # paquetes. Va con el cierre de la tarde, cuando el dia ya no se mueve.
+    asyncio.create_task(_bucle_aviso("dirs_consolidar", "turno_tarde", consolidar_direcciones))
 
 
 @api_router.post("/whatsapp/avisar-itv")
@@ -28119,6 +28122,104 @@ def _dir_sugerencia(motivos: dict, horas: list) -> Optional[str]:
     return None
 
 
+COLECCION_DIR_HIST = "direcciones_historico"
+
+
+async def consolidar_direcciones() -> dict:
+    """Guarda el recuento de fallos por direccion ANTES de que Cortex los borre.
+
+    POR QUE HACE FALTA. `cortex_packages` tiene TTL y hoy solo llega hasta el
+    1 de julio: 60 dias. Sin esto, una direccion que fallo cuatro veces en mayo
+    desaparece, y el analisis empieza de cero cada dos meses en vez de mejorar.
+    Justo al reves de lo que tiene que pasar.
+
+    Lo que se guarda es DIMINUTO —un documento por direccion con contadores— y
+    no un duplicado de los paquetes: en un Atlas M0 de 512 MB eso importa. Hoy
+    serian del orden de 450 documentos.
+
+    ES IDEMPOTENTE por dia. Se guarda que dias ya estan contados y no se vuelven
+    a sumar: correrlo dos veces no duplica nada. Sin eso, un reintento tras un
+    fallo doblaria los contadores y las direcciones "peores" serian las que
+    tuvieron la mala suerte de estar en el reintento.
+    """
+    ya = set()
+    doc = await db.app_meta.find_one({"_id": "dirs_consolidadas"}, {"_id": 0})
+    if doc:
+        ya = set(doc.get("dias") or [])
+
+    # Solo dias CERRADOS: el de hoy sigue moviendose.
+    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    cur = db.cortex_packages.aggregate([
+        {"$match": {"service_day": {"$lt": hoy},
+                    "state": {"$nin": list(_CX_OK) + list(_CX_EN_VUELO) + list(_CX_NO_DESPACHADO)}}},
+        {"$group": {"_id": "$service_day"}}])
+    dias = sorted({r["_id"] async for r in cur if r["_id"] and r["_id"] not in ya})
+    if not dias:
+        return {"dias": 0, "direcciones": 0}
+
+    tocadas: dict = {}
+    async for p in db.cortex_packages.find(
+            {"service_day": {"$in": dias},
+             "state": {"$nin": list(_CX_OK) + list(_CX_EN_VUELO) + list(_CX_NO_DESPACHADO)}},
+            {"_id": 0, "stop_address": 1, "state": 1, "timeline": 1, "service_day": 1}):
+        dirtxt = (p.get("stop_address") or "").strip()
+        k = _dir_clave(dirtxt)
+        if not k or len(k) < 8:
+            continue
+        ctx = None
+        hora = None
+        for e in reversed(p.get("timeline") or []):
+            if e.get("state") == p.get("state"):
+                ctx = e.get("context")
+                if e.get("at"):
+                    try:
+                        hora = (int(str(e["at"])[11:13]) + 2) % 24
+                    except Exception:                        # noqa: BLE001
+                        pass
+                break
+        g = tocadas.setdefault(k, {"n": 0, "motivos": {}, "horas": [], "texto": dirtxt,
+                                   "ultimo": p.get("service_day")})
+        g["n"] += 1
+        m = str(ctx or "SIN_MOTIVO")
+        g["motivos"][m] = g["motivos"].get(m, 0) + 1
+        if hora is not None:
+            g["horas"].append(hora)
+        if len(dirtxt) > len(g["texto"]):
+            g["texto"] = dirtxt
+        if (p.get("service_day") or "") > (g["ultimo"] or ""):
+            g["ultimo"] = p["service_day"]
+
+    for k, g in tocadas.items():
+        inc = {"n": g["n"]}
+        for m, v in g["motivos"].items():
+            # El punto no vale como clave de campo en Mongo, y un motivo raro
+            # con un punto tumbaria el update entero.
+            inc["motivos.%s" % re.sub(r"[.$]", "_", m)] = v
+        await db[COLECCION_DIR_HIST].update_one(
+            {"_id": k},
+            {"$inc": inc,
+             "$set": {"texto": g["texto"], "ultimo": g["ultimo"],
+                      "at": datetime.now(timezone.utc).isoformat()},
+             "$push": {"horas": {"$each": g["horas"][:40], "$slice": -200}}},
+            upsert=True)
+
+    # La lista de dias ya contados se recorta: con el TTL de Cortex, un dia de
+    # hace un ano no puede volver a aparecer y guardarlo no sirve de nada.
+    nuevos = sorted(ya | set(dias))[-400:]
+    await db.app_meta.update_one({"_id": "dirs_consolidadas"},
+                                 {"$set": {"dias": nuevos,
+                                           "at": datetime.now(timezone.utc).isoformat()}},
+                                 upsert=True)
+    logger.info("Direcciones consolidadas: %d días, %d direcciones", len(dias), len(tocadas))
+    return {"dias": len(dias), "direcciones": len(tocadas)}
+
+
+@api_router.post("/cortex/direcciones-problema/consolidar")
+async def disparar_consolidar_direcciones(_=Depends(require_admin)):
+    """Consolida ahora, sin esperar a su hora."""
+    return await consolidar_direcciones()
+
+
 @api_router.get("/cortex/direcciones-problema")
 async def direcciones_problema(dias: int = 90, center: str = "", _=Depends(require_admin)):
     """Las direcciones que fallan una y otra vez, con su motivo y su nota."""
@@ -28168,6 +28269,26 @@ async def direcciones_problema(dias: int = 90, center: str = "", _=Depends(requi
             g["texto"] = dirtxt
 
     notas = {n["clave"]: n async for n in db[COLECCION_DIR_NOTAS].find({}, {"_id": 0})}
+
+    # SE SUMA LO QUE YA NO ESTA EN CORTEX. Sus paquetes tienen TTL y hoy solo
+    # llegan 60 dias atras; sin esto, una direccion que fallo cuatro veces en
+    # mayo desaparece y el analisis empieza de cero cada dos meses en vez de
+    # mejorar. `consolidar_direcciones()` lo va guardando cada tarde.
+    async for h in db[COLECCION_DIR_HIST].find({}):
+        k = h.get("_id")
+        if not k:
+            continue
+        g = grupos.setdefault(k, {"texto": h.get("texto") or k, "n": 0, "motivos": {},
+                                  "dias": set(), "rutas": set(), "lat": None,
+                                  "lng": None, "horas": []})
+        # Solo se suma lo ANTERIOR a la ventana que ya trae Cortex: los dias
+        # que estan en las dos partes se contarian dos veces.
+        if (h.get("ultimo") or "") < desde:
+            g["n"] += int(h.get("n") or 0)
+            for m, v in (h.get("motivos") or {}).items():
+                g["motivos"][m] = g["motivos"].get(m, 0) + int(v or 0)
+            g["horas"].extend(h.get("horas") or [])
+            g["historico"] = True
 
     out = []
     for k, g in grupos.items():

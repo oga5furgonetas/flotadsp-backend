@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { MapPinned, AlertTriangle, Hand, RefreshCw, Loader2, ChevronRight, StickyNote } from 'lucide-react'
-import { cortexDsc, getDireccionesProblema, guardarNotaDireccion } from '../api'
+import { cortexDsc, getDireccionesProblema, guardarNotaDireccion, consolidarDirecciones } from '../api'
 import { useT } from '../../i18n'
 
 /* Dónde se deja cada paquete.
@@ -182,6 +182,14 @@ function DireccionesProblema({ center }) {
         </span>
       </div>
 
+      <p className="max-w-[74ch] text-[12.5px] leading-relaxed text-dark-500">
+        Los paquetes de Cortex caducan a los dos meses, así que cada tarde se guarda el
+        recuento por dirección antes de que desaparezcan:{' '}
+        <button onClick={async () => { await consolidarDirecciones(); cargar() }}
+          className="text-brand-300 underline decoration-dotted hover:text-brand-200">
+          guardar ahora
+        </button>. Sin eso, esta lista empezaría de cero cada dos meses en vez de mejorar.
+      </p>
       <p className="max-w-[74ch] text-[12.5px] leading-relaxed text-dark-500">
         El fallo se ve paquete a paquete y así no se repite nunca: lo que se repite es la
         dirección. Arreglar una <span className="text-dark-300">una sola vez</span> —una nota
