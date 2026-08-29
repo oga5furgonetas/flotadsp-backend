@@ -231,6 +231,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     enviarDiagnostico({ kind: 'schema', which: msg.which || 'details', url: msg.url, schema: msg.schema });
     return false;
   }
+  /* LOS CONTADORES DEL PROPIO CORTEX. Van por el mismo camino que el esquema
+     —diagnostico, no paquetes— porque no son datos de cliente: son totales por
+     ruta y por conductor, mas el nombre y el telefono que Amazon publica de su
+     propia plantilla. */
+  if (msg?.type === 'resumenCortex') {
+    enviarDiagnostico({ kind: 'resumen_cortex', url: msg.url, dia: msg.dia,
+                        sa: msg.sa, datos: msg.datos });
+    return false;
+  }
   if (msg?.type === 'flushNow') { flush().then(() => reply?.({ ok: true })); return true; }
   /* El popup manda aquí qué estaciones se envían. Lista vacía = no enviar nada. */
   if (msg?.type === 'setEstaciones') {

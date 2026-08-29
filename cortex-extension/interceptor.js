@@ -590,13 +590,44 @@
          verdad es más lento y es lo único que no se inventa nada. */
       if (parsed && isSummary) {
         try {
-          const resumen = {
-            rutas: parsed.rmsRouteSummaries || [],
-            conductores: parsed.transporterPackageSummaries || [],
-          };
-          if (resumen.rutas.length || resumen.conductores.length) {
+          /* SE MANDA RECORTADO, NO ENTERO. Una sola ruta de `rmsRouteSummaries`
+             trae paradas, descansos, meteorologia, bateria y treinta bloques
+             mas; las 41 juntas son megabytes que no caben en un mensaje y que
+             ademas no hacen falta. Se sacan cuatro cosas:
+
+               · los contadores de Amazon por ruta (DELIVERED / REMAINING /
+                 REATTEMPTABLE), que es con lo que se comprueba si vamos por
+                 detras — el 29-08 Cortex decia 41 rutas y 5.326 paquetes y
+                 nosotros teniamos 39 y 5.202;
+               · la lista de rutas, para descubrir las que falten;
+               · el NOMBRE y el TELEFONO de cada conductor. Esto es lo gordo:
+                 `route-details` no manda nombres (0 de 7.171 paquetes medidos)
+                 y por eso el debrief enseña "SIN FICHA" con un codigo. Aqui SI
+                 vienen, y con el telefono, que falta en 150 fichas de 212. */
+          const t = (v) => (typeof v === 'string' ? v.slice(0, 80) : v);
+          const rutas = (parsed.rmsRouteSummaries || []).map((r) => ({
+            routeId: t(r.routeId), routeCode: t(r.routeCode),
+            transporterId: t(r.transporterIdFromRms),
+            status: t(r.routeStatus), progreso: t(r.progressStatus),
+            paquetes: (r.routeDeliveryProgress || {}).routePackageSummary || null,
+            totalTasks: (r.routeDeliveryProgress || {}).totalTasks,
+            completedTasks: (r.routeDeliveryProgress || {}).completedTasks,
+            totalStops: (r.routeDeliveryProgress || {}).totalStops,
+            completedStops: (r.routeDeliveryProgress || {}).completedStops,
+          }));
+          const gente = (parsed.transporters || []).map((x) => ({
+            transporterId: t(x.transporterId),
+            nombre: [t(x.firstName), t(x.lastName)].filter(Boolean).join(' ').trim(),
+            telefono: t(x.workPhoneNumber),
+          })).filter((x) => x.transporterId);
+          const cuentas = (parsed.transporterPackageSummaries || []).map((x) => ({
+            transporterId: t(x.transporterId), paquetes: x.packageStatus || null,
+          })).filter((x) => x.transporterId);
+
+          if (rutas.length || gente.length || cuentas.length) {
             post({ kind: 'resumen_cortex', url: url.slice(0, 160),
-                   dia: serviceDay(), sa: saId, datos: resumen });
+                   dia: serviceDay(), sa: saId,
+                   datos: { rutas, gente, cuentas } });
           }
         } catch (_) {}
       }

@@ -17,5 +17,11 @@ if (!window.__flotadspBridge) {
     else if (d.kind === 'debug') chrome.runtime.sendMessage({ type: 'debug', url: d.url, count: d.count, bytes: d.bytes });
     else if (d.kind === 'sample') chrome.runtime.sendMessage({ type: 'sample', keys: d.keys, node: d.node });
     else if (d.kind === 'schema') chrome.runtime.sendMessage({ type: 'schema', which: d.which, url: d.url, schema: d.schema });
+    /* EL RESUMEN DE CORTEX. Faltaba en esta lista y el mensaje se tiraba aqui
+       en silencio: el interceptor lo mandaba, nadie lo recogia y `cortex_resumen`
+       llevaba vacia desde que se monto. Es el mismo fallo que el gotcha 1 —una
+       lista blanca que descarta sin avisar— en otro sitio.
+       Al anadir un `kind` nuevo hay que tocarlo AQUI y en background.js. */
+    else if (d.kind === 'resumen_cortex') chrome.runtime.sendMessage({ type: 'resumenCortex', url: d.url, dia: d.dia, sa: d.sa, datos: d.datos });
   });
 }

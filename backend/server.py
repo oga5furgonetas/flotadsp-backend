@@ -30022,7 +30022,11 @@ async def cortex_ingest(request: Request):
                 {"_id": f"{dia}:{sa}"},
                 {"$set": {"dia": dia, "service_area_id": sa,
                           "rutas": (datos.get("rutas") or [])[:200],
-                          "conductores": (datos.get("conductores") or [])[:300],
+                          # Nombre y telefono de cada conductor, publicados por
+                          # el propio Cortex. Es lo que hace que el debrief pueda
+                          # poner cara a un id en vez de enseñar el codigo.
+                          "gente": (datos.get("gente") or [])[:400],
+                          "cuentas": (datos.get("cuentas") or [])[:400],
                           "visto_en": datetime.now(timezone.utc).isoformat(),
                           "expira_en": datetime.now(timezone.utc) + timedelta(days=60)}},
                 upsert=True)
