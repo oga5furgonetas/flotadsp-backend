@@ -17423,11 +17423,15 @@ async def transporter_ids_sin_ficha(dias: int = 30, _=Depends(require_admin)):
     dias = max(1, min(dias, 120))
     desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
 
+    # Los DOS campos: el mismo id se guardaba en "ID Amazon" o en "Transporter
+    # ID" segun el dia del alta. Mirando solo uno, 19 conductores que SI tienen
+    # ficha salian aqui como si no la tuvieran.
     conocidos = set()
-    async for d in db.drivers.find({}, {"_id": 0, "transporter_id": 1}):
-        t = (d.get("transporter_id") or "").strip()
-        if t:
-            conocidos.add(t)
+    async for d in db.drivers.find({}, {"_id": 0, "transporter_id": 1, "driver_id": 1}):
+        for campo in ("transporter_id", "driver_id"):
+            v = (d.get(campo) or "").strip()
+            if v:
+                conocidos.add(v)
 
     vistos: dict = {}
     async for r in db.cortex_packages.aggregate([
@@ -17468,12 +17472,11 @@ async def transporter_ids_sin_ficha(dias: int = 30, _=Depends(require_admin)):
     # de ahi las entregas de una persona se le cuelgan a la otra.
     libres = []
     async for d in db.drivers.find(
-            {"$or": [{"transporter_id": {"$in": [None, ""]}},
-                     {"transporter_id": {"$exists": False}}],
-             "merged_into": {"$exists": False}},
-            {"_id": 0, "id": 1, "name": 1, "center": 1}):
-        if d.get("name"):
-            libres.append(d)
+            {"merged_into": {"$exists": False}},
+            {"_id": 0, "id": 1, "name": 1, "center": 1,
+             "transporter_id": 1, "driver_id": 1}):
+        if d.get("name") and not (d.get("transporter_id") or "").strip()                 and not (d.get("driver_id") or "").strip():
+            libres.append({k: d[k] for k in ("id", "name", "center") if k in d})
     libres.sort(key=lambda x: str(x.get("name") or "").upper())
 
     return {"sin_ficha": fuera, "total": len(fuera),
@@ -17578,12 +17581,17 @@ async def transporter_id_confirmar(data: dict = Body(...), user: dict = Depends(
     tid = str(data.get("transporter_id") or "").strip().upper()
     if not did or not tid:
         raise HTTPException(400, "Faltan el conductor o el Transporter ID")
-    otro = await db.drivers.find_one({"transporter_id": tid, "id": {"$ne": did}},
-                                     {"_id": 0, "name": 1})
+    otro = await db.drivers.find_one(
+        {"$or": [{"transporter_id": tid}, {"driver_id": tid}], "id": {"$ne": did}},
+        {"_id": 0, "name": 1})
     if otro:
         raise HTTPException(409, f"Ese Transporter ID ya lo tiene {otro.get('name')}")
+    # LOS DOS CAMPOS A LA VEZ. Media app cruza por `driver_id` (el debrief) y la
+    # otra media por `transporter_id`: rellenando uno solo, el conductor
+    # aparecia con nombre en una pantalla y sin ficha en la de al lado.
     r = await db.drivers.update_one({"id": did}, {"$set": {
         "transporter_id": tid,
+        "driver_id": tid,
         "transporter_id_por": user.get("name") or "oficina",
         "transporter_id_en": datetime.now(timezone.utc).isoformat()}})
     if not r.matched_count:
@@ -26642,11 +26650,29 @@ async def _cx_nombres(ids: set) -> dict:
     """
     if not ids:
         return {}
+    # ── EL MISMO ID VIVE EN DOS CAMPOS DE LA FICHA ───────────────────────────
+    # La ficha tiene "ID Amazon" (`driver_id`) y "Transporter ID (Cortex)"
+    # (`transporter_id`), y son lo mismo: al dar de alta se rellenaba uno u
+    # otro segun el dia. Medido el 29-08-2026 sobre 213 fichas:
+    #     92 con los dos y coincidiendo · 32 solo en `driver_id`
+    #     19 solo en `transporter_id`   ·  0 con los dos DISTINTOS
+    # Ese cero es lo que hace seguro tratarlos como uno solo: nunca se
+    # contradicen.
+    #
+    # Buscando por un campo solo, media plantilla no cruzaba: los 19 salian
+    # "SIN FICHA" en el debrief y los 32 en la pantalla de IDs sin ficha — el
+    # mismo fallo visto desde los dos lados.
     mapa = {}
-    async for d in db.drivers.find({"driver_id": {"$in": list(ids)}},
-                                   {"_id": 0, "id": 1, "name": 1, "driver_id": 1, "active": 1}):
-        mapa[d["driver_id"]] = {"nombre": d.get("name"), "ficha_id": d.get("id"),
-                                "activo": d.get("active", True), "origen": "ficha"}
+    async for d in db.drivers.find(
+            {"$or": [{"driver_id": {"$in": list(ids)}},
+                     {"transporter_id": {"$in": list(ids)}}]},
+            {"_id": 0, "id": 1, "name": 1, "driver_id": 1, "transporter_id": 1, "active": 1}):
+        ficha = {"nombre": d.get("name"), "ficha_id": d.get("id"),
+                 "activo": d.get("active", True), "origen": "ficha"}
+        for campo in ("driver_id", "transporter_id"):
+            v = (d.get(campo) or "").strip()
+            if v in ids:
+                mapa[v] = ficha
     faltan = ids - set(mapa)
     if faltan:
         async for r in db.route_history.find({"transporter_id": {"$in": list(faltan)}},
