@@ -11653,6 +11653,21 @@ async def whatsapp_prueba(data: dict = Body(...), _=Depends(require_admin)):
     return r
 
 
+@api_router.post("/whatsapp/plantillas/crear")
+async def whatsapp_crear_plantillas(_=Depends(require_admin)):
+    """Sube a Meta las tres plantillas, en vez de picarlas a mano.
+
+    Escritas a mano en el WhatsApp Manager es donde mas facil es equivocarse, y
+    el fallo no sale hasta el dia que se activa el aviso: el nombre tiene que
+    coincidir letra por letra con el que manda el codigo. Aqui salen del mismo
+    sitio del que salen los envios, asi que no pueden discrepar.
+    """
+    r = await whatsapp.crear_plantillas(db)
+    if not r.get("ok") and r.get("error") == "sin_credenciales":
+        raise HTTPException(400, "Faltan las credenciales de WhatsApp")
+    return r
+
+
 # =========================
 # TELEGRAM
 # =========================

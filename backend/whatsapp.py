@@ -202,6 +202,109 @@ async def plantillas(db=None) -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"[:200], "plantillas": []}
 
 
+# ---------------------------------------------------------------------------
+# ALTA DE LAS PLANTILLAS POR API
+# ---------------------------------------------------------------------------
+# Se pueden crear a mano en el WhatsApp Manager, pero hay tres formas de que
+# salga mal y ninguna avisa a tiempo: el nombre tiene que coincidir LETRA POR
+# LETRA con el que manda el codigo (si no, "template not found" el dia que se
+# active), la categoria tiene que ser "utility" (como "marketing" cuesta mas
+# por mensaje y ademas Meta las rechaza, porque no venden nada) y cada variable
+# necesita un ejemplo concreto o la revision la tumba por "ejemplos poco
+# claros". Escritas aqui una vez, se suben de un boton y las tres cosas salen
+# bien por construccion.
+#
+# El texto va con {{1}}, {{2}}... y el ORDEN es el mismo con el que llaman los
+# disparadores en server.py. Cambiar el orden aqui sin cambiarlo alli manda la
+# matricula donde va la fecha, y Meta lo acepta: son dos textos cualesquiera.
+PLANTILLAS_BASE = [
+    {
+        "name": "itv_vencida",
+        "language": "es",
+        "category": "UTILITY",
+        "components": [{
+            "type": "BODY",
+            "text": ("La furgoneta {{1}} tiene la ITV vencida desde hace {{2}} "
+                     "días. No puede salir a ruta hasta pasarla."),
+            "example": {"body_text": [["1234 ABC", "12"]]},
+        }],
+    },
+    {
+        "name": "incidencia_critica",
+        "language": "es",
+        "category": "UTILITY",
+        "components": [{
+            "type": "BODY",
+            "text": ("Nueva incidencia grave en {{1}}: {{2}}. Revisar antes de "
+                     "la próxima ruta."),
+            "example": {"body_text": [["1234 ABC", "frenos con ruido al pisar"]]},
+        }],
+    },
+    {
+        "name": "resumen_diario",
+        "language": "es",
+        "category": "UTILITY",
+        "components": [{
+            "type": "BODY",
+            "text": ("Resumen {{1}}: {{2}} entregados, {{3}} golpes nuevos, "
+                     "checklist {{4}}."),
+            "example": {"body_text": [["OGA5 28/08", "3.412", "2", "38 de 41"]]},
+        }],
+    },
+]
+
+
+async def crear_plantillas(db=None) -> dict:
+    """Da de alta en Meta las tres plantillas. Se puede llamar mil veces.
+
+    Idempotente a proposito: si una ya existe no se reenvia, porque Meta
+    responde con un error ("template name already exists") que en el panel se
+    leeria como que algo fallo cuando lo que pasa es que ya estaba hecho.
+    """
+    cuenta = os.environ.get("WHATSAPP_BUSINESS_ACCOUNT_ID")
+    if not (cuenta and os.environ.get("WHATSAPP_ACCESS_TOKEN")):
+        return {"ok": False, "error": "sin_credenciales", "resultados": []}
+
+    ya = await plantillas()
+    if not ya.get("ok"):
+        # Sin poder leer lo que hay no se sube nada: a ciegas se duplicarian
+        # las que existan y el resultado seria una lista de errores.
+        return {"ok": False, "error": ya.get("error") or "no_se_pudo_leer",
+                "resultados": []}
+    existentes = {p.get("nombre") for p in (ya.get("plantillas") or [])}
+
+    url = f"{API}/{cuenta}/message_templates"
+    cab = {"Authorization": f"Bearer {os.environ['WHATSAPP_ACCESS_TOKEN']}",
+           "Content-Type": "application/json"}
+    salida = []
+    async with aiohttp.ClientSession() as s:
+        for pl in PLANTILLAS_BASE:
+            if pl["name"] in existentes:
+                salida.append({"plantilla": pl["name"], "ok": True,
+                               "estado": "ya_existia"})
+                continue
+            try:
+                async with s.post(url, json=pl, headers=cab,
+                                  timeout=aiohttp.ClientTimeout(total=20)) as resp:
+                    datos = await resp.json(content_type=None)
+                    if resp.status >= 400:
+                        err = (datos or {}).get("error") or {}
+                        # `error_user_msg` es el mensaje en cristiano que Meta
+                        # escribe para la persona; `message` es el tecnico.
+                        salida.append({
+                            "plantilla": pl["name"], "ok": False,
+                            "error": str(err.get("error_user_msg")
+                                         or err.get("message") or datos)[:300]})
+                    else:
+                        salida.append({"plantilla": pl["name"], "ok": True,
+                                       "estado": datos.get("status") or "PENDING"})
+            except Exception as e:                           # noqa: BLE001
+                salida.append({"plantilla": pl["name"], "ok": False,
+                               "error": f"{type(e).__name__}: {e}"[:200]})
+    logger.info("WhatsApp alta de plantillas: %s", salida)
+    return {"ok": all(r["ok"] for r in salida), "resultados": salida}
+
+
 async def config(db) -> dict:
     """Que avisos estan encendidos. Por defecto TODO APAGADO.
 

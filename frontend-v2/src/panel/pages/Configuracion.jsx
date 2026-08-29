@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useT } from '../../i18n'
 import { Loader2, Plus, Building, Send, CreditCard, Check, Copy, ExternalLink, BellRing, Pencil, Trash2, Clock, MessageCircle } from 'lucide-react'
 import { getOrgCenters, addOrgCenter, getTelegramConfig,
-  getWhatsappEstado, setWhatsappConfig, probarWhatsapp, getOrgBilling, getBillingUso, listarDestinatarios, guardarDestinatario, borrarDestinatario, enviarResumenDiario, getHorariosAvisos, setHorariosAvisos } from '../api'
+  getWhatsappEstado, setWhatsappConfig, probarWhatsapp, crearPlantillasWhatsapp, getOrgBilling, getBillingUso, listarDestinatarios, guardarDestinatario, borrarDestinatario, enviarResumenDiario, getHorariosAvisos, setHorariosAvisos } from '../api'
 import { lista } from '../../lib/lista'
 import { getAdmin } from '../auth'
 
@@ -128,6 +128,25 @@ function WhatsAppCard() {
     } finally { setBusy('') }
   }
 
+  const subirPlantillas = async () => {
+    setBusy('plantillas'); setMsg(null)
+    try {
+      const r = await crearPlantillasWhatsapp()
+      const res = r.data?.resultados || []
+      const nuevas = res.filter((x) => x.ok && x.estado !== 'ya_existia').length
+      const malas = res.filter((x) => !x.ok)
+      // El error de Meta se enseña TAL CUAL. "categoría no permitida" y
+      // "ejemplo poco claro" se arreglan de formas distintas, y un "no se pudo"
+      // genérico no dice cuál de las dos es.
+      setMsg(malas.length
+        ? { mal: true, txt: malas.map((x) => `${x.plantilla}: ${x.error}`).join(' · ') }
+        : { txt: nuevas ? `${nuevas} subidas. Meta las revisa en unas horas.` : 'Ya estaban las tres.' })
+      cargar()
+    } catch (e) {
+      setMsg({ mal: true, txt: e?.response?.data?.detail || 'No se pudieron crear.' })
+    } finally { setBusy('') }
+  }
+
   const c = est?.config || {}
   const listo = est?.configurado
 
@@ -224,9 +243,22 @@ function WhatsAppCard() {
                   </span>
                 ))}
                 {!(est.plantillas.plantillas || []).length && (
-                  <span className="text-[12.5px] text-dark-500">Ninguna todavía. Se crean en Meta y las aprueba en unas horas.</span>
+                  <span className="text-[12.5px] text-dark-500">Ninguna todavía.</span>
                 )}
               </div>
+              {/* Picarlas a mano en el WhatsApp Manager es donde más fácil es
+                  equivocarse, y el fallo no sale hasta el día que se enciende
+                  el aviso: el nombre tiene que coincidir letra por letra con el
+                  que manda el código. Subidas desde aquí salen del mismo sitio
+                  que los envíos, así que no pueden discrepar. */}
+              <button onClick={subirPlantillas} disabled={busy === 'plantillas'}
+                className="btn-secondary mt-2.5 w-full text-[13px] disabled:opacity-50">
+                {busy === 'plantillas' ? 'Subiendo…' : 'Crear las tres plantillas en Meta'}
+              </button>
+              <p className="mt-1.5 text-[11.5px] text-dark-500">
+                Se pueden pulsar las veces que haga falta: las que ya existan no se tocan.
+                Meta las revisa en unas horas.
+              </p>
             </div>
           )}
         </div>
