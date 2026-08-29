@@ -30034,6 +30034,38 @@ async def cortex_ingest(request: Request):
             dia = str(body.get("dia") or "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             sa = str(body.get("sa") or "")[:64]
             datos = body.get("datos") or {}
+
+            # ── SE ACEPTAN LAS DOS FORMAS ────────────────────────────────────
+            # Las versiones viejas de la extension mandan las rutas EN CRUDO
+            # (43 campos por ruta) y bajo la clave `conductores`; las nuevas las
+            # mandan ya recortadas y en `gente`/`cuentas`. Con varias naves, en
+            # cualquier momento hay dos versiones a la vez, y una de ellas
+            # guardaria el resumen a medias — que es peor que no guardarlo,
+            # porque parece que esta y no lo esta.
+            # Se normaliza aqui: el crudo se recorta al llegar.
+            def _ruta_norm(r):
+                if not isinstance(r, dict):
+                    return None
+                if "paquetes" in r or "routeCode" not in r:
+                    return r                      # ya viene recortada
+                prog = r.get("routeDeliveryProgress") or {}
+                return {
+                    "routeId": r.get("routeId"), "routeCode": r.get("routeCode"),
+                    "transporterId": r.get("transporterIdFromRms"),
+                    "status": r.get("routeStatus"), "progreso": r.get("progressStatus"),
+                    "paquetes": prog.get("routePackageSummary") or {},
+                    "totalTasks": prog.get("totalTasks"),
+                    "completedTasks": prog.get("completedTasks"),
+                    "totalStops": prog.get("totalStops"),
+                    "completedStops": prog.get("completedStops"),
+                }
+
+            _rutas = [x for x in (_ruta_norm(r) for r in (datos.get("rutas") or [])) if x]
+            _gente = datos.get("gente") or []
+            # `conductores` es como lo llamaban las versiones viejas.
+            _cuentas = datos.get("cuentas") or datos.get("conductores") or []
+            datos = {"rutas": _rutas, "gente": _gente, "cuentas": _cuentas}
+
             await db.cortex_resumen.update_one(
                 {"_id": f"{dia}:{sa}"},
                 {"$set": {"dia": dia, "service_area_id": sa,

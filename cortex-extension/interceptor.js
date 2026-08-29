@@ -236,6 +236,33 @@
   const ROUTE_ID_RE = /^\d{5,}-\d{1,3}$/; // p.ej. 7624078-2 (formato distintivo)
   const collectRoutes = (json) => {
     const ids = new Set(); let sa = null;
+
+    /* ── EL CAMINO EXACTO PRIMERO: rmsRouteSummaries[].routeId ──────────────
+       El barrido de abajo busca valores CON FORMA de routeId (`7715688-13`)
+       sin mirar el nombre de la clave, y eso deja fuera las rutas RDM —las de
+       rescate—, cuyo routeId es un UUID: `475d2ffe-bac7-4a10-af0a-...`.
+
+       Nunca se descubrian, nunca se pedian, y sus paquetes no entraban jamas.
+       Medido el 29-08-2026 a las 14:11, comparando con los contadores del
+       propio Cortex ruta a ruta:
+
+           RDM__PHne3aP   73 paquetes   nosotros 0
+           RDM__rkRN6DE   45 paquetes   nosotros 0
+
+       118 paquetes, y explicaban ELLOS SOLOS el descuadre: Cortex 5.310 y
+       nosotros 5.202. Las otras 39 rutas cuadraban con ±1.
+
+       No se arregla ensanchando el patron para que acepte UUIDs: en la misma
+       respuesta hay decenas de UUIDs que no son rutas (serviceAreaId,
+       addressId, itineraryId) y acabariamos pidiendo URLs inventadas. Se lee
+       el campo por su nombre, que ahora sabemos cual es, y el barrido generico
+       se queda de red por si la respuesta cambia de forma. */
+    for (const r of (json && json.rmsRouteSummaries) || []) {
+      const v = r && r.routeId;
+      if (typeof v === 'string' && v.length > 6) ids.add(v);
+      if (!sa && r && typeof r.serviceAreaId === 'string') sa = r.serviceAreaId;
+    }
+
     const walk = (n) => {
       if (Array.isArray(n)) { for (const x of n) walk(x); return; }
       if (!n || typeof n !== 'object') return;
