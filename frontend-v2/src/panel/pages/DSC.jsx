@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { MapPinned, AlertTriangle, Hand, RefreshCw } from 'lucide-react'
-import { cortexDsc } from '../api'
+import { useOutletContext } from 'react-router-dom'
+import { MapPinned, AlertTriangle, Hand, RefreshCw, Loader2, ChevronRight, StickyNote } from 'lucide-react'
+import { cortexDsc, getDireccionesProblema, guardarNotaDireccion } from '../api'
 import { useT } from '../../i18n'
 
 /* Dónde se deja cada paquete.
@@ -18,11 +19,181 @@ const COLOR = {
   seguro: 'bg-sky-500', otro: 'bg-dark-600',
 }
 
+/* ── DIRECCIONES QUE DAN PROBLEMAS ─────────────────────────────────────────
+   El fallo se ve paquete a paquete, y paquete a paquete no se repite: se
+   repite la DIRECCIÓN. Medido sobre 90 días, 47 direcciones acumulan 165
+   paquetes, y una sola —reparalotodo.net— falla 9 veces y las 9 por el mismo
+   motivo. Nadie lo había mirado nunca porque no había dónde mirarlo.
+
+   Arreglar una dirección UNA vez se lleva por delante todos sus fallos
+   futuros. Por eso lo importante de esta pantalla no es la lista: es la NOTA.
+   Ver las direcciones que fallan sin poder dejar escrito el porqué no arregla
+   nada, porque quien lo averigua hoy no es quien reparte mañana. */
+
+const MOTIVO_TXT = {
+  BUSINESS_CLOSED: 'Negocio cerrado',
+  ADDRESS_NOT_FOUND: 'No se encuentra',
+  INACCESSIBLE_DELIVERY_LOCATION: 'No se puede acceder',
+  CUSTOMER_UNAVAILABLE: 'Cliente ausente',
+  NO_SECURE_LOCATION: 'Sin sitio seguro',
+  LOCKER_ISSUE: 'Problema con el locker',
+  RESCHEDULED_BY_CUSTOMER: 'Aplazado por el cliente',
+  TR_CANCELLED: 'Cancelado por Amazon',
+  OBJECT_MISSING: 'Paquete perdido',
+  NO_ITEMS_DELIVERED: 'No se entregó nada',
+  DAMAGED: 'Dañado',
+  BAD_WEATHER: 'Meteorología',
+  SIN_MOTIVO: 'Sin motivo',
+  NONE: 'Sin motivo',
+}
+
+function FilaDireccion({ d, onGuardar }) {
+  const [abierto, setAbierto] = useState(false)
+  const [txt, setTxt] = useState(d.nota || '')
+  const [guardando, setGuardando] = useState(false)
+
+  const guardar = async () => {
+    setGuardando(true)
+    try { await onGuardar(d, txt) } finally { setGuardando(false) }
+  }
+
+  return (
+    <div className="card overflow-hidden">
+      <button onClick={() => setAbierto(!abierto)}
+        className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left hover:bg-dark-800/40">
+        <span className="cifra w-9 flex-none text-right font-semibold text-orange-300">{d.fallos}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] text-dark-200">{d.direccion}</span>
+          <span className="mt-0.5 block text-[11.5px] text-dark-500">
+            {MOTIVO_TXT[d.motivo_principal] || d.motivo_principal}
+            {d.motivo_n > 1 && <> <span className="cifra">×{d.motivo_n}</span></>}
+            {' · '}<span className="cifra">{d.dias_distintos}</span> {d.dias_distintos === 1 ? 'día' : 'días'} distintos
+            {d.rutas?.length > 0 && <> · {d.rutas.slice(0, 3).join(' ')}</>}
+          </span>
+        </span>
+        {d.accionable && (
+          <span className="hidden rounded-full bg-lime-500/15 px-2 py-0.5 text-[10.5px] font-semibold text-lime-300 ring-1 ring-inset ring-lime-500/30 sm:inline">
+            se puede arreglar
+          </span>
+        )}
+        {d.nota && <StickyNote size={13} className="flex-none text-lime-400" title="Tiene nota" />}
+        <ChevronRight size={14} className={`flex-none text-dark-600 transition-transform ${abierto ? 'rotate-90' : ''}`} />
+      </button>
+
+      {abierto && (
+        <div className="space-y-2.5 border-t border-dark-800 px-3.5 py-3">
+          <div className="flex flex-wrap gap-1.5">
+            {Object.entries(d.motivos).map(([m, n]) => (
+              <span key={m} className="rounded bg-dark-800 px-2 py-0.5 text-[11.5px] text-dark-400">
+                {MOTIVO_TXT[m] || m} <span className="cifra text-dark-300">{n}</span>
+              </span>
+            ))}
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11.5px] font-semibold text-dark-400">
+              Qué hay que saber de esta dirección
+            </label>
+            <textarea rows={2} value={txt} onChange={(e) => setTxt(e.target.value)}
+              placeholder="El acceso es por la parte de atrás · Cierran a las 14:00 · Llamar al 6XX antes de subir"
+              className="input text-[13px]" />
+            <div className="mt-1.5 flex items-center gap-2">
+              <button onClick={guardar} disabled={guardando || txt === (d.nota || '')}
+                className="btn-primary px-3 py-1 text-[12.5px] disabled:opacity-40">
+                {guardando ? 'Guardando…' : 'Guardar'}
+              </button>
+              {d.nota_por && (
+                <span className="text-[11px] text-dark-600">
+                  Última nota de {d.nota_por}{d.nota_en && ` el ${d.nota_en.slice(0, 10)}`}
+                </span>
+              )}
+              {d.lat && (
+                <a href={`https://www.google.com/maps?q=${d.lat},${d.lng}`}
+                  target="_blank" rel="noreferrer"
+                  className="ml-auto text-[12px] text-brand-300 hover:text-brand-200">
+                  Ver en el mapa
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DireccionesProblema({ center }) {
+  const [d, setD] = useState(null)
+  const [cargando, setCargando] = useState(true)
+  const [soloAcc, setSoloAcc] = useState(false)
+
+  const cargar = useCallback(() => {
+    setCargando(true)
+    getDireccionesProblema(90, center)
+      .then((r) => setD(r.data))
+      .catch(() => setD({ direcciones: [] }))
+      .finally(() => setCargando(false))
+  }, [center])
+  useEffect(cargar, [cargar])
+
+  const guardar = async (dir, nota) => {
+    await guardarNotaDireccion({ clave: dir.clave, direccion: dir.direccion, nota })
+    cargar()
+  }
+
+  const lista = (d?.direcciones || []).filter((x) => !soloAcc || x.accionable)
+
+  if (cargando) {
+    return (
+      <div className="card flex items-center justify-center gap-2 p-12 text-dark-400">
+        <Loader2 size={16} className="animate-spin" /> Agrupando los fallos por dirección…
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <button onClick={() => setSoloAcc(!soloAcc)}
+          className={`rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors ${
+            soloAcc ? 'bg-dark-700 text-dark-100' : 'bg-dark-800/60 text-dark-400 hover:text-dark-200'}`}>
+          {soloAcc ? 'Solo las que se pueden arreglar' : 'Todas'}
+        </button>
+        <span className="text-[12.5px] text-dark-500">
+          <span className="cifra text-dark-300">{d?.total || 0}</span> direcciones ·{' '}
+          <span className="cifra text-orange-300">{d?.paquetes_en_juego || 0}</span> paquetes ·{' '}
+          <span className="cifra text-lime-400">{d?.con_nota || 0}</span> con nota
+        </span>
+      </div>
+
+      <p className="max-w-[74ch] text-[12.5px] leading-relaxed text-dark-500">
+        El fallo se ve paquete a paquete y así no se repite nunca: lo que se repite es la
+        dirección. Arreglar una <span className="text-dark-300">una sola vez</span> —una nota
+        de acceso, un horario, un teléfono— se lleva por delante todos sus fallos futuros.
+        «Cliente ausente» cuenta menos en el orden porque no se arregla con nada.
+      </p>
+
+      {!lista.length ? (
+        <div className="card p-10 text-center text-[13px] text-dark-400">
+          Ninguna dirección repite fallos en los últimos 90 días.
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {lista.map((x) => <FilaDireccion key={x.clave} d={x} onGuardar={guardar} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 export default function DSC() {
   // `useT()` devuelve el contexto entero ({ lang, setLang, t }), no la funcion.
   // Sin desestructurar, `t('...')` es "t is not a function" y la pantalla se
   // cae entera en cuanto pinta la primera etiqueta.
   const { t } = useT()
+  const { center } = useOutletContext()
+  const [vista, setVista] = useState('donde')
   const [dias, setDias] = useState(7)
   const [d, setD] = useState(null)
   const [cargando, setCargando] = useState(true)
@@ -51,7 +222,7 @@ export default function DSC() {
           </h1>
           <p className="mt-0.5 text-sm text-dark-400">{t('dsc.sub')}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className={`flex items-center gap-2 ${vista === 'donde' ? '' : 'hidden'}`}>
           {[7, 14, 30].map((n) => (
             <button key={n} onClick={() => setDias(n)}
               className={`rounded-lg px-3 py-1.5 text-sm font-semibold ${
@@ -66,15 +237,29 @@ export default function DSC() {
         </div>
       </div>
 
+      {/* Dos preguntas distintas sobre lo mismo: DONDE deja el paquete el
+          conductor, y QUE direcciones fallan siempre. La segunda no existia. */}
+      <div className="flex w-fit gap-1 rounded-lg bg-dark-900 p-1 ring-1 ring-dark-700">
+        {[['donde', 'Dónde se deja'], ['dirs', 'Direcciones que fallan']].map(([k, txt]) => (
+          <button key={k} onClick={() => setVista(k)}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+              vista === k ? 'bg-brand-500/20 text-brand-300' : 'text-dark-400 hover:text-dark-200'}`}>
+            {txt}
+          </button>
+        ))}
+      </div>
+
+      {vista === 'dirs' && <DireccionesProblema center={center} />}
+
       {error && <div className="card border-red-500/30 p-4 text-sm text-red-300">{error}</div>}
 
-      {cargando && !d && <div className="card p-8 text-center text-dark-400">{t('dsc.loading')}</div>}
+      {vista === 'donde' && cargando && !d && <div className="card p-8 text-center text-dark-400">{t('dsc.loading')}</div>}
 
-      {d && !d.total && (
+      {vista === 'donde' && d && !d.total && (
         <div className="card p-8 text-center text-dark-400">{t('dsc.vacio')}</div>
       )}
 
-      {f && (
+      {vista === 'donde' && f && (
         <>
           <div className="grid gap-3 sm:grid-cols-4">
             {[

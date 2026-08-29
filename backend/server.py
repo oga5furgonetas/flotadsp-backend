@@ -45,6 +45,7 @@ import secrets
 import base64
 import logging
 import math
+import unicodedata
 
 # =========================
 # PATHS + ENV
@@ -27995,6 +27996,162 @@ def _dsc_base(desde: str) -> list:
             "cond": {"$eq": ["$$t.state", "DELIVERED"]}}}}}},
         {"$addFields": {"ctx": {"$ifNull": ["$_e.context", "NONE"]}, "rw": "$_e.raw"}},
     ]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DIRECCIONES QUE DAN PROBLEMAS
+# ═══════════════════════════════════════════════════════════════════════════
+# EL HALLAZGO QUE LO MOTIVA. Medido sobre 90 dias: 2.154 paquetes fallados, y
+# de las 454 direcciones distintas que fallan, DOCE acumulan 93 paquetes. Una
+# sola —reparalotodo.net, Avenida Ferrol 40— falla 9 veces y las 9 por el mismo
+# motivo: INACCESSIBLE_DELIVERY_LOCATION. Nadie lo habia mirado nunca porque el
+# fallo se ve paquete a paquete, y paquete a paquete no se repite: se repite la
+# DIRECCION.
+#
+# Y ahi esta el negocio: arreglar una direccion UNA vez —una nota de acceso, un
+# telefono, un horario— se lleva por delante todos sus fallos futuros. Los
+# motivos mas gordos son accionables:
+#   BUSINESS_CLOSED  438 (20%) -> un negocio con horario; si siempre llegamos
+#                                 despues de que cierre, es orden de ruta.
+#   ADDRESS_NOT_FOUND 216 (10%) -> la direccion esta mal o el portal no se ve.
+#   INACCESSIBLE      73  (3%)  -> hay una barrera, un codigo, un acceso.
+# CUSTOMER_UNAVAILABLE (21%) es el mayor pero el menos accionable, y por eso NO
+# manda en la ordenacion: ordenar por volumen bruto pondria arriba justo lo que
+# no se puede arreglar.
+
+# Motivos sobre los que se puede hacer algo, con su peso. Lo que no esta aqui
+# cuenta como 1: no se ignora, pero tampoco sube a nadie al principio.
+_DIR_ACCIONABLE = {
+    "BUSINESS_CLOSED": 3.0,
+    "ADDRESS_NOT_FOUND": 3.0,
+    "INACCESSIBLE_DELIVERY_LOCATION": 3.0,
+    "NO_SECURE_LOCATION": 2.0,
+    "LOCKER_ISSUE": 2.0,
+    "CUSTOMER_UNAVAILABLE": 0.5,
+    "RESCHEDULED_BY_CUSTOMER": 0.3,
+    "TR_CANCELLED": 0.2,
+}
+_DIR_MIN_FALLOS = 2
+COLECCION_DIR_NOTAS = "direcciones_notas"
+
+
+def _dir_clave(direccion: str) -> str:
+    """Misma direccion escrita de seis maneras = una sola clave.
+
+    Vienen del sistema de Amazon sin normalizar: 'Rua Isaac Peral, 14' y 'RUA
+    ISAAC PERAL 14, BAJO' son el mismo portal. Sin esto cada variante cuenta
+    por separado y NINGUNA llega al minimo: el problema existe y no lo ve nadie.
+    """
+    s = unicodedata.normalize("NFKD", str(direccion or "")).encode("ascii", "ignore").decode()
+    s = s.lower()
+    s = re.sub(r"\b(bajo|baixo|piso|puerta|pta|esc|escalera|izq|dcha|izquierda|derecha)\b", " ", s)
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    # Letra pegada a numero = numero suelto. 'n°43' y 'n 43' son el mismo portal:
+    # el simbolo de grado desaparece al quitar acentos y deja 'n43', que sin
+    # esto cuenta como una direccion distinta. Salio en 'Calle Campanario
+    # n°43', que esta en produccion.
+    s = re.sub(r"(?<=[a-z])(?=\d)", " ", s)
+    s = re.sub(r"(?<=\d)(?=[a-z])", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+@api_router.get("/cortex/direcciones-problema")
+async def direcciones_problema(dias: int = 90, center: str = "", _=Depends(require_admin)):
+    """Las direcciones que fallan una y otra vez, con su motivo y su nota."""
+    desde = (datetime.now(timezone.utc) - timedelta(days=max(7, min(dias, 365)))).strftime("%Y-%m-%d")
+    q = {"service_day": {"$gte": desde},
+         "state": {"$nin": list(_CX_OK) + list(_CX_EN_VUELO) + list(_CX_NO_DESPACHADO)}}
+    if center and center not in ("Todos", "todos"):
+        q["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
+
+    grupos = {}
+    async for p in db.cortex_packages.find(
+            q, {"_id": 0, "stop_address": 1, "state": 1, "service_day": 1,
+                "timeline": 1, "lat": 1, "lng": 1, "route_code": 1}):
+        dirtxt = (p.get("stop_address") or "").strip()
+        if not dirtxt:
+            continue
+        k = _dir_clave(dirtxt)
+        if not k or len(k) < 8:
+            continue
+        # El `context` del ultimo evento del estado vigente es el motivo real
+        # que da Amazon; el estado a secas dice que fallo, no por que.
+        ctx = None
+        for e in reversed(p.get("timeline") or []):
+            if e.get("state") == p.get("state"):
+                ctx = e.get("context")
+                break
+        g = grupos.setdefault(k, {"texto": dirtxt, "n": 0, "motivos": {}, "dias": set(),
+                                  "rutas": set(), "lat": None, "lng": None})
+        g["n"] += 1
+        m = str(ctx or "SIN_MOTIVO")
+        g["motivos"][m] = g["motivos"].get(m, 0) + 1
+        g["dias"].add(p.get("service_day"))
+        if p.get("route_code"):
+            g["rutas"].add(p["route_code"])
+        if g["lat"] is None and p.get("lat"):
+            g["lat"], g["lng"] = p.get("lat"), p.get("lng")
+        if len(dirtxt) > len(g["texto"]):
+            g["texto"] = dirtxt
+
+    notas = {n["clave"]: n async for n in db[COLECCION_DIR_NOTAS].find({}, {"_id": 0})}
+
+    out = []
+    for k, g in grupos.items():
+        if g["n"] < _DIR_MIN_FALLOS:
+            continue
+        dom = max(g["motivos"].items(), key=lambda x: x[1])
+        prioridad = round(sum(_DIR_ACCIONABLE.get(m, 1.0) * n for m, n in g["motivos"].items()), 1)
+        nota = notas.get(k) or {}
+        out.append({
+            "clave": k,
+            "direccion": g["texto"],
+            "fallos": g["n"],
+            "dias_distintos": len(g["dias"]),
+            "rutas": sorted(g["rutas"])[:6],
+            "motivo_principal": dom[0],
+            "motivo_n": dom[1],
+            "motivos": dict(sorted(g["motivos"].items(), key=lambda x: -x[1])),
+            "prioridad": prioridad,
+            "accionable": prioridad >= g["n"] * 1.5,
+            "lat": g["lat"], "lng": g["lng"],
+            "nota": nota.get("nota"),
+            "nota_por": nota.get("por"),
+            "nota_en": nota.get("en"),
+        })
+    out.sort(key=lambda x: (-x["prioridad"], -x["fallos"]))
+    return {
+        "direcciones": out[:150],
+        "total": len(out),
+        "paquetes_en_juego": sum(x["fallos"] for x in out),
+        "con_nota": sum(1 for x in out if x.get("nota")),
+        "desde": desde,
+    }
+
+
+@api_router.post("/cortex/direcciones-problema/nota")
+async def guardar_nota_direccion(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """La nota de esa direccion: como entrar, a que hora, a quien llamar.
+
+    Es lo unico que convierte esta pantalla en algo util. Ver la lista de
+    direcciones que fallan sin poder dejar escrito el porque no arregla nada:
+    quien lo averigua hoy no es quien reparte manana.
+    """
+    clave = _dir_clave(str(data.get("clave") or data.get("direccion") or ""))
+    if not clave:
+        raise HTTPException(400, "Falta la dirección")
+    nota = str(data.get("nota") or "").strip()[:600]
+    quien = user.get("name") or user.get("username") or "oficina"
+    if not nota:
+        await db[COLECCION_DIR_NOTAS].delete_one({"clave": clave})
+        return {"ok": True, "borrada": True}
+    await db[COLECCION_DIR_NOTAS].update_one(
+        {"clave": clave},
+        {"$set": {"clave": clave, "nota": nota, "por": quien,
+                  "en": datetime.now(timezone.utc).isoformat(),
+                  "direccion": str(data.get("direccion") or "")[:300]}},
+        upsert=True)
+    return {"ok": True, "nota": nota}
 
 
 @api_router.get("/cortex/dsc")

@@ -331,6 +331,11 @@ export const dispararSeguimientoTalleres = () => api.post('/work-orders/seguimie
 /* Revisa el ultimo dia cerrado y avisa si se sale de lo normal. Sale solo con
    el resumen del dia; esto es para no esperar. */
 export const revisarDiaScorecard = () => api.post('/scorecard/revisar-dia')
+/* Las direcciones que fallan una y otra vez. El fallo se ve paquete a paquete
+   y asi no se repite nunca: lo que se repite es la direccion. */
+export const getDireccionesProblema = (dias, center) =>
+  api.get('/cortex/direcciones-problema', { params: { ...(dias ? { dias } : {}), ...centerParam(center) } })
+export const guardarNotaDireccion = (body) => api.post('/cortex/direcciones-problema/nota', body)
 export const getScorecardEnVivo = (center, semanas) =>
   api.get('/scorecard/en-vivo', { params: { ...centerParam(center), ...(semanas ? { semanas } : {}) } })
 export const getExposicionVehiculos = (center) =>
