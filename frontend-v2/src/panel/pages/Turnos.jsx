@@ -281,27 +281,34 @@ function CalendarioDiasLibres({ center }) {
     return m
   }, [filas])
 
+  const hoyK = claveDia(hoyRef)
+
   const cerrado = (k) => bloqueos.find((b) => b.desde <= k && k <= b.hasta && !b.driver_id)
 
-  /* Quién ha pedido días, con TODOS los suyos — también los de otros meses.
-     Se ordena por quien más tiene: es la pregunta que se hace al mirar esta
-     lista ("¿a quién le estoy dando más días?"), y por orden alfabético habría
-     que leerla entera para contestarla. */
+  /* Quién ha pedido días, con los suyos de HOY EN ADELANTE.
+     Solo futuro a propósito: un día que ya pasó no se puede dar ni quitar, y
+     mezclarlo con los que quedan hace que la cuenta de "cuántos días lleva"
+     signifique dos cosas a la vez. Quien no tenga ninguno pendiente por venir
+     no sale en la lista — no hay nada que mirar en él.
+
+     Se ordena por quien más tiene: es la pregunta que se hace al abrir esto
+     ("¿a quién le estoy dando más días?"), y en orden alfabético habría que
+     leerla entera para contestarla. */
   const personas = useMemo(() => {
     const m = new Map()
     for (const f of (filas || [])) {
       const id = f.driver_id || f.driver_name
-      if (!id) continue
-      const p = m.get(id) || { id, nombre: f.driver_name, dias: [], pendientes: 0 }
       const k = String(f.date || '').slice(0, 10)
-      if (k) p.dias.push({ k, status: f.status, motivo: f.motivo_label || f.type })
+      if (!id || !k || k < hoyK) continue
+      const p = m.get(id) || { id, nombre: f.driver_name, dias: [], pendientes: 0 }
+      p.dias.push({ k, status: f.status, motivo: f.motivo_label || f.type })
       if (f.status === 'pendiente') p.pendientes += 1
       m.set(id, p)
     }
     for (const p of m.values()) p.dias.sort((a, b) => a.k.localeCompare(b.k))
     return [...m.values()].sort((a, b) => (b.dias.length - a.dias.length)
       || String(a.nombre).localeCompare(String(b.nombre), 'es', { sensitivity: 'base' }))
-  }, [filas])
+  }, [filas, hoyK])
 
   const suyos = useMemo(() => {
     if (!personaSel) return null
@@ -317,7 +324,6 @@ function CalendarioDiasLibres({ center }) {
                   ...Array.from({ length: diasMes }, (_, i) => i + 1)]
 
   const nombreMes = mes.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })
-  const hoyK = claveDia(hoyRef)
   const totalMes = Object.entries(porDia)
     .reduce((n, [, v]) => n + v.filter((x) => x.status === 'aprobado').length, 0)
 
@@ -375,24 +381,41 @@ function CalendarioDiasLibres({ center }) {
                   } ${apagado ? 'opacity-35' : ''}`}>
                   <span className={`text-[12px] font-bold tabular-nums ${
                     k === hoyK ? 'text-brand-300' : 'text-dark-300'}`}>{n}</span>
-                  {/* El primer nombre se ve sin pulsar: en la mayoría de los días
-                      hay una sola persona, y obligar a un clic para leer un
-                      nombre es lo que hacía que no se mirase. */}
-                  {apro.slice(0, 2).map((x) => (
-                    <span key={x.id} className="mt-0.5 block truncate text-[10.5px] leading-tight text-emerald-300">
-                      {String(x.driver_name || '').split(' ')[0]}
-                    </span>
-                  ))}
-                  {apro.length > 2 && (
-                    <span className="block text-[10.5px] text-emerald-400/80">+{apro.length - 2} más</span>
-                  )}
-                  {pend.length > 0 && (
-                    <span className="mt-0.5 block text-[10.5px] leading-tight text-amber-300">
-                      {pend.length} sin contestar
-                    </span>
-                  )}
-                  {bloq && !apro.length && !pend.length && (
-                    <span className="mt-0.5 block truncate text-[10.5px] leading-tight text-red-300">cerrado</span>
+                  {/* CON ALGUIEN MARCADO, SOLO SE LEE LO SUYO. Los nombres de
+                      los demás se quitan: si lo que estás mirando es "los días
+                      de este", el resto es ruido que hay que descartar con la
+                      vista casilla por casilla. Las casillas siguen ahí y con su
+                      color, así que se sigue viendo que ese día hay más gente
+                      fuera — lo que desaparece son los nombres, no el hecho. */}
+                  {suyos ? (
+                    esSuyo && (
+                      <span className="mt-0.5 block truncate text-[10.5px] font-semibold leading-tight text-brand-200">
+                        {(dia.find((x) => (x.driver_id || x.driver_name) === personaSel)?.status) === 'pendiente'
+                          ? 'sin contestar' : 'día suyo'}
+                      </span>
+                    )
+                  ) : (
+                    <>
+                      {/* El primer nombre se ve sin pulsar: en la mayoría de los
+                          días hay una sola persona, y obligar a un clic para
+                          leer un nombre es lo que hacía que no se mirase. */}
+                      {apro.slice(0, 2).map((x) => (
+                        <span key={x.id} className="mt-0.5 block truncate text-[10.5px] leading-tight text-emerald-300">
+                          {String(x.driver_name || '').split(' ')[0]}
+                        </span>
+                      ))}
+                      {apro.length > 2 && (
+                        <span className="block text-[10.5px] text-emerald-400/80">+{apro.length - 2} más</span>
+                      )}
+                      {pend.length > 0 && (
+                        <span className="mt-0.5 block text-[10.5px] leading-tight text-amber-300">
+                          {pend.length} sin contestar
+                        </span>
+                      )}
+                      {bloq && !apro.length && !pend.length && (
+                        <span className="mt-0.5 block truncate text-[10.5px] leading-tight text-red-300">cerrado</span>
+                      )}
+                    </>
                   )}
                 </button>
               )
@@ -409,7 +432,8 @@ function CalendarioDiasLibres({ center }) {
               <div className="mb-2 flex flex-wrap items-baseline gap-2">
                 <h4 className="text-[13px] font-bold text-dark-100">Quién ha pedido días</h4>
                 <span className="text-[12px] text-dark-500">
-                  {personas.length} persona{personas.length === 1 ? '' : 's'} · pulsa para ver los suyos
+                  {personas.length} persona{personas.length === 1 ? '' : 's'} con días por
+                  delante · pulsa para ver los suyos
                 </span>
                 {personaSel && (
                   <button onClick={() => setPersonaSel(null)}
@@ -454,6 +478,7 @@ function CalendarioDiasLibres({ center }) {
                   <div className="mt-2.5 rounded-lg border border-brand-500/30 bg-brand-500/[0.07] p-3">
                     <p className="mb-1.5 text-[13px] font-bold text-dark-100">
                       {p.nombre} · {p.dias.length} día{p.dias.length === 1 ? '' : 's'}
+                      <span className="ml-1.5 font-normal text-dark-500">de hoy en adelante</span>
                     </p>
                     <div className="flex flex-wrap gap-1.5">
                       {p.dias.map((d) => (
