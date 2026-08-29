@@ -131,6 +131,175 @@ const ATAJOS = [
   { k: 'siguiente', lbl: 'Mes que viene', titulo: 'El mes siguiente entero: para los días que ya se piden con antelación' },
 ]
 
+/* ── CALENDARIO DE DÍAS CONCEDIDOS ────────────────────────────────────────
+   Para saber qué días hay ya dados había que entrar en el historial, filtrar y
+   leer una lista — y eso no contesta la pregunta que se hace de verdad, que es
+   "el puente de octubre, ¿cuánta gente tengo fuera?". Una lista ordenada por
+   fecha obliga a ir sumando de cabeza; un mes de un vistazo, no.
+
+   Se pintan las tres cosas a la vez porque las tres condicionan la respuesta:
+   lo aprobado (verde), lo que está pendiente de contestar (ámbar, porque puede
+   convertirse en gente fuera) y los días cerrados (rojo). Verlas por separado
+   es lo que obligaba a cruzarlas a mano.
+
+   LA CLAVE DEL DÍA SE COMPONE A MANO, nunca por `toISOString()`: en UTC+2 la
+   medianoche local cae en el día anterior y el calendario pintaría todo un día
+   desplazado, en silencio (gotcha 11 — pasó ya con las ITV). */
+const claveDia = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+function CalendarioDiasLibres({ center }) {
+  const hoyRef = new Date()
+  const [mes, setMes] = useState(new Date(hoyRef.getFullYear(), hoyRef.getMonth(), 1))
+  const [filas, setFilas] = useState(null)
+  const [bloqueos, setBloqueos] = useState([])
+  const [abierto, setAbierto] = useState(null)
+  const [err, setErr] = useState('')
+
+  const desde = claveDia(new Date(mes.getFullYear(), mes.getMonth(), 1))
+  const hasta = claveDia(new Date(mes.getFullYear(), mes.getMonth() + 1, 0))
+
+  useEffect(() => {
+    setFilas(null); setErr('')
+    // `r.data.requests`, igual que el resto de la pantalla: el endpoint devuelve
+    // un objeto. Leyendo `r.data` a secas, `lista()` lo convierte en [] y el mes
+    // saldría vacío sin un solo error — que es peor que un fallo.
+    getShiftRequests(center, 'aprobado,pendiente', { desde, hasta, limit: 1000 })
+      .then((r) => setFilas(lista(r.data?.requests)))
+      .catch(() => setErr('No se pudieron cargar los días.'))
+    // `r.data.bloqueos`, no `r.data`: el endpoint devuelve un objeto. Leyendo
+    // mal, la lista sale vacía y los días cerrados no se pintarían — sin fallar.
+    getShiftBlocks(center).then((r) => setBloqueos(lista(r.data?.bloqueos))).catch(() => {})
+  }, [center, desde, hasta])
+
+  const porDia = useMemo(() => {
+    const m = {}
+    for (const f of (filas || [])) {
+      const k = String(f.date || '').slice(0, 10)
+      if (!k) continue
+      ;(m[k] ||= []).push(f)
+    }
+    // Aprobados primero dentro de cada día: es lo que ya es un hecho.
+    for (const k of Object.keys(m)) {
+      m[k].sort((a, b) => (a.status === b.status ? 0 : a.status === 'aprobado' ? -1 : 1))
+    }
+    return m
+  }, [filas])
+
+  const cerrado = (k) => bloqueos.find((b) => b.desde <= k && k <= b.hasta && !b.driver_id)
+
+  // Rejilla de lunes a domingo, con los huecos del mes anterior en blanco.
+  const primero = new Date(mes.getFullYear(), mes.getMonth(), 1)
+  const huecos = (primero.getDay() + 6) % 7          // 0 = lunes
+  const diasMes = new Date(mes.getFullYear(), mes.getMonth() + 1, 0).getDate()
+  const celdas = [...Array(huecos).fill(null),
+                  ...Array.from({ length: diasMes }, (_, i) => i + 1)]
+
+  const nombreMes = mes.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })
+  const hoyK = claveDia(hoyRef)
+  const totalMes = Object.entries(porDia)
+    .reduce((n, [, v]) => n + v.filter((x) => x.status === 'aprobado').length, 0)
+
+  return (
+    <div className="card p-4">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <button onClick={() => setMes(new Date(mes.getFullYear(), mes.getMonth() - 1, 1))}
+          className="btn-ghost p-1.5" aria-label="Mes anterior"><ChevronLeft size={16} /></button>
+        <h3 className="min-w-[9rem] text-center text-sm font-bold capitalize text-dark-100">{nombreMes}</h3>
+        <button onClick={() => setMes(new Date(mes.getFullYear(), mes.getMonth() + 1, 1))}
+          className="btn-ghost p-1.5" aria-label="Mes siguiente"><ChevronRight size={16} /></button>
+        <button onClick={() => setMes(new Date(hoyRef.getFullYear(), hoyRef.getMonth(), 1))}
+          className="btn-ghost px-2.5 py-1 text-xs">Hoy</button>
+        <span className="ml-auto text-[12.5px] text-dark-400">
+          {totalMes} día{totalMes === 1 ? '' : 's'} concedido{totalMes === 1 ? '' : 's'} este mes
+        </span>
+      </div>
+
+      <div className="mb-2 flex flex-wrap gap-3 text-[11.5px] text-dark-500">
+        <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-emerald-400" /> concedido</span>
+        <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-amber-400" /> sin contestar</span>
+        <span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-full bg-red-500" /> día cerrado</span>
+      </div>
+
+      {err && <p className="mb-2 text-sm text-red-300">{err}</p>}
+      {!filas ? (
+        <div className="flex items-center gap-2 py-8 text-dark-400"><Loader2 className="animate-spin" size={16} /> …</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-7 gap-1">
+            {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((d, i) => (
+              <div key={i} className="pb-1 text-center text-[11px] font-semibold text-dark-600">{d}</div>
+            ))}
+            {celdas.map((n, i) => {
+              if (n === null) return <div key={`h${i}`} />
+              const k = claveDia(new Date(mes.getFullYear(), mes.getMonth(), n))
+              const dia = porDia[k] || []
+              const apro = dia.filter((x) => x.status === 'aprobado')
+              const pend = dia.filter((x) => x.status === 'pendiente')
+              const bloq = cerrado(k)
+              return (
+                <button key={k} onClick={() => setAbierto(abierto === k ? null : k)}
+                  className={`min-h-[62px] rounded-lg border p-1.5 text-left transition-colors ${
+                    abierto === k ? 'border-brand-500 bg-brand-500/10'
+                      : bloq ? 'border-red-500/40 bg-red-500/[0.07]'
+                        : apro.length ? 'border-emerald-500/30 bg-emerald-500/[0.07] hover:border-emerald-500/60'
+                          : 'border-dark-800 hover:border-dark-700'}`}>
+                  <span className={`text-[12px] font-bold tabular-nums ${
+                    k === hoyK ? 'text-brand-300' : 'text-dark-300'}`}>{n}</span>
+                  {/* El primer nombre se ve sin pulsar: en la mayoría de los días
+                      hay una sola persona, y obligar a un clic para leer un
+                      nombre es lo que hacía que no se mirase. */}
+                  {apro.slice(0, 2).map((x) => (
+                    <span key={x.id} className="mt-0.5 block truncate text-[10.5px] leading-tight text-emerald-300">
+                      {String(x.driver_name || '').split(' ')[0]}
+                    </span>
+                  ))}
+                  {apro.length > 2 && (
+                    <span className="block text-[10.5px] text-emerald-400/80">+{apro.length - 2} más</span>
+                  )}
+                  {pend.length > 0 && (
+                    <span className="mt-0.5 block text-[10.5px] leading-tight text-amber-300">
+                      {pend.length} sin contestar
+                    </span>
+                  )}
+                  {bloq && !apro.length && !pend.length && (
+                    <span className="mt-0.5 block truncate text-[10.5px] leading-tight text-red-300">cerrado</span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+
+          {abierto && (
+            <div className="mt-3 rounded-lg border border-dark-700 bg-dark-900/60 p-3">
+              <p className="mb-2 text-[13px] font-bold text-dark-100">{abierto}</p>
+              {cerrado(abierto) && (
+                <p className="mb-2 rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-[12.5px] text-red-300">
+                  Día cerrado: {cerrado(abierto).motivo}
+                </p>
+              )}
+              {(porDia[abierto] || []).length === 0 ? (
+                <p className="text-[13px] text-dark-500">Nadie tiene día ese día.</p>
+              ) : (
+                <div className="space-y-1">
+                  {(porDia[abierto] || []).map((x) => (
+                    <div key={x.id} className="flex flex-wrap items-center gap-2 text-[13px]">
+                      <span className={`h-2 w-2 rounded-full ${x.status === 'aprobado' ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                      <span className="font-semibold text-dark-100">{x.driver_name}</span>
+                      <span className="text-dark-500">{x.motivo_label || x.type}</span>
+                      {x.status === 'pendiente' && <span className="text-amber-300">sin contestar</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 function atajo(k, ref = new Date()) {
   const y = ref.getFullYear()
   const m = ref.getMonth()
@@ -235,6 +404,7 @@ export default function Turnos() {
   const [verPegar, setVerPegar] = useState(false)
   const [bloqueos, setBloqueos] = useState([])
   const [verBloqueos, setVerBloqueos] = useState(false)
+  const [vistaDias, setVistaDias] = useState('peticiones')  // peticiones | calendario | bloqueos
   const [nuevoBloqueo, setNuevoBloqueo] = useState({ desde: '', hasta: '', motivo: '', driver_id: '' })
 
   /* ── LA REJILLA ─────────────────────────────────────────────────────────
@@ -1011,6 +1181,22 @@ export default function Turnos() {
         <h1 className="flex items-center gap-2 text-xl font-bold">
           <CalendarClock size={20} /> {t('turns.title')} · {center}
         </h1>
+        {/* ── TRES COSAS DISTINTAS, TRES SITIOS ──────────────────────────────
+            Contestar peticiones, ver qué días hay ya dados y cerrar fechas son
+            tareas separadas y se hacen en momentos distintos. Estaban las tres
+            revueltas en la misma pantalla —y las dos últimas, dentro del
+            cuadrante escondido, sin forma de llegar. */}
+        <div className="flex gap-1 rounded-lg bg-dark-900 p-1 ring-1 ring-dark-700">
+          {[['peticiones', `Peticiones${grupos.length ? ` · ${grupos.length}` : ''}`],
+            ['calendario', 'Calendario'],
+            ['bloqueos', 'Días cerrados']].map(([k, lbl]) => (
+            <button key={k} onClick={() => setVistaDias(k)}
+              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
+                vistaDias === k ? 'bg-brand-500/20 text-brand-300' : 'text-dark-400 hover:text-dark-200'}`}>
+              {lbl}
+            </button>
+          ))}
+        </div>
       {/* la navegacion por quincenas */}
       {MOSTRAR_CUADRANTE && (<>
         <div className="flex flex-wrap items-center gap-1.5">
@@ -1513,7 +1699,7 @@ export default function Turnos() {
           Vive aparte de la bandeja de pendientes a proposito: la bandeja es
           para decidir y se vacia; esto es para consultar y no se vacia nunca.
           Mezclarlas hacia que lo ya decidido tapara lo que falta por decidir. */}
-      {verHistorial && (
+      {vistaDias === 'peticiones' && verHistorial && (
         <div className="card p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <History size={16} className="text-brand-400" />
@@ -1661,7 +1847,7 @@ export default function Turnos() {
         </div>
       )}
 
-      {MOSTRAR_CUADRANTE && verBloqueos && (
+      {(vistaDias === 'bloqueos' || (MOSTRAR_CUADRANTE && verBloqueos)) && (
         <div className="card p-4">
           <div className="mb-2 flex items-center gap-2">
             <Ban size={16} className="text-red-400" />
@@ -1910,6 +2096,7 @@ export default function Turnos() {
       )}
 
       {/* Solicitudes de los conductores */}
+      {vistaDias === 'peticiones' && (
       <div className="card p-4">
         <h2 className="mb-3 flex items-center gap-2 text-sm font-bold text-dark-100">
           <Inbox size={16} /> {t('turns.requests')}
@@ -1986,6 +2173,11 @@ export default function Turnos() {
           </div>
         )}
       </div>
+      )}
+
+      {vistaDias === 'calendario' && (
+        <CalendarioDiasLibres center={center} />
+      )}
 
       {MOSTRAR_CUADRANTE && min > 0 && (
         <p className="flex items-center gap-1.5 text-xs text-dark-600">
