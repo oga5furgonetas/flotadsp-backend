@@ -13136,6 +13136,68 @@ class OrdenTrabajoCrear(BaseModel):
     # Apunte del libro de daños del que sale esta orden. Al crearla se marca
     # ese daño como "en taller" para que no salga otra vez en la lista.
     ledger_id: Optional[str] = None
+    # VARIOS daños en la misma orden. `ledger_id` se queda por lo que ya
+    # llamaba asi, pero lo normal es esto: una furgoneta va al taller con
+    # todo lo que tiene, no con un golpe.
+    ledger_ids: Optional[List[str]] = None
+
+
+async def _ot_fotos_del_dano(danos: list) -> dict:
+    """Para cada daño del libro, la foto donde se ve. {ledger_id: {...}}
+
+    POR QUE ESTO ES LA PIEZA QUE FALTABA. Mandar una furgoneta al taller
+    obligaba a explicar el golpe por telefono o por correo, y el taller a
+    buscarlo dando vueltas al vehiculo. Todo lo necesario ya estaba guardado y
+    sin conectar: cada apunte del libro sabe en que inspeccion se vio
+    (`first_seen_inspection`) y esa inspeccion tiene las fotos.
+
+    SE PREFIERE LA FOTO ANOTADA. `annotated_photos` es un array PARALELO a
+    `photos` con la marca de la IA encima del golpe, y `None` en las fotos
+    donde no detecto nada. Una foto anotada le dice al taller donde mirar; la
+    misma foto sin anotar es un lateral de furgoneta cualquiera. Si no hay
+    anotada se manda la normal, que sigue siendo mejor que nada — pero nunca
+    se manda una posicion vacia del array como si fuera una URL.
+    """
+    ids = [d.get("first_seen_inspection") for d in danos if d.get("first_seen_inspection")]
+    if not ids:
+        return {}
+    insp = {i["id"]: i async for i in db.inspections.find(
+        {"id": {"$in": list(set(ids))}},
+        {"_id": 0, "id": 1, "photos": 1, "annotated_photos": 1, "created_at": 1})}
+    out = {}
+    for d in danos:
+        i = insp.get(d.get("first_seen_inspection"))
+        if not i:
+            continue
+        fotos = [f for f in (i.get("photos") or []) if f]
+        anot = [f for f in (i.get("annotated_photos") or []) if f]
+        elegidas = (anot or fotos)[:4]
+        if not elegidas:
+            continue
+        out[str(d.get("_id"))] = {
+            "fotos": elegidas,
+            "anotadas": bool(anot),
+            "vista_en": (i.get("created_at") or "")[:10],
+        }
+    return out
+
+
+def _ot_linea_dano(d: dict) -> str:
+    """Una linea de parte a partir de un apunte del libro.
+
+    'Puerta corredera izq (puerta) — grave, visto el 2026-07-13'. Es lo que el
+    taller necesita leer, y sale igual escriba quien escriba: un parte a mano
+    depende del dia que tenga quien lo redacta.
+    """
+    trozos = [str(d.get("part") or d.get("panel") or "Daño sin describir").strip()]
+    if d.get("panel") and d.get("part") and d["panel"] not in d["part"]:
+        trozos[0] += " (%s)" % d["panel"]
+    cola = []
+    if d.get("severity"):
+        cola.append(str(d["severity"]))
+    if d.get("first_seen"):
+        cola.append("visto el %s" % str(d["first_seen"])[:10])
+    return trozos[0] + (" — " + ", ".join(cola) if cola else "")
 
 
 def _ot_ahora() -> str:
@@ -13248,6 +13310,8 @@ async def _ot_publica(orden: dict) -> dict:
         "importe_final": orden.get("importe_final"),
         "presupuesto": orden.get("presupuesto", "sin_presupuesto"),
         "fotos": orden.get("fotos") or [],
+        # Cada golpe con SUS fotos. Doce fotos seguidas no dicen cual es cual.
+        "partes": orden.get("partes") or [],
         "historial": orden.get("historial") or [],
         "estados_posibles": [{"id": e, "txt": OT_ESTADOS[e]} for e in OT_ESTADOS_TALLER],
         "cerrada": orden.get("estado") in ("entregado", "anulada"),
@@ -13422,6 +13486,73 @@ def _ot_dias_desde(f) -> int:
         return 0
 
 
+@api_router.get("/work-orders/parte/{vehicle_id}")
+async def ot_parte_furgoneta(vehicle_id: str, _=Depends(require_admin)):
+    """Todo lo que le pasa a UNA furgoneta, con las fotos, listo para el taller.
+
+    Es el paso previo a crear la orden. La lista de daños pendientes
+    (`/work-orders/danos-pendientes`) mira la flota entera para decidir A QUIEN
+    mandar; esto mira una sola furgoneta para decidir QUE mandar, que es la
+    otra mitad y no existia.
+
+    UNA ORDEN CON TODO, NO UNA POR GOLPE. Hoy solo se podia crear una orden
+    por cada apunte del libro. Con 213 daños abiertos repartidos en 123
+    furgonetas, eso son varias ordenes de la misma matricula al mismo taller
+    la misma semana — que nadie manda, y por eso el modulo esta sin usar. El
+    taller quiere una entrada y una salida.
+    """
+    v = await db.vehicles.find_one(
+        {"id": vehicle_id},
+        {"_id": 0, "id": 1, "license_plate": 1, "model": 1, "center": 1, "status": 1})
+    if not v:
+        raise HTTPException(404, "Esa furgoneta no existe")
+
+    danos = await db.vehicle_damage_ledger.find(
+        {"vehicle_id": vehicle_id, "status": "open",
+         "orden_id": {"$in": [None, ""]}}).to_list(200)
+    fotos = await _ot_fotos_del_dano(danos)
+
+    peso = {"critico": 0, "grave": 1, "moderado": 2, "leve": 3}
+    danos.sort(key=lambda d: (peso.get(str(d.get("severity") or ""), 9),
+                              str(d.get("first_seen") or "")))
+    items = []
+    for d in danos:
+        lid = str(d.get("_id"))
+        f = fotos.get(lid) or {}
+        items.append({
+            "ledger_id": lid,
+            "panel": d.get("panel") or "",
+            "part": d.get("part") or "",
+            "severity": d.get("severity") or "",
+            "first_seen": str(d.get("first_seen") or "")[:10],
+            "linea": _ot_linea_dano(d),
+            "fotos": f.get("fotos") or [],
+            "anotadas": bool(f.get("anotadas")),
+        })
+
+    # Las incidencias abiertas de esta furgoneta van aparte: no son golpes de
+    # chapa, son averias (frenos, ruidos, luces) y el taller las trata en otro
+    # sitio del parte. Mezclarlas en la misma lista hacia que se perdieran.
+    incs = await db.incidents.find(
+        {"vehicle_id": vehicle_id, "status": {"$ne": "resolved"}},
+        {"_id": 0, "id": 1, "title": 1, "description": 1, "severity": 1,
+         "photos": 1, "created_at": 1}).sort("created_at", -1).to_list(30)
+
+    return {
+        "vehiculo": v,
+        "danos": items,
+        "incidencias": [{
+            "id": i.get("id"),
+            "titulo": (i.get("title") or i.get("description") or "").strip()[:200],
+            "severity": i.get("severity") or "",
+            "fotos": [f for f in (i.get("photos") or []) if f][:4],
+            "fecha": (i.get("created_at") or "")[:10],
+        } for i in incs],
+        "total_danos": len(items),
+        "graves": sum(1 for i in items if i["severity"] in ("grave", "critico")),
+    }
+
+
 @api_router.get("/work-orders/paradas")
 async def ot_furgonetas_paradas(center: str = "", _=Depends(require_admin)):
     """Las furgonetas que no estan trabajando, con el reloj corriendo.
@@ -13499,6 +13630,7 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
     # cosas; el problema escrito a mano, si lo hay, manda sobre el de la
     # incidencia (quien crea la orden sabe mejor que le pasa hoy).
     fotos_previas: list = []
+    partes: list = []
     problema = (data.problema or "").strip()
 
     # DESDE UN DAÑO DEL LIBRO.
@@ -13506,8 +13638,57 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
     # la gravedad: 'Paragolpes trasero — grave (visto el 2026-08-12)'. Es
     # exactamente lo que el taller necesita leer, y evita que la orden salga
     # con el problema en blanco por pereza.
+    # VARIOS DAÑOS EN UNA ORDEN, CON SUS FOTOS.
+    # El parte se redacta solo a partir del libro y se le enganchan las fotos
+    # anotadas de la inspeccion donde se vio cada golpe. Es la diferencia entre
+    # que el taller sepa donde mirar y que tenga que dar vueltas al vehiculo.
+    lids = [str(x) for x in (data.ledger_ids or []) if str(x).strip()]
+    if data.ledger_id and data.ledger_id not in lids:
+        lids.append(str(data.ledger_id))
+    if lids:
+        from bson import ObjectId as _OId
+        oids, planos = [], []
+        for x in lids:
+            try:
+                oids.append(_OId(x))
+            except Exception:
+                planos.append(x)
+        cond = [c for c in ({"_id": {"$in": oids}} if oids else None,
+                            {"_id": {"$in": planos}} if planos else None) if c]
+        multi = await db.vehicle_damage_ledger.find(
+            cond[0] if len(cond) == 1 else {"$or": cond}).to_list(200)
+        # Solo los de ESTA furgoneta. Un id de otra matricula colado en la
+        # lista mandaria al taller el golpe de un vehiculo que no ha ido.
+        multi = [d for d in multi if d.get("vehicle_id") == data.vehicle_id]
+        if multi:
+            peso = {"critico": 0, "grave": 1, "moderado": 2, "leve": 3}
+            multi.sort(key=lambda d: peso.get(str(d.get("severity") or ""), 9))
+            fotos_map = await _ot_fotos_del_dano(multi)
+            lineas = ["- " + _ot_linea_dano(d) for d in multi]
+            if not problema:
+                problema = "Reparar:\n" + "\n".join(lineas)
+            # EL PARTE VA AGRUPADO, no como un monton de fotos sueltas. Doce
+            # fotos seguidas debajo de un texto no le dicen al taller cual es
+            # cual; con cada golpe llevando las suyas, sabe donde mirar sin
+            # preguntar. Esto es lo que se le enseña en el portal.
+            for d in multi:
+                f = (fotos_map.get(str(d.get("_id"))) or {}).get("fotos") or []
+                partes.append({
+                    "linea": _ot_linea_dano(d),
+                    "panel": d.get("panel") or "",
+                    "severity": d.get("severity") or "",
+                    "fotos": f[:4],
+                })
+                for x in f:
+                    if x not in fotos_previas:
+                        fotos_previas.append(x)
+            fotos_previas = fotos_previas[:24]
+            lids = [str(d.get("_id")) for d in multi]
+        else:
+            lids = []
+
     dano_doc = None
-    if data.ledger_id:
+    if data.ledger_id and not lids:
         try:
             from bson import ObjectId as _OId
             dano_doc = await db.vehicle_damage_ledger.find_one(
@@ -13555,8 +13736,9 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
         "presupuesto_por": None,
         "presupuesto_en": None,
         "fotos": fotos_previas,
+        "partes": partes,
         "historial": [_ot_apunte(quien, "Orden creada", w.get("name") or "")]
-                     + ([_ot_apunte(quien, "%d fotos de la incidencia" % len(fotos_previas))]
+                     + ([_ot_apunte(quien, "%d fotos del parte" % len(fotos_previas))]
                         if fotos_previas else []),
         "creada_por": quien,
         "creada_en": _ot_ahora(),
@@ -13581,9 +13763,17 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
     # El daño queda marcado DESPUES de guardar la orden, no antes: si el
     # insert fallara, un daño marcado como "en taller" sin orden que lo
     # respalde desapareceria de la lista de pendientes y no lo veria nadie.
-    if data.ledger_id:
-        await _ot_marcar_dano(data.ledger_id, orden["id"], orden.get("numero"))
-    logger.info("OT creada %s (%s -> %s)", orden["numero"], orden["matricula"], orden["taller_nombre"])
+    for _lid in (lids or ([data.ledger_id] if data.ledger_id else [])):
+        await _ot_marcar_dano(_lid, orden["id"], orden.get("numero"))
+    # Se guarda de QUE daños sale la orden para poder cerrarlos al entregarla.
+    # Sin esta lista habria que adivinarlo por matricula y fecha, y un daño
+    # que se queda abierto despues de repararse ensucia el libro para siempre.
+    if lids:
+        await db.ordenes_trabajo.update_one({"id": orden["id"]},
+                                            {"$set": {"ledger_ids": lids}})
+        orden["ledger_ids"] = lids
+    logger.info("OT creada %s (%s -> %s, %d daños)", orden["numero"], orden["matricula"],
+                orden["taller_nombre"], len(lids))
     return orden
 
 
@@ -14247,6 +14437,48 @@ async def _ot_marcar_dano(ledger_id: str, orden_id: str, numero) -> None:
         logger.warning(f"No se pudo marcar el daño {ledger_id}: {e}")
 
 
+async def _ot_cerrar_danos(ledger_ids: list, estado: str, numero=None) -> int:
+    """Cierra (o devuelve) los daños que iban en una orden. Devuelve cuantos.
+
+    ENTREGADA -> los daños pasan a 'repaired' y salen del libro de abiertos.
+    ANULADA   -> se les quita la orden y vuelven a la lista de pendientes, que
+                 es donde tienen que estar: la furgoneta no se ha arreglado.
+
+    Se marca `repaired` y no `archived` a proposito. 'Archivado' ya se usa para
+    lo que se descarta por otras razones (falso positivo de la IA, duplicado),
+    y mezclar "se reparo" con "no era nada" hace imposible saber despues cuanto
+    se ha arreglado de verdad — que es justo el numero que quiere un DSP.
+    """
+    if not ledger_ids:
+        return 0
+    from bson import ObjectId as _OId
+    oids, planos = [], []
+    for x in ledger_ids:
+        try:
+            oids.append(_OId(str(x)))
+        except Exception:
+            planos.append(str(x))
+    cond = [c for c in ({"_id": {"$in": oids}} if oids else None,
+                        {"_id": {"$in": planos}} if planos else None) if c]
+    if not cond:
+        return 0
+    clave = cond[0] if len(cond) == 1 else {"$or": cond}
+    if estado == "entregado":
+        cambio = {"$set": {"status": "repaired", "repaired_at": _ot_ahora(),
+                           "repaired_orden": numero, "updated_at": _ot_ahora()}}
+    else:
+        cambio = {"$set": {"status": "open", "updated_at": _ot_ahora()},
+                  "$unset": {"orden_id": "", "orden_numero": ""}}
+    try:
+        r = await db.vehicle_damage_ledger.update_many(clave, cambio)
+        return int(r.modified_count or 0)
+    except Exception as e:                                   # noqa: BLE001
+        # Que falle cerrar el libro NO puede tumbar el cierre de la orden: la
+        # furgoneta ya ha vuelto y eso es lo que manda.
+        logger.warning("No se pudieron cerrar los daños de la orden %s: %s", numero, e)
+        return 0
+
+
 @api_router.post("/work-orders/{orden_id}/enlace")
 async def enlace_orden(orden_id: str, dias: int = 60, user: dict = Depends(require_admin)):
     """Crea (o rehace) el enlace del taller y devuelve el texto listo para WhatsApp.
@@ -14321,6 +14553,22 @@ async def editar_orden(orden_id: str, data: dict = Body(...), user: dict = Depen
                     await db.vehicles.update_one({"id": o["vehicle_id"]},
                                                  {"$set": {"status": vuelve}})
                     apuntes.append(_ot_apunte(quien, "Furgoneta de vuelta", vuelve))
+            # SE CIERRA EL CIRCULO. Al entregar, los daños que iban en la orden
+            # pasan a reparados en el libro; al anularla vuelven a la lista de
+            # pendientes en vez de quedarse retenidos por una orden muerta.
+            # Sin esto el libro no vale: un golpe ya arreglado seguia contando
+            # como abierto para siempre, y una lista que no baja nunca deja de
+            # mirarse — que es exactamente lo que le pasa hoy a los 213.
+            _lids = list(o.get("ledger_ids") or [])
+            if not _lids and o.get("ledger_id"):
+                _lids = [o["ledger_id"]]
+            if _lids and nuevo in ("entregado", "anulada"):
+                n = await _ot_cerrar_danos(_lids, nuevo, o.get("numero"))
+                if n:
+                    apuntes.append(_ot_apunte(
+                        quien,
+                        "%d daños %s" % (n, "reparados" if nuevo == "entregado" else "devueltos"),
+                        "" if nuevo == "entregado" else "la orden se anuló"))
 
     for campo, etiqueta in (("problema", "Problema"), ("descripcion_trabajo", "Trabajo")):
         if campo in data:

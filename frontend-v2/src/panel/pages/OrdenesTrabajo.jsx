@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import {
   getOrdenes, getResumenOrdenes, getOrden, crearOrden, editarOrden, enlaceOrden,
+  getParteFurgoneta,
   getVehicles, getWorkshops, crearTaller, exportarOrdenes, ordenesPorTaller,
   getIncidents, getDanosPendientes, getFurgonetasParadas,
 } from '../api'
@@ -184,6 +185,8 @@ export default function OrdenesTrabajo() {
   const [comparativa, setComparativa] = useState(null)
 
   const [nueva, setNueva] = useState(null)
+  const [parte, setParte] = useState(null)          // golpes abiertos de la furgoneta elegida, con fotos
+  const [danosElegidos, setDanosElegidos] = useState([])
   const [tallerNuevo, setTallerNuevo] = useState(null)
   const [vehiculos, setVehiculos] = useState([])
   const [talleres, setTalleres] = useState([])
@@ -215,6 +218,26 @@ export default function OrdenesTrabajo() {
     getIncidents({ vehicle_id: nueva.vehicle_id })
       .then((r) => setIncidencias((r.data || []).filter((x) => x.status === 'open')))
       .catch(() => setIncidencias([]))
+  }, [nueva?.vehicle_id])
+
+  // EL PARTE DE LA FURGONETA. En cuanto se elige matrícula se traen sus golpes
+  // abiertos con la foto de cada uno. Los graves vienen marcados de entrada:
+  // son los que no deberían quedarse fuera por descuido, y desmarcar es más
+  // fácil que acordarse de marcar.
+  useEffect(() => {
+    setParte(null); setDanosElegidos([])
+    if (!nueva?.vehicle_id) return
+    let vivo = true
+    getParteFurgoneta(nueva.vehicle_id)
+      .then((r) => {
+        if (!vivo) return
+        setParte(r.data)
+        setDanosElegidos((r.data?.danos || [])
+          .filter((d) => d.severity === 'grave' || d.severity === 'critico')
+          .map((d) => d.ledger_id))
+      })
+      .catch(() => { if (vivo) setParte({ danos: [], incidencias: [] }) })
+    return () => { vivo = false }
   }, [nueva?.vehicle_id])
 
   const estados = datos?.estados || {}
@@ -312,7 +335,7 @@ export default function OrdenesTrabajo() {
   const crear = async () => {
     setGuardando('crear')
     try {
-      const r = await crearOrden(nueva)
+      const r = await crearOrden({ ...nueva, ledger_ids: danosElegidos })
       setNueva(null); await cargar(); await abrirFicha(r.data.id)
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se pudo crear la orden.')
@@ -1063,6 +1086,63 @@ export default function OrdenesTrabajo() {
                 <button onClick={() => setNueva({ ...nueva, incident_id: null })}
                   className="ml-auto text-[12px] text-slate-500 hover:text-slate-700">quitar</button>
               </p>
+            )}
+
+            {/* EL PARTE. Los golpes que esta furgoneta arrastra en el libro, con
+                la foto de cada uno — la anotada, con la marca de la IA encima.
+                Esto es lo que evita el «¿y dónde está el golpe?» por teléfono, y
+                lo que hace que la orden salga con TODO y no de uno en uno. */}
+            {!!parte?.danos?.length && (
+              <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-[12.5px] font-semibold text-slate-700">
+                    Golpes sin arreglar <span className="font-normal text-slate-500">({parte.danos.length})</span>
+                  </p>
+                  <button
+                    onClick={() => setDanosElegidos(
+                      danosElegidos.length === parte.danos.length ? [] : parte.danos.map((d) => d.ledger_id))}
+                    className="text-[12px] font-medium text-blue-600 hover:text-blue-700">
+                    {danosElegidos.length === parte.danos.length ? 'ninguno' : 'todos'}
+                  </button>
+                </div>
+                <div className="max-h-64 space-y-1.5 overflow-y-auto">
+                  {parte.danos.map((d) => {
+                    const puesto = danosElegidos.includes(d.ledger_id)
+                    return (
+                      <label key={d.ledger_id}
+                        className={`flex cursor-pointer items-start gap-2.5 rounded-lg border p-2 ${
+                          puesto ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white'}`}>
+                        <input type="checkbox" checked={puesto} className="mt-0.5 accent-blue-600"
+                          onChange={() => setDanosElegidos(puesto
+                            ? danosElegidos.filter((x) => x !== d.ledger_id)
+                            : [...danosElegidos, d.ledger_id])} />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[13px] leading-snug text-slate-800">{d.linea}</p>
+                          {!!d.fotos.length && (
+                            <div className="mt-1.5 flex gap-1.5">
+                              {d.fotos.slice(0, 4).map((f) => (
+                                <img key={f} src={f} alt="" loading="lazy"
+                                  className="h-12 w-16 rounded border border-slate-200 object-cover" />
+                              ))}
+                              {d.anotadas && (
+                                <span className="self-end text-[10.5px] text-emerald-600">marcado por la IA</span>
+                              )}
+                            </div>
+                          )}
+                          {!d.fotos.length && (
+                            <p className="mt-0.5 text-[11.5px] text-slate-400">Sin foto de ese día.</p>
+                          )}
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+                <p className="mt-2 text-[11.5px] text-slate-500">
+                  {danosElegidos.length
+                    ? `${danosElegidos.length} van en la orden, con sus fotos. Los graves salen marcados.`
+                    : 'Sin marcar ninguno, la orden va solo con lo que escribas abajo.'}
+                </p>
+              </div>
             )}
 
             <label className="mb-1.5 block text-[12.5px] font-semibold text-slate-600">Qué le pasa</label>

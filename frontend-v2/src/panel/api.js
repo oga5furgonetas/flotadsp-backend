@@ -312,6 +312,10 @@ export const getResumenOrdenes = (center) =>
   api.get('/work-orders/resumen', { params: centerParam(center) })
 export const getOrden = (id) => api.get(`/work-orders/${id}`)
 export const crearOrden = (body) => api.post('/work-orders', body)
+/* Todo lo que le pasa a UNA furgoneta, con las fotos del golpe, para armar
+   el parte antes de mandarla. Es la otra mitad de `danos-pendientes`:
+   aquella dice a quien mandar, esta dice que mandar. */
+export const getParteFurgoneta = (vehicleId) => api.get(`/work-orders/parte/${vehicleId}`)
 export const editarOrden = (id, body) => api.patch(`/work-orders/${id}`, body)
 // Rehace el enlace y REVOCA el anterior: es la forma de arreglar un envío
 // al taller equivocado.
