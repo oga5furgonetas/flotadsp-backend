@@ -24371,6 +24371,9 @@ async def scorecard_full(center: str, week: Optional[str] = None, user: dict = D
     # scorecard suya salen marcados como no fiables, y entonces el tier se
     # devuelve como estimado en vez de afirmarlo.
     thr, thr_meta = await _sc_thresholds(center, wnum)
+    # Los pesos viajan con cada metrica para que la pantalla pueda ordenar por
+    # lo que de verdad cuesta puntos (ver mas abajo).
+    pesos = await _sc_weights(center)
     doc = await db.scorecard_live.find_one({"center": center, "week": sun}, {"_id": 0})
     values = (doc or {}).get("values", {})
     # ¿hay scorecard OFICIAL de esa semana? → valores+tiers REALES de Amazon
@@ -24432,9 +24435,16 @@ async def scorecard_full(center: str, week: Optional[str] = None, user: dict = D
             _t, cierto, motivo = _sc_tier_cert(v, thr.get(m["key"]),
                                                thr_meta.get(m["key"]), m["dir"])
         counts[t or "Sin datos"] = counts.get(t or "Sin datos", 0) + 1
+        # EL PESO VIAJA CON LA METRICA. Sin el, la pantalla no puede ordenar
+        # por lo que de verdad cuesta puntos y todas las metricas parecen
+        # igual de importantes: DSC pesa 15,6 y CC pesa 3,6, o sea que la
+        # misma distancia al objetivo vale cuatro veces mas en una que en
+        # otra. Sale de `scorecard_weights` si esta cargado, y si no de los
+        # pesos oficiales sembrados.
         out.append({**m, "value": v, "tier": t, "thr": thr.get(m["key"]), "source": src,
                     "cierto": bool(cierto), "motivo": motivo,
                     "umbral": thr_meta.get(m["key"]),
+                    "peso": pesos.get(m["key"]),
                     "next": _sc_next_target(v, t, thr.get(m["key"]), m["dir"])})
 
     to_improve = sorted(

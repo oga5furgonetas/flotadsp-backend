@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
@@ -18,9 +18,13 @@ import {
 import CalidadViva from '../components/CalidadViva'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+/* La escala va LIMA → amarillo → ámbar → rojo, sin verde azulado. El esmeralda
+   de antes se parecía demasiado al cian de marca y el ojo los mezclaba: "va
+   bien" y "púlsame" no se pueden confundir. Y es una ESCALA, no cinco
+   categorías sueltas: el mismo color significa lo mismo en toda la app. */
 const TIER_CFG = {
-  'Fantastic Plus': { bg: 'bg-emerald-500/20', text: 'text-emerald-300', ring: 'ring-emerald-500/40', dot: 'bg-emerald-400' },
-  'Fantastic':      { bg: 'bg-green-500/20',   text: 'text-green-300',   ring: 'ring-green-500/40',   dot: 'bg-green-400' },
+  'Fantastic Plus': { bg: 'bg-lime-500/20',    text: 'text-lime-300',    ring: 'ring-lime-500/40',    dot: 'bg-lime-400' },
+  'Fantastic':      { bg: 'bg-lime-500/15',    text: 'text-lime-400',    ring: 'ring-lime-500/30',    dot: 'bg-lime-500' },
   'Great':          { bg: 'bg-yellow-500/20',  text: 'text-yellow-300',  ring: 'ring-yellow-500/30',  dot: 'bg-yellow-400' },
   'Fair':           { bg: 'bg-orange-500/20',  text: 'text-orange-300',  ring: 'ring-orange-500/30',  dot: 'bg-orange-400' },
   'Poor':           { bg: 'bg-red-500/20',     text: 'text-red-300',     ring: 'ring-red-500/30',     dot: 'bg-red-400' },
@@ -197,8 +201,86 @@ function MetricSourceTooltip({ metricKey }) {
 }
 
 // ── MetricRow ─────────────────────────────────────────────────────────────────
-function MetricRow({ m, weekSun, center, onSaved }) {
+/* ── TABLA DE MÉTRICAS ──────────────────────────────────────────────────────
+   Antes eran tres tarjetas apiladas con las métricas dentro como filas-caja.
+   Cabían cuatro sin bajar la página de dieciséis que hay, y todas ocupaban lo
+   mismo tuvieran el peso que tuvieran.
+
+   Aquí caben las doce de un vistazo y, sobre todo, se pueden ORDENAR POR LO
+   QUE CUESTAN. DSC pesa 15,6 puntos y CC pesa 3,6: la misma distancia al
+   objetivo vale cuatro veces más en una que en otra, y eso decidía dónde
+   meter horas la semana siguiente. Con las tarjetas no se veía.
+
+   La edición a mano del valor se queda: es como se rellenan las métricas que
+   solo salen en el PDF. */
+function TablaMetricas({ metricas, weekSun, center, onSaved }) {
   const { t } = useT()
+  const [orden, setOrden] = useState('cuesta')
+
+  const filas = useMemo(() => {
+    const ms = [...metricas]
+    if (orden === 'grupo') {
+      const peso = { safety: 0, quality: 1, capacity: 2 }
+      return ms.sort((a, b) => (peso[a.group] ?? 9) - (peso[b.group] ?? 9)
+        || (b.peso || 0) - (a.peso || 0))
+    }
+    // "Lo que cuesta": primero lo que NO está en Fantastic, por peso. Una
+    // métrica sin dato no cuesta puntos todavía, así que va al final: lo que
+    // no se sabe no se puede arreglar esta semana.
+    const bien = (m) => m.tier === 'Fantastic' || m.tier === 'Fantastic Plus'
+    const rango = (m) => (m.value == null ? 2 : bien(m) ? 1 : 0)
+    return ms.sort((a, b) => rango(a) - rango(b) || (b.peso || 0) - (a.peso || 0))
+  }, [metricas, orden])
+
+  const enJuego = filas
+    .filter((m) => m.value != null && m.tier !== 'Fantastic' && m.tier !== 'Fantastic Plus')
+    .reduce((s, m) => s + (m.peso || 0), 0)
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="flex flex-wrap items-center gap-2 border-b border-dark-800 px-4 py-2.5">
+        <span className="text-xs font-semibold uppercase tracking-wide text-dark-300">Métricas</span>
+        {enJuego > 0 && (
+          <span className="cifra text-[11px] text-orange-300">
+            {enJuego.toFixed(1)} puntos en juego
+          </span>
+        )}
+        <div className="ml-auto flex gap-1 rounded-md bg-dark-800/60 p-0.5">
+          {[['cuesta', 'Lo que cuesta'], ['grupo', 'Por pilar']].map(([k, txt]) => (
+            <button key={k} onClick={() => setOrden(k)}
+              className={`rounded px-2.5 py-1 text-[11.5px] font-medium transition-colors ${
+                orden === k ? 'bg-dark-700 text-dark-100' : 'text-dark-400 hover:text-dark-200'}`}>
+              {txt}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[620px] text-[13px]">
+          <thead>
+            <tr className="border-b border-dark-800">
+              <th className="w-7 px-2 py-2"></th>
+              <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Métrica</th>
+              <th className="px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">Valor</th>
+              <th className="px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">Objetivo</th>
+              <th className="px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">Falta</th>
+              <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Nivel</th>
+              <th className="px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">Peso</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filas.map((m) => (
+              <FilaMetrica key={m.key} m={m} weekSun={weekSun} center={center} onSaved={onSaved} t={t} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function FilaMetrica({ m, weekSun, center, onSaved, t }) {
   const [editing, setEditing] = useState(false)
   const [val, setVal] = useState('')
   const [busy, setBusy] = useState(false)
@@ -209,7 +291,6 @@ function MetricRow({ m, weekSun, center, onSaved }) {
     setEditing(true)
     setTimeout(() => inputRef.current?.focus(), 0)
   }
-
   async function save() {
     setBusy(true)
     try {
@@ -222,52 +303,62 @@ function MetricRow({ m, weekSun, center, onSaved }) {
 
   const cfg = tierCfg(m.tier)
   const src = SRC_CFG[m.source]
-  const next = m.next
+  // El objetivo que se enseña es el de FANTASTIC, no el del siguiente escalón:
+  // es el que persigue todo el mundo y el que sale en el PDF de Amazon.
+  const objetivo = m.thr?.fantastic
+  const gcolor = GROUP_CFG[m.group]?.color || 'text-dark-500'
 
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-dark-800 bg-dark-900 px-3 py-2">
-      <MetricSourceTooltip metricKey={m.key} />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-xs font-medium text-dark-200">{m.label}</div>
-        {next && (
-          <div className="mt-0.5 text-[10px] text-dark-500">
-            Falta <span className="text-orange-400">{next.gap} {m.unit}</span> para {next.to_tier?.fantastic || next.to_tier?.great || next.to_tier?.fair}
-          </div>
-        )}
-      </div>
-
-      {editing ? (
-        <div className="flex items-center gap-1">
-          <input
-            ref={inputRef}
-            type="number"
-            step="0.01"
-            value={val}
-            onChange={e => setVal(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
-            className="w-20 rounded border border-dark-600 bg-dark-800 px-1.5 py-0.5 text-center text-xs focus:outline-none focus:border-brand-500"
-          />
-          <button onClick={save} disabled={busy} className="text-emerald-400 hover:text-emerald-300">
-            {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+    <tr className="float-row border-b border-dark-800/50 last:border-0">
+      <td className="px-2 py-1.5 align-middle">
+        <MetricSourceTooltip metricKey={m.key} />
+      </td>
+      <td className="px-2 py-1.5">
+        <span className="text-dark-200">{m.label}</span>
+        <span className={`ml-1.5 text-[9.5px] uppercase tracking-wider ${gcolor}`}>
+          {m.group === 'safety' ? 'seg' : m.group === 'quality' ? 'cal' : 'cap'}
+        </span>
+      </td>
+      <td className="px-2 py-1.5 text-right">
+        {editing ? (
+          <span className="inline-flex items-center gap-1">
+            <input ref={inputRef} type="number" step="0.01" value={val}
+              onChange={(e) => setVal(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') setEditing(false) }}
+              className="cifra w-20 rounded border border-dark-600 bg-dark-800 px-1.5 py-0.5 text-right text-[12.5px] focus:border-brand-500 focus:outline-none" />
+            <button onClick={save} disabled={busy} className="text-lime-400 hover:text-lime-300">
+              {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+            </button>
+            <button onClick={() => setEditing(false)} className="text-dark-500 hover:text-dark-300"><X size={12} /></button>
+          </span>
+        ) : (
+          <button onClick={startEdit} title="Editar valor a mano"
+            className={`cifra group rounded px-1.5 py-0.5 font-semibold hover:bg-dark-800 ${
+              m.value != null ? cfg.text : 'text-dark-600'}`}>
+            {fmtVal(m.value, m.unit)}
+            <Pencil size={9} className="ml-1 inline opacity-0 group-hover:opacity-60" />
           </button>
-          <button onClick={() => setEditing(false)} className="text-dark-500 hover:text-dark-300"><X size={12} /></button>
-        </div>
-      ) : (
-        <button
-          onClick={startEdit}
-          title="Editar valor a mano"
-          className={`group flex items-center gap-1 rounded px-2 py-0.5 text-xs font-mono font-semibold transition hover:bg-dark-800 ${m.value != null ? cfg.text : 'text-dark-600'}`}
-        >
-          {fmtVal(m.value, m.unit)}
-          <Pencil size={10} className="opacity-0 group-hover:opacity-60" />
-        </button>
-      )}
-
-      <TierBadge tier={m.tier} cierto={m.cierto !== false} motivo={m.motivo} />
-      {src && <span className={`hidden rounded px-1.5 py-0.5 text-[10px] sm:inline ${src.cls}`}>{t(src.labelKey)}</span>}
-    </div>
+        )}
+      </td>
+      <td className="cifra px-2 py-1.5 text-right text-dark-500">
+        {objetivo != null ? fmtVal(objetivo, m.unit) : '—'}
+      </td>
+      <td className="cifra px-2 py-1.5 text-right">
+        {m.next ? (
+          <span className="text-orange-300">{fmtVal(Math.abs(m.next.gap), m.unit)}</span>
+        ) : <span className="text-dark-600">—</span>}
+      </td>
+      <td className="px-2 py-1.5">
+        <TierBadge tier={m.tier} cierto={m.cierto !== false} motivo={m.motivo} />
+      </td>
+      <td className="cifra px-2 py-1.5 text-right text-dark-400">
+        {m.peso != null ? Number(m.peso).toFixed(1) : '—'}
+        {src && <span className={`ml-1.5 hidden rounded px-1 py-0.5 text-[9.5px] xl:inline ${src.cls}`}>{t(src.labelKey)}</span>}
+      </td>
+    </tr>
   )
 }
+
 
 // ── CategoryCard ──────────────────────────────────────────────────────────────
 function CategoryCard({ groupKey, tier, metrics }) {
@@ -861,35 +952,34 @@ export default function Scorecard() {
           <div className="grid gap-5 lg:grid-cols-3">
             {/* Metrics (2/3) */}
             <div className="space-y-4 lg:col-span-2">
-              {['safety', 'quality', 'capacity'].map(g => {
-                const gm = byGroup(g)
-                if (!gm.length) return null
-                const gc = GROUP_CFG[g]
-                return (
-                  <div key={g} className="card p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <span className={`text-xs font-semibold uppercase tracking-wide ${gc.color}`}>{t(gc.labelKey)}</span>
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-dark-500">{gc.weight} del score total</span>
-                        <TierBadge tier={full[`${g}_tier`]} />
-                      </div>
+              {/* Los tres pilares en una tira, y debajo TODAS las metricas en
+                  una tabla. Antes cada pilar era una tarjeta con sus metricas
+                  dentro: cabian cuatro de dieciseis sin bajar la pagina. */}
+              <div className="card grid grid-cols-3 divide-x divide-dark-800 overflow-hidden">
+                {['safety', 'quality', 'capacity'].map(g => {
+                  const gc = GROUP_CFG[g]
+                  return (
+                    <div key={g} className="px-3 py-2.5">
+                      <p className={`text-[10px] font-medium uppercase tracking-wider ${gc.color}`}>
+                        {t(gc.labelKey)} <span className="text-dark-600">{gc.weight}</span>
+                      </p>
+                      <div className="mt-1"><TierBadge tier={full[`${g}_tier`]} /></div>
                     </div>
-                    <div className="space-y-1.5">
-                      {gm.map(m => (
-                        <MetricRow key={m.key} m={m} weekSun={full.week} center={center} onSaved={reload} />
-                      ))}
-                    </div>
-                    {g === 'safety' && !byGroup('safety').some(m => m.value != null) && (
-                      <div className="mt-3 rounded-lg border border-blue-500/15 bg-blue-500/5 px-3 py-2">
-                        <p className="text-[11px] text-blue-400">
-                          Safety (40% del score) requiere el PDF oficial de Amazon.{' '}
-                          <span className="text-blue-300">DSP Portal → Performance → Scorecard → Descargar PDF</span>
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+                  )
+                })}
+              </div>
+
+              <TablaMetricas metricas={full.metrics || []} weekSun={full.week}
+                center={center} onSaved={reload} />
+
+              {!byGroup('safety').some(m => m.value != null) && (
+                <div className="rounded-lg border border-blue-500/15 bg-blue-500/5 px-3 py-2">
+                  <p className="text-[11px] text-blue-400">
+                    Safety (40% del score) requiere el PDF oficial de Amazon.{' '}
+                    <span className="text-blue-300">DSP Portal → Performance → Scorecard → Descargar PDF</span>
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Prediction panel (1/3) */}
