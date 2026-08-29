@@ -13386,6 +13386,145 @@ async def _ot_avisa(orden: dict, texto: str):
 
 # ── ADMIN ─────────────────────────────────────────────────────────────────
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ATRIBUCION DE DANOS
+# ═══════════════════════════════════════════════════════════════════════════
+# QUE HACE. Para cada golpe del libro busca la ULTIMA foto en la que la
+# furgoneta estaba limpia, y con eso acota cuando aparecio y quien la llevaba.
+# Hoy nadie sabe quien rompe las furgonetas: se ve el golpe y ya.
+#
+# POR QUE AQUI SI SE PUEDE. Las herramientas del mercado piden cambiar el
+# proceso —que el conductor siguiente firme al recoger— y solo sirven hacia
+# delante. Aqui sale de datos que YA existen: 3.804 inspecciones con foto,
+# hora y conductor. Se puede mirar hacia atras sin pedirle nada a nadie.
+#
+# ═══ ESTO SENALA A PERSONAS, ASI QUE LAS REGLAS SON DURAS ═══
+# Un falso positivo aqui no es un numero mal contado: es acusar a alguien de
+# romper una furgoneta que no rompio.
+#
+#  1. Solo se SENALA a una persona si la ventana es de un dia o menos Y hay
+#     un unico conductor. Con dos dias hay dos turnos y dos personas.
+#  2. Nunca se dice "lo hizo": se dice "la llevaba". La app sabe quien
+#     conducia, no quien golpeo — pudo ser un tercero en un parking.
+#  3. Sin foto limpia previa no se atribuye nada. Que un golpe aparezca en la
+#     primera inspeccion no significa que se hiciera ese dia: pudo venir de
+#     fabrica o de antes de que existiera la app.
+#  4. Los danos LEVES quedan fuera del senalamiento. Un arañazo fino aparece
+#     de un dia para otro por lavado, ramas o roce de aparcamiento, y no se
+#     le cuelga a nadie.
+#  5. Siempre viajan las DOS fotos. Sin la prueba delante esto no es un dato,
+#     es una acusacion.
+
+_ATR_LEVES = ("leve",)
+
+
+def _atr_certeza(dias: int, conductores: list, severidad: str) -> tuple:
+    """(certeza, motivo). 'alta' es la unica que senala a una persona."""
+    if severidad in _ATR_LEVES:
+        return "baja", "daño leve: puede salir de un roce o del lavado"
+    if dias is None or dias > 3:
+        return "baja", "pasaron más de tres días sin foto"
+    if len(conductores) != 1:
+        return ("media", "%d personas la llevaron en esa ventana" % len(conductores)) \
+            if conductores else ("baja", "no consta quién la llevaba")
+    if dias <= 1:
+        return "alta", None
+    return "media", "ventana de %d días" % dias
+
+
+@api_router.get("/damages/atribucion")
+async def danos_atribucion(center: str = "", dias: int = 120, solo_alta: bool = False,
+                           _=Depends(require_admin)):
+    """Cada golpe con la ultima foto limpia, la ventana y quien la llevaba."""
+    desde = (datetime.now(timezone.utc) - timedelta(days=max(7, min(dias, 400)))).strftime("%Y-%m-%d")
+    danos = await db.vehicle_damage_ledger.find(
+        {"first_seen": {"$gte": desde}}).sort("first_seen", -1).to_list(600)
+    if not danos:
+        return {"danos": [], "resumen": {}}
+
+    vids = list({d.get("vehicle_id") for d in danos if d.get("vehicle_id")})
+    vs = {v["id"]: v async for v in db.vehicles.find(
+        {"id": {"$in": vids}},
+        {"_id": 0, "id": 1, "license_plate": 1, "center": 1, "status": 1})}
+
+    # Todas las inspecciones de esas furgonetas, ordenadas por fecha.
+    porveh: dict = {}
+    async for i in db.inspections.find(
+            {"vehicle_id": {"$in": vids}},
+            {"_id": 0, "id": 1, "vehicle_id": 1, "created_at": 1, "driver_id": 1,
+             "photos": 1, "annotated_photos": 1}):
+        porveh.setdefault(i["vehicle_id"], []).append(i)
+    for v in porveh:
+        porveh[v].sort(key=lambda x: x.get("created_at") or "")
+
+    nombres = {d["id"]: d.get("name") async for d in db.drivers.find({}, {"_id": 0, "id": 1, "name": 1})}
+
+    def _foto(ins):
+        anot = [f for f in (ins.get("annotated_photos") or []) if f]
+        return (anot or [f for f in (ins.get("photos") or []) if f] or [None])[0]
+
+    out, resumen = [], {"alta": 0, "media": 0, "baja": 0}
+    for d in danos:
+        vid = d.get("vehicle_id")
+        v = vs.get(vid) or {}
+        if center and center not in ("Todos", "todos"):
+            if not re.search(re.escape(center.strip()), str(v.get("center") or ""), re.I):
+                continue
+        fs = str(d.get("first_seen") or "")[:10]
+        lista = porveh.get(vid) or []
+        previas = [i for i in lista if (i.get("created_at") or "")[:10] < fs]
+        actual = next((i for i in lista if i.get("id") == d.get("first_seen_inspection")), None)
+        limpia = previas[-1] if previas else None
+
+        ventana = None
+        if limpia:
+            try:
+                ventana = (datetime.strptime(fs, "%Y-%m-%d")
+                           - datetime.strptime((limpia.get("created_at") or "")[:10], "%Y-%m-%d")).days
+            except Exception:                                # noqa: BLE001
+                ventana = None
+
+        # Quien la llevo ENTRE la foto limpia y la que ve el golpe. Sale de las
+        # propias inspecciones: quien inspecciona una furgoneta es quien la
+        # saca. Es mas fiable que el cuadrante, que es una intencion.
+        desde_f = (limpia.get("created_at") or "")[:10] if limpia else fs
+        cond_ids = []
+        for i in lista:
+            f = (i.get("created_at") or "")[:10]
+            if desde_f <= f <= fs and i.get("driver_id"):
+                if i["driver_id"] not in cond_ids:
+                    cond_ids.append(i["driver_id"])
+
+        certeza, motivo = _atr_certeza(ventana, cond_ids, str(d.get("severity") or ""))
+        if not limpia:
+            certeza, motivo = "baja", "no hay ninguna foto anterior sin ese golpe"
+        if solo_alta and certeza != "alta":
+            continue
+        resumen[certeza] = resumen.get(certeza, 0) + 1
+
+        out.append({
+            "ledger_id": str(d.get("_id")),
+            "vehicle_id": vid,
+            "matricula": v.get("license_plate") or vid,
+            "center": v.get("center") or "",
+            "part": d.get("part") or d.get("panel") or "",
+            "panel": d.get("panel") or "",
+            "severity": d.get("severity") or "",
+            "status": d.get("status") or "",
+            "aparecio": fs,
+            "ventana_dias": ventana,
+            "certeza": certeza,
+            "motivo": motivo,
+            "conductores": [{"id": c, "nombre": nombres.get(c) or "?"} for c in cond_ids],
+            # Las dos fotos, que son la prueba. Sin ellas esto no es un dato.
+            "foto_limpia": _foto(limpia) if limpia else None,
+            "foto_limpia_fecha": (limpia.get("created_at") or "")[:10] if limpia else None,
+            "foto_golpe": _foto(actual) if actual else None,
+        })
+
+    return {"danos": out, "resumen": resumen, "total": len(out)}
+
+
 @api_router.get("/work-orders/danos-pendientes")
 async def ot_danos_pendientes(center: str = "", solo_graves: bool = False,
                               _=Depends(require_admin)):

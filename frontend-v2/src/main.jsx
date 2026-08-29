@@ -245,6 +245,7 @@ const PanelConfiguracion = lazy(() => import('./panel/pages/Configuracion'))
 const PanelTurnos = lazy(() => import('./panel/pages/Turnos'))
 const PanelUsuarios = lazy(() => import('./panel/pages/Usuarios'))
 const PanelIAPeritaje = lazy(() => import('./panel/pages/IAPeritaje'))
+const PanelOrigenDanos = lazy(() => import('./panel/pages/OrigenDanos'))
 const PanelMetricas = lazy(() => import('./panel/pages/Metricas'))
 const PanelImportaciones = lazy(() => import('./panel/pages/Importaciones'))
 const PanelActividad = lazy(() => import('./panel/pages/Actividad'))
@@ -355,6 +356,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="renting" element={<PanelRenting />} />
                 <Route path="casas-alquiler" element={<PanelCasasAlquiler />} />
                 <Route path="ia-peritaje" element={<PanelIAPeritaje />} />
+                <Route path="origen-danos" element={<PanelOrigenDanos />} />
                 <Route path="importaciones" element={<PanelImportaciones />} />
                 <Route path="configuracion" element={<PanelConfiguracion />} />
                 <Route path="admin" element={<PanelNegocio />} />

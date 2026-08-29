@@ -390,6 +390,7 @@ const DICT = {
   'nav.itvalerts':  { es: 'Avisos ITV',       en: 'MOT alerts',    fr: 'Alertes CT',      de: 'TÜV-Warnungen',   it: 'Avvisi revisione', pt: 'Alertas inspeção' },
   'nav.renting':    { es: 'Renting',          en: 'Leasing',       fr: 'Location',        de: 'Leasing',         it: 'Leasing',        pt: 'Renting' },
   'nav.rental':     { es: 'Casas de alquiler',en: 'Rental hubs',   fr: 'Agences location', de: 'Mietstationen', it: 'Case di noleggio', pt: 'Casas de aluguer' },
+  'nav.origen':     { es: 'Origen de daños',  en: 'Damage origin', fr: 'Origine dégâts',  de: 'Schadensherkunft', it: 'Origine danni', pt: 'Origem dos danos' },
   'nav.ai':         { es: 'IA Peritaje',      en: 'AI Assessment', fr: 'IA Expertise',    de: 'KI-Schätzung',    it: 'IA Perizia',     pt: 'IA Peritagem' },
   'nav.imports':    { es: 'Importaciones',    en: 'Imports',       fr: 'Importations',    de: 'Importe',         it: 'Importazioni',   pt: 'Importações' },
   'nav.settings':   { es: 'Configuración',    en: 'Settings',      fr: 'Paramètres',      de: 'Einstellungen',   it: 'Impostazioni',   pt: 'Configurações' },

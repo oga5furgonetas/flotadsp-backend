@@ -45,7 +45,7 @@ const MODULES = [
     ['diarios', 'DNR · Diarios'], ['debrief', 'Cuadre del debrief'],
   ]},
   { g: 'Sistema', items: [
-    ['ia-peritaje', 'IA Peritaje'], ['configuracion', 'Configuración'],
+    ['origen-danos', 'Origen de daños'], ['ia-peritaje', 'IA Peritaje'], ['configuracion', 'Configuración'],
   ]},
 ]
 const ALL_KEYS = MODULES.flatMap((g) => g.items.map(([k]) => k))

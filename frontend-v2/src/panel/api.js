@@ -316,6 +316,11 @@ export const crearOrden = (body) => api.post('/work-orders', body)
    el parte antes de mandarla. Es la otra mitad de `danos-pendientes`:
    aquella dice a quien mandar, esta dice que mandar. */
 export const getParteFurgoneta = (vehicleId) => api.get(`/work-orders/parte/${vehicleId}`)
+/* De cada golpe, la ultima foto en la que la furgoneta estaba limpia: con eso
+   se acota que dia aparecio y quien la llevaba. Señala a personas, asi que el
+   backend solo pone certeza 'alta' con un unico conductor y un dia de ventana. */
+export const getAtribucionDanos = (center, dias) =>
+  api.get('/damages/atribucion', { params: { ...centerParam(center), ...(dias ? { dias } : {}) } })
 export const editarOrden = (id, body) => api.patch(`/work-orders/${id}`, body)
 // Rehace el enlace y REVOCA el anterior: es la forma de arreglar un envío
 // al taller equivocado.

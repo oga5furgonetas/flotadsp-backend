@@ -6,7 +6,7 @@ import {
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX,
-  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, UserCircle2, Languages,
+  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, UserCircle2, Languages, ShieldAlert,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
 import { getMe, contarPeticionesPendientes } from './api'
@@ -87,6 +87,7 @@ const NAV_DEF = [
     { to: '/panel/contactos', labelKey: 'nav.contacts', icon: BookUser },
   ]},
   { g: 'nav.g.system', gIcon: Settings, iconCls: 'text-dark-300', iconBg: 'bg-white/[0.07]', items: [
+    { to: '/panel/origen-danos', labelKey: 'nav.origen', icon: ShieldAlert },
     { to: '/panel/ia-peritaje', labelKey: 'nav.ai', icon: BrainCircuit },
     { to: '/panel/configuracion', labelKey: 'nav.settings', icon: Settings },
   ]},

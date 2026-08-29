@@ -219,6 +219,14 @@ export const AYUDA = {
   },
 
   // ── Sistema ────────────────────────────────────────────────────────────
+  'origen-danos': {
+    que: 'De cada golpe, la última foto en la que la furgoneta estaba limpia.',
+    pasos: [
+      'Dice quién la LLEVABA, no quién dio el golpe: pudo ser un tercero en un parking.',
+      'Mira siempre las dos fotos antes de hablar con nadie.',
+      'Solo se señala a una persona con un día de ventana y un único conductor.',
+    ],
+  },
   'ia-peritaje': {
     que: 'Peritaje técnico de daños con IA, para valorar un golpe.',
     pasos: ['Sube las fotos del daño y la IA propone una valoración.'],
