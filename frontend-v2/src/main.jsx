@@ -1,10 +1,23 @@
 import React, { Suspense, lazy } from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
-/* Tipografía self-hosted (la CSP bloquea Google Fonts): Inter para texto,
-   Space Grotesk para titulares. Vite las sirve desde el propio dominio. */
-import '@fontsource-variable/inter'
-import '@fontsource-variable/space-grotesk'
+/* Tipografía self-hosted (la CSP bloquea Google Fonts). Vite las sirve desde
+   el propio dominio.
+
+   ARCHIVO para el texto y IBM PLEX MONO para las cifras. Antes eran Inter y
+   Space Grotesk, que es exactamente el par que viene por defecto en medio
+   sector y por eso la app se parecía a cualquier otra. Archivo es una
+   grotesque con carácter propio que aguanta los tamaños pequeños de una
+   tabla densa.
+
+   Plex Mono no es decorativo: sus cifras son TABULARES, así que en una
+   columna de 129 matrículas o de importes todo alinea en vertical. Con una
+   fuente de ancho variable, '1234 ABC' y '1111 BBB' ocupan distinto y la
+   columna baila; hay que leerla dígito a dígito. */
+import '@fontsource-variable/archivo'
+import '@fontsource/ibm-plex-mono/400.css'
+import '@fontsource/ibm-plex-mono/500.css'
+import '@fontsource/ibm-plex-mono/600.css'
 
 /* Señal de vida para /arranque.js. Ese vigilante espera 10 s y, si esta marca
    no aparece, da por hecho que el bundle llegó envenenado (pantalla en blanco)
@@ -169,7 +182,7 @@ class ErrorBoundary extends React.Component {
   render() {
     if (!this.state.broken) return this.props.children
     return (
-      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: '#0b0d10', color: '#eef1f6', fontFamily: 'Inter Variable,Inter,system-ui,sans-serif', padding: 24, textAlign: 'center' }}>
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: '#0b0d10', color: '#eef1f6', fontFamily: 'Archivo Variable,Archivo,system-ui,sans-serif', padding: 24, textAlign: 'center' }}>
         <div style={{ fontSize: 34 }}>⚠️</div>
         <h1 style={{ margin: 0, fontSize: 19, fontWeight: 800 }}>Algo ha ido mal</h1>
         <p style={{ margin: 0, color: '#8b94a3', fontSize: 14 }}>El error se ha reportado automáticamente. Pulsa el botón: repara y recarga.</p>

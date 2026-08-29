@@ -41,30 +41,22 @@ html[data-panel-theme='light'] {
   color-scheme: light;
 }
 
-/* Modo día: materiales y luz reinterpretados (mismo lenguaje, otra hora) */
-html[data-panel-theme='light'] body {
-  background-image:
-    radial-gradient(1100px 500px at 85% -10%, rgba(249, 115, 22, 0.05), transparent 60%),
-    radial-gradient(900px 600px at -10% 110%, rgba(120, 120, 140, 0.05), transparent 55%);
-}
+/* Modo día: el mismo lenguaje plano, con la rampa invertida. Aquí también
+   se fueron los degradados y las sombras largas: lo que sobra en el modo
+   noche sobra igual de día. */
 html[data-panel-theme='light'] .atmosphere {
-  background:
-    radial-gradient(1100px 560px at 16% -12%, rgba(255, 255, 255, 0.9), transparent 60%),
-    radial-gradient(820px 460px at 88% -6%, rgba(251, 146, 60, 0.06), transparent 55%),
-    linear-gradient(180deg, #f7f6f3 0%, #f3f2ef 55%, #efeeeb 100%);
+  background: rgb(var(--dk-950));
 }
 html[data-panel-theme='light'] .rail {
   background: rgba(255, 255, 255, 0.72);
-  border-color: rgba(20, 20, 30, 0.08);
-  box-shadow: 0 24px 60px -36px rgba(20, 20, 30, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  border-color: rgba(20, 20, 30, 0.10);
 }
 html[data-panel-theme='light'] .glass {
   background: rgba(255, 255, 255, 0.65);
   border-color: rgba(20, 20, 30, 0.08);
 }
 html[data-panel-theme='light'] .float-row:hover {
-  background-color: rgba(20, 20, 30, 0.045);
-  box-shadow: 0 14px 34px -24px rgba(20, 20, 30, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  background-color: rgba(20, 20, 30, 0.05);
 }
 html[data-panel-theme='light'] .nav-item:hover { background: rgba(20, 20, 30, 0.05); }
 html[data-panel-theme='light'] .nav-ghead:hover { background: rgba(20, 20, 30, 0.05); }
@@ -162,24 +154,27 @@ html[data-panel-theme='light'] [class*='hover:text-white']:hover { color: rgb(va
 }
 
 @layer base {
+  /* FONDO PLANO. Antes llevaba dos degradados radiales de marca fijos detrás
+     del contenido. Eran bonitos y no decían nada: color que no significa
+     nada le quita fuerza al color que sí significa algo, que aquí son los
+     niveles del scorecard y las alertas. */
   body {
     @apply bg-dark-950 text-dark-50 font-sans antialiased;
     font-size: 14px;
-    letter-spacing: -0.01em;
-    /* Atmósfera: glow ambiental sutil de marca, fijo tras el contenido */
-    background-image:
-      radial-gradient(1100px 500px at 85% -10%, rgba(249, 115, 22, 0.055), transparent 60%),
-      radial-gradient(900px 600px at -10% 110%, rgba(56, 130, 246, 0.04), transparent 55%);
-    background-attachment: fixed;
+    letter-spacing: -0.005em;
     /* Prevent iOS bounce scroll on body */
     overscroll-behavior: none;
   }
 
-  /* Titulares con la fuente display: identidad propia en toda la app */
+  /* Los titulares NO cambian de fuente: se distinguen por tamaño y peso.
+     Cambiar de familia para el titular era la mitad del ruido tipográfico. */
   h1, h2, h3 {
-    @apply font-display;
-    letter-spacing: -0.025em;
+    font-weight: 600;
+    letter-spacing: -0.022em;
   }
+
+  /* Toda cifra alinea en columna, escriba quien escriba la pantalla. */
+  th, td, .tabular { font-variant-numeric: tabular-nums; }
 
   ::selection {
     background: rgba(249, 115, 22, 0.35);
@@ -228,11 +223,13 @@ html[data-panel-theme='light'] [class*='hover:text-white']:hover { color: rgb(va
 }
 
 @layer components {
+  /* El foco se marca con UN anillo y nada mas. Antes llevaba anillo + dos
+     sombras naranjas superpuestas: tres cosas para decir lo mismo. */
   .input {
-    @apply w-full rounded-lg border border-dark-700 bg-dark-800/80 px-3 py-2 text-sm text-dark-50
-           placeholder:text-dark-500 transition-all duration-200
+    @apply w-full rounded-md border border-dark-700 bg-dark-800/80 px-3 py-2 text-sm text-dark-50
+           placeholder:text-dark-500 transition-colors duration-100
            hover:border-dark-600 focus:border-brand-500 focus:outline-none
-           focus:ring-2 focus:ring-brand-500/20 focus:shadow-[0_0_0_4px_rgba(249,115,22,0.06),0_4px_16px_-4px_rgba(249,115,22,0.12)];
+           focus:ring-1 focus:ring-brand-500/40;
   }
   .select {
     @apply input appearance-none;
@@ -240,59 +237,62 @@ html[data-panel-theme='light'] [class*='hover:text-white']:hover { color: rgb(va
   .label {
     @apply mb-1 block text-xs font-semibold uppercase tracking-wider text-dark-400;
   }
+  /* SIN GRADIENTE, SIN SOMBRA DE COLOR, SIN ELEVARSE AL PASAR EL RATON.
+     El degradado y la sombra naranja daban volumen de landing page; en una
+     herramienta que se usa ocho horas, el boton solo tiene que verse pulsable
+     y distinguirse del secundario, y eso lo hace el color de fondo solo.
+     El movimiento al pasar por encima estorbaba al recorrer listas largas:
+     con 129 furgonetas o 200 conductores, cada fila saltando es ruido. */
   .btn-primary {
-    @apply relative overflow-hidden rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 px-4 py-2 text-sm font-semibold
-           text-white shadow-lg shadow-brand-500/25 transition-all duration-200
-           [text-shadow:0_1px_1px_rgba(0,0,0,0.15)]
-           hover:-translate-y-px hover:shadow-xl hover:shadow-brand-500/30 hover:brightness-110
-           active:translate-y-0 active:scale-[0.98] active:brightness-95
-           disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:brightness-100;
-  }
-  /* Brillo interior superior: da volumen al botón principal */
-  .btn-primary::before {
-    content: '';
-    position: absolute;
-    inset: 0 0 50% 0;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent);
-    pointer-events: none;
+    @apply rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white
+           transition-colors duration-100
+           hover:bg-brand-500 active:bg-brand-600
+           disabled:cursor-not-allowed disabled:opacity-45;
   }
   .btn-secondary {
-    @apply rounded-lg border border-dark-700 bg-dark-800 px-4 py-2 text-sm font-medium
-           text-dark-200 transition-all duration-200
-           hover:-translate-y-px hover:border-dark-600 hover:bg-dark-700 hover:shadow-lg hover:shadow-black/20
-           active:translate-y-0 active:scale-[0.98] disabled:opacity-50 disabled:hover:translate-y-0;
+    @apply rounded-md border border-dark-700 bg-dark-800 px-4 py-2 text-sm font-medium
+           text-dark-200 transition-colors duration-100
+           hover:border-dark-600 hover:bg-dark-700
+           disabled:opacity-45;
   }
   .btn-ghost {
     @apply rounded-lg text-dark-400 transition-colors duration-200 hover:bg-dark-800 hover:text-dark-200;
   }
-  /* ── Instrumento de titanio: atmósfera, luz y física ─────────────────── */
-  /* Carbón cálido iluminado desde arriba: profundidad sin sombras baratas */
+  /* ── Superficies ──────────────────────────────────────────────────────
+     Un fondo plano y bordes de 1 px. Antes habia tres degradados radiales
+     superpuestos y cristal esmerilado con `backdrop-blur-xl`. Dos motivos
+     para quitarlo: el desenfoque se recalcula en CADA scroll —y aqui se
+     recorren listas de cientos de filas— y una linea separa igual de bien
+     que un desenfoque, tambien en una nave con mala luz. */
   .atmosphere {
-    background:
-      radial-gradient(1100px 560px at 16% -12%, rgba(255, 252, 246, 0.055), transparent 60%),
-      radial-gradient(820px 460px at 88% -6%, rgba(251, 146, 60, 0.05), transparent 55%),
-      radial-gradient(1400px 900px at 50% 118%, rgba(120, 120, 135, 0.05), transparent 60%),
-      linear-gradient(180deg, #0c0b0b 0%, #0a0a0b 42%, #090909 100%);
+    background: rgb(var(--dk-950));
   }
-  /* Raíl de navegación: panel flotante de vidrio sobre el carbón */
+  /* Raíl de navegación */
   .rail {
-    @apply rounded-2xl border border-white/[0.06] bg-white/[0.025] backdrop-blur-xl;
-    box-shadow: 0 24px 60px -32px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    @apply rounded-xl border border-dark-800 bg-dark-900/60;
   }
-  /* Fila flotante: vive al pasar el cursor (física suave, luz al elevarse) */
+  /* Fila de lista: cambia el fondo y ya. Sin moverse ni levantarse. */
   .float-row {
-    transition: transform 0.35s cubic-bezier(0.22, 1.15, 0.32, 1), background-color 0.2s ease, box-shadow 0.35s ease;
+    transition: background-color 0.1s ease;
   }
   .float-row:hover {
-    transform: translateY(-1px);
-    background-color: rgba(255, 255, 255, 0.035);
-    box-shadow: 0 14px 34px -20px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    background-color: rgb(var(--dk-800) / 0.55);
+  }
+  /* CIFRAS TABULARES en todo lo que sea un numero de verdad: matriculas,
+     importes, metricas, contadores. Es lo que hace que una columna de 129
+     filas se lea en vertical en vez de digito a digito. */
+  .cifra {
+    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
   }
   .float-row:active { transform: translateY(0) scale(0.995); }
 
   /* Tarjeta silenciosa: un solo tono, borde que susurra, sin sombras teatrales */
+  /* Radio de 12 px en vez de 16: una superficie de datos no necesita
+     esquinas de tarjeta de producto. */
   .card {
-    @apply rounded-2xl border border-dark-800/80 bg-dark-900/70;
+    @apply rounded-xl border border-dark-800/80 bg-dark-900/70;
   }
   .card-hover {
     @apply card transition-colors duration-200 hover:border-dark-700 hover:bg-dark-900;

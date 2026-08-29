@@ -28,9 +28,17 @@ export default {
           950: 'rgb(var(--dk-950) / <alpha-value>)',
         },
       },
+      /* Una sola familia de texto y una de cifras. `display` apunta a la misma
+         que `sans` a propósito: el titular se distingue por tamaño y peso, no
+         por cambiar de fuente. Dos familias distintas para lo mismo era medio
+         del ruido visual.
+
+         `mono` no es para código: es para MATRÍCULAS, IMPORTES Y MÉTRICAS.
+         Las cifras de Plex Mono son tabulares y alinean en columna. */
       fontFamily: {
-        sans: ['Inter Variable', 'Inter', 'system-ui', 'sans-serif'],
-        display: ['Space Grotesk Variable', 'Inter Variable', 'system-ui', 'sans-serif'],
+        sans: ['Archivo Variable', 'Archivo', 'system-ui', 'sans-serif'],
+        display: ['Archivo Variable', 'Archivo', 'system-ui', 'sans-serif'],
+        mono: ['IBM Plex Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       keyframes: {
         fadeIn: {
