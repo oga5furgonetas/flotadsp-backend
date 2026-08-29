@@ -328,6 +328,9 @@ export const dispararSeguimientoTalleres = () => api.post('/work-orders/seguimie
 /* El DCR real de esta semana contado desde Cortex, contra el umbral de la nave.
    NO predice: la scorecard oficial llega con semanas de retraso y esto cuenta
    lo que ya ha pasado. */
+/* Revisa el ultimo dia cerrado y avisa si se sale de lo normal. Sale solo con
+   el resumen del dia; esto es para no esperar. */
+export const revisarDiaScorecard = () => api.post('/scorecard/revisar-dia')
 export const getScorecardEnVivo = (center, semanas) =>
   api.get('/scorecard/en-vivo', { params: { ...centerParam(center), ...(semanas ? { semanas } : {}) } })
 export const getExposicionVehiculos = (center) =>

@@ -11061,6 +11061,9 @@ async def start_itv_whatsapp_scheduler():
     # el taller ya ha abierto y ha visto lo que tiene, y le da todo el dia para
     # contestar. A la hora del resumen (tarde) muchos ya han cerrado.
     asyncio.create_task(_bucle_aviso("seguimiento_talleres", "turno_manana", seguimiento_talleres))
+    # La revision del DCR sale con el resumen del dia, cuando la jornada ya ha
+    # cerrado. Antes, media flota sigue en la calle y todo parece un desastre.
+    asyncio.create_task(_bucle_aviso("dcr_diario", "resumen_diario", revisar_dcr_diario))
 
 
 @api_router.post("/whatsapp/avisar-itv")
@@ -25671,6 +25674,120 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
                  "Los días con paquetes aún en la furgoneta salen marcados "
                  "porque todavía pueden entregarse."),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AVISO CUANDO EL DIA SALE MAL
+# ═══════════════════════════════════════════════════════════════════════════
+# El 28 y el 29 de agosto de 2026 el DCR cayo a 98,3% y 97,69% frente al
+# 99,7-99,9% habitual: 117 y 120 paquetes que no salieron, casi todos
+# BACK_TO_ORIGIN, repartidos en 30 rutas. Nadie se entero. Con la scorecard
+# oficial se habria sabido un mes despues.
+#
+# ESTO NO AVISA DE QUE "EL DCR BAJO", que no sirve de nada. Avisa de CUANTOS
+# paquetes, de QUE les paso y en CUANTAS rutas — que es lo que dice si hay que
+# hablar con una persona o con la estacion entera.
+#
+# CONTRA EL RUIDO, que es lo unico que mata un aviso diario:
+#  - La referencia es la MEDIANA de los ultimos dias cerrados, no la media: un
+#    solo dia malo arrastra la media y el dia siguiente ya no parece malo.
+#  - Hace falta que la caida sea de al menos 1,5 puntos Y que haya un minimo de
+#    paquetes fallados. Con 200 paquetes en un dia flojo, medio punto son dos
+#    paquetes y eso no es una noticia.
+#  - Un dia con paquetes aun en la calle no se juzga: a media tarde siempre
+#    parece un desastre.
+#  - Uno por dia como mucho.
+
+DCR_CAIDA_MIN = 1.5      # puntos por debajo de la mediana
+DCR_FALLOS_MIN = 40      # y ademas, tantos paquetes fallados como minimo
+DCR_DIAS_REF = 14        # cuantos dias cerrados se miran para la mediana
+
+
+async def revisar_dcr_diario() -> list:
+    """Mira el ultimo dia cerrado y avisa si se sale de lo normal."""
+    hoy = datetime.now(timezone.utc).date()
+    desde = (hoy - timedelta(days=DCR_DIAS_REF + 2)).strftime("%Y-%m-%d")
+    centros = await _centros_conocidos()
+    salida = []
+
+    for centro in (centros or ["OGA5"]):
+        cur = db.cortex_packages.aggregate([
+            {"$match": {"service_day": {"$gte": desde},
+                        "center": {"$regex": re.escape(centro), "$options": "i"}}},
+            {"$group": {"_id": {"d": "$service_day", "s": "$state"}, "n": {"$sum": 1}}}])
+        dias: dict = {}
+        async for r in cur:
+            dias.setdefault(r["_id"]["d"], {})[r["_id"]["s"] or "NONE"] = r["n"]
+        if len(dias) < 5:
+            continue
+
+        filas = []
+        for d in sorted(dias):
+            e = dias[d]
+            ok = sum(n for s, n in e.items() if s in _CX_OK)
+            vuelo = sum(n for s, n in e.items() if s in _CX_EN_VUELO)
+            fallos = sum(n for s, n in e.items()
+                         if s not in _CX_OK and s not in _CX_EN_VUELO
+                         and s not in _CX_NO_DESPACHADO)
+            tot = ok + vuelo + fallos
+            if not tot:
+                continue
+            filas.append({"fecha": d, "ok": ok, "fallos": fallos, "vuelo": vuelo,
+                          "dcr": _sc_dcr(ok, fallos),
+                          "cerrado": vuelo <= max(5, tot * 0.02), "estados": e})
+        cerrados = [f for f in filas if f["cerrado"] and f["dcr"] is not None]
+        if len(cerrados) < 5:
+            continue
+
+        ultimo = cerrados[-1]
+        ref = sorted(f["dcr"] for f in cerrados[:-1])[-DCR_DIAS_REF:]
+        mediana = ref[len(ref) // 2] if ref else None
+        if mediana is None:
+            continue
+        if ultimo["dcr"] >= mediana - DCR_CAIDA_MIN or ultimo["fallos"] < DCR_FALLOS_MIN:
+            continue
+        if await _ya_enviado_hoy("dcr_%s_%s" % (centro, ultimo["fecha"]), ultimo["fecha"]):
+            continue
+
+        # QUE les paso, no solo que fallaron. Es la diferencia entre un aviso
+        # que se puede accionar y uno que solo preocupa.
+        motivos = sorted(
+            ((s, n) for s, n in ultimo["estados"].items()
+             if s not in _CX_OK and s not in _CX_EN_VUELO and s not in _CX_NO_DESPACHADO),
+            key=lambda x: -x[1])[:3]
+        nrutas = len(await db.cortex_packages.distinct(
+            "route_code", {"service_day": ultimo["fecha"],
+                           "center": {"$regex": re.escape(centro), "$options": "i"},
+                           "state": {"$nin": list(_CX_OK) + list(_CX_EN_VUELO)
+                                     + list(_CX_NO_DESPACHADO)}}))
+
+        texto = (
+            "⚠️ %s · %s\n"
+            "DCR %.2f%% (lo normal ronda %.2f%%)\n"
+            "%d paquetes sin entregar, repartidos en %d rutas.\n"
+            "%s\n\n%s"
+        ) % (centro, ultimo["fecha"], ultimo["dcr"], mediana, ultimo["fallos"], nrutas,
+             " · ".join("%s: %d" % (s, n) for s, n in motivos),
+             ("Repartido en tantas rutas no es un conductor: mira si cambió algo "
+              "en la estación." if nrutas >= 10 else
+              "Concentrado en pocas rutas: mira esas."))
+        try:
+            await _telegram_aviso(texto)
+        except Exception as e:                               # noqa: BLE001
+            logger.warning("Aviso DCR: no salió por Telegram: %s", e)
+        salida.append({"center": centro, "fecha": ultimo["fecha"], "dcr": ultimo["dcr"],
+                       "mediana": mediana, "fallos": ultimo["fallos"], "rutas": nrutas,
+                       "motivos": dict(motivos)})
+
+    if salida:
+        logger.info("Aviso de DCR: %d centros con el día por debajo", len(salida))
+    return salida
+
+
+@api_router.post("/scorecard/revisar-dia")
+async def disparar_revision_dcr(_=Depends(require_admin)):
+    """Lanza la revisión del último día cerrado sin esperar a su hora."""
+    return {"avisos": await revisar_dcr_diario()}
 
 
 @api_router.get("/scorecard/daily-trend")

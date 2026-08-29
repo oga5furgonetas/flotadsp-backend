@@ -7,7 +7,7 @@ import {
   ChevronDown, ChevronUp, RotateCcw, ExternalLink, BookOpen, AlertCircle,
 } from 'lucide-react'
 import {
-  getScorecardFull, setScorecardValue, getScorecardEnVivo,
+  getScorecardFull, setScorecardValue, getScorecardEnVivo, revisarDiaScorecard,
   getScorecardPredict, getScorecardDailyTrend,
   getScorecardSources, uploadScorecard, getScorecardUmbrales,
   setScorecardThreshold, toggleScorecardEstimacion,
@@ -707,6 +707,13 @@ function BaremosEditor({ full, center, onSaved }) {
 function ComoVaLaSemana({ center }) {
   const [d, setD] = useState(null)
   const [cargando, setCargando] = useState(true)
+  const [revisando, setRevisando] = useState(false)
+
+  const revisar = async () => {
+    setRevisando(true)
+    try { await revisarDiaScorecard() } catch { /* el aviso sale por Telegram */ }
+    finally { setRevisando(false) }
+  }
 
   useEffect(() => {
     setCargando(true)
@@ -751,7 +758,12 @@ function ComoVaLaSemana({ center }) {
         <span className={`text-[11px] font-semibold uppercase tracking-wide ${tierCls(actual.tier)}`}>
           {actual.tier || '—'}
         </span>
-        <span className="ml-auto text-[11.5px] text-dark-500">
+        <button onClick={revisar} disabled={revisando}
+          className="ml-auto rounded-md border border-dark-700 px-2 py-0.5 text-[11px] text-dark-400 hover:text-dark-200 disabled:opacity-50"
+          title="Comprueba el último día cerrado y avisa por Telegram si se sale de lo normal">
+          {revisando ? 'Revisando…' : 'Revisar el día'}
+        </button>
+        <span className="text-[11.5px] text-dark-500">
           <span className="cifra">{actual.entregados.toLocaleString('es')}</span> entregados ·{' '}
           <span className="cifra text-orange-300">{actual.fallos}</span> fallos
           {actual.en_vuelo > 0 && <> · <span className="cifra">{actual.en_vuelo}</span> aún en la calle</>}
