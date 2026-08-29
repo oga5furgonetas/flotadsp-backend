@@ -6289,6 +6289,159 @@ async def root():
 # VEHICLES — solo admin
 # =========================
 
+# ═══════════════════════════════════════════════════════════════════════════
+# EXPOSICION POR FURGONETA
+# ═══════════════════════════════════════════════════════════════════════════
+# LA PREGUNTA QUE NADIE PUEDE CONTESTAR HOY: cual de tus 129 furgonetas te esta
+# costando dinero. Se ven los golpes uno a uno en la ficha de cada una, pero no
+# hay ningun sitio donde se vean las 129 en fila y ordenadas por lo que
+# acumulan. Con 213 daños abiertos repartidos en 123 furgonetas, todas parecen
+# igual de malas.
+#
+# LO QUE ES UN HECHO Y LO QUE ES UNA ESTIMACION, separado a proposito:
+#   HECHOS  → cuantos golpes tiene abiertos, de que gravedad, desde cuando, y
+#             cuantos dias lleva parada. Sale del libro y de las ordenes.
+#   ESTIMA  → el coste en euros. Sale de lo que calcula Gemini por cada daño
+#             (342 EUR de media sobre 8.775) y NO esta calibrado con una sola
+#             factura real, porque todavia no hay ninguna cargada.
+#
+# Por eso el coste viaja con `coste_es_estimacion: True` y la pantalla lo dice.
+# Un numero en euros que parece contabilidad y sale de una IA sin calibrar es
+# exactamente el falso positivo que mas caro sale: se toman decisiones de
+# dinero con el.
+#
+# LA COMPARACION CON SU MODELO es lo que de verdad senala. Una furgoneta con 5
+# golpes no dice nada por si sola; 5 golpes cuando las demas de su modelo tienen
+# 1,4 de media si dice algo — o la lleva quien no debe, o hace una ruta que la
+# castiga, o tiene un punto ciego. Solo se compara cuando hay al menos 4
+# furgonetas de ese modelo: con dos, la "media" es una de las dos.
+
+_EXP_PESO_SEV = {"critico": 4.0, "grave": 3.0, "moderado": 1.5, "leve": 0.5}
+_EXP_MIN_MODELO = 4     # menos de esto y no hay media con la que comparar
+_EXP_MEDIA_MIN = 0.5    # media del modelo por debajo de la cual el multiplo engaña
+
+
+@api_router.get("/vehicles/exposicion")
+async def vehiculos_exposicion(center: str = "", _=Depends(require_admin)):
+    """Las furgonetas ordenadas por lo que acumulan, con lo que es hecho
+    separado de lo que es estimacion."""
+    vs = await db.vehicles.find(
+        {"status": {"$nin": ["deleted", "baja"]}},
+        {"_id": 0, "id": 1, "license_plate": 1, "brand": 1, "model": 1,
+         "center": 1, "status": 1, "mileage": 1, "taller_desde": 1}).to_list(600)
+    if center and center not in ("Todos", "todos"):
+        rx = re.compile(re.escape(center.strip()), re.I)
+        vs = [v for v in vs if rx.search(str(v.get("center") or ""))]
+    vids = [v["id"] for v in vs]
+
+    # Los golpes abiertos, que son el hecho.
+    porveh: dict = {}
+    async for d in db.vehicle_damage_ledger.find(
+            {"vehicle_id": {"$in": vids}, "status": "open"},
+            {"_id": 0, "vehicle_id": 1, "severity": 1, "first_seen": 1, "part": 1}):
+        porveh.setdefault(d["vehicle_id"], []).append(d)
+
+    # El coste estimado por la IA, del ultimo analisis de cada furgoneta. Se
+    # coge el ULTIMO y no la suma de todos: el mismo golpe sale en cada
+    # inspeccion, y sumarlos multiplicaria el coste por el numero de fotos.
+    coste: dict = {}
+    async for i in db.inspections.find(
+            {"vehicle_id": {"$in": vids}, "analysis.damages": {"$exists": True}},
+            {"_id": 0, "vehicle_id": 1, "created_at": 1, "analysis": 1}).sort("created_at", 1):
+        s = sum(float(d.get("estimated_cost") or 0)
+                for d in (i.get("analysis") or {}).get("damages") or [])
+        if s > 0:
+            coste[i["vehicle_id"]] = s          # se queda el mas reciente
+
+    # Dias parada, del reloj del taller.
+    hoy = datetime.now(timezone.utc)
+    ordenes: dict = {}
+    async for o in db.ordenes_trabajo.find(
+            {"vehicle_id": {"$in": vids}}, {"_id": 0, "vehicle_id": 1, "estado": 1,
+                                            "importe_final": 1, "fecha_entrada": 1}):
+        ordenes.setdefault(o["vehicle_id"], []).append(o)
+
+    filas = []
+    for v in vs:
+        ds = porveh.get(v["id"]) or []
+        sev = {"critico": 0, "grave": 0, "moderado": 0, "leve": 0}
+        for d in ds:
+            k = str(d.get("severity") or "").lower()
+            if k in sev:
+                sev[k] += 1
+        # Indice de castigo: no es dinero, es cuanto pesa lo que arrastra. Un
+        # critico no vale lo mismo que un aranazo, y contar "numero de golpes"
+        # los iguala.
+        indice = round(sum(_EXP_PESO_SEV.get(k, 1.0) * n for k, n in sev.items()), 1)
+        antiguo = min((str(d.get("first_seen") or "9999") for d in ds), default=None)
+        dias_antiguo = None
+        if antiguo and antiguo != "9999":
+            try:
+                dias_antiguo = (hoy - datetime.strptime(antiguo[:10], "%Y-%m-%d")
+                                .replace(tzinfo=timezone.utc)).days
+            except Exception:                                # noqa: BLE001
+                pass
+        os_ = ordenes.get(v["id"]) or []
+        dias_taller = None
+        if v.get("taller_desde"):
+            try:
+                dias_taller = (hoy - datetime.fromisoformat(str(v["taller_desde"]))).days
+            except Exception:                                # noqa: BLE001
+                pass
+        filas.append({
+            "vehicle_id": v["id"],
+            "matricula": v.get("license_plate") or v["id"],
+            "modelo": " ".join(x for x in (v.get("brand"), v.get("model")) if x) or "—",
+            "center": v.get("center") or "",
+            "km": v.get("mileage"),
+            "abiertos": len(ds),
+            "severidad": sev,
+            "indice": indice,
+            "dias_golpe_mas_viejo": dias_antiguo,
+            "ordenes": len(os_),
+            "dias_en_taller": dias_taller,
+            "coste_estimado": round(coste.get(v["id"], 0.0)) or None,
+        })
+
+    # Comparacion con las de su MISMO modelo.
+    grupos: dict = {}
+    for f in filas:
+        grupos.setdefault(f["modelo"], []).append(f)
+    for modelo, g in grupos.items():
+        if len(g) < _EXP_MIN_MODELO:
+            for f in g:
+                f["vs_modelo"] = None
+                f["modelo_n"] = len(g)
+            continue
+        media = sum(x["indice"] for x in g) / len(g)
+        for f in g:
+            f["modelo_n"] = len(g)
+            f["modelo_media"] = round(media, 1)
+            # EL MULTIPLO SOLO VALE SI HAY CON QUE COMPARAR. Con la media del
+            # modelo cerca de cero, cualquier golpe dispara el multiplicador:
+            # medido en produccion, una Jumpy con un golpe salia "6 veces peor"
+            # porque las otras cinco no tenian ninguno. El numero es correcto y
+            # la lectura es falsa — parece una furgoneta problematica cuando lo
+            # que pasa es que su grupo esta impecable. Por debajo de 0,5 de
+            # media se dice eso mismo y no se da multiplo.
+            if media >= _EXP_MEDIA_MIN:
+                f["vs_modelo"] = round(f["indice"] / media, 1)
+                f["vs_nota"] = None
+            else:
+                f["vs_modelo"] = None
+                f["vs_nota"] = ("las demás %s de su modelo casi no tienen golpes"
+                                % (len(g) - 1)) if f["indice"] > 0 else None
+
+    filas.sort(key=lambda f: (-f["indice"], -(f["abiertos"] or 0)))
+    return {
+        "vehiculos": filas,
+        "total": len(filas),
+        "coste_es_estimacion": True,
+        "coste_origen": "cálculo de la IA sobre las fotos, sin calibrar con facturas reales",
+        "min_modelo": _EXP_MIN_MODELO,
+    }
+
+
 @api_router.get("/vehicles/last-inspections")
 async def vehicles_last_inspections(_=Depends(require_admin)):
     """Mapa vehicle_id → fecha de su última inspección (para el semáforo de la lista)."""

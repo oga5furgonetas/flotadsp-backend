@@ -316,9 +316,17 @@ export const crearOrden = (body) => api.post('/work-orders', body)
    el parte antes de mandarla. Es la otra mitad de `danos-pendientes`:
    aquella dice a quien mandar, esta dice que mandar. */
 export const getParteFurgoneta = (vehicleId) => api.get(`/work-orders/parte/${vehicleId}`)
+/* Dispara AHORA el recordatorio a los talleres que llevan dias sin decir nada.
+   Normalmente sale solo a media manana; esto es para no esperar. */
+export const dispararSeguimientoTalleres = () => api.post('/work-orders/seguimiento')
 /* De cada golpe, la ultima foto en la que la furgoneta estaba limpia: con eso
    se acota que dia aparecio y quien la llevaba. Señala a personas, asi que el
    backend solo pone certeza 'alta' con un unico conductor y un dia de ventana. */
+/* Las furgonetas ordenadas por lo que arrastran. Los golpes y los dias son
+   HECHOS; los euros los estima la IA sobre las fotos y no estan calibrados con
+   ninguna factura — la pantalla lo dice. */
+export const getExposicionVehiculos = (center) =>
+  api.get('/vehicles/exposicion', { params: centerParam(center) })
 export const getAtribucionDanos = (center, dias) =>
   api.get('/damages/atribucion', { params: { ...centerParam(center), ...(dias ? { dias } : {}) } })
 export const editarOrden = (id, body) => api.patch(`/work-orders/${id}`, body)

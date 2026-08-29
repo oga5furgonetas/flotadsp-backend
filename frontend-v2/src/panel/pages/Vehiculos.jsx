@@ -23,6 +23,7 @@ import {
   getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument, createVehicle,
   getVehicleDamageLedger, repairVehicleLedger, getSpareWheels, getMaintenanceLog, borrarApunteMantenimiento,
   getAllDocuments,
+  getExposicionVehiculos,
 } from '../api'
 import { getAdmin } from '../auth'
 
@@ -1786,6 +1787,128 @@ function PanelDocumentos() {
 }
 
 
+/* ── LO QUE ACUMULA CADA FURGONETA ─────────────────────────────────────────
+   La pregunta que hoy no se puede contestar: cuál de las 129 te está costando
+   dinero. Los golpes se ven uno a uno en cada ficha, pero no había ningún sitio
+   donde se vieran las 129 en fila y ordenadas por lo que arrastran.
+
+   HECHO Y ESTIMACIÓN VAN SEPARADOS a propósito. Los golpes, la gravedad y los
+   días son hechos: salen del libro. Los euros los calcula la IA sobre las fotos
+   y NO están calibrados con ninguna factura, porque todavía no hay ninguna
+   cargada — así que van en gris y con su aviso. Un número en euros que parece
+   contabilidad y sale de una IA sin calibrar es el falso positivo más caro que
+   hay: con él se toman decisiones de dinero. */
+function PanelExposicion({ center, onAbrir }) {
+  const [datos, setDatos] = useState(null)
+  const [cargando, setCargando] = useState(true)
+  const [soloConGolpes, setSoloConGolpes] = useState(true)
+
+  useEffect(() => {
+    setCargando(true)
+    getExposicionVehiculos(center)
+      .then((r) => setDatos(r.data))
+      .catch(() => setDatos({ vehiculos: [] }))
+      .finally(() => setCargando(false))
+  }, [center])
+
+  const lista = useMemo(() => {
+    const vs = datos?.vehiculos || []
+    return soloConGolpes ? vs.filter((v) => v.abiertos > 0) : vs
+  }, [datos, soloConGolpes])
+
+  if (cargando) {
+    return (
+      <div className="card flex items-center justify-center gap-2 p-12 text-dark-400">
+        <Loader2 size={16} className="animate-spin" /> Sumando lo que arrastra cada furgoneta…
+      </div>
+    )
+  }
+
+  const sinGolpes = (datos?.vehiculos || []).filter((v) => v.abiertos === 0).length
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={() => setSoloConGolpes(!soloConGolpes)}
+          className={`rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors ${
+            soloConGolpes ? 'bg-dark-700 text-dark-100' : 'bg-dark-800/60 text-dark-400 hover:text-dark-200'}`}>
+          {soloConGolpes ? 'Solo con golpes' : 'Todas'}
+        </button>
+        <span className="text-[12px] text-dark-500">
+          <span className="cifra text-lime-400">{sinGolpes}</span> sin ningún golpe abierto
+        </span>
+      </div>
+
+      <div className="card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[820px] text-[13px]">
+            <thead className="sticky top-0 z-10 bg-dark-900">
+              <tr className="border-b border-dark-800">
+                <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Matrícula</th>
+                <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Modelo</th>
+                <th className="px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">Golpes</th>
+                <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Gravedad</th>
+                <th className="px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500" title="Los graves pesan más que los leves">Índice</th>
+                <th className="px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">vs. modelo</th>
+                <th className="px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">Más viejo</th>
+                <th className="px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">€ estim.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lista.map((v) => (
+                <tr key={v.vehicle_id} onClick={() => onAbrir?.(v.vehicle_id)}
+                  className="float-row cursor-pointer border-b border-dark-800/50 last:border-0">
+                  <td className="cifra px-2 py-1.5 font-semibold tracking-wider text-dark-50">{v.matricula}</td>
+                  <td className="max-w-[170px] truncate px-2 py-1.5 text-dark-500">{v.modelo}</td>
+                  <td className="cifra px-2 py-1.5 text-right text-dark-200">{v.abiertos || '—'}</td>
+                  <td className="whitespace-nowrap px-2 py-1.5">
+                    {['critico', 'grave', 'moderado', 'leve'].map((k) => v.severidad[k] > 0 && (
+                      <span key={k} className={`cifra mr-1 rounded px-1 text-[11px] ${
+                        k === 'critico' ? 'bg-red-500/15 text-red-300'
+                          : k === 'grave' ? 'bg-orange-500/15 text-orange-300'
+                            : k === 'moderado' ? 'bg-amber-500/15 text-amber-300'
+                              : 'bg-dark-800 text-dark-400'}`}>
+                        {v.severidad[k]}{k[0]}
+                      </span>
+                    ))}
+                    {!v.abiertos && <span className="text-dark-700">—</span>}
+                  </td>
+                  <td className="cifra px-2 py-1.5 text-right text-dark-200">{v.indice || '—'}</td>
+                  <td className="cifra px-2 py-1.5 text-right">
+                    {v.vs_modelo ? (
+                      <span className={v.vs_modelo >= 2 ? 'text-orange-300' : v.vs_modelo >= 1.5 ? 'text-amber-300' : 'text-dark-500'}
+                        title={`Media de las ${v.modelo_n} de su modelo: ${v.modelo_media}`}>
+                        {v.vs_modelo}x
+                      </span>
+                    ) : (
+                      <span className="text-dark-700" title={v.vs_nota || 'No hay con qué comparar'}>—</span>
+                    )}
+                  </td>
+                  <td className="cifra px-2 py-1.5 text-right text-dark-500">
+                    {v.dias_golpe_mas_viejo != null ? `${v.dias_golpe_mas_viejo} d` : '—'}
+                  </td>
+                  <td className="cifra px-2 py-1.5 text-right text-dark-600">
+                    {v.coste_estimado ? v.coste_estimado.toLocaleString('es') : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="border-t border-dark-800 px-3 py-2 text-[11.5px] leading-relaxed text-dark-500">
+          <span className="font-semibold text-dark-400">Los euros son una estimación</span> que
+          calcula la IA sobre las fotos: no están contrastados con ninguna factura, así que
+          sirven para ordenar entre sí, no como coste real. Lo demás —golpes, gravedad y
+          días— sale del libro y es un hecho. El índice pesa los graves más que los leves;
+          el múltiplo solo sale cuando hay al menos {datos?.min_modelo || 4} furgonetas del
+          mismo modelo con las que comparar.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+
 export default function Vehiculos() {
   const { center, centers } = useOutletContext()
   const { t, lang } = useT()
@@ -1802,6 +1925,7 @@ export default function Vehiculos() {
   const [verBaja, setVerBaja] = useState(false)
   const [nBaja, setNBaja] = useState(0)
   const [verDocs, setVerDocs] = useState(false)
+  const [verExpo, setVerExpo] = useState(false)
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Deep-link desde la paleta de comandos: /panel/vehiculos?open=<id>
@@ -1897,12 +2021,15 @@ export default function Vehiculos() {
           { id: 'baja', label: t('veh.tab.baja'), n: nBaja },
           // La documentación es su propia pestaña y no cuelga de ninguna
           // furgoneta: ver el comentario de PanelDocumentos.
+          { id: 'expo', label: 'Lo que acumulan' },
           { id: 'docs', label: t('veh.tab.docs') },
         ].map((x) => {
-          const activa = x.id === 'docs' ? verDocs : (!verDocs && verBaja === (x.id === 'baja'))
+          const activa = x.id === 'docs' ? verDocs : x.id === 'expo' ? verExpo
+            : (!verDocs && !verExpo && verBaja === (x.id === 'baja'))
           return (
             <button key={x.id}
-              onClick={() => { setVerDocs(x.id === 'docs'); if (x.id !== 'docs') setVerBaja(x.id === 'baja') }}
+              onClick={() => { setVerDocs(x.id === 'docs'); setVerExpo(x.id === 'expo')
+                if (x.id !== 'docs' && x.id !== 'expo') setVerBaja(x.id === 'baja') }}
               className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
                 activa ? 'bg-brand-500/20 text-brand-300' : 'text-dark-400 hover:text-dark-200'}`}>
               {x.label}
@@ -1913,6 +2040,9 @@ export default function Vehiculos() {
       </div>
 
       {verDocs && <PanelDocumentos />}
+      {verExpo && <PanelExposicion center={center} onAbrir={(id) => {
+        const v = list.find((x) => x.id === id); if (v) setSel(v)
+      }} />}
 
       {!verDocs && verBaja && (
         <p className="mb-4 text-[12px] leading-relaxed text-dark-500">{t('veh.baja.exp')}</p>

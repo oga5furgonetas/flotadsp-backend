@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import {
   getOrdenes, getResumenOrdenes, getOrden, crearOrden, editarOrden, enlaceOrden,
-  getParteFurgoneta,
+  getParteFurgoneta, dispararSeguimientoTalleres,
   getVehicles, getWorkshops, crearTaller, exportarOrdenes, ordenesPorTaller,
   getIncidents, getDanosPendientes, getFurgonetasParadas,
 } from '../api'
@@ -176,6 +176,8 @@ export default function OrdenesTrabajo() {
   const [copiado, setCopiado] = useState(false)
   const [guardando, setGuardando] = useState('')
   const [bajando, setBajando] = useState(false)
+  const [tocando, setTocando] = useState(false)
+  const [avisoToques, setAvisoToques] = useState('')
   const [danos, setDanos] = useState(null)
   const [paradas, setParadas] = useState(null)
   const [verParadas, setVerParadas] = useState(true)
@@ -342,6 +344,21 @@ export default function OrdenesTrabajo() {
     } finally { setGuardando('') }
   }
 
+  const tocarTalleres = async () => {
+    setTocando(true); setAvisoToques('')
+    try {
+      const r = await dispararSeguimientoTalleres()
+      const n = (r.data?.recordatorios || []).length
+      // Cero NO es un fallo: es que ningún taller lleva días callado. Decirlo
+      // así evita que alguien lo pulse cinco veces pensando que no funciona.
+      setAvisoToques(n ? `${n} recordatorio${n > 1 ? 's' : ''} enviado${n > 1 ? 's' : ''}.`
+        : 'Ningún taller lleva días sin contestar.')
+      cargar()
+    } catch {
+      setAvisoToques('No se pudo lanzar el recordatorio.')
+    } finally { setTocando(false); setTimeout(() => setAvisoToques(''), 6000) }
+  }
+
   const descargar = async () => {
     setBajando(true); setErr('')
     try {
@@ -409,6 +426,13 @@ export default function OrdenesTrabajo() {
             className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-[13px] font-semibold text-slate-600 hover:bg-slate-50">
             <BarChart3 size={15} /> Comparar talleres
           </button>
+          {/* El seguimiento sale solo a media manana. Este boton es para no
+              esperar cuando ya sabes que hay talleres callados. */}
+          <button onClick={tocarTalleres} disabled={tocando}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-[13px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+            title="Manda el recordatorio a los talleres que llevan días sin novedades">
+            {tocando ? <Loader2 size={15} className="animate-spin" /> : <PhoneCall size={15} />} Recordar
+          </button>
           <button onClick={descargar} disabled={bajando}
             className="flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-[13px] font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50">
             {bajando ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />} Excel
@@ -418,6 +442,12 @@ export default function OrdenesTrabajo() {
             <Plus size={15} /> Nueva orden
           </button>
         </div>
+
+      {avisoToques && (
+        <p className="mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[13px] text-slate-700">
+          {avisoToques}
+        </p>
+      )}
       </div>
 
       {err && (
