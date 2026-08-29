@@ -552,6 +552,35 @@
       try { parsed = JSON.parse(text); } catch (_) {}
       // De route-summaries sacamos TODAS las rutas del día y pedimos su detalle.
       if (parsed && isSummary) harvestRoutes(parsed);
+
+      /* ── LOS CONTADORES DEL PROPIO CORTEX ─────────────────────────────────
+         `route-summaries` trae `rmsRouteSummaries` y `transporterPackageSummaries`:
+         lo que Cortex cuenta por ruta y por conductor, hecho por Amazon y no por
+         nosotros. Es la ÚNICA forma de saber si vamos por detrás.
+
+         Hace falta porque el 28-08-2026 a las 14:37 Cortex decía 3.251 paquetes
+         restantes y nosotros teníamos 1.039 entregados de 6.775: unas 2.500
+         entregas sin capturar, y en pantalla no se notaba nada. Al cerrar el día
+         cuadró (6.769 de 6.895), o sea que el barrido acaba llegando — pero a
+         media tarde, que es cuando se mira, la app iba muy atrás y lo decía
+         todo con la misma seguridad.
+
+         Se manda tal cual y sin interpretarlo aquí: el esquema que teníamos se
+         capturó a las 8:13 con los arrays vacíos, así que los nombres de dentro
+         no se conocen todavía. Guardarlo primero y leerlo cuando haya datos de
+         verdad es más lento y es lo único que no se inventa nada. */
+      if (parsed && isSummary) {
+        try {
+          const resumen = {
+            rutas: parsed.rmsRouteSummaries || [],
+            conductores: parsed.transporterPackageSummaries || [],
+          };
+          if (resumen.rutas.length || resumen.conductores.length) {
+            post({ kind: 'resumen_cortex', url: url.slice(0, 160),
+                   dia: serviceDay(), sa: saId, datos: resumen });
+          }
+        } catch (_) {}
+      }
       let packages = [];
       if (parsed && (marked || isDetails)) packages = extractRouteDetails(parsed) || extract(parsed);
 

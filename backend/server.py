@@ -26463,15 +26463,15 @@ _CX_OK = ("DELIVERED",)
 
 # Todavia en juego: el paquete esta en la furgoneta o de camino. NO es un fallo,
 # es una jornada sin terminar. Si esto pesa mucho en un dia, ese dia no puntua.
-_CX_EN_VUELO = ("LOADED", "YOU_ARE_NEXT", "ARRIVED", "OBSERVED", "NONE", "PENDING_PICKUP")
+# PICKED_UP entra aqui y no en "fallo": es un paquete cargado en la furgoneta y
+# en reparto, no una entrega que salio mal. Sin esto, medio dia de trabajo
+# normal contaria como miles de fallos y hundiria el DCR en vivo.
+_CX_EN_VUELO = ("LOADED", "PICKED_UP", "YOU_ARE_NEXT", "ARRIVED", "OBSERVED",
+                "NONE", "PENDING_PICKUP")
 
 # Nunca salio a reparto: no se despacho, luego no entra en el denominador del
 # DCR. Meterlo seria castigar al conductor por un paquete que no llego a tocar.
-# PICKED_UP va aqui y no en "fallo": una recogida no es una entrega que salio
-# mal, es que nunca hubo entrega que hacer. Dejarla caer al cajon por defecto
-# convertiria 281 recogidas de un dia normal en 281 fallos de entrega y hundiria
-# el DCR en vivo con un numero falso.
-_CX_NO_DESPACHADO = ("UNCOLLECTED", "NOT_READY", "TR_CANCELLED", "PICKED_UP")
+_CX_NO_DESPACHADO = ("UNCOLLECTED", "NOT_READY", "TR_CANCELLED")
 
 # Cualquier otro estado al cierre del dia es un fallo de entrega imputable:
 # BACK_TO_ORIGIN, CUSTOMER_UNAVAILABLE, ATTEMPTED, MISSING, DAMAGED,
@@ -29080,16 +29080,30 @@ CX_CTX_CLIENTE = ("COLLECTED_BY_CUSTOMER", "PICKED_BY_CUSTOMER",
                   "PICKED_UP_BY_CUSTOMER")
 # Cortex ya dice que el paquete no aparece. No es "devuelvemelo", es un aviso.
 CX_CTX_PERDIDO = ("OBJECT_MISSING", "PACKAGE_MISSING")
-# Nunca salio de la nave. No es del conductor en absoluto.
-CX_NO_SALIO = ("PENDING_PICKUP",)
-# RECOGIDAS QUE SI TRAE. El conductor las ha subido a la furgoneta y tiene que
-# entregarlas en la nave. No son un fallo suyo y no son reparto, pero SI hay que
-# reclamarselas en el debrief, asi que tienen cajon propio en vez de esconderse.
-CX_RECOGIDO = ("PICKED_UP",)
-# Estados a medias. Un paquete aqui puede estar en la furgoneta o puede ser que
-# dejaramos de mirar. Solo estos pasan por la regla del hueco.
-# PENDING_PICKUP NO entra aqui: no es ambiguo, es que no salio (ver CX_NO_SALIO).
-CX_AMBIGUO = ("LOADED", "YOU_ARE_NEXT", "OBSERVED", "NONE")
+# ── EL CICLO NORMAL DE UN PAQUETE, MEDIDO ────────────────────────────────────
+# El 28-08-2026 me equivoque con esto y la pantalla enseño barbaridades: 2.288
+# "recogidas que trae" y 2.867 "no salieron" en un dia con 45 rutas en la calle.
+# Vi que todos los PICKED_UP venian de un PENDING_PICKUP y conclui que eran
+# recogidas de cliente. Es al reves: es el ciclo de TODOS los paquetes.
+#
+# Contado sobre los entregados de ese dia:
+#     PENDING_PICKUP -> PICKED_UP -> DELIVERED                    1.680
+#     PENDING_PICKUP -> DELIVERED                                   709
+#     PENDING_PICKUP -> PICKED_UP -> YOU_ARE_NEXT -> DELIVERED       304
+#     PENDING_PICKUP -> YOU_ARE_NEXT -> DELIVERED                    170
+#
+# Y el esquema de Cortex lo confirma: cada tarea lleva `taskType`, y el
+# `PENDING_PICKUP` es el estado de la tarea PICK_UP — el conductor recogiendo el
+# paquete EN LA NAVE, no un cliente devolviendo nada:
+#     "taskType":"PICK_UP","taskState":"PENDING_PICKUP","executionStatus":"NOT_STARTED"
+#
+# Asi que los tres significan lo mismo para quien hace el debrief: TODAVIA NO
+# ESTA ENTREGADO. No hay forma de distinguir una recogida de verdad por el
+# estado, y por eso no se intenta: Cortex las cuenta aparte ("Recogidas en
+# carretera", 16 ese dia) y hasta que la extension capture `taskType` no se
+# puede afirmar cual es cual. Afirmarlo a ojo es lo que rompio la pantalla.
+CX_AMBIGUO = ("PENDING_PICKUP", "PICKED_UP", "LOADED",
+              "YOU_ARE_NEXT", "ARRIVED", "OBSERVED", "NONE")
 
 # Minutos de margen. Por debajo, se entiende que la captura murio ahi.
 # 45 min no es un numero redondo elegido a ojo: con captura viva, un paquete
@@ -29126,7 +29140,7 @@ def _cx_debrief_reparto(paquetes: list, ultima_por_ruta: dict, en_curso: bool = 
     """
     cajones = {"entregados": [], "cancelados": [], "no_observado": [],
                "perdidos": [], "sin_cerrar": [], "reprogramados": [],
-               "cliente": [], "no_salio": [], "arrastrados": [], "recogidas": [],
+               "cliente": [], "arrastrados": [],
                # Los cuatro que se miran de primeras
                "reintento": [], "no_entrega": [], "no_recogido": []}
     for p in paquetes:
@@ -29184,12 +29198,6 @@ def _cx_debrief_reparto(paquetes: list, ultima_por_ruta: dict, en_curso: bool = 
             cajones["reprogramados"].append(fila)
         elif st in CX_CANCELADO:
             cajones["cancelados"].append(fila)
-        elif st in CX_NO_SALIO:
-            # Se quedo en la nave. No es del conductor.
-            cajones["no_salio"].append(fila)
-        elif st in CX_RECOGIDO:
-            # Las trae de vuelta: hay que contarlas al descargar.
-            cajones["recogidas"].append(fila)
         elif st in CX_REINTENTO:
             cajones["reintento"].append(fila)
         elif st in CX_NO_ENTREGA:
@@ -29435,14 +29443,6 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
             "cancelados": caj["cancelados"],
             "reprogramados": caj["reprogramados"],
             "cliente": caj["cliente"],
-            "no_salio": len(caj["no_salio"]),
-            # LAS RECOGIDAS QUE TRAE DE VUELTA. Las subio a la furgoneta en
-            # ruta y las descarga en la nave. No son un fallo suyo y no son
-            # reparto, pero son bultos reales que hay que contar al descargar.
-            # Iban en el mismo saco que "sigue en la furgoneta" y eran la mayor
-            # parte de ese numero (113 de 130 hoy), asi que el inventario del
-            # dia parecia enorme y no se miraba.
-            "recogidas": len(caj["recogidas"]),
             "arrastrados": len(caj["arrastrados"]),
             "no_observado": len(caj["no_observado"]),
             # El contador: de N que hay que comprobar, cuantos van
@@ -29498,8 +29498,6 @@ async def cortex_debrief(day: str = "", center: str = "", _=Depends(require_admi
         "cancelados": sum(len(f["cancelados"]) for f in filas),
         "reprogramados": sum(len(f["reprogramados"]) for f in filas),
         "cliente": sum(len(f["cliente"]) for f in filas),
-        "no_salio": sum(f["no_salio"] for f in filas),
-        "recogidas": sum(f["recogidas"] for f in filas),
         "arrastrados": sum(f["arrastrados"] for f in filas),
         "no_observado": sum(f["no_observado"] for f in filas),
         "perdidos": sum(len(f["perdidos"]) for f in filas),
@@ -29902,6 +29900,34 @@ async def cortex_ingest(request: Request):
     # tipos de parada. Con eso se puede decidir con pruebas si una anulación en
     # nave se distingue sola, en vez de inventar un umbral de hora y dirección.
     kind = str(body.get("kind") or "").strip()
+
+    # ── LOS CONTADORES DEL PROPIO CORTEX ─────────────────────────────────────
+    # `route-summaries` trae lo que Amazon cuenta por ruta y por conductor. Es la
+    # unica forma de saber si vamos por detras, y hace falta: el 28-08-2026 a las
+    # 14:37 Cortex decia 3.251 restantes y nosotros teniamos 1.039 entregados de
+    # 6.775 — unas 2.500 entregas sin capturar y en pantalla no se notaba nada.
+    #
+    # Se guarda TAL CUAL y sin interpretarlo. El esquema que teniamos se capturo
+    # con los arrays vacios, asi que los nombres de dentro no se conocen; leerlos
+    # cuando haya datos de verdad es mas lento y es lo unico que no se inventa
+    # nada. Una foto por dia y estacion, siempre la ultima.
+    if kind == "resumen_cortex":
+        try:
+            dia = str(body.get("dia") or "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            sa = str(body.get("sa") or "")[:64]
+            datos = body.get("datos") or {}
+            await db.cortex_resumen.update_one(
+                {"_id": f"{dia}:{sa}"},
+                {"$set": {"dia": dia, "service_area_id": sa,
+                          "rutas": (datos.get("rutas") or [])[:200],
+                          "conductores": (datos.get("conductores") or [])[:300],
+                          "visto_en": datetime.now(timezone.utc).isoformat(),
+                          "expira_en": datetime.now(timezone.utc) + timedelta(days=60)}},
+                upsert=True)
+        except Exception as e:
+            logger.warning(f"Resumen de Cortex: {e}")
+        return {"ok": True, "guardado": "resumen_cortex"}
+
     if kind in ("schema", "debug"):
         try:
             cual = str(body.get("which") or kind)[:40]

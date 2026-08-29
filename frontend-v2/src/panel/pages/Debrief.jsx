@@ -360,10 +360,6 @@ function Conductor({ c, dia, alMarcar }) {
             {!!(c.sin_cerrar || []).length && (
               <span className="text-slate-400">· {c.sin_cerrar.length} aún en la furgoneta</span>
             )}
-            {c.recogidas > 0 && (
-              <span className="text-slate-500">· {c.recogidas} recogidas que trae</span>
-            )}
-            {c.no_salio > 0 && <span className="text-slate-400">· {c.no_salio} no salieron de la nave</span>}
             {c.arrastrados > 0 && (
               <span className="text-slate-400">· {c.arrastrados} arrastran de otro día</span>
             )}
@@ -767,16 +763,17 @@ export default function Debrief() {
               <Kpi n={`${r.cuadran ?? 0}/${r.cuadran_de ?? r.conductores ?? 0}`}
                    et="Conductores que cuadran" tono="verde"
                    sub={`${r.rutas ?? 0} rutas${r.apoyos ? ` · ${r.apoyos} de apoyo` : ''}`} />
-              <Kpi n={r.sin_cerrar ?? 0} et="Sigue en la furgoneta" tono="gris"
-                   sub={datos?.en_curso ? 'el día no ha terminado' : 'inventario'} />
-              {/* LAS RECOGIDAS, APARTE. Iban dentro de "sigue en la furgoneta" y
-                  eran la mayor parte de ese numero (121 de 138 el 27-08), asi que
-                  el inventario parecia enorme y la tarjeta no se miraba. Son
-                  bultos reales que el conductor descarga en la nave, pero no son
-                  reparto suyo sin hacer: merecen su propia linea. */}
-              <Kpi n={r.recogidas ?? 0} et="Recogidas que traen" tono="gris"
-                   sub="las descargan en la nave" />
-              <Kpi n={r.no_salio ?? 0} et="No salieron" tono="gris" sub="se quedaron en nave" />
+              {/* MEDIODÍA Y FINAL DE DÍA NO SON LO MISMO, y llamarlos igual
+                  asusta para nada. A las 14:37, con 45 rutas en la calle, casi
+                  todo está sin entregar todavía: eso es la jornada, no un
+                  problema. Al cerrar, ese mismo número sí es lo que queda en
+                  las furgonetas. El dato es el mismo; el nombre, no. */}
+              <Kpi n={r.sin_cerrar ?? 0}
+                   et={datos?.en_curso ? 'Aún en reparto' : 'Sigue en la furgoneta'}
+                   tono="gris"
+                   sub={datos?.en_curso
+                     ? `${r.entregados ?? 0} de ${r.paquetes ?? 0} ya entregados`
+                     : 'inventario al cerrar'} />
               {/* Se enseña aunque sea cero: si desapareciera sin mas, alguien
                   echaria en falta esos paquetes y desconfiaria de la cuenta. */}
               <Kpi n={r.arrastrados ?? 0} et="De días anteriores" tono="gris"
