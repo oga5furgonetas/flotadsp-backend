@@ -52,6 +52,22 @@ def arregla_mojibake(s):
         return s
 
 
+def _lev(a, b):
+    """Distancia de edicion. Hace falta porque los nombres llegan con una letra
+    de diferencia: ESPINOSA/ESPINOZA, VILLANOVA/VILANOVA, ACEBEDO/ACEVEDO, y
+    'FANDIAO' cuando la enye se rompe al pegar desde Excel. Comparando palabras
+    exactas, esas personas salen como si no existieran teniendo su ficha."""
+    if len(a) < len(b):
+        a, b = b, a
+    ant = list(range(len(b) + 1))
+    for i, ca in enumerate(a):
+        act = [i + 1]
+        for j, cb in enumerate(b):
+            act.append(min(ant[j + 1] + 1, act[j] + 1, ant[j] + (ca != cb)))
+        ant = act
+    return ant[-1]
+
+
 def norm(s):
     s = arregla_mojibake(str(s or ""))
     s = unicodedata.normalize("NFKD", s.upper()).encode("ascii", "ignore").decode()
@@ -151,15 +167,21 @@ async def main():
         print("    equivocarse aqui le cuelga a alguien las entregas de otro.")
         todos = [(k, v) for k, v in por_nombre.items() if k]
         for n, t in r["sin_ficha"]:
-            objetivo = set(norm(n).split())
+            objetivo = norm(n).split()
             mejor, punt = None, 0.0
             for clave, fichas in todos:
-                otros = set(clave.split())
+                otros = clave.split()
                 if not otros:
                     continue
-                # Palabras en comun sobre el total: un apellido de mas o de
-                # menos baja poco, un nombre distinto baja mucho.
-                p = len(objetivo & otros) / max(len(objetivo | otros), 1)
+                # PALABRA A PALABRA Y CON MARGEN DE DOS LETRAS, no comparando
+                # palabras identicas. Comparando exacto se escapaba justo lo que
+                # esta pantalla busca: 'FANDIAO' contra 'FANDINO' (una tilde que
+                # se rompio al pegar) daba 0 coincidencias y la persona salia
+                # como si no existiera, teniendo su ficha y su id puestos.
+                # Tambien pilla ESPINOSA/ESPINOZA, VILLANOVA/VILANOVA y
+                # ACEBEDO/ACEVEDO, que son los tres casos reales que habia.
+                comunes = sum(1 for w in objetivo if any(_lev(w, x) <= 2 for x in otros))
+                p = comunes / max(len(objetivo), 1)
                 if p > punt:
                     mejor, punt = fichas[0], p
             pista = ""
