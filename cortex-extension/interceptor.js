@@ -78,7 +78,8 @@
      en la lista no se descubre nunca. Se aprende de la petición real de la
      página —no se construye a mano— para no inventar parámetros. */
   let urlResumen = null;
-  const pedirResumen = () => { if (urlResumen) syntheticFetch(urlResumen); };
+  // Devuelve la promesa: el barrido la espera antes de cerrar la vuelta.
+  const pedirResumen = () => (urlResumen ? syntheticFetch(urlResumen) : Promise.resolve());
 
   const rememberGet = (url, method) => {
     if ((method || 'GET').toUpperCase() !== 'GET') return;
@@ -103,25 +104,26 @@
   };
   // Petición propia, educada y observable: mismas cabeceras que la página,
   // y si falla (403/429…) lo apunta en la actividad para diagnosticarlo.
+  /* DEVUELVE LA PROMESA. Sin esto, el `await` del barrido no espera a nada y
+     las peticiones salen todas de golpe: la limitacion a cuatro en paralelo no
+     serviria y acabariamos en un 429. */
   const syntheticFetch = (url) => {
     try {
-      window.fetch(url, { credentials: 'include', headers: { accept: 'application/json, text/plain, */*', ...apiHeaders } })
+      return window.fetch(url, { credentials: 'include', headers: { accept: 'application/json, text/plain, */*', ...apiHeaders } })
         .then((r) => {
           if (!r || !r.ok) post({ kind: 'debug', url: `HTTP ${r ? r.status : '?'} · ${url.replace(/^https?:\/\/[^/]+/, '').slice(0, 100)}`, count: 0, bytes: 0 });
         })
         .catch(() => post({ kind: 'debug', url: `sin respuesta · ${url.replace(/^https?:\/\/[^/]+/, '').slice(0, 100)}`, count: 0, bytes: 0 }));
-    } catch (_) {}
+    } catch (_) { return Promise.resolve(); }
   };
-  /* ── BARRIDO ENCADENADO, NO A RELOJ FIJO ─────────────────────────────────
-     Se pide 1 ruta por segundo, asi que el barrido dura tantos segundos como
-     rutas haya. Medido en produccion sobre 30 dias: mediana 45 rutas, maximo
-     71, y 8 dias por encima de 60. Con un setInterval de 60 s, esos 8 dias
-     —los de mas volumen, 9.800 paquetes— el barrido no habria acabado cuando
-     empieza el siguiente: se solapan y las peticiones se amontonan.
+  /* ── BARRIDO ENCADENADO, Y SIN RELOJES DENTRO ────────────────────────────
+     Encadenado y no a intervalo fijo: el numero de rutas cambia cada dia
+     (mediana 45, maximo 71 en 30 dias medidos), y con un `setInterval` de 60 s
+     los dias de mas volumen la vuelta no habria terminado cuando arranca la
+     siguiente — se solapan y las peticiones se amontonan.
 
-     Encadenando, el ritmo se adapta solo: ~65 s con 45 rutas, ~91 s con 71,
-     y nunca se pisa. El pico sigue siendo 1 req/s, que es lo unico que Cortex
-     podria notar. */
+     Y sin temporizadores DENTRO de la vuelta, que es lo que la rompia: ver el
+     comentario de `replay`. */
   const PAUSA_ENTRE = 20000;   // respiro entre barridos
   const CERROJO_MAX = 360000;  // si el cerrojo lleva 6 min puesto, algo fue mal
   let barriendo = 0;           // marca de tiempo de inicio, 0 = libre
@@ -138,32 +140,49 @@
     if (barriendo) return;
     barriendo = Date.now();
 
-    const urls = todasLasUrls();
-    let i = 0;
-    for (const url of urls) {
-      setTimeout(() => syntheticFetch(url), (i++) * 1000); // 1 req/s: ritmo suave
-    }
-    /* El informe de faltas viaja en el mismo tren: es la categoria "se puede
-       volver a intentar" del debrief y la unica fuente con la direccion en
-       texto. A 3 min mientras el resto va a 65 s seria lo mas mirado y lo mas
-       viejo. */
-    setTimeout(pedirInforme, i * 1000);
+    /* ── UN SOLO TEMPORIZADOR POR VUELTA, NO UNO POR RUTA ────────────────────
+       Aqui habia un `setTimeout` por cada URL, escalonados a 1 por segundo.
+       Sobre el papel, 39 rutas = 39 segundos. En la practica, CHROME FRENA LOS
+       TEMPORIZADORES DE UNA PESTANA EN SEGUNDO PLANO A UNO POR MINUTO, y la
+       pestana de Cortex esta siempre detras de otra cosa. Asi que 39 rutas
+       pasaban a ser 39 MINUTOS.
 
-    /* Y EL RESUMEN DE RUTAS, QUE ES DE DONDE SALEN LAS RUTAS.
-       El descubrimiento dependia de que la pagina pidiera `route-summaries`
-       por su cuenta. Cortex es una SPA: si nadie navega ni recarga, esa
-       peticion no se repite, y una ruta que no este en la lista NO SE
-       DESCUBRE NUNCA — ni aunque el barrido funcione perfectamente.
-       Pidiendolo nosotros en cada tanda, el interceptor ve la respuesta,
-       `harvestRoutes` se ejecuta y cualquier ruta que falte entra sola. Es lo
-       que hace que esto se arregle sin depender de que alguien recargue. */
-    setTimeout(pedirResumen, (i + 1) * 1000);
+       Medido el 29-08-2026 a las 11:21, con las rutas en la calle desde las 7:
+           39 rutas · la mas fresca bajada hace 47 min · mediana 67 · peor 188
+           cero rutas bajadas en los ultimos 15 minutos
+           0 entregados de 5.201 en pantalla a las 11:21
+       Y no era el barrido parado: era el barrido a un paso por minuto.
 
-    /* +2 y no +1: en la tanda van las rutas, el informe de faltas Y el resumen.
-       Si el reloj del encadenado no los contara, el barrido siguiente
-       arrancaria antes de que salieran los dos ultimos. */
-    const dura = (i + 2) * 1000;
-    setTimeout(() => { barriendo = 0; replay(); }, dura + PAUSA_ENTRE);
+       La solucion no es acortar el intervalo —lo frenan igual— sino no depender
+       de temporizadores DENTRO de la vuelta: un unico `await` sobre las
+       peticiones, que resuelven por red y no por reloj, con cuatro en paralelo.
+       Las 39 rutas salen en segundos aunque la pestana este dormida.
+
+       Cuatro a la vez y no todas de golpe: la propia pagina de Cortex hace
+       rafagas parecidas, y 39 peticiones simultaneas son las que acaban en un
+       429 y en dejarnos sin datos del todo. */
+    (async () => {
+      const urls = todasLasUrls();
+      const cola = urls.slice();
+      const obrero = async () => {
+        while (cola.length) {
+          const u = cola.shift();
+          if (u) { try { await syntheticFetch(u); } catch (_) {} }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, cola.length || 1) }, obrero));
+
+      /* El informe de faltas y el resumen van al final de la misma vuelta.
+         El informe es la categoria "se puede volver a intentar" del debrief y la
+         unica fuente con la direccion en texto; el resumen es de donde salen las
+         rutas —Cortex es una SPA y, si nadie navega, esa peticion no se repite
+         nunca, asi que una ruta nueva no se descubriria jamas. */
+      try { await pedirInforme(); } catch (_) {}
+      try { await pedirResumen(); } catch (_) {}
+
+      barriendo = 0;
+      setTimeout(replay, PAUSA_ENTRE);
+    })();
   };
   setTimeout(replay, 12000);   // el primero, tras dejar cargar la pagina
 
@@ -263,7 +282,7 @@
       plantillaInforme = u.href;
     } catch (_) {}
   };
-  const pedirInforme = () => { const u = urlInforme(); if (u) syntheticFetch(u); };
+  const pedirInforme = () => { const u = urlInforme(); return u ? syntheticFetch(u) : Promise.resolve(); };
   setTimeout(pedirInforme, 9000);      // una vez al entrar, sin agobiar la carga
   /* Ya NO tiene reloj propio: lo dispara el barrido al final de cada tanda.
      Tenerlo aparte a 180 s hacia que la pantalla mas mirada del debrief
