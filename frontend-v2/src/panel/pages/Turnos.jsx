@@ -148,29 +148,124 @@ const ATAJOS = [
 const claveDia = (d) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
+/* ── ELEGIR UN RANGO SIN SABERSE LAS FECHAS ───────────────────────────────
+   Dani: "déjame abrir ahí un calendario, que no me sé los días".
+
+   Un `<input type="date">` da por hecho que sabes la fecha: para cerrar "el
+   puente de diciembre" hay que ir a mirar un calendario en otro sitio, contar,
+   y volver a escribirlo. Aquí se pulsa el primer día y el último, y ya está.
+
+   Y enseña quién tiene día concedido en cada casilla, que es el dato que hace
+   falta justo en ese momento: cerrar una semana en la que ya le diste el día a
+   tres personas no es lo mismo que cerrarla vacía, y con dos pantallas
+   separadas eso no se ve hasta que alguien se queja. */
+function SelectorRango({ desde, hasta, onElegir, ocupados }) {
+  const hoyRef = new Date()
+  const [mes, setMes] = useState(() => {
+    const d = desde ? new Date(`${desde}T12:00:00`) : hoyRef
+    return new Date(d.getFullYear(), d.getMonth(), 1)
+  })
+
+  const primero = new Date(mes.getFullYear(), mes.getMonth(), 1)
+  const huecos = (primero.getDay() + 6) % 7
+  const diasMes = new Date(mes.getFullYear(), mes.getMonth() + 1, 0).getDate()
+  const celdas = [...Array(huecos).fill(null),
+                  ...Array.from({ length: diasMes }, (_, i) => i + 1)]
+  const hoyK = claveDia(hoyRef)
+
+  /* Un solo clic elige el inicio y borra el fin; el siguiente cierra el rango.
+     Si el segundo es anterior al primero se le da la vuelta en vez de dar un
+     error: es obvio lo que quería y el backend lo rechazaría con un mensaje
+     que no ayuda a nadie. */
+  const pulsar = (k) => {
+    if (!desde || (desde && hasta)) return onElegir({ desde: k, hasta: '' })
+    return k < desde ? onElegir({ desde: k, hasta: desde }) : onElegir({ desde, hasta: k })
+  }
+
+  return (
+    <div className="rounded-lg border border-dark-700 bg-dark-950 p-2.5">
+      <div className="mb-2 flex items-center gap-1">
+        <button type="button" onClick={() => setMes(new Date(mes.getFullYear(), mes.getMonth() - 1, 1))}
+          className="btn-ghost p-1" aria-label="Mes anterior"><ChevronLeft size={14} /></button>
+        <span className="min-w-[8rem] text-center text-[12.5px] font-semibold capitalize text-dark-200">
+          {mes.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}
+        </span>
+        <button type="button" onClick={() => setMes(new Date(mes.getFullYear(), mes.getMonth() + 1, 1))}
+          className="btn-ghost p-1" aria-label="Mes siguiente"><ChevronRight size={14} /></button>
+        {(desde || hasta) && (
+          <button type="button" onClick={() => onElegir({ desde: '', hasta: '' })}
+            className="ml-auto text-[11.5px] text-dark-500 hover:text-dark-300">Quitar</button>
+        )}
+      </div>
+      <div className="grid grid-cols-7 gap-0.5">
+        {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map((d, i) => (
+          <div key={i} className="pb-0.5 text-center text-[10px] font-semibold text-dark-600">{d}</div>
+        ))}
+        {celdas.map((n, i) => {
+          if (n === null) return <div key={`h${i}`} />
+          const k = claveDia(new Date(mes.getFullYear(), mes.getMonth(), n))
+          const dentro = desde && hasta && k >= desde && k <= hasta
+          const punta = k === desde || k === hasta
+          const gente = ocupados?.[k] || 0
+          return (
+            <button key={k} type="button" onClick={() => pulsar(k)}
+              title={gente ? `${gente} con día concedido` : undefined}
+              className={`relative h-8 rounded text-[12px] font-semibold tabular-nums transition-colors ${
+                punta ? 'bg-red-500 text-white'
+                  : dentro ? 'bg-red-500/25 text-red-100'
+                    : k === hoyK ? 'text-brand-300 ring-1 ring-brand-500/40'
+                      : 'text-dark-300 hover:bg-dark-800'}`}>
+              {n}
+              {gente > 0 && (
+                <i className={`absolute bottom-0.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full ${
+                  punta || dentro ? 'bg-white/80' : 'bg-emerald-400'}`} />
+              )}
+            </button>
+          )
+        })}
+      </div>
+      <p className="mt-1.5 text-[11px] leading-tight text-dark-500">
+        {!desde ? 'Pulsa el primer día que quieres cerrar.'
+          : !hasta ? 'Ahora el último.'
+            : `Del ${desde.split('-').reverse().join('/')} al ${hasta.split('-').reverse().join('/')}`}
+        <span className="ml-2 inline-flex items-center gap-1">
+          <i className="h-1 w-1 rounded-full bg-emerald-400" /> ya tiene alguien día
+        </span>
+      </p>
+    </div>
+  )
+}
+
 function CalendarioDiasLibres({ center }) {
   const hoyRef = new Date()
   const [mes, setMes] = useState(new Date(hoyRef.getFullYear(), hoyRef.getMonth(), 1))
   const [filas, setFilas] = useState(null)
   const [bloqueos, setBloqueos] = useState([])
   const [abierto, setAbierto] = useState(null)
+  const [personaSel, setPersonaSel] = useState(null)
   const [err, setErr] = useState('')
 
-  const desde = claveDia(new Date(mes.getFullYear(), mes.getMonth(), 1))
-  const hasta = claveDia(new Date(mes.getFullYear(), mes.getMonth() + 1, 0))
+  /* ── SE CARGA UN AÑO DE GOLPE, NO MES A MES ─────────────────────────────
+     Son 67 días concedidos en total: cabe entero y de sobra. Pedirlo por mes
+     obligaba a una llamada por cada flecha, y sobre todo dejaba a medias lo que
+     de verdad se quiere saber al pulsar a una persona: TODOS sus días, no solo
+     los del mes que se está mirando. */
+  const ventanaDesde = claveDia(new Date(hoyRef.getFullYear(), hoyRef.getMonth() - 3, 1))
+  const ventanaHasta = claveDia(new Date(hoyRef.getFullYear(), hoyRef.getMonth() + 10, 0))
 
   useEffect(() => {
     setFilas(null); setErr('')
     // `r.data.requests`, igual que el resto de la pantalla: el endpoint devuelve
     // un objeto. Leyendo `r.data` a secas, `lista()` lo convierte en [] y el mes
     // saldría vacío sin un solo error — que es peor que un fallo.
-    getShiftRequests(center, 'aprobado,pendiente', { desde, hasta, limit: 1000 })
+    getShiftRequests(center, 'aprobado,pendiente',
+                     { desde: ventanaDesde, hasta: ventanaHasta, limit: 2000 })
       .then((r) => setFilas(lista(r.data?.requests)))
       .catch(() => setErr('No se pudieron cargar los días.'))
     // `r.data.bloqueos`, no `r.data`: el endpoint devuelve un objeto. Leyendo
     // mal, la lista sale vacía y los días cerrados no se pintarían — sin fallar.
     getShiftBlocks(center).then((r) => setBloqueos(lista(r.data?.bloqueos))).catch(() => {})
-  }, [center, desde, hasta])
+  }, [center, ventanaDesde, ventanaHasta])
 
   const porDia = useMemo(() => {
     const m = {}
@@ -187,6 +282,32 @@ function CalendarioDiasLibres({ center }) {
   }, [filas])
 
   const cerrado = (k) => bloqueos.find((b) => b.desde <= k && k <= b.hasta && !b.driver_id)
+
+  /* Quién ha pedido días, con TODOS los suyos — también los de otros meses.
+     Se ordena por quien más tiene: es la pregunta que se hace al mirar esta
+     lista ("¿a quién le estoy dando más días?"), y por orden alfabético habría
+     que leerla entera para contestarla. */
+  const personas = useMemo(() => {
+    const m = new Map()
+    for (const f of (filas || [])) {
+      const id = f.driver_id || f.driver_name
+      if (!id) continue
+      const p = m.get(id) || { id, nombre: f.driver_name, dias: [], pendientes: 0 }
+      const k = String(f.date || '').slice(0, 10)
+      if (k) p.dias.push({ k, status: f.status, motivo: f.motivo_label || f.type })
+      if (f.status === 'pendiente') p.pendientes += 1
+      m.set(id, p)
+    }
+    for (const p of m.values()) p.dias.sort((a, b) => a.k.localeCompare(b.k))
+    return [...m.values()].sort((a, b) => (b.dias.length - a.dias.length)
+      || String(a.nombre).localeCompare(String(b.nombre), 'es', { sensitivity: 'base' }))
+  }, [filas])
+
+  const suyos = useMemo(() => {
+    if (!personaSel) return null
+    const p = personas.find((x) => x.id === personaSel)
+    return p ? new Set(p.dias.map((d) => d.k)) : null
+  }, [personaSel, personas])
 
   // Rejilla de lunes a domingo, con los huecos del mes anterior en blanco.
   const primero = new Date(mes.getFullYear(), mes.getMonth(), 1)
@@ -237,13 +358,21 @@ function CalendarioDiasLibres({ center }) {
               const apro = dia.filter((x) => x.status === 'aprobado')
               const pend = dia.filter((x) => x.status === 'pendiente')
               const bloq = cerrado(k)
+              /* Con una persona elegida, sus días se marcan y el resto se
+                 apaga. Apagar y no esconder: si los demás desaparecieran no se
+                 vería que ese día ya hay otros tres fuera, que es justo lo que
+                 hay que tener en cuenta antes de dar o quitar un día. */
+              const esSuyo = suyos?.has(k)
+              const apagado = suyos && !esSuyo
               return (
                 <button key={k} onClick={() => setAbierto(abierto === k ? null : k)}
                   className={`min-h-[62px] rounded-lg border p-1.5 text-left transition-colors ${
-                    abierto === k ? 'border-brand-500 bg-brand-500/10'
-                      : bloq ? 'border-red-500/40 bg-red-500/[0.07]'
-                        : apro.length ? 'border-emerald-500/30 bg-emerald-500/[0.07] hover:border-emerald-500/60'
-                          : 'border-dark-800 hover:border-dark-700'}`}>
+                    esSuyo ? 'border-brand-400 bg-brand-500/20 ring-1 ring-brand-400/50'
+                      : abierto === k ? 'border-brand-500 bg-brand-500/10'
+                        : bloq ? 'border-red-500/40 bg-red-500/[0.07]'
+                          : apro.length ? 'border-emerald-500/30 bg-emerald-500/[0.07] hover:border-emerald-500/60'
+                            : 'border-dark-800 hover:border-dark-700'
+                  } ${apagado ? 'opacity-35' : ''}`}>
                   <span className={`text-[12px] font-bold tabular-nums ${
                     k === hoyK ? 'text-brand-300' : 'text-dark-300'}`}>{n}</span>
                   {/* El primer nombre se ve sin pulsar: en la mayoría de los días
@@ -269,6 +398,79 @@ function CalendarioDiasLibres({ center }) {
               )
             })}
           </div>
+
+          {/* ── QUIÉN HA PEDIDO DÍAS ────────────────────────────────────────
+              Pulsando a alguien se le marcan TODOS sus días en el calendario,
+              también los de otros meses — por eso se carga un año entero de una
+              vez en lugar de mes a mes. Contesta la pregunta que no contestaba
+              ninguna pantalla: "este, ¿cuántos días lleva pedidos y cuándo?". */}
+          {personas.length > 0 && (
+            <div className="mt-4 border-t border-dark-800 pt-3">
+              <div className="mb-2 flex flex-wrap items-baseline gap-2">
+                <h4 className="text-[13px] font-bold text-dark-100">Quién ha pedido días</h4>
+                <span className="text-[12px] text-dark-500">
+                  {personas.length} persona{personas.length === 1 ? '' : 's'} · pulsa para ver los suyos
+                </span>
+                {personaSel && (
+                  <button onClick={() => setPersonaSel(null)}
+                    className="ml-auto text-[12px] font-semibold text-brand-300 hover:text-brand-200">
+                    Ver a todos
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {personas.map((p) => {
+                  const sel = personaSel === p.id
+                  return (
+                    <button key={p.id}
+                      onClick={() => {
+                        setPersonaSel(sel ? null : p.id)
+                        setAbierto(null)
+                        // Saltar a su primer día: si todos caen en octubre y
+                        // estás mirando septiembre, marcarlos no se ve.
+                        if (!sel && p.dias.length) {
+                          const d = new Date(`${p.dias[0].k}T12:00:00`)
+                          setMes(new Date(d.getFullYear(), d.getMonth(), 1))
+                        }
+                      }}
+                      className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[12.5px] transition-colors ${
+                        sel ? 'border-brand-400 bg-brand-500/20 text-brand-100'
+                          : 'border-dark-700 bg-dark-900 text-dark-300 hover:border-dark-600 hover:text-dark-100'}`}>
+                      <span className="font-semibold">{p.nombre}</span>
+                      <span className="tabular-nums text-dark-500">{p.dias.length}</span>
+                      {p.pendientes > 0 && (
+                        <span className="rounded-full bg-amber-500/20 px-1.5 text-[10.5px] font-bold text-amber-300">
+                          {p.pendientes} sin contestar
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+              {personaSel && (() => {
+                const p = personas.find((x) => x.id === personaSel)
+                if (!p) return null
+                return (
+                  <div className="mt-2.5 rounded-lg border border-brand-500/30 bg-brand-500/[0.07] p-3">
+                    <p className="mb-1.5 text-[13px] font-bold text-dark-100">
+                      {p.nombre} · {p.dias.length} día{p.dias.length === 1 ? '' : 's'}
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {p.dias.map((d) => (
+                        <span key={d.k}
+                          className={`rounded px-1.5 py-0.5 text-[11.5px] tabular-nums ${
+                            d.status === 'aprobado' ? 'bg-emerald-500/15 text-emerald-300'
+                              : 'bg-amber-500/15 text-amber-300'}`}
+                          title={`${d.motivo || ''}${d.status === 'pendiente' ? ' · sin contestar' : ''}`}>
+                          {d.k.split('-').reverse().slice(0, 2).join('/')}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+          )}
 
           {abierto && (
             <div className="mt-3 rounded-lg border border-dark-700 bg-dark-900/60 p-3">
@@ -434,6 +636,19 @@ export default function Turnos() {
     { estado: 'aprobado', desde: '', hasta: '', q: '' })
   const [cargandoHist, setCargandoHist] = useState(false)
   const [aprobados, setAprobados] = useState(new Set())  // 'did|fecha' con día libre CONCEDIDO
+
+  /* Cuántas personas tienen ya día concedido en cada fecha. Lo usa el selector
+     de rango de los días cerrados: cerrar una semana en la que ya le diste el
+     día a tres personas no es lo mismo que cerrarla vacía, y con las dos cosas
+     en pantallas distintas eso no se ve hasta que alguien se queja. */
+  const diasConGente = useMemo(() => {
+    const m = {}
+    for (const k of aprobados) {
+      const f = String(k).split('|')[1]
+      if (f) m[f] = (m[f] || 0) + 1
+    }
+    return m
+  }, [aprobados])
   const historial = useRef([])                            // para deshacer
   const [puedeDeshacer, setPuedeDeshacer] = useState(false)
   const gridOriginal = useRef({})                         // lo que había al cargar
@@ -1859,7 +2074,18 @@ export default function Turnos() {
           </p>
 
           {puedeAprobar ? (
-            <div className="flex flex-wrap items-end gap-2 rounded-lg border border-dark-700 bg-dark-900/60 p-3">
+            <div className="flex flex-wrap items-end gap-3 rounded-lg border border-dark-700 bg-dark-900/60 p-3">
+              {/* El calendario ANTES que los campos: es por donde se empieza.
+                  Los dos `input type=date` se quedan al lado porque para una
+                  fecha que ya sabes teclearla es más rápido, y porque son los
+                  que enseñan lo elegido en formato legible. */}
+              <div className="w-[16.5rem]">
+                <span className="mb-1 block text-[11px] text-dark-500">Elige el rango</span>
+                <SelectorRango
+                  desde={nuevoBloqueo.desde} hasta={nuevoBloqueo.hasta}
+                  ocupados={diasConGente}
+                  onElegir={({ desde, hasta }) => setNuevoBloqueo((b) => ({ ...b, desde, hasta }))} />
+              </div>
               <label className="flex flex-col gap-1 text-[11px] text-dark-500">Desde
                 <input type="date" value={nuevoBloqueo.desde}
                   onChange={(e) => setNuevoBloqueo((b) => ({ ...b, desde: e.target.value }))}
