@@ -31,6 +31,9 @@ PRUEBAS = [
     ("GET",  "/whatsapp/estado", None, lambda d: "configurado" in d),
     ("POST", "/work-orders/seguimiento", {}, lambda d: "recordatorios" in d),
     ("POST", "/scorecard/revisar-dia", {}, lambda d: "avisos" in d),
+    ("GET",  "/vehicles/duplicados", None, lambda d: d.get("parten_historial") == 0),
+    ("GET",  "/vehicles/itv/pendientes", None, lambda d: "sin_fecha" in d),
+    ("GET",  "/drivers/duplicados", None, lambda d: d.get("total") == 0),
 ]
 ok = mal = 0
 for metodo, ruta, body, comprueba in PRUEBAS:
