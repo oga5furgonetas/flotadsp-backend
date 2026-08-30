@@ -116,5 +116,15 @@ def main():
     return 0
 
 
+# ── PUENTE PARA PYTEST ─────────────────────────────────────────────────────
+# CI corre `pytest backend/tests -q`, y pytest solo ejecuta funciones que se
+# llamen `test_*`. Este fichero solo tenia `main()`, asi que sus casos NO se
+# estaban comprobando en CI: pasaban las 20 comprobaciones de los otros
+# ficheros y estos 37 se saltaban en silencio. Un test que no corre es peor que
+# no tenerlo, porque parece que cubre algo.
+def test_todos_los_casos():
+    assert main() == 0, "hay casos que fallan; el detalle sale por pantalla"
+
+
 if __name__ == "__main__":
     sys.exit(main())

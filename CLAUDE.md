@@ -404,10 +404,25 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    casa con 'n 43' — pasa de verdad en 'Calle Campanario n°43'. Cubierto en
    `backend/tests/test_direcciones.py`.
 
+36. **Un test que solo tiene `main()` NO lo ejecuta pytest, y CI usa pytest.**
+   `test_piezas.py` (37 casos) y `test_estados_cortex.py` (18) se escribieron
+   como scripts con `def main()`, asi que `pytest backend/tests -q` los
+   importaba y no corria ni uno: 55 comprobaciones pasando en verde sin
+   ejecutarse. No fallaban — es peor, parecian cubrir algo. Arreglado con un
+   `def test_todos_los_casos()` que llama a `main()` y comprueba que devuelve
+   0, sin tocar la forma de ejecutarlos a mano.
+   Para correrlos todos de golpe en local: `python backend/tests/run_all.py`,
+   que aguanta las dos formas y SALTA (sin marcar fallo) los que necesitan el
+   backend entero instalado — esos los corre CI.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
 - Commits en español, estilo `feat:`/`fix:`, y push a `main` (sincroniza 2 ordenadores).
+- Tests: `python backend/tests/run_all.py` (17 en local; CI corre tambien los
+  de API, que necesitan el backend instalado).
+- Smoke de produccion: `backend/scripts/smoke_endpoints.py` desde la maquina,
+  que comprueba que el DATO cuadra y no solo que responda 200.
 - Los checkers de `scripts/` deben quedar a cero antes de commitear:
   `check-i18n.mjs`, `check-routes.mjs`, `check-huerfanas.mjs`, `check-permisos.mjs`
   y `check_contracts.py`.
