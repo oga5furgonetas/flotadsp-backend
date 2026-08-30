@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { lista } from '../../lib/lista'
@@ -23,7 +23,7 @@ import {
   getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument, createVehicle,
   getVehicleDamageLedger, repairVehicleLedger, getSpareWheels, getMaintenanceLog, borrarApunteMantenimiento,
   getAllDocuments,
-  getExposicionVehiculos,
+  getExposicionVehiculos, getVehiculosDuplicados, fusionarVehiculos,
 } from '../api'
 import { getAdmin } from '../auth'
 
@@ -1909,6 +1909,139 @@ function PanelExposicion({ center, onAbrir }) {
 }
 
 
+/* ── FURGONETAS DADAS DE ALTA DOS VECES ────────────────────────────────────
+   El daño no es el duplicado, es que el HISTORIAL SE PARTE. En la 9873LTX una
+   ficha tiene 9 registros y la otra 8: ni los daños, ni el coste, ni las
+   inspecciones de esa furgoneta son ciertos en ninguna de las dos. Y 38 slots
+   del cuadrante apuntan a fichas duplicadas, así que «qué furgoneta lleva esta
+   persona» depende de cuál tocó el sistema esa mañana.
+
+   Primero salen las que tienen más de una ficha VIVA, que son las que están
+   haciendo daño ahora. Las que ya tienen la otra de baja están resueltas de
+   hecho y solo ensucian. */
+function PanelDuplicados() {
+  const [d, setD] = useState(null)
+  const [cargando, setCargando] = useState(true)
+  const [fusionando, setFusionando] = useState('')
+  const [msg, setMsg] = useState(null)
+
+  const cargar = useCallback(() => {
+    setCargando(true)
+    getVehiculosDuplicados()
+      .then((r) => setD(r.data))
+      .catch(() => setD({ duplicados: [] }))
+      .finally(() => setCargando(false))
+  }, [])
+  useEffect(cargar, [cargar])
+
+  const fusionar = async (grupo, conservar) => {
+    const absorber = grupo.fichas.filter((f) => f.id !== conservar).map((f) => f.id)
+    setFusionando(grupo.matricula); setMsg(null)
+    try {
+      const r = await fusionarVehiculos({ conservar, absorber })
+      const n = Object.values(r.data?.movidos || {}).reduce((a, b) => a + b, 0)
+      setMsg({ txt: `${grupo.matricula}: ${absorber.length} ficha${absorber.length > 1 ? 's' : ''} unida${absorber.length > 1 ? 's' : ''}, ${n} registros movidos.` })
+      cargar()
+    } catch (e) {
+      setMsg({ mal: true, txt: e?.response?.data?.detail || 'No se pudo unir.' })
+    } finally { setFusionando('') }
+  }
+
+  if (cargando) {
+    return (
+      <div className="card flex items-center justify-center gap-2 p-12 text-dark-400">
+        <Loader2 size={16} className="animate-spin" /> Buscando matrículas repetidas…
+      </div>
+    )
+  }
+  if (!d?.duplicados?.length) {
+    return (
+      <div className="card p-10 text-center text-[13px] text-dark-400">
+        Ninguna matrícula está dada de alta dos veces.
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3 text-[12.5px] text-dark-500">
+        <span><span className="cifra text-dark-300">{d.total}</span> matrículas repetidas</span>
+        <span><span className="cifra text-orange-300">{d.parten_historial}</span> con el historial partido</span>
+        <span><span className="cifra text-dark-400">{d.fichas_de_mas}</span> fichas de más</span>
+      </div>
+
+      {msg && (
+        <p className={`text-[12.5px] ${msg.mal ? 'text-red-300' : 'text-lime-300'}`}>{msg.txt}</p>
+      )}
+
+      <p className="max-w-[74ch] text-[12.5px] leading-relaxed text-dark-500">
+        Al unirlas <span className="text-dark-300">no se borra nada</span>: la ficha absorbida
+        queda marcada y se puede deshacer. Se mueven las inspecciones, los daños, las
+        incidencias, las órdenes, los documentos y los slots del cuadrante. El kilometraje se
+        queda con el mayor —un cuentakilómetros no baja— y lo que le falte a la que se conserva
+        lo hereda de la otra.
+      </p>
+
+      {d.duplicados.map((g) => (
+        <div key={g.matricula} className="card overflow-hidden">
+          <div className="flex flex-wrap items-center gap-2 border-b border-dark-800 px-3.5 py-2">
+            <span className="cifra font-semibold text-dark-100">{g.matricula}</span>
+            <span className="text-[12px] text-dark-500">
+              {g.fichas.length} fichas · <span className="cifra">{g.total_datos}</span> registros
+            </span>
+            {g.parte_historial ? (
+              <span className="rounded-full bg-orange-500/15 px-2 py-0.5 text-[10.5px] font-semibold text-orange-300 ring-1 ring-inset ring-orange-500/30">
+                historial partido
+              </span>
+            ) : (
+              <span className="rounded-full bg-dark-800 px-2 py-0.5 text-[10.5px] text-dark-400">
+                la otra ya está de baja
+              </span>
+            )}
+          </div>
+          <div className="divide-y divide-dark-800/60">
+            {g.fichas.map((f, i) => (
+              <div key={f.id} className="flex flex-wrap items-center gap-3 px-3.5 py-2">
+                <span className="cifra w-[100px] flex-none text-[12px] text-dark-500">{f.id.slice(0, 8)}</span>
+                <span className={`w-[62px] flex-none text-[12px] ${
+                  f.status === 'active' ? 'text-lime-400'
+                    : f.status === 'deleted' ? 'text-dark-600' : 'text-amber-300'}`}>
+                  {f.status}
+                </span>
+                <span className="min-w-0 flex-1 text-[12px] text-dark-400">
+                  alta <span className="cifra">{f.alta || '—'}</span>
+                  {f.km != null && <> · <span className="cifra">{f.km.toLocaleString('es')}</span> km</>}
+                  {f.vin && <> · VIN</>}
+                </span>
+                <span className="cifra text-[12px] text-dark-300">
+                  {f.total_datos > 0
+                    ? Object.entries(f.datos).filter(([, n]) => n > 0)
+                        .map(([c, n]) => `${c.slice(0, 6)} ${n}`).join(' · ')
+                    : <span className="text-dark-600">sin datos</span>}
+                </span>
+                {i === 0 ? (
+                  <button onClick={() => fusionar(g, f.id)} disabled={fusionando === g.matricula}
+                    className="btn-primary px-2.5 py-1 text-[12px] disabled:opacity-40"
+                    title="Une el resto de fichas en esta">
+                    {fusionando === g.matricula ? 'Uniendo…' : 'Unir en esta'}
+                  </button>
+                ) : (
+                  <button onClick={() => fusionar(g, f.id)} disabled={fusionando === g.matricula}
+                    className="rounded-md border border-dark-700 px-2.5 py-1 text-[12px] text-dark-400 hover:text-dark-200 disabled:opacity-40"
+                    title="Conservar esta en su lugar">
+                    conservar esta
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+
 export default function Vehiculos() {
   const { center, centers } = useOutletContext()
   const { t, lang } = useT()
@@ -1926,6 +2059,8 @@ export default function Vehiculos() {
   const [nBaja, setNBaja] = useState(0)
   const [verDocs, setVerDocs] = useState(false)
   const [verExpo, setVerExpo] = useState(false)
+  const [verDup, setVerDup] = useState(false)
+  const [nDup, setNDup] = useState(0)
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Deep-link desde la paleta de comandos: /panel/vehiculos?open=<id>
@@ -1949,6 +2084,9 @@ export default function Vehiculos() {
     // Cuántas hay de baja se pide siempre, aunque se esté viendo la flota
     // activa: es el número que va en la pestaña.
     getVehicles(center, 'baja').then(r => setNBaja(lista(r.data).length)).catch(() => setNBaja(0))
+    // El contador de repetidas va en la pestana: si no se ve el numero,
+    // nadie entra a mirar y el historial sigue partido.
+    getVehiculosDuplicados().then(r => setNDup(r.data?.parten_historial || 0)).catch(() => setNDup(0))
   }
   useEffect(load, [center, verBaja])
 
@@ -2022,14 +2160,17 @@ export default function Vehiculos() {
           // La documentación es su propia pestaña y no cuelga de ninguna
           // furgoneta: ver el comentario de PanelDocumentos.
           { id: 'expo', label: 'Lo que acumulan' },
+          { id: 'dup', label: 'Repetidas', n: nDup },
           { id: 'docs', label: t('veh.tab.docs') },
         ].map((x) => {
           const activa = x.id === 'docs' ? verDocs : x.id === 'expo' ? verExpo
-            : (!verDocs && !verExpo && verBaja === (x.id === 'baja'))
+            : x.id === 'dup' ? verDup
+            : (!verDocs && !verExpo && !verDup && verBaja === (x.id === 'baja'))
           return (
             <button key={x.id}
               onClick={() => { setVerDocs(x.id === 'docs'); setVerExpo(x.id === 'expo')
-                if (x.id !== 'docs' && x.id !== 'expo') setVerBaja(x.id === 'baja') }}
+                setVerDup(x.id === 'dup')
+                if (!['docs', 'expo', 'dup'].includes(x.id)) setVerBaja(x.id === 'baja') }}
               className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
                 activa ? 'bg-brand-500/20 text-brand-300' : 'text-dark-400 hover:text-dark-200'}`}>
               {x.label}
@@ -2040,6 +2181,7 @@ export default function Vehiculos() {
       </div>
 
       {verDocs && <PanelDocumentos />}
+      {verDup && <PanelDuplicados />}
       {verExpo && <PanelExposicion center={center} onAbrir={(id) => {
         const v = list.find((x) => x.id === id); if (v) setSel(v)
       }} />}

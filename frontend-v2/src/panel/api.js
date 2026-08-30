@@ -342,6 +342,10 @@ export const guardarNotaDireccion = (body) => api.post('/cortex/direcciones-prob
 export const consolidarDirecciones = () => api.post('/cortex/direcciones-problema/consolidar')
 export const getScorecardEnVivo = (center, semanas) =>
   api.get('/scorecard/en-vivo', { params: { ...centerParam(center), ...(semanas ? { semanas } : {}) } })
+/* Matriculas dadas de alta dos veces. El dano no es el duplicado: es que el
+   historial se parte entre las dos fichas y ninguna es cierta. */
+export const getVehiculosDuplicados = () => api.get('/vehicles/duplicados')
+export const fusionarVehiculos = (body) => api.post('/vehicles/fusionar', body)
 export const getExposicionVehiculos = (center) =>
   api.get('/vehicles/exposicion', { params: centerParam(center) })
 export const getAtribucionDanos = (center, dias) =>

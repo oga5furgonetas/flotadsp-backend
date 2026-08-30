@@ -6444,6 +6444,180 @@ async def vehiculos_exposicion(center: str = "", _=Depends(require_admin)):
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# FURGONETAS DADAS DE ALTA DOS VECES
+# ═══════════════════════════════════════════════════════════════════════════
+# Es el gotcha 9 otra vez, ahora en `vehicles`: alta sin indice unico sobre la
+# matricula, y una importacion repetida o dos personas dando de alta lo mismo
+# crean fichas paralelas. Medido el 30-08-2026: 24 matriculas repetidas, 28
+# fichas de mas y CINCO con mas de una ficha viva.
+#
+# EL DAÑO NO ES EL DUPLICADO, ES QUE EL HISTORIAL SE PARTE. En la 9873LTX una
+# ficha tiene 9 registros y la otra 8: ni la lista de daños, ni el coste, ni
+# las inspecciones de esa furgoneta son ciertos en ninguna de las dos. Y 38
+# slots del cuadrante apuntan a fichas duplicadas, asi que "que furgoneta lleva
+# esta persona" depende de cual toco el sistema esa manana.
+#
+# LA MATRICULA SE COMPARA NORMALIZADA. "9886 NFX" y "9886NFX" son la misma
+# furgoneta y estan las dos en produccion; comparando el texto crudo no salen.
+
+_VEH_COLS = (("inspections", "vehicle_id"), ("vehicle_damage_ledger", "vehicle_id"),
+             ("incidents", "vehicle_id"), ("ordenes_trabajo", "vehicle_id"),
+             ("vehicle_documents", "vehicle_id"), ("parking_assignments", "vehicle_id"))
+
+
+def _matricula_norm(p) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(p or "").upper())
+
+
+@api_router.get("/vehicles/duplicados")
+async def vehiculos_duplicados(_=Depends(require_admin)):
+    """Matriculas con mas de una ficha, y cuantos datos cuelgan de cada una."""
+    vs = await db.vehicles.find({}, {"_id": 0}).to_list(700)
+    grupos: dict = {}
+    for v in vs:
+        k = _matricula_norm(v.get("license_plate"))
+        if k:
+            grupos.setdefault(k, []).append(v)
+
+    salida = []
+    for k, fichas in grupos.items():
+        if len(fichas) < 2:
+            continue
+        detalle = []
+        for v in fichas:
+            cuenta = {}
+            for col, campo in _VEH_COLS:
+                try:
+                    cuenta[col] = await db[col].count_documents({campo: v["id"]})
+                except Exception:                            # noqa: BLE001
+                    cuenta[col] = 0
+            cuenta["cuadrante"] = await db.daily_assignments.count_documents(
+                {"slots.vehicle_id": v["id"]})
+            detalle.append({
+                "id": v["id"],
+                "matricula": v.get("license_plate"),
+                "status": v.get("status"),
+                "center": v.get("center"),
+                "alta": str(v.get("created_at") or "")[:10],
+                "km": v.get("mileage"),
+                "vin": v.get("vin"),
+                "datos": cuenta,
+                "total_datos": sum(cuenta.values()),
+            })
+        vivas = [d for d in detalle if d["status"] != "deleted"]
+        # La que se propone conservar es la que MAS historia tiene, no la mas
+        # nueva ni la que este activa: mover 9 registros a una ficha vacia es
+        # mas trabajo y mas riesgo que al reves. Si empatan, la activa.
+        detalle.sort(key=lambda d: (-d["total_datos"], d["status"] == "deleted",
+                                    d["status"] != "active", d["alta"]))
+        salida.append({
+            "matricula": k,
+            "fichas": detalle,
+            "vivas": len(vivas),
+            "parte_historial": len(vivas) > 1,
+            "sugerido_conservar": detalle[0]["id"],
+            "total_datos": sum(d["total_datos"] for d in detalle),
+        })
+    # Primero las que de verdad estan partiendo el historial.
+    salida.sort(key=lambda x: (not x["parte_historial"], -x["total_datos"]))
+    return {
+        "duplicados": salida,
+        "total": len(salida),
+        "parten_historial": sum(1 for x in salida if x["parte_historial"]),
+        "fichas_de_mas": sum(len(x["fichas"]) - 1 for x in salida),
+    }
+
+
+@api_router.post("/vehicles/fusionar")
+async def vehiculos_fusionar(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Une varias fichas de la misma furgoneta en una.
+
+    NO BORRA NADA. La absorbida se marca `merged_into` y pasa a `deleted`, asi
+    que un emparejamiento mal hecho se puede deshacer mirando el campo. Borrarla
+    dejaria huerfano cualquier documento que se hubiera escapado, y eso no se
+    nota hasta que alguien lo echa en falta.
+
+    SOLO SE FUSIONAN FICHAS CON LA MISMA MATRICULA NORMALIZADA. Por modelo o por
+    centro no: dos furgonetas iguales del mismo sitio son dos furgonetas.
+    """
+    conservar = str(data.get("conservar") or "").strip()
+    absorber = [str(x).strip() for x in (data.get("absorber") or []) if str(x).strip()]
+    if not conservar or not absorber:
+        raise HTTPException(400, "Hace falta cuál se conserva y cuáles se absorben")
+    if conservar in absorber:
+        raise HTTPException(400, "Una ficha no se puede absorber a sí misma")
+
+    buena = await db.vehicles.find_one({"id": conservar}, {"_id": 0})
+    if not buena:
+        raise HTTPException(404, "La ficha que se conserva no existe")
+    otras = await db.vehicles.find({"id": {"$in": absorber}}, {"_id": 0}).to_list(20)
+    if len(otras) != len(absorber):
+        raise HTTPException(404, "Alguna de las fichas a absorber no existe")
+
+    mat = _matricula_norm(buena.get("license_plate"))
+    for o in otras:
+        if _matricula_norm(o.get("license_plate")) != mat or not mat:
+            raise HTTPException(
+                400, "Solo se fusionan fichas con la MISMA matrícula. "
+                     "Dos furgonetas del mismo modelo y centro son dos furgonetas.")
+
+    movidos = {}
+    for col, campo in _VEH_COLS:
+        try:
+            r = await db[col].update_many({campo: {"$in": absorber}},
+                                          {"$set": {campo: conservar}})
+            if r.modified_count:
+                movidos[col] = r.modified_count
+        except Exception as e:                               # noqa: BLE001
+            logger.warning("Fusión de vehículos, %s: %s", col, e)
+
+    # El cuadrante apunta por slot: 38 en produccion. Sin repuntarlos, la
+    # asignacion del dia seguiria mirando a una ficha muerta y por pantalla
+    # saldria "sin furgoneta".
+    r = await db.daily_assignments.update_many(
+        {"slots.vehicle_id": {"$in": absorber}},
+        {"$set": {"slots.$[s].vehicle_id": conservar,
+                  "slots.$[s].vehicle_plate": buena.get("license_plate")}},
+        array_filters=[{"s.vehicle_id": {"$in": absorber}}])
+    if r.modified_count:
+        movidos["daily_assignments"] = r.modified_count
+
+    # Lo que le falte a la buena se lo queda de las otras. Nunca al reves: la
+    # buena manda, y un dato viejo no puede pisar uno nuevo.
+    def _vacio(v):
+        return v is None or (isinstance(v, str) and not v.strip())
+
+    completado = {}
+    for campo in ("vin", "brand", "model", "year", "center", "itv_date",
+                  "insurance_date", "oil_last_change_km"):
+        if _vacio(buena.get(campo)):
+            for o in otras:
+                if not _vacio(o.get(campo)):
+                    completado[campo] = o[campo]
+                    break
+    # El kilometraje se queda con el MAYOR: un cuentakilometros no baja, y si
+    # la ficha buena tiene 20.000 y la otra 60.000, los 60.000 son los reales.
+    kms = [x.get("mileage") for x in [buena] + otras
+           if isinstance(x.get("mileage"), (int, float))]
+    if kms and max(kms) != buena.get("mileage"):
+        completado["mileage"] = max(kms)
+
+    if completado:
+        await db.vehicles.update_one({"id": conservar}, {"$set": completado})
+
+    await db.vehicles.update_many(
+        {"id": {"$in": absorber}},
+        {"$set": {"status": "deleted", "merged_into": conservar,
+                  "merged_at": datetime.now(timezone.utc).isoformat(),
+                  "merged_by": user.get("name") or user.get("username") or "oficina"}})
+
+    logger.info("Fusionadas %d fichas de %s en %s: %s",
+                len(absorber), mat, conservar, movidos)
+    return {"ok": True, "conservada": conservar, "absorbidas": absorber,
+            "movidos": movidos, "completado": list(completado)}
+
+
 @api_router.get("/vehicles/last-inspections")
 async def vehicles_last_inspections(_=Depends(require_admin)):
     """Mapa vehicle_id → fecha de su última inspección (para el semáforo de la lista)."""
@@ -6680,6 +6854,27 @@ async def create_vehicle(data: VehicleCreate, _=Depends(require_admin)):
     vehicle = Vehicle(**data.model_dump())
     if getattr(vehicle, "center", None):
         vehicle.center = _centro_norm(vehicle.center, await _centros_conocidos())
+
+    # NO SE DA DE ALTA DOS VECES LA MISMA MATRICULA. Sin esto se acumularon 24
+    # matriculas repetidas y CINCO con el historial partido en dos fichas: las
+    # inspecciones en una, los daños en la otra, y ningun numero cierto en
+    # ninguna. Es el gotcha 9 (alta sin unico) aplicado a la flota.
+    #
+    # Se compara NORMALIZADA: "9886 NFX" y "9886NFX" estaban las dos en
+    # produccion y con el texto crudo no se ven. Y solo contra las VIVAS: una
+    # furgoneta devuelta y dada de alta otra vez meses despues es legitima.
+    mat = _matricula_norm(getattr(vehicle, "license_plate", None))
+    if mat:
+        async for otra in db.vehicles.find(
+                {"status": {"$nin": ["deleted"]}},
+                {"_id": 0, "id": 1, "license_plate": 1, "status": 1}):
+            if _matricula_norm(otra.get("license_plate")) == mat:
+                raise HTTPException(
+                    409, "La matrícula %s ya está dada de alta (%s). "
+                         "Si es otra furgoneta distinta, revisa la matrícula; si es "
+                         "la misma, edita la ficha que ya existe."
+                         % (otra.get("license_plate"), otra.get("status")))
+
     doc = serialize_doc(vehicle.model_dump())
     await db.vehicles.insert_one(doc)
     return vehicle
