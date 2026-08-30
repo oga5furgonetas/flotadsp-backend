@@ -7273,6 +7273,202 @@ async def vehiculos_rellenar_lote(data: dict = Body(...), user: dict = Depends(r
             "errores": errores, "detalle": guardadas}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# CHECKER DE ESTADOS DEL VEHICULO
+# ═══════════════════════════════════════════════════════════════════════════
+# LO QUE ENCONTRO LA AUDITORIA DEL 30-08-2026: TRECE furgonetas marcadas
+# `status: "taller"` —el 10% de la flota— sin `taller_desde` y sin ninguna orden
+# que las respalde. Nadie sabe desde cuando estan paradas, y por eso
+# `/work-orders/paradas` no puede decirlo: son 441 dias-furgoneta acumulados que
+# no se ven en ninguna pantalla.
+#
+# Un estado sin respaldo es el agujero por donde se escapa la operacion entera:
+# la furgoneta esta fuera de servicio, alguien lo sabe, y el sistema no.
+#
+# EL CHECKER NO CORRIGE. Detecta, clasifica y explica; corregir es otra llamada.
+# Un checker que arregla lo que encuentra no se puede leer para entender que
+# esta pasando, que es justo para lo que sirve.
+#
+# Y LA CLASIFICACION SE RECALCULA EN EL SERVIDOR al corregir, no se acepta del
+# cliente: si el cliente pudiera decir "esto es seguro", bastaria con mentir
+# para saltarse la clasificacion entera.
+
+_EST_INCIDENCIA_TALLER = "Vehículo en taller"
+
+
+def _est_clase(problema: str, evidencia: dict) -> str:
+    """SAFE_TO_AUTOCORRECT solo si se cumplen las CINCO condiciones:
+    determinista, con evidencia, reversible, sin ambiguedad y verificable."""
+    if problema == "taller_sin_fecha":
+        # La fecha sale de la incidencia de entrada (determinista y con
+        # evidencia); el campo hoy no existe, asi que quitarlo lo revierte;
+        # se busca la de ENTRADA y no la ultima, asi que no hay ambiguedad; y
+        # se comprueba releyendo. Las cinco.
+        return "SAFE_TO_AUTOCORRECT" if evidencia.get("fecha_incidencia") else "NEEDS_REVIEW"
+    if problema == "taller_sin_orden":
+        # Puede ser correcto: se llevo al taller sin abrir orden. Crear una por
+        # nuestra cuenta seria inventar un trabajo que nadie encargo.
+        return "NEEDS_REVIEW"
+    if problema == "orden_abierta_sin_taller":
+        return "NEEDS_REVIEW"
+    return "UNKNOWN"
+
+
+async def _est_hallazgos() -> dict:
+    """Estados de vehiculo que no cuadran con lo que hay detras."""
+    hallazgos = []
+    hoy = datetime.now(timezone.utc)
+
+    async for v in db.vehicles.find(
+            {"status": "taller"},
+            {"_id": 0, "id": 1, "license_plate": 1, "taller_desde": 1,
+             "updated_at": 1, "center": 1}):
+        # La incidencia DE ENTRADA A TALLER, no la ultima que haya. Una de
+        # ellas (4453 NKC) tiene otra mas reciente por un tema distinto:
+        # cogiendo la ultima se pondria una fecha equivocada que ademas parece
+        # medida, que es peor que no tener fecha.
+        inc = await db.incidents.find_one(
+            {"vehicle_id": v["id"],
+             "$or": [{"title": {"$regex": re.escape(_EST_INCIDENCIA_TALLER), "$options": "i"}},
+                     {"description": {"$regex": re.escape(_EST_INCIDENCIA_TALLER), "$options": "i"}}]},
+            {"_id": 0, "id": 1, "created_at": 1, "title": 1},
+            sort=[("created_at", 1)])
+        n_ordenes = await db.ordenes_trabajo.count_documents(
+            {"vehicle_id": v["id"], "estado": {"$nin": ["entregado", "anulada"]}})
+
+        if not v.get("taller_desde"):
+            ev = {"fecha_incidencia": (inc or {}).get("created_at"),
+                  "incidencia_id": (inc or {}).get("id"),
+                  "titulo": (inc or {}).get("title"),
+                  "updated_at": v.get("updated_at")}
+            dias = None
+            if ev["fecha_incidencia"]:
+                try:
+                    dias = (hoy - datetime.fromisoformat(
+                        str(ev["fecha_incidencia"]).replace("Z", "+00:00"))).days
+                except Exception:                            # noqa: BLE001
+                    pass
+            hallazgos.append({
+                "problema": "taller_sin_fecha",
+                "vehicle_id": v["id"],
+                "matricula": v.get("license_plate"),
+                "que_pasa": "Está en taller y no consta desde cuándo",
+                "impacto": ("No sale en las furgonetas paradas, así que nadie ve que "
+                            "lleva %d días fuera" % dias) if dias
+                           else "No se puede medir cuánto lleva parada",
+                "evidencia": ev,
+                "dias_estimados": dias,
+                "clase": _est_clase("taller_sin_fecha", ev),
+                "correccion": ("Poner taller_desde = %s, la fecha de la incidencia de entrada"
+                               % str(ev["fecha_incidencia"])[:10]) if ev["fecha_incidencia"]
+                              else "Sin incidencia de entrada: hace falta que alguien diga la fecha",
+            })
+
+        if not n_ordenes:
+            hallazgos.append({
+                "problema": "taller_sin_orden",
+                "vehicle_id": v["id"],
+                "matricula": v.get("license_plate"),
+                "que_pasa": "Está en taller sin ninguna orden abierta",
+                "impacto": ("El taller no recibe recordatorios, no hay presupuesto ni "
+                            "coste, y no consta qué se le está haciendo"),
+                "evidencia": {"incidencia": (inc or {}).get("title")},
+                "clase": _est_clase("taller_sin_orden", {}),
+                "correccion": ("Abrir la orden desde Órdenes de taller, o devolverla a "
+                               "activa si ya volvió"),
+            })
+
+    # Al reves: orden abierta con la furgoneta fuera de taller. Es peor de lo
+    # que parece — podria salir asignada a alguien estando en el taller.
+    async for o in db.ordenes_trabajo.find(
+            {"estado": {"$nin": ["entregado", "anulada"]}},
+            {"_id": 0, "id": 1, "numero": 1, "vehicle_id": 1, "matricula": 1}):
+        v = await db.vehicles.find_one({"id": o.get("vehicle_id")},
+                                       {"_id": 0, "status": 1, "license_plate": 1})
+        if v and v.get("status") not in ("taller", "deleted"):
+            hallazgos.append({
+                "problema": "orden_abierta_sin_taller",
+                "vehicle_id": o.get("vehicle_id"),
+                "matricula": v.get("license_plate") or o.get("matricula"),
+                "que_pasa": "Orden %s abierta y la furgoneta figura como '%s'"
+                            % (o.get("numero"), v.get("status")),
+                "impacto": "Puede salir asignada a alguien estando en el taller",
+                "evidencia": {"orden": o.get("numero"), "status": v.get("status")},
+                "clase": _est_clase("orden_abierta_sin_taller", {}),
+                "correccion": "Cerrar la orden si ya volvió, o marcarla en taller",
+            })
+
+    por_clase = {}
+    for h in hallazgos:
+        por_clase[h["clase"]] = por_clase.get(h["clase"], 0) + 1
+    dias = [h.get("dias_estimados") for h in hallazgos if h.get("dias_estimados")]
+    return {
+        "hallazgos": hallazgos,
+        "total": len(hallazgos),
+        "por_clase": por_clase,
+        "dias_furgoneta_parados": sum(dias) if dias else 0,
+    }
+
+
+@api_router.get("/checkers/estados-vehiculo")
+async def checker_estados_vehiculo(_=Depends(require_admin)):
+    """Estados de vehiculo que no cuadran con lo que hay detras."""
+    return await _est_hallazgos()
+
+
+@api_router.post("/checkers/estados-vehiculo/corregir")
+async def corregir_estados_vehiculo(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Aplica SOLO lo clasificado como SAFE_TO_AUTOCORRECT.
+
+    Antes de tocar nada se guarda el estado previo. Despues se vuelve a pasar el
+    checker y se comprueba que el hallazgo ha desaparecido: una correccion que
+    no se verifica es una suposicion.
+    """
+    solo = set(str(x) for x in (data.get("vehiculos") or []) if x)
+    estado = await _est_hallazgos()
+    seguros = [h for h in estado["hallazgos"]
+               if h["clase"] == "SAFE_TO_AUTOCORRECT"
+               and h["problema"] == "taller_sin_fecha"
+               and (not solo or h["vehicle_id"] in solo)]
+    if not seguros:
+        return {"corregidos": 0, "verificado": True,
+                "motivo": "no hay ningún hallazgo que se pueda corregir solo"}
+
+    quien = user.get("name") or user.get("username") or "oficina"
+    respaldo = []
+    for h in seguros:
+        v = await db.vehicles.find_one(
+            {"id": h["vehicle_id"]},
+            {"_id": 0, "id": 1, "license_plate": 1, "taller_desde": 1, "status": 1})
+        if v:
+            respaldo.append(v)
+    await db.app_meta.update_one(
+        {"_id": "respaldo_estados_vehiculo"},
+        {"$set": {"at": datetime.now(timezone.utc).isoformat(), "por": quien,
+                  "vehiculos": respaldo}}, upsert=True)
+
+    hechos = []
+    for h in seguros:
+        fecha = (h.get("evidencia") or {}).get("fecha_incidencia")
+        if not fecha:
+            continue
+        await db.vehicles.update_one(
+            {"id": h["vehicle_id"]},
+            {"$set": {"taller_desde": fecha,
+                      "taller_desde_origen": "incidencia de entrada",
+                      "taller_desde_puesto_por": quien,
+                      "taller_desde_puesto_en": datetime.now(timezone.utc).isoformat()}})
+        hechos.append({"matricula": h["matricula"], "taller_desde": str(fecha)[:10],
+                       "dias": h.get("dias_estimados")})
+
+    # VERIFICAR: el hallazgo tiene que haber desaparecido.
+    despues = await _est_hallazgos()
+    quedan = sum(1 for h in despues["hallazgos"] if h["problema"] == "taller_sin_fecha")
+    logger.info("Estados de vehiculo: %d corregidos, quedan %d sin fecha", len(hechos), quedan)
+    return {"corregidos": len(hechos), "detalle": hechos,
+            "quedan_sin_fecha": quedan, "verificado": quedan == 0}
+
+
 @api_router.get("/vehicles/last-inspections")
 async def vehicles_last_inspections(_=Depends(require_admin)):
     """Mapa vehicle_id → fecha de su última inspección (para el semáforo de la lista)."""

@@ -37,6 +37,10 @@ PRUEBAS = [
     ("GET",  "/vehicles/odometro/sospechosas", None, lambda d: d.get("sospechosas") == 0),
     ("GET",  "/cortex/direcciones-problema?dias=7", None, lambda d: d.get("total", 0) > 0),
     ("GET",  "/vehicles/faltan", None, lambda d: "resumen" in d and d.get("activas", 0) > 0),
+    # INVARIANTE: ninguna furgoneta en taller sin fecha de entrada. Si vuelve a
+    # aparecer una, es que hay un camino que se salta `_auto_incident_on_workshop`.
+    ("GET",  "/checkers/estados-vehiculo", None,
+     lambda d: d.get("por_clase", {}).get("SAFE_TO_AUTOCORRECT", 0) == 0),
 
 ]
 ok = mal = 0

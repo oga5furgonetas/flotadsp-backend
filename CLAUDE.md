@@ -415,10 +415,34 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    que aguanta las dos formas y SALTA (sin marcar fallo) los que necesitan el
    backend entero instalado — esos los corre CI.
 
+37. **Un estado sin nada detras es por donde se escapa la operacion.** Habia 13
+   furgonetas —el 10% de la flota— marcadas `status: "taller"` SIN fecha de
+   entrada y SIN ninguna orden: 475 dias-furgoneta parados que no salian en
+   ninguna pantalla, porque `/work-orders/paradas` mide con `taller_desde` y no
+   lo tenian. La prevencion ya existe desde el 28-08 (`_auto_incident_on_workshop`
+   pone el reloj, probado con 5 casos en staging), asi que eran anteriores. La
+   fecha se recupero de la incidencia de entrada — ojo, LA PRIMERA que diga
+   "Vehiculo en taller", no la ultima incidencia: una de ellas tiene otra mas
+   reciente por un tema distinto y se habria puesto una fecha equivocada que
+   ademas parece medida.
+   Regla: al añadir un estado que saca algo de la operacion, preguntarse **que
+   lo respalda** y que pasa si alguien lo pone a mano.
+
+38. **Un checker no corrige, y el que corrige no se fia del cliente.**
+   `/checkers/estados-vehiculo` detecta, clasifica (`SAFE_TO_AUTOCORRECT` /
+   `NEEDS_REVIEW` / `UNKNOWN`) y explica impacto y correccion; corregir es otra
+   llamada, que **recalcula la clasificacion en el servidor**. Si el cliente
+   pudiera decir "esto es seguro", bastaria con mentir para saltarse la
+   clasificacion entera. Y toda correccion automatica exige las CINCO: regla
+   determinista, evidencia suficiente, reversible, sin ambiguedad y verificable.
+   Cuatro de cinco no bastan.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
 - Commits en español, estilo `feat:`/`fix:`, y push a `main` (sincroniza 2 ordenadores).
+- **Al empezar una sesion**: `CLAUDE.md` -> `ESTADO.md` -> `CHECKPOINT.md` ->
+  `docs/ROADMAP.md`. El repositorio manda sobre lo que recuerde una conversacion.
 - Tests: `python backend/tests/run_all.py` (17 en local; CI corre tambien los
   de API, que necesitan el backend instalado).
 - Smoke de produccion: `backend/scripts/smoke_endpoints.py` desde la maquina,

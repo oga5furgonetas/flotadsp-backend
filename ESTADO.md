@@ -1,4 +1,143 @@
-# Estado a 26-08-2026 — para retomar desde otro sitio
+# Estado del proyecto
+
+> Este fichero es **la memoria del proyecto y el relevo entre sesiones**.
+> El repositorio y los datos mandan sobre lo que recuerde una conversación:
+> si algo aquí contradice producción, gana producción y esto está viejo.
+>
+> Lee **CLAUDE.md** primero (las reglas y los 36 gotchas), luego esto.
+>
+> Última actualización: **2026-08-30**
+
+---
+
+## Objetivo principal
+
+FlotaDSP es la capa de inteligencia operativa de un DSP de Amazon. El objetivo
+de negocio es que **Amazon la compre y se la imponga a sus DSPs**, empezando por
+convencer en España.
+
+El núcleo del producto —y donde está la diferenciación— es unir lo que en el
+resto de herramientas vive separado:
+
+```
+VEHÍCULO ↔ CONDUCTOR ↔ RUTA ↔ KILOMETRAJE ↔ INCIDENCIA
+        ↔ TALLER ↔ MANTENIMIENTO ↔ COSTE ↔ DISPONIBILIDAD ↔ DSP
+```
+
+Con eso unido y fiable se pueden producir decisiones que ninguna otra
+herramienta puede producir. Sin fiabilidad de datos, no se puede producir
+ninguna.
+
+---
+
+## Regla que ordena el trabajo
+
+**No se construye capa predictiva sobre datos que no son fiables.** Primero
+integridad, después reglas, después predicción. Lo contrario produce números que
+parecen medidos y no lo son, que es el peor resultado posible: se toman
+decisiones con ellos.
+
+---
+
+## Estado a 2026-08-30
+
+### Producción
+
+| | |
+|---|---|
+| Frontend | flotadsp.com (Cloudflare Pages) — sirviendo el último build |
+| Backend | flotadsp-backend.fly.dev — `/api/health` ok, mongo conectado |
+| Smoke test | **17 de 17** (`backend/scripts/smoke_endpoints.py`) |
+| Tests | **17 en local** (`python backend/tests/run_all.py`); CI corre también los de API |
+| Checkers | los nueve en verde, contraste AA incluido |
+
+### Datos (medido, no supuesto)
+
+| | |
+|---|---|
+| Furgonetas activas | 124 (185 fichas en total) |
+| Conductores | 218 |
+| Inspecciones | 3.806 · 1.641 revisadas a mano (43%) |
+| Paquetes de Cortex | 259.804 (con TTL: ~60 días de histórico) |
+| Daños en el libro | 680 · 213 abiertos |
+| Órdenes de taller | **2, las dos anuladas** |
+| Colecciones | 72 · 27 vivas, 18 muertas (>30 días), 7 vacías |
+
+---
+
+## Problemas abiertos, por prioridad
+
+### P0 — Integridad
+
+Ninguno crítico sin resolver a fecha de hoy. Resueltos esta noche: matrículas
+duplicadas, kilometrajes imposibles, conductor duplicado. Ver `docs/DATA_INTEGRITY.md`.
+
+### P1 — Operación crítica
+
+| Problema | Medida | Estado |
+|---|---|---|
+| Furgonetas en taller sin `taller_desde` | 13 de 13 · **441 días-furgoneta** parados sin trazabilidad | **Siguiente acción** |
+| ITV vencida | 16 furgonetas, una desde 2024-12-20 | Herramienta hecha, falta que Dani rellene |
+| ITV sin fecha | 56 de 124 activas (45%) | Herramienta hecha, falta rellenar |
+| Sin km del último cambio de aceite | 109 de 124 | Herramienta hecha, bloquea la predicción |
+| Módulo de órdenes de taller sin usar | 2 órdenes, ambas anuladas | Ver `docs/OPERATIONS.md` |
+
+### P2 — Automatización
+
+- Seguimiento del taller: **hecho**, sale solo a media mañana
+- Aviso de caída del DCR: **hecho**, sale con el resumen del día
+- Consolidación de direcciones antes del TTL: **hecha**, cada tarde
+- Recuperar `BUSINESS_CLOSED` reordenando ruta: **pendiente**, 438 paquetes/90 días
+
+### P3 — Ventaja competitiva
+
+- Origen de daños, expediente por furgoneta, exposición: **hechos**
+- Perfil operativo de cada taller (tiempo, coste, desviación, repetidas): **pendiente**, bloqueado por falta de órdenes
+- Mantenimiento predictivo: **bloqueado** por el km del último cambio
+
+### P4 — UX
+
+Sistema visual rehecho (Archivo + IBM Plex Mono, colores del logo, tablas
+densas). Aprobado por Dani el 29-08.
+
+---
+
+## Hallazgo sin resolver que necesita a Dani
+
+**El DCR se desplomó el viernes 28 y el sábado 29 de agosto.** 98,3% y 97,69%
+frente al 99,7-99,9% habitual: **237 paquetes** que no salieron. La causa es
+`BACK_TO_ORIGIN` (77 y 90, contra **1** el jueves) repartido en **30 rutas
+distintas**, así que no es un conductor ni una ruta — cambió algo en la estación.
+
+`UNKNOWN`: qué cambió. Solo Dani puede saberlo.
+
+---
+
+## Bloqueado por terceros
+
+- **WhatsApp**: código completo y probado, esperando a que Meta desbloquee la
+  cuenta de Dani (bloqueo antispam por SMS). Ver `docs/INTEGRATIONS.md`.
+- **Verificación de negocio en Meta**: Dani aún no tiene la empresa constituida;
+  la creará al firmar con Amazon.
+- **Clave de Google Geocoding**: sigue pendiente de rotar (se subió a un repo
+  público en el commit `2f0bb46`).
+
+---
+
+## Puntos de vuelta
+
+```bash
+git checkout punto-seguro-2026-08-29 -- .      # antes del trabajo autónomo
+git checkout estado-2026-08-30-madrugada -- .  # después, todo verde
+```
+
+Los cambios de **datos** no se revierten con eso: están en la base. Los
+respaldos viven en `app_meta/respaldo_fusion_vehiculos` y
+`app_meta/respaldo_odometro`.
+
+---
+
+# Lo anterior (26-08-2026 y antes)
 
 Este fichero es el relevo. Si abres una sesión nueva (otro ordenador, Claude en
 la web), lee **CLAUDE.md** primero —ahí están las reglas y los 27 gotchas— y
