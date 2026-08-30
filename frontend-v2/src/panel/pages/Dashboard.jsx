@@ -11,6 +11,7 @@ import { useT, LANG_LOCALE } from '../../i18n'
 import { lista } from '../../lib/lista'
 import { PageSkeleton } from '../components/Skeleton'
 import Activacion from '../components/Activacion'
+import { hoyLocal } from '../../lib/fecha'
 
 /* ── helpers ── */
 function greeting(t) {
@@ -355,7 +356,7 @@ function WeeklyChart({ data }) {
         {days.map(d => {
           const h = max > 0 ? Math.max(4, Math.round((d.inspecciones / max) * 100)) : 4
           const dPct = d.inspecciones > 0 ? (d.danos / d.inspecciones) * 100 : 0
-          const isToday = d.key === new Date().toISOString().slice(0, 10)
+          const isToday = d.key === hoyLocal()
           return (
             <div key={d.key} className="group relative flex flex-1 flex-col items-center gap-1">
               {d.inspecciones > 0 && (
@@ -513,7 +514,7 @@ export default function Dashboard() {
          desaparecía —el usuario abre su dashboard y no hay nada—. Si hoy aún
          no tiene datos, se enseña el último día que sí los tiene y se dice
          cuál es. Un panel que sólo sirve a media tarde no sirve. */
-      let day = new Date().toISOString().slice(0, 10)
+      let day = hoyLocal()
       let esHoy = true
       try {
         const d = await cortexDays(center && center !== 'Todos' ? center : '')
@@ -637,7 +638,7 @@ export default function Dashboard() {
   const active = fleet - inShop
   const breakdown = data.severity_breakdown || {}
   const critCount = (breakdown.grave || 0) + (breakdown.critico || 0)
-  const todayKey = new Date().toISOString().slice(0, 10)
+  const todayKey = hoyLocal()
   const todayInsp = data.weekly_activity?.[todayKey]?.inspecciones || 0
 
   const fleetSub = `${fleet} ${t('chart.total')} · ${inShop} ${t('dash.workshop').toLowerCase()}`

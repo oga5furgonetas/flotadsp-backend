@@ -24,7 +24,7 @@ import {
   getVehicleDamageLedger, repairVehicleLedger, getSpareWheels, getMaintenanceLog, borrarApunteMantenimiento,
   getAllDocuments,
   getExposicionVehiculos, getVehiculosDuplicados, fusionarVehiculos, getExpedienteVehiculo,
-  getOdometroSospechosas, sanearOdometro, getDatosQueFaltan, rellenarDatosLote,
+  getOdometroSospechosas, sanearOdometro, getDatosQueFaltan, rellenarDatosLote, getCheckerEstados, corregirEstados,
 } from '../api'
 import { getAdmin } from '../auth'
 
@@ -2075,6 +2075,111 @@ function Expediente({ vehicleId }) {
    El del aceite es el que más duele: el ritmo km/día ya se calcula bien para
    85 furgonetas, pero sin saber DESDE DÓNDE contar, ese ritmo no sirve de
    nada. Se sabe a qué velocidad va y no cuánto le queda. */
+/* ── ESTADOS QUE NO CUADRAN ─────────────────────────────────────────────────
+   Una furgoneta marcada «en taller» sin nada detrás es el agujero por donde se
+   escapa la operación: está fuera de servicio, alguien lo sabe, y el sistema
+   no. Aquí salen esos casos con lo que se puede hacer con cada uno.
+
+   Lo que se puede corregir solo se corrige; lo demás se explica y espera a una
+   persona. Que una furgoneta esté en taller sin orden PUEDE ser correcto —se
+   llevó y no se abrió orden— y crear una por nuestra cuenta sería inventar un
+   trabajo que nadie encargó. */
+const CLASE = {
+  SAFE_TO_AUTOCORRECT: { txt: 'se arregla solo', cls: 'bg-lime-500/15 text-lime-300 ring-lime-500/30' },
+  NEEDS_REVIEW: { txt: 'lo mira una persona', cls: 'bg-amber-500/15 text-amber-300 ring-amber-500/30' },
+  HIGH_RISK: { txt: 'riesgo alto', cls: 'bg-red-500/15 text-red-300 ring-red-500/30' },
+  UNKNOWN: { txt: 'sin clasificar', cls: 'bg-dark-800 text-dark-400 ring-dark-700' },
+}
+
+function PanelEstados() {
+  const [d, setD] = useState(null)
+  const [cargando, setCargando] = useState(true)
+  const [corrigiendo, setCorrigiendo] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  const cargar = useCallback(() => {
+    setCargando(true)
+    getCheckerEstados()
+      .then((r) => setD(r.data))
+      .catch(() => setD(null))
+      .finally(() => setCargando(false))
+  }, [])
+  useEffect(cargar, [cargar])
+
+  const corregir = async () => {
+    setCorrigiendo(true); setMsg(null)
+    try {
+      const r = await corregirEstados({})
+      setMsg(r.data.corregidos
+        ? { txt: `${r.data.corregidos} corregidos${r.data.verificado ? ' y comprobado' : ', pero quedan casos'}.` }
+        : { txt: r.data.motivo || 'No había nada que corregir solo.' })
+      cargar()
+    } catch (e) {
+      setMsg({ mal: true, txt: e?.response?.data?.detail || 'No se pudo.' })
+    } finally { setCorrigiendo(false) }
+  }
+
+  if (cargando) {
+    return (
+      <div className="card flex items-center justify-center gap-2 p-10 text-dark-400">
+        <Loader2 size={15} className="animate-spin" /> Comprobando estados…
+      </div>
+    )
+  }
+  if (!d?.hallazgos?.length) {
+    return (
+      <div className="card p-10 text-center text-[13px] text-dark-400">
+        Todos los estados cuadran con lo que hay detrás.
+      </div>
+    )
+  }
+
+  const seguros = d.por_clase?.SAFE_TO_AUTOCORRECT || 0
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-[12.5px] text-dark-500">
+          <span className="cifra text-dark-300">{d.total}</span> hallazgos ·{' '}
+          <span className="cifra text-lime-300">{seguros}</span> se arreglan solos ·{' '}
+          <span className="cifra text-amber-300">{d.por_clase?.NEEDS_REVIEW || 0}</span> necesitan a alguien
+          {d.dias_furgoneta_parados > 0 && (
+            <> · <span className="cifra text-orange-300">{d.dias_furgoneta_parados}</span> días-furgoneta parados</>
+          )}
+        </span>
+        {seguros > 0 && (
+          <button onClick={corregir} disabled={corrigiendo}
+            className="btn-primary ml-auto px-3 py-1.5 text-[12.5px] disabled:opacity-50">
+            {corrigiendo ? 'Corrigiendo…' : `Corregir los ${seguros} seguros`}
+          </button>
+        )}
+      </div>
+
+      {msg && <p className={`text-[12.5px] ${msg.mal ? 'text-red-300' : 'text-lime-300'}`}>{msg.txt}</p>}
+
+      <div className="space-y-1.5">
+        {d.hallazgos.map((h, i) => {
+          const c = CLASE[h.clase] || CLASE.UNKNOWN
+          return (
+            <div key={`${h.vehicle_id}-${h.problema}-${i}`} className="card px-3.5 py-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="cifra font-semibold text-dark-100">{h.matricula}</span>
+                <span className="text-[13px] text-dark-300">{h.que_pasa}</span>
+                <span className={`ml-auto rounded-full px-2 py-0.5 text-[10.5px] font-semibold ring-1 ring-inset ${c.cls}`}>
+                  {c.txt}
+                </span>
+              </div>
+              <p className="mt-1 text-[12px] text-dark-500">{h.impacto}</p>
+              <p className="mt-0.5 text-[12px] text-brand-300">{h.correccion}</p>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+
 function PanelFaltan() {
   const [d, setD] = useState(null)
   const [campo, setCampo] = useState('oil_last_change_km')
@@ -2586,6 +2691,10 @@ export default function Vehiculos() {
           <div>
             <h2 className="mb-2 text-[15px] font-semibold text-dark-100">Kilometrajes imposibles</h2>
             <PanelOdometro />
+          </div>
+          <div>
+            <h2 className="mb-2 text-[15px] font-semibold text-dark-100">Estados que no cuadran</h2>
+            <PanelEstados />
           </div>
           <div>
             <h2 className="mb-2 text-[15px] font-semibold text-dark-100">Datos que faltan</h2>

@@ -16,7 +16,7 @@ import {
 import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
 import { canSee } from '../auth'
-import { isoLocal } from '../../lib/fecha'
+import { isoLocal, hoyLocal } from '../../lib/fecha'
 
 /* Cuantos dias se pueden pintar de una vez. 92 es un trimestre: por encima
    son miles de celdas y la pantalla se arrastra sin que nadie lo necesite. */
@@ -684,7 +684,7 @@ export default function Turnos() {
   const tablaRef = useRef(null)
   // El mes NO sale del fichero: la plantilla de Amazon arrastra en la cabecera
   // el texto del mes anterior ("Desde: 01-06-2026" en un fichero de agosto).
-  const [mesImport, setMesImport] = useState(() => new Date().toISOString().slice(0, 7))
+  const [mesImport, setMesImport] = useState(() => hoyLocal().slice(0, 7))
 
   /* Ver las peticiones lo puede hacer cualquiera del centro; decidirlas no.
      Quién puede se configura por usuario en Usuarios → permisos, porque cada
@@ -1386,7 +1386,7 @@ export default function Turnos() {
        quedo sin respuesta: o vino a trabajar sin saberlo, o no vino sin
        permiso. Se marca y se pone la primera, porque enterrada entre las demas
        no la ve nadie — habia una asi en produccion el 22-08-2026. */
-    const hoyIso = new Date().toISOString().slice(0, 10)
+    const hoyIso = hoyLocal()
     for (const g of m.values()) {
       g.fechas.sort()
       g.caducada = g.fechas[0] < hoyIso

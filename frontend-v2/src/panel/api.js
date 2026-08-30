@@ -358,6 +358,11 @@ export const guardarItvLote = (body) => api.put('/vehicles/itv/lote', body)
    predecir nada. */
 /* Que dato le falta a cada furgoneta y cuantas lo tienen vacio. Un dato que
    cuesta dos minutos por unidad no se rellena nunca de una en una. */
+/* Estados que no cuadran con lo que hay detras: una furgoneta en taller sin
+   fecha o sin orden. Detecta y clasifica; corregir es otra llamada, y la
+   clasificacion se recalcula en el servidor. */
+export const getCheckerEstados = () => api.get('/checkers/estados-vehiculo')
+export const corregirEstados = (body) => api.post('/checkers/estados-vehiculo/corregir', body || {})
 export const getDatosQueFaltan = (campo) =>
   api.get('/vehicles/faltan', { params: campo ? { campo } : {} })
 export const rellenarDatosLote = (body) => api.put('/vehicles/faltan/lote', body)

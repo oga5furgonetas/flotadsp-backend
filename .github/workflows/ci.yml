@@ -47,6 +47,8 @@ jobs:
         run: node scripts/check-contraste.mjs
       - name: Checker extension (mensajes que se pierden entre los tres saltos)
         run: node scripts/check-extension.mjs
+      - name: Checker patrones (codigo que repite un bug ya conocido)
+        run: node scripts/check-patrones.mjs
 
   backend:
     name: Backend (sintaxis + contratos + tests de API)

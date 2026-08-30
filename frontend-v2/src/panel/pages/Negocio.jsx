@@ -16,6 +16,7 @@ import {
   adminGetEmisor, adminSetEmisor, revisarFacturacion as revisarFacturacionApi, getSaludSistema,
 } from '../api'
 import { API_BASE } from '../../services/api'
+import { hoyLocal } from '../../lib/fecha'
 
 // ST labels are now translated inside the component via t()
 
@@ -230,7 +231,7 @@ function EditorTarifas() {
    lleva la cuenta. El botón de conciliar lee el extracto que descargas del
    banco y marca solos los que ya han entrado — sin API ni claves. */
 function Cobros() {
-  const [mes, setMes] = useState(() => new Date().toISOString().slice(0, 7))
+  const [mes, setMes] = useState(() => hoyLocal().slice(0, 7))
   const [datos, setDatos] = useState(null)
   const [err, setErr] = useState('')
   const [aviso, setAviso] = useState('')

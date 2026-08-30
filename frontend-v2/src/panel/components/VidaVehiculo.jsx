@@ -35,6 +35,7 @@
    ───────────────────────────────────────────────────────────────────────────── */
 import { useMemo, useState } from 'react'
 import { useT } from '../../i18n'
+import { hoyLocal } from '../../lib/fecha'
 
 const DIA = 86400000
 const SEV = { leve: '#fbbf24', moderado: '#fb923c', grave: '#f87171', critico: '#ef4444' }
@@ -60,7 +61,7 @@ export default function VidaVehiculo({ ledger }) {
   const meses = MESES[lang] || MESES.en
 
   const datos = useMemo(() => {
-    const hoyMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T12:00:00Z`)
+    const hoyMs = Date.parse(`${hoyLocal()}T12:00:00Z`)
     const items = []
     let descartados = 0
 
