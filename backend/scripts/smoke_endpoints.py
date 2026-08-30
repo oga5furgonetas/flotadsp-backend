@@ -34,6 +34,8 @@ PRUEBAS = [
     ("GET",  "/vehicles/duplicados", None, lambda d: d.get("parten_historial") == 0),
     ("GET",  "/vehicles/itv/pendientes", None, lambda d: "sin_fecha" in d),
     ("GET",  "/drivers/duplicados", None, lambda d: d.get("total") == 0),
+    ("GET",  "/vehicles/odometro/sospechosas", None, lambda d: d.get("sospechosas") == 0),
+    ("GET",  "/cortex/direcciones-problema?dias=7", None, lambda d: d.get("total", 0) > 0),
 ]
 ok = mal = 0
 for metodo, ruta, body, comprueba in PRUEBAS:
