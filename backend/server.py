@@ -1204,6 +1204,9 @@ async def _ensure_tenant_indexes(db_name: str):
     # Al revés, la creación falla (ya hay duplicados) y todo se queda igual.
     await _dedupe_cortex_stations(tdb)
     await _idx_unico(tdb.cortex_stations, "service_area_id")
+    # La foto diaria: se consulta por dia y por centro.
+    await _idx(tdb.cortex_day_snapshots, "service_day")
+    await _idx(tdb.cortex_day_snapshots, "center")
     # cortex_events es un registro que SOLO se escribe (0 lecturas en todo el
     # codigo). Se le pone caducidad de 90 dias para que no crezca sin fin en un
     # Atlas de 512 MB: conserva la traza reciente y libera el resto solo.
@@ -12127,6 +12130,11 @@ async def start_itv_whatsapp_scheduler():
     # Consolidar las direcciones ANTES de que el TTL de Cortex borre los
     # paquetes. Va con el cierre de la tarde, cuando el dia ya no se mueve.
     asyncio.create_task(_bucle_aviso("dirs_consolidar", "turno_tarde", consolidar_direcciones))
+    # Congelar el dia de Cortex NO va con los avisos: aquellos disparan una vez
+    # a una hora fija, y aqui hacen falta varias pasadas por la tarde-noche
+    # porque cada centro cierra a su hora y el dato se borra solo al dia
+    # siguiente (medido: a los 3 dias se ha perdido el 97 % de las devoluciones).
+    asyncio.create_task(_bucle_congelar())
 
 
 @api_router.post("/whatsapp/avisar-itv")
@@ -26697,10 +26705,38 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
     thr, _meta = await _sc_thresholds(center or "OGA5", wnum)
     thr_dcr = (thr or {}).get("dcr") or {}
 
+    # LA FOTO CONGELADA MANDA SOBRE EL RECUENTO EN VIVO.
+    # El recuento de arriba usa `state`, que es el estado de AHORA: un paquete
+    # devuelto el viernes y re-repartido el lunes ya no consta como devuelto el
+    # viernes. Medido contra Cortex: a los 3 dias se ha borrado el 97 % de las
+    # devoluciones del dia. `_bucle_congelar` guarda cada tarde el maximo de
+    # fallos visto, y esa foto es la que vale para los dias pasados.
+    snaps: dict = {}
+    qs: dict = {"service_day": {"$gte": desde}}
+    if "center" in q:
+        qs["center"] = q["center"]
+    async for s in db.cortex_day_snapshots.find(
+            qs, {"_id": 0, "service_day": 1, "entregados": 1, "fallos": 1,
+                 "en_vuelo": 1, "no_despachados": 1, "total": 1}):
+        # Sin centro concreto hay una foto POR centro y hay que sumarlas: coger
+        # una sola dejaria fuera los paquetes del resto, sin avisar.
+        a = snaps.setdefault(s["service_day"], {"entregados": 0, "fallos": 0,
+                                                "en_vuelo": 0, "no_despachados": 0,
+                                                "total": 0})
+        for k in a:
+            a[k] += s.get(k) or 0
+
     semanas_out, dias_out = [], []
     porsem: dict = {}
     for d in sorted(dias):
         rep = _reparte(dias[d])
+        sn = snaps.get(d)
+        # Se cambia solo si la foto vio MAS fallos. Asi el dia en curso, que
+        # sigue creciendo entre foto y foto, no se queda con un numero viejo.
+        rep["congelado"] = bool(sn and sn["fallos"] > rep["fallos"])
+        if rep["congelado"]:
+            for k in ("entregados", "fallos", "en_vuelo", "no_despachados", "total"):
+                rep[k] = sn[k]
         rep["fecha"] = d
         rep["dcr"] = _sc_dcr(rep["entregados"], rep["fallos"])
         # Un dia con muchos paquetes aun en la furgoneta no esta cerrado.
@@ -26798,6 +26834,211 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
 DCR_CAIDA_MIN = 1.5      # puntos por debajo de la mediana
 DCR_FALLOS_MIN = 40      # y ademas, tantos paquetes fallados como minimo
 DCR_DIAS_REF = 14        # cuantos dias cerrados se miran para la mediana
+
+
+# ── CONGELAR EL DIA ─────────────────────────────────────────────────────────
+# `cortex_packages.state` es el estado de AHORA, no el del dia de servicio. Un
+# paquete que volvio a la nave el viernes se re-reparte el lunes y su `state`
+# pasa a DELIVERED: el viernes deja de tener esa devolucion, en silencio.
+#
+# Medido el 30-08-2026 contra cuatro capturas de Cortex de OGA5:
+#
+#     dia          Cortex ve   nosotros vemos   perdido
+#     29-08 (1 d)      95            83           13 %
+#     28-08 (2 d)     130            34           74 %
+#     27-08 (3 d)     144             4           97 %
+#     26-08 (4 d)      97             6           94 %
+#
+# A los tres dias se ha borrado el 97 % de las devoluciones del dia. La pantalla
+# de scorecard enseña entonces dias historicos casi perfectos, y ese es
+# justamente el numero que Amazon contrastaria contra su propio Cortex.
+#
+# No se puede reconstruir hacia atras: el `timeline` no guarda todos los saltos
+# (para el 28-08 da 155 donde Cortex dice 130, porque recoge tambien vueltas de
+# otros dias). Lo unico honesto es dejar de perderlo de hoy en adelante.
+#
+# Como se congela, sin tener que adivinar cuando cierra el dia: los fallos de un
+# dia SOLO se erosionan hacia abajo —un paquete devuelto pasa a entregado, nunca
+# al reves— asi que el maximo de fallos observado a lo largo del dia ES el pico
+# real. Se toma una foto cada media hora en la ventana de cierre y se guarda la
+# que mas fallos tenga. Un high-water mark no necesita saber la hora de cierre,
+# que es justo el dato que no tenemos y que cambia por centro y por dia.
+
+CX_SNAP_CADA_MIN = 30          # cada cuanto se toma una foto
+CX_SNAP_VENTANA = (17, 4)      # hora de Madrid: de las 17:00 a las 04:00
+CX_SNAP_DIAS = 3               # cuantos dias hacia atras se refresca cada vuelta
+
+
+async def _cx_foto_dia(dia: str, centro: str) -> Optional[dict]:
+    """Contadores de un dia y centro, tal y como se ven AHORA MISMO."""
+    cur = db.cortex_packages.aggregate([
+        {"$match": {"service_day": dia,
+                    "center": {"$regex": re.escape(centro), "$options": "i"}}},
+        {"$group": {"_id": "$state", "n": {"$sum": 1}}}])
+    por_estado = {}
+    async for r in cur:
+        por_estado[r["_id"] or "NONE"] = r["n"]
+    if not por_estado:
+        return None
+
+    ok = sum(n for s, n in por_estado.items() if s in _CX_OK)
+    vuelo = sum(n for s, n in por_estado.items() if s in _CX_EN_VUELO)
+    fuera = sum(n for s, n in por_estado.items() if s in _CX_NO_DESPACHADO)
+    fallos = sum(n for s, n in por_estado.items()
+                 if s not in _CX_OK and s not in _CX_EN_VUELO
+                 and s not in _CX_NO_DESPACHADO)
+    total = ok + vuelo + fuera + fallos
+    return {"por_estado": por_estado, "entregados": ok, "en_vuelo": vuelo,
+            "no_despachados": fuera, "fallos": fallos, "total": total,
+            "dcr": _sc_dcr(ok, fallos),
+            "pct_en_vuelo": round(vuelo / max(total, 1) * 100, 2)}
+
+
+def _snap_mejora(prev: Optional[dict], fallos: int, cerrado: bool,
+                 antiguedad_d: int = 0) -> bool:
+    """Decide si la foto nueva sustituye a la guardada.
+
+    Separada de la BD a proposito: es la unica regla del modulo que se puede
+    equivocar en silencio —guardar de menos deja el dia mal para siempre, y el
+    dia siguiente ya no hay forma de recuperarlo— asi que tiene que ser
+    probable sin Mongo delante.
+
+    Un dia con media flota aun en la calle NO es la foto del dia: es una foto de
+    media tarde. Se guarda si no hay nada mejor, pero nunca pisa una de un dia
+    ya cerrado, aunque tuviera mas fallos: a media tarde hay paquetes contados
+    como fallo que todavia se van a entregar.
+    """
+    if not prev:
+        # OJO: un dia que ya lleva mas de un dia cerrado esta erosionado —el
+        # re-reparto le ha borrado los fallos— asi que la foto de ahora NO es la
+        # foto de ese dia. Guardarla seria inventar un numero que ademas
+        # PARECERIA medido, y eso es peor que no tener el dia: un hueco se ve,
+        # un dato falso no. Los dias anteriores al despliegue estan perdidos y
+        # asi hay que contarlos.
+        return antiguedad_d <= 1
+    if prev.get("cerrado") and not cerrado:
+        return False                       # no degradar una foto buena
+    if cerrado and not prev.get("cerrado"):
+        return True                        # una foto de dia cerrado siempre gana
+    # Misma categoria: manda el maximo de fallos (high-water mark), porque la
+    # erosion solo los borra.
+    return fallos > (prev.get("fallos") or 0)
+
+
+async def _congelar_dia(dia: str, centro: str) -> Optional[dict]:
+    """Guarda la foto de un dia si mejora a la que ya hubiera.
+
+    "Mejora" = tiene mas fallos. Es el high-water mark: como la erosion solo
+    borra fallos, la foto con mas es la mas cercana a la verdad del dia.
+    """
+    foto = await _cx_foto_dia(dia, centro)
+    if not foto:
+        return None
+    clave = "%s_%s" % (centro, dia)
+    prev = await db.cortex_day_snapshots.find_one({"_id": clave})
+    cerrado = foto["pct_en_vuelo"] <= _CX_UMBRAL_EN_VUELO
+    try:
+        antig = (datetime.now(timezone.utc).date()
+                 - datetime.strptime(dia, "%Y-%m-%d").date()).days
+    except Exception:                                            # noqa: BLE001
+        antig = 0
+    if not _snap_mejora(prev, foto["fallos"], cerrado, antig):
+        return None
+
+    doc = dict(foto)
+    doc.update({"_id": clave, "center": centro, "service_day": dia,
+                "cerrado": cerrado, "tomado_at": datetime.now(timezone.utc),
+                "fotos": (prev or {}).get("fotos", 0) + 1})
+    await db.cortex_day_snapshots.update_one({"_id": clave}, {"$set": doc}, upsert=True)
+    return doc
+
+
+async def congelar_dias_cortex(dias: Optional[list] = None) -> dict:
+    """Congela los ultimos dias de TODOS los DSP.
+
+    Gotcha 26: esto es un cron, no tiene sesion, y `db` sin `set_current_org_db`
+    caeria siempre en la BD principal. Aqui se recorren las orgs a mano.
+    """
+    hoy = datetime.now(timezone.utc).date()
+    objetivo = dias or [(hoy - timedelta(days=k)).strftime("%Y-%m-%d")
+                        for k in range(CX_SNAP_DIAS)]
+    orgs = await global_db.organizations.find(
+        {"status": {"$in": ["active", "trial"]}},
+        {"_id": 0, "id": 1, "name": 1, "slug": 1, "db_name": 1,
+         "account_type": 1}).to_list(500)
+    if not orgs:
+        orgs = [None]                      # instalacion de un solo tenant
+
+    guardados, tocados = 0, []
+    anterior = _current_db_name.get()
+    try:
+        for o in orgs:
+            set_current_org_db(_tenant_db_name(o))
+            try:
+                centros = await _centros_conocidos()
+            except Exception as e:
+                logger.error("congelar: centros de %s: %s", _tenant_db_name(o), e)
+                continue
+            for centro in sorted(centros or set()):
+                for dia in objetivo:
+                    try:
+                        d = await _congelar_dia(dia, centro)
+                    except Exception as e:
+                        logger.error("congelar %s %s: %s", centro, dia, e)
+                        continue
+                    if d:
+                        guardados += 1
+                        tocados.append({"centro": centro, "dia": dia,
+                                        "fallos": d["fallos"], "dcr": d["dcr"],
+                                        "cerrado": d["cerrado"]})
+    finally:
+        set_current_org_db(anterior)
+    if guardados:
+        logger.info("Congelados %d dias de Cortex", guardados)
+    return {"guardados": guardados, "detalle": tocados[:40]}
+
+
+async def _bucle_congelar():
+    """Toma una foto cada media hora dentro de la ventana de cierre.
+
+    No usa `_bucle_aviso` a proposito: aquel dispara UNA vez al dia a una hora
+    fija, y aqui hace falta justo lo contrario —varias pasadas— porque no
+    sabemos a que hora cierra cada centro y el dato se pierde al dia siguiente.
+    """
+    from zoneinfo import ZoneInfo
+    madrid = ZoneInfo("Europe/Madrid")
+    desde, hasta = CX_SNAP_VENTANA
+    while True:
+        try:
+            h = datetime.now(madrid).hour
+            # La ventana cruza la medianoche: 17..23 o 0..4
+            if h >= desde or h < hasta:
+                await congelar_dias_cortex()
+        except Exception as e:
+            logger.error("Bucle de congelacion: %s", e)
+        await asyncio.sleep(CX_SNAP_CADA_MIN * 60)
+
+
+@api_router.post("/cortex/congelar-dia")
+async def disparar_congelar_dia(data: dict = Body(default={}), _=Depends(require_admin)):
+    """Congela a mano (util para probar y para recuperar el dia en curso)."""
+    dias = data.get("dias")
+    if isinstance(dias, str):
+        dias = [dias]
+    return await congelar_dias_cortex(dias if isinstance(dias, list) else None)
+
+
+@api_router.get("/cortex/dias-congelados")
+async def dias_congelados(center: str = "", limite: int = 60, _=Depends(require_admin)):
+    """Lo que quedo congelado, para poder comparar con Cortex."""
+    q: dict = {}
+    if center and center not in ("Todos", "todos"):
+        q["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
+    filas = await db.cortex_day_snapshots.find(q, {"por_estado": 0}).sort(
+        "service_day", -1).to_list(max(1, min(limite, 400)))
+    for f in filas:
+        f["id"] = f.pop("_id", None)
+    return {"dias": filas}
 
 
 async def revisar_dcr_diario() -> list:

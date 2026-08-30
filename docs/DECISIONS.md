@@ -116,3 +116,38 @@ no en la rampa `dark`, porque la rampa se invierte en modo día y dejaría texto
 claro sobre cian claro.
 
 **Revertir.** `git checkout punto-seguro-2026-08-29 -- frontend-v2/src/index.css frontend-v2/tailwind.config.js`
+
+---
+
+## 2026-08-30 · Del DCR no se reconstruye el pasado: se deja de perder el presente
+
+**Problema.** `cortex_packages.state` es el estado de ahora, no el del día de
+servicio. Un paquete devuelto el viernes y reentregado el lunes deja de constar
+como devuelto el viernes. Medido contra cuatro capturas de Cortex: a los tres
+días se ha borrado el **97 %** de las devoluciones de ese día.
+
+**Lo que se descartó.** Reconstruir el histórico desde el `timeline`. Es la
+opción que arreglaría también el pasado, y por eso se probó primero — pero no
+guarda todos los saltos: para el 28-08 da 155 devueltos donde Cortex dice 130,
+porque recoge además vueltas de otros días. Un histórico reconstruido con ese
+método daría números que **parecen medidos** y no lo son, que es peor que el
+agujero: un hueco se ve, un dato falso no.
+
+**Decisión.** Congelar el día en `cortex_day_snapshots`, quedándose con la foto
+que **más fallos** tenga (high-water mark). Los días anteriores al 30-08-2026 se
+dan por perdidos y se marcan «sin foto» en la pantalla, con el DCR como `≥`.
+
+**Por qué el máximo y no la foto de una hora fija.** No sabemos a qué hora cierra
+cada centro, y esa hora cambia por día y por nave. Pero sí sabemos que la erosión
+solo va en un sentido —un paquete devuelto pasa a entregado, nunca al revés—, así
+que el máximo observado ES el pico real. La regla no necesita el dato que no
+tenemos.
+
+**Lo que costó no dar por buena la primera respuesta.** Tres análisis seguidos
+dijeron que la alerta de DCR generaba falsos positivos sistemáticos. Era falso:
+los tres scripts llevaban las listas de estados copiadas a mano y sin
+`PENDING_PICKUP`. Con las listas leídas del propio `server.py`, el sesgo es de
++0,14 pp — la alerta estaba sana desde el principio (gotcha 40).
+
+**Revertir.** Quitar `_bucle_congelar` del arranque; la lectura vuelve sola al
+recuento en vivo en cuanto no haya fotos, sin tocar nada más.

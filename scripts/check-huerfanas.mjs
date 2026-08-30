@@ -38,6 +38,14 @@ const SIN_UI_A_PROPOSITO = new Set([
   // Telegram y a una linea de log que dura minutos, asi que no habia nada que
   // leer. No lleva pantalla a proposito: nadie deberia mirar esto a diario.
   'GET /client-errors',
+  // La foto diaria de Cortex. La toma sola `_bucle_congelar` cada media hora
+  // por la tarde; estas dos son para operar y auditar a mano. La que SÍ tiene
+  // pantalla es `/scorecard/en-vivo`, que ya devuelve el campo `congelado` de
+  // cada día — que es donde esto se ve. Un panel propio para comparar con
+  // Cortex tendría sentido el día que haya varias naves; con una, la
+  // comparación se hace abriendo Cortex al lado.
+  'POST /cortex/congelar-dia',
+  'GET /cortex/dias-congelados',
   'POST /vehicles/fix-centers',
   'POST /drivers/import-ids',
   'GET /ai-dataset/export',

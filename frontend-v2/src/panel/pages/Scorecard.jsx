@@ -15,6 +15,7 @@ import {
   calibrateScorecardThresholds,
   resetScorecardThresholds,
 } from '../api'
+import { diasAtras } from '../../lib/fecha'
 import CalidadViva from '../components/CalidadViva'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -747,6 +748,11 @@ function ComoVaLaSemana({ center }) {
   const orden = [...cerrados].map((x) => x.dcr).sort((a, b) => a - b)
   const mediana = orden.length ? orden[Math.floor(orden.length / 2)] : null
   const ultimos = cerrados.slice(-3)
+  // Cuantos de los que se enseñan salen del recuento de hoy en vez de una foto
+  // suya. Se cuenta sobre los MISMOS diez que pinta la tabla, no sobre todos:
+  // una nota que habla de días que no se ven no la entiende nadie (gotcha 21).
+  const sinFoto = dias.slice(-10).filter(
+    (x) => !x.congelado && x.cerrado && diasAtras(x.fecha) > 1).length
   // Un día por debajo de la mediana menos punto y medio no es ruido: con 5.000
   // paquetes al día, eso son 75 entregas que no salieron.
   const malos = mediana != null ? ultimos.filter((x) => x.dcr < mediana - 1.5) : []
@@ -819,6 +825,7 @@ function ComoVaLaSemana({ center }) {
           <tbody>
             {dias.slice(-10).reverse().map((x) => {
               const malo = mediana != null && x.cerrado && x.dcr != null && x.dcr < mediana - 1.5
+              const aprox = !x.congelado && x.cerrado && diasAtras(x.fecha) > 1
               return (
                 <tr key={x.fecha} className="border-b border-dark-800/50 last:border-0">
                   <td className="cifra px-3 py-1.5 text-dark-300">{x.fecha}</td>
@@ -827,10 +834,17 @@ function ComoVaLaSemana({ center }) {
                     {x.fallos || '—'}
                   </td>
                   <td className={`cifra px-3 py-1.5 text-right font-semibold ${malo ? 'text-orange-300' : 'text-dark-200'}`}>
-                    {x.dcr != null ? `${x.dcr}%` : '—'}
+                    {/* Un dia sin foto propia esta MEDIDO HOY, y hoy sus
+                        devoluciones ya se re-repartieron: el DCR sale mejor de
+                        lo que fue. El simbolo avisa de que ese numero es un
+                        suelo, no una medida. */}
+                    {x.dcr != null ? `${aprox ? '≥' : ''}${x.dcr}%` : '—'}
                   </td>
                   <td className="px-3 py-1.5 text-[11px] text-dark-600">
-                    {!x.cerrado && `${x.en_vuelo} en la calle`}
+                    {!x.cerrado ? `${x.en_vuelo} en la calle`
+                      : x.congelado ? <span className="text-lime-400/70">foto del día</span>
+                        : aprox ? <span title="Sin foto de ese día: los paquetes devueltos que ya se re-repartieron no se ven, así que el DCR real fue peor">sin foto</span>
+                          : null}
                   </td>
                 </tr>
               )
@@ -844,6 +858,12 @@ function ComoVaLaSemana({ center }) {
         aún en la furgoneta no cuentan para el acumulado: todavía pueden entregarse.
         {d.umbral_dcr?.fantastic && <> El umbral de Fantastic de tu nave es{' '}
           <span className="cifra">{d.umbral_dcr.fantastic}%</span>.</>}
+        {sinFoto > 0 && (
+          <> <span className="text-dark-400">Los {sinFoto} días marcados «sin foto» son
+            anteriores a que se guardara el cierre de cada día: sus paquetes devueltos ya se
+            re-repartieron y no se ven, así que ahí el DCR real fue algo peor que el que
+            sale.</span></>
+        )}
       </p>
     </div>
   )

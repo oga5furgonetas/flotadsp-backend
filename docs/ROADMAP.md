@@ -9,6 +9,20 @@
 
 ## Ahora mismo
 
+### 0 · Contrastar la primera foto buena del día — P0
+
+El 30-08 se empezó a congelar el cierre de cada día (`cortex_day_snapshots`),
+porque el estado de los paquetes se sobrescribe y a los tres días se había
+borrado el 97 % de las devoluciones. **El 31-08 es el primer día capturado desde
+su propia tarde**, así que es el primero comparable.
+
+Qué hace falta: la captura de Cortex de OGA5 del 31-08 y contrastar «Devuelto a
+la estación» contra lo que guardó la foto. Si cuadra, el P0 queda cerrado del
+todo; si no, el desvío dice qué falta y con un día bien capturado se puede
+razonar — con cuatro reconstruidos, no.
+
+Es una sola pantalla y cierra el número que Amazon contrastaría primero.
+
 ### 1 · Poner fecha de entrada a las 13 furgonetas paradas — P1
 
 **441 días-furgoneta** parados sin trazabilidad. La fecha es recuperable de la

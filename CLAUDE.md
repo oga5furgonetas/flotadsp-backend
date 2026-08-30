@@ -437,19 +437,76 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    determinista, evidencia suficiente, reversible, sin ambiguedad y verificable.
    Cuatro de cinco no bastan.
 
+39. **`cortex_packages.state` es el estado de AHORA, no el del dia de servicio.**
+   Un paquete devuelto a la nave el viernes se re-reparte el lunes y su `state`
+   pasa a `DELIVERED`: el viernes deja de tener esa devolucion, en silencio y
+   sin que falle nada. Medido el 30-08-2026 contra cuatro capturas de Cortex de
+   OGA5:
+
+   | dia | Cortex ve | nosotros veiamos | perdido |
+   |---|---|---|---|
+   | 29-08 (1 dia) | 95 | 83 | 13 % |
+   | 28-08 (2 dias) | 130 | 34 | 74 % |
+   | 27-08 (3 dias) | 144 | 4 | **97 %** |
+   | 26-08 (4 dias) | 97 | 6 | 94 % |
+
+   A los tres dias se ha borrado el 97 % de las devoluciones de ese dia, y la
+   pantalla de scorecard enseña entonces dias historicos casi perfectos. Ese es
+   justo el numero que Amazon contrastaria contra su propio Cortex.
+   **No se puede reconstruir hacia atras**: el `timeline` no guarda todos los
+   saltos (para el 28-08 da 155 donde Cortex dice 130, porque recoge tambien
+   vueltas de otros dias). Lo unico honesto es dejar de perderlo: `_bucle_congelar`
+   guarda cada media hora, de 17:00 a 04:00, la foto del dia en
+   `cortex_day_snapshots`, y se queda con la que MAS fallos tenga —la erosion
+   solo borra fallos, nunca los añade, asi que el maximo observado es el pico
+   real y no hace falta saber a que hora cierra cada centro—.
+   Dos guardas que no son obvias y estan probadas en `test_congelar_dia.py`:
+   una foto de media tarde **no** pisa a una de dia cerrado aunque tenga mas
+   fallos (a media tarde hay paquetes contados como fallo que aun se van a
+   entregar), y de un dia con mas de un dia de antiguedad **no se crea foto
+   nueva**, porque ya esta erosionado y guardarlo seria inventar un numero que
+   ademas pareceria medido. Los dias anteriores al 30-08-2026 estan perdidos y
+   salen marcados «sin foto» en la pantalla, con el DCR como `≥`.
+   Regla general: **antes de guardar una serie historica, preguntarse si el
+   campo del que sale se sobrescribe.** Si se sobrescribe, el historico no es
+   historico: es una foto de hoy con fecha de ayer.
+
+40. **Un script de diagnostico que COPIA las constantes del backend no mide el
+   backend: mide la copia.** Investigando el gotcha 39 escribi tres scripts
+   seguidos con las listas `_CX_OK` / `_CX_EN_VUELO` / `_CX_NO_DESPACHADO`
+   tecleadas a mano, y en las tres faltaban estados reales (`PENDING_PICKUP`,
+   `YOU_ARE_NEXT`, `NOT_READY`). Resultado: un dia salio con **DCR 1,58 %** y
+   estuve a punto de dar por bueno que la alerta de DCR generaba falsos
+   positivos sistematicos. No era cierto —con las listas de verdad el sesgo es
+   de +0,14 pp de media, muy por debajo del umbral de 1,5— y el backend estaba
+   bien desde el principio. Un script contra produccion se lee del propio
+   `server.py` (con `ast`, sin ejecutarlo, que arranca conexiones):
+
+   ```python
+   for n in ast.parse(open("/app/server.py", encoding="utf-8-sig").read()).body:
+       if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") in NOMBRES:
+           CONST[n.targets[0].id] = ast.literal_eval(n.value)
+   ```
+
+   Lo mismo vale para los tests: `test_congelar_dia.py` extrae la funcion real
+   del fichero en vez de reimplementarla, porque una copia deja de probar el
+   codigo que corre en cuanto alguien toca el original.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
 - Commits en español, estilo `feat:`/`fix:`, y push a `main` (sincroniza 2 ordenadores).
 - **Al empezar una sesion**: `CLAUDE.md` -> `ESTADO.md` -> `CHECKPOINT.md` ->
   `docs/ROADMAP.md`. El repositorio manda sobre lo que recuerde una conversacion.
-- Tests: `python backend/tests/run_all.py` (17 en local; CI corre tambien los
+- Tests: `python backend/tests/run_all.py` (18 en local; CI corre tambien los
   de API, que necesitan el backend instalado).
 - Smoke de produccion: `backend/scripts/smoke_endpoints.py` desde la maquina,
   que comprueba que el DATO cuadra y no solo que responda 200.
-- Los checkers de `scripts/` deben quedar a cero antes de commitear:
-  `check-i18n.mjs`, `check-routes.mjs`, `check-huerfanas.mjs`, `check-permisos.mjs`
-  y `check_contracts.py`.
+- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son diez:
+  `check-i18n`, `check-routes`, `check-huerfanas`, `check-permisos`, `check-tema`,
+  `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones` y
+  `check_contracts.py`. Los tres ultimos con trinquete (toleran el backlog
+  actual y fallan si sube).
 - `check-huerfanas.mjs` lista rutas del backend que no llama ningún cliente. Una
   ruta sin UI no falla, simplemente no se usa: así estuvieron meses el módulo de
   turnos entero y las subidas de métricas. Lleva trinquete (tolera el backlog

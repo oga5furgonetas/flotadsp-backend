@@ -107,51 +107,79 @@ furgoneta asignada».
 tocayos acabarían uno auditando la furgoneta del otro.
 
 
-### El DCR se calcula con el estado equivocado — P0, ABIERTO
+### El DCR se calculaba con el estado equivocado — P0, CERRADO HACIA DELANTE
 
-**Encontrado** 2026-08-30, reconciliando contra una captura de Cortex.
+**Encontrado** 2026-08-30 reconciliando contra una captura de Cortex.
+**Calibrado** el mismo día con cuatro capturas (26 a 29 de agosto).
 
-**El hecho.** Cortex, para el viernes 28-08-2026 en OGA5, dice **130 paquetes
-devueltos a la estación**. Nuestro cálculo del mismo día da **35**.
+**El hecho.** Guardamos el estado **vigente** de cada paquete y Amazon cuenta el
+del **día**. Un paquete devuelto el viernes y reentregado el lunes figura hoy
+`DELIVERED` en nuestra base, y sigue contando como devuelto en la casilla del
+viernes de Cortex.
 
-**La causa, confirmada.** Guardamos el estado **vigente** de cada paquete, y
-Amazon cuenta el del **día**. Un paquete devuelto el viernes y entregado el
-lunes figura hoy `DELIVERED` en nuestra base y sigue contando como devuelto en
-la casilla del viernes de Cortex.
+Con un solo día no se podía determinar la regla: 130 caía entre «al cierre» (53)
+y «pasaron por ahí» (159), y se dejó abierto a propósito en vez de elegir un
+número que cuadrara por casualidad. Con cuatro días la regla aparece sola, y no
+es cuál de las tres formas de contar: **es el tiempo**.
 
-Medido sobre los 6.843 paquetes de ese día:
+| día | Cortex ve | nosotros veíamos | perdido |
+|---|---|---|---|
+| 29-08 (1 día) | 95 | 83 | 13 % |
+| 28-08 (2 días) | 130 | 34 | 74 % |
+| 27-08 (3 días) | 144 | 4 | **97 %** |
+| 26-08 (4 días) | 97 | 6 | 94 % |
 
-| Forma de contar los devueltos | Sale |
-|---|---|
-| Estado vigente hoy | 35 |
-| Estado al cierre del día | 53 |
-| **Pasaron por devuelto ese día** | **159** |
-| **Cortex** | **130** |
+El error no depende del criterio: **crece con la antigüedad del día**. Y la
+prueba directa: de los 80 paquetes que el 27-08 pasaron por `BACK_TO_ORIGIN`,
+**78 figuran hoy como `DELIVERED`**.
 
-Y la prueba directa: **de los que pasaron por `BACK_TO_ORIGIN`, 103 figuran hoy
-como `DELIVERED`**.
+**Por qué era P0.** El DCR que enseñaba la app **subía solo con el paso de los
+días** sin que mejorara nada. Una semana mala parecía arreglarse sola al mirarla
+más tarde, y el número no cuadraba nunca con el que puntúa Amazon.
 
-**Por qué es P0.** El DCR que enseña la app **sube solo con el paso de los
-días**, sin que mejore nada: los devueltos se van reentregando y salen de la
-cuenta. Consecuencias:
+**Lo que NO se pudo hacer: reconstruir el pasado.** El `timeline` no guarda todos
+los saltos —para el 28-08 da 155 donde Cortex dice 130, porque recoge también
+vueltas de otros días—. Los días anteriores al 30-08-2026 están **perdidos**, y
+así se dicen: salen marcados «sin foto» en la pantalla y su DCR se enseña como
+`≥`, porque es un suelo, no una medida.
 
-1. El número nunca cuadra con el que puntúa Amazon.
-2. El aviso de caída del DCR se dispara tarde o no se dispara.
-3. Una semana mala parece que se arregla sola al mirarla más tarde.
+**Lo que sí se hizo: dejar de perderlo.** `_bucle_congelar` guarda cada media
+hora, de 17:00 a 04:00, la foto del día en `cortex_day_snapshots`, y se queda con
+la que **más fallos** tenga. Funciona sin saber a qué hora cierra cada centro,
+que es justo el dato que no tenemos: la erosión solo borra fallos, nunca los
+añade, así que el máximo observado es el pico real.
 
-Es exactamente el tipo de cálculo incorrecto que produce decisiones operativas
-equivocadas.
+Dos guardas que no son obvias, probadas en `test_congelar_dia.py` (14 casos):
 
-**Lo que aún es `UNKNOWN`.** Cuál de las tres formas usa Amazon exactamente.
-Ninguna cuadra al número: 130 está entre «al cierre» (53) y «pasaron por ahí»
-(159). Con **una sola captura no se puede determinar la regla**. Hacen falta
-capturas de más días para calibrar antes de dar el número por bueno.
+- una foto de media tarde **no** pisa a una de día cerrado ni con más fallos —a
+  media tarde hay paquetes contados como fallo que aún se van a entregar—;
+- de un día con más de un día de antigüedad **no se crea foto nueva**, porque ya
+  está erosionado. Guardarlo daría un número que además **parecería medido**, y
+  un hueco se ve mientras que un dato falso no.
 
-**Además, sin explicar todavía:**
-- Cortex ve **46 rutas** y nosotros guardamos **45**: falta una entera.
-- Cortex tiene **46 en «Restante»**, que según Dani son también devoluciones
-  (cuentas que no dejaron cerrar por exceso de paquetes). Nuestros estados sin
-  cerrar de ese día suman 21.
+**Verificado end to end** el 30-08: se insertó una foto de prueba en el 27-08 y
+el scorecard pasó de 14 a 152 fallos con `congelado: true`; al retirarla volvió a
+14. Las dos fotos que quedan (29 y 30 de agosto) están medidas.
+
+**Lo que sigue abierto.** Si el máximo observado coincide con lo que puntúa
+Amazon. La primera foto comparable será la del 31-08: hasta entonces no hay un
+día capturado desde su propia tarde. Se contrasta pidiendo a Dani la captura de
+Cortex de ese día — **un día bien capturado vale más que cuatro reconstruidos**.
+
+**Corregido de lo que se había afirmado antes:**
+
+- *«Cortex ve 46 rutas y nosotros guardamos 45».* Falso: la consulta que lo midió
+  no filtraba por centro y mezclaba las rutas `CA_*` de **DGA1** con las `XA_*`
+  de OGA5. El campo `center` está bien guardado y el backend filtra por `$regex`
+  como manda el gotcha 6.
+- *«El DCR se desplomó el viernes 28».* Falso, y era este mismo bug: Cortex ve
+  97 / 144 / 130 / 95 devueltos los días 26 a 29. El viernes no fue peor que el
+  jueves — **no hubo pico**, había un contador que se vaciaba solo.
+- *«La alerta de caída del DCR da falsos positivos sistemáticos».* Falso. Se
+  midió el sesgo de madurez con las listas de estados reales del backend: **+0,14
+  pp de media, peor caso +1,04**, por debajo del umbral de 1,5 pp. Ninguno de los
+  15 días evaluables dispararía por esa causa. La alerta está sana; lo que estaba
+  mal era el script que la juzgó (gotcha 40).
 
 ---
 
