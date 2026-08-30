@@ -24,7 +24,7 @@ import {
   getVehicleDamageLedger, repairVehicleLedger, getSpareWheels, getMaintenanceLog, borrarApunteMantenimiento,
   getAllDocuments,
   getExposicionVehiculos, getVehiculosDuplicados, fusionarVehiculos, getExpedienteVehiculo,
-  getOdometroSospechosas, sanearOdometro,
+  getOdometroSospechosas, sanearOdometro, getDatosQueFaltan, rellenarDatosLote,
 } from '../api'
 import { getAdmin } from '../auth'
 
@@ -2066,6 +2066,143 @@ function Expediente({ vehicleId }) {
 
    No se borra nada: la lectura queda marcada con su motivo y deja de contar.
    Si el juicio estuviera mal, está ahí para verlo. */
+/* ── DATOS QUE FALTAN ──────────────────────────────────────────────────────
+   Un dato que cuesta dos minutos por unidad no se rellena nunca, por muy rojo
+   que se pinte el aviso. Con la ITV se vio: el sistema llevaba dos días
+   sacando las 56 sin fecha y seguían las 56, porque rellenarlas era abrir
+   cincuenta y seis fichas.
+
+   El del aceite es el que más duele: el ritmo km/día ya se calcula bien para
+   85 furgonetas, pero sin saber DESDE DÓNDE contar, ese ritmo no sirve de
+   nada. Se sabe a qué velocidad va y no cuánto le queda. */
+function PanelFaltan() {
+  const [d, setD] = useState(null)
+  const [campo, setCampo] = useState('oil_last_change_km')
+  const [lista, setLista] = useState(null)
+  const [borrador, setBorrador] = useState({})
+  const [guardando, setGuardando] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  const cargarResumen = useCallback(() => {
+    getDatosQueFaltan().then((r) => setD(r.data)).catch(() => setD(null))
+  }, [])
+  useEffect(cargarResumen, [cargarResumen])
+
+  const cargarCampo = useCallback((c) => {
+    setLista(null); setBorrador({})
+    getDatosQueFaltan(c).then((r) => setLista(r.data)).catch(() => setLista(null))
+  }, [])
+  useEffect(() => { if (campo) cargarCampo(campo) }, [campo, cargarCampo])
+
+  const guardar = async () => {
+    const valores = Object.entries(borrador).filter(([, v]) => v !== '' && v != null)
+      .map(([vehicle_id, valor]) => ({ vehicle_id, valor }))
+    if (!valores.length) return
+    setGuardando(true); setMsg(null)
+    try {
+      const r = await rellenarDatosLote({ campo, valores })
+      const err = r.data?.errores || []
+      setMsg(err.length
+        ? { mal: true, txt: `${r.data.guardadas} guardados. ${err.length} con problema: ${[...new Set(err.map((e) => e.error))].join(' · ')}` }
+        : { txt: `${r.data.guardadas} guardados.` })
+      // Solo se limpian los que entraron: los que fallaron se quedan escritos
+      // para poder corregirlos sin volver a teclearlos.
+      const bien = new Set((r.data?.detalle || []).map((x) => x.vehicle_id))
+      setBorrador((b) => Object.fromEntries(Object.entries(b).filter(([k]) => !bien.has(k))))
+      cargarCampo(campo); cargarResumen()
+    } catch (e) {
+      setMsg({ mal: true, txt: e?.response?.data?.detail || 'No se pudo guardar.' })
+    } finally { setGuardando(false) }
+  }
+
+  if (!d) {
+    return (
+      <div className="card flex items-center justify-center gap-2 p-10 text-dark-400">
+        <Loader2 size={15} className="animate-spin" /> Mirando qué falta…
+      </div>
+    )
+  }
+
+  const pendientes = Object.values(borrador).filter((v) => v !== '' && v != null).length
+  const esFecha = lista?.tipo === 'fecha'
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-1.5">
+        {Object.entries(d.resumen)
+          .filter(([, n]) => n > 0)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, n]) => (
+            <button key={k} onClick={() => setCampo(k)}
+              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[12.5px] font-medium transition-colors ${
+                campo === k ? 'bg-dark-700 text-dark-100' : 'bg-dark-800/60 text-dark-400 hover:text-dark-200'}`}>
+              {d.campos[k]}
+              <span className="cifra rounded-full bg-orange-500/20 px-1.5 text-[10px] text-orange-300">{n}</span>
+            </button>
+          ))}
+      </div>
+
+      {msg && <p className={`text-[12.5px] ${msg.mal ? 'text-red-300' : 'text-lime-300'}`}>{msg.txt}</p>}
+
+      {!lista ? (
+        <div className="card flex items-center justify-center gap-2 p-8 text-dark-400">
+          <Loader2 size={14} className="animate-spin" /> Cargando…
+        </div>
+      ) : !lista.faltan?.length ? (
+        <div className="card p-8 text-center text-[13px] text-dark-400">
+          Todas las furgonetas activas tienen este dato.
+        </div>
+      ) : (
+        <div className="card overflow-hidden">
+          <p className="border-b border-dark-800 px-3.5 py-2 text-[12.5px] text-dark-400">
+            <span className="font-semibold text-dark-200">{d.campos[campo]}</span> ·{' '}
+            <span className="cifra">{lista.faltan.length}</span> furgonetas sin este dato
+            {campo === 'oil_last_change_km' && (
+              <span className="ml-1 text-dark-500">
+                — es el kilometraje que marcaba cuando se le hizo el último cambio, no el de ahora.
+              </span>
+            )}
+          </p>
+          <div className="max-h-[460px] divide-y divide-dark-800/60 overflow-y-auto">
+            {lista.faltan.map((v) => (
+              <div key={v.id} className="flex flex-wrap items-center gap-3 px-3.5 py-1.5">
+                <span className="cifra w-[86px] flex-none font-semibold text-dark-100">{v.matricula}</span>
+                <span className="min-w-0 flex-1 truncate text-[12px] text-dark-500">
+                  {v.modelo}{v.center && ` · ${v.center}`}
+                  {v.km != null && campo === 'oil_last_change_km' && (
+                    <> · ahora marca <span className="cifra text-dark-400">{v.km.toLocaleString('es')}</span></>
+                  )}
+                </span>
+                <input
+                  type={esFecha ? 'date' : lista.tipo === 'km' ? 'number' : 'text'}
+                  value={borrador[v.id] ?? ''}
+                  onChange={(e) => setBorrador({ ...borrador, [v.id]: e.target.value })}
+                  placeholder={lista.tipo === 'km' ? 'km' : ''}
+                  className="input w-[150px] py-1 text-[12.5px]" />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {pendientes > 0 && (
+        <div className="sticky bottom-3 flex items-center gap-3 rounded-lg border border-dark-700 bg-dark-900 px-3.5 py-2.5 shadow-lg shadow-black/40">
+          <span className="text-[13px] text-dark-300">
+            <span className="cifra font-semibold">{pendientes}</span> por guardar
+          </span>
+          <button onClick={() => setBorrador({})}
+            className="text-[12px] text-dark-500 hover:text-dark-300">descartar</button>
+          <button onClick={guardar} disabled={guardando}
+            className="btn-primary ml-auto px-4 py-1.5 text-[13px] disabled:opacity-50">
+            {guardando ? 'Guardando…' : 'Guardar'}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+
 function PanelOdometro() {
   const [d, setD] = useState(null)
   const [cargando, setCargando] = useState(true)
@@ -2449,6 +2586,10 @@ export default function Vehiculos() {
           <div>
             <h2 className="mb-2 text-[15px] font-semibold text-dark-100">Kilometrajes imposibles</h2>
             <PanelOdometro />
+          </div>
+          <div>
+            <h2 className="mb-2 text-[15px] font-semibold text-dark-100">Datos que faltan</h2>
+            <PanelFaltan />
           </div>
         </div>
       )}

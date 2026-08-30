@@ -356,6 +356,11 @@ export const guardarItvLote = (body) => api.put('/vehicles/itv/lote', body)
 /* Lecturas de kilometraje que no pueden ser: un digito de mas o de menos, o el
    cuentakilometros PARCIAL en vez del total. Con esos picos dentro no se puede
    predecir nada. */
+/* Que dato le falta a cada furgoneta y cuantas lo tienen vacio. Un dato que
+   cuesta dos minutos por unidad no se rellena nunca de una en una. */
+export const getDatosQueFaltan = (campo) =>
+  api.get('/vehicles/faltan', { params: campo ? { campo } : {} })
+export const rellenarDatosLote = (body) => api.put('/vehicles/faltan/lote', body)
 export const getOdometroSospechosas = () => api.get('/vehicles/odometro/sospechosas')
 export const sanearOdometro = (body) => api.post('/vehicles/odometro/sanear', body || {})
 export const getVehiculosDuplicados = () => api.get('/vehicles/duplicados')

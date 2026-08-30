@@ -7128,6 +7128,151 @@ async def odometro_sanear(data: dict = Body(...), user: dict = Depends(require_a
             "km_corregidos": km_corregidos}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# LOS DATOS QUE FALTAN, RELLENABLES DE UNA VEZ
+# ═══════════════════════════════════════════════════════════════════════════
+# UN DATO QUE CUESTA DOS MINUTOS POR UNIDAD NO SE RELLENA NUNCA, por muy rojo
+# que se pinte el aviso. Con la ITV ya se vio: `/alerts/itv` llevaba dos dias
+# sacando las 56 sin fecha y seguian las 56. Abrir la ficha de cada furgoneta,
+# buscar el campo y guardar, cincuenta y seis veces, no lo hace nadie.
+#
+# Y NO ES SOLO LA ITV. Medido el 30-08-2026 sobre 124 activas:
+#   sin km del ultimo cambio de aceite  109   <- sin esto no hay prediccion
+#   sin fecha de ITV                     56
+#   sin kilometraje                      15
+#   sin modelo                            2
+# El del aceite es el que mas duele: el ritmo km/dia ya se calcula bien para 85
+# furgonetas —despues de sanear el historico— pero sin saber DESDE DONDE contar,
+# ese ritmo no sirve para nada. Se sabe a que velocidad va y no cuanto le queda.
+#
+# LISTA BLANCA DE CAMPOS, siempre. Un endpoint que escribe el campo que le
+# manden es un agujero: bastaria con pedirle `status` o `id` para romper una
+# ficha desde fuera (gotcha 1).
+
+_LOTE_CAMPOS = {
+    "itv_date":           {"tipo": "fecha", "etiqueta": "Fecha de ITV"},
+    "insurance_date":     {"tipo": "fecha", "etiqueta": "Fecha del seguro"},
+    "oil_last_change_km": {"tipo": "km",    "etiqueta": "Km del último cambio de aceite"},
+    "oil_interval_km":    {"tipo": "km",    "etiqueta": "Cada cuántos km toca el aceite"},
+    "mileage":            {"tipo": "km",    "etiqueta": "Kilometraje"},
+    "model":              {"tipo": "texto", "etiqueta": "Modelo"},
+    "brand":              {"tipo": "texto", "etiqueta": "Marca"},
+    "vin":                {"tipo": "texto", "etiqueta": "VIN"},
+}
+
+
+@api_router.get("/vehicles/faltan")
+async def vehiculos_datos_que_faltan(campo: str = "", _=Depends(require_admin)):
+    """Que furgonetas activas no tienen cada dato, y cuantas son."""
+    vs = await db.vehicles.find(
+        {"status": {"$nin": ["deleted", "baja"]}},
+        {"_id": 0, "id": 1, "license_plate": 1, "brand": 1, "model": 1,
+         "center": 1, "mileage": 1, **{k: 1 for k in _LOTE_CAMPOS}}).to_list(600)
+
+    def _vacio(x):
+        return x is None or (isinstance(x, str) and not x.strip())
+
+    resumen = {k: sum(1 for v in vs if _vacio(v.get(k))) for k in _LOTE_CAMPOS}
+    salida = {"activas": len(vs), "resumen": resumen,
+              "campos": {k: c["etiqueta"] for k, c in _LOTE_CAMPOS.items()}}
+
+    if campo:
+        if campo not in _LOTE_CAMPOS:
+            raise HTTPException(400, "Ese campo no se puede rellenar así")
+        faltan = [{"id": v["id"], "matricula": v.get("license_plate"),
+                   "modelo": " ".join(x for x in (v.get("brand"), v.get("model")) if x) or "—",
+                   "center": v.get("center"), "km": v.get("mileage")}
+                  for v in vs if _vacio(v.get(campo))]
+        faltan.sort(key=lambda x: str(x.get("matricula") or ""))
+        salida["faltan"] = faltan
+        salida["campo"] = campo
+        salida["tipo"] = _LOTE_CAMPOS[campo]["tipo"]
+    return salida
+
+
+@api_router.put("/vehicles/faltan/lote")
+async def vehiculos_rellenar_lote(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Rellena un campo en varias furgonetas de una vez.
+
+    Se valida CADA valor y se dice cual falla, sin rechazar el lote entero:
+    quien acaba de teclear cuarenta datos no puede perderlos porque uno este
+    mal. Es la diferencia entre que la pantalla se use y que no.
+    """
+    campo = str(data.get("campo") or "").strip()
+    if campo not in _LOTE_CAMPOS:
+        raise HTTPException(400, "Ese campo no se puede rellenar así")
+    tipo = _LOTE_CAMPOS[campo]["tipo"]
+    filas = data.get("valores") or []
+    if not isinstance(filas, list) or not filas:
+        raise HTTPException(400, "No hay nada que guardar")
+
+    from datetime import date as _date
+    hoy = _date.today()
+    quien = user.get("name") or user.get("username") or "oficina"
+    guardadas, errores = [], []
+
+    for f in filas[:300]:
+        vid = str((f or {}).get("vehicle_id") or "").strip()
+        crudo = (f or {}).get("valor")
+        if not vid or crudo in (None, ""):
+            continue
+        valor = None
+        if tipo == "fecha":
+            txt = str(crudo).strip()[:10]
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", txt):
+                errores.append({"vehicle_id": vid, "error": "la fecha tiene que ser AAAA-MM-DD"})
+                continue
+            try:
+                d = datetime.strptime(txt, "%Y-%m-%d").date()
+            except ValueError:
+                errores.append({"vehicle_id": vid, "error": "esa fecha no existe"})
+                continue
+            # Un dedazo de un digito en el año (2036 por 2026) APAGA el aviso
+            # que este dato enciende, y eso es peor que no tener dato.
+            if d.year > hoy.year + 3 or d.year < hoy.year - 5:
+                errores.append({"vehicle_id": vid, "error": "esa fecha está muy lejos, revísala"})
+                continue
+            valor = txt
+        elif tipo == "km":
+            try:
+                n = int(float(str(crudo).replace(".", "").replace(",", ".")))
+            except Exception:                                # noqa: BLE001
+                errores.append({"vehicle_id": vid, "error": "eso no es un número"})
+                continue
+            if n < 0 or n > ODO_MAX_ABSOLUTO:
+                errores.append({"vehicle_id": vid, "error": "ese kilometraje no es creíble"})
+                continue
+            # El km del ultimo cambio NO puede ser mayor que el actual: seria
+            # un cambio hecho en el futuro, y ademas dejaria la cuenta atras en
+            # negativo sin que nadie entienda por que.
+            if campo == "oil_last_change_km":
+                v = await db.vehicles.find_one({"id": vid}, {"_id": 0, "mileage": 1})
+                act = (v or {}).get("mileage")
+                if isinstance(act, (int, float)) and n > act:
+                    errores.append({"vehicle_id": vid,
+                                    "error": "el cambio no puede ser posterior al km actual (%s)" % act})
+                    continue
+            valor = n
+        else:
+            valor = str(crudo).strip()[:120]
+            if not valor:
+                continue
+
+        r = await db.vehicles.update_one(
+            {"id": vid}, {"$set": {campo: valor,
+                                   "%s_puesto_por" % campo: quien,
+                                   "%s_puesto_en" % campo: datetime.now(timezone.utc).isoformat()}})
+        if r.matched_count:
+            guardadas.append({"vehicle_id": vid, "valor": valor})
+        else:
+            errores.append({"vehicle_id": vid, "error": "esa furgoneta no existe"})
+
+    logger.info("Relleno en lote de %s: %d guardadas, %d con error",
+                campo, len(guardadas), len(errores))
+    return {"campo": campo, "guardadas": len(guardadas),
+            "errores": errores, "detalle": guardadas}
+
+
 @api_router.get("/vehicles/last-inspections")
 async def vehicles_last_inspections(_=Depends(require_admin)):
     """Mapa vehicle_id → fecha de su última inspección (para el semáforo de la lista)."""
@@ -18193,9 +18338,26 @@ ODO_MIN_CONFIANZA = 0.80      # por debajo, la lectura no vale
 ODO_MAX_ABSOLUTO = 2_000_000  # ningun odometro real pasa de aqui
 
 
+def _odo_lecturas(v: dict) -> list:
+    """Las lecturas de kilometraje QUE CUENTAN, ordenadas por fecha.
+
+    UN SOLO SITIO que decide esto. Al marcar 66 lecturas como `descartada`
+    quedaron cuatro calculos leyendo `mileage_history` en crudo —el ritmo
+    km/dia, la ultima fecha, la grafica y la prediccion de mantenimiento— y los
+    cuatro seguian usando la basura que se acababa de descartar. Es el gotcha
+    20: si cambias lo que guarda una estructura, busca TODOS los que la leen.
+    """
+    return sorted(
+        (h for h in (v.get("mileage_history") or [])
+         if isinstance(h, dict) and not h.get("descartada")
+         and h.get("date") and isinstance(h.get("km"), (int, float))
+         and not isinstance(h.get("km"), bool)),
+        key=lambda h: str(h["date"]))
+
+
 def _odo_ultima_fecha(v: dict):
     """Fecha de la ultima lectura registrada del vehiculo."""
-    hist = v.get("mileage_history") or []
+    hist = _odo_lecturas(v)
     for e in reversed(hist):
         d = e.get("date")
         if not d:
@@ -19367,8 +19529,8 @@ async def get_vehicle_history(vehicle_id: str, _=Depends(require_admin)):
     if not v:
         raise HTTPException(status_code=404, detail="Furgoneta no encontrada")
     # Historial de km (ordenado por fecha)
-    mh = v.get("mileage_history", [])
-    km_points = [{"date": e.get("date", "")[:10], "km": e.get("km", 0)} for e in mh if e.get("km")]
+    mh = _odo_lecturas(v)
+    km_points = [{"date": str(e.get("date", ""))[:10], "km": e.get("km", 0)} for e in mh]
     # Historial de bolsas: reconstruir el valor restante tras cada movimiento
     bh = v.get("bags_history", [])
     bags_points = []
@@ -19435,11 +19597,7 @@ def _km_por_dia(v: dict) -> Optional[float]:
     Devolver None es una respuesta legítima y quien llama TIENE que respetarla:
     sin ritmo medido no hay días estimados. Ponerlos a ojo sería inventarlos.
     """
-    hist = sorted(
-        (h for h in (v.get("mileage_history") or [])
-         if isinstance(h, dict) and h.get("date") and isinstance(h.get("km"), (int, float))),
-        key=lambda h: str(h["date"]),
-    )
+    hist = _odo_lecturas(v)
     if len(hist) < 2:
         return None
     cutoff = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d")
@@ -19462,8 +19620,7 @@ def _km_ultimo_apunte(v: dict) -> Optional[str]:
     """Fecha del apunte de km más reciente. El km de la ficha puede llevar
     semanas parado, y una cuenta atrás sobre un km viejo va adelantada sin que
     se note: la vista tiene que poder decir de cuándo es el dato."""
-    fechas = [str(h.get("date"))[:10] for h in (v.get("mileage_history") or [])
-              if isinstance(h, dict) and h.get("date")]
+    fechas = [str(h.get("date"))[:10] for h in _odo_lecturas(v)]
     return max(fechas) if fechas else None
 
 
