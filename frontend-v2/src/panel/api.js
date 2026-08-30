@@ -521,3 +521,5 @@ export const marcarDebrief = (tba, body, day) =>
   api.post(`/cortex/debrief/${encodeURIComponent(tba)}`, body, { params: { day } })
 export const getCheckerCentros = () => api.get('/checkers/centros')
 export const corregirCentros = () => api.post('/checkers/centros/corregir')
+export const prepararOrden = (vehicleId) =>
+  api.get(`/work-orders/preparar/${encodeURIComponent(vehicleId)}`)

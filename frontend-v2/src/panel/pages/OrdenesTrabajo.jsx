@@ -9,7 +9,7 @@ import {
   getOrdenes, getResumenOrdenes, getOrden, crearOrden, editarOrden, enlaceOrden,
   getParteFurgoneta, dispararSeguimientoTalleres,
   getVehicles, getWorkshops, crearTaller, exportarOrdenes, ordenesPorTaller,
-  getIncidents, getDanosPendientes, getFurgonetasParadas,
+  getIncidents, getDanosPendientes, getFurgonetasParadas, prepararOrden,
 } from '../api'
 
 /* ÓRDENES DE TALLER
@@ -312,6 +312,39 @@ export default function OrdenesTrabajo() {
     }
   }
 
+  /* Desde una furgoneta PARADA. Es el hueco por el que se escapaba todo: 13
+     furgonetas en taller, algunas mas de dos meses, y CERO partes abiertos. No
+     faltaba ninguna funcion — faltaba que abrir el parte fuera barato. El
+     backend devuelve el problema ya redactado desde el libro de daños, sus
+     fotos y el taller sugerido del mismo centro; aqui solo se revisa y se
+     manda. Preparar no es crear: la orden sigue saliendo cuando una persona lo
+     dice. */
+  const [preparando, setPreparando] = useState('')
+  const prepararDesdeParada = async (vehicleId) => {
+    setPreparando(vehicleId); setErr('')
+    try {
+      const { data } = await prepararOrden(vehicleId)
+      setNueva({
+        vehicle_id: vehicleId,
+        workshop_id: data.sugerido || '',
+        problema: data.problema || '',
+        fecha_entrega_estimada: '',
+        ledger_id: data.ledger_ids?.[0],
+      })
+      setDanosElegidos(data.ledger_ids || [])
+      if (!vehiculos.length) {
+        try { setVehiculos((await getVehicles(center)).data || []) } catch { /* lo avisa el formulario */ }
+      }
+      // Sin daños apuntados no se inventa el texto: quien abra el parte tiene
+      // que escribir qué le pasa, o el taller acabará llamando igual.
+      if (data.falta_problema) {
+        setErr('Esta furgoneta no tiene daños apuntados: escribe qué le pasa antes de mandarla.')
+      }
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo preparar el parte.')
+    } finally { setPreparando('') }
+  }
+
   const abrirAlta = async () => {
     setNueva({ vehicle_id: '', workshop_id: '', problema: '', fecha_entrega_estimada: '' })
     if (!vehiculos.length) {
@@ -546,10 +579,12 @@ export default function OrdenesTrabajo() {
                       {v.orden}{v.taller ? ` · ${v.taller}` : ''}
                     </span>
                   ) : (
-                    <span className="rounded-lg bg-red-50 px-2 py-1 text-[12px] font-semibold text-red-700"
-                      title="Está parada y no hay ningún parte abierto: nadie la está gestionando">
-                      sin parte
-                    </span>
+                    <button onClick={() => prepararDesdeParada(v.vehicle_id)}
+                      disabled={preparando === v.vehicle_id}
+                      className="rounded-lg bg-red-50 px-2 py-1 text-[12px] font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50"
+                      title="Está parada y no hay ningún parte abierto. Pulsa para abrirlo con sus daños y su taller ya puestos">
+                      {preparando === v.vehicle_id ? 'preparando…' : 'sin parte · abrir'}
+                    </button>
                   )}
                 </div>
               ))}

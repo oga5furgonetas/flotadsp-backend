@@ -7383,6 +7383,15 @@ async def vehiculos_rellenar_lote(data: dict = Body(...), user: dict = Depends(r
 _EST_INCIDENCIA_TALLER = "Vehículo en taller"
 
 
+# Cuantas inspecciones posteriores a la entrada en taller hacen falta para dar
+# por hecho que la furgoneta esta circulando. Tres, y una de la ultima semana:
+# una suelta puede ser alguien mirandola en el propio taller, pero nadie
+# inspecciona tres veces una furgoneta que no sale. Medido el 30-08-2026: las
+# dos que salieron tenian 17 y 11, con la ultima de ayer y de hoy.
+_EST_INSP_CIRCULA = 3
+_EST_INSP_DIAS_RECIENTE = 10
+
+
 def _est_clase(problema: str, evidencia: dict) -> str:
     """SAFE_TO_AUTOCORRECT solo si se cumplen las CINCO condiciones:
     determinista, con evidencia, reversible, sin ambiguedad y verificable."""
@@ -7392,6 +7401,15 @@ def _est_clase(problema: str, evidencia: dict) -> str:
         # se busca la de ENTRADA y no la ultima, asi que no hay ambiguedad; y
         # se comprueba releyendo. Las cinco.
         return "SAFE_TO_AUTOCORRECT" if evidencia.get("fecha_incidencia") else "NEEDS_REVIEW"
+    if problema == "taller_circulando":
+        # El conductor inspecciona la furgoneta AL SACARLA, asi que una marcada
+        # en taller con inspecciones posteriores esta trabajando. Determinista y
+        # con evidencia dura; reversible (se guarda el estado previo); se
+        # comprueba releyendo. La ambiguedad es el numero: UNA inspeccion suelta
+        # puede ser alguien revisandola en el propio taller, asi que hacen falta
+        # tres o mas y una reciente. Con menos, lo mira una persona.
+        n = evidencia.get("inspecciones_despues") or 0
+        return "SAFE_TO_AUTOCORRECT" if n >= _EST_INSP_CIRCULA else "NEEDS_REVIEW"
     if problema == "taller_sin_orden":
         # Puede ser correcto: se llevo al taller sin abrir orden. Crear una por
         # nuestra cuenta seria inventar un trabajo que nadie encargo.
@@ -7450,6 +7468,50 @@ async def _est_hallazgos() -> dict:
                                % str(ev["fecha_incidencia"])[:10]) if ev["fecha_incidencia"]
                               else "Sin incidencia de entrada: hace falta que alguien diga la fecha",
             })
+
+        # ¿ESTA CIRCULANDO? Una furgoneta en taller que se inspecciona a
+        # diario esta trabajando, y cuenta como parada sin estarlo: infla los
+        # dias-furgoneta y la saca de la flota disponible sin motivo. Medido el
+        # 30-08-2026: 2 de 13, con 71 y 54 dias "paradas" y 17 y 11
+        # inspecciones posteriores — 125 de los 482 dias-furgoneta eran falsos.
+        if v.get("taller_desde"):
+            n_insp = await db.inspections.count_documents(
+                {"vehicle_id": v["id"], "created_at": {"$gt": v["taller_desde"]}})
+            if n_insp:
+                ult = await db.inspections.find_one(
+                    {"vehicle_id": v["id"]}, {"_id": 0, "created_at": 1},
+                    sort=[("created_at", -1)])
+                fult = str((ult or {}).get("created_at") or "")
+                reciente = False
+                try:
+                    reciente = (hoy - datetime.fromisoformat(
+                        fult.replace("Z", "+00:00"))).days <= _EST_INSP_DIAS_RECIENTE
+                except Exception:                            # noqa: BLE001
+                    pass
+                dias_p = None
+                try:
+                    dias_p = (hoy - datetime.fromisoformat(
+                        str(v["taller_desde"]).replace("Z", "+00:00"))).days
+                except Exception:                            # noqa: BLE001
+                    pass
+                ev = {"inspecciones_despues": n_insp, "ultima_inspeccion": fult[:10],
+                      "reciente": reciente, "taller_desde": str(v["taller_desde"])[:10]}
+                hallazgos.append({
+                    "problema": "taller_circulando",
+                    "vehicle_id": v["id"],
+                    "matricula": v.get("license_plate"),
+                    "que_pasa": ("Está marcada en taller pero se ha inspeccionado %d "
+                                 "veces desde que entró" % n_insp),
+                    "impacto": ("Lleva %s días contando como parada sin estarlo: no se "
+                                "puede asignar a ruta y falsea los días-furgoneta"
+                                % (dias_p if dias_p is not None else "?")),
+                    "evidencia": ev,
+                    "dias_estimados": dias_p,
+                    "clase": _est_clase("taller_circulando", ev)
+                             if reciente else "NEEDS_REVIEW",
+                    "correccion": "Devolverla a activa: la última inspección es del %s"
+                                  % fult[:10],
+                })
 
         if not n_ordenes:
             hallazgos.append({
@@ -7623,7 +7685,7 @@ async def corregir_estados_vehiculo(data: dict = Body(...), user: dict = Depends
     estado = await _est_hallazgos()
     seguros = [h for h in estado["hallazgos"]
                if h["clase"] == "SAFE_TO_AUTOCORRECT"
-               and h["problema"] == "taller_sin_fecha"
+               and h["problema"] in ("taller_sin_fecha", "taller_circulando")
                and (not solo or h["vehicle_id"] in solo)]
     if not seguros:
         return {"corregidos": 0, "verificado": True,
@@ -7642,9 +7704,37 @@ async def corregir_estados_vehiculo(data: dict = Body(...), user: dict = Depends
         {"$set": {"at": datetime.now(timezone.utc).isoformat(), "por": quien,
                   "vehiculos": respaldo}}, upsert=True)
 
+    ahora = datetime.now(timezone.utc).isoformat()
     hechos = []
     for h in seguros:
-        fecha = (h.get("evidencia") or {}).get("fecha_incidencia")
+        ev = h.get("evidencia") or {}
+
+        if h["problema"] == "taller_circulando":
+            # Vuelve a activa y se le quita el reloj: si se quedara, la proxima
+            # entrada en taller heredaria esta fecha y apareceria parada desde
+            # hace meses (mismo motivo por el que `_auto_incident_on_workshop`
+            # lo borra al salir).
+            await db.vehicles.update_one(
+                {"id": h["vehicle_id"]},
+                {"$set": {"status": "active",
+                          "salida_taller_origen": "se inspecciona a diario: estaba circulando",
+                          "salida_taller_por": quien, "salida_taller_en": ahora},
+                 "$unset": {"taller_desde": ""}})
+            # Y se cierra su incidencia de taller, que si no queda abierta para
+            # siempre diciendo que esta dentro.
+            await db.incidents.update_many(
+                {"vehicle_id": h["vehicle_id"], "status": "open",
+                 "title": {"$regex": re.escape(_EST_INCIDENCIA_TALLER), "$options": "i"}},
+                {"$set": {"status": "resolved", "resolved_at": ahora},
+                 "$push": {"history": {"date": ahora,
+                                       "event": "Cerrada: la furgoneta se inspecciona a "
+                                                "diario, estaba circulando"}}})
+            hechos.append({"matricula": h["matricula"], "accion": "devuelta a activa",
+                           "inspecciones": ev.get("inspecciones_despues"),
+                           "dias": h.get("dias_estimados")})
+            continue
+
+        fecha = ev.get("fecha_incidencia")
         if not fecha:
             continue
         await db.vehicles.update_one(
@@ -7652,14 +7742,16 @@ async def corregir_estados_vehiculo(data: dict = Body(...), user: dict = Depends
             {"$set": {"taller_desde": fecha,
                       "taller_desde_origen": "incidencia de entrada",
                       "taller_desde_puesto_por": quien,
-                      "taller_desde_puesto_en": datetime.now(timezone.utc).isoformat()}})
-        hechos.append({"matricula": h["matricula"], "taller_desde": str(fecha)[:10],
-                       "dias": h.get("dias_estimados")})
+                      "taller_desde_puesto_en": ahora}})
+        hechos.append({"matricula": h["matricula"], "accion": "fecha de entrada puesta",
+                       "taller_desde": str(fecha)[:10], "dias": h.get("dias_estimados")})
 
     # VERIFICAR: el hallazgo tiene que haber desaparecido.
     despues = await _est_hallazgos()
-    quedan = sum(1 for h in despues["hallazgos"] if h["problema"] == "taller_sin_fecha")
-    logger.info("Estados de vehiculo: %d corregidos, quedan %d sin fecha", len(hechos), quedan)
+    quedan = sum(1 for h in despues["hallazgos"]
+                 if h["problema"] in ("taller_sin_fecha", "taller_circulando")
+                 and h["clase"] == "SAFE_TO_AUTOCORRECT")
+    logger.info("Estados de vehiculo: %d corregidos, quedan %d seguros", len(hechos), quedan)
     return {"corregidos": len(hechos), "detalle": hechos,
             "quedan_sin_fecha": quedan, "verificado": quedan == 0}
 
@@ -15259,6 +15351,115 @@ async def ot_furgonetas_paradas(center: str = "", _=Depends(require_admin)):
         "dias_acumulados": sum(x["dias"] or 0 for x in out),
         "sin_orden": sum(1 for x in out if not x["orden"]),
         "mas_de_30": sum(1 for x in out if (x["dias"] or 0) > 30),
+    }
+
+
+@api_router.get("/work-orders/preparar/{vehicle_id}")
+async def ot_preparar(vehicle_id: str, _=Depends(require_admin)):
+    """Una orden de taller ya redactada, lista para revisar y mandar.
+
+    POR QUE. El modulo de ordenes existe entero y no se usa: 13 furgonetas
+    paradas —algunas desde hace mas de dos meses— y CERO ordenes vivas, con 39
+    danos graves o criticos abiertos sin ninguna. Al mirar por que, no falta
+    ninguna funcionalidad: falta que crear una orden sea barato. Hoy hay que
+    elegir taller de entre 46, escribir el problema y acordarse de marcar los
+    danos que van dentro.
+
+    Todo eso ya esta en la base. Esto lo junta y devuelve el borrador; la
+    persona revisa y confirma. No crea nada: preparar y decidir son cosas
+    distintas, y una orden creada sola acabaria mandando furgonetas a talleres
+    que nadie eligio.
+    """
+    v = await db.vehicles.find_one(
+        {"id": vehicle_id, "status": {"$nin": ["deleted", "baja"]}}, {"_id": 0})
+    if not v:
+        raise HTTPException(404, "Esa furgoneta no está o está de baja")
+
+    # ── Lo que tiene roto ────────────────────────────────────────────────────
+    danos = await db.vehicle_damage_ledger.find(
+        {"vehicle_id": vehicle_id, "status": "open",
+         "orden_id": {"$in": [None, ""]}}).sort("rank", -1).to_list(60)
+    fotos = await _ot_fotos_del_dano(danos)
+
+    # ── Con que taller ───────────────────────────────────────────────────────
+    # Del mismo centro, y de esos primero los que se puede AVISAR: un taller sin
+    # telefono ni correo obliga a salir de la app, que es justo lo que sobra.
+    centro = str(v.get("center") or "")
+    q_w: dict = {}
+    if centro:
+        cod = _centro_norm(centro, await _centros_conocidos())
+        q_w["center"] = {"$regex": re.escape(cod), "$options": "i"}
+    talleres = await db.workshops.find(
+        q_w, {"_id": 0, "id": 1, "name": 1, "phone": 1, "email": 1, "center": 1,
+              "especialidad": 1}).to_list(100)
+
+    # Cuantas ordenes lleva cada uno y como le fue. Con dos ordenes en total
+    # esto no ordena nada todavia, pero es el sitio donde entrara el historial
+    # en cuanto lo haya, y asi no hay que rehacer la pantalla.
+    hechas: dict = {}
+    cur = db.ordenes_trabajo.aggregate([
+        {"$match": {"estado": {"$nin": ["anulada"]}}},
+        {"$group": {"_id": "$taller_id", "n": {"$sum": 1}}}])
+    async for r in cur:
+        hechas[r["_id"]] = r["n"]
+
+    def _puntua(w):
+        return (1 if (w.get("phone") or w.get("email")) else 0,
+                hechas.get(w.get("id"), 0))
+    talleres.sort(key=_puntua, reverse=True)
+
+    # ── El problema, escrito ─────────────────────────────────────────────────
+    # Redactado a partir del libro, que es lo que el taller necesita saber. Si
+    # no hay danos apuntados NO se inventa un texto: se dice que hay que
+    # escribirlo, porque una orden que llega al taller diciendo "revision
+    # general" obliga a la llamada que esto venia a quitar.
+    if danos:
+        por_grav: dict = {}
+        for d in danos:
+            por_grav.setdefault(d.get("severity") or "sin gravedad", []).append(
+                d.get("part") or d.get("panel") or "pieza sin nombre")
+        trozos = []
+        for sev in ("critico", "grave", "moderado", "leve", "sin gravedad"):
+            if sev in por_grav:
+                trozos.append("%s: %s" % (sev, ", ".join(sorted(set(por_grav[sev])))))
+        problema = "; ".join(trozos)
+    else:
+        problema = ""
+
+    dias_parada = None
+    if v.get("taller_desde"):
+        try:
+            dias_parada = (datetime.now(timezone.utc) - datetime.fromisoformat(
+                str(v["taller_desde"]).replace("Z", "+00:00"))).days
+        except Exception:                                        # noqa: BLE001
+            dias_parada = None
+
+    return {
+        "vehicle_id": vehicle_id,
+        "matricula": v.get("license_plate") or vehicle_id,
+        "center": centro,
+        "en_taller": v.get("status") == "taller",
+        "dias_parada": dias_parada,
+        "problema": problema,
+        "falta_problema": not problema,
+        "ledger_ids": [str(d.get("_id")) for d in danos],
+        "danos": [{
+            "ledger_id": str(d.get("_id")),
+            "part": d.get("part") or d.get("panel") or "",
+            "pieza": _atr_pieza(d.get("part") or d.get("panel") or ""),
+            "severity": d.get("severity") or "",
+            "first_seen": d.get("first_seen"),
+            "foto": (fotos.get(str(d.get("_id"))) or {}).get("url"),
+        } for d in danos],
+        "talleres": [{
+            "id": w.get("id"), "name": w.get("name"), "center": w.get("center"),
+            "phone": w.get("phone"), "email": w.get("email"),
+            "contactable": bool(w.get("phone") or w.get("email")),
+            "ordenes_previas": hechas.get(w.get("id"), 0),
+        } for w in talleres[:15]],
+        "sugerido": (talleres[0].get("id") if talleres else None),
+        "fecha_entrada": (str(v.get("taller_desde") or "")[:10]
+                          or datetime.now(timezone.utc).strftime("%Y-%m-%d")),
     }
 
 
