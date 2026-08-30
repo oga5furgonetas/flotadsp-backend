@@ -6933,6 +6933,201 @@ async def itv_guardar_lote(data: dict = Body(...), user: dict = Depends(require_
     return {"guardadas": len(guardadas), "errores": errores, "detalle": guardadas}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# SANEAR EL HISTORICO DE KILOMETRAJE
+# ═══════════════════════════════════════════════════════════════════════════
+# `_odo_validar` esta bien y ya rechaza lo imposible, pero se puso DESPUES de
+# que entrara la basura: en `mileage_history` quedan 27 lecturas imposibles de
+# 2.517 (1,1%). El patron es siempre el mismo, un digito de mas o de menos:
+# 611105 por 61110, 253030 por 25303, 1600 por 34597.
+#
+# NO ES UN DETALLE ESTETICO. Con esos picos dentro, el ritmo de km sale entre
+# -6.350 y +7.616 km/dia y no se puede predecir NADA: ni cuando toca el aceite,
+# ni que furgoneta esta parada, ni cual hace mas kilometros de la cuenta. Un
+# solo pico envenena toda la serie de esa furgoneta.
+#
+# COMO SE DECIDE CUAL SOBRA, y esto es lo importante. No se mira lectura a
+# lectura contra la anterior: se busca el PICO AISLADO. Si A < B > C con B
+# absurdo respecto a los dos vecinos, el que sobra es B, no C — y comparando de
+# dos en dos se marcaria C, que es el bueno. Es la diferencia entre limpiar el
+# error y borrar el dato correcto que viene detras.
+#
+# NO SE BORRA NADA: la lectura se marca `descartada` con su motivo y deja de
+# contar. Si el juicio estuviera mal, esta ahi para verlo.
+
+ODO_SALTO_MAX_DIA = 900       # km/dia por encima de los cuales no es reparto urbano
+
+
+def _odo_sospechosas(hist: list) -> list:
+    """Indices del historico que no pueden ser ciertos.
+
+    SE BUSCA LA CADENA VALIDA MAS LARGA, y lo que queda fuera es lo malo. Dos
+    intentos anteriores fallaron por comparar de dos en dos:
+
+      · Contra la lectura anterior a secas: un pico marca ADEMAS el dato bueno
+        que viene detras, porque respecto al pico ha "bajado". Se limpiaba el
+        error y se tiraba el dato correcto.
+      · Contra el ultimo punto bueno, con los siguientes como confirmacion: en
+        la 2851 NGX hay CUATRO lecturas malas seguidas (253030 y 271000 x3), y
+        entre ellas se confirman. El algoritmo se dejaba convencer y marcaba
+        como mala la serie buena entera.
+
+    Con la cadena mas larga eso no pasa: 4 lecturas malas nunca ganan a 26
+    buenas. Es la mayoria la que define que es normal, no el vecino.
+
+    LOS DIAS SE CUENTAN DESDE LA PRIMERA VEZ QUE SE VIO ESE KILOMETRAJE. El
+    cuentakilometros se queda pegado dias entre inspecciones: la 4523MZG
+    marcaba 56518 del 9 al 17 de agosto y el 18 puso 57682. Contando de un dia
+    para otro son 1.164 km/dia e imposible; contando desde que se vio por
+    primera vez son nueve dias y 129 km/dia, que es su ritmo normal.
+    """
+    puntos = []
+    for i, h in enumerate(hist or []):
+        if h.get("descartada"):
+            continue
+        km = h.get("km")
+        f = _fecha_suave(h.get("date"))
+        if isinstance(km, (int, float)) and not isinstance(km, bool) and f:
+            puntos.append((i, int(km), f))
+    if len(puntos) < 3:
+        # Con dos lecturas no hay mayoria que valga: cualquiera de las dos
+        # podria ser la mala y marcar una al azar es peor que no marcar.
+        return []
+    puntos.sort(key=lambda x: (x[2], x[1]))
+    n = len(puntos)
+
+    # Primera vez que se vio cada kilometraje: es desde donde cuenta el salto.
+    primera = {}
+    for _, km, f in puntos:
+        if km not in primera or f < primera[km]:
+            primera[km] = f
+
+    def _encaja(a, b):
+        """b puede venir despues de a en una misma cadena real."""
+        if b[1] < a[1]:
+            return False                      # un cuentakilometros no baja
+        dias = max(1, (b[2] - primera.get(a[1], a[2])).days)
+        return (b[1] - a[1]) / dias <= ODO_SALTO_MAX_DIA
+
+    # Cadena valida mas larga (n es de decenas: O(n^2) sobra).
+    largo = [1] * n
+    prev = [-1] * n
+    for b in range(n):
+        for a in range(b):
+            if largo[a] + 1 > largo[b] and _encaja(puntos[a], puntos[b]):
+                largo[b] = largo[a] + 1
+                prev[b] = a
+    fin = max(range(n), key=lambda k: (largo[k], puntos[k][2]))
+    buena = set()
+    k = fin
+    while k != -1:
+        buena.add(k)
+        k = prev[k]
+
+    # Si la cadena no llega ni a la mitad, esta serie es un caos y marcar la
+    # mitad de las lecturas seria inventar: mejor no tocar nada y que lo mire
+    # una persona.
+    if len(buena) * 2 < n:
+        return []
+
+    malos = []
+    for k in range(n):
+        if k in buena:
+            continue
+        idx, km, f = puntos[k]
+        malos.append((idx, "%d km no encaja con la serie de esta furgoneta" % km))
+    return malos
+
+
+def _fecha_suave(x):
+    try:
+        return datetime.fromisoformat(str(x).replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:                                        # noqa: BLE001
+        try:
+            return datetime.strptime(str(x)[:10], "%Y-%m-%d")
+        except Exception:                                    # noqa: BLE001
+            return None
+
+
+@api_router.get("/vehicles/odometro/sospechosas")
+async def odometro_sospechosas(_=Depends(require_admin)):
+    """Lecturas de kilometraje que no pueden ser ciertas."""
+    vs = await db.vehicles.find({"status": {"$nin": ["deleted"]}},
+                                {"_id": 0, "id": 1, "license_plate": 1,
+                                 "mileage": 1, "mileage_history": 1}).to_list(700)
+    out, total = [], 0
+    for v in vs:
+        hist = v.get("mileage_history") or []
+        total += len(hist)
+        malos = _odo_sospechosas(hist)
+        if not malos:
+            continue
+        # Cual seria el km bueno una vez fuera lo malo: es lo que hay que
+        # enseñar, porque si el km ACTUAL es una de las malas, la ficha esta
+        # mintiendo ahora mismo.
+        buenos = [h.get("km") for i, h in enumerate(hist)
+                  if i not in {m[0] for m in malos} and isinstance(h.get("km"), (int, float))]
+        out.append({
+            "vehicle_id": v["id"],
+            "matricula": v.get("license_plate"),
+            "km_actual": v.get("mileage"),
+            "km_bueno": max(buenos) if buenos else None,
+            "actual_es_malo": bool(buenos) and v.get("mileage") != max(buenos),
+            "lecturas": [{"i": i, "km": hist[i].get("km"),
+                          "fecha": str(hist[i].get("date"))[:10],
+                          "origen": hist[i].get("source"), "motivo": m}
+                         for i, m in malos],
+        })
+    out.sort(key=lambda x: -len(x["lecturas"]))
+    return {"vehiculos": out, "total_lecturas": total,
+            "sospechosas": sum(len(x["lecturas"]) for x in out),
+            "con_km_actual_malo": sum(1 for x in out if x["actual_es_malo"])}
+
+
+@api_router.post("/vehicles/odometro/sanear")
+async def odometro_sanear(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Marca como descartadas las lecturas imposibles y recoloca el km.
+
+    NO BORRA: cada lectura queda con `descartada`, el motivo y quien lo hizo, y
+    deja de contar en las series. Si el juicio estuviera mal, ahi esta para
+    verlo — y para deshacerlo quitando la marca.
+    """
+    solo = set(str(x) for x in (data.get("vehiculos") or []) if x)
+    vs = await db.vehicles.find({"status": {"$nin": ["deleted"]}},
+                                {"_id": 0, "id": 1, "license_plate": 1,
+                                 "mileage": 1, "mileage_history": 1}).to_list(700)
+    quien = user.get("name") or user.get("username") or "oficina"
+    ahora = datetime.now(timezone.utc).isoformat()
+    tocadas, marcadas, km_corregidos = 0, 0, 0
+
+    for v in vs:
+        if solo and v["id"] not in solo:
+            continue
+        hist = list(v.get("mileage_history") or [])
+        malos = _odo_sospechosas(hist)
+        if not malos:
+            continue
+        for i, motivo in malos:
+            hist[i] = {**hist[i], "descartada": True, "descartada_motivo": motivo,
+                       "descartada_por": quien, "descartada_en": ahora}
+        buenos = [h.get("km") for h in hist
+                  if not h.get("descartada") and isinstance(h.get("km"), (int, float))]
+        cambio = {"mileage_history": hist}
+        # El km de la ficha se recoloca al MAYOR de los buenos: un
+        # cuentakilometros no baja, asi que el mayor valido es el real.
+        if buenos and v.get("mileage") != max(buenos):
+            cambio["mileage"] = max(buenos)
+            km_corregidos += 1
+        await db.vehicles.update_one({"id": v["id"]}, {"$set": cambio})
+        tocadas += 1
+        marcadas += len(malos)
+        logger.info("Odómetro saneado %s: %d lecturas descartadas",
+                    v.get("license_plate"), len(malos))
+
+    return {"vehiculos_tocados": tocadas, "lecturas_descartadas": marcadas,
+            "km_corregidos": km_corregidos}
+
+
 @api_router.get("/vehicles/last-inspections")
 async def vehicles_last_inspections(_=Depends(require_admin)):
     """Mapa vehicle_id → fecha de su última inspección (para el semáforo de la lista)."""
