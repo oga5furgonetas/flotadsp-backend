@@ -7413,6 +7413,114 @@ async def _est_hallazgos() -> dict:
     }
 
 
+# ── EL CENTRO ESCRITO DE VARIAS FORMAS ──────────────────────────────────────
+# El gotcha 6 se descubrio en `vehicles` ('OGA5', 'OGA5 ', 'oga5', 'AMZL OGA5
+# SANTIAGO XPT') y se arreglo de dos maneras: limpiando el dato y filtrando por
+# `$regex` en la lectura. Pero eso es corregir y esquivar, no PREVENIR: hay 148
+# sitios que escriben el centro y solo dos lo normalizan, asi que basta un
+# espacio de mas desde cualquiera de los otros 146 para partir un centro en dos.
+#
+# Medido el 30-08-2026: hoy las 14 colecciones con campo `center` estan limpias,
+# `vehicles` incluida. O sea que el filtro por igualdad ACIERTA — pero por
+# suerte, no por diseño.
+#
+# Parchear los 148 sitios seria fragil: el 149 se olvidaria. Esto en cambio
+# descubre las colecciones solo, asi que cubre tambien las que todavia no
+# existen, y deja el aviso donde se ve.
+
+_CENTRO_SALTAR = {"cortex_packages", "cortex_events", "cortex_stations"}
+
+
+async def _centros_hallazgos() -> dict:
+    """Colecciones donde el mismo centro esta escrito de mas de una forma."""
+    conocidos = await _centros_conocidos()
+    hallazgos, revisadas = [], 0
+    for col in sorted(await db.list_collection_names()):
+        if col.startswith("system.") or col in _CENTRO_SALTAR:
+            continue
+        try:
+            vals = await db[col].distinct("center")
+        except Exception:                                        # noqa: BLE001
+            continue
+        if not vals:
+            continue
+        revisadas += 1
+        # Se agrupan por su codigo: si dos escrituras distintas llevan al mismo
+        # centro, ese centro esta partido en dos y ningun recuento cuadra.
+        por_codigo: dict = {}
+        for v in vals:
+            por_codigo.setdefault(_centro_norm(v, conocidos), []).append(v)
+        for codigo, formas in por_codigo.items():
+            if len(formas) < 2:
+                continue
+            cuenta = {}
+            for f in formas:
+                cuenta[f] = await db[col].count_documents({"center": f})
+            # Se corrige solo si el destino es un centro que YA existe limpio.
+            # Si no, renombrar seria inventarse el centro (misma regla que
+            # `_centro_norm`: no adivina).
+            seguro = codigo in conocidos and codigo in formas
+            hallazgos.append({
+                "coleccion": col, "codigo": codigo,
+                "formas": [{"valor": f, "docs": cuenta[f]} for f in
+                           sorted(formas, key=lambda x: -cuenta[x])],
+                "docs_a_mover": sum(n for f, n in cuenta.items() if f != codigo),
+                "clase": "SAFE_TO_AUTOCORRECT" if seguro else "NEEDS_REVIEW",
+                "que_pasa": "«%s» está escrito de %d formas en %s"
+                            % (codigo, len(formas), col),
+                "impacto": "Cualquier recuento que agrupe por centro parte %s en "
+                           "%d trozos, y los filtros por igualdad ven solo uno."
+                           % (codigo, len(formas)),
+                "correccion": ("Reescribir las variantes a «%s»" % codigo) if seguro
+                              else "«%s» no existe escrito limpio en ninguna parte: "
+                                   "decidir a mano cuál es el bueno" % codigo,
+            })
+    return {"total": len(hallazgos), "colecciones_revisadas": revisadas,
+            "centros_conocidos": sorted(conocidos), "hallazgos": hallazgos}
+
+
+@api_router.get("/checkers/centros")
+async def checker_centros(_=Depends(require_admin)):
+    """Dónde está el centro escrito de varias formas."""
+    return await _centros_hallazgos()
+
+
+@api_router.post("/checkers/centros/corregir")
+async def corregir_centros(_=Depends(require_admin)):
+    """Unifica las variantes, con respaldo y comprobación.
+
+    Gotcha 38: la clasificación se recalcula AQUI. Si el cliente pudiera decir
+    «esto es seguro», bastaría con mentir para saltársela.
+    """
+    d = await _centros_hallazgos()
+    seguros = [h for h in d["hallazgos"] if h["clase"] == "SAFE_TO_AUTOCORRECT"]
+    if not seguros:
+        return {"corregidos": 0, "motivo": "No hay nada que se pueda unificar solo.",
+                "pendientes": d["total"]}
+
+    respaldo, corregidos = [], 0
+    for h in seguros:
+        for f in h["formas"]:
+            if f["valor"] == h["codigo"]:
+                continue
+            respaldo.append({"coleccion": h["coleccion"], "de": f["valor"],
+                             "a": h["codigo"], "docs": f["docs"]})
+            r = await db[h["coleccion"]].update_many(
+                {"center": f["valor"]}, {"$set": {"center": h["codigo"]}})
+            corregidos += r.modified_count
+    await db.app_meta.update_one(
+        {"_id": "respaldo_centros"},
+        {"$set": {"at": datetime.now(timezone.utc), "cambios": respaldo}},
+        upsert=True)
+
+    # Verificable: se vuelve a mirar. Una correccion que no se comprueba es una
+    # esperanza (gotcha 38, quinta condicion).
+    despues = await _centros_hallazgos()
+    quedan = [h for h in despues["hallazgos"] if h["clase"] == "SAFE_TO_AUTOCORRECT"]
+    return {"corregidos": corregidos, "verificado": not quedan,
+            "pendientes": despues["total"], "respaldo": len(respaldo)}
+
+
 @api_router.get("/checkers/estados-vehiculo")
 async def checker_estados_vehiculo(_=Depends(require_admin)):
     """Estados de vehiculo que no cuadran con lo que hay detras."""

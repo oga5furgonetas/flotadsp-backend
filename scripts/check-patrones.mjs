@@ -33,6 +33,14 @@ const REVISADOS = new Map([
    '0 paquetes sin `service_day` ni `state`, 0 daños sin `part` ni `severity`: hoy no ' +
    'puede reventar. Aun así se pasó a .get(), porque protegerlo es gratis y el día que ' +
    'entre uno sin campo el fallo es un 500 en el aviso diario.'],
+  ['backend/server.py:igualdad-de-centro',
+   'Medido el 30-08-2026 en las 37 colecciones con campo `center`: ninguna de las que ' +
+   'tocan estas 33 líneas tiene el centro escrito de dos formas, así que la igualdad ' +
+   'acierta. Y ya no es por suerte: `/checkers/centros` vigila las 37 —descubriéndolas ' +
+   'solo, así que cubre también las futuras— y unifica con `_centro_norm`. En esa misma ' +
+   'pasada salieron dos que SÍ estaban partidas y no se veían desde aquí: `maintenance_log` ' +
+   '(5 de 9 registros invisibles) y `ordenes_trabajo`. Corregidas, con respaldo en ' +
+   '`app_meta.respaldo_centros`.'],
   // Los scripts de análisis no corren en producción: una división por cero ahí
   // es un script que falla al ejecutarlo a mano, no un endpoint caído.
   ['scripts/regla_dsc.py:division-sin-guard', 'Script de análisis, no corre en producción'],
@@ -137,7 +145,7 @@ for (const f of ficheros(RAIZ)) {
    de revisar sitios que en su mayoría están bien, y mientras tanto CI en rojo
    deja de mirarse. Lo que NO se tolera es que suba: un patrón nuevo es código
    recién escrito, y ese es el momento barato de arreglarlo. */
-const TOLERADOS = 85
+const TOLERADOS = 45
 
 console.log(`\npatrones: ${PATRONES.length} reglas, todas salidas de un bug real de este proyecto`)
 if (!avisos) {

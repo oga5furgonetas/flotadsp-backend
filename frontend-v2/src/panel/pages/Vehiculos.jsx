@@ -24,7 +24,7 @@ import {
   getVehicleDamageLedger, repairVehicleLedger, getSpareWheels, getMaintenanceLog, borrarApunteMantenimiento,
   getAllDocuments,
   getExposicionVehiculos, getVehiculosDuplicados, fusionarVehiculos, getExpedienteVehiculo,
-  getOdometroSospechosas, sanearOdometro, getDatosQueFaltan, rellenarDatosLote, getCheckerEstados, corregirEstados,
+  getOdometroSospechosas, sanearOdometro, getDatosQueFaltan, rellenarDatosLote, getCheckerEstados, corregirEstados, getCheckerCentros, corregirCentros,
 } from '../api'
 import { getAdmin } from '../auth'
 
@@ -2091,6 +2091,104 @@ const CLASE = {
   UNKNOWN: { txt: 'sin clasificar', cls: 'bg-dark-800 text-dark-400 ring-dark-700' },
 }
 
+/* ── EL CENTRO ESCRITO DE VARIAS FORMAS ─────────────────────────────────────
+   'OGA5' y 'AMZL OGA5 SANTIAGO XPT' son la misma nave, y para la base de datos
+   son dos. Cuando eso pasa, cualquier lista filtrada por centro enseña la mitad
+   de lo que hay y no falla nada: simplemente faltan filas.
+
+   Salió el 30-08-2026 en el historial de mantenimiento — 5 de 9 registros
+   invisibles— y en una orden de taller. */
+function PanelCentros() {
+  const [d, setD] = useState(null)
+  const [cargando, setCargando] = useState(true)
+  const [corrigiendo, setCorrigiendo] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  const cargar = useCallback(() => {
+    setCargando(true)
+    getCheckerCentros()
+      .then((r) => setD(r.data))
+      .catch(() => setD(null))
+      .finally(() => setCargando(false))
+  }, [])
+  useEffect(cargar, [cargar])
+
+  const corregir = async () => {
+    setCorrigiendo(true); setMsg(null)
+    try {
+      const r = await corregirCentros()
+      setMsg(r.data.corregidos
+        ? { txt: `${r.data.corregidos} registros unificados${r.data.verificado ? ' y comprobado' : ', pero quedan casos'}.` }
+        : { txt: r.data.motivo || 'No había nada que unificar solo.' })
+      cargar()
+    } catch (e) {
+      setMsg({ mal: true, txt: e?.response?.data?.detail || 'No se pudo.' })
+    } finally { setCorrigiendo(false) }
+  }
+
+  if (cargando) {
+    return (
+      <div className="card flex items-center justify-center gap-2 p-10 text-dark-400">
+        <Loader2 size={15} className="animate-spin" /> Comprobando cómo está escrito el centro…
+      </div>
+    )
+  }
+  if (!d?.hallazgos?.length) {
+    return (
+      <div className="card p-10 text-center text-[13px] text-dark-400">
+        El centro está escrito igual en las {d?.colecciones_revisadas || 0} tablas que lo llevan.
+      </div>
+    )
+  }
+
+  const seguros = d.hallazgos.filter((h) => h.clase === 'SAFE_TO_AUTOCORRECT').length
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-[12.5px] text-dark-500">
+          <span className="cifra text-dark-300">{d.total}</span> casos en{' '}
+          <span className="cifra">{d.colecciones_revisadas}</span> tablas revisadas ·{' '}
+          <span className="cifra text-lime-300">{seguros}</span> se unifican solos
+        </span>
+        {seguros > 0 && (
+          <button onClick={corregir} disabled={corrigiendo}
+            className="btn-primary ml-auto px-3 py-1.5 text-[12.5px] disabled:opacity-50">
+            {corrigiendo ? 'Unificando…' : `Unificar los ${seguros} seguros`}
+          </button>
+        )}
+      </div>
+
+      {msg && <p className={`text-[12.5px] ${msg.mal ? 'text-red-300' : 'text-lime-300'}`}>{msg.txt}</p>}
+
+      <div className="space-y-1.5">
+        {d.hallazgos.map((h) => (
+          <div key={`${h.coleccion}-${h.codigo}`} className="card px-3.5 py-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="cifra font-semibold text-dark-100">{h.codigo}</span>
+              <span className="text-[13px] text-dark-300">{h.que_pasa}</span>
+              <span className={`ml-auto rounded-full px-2 py-0.5 text-[10.5px] font-semibold ring-1 ring-inset ${
+                (CLASE[h.clase] || CLASE.UNKNOWN).cls}`}>
+                {(CLASE[h.clase] || CLASE.UNKNOWN).txt}
+              </span>
+            </div>
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5">
+              {h.formas.map((f) => (
+                <span key={f.valor} className="text-[12px] text-dark-500">
+                  <span className="cifra text-dark-400">{f.docs}</span>
+                  {' '}× «{f.valor}»
+                </span>
+              ))}
+            </div>
+            <p className="mt-1 text-[12px] text-dark-500">{h.impacto}</p>
+            <p className="mt-0.5 text-[12px] text-brand-300">{h.correccion}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function PanelEstados() {
   const [d, setD] = useState(null)
   const [cargando, setCargando] = useState(true)
@@ -2695,6 +2793,10 @@ export default function Vehiculos() {
           <div>
             <h2 className="mb-2 text-[15px] font-semibold text-dark-100">Estados que no cuadran</h2>
             <PanelEstados />
+          </div>
+          <div>
+            <h2 className="mb-2 text-[15px] font-semibold text-dark-100">El centro escrito de varias formas</h2>
+            <PanelCentros />
           </div>
           <div>
             <h2 className="mb-2 text-[15px] font-semibold text-dark-100">Datos que faltan</h2>

@@ -221,3 +221,41 @@ evento que marca la entrada.
 distinta («4453 NKC + CARTER»), así que hay que buscar **la de entrada a
 taller**, no la última. Coger la última pondría una fecha equivocada que parece
 medida.
+
+---
+
+### 4 · El centro escrito de varias formas
+
+**Encontrado** 2026-08-30, revisando los avisos del gotcha 6.
+
+**Lo que se esperaba encontrar.** 33 consultas filtran el centro por igualdad
+cuando el gotcha 6 manda `$regex`. Se midió antes de tocar nada: **ninguna de
+esas colecciones está sucia hoy**, y `vehicles` —la que originó el gotcha—
+tampoco. Los 33 avisos aciertan.
+
+**Lo que se encontró de verdad.** Que aciertan **por suerte, no por diseño**. Se
+corrigió el dato y se esquivó en la lectura, pero nunca se previno: hay **148
+sitios que escriben el centro y solo dos lo normalizan**.
+
+Y al mirar las 37 colecciones con campo `center` en vez de solo las 14 que salían
+en el análisis del código, aparecieron **dos partidas en dos** que nadie veía —
+precisamente porque nadie las filtraba por igualdad:
+
+| Colección | Formas | Efecto |
+|---|---|---|
+| `maintenance_log` | `'OGA5'` (4) y `'AMZL OGA5 SANTIAGO XPT'` (5) | **5 de 9 registros invisibles** |
+| `ordenes_trabajo` | `'OGA5'` (1) y `'AMZL OGA5 SANTIAGO XPT'` (1) | La mitad fuera |
+
+El historial de mantenimiento de OGA5 llevaba **el 56 % oculto**.
+
+**Corregido.** 6 documentos unificados, verificado a 0, respaldo en
+`app_meta.respaldo_centros`.
+
+**Prevención.** `/checkers/centros` **descubre solas** las colecciones con campo
+`center`, así que cubre también las que aún no existen — que es la parte que
+importa, porque el fallo de esta familia siempre aparece donde no se estaba
+mirando. Panel en Vehículos → Revisar datos.
+
+**Lo que enseña este caso.** Buscar el patrón en el código encuentra dónde se
+*lee* mal; solo mirar los datos encuentra dónde están *escritos* mal. Las dos
+colecciones rotas no aparecían en ninguna de las 33 líneas sospechosas.

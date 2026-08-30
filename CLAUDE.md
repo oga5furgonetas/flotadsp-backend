@@ -87,6 +87,19 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `'AMZL OGA5 SANTIAGO XPT'`. Cualquier filtro por centro va por `$regex` sobre el
    código, nunca por igualdad. Y `inspections`, `incidents` y `alerts` NO tienen
    campo `center`: se acotan por `vehicle_id` contra las furgonetas del centro.
+   **Actualizado el 30-08-2026.** Se había corregido el dato y esquivado en la
+   lectura, pero nunca se PREVINO: hay 148 sitios que escriben el centro y solo
+   dos lo normalizan, así que basta un espacio de más desde cualquiera de los
+   otros 146. Parchear los 148 sería frágil —el 149 se olvidaría—, así que la
+   defensa es `/checkers/centros`: **descubre solas** las colecciones con campo
+   `center` (37 hoy) y unifica con `_centro_norm`, respaldo en
+   `app_meta.respaldo_centros`. Encontró dos que estaban partidas y que el
+   análisis del código no veía porque nadie las filtraba por igualdad:
+   `maintenance_log` (**5 de 9 registros invisibles**) y `ordenes_trabajo`.
+   La regla de `_centro_norm` es que **no adivina**: solo reescribe cuando en el
+   texto hay EXACTAMENTE UN código que ya existe limpio. Con dos, no toca nada —
+   si adivinara, movería documentos al centro equivocado, que no se nota y es
+   peor que una lista corta. 15 casos en `backend/tests/test_centros.py`.
 7. `frontend-v2/dist/` NO se versiona (está en .gitignore desde 2026-07). Es el build:
    se regenera con `npm run build` antes de cada deploy. Antes se commiteaba y provocaba
    conflictos masivos al trabajar desde dos ordenadores; ya no.

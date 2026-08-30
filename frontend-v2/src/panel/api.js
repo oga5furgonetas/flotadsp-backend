@@ -519,3 +519,5 @@ export const getFurgonetasParadas = (center) =>
   api.get('/work-orders/paradas', { params: centerParam(center) })
 export const marcarDebrief = (tba, body, day) =>
   api.post(`/cortex/debrief/${encodeURIComponent(tba)}`, body, { params: { day } })
+export const getCheckerCentros = () => api.get('/checkers/centros')
+export const corregirCentros = () => api.post('/checkers/centros/corregir')
