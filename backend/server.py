@@ -12299,6 +12299,151 @@ async def _bucle_aviso(clave: str, hora_key: str, accion):
         await asyncio.sleep(60)
 
 
+# ── EL DISCO SE LLENA EN SILENCIO ───────────────────────────────────────────
+# Un Atlas M0 son 512 MB y cuando se llena DEJA DE ACEPTAR ESCRITURAS: se para
+# la ingesta de Cortex, las inspecciones y todo lo que guarde algo. No avisa
+# antes, no se degrada poco a poco: funciona y de repente no.
+#
+# El 30-08-2026 estaba al 95 % —488,6 de 512— y a 5 MB/dia le quedaban CINCO
+# DIAS. Nadie lo estaba mirando, y no habia forma de mirarlo sin abrir Atlas.
+#
+# Esto lo mide solo y avisa con margen. La cuenta que importa no es el
+# porcentaje: son los DIAS QUE QUEDAN, porque es lo unico que dice si hay que
+# hacer algo hoy o la semana que viene.
+
+ESPACIO_LIMITE_MB = 512          # Atlas M0
+ESPACIO_AVISA_DIAS = 21          # avisa cuando queden menos de tres semanas
+ESPACIO_AVISA_PCT = 80           # o cuando se pase de este porcentaje
+
+
+async def _espacio_estado() -> dict:
+    """Cuanto ocupa, a que ritmo crece y cuantos dias quedan."""
+    cli = client
+    bases, total = [], 0.0
+    try:
+        nombres = await cli.list_database_names()
+    except Exception as e:                                       # noqa: BLE001
+        return {"error": str(e)}
+    for n in nombres:
+        if n in ("admin", "local", "config"):
+            continue
+        try:
+            s = await cli[n].command("dbStats")
+        except Exception:                                        # noqa: BLE001
+            continue
+        mb = round(s.get("dataSize", 0) / 1024 / 1024, 1)
+        total += mb
+        # `ajena` marca lo que NO es de la app. `sample_mflix` es la base de
+        # ejemplo que Atlas crea sola —peliculas— y ocupaba 96 MB, el 19 % del
+        # limite, sin que nada la use: el propio backend ya la excluye al listar
+        # tenants. Se enseña aparte para que se vea que ese espacio se puede
+        # recuperar sin tocar un solo dato del negocio.
+        bases.append({"base": n, "mb": mb, "ajena": n.startswith("sample_")})
+    bases.sort(key=lambda x: -x["mb"])
+    total = round(total, 1)
+
+    # Las colecciones mas gordas de la BD principal, con su caducidad. Una
+    # coleccion grande CON caducidad se estabiliza sola; una sin caducidad
+    # crece para siempre, y esa es la que hay que mirar.
+    cols = []
+    try:
+        for c in await db.list_collection_names():
+            if c.startswith("system."):
+                continue
+            try:
+                s = await db.command("collStats", c)
+            except Exception:                                    # noqa: BLE001
+                continue
+            mb = round(s.get("size", 0) / 1024 / 1024, 1)
+            if mb < 1:
+                continue
+            dias = None
+            try:
+                for _k, v in (await db[c].index_information()).items():
+                    if "expireAfterSeconds" in v:
+                        dias = "por campo" if v["expireAfterSeconds"] == 0 else \
+                               round(v["expireAfterSeconds"] / 86400)
+                        break
+            except Exception:                                    # noqa: BLE001
+                pass
+            cols.append({"coleccion": c, "mb": mb, "docs": s.get("count", 0),
+                         "caducidad": dias, "sin_caducidad": dias is None})
+    except Exception:                                            # noqa: BLE001
+        pass
+    cols.sort(key=lambda x: -x["mb"])
+
+    # El ritmo, medido de lo que mas crece y no estimado a ojo.
+    mb_dia = None
+    try:
+        cur = db.cortex_packages.aggregate([
+            {"$group": {"_id": "$service_day", "n": {"$sum": 1}}},
+            {"$sort": {"_id": -1}}, {"$limit": 8}])
+        dias_p = [r async for r in cur]
+        n_tot = await db.cortex_packages.count_documents({})
+        s = await db.command("collStats", "cortex_packages")
+        if dias_p and n_tot:
+            kb_doc = (s.get("size", 0) / 1024) / n_tot
+            media = sum(d["n"] for d in dias_p) / max(len(dias_p), 1)
+            mb_dia = round(media * kb_doc / 1024, 2)
+    except Exception:                                            # noqa: BLE001
+        pass
+
+    libre = round(ESPACIO_LIMITE_MB - total, 1)
+    dias_rest = None
+    if mb_dia and mb_dia > 0:
+        dias_rest = max(0, round(libre / mb_dia))
+
+    ajeno = round(sum(b["mb"] for b in bases if b["ajena"]), 1)
+    return {
+        "usado_mb": total, "limite_mb": ESPACIO_LIMITE_MB, "libre_mb": libre,
+        "pct": round(total / ESPACIO_LIMITE_MB * 100, 1),
+        "crece_mb_dia": mb_dia, "dias_restantes": dias_rest,
+        "bases": bases, "colecciones": cols[:12],
+        "recuperable_mb": ajeno,
+        "urgente": bool((dias_rest is not None and dias_rest <= ESPACIO_AVISA_DIAS)
+                        or total / ESPACIO_LIMITE_MB * 100 >= ESPACIO_AVISA_PCT),
+    }
+
+
+@api_router.get("/admin/espacio")
+async def admin_espacio(_=Depends(require_admin)):
+    """Cuánto queda de base de datos, y para cuántos días."""
+    return await _espacio_estado()
+
+
+async def avisar_espacio() -> dict:
+    """Avisa por Telegram cuando el disco empiece a apretar.
+
+    Se avisa por DIAS y no por porcentaje: el 80 % no dice si hay que hacer algo
+    hoy o el mes que viene, y «quedan 5 dias» si.
+    """
+    e = await _espacio_estado()
+    if e.get("error") or not e.get("urgente"):
+        return e
+    # Clave DISTINTA de la del bucle: `_bucle_aviso` ya consume "espacio_bd" al
+    # comprobarla —es un upsert, no una lectura—, asi que reusarla aqui haria
+    # que el aviso no saliera NUNCA. Mismo patron que el aviso de DCR.
+    if await _ya_enviado_hoy("espacio_aviso", datetime.now(timezone.utc).strftime("%Y-%m-%d")):
+        return e
+    lineas = ["🗄️ <b>La base de datos se está llenando</b>",
+              "%s MB de %s (%s%%) · quedan %s MB"
+              % (e["usado_mb"], e["limite_mb"], e["pct"], e["libre_mb"])]
+    if e.get("dias_restantes") is not None:
+        lineas.append("A %s MB/día se llena en <b>%d días</b>."
+                      % (e["crece_mb_dia"], e["dias_restantes"]))
+    lineas.append("Cuando se llene deja de aceptar escrituras: se para la ingesta "
+                  "de Cortex y las inspecciones.")
+    if e.get("recuperable_mb"):
+        lineas.append("Hay <b>%s MB</b> en bases de ejemplo que no usa nadie."
+                      % e["recuperable_mb"])
+    gordas = [c for c in e.get("colecciones", []) if c["sin_caducidad"] and c["mb"] > 5]
+    if gordas:
+        lineas.append("Sin caducidad y grandes: %s"
+                      % ", ".join("%s (%s MB)" % (c["coleccion"], c["mb"]) for c in gordas[:3]))
+    await _telegram_aviso("\n".join(lineas))
+    return e
+
+
 async def revisar_facturacion() -> list:
     """Compara lo pagado con lo usado en TODOS los DSP y avisa de los desfases.
 
@@ -12422,6 +12567,10 @@ async def start_itv_whatsapp_scheduler():
     # porque cada centro cierra a su hora y el dato se borra solo al dia
     # siguiente (medido: a los 3 dias se ha perdido el 97 % de las devoluciones).
     asyncio.create_task(_bucle_congelar())
+    # El disco no avisa: un Atlas M0 lleno deja de aceptar escrituras de golpe.
+    # Va con el resumen del dia porque no es una urgencia de minutos, pero si
+    # algo que hay que ver TODOS los dias mientras apriete.
+    asyncio.create_task(_bucle_aviso("espacio_bd", "resumen_diario", avisar_espacio))
 
 
 @api_router.post("/whatsapp/avisar-itv")

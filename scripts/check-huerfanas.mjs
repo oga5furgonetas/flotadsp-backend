@@ -46,6 +46,11 @@ const SIN_UI_A_PROPOSITO = new Set([
   // comparación se hace abriendo Cortex al lado.
   'POST /cortex/congelar-dia',
   'GET /cortex/dias-congelados',
+  // Cuánto queda de base de datos. El aviso de verdad va por Telegram —cuando
+  // el disco aprieta hay que enterarse sin abrir la app—, y esto es para
+  // mirarlo a mano. Una pantalla que casi siempre dice «va bien» se deja de
+  // abrir justo antes del día que no.
+  'GET /admin/espacio',
   'POST /vehicles/fix-centers',
   'POST /drivers/import-ids',
   'GET /ai-dataset/export',
