@@ -6789,6 +6789,150 @@ async def vehiculo_expediente(vehicle_id: str, _=Depends(require_admin)):
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ITV: RELLENAR EN LOTE Y RENOVAR DE UN CLIC
+# ═══════════════════════════════════════════════════════════════════════════
+# EL PROBLEMA NO ES DETECTARLO, YA SE DETECTA. `/alerts/itv` lleva desde el
+# 28-08 sacando las que no tienen fecha, y aun asi el 30-08 seguian 56 de 124
+# activas sin ella (45%) y 16 con la fecha vencida — una desde agosto de 2025.
+# Entre las dos, la app no sabe el estado de la ITV del 58% de la flota.
+#
+# NO SE RELLENAN PORQUE CUESTA. Hoy hay que abrir la ficha de cada furgoneta,
+# buscar el campo y guardar: cincuenta y seis veces. Un dato que cuesta dos
+# minutos por unidad no se rellena nunca, por muy rojo que se pinte el aviso.
+# Esto lo convierte en una sola pantalla.
+#
+# Y RENOVAR ES UN CLIC. Una ITV "vencida hace diez meses" casi siempre es una
+# ITV que se paso y que nadie actualizo aqui. En Espana la siguiente cae el
+# mismo dia del mes: al ano para un vehiculo de menos de diez, a los seis meses
+# para uno de mas. Se propone la fecha y la persona confirma — no se toca sola,
+# porque una ITV que NO se paso y se marca como pasada es mucho peor que el
+# aviso rojo que habia antes.
+
+_ITV_ANOS_SEMESTRAL = 10        # a partir de aqui, ITV cada 6 meses en Espana
+
+
+def _itv_siguiente(fecha: str, ano_matricula=None) -> Optional[str]:
+    """La proxima ITV a partir de la ultima. None si la fecha no vale."""
+    try:
+        f = datetime.strptime(str(fecha)[:10], "%Y-%m-%d")
+    except Exception:                                        # noqa: BLE001
+        return None
+    meses = 12
+    try:
+        if ano_matricula and (datetime.now(timezone.utc).year - int(ano_matricula)) >= _ITV_ANOS_SEMESTRAL:
+            meses = 6
+    except Exception:                                        # noqa: BLE001
+        pass
+    def _suma(base, n_meses):
+        """Suma meses sin dateutil: el dia se mantiene, y si no existe (31 de
+        un mes de 30) se retrocede al ultimo dia valido."""
+        m = base.month - 1 + n_meses
+        ano, mes, dia = base.year + m // 12, m % 12 + 1, base.day
+        while dia > 28:
+            try:
+                return datetime(ano, mes, dia)
+            except ValueError:
+                dia -= 1
+        return datetime(ano, mes, dia)
+
+    # SE SIGUE SUMANDO HASTA PASAR DE HOY. Con una ITV vencida hace 618 dias,
+    # sumar un periodo daba otra fecha ya pasada: se proponia diciembre de 2025
+    # estando en agosto de 2026. La persona lo aceptaba de un clic y el aviso
+    # rojo se quedaba igual, que es peor que no proponer nada — parece
+    # arreglado y no lo esta.
+    hoy = datetime.now(timezone.utc).replace(tzinfo=None)
+    prox = _suma(f, meses)
+    vueltas = 0
+    while prox <= hoy and vueltas < 12:
+        prox = _suma(prox, meses)
+        vueltas += 1
+    return prox.strftime("%Y-%m-%d")
+
+
+@api_router.get("/vehicles/itv/pendientes")
+async def itv_pendientes(_=Depends(require_admin)):
+    """Las que no tienen fecha y las que la tienen pasada, para arreglarlas."""
+    from datetime import date as _date
+    hoy = _date.today().strftime("%Y-%m-%d")
+    vs = await db.vehicles.find(
+        {"status": {"$nin": ["deleted", "baja"]}},
+        {"_id": 0, "id": 1, "license_plate": 1, "brand": 1, "model": 1, "year": 1,
+         "center": 1, "itv_date": 1, "status": 1, "vin": 1}).to_list(600)
+
+    sin_fecha, vencidas = [], []
+    for v in vs:
+        f = str(v.get("itv_date") or "").strip()
+        fila = {k: v.get(k) for k in ("id", "license_plate", "brand", "model",
+                                      "year", "center", "itv_date", "status", "vin")}
+        if not f:
+            sin_fecha.append(fila)
+        elif f[:10] < hoy:
+            try:
+                dias = (_date.today() - datetime.strptime(f[:10], "%Y-%m-%d").date()).days
+            except Exception:                                # noqa: BLE001
+                dias = None
+            fila["dias_vencida"] = dias
+            fila["propuesta"] = _itv_siguiente(f, v.get("year"))
+            vencidas.append(fila)
+
+    sin_fecha.sort(key=lambda x: str(x.get("license_plate") or ""))
+    vencidas.sort(key=lambda x: -(x.get("dias_vencida") or 0))
+    return {
+        "sin_fecha": sin_fecha,
+        "vencidas": vencidas,
+        "activas": len(vs),
+        "sin_control": len(sin_fecha) + len(vencidas),
+    }
+
+
+@api_router.put("/vehicles/itv/lote")
+async def itv_guardar_lote(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Guarda varias fechas de ITV de una vez.
+
+    Se valida CADA fecha y se dice cual falla, en vez de rechazar el lote
+    entero: quien acaba de teclear cuarenta fechas no puede perderlas porque
+    una este mal.
+    """
+    filas = data.get("fechas") or []
+    if not isinstance(filas, list) or not filas:
+        raise HTTPException(400, "No hay ninguna fecha que guardar")
+
+    from datetime import date as _date
+    hoy = _date.today()
+    guardadas, errores = [], []
+    for f in filas[:300]:
+        vid = str((f or {}).get("vehicle_id") or "").strip()
+        fecha = str((f or {}).get("itv_date") or "").strip()[:10]
+        if not vid:
+            continue
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", fecha):
+            errores.append({"vehicle_id": vid, "error": "la fecha tiene que ser AAAA-MM-DD"})
+            continue
+        try:
+            d = datetime.strptime(fecha, "%Y-%m-%d").date()
+        except ValueError:
+            errores.append({"vehicle_id": vid, "error": "esa fecha no existe"})
+            continue
+        # Una ITV a diez años vista es un dedazo (2036 en vez de 2026), y una a
+        # cinco años atras tambien. Se avisa en vez de guardarla: un dato malo
+        # aqui apaga el aviso y es peor que no tener dato.
+        if d.year > hoy.year + 3 or d.year < hoy.year - 5:
+            errores.append({"vehicle_id": vid, "error": "esa fecha está muy lejos, revísala"})
+            continue
+        r = await db.vehicles.update_one(
+            {"id": vid}, {"$set": {"itv_date": fecha,
+                                   "itv_actualizada_en": datetime.now(timezone.utc).isoformat(),
+                                   "itv_actualizada_por": user.get("name") or user.get("username") or "oficina"}})
+        if r.matched_count:
+            guardadas.append({"vehicle_id": vid, "itv_date": fecha})
+        else:
+            errores.append({"vehicle_id": vid, "error": "esa furgoneta no existe"})
+
+    logger.info("ITV en lote: %d guardadas, %d con error", len(guardadas), len(errores))
+    return {"guardadas": len(guardadas), "errores": errores, "detalle": guardadas}
+
+
 @api_router.get("/vehicles/last-inspections")
 async def vehicles_last_inspections(_=Depends(require_admin)):
     """Mapa vehicle_id → fecha de su última inspección (para el semáforo de la lista)."""

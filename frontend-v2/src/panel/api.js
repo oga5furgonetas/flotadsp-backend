@@ -348,6 +348,11 @@ export const getScorecardEnVivo = (center, semanas) =>
    revision con quien la hizo, cada golpe con quien la llevaba, cada averia,
    cada entrada y salida de taller. */
 export const getExpedienteVehiculo = (id) => api.get(`/vehicles/${id}/expediente`)
+/* Las que no tienen fecha de ITV y las que la tienen pasada, para arreglarlas
+   de una vez. Rellenarlas de una en una cuesta dos minutos por furgoneta, y un
+   dato que cuesta eso no se rellena nunca. */
+export const getItvPendientes = () => api.get('/vehicles/itv/pendientes')
+export const guardarItvLote = (body) => api.put('/vehicles/itv/lote', body)
 export const getVehiculosDuplicados = () => api.get('/vehicles/duplicados')
 export const fusionarVehiculos = (body) => api.post('/vehicles/fusionar', body)
 export const getExposicionVehiculos = (center) =>
