@@ -26998,6 +26998,27 @@ async def congelar_dias_cortex(dias: Optional[list] = None) -> dict:
     return {"guardados": guardados, "detalle": tocados[:40]}
 
 
+async def _latido_congelar(abierta: bool, guardados: Optional[int],
+                           error: str = "") -> None:
+    """Deja constancia de que el bucle ha pasado por aqui.
+
+    Un cron que se muere es INDISTINGUIBLE de uno que no tiene nada que hacer:
+    los dos no escriben nada. Aqui eso seria caro —el dato del dia se pierde a
+    las pocas horas y no se puede recuperar—, asi que el bucle marca cada
+    pasada, tenga o no algo que guardar. Sin esto, la unica forma de saber que
+    seguia vivo era mirar dos dias despues si faltaban dias, que es tarde.
+    """
+    try:
+        await global_db.app_meta.update_one(
+            {"_id": "congelar_latido"},
+            {"$set": {"at": datetime.now(timezone.utc), "ventana_abierta": abierta,
+                      "guardados": guardados, "error": error or None}},
+            upsert=True)
+    except Exception as e:                                       # noqa: BLE001
+        # El latido no puede tumbar el bucle: es el vigilante, no el trabajo.
+        logger.error("Latido de congelacion: %s", e)
+
+
 async def _bucle_congelar():
     """Toma una foto cada media hora dentro de la ventana de cierre.
 
@@ -27012,10 +27033,14 @@ async def _bucle_congelar():
         try:
             h = datetime.now(madrid).hour
             # La ventana cruza la medianoche: 17..23 o 0..4
-            if h >= desde or h < hasta:
-                await congelar_dias_cortex()
+            abierta = h >= desde or h < hasta
+            n = None
+            if abierta:
+                n = (await congelar_dias_cortex()).get("guardados")
+            await _latido_congelar(abierta, n)
         except Exception as e:
             logger.error("Bucle de congelacion: %s", e)
+            await _latido_congelar(False, None, str(e)[:200])
         await asyncio.sleep(CX_SNAP_CADA_MIN * 60)
 
 
@@ -27038,7 +27063,14 @@ async def dias_congelados(center: str = "", limite: int = 60, _=Depends(require_
         "service_day", -1).to_list(max(1, min(limite, 400)))
     for f in filas:
         f["id"] = f.pop("_id", None)
-    return {"dias": filas}
+    # El latido va aqui y no en un endpoint aparte: quien mira si falta un dia
+    # es exactamente quien necesita saber si el bucle sigue vivo.
+    lat = await global_db.app_meta.find_one({"_id": "congelar_latido"}, {"_id": 0})
+    if lat and lat.get("at"):
+        lat["hace_min"] = round(
+            (datetime.now(timezone.utc) - lat["at"].replace(tzinfo=timezone.utc)
+             ).total_seconds() / 60)
+    return {"dias": filas, "latido": lat}
 
 
 async def revisar_dcr_diario() -> list:

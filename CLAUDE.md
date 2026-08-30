@@ -467,6 +467,11 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    nueva**, porque ya esta erosionado y guardarlo seria inventar un numero que
    ademas pareceria medido. Los dias anteriores al 30-08-2026 estan perdidos y
    salen marcados «sin foto» en la pantalla, con el DCR como `≥`.
+   El bucle deja **latido** en `app_meta.congelar_latido` en CADA pasada, este
+   o no dentro de la ventana, y sale en `GET /cortex/dias-congelados`. Un cron
+   muerto y un cron sin trabajo escriben lo mismo —nada—, y aqui esa duda cuesta
+   un dia entero irrecuperable: `hace_min` por encima de 30 significa que el
+   bucle no esta.
    Regla general: **antes de guardar una serie historica, preguntarse si el
    campo del que sale se sobrescribe.** Si se sobrescribe, el historico no es
    historico: es una foto de hoy con fecha de ayer.

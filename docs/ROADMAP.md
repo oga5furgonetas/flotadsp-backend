@@ -13,13 +13,20 @@
 
 El 30-08 se empezó a congelar el cierre de cada día (`cortex_day_snapshots`),
 porque el estado de los paquetes se sobrescribe y a los tres días se había
-borrado el 97 % de las devoluciones. **El 31-08 es el primer día capturado desde
-su propia tarde**, así que es el primero comparable.
+borrado el 97 % de las devoluciones. La ventana de congelación abre a las 17:00,
+así que **el primer día capturado desde su propia tarde es el domingo 30**, que
+todavía estaba en curso cuando se desplegó — no el 31, como se anotó primero.
 
-Qué hace falta: la captura de Cortex de OGA5 del 31-08 y contrastar «Devuelto a
-la estación» contra lo que guardó la foto. Si cuadra, el P0 queda cerrado del
-todo; si no, el desvío dice qué falta y con un día bien capturado se puede
-razonar — con cuatro reconstruidos, no.
+Qué hace falta: la captura de Cortex de OGA5 del **domingo 30**, tomada cuando el
+día ya haya cerrado (esa noche tarde o el lunes a primera hora), y contrastar
+«Devuelto a la estación» contra lo que guardó la foto. Si cuadra, el P0 queda
+cerrado del todo; si no, el desvío dice qué falta y con un día bien capturado se
+puede razonar — con cuatro reconstruidos, no.
+
+El bucle deja **latido** en `app_meta.congelar_latido`, que sale en
+`GET /cortex/dias-congelados`: si `hace_min` pasa de 30, el bucle está muerto y
+ese día se va a perder. Es la comprobación que hay que hacer ANTES de esperar el
+dato, no después.
 
 Es una sola pantalla y cierra el número que Amazon contrastaría primero.
 
