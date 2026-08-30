@@ -1205,6 +1205,15 @@ async def _ensure_tenant_indexes(db_name: str):
     await _dedupe_cortex_stations(tdb)
     await _idx_unico(tdb.cortex_stations, "service_area_id")
     # La foto diaria: se consulta por dia y por centro.
+    # Un unico parcial: dos analisis a la vez del mismo vehiculo creaban dos
+    # entradas del mismo golpe (gotcha 9). Solo sobre los ABIERTOS, porque el
+    # historico SI puede tener varias del mismo panel en distintas epocas.
+    try:
+        await tdb.vehicle_damage_ledger.create_index(
+            [("vehicle_id", 1), ("panel", 1)], unique=True,
+            partialFilterExpression={"status": "open"}, name="uniq_veh_panel_open")
+    except Exception as e:                                       # noqa: BLE001
+        logger.warning("indice unico del ledger: %s", e)
     await _idx(tdb.cortex_day_snapshots, "service_day")
     await _idx(tdb.cortex_day_snapshots, "center")
     # cortex_events es un registro que SOLO se escribe (0 lecturas en todo el
@@ -2534,6 +2543,34 @@ async def _known_damages_prompt(vehicle_id: str, exclude_inspection_id: str = No
         return ""
 
 
+async def _ledger_upsert(filtro: dict, update: dict) -> bool:
+    """Upsert en el libro de daños, a prueba del indice unico.
+
+    `vehicle_damage_ledger` lleva un unico parcial sobre (vehicle_id, panel)
+    para los ABIERTOS: sin el, dos analisis a la vez del mismo vehiculo creaban
+    dos entradas del mismo golpe y el libro dejaba de cuadrar (gotcha 9, ya paso
+    en cortex_stations). Pero un unico convierte esa carrera en un
+    DuplicateKeyError que subiria como 500 y tumbaria el analisis de la
+    inspeccion entera.
+
+    Un duplicado aqui significa "ya existe", que es justo lo que el upsert
+    queria conseguir: se traga y se devuelve False (gotcha 32 — un cerrojo que
+    revienta es peor que no tenerlo).
+    """
+    try:
+        await db.vehicle_damage_ledger.update_one(filtro, update, upsert=True)
+        return True
+    except DuplicateKeyError:
+        # Otro proceso la creo entre medias. Se aplica solo el $set sobre la
+        # que gano, para no perder una escalada de gravedad.
+        try:
+            if update.get("$set"):
+                await db.vehicle_damage_ledger.update_one(filtro, {"$set": update["$set"]})
+        except Exception as e:                                   # noqa: BLE001
+            logger.warning("ledger upsert tras duplicado: %s", e)
+        return False
+
+
 async def _fecha_dano(inspection_id: str) -> str:
     """El dia en que se VIO el golpe, que es el de la inspeccion.
 
@@ -2653,7 +2690,7 @@ async def _apply_vehicle_memory(vehicle_id: str, analysis, inspection_id: str = 
 
             # Daño genuinamente nuevo (o escalada) → REGISTRAR en el ledger
             if p and getattr(d, "confirmed", True):
-                await db.vehicle_damage_ledger.update_one(
+                await _ledger_upsert(
                     {"vehicle_id": vehicle_id, "panel": p, "status": "open"},
                     {"$set": {"part": d.part, "severity": _norm_sev(d.severity),
                               "rank": max(d_rank, known.get(p, {}).get("rank", 0)),
@@ -2661,8 +2698,7 @@ async def _apply_vehicle_memory(vehicle_id: str, analysis, inspection_id: str = 
                      "$setOnInsert": {"vehicle_id": vehicle_id, "panel": p, "status": "open",
                                       "source": "ai",
                                       "first_seen": await _fecha_dano(inspection_id),
-                                      "first_seen_inspection": inspection_id or ""}},
-                    upsert=True)
+                                      "first_seen_inspection": inspection_id or ""}})
                 registered += 1
             kept.append(d)
 
@@ -9818,7 +9854,7 @@ async def damage_feedback(inspection_id: str, data: dict, user: dict = Depends(g
         if _p and _vid:
             if verdict in ("correct", "corrected"):
                 # Confirmado por humano → entrada consolidada (fuente humana)
-                await db.vehicle_damage_ledger.update_one(
+                await _ledger_upsert(
                     {"vehicle_id": _vid, "panel": _p, "status": "open"},
                     {"$set": {"part": dmg.get("part"), "source": "human",
                               "severity": _norm_sev(dmg.get("severity")),
@@ -9830,8 +9866,7 @@ async def damage_feedback(inspection_id: str, data: dict, user: dict = Depends(g
                                       # revisar algo de hace dos semanas.
                                       "first_seen": (str(insp.get("created_at") or "")[:10]
                                                      or datetime.now(timezone.utc).strftime("%Y-%m-%d")),
-                                      "first_seen_inspection": inspection_id}},
-                    upsert=True)
+                                      "first_seen_inspection": inspection_id}})
             elif verdict == "wrong":
                 # El humano dice que era un fantasma → fuera del ledger las
                 # entradas creadas por la IA en ese panel (las humanas quedan)
