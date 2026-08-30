@@ -523,3 +523,5 @@ export const getCheckerCentros = () => api.get('/checkers/centros')
 export const corregirCentros = () => api.post('/checkers/centros/corregir')
 export const prepararOrden = (vehicleId) =>
   api.get(`/work-orders/preparar/${encodeURIComponent(vehicleId)}`)
+export const getDisponibilidadFlota = (center) =>
+  api.get('/fleet/disponibilidad', { params: centerParam(center) })

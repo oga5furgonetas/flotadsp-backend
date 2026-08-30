@@ -10,6 +10,7 @@ import {
   getParteFurgoneta, dispararSeguimientoTalleres,
   getVehicles, getWorkshops, crearTaller, exportarOrdenes, ordenesPorTaller,
   getIncidents, getDanosPendientes, getFurgonetasParadas, prepararOrden,
+  getDisponibilidadFlota,
 } from '../api'
 
 /* ÓRDENES DE TALLER
@@ -185,6 +186,7 @@ export default function OrdenesTrabajo() {
   const [verDanos, setVerDanos] = useState(false)
   const [verComo, setVerComo] = useState(false)
   const [comparativa, setComparativa] = useState(null)
+  const [dispo, setDispo] = useState(null)
 
   const [nueva, setNueva] = useState(null)
   const [parte, setParte] = useState(null)          // golpes abiertos de la furgoneta elegida, con fotos
@@ -290,6 +292,9 @@ export default function OrdenesTrabajo() {
       .catch(() => {})
     getFurgonetasParadas(center)
       .then((r) => { if (vivo) setParadas(r.data) })
+      .catch(() => {})
+    getDisponibilidadFlota(center)
+      .then((r) => { if (vivo) setDispo(r.data) })
       .catch(() => {})
     return () => { vivo = false }
   }, [center])
@@ -542,6 +547,63 @@ export default function OrdenesTrabajo() {
           28-08-2026: 14 paradas, tres desde hacía 52 días, 319 días-furgoneta
           acumulados y trece SIN NINGÚN PARTE ABIERTO — no es que tardaran, es
           que nadie las llevaba. */}
+      {/* ¿CUBRO LAS RUTAS? ───────────────────────────────────────────────
+          Va ARRIBA DEL TODO y antes que las órdenes a propósito. La pregunta
+          de un DSP por la mañana no es «cuántos partes tengo abiertos», es
+          «¿me da la flota para hoy?». Un inspector de vehículos dice «esta
+          furgoneta tiene un golpe»; esto dice «te quedas sin cubrir dos rutas»,
+          y esa es la diferencia entre una herramienta y algo que no se puede
+          quitar. */}
+      {dispo?.flota && (
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-b border-slate-100 px-4 py-3">
+            <h2 className="text-[15px] font-bold">¿Da la flota para las rutas?</h2>
+            <span className="text-[13px] text-slate-500">
+              <b className="tabular-nums text-slate-800">{dispo.flota.operativas}</b> operativas
+              {dispo.demanda?.pico != null && <> · pico de <b className="tabular-nums text-slate-800">{dispo.demanda.pico}</b> rutas</>}
+              {dispo.flota.en_taller > 0 && <> · <b className="tabular-nums">{dispo.flota.en_taller}</b> en taller</>}
+            </span>
+            {dispo.margen?.ajustado != null && (
+              <span className={`ml-auto rounded-lg px-2.5 py-1 text-[12.5px] font-bold ${
+                dispo.margen.suficiente ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`}>
+                {dispo.margen.ajustado >= 0 ? '+' : ''}{dispo.margen.ajustado} de margen
+              </span>
+            )}
+          </div>
+
+          {/* El margen a secas no dice nada: hace falta saber CONTRA QUÉ. */}
+          <p className="px-4 pt-2.5 text-[12.5px] text-slate-500">{dispo.margen?.explica}</p>
+
+          {!!dispo.riesgos?.length && (
+            <div className="px-4 pb-3 pt-2">
+              {dispo.riesgos.map((r) => (
+                <div key={r.tipo} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-slate-100 py-2 last:border-b-0">
+                  <span className={`rounded px-1.5 py-0.5 text-[10.5px] font-bold uppercase ${
+                    r.gravedad === 'alta' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}`}>
+                    {r.n}
+                  </span>
+                  <span className="text-[13.5px] font-semibold text-slate-800">{r.que_pasa}</span>
+                  <span className="w-full pl-1 text-[12.5px] text-slate-500">{r.cuesta}</span>
+                  {!!r.matriculas?.length && (
+                    <span className="w-full pl-1 font-mono text-[11.5px] text-slate-400">
+                      {r.matriculas.filter(Boolean).join(' · ')}{r.n > r.matriculas.length ? ` … +${r.n - r.matriculas.length}` : ''}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Sin fecha de vuelta no hay previsión posible, así que se dice en
+              vez de enseñar una lista vacía que parece que todo va bien. */}
+          <p className="border-t border-slate-100 px-4 py-2 text-[12.5px] text-slate-400">
+            {dispo.vuelven?.length
+              ? `${dispo.vuelven.length} vuelven con fecha: ${dispo.vuelven.slice(0, 3).map((v) => `${v.matricula} el ${v.fecha}`).join(' · ')}`
+              : 'Ninguna de las que están en el taller tiene fecha de vuelta, así que no se puede prever la flota de la semana que viene. Ponla al abrir el parte.'}
+          </p>
+        </div>
+      )}
+
       {!!paradas?.total && (
         <div className="mb-4 overflow-hidden rounded-xl border border-slate-200 bg-white">
           <button onClick={() => setVerParadas((v) => !v)}

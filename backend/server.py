@@ -15278,6 +15278,199 @@ async def danos_atribucion(center: str = "", dias: int = 120, solo_alta: bool = 
             "truncado": truncado}
 
 
+# ── ¿CUBRO LAS RUTAS DE MAÑANA? ─────────────────────────────────────────────
+# La cadena del producto es VEHICULO -> TALLER -> DISPONIBILIDAD -> RUTA, y el
+# eslabon que faltaba es el ultimo. Hoy la app sabe que una furgoneta esta rota
+# y sabe cuantas rutas manda Amazon, pero nadie junta las dos cosas — y esa
+# union es la unica pregunta que se hace un DSP por la mañana.
+#
+# Un inspector de vehiculos dice "esta furgoneta tiene un golpe". Esto dice
+# "el martes te quedas sin cubrir dos rutas". No es la misma frase ni el mismo
+# producto.
+#
+# Todo sale de datos que ya estan: el estado de la flota, las ordenes de taller
+# con su fecha de vuelta, la ITV, los daños graves y las rutas que Amazon dio
+# los ultimos dias. Nada de esto hay que teclearlo.
+
+DISPO_DIAS_DEMANDA = 21      # cuantos dias atras se mira para saber el pico
+DISPO_ITV_AVISO = 30         # dias de antelacion con los que preocupa una ITV
+DISPO_MARGEN_MIN = 2         # por debajo de esto, un imprevisto deja una ruta sin cubrir
+
+
+async def _dispo_demanda(centro: str) -> dict:
+    """Cuantas rutas nos ha dado Amazon: pico, media y ultimo dia.
+
+    Se mide de Cortex, que es lo que Amazon nos mandó de verdad, y no de lo que
+    hayamos planificado nosotros: la pregunta es si aguantamos LO QUE VENGA.
+    """
+    desde = (datetime.now(timezone.utc)
+             - timedelta(days=DISPO_DIAS_DEMANDA)).strftime("%Y-%m-%d")
+    q: dict = {"service_day": {"$gte": desde}}
+    if centro:
+        q["center"] = {"$regex": re.escape(centro), "$options": "i"}
+    cur = db.cortex_packages.aggregate([
+        {"$match": q},
+        {"$group": {"_id": {"d": "$service_day", "r": "$route_code"}}},
+        {"$group": {"_id": "$_id.d", "rutas": {"$sum": 1}}},
+        {"$sort": {"_id": -1}}])
+    dias = [(r["_id"], r["rutas"]) async for r in cur]
+    if not dias:
+        return {"pico": None, "media": None, "dias": 0}
+    ns = [n for _, n in dias]
+    return {"pico": max(ns), "media": round(sum(ns) / len(ns), 1), "dias": len(ns),
+            "ultimo": {"dia": dias[0][0], "rutas": dias[0][1]},
+            "serie": [{"dia": d, "rutas": n} for d, n in dias[:14]]}
+
+
+@api_router.get("/fleet/disponibilidad")
+async def fleet_disponibilidad(center: str = "", _=Depends(require_admin)):
+    """Si la flota da para las rutas, y qué la puede dejar corta."""
+    centro = ""
+    if center and center not in ("Todos", "todos"):
+        centro = _centro_norm(center, await _centros_conocidos())
+    qv: dict = {}
+    if centro:
+        qv["center"] = {"$regex": re.escape(centro), "$options": "i"}
+
+    vs = await db.vehicles.find(
+        {**qv, "status": {"$ne": "deleted"}},
+        {"_id": 0, "id": 1, "license_plate": 1, "status": 1, "itv_date": 1,
+         "taller_desde": 1}).to_list(1000)
+    por_estado: dict = {}
+    for v in vs:
+        por_estado[v.get("status") or "sin estado"] = por_estado.get(v.get("status") or "sin estado", 0) + 1
+    operativas = [v for v in vs if v.get("status") == "active"]
+    ids_op = {v["id"] for v in operativas}
+
+    demanda = await _dispo_demanda(centro)
+
+    # ── Lo que puede dejarlas fuera ──────────────────────────────────────────
+    hoy = datetime.now(timezone.utc).date()
+    limite = (hoy + timedelta(days=DISPO_ITV_AVISO)).strftime("%Y-%m-%d")
+    hoy_s = hoy.strftime("%Y-%m-%d")
+    riesgos = []
+
+    itv_vencida = [v for v in operativas
+                   if v.get("itv_date") and str(v["itv_date"])[:10] < hoy_s]
+    if itv_vencida:
+        riesgos.append({
+            "tipo": "itv_vencida", "gravedad": "alta", "n": len(itv_vencida),
+            "matriculas": [v.get("license_plate") for v in itv_vencida[:12]],
+            "que_pasa": "Circulan con la ITV caducada",
+            "cuesta": "200 € de multa, inmovilización en carretera, y la aseguradora "
+                      "puede repetir lo que pague si hay un accidente",
+            "cuando": "ya",
+        })
+    itv_pronto = [v for v in operativas
+                  if v.get("itv_date") and hoy_s <= str(v["itv_date"])[:10] <= limite]
+    if itv_pronto:
+        riesgos.append({
+            "tipo": "itv_pronto", "gravedad": "media", "n": len(itv_pronto),
+            "matriculas": [v.get("license_plate") for v in itv_pronto[:12]],
+            "que_pasa": "Les caduca la ITV en menos de %d días" % DISPO_ITV_AVISO,
+            "cuesta": "Cada una es un día fuera si se pasa la cita",
+            "cuando": "este mes",
+        })
+    sin_itv = [v for v in operativas if not v.get("itv_date")]
+    if sin_itv:
+        riesgos.append({
+            "tipo": "itv_sin_dato", "gravedad": "media", "n": len(sin_itv),
+            "matriculas": [v.get("license_plate") for v in sin_itv[:12]],
+            "que_pasa": "No consta cuándo les toca la ITV",
+            # Esto no es un aviso de mantenimiento: es que NO SE PUEDE SABER si
+            # hay riesgo. Un hueco no es una tranquilidad.
+            "cuesta": "De estas no se puede decir si están en regla",
+            "cuando": "—",
+        })
+
+    # Daños graves en furgonetas que están CIRCULANDO. No sacan la furgoneta
+    # hoy, pero son las candidatas a entrar en taller: es la cola del taller.
+    graves_ids = set()
+    cur = db.vehicle_damage_ledger.aggregate([
+        {"$match": {"status": "open", "severity": {"$in": ["grave", "critico"]},
+                    "vehicle_id": {"$in": list(ids_op)}}},
+        {"$group": {"_id": "$vehicle_id", "n": {"$sum": 1}}}])
+    graves = {}
+    async for r in cur:
+        graves[r["_id"]] = r["n"]
+        graves_ids.add(r["_id"])
+    if graves:
+        pl = {v["id"]: v.get("license_plate") for v in operativas}
+        riesgos.append({
+            "tipo": "danos_graves_circulando", "gravedad": "alta", "n": len(graves),
+            "matriculas": [pl.get(i) for i in list(graves)[:12]],
+            "que_pasa": "Circulan con %d daños graves o críticos sin reparar"
+                        % sum(graves.values()),
+            "cuesta": "Son las que van a entrar en taller: la cola que viene",
+            "cuando": "próximas semanas",
+        })
+
+    # ── Las que están dentro: ¿cuándo vuelven? ───────────────────────────────
+    en_taller = [v for v in vs if v.get("status") == "taller"]
+    ordenes = {}
+    async for o in db.ordenes_trabajo.find(
+            {"estado": {"$nin": ["entregada", "anulada"]}},
+            {"_id": 0, "vehicle_id": 1, "numero": 1, "fecha_entrega_estimada": 1,
+             "taller_nombre": 1}):
+        ordenes.setdefault(o.get("vehicle_id"), o)
+    vuelven, sin_fecha = [], []
+    for v in en_taller:
+        o = ordenes.get(v["id"])
+        f = (o or {}).get("fecha_entrega_estimada")
+        if f:
+            vuelven.append({"matricula": v.get("license_plate"), "fecha": str(f)[:10],
+                            "orden": o.get("numero"), "taller": o.get("taller_nombre")})
+        else:
+            dias = None
+            if v.get("taller_desde"):
+                try:
+                    dias = (datetime.now(timezone.utc) - datetime.fromisoformat(
+                        str(v["taller_desde"]).replace("Z", "+00:00"))).days
+                except Exception:                            # noqa: BLE001
+                    pass
+            sin_fecha.append({"matricula": v.get("license_plate"), "dias": dias})
+    vuelven.sort(key=lambda x: x["fecha"])
+    if sin_fecha:
+        riesgos.append({
+            "tipo": "taller_sin_fecha_vuelta", "gravedad": "media", "n": len(sin_fecha),
+            "matriculas": [x["matricula"] for x in sin_fecha[:12]],
+            "que_pasa": "Están en el taller y no consta cuándo vuelven",
+            # Este es el que impide planificar de verdad: sin fecha de vuelta,
+            # la unica prevision posible es "las de hoy", que es no prever nada.
+            "cuesta": "Sin fecha de vuelta no se puede prever la flota de la semana",
+            "cuando": "—",
+        })
+
+    # ── El margen ────────────────────────────────────────────────────────────
+    n_op = len(operativas)
+    pico = demanda.get("pico")
+    margen_pico = (n_op - pico) if pico is not None else None
+    # Peor caso realista: el pico de rutas Y las de ITV vencida fuera. No se
+    # suman los daños graves porque esos siguen circulando: contarlos como bajas
+    # daria un numero alarmista que nadie se creeria a la segunda vez.
+    n_riesgo = len(itv_vencida)
+    margen_ajustado = (n_op - n_riesgo - pico) if pico is not None else None
+
+    return {
+        "center": centro or "todos",
+        "flota": {"operativas": n_op, "por_estado": por_estado,
+                  "total": len(vs), "en_taller": len(en_taller)},
+        "demanda": demanda,
+        "margen": {
+            "en_el_pico": margen_pico,
+            "ajustado": margen_ajustado,
+            "suficiente": (margen_ajustado is not None and margen_ajustado >= DISPO_MARGEN_MIN),
+            "minimo": DISPO_MARGEN_MIN,
+            "explica": ("%d operativas contra el pico de %d rutas de los últimos %d días"
+                        % (n_op, pico, demanda.get("dias") or 0)) if pico is not None
+                       else "Sin datos de rutas todavía",
+        },
+        "riesgos": sorted(riesgos, key=lambda r: 0 if r["gravedad"] == "alta" else 1),
+        "vuelven": vuelven,
+        "sin_fecha_vuelta": len(sin_fecha),
+    }
+
+
 @api_router.get("/work-orders/danos-pendientes")
 async def ot_danos_pendientes(center: str = "", solo_graves: bool = False,
                               _=Depends(require_admin)):
