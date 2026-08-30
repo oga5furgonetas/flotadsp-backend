@@ -106,6 +106,53 @@ furgoneta asignada».
 **Prevención.** La fusión empareja **solo por correo**, nunca por nombre: dos
 tocayos acabarían uno auditando la furgoneta del otro.
 
+
+### El DCR se calcula con el estado equivocado — P0, ABIERTO
+
+**Encontrado** 2026-08-30, reconciliando contra una captura de Cortex.
+
+**El hecho.** Cortex, para el viernes 28-08-2026 en OGA5, dice **130 paquetes
+devueltos a la estación**. Nuestro cálculo del mismo día da **35**.
+
+**La causa, confirmada.** Guardamos el estado **vigente** de cada paquete, y
+Amazon cuenta el del **día**. Un paquete devuelto el viernes y entregado el
+lunes figura hoy `DELIVERED` en nuestra base y sigue contando como devuelto en
+la casilla del viernes de Cortex.
+
+Medido sobre los 6.843 paquetes de ese día:
+
+| Forma de contar los devueltos | Sale |
+|---|---|
+| Estado vigente hoy | 35 |
+| Estado al cierre del día | 53 |
+| **Pasaron por devuelto ese día** | **159** |
+| **Cortex** | **130** |
+
+Y la prueba directa: **de los que pasaron por `BACK_TO_ORIGIN`, 103 figuran hoy
+como `DELIVERED`**.
+
+**Por qué es P0.** El DCR que enseña la app **sube solo con el paso de los
+días**, sin que mejore nada: los devueltos se van reentregando y salen de la
+cuenta. Consecuencias:
+
+1. El número nunca cuadra con el que puntúa Amazon.
+2. El aviso de caída del DCR se dispara tarde o no se dispara.
+3. Una semana mala parece que se arregla sola al mirarla más tarde.
+
+Es exactamente el tipo de cálculo incorrecto que produce decisiones operativas
+equivocadas.
+
+**Lo que aún es `UNKNOWN`.** Cuál de las tres formas usa Amazon exactamente.
+Ninguna cuadra al número: 130 está entre «al cierre» (53) y «pasaron por ahí»
+(159). Con **una sola captura no se puede determinar la regla**. Hacen falta
+capturas de más días para calibrar antes de dar el número por bueno.
+
+**Además, sin explicar todavía:**
+- Cortex ve **46 rutas** y nosotros guardamos **45**: falta una entera.
+- Cortex tiene **46 en «Restante»**, que según Dani son también devoluciones
+  (cuentas que no dejaron cerrar por exceso de paquetes). Nuestros estados sin
+  cerrar de ese día suman 21.
+
 ---
 
 ## Anomalías descartadas tras investigarlas
