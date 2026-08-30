@@ -6618,6 +6618,177 @@ async def vehiculos_fusionar(data: dict = Body(...), user: dict = Depends(requir
             "movidos": movidos, "completado": list(completado)}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# EXPEDIENTE DE UNA FURGONETA
+# ═══════════════════════════════════════════════════════════════════════════
+# TODO lo que le ha pasado, en una sola linea de tiempo: cada revision con
+# quien la hizo, cada golpe con el dia que aparecio y quien la llevaba, cada
+# averia, cada entrada y salida de taller, cada cambio de aceite.
+#
+# POR QUE ESTO IMPORTA MAS DE LO QUE PARECE. Hoy cada cosa vive en su pantalla:
+# las inspecciones en Inspecciones, los golpes en el libro, las averias en
+# Incidencias, el taller en Ordenes. Para contestar "que le ha pasado a esta
+# furgoneta" hay que abrir cuatro sitios y cruzarlos a mano, y nadie lo hace.
+# Junto, contesta de un vistazo preguntas que hoy no se contestan: si un golpe
+# se repara y vuelve a salir a los dos meses, si una furgoneta empeora desde
+# que la lleva alguien, o si entra al taller por lo mismo cada trimestre.
+#
+# Y es lo unico que un DSP puede ENSEÑAR: una furgoneta con su vida entera
+# documentada, con foto y hora, es una respuesta a cualquier pregunta que haga
+# Amazon en una auditoria. Eso no se improvisa el dia que la hacen.
+#
+# NO INVENTA NADA. Cada linea sale de un documento que ya existe y lleva su
+# origen dentro, para poder ir a mirarlo.
+
+_VIDA_MAX = 400
+
+
+@api_router.get("/vehicles/{vehicle_id}/expediente")
+async def vehiculo_expediente(vehicle_id: str, _=Depends(require_admin)):
+    """La vida entera de una furgoneta en una linea de tiempo."""
+    v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0})
+    if not v:
+        raise HTTPException(404, "Esa furgoneta no existe")
+
+    hitos = []
+
+    def _add(fecha, tipo, texto, **extra):
+        f = str(fecha or "")[:10]
+        if len(f) == 10:
+            hitos.append({"fecha": f, "tipo": tipo, "texto": texto, **extra})
+
+    _add(v.get("created_at"), "alta", "Dada de alta en la flota",
+         detalle=" ".join(x for x in (v.get("brand"), v.get("model")) if x) or None)
+
+    # Quien la ha llevado, sacado de quien la inspecciona: es quien la saca.
+    nombres = {d["id"]: d.get("name") async for d in db.drivers.find({}, {"_id": 0, "id": 1, "name": 1})}
+
+    insp = await db.inspections.find(
+        {"vehicle_id": vehicle_id},
+        {"_id": 0, "id": 1, "created_at": 1, "driver_id": 1, "photos": 1,
+         "annotated_photos": 1, "analysis": 1, "reviewed": 1}).sort("created_at", 1).to_list(500)
+
+    # QUE REVISION DESCUBRIO CADA GOLPE. Con una revision al dia, veintiuna
+    # lineas iguales entierran los tres hitos que de verdad importan. Marcando
+    # cual destapo algo, la pantalla puede esconder la rutina y dejar a la
+    # vista lo que cambio: es la diferencia entre un historial y un listado.
+    danos = await db.vehicle_damage_ledger.find({"vehicle_id": vehicle_id}).to_list(300)
+    descubre = {}
+    for _d in danos:
+        if _d.get("first_seen_inspection"):
+            descubre.setdefault(_d["first_seen_inspection"], []).append(
+                _d.get("part") or _d.get("panel") or "golpe")
+
+    for i in insp:
+        a = i.get("analysis") or {}
+        n = a.get("total_damages_count")
+        nuevos = descubre.get(i.get("id")) or []
+        _add(i.get("created_at"), "revision",
+             "Revisión de %s" % (nombres.get(i.get("driver_id")) or "alguien"),
+             id=i.get("id"),
+             # Lo que se cuenta es lo NUEVO, no el total: "4 golpes vistos"
+             # sale igual el dia que aparece uno que los veinte dias siguientes,
+             # y entonces no dice nada.
+             detalle=("aparece %s" % ", ".join(nuevos[:3])) if nuevos
+                     else (("%s golpe%s ya conocidos" % (n, "s" if n != 1 else "")) if n else None),
+             novedad=bool(nuevos),
+             gravedad=a.get("severity"),
+             foto=next((f for f in (i.get("annotated_photos") or []) if f), None)
+                  or next((f for f in (i.get("photos") or []) if f), None))
+
+    # Los golpes, con quien la llevaba cuando aparecieron. Se reutiliza la
+    # misma regla que /damages/atribucion: solo se nombra a alguien con un dia
+    # de ventana y un unico conductor.
+    por_insp = {i["id"]: i for i in insp}
+    for d in danos:
+        fs = str(d.get("first_seen") or "")[:10]
+        previas = [i for i in insp if (i.get("created_at") or "")[:10] < fs]
+        cond = None
+        if previas and fs:
+            desde_f = (previas[-1].get("created_at") or "")[:10]
+            ids = [i.get("driver_id") for i in insp
+                   if desde_f <= (i.get("created_at") or "")[:10] <= fs and i.get("driver_id")]
+            ids = list(dict.fromkeys(ids))
+            try:
+                ventana = (datetime.strptime(fs, "%Y-%m-%d")
+                           - datetime.strptime(desde_f, "%Y-%m-%d")).days
+            except Exception:                                # noqa: BLE001
+                ventana = None
+            if (len(ids) == 1 and ventana is not None and ventana <= 1
+                    and str(d.get("severity") or "") != "leve"):
+                cond = nombres.get(ids[0])
+        i0 = por_insp.get(d.get("first_seen_inspection")) or {}
+        _add(fs, "golpe", d.get("part") or d.get("panel") or "Golpe",
+             gravedad=d.get("severity"), estado=d.get("status"), llevaba=cond,
+             foto=next((f for f in (i0.get("annotated_photos") or []) if f), None))
+        if d.get("status") == "repaired" and d.get("repaired_at"):
+            _add(d["repaired_at"], "reparado",
+                 "Reparado: %s" % (d.get("part") or d.get("panel") or "golpe"),
+                 orden=d.get("repaired_orden"))
+
+    async for inc in db.incidents.find(
+            {"vehicle_id": vehicle_id},
+            {"_id": 0, "id": 1, "title": 1, "description": 1, "severity": 1,
+             "status": 1, "created_at": 1, "resolved_at": 1}):
+        _add(inc.get("created_at"), "averia",
+             (inc.get("title") or inc.get("description") or "Incidencia").strip()[:140],
+             gravedad=inc.get("severity"), estado=inc.get("status"), id=inc.get("id"))
+        if inc.get("resolved_at"):
+            _add(inc["resolved_at"], "resuelta",
+                 "Resuelta: %s" % (inc.get("title") or "incidencia")[:100])
+
+    async for o in db.ordenes_trabajo.find(
+            {"vehicle_id": vehicle_id},
+            {"_id": 0, "numero": 1, "taller_nombre": 1, "problema": 1, "estado": 1,
+             "fecha_entrada": 1, "fecha_entrega_real": 1, "importe_final": 1}):
+        _add(o.get("fecha_entrada"), "taller",
+             "Al taller: %s" % (o.get("taller_nombre") or "sin taller"),
+             orden=o.get("numero"), detalle=(o.get("problema") or "")[:160] or None)
+        if o.get("fecha_entrega_real"):
+            _add(o["fecha_entrega_real"], "vuelve", "Vuelve del taller",
+                 orden=o.get("numero"), importe=o.get("importe_final"))
+
+    # Mantenimiento: los cambios de aceite y demas viven en la propia ficha.
+    for m in (v.get("maintenance_history") or []):
+        _add(m.get("date") or m.get("fecha"), "mantenimiento",
+             str(m.get("kind") or m.get("tipo") or "Mantenimiento").capitalize(),
+             detalle=("%s km" % m.get("km")) if m.get("km") else None)
+    if v.get("oil_last_change_km"):
+        _add(v.get("oil_last_change_date"), "mantenimiento", "Cambio de aceite",
+             detalle="%s km" % v["oil_last_change_km"])
+
+    hitos.sort(key=lambda h: (h["fecha"], h["tipo"]), reverse=True)
+
+    # El resumen contesta de un vistazo lo que hoy hay que ir a buscar.
+    abiertos = [d for d in danos if d.get("status") == "open"]
+    reparados = [d for d in danos if d.get("status") == "repaired"]
+    conductores = {}
+    for i in insp:
+        if i.get("driver_id"):
+            conductores[i["driver_id"]] = conductores.get(i["driver_id"], 0) + 1
+    top = sorted(conductores.items(), key=lambda x: -x[1])[:5]
+
+    return {
+        "vehiculo": {k: v.get(k) for k in
+                     ("id", "license_plate", "brand", "model", "year", "vin",
+                      "center", "status", "mileage", "itv_date", "created_at")},
+        "hitos": hitos[:_VIDA_MAX],
+        "total_hitos": len(hitos),
+        "resumen": {
+            "revisiones": len(insp),
+            "golpes_abiertos": len(abiertos),
+            "golpes_reparados": len(reparados),
+            "golpes_total": len(danos),
+            "veces_en_taller": sum(1 for h in hitos if h["tipo"] == "taller"),
+            "desde": hitos[-1]["fecha"] if hitos else None,
+            "conductores": [{"nombre": nombres.get(k) or "?", "veces": n} for k, n in top],
+            "conductores_distintos": len(conductores),
+            "revisiones_con_novedad": sum(1 for h in hitos
+                                          if h["tipo"] == "revision" and h.get("novedad")),
+        },
+    }
+
+
 @api_router.get("/vehicles/last-inspections")
 async def vehicles_last_inspections(_=Depends(require_admin)):
     """Mapa vehicle_id → fecha de su última inspección (para el semáforo de la lista)."""

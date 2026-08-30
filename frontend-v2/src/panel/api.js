@@ -344,6 +344,10 @@ export const getScorecardEnVivo = (center, semanas) =>
   api.get('/scorecard/en-vivo', { params: { ...centerParam(center), ...(semanas ? { semanas } : {}) } })
 /* Matriculas dadas de alta dos veces. El dano no es el duplicado: es que el
    historial se parte entre las dos fichas y ninguna es cierta. */
+/* Todo lo que le ha pasado a una furgoneta en una sola linea de tiempo: cada
+   revision con quien la hizo, cada golpe con quien la llevaba, cada averia,
+   cada entrada y salida de taller. */
+export const getExpedienteVehiculo = (id) => api.get(`/vehicles/${id}/expediente`)
 export const getVehiculosDuplicados = () => api.get('/vehicles/duplicados')
 export const fusionarVehiculos = (body) => api.post('/vehicles/fusionar', body)
 export const getExposicionVehiculos = (center) =>

@@ -23,7 +23,7 @@ import {
   getVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument, createVehicle,
   getVehicleDamageLedger, repairVehicleLedger, getSpareWheels, getMaintenanceLog, borrarApunteMantenimiento,
   getAllDocuments,
-  getExposicionVehiculos, getVehiculosDuplicados, fusionarVehiculos,
+  getExposicionVehiculos, getVehiculosDuplicados, fusionarVehiculos, getExpedienteVehiculo,
 } from '../api'
 import { getAdmin } from '../auth'
 
@@ -733,6 +733,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
               { id: 'info',         label: 'Info',          count: null },
               { id: 'gemelo',       label: 'Gemelo 3D',     count: null },
               { id: 'inspecciones', label: 'Inspecciones',  count: insps?.length ?? null },
+              { id: 'expediente',  label: 'Expediente',    count: null },
               { id: 'historial',    label: t('vh.tab.history'), count: null },
               { id: 'docs',         label: 'Documentos',    count: docs?.length ?? null },
             ].map(tab => (
@@ -1245,6 +1246,8 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
             {/* ══ TAB: HISTORIAL — línea de vida cronológica del vehículo ══
                 Oro en disputas con el renting: qué pasó, cuándo y con quién,
                 todo desde datos ya registrados (nada inventado). */}
+            {activeTab === 'expediente' && <Expediente vehicleId={vehicle?.id} />}
+
             {activeTab === 'historial' && (() => {
               const evs = []
               for (const i of insps || []) {
@@ -1919,6 +1922,141 @@ function PanelExposicion({ center, onAbrir }) {
    Primero salen las que tienen más de una ficha VIVA, que son las que están
    haciendo daño ahora. Las que ya tienen la otra de baja están resueltas de
    hecho y solo ensucian. */
+/* ── EXPEDIENTE ────────────────────────────────────────────────────────────
+   Todo lo que le ha pasado a esta furgoneta en una sola línea de tiempo. Hoy
+   cada cosa vive en su pantalla —inspecciones aquí, golpes en el libro, averías
+   en Incidencias, taller en Órdenes— y para contestar «qué le ha pasado» hay
+   que abrir cuatro sitios y cruzarlos a mano. Nadie lo hace.
+
+   Con una revisión al día, veintiuna líneas iguales entierran los tres hitos
+   que importan. Por eso las revisiones que NO descubrieron nada se pueden
+   esconder: la rutina se cuenta, pero no ocupa. Es la diferencia entre un
+   historial y un listado. */
+
+const HITO = {
+  alta: { ico: '●', cls: 'text-dark-500', txt: 'Alta' },
+  revision: { ico: '○', cls: 'text-dark-500', txt: 'Revisión' },
+  golpe: { ico: '▲', cls: 'text-orange-400', txt: 'Golpe' },
+  reparado: { ico: '✓', cls: 'text-lime-400', txt: 'Reparado' },
+  averia: { ico: '!', cls: 'text-red-400', txt: 'Avería' },
+  resuelta: { ico: '✓', cls: 'text-lime-400', txt: 'Resuelta' },
+  taller: { ico: '→', cls: 'text-amber-400', txt: 'Al taller' },
+  vuelve: { ico: '←', cls: 'text-lime-400', txt: 'Vuelve' },
+  mantenimiento: { ico: '◆', cls: 'text-sky-400', txt: 'Mantenimiento' },
+}
+
+function Expediente({ vehicleId }) {
+  const [d, setD] = useState(null)
+  const [cargando, setCargando] = useState(true)
+  const [verRutina, setVerRutina] = useState(false)
+
+  useEffect(() => {
+    if (!vehicleId) return
+    setCargando(true)
+    getExpedienteVehiculo(vehicleId)
+      .then((r) => setD(r.data))
+      .catch(() => setD(null))
+      .finally(() => setCargando(false))
+  }, [vehicleId])
+
+  const hitos = useMemo(() => {
+    const hs = d?.hitos || []
+    return verRutina ? hs : hs.filter((h) => h.tipo !== 'revision' || h.novedad)
+  }, [d, verRutina])
+
+  if (cargando) {
+    return (
+      <div className="flex items-center justify-center gap-2 p-10 text-sm text-dark-400">
+        <Loader2 size={15} className="animate-spin" /> Reuniendo su historia…
+      </div>
+    )
+  }
+  if (!d) return <div className="p-8 text-center text-sm text-dark-400">No se pudo cargar.</div>
+
+  const r = d.resumen
+  const ocultas = (d.hitos || []).filter((h) => h.tipo === 'revision' && !h.novedad).length
+
+  return (
+    <div className="space-y-3 p-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {[['Revisiones', r.revisiones], ['Golpes abiertos', r.golpes_abiertos],
+          ['Reparados', r.golpes_reparados], ['Veces al taller', r.veces_en_taller]].map(([et, n]) => (
+          <div key={et} className="rounded-lg border border-dark-800 bg-dark-900/60 px-3 py-2">
+            <p className="text-[10px] font-medium uppercase tracking-wider text-dark-500">{et}</p>
+            <p className="cifra mt-0.5 text-[19px] font-semibold text-dark-100">{n}</p>
+          </div>
+        ))}
+      </div>
+
+      {!!r.conductores?.length && (
+        <p className="text-[12px] leading-relaxed text-dark-500">
+          La han llevado <span className="cifra text-dark-300">{r.conductores_distintos}</span> personas
+          distintas desde <span className="cifra">{r.desde}</span>. Los que más:{' '}
+          {r.conductores.map((c, i) => (
+            <span key={c.nombre}>
+              {i > 0 && ', '}
+              <span className="text-dark-300">{c.nombre}</span>
+              {' '}<span className="cifra">({c.veces})</span>
+            </span>
+          ))}.
+        </p>
+      )}
+
+      {ocultas > 0 && (
+        <button onClick={() => setVerRutina(!verRutina)}
+          className="text-[12px] font-medium text-brand-300 hover:text-brand-200">
+          {verRutina
+            ? `Esconder las ${ocultas} revisiones sin novedad`
+            : `Ver también las ${ocultas} revisiones que no descubrieron nada`}
+        </button>
+      )}
+
+      <div className="space-y-0.5">
+        {hitos.map((h, i) => {
+          const c = HITO[h.tipo] || HITO.revision
+          return (
+            <div key={`${h.fecha}-${h.tipo}-${i}`}
+              className="flex items-start gap-2.5 rounded-lg px-2 py-1.5 hover:bg-dark-800/40">
+              <span className="cifra w-[74px] flex-none pt-0.5 text-[11.5px] text-dark-500">{h.fecha}</span>
+              <span className={`w-3 flex-none pt-0.5 text-center text-[11px] ${c.cls}`}>{c.ico}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[13px] text-dark-200">
+                  {h.texto}
+                  {h.gravedad && h.tipo !== 'revision' && (
+                    <span className={`ml-1.5 text-[11px] ${
+                      h.gravedad === 'critico' ? 'text-red-300'
+                        : h.gravedad === 'grave' ? 'text-orange-300' : 'text-dark-500'}`}>
+                      {h.gravedad}
+                    </span>
+                  )}
+                </span>
+                {(h.detalle || h.llevaba || h.orden) && (
+                  <span className="mt-0.5 block text-[11.5px] text-dark-500">
+                    {h.llevaba && <>La llevaba <span className="text-dark-300">{h.llevaba}</span>. </>}
+                    {h.detalle}
+                    {h.orden && <> · orden {h.orden}</>}
+                  </span>
+                )}
+              </span>
+              {h.foto && (
+                <img src={h.foto} alt="" loading="lazy"
+                  className="h-9 w-12 flex-none rounded border border-dark-700 object-cover" />
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {d.total_hitos > (d.hitos || []).length && (
+        <p className="text-[11.5px] text-dark-600">
+          Se enseñan los {(d.hitos || []).length} más recientes de {d.total_hitos}.
+        </p>
+      )}
+    </div>
+  )
+}
+
+
 function PanelDuplicados() {
   const [d, setD] = useState(null)
   const [cargando, setCargando] = useState(true)
