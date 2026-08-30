@@ -732,7 +732,14 @@ function ComoVaLaSemana({ center }) {
   }
   if (!d?.semanas?.length) return null
 
-  const actual = d.semanas.find((s) => s.es_la_actual) || d.semanas[0]
+  // LA SEMANA QUE ACABA DE EMPEZAR NO SE ENSEÑA. La semana de Amazon arranca
+  // el domingo, y ese dia no hay ni un paquete cerrado: el DCR sale a null y
+  // la cabecera ponia "None%" con "0 entregados". El backend dice cual hay que
+  // enseñar y si tuvo que retroceder; aqui solo se respeta.
+  const actual = d.semanas.find((s) => s.domingo === d.ensenar)
+    || d.semanas.find((s) => s.suficiente) || d.semanas[0]
+  const enCurso = d.semanas.find((s) => s.es_la_actual)
+  const arrancando = enCurso && !enCurso.suficiente
   const dias = d.dias || []
   const cerrados = dias.filter((x) => x.cerrado && x.dcr != null)
   // La referencia es la MEDIANA de los días cerrados, no la media: un solo día
@@ -752,12 +759,20 @@ function ComoVaLaSemana({ center }) {
     <div className="card overflow-hidden">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-dark-800 px-4 py-2.5">
         <span className="text-xs font-semibold uppercase tracking-wide text-dark-300">
-          Cómo va la semana {actual.semana}
+          {arrancando ? 'Última semana con datos' : 'Cómo va la semana'} {actual.semana}
         </span>
-        <span className="cifra text-[22px] font-semibold leading-none text-dark-50">{actual.dcr}%</span>
+        <span className="cifra text-[22px] font-semibold leading-none text-dark-50">
+          {actual.dcr != null ? `${actual.dcr}%` : '—'}
+        </span>
         <span className={`text-[11px] font-semibold uppercase tracking-wide ${tierCls(actual.tier)}`}>
           {actual.tier || '—'}
         </span>
+        {arrancando && (
+          <span className="text-[11.5px] text-dark-500">
+            · la {enCurso.semana} acaba de empezar
+            {enCurso.entregados > 0 && <> (<span className="cifra">{enCurso.entregados.toLocaleString('es')}</span> entregados)</>}
+          </span>
+        )}
         <button onClick={revisar} disabled={revisando}
           className="ml-auto rounded-md border border-dark-700 px-2 py-0.5 text-[11px] text-dark-400 hover:text-dark-200 disabled:opacity-50"
           title="Comprueba el último día cerrado y avisa por Telegram si se sale de lo normal">

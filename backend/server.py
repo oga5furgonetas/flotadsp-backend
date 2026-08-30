@@ -26544,10 +26544,32 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
                 else 0),
         })
 
+    # LA SEMANA QUE ACABA DE EMPEZAR NO ES "LA ACTUAL" PARA ENSEÑAR.
+    # La semana de Amazon arranca el domingo: ese dia, y a veces el lunes por
+    # la manana, no hay ni un paquete cerrado y el DCR sale a None. La pantalla
+    # lo pintaba como "None%" con "0 entregados", que es lo que se veia hoy
+    # domingo 30. Con tan pocos paquetes tampoco significa nada: un solo fallo
+    # sobre veinte entregas da un 95% que asusta y no dice nada.
+    # Se marca cual hay que enseñar y por que, y la pantalla lo respeta.
+    _MIN_PARA_ENSEÑAR = 300
+    ensenar = None
+    for sem in semanas_out:
+        if sem["dcr"] is not None and (sem["entregados"] + sem["fallos"]) >= _MIN_PARA_ENSEÑAR:
+            ensenar = sem
+            break
+    for sem in semanas_out:
+        sem["suficiente"] = (sem["dcr"] is not None
+                             and (sem["entregados"] + sem["fallos"]) >= _MIN_PARA_ENSEÑAR)
+
     return {
         "center": center or "Todos",
         "umbral_dcr": thr_dcr,
         "semanas": semanas_out,
+        # Cual debe enseñar la pantalla arriba del todo, y si es la de esta
+        # semana o hubo que retroceder porque la actual no ha arrancado.
+        "ensenar": (ensenar or {}).get("domingo"),
+        "ensenar_es_la_actual": bool(ensenar and ensenar.get("es_la_actual")),
+        "min_para_ensenar": _MIN_PARA_ENSEÑAR,
         "dias": dias_out[-21:],
         "nota": ("Contado sobre los paquetes de Cortex, no es una predicción. "
                  "Los días con paquetes aún en la furgoneta salen marcados "
