@@ -26774,6 +26774,50 @@ async def scorecard_estimacion(data: dict = Body(...), _=Depends(require_admin))
 # numero y da un susto falso todas las tardes. Sale aparte, marcado.
 
 
+# ATTEMPTED es un intento fallido que TODAVIA SE VA A REINTENTAR. Cortex lo
+# llama literalmente «se puede volver a intentar» y lo pone en su propia casilla,
+# separado de «no se puede entregar» y de «devuelto a la estacion». Medido en
+# OGA5: de los que pasan por ATTEMPTED acaban entregados el 90 % (26-08), el
+# 95 % (27-08) y el 80 % (28-08), y al cerrar el dia quedan vivos 2, 3 y 1.
+#
+# Pero al CIERRE, un ATTEMPTED que sigue en pie si es un fallo: nadie lo entrego.
+# O sea que no es ni fallo ni no-fallo: depende de si la jornada sigue viva.
+#
+# Cayendo al cajon por defecto contaba siempre como fallo, y el 30-08 a las 18:33
+# eso hundia el DCR en vivo 4,29 puntos: 95,28 % cuando era 99,57 %. Es el
+# gotcha 28 otra vez —lo que no encaja cae a «fallo de entrega»—, y por eso esta
+# funcion es UNA y no cuatro: la misma cuenta estaba copiada en cuatro sitios y
+# arreglarla en tres de ellos habria sido peor que no tocarla (gotcha 20).
+_CX_REINTENTABLE = ("ATTEMPTED",)
+
+
+def _cx_reparte(por_estado: dict) -> dict:
+    """Reparte los paquetes de un dia en entregados / en vuelo / fuera / fallos."""
+    ok = sum(n for s, n in por_estado.items() if s in _CX_OK)
+    vuelo = sum(n for s, n in por_estado.items() if s in _CX_EN_VUELO)
+    fuera = sum(n for s, n in por_estado.items() if s in _CX_NO_DESPACHADO)
+    reint = sum(n for s, n in por_estado.items() if s in _CX_REINTENTABLE)
+    fallos = sum(n for s, n in por_estado.items()
+                 if s not in _CX_OK and s not in _CX_EN_VUELO
+                 and s not in _CX_NO_DESPACHADO and s not in _CX_REINTENTABLE)
+    total = ok + vuelo + fuera + reint + fallos
+
+    # Si la jornada sigue viva, los reintentables siguen en juego. Se mira SIN
+    # contarlos: incluirlos aqui haria que ellos mismos decidieran si el dia
+    # esta abierto, y un dia con 300 intentos fallidos y ni una furgoneta en la
+    # calle se declararia abierto para siempre.
+    abierto = vuelo > max(5, total * (_CX_UMBRAL_EN_VUELO / 100))
+    if abierto:
+        vuelo += reint
+    else:
+        fallos += reint
+
+    return {"entregados": ok, "en_vuelo": vuelo, "no_despachados": fuera,
+            "fallos": fallos, "total": total, "reintentables": reint,
+            "cerrado": not abierto, "dcr": _sc_dcr(ok, fallos),
+            "pct_en_vuelo": round(vuelo / max(total, 1) * 100, 2)}
+
+
 def _sc_dcr(entregados: int, fallos: int) -> Optional[float]:
     """DCR = entregados / (entregados + fallos). Sin los no despachados."""
     base = entregados + fallos
@@ -26799,15 +26843,6 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
     async for r in cur:
         dias.setdefault(r["_id"]["d"], {})[r["_id"]["s"] or "NONE"] = r["n"]
 
-    def _reparte(estados: dict) -> dict:
-        ok = sum(n for s, n in estados.items() if s in _CX_OK)
-        vuelo = sum(n for s, n in estados.items() if s in _CX_EN_VUELO)
-        fuera = sum(n for s, n in estados.items() if s in _CX_NO_DESPACHADO)
-        fallos = sum(n for s, n in estados.items()
-                     if s not in _CX_OK and s not in _CX_EN_VUELO and s not in _CX_NO_DESPACHADO)
-        return {"entregados": ok, "en_vuelo": vuelo, "no_despachados": fuera,
-                "fallos": fallos, "total": ok + vuelo + fuera + fallos}
-
     # Umbrales de esta nave para poder decir en que nivel cae.
     wnum = _sun_to_week_num(dom.strftime("%Y-%m-%d"))
     thr, _meta = await _sc_thresholds(center or "OGA5", wnum)
@@ -26819,36 +26854,37 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
     # viernes. Medido contra Cortex: a los 3 dias se ha borrado el 97 % de las
     # devoluciones del dia. `_bucle_congelar` guarda cada tarde el maximo de
     # fallos visto, y esa foto es la que vale para los dias pasados.
+    # Se lee `por_estado`, que es el dato CRUDO, y se reparte aqui. Guardar el
+    # reparto ya hecho ataria cada foto a la clasificacion que hubiera el dia que
+    # se tomo: al mover ATTEMPTED a reintentable, las fotas viejas habrian
+    # seguido diciendo lo de antes y la pantalla habria mezclado dos criterios.
+    # El dato crudo se recalcula solo.
     snaps: dict = {}
     qs: dict = {"service_day": {"$gte": desde}}
     if "center" in q:
         qs["center"] = q["center"]
     async for s in db.cortex_day_snapshots.find(
-            qs, {"_id": 0, "service_day": 1, "entregados": 1, "fallos": 1,
-                 "en_vuelo": 1, "no_despachados": 1, "total": 1}):
+            qs, {"_id": 0, "service_day": 1, "por_estado": 1}):
         # Sin centro concreto hay una foto POR centro y hay que sumarlas: coger
         # una sola dejaria fuera los paquetes del resto, sin avisar.
-        a = snaps.setdefault(s["service_day"], {"entregados": 0, "fallos": 0,
-                                                "en_vuelo": 0, "no_despachados": 0,
-                                                "total": 0})
-        for k in a:
-            a[k] += s.get(k) or 0
+        a = snaps.setdefault(s["service_day"], {})
+        for est, n_ in (s.get("por_estado") or {}).items():
+            a[est] = a.get(est, 0) + n_
 
     semanas_out, dias_out = [], []
     porsem: dict = {}
     for d in sorted(dias):
-        rep = _reparte(dias[d])
+        rep = _cx_reparte(dias[d])
         sn = snaps.get(d)
         # Se cambia solo si la foto vio MAS fallos. Asi el dia en curso, que
         # sigue creciendo entre foto y foto, no se queda con un numero viejo.
-        rep["congelado"] = bool(sn and sn["fallos"] > rep["fallos"])
+        # Y se reparte la foto con la MISMA funcion, para no comparar un numero
+        # de hoy contra uno calculado con otro criterio.
+        rep_sn = _cx_reparte(sn) if sn else None
+        rep["congelado"] = bool(rep_sn and rep_sn["fallos"] > rep["fallos"])
         if rep["congelado"]:
-            for k in ("entregados", "fallos", "en_vuelo", "no_despachados", "total"):
-                rep[k] = sn[k]
+            rep = rep_sn
         rep["fecha"] = d
-        rep["dcr"] = _sc_dcr(rep["entregados"], rep["fallos"])
-        # Un dia con muchos paquetes aun en la furgoneta no esta cerrado.
-        rep["cerrado"] = rep["en_vuelo"] <= max(5, rep["total"] * 0.02)
         dias_out.append(rep)
         try:
             f = datetime.strptime(d, "%Y-%m-%d").date()
@@ -26989,17 +27025,7 @@ async def _cx_foto_dia(dia: str, centro: str) -> Optional[dict]:
     if not por_estado:
         return None
 
-    ok = sum(n for s, n in por_estado.items() if s in _CX_OK)
-    vuelo = sum(n for s, n in por_estado.items() if s in _CX_EN_VUELO)
-    fuera = sum(n for s, n in por_estado.items() if s in _CX_NO_DESPACHADO)
-    fallos = sum(n for s, n in por_estado.items()
-                 if s not in _CX_OK and s not in _CX_EN_VUELO
-                 and s not in _CX_NO_DESPACHADO)
-    total = ok + vuelo + fuera + fallos
-    return {"por_estado": por_estado, "entregados": ok, "en_vuelo": vuelo,
-            "no_despachados": fuera, "fallos": fallos, "total": total,
-            "dcr": _sc_dcr(ok, fallos),
-            "pct_en_vuelo": round(vuelo / max(total, 1) * 100, 2)}
+    return {"por_estado": por_estado, **_cx_reparte(por_estado)}
 
 
 def _snap_mejora(prev: Optional[dict], fallos: int, cerrado: bool,
@@ -27050,7 +27076,14 @@ async def _congelar_dia(dia: str, centro: str) -> Optional[dict]:
                  - datetime.strptime(dia, "%Y-%m-%d").date()).days
     except Exception:                                            # noqa: BLE001
         antig = 0
-    if not _snap_mejora(prev, foto["fallos"], cerrado, antig):
+    # El `fallos` guardado en `prev` puede venir de una clasificacion anterior
+    # (ATTEMPTED conto como fallo hasta el 30-08). Se reparte su `por_estado`
+    # con la funcion de HOY: si no, una foto vieja ganaria siempre el maximo por
+    # haber contado de mas, y congelaria el dia con un numero que ya no vale.
+    prev_cmp = prev
+    if prev and prev.get("por_estado"):
+        prev_cmp = {**prev, **_cx_reparte(prev["por_estado"])}
+    if not _snap_mejora(prev_cmp, foto["fallos"], cerrado, antig):
         return None
 
     doc = dict(foto)
@@ -27202,17 +27235,12 @@ async def revisar_dcr_diario() -> list:
         filas = []
         for d in sorted(dias):
             e = dias[d]
-            ok = sum(n for s, n in e.items() if s in _CX_OK)
-            vuelo = sum(n for s, n in e.items() if s in _CX_EN_VUELO)
-            fallos = sum(n for s, n in e.items()
-                         if s not in _CX_OK and s not in _CX_EN_VUELO
-                         and s not in _CX_NO_DESPACHADO)
-            tot = ok + vuelo + fallos
-            if not tot:
+            rep = _cx_reparte(e)
+            if not rep["total"]:
                 continue
-            filas.append({"fecha": d, "ok": ok, "fallos": fallos, "vuelo": vuelo,
-                          "dcr": _sc_dcr(ok, fallos),
-                          "cerrado": vuelo <= max(5, tot * 0.02), "estados": e})
+            filas.append({"fecha": d, "ok": rep["entregados"], "fallos": rep["fallos"],
+                          "vuelo": rep["en_vuelo"], "dcr": rep["dcr"],
+                          "cerrado": rep["cerrado"], "estados": e})
         cerrados = [f for f in filas if f["cerrado"] and f["dcr"] is not None]
         if len(cerrados) < 5:
             continue
@@ -27231,13 +27259,15 @@ async def revisar_dcr_diario() -> list:
         # que se puede accionar y uno que solo preocupa.
         motivos = sorted(
             ((s, n) for s, n in ultimo["estados"].items()
-             if s not in _CX_OK and s not in _CX_EN_VUELO and s not in _CX_NO_DESPACHADO),
+             if s not in _CX_OK and s not in _CX_EN_VUELO and s not in _CX_NO_DESPACHADO
+             and s not in _CX_REINTENTABLE),
             key=lambda x: -x[1])[:3]
         nrutas = len(await db.cortex_packages.distinct(
             "route_code", {"service_day": ultimo["fecha"],
                            "center": {"$regex": re.escape(centro), "$options": "i"},
                            "state": {"$nin": list(_CX_OK) + list(_CX_EN_VUELO)
-                                     + list(_CX_NO_DESPACHADO)}}))
+                                     + list(_CX_NO_DESPACHADO)
+                                     + list(_CX_REINTENTABLE)}}))
 
         texto = (
             "⚠️ %s · %s\n"
