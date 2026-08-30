@@ -24,6 +24,7 @@ import {
   getVehicleDamageLedger, repairVehicleLedger, getSpareWheels, getMaintenanceLog, borrarApunteMantenimiento,
   getAllDocuments,
   getExposicionVehiculos, getVehiculosDuplicados, fusionarVehiculos, getExpedienteVehiculo,
+  getOdometroSospechosas, sanearOdometro,
 } from '../api'
 import { getAdmin } from '../auth'
 
@@ -2057,6 +2058,123 @@ function Expediente({ vehicleId }) {
 }
 
 
+/* ── LECTURAS DE KILOMETRAJE QUE NO PUEDEN SER ───────────────────────────────
+   Dos errores reales, vistos en producción: un dígito de más o de menos
+   (611105 por 61110) y meter el cuentakilómetros PARCIAL en vez del total
+   (350, 500, 25 km). Con esos picos dentro, el ritmo salía entre -6.350 y
+   +7.616 km/día y no se podía predecir nada; limpiando, va de 21 a 281.
+
+   No se borra nada: la lectura queda marcada con su motivo y deja de contar.
+   Si el juicio estuviera mal, está ahí para verlo. */
+function PanelOdometro() {
+  const [d, setD] = useState(null)
+  const [cargando, setCargando] = useState(true)
+  const [saneando, setSaneando] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  const cargar = useCallback(() => {
+    setCargando(true)
+    getOdometroSospechosas()
+      .then((r) => setD(r.data))
+      .catch(() => setD(null))
+      .finally(() => setCargando(false))
+  }, [])
+  useEffect(cargar, [cargar])
+
+  const sanear = async (soloUno) => {
+    setSaneando(true); setMsg(null)
+    try {
+      const r = await sanearOdometro(soloUno ? { vehiculos: [soloUno] } : {})
+      setMsg({ txt: `${r.data.lecturas_descartadas} lecturas descartadas en ${r.data.vehiculos_tocados} furgonetas.` })
+      cargar()
+    } catch (e) {
+      setMsg({ mal: true, txt: e?.response?.data?.detail || 'No se pudo.' })
+    } finally { setSaneando(false) }
+  }
+
+  if (cargando) {
+    return (
+      <div className="card flex items-center justify-center gap-2 p-10 text-dark-400">
+        <Loader2 size={15} className="animate-spin" /> Revisando el historial de kilómetros…
+      </div>
+    )
+  }
+  if (!d?.vehiculos?.length) {
+    return (
+      <div className="card p-10 text-center text-[13px] text-dark-400">
+        Ninguna lectura de kilometraje se sale de lo posible.
+        <span className="mt-1 block text-[12px] text-dark-600">
+          Revisadas {d?.total_lecturas?.toLocaleString('es') || 0} lecturas.
+        </span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-[12.5px] text-dark-500">
+          <span className="cifra text-orange-300">{d.sospechosas}</span> lecturas imposibles
+          de <span className="cifra">{d.total_lecturas.toLocaleString('es')}</span> ·{' '}
+          <span className="cifra">{d.vehiculos.length}</span> furgonetas
+          {d.con_km_actual_malo > 0 && (
+            <> · <span className="cifra text-red-300">{d.con_km_actual_malo}</span> con el km de la ficha equivocado</>
+          )}
+        </span>
+        <button onClick={() => sanear(null)} disabled={saneando}
+          className="btn-primary ml-auto px-3 py-1.5 text-[12.5px] disabled:opacity-50">
+          {saneando ? 'Limpiando…' : 'Descartar todas'}
+        </button>
+      </div>
+
+      {msg && <p className={`text-[12.5px] ${msg.mal ? 'text-red-300' : 'text-lime-300'}`}>{msg.txt}</p>}
+
+      <p className="max-w-[74ch] text-[12.5px] leading-relaxed text-dark-500">
+        Los dos errores de siempre: un dígito de más o de menos, y meter el
+        cuentakilómetros <span className="text-dark-300">parcial</span> en vez del total.
+        No se borra nada — la lectura queda marcada y deja de contar, así que se puede
+        revisar después.
+      </p>
+
+      {d.vehiculos.map((v) => (
+        <div key={v.vehicle_id} className="card overflow-hidden">
+          <div className="flex flex-wrap items-center gap-2 border-b border-dark-800 px-3.5 py-2">
+            <span className="cifra font-semibold text-dark-100">{v.matricula}</span>
+            <span className="text-[12px] text-dark-500">
+              ficha: <span className="cifra">{v.km_actual?.toLocaleString('es') || '—'}</span> km
+              {v.km_bueno != null && v.km_bueno !== v.km_actual && (
+                <> · debería ser <span className="cifra text-lime-300">{v.km_bueno.toLocaleString('es')}</span></>
+              )}
+            </span>
+            {v.actual_es_malo && (
+              <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-[10.5px] font-semibold text-red-300 ring-1 ring-inset ring-red-500/30">
+                la ficha miente
+              </span>
+            )}
+            <button onClick={() => sanear(v.vehicle_id)} disabled={saneando}
+              className="ml-auto rounded-md border border-dark-700 px-2.5 py-1 text-[12px] text-dark-400 hover:text-dark-200 disabled:opacity-40">
+              solo esta
+            </button>
+          </div>
+          <div className="divide-y divide-dark-800/60">
+            {v.lecturas.map((l) => (
+              <div key={`${l.i}-${l.fecha}`} className="flex flex-wrap items-center gap-3 px-3.5 py-1.5">
+                <span className="cifra w-[86px] flex-none text-[12px] text-dark-500">{l.fecha}</span>
+                <span className="cifra w-[100px] flex-none text-right text-[13px] text-orange-300">
+                  {typeof l.km === 'number' ? l.km.toLocaleString('es') : l.km}
+                </span>
+                <span className="w-[120px] flex-none text-[11.5px] text-dark-600">{l.origen}</span>
+                <span className="min-w-0 flex-1 text-[12px] text-dark-500">{l.motivo}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+
 function PanelDuplicados() {
   const [d, setD] = useState(null)
   const [cargando, setCargando] = useState(true)
@@ -2298,7 +2416,7 @@ export default function Vehiculos() {
           // La documentación es su propia pestaña y no cuelga de ninguna
           // furgoneta: ver el comentario de PanelDocumentos.
           { id: 'expo', label: 'Lo que acumulan' },
-          { id: 'dup', label: 'Repetidas', n: nDup },
+          { id: 'dup', label: 'Revisar datos', n: nDup },
           { id: 'docs', label: t('veh.tab.docs') },
         ].map((x) => {
           const activa = x.id === 'docs' ? verDocs : x.id === 'expo' ? verExpo
@@ -2319,7 +2437,21 @@ export default function Vehiculos() {
       </div>
 
       {verDocs && <PanelDocumentos />}
-      {verDup && <PanelDuplicados />}
+      {verDup && (
+        <div className="space-y-6">
+          {/* Dos revisiones distintas del mismo sitio: fichas repetidas y
+              kilometrajes imposibles. Las dos ensucian TODO lo que se calcula
+              encima, asi que van juntas y no escondidas en pantallas aparte. */}
+          <div>
+            <h2 className="mb-2 text-[15px] font-semibold text-dark-100">Matrículas repetidas</h2>
+            <PanelDuplicados />
+          </div>
+          <div>
+            <h2 className="mb-2 text-[15px] font-semibold text-dark-100">Kilometrajes imposibles</h2>
+            <PanelOdometro />
+          </div>
+        </div>
+      )}
       {verExpo && <PanelExposicion center={center} onAbrir={(id) => {
         const v = list.find((x) => x.id === id); if (v) setSel(v)
       }} />}

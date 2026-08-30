@@ -353,6 +353,11 @@ export const getExpedienteVehiculo = (id) => api.get(`/vehicles/${id}/expediente
    dato que cuesta eso no se rellena nunca. */
 export const getItvPendientes = () => api.get('/vehicles/itv/pendientes')
 export const guardarItvLote = (body) => api.put('/vehicles/itv/lote', body)
+/* Lecturas de kilometraje que no pueden ser: un digito de mas o de menos, o el
+   cuentakilometros PARCIAL en vez del total. Con esos picos dentro no se puede
+   predecir nada. */
+export const getOdometroSospechosas = () => api.get('/vehicles/odometro/sospechosas')
+export const sanearOdometro = (body) => api.post('/vehicles/odometro/sanear', body || {})
 export const getVehiculosDuplicados = () => api.get('/vehicles/duplicados')
 export const fusionarVehiculos = (body) => api.post('/vehicles/fusionar', body)
 export const getExposicionVehiculos = (center) =>
