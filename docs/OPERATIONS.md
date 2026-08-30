@@ -49,18 +49,21 @@ Es decir: **la operación de taller ocurre, pero fuera de la app**. Las furgonet
 entran y salen del taller, y lo único que queda es un `status: "taller"` puesto a
 mano y una incidencia.
 
-`UNKNOWN`: **por qué** no se usa. Las dos órdenes que se crearon se anularon, y
-esa es la pista más valiosa que hay — pero solo Dani puede decir por qué.
+**RESUELTO (Dani, 30-08):** las dos órdenes se anularon porque eran **pruebas
+visuales suyas** para ver cómo iba a funcionar. No son un rechazo del flujo.
 
-Hipótesis a contrastar con él, **no verificadas**:
+Eso cambia el diagnóstico por completo, y para bien: **el módulo no está
+rechazado, está sin estrenar**. Aquí estaba anotado como hipótesis de rechazo y
+era falso — conviene registrarlo, porque una hipótesis mal escrita condiciona
+todo lo que se construye después.
 
-1. Crear la orden cuesta más que llamar por teléfono
-2. El taller no quiere entrar en un enlace
-3. El flujo no encaja con cómo se manda una furgoneta de verdad
-4. Nadie sabe que existe
+Lo que sí sigue siendo cierto: la operación de taller ocurre hoy fuera de la
+app. 13 furgonetas entraron y salieron sin que quedara una orden.
 
-Hasta saberlo, **no tiene sentido añadir funciones al módulo**: sería construir
-sobre un flujo que nadie anda.
+`UNKNOWN`: qué hace falta para que se empiece a usar de verdad. Al no haber
+rechazo que estudiar, la vía es la contraria — **quitar fricción hasta que usarlo
+sea más cómodo que llamar por teléfono**. El parte con fotos y el recordatorio
+automático van en esa dirección; falta saber si es suficiente.
 
 ---
 
