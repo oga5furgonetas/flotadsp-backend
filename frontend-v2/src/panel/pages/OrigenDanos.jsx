@@ -3,6 +3,17 @@ import { useOutletContext } from 'react-router-dom'
 import { Loader2, ShieldAlert, Camera, ChevronRight, Info } from 'lucide-react'
 import { getAtribucionDanos } from '../api'
 
+/* La misma pieza viene escrita de dos formas desde la IA ('Paragolpes
+   delantero' 30 veces y 'paragolpes delantero' otras 26), y en una lista se
+   leen como dos cosas distintas. Se enseñan igual sin tocar el dato: el texto
+   original es más legible que la clave canónica que devuelve el backend, que
+   sirve para contar y no para leer. */
+function nombrePieza(t) {
+  const s = String(t || '').trim()
+  if (!s) return '—'
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase()
+}
+
 /* ORIGEN DE DAÑOS
    ═══════════════════════════════════════════════════════════════════════════
    Para cada golpe del libro busca la ÚLTIMA foto en la que la furgoneta estaba
@@ -131,7 +142,7 @@ export default function OrigenDanos() {
                   <span className="cifra w-[86px] flex-none font-semibold text-dark-100">{d.matricula}</span>
                   <span className="min-w-0 flex-1">
                     <span className={`block truncate text-[13px] ${SEV[d.severity] || 'text-dark-300'}`}>
-                      {d.part || d.panel}
+                      {nombrePieza(d.part || d.panel)}
                     </span>
                     <span className="mt-0.5 block text-[11.5px] text-dark-500">
                       Apareció el <span className="cifra">{d.aparecio}</span>

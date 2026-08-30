@@ -2534,6 +2534,33 @@ async def _known_damages_prompt(vehicle_id: str, exclude_inspection_id: str = No
         return ""
 
 
+async def _fecha_dano(inspection_id: str) -> str:
+    """El dia en que se VIO el golpe, que es el de la inspeccion.
+
+    No es la fecha de hoy. Suena obvio y se colo en dos de los tres sitios que
+    escriben el ledger: el analisis diferido y, sobre todo, la revision humana
+    —alguien revisa hoy una inspeccion de hace doce dias y el golpe quedaba
+    fechado hoy—. Medido el 30-08-2026: solo 77 de 215 daños vivos tenian la
+    fecha del ledger igual que la de su propia inspeccion; el resto se desviaba
+    entre 1 y 12 dias.
+
+    Importa porque el origen de daños calcula la ventana con esta fecha y
+    enseña la foto de la inspeccion: con las dos descuadradas, la pantalla dice
+    "aparecio el 13" mientras enseña una foto del 12, y la ventana sale de mas,
+    que es lo que decide a quien se nombra.
+
+    Si no se puede saber, se devuelve hoy: es lo que habia antes y no empeora.
+    """
+    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if not inspection_id:
+        return hoy
+    try:
+        i = await db.inspections.find_one({"id": inspection_id}, {"_id": 0, "created_at": 1})
+    except Exception:                                            # noqa: BLE001
+        return hoy
+    return (str((i or {}).get("created_at") or "")[:10]) or hoy
+
+
 async def _apply_vehicle_memory(vehicle_id: str, analysis, inspection_id: str = None) -> None:
     """MEMORIA DEL VEHÍCULO tras cada análisis. Tres garantías:
 
@@ -2632,7 +2659,8 @@ async def _apply_vehicle_memory(vehicle_id: str, analysis, inspection_id: str = 
                               "rank": max(d_rank, known.get(p, {}).get("rank", 0)),
                               "updated_at": now_iso},
                      "$setOnInsert": {"vehicle_id": vehicle_id, "panel": p, "status": "open",
-                                      "source": "ai", "first_seen": now_iso[:10],
+                                      "source": "ai",
+                                      "first_seen": await _fecha_dano(inspection_id),
                                       "first_seen_inspection": inspection_id or ""}},
                     upsert=True)
                 registered += 1
@@ -6675,7 +6703,13 @@ async def vehiculo_expediente(vehicle_id: str, _=Depends(require_admin)):
     # lineas iguales entierran los tres hitos que de verdad importan. Marcando
     # cual destapo algo, la pantalla puede esconder la rutina y dejar a la
     # vista lo que cambio: es la diferencia entre un historial y un listado.
-    danos = await db.vehicle_damage_ledger.find({"vehicle_id": vehicle_id}).to_list(300)
+    # Mismo filtro que /damages/atribucion: `archived` es lo que quedo de una
+    # reconstruccion de flota, no un golpe. Sin esto el historial de una
+    # furgoneta ensena el mismo daño dos veces —el vivo y el archivado— y
+    # parece que se rompio dos veces.
+    danos = await db.vehicle_damage_ledger.find(
+        {"vehicle_id": vehicle_id,
+         "status": {"$nin": ["archived", "descartada", "deleted"]}}).to_list(300)
     descubre = {}
     for _d in danos:
         if _d.get("first_seen_inspection"):
@@ -6703,15 +6737,29 @@ async def vehiculo_expediente(vehicle_id: str, _=Depends(require_admin)):
     # misma regla que /damages/atribucion: solo se nombra a alguien con un dia
     # de ventana y un unico conductor.
     por_insp = {i["id"]: i for i in insp}
+    # Quien es quien: dos fichas de la misma persona contarian como dos
+    # conductores y la certeza caeria sin motivo (gotcha 15). Por CORREO, nunca
+    # por nombre: dos tocayos son dos personas.
+    persona = {}
+    async for dr in db.drivers.find({}, {"_id": 0, "id": 1, "email": 1}):
+        c = str(dr.get("email") or "").strip().lower()
+        if c:
+            persona[dr["id"]] = c
     for d in danos:
         fs = str(d.get("first_seen") or "")[:10]
-        previas = [i for i in insp if (i.get("created_at") or "")[:10] < fs]
+        # Contra el INSTANTE de la inspeccion que vio el golpe, no contra el
+        # dia: por dia se descartaba la revision limpia de esa misma mañana.
+        act = por_insp.get(d.get("first_seen_inspection"))
+        if act and act.get("created_at"):
+            previas = [i for i in insp if (i.get("created_at") or "") < act["created_at"]]
+        else:
+            previas = [i for i in insp if (i.get("created_at") or "")[:10] < fs]
         cond = None
         if previas and fs:
             desde_f = (previas[-1].get("created_at") or "")[:10]
             ids = [i.get("driver_id") for i in insp
                    if desde_f <= (i.get("created_at") or "")[:10] <= fs and i.get("driver_id")]
-            ids = list(dict.fromkeys(ids))
+            ids = _atr_una_persona(list(dict.fromkeys(ids)), persona)
             try:
                 ventana = (datetime.strptime(fs, "%Y-%m-%d")
                            - datetime.strptime(desde_f, "%Y-%m-%d")).days
@@ -9777,7 +9825,11 @@ async def damage_feedback(inspection_id: str, data: dict, user: dict = Depends(g
                               "rank": _SEV_RANK.get(_norm_sev(dmg.get("severity")), 1),
                               "updated_at": datetime.now(timezone.utc).isoformat()},
                      "$setOnInsert": {"vehicle_id": _vid, "panel": _p, "status": "open",
-                                      "first_seen": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                                      # La fecha de la INSPECCION, no la de hoy:
+                                      # esto corre cuando alguien revisa, y puede
+                                      # revisar algo de hace dos semanas.
+                                      "first_seen": (str(insp.get("created_at") or "")[:10]
+                                                     or datetime.now(timezone.utc).strftime("%Y-%m-%d")),
                                       "first_seen_inspection": inspection_id}},
                     upsert=True)
             elif verdict == "wrong":
@@ -14758,6 +14810,35 @@ async def _ot_avisa(orden: dict, texto: str):
 _ATR_LEVES = ("leve",)
 
 
+def _atr_pieza(texto: str) -> str:
+    """Nombre canonico de la pieza, o el texto tal cual si no se reconoce.
+
+    Devolver el original cuando no casa es a proposito: una pieza sin canonico
+    tiene que SEGUIR VIENDOSE, no desaparecer (gotcha 17, el cajon de sobras).
+    """
+    try:
+        c = piezas.canon(texto or "")
+    except Exception:                                            # noqa: BLE001
+        return texto or ""
+    return c[0][0] if c and c[0][0] else (texto or "")
+
+
+def _atr_una_persona(ids: list, persona: dict) -> list:
+    """Deja un id por PERSONA, no por ficha (gotcha 15).
+
+    Conserva el orden y el primer id de cada persona, que es el que se usa
+    para enlazar con su ficha.
+    """
+    fuera, vistas = [], set()
+    for i in ids:
+        k = persona.get(i) or i
+        if k in vistas:
+            continue
+        vistas.add(k)
+        fuera.append(i)
+    return fuera
+
+
 def _atr_certeza(dias: int, conductores: list, severidad: str) -> tuple:
     """(certeza, motivo). 'alta' es la unica que senala a una persona."""
     if severidad in _ATR_LEVES:
@@ -14777,14 +14858,29 @@ async def danos_atribucion(center: str = "", dias: int = 120, solo_alta: bool = 
                            _=Depends(require_admin)):
     """Cada golpe con la ultima foto limpia, la ventana y quien la llevaba."""
     desde = (datetime.now(timezone.utc) - timedelta(days=max(7, min(dias, 400)))).strftime("%Y-%m-%d")
-    danos = await db.vehicle_damage_ledger.find(
-        {"first_seen": {"$gte": desde}}).sort("first_seen", -1).to_list(600)
+    # `archived` NO es un daño: es lo que quedó de una reconstrucción de flota
+    # (`archived_reason: rebuild_fleet`). Eran 466 de 681 —el 68 % de la
+    # pantalla— y salían mezclados con los vivos como si fueran golpes reales.
+    # `repaired` sí se queda: se hizo, se arregló, y saber quién lo hizo es
+    # justamente para lo que existe esta pantalla.
+    q_dan: dict = {"first_seen": {"$gte": desde},
+                   "status": {"$nin": ["archived", "descartada", "deleted"]}}
+    # Sin tope: cortaba en 600 teniendo 681, y como ordena por fecha se comía
+    # los más antiguos de la ventana en silencio (gotcha 10). Se pide uno más
+    # que el máximo para poder DECIR que se cortó, en vez de callarlo.
+    _TOPE = 3000
+    danos = await db.vehicle_damage_ledger.find(q_dan).sort(
+        "first_seen", -1).to_list(_TOPE + 1)
+    truncado = len(danos) > _TOPE
+    danos = danos[:_TOPE]
     if not danos:
-        return {"danos": [], "resumen": {}}
+        return {"danos": [], "resumen": {}, "total": 0}
 
     vids = list({d.get("vehicle_id") for d in danos if d.get("vehicle_id")})
+    # Una furgoneta de baja o borrada no cuenta en nada (gotcha 13): sus golpes
+    # no se le pueden reclamar a nadie y solo ensucian la lista. Eran 32.
     vs = {v["id"]: v async for v in db.vehicles.find(
-        {"id": {"$in": vids}},
+        {"id": {"$in": vids}, "status": {"$nin": ["deleted", "baja"]}},
         {"_id": 0, "id": 1, "license_plate": 1, "center": 1, "status": 1})}
 
     # Todas las inspecciones de esas furgonetas, ordenadas por fecha.
@@ -14797,7 +14893,14 @@ async def danos_atribucion(center: str = "", dias: int = 120, solo_alta: bool = 
     for v in porveh:
         porveh[v].sort(key=lambda x: x.get("created_at") or "")
 
-    nombres = {d["id"]: d.get("name") async for d in db.drivers.find({}, {"_id": 0, "id": 1, "name": 1})}
+    nombres, persona = {}, {}
+    async for dr in db.drivers.find({}, {"_id": 0, "id": 1, "name": 1, "email": 1}):
+        nombres[dr["id"]] = dr.get("name")
+        # Se empareja por CORREO, nunca por nombre: dos tocayos distintos
+        # acabarían siendo la misma persona (gotcha 15).
+        c = str(dr.get("email") or "").strip().lower()
+        if c:
+            persona[dr["id"]] = c
 
     def _foto(ins):
         anot = [f for f in (ins.get("annotated_photos") or []) if f]
@@ -14806,14 +14909,25 @@ async def danos_atribucion(center: str = "", dias: int = 120, solo_alta: bool = 
     out, resumen = [], {"alta": 0, "media": 0, "baja": 0}
     for d in danos:
         vid = d.get("vehicle_id")
-        v = vs.get(vid) or {}
+        v = vs.get(vid)
+        if not v:
+            continue                       # de baja, borrada o sin ficha
         if center and center not in ("Todos", "todos"):
             if not re.search(re.escape(center.strip()), str(v.get("center") or ""), re.I):
                 continue
         fs = str(d.get("first_seen") or "")[:10]
         lista = porveh.get(vid) or []
-        previas = [i for i in lista if (i.get("created_at") or "")[:10] < fs]
         actual = next((i for i in lista if i.get("id") == d.get("first_seen_inspection")), None)
+        # Comparar por DÍA descartaba la inspección limpia de esa misma mañana:
+        # con `< fs`, una revisión a las 08:00 sin el golpe y otra a las 20:00
+        # con él quedaban en el mismo día y la primera no contaba como previa.
+        # La ventana se ensanchaba a la víspera, o se perdía entera. Pasaba en 5
+        # casos. Contra el INSTANTE de la que vio el golpe sale exacto.
+        if actual and actual.get("created_at"):
+            previas = [i for i in lista
+                       if (i.get("created_at") or "") < actual["created_at"]]
+        else:
+            previas = [i for i in lista if (i.get("created_at") or "")[:10] < fs]
         limpia = previas[-1] if previas else None
 
         ventana = None
@@ -14834,13 +14948,28 @@ async def danos_atribucion(center: str = "", dias: int = 120, solo_alta: bool = 
             if desde_f <= f <= fs and i.get("driver_id"):
                 if i["driver_id"] not in cond_ids:
                     cond_ids.append(i["driver_id"])
+        # Hay 13 personas con dos fichas (gotcha 15). Contadas por separado
+        # serían «dos personas la llevaron» y la certeza caería de alta a media
+        # sin que haya pasado nada. Hoy no coincide ninguna en la misma ventana
+        # —medido: 0 casos—, pero eso es suerte del reparto de este mes, no una
+        # garantía, y el día que coincidan el fallo sería invisible.
+        cond_ids = _atr_una_persona(cond_ids, persona)
 
         certeza, motivo = _atr_certeza(ventana, cond_ids, str(d.get("severity") or ""))
         if not limpia:
             certeza, motivo = "baja", "no hay ninguna foto anterior sin ese golpe"
+        # Regla 5 de este módulo: «siempre viajan las DOS fotos; sin la prueba
+        # delante esto no es un dato, es una acusación». Estaba escrita arriba y
+        # no se comprobaba en ninguna parte.
+        if certeza == "alta" and not ((_foto(limpia) if limpia else None)
+                                      and (_foto(actual) if actual else None)):
+            certeza, motivo = "media", "falta una de las dos fotos: no se señala a nadie"
+        # El resumen cuenta SIEMPRE, aunque luego no se enseñe: con `solo_alta`
+        # el contador decía «58 altas, 0 medias, 0 bajas» y parecía que no había
+        # más que mirar.
+        resumen[certeza] = resumen.get(certeza, 0) + 1
         if solo_alta and certeza != "alta":
             continue
-        resumen[certeza] = resumen.get(certeza, 0) + 1
 
         out.append({
             "ledger_id": str(d.get("_id")),
@@ -14848,6 +14977,13 @@ async def danos_atribucion(center: str = "", dias: int = 120, solo_alta: bool = 
             "matricula": v.get("license_plate") or vid,
             "center": v.get("center") or "",
             "part": d.get("part") or d.get("panel") or "",
+            # La misma pieza está escrita de dos formas ('Paragolpes delantero'
+            # 30 veces y 'paragolpes delantero' otras 26), así que agrupar o
+            # contar por el texto crudo parte cada pieza en dos. `piezas.canon`
+            # es el vocabulario que ya usa el resto del backend y tiene 37 casos
+            # de prueba; aquí faltaba y por eso esta pantalla contaba distinto
+            # que las demás.
+            "pieza": _atr_pieza(d.get("part") or d.get("panel") or ""),
             "panel": d.get("panel") or "",
             "severity": d.get("severity") or "",
             "status": d.get("status") or "",
@@ -14862,7 +14998,8 @@ async def danos_atribucion(center: str = "", dias: int = 120, solo_alta: bool = 
             "foto_golpe": _foto(actual) if actual else None,
         })
 
-    return {"danos": out, "resumen": resumen, "total": len(out)}
+    return {"danos": out, "resumen": resumen, "total": len(out),
+            "truncado": truncado}
 
 
 @api_router.get("/work-orders/danos-pendientes")
