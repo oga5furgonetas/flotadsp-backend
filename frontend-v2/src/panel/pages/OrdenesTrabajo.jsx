@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, Plus, Link2, Copy, Check, X, Wrench, Euro, Clock, Search,
-  AlertTriangle, MessageCircle, Package, Eye, EyeOff, PhoneCall,
+  AlertTriangle, MessageCircle, MessageSquare, Package, Eye, EyeOff, PhoneCall,
   Download, CalendarClock, HelpCircle, Images, BarChart3, ChevronRight, Truck,
 } from 'lucide-react'
 import {
@@ -12,6 +12,7 @@ import {
   getIncidents, getDanosPendientes, getFurgonetasParadas, prepararOrden,
   getDisponibilidadFlota,
 } from '../api'
+import PautaTaller from '../components/PautaTaller'
 
 /* ÓRDENES DE TALLER
    ═══════════════════════════════════════════════════════════════════════
@@ -187,6 +188,7 @@ export default function OrdenesTrabajo() {
   const [verComo, setVerComo] = useState(false)
   const [comparativa, setComparativa] = useState(null)
   const [dispo, setDispo] = useState(null)
+  const [verCanal, setVerCanal] = useState(false)
 
   const [nueva, setNueva] = useState(null)
   const [parte, setParte] = useState(null)          // golpes abiertos de la furgoneta elegida, con fotos
@@ -603,6 +605,23 @@ export default function OrdenesTrabajo() {
           </p>
         </div>
       )}
+
+      {/* El canal con el taller: cada cuánto se pregunta, qué se dice y lo
+          que ellos contestan. Plegado porque es configuración —se toca una vez
+          y se olvida—, pero el contador de sin leer va fuera, que eso sí es de
+          mirar. */}
+      <div>
+        <button onClick={() => setVerCanal((v) => !v)}
+          className="flex w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-left hover:bg-slate-50">
+          <MessageSquare size={16} className="text-slate-500" />
+          <span className="text-[14px] font-semibold">Canal con el taller</span>
+          <span className="text-[12.5px] text-slate-500">
+            cada cuánto se pregunta, qué se dice y lo que contestan
+          </span>
+          <span className="ml-auto text-[12.5px] text-slate-400">{verCanal ? 'ocultar' : 'ver'}</span>
+        </button>
+        {verCanal && <div className="mt-3"><PautaTaller /></div>}
+      </div>
 
       {!!paradas?.total && (
         <div className="mb-4 overflow-hidden rounded-xl border border-slate-200 bg-white">

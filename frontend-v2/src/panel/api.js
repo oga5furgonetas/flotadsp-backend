@@ -525,3 +525,13 @@ export const prepararOrden = (vehicleId) =>
   api.get(`/work-orders/preparar/${encodeURIComponent(vehicleId)}`)
 export const getDisponibilidadFlota = (center) =>
   api.get('/fleet/disponibilidad', { params: centerParam(center) })
+export const getPautaTaller = () => api.get('/taller/pauta')
+export const setPautaTaller = (body) => api.patch('/taller/pauta', body)
+export const setPlantillaTaller = (clave, body) =>
+  api.patch(`/taller/plantillas/${encodeURIComponent(clave)}`, body)
+export const getBandejaTaller = (soloSinLeer) =>
+  api.get('/taller/bandeja', { params: soloSinLeer ? { solo_sin_leer: true } : {} })
+export const marcarLeidoTaller = (id) =>
+  api.post(`/taller/bandeja/${encodeURIComponent(id)}/leido`)
+export const asignarMensajeTaller = (id, ordenId) =>
+  api.post(`/taller/bandeja/${encodeURIComponent(id)}/asignar`, { orden_id: ordenId })

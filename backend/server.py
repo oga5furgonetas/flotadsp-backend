@@ -1,6 +1,7 @@
 ﻿from damage_segmentation import segment_damage, preload_sam
 import fiabilidad
 import piezas
+import seguimiento
 import whatsapp
 from ai_learning import (
     get_few_shot_examples, build_few_shot_prompt_parts_multimodal,
@@ -13240,6 +13241,100 @@ async def whatsapp_webhook_verificar(request: Request):
     raise HTTPException(status_code=403, detail="Token de verificacion incorrecto")
 
 
+async def _seg_tenant_por_telefono(tel: str):
+    """De qué DSP es el taller que escribe desde ese teléfono.
+
+    Gotcha 26: este camino NO tiene sesión, y `db` sin `set_current_org_db`
+    caería siempre en la base principal. Hoy acertaría por casualidad porque la
+    de Dani ES la principal; el día que haya un segundo cliente, el mensaje de
+    su taller se guardaría en los datos de otro.
+
+    Se busca el teléfono en los talleres de cada DSP y se devuelve el primero
+    que lo tenga. Se compara por los ÚLTIMOS 9 DÍGITOS: el mismo número está
+    escrito '+34 981 58 48 24', '981584824' y '0034981584824', y un igual a
+    secas no casaría ninguno con otro.
+    """
+    fin = "".join(c for c in str(tel or "") if c.isdigit())[-9:]
+    if len(fin) < 9:
+        return None, None
+    orgs = await global_db.organizations.find(
+        {"status": {"$in": ["active", "trial"]}},
+        {"_id": 0, "id": 1, "db_name": 1, "account_type": 1, "name": 1}).to_list(500)
+    for o in (orgs or [None]):
+        nombre = _tenant_db_name(o)
+        try:
+            async for w in client[nombre].workshops.find(
+                    {}, {"_id": 0, "id": 1, "name": 1, "phone": 1}):
+                d = "".join(c for c in str(w.get("phone") or "") if c.isdigit())
+                if d and d[-9:] == fin:
+                    return nombre, w
+        except Exception as e:                                   # noqa: BLE001
+            logger.warning("buscando taller en %s: %s", nombre, e)
+    return None, None
+
+
+def _seg_textos_del_webhook(cuerpo: dict) -> list:
+    """[(telefono, texto)] de un webhook de Meta. Lista vacía si no hay ninguno.
+
+    Un webhook trae también acuses de entrega y cambios de estado; aquí solo
+    interesan los mensajes de texto de una persona.
+    """
+    out = []
+    for entry in (cuerpo or {}).get("entry") or []:
+        for ch in entry.get("changes") or []:
+            val = ch.get("value") or {}
+            for m in val.get("messages") or []:
+                if m.get("type") != "text":
+                    continue
+                t = ((m.get("text") or {}).get("body") or "").strip()
+                if t:
+                    out.append((m.get("from") or "", t))
+    return out
+
+
+async def procesar_entrante_taller(cuerpo: dict) -> dict:
+    """Un mensaje de WhatsApp de un taller: se guarda, para el reloj y avisa.
+
+    Esto es lo que hace que el canal vaya en los DOS sentidos. Si el taller
+    termina el martes y a nosotros no nos tocaba preguntar hasta el jueves,
+    aquí es donde nos enteramos.
+    """
+    hechos = []
+    anterior = _current_db_name.get()
+    try:
+        for tel, texto in _seg_textos_del_webhook(cuerpo):
+            base, taller = await _seg_tenant_por_telefono(tel)
+            if not base:
+                # No sabemos de quién es. Se apunta igual en global: un mensaje
+                # perdido es el silencio que esto viene a quitar, y el número
+                # sirve para darlo de alta luego.
+                await global_db.whatsapp_sin_asignar.insert_one({
+                    "telefono": tel, "texto": texto[:2000],
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "expira_en": datetime.now(timezone.utc) + timedelta(days=90)})
+                hechos.append({"telefono": tel, "estado": "sin taller conocido"})
+                continue
+
+            set_current_org_db(base)
+            abiertas = await db.ordenes_trabajo.find(
+                {"taller_id": taller.get("id"),
+                 "estado": {"$in": list(seguimiento.ESTADOS_QUE_SE_SIGUEN)}},
+                {"_id": 0}).to_list(50)
+            ident = seguimiento.identifica_orden(texto, abiertas)
+            r = await registrar_novedad_taller(
+                ident["orden"], texto, "whatsapp",
+                {"telefono": tel, "certeza": ident["certeza"],
+                 "motivo_identificacion": ident["motivo"],
+                 "taller_id": taller.get("id"), "taller_nombre": taller.get("name")})
+            hechos.append({"taller": taller.get("name"), "orden": r.get("orden"),
+                           "certeza": ident["certeza"], "pista": r.get("pista")})
+    finally:
+        set_current_org_db(anterior)
+    if hechos:
+        logger.info("Taller por WhatsApp: %d mensaje(s) procesados", len(hechos))
+    return {"procesados": hechos}
+
+
 @api_router.post("/webhooks/whatsapp")
 async def whatsapp_webhook_recibir(request: Request):
     """Mensajes entrantes y acuses de entrega. De momento solo se apuntan.
@@ -13265,6 +13360,15 @@ async def whatsapp_webhook_recibir(request: Request):
         })
     except Exception as e:                                   # noqa: BLE001
         logger.warning(f"WhatsApp webhook: no se pudo guardar: {e}")
+
+    # Y AHORA SE PROCESA. Hasta hoy solo se apuntaba, asi que un taller podia
+    # contestar "ya esta lista" y no enterarse nadie: el canal iba en un solo
+    # sentido. Va dentro de su propio try porque el contrato de arriba manda —
+    # Meta desactiva el webhook entero si no le devolvemos 200.
+    try:
+        await procesar_entrante_taller(cuerpo)
+    except Exception as e:                                   # noqa: BLE001
+        logger.error(f"WhatsApp webhook: procesando entrante: {e}")
     return {"ok": True}
 
 
@@ -15317,7 +15421,7 @@ async def _dispo_demanda(centro: str) -> dict:
     if not dias:
         return {"pico": None, "media": None, "dias": 0}
     ns = [n for _, n in dias]
-    return {"pico": max(ns), "media": round(sum(ns) / len(ns), 1), "dias": len(ns),
+    return {"pico": max(ns), "media": round(sum(ns) / max(len(ns), 1), 1), "dias": len(ns),
             "ultimo": {"dia": dias[0][0], "rutas": dias[0][1]},
             "serie": [{"dia": d, "rutas": n} for d, n in dias[:14]]}
 
@@ -16507,48 +16611,279 @@ async def _ot_url_taller(orden_id: str) -> str:
     return "%s/taller/%s" % (_PORTAL_BASE_FRONT.rstrip("/"), e["token"])
 
 
-async def seguimiento_talleres(forzar: bool = False) -> list:
-    """Un recordatorio a los talleres que llevan dias sin decir nada."""
+# ── EL CANAL CON EL TALLER, EN LOS DOS SENTIDOS ─────────────────────────────
+# Lo que sale (los recordatorios) ya existía. Lo que faltaba es lo que ENTRA:
+# si el taller termina la reparación el martes y a nosotros no nos tocaba
+# preguntar hasta el jueves, tiene que poder decirlo y que nos salte. Si no, la
+# furgoneta pasa dos días parada en la puerta del taller estando lista — la peor
+# de las esperas, porque no la ve nadie.
+#
+# Todo lo que dice un taller acaba en `taller_bandeja`, venga por donde venga:
+# WhatsApp, el portal o alguien copiándolo a mano. Un solo sitio donde mirar.
+
+SEG_COL_PLANTILLAS = "taller_plantillas"
+SEG_COL_PAUTA = "taller_pauta"
+SEG_COL_BANDEJA = "taller_bandeja"
+
+
+async def _seg_pauta() -> dict:
+    """La pauta de este DSP, o la de fábrica si todavía no la ha tocado nadie."""
+    d = await db[SEG_COL_PAUTA].find_one({"_id": "pauta"}) or {}
+    d.pop("_id", None)
+    return seguimiento.normaliza_pauta(d)
+
+
+async def _seg_plantillas() -> dict:
+    """{clave: texto}. Las de fábrica se siembran la primera vez.
+
+    Se siembran en la BD en vez de leerlas del código cada vez para que se
+    puedan EDITAR: si el texto viviera solo en el fichero, cambiarlo sería un
+    despliegue, y entonces nadie lo cambiaría nunca.
+    """
+    hay = await db[SEG_COL_PLANTILLAS].count_documents({})
+    if not hay:
+        await db[SEG_COL_PLANTILLAS].insert_many([
+            {"_id": p["clave"], "clave": p["clave"], "nombre": p["nombre"],
+             "texto": p["texto"], "orden": p["orden"], "de_fabrica": True,
+             "creada_en": _ot_ahora()}
+            for p in seguimiento.PLANTILLAS_BASE])
+    out = {}
+    async for p in db[SEG_COL_PLANTILLAS].find({}, {"_id": 0}):
+        out[p.get("clave")] = p
+    return out
+
+
+async def _seg_apunta(orden: dict, direccion: str, texto: str, canal: str,
+                      extra: dict = None) -> str:
+    """Guarda un mensaje en la bandeja y devuelve su id.
+
+    `orden` puede ser None: un mensaje que no se sabe de qué furgoneta habla NO
+    SE TIRA. Perder lo que dice un taller es exactamente el silencio que este
+    canal viene a quitar, y un mensaje sin clasificar sigue siendo información.
+    """
+    doc = {
+        "id": str(uuid.uuid4()),
+        "orden_id": (orden or {}).get("id"),
+        "numero": (orden or {}).get("numero"),
+        "matricula": (orden or {}).get("matricula"),
+        "taller_id": (orden or {}).get("taller_id"),
+        "taller_nombre": (orden or {}).get("taller_nombre"),
+        "direccion": direccion,            # "salida" (nosotros) | "entrada" (ellos)
+        "canal": canal,                    # whatsapp | portal | oficina
+        "texto": (texto or "").strip(),
+        "at": _ot_ahora(),
+        "leido": direccion == "salida",    # lo que mandamos ya está visto
+    }
+    doc.update(extra or {})
+    await db[SEG_COL_BANDEJA].insert_one(doc)
+    return doc["id"]
+
+
+async def registrar_novedad_taller(orden: dict, texto: str, canal: str,
+                                   extra: dict = None) -> dict:
+    """Una novedad del taller: se guarda, PARA EL RELOJ y nos avisa.
+
+    Las tres cosas juntas y en este orden. Parar el reloj es lo que evita que se
+    le siga escribiendo a un taller que acaba de contestar —la forma más rápida
+    de que dejen de leernos—, y por eso se hace aunque el aviso falle.
+    """
+    ida = await _seg_apunta(orden, "entrada", texto, canal, extra)
+    pista = seguimiento.pista_de_estado(texto)
+
+    if orden and orden.get("id"):
+        await db.ordenes_trabajo.update_one(
+            {"id": orden["id"]},
+            {"$set": {"ultima_novedad_taller": _ot_ahora(),
+                      # Los toques se ponen a cero: si vuelve a callarse dentro
+                      # de un mes, el ciclo empieza otra vez por el mensaje
+                      # amable y no por el «es el cuarto mensaje sin respuesta».
+                      "toques": 0},
+             "$push": {"historial": _ot_apunte(
+                 "novedad_taller", "El taller ha escrito",
+                 (texto or "")[:300])}})
+
+    # Y que nos salte. Sin esto lo anterior es un buzón que nadie abre.
+    cab = "🔧 %s%s" % (
+        (orden or {}).get("matricula") or "Una furgoneta",
+        " · %s" % (orden or {}).get("numero") if (orden or {}).get("numero") else "")
+    cuerpo = [cab, (texto or "").strip()[:600]]
+    if not orden:
+        cuerpo.append("⚠️ No se ha podido saber de qué furgoneta hablan: "
+                      "míralo en la bandeja del taller.")
+    elif pista == "listo":
+        cuerpo.append("Parece que está LISTA para recoger.")
+    elif pista == "esperando_piezas":
+        cuerpo.append("Parece que están esperando piezas.")
+    try:
+        await _telegram_aviso("\n".join(x for x in cuerpo if x))
+    except Exception as e:                                       # noqa: BLE001
+        logger.warning("aviso de novedad de taller: %s", e)
+
+    return {"bandeja_id": ida, "pista": pista,
+            "orden": (orden or {}).get("numero"), "reloj_reiniciado": bool(orden)}
+
+
+@api_router.get("/taller/bandeja")
+async def taller_bandeja(solo_sin_leer: bool = False, limite: int = 80,
+                         _=Depends(require_admin)):
+    """Todo lo que han dicho los talleres, lo hayamos preguntado o no."""
+    q: dict = {"direccion": "entrada"}
+    if solo_sin_leer:
+        q["leido"] = False
+    filas = await db[SEG_COL_BANDEJA].find(q, {"_id": 0}).sort(
+        "at", -1).to_list(max(1, min(limite, 300)))
+    return {
+        "mensajes": filas,
+        "sin_leer": await db[SEG_COL_BANDEJA].count_documents(
+            {"direccion": "entrada", "leido": False}),
+        # Los que no se pudieron asignar van aparte: son los que necesitan a una
+        # persona, y mezclados con el resto no los mira nadie.
+        "sin_asignar": await db[SEG_COL_BANDEJA].count_documents(
+            {"direccion": "entrada", "orden_id": None}),
+    }
+
+
+@api_router.post("/taller/bandeja/{mensaje_id}/leido")
+async def taller_bandeja_leido(mensaje_id: str, _=Depends(require_admin)):
+    r = await db[SEG_COL_BANDEJA].update_one({"id": mensaje_id}, {"$set": {"leido": True}})
+    return {"ok": bool(r.modified_count)}
+
+
+@api_router.post("/taller/bandeja/{mensaje_id}/asignar")
+async def taller_bandeja_asignar(mensaje_id: str, data: dict = Body(...),
+                                 _=Depends(require_admin)):
+    """Decir a mano de qué orden hablaba un mensaje que no se pudo clasificar."""
+    m = await db[SEG_COL_BANDEJA].find_one({"id": mensaje_id}, {"_id": 0})
+    if not m:
+        raise HTTPException(404, "No existe ese mensaje")
+    o = await db.ordenes_trabajo.find_one({"id": data.get("orden_id")}, {"_id": 0})
+    if not o:
+        raise HTTPException(404, "No existe esa orden")
+    await db[SEG_COL_BANDEJA].update_one(
+        {"id": mensaje_id},
+        {"$set": {"orden_id": o["id"], "numero": o.get("numero"),
+                  "matricula": o.get("matricula"), "leido": True,
+                  "asignado_a_mano": True}})
+    # Al asignarlo cuenta como novedad de esa orden: hasta ahora el reloj de esa
+    # furgoneta seguía corriendo porque nadie sabía que el taller había escrito.
+    await db.ordenes_trabajo.update_one(
+        {"id": o["id"]},
+        {"$set": {"ultima_novedad_taller": _ot_ahora(), "toques": 0},
+         "$push": {"historial": _ot_apunte(
+             "novedad_taller", "Mensaje del taller asignado a mano",
+             (m.get("texto") or "")[:300])}})
+    return {"ok": True, "orden": o.get("numero")}
+
+
+@api_router.get("/taller/pauta")
+async def taller_pauta_get(_=Depends(require_admin)):
+    """Cada cuánto se pregunta, qué días y con qué mensajes."""
+    pauta = await _seg_pauta()
+    plantillas = await _seg_plantillas()
+    # Se enseña CUÁNDO le toca a cada orden, no solo la regla: «el próximo el
+    # jueves» se entiende y «cada 3 días» se cambia a ciegas.
     from zoneinfo import ZoneInfo
     ahora = datetime.now(ZoneInfo("Europe/Madrid"))
-    # Ni de noche ni en fin de semana: quema el canal y no lo lee nadie.
-    if not forzar and (ahora.weekday() >= 5 or not (9 <= ahora.hour <= 19)):
+    proximos = []
+    async for o in db.ordenes_trabajo.find(
+            {"estado": {"$in": list(seguimiento.ESTADOS_QUE_SE_SIGUEN)}},
+            {"_id": 0, "id": 1, "numero": 1, "matricula": 1, "estado": 1,
+             "toques": 1, "ultimo_toque": 1, "ultima_novedad_taller": 1,
+             "creada_en": 1, "taller_nombre": 1}):
+        p = seguimiento.proximo_aviso(o, pauta, ahora)
+        toca, motivo = seguimiento.toca_preguntar(o, pauta, ahora)
+        proximos.append({
+            "numero": o.get("numero"), "matricula": o.get("matricula"),
+            "taller": o.get("taller_nombre"), "toques": int(o.get("toques") or 0),
+            "proximo": p.strftime("%Y-%m-%d %H:%M") if p else None,
+            "toca_ahora": toca, "motivo": motivo,
+        })
+    proximos.sort(key=lambda x: x["proximo"] or "9999")
+    return {"pauta": pauta, "plantillas": sorted(
+        plantillas.values(), key=lambda p: p.get("orden") or 0),
+        "variables": seguimiento.VARIABLES, "proximos": proximos,
+        "es_hora_ahora": seguimiento.es_hora(pauta, ahora)}
+
+
+@api_router.patch("/taller/pauta")
+async def taller_pauta_set(data: dict = Body(...), _=Depends(require_admin)):
+    """Cambiar la cadencia. Se normaliza SIEMPRE antes de guardar."""
+    p = seguimiento.normaliza_pauta({**(await _seg_pauta()), **(data or {})})
+    await db[SEG_COL_PAUTA].update_one(
+        {"_id": "pauta"}, {"$set": {**p, "actualizada_en": _ot_ahora()}}, upsert=True)
+    return {"pauta": p}
+
+
+@api_router.patch("/taller/plantillas/{clave}")
+async def taller_plantilla_set(clave: str, data: dict = Body(...),
+                               _=Depends(require_admin)):
+    """Editar un mensaje. Avisa de las variables que no existen."""
+    await _seg_plantillas()                       # siembra si hace falta
+    texto = str(data.get("texto") or "")
+    if not texto.strip():
+        raise HTTPException(400, "El mensaje no puede quedar vacío")
+    # No se rechaza: se avisa. Una variable de más no rompe nada —sale en
+    # blanco— y bloquear el guardado por eso hace que se edite en un bloc de
+    # notas y se pegue, que es peor.
+    desconocidas = [v for v in seguimiento.variables_de(texto)
+                    if v not in seguimiento.VARIABLES]
+    r = await db[SEG_COL_PLANTILLAS].update_one(
+        {"clave": clave},
+        {"$set": {"texto": texto, "nombre": data.get("nombre") or clave,
+                  "editada_en": _ot_ahora()}}, upsert=True)
+    return {"ok": True, "clave": clave, "desconocidas": desconocidas,
+            "ejemplo": seguimiento.render(texto, seguimiento.contexto(
+                {"matricula": "1234 ABC", "numero": "OT-1001",
+                 "taller_nombre": "Talleres Muñiz",
+                 "problema": "golpe en la puerta corredera derecha",
+                 "fecha_entrega_estimada": "2026-09-05"},
+                "https://flotadsp.com/taller/ejemplo", 5)),
+            "creada": bool(r.upserted_id)}
+
+
+async def seguimiento_talleres(forzar: bool = False) -> list:
+    """Pregunta a los talleres segun la PAUTA que haya puesta.
+
+    Antes la cadencia estaba cosida al codigo —cada 3 dias, cuatro veces, de
+    lunes a viernes de 9 a 19— y cambiarla era un despliegue. Ahora sale de
+    `taller_pauta`, que se edita desde la app, y el texto de cada aviso de
+    `taller_plantillas`. Lo que decide se prueba entero en
+    `backend/tests/test_seguimiento_motor.py`, sin base de datos delante.
+    """
+    from zoneinfo import ZoneInfo
+    ahora = datetime.now(ZoneInfo("Europe/Madrid"))
+    pauta = await _seg_pauta()
+    if not forzar and not seguimiento.es_hora(pauta, ahora):
         return []
 
-    corte = (datetime.now(timezone.utc) - timedelta(days=OT_DIAS_TOQUE)).isoformat()
+    plantillas = await _seg_plantillas()
     abiertas = await db.ordenes_trabajo.find(
-        {"estado": {"$in": [e for e in OT_ABIERTAS if e != "listo"]}},
+        {"estado": {"$in": list(seguimiento.ESTADOS_QUE_SE_SIGUEN)}},
         {"_id": 0}).to_list(300)
 
     salida = []
     for o in abiertas:
-        # El reloj cuenta desde lo ULTIMO que hizo el taller, y si nunca ha
-        # hecho nada, desde que se creo la orden.
-        ultimo = (o.get("ultima_novedad_taller") or o.get("ultima_visita")
-                  or o.get("creada_en") or "")
-        if ultimo >= corte:
+        toca, motivo = seguimiento.toca_preguntar(o, pauta, datetime.now(timezone.utc))
+        if not toca and not forzar:
             continue
-        # Ya se le escribio hace poco: no se repite.
-        if (o.get("ultimo_toque") or "") >= corte:
-            continue
+
+        ref = seguimiento._ultima_senal(o)
+        dias = max(1, (datetime.now(timezone.utc) - ref).days) if ref else 1
         n = int(o.get("toques") or 0)
-        if n >= OT_TOQUES_MAX:
-            # Cuatro recordatorios sin respuesta ya no es un despiste del
-            # taller: es una conversacion que tiene que tener una persona.
-            continue
-
-        try:
-            dias = max(1, (datetime.now(timezone.utc)
-                           - datetime.fromisoformat(ultimo)).days)
-        except Exception:                                    # noqa: BLE001
-            dias = OT_DIAS_TOQUE
-
         url = await _ot_url_taller(o["id"])
-        texto = _ot_texto_toque(o, dias, url)
+        clave = seguimiento.plantilla_para(pauta, n)
+        texto = seguimiento.render((plantillas.get(clave) or {}).get("texto") or "",
+                                   seguimiento.contexto(o, url, dias))
+        if not texto:
+            # Si alguien deja una plantilla vacia NO se calla el aviso: se usa
+            # el texto de siempre. Un mensaje mal editado no puede convertirse
+            # en semanas de silencio.
+            texto = _ot_texto_toque(o, dias, url)
         enviado = False
 
         tel = (o.get("taller_telefono") or "").strip()
-        if tel and await whatsapp.puede_avisar(db, "avisar_incidencia"):
+        if (tel and "whatsapp" in pauta["canales"]
+                and await whatsapp.puede_avisar(db, "avisar_incidencia")):
             r = await whatsapp.enviar_plantilla(
                 db, tel, "taller_seguimiento",
                 [o.get("matricula") or "", str(dias), url],
@@ -16561,6 +16896,11 @@ async def seguimiento_talleres(forzar: bool = False) -> list:
             # no salga: seria volver al silencio que esto viene a arreglar.
             await _ot_avisa(o, "Lleva %d días sin novedades del taller.\n\n%s" % (dias, texto))
 
+        # Queda apuntado en la bandeja, al lado de lo que ellos contestan: la
+        # conversacion entera en un sitio y no la mitad en el historial.
+        await _seg_apunta(o, "salida", texto, "whatsapp" if enviado else "oficina",
+                          {"plantilla": clave, "toque": n + 1, "dias": dias})
+
         await db.ordenes_trabajo.update_one(
             {"id": o["id"]},
             {"$set": {"ultimo_toque": _ot_ahora()}, "$inc": {"toques": 1},
@@ -16569,7 +16909,8 @@ async def seguimiento_talleres(forzar: bool = False) -> list:
                  "%d días sin novedades%s" % (dias, "" if enviado else " · por WhatsApp no salió"))}})
         salida.append({"numero": o.get("numero"), "matricula": o.get("matricula"),
                        "taller": o.get("taller_nombre"), "dias": dias,
-                       "por_whatsapp": enviado, "toque": n + 1})
+                       "por_whatsapp": enviado, "toque": n + 1,
+                       "plantilla": clave, "motivo": motivo})
 
     if salida:
         logger.info("Seguimiento de talleres: %d recordatorios", len(salida))
