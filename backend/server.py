@@ -9041,6 +9041,16 @@ async def drivers_importar(file: UploadFile = File(...), center: str = Form(""),
 
     ahora = datetime.now(timezone.utc).isoformat()
     quien = user.get("name") or user.get("username") or "importación"
+    # El centro de la empresa, si solo tiene uno. Se saca de la organizacion y
+    # no de los conductores que ya haya: en una empresa nueva no hay ninguno.
+    unico_centro = ""
+    try:
+        org = await get_org(user.get("org_id"))
+        centros = [c for c in ((org or {}).get("centers") or []) if c]
+        if len(centros) == 1:
+            unico_centro = centros[0]
+    except Exception:                                            # noqa: BLE001
+        pass
     nuevos, saltados = [], []
     for p in r["personas"]:
         existe = (p["email"] and p["email"] in ya) or \
@@ -9055,8 +9065,13 @@ async def drivers_importar(file: UploadFile = File(...), center: str = Form(""),
         d.update({"id": str(uuid.uuid4()), "active": True,
                   "created_at": ahora, "updated_at": ahora,
                   "importado_por": quien, "importado_en": ahora})
-        if not d.get("center") and center and center not in ("Todos", "todos"):
-            d["center"] = center
+        if not d.get("center"):
+            # El centro que venga del formulario; y si no hay ninguno, el unico
+            # de la empresa. Casi todos los DSP empiezan con una sola nave, y
+            # sin centro los conductores NO SALEN en ninguna lista filtrada:
+            # importas cincuenta y parece que no ha funcionado nada.
+            d["center"] = (center if center and center not in ("Todos", "todos")
+                           else (unico_centro or None))
         nuevos.append(d)
         if p["email"]:
             ya.add(p["email"])
