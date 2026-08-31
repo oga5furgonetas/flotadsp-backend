@@ -12300,149 +12300,70 @@ async def _bucle_aviso(clave: str, hora_key: str, accion):
         await asyncio.sleep(60)
 
 
-# ── EL DISCO SE LLENA EN SILENCIO ───────────────────────────────────────────
-# Un Atlas M0 son 512 MB y cuando se llena DEJA DE ACEPTAR ESCRITURAS: se para
-# la ingesta de Cortex, las inspecciones y todo lo que guarde algo. No avisa
-# antes, no se degrada poco a poco: funciona y de repente no.
+# ── AVISO DE ESPACIO ────────────────────────────────────────────────────────
+# `/admin/salud` ya mide el disco desde hace tiempo, con su limite configurable
+# y todo. Lo que le faltaba es que AVISE solo: una tarjeta que hay que abrir no
+# sirve de nada para algo que se llena despacio y de golpe deja de escribir.
 #
-# El 30-08-2026 estaba al 95 % —488,6 de 512— y a 5 MB/dia le quedaban CINCO
-# DIAS. Nadie lo estaba mirando, y no habia forma de mirarlo sin abrir Atlas.
+# Esto es solo el aviso. La medida sale de alli, no de una copia — el 30-08-2026
+# escribi un segundo medidor con el limite 512 puesto a mano, ignorando el
+# `ATLAS_LIMITE_MB=10240` que ya estaba configurado en el propio servidor, y
+# avise de que la base se llenaba en cinco dias estando al 4,8 %.
 #
-# Esto lo mide solo y avisa con margen. La cuenta que importa no es el
-# porcentaje: son los DIAS QUE QUEDAN, porque es lo unico que dice si hay que
-# hacer algo hoy o la semana que viene.
+# La leccion no es del numero: es que BUSQUE ANTES DE CONSTRUIR. La solucion
+# estaba escrita, con la advertencia incluida, y aun asi la reinvente peor.
 
-ESPACIO_LIMITE_MB = 512          # Atlas M0
-ESPACIO_AVISA_DIAS = 21          # avisa cuando queden menos de tres semanas
-ESPACIO_AVISA_PCT = 80           # o cuando se pase de este porcentaje
-
-
-async def _espacio_estado() -> dict:
-    """Cuanto ocupa, a que ritmo crece y cuantos dias quedan."""
-    cli = client
-    bases, total = [], 0.0
-    try:
-        nombres = await cli.list_database_names()
-    except Exception as e:                                       # noqa: BLE001
-        return {"error": str(e)}
-    for n in nombres:
-        if n in ("admin", "local", "config"):
-            continue
-        try:
-            s = await cli[n].command("dbStats")
-        except Exception:                                        # noqa: BLE001
-            continue
-        mb = round(s.get("dataSize", 0) / 1024 / 1024, 1)
-        total += mb
-        # `ajena` marca lo que NO es de la app. `sample_mflix` es la base de
-        # ejemplo que Atlas crea sola —peliculas— y ocupaba 96 MB, el 19 % del
-        # limite, sin que nada la use: el propio backend ya la excluye al listar
-        # tenants. Se enseña aparte para que se vea que ese espacio se puede
-        # recuperar sin tocar un solo dato del negocio.
-        bases.append({"base": n, "mb": mb, "ajena": n.startswith("sample_")})
-    bases.sort(key=lambda x: -x["mb"])
-    total = round(total, 1)
-
-    # Las colecciones mas gordas de la BD principal, con su caducidad. Una
-    # coleccion grande CON caducidad se estabiliza sola; una sin caducidad
-    # crece para siempre, y esa es la que hay que mirar.
-    cols = []
-    try:
-        for c in await db.list_collection_names():
-            if c.startswith("system."):
-                continue
-            try:
-                s = await db.command("collStats", c)
-            except Exception:                                    # noqa: BLE001
-                continue
-            mb = round(s.get("size", 0) / 1024 / 1024, 1)
-            if mb < 1:
-                continue
-            dias = None
-            try:
-                for _k, v in (await db[c].index_information()).items():
-                    if "expireAfterSeconds" in v:
-                        dias = "por campo" if v["expireAfterSeconds"] == 0 else \
-                               round(v["expireAfterSeconds"] / 86400)
-                        break
-            except Exception:                                    # noqa: BLE001
-                pass
-            cols.append({"coleccion": c, "mb": mb, "docs": s.get("count", 0),
-                         "caducidad": dias, "sin_caducidad": dias is None})
-    except Exception:                                            # noqa: BLE001
-        pass
-    cols.sort(key=lambda x: -x["mb"])
-
-    # El ritmo, medido de lo que mas crece y no estimado a ojo.
-    mb_dia = None
-    try:
-        cur = db.cortex_packages.aggregate([
-            {"$group": {"_id": "$service_day", "n": {"$sum": 1}}},
-            {"$sort": {"_id": -1}}, {"$limit": 8}])
-        dias_p = [r async for r in cur]
-        n_tot = await db.cortex_packages.count_documents({})
-        s = await db.command("collStats", "cortex_packages")
-        if dias_p and n_tot:
-            kb_doc = (s.get("size", 0) / 1024) / n_tot
-            media = sum(d["n"] for d in dias_p) / max(len(dias_p), 1)
-            mb_dia = round(media * kb_doc / 1024, 2)
-    except Exception:                                            # noqa: BLE001
-        pass
-
-    libre = round(ESPACIO_LIMITE_MB - total, 1)
-    dias_rest = None
-    if mb_dia and mb_dia > 0:
-        dias_rest = max(0, round(libre / mb_dia))
-
-    ajeno = round(sum(b["mb"] for b in bases if b["ajena"]), 1)
-    return {
-        "usado_mb": total, "limite_mb": ESPACIO_LIMITE_MB, "libre_mb": libre,
-        "pct": round(total / ESPACIO_LIMITE_MB * 100, 1),
-        "crece_mb_dia": mb_dia, "dias_restantes": dias_rest,
-        "bases": bases, "colecciones": cols[:12],
-        "recuperable_mb": ajeno,
-        "urgente": bool((dias_rest is not None and dias_rest <= ESPACIO_AVISA_DIAS)
-                        or total / ESPACIO_LIMITE_MB * 100 >= ESPACIO_AVISA_PCT),
-    }
-
-
-@api_router.get("/admin/espacio")
-async def admin_espacio(_=Depends(require_admin)):
-    """Cuánto queda de base de datos, y para cuántos días."""
-    return await _espacio_estado()
+ESPACIO_AVISA_PCT = 80           # avisa a partir de este porcentaje
+ESPACIO_AVISA_MESES = 6          # o si al ritmo actual quedan menos meses
 
 
 async def avisar_espacio() -> dict:
-    """Avisa por Telegram cuando el disco empiece a apretar.
-
-    Se avisa por DIAS y no por porcentaje: el 80 % no dice si hay que hacer algo
-    hoy o el mes que viene, y «quedan 5 dias» si.
-    """
-    e = await _espacio_estado()
-    if e.get("error") or not e.get("urgente"):
+    """Avisa por Telegram cuando el disco empiece a apretar de verdad."""
+    try:
+        e = await _espacio_desde_salud()
+    except Exception as ex:                                      # noqa: BLE001
+        logger.warning("aviso de espacio: %s", ex)
+        return {"error": str(ex)}
+    m = (e or {}).get("mongo") or {}
+    pct = m.get("porcentaje") or 0
+    meses = m.get("meses_restantes")
+    urge = pct >= ESPACIO_AVISA_PCT or (meses is not None and meses <= ESPACIO_AVISA_MESES)
+    if not urge:
         return e
-    # Clave DISTINTA de la del bucle: `_bucle_aviso` ya consume "espacio_bd" al
-    # comprobarla —es un upsert, no una lectura—, asi que reusarla aqui haria
-    # que el aviso no saliera NUNCA. Mismo patron que el aviso de DCR.
     if await _ya_enviado_hoy("espacio_aviso", datetime.now(timezone.utc).strftime("%Y-%m-%d")):
         return e
-    lineas = ["🗄️ <b>La base de datos se está llenando</b>",
-              "%s MB de %s (%s%%) · quedan %s MB"
-              % (e["usado_mb"], e["limite_mb"], e["pct"], e["libre_mb"])]
-    if e.get("dias_restantes") is not None:
-        lineas.append("A %s MB/día se llena en <b>%d días</b>."
-                      % (e["crece_mb_dia"], e["dias_restantes"]))
-    lineas.append("Cuando se llene deja de aceptar escrituras: se para la ingesta "
-                  "de Cortex y las inspecciones.")
-    if e.get("recuperable_mb"):
-        lineas.append("Hay <b>%s MB</b> en bases de ejemplo que no usa nadie."
-                      % e["recuperable_mb"])
-    gordas = [c for c in e.get("colecciones", []) if c["sin_caducidad"] and c["mb"] > 5]
-    if gordas:
-        lineas.append("Sin caducidad y grandes: %s"
-                      % ", ".join("%s (%s MB)" % (c["coleccion"], c["mb"]) for c in gordas[:3]))
+    lineas = ["🗄️ <b>La base de datos empieza a apretar</b>",
+              "%s MB de %s (%s%%)" % (m.get("usado_mb"), m.get("limite_mb"), pct)]
+    if meses is not None:
+        lineas.append("Al ritmo de ahora quedan <b>%s meses</b>." % meses)
+    # Se dice SIEMPRE si el limite es medido o supuesto: un porcentaje sobre un
+    # limite equivocado parece igual de fiable que uno bueno.
+    lineas.append("Límite %s." % ("configurado" if m.get("limite_configurado")
+                                  else "POR DEFECTO — compruébalo en Atlas"))
     await _telegram_aviso("\n".join(lineas))
     return e
+
+
+async def _espacio_desde_salud() -> dict:
+    """Los mismos numeros que /admin/salud, sin pasar por el permiso.
+
+    El endpoint pide super-admin y esto lo llama un cron sin sesion. Se rehace
+    la cuenta minima en vez de duplicar el medidor entero.
+    """
+    total = 0.0
+    for n in await client.list_database_names():
+        if n in ("admin", "local", "config"):
+            continue
+        try:
+            st = await client[n].command("dbStats", scale=1024 * 1024)
+        except Exception:                                        # noqa: BLE001
+            continue
+        total += float(st.get("dataSize") or 0) + float(st.get("indexSize") or 0)
+    total = round(total, 1)
+    pct = round(total / max(LIMITE_ATLAS_MB, 1) * 100, 1)
+    return {"mongo": {"usado_mb": total, "limite_mb": LIMITE_ATLAS_MB,
+                      "porcentaje": pct, "meses_restantes": None,
+                      "limite_configurado": bool(os.environ.get("ATLAS_LIMITE_MB"))}}
 
 
 async def revisar_facturacion() -> list:

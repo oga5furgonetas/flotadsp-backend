@@ -510,6 +510,27 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    del fichero en vez de reimplementarla, porque una copia deja de probar el
    codigo que corre en cuanto alguien toca el original.
 
+41. **El Atlas tiene 10 GB, no 512 MB — y el limite NO se supone, se lee.**
+   El 30-08-2026 di por hecho que era un M0 gratuito de 512 MB, medi 488, y
+   avise por correo de que la base se llenaba en CINCO DIAS. Estaba al 4,8 %.
+   Dani tuvo que corregirme dos veces.
+   El dato correcto estaba en TRES sitios y no mire ninguno:
+   · el secret `ATLAS_LIMITE_MB=10240` del backend en Fly;
+   · `GET /api/admin/salud` (super-admin), que ya lo leia y respondia
+     literalmente «vas sobrado, no toques nada»;
+   · la realidad — llevabamos dias escribiendo sin un solo error, cosa
+     imposible rozando el tope de un M0.
+   Y hay algo peor que el numero: **ya existia el medidor**. `/admin/salud`
+   llevaba tiempo hecho, con el limite configurable y este comentario dentro:
+   *«una mentira gasta la confianza en todos los demas avisos»*. Aun asi
+   escribi un segundo medidor, peor, con el limite a pelo. Se ha borrado; del
+   mio solo queda el aviso automatico por Telegram, que es lo unico que
+   aportaba, apoyado en `LIMITE_ATLAS_MB`.
+   Dos reglas: **un limite que no se ha comprobado no se pone como constante y
+   menos aun se le cuelga una alarma**, y **antes de construir un medidor,
+   buscar si ya existe**. Un aviso construido sobre una suposicion no avisa de
+   nada.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

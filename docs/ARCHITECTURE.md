@@ -10,7 +10,7 @@
 
 ```
 Chrome (extensión MV3)  ─┐
-                         ├─→  FastAPI (Fly.io)  ──→  MongoDB Atlas M0
+                         ├─→  FastAPI (Fly.io)  ──→  MongoDB Atlas (10 GB)
 React 18 + Vite ─────────┘         │                 (multi-tenant)
 (Cloudflare Pages)                 ├──→  Cloudflare R2   (fotos, documentos)
                                    ├──→  Gemini          (análisis de daños)

@@ -137,8 +137,10 @@ Fotos y documentos. Bucket `flotadsp-uploads`, público por URL.
 
 ## MongoDB Atlas — ⚠️ M0
 
-512 MB y **sin copias de seguridad nativas**. Hay backup diario propio a R2 a
-las 04:00. Los dos límites (Atlas M0 y la máquina de Fly de 1 GB) **rompen en
+**10 GB** (el límite real está en el secret `ATLAS_LIMITE_MB`, y lo lee
+`GET /admin/salud`) y **sin copias de seguridad nativas**. Hay backup diario
+propio a R2 a las 04:00. Los dos límites (el Atlas y la máquina de Fly de 1 GB)
+**rompen en
 silencio**: no avisan, simplemente empieza a fallar.
 
 Por eso las colecciones que crecen sin techo llevan TTL: `cortex_packages`,
