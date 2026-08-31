@@ -71,6 +71,8 @@ jobs:
         run: python -m py_compile backend/server.py backend/ai_learning.py backend/damage_segmentation.py
       - name: Contratos modelo↔frontend (campos que se descartarían en silencio)
         run: python scripts/check_contracts.py
+      - name: ObjectId en la respuesta (500 solo la primera vez, luego funciona)
+        run: python scripts/check_objectid.py
       - name: Instalar dependencias
         run: pip install -r backend/requirements.txt pytest pytest-asyncio
       - name: Tests de API contra Mongo real (persistencia, auth, demo read-only)

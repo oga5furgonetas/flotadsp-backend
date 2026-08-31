@@ -531,6 +531,31 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    buscar si ya existe**. Un aviso construido sobre una suposicion no avisa de
    nada.
 
+42. **`insert_one(doc)` MUTA `doc`, y devolver ese mismo dict responde 500.**
+   pymongo le mete `_id` con un ObjectId y FastAPI no sabe serializarlo. Lo
+   peligroso es **cómo** falla: revienta SOLO la petición que crea el
+   documento, porque las siguientes lo leen con proyección `{"_id": 0}` y van
+   perfectas. Falla una vez, recargas, funciona — y no lo reporta nadie nunca.
+   Estaba en `/checklist` desde siempre: **el primero que abría la lista de
+   tareas cada día**, en cualquier centro y cualquier empresa, se llevaba un
+   «Error interno del servidor». Y el bug ya era conocido — tres endpoints
+   (documentos, chat, contactos) lo esquivaban a mano con `doc.pop("_id", None)`
+   y uno hasta lo explicaba en un comentario—, pero el cuarto se coló porque no
+   seguía la forma `return doc`, sino `result[turno] = new_doc`.
+   Se encontró **barriendo las 155 pantallas del panel con una empresa recién
+   creada**, no leyendo el código: 1.550 combinaciones de ruta × parámetros
+   (`?center=`, `?from=/&to=`, `?week=`, `?days=`) y un único 500 en todas.
+   Cualquiera de las dos curas vale: `insert_one(dict(doc))` inserta una copia,
+   o `doc.pop("_id", None)` limpia después. Lo vigila
+   `scripts/check_objectid.py`, que reconoce las dos y por eso no da ninguno de
+   los tres avisos en falso que daba antes de afinarlo — un checker que grita en
+   falso deja de leerse, que es exactamente como se coló este.
+   Regla general: **con la base vacía se recorre un camino que con datos no se
+   recorre nunca**, y ese camino solo lo pisan los clientes nuevos, el primer
+   día. Es el mismo origen que los otros tres fallos del 31-08 (conductores sin
+   centro, importar sin crear, «0 nuevos» siempre): la app se desarrolla contra
+   una flota llena.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
@@ -541,11 +566,11 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   de API, que necesitan el backend instalado).
 - Smoke de produccion: `backend/scripts/smoke_endpoints.py` desde la maquina,
   que comprueba que el DATO cuadra y no solo que responda 200.
-- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son diez:
+- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son doce:
   `check-i18n`, `check-routes`, `check-huerfanas`, `check-permisos`, `check-tema`,
-  `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones` y
-  `check_contracts.py`. Los tres ultimos con trinquete (toleran el backlog
-  actual y fallan si sube).
+  `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones`,
+  `check-tema-mezclado`, `check_contracts.py` y `check_objectid.py`. Tres llevan
+  trinquete (toleran el backlog actual y fallan si sube).
 - `check-huerfanas.mjs` lista rutas del backend que no llama ningún cliente. Una
   ruta sin UI no falla, simplemente no se usa: así estuvieron meses el módulo de
   turnos entero y las subidas de métricas. Lleva trinquete (tolera el backlog

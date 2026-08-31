@@ -11810,7 +11810,14 @@ async def get_checklist(center: str, date: Optional[str] = None,
             "created_at": now, "updated_at": now,
         }
         try:
-            await db.daily_checklists.insert_one(new_doc)
+            # dict(...) NO sobra: insert_one MUTA el dict que le pasas y le mete
+            # `_id` con un ObjectId. Como este mismo `new_doc` es lo que se
+            # devuelve, sin la copia FastAPI no sabe serializarlo y responde 500.
+            # Solo reventaba la peticion que CREA —las siguientes leen el
+            # documento con proyeccion `{"_id": 0}`—, o sea el PRIMERO que abria
+            # el checklist cada dia, en todos los centros. Al recargar funciona,
+            # asi que nadie lo reportaba nunca.
+            await db.daily_checklists.insert_one(dict(new_doc))
         except DuplicateKeyError:
             # Race: alguien lo creó entre el find y el insert. Recargamos.
             existing = await db.daily_checklists.find_one(
@@ -32386,7 +32393,10 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
             "por_bloque": len(por_bloque),
             "por_ambos": sum(1 for c in incumplen
                              if c["supera_semanal"] and c["bloques_pasados"]),
-            "porcentaje": round((len(activos) - len(incumplen)) / len(activos) * 100, 1),
+            # Sin conductores en el cuadrante esto era un 500. Le pasa a toda
+            # empresa el primer dia, que es justo cuando peor sienta.
+            "porcentaje": (round((len(activos) - len(incumplen)) / len(activos) * 100, 1)
+                           if activos else None),
             "limite_semanal_min": limite,
             "limite_bloque_min": bloque_limite,
             "trabajando_ahora": sum(1 for c in incumplen if c["trabajando_ahora"]),
