@@ -714,17 +714,24 @@ function ScoringView({ center }) {
    están escritos en MAYÚSCULAS, minúsculas y Mixtas: un `sort()` normal manda
    todas las minúsculas detrás de todas las mayúsculas y la lista parece
    aleatoria (gotcha 23). */
-/* QUIEN NO PUEDE ENTRAR AL PORTAL TODAVIA
+/* QUIEN ENTRA AL PORTAL SIN CONTRASEÑA
    ═══════════════════════════════════════════════════════════════════════════
-   Importar un Excel crea las fichas pero NO las cuentas: hasta hoy los
-   cincuenta conductores recien importados se quedaban sin poder entrar y en
-   ninguna pantalla se decia. Al que importa le parece que ya esta hecho, y se
-   entera el lunes por la mañana cuando le llaman desde la nave.
+   Un conductor SIN cuenta entra solo con su correo: `driver-lookup` le da el
+   token en el sitio. La contraseña es opcional y añade una barrera.
 
-   Las claves se ven UNA vez —en la base solo queda el hash—, asi que se
-   enseñan aqui para copiarlas o bajarlas en CSV y repartirlas. */
+   Ojo con el texto, que estuvo mal media hora: decir «no pueden entrar» era
+   FALSO —entran perfectamente— y en el panel de Dani habria acusado a sus 202
+   conductores de estar bloqueados. Un aviso que miente gasta la confianza en
+   todos los demas.
+
+   Y el boton no es inocuo: al ponerles contraseña DEJAN de poder entrar solo
+   con el correo. Si las claves no se reparten, la nave se queda sin portal a
+   la mañana siguiente. Por eso hay un paso de confirmacion que lo dice con
+   todas las letras, y por eso las claves se pueden bajar en CSV: se ven UNA
+   vez, porque en la base solo queda el hash. */
 function AvisoAccesos({ list, accounts, onHecho }) {
   const [dando, setDando] = useState(false)
+  const [confirmar, setConfirmar] = useState(false)
   const [hecho, setHecho] = useState(null)
   const [error, setError] = useState('')
 
@@ -759,7 +766,11 @@ function AvisoAccesos({ list, accounts, onHecho }) {
     return (
       <div className="mb-4 rounded-xl border border-lime-500/30 bg-lime-500/5 p-4">
         <p className="text-sm font-semibold text-lime-300">
-          {hecho.creadas} {hecho.creadas === 1 ? 'conductor ya puede entrar' : 'conductores ya pueden entrar'} al portal
+          {hecho.creadas} {hecho.creadas === 1 ? 'conductor ya tiene' : 'conductores ya tienen'} contraseña
+        </p>
+        <p className="mt-1 text-[12.5px] leading-relaxed text-amber-200">
+          Desde ahora la necesitan para entrar: con el correo solo ya no les vale.
+          Repártelas antes de que lo intenten.
         </p>
         <p className="mt-1 text-[12.5px] leading-relaxed text-dark-400">{hecho.aviso}</p>
         {hecho.sin_email > 0 && (
@@ -794,23 +805,47 @@ function AvisoAccesos({ list, accounts, onHecho }) {
 
   if (!conCorreo) return null
 
-  return (
-    <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
-      <div className="min-w-0 flex-1">
+  if (confirmar) {
+    return (
+      <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/5 p-4">
         <p className="text-[13px] font-semibold text-amber-200">
-          {conCorreo} {conCorreo === 1 ? 'conductor no puede' : 'conductores no pueden'} entrar al portal todavía
+          Antes de seguir: esto cambia cómo entran
+        </p>
+        <ul className="mt-2 space-y-1 text-[12.5px] leading-relaxed text-dark-300">
+          <li>· Ahora esos {conCorreo} entran escribiendo solo su correo.</li>
+          <li>· Al ponerles contraseña, <span className="font-semibold text-amber-200">eso deja de valer</span>: sin su clave no entran.</li>
+          <li>· Las claves se ven una sola vez. Descárgalas y repártelas el mismo día.</li>
+        </ul>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button onClick={dar} disabled={dando}
+            className="flex items-center gap-1.5 rounded-lg bg-amber-500/20 px-3 py-2 text-[12.5px] font-semibold text-amber-100 hover:bg-amber-500/30 disabled:opacity-50">
+            {dando ? <Loader2 size={13} className="animate-spin" /> : <Lock size={13} />}
+            {dando ? 'Creando…' : 'Lo entiendo, poner contraseña'}
+          </button>
+          <button onClick={() => setConfirmar(false)}
+            className="px-3 py-2 text-[12.5px] text-dark-400 hover:text-dark-200">Dejarlo como está</button>
+        </div>
+        {error && <p className="mt-2 text-[12px] text-red-300">{error}</p>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-dark-700 bg-dark-900/60 px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-semibold text-dark-200">
+          {conCorreo} {conCorreo === 1 ? 'conductor entra' : 'conductores entran'} al portal solo con su correo
         </p>
         <p className="mt-0.5 text-[12px] leading-relaxed text-dark-400">
-          Tienen ficha, pero no clave. Importar de un Excel da de alta la ficha; la clave se pone aquí.
-          {sinCorreo > 0 && ` (${sinCorreo} más sin correo: sin correo no hay con qué entrar.)`}
+          Funciona y es lo más cómodo, pero cualquiera que sepa su correo entraría por ellos.
+          Si prefieres que haga falta una contraseña, se la pones desde aquí.
+          {sinCorreo > 0 && ` (${sinCorreo} sin correo: a esos hay que ponerles uno en su ficha para que puedan entrar de cualquier forma.)`}
         </p>
       </div>
-      <button onClick={dar} disabled={dando}
-        className="flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-3 py-2 text-[12.5px] font-semibold text-amber-200 hover:bg-amber-500/25 disabled:opacity-50">
-        {dando ? <Loader2 size={13} className="animate-spin" /> : <Lock size={13} />}
-        {dando ? 'Creando…' : `Dar acceso a ${conCorreo === 1 ? 'ese' : 'los ' + conCorreo}`}
+      <button onClick={() => setConfirmar(true)}
+        className="flex items-center gap-1.5 rounded-lg bg-dark-800 px-3 py-2 text-[12.5px] font-semibold text-dark-200 hover:bg-dark-700">
+        <Lock size={13} /> Poner contraseña
       </button>
-      {error && <p className="w-full text-[12px] text-red-300">{error}</p>}
     </div>
   )
 }

@@ -189,6 +189,9 @@ export const AYUDA = {
       'Si empiezas: pulsa «Importar Excel» y sube la hoja que ya tengas. No hace falta ningún formato nuestro — vale con que haya una columna de nombre.',
       'Antes de guardar se enseña lo que se ha entendido: compruébalo ahí, no después.',
       'El Transporter ID es la llave con la que se reparten los DNR: si está mal, los fallos van a otra persona.',
+      'Para entrar al portal no hay que hacer nada más: el conductor escribe su correo y ya está. '
+        + 'Si prefieres que además haga falta contraseña, se la pones desde el aviso de arriba — pero entonces '
+        + 'con el correo solo ya no les vale, así que hay que repartirlas el mismo día.',
     ],
     ojo: 'Importar da de alta lo que falta y nunca pisa una ficha que ya existe. Si alguien aparece con el historial corto, comprueba si tiene otra ficha con el mismo correo.',
   },

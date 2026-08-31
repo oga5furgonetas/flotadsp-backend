@@ -6370,12 +6370,17 @@ def _clave_conductor() -> str:
 
 @auth_router.post("/driver-accounts/generar")
 async def generar_accesos_conductores(_admin: dict = Depends(require_admin)):
-    """Da acceso al portal a todos los conductores que aun no lo tienen.
+    """Pone contraseña a los conductores que todavia no tienen.
 
-    Por que existe: importar cincuenta conductores de un Excel crea sus fichas
-    pero NO sus cuentas —eso solo lo hacia `/set-driver-password`, de uno en
-    uno—, asi que los cincuenta se quedaban sin poder entrar al portal y en
-    ninguna pantalla se decia. Al que importa le parece que ya esta hecho.
+    OJO A LO QUE ESTO CAMBIA. Un conductor SIN cuenta entra al portal
+    escribiendo solo su correo: `driver-lookup` le da el token alli mismo. Al
+    ponerle contraseña eso DEJA DE VALER — sin su clave ya no entra—, asi que
+    si las claves no se reparten, la nave se queda sin portal al dia siguiente.
+    El panel lo confirma antes de llamar aqui, y por eso las claves se
+    devuelven y se pueden bajar en CSV.
+
+    Existe porque hacerlo de uno en uno con `/set-driver-password` es inviable
+    con una plantilla entera recien importada de un Excel.
 
     A los que YA tienen cuenta no se les toca: regenerar una clave que alguien
     esta usando le echa del portal a mitad de ruta, y esto se pulsa sin pensar.
@@ -6419,7 +6424,8 @@ async def generar_accesos_conductores(_admin: dict = Depends(require_admin)):
         # solo queda el hash. Si se pierde una, se le pone otra desde su ficha.
         "accesos": sorted(nuevas, key=lambda x: (x["centro"] or "", x["nombre"])),
         "aviso": ("Apunta o descarga estas claves ahora: no se pueden volver a ver. "
-                  "Cada conductor entra con su correo y la suya, y puede cambiarla dentro."),
+                  "Desde este momento estos conductores NECESITAN su clave para "
+                  "entrar; con el correo solo ya no les vale."),
     }
 
 
