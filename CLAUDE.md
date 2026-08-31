@@ -616,6 +616,21 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    es la respuesta correcta. Lo que hay que buscar son **decisiones**
    —comparaciones y valores por defecto—, no datos.
 
+44. **Los `.ps1` van en ASCII puro, sin tildes ni guiones largos.**
+   PowerShell 5.1 lee un `.ps1` sin BOM como ANSI, así que cualquier carácter
+   UTF-8 multibyte —una tilde, un `—`, una `·`— llega corrupto y puede romper
+   el PARSEO: el error que da entonces es `Token '}' inesperado` señalando una
+   llave que está perfectamente cerrada, treinta líneas más abajo del carácter
+   culpable. Se pierde un buen rato buscando en el sitio equivocado.
+   `deploy-frontend.ps1` y `verificar-produccion.ps1` llevan 0 bytes no-ASCII
+   desde siempre; era una convención que nadie había escrito.
+   Comprobarlo antes de dar un script por bueno:
+   `python -c "import io;b=io.open('scripts/x.ps1','rb').read();print(sum(1 for c in b if c>127))"`
+   Y dos más de PowerShell 5.1 que también cuestan tiempo: `-in` con una lista
+   suelta no parsea (usar `@(...) -contains`), y `Join-Path a ".."` deja el
+   `..` dentro mientras `FileInfo.FullName` viene ya resuelto — restar
+   longitudes sin `Resolve-Path` se sale de la cadena.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

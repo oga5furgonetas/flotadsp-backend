@@ -38,4 +38,15 @@ Write-Host ""
 Write-Host "==> Comprobando que produccion sirve de verdad esta compilacion..."
 # El edge tarda unos segundos en propagar: se le dan 90.
 & (Join-Path $PSScriptRoot "verificar-produccion.ps1") -Esperar 90
-exit $LASTEXITCODE
+$verif = $LASTEXITCODE
+
+# Y AHORA LOS CHUNKS, QUE ES LO QUE SE ENVENENA (gotcha 8).
+# Lo de arriba comprueba el index.html; el problema esta en los .js y .css,
+# que tardan mas en propagarse. Mientras no estan, el catch-all de _redirects
+# devuelve la PAGINA HTML con codigo 200 bajo la URL .js, y el navegador se la
+# guarda 4 horas. Pedirlos aqui los deja cacheados en el edge antes de que
+# llegue nadie, y de paso delata la ventana, que hoy no se ve.
+Write-Host ""
+& (Join-Path $PSScriptRoot "calentar-edge.ps1")
+
+exit $verif
