@@ -40,6 +40,7 @@ import time
 import asyncio
 import os
 import io
+from urllib.parse import quote as _url_quote
 import json
 import uuid
 import secrets
@@ -15068,11 +15069,45 @@ def _ot_freno(token: str, limite: int = 40):
             _OT_GOLPES.pop(k, None)
 
 
-async def _ot_avisa(orden: dict, texto: str):
+PREFIJO_WA_DEFECTO = os.environ.get("WHATSAPP_PREFIJO_PAIS", "34")
+
+
+def enlace_wa(telefono: str, texto: str = "") -> str:
+    """Un enlace `wa.me` que abre WhatsApp con el mensaje YA ESCRITO.
+
+    POR QUE ESTO IMPORTA MAS DE LO QUE PARECE. La API de WhatsApp de Meta esta
+    bloqueada: no llegan los codigos de verificacion a NINGUN numero, y sin eso
+    no hay envio automatico. Pero `wa.me` es un enlace PUBLICO — no usa la API,
+    no pide credenciales, no hay nada que verificar. Funciona hoy.
+
+    Con esto, "reenviar el recordatorio a mano" pasa de copiar un texto, buscar
+    el contacto y pegarlo, a pulsar un enlace y darle a enviar. La diferencia
+    entre esas dos cosas es si se hace o no se hace un martes con cuarenta
+    rutas fuera. Y el taller contesta al WhatsApp de siempre, que ya se lee.
+
+    Los 46 talleres tienen telefono y NINGUNO correo (medido el 31-08-2026), asi
+    que este es el unico canal que llega a todos sin depender de Meta.
+    """
+    d = "".join(c for c in str(telefono or "") if c.isdigit())
+    if not d:
+        return ""
+    if d.startswith("00"):
+        d = d[2:]
+    elif len(d) == 9:
+        # Sin prefijo, wa.me abre una conversacion con un numero que no existe.
+        d = PREFIJO_WA_DEFECTO + d
+    return "https://wa.me/%s%s" % (
+        d, ("?text=" + _url_quote(texto[:1500])) if texto else "")
+
+
+async def _ot_avisa(orden: dict, texto: str, enlace_directo: str = ""):
     """Avisa a la oficina por Telegram. Que falle no puede tumbar la peticion:
     el taller ya ha hecho su parte y perder su cambio seria mucho peor."""
+    cuerpo = "%s · %s\n%s" % (orden.get("numero"), orden.get("matricula"), texto)
+    if enlace_directo:
+        cuerpo += "\n\n👉 Mandarlo por WhatsApp: %s" % enlace_directo
     try:
-        await _telegram_aviso("%s · %s\n%s" % (orden.get("numero"), orden.get("matricula"), texto))
+        await _telegram_aviso(cuerpo)
     except Exception as e:
         logger.warning("OT: no se pudo avisar por Telegram: %s", e)
 
@@ -17044,7 +17079,9 @@ async def seguimiento_talleres(forzar: bool = False) -> list:
             # Sin WhatsApp, el recordatorio va a la oficina con el texto ya
             # escrito para reenviar. Que no salga solo no puede significar que
             # no salga: seria volver al silencio que esto viene a arreglar.
-            await _ot_avisa(o, "Lleva %d días sin novedades del taller.\n\n%s" % (dias, texto))
+            # El enlace lleva el texto dentro: un clic y a enviar.
+            await _ot_avisa(o, "Lleva %d días sin novedades del taller.\n\n%s" % (dias, texto),
+                            enlace_wa(o.get("taller_telefono"), texto))
 
         # Queda apuntado en la bandeja, al lado de lo que ellos contestan: la
         # conversacion entera en un sitio y no la mitad en el historial.
