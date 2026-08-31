@@ -603,6 +603,11 @@ def _slugify(s):
 class DriverLoginRequest(BaseModel):
     email: str
     password: str
+    # El portal vive en flotadsp.com/conductor/#<slug>, y sin este campo el
+    # login busca en la BD por defecto (gotcha 26): los conductores de
+    # cualquier empresa que no sea la principal no entraban NUNCA. Opcional
+    # a proposito, para no dejar fuera a un portal con la version vieja.
+    slug: Optional[str] = None
 
 
 class SetDriverPasswordRequest(BaseModel):
@@ -5949,7 +5954,16 @@ async def driver_login(data: DriverLoginRequest, request: Request):
     rl_ip = f"ip:{_rl_key_ip(request)}"
     _rl_check(rl_key)
     _rl_check(rl_ip)
-    account = await db.driver_accounts.find_one({"email": data.email}, {"_id": 0})
+    # Sin esto se leia SIEMPRE la BD por defecto: sus dos hermanos
+    # —driver-lookup y driver-token— si lo hacian, y este se quedo atras. El
+    # sintoma era cruel: el paso del email reconocia al conductor (ese si iba
+    # al DSP bueno) y el de la contraseña le decia que era incorrecta. Con la
+    # suya buena, y para siempre.
+    org = await _set_tenant_by_slug(data.slug)
+    # El correo se guarda en minusculas; tecleado en el movil llega como llega.
+    correo = data.email.strip().lower()
+    account = await db.driver_accounts.find_one(
+        {"email": {"$regex": f"^{re.escape(correo)}$", "$options": "i"}}, {"_id": 0})
     if not account or not verify_password(data.password, account["hashed_password"]):
         await _rl_fail(rl_key, f"conductor '{data.email}' (IP {_rl_key_ip(request)})")
         await _rl_fail(rl_ip, f"conductor '{data.email}' (IP {_rl_key_ip(request)})")
@@ -5965,7 +5979,13 @@ async def driver_login(data: DriverLoginRequest, request: Request):
     driver_name = driver["name"] if driver else account["email"]
     driver_center = driver.get("center") if driver else None
 
-    token = create_token(account["driver_id"], "driver", driver_name)
+    # Con la empresa DENTRO del token. Si no, cada peticion posterior del
+    # portal vuelve a caer en la BD por defecto y el conductor entra pero no
+    # ve nada suyo — que es peor que no dejarle entrar, porque parece que la
+    # aplicacion esta vacia. Es lo mismo que hace `_driver_token_impl`.
+    token = create_token(account["driver_id"], "driver", driver_name,
+                         org_id=(org or {}).get("id"), db_name=_tenant_db_name(org),
+                         account_type=(org or {}).get("account_type"))
     logger.info(f"Driver login: {data.email}")
     return TokenResponse(
         access_token=token,
@@ -6336,6 +6356,71 @@ async def list_driver_accounts(_admin: dict = Depends(require_admin)):
         {}, {"_id": 0, "hashed_password": 0}
     ).to_list(1000)
     return accounts
+
+
+# Sin i, l, 1, O, 0: estas claves se dictan por telefono y se copian a mano de
+# un papel. Una `l` que se lee como `1` es una llamada al despacho.
+_ALFA_CLAVE = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def _clave_conductor() -> str:
+    """Diez caracteres al azar, legibles a mano."""
+    return "".join(secrets.choice(_ALFA_CLAVE) for _ in range(10))
+
+
+@auth_router.post("/driver-accounts/generar")
+async def generar_accesos_conductores(_admin: dict = Depends(require_admin)):
+    """Da acceso al portal a todos los conductores que aun no lo tienen.
+
+    Por que existe: importar cincuenta conductores de un Excel crea sus fichas
+    pero NO sus cuentas —eso solo lo hacia `/set-driver-password`, de uno en
+    uno—, asi que los cincuenta se quedaban sin poder entrar al portal y en
+    ninguna pantalla se decia. Al que importa le parece que ya esta hecho.
+
+    A los que YA tienen cuenta no se les toca: regenerar una clave que alguien
+    esta usando le echa del portal a mitad de ruta, y esto se pulsa sin pensar.
+    """
+    conductores = await db.drivers.find(
+        {"status": {"$ne": "deleted"}}, {"_id": 0, "id": 1, "name": 1, "email": 1, "center": 1}
+    ).to_list(5000)
+    con_cuenta = {a["driver_id"] for a in await db.driver_accounts.find(
+        {}, {"_id": 0, "driver_id": 1}).to_list(5000)}
+
+    nuevas, sin_email, ahora = [], 0, datetime.now(timezone.utc).isoformat()
+    for c in conductores:
+        if c["id"] in con_cuenta:
+            continue
+        email = (c.get("email") or "").strip().lower()
+        if not email:
+            # Sin correo no hay con que entrar. Se cuentan y se dicen: si no,
+            # el numero de altas no cuadra con la plantilla y no se sabe por que.
+            sin_email += 1
+            continue
+        clave = _clave_conductor()
+        try:
+            await db.driver_accounts.insert_one({
+                "id": str(uuid.uuid4()), "driver_id": c["id"], "email": email,
+                "hashed_password": hash_password(clave), "active": True,
+                "created_at": ahora, "creada_en_bloque": True,
+            })
+        except DuplicateKeyError:
+            # Dos pestañas a la vez. La cuenta existe: no es un fallo.
+            continue
+        nuevas.append({"driver_id": c["id"], "nombre": c.get("name") or email,
+                       "centro": c.get("center"), "email": email, "clave": clave})
+
+    logger.info("Accesos de conductor generados en bloque: %d nuevos, %d sin email",
+                len(nuevas), sin_email)
+    return {
+        "creadas": len(nuevas),
+        "ya_tenian": len(con_cuenta),
+        "sin_email": sin_email,
+        # Las claves se ven UNA vez, igual que las llaves de partner: en la base
+        # solo queda el hash. Si se pierde una, se le pone otra desde su ficha.
+        "accesos": sorted(nuevas, key=lambda x: (x["centro"] or "", x["nombre"])),
+        "aviso": ("Apunta o descarga estas claves ahora: no se pueden volver a ver. "
+                  "Cada conductor entra con su correo y la suya, y puede cambiarla dentro."),
+    }
 
 
 @auth_router.delete("/driver-account/{driver_id}")
@@ -13812,7 +13897,15 @@ async def report_client_error(data: dict, request: Request):
     try:
         auth = request.headers.get("authorization") or ""
         if auth.lower().startswith("bearer "):
-            quien = (decode_token(auth[7:]) or {}).get("name")
+            _tok = decode_token(auth[7:]) or {}
+            quien = _tok.get("name")
+            # Y su EMPRESA. Sin esto el error se guardaba en la base principal
+            # viniera de donde viniera (gotcha 26): la empresa que lo sufre no
+            # lo ve en su pantalla de errores, y en la principal aparecen
+            # mezclados los de todo el mundo sin saber de quien son. Justo lo
+            # contrario de para lo que se guardan.
+            if _tok.get("db_name"):
+                set_current_org_db(_tok["db_name"])
     except Exception:
         pass          # un token caducado no puede impedir guardar el error
 

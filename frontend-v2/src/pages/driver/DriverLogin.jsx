@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Loader2, LogIn, Lock, Eye, EyeOff, ArrowLeft } from 'lucide-react'
-import { driverLookup, DRIVER_TOKEN_KEY } from '../../services/api'
+import { driverLookup, DRIVER_TOKEN_KEY, currentSlug } from '../../services/api'
 import { api } from '../../services/api'
 import { useToast } from '../../lib/toast'
 import { useT } from '../../i18n'
@@ -62,7 +62,12 @@ export default function DriverLogin({ onLogin }) {
     if (!password) return toast.warning(t('dr.introPass'))
     setBusy(true)
     try {
-      const r = await api.post('/auth/driver-login', { email: email.trim(), password })
+      /* El slug NO sobra: sin el, el backend busca la cuenta en la base por
+         defecto y un conductor de cualquier empresa que no sea la principal
+         se llevaba «contraseña incorrecta» con la suya buena. Sus hermanos
+         driverLookup y getDriverToken ya lo mandaban; este no. */
+      const r = await api.post('/auth/driver-login',
+        { email: email.trim(), password, slug: currentSlug() })
       if (r.data?.access_token) localStorage.setItem(DRIVER_TOKEN_KEY, r.data.access_token)
       onLogin({
         ...currentDriver,

@@ -73,6 +73,8 @@ jobs:
         run: python scripts/check_contracts.py
       - name: ObjectId en la respuesta (500 solo la primera vez, luego funciona)
         run: python scripts/check_objectid.py
+      - name: Multi-tenant (endpoint sin sesión que escribiría en la empresa que no es)
+        run: python scripts/check_tenant.py
       - name: Instalar dependencias
         run: pip install -r backend/requirements.txt pytest pytest-asyncio
       - name: Tests de API contra Mongo real (persistencia, auth, demo read-only)

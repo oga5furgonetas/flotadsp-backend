@@ -324,6 +324,25 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    Y lo que devuelva ese endpoint va por **lista blanca de campos**, nunca por
    lista negra: el enlace se reenvía por WhatsApp y acaba en teléfonos que no
    controlamos, así que ni nombres de conductores ni ids internos.
+   **Ampliado el 31-08-2026.** Volvió a pasar, y con la peor cara posible:
+   `driver_login` tocaba `db` sin fijar la empresa, mientras sus DOS hermanos
+   —`driver_lookup` y `_driver_token_impl`— sí lo hacían. `DriverLoginRequest`
+   ni siquiera tenía campo `slug`. Consecuencia: **ningún conductor de ninguna
+   empresa que no fuera la principal podía entrar al portal, nunca.** Y el
+   síntoma engaña: el paso del email le reconocía —ese sí iba al DSP bueno— y
+   el de la contraseña le decía que era incorrecta. Con la suya buena. Además
+   el token que emitía no llevaba `db_name`, así que aunque hubiera entrado,
+   cada petición suya habría vuelto a caer en la base principal y habría visto
+   la aplicación vacía — peor que no dejarle entrar.
+   Se encontró probando el portal con una empresa recién creada, no leyendo el
+   código. Ahora lo vigila `scripts/check_tenant.py`: marca todo endpoint SIN
+   dependencia de sesión que toque `db` sin llamar a `_set_tenant_by_slug`,
+   `set_current_org_db`, `_ot_por_token`, `_partner_auth` o
+   `_cortex_ingest_org`. `global_db` no cuenta —es única a propósito— ni
+   `db.command("ping")`, que pregunta por la conexión y no por los datos de
+   nadie. Sacó también `report_client_error`, que guardaba los errores de
+   navegador de TODAS las empresas en la principal: la que los sufre no los
+   veía en su pantalla, y en la principal salían mezclados sin saber de quién.
 
 27. **Una pantalla nueva sin su casilla de permiso es INVISIBLE, y no avisa.**
    El menú filtra cada entrada con `canSee(clave)`, y `canSee` devuelve false
@@ -566,11 +585,12 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   de API, que necesitan el backend instalado).
 - Smoke de produccion: `backend/scripts/smoke_endpoints.py` desde la maquina,
   que comprueba que el DATO cuadra y no solo que responda 200.
-- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son doce:
+- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son trece:
   `check-i18n`, `check-routes`, `check-huerfanas`, `check-permisos`, `check-tema`,
   `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones`,
-  `check-tema-mezclado`, `check_contracts.py` y `check_objectid.py`. Tres llevan
-  trinquete (toleran el backlog actual y fallan si sube).
+  `check-tema-mezclado`, `check_contracts.py`, `check_objectid.py` y
+  `check_tenant.py`. Tres llevan trinquete (toleran el backlog actual y fallan
+  si sube).
 - `check-huerfanas.mjs` lista rutas del backend que no llama ningún cliente. Una
   ruta sin UI no falla, simplemente no se usa: así estuvieron meses el módulo de
   turnos entero y las subidas de métricas. Lleva trinquete (tolera el backlog

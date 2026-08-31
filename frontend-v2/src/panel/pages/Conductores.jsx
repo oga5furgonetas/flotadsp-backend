@@ -13,6 +13,7 @@ import {
 import {
   getDrivers, createDriver, updateDriver, deleteDriver, uploadDriverPhoto,
   getDriversScoring, getScoringLeaderboard, getDriverAccounts, setDriverPassword,
+  generarAccesosConductores,
   deleteDriverAccount,
   getDriversDuplicados, fusionarConductores,
   getPropuestasTransporterId, confirmarTransporterId, getTransporterIdsSinFicha,
@@ -713,6 +714,108 @@ function ScoringView({ center }) {
    están escritos en MAYÚSCULAS, minúsculas y Mixtas: un `sort()` normal manda
    todas las minúsculas detrás de todas las mayúsculas y la lista parece
    aleatoria (gotcha 23). */
+/* QUIEN NO PUEDE ENTRAR AL PORTAL TODAVIA
+   ═══════════════════════════════════════════════════════════════════════════
+   Importar un Excel crea las fichas pero NO las cuentas: hasta hoy los
+   cincuenta conductores recien importados se quedaban sin poder entrar y en
+   ninguna pantalla se decia. Al que importa le parece que ya esta hecho, y se
+   entera el lunes por la mañana cuando le llaman desde la nave.
+
+   Las claves se ven UNA vez —en la base solo queda el hash—, asi que se
+   enseñan aqui para copiarlas o bajarlas en CSV y repartirlas. */
+function AvisoAccesos({ list, accounts, onHecho }) {
+  const [dando, setDando] = useState(false)
+  const [hecho, setHecho] = useState(null)
+  const [error, setError] = useState('')
+
+  const sinAcceso = list.filter((d) => !accounts.includes(d.id))
+  const sinCorreo = sinAcceso.filter((d) => !(d.email || '').trim()).length
+  const conCorreo = sinAcceso.length - sinCorreo
+
+  const dar = async () => {
+    setDando(true); setError('')
+    try {
+      const r = await generarAccesosConductores()
+      setHecho(r.data)
+      onHecho()
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'No se pudo. Reintenta.')
+    }
+    setDando(false)
+  }
+
+  const bajarCsv = () => {
+    const filas = [['Nombre', 'Centro', 'Correo', 'Contraseña'],
+      ...hecho.accesos.map((a) => [a.nombre, a.centro || '', a.email, a.clave])]
+    const csv = filas.map((f) => f.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(';')).join('\r\n')
+    // BOM: sin el, Excel abre las tildes rotas y parece que el fichero esta mal.
+    const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }))
+    const a = document.createElement('a')
+    a.href = url; a.download = 'accesos-conductores.csv'; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  if (hecho) {
+    return (
+      <div className="mb-4 rounded-xl border border-lime-500/30 bg-lime-500/5 p-4">
+        <p className="text-sm font-semibold text-lime-300">
+          {hecho.creadas} {hecho.creadas === 1 ? 'conductor ya puede entrar' : 'conductores ya pueden entrar'} al portal
+        </p>
+        <p className="mt-1 text-[12.5px] leading-relaxed text-dark-400">{hecho.aviso}</p>
+        {hecho.sin_email > 0 && (
+          <p className="mt-1 text-[12.5px] text-amber-300">
+            {hecho.sin_email} se han quedado fuera por no tener correo. Ponles uno en su ficha y vuelve a pulsar.
+          </p>
+        )}
+        {hecho.accesos.length > 0 && (
+          <>
+            <button onClick={bajarCsv}
+              className="mt-3 rounded-lg bg-lime-500/15 px-3 py-1.5 text-[12.5px] font-semibold text-lime-300 hover:bg-lime-500/25">
+              Descargar las claves (CSV)
+            </button>
+            <div className="mt-3 max-h-52 overflow-y-auto rounded-lg border border-dark-800">
+              <table className="w-full text-[12px]">
+                <tbody>
+                  {hecho.accesos.map((a) => (
+                    <tr key={a.driver_id} className="border-b border-dark-800/70 last:border-0">
+                      <td className="px-2 py-1 text-dark-300">{a.nombre}</td>
+                      <td className="px-2 py-1 text-dark-500">{a.email}</td>
+                      <td className="cifra px-2 py-1 font-semibold text-lime-300">{a.clave}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
+    )
+  }
+
+  if (!conCorreo) return null
+
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-semibold text-amber-200">
+          {conCorreo} {conCorreo === 1 ? 'conductor no puede' : 'conductores no pueden'} entrar al portal todavía
+        </p>
+        <p className="mt-0.5 text-[12px] leading-relaxed text-dark-400">
+          Tienen ficha, pero no clave. Importar de un Excel da de alta la ficha; la clave se pone aquí.
+          {sinCorreo > 0 && ` (${sinCorreo} más sin correo: sin correo no hay con qué entrar.)`}
+        </p>
+      </div>
+      <button onClick={dar} disabled={dando}
+        className="flex items-center gap-1.5 rounded-lg bg-amber-500/15 px-3 py-2 text-[12.5px] font-semibold text-amber-200 hover:bg-amber-500/25 disabled:opacity-50">
+        {dando ? <Loader2 size={13} className="animate-spin" /> : <Lock size={13} />}
+        {dando ? 'Creando…' : `Dar acceso a ${conCorreo === 1 ? 'ese' : 'los ' + conCorreo}`}
+      </button>
+      {error && <p className="w-full text-[12px] text-red-300">{error}</p>}
+    </div>
+  )
+}
+
+
 function TablaConductores({ list, accounts, onAbrir, t }) {
   const [orden, setOrden] = useState({ col: 'name', asc: true })
 
@@ -920,7 +1023,10 @@ export default function Conductores() {
                   <Plus size={14} /> {t('drv.add')}
                 </button>
               </div>
-            : <TablaConductores list={list} accounts={accounts} onAbrir={(d) => setModal({ driver: d })} t={t} />
+            : <>
+                <AvisoAccesos list={list} accounts={accounts} onHecho={load} />
+                <TablaConductores list={list} accounts={accounts} onAbrir={(d) => setModal({ driver: d })} t={t} />
+              </>
       )}
 
       {/* Ranking + scoring unificado */}
