@@ -1,0 +1,14 @@
+{
+  "version": "2.20.0",
+  "ficheros": [
+    "README.md",
+    "background.js",
+    "bridge.js",
+    "interceptor.js",
+    "manifest.json",
+    "popup.html",
+    "popup.js"
+  ],
+  "kb": 29,
+  "generado": "2026-08-31"
+}

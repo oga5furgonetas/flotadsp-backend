@@ -3,6 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import {
   Search, RefreshCw, PackageSearch, ShieldAlert, Activity, Radar,
   MapPin, User, Route as RouteIcon, Box, Clock, Zap, Copy, Check, Loader2, X, Calendar,
+  Download, Lock,
 } from 'lucide-react'
 import {
   cortexOverview, cortexPackages, cortexPackage, cortexAlerts, cortexRoutes,
@@ -203,8 +204,15 @@ function SetupCard({ onSeed, onReset, seeding }) {
   const { t } = useT()
   const [tok, setTok] = useState(null)
   const [copied, setCopied] = useState('')
+  const [ext, setExt] = useState(null)
   const load = () => cortexIngestToken().then(r => setTok(r.data)).catch(() => {})
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    // Qué versión se está sirviendo. Lo escribe el empaquetador en cada
+    // despliegue: sin esto, un cliente con un fallo ya arreglado no sabe si
+    // tiene la última, y nosotros tampoco.
+    fetch('/extension.json').then((r) => r.json()).then(setExt).catch(() => {})
+  }, [])
   const copy = (txt, key) => { navigator.clipboard?.writeText(txt).catch(() => {}); setCopied(key); setTimeout(() => setCopied(''), 1500) }
   return (
     <div className="rounded-2xl border border-white/[0.05] bg-white/[0.02] p-5">
@@ -212,20 +220,56 @@ function SetupCard({ onSeed, onReset, seeding }) {
       <p className="mt-1 text-[13px] leading-relaxed text-dark-400">
         {t('px.setupIntro')}
       </p>
-      <ol className="mt-3 space-y-1.5 text-[12.5px] text-dark-400">
-        <li>1. {t('px.paso1a')} <code className="rounded bg-dark-800 px-1 text-dark-200">FlotaDSP-Cortex.zip</code> {t('px.paso1b')}</li>
-        <li>2. Chrome → <code className="rounded bg-dark-800 px-1 text-dark-200">chrome://extensions</code> → {t('px.paso2')}</li>
-        <li>3. {t('px.paso3')}</li>
-      </ol>
+      {/* PASO 1: descargar. Antes ponia «te lo paso», o sea que habia que
+          mandar el ZIP a mano por WhatsApp — con dos empresas dandose de alta
+          el mismo dia eso no se sostiene, y ademas nadie sabia que version
+          tenia puesta cada una. El ZIP se regenera en cada despliegue desde el
+          codigo del repositorio, asi que siempre es el ultimo. */}
+      <div className="mt-3.5 rounded-xl border border-dark-700 bg-dark-900/60 p-3.5">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <a href="/FlotaDSP-Cortex.zip" download
+            className="flex items-center gap-2 rounded-lg bg-brand-400 px-3.5 py-2 text-[13px] font-semibold text-brand-tinta hover:brightness-110">
+            <Download size={15} /> {t('px.descargar')}
+          </a>
+          {ext?.version && (
+            <span className="text-[12px] text-dark-500">
+              v<span className="cifra text-dark-300">{ext.version}</span>
+              {ext.kb ? ` · ${ext.kb} KB` : ''}
+            </span>
+          )}
+        </div>
+        <ol className="mt-3 space-y-2 text-[12.5px] leading-relaxed text-dark-400">
+          <li><b className="text-dark-200">1.</b> Descarga el ZIP y <b>descomprímelo</b> en una
+            carpeta que no vayas a borrar. Chrome carga la extensión desde ahí: si mueves
+            o borras la carpeta, deja de funcionar.</li>
+          <li><b className="text-dark-200">2.</b> Abre Chrome en{' '}
+            <code className="rounded bg-dark-800 px-1 text-dark-200">chrome://extensions</code>,
+            activa arriba a la derecha <b>Modo de desarrollador</b> y pulsa{' '}
+            <b>Cargar descomprimida</b>. Elige la carpeta del paso 1.</li>
+          <li><b className="text-dark-200">3.</b> Pulsa el icono de la extensión, <b>pega el
+            token de abajo</b> y guarda. Se guarda solo al pegarlo.</li>
+          <li><b className="text-dark-200">4.</b> Entra en Cortex como siempre. Los datos
+            empiezan a llegar aquí en unos minutos, sin hacer nada más.</li>
+        </ol>
+      </div>
+
       {tok && (
         <div className="mt-3 space-y-2">
+          {/* De QUIEN es este token. Es lo que separa los datos de una empresa
+              de los de otra: si dos personas pegan el mismo, sus paquetes
+              acaban mezclados y no hay forma de separarlos despues. */}
+          <div className="flex items-center gap-1.5 text-[12px] font-semibold text-dark-300">
+            <Lock size={12} className="text-brand-400" />
+            {t('px.tuToken')}
+            {tok.caduca && <span className="font-normal text-dark-500">· caduca el {tok.caduca}</span>}
+          </div>
           <div className="flex items-center gap-2">
             <input readOnly value={tok.token} className="min-w-0 flex-1 truncate rounded-lg border border-dark-700 bg-dark-950 px-3 py-2 font-mono text-[11px] text-dark-300" />
             <button onClick={() => copy(tok.token, 'tok')} className="flex items-center gap-1 rounded-lg border border-dark-700 bg-dark-800 px-3 py-2 text-[12px] font-semibold text-dark-200 hover:border-dark-600">
               {copied === 'tok' ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />} Token
             </button>
           </div>
-          <div className="text-[11px] text-dark-500">{t('px.tokenInfo')}</div>
+          <div className="text-[11px] leading-relaxed text-dark-500">{t('px.tokenInfo')}</div>
         </div>
       )}
       <div className="mt-4 flex flex-wrap gap-2">

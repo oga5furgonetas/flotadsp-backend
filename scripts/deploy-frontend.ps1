@@ -11,6 +11,19 @@
 $ErrorActionPreference = "Stop"
 
 $raiz = Join-Path $PSScriptRoot ".."
+
+# La extension que descargan los clientes se reempaqueta SIEMPRE antes de
+# compilar. Un ZIP generado a mano se queda viejo y nadie se entera hasta que
+# un cliente reporta un fallo que ya estaba arreglado hace tres versiones.
+Write-Host "==> Empaquetando la extension de Cortex..."
+# Con la ruta COMPLETA: en esta maquina `node` a secas resuelve a un stub de
+# system32 que no imprime nada y no devuelve codigo de salida, asi que el
+# empaquetado fallaba en silencio y tumbaba el despliegue entero.
+$nodeExe = Join-Path $env:ProgramFiles "nodejs\node.exe"
+if (-not (Test-Path $nodeExe)) { $nodeExe = "node" }
+& $nodeExe (Join-Path $PSScriptRoot "empaquetar-extension.mjs")
+if ($LASTEXITCODE -ne 0) { throw "no se pudo empaquetar la extension" }
+
 Set-Location (Join-Path $raiz "frontend-v2")
 
 Write-Host "==> Compilando frontend (produccion)..."
