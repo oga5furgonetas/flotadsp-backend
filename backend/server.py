@@ -20299,16 +20299,38 @@ async def import_roster_image(
 # =========================
 
 @api_router.get("/reports/fleet-pdf")
-async def fleet_report_pdf(_=Depends(require_admin)):
-    """Genera un informe PDF del estado de la flota, listo para enviar al coordinador."""
-    total_vehicles = await db.vehicles.count_documents({"status": {"$nin": ["deleted", "baja"]}})
-    total_inspections = await db.inspections.count_documents({})
+async def fleet_report_pdf(center: Optional[str] = None, user: dict = Depends(require_admin)):
+    """Genera un informe PDF del estado de la flota, listo para enviar al coordinador.
+
+    EL CENTRO NO ES OPCIONAL DE VERDAD. Este informe existia desde hacia meses
+    y no lo llamaba NINGUNA pantalla, asi que nadie habia notado que contaba
+    la flota entera de la empresa: en una DSP con tres naves, el numero que
+    sales a enseñar mezcla las tres y no cuadra con nada de lo que Amazon mide,
+    que va siempre por estacion. Un informe que no cuadra se cae en la primera
+    pregunta, y es peor que no llevar informe.
+
+    Sin `center` sigue saliendo el total —que es lo que quiere el dueño de la
+    DSP para su propia foto—, pero el PDF lo DICE en la cabecera, para que
+    nadie lo enseñe creyendo que es de una nave.
+    """
+    filtro_centro = _filtro_centro(user, center) or {}
+    vq = dict(filtro_centro)
+    vq["status"] = {"$nin": ["deleted", "baja"]}
+    total_vehicles = await db.vehicles.count_documents(vq)
+
+    # `inspections` no tiene campo `center` (0 de 2.380 documentos, gotcha 6):
+    # se acota por las furgonetas del centro, como en el resto de la app.
+    iq: dict = {"deleted": {"$ne": True}}
+    if filtro_centro:
+        vids = await db.vehicles.distinct("id", filtro_centro)
+        iq["vehicle_id"] = {"$in": vids}
+    total_inspections = await db.inspections.count_documents(iq)
     alerts = await db.alerts.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
 
     # Desglose severidad
     sev_counts = {"leve": 0, "moderado": 0, "grave": 0, "critico": 0}
     total_cost = 0.0
-    async for insp in db.inspections.find({"deleted": {"$ne": True}}, {"_id": 0, "analysis": 1}):
+    async for insp in db.inspections.find(iq, {"_id": 0, "analysis": 1}):
         a = insp.get("analysis") or {}
         sev = a.get("severity")
         if sev in sev_counts:
@@ -20326,6 +20348,11 @@ async def fleet_report_pdf(_=Depends(require_admin)):
     styles = getSampleStyleSheet()
     story = []
     story.append(Paragraph("<b>FlotaDSP - Informe de Estado de Flota</b>", styles["Title"]))
+    # De QUE es el informe, en la propia hoja. Un PDF que solo pone una
+    # fecha se acaba enseñando como si fuera de la nave de la que se habla.
+    _ambito = ("Centro: %s" % center) if center and center != "Todos" else (
+        "Toda la flota (todos los centros)")
+    story.append(Paragraph(_ambito, styles["Heading3"]))
     story.append(Paragraph(datetime.now(timezone.utc).strftime("Generado: %d/%m/%Y"), styles["Normal"]))
     story.append(Spacer(1, 0.6*cm))
 
@@ -20354,7 +20381,8 @@ async def fleet_report_pdf(_=Depends(require_admin)):
     buf.seek(0)
 
     from fastapi.responses import StreamingResponse
-    fname = "informe_flota_" + datetime.now(timezone.utc).strftime("%Y%m%d") + ".pdf"
+    _suf = ("_" + re.sub(r"[^A-Za-z0-9]", "", center)) if center and center != "Todos" else ""
+    fname = "informe_flota%s_%s.pdf" % (_suf, datetime.now(timezone.utc).strftime("%Y%m%d"))
     return StreamingResponse(buf, media_type="application/pdf",
                              headers={"Content-Disposition": f"attachment; filename={fname}"})
 
@@ -24086,16 +24114,21 @@ async def get_route_plan(code: str, center: str = "", date: Optional[str] = None
 
 
 @api_router.get("/metrics/routeplan-available")
-async def routeplan_available(center: str = "OGA5", _=Depends(require_admin)):
+async def routeplan_available(center: str = "", _=Depends(require_admin)):
     """Lista de códigos de ruta con plan disponible hoy (para enlazar el mapa)."""
+    center = center or await _centro_por_defecto()
     today = _dia_negocio()
     docs = await db.route_plans.find({"center": center, "date": today}, {"_id": 0, "code": 1, "stops_count": 1, "distance_km": 1}).to_list(200)
     return {"date": today, "routes": {d["code"]: {"stops": d.get("stops_count"), "km": d.get("distance_km")} for d in docs}}
 
 
 @api_router.post("/metrics/upload-report")
-async def upload_amazon_report(file: UploadFile = File(...), center: str = Form("OGA5"), _=Depends(require_admin)):
+async def upload_amazon_report(file: UploadFile = File(...), center: str = Form(""), _=Depends(require_admin)):
     """Sube un report de Amazon (Scorecard, Daily, POD, CDF…) y lo analiza con IA."""
+    # El centro de la empresa, no el de Dani: subir un report sin decir centro
+    # lo guardaba bajo "OGA5", que en otra DSP no existe — y ahi se quedaba,
+    # sin salir en ninguna pantalla y sin ningun error.
+    center = center or await _centro_por_defecto()
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Archivo vacío")
@@ -28424,7 +28457,7 @@ async def import_official_scorecard(file: UploadFile = File(...), center: Option
     except Exception as e:
         logger.error(f"import-official gemini: {type(e).__name__}: {repr(e)}")
         raise HTTPException(status_code=502, detail="La IA no pudo leer la scorecard; reintenta.")
-    cen = (sc.get("center") or center or "").upper() or "OGA5"
+    cen = (sc.get("center") or center or "").upper() or await _centro_por_defecto()
     week = sc.get("week")
     year = sc.get("year")
     if not week:
@@ -28650,7 +28683,7 @@ def _parse_contact_compliance(content: bytes, filename: str):
 
 async def _store_weekly_metric(center, week, key, value):
     """Guarda UNA métrica semanal (de un reporte por métrica) en scorecard_weekly."""
-    cen = (center or "OGA5").upper()
+    cen = (center or await _centro_por_defecto()).upper()
     await db.scorecard_weekly.update_one(
         {"center": cen, "week": int(week)},
         {"$set": {"center": cen, "week": int(week), f"values.{key}": value,
@@ -28684,7 +28717,7 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
         if not cc:
             raise HTTPException(status_code=422, detail="No pude leer la tabla del Contact Compliance.")
         await _store_weekly_metric(center, cc["week"], cc["key"], cc["value"])
-        return {"tipo": "metrica", "ok": True, "center": (center or "OGA5").upper(),
+        return {"tipo": "metrica", "ok": True, "center": (center or await _centro_por_defecto()).upper(),
                 "mensaje": f"Contact Compliance W{cc['week']}: CC = {cc['value']}% ({cc['detalle']})"}
 
     try:
@@ -28723,7 +28756,7 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
                                         "umbrales de tu nave" + umbrales_msg[1:] +
                                         ". Vuelve a subirlo más tarde para las métricas.")}
                 raise
-            cen = (sc.get("center") or center or "").upper() or "OGA5"
+            cen = (sc.get("center") or center or "").upper() or await _centro_por_defecto()
             week = sc.get("week")
             if not week:
                 raise HTTPException(status_code=422, detail="No reconocí la semana en el PDF (¿es una scorecard oficial?)")
@@ -28922,7 +28955,7 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
 
     # Umbrales de esta nave para poder decir en que nivel cae.
     wnum = _sun_to_week_num(dom.strftime("%Y-%m-%d"))
-    thr, _meta = await _sc_thresholds(center or "OGA5", wnum)
+    thr, _meta = await _sc_thresholds(center or await _centro_por_defecto(), wnum)
     thr_dcr = (thr or {}).get("dcr") or {}
 
     # LA FOTO CONGELADA MANDA SOBRE EL RECUENTO EN VIVO.
@@ -29564,7 +29597,7 @@ async def scorecard_delete_source(center: str, kind: str, ref: str,
 
 
 async def _store_resumen_semanal(sem, center):
-    cen = (center or "OGA5").upper()
+    cen = (center or await _centro_por_defecto()).upper()
     guardadas = []
     for wn, vals in sem.items():
         await db.scorecard_weekly.update_one(
@@ -29579,7 +29612,7 @@ async def _store_resumen_semanal(sem, center):
 
 
 async def _store_ratios(ratios, center):
-    cen = (center or "OGA5").upper()
+    cen = (center or await _centro_por_defecto()).upper()
     n = 0
     for date, vals in ratios["days"].items():
         if not vals:

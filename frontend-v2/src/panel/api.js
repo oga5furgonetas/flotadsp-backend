@@ -542,6 +542,11 @@ export const asignarMensajeTaller = (id, ordenId) =>
 export const getInformeFlota = (params) => api.get('/taller/export', { params })
 export const descargarInformeFlota = (params) =>
   api.get('/taller/export', { params: { ...params, formato: 'csv' }, responseType: 'blob' })
+/* El mismo informe en PDF, con tabla y cabecera: es el que se imprime o se
+   manda por correo. El CSV es para que Amazon lo abra y lo cruce; el PDF, para
+   enseñarlo. Existia desde hacia meses y no lo llamaba ninguna pantalla. */
+export const descargarInformeFlotaPdf = (params) =>
+  api.get('/reports/fleet-pdf', { params, responseType: 'blob' })
 export const getLlavesPartner = () => api.get('/partner/tokens')
 export const crearLlavePartner = (body) => api.post('/partner/tokens', body)
 export const revocarLlavePartner = (id) =>

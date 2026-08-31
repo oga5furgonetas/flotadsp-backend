@@ -20,6 +20,66 @@ const RAIZ = process.cwd()
    Si alguien cambia esa línea, el número de línea baila y vuelve a salir, que
    es justo lo que se quiere. */
 const REVISADOS = new Map([
+  // ── DIVISIONES POR len() ──────────────────────────────────────────────
+  // Las 22 miradas UNA A UNA el 31-08-2026, con el bloque entero delante y no
+  // solo la linea. Ninguna puede dar ZeroDivisionError, y no por suerte:
+  //
+  //   · doce llevan su guarda EN LA MISMA LINEA (`… if xs else None`):
+  //     puntualidad, evidencia y honestidad del scoring, dias e importes por
+  //     taller, tasa y rescates del historial, ratios de la semana, y los dos
+  //     de cortex_overview;
+  //   · seis la llevan en un `if` justo encima que corta antes de llegar:
+  //     `if len(poly_px) < 3: continue` al anotar la foto, `if len(g) <
+  //     _EXP_MIN_MODELO: continue` en exposicion, `if center_scores:` en el
+  //     ranking, `if vals:` en las dos del cuadrante, `if len(horas) >= 2:` en
+  //     la sugerencia de direccion, `if total["despachados"] and
+  //     len(cerrados):` en calidad;
+  //   · dos son estructurales: `porn.setdefault(n, []).append(...)` en el
+  //     geocodificador y `explicit.setdefault(key, []).append(...)` en la
+  //     calibracion crean cada clave CON un elemento dentro, asi que una
+  //     lista vacia no existe;
+  //   · una la lleva en la linea siguiente (`hora_media`, `if g["horas"]`);
+  //   · y la del WHC se arreglo hoy: era la unica que reventaba de verdad —
+  //     una empresa sin conductores en el cuadrante se llevaba un 500 el
+  //     primer dia.
+  //
+  // Se anota aqui y deja de salir. Veintidos avisos que no son nada tapan al
+  // que si lo es: es lo mismo que pasaba con los toISOString.
+  ['backend/server.py:division-sin-guard',
+   'Las 22 revisadas una a una el 31-08-2026: doce con la guarda en la misma linea, ' +
+   'seis con un `if` que corta antes, dos donde la coleccion se crea siempre con un ' +
+   'elemento (setdefault+append), una con el guard en la linea siguiente. La unica que ' +
+   'reventaba de verdad era la del WHC —empresa sin conductores, 500 el primer dia— y ' +
+   'esa se arreglo, no se tolera.'],
+  ['backend/fiabilidad.py:division-sin-guard',
+   'Las tres revisadas el 31-08-2026. Dos llevan `if bajos`/`if altos` en la misma linea. ' +
+   'La de `len(puntos)` esta protegida por la salida temprana `if len(datos) < ' +
+   '_MIN_MUESTRAS: return`: los cinco cortes de la validacion cruzada reparten TODOS los ' +
+   'datos, asi que len(puntos) == len(datos) y ya se sabe que no es cero.'],
+  ['scripts/conciliar_diarios.py:division-sin-guard',
+   'Dentro de `if v:`. Y es un script de analisis que se lanza a mano, no codigo servido.'],
+  // ── FECHAS POR ISO ────────────────────────────────────────────────────
+  // Los ocho revisados el 31-08-2026. Ninguno pinta un dato de nadie:
+  ['frontend-v2/src/panel/pages/Scorecard.jsx:toisostring-fecha-local',
+   '`addDays` construye la fecha con `T12:00:00Z` y avanza con `setUTCDate`: todo en UTC ' +
+   'y a mediodia A PROPOSITO, asi que el ISO es exactamente lo correcto y el cambio de ' +
+   'hora de marzo y octubre no puede mover el dia. Cambiarlo a hora local seria empeorarlo.'],
+  ['frontend-v2/e2e/api-simulada.js:toisostring-fecha-local',
+   'Fixtures de los tests de navegador: fabrican fechas de mentira para una API simulada. ' +
+   'No hay dato de nadie detras.'],
+  ['frontend-v2/src/panel/lab/apiLab.js:toisostring-fecha-local',
+   'Laboratorio: datos inventados para probar pantallas. No sale a produccion.'],
+  ['frontend-v2/src/panel/lab/app2/datosPlus.js:toisostring-fecha-local',
+   'Laboratorio: la flota de mentira con la que se prueban las pantallas nuevas.'],
+  ['frontend-v2/src/panel/lab/datos.js:toisostring-fecha-local',
+   'Laboratorio: generador de datos de ejemplo.'],
+  ['frontend-v2/src/panel/lab/v2/amazon.js:toisostring-fecha-local',
+   'Laboratorio: semanas de scorecard simuladas para maquetar.'],
+  ['scripts/eval_danos.py:division-sin-guard',
+   'Script de evaluacion que se lanza a mano contra un lote de inspecciones ya elegido: ' +
+   'con `common` vacio no hay nada que evaluar y el resultado no significaria nada. ' +
+   'Reventar ahi avisa mejor que imprimir un cero que parece una medida.'],
+
   // Mirados uno por uno el 30-08-2026 CONTRA LA BASE DE PRODUCCIÓN, que es la
   // única forma de saber si un patrón peligroso puede dispararse de verdad.
   ['backend/server.py:status-ne-deleted',
@@ -157,14 +217,19 @@ for (const f of ficheros(RAIZ)) {
    de revisar sitios que en su mayoría están bien, y mientras tanto CI en rojo
    deja de mirarse. Lo que NO se tolera es que suba: un patrón nuevo es código
    recién escrito, y ese es el momento barato de arreglarlo. */
-/* El trinquete BAJA cuando se limpia, si no deja de apretar. De 45 a 36 el
-   31-08-2026: la division del WHC (reventaba con una empresa sin conductores),
+/* El trinquete BAJA cuando se limpia, si no deja de apretar. De 45 a 8 el
+   31-08-2026, y a CERO al terminar: cada aviso que queda en la cuenta es uno
+   que ya nadie mira. Las 28 divisiones por len() se miraron UNA A UNA con el bloque
+   entero delante: ninguna puede reventar y estan anotadas en REVISADOS con el
+   motivo, que es lo que hay que hacer con un aviso que no es nada — dejarlo
+   en la cuenta lo unico que consigue es tapar al que si lo es. Lo arreglado
+   de verdad fue: la division del WHC (reventaba con una empresa sin conductores),
    los dos toISOString de la extension (le pedia a Cortex el resumen del dia
    ANTERIOR entre medianoche y las 2) y los dos del Dashboard (el rotulo decia
    un dia y el dato era el del anterior). Los 8 que quedan de fecha son datos
    de laboratorio, fixtures de e2e y el de Scorecard, que trabaja en UTC a
    mediodia A PROPOSITO y es correcto. */
-const TOLERADOS = 36
+const TOLERADOS = 0
 
 console.log(`\npatrones: ${PATRONES.length} reglas, todas salidas de un bug real de este proyecto`)
 if (!avisos) {

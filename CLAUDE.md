@@ -653,12 +653,13 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   despues de tocar multiempresa, importaciones, centros o el flujo de taller.
   Deja la empresa creada a proposito —no se borra sola: un script de smoke no
   debe poder borrar nada—; se quita desde el panel de super-admin.
-- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son catorce:
+- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son quince:
   `check-i18n`, `check-routes`, `check-huerfanas`, `check-permisos`, `check-tema`,
   `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones`,
   `check-tema-mezclado`, `check-efectos`, `check_contracts.py`,
-  `check_objectid.py` y `check_tenant.py`. Tres llevan trinquete (toleran el
-  backlog actual y fallan si sube).
+  `check_objectid.py`, `check_tenant.py` y `check_multiempresa.py`.
+  `check-patrones` ya NO tiene backlog —los 45 avisos se miraron uno a uno el
+  31-08-2026 y quedó a cero—; `check-huerfanas` sí (28).
 - `check-huerfanas.mjs` lista rutas del backend que no llama ningún cliente. Una
   ruta sin UI no falla, simplemente no se usa: así estuvieron meses el módulo de
   turnos entero y las subidas de métricas. Lleva trinquete (tolera el backlog

@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import {
   getOrdenes, getResumenOrdenes, getOrden, crearOrden, editarOrden, enlaceOrden,
+  descargarInformeFlotaPdf,
   getParteFurgoneta, dispararSeguimientoTalleres,
   getVehicles, getWorkshops, crearTaller, exportarOrdenes, ordenesPorTaller,
   getIncidents, getDanosPendientes, getFurgonetasParadas, prepararOrden,
@@ -194,6 +195,7 @@ export default function OrdenesTrabajo() {
   const [verCanal, setVerCanal] = useState(false)
   const [informe, setInforme] = useState(null)
   const [bajandoInforme, setBajandoInforme] = useState(false)
+  const [bajandoPdf, setBajandoPdf] = useState(false)
   const [verLlaves, setVerLlaves] = useState(false)
 
   const [nueva, setNueva] = useState(null)
@@ -379,6 +381,25 @@ export default function OrdenesTrabajo() {
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se pudo generar el informe.')
     } finally { setBajandoInforme(false) }
+  }
+
+  /* El mismo informe en PDF. Va con el centro SIEMPRE que haya uno elegido:
+     el endpoint contaba la flota entera de la empresa y en una DSP con tres
+     naves ese numero no cuadra con nada de lo que mide Amazon, que va por
+     estacion. Ahora el propio PDF dice en la cabecera de que ambito es. */
+  const bajarInformePdf = async () => {
+    setBajandoPdf(true)
+    try {
+      const r = await descargarInformeFlotaPdf({ ...(center && center !== 'Todos' ? { center } : {}) })
+      const url = URL.createObjectURL(new Blob([r.data], { type: 'application/pdf' }))
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `flotadsp_${center || 'todos'}_${hoyLocal()}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo generar el PDF.')
+    } finally { setBajandoPdf(false) }
   }
 
   const abrirAlta = async () => {
@@ -654,10 +675,19 @@ export default function OrdenesTrabajo() {
             <span className="text-[12.5px] text-slate-500">
               {informe.informe.desde} a {informe.informe.hasta} · para entregar a Amazon
             </span>
-            <button onClick={bajarInforme} disabled={bajandoInforme}
+            {/* Dos formatos porque son para dos cosas distintas: el CSV lo
+                abre Amazon y lo cruza con lo suyo; el PDF es el que se imprime
+                o se manda por correo. El PDF llevaba meses hecho y sin ningun
+                boton que lo pidiera. */}
+            <button onClick={bajarInforme} disabled={bajandoInforme || bajandoPdf}
               className="ml-auto flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
               <Download size={14} />
-              {bajandoInforme ? 'Generando…' : 'Descargar'}
+              {bajandoInforme ? 'Generando…' : 'CSV'}
+            </button>
+            <button onClick={bajarInformePdf} disabled={bajandoInforme || bajandoPdf}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+              <Download size={14} />
+              {bajandoPdf ? 'Generando…' : 'PDF'}
             </button>
           </div>
 
