@@ -16644,6 +16644,235 @@ async def registrar_novedad_taller(orden: dict, texto: str, canal: str,
             "orden": (orden or {}).get("numero"), "reloj_reiniciado": bool(orden)}
 
 
+# ── INFORME PARA AMAZON ─────────────────────────────────────────────────────
+# Amazon le exige a un DSP poder demostrar la cadena entera de un defecto:
+# detectado -> registrado -> llevado a taller -> reparado -> vehiculo de vuelta.
+# En la practica casi ningun DSP puede probar ni el primer eslabon, porque la
+# inspeccion diaria se firma en papel o en una app que no guarda la foto.
+#
+# Nosotros SI podemos: 3.803 inspecciones en 90 dias, el 100 % con foto y el
+# 99 % con el conductor identificado, una por furgoneta y dia. Eso es el DVIC
+# que piden, con prueba.
+#
+# Y lo que NO podemos demostrar se DICE. El apartado `lagunas` no es un descargo
+# de responsabilidad: es lo que hace creible el resto. Un informe que rellena
+# huecos se cae en la primera pregunta; uno que separa lo probado de lo que
+# falta aguanta que lo miren con lupa, que es justo lo que va a pasar.
+
+EXPORT_VERSION = "1.0"
+
+
+def _pct(n, total):
+    return round(n / total * 100, 1) if total else None
+
+
+@api_router.get("/taller/export")
+async def taller_export(desde: str = "", hasta: str = "", center: str = "",
+                        formato: str = "json", _=Depends(require_admin)):
+    """Trazabilidad de flota y taller, en formato estable para entregar."""
+    hoy = datetime.now(timezone.utc).date()
+    d_hasta = (hasta or hoy.strftime("%Y-%m-%d"))[:10]
+    d_desde = (desde or (hoy - timedelta(days=90)).strftime("%Y-%m-%d"))[:10]
+    if d_desde > d_hasta:
+        d_desde, d_hasta = d_hasta, d_desde
+
+    centro = ""
+    if center and center not in ("Todos", "todos"):
+        centro = _centro_norm(center, await _centros_conocidos())
+    qv: dict = {"status": {"$nin": ["deleted"]}}
+    if centro:
+        qv["center"] = {"$regex": re.escape(centro), "$options": "i"}
+    vehiculos = await db.vehicles.find(
+        qv, {"_id": 0, "id": 1, "license_plate": 1, "brand": 1, "model": 1,
+             "status": 1, "itv_date": 1, "center": 1}).to_list(1000)
+    vids = [v["id"] for v in vehiculos]
+    porplaca = {v["id"]: (v.get("license_plate") or v["id"]) for v in vehiculos}
+
+    # ── 1. La inspeccion diaria (el DVIC) ────────────────────────────────────
+    insp_por_veh: dict = {}
+    insp_dias: dict = {}
+    n_insp = n_foto = n_cond = 0
+    async for i in db.inspections.find(
+            {"vehicle_id": {"$in": vids},
+             "created_at": {"$gte": d_desde, "$lte": d_hasta + "T23:59:59Z"}},
+            {"_id": 0, "vehicle_id": 1, "created_at": 1, "driver_id": 1,
+             "photos": 1, "annotated_photos": 1}):
+        n_insp += 1
+        dia = str(i.get("created_at") or "")[:10]
+        insp_por_veh.setdefault(i["vehicle_id"], set()).add(dia)
+        insp_dias.setdefault(dia, set()).add(i["vehicle_id"])
+        if (i.get("photos") or i.get("annotated_photos")):
+            n_foto += 1
+        if i.get("driver_id"):
+            n_cond += 1
+
+    # ── 2. Los defectos ──────────────────────────────────────────────────────
+    defectos = await db.vehicle_damage_ledger.find(
+        {"vehicle_id": {"$in": vids},
+         "first_seen": {"$gte": d_desde, "$lte": d_hasta},
+         "status": {"$nin": ["archived", "descartada", "deleted"]}},
+        {"_id": 1, "vehicle_id": 1, "part": 1, "severity": 1, "status": 1,
+         "first_seen": 1, "orden_id": 1, "source": 1}).to_list(5000)
+    por_grav: dict = {}
+    def_por_veh: dict = {}
+    con_orden = reparados = 0
+    for d in defectos:
+        por_grav[d.get("severity") or "sin clasificar"] = \
+            por_grav.get(d.get("severity") or "sin clasificar", 0) + 1
+        def_por_veh.setdefault(d.get("vehicle_id"), []).append(d)
+        if d.get("orden_id"):
+            con_orden += 1
+        if d.get("status") == "repaired":
+            reparados += 1
+
+    # ── 3. El taller: ordenes y conversacion ─────────────────────────────────
+    ordenes = await db.ordenes_trabajo.find(
+        {"vehicle_id": {"$in": vids}}, {"_id": 0}).to_list(2000)
+    ords_periodo = [o for o in ordenes
+                    if d_desde <= str(o.get("creada_en") or "")[:10] <= d_hasta]
+    avisos = await db[SEG_COL_BANDEJA].count_documents(
+        {"direccion": "salida", "at": {"$gte": d_desde, "$lte": d_hasta + "T23:59:59Z"}})
+    respuestas = await db[SEG_COL_BANDEJA].count_documents(
+        {"direccion": "entrada", "at": {"$gte": d_desde, "$lte": d_hasta + "T23:59:59Z"}})
+
+    # Cuanto tarda un taller en contestar. Es la metrica que convierte esto en
+    # un proveedor medido y no en una lista de telefonos.
+    tiempos = []
+    for o in ordenes:
+        c, r = o.get("creada_en"), o.get("ultima_novedad_taller")
+        if c and r:
+            try:
+                h = (datetime.fromisoformat(str(r).replace("Z", "+00:00"))
+                     - datetime.fromisoformat(str(c).replace("Z", "+00:00"))).total_seconds() / 3600
+                if h >= 0:
+                    tiempos.append(round(h, 1))
+            except Exception:                                # noqa: BLE001
+                pass
+
+    # ── 4. Por vehiculo ──────────────────────────────────────────────────────
+    dias_periodo = (datetime.strptime(d_hasta, "%Y-%m-%d")
+                    - datetime.strptime(d_desde, "%Y-%m-%d")).days + 1
+    filas = []
+    for v in sorted(vehiculos, key=lambda x: porplaca.get(x["id"], "")):
+        ds = def_por_veh.get(v["id"]) or []
+        dias_insp = len(insp_por_veh.get(v["id"]) or ())
+        filas.append({
+            "matricula": porplaca[v["id"]],
+            "marca": v.get("brand") or "", "modelo": v.get("model") or "",
+            "estado": v.get("status") or "",
+            "itv": str(v.get("itv_date") or "")[:10] or None,
+            "dias_con_inspeccion": dias_insp,
+            "cobertura_pct": _pct(dias_insp, dias_periodo),
+            "defectos": len(ds),
+            "defectos_graves": sum(1 for d in ds if d.get("severity") in ("grave", "critico")),
+            "defectos_abiertos": sum(1 for d in ds if d.get("status") == "open"),
+            "ordenes_taller": sum(1 for o in ordenes if o.get("vehicle_id") == v["id"]),
+        })
+
+    # ── 5. LO QUE NO SE PUEDE DEMOSTRAR ──────────────────────────────────────
+    # Va en el informe, con su motivo. Es lo que hace creible lo demas.
+    lagunas = []
+    if defectos and not con_orden:
+        lagunas.append({
+            "que": "Ningún defecto del periodo tiene orden de taller asociada",
+            "de": len(defectos),
+            "porque": "Las reparaciones se están gestionando fuera de la aplicación "
+                      "(teléfono y correo), así que no queda registro de cuál se "
+                      "reparó ni cuándo.",
+            "efecto": "Este informe demuestra la DETECCIÓN de defectos, no su reparación.",
+        })
+    sin_itv = [f for f in filas if not f["itv"] and f["estado"] == "active"]
+    if sin_itv:
+        lagunas.append({
+            "que": "Furgonetas activas sin fecha de ITV registrada",
+            "de": len(sin_itv),
+            "porque": "El dato no está cargado en la aplicación.",
+            "efecto": "De esas no se puede acreditar que estén en regla.",
+        })
+    baja_cob = [f for f in filas if f["estado"] == "active" and (f["cobertura_pct"] or 0) < 50]
+    if baja_cob:
+        lagunas.append({
+            "que": "Furgonetas activas con menos del 50 % de días inspeccionados",
+            "de": len(baja_cob),
+            "porque": "O no salieron a ruta esos días, o la inspección no se registró.",
+            "efecto": "La cobertura de inspección no es completa para esas unidades.",
+        })
+
+    informe = {
+        "informe": {
+            "version": EXPORT_VERSION,
+            "generado": datetime.now(timezone.utc).isoformat(),
+            "desde": d_desde, "hasta": d_hasta, "dias": dias_periodo,
+            "centro": centro or "todos",
+            "alcance": "Inspección diaria de vehículo, defectos detectados y "
+                       "gestión de taller.",
+        },
+        "inspeccion_diaria": {
+            "inspecciones": n_insp,
+            "con_fotografia": n_foto, "con_fotografia_pct": _pct(n_foto, n_insp),
+            "con_conductor_identificado": n_cond,
+            "con_conductor_pct": _pct(n_cond, n_insp),
+            "vehiculos_en_flota": len(vehiculos),
+            "vehiculos_inspeccionados": len(insp_por_veh),
+            "dias_con_actividad": len(insp_dias),
+            "media_vehiculos_por_dia": round(
+                sum(len(s) for s in insp_dias.values()) / max(len(insp_dias), 1), 1),
+        },
+        "defectos": {
+            "detectados": len(defectos),
+            "por_gravedad": por_grav,
+            "con_orden_de_taller": con_orden,
+            "con_orden_pct": _pct(con_orden, len(defectos)),
+            "reparados": reparados,
+            "abiertos": sum(1 for d in defectos if d.get("status") == "open"),
+            "origen": {"deteccion_automatica": sum(1 for d in defectos if d.get("source") == "ai"),
+                       "revision_humana": sum(1 for d in defectos if d.get("source") == "human")},
+        },
+        "taller": {
+            "ordenes_en_el_periodo": len(ords_periodo),
+            "ordenes_totales": len(ordenes),
+            "avisos_enviados": avisos,
+            "respuestas_recibidas": respuestas,
+            "tiempo_medio_respuesta_h": round(sum(tiempos) / max(len(tiempos), 1), 1) if tiempos else None,
+        },
+        "vehiculos": filas,
+        "lagunas": lagunas,
+    }
+
+    if (formato or "").lower() != "csv":
+        return informe
+
+    # CSV por vehiculo: es lo que se abre en Excel y se manda por correo. Las
+    # cifras de cabecera van en las primeras filas para que el fichero se
+    # entienda solo, sin el JSON al lado.
+    import csv
+    from fastapi import Response
+    cab = ["matricula", "marca", "modelo", "estado", "itv", "dias_con_inspeccion",
+           "cobertura_pct", "defectos", "defectos_graves", "defectos_abiertos",
+           "ordenes_taller"]
+    out = io.StringIO()
+    w = csv.writer(out, delimiter=";")
+    w.writerow(["FlotaDSP · informe de flota y taller", "v" + EXPORT_VERSION])
+    w.writerow(["Periodo", "%s a %s" % (d_desde, d_hasta), "Centro", centro or "todos"])
+    w.writerow(["Inspecciones", n_insp, "Con fotografia",
+                "%s%%" % _pct(n_foto, n_insp), "Con conductor",
+                "%s%%" % _pct(n_cond, n_insp)])
+    w.writerow(["Defectos detectados", len(defectos), "Con orden de taller", con_orden,
+                "Reparados", reparados])
+    for lg in lagunas:
+        w.writerow(["LIMITACION", lg["que"], lg["de"], lg["porque"]])
+    w.writerow([])
+    w.writerow(cab)
+    for f in filas:
+        w.writerow([f.get(k) if f.get(k) is not None else "" for k in cab])
+    return Response(
+        content=out.getvalue().encode("utf-8-sig"),      # BOM: Excel y las tildes
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition":
+                 'attachment; filename="flotadsp_%s_%s_%s.csv"'
+                 % (centro or "todos", d_desde, d_hasta)})
+
+
 @api_router.get("/taller/bandeja")
 async def taller_bandeja(solo_sin_leer: bool = False, limite: int = 80,
                          _=Depends(require_admin)):

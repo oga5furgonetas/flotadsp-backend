@@ -10,9 +10,10 @@ import {
   getParteFurgoneta, dispararSeguimientoTalleres,
   getVehicles, getWorkshops, crearTaller, exportarOrdenes, ordenesPorTaller,
   getIncidents, getDanosPendientes, getFurgonetasParadas, prepararOrden,
-  getDisponibilidadFlota,
+  getDisponibilidadFlota, getInformeFlota, descargarInformeFlota,
 } from '../api'
 import PautaTaller from '../components/PautaTaller'
+import { hoyLocal } from '../../lib/fecha'
 
 /* ÓRDENES DE TALLER
    ═══════════════════════════════════════════════════════════════════════
@@ -189,6 +190,8 @@ export default function OrdenesTrabajo() {
   const [comparativa, setComparativa] = useState(null)
   const [dispo, setDispo] = useState(null)
   const [verCanal, setVerCanal] = useState(false)
+  const [informe, setInforme] = useState(null)
+  const [bajandoInforme, setBajandoInforme] = useState(false)
 
   const [nueva, setNueva] = useState(null)
   const [parte, setParte] = useState(null)          // golpes abiertos de la furgoneta elegida, con fotos
@@ -298,6 +301,9 @@ export default function OrdenesTrabajo() {
     getDisponibilidadFlota(center)
       .then((r) => { if (vivo) setDispo(r.data) })
       .catch(() => {})
+    getInformeFlota({ ...(center && center !== 'Todos' ? { center } : {}) })
+      .then((r) => { if (vivo) setInforme(r.data) })
+      .catch(() => {})
     return () => { vivo = false }
   }, [center])
 
@@ -350,6 +356,26 @@ export default function OrdenesTrabajo() {
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se pudo preparar el parte.')
     } finally { setPreparando('') }
+  }
+
+  /* El informe para Amazon. Lo que lo hace creíble no son las cifras buenas
+     —esas las enseña cualquiera— sino que diga POR ESCRITO lo que no puede
+     demostrar. Un informe que rellena huecos se cae en la primera pregunta. */
+  const bajarInforme = async () => {
+    setBajandoInforme(true)
+    try {
+      const r = await descargarInformeFlota({ ...(center && center !== 'Todos' ? { center } : {}) })
+      const url = URL.createObjectURL(new Blob([r.data], { type: 'text/csv;charset=utf-8' }))
+      const a = document.createElement('a')
+      a.href = url
+      // hoyLocal y no toISOString: entre medianoche y las 2 de la mañana el
+      // fichero saldría fechado el día anterior (gotcha 11).
+      a.download = `flotadsp_${center || 'todos'}_${hoyLocal()}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo generar el informe.')
+    } finally { setBajandoInforme(false) }
   }
 
   const abrirAlta = async () => {
@@ -603,6 +629,66 @@ export default function OrdenesTrabajo() {
               ? `${dispo.vuelven.length} vuelven con fecha: ${dispo.vuelven.slice(0, 3).map((v) => `${v.matricula} el ${v.fecha}`).join(' · ')}`
               : 'Ninguna de las que están en el taller tiene fecha de vuelta, así que no se puede prever la flota de la semana que viene. Ponla al abrir el parte.'}
           </p>
+        </div>
+      )}
+
+      {/* ── INFORME PARA AMAZON ────────────────────────────────────────────
+          Va aquí arriba porque es el que se enseña, no el que se consulta. Lo
+          que lo hace creíble no son las cifras buenas —el 100 % de inspecciones
+          con foto lo enseña cualquiera que lo tenga— sino que diga por escrito
+          lo que NO puede demostrar. Un informe que rellena huecos se cae en la
+          primera pregunta; uno que separa lo probado de lo que falta aguanta
+          que lo miren con lupa, que es lo que va a pasar. */}
+      {informe?.inspeccion_diaria && (
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-slate-100 px-4 py-3">
+            <h2 className="text-[15px] font-bold">Informe de flota</h2>
+            <span className="text-[12.5px] text-slate-500">
+              {informe.informe.desde} a {informe.informe.hasta} · para entregar a Amazon
+            </span>
+            <button onClick={bajarInforme} disabled={bajandoInforme}
+              className="ml-auto flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1 text-[12.5px] font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+              <Download size={14} />
+              {bajandoInforme ? 'Generando…' : 'Descargar'}
+            </button>
+          </div>
+
+          <div className="flex flex-wrap gap-x-8 gap-y-2 px-4 py-3">
+            <div>
+              <div className="tabular-nums text-[22px] font-bold leading-none text-emerald-700">
+                {informe.inspeccion_diaria.con_fotografia_pct}%
+              </div>
+              <div className="mt-0.5 text-[12px] text-slate-500">
+                de {informe.inspeccion_diaria.inspecciones.toLocaleString('es')} inspecciones con foto
+              </div>
+            </div>
+            <div>
+              <div className="tabular-nums text-[22px] font-bold leading-none text-emerald-700">
+                {informe.inspeccion_diaria.con_conductor_pct}%
+              </div>
+              <div className="mt-0.5 text-[12px] text-slate-500">con conductor identificado</div>
+            </div>
+            <div>
+              <div className="tabular-nums text-[22px] font-bold leading-none text-slate-800">
+                {informe.defectos.detectados}
+              </div>
+              <div className="mt-0.5 text-[12px] text-slate-500">defectos detectados y clasificados</div>
+            </div>
+          </div>
+
+          {/* Y esto es lo que de verdad importa que se vea antes de enseñarlo. */}
+          {!!informe.lagunas?.length && (
+            <div className="border-t border-slate-100 bg-amber-50/60 px-4 py-2.5">
+              <p className="mb-1 text-[12.5px] font-semibold text-amber-900">
+                Lo que este informe NO demuestra, y va escrito dentro:
+              </p>
+              {informe.lagunas.map((l) => (
+                <p key={l.que} className="text-[12.5px] leading-relaxed text-amber-800">
+                  · {l.que} <b className="tabular-nums">({l.de})</b> — {l.efecto}
+                </p>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

@@ -535,3 +535,6 @@ export const marcarLeidoTaller = (id) =>
   api.post(`/taller/bandeja/${encodeURIComponent(id)}/leido`)
 export const asignarMensajeTaller = (id, ordenId) =>
   api.post(`/taller/bandeja/${encodeURIComponent(id)}/asignar`, { orden_id: ordenId })
+export const getInformeFlota = (params) => api.get('/taller/export', { params })
+export const descargarInformeFlota = (params) =>
+  api.get('/taller/export', { params: { ...params, formato: 'csv' }, responseType: 'blob' })
