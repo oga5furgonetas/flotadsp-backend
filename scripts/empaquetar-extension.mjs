@@ -108,8 +108,13 @@ console.log(`   -> frontend-v2/public/FlotaDSP-Cortex.zip`)
    descargando. Sin esto, un cliente con un problema ya arreglado no sabe si
    tiene la última, y nosotros tampoco. */
 const meta = join(RAIZ, 'frontend-v2', 'public', 'extension.json')
+/* La fecha en hora LOCAL, no por ISO: `toISOString()` devuelve el día anterior
+   entre medianoche y las 2 en España, y un despliegue de madrugada quedaría
+   fechado el día de antes (gotcha 11). */
+const h = new Date()
+const generado = `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, '0')}` +
+                 `-${String(h.getDate()).padStart(2, '0')}`
 createWriteStream(meta).end(JSON.stringify({
-  version, ficheros: locales, kb: Math.round(salida.length / 1024),
-  generado: new Date().toISOString().slice(0, 10),
+  version, ficheros: locales, kb: Math.round(salida.length / 1024), generado,
 }, null, 2))
 console.log(`   -> frontend-v2/public/extension.json (v${version})`)
