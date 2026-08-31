@@ -8822,6 +8822,41 @@ def _centro_norm(valor, conocidos=None) -> str:
     return hallados.pop() if len(hallados) == 1 else t
 
 
+async def _centro_por_defecto() -> str:
+    """El centro que se usa cuando no viene ninguno.
+
+    Tres sitios lo tenian escrito como "OGA5" —importar cuadrante y las dos
+    rutas del plan de reparto—, o sea el centro de la empresa principal. En
+    cualquier otra, esos datos se guardaban en un centro que no existe en su
+    flota y no volvian a aparecer en ninguna pantalla, sin ningun error.
+
+    Se usa el PRIMERO de `organizations.centers`, que es el principal: el que
+    la empresa escribio al darse de alta. Ordenar alfabeticamente parecia mas
+    limpio y era peor — a la empresa principal le habria cambiado el centro por
+    defecto de OGA5 a DGA1 en silencio, que es exactamente el tipo de cambio
+    que nadie nota hasta que faltan datos en una pantalla.
+
+    Si la organizacion no se encuentra, se cae a los centros que ya existen en
+    los datos; y si tampoco hay, cadena vacia: mejor que decida quien llama,
+    antes que inventarse el centro de otro.
+    """
+    try:
+        org = await global_db.organizations.find_one(
+            {"db_name": _current_db_name.get()}, {"_id": 0, "centers": 1})
+        if not org and _current_db_name.get() == _DEFAULT_DB_NAME:
+            # La organizacion principal no guarda `db_name`: se resuelve por
+            # `account_type == "owner"` (ver `_tenant_db_name`).
+            org = await global_db.organizations.find_one(
+                {"account_type": "owner"}, {"_id": 0, "centers": 1})
+        cs = [str(c).strip().upper() for c in ((org or {}).get("centers") or []) if str(c).strip()]
+        if cs:
+            return cs[0]
+        conocidos = sorted(c for c in await _centros_conocidos() if c)
+        return conocidos[0] if conocidos else ""
+    except Exception:
+        return ""
+
+
 async def _centros_conocidos() -> set:
     """Los codigos de centro que ya existen escritos limpios.
 
@@ -19876,7 +19911,7 @@ async def import_roster_text(
     """
     raw_text = data.get("text", "")
     date = data.get("date") or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    center = data.get("center", "OGA5")
+    center = data.get("center") or await _centro_por_defecto()
 
     if not raw_text.strip():
         raise HTTPException(status_code=400, detail="Texto vacío")
@@ -23895,7 +23930,8 @@ def _parse_routes_excel(content: bytes, driver_info, snapshot_name=None):
 
 
 @api_router.post("/metrics/upload-routeplan")
-async def upload_route_plan(file: UploadFile = File(...), center: str = Form("OGA5"), _=Depends(require_admin)):
+async def upload_route_plan(file: UploadFile = File(...), center: str = Form(""), _=Depends(require_admin)):
+    center = center or await _centro_por_defecto()
     """Sube el archivo de la mañana (sequenced routes / CYCLE) con las paradas reales
     de cada ruta: dirección, código postal, GPS y hora planificada por Amazon.
     Guarda un documento por ruta para luego mostrar el mapa y el progreso geográfico."""
@@ -24002,7 +24038,8 @@ async def upload_route_plan(file: UploadFile = File(...), center: str = Form("OG
 
 
 @api_router.get("/metrics/routeplan")
-async def get_route_plan(code: str, center: str = "OGA5", date: Optional[str] = None, _=Depends(require_admin)):
+async def get_route_plan(code: str, center: str = "", date: Optional[str] = None, _=Depends(require_admin)):
+    center = center or await _centro_por_defecto()
     """Devuelve las paradas de una ruta (la más reciente o de una fecha)."""
     q = {"center": center, "code": code}
     if date:

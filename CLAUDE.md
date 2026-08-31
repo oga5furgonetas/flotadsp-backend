@@ -575,6 +575,36 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    centro, importar sin crear, «0 nuevos» siempre): la app se desarrolla contra
    una flota llena.
 
+43. **Código escrito para UNA empresa: los centros de Dani a mano.**
+   `_normalize_center_code` llevaba dentro `for code in ("OGA5","DGA1","DGA2")`
+   y devolvía `""` para cualquier otro. La cola de Revisión Rápida compara el
+   centro pedido contra eso, así que **en toda empresa que no fuera la
+   principal, filtrar por centro devolvía CERO** hubiera lo que hubiera
+   esperando — y el panel manda siempre el centro seleccionado, o sea que era
+   el caso normal. Se vio el 31-08-2026 con una empresa recién creada: el
+   conductor sube la foto, Gemini detecta un daño grave, la cola tiene 1 y
+   `?center=IN1` devolvía 0. En pantalla es idéntico a «no hay nada pendiente».
+   Ya existía la función buena (`_centro_norm`, gotcha 6), que **devuelve el
+   original cuando no reconoce** en vez de borrarlo; ahora delega en ella.
+   Al arreglarlo apareció el efecto de rebote: los otros dos usos filtran
+   talleres, y con `""` no filtraban nada. Al empezar a filtrar de verdad
+   desaparecían los talleres **sin centro** —que da de alta el propio panel
+   cuando el selector está en «Todos»—. Los tres filtros aceptan ahora los del
+   centro Y los que no tienen ninguno.
+   Y otros tres sitios tenían `"OGA5"` como valor por defecto (importar
+   cuadrante, subir y leer el plan de reparto): en otra empresa esos datos
+   caían en un centro que no existe en su flota y no volvían a aparecer.
+   `_centro_por_defecto()` usa ahora el PRIMERO de `organizations.centers`, que
+   es el principal. Ojo con la tentación de ordenar alfabéticamente: parece más
+   limpio y le habría cambiado a Dani el defecto de OGA5 a DGA1 en silencio.
+   Regla: **antes de dar por bueno un arreglo multiempresa, comprobar que la
+   empresa principal sigue dando exactamente lo mismo que antes.**
+   No todo lo que lleva OGA5 dentro es un fallo: los talleres y alquiladoras
+   semilla se siembran solo en la BD por defecto y son idempotentes, y
+   `_centros_referencia` no etiqueta si el punto no está a menos de 70 km, que
+   es la respuesta correcta. Lo que hay que buscar son **decisiones**
+   —comparaciones y valores por defecto—, no datos.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
