@@ -13923,6 +13923,30 @@ async def report_client_error(data: dict, request: Request):
     url = str(data.get("url") or "")[:200]
     ua = (request.headers.get("user-agent") or "")[:120]
 
+    # LO QUE NO ES NUESTRO NO SE GUARDA NI DESPIERTA A NADIE.
+    #
+    # `window.onerror` recoge TODO lo que pasa en la pestaña, incluidas las
+    # extensiones que el usuario tenga puestas. De los 14 errores guardados el
+    # 31-08-2026, CINCO venian de una extension de Chrome ajena
+    # (`chrome-extension://.../executors/200.js`, siempre el mismo 'M_ID') y
+    # uno de un traductor automatico moviendo nodos del DOM. Nada de eso lo
+    # podemos arreglar, y cada uno mandaba su aviso a Telegram.
+    #
+    # El problema no es el espacio: es que con el registro lleno de ruido, los
+    # de verdad —tres del chunk envenenado, uno de React— no se ven. Es lo
+    # mismo que pasaba con el checker de fechas: 15 avisos en falso por cada
+    # uno bueno y los buenos llevaban meses escondidos.
+    _AJENO = ("chrome-extension://", "moz-extension://", "safari-extension://",
+              "safari-web-extension://", "webkit-masked-url")
+    if any(x in stack for x in _AJENO) or any(x in url for x in _AJENO):
+        logger.info("Error de una extension del navegador, no nuestro: %s", message[:120])
+        return {"success": True, "ignorado": "extension del navegador"}
+    # El traductor de Chrome reescribe el DOM por debajo de React y provoca
+    # esto sin que nada nuestro falle. Se reconoce por el mensaje exacto.
+    if "insertBefore" in message and "not a child of this node" in message:
+        logger.info("Error del traductor del navegador, no nuestro")
+        return {"success": True, "ignorado": "traductor del navegador"}
+
     # SE GUARDA, no solo se avisa.
     #
     # Hasta ahora un error del navegador iba a Telegram y a una linea de log.

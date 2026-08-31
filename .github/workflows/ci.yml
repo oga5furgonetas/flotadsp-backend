@@ -47,6 +47,8 @@ jobs:
         run: node scripts/check-contraste.mjs
       - name: Checker tema mezclado (componente oscuro en pantalla clara)
         run: node scripts/check-tema-mezclado.mjs
+      - name: useEffect que devuelve algo (revienta AL SALIR de la pantalla)
+        run: node scripts/check-efectos.mjs
       - name: Checker extension (mensajes que se pierden entre los tres saltos)
         run: node scripts/check-extension.mjs
       - name: Checker patrones (codigo que repite un bug ya conocido)

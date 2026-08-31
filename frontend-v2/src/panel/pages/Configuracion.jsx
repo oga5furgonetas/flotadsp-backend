@@ -102,7 +102,13 @@ function WhatsAppCard() {
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState('')
 
-  const cargar = () => getWhatsappEstado().then((r) => setEst(r.data)).catch(() => setEst({ error: true }))
+  /* Las llaves NO sobran. Sin ellas la flecha DEVUELVE la promesa, y
+     `useEffect(cargar, [])` guarda lo que devuelva como funcion de limpieza:
+     al salir de Configuracion hacia otra pantalla React intentaba llamar a una
+     promesa y saltaba «n is not a function». Paso dos veces el 30-08-2026 a las
+     08:50, y el error quedaba registrado en la pantalla de DESTINO —Usuarios,
+     IA-peritaje—, que es donde nadie iba a buscarlo. */
+  const cargar = () => { getWhatsappEstado().then((r) => setEst(r.data)).catch(() => setEst({ error: true })) }
   useEffect(cargar, [])
 
   const toggle = async (clave, valor) => {
