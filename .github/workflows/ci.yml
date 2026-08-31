@@ -45,6 +45,8 @@ jobs:
         run: node scripts/check-ayuda.mjs
       - name: Checker contraste (texto que no se lee)
         run: node scripts/check-contraste.mjs
+      - name: Checker tema mezclado (componente oscuro en pantalla clara)
+        run: node scripts/check-tema-mezclado.mjs
       - name: Checker extension (mensajes que se pierden entre los tres saltos)
         run: node scripts/check-extension.mjs
       - name: Checker patrones (codigo que repite un bug ya conocido)

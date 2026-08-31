@@ -54,10 +54,12 @@ export const AYUDA = {
   paquetes: {
     que: 'Los paquetes de Cortex, investigables uno a uno: dónde está cada uno y qué le pasó.',
     pasos: [
-      'Busca por TBA cuando alguien reclama un paquete concreto.',
-      'La pestaña de direcciones agrupa los que el conductor no pudo encontrar.',
+      'La primera vez: descarga la extensión desde esta pantalla, descomprímela y cárgala en Chrome desde chrome://extensions con el «Modo de desarrollador» activado.',
+      'Pega en ella el token que sale aquí abajo. Es el de tu empresa y solo el tuyo: con el de otra, los datos se mezclarían.',
+      'Luego entra en Cortex como siempre. Los datos llegan en unos minutos, sin hacer nada más.',
+      'Busca por TBA cuando alguien reclame un paquete concreto.',
     ],
-    ojo: 'Solo se ve lo que la extensión de Chrome haya capturado. Si nadie tuvo Cortex abierto, aquí no hay nada de esas horas.',
+    ojo: 'La carpeta que descomprimes NO se puede borrar ni mover: Chrome carga la extensión desde ahí. Y solo se ve lo que la extensión haya capturado — si nadie tuvo Cortex abierto, de esas horas no hay nada.',
   },
   debrief: {
     que: 'Qué trae cada conductor de vuelta en la furgoneta, para comprobarlo con él delante.',
@@ -133,16 +135,21 @@ export const AYUDA = {
   },
   talleres: {
     que: 'La agenda de talleres: quién arregla qué, dónde y con qué teléfono.',
-    pasos: ['Añade el teléfono de cada uno: sin él, el botón de WhatsApp no puede elegir contacto solo.'],
+    pasos: [
+      'Añade el teléfono de cada uno. Sin él no se les puede escribir ni por WhatsApp ni desde el parte, y hay que salir de la app para llamar.',
+      'Si tienes su correo, ponlo también: es el único canal que funciona cuando WhatsApp falla.',
+    ],
+    ojo: 'Un taller sin teléfono ni correo no recibe nada. Al preparar un parte se proponen primero los que sí se pueden avisar.',
   },
   ordenes: {
     que: 'Mandar una furgoneta al taller y seguirla sin llamar por teléfono.',
     pasos: [
-      'Crea la orden, o pulsa "Mandar al taller" en un daño que ya esté abierto.',
-      'Copia el enlace y mándaselo al taller por WhatsApp: entra sin registrarse.',
-      'El taller pone estado, fotos, fecha de entrega y presupuesto desde su móvil.',
+      'En «Furgonetas paradas», pulsa el «sin parte» rojo: el parte se abre con sus daños, sus fotos y el taller sugerido ya puestos.',
+      'Manda el enlace al taller por WhatsApp desde el propio parte. Entra sin registrarse y desde el móvil.',
+      'A partir de ahí la app pregunta sola cada pocos días. En «Canal con el taller» eliges cada cuánto, qué días y qué se les dice.',
+      'Lo que ellos contesten aparece en «Lo que dicen los talleres», aunque no les hayamos preguntado.',
     ],
-    ojo: 'El enlace es público: quien lo tenga entra. No lleva datos del conductor, solo la furgoneta y el problema.',
+    ojo: 'El enlace es público: quien lo tenga entra. No lleva datos del conductor, solo la furgoneta y el problema. Y pon la fecha de salida cuando el taller la diga: sin ella no se puede prever con qué flota cuentas la semana que viene.',
   },
   aparcamiento: {
     que: 'Dónde está aparcada cada furgoneta en la nave.',
@@ -179,10 +186,11 @@ export const AYUDA = {
   conductores: {
     que: 'La ficha de cada persona: contacto, centro, Transporter ID e historial.',
     pasos: [
-      'Busca por nombre.',
+      'Si empiezas: pulsa «Importar Excel» y sube la hoja que ya tengas. No hace falta ningún formato nuestro — vale con que haya una columna de nombre.',
+      'Antes de guardar se enseña lo que se ha entendido: compruébalo ahí, no después.',
       'El Transporter ID es la llave con la que se reparten los DNR: si está mal, los fallos van a otra persona.',
     ],
-    ojo: 'Hay personas dadas de alta dos veces. Si un historial parece corto, comprueba si tiene otra ficha con el mismo correo.',
+    ojo: 'Importar da de alta lo que falta y nunca pisa una ficha que ya existe. Si alguien aparece con el historial corto, comprueba si tiene otra ficha con el mismo correo.',
   },
   scorecard: {
     que: 'El scorecard semanal de Amazon: en qué tier estás y qué métrica te baja.',
@@ -203,7 +211,11 @@ export const AYUDA = {
   },
   whc: {
     que: 'Horas trabajadas y quién se ha pasado, antes de que lo diga Amazon.',
-    pasos: ['Mira la semana en curso y avisa a quien vaya justo de horas.'],
+    pasos: [
+      'Pega el cuadrante de la semana tal cual y pulsa analizar.',
+      'Mira quién va justo de horas y avísale antes del viernes, que es cuando ya no se puede arreglar.',
+    ],
+    ojo: 'El límite son 54 h 30 min semanales y no se puede cambiar: lo fija Amazon, no cada nave. Si cada empresa pusiera el suyo, dos DSP con la misma plantilla saldrían con resultados distintos y el dato dejaría de servir para comparar.',
   },
   dsc: {
     que: 'Dónde se deja cada paquete. Es la métrica que más le cuesta a un DSP.',
