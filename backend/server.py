@@ -15088,14 +15088,21 @@ async def delete_contact(contact_id: str, _=Depends(require_admin)):
 # =========================
 
 def _normalize_center_code(center_raw: Optional[str]) -> str:
-    """Convierte 'AMZL OGA5 SANTIAGO XPT' → 'OGA5'. Devuelve '' si no reconocido."""
-    if not center_raw or not isinstance(center_raw, str):
-        return ""
-    up = center_raw.upper()
-    for code in ("OGA5", "DGA1", "DGA2"):
-        if code in up:
-            return code
-    return ""
+    """Convierte 'AMZL OGA5 SANTIAGO XPT' → 'OGA5'.
+
+    Llevaba los tres centros de Dani ESCRITOS A MANO —OGA5, DGA1, DGA2— y
+    devolvia '' para cualquier otro. Con una empresa nueva eso no era un
+    detalle: la cola de Revision Rapida compara el centro pedido contra esto,
+    asi que **filtrar por centro devolvia siempre CERO** aunque hubiera
+    inspecciones esperando. Medido el 31-08-2026 con una empresa recien
+    creada: la cola tenia una y `?center=IN1` devolvia ninguna. El panel manda
+    siempre el centro seleccionado, o sea que era el caso normal, no el raro.
+
+    Ahora delega en `_centro_norm`, que ya existia y hace lo correcto: saca el
+    codigo cuando lo reconoce y, cuando no, **devuelve el original** en vez de
+    borrarlo. Para OGA5/DGA1/DGA2 da exactamente lo mismo que antes.
+    """
+    return _centro_norm(center_raw)
 
 
 _MOTIVOS_NO_EVALUABLE = ("borrosa", "oscura", "lejos", "tapada", "sucia")
@@ -16175,7 +16182,13 @@ async def ot_preparar(vehicle_id: str, _=Depends(require_admin)):
     q_w: dict = {}
     if centro:
         cod = _centro_norm(centro, await _centros_conocidos())
-        q_w["center"] = {"$regex": re.escape(cod), "$options": "i"}
+        # Los del centro Y los que no tienen ninguno. El propio panel da de
+        # alta un taller SIN centro cuando el selector esta en "Todos", y esos
+        # sirven para toda la empresa: dejarlos fuera hace que quien tenga sus
+        # talleres asi no vea ninguno al preparar un parte, sin explicacion.
+        q_w["$or"] = [{"center": {"$regex": re.escape(cod), "$options": "i"}},
+                      {"center": {"$in": [None, ""]}},
+                      {"center": {"$exists": False}}]
     talleres = await db.workshops.find(
         q_w, {"_id": 0, "id": 1, "name": 1, "phone": 1, "email": 1, "center": 1,
               "especialidad": 1}).to_list(100)
@@ -18574,7 +18587,15 @@ async def suggest_workshops_for_damage(
     # Sin centro de furgoneta → no filtramos (mejor mostrar todo que nada).
     query = {"active": {"$ne": False}}
     if center_code:
-        query["center"] = center_code
+        # Los del centro Y los que no tienen ninguno. Un taller dado de alta
+        # con el selector en "Todos" se guarda sin centro —lo hace el propio
+        # panel—, y antes se colaba igual porque `center_code` salia vacio
+        # para toda empresa que no fuera la principal. Al arreglar eso, sin
+        # esta linea habrian desaparecido de las sugerencias sin que nadie
+        # hubiera tocado nada.
+        query["$or"] = [{"center": center_code},
+                        {"center": {"$in": [None, ""]}},
+                        {"center": {"$exists": False}}]
 
     workshops = await db.workshops.find(query, {"_id": 0}).to_list(500)
     # Respaldo: si el centro no tiene ningún taller, mostrar todos marcados como de otro centro
@@ -23255,7 +23276,9 @@ async def vehicle_provider_info_by_plate(plate: str, _=Depends(require_any_auth)
     provider_workshops = []
     for w in workshops_raw:
         # Filtrar: mismo centro + convenio con el proveedor (no universales)
-        if center_code and w.get("center") != center_code:
+        # `or not w.get("center")`: un taller sin centro vale para toda la
+        # empresa (ver la nota de arriba, en los talleres sugeridos).
+        if center_code and w.get("center") and w.get("center") != center_code:
             continue
         convs = w.get("convenios", [])
         if "*" in convs:

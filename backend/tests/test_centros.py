@@ -76,6 +76,24 @@ CASOS = [
     ("sin lista de conocidos, el texto largo se queda entero",
      "AMZL OGA5 SANTIAGO XPT", None, "OGA5"),
     ("sin lista, el código limpio sigue igual", "OGA5", None, "OGA5"),
+
+    # ── CENTROS QUE NO SON LOS DE DANI ────────────────────────────────────
+    # `_normalize_center_code` llevaba OGA5/DGA1/DGA2 escritos a mano y
+    # devolvia "" para cualquier otro. Como la cola de Revision Rapida compara
+    # el centro pedido contra eso, **filtrar por centro devolvia siempre CERO**
+    # en toda empresa que no fuera la principal — y el panel manda siempre el
+    # centro seleccionado, o sea que era el caso normal. Se vio el 31-08-2026
+    # con una empresa recien creada: la cola tenia una inspeccion y
+    # `?center=IN1` devolvia ninguna.
+    ("un centro nuevo NO se borra", "IN1", None, "IN1"),
+    ("otro centro nuevo tampoco", "QA1", None, "QA1"),
+    ("un centro de cuatro letras", "MADR1", None, "MADR1"),
+    ("un centro escrito en cristiano se respeta", "NAVE PRINCIPAL", None, "NAVE PRINCIPAL"),
+    ("en minusculas sube a mayusculas", "in1", None, "IN1"),
+    ("con espacios de mas se recorta", "  IN1  ", None, "IN1"),
+    ("dentro de un texto largo se extrae", "AMZL IN1 MADRID XPT", None, "IN1"),
+    ("vacio sigue siendo vacio", "", None, ""),
+    ("None no revienta", None, None, ""),
 ]
 
 
