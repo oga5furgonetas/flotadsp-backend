@@ -10,6 +10,7 @@ import {
   getScorecardFull, setScorecardValue, getScorecardEnVivo, revisarDiaScorecard,
   getScorecardPredict, getScorecardDailyTrend,
   getScorecardSources, uploadScorecard, getScorecardUmbrales,
+  getScorecardStandings,
   setScorecardThreshold, toggleScorecardEstimacion,
   resetScorecardWeek, deleteScorecardSource,
   calibrateScorecardThresholds,
@@ -881,6 +882,7 @@ export default function Scorecard() {
   const [predict, setPredict] = useState(null)
   const [trend, setTrend] = useState(null)
   const [sources, setSources] = useState([])
+  const [plantilla, setPlantilla] = useState(null)   // reparto por tier de la plantilla
   const [loadingFull, setLoadingFull] = useState(false)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [msg, setMsg] = useState(null)
@@ -894,12 +896,13 @@ export default function Scorecard() {
     if (!c || c === 'Todos') return
     setLoadingFull(true)
     try {
-      const [rf, rp, rt, rs, ru] = await Promise.allSettled([
+      const [rf, rp, rt, rs, ru, rd] = await Promise.allSettled([
         getScorecardFull(c, w || undefined),
         getScorecardPredict(c, w || undefined),
         getScorecardDailyTrend(c, w || undefined),
         getScorecardSources(c, w || undefined),
         getScorecardUmbrales(c),
+        getScorecardStandings(c),
       ])
       if (rf.status === 'fulfilled') {
         setFull(rf.value.data)
@@ -909,6 +912,7 @@ export default function Scorecard() {
       if (rt.status === 'fulfilled') setTrend(rt.value.data)
       if (rs.status === 'fulfilled') setSources(rs.value.data?.items || [])
       if (ru.status === 'fulfilled') setUmbrales(ru.value.data)
+      if (rd.status === 'fulfilled') setPlantilla(rd.value.data)
     } catch {}
     finally { setLoadingFull(false) }
   }, [])
@@ -1301,6 +1305,48 @@ export default function Scorecard() {
             ))}
           </div>
         </div>
+
+        {/* ── CUÁNTOS DE TU PLANTILLA LLEGAN ──────────────────────────────
+            El tier del DSP no sale de la media: Amazon mira qué PORCENTAJE de
+            los repartidores llega a objetivo. Con la media, tres cracks tapan
+            a diez que van justos — el número sale bonito y el tier baja.
+
+            Este bloque solo aparece cuando hay datos por conductor, que llegan
+            al subir la scorecard. Antes se guardaban solo si se llamaba a una
+            ruta sin botón, así que la tabla llevaba vacía desde siempre.
+
+            NO se pinta ningún aprobado: el listón que se publica por ahí
+            (86 %, 88 %) cambia y no lo hemos visto en un documento de Amazon.
+            Se da el reparto real, que es un hecho de sus datos. */}
+        {plantilla?.con_tier > 0 && (
+          <div className="mt-4 rounded-lg border border-dark-800 bg-dark-900/50 p-3">
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <span className="text-xs font-semibold text-dark-200">Tu plantilla esa semana</span>
+              <span className="text-xs text-dark-500">
+                {plantilla.ultima_semana} · {plantilla.con_tier} conductores con tier
+              </span>
+              <span className="cifra ml-auto text-sm font-bold text-brand-300">
+                {plantilla.pct_fantastic_o_mejor}% en Fantastic o mejor
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {Object.entries(plantilla.reparto_tiers || {})
+                .sort((a, b) => b[1] - a[1])
+                .map(([tier, n]) => (
+                  <span key={tier}
+                    className="rounded-md bg-dark-800 px-2 py-0.5 text-[11px] text-dark-300">
+                    {tier}: <span className="cifra font-semibold text-dark-100">{n}</span>
+                  </span>
+                ))}
+            </div>
+            {plantilla.cruzados < plantilla.con_tier && (
+              <p className="mt-2 text-[11px] text-dark-500">
+                {plantilla.con_tier - plantilla.cruzados} no se han podido cruzar con una ficha:
+                revisa que su Transporter ID esté puesto en Conductores.
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Sources list */}
         {sources.length > 0 && (

@@ -27437,15 +27437,43 @@ async def import_scorecard(file: UploadFile = File(...), center: str = Form(...)
     by_tid = {(d.get("driver_id") or "").upper(): d for d in drivers if d.get("driver_id")}
     by_name = {(d.get("name") or "").strip().lower(): d for d in drivers}
 
-    saved, matched = 0, 0
+    # El guardado vive en `_guardar_standings`, que usa tambien la subida
+    # unificada. Dos copias del mismo trabajo acaban separandose: se arregla
+    # una y la otra no, y las dos siguen respondiendo 200.
+    saved = await _guardar_standings({"semana": semana, "conductores": conductores}, center)
+    matched = sum(1 for c in conductores
+                  if by_tid.get((c.get("transporter_id") or "").strip().upper())
+                  or by_name.get((c.get("name") or "").strip().lower()))
+    return {"success": True, "semana": semana, "conductores": saved,
+            "cruzados": matched, "sin_cruzar": max(0, saved - matched)}
+
+
+async def _guardar_standings(data: dict, center: str) -> int:
+    """Guarda el rendimiento por conductor de una scorecard. Devuelve cuantos.
+
+    Es el mismo trabajo que hace `/scorecard/import`, sacado aparte para que lo
+    pueda usar tambien la subida unificada —la que si tiene boton—. Copiarlo
+    seria condenar a las dos copias a separarse: la de arriba se arreglaria y
+    esta no, y nadie lo notaria porque las dos responden 200.
+    """
+    semana = (data.get("semana") or "").strip()[:80]
+    conductores = data.get("conductores") or []
+    if not semana or not conductores:
+        return 0
+    drivers = await db.drivers.find(
+        {}, {"_id": 0, "id": 1, "name": 1, "driver_id": 1}).to_list(2000)
+    by_tid = {(d.get("driver_id") or "").upper(): d for d in drivers if d.get("driver_id")}
+    by_name = {(d.get("name") or "").strip().lower(): d for d in drivers}
+
+    guardados = 0
     for c in conductores:
         name = (c.get("name") or "").strip()
         tid = (c.get("transporter_id") or "").strip().upper()
         drv = by_tid.get(tid) or by_name.get(name.lower())
         if drv and not tid:
             tid = (drv.get("driver_id") or "").upper()
-        if drv:
-            matched += 1
+        if not (tid or name):
+            continue                       # sin nada con que identificarlo, no se guarda
         tier = c.get("tier")
         doc = {
             "center": center, "semana": semana,
@@ -27458,17 +27486,15 @@ async def import_scorecard(file: UploadFile = File(...), center: str = Form(...)
                         "pod": c.get("pod"), "cc": c.get("cc")},
             "imported_at": datetime.now(timezone.utc).isoformat(),
         }
-        # una entrada por (conductor, semana, centro)
         key = {"center": center, "semana": semana}
         if tid:
             key["transporter_id"] = tid
         else:
             key["driver_name"] = doc["driver_name"]
         await db.driver_scorecard.update_one(key, {"$set": doc}, upsert=True)
-        saved += 1
-
-    return {"success": True, "semana": semana, "conductores": saved,
-            "cruzados": matched, "sin_cruzar": saved - matched}
+        guardados += 1
+    logger.info("Scorecard %s (%s): %d conductores guardados", semana, center, guardados)
+    return guardados
 
 
 @api_router.delete("/scorecard/week")
@@ -27497,7 +27523,35 @@ async def scorecard_standings(center: Optional[str] = None, user: dict = Depends
         semanas[d["semana"]] += 1
         if d.get("driver_id"):
             cruzados += 1
-    return {"semanas": semanas, "total": len(docs), "cruzados": cruzados}
+
+    # ── CUANTOS DE LA PLANTILLA LLEGAN, QUE ES LO QUE DECIDE EL TIER ────────
+    # El tier del DSP no sale de la media: Amazon mira que PORCENTAJE de los
+    # repartidores llega a objetivo. Con la media, tres cracks tapan a diez que
+    # van justos y el numero sale bonito mientras el tier baja.
+    #
+    # `tier_score` viene de `_TIER_SCORE`: 6 Fantastic+, 5 Fantastic, 4 Great,
+    # 3 Fair, 2 Poor, 1 At Risk. Aqui NO se pone ningun umbral de aprobado a
+    # dedo —el que se publica por ahi (86 %, 88 %) cambia y no lo hemos visto
+    # en un documento de Amazon—: se da el reparto real y el porcentaje que
+    # esta en Fantastic o mejor, que es un HECHO de sus datos. Poner un listón
+    # inventado al lado convertiria un dato en una opinion.
+    ultima = max(semanas, key=lambda s: semanas[s]) if semanas else None
+    reparto: dict = {}
+    de_la_ultima = [d for d in docs if d.get("semana") == ultima] if ultima else []
+    for d in de_la_ultima:
+        reparto[d.get("tier") or "sin tier"] = reparto.get(d.get("tier") or "sin tier", 0) + 1
+    con_tier = [d for d in de_la_ultima if isinstance(d.get("tier_score"), int)]
+    en_fantastic = sum(1 for d in con_tier if d["tier_score"] >= 5)
+    return {
+        "semanas": semanas, "total": len(docs), "cruzados": cruzados,
+        "ultima_semana": ultima,
+        "reparto_tiers": reparto,
+        "conductores_ultima": len(de_la_ultima),
+        "con_tier": len(con_tier),
+        "en_fantastic_o_mejor": en_fantastic,
+        "pct_fantastic_o_mejor": (round(100.0 * en_fantastic / len(con_tier), 1)
+                                  if con_tier else None),
+    }
 
 
 
@@ -28781,7 +28835,34 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
             # que no se pierdan si Gemini falla o se queda sin cuota.
             if umbrales_msg and cen0 and cen0 != cen:
                 logger.warning(f"[sls] centro del PDF ({cen0}) != centro usado ({cen})")
+
+            # ── Y EL DETALLE POR CONDUCTOR, QUE SE ESTABA PERDIENDO ──────────
+            # La misma scorecard trae el tier de CADA repartidor, y eso es lo
+            # que decide el tier del DSP: Amazon mira que porcentaje de la
+            # plantilla llega a objetivo, no solo la media. Hasta ahora ese
+            # bloque solo lo leia `/scorecard/import`, que no tiene boton en
+            # ninguna pantalla — asi que `driver_scorecard` llevaba vacia desde
+            # siempre (0 documentos en produccion el 31-08-2026) y el generador
+            # de cuadrantes, que la usa como señal de eficiencia real, trabajaba
+            # a ciegas sin que nada lo dijera.
+            #
+            # Va DESPUES de guardar lo demas y dentro de un try: es una segunda
+            # llamada a Gemini y la cuota se agota (memoria del proyecto). Si
+            # falla, la subida sigue valiendo exactamente igual que hasta hoy y
+            # se dice en el mensaje; lo que no puede pasar es que se pierda la
+            # scorecard entera por esto.
+            n_conductores = 0
+            try:
+                _st = await _extract_scorecard_standings(
+                    (await _extract_report_text(content, file.filename or "scorecard"))[0],
+                    content)
+                n_conductores = await _guardar_standings(_st, cen)
+            except Exception as _e:
+                logger.warning("[upload] detalle por conductor no disponible: %s: %s",
+                               type(_e).__name__, _e)
+
             return {"tipo": "scorecard", "ok": True, "center": cen,
+                    "conductores": n_conductores,
                     "mensaje": f"Scorecard W{week}: {sc.get('overall_tier')} ({sc.get('overall_score')}){umbrales_msg}",
                     "umbrales": bool(umbrales_msg),
                     "metricas": len(sc.get("metrics") or [])}
