@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900" width="1600" height="900" role="img" aria-labelledby="t d">
+<title id="t">Flujo de taller de FlotaDSP y acceso de Amazon</title>
+<desc id="d">El DSP pregunta al taller según una pauta configurable; el taller responde en cualquier momento y queda registrado; Amazon consulta los datos con su propia llave, sin datos personales.</desc>
+
+<defs>
+  <marker id="f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#0E8C9E"/>
+  </marker>
+  <marker id="fv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#2C6B4F"/>
+  </marker>
+</defs>
+
+<rect width="1600" height="900" fill="#F7F9F9"/>
+
+<g font-family="Segoe UI, Helvetica Neue, Arial, sans-serif">
+
+  <text x="80" y="88" font-size="15" font-weight="600" letter-spacing="2.4" fill="#0E8C9E">FLOTADSP · CICLO DE TALLER</text>
+  <text x="80" y="146" font-size="44" font-weight="600" fill="#0A1E24">De la furgoneta parada al dato auditable</text>
+  <text x="80" y="184" font-size="20" fill="#5A6E73">El canal va en los dos sentidos, y Amazon lo consulta sin depender del DSP.</text>
+
+  <line x1="80" y1="222" x2="1520" y2="222" stroke="#DCE4E5" stroke-width="1"/>
+
+  <g>
+    <rect x="80" y="270" width="380" height="188" fill="#FFFFFF" stroke="#DCE4E5"/>
+    <rect x="80" y="270" width="380" height="4" fill="#0A1E24"/>
+    <text x="112" y="322" font-size="24" font-weight="600" fill="#0A1E24">DSP</text>
+    <text x="112" y="360" font-size="17" fill="#5A6E73">Inspección diaria con fotografía</text>
+    <text x="112" y="390" font-size="17" fill="#5A6E73">Detecta y clasifica el daño</text>
+    <text x="112" y="420" font-size="17" fill="#5A6E73">Abre el parte de taller</text>
+  </g>
+
+  <g>
+    <rect x="610" y="270" width="380" height="188" fill="#FFFFFF" stroke="#DCE4E5"/>
+    <rect x="610" y="270" width="380" height="4" fill="#0A1E24"/>
+    <text x="642" y="322" font-size="24" font-weight="600" fill="#0A1E24">Taller</text>
+    <text x="642" y="360" font-size="17" fill="#5A6E73">Recibe el parte con las fotos</text>
+    <text x="642" y="390" font-size="17" fill="#5A6E73">Dice cómo va y cuándo sale</text>
+    <text x="642" y="420" font-size="17" font-weight="600" fill="#2C6B4F">Escribe sin que le pregunten</text>
+  </g>
+
+  <g>
+    <rect x="1140" y="270" width="380" height="188" fill="#FFFFFF" stroke="#0E8C9E"/>
+    <rect x="1140" y="270" width="380" height="4" fill="#0E8C9E"/>
+    <text x="1172" y="322" font-size="24" font-weight="600" fill="#0E8C9E">Amazon</text>
+    <text x="1172" y="360" font-size="17" fill="#5A6E73">Consulta con su propia llave</text>
+    <text x="1172" y="390" font-size="17" fill="#5A6E73">Cuando quiere, sin pedir nada</text>
+    <text x="1172" y="420" font-size="17" fill="#5A6E73">Sin ningún dato personal</text>
+  </g>
+
+  <path d="M470,338 L600,338" stroke="#0E8C9E" stroke-width="2" marker-end="url(#f)"/>
+  <text x="484" y="326" font-size="14.5" fill="#0E8C9E">pregunta</text>
+
+  <path d="M600,400 L470,400" stroke="#2C6B4F" stroke-width="2" marker-end="url(#fv)"/>
+  <text x="484" y="428" font-size="14.5" fill="#2C6B4F">responde cuando quiere</text>
+
+  <path d="M1000,364 L1130,364" stroke="#0E8C9E" stroke-width="2" marker-end="url(#f)"/>
+  <text x="1006" y="352" font-size="14.5" fill="#0E8C9E">API con llave</text>
+
+  <g>
+    <rect x="80" y="522" width="1440" height="196" fill="#FFFFFF" stroke="#DCE4E5"/>
+
+    <text x="112" y="566" font-size="13" font-weight="600" letter-spacing="1.8" fill="#5A6E73">CÓMO FUNCIONA</text>
+
+    <g font-size="16.5" fill="#5A6E73">
+      <text x="112" y="612" font-family="Consolas, monospace" font-size="14" fill="#95A6A9">01</text>
+      <text x="152" y="612" font-weight="600" fill="#0A1E24">Se pregunta según la pauta.</text>
+      <text x="152" y="640">Cada cuántos días, cuántas veces, qué días y en qué franja. Todo configurable.</text>
+
+      <text x="112" y="684" font-family="Consolas, monospace" font-size="14" fill="#95A6A9">02</text>
+      <text x="152" y="684" font-weight="600" fill="#2C6B4F">Si el taller termina antes, lo dice y salta al momento.</text>
+      <text x="784" y="684">Se identifica por la matrícula; si no está claro, no se adivina.</text>
+    </g>
+
+    <line x1="810" y1="590" x2="810" y2="660" stroke="#DCE4E5"/>
+
+    <g font-size="16.5" fill="#5A6E73">
+      <text x="852" y="612" font-family="Consolas, monospace" font-size="14" fill="#95A6A9">03</text>
+      <text x="892" y="612" font-weight="600" fill="#0A1E24">Queda registrado.</text>
+      <text x="892" y="640">La conversación entera junto al parte.</text>
+    </g>
+  </g>
+
+  <g>
+    <rect x="80" y="748" width="1440" height="88" fill="#E4F2F3"/>
+    <text x="112" y="784" font-size="17" font-weight="600" fill="#0A5F6C">Amazon lo saca solo:</text>
+    <text x="112" y="814" font-family="Consolas, monospace" font-size="16" fill="#0A1E24">curl -H "X-FlotaDSP-Key: fd_…"  flotadsp.com/api/partner/v1/flota</text>
+    <text x="1000" y="784" font-size="15" fill="#0A5F6C">Llave cifrada · cada consulta auditada · revocable en un clic</text>
+    <text x="1000" y="814" font-size="15" fill="#0A5F6C">Sin nombres de conductores, ni teléfonos, ni quién conducía</text>
+  </g>
+
+</g>
+</svg>
