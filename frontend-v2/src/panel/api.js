@@ -538,3 +538,8 @@ export const asignarMensajeTaller = (id, ordenId) =>
 export const getInformeFlota = (params) => api.get('/taller/export', { params })
 export const descargarInformeFlota = (params) =>
   api.get('/taller/export', { params: { ...params, formato: 'csv' }, responseType: 'blob' })
+export const getLlavesPartner = () => api.get('/partner/tokens')
+export const crearLlavePartner = (body) => api.post('/partner/tokens', body)
+export const revocarLlavePartner = (id) =>
+  api.delete(`/partner/tokens/${encodeURIComponent(id)}`)
+export const getAccesosPartner = () => api.get('/partner/accesos')

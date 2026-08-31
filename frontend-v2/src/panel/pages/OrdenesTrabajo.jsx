@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import {
   Loader2, Plus, Link2, Copy, Check, X, Wrench, Euro, Clock, Search,
   AlertTriangle, MessageCircle, MessageSquare, Package, Eye, EyeOff, PhoneCall,
-  Download, CalendarClock, HelpCircle, Images, BarChart3, ChevronRight, Truck,
+  Download, CalendarClock, HelpCircle, Images, BarChart3, ChevronRight, Truck, Key,
 } from 'lucide-react'
 import {
   getOrdenes, getResumenOrdenes, getOrden, crearOrden, editarOrden, enlaceOrden,
@@ -13,6 +13,7 @@ import {
   getDisponibilidadFlota, getInformeFlota, descargarInformeFlota,
 } from '../api'
 import PautaTaller from '../components/PautaTaller'
+import LlavesPartner from '../components/LlavesPartner'
 
 import { hoyLocal } from '../../lib/fecha'
 
@@ -193,6 +194,7 @@ export default function OrdenesTrabajo() {
   const [verCanal, setVerCanal] = useState(false)
   const [informe, setInforme] = useState(null)
   const [bajandoInforme, setBajandoInforme] = useState(false)
+  const [verLlaves, setVerLlaves] = useState(false)
 
   const [nueva, setNueva] = useState(null)
   const [parte, setParte] = useState(null)          // golpes abiertos de la furgoneta elegida, con fotos
@@ -675,6 +677,20 @@ export default function OrdenesTrabajo() {
               </div>
               <div className="mt-0.5 text-[12px] text-slate-500">defectos detectados y clasificados</div>
             </div>
+          </div>
+
+          {/* Quien audita no quiere ver una pantalla: quiere sacar el dato a
+              SUS sistemas cuando le convenga. Va justo debajo del informe
+              porque es la misma información, servida de otra manera. */}
+          <div className="border-t border-slate-100 px-4 py-3">
+            <button onClick={() => setVerLlaves((v) => !v)}
+              className="flex w-full items-center gap-2 text-left">
+              <Key size={15} className="text-slate-500" />
+              <span className="text-[13.5px] font-semibold">Dar acceso directo a Amazon</span>
+              <span className="text-[12.5px] text-slate-500">para que lo saquen ellos, sin pedírtelo</span>
+              <span className="ml-auto text-[12.5px] text-slate-400">{verLlaves ? 'ocultar' : 'ver'}</span>
+            </button>
+            {verLlaves && <div className="mt-3"><LlavesPartner /></div>}
           </div>
 
           {/* Y esto es lo que de verdad importa que se vea antes de enseñarlo. */}

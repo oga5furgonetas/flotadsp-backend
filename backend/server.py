@@ -44,6 +44,7 @@ from urllib.parse import quote as _url_quote
 import json
 import uuid
 import secrets
+import hashlib
 import base64
 import logging
 import math
@@ -16906,6 +16907,175 @@ async def taller_export(desde: str = "", hasta: str = "", center: str = "",
         headers={"Content-Disposition":
                  'attachment; filename="flotadsp_%s_%s_%s.csv"'
                  % (centro or "todos", d_desde, d_hasta)})
+
+
+# ── ACCESO PARA AMAZON ──────────────────────────────────────────────────────
+# Lo que de verdad le importa a quien audita un DSP no es ver una pantalla: es
+# poder sacar el dato a SUS sistemas, cuando quiera, sin depender de que alguien
+# se lo mande. Un informe que hay que pedir por correo no es trazabilidad.
+#
+# Esto es esa vía, y está construida asumiendo tres cosas que no son negociables
+# cuando le abres tus datos a un tercero:
+#
+#   1. El token se guarda HASHEADO. Si alguien se lleva la base de datos, no se
+#      lleva las llaves. Se enseña UNA vez, al crearlo, y no vuelve a verse.
+#   2. Solo lectura y con alcance. Un token de flota no abre nada más.
+#   3. Cada consulta queda registrada. El DSP tiene que poder ver qué le han
+#      mirado y cuándo — la transparencia va en los dos sentidos o no es
+#      transparencia.
+#
+# Y NO SALE UN SOLO DATO PERSONAL. Ni nombres de conductores, ni teléfonos, ni
+# quién conducía cuándo. Amazon audita la flota y el cumplimiento, no a las
+# personas; mandarle nombres sería entregar datos de un tercero que no lo ha
+# consentido, y además no lo ha pedido nadie.
+
+PARTNER_COL = "partner_tokens"
+PARTNER_ACCESOS = "partner_accesos"
+PARTNER_SCOPES = ("flota",)
+PARTNER_DIAS_DEF = 365
+
+
+def _partner_hash(tok: str) -> str:
+    return hashlib.sha256(("flotadsp-partner:" + str(tok or "")).encode()).hexdigest()
+
+
+@api_router.post("/partner/tokens")
+async def partner_crear_token(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Crea una llave de solo lectura para un tercero. Se enseña UNA vez."""
+    nombre = str(data.get("partner") or "").strip()
+    if not nombre:
+        raise HTTPException(400, "Dile de quién es la llave (por ejemplo, «Amazon Logistics»)")
+    scopes = [s for s in (data.get("scopes") or ["flota"]) if s in PARTNER_SCOPES] or ["flota"]
+    dias = max(1, min(int(data.get("dias") or PARTNER_DIAS_DEF), 1095))
+    centro = str(data.get("center") or "").strip()
+
+    crudo = "fd_" + secrets.token_urlsafe(32)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "partner": nombre,
+        "token_hash": _partner_hash(crudo),
+        "db_name": _current_db_name.get(),
+        "center": centro,
+        "scopes": scopes,
+        "creado_en": datetime.now(timezone.utc).isoformat(),
+        "creado_por": user.get("name") or user.get("username") or "oficina",
+        "expira_en": (datetime.now(timezone.utc) + timedelta(days=dias)).isoformat(),
+        "revocado": False,
+        "accesos": 0,
+        "ultimo_uso": None,
+    }
+    await global_db[PARTNER_COL].insert_one(doc)
+    logger.info("Llave de partner creada para %s (%d días)", nombre, dias)
+    return {
+        # La única vez que se ve. A partir de aquí solo existe su hash.
+        "token": crudo,
+        "aviso": "Cópiala ahora: no se puede volver a ver. Si se pierde, se revoca y se hace otra.",
+        "id": doc["id"], "partner": nombre, "scopes": scopes,
+        "expira_en": doc["expira_en"],
+        "como_se_usa": "curl -H 'X-FlotaDSP-Key: <token>' %s/api/partner/v1/flota"
+                       % os.environ.get("PUBLIC_BASE_URL", "https://flotadsp-backend.fly.dev"),
+    }
+
+
+@api_router.get("/partner/tokens")
+async def partner_listar_tokens(_=Depends(require_admin)):
+    """Las llaves entregadas y lo que han consultado. Nunca el token."""
+    filas = await global_db[PARTNER_COL].find(
+        {"db_name": _current_db_name.get()},
+        {"_id": 0, "token_hash": 0}).sort("creado_en", -1).to_list(100)
+    ahora = datetime.now(timezone.utc).isoformat()
+    for f in filas:
+        f["caducada"] = str(f.get("expira_en") or "") < ahora
+        f["activa"] = not f.get("revocado") and not f["caducada"]
+    return {"llaves": filas}
+
+
+@api_router.delete("/partner/tokens/{token_id}")
+async def partner_revocar_token(token_id: str, _=Depends(require_admin)):
+    """Corta el acceso. No se borra la llave: se marca, para que quede el rastro
+    de que existió y de lo que consultó mientras estuvo viva."""
+    r = await global_db[PARTNER_COL].update_one(
+        {"id": token_id, "db_name": _current_db_name.get()},
+        {"$set": {"revocado": True,
+                  "revocado_en": datetime.now(timezone.utc).isoformat()}})
+    if not r.matched_count:
+        raise HTTPException(404, "No existe esa llave")
+    return {"ok": True, "revocada": token_id}
+
+
+@api_router.get("/partner/accesos")
+async def partner_ver_accesos(limite: int = 100, _=Depends(require_admin)):
+    """Qué han consultado y cuándo. La transparencia va en los dos sentidos."""
+    filas = await global_db[PARTNER_ACCESOS].find(
+        {"db_name": _current_db_name.get()}, {"_id": 0}).sort(
+        "at", -1).to_list(max(1, min(limite, 500)))
+    return {"accesos": filas, "total": len(filas)}
+
+
+async def _partner_auth(request: Request, scope: str) -> dict:
+    """Valida la llave del tercero y deja la BD del DSP fijada.
+
+    Gotcha 26: este camino NO tiene sesión de usuario. `db` sin
+    `set_current_org_db` caería en la base por defecto, y el día que haya un
+    segundo cliente, la llave de un DSP leería los datos de otro. El `db_name`
+    va DENTRO de la llave y se fija aquí a mano.
+    """
+    tok = (request.headers.get("X-FlotaDSP-Key")
+           or request.headers.get("x-flotadsp-key") or "").strip()
+    if not tok:
+        raise HTTPException(401, "Falta la cabecera X-FlotaDSP-Key")
+    doc = await global_db[PARTNER_COL].find_one({"token_hash": _partner_hash(tok)})
+    if not doc or doc.get("revocado"):
+        # Mismo mensaje para una llave que no existe y una revocada: distinguirlas
+        # le diría a quien prueba llaves cuáles existieron.
+        raise HTTPException(401, "Llave no válida")
+    if str(doc.get("expira_en") or "") < datetime.now(timezone.utc).isoformat():
+        raise HTTPException(401, "Llave caducada")
+    if scope not in (doc.get("scopes") or []):
+        raise HTTPException(403, "Esta llave no da acceso a %s" % scope)
+    set_current_org_db(doc.get("db_name") or _DEFAULT_DB_NAME)
+    return doc
+
+
+async def _partner_apunta(doc: dict, request: Request, recurso: str, params: dict):
+    """Deja constancia de la consulta. Que falle no puede tumbar la respuesta."""
+    try:
+        await global_db[PARTNER_ACCESOS].insert_one({
+            "at": datetime.now(timezone.utc).isoformat(),
+            "partner": doc.get("partner"), "token_id": doc.get("id"),
+            "db_name": doc.get("db_name"), "recurso": recurso, "params": params,
+            "ip": (request.client.host if request.client else None),
+            # 90 días: es un registro de auditoría, no un histórico eterno.
+            "expira_en": datetime.now(timezone.utc) + timedelta(days=90),
+        })
+        await global_db[PARTNER_COL].update_one(
+            {"id": doc.get("id")},
+            {"$set": {"ultimo_uso": datetime.now(timezone.utc).isoformat()},
+             "$inc": {"accesos": 1}})
+    except Exception as e:                                       # noqa: BLE001
+        logger.warning("registro de acceso de partner: %s", e)
+
+
+@api_router.get("/partner/v1/flota")
+async def partner_flota(request: Request, desde: str = "", hasta: str = "",
+                        formato: str = "json"):
+    """Trazabilidad de flota y taller, para un tercero autorizado.
+
+    Misma información que ve el DSP, sin un solo dato personal. La versión va en
+    la ruta (`/v1/`) a propósito: quien conecte esto a un proceso automático
+    tiene que poder confiar en que las columnas no cambian de un día para otro.
+    """
+    doc = await _partner_auth(request, "flota")
+    centro = doc.get("center") or ""
+    await _partner_apunta(doc, request, "flota",
+                          {"desde": desde, "hasta": hasta, "formato": formato})
+    datos = await taller_export(desde=desde, hasta=hasta, center=centro,
+                                formato=formato, _=None)
+    if not isinstance(datos, dict):
+        return datos                                   # el CSV sale tal cual
+    datos["informe"]["emitido_para"] = doc.get("partner")
+    datos["informe"]["contiene_datos_personales"] = False
+    return datos
 
 
 @api_router.get("/taller/bandeja")

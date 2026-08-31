@@ -46,6 +46,12 @@ const SIN_UI_A_PROPOSITO = new Set([
   // comparación se hace abriendo Cortex al lado.
   'POST /cortex/congelar-dia',
   'GET /cortex/dias-congelados',
+  // La consume AMAZON con su propia llave, no nuestro frontend — igual que el
+  // webhook de WhatsApp. Sin esta excepción sale como huérfana para siempre y
+  // el trinquete acaba subiendo por rutas que sí tienen consumidor, solo que
+  // está fuera. Lo que SÍ tiene pantalla es la gestión de las llaves
+  // (/partner/tokens y /partner/accesos), que es donde se da y se corta.
+  'GET /partner/v1/flota',
   'POST /vehicles/fix-centers',
   'POST /drivers/import-ids',
   'GET /ai-dataset/export',
