@@ -27,6 +27,20 @@
     return null;
   };
 
+  /* El día de HOY en la nave, compuesto a mano.
+     ═══════════════════════════════════════════════════════════════════════
+     Sacar el dia por ISO es lo que habia aqui, y en España
+     (UTC+2) entre medianoche y las 2 devuelve el día ANTERIOR: la extensión
+     le pedía a Cortex el resumen del día de ayer sin que nada fallara. La
+     ventana no es teórica — el barrido sigue vivo hasta las 04:00.
+     Es el gotcha 11: para un DÍA se compone con getFullYear/getMonth/getDate;
+     `toISOString()` solo vale para un instante. */
+  const hoyLocal = () => {
+    const h = new Date();
+    return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, '0')}`
+      + `-${String(h.getDate()).padStart(2, '0')}`;
+  };
+
   // Esquema de una respuesta: describe la ESTRUCTURA (claves + valores cortos)
   // sin volcar miles de items. Los estados de entrega son strings cortos, así
   // que aparecen literalmente y podemos localizar el campo real.
@@ -92,7 +106,7 @@
      peticion buena una vez. */
   const urlResumenFallback = () => {
     if (!saId) return null;   // sin estacion iria a la nave equivocada
-    const dia = serviceDay() || new Date().toISOString().slice(0, 10);
+    const dia = serviceDay() || hoyLocal();
     return `${location.origin}/operations/execution/api/route-summaries`
       + `?historicalDay=${histParam}&localDate=${dia}&serviceAreaId=${saId}`;
   };
@@ -317,7 +331,7 @@
      la página cuando la tienes abierta. */
   let plantillaInforme = null;
   const urlInforme = () => {
-    const dia = serviceDay() || new Date().toISOString().slice(0, 10);
+    const dia = serviceDay() || hoyLocal();
     if (plantillaInforme) return plantillaInforme.replace('__DIA__', dia);
     if (!saId) return null;   // sin estación no se pide: iría al centro equivocado
     return `${location.origin}/operations/execution/api/packages/packagesByStatus`

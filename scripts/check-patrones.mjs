@@ -61,10 +61,22 @@ const PATRONES = [
   {
     id: 'toisostring-fecha-local',
     gotcha: 11,
-    // new Date(y, m, d).toISOString() cae en el día ANTERIOR en UTC+2.
-    re: /new Date\([^)]*\)\s*\.toISOString\(\)/g,
-    que: 'toISOString() sobre una fecha construida en local',
-    porque: 'En UTC+2 devuelve el día ANTERIOR. Compón la clave con getFullYear/getMonth/getDate',
+    /* Dos formas del gotcha 11, y solo dos:
+         · `new Date(y, m, d).toISOString()`  — fecha LOCAL pasada a ISO
+         · `.toISOString().slice(0,10)` / `.split('T')[0]` — sacar el DÍA
+       `new Date().toISOString()` a secas NO es el fallo: es un INSTANTE, y
+       para un instante el ISO es lo correcto. Marcarlo tambien daba 15 avisos
+       en falso por cada uno bueno —timestamps de logs, de capturas, de
+       consentimiento— y con ese ruido los dos de verdad llevaban meses
+       escondidos en el trinquete: la extension le pedia a Cortex el resumen
+       del dia ANTERIOR entre medianoche y las 2.
+
+       Ojo tambien a `new Date(x).toISOString()` con UN argumento: eso convierte
+       un instante que ya existe y tampoco es el fallo. La fecha local se
+       construye con VARIOS —`new Date(y, m, d)`—, de ahi la coma en el patron. */
+    re: /new Date\([^)]*,[^)]*\)\s*\.toISOString\(\)|\.toISOString\(\)\s*\.(?:slice\(\s*0\s*,\s*10\s*\)|split\(\s*['"]T['"]\s*\))/g,
+    que: 'toISOString() para sacar un DÍA (o sobre una fecha local)',
+    porque: 'En UTC+2 devuelve el día ANTERIOR. Compón el día con getFullYear/getMonth/getDate',
   },
   {
     id: 'division-sin-guard',
@@ -145,7 +157,14 @@ for (const f of ficheros(RAIZ)) {
    de revisar sitios que en su mayoría están bien, y mientras tanto CI en rojo
    deja de mirarse. Lo que NO se tolera es que suba: un patrón nuevo es código
    recién escrito, y ese es el momento barato de arreglarlo. */
-const TOLERADOS = 45
+/* El trinquete BAJA cuando se limpia, si no deja de apretar. De 45 a 36 el
+   31-08-2026: la division del WHC (reventaba con una empresa sin conductores),
+   los dos toISOString de la extension (le pedia a Cortex el resumen del dia
+   ANTERIOR entre medianoche y las 2) y los dos del Dashboard (el rotulo decia
+   un dia y el dato era el del anterior). Los 8 que quedan de fecha son datos
+   de laboratorio, fixtures de e2e y el de Scorecard, que trabaja en UTC a
+   mediodia A PROPOSITO y es correcto. */
+const TOLERADOS = 36
 
 console.log(`\npatrones: ${PATRONES.length} reglas, todas salidas de un bug real de este proyecto`)
 if (!avisos) {

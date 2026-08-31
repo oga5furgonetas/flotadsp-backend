@@ -11,7 +11,7 @@ import { useT, LANG_LOCALE } from '../../i18n'
 import { lista } from '../../lib/lista'
 import { PageSkeleton } from '../components/Skeleton'
 import Activacion from '../components/Activacion'
-import { hoyLocal } from '../../lib/fecha'
+import { hoyLocal, isoLocal } from '../../lib/fecha'
 
 /* ── helpers ── */
 function greeting(t) {
@@ -342,7 +342,10 @@ function WeeklyChart({ data }) {
   for (let i = 6; i >= 0; i--) {
     const d = new Date()
     d.setDate(d.getDate() - i)
-    const key = d.toISOString().slice(0, 10)
+    // isoLocal y no toISOString: la etiqueta sale de la fecha LOCAL y la clave
+    // salia en UTC, asi que entre medianoche y las 2 el rotulo decia un dia y
+    // el dato era el del anterior — y «hoy» se quedaba a cero (gotcha 11).
+    const key = isoLocal(d)
     const label = i === 0 ? t('chart.today') : d.toLocaleDateString(locale, { weekday: 'short' })
     days.push({ key, label, ...(data[key] || { inspecciones: 0, danos: 0 }) })
   }
@@ -694,7 +697,7 @@ export default function Dashboard() {
     for (let i = 6; i >= 0; i--) {
       const d = new Date()
       d.setDate(d.getDate() - i)
-      const key = d.toISOString().slice(0, 10)
+      const key = isoLocal(d)          // en UTC el dia se corria (gotcha 11)
       out.push({
         key,
         label: i === 0 ? t('chart.today') : d.toLocaleDateString(locale, { weekday: 'short' }).slice(0, 3),
