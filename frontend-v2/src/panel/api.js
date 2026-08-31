@@ -241,10 +241,11 @@ export const uploadDailyReport = (file) => _subir('/metrics/upload-daily', file)
 export const getDailyWeek = (center, desde, hasta) => api.get('/metrics/daily-week', { params: { center, desde, hasta } })
 export const getRoutePlanAvailable = (center) => api.get('/metrics/routeplan-available', { params: { center } })
 export const getDriverRouteHistory = (tid) => api.get(`/metrics/driver-history/${encodeURIComponent(tid)}`)
-export const importVehicles = (file, center) => {
+export const importVehicles = (file, center, crear) => {
   const fd = new FormData()
   fd.append('file', file, file.name)
   if (center && center !== 'Todos') fd.append('center_filter', center)
+  if (crear) fd.append('crear', 'true')
   return api.post('/import/vehicles', fd, { timeout: 120000, headers: { 'Content-Type': undefined } })
 }
 

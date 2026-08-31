@@ -18625,43 +18625,100 @@ def _load_workbook_reparado(content):
 async def import_vehicles(
     file: UploadFile = File(...),
     center_filter: Optional[str] = Form(None),
-    _=Depends(require_admin)
+    crear: bool = Form(False),
+    user: dict = Depends(require_admin)
 ):
+    """Importa flota desde Excel o CSV.
+
+    DOS USOS DISTINTOS, y por eso `crear` existe:
+
+      · El Excel de Amazon trae 600 furgonetas de toda la region, de las que
+        solo unas pocas son tuyas. Ahi lo que se quiere es ACTUALIZAR las que
+        ya tienes y no dar de alta las 600 ajenas. Es el comportamiento por
+        defecto y no se toca.
+      · Una empresa que empieza sube SU flota. Ahi no hay nada que actualizar:
+        si no se crean, no pasa nada y el mensaje decia solo "3 omitidos", que
+        no explica nada. Con `crear=true` se dan de alta.
+
+    Poner `crear` por defecto a false es deliberado: crear de mas ensucia la
+    flota con furgonetas que no son tuyas y hay que borrarlas una a una;
+    no crear solo obliga a repetir la importacion marcando la casilla.
+    """
     content = await file.read()
+    # Un CSV tambien vale. El importador solo leia Excel, y hay empresas que
+    # tienen la flota en una hoja exportada a CSV: pedirles que la conviertan
+    # es trasladarles trabajo que se hace aqui en tres lineas.
+    es_csv = (file.filename or "").lower().endswith((".csv", ".txt"))
+    all_rows = None
+    if es_csv:
+        try:
+            all_rows = [tuple(f) for f in _read_table_any(content, file.filename)]
+        except Exception as e:                                   # noqa: BLE001
+            raise HTTPException(400, "No se pudo leer el fichero: %s" % str(e)[:120])
+        if not all_rows:
+            raise HTTPException(400, "El fichero no tiene filas legibles")
+
     try:
-        import openpyxl
-        wb = None
-        # Intento 1: carga normal con data_only
-        try:
-            wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
-        except Exception as e1:
-            # Intento 2: sin data_only (evita leer la hoja de estilos calculada)
+        # Con un CSV las filas ya están leídas arriba: openpyxl no pinta nada
+        # aquí, y sus tres intentos de carga fallarían uno detrás de otro.
+        if not es_csv:
+            import openpyxl
+            wb = None
+            # Intento 1: carga normal con data_only
             try:
-                wb = openpyxl.load_workbook(io.BytesIO(content), data_only=False)
-            except Exception as e2:
-                # Intento 3: reparar el XML de estilos corrupto del Excel de Amazon
-                wb = _load_workbook_reparado(content)
-        if wb is None:
-            raise HTTPException(status_code=400, detail="No se pudo leer el Excel")
-        # Elegir la hoja con MÁS filas (no siempre es la activa)
-        hojas_validas = [w for w in wb.worksheets if (w.max_row or 0) > 0]
-        if not hojas_validas:
-            raise HTTPException(status_code=400, detail="El Excel no tiene hojas con datos")
-        ws = max(hojas_validas, key=lambda w: w.max_row or 0)
-        # Forzar recálculo de dimensiones por si vienen mal declaradas
-        try:
-            ws.reset_dimensions()
-        except Exception:
-            pass
-        # Leer todas las filas como valores
-        all_rows = list(ws.iter_rows(values_only=True))
+                wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+            except Exception as e1:
+                # Intento 2: sin data_only (evita leer la hoja de estilos calculada)
+                try:
+                    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=False)
+                except Exception as e2:
+                    # Intento 3: reparar el XML de estilos corrupto del Excel de Amazon
+                    wb = _load_workbook_reparado(content)
+            if wb is None:
+                raise HTTPException(status_code=400, detail="No se pudo leer el Excel")
+            # Elegir la hoja con MÁS filas (no siempre es la activa)
+            hojas_validas = [w for w in wb.worksheets if (w.max_row or 0) > 0]
+            if not hojas_validas:
+                raise HTTPException(status_code=400, detail="El Excel no tiene hojas con datos")
+            ws = max(hojas_validas, key=lambda w: w.max_row or 0)
+            # Forzar recálculo de dimensiones por si vienen mal declaradas
+            try:
+                ws.reset_dimensions()
+            except Exception:
+                pass
+            # Leer todas las filas como valores
+            all_rows = list(ws.iter_rows(values_only=True))
         # Filtrar filas completamente vacías al principio
         all_rows = [r for r in all_rows if r is not None]
         if not all_rows or len(all_rows) < 1:
-            raise HTTPException(status_code=400, detail="El Excel no tiene filas legibles")
-        headers = [str(c).strip().lower() if c is not None else "" for c in all_rows[0]]
+            raise HTTPException(status_code=400, detail="El fichero no tiene filas legibles")
+        # LA CABECERA NO SIEMPRE ESTA EN LA PRIMERA FILA. Los Excel de gestoria
+        # traen el logo, el mes y un par de filas en blanco delante, y asumiendo
+        # `all_rows[0]` el importador respondia "no se detectaron cabeceras" —
+        # que es verdad, pero no ayuda a nadie. Se busca la fila que MAS
+        # columnas conocidas tenga, igual que hace el de conductores.
+        _CLAVES = ("matricula", "license_plate", "matrícula", "centro", "center",
+                   "marca", "brand", "modelo", "model", "vin", "bastidor")
+        def _cuantas(fila):
+            n = 0
+            for c in fila:
+                t = str(c or "").strip().lower()
+                if t and any(k in t for k in _CLAVES):
+                    n += 1
+            return n
+        _fila_cab = max(range(min(15, len(all_rows))),
+                        key=lambda i: _cuantas(all_rows[i]), default=0)
+        if _cuantas(all_rows[_fila_cab]) == 0:
+            _fila_cab = 0
+        headers = [str(c).strip().lower() if c is not None else ""
+                   for c in all_rows[_fila_cab]]
+        all_rows = all_rows[_fila_cab:]
         if not any(headers):
-            raise HTTPException(status_code=400, detail="No se detectaron cabeceras en el Excel")
+            raise HTTPException(
+                status_code=400,
+                detail="No se han encontrado las cabeceras. Hace falta una columna de "
+                       "matrícula — puede llamarse «Matrícula», «Matricula» o "
+                       "«License plate».")
     except HTTPException:
         raise
     except Exception as e:
@@ -18687,7 +18744,17 @@ async def import_vehicles(
     imported = 0
     updated = 0
     skipped = 0
+    no_estaban = 0
     errors = []
+
+    unico_centro_veh = ""
+    try:
+        _org = await get_org(user.get("org_id"))
+        _cs = [c for c in ((_org or {}).get("centers") or []) if c]
+        if len(_cs) == 1:
+            unico_centro_veh = _cs[0]
+    except Exception:                                            # noqa: BLE001
+        pass
 
     # Precargar todas las furgonetas indexadas por matrícula normalizada (sin espacios)
     _all_vehicles = await db.vehicles.find({}).to_list(10000)
@@ -18780,8 +18847,24 @@ async def import_vehicles(
                     skipped += 1
                 continue
 
-            # Furgoneta NO está en tu flota: la omitimos (no creamos las 600 ajenas)
-            skipped += 1
+            # No esta en tu flota. Se crea solo si te lo has pedido.
+            if not crear:
+                no_estaban += 1
+                skipped += 1
+                continue
+            nueva = {
+                "id": str(uuid.uuid4()), "license_plate": plate,
+                "status": "active",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                **campos,
+            }
+            # Si el fichero no trae centro y la empresa solo tiene uno, ese.
+            # Sin centro, una furgoneta no sale en ninguna lista filtrada.
+            if not nueva.get("center") and unico_centro_veh:
+                nueva["center"] = unico_centro_veh
+            await db.vehicles.insert_one(nueva)
+            imported += 1
         except Exception as row_err:
             errors.append(f"{plate}: {str(row_err)[:80]}")
             skipped += 1
@@ -18795,7 +18878,16 @@ async def import_vehicles(
         "diag_total_filas": len(all_rows),
         "diag_furgonetas_bd": len(_plate_map),
         "diag_ejemplos_excel": _diag_examples,
-        "message": f"{imported} creados, {updated} actualizados, {skipped} omitidos"
+        "no_estaban": no_estaban,
+        # El mensaje tiene que decir QUE HACER. «3 omitidos» es verdad y no
+        # sirve de nada: quien sube su flota entera y ve eso cree que la
+        # aplicación no funciona, y no vuelve a intentarlo.
+        "message": (
+            f"{imported} creadas, {updated} actualizadas, {skipped} omitidas"
+            + (f". {no_estaban} no estaban en tu flota: si este fichero ES tu flota, "
+               f"vuelve a subirlo marcando «dar de alta las que no estén»."
+               if no_estaban and not crear else "")
+        )
     }
 
 

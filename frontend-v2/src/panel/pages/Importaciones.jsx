@@ -10,15 +10,21 @@ export default function Importaciones() {
   const fileRef = useRef(null)
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState(null)
+  const [crear, setCrear] = useState(false)
 
   async function onFile(e) {
     const file = e.target.files?.[0]
     if (!file) return
     setBusy(true); setMsg(null)
     try {
-      const r = await importVehicles(file, center)
+      const r = await importVehicles(file, center, crear)
       const d = r.data || {}
-      setMsg({ ok: true, t: `Importado: ${d.creados ?? d.created ?? d.importados ?? 0} nuevos, ${d.actualizados ?? d.updated ?? 0} actualizados${center !== 'Todos' ? ` (centro ${center})` : ''}.` })
+      /* Se enseña el mensaje que manda el backend, no uno recompuesto aquí:
+         antes se leía `d.creados`, `d.created` o `d.importados` y el backend
+         devuelve `imported`, así que SIEMPRE ponía «0 nuevos» aunque hubiera
+         importado cincuenta. Y el del backend además dice qué hacer cuando
+         algo se omite. */
+      setMsg({ ok: true, t: d.message || 'Importado.' })
     } catch (err) {
       setMsg({ ok: false, t: err?.response?.data?.detail || 'No se pudo importar el archivo.' })
     } finally { setBusy(false); if (fileRef.current) fileRef.current.value = '' }
@@ -35,6 +41,22 @@ export default function Importaciones() {
         <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={onFile} className="hidden" id="imp-file" />
         <label htmlFor="imp-file" className="btn-primary inline-flex cursor-pointer items-center gap-2">
           {busy ? <Loader2 size={16} className="animate-spin" /> : <FileUp size={16} />} {t('imp.choose.file')}
+        </label>
+        {/* La casilla que decide si se dan de alta las que no estén. Va sin
+            marcar a propósito: el fichero más habitual es el de Amazon, que
+            trae 600 furgonetas de toda la región y solo unas pocas son tuyas.
+            Crear de más ensucia la flota y hay que borrarlas una a una; no
+            crear solo obliga a repetir la importación. */}
+        <label className="mt-3 flex cursor-pointer items-start gap-2 text-[13px] text-dark-300">
+          <input type="checkbox" checked={crear} onChange={(e) => setCrear(e.target.checked)}
+            className="mt-0.5 h-4 w-4 accent-brand-500" />
+          <span>
+            Dar de alta las que no estén
+            <span className="mt-0.5 block text-[12px] text-dark-500">
+              Márcalo si este fichero es TU flota. Déjalo sin marcar si es el listado
+              de Amazon, que trae furgonetas de otras empresas.
+            </span>
+          </span>
         </label>
         <p className="mt-3 flex items-start gap-1.5 text-xs text-dark-500"><Info size={13} className="mt-0.5 shrink-0" /> {t('imp.columns.hint')}</p>
       </div>
