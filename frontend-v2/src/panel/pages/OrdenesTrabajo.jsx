@@ -383,6 +383,11 @@ export default function OrdenesTrabajo() {
 
   const abrirAlta = async () => {
     setNueva({ vehicle_id: '', workshop_id: '', problema: '', fecha_entrega_estimada: '' })
+    // Los daños de la preparación anterior son de OTRA furgoneta: si se quedan,
+    // el botón se activa creyendo que hay problema descrito y el parte sale con
+    // golpes de un vehículo que no ha ido (el backend los descarta, pero para
+    // entonces la pantalla ya ha dicho que sí).
+    setDanosElegidos([])
     if (!vehiculos.length) {
       try { setVehiculos((await getVehicles(center)).data || []) } catch { /* lo avisa el formulario */ }
     }
@@ -1407,8 +1412,17 @@ export default function OrdenesTrabajo() {
               onChange={(e) => setNueva({ ...nueva, fecha_entrega_estimada: e.target.value })}
               className="mb-5 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-[14px]" />
 
+            {/* Sin decir qué le pasa, el taller abre el enlace y solo ve la
+                matrícula: acaba llamando, que es lo que esto evita. Vale
+                marcar daños del libro — con eso el texto se redacta solo. */}
+            {!(nueva.problema || '').trim() && !danosElegidos.length && (
+              <p className="mb-2 text-[12.5px] text-amber-700">
+                Escribe qué le pasa, o marca arriba el daño del libro. El taller no ve nada más.
+              </p>
+            )}
             <button onClick={crear}
-              disabled={!nueva.vehicle_id || !nueva.workshop_id || guardando === 'crear'}
+              disabled={!nueva.vehicle_id || !nueva.workshop_id || guardando === 'crear'
+                || (!(nueva.problema || '').trim() && !danosElegidos.length)}
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 py-3 text-[14.5px] font-semibold text-white hover:bg-blue-700 disabled:opacity-40">
               {guardando === 'crear' ? <Loader2 size={16} className="animate-spin" /> : <><Plus size={16} /> Crear y generar enlace</>}
             </button>

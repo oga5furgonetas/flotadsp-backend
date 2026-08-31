@@ -16352,6 +16352,24 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
             if not problema:
                 problema = (inc.get("description") or inc.get("title") or "").strip()
 
+    # SIN DECIR QUE LE PASA NO SALE.
+    #
+    # Arriba se redacta el problema solo a partir de los daños del libro o de
+    # la incidencia. Cuando no hay ninguna de las dos cosas —y una empresa
+    # recien dada de alta no tiene ninguna el primer dia— la orden salia con
+    # el problema en BLANCO: el taller recibe el enlace por WhatsApp, abre, ve
+    # la matricula y no ve que arreglar. Acaba llamando, que es justo lo que
+    # este flujo existe para evitar.
+    #
+    # La pantalla ya avisaba, pero solo con un mensaje que no impedia guardar,
+    # y el aviso ni siquiera aparece al abrir una orden desde cero. La regla
+    # tiene que estar aqui, que es por donde pasan las dos formas de crearla.
+    if not problema:
+        raise HTTPException(
+            400, "Escribe qué le pasa a la furgoneta: el taller solo ve lo que le "
+                 "pongas aquí. Si el golpe ya está apuntado en el libro de daños, "
+                 "márcalo y el texto se redacta solo.")
+
     orden = {
         "id": str(uuid.uuid4()),
         "numero": await _ot_numero(),
@@ -17018,6 +17036,30 @@ async def _seg_apunta(orden: dict, direccion: str, texto: str, canal: str,
     doc.update(extra or {})
     await db[SEG_COL_BANDEJA].insert_one(doc)
     return doc["id"]
+
+
+async def _portal_apunta(orden: dict, texto: str) -> None:
+    """Lo que el taller hace EN EL PORTAL, a la bandeja del DSP.
+
+    Sin esto, «Lo que dicen los talleres» solo se llenaba con los WhatsApp
+    entrantes —lo unico que llamaba a `registrar_novedad_taller`—, y por el
+    portal, que es el enlace que les mandamos y el unico camino que funciona
+    mientras Meta siga sin aprobar el numero, no entraba nada. La pantalla que
+    promete enseñar lo que dicen los talleres estaba vacia siempre.
+
+    No avisa ni para el reloj: de eso ya se encargan `_ot_avisa` y
+    `ultima_novedad_taller` en cada endpoint del portal. Aqui solo se APUNTA,
+    para no mandar dos avisos por lo mismo.
+
+    Y no puede tumbar la accion del taller: si el apunte falla, lo que el
+    taller acaba de decir ya esta guardado en la orden. Perder la linea de la
+    bandeja es malo; perder el cambio de estado, peor.
+    """
+    try:
+        await _seg_apunta(orden, "entrada", texto, "portal",
+                          {"taller_id": orden.get("workshop_id") or orden.get("taller_id")})
+    except Exception as e:
+        logger.warning("No se pudo apuntar en la bandeja la novedad del portal: %s", e)
 
 
 async def registrar_novedad_taller(orden: dict, texto: str, canal: str,
@@ -18105,6 +18147,8 @@ async def portal_taller_estado(token: str, data: dict = Body(...)):
                    "ultima_novedad_taller": _ot_ahora()},
          "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller",
                                            "Estado: " + OT_ESTADOS[nuevo], nota)}})
+    await _portal_apunta(orden, "Lo ha puesto en: %s%s"
+                         % (OT_ESTADOS[nuevo], (" — " + nota) if nota else ""))
     if nuevo in OT_AVISA:
         await _ot_avisa(orden, "El taller lo ha puesto en: %s%s"
                         % (OT_ESTADOS[nuevo], (" — " + nota) if nota else ""))
@@ -18194,6 +18238,8 @@ async def portal_taller_entrega(token: str, data: dict = Body(...)):
 
     # Un retraso es exactamente la llamada que este modulo venia a quitar:
     # si la fecha se mueve, se avisa. Si se pone por primera vez, no.
+    await _portal_apunta(orden, "Entrega prevista: %s%s"
+                         % (f, (" — " + " · ".join(partes)) if partes else ""))
     if antes and antes != f:
         cuanto = ("se retrasa %d dias" % desfase) if desfase and desfase > 0 else (
             "se adelanta %d dias" % abs(desfase)) if desfase else "cambia"
@@ -18227,6 +18273,8 @@ async def portal_taller_presupuesto(token: str, data: dict = Body(...)):
         {"id": orden["id"]},
         {"$set": campos,
          "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller", que, detalle)}})
+    await _portal_apunta(orden, que + ((" — " + detalle) if detalle else "")
+                         + ("" if final else " (pendiente de aprobar)"))
     await _ot_avisa(orden, que + ((" — " + detalle) if detalle else "")
                     + ("" if final else " (pendiente de aprobar)"))
     return await _ot_publica(await db.ordenes_trabajo.find_one({"id": orden["id"]}, {"_id": 0}))
@@ -18244,6 +18292,7 @@ async def portal_taller_nota(token: str, data: dict = Body(...)):
         {"id": orden["id"]},
         {"$set": {"actualizada_en": _ot_ahora(), "ultima_novedad_taller": _ot_ahora()},
          "$push": {"historial": _ot_apunte(orden.get("taller_nombre") or "Taller", "Nota", nota)}})
+    await _portal_apunta(orden, nota)
     await _ot_avisa(orden, "Nota del taller: " + nota[:200])
     return await _ot_publica(await db.ordenes_trabajo.find_one({"id": orden["id"]}, {"_id": 0}))
 
