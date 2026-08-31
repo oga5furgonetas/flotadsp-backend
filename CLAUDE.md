@@ -626,6 +626,18 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   de API, que necesitan el backend instalado).
 - Smoke de produccion: `backend/scripts/smoke_endpoints.py` desde la maquina,
   que comprueba que el DATO cuadra y no solo que responda 200.
+- **El primer dia de un cliente**: `python backend/scripts/smoke_empresa_nueva.py`.
+  Da de alta una empresa de usar y tirar y la recorre entera: importar de un
+  Excel, las 35 pantallas con centro y sin el, el conductor entrando al portal,
+  foto + IA + Revision Rapida filtrada por centro, el circuito del taller de ida
+  y de vuelta, y lo que solo falla con dos peticiones a la vez. 25
+  comprobaciones. **Es el unico sitio donde se prueba la base vacia**, que es el
+  camino que con la flota de Dani no se recorre nunca y que los clientes nuevos
+  recorren entero el primer dia: saco seis fallos de golpe el 31-08-2026
+  (gotchas 26, 32, 42 y 43), todos respondiendo 200 o lista vacia. Pasarlo
+  despues de tocar multiempresa, importaciones, centros o el flujo de taller.
+  Deja la empresa creada a proposito —no se borra sola: un script de smoke no
+  debe poder borrar nada—; se quita desde el panel de super-admin.
 - Los checkers de `scripts/` deben quedar a cero antes de commitear. Son trece:
   `check-i18n`, `check-routes`, `check-huerfanas`, `check-permisos`, `check-tema`,
   `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones`,
