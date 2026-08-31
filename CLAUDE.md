@@ -413,6 +413,17 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    reglas: la clave NO lleva la fecha, y el cerrojo captura el duplicado y
    devuelve True, porque un duplicado ahi significa "ya enviado", que es
    justo lo que se preguntaba. Un cerrojo que revienta es peor que no tenerlo.
+   **La misma familia, 31-08-2026: sembrar «la primera vez» sin contar con que
+   hay dos.** `_seg_plantillas` hacía `count == 0` y luego `insert_many` de las
+   plantillas de taller. Entre las dos cosas cabe otra petición, y en una
+   empresa nueva eso pasa el primer día —dos personas abriendo Órdenes de
+   taller a la vez, o un clic justo cuando corre el bucle de seguimiento—: la
+   segunda reventaba con `BulkWriteError` y salía un 500. Que la plantilla ya
+   exista es exactamente lo que se quería conseguir, así que **no es un error**:
+   `ordered=False` y tragarse `DuplicateKeyError`/`BulkWriteError`. Es el mismo
+   caso que `/checklist` (gotcha 42) con otra cara: **todo lo que se crea "solo
+   la primera vez" hay que probarlo con dos peticiones simultáneas**, porque en
+   producción esa primera vez ocurre una sola vez y nadie la vuelve a ver.
 
 33. **`analysis_status` vale `"ok"`, no `"done"`.** Contando por `"done"` salia
    que CERO de 1.570 inspecciones estaban analizadas por la IA, y estaban las

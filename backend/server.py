@@ -31,7 +31,7 @@ from pymongo import UpdateOne, ReturnDocument
 from concurrent.futures import ThreadPoolExecutor
 
 from jose import jwt, JWTError
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, BulkWriteError
 import bcrypt
 import functools
 import re
@@ -17049,11 +17049,22 @@ async def _seg_plantillas() -> dict:
     """
     hay = await db[SEG_COL_PLANTILLAS].count_documents({})
     if not hay:
-        await db[SEG_COL_PLANTILLAS].insert_many([
-            {"_id": p["clave"], "clave": p["clave"], "nombre": p["nombre"],
-             "texto": p["texto"], "orden": p["orden"], "de_fabrica": True,
-             "creada_en": _ot_ahora()}
-            for p in seguimiento.PLANTILLAS_BASE])
+        try:
+            # `ordered=False` + tragarse el duplicado: entre el `count` y este
+            # insert cabe otra peticion, y en una empresa nueva eso pasa el
+            # primer dia —dos personas abriendo Ordenes de taller a la vez, o
+            # un clic justo cuando corre el bucle de seguimiento—. La segunda
+            # reventaba con BulkWriteError y salia un 500 en la cara del
+            # cliente; que la plantilla ya exista es exactamente lo que se
+            # queria conseguir, asi que no es un error. Es lo mismo que el
+            # gotcha 32: un cerrojo que revienta es peor que no tenerlo.
+            await db[SEG_COL_PLANTILLAS].insert_many([
+                {"_id": p["clave"], "clave": p["clave"], "nombre": p["nombre"],
+                 "texto": p["texto"], "orden": p["orden"], "de_fabrica": True,
+                 "creada_en": _ot_ahora()}
+                for p in seguimiento.PLANTILLAS_BASE], ordered=False)
+        except (DuplicateKeyError, BulkWriteError):
+            pass
     out = {}
     async for p in db[SEG_COL_PLANTILLAS].find({}, {"_id": 0}):
         out[p.get("clave")] = p
