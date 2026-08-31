@@ -12479,7 +12479,14 @@ async def start_itv_whatsapp_scheduler():
     # El seguimiento del taller va a MEDIA MANANA, no con el resto: es cuando
     # el taller ya ha abierto y ha visto lo que tiene, y le da todo el dia para
     # contestar. A la hora del resumen (tarde) muchos ya han cerrado.
-    asyncio.create_task(_bucle_aviso("seguimiento_talleres", "turno_manana", seguimiento_talleres))
+    # El seguimiento NO va con `_bucle_aviso`. Aquel dispara una vez al dia a
+    # una hora fija (las 15:00), y la pauta deja configurar la franja horaria:
+    # con 9-19 funcionaba POR CASUALIDAD, porque las 15:00 caen dentro. En
+    # cuanto alguien pusiera 10-14, `es_hora` habria devuelto False a las 15:00
+    # y el seguimiento se habria apagado PARA SIEMPRE, sin un solo error.
+    # Configuracion que parece que funciona y apaga el sistema en silencio.
+    # Con su propio bucle, la franja que se configura es la que manda de verdad.
+    asyncio.create_task(_bucle_seguimiento())
     # La revision del DCR sale con el resumen del dia, cuando la jornada ya ha
     # cerrado. Antes, media flota sigue en la calle y todo parece un desastre.
     asyncio.create_task(_bucle_aviso("dcr_diario", "resumen_diario", revisar_dcr_diario))
@@ -12495,6 +12502,9 @@ async def start_itv_whatsapp_scheduler():
     # Va con el resumen del dia porque no es una urgencia de minutos, pero si
     # algo que hay que ver TODOS los dias mientras apriete.
     asyncio.create_task(_bucle_aviso("espacio_bd", "resumen_diario", avisar_espacio))
+    # Y que avise si algun bucle se ha muerto. Un latido que hay que ir a mirar
+    # no lo mira nadie.
+    asyncio.create_task(_bucle_aviso("bucles_vivos", "resumen_diario", avisar_bucles_muertos))
 
 
 @api_router.post("/whatsapp/avisar-itv")
@@ -16707,8 +16717,29 @@ async def taller_export(desde: str = "", hasta: str = "", center: str = "",
                         formato: str = "json", _=Depends(require_admin)):
     """Trazabilidad de flota y taller, en formato estable para entregar."""
     hoy = datetime.now(timezone.utc).date()
-    d_hasta = (hasta or hoy.strftime("%Y-%m-%d"))[:10]
-    d_desde = (desde or (hoy - timedelta(days=90)).strftime("%Y-%m-%d"))[:10]
+
+    def _dia(v, defecto):
+        """Una fecha 'YYYY-MM-DD' de verdad, o el valor por defecto.
+
+        Sin esto, `?desde=loquesea` reventaba en el `strptime` de mas abajo y
+        salia un 500. Da igual que sea un parametro tonto: este endpoint lo
+        consume AMAZON por su cuenta, y una tuberia que devuelve 500 porque
+        alguien escribio mal una fecha deja de ser fiable el primer dia.
+        Se ignora lo que no se entiende en vez de rechazar la peticion: quien
+        pide un informe quiere el informe, no una leccion de formatos.
+        """
+        s = str(v or "")[:10]
+        try:
+            # Se devuelve REFORMATEADA, no la cadena de entrada: `strptime`
+            # acepta '2026-2-3' sin ceros, y las fechas se comparan como TEXTO
+            # en Mongo — '2026-2-3' es mayor que '2026-12-01' en ese orden. El
+            # rango saldria mal sin dar ningun error.
+            return datetime.strptime(s, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            return defecto
+
+    d_hasta = _dia(hasta, hoy.strftime("%Y-%m-%d"))
+    d_desde = _dia(desde, (hoy - timedelta(days=90)).strftime("%Y-%m-%d"))
     if d_desde > d_hasta:
         d_desde, d_hasta = d_hasta, d_desde
 
@@ -17194,6 +17225,29 @@ async def taller_plantilla_set(clave: str, data: dict = Body(...),
                  "fecha_entrega_estimada": "2026-09-05"},
                 "https://flotadsp.com/taller/ejemplo", 5)),
             "creada": bool(r.upserted_id)}
+
+
+SEG_CADA_MIN = 30        # cada cuanto se mira si a alguien le toca
+
+
+async def _bucle_seguimiento():
+    """Mira cada media hora si a algun taller le toca que le preguntemos.
+
+    Correr cada media hora no manda de mas: quien decide es
+    `seguimiento.toca_preguntar`, que mira `ultimo_toque` y no repite dentro de
+    los dias que diga la pauta. El bucle solo abre la puerta; la pauta decide
+    quien pasa.
+    """
+    while True:
+        try:
+            r = await seguimiento_talleres()
+            await _latido("seguimiento_talleres", enviados=len(r or []),
+                          cada_min=SEG_CADA_MIN, error=None)
+        except Exception as e:                                   # noqa: BLE001
+            logger.error("Bucle de seguimiento de talleres: %s", e)
+            await _latido("seguimiento_talleres", error=str(e)[:200],
+                          cada_min=SEG_CADA_MIN)
+        await asyncio.sleep(SEG_CADA_MIN * 60)
 
 
 async def seguimiento_talleres(forzar: bool = False) -> list:
@@ -28552,16 +28606,33 @@ async def congelar_dias_cortex(dias: Optional[list] = None) -> dict:
     return {"guardados": guardados, "detalle": tocados[:40]}
 
 
-async def _latido_congelar(abierta: bool, guardados: Optional[int],
-                           error: str = "") -> None:
-    """Deja constancia de que el bucle ha pasado por aqui.
+async def _latido(clave: str, **datos) -> None:
+    """Deja constancia de que un bucle ha pasado por aqui.
 
     Un cron que se muere es INDISTINGUIBLE de uno que no tiene nada que hacer:
-    los dos no escriben nada. Aqui eso seria caro —el dato del dia se pierde a
-    las pocas horas y no se puede recuperar—, asi que el bucle marca cada
-    pasada, tenga o no algo que guardar. Sin esto, la unica forma de saber que
-    seguia vivo era mirar dos dias despues si faltaban dias, que es tarde.
+    los dos no escriben nada. Por eso cada bucle marca CADA pasada, tenga o no
+    algo que hacer — sin esto, la unica forma de saber que seguia vivo es mirar
+    dias despues si falta trabajo, que es tarde.
+
+    Generico y no uno por bucle: el segundo que hizo falta ya iba a ser una
+    copia del primero, y una copia se queda atras en cuanto se toca el original.
+    Se consulta en `GET /admin/latidos`.
     """
+    try:
+        await global_db.app_meta.update_one(
+            {"_id": "latido_%s" % clave},
+            {"$set": {"at": datetime.now(timezone.utc), "bucle": clave, **datos}},
+            upsert=True)
+    except Exception as e:                                       # noqa: BLE001
+        # El latido no puede tumbar el bucle: es el vigilante, no el trabajo.
+        logger.error("Latido de %s: %s", clave, e)
+
+
+async def _latido_congelar(abierta: bool, guardados: Optional[int],
+                           error: str = "") -> None:
+    await _latido("congelar", ventana_abierta=abierta, guardados=guardados,
+                  cada_min=CX_SNAP_CADA_MIN, error=error or None)
+    # Se mantiene la clave vieja porque `/cortex/dias-congelados` la lee.
     try:
         await global_db.app_meta.update_one(
             {"_id": "congelar_latido"},
@@ -28569,8 +28640,68 @@ async def _latido_congelar(abierta: bool, guardados: Optional[int],
                       "guardados": guardados, "error": error or None}},
             upsert=True)
     except Exception as e:                                       # noqa: BLE001
-        # El latido no puede tumbar el bucle: es el vigilante, no el trabajo.
         logger.error("Latido de congelacion: %s", e)
+
+
+async def avisar_bucles_muertos() -> dict:
+    """Avisa si algun bucle ha dejado de latir.
+
+    Sin esto el latido no sirve de nada: es un dato que hay que ir a mirar, y a
+    los que hay que ir a mirar no los mira nadie. El que se muere en silencio es
+    justo el que importa —el de congelar el dia pierde datos que no se pueden
+    recuperar— asi que el aviso tiene que venir solo.
+    """
+    ahora = datetime.now(timezone.utc)
+    muertos = []
+    async for d in global_db.app_meta.find({"_id": {"$regex": "^latido_"}}):
+        at = d.get("at")
+        if not at:
+            continue
+        try:
+            mins = (ahora - (at if at.tzinfo else at.replace(
+                tzinfo=timezone.utc))).total_seconds() / 60
+        except Exception:                                        # noqa: BLE001
+            continue
+        # El doble de su propio ritmo: un retraso puntual no es una muerte, y
+        # avisar por eso haria que se dejara de leer el aviso.
+        if mins > (d.get("cada_min") or 30) * 2:
+            muertos.append((d.get("bucle") or str(d.get("_id"))[7:], round(mins)))
+    if not muertos:
+        return {"muertos": []}
+    if await _ya_enviado_hoy("bucles_muertos", ahora.strftime("%Y-%m-%d")):
+        return {"muertos": muertos, "avisado": False}
+    lineas = ["⏱️ <b>Un proceso automático ha dejado de correr</b>"]
+    for nom, mins in muertos:
+        lineas.append("• <b>%s</b>: sin señal desde hace %d min" % (nom, mins))
+    lineas.append("Suele arreglarse volviendo a desplegar el backend.")
+    await _telegram_aviso("\n".join(lineas))
+    return {"muertos": muertos, "avisado": True}
+
+
+@api_router.get("/admin/latidos")
+async def admin_latidos(_=Depends(require_admin)):
+    """Que bucles siguen vivos. Un cron muerto no avisa: hay que preguntarle."""
+    ahora = datetime.now(timezone.utc)
+    out = []
+    async for d in global_db.app_meta.find({"_id": {"$regex": "^latido_"}}):
+        at = d.get("at")
+        mins = None
+        if at:
+            try:
+                mins = round((ahora - (at if at.tzinfo else at.replace(
+                    tzinfo=timezone.utc))).total_seconds() / 60)
+            except Exception:                                    # noqa: BLE001
+                pass
+        out.append({"bucle": d.get("bucle") or str(d.get("_id"))[7:],
+                    "hace_min": mins, "error": d.get("error"),
+                    # Cada bucle late a su ritmo, asi que el umbral sale de lo
+                    # que el propio bucle diga que tarda, con margen.
+                    "vivo": mins is not None and mins <= (d.get("cada_min") or 30) * 2,
+                    "detalle": {k: v for k, v in d.items()
+                                if k not in ("_id", "at", "bucle", "error")}})
+    out.sort(key=lambda x: x["bucle"])
+    return {"latidos": out,
+            "todos_vivos": all(x["vivo"] for x in out) if out else None}
 
 
 async def _bucle_congelar():

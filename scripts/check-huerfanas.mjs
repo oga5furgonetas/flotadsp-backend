@@ -51,6 +51,10 @@ const SIN_UI_A_PROPOSITO = new Set([
   // el trinquete acaba subiendo por rutas que sí tienen consumidor, solo que
   // está fuera. Lo que SÍ tiene pantalla es la gestión de las llaves
   // (/partner/tokens y /partner/accesos), que es donde se da y se corta.
+  // Qué bucles siguen vivos. El aviso de verdad va por Telegram —si un proceso
+  // se muere hay que enterarse sin abrir la app—, y esto es para mirarlo a mano
+  // cuando ya sabes que algo falla.
+  'GET /admin/latidos',
   'GET /partner/v1/flota',
   'POST /vehicles/fix-centers',
   'POST /drivers/import-ids',
