@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
+import ImportarConductores from '../components/ImportarConductores'
 import { useEscape } from '../../lib/useEscape'
 import {
-  Loader2, Search, Plus, X, Pencil, Trash2, UserCheck,
+  Loader2, Search, Plus, X, Pencil, Trash2, UserCheck, FileSpreadsheet,
   Phone, Mail, IdCard, Car, MapPin, FileText, Building2, Save, Camera,
   Trophy, TrendingUp, TrendingDown, Minus, Flame, BarChart2, ChevronDown, ChevronUp, AlertCircle,
   Lock, LockOpen, Eye, EyeOff, ShieldCheck, Share2,
@@ -799,7 +800,8 @@ export default function Conductores() {
   const [drivers, setDrivers] = useState(null)
   const [accounts, setAccounts] = useState([]) // driver_ids que tienen contraseña
   const [q, setQ] = useState('')
-  const [modal, setModal] = useState(null) // null | { driver: obj|null }
+  const [modal, setModal] = useState(null)
+  const [verImportar, setVerImportar] = useState(false) // null | { driver: obj|null }
   const [tab, setTab] = useState('directorio') // directorio | ranking | scoring
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -867,6 +869,12 @@ export default function Conductores() {
                   placeholder={t('drv.search')} value={q} onChange={e => setQ(e.target.value)}
                 />
               </div>
+              {/* Importar va ANTES de «añadir»: quien llega el primer día no
+                  quiere teclear cincuenta fichas, quiere subir su Excel. */}
+              <button onClick={() => setVerImportar((v) => !v)}
+                className="flex items-center gap-1.5 rounded-xl border border-dark-700 px-3.5 py-2.5 text-[13.5px] font-semibold text-dark-300 hover:border-dark-600 hover:text-dark-100">
+                <FileSpreadsheet size={15} /> {t('drv.importar')}
+              </button>
               <button
                 onClick={() => setModal({ driver: null })}
                 className="group relative flex items-center gap-1.5 overflow-hidden rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 px-4 py-2.5 text-[13.5px] font-semibold text-white shadow-lg shadow-brand-500/25 transition-all duration-300 [text-shadow:0_1px_1px_rgba(0,0,0,0.15)] hover:-translate-y-px hover:shadow-xl hover:shadow-brand-500/30 hover:brightness-110 active:translate-y-0 active:scale-[0.98]"
@@ -878,6 +886,12 @@ export default function Conductores() {
           )}
         </div>
       </header>
+
+      {verImportar && (
+        <div className="mb-5">
+          <ImportarConductores center={center} alTerminar={() => { setVerImportar(false); load() }} />
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-0 border-b border-dark-800 mb-6">

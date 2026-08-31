@@ -543,3 +543,8 @@ export const crearLlavePartner = (body) => api.post('/partner/tokens', body)
 export const revocarLlavePartner = (id) =>
   api.delete(`/partner/tokens/${encodeURIComponent(id)}`)
 export const getAccesosPartner = () => api.get('/partner/accesos')
+export const previsualizarConductores = (fd) =>
+  api.post('/drivers/importar/previsualizar', fd,
+    { headers: { 'Content-Type': 'multipart/form-data' } })
+export const importarConductores = (fd) =>
+  api.post('/drivers/importar', fd, { headers: { 'Content-Type': 'multipart/form-data' } })

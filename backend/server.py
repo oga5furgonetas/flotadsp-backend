@@ -8818,6 +8818,259 @@ async def drivers_duplicados(_=Depends(require_admin)):
             "fichas_de_mas": sum(len(g["fichas"]) - 1 for g in fuera)}
 
 
+# ── IMPORTAR CONDUCTORES DE GOLPE ───────────────────────────────────────────
+# Una empresa que empieza tiene la plantilla en un Excel, y darla de alta a mano
+# —cincuenta fichas, una a una— es el motivo por el que la mayoría de las
+# aplicaciones de flota se abandonan la primera semana.
+#
+# Dos decisiones que hacen que esto funcione de verdad:
+#
+#   1. NO SE PIDE UNA PLANTILLA. Se lee el Excel que ya tienen, con las columnas
+#      que ya usan. Pedir un formato concreto es trasladarles el trabajo:
+#      reconocer «Nombre», «NOMBRE Y APELLIDOS» o «Driver name» lo hacemos aquí
+#      una vez, y ellos no hacen nada.
+#   2. SE ENSEÑA ANTES DE GUARDAR. Primero se dice qué se ha entendido, cuántos
+#      se darían de alta y qué filas se van a saltar y por qué. Importar a ciegas
+#      y descubrir que han entrado 50 fichas mal es peor que no importar.
+#
+# El teléfono y el correo se normalizan al entrar, porque el gotcha 15 nació
+# justo de aquí: nombres con espacios de más y correos en mayúsculas crearon
+# 17 personas duplicadas y cinco conductores acabaron viendo la furgoneta de
+# otro.
+
+# Cómo se llama cada cosa en los Excel que se ven de verdad. El orden importa:
+# gana la primera que case.
+_IMP_COLS = {
+    "name": ("nombre y apellidos", "nombre completo", "nombre", "conductor",
+             "driver name", "empleado", "trabajador", "apellidos y nombre"),
+    "dni": ("dni", "nif", "documento", "dni/nie", "nie", "id documento"),
+    "phone": ("telefono", "teléfono", "movil", "móvil", "tlf", "phone", "contacto"),
+    "email": ("email", "correo", "correo electronico", "correo electrónico",
+              "e-mail", "mail"),
+    "driver_id": ("driver id", "id amazon", "amazon id", "id conductor",
+                  "transporter", "transporter id"),
+    "center": ("centro", "estacion", "estación", "nave", "station", "site"),
+    "license_number": ("carnet", "licencia", "permiso", "license"),
+    "contrato": ("contrato", "tipo contrato", "empresa/ett", "modalidad"),
+}
+
+
+def _imp_norm(s) -> str:
+    """Texto de cabecera comparable: sin tildes, sin dobles espacios, en bajas."""
+    t = unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode()
+    return re.sub(r"\s+", " ", t).strip().lower()
+
+
+def _imp_mapea(cabecera: list) -> dict:
+    """{indice de columna: campo}. Solo la PRIMERA columna que case cada campo.
+
+    Sin ese «solo la primera», un Excel con «Teléfono» y «Teléfono 2» mapearía
+    las dos al mismo campo y la segunda pisaría a la primera.
+    """
+    mapa, usados = {}, set()
+    limpio = [_imp_norm(c) for c in cabecera]
+    for campo, nombres in _IMP_COLS.items():
+        for n in nombres:
+            for i, c in enumerate(limpio):
+                if i in mapa or campo in usados:
+                    continue
+                if c == n or (len(n) > 4 and n in c):
+                    mapa[i] = campo
+                    usados.add(campo)
+                    break
+            if campo in usados:
+                break
+    return mapa
+
+
+def _imp_cabecera(filas: list) -> int:
+    """En qué fila está la cabecera.
+
+    No siempre es la primera: los Excel de gestoría traen el logo, el mes y un
+    par de filas vacías antes. Se busca la que más columnas reconocidas tenga.
+    """
+    mejor, mejor_n = 0, 0
+    for i, f in enumerate(filas[:15]):
+        n = len(_imp_mapea(f))
+        if n > mejor_n:
+            mejor, mejor_n = i, n
+    return mejor if mejor_n >= 1 else 0
+
+
+_IMP_RESUMEN = ("total", "totales", "suma", "subtotal", "recuento", "n conductores",
+                "num conductores", "plantilla", "resumen")
+
+
+def _imp_es_resumen(nombre: str) -> bool:
+    """Si esa «persona» es en realidad la fila de totales del final.
+
+    Se compara contra el nombre ENTERO o su primera palabra, no por «contiene»:
+    hay apellidos que empiezan por Suma y no queremos tirar a nadie de verdad.
+    """
+    t = _imp_norm(nombre)
+    if t in _IMP_RESUMEN:
+        return True
+    # «TOTAL: 47», «TOTAL 47», «Total conductores»
+    primera = t.split(":")[0].split()[0] if t.split() else ""
+    return primera in _IMP_RESUMEN and len(t.split()) <= 3
+
+
+def _imp_lee(filas: list) -> dict:
+    """Convierte las filas del Excel en fichas, diciendo qué se salta y por qué."""
+    if not filas:
+        return {"cabecera": [], "mapa": {}, "personas": [], "saltadas": []}
+    ic = _imp_cabecera(filas)
+    mapa = _imp_mapea(filas[ic])
+    personas, saltadas, vistos = [], [], set()
+
+    for n, fila in enumerate(filas[ic + 1:], start=ic + 2):
+        d = {}
+        for i, campo in mapa.items():
+            if i < len(fila):
+                d[campo] = str(fila[i] or "").strip()
+        nombre = re.sub(r"\s+", " ", (d.get("name") or "")).strip()
+        if not nombre:
+            # Una fila sin nombre no es un error: son los totales y las filas en
+            # blanco del final. Se cuentan aparte para no asustar con «40 filas
+            # con problemas» cuando son cuarenta líneas vacías.
+            if any(v for v in d.values()):
+                saltadas.append({"fila": n, "motivo": "no tiene nombre"})
+            continue
+        if len(nombre) < 3:
+            saltadas.append({"fila": n, "motivo": "el nombre es demasiado corto: %r" % nombre})
+            continue
+        # Las filas de resumen del final. Casi todos los Excel de plantilla
+        # llevan una, y sin esto se daba de alta un conductor llamado
+        # «TOTAL: 47» — basura que luego sale en el cuadrante y en las listas.
+        if _imp_es_resumen(nombre):
+            saltadas.append({"fila": n, "motivo": "parece una fila de totales: %r" % nombre})
+            continue
+
+        correo = (d.get("email") or "").strip().lower()
+        if correo and not _EMAIL_RE.match(correo):
+            correo = ""
+        clave = correo or _imp_norm(nombre)
+        if clave in vistos:
+            saltadas.append({"fila": n, "motivo": "repetido en el propio fichero: %s" % nombre})
+            continue
+        vistos.add(clave)
+
+        personas.append({
+            "name": nombre.upper(),          # como el resto de la base
+            "dni": (d.get("dni") or "").strip().upper() or None,
+            "phone": whatsapp.normaliza_telefono(d.get("phone")) or None,
+            "email": correo or None,
+            "driver_id": (d.get("driver_id") or "").strip() or None,
+            "center": (d.get("center") or "").strip() or None,
+            "license_number": (d.get("license_number") or "").strip() or None,
+            "fila": n,
+        })
+    return {"cabecera": [str(c) for c in filas[ic]], "fila_cabecera": ic + 1,
+            "mapa": {str(k): v for k, v in mapa.items()},
+            "personas": personas, "saltadas": saltadas}
+
+
+@api_router.post("/drivers/importar/previsualizar")
+async def drivers_importar_prev(file: UploadFile = File(...), center: str = Form(""),
+                                _=Depends(require_admin)):
+    """Qué se importaría, SIN guardar nada."""
+    contenido = await file.read()
+    try:
+        filas = _read_table_any(contenido, file.filename or "")
+    except Exception as e:                                       # noqa: BLE001
+        raise HTTPException(400, "No se pudo leer el fichero: %s" % str(e)[:120])
+    r = _imp_lee(filas)
+    if not r["personas"]:
+        raise HTTPException(
+            400, "No se ha encontrado ninguna persona. Hace falta una columna con "
+                 "el nombre — puede llamarse «Nombre», «Conductor», «Nombre y "
+                 "apellidos» o «Driver name».")
+
+    # Quién ya está. Por correo, nunca por nombre: dos tocayos son dos personas
+    # (gotcha 15), y fusionarlos haría que uno viera la furgoneta del otro.
+    correos = [p["email"] for p in r["personas"] if p["email"]]
+    ya = {}
+    async for d in db.drivers.find({"email": {"$in": correos}},
+                                   {"_id": 0, "email": 1, "name": 1}):
+        ya[str(d.get("email") or "").lower()] = d.get("name")
+    nombres_bd = {_imp_norm(d["name"]) async for d in db.drivers.find(
+        {}, {"_id": 0, "name": 1}) if d.get("name")}
+
+    nuevos = repetidos = 0
+    for p in r["personas"]:
+        p["ya_existe"] = bool(p["email"] and p["email"] in ya) or \
+            (not p["email"] and _imp_norm(p["name"]) in nombres_bd)
+        if p["ya_existe"]:
+            repetidos += 1
+        else:
+            nuevos += 1
+
+    return {
+        "columnas_reconocidas": r["mapa"],
+        "cabecera": r["cabecera"], "fila_cabecera": r["fila_cabecera"],
+        "total_leidas": len(r["personas"]),
+        "nuevas": nuevos, "ya_estaban": repetidos,
+        "saltadas": r["saltadas"][:40], "n_saltadas": len(r["saltadas"]),
+        # Las primeras, para que se vea que se ha entendido bien antes de tocar
+        # nada. Es la diferencia entre importar y importar a ciegas.
+        "muestra": r["personas"][:12],
+        "centro_por_defecto": center,
+        "sin_correo": sum(1 for p in r["personas"] if not p["email"]),
+    }
+
+
+@api_router.post("/drivers/importar")
+async def drivers_importar(file: UploadFile = File(...), center: str = Form(""),
+                           user: dict = Depends(require_admin)):
+    """Da de alta lo que no esté ya. Nunca pisa una ficha existente."""
+    contenido = await file.read()
+    try:
+        filas = _read_table_any(contenido, file.filename or "")
+    except Exception as e:                                       # noqa: BLE001
+        raise HTTPException(400, "No se pudo leer el fichero: %s" % str(e)[:120])
+    r = _imp_lee(filas)
+    if not r["personas"]:
+        raise HTTPException(400, "No se ha encontrado ninguna persona en el fichero.")
+
+    correos = [p["email"] for p in r["personas"] if p["email"]]
+    ya = set()
+    async for d in db.drivers.find({"email": {"$in": correos}}, {"_id": 0, "email": 1}):
+        ya.add(str(d.get("email") or "").lower())
+    nombres_bd = {_imp_norm(d["name"]) async for d in db.drivers.find(
+        {}, {"_id": 0, "name": 1}) if d.get("name")}
+
+    ahora = datetime.now(timezone.utc).isoformat()
+    quien = user.get("name") or user.get("username") or "importación"
+    nuevos, saltados = [], []
+    for p in r["personas"]:
+        existe = (p["email"] and p["email"] in ya) or \
+            (not p["email"] and _imp_norm(p["name"]) in nombres_bd)
+        if existe:
+            # NO se actualiza la ficha que ya está. Importar es dar de alta lo
+            # que falta; pisar datos buenos con los de un Excel viejo es la
+            # forma más rápida de que se deje de confiar en la aplicación.
+            saltados.append({"nombre": p["name"], "motivo": "ya estaba dado de alta"})
+            continue
+        d = {k: v for k, v in p.items() if k != "fila" and v is not None}
+        d.update({"id": str(uuid.uuid4()), "active": True,
+                  "created_at": ahora, "updated_at": ahora,
+                  "importado_por": quien, "importado_en": ahora})
+        if not d.get("center") and center and center not in ("Todos", "todos"):
+            d["center"] = center
+        nuevos.append(d)
+        if p["email"]:
+            ya.add(p["email"])
+        else:
+            nombres_bd.add(_imp_norm(p["name"]))
+
+    if nuevos:
+        await db.drivers.insert_many(nuevos)
+    logger.info("Conductores importados: %d nuevos, %d ya estaban", len(nuevos), len(saltados))
+    return {"importados": len(nuevos), "ya_estaban": len(saltados),
+            "no_leidas": len(r["saltadas"]),
+            "nombres": [d["name"] for d in nuevos][:50]}
+
+
 @api_router.post("/drivers/fusionar")
 async def drivers_fusionar(data: dict = Body(...), user: dict = Depends(require_admin)):
     """Une dos fichas de la misma persona en una.
@@ -30402,7 +30655,15 @@ def _cortex_ingest_org(request: Request) -> str:
         raise HTTPException(status_code=401, detail="Token de ingesta inválido o caducado.")
     if payload.get("scope") != "cortex_ingest":
         raise HTTPException(status_code=403, detail="Token sin permiso de ingesta.")
-    set_current_org_db(payload.get("db_name"))
+    # Sin `db_name` NO se escribe. Un token viejo sin ese campo caeria en la BD
+    # por defecto y mezclaria los datos de dos empresas: mejor que falle y se
+    # regenere la llave, que se nota enseguida.
+    if not payload.get("db_name"):
+        raise HTTPException(
+            status_code=403,
+            detail="Esta llave es de una versión anterior y no identifica la empresa. "
+                   "Vuelve a copiarla desde Cortex IA en la aplicación.")
+    set_current_org_db(payload["db_name"])
     return payload.get("org_id", "")
 
 
@@ -34559,14 +34820,31 @@ async def cortex_portales_mi_ruta(user: dict = Depends(require_any_auth)):
 
 @api_router.get("/cortex/ingest-token")
 async def cortex_ingest_token(user: dict = Depends(require_admin)):
-    """Genera el token que la extensión usa para enviar datos (1 año)."""
+    """La llave de la extensión. UNA POR EMPRESA, y nunca compartida.
+
+    El `db_name` es lo que separa los datos de una empresa de los de otra: va
+    dentro del token y la ingesta lo aplica antes de escribir nada. Si faltara,
+    `set_current_org_db(None)` caería en la base por defecto y los paquetes de
+    un DSP acabarían mezclados con los de otro — en silencio, con HTTP 200 y
+    sin un solo error en los logs (gotcha 26).
+    """
+    db_name = user.get("db_name")
+    if not db_name:
+        # Preferimos no dar token a dar uno que mezcle datos. Un token que no
+        # funciona se nota en cinco minutos; datos de dos empresas mezclados se
+        # notan semanas después y ya no se pueden separar.
+        raise HTTPException(
+            500, "Tu cuenta no tiene empresa asignada, así que no se puede generar "
+                 "una llave que aísle tus datos. Avísanos antes de instalar la extensión.")
     payload = {
         "scope": "cortex_ingest", "org_id": user.get("org_id", ""),
-        "db_name": user.get("db_name"), "name": user.get("name", ""),
+        "db_name": db_name, "name": user.get("name", ""),
         "exp": datetime.now(timezone.utc) + timedelta(days=365),
     }
     return {"token": jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGORITHM),
-            "ingest_url": f"{PUBLIC_BASE_URL}/api/cortex/ingest"}
+            "ingest_url": f"{PUBLIC_BASE_URL}/api/cortex/ingest",
+            "empresa": user.get("org_id") or "",
+            "caduca": (datetime.now(timezone.utc) + timedelta(days=365)).strftime("%Y-%m-%d")}
 
 
 @api_router.post("/cortex/ingest")

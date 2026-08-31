@@ -490,6 +490,7 @@ const DICT = {
 
   // ── Conductores ──────────────────────────────────────────────────────────
   'drv.title':        { es: 'Conductores',    en: 'Drivers',      fr: 'Chauffeurs',    de: 'Fahrer',       it: 'Autisti',        pt: 'Motoristas' },
+  'drv.importar': { es: 'Importar Excel', en: 'Import Excel', fr: 'Importer Excel', de: 'Excel importieren', it: 'Importa Excel', pt: 'Importar Excel' },
   'drv.add':          { es: 'Añadir conductor', en: 'Add driver', fr: 'Ajouter chauffeur', de: 'Fahrer hinzufügen', it: 'Aggiungi autista', pt: 'Adicionar motorista' },
   'drv.search':       { es: 'Buscar conductor…', en: 'Search driver…', fr: 'Rechercher chauffeur…', de: 'Fahrer suchen…', it: 'Cerca autista…', pt: 'Pesquisar motorista…' },
   'drv.score':        { es: 'Puntuación',     en: 'Score',        fr: 'Score',         de: 'Punktzahl',    it: 'Punteggio',      pt: 'Pontuação' },

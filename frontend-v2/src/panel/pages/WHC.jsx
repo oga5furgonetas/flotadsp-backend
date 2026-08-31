@@ -3,7 +3,7 @@ import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
   Loader2, Clock, AlertTriangle, CircleCheck, Info, ChevronDown, ChevronUp,
-  Trash2, RefreshCw,
+  Trash2, RefreshCw, Lock,
 } from 'lucide-react'
 import { whcAnalizar, getWhcPlan, deleteWhcPlan } from '../api'
 import { lista } from '../../lib/lista'
@@ -37,7 +37,15 @@ export default function WHC() {
   const { center } = useOutletContext()
   const { t } = useT()
   const [texto, setTexto] = useState('')
-  const [limite, setLimite] = useState(55)
+  /* EL LÍMITE NO SE ELIGE. Son 54 h 30 min semanales, que es lo que fija
+     Amazon en el Work Hours Compliance, y no una preferencia de cada nave: si
+     cada empresa pone el suyo, dos DSP con la misma plantilla salen con
+     resultados distintos y el dato deja de valer para comparar — que es
+     justamente para lo que existe. Antes era un campo editable con 55 por
+     defecto; el medio punto de diferencia es una hora larga a la semana por
+     conductor. */
+  const LIMITE_H = 54.5
+  const limite = LIMITE_H
   const [excepciones, setExcepciones] = useState(0)
   const [datos, setDatos] = useState(null)
   const [cargando, setCargando] = useState(false)
@@ -74,7 +82,8 @@ export default function WHC() {
       if (!vivo || !data?.hay || !data.texto) return
       setGuardado(data)
       setTexto(data.texto)
-      if (data.limite_horas) setLimite(data.limite_horas)
+      // El límite guardado se ignora a propósito: puede venir de un plan
+      // analizado con el campo editable de antes, y ya no es una opción.
       if (data.excepciones != null) setExcepciones(data.excepciones)
       analizar(data.texto, data.limite_horas, data.excepciones)
     }).catch(() => {})
@@ -107,13 +116,12 @@ export default function WHC() {
           placeholder={t('whc.placeholder')}
           className="w-full rounded-lg border border-dark-700 bg-dark-900 px-3 py-2 font-mono text-xs text-dark-100 placeholder:text-dark-600" />
         <div className="mt-3 flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2 text-xs text-dark-400">
-            {t('whc.limite')}
-            <input type="number" value={limite} min={1} max={100} step={0.5}
-              onChange={(e) => setLimite(Number(e.target.value))}
-              className="w-20 rounded-lg border border-dark-700 bg-dark-900 px-2 py-1 text-sm text-dark-100" />
-            <span className="text-dark-600">h</span>
-          </label>
+          {/* Se enseña, no se edita: quien lo mira tiene que saber contra qué
+              se está midiendo, y a la vez que no es una opción suya. */}
+          <span className="flex items-center gap-1.5 rounded-lg bg-dark-800 px-2.5 py-1 text-xs text-dark-300">
+            <Lock size={12} className="text-dark-500" />
+            {t('whc.limite')} <span className="cifra font-semibold text-dark-100">54 h 30 min</span>
+          </span>
           <label className="flex items-center gap-2 text-xs text-dark-400">
             {t('whc.excep')}
             <input type="number" value={excepciones} min={0} max={200}
