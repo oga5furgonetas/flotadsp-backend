@@ -510,11 +510,26 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    nueva**, porque ya esta erosionado y guardarlo seria inventar un numero que
    ademas pareceria medido. Los dias anteriores al 30-08-2026 estan perdidos y
    salen marcados «sin foto» en la pantalla, con el DCR como `≥`.
-   El bucle deja **latido** en `app_meta.congelar_latido` en CADA pasada, este
-   o no dentro de la ventana, y sale en `GET /cortex/dias-congelados`. Un cron
+   El bucle deja **latido** en CADA pasada, este o no dentro de la ventana, y
+   sale en `GET /cortex/dias-congelados` y en `GET /admin/latidos`. Un cron
    muerto y un cron sin trabajo escriben lo mismo —nada—, y aqui esa duda cuesta
    un dia entero irrecuperable: `hace_min` por encima de 30 significa que el
    bucle no esta.
+   **Donde mirarlo a mano, que no es obvio y cuesta dos intentos:**
+   · el latido esta en **`global_db`**, no en la BD del tenant, con `_id`
+     **`latido_congelar`** (lo escribe el `_latido()` generico, que antepone
+     `latido_`). Este texto decia `app_meta.congelar_latido` y ya no era
+     verdad — el bucle habia pasado a la funcion generica y nadie corrigio la
+     nota, asi que buscarlo donde ponia daba «no existe» y parecia un cron
+     muerto cuando estaba vivo;
+   · la foto va en `cortex_day_snapshots` de la BD del tenant, y el campo del
+     dia es **`service_day`** (no `dia`), con `tomado_at` y `fotos` = cuantas
+     veces se tomo ese dia.
+   **Comprobado end to end el 01-09-2026**, que era la unica forma de cerrarlo:
+   el 31-08 quedo congelado a las 17:44 de su PROPIA tarde con 5 tomas y
+   DCR 97,98 %. El 29-08, en cambio, tiene solo 2 tomas y se capturo al dia
+   siguiente a las 15:03 — ya erosionado. Esa diferencia es justo lo que este
+   bucle viene a evitar.
    Regla general: **antes de guardar una serie historica, preguntarse si el
    campo del que sale se sobrescribe.** Si se sobrescribe, el historico no es
    historico: es una foto de hoy con fecha de ayer.
