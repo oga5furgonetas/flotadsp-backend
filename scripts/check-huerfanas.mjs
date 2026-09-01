@@ -31,7 +31,31 @@ const SIN_UI_A_PROPOSITO = new Set([
   // El PATCH de UNA alerta si tiene sentido y si esta enganchado: si el
   // problema sigue sin arreglar, que vuelva a avisar es lo correcto.
   'PUT /alerts/read-all',
+  // ── SUPERADAS POR LA SUBIDA UNIFICADA ─────────────────────────────────
+  // `/scorecard/upload` detecta el tipo de fichero y llama a la funcion que
+  // toca: el PDF por su contenido, y los dos Excel de baremos por sus
+  // COLUMNAS (`..._wt_final` los pesos, `..._t0/_t1` los umbrales). Estas tres
+  // siguen vivas como via directa, pero la que tiene boton es aquella.
+  'POST /scorecard/import-official',
+  'POST /scorecard/import-thresholds',
+  'POST /scorecard/import-weights',
+  // Lee `scorecard_official`, la misma coleccion que `/scorecard/full`, que si
+  // esta enganchada y ademas cruza con lo demas. Esta devuelve el documento
+  // crudo: util para depurar, no para una pantalla.
+  'GET /scorecard/official',
+
+  // ── EL ROSTER SE PEGA EN LOCAL, Y ES MEJOR ────────────────────────────
+  // `PasteModal` parsea el texto del roster en el navegador con `parseRoster`
+  // y `matchRoster`: instantaneo, sin viaje al servidor y sin gastar cuota de
+  // Gemini —que se agota y deja sin IA al resto de la app el resto del dia—.
+  // Esta ruta hacia lo mismo pasando por el servidor.
+  'POST /assignments/import-text',
+
   // Mantenimiento y diagnóstico, se lanzan a mano
+  'POST /import/diagnose',            // el docstring lo dice: DIAGNOSTICO TEMPORAL
+  'POST /inspections/batch-upload',   // carga masiva por carpetas, desde un script
+  'POST /ai/detect/{inspection_id}',  // el detector CV sobre una foto suelta
+  'GET /ai/status/{inspection_id}',   // y sus cajas, para comprobarlo a mano
   'POST /admin/backfill-new-damages',
   'POST /admin/send-weekly-digest',
   'POST /telegram/test',
@@ -119,10 +143,20 @@ const TODO = consumidores.join('\n')
    tras el parámetro queda un segmento fijo (…/{id}/km) también. Cubre las
    plantillas `/vehicles/${id}/km` del frontend. */
 function seUsa({ ruta }) {
-  const prefijo = ruta.split('{')[0].replace(/\/$/, '')
-  if (!prefijo || !TODO.includes(prefijo)) return false
-  const cola = ruta.split('}').pop().replace(/^\/|\/$/g, '')
-  return !cola || TODO.includes(cola)
+  /* Sin el `/api` de delante. Las rutas colgadas de `@app` en vez del router
+     lo llevan escrito dentro (`/api/tools/plantilla-compartida`), mientras que
+     el cliente usa `apiFetch('/tools/...')` y el prefijo lo pone el helper. Al
+     comparar la cadena tal cual, las CINCO rutas de plantilla compartida
+     salian huerfanas teniendo consumidor a dos ficheros de distancia — y con
+     cinco avisos en falso, la lista entera deja de leerse. */
+  const sinApi = ruta.replace(/^\/api(?=\/)/, '')
+  for (const r of new Set([ruta, sinApi])) {
+    const prefijo = r.split('{')[0].replace(/\/$/, '')
+    if (!prefijo || !TODO.includes(prefijo)) continue
+    const cola = r.split('}').pop().replace(/^\/|\/$/g, '')
+    if (!cola || TODO.includes(cola)) return true
+  }
+  return false
 }
 
 // Una ruta llamada desde otra ruta del propio backend también está viva.
@@ -144,7 +178,7 @@ const huerfanas = rutas.filter((r) => {
    alguien lo desactive. Así que se tolera el número ACTUAL y ni una más: si
    añades una ruta sin engancharla, CI se pone en rojo. Cuando bajes el
    backlog, baja también este número — el checker te avisa de que lo hagas. */
-const MAXIMO_TOLERADO = 27
+const MAXIMO_TOLERADO = 11
 
 if (huerfanas.length === 0) {
   console.log(`huerfanas OK: ${rutas.length} rutas, todas con consumidor ` +

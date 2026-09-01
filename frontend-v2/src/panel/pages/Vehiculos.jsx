@@ -25,6 +25,7 @@ import {
   getAllDocuments,
   getExposicionVehiculos, getVehiculosDuplicados, fusionarVehiculos, getExpedienteVehiculo,
   getOdometroSospechosas, sanearOdometro, getDatosQueFaltan, rellenarDatosLote, getCheckerEstados, corregirEstados, getCheckerCentros, corregirCentros,
+  fijarBolsas,
 } from '../api'
 import { getAdmin } from '../auth'
 
@@ -348,6 +349,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
   const [maintenance, setMaintenance] = useState(null)
   const [maintLog, setMaintLog] = useState(null)     // qué se le ha hecho ya
   const [maintModal, setMaintModal] = useState(null) // 'oil' | 'ruedas' | 'pastillas' | null
+  const [bolsasOpen, setBolsasOpen] = useState(false)
   const [docs, setDocs] = useState(null)
   const [uploadingDoc, setUploadingDoc] = useState(false)
   const docInputRef = useRef()
@@ -642,6 +644,16 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
     <>
       {qrOpen && qrDataUrl && <QrLightbox dataUrl={qrDataUrl} label={vinOrPlate} onClose={() => setQrOpen(false)} />}
       {tallerModal && <TallerModal vehicle={vehicle} onConfirm={confirmTaller} onCancel={() => setTallerModal(null)} />}
+      {bolsasOpen && (
+        <BolsasModal vehicle={vehicle} onClose={() => setBolsasOpen(false)}
+          onGuardar={async (n) => {
+            await fijarBolsas(vehicle.id, n)
+            // Se refleja en la ficha sin recargar: el chip es lo unico que
+            // cambia y volver a pedir la furgoneta entera para eso sobra.
+            setVehicle((v) => ({ ...v, bags_remaining: n }))
+            setToast({ ok: true, t: `Bolsas de ${vehicle.license_plate}: ${n}` })
+          }} />
+      )}
       {maintModal && (
         <MaintModal
           kind={maintModal}
@@ -723,7 +735,8 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
             <div className="mt-4 grid grid-cols-4 gap-2">
               <StatChip icon={<Shield size={12} />} val={health ? <span className={healthCls(health.score)}>{health.score}</span> : '…'} label={t('vh.health.short')} />
               <StatChip icon={<Gauge size={12} />} val={vehicle.mileage != null ? `${vehicle.mileage.toLocaleString('es')} km` : '—'} label="Kilómetros" />
-              <StatChip icon={<Package size={12} />} val={vehicle.bags_remaining ?? '—'} label="Bolsas" />
+              <StatChip icon={<Package size={12} />} val={vehicle.bags_remaining ?? '—'} label="Bolsas"
+                titulo="Poner cuántas bolsas quedan" onClick={() => setBolsasOpen(true)} />
               <StatChip icon={<Camera size={12} />} val={insps ? insps.length : '…'} label="Inspecciones" />
             </div>
           </div>
@@ -1443,12 +1456,78 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
   )
 }
 
-function StatChip({ icon, val, label }) {
-  return (
-    <div className="flex flex-col items-center gap-0.5 rounded-xl bg-white/5 py-2.5 px-2 text-center">
+function StatChip({ icon, val, label, onClick, titulo }) {
+  const clases = 'flex flex-col items-center gap-0.5 rounded-xl bg-white/5 py-2.5 px-2 text-center'
+  const dentro = (
+    <>
       <div className="mb-0.5 text-slate-500">{icon}</div>
       <div className="text-sm font-bold text-slate-200">{val}</div>
       <div className="text-[9px] text-slate-600">{label}</div>
+    </>
+  )
+  // Los chips que se pueden tocar tienen que PARECER que se pueden tocar: si no
+  // se distinguen del resto, nadie descubre que hay algo detras.
+  if (!onClick) return <div className={clases}>{dentro}</div>
+  return (
+    <button type="button" onClick={onClick} title={titulo}
+      className={`${clases} cursor-pointer transition-colors hover:bg-white/10`}>
+      {dentro}
+    </button>
+  )
+}
+
+
+/* PONER LAS BOLSAS QUE QUEDAN
+   ═══════════════════════════════════════════════════════════════════════════
+   La ficha llevaba enseñando este numero desde siempre y no habia forma de
+   cambiarlo: las rutas `bags/set` y `bags/consume` existian sin un solo boton,
+   asi que el chip decia 0 en todas las furgonetas de todas las empresas.
+
+   Se fija el stock, no se suma: quien cuenta bolsas en la nave mira cuantas
+   hay y escribe ese numero. Pedirle la diferencia obliga a restar de cabeza y
+   a acordarse de lo que habia. */
+function BolsasModal({ vehicle, onGuardar, onClose }) {
+  const [n, setN] = useState(String(vehicle.bags_remaining ?? 0))
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const num = Number(n)
+  const valido = n !== '' && Number.isFinite(num) && num >= 0 && num <= 100000
+
+  const guardar = async () => {
+    if (!valido) return
+    setBusy(true); setErr('')
+    try { await onGuardar(num) } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo guardar.')
+      setBusy(false); return
+    }
+    setBusy(false); onClose()
+  }
+
+  return (
+    /* Las clases son las del panel (`dark-*` y `.input`), no `slate-*`: el modo
+       dia compensa unas y no las otras, y `text-slate-100` sobre `bg-slate-800`
+       da 1,01:1 —texto claro sobre fondo claro—. Lo canto `check-contraste`
+       antes de desplegarlo. */
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-xs rounded-2xl border border-dark-700 bg-dark-900 p-5 shadow-xl">
+        <h3 className="text-sm font-bold text-dark-50">Bolsas de {vehicle.license_plate}</h3>
+        <p className="mt-1 text-[12px] text-dark-400">
+          Cuántas quedan ahora mismo en la furgoneta.
+        </p>
+        <input type="number" min="0" max="100000" value={n} autoFocus
+          onChange={(e) => setN(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && valido) guardar() }}
+          className="cifra input mt-3 w-full text-center text-lg font-bold" />
+        {err && <p className="mt-2 text-[12px] text-red-400">{err}</p>}
+        <div className="mt-4 flex gap-2">
+          <button onClick={guardar} disabled={!valido || busy}
+            className="btn-primary flex-1 disabled:opacity-40">
+            {busy ? 'Guardando…' : 'Guardar'}
+          </button>
+          <button onClick={onClose} className="btn-secondary">Cancelar</button>
+        </div>
+      </div>
     </div>
   )
 }

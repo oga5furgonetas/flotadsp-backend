@@ -545,6 +545,16 @@ export const descargarInformeFlota = (params) =>
 /* El mismo informe en PDF, con tabla y cabecera: es el que se imprime o se
    manda por correo. El CSV es para que Amazon lo abra y lo cruce; el PDF, para
    enseñarlo. Existia desde hacia meses y no lo llamaba ninguna pantalla. */
+/* Bolsas de reparto de una furgoneta. La ficha ya ENSEÑABA el stock —un chip
+   "Bolsas" en la cabecera— pero no habia forma de cambiarlo: las dos rutas
+   llevaban sin boton desde siempre, asi que el numero se quedaba en 0 para
+   todo el mundo. Un dato que se enseña y no se puede rellenar es peor que no
+   enseñarlo: parece que la furgoneta no tiene bolsas. */
+export const fijarBolsas = (vehicleId, bags, note) =>
+  api.post(`/vehicles/${encodeURIComponent(vehicleId)}/bags/set`, { bags, note })
+export const gastarBolsas = (vehicleId, used, note) =>
+  api.post(`/vehicles/${encodeURIComponent(vehicleId)}/bags/consume`, { used, note })
+
 export const descargarInformeFlotaPdf = (params) =>
   api.get('/reports/fleet-pdf', { params, responseType: 'blob' })
 export const getLlavesPartner = () => api.get('/partner/tokens')
