@@ -20,6 +20,17 @@ const RAIZ = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
    a mano (curl / consola) o endpoints de diagnóstico. Están aquí para que el
    checker no las cante cada vez; si borras una, bórrala también de esta lista. */
 const SIN_UI_A_PROPOSITO = new Set([
+  // ── NO ENGANCHAR: parece un boton inofensivo y no lo es ────────────────
+  // `read` tiene DOS usos en `alerts`, y el segundo no es evidente: ademas de
+  // "visto", es lo que evita duplicar el aviso —`find_one({vehicle_id, title,
+  // read: {$ne: true}})` antes de crear cada uno—. Marcarlas todas leidas de
+  // golpe deja al generador sin nada que encontrar y **vuelve a crear la lista
+  // entera** en la siguiente pasada: el usuario ve los avisos desaparecer y
+  // reaparecer, ahora duplicados. Ademas `update_many({})` no filtra por
+  // centro, asi que en una DSP con tres naves las borraria las tres.
+  // El PATCH de UNA alerta si tiene sentido y si esta enganchado: si el
+  // problema sigue sin arreglar, que vuelva a avisar es lo correcto.
+  'PUT /alerts/read-all',
   // Mantenimiento y diagnóstico, se lanzan a mano
   'POST /admin/backfill-new-damages',
   'POST /admin/send-weekly-digest',
@@ -133,7 +144,7 @@ const huerfanas = rutas.filter((r) => {
    alguien lo desactive. Así que se tolera el número ACTUAL y ni una más: si
    añades una ruta sin engancharla, CI se pone en rojo. Cuando bajes el
    backlog, baja también este número — el checker te avisa de que lo hagas. */
-const MAXIMO_TOLERADO = 28
+const MAXIMO_TOLERADO = 27
 
 if (huerfanas.length === 0) {
   console.log(`huerfanas OK: ${rutas.length} rutas, todas con consumidor ` +

@@ -28774,6 +28774,30 @@ async def scorecard_upload(file: UploadFile = File(...), center: Optional[str] =
         return {"tipo": "metrica", "ok": True, "center": (center or await _centro_por_defecto()).upper(),
                 "mensaje": f"Contact Compliance W{cc['week']}: CC = {cc['value']}% ({cc['detalle']})"}
 
+    # ── LOS DOS EXCEL DE AMAZON QUE NO SE PODIAN SUBIR ──────────────────────
+    # Los umbrales (t0..t3 por metrica) y los PESOS (..._wt_final) tienen cada
+    # uno su ruta desde hace tiempo, pero ninguna tiene boton: para meterlos
+    # habia que llamar a la API a mano. Los pesos deciden cuanto vale cada
+    # metrica en la nota final, asi que sin poder actualizarlos el calculo se
+    # queda con los de la semana 22 para siempre — y cuando Amazon los cambia,
+    # el numero que enseña la app deja de ser el que ellos calculan.
+    #
+    # Se reconocen por sus COLUMNAS, no por el nombre del fichero: el nombre lo
+    # cambia cualquiera al descargarlo, las columnas no. Y va antes del resto
+    # porque son Excel, que si no caerian en el flujo de ratios y se
+    # rechazarian con un "no reconocido" que no dice nada.
+    if ext in ("xlsx", "xls", "xlsm", "csv"):
+        try:
+            _filas = _read_table_any(content, file.filename or "tabla")
+        except Exception:
+            _filas = []
+        _hdr = [str(c).strip().lower() for c in (_filas[0] if _filas else [])]
+        _tiene = set(_hdr)
+        if any(h.endswith("_wt_final") for h in _hdr) and "station" in _tiene:
+            return await _upload_pesos(content, file.filename or "pesos")
+        if any(h.endswith("_t0") or h.endswith("_t1") for h in _hdr) and "station" in _tiene:
+            return await _upload_umbrales(content, file.filename or "umbrales")
+
     try:
         # PDF → scorecard oficial
         if ext == "pdf":
@@ -29956,12 +29980,14 @@ async def calibrate_thresholds(data: dict = Body(...), _=Depends(require_admin))
             "desde_scorecards": len(docs)}
 
 
-@api_router.post("/scorecard/import-thresholds")
-async def import_thresholds(file: UploadFile = File(...), _=Depends(require_admin)):
+async def _upload_umbrales(content: bytes, filename: str) -> dict:
     """Sube el Excel de umbrales de Amazon (t0/t1/t2/t3 por métrica y semana).
-    Guarda, por estación, los umbrales de la ÚLTIMA semana = vigentes."""
-    content = await file.read()
-    rows = _read_table_any(content, file.filename or "umbrales.xlsx")
+    Guarda, por estación, los umbrales de la ÚLTIMA semana = vigentes.
+
+    Sacado de la ruta para que lo pueda usar tambien la subida unificada, que
+    es la unica con boton. Copiarlo condenaria a las dos copias a separarse.
+    """
+    rows = _read_table_any(content, filename or "umbrales.xlsx")
     if len(rows) < 2:
         raise HTTPException(status_code=400, detail="Excel vacío o sin filas")
     hdr = [str(c).strip().lower() for c in rows[0]]
@@ -30003,7 +30029,16 @@ async def import_thresholds(file: UploadFile = File(...), _=Depends(require_admi
                 n += 1
         await db.scorecard_thresholds.update_one({"center": st}, {"$set": thr_doc}, upsert=True)
         saved.append({"center": st, "week": wk, "metricas": n})
-    return {"success": True, "guardadas": saved}
+    return {"success": True, "tipo": "umbrales", "guardadas": saved,
+            "mensaje": "Umbrales guardados: " + ", ".join(
+                "%s W%s (%d metricas)" % (x["center"], x["week"], x["metricas"]) for x in saved)}
+
+
+@api_router.post("/scorecard/import-thresholds")
+async def import_thresholds(file: UploadFile = File(...), _=Depends(require_admin)):
+    """Ruta directa. La via normal es la subida unificada, que reconoce este
+    Excel por sus columnas y llama aqui debajo."""
+    return await _upload_umbrales(await file.read(), file.filename or "umbrales.xlsx")
 
 
 # Columna de pesos (CSV ..._wt_final) → clave métrica
@@ -30016,12 +30051,15 @@ _XLSX_WT_MAP = {
 }
 
 
-@api_router.post("/scorecard/import-weights")
-async def import_weights(file: UploadFile = File(...), _=Depends(require_admin)):
+async def _upload_pesos(content: bytes, filename: str) -> dict:
     """Sube el CSV/Excel de pesos de Amazon (..._wt_final por métrica y semana).
-    Guarda, por estación, los pesos de la ÚLTIMA semana = vigentes."""
-    content = await file.read()
-    rows = _read_table_any(content, file.filename or "pesos.csv")
+    Guarda, por estación, los pesos de la ÚLTIMA semana = vigentes.
+
+    Los pesos deciden cuanto vale cada metrica en la nota final: sin poder
+    actualizarlos, el calculo se queda con los de la semana 22 y el numero que
+    enseña la app deja de ser el que calcula Amazon.
+    """
+    rows = _read_table_any(content, filename or "pesos.csv")
     if len(rows) < 2:
         raise HTTPException(status_code=400, detail="Archivo vacío")
     hdr = [str(c).strip().lower() for c in rows[0]]
@@ -30059,7 +30097,18 @@ async def import_weights(file: UploadFile = File(...), _=Depends(require_admin))
                     pass
         await db.scorecard_weights.update_one({"center": st}, {"$set": doc}, upsert=True)
         saved.append({"center": st, "week": wk, "suma_pesos": round(total, 2)})
-    return {"success": True, "guardados": saved}
+    # La suma se enseña a proposito: los pesos oficiales suman 100, asi que un
+    # total distinto delata que el fichero esta incompleto o no es el que toca.
+    return {"success": True, "tipo": "pesos", "guardados": saved,
+            "mensaje": "Pesos guardados: " + ", ".join(
+                "%s W%s (suman %s)" % (x["center"], x["week"], x["suma_pesos"]) for x in saved)}
+
+
+@api_router.post("/scorecard/import-weights")
+async def import_weights(file: UploadFile = File(...), _=Depends(require_admin)):
+    """Ruta directa. La via normal es la subida unificada, que reconoce este
+    fichero por sus columnas `..._wt_final` y llama aqui debajo."""
+    return await _upload_pesos(await file.read(), file.filename or "pesos.csv")
 
 
 async def _sc_weights(center):

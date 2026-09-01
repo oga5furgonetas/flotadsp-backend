@@ -514,6 +514,39 @@ function ImportGuide({ center, fileRef, uploadBusy, onUpload }) {
       ],
       metricas: 'DCR diario, DNR diario, POD diario',
     },
+    /* Los dos ficheros de baremos. No traen resultados: traen las REGLAS con
+       las que Amazon puntúa. Sin ellos la app calcula con los baremos de la
+       semana 22, que es cuando se sembraron — y el día que Amazon los cambie,
+       el número que enseñamos deja de ser el suyo sin que nada avise.
+       Las rutas para subirlos existían desde hacía tiempo pero no tenían
+       botón, así que en la práctica no los subía nadie. */
+    {
+      id: 'pesos',
+      color: 'rose',
+      icon: '⚖️',
+      titulo: 'Pesos de las métricas (Excel/CSV de Amazon)',
+      desc: 'Cuánto vale cada métrica en la nota final. Sin esto se calcula con los pesos de la semana 22.',
+      pasos: [
+        'Es el fichero con columnas que acaban en "_wt_final" (dcr_wt_final, pod_wt_final…)',
+        'Te lo pasa Amazon cuando cambian la ponderación',
+        'Súbelo aquí tal cual: se reconoce por sus columnas, da igual cómo se llame',
+        'Comprueba que la suma que te diga sea 100: si no, el fichero está incompleto',
+      ],
+      metricas: 'Ponderación de las 12 métricas del Scorecard 3.0',
+    },
+    {
+      id: 'umbrales',
+      color: 'sky',
+      icon: '🎯',
+      titulo: 'Umbrales por tier (Excel de Amazon)',
+      desc: 'Los baremos t0/t1/t2/t3 de tu estación. El PDF ya trae los suyos; este cubre varias semanas de golpe.',
+      pasos: [
+        'Es el fichero con columnas que acaban en "_t0", "_t1", "_t2", "_t3"',
+        'Súbelo aquí: se guarda el de la semana más reciente de cada estación',
+        'Si solo tienes el PDF de la semana, no hace falta: los umbrales salen de él',
+      ],
+      metricas: 'Fantastic+, Fantastic, Great y Fair de cada métrica',
+    },
   ]
 
   return (
