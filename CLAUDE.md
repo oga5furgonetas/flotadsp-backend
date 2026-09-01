@@ -673,8 +673,10 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones`,
   `check-tema-mezclado`, `check-efectos`, `check_contracts.py`,
   `check_objectid.py`, `check_tenant.py` y `check_multiempresa.py`.
-  `check-patrones` ya NO tiene backlog —los 45 avisos se miraron uno a uno el
-  31-08-2026 y quedó a cero—; `check-huerfanas` sí (28).
+  **Ninguno tolera ya backlog**: los 45 avisos de `check-patrones` y las 29
+  rutas de `check-huerfanas` se miraron una a una el 31-08 y el 01-09-2026, y
+  los dos trinquetes están a cero. Un checker con backlog no distingue lo nuevo
+  de lo viejo, que es como se acumulan.
 - `check-huerfanas.mjs` lista rutas del backend que no llama ningún cliente. Una
   ruta sin UI no falla, simplemente no se usa: así estuvieron meses el módulo de
   turnos entero y las subidas de métricas.
