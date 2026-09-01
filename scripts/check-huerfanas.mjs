@@ -51,6 +51,57 @@ const SIN_UI_A_PROPOSITO = new Set([
   // Esta ruta hacia lo mismo pasando por el servidor.
   'POST /assignments/import-text',
 
+  // ── SUPERADAS POR ALGO MEJOR QUE YA TIENE PANTALLA ────────────────────
+  // `/damages/atribucion` hace esto y mucho mas: cada golpe con su ultima foto
+  // limpia, la ventana en la que aparecio y quien la llevaba, con nivel de
+  // certeza. Esta devuelve el `driver_id` que la inspeccion ya trae dentro.
+  'GET /inspections/{inspection_id}/responsibility',
+  // El portal del conductor usa `/portal/mi-ficha`, que ademas dice QUE le
+  // falta rellenar. Esta devuelve la ficha cruda.
+  'GET /me/driver',
+  // Busca la furgoneta por `current_driver_id` —el conductor FIJO—, que no se
+  // pone desde ninguna pantalla, asi que hoy devolveria 404 siempre. Lo que
+  // usa el portal es `/auth/me/assigned-vehicle`, que va por el cuadrante.
+  'GET /me/vehicle',
+  // `PATCH /vehicles/{id}` ya admite `current_driver_id` (esta en la
+  // whitelist) y esa pantalla si existe. Lo unico que añade esta ruta es un
+  // apunte en `driver_assignments`... que no lee NADIE: es una coleccion de
+  // solo escritura. Si algun dia hace falta el historial de conductor fijo,
+  // el sitio es el PATCH, no resucitar esta.
+  'PUT /vehicles/{vehicle_id}/assign-driver',
+
+  // ── EL ROSTER POR IMAGEN: solo si el texto dejara de poderse copiar ────
+  // `PasteModal` parsea el roster pegado como TEXTO en el propio navegador.
+  // Esta ruta hace lo mismo desde una captura con Gemini Vision: mas lenta y
+  // gastando cuota —que se agota y deja sin IA al resto de la app—. Se queda
+  // por si Amazon deja de permitir copiar el roster; mientras tanto, el texto
+  // es mejor camino.
+  'POST /assignments/import-image',
+
+  // ── SIN USO, Y CON EL MOTIVO A LA VISTA ───────────────────────────────
+  // Pares clave/valor en `app_meta` para una pantalla que no existe: ninguna
+  // linea del frontend menciona "mery". Se dejan por si aparece el cliente que
+  // las escribia; no estorban y borrarlas sin saber que las puso seria peor.
+  'GET /mery/stickers',
+  'PUT /mery/stickers',
+  // Lee `daily_ratios`, que esta VACIA en produccion (gotcha 34): depende de
+  // que alguien suba el Resumen diario a mano y no lo sube nadie. Devolveria
+  // siempre cero. Lo que si funciona es `/scorecard/en-vivo`, que calcula lo
+  // mismo desde `cortex_packages`, que se actualiza solo.
+  'GET /scorecard/ratios-raw',
+  // Coste de subir de plan a mitad de ciclo. La pantalla de planes es de
+  // super-admin y trabaja con `/admin/planes`; esto es para un flujo de
+  // autoservicio que hoy no existe.
+  'GET /org/upgrade-preview',
+  // Siete enlaces de marketplace para buscar una pieza. No hay pantalla de
+  // piezas: cuando la haya, este es el endpoint.
+  'GET /parts/search',
+  // El proveedor de renting ya se ve en la ficha de la furgoneta
+  // (`vehicle.provider`). Esta busca por matricula y añade los talleres
+  // concertados: util el dia que se busque por matricula desde fuera de la
+  // ficha, que hoy no pasa.
+  'GET /vehicles/plate/{plate}/provider-info',
+
   // Mantenimiento y diagnóstico, se lanzan a mano
   'POST /import/diagnose',            // el docstring lo dice: DIAGNOSTICO TEMPORAL
   'POST /inspections/batch-upload',   // carga masiva por carpetas, desde un script
@@ -178,7 +229,19 @@ const huerfanas = rutas.filter((r) => {
    alguien lo desactive. Así que se tolera el número ACTUAL y ni una más: si
    añades una ruta sin engancharla, CI se pone en rojo. Cuando bajes el
    backlog, baja también este número — el checker te avisa de que lo hagas. */
-const MAXIMO_TOLERADO = 11
+/* A CERO desde el 01-09-2026. Empezo el dia en 29 y se cerro asi:
+     · 5 eran falsos positivos —las de plantilla compartida cuelgan de `@app` y
+       llevan `/api` escrito dentro, mientras el cliente usa apiFetch('/tools/…')—
+       y se arreglo la comparacion, no la lista;
+     · 2 se engancharon: el PDF de flota y las bolsas de cada furgoneta, que la
+       ficha ya ENSEÑABA sin que nadie pudiera rellenarlas;
+     · 1 se marco como NO enganchar (alerts/read-all, que regeneraria la lista
+       entera de avisos);
+     · el resto estan aqui abajo, cada una con por que.
+   Con el trinquete a cero, una ruta nueva sin cliente salta el mismo dia. Y esa
+   es la unica forma de que esto no vuelva a acumular 29: mientras se tolera un
+   backlog, lo que se añade encima no se distingue de lo que ya habia. */
+const MAXIMO_TOLERADO = 0
 
 if (huerfanas.length === 0) {
   console.log(`huerfanas OK: ${rutas.length} rutas, todas con consumidor ` +

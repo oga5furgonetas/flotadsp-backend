@@ -677,5 +677,14 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   31-08-2026 y quedó a cero—; `check-huerfanas` sí (28).
 - `check-huerfanas.mjs` lista rutas del backend que no llama ningún cliente. Una
   ruta sin UI no falla, simplemente no se usa: así estuvieron meses el módulo de
-  turnos entero y las subidas de métricas. Lleva trinquete (tolera el backlog
-  actual, falla si sube), así que si añades una ruta, engánchala.
+  turnos entero y las subidas de métricas.
+  **Trinquete a CERO desde el 01-09-2026**: si añades una ruta, engánchala el
+  mismo día o anótala en `SIN_UI_A_PROPOSITO` con el motivo. Las 29 que había se
+  cerraron una a una — 5 eran falsos positivos (las de `@app` llevan `/api`
+  dentro de la ruta y el cliente lo pone por su lado: se arregló la comparación,
+  no la lista), 2 se engancharon (el PDF de flota y las bolsas, que la ficha
+  ENSEÑABA sin que nadie pudiera rellenarlas), 1 quedó marcada como NO enganchar
+  y el resto tienen su porqué escrito.
+  Mientras se tolera un backlog, lo que se añade encima no se distingue de lo
+  que ya estaba: por eso los tres trinquetes que quedaban se han bajado a cero
+  (`check-patrones` también) y `check_contracts` nunca tuvo.
