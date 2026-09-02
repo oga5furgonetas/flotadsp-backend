@@ -119,6 +119,7 @@ export const fiabilidadIA = () => api.get('/ai/fiabilidad')
 export const iaParaRevisar = (center, limit) =>
   api.get('/ai/para-revisar', { params: { ...centerParam(center), ...(limit ? { limit } : {}) } })
 export const markReviewed = (id) => api.post(`/inspections/${id}/mark-reviewed`)
+export const autorrevisarIA = (limite) => api.post('/ai/autorrevisar', { limite }) // la IA cierra sola lo que puede
 export const damageFeedback = (id, body) => api.post(`/inspections/${id}/damage-feedback`, body)
 export const missedDamage = (id, body) => api.post(`/inspections/${id}/missed-damage`, body)
 
@@ -206,6 +207,7 @@ export const uploadScorecard = (file, center) => {
 /* ── Org / Config ── */
 export const getOrgCenters = () => api.get('/org/centers')
 export const getCentrosGeo = () => api.get('/org/centros-geo') // {centros: {OGA5: {lat, lng, origen}}}
+export const enlaceTaller = (workshopId) => api.post(`/workshops/${workshopId}/enlace`) // enlace fijo por taller
 export const addOrgCenter = (name) => api.post('/org/centers', { name })
 /* WhatsApp Business. Las credenciales NO pasan por aqui: viven en los secretos
    de Fly. Estos endpoints solo dicen que falta, encienden cada aviso y prueban. */

@@ -270,6 +270,18 @@ def main() -> int:
         tok = url.rsplit("/", 1)[-1] if "/taller/" in url else ""
         paso("generar el enlace para el taller", bool(tok), "HTTP %s" % code)
 
+    # UN enlace fijo por taller, con todas sus furgonetas dentro (02-09-2026).
+    code, et = pide("/workshops/%s/enlace" % wid, "POST", {}, token=T)
+    tt = (et.get("url") or "").rsplit("/", 1)[-1] if "/taller/t/" in (et.get("url") or "") else ""
+    paso("un enlace fijo para el taller", bool(tt), "HTTP %s" % code)
+    if tt:
+        code, lista = pide("/taller/t/%s" % tt)      # SIN sesion: es el caso publico
+        crudo = json.dumps(lista)
+        paso("y el taller ve sus furgonetas nuestras, sin datos internos",
+             code == 200 and (lista.get("total") or 0) >= 1
+             and not any(k in crudo for k in ("driver_id", "db_name", "vehicle_id")),
+             "ve %s" % lista.get("total"))
+
     if tok:
         code, pub = pide("/taller/%s" % tok)          # SIN sesion: es el caso publico
         # Lo que ve el taller no puede llevar datos de nadie: el enlace se

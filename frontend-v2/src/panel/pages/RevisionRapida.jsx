@@ -6,7 +6,7 @@ import {
   AlertTriangle, BrainCircuit, Pencil, Plus, FileText, TrendingUp, EyeOff,
   Zap, HelpCircle,
 } from 'lucide-react'
-import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback, fetchAuthedBlob, autoexamenIA, iaParaRevisar, fiabilidadIA, entrenarModeloIA } from '../api'
+import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback, fetchAuthedBlob, autoexamenIA, iaParaRevisar, fiabilidadIA, entrenarModeloIA, autorrevisarIA } from '../api'
 import PolygonEditor from '../components/PolygonEditor'
 import BboxEditor from '../components/BboxEditor'
 import CompareSlider from '../components/CompareSlider'
@@ -572,6 +572,9 @@ export default function RevisionRapida() {
   const [compareMode, setCompareMode] = useState(false)     // slider antes/después vs referencia
   const [partName, setPartName] = useState('')
   const [filterIA, setFilterIA] = useState(false)
+  // Lo que la IA ha cerrado sola (viene con la cola): esta cola son DUDAS.
+  const [colaMeta, setColaMeta] = useState(null)
+  const [iaOcupada, setIaOcupada] = useState(false)
   const [autoex, setAutoex] = useState(null)
   const [expres, setExpres] = useState(false)
   // Modal editor de polígono/bbox
@@ -594,10 +597,23 @@ export default function RevisionRapida() {
   useEffect(() => {
     setQueue(null); setIdx(0); setPhotoIdx(0); setErr(''); setFullInsp(null)
     getReviewQueue(center)
-      .then((r) => setQueue(Array.isArray(r.data) ? r.data : r.data?.queue || []))
+      .then((r) => { setQueue(Array.isArray(r.data) ? r.data : r.data?.queue || []); setColaMeta(Array.isArray(r.data) ? null : r.data) })
       .catch(() => setErr(t('rev.load.error')))
     loadStats()
   }, [center, loadStats])
+
+  // Que la IA cierre ahora lo que pueda y volver a pedir la cola. El bucle lo
+  // hace cada cuarto de hora; el boton es para no esperar.
+  const revisarConIA = async () => {
+    setIaOcupada(true)
+    try {
+      await autorrevisarIA(500)
+      const r = await getReviewQueue(center)
+      setQueue(Array.isArray(r.data) ? r.data : r.data?.queue || [])
+      setColaMeta(Array.isArray(r.data) ? null : r.data)
+      setIdx(0)
+    } catch { /* la cola de antes sigue en pantalla */ } finally { setIaOcupada(false) }
+  }
 
   // Carga la inspección completa cuando cambia el item (el queue solo trae el conteo, no el array de daños)
   useEffect(() => {
@@ -757,9 +773,26 @@ export default function RevisionRapida() {
             className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold ring-1 transition ${filterIA ? 'bg-brand-500/15 text-brand-300 ring-brand-500/30' : 'text-dark-500 ring-white/[0.07] hover:text-dark-300'}`}>
             ⬡ Solo IA {filterIA && `(${displayQueue.length})`}
           </button>
-          <span className="text-[13px] text-dark-500">{t('rev.pending')}</span>
+          <span className="text-[13px] text-dark-500">{t('rev.dudas')}</span>
         </div>
       </header>
+
+      {/* La IA se revisa sola: aqui solo llega lo que no tiene claro. Que se
+          vea cuanto ha cerrado ella, si no "35 pendientes" parece que no
+          hace nada. */}
+      {colaMeta && (
+        <div className="rise mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-brand-500/20 bg-brand-500/[0.06] px-4 py-3 text-[13px] text-dark-300">
+          <span>
+            <b className="text-dark-50">{(colaMeta.ia_revisadas_7d ?? 0).toLocaleString('es-ES')}</b> {t('rev.ia.week')}
+            <span className="text-dark-600"> · {(colaMeta.ia_revisadas ?? 0).toLocaleString('es-ES')} {t('rev.ia.total')}</span>
+          </span>
+          <span className="text-dark-500">{t('rev.ia.como')}</span>
+          <button onClick={revisarConIA} disabled={iaOcupada}
+            className="ml-auto rounded-lg border border-brand-500/30 px-3 py-1.5 text-xs font-semibold text-brand-300 hover:bg-brand-500/10 disabled:opacity-50">
+            {iaOcupada ? t('rev.ia.working') : t('rev.ia.now')}
+          </button>
+        </div>
+      )}
 
       <Autoexamen datos={autoex} total={total} alRevisar={() => setExpres(true)}
                   recargar={() => autoexamenIA().then((r) => setAutoex(r.data)).catch(() => {})} />

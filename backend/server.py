@@ -10381,8 +10381,18 @@ async def get_review_queue(center: Optional[str] = None, user: dict = Depends(re
     # cola de 200 y una de 834 se ven exactamente igual, y quien revisa cree
     # que ha terminado cuando le quedan seiscientas.
     pendientes = await db.inspections.count_documents(query)
+    # Lo que la IA ha cerrado sola, para que la pantalla diga que esta cola
+    # son DUDAS y no todo lo que entra. Sin ese numero, "35 pendientes" se
+    # leeria como "la IA no hace nada".
+    hace_7d = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    q_ia = {"reviewed_by": "ia", "deleted": {"$ne": True}}
+    if "$or" in query:
+        q_ia["$or"] = query["$or"]
+    ia_total = await db.inspections.count_documents(q_ia)
+    ia_7d = await db.inspections.count_documents({**q_ia, "reviewed_at": {"$gte": hace_7d}})
     return {"queue": out, "total": len(out), "pendientes": pendientes,
-            "hay_mas": pendientes > len(out)}
+            "hay_mas": pendientes > len(out),
+            "ia_revisadas": ia_total, "ia_revisadas_7d": ia_7d}
 
 
 @api_router.get("/inspections/{inspection_id}", response_model=Inspection)
@@ -10969,6 +10979,12 @@ async def reanalyze_inspection(inspection_id: str, silent: bool = False, _=Depen
         analysis.new_damages = list(analysis.damages)
     if analysis_status == "ok" and analysis:
         await _apply_vehicle_memory(insp.get("vehicle_id"), analysis, inspection_id=inspection_id)
+        # Y la IA decide en el acto lo que pueda decidir de ESTA inspeccion,
+        # sin esperar al bucle: la cola solo enseña dudas.
+        try:
+            await autorrevisar_inspecciones(limite=1, ids=[inspection_id])
+        except Exception as _ar:                                 # noqa: BLE001
+            logger.warning("autorrevision tras analisis %s: %s", inspection_id, _ar)
         if inv_mode:
             await db.inspections.update_one({"id": inspection_id}, {"$set": {"inventory_done": True}})
 
@@ -13042,6 +13058,8 @@ async def start_itv_whatsapp_scheduler():
     # porque cada centro cierra a su hora y el dato se borra solo al dia
     # siguiente (medido: a los 3 dias se ha perdido el 97 % de las devoluciones).
     asyncio.create_task(_bucle_congelar())
+    # La IA cierra sola lo que puede decidir; a la persona le queda la duda.
+    asyncio.create_task(_bucle_autorrevision())
     # El disco no avisa: un Atlas M0 lleno deja de aceptar escrituras de golpe.
     # Va con el resumen del dia porque no es una urgencia de minutos, pero si
     # algo que hay que ver TODOS los dias mientras apriete.
@@ -17994,6 +18012,156 @@ async def taller_plantilla_set(clave: str, data: dict = Body(...),
 SEG_CADA_MIN = 30        # cada cuanto se mira si a alguien le toca
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# LA IA SE REVISA SOLA
+# ═══════════════════════════════════════════════════════════════════════════
+# El 02-09-2026 habia 2.324 inspecciones "sin mirar" y 2.219 de ellas (95 %)
+# NO tenian ningun daño nuevo: no habia nada que decidir y aun asi esperaban
+# un clic de una persona. De las 105 restantes, el puntuador de fiabilidad ya
+# sabia decir con un 90 % de acierto medido cuales eran reales y cuales
+# inventadas (fiabilidad.py), pero nadie actuaba sobre ese veredicto: solo
+# servia para ORDENAR la cola. Dani no quiere revisar; quiere que la IA se
+# corrija sola y le deje solo lo que no tiene claro.
+#
+# Reglas, y por que:
+#   · Sin daños nuevos que decidir -> revisada por la IA. No hay pregunta.
+#   · Todos los daños nuevos en los extremos (confirmado >= 0,75 o descartado
+#     < 0,15) -> la IA aplica sus veredictos IGUAL que una persona (el
+#     descartado sale del libro de daños) y cierra la inspeccion.
+#   · Alguno dudoso -> se queda para una persona, con la puntuacion guardada
+#     en el daño para que la pantalla diga cual es la duda.
+#   · Lo que decide la IA NUNCA entra en `ai_feedback`: el modelo se
+#     reentrena solo con veredictos humanos. Si la IA se diera la razon a si
+#     misma, los porcentajes subirian y el modelo iria a peor sin que nadie se
+#     enterara (probar_autovalidacion.py).
+# Queda `reviewed_by: "ia"` y `reviewed_motivo`, asi que se puede filtrar,
+# auditar y deshacer.
+
+def _autorrevision_decision(veredictos: list) -> str:
+    """'auto' si la IA puede cerrar sola la inspeccion; 'humano' si no.
+
+    Sin daños que decidir es 'auto' (no hay pregunta). Con daños, solo si
+    TODOS son confirmado o descartado; un solo dudoso —o un None, que es
+    "sin modelo todavia"— y la decision es de una persona.
+    """
+    if not veredictos:
+        return "auto"
+    if all(v in ("confirmado", "descartado") for v in veredictos):
+        return "auto"
+    return "humano"
+
+
+def _dano_pendiente_de_decidir(d) -> bool:
+    """Un daño nuevo que aun no ha decidido nadie (ni persona ni IA).
+
+    Los ya registrados en el libro (`is_new: False`, "[ya registrado …]") no
+    se vuelven a preguntar: es la misma regla que aplica la pantalla.
+    """
+    if not isinstance(d, dict):
+        return False
+    if d.get("is_new", True) is False or "[ya registrado" in (d.get("description") or ""):
+        return False
+    return True
+
+
+async def autorrevisar_inspecciones(limite: int = 300, ids=None) -> dict:
+    """Cierra sola las inspecciones que la IA puede cerrar, en la empresa actual."""
+    modelo = await fiabilidad.cargar(db)
+    q: dict = {"reviewed": {"$ne": True}, "deleted": {"$ne": True}, "analysis_status": "ok"}
+    if ids:
+        q["id"] = {"$in": list(ids)}
+    cur = db.inspections.find(
+        q, {"_id": 0, "id": 1, "vehicle_id": 1, "analysis.new_damages": 1,
+            "analysis.total_damages_count": 1}).sort("created_at", -1).limit(max(1, limite))
+    res = {"revisadas": 0, "sin_nada": 0, "decididas": 0, "confirmados": 0,
+           "descartados": 0, "dudosas": 0, "sin_modelo": 0}
+    ahora = datetime.now(timezone.utc).isoformat()
+    async for insp in cur:
+        an = insp.get("analysis") or {}
+        nuevos = an.get("new_damages") or []
+        pendientes = [(i, d) for i, d in enumerate(nuevos) if _dano_pendiente_de_decidir(d)]
+        if not pendientes:
+            await db.inspections.update_one(
+                {"id": insp["id"]},
+                {"$set": {"reviewed": True, "reviewed_at": ahora, "reviewed_by": "ia",
+                          "reviewed_motivo": "sin daños nuevos que decidir"}})
+            res["revisadas"] += 1
+            res["sin_nada"] += 1
+            continue
+        if not modelo:
+            res["sin_modelo"] += 1
+            continue
+        veredictos, sets = [], {}
+        for i, d in pendientes:
+            p = fiabilidad.puntuar(modelo, d, an.get("total_damages_count"), i)
+            v = fiabilidad.veredicto(p)
+            veredictos.append(v)
+            sets["analysis.new_damages.%d.fiabilidad" % i] = p
+            sets["analysis.new_damages.%d.veredicto_ia" % i] = v
+        # La puntuacion se guarda siempre: la pantalla enseña asi cual es la duda.
+        await db.inspections.update_one({"id": insp["id"]}, {"$set": sets})
+        if _autorrevision_decision(veredictos) != "auto":
+            res["dudosas"] += 1
+            continue
+        n_ok = n_no = 0
+        for (i, d), v in zip(pendientes, veredictos):
+            if v == "descartado":
+                # Lo mismo que hace el veredicto humano "inventado": fuera del
+                # libro las entradas de la IA en ese panel; las humanas quedan.
+                p = _canon_panel(d.get("part") or "")
+                if p and insp.get("vehicle_id"):
+                    await db.vehicle_damage_ledger.delete_many(
+                        {"vehicle_id": insp["vehicle_id"], "panel": p, "status": "open", "source": "ai"})
+                n_no += 1
+            else:
+                n_ok += 1
+        await db.inspections.update_one(
+            {"id": insp["id"]},
+            {"$set": {"reviewed": True, "reviewed_at": ahora, "reviewed_by": "ia",
+                      "reviewed_motivo": "%d confirmado(s) · %d descartado(s) por fiabilidad" % (n_ok, n_no)}})
+        res["revisadas"] += 1
+        res["decididas"] += 1
+        res["confirmados"] += n_ok
+        res["descartados"] += n_no
+    return res
+
+
+AUTORREV_CADA_MIN = 15
+
+
+async def _bucle_autorrevision():
+    """Cada cuarto de hora, en TODAS las empresas (gotcha 26: es un cron)."""
+    await asyncio.sleep(120)
+    while True:
+        total = 0
+        try:
+            orgs = await global_db.organizations.find(
+                {"status": {"$in": ["active", "trial"]}},
+                {"_id": 0, "id": 1, "db_name": 1, "account_type": 1}).to_list(500) or [None]
+            anterior = _current_db_name.get()
+            try:
+                for o in orgs:
+                    set_current_org_db(_tenant_db_name(o))
+                    r = await autorrevisar_inspecciones(limite=300)
+                    total += r.get("revisadas", 0)
+            finally:
+                set_current_org_db(anterior)
+            await _latido("autorrevision", revisadas=total, cada_min=AUTORREV_CADA_MIN, error=None)
+        except Exception as e:                                   # noqa: BLE001
+            logger.error("Bucle de autorrevision: %s", e)
+            await _latido("autorrevision", error=str(e)[:200], cada_min=AUTORREV_CADA_MIN)
+        await asyncio.sleep(AUTORREV_CADA_MIN * 60)
+
+
+@api_router.post("/ai/autorrevisar")
+async def disparar_autorrevision(data: dict = Body(default={}), _=Depends(require_admin)):
+    """Que la IA cierre ahora lo que pueda, en esta empresa. Devuelve cuanto."""
+    limite = int((data or {}).get("limite") or 500)
+    r = await autorrevisar_inspecciones(limite=max(1, min(limite, 5000)))
+    await _audit(_, "autorrevision_manual", r)
+    return r
+
+
 async def _bucle_seguimiento():
     """Mira cada media hora si a algun taller le toca que le preguntemos.
 
@@ -18316,6 +18484,100 @@ async def _ot_cerrar_danos(ledger_ids: list, estado: str, numero=None) -> int:
         # furgoneta ya ha vuelto y eso es lo que manda.
         logger.warning("No se pudieron cerrar los daños de la orden %s: %s", numero, e)
         return 0
+
+
+@api_router.post("/workshops/{workshop_id}/enlace")
+async def enlace_taller(workshop_id: str, user: dict = Depends(require_admin)):
+    """UN enlace por taller, para siempre, con todas sus furgonetas dentro.
+
+    Hasta ahora cada orden tenia su enlace y el taller acababa con seis
+    mensajes de WhatsApp con seis enlaces distintos: abria el que tenia mas a
+    mano y no el de la furgoneta que tenia delante. Con uno solo por taller
+    —que se manda una vez y se guarda en favoritos— entra y ve lo que tiene
+    nuestro ahora mismo, y desde ahi abre cada orden con su paso a paso de
+    siempre. Es lo que hace que un taller QUIERA usarlo (Dani, 02-09-2026).
+    Se reutiliza si ya existe uno vivo; rehacerlo revoca el anterior.
+    """
+    w = await db.workshops.find_one({"id": workshop_id}, {"_id": 0, "name": 1, "phone": 1})
+    if not w:
+        raise HTTPException(404, "Ese taller no existe")
+    dbn = _current_db_name.get()
+    vivo = await global_db.taller_enlaces.find_one(
+        {"workshop_id": workshop_id, "db_name": dbn, "revocado": {"$ne": True},
+         "expira_en": {"$gt": _ot_ahora()}}, {"_id": 0, "token": 1, "expira_en": 1})
+    if vivo:
+        token, caduca = vivo["token"], vivo["expira_en"]
+    else:
+        token = secrets.token_urlsafe(32)
+        caduca = (datetime.now(timezone.utc) + timedelta(days=365)).isoformat()
+        await global_db.taller_enlaces.insert_one({
+            "token": token, "workshop_id": workshop_id, "db_name": dbn,
+            "taller_nombre": w.get("name"),
+            "creado_por": user.get("name") or user.get("username") or "oficina",
+            "creado_en": _ot_ahora(), "expira_en": caduca, "revocado": False, "tipo": "taller",
+        })
+    url = "%s/taller/t/%s" % (_PORTAL_BASE_FRONT.rstrip("/"), token)
+    texto = (
+        "Hola, somos de la flota. Este es vuestro enlace fijo con nuestras "
+        "furgonetas: %s\n\nAhí veis las que tenéis nuestras ahora mismo y, en cada "
+        "una, podéis marcar el estado, subir fotos, pasar presupuesto y decir "
+        "para cuándo estará. Sin registrarse. Guardadlo en favoritos: es siempre "
+        "el mismo. Gracias."
+    ) % url
+    return {"url": url, "expira_en": caduca, "texto_whatsapp": texto,
+            "taller": w.get("name"), "telefono": w.get("phone")}
+
+
+@api_router.get("/taller/t/{token}")
+async def portal_taller_lista(token: str):
+    """Lo que un taller tiene nuestro ahora mismo, sin usuario ni contraseña.
+
+    Cada orden lleva su propio enlace de siempre (se crea si no lo tenia), asi
+    el paso a paso por orden no cambia: esto solo es la puerta de entrada.
+    """
+    _ot_freno(token, limite=120)
+    tok = (token or "").strip()
+    if len(tok) < 20 or len(tok) > 120:
+        raise HTTPException(404, "Este enlace no es válido")
+    enlace = await global_db.taller_enlaces.find_one(
+        {"token": tok, "tipo": "taller"}, {"_id": 0})
+    if not enlace or enlace.get("revocado") or not enlace.get("workshop_id"):
+        raise HTTPException(404, "Este enlace no es válido")
+    if enlace.get("expira_en") and enlace["expira_en"] < _ot_ahora():
+        raise HTTPException(404, "Este enlace ha caducado. Pídele uno nuevo a la oficina.")
+    # LA LINEA QUE EVITA EL DESASTRE MULTIEMPRESA (gotcha 26).
+    set_current_org_db(enlace.get("db_name"))
+    ordenes = await db.ordenes_trabajo.find(
+        {"workshop_id": enlace["workshop_id"], "estado": {"$nin": list(OT_ESTADOS_CERRADOS)}},
+        {"_id": 0, "id": 1, "numero": 1, "matricula": 1, "modelo": 1, "estado": 1,
+         "problema": 1, "fecha_entrada": 1, "fecha_entrega_estimada": 1, "presupuesto": 1,
+         "creada_en": 1}).sort("creada_en", -1).to_list(100)
+    salida = []
+    for o in ordenes:
+        e = await global_db.taller_enlaces.find_one(
+            {"orden_id": o["id"], "revocado": {"$ne": True}, "expira_en": {"$gt": _ot_ahora()}},
+            {"_id": 0, "token": 1})
+        if not e:
+            t_orden = secrets.token_urlsafe(32)
+            await global_db.taller_enlaces.insert_one({
+                "token": t_orden, "orden_id": o["id"], "db_name": enlace.get("db_name"),
+                "numero": o.get("numero"), "creado_por": "enlace del taller",
+                "creado_en": _ot_ahora(),
+                "expira_en": (datetime.now(timezone.utc) + timedelta(days=60)).isoformat(),
+                "revocado": False,
+            })
+            e = {"token": t_orden}
+        # Lista blanca de campos: esto acaba en telefonos que no controlamos.
+        salida.append({
+            "numero": o.get("numero"), "matricula": o.get("matricula"), "modelo": o.get("modelo"),
+            "estado": o.get("estado"), "estado_txt": OT_ESTADOS.get(o.get("estado"), o.get("estado")),
+            "problema": (o.get("problema") or "")[:300], "fecha_entrada": o.get("fecha_entrada"),
+            "fecha_entrega_estimada": o.get("fecha_entrega_estimada"),
+            "presupuesto": o.get("presupuesto"), "token": e["token"],
+        })
+    await global_db.taller_enlaces.update_one(
+        {"token": tok}, {"$set": {"ultima_visita": _ot_ahora()}, "$inc": {"visitas": 1}})
+    return {"taller": enlace.get("taller_nombre"), "ordenes": salida, "total": len(salida)}
 
 
 @api_router.post("/work-orders/{orden_id}/enlace")
@@ -31049,6 +31311,155 @@ async def plantilla_extraer(request: Request):
 
 
 # ── Paso 2: generar Excel con rutas rojas elegidas por el usuario ──
+_HORA_RE = re.compile(r"^([01]?\d|2[0-3]):[0-5]\d$")
+
+
+def _plantilla_validar_filas(rows: list, conductores: list, matriculas: dict, rutas_cortex: dict) -> list:
+    """Que cada fila de la plantilla cuadre con lo que la empresa YA sabe.
+
+    La plantilla sale de leer capturas con la IA, y de vez en cuando se cuela
+    una hora imposible, un nombre mal leido o una matricula que no existe. Eso
+    no se puede impedir en la lectura; se puede CAZAR antes de que salga la
+    plantilla, comparando con tres cosas que ya son verdad en la base:
+      · los conductores de la empresa (nombre normalizado y por tokens),
+      · las furgonetas de la flota (matricula normalizada),
+      · lo que Cortex dice de HOY (ruta -> conductor), si la extension ya lo
+        capturo: es la fuente sin OCR y manda cuando discrepa.
+    Devuelve avisos con sugerencia; no cambia nada solo. Pura, sin base de
+    datos: `test_plantilla_validar.py`.
+
+    `conductores`: [{"name", "transporter_id"}]; `matriculas`: {normalizada:
+    original}; `rutas_cortex`: {ruta: nombre del conductor segun Cortex}.
+    """
+    avisos = []
+    vistos_c: dict = {}
+    vistos_f: dict = {}
+    nombres_norm = [(c.get("name") or "", _normalize_name(c.get("name") or "").strip()) for c in conductores if c.get("name")]
+    for i, r in enumerate(rows or []):
+        if not isinstance(r, dict):
+            continue
+        conductor = (r.get("conductor") or "").strip()
+        ruta = (r.get("ruta") or "").strip()
+        furgo = _matricula_norm(r.get("furgo"))
+        h_salida = (r.get("h_salida") or "").strip()
+
+        # 1. La ruta la lleva quien dice Cortex, no quien leyo la IA.
+        if ruta and rutas_cortex.get(ruta) and conductor:
+            if _match_score(conductor, rutas_cortex[ruta]) < 0.8:
+                avisos.append({"fila": i, "campo": "conductor", "tipo": "ruta_cortex",
+                               "texto": "Cortex dice que la %s la lleva %s" % (ruta, rutas_cortex[ruta]),
+                               "sugerencia": rutas_cortex[ruta]})
+        # 2. El nombre existe en la empresa (o se parece a uno).
+        if conductor:
+            n = _normalize_name(conductor).strip()
+            exacto = any(n == nn for _, nn in nombres_norm)
+            if not exacto:
+                mejor, mejor_sc = None, 0.0
+                for original, _ in nombres_norm:
+                    sc = _match_score(conductor, original)
+                    if sc > mejor_sc:
+                        mejor, mejor_sc = original, sc
+                if mejor and mejor_sc >= 0.8:
+                    if _normalize_name(mejor).strip() != n:
+                        avisos.append({"fila": i, "campo": "conductor", "tipo": "nombre_parecido",
+                                       "texto": "En la empresa figura como %s" % mejor,
+                                       "sugerencia": mejor})
+                else:
+                    avisos.append({"fila": i, "campo": "conductor", "tipo": "nombre_desconocido",
+                                   "texto": "No hay ningún conductor con ese nombre", "sugerencia": None})
+            if n in vistos_c:
+                avisos.append({"fila": i, "campo": "conductor", "tipo": "repetido",
+                               "texto": "Ya está en la fila %d" % (vistos_c[n] + 1), "sugerencia": None})
+            else:
+                vistos_c[n] = i
+        # 3. La matricula existe en la flota (o se parece a una).
+        if furgo:
+            if furgo not in matriculas:
+                import difflib
+                cerca = difflib.get_close_matches(furgo, list(matriculas), n=1, cutoff=0.75)
+                avisos.append({"fila": i, "campo": "furgo", "tipo": "matricula_desconocida",
+                               "texto": "Esa matrícula no está en la flota",
+                               "sugerencia": matriculas[cerca[0]] if cerca else None})
+            if furgo in vistos_f:
+                avisos.append({"fila": i, "campo": "furgo", "tipo": "repetido",
+                               "texto": "Ya va en la fila %d" % (vistos_f[furgo] + 1), "sugerencia": None})
+            else:
+                vistos_f[furgo] = i
+        # 4. Horas: formato, rango de una ola de reparto y coherencia con salida.
+        if h_salida:
+            if not _HORA_RE.match(h_salida):
+                avisos.append({"fila": i, "campo": "h_salida", "tipo": "hora_invalida",
+                               "texto": "La hora no tiene forma de hora (HH:MM)", "sugerencia": None})
+            else:
+                hh = int(h_salida.split(":")[0])
+                if hh < 5 or hh > 16:
+                    avisos.append({"fila": i, "campo": "h_salida", "tipo": "hora_rara",
+                                   "texto": "Una salida a las %s no es de ninguna ola" % h_salida,
+                                   "sugerencia": None})
+                # Solo lo IMPOSIBLE: llegada a nave y bajada al yard van antes de la
+                # salida, a menos de hora y media, y la llegada antes que la bajada.
+                # Medido en 151 filas reales: el 67 % usa -30/-10, pero DGA1 usa
+                # -40/-20 a proposito; avisar de eso en cada fila seria un aviso
+                # que grita en falso y deja de leerse. Lo que si se vio son 42
+                # filas con la bajada DESPUES de la salida: eso si es un error.
+                llegada_std, bajada_std = _calc_horas(h_salida)
+                sm = int(h_salida.split(":")[0]) * 60 + int(h_salida.split(":")[1])
+                def _min(v):
+                    return int(v.split(":")[0]) * 60 + int(v.split(":")[1])
+                lleg = (r.get("h_llegada") or "").strip()
+                baj = (r.get("h_bajada") or "").strip()
+                for campo, val, esperado in (("h_llegada", lleg, llegada_std), ("h_bajada", baj, bajada_std)):
+                    if val and _HORA_RE.match(val):
+                        vm = _min(val)
+                        if vm >= sm or sm - vm > 90:
+                            avisos.append({"fila": i, "campo": campo, "tipo": "hora_incoherente",
+                                           "texto": "Tiene que ser antes de la salida (%s) y a menos de hora y media" % h_salida,
+                                           "sugerencia": esperado})
+                if lleg and baj and _HORA_RE.match(lleg) and _HORA_RE.match(baj) and _min(lleg) >= _min(baj):
+                    avisos.append({"fila": i, "campo": "h_llegada", "tipo": "hora_incoherente",
+                                   "texto": "La llegada a nave va después de la bajada al yard",
+                                   "sugerencia": llegada_std})
+        elif ruta:
+            avisos.append({"fila": i, "campo": "h_salida", "tipo": "hora_falta",
+                           "texto": "La ruta no tiene hora de salida", "sugerencia": None})
+    return avisos
+
+
+@app.post("/api/tools/plantilla-validar", dependencies=[Depends(require_admin)])
+async def plantilla_validar(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Avisos de la plantilla contra la empresa y contra Cortex, con sugerencia."""
+    rows = data.get("rows") or []
+    center = (data.get("center") or "").strip()
+    fecha = (data.get("date") or "").strip()
+    # dd/mm/aaaa -> aaaa-mm-dd, que es como Cortex guarda el dia.
+    dia = fecha
+    m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", fecha)
+    if m:
+        dia = "%s-%s-%s" % (m.group(3), m.group(2), m.group(1))
+    fc = _filtro_centro(user, center) if center and center != "Todos" else {}
+    conductores = await db.drivers.find(
+        {"active": {"$ne": False}, **fc}, {"_id": 0, "name": 1, "transporter_id": 1}).to_list(2000)
+    matriculas = {}
+    async for v in db.vehicles.find({"status": {"$nin": ["deleted", "baja"]}, **fc},
+                                    {"_id": 0, "license_plate": 1}):
+        n = _matricula_norm(v.get("license_plate"))
+        if n:
+            matriculas[n] = v.get("license_plate")
+    rutas_cortex: dict = {}
+    if dia:
+        # Hay un resumen POR ESTACION y dia: se juntan todos, que la plantilla
+        # de DGA1 no se compare con las rutas de OGA5.
+        async for res in db.cortex_resumen.find({"dia": dia}, {"_id": 0, "rutas": 1, "gente": 1}):
+            nombres = {g.get("transporterId"): g.get("nombre") for g in (res.get("gente") or []) if g.get("nombre")}
+            for r in res.get("rutas") or []:
+                nom = nombres.get(r.get("transporterId"))
+                if r.get("routeCode") and nom:
+                    rutas_cortex[r["routeCode"]] = nom
+    avisos = _plantilla_validar_filas(rows, conductores, matriculas, rutas_cortex)
+    return {"avisos": avisos, "con_cortex": bool(rutas_cortex), "dia": dia,
+            "resumen": {"filas": len(rows), "con_aviso": len({a["fila"] for a in avisos})}}
+
+
 @app.post("/api/tools/plantilla-excel", dependencies=[Depends(require_admin)])
 async def plantilla_excel(body: dict = Body(...), admin=Depends(require_admin)):
     from datetime import date as _date

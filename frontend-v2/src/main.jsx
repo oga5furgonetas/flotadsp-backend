@@ -245,6 +245,7 @@ const PanelDiarios = lazy(() => import('./panel/pages/Diarios'))
 const PanelOrdenes = lazy(() => import('./panel/pages/OrdenesTrabajo'))
 const PanelDebrief = lazy(() => import('./panel/pages/Debrief'))
 const PortalTaller = lazy(() => import('./pages/PortalTaller'))
+const PortalTallerLista = lazy(() => import('./pages/PortalTallerLista'))
 const PanelConfiguracion = lazy(() => import('./panel/pages/Configuracion'))
 const PanelTurnos = lazy(() => import('./panel/pages/Turnos'))
 const PanelUsuarios = lazy(() => import('./panel/pages/Usuarios'))
@@ -326,6 +327,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/verify" element={<Verify />} />
               <Route path="/verify/:hash" element={<Verify />} />
               <Route path="/app" element={<AppRedirect />} />
+              <Route path="/taller/t/:token" element={<PortalTallerLista />} />
               <Route path="/taller/:token" element={<PortalTaller />} />
               <Route path="/conductor" element={<DriverPortal />} />
               <Route path="/conductor/:slug" element={<DriverPortal />} />

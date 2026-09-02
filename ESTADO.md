@@ -175,6 +175,32 @@ reales de OGA5. Todo desplegado y comprobado en producción:
   intentaba una vez por minuto y la ventana dura más. Tres intentos
   escalonados en diez minutos.
 
+### Quinta pasada (noche del 02-09): lo que Dani pidió a nivel de producto
+
+- **La IA se revisa sola.** De 2.324 inspecciones «sin mirar», 2.219 no
+  tenían ningún daño nuevo (nada que decidir) y el puntuador de fiabilidad ya
+  sabía cerrar los extremos con un 90 % de acierto medido, pero nadie actuaba.
+  `autorrevisar_inspecciones`: cierra sola las que no tienen daños nuevos y
+  las que tiene claras (aplica el veredicto al libro como haría una persona),
+  guarda `fiabilidad`/`veredicto_ia` en cada daño y deja a la persona solo
+  las dudas. Corre cada 15 min en todas las empresas y en el acto tras cada
+  análisis; botón «Que la IA revise ahora». Lo que decide la IA **nunca**
+  entra en `ai_feedback`: el modelo se reentrena solo con humanos. Resultado
+  en producción: **2.325 → 103 pendientes** (todas con una duda real).
+  `test_autorrevision.py`.
+- **La plantilla diaria no sale con errores.** `POST /api/tools/plantilla-validar`
+  contrasta cada fila con la empresa (conductores por tokens, matrículas
+  normalizadas, horas con forma y rango, repetidos) y con **lo que Cortex dice
+  de hoy** (ruta → conductor, sin OCR: si discrepa, manda Cortex). La pantalla
+  enseña los avisos con un botón «Poner» que aplica la sugerencia y marca la
+  celda. `test_plantilla_validar.py`.
+- **Un enlace fijo por taller.** Cada orden tenía su enlace y el taller acababa
+  con seis mensajes de WhatsApp. `POST /workshops/{id}/enlace` da uno para
+  siempre; `/taller/t/{token}` enseña lo que tienen nuestro ahora mismo y
+  cada furgoneta abre su paso a paso de siempre (lista blanca de campos). En
+  Talleres, dentro de «Más»: copiar o mandar por WhatsApp. Cubierto en
+  `smoke_empresa_nueva.py`.
+
 ### Comprobado y descartado (sin evidencia de fallo)
 
 - Aislamiento multiempresa con ids reales de la principal desde otra

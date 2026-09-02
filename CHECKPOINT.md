@@ -69,9 +69,31 @@ reintroduciendo el fallo. Invariante nuevo en `smoke_endpoints.py`.
 
 ---
 
+## Mandato de Dani (02-09-2026, tarde)
+
+Usabilidad y producto, no solo bugs: (1) un flujo DSP↔taller que el taller
+quiera usar, (2) la plantilla diaria sin errores de horas, nombres ni
+furgonetas, (3) cada sección a su máximo, (4) que Revisión rápida se
+autorrevise y corrija sola sin que él entre. Los tres primeros pasos están
+hechos y desplegados (ver «Quinta pasada» en `ESTADO.md`). Lo que sigue:
+
+- **Que la IA mejore sola de verdad**: hoy decide con el modelo de
+  fiabilidad entrenado con 1.423 veredictos humanos (AUC 0,762). Para subir el
+  techo hacen falta señales independientes de la propia IA: órdenes de taller
+  cerradas (un daño reparado era real), «marcar un daño que la IA no vio» del
+  portal, y el detector de visión (hoy dispara en el 11 % de los recortes
+  confirmados). Medir cada una contra los humanos antes de usarla
+  (`probar_autovalidacion.py`).
+- **Plantilla sin OCR**: la extensión ya captura las rutas y los conductores
+  de Cortex; falta la hora de salida (`plannedDepartureTime` está en
+  route-details). Con eso la plantilla sale de datos, no de capturas.
+- **Taller**: aprobar presupuesto desde el móvil del DSP con un toque y avisar
+  al taller; medir cuántos talleres abren el enlace fijo (`visitas`).
+
 ## Siguiente acción exacta
 
-Quinta pasada (la cuarta fue recorrer el panel como usuario; ver `ESTADO.md`):
+Sexta pasada (la cuarta fue recorrer el panel como usuario; la quinta, el
+mandato de producto; ver `ESTADO.md`):
 
 1. **Pantallas que faltan por recorrer con criterio de producto**: Debrief a
    fondo (diseño de Dani, no se toca sin hablarlo), Chat interno, Plantilla

@@ -174,6 +174,11 @@ export default function PlantillaGenerador() {
   const [loading, setLoading] = useState(false)
   const [err,     setErr]     = useState('')
   const [data,    setData]    = useState(null)
+  // Avisos de la validación contra la empresa y contra Cortex (nombre mal
+  // leído, matrícula que no existe, hora imposible). Se recalculan solos al
+  // editar; Dani pidió que la plantilla no saliera nunca con esos errores.
+  const [avisos,  setAvisos]  = useState([])
+  const [conCortex, setConCortex] = useState(false)
   const [redSet,     setRedSet]     = useState(new Set())
   const [yellowSet,  setYellowSet]  = useState(new Set())
   const [pinkSet,    setPinkSet]    = useState(new Set())
@@ -384,6 +389,27 @@ export default function PlantillaGenerador() {
     }))
   }
   function editMeta(field, value) { setData(prev => ({ ...prev, [field]: value })) }
+
+  // Validar contra lo que la empresa ya sabe, medio segundo después del
+  // último cambio: cada aviso trae su sugerencia y se aplica con un clic.
+  useEffect(() => {
+    if (step !== 'preview' || !data?.rows) return
+    let vivo = true
+    const t = setTimeout(async () => {
+      try {
+        const resp = await apiFetch('/tools/plantilla-validar', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rows: data.rows, center: noCenter ? '' : center, date: data.date }),
+        })
+        const j = await resp.json()
+        if (!vivo) return
+        setAvisos(j.avisos || [])
+        setConCortex(!!j.con_cortex)
+      } catch { /* sin validación no se bloquea nada */ }
+    }, 600)
+    return () => { vivo = false; clearTimeout(t) }
+  }, [data?.rows, data?.date, step]) // eslint-disable-line
+  const conAviso = new Set(avisos.map(a => `${a.fila}:${a.campo}`))
   function addRow() {
     setData(prev => ({
       ...prev,
@@ -597,6 +623,32 @@ export default function PlantillaGenerador() {
             </div>
           )}
 
+          {avisos.length > 0 && (
+            <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/[0.07] p-3">
+              <div className="mb-1.5 flex items-center gap-2 text-[13px] font-semibold text-amber-200">
+                <AlertCircle size={14} /> {avisos.length} {t('pg.avisos.titulo')}
+                {conCortex && <span className="text-[11px] font-normal text-amber-300/70">· {t('pg.avisos.cortex')}</span>}
+              </div>
+              <ul className="space-y-1">
+                {avisos.slice(0, 30).map((a, k) => (
+                  <li key={k} className="flex flex-wrap items-center gap-2 text-[12px] text-dark-200">
+                    <span className="cifra rounded bg-black/30 px-1.5 py-0.5 text-[11px] text-dark-400">fila {a.fila + 1}</span>
+                    <span className="text-dark-400">{a.campo}</span>
+                    <span>{a.texto}</span>
+                    {a.sugerencia && (
+                      <button onClick={() => editCell(a.fila, a.campo, a.sugerencia)}
+                        className="rounded-md border border-amber-400/40 px-2 py-0.5 text-[11.5px] font-semibold text-amber-200 hover:bg-amber-500/15">
+                        {t('pg.avisos.aplicar')} «{a.sugerencia}»
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {avisos.length === 0 && data.rows.length > 0 && (
+            <p className="mb-3 flex items-center gap-1.5 text-[12px] text-emerald-300"><CheckCircle2 size={13} /> {t('pg.avisos.ok')}</p>
+          )}
           <div className="overflow-x-auto rounded-xl border border-dark-700">
             <table className="w-full text-xs">
               <thead>
@@ -645,7 +697,7 @@ export default function PlantillaGenerador() {
                           <EditCell
                             value={row.conductor}
                             onChange={v => editCell(i, 'conductor', v)}
-                            extraCls={`min-w-[140px] ${isMarked && !isRed ? 'text-orange-900 font-semibold' : textCl}`}
+                            extraCls={`min-w-[140px] ${isMarked && !isRed ? 'text-orange-900 font-semibold' : textCl} ${conAviso.has(`${i}:conductor`) ? 'ring-2 ring-amber-500 rounded' : ''}`}
                           />
                         </div>
                       </td>
@@ -685,7 +737,7 @@ export default function PlantillaGenerador() {
 
                       {/* H. WAVE — color de ola */}
                       <td className="border border-[#BFBFBF] px-1 py-0.5" style={waveColor ? { background: waveColor } : {}}>
-                        <EditCell value={row.h_salida} onChange={v => editCell(i, 'h_salida', v)} extraCls={`text-center font-mono ${textCl}`} />
+                        <EditCell value={row.h_salida} onChange={v => editCell(i, 'h_salida', v)} extraCls={`text-center font-mono ${textCl} ${conAviso.has(`${i}:h_salida`) ? 'ring-2 ring-amber-500 rounded' : ''}`} />
                       </td>
 
                       {/* OBSERVACIONES */}

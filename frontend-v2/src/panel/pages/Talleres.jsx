@@ -5,9 +5,9 @@ import { lista } from '../../lib/lista'
 import {
   Wrench, MapPin, Phone, Globe, BadgeCheck, Loader2, Navigation,
   AlertTriangle, Search, Filter, Star, Clock, ChevronDown, X,
-  ExternalLink, PhoneCall, Zap, Car, RefreshCw, Info,
+  ExternalLink, PhoneCall, Zap, Car, RefreshCw, Info, Link2, Copy, Check,
 } from 'lucide-react'
-import { getWorkshopsNearby, getWorkshops, getVehicles, getCentrosGeo } from '../api'
+import { getWorkshopsNearby, getWorkshops, getVehicles, getCentrosGeo, enlaceTaller } from '../api'
 
 const CATEGORIES = [
   { id: 'chapa',          label: 'Chapa'       },
@@ -122,6 +122,21 @@ function WorkshopCard({ w, userCoords }) {
   const { t } = useT()
   const [expanded, setExpanded] = useState(false)
   const cats = (w.categories || []).slice(0, 4)
+  // Enlace fijo del taller: uno para siempre con todas sus furgonetas dentro.
+  const [enlace, setEnlace] = useState(null)
+  const [pidiendo, setPidiendo] = useState(false)
+  const [copiado, setCopiado] = useState(false)
+  const pedirEnlace = async () => {
+    setPidiendo(true)
+    try { setEnlace((await enlaceTaller(w.id)).data) } catch { setEnlace({ error: true }) } finally { setPidiendo(false) }
+  }
+  const copiar = () => {
+    navigator.clipboard?.writeText(enlace?.texto_whatsapp || enlace?.url || '').catch(() => {})
+    setCopiado(true); setTimeout(() => setCopiado(false), 1500)
+  }
+  const wa = enlace?.url && w.phone
+    ? `https://wa.me/${w.phone.replace(/[^\d]/g, '').replace(/^0+/, '')}?text=${encodeURIComponent(enlace.texto_whatsapp || enlace.url)}`
+    : null
 
   return (
     <div className="group flex flex-col overflow-hidden rounded-2xl border border-dark-700/50 bg-dark-800/60 transition hover:border-dark-600 hover:bg-dark-800">
@@ -216,6 +231,35 @@ function WorkshopCard({ w, userCoords }) {
             </a>
           )}
           {w.notes && <div className="flex gap-1.5 text-dark-600 italic"><Info size={11} className="mt-0.5 shrink-0" />{w.notes}</div>}
+          {/* El enlace fijo: se manda UNA vez y el taller ve siempre lo que
+              tiene nuestro. Sustituye a mandar un enlace por cada orden. */}
+          <div className="pt-1.5">
+            {!enlace ? (
+              <button onClick={pedirEnlace} disabled={pidiendo}
+                className="flex items-center gap-1.5 rounded-lg border border-dark-600 px-2.5 py-1.5 text-[12px] font-semibold text-dark-200 hover:border-brand-500/50 hover:text-brand-200 disabled:opacity-50">
+                <Link2 size={12} /> {pidiendo ? '…' : t('ws.link.fixed')}
+              </button>
+            ) : enlace.error ? (
+              <span className="text-red-300">{t('ws.link.err')}</span>
+            ) : (
+              <div className="space-y-1.5">
+                <div className="break-all font-mono text-[11px] text-dark-300">{enlace.url}</div>
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={copiar}
+                    className="flex items-center gap-1 rounded-md border border-dark-600 px-2 py-1 text-[11.5px] text-dark-200 hover:text-brand-200">
+                    {copiado ? <Check size={11} /> : <Copy size={11} />} {copiado ? t('ws.link.copied') : t('ws.link.copy')}
+                  </button>
+                  {wa && (
+                    <a href={wa} target="_blank" rel="noreferrer"
+                      className="flex items-center gap-1 rounded-md border border-emerald-500/40 px-2 py-1 text-[11.5px] text-emerald-300 hover:bg-emerald-500/10">
+                      <PhoneCall size={11} /> {t('ws.link.wa')}
+                    </a>
+                  )}
+                </div>
+                <p className="text-[11px] text-dark-600">{t('ws.link.hint')}</p>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
