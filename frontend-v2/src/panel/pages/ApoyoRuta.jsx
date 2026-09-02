@@ -165,7 +165,7 @@ export default function ApoyoRuta() {
                 </div>
                 <div className="text-right">
                   <div className={`cifra text-base font-bold ${c.pendientes > 40 ? 'text-orange-400' : 'text-dark-200'}`}>{c.pendientes}</div>
-                  <div className="text-[10px] uppercase text-dark-500">{c.paradas} {t('apoyo.paradas')}</div>
+                  <div className="text-[10px] uppercase text-dark-500">{c.paradas} {t('apoyo.paradas')}{c.con_destino != null && c.con_destino < c.paradas ? ` · ${c.con_destino} ${t('apoyo.conDestino')}` : ''}</div>
                 </div>
                 {c.apoyo_id && <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300">{t('apoyo.enApoyo')}</span>}
                 <ChevronRight size={14} className="text-dark-600" />
@@ -194,7 +194,7 @@ export default function ApoyoRuta() {
             {driver && infoParadas && (
               <div className="flex flex-wrap items-center gap-3 border-t border-dark-800 px-4 py-2 text-xs text-dark-400">
                 <span><MapPin size={12} className="mr-1 inline" />{paradas.length} {t('apoyo.paradas')} · {infoParadas.paquetes} {t('apoyo.paquetes')}</span>
-                {infoParadas.sin_coordenadas > 0 && <span className="text-amber-300">{t('apoyo.sinCoord').replace('{n}', infoParadas.sin_coordenadas)}</span>}
+                {infoParadas.sin_ubicacion > 0 && <span className="text-amber-300">{t('apoyo.sinCoord').replace('{n}', infoParadas.sin_ubicacion)}</span>}
                 <span className="ml-auto font-medium text-sky-300">{sel.size} {t('apoyo.elegidas')} · {paquetesSel} {t('apoyo.paquetes')}</span>
               </div>
             )}
@@ -210,7 +210,7 @@ export default function ApoyoRuta() {
                     <input type="checkbox" className="mt-1" checked={sel.has(p.stop_id)} onChange={() => toggle(p.stop_id)} />
                     <span className={`cifra mt-0.5 w-8 shrink-0 text-center text-xs font-bold ${p.hecha ? 'text-dark-500 line-through' : 'text-orange-300'}`}>{p.stop_id}</span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm text-dark-200">{p.direccion || (p.lat != null ? `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : t('apoyo.sinCoordUna'))}</span>
+                      <span className={`block truncate text-sm ${p.ubicacion ? 'text-dark-200' : 'text-amber-300/80'}`}>{p.direccion || (p.lat != null ? `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : t('apoyo.sinCoordUna'))}</span>
                       <span className="block text-[11px] text-dark-500">{p.n} {p.n === 1 ? t('apoyo.paquete') : t('apoyo.paquetes')} · {(p.estados || []).join(', ')}{p.hecha ? ` · ${t('apoyo.hecha')}` : ''}</span>
                     </span>
                   </label>

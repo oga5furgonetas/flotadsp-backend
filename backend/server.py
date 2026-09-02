@@ -17535,8 +17535,8 @@ async def _apoyo_paradas_pendientes(driver_id: str, dia: str) -> dict:
     """Las paradas de ESE conductor que siguen en juego, agrupadas por parada."""
     cur = db.cortex_packages.find(
         {"service_day": dia, "driver_id": driver_id},
-        {"_id": 0, "stop_id": 1, "lat": 1, "lng": 1, "stop_address": 1, "state": 1,
-         "tba": 1, "seen_at": 1, "route_code": 1, "priority": 1})
+        {"_id": 0, "stop_id": 1, "lat": 1, "lng": 1, "dest_lat": 1, "dest_lng": 1,
+         "stop_address": 1, "state": 1, "tba": 1, "seen_at": 1, "route_code": 1, "priority": 1})
     paradas: dict = {}
     ultima = None
     rutas: list = []
@@ -17550,16 +17550,24 @@ async def _apoyo_paradas_pendientes(driver_id: str, dia: str) -> dict:
         if not sid:
             continue
         x = paradas.setdefault(sid, {"stop_id": sid, "lat": None, "lng": None, "direccion": "",
-                                     "n": 0, "tbas": [], "estados": []})
+                                     "ubicacion": None, "n": 0, "tbas": [], "estados": []})
         x["n"] += 1
         if p.get("tba"):
             x["tbas"].append(p["tba"])
         if p.get("state") and p["state"] not in x["estados"]:
             x["estados"].append(p["state"])
-        if x["lat"] is None and p.get("lat") is not None and p.get("lng") is not None:
-            x["lat"], x["lng"] = p["lat"], p["lng"]
+        # `lat/lng` del paquete es DONDE SE ESCANEO POR ULTIMA VEZ, no el destino:
+        # medido el 02-09-2026, 191 de 200 PICKED_UP tenian la coordenada de la
+        # nave. Solo vale cuando el escaneo fue en el destino (intento de
+        # entrega). Pintar la nave como parada mandaria al ayudante a la nave.
+        if x["lat"] is None and p.get("dest_lat") is not None and p.get("dest_lng") is not None:
+            x["lat"], x["lng"], x["ubicacion"] = p["dest_lat"], p["dest_lng"], "cortex"
+        elif (x["lat"] is None and _cx_ruta_cajon(p.get("state")) == "attempted"
+                and p.get("lat") is not None and p.get("lng") is not None):
+            x["lat"], x["lng"], x["ubicacion"] = p["lat"], p["lng"], "intento"
         if not x["direccion"] and p.get("stop_address"):
             x["direccion"] = p["stop_address"]
+            x["ubicacion"] = x["ubicacion"] or "direccion"
 
     def _orden(s):
         try:
@@ -17570,6 +17578,7 @@ async def _apoyo_paradas_pendientes(driver_id: str, dia: str) -> dict:
     return {"paradas": lista, "ruta": " + ".join(rutas),
             "paquetes": sum(x["n"] for x in lista),
             "sin_coordenadas": sum(1 for x in lista if x["lat"] is None),
+            "sin_ubicacion": sum(1 for x in lista if not x["ubicacion"]),
             "bajado_hace_min": _apoyo_minutos_desde(ultima)}
 
 
@@ -17592,6 +17601,8 @@ async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = Non
         {"$match": q},
         {"$group": {"_id": {"d": "$driver_id", "s": "$stop_id", "st": "$state"},
                     "n": {"$sum": 1}, "rutas": {"$addToSet": "$route_code"},
+                    "con_dir": {"$max": {"$cond": [{"$or": [{"$gt": [{"$strLenCP": {"$ifNull": ["$stop_address", ""]}}, 0]},
+                                                            {"$ne": [{"$ifNull": ["$dest_lat", None]}, None]}]}, 1, 0]}},
                     "centro": {"$first": "$center"}, "seen": {"$max": "$seen_at"}}},
     ]
     por: dict = {}
@@ -17603,7 +17614,7 @@ async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = Non
             continue
         ultima = max(ultima or "", str(r.get("seen") or ""))
         x = por.setdefault(did, {"driver_id": did, "rutas": [], "center": r.get("centro") or "",
-                                 "paquetes": 0, "pendientes": 0, "paradas": set(), "entregados": 0})
+                                 "paquetes": 0, "pendientes": 0, "paradas": set(), "con_destino": set(), "entregados": 0})
         for rc in r.get("rutas") or []:
             if rc and rc not in x["rutas"]:
                 x["rutas"].append(rc)
@@ -17613,6 +17624,8 @@ async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = Non
             x["pendientes"] += r["n"]
             if k.get("s"):
                 x["paradas"].add(str(k["s"]))
+                if caj == "attempted" or r.get("con_dir"):
+                    x["con_destino"].add(str(k["s"]))
         elif caj == "delivered":
             x["entregados"] += r["n"]
     personas = await _apoyo_personas(set(por))
@@ -17621,7 +17634,7 @@ async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = Non
     for did, x in por.items():
         p = personas.get(did, {})
         conductores.append({**x, "ruta": " + ".join(sorted(x["rutas"])), "paradas": len(x["paradas"]),
-                            "nombre": p.get("nombre") or did,
+                            "con_destino": len(x["con_destino"]), "nombre": p.get("nombre") or did,
                             "telefono": p.get("telefono") or "",
                             "apoyo_id": (vivos.get(did) or {}).get("id")})
     conductores.sort(key=lambda c: (-c["pendientes"], c["nombre"]))
@@ -17700,7 +17713,7 @@ def _apoyo_publico(a: dict) -> dict:
             "de": {"nombre": (a.get("de") or {}).get("nombre"), "telefono": (a.get("de") or {}).get("telefono"),
                    "ruta": (a.get("de") or {}).get("ruta")},
             "a": {"nombre": (a.get("a") or {}).get("nombre"), "telefono": (a.get("a") or {}).get("telefono")},
-            "paradas": [{k: p.get(k) for k in ("stop_id", "lat", "lng", "direccion", "n", "tbas", "hecha", "entregada")}
+            "paradas": [{k: p.get(k) for k in ("stop_id", "lat", "lng", "direccion", "ubicacion", "n", "tbas", "hecha", "entregada")}
                         for p in a.get("paradas") or []],
             "nota": a.get("nota") or "", "actualizado": a.get("updated_at")}
 
@@ -32770,6 +32783,9 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         "stop_address": _cortex_addr_str(obs.get("stop_address") or obs.get("address")),
         "container_id": obs.get("container_id"), "station": obs.get("station"),
         "lat": obs.get("lat"), "lng": obs.get("lng"),
+        # Destino (geocode de la direccion), distinto del ultimo escaneo. Lo
+        # manda la extension 2.22+; nulo no pisa lo conocido (regla de abajo).
+        "dest_lat": obs.get("dest_lat"), "dest_lng": obs.get("dest_lng"),
     }
     # Las fuentes se COMPLEMENTAN: el informe de faltas no trae conductor pero
     # route-details sí. Un campo null/"" de una fuente pobre NUNCA pisa el dato

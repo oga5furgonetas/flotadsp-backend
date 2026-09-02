@@ -55,6 +55,17 @@ empresas, otras DSP con otros Cortex»):
   furgoneta, siguiente, o intentada. NUNCA por listas escritas a mano
   (gotchas 28 y 40). Lo que va de vuelta a la nave (`BACK_TO_ORIGIN`) o no se
   recogió no es pendiente. `backend/tests/test_apoyo.py`.
+- **La coordenada del paquete NO es su destino.** `lat/lng` en
+  `cortex_packages` es el `executionGeocode` de route-details: dónde se
+  escaneó por última vez. Para un paquete en furgoneta es LA NAVE (medido:
+  191 de 200 `PICKED_UP` en la coordenada de OGA5). La primera versión lo
+  pintaba en el mapa y habría mandado al ayudante a la nave. Ahora una parada
+  solo tiene ubicación si (a) la extensión mandó `dest_lat/dest_lng` (geocode
+  de la dirección, extensión 2.22+, campo `ubicacion: "cortex"`), (b) el
+  escaneo fue en el destino (intento de entrega, `"intento"`) o (c) hay
+  dirección en texto (`"direccion"`). Lo demás se lista con número de parada
+  y TBA y dice «Cortex no da la ubicación». `sin_ubicacion` en cada respuesta,
+  `con_destino` por conductor en la situación.
 - Cada respuesta lleva `bajado_hace_min` (de `seen_at`, gotcha 29) y la
   pantalla lo enseña en ámbar pasados 10 min. Medido el 02-09-2026: 1,5 min.
 - Un apoyo abierto por pareja y día; crear otro devuelve 409 y manda a cambiar
@@ -79,6 +90,16 @@ internos, ni otros conductores, ni nada de la empresa.
 
 ## Lo que falta (en orden)
 
+0. **Que las paradas en furgoneta tengan destino (extensión 2.22).** El único
+   sitio de Cortex con dirección y geocode del destino es el informe
+   `packagesByStatus`, y la extensión solo lo pedía para `REATTEMPTABLE`.
+   Desde 2.22 APRENDE los estados: en cuanto alguien abre en Cortex
+   «Packages by status» con otro estado (el de los paquetes en furgoneta),
+   ese estado se refresca solo en cada barrido y llegan `dest_lat/dest_lng`.
+   Pasos: descargar la extensión nueva desde Paquetes IA, recargarla en
+   `chrome://extensions`, abrir una vez «Packages by status» y elegir el
+   estado de «en furgoneta». Comprobar después con
+   `db.cortex_packages.count_documents({"dest_lat": {"$ne": None}})`.
 1. **Envío automático por la API de Meta** cuando lleguen las credenciales:
    hoy `wa.me` abre WhatsApp con el texto escrito y la oficina pulsa enviar.
    El módulo de WhatsApp (`/whatsapp/*`) ya existe; enganchar `_apoyo_textos`.

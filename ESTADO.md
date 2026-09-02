@@ -267,6 +267,13 @@ reales de OGA5. Todo desplegado y comprobado en producción:
   con dirección, frescura 1,5 min. Probado en producción de punta a punta con
   un apoyo real anulado al final. `docs/APOYO_EN_RUTA.md`,
   `backend/tests/test_apoyo.py`.
+  **Falso positivo cazado en la primera prueba visual:** las paradas en
+  furgoneta salían todas en la misma coordenada, la nave —`lat/lng` del
+  paquete es el último escaneo, no el destino—. Ahora solo se pinta lo que
+  tiene destino conocido (intento, dirección o `dest_lat` de la extensión
+  2.22, que aprende los estados del informe de Cortex) y lo demás dice
+  «Cortex no da la ubicación». Extensión 2.22 publicada; falta que Dani la
+  recargue y abra una vez «Packages by status» con el estado de en furgoneta.
 - **Descartado con evidencia:** cobertura del cuadrante 47 frente a 48 turnos
   (uno lleva código `S`, que no saca ruta: correcto); `/shifts?center=Todos`
   igual a OGA5 (esta semana solo OGA5 tiene cuadrante); chat interno con 8

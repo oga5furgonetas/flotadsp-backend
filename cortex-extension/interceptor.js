@@ -329,22 +329,53 @@
 
      No añade carga apreciable: una petición cada 3 minutos, la misma que hace
      la página cuando la tienes abierta. */
+  /* QUÉ ESTADOS SE PIDEN. Empieza con REATTEMPTABLE y APRENDE: cada vez que
+     alguien abre «Packages by status» con otro estado en Cortex, ese estado
+     entra en la lista y se refresca solo en cada barrido, para siempre.
+     Por qué importa: el informe es lo ÚNICO que trae la dirección y la
+     geocodificación del DESTINO de cada paquete. route-details trae
+     `executionGeocode`, que es el ÚLTIMO ESCANEO: para un paquete en
+     furgoneta es la nave (medido el 02-09-2026: 191 de 200 PICKED_UP con la
+     coordenada de la nave). El mapa de «Apoyo en ruta» del panel solo pinta
+     lo que tiene destino conocido, así que sin esto las paradas en furgoneta
+     salen sin ubicación. Un estado que Cortex no reconozca devuelve vacío y no
+     pasa nada: no se inventa ningún dato. */
   let plantillaInforme = null;
-  const urlInforme = () => {
+  const estadosInforme = new Set(['REATTEMPTABLE']);
+  const urlInforme = (estado) => {
     const dia = serviceDay() || hoyLocal();
-    if (plantillaInforme) return plantillaInforme.replace('__DIA__', dia);
+    if (plantillaInforme) {
+      try {
+        const u = new URL(plantillaInforme.replace('__DIA__', dia));
+        u.searchParams.set('packageStatus', estado);
+        return u.href;
+      } catch (_) { /* cae a la construcción de abajo */ }
+    }
     if (!saId) return null;   // sin estación no se pide: iría al centro equivocado
     return `${location.origin}/operations/execution/api/packages/packagesByStatus`
-      + `?historicalDay=false&localDate=${dia}&packageStatus=REATTEMPTABLE&serviceAreaId=${saId}`;
+      + `?historicalDay=false&localDate=${dia}&packageStatus=${encodeURIComponent(estado)}&serviceAreaId=${saId}`;
   };
   const aprenderInforme = (url) => {
     try {
       const u = new URL(url, location.origin);
+      const st = (u.searchParams.get('packageStatus') || '').trim().toUpperCase();
+      if (st && !estadosInforme.has(st)) {
+        estadosInforme.add(st);
+        post({ kind: 'debug', url: `informe: estado nuevo aprendido ${st} (se refresca solo)`, count: estadosInforme.size, bytes: 0 });
+      }
       u.searchParams.set('localDate', '__DIA__');
       plantillaInforme = u.href;
     } catch (_) {}
   };
-  const pedirInforme = () => { const u = urlInforme(); return u ? syntheticFetch(u) : Promise.resolve(); };
+  const pedirInforme = async () => {
+    let i = 0;
+    for (const estado of estadosInforme) {
+      const u = urlInforme(estado);
+      if (!u) continue;
+      if (i++) await new Promise((r) => setTimeout(r, 1500)); // uno cada 1,5 s, como las rutas
+      try { await syntheticFetch(u); } catch (_) {}
+    }
+  };
   setTimeout(pedirInforme, 9000);      // una vez al entrar, sin agobiar la carga
   /* Ya NO tiene reloj propio: lo dispara el barrido al final de cada tanda.
      Tenerlo aparte a 180 s hacia que la pantalla mas mirada del debrief
@@ -404,6 +435,19 @@
   };
 
   let sampled = false; // volcamos UNA muestra del nodo real al console para diagnosticar campos
+  /* Geocodificación del DESTINO de un paquete: la de su dirección. NO es
+     `latitude/longitude` sueltos del nodo, que en route-details son el último
+     escaneo. Solo se acepta si viene dentro de `address` (o `geocode`) y son
+     números; si no, null y el panel dice «sin ubicación», que es la verdad. */
+  const destGeo = (node) => {
+    if (!node || typeof node !== 'object') return null;
+    const ad = node.address && typeof node.address === 'object' ? node.address : null;
+    const g = (ad && (ad.geocode || ad)) || node.geocode || null;
+    if (!g || typeof g !== 'object') return null;
+    const la = g.latitude ?? g.lat, ln = g.longitude ?? g.lng ?? g.lon;
+    return (typeof la === 'number' && typeof ln === 'number') ? { lat: la, lng: ln } : null;
+  };
+
   const buildObs = (node, ctx) => {
     const tba = pickTba(node);
     if (!tba) return null;
@@ -475,6 +519,9 @@
       })(),
       lat: firstKey(node, KEYS.lat) ?? ctx.lat ?? null,
       lng: firstKey(node, KEYS.lng) ?? ctx.lng ?? null,
+      // El DESTINO (geocode de la dirección), aparte del último escaneo.
+      dest_lat: destGeo(node)?.lat ?? null,
+      dest_lng: destGeo(node)?.lng ?? null,
       observed_at: firstKey(node, KEYS.time) || null,
       events,
     };
@@ -602,6 +649,9 @@
           state_context: task.taskStateContext || null,
           task_type: task.taskType || null,
           lat: geo.latitude ?? null, lng: geo.longitude ?? null,
+          // Destino planificado (geocode de la dirección), si route-details lo trae.
+          dest_lat: (a.geocode && typeof a.geocode.latitude === 'number') ? a.geocode.latitude : null,
+          dest_lng: (a.geocode && typeof a.geocode.longitude === 'number') ? a.geocode.longitude : null,
           observed_at: task.actualExecutionTime || stop.actualEndTime || null,
           service_day: day,
           events,

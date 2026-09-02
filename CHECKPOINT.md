@@ -102,11 +102,16 @@ producción y comprobado con datos reales. Detalle en `ESTADO.md`.
 Sexta pasada (la cuarta fue recorrer el panel como usuario; la quinta, el
 mandato de producto; ver `ESTADO.md`):
 
-1. **Apoyo en ruta, segunda vuelta**: que Dani lo use un día real y medir
-   (apoyos creados, minutos hasta la primera «hecha»); dirección orientativa
-   para el 83 % de paradas sin ella (`/cortex/geo/inverso`); envío automático
-   cuando Meta desbloquee la API. Y cargar el cuadrante de septiembre: sin él
-   no hay «backup de hoy» que proponer (hoy 0).
+1. **Apoyo en ruta, segunda vuelta**: (a) **extensión 2.22** — descargarla
+   de Paquetes IA, recargarla en `chrome://extensions` y abrir UNA vez en
+   Cortex «Packages by status» con el estado de los paquetes en furgoneta:
+   desde entonces llegan `dest_lat/dest_lng` y el mapa pinta todas las
+   paradas (hoy solo las que tienen intento o dirección: la coordenada de un
+   paquete en furgoneta es la nave, ver `docs/APOYO_EN_RUTA.md`); comprobar
+   con `count_documents({"dest_lat": {"$ne": None}})`. (b) Que Dani lo use un
+   día real y medir (apoyos creados, minutos hasta la primera «hecha»).
+   (c) Envío automático cuando Meta desbloquee la API. (d) Cargar el
+   cuadrante de septiembre: sin él no hay «backup de hoy» que proponer.
 2. **Los 32 conductores que siguen sin teléfono**: 24 no tienen
    `transporter_id` en la ficha (Conductores → propuestas de id) y 8 no salen
    en Cortex. Los 6 teléfonos distintos entre app y Cortex: que la oficina

@@ -109,7 +109,7 @@ export default function PortalApoyo() {
 
         <div ref={mapaRef} className="h-[300px] w-full overflow-hidden rounded-2xl bg-dark-900" />
 
-        <div className="text-xs text-dark-500">{vivas.length} por hacer · se actualiza sola cada minuto</div>
+        <div className="text-xs text-dark-500">{vivas.length} por hacer · se actualiza sola cada minuto{datos.paradas.some((p) => !p.ubicacion) ? ' · las paradas en ámbar no tienen ubicación en Cortex' : ''}</div>
 
         <div className="space-y-2">
           {datos.paradas.map((p) => {
@@ -119,7 +119,7 @@ export default function PortalApoyo() {
                 <div className="flex items-start gap-3">
                   <div className={`cifra flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ${apagada ? 'bg-dark-600' : 'bg-sky-600'}`}>{p.stop_id}</div>
                   <div className="min-w-0 flex-1">
-                    <div className={`text-sm font-medium ${apagada ? 'line-through' : ''}`}>{p.direccion || (p.lat != null ? <span className="text-dark-300"><MapPin size={12} className="mr-1 inline" />{p.lat.toFixed(5)}, {p.lng.toFixed(5)}</span> : 'Sin dirección ni coordenadas: llama')}</div>
+                    <div className={`text-sm font-medium ${apagada ? 'line-through' : ''}`}>{p.direccion || (p.lat != null ? <span className="text-dark-300"><MapPin size={12} className="mr-1 inline" />{p.lat.toFixed(5)}, {p.lng.toFixed(5)}</span> : <span className="text-amber-300">Cortex no da la ubicación: es la parada {p.stop_id} de {datos.de?.nombre?.split(' ')[0]}, pregúntale</span>)}</div>
                     <div className="mt-0.5 text-xs text-dark-500">{p.n} paquete{p.n === 1 ? '' : 's'}{p.tbas?.length ? ` · ${p.tbas.map((t) => t.slice(-6)).join(', ')}` : ''}{p.entregada ? ' · entregada según Cortex' : ''}</div>
                   </div>
                 </div>
