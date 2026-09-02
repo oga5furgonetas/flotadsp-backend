@@ -224,6 +224,43 @@ db = _TenantDBProxy()
 app = FastAPI(title="FlotaDSP API", version="5.3.4")
 api_router = APIRouter(prefix="/api")
 
+
+@app.middleware("http")
+async def _registro_escrituras(request: Request, call_next):
+    """Toda peticion que ESCRIBE queda apuntada: quien, que, cuando, cuanto tardo.
+
+    Fly guarda cien lineas de log. El 01-09-2026 desaparecieron dos meses de
+    Cortex con un clic y no hubo forma de saber quien ni cuando: se fecho por
+    el tamaño de las copias de R2. Esto lo evita para siempre y cuesta un
+    insert asincrono por escritura, en `global_db.audit_requests`, 30 dias.
+    Nunca guarda cuerpos ni cabeceras: solo metodo, ruta, codigo, milisegundos
+    y quien firmaba el token. La ingesta de Cortex se salta: son miles al dia
+    y ya deja su propio rastro.
+    """
+    inicio = time.time()
+    response = await call_next(request)
+    if request.method in ("POST", "PUT", "PATCH", "DELETE") \
+            and not request.url.path.startswith("/api/cortex/ingest"):
+        try:
+            quien: dict = {}
+            auth = request.headers.get("authorization") or ""
+            if auth.lower().startswith("bearer "):
+                try:
+                    p = jwt.decode(auth[7:], SECRET_KEY, algorithms=[JWT_ALGORITHM])
+                    quien = {"sub": p.get("sub"), "name": p.get("name"), "org_id": p.get("org_id"),
+                             "db_name": p.get("db_name"), "role": p.get("role")}
+                except Exception:                                # noqa: BLE001
+                    quien = {"sub": "token_invalido"}
+            ip = (request.headers.get("x-forwarded-for") or
+                  (request.client.host if request.client else "") or "").split(",")[0].strip()
+            doc = {"at": datetime.now(timezone.utc), "method": request.method,
+                   "path": request.url.path[:200], "status": response.status_code,
+                   "ms": int((time.time() - inicio) * 1000), "ip": ip[:64], **quien}
+            asyncio.create_task(global_db.audit_requests.insert_one(doc))
+        except Exception:                                        # noqa: BLE001
+            pass
+    return response
+
 # StaticFiles DESPUÉS del middleware — solo como fallback local
 # (si R2 está configurado, las imágenes van a R2 directamente)
 
@@ -1363,6 +1400,11 @@ async def create_indexes():
         # unico, y indexado por orden para poder revocarlos de golpe.
         await _idx(global_db.taller_enlaces, "token", unique=True)
         await _idx(global_db.taller_enlaces, [("orden_id", 1), ("revocado", 1)])
+        await _idx(global_db.taller_enlaces, [("workshop_id", 1), ("db_name", 1)])
+        # Registro de escrituras (quien hizo que): 30 dias y fuera.
+        await _idx(global_db.audit_requests, "at", expireAfterSeconds=30 * 24 * 3600)
+        await _idx(global_db.audit_requests, [("path", 1), ("at", -1)])
+        await _idx(global_db.audit_requests, [("sub", 1), ("at", -1)])
         # Crear índices en BDs de DSPs ya existentes (por si arrancamos con DSPs sin índices)
         orgs = await global_db.organizations.find(
             {"account_type": "dsp", "db_name": {"$exists": True}}, {"db_name": 1}
@@ -9864,6 +9906,7 @@ async def get_inspections(
     date_to: Optional[str] = None,
     limit: int = 100,
     skip: int = 0,
+    campos: Optional[str] = None,
     user: dict = Depends(require_admin),
 ):
     query = {"deleted": {"$ne": True}}
@@ -9881,7 +9924,19 @@ async def get_inspections(
         query.setdefault("created_at", {})["$lte"] = date_to + "T23:59:59"
     limit = max(1, min(limit, 500))
     skip = max(0, skip)
-    inspections = await db.inspections.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).to_list(limit)
+    # `campos=lista`: lo justo para pintar la tarjeta (primera foto, severidad y
+    # contadores). El detalle se pide aparte con GET /inspections/{id}; así el
+    # listado de 200 baja de ~730 KB a una fracción.
+    proj = {"_id": 0}
+    if campos == "lista":
+        proj = {
+            "_id": 0,
+            "analysis.damages": 0, "analysis.new_damages": 0, "analysis.existing_damages": 0,
+            "analysis.executive_summary": 0, "analysis.zonas_no_evaluables": 0,
+            "reference_photos": 0, "annotated_photos": 0, "notes": 0, "photo_roles": 0,
+            "photos": {"$slice": 1},
+        }
+    inspections = await db.inspections.find(query, proj).sort("created_at", -1).skip(skip).to_list(limit)
     return inspections
 
 
@@ -37019,6 +37074,26 @@ async def cortex_clear_demo(_=Depends(require_admin)):
     p = await db.cortex_packages.delete_many(q)
     e = await db.cortex_events.delete_many(q)
     return {"ok": True, "packages_deleted": p.deleted_count, "events_deleted": e.deleted_count}
+
+
+@api_router.get("/admin/actividad")
+async def admin_actividad(path: str = "", sub: str = "", horas: int = 24, limite: int = 200,
+                          _=Depends(require_superadmin)):
+    """Quien ha escrito que en las ultimas horas, en toda la plataforma.
+
+    Es la pregunta que no se pudo contestar el 01-09-2026 («¿quien borro
+    esto?»). Lee `audit_requests`, que llena el middleware de escrituras.
+    """
+    q: dict = {"at": {"$gte": datetime.now(timezone.utc) - timedelta(hours=max(1, min(horas, 24 * 30)))}}
+    if path:
+        q["path"] = {"$regex": re.escape(path)}
+    if sub:
+        q["sub"] = sub
+    filas = await global_db.audit_requests.find(q, {"_id": 0}).sort("at", -1).to_list(max(1, min(limite, 2000)))
+    for f in filas:
+        if isinstance(f.get("at"), datetime):
+            f["at"] = f["at"].isoformat()
+    return {"total": len(filas), "filas": filas}
 
 
 @api_router.post("/cortex/reset")

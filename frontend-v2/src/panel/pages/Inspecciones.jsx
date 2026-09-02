@@ -7,7 +7,7 @@ import {
   ShieldCheck, FileSignature, ShieldAlert, RefreshCw, Wrench, Check, Euro, Undo2,
   ClipboardList, ChevronRight,
 } from 'lucide-react'
-import { getInspections, getCoberturaInspecciones, getVehicles, getDrivers, getVehicleInspections, fetchAuthedBlob, getForensicStatus, signInspectionAdmin, recheckFraud, getSuggestedWorkshops, updateDamage } from '../api'
+import { getInspections, getInspection, getCoberturaInspecciones, getVehicles, getDrivers, getVehicleInspections, fetchAuthedBlob, getForensicStatus, signInspectionAdmin, recheckFraud, getSuggestedWorkshops, updateDamage } from '../api'
 
 const SEV_CLS = {
   leve: 'bg-amber-500/20 text-amber-300', moderado: 'bg-orange-500/20 text-orange-300',
@@ -50,7 +50,7 @@ export default function Inspecciones() {
      pedir nada y se seguía filtrando sobre los mismos 100 de antes. */
   useEffect(() => {
     setErr(''); setInsps(null); setSel(null)
-    Promise.all([getInspections({ limit: 200, ...(center && center !== 'Todos' ? { center } : {}) }), getVehicles('Todos'), getDrivers('Todos').catch(() => ({ data: [] }))])
+    Promise.all([getInspections({ limit: 200, campos: 'lista', ...(center && center !== 'Todos' ? { center } : {}) }), getVehicles('Todos'), getDrivers('Todos').catch(() => ({ data: [] }))])
       .then(([ri, rv, rd]) => {
         const m = {}; (lista(rv.data)).forEach((v) => { m[v.id] = { plate: v.license_plate, center: v.center || '' } })
         const dm = {}; (lista(rd.data)).forEach((d) => { dm[d.id] = d.name })
@@ -68,7 +68,7 @@ export default function Inspecciones() {
   const recargarInspeccion = async () => {
     if (!sel) return
     try {
-      const r = await getInspections({ limit: 200, ...(center && center !== 'Todos' ? { center } : {}) })
+      const r = await getInspections({ limit: 200, campos: 'lista', ...(center && center !== 'Todos' ? { center } : {}) })
       const todas = lista(r.data)
       setInsps(todas)
       const fresca = todas.find((i) => i.id === sel.id)
@@ -195,7 +195,7 @@ export default function Inspecciones() {
             const v = vmap[i.vehicle_id] || {}
             const s = i.analysis?.severity || 'sin_analisis'
             return (
-              <button key={i.id} onClick={() => setSel(i)} className="card-hover overflow-hidden text-left">
+              <button key={i.id} onClick={() => { setSel(i); getInspection(i.id).then((r) => setSel((s) => (s && s.id === i.id ? r.data : s))).catch(() => {}) }} className="card-hover overflow-hidden text-left">
                 <div className="relative h-36 bg-dark-800">
                   {i.photos?.[0] ? <img src={i.photos[0]} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-dark-600"><ImageIcon size={24} /></div>}
                   <span className={`absolute left-2 top-2 rounded px-2 py-0.5 text-[11px] font-bold ${SEV_CLS[s]}`}>{sevLabel(s)}</span>

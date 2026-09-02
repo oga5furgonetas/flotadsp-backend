@@ -214,6 +214,27 @@ reales de OGA5. Todo desplegado y comprobado en producción:
 
 ---
 
+### Sexta pasada (02-09, noche): quién escribió qué, y listados a su tamaño
+
+- **Registro duradero de escrituras.** La pregunta del 01-09 («¿quién borró
+  esto?») no tenía respuesta porque ningún log duraba. El middleware
+  `_registro_escrituras` deja en `flotadsp_global.audit_requests` cada
+  POST/PUT/PATCH/DELETE (menos la ingesta de Cortex): fecha, ruta, estado,
+  milisegundos, IP, usuario, empresa y BD, con TTL de 30 días. Se lee con
+  `GET /admin/actividad?path=&sub=&horas=` (super-admin). Comprobado en
+  producción: 13 apuntes en la primera hora, incluidas subidas reales de
+  inspecciones de conductores.
+- **Inspecciones bajaba 801 KB por 200 tarjetas** que solo pintan la primera
+  foto, la severidad y dos contadores. `GET /inspections?campos=lista`
+  proyecta fuera daños, resumen, fotos anotadas y notas y deja una sola foto:
+  **238 KB y 0,53 s frente a 801 KB y 0,90 s**, mismos ids y mismo orden. El
+  detalle se pide al abrir la tarjeta con `GET /inspections/{id}`.
+- **Plantilla diaria con la plantilla real de DGA1 (01-09, 16 filas):** tras
+  dejar la regla de horas solo para los casos imposibles, un único aviso y
+  verdadero (un nombre que la empresa tiene escrito de otra forma, con su
+  sugerencia). `/cortex/debrief` medido: 209 KB y 0,7 s para OGA5 (49
+  conductores), sin cambio.
+
 ## Estado a 2026-08-30
 
 ### Producción

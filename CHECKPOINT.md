@@ -47,7 +47,7 @@ las GET < 1 s a volumen real).
 Deshacer: `delete_many({"restaurado_de": "backups/flotadsp_2026-09-01_0200.jsonl.gz"})`
 en `cortex_packages` y `cortex_events`.
 
-**Código:** ver los commits `ce7819d`, `9f5270c` y el siguiente. Dos checkers
+**Código:** ver los commits desde `ce7819d`; el registro de escrituras (`audit_requests`, `GET /admin/actividad`) es el último. Dos checkers
 nuevos (`check_borrado.py`, `check-chunk-error.mjs`), los dos probados
 reintroduciendo el fallo. Invariante nuevo en `smoke_endpoints.py`.
 
@@ -101,8 +101,9 @@ mandato de producto; ver `ESTADO.md`):
    conductor (página del panel), Bandeja.
 2. **Portal del conductor como conductor real** en móvil (viewport 375):
    inspección con foto, petición de días, cambio de contraseña.
-3. **Escala**: `/cortex/debrief` (401 KB, gzip) e `/inspections` sin paginar;
-   medir con una empresa sintética 1.000× antes de tocar nada.
+3. **Escala**: `/inspections` ya va proyectado (`campos=lista`, 801 → 238 KB);
+   `/cortex/debrief` medido en 209 KB y 0,7 s para OGA5, se deja. Falta medir
+   con una empresa sintética 1.000× antes de paginar nada.
 4. **«Mis turnos» en el portal**: `/shifts/mine` ya devuelve el cuadrante y
    el portal lo tiene en PRONTO a propósito. Decisión de producto de Dani.
 5. Los 13 correos repetidos entre conductores dados de baja: fusionar fichas

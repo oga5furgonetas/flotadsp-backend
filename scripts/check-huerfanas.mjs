@@ -62,6 +62,11 @@ const SIN_UI_A_PROPOSITO = new Set([
   // Disparo manual de los avisos de ITV por WhatsApp: los manda el cron a su
   // hora (`envio_itv_whatsapp`) y el canal sigue bloqueado por Meta.
   'POST /whatsapp/avisar-itv',
+  // ── HERRAMIENTA DE OPERACION DEL SUPER-ADMIN (02-09-2026) ─────────────
+  // Quien escribio que en las ultimas horas (`audit_requests`, lo llena el
+  // middleware de escrituras). Se consulta con curl o desde la consola cuando
+  // hay que contestar «¿quien borro esto?»; darle pantalla es trabajo aparte.
+  'GET /admin/actividad',
 
   // ── EL ROSTER SE PEGA EN LOCAL, Y ES MEJOR ────────────────────────────
   // `PasteModal` parsea el texto del roster en el navegador con `parseRoster`
