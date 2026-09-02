@@ -171,6 +171,16 @@ const PATRONES = [
     que: 'Consulta a Mongo filtrando el centro por igualdad',
     porque: "El centro está sucio ('OGA5', 'OGA5 ', 'oga5'). Filtra por $regex",
   },
+  {
+    id: 'whatsapp-a-mano',
+    gotcha: 47,
+    // Solo en el frontend: `enlace_wa` del backend SI construye la URL, y es el
+    // unico sitio donde debe hacerse — ahi vive la regla del prefijo.
+    soloEn: /^frontend-v2\//,
+    re: /https:\/\/wa\.me\//g,
+    que: 'Enlace de WhatsApp construido a mano en el frontend',
+    porque: 'Sin el prefijo del pais abre un numero que no existe. Usa el campo `wa` que devuelve el backend',
+  },
 ]
 
 /* Ficheros a mirar. El frontend viejo y las dependencias no. */
@@ -196,9 +206,15 @@ for (const f of ficheros(RAIZ)) {
   const lineas = txt.split('\n')
 
   for (const p of PATRONES) {
+    // `soloEn`: hay patrones que solo son un bug en una parte del arbol. El de
+    // WhatsApp, por ejemplo, es correcto dentro de `enlace_wa` del backend.
+    if (p.soloEn && !p.soloEn.test(rel)) continue
     lineas.forEach((linea, i) => {
       // Los comentarios no ejecutan nada: citar el patrón para explicarlo no es un bug.
-      const limpia = linea.replace(/#.*$/, '').replace(/\/\/.*$/, '')
+      // El `//` de una URL NO abre comentario: cortando ahí, `https://wa.me/…`
+      // se quedaba en `https:` y la regla de WhatsApp no podía saltar nunca.
+      // Un checker que no ve es peor que no tenerlo (probado reintroduciendo).
+      const limpia = linea.replace(/#.*$/, '').replace(/(^|[^:])\/\/.*$/, '$1')
       p.re.lastIndex = 0
       if (!p.re.test(limpia)) return
       const clave = `${rel}:${p.id}`

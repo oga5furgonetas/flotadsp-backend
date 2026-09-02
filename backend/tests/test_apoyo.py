@@ -24,8 +24,10 @@ from typing import Optional
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUTA = os.path.join(RAIZ, "server.py")
 
-FUNCS = ("_cx_ruta_cajon", "_apoyo_textos", "_apoyo_url", "enlace_wa", "_apoyo_minutos_desde")
-CONSTS = ("_CX_OK", "_CX_EN_VUELO", "_CX_NO_DESPACHADO", "_CX_REINTENTABLE", "_APOYO_CAJONES_PENDIENTES")
+FUNCS = ("_cx_ruta_cajon", "_apoyo_textos", "_apoyo_url", "enlace_wa", "_apoyo_minutos_desde",
+         "_apoyo_posicion_de", "_apoyo_estados_en_calle")
+CONSTS = ("_CX_OK", "_CX_EN_VUELO", "_CX_NO_DESPACHADO", "_CX_REINTENTABLE", "_APOYO_CAJONES_PENDIENTES",
+          "_APOYO_POSICION_MAX_MIN")
 
 
 def _cargar():
@@ -93,6 +95,42 @@ def test_sin_telefono_no_hay_enlace():
     a = {"token": "x" * 32, "de": {"nombre": "P", "telefono": ""}, "a": {"nombre": "A", "telefono": "600000000"}, "paradas": []}
     t = NS["_apoyo_textos"](a)
     assert t["wa_conductor"] == "" and t["wa_ayudante"]
+
+
+def _hace(minutos):
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutos)).isoformat()
+
+
+def test_la_posicion_solo_sale_de_escaneos_en_la_calle():
+    """Un escaneo de carga ocurre EN LA NAVE: si colara, mandaria a todo el
+    mundo al almacen. Los estados salen de las listas canonicas."""
+    calle = NS["_apoyo_estados_en_calle"]()
+    for e in calle:
+        assert NS["_cx_ruta_cajon"](e) in ("delivered", "attempted"), e
+    for e in ("PICKED_UP", "PENDING_PICKUP", "YOU_ARE_NEXT", "LOADED", "UNCOLLECTED", "BACK_TO_ORIGIN"):
+        assert e not in calle, e
+    assert "DELIVERED" in calle and "ATTEMPTED" in calle
+
+
+def test_posicion_reciente_y_vieja():
+    f = NS["_apoyo_posicion_de"]
+    p = f({"lat": 42.6, "lng": -8.9, "updated_at": _hace(7), "state": "DELIVERED", "stop_id": 16})
+    assert p and 6 <= p["hace_min"] <= 8 and p["que"] == "entrega" and p["stop_id"] == "16"
+    p = f({"lat": 42.6, "lng": -8.9, "updated_at": _hace(3), "state": "ATTEMPTED", "stop_id": 4})
+    assert p["que"] == "intento"
+    # Mas vieja que el tope: no se devuelve NADA, porque al lado hay un boton de ir.
+    viejo = NS["_APOYO_POSICION_MAX_MIN"] + 5
+    assert f({"lat": 42.6, "lng": -8.9, "updated_at": _hace(viejo), "state": "DELIVERED"}) is None
+    # Sin coordenada, sin hora o sin paquete: nada.
+    assert f(None) is None
+    assert f({"lat": None, "lng": None, "updated_at": _hace(2), "state": "DELIVERED"}) is None
+    assert f({"lat": 42.6, "lng": -8.9, "updated_at": None, "state": "DELIVERED"}) is None
+
+
+def test_la_posicion_siempre_lleva_su_antiguedad():
+    """Un punto sin `hace_min` parece que esta ahi AHORA."""
+    p = NS["_apoyo_posicion_de"]({"lat": 1.0, "lng": 2.0, "updated_at": _hace(1), "state": "DELIVERED"})
+    assert "hace_min" in p and isinstance(p["hace_min"], int) and "cuando" in p
 
 
 def test_minutos_desde():

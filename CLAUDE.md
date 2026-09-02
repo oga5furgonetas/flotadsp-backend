@@ -709,6 +709,31 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `except DuplicateKeyError` tiene que tener su único) y lo ejercita
    `backend/scripts/smoke_concurrencia.py`, que es como se encontró.
 
+47. **Un enlace de WhatsApp construido a mano abre un numero que no existe.**
+   `wa.me` necesita el numero CON prefijo de pais. `enlace_wa()` lo pone a los
+   de 9 digitos y devuelve `""` cuando no hay telefono, pero el panel se lo
+   construia por su cuenta en dos sitios (la orden de taller y el enlace fijo
+   del taller): `wa.me/${phone.replace(/[^0-9]/g,'')}`. Medido el 02-09-2026:
+   de 41 talleres con telefono, **40 lo tienen con prefijo y uno no** (Midas
+   Santiago, `981574178`), asi que ese abria `wa.me/981574178`. Y entre los
+   conductores es al reves: **61 de 114 estan guardados sin prefijo**, de modo
+   que cualquier pantalla que copie ese patron falla para la mayoria. El
+   sintoma engana: WhatsApp abre y dice que el numero no existe, y parece cosa
+   de WhatsApp o del taller.
+   Regla: **la URL de WhatsApp la arma SIEMPRE el backend** con `enlace_wa` y
+   viaja en el campo `wa` de la respuesta; el frontend solo la abre. Si viene
+   vacia es que no hay telefono, y eso se DICE («este taller no tiene telefono
+   guardado: copia el enlace»), no se disimula con un boton que abre WhatsApp
+   sin destinatario. Lo vigila la regla `whatsapp-a-mano` de
+   `scripts/check-patrones.mjs`.
+   Y de paso salio otra: el checker **borraba las URLs** antes de mirarlas,
+   porque cortaba la linea en el primer `//` para quitar comentarios. Con eso
+   `https://wa.me/…` se quedaba en `https:` y la regla no podia saltar nunca.
+   Ahora solo corta cuando el `//` no va precedido de `:`. Un checker que no ve
+   es peor que no tenerlo: se probo reintroduciendo el fallo, que es la unica
+   forma de saber que mira de verdad.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
@@ -738,6 +763,9 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   `check-tema-mezclado`, `check-efectos`, `check-chunk-error`,
   `check_contracts.py`, `check_objectid.py`, `check_tenant.py`,
   `check_multiempresa.py`, `check_borrado.py` y `check_unicos.py`.
+  `check-patrones` admite `soloEn` en una regla: hay patrones que solo son un
+  bug en una parte del arbol (el de WhatsApp es correcto dentro de
+  `enlace_wa`).
   **Ninguno tolera ya backlog**: los 45 avisos de `check-patrones` y las 29
   rutas de `check-huerfanas` se miraron una a una el 31-08 y el 01-09-2026, y
   los dos trinquetes están a cero. Un checker con backlog no distingue lo nuevo

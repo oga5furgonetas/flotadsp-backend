@@ -134,9 +134,9 @@ function WorkshopCard({ w, userCoords }) {
     navigator.clipboard?.writeText(enlace?.texto_whatsapp || enlace?.url || '').catch(() => {})
     setCopiado(true); setTimeout(() => setCopiado(false), 1500)
   }
-  const wa = enlace?.url && w.phone
-    ? `https://wa.me/${w.phone.replace(/[^\d]/g, '').replace(/^0+/, '')}?text=${encodeURIComponent(enlace.texto_whatsapp || enlace.url)}`
-    : null
+  // El enlace lo arma el servidor (`enlace_wa`): pone el prefijo del pais y
+  // devuelve vacio si el taller no tiene telefono guardado (gotcha 47).
+  const wa = enlace?.wa || null
 
   return (
     <div className="group flex flex-col overflow-hidden rounded-2xl border border-dark-700/50 bg-dark-800/60 transition hover:border-dark-600 hover:bg-dark-800">

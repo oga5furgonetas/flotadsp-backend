@@ -23,6 +23,14 @@ const ICONO = (n, apagada) => L.divIcon({
   iconSize: [28, 28], iconAnchor: [14, 14],
 })
 
+/* La chincheta de la PERSONA a la que se ayuda. Distinta de las paradas a
+   proposito: es lo unico del mapa que no es una entrega. */
+const ICONO_PERSONA = L.divIcon({
+  className: '',
+  html: '<div style="width:34px;height:34px;border-radius:17px;display:flex;align-items:center;justify-content:center;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.6);background:#f59e0b;font:700 15px system-ui;color:#1c1917">\u265f</div>',
+  iconSize: [34, 34], iconAnchor: [17, 17],
+})
+
 const irA = (p) => `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}&travelmode=driving`
 const rutaEntera = (paradas) => {
   const vivas = paradas.filter((p) => p.lat != null && !p.hecha && !p.entregada).slice(0, 10)
@@ -66,6 +74,12 @@ export default function PortalApoyo() {
       mk.bindPopup(`<b>Parada ${p.stop_id}</b><br>${p.direccion || ''}<br>${p.n} paquete${p.n === 1 ? '' : 's'}<br><a href="${irA(p)}" target="_blank" rel="noreferrer">Ir con Google Maps</a>`)
       capa.addLayer(mk); pts.push([p.lat, p.lng])
     })
+    const pos = datos.de?.posicion
+    if (pos) {
+      const mk = L.marker([pos.lat, pos.lng], { icon: ICONO_PERSONA, zIndexOffset: 1000 })
+      mk.bindPopup(`<b>${datos.de?.nombre || ''}</b><br>Aquí hace ${pos.hace_min} min<br><a href="${irA(pos)}" target="_blank" rel="noreferrer">Ir hacia él</a>`)
+      capa.addLayer(mk); pts.push([pos.lat, pos.lng])
+    }
     if (pts.length) m.fitBounds(L.latLngBounds(pts).pad(0.2), { maxZoom: 15 })
     setTimeout(() => m.invalidateSize(), 50)
   }, [datos])
@@ -106,6 +120,31 @@ export default function PortalApoyo() {
           {datos.de?.telefono && <a href={`tel:${datos.de.telefono}`} className="flex items-center justify-center gap-2 rounded-xl bg-dark-800 px-3 py-3 text-sm font-semibold text-dark-100 active:bg-dark-700"><Phone size={18} /> Llamar a {datos.de.nombre?.split(' ')[0]}</a>}
           {ruta && !cerrado && <a href={ruta} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 rounded-xl bg-sky-600 px-3 py-3 text-sm font-semibold text-white active:bg-sky-500"><Navigation size={18} /> Ruta en Maps</a>}
         </div>
+
+        {/* DONDE ESTA EL OTRO. Siempre con el «hace N min» delante: un punto sin
+            hora parece que está ahí AHORA, y esto lleva un botón de ir al lado. */}
+        {datos.de?.posicion ? (
+          <div className={`rounded-2xl border p-3 ${datos.de.posicion.hace_min <= 30 ? 'border-amber-500/40 bg-amber-500/10' : 'border-dark-700 bg-dark-900'}`}>
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500 text-[15px] text-dark-950">♟</div>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold">{datos.de?.nombre?.split(' ')[0]} estaba aquí hace {datos.de.posicion.hace_min} min</div>
+                <div className="text-xs text-dark-400">
+                  {datos.de.posicion.que === 'intento' ? 'Último intento de entrega' : 'Última entrega'}
+                  {datos.de.posicion.stop_id ? ` · parada ${datos.de.posicion.stop_id}` : ''} · lo dice Cortex, no es un GPS
+                </div>
+              </div>
+            </div>
+            <a href={irA(datos.de.posicion)} target="_blank" rel="noreferrer"
+              className="mt-2 flex items-center justify-center gap-2 rounded-xl bg-amber-600 py-2.5 text-sm font-semibold text-white active:bg-amber-500">
+              <Navigation size={16} /> Ir hacia {datos.de?.nombre?.split(' ')[0]}
+            </a>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-dark-700 bg-dark-900 px-3 py-2.5 text-xs text-dark-400">
+            Cortex no da una posición reciente de {datos.de?.nombre?.split(' ')[0]}: llámale para quedar.
+          </div>
+        )}
 
         <div ref={mapaRef} className="h-[300px] w-full overflow-hidden rounded-2xl bg-dark-900" />
 

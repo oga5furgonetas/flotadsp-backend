@@ -17603,6 +17603,65 @@ async def _apoyo_vivo_hoy(dia: str) -> dict:
     return out
 
 
+
+# ── DONDE ESTA LA PERSONA A LA QUE SE AYUDA ─────────────────────────────────
+# Lo pidio Dani el 02-09-2026: «que el backup sepa donde anda sin tener que
+# llamarle, y pueda ir junto a el sin molestarse mutuamente».
+#
+# NO ES UN GPS Y NO SE PUEDE VENDER COMO TAL. Es el ULTIMO ESCANEO SUYO HECHO
+# EN LA CALLE —una entrega o un intento de entrega—, con la hora que le pone el
+# propio Cortex. Por eso:
+#   · los estados validos salen de las listas canonicas (`_CX_OK`,
+#     `_CX_REINTENTABLE`), nunca escritos a mano (gotchas 28 y 40). Un escaneo
+#     de carga (PICKED_UP) ocurre EN LA NAVE y pondria a todo el mundo alli;
+#   · la hora es `updated_at`, que es cuando paso en Cortex, no cuando lo
+#     bajamos nosotros (gotcha 29);
+#   · SIEMPRE viaja con `hace_min` y la pantalla lo enseña. Un punto sin hora
+#     es una mentira util: parece que esta ahi AHORA;
+#   · por encima de `_APOYO_POSICION_MAX_MIN` no se devuelve nada. Mandar a
+#     alguien a un sitio donde el otro estuvo hace tres horas es peor que no
+#     decir nada, y esto tiene un boton de «ir» al lado.
+# Medido el 02-09-2026 con 49 conductores: 6.636 entregas con coordenada, y la
+# ultima de cada uno a una mediana de 12,5 km de la nave (o sea, en ruta).
+
+_APOYO_POSICION_MAX_MIN = 120
+
+
+def _apoyo_estados_en_calle() -> list:
+    """Estados cuyo escaneo ocurrio en la calle, de las listas canonicas.
+
+    Se resuelve al llamar y no al importar: `_CX_OK` y `_CX_REINTENTABLE` se
+    definen mas abajo en el fichero y hacerlo arriba tumbaba el arranque con un
+    NameError (lo cazo `pyflakes`, gotcha 19).
+    """
+    return list(_CX_OK) + list(_CX_REINTENTABLE)
+
+
+def _apoyo_posicion_de(p: Optional[dict]) -> Optional[dict]:
+    """Del ultimo escaneo en calle saca {lat, lng, hace_min, que}. Puro, para poder probarlo."""
+    if not p:
+        return None
+    lat, lng = p.get("lat"), p.get("lng")
+    if lat is None or lng is None:
+        return None
+    mins = _apoyo_minutos_desde(p.get("updated_at"))
+    if mins is None or mins > _APOYO_POSICION_MAX_MIN:
+        return None
+    return {"lat": lat, "lng": lng, "hace_min": mins, "cuando": p.get("updated_at"),
+            "stop_id": str(p.get("stop_id") or ""),
+            "que": "intento" if p.get("state") in tuple(_CX_REINTENTABLE) else "entrega"}
+
+
+async def _apoyo_posicion(driver_id: str, dia: str) -> Optional[dict]:
+    """Donde se vio por ultima vez a esa persona hoy, segun Cortex."""
+    docs = await db.cortex_packages.find(
+        {"service_day": dia, "driver_id": driver_id, "lat": {"$ne": None},
+         "state": {"$in": _apoyo_estados_en_calle()}},
+        {"_id": 0, "lat": 1, "lng": 1, "updated_at": 1, "state": 1, "stop_id": 1},
+    ).sort("updated_at", -1).limit(1).to_list(1)
+    return _apoyo_posicion_de(docs[0] if docs else None)
+
+
 @api_router.get("/apoyo/situacion")
 async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = None,
                           user: dict = Depends(require_admin)):
@@ -17680,7 +17739,8 @@ async def apoyo_paradas(driver_id: str, day: Optional[str] = None, user: dict = 
         raise HTTPException(404, "Ese conductor no tiene paquetes hoy en tus centros")
     datos = await _apoyo_paradas_pendientes(driver_id, dia)
     personas = await _apoyo_personas({driver_id})
-    return {"dia": dia, "driver": {"driver_id": driver_id, **personas.get(driver_id, {})}, **datos}
+    return {"dia": dia, "driver": {"driver_id": driver_id, **personas.get(driver_id, {})},
+            "posicion": await _apoyo_posicion(driver_id, dia), **datos}
 
 
 def _apoyo_url(token: str) -> str:
@@ -17729,6 +17789,8 @@ def _apoyo_publico(a: dict) -> dict:
     (tienen que quedar), las paradas, y nada más — ni ids internos ni otros
     conductores."""
     return {"id": a.get("id"), "dia": a.get("dia"), "fase": a.get("fase"),
+            # `posicion` la añade `_apoyo_publico_con_posicion`: no se guarda en
+            # el apoyo porque cambia cada pocos minutos.
             "de": {"nombre": (a.get("de") or {}).get("nombre"), "telefono": (a.get("de") or {}).get("telefono"),
                    "ruta": (a.get("de") or {}).get("ruta")},
             "a": {"nombre": (a.get("a") or {}).get("nombre"), "telefono": (a.get("a") or {}).get("telefono")},
@@ -17896,11 +17958,18 @@ async def _apoyo_marcar_entregadas(a: dict) -> dict:
     return a
 
 
+async def _apoyo_publico_con_posicion(a: dict) -> dict:
+    """Lo de siempre mas donde estaba el otro, que es lo que evita la llamada."""
+    dat = _apoyo_publico(a)
+    dat["de"]["posicion"] = await _apoyo_posicion((a.get("de") or {}).get("driver_id"), a.get("dia"))
+    return dat
+
+
 @api_router.get("/apoyo/t/{token}")
 async def apoyo_publico(token: str):
     """La página del que ayuda (y del que recibe la ayuda): mapa y lista, sin login."""
     a = await _apoyo_marcar_entregadas(await _apoyo_por_token(token))
-    return _apoyo_publico(a)
+    return await _apoyo_publico_con_posicion(a)
 
 
 @api_router.post("/apoyo/t/{token}/parada/{stop_id}")
@@ -17919,7 +17988,7 @@ async def apoyo_publico_parada(token: str, stop_id: str, data: dict = Body(defau
     if not r.matched_count:
         raise HTTPException(404, "Esa parada no está en este apoyo")
     a = await _apoyo_marcar_entregadas(await db.apoyos.find_one({"id": a["id"]}, {"_id": 0}))
-    return _apoyo_publico(a)
+    return await _apoyo_publico_con_posicion(a)
 
 
 # ── EL CANAL CON EL TALLER, EN LOS DOS SENTIDOS ─────────────────────────────
@@ -19122,7 +19191,8 @@ async def enlace_taller(workshop_id: str, user: dict = Depends(require_admin)):
         "el mismo. Gracias."
     ) % url
     return {"url": url, "expira_en": caduca, "texto_whatsapp": texto,
-            "taller": w.get("name"), "telefono": w.get("phone")}
+            "taller": w.get("name"), "telefono": w.get("phone"),
+            "wa": enlace_wa(w.get("phone") or "", texto)}
 
 
 @api_router.get("/taller/t/{token}")
@@ -19218,8 +19288,13 @@ async def enlace_orden(orden_id: str, dias: int = 60, user: dict = Depends(requi
         {"id": orden_id},
         {"$push": {"historial": _ot_apunte(user.get("name") or "oficina", "Enlace generado")},
          "$set": {"actualizada_en": _ot_ahora()}})
+    # `wa` lo arma el servidor con `enlace_wa`, que pone el prefijo del pais a
+    # los numeros de 9 digitos y devuelve "" cuando no hay telefono. El panel lo
+    # construia a mano y abria `wa.me/981574178` —un numero que no existe— con
+    # el unico taller guardado sin prefijo (gotcha 47).
     return {"url": url, "expira_en": caduca, "texto_whatsapp": texto,
-            "telefono_taller": o.get("taller_telefono") or ""}
+            "telefono_taller": o.get("taller_telefono") or "",
+            "wa": enlace_wa(o.get("taller_telefono") or "", texto)}
 
 
 @api_router.patch("/work-orders/{orden_id}")

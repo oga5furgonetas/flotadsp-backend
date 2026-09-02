@@ -18,13 +18,20 @@ import { getApoyoSituacion, getApoyoParadas, crearApoyo, cambiarApoyo, getApoyos
    Cero falsos positivos: las paradas salen de Cortex tal como está AHORA y el
    banner dice hace cuántos minutos se bajó. */
 
+/* La persona a la que se ayuda: la oficina ve donde anda al elegirla. */
+const ICONO_PERSONA = L.divIcon({
+  className: '',
+  html: '<div style="width:30px;height:30px;border-radius:15px;display:flex;align-items:center;justify-content:center;border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.6);background:#f59e0b;font:700 14px system-ui;color:#1c1917">\u265f</div>',
+  iconSize: [30, 30], iconAnchor: [15, 15],
+})
+
 const NUM_ICON = (n, sel, hecha) => L.divIcon({
   className: '',
   html: `<div style="width:26px;height:26px;border-radius:13px;display:flex;align-items:center;justify-content:center;font:700 12px system-ui;color:#fff;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5);background:${hecha ? '#64748b' : sel ? '#0ea5e9' : '#f97316'}">${n}</div>`,
   iconSize: [26, 26], iconAnchor: [13, 13],
 })
 
-function useMapa(ref, paradas, seleccion, onToggle) {
+function useMapa(ref, paradas, seleccion, onToggle, posicion) {
   const mapRef = useRef(null)
   const capaRef = useRef(null)
   useEffect(() => {
@@ -50,9 +57,15 @@ function useMapa(ref, paradas, seleccion, onToggle) {
       capa.addLayer(mk)
       puntos.push([p.lat, p.lng])
     })
+    if (posicion) {
+      const mk = L.marker([posicion.lat, posicion.lng], { icon: ICONO_PERSONA, zIndexOffset: 1000 })
+      mk.bindTooltip(`Estaba aquí hace ${posicion.hace_min} min`)
+      capa.addLayer(mk)
+      puntos.push([posicion.lat, posicion.lng])
+    }
     if (puntos.length) m.fitBounds(L.latLngBounds(puntos).pad(0.2), { maxZoom: 15 })
     setTimeout(() => m.invalidateSize(), 50)
-  }, [paradas, seleccion, onToggle])
+  }, [paradas, seleccion, onToggle, posicion])
 }
 
 export default function ApoyoRuta() {
@@ -100,7 +113,7 @@ export default function ApoyoRuta() {
   }, [dia])
 
   const toggle = useCallback((id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n }), [])
-  useMapa(mapaRef, paradas, sel, toggle)
+  useMapa(mapaRef, paradas, sel, toggle, infoParadas?.posicion || null)
 
   const ultimas = (n) => setSel(new Set(paradas.slice(-n).map((p) => p.stop_id)))
 
@@ -182,6 +195,11 @@ export default function ApoyoRuta() {
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-dark-800 px-4 py-3">
               <div className="text-sm font-semibold text-dark-200">
                 {driver ? <>{driver.nombre} <span className="text-dark-500">· {infoParadas?.ruta || driver.ruta || ''}</span></> : t('apoyo.elegir')}
+                {infoParadas?.posicion && (
+                  <span className="ml-2 rounded bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+                    ♟ {t('apoyo.visto').replace('{n}', infoParadas.posicion.hace_min)}
+                  </span>
+                )}
               </div>
               {driver && paradas.length > 0 && (
                 <div className="flex items-center gap-1 text-xs">

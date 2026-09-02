@@ -24,12 +24,21 @@
 4. **Cambiar** (`PATCH /api/apoyo/{id}`): paradas, ayudante, nota o fase
    (`hecho` / `anulado`). Cada cambio va al `historial`. El enlace ya enviado
    enseña la versión nueva sin mandar nada más.
-5. **La página del ayudante** (`/apoyo/t/<token>`, `GET /api/apoyo/t/{token}`):
+5. **Dónde está la persona a la que se ayuda** (`de.posicion`): el ÚLTIMO
+   ESCANEO SUYO HECHO EN LA CALLE —una entrega o un intento—, con la hora del
+   propio Cortex. No es un GPS y no se enseña como tal: viaja siempre con
+   `hace_min`, y por encima de 120 minutos no se devuelve nada, porque al lado
+   hay un botón de «ir hacia él». Los estados válidos salen de las listas
+   canónicas (`_CX_OK` + `_CX_REINTENTABLE`): un escaneo de carga ocurre en la
+   nave y pondría a todo el mundo allí. Probado reintroduciendo el fallo.
+   Medido en producción: `{hace_min: 46, stop_id: 16, que: "entrega"}`.
+6. **La página del ayudante** (`/apoyo/t/<token>`, `GET /api/apoyo/t/{token}`):
    mapa con las paradas numeradas, «Ir» a cada una (Google Maps con
    coordenadas: funciona aunque no haya dirección), «Ruta en Maps» con hasta
    10 paradas, «Hecha» para ir tachando
    (`POST /api/apoyo/t/{token}/parada/{stop_id}`), y lo que Cortex ya da por
    entregado aparece tachado solo. Se recarga cada minuto. Válido 3 días.
+   Arriba, la ficha de dónde estaba el otro y un botón para ir hacia él.
 
 ## Por qué está montado así
 

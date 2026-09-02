@@ -1228,13 +1228,19 @@ export default function OrdenesTrabajo() {
                         {copiado ? <Check size={15} className="text-emerald-600" /> : <Copy size={15} />}
                       </button>
                     </div>
-                    {enlace.texto_whatsapp && (
-                      <button onClick={() => window.open(
-                        `https://wa.me/${(enlace.telefono_taller || '').replace(/[^0-9]/g, '')}?text=${encodeURIComponent(enlace.texto_whatsapp)}`,
-                        '_blank', 'noopener')}
+                    {/* El enlace lo arma el servidor (`enlace_wa`): pone el prefijo del
+                        pais y devuelve vacio si el taller no tiene telefono. Construirlo
+                        aqui abria `wa.me/981574178`, que no existe (gotcha 47). */}
+                    {enlace.wa ? (
+                      <button onClick={() => window.open(enlace.wa, '_blank', 'noopener')}
                         className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-700 py-2.5 text-[13.5px] font-semibold text-white hover:bg-emerald-700">
                         <MessageCircle size={15} /> Mandarlo por WhatsApp
                       </button>
+                    ) : (
+                      <p className="rounded-lg bg-amber-50 px-3 py-2 text-[12.5px] text-amber-800">
+                        {abierta.taller_nombre || 'Este taller'} no tiene teléfono guardado: copia el enlace y mándaselo tú,
+                        o añade el teléfono en Talleres para poder mandarlo desde aquí.
+                      </p>
                     )}
                     <button onClick={() => window.open(enlace.url, '_blank', 'noopener')}
                       className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 py-2 text-[13px] font-semibold text-slate-600 hover:bg-slate-50">
