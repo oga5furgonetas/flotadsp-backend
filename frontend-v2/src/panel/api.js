@@ -205,6 +205,7 @@ export const uploadScorecard = (file, center) => {
 
 /* ── Org / Config ── */
 export const getOrgCenters = () => api.get('/org/centers')
+export const getCentrosGeo = () => api.get('/org/centros-geo') // {centros: {OGA5: {lat, lng, origen}}}
 export const addOrgCenter = (name) => api.post('/org/centers', { name })
 /* WhatsApp Business. Las credenciales NO pasan por aqui: viven en los secretos
    de Fly. Estos endpoints solo dicen que falta, encienden cada aviso y prueban. */

@@ -102,6 +102,24 @@ try:
 except Exception as e:
     print("  %-4s %-46s FALLA %s" % ("INV", "dias congelados conservan sus paquetes", str(e)[:120]))
     mal += 1
+# INVARIANTE: ninguna incidencia automatica "Vehiculo en taller" sigue abierta
+# para una furgoneta que ya no esta en el taller. Habia 7 desde julio (02-09-2026):
+# nadie las cerraba y contaban en las "incidencias abiertas" del dashboard.
+try:
+    from pymongo import MongoClient as _MC
+    _dbi = _MC(os.environ["MONGO_URL"])[os.environ.get("DB_NAME", "flotadsp")]
+    en_taller = {v["id"] for v in _dbi.vehicles.find({"status": "taller"}, {"id": 1})}
+    huerfanas = [i["title"] for i in _dbi.incidents.find(
+        {"status": "open", "auto_created": True}, {"title": 1, "vehicle_id": 1})
+        if i.get("vehicle_id") not in en_taller]
+    bien = not huerfanas
+    print("  %-4s %-46s %s" % ("INV", "incidencias de taller cerradas al salir",
+                               "OK" if bien else "ABIERTAS SIN TALLER: " + ", ".join(huerfanas[:5])))
+    ok += 1 if bien else 0
+    mal += 0 if bien else 1
+except Exception as e:
+    print("  %-4s %-46s FALLA %s" % ("INV", "incidencias de taller cerradas al salir", str(e)[:120]))
+    mal += 1
 # INVARIANTE: los indices unicos que el codigo da por hechos EXISTEN en la base
 # principal. `_idx` no revienta si uno falla (gotcha 9: con duplicados dentro
 # la creacion falla y se queda sin indice, en silencio): el except de

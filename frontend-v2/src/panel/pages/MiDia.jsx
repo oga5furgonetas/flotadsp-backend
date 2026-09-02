@@ -10,21 +10,29 @@ import { hoyLocal } from '../../lib/fecha'
    La pantalla de las 8:00 del jefe de turno: todo lo urgente de HOY en un solo
    sitio, ordenado por prioridad. Compone endpoints existentes (cero backend). */
 export default function MiDia() {
-  const { center } = useOutletContext()
+  const { center, centers } = useOutletContext()
   const { t } = useT()
   const [data, setData] = useState(null)
   const [err, setErr] = useState('')
   const today = hoyLocal()
-  const noCenter = center === 'Todos'
+  /* Con "Todos" arriba, la pantalla se quedaba en blanco pidiendo elegir un
+     centro: el jefe de turno entraba a las 8:00 y se encontraba un aviso en
+     vez de su día. El cuadrante es por centro, así que se enseña el primero
+     (el principal) y se dice cuál es; cambiarlo sigue estando arriba. */
+  const defaulted = center === 'Todos'
+  const centro = defaulted ? (centers?.[0] || '') : center
+  const noCenter = !centro
 
   useEffect(() => {
     if (noCenter) return
     setData(null); setErr('')
     Promise.all([
-      getDailyAssignment(center, today).catch(() => ({ data: null })),
-      getInspections({ center, date_from: today, date_to: today, limit: 500 }).catch(() => ({ data: [] })),
-      getIncidents({ status: 'open' }).catch(() => ({ data: [] })),
-      getItvAlerts(center).catch(() => ({ data: [] })),
+      getDailyAssignment(centro, today).catch(() => ({ data: null })),
+      getInspections({ center: centro, date_from: today, date_to: today, limit: 500 }).catch(() => ({ data: [] })),
+      // Por centro y solo abiertas: antes pedía todas las incidencias de todos
+      // los centros y las contaba como "abiertas" (56 con 40 abiertas).
+      getIncidents({ status: 'open', center: centro }).catch(() => ({ data: [] })),
+      getItvAlerts(centro).catch(() => ({ data: [] })),
     ]).then(([da, insp, inc, itv]) => {
       const doc = Array.isArray(da.data) ? da.data[0] : da.data
       setData({
@@ -34,7 +42,7 @@ export default function MiDia() {
         itv: Array.isArray(itv.data) ? itv.data : [],
       })
     }).catch(() => setErr(t('dash.error')))
-  }, [center]) // eslint-disable-line
+  }, [centro]) // eslint-disable-line
 
   if (noCenter) {
     return (
@@ -52,8 +60,15 @@ export default function MiDia() {
   const pending = data.slots.filter((s) => s.driver_id && s.vehicle_id && !doneDrivers.has(s.driver_id))
   const withDamage = data.insps.filter((i) => (i.analysis?.new_damages || []).length > 0)
   const unassigned = data.slots.filter((s) => s.vehicle_id && !s.driver_id)
-  const itvSoon = data.itv.filter((a) => (a.days_left ?? 99) <= 15)
-  const allClear = pending.length === 0 && withDamage.length === 0 && itvSoon.length === 0
+  // Sin cuadrante de hoy no se sabe nada: ni quién falta por inspeccionar ni
+  // si hay furgonetas sin conductor. Antes salía "Todas asignadas ✓" sobre
+  // cero filas, que es un tranquilizador falso (medido: OGA5 sin cuadrante
+  // el 02-09-2026 y la pantalla en verde).
+  const sinCuadrante = data.slots.length === 0
+  // Vencidas y a ≤ 15 días van juntas porque las dos piden cita YA; el chip
+  // dice cuál es cuál en vez de enseñar "-621d".
+  const itvSoon = data.itv.filter((a) => a.days_left != null && a.days_left <= 15)
+  const allClear = !sinCuadrante && pending.length === 0 && withDamage.length === 0 && itvSoon.length === 0
 
   const Section = ({ icon: Icon, tone, title, count, to, children }) => (
     <div className={`rounded-2xl border p-4 ${tone}`}>
@@ -70,7 +85,9 @@ export default function MiDia() {
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <header className="rise">
-        <p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-brand-400/80">{center}</p>
+        <p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-brand-400/80">{centro}
+          {defaulted && <span className="ml-2 normal-case tracking-normal text-dark-500">· {t('midia.default.center')}</span>}
+        </p>
         <h1 className="mt-2 font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('midia.title')}</h1>
         <p className="mt-3 text-[13.5px] capitalize text-dark-500">{new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
       </header>
@@ -79,6 +96,14 @@ export default function MiDia() {
         <div className="card flex items-center gap-3 border-emerald-500/20 bg-emerald-500/5 p-5 text-emerald-300">
           <CheckCircle2 size={22} /> <span className="font-semibold">{t('midia.all.clear')}</span>
         </div>
+      )}
+
+      {sinCuadrante && (
+        <Section icon={ClipboardCheck} count="—" to="/panel/asignacion"
+          tone="border-amber-500/25 bg-amber-500/5 text-amber-200"
+          title={t('midia.no.roster')}>
+          <p className="text-xs opacity-80">{t('midia.no.roster.why')}</p>
+        </Section>
       )}
 
       {pending.length > 0 && (
@@ -118,8 +143,10 @@ export default function MiDia() {
           title={t('midia.itv.soon')}>
           <div className="flex flex-wrap gap-2">
             {itvSoon.slice(0, 8).map((a, i) => (
-              <span key={i} className="rounded-full bg-black/25 px-2.5 py-1 text-xs font-mono">
-                {a.license_plate || a.vehicle_plate} · {a.days_left}d
+              <span key={i} className={`rounded-full px-2.5 py-1 text-xs font-mono ${a.days_left < 0 ? 'bg-red-500/20 text-red-200' : 'bg-black/25'}`}>
+                {a.license_plate || a.vehicle_plate} · {a.days_left < 0
+                  ? t('midia.itv.expired.chip').replace('{n}', -a.days_left)
+                  : `${a.days_left}d`}
               </span>
             ))}
           </div>
@@ -127,9 +154,9 @@ export default function MiDia() {
       )}
 
       <div className="grid grid-cols-2 gap-3">
-        <Section icon={ClipboardCheck} count={unassigned.length} to="/panel/asignacion"
+        <Section icon={ClipboardCheck} count={sinCuadrante ? '—' : unassigned.length} to="/panel/asignacion"
           tone="border-dark-700 bg-dark-900 text-dark-200" title={t('midia.unassigned')}>
-          <p className="text-xs text-dark-500">{unassigned.length === 0 ? t('midia.all.assigned') : t('midia.go.assign')}</p>
+          <p className="text-xs text-dark-500">{sinCuadrante ? t('midia.no.roster') : unassigned.length === 0 ? t('midia.all.assigned') : t('midia.go.assign')}</p>
         </Section>
         <Section icon={AlertTriangle} count={data.incidents.length} to="/panel/incidencias"
           tone="border-dark-700 bg-dark-900 text-dark-200" title={t('midia.open.inc')}>

@@ -51,23 +51,32 @@ import CookieBanner from './legal/CookieBanner'
 /* ── Auto-recuperación tras deploy: si una pestaña abierta pide un chunk viejo
    (invalidado por un despliegue), Vite emite vite:preloadError. Recargamos UNA
    vez para coger la versión nueva — sin pantalla rota y sin alertas de ruido. ── */
+/* TRES INTENTOS ESCALONADOS, NO UNO. Visto en vivo el 02-09-2026: navegando
+   durante un despliegue, el edge sirvió HTML bajo un .js, la app se curó UNA
+   vez, el chunk seguía sin propagarse y el segundo fallo cayó dentro de la
+   ventana anti-bucle: pantalla de error y botón manual para el usuario. La
+   ventana de un despliegue dura más de un minuto, así que se intenta hasta
+   tres veces en diez minutos, esperando un poco más cada vez para dar tiempo
+   al edge. Reparar ANTES de recargar, siempre: una recarga a secas vuelve a
+   servir el fichero podrido desde la caché larga de los assets (2026-08-04). */
+function intentarCuracion() {
+  const k = 'chunk_curacion'
+  let est = { t: 0, n: 0 }
+  try { est = JSON.parse(sessionStorage.getItem(k) || '{}') || {} } catch { /* sin estado */ }
+  const ahora = Date.now()
+  if (!est.t || ahora - est.t > 10 * 60_000) est = { t: ahora, n: 0 }
+  if ((est.n || 0) >= 3) return false
+  est.n = (est.n || 0) + 1
+  try { sessionStorage.setItem(k, JSON.stringify(est)) } catch { /* sin estado */ }
+  const espera = (est.n - 1) * 2500
+  setTimeout(() => repairAssetCache().finally(() => window.location.reload()), espera)
+  return true
+}
+
 window.addEventListener('vite:preloadError', (e) => {
   e.preventDefault()
-  const k = 'chunk_reload_at'
-  const last = Number(sessionStorage.getItem(k) || 0)
-  if (Date.now() - last > 30_000) {           // guarda anti-bucle de recargas
-    sessionStorage.setItem(k, String(Date.now()))
-    // Reparar ANTES de recargar, igual que hace el ErrorBoundary. Una recarga
-    // a secas NO cura un asset envenenado: los assets van con caché larga, así
-    // que el navegador vuelve a servir el mismo fichero malo, falla otra vez, y
-    // el guardia anti-bucle deja al usuario clavado en la pantalla de error.
-    //
-    // Pasó de verdad en flotadsp.com el 2026-08-04: un chunk de 410 bytes tenía
-    // el index.html cacheado bajo su URL .js. curl y el mismo build en
-    // *.pages.dev iban bien; ese navegador no cargaba la web NUNCA. Solo se
-    // curó forzando cache:'reload' a mano — que es justo lo que hace
-    // repairAssetCache y este manejador se estaba saltando.
-    repairAssetCache().finally(() => window.location.reload())
+  if (!intentarCuracion()) {
+    reportError('chunk sin curar tras tres intentos: ' + String(e?.payload?.message || ''), '')
   }
 })
 
@@ -169,14 +178,9 @@ class ErrorBoundary extends React.Component {
     // (trae el index nuevo con los nombres de chunk correctos) sin molestar.
     // Repetible cada 60 s (no una vez por sesión): tras cada deploy la pestaña
     // puede envenenarse otra vez y debe poder curarse otra vez.
-    const _lastFix = Number(sessionStorage.getItem('chunk_reloaded') || 0)
-    if (isStaleChunkError(error?.message) && Date.now() - _lastFix > 60_000) {
-      sessionStorage.setItem('chunk_reloaded', String(Date.now()))
-      // Repara el caché ANTES de recargar: cubre también el asset envenenado
-      // (recargar sin reparar serviría el mismo JS corrupto desde caché).
-      repairAssetCache().finally(() => window.location.reload())
-      return
-    }
+    // Misma politica escalonada que vite:preloadError (tres intentos en diez
+    // minutos); solo cuando ya no queda intento se enseña la pantalla de error.
+    if (isStaleChunkError(error?.message) && intentarCuracion()) return
     reportError(error?.message, (error?.stack || '') + (info?.componentStack || ''))
   }
   render() {
@@ -210,8 +214,8 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-// Tras 15 s sanos, se rearma la auto-curación para el próximo deploy.
-setTimeout(() => { try { sessionStorage.removeItem('chunk_reloaded') } catch { /* privado */ } }, 15000)
+// Tras 15 s sanos, se rearma la auto-curación (los tres intentos) para el próximo deploy.
+setTimeout(() => { try { sessionStorage.removeItem('chunk_curacion') } catch { /* privado */ } }, 15000)
 
 /* Code-splitting: la landing carga al instante; el resto de rutas se descargan
    solo cuando se visitan (panel, portal conductor, legal…). */

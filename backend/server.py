@@ -5086,6 +5086,30 @@ async def list_org_centers(user: dict = Depends(get_current_user)):
             "account_type": (org or {}).get("account_type")}
 
 
+@api_router.get("/org/centros-geo")
+async def org_centros_geo(_=Depends(require_admin)):
+    """Donde esta cada centro: la mediana de sus talleres con posicion (tres o
+    mas), y si no los hay, las coordenadas de referencia.
+
+    Es para que Talleres arranque desde la nave en vez de pedir una direccion
+    o el GPS del PC cada vez (02-09-2026): quien llama a un taller esta
+    sentado en el centro, y el centro ya se sabe donde esta.
+    """
+    acc: dict = {}
+    async for w in db.workshops.find(
+            {"latitude": {"$type": "number"}, "longitude": {"$type": "number"}},
+            {"_id": 0, "center": 1, "latitude": 1, "longitude": 1}):
+        c = (w.get("center") or "").strip().upper()
+        if c:
+            acc.setdefault(c, []).append((float(w["latitude"]), float(w["longitude"])))
+    out = {c: {"lat": _mediana([p[0] for p in ps]), "lng": _mediana([p[1] for p in ps]),
+               "origen": "talleres"}
+           for c, ps in acc.items() if len(ps) >= 3}
+    for c, (la, ln) in _centros_referencia().items():
+        out.setdefault(c, {"lat": la, "lng": ln, "origen": "referencia"})
+    return {"centros": out}
+
+
 @api_router.post("/org/centers")
 async def add_org_center(data: dict = Body(...), user: dict = Depends(require_admin)):
     """Añade un centro a tu organización. Pasado el límite del plan → 402 (de pago)."""
@@ -7273,10 +7297,25 @@ async def odometro_sospechosas(_=Depends(require_admin)):
                                 {"_id": 0, "id": 1, "license_plate": 1,
                                  "mileage": 1, "mileage_history": 1}).to_list(700)
     out, total = [], 0
+    # Por encima de esto no es un kilometraje de furgoneta, es un dedo de mas:
+    # la 3328 NFY llevaba 14 lecturas coherentes entre si alrededor de
+    # 1.880.712 km (02-09-2026) y, como todas encajaban, la cadena mas larga
+    # no las veia. Se enseña para que alguien lo corrija; no se adivina.
+    _KM_IMPOSIBLE = 1_000_000
     for v in vs:
         hist = v.get("mileage_history") or []
         total += len(hist)
         malos = _odo_sospechosas(hist)
+        km_actual = v.get("mileage")
+        if not malos and isinstance(km_actual, (int, float)) and km_actual > _KM_IMPOSIBLE:
+            out.append({
+                "vehicle_id": v["id"], "matricula": v.get("license_plate"),
+                "km_actual": km_actual, "km_bueno": None, "actual_es_malo": True,
+                "imposible": True, "lecturas": [],
+                "motivo": "Más de un millón de km: no es un kilometraje de furgoneta. "
+                          "Corrige el km en la ficha.",
+            })
+            continue
         if not malos:
             continue
         # Cual seria el km bueno una vez fuera lo malo: es lo que hay que
@@ -15015,15 +15054,38 @@ async def _auto_incident_on_workshop(vehicle_id: str, prev_status, new_status):
         # Al salir se borra: si se quedara, la proxima entrada heredaria la
         # fecha vieja y la furgoneta apareceria parada desde hace meses.
         await db.vehicles.update_one({"id": vehicle_id}, {"$unset": {"taller_desde": ""}})
+        # Y LA INCIDENCIA AUTOMATICA SE CIERRA SOLA. Nadie la cerraba: el
+        # 02-09-2026 habia 7 "Vehiculo en taller" abiertas de furgonetas
+        # activas desde julio, contando en las "40 incidencias abiertas" del
+        # dashboard. Solo las automaticas: una escrita a mano ("ADBLUE",
+        # "EMBRAGUE") la cierra quien sepa si esta arreglado.
+        ahora = datetime.now(timezone.utc).isoformat()
+        r = await db.incidents.update_many(
+            {"vehicle_id": vehicle_id, "auto_created": True, "status": "open"},
+            {"$set": {"status": "resolved", "resolved_at": ahora,
+                      "resolucion": "Cerrada sola: la furgoneta salió del taller"},
+             "$push": {"history": {"date": ahora, "event": "Cerrada: salió del taller"}}})
+        if r.modified_count:
+            logger.info("Incidencia de taller cerrada sola al salir (%s)", vehicle_id)
 
     if new_status != "taller" or prev_status == "taller":
         return
     v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "license_plate": 1})
     plate = (v or {}).get("license_plate", vehicle_id)
     titulo = f"Vehículo en taller — {plate}"
-    # ¿Ya hay una incidencia de taller para este vehículo? → reabrirla en vez de duplicar
-    existing = await db.incidents.find_one({"vehicle_id": vehicle_id, "title": titulo})
     now_iso = datetime.now(timezone.utc).isoformat()
+    # ¿Ya hay una incidencia de taller ABIERTA para este vehiculo, sea
+    # automatica o escrita a mano con el mismo titulo? No se duplica. Antes se
+    # comparaba el titulo exacto y bastaba que la matricula se hubiera
+    # escrito "9886NFX" en vez de "9886 NFX" para abrir otra: 13 parejas
+    # abiertas en produccion el 02-09-2026.
+    abierta = await db.incidents.find_one(
+        {"vehicle_id": vehicle_id, "status": "open",
+         "$or": [{"auto_created": True}, {"title": {"$regex": "^Veh[ií]culo en taller"}}]},
+        {"_id": 0, "id": 1})
+    if abierta:
+        return
+    existing = await db.incidents.find_one({"vehicle_id": vehicle_id, "title": titulo})
     if existing:
         if existing.get("status") in ("resolved", "closed"):
             await db.incidents.update_one(
@@ -15047,20 +15109,30 @@ async def _auto_incident_on_workshop(vehicle_id: str, prev_status, new_status):
 
 
 @api_router.get("/incidents")
-async def get_incidents(vehicle_id: Optional[str] = None, user: dict = Depends(require_any_auth)):
+async def get_incidents(vehicle_id: Optional[str] = None, status: Optional[str] = None,
+                        center: Optional[str] = None, user: dict = Depends(require_any_auth)):
+    """Incidencias, acotadas por furgoneta, estado y centro.
+
+    `status` y `center` no existian: el panel mandaba `?status=open` y esto
+    devolvia TODAS (56, con 16 resueltas), y "Mi dia" las contaba como
+    abiertas del centro cuando eran de toda la empresa (02-09-2026). Las
+    incidencias no tienen centro: se acotan por furgoneta (gotcha 6).
+    """
     query = {}
     if user["role"] == "driver":
         query["driver_id"] = user["sub"]
         if vehicle_id:
             query["vehicle_id"] = vehicle_id
     else:
-        permitido = await _filtro_por_vehiculos(user)
+        permitido = await _filtro_por_vehiculos(user, center)
         if vehicle_id:
             if permitido and vehicle_id not in permitido["vehicle_id"]["$in"]:
                 raise HTTPException(403, "No tienes acceso a ese vehículo")
             query["vehicle_id"] = vehicle_id
         else:
             query.update(permitido)
+    if status in ("open", "resolved"):
+        query["status"] = status
     incidents = await db.incidents.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
     return incidents
 
@@ -22051,8 +22123,12 @@ async def transporter_id_confirmar(data: dict = Body(...), user: dict = Depends(
 
 
 @api_router.get("/alerts/itv")
-async def get_itv_alerts(_=Depends(require_admin)):
+async def get_itv_alerts(center: Optional[str] = None, user: dict = Depends(require_admin)):
     """Furgonetas con la ITV caducada, a punto, o SIN FECHA NINGUNA.
+
+    Acotado al centro pedido y a los que el usuario puede ver: hasta el
+    02-09-2026 ignoraba `center` y el dashboard lo filtraba en el navegador
+    bajandose el listado entero de furgonetas para eso.
 
     LAS QUE NO TIENEN FECHA SON EL HALLAZGO, no un detalle. Antes habia aqui un
     `if not itv: continue` y esas furgonetas se saltaban el bucle: no salian
@@ -22074,7 +22150,9 @@ async def get_itv_alerts(_=Depends(require_admin)):
     """
     from datetime import date as _date
     hoy = _date.today()
-    vehicles = await db.vehicles.find({"status": {"$nin": ["deleted", "baja"]}}, {"_id": 0}).to_list(2000)
+    vehicles = await db.vehicles.find(
+        {"status": {"$nin": ["deleted", "baja"]}, **_filtro_centro(user, center)},
+        {"_id": 0, "mileage_history": 0}).to_list(2000)
     result = []
     for v in vehicles:
         base = {"vehicle_id": v.get("id"), "license_plate": v.get("license_plate"),
@@ -28358,13 +28436,32 @@ async def _latest_week_with_data(center):
     return _sun_sat_week((datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d"))[0]
 
 
+async def _semana_a_seguir(center) -> str:
+    """La semana que abre la pantalla de scorecard.
+
+    `_latest_week_with_data` manda la ultima con ficheros subidos, y en OGA5
+    eso era la del 14 de junio (`daily_dsp` dejo de subirse entonces): la
+    pantalla abria diez semanas atras con la cabecera en W25 mientras la
+    calidad en vivo hablaba de la 36 (02-09-2026). Si lo ultimo subido tiene
+    mas de dos semanas, se abre la semana en curso, que es la que se sigue
+    con Cortex sin subir nada.
+    """
+    sun = await _latest_week_with_data(center)
+    actual = _sun_sat_week((datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d"))[0]
+    try:
+        vieja = (datetime.strptime(actual, "%Y-%m-%d") - datetime.strptime(sun, "%Y-%m-%d")).days > 14
+    except (TypeError, ValueError):
+        vieja = True
+    return actual if vieja else sun
+
+
 @api_router.get("/scorecard/full")
 async def scorecard_full(center: str, week: Optional[str] = None, user: dict = Depends(require_admin)):
     """Scorecard completa de la semana (dom): cada métrica con valor + tier +
     qué falta para subir. Valores manuales (db) y auto donde haya."""
     await _require_plan_feature(user, "scorecard")
     if not week:
-        week = await _latest_week_with_data(center)
+        week = await _semana_a_seguir(center)
     sun, sat = _sun_sat_week(week)
     wnum = _sun_to_week_num(sun)
     # Umbrales de ESTA nave y ESTA semana. Si el DSP no ha subido nunca una
@@ -29313,7 +29410,11 @@ async def _cx_dias_reparto(center: str, desde: str, hasta: Optional[str] = None)
         rep["congelado"] = bool(rep_sn and rep_sn["fallos"] > rep["fallos"])
         if rep["congelado"]:
             rep = rep_sn
+            rep["congelado"] = True
         rep["fecha"] = d
+        # El crudo por estado del que sale el reparto, para quien necesite un
+        # estado concreto (el RTS de `/cortex/calidad` es BACK_TO_ORIGIN).
+        rep["por_estado"] = dict(sn) if rep["congelado"] else dict(dias[d])
         dias_out.append(rep)
     return dias_out
 
@@ -29842,7 +29943,7 @@ async def scorecard_daily_trend(center: str, week: Optional[str] = None, _=Depen
     y el ACUMULADO hasta ese día. Para saber 'cómo vamos' un miércoles."""
     semana_pedida = bool(week)
     if not week:
-        week = await _latest_week_with_data(center)
+        week = await _semana_a_seguir(center)
     sun, sat = _sun_sat_week(week)
     docs = await db.daily_ratios.find(
         {"center": center, "date": {"$gte": sun, "$lte": sat}}, {"_id": 0}).sort("date", 1).to_list(10)
@@ -33178,17 +33279,45 @@ async def cortex_calidad(desde: str = "", hasta: str = "", center: str = "",
     # $group con valor null: la OMITE. Un r["_id"]["cond"] directo revienta con
     # KeyError. Pasa de verdad: 94 paquetes sin conductor, y 70 de ellos son
     # fallos, asi que tirarlos falsearia el DCR a la baja. Van a SIN_CONDUCTOR.
+    # LA FOTO CONGELADA MANDA TAMBIEN AQUI. Este recuento sale del estado de
+    # AHORA de cada paquete, y un devuelto el viernes que se re-reparte el
+    # lunes deja de ser un fallo del viernes (gotcha 39). Medido el 02-09-2026
+    # en la misma pantalla: arriba "DCR de la semana 99,79 % · 34 fallos" y
+    # abajo, con la foto, "98,4 % · 347 fallos". El de arriba era el que
+    # Amazon nunca veria. Los dias cerrados se sustituyen por su foto cuando
+    # la foto vio mas fallos, con la MISMA regla que la scorecard en vivo.
+    fotos = {f["fecha"]: f for f in await _cx_dias_reparto(center, desde, hasta)}
+    for d in cerrados:
+        f = fotos.get(d)
+        if f and f.get("congelado"):
+            dias[d].update({"ok": f["entregados"], "fallo": f["fallos"],
+                            "nodesp": f["no_despachados"], "vuelo": f["en_vuelo"],
+                            "total": f["total"], "congelado": True,
+                            "rts_foto": int((f.get("por_estado") or {}).get("BACK_TO_ORIGIN", 0))})
+
     porc, tot = {}, {"ok": 0, "fallo": 0, "rts": 0, "nodesp": 0}
+    rts_vivo: dict = {}
     for r in bruto:
-        if r["_id"].get("dia") not in cerrados:
+        dia = r["_id"].get("dia")
+        if dia not in cerrados:
             continue
         cid = r["_id"].get("cond") or "SIN_CONDUCTOR"
         a = porc.setdefault(cid, {"ok": 0, "fallo": 0, "rts": 0, "nodesp": 0})
         for k in ("ok", "fallo", "rts", "nodesp"):
             a[k] += r[k]
-            tot[k] += r[k]
+        rts_vivo[dia] = rts_vivo.get(dia, 0) + r["rts"]
+    # El total de la semana sale de los dias (ya con foto). El reparto por
+    # conductor sigue siendo el vivo, que es el unico con nombre: la foto guarda
+    # estados, no personas. Por eso los fallos por conductor son un MINIMO.
+    for d in cerrados:
+        v = dias[d]
+        tot["ok"] += v["ok"]
+        tot["fallo"] += v["fallo"]
+        tot["nodesp"] += v["nodesp"]
+        tot["rts"] += v["rts_foto"] if v.get("congelado") else rts_vivo.get(d, 0)
 
     total = _cx_tasas(tot["ok"], tot["fallo"], tot["rts"])
+    total["dias_congelados"] = sum(1 for d in cerrados if dias[d].get("congelado"))
     total["no_despachados"] = tot["nodesp"]
     total["dias_cerrados"] = len(cerrados)
     total["dias_totales"] = len(dias)
@@ -36215,6 +36344,30 @@ async def cortex_overview(day: str = "", center: str = "", _=Depends(require_adm
     }
 
 
+def _cx_ruta_cajon(state) -> str:
+    """En que cajon de la tarjeta de ruta cae un paquete por su estado.
+
+    Con las listas canonicas (`_CX_OK`, `_CX_EN_VUELO`…), no con nombres
+    escritos a mano: hasta el 02-09-2026 `loaded` solo contaba LOADED y
+    ARRIVED, dos estados que dejaron de existir con el gotcha 28, asi que con
+    1.209 paquetes PICKED_UP en la calle todas las rutas salian "terminadas",
+    el dashboard decia "0 rutas en curso" y la alarma de minutos sin entregar
+    no se calculaba nunca. Un filtro por un valor que no existe no da error:
+    da cero (gotcha 33). Probado en `test_cajones_ruta.py`.
+    """
+    if state in _CX_OK:
+        return "delivered"
+    if state in ("MISSING", "LOST"):
+        return "missing"
+    if state in _CX_EN_VUELO:
+        return "loaded"
+    if state in _CX_REINTENTABLE:
+        return "attempted"
+    if state in ("BACK_TO_ORIGIN", "RETURNED", "RECOVERED"):
+        return "returned"
+    return "other"
+
+
 @api_router.get("/cortex/routes")
 async def cortex_routes(day: str = "", center: str = "", _=Depends(require_admin)):
     """Resumen agregado por ruta: la vista principal cuando hay miles de paquetes."""
@@ -36234,18 +36387,7 @@ async def cortex_routes(day: str = "", center: str = "", _=Depends(require_admin
                                    "critical": 0, "updated_at": None, "ultima_entrega": None})
         r["total"] += 1
         st = p.get("state")
-        if st == "DELIVERED":
-            r["delivered"] += 1
-        elif st in ("MISSING", "LOST"):
-            r["missing"] += 1
-        elif st in ("ATTEMPTED", "UNCOLLECTED"):
-            r["attempted"] += 1
-        elif st in ("LOADED", "ARRIVED"):
-            r["loaded"] += 1
-        elif st in ("RETURNED", "RECOVERED"):
-            r["returned"] += 1
-        else:
-            r["other"] += 1
+        r[_cx_ruta_cajon(st)] += 1
         if p.get("priority") == "critical":
             r["critical"] += 1
         if p.get("driver_id") and not r["driver_id"]:

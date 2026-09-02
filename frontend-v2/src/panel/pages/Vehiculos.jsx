@@ -2567,8 +2567,11 @@ function PanelOdometro() {
             </span>
             {v.actual_es_malo && (
               <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-[10.5px] font-semibold text-red-300 ring-1 ring-inset ring-red-500/30">
-                la ficha miente
+                {v.imposible ? 'kilometraje imposible' : 'la ficha miente'}
               </span>
+            )}
+            {v.imposible && (
+              <span className="min-w-0 basis-full text-[12px] text-dark-500">{v.motivo}</span>
             )}
             <button onClick={() => sanear(v.vehicle_id)} disabled={saneando}
               className="ml-auto rounded-md border border-dark-700 px-2.5 py-1 text-[12px] text-dark-400 hover:text-dark-200 disabled:opacity-40">

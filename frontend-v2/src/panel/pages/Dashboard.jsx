@@ -6,7 +6,7 @@ import {
   Loader2, TrendingUp, Camera, ShieldAlert, CheckCircle2,
   ChevronRight, Clock, ArrowRight,
 } from 'lucide-react'
-import { getDashboardStats, getItvAlerts, getVehicles, getDrivers, getDamageCosts, cortexOverview, cortexRoutes, getReviewQueue, cortexDireccionesHoy, cortexDays } from '../api'
+import { getDashboardStats, getItvAlerts, getDamageCosts, cortexOverview, cortexRoutes, getReviewQueue, cortexDireccionesHoy, cortexDays, getDanosPendientes } from '../api'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { lista } from '../../lib/lista'
 import { PageSkeleton } from '../components/Skeleton'
@@ -508,6 +508,10 @@ export default function Dashboard() {
 
   // "Ahora mismo": lo urgente en vivo (Cortex + cola de revisión), refresco 60 s.
   const [nowLive, setNowLive] = useState(null)
+  // Daños abiertos en el libro (los que aún no tienen orden de taller). Es el
+  // número que pide una decisión; el de "críticos/graves en todas las
+  // inspecciones" era un histórico de meses que no cambiaba nada hoy.
+  const [danos, setDanos] = useState(null)
   const navTop = useNavigate()
   useEffect(() => {
     let stop = false
@@ -594,41 +598,22 @@ export default function Dashboard() {
          quitado el panel y con él la petición, que además se hacía en cada
          carga para nada. */
       getItvAlerts(center).catch(() => ({ data: [] })),
-      isCentered ? getVehicles(center).catch(() => ({ data: [] })) : Promise.resolve({ data: [] }),
-      isCentered ? getDrivers(center).catch(() => ({ data: [] }))  : Promise.resolve({ data: [] }),
-    ]).then(([stats, alerts, vehs, drvs]) => {
+      getDanosPendientes(isCentered ? { center } : {}).catch(() => ({ data: null })),
+    ]).then(([stats, alerts, dp]) => {
       const ra   = alerts.data
-      let itvList    = Array.isArray(ra)  ? ra  : (ra?.items  || ra?.alerts       || [])
+      setDanos(dp?.data || null)
+      const itvList    = Array.isArray(ra)  ? ra  : (ra?.items  || ra?.alerts       || [])
 
-      if (isCentered) {
-        const centerVehicles = lista(vehs.data)
-        const centerDrivers  = lista(drvs.data)
-
-        // Construir set de IDs y matrículas del centro (fuente de verdad fiable)
-        const idSet    = new Set(centerVehicles.map(v => v.id))
-        const plateSet = new Set(
-          centerVehicles.map(v => (v.license_plate || '').replace(/\s/g, '').toLowerCase()).filter(Boolean)
-        )
-        const normPlate = (p) => (p || '').replace(/\s/g, '').toLowerCase()
-
-        // KPIs calculados desde la lista real del centro
-        const inWorkshop = centerVehicles.filter(v => v.status === 'workshop' || v.in_workshop).length
-        setData({
-          ...stats.data,
-          total_vehicles:       centerVehicles.length,
-          vehicles_in_workshop: inWorkshop,
-          total_drivers:        centerDrivers.length,
-        })
-
-        // Filtrar alertas ITV por matrícula del centro
-        itvList = itvList.filter(a =>
-          idSet.has(a.vehicle_id) ||
-          plateSet.has(normPlate(a.license_plate || a.vehicle_plate || a.vehicle?.license_plate))
-        )
-      } else {
-        setData(stats.data)
-      }
-
+      /* Los contadores vienen ya acotados al centro desde /stats/dashboard
+         (02-09-2026). Antes el backend ignoraba el centro y esto los
+         recalculaba en el navegador a partir de /vehicles… filtrando por
+         `status === 'workshop'`, un valor que no existe (el real es 'taller'):
+         con OGA5 seleccionado salía "En taller 0 · 100 % de disponibilidad"
+         teniendo 9 furgonetas en el taller. Un filtro por un valor que no
+         existe no da error, da cero (gotcha 33). Y de paso se ahorran dos
+         peticiones por carga, una de ellas el listado entero de furgonetas. */
+      setData(stats.data)
+      // /alerts/itv tambien viene acotado al centro desde el servidor.
       setItv(itvList)
     }).catch(() => setErr(t('dash.error')))
   }, [center])
@@ -643,6 +628,13 @@ export default function Dashboard() {
   const critCount = (breakdown.grave || 0) + (breakdown.critico || 0)
   const todayKey = hoyLocal()
   const todayInsp = data.weekly_activity?.[todayKey]?.inspecciones || 0
+  /* La ITV en tres cajones, porque no son lo mismo: vencida (no puede salir),
+     próxima (pedir cita) y SIN FECHA (no se sabe). Antes las 79 iban juntas
+     como "vencidas o inminentes" y 57 eran simplemente desconocidas: el
+     aviso exageraba, y un aviso que exagera deja de leerse (gotcha 41). */
+  const itvVencidas = itv.filter((a) => a.status === 'caducada')
+  const itvProximas = itv.filter((a) => a.status === 'proxima')
+  const itvSinFecha = itv.filter((a) => a.status === 'sin_fecha')
 
   const fleetSub = `${fleet} ${t('chart.total')} · ${inShop} ${t('dash.workshop').toLowerCase()}`
   const workshopSub = fleet > 0 ? `${Math.round((inShop/fleet)*100)}${t('dash.workshop.sub')}` : undefined
@@ -666,8 +658,12 @@ export default function Dashboard() {
        4. Inspecciones por validar → daños sin peritar es dinero sin reclamar.
        5. Incidencias / taller → importan, pero aguantan a mañana. */
   const decisiones = [
-    { n: itv.length, label: t('ops.itv.due'), why: t('ops.why.itv'),
+    { n: itvVencidas.length, label: t('ops.itv.expired'), why: t('ops.why.itv'),
       to: '/panel/vencimientos', tono: 'red' },
+    { n: itvProximas.length, label: t('ops.itv.soon'), why: t('ops.why.itv.soon'),
+      to: '/panel/vencimientos', tono: 'amber' },
+    { n: itvSinFecha.length, label: t('ops.itv.nodate'), why: t('ops.why.itv.nodate'),
+      to: '/panel/vencimientos', tono: 'dark' },
     { n: nowLive?.missing || 0, label: t('ops.missing'), why: t('ops.why.missing'),
       to: '/panel/paquetes', tono: 'red' },
     { n: nowLive?.sinDireccion || 0, label: t('ops.nodir'), why: t('ops.why.nodir'),
@@ -771,11 +767,14 @@ export default function Dashboard() {
             serie={semana.map((d) => d.n)} onIr={() => navTop('/panel/inspecciones')} />
           <Cifra icono={AlertTriangle} color="#fbbf24" n={data.open_incidents || 0}
             label={t('ops.incidents')} sub={t('ops.open')} onIr={() => navTop('/panel/incidencias')} />
-          <Cifra icono={ShieldAlert} color="#f87171" n={(breakdown?.grave || 0) + (breakdown?.critico || 0)}
-            label={t('fleet.critical')} sub={t('ops.damage.split')}
-            onIr={() => navTop('/panel/inspecciones')} />
-          <Cifra icono={BellRing} color="#fb923c" n={itv.length} label={t('ops.itv.due')}
-            sub={t('nav.expiries')} alerta={itv.length > 0} onIr={() => navTop('/panel/vencimientos')} />
+          <Cifra icono={ShieldAlert} color="#f87171" n={danos?.total ?? 0}
+            label={t('ops.damage.open')}
+            sub={t('ops.damage.open.sub').replace('{g}', danos?.graves ?? 0).replace('{v}', danos?.furgonetas_graves ?? 0)}
+            alerta={(danos?.graves || 0) > 0}
+            onIr={() => navTop('/panel/ordenes')} />
+          <Cifra icono={BellRing} color="#fb923c" n={itvVencidas.length + itvProximas.length} label={t('ops.itv.due')}
+            sub={itvSinFecha.length ? t('ops.itv.nodate.sub').replace('{n}', itvSinFecha.length) : t('nav.expiries')}
+            alerta={itvVencidas.length > 0} onIr={() => navTop('/panel/vencimientos')} />
         </div>
       )}
 

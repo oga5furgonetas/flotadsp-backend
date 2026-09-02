@@ -7,7 +7,7 @@ import {
   AlertTriangle, Search, Filter, Star, Clock, ChevronDown, X,
   ExternalLink, PhoneCall, Zap, Car, RefreshCw, Info,
 } from 'lucide-react'
-import { getWorkshopsNearby, getWorkshops, getVehicles } from '../api'
+import { getWorkshopsNearby, getWorkshops, getVehicles, getCentrosGeo } from '../api'
 
 const CATEGORIES = [
   { id: 'chapa',          label: 'Chapa'       },
@@ -381,6 +381,24 @@ export default function Talleres() {
       fetchNearby(coords.lat, coords.lng, providerFilter || undefined, categoryFilter || undefined)
     }
   }, [providerFilter, categoryFilter])
+
+  // ARRANCA DESDE EL CENTRO. Antes la pantalla pedía siempre una dirección o
+  // el GPS del PC antes de enseñar un solo taller: la persona que llama a un
+  // taller está sentada en la nave, y la nave ya se sabe dónde está. Se dice
+  // de dónde parte y se puede cambiar con el botón de siempre.
+  useEffect(() => {
+    if (!center || center === 'Todos' || geoState !== 'idle' || coords) return
+    let vivo = true
+    getCentrosGeo().then((r) => {
+      const c = r.data?.centros?.[center]
+      if (!vivo || !c) return
+      setCoords({ lat: c.lat, lng: c.lng })
+      setGeoState('ok')
+      setLocationLabel(`${t('ws.from.center')} ${center}`)
+      fetchNearby(c.lat, c.lng, providerFilter || undefined, categoryFilter || undefined)
+    }).catch(() => {})
+    return () => { vivo = false }
+  }, [center]) // eslint-disable-line
 
   const workshops = (result?.workshops || []).filter(w => {
     if (!q) return true
