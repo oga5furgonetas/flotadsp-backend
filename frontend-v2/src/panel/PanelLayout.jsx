@@ -6,7 +6,7 @@ import {
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX,
-  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, UserCircle2, Languages, ShieldAlert, LifeBuoy,
+  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
 import { getMe, contarPeticionesPendientes } from './api'
@@ -14,6 +14,7 @@ import TrialBanner from './TrialBanner'
 import CommandPalette from './CommandPalette'
 import { BotonAyuda, PanelAyuda, PrimerosPasos } from './Ayuda'
 import LiveNotifier from './LiveNotifier'
+import MenuMovil from './components/MenuMovil'
 import { useT, LANGS } from '../i18n'
 import { usePlan } from '../lib/usePlan'
 
@@ -204,6 +205,7 @@ export default function PanelLayout() {
   const [center, setCenter] = useState(() => localStorage.getItem('panel_center') || 'Todos')
   const [cmdOpen, setCmdOpen] = useState(false)
   const [ayudaOpen, setAyudaOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   /* La tecla `?` abre la ficha de la pantalla actual. Se ignora si el foco
      esta en un campo de texto: en un buscador, `?` es un caracter, no un
      atajo, y robarselo hace que la app parezca rota. */
@@ -649,23 +651,10 @@ export default function PanelLayout() {
             langs={LANGS} onLogout={doLogout} t={t} />
         </header>
 
-        {/* navegación móvil rápida */}
-        <div className="flex gap-1 overflow-x-auto border-b border-dark-800 px-3 py-2 md:hidden">
-          {flatItems.map((it) => (
-            <NavLink
-              key={it.to}
-              to={it.to}
-              end={it.end}
-              className={({ isActive }) =>
-                `whitespace-nowrap rounded-full px-3 py-1 text-xs ${
-                  isActive ? 'bg-brand-500/20 text-brand-300' : 'bg-dark-800 text-dark-300'
-                }`
-              }
-            >
-              {it.label}
-            </NavLink>
-          ))}
-        </div>
+        {/* En el móvil la navegación va en la barra de abajo y en el botón
+            «Menú». Aquí había una fila horizontal con las 40 pantallas en
+            pastillas: para llegar a una había que barrer a ciegas, y era lo
+            que más se usaba en el móvil (02-09-2026). */}
 
         <main key={loc.pathname} className="animate-fade-in flex-1 overflow-y-auto p-4 pb-24 md:p-5 md:pb-5">
           <Outlet context={{ center, centers, admin }} />
@@ -675,23 +664,35 @@ export default function PanelLayout() {
       {/* Barra de navegación inferior — solo móvil (sensación de app nativa) */}
       <nav className="fixed inset-x-0 bottom-0 z-40 flex border-t border-dark-800 bg-dark-900/95 backdrop-blur-md md:hidden"
         style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+        {/* Cuatro destinos + el menú. El sitio que ocupaba «Chat interno» se
+            lo lleva el menú: el chat tenía 8 mensajes desde el 16 de julio
+            (medido), y desde aquí no se llegaba a ninguna otra pantalla sin
+            barrer la tira de pastillas. */}
         {[
           { to: '/panel', label: t('nav.dashboard'), icon: LayoutDashboard, end: true },
           { to: '/panel/revision', label: t('nav.revision'), icon: CheckCircle2 },
           { to: '/panel/asignacion', label: t('nav.assign'), icon: ClipboardCheck },
-          { to: '/panel/chat', label: t('nav.chat'), icon: BellRing },
           { to: '/panel/vehiculos', label: t('nav.vehicles'), icon: Truck },
         ].map((it) => (
           <NavLink key={it.to} to={it.to} end={it.end}
             className={({ isActive }) =>
-              `flex flex-1 flex-col items-center gap-0.5 py-2 text-[10px] font-semibold transition-colors ${
+              `flex min-h-[52px] flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-semibold transition-colors ${
                 isActive ? 'text-brand-400' : 'text-dark-500'
               }`}>
             <it.icon size={19} />
             <span className="max-w-full truncate px-1">{it.label}</span>
           </NavLink>
         ))}
+        <button onClick={() => setMenuOpen(true)}
+          className={`flex min-h-[52px] flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-semibold transition-colors ${
+            menuOpen ? 'text-brand-400' : 'text-dark-500'}`}>
+          <Menu size={19} />
+          <span className="max-w-full truncate px-1">{t('nav.menu')}</span>
+        </button>
       </nav>
+
+      <MenuMovil abierto={menuOpen} cerrar={() => setMenuOpen(false)}
+        groups={groups} showAdmin={showAdmin} cm={cm} t={t} />
 
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} pages={palettePages} />
       <PanelAyuda

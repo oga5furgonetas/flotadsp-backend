@@ -445,6 +445,8 @@ const DICT = {
   'nav.imports':    { es: 'Importaciones',    en: 'Imports',       fr: 'Importations',    de: 'Importe',         it: 'Importazioni',   pt: 'Importações' },
   'nav.settings':   { es: 'Configuración',    en: 'Settings',      fr: 'Paramètres',      de: 'Einstellungen',   it: 'Impostazioni',   pt: 'Configurações' },
   'nav.business':   { es: 'Negocio (super-admin)', en: 'Business (super-admin)', fr: 'Activité (super-admin)', de: 'Geschäft (Super-Admin)', it: 'Business (super-admin)', pt: 'Negócio (super-admin)' },
+  'nav.menu':       { es: 'Menú',             en: 'Menu',          fr: 'Menu',            de: 'Menü',            it: 'Menu',           pt: 'Menu' },
+  'common.close':   { es: 'Cerrar',           en: 'Close',         fr: 'Fermer',          de: 'Schließen',       it: 'Chiudi',         pt: 'Fechar' },
   'nav.users':      { es: 'Usuarios',         en: 'Users',         fr: 'Utilisateurs',    de: 'Benutzer',        it: 'Utenti',         pt: 'Utilizadores' },
   'nav.inbox':      { es: 'Bandeja',          en: 'Inbox',         fr: 'Boîte de réception', de: 'Posteingang',  it: 'Posta in arrivo', pt: 'Caixa de entrada' },
   'nav.portal':     { es: 'Portal Conductor', en: 'Driver Portal', fr: 'Portail Chauffeur', de: 'Fahrerportal',  it: 'Portale Autista', pt: 'Portal Motorista' },

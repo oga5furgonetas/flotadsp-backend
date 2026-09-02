@@ -1169,15 +1169,19 @@ export default function Scorecard() {
               {/* Los tres pilares en una tira, y debajo TODAS las metricas en
                   una tabla. Antes cada pilar era una tarjeta con sus metricas
                   dentro: cabian cuatro de dieciseis sin bajar la pagina. */}
-              <div className="card grid grid-cols-3 divide-x divide-dark-800 overflow-hidden">
+              {/* Tres columnas SOLO desde `sm`. Con «Seguridad y Cumplimiento»
+                  dentro, tres columnas fijas median 621 px y en un movil de
+                  375 la pagina entera se arrastraba de lado (medido el
+                  02-09-2026). Apiladas se leen mejor y no mueven nada. */}
+              <div className="card grid grid-cols-1 divide-y divide-dark-800 overflow-hidden sm:grid-cols-3 sm:divide-x sm:divide-y-0">
                 {['safety', 'quality', 'capacity'].map(g => {
                   const gc = GROUP_CFG[g]
                   return (
-                    <div key={g} className="px-3 py-2.5">
+                    <div key={g} className="flex items-center justify-between gap-2 px-3 py-2.5 sm:block">
                       <p className={`text-[10px] font-medium uppercase tracking-wider ${gc.color}`}>
                         {t(gc.labelKey)} <span className="text-dark-600">{gc.weight}</span>
                       </p>
-                      <div className="mt-1"><TierBadge tier={full[`${g}_tier`]} /></div>
+                      <div className="sm:mt-1"><TierBadge tier={full[`${g}_tier`]} /></div>
                     </div>
                   )
                 })}

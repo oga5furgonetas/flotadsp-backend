@@ -2800,11 +2800,13 @@ export default function Vehiculos() {
           <h1 className="font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
             {t('veh.title')}{vehicles && <span className="text-dark-600"> · {list.length}</span>}
           </h1>
-          <div className="flex items-center gap-2.5">
-            <div className="relative">
+          {/* En el movil el buscador ocupa toda la linea: con `w-64` fijo, la
+              cabecera medía 371 px en 343 y la pagina se arrastraba de lado. */}
+          <div className="flex w-full min-w-0 items-center gap-2.5 sm:w-auto">
+            <div className="relative min-w-0 flex-1 sm:flex-none">
               <Search size={15} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-dark-500" />
               <input
-                className="w-64 rounded-xl border border-white/[0.07] bg-white/[0.02] py-2.5 pl-10 pr-3 text-[13.5px] text-dark-50 placeholder:text-dark-600 transition-all duration-300 hover:border-white/[0.12] focus:border-brand-500/50 focus:bg-white/[0.045] focus:outline-none focus:ring-[3px] focus:ring-brand-500/15"
+                className="w-full rounded-xl border border-white/[0.07] bg-white/[0.02] py-2.5 pl-10 pr-3 text-[13.5px] text-dark-50 placeholder:text-dark-600 sm:w-64 transition-all duration-300 hover:border-white/[0.12] focus:border-brand-500/50 focus:bg-white/[0.045] focus:outline-none focus:ring-[3px] focus:ring-brand-500/15"
                 placeholder={`${t('ui.search')} ${t('veh.plate')}, VIN…`} value={q} onChange={e => setQ(e.target.value)}
               />
             </div>

@@ -549,10 +549,13 @@ export default function OrdenesTrabajo() {
           <h1 className="text-[26px] font-bold leading-tight tracking-tight">Órdenes de trabajo</h1>
           <p className="text-[13.5px] text-slate-500">Lo que está en el taller, sin llamar a nadie.</p>
         </div>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+        {/* En el movil esta fila se iba 86 px por fuera de la pantalla (medido a
+            375 px) y la pagina se arrastraba de lado: el `select` de talleres
+            crece con el nombre mas largo y no encoge solo. */}
+        <div className="ml-auto flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
           {talleres.length > 1 && (
             <select value={filtroTaller} onChange={(e) => setFiltroTaller(e.target.value)}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-[13px] text-slate-700">
+              className="w-full min-w-0 max-w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-[13px] text-slate-700 sm:w-auto">
               <option value="">Todos los talleres</option>
               {talleres.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
