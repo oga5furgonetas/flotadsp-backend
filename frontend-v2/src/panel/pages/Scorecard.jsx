@@ -1106,7 +1106,9 @@ export default function Scorecard() {
                 )}
                 {full.overall_method && <p className="mt-1 text-[10px] text-dark-600">{full.overall_method}</p>}
               </div>
-              <div className="flex gap-3">
+              {/* Tres tarjetas en fila medían 412 px dentro de 302 en un móvil:
+                  la tarjeta se arrastraba de lado. Con `flex-wrap` bajan solas. */}
+              <div className="flex flex-wrap gap-3">
                 {['safety', 'quality', 'capacity'].map(g => (
                   <CategoryCard key={g} groupKey={g} tier={full[`${g}_tier`]} metrics={byGroup(g)} />
                 ))}
@@ -1163,9 +1165,14 @@ export default function Scorecard() {
           </div>
 
           {/* Metrics + Prediction side by side */}
+          {/* `min-w-0` NO sobra. Un hijo de rejilla trae `min-width: auto`, asi
+              que el `overflow-x-auto` de la tabla del dia a dia (620 px de
+              ancho minimo) no podia encoger: estiraba su columna, y con ella la
+              pagina entera, hasta 621 px en un movil de 375. La tabla ya tenia
+              su scroll; lo que faltaba era dejarla encoger. */}
           <div className="grid gap-5 lg:grid-cols-3">
             {/* Metrics (2/3) */}
-            <div className="space-y-4 lg:col-span-2">
+            <div className="min-w-0 space-y-4 lg:col-span-2">
               {/* Los tres pilares en una tira, y debajo TODAS las metricas en
                   una tabla. Antes cada pilar era una tarjeta con sus metricas
                   dentro: cabian cuatro de dieciseis sin bajar la pagina. */}
@@ -1205,7 +1212,7 @@ export default function Scorecard() {
             </div>
 
             {/* Prediction panel (1/3) */}
-            <div className="space-y-4">
+            <div className="min-w-0 space-y-4">
               {predict && (
                 <div className="card p-4">
                   <div className="mb-3 flex items-center gap-2">

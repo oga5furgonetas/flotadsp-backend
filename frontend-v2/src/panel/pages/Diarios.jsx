@@ -249,7 +249,9 @@ export default function Diarios() {
         <h1 className="flex items-center gap-2 text-xl font-bold">
           <AlertTriangle size={20} /> DNR · {center}
         </h1>
-        <div className="flex items-center gap-1.5">
+        {/* Las dos fechas y su nota medían 400 px en un móvil de 375 y movían
+            la página de lado; abajo ocupan su propia línea. */}
+        <div className="flex w-full flex-wrap items-center gap-1.5 sm:w-auto">
           <input type="date" value={rango.desde}
             onChange={(e) => e.target.value && setRango((r) => ({ ...r, desde: e.target.value }))}
             className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1 text-[12.5px] font-semibold text-dark-100" />
@@ -259,7 +261,7 @@ export default function Diarios() {
             className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1 text-[12.5px] font-semibold text-dark-100" />
           <span className="ml-1 text-[11px] text-dark-600">por fecha de concesión</span>
         </div>
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex flex-wrap gap-2">
           <button onClick={() => setVerIds((v) => !v)}
             className="flex items-center gap-1.5 rounded-lg border border-dark-700 px-3 py-1.5 text-[12.5px] font-semibold text-dark-300 hover:text-dark-100">
             <IdCard size={15} /> Transporter IDs
