@@ -7533,7 +7533,7 @@ async def _est_hallazgos() -> dict:
             {"_id": 0, "id": 1, "created_at": 1, "title": 1},
             sort=[("created_at", 1)])
         n_ordenes = await db.ordenes_trabajo.count_documents(
-            {"vehicle_id": v["id"], "estado": {"$nin": ["entregado", "anulada"]}})
+            {"vehicle_id": v["id"], "estado": {"$nin": list(OT_ESTADOS_CERRADOS)}})
 
         if not v.get("taller_desde"):
             ev = {"fecha_incidencia": (inc or {}).get("created_at"),
@@ -7624,7 +7624,7 @@ async def _est_hallazgos() -> dict:
     # Al reves: orden abierta con la furgoneta fuera de taller. Es peor de lo
     # que parece — podria salir asignada a alguien estando en el taller.
     async for o in db.ordenes_trabajo.find(
-            {"estado": {"$nin": ["entregado", "anulada"]}},
+            {"estado": {"$nin": list(OT_ESTADOS_CERRADOS)}},
             {"_id": 0, "id": 1, "numero": 1, "vehicle_id": 1, "matricula": 1}):
         v = await db.vehicles.find_one({"id": o.get("vehicle_id")},
                                        {"_id": 0, "status": 1, "license_plate": 1})
@@ -15254,6 +15254,16 @@ OT_ESTADOS = {
     "anulada": "Anulada",
 }
 
+# Una orden CERRADA es la que ya no cuenta: el vehiculo volvio o el trabajo se
+# anulo. Existe como constante porque escribirla a mano salio mal dos veces:
+# habia un `$nin ["entregada", "anulada"]` y un `$nin ["cerrada", "anulada"]`, y
+# NINGUNO de esos dos estados existe —el real es "entregado", masculino—. Un
+# filtro por un valor que no existe no da error: no excluye nada (gotcha 33).
+# El efecto era que una furgoneta ya devuelta seguia contando como parada en
+# "no consta cuando vuelven" y en "furgonetas paradas". Con dos ordenes en la
+# base no se veia; con cincuenta, los dos numeros de la portada serian falsos.
+OT_ESTADOS_CERRADOS = ("entregado", "anulada")
+
 # Lo que puede poner EL TALLER. 'entregado' y 'anulada' las pone la oficina a
 # proposito: el taller no decide que un vehiculo ya esta devuelto ni que un
 # trabajo se cancela, porque eso mueve el estado de la furgoneta en la flota.
@@ -15859,13 +15869,26 @@ async def fleet_disponibilidad(center: str = "", _=Depends(require_admin)):
     hoy = datetime.now(timezone.utc).date()
     limite = (hoy + timedelta(days=DISPO_ITV_AVISO)).strftime("%Y-%m-%d")
     hoy_s = hoy.strftime("%Y-%m-%d")
+    # DOS COSAS DISTINTAS, Y NO PUEDEN PESAR IGUAL EN PANTALLA.
+    #
+    #   clase "riesgo"      algo va mal AHORA: circulan con la ITV caducada,
+    #                       con daños graves, o les caduca en menos de un mes.
+    #   clase "falta_dato"  no sabemos si va mal, porque el dato no está: sin
+    #                       fecha de ITV, sin fecha de vuelta del taller.
+    #
+    # Se arreglan de formas distintas —una se lleva al taller, la otra se
+    # rellena en una ficha— y mezclarlas con el mismo aviso hace que 28 huecos
+    # administrativos griten igual que 5 furgonetas circulando ilegalmente.
+    # Con todo al mismo peso, el que mira acaba sin distinguir ninguna de las
+    # dos: es exactamente lo que pasaba en la pantalla el 01-09-2026.
     riesgos = []
 
     itv_vencida = [v for v in operativas
                    if v.get("itv_date") and str(v["itv_date"])[:10] < hoy_s]
     if itv_vencida:
         riesgos.append({
-            "tipo": "itv_vencida", "gravedad": "alta", "n": len(itv_vencida),
+            "tipo": "itv_vencida", "gravedad": "alta", "clase": "riesgo",
+            "n": len(itv_vencida),
             "matriculas": [v.get("license_plate") for v in itv_vencida[:12]],
             "que_pasa": "Circulan con la ITV caducada",
             "cuesta": "200 € de multa, inmovilización en carretera, y la aseguradora "
@@ -15876,7 +15899,8 @@ async def fleet_disponibilidad(center: str = "", _=Depends(require_admin)):
                   if v.get("itv_date") and hoy_s <= str(v["itv_date"])[:10] <= limite]
     if itv_pronto:
         riesgos.append({
-            "tipo": "itv_pronto", "gravedad": "media", "n": len(itv_pronto),
+            "tipo": "itv_pronto", "gravedad": "media", "clase": "riesgo",
+            "n": len(itv_pronto),
             "matriculas": [v.get("license_plate") for v in itv_pronto[:12]],
             "que_pasa": "Les caduca la ITV en menos de %d días" % DISPO_ITV_AVISO,
             "cuesta": "Cada una es un día fuera si se pasa la cita",
@@ -15885,7 +15909,8 @@ async def fleet_disponibilidad(center: str = "", _=Depends(require_admin)):
     sin_itv = [v for v in operativas if not v.get("itv_date")]
     if sin_itv:
         riesgos.append({
-            "tipo": "itv_sin_dato", "gravedad": "media", "n": len(sin_itv),
+            "tipo": "itv_sin_dato", "gravedad": "media", "clase": "falta_dato",
+            "n": len(sin_itv),
             "matriculas": [v.get("license_plate") for v in sin_itv[:12]],
             "que_pasa": "No consta cuándo les toca la ITV",
             # Esto no es un aviso de mantenimiento: es que NO SE PUEDE SABER si
@@ -15908,7 +15933,8 @@ async def fleet_disponibilidad(center: str = "", _=Depends(require_admin)):
     if graves:
         pl = {v["id"]: v.get("license_plate") for v in operativas}
         riesgos.append({
-            "tipo": "danos_graves_circulando", "gravedad": "alta", "n": len(graves),
+            "tipo": "danos_graves_circulando", "gravedad": "alta", "clase": "riesgo",
+            "n": len(graves),
             "matriculas": [pl.get(i) for i in list(graves)[:12]],
             "que_pasa": "Circulan con %d daños graves o críticos sin reparar"
                         % sum(graves.values()),
@@ -15920,7 +15946,7 @@ async def fleet_disponibilidad(center: str = "", _=Depends(require_admin)):
     en_taller = [v for v in vs if v.get("status") == "taller"]
     ordenes = {}
     async for o in db.ordenes_trabajo.find(
-            {"estado": {"$nin": ["entregada", "anulada"]}},
+            {"estado": {"$nin": list(OT_ESTADOS_CERRADOS)}},
             {"_id": 0, "vehicle_id": 1, "numero": 1, "fecha_entrega_estimada": 1,
              "taller_nombre": 1}):
         ordenes.setdefault(o.get("vehicle_id"), o)
@@ -15943,7 +15969,8 @@ async def fleet_disponibilidad(center: str = "", _=Depends(require_admin)):
     vuelven.sort(key=lambda x: x["fecha"])
     if sin_fecha:
         riesgos.append({
-            "tipo": "taller_sin_fecha_vuelta", "gravedad": "media", "n": len(sin_fecha),
+            "tipo": "taller_sin_fecha_vuelta", "gravedad": "media", "clase": "falta_dato",
+            "n": len(sin_fecha),
             "matriculas": [x["matricula"] for x in sin_fecha[:12]],
             "que_pasa": "Están en el taller y no consta cuándo vuelven",
             # Este es el que impide planificar de verdad: sin fecha de vuelta,
@@ -16167,7 +16194,7 @@ async def ot_furgonetas_paradas(center: str = "", _=Depends(require_admin)):
     vs = await db.vehicles.find(q, {"_id": 0}).to_list(500)
     ordenes = {}
     async for o in db.ordenes_trabajo.find(
-            {"estado": {"$nin": ["cerrada", "anulada"]}},
+            {"estado": {"$nin": list(OT_ESTADOS_CERRADOS)}},
             {"_id": 0, "vehicle_id": 1, "numero": 1, "taller_nombre": 1,
              "fecha_entrega_estimada": 1, "estado": 1}):
         ordenes.setdefault(o.get("vehicle_id"), o)

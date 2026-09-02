@@ -168,6 +168,50 @@ function Kpi({ etiqueta, valor, pie, icono: Icono, tono = 'slate' }) {
   )
 }
 
+/* UNA LÍNEA DE AVISO, CON LAS MATRÍCULAS PLEGADAS
+   ═══════════════════════════════════════════════════════════════════════════
+   El número y qué pasa se leen de un vistazo; las matrículas se abren cuando
+   se va a actuar. Antes iban siempre desplegadas y sumaban cinco líneas de
+   monoespaciado que empujaban el resto de la pantalla hacia abajo.
+
+   `apagado` es para los huecos de dato: mismo formato, sin color de alarma.
+   Que a alguien le falten 28 fechas de ITV por rellenar no es lo mismo que
+   tener 5 furgonetas circulando caducadas, y la pantalla tiene que notarlo. */
+function LineaRiesgo({ r, apagado = false }) {
+  const [abierto, setAbierto] = useState(false)
+  const hay = (r.matriculas || []).filter(Boolean)
+  const ocultas = Math.max(0, (r.n || 0) - hay.length)
+
+  return (
+    <div className="border-b border-slate-100 py-1.5 last:border-b-0">
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span className={`cifra rounded px-1.5 py-0.5 text-[10.5px] font-bold ${
+          apagado ? 'bg-slate-200 text-slate-600'
+            : r.gravedad === 'alta' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}`}>
+          {r.n}
+        </span>
+        <span className={`text-[13.5px] ${apagado ? 'text-slate-600' : 'font-semibold text-slate-800'}`}>
+          {r.que_pasa}
+        </span>
+        {!!hay.length && (
+          <button onClick={() => setAbierto((v) => !v)}
+            className="ml-auto text-[11.5px] text-slate-400 underline-offset-2 hover:text-slate-600 hover:underline">
+            {abierto ? 'ocultar' : 'ver cuáles'}
+          </button>
+        )}
+      </div>
+      {!apagado && <p className="pl-1 text-[12.5px] text-slate-500">{r.cuesta}</p>}
+      {abierto && !!hay.length && (
+        <p className="cifra mt-1 pl-1 text-[11.5px] leading-relaxed text-slate-500">
+          {hay.join(' · ')}
+          {ocultas > 0 && <span className="text-slate-400"> … y {ocultas} más</span>}
+        </p>
+      )}
+    </div>
+  )
+}
+
+
 export default function OrdenesTrabajo() {
   const { center } = useOutletContext()
   const [datos, setDatos] = useState(null)
@@ -631,23 +675,36 @@ export default function OrdenesTrabajo() {
           {/* El margen a secas no dice nada: hace falta saber CONTRA QUÉ. */}
           <p className="px-4 pt-2.5 text-[12.5px] text-slate-500">{dispo.margen?.explica}</p>
 
+          {/* ── LO QUE VA MAL, Y APARTE LO QUE NO SE SABE ───────────────────
+              Antes iban los cinco seguidos y con el mismo aviso de color, y el
+              resultado era que 28 fichas sin rellenar gritaban igual que 5
+              furgonetas circulando con la ITV caducada. Con todo al mismo peso
+              no se distingue ninguna de las dos.
+
+              Arriba, lo que va mal AHORA. Debajo y en gris, los huecos de
+              dato: no son un riesgo, son trabajo administrativo, y se arreglan
+              en una ficha, no en un taller.
+
+              Y las matrículas van PLEGADAS. Son la parte que más ocupa —una
+              línea de monoespaciado por aviso, cinco avisos— y la que menos se
+              lee de un vistazo: por la mañana se quiere el número, y las
+              matrículas solo cuando ya se va a actuar sobre ellas. */}
           {!!dispo.riesgos?.length && (
             <div className="px-4 pb-3 pt-2">
-              {dispo.riesgos.map((r) => (
-                <div key={r.tipo} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-slate-100 py-2 last:border-b-0">
-                  <span className={`rounded px-1.5 py-0.5 text-[10.5px] font-bold uppercase ${
-                    r.gravedad === 'alta' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'}`}>
-                    {r.n}
-                  </span>
-                  <span className="text-[13.5px] font-semibold text-slate-800">{r.que_pasa}</span>
-                  <span className="w-full pl-1 text-[12.5px] text-slate-500">{r.cuesta}</span>
-                  {!!r.matriculas?.length && (
-                    <span className="w-full pl-1 font-mono text-[11.5px] text-slate-400">
-                      {r.matriculas.filter(Boolean).join(' · ')}{r.n > r.matriculas.length ? ` … +${r.n - r.matriculas.length}` : ''}
-                    </span>
-                  )}
-                </div>
+              {dispo.riesgos.filter((r) => r.clase !== 'falta_dato').map((r) => (
+                <LineaRiesgo key={r.tipo} r={r} />
               ))}
+
+              {!!dispo.riesgos.filter((r) => r.clase === 'falta_dato').length && (
+                <div className="mt-2.5 rounded-lg bg-slate-50 px-3 py-2">
+                  <p className="mb-0.5 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                    Datos que faltan · se rellenan en la ficha
+                  </p>
+                  {dispo.riesgos.filter((r) => r.clase === 'falta_dato').map((r) => (
+                    <LineaRiesgo key={r.tipo} r={r} apagado />
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
