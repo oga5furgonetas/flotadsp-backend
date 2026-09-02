@@ -19,7 +19,7 @@ import { X, Shield, Users } from 'lucide-react'
    · se cierra al elegir, al tocar fuera y con Escape,
    · respeta la zona segura de los iPhone con notch,
    · la pantalla en la que estás sale marcada, para no perder el sitio. */
-export default function MenuMovil({ abierto, cerrar, groups, showAdmin, cm, t }) {
+export default function MenuMovil({ abierto, cerrar, groups, showAdmin, cm, t, acciones = [] }) {
   useEffect(() => {
     if (!abierto) return
     const esc = (e) => { if (e.key === 'Escape') cerrar() }
@@ -50,6 +50,20 @@ export default function MenuMovil({ abierto, cerrar, groups, showAdmin, cm, t })
             <X size={20} />
           </button>
         </div>
+
+        {/* Buscar, ayuda y tema. En el movil no caben en la cabecera —medido:
+            la dejaban en 479 px dentro de una pantalla de 375— y aqui se
+            encuentran igual de rapido. */}
+        {acciones.length > 0 && (
+          <div className="flex gap-2 border-b border-dark-800 px-3 py-3">
+            {acciones.map((a) => (
+              <button key={a.clave} onClick={() => { a.hacer(); cerrar() }}
+                className="flex min-h-[44px] flex-1 items-center justify-center gap-2 rounded-xl border border-dark-700 bg-dark-800/60 px-2 text-[12.5px] font-semibold text-dark-200 active:bg-dark-800">
+                <a.icono size={16} className="text-dark-400" /> {a.texto}
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="overflow-y-auto overscroll-contain px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
           {groups.map((g) => (

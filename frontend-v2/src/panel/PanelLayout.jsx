@@ -6,7 +6,7 @@ import {
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX,
-  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu,
+  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
 import { getMe, contarPeticionesPendientes } from './api'
@@ -118,10 +118,13 @@ function MenuUsuario({ admin, showAdmin, lang, setLang, langs, onLogout, t }) {
     if (!abierto) return
     const fuera = (e) => { if (caja.current && !caja.current.contains(e.target)) setAbierto(false) }
     const esc = (e) => { if (e.key === 'Escape') setAbierto(false) }
-    document.addEventListener('mousedown', fuera)
+    // `pointerdown` y no `mousedown`: en un movil, tocar fuera de un menu no
+    // siempre dispara los eventos de raton, y el desplegable se quedaba
+    // abierto sin forma de cerrarlo mas que recargando.
+    document.addEventListener('pointerdown', fuera)
     document.addEventListener('keydown', esc)
     return () => {
-      document.removeEventListener('mousedown', fuera)
+      document.removeEventListener('pointerdown', fuera)
       document.removeEventListener('keydown', esc)
     }
   }, [abierto])
@@ -158,7 +161,7 @@ function MenuUsuario({ admin, showAdmin, lang, setLang, langs, onLogout, t }) {
 
       {abierto && (
         <div role="menu"
-             className="absolute right-0 z-50 mt-1.5 w-60 overflow-hidden rounded-lg border border-dark-700 bg-dark-900 shadow-xl shadow-black/40">
+             className="absolute right-0 z-50 mt-1.5 w-[min(15rem,calc(100vw-1.5rem))] overflow-hidden rounded-lg border border-dark-700 bg-dark-900 shadow-xl shadow-black/40">
           <div className="border-b border-dark-800 px-3 py-2.5">
             <p className="truncate text-[13px] font-semibold text-dark-100">{nombre}</p>
             <p className="truncate text-[11px] text-dark-500">
@@ -588,7 +591,33 @@ export default function PanelLayout() {
           </div>
         )}
         <TrialBanner />
-        <header className="flex items-center justify-between gap-3 border-b border-white/[0.05] bg-transparent px-4 py-2.5 backdrop-blur-md">
+        {/* MEDIDA A 375 px EL 02-09-2026: esta cabecera medía 479 y no tenía
+            scroll, asi que los 104 px que sobraban se quedaban FUERA de la
+            pantalla — y ahi vivia el avatar, con «Perfil» y «Cerrar sesion»
+            dentro. En un movil no habia forma de llegar a ellos.
+            Reparto nuevo: el boton de menu y el avatar no se mueven nunca
+            (`flex-none`), el selector de centro se queda con lo que sobra y
+            hace scroll el solo (`min-w-0`), y buscar/ayuda/tema se van al menu,
+            que es donde se busca lo que se usa poco. */}
+        {/* `relative z-30` NO es decoracion: sin el, el desplegable del avatar se
+            pintaba DEBAJO del contenido de la pagina y no se podia pulsar.
+            El motivo es de CSS puro y no se ve leyendo el JSX: `backdrop-blur`
+            convierte la cabecera en un contexto de apilado propio, asi que el
+            `z-50` de dentro solo compite con sus hermanos DE DENTRO; fuera, la
+            cabecera valia `auto` y `main`, que va despues en el DOM, ganaba.
+            Medido en un movil el 02-09-2026 con `elementFromPoint` sobre el
+            boton «Salir»: devolvia el titular de la pagina, no el boton. Se
+            veian las dos cosas superpuestas y no habia forma de cerrar sesion. */}
+        <header className="relative z-30 flex items-center gap-2 border-b border-white/[0.05] bg-transparent px-3 py-2.5 backdrop-blur-md md:gap-3 md:px-4">
+          {/* La puerta del menu tambien arriba: en iOS la barra de abajo se
+              queda debajo del navegador y no siempre se ve. */}
+          <button
+            onClick={() => setMenuOpen(true)}
+            aria-label={t('nav.menu')}
+            className="flex h-9 w-9 flex-none items-center justify-center rounded-lg border border-dark-700 bg-dark-800/70 text-dark-300 active:bg-dark-800 md:hidden">
+            <Menu size={18} />
+          </button>
+
           <div className="hidden text-sm text-dark-400 md:block">
             {flatItems.find((it) => (it.end ? loc.pathname === it.to : loc.pathname.startsWith(it.to)))?.label || ''}
           </div>
@@ -596,7 +625,7 @@ export default function PanelLayout() {
           {/* Paleta de comandos (Ctrl+K) */}
           <button
             onClick={() => setCmdOpen(true)}
-            className="ml-auto flex items-center gap-2 rounded-lg border border-dark-700 bg-dark-800/70 px-3 py-1.5 text-xs text-dark-400 transition-colors hover:border-dark-600 hover:text-dark-200"
+            className="ml-auto hidden items-center gap-2 rounded-lg border border-dark-700 bg-dark-800/70 px-3 py-1.5 text-xs text-dark-400 transition-colors hover:border-dark-600 hover:text-dark-200 md:flex"
             title="Ctrl+K"
           >
             <Search size={13} />
@@ -604,7 +633,7 @@ export default function PanelLayout() {
             <kbd className="kbd hidden sm:inline-flex">Ctrl K</kbd>
           </button>
 
-          <BotonAyuda abrir={() => setAyudaOpen(true)} />
+          <span className="hidden md:inline-flex"><BotonAyuda abrir={() => setAyudaOpen(true)} /></span>
 
           {/* Tema: híbrido → noche → día → híbrido.
               Tres estados en un botón necesitan que el título diga a dónde
@@ -615,7 +644,7 @@ export default function PanelLayout() {
               try { localStorage.setItem('panel_theme_elegido', '1') } catch { /* incognito */ }
               setTheme((th) => (th === 'hibrido' ? 'dark' : th === 'dark' ? 'light' : 'hibrido'))
             }}
-            className="flex items-center gap-1.5 rounded-lg border border-dark-700 bg-dark-800/70 px-2 py-1.5 text-dark-400 transition-colors hover:border-dark-600 hover:text-dark-200"
+            className="hidden md:flex items-center gap-1.5 rounded-lg border border-dark-700 bg-dark-800/70 px-2 py-1.5 text-dark-400 transition-colors hover:border-dark-600 hover:text-dark-200"
             title={theme === 'hibrido' ? 'Cambiar a modo noche'
               : theme === 'dark' ? 'Cambiar a modo día' : 'Volver al modo mixto'}
           >
@@ -627,7 +656,7 @@ export default function PanelLayout() {
           </button>
 
           {/* Filtro de CENTRO — si solo tiene 1 centro asignado se muestra fijo */}
-          <div className="flex items-center gap-1 rounded-lg bg-dark-800/60 p-1">
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-lg bg-dark-800/60 p-1 md:flex-none">
             {singleCenter ? (
               <span className="rounded-md bg-brand-500/20 px-3 py-1 text-xs font-semibold text-brand-300">
                 {singleCenter}
@@ -647,8 +676,10 @@ export default function PanelLayout() {
             )}
           </div>
 
+          <span className="flex-none">
           <MenuUsuario admin={admin} showAdmin={showAdmin} lang={lang} setLang={setLang}
             langs={LANGS} onLogout={doLogout} t={t} />
+          </span>
         </header>
 
         {/* En el móvil la navegación va en la barra de abajo y en el botón
@@ -692,7 +723,20 @@ export default function PanelLayout() {
       </nav>
 
       <MenuMovil abierto={menuOpen} cerrar={() => setMenuOpen(false)}
-        groups={groups} showAdmin={showAdmin} cm={cm} t={t} />
+        groups={groups} showAdmin={showAdmin} cm={cm} t={t}
+        acciones={[
+          { clave: 'buscar', icono: Search, texto: t('cmdk.hint'), hacer: () => setCmdOpen(true) },
+          { clave: 'ayuda', icono: CircleHelp, texto: t('nav.help'), hacer: () => setAyudaOpen(true) },
+          {
+            clave: 'tema',
+            icono: theme === 'dark' ? Moon : theme === 'light' ? Sun : Contrast,
+            texto: theme === 'hibrido' ? 'Mixto' : theme === 'dark' ? 'Noche' : 'Día',
+            hacer: () => {
+              try { localStorage.setItem('panel_theme_elegido', '1') } catch { /* incognito */ }
+              setTheme((th) => (th === 'hibrido' ? 'dark' : th === 'dark' ? 'light' : 'hibrido'))
+            },
+          },
+        ]} />
 
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} pages={palettePages} />
       <PanelAyuda

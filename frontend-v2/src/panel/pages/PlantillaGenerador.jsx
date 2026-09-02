@@ -860,8 +860,9 @@ function FurgoCell({ value, onChange, isPink, isRed, furgosDisp, usedFurgos, onT
   useEffect(() => {
     if (!open) return
     function handler(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    // Con el dedo, `mousedown` no siempre llega: `pointerdown` vale para los dos.
+    document.addEventListener('pointerdown', handler)
+    return () => document.removeEventListener('pointerdown', handler)
   }, [open])
 
   const used = new Set(usedFurgos)

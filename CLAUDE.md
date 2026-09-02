@@ -734,6 +734,34 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    forma de saber que mira de verdad.
 
 
+48. **`backdrop-blur` crea un contexto de apilado, y un desplegable dentro de
+   el NO puede salir por encima de lo que va despues en el DOM.** La cabecera
+   del panel era `backdrop-blur-md` sin `position` ni `z-index`. El
+   desplegable del avatar llevaba `z-50`, pero ese 50 solo compite con sus
+   hermanos DE DENTRO de la cabecera: hacia fuera, la cabecera valia `auto` y
+   `main` —que va despues— pintaba por encima. Resultado en un movil, con la
+   captura de Dani delante: el menu se veia TRANSPARENTE, con el titular de la
+   pagina escrito por encima de «ver perfil» y «Salir», y ningun toque llegaba
+   a los botones. **No se podia cerrar sesion desde el movil.**
+   En el ordenador no se notaba porque el desplegable cae sobre una zona vacia
+   y ahi el toque, aunque tampoco llegara, no molestaba a nadie.
+   La cura es una linea: `relative z-30` en la cabecera. Y la forma de
+   comprobarlo es la unica que no engaña, porque a ojo el menu SE VE:
+   ```js
+   const b = boton.getBoundingClientRect()
+   document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)
+   ```
+   Si eso no devuelve el propio boton, el usuario no puede pulsarlo por mucho
+   que lo vea. Antes devolvia el titular de la pagina; ahora devuelve
+   `BUTTON · Salir` y la sesion se cierra de verdad (medido el 02-09-2026).
+   Regla: **todo panel flotante se prueba con `elementFromPoint`, no mirandolo**,
+   y cualquier `backdrop-blur` que contenga algo flotante necesita su propio
+   `relative z-N`.
+   De la misma tanda: los «cerrar al tocar fuera» escuchaban solo `mousedown`,
+   que con el dedo no siempre llega. Ahora escuchan `pointerdown`, que vale
+   para los dos (dos sitios: el menu de usuario y la plantilla).
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
