@@ -1328,6 +1328,12 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.vehicle_damage_ledger, [("vehicle_id", 1), ("status", 1)])
     await _idx(tdb.alerts, [("created_at", -1)])
     await _idx(tdb.alerts, "read")
+    # Turnos: un conductor tiene UN turno por dia. Los cuatro sitios que los
+    # guardan hacen upsert por (driver_id, date), y sin unico dos peticiones a
+    # la vez dejan dos documentos (gotcha 9). Medido 0 repetidos el 02-09-2026
+    # antes de crearlo; los upserts pasan por _upsert_turno/_bulk_turnos.
+    await _idx(tdb.shifts, [("driver_id", 1), ("date", 1)], unique=True, name="turno_unico")
+    await _idx(tdb.shifts, [("center", 1), ("date", 1)])
     await _idx(tdb.ai_feedback, [("created_at", -1)])
     await _idx(tdb.ai_feedback, [("damage.part", 1)])
     await _idx(tdb.ai_feedback, [("damage.location_hint", 1)])
@@ -9925,7 +9931,8 @@ async def get_inspections(
     limit = max(1, min(limit, 500))
     skip = max(0, skip)
     # `campos=lista`: lo justo para pintar la tarjeta (primera foto, severidad y
-    # contadores). El detalle se pide aparte con GET /inspections/{id}; así el
+    # contadores; IA Peritaje mira además `annotated_photos`). El detalle se
+    # pide aparte con GET /inspections/{id}; así el
     # listado de 200 baja de ~730 KB a una fracción.
     proj = {"_id": 0}
     if campos == "lista":
@@ -9933,7 +9940,7 @@ async def get_inspections(
             "_id": 0,
             "analysis.damages": 0, "analysis.new_damages": 0, "analysis.existing_damages": 0,
             "analysis.executive_summary": 0, "analysis.zonas_no_evaluables": 0,
-            "reference_photos": 0, "annotated_photos": 0, "notes": 0, "photo_roles": 0,
+            "reference_photos": 0, "notes": 0, "photo_roles": 0,
             "photos": {"$slice": 1},
         }
     inspections = await db.inspections.find(query, proj).sort("created_at", -1).skip(skip).to_list(limit)
@@ -12132,6 +12139,11 @@ async def get_checklist(center: str, date: Optional[str] = None,
     """Devuelve los 2 turnos (mañana, tarde) de un centro y día. Crea con defaults si no existe."""
     if not center:
         raise HTTPException(400, "Centro requerido")
+    if center.strip().lower() in ("todos", "all"):
+        # La lista es POR CENTRO y se crea sola la primera vez que se pide:
+        # con «Todos» se creaba un turno fantasma para un centro que no
+        # existe, que nadie ve desde su centro (medido el 02-09-2026).
+        raise HTTPException(400, "Elige un centro: la lista de tareas es por centro")
     if not _user_can_see_center(user, center):
         raise HTTPException(403, "No tienes acceso a este centro")
     date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -25067,6 +25079,34 @@ async def _coverage_for_date(center: str, date: str) -> int:
         {"center": center, "date": date, **_FILTRO_RUTA})
 
 
+async def _upsert_turno(filtro: dict, cambio: dict):
+    """Upsert de un turno que aguanta dos peticiones a la vez.
+
+    Con el unico `turno_unico`, el que pierde la carrera recibe
+    `DuplicateKeyError` en vez de crear un segundo documento; entonces repite
+    sin upsert, que ya encuentra el que insertó el otro (gotchas 9 y 46).
+    """
+    try:
+        await db.shifts.update_one(filtro, cambio, upsert=True)
+    except DuplicateKeyError:
+        await db.shifts.update_one(filtro, cambio)
+
+
+async def _bulk_turnos(ops: list):
+    """bulk_write de upserts de turnos con la misma garantia que _upsert_turno.
+
+    `ordered=False` aplica todos los que puede; si alguno choca con el unico,
+    la segunda pasada los encuentra ya creados y solo actualiza. Volver a
+    aplicar un `$set` identico es idempotente.
+    """
+    if not ops:
+        return
+    try:
+        await db.shifts.bulk_write(ops, ordered=False)
+    except BulkWriteError:
+        await db.shifts.bulk_write(ops, ordered=False)
+
+
 @api_router.get("/shifts")
 async def get_shifts(center: Optional[str] = None, desde: Optional[str] = None,
                      hasta: Optional[str] = None, user: dict = Depends(require_admin)):
@@ -25183,7 +25223,7 @@ async def save_shifts_bulk(data: dict = Body(...), user: dict = Depends(require_
                 quitar[clave] = ""
         if quitar:
             cambio["$unset"] = quitar
-        await db.shifts.update_one({"driver_id": did, "date": date}, cambio, upsert=True)
+        await _upsert_turno({"driver_id": did, "date": date}, cambio)
         saved += 1
     if bloqueados:
         logger.info("Turnos: %s intento cambiar %d dias aprobados sin permiso",
@@ -25649,13 +25689,12 @@ async def resolve_shift_request(req_id: str, data: dict = Body(...),
         # aprobaste" — que es justo lo que no se puede confundir, porque lo
         # segundo no se puede cambiar sin hablar con la persona.
         cod = "N/T APROB" if req["type"] == "libre" else "EXTRA"
-        await db.shifts.update_one(
+        await _upsert_turno(
             {"driver_id": req["driver_id"], "date": req["date"]},
             {"$set": {"driver_id": req["driver_id"], "driver_name": req.get("driver_name", ""),
                       "center": req["center"], "date": req["date"], "type": req["type"],
                       "cod": cod, "aprobado_req": req_id},
              "$unset": {"hora": ""}},
-            upsert=True,
         )
     elif req.get("status") == "aprobado":
         # Se ha desaprobado algo que ya estaba aprobado: la marca del cuadrante
@@ -25932,7 +25971,7 @@ async def import_shifts_pegado(data: dict = Body(...), _=Depends(require_admin))
     guardados = 0
     for i in range(0, len(items), 500):
         lote = items[i:i + 500]
-        await db.shifts.bulk_write([
+        await _bulk_turnos([
             UpdateOne({"driver_id": it["driver_id"], "date": it["date"]},
                       {"$set": it}, upsert=True) for it in lote])
         guardados += len(lote)
@@ -27762,7 +27801,7 @@ async def import_shifts(file: UploadFile = File(...), center: str = Form(...),
     for i in range(0, len(items), 500):
         lote = items[i:i + 500]
         if lote:
-            await db.shifts.bulk_write([
+            await _bulk_turnos([
                 UpdateOne({"driver_id": it["driver_id"], "date": it["date"]},
                           {"$set": it}, upsert=True) for it in lote])
             guardados += len(lote)

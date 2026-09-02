@@ -52,7 +52,7 @@ export default function IAPeritaje() {
   const [rebuild, setRebuild] = useState(null)
 
   function loadInsps() {
-    getInspections({ limit: 300 }).then((r) => setInsps(lista(r.data))).catch(() => setInsps([]))
+    getInspections({ limit: 300, campos: 'lista' }).then((r) => setInsps(lista(r.data))).catch(() => setInsps([]))
   }
   const loadRebuild = () => rebuildStatus().then(r => setRebuild(r.data)).catch(() => {})
   useEffect(() => {

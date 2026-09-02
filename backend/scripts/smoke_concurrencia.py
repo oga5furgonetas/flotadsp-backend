@@ -93,6 +93,18 @@ def main() -> int:
     code2, _ = pide("/drivers", "POST", {"name": "PEPE AUDIT", "email": correo.upper(), "center": "AUD1"}, token=T)
     paso("y el mismo correo en MAYUSCULAS tampoco entra", code2 == 409, "HTTP %s" % code2)
 
+    # Turnos: los cuatro sitios que guardan hacen upsert por (conductor, dia).
+    # Sin el unico `turno_unico`, cinco guardados a la vez dejaban varios
+    # documentos para la misma persona y el mismo dia (gotcha 9).
+    did = next((c["id"] for c in (con or []) if (c.get("email") or "").lower() == correo), "")
+    turno = {"items": [{"driver_id": did, "driver_name": "PEPE AUDIT", "center": "AUD1",
+                        "date": "2026-09-15", "type": "trabaja", "cod": "1"}]}
+    cs = a_la_vez("/shifts/bulk", turno)
+    _, sh = pide("/shifts?center=AUD1&desde=2026-09-15&hasta=2026-09-15", token=T)
+    n = sum(1 for s in ((sh or {}).get("shifts") or []) if s.get("driver_id") == did)
+    paso("5 guardados del mismo turno a la vez -> UN turno", n == 1 and cs.count(200) == 5,
+         "quedan %d · codigos %s" % (n, cs))
+
     _, w = pide("/workshops", "POST", {"name": "Taller Audit", "phone": "600000001", "center": "AUD1"}, token=T)
     vid = next((v["id"] for v in (veh or []) if "9999" in (v.get("license_plate") or "")), "")
     cs = a_la_vez("/work-orders", {"vehicle_id": vid, "workshop_id": w.get("id"), "problema": "Ruido audit"}, n=2)
