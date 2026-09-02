@@ -77,6 +77,17 @@ def test_whatsapp_lleva_prefijo_y_mapa():
     assert urllib.parse.quote(t["url"], safe="") in t["wa_ayudante"] or t["url"] in urllib.parse.unquote(t["wa_ayudante"])
 
 
+def test_aviso_de_paradas_sin_ubicacion():
+    a = {"token": "x" * 32, "nota": "", "de": {"nombre": "PEPE", "telefono": "600111222"},
+         "a": {"nombre": "ANA", "telefono": "600333444"},
+         "paradas": [{"stop_id": "1", "n": 1, "ubicacion": "cortex"}, {"stop_id": "2", "n": 1, "ubicacion": None},
+                     {"stop_id": "3", "n": 2}]}
+    t = NS["_apoyo_textos"](a)
+    assert "2 de esas paradas no tienen ubicación en Cortex: pregúntale a PEPE" in t["texto_ayudante"]
+    a["paradas"] = [{"stop_id": "1", "n": 1, "ubicacion": "intento"}]
+    assert "no tienen ubicación" not in NS["_apoyo_textos"](a)["texto_ayudante"]
+
+
 def test_sin_telefono_no_hay_enlace():
     assert NS["enlace_wa"]("", "hola") == ""
     a = {"token": "x" * 32, "de": {"nombre": "P", "telefono": ""}, "a": {"nombre": "A", "telefono": "600000000"}, "paradas": []}

@@ -106,6 +106,8 @@ export default function ApoyoRuta() {
 
   const enviar = async () => {
     if (!driver || !ayudante || sel.size === 0) return
+    const sinUbic = paradas.filter((p) => sel.has(p.stop_id) && !p.ubicacion).length
+    if (sinUbic && !window.confirm(t('apoyo.confirmarSinUbic').replace('{n}', sinUbic).replace('{total}', sel.size))) return
     setEnviando(true); setError('')
     try {
       const body = { day: dia, de_driver_id: driver.driver_id, a_driver_id: ayudante, stop_ids: [...sel], nota }

@@ -17697,9 +17697,15 @@ def _apoyo_textos(a: dict) -> dict:
     if n > 12:
         ids += "…"
     nota = ("\n" + a["nota"].strip()) if a.get("nota") else ""
-    t_ay = ("Hola %s. Apoyo a %s%s: %d paradas, %d paquetes.\nMapa y lista: %s\nTel. de %s: %s%s"
+    # Lo que el mapa NO puede enseñar se dice en el propio mensaje: un ayudante
+    # que abre el enlace y ve paradas sin punto tiene que saber que no es un
+    # fallo suyo y a quién preguntar.
+    sin_ubic = sum(1 for p in a.get("paradas") or [] if not p.get("ubicacion"))
+    aviso_ubic = ("\n%d de esas paradas no tienen ubicación en Cortex: pregúntale a %s el sitio."
+                  % (sin_ubic, de.get("nombre") or "")) if sin_ubic else ""
+    t_ay = ("Hola %s. Apoyo a %s%s: %d paradas, %d paquetes.\nMapa y lista: %s\nTel. de %s: %s%s%s"
             % (ay.get("nombre") or "", de.get("nombre") or "", (" (%s)" % de["ruta"]) if de.get("ruta") else "",
-               n, npaq, url, de.get("nombre") or "", de.get("telefono") or "-", nota))
+               n, npaq, url, de.get("nombre") or "", de.get("telefono") or "-", aviso_ubic, nota))
     t_de = ("Hola %s. %s te quita %d paradas (%s).\nMapa: %s\nTel. de %s: %s%s"
             % (de.get("nombre") or "", ay.get("nombre") or "", n, ids, url,
                ay.get("nombre") or "", ay.get("telefono") or "-", nota))
