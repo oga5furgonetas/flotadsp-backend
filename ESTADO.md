@@ -281,6 +281,33 @@ reales de OGA5. Todo desplegado y comprobado en producción:
   igual a OGA5 (esta semana solo OGA5 tiene cuadrante); chat interno con 8
   mensajes desde julio y `contacts` a 0: no son fallos, es que no se usan.
 
+### Octava pasada (02-09, noche): lo suyo, para el conductor
+
+Dos pantallas nuevas en el portal, pedidas por Dani: «Tus estadísticas» y
+«Ayudas de este mes». Las dos salen de datos que ya existían.
+
+- **Tus estadísticas** (`GET /portal/mis-numeros`). Hoy en vivo con su ruta,
+  entregados de total, lo que le queda y de cuándo es el dato. Debajo, sus
+  siete días en barras y la comparación contra el CENTRO, calculada con la
+  misma función que usa la oficina (`_cx_dias_reparto`, que respeta las fotos
+  congeladas). Verificado con un conductor real: 181 de 194 hoy (93,3 %), 746
+  paquetes en 5 días, el centro al 98,6 %.
+- **Lo que NO lleva, a propósito.** Los días cerrados no llevan porcentaje:
+  `state` es el estado de ahora, y un paquete devuelto el viernes que se
+  reparte el lunes figura hoy como entregado el viernes. Un DCR de un día
+  pasado saldría mejor de lo que fue, o sea una mentira a favor del conductor,
+  que es la peor de todas. Se enseña lo que no se degrada hacia abajo
+  (paquetes entregados) y se explica por qué en la propia pantalla.
+- **Ayudas de este mes** (`GET /portal/mis-ayudas`). Las paradas que le ha
+  quitado a un compañero, quién se lo debe, lo que a él le ayudaron y el total
+  del equipo. Una parada suma solo cuando el que fue a ayudar la marca como
+  hecha, y un apoyo anulado no cuenta. Si le pasaron paradas y no las marcó,
+  la pantalla se lo dice en vez de quedarse en cero sin explicación.
+- **Multiempresa y primer día**: `smoke_empresa_nueva.py` sube a 29
+  comprobaciones. En una empresa recién creada las dos pantallas dicen que
+  falta emparejar la ficha con Cortex, en vez de enseñar un cero que parezca
+  un dato.
+
 ### Séptima pasada (02-09, noche): el móvil, que era lo más atrasado
 
 Dani: «trabaja en la app para Android y iOS, que puedan entrar desde los

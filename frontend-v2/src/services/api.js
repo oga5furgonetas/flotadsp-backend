@@ -124,6 +124,9 @@ export const getMiFicha = () => api.get('/portal/mi-ficha')
 export const guardarMiTelefono = (telefono) => api.post('/portal/mi-telefono', { telefono })
 /* Turnos del propio conductor: su calendario y sus peticiones de día. */
 export const getMyShifts = (desde, hasta) => api.get('/shifts/mine', { params: { desde, hasta } })
+// Lo suyo, para el: sus numeros de Cortex y las ayudas del mes
+export const getMisNumeros = () => api.get('/portal/mis-numeros')
+export const getMisAyudas = () => api.get('/portal/mis-ayudas')
 // Dias que este conductor NO puede pedir, y por que.
 export const getMisBloqueos = () => api.get('/shift-blocks/mios')
 /* Pedir días. Admite las dos formas a propósito:

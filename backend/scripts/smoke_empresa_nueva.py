@@ -206,6 +206,19 @@ def main() -> int:
              bool(lista) and all("SMK" in (v.get("license_plate") or "") for v in lista),
              "ve %d" % len(lista or []))
 
+        # Sus dos pantallas nuevas. En una empresa recien creada NO hay
+        # transporter_id ni apoyos, y lo que importa es que lo digan en vez de
+        # ensenar un cero que parezca un dato.
+        code, mn = pide("/portal/mis-numeros", token=dt)
+        paso("sus estadisticas dicen que falta emparejar la ficha",
+             code == 200 and mn.get("sin_transporter") is True and mn.get("hoy") is None,
+             "HTTP %s · sin_transporter=%s" % (code, mn.get("sin_transporter")))
+        code, ma = pide("/portal/mis-ayudas", token=dt)
+        paso("sus ayudas del mes salen a cero sin reventar",
+             code == 200 and ma.get("hechas") == 0 and ma.get("equipo") == 0
+             and ma.get("me_ayudaron", {}).get("veces") == 0,
+             "HTTP %s · %s" % (code, {k: ma.get(k) for k in ("hechas", "asignadas", "veces")}))
+
     # Ponerle contraseña y comprobar que entra con ella. Aqui vivia el fallo
     # que dejaba fuera del portal a toda empresa que no fuera la principal.
     code, d = pide("/auth/driver-accounts/generar", "POST", {}, token=T)

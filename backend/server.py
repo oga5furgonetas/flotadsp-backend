@@ -17662,6 +17662,165 @@ async def _apoyo_posicion(driver_id: str, dia: str) -> Optional[dict]:
     return _apoyo_posicion_de(docs[0] if docs else None)
 
 
+
+# ── LO SUYO, PARA EL: NUMEROS Y AYUDAS ──────────────────────────────────────
+# Dos pantallas del portal del conductor. La idea es devolverle a quien hace el
+# trabajo lo que la empresa ya sabe de el, y contar las veces que ha sacado de
+# un apuro a un companero.
+#
+# LAS REGLAS, QUE AQUI IMPORTAN MAS QUE EN NINGUN SITIO. Esto lo lee la persona
+# de la que habla, asi que un numero inflado se nota y quema la pantalla entera:
+#   · Nada de rankings entre companeros. La unica comparacion es contra el
+#     CENTRO, calculada con la misma funcion que usa la oficina
+#     (`_cx_dias_reparto`, que respeta las fotos congeladas del gotcha 39).
+#   · Los dias cerrados NO llevan porcentaje. `cortex_packages.state` es el
+#     estado de AHORA: un paquete devuelto el viernes y re-repartido el lunes
+#     figura hoy como entregado el viernes, asi que un DCR de un dia pasado
+#     saldria mejor de lo que fue. Eso es una mentira a favor del conductor,
+#     que es justo la peor. Se ensena lo que NO se degrada hacia abajo
+#     —cuantos paquetes entrego cada dia— y se dice de cuando es el dato.
+#   · Hoy si lleva porcentaje: es en vivo y no ha dado tiempo a erosionarse.
+#   · Un apoyo ANULADO no cuenta. Y una parada solo suma cuando el que fue a
+#     ayudar la marca como hecha: es el, diciendo que la hizo.
+#   · Sin `transporter_id` no se inventa nada: se dice que falta emparejar la
+#     ficha, que es un trabajo de la oficina y no culpa suya.
+
+
+async def _portal_quien_es(user: dict) -> tuple:
+    """(ids de sus fichas, sus transporter_ids, centro). Sus fichas, no su ficha:
+    una misma persona puede estar dada de alta dos veces (gotcha 15)."""
+    driver_id = user.get("sub") or ""
+    ficha = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "id": 1, "center": 1, "email": 1})
+    mis_ids, center = await _fichas_misma_persona(ficha or {"id": driver_id})
+    tids = set()
+    async for d in db.drivers.find({"id": {"$in": list(mis_ids)}}, {"_id": 0, "transporter_id": 1}):
+        if d.get("transporter_id"):
+            tids.add(d["transporter_id"])
+    return set(mis_ids), tids, center
+
+
+@api_router.get("/portal/mis-numeros")
+async def portal_mis_numeros(user: dict = Depends(require_any_auth)):
+    """Lo que Cortex sabe de EL, devuelto a quien lo hizo."""
+    mis_ids, tids, center = await _portal_quien_es(user)
+    hoy = _apoyo_hoy()
+    desde = (datetime.now(timezone.utc) - timedelta(days=6)).strftime("%Y-%m-%d")
+    if not tids:
+        return {"sin_transporter": True, "centro": center, "hoy": None, "dias": [], "semana": None}
+
+    # ── HOY, en vivo ────────────────────────────────────────────────────────
+    total = entregados = pendientes = reintentos = 0
+    paradas: set = set()
+    rutas: list = []
+    ultima = None
+    cur = db.cortex_packages.find(
+        {"service_day": hoy, "driver_id": {"$in": list(tids)}},
+        {"_id": 0, "state": 1, "stop_id": 1, "route_code": 1, "seen_at": 1})
+    async for p in cur:
+        total += 1
+        ultima = max(ultima or "", str(p.get("seen_at") or ""))
+        rc = p.get("route_code")
+        if rc and rc not in rutas:
+            rutas.append(rc)
+        caj = _cx_ruta_cajon(p.get("state"))
+        if caj == "delivered":
+            entregados += 1
+        elif caj in _APOYO_CAJONES_PENDIENTES:
+            pendientes += 1
+            if p.get("stop_id"):
+                paradas.add(str(p["stop_id"]))
+            if caj == "attempted":
+                reintentos += 1
+    dhoy = None
+    if total:
+        dhoy = {"fecha": hoy, "ruta": " + ".join(sorted(rutas)), "total": total,
+                "entregados": entregados, "pendientes": pendientes,
+                "paradas_pendientes": len(paradas), "reintentos": reintentos,
+                "pct": round(100.0 * entregados / total, 1) if total else None,
+                "bajado_hace_min": _apoyo_minutos_desde(ultima)}
+
+    # ── LOS SIETE DIAS: solo entregados, que no se degradan hacia abajo ─────
+    porc: dict = {}
+    async for r in db.cortex_packages.aggregate([
+        {"$match": {"service_day": {"$gte": desde, "$lte": hoy}, "driver_id": {"$in": list(tids)}}},
+        {"$group": {"_id": {"d": "$service_day", "st": "$state"}, "n": {"$sum": 1}}},
+    ]):
+        k = r["_id"]
+        dia = k.get("d")
+        if not dia:
+            continue
+        x = porc.setdefault(dia, {"dia": dia, "entregados": 0, "total": 0})
+        x["total"] += r["n"]
+        if _cx_ruta_cajon(k.get("st")) == "delivered":
+            x["entregados"] += r["n"]
+    dias = [porc[d] for d in sorted(porc)]
+    con_ruta = [d for d in dias if d["total"] > 0]
+    mejor = max(con_ruta, key=lambda d: d["entregados"]) if con_ruta else None
+    semana = {"desde": desde, "hasta": hoy,
+              "entregados": sum(d["entregados"] for d in dias),
+              "dias_con_ruta": len(con_ruta),
+              "mejor": mejor}
+
+    # ── EL CENTRO, con la misma cuenta que hace la oficina ─────────────────
+    centro = None
+    if center:
+        try:
+            filas = await _cx_dias_reparto(center, desde, hoy)
+            ent = sum(int(f.get("entregados") or 0) for f in filas)
+            fal = sum(int(f.get("fallos") or 0) for f in filas)
+            if ent + fal:
+                centro = {"codigo": center, "dcr": round(100.0 * ent / (ent + fal), 1),
+                          "entregados": ent}
+        except Exception as e:                       # el centro es contexto, no puede tumbar la pantalla
+            logger.warning("mis-numeros: centro %s: %s", center, e)
+
+    return {"sin_transporter": False, "centro": centro, "hoy": dhoy,
+            "dias": dias, "semana": semana}
+
+
+@api_router.get("/portal/mis-ayudas")
+async def portal_mis_ayudas(user: dict = Depends(require_any_auth)):
+    """Las veces que ha sacado de un apuro a un companero, y las que se lo hicieron a el."""
+    mis_ids, tids, center = await _portal_quien_es(user)
+    claves = list(mis_ids | tids)      # el que ayuda puede ir por ficha o por transporter
+    mes = _apoyo_hoy()[:7]
+    vivos = {"$nin": ["anulado"]}      # un apoyo anulado no ocurrio
+
+    def _cuenta(a):
+        ps = a.get("paradas") or []
+        return len(ps), sum(1 for p in ps if p.get("hecha"))
+
+    ayude = await db.apoyos.find(
+        {"dia": {"$regex": "^" + mes}, "fase": vivos, "a.driver_id": {"$in": claves}},
+        {"_id": 0, "dia": 1, "de": 1, "paradas": 1, "nota": 1, "created_at": 1}).sort("dia", -1).to_list(200)
+    hechas = asignadas = 0
+    gracias = []
+    for a in ayude:
+        n, h = _cuenta(a)
+        asignadas += n
+        hechas += h
+        gracias.append({"nombre": (a.get("de") or {}).get("nombre") or "", "dia": a.get("dia"),
+                        "ruta": (a.get("de") or {}).get("ruta") or "", "paradas": n, "hechas": h,
+                        "nota": a.get("nota") or ""})
+
+    recibi = await db.apoyos.find(
+        {"dia": {"$regex": "^" + mes}, "fase": vivos, "de.driver_id": {"$in": claves}},
+        {"_id": 0, "dia": 1, "a": 1, "paradas": 1}).sort("dia", -1).to_list(200)
+    me_ayudaron = [{"nombre": (a.get("a") or {}).get("nombre") or "", "dia": a.get("dia"),
+                    "paradas": _cuenta(a)[1]} for a in recibi]
+
+    equipo = 0
+    async for a in db.apoyos.find({"dia": {"$regex": "^" + mes}, "fase": vivos}, {"_id": 0, "paradas": 1}):
+        equipo += _cuenta(a)[1]
+
+    return {"mes": mes, "centro": center,
+            "hechas": hechas, "asignadas": asignadas, "veces": len(ayude),
+            "gracias": gracias[:20],
+            "me_ayudaron": {"veces": len(recibi), "paradas": sum(x["paradas"] for x in me_ayudaron),
+                            "quien": me_ayudaron[:10]},
+            "equipo": equipo}
+
+
 @api_router.get("/apoyo/situacion")
 async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = None,
                           user: dict = Depends(require_admin)):

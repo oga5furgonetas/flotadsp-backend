@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { ClipboardCheck, CalendarDays, CalendarClock, LogOut, Lock, Ban } from 'lucide-react'
+import { ClipboardCheck, CalendarDays, CalendarClock, LogOut, Lock, Ban, BarChart3, LifeBuoy } from 'lucide-react'
 import { getPortalVehicles, getMyShifts, getMiFicha, guardarMiTelefono, DRIVER_TOKEN_KEY } from '../../services/api'
 import { lista } from '../../lib/lista'
 import DriverLogin from './DriverLogin'
 import InspectionFlow from './InspectionFlow'
 import InspectionDone from './InspectionDone'
 import MisTurnos from './MisTurnos'
+import MisNumeros from './MisNumeros'
+import MisAyudas from './MisAyudas'
 import MiClave from './MiClave'
 import PedirDias from './PedirDias'
 
@@ -140,6 +142,8 @@ export default function DriverPortal() {
   if (vista === 'dias') return <PedirDias onBack={() => setVista('inicio')} />
   if (vista === 'turnos') return <MisTurnos onBack={() => setVista('inicio')} />
   if (vista === 'clave') return <MiClave onBack={() => setVista('inicio')} />
+  if (vista === 'numeros') return <MisNumeros onBack={() => setVista('inicio')} />
+  if (vista === 'ayudas') return <MisAyudas onBack={() => setVista('inicio')} />
   if (result) {
     return <InspectionDone result={result} onNew={() => { setResult(null); setVista('inicio') }} onLogout={logout} />
   }
@@ -240,6 +244,20 @@ export default function DriverPortal() {
             titulo="Mis turnos"
             sub="Aquí verás qué días trabajas"
             pronto
+          />
+          {/* Lo suyo. Va DESPUES de la auditoria y los dias libres a
+              proposito: primero lo que tiene que hacer, luego lo que ha hecho. */}
+          <Opcion
+            icono={BarChart3}
+            titulo="Tus estadísticas"
+            sub="Lo que llevas hoy y esta semana"
+            onClick={() => setVista('numeros')}
+          />
+          <Opcion
+            icono={LifeBuoy}
+            titulo="Ayudas de este mes"
+            sub="Las paradas que has salvado a un compañero"
+            onClick={() => setVista('ayudas')}
           />
           <Opcion
             icono={Lock}
