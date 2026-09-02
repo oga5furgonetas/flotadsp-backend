@@ -44,6 +44,7 @@ import './index.css'
 import { ToastProvider } from './lib/toast'
 import { LangProvider } from './i18n'
 import { API_BASE } from './lib/apiBase'
+import { isStaleChunkError } from './lib/chunkError'
 import Landing from './pages/Landing'
 import CookieBanner from './legal/CookieBanner'
 
@@ -98,10 +99,9 @@ window.addEventListener('error', (e) => reportError(e.message, e.error?.stack))
 window.addEventListener('unhandledrejection', (e) => reportError(e.reason?.message || String(e.reason), e.reason?.stack))
 
 /* Un error de render no debe dejar la pantalla en blanco */
-// ¿Es el fallo típico de "chunk viejo tras un deploy"? (index cacheado pide un
-// JS con hash antiguo; el fallback SPA devuelve HTML → módulo undefined)
-const isStaleChunkError = (msg = '') =>
-  /reading 'default'|dynamically imported module|Importing a module script failed|Loading chunk/i.test(msg)
+// ¿Es el fallo típico de "chunk viejo tras un deploy"? Vive en lib/chunkError.js
+// con los mensajes reales de cada navegador (Safari lo dice distinto que Chrome
+// y por eso los iPhone no se curaban solos): así se puede probar fuera de React.
 
 /* Reparación del caché HTTP: re-descarga cada asset del build saltándose el
    caché del navegador y lo re-almacena. Cura el caso "asset envenenado" (una

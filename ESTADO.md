@@ -4,9 +4,9 @@
 > El repositorio y los datos mandan sobre lo que recuerde una conversación:
 > si algo aquí contradice producción, gana producción y esto está viejo.
 >
-> Lee **CLAUDE.md** primero (las reglas y los 36 gotchas), luego esto.
+> Lee **CLAUDE.md** primero (las reglas y los 45 gotchas), luego esto.
 >
-> Última actualización: **2026-08-30**
+> Última actualización: **2026-09-02**
 
 ---
 
@@ -36,6 +36,83 @@ ninguna.
 integridad, después reglas, después predicción. Lo contrario produce números que
 parecen medidos y no lo son, que es el peor resultado posible: se toman
 decisiones con ellos.
+
+---
+
+## Estado a 2026-09-02 (auditoría completa, dos pasadas)
+
+### Lo grave, y ya resuelto
+
+**El 01-09-2026 desaparecieron de producción 265.986 paquetes y 555.730
+eventos de Cortex** (julio y agosto enteros). No fue el TTL: fue el botón
+«Borrar todo y empezar limpio» de Paquetes IA, que llamaba a
+`POST /cortex/reset` con solo `require_admin` y un `window.confirm`. Se fechó
+por las copias de R2 (67 MB el 01-09 a las 02:00, 14,6 MB el 02-09) y **se
+restauró de la copia del 01-09**: 265.513 paquetes y 553.997 eventos
+insertados (solo lo que faltaba), cada uno con `restaurado_de`, resumen en
+`app_meta.respaldo_restauracion_cortex`. Las semanas de la scorecard en vivo,
+las direcciones que fallan y el selector de días (hasta el 1 de julio)
+volvieron a salir. Gotcha 45 y `scripts/check_borrado.py`.
+
+### Producción
+
+| | |
+|---|---|
+| Frontend | flotadsp.com — sirviendo el último build (verificado por hash) |
+| Backend | flotadsp-backend.fly.dev — `/api/health` ok, mongo conectado |
+| Smoke empresa nueva | **25 de 25** (`smoke_empresa_nueva.py`) |
+| Barrido con empresa vacía | 196 rutas GET × 9 variantes = 1.526 llamadas, **0 de 5xx**; 175 mutaciones × 2 = 350 llamadas, 1 de 5xx (corregido) |
+| Tests | **24 en local**; CI corre también los de API |
+| Checkers | los **diecisiete** en verde (`check_borrado.py` y `check-chunk-error.mjs` nuevos) |
+| Latencia | todas las GET de la empresa principal < 1 s con Cortex a volumen real (279.396 paquetes) |
+
+### Datos (medido, no supuesto)
+
+| | |
+|---|---|
+| Furgonetas activas | 125 (69 OGA5 · 39 DGA1 · 17 DGA2); 11 en taller, todas con `taller_desde` |
+| Conductores activos | 145 |
+| Inspecciones | 3.965 |
+| Paquetes de Cortex | 279.396 (desde 2026-07-01, TTL 90 días) |
+| Días congelados | 5 (desde el 29-08); los anteriores al 30-08 salen como mínimo, no como real |
+| Atlas | 10 GB contratados; medir con `/admin/salud` |
+
+### Corregido en esta auditoría (todo desplegado y comprobado en producción)
+
+- `POST /cortex/reset` y `DELETE /metrics/reports/all`: super-admin,
+  `confirmar: "BORRAR"` y `audit_log`; el botón solo lo ve el super-admin.
+- `POST /cortex/congelar-dia` congelaba **todas** las empresas y devolvía el
+  centro y el DCR de las demás al que llamaba; ahora solo la suya.
+- `/stats/dashboard` ignoraba el centro y los centros permitidos: con OGA5
+  decía 125 furgonetas (las de los tres centros). Ahora 69, y 69+39+17 cuadra
+  con los 125 de «Todos», que no ha cambiado.
+- `/scorecard/daily-trend` estaba en blanco desde junio (`daily_ratios`
+  vacía) y apuntaba a la semana del 14-06; cuenta desde Cortex con la misma
+  regla que la scorecard en vivo (`_cx_dias_reparto`, compartida).
+- La bandeja del taller decía «N sin saber de cuál hablan» sin forma de
+  asignarlos; ahora se elige la orden abierta y se asigna.
+- Los iPhone no se curaban del chunk envenenado: Safari lo describe distinto
+  que Chrome y el patrón no lo reconocía (4 conductores entre el 26-08 y el
+  01-09). `lib/chunkError.js` + `check-chunk-error.mjs` con los mensajes reales.
+- `check-huerfanas` contaba como consumidor un export de `api.js` que ninguna
+  pantalla importa: 16 rutas pasaban por enganchadas. Corregido; 4 anotadas.
+- `smoke_endpoints.py` firmaba su token con `org_id: oga5`, que no existe:
+  medía contra una organización vacía. Ahora `owner`, e invariante nuevo:
+  los días congelados conservan sus paquetes (habría cantado el borrado).
+- `PATCH /incidents/{id}` sin cuerpo daba 500; `/auth/me` con token de
+  mantenimiento daba 500; borrar o editar alquiladoras e informes con id
+  inexistente decía «success».
+
+### Comprobado y descartado (sin evidencia de fallo)
+
+- Aislamiento multiempresa con ids reales de la principal desde otra
+  empresa: 404 en lectura y en escritura, sin tocar nada.
+- Los `upsert` de `geo_rescate` van por `_id`: no duplican bajo concurrencia.
+- Los literales de filtro que no existen en producción (`LOST`, `REJECTED`,
+  `descartada`, `extra`…) son estados legítimos aún no ocurridos o
+  compatibilidad con datos antiguos, no filtros muertos.
+- `current_driver_id` no lo tiene ninguna furgoneta, pero solo decide como
+  alternativa al cuadrante; el portal no llama a la ruta que lo exige.
 
 ---
 

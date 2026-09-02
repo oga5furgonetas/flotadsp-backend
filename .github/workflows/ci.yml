@@ -49,6 +49,8 @@ jobs:
         run: node scripts/check-tema-mezclado.mjs
       - name: useEffect que devuelve algo (revienta AL SALIR de la pantalla)
         run: node scripts/check-efectos.mjs
+      - name: Chunk roto reconocido en todos los navegadores (si no, el usuario no se cura)
+        run: node scripts/check-chunk-error.mjs
       - name: Checker extension (mensajes que se pierden entre los tres saltos)
         run: node scripts/check-extension.mjs
       - name: Checker patrones (codigo que repite un bug ya conocido)
