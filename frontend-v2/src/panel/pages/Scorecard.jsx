@@ -391,6 +391,9 @@ function DailyTrendTable({ trend }) {
   )
   return (
     <div className="overflow-x-auto">
+      {/* Sin Resumen diario subido, el backend cuenta los dias desde Cortex y
+          lo dice: DCR real, DNR y POD en blanco. Que se sepa de donde sale. */}
+      {trend.nota && <p className="mb-1 text-[11px] text-dark-500">{trend.nota}</p>}
       <table className="w-full text-xs">
         <thead>
           <tr className="text-dark-400">

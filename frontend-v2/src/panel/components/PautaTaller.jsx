@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Loader2, MessageSquare, Clock, Inbox } from 'lucide-react'
 import {
   getPautaTaller, setPautaTaller, setPlantillaTaller,
-  getBandejaTaller, marcarLeidoTaller,
+  getBandejaTaller, marcarLeidoTaller, asignarMensajeTaller, getOrdenes,
 } from '../api'
 
 /* EL CANAL CON EL TALLER
@@ -25,15 +25,38 @@ export default function PautaTaller() {
   const [guardando, setGuardando] = useState('')
   const [editando, setEditando] = useState(null)
   const [msg, setMsg] = useState(null)
+  // Ordenes abiertas para poder decir A MANO de cual habla un mensaje que no
+  // se pudo clasificar. La pantalla contaba "N sin saber de cual hablan" y la
+  // ruta para asignarlos existia desde el 30-08-2026, pero ningun boton la
+  // llamaba: el dato se enseñaba y no se podia resolver (02-09-2026).
+  const [ordenes, setOrdenes] = useState([])
+  const [eleccion, setEleccion] = useState({})
 
   const cargar = useCallback(() => {
     setCargando(true)
     Promise.all([
       getPautaTaller().then((r) => r.data).catch(() => null),
       getBandejaTaller().then((r) => r.data).catch(() => null),
-    ]).then(([p, b]) => { setD(p); setBandeja(b) }).finally(() => setCargando(false))
+      getOrdenes({ abiertas: true, limit: 200 }).then((r) => r.data).catch(() => null),
+    ]).then(([p, b, o]) => {
+      setD(p); setBandeja(b)
+      setOrdenes(Array.isArray(o) ? o : (o?.ordenes || o?.items || []))
+    }).finally(() => setCargando(false))
   }, [])
   useEffect(cargar, [cargar])
+
+  const asignar = async (m) => {
+    const ordenId = eleccion[m.id]
+    if (!ordenId) return
+    setGuardando('asignar-' + m.id); setMsg(null)
+    try {
+      const r = await asignarMensajeTaller(m.id, ordenId)
+      setMsg({ txt: `Asignado a la orden ${r.data?.orden || ''}.` })
+      cargar()
+    } catch (e) {
+      setMsg({ mal: true, txt: e?.response?.data?.detail || 'No se pudo asignar.' })
+    } finally { setGuardando('') }
+  }
 
   const guardarPauta = async (cambio) => {
     setGuardando('pauta'); setMsg(null)
@@ -228,6 +251,26 @@ export default function PautaTaller() {
                   <span className="ml-auto text-[11.5px] text-slate-400">{(m.at || '').slice(0, 16).replace('T', ' ')}</span>
                 </div>
                 <p className="mt-1 text-[12.5px] text-slate-600">{m.texto}</p>
+                {!m.orden_id && (
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                    <span className="text-[11.5px] text-amber-700">¿De qué orden habla?</span>
+                    <select value={eleccion[m.id] || ''}
+                      onChange={(e) => setEleccion((p) => ({ ...p, [m.id]: e.target.value }))}
+                      className="rounded-md border border-slate-300 bg-white px-2 py-1 text-[12px] text-slate-700">
+                      <option value="">Elegir orden abierta…</option>
+                      {ordenes.map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {[o.numero, o.matricula, o.taller_nombre].filter(Boolean).join(' · ')}
+                        </option>
+                      ))}
+                    </select>
+                    <button onClick={() => asignar(m)} disabled={!eleccion[m.id] || guardando === 'asignar-' + m.id}
+                      className="rounded-md bg-slate-800 px-2.5 py-1 text-[12px] font-semibold text-white disabled:opacity-50">
+                      {guardando === 'asignar-' + m.id ? 'Asignando…' : 'Asignar'}
+                    </button>
+                    {!ordenes.length && <span className="text-[11.5px] text-slate-400">No hay órdenes abiertas.</span>}
+                  </div>
+                )}
                 {!m.leido && (
                   <button onClick={() => marcarLeidoTaller(m.id).then(cargar)}
                     className="mt-1 text-[11.5px] text-slate-500 hover:text-slate-600">marcar leído</button>

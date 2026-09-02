@@ -19656,43 +19656,53 @@ async def get_damage_costs(center: Optional[str] = None, _=Depends(require_admin
 
 
 @api_router.get("/stats/dashboard")
-async def stats_dashboard(_=Depends(require_admin)):
-    """Devuelve los contadores y metricas del dashboard principal."""
-    total_vehicles = await db.vehicles.count_documents({"status": {"$nin": ["deleted", "baja"]}})
-    vehicles_in_workshop = await db.vehicles.count_documents({"status": "taller"})
-    total_drivers = await db.drivers.count_documents({"active": {"$ne": False}})
-    total_inspections = await db.inspections.count_documents({})
-    unread_alerts = await db.alerts.count_documents({"read": False})
-    open_incidents = await db.incidents.count_documents({"status": "open"})
+async def stats_dashboard(center: Optional[str] = None, user: dict = Depends(require_admin)):
+    """Contadores del dashboard, acotados al centro pedido y a lo que el
+    usuario puede ver.
 
-    # Desglose de severidad de inspecciones
+    Hasta el 02-09-2026 ignoraba `center` —el panel lo mandaba— y los
+    `allowed_centers`: con OGA5 seleccionado decia 125 furgonetas (las de los
+    tres centros) mientras Disponibilidad, en la misma pantalla, decia 69. El
+    mismo numero de dos poblaciones distintas (gotcha 30). Un dispatcher
+    limitado a un centro veia la flota entera. `inspections`, `incidents` y
+    `alerts` no tienen centro: se acotan por furgoneta (gotcha 6). Y recorria
+    las 3.965 inspecciones en Python dos veces: ahora agrega Mongo (gotcha 10).
+    """
+    fc = _filtro_centro(user, center)                 # {} = sin acotar
+    fv = await _filtro_por_vehiculos(user, center)    # por furgoneta, para lo que no tiene centro
+    total_vehicles = await db.vehicles.count_documents({**fc, "status": {"$nin": ["deleted", "baja"]}})
+    vehicles_in_workshop = await db.vehicles.count_documents({**fc, "status": "taller"})
+    total_drivers = await db.drivers.count_documents({**fc, "active": {"$ne": False}})
+    total_inspections = await db.inspections.count_documents({**fv})
+    unread_alerts = await db.alerts.count_documents({**fv, "read": False})
+    open_incidents = await db.incidents.count_documents({**fv, "status": "open"})
+
+    # Desglose de severidad de inspecciones. Solo los cinco cajones de siempre:
+    # `sin_analisis` (16 en produccion) no entra, igual que antes.
     severity_counts = {"sin_danos": 0, "leve": 0, "moderado": 0, "grave": 0, "critico": 0}
-    async for insp in db.inspections.find({"deleted": {"$ne": True}}, {"_id": 0, "analysis.severity": 1}):
-        sev = (insp.get("analysis") or {}).get("severity", "sin_danos")
-        if sev in severity_counts:
-            severity_counts[sev] += 1
+    async for r in db.inspections.aggregate([
+            {"$match": {**fv, "deleted": {"$ne": True}}},
+            {"$group": {"_id": {"$ifNull": ["$analysis.severity", "sin_danos"]}, "n": {"$sum": 1}}}]):
+        if r["_id"] in severity_counts:
+            severity_counts[r["_id"]] += r["n"]
 
-    # Actividad ultimos 7 dias (inspecciones por dia)
-    from collections import defaultdict
-    daily = defaultdict(lambda: {"inspecciones": 0, "danos": 0})
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-    async for insp in db.inspections.find({"deleted": {"$ne": True}}, {"_id": 0, "created_at": 1, "analysis.severity": 1}):
-        ca = insp.get("created_at")
-        if isinstance(ca, str):
-            try:
-                ca = datetime.fromisoformat(ca)
-            except Exception:
-                continue
-        if not ca:
+    # Actividad ultimos 7 dias (inspecciones por dia). `created_at` es ISO en
+    # texto en las 3.965 (medido); $toString cubre el dia que alguna venga
+    # como fecha.
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    daily: dict = {}
+    async for r in db.inspections.aggregate([
+            {"$match": {**fv, "deleted": {"$ne": True}, "created_at": {"$gte": cutoff}}},
+            {"$group": {"_id": {"d": {"$substr": [{"$toString": "$created_at"}, 0, 10]},
+                                "sev": {"$ifNull": ["$analysis.severity", "sin_danos"]}},
+                        "n": {"$sum": 1}}}]):
+        key = r["_id"].get("d") or ""
+        if not key:
             continue
-        if ca.tzinfo is None:
-            ca = ca.replace(tzinfo=timezone.utc)
-        if ca >= cutoff:
-            key = ca.strftime("%Y-%m-%d")
-            daily[key]["inspecciones"] += 1
-            sev = (insp.get("analysis") or {}).get("severity", "sin_danos")
-            if sev in ["grave", "critico", "moderado"]:
-                daily[key]["danos"] += 1
+        fila = daily.setdefault(key, {"inspecciones": 0, "danos": 0})
+        fila["inspecciones"] += r["n"]
+        if r["_id"].get("sev") in ("grave", "critico", "moderado"):
+            fila["danos"] += r["n"]
 
     return {
         "total_vehicles": total_vehicles,
@@ -29091,15 +29101,19 @@ def _sc_dcr(entregados: int, fallos: int) -> Optional[float]:
     return round(entregados / base * 100, 2) if base else None
 
 
-@api_router.get("/scorecard/en-vivo")
-async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(require_admin)):
-    """El DCR real de esta semana contado desde Cortex, contra su umbral."""
-    hoy = datetime.now(timezone.utc).date()
-    # La semana de Amazon va de domingo a sabado.
-    dom = hoy - timedelta(days=(hoy.weekday() + 1) % 7)
-    desde = (dom - timedelta(days=7 * max(1, min(semanas, 12)))).strftime("%Y-%m-%d")
+async def _cx_dias_reparto(center: str, desde: str, hasta: Optional[str] = None) -> list:
+    """Cada dia de Cortex repartido (entregados / en vuelo / fallos / DCR),
+    con la foto congelada mandando sobre el recuento en vivo.
 
+    Es el corazon de `/scorecard/en-vivo`, sacado aqui para que
+    `/scorecard/daily-trend` cuente los dias con LA MISMA regla en vez de
+    quedarse en blanco (leia `daily_ratios`, vacia desde junio de 2026).
+    Devuelve una lista ordenada por fecha de dicts como los de `_cx_reparte`
+    mas `fecha` y `congelado`.
+    """
     q: dict = {"service_day": {"$gte": desde}}
+    if hasta:
+        q["service_day"]["$lte"] = hasta
     if center and center not in ("Todos", "todos"):
         q["center"] = {"$regex": re.escape(center.strip()), "$options": "i"}
 
@@ -29109,11 +29123,6 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
     dias: dict = {}
     async for r in cur:
         dias.setdefault(r["_id"]["d"], {})[r["_id"]["s"] or "NONE"] = r["n"]
-
-    # Umbrales de esta nave para poder decir en que nivel cae.
-    wnum = _sun_to_week_num(dom.strftime("%Y-%m-%d"))
-    thr, _meta = await _sc_thresholds(center or await _centro_por_defecto(), wnum)
-    thr_dcr = (thr or {}).get("dcr") or {}
 
     # LA FOTO CONGELADA MANDA SOBRE EL RECUENTO EN VIVO.
     # El recuento de arriba usa `state`, que es el estado de AHORA: un paquete
@@ -29127,7 +29136,7 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
     # seguido diciendo lo de antes y la pantalla habria mezclado dos criterios.
     # El dato crudo se recalcula solo.
     snaps: dict = {}
-    qs: dict = {"service_day": {"$gte": desde}}
+    qs: dict = {"service_day": dict(q["service_day"])}
     if "center" in q:
         qs["center"] = q["center"]
     async for s in db.cortex_day_snapshots.find(
@@ -29138,8 +29147,7 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
         for est, n_ in (s.get("por_estado") or {}).items():
             a[est] = a.get(est, 0) + n_
 
-    semanas_out, dias_out = [], []
-    porsem: dict = {}
+    dias_out = []
     for d in sorted(dias):
         rep = _cx_reparte(dias[d])
         sn = snaps.get(d)
@@ -29153,6 +29161,27 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
             rep = rep_sn
         rep["fecha"] = d
         dias_out.append(rep)
+    return dias_out
+
+
+@api_router.get("/scorecard/en-vivo")
+async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(require_admin)):
+    """El DCR real de esta semana contado desde Cortex, contra su umbral."""
+    hoy = datetime.now(timezone.utc).date()
+    # La semana de Amazon va de domingo a sabado.
+    dom = hoy - timedelta(days=(hoy.weekday() + 1) % 7)
+    desde = (dom - timedelta(days=7 * max(1, min(semanas, 12)))).strftime("%Y-%m-%d")
+
+    # Umbrales de esta nave para poder decir en que nivel cae.
+    wnum = _sun_to_week_num(dom.strftime("%Y-%m-%d"))
+    thr, _meta = await _sc_thresholds(center or await _centro_por_defecto(), wnum)
+    thr_dcr = (thr or {}).get("dcr") or {}
+
+    dias_out = await _cx_dias_reparto(center, desde)
+    semanas_out = []
+    porsem: dict = {}
+    for rep in dias_out:
+        d = rep["fecha"]
         try:
             f = datetime.strptime(d, "%Y-%m-%d").date()
             sd = (f - timedelta(days=(f.weekday() + 1) % 7)).strftime("%Y-%m-%d")
@@ -29657,11 +29686,41 @@ async def disparar_revision_dcr(_=Depends(require_admin)):
 async def scorecard_daily_trend(center: str, week: Optional[str] = None, _=Depends(require_admin)):
     """Evolución DÍA A DÍA de la semana (del Resumen diario): cada día su DCR/DNR/POD
     y el ACUMULADO hasta ese día. Para saber 'cómo vamos' un miércoles."""
+    semana_pedida = bool(week)
     if not week:
         week = await _latest_week_with_data(center)
     sun, sat = _sun_sat_week(week)
     docs = await db.daily_ratios.find(
         {"center": center, "date": {"$gte": sun, "$lte": sat}}, {"_id": 0}).sort("date", 1).to_list(10)
+    if not docs:
+        # `daily_ratios` depende de que alguien suba el Resumen diario a mano y
+        # en produccion lleva vacia desde junio de 2026 (gotcha 34): la tabla
+        # "dia a dia" de la scorecard salia en blanco y ademas apuntaba a la
+        # ultima semana con ratios, la del 14 de junio. Cortex tiene el mismo
+        # dato y se actualiza solo, asi que se cuenta desde ahi con la MISMA
+        # regla que la scorecard en vivo (foto congelada incluida). DNR y POD
+        # no salen de Cortex y van a None, no a cero.
+        if not semana_pedida:
+            sun, sat = _sun_sat_week(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+        reps = await _cx_dias_reparto(center, sun, sat)
+        dias, cEnt, cFal = [], 0, 0
+        for rep in reps:
+            cEnt += rep["entregados"]
+            cFal += rep["fallos"]
+            dias.append({
+                "fecha": rep["fecha"],
+                "dia": {"dcr": rep["dcr"], "dnr_dpmo": None, "pod": None,
+                        "entregados": rep["entregados"] or None,
+                        "en_vuelo": rep["en_vuelo"], "cerrado": rep["cerrado"],
+                        # Sin foto congelada el DCR de un dia pasado es un
+                        # minimo, no el real (gotcha 39): que quien lo lea lo sepa.
+                        "congelado": bool(rep.get("congelado"))},
+                "acum": {"dcr": _sc_dcr(cEnt, cFal), "dnr_dpmo": None, "pod": None,
+                         "entregados": cEnt or None}})
+        return {"center": center, "desde": sun, "hasta": sat, "dias": dias,
+                "n_dias": len(dias), "acumulado": (dias[-1]["acum"] if dias else None),
+                "fuente": "cortex",
+                "nota": "Contado sobre los paquetes de Cortex (DCR). DNR y POD solo salen del Resumen diario."}
     dias = []
     cEnv = cEnt = cDnr = cOpp = cSucc = 0
     for d in docs:

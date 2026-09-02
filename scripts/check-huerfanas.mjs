@@ -44,6 +44,25 @@ const SIN_UI_A_PROPOSITO = new Set([
   // crudo: util para depurar, no para una pantalla.
   'GET /scorecard/official',
 
+  // ── SALIERON AL PODAR api.js (02-09-2026) ─────────────────────────────
+  // Hasta ese dia un export de api.js sin importar contaba como consumidor y
+  // estas cuatro pasaban por enganchadas. Ninguna tiene pantalla:
+  // Mapa de calor de paquetes fallados por coordenadas. Paquetes IA enseña
+  // rutas y direcciones que fallan (`/cortex/direcciones-problema`), que es
+  // lo accionable; un mapa de puntos sin direccion no lo pidio nadie.
+  'GET /cortex/heatmap',
+  // Ritmo y rescates de un conductor a partir de `route_history`, que dejo
+  // de escribirse el 15-06-2026 (363 documentos). Lo que se mira hoy es
+  // `/diarios/conductores` y la scorecard por conductor.
+  'GET /metrics/driver-history/{transporter_id}',
+  // Donde quedo cada furgoneta la ultima vez que se confirmo la plaza. El
+  // plano (`/parking/state`) ya enseña plaza mandada, reportada y confirmada
+  // del dia; el historico se consulta a mano si hace falta.
+  'GET /parking/last-known',
+  // Disparo manual de los avisos de ITV por WhatsApp: los manda el cron a su
+  // hora (`envio_itv_whatsapp`) y el canal sigue bloqueado por Meta.
+  'POST /whatsapp/avisar-itv',
+
   // ── EL ROSTER SE PEGA EN LOCAL, Y ES MEJOR ────────────────────────────
   // `PasteModal` parsea el texto del roster en el navegador con `parseRoster`
   // y `matchRoster`: instantaneo, sin viaje al servidor y sin gastar cuota de
@@ -187,6 +206,31 @@ function recorrer(dir) {
 }
 for (const sub of ['frontend-v2/src', 'frontend/src', 'flotadsp_app/lib', 'scripts', 'backend/tests']) {
   recorrer(path.join(RAIZ, ...sub.split('/')))
+}
+
+/* Un export de `api.js` que ninguna pantalla importa NO es un consumidor.
+   El 02-09-2026 este checker daba "todas con consumidor" con 16 rutas cuyo
+   unico rastro era su propia linea en api.js —`getAlerts`, `getDriverRanking`,
+   `asignarMensajeTaller`…—: la bandeja del taller enseñaba "N sin saber de
+   cual hablan" y la ruta para asignarlos existia, pero ningun boton la
+   llamaba. Asi que las lineas de api.js cuyo nombre no aparece en ningun otro
+   fichero se quitan antes de buscar. */
+const apiJs = path.join(RAIZ, 'frontend-v2', 'src', 'panel', 'api.js')
+let apiTexto = ''
+try { apiTexto = fs.readFileSync(apiJs, 'utf8') } catch { /* sin api.js no hay nada que podar */ }
+if (apiTexto) {
+  const resto = consumidores.filter((t) => t !== apiTexto).join('\n')
+  const podadas = []
+  apiTexto = apiTexto.split('\n').filter((linea) => {
+    const m = linea.match(/^export (?:const|function|async function) (\w+)/)
+    if (!m) return true
+    const vivo = new RegExp(`\\b${m[1]}\\b`).test(resto)
+    if (!vivo) podadas.push(m[1])
+    return vivo
+  }).join('\n')
+  const idx = consumidores.findIndex((t) => t.startsWith(apiTexto.slice(0, 200)) || t.includes('export const getVehicles'))
+  if (idx >= 0) consumidores[idx] = apiTexto
+  if (podadas.length) console.log(`huerfanas: ${podadas.length} export(s) de api.js sin usar no cuentan como consumidor: ${podadas.join(', ')}`)
 }
 const TODO = consumidores.join('\n')
 
