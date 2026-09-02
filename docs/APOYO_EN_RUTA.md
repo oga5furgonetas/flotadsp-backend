@@ -68,8 +68,10 @@ empresas, otras DSP con otros Cortex»):
   `con_destino` por conductor en la situación.
 - Cada respuesta lleva `bajado_hace_min` (de `seen_at`, gotcha 29) y la
   pantalla lo enseña en ámbar pasados 10 min. Medido el 02-09-2026: 1,5 min.
-- Un apoyo abierto por pareja y día; crear otro devuelve 409 y manda a cambiar
-  el que hay.
+- Un apoyo abierto por pareja y día, dicho por la base (`apoyo_pareja_abierta`,
+  único parcial sobre `fase: "enviado"`): cinco «Crear apoyo» a la vez dejan
+  uno (medido: 1×200, 4×409). Crear otro devuelve 409 y manda a cambiar el
+  que hay. El enlace público se registra DESPUÉS del apoyo: sin huérfanos.
 - Sin teléfono del ayudante no se crea (400 con el nombre): no habría a quién
   mandarle el mapa. Por eso `_telefonos_desde_cortex` rellena los que faltan.
 

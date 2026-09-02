@@ -1339,6 +1339,11 @@ async def _ensure_tenant_indexes(db_name: str):
     # Apoyo en ruta (un conductor le quita paradas a otro, con mapa por WhatsApp).
     await _idx(tdb.apoyos, "id", unique=True, name="apoyo_id_unico")
     await _idx(tdb.apoyos, [("dia", 1), ("center", 1)])
+    # Un apoyo ABIERTO por pareja y dia, dicho por la base: dos clics a la vez en
+    # «Crear apoyo» no pueden dejar dos (gotcha 46). El find_one previo solo
+    # sirve para dar un mensaje bonito; el que manda es este unico parcial.
+    await _idx(tdb.apoyos, [("dia", 1), ("de.driver_id", 1), ("a.driver_id", 1)], unique=True,
+               partialFilterExpression={"fase": "enviado"}, name="apoyo_pareja_abierta")
     await _idx(tdb.ai_feedback, [("created_at", -1)])
     await _idx(tdb.ai_feedback, [("damage.part", 1)])
     await _idx(tdb.ai_feedback, [("damage.location_hint", 1)])
@@ -17778,11 +17783,17 @@ async def apoyo_crear(data: dict = Body(...), user: dict = Depends(require_admin
                        "detalle": "%d paradas" % len(paradas)}],
         "created_at": ahora, "created_by": user.get("sub"), "updated_at": ahora,
     }
+    try:
+        await db.apoyos.insert_one(dict(doc))
+    except DuplicateKeyError:
+        # Dos «Crear apoyo» a la vez para la misma pareja: el segundo pierde.
+        raise HTTPException(409, "Ya hay un apoyo abierto de esa pareja hoy: cámbialo en vez de crear otro")
+    # El enlace se registra DESPUES del apoyo: si el apoyo no entra, no queda
+    # un token huerfano apuntando a nada.
     await global_db.taller_enlaces.insert_one({
         "token": token, "tipo": "apoyo", "apoyo_id": doc["id"], "db_name": _current_db_name.get(),
         "creado_por": user.get("sub"), "creado_en": ahora,
         "expira_en": (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(), "revocado": False})
-    await db.apoyos.insert_one(dict(doc))
     await _audit(user, "apoyo_crear", {"id": doc["id"], "de": de_id, "a": a_id, "paradas": len(paradas)})
     return {**(await _apoyo_con_enlaces(doc)), "ya_entregadas": ya}
 
@@ -17830,7 +17841,11 @@ async def apoyo_cambiar(apoyo_id: str, data: dict = Body(...), user: dict = Depe
     if not cambios:
         raise HTTPException(400, "Nada que cambiar")
     cambios["updated_at"] = ahora
-    await db.apoyos.update_one({"id": apoyo_id}, {"$set": cambios, "$push": {"historial": {"$each": hist}}})
+    try:
+        await db.apoyos.update_one({"id": apoyo_id}, {"$set": cambios, "$push": {"historial": {"$each": hist}}})
+    except DuplicateKeyError:
+        # Reabrir (o cambiar de ayudante) chocando con otro apoyo abierto de la misma pareja.
+        raise HTTPException(409, "Ya hay otro apoyo abierto de esa pareja hoy")
     a = await db.apoyos.find_one({"id": apoyo_id}, {"_id": 0})
     await _audit(user, "apoyo_cambiar", {"id": apoyo_id, "cambios": sorted(cambios)})
     return await _apoyo_con_enlaces(a)
