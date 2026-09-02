@@ -274,6 +274,8 @@ reales de OGA5. Todo desplegado y comprobado en producción:
   2.22, que aprende los estados del informe de Cortex) y lo demás dice
   «Cortex no da la ubicación». Extensión 2.22 publicada; falta que Dani la
   recargue y abra una vez «Packages by status» con el estado de en furgoneta.
+  Y el ayudante puede ser cualquier ficha activa con teléfono aunque no tenga
+  `transporter_id` (24 de 146 no lo tienen): se identifica por la ficha.
 - **Descartado con evidencia:** cobertura del cuadrante 47 frente a 48 turnos
   (uno lleva código `S`, que no saca ruta: correcto); `/shifts?center=Todos`
   igual a OGA5 (esta semana solo OGA5 tiene cuadrante); chat interno con 8

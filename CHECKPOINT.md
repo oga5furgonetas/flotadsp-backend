@@ -83,7 +83,11 @@ hechos y desplegados (ver «Quinta pasada» en `ESTADO.md`). Lo que sigue:
   cerradas (un daño reparado era real), «marcar un daño que la IA no vio» del
   portal, y el detector de visión (hoy dispara en el 11 % de los recortes
   confirmados). Medir cada una contra los humanos antes de usarla
-  (`probar_autovalidacion.py`).
+  (`probar_autovalidacion.py`). **Sin evidencia todavía (02-09, noche):** hay
+  4 órdenes de taller en producción y ninguna enlaza con un daño
+  (`ordenes_trabajo` no tiene `damage_id`/`inspection_id`), así que la señal
+  «reparado = real» no se puede medir hasta que el circuito del taller se use
+  y las órdenes nazcan desde un daño (PautaTaller).
 - **Plantilla sin OCR**: la extensión ya captura las rutas y los conductores
   de Cortex; falta la hora de salida (`plannedDepartureTime` está en
   route-details). Con eso la plantilla sale de datos, no de capturas.

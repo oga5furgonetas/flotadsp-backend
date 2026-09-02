@@ -17508,16 +17508,23 @@ def _apoyo_minutos_desde(iso: Optional[str]) -> Optional[int]:
 
 
 async def _apoyo_personas(ids: set) -> dict:
-    """transporter_id -> {nombre, telefono, ficha_id}. La ficha manda; Cortex completa."""
+    """id -> {nombre, telefono, ficha_id}. La ficha manda; Cortex completa.
+
+    El id puede ser el `transporter_id` (asi vienen los conductores desde los
+    paquetes de Cortex) o el `id` de la ficha: 24 de 146 fichas activas no
+    tienen transporter_id (02-09-2026) y el backup del dia puede ser una de
+    ellas. Para ayudar no hace falta transporter_id, hace falta telefono.
+    """
     ids = {i for i in ids if i}
     out: dict = {}
     if not ids:
         return out
-    cur = db.drivers.find({"transporter_id": {"$in": list(ids)}, "active": True},
+    cur = db.drivers.find({"active": True, "$or": [{"transporter_id": {"$in": list(ids)}}, {"id": {"$in": list(ids)}}]},
                           {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1})
     async for d in cur:
-        out[d["transporter_id"]] = {"nombre": (d.get("name") or "").strip(),
-                                    "telefono": _telefono_limpio(d.get("phone")), "ficha_id": d["id"]}
+        clave = d.get("transporter_id") if d.get("transporter_id") in ids else d["id"]
+        out[clave] = {"nombre": (d.get("name") or "").strip(),
+                      "telefono": _telefono_limpio(d.get("phone")), "ficha_id": d["id"]}
     faltan = ids - set(out)
     if faltan:
         async for r in db.cortex_resumen.find({}, {"gente": 1}).sort("dia", -1).limit(40):
@@ -17648,7 +17655,8 @@ async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = Non
     fq = {"active": True, **_filtro_centro(user, center)}
     async for d in db.drivers.find(fq, {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1}):
         tid = d.get("transporter_id") or ""
-        ayudantes.append({"driver_id": tid, "ficha_id": d["id"], "nombre": (d.get("name") or "").strip(),
+        # Sin transporter_id se identifica por la ficha: puede ayudar igual.
+        ayudantes.append({"driver_id": tid or d["id"], "ficha_id": d["id"], "nombre": (d.get("name") or "").strip(),
                           "telefono": _telefono_limpio(d.get("phone")),
                           "es_backup": d["id"] in bkp,
                           "pendientes": (por.get(tid) or {}).get("pendientes", 0) if tid else 0})
