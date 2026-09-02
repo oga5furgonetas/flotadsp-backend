@@ -28,6 +28,9 @@ producción. El detalle está en `ESTADO.md` («Estado a 2026-09-02»).
 | `check-huerfanas` daba por consumidas 16 rutas por su export en `api.js` | 16 → 4 sin consumidor real | **Checker corregido** — 4 anotadas con motivo |
 | `smoke_endpoints.py` medía con `org_id: oga5` (no existe) | organización vacía | **Herramienta corregida** |
 | 500 en `PATCH /incidents` sin cuerpo, `/auth/me` con token de mantenimiento; 200 en borrados de ids inexistentes | barrido de 350 mutaciones | **Bugs confirmados** — corregidos |
+| 5 altas a la vez: 3 furgonetas con la misma matrícula, 5 conductores con el mismo correo, 5 órdenes, 21 cuentas por persona | `smoke_concurrencia.py` | **Bugs confirmados** — índices únicos parciales + cerrojo atómico (gotcha 46) |
+| El único de `ai_feedback` nunca existió (WARNING en cada arranque) | 10 parejas repetidas, 0 con `scope` | **Bug confirmado** — redeclarado con la clave del upsert |
+| `check-huerfanas` no escaneaba la app Flutter (`flotadsp_app/lib` no existe) | 23 rutas sin contar | **Checker corregido** |
 
 **Descartado con evidencia:** aislamiento multiempresa con ids reales (404 en
 todo), duplicados por `upsert` en `geo_rescate` (van por `_id`), 30 literales
@@ -68,10 +71,17 @@ reintroduciendo el fallo. Invariante nuevo en `smoke_endpoints.py`.
 
 ## Siguiente acción exacta
 
-Tercera pasada, con lo que las dos primeras no podían ver: recorrer el portal
-del conductor y la app Flutter como usuario (no solo la API), y medir el
-tamaño de `/cortex/debrief` (1,6 MB por carga) para paginarlo si el panel lo
-refresca a menudo.
+Cuarta pasada. Lo que las tres primeras no podían ver:
+
+1. **Estados y transiciones** de órdenes de taller e incidencias: provocar
+   saltos, retrocesos y transiciones duplicadas por API (`PATCH /work-orders`)
+   y comprobar que la furgoneta vuelve a su estado previo al entregar.
+2. **Escala**: `/cortex/debrief` y `/inspections` sin paginar; medir con
+   1.000× más datos (empresa sintética) antes de tocar nada.
+3. **«Mis turnos» en el portal**: `/shifts/mine` ya devuelve el cuadrante y
+   el portal lo tiene en PRONTO a propósito. Decisión de producto de Dani.
+4. Los 13 correos repetidos entre conductores dados de baja: fusionar fichas
+   (`/drivers/fusionar`) para poder quitar el `partial` del índice.
 
 ---
 

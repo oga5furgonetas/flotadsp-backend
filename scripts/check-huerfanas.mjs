@@ -204,7 +204,11 @@ function recorrer(dir) {
     }
   }
 }
-for (const sub of ['frontend-v2/src', 'frontend/src', 'flotadsp_app/lib', 'scripts', 'backend/tests']) {
+// `mobile/lib` es la app Flutter. Hasta el 02-09-2026 aqui ponia
+// `flotadsp_app/lib`, una carpeta que no existe: sus 23 rutas (`/drivers/ranking`,
+// `/inspections/vehicle/…`, `/alerts/maintenance`…) no contaban como consumidas
+// y una de ellas se podia haber borrado por "huerfana" dejando la app sin datos.
+for (const sub of ['frontend-v2/src', 'frontend/src', 'mobile/lib', 'scripts', 'backend/tests']) {
   recorrer(path.join(RAIZ, ...sub.split('/')))
 }
 

@@ -83,6 +83,8 @@ jobs:
         run: python scripts/check_multiempresa.py
       - name: Borrado masivo (vaciar una coleccion sin super-admin, confirmacion y rastro)
         run: python scripts/check_borrado.py
+      - name: Unicos (except DuplicateKeyError sin indice unico detras)
+        run: python scripts/check_unicos.py
       - name: Instalar dependencias
         run: pip install -r backend/requirements.txt pytest pytest-asyncio
       - name: Tests de API contra Mongo real (persistencia, auth, demo read-only)

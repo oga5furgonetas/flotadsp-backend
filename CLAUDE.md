@@ -670,6 +670,28 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `smoke_endpoints.py` comprueba ahora que `cortex_packages` no se hunde de un
    día para otro.
 
+46. **Una guarda en Python no protege de dos peticiones a la vez, y un
+   `except DuplicateKeyError` sin índice único detrás es papel mojado.**
+   Medido el 02-09-2026 en una empresa de prueba con cinco peticiones
+   simultáneas: 5 altas de la misma matrícula dejaban **3 furgonetas** (la
+   comprobación era un recorrido en Python: las cinco pasaban antes de que
+   ninguna insertara); 5 altas del mismo correo dejaban **5 conductores**
+   (`POST /drivers` no comprobaba nada, ni en secuencia); 5 partes de la
+   misma furgoneta, **5 órdenes abiertas**; y 5 «generar accesos» dejaban
+   **21 cuentas para la misma persona**, cada una con su contraseña — ese
+   código *ya capturaba* `DuplicateKeyError` «por si dos pestañas a la vez»,
+   pero `driver_accounts` no tenía índice único, así que el except no saltaba
+   nunca y el código parecía protegido. Todo respondía 200.
+   Reglas: lo que tiene que ser único lo dice **la base**, con un índice
+   único (parcial cuando el dato viejo lo exige: `matricula_unica_viva` solo
+   entre `active/taller/baja`, `email_unico_activo` solo con `active: true` y
+   sin distinguir mayúsculas), y el código traduce el `DuplicateKeyError` a
+   409. Antes de crear el único se mide que no haya repetidos en producción:
+   con repetidos la creación falla, `_idx` lo anota y se queda sin
+   protección, en silencio. Lo vigila `scripts/check_unicos.py` (todo
+   `except DuplicateKeyError` tiene que tener su único) y lo ejercita
+   `backend/scripts/smoke_concurrencia.py`, que es como se encontró.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
@@ -692,12 +714,12 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   despues de tocar multiempresa, importaciones, centros o el flujo de taller.
   Deja la empresa creada a proposito —no se borra sola: un script de smoke no
   debe poder borrar nada—; se quita desde el panel de super-admin.
-- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son diecisiete:
+- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son dieciocho:
   `check-i18n`, `check-routes`, `check-huerfanas`, `check-permisos`, `check-tema`,
   `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones`,
   `check-tema-mezclado`, `check-efectos`, `check-chunk-error`,
   `check_contracts.py`, `check_objectid.py`, `check_tenant.py`,
-  `check_multiempresa.py` y `check_borrado.py`.
+  `check_multiempresa.py`, `check_borrado.py` y `check_unicos.py`.
   **Ninguno tolera ya backlog**: los 45 avisos de `check-patrones` y las 29
   rutas de `check-huerfanas` se miraron una a una el 31-08 y el 01-09-2026, y
   los dos trinquetes están a cero. Un checker con backlog no distingue lo nuevo

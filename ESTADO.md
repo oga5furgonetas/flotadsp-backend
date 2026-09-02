@@ -63,7 +63,8 @@ volvieron a salir. Gotcha 45 y `scripts/check_borrado.py`.
 | Smoke empresa nueva | **25 de 25** (`smoke_empresa_nueva.py`) |
 | Barrido con empresa vacía | 196 rutas GET × 9 variantes = 1.526 llamadas, **0 de 5xx**; 175 mutaciones × 2 = 350 llamadas, 1 de 5xx (corregido) |
 | Tests | **24 en local**; CI corre también los de API |
-| Checkers | los **diecisiete** en verde (`check_borrado.py` y `check-chunk-error.mjs` nuevos) |
+| Checkers | los **dieciocho** en verde (`check_borrado.py`, `check-chunk-error.mjs` y `check_unicos.py` nuevos) |
+| Smoke de concurrencia | **5 de 5** (`smoke_concurrencia.py`, nuevo) |
 | Latencia | todas las GET de la empresa principal < 1 s con Cortex a volumen real (279.396 paquetes) |
 
 ### Datos (medido, no supuesto)
@@ -102,6 +103,39 @@ volvieron a salir. Gotcha 45 y `scripts/check_borrado.py`.
 - `PATCH /incidents/{id}` sin cuerpo daba 500; `/auth/me` con token de
   mantenimiento daba 500; borrar o editar alquiladoras e informes con id
   inexistente decía «success».
+
+### Tercera pasada (tarde del 02-09): lo que solo falla con cinco a la vez
+
+Medido con `backend/scripts/smoke_concurrencia.py` en una empresa de prueba,
+antes de arreglarlo: 5 altas de la misma matrícula dejaban **3 furgonetas**;
+5 del mismo correo, **5 conductores** (`POST /drivers` no comprobaba nada, ni
+en secuencia); 5 partes de la misma furgoneta, **5 órdenes**; 5 «generar
+accesos», **21 cuentas** para una persona. Ahora, en producción:
+
+- Índices únicos parciales en cada empresa: `matricula_unica_viva` (solo
+  `active/taller/baja`), `email_unico_activo` (solo `active: true`, sin
+  distinguir mayúsculas) y `driver_id_unico` en `driver_accounts`. Se midió
+  antes que no hubiera repetidos vivos en `flotadsp`; los tres se crearon.
+- `POST /drivers` da 409 con un correo activo repetido; los seis escritores
+  traducen `DuplicateKeyError` a 409 en vez de 500.
+- Abrir un parte es idempotente dos minutos por (furgoneta, taller) con un
+  cerrojo atómico por `_id` en `app_meta` (un `find_one` previo no valía: dos
+  peticiones miraban antes de escribir, medido).
+- `scripts/check_unicos.py`: todo `except DuplicateKeyError` tiene que tener
+  su índice único; `generar_accesos` lo capturaba sobre una colección sin
+  único y por eso parecía protegido. Probado quitando el índice a propósito.
+- El único de `ai_feedback` (inspección, daño) **nunca existió**: fallaba en
+  cada arranque con un WARNING porque los «daño no visto» van sin índice y
+  el upsert va por (inspección, scope, daño). Redeclarado con esa clave y
+  parcial; `smoke_endpoints.py` comprueba ahora que los únicos declarados
+  existen de verdad.
+- `check-huerfanas` escaneaba `flotadsp_app/lib`, que no existe: la app
+  Flutter vive en `mobile/lib` y sus 23 rutas no contaban como consumidas.
+- Portal del conductor recorrido como usuario (empresa demo): las seis
+  llamadas de la home responden 200; «Mis turnos» sigue en PRONTO a
+  propósito (comentario en `DriverPortal.jsx`) aunque `/shifts/mine` existe.
+  `/cortex/debrief` va comprimido por Fly (gzip): 401 KB en JSON, no es
+  problema de red.
 
 ### Comprobado y descartado (sin evidencia de fallo)
 

@@ -1143,6 +1143,15 @@ async def _ensure_tenant_indexes(db_name: str):
     tdb = client[db_name]
     await _idx(tdb.vehicles, "id")
     await _idx(tdb.vehicles, "license_plate")
+    # UNA MATRICULA VIVA, UNA FICHA. `create_vehicle` ya comparaba en Python,
+    # pero cinco altas a la vez de la misma matricula pasaban las cinco la
+    # comprobacion antes de que ninguna insertara: 3 fichas (medido el
+    # 02-09-2026 en una empresa de prueba). Solo la base puede impedirlo, y
+    # solo entre las vivas: una devuelta (`deleted`) y dada de alta otra vez es
+    # legitima. En produccion no habia repetidas vivas, asi que se crea limpio;
+    # si en alguna empresa las hubiera, `_idx` lo anota y se queda como estaba.
+    await _idx(tdb.vehicles, [("license_plate", 1)], unique=True, name="matricula_unica_viva",
+               partialFilterExpression={"status": {"$in": ["active", "taller", "baja"]}})
     await _idx(tdb.vehicles, "center")
     await _idx(tdb.vehicles, "current_driver_id")
     await _idx(tdb.vehicles, "status")
@@ -1157,6 +1166,15 @@ async def _ensure_tenant_indexes(db_name: str):
     # duplicados dentro FALLA y se queda sin indice — o sea, peor que ahora.
     # El unico se pone cuando se fusionen las fichas, con _idx_unico().
     await _idx(tdb.drivers, "email")
+    # ...y mientras tanto, unico SOLO ENTRE LOS ACTIVOS y sin distinguir
+    # mayusculas: las 13 parejas repetidas que quedan en produccion tienen al
+    # menos una ficha dada de baja, asi que este si se puede crear. Sin el,
+    # `POST /drivers` cinco veces a la vez con el mismo correo daba cinco
+    # fichas (02-09-2026), que es justo el gotcha 15: el login cae en la que no
+    # toca. Un `active` que no sea `true` queda fuera del indice a proposito.
+    await _idx(tdb.drivers, [("email", 1)], unique=True, name="email_unico_activo",
+               partialFilterExpression={"active": True, "email": {"$type": "string", "$gt": ""}},
+               collation={"locale": "en", "strength": 2})
     # Bloqueos de dias: se consultan en CADA peticion del conductor.
     await _idx(tdb.shift_blocks, [("hasta", 1), ("desde", 1)])
     await _idx(tdb.shift_blocks, "driver_id")
@@ -1262,8 +1280,17 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.ai_feedback, [("damage.part", 1)])
     await _idx(tdb.ai_feedback, [("damage.location_hint", 1)])
     await _idx(tdb.ai_feedback, [("verdict", 1)])
-    await _idx(tdb.ai_feedback, 
-        [("inspection_id", 1), ("damage_index", 1)], unique=True
+    # UN VEREDICTO POR DAÑO Y ALCANCE. El unico de antes era sobre
+    # (inspection_id, damage_index) y NUNCA llego a existir en produccion: los
+    # avisos de "daño no visto" van con `damage_index: null` y hay varios por
+    # inspeccion (legitimo), y el upsert de Revision Rapida va por
+    # (inspection_id, scope, damage_index), asi que la misma pareja convivia
+    # con dos `scope`. La creacion fallaba en cada arranque con un WARNING que
+    # nadie leia (medido el 02-09-2026: 10 parejas repetidas, 0 con el scope).
+    # Este si se crea: la clave del upsert, y solo para daños numerados.
+    await _idx(tdb.ai_feedback,
+        [("inspection_id", 1), ("scope", 1), ("damage_index", 1)], unique=True,
+        name="feedback_unico", partialFilterExpression={"damage_index": {"$type": "number"}}
     )
     await _idx(tdb.incidents, "vehicle_id")
     await _idx(tdb.incidents, "status")
@@ -1275,7 +1302,14 @@ async def _ensure_tenant_indexes(db_name: str):
     )
     await _idx(tdb.chat_messages, [("center", 1), ("created_at", -1)])
     await _idx(tdb.driver_accounts, "username")
-    await _idx(tdb.inspection_ai_results, 
+    # `generar_accesos_conductores` capturaba DuplicateKeyError "por si dos
+    # pestañas a la vez"... sobre una coleccion SIN indice unico, asi que nunca
+    # saltaba: cinco pulsaciones a la vez dejaron 21 cuentas para un mismo
+    # conductor, cada una con una contraseña distinta (02-09-2026). Un except
+    # de duplicado sin indice unico es papel mojado; `check_unicos.py` lo vigila.
+    await _idx(tdb.driver_accounts, [("driver_id", 1)], unique=True, name="driver_id_unico",
+               partialFilterExpression={"driver_id": {"$type": "string"}})
+    await _idx(tdb.inspection_ai_results,
         [("inspection_id", 1), ("photo_index", 1)], unique=True
     )
     await _idx(tdb.workshops, "id")
@@ -8110,7 +8144,12 @@ async def create_vehicle(data: VehicleCreate, _=Depends(require_admin)):
                          % (otra.get("license_plate"), otra.get("status")))
 
     doc = serialize_doc(vehicle.model_dump())
-    await db.vehicles.insert_one(doc)
+    try:
+        await db.vehicles.insert_one(doc)
+    except DuplicateKeyError:
+        # La comprobacion de arriba no protege de dos altas A LA VEZ: eso lo
+        # para el indice `matricula_unica_viva`, y aqui se traduce a 409.
+        raise HTTPException(409, "La matrícula %s ya está dada de alta." % (vehicle.license_plate or ""))
     return vehicle
 
 
@@ -8759,7 +8798,12 @@ async def update_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
     if "center" in data:
         data["center"] = _centro_norm(data["center"], await _centros_conocidos())
     prev = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "status": 1})
-    result = await db.vehicles.update_one({"id": vehicle_id}, {"$set": data})
+    try:
+        result = await db.vehicles.update_one({"id": vehicle_id}, {"$set": data})
+    except DuplicateKeyError:
+        # Cambiarle la matricula a una que ya lleva otra furgoneta viva, o
+        # resucitar una `deleted` con matricula ya ocupada: el indice lo para.
+        raise HTTPException(409, "Esa matrícula ya la lleva otra furgoneta dada de alta.")
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Vehículo no encontrado")
     if "status" in data:
@@ -8780,8 +8824,27 @@ async def create_driver(data: DriverCreate, admin: dict = Depends(require_admin)
     password = driver_data.pop("password", None)
 
     driver = Driver(**driver_data)
+    # UNA PERSONA, UNA FICHA ACTIVA. Esta ruta no comprobaba nada: dos altas
+    # con el mismo correo, seguidas o a la vez, daban dos fichas, y el login
+    # del portal cae en la que Mongo tenga primero (gotcha 15). Se compara sin
+    # distinguir mayusculas y solo contra las activas: una persona que vuelve
+    # tras una baja se da de alta otra vez con normalidad.
+    email = (driver.email or "").strip()
+    if email:
+        otra = await db.drivers.find_one(
+            {"email": {"$regex": "^%s$" % re.escape(email), "$options": "i"},
+             "active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1})
+        if otra:
+            raise HTTPException(
+                409, "Ya hay un conductor activo con el correo %s (%s). Edita esa "
+                     "ficha o cambia el correo." % (email, otra.get("name") or otra.get("id")))
     doc = serialize_doc(driver.model_dump())
-    await db.drivers.insert_one(doc)
+    try:
+        await db.drivers.insert_one(doc)
+    except DuplicateKeyError:
+        # Dos altas A LA VEZ: la comprobacion de arriba las deja pasar a las
+        # dos y solo el indice `email_unico_activo` para a la segunda.
+        raise HTTPException(409, "Ya hay un conductor activo con el correo %s." % email)
 
     if password and driver.email:
         await db.driver_accounts.insert_one({
@@ -9206,10 +9269,18 @@ async def drivers_importar(file: UploadFile = File(...), center: str = Form(""),
         else:
             nombres_bd.add(_imp_norm(p["name"]))
 
+    metidos = len(nuevos)
     if nuevos:
-        await db.drivers.insert_many(nuevos)
-    logger.info("Conductores importados: %d nuevos, %d ya estaban", len(nuevos), len(saltados))
-    return {"importados": len(nuevos), "ya_estaban": len(saltados),
+        try:
+            await db.drivers.insert_many(nuevos, ordered=False)
+        except BulkWriteError as e:
+            # Dos importaciones a la vez del mismo fichero: los correos que ya
+            # entraron por la otra los para el indice `email_unico_activo`, el
+            # resto entra igual (`ordered=False`). Se cuenta lo que entro.
+            metidos = int((e.details or {}).get("nInserted") or 0)
+            saltados = saltados + [None] * (len(nuevos) - metidos)
+    logger.info("Conductores importados: %d nuevos, %d ya estaban", metidos, len(saltados))
+    return {"importados": metidos, "ya_estaban": len(saltados),
             "no_leidas": len(r["saltadas"]),
             "nombres": [d["name"] for d in nuevos][:50]}
 
@@ -9345,7 +9416,10 @@ async def update_driver(driver_id: str, data: dict, _=Depends(require_admin)):
         cambio["$unset"] = quitar
     if not cambio:
         return {"success": True, "sin_cambios": True}
-    result = await db.drivers.update_one({"id": driver_id}, cambio)
+    try:
+        result = await db.drivers.update_one({"id": driver_id}, cambio)
+    except DuplicateKeyError:
+        raise HTTPException(409, "Ese correo ya lo tiene otro conductor activo.")
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Conductor no encontrado")
     return {"success": True}
@@ -10326,11 +10400,15 @@ async def damage_feedback(inspection_id: str, data: dict, user: dict = Depends(g
         "created_at": datetime.now(timezone.utc).isoformat(),
         "model_version": "gemini-2.5-flash",
     }
-    # Upsert: si re-valida el mismo daño, se actualiza el veredicto
-    await db.ai_feedback.update_one(
-        {"inspection_id": inspection_id, "scope": scope, "damage_index": damage_index},
-        {"$set": sample}, upsert=True
-    )
+    # Upsert: si re-valida el mismo daño, se actualiza el veredicto. Dos
+    # veredictos A LA VEZ sobre el mismo daño chocan en el indice
+    # `feedback_unico` (gotcha 9): el segundo vuelve a intentarlo y, como el
+    # documento ya existe, actualiza en vez de insertar. Gana el ultimo.
+    _clave_fb = {"inspection_id": inspection_id, "scope": scope, "damage_index": damage_index}
+    try:
+        await db.ai_feedback.update_one(_clave_fb, {"$set": sample}, upsert=True)
+    except DuplicateKeyError:
+        await db.ai_feedback.update_one(_clave_fb, {"$set": sample}, upsert=True)
 
     # AQUI SE CIERRA EL BUCLE. La correccion que acaba de hacer una persona
     # entra en el modelo que decide de que fiarse, sin que nadie tenga que
@@ -16478,6 +16556,34 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
                  "pongas aquí. Si el golpe ya está apuntado en el libro de daños, "
                  "márcalo y el texto se redacta solo.")
 
+    # DOS CLICS, UNA ORDEN. Cinco peticiones iguales a la vez abrian cinco
+    # ordenes para la misma furgoneta en el mismo taller (02-09-2026), y el
+    # boton "abrir parte en un clic" se puede pulsar dos veces. Si ya hay una
+    # abierta de esta furgoneta en este taller creada hace menos de dos
+    # minutos, es la misma orden: se devuelve en vez de crear otra. Dos
+    # ordenes distintas de verdad (otro taller, o mas tarde) siguen pudiendo.
+    # Y tiene que ser ATOMICO: un `find_one` antes de insertar no vale, porque
+    # dos peticiones a la vez miran las dos antes de que ninguna escriba
+    # (medido: seguian saliendo 2). El cerrojo es un documento por `_id` en
+    # `app_meta`, como `_ya_enviado_hoy` (gotcha 32): el upsert solo pasa si
+    # no hay cerrojo o es viejo; si lo hay, Mongo lanza DuplicateKeyError y
+    # esa es la señal de que la otra peticion va por delante.
+    ahora = datetime.now(timezone.utc)
+    hace_poco = (ahora - timedelta(minutes=2)).isoformat()
+    cerrojo = "ot_cerrojo|%s|%s" % (data.vehicle_id, data.workshop_id)
+    try:
+        await db.app_meta.update_one({"_id": cerrojo, "at": {"$lt": hace_poco}},
+                                     {"$set": {"at": ahora.isoformat()}}, upsert=True)
+    except DuplicateKeyError:
+        repetida = await db.ordenes_trabajo.find_one(
+            {"vehicle_id": data.vehicle_id, "workshop_id": data.workshop_id,
+             "estado": {"$nin": ["anulada", "entregado"]}, "creada_en": {"$gte": hace_poco}},
+            {"_id": 0})
+        if repetida:
+            return repetida
+        raise HTTPException(409, "Esa orden se está abriendo ahora mismo desde otra petición. "
+                                 "Recarga la lista antes de volver a intentarlo.")
+
     orden = {
         "id": str(uuid.uuid4()),
         "numero": await _ot_numero(),
@@ -18828,7 +18934,10 @@ async def put_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
     data.pop("id", None)
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     prev = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "status": 1})
-    result = await db.vehicles.update_one({"id": vehicle_id}, {"$set": data})
+    try:
+        result = await db.vehicles.update_one({"id": vehicle_id}, {"$set": data})
+    except DuplicateKeyError:
+        raise HTTPException(409, "Esa matrícula ya la lleva otra furgoneta dada de alta.")
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Vehículo no encontrado")
     if "status" in data:
@@ -19147,6 +19256,10 @@ async def import_vehicles(
                 nueva["center"] = unico_centro_veh
             await db.vehicles.insert_one(nueva)
             imported += 1
+        except DuplicateKeyError:
+            # Dos importaciones a la vez con la misma fila: ya esta dada de
+            # alta, que es lo que se queria. No es un error de la fila.
+            skipped += 1
         except Exception as row_err:
             errors.append(f"{plate}: {str(row_err)[:80]}")
             skipped += 1

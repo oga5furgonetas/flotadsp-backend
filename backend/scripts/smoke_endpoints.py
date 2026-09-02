@@ -102,4 +102,25 @@ try:
 except Exception as e:
     print("  %-4s %-46s FALLA %s" % ("INV", "dias congelados conservan sus paquetes", str(e)[:120]))
     mal += 1
+# INVARIANTE: los indices unicos que el codigo da por hechos EXISTEN en la base
+# principal. `_idx` no revienta si uno falla (gotcha 9: con duplicados dentro
+# la creacion falla y se queda sin indice, en silencio): el except de
+# duplicado que lo acompaña se vuelve papel mojado y nadie se entera. Se mira
+# en Mongo directamente, que para eso este smoke corre en la maquina.
+try:
+    from pymongo import MongoClient
+    _db = MongoClient(os.environ["MONGO_URL"])[os.environ.get("DB_NAME", "flotadsp")]
+    faltan = [f"{col}.{nombre}" for col, nombre in (
+        ("vehicles", "matricula_unica_viva"), ("drivers", "email_unico_activo"),
+        ("driver_accounts", "driver_id_unico"), ("daily_checklists", "center_1_date_1_shift_1"),
+        ("cortex_stations", "service_area_id_1"))
+        if not _db[col].index_information().get(nombre, {}).get("unique")]
+    bien = not faltan
+    print("  %-4s %-46s %s" % ("INV", "los indices unicos declarados existen",
+                               "OK" if bien else "FALTAN: " + ", ".join(faltan)))
+    ok += 1 if bien else 0
+    mal += 0 if bien else 1
+except Exception as e:
+    print("  %-4s %-46s FALLA %s" % ("INV", "los indices unicos declarados existen", str(e)[:120]))
+    mal += 1
 print("\n%d bien, %d mal" % (ok, mal))
