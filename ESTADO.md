@@ -281,6 +281,30 @@ reales de OGA5. Todo desplegado y comprobado en producción:
   igual a OGA5 (esta semana solo OGA5 tiene cuadrante); chat interno con 8
   mensajes desde julio y `contacts` a 0: no son fallos, es que no se usan.
 
+### Séptima pasada (02-09, noche): el móvil, que era lo más atrasado
+
+Dani: «trabaja en la app para Android y iOS, que puedan entrar desde los
+navegadores y se vea bien; es un coñazo histórico». Medido a 375 px en el
+navegador, pantalla por pantalla, no a ojo.
+
+- **Navegación.** En el móvil las 40 pantallas salían en una tira horizontal
+  de pastillas, sin grupos: para llegar a una había que barrer a ciegas. Ahora
+  hay un **menú de verdad** (hoja que sube desde abajo) con los MISMOS grupos
+  del escritorio, filas de 48 px, se cierra al elegir, al tocar fuera y con
+  Escape, y respeta la zona segura del iPhone. La barra de abajo pasa a cuatro
+  destinos + Menú; el sitio lo deja Chat interno, que tiene 8 mensajes desde
+  el 16 de julio.
+- **Páginas que se arrastraban de lado** (el gesto que hace que una web
+  parezca rota en el móvil). Medidas y corregidas: Scorecard **621 px** en una
+  pantalla de 375 (la tabla del día a día tenía scroll, pero su columna no
+  podía encoger: `min-width: auto` de un hijo de rejilla), Paquetes IA 453,
+  DNR 400, Órdenes de taller 429, Vehículos 371. Las cinco quedan a cero.
+- **Recorridas y limpias sin tocar nada**: Mi día, Actividad, Apoyo en ruta,
+  Debrief, Métricas, Checklist de turno, Incidencias, Talleres, Horas · WHC,
+  Configuración, Conductores, Inspecciones, Asignación diaria, Turnos.
+- **Sin evidencia todavía**: Plantilla de turno se sale 17 px, que no se nota
+  al arrastrar; se deja anotado y no se toca sin verlo en un móvil real.
+
 ## Estado a 2026-08-30
 
 ### Producción

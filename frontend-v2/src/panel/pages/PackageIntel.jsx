@@ -519,11 +519,13 @@ export default function PackageIntel() {
             {t('px.titulo')}
           </h1>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
+        {/* En el movil esta fila medía 437 px dentro de 311 y arrastraba la
+            pagina: el selector de dia crece con el texto de la fecha. */}
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto">
+          <div className="relative w-full sm:w-auto">
             <Calendar size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dark-500" />
             <select value={day} onChange={e => { dayPickedRef.current = true; setDay(e.target.value); setSel(null) }}
-              className="appearance-none rounded-lg border border-dark-700 bg-dark-900 py-2 pl-8 pr-8 text-[13px] font-semibold text-dark-200 outline-none hover:border-dark-600 focus:border-brand-500/50">
+              className="w-full min-w-0 sm:w-auto appearance-none rounded-lg border border-dark-700 bg-dark-900 py-2 pl-8 pr-8 text-[13px] font-semibold text-dark-200 outline-none hover:border-dark-600 focus:border-brand-500/50">
               {(days.some(d => d.day === day) ? days : [{ day, n: 0 }, ...days]).map(d => (
                 <option key={d.day} value={d.day}>{fmtDay(d.day, t, locale)}{d.n ? ` · ${d.n}` : ''}</option>
               ))}

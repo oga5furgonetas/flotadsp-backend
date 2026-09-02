@@ -101,6 +101,18 @@ Registro de escrituras (`audit_requests`), listado de inspecciones proyectado,
 y el módulo **Apoyo en ruta** entero (`docs/APOYO_EN_RUTA.md`). Todo en
 producción y comprobado con datos reales. Detalle en `ESTADO.md`.
 
+## El móvil (02-09, noche)
+
+El panel se recorrió entero a 375 px en el navegador. Menú nuevo (hoja con los
+grupos del escritorio) y cinco pantallas que se arrastraban de lado, a cero.
+La regla que salió de ahí y que hay que recordar: **un hijo de rejilla o de
+flex trae `min-width: auto`**, así que un contenedor con `overflow-x-auto`
+dentro NO puede encoger y estira la página entera; se arregla con `min-w-0`
+en el hijo, no tocando la tabla. Detalle en `ESTADO.md` («Séptima pasada»).
+Queda: Plantilla de turno se sale 17 px, y el resto de pantallas menores
+(Renting, Casas de alquiler, Aparcamiento, Vencimientos, Importaciones,
+Bandeja, Contactos, Perfil, Usuarios) sin medir todavía.
+
 ## Siguiente acción exacta
 
 Sexta pasada (la cuarta fue recorrer el panel como usuario; la quinta, el
