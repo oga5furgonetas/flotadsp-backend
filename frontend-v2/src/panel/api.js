@@ -469,7 +469,7 @@ export const cortexStationsAuto = (aplicar = false) => api.post(`/cortex/station
 export const cortexIngestToken = () => api.get('/cortex/ingest-token')
 export const cortexSeedDemo = () => api.post('/cortex/seed-demo')
 export const cortexClearDemo = () => api.post('/cortex/clear-demo')
-export const cortexReset = () => api.post('/cortex/reset')
+export const cortexReset = (body) => api.post('/cortex/reset', body) // {confirmar: 'BORRAR'}, solo super-admin
 
 /* Calidad de entrega en vivo: el scorecard calculado desde Cortex, sin subir
    nada y sin esperar al viernes de Amazon. */

@@ -646,6 +646,30 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `..` dentro mientras `FileInfo.FullName` viene ya resuelto — restar
    longitudes sin `Resolve-Path` se sale de la cadena.
 
+45. **Un botón que borra un histórico entero no puede estar a un clic ni al
+   alcance de cualquier admin.** El 01-09-2026 desaparecieron de producción
+   **265.986 paquetes y 555.730 eventos de Cortex** —julio y agosto enteros—,
+   y con ellos las semanas de la scorecard en vivo, las direcciones que fallan
+   y el DCR de cada día. No fue el TTL: en la copia de esa madrugada todos
+   caducaban en octubre y noviembre. Fue `POST /cortex/reset`, que hacía
+   `delete_many({})` con solo `require_admin` y un `window.confirm`, colgado
+   del botón «Borrar todo y empezar limpio» de la tarjeta de arranque de
+   Paquetes IA, visible para los 14 usuarios del panel. No dejó rastro en
+   ningún log: se fechó por el tamaño de las copias de R2 (67 MB el 01-09 a
+   las 02:00, 14,6 MB el 02-09) y se recuperó de la del 01-09 insertando solo
+   lo que faltaba, cada documento marcado con `restaurado_de`, y el resumen en
+   `app_meta.respaldo_restauracion_cortex` (deshacer:
+   `delete_many({"restaurado_de": ...})`). Los 473 paquetes que seguían en
+   vuelo se dejaron como estaban.
+   Reglas: **todo `delete_many({})` en una ruta exige `require_superadmin`,
+   una confirmación explícita en la petición (`confirmar: "BORRAR"`) y un
+   apunte en `audit_log`**; el botón solo se pinta al super-admin y pide
+   escribir la palabra. Lo vigila `scripts/check_borrado.py`, probado
+   quitando la dependencia a propósito. Y la copia de R2 rota a los 14 días:
+   una pérdida que no se detecta en dos semanas ya no se recupera, así que
+   `smoke_endpoints.py` comprueba ahora que `cortex_packages` no se hunde de un
+   día para otro.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
@@ -668,11 +692,12 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   despues de tocar multiempresa, importaciones, centros o el flujo de taller.
   Deja la empresa creada a proposito —no se borra sola: un script de smoke no
   debe poder borrar nada—; se quita desde el panel de super-admin.
-- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son quince:
+- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son dieciséis:
   `check-i18n`, `check-routes`, `check-huerfanas`, `check-permisos`, `check-tema`,
   `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones`,
   `check-tema-mezclado`, `check-efectos`, `check_contracts.py`,
-  `check_objectid.py`, `check_tenant.py` y `check_multiempresa.py`.
+  `check_objectid.py`, `check_tenant.py`, `check_multiempresa.py` y
+  `check_borrado.py`.
   **Ninguno tolera ya backlog**: los 45 avisos de `check-patrones` y las 29
   rutas de `check-huerfanas` se miraron una a una el 31-08 y el 01-09-2026, y
   los dos trinquetes están a cero. Un checker con backlog no distingue lo nuevo

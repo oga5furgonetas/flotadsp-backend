@@ -10,6 +10,7 @@ import {
   cortexIngestToken, cortexSeedDemo, cortexClearDemo, cortexDays, cortexReset,
   cortexStations, cortexAssignStation, cortexStationsAuto,
 } from '../api'
+import { isSuperAdmin } from '../auth'
 import LibretaPortales from '../components/LibretaPortales'
 import DireccionesHoy from '../components/DireccionesHoy'
 import MissingHoy from '../components/MissingHoy'
@@ -474,10 +475,15 @@ export default function PackageIntel() {
   const actionErr = (e, fb) => flash(false, e?.response?.data?.detail || fb)
   const seed = async () => { setSeeding(true); try { await cortexSeedDemo(); await load() } catch (e) { actionErr(e, t('px.eSeed')) } finally { setSeeding(false) } }
   const clearDemo = async () => { setSeeding(true); try { await cortexClearDemo(); setSel(null); await load() } catch (e) { actionErr(e, t('px.eClearDemo')) } finally { setSeeding(false) } }
+  // Borrar TODO el historico de Cortex: solo el super-admin y escribiendo
+  // BORRAR. Con un simple confirm y al alcance de cualquier admin, un clic
+  // el 01-09-2026 borro dos meses de paquetes (gotcha 45).
   const reset = async () => {
-    if (!window.confirm(t('px.confirmReset'))) return
-    setSeeding(true); try { await cortexReset(); setSel(null); await load() } catch (e) { actionErr(e, t('px.eBorrar')) } finally { setSeeding(false) }
+    const palabra = window.prompt(t('px.confirmReset'))
+    if (palabra !== 'BORRAR') return
+    setSeeding(true); try { await cortexReset({ confirmar: 'BORRAR' }); setSel(null); await load() } catch (e) { actionErr(e, t('px.eBorrar')) } finally { setSeeding(false) }
   }
+  const puedeBorrarTodo = isSuperAdmin()
 
   // Frescura de la captura: LA señal de confianza. Verde = extensión viva.
   const freshMin = ov?.last_capture_at ? Math.max(0, Math.floor((Date.now() - new Date(ov.last_capture_at)) / 60000)) : null
@@ -600,7 +606,7 @@ export default function PackageIntel() {
       )}
 
       {showSetup && (
-        <div className="mb-5 mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={reset} seeding={seeding} /></div>
+        <div className="mb-5 mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={puedeBorrarTodo ? reset : null} seeding={seeding} /></div>
       )}
 
       {/* ── ESTACIONES → CENTRO ────────────────────────────────────────────
@@ -704,7 +710,7 @@ export default function PackageIntel() {
       </div>
 
       {empty ? (
-        <div className="mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={reset} seeding={seeding} /></div>
+        <div className="mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={puedeBorrarTodo ? reset : null} seeding={seeding} /></div>
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_420px]">
           {/* Columna izquierda */}

@@ -6046,7 +6046,9 @@ async def get_me(user: dict = Depends(get_current_user)):
     return {
         "id": user["sub"],
         "role": user["role"],
-        "name": user["name"],
+        # .get: el token de mantenimiento (smoke_endpoints) no lleva nombre y
+        # con user["name"] esto respondia 500 en vez de contestar.
+        "name": user.get("name"),
         "theme": theme,
         "email": email,
         # Permisos, rol y centros TAL COMO ESTAN AHORA en la base de datos
@@ -15064,7 +15066,14 @@ async def resolve_incident(incident_id: str, _=Depends(require_admin)):
 async def update_incident(incident_id: str, request: Request, _=Depends(require_admin)):
     """Actualiza campos editables de una incidencia."""
     _ALLOWED = {"title", "description", "severity", "notes", "status"}
-    data = await request.json()
+    try:
+        data = await request.json()
+    except Exception:                                        # noqa: BLE001
+        # Sin cuerpo o mal formado, `request.json()` revienta y salia un 500
+        # (barrido de mutaciones del 02-09-2026). Es un dato mal mandado: 400.
+        raise HTTPException(status_code=400, detail="Cuerpo JSON inválido o vacío")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Cuerpo JSON inválido")
     data = {k: v for k, v in data.items() if k in _ALLOWED}
     if not data:
         raise HTTPException(status_code=400, detail="Sin campos válidos")
@@ -23689,7 +23698,13 @@ async def update_rental(rental_id: str, data: dict, _=Depends(require_admin)):
     """Edita una empresa o registra una verificación de disponibilidad."""
     data.pop("_id", None)
     data.pop("id", None)
-    await db.rental_companies.update_one({"id": rental_id}, {"$set": data})
+    if not data:
+        raise HTTPException(status_code=400, detail="Sin campos que guardar")
+    r = await db.rental_companies.update_one({"id": rental_id}, {"$set": data})
+    # Con un id que no existe respondia "success": el panel decia "guardado"
+    # sin haber tocado nada.
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Empresa no encontrada")
     return {"success": True}
 
 
@@ -23714,7 +23729,9 @@ async def verify_rental_availability(rental_id: str, data: dict, user: dict = De
 
 @api_router.delete("/rentals/{rental_id}")
 async def delete_rental(rental_id: str, _=Depends(require_admin)):
-    await db.rental_companies.update_one({"id": rental_id}, {"$set": {"active": False}})
+    r = await db.rental_companies.update_one({"id": rental_id}, {"$set": {"active": False}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Empresa no encontrada")
     return {"success": True}
 
 
@@ -24281,14 +24298,22 @@ async def list_amazon_reports(center: Optional[str] = None, _=Depends(require_ad
 
 
 @api_router.delete("/metrics/reports/all")
-async def delete_all_reports(_=Depends(require_admin)):
+async def delete_all_reports(confirmar: str = "", user: dict = Depends(require_superadmin)):
+    """Vacia los informes de Amazon subidos. Misma regla que `/cortex/reset`
+    (gotcha 45): super-admin, `?confirmar=BORRAR` y rastro en `audit_log`."""
+    if confirmar != "BORRAR":
+        raise HTTPException(400, "Añade ?confirmar=BORRAR para vaciar todos los informes")
     r = await db.amazon_reports.delete_many({})
+    await _audit(user, "amazon_reports_reset", {"db": _current_db_name.get(),
+                                                "deleted": r.deleted_count})
     return {"success": True, "deleted": r.deleted_count}
 
 
 @api_router.delete("/metrics/reports/{report_id}")
 async def delete_amazon_report(report_id: str, _=Depends(require_admin)):
-    await db.amazon_reports.delete_one({"id": report_id})
+    r = await db.amazon_reports.delete_one({"id": report_id})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Informe no encontrado")
     return {"success": True}
 
 
@@ -29336,11 +29361,16 @@ async def _congelar_dia(dia: str, centro: str) -> Optional[dict]:
     return doc
 
 
-async def congelar_dias_cortex(dias: Optional[list] = None) -> dict:
-    """Congela los ultimos dias de TODOS los DSP.
+async def congelar_dias_cortex(dias: Optional[list] = None, solo_db: Optional[str] = None) -> dict:
+    """Congela los ultimos dias de TODOS los DSP (o de uno, con `solo_db`).
 
     Gotcha 26: esto es un cron, no tiene sesion, y `db` sin `set_current_org_db`
     caeria siempre en la BD principal. Aqui se recorren las orgs a mano.
+
+    `solo_db` es para el disparo A MANO desde el panel: sin el, un admin de
+    cualquier empresa congelaba los dias de TODAS y recibia en la respuesta el
+    centro y el DCR de las demas (visto el 02-09-2026 con una empresa recien
+    creada: `guardados: 1, centro: OGA5`). El cron sigue recorriendo todas.
     """
     hoy = datetime.now(timezone.utc).date()
     objetivo = dias or [(hoy - timedelta(days=k)).strftime("%Y-%m-%d")
@@ -29351,6 +29381,8 @@ async def congelar_dias_cortex(dias: Optional[list] = None) -> dict:
          "account_type": 1}).to_list(500)
     if not orgs:
         orgs = [None]                      # instalacion de un solo tenant
+    if solo_db:
+        orgs = [o for o in orgs if _tenant_db_name(o) == solo_db]
 
     guardados, tocados = 0, []
     anterior = _current_db_name.get()
@@ -29506,11 +29538,15 @@ async def _bucle_congelar():
 
 @api_router.post("/cortex/congelar-dia")
 async def disparar_congelar_dia(data: dict = Body(default={}), _=Depends(require_admin)):
-    """Congela a mano (util para probar y para recuperar el dia en curso)."""
+    """Congela a mano (util para probar y para recuperar el dia en curso).
+
+    Solo la empresa del que llama: el cron es el que recorre todas.
+    """
     dias = data.get("dias")
     if isinstance(dias, str):
         dias = [dias]
-    return await congelar_dias_cortex(dias if isinstance(dias, list) else None)
+    return await congelar_dias_cortex(dias if isinstance(dias, list) else None,
+                                      solo_db=_current_db_name.get())
 
 
 @api_router.get("/cortex/dias-congelados")
@@ -36205,11 +36241,26 @@ async def cortex_clear_demo(_=Depends(require_admin)):
 
 
 @api_router.post("/cortex/reset")
-async def cortex_reset(_=Depends(require_admin)):
-    """Borra TODOS los paquetes y eventos de Cortex (empezar de cero). Útil tras
-    pruebas que ensuciaron los días. La extensión los repuebla al capturar."""
+async def cortex_reset(data: dict = Body(default={}), user: dict = Depends(require_superadmin)):
+    """Borra TODOS los paquetes y eventos de Cortex de ESTA empresa.
+
+    Solo el super-admin, solo con `{"confirmar": "BORRAR"}` en el cuerpo, y
+    queda en `audit_log`. Hasta el 02-09-2026 pedia `require_admin` y un
+    `window.confirm`: el boton «Borrar todo y empezar limpio» vivia en la
+    tarjeta de arranque de Paquetes IA, al alcance de los 14 usuarios del
+    panel, y un clic borro 265.986 paquetes y 555.730 eventos —dos meses de
+    historico—, y con ellos la scorecard en vivo, las direcciones que fallan y
+    el DCR de cada dia. Se recuperaron de la copia diaria de R2 (gotcha 45).
+    Nada que borre un historico entero puede depender de un solo clic ni estar
+    al alcance de quien no es el dueno. Lo vigila `scripts/check_borrado.py`.
+    """
+    if (data or {}).get("confirmar") != "BORRAR":
+        raise HTTPException(400, "Escribe BORRAR en `confirmar` para borrar todo el historico de Cortex")
     p = await db.cortex_packages.delete_many({})
     e = await db.cortex_events.delete_many({})
+    await _audit(user, "cortex_reset", {"db": _current_db_name.get(),
+                                        "packages_deleted": p.deleted_count,
+                                        "events_deleted": e.deleted_count})
     return {"ok": True, "packages_deleted": p.deleted_count, "events_deleted": e.deleted_count}
 
 

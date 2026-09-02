@@ -79,6 +79,8 @@ jobs:
         run: python scripts/check_tenant.py
       - name: Multiempresa (un centro de la principal decidiendo por los demas)
         run: python scripts/check_multiempresa.py
+      - name: Borrado masivo (vaciar una coleccion sin super-admin, confirmacion y rastro)
+        run: python scripts/check_borrado.py
       - name: Instalar dependencias
         run: pip install -r backend/requirements.txt pytest pytest-asyncio
       - name: Tests de API contra Mongo real (persistencia, auth, demo read-only)

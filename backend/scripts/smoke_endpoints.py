@@ -13,7 +13,12 @@ dos veces el mismo dia (ver `_ya_enviado_hoy`).
 """
 import os, json, datetime, urllib.request
 from jose import jwt
-t = jwt.encode({"sub":"maintenance-claude","role":"admin","org_id":"oga5","db_name":"flotadsp",
+# org_id "owner" y account_type "owner": son los de la organizacion principal en
+# `global_db.organizations`. Hasta el 02-09-2026 ponia "oga5", que no existe,
+# asi que todo lo que resuelve la org (centros, plan, `_centro_por_defecto`)
+# media contra una empresa vacia — misma trampa que el gotcha 40.
+t = jwt.encode({"sub":"maintenance-claude","role":"admin","org_id":"owner","db_name":"flotadsp",
+                "account_type":"owner",
                 "exp": datetime.datetime.utcnow()+datetime.timedelta(minutes=15)},
                os.environ["SECRET_KEY"], algorithm="HS256")
 H = {"Authorization": "Bearer " + t}
@@ -59,4 +64,42 @@ for metodo, ruta, body, comprueba in PRUEBAS:
         cuerpo = e.read().decode()[:120] if hasattr(e, "read") else str(e)[:120]
         print("  %-4s %-46s FALLA %s %s" % (metodo, ruta[:46], getattr(e, "code", ""), cuerpo))
         mal += 1
+# INVARIANTE: los dias ya congelados siguen teniendo sus paquetes. Un paquete
+# solo desaparece por el TTL de 90 dias, asi que un dia cerrado de hace dos o
+# tres dias tiene que conservar (casi) todos los que conto la foto. El
+# 01-09-2026 se borraron dos meses de Cortex de un clic y NADA lo detecto hasta
+# que alguien miro la base al dia siguiente; la copia de R2 rota a los 14 dias,
+# asi que esto tiene que gritar antes de que la ultima copia buena se vaya.
+try:
+    r = urllib.request.Request(B + "/cortex/dias-congelados?center=Todos&limite=10", headers=dict(H))
+    fotos = json.loads(urllib.request.urlopen(r, timeout=90).read().decode()).get("dias") or []
+    r = urllib.request.Request(B + "/cortex/days?days=30", headers=dict(H))
+    dias = json.loads(urllib.request.urlopen(r, timeout=90).read().decode())
+    dias = dias.get("days") if isinstance(dias, dict) else dias
+    por_dia = {}
+    for x in dias or []:
+        por_dia[x.get("day") or x.get("service_day")] = por_dia.get(x.get("day") or x.get("service_day"), 0) + int(x.get("count") or x.get("n") or x.get("total") or 0)
+    hoy = datetime.date.today()
+    hundidos = []
+    for f in fotos:
+        d = f.get("service_day") or ""
+        try:
+            edad = (hoy - datetime.date.fromisoformat(d)).days
+        except ValueError:
+            continue
+        total = int(f.get("total") or 0)
+        if not f.get("cerrado") or edad < 2 or total < 100:
+            continue
+        # La foto cuenta un centro; /cortex/days cuenta todos. Con la mitad ya
+        # vale: lo que se busca es un hundimiento, no una diferencia de cajones.
+        if por_dia.get(d, 0) < total * 0.5:
+            hundidos.append("%s: foto %d, quedan %d" % (d, total, por_dia.get(d, 0)))
+    bien = not hundidos
+    print("  %-4s %-46s %s" % ("INV", "dias congelados conservan sus paquetes",
+                               "OK" if bien else "HUNDIDO: " + "; ".join(hundidos)))
+    ok += 1 if bien else 0
+    mal += 0 if bien else 1
+except Exception as e:
+    print("  %-4s %-46s FALLA %s" % ("INV", "dias congelados conservan sus paquetes", str(e)[:120]))
+    mal += 1
 print("\n%d bien, %d mal" % (ok, mal))
