@@ -63,6 +63,23 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   oferta fundador en /planes (10 plazas reales, `founder_reservations`, avisa por Telegram)
   y ofertas patrocinadas del portal conductor (`driver_offers`, views/clicks; sin ofertas
   activas sirve auto-promo de referidos). Gestión super-admin en el panel de Negocio.
+- **Apoyo en ruta** (`/api/apoyo/*`, `docs/APOYO_EN_RUTA.md`, 02-09-2026): un
+  conductor le quita paradas a otro. Las paradas salen de `cortex_packages` de
+  la empresa con los cajones canonicos (`_cx_ruta_cajon`), el registro va en
+  `apoyos` (campo de estado **`fase`**, no `estado`: `test_estados_orden`
+  vigila los literales de las ordenes de taller), y cada uno recibe un enlace
+  `wa.me` con el texto escrito y la pagina publica `/apoyo/t/<token>` (mapa
+  Leaflet + OSM). Sin API de Meta: la oficina pulsa enviar.
+- **Enlaces publicos**: `flotadsp_global.taller_enlaces` es el registro de
+  TODOS los enlaces sin sesion (`tipo: taller | apoyo`), siempre con `db_name`;
+  el endpoint fija la empresa con `_ot_por_token` / `_apoyo_por_token` (gotcha 26).
+- **Telefonos desde Cortex**: `cortex_resumen.gente` trae nombre y telefono de
+  cada conductor. `_telefonos_desde_cortex` rellena SOLO los vacios por
+  `transporter_id` (`telefono_por: "cortex"`), en cada ingesta y con el boton
+  de Conductores. Nunca pisa uno escrito: 6 de 19 no coincidian (02-09-2026).
+- **Registro de escrituras**: todo POST/PUT/PATCH/DELETE queda 30 dias en
+  `flotadsp_global.audit_requests` (usuario, empresa, ruta, estado, ms);
+  `GET /admin/actividad` lo consulta. Es lo que faltaba el 01-09 (gotcha 45).
 
 ## Gotchas (bugs reales ya sufridos — no repetir)
 
@@ -698,8 +715,9 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
 - Commits en español, estilo `feat:`/`fix:`, y push a `main` (sincroniza 2 ordenadores).
 - **Al empezar una sesion**: `CLAUDE.md` -> `ESTADO.md` -> `CHECKPOINT.md` ->
   `docs/ROADMAP.md`. El repositorio manda sobre lo que recuerde una conversacion.
-- Tests: `python backend/tests/run_all.py` (18 en local; CI corre tambien los
-  de API, que necesitan el backend instalado).
+- Tests: `python backend/tests/run_all.py` (todos los de `backend/tests/`; CI
+  corre tambien los de API, que necesitan el backend instalado). Ojo al
+  encadenar en bash: `run_all.py | tail -1` esconde el fallo — `set -o pipefail`.
 - Smoke de produccion: `backend/scripts/smoke_endpoints.py` desde la maquina,
   que comprueba que el DATO cuadra y no solo que responda 200.
 - **El primer dia de un cliente**: `python backend/scripts/smoke_empresa_nueva.py`.

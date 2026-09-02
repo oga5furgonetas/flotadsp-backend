@@ -61,6 +61,17 @@ export const AYUDA = {
     ],
     ojo: 'La carpeta que descomprimes NO se puede borrar ni mover: Chrome carga la extensión desde ahí. Y solo se ve lo que la extensión haya capturado — si nadie tuvo Cortex abierto, de esas horas no hay nada.',
   },
+  apoyo: {
+    que: 'Cuando alguien va tarde: elegir qué paradas le quita otro conductor y mandárselo por WhatsApp con el mapa. Queda registrado.',
+    pasos: [
+      'A la izquierda salen los que aún tienen paradas sin entregar, el que más arriba. Toca uno.',
+      'En el mapa (o en la lista) marca las paradas que se le quitan. «Últimas 10» marca el final de su ruta, que es lo normal.',
+      'Elige quién va: el backup del día sale el primero con una estrella. Si alguien sale en gris es que no tiene teléfono en su ficha.',
+      'Crea el apoyo y pulsa los dos botones de WhatsApp: uno para el que va (mapa y lista de SUS paradas, con «Ir» a cada una) y otro para el que recibe la ayuda.',
+      'Si cambia algo, edítalo con el lápiz: el enlace que ya mandaste enseña la versión nueva solo.',
+    ],
+    ojo: 'Las paradas salen de Cortex tal como está AHORA: arriba pone hace cuántos minutos se bajó. Lo que ya se entregó entre medias se descarta solo y te lo dice. Una parada sin coordenadas no se puede pintar en el mapa: llama.',
+  },
   debrief: {
     que: 'Qué trae cada conductor de vuelta en la furgoneta, para comprobarlo con él delante.',
     pasos: [

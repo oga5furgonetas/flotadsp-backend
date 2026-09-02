@@ -16,8 +16,7 @@ import {
   generarAccesosConductores,
   deleteDriverAccount,
   getDriversDuplicados, fusionarConductores,
-  getPropuestasTransporterId, confirmarTransporterId, getTransporterIdsSinFicha,
-} from '../api'
+  getPropuestasTransporterId, confirmarTransporterId, getTransporterIdsSinFicha, telefonosDesdeCortex, } from '../api'
 
 const EMPTY = {
   name: '', dni: '', phone: '', email: '', driver_id: '', transporter_id: '',
@@ -904,7 +903,7 @@ function TablaConductores({ list, accounts, onAbrir, t }) {
                   <td className="max-w-[220px] truncate px-2 py-1 font-medium text-dark-100">{d.name}</td>
                   <td className="px-2 py-1 text-dark-400">{d.center || '—'}</td>
                   <td className="max-w-[150px] truncate px-2 py-1 text-dark-500">{d.alojamiento || '—'}</td>
-                  <td className="cifra px-2 py-1 text-dark-400">{d.phone || '—'}</td>
+                  <td className="cifra px-2 py-1 text-dark-400">{d.phone || '—'}{d.phone && d.telefono_por === 'cortex' && <span className="ml-1 text-[10px] font-normal text-dark-500" title={t('drv.telDeCortex')}>Cortex</span>}</td>
                   <td className="max-w-[210px] truncate px-2 py-1 text-dark-500">{d.email || '—'}</td>
                   <td className="whitespace-nowrap px-2 py-1">
                     {cc ? <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${cc}`}>{cl}</span>
@@ -940,6 +939,20 @@ export default function Conductores() {
   const [q, setQ] = useState('')
   const [modal, setModal] = useState(null)
   const [verImportar, setVerImportar] = useState(false) // null | { driver: obj|null }
+  const [telCortex, setTelCortex] = useState(false)
+  const completarTelefonos = async () => {
+    setTelCortex(true)
+    try {
+      const { data } = await telefonosDesdeCortex()
+      const lineas = [t('drv.telCortexOk').replace('{n}', data.rellenados)]
+      if (data.distintos?.length) {
+        lineas.push(t('drv.telCortexDistintos').replace('{n}', data.distintos.length))
+        lineas.push(...data.distintos.slice(0, 12).map((d) => `· ${d.name}: ${d.app} / Cortex ${d.cortex}`))
+      }
+      alert(lineas.join(String.fromCharCode(10)))
+      if (data.rellenados) load()
+    } catch (e) { alert(e?.response?.data?.detail || 'No se ha podido') } finally { setTelCortex(false) }
+  }
   const [tab, setTab] = useState('directorio') // directorio | ranking | scoring
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -1012,6 +1025,10 @@ export default function Conductores() {
               <button onClick={() => setVerImportar((v) => !v)}
                 className="flex items-center gap-1.5 rounded-xl border border-dark-700 px-3.5 py-2.5 text-[13.5px] font-semibold text-dark-300 hover:border-dark-600 hover:text-dark-100">
                 <FileSpreadsheet size={15} /> {t('drv.importar')}
+              </button>
+              <button onClick={completarTelefonos} disabled={telCortex} title={t('drv.telCortexTip')}
+                className="flex items-center gap-1.5 rounded-xl border border-dark-700 px-3.5 py-2.5 text-[13.5px] font-semibold text-dark-300 hover:border-dark-600 hover:text-dark-100 disabled:opacity-50">
+                <Phone size={15} /> {t('drv.telCortex')}
               </button>
               <button
                 onClick={() => setModal({ driver: null })}

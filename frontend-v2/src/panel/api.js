@@ -81,6 +81,13 @@ export const getDriversScoring = (month, year) => api.get('/scoring/drivers', { 
 export const getScoringLeaderboard = (month, year) => api.get('/scoring/leaderboard', { params: { ...(month ? { month } : {}), ...(year ? { year } : {}) } })
 export const createDriver = (data) => api.post('/drivers', data)
 export const updateDriver = (id, data) => api.patch(`/drivers/${id}`, data)
+export const telefonosDesdeCortex = () => api.post('/drivers/telefonos-desde-cortex')
+// Apoyo en ruta: quien le quita paradas a quien, con mapa por WhatsApp
+export const getApoyoSituacion = (params) => api.get('/apoyo/situacion', { params })
+export const getApoyoParadas = (params) => api.get('/apoyo/paradas', { params })
+export const getApoyos = (params) => api.get('/apoyo', { params })
+export const crearApoyo = (body) => api.post('/apoyo', body)
+export const cambiarApoyo = (id, body) => api.patch(`/apoyo/${id}`, body)
 export const deleteDriver = (id) => api.delete(`/drivers/${id}`)
 export const uploadDriverPhoto = (id, file) => { const fd = new FormData(); fd.append('file', file); return api.post(`/drivers/${id}/photo`, fd) }
 

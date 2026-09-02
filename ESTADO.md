@@ -234,6 +234,43 @@ reales de OGA5. Todo desplegado y comprobado en producción:
   verdadero (un nombre que la empresa tiene escrito de otra forma, con su
   sugerencia). `/cortex/debrief` medido: 209 KB y 0,7 s para OGA5 (49
   conductores), sin cambio.
+- **Turnos: un turno por conductor y día, dicho por la base.** Los cuatro
+  sitios que guardan turnos hacían `upsert` por (conductor, día) sin índice
+  único (gotcha 9). Medidos 0 repetidos antes de crear `turno_unico`; los
+  cuatro pasan por `_upsert_turno`/`_bulk_turnos`, y `smoke_concurrencia`
+  tiene el paso «5 guardados del mismo turno → UN turno» (7/7 en producción).
+- **La lista de tareas ya no se crea para «Todos».** `GET /checklist` creaba
+  un turno fantasma para ese pseudocentro (lo reproduje con mi propia sonda
+  y retiré mis dos documentos); ahora 400 con mensaje.
+- **Teléfonos: 84 de 146 conductores activos no tenían, y el portal se lo
+  pedía a ellos.** Cortex publica el teléfono de cada conductor en
+  `cortex_resumen.gente` (49 de 49 en el último resumen).
+  `_telefonos_desde_cortex` rellena SOLO los vacíos por `transporter_id`
+  (nunca por nombre, gotcha 15), en cada ingesta y con el botón «Teléfonos
+  desde Cortex» de Conductores: **52 rellenados** (`telefono_por: "cortex"`),
+  idempotente (segunda pasada 0), y **6 que ya tenían uno distinto se
+  devuelven sin tocar** (JUAN ANTONIO ARCOS, JUAN CARLOS LÓPEZ, CHRISTIAN
+  GALLEGO, MARÍA CERVIÑO, MARÍA VICTORIA CAMPOS, DAVID SIERRA). Quedan 32
+  sin teléfono: 24 sin `transporter_id` y 8 que Cortex no trae.
+- **Apoyo en ruta (nuevo, pedido por Dani esa tarde).** Un conductor va tarde
+  y otro le quita paradas: se eligen en el mapa (Leaflet + OSM, sin clave),
+  se elige quién va (el backup del cuadrante sale primero), y salen dos
+  WhatsApp con el texto escrito —al que ayuda, con el enlace `/apoyo/t/<token>`
+  (mapa, «Ir» a cada parada, «Ruta en Maps», «Hecha»); al que recibe la
+  ayuda, con lo que le quitan—. Registro en `apoyos` (campo `fase`), editable
+  con historial; el enlace enseña siempre la última versión y tacha solo lo
+  que Cortex ya da por entregado. Multiempresa desde el primer día (BD de la
+  empresa, enlace con `db_name`). Cero falsos positivos: «pendiente» sale de
+  `_cx_ruta_cajon`, se vuelve a mirar Cortex al crear (`ya_entregadas`), y
+  cada respuesta lleva `bajado_hace_min`. Medido a las 20:00: 587 paquetes
+  sin entregar en 433 paradas de 38 conductores, 99 % con coordenadas, 17 %
+  con dirección, frescura 1,5 min. Probado en producción de punta a punta con
+  un apoyo real anulado al final. `docs/APOYO_EN_RUTA.md`,
+  `backend/tests/test_apoyo.py`.
+- **Descartado con evidencia:** cobertura del cuadrante 47 frente a 48 turnos
+  (uno lleva código `S`, que no saca ruta: correcto); `/shifts?center=Todos`
+  igual a OGA5 (esta semana solo OGA5 tiene cuadrante); chat interno con 8
+  mensajes desde julio y `contacts` a 0: no son fallos, es que no se usan.
 
 ## Estado a 2026-08-30
 

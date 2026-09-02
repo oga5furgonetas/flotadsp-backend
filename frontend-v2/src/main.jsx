@@ -246,6 +246,7 @@ const PanelOrdenes = lazy(() => import('./panel/pages/OrdenesTrabajo'))
 const PanelDebrief = lazy(() => import('./panel/pages/Debrief'))
 const PortalTaller = lazy(() => import('./pages/PortalTaller'))
 const PortalTallerLista = lazy(() => import('./pages/PortalTallerLista'))
+const PortalApoyo = lazy(() => import('./pages/PortalApoyo'))
 const PanelConfiguracion = lazy(() => import('./panel/pages/Configuracion'))
 const PanelTurnos = lazy(() => import('./panel/pages/Turnos'))
 const PanelUsuarios = lazy(() => import('./panel/pages/Usuarios'))
@@ -263,6 +264,7 @@ const PanelBandeja = lazy(() => import('./panel/pages/Bandeja'))
 const PanelIncidencias = lazy(() => import('./panel/pages/Incidencias'))
 const PanelContactos = lazy(() => import('./panel/pages/Contactos'))
 const PanelPaquetes = lazy(() => import('./panel/pages/PackageIntel'))
+const PanelApoyo = lazy(() => import('./panel/pages/ApoyoRuta'))
 const PanelWHC = lazy(() => import('./panel/pages/WHC'))
 const PanelDSC = lazy(() => import('./panel/pages/DSC'))
 /* FlotaDSP 2.0 — la aplicación entera reorganizada, sólo en el laboratorio.
@@ -328,6 +330,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/verify/:hash" element={<Verify />} />
               <Route path="/app" element={<AppRedirect />} />
               <Route path="/taller/t/:token" element={<PortalTallerLista />} />
+              <Route path="/apoyo/t/:token" element={<PortalApoyo />} />
               <Route path="/taller/:token" element={<PortalTaller />} />
               <Route path="/conductor" element={<DriverPortal />} />
               <Route path="/conductor/:slug" element={<DriverPortal />} />
@@ -373,6 +376,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="incidencias" element={<PanelIncidencias />} />
                 <Route path="contactos" element={<PanelContactos />} />
                 <Route path="paquetes" element={<PanelPaquetes />} />
+                <Route path="apoyo" element={<PanelApoyo />} />
                 <Route path="whc" element={<PanelWHC />} />
                 <Route path="dsc" element={<PanelDSC />} />
                 {/* Experimentos DENTRO del panel: heredan barra lateral,

@@ -90,15 +90,30 @@ hechos y desplegados (ver «Quinta pasada» en `ESTADO.md`). Lo que sigue:
 - **Taller**: aprobar presupuesto desde el móvil del DSP con un toque y avisar
   al taller; medir cuántos talleres abren el enlace fijo (`visitas`).
 
+## Hecho en la sexta pasada (noche del 02-09)
+
+Registro de escrituras (`audit_requests`), listado de inspecciones proyectado,
+`turno_unico`, checklist sin «Todos», teléfonos desde Cortex (52 rellenados)
+y el módulo **Apoyo en ruta** entero (`docs/APOYO_EN_RUTA.md`). Todo en
+producción y comprobado con datos reales. Detalle en `ESTADO.md`.
+
 ## Siguiente acción exacta
 
 Sexta pasada (la cuarta fue recorrer el panel como usuario; la quinta, el
 mandato de producto; ver `ESTADO.md`):
 
-1. **Pantallas que faltan por recorrer con criterio de producto**: Debrief a
-   fondo (diseño de Dani, no se toca sin hablarlo), Chat interno, Plantilla
-   de turno, Checklist de turno, Días libres, Contactos, IA Peritaje, Portal
-   conductor (página del panel), Bandeja.
+1. **Apoyo en ruta, segunda vuelta**: que Dani lo use un día real y medir
+   (apoyos creados, minutos hasta la primera «hecha»); dirección orientativa
+   para el 83 % de paradas sin ella (`/cortex/geo/inverso`); envío automático
+   cuando Meta desbloquee la API. Y cargar el cuadrante de septiembre: sin él
+   no hay «backup de hoy» que proponer (hoy 0).
+2. **Los 32 conductores que siguen sin teléfono**: 24 no tienen
+   `transporter_id` en la ficha (Conductores → propuestas de id) y 8 no salen
+   en Cortex. Los 6 teléfonos distintos entre app y Cortex: que la oficina
+   diga cuál vale.
+3. **Pantallas recorridas sin fallo esta noche**: Chat (8 mensajes desde
+   julio, sin uso), Checklist, Bandeja (super-admin), IA Peritaje, Turnos,
+   Contactos (0 registros). Queda Debrief a fondo (diseño de Dani).
 2. **Portal del conductor como conductor real** en móvil (viewport 375):
    inspección con foto, petición de días, cambio de contraseña.
 3. **Escala**: `/inspections` ya va proyectado (`campos=lista`, 801 → 238 KB);

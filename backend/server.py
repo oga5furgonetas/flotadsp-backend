@@ -347,6 +347,8 @@ class Driver(BaseModel):
     name: str
     dni: Optional[str] = None
     phone: Optional[str] = None
+    telefono_por: Optional[str] = None   # quien lo puso: oficina | portal | cortex
+    telefono_en: Optional[str] = None
     email: Optional[str] = None
     license_number: Optional[str] = None
     login: Optional[str] = None        # login del conductor
@@ -1334,6 +1336,9 @@ async def _ensure_tenant_indexes(db_name: str):
     # antes de crearlo; los upserts pasan por _upsert_turno/_bulk_turnos.
     await _idx(tdb.shifts, [("driver_id", 1), ("date", 1)], unique=True, name="turno_unico")
     await _idx(tdb.shifts, [("center", 1), ("date", 1)])
+    # Apoyo en ruta (un conductor le quita paradas a otro, con mapa por WhatsApp).
+    await _idx(tdb.apoyos, "id", unique=True, name="apoyo_id_unico")
+    await _idx(tdb.apoyos, [("dia", 1), ("center", 1)])
     await _idx(tdb.ai_feedback, [("created_at", -1)])
     await _idx(tdb.ai_feedback, [("damage.part", 1)])
     await _idx(tdb.ai_feedback, [("damage.location_hint", 1)])
@@ -8133,6 +8138,65 @@ async def portal_mi_ficha(user: dict = Depends(require_any_auth)):
         return {"falta_telefono": False}
     tel = (d.get("phone") or d.get("telefono") or "").strip()
     return {"falta_telefono": not tel, "nombre": d.get("name")}
+
+
+def _telefono_limpio(valor) -> str:
+    """Deja digitos y un `+` inicial; vacio si no parece un telefono (9-15 digitos)."""
+    bruto = re.sub(r"[^0-9+]", "", str(valor or ""))
+    solo = bruto.lstrip("+")
+    if not solo.isdigit() or not (9 <= len(solo) <= 15):
+        return ""
+    return ("+" if bruto.startswith("+") else "") + solo
+
+
+def _telefono_digitos(valor) -> str:
+    """Los 9 ultimos digitos: es lo que compara dos formas de escribir el mismo numero."""
+    return re.sub(r"\D", "", str(valor or ""))[-9:]
+
+
+async def _telefonos_desde_cortex() -> dict:
+    """Rellena el telefono de los conductores que NO lo tienen con el que publica Cortex.
+
+    Cortex trae nombre y telefono de cada conductor en el resumen diario
+    (`cortex_resumen.gente`). El 02-09-2026 la app tenia 84 de 146 conductores
+    activos sin telefono y el portal se lo pedia a ellos, cuando la oficina ya
+    lo tenia. Reglas:
+    · se casa SOLO por `transporter_id` exacto, nunca por nombre (gotcha 15);
+    · SOLO se rellena lo vacio: lo que escribio la oficina o el conductor manda;
+    · los que ya tenian uno DISTINTO se devuelven en `distintos` para que la
+      oficina decida — medido: 6 de 19 no coincidian, asi que pisar seria
+      cambiar un numero bueno por otro que tambien parece bueno.
+    Cada relleno queda marcado con `telefono_por: "cortex"`; deshacer es
+    `$unset` de `phone` donde `telefono_por == "cortex"`.
+    """
+    mapa: dict = {}
+    async for r in db.cortex_resumen.find({}, {"gente": 1, "dia": 1}).sort("dia", -1):
+        for p in r.get("gente") or []:
+            tid, tel = p.get("transporterId"), _telefono_limpio(p.get("telefono"))
+            if tid and tel and tid not in mapa:
+                mapa[tid] = tel
+    if not mapa:
+        return {"rellenados": 0, "distintos": [], "cortex": 0}
+    rellenados, distintos = 0, []
+    ahora = datetime.now(timezone.utc).isoformat()
+    cur = db.drivers.find({"active": True, "transporter_id": {"$in": list(mapa)}},
+                          {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1})
+    async for d in cur:
+        tel = mapa[d["transporter_id"]]
+        actual = str(d.get("phone") or "").strip()
+        if not actual:
+            await db.drivers.update_one({"id": d["id"]}, {"$set": {
+                "phone": tel, "telefono_por": "cortex", "telefono_en": ahora}})
+            rellenados += 1
+        elif _telefono_digitos(actual) != _telefono_digitos(tel):
+            distintos.append({"id": d["id"], "name": d.get("name"), "app": actual, "cortex": tel})
+    return {"rellenados": rellenados, "distintos": distintos, "cortex": len(mapa)}
+
+
+@api_router.post("/drivers/telefonos-desde-cortex")
+async def drivers_telefonos_desde_cortex(_=Depends(require_admin)):
+    """Boton «Completar teléfonos desde Cortex» de Conductores. Idempotente."""
+    return await _telefonos_desde_cortex()
 
 
 @api_router.post("/portal/mi-telefono")
@@ -17390,6 +17454,430 @@ async def _ot_url_taller(orden_id: str) -> str:
             "revocado": False})
         e = {"token": token}
     return "%s/taller/%s" % (_PORTAL_BASE_FRONT.rstrip("/"), e["token"])
+
+
+
+# ── APOYO EN RUTA ────────────────────────────────────────────────────────────
+# Un conductor va tarde y otro (el backup, o quien ya terminó) le quita paradas.
+# Hasta ahora eso era una llamada, una foto del mapa de Cortex por WhatsApp y
+# nadie sabía después quién había quitado qué. Aquí queda REGISTRADO, se puede
+# CAMBIAR, y cada uno recibe por WhatsApp un enlace con el mapa y la lista de
+# SUS paradas, sin usuario ni contraseña.
+#
+# Multiempresa desde el primer día: las paradas salen de `cortex_packages` de
+# la empresa (cada extensión ingesta en su BD), los nombres y teléfonos de sus
+# `drivers` (y si no, de `cortex_resumen.gente`), el registro va en `apoyos`
+# de esa BD, y el enlace público lleva `db_name` en `taller_enlaces` (que es el
+# registro de enlaces públicos, no solo de talleres) y fija la empresa antes
+# de tocar `db` (gotcha 26). Ningún centro ni número escrito a mano.
+#
+# Cero falsos positivos, que aquí cuesta un viaje en balde:
+# · una parada solo entra si sus paquetes siguen "en juego" según los cajones
+#   canónicos (`_cx_ruta_cajon` → loaded/attempted), nunca por listas a mano;
+# · al crear el apoyo se vuelve a mirar Cortex y lo que ya se entregó entre
+#   medias se devuelve en `ya_entregadas` en vez de mandarse;
+# · cada respuesta dice hace cuántos minutos se bajó el dato (`bajado_hace_min`)
+#   y la página del ayudante marca en vivo lo que Cortex ya da por entregado.
+
+_APOYO_CAJONES_PENDIENTES = ("loaded", "attempted")
+
+
+def _apoyo_hoy() -> str:
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Europe/Madrid")).strftime("%Y-%m-%d")
+
+
+def _apoyo_codigos_backup() -> set:
+    """Códigos del cuadrante cuya familia es «apoyo» (BKP y parecidos)."""
+    try:
+        return {c for c, v in CODIGOS_CUADRANTE_INFO.items() if len(v) > 2 and v[2] == "apoyo"}
+    except Exception:
+        return set()
+
+
+def _apoyo_minutos_desde(iso: Optional[str]) -> Optional[int]:
+    if not iso:
+        return None
+    try:
+        d = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - d).total_seconds() // 60))
+    except Exception:
+        return None
+
+
+async def _apoyo_personas(ids: set) -> dict:
+    """transporter_id -> {nombre, telefono, ficha_id}. La ficha manda; Cortex completa."""
+    ids = {i for i in ids if i}
+    out: dict = {}
+    if not ids:
+        return out
+    cur = db.drivers.find({"transporter_id": {"$in": list(ids)}, "active": True},
+                          {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1})
+    async for d in cur:
+        out[d["transporter_id"]] = {"nombre": (d.get("name") or "").strip(),
+                                    "telefono": _telefono_limpio(d.get("phone")), "ficha_id": d["id"]}
+    faltan = ids - set(out)
+    if faltan:
+        async for r in db.cortex_resumen.find({}, {"gente": 1}).sort("dia", -1).limit(40):
+            for p in r.get("gente") or []:
+                tid = p.get("transporterId")
+                if tid in faltan and tid not in out:
+                    out[tid] = {"nombre": (p.get("nombre") or tid).strip(),
+                                "telefono": _telefono_limpio(p.get("telefono")), "ficha_id": None}
+    for tid in ids:
+        out.setdefault(tid, {"nombre": tid, "telefono": "", "ficha_id": None})
+    return out
+
+
+async def _apoyo_paradas_pendientes(driver_id: str, dia: str) -> dict:
+    """Las paradas de ESE conductor que siguen en juego, agrupadas por parada."""
+    cur = db.cortex_packages.find(
+        {"service_day": dia, "driver_id": driver_id},
+        {"_id": 0, "stop_id": 1, "lat": 1, "lng": 1, "stop_address": 1, "state": 1,
+         "tba": 1, "seen_at": 1, "route_code": 1, "priority": 1})
+    paradas: dict = {}
+    ultima = None
+    rutas: list = []
+    async for p in cur:
+        ultima = max(ultima or "", str(p.get("seen_at") or ""))
+        if p.get("route_code") and p["route_code"] not in rutas:
+            rutas.append(p["route_code"])   # un conductor puede llevar dos rutas
+        if _cx_ruta_cajon(p.get("state")) not in _APOYO_CAJONES_PENDIENTES:
+            continue
+        sid = str(p.get("stop_id") or "")
+        if not sid:
+            continue
+        x = paradas.setdefault(sid, {"stop_id": sid, "lat": None, "lng": None, "direccion": "",
+                                     "n": 0, "tbas": [], "estados": []})
+        x["n"] += 1
+        if p.get("tba"):
+            x["tbas"].append(p["tba"])
+        if p.get("state") and p["state"] not in x["estados"]:
+            x["estados"].append(p["state"])
+        if x["lat"] is None and p.get("lat") is not None and p.get("lng") is not None:
+            x["lat"], x["lng"] = p["lat"], p["lng"]
+        if not x["direccion"] and p.get("stop_address"):
+            x["direccion"] = p["stop_address"]
+
+    def _orden(s):
+        try:
+            return (0, int(s["stop_id"]))
+        except (TypeError, ValueError):
+            return (1, 0)
+    lista = sorted(paradas.values(), key=_orden)
+    return {"paradas": lista, "ruta": " + ".join(rutas),
+            "paquetes": sum(x["n"] for x in lista),
+            "sin_coordenadas": sum(1 for x in lista if x["lat"] is None),
+            "bajado_hace_min": _apoyo_minutos_desde(ultima)}
+
+
+async def _apoyo_vivo_hoy(dia: str) -> dict:
+    """Apoyos no cerrados del día, por conductor que recibe ayuda."""
+    out: dict = {}
+    async for a in db.apoyos.find({"dia": dia, "fase": {"$nin": ["hecho", "anulado"]}},
+                                  {"_id": 0, "id": 1, "de": 1, "a": 1, "paradas": 1}):
+        out[(a.get("de") or {}).get("driver_id")] = a
+    return out
+
+
+@api_router.get("/apoyo/situacion")
+async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = None,
+                          user: dict = Depends(require_admin)):
+    """Quién tiene paradas sin entregar ahora mismo, y quién puede ir a ayudar."""
+    dia = day or _apoyo_hoy()
+    q = {"service_day": dia, **_filtro_centro(user, center)}
+    pipeline = [
+        {"$match": q},
+        {"$group": {"_id": {"d": "$driver_id", "s": "$stop_id", "st": "$state"},
+                    "n": {"$sum": 1}, "rutas": {"$addToSet": "$route_code"},
+                    "centro": {"$first": "$center"}, "seen": {"$max": "$seen_at"}}},
+    ]
+    por: dict = {}
+    ultima = None
+    async for r in db.cortex_packages.aggregate(pipeline):
+        k = r["_id"]
+        did = k.get("d")
+        if not did:
+            continue
+        ultima = max(ultima or "", str(r.get("seen") or ""))
+        x = por.setdefault(did, {"driver_id": did, "rutas": [], "center": r.get("centro") or "",
+                                 "paquetes": 0, "pendientes": 0, "paradas": set(), "entregados": 0})
+        for rc in r.get("rutas") or []:
+            if rc and rc not in x["rutas"]:
+                x["rutas"].append(rc)
+        x["paquetes"] += r["n"]
+        caj = _cx_ruta_cajon(k.get("st"))
+        if caj in _APOYO_CAJONES_PENDIENTES:
+            x["pendientes"] += r["n"]
+            if k.get("s"):
+                x["paradas"].add(str(k["s"]))
+        elif caj == "delivered":
+            x["entregados"] += r["n"]
+    personas = await _apoyo_personas(set(por))
+    vivos = await _apoyo_vivo_hoy(dia)
+    conductores = []
+    for did, x in por.items():
+        p = personas.get(did, {})
+        conductores.append({**x, "ruta": " + ".join(sorted(x["rutas"])), "paradas": len(x["paradas"]),
+                            "nombre": p.get("nombre") or did,
+                            "telefono": p.get("telefono") or "",
+                            "apoyo_id": (vivos.get(did) or {}).get("id")})
+    conductores.sort(key=lambda c: (-c["pendientes"], c["nombre"]))
+
+    # Ayudantes: fichas activas del centro con teléfono. Los backup de hoy, primero.
+    backup_codes = _apoyo_codigos_backup()
+    bkp = set()
+    async for s in db.shifts.find({"date": dia, "cod": {"$in": sorted(backup_codes)}}, {"_id": 0, "driver_id": 1}):
+        bkp.add(s.get("driver_id"))
+    ayudantes = []
+    fq = {"active": True, **_filtro_centro(user, center)}
+    async for d in db.drivers.find(fq, {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1}):
+        tid = d.get("transporter_id") or ""
+        ayudantes.append({"driver_id": tid, "ficha_id": d["id"], "nombre": (d.get("name") or "").strip(),
+                          "telefono": _telefono_limpio(d.get("phone")),
+                          "es_backup": d["id"] in bkp,
+                          "pendientes": (por.get(tid) or {}).get("pendientes", 0) if tid else 0})
+    ayudantes.sort(key=lambda a: (not a["es_backup"], a["pendientes"], a["nombre"]))
+    return {"dia": dia, "bajado_hace_min": _apoyo_minutos_desde(ultima),
+            "conductores": conductores, "ayudantes": ayudantes}
+
+
+@api_router.get("/apoyo/paradas")
+async def apoyo_paradas(driver_id: str, day: Optional[str] = None, user: dict = Depends(require_admin)):
+    """Las paradas pendientes de un conductor, para elegir cuáles se quitan."""
+    dia = day or _apoyo_hoy()
+    permitido = await db.cortex_packages.find_one(
+        {"service_day": dia, "driver_id": driver_id, **_filtro_centro(user, None)}, {"_id": 1})
+    if not permitido:
+        raise HTTPException(404, "Ese conductor no tiene paquetes hoy en tus centros")
+    datos = await _apoyo_paradas_pendientes(driver_id, dia)
+    personas = await _apoyo_personas({driver_id})
+    return {"dia": dia, "driver": {"driver_id": driver_id, **personas.get(driver_id, {})}, **datos}
+
+
+def _apoyo_url(token: str) -> str:
+    return "%s/apoyo/t/%s" % (_PORTAL_BASE_FRONT, token)
+
+
+def _apoyo_textos(a: dict) -> dict:
+    """Los dos mensajes de WhatsApp (ayudante y conductor) y sus enlaces wa.me."""
+    de, ay = a.get("de") or {}, a.get("a") or {}
+    url = _apoyo_url(a.get("token") or "")
+    n = len(a.get("paradas") or [])
+    npaq = sum(int(p.get("n") or 0) for p in a.get("paradas") or [])
+    ids = ", ".join(p["stop_id"] for p in (a.get("paradas") or [])[:12])
+    if n > 12:
+        ids += "…"
+    nota = ("\n" + a["nota"].strip()) if a.get("nota") else ""
+    t_ay = ("Hola %s. Apoyo a %s%s: %d paradas, %d paquetes.\nMapa y lista: %s\nTel. de %s: %s%s"
+            % (ay.get("nombre") or "", de.get("nombre") or "", (" (%s)" % de["ruta"]) if de.get("ruta") else "",
+               n, npaq, url, de.get("nombre") or "", de.get("telefono") or "-", nota))
+    t_de = ("Hola %s. %s te quita %d paradas (%s).\nMapa: %s\nTel. de %s: %s%s"
+            % (de.get("nombre") or "", ay.get("nombre") or "", n, ids, url,
+               ay.get("nombre") or "", ay.get("telefono") or "-", nota))
+    return {"url": url, "texto_ayudante": t_ay, "texto_conductor": t_de,
+            "wa_ayudante": enlace_wa(ay.get("telefono") or "", t_ay),
+            "wa_conductor": enlace_wa(de.get("telefono") or "", t_de)}
+
+
+async def _apoyo_guardar_paradas(de_id: str, dia: str, stop_ids: list) -> tuple:
+    """Las paradas pedidas que SIGUEN pendientes en Cortex ahora, y las que ya no."""
+    actual = await _apoyo_paradas_pendientes(de_id, dia)
+    vivas = {p["stop_id"]: p for p in actual["paradas"]}
+    pedidas = [str(s) for s in stop_ids if str(s)]
+    paradas = [{**vivas[s], "hecha": False} for s in pedidas if s in vivas]
+    ya = [s for s in pedidas if s not in vivas]
+    return paradas, ya, actual
+
+
+def _apoyo_publico(a: dict) -> dict:
+    """Lo que ve un enlace público: nombres y teléfonos de los DOS implicados
+    (tienen que quedar), las paradas, y nada más — ni ids internos ni otros
+    conductores."""
+    return {"id": a.get("id"), "dia": a.get("dia"), "fase": a.get("fase"),
+            "de": {"nombre": (a.get("de") or {}).get("nombre"), "telefono": (a.get("de") or {}).get("telefono"),
+                   "ruta": (a.get("de") or {}).get("ruta")},
+            "a": {"nombre": (a.get("a") or {}).get("nombre"), "telefono": (a.get("a") or {}).get("telefono")},
+            "paradas": [{k: p.get(k) for k in ("stop_id", "lat", "lng", "direccion", "n", "tbas", "hecha", "entregada")}
+                        for p in a.get("paradas") or []],
+            "nota": a.get("nota") or "", "actualizado": a.get("updated_at")}
+
+
+async def _apoyo_con_enlaces(a: dict) -> dict:
+    return {**a, **_apoyo_textos(a)}
+
+
+@api_router.get("/apoyo")
+async def apoyo_lista(center: Optional[str] = None, day: Optional[str] = None,
+                      user: dict = Depends(require_admin)):
+    dia = day or _apoyo_hoy()
+    q = {"dia": dia, **_filtro_centro(user, center)}
+    docs = await db.apoyos.find(q, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return {"dia": dia, "apoyos": [await _apoyo_con_enlaces(a) for a in docs]}
+
+
+@api_router.post("/apoyo")
+async def apoyo_crear(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Crea un apoyo: quién ayuda a quién y con qué paradas. Queda registrado."""
+    dia = str(data.get("day") or _apoyo_hoy())
+    de_id = str(data.get("de_driver_id") or "").strip()
+    a_id = str(data.get("a_driver_id") or "").strip()
+    stop_ids = data.get("stop_ids") or []
+    if not de_id or not a_id or not isinstance(stop_ids, list) or not stop_ids:
+        raise HTTPException(400, "Falta el conductor, el ayudante o las paradas")
+    if de_id == a_id:
+        raise HTTPException(400, "El ayudante no puede ser el mismo conductor")
+    permitido = await db.cortex_packages.find_one(
+        {"service_day": dia, "driver_id": de_id, **_filtro_centro(user, None)}, {"_id": 0, "center": 1})
+    if not permitido:
+        raise HTTPException(404, "Ese conductor no tiene paquetes hoy en tus centros")
+    personas = await _apoyo_personas({de_id, a_id})
+    if not personas[a_id].get("telefono"):
+        raise HTTPException(400, "%s no tiene teléfono en su ficha: ponlo antes, sin él no hay a quién mandarle el mapa"
+                            % personas[a_id].get("nombre"))
+    paradas, ya, actual = await _apoyo_guardar_paradas(de_id, dia, stop_ids)
+    if not paradas:
+        raise HTTPException(409, "Ninguna de esas paradas sigue pendiente en Cortex (bajado hace %s min)"
+                            % actual.get("bajado_hace_min"))
+    vivo = await db.apoyos.find_one({"dia": dia, "de.driver_id": de_id, "a.driver_id": a_id,
+                                     "fase": {"$nin": ["hecho", "anulado"]}}, {"_id": 0, "id": 1})
+    if vivo:
+        raise HTTPException(409, "Ya hay un apoyo abierto de esa pareja hoy: cámbialo en vez de crear otro")
+    ahora = datetime.now(timezone.utc).isoformat()
+    token = secrets.token_urlsafe(32)
+    doc = {
+        "id": str(uuid.uuid4()), "dia": dia, "center": permitido.get("center") or "",
+        "de": {"driver_id": de_id, **personas[de_id], "ruta": actual.get("ruta") or ""},
+        "a": {"driver_id": a_id, **personas[a_id]},
+        "paradas": paradas, "nota": str(data.get("nota") or "")[:300],
+        "fase": "enviado", "token": token,
+        "historial": [{"en": ahora, "por": user.get("name") or user.get("sub"), "accion": "creado",
+                       "detalle": "%d paradas" % len(paradas)}],
+        "created_at": ahora, "created_by": user.get("sub"), "updated_at": ahora,
+    }
+    await global_db.taller_enlaces.insert_one({
+        "token": token, "tipo": "apoyo", "apoyo_id": doc["id"], "db_name": _current_db_name.get(),
+        "creado_por": user.get("sub"), "creado_en": ahora,
+        "expira_en": (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(), "revocado": False})
+    await db.apoyos.insert_one(dict(doc))
+    await _audit(user, "apoyo_crear", {"id": doc["id"], "de": de_id, "a": a_id, "paradas": len(paradas)})
+    return {**(await _apoyo_con_enlaces(doc)), "ya_entregadas": ya}
+
+
+@api_router.patch("/apoyo/{apoyo_id}")
+async def apoyo_cambiar(apoyo_id: str, data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Cambia paradas, ayudante o fase. Cada cambio queda en el historial y
+    el enlace del ayudante enseña la versión nueva sin mandar nada más."""
+    a = await db.apoyos.find_one({"id": apoyo_id, **_filtro_centro(user, None)}, {"_id": 0})
+    if not a:
+        raise HTTPException(404, "Apoyo no encontrado")
+    if a.get("fase") in ("hecho", "anulado") and data.get("fase") not in ("enviado",):
+        raise HTTPException(409, "Este apoyo ya está cerrado")
+    ahora = datetime.now(timezone.utc).isoformat()
+    cambios: dict = {}
+    hist = []
+    quien = user.get("name") or user.get("sub")
+    if "stop_ids" in data:
+        if not isinstance(data["stop_ids"], list) or not data["stop_ids"]:
+            raise HTTPException(400, "Sin paradas no hay apoyo: anúlalo si ya no hace falta")
+        hechas = {p["stop_id"] for p in a.get("paradas") or [] if p.get("hecha")}
+        paradas, ya, actual = await _apoyo_guardar_paradas(a["de"]["driver_id"], a["dia"], data["stop_ids"])
+        for p in paradas:
+            p["hecha"] = p["stop_id"] in hechas
+        if not paradas:
+            raise HTTPException(409, "Ninguna de esas paradas sigue pendiente en Cortex")
+        cambios["paradas"] = paradas
+        hist.append({"en": ahora, "por": quien, "accion": "paradas",
+                     "detalle": "%d paradas (%d ya entregadas descartadas)" % (len(paradas), len(ya))})
+    if data.get("a_driver_id") and data["a_driver_id"] != a["a"]["driver_id"]:
+        nuevo = str(data["a_driver_id"])
+        if nuevo == a["de"]["driver_id"]:
+            raise HTTPException(400, "El ayudante no puede ser el mismo conductor")
+        personas = await _apoyo_personas({nuevo})
+        if not personas[nuevo].get("telefono"):
+            raise HTTPException(400, "%s no tiene teléfono en su ficha" % personas[nuevo].get("nombre"))
+        cambios["a"] = {"driver_id": nuevo, **personas[nuevo]}
+        hist.append({"en": ahora, "por": quien, "accion": "ayudante",
+                     "detalle": "%s -> %s" % (a["a"].get("nombre"), personas[nuevo].get("nombre"))})
+    if "nota" in data:
+        cambios["nota"] = str(data.get("nota") or "")[:300]
+    if data.get("fase") in ("hecho", "anulado", "enviado"):
+        cambios["fase"] = data["fase"]
+        hist.append({"en": ahora, "por": quien, "accion": data["fase"], "detalle": ""})
+    if not cambios:
+        raise HTTPException(400, "Nada que cambiar")
+    cambios["updated_at"] = ahora
+    await db.apoyos.update_one({"id": apoyo_id}, {"$set": cambios, "$push": {"historial": {"$each": hist}}})
+    a = await db.apoyos.find_one({"id": apoyo_id}, {"_id": 0})
+    await _audit(user, "apoyo_cambiar", {"id": apoyo_id, "cambios": sorted(cambios)})
+    return await _apoyo_con_enlaces(a)
+
+
+async def _apoyo_por_token(token: str) -> dict:
+    _ot_freno(token, limite=120)
+    tok = (token or "").strip()
+    if len(tok) < 20 or len(tok) > 120:
+        raise HTTPException(404, "Este enlace no es válido")
+    enlace = await global_db.taller_enlaces.find_one({"token": tok, "tipo": "apoyo"}, {"_id": 0})
+    if not enlace or enlace.get("revocado") or not enlace.get("apoyo_id"):
+        raise HTTPException(404, "Este enlace no es válido")
+    if enlace.get("expira_en") and enlace["expira_en"] < _ot_ahora():
+        raise HTTPException(404, "Este enlace ha caducado")
+    # LA LINEA QUE EVITA EL DESASTRE MULTIEMPRESA (gotcha 26).
+    set_current_org_db(enlace.get("db_name"))
+    a = await db.apoyos.find_one({"id": enlace["apoyo_id"]}, {"_id": 0})
+    if not a:
+        raise HTTPException(404, "Este apoyo ya no existe")
+    return a
+
+
+async def _apoyo_marcar_entregadas(a: dict) -> dict:
+    """Lo que Cortex ya da por entregado se enseña como tal, sin que nadie lo marque."""
+    ids = [p["stop_id"] for p in a.get("paradas") or []]
+    if not ids:
+        return a
+    entregadas = set()
+    pendientes = set()
+    cur = db.cortex_packages.find({"service_day": a["dia"], "driver_id": a["de"]["driver_id"],
+                                   "stop_id": {"$in": ids}}, {"_id": 0, "stop_id": 1, "state": 1})
+    async for p in cur:
+        sid = str(p.get("stop_id"))
+        caj = _cx_ruta_cajon(p.get("state"))
+        if caj in _APOYO_CAJONES_PENDIENTES:
+            pendientes.add(sid)
+        elif caj == "delivered":
+            entregadas.add(sid)
+    for p in a.get("paradas") or []:
+        p["entregada"] = p["stop_id"] in entregadas and p["stop_id"] not in pendientes
+    return a
+
+
+@api_router.get("/apoyo/t/{token}")
+async def apoyo_publico(token: str):
+    """La página del que ayuda (y del que recibe la ayuda): mapa y lista, sin login."""
+    a = await _apoyo_marcar_entregadas(await _apoyo_por_token(token))
+    return _apoyo_publico(a)
+
+
+@api_router.post("/apoyo/t/{token}/parada/{stop_id}")
+async def apoyo_publico_parada(token: str, stop_id: str, data: dict = Body(default={})):
+    """El ayudante marca una parada como hecha (o la desmarca)."""
+    a = await _apoyo_por_token(token)
+    if a.get("fase") in ("hecho", "anulado"):
+        raise HTTPException(409, "Este apoyo ya está cerrado")
+    hecha = bool(data.get("hecha", True))
+    ahora = datetime.now(timezone.utc).isoformat()
+    r = await db.apoyos.update_one({"id": a["id"], "paradas.stop_id": str(stop_id)},
+                                   {"$set": {"paradas.$.hecha": hecha, "updated_at": ahora},
+                                    "$push": {"historial": {"en": ahora, "por": "ayudante",
+                                                            "accion": "hecha" if hecha else "deshecha",
+                                                            "detalle": str(stop_id)}}})
+    if not r.matched_count:
+        raise HTTPException(404, "Esa parada no está en este apoyo")
+    a = await _apoyo_marcar_entregadas(await db.apoyos.find_one({"id": a["id"]}, {"_id": 0}))
+    return _apoyo_publico(a)
 
 
 # ── EL CANAL CON EL TALLER, EN LOS DOS SENTIDOS ─────────────────────────────
@@ -36390,6 +36878,8 @@ async def cortex_ingest(request: Request):
                           "visto_en": datetime.now(timezone.utc).isoformat(),
                           "expira_en": datetime.now(timezone.utc) + timedelta(days=60)}},
                 upsert=True)
+            # Con la gente recien capturada, completa los telefonos que falten.
+            await _telefonos_desde_cortex()
         except Exception as e:
             logger.warning(f"Resumen de Cortex: {e}")
         return {"ok": True, "guardado": "resumen_cortex"}

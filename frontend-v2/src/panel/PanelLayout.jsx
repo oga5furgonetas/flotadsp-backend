@@ -6,7 +6,7 @@ import {
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX,
-  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, UserCircle2, Languages, ShieldAlert,
+  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, UserCircle2, Languages, ShieldAlert, LifeBuoy,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
 import { getMe, contarPeticionesPendientes } from './api'
@@ -51,6 +51,7 @@ const NAV_DEF = [
   // Un numero rojo permanente en el menu deja de mirarse a los dos dias.
   { g: 'nav.g.dailyops', gIcon: Zap, iconCls: 'text-sky-400', iconBg: 'bg-sky-500/10', items: [
     { to: '/panel/paquetes', labelKey: 'nav.pkgintel', icon: PackageSearch },
+    { to: '/panel/apoyo', labelKey: 'nav.apoyo', icon: LifeBuoy },
     { to: '/panel/debrief', labelKey: 'nav.debrief', icon: PackageCheck },
     { to: '/panel/asignacion', labelKey: 'nav.assign', icon: ClipboardCheck },
     // El cuadrante y las peticiones de días llevaban meses construidos y sin

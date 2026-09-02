@@ -36,7 +36,7 @@ RUTA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend",
 CON_SESION = {"get_current_user", "require_admin", "require_superadmin",
               "require_any_auth", "require_driver", "get_current_admin"}
 # Llamadas que fijan la empresa a mano.
-FIJAN = {"_set_tenant_by_slug", "set_current_org_db", "_ot_por_token", "_partner_auth",
+FIJAN = {"_set_tenant_by_slug", "set_current_org_db", "_ot_por_token", "_apoyo_por_token", "_partner_auth",
          # Autentica la extension por su token de ingesta y fija la BD dentro.
          "_cortex_ingest_org"}
 
