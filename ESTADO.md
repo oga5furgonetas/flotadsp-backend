@@ -281,6 +281,32 @@ reales de OGA5. Todo desplegado y comprobado en producción:
   igual a OGA5 (esta semana solo OGA5 tiene cuadrante); chat interno con 8
   mensajes desde julio y `contacts` a 0: no son fallos, es que no se usan.
 
+### Novena pasada (02-09, noche): el móvil de verdad, con su captura delante
+
+Dani abrió el panel en su Android y mandó la foto: el menú de usuario se veía
+transparente, con el texto de la pantalla escrito por encima, y al pulsar
+«Salir» no pasaba nada. Dos fallos, los dos medidos y ninguno visible leyendo
+el código.
+
+- **No se podía cerrar sesión desde el móvil.** La cabecera lleva
+  `backdrop-blur`, que crea contexto de apilado, y no tenía `position` ni
+  `z-index`: el `z-50` del desplegable solo competía DENTRO de la cabecera, y
+  `main`, que va después en el DOM, pintaba por encima. `elementFromPoint` en
+  el centro de «Salir» devolvía el titular de la página. Con `relative z-30`
+  devuelve el botón y la sesión se cierra (comprobado: lleva al login con el
+  token borrado). Gotcha 48.
+- **La cabecera medía 479 px en una pantalla de 375** y no tenía scroll, así
+  que el avatar (con Perfil, Portal y Salir dentro) quedaba entre 416 y 479:
+  fuera de la pantalla. Ahora: botón de menú y avatar fijos, el selector de
+  centro encoge y hace scroll, y buscar, ayuda y tema se van al menú del móvil.
+  375 de 375, nada fuera.
+- **Botón de menú también arriba**, porque en iOS la barra de abajo se queda
+  debajo del navegador y no siempre se ve. Y los «cerrar al tocar fuera»
+  escuchan `pointerdown`, que con el dedo sí llega, en vez de `mousedown`.
+- **Sin efecto de rebote**: el modal de Vehículos mantiene sus 16 controles
+  alcanzables con la cabecera en z-30, la paleta de comandos sus 6, y ni la
+  cabecera ni la página se salen en Órdenes de taller.
+
 ### Octava pasada (02-09, noche): lo suyo, para el conductor
 
 Dos pantallas nuevas en el portal, pedidas por Dani: «Tus estadísticas» y
