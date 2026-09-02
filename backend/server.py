@@ -8069,9 +8069,13 @@ async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
     Bloquear por falta de datos sería el peor fallo posible de esta pantalla:
     pararía la operación entera un lunes a las seis de la mañana.
     """
+    # `mileage_history` fuera en todo el portal: un conductor con un movil y
+    # mala cobertura se bajaba 531 KB (medido) para elegir su furgoneta, y el
+    # 87 % eran lecturas de cuentakilometros que la pantalla no enseña.
+    _SIN_HIST = {"_id": 0, "mileage_history": 0}
     if user.get("role") == "admin":
         vehicles = await db.vehicles.find(
-            {"status": {"$nin": ["deleted", "baja"]}}, {"_id": 0}
+            {"status": {"$nin": ["deleted", "baja"]}}, _SIN_HIST
         ).to_list(1000)
         return _portal_payload(vehicles, permitido=True, motivo=None)
 
@@ -8099,19 +8103,19 @@ async def get_vehicles_portal(user: dict = Depends(require_any_auth)):
         # Le toca: SÓLO su furgoneta. Nada de elegir de una lista.
         ids = [s["vehicle_id"] for s in mis_slots]
         vehicles = await db.vehicles.find(
-            {"id": {"$in": ids}, "status": {"$nin": ["deleted", "baja"]}}, {"_id": 0}).to_list(10)
+            {"id": {"$in": ids}, "status": {"$nin": ["deleted", "baja"]}}, _SIN_HIST).to_list(10)
         return _portal_payload(vehicles, permitido=True, motivo=None)
 
     # Sin cuadrante cargado: no se sabe. Se abre, acotado a su centro.
     asignadas = await db.vehicles.find(
         {"status": {"$nin": ["deleted", "baja"]},
-         "current_driver_id": {"$in": list(mis_ids)}}, {"_id": 0}).to_list(10)
+         "current_driver_id": {"$in": list(mis_ids)}}, _SIN_HIST).to_list(10)
     if asignadas:
         return _portal_payload(asignadas, permitido=True, motivo=None)
     if center:
         vehicles = await db.vehicles.find(
             {"status": {"$nin": ["deleted", "baja"]},
-             "center": {"$regex": re.escape(center[:4]), "$options": "i"}}, {"_id": 0}).to_list(100)
+             "center": {"$regex": re.escape(center[:4]), "$options": "i"}}, _SIN_HIST).to_list(100)
     else:
         vehicles = []
     return _portal_payload(vehicles, permitido=True, motivo="sin_cuadrante")
@@ -8169,7 +8173,12 @@ async def get_vehicles(center: Optional[str] = None, estado: Optional[str] = Non
     else:
         query = {"status": {"$nin": ["deleted", "baja"]}}
     query.update(_filtro_centro(user, center))
-    vehicles = await db.vehicles.find(query, {"_id": 0}).to_list(1000)
+    # Sin `mileage_history`: es el 87 % del listado (472 de 540 KB medidos con
+    # 125 furgonetas) y ninguna pantalla lo pinta desde aqui — el ritmo y el
+    # saneo lo calculan en el servidor y la ficha lo pide por su ruta. Crece
+    # con cada lectura de cuentakilometros, asi que el listado engordaba sin
+    # techo en cada apertura de Vehiculos y en cada entrada al portal.
+    vehicles = await db.vehicles.find(query, {"_id": 0, "mileage_history": 0}).to_list(1000)
     for v in vehicles:
         for k in ["created_at", "updated_at"]:
             if isinstance(v.get(k), str):
@@ -15357,6 +15366,27 @@ OT_ESTADOS_CERRADOS = ("entregado", "anulada")
 OT_ESTADOS_TALLER = ("recibido", "diagnostico", "esperando_piezas", "reparando", "listo")
 OT_ABIERTAS = ("abierta", "recibido", "diagnostico", "esperando_piezas", "reparando", "listo")
 
+
+def _ot_transicion_invalida(actual, nuevo) -> Optional[str]:
+    """Por que NO se puede pasar de `actual` a `nuevo`, o None si se puede.
+
+    Una orden cerrada es terminal. Forzado por API el 02-09-2026: una orden
+    `entregado` volvia a `reparando` con un 200, la furgoneta se quedaba
+    `active` en la flota mientras la orden decia que estaba en el taller
+    —las "dos verdades" que la creacion de ordenes evita—, y una `entregado`
+    pasaba a `anulada` sin deshacer nada. Si hay que volver al taller, se
+    abre otra orden: asi cada visita tiene su fecha de entrada y su parte.
+    Repetir el mismo estado no es una transicion y no molesta.
+    """
+    if nuevo not in OT_ESTADOS:
+        return "Ese estado no existe"
+    if actual == nuevo:
+        return None
+    if actual in OT_ESTADOS_CERRADOS:
+        return ("La orden ya está %s y no se puede reabrir. Si la furgoneta vuelve "
+                "al taller, abre una orden nueva." % OT_ESTADOS.get(actual, actual).lower())
+    return None
+
 # Cambios que merecen aviso inmediato. El resto se ve en la pantalla y ya:
 # avisar de todo es no avisar de nada.
 OT_AVISA = ("listo", "esperando_piezas")
@@ -16575,14 +16605,20 @@ async def crear_orden(data: OrdenTrabajoCrear, user: dict = Depends(require_admi
         await db.app_meta.update_one({"_id": cerrojo, "at": {"$lt": hace_poco}},
                                      {"$set": {"at": ahora.isoformat()}}, upsert=True)
     except DuplicateKeyError:
-        repetida = await db.ordenes_trabajo.find_one(
-            {"vehicle_id": data.vehicle_id, "workshop_id": data.workshop_id,
-             "estado": {"$nin": ["anulada", "entregado"]}, "creada_en": {"$gte": hace_poco}},
-            {"_id": 0})
-        if repetida:
-            return repetida
-        raise HTTPException(409, "Esa orden se está abriendo ahora mismo desde otra petición. "
-                                 "Recarga la lista antes de volver a intentarlo.")
+        # La otra peticion puede no haber insertado todavia: se le da un
+        # segundo. Si despues sigue sin haber orden abierta reciente, no era un
+        # doble clic (por ejemplo: abrir, anular y volver a abrir en dos
+        # minutos, que es legitimo) y se sigue adelante.
+        repetida = None
+        for _ in range(4):
+            repetida = await db.ordenes_trabajo.find_one(
+                {"vehicle_id": data.vehicle_id, "workshop_id": data.workshop_id,
+                 "estado": {"$nin": list(OT_ESTADOS_CERRADOS)}, "creada_en": {"$gte": hace_poco}},
+                {"_id": 0})
+            if repetida:
+                return repetida
+            await asyncio.sleep(0.25)
+        await db.app_meta.update_one({"_id": cerrojo}, {"$set": {"at": ahora.isoformat()}}, upsert=True)
 
     orden = {
         "id": str(uuid.uuid4()),
@@ -18252,8 +18288,9 @@ async def editar_orden(orden_id: str, data: dict = Body(...), user: dict = Depen
 
     if "estado" in data:
         nuevo = str(data["estado"])
-        if nuevo not in OT_ESTADOS:
-            raise HTTPException(400, "Ese estado no existe")
+        motivo = _ot_transicion_invalida(o.get("estado"), nuevo)
+        if motivo:
+            raise HTTPException(400 if nuevo not in OT_ESTADOS else 409, motivo)
         if nuevo != o.get("estado"):
             campos["estado"] = nuevo
             apuntes.append(_ot_apunte(quien, "Estado: " + OT_ESTADOS[nuevo]))
@@ -18268,6 +18305,10 @@ async def editar_orden(orden_id: str, data: dict = Body(...), user: dict = Depen
                     vuelve = o.get("vehiculo_estado_previo") or "activo"
                     await db.vehicles.update_one({"id": o["vehicle_id"]},
                                                  {"$set": {"status": vuelve}})
+                    # Las mismas reglas que al cambiarla a mano en Vehiculos:
+                    # sin esto `taller_desde` se quedaba puesto en una
+                    # furgoneta ya activa (medido al entregar por API).
+                    await _auto_incident_on_workshop(o["vehicle_id"], "taller", vuelve)
                     apuntes.append(_ot_apunte(quien, "Furgoneta de vuelta", vuelve))
             # SE CIERRA EL CIRCULO. Al entregar, los daños que iban en la orden
             # pasan a reparados en el libro; al anularla vuelven a la lista de
