@@ -18,7 +18,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from PIL import Image
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 from typing import List, Optional, Tuple
 
@@ -519,6 +519,21 @@ class InspectionAnalysis(BaseModel):
     critical_damages: list = []
     new_damages: List[Damage] = []
     damages: List[Damage] = []
+
+    @model_validator(mode="after")
+    def _severidad_coherente(self):
+        """Sin daños en la lista no hay severidad de daño.
+
+        La IA devuelve `severity` y `damages` por separado y a veces dice
+        "leve" con la lista vacia (suciedad, una duda descartada): 128 de
+        3.964 inspecciones en produccion el 02-09-2026, que en la lista salian
+        como "Leve · 0 daños" y en el dashboard contaban como daño. Una
+        pantalla que reparte en cajones tiene que cuadrar (gotcha 30).
+        """
+        if not self.damages and not self.new_damages and \
+                self.severity in ("leve", "moderado", "grave", "critico"):
+            self.severity = "sin_danos"
+        return self
 
 
 class Inspection(BaseModel):

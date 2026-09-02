@@ -71,17 +71,22 @@ reintroduciendo el fallo. Invariante nuevo en `smoke_endpoints.py`.
 
 ## Siguiente acción exacta
 
-Cuarta pasada. Lo que las tres primeras no podían ver:
+Quinta pasada (la cuarta fue recorrer el panel como usuario; ver `ESTADO.md`):
 
-1. **Estados y transiciones** de órdenes de taller e incidencias: provocar
-   saltos, retrocesos y transiciones duplicadas por API (`PATCH /work-orders`)
-   y comprobar que la furgoneta vuelve a su estado previo al entregar.
-2. **Escala**: `/cortex/debrief` y `/inspections` sin paginar; medir con
-   1.000× más datos (empresa sintética) antes de tocar nada.
-3. **«Mis turnos» en el portal**: `/shifts/mine` ya devuelve el cuadrante y
+1. **Pantallas que faltan por recorrer con criterio de producto**: Debrief a
+   fondo (diseño de Dani, no se toca sin hablarlo), Chat interno, Plantilla
+   de turno, Checklist de turno, Días libres, Contactos, IA Peritaje, Portal
+   conductor (página del panel), Bandeja.
+2. **Portal del conductor como conductor real** en móvil (viewport 375):
+   inspección con foto, petición de días, cambio de contraseña.
+3. **Escala**: `/cortex/debrief` (401 KB, gzip) e `/inspections` sin paginar;
+   medir con una empresa sintética 1.000× antes de tocar nada.
+4. **«Mis turnos» en el portal**: `/shifts/mine` ya devuelve el cuadrante y
    el portal lo tiene en PRONTO a propósito. Decisión de producto de Dani.
-4. Los 13 correos repetidos entre conductores dados de baja: fusionar fichas
+5. Los 13 correos repetidos entre conductores dados de baja: fusionar fichas
    (`/drivers/fusionar`) para poder quitar el `partial` del índice.
+6. `alerts` (50 docs de junio) sin pantalla; el dashboard ya no la usa como
+   decisión. Retirar el generador o darle pantalla.
 
 ---
 

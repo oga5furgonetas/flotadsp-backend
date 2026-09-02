@@ -137,6 +137,44 @@ accesos», **21 cuentas** para una persona. Ahora, en producción:
   `/cortex/debrief` va comprimido por Fly (gzip): 401 KB en JSON, no es
   problema de red.
 
+### Cuarta pasada (noche del 02-09): el panel recorrido como usuario
+
+Con sesión de super-admin en el navegador, pantalla por pantalla, con datos
+reales de OGA5. Todo desplegado y comprobado en producción:
+
+- **Dashboard.** «0 rutas en curso» con 1.209 paquetes `PICKED_UP` en la
+  calle: `/cortex/routes` contaba «en la furgoneta» solo `LOADED/ARRIVED`,
+  estados que dejaron de existir con el gotcha 28. Ahora 42 en curso con sus
+  minutos sin entregar. «79 ITV vencidas o inminentes» eran 16 + 6 + **57
+  sin fecha**: tres líneas. El KPI histórico de críticos/graves pasa a
+  «daños sin reparar · N graves en M furgonetas». Con un centro elegido decía
+  «100 % disponibilidad · 0 en taller» (filtraba `status==='workshop'`, que
+  no existe) con 9 en el taller.
+- **Mi día.** Con «Todos» quedaba en blanco; sin cuadrante decía «Todas
+  asignadas ✓»; contaba 56 incidencias «abiertas» de toda la empresa (16
+  resueltas). `GET /incidents` admite `status` y `center`.
+- **Scorecard.** Dos DCR de la semana en la misma pantalla (99,79 % arriba,
+  98,4 % abajo): `/cortex/calidad` no usaba la foto congelada del gotcha 39.
+  Ahora manda la foto en las dos. Abría en la semana del 14 de junio;
+  `_semana_a_seguir` cae a la actual si lo subido tiene más de dos semanas.
+- **Incidencias.** Las automáticas «Vehículo en taller» no se cerraban al
+  salir (7 abiertas desde julio, cerradas con respaldo) ni evitaban
+  duplicados por variaciones del título (13 parejas). Se cierran solas y no se
+  duplican; invariante en el smoke; probado de punta a punta.
+- **Inspecciones.** 126 con severidad «leve/moderado/grave» y cero daños en
+  la lista (la IA las devuelve por separado): validador en el modelo y las
+  126 corregidas con respaldo (`respaldo_severidad_sin_danos`).
+- **Vehículos.** `/vehicles` y el portal sin `mileage_history`: 540 → 92 KB
+  y 532 → 82 KB. La 3328 NFY con 1.880.712 km coherentes consigo misma sale
+  en Revisar datos como «kilometraje imposible».
+- **Talleres.** Pedía dirección o GPS antes de enseñar nada; arranca desde el
+  centro elegido (`GET /org/centros-geo`) con «Cambiar ubicación».
+- **Órdenes de taller.** Una cerrada ya no se reabre (409) y `taller_desde`
+  se limpia al entregar; anular y reabrir en dos minutos funciona.
+- **Chunk envenenado.** Visto en vivo durante un despliegue: la curación
+  intentaba una vez por minuto y la ventana dura más. Tres intentos
+  escalonados en diez minutos.
+
 ### Comprobado y descartado (sin evidencia de fallo)
 
 - Aislamiento multiempresa con ids reales de la principal desde otra
