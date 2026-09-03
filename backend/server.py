@@ -17515,7 +17515,7 @@ def _apoyo_minutos_desde(iso: Optional[str]) -> Optional[int]:
         return None
 
 
-def _apoyo_telefono(fi_tel, cx_tel) -> dict:
+def _apoyo_telefono(fi_tel, cx_tel, cx_del_dia: bool = True) -> dict:
     """Elige el telefono de un apoyo y dice si esta corroborado. PURO (testable).
 
     EL PORQUE (Dani, 03-09-2026): «a lo mejor salen con numeros de telefono
@@ -17538,7 +17538,11 @@ def _apoyo_telefono(fi_tel, cx_tel) -> dict:
     cx = _telefono_limpio(cx_tel)
     fi = _telefono_limpio(fi_tel)
     if cx:
-        return {"telefono": cx, "telefono_fuente": "cortex", "telefono_sin_corroborar": False,
+        # `cx_del_dia` False = el resumen es de OTRO dia (hoy aun no se capturo).
+        # Ese numero es tan de fiar como el de la ficha: quien conduce esa ruta
+        # cambia de un dia para otro. Se usa, pero NO se vende como corroborado.
+        return {"telefono": cx, "telefono_fuente": "cortex" if cx_del_dia else "cortex_otro_dia",
+                "telefono_sin_corroborar": not cx_del_dia,
                 "telefono_discrepa": bool(fi and _telefono_digitos(fi) != _telefono_digitos(cx))}
     if fi:
         return {"telefono": fi, "telefono_fuente": "ficha", "telefono_sin_corroborar": True,
@@ -17556,16 +17560,34 @@ async def _apoyo_gente_cortex(dia: str) -> dict:
     """
     if not dia:
         return {}
-    doc = await db.cortex_resumen.find_one({"dia": dia}, {"_id": 0, "gente": 1})
-    if not doc:
-        doc = await db.cortex_resumen.find_one(
-            {"dia": {"$lte": dia}}, {"_id": 0, "gente": 1}, sort=[("dia", -1)])
+    # HAY UN RESUMEN POR CENTRO Y DIA (`_id` = "dia:service_area"), asi que se
+    # juntan TODOS los del dia. Leer solo uno se llevaba por delante a un centro
+    # entero: medido el 03-09-2026, el 02-09 habia 49 personas en OGA5 y 25 en
+    # DGA1, y con `find_one` esas 25 —todas con telefono en Cortex— salian con
+    # el numero de la ficha, que es justo el que puede estar mal.
+    docs = await db.cortex_resumen.find({"dia": dia}, {"_id": 0, "gente": 1}).to_list(20)
+    del_dia = True
+    if not docs:
+        # Sin resumen de hoy se coge el dia anterior mas cercano, pero MARCADO:
+        # ese numero no esta corroborado con el dia de hoy.
+        ultimo = await db.cortex_resumen.find_one(
+            {"dia": {"$lt": dia}}, {"_id": 0, "dia": 1}, sort=[("dia", -1)])
+        if not ultimo:
+            return {}
+        docs = await db.cortex_resumen.find(
+            {"dia": ultimo["dia"]}, {"_id": 0, "gente": 1}).to_list(20)
+        del_dia = False
     mapa: dict = {}
-    for p in (doc or {}).get("gente") or []:
-        tid = p.get("transporterId")
-        if tid and tid not in mapa:
-            mapa[tid] = {"nombre": (p.get("nombre") or "").strip(),
-                         "telefono": _telefono_limpio(p.get("telefono"))}
+    for doc in docs:
+        for p in doc.get("gente") or []:
+            tid = p.get("transporterId")
+            if not tid:
+                continue
+            tel = _telefono_limpio(p.get("telefono"))
+            # Con varios centros, gana la entrada que trae telefono.
+            if tid not in mapa or (tel and not mapa[tid].get("telefono")):
+                mapa[tid] = {"nombre": (p.get("nombre") or "").strip(),
+                             "telefono": tel, "del_dia": del_dia}
     return mapa
 
 
@@ -17599,11 +17621,12 @@ async def _apoyo_personas(ids: set, dia: Optional[str] = None, gente: Optional[d
     for i in ids:
         fi = fichas.get(i)
         cx = cortex.get(i) if cortex else None
-        tel = _apoyo_telefono((fi or {}).get("phone"), (cx or {}).get("telefono"))
+        tel = _apoyo_telefono((fi or {}).get("phone"), (cx or {}).get("telefono"),
+                              (cx or {}).get("del_dia", True))
         # El nombre se empareja con la fuente del telefono: si el numero es de
         # Cortex, el nombre tambien (misma persona de hoy); si es de la ficha,
         # el de la ficha. Nunca se mezclan.
-        if tel["telefono_fuente"] == "cortex":
+        if tel["telefono_fuente"] in ("cortex", "cortex_otro_dia"):
             nombre = ((cx or {}).get("nombre") or (fi or {}).get("name") or i).strip()
         else:
             nombre = ((fi or {}).get("name") or (cx or {}).get("nombre") or i).strip()
@@ -18082,7 +18105,8 @@ async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = Non
         # El telefono del ayudante tambien se corrobora con Cortex de hoy si
         # esta en ruta: es a quien la oficina le manda el enlace.
         cx = gente.get(tid) if tid else None
-        tel = _apoyo_telefono(d.get("phone"), (cx or {}).get("telefono"))
+        tel = _apoyo_telefono(d.get("phone"), (cx or {}).get("telefono"),
+                              (cx or {}).get("del_dia", True))
         # Sin transporter_id se identifica por la ficha: puede ayudar igual.
         ayudantes.append({"driver_id": tid or d["id"], "ficha_id": d["id"], "nombre": (d.get("name") or "").strip(),
                           "telefono": tel["telefono"], "telefono_fuente": tel["telefono_fuente"],
@@ -18215,7 +18239,13 @@ async def apoyo_crear(data: dict = Body(...), user: dict = Depends(require_admin
     # ayudante termine el que tenga en marcha. Si no tiene ninguno activo,
     # `_apoyo_promover_cola` lo activa al instante (mas abajo), asi que pedir
     # cola cuando el ayudante esta libre no lo deja parado.
-    en_cola = bool(data.get("cola"))
+    # LA CADENA LA DECIDE EL SERVIDOR. Antes dependia de que el panel mandase
+    # `cola`, y sin esa casilla el mismo ayudante acababa con varios apoyos
+    # activos a la vez: el 03-09-2026 habia CINCO abiertos sobre la misma
+    # persona en produccion. Ahora todo nace EN COLA y `_apoyo_promover_cola`
+    # decide, que ademas es lo unico a prueba de dos clics simultaneos: su
+    # update va condicionado a `fase: en_cola`, asi que solo uno pasa a activo.
+    pedido_en_cola = bool(data.get("cola"))
     ahora = datetime.now(timezone.utc).isoformat()
     token = secrets.token_urlsafe(32)
     doc = {
@@ -18223,9 +18253,9 @@ async def apoyo_crear(data: dict = Body(...), user: dict = Depends(require_admin
         "de": {"driver_id": de_id, **personas[de_id], "ruta": actual.get("ruta") or ""},
         "a": {"driver_id": a_id, **personas[a_id]},
         "paradas": paradas, "nota": str(data.get("nota") or "")[:300],
-        "fase": "en_cola" if en_cola else "enviado", "token": token,
+        "fase": "en_cola", "token": token,
         "historial": [{"en": ahora, "por": user.get("name") or user.get("sub"),
-                       "accion": "en_cola" if en_cola else "creado",
+                       "accion": "en_cola" if pedido_en_cola else "creado",
                        "detalle": "%d paradas" % len(paradas)}],
         "created_at": ahora, "created_by": user.get("sub"), "updated_at": ahora,
     }
@@ -18240,11 +18270,12 @@ async def apoyo_crear(data: dict = Body(...), user: dict = Depends(require_admin
         "token": token, "tipo": "apoyo", "apoyo_id": doc["id"], "db_name": _current_db_name.get(),
         "creado_por": user.get("sub"), "creado_en": ahora,
         "expira_en": (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(), "revocado": False})
-    # Si nacio en cola pero el ayudante esta libre, se activa ya (no tiene sentido
-    # dejarlo esperando a nada). Se relee el doc por si cambio de fase.
-    if en_cola:
+    # Nace en cola y se activa aqui SOLO si el ayudante esta libre. Si ya esta
+    # en otra, este espera su turno y sale solo al terminarla. Se relee el doc
+    # porque `promover` puede haber activado otro anterior de la misma cola.
+    if not pedido_en_cola:
         await _apoyo_promover_cola(a_id, dia)
-        doc = await db.apoyos.find_one({"id": doc["id"]}, {"_id": 0}) or doc
+    doc = await db.apoyos.find_one({"id": doc["id"]}, {"_id": 0}) or doc
     await _audit(user, "apoyo_crear", {"id": doc["id"], "de": de_id, "a": a_id,
                                        "paradas": len(paradas), "fase": doc.get("fase")})
     return {**(await _apoyo_con_enlaces(doc)), "ya_entregadas": ya, "en_cola": doc.get("fase") == "en_cola"}
@@ -18285,6 +18316,18 @@ async def apoyo_cambiar(apoyo_id: str, data: dict = Body(...), user: dict = Depe
         personas = await _apoyo_personas({nuevo}, a["dia"])
         if not personas[nuevo].get("telefono"):
             raise HTTPException(400, "%s no tiene teléfono en su ficha" % personas[nuevo].get("nombre"))
+        # UN APOYO ACTIVO POR AYUDANTE, tambien por esta puerta. Si el nuevo ya
+        # esta en otra, este pasa a la cola en vez de dejarle dos abiertos:
+        # es la misma regla que al crear, y sin ella la cadena se rompe por
+        # aqui sin que nadie lo vea.
+        if a.get("fase") == "enviado":
+            ocupado = await db.apoyos.find_one(
+                {"dia": a["dia"], "a.driver_id": nuevo, "fase": "enviado", "id": {"$ne": apoyo_id}},
+                {"_id": 0, "id": 1})
+            if ocupado:
+                cambios["fase"] = "en_cola"
+                hist.append({"en": ahora, "por": quien, "accion": "en_cola",
+                             "detalle": "el ayudante nuevo ya esta en otra ayuda"})
         cambios["a"] = {"driver_id": nuevo, **personas[nuevo]}
         hist.append({"en": ahora, "por": quien, "accion": "ayudante",
                      "detalle": "%s -> %s" % (a["a"].get("nombre"), personas[nuevo].get("nombre"))})
@@ -18303,6 +18346,10 @@ async def apoyo_cambiar(apoyo_id: str, data: dict = Body(...), user: dict = Depe
         raise HTTPException(409, "Ya hay otro apoyo abierto de esa pareja hoy")
     # Al cerrar un apoyo, el siguiente de la cola de ese ayudante sale solo.
     if cambios.get("fase") in ("hecho", "anulado"):
+        await _apoyo_promover_cola(a["a"]["driver_id"], a["dia"])
+    # Y si se le quito el apoyo a un ayudante para darselo a otro, el primero
+    # queda libre: su cola tambien tiene que avanzar.
+    if cambios.get("a") and a["a"]["driver_id"] != cambios["a"]["driver_id"]:
         await _apoyo_promover_cola(a["a"]["driver_id"], a["dia"])
     a = await db.apoyos.find_one({"id": apoyo_id}, {"_id": 0})
     await _audit(user, "apoyo_cambiar", {"id": apoyo_id, "cambios": sorted(cambios)})

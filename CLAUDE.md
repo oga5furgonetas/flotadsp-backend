@@ -762,6 +762,39 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    para los dos (dos sitios: el menu de usuario y la plantilla).
 
 
+49. **`cortex_resumen` tiene UN DOCUMENTO POR CENTRO Y DIA, y leer uno solo se
+   lleva por delante un centro entero.** El `_id` es `"dia:service_area_id"`,
+   asi que un dia con dos naves son dos documentos. `_apoyo_gente_cortex` hacia
+   `find_one({"dia": dia})` y se quedaba con el que Mongo devolviera primero.
+   Medido el 03-09-2026 sobre el 02-09: 49 personas en OGA5 y 25 en DGA1, y esas
+   25 —**todas con telefono en Cortex**— salian con el numero de la ficha. De
+   ellas, **15 tenian en la ficha un numero DISTINTO**: son exactamente las
+   llamadas que acababan con otra persona al otro lado, que es el fallo que Dani
+   reporto. Ahora se juntan todos los documentos del dia (`find(...).to_list`).
+   Y una segunda cara del mismo sitio: cuando no hay resumen de HOY se coge el
+   del dia anterior mas cercano, pero eso ya **no se vende como corroborado**
+   (`telefono_fuente: "cortex_otro_dia"`, `sin_corroborar: True`). Quien conduce
+   una ruta cambia de un dia para otro, asi que el numero de ayer vale tanto
+   como el de la ficha: se usa, pero se avisa. Probado reintroduciendo el fallo
+   en `test_apoyo.py`.
+
+50. **La cola de ayudas no puede depender de una casilla del panel.**
+   `POST /apoyo` decidia `en_cola` con un campo del cuerpo (`cola`). Si el panel
+   no lo mandaba, el apoyo nacia activo aunque el ayudante ya estuviera en otra:
+   medido en produccion el 03-09-2026, **cinco apoyos abiertos a la vez sobre la
+   misma persona** y dos mas creados a proposito para comprobarlo. La cadena que
+   se habia pedido no existia por esa puerta.
+   Ahora **todo nace en cola y el servidor decide**: `_apoyo_promover_cola` lo
+   activa solo si el ayudante esta libre, y su `update_one` va condicionado a
+   `fase: "en_cola"`, asi que dos clics simultaneos no pueden activar dos.
+   La misma regla se aplica al **cambiar de ayudante** —si el nuevo ya esta en
+   otra, este pasa a la cola— y al soltar al anterior, cuya cola avanza. Antes
+   solo avanzaba al cerrar.
+   Regla general: **una invariante de negocio se cumple en TODAS las puertas**
+   (crear, cambiar, cerrar) o no se cumple; y quien decide es el servidor, no
+   un campo que el cliente puede olvidar.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

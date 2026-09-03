@@ -153,6 +153,19 @@ def test_telefono_cortex_manda_sobre_ficha():
     assert r["telefono_discrepa"] is True   # la ficha tenia otro: se avisa para arreglarla
 
 
+def test_telefono_de_cortex_de_OTRO_dia_no_es_corroborado():
+    """Sin resumen de hoy se usa el del dia anterior, pero NO se vende como
+    corroborado: quien conduce esa ruta cambia de un dia para otro, que es
+    justo el bug que se venia a arreglar."""
+    r = NS["_apoyo_telefono"]("600111222", "600999888", False)
+    assert r["telefono"] == "600999888"
+    assert r["telefono_fuente"] == "cortex_otro_dia"
+    assert r["telefono_sin_corroborar"] is True
+    # Y con el resumen del propio dia, sigue siendo corroborado.
+    r2 = NS["_apoyo_telefono"]("600111222", "600999888", True)
+    assert r2["telefono_fuente"] == "cortex" and r2["telefono_sin_corroborar"] is False
+
+
 def test_telefono_ficha_sola_va_sin_corroborar():
     # Cortex no trae a esa persona hoy: se usa la ficha pero se marca para que
     # la oficina lo confirme (puede ser el de ayer).
