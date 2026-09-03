@@ -342,12 +342,76 @@
      pasa nada: no se inventa ningún dato. */
   let plantillaInforme = null;
   const estadosInforme = new Set(['REATTEMPTABLE']);
+  /* …Y SE RECUERDAN ENTRE SESIONES. Ese «para siempre» de arriba no lo era: el
+     Set y la plantilla vivían sólo en la memoria de la pestaña. Un F5 en Cortex
+     —o cerrarla y volver por la mañana— y se arrancaba otra vez pidiendo
+     únicamente REATTEMPTABLE, con lo que los paquetes que van en la furgoneta
+     se quedaban sin `dest_lat/dest_lng` y «Apoyo en ruta» los listaba como
+     «Cortex no da la ubicación». Es el mismo fallo que ya está descrito cuatro
+     párrafos más arriba para las URLs del barrido, en la lista de al lado.
+     Medido el 03-09-2026: 68 de 78 paradas de una ruta, sin ubicación.
+
+     MAIN no tiene las APIs de la extensión, así que se guarda a través del
+     puente (`informe_aprendido`) y se recupera al cargar (`informe_pedir`).
+
+     La plantilla lleva el `serviceAreaId` DENTRO, así que va guardada POR
+     ESTACIÓN y sólo se recupera la de la que se está mirando: restaurar la de
+     otra nave pediría sus paquetes y los metería en el centro equivocado, que
+     es justo contra lo que avisa el `return null` de aquí abajo. Los estados sí
+     son comunes — `PICKED_UP` es `PICKED_UP` en cualquier nave. */
+  const ESTADO_INFORME_OK = /^[A-Z][A-Z0-9_.-]{2,39}$/;
+  let plantillasGuardadas = {};      // serviceAreaId → plantilla de sesiones anteriores
+  let informeRespondido = false;
+  const guardarInforme = () => post({
+    kind: 'informe_aprendido', estados: [...estadosInforme],
+    plantilla: plantillaInforme, sa: saId,
+  });
+  const plantillaInformeValida = (u) => {
+    try {
+      const x = new URL(u, location.origin);
+      return x.origin === location.origin && /packagesByStatus/i.test(x.pathname);
+    } catch (_) { return false; }
+  };
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window) return;
+    const d = ev.data;
+    if (!d || d.__flotadspIn !== true || d.kind !== 'informe_guardado') return;
+    informeRespondido = true;
+    /* Sale de nuestro propio almacén, pero llega por `postMessage`, que
+       cualquier script de la página puede falsificar. Se valida antes de usarlo:
+       un estado inventado sería una petición de más, pero una plantilla ajena
+       mandaría la sesión de Cortex del usuario a donde no debe. */
+    let n = 0;
+    for (const st of (Array.isArray(d.estados) ? d.estados : [])) {
+      const s = String(st || '').trim().toUpperCase();
+      if (ESTADO_INFORME_OK.test(s) && !estadosInforme.has(s)) { estadosInforme.add(s); n++; }
+    }
+    const ps = (d.plantillas && typeof d.plantillas === 'object') ? d.plantillas : {};
+    for (const [sa, u] of Object.entries(ps)) {
+      const k = normSa(sa);
+      if (k && typeof u === 'string' && plantillaInformeValida(u)) plantillasGuardadas[k] = u;
+    }
+    if (n) post({ kind: 'debug', url: `informe: ${n} estado(s) recordados de la sesión anterior`, count: estadosInforme.size, bytes: 0 });
+  });
+  /* Se pregunta en cuanto arranca. `bridge.js` va en el mundo ISOLATED y el
+     orden entre los dos no está garantizado, así que si a los 3 s nadie ha
+     contestado se vuelve a preguntar — sigue sobrando margen para los 9 s del
+     primer `pedirInforme`. */
+  post({ kind: 'informe_pedir' });
+  setTimeout(() => { if (!informeRespondido) post({ kind: 'informe_pedir' }); }, 3000);
   const urlInforme = (estado) => {
     const dia = serviceDay() || hoyLocal();
-    if (plantillaInforme) {
+    // La aprendida en esta sesión manda; si no hay, la guardada DE ESTA MISMA
+    // ESTACIÓN. Sin estación no se toca ninguna guardada: no sabríamos de cuál.
+    const plantilla = plantillaInforme || (saId ? plantillasGuardadas[saId] : null);
+    if (plantilla) {
       try {
-        const u = new URL(plantillaInforme.replace('__DIA__', dia));
+        const u = new URL(plantilla.replace('__DIA__', dia));
         u.searchParams.set('packageStatus', estado);
+        /* El `serviceAreaId` de una plantilla guardada puede ser de otra nave:
+           manda el de la estación que se está mirando ahora. Dentro de la misma
+           sesión coinciden y esto no hace nada. */
+        if (saId && u.searchParams.has('serviceAreaId')) u.searchParams.set('serviceAreaId', saId);
         return u.href;
       } catch (_) { /* cae a la construcción de abajo */ }
     }
@@ -359,12 +423,15 @@
     try {
       const u = new URL(url, location.origin);
       const st = (u.searchParams.get('packageStatus') || '').trim().toUpperCase();
+      let cambio = false;
       if (st && !estadosInforme.has(st)) {
         estadosInforme.add(st);
+        cambio = true;
         post({ kind: 'debug', url: `informe: estado nuevo aprendido ${st} (se refresca solo)`, count: estadosInforme.size, bytes: 0 });
       }
       u.searchParams.set('localDate', '__DIA__');
-      plantillaInforme = u.href;
+      if (plantillaInforme !== u.href) { plantillaInforme = u.href; cambio = true; }
+      if (cambio) guardarInforme();   // que sobreviva al F5
     } catch (_) {}
   };
   const pedirInforme = async () => {

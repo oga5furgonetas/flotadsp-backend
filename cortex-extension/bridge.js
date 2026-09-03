@@ -23,5 +23,21 @@ if (!window.__flotadspBridge) {
        lista blanca que descarta sin avisar— en otro sitio.
        Al anadir un `kind` nuevo hay que tocarlo AQUI y en background.js. */
     else if (d.kind === 'resumen_cortex') chrome.runtime.sendMessage({ type: 'resumenCortex', url: d.url, dia: d.dia, sa: d.sa, datos: d.datos });
+    /* LO QUE APRENDE EL INFORME DE DIRECCIONES, GUARDADO ENTRE SESIONES.
+       Único camino de VUELTA del puente: el interceptor vive en MAIN y no puede
+       tocar `chrome.storage`, así que pregunta y se le contesta por la misma
+       ventana. `__flotadspIn` (no `__flotadsp`) para que no se confunda con los
+       mensajes de ida y el bucle de arriba no se lo coma. */
+    else if (d.kind === 'informe_aprendido') {
+      chrome.runtime.sendMessage({ type: 'informeAprendido', estados: d.estados, plantilla: d.plantilla, sa: d.sa });
+    } else if (d.kind === 'informe_pedir') {
+      try {
+        chrome.runtime.sendMessage({ type: 'informeGuardado' }, (r) => {
+          if (chrome.runtime.lastError || !r) return;   // service worker dormido: se reintenta
+          window.postMessage({ __flotadspIn: true, kind: 'informe_guardado',
+                               estados: r.estados || [], plantillas: r.plantillas || {} }, '*');
+        });
+      } catch (_) {}
+    }
   });
 }

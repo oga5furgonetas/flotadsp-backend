@@ -74,6 +74,23 @@ for (const [permiso, re] of usa) {
   }
 }
 
+/* ── 5. lo que la extensión APRENDE tiene que sobrevivir al F5 ─────────── */
+/* Los estados del informe de direcciones y su plantilla vivían sólo en la
+ * memoria del interceptor. Un F5 en Cortex y volvía a pedir únicamente
+ * REATTEMPTABLE: los paquetes que van en la furgoneta se quedaban sin
+ * `dest_lat/dest_lng` y «Apoyo en ruta» los daba por sin ubicación (medido el
+ * 03-09-2026: 68 de 78 paradas de una ruta). No da error, no sale en ningún
+ * log: simplemente deja de haber direcciones. Si alguien quita el guardado,
+ * que salte aquí y no tres semanas después mirando un mapa vacío. */
+if (!/chrome\.storage\.local\.set\(\{\s*informe:/.test(background)) {
+  problemas.push('background.js ya no guarda `informe` en chrome.storage: '
+    + 'los estados aprendidos se perderán en cada recarga de Cortex')
+}
+if (!/__flotadspIn/.test(background + bridge + interceptor)) {
+  problemas.push('no queda camino de vuelta al interceptor (`__flotadspIn`): '
+    + 'lo guardado no se puede recuperar al cargar la página')
+}
+
 if (problemas.length) {
   for (const p of problemas) console.error('  ' + p)
   console.error(`\nextensión: ${problemas.length} problema(s).`)

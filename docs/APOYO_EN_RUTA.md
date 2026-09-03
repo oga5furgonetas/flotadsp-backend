@@ -101,16 +101,30 @@ internos, ni otros conductores, ni nada de la empresa.
 
 ## Lo que falta (en orden)
 
-0. **Que las paradas en furgoneta tengan destino (extensión 2.22).** El único
+0. **Que las paradas en furgoneta tengan destino (extensión 2.23).** El único
    sitio de Cortex con dirección y geocode del destino es el informe
    `packagesByStatus`, y la extensión solo lo pedía para `REATTEMPTABLE`.
    Desde 2.22 APRENDE los estados: en cuanto alguien abre en Cortex
    «Packages by status» con otro estado (el de los paquetes en furgoneta),
    ese estado se refresca solo en cada barrido y llegan `dest_lat/dest_lng`.
-   Pasos: descargar la extensión nueva desde Paquetes IA, recargarla en
-   `chrome://extensions`, abrir una vez «Packages by status» y elegir el
-   estado de «en furgoneta». Comprobar después con
-   `db.cortex_packages.count_documents({"dest_lat": {"$ne": None}})`.
+
+   **Lo aprendido no sobrevivía al F5 (arreglado en 2.23).** El Set de estados
+   y la plantilla vivían en la memoria del interceptor, así que cada recarga de
+   Cortex volvía a dejarlo en `REATTEMPTABLE` y había que abrir el informe otra
+   vez a mano — sin aviso de ningún tipo, simplemente dejaban de llegar
+   direcciones. Medido el 03-09-2026 en `XA_C14`: 68 de 78 paradas sin
+   ubicación. Ahora se guarda en `chrome.storage.local` (`informe`), viaja por
+   el puente (`informe_aprendido` / `informe_pedir`, único camino de VUELTA
+   hacia MAIN) y se recupera al cargar. La plantilla lleva el `serviceAreaId`
+   dentro, así que va **por estación** y solo se recupera la de la nave que se
+   está mirando: cruzarla metería los paquetes en el centro equivocado. Los
+   estados sí se comparten. `scripts/check-extension.mjs` vigila que el
+   guardado siga ahí.
+
+   Pasos, una sola vez por navegador: descargar la extensión nueva desde
+   Paquetes IA, recargarla en `chrome://extensions`, abrir una vez
+   «Packages by status» y elegir el estado de «en furgoneta». Comprobar después
+   con `db.cortex_packages.count_documents({"dest_lat": {"$ne": None}})`.
 1. **Envío automático por la API de Meta** cuando lleguen las credenciales:
    hoy `wa.me` abre WhatsApp con el texto escrito y la oficina pulsa enviar.
    El módulo de WhatsApp (`/whatsapp/*`) ya existe; enganchar `_apoyo_textos`.

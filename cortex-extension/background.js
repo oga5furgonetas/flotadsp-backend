@@ -256,6 +256,32 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
                         sa: msg.sa, datos: msg.datos });
     return false;
   }
+  /* QUE ESTADOS DEL INFORME DE DIRECCIONES SE HAN APRENDIDO. Vivian en la
+     memoria del interceptor y un F5 en Cortex los borraba: se volvia a pedir
+     solo REATTEMPTABLE, los paquetes en furgoneta se quedaban sin dest_lat /
+     dest_lng y el mapa de "Apoyo en ruta" los daba por sin ubicacion. Guardarlo
+     aqui es lo unico que hace que el "aprende para siempre" sea verdad.
+
+     Los estados se acumulan (son comunes a cualquier nave). La plantilla lleva
+     el serviceAreaId dentro, asi que va POR ESTACION y solo se devuelve entera:
+     el interceptor coge la de la estacion que esta mirando y descarta el resto.
+     Nada de esto son datos de cliente: son nombres de estado y una URL. */
+  if (msg?.type === 'informeAprendido') {
+    chrome.storage.local.get({ informe: { estados: [], plantillas: {} } }).then(({ informe }) => {
+      const estados = [...new Set([...(informe.estados || []),
+                                   ...(Array.isArray(msg.estados) ? msg.estados : [])])];
+      const plantillas = { ...(informe.plantillas || {}) };
+      if (msg.sa && typeof msg.plantilla === 'string' && msg.plantilla) plantillas[msg.sa] = msg.plantilla;
+      chrome.storage.local.set({ informe: { estados, plantillas, at: Date.now() } });
+    });
+    return false;
+  }
+  if (msg?.type === 'informeGuardado') {
+    chrome.storage.local.get({ informe: { estados: [], plantillas: {} } })
+      .then(({ informe }) => reply?.({ estados: informe.estados || [],
+                                       plantillas: informe.plantillas || {} }));
+    return true;   // respuesta asincrona: hay que mantener el canal abierto
+  }
   if (msg?.type === 'flushNow') { flush().then(() => reply?.({ ok: true })); return true; }
   /* El popup manda aquí qué estaciones se envían. Lista vacía = no enviar nada. */
   if (msg?.type === 'setEstaciones') {
