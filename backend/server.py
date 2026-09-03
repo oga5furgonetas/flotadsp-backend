@@ -17704,9 +17704,15 @@ async def portal_mis_numeros(user: dict = Depends(require_any_auth)):
     """Lo que Cortex sabe de EL, devuelto a quien lo hizo."""
     mis_ids, tids, center = await _portal_quien_es(user)
     hoy = _apoyo_hoy()
-    desde = (datetime.now(timezone.utc) - timedelta(days=6)).strftime("%Y-%m-%d")
+    # EL MES EN CURSO, del dia 1 a hoy (lo pidio Dani el 03-09-2026: siete dias
+    # se quedaban cortos para ver como va el mes). Mes natural, no "ultimos 30
+    # dias": es lo que el conductor tiene en la cabeza y lo que cuadra con
+    # `mis-ayudas`, que ya agrupa por `dia` empezando por `YYYY-MM`.
+    # Cabe de sobra: `cortex_packages` caduca a los 90 dias.
+    desde = hoy[:8] + "01"
     if not tids:
-        return {"sin_transporter": True, "centro": center, "hoy": None, "dias": [], "semana": None}
+        return {"sin_transporter": True, "centro": center, "hoy": None, "dias": [],
+                "mes": None, "semana": None}
 
     # ── HOY, en vivo ────────────────────────────────────────────────────────
     total = entregados = pendientes = reintentos = 0
@@ -17739,7 +17745,7 @@ async def portal_mis_numeros(user: dict = Depends(require_any_auth)):
                 "pct": round(100.0 * entregados / total, 1) if total else None,
                 "bajado_hace_min": _apoyo_minutos_desde(ultima)}
 
-    # ── LOS SIETE DIAS: solo entregados, que no se degradan hacia abajo ─────
+    # ── EL MES: solo entregados, que no se degradan hacia abajo (gotcha 39) ──
     porc: dict = {}
     async for r in db.cortex_packages.aggregate([
         {"$match": {"service_day": {"$gte": desde, "$lte": hoy}, "driver_id": {"$in": list(tids)}}},
@@ -17756,10 +17762,10 @@ async def portal_mis_numeros(user: dict = Depends(require_any_auth)):
     dias = [porc[d] for d in sorted(porc)]
     con_ruta = [d for d in dias if d["total"] > 0]
     mejor = max(con_ruta, key=lambda d: d["entregados"]) if con_ruta else None
-    semana = {"desde": desde, "hasta": hoy,
-              "entregados": sum(d["entregados"] for d in dias),
-              "dias_con_ruta": len(con_ruta),
-              "mejor": mejor}
+    mes = {"desde": desde, "hasta": hoy,
+           "entregados": sum(d["entregados"] for d in dias),
+           "dias_con_ruta": len(con_ruta),
+           "mejor": mejor}
 
     # ── EL CENTRO, con la misma cuenta que hace la oficina ─────────────────
     centro = None
@@ -17774,8 +17780,12 @@ async def portal_mis_numeros(user: dict = Depends(require_any_auth)):
         except Exception as e:                       # el centro es contexto, no puede tumbar la pantalla
             logger.warning("mis-numeros: centro %s: %s", center, e)
 
+    # `semana` va de alias UNA version mas: el backend (Fly) y el frontend
+    # (Pages) se despliegan por separado, y si sale primero el backend la
+    # pantalla vieja leeria `datos.semana.entregados` de un undefined y se
+    # quedaria en blanco. Se puede quitar cuando el frontend nuevo este arriba.
     return {"sin_transporter": False, "centro": centro, "hoy": dhoy,
-            "dias": dias, "semana": semana}
+            "dias": dias, "mes": mes, "semana": mes}
 
 
 @api_router.get("/portal/mis-ayudas")

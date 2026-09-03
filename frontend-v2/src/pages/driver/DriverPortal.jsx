@@ -250,7 +250,7 @@ export default function DriverPortal() {
           <Opcion
             icono={BarChart3}
             titulo="Tus estadísticas"
-            sub="Lo que llevas hoy y esta semana"
+            sub="Lo que llevas hoy y este mes"
             onClick={() => setVista('numeros')}
           />
           <Opcion

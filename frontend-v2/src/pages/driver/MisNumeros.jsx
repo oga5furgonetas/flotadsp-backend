@@ -15,10 +15,16 @@ import { getMisNumeros } from '../../services/api'
    · La única comparación es contra el CENTRO, nunca contra otro conductor.
    · Y se dice, en la propia pantalla, que esto no lo ve nadie más. */
 
-const DIA_CORTO = (iso) => {
-  const [y, m, d] = String(iso || '').split('-').map(Number)
-  if (!y) return ''
-  return new Date(y, m - 1, d).toLocaleDateString('es-ES', { weekday: 'short' }).slice(0, 3)
+/* El día del mes, no el nombre del día: con hasta 31 barras el nombre no cabe
+   ni se distingue. Se etiqueta 1, 5, 10, 15, 20, 25, 30 y el último, que es lo
+   que hace falta para situarse. Ojo: la clave es 'YYYY-MM-DD' y se parte a
+   mano, nunca con `new Date(iso).getDate()` — el ISO se interpreta en UTC y en
+   España devolvería el día anterior (gotcha 11). */
+const DIA_NUM = (iso) => Number(String(iso || '').split('-')[2]) || 0
+const MES_LARGO = (iso) => {
+  const [y, m] = String(iso || '').split('-').map(Number)
+  if (!y) return 'este mes'
+  return new Date(y, m - 1, 1).toLocaleDateString('es-ES', { month: 'long' })
 }
 
 export default function MisNumeros({ onBack }) {
@@ -34,6 +40,15 @@ export default function MisNumeros({ onBack }) {
   const hoy = datos?.hoy
   const dias = datos?.dias || []
   const tope = Math.max(1, ...dias.map((d) => d.entregados))
+  // `mes` es el nombre nuevo; `semana` sigue llegando de alias mientras el
+  // backend viejo esté arriba. Sin esto, un despliegue a medias deja la
+  // pantalla en blanco al leer `.entregados` de un undefined.
+  const mes = datos?.mes ?? datos?.semana
+  const ultimo = dias.length ? DIA_NUM(dias[dias.length - 1].dia) : 0
+  const etiqueta = (d) => {
+    const n = DIA_NUM(d.dia)
+    return (n === 1 || n % 5 === 0 || n === ultimo) ? n : ''
+  }
 
   return (
     <div className="min-h-screen bg-dark-950 text-dark-100">
@@ -111,36 +126,37 @@ export default function MisNumeros({ onBack }) {
           </div>
         )}
 
-        {/* ── LOS SIETE DÍAS ──────────────────────────────────────────── */}
-        {dias.length > 0 && (
+        {/* ── EL MES ──────────────────────────────────────────────────── */}
+        {dias.length > 0 && mes && (
           <div className="rounded-2xl border border-dark-700/60 bg-dark-900/70 p-4">
             <div className="mb-1 flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-[.16em] text-dark-500">
-              <TrendingUp size={12} /> Tus últimos siete días
+              <TrendingUp size={12} /> <span className="capitalize">{MES_LARGO(mes.desde)}</span>
             </div>
             <div className="flex items-baseline gap-2">
-              <span className="cifra text-[28px] font-bold leading-none">{datos.semana.entregados}</span>
+              <span className="cifra text-[28px] font-bold leading-none">{mes.entregados}</span>
               <span className="text-[13px] text-dark-400">
-                paquetes en {datos.semana.dias_con_ruta} {datos.semana.dias_con_ruta === 1 ? 'día' : 'días'} de ruta
+                paquetes en {mes.dias_con_ruta} {mes.dias_con_ruta === 1 ? 'día' : 'días'} de ruta
               </span>
             </div>
 
-            <div className="mt-3 flex h-[52px] items-end gap-[5px]">
+            {/* Hasta 31 barras: el hueco baja a 2 px para que quepan en un móvil. */}
+            <div className="mt-3 flex h-[52px] items-end gap-[2px]">
               {dias.map((d) => (
-                <div key={d.dia} className="flex-1 rounded-t-[3px] bg-brand-400/25"
+                <div key={d.dia} className="flex-1 rounded-t-[2px] bg-brand-400/25"
                   style={{ height: `${Math.max(6, (d.entregados / tope) * 100)}%`,
-                    background: d.dia === datos.semana.mejor?.dia ? 'linear-gradient(180deg,#14E7D8,#0FC2BC)' : undefined }}
+                    background: d.dia === mes.mejor?.dia ? 'linear-gradient(180deg,#14E7D8,#0FC2BC)' : undefined }}
                   title={`${d.dia}: ${d.entregados}`} />
               ))}
             </div>
-            <div className="mt-1 flex gap-[5px]">
+            <div className="mt-1 flex gap-[2px]">
               {dias.map((d) => (
-                <span key={d.dia} className="flex-1 text-center font-mono text-[9px] capitalize text-dark-600">{DIA_CORTO(d.dia)}</span>
+                <span key={d.dia} className="flex-1 text-center font-mono text-[9px] text-dark-600">{etiqueta(d)}</span>
               ))}
             </div>
 
-            {datos.semana.mejor && (
+            {mes.mejor && (
               <p className="mt-2.5 text-[12.5px] text-dark-400">
-                Tu mejor día fueron <b className="cifra text-dark-100">{datos.semana.mejor.entregados}</b> paquetes.
+                Tu mejor día fueron <b className="cifra text-dark-100">{mes.mejor.entregados}</b> paquetes.
               </p>
             )}
             {/* Sin porcentaje en los días cerrados, y dicho en claro por qué. */}
