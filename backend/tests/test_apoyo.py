@@ -26,7 +26,7 @@ RUTA = os.path.join(RAIZ, "server.py")
 
 FUNCS = ("_cx_ruta_cajon", "_apoyo_textos", "_apoyo_url", "enlace_wa", "_apoyo_minutos_desde",
          "_apoyo_posicion_de", "_apoyo_estados_en_calle",
-         "_apoyo_telefono", "_telefono_limpio", "_telefono_digitos")
+         "_apoyo_telefono", "_telefono_limpio", "_telefono_digitos", "_apoyo_todas_hechas")
 CONSTS = ("_CX_OK", "_CX_EN_VUELO", "_CX_NO_DESPACHADO", "_CX_REINTENTABLE", "_APOYO_CAJONES_PENDIENTES",
           "_APOYO_POSICION_MAX_MIN")
 
@@ -175,6 +175,16 @@ def test_telefono_sin_ninguno_vacio():
     r = NS["_apoyo_telefono"]("", "")
     assert r["telefono"] == "" and r["telefono_fuente"] is None
     assert r["telefono_sin_corroborar"] is False and r["telefono_discrepa"] is False
+
+
+def test_todas_hechas_dispara_el_cierre_y_la_cola():
+    # La señal fiable de «apoyo terminado» que engancha la cola: todas marcadas.
+    assert NS["_apoyo_todas_hechas"]([{"stop_id": "1", "hecha": True}, {"stop_id": "2", "hecha": True}])
+    # Si falta una, no esta hecho.
+    assert not NS["_apoyo_todas_hechas"]([{"stop_id": "1", "hecha": True}, {"stop_id": "2"}])
+    # Un apoyo sin paradas NO cuenta como hecho (si no, se cerraria en el aire).
+    assert not NS["_apoyo_todas_hechas"]([])
+    assert not NS["_apoyo_todas_hechas"](None)
 
 
 def main() -> int:

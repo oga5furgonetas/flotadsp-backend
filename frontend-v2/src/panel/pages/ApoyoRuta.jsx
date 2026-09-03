@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { LifeBuoy, RefreshCw, MessageCircle, Copy, Check, Loader2, MapPin, Phone, AlertTriangle, ChevronRight, Pencil, XCircle, CheckCircle2 } from 'lucide-react'
+import { LifeBuoy, RefreshCw, MessageCircle, Copy, Check, Loader2, MapPin, Phone, AlertTriangle, ChevronRight, Pencil, XCircle, CheckCircle2, ListPlus } from 'lucide-react'
 import { useT } from '../../i18n'
 import { hoyLocal } from '../../lib/fecha'
 import { getApoyoSituacion, getApoyoParadas, crearApoyo, cambiarApoyo, getApoyos } from '../api'
@@ -117,13 +117,13 @@ export default function ApoyoRuta() {
 
   const ultimas = (n) => setSel(new Set(paradas.slice(-n).map((p) => p.stop_id)))
 
-  const enviar = async () => {
+  const enviar = async (cola = false) => {
     if (!driver || !ayudante || sel.size === 0) return
     const sinUbic = paradas.filter((p) => sel.has(p.stop_id) && !p.ubicacion).length
     if (sinUbic && !window.confirm(t('apoyo.confirmarSinUbic').replace('{n}', sinUbic).replace('{total}', sel.size))) return
     setEnviando(true); setError('')
     try {
-      const body = { day: dia, de_driver_id: driver.driver_id, a_driver_id: ayudante, stop_ids: [...sel], nota }
+      const body = { day: dia, de_driver_id: driver.driver_id, a_driver_id: ayudante, stop_ids: [...sel], nota, cola }
       const { data } = editando ? await cambiarApoyo(editando.id, { stop_ids: body.stop_ids, a_driver_id: ayudante, nota }) : await crearApoyo(body)
       setResultado(data); setEditando(null)
       cargarSit()
@@ -257,11 +257,18 @@ export default function ApoyoRuta() {
                 {ayudanteSel?.telefono_sin_corroborar && <div className="flex items-start gap-1 text-[11px] text-amber-300"><AlertTriangle size={12} className="mt-0.5 shrink-0" />{t('apoyo.telSinCorroborar')}</div>}
                 {ayudanteSel?.telefono_discrepa && <div className="flex items-start gap-1 text-[11px] text-amber-300/80"><AlertTriangle size={12} className="mt-0.5 shrink-0" />{t('apoyo.telDiscrepa')}</div>}
                 <textarea className="input w-full" rows={2} placeholder={t('apoyo.nota')} value={nota} onChange={(e) => setNota(e.target.value.slice(0, 300))} />
-                <button onClick={enviar} disabled={enviando || !ayudante || sel.size === 0}
+                <button onClick={() => enviar(false)} disabled={enviando || !ayudante || sel.size === 0}
                   className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-sky-500 to-sky-700 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 disabled:opacity-40">
                   {enviando ? <Loader2 size={16} className="animate-spin" /> : <MessageCircle size={16} />}
                   {editando ? t('apoyo.guardarCambios') : t('apoyo.crear').replace('{n}', sel.size)}
                 </button>
+                {!editando && (
+                  <button onClick={() => enviar(true)} disabled={enviando || !ayudante || sel.size === 0}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-dark-700 px-4 py-2 text-xs font-semibold text-dark-300 hover:text-dark-50 disabled:opacity-40"
+                    title={t('apoyo.colaAyuda')}>
+                    <ListPlus size={14} /> {t('apoyo.ponerEnCola')}
+                  </button>
+                )}
                 {editando && <button onClick={() => { setEditando(null); setSel(new Set()); setAyudante(''); setNota('') }} className="w-full text-xs text-dark-500 hover:text-dark-200">{t('common.cancel')}</button>}
               </div>
             </div>
@@ -297,7 +304,7 @@ export default function ApoyoRuta() {
                   <div className="text-sm text-dark-100"><span className="font-semibold">{a.a?.nombre}</span> → {a.de?.nombre} <span className="text-dark-500">· {a.de?.ruta}</span></div>
                   <div className="text-xs text-dark-500">{a.paradas?.length} {t('apoyo.paradas')} · {hechas} {t('apoyo.hechas')} · {new Date(a.created_at).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })} · {a.historial?.[0]?.por}</div>
                 </div>
-                <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${a.fase === 'hecho' ? 'bg-emerald-500/15 text-emerald-300' : a.fase === 'anulado' ? 'bg-dark-700 text-dark-400' : 'bg-sky-500/15 text-sky-300'}`}>{({ enviado: t('apoyo.estado.enviado'), hecho: t('apoyo.estado.hecho'), anulado: t('apoyo.estado.anulado') })[a.fase] || a.fase}</span>
+                <span className={`rounded px-2 py-0.5 text-[11px] font-medium ${a.fase === 'hecho' ? 'bg-emerald-500/15 text-emerald-300' : a.fase === 'anulado' ? 'bg-dark-700 text-dark-400' : a.fase === 'en_cola' ? 'bg-amber-500/15 text-amber-300' : 'bg-sky-500/15 text-sky-300'}`}>{({ enviado: t('apoyo.estado.enviado'), hecho: t('apoyo.estado.hecho'), anulado: t('apoyo.estado.anulado'), en_cola: t('apoyo.estado.enCola') })[a.fase] || a.fase}</span>
                 {!cerrado && (
                   <div className="flex items-center gap-1">
                     {a.wa_ayudante && <a href={a.wa_ayudante} target="_blank" rel="noreferrer" title={t('apoyo.waAyudante').replace('{a}', '')} className="rounded-lg p-1.5 text-emerald-400 hover:bg-emerald-500/10"><MessageCircle size={16} /></a>}

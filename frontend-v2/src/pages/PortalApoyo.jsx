@@ -48,13 +48,23 @@ export default function PortalApoyo() {
   const mapaRef = useRef(null)
   const mapRef = useRef(null)
   const capaRef = useRef(null)
+  const ajustadoRef = useRef(false)
 
   const cargar = useCallback(async () => {
     try { const { data } = await http.get(`/apoyo/t/${encodeURIComponent(token)}`); setDatos(data); setError('') }
     catch (e) { setError(e?.response?.data?.detail || 'No se ha podido abrir este enlace') }
   }, [token])
   useEffect(() => { cargar() }, [cargar])
-  useEffect(() => { const id = setInterval(cargar, 60000); return () => clearInterval(id) }, [cargar])
+  // Se refresca cada 30 s para que la ubicacion del companero se vea lo mas al
+  // dia posible (la de Cortex se mueve cada ~1-2 min). Y al volver a la pestana,
+  // al instante: el ayudante abre el movil y quiere el dato de AHORA, no el de
+  // hace medio minuto.
+  useEffect(() => { const id = setInterval(cargar, 30000); return () => clearInterval(id) }, [cargar])
+  useEffect(() => {
+    const alVolver = () => { if (document.visibilityState === 'visible') cargar() }
+    document.addEventListener('visibilitychange', alVolver)
+    return () => document.removeEventListener('visibilitychange', alVolver)
+  }, [cargar])
 
   useEffect(() => {
     if (!mapaRef.current || mapRef.current || !datos) return
@@ -80,7 +90,12 @@ export default function PortalApoyo() {
       mk.bindPopup(`<b>${datos.de?.nombre || ''}</b><br>Aquí hace ${pos.hace_min} min<br><a href="${irA(pos)}" target="_blank" rel="noreferrer">Ir hacia él</a>`)
       capa.addLayer(mk); pts.push([pos.lat, pos.lng])
     }
-    if (pts.length) m.fitBounds(L.latLngBounds(pts).pad(0.2), { maxZoom: 15 })
+    // Encuadrar solo la PRIMERA vez: con refresco cada 30 s, reencuadrar en
+    // cada pasada le quitaria al ayudante el zoom que acabe de hacer.
+    if (pts.length && !ajustadoRef.current) {
+      m.fitBounds(L.latLngBounds(pts).pad(0.2), { maxZoom: 15 })
+      ajustadoRef.current = true
+    }
     setTimeout(() => m.invalidateSize(), 50)
   }, [datos])
 
@@ -128,10 +143,12 @@ export default function PortalApoyo() {
             <div className="flex items-start gap-3">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500 text-[15px] text-dark-950">♟</div>
               <div className="min-w-0 flex-1">
-                <div className="text-sm font-semibold">{datos.de?.nombre?.split(' ')[0]} estaba aquí hace {datos.de.posicion.hace_min} min</div>
+                <div className="text-sm font-semibold">
+                  {datos.de?.nombre?.split(' ')[0]} {datos.de.posicion.hace_min <= 1 ? 'está aquí ahora mismo' : `estaba aquí hace ${datos.de.posicion.hace_min} min`}
+                </div>
                 <div className="text-xs text-dark-400">
                   {datos.de.posicion.que === 'intento' ? 'Último intento de entrega' : 'Última entrega'}
-                  {datos.de.posicion.stop_id ? ` · parada ${datos.de.posicion.stop_id}` : ''} · lo dice Cortex, no es un GPS
+                  {datos.de.posicion.stop_id ? ` · parada ${datos.de.posicion.stop_id}` : ''} · se actualiza solo · lo dice Cortex, no es un GPS
                 </div>
               </div>
             </div>

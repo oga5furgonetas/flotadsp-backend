@@ -13203,6 +13203,9 @@ async def start_itv_whatsapp_scheduler():
     # Y que avise si algun bucle se ha muerto. Un latido que hay que ir a mirar
     # no lo mira nadie.
     asyncio.create_task(_bucle_aviso("bucles_vivos", "resumen_diario", avisar_bucles_muertos))
+    # A medianoche cierra los apoyos que quedaron abiertos, para que no se
+    # acumulen ni cuenten como en marcha al dia siguiente.
+    asyncio.create_task(_bucle_apoyo_cierre())
 
 
 @api_router.post("/whatsapp/avisar-itv")
@@ -17660,12 +17663,129 @@ async def _apoyo_paradas_pendientes(driver_id: str, dia: str) -> dict:
 
 
 async def _apoyo_vivo_hoy(dia: str) -> dict:
-    """Apoyos no cerrados del día, por conductor que recibe ayuda."""
+    """Apoyos ACTIVOS del día, por conductor que recibe ayuda.
+
+    Solo `enviado`: un apoyo `en_cola` todavia no ha empezado, asi que marcar al
+    conductor como «en apoyo» seria un falso positivo —le pasaba a Dani el
+    03-09—. La cola se ve aparte; aqui solo lo que esta de verdad en marcha.
+    """
     out: dict = {}
-    async for a in db.apoyos.find({"dia": dia, "fase": {"$nin": ["hecho", "anulado"]}},
+    async for a in db.apoyos.find({"dia": dia, "fase": "enviado"},
                                   {"_id": 0, "id": 1, "de": 1, "a": 1, "paradas": 1}):
         out[(a.get("de") or {}).get("driver_id")] = a
     return out
+
+
+def _apoyo_todas_hechas(paradas) -> bool:
+    """True si el ayudante ya marco TODAS las paradas del apoyo. PURO (testable).
+
+    Es la señal fiable de «apoyo terminado»: sale de que el propio ayudante las
+    tache en su enlace, no de como registre Cortex las entregas (que puede
+    apuntarlas a la ruta del que ayuda y no a la del ayudado). Un apoyo sin
+    paradas no cuenta como hecho.
+    """
+    ps = paradas or []
+    return bool(ps) and all(p.get("hecha") for p in ps)
+
+
+async def _apoyo_promover_cola(a_driver_id: str, dia: str) -> Optional[dict]:
+    """Activa el apoyo en cola mas antiguo de un ayudante, si no tiene ya uno activo.
+
+    Es la «cola de ayudas» que pidio Dani: cuando el ayudante termina la primera,
+    la siguiente sale sola de la cola y queda lista para enviar. Se activa uno y
+    solo uno: el filtro `fase: en_cola` en el update y el unico parcial sobre
+    `fase: enviado` cierran la puerta a dobles activaciones por concurrencia.
+    """
+    if not a_driver_id:
+        return None
+    activo = await db.apoyos.find_one({"dia": dia, "a.driver_id": a_driver_id, "fase": "enviado"},
+                                      {"_id": 0, "id": 1})
+    if activo:
+        return None
+    siguiente = await db.apoyos.find_one({"dia": dia, "a.driver_id": a_driver_id, "fase": "en_cola"},
+                                         {"_id": 0}, sort=[("created_at", 1)])
+    if not siguiente:
+        return None
+    ahora = datetime.now(timezone.utc).isoformat()
+    try:
+        r = await db.apoyos.update_one(
+            {"id": siguiente["id"], "fase": "en_cola"},
+            {"$set": {"fase": "enviado", "updated_at": ahora},
+             "$push": {"historial": {"en": ahora, "por": "sistema", "accion": "activado",
+                                     "detalle": "sale de la cola al terminar la anterior"}}})
+    except DuplicateKeyError:
+        return None            # otro apoyo de esa pareja se activo en paralelo: se queda en cola
+    if not r.modified_count:
+        return None
+    return await db.apoyos.find_one({"id": siguiente["id"]}, {"_id": 0})
+
+
+async def _apoyo_cierre_dia() -> dict:
+    """Cierra a fin de dia los apoyos que quedaron abiertos de dias ANTERIORES.
+
+    Lo pidio Dani: que no se acumulen. NO se borran —el historial de
+    `mis-ayudas` se conserva y el panel ya solo muestra los de HOY, asi que no
+    pesan en pantalla—: se cierran para que no queden como abiertos (cola, indice
+    unico, estadisticas). Un `enviado` que no se marco se da por HECHO (se envio,
+    presumiblemente ocurrio); un `en_cola` que nunca salio se da por ANULADO (no
+    llego a pasar). Los de HOY no se tocan: el dia sigue en marcha.
+
+    Multi-tenant a mano (cron sin sesion, gotcha 26): recorre las orgs y fija la
+    BD de cada una antes de tocar `db`.
+    """
+    hoy = _apoyo_hoy()
+    orgs = await global_db.organizations.find(
+        {"status": {"$in": ["active", "trial"]}},
+        {"_id": 0, "id": 1, "slug": 1, "db_name": 1, "account_type": 1}).to_list(500)
+    if not orgs:
+        orgs = [None]                       # instalacion de un solo tenant
+    ahora = datetime.now(timezone.utc).isoformat()
+    hechos = anulados = 0
+    anterior = _current_db_name.get()
+    try:
+        for o in orgs:
+            set_current_org_db(_tenant_db_name(o))
+            try:
+                r1 = await db.apoyos.update_many(
+                    {"dia": {"$lt": hoy}, "fase": "enviado"},
+                    {"$set": {"fase": "hecho", "updated_at": ahora},
+                     "$push": {"historial": {"en": ahora, "por": "sistema", "accion": "hecho",
+                                             "detalle": "cerrado automaticamente a fin de dia"}}})
+                r2 = await db.apoyos.update_many(
+                    {"dia": {"$lt": hoy}, "fase": "en_cola"},
+                    {"$set": {"fase": "anulado", "updated_at": ahora},
+                     "$push": {"historial": {"en": ahora, "por": "sistema", "accion": "anulado",
+                                             "detalle": "no llego a salir de la cola"}}})
+                hechos += r1.modified_count
+                anulados += r2.modified_count
+            except Exception as e:                       # una org no puede tumbar el cierre de las demas
+                logger.error("cierre apoyos %s: %s", _tenant_db_name(o), e)
+    finally:
+        set_current_org_db(anterior)
+    return {"hechos": hechos, "anulados": anulados}
+
+
+async def _bucle_apoyo_cierre():
+    """A las 00:xx cierra los apoyos abiertos de dias anteriores.
+
+    Loop propio y no `_bucle_aviso` porque la hora es fija (medianoche) y no
+    configurable. El cerrojo `_ya_enviado_hoy` evita repetir dentro de la hora, y
+    deja latido en CADA pasada para distinguir «vivo sin trabajo» de «muerto»
+    (gotcha 39). El cerrojo se coge con la BD por defecto, antes de que
+    `_apoyo_cierre_dia` cambie de tenant.
+    """
+    from zoneinfo import ZoneInfo
+    madrid = ZoneInfo("Europe/Madrid")
+    while True:
+        try:
+            now = datetime.now(madrid)
+            if now.hour == 0 and not await _ya_enviado_hoy("apoyo_cierre", now.strftime("%Y-%m-%d")):
+                res = await _apoyo_cierre_dia()
+                logger.info("Cierre de apoyos a fin de dia: %s", res)
+            await _latido("apoyo_cierre")
+        except Exception as e:
+            logger.error("Bucle cierre apoyos: %s", e)
+        await asyncio.sleep(60)
 
 
 
@@ -18091,6 +18211,11 @@ async def apoyo_crear(data: dict = Body(...), user: dict = Depends(require_admin
                                      "fase": {"$nin": ["hecho", "anulado"]}}, {"_id": 0, "id": 1})
     if vivo:
         raise HTTPException(409, "Ya hay un apoyo abierto de esa pareja hoy: cámbialo en vez de crear otro")
+    # EN COLA: si se pide, el apoyo nace en cola y no se activa hasta que el
+    # ayudante termine el que tenga en marcha. Si no tiene ninguno activo,
+    # `_apoyo_promover_cola` lo activa al instante (mas abajo), asi que pedir
+    # cola cuando el ayudante esta libre no lo deja parado.
+    en_cola = bool(data.get("cola"))
     ahora = datetime.now(timezone.utc).isoformat()
     token = secrets.token_urlsafe(32)
     doc = {
@@ -18098,8 +18223,9 @@ async def apoyo_crear(data: dict = Body(...), user: dict = Depends(require_admin
         "de": {"driver_id": de_id, **personas[de_id], "ruta": actual.get("ruta") or ""},
         "a": {"driver_id": a_id, **personas[a_id]},
         "paradas": paradas, "nota": str(data.get("nota") or "")[:300],
-        "fase": "enviado", "token": token,
-        "historial": [{"en": ahora, "por": user.get("name") or user.get("sub"), "accion": "creado",
+        "fase": "en_cola" if en_cola else "enviado", "token": token,
+        "historial": [{"en": ahora, "por": user.get("name") or user.get("sub"),
+                       "accion": "en_cola" if en_cola else "creado",
                        "detalle": "%d paradas" % len(paradas)}],
         "created_at": ahora, "created_by": user.get("sub"), "updated_at": ahora,
     }
@@ -18114,8 +18240,14 @@ async def apoyo_crear(data: dict = Body(...), user: dict = Depends(require_admin
         "token": token, "tipo": "apoyo", "apoyo_id": doc["id"], "db_name": _current_db_name.get(),
         "creado_por": user.get("sub"), "creado_en": ahora,
         "expira_en": (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(), "revocado": False})
-    await _audit(user, "apoyo_crear", {"id": doc["id"], "de": de_id, "a": a_id, "paradas": len(paradas)})
-    return {**(await _apoyo_con_enlaces(doc)), "ya_entregadas": ya}
+    # Si nacio en cola pero el ayudante esta libre, se activa ya (no tiene sentido
+    # dejarlo esperando a nada). Se relee el doc por si cambio de fase.
+    if en_cola:
+        await _apoyo_promover_cola(a_id, dia)
+        doc = await db.apoyos.find_one({"id": doc["id"]}, {"_id": 0}) or doc
+    await _audit(user, "apoyo_crear", {"id": doc["id"], "de": de_id, "a": a_id,
+                                       "paradas": len(paradas), "fase": doc.get("fase")})
+    return {**(await _apoyo_con_enlaces(doc)), "ya_entregadas": ya, "en_cola": doc.get("fase") == "en_cola"}
 
 
 @api_router.patch("/apoyo/{apoyo_id}")
@@ -18166,6 +18298,9 @@ async def apoyo_cambiar(apoyo_id: str, data: dict = Body(...), user: dict = Depe
     except DuplicateKeyError:
         # Reabrir (o cambiar de ayudante) chocando con otro apoyo abierto de la misma pareja.
         raise HTTPException(409, "Ya hay otro apoyo abierto de esa pareja hoy")
+    # Al cerrar un apoyo, el siguiente de la cola de ese ayudante sale solo.
+    if cambios.get("fase") in ("hecho", "anulado"):
+        await _apoyo_promover_cola(a["a"]["driver_id"], a["dia"])
     a = await db.apoyos.find_one({"id": apoyo_id}, {"_id": 0})
     await _audit(user, "apoyo_cambiar", {"id": apoyo_id, "cambios": sorted(cambios)})
     return await _apoyo_con_enlaces(a)
@@ -18239,7 +18374,20 @@ async def apoyo_publico_parada(token: str, stop_id: str, data: dict = Body(defau
                                                             "detalle": str(stop_id)}}})
     if not r.matched_count:
         raise HTTPException(404, "Esa parada no está en este apoyo")
-    a = await _apoyo_marcar_entregadas(await db.apoyos.find_one({"id": a["id"]}, {"_id": 0}))
+    a = await db.apoyos.find_one({"id": a["id"]}, {"_id": 0})
+    # Cuando el ayudante marca la ULTIMA parada, el apoyo se cierra solo y sale
+    # el siguiente de la cola. Es la señal fiable de «terminado» (la da el que
+    # ayuda, no Cortex), que es lo que engancha la cola de ayudas.
+    if a and a.get("fase") == "enviado" and _apoyo_todas_hechas(a.get("paradas")):
+        cerrado = await db.apoyos.update_one(
+            {"id": a["id"], "fase": "enviado"},
+            {"$set": {"fase": "hecho", "updated_at": ahora},
+             "$push": {"historial": {"en": ahora, "por": "ayudante", "accion": "hecho",
+                                     "detalle": "todas las paradas marcadas"}}})
+        if cerrado.modified_count:
+            await _apoyo_promover_cola(a["a"]["driver_id"], a["dia"])
+            a = await db.apoyos.find_one({"id": a["id"]}, {"_id": 0})
+    a = await _apoyo_marcar_entregadas(a)
     return await _apoyo_publico_con_posicion(a)
 
 
