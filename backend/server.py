@@ -17512,34 +17512,99 @@ def _apoyo_minutos_desde(iso: Optional[str]) -> Optional[int]:
         return None
 
 
-async def _apoyo_personas(ids: set) -> dict:
-    """id -> {nombre, telefono, ficha_id}. La ficha manda; Cortex completa.
+def _apoyo_telefono(fi_tel, cx_tel) -> dict:
+    """Elige el telefono de un apoyo y dice si esta corroborado. PURO (testable).
 
-    El id puede ser el `transporter_id` (asi vienen los conductores desde los
-    paquetes de Cortex) o el `id` de la ficha: 24 de 146 fichas activas no
-    tienen transporter_id (02-09-2026) y el backup del dia puede ser una de
-    ellas. Para ayudar no hace falta transporter_id, hace falta telefono.
+    EL PORQUE (Dani, 03-09-2026): «a lo mejor salen con numeros de telefono
+    distinto un dia de otro y la app penso que es el mismo siempre; por eso es
+    importante que beba de Cortex y lo corrobore, porque si no sucedera esto».
+    Paso de verdad: un enlace decia el numero de Yeimar y al llamar salia
+    Martin. Un `transporter_id` NO es una persona fija con un telefono fijo: es
+    quien conduce esa ruta ESE dia, y su numero cambia. Para un apoyo se llama
+    HOY, asi que el numero que vale es el de Cortex de hoy.
+
+    Reglas:
+    · Cortex-del-dia MANDA. Si lo trae, ese es el numero (y `sin_corroborar` es
+      False: viene de la fuente viva).
+    · La ficha solo se usa si Cortex no trae numero ese dia, y entonces se marca
+      `sin_corroborar`: puede ser el de ayer, la oficina lo confirma antes.
+    · `discrepa` avisa cuando la ficha tenia OTRO numero distinto del de Cortex:
+      no cambia cual se usa (Cortex), pero deja ver el desajuste para arreglar
+      la ficha.
+    """
+    cx = _telefono_limpio(cx_tel)
+    fi = _telefono_limpio(fi_tel)
+    if cx:
+        return {"telefono": cx, "telefono_fuente": "cortex", "telefono_sin_corroborar": False,
+                "telefono_discrepa": bool(fi and _telefono_digitos(fi) != _telefono_digitos(cx))}
+    if fi:
+        return {"telefono": fi, "telefono_fuente": "ficha", "telefono_sin_corroborar": True,
+                "telefono_discrepa": False}
+    return {"telefono": "", "telefono_fuente": None, "telefono_sin_corroborar": False,
+            "telefono_discrepa": False}
+
+
+async def _apoyo_gente_cortex(dia: str) -> dict:
+    """transporterId -> {nombre, telefono} SEGUN CORTEX ESE DIA.
+
+    Del resumen del propio dia (`cortex_resumen.gente`), no de la ficha: es
+    quien conduce hoy esa ruta, con el numero de hoy. Si el dia aun no llego,
+    coge el resumen mas reciente ANTERIOR o igual (nunca uno futuro).
+    """
+    if not dia:
+        return {}
+    doc = await db.cortex_resumen.find_one({"dia": dia}, {"_id": 0, "gente": 1})
+    if not doc:
+        doc = await db.cortex_resumen.find_one(
+            {"dia": {"$lte": dia}}, {"_id": 0, "gente": 1}, sort=[("dia", -1)])
+    mapa: dict = {}
+    for p in (doc or {}).get("gente") or []:
+        tid = p.get("transporterId")
+        if tid and tid not in mapa:
+            mapa[tid] = {"nombre": (p.get("nombre") or "").strip(),
+                         "telefono": _telefono_limpio(p.get("telefono"))}
+    return mapa
+
+
+async def _apoyo_personas(ids: set, dia: Optional[str] = None, gente: Optional[dict] = None) -> dict:
+    """id -> {nombre, telefono, ficha_id, telefono_fuente, telefono_sin_corroborar, telefono_discrepa}.
+
+    NOMBRE Y TELEFONO SALEN SIEMPRE DE LA MISMA FUENTE, para no cruzar personas
+    (el bug del 03-09: nombre de uno, telefono de otro). Si Cortex trae a esa
+    persona ese dia, manda Cortex —nombre Y telefono juntos—; si no, la ficha.
+    Cortex-del-dia se pasa en `gente` para no leerlo dos veces por peticion.
+
+    El id puede ser el `transporter_id` (asi vienen desde los paquetes) o el
+    `id` de la ficha: 24 de 146 fichas activas no tienen transporter_id
+    (02-09-2026) y el backup del dia puede ser una de ellas.
     """
     ids = {i for i in ids if i}
     out: dict = {}
     if not ids:
         return out
+    # Ficha por id. Ante DUPLICADOS de la misma clave (gotcha 15), preferir la
+    # que tenga telefono; nombre y telefono se toman SIEMPRE del mismo documento.
+    fichas: dict = {}
     cur = db.drivers.find({"active": True, "$or": [{"transporter_id": {"$in": list(ids)}}, {"id": {"$in": list(ids)}}]},
                           {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1})
     async for d in cur:
         clave = d.get("transporter_id") if d.get("transporter_id") in ids else d["id"]
-        out[clave] = {"nombre": (d.get("name") or "").strip(),
-                      "telefono": _telefono_limpio(d.get("phone")), "ficha_id": d["id"]}
-    faltan = ids - set(out)
-    if faltan:
-        async for r in db.cortex_resumen.find({}, {"gente": 1}).sort("dia", -1).limit(40):
-            for p in r.get("gente") or []:
-                tid = p.get("transporterId")
-                if tid in faltan and tid not in out:
-                    out[tid] = {"nombre": (p.get("nombre") or tid).strip(),
-                                "telefono": _telefono_limpio(p.get("telefono")), "ficha_id": None}
-    for tid in ids:
-        out.setdefault(tid, {"nombre": tid, "telefono": "", "ficha_id": None})
+        prev = fichas.get(clave)
+        if prev is None or (not str(prev.get("phone") or "").strip() and str(d.get("phone") or "").strip()):
+            fichas[clave] = d
+    cortex = gente if gente is not None else await _apoyo_gente_cortex(dia)
+    for i in ids:
+        fi = fichas.get(i)
+        cx = cortex.get(i) if cortex else None
+        tel = _apoyo_telefono((fi or {}).get("phone"), (cx or {}).get("telefono"))
+        # El nombre se empareja con la fuente del telefono: si el numero es de
+        # Cortex, el nombre tambien (misma persona de hoy); si es de la ficha,
+        # el de la ficha. Nunca se mezclan.
+        if tel["telefono_fuente"] == "cortex":
+            nombre = ((cx or {}).get("nombre") or (fi or {}).get("name") or i).strip()
+        else:
+            nombre = ((fi or {}).get("name") or (cx or {}).get("nombre") or i).strip()
+        out[i] = {"nombre": nombre or i, "ficha_id": (fi or {}).get("id"), **tel}
     return out
 
 
@@ -17868,7 +17933,10 @@ async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = Non
                     x["con_destino"].add(str(k["s"]))
         elif caj == "delivered":
             x["entregados"] += r["n"]
-    personas = await _apoyo_personas(set(por))
+    # Cortex del dia UNA vez, para nombre+telefono vivos de todos (gotcha del
+    # 03-09: el numero cambia de un dia a otro, hay que beber de Cortex de hoy).
+    gente = await _apoyo_gente_cortex(dia)
+    personas = await _apoyo_personas(set(por), dia, gente=gente)
     vivos = await _apoyo_vivo_hoy(dia)
     conductores = []
     for did, x in por.items():
@@ -17876,6 +17944,9 @@ async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = Non
         conductores.append({**x, "ruta": " + ".join(sorted(x["rutas"])), "paradas": len(x["paradas"]),
                             "con_destino": len(x["con_destino"]), "nombre": p.get("nombre") or did,
                             "telefono": p.get("telefono") or "",
+                            "telefono_fuente": p.get("telefono_fuente"),
+                            "telefono_sin_corroborar": p.get("telefono_sin_corroborar", False),
+                            "telefono_discrepa": p.get("telefono_discrepa", False),
                             "apoyo_id": (vivos.get(did) or {}).get("id")})
     conductores.sort(key=lambda c: (-c["pendientes"], c["nombre"]))
 
@@ -17888,9 +17959,15 @@ async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = Non
     fq = {"active": True, **_filtro_centro(user, center)}
     async for d in db.drivers.find(fq, {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1}):
         tid = d.get("transporter_id") or ""
+        # El telefono del ayudante tambien se corrobora con Cortex de hoy si
+        # esta en ruta: es a quien la oficina le manda el enlace.
+        cx = gente.get(tid) if tid else None
+        tel = _apoyo_telefono(d.get("phone"), (cx or {}).get("telefono"))
         # Sin transporter_id se identifica por la ficha: puede ayudar igual.
         ayudantes.append({"driver_id": tid or d["id"], "ficha_id": d["id"], "nombre": (d.get("name") or "").strip(),
-                          "telefono": _telefono_limpio(d.get("phone")),
+                          "telefono": tel["telefono"], "telefono_fuente": tel["telefono_fuente"],
+                          "telefono_sin_corroborar": tel["telefono_sin_corroborar"],
+                          "telefono_discrepa": tel["telefono_discrepa"],
                           "es_backup": d["id"] in bkp,
                           "pendientes": (por.get(tid) or {}).get("pendientes", 0) if tid else 0})
     ayudantes.sort(key=lambda a: (not a["es_backup"], a["pendientes"], a["nombre"]))
@@ -17907,7 +17984,7 @@ async def apoyo_paradas(driver_id: str, day: Optional[str] = None, user: dict = 
     if not permitido:
         raise HTTPException(404, "Ese conductor no tiene paquetes hoy en tus centros")
     datos = await _apoyo_paradas_pendientes(driver_id, dia)
-    personas = await _apoyo_personas({driver_id})
+    personas = await _apoyo_personas({driver_id}, dia)
     return {"dia": dia, "driver": {"driver_id": driver_id, **personas.get(driver_id, {})},
             "posicion": await _apoyo_posicion(driver_id, dia), **datos}
 
@@ -17932,9 +18009,15 @@ def _apoyo_textos(a: dict) -> dict:
     sin_ubic = sum(1 for p in a.get("paradas") or [] if not p.get("ubicacion"))
     aviso_ubic = ("\n%d de esas paradas no tienen ubicación en Cortex: pregúntale a %s el sitio."
                   % (sin_ubic, de.get("nombre") or "")) if sin_ubic else ""
+    # Si el numero del conductor no se pudo corroborar con Cortex de hoy, se dice
+    # en el propio mensaje: puede ser el de ayer (Dani, 03-09) y hay que
+    # confirmarlo antes de fiarse. Asi no se manda un numero equivocado callando.
+    tel_de = de.get("telefono") or "-"
+    if de.get("telefono") and de.get("telefono_sin_corroborar"):
+        tel_de += " (sin confirmar: compruébalo)"
     t_ay = ("Hola %s. Apoyo a %s%s: %d paradas, %d paquetes.\nMapa y lista: %s\nTel. de %s: %s%s%s"
             % (ay.get("nombre") or "", de.get("nombre") or "", (" (%s)" % de["ruta"]) if de.get("ruta") else "",
-               n, npaq, url, de.get("nombre") or "", de.get("telefono") or "-", aviso_ubic, nota))
+               n, npaq, url, de.get("nombre") or "", tel_de, aviso_ubic, nota))
     t_de = ("Hola %s. %s te quita %d paradas (%s).\nMapa: %s\nTel. de %s: %s%s"
             % (de.get("nombre") or "", ay.get("nombre") or "", n, ids, url,
                ay.get("nombre") or "", ay.get("telefono") or "-", nota))
@@ -17996,7 +18079,7 @@ async def apoyo_crear(data: dict = Body(...), user: dict = Depends(require_admin
         {"service_day": dia, "driver_id": de_id, **_filtro_centro(user, None)}, {"_id": 0, "center": 1})
     if not permitido:
         raise HTTPException(404, "Ese conductor no tiene paquetes hoy en tus centros")
-    personas = await _apoyo_personas({de_id, a_id})
+    personas = await _apoyo_personas({de_id, a_id}, dia)
     if not personas[a_id].get("telefono"):
         raise HTTPException(400, "%s no tiene teléfono en su ficha: ponlo antes, sin él no hay a quién mandarle el mapa"
                             % personas[a_id].get("nombre"))

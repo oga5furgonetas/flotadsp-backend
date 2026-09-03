@@ -25,7 +25,8 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUTA = os.path.join(RAIZ, "server.py")
 
 FUNCS = ("_cx_ruta_cajon", "_apoyo_textos", "_apoyo_url", "enlace_wa", "_apoyo_minutos_desde",
-         "_apoyo_posicion_de", "_apoyo_estados_en_calle")
+         "_apoyo_posicion_de", "_apoyo_estados_en_calle",
+         "_apoyo_telefono", "_telefono_limpio", "_telefono_digitos")
 CONSTS = ("_CX_OK", "_CX_EN_VUELO", "_CX_NO_DESPACHADO", "_CX_REINTENTABLE", "_APOYO_CAJONES_PENDIENTES",
           "_APOYO_POSICION_MAX_MIN")
 
@@ -139,6 +140,41 @@ def test_minutos_desde():
     hace5 = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
     assert 4 <= f(hace5) <= 6
     assert 4 <= f(hace5.replace("+00:00", "Z")) <= 6
+
+
+def test_telefono_cortex_manda_sobre_ficha():
+    # El numero cambia de un dia a otro: manda el de Cortex de hoy, y como viene
+    # de la fuente viva NO se marca sin_corroborar. Este es el caso del bug del
+    # 03-09 (la ficha tenia el de Martin, Cortex el bueno de Yeimar hoy).
+    r = NS["_apoyo_telefono"]("600111222", "600999888")
+    assert r["telefono"] == "600999888", r
+    assert r["telefono_fuente"] == "cortex"
+    assert r["telefono_sin_corroborar"] is False
+    assert r["telefono_discrepa"] is True   # la ficha tenia otro: se avisa para arreglarla
+
+
+def test_telefono_ficha_sola_va_sin_corroborar():
+    # Cortex no trae a esa persona hoy: se usa la ficha pero se marca para que
+    # la oficina lo confirme (puede ser el de ayer).
+    r = NS["_apoyo_telefono"]("600111222", None)
+    assert r["telefono"] == "600111222"
+    assert r["telefono_fuente"] == "ficha"
+    assert r["telefono_sin_corroborar"] is True
+    assert r["telefono_discrepa"] is False
+
+
+def test_telefono_corroborado_no_avisa():
+    # Ficha y Cortex coinciden (una con prefijo, otra sin): corroborado, sin avisos.
+    r = NS["_apoyo_telefono"]("+34600111222", "600111222")
+    assert r["telefono_fuente"] == "cortex"
+    assert r["telefono_sin_corroborar"] is False
+    assert r["telefono_discrepa"] is False
+
+
+def test_telefono_sin_ninguno_vacio():
+    r = NS["_apoyo_telefono"]("", "")
+    assert r["telefono"] == "" and r["telefono_fuente"] is None
+    assert r["telefono_sin_corroborar"] is False and r["telefono_discrepa"] is False
 
 
 def main() -> int:
