@@ -783,16 +783,29 @@ async function buscarUnaVez(texto, amazon, opciones = {}) {
     }
   }
 
-  const oficial = resultados.find((v) => v.familia === 'ign' && PRECISIONES_QUE_VOTAN.has(v.precision))
-  if (oficial && !hayFino) {
-    const muniOk = mismaVia(oficial.municipio, d.municipio || d.ciudad)
-    const viaOk = mismaVia(oficial.calle, d.via)
+  /* FUENTES FIABLES A SOLAS: el callejero oficial del IGN y Apple.
+     Apple se añadió el 03-09-2026 porque encuentra el rural que las demás no
+     (Dani: «el de Apple las encuentra casi todas»), y se pidió expresamente que
+     sustituya aunque nadie la corrobore. Se le exigen las MISMAS dos pruebas
+     que al IGN, que son las que cazaron los errores reales: el municipio y la
+     vía tienen que ser los que se pidieron, y el desvío no puede pasar de
+     MAX_M_FUENTE_UNICA. Sin eso, «sustituir directo» sería mandar al conductor
+     a donde diga una sola voz sin nadie que la contradiga.
+     Nunca se afirma el portal: se etiqueta 'zona' igual que el IGN. */
+  const FAMILIAS_FIABLES_SOLAS = new Set(['ign', 'apple'])
+  const fiable = resultados.find((v) => FAMILIAS_FIABLES_SOLAS.has(v.familia)
+    && PRECISIONES_QUE_VOTAN.has(v.precision))
+  if (fiable && !hayFino) {
+    const muniOk = mismaVia(fiable.municipio, d.municipio || d.ciudad)
+    const viaOk = mismaVia(fiable.calle, d.via)
     if (muniOk && viaOk) {
       const r = {
         ...base,
-        punto: oficial,
-        metros_amazon: metrosEntre(oficial, amazon),
-        familias: ['ign'],
+        punto: fiable,
+        metros_amazon: metrosEntre(fiable, amazon),
+        // La familia REAL, no 'ign' fija: si no, un punto de Apple se
+        // etiquetaría como del callejero oficial y nadie podría auditarlo.
+        familias: [fiable.familia],
         dispersion_m: 0,
         precision_acuerdo: 'zona',
       }

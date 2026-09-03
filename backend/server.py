@@ -18279,7 +18279,10 @@ async def apoyo_cambiar(apoyo_id: str, data: dict = Body(...), user: dict = Depe
         nuevo = str(data["a_driver_id"])
         if nuevo == a["de"]["driver_id"]:
             raise HTTPException(400, "El ayudante no puede ser el mismo conductor")
-        personas = await _apoyo_personas({nuevo})
+        # CON EL DIA DEL APOYO: sin el, el telefono del ayudante nuevo saldria de
+        # la ficha sin corroborar con Cortex y volveria el fallo del numero de
+        # ayer justo por esta puerta (cambiar de ayudante).
+        personas = await _apoyo_personas({nuevo}, a["dia"])
         if not personas[nuevo].get("telefono"):
             raise HTTPException(400, "%s no tiene teléfono en su ficha" % personas[nuevo].get("nombre"))
         cambios["a"] = {"driver_id": nuevo, **personas[nuevo]}
@@ -35794,6 +35797,123 @@ async def _geo_overpass(c, via: str, municipio: str) -> Optional[dict]:
     }
 
 
+# ─── APPLE MAPS: LA QUINTA FUENTE ────────────────────────────────────────────
+#
+# Dani, 03-09-2026: «en direcciones usamos varios motores y aun asi no encuentra
+# las geos; el de Apple las encuentra casi todas». Es cierto en el rural gallego,
+# donde OSM no tiene la via y Google devuelve el centro del pueblo.
+#
+# OJO CON LA URL QUE PARECE QUE VALE: `maps.apple.com/frame?center=lat,lng` NO
+# geocodifica —solo PINTA un mapa en unas coordenadas que ya tienes—. Para que
+# Apple BUSQUE una direccion hace falta su API, y esa pide cuenta de Apple
+# Developer: una clave de MapKit (.p8) con su Key ID y el Team ID.
+#
+# Dos saltos, como manda Apple:
+#   1. Se firma un JWT ES256 con la .p8  ->  `GET /v1/token`  ->  accessToken.
+#   2. Con ese accessToken  ->  `GET /v1/geocode?q=...`.
+# El accessToken dura ~30 min y se cachea en memoria: sin cache seria un salto
+# de mas en CADA direccion, y esto se llama en bucle sobre listas largas.
+#
+# SIN LAS TRES VARIABLES DE ENTORNO NO HACE NADA (devuelve None) y el rescate se
+# comporta exactamente igual que antes. Es decir: mientras no se configure la
+# clave, este bloque es inerte y no puede cambiar ni una coordenada.
+_APPLE_TOKEN: dict = {"valor": "", "expira": 0.0}
+
+
+def _apple_maps_configurado() -> bool:
+    return all(os.environ.get(k, "").strip() for k in
+               ("APPLE_MAPS_KEY_ID", "APPLE_MAPS_TEAM_ID", "APPLE_MAPS_PRIVATE_KEY"))
+
+
+async def _apple_maps_token(c) -> str:
+    """El accessToken de Apple, cacheado hasta un minuto antes de caducar."""
+    ahora = time.time()
+    if _APPLE_TOKEN["valor"] and _APPLE_TOKEN["expira"] > ahora:
+        return _APPLE_TOKEN["valor"]
+    kid = os.environ["APPLE_MAPS_KEY_ID"].strip()
+    iss = os.environ["APPLE_MAPS_TEAM_ID"].strip()
+    # La .p8 se guarda en el secreto con saltos de linea reales o con "\n"
+    # escapados (Fly hace lo segundo si se pega en una sola linea).
+    clave = os.environ["APPLE_MAPS_PRIVATE_KEY"].strip().replace("\\n", "\n")
+    firmado = jwt.encode({"iss": iss, "iat": int(ahora), "exp": int(ahora) + 1800},
+                         clave, algorithm="ES256", headers={"kid": kid, "typ": "JWT"})
+    r = await c.get("https://maps-api.apple.com/v1/token",
+                    headers={"Authorization": "Bearer %s" % firmado})
+    r.raise_for_status()
+    j = r.json()
+    tok = j.get("accessToken") or ""
+    if not tok:
+        raise RuntimeError("Apple no devolvio accessToken")
+    _APPLE_TOKEN["valor"] = tok
+    _APPLE_TOKEN["expira"] = ahora + max(60, int(j.get("expiresInSeconds") or 1800)) - 60
+    return tok
+
+
+def _apple_geo_parse(j: dict) -> Optional[dict]:
+    """De la respuesta de Apple al mismo formato que las demas fuentes. PURO.
+
+    Apple no declara `location_type` como Google, asi que la precision se deduce
+    de lo que ha entendido: con numero de portal es `portal`; con via pero sin
+    numero, `calle`; sin via, `zona`. No se inventa nada: si no hay coordenada,
+    no hay resultado.
+    """
+    res = (j or {}).get("results") or []
+    if not res:
+        return None
+    r0 = res[0] or {}
+    coord = r0.get("coordinate") or {}
+    lat, lng = coord.get("latitude"), coord.get("longitude")
+    if lat is None or lng is None:
+        return None
+    sa = r0.get("structuredAddress") or {}
+    numero = (sa.get("subThoroughfare") or "").strip()
+    calle = (sa.get("thoroughfare") or "").strip()
+    if numero and calle:
+        precision = "portal"
+    elif calle:
+        precision = "calle"
+    else:
+        precision = "zona"
+    lineas = r0.get("formattedAddressLines") or []
+    return {
+        # `familia` es OBLIGATORIA: el acuerdo se cuenta por familias, no por
+        # servicios, y una fuente sin ella rompe el agrupado. Apple es familia
+        # propia de verdad —su cartografia no es OSM ni el IGN—, asi que
+        # ademas puede corroborar a las otras en lugar de repetirlas.
+        "fuente": "apple", "familia": "apple",
+        "lat": float(lat), "lng": float(lng),
+        "display": ", ".join(x for x in lineas if x) or (r0.get("name") or ""),
+        "calle": calle, "numero": numero,
+        "cp": (sa.get("postCode") or "").strip(),
+        "municipio": (sa.get("locality") or sa.get("administrativeArea") or "").strip(),
+        "precision": precision,
+    }
+
+
+async def _geo_apple(c, via: str, municipio: str = "", cp: str = "") -> Optional[dict]:
+    """Apple Maps como una fuente mas del rescate. None si no esta configurada."""
+    if not _apple_maps_configurado():
+        return None
+    consulta = ", ".join(x for x in (via, cp, municipio, "España") if x)
+    try:
+        tok = await _apple_maps_token(c)
+        r = await c.get("https://maps-api.apple.com/v1/geocode",
+                        params={"q": consulta[:300], "lang": "es-ES", "limit": 1},
+                        headers={"Authorization": "Bearer %s" % tok})
+        if r.status_code == 401:                      # token caducado antes de tiempo
+            _APPLE_TOKEN["valor"] = ""
+            tok = await _apple_maps_token(c)
+            r = await c.get("https://maps-api.apple.com/v1/geocode",
+                            params={"q": consulta[:300], "lang": "es-ES", "limit": 1},
+                            headers={"Authorization": "Bearer %s" % tok})
+        r.raise_for_status()
+        return _apple_geo_parse(r.json())
+    except Exception as e:
+        # Que Apple falle no puede tumbar el rescate: las otras fuentes siguen.
+        logger.warning("geo apple: %s: %s", type(e).__name__, str(e)[:150])
+        return None
+
+
 @api_router.get("/cortex/geo/rescate")
 async def cortex_geo_rescate(via: str, municipio: str = "", cp: str = "",
                              _=Depends(require_admin)):
@@ -35861,6 +35981,9 @@ async def cortex_geo_rescate(via: str, municipio: str = "", cp: str = "",
         for f in formas:
             tareas.append(_geo_catastro(c, f, municipio_busqueda, cp))
             tareas.append(_geo_overpass(c, f, municipio_busqueda))
+        # Apple, una sola vez y con la via tal cual: es la que encuentra el rural
+        # que las demas no. Si no esta configurada devuelve None y no suma nada.
+        tareas.append(_geo_apple(c, via, municipio_busqueda, cp))
         salidas = await asyncio.gather(*tareas, return_exceptions=True)
     _vistos = set()
     for s in salidas:

@@ -278,12 +278,20 @@ export default function ApoyoRuta() {
             <div className="card space-y-3 border-sky-500/30 p-4">
               <div className="flex items-center gap-2 text-sm font-semibold text-sky-300"><CheckCircle2 size={16} /> {t('apoyo.listo').replace('{a}', resultado.a?.nombre).replace('{de}', resultado.de?.nombre).replace('{n}', resultado.paradas?.length)}</div>
               {resultado.ya_entregadas?.length > 0 && <div className="text-xs text-amber-300">{t('apoyo.yaEntregadas').replace('{n}', resultado.ya_entregadas.length)}: {resultado.ya_entregadas.join(', ')}</div>}
+              {/* En cola NO se enseñan los botones de enviar: mandarlo ahora
+                  sería avisar de un apoyo que todavía no le toca al ayudante. */}
+              {resultado.en_cola ? (
+                <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                  <ListPlus size={14} className="mt-0.5 shrink-0" /> {t('apoyo.quedaEnCola')}
+                </div>
+              ) : (
               <div className="flex flex-wrap gap-2">
                 {resultado.wa_ayudante && <a href={resultado.wa_ayudante} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-xl bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-600"><MessageCircle size={16} /> {t('apoyo.waAyudante').replace('{a}', resultado.a?.nombre?.split(' ')[0])}</a>}
                 {resultado.wa_conductor ? <a href={resultado.wa_conductor} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-xl border border-emerald-600/60 px-4 py-2 text-sm font-semibold text-emerald-300 hover:bg-emerald-600/10"><MessageCircle size={16} /> {t('apoyo.waConductor').replace('{de}', resultado.de?.nombre?.split(' ')[0])}</a>
                   : <span className="self-center text-xs text-amber-300">{t('apoyo.conductorSinTel')}</span>}
                 <button onClick={() => copiar(resultado.url, 'url')} className="flex items-center gap-2 rounded-xl border border-dark-700 px-4 py-2 text-sm text-dark-300 hover:text-dark-50">{copiado === 'url' ? <Check size={16} /> : <Copy size={16} />} {t('apoyo.copiar')}</button>
               </div>
+              )}
               <a href={resultado.url} target="_blank" rel="noreferrer" className="block truncate text-xs text-dark-500 hover:text-sky-300">{resultado.url}</a>
             </div>
           )}
