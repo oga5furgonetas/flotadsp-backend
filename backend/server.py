@@ -221,7 +221,7 @@ db = _TenantDBProxy()
 # FASTAPI
 # =========================
 
-app = FastAPI(title="FlotaDSP API", version="5.3.4")
+app = FastAPI(title="FlotaDSP API", version="5.4.0")
 api_router = APIRouter(prefix="/api")
 
 
@@ -6578,7 +6578,7 @@ async def delete_driver_account(driver_id: str, _admin: dict = Depends(require_a
 
 @api_router.get("/")
 async def root():
-    return {"message": "FlotaDSP API funcionando", "version": "5.3.4"}
+    return {"message": "FlotaDSP API funcionando", "version": "5.4.0"}
 
 
 # =========================
@@ -13752,7 +13752,7 @@ async def health():
 
     return {
         "status": "ok",
-        "version": "5.3.4",
+        "version": "5.4.0",
         "gemini_configured": bool(os.environ.get("GEMINI_API_KEY")) or os.environ.get("USE_VERTEX_AI","").lower() in ("1","true","yes"),
         "gemini_mode": "vertex_ai" if os.environ.get("USE_VERTEX_AI","").lower() in ("1","true","yes") else "ai_studio",
         "gemini_model": os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
@@ -13823,7 +13823,7 @@ app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 @app.get("/")
 async def home():
-    return {"status": "FlotaDSP backend running", "version": "5.3.4"}
+    return {"status": "FlotaDSP backend running", "version": "5.4.0"}
 
 
 @app.on_event("shutdown")
