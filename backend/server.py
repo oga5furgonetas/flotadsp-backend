@@ -287,6 +287,8 @@ class Vehicle(BaseModel):
     color: str = ""
     year: Optional[int] = None
     vin: Optional[str] = None
+    bloqueada: Optional[bool] = False       # candado de la plantilla diaria
+    bloqueada_motivo: Optional[str] = None
     status: str = "active"
     center: Optional[str] = None
     current_driver_id: Optional[str] = None
@@ -8969,6 +8971,10 @@ async def update_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
         # fallaba en silencio): tipo, ITV, renting, proveedor y motivo de taller.
         "vehicle_type","itv_date","renting_end_date","renting_baja_date",
         "provider","workshop_status","workshop_reason",
+        # El candado de la plantilla diaria: la furgoneta sigue activa para todo
+        # lo demas, pero no se ofrece para asignar ese dia (lo pidio Mery el
+        # 03-09-2026: «una que no esta en taller pero no quieres que salga»).
+        "bloqueada", "bloqueada_motivo",
     }
     data = {k: v for k, v in data.items() if k in _VEHICLE_ALLOWED}
     # EL CENTRO SE GUARDA LIMPIO. Aqui entraba 'AMZL OGA5 SANTIAGO XPT' y
@@ -32050,15 +32056,32 @@ def _calc_horas(h_salida: str | None) -> tuple[str, str]:
     return "", ""
 
 
+# Las olas salen cada 20 minutos y SIEMPRE en punto: xx:00, xx:20, xx:40.
+# Lo dijo Mery el 03-09-2026 y es la regla de la nave.
+_OLA_MINUTOS = 20
+
+
 def _normalizar_hora_cortex(hora: str | None) -> str:
-    """Convierte la hora cruda de Cortex a la hora real de ola (UTC local).
-    No inventa una hora si el valor no se puede interpretar."""
+    """La hora de OLA a partir de la que enseña Cortex.
+
+    Cortex muestra la hora unos minutos DESPUES de la ola. Antes se restaban 12
+    minutos fijos, y eso solo acierta cuando el desfase es exactamente 12: con
+    otro cualquiera la hora cae fuera de la rejilla y la plantilla sale mal. En
+    una plantilla real de DGA1 (01-09-2026) 8 de 18 filas tenian horas del tipo
+    11:50, que no existe como ola, y Mery las corregia a mano una por una.
+
+    Se baja al escalon de 20 minutos, que es lo mismo que restar el desfase real
+    sea cual sea (mientras este entre 0 y 20). Y NO CAMBIA NADA de lo que ya
+    salia bien: si `hora - 12` caia en la rejilla, entonces los minutos eran 12
+    y bajar al escalon da exactamente lo mismo. Probado en `test_plantilla_hora`.
+    """
     if not hora:
         return ""
-    from datetime import datetime as _dt, timedelta as _td
+    from datetime import datetime as _dt
     for fmt in ("%H:%M", "%H.%M", "%I:%M %p", "%I:%M%p"):
         try:
-            return (_dt.strptime(str(hora).strip(), fmt) - _td(minutes=12)).strftime("%H:%M")
+            t = _dt.strptime(str(hora).strip(), fmt)
+            return t.replace(minute=(t.minute // _OLA_MINUTOS) * _OLA_MINUTOS).strftime("%H:%M")
         except ValueError:
             pass
     return ""
@@ -32759,6 +32782,53 @@ async def guardar_plantilla_compartida(draft_id: str, body: dict = Body(...), ad
 
 
 # ── Historial de plantillas ──
+# Campos de una fila de la plantilla que se pueden tocar celda a celda.
+_PLANTILLA_CELDAS = ("ruta", "conductor", "movil", "furgo",
+                     "h_salida", "h_bajada", "h_llegada", "observaciones")
+
+
+@api_router.patch("/tools/plantilla-compartida/{draft_id}/celda")
+async def plantilla_compartida_celda(draft_id: str, body: dict = Body(...), admin=Depends(require_admin)):
+    """Cambia UNA celda de la plantilla compartida.
+
+    EL PORQUE (Mery y Judit, 03-09-2026): «si una esta escribiendo y la otra
+    escribe se borra todo lo anterior». Pasaba porque cada una guardaba la HOJA
+    ENTERA: la ultima en guardar pisaba las celdas de la otra, y el refresco de
+    cada 2,5 s sustituia la hoja completa incluso mientras se escribia.
+    Guardando celda a celda, dos personas solo pueden chocar si tocan LA MISMA
+    celda; en cualquier otro caso los dos cambios conviven.
+
+    Aqui NO se comprueba la revision a proposito: en una celda el ultimo cambio
+    es el bueno. Lo que se comprueba es que la fila siga siendo la misma
+    (`ruta_ref`), porque si alguien anadio o quito filas los indices bailan y el
+    cambio caeria en la fila equivocada — eso si seria un dato falso.
+    """
+    fila = body.get("fila")
+    campo = body.get("campo")
+    if not isinstance(fila, int) or fila < 0 or campo not in _PLANTILLA_CELDAS:
+        raise HTTPException(400, "Fila o campo no validos")
+    valor = str(body.get("valor") or "")[:300]
+    ruta_ref = body.get("ruta_ref")
+    filtro: dict = {"id": draft_id, "state.rows.%d" % fila: {"$exists": True}}
+    if isinstance(ruta_ref, str):
+        filtro["state.rows.%d.ruta" % fila] = ruta_ref
+    ahora = datetime.now(timezone.utc).isoformat()
+    r = await db.plantillas_compartidas.update_one(
+        filtro,
+        {"$set": {"state.rows.%d.%s" % (fila, campo): valor,
+                  "updated_at": ahora, "updated_by": admin.get("name") or "Usuario"},
+         "$inc": {"revision": 1}})
+    if not r.matched_count:
+        doc = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
+        if not doc:
+            raise HTTPException(404, "Esa plantilla ya no existe")
+        # La fila se movio: el cliente se recarga y vuelve a intentarlo.
+        raise HTTPException(409, detail={"message": "Las filas han cambiado, se recarga la plantilla.",
+                                         "draft": _plantilla_shared_payload(doc)})
+    doc = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
+    return _plantilla_shared_payload(doc)
+
+
 @api_router.get("/plantillas")
 async def list_plantillas(center: str = None, admin=Depends(require_admin)):
     allowed = admin.get("allowed_centers") or []

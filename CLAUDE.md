@@ -795,6 +795,45 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    un campo que el cliente puede olvidar.
 
 
+51. **Restar un desfase FIJO a una hora que va en rejilla acierta solo cuando
+   el desfase es exactamente ese.** Las olas de reparto salen cada 20 minutos y
+   siempre en punto: xx:00, xx:20, xx:40. Cortex enseña la hora unos minutos
+   despues de la ola, y `_normalizar_hora_cortex` restaba **12 minutos fijos**.
+   Con un desfase de 12 clava; con cualquier otro la hora cae FUERA de la
+   rejilla. En una plantilla real de DGA1 (01-09-2026), 8 de 18 filas tenian
+   horas como `11:50`, que no existe como ola, y Mery las corregia a mano cada
+   dia. Lo correcto es **bajar al escalon de 20 minutos**, que equivale a restar
+   el desfase real sea cual sea mientras este entre 0 y 20.
+   Lo que hace segura la sustitucion, y esta probado sobre los 1.440 minutos del
+   dia en `test_plantilla_hora.py`: **donde la regla vieja acertaba, la nueva da
+   exactamente lo mismo** (si `hora - 12` caia en la rejilla, los minutos eran 12
+   y bajar al escalon da ese mismo valor). O sea que no puede estropear ninguna
+   plantilla que hoy salga bien.
+   Regla general: cuando el dato de destino vive en una rejilla conocida, se
+   ajusta A LA REJILLA; restar una constante es adivinar el desfase.
+
+52. **Guardar el documento ENTERO en una pantalla que usan dos personas a la
+   vez borra el trabajo de una de ellas.** La plantilla diaria se guardaba
+   completa cada 900 ms y se refrescaba entera cada 2,5 s. Mery y Judit la
+   llenan a la vez desde dos equipos: la ultima en guardar pisaba las celdas de
+   la otra, y el refresco sustituia la hoja incluso mientras se escribia, asi
+   que se borraban letras en pantalla. El control de version por `revision` no
+   salvaba nada, porque el conflicto se resolvia recargando la hoja completa —
+   que es justo perder lo escrito.
+   La cura no es mas bloqueo, es **bajar el tamaño de lo que se guarda**: cada
+   celda viaja sola (`PATCH /tools/plantilla-compartida/{id}/celda`) y ahi el
+   ultimo cambio SI puede mandar, porque dos personas solo chocan si tocan la
+   MISMA celda. Comprobado en produccion: dos escrituras con la misma revision
+   vieja, en filas distintas, sobreviven las dos.
+   Dos detalles que no son obvios y sin los cuales vuelve a fallar:
+   · el parche lleva la ruta de la fila como referencia (`ruta_ref`): si alguien
+     añadio o quito filas, los indices bailan y el cambio caeria en la fila
+     equivocada — un dato falso, que es peor que un 409;
+   · al aplicar la version de los demas se respeta la celda que se esta
+     escribiendo, y se lee con la forma FUNCIONAL de `setData`: leer el estado
+     de fuera devuelve el de hace dos segundos y restauraria una letra vieja.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

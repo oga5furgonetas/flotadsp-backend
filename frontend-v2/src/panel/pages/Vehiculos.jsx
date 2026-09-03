@@ -16,6 +16,7 @@ import {
   Fuel, Palette, Hash, Building2, Clock, AlertTriangle, Wrench,
   Droplets, CircleDot, Disc, FileText, Trash2, Upload, ExternalLink,
   FileCheck, FileBadge, FileImage, File, Plus, Box,
+  Lock, LockOpen,
 } from 'lucide-react'
 import {
   getVehicles, getLastInspections, getVehicleDriver, getVehicleInspections, updateVehicle, deleteVehicle, createIncident, getIncidents,
@@ -872,6 +873,31 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                     </div>
                   </div>
                 </div>
+                {/* EL CANDADO DE LA PLANTILLA DIARIA. Lo pidió Mery el 03-09-2026:
+                    una furgoneta que no está en el taller pero que ese día no
+                    quieres que nadie asigne. Sigue activa para todo lo demás
+                    —ITV, incidencias, historial—: lo único que cambia es que no
+                    se ofrece al hacer la plantilla. */}
+                <button
+                  onClick={() => patch({ bloqueada: !vehicle.bloqueada })}
+                  className={`mb-3 flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition ${
+                    vehicle.bloqueada
+                      ? 'border-amber-500/40 bg-amber-500/[0.08] text-amber-200'
+                      : 'border-dark-700 text-dark-300 hover:border-dark-600'}`}>
+                  {vehicle.bloqueada ? <Lock size={16} className="shrink-0 text-amber-400" />
+                    : <LockOpen size={16} className="shrink-0 text-dark-500" />}
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[13px] font-semibold">
+                      {vehicle.bloqueada ? 'Bloqueada para la plantilla' : 'Disponible para la plantilla'}
+                    </span>
+                    <span className="block text-[11.5px] leading-snug text-dark-500">
+                      {vehicle.bloqueada
+                        ? 'No sale al asignar furgonetas. Pulsa para desbloquearla.'
+                        : 'Pulsa para que no salga al hacer la plantilla diaria.'}
+                    </span>
+                  </span>
+                </button>
+
                 <EditableField label="Matrícula" icon={<Hash size={13} />}
                   value={vehicle.license_plate} mono
                   onSave={v => {
@@ -2979,6 +3005,7 @@ export default function Vehiculos() {
                         <td className="cifra px-2 py-1.5 font-semibold tracking-wider text-dark-50">
                           {v.license_plate}
                           {v.vin && <QrCode size={9} className="ml-1.5 inline text-dark-700" title="Tiene VIN" />}
+                          {v.bloqueada && <Lock size={10} className="ml-1.5 inline text-amber-400" title="Bloqueada para la plantilla diaria" />}
                         </td>
                         <td className="max-w-[190px] truncate px-2 py-1.5 text-dark-400">
                           {[v.brand, v.model].filter(Boolean).join(' ') || '—'}

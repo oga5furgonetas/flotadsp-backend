@@ -184,6 +184,10 @@ export default function PlantillaGenerador() {
   const [pinkSet,    setPinkSet]    = useState(new Set())
   const [markedSet,  setMarkedSet]  = useState(new Set())
   const [sharedDraft, setSharedDraft] = useState(null) // { id, revision, updated_by }
+  const celdaTimers = useRef({})        // un temporizador por celda
+  const soloCelda = useRef(false)       // el ultimo cambio fue de una celda
+  const celdaEnFoco = useRef(null)      // { fila, campo } mientras se escribe
+  const focoTimer = useRef(null)
   const [sharedNote, setSharedNote] = useState('')
   const skipSharedSave = useRef(false)
   const sharedTimer = useRef(null)
@@ -211,7 +215,18 @@ export default function PlantillaGenerador() {
     const s = draft?.state
     if (!s?.rows) return
     skipSharedSave.current = true
-    setData({ week: s.week, date: s.date, rows: s.rows })
+    // La celda que se está escribiendo AHORA no se toca: su versión del
+    // servidor llega medio segundo tarde y borraría las últimas letras.
+    // Se lee con la forma funcional de `setData` A PROPÓSITO: esta función la
+    // llama un temporizador, y leer `data` de fuera daría el valor de hace dos
+    // segundos — se restauraría una letra vieja, que es peor que no hacer nada.
+    setData(prev => {
+      const foco = celdaEnFoco.current
+      const rows = (foco && s.rows[foco.fila] && prev?.rows?.[foco.fila])
+        ? s.rows.map((r, i) => (i === foco.fila ? { ...r, [foco.campo]: prev.rows[i][foco.campo] } : r))
+        : s.rows
+      return { week: s.week, date: s.date, rows }
+    })
     setRedSet(new Set(s.red_routes || [])); setYellowSet(new Set(s.yellow_routes || []))
     setPinkSet(new Set(s.pink_furgos || [])); setMarkedSet(new Set(s.marked_conductors || []))
     setSharedDraft({ id: draft.id, revision: draft.revision, updated_by: draft.updated_by })
@@ -248,6 +263,9 @@ export default function PlantillaGenerador() {
   useEffect(() => {
     if (!sharedDraft?.id || !data) return
     if (skipSharedSave.current) { skipSharedSave.current = false; return }
+    // Una celda ya se guardó sola: no hace falta mandar la hoja entera, y
+    // mandarla es justo lo que pisaba el trabajo de la otra persona.
+    if (soloCelda.current) { soloCelda.current = false; return }
     clearTimeout(sharedTimer.current)
     sharedTimer.current = setTimeout(async () => {
       try {
@@ -274,7 +292,9 @@ export default function PlantillaGenerador() {
     getVehicles(center)
       .then(r => {
         const plates = (lista(r.data))
-          .filter(v => v.status === 'active' || v.status === 'activo')
+          // Fuera las que estan en taller (por su estado) y las que la oficina
+          // ha bloqueado a mano con el candado de su ficha.
+          .filter(v => (v.status === 'active' || v.status === 'activo') && !v.bloqueada)
           .map(v => (v.license_plate || v.id || '').replace(/\s/g, '').toUpperCase())
           .filter(Boolean)
           .sort()
@@ -378,7 +398,46 @@ export default function PlantillaGenerador() {
     setter(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
   }
 
+  /* DOS PERSONAS A LA VEZ EN LA MISMA PLANTILLA (Mery y Judit, 03-09-2026).
+     Antes cada cambio guardaba la HOJA ENTERA: la última en guardar pisaba las
+     celdas de la otra, y el refresco de cada 2,5 s sustituía la hoja completa
+     aunque estuvieras escribiendo. Ahora cada celda viaja sola
+     (`PATCH …/celda`), así que dos personas solo chocan si tocan LA MISMA
+     celda; en todo lo demás los dos cambios conviven. */
+  function guardarCelda(rowIdx, field, value, rutaRef) {
+    if (!sharedDraft?.id) return
+    const clave = `${rowIdx}:${field}`
+    clearTimeout(celdaTimers.current[clave])
+    celdaTimers.current[clave] = setTimeout(async () => {
+      try {
+        const r = await apiFetch(`/tools/plantilla-compartida/${sharedDraft.id}/celda`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fila: rowIdx, campo: field, valor: value, ruta_ref: rutaRef }),
+        })
+        if (!r.ok) {
+          // Las filas se movieron (alguien añadió o quitó una): se recarga.
+          const d = await (await apiFetch(`/tools/plantilla-compartida/${sharedDraft.id}`)).json()
+          if (d?.id) applySharedDraft(d)
+          return
+        }
+        const saved = await r.json()
+        setSharedDraft(p => p && ({ ...p, revision: saved.revision, updated_by: saved.updated_by }))
+        setSharedNote(t('pg.sync'))
+      } catch { setSharedNote(t('pg.conflicto')) }
+    }, 500)
+  }
+
   function editCell(rowIdx, field, value) {
+    if (field !== '_paste_hours') {
+      guardarCelda(rowIdx, field, value, data?.rows?.[rowIdx]?.ruta)
+      // Mientras se escribe en esta celda, el refresco de los otros equipos no
+      // la toca: su version llega medio segundo tarde y borraria las ultimas
+      // letras. Se suelta sola tres segundos despues de la ultima tecla.
+      celdaEnFoco.current = { fila: rowIdx, campo: field }
+      clearTimeout(focoTimer.current)
+      focoTimer.current = setTimeout(() => { celdaEnFoco.current = null }, 3000)
+    }
+    soloCelda.current = (field !== '_paste_hours')
     setData(prev => ({
       ...prev,
       rows: prev.rows.map((r, i) => {
