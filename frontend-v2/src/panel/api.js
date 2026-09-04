@@ -493,6 +493,9 @@ export const cortexIngestToken = (nombre) => api.get('/cortex/ingest-token', { p
 /* Las llaves de la extension: que equipos escriben y como apagar el que sobre.
    Antes la llave era un JWT de un año sin rastro y no se podia revocar. */
 export const cortexLlaves = () => api.get('/cortex/llaves')
+/* Rellena el catalogo de direcciones con lo que ya esta guardado en los
+   paquetes: no hay que esperar a que vuelvan a pasar. */
+export const cortexReconstruirDirecciones = () => api.post('/cortex/direcciones/reconstruir')
 export const cortexRevocarLlave = (jti) => api.post(`/cortex/llaves/${jti}/revocar`)
 export const cortexReactivarLlave = (jti) => api.post(`/cortex/llaves/${jti}/reactivar`)
 export const cortexSeedDemo = () => api.post('/cortex/seed-demo')

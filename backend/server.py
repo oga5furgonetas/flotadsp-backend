@@ -34553,15 +34553,22 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     # barrido estaba muerto y estaba funcionando. Sin este campo, "esta al dia"
     # no se puede ni preguntar.
     common["seen_at"] = datetime.now(timezone.utc).isoformat()
-    # Si esta observacion trae direccion Y su identificador, al catalogo: es lo
-    # que hara que el proximo paquete a ese mismo portal ya tenga ubicacion.
-    await _cortex_guardar_direccion(obs)
     # Día de servicio (el que el usuario tiene seleccionado en Cortex). Se guarda
     # una sola vez y no se pisa con null: cada paquete pertenece a un día.
     service_day = str(obs.get("service_day") or "").strip()[:10]
     if service_day:
         common["service_day"] = service_day
     pkg = await db.cortex_packages.find_one({"tba": tba}, {"_id": 0})
+
+    # EL CATALOGO SE ALIMENTA DEL PAQUETE CONSOLIDADO, no de una observacion
+    # suelta. Las dos mitades de la llave llegan por caminos distintos y casi
+    # nunca en el mismo mensaje: el `addressId` lo manda route-details y la
+    # coordenada la manda el informe, minutos u horas despues. Mirando solo
+    # `obs`, el catalogo se quedaba VACIO teniendo ya 126 paquetes con las dos
+    # cosas guardadas (medido el 04-09-2026). Se mezcla lo que llega ahora
+    # encima de lo que ya habia, que es exactamente como se guarda el paquete.
+    await _cortex_guardar_direccion(
+        {**(pkg or {}), **{k: v for k, v in obs.items() if v not in (None, "")}})
 
     # ¿ES ESTE EVENTO EL MAS RECIENTE QUE CONOCEMOS?
     # Se decide aqui, una sola vez, porque hay cuatro caminos distintos mas
@@ -38714,6 +38721,29 @@ async def cortex_ingest_token(nombre: str = "", user: dict = Depends(require_adm
             "ingest_url": f"{PUBLIC_BASE_URL}/api/cortex/ingest",
             "empresa": user.get("org_id") or "", "jti": jti,
             "caduca": (ahora + timedelta(days=365)).strftime("%Y-%m-%d")}
+
+
+@api_router.post("/cortex/direcciones/reconstruir")
+async def cortex_direcciones_reconstruir(dias: int = 30, _=Depends(require_admin)):
+    """Llena el catalogo con las direcciones que YA estan en los paquetes.
+
+    El catalogo se alimenta solo segun entran los paquetes, pero lo ya guardado
+    tambien sirve: hay paquetes con `address_id` y coordenada desde antes de que
+    existiera el catalogo. Esto los recorre una vez. Es idempotente —vuelve a
+    escribir lo mismo— y no borra nada.
+    """
+    desde = (datetime.now(timezone.utc) - timedelta(days=max(1, min(dias, 90)))).strftime("%Y-%m-%d")
+    n = 0
+    cur = db.cortex_packages.find(
+        {"service_day": {"$gte": desde}, "address_id": {"$nin": [None, ""]},
+         "$or": [{"dest_lat": {"$ne": None}}, {"stop_address": {"$nin": [None, ""]}}]},
+        {"_id": 0, "address_id": 1, "dest_lat": 1, "dest_lng": 1, "stop_address": 1})
+    async for p in cur:
+        await _cortex_guardar_direccion(p)
+        n += 1
+    total = await db.cortex_direcciones.count_documents({})
+    con_geo = await db.cortex_direcciones.count_documents({"lat": {"$ne": None}})
+    return {"revisados": n, "catalogo": total, "con_coordenada": con_geo}
 
 
 @api_router.get("/cortex/llaves")

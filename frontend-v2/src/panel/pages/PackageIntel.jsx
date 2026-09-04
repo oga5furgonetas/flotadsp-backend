@@ -8,7 +8,7 @@ import {
 import {
   cortexOverview, cortexPackages, cortexPackage, cortexAlerts, cortexRoutes,
   cortexIngestToken, cortexSeedDemo, cortexClearDemo, cortexDays, cortexReset,
-  cortexLlaves, cortexRevocarLlave, cortexReactivarLlave,
+  cortexLlaves, cortexRevocarLlave, cortexReactivarLlave, cortexReconstruirDirecciones,
   cortexStations, cortexAssignStation, cortexStationsAuto,
 } from '../api'
 import { isSuperAdmin } from '../auth'
@@ -274,6 +274,15 @@ function SetupCard({ onSeed, onReset, seeding }) {
                 </div>
               ))}
             </div>
+            {/* Las direcciones que ya estan en los paquetes guardados sirven
+                igual: esto las recoge de una vez en vez de esperar a que vuelvan
+                a pasar por Cortex. */}
+            <button onClick={() => cortexReconstruirDirecciones().then((r) => window.alert(
+              `Catálogo de direcciones: ${r.data.catalogo} (${r.data.con_coordenada} con coordenada), de ${r.data.revisados} paquetes revisados.`))}
+              className="mt-2 w-full rounded px-2 py-1 text-[11.5px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100">
+              Rehacer el catálogo de direcciones
+            </button>
+
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <input value={nombreLlave} onChange={(e) => setNombreLlave(e.target.value)}
                 placeholder="PC de la oficina, portátil de Dani…"
