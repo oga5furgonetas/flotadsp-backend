@@ -8,6 +8,7 @@ import {
 import {
   cortexOverview, cortexPackages, cortexPackage, cortexAlerts, cortexRoutes,
   cortexIngestToken, cortexSeedDemo, cortexClearDemo, cortexDays, cortexReset,
+  cortexLlaves, cortexRevocarLlave, cortexReactivarLlave,
   cortexStations, cortexAssignStation, cortexStationsAuto,
 } from '../api'
 import { isSuperAdmin } from '../auth'
@@ -206,9 +207,13 @@ function SetupCard({ onSeed, onReset, seeding }) {
   const [tok, setTok] = useState(null)
   const [copied, setCopied] = useState('')
   const [ext, setExt] = useState(null)
-  const load = () => cortexIngestToken().then(r => setTok(r.data)).catch(() => {})
+  const [llaves, setLlaves] = useState(null)
+  const [nombreLlave, setNombreLlave] = useState('')
+  const load = (nombre) => cortexIngestToken(nombre).then(r => { setTok(r.data); cargarLlaves() }).catch(() => {})
+  const cargarLlaves = () => cortexLlaves().then(r => setLlaves(r.data)).catch(() => {})
   useEffect(() => {
     load()
+    cargarLlaves()
     // Qué versión se está sirviendo. Lo escribe el empaquetador en cada
     // despliegue: sin esto, un cliente con un fallo ya arreglado no sabe si
     // tiene la última, y nosotros tampoco.
@@ -239,6 +244,53 @@ function SetupCard({ onSeed, onReset, seeding }) {
             </span>
           )}
         </div>
+        {/* QUE EQUIPOS ESTAN ESCRIBIENDO, y como apagar el que sobre. Antes la
+            llave era un JWT de un año sin rastro en ninguna parte: no habia forma
+            de cortarle el acceso a un equipo concreto —ni a quien se llevara el
+            token— salvo cambiar la clave del servidor y tumbar todas las
+            sesiones. */}
+        {llaves?.llaves?.length > 0 && (
+          <div className="mt-3 rounded-lg border border-dark-800 bg-dark-950/40 p-2.5">
+            <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-dark-500">
+              Llaves en uso
+            </div>
+            <div className="space-y-1.5">
+              {llaves.llaves.map((l) => (
+                <div key={l.jti} className="flex flex-wrap items-center gap-2 text-[12px]">
+                  <span className={l.revocada ? 'text-dark-600 line-through' : 'text-dark-200'}>{l.nombre}</span>
+                  <span className="text-dark-600">{(l.creada_en || '').slice(0, 10)}</span>
+                  {l.revocada
+                    ? (
+                      <button onClick={() => cortexReactivarLlave(l.jti).then(cargarLlaves)}
+                        className="ml-auto rounded px-2 py-0.5 text-[11px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100">
+                        Volver a activar
+                      </button>
+                    ) : (
+                      <button onClick={() => { if (window.confirm(`Apagar «${l.nombre}»? El equipo que la use deja de mandar datos en menos de 30 segundos. Se puede volver a activar.`)) cortexRevocarLlave(l.jti).then(cargarLlaves) }}
+                        className="ml-auto rounded px-2 py-0.5 text-[11px] text-red-300 ring-1 ring-red-500/30 hover:bg-red-500/10">
+                        Apagar
+                      </button>
+                    )}
+                </div>
+              ))}
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <input value={nombreLlave} onChange={(e) => setNombreLlave(e.target.value)}
+                placeholder="PC de la oficina, portátil de Dani…"
+                className="min-w-0 flex-1 rounded border border-dark-700 bg-dark-950 px-2 py-1 text-[11.5px] text-dark-100" />
+              <button onClick={() => { load(nombreLlave || 'Sin nombre'); setNombreLlave('') }}
+                className="rounded px-2 py-1 text-[11.5px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100">
+                Llave nueva
+              </button>
+            </div>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-dark-600">
+              Ponle nombre a cada equipo. Las llaves repartidas antes de esto no
+              figuran aquí y siguen valiendo: para apagarlas, dale una llave nueva a
+              cada equipo y avísanos para retirar las viejas.
+            </p>
+          </div>
+        )}
+
         <ol className="mt-3 space-y-2 text-[12.5px] leading-relaxed text-dark-400">
           <li><b className="text-dark-200">1.</b> Descarga el ZIP y <b>descomprímelo</b> en una
             carpeta que no vayas a borrar. Chrome carga la extensión desde ahí: si mueves

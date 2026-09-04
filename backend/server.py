@@ -34257,9 +34257,12 @@ def _cortex_parse_dt(v):
             return None
 
 
-def _cortex_ingest_org(request: Request) -> str:
+def _cortex_ingest_org(request: Request):
     """Autentica la extensión por su token de ingesta y fija la BD del DSP.
-    Devuelve el org_id. El token es un JWT de larga duración con scope propio."""
+
+    Devuelve `(org_id, jti)`. El token es un JWT de larga duración con scope
+    propio; el `jti` es lo que permite revocar la llave de UN equipo sin tocar
+    la de los demás (las emitidas antes del registro no lo llevan)."""
     token = request.headers.get("x-ingest-token") or request.query_params.get("ingest_token", "")
     if not token:
         raise HTTPException(status_code=401, detail="Falta el token de ingesta (X-Ingest-Token).")
@@ -34278,7 +34281,7 @@ def _cortex_ingest_org(request: Request) -> str:
             detail="Esta llave es de una versión anterior y no identifica la empresa. "
                    "Vuelve a copiarla desde Cortex IA en la aplicación.")
     set_current_org_db(payload["db_name"])
-    return payload.get("org_id", "")
+    return payload.get("org_id", ""), payload.get("jti") or ""
 
 
 def _cortex_evaluate(pkg: dict) -> dict:
@@ -38636,8 +38639,37 @@ async def cortex_portales_mi_ruta(user: dict = Depends(require_any_auth)):
     return {"avisos": avisos, "stops_con_aviso": len(avisos), "dia": hoy}
 
 
+CORTEX_LLAVES = "cortex_llaves"
+_LLAVE_CACHE: dict = {}          # jti -> (caduca_el, viva)
+_LLAVE_TTL = 30                  # segundos
+
+
+async def _llave_viva(jti: str) -> bool:
+    """Sigue valiendo esta llave? Con cache de 30 s.
+
+    La ingesta manda lotes cada pocos segundos y una lectura a `global_db` por
+    peticion se nota. 30 s es lo que tarda como mucho en apagarse un equipo al
+    que se le revoque la llave, que para esto sobra.
+    """
+    ahora = time.time()
+    hit = _LLAVE_CACHE.get(jti)
+    if hit and hit[0] > ahora:
+        return hit[1]
+    try:
+        d = await global_db[CORTEX_LLAVES].find_one({"jti": jti}, {"_id": 0, "revocada": 1})
+    except Exception:
+        return True              # si la base falla, no se corta la captura
+    # Una llave que no consta se acepta: puede haberse emitido antes de que
+    # existiera el registro. Lo que NO se acepta es una revocada a proposito.
+    viva = not (d or {}).get("revocada")
+    if len(_LLAVE_CACHE) > 500:
+        _LLAVE_CACHE.clear()
+    _LLAVE_CACHE[jti] = (ahora + _LLAVE_TTL, viva)
+    return viva
+
+
 @api_router.get("/cortex/ingest-token")
-async def cortex_ingest_token(user: dict = Depends(require_admin)):
+async def cortex_ingest_token(nombre: str = "", user: dict = Depends(require_admin)):
     """La llave de la extensión. UNA POR EMPRESA, y nunca compartida.
 
     El `db_name` es lo que separa los datos de una empresa de los de otra: va
@@ -38654,22 +38686,103 @@ async def cortex_ingest_token(user: dict = Depends(require_admin)):
         raise HTTPException(
             500, "Tu cuenta no tiene empresa asignada, así que no se puede generar "
                  "una llave que aísle tus datos. Avísanos antes de instalar la extensión.")
+    # CADA LLAVE, APUNTADA Y REVOCABLE. Antes se firmaba un JWT de un año sin
+    # dejar rastro: no habia forma de apagar el de un equipo concreto, ni de
+    # cortarle el acceso a quien se llevara el token, salvo cambiar la
+    # SECRET_KEY y tumbar de paso todas las sesiones.
+    ahora = datetime.now(timezone.utc)
+    jti = uuid.uuid4().hex
     payload = {
         "scope": "cortex_ingest", "org_id": user.get("org_id", ""),
         "db_name": db_name, "name": user.get("name", ""),
-        "exp": datetime.now(timezone.utc) + timedelta(days=365),
+        "jti": jti,
+        "exp": ahora + timedelta(days=365),
     }
+    try:
+        await global_db[CORTEX_LLAVES].insert_one({
+            "jti": jti, "db_name": db_name, "org_id": user.get("org_id", ""),
+            "nombre": _empleo_texto(nombre, 60) or "Sin nombre",
+            "creada_en": ahora.isoformat(),
+            "creada_por": user.get("name") or user.get("username") or "",
+            "revocada": False, "usos": 0, "ultimo_uso": None,
+        })
+    except Exception as e:
+        # Que falle el registro NO puede dejar sin llave a quien la pide, pero
+        # si se avisa: una llave sin apuntar no se podra revocar.
+        logger.warning("registro de llave de ingesta: %s", e)
     return {"token": jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGORITHM),
             "ingest_url": f"{PUBLIC_BASE_URL}/api/cortex/ingest",
-            "empresa": user.get("org_id") or "",
-            "caduca": (datetime.now(timezone.utc) + timedelta(days=365)).strftime("%Y-%m-%d")}
+            "empresa": user.get("org_id") or "", "jti": jti,
+            "caduca": (ahora + timedelta(days=365)).strftime("%Y-%m-%d")}
+
+
+@api_router.get("/cortex/llaves")
+async def cortex_llaves(user: dict = Depends(require_admin)):
+    """Las llaves de la extension de esta empresa, con su ultimo uso.
+
+    Para poder contestar «que equipos estan mandando datos» y apagar el que
+    sobre. Antes no existia: la llave era un JWT de un año sin rastro en ninguna
+    parte, y la unica forma de cortarla era cambiar la SECRET_KEY y tumbar de
+    paso todas las sesiones de todo el mundo.
+    """
+    dbn = user.get("db_name") or _DEFAULT_DB_NAME
+    filas = await global_db[CORTEX_LLAVES].find(
+        {"db_name": dbn}, {"_id": 0}).sort("creada_en", -1).to_list(100)
+    # Que version y que equipo esta usando cada una: sale del diagnostico, que
+    # es donde la ingesta apunta quien habla.
+    equipos = []
+    try:
+        async for d in db.cortex_diagnostico.find({"kind": "version"}, {"_id": 0}):
+            equipos.append({"version": d.get("url"), "interceptor": d.get("interceptor"),
+                            "instalacion": d.get("instalacion"), "visto_en": d.get("visto_en")})
+    except Exception:
+        pass
+    equipos.sort(key=lambda x: str(x.get("visto_en") or ""), reverse=True)
+    return {"llaves": filas, "equipos": equipos,
+            # Las emitidas antes del registro no llevan `jti`: valen todas por
+            # igual y solo se pueden apagar en bloque.
+            "heredadas_activas": True}
+
+
+@api_router.post("/cortex/llaves/{jti}/revocar")
+async def cortex_llave_revocar(jti: str, user: dict = Depends(require_admin)):
+    """Apaga UNA llave. El equipo que la use deja de escribir en menos de 30 s."""
+    dbn = user.get("db_name") or _DEFAULT_DB_NAME
+    r = await global_db[CORTEX_LLAVES].update_one(
+        {"jti": re.sub(r"[^a-f0-9]", "", str(jti))[:64], "db_name": dbn},
+        {"$set": {"revocada": True,
+                  "revocada_en": datetime.now(timezone.utc).isoformat(),
+                  "revocada_por": user.get("name") or user.get("username") or ""}})
+    if not r.matched_count:
+        raise HTTPException(404, "Esa llave no existe")
+    _LLAVE_CACHE.clear()          # que se note ya, sin esperar al cache
+    return {"ok": True}
+
+
+@api_router.post("/cortex/llaves/{jti}/reactivar")
+async def cortex_llave_reactivar(jti: str, user: dict = Depends(require_admin)):
+    """Vuelve a encenderla. Revocar por error no puede costar reinstalar nada."""
+    dbn = user.get("db_name") or _DEFAULT_DB_NAME
+    r = await global_db[CORTEX_LLAVES].update_one(
+        {"jti": re.sub(r"[^a-f0-9]", "", str(jti))[:64], "db_name": dbn},
+        {"$set": {"revocada": False}, "$unset": {"revocada_en": "", "revocada_por": ""}})
+    if not r.matched_count:
+        raise HTTPException(404, "Esa llave no existe")
+    _LLAVE_CACHE.clear()
+    return {"ok": True}
 
 
 @api_router.post("/cortex/ingest")
 async def cortex_ingest(request: Request):
     """Recibe observaciones canónicas de la extensión (JSON real de Cortex ya
     normalizado). No requiere JWT de usuario: se autentica por token de ingesta."""
-    _cortex_ingest_org(request)
+    _org, _jti = _cortex_ingest_org(request)
+    # UNA LLAVE REVOCADA DEJA DE ESCRIBIR. Las de antes del registro no llevan
+    # `jti` y siguen valiendo: rechazarlas de golpe dejaria la captura muerta en
+    # los equipos que no se hayan renovado, sin avisar a nadie.
+    if _jti and not await _llave_viva(_jti):
+        raise HTTPException(401, "Esta llave se ha revocado. Copia una nueva desde "
+                                 "Paquetes IA en la aplicación.")
     body = await request.json()
 
     # QUE VERSION DE LA EXTENSION HABLA. Repartida a varias naves, sin esto no

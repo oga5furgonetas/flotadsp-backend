@@ -489,7 +489,12 @@ export const cortexAssignStation = (service_area_id, center) => api.post('/corte
 // Reparto automático por geografía. Sin `aplicar` solo propone: se puede mirar
 // antes de que toque nada.
 export const cortexStationsAuto = (aplicar = false) => api.post(`/cortex/stations/auto?aplicar=${aplicar ? 'true' : 'false'}`)
-export const cortexIngestToken = () => api.get('/cortex/ingest-token')
+export const cortexIngestToken = (nombre) => api.get('/cortex/ingest-token', { params: { nombre } })
+/* Las llaves de la extension: que equipos escriben y como apagar el que sobre.
+   Antes la llave era un JWT de un año sin rastro y no se podia revocar. */
+export const cortexLlaves = () => api.get('/cortex/llaves')
+export const cortexRevocarLlave = (jti) => api.post(`/cortex/llaves/${jti}/revocar`)
+export const cortexReactivarLlave = (jti) => api.post(`/cortex/llaves/${jti}/reactivar`)
 export const cortexSeedDemo = () => api.post('/cortex/seed-demo')
 export const cortexClearDemo = () => api.post('/cortex/clear-demo')
 export const cortexReset = (body) => api.post('/cortex/reset', body) // {confirmar: 'BORRAR'}, solo super-admin
