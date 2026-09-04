@@ -24275,6 +24275,166 @@ async def transporter_ids_sin_ficha(dias: int = 30, _=Depends(require_admin)):
             "con_ficha": len(conocidos), "candidatos": libres, "dias": dias}
 
 
+# ── CONDUCTORES SIN CENTRO ────────────────────────────────────────────────
+#
+# El reverso exacto del bloque de arriba: alli hay un id que sale a ruta y no
+# tiene ficha; aqui hay una ficha que no dice a que nave pertenece, y eso la
+# borra de TODAS las pantallas en cuanto alguien elige un centro — que es como
+# se trabaja el 100% del tiempo.
+#
+# Medido en produccion el 05-09-2026 barriendo los filtros: `GET /drivers` daba
+# 150 activos y la suma por centro 83+47+16 = **146**. Los cuatro que faltaban
+# tienen `center: ""`. Salen en el total, no salen en ningun centro, y no falla
+# nada: es el gotcha 30 con personas dentro. Uno de ellos —MARCOS ESPANTOSO
+# SANDE— llevaba **469 paquetes** repartidos en OGA5.
+#
+# `/checkers/centros` no los ve a proposito: unifica variantes SUCIAS de un
+# centro escrito ('oga5', 'OGA5 '), y vacio no es una variante, es que no esta.
+# Decia «0 hallazgos» con estas cuatro personas invisibles.
+
+_SIN_CENTRO_MIN_PAQUETES = 20   # por debajo, la evidencia no da para afirmar
+
+
+async def _drivers_sin_centro(dias: int = 60) -> dict:
+    """Fichas activas sin centro, con lo que Cortex sabe de cada una.
+
+    La sugerencia sale de los paquetes que esa persona ha repartido: si TODOS
+    caen en una sola nave, esa es su nave. Es la misma regla que `_centro_norm`
+    —no adivina—: con dos centros o con cuatro paquetes sueltos no se propone
+    nada y lo decide una persona.
+    """
+    dias = max(1, min(dias, 180))
+    desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
+    conocidos = await _centros_conocidos()
+
+    fichas = []
+    async for d in db.drivers.find(
+            {"active": {"$ne": False}, "merged_into": {"$exists": False}},
+            {"_id": 0, "id": 1, "name": 1, "email": 1, "phone": 1,
+             "center": 1, "transporter_id": 1, "driver_id": 1, "created_at": 1}):
+        if str(d.get("center") or "").strip():
+            continue
+        fichas.append(d)
+
+    salida = []
+    for d in fichas:
+        # Los DOS campos, por lo mismo que en `sin-ficha`: el id se guardaba en
+        # uno o en otro segun el dia del alta.
+        tids = [t for t in ((d.get("transporter_id") or "").strip(),
+                            (d.get("driver_id") or "").strip()) if t]
+        centros: dict = {}
+        rutas: dict = {}
+        dias_vistos = set()
+        total = 0
+        if tids:
+            async for r in db.cortex_packages.aggregate([
+                {"$match": {"driver_id": {"$in": tids}, "service_day": {"$gte": desde}}},
+                {"$group": {"_id": {"c": "$center", "d": "$service_day", "r": "$route_code"},
+                            "n": {"$sum": 1}}},
+            ]):
+                k = r["_id"]
+                n = r.get("n", 0)
+                total += n
+                c = _centro_norm(k.get("c"), conocidos)
+                if c:
+                    centros[c] = centros.get(c, 0) + n
+                if k.get("d"):
+                    dias_vistos.add(k["d"])
+                ruta = str(k.get("r") or "").strip()
+                if ruta:
+                    rutas[ruta] = rutas.get(ruta, 0) + n
+
+        # UNA sola nave y suficientes paquetes: se puede afirmar. Con dos, no.
+        sugerencia = None
+        if len(centros) == 1 and total >= _SIN_CENTRO_MIN_PAQUETES:
+            sugerencia = next(iter(centros))
+            motivo = "%d paquetes en %s, todos en la misma nave" % (total, sugerencia)
+        elif len(centros) > 1:
+            motivo = "reparte en %s: lo tiene que decir una persona" % (
+                ", ".join("%s (%d)" % (c, n) for c, n in
+                          sorted(centros.items(), key=lambda x: -x[1])))
+        elif total:
+            motivo = "solo %d paquetes: poca evidencia para afirmar nada" % total
+        else:
+            motivo = ("sin Transporter ID" if not tids
+                      else "su ID no ha repartido nada en %d dias" % dias)
+
+        salida.append({
+            "id": d.get("id"), "name": d.get("name") or "",
+            "email": d.get("email") or "", "phone": d.get("phone") or "",
+            "transporter_id": tids[0] if tids else "",
+            "alta": str(d.get("created_at") or "")[:10],
+            "paquetes": total, "dias": len(dias_vistos),
+            "ultimo_dia": max(dias_vistos) if dias_vistos else None,
+            "centros_cortex": [{"centro": c, "paquetes": n}
+                               for c, n in sorted(centros.items(), key=lambda x: -x[1])],
+            "rutas": [r for r, _ in sorted(rutas.items(), key=lambda x: -x[1])[:3]],
+            "sugerencia": sugerencia, "motivo": motivo,
+        })
+    # Primero los que mas mueven: una persona invisible que reparte a diario
+    # duele mucho mas que una ficha que nadie llego a terminar.
+    salida.sort(key=lambda x: (-x["paquetes"], str(x["name"]).upper()))
+    return {"sin_centro": salida, "total": len(salida),
+            "con_sugerencia": sum(1 for x in salida if x["sugerencia"]),
+            "dias": dias, "centros": sorted(conocidos)}
+
+
+@api_router.get("/drivers/sin-centro")
+async def drivers_sin_centro(dias: int = 60, _=Depends(require_admin)):
+    """Fichas activas que no salen en ningun centro. Solo mira, no toca nada."""
+    return await _drivers_sin_centro(dias)
+
+
+@api_router.post("/drivers/sin-centro/aplicar")
+async def drivers_sin_centro_aplicar(body: dict = Body(default={}),
+                                     admin: dict = Depends(require_admin)):
+    """Pone el centro SOLO a los que Cortex deja sin ninguna duda.
+
+    Gotcha 38: la sugerencia se vuelve a calcular AQUI. Si viniera en el cuerpo,
+    bastaria con mandar el centro que a uno le apeteciera para saltarse la regla
+    de «una sola nave». Del cuerpo solo se admite a QUIENES aplicar.
+    """
+    solo = set(str(x) for x in (body.get("conductores") or []) if x)
+    dias = int(body.get("dias") or 60)
+    antes = await _drivers_sin_centro(dias)
+    aplicables = [x for x in antes["sin_centro"]
+                  if x["sugerencia"] and (not solo or x["id"] in solo)]
+    if not aplicables:
+        return {"puestos": 0, "verificado": True,
+                "motivo": "Ninguno tiene evidencia suficiente: lo decide una persona.",
+                "pendientes": antes["total"]}
+
+    quien = admin.get("name") or admin.get("username") or "oficina"
+    ahora = datetime.now(timezone.utc).isoformat()
+    # Reversible: se guarda que ficha se toco y con que evidencia, para poder
+    # deshacerlo sin depender de la memoria de nadie.
+    await db.app_meta.update_one(
+        {"_id": "respaldo_centro_conductores"},
+        {"$set": {"at": ahora, "por": quien,
+                  "cambios": [{"id": x["id"], "name": x["name"], "de": "",
+                               "a": x["sugerencia"], "motivo": x["motivo"]}
+                              for x in aplicables]}},
+        upsert=True)
+
+    puestos = 0
+    for x in aplicables:
+        # Condicionado a que SIGA vacio: entre el calculo y la escritura puede
+        # haberlo puesto una persona a mano, y su valor manda sobre el nuestro.
+        r = await db.drivers.update_one(
+            {"id": x["id"], "$or": [{"center": ""}, {"center": None},
+                                    {"center": {"$exists": False}}]},
+            {"$set": {"center": x["sugerencia"], "centro_por": "cortex",
+                      "centro_puesto_en": ahora}})
+        puestos += r.modified_count
+
+    # Verificable (quinta condicion del gotcha 38): se vuelve a mirar.
+    despues = await _drivers_sin_centro(dias)
+    return {"puestos": puestos, "pendientes": despues["total"],
+            "verificado": despues["con_sugerencia"] == 0,
+            "quedan_por_decidir": [{"name": x["name"], "motivo": x["motivo"]}
+                                   for x in despues["sin_centro"]]}
+
+
 @api_router.post("/transporter-ids/{tid}/crear-ficha")
 async def transporter_id_crear_ficha(tid: str, body: dict = Body(default={}),
                                      admin: dict = Depends(require_admin)):

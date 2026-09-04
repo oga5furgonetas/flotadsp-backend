@@ -1004,6 +1004,35 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    y en una empresa recien creada no existe ninguno.
 
 
+60. **Un campo VACIO no es una variante sucia, y por eso el checker de centros
+   decia «0 hallazgos» con cuatro personas invisibles.** `/checkers/centros`
+   unifica las formas sucias de un centro escrito ('oga5', 'OGA5 ',
+   'AMZL OGA5 SANTIAGO XPT'); vacio no entra en esa familia. Medido el
+   05-09-2026 barriendo los FILTROS contra produccion: `GET /drivers` daba
+   **150 activos** y la suma por centro **83+47+16 = 146**. Los cuatro que
+   faltaban tienen `center: ""`, y como el panel manda siempre el centro
+   elegido, no salian en ninguna pantalla —ni cuadrante, ni asignacion, ni la
+   propia lista— aunque si contaban en el total. Uno de ellos, MARCOS ESPANTOSO
+   SANDE, llevaba **469 paquetes repartidos en OGA5**: una persona trabajando a
+   la que la oficina no podia ver.
+   Es el gotcha 30 (los cajones tienen que sumar el total) aplicado a personas,
+   y no lo detecta nada porque un filtro que devuelve de menos no falla.
+   `GET /drivers/sin-centro` los lista con lo que Cortex sabe de cada uno, y
+   `POST /drivers/sin-centro/aplicar` pone la nave **solo cuando no hay duda**:
+   todos sus paquetes en UNA sola nave y al menos `_SIN_CENTRO_MIN_PAQUETES`.
+   Con dos naves no se propone nada aunque una sea testimonial —un traslado
+   real existe— porque poner a alguien en la nave que no es no se nota: la
+   ficha parece completa y la persona sale en el cuadrante equivocado. Es la
+   misma regla que `_centro_norm`: no adivina. La sugerencia se recalcula en el
+   servidor (gotcha 38), hay respaldo en `app_meta.respaldo_centro_conductores`
+   y la escritura va condicionada a que el centro SIGA vacio.
+   Regla general: **al reconciliar una suma por categorias, el cajon que hay
+   que buscar es el de los que no tienen ninguna.** Y un checker de "dato
+   sucio" no cubre el "dato que falta": son dos preguntas distintas.
+   Ocho casos en `test_sin_centro.py`, sacando la regla de `server.py` con
+   `ast` (gotcha 40) y probados reintroduciendo el fallo.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

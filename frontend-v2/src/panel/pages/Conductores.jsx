@@ -17,7 +17,7 @@ import {
   deleteDriverAccount,
   getDriversDuplicados, fusionarConductores,
   getPropuestasTransporterId, confirmarTransporterId, getTransporterIdsSinFicha, telefonosDesdeCortex,
-  crearFichaDeTransporterId, } from '../api'
+  crearFichaDeTransporterId, getDriversSinCentro, aplicarCentroConductores, } from '../api'
 
 const EMPTY = {
   name: '', dni: '', phone: '', email: '', driver_id: '', transporter_id: '',
@@ -284,6 +284,7 @@ function SaludFichas({ onCambio }) {
   const [dups, setDups] = useState(null)
   const [ids, setIds] = useState(null)
   const [sinFicha, setSinFicha] = useState(null)
+  const [sinCentro, setSinCentro] = useState(null)
   const [ocupado, setOcupado] = useState('')
   const [err, setErr] = useState('')
   const [hecho, setHecho] = useState('')
@@ -293,8 +294,25 @@ function SaludFichas({ onCambio }) {
     getDriversDuplicados().then((r) => setDups(r.data)).catch(() => setErr('No se pudieron cargar las fichas duplicadas.'))
     getPropuestasTransporterId().then((r) => setIds(r.data)).catch(() => {})
     getTransporterIdsSinFicha().then((r) => setSinFicha(r.data)).catch(() => {})
+    getDriversSinCentro().then((r) => setSinCentro(r.data)).catch(() => {})
   }
   useEffect(cargar, [])
+
+  /* El centro NO viaja en la petición a propósito: lo vuelve a calcular el
+     servidor con los paquetes de Cortex (gotcha 38). Si lo mandara el panel,
+     bastaría con cambiarlo aquí para saltarse la regla de «una sola nave». */
+  const ponerCentros = async () => {
+    setOcupado('centros'); setErr(''); setHecho('')
+    try {
+      const { data } = await aplicarCentroConductores({})
+      setHecho(data.puestos
+        ? `Centro puesto a ${data.puestos} ${data.puestos === 1 ? 'ficha' : 'fichas'}.`
+        : (data.motivo || 'No había ninguna con evidencia suficiente.'))
+      cargar(); onCambio?.()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo poner el centro.')
+    } finally { setOcupado('') }
+  }
 
   const fusionar = async (grupo) => {
     const conservar = elegida[grupo.email] || grupo.sugerida
@@ -488,6 +506,58 @@ function SaludFichas({ onCambio }) {
           </div>
         )}
       </section>
+
+      {/* ── FICHAS QUE NO SALEN EN NINGÚN CENTRO ─────────────────────────
+          El reverso de la lista de arriba: allí hay un ID sin ficha, aquí hay
+          una ficha sin nave. Y no se nota, que es lo peor: la persona SÍ está
+          en el total, así que nadie la echa de menos; simplemente desaparece en
+          cuanto se elige un centro, que es como se trabaja siempre. Medido el
+          05-09-2026: 150 activos y 83+47+16 = 146 por centro.
+          El centro solo se propone cuando Cortex no deja duda —todos sus
+          paquetes en una sola nave—; con dos naves se dice y lo decide una
+          persona, que es la misma regla que `_centro_norm`. */}
+      {!!sinCentro?.total && (
+        <section>
+          <h2 className="mb-1 text-[15px] font-bold text-dark-100">
+            No salen en ningún centro
+            <span className="ml-2 rounded-full bg-amber-500/20 px-2 py-0.5 text-[11.5px] font-bold text-amber-300">
+              {sinCentro.total}
+            </span>
+          </h2>
+          <p className="mb-3 max-w-[72ch] text-[13px] text-dark-400">
+            Tienen ficha activa y el centro en blanco: cuentan en el total, pero al
+            elegir una nave no aparecen en ninguna pantalla — ni en el cuadrante, ni en
+            la asignación, ni en esta lista. Debajo, lo que dice Cortex de cada uno.
+          </p>
+          <div className="space-y-1.5">
+            {(sinCentro.sin_centro || []).map((x) => (
+              <div key={x.id} className="card flex flex-wrap items-center gap-2 p-3 text-[13px]">
+                <b className="text-[13.5px] text-dark-100">{x.name || 'Sin nombre'}</b>
+                {x.sugerencia ? (
+                  <span className="rounded-md bg-brand-500/15 px-2 py-0.5 text-[12px] font-semibold text-brand-200">
+                    {x.sugerencia}
+                  </span>
+                ) : null}
+                <span className="text-[12.5px] text-dark-500">{x.motivo}</span>
+                {!!x.rutas?.length && (
+                  <span className="font-mono text-[11.5px] text-dark-500">{x.rutas.join(' · ')}</span>
+                )}
+                <span className="ml-auto text-[12px] text-dark-600">
+                  {x.alta ? `alta ${x.alta}` : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+          {sinCentro.con_sugerencia > 0 && (
+            <button onClick={ponerCentros} disabled={ocupado === 'centros'}
+              className="mt-2 rounded-lg bg-brand-500/20 px-3 py-1.5 text-[13px] font-semibold text-brand-200 hover:bg-brand-500/30 disabled:opacity-50">
+              {ocupado === 'centros'
+                ? 'Poniendo…'
+                : `Poner el centro a ${sinCentro.con_sugerencia} ${sinCentro.con_sugerencia === 1 ? 'ficha' : 'fichas'} (lo dice Cortex)`}
+            </button>
+          )}
+        </section>
+      )}
 
       {/* ── Transporter IDs ────────────────────────────────────────── */}
       <section>

@@ -113,6 +113,12 @@ export const crearFichaDeTransporterId = (tid, body) =>
 export const getTransporterIdsSinFicha = (dias) =>
   api.get('/transporter-ids/sin-ficha', { params: dias ? { dias } : {} })
 export const confirmarTransporterId = (body) => api.post('/transporter-ids/confirmar', body)
+/* Fichas activas sin centro: salen en el total y en ningun centro, o sea que
+   con un centro elegido —como se trabaja siempre— no las ve nadie. */
+export const getDriversSinCentro = (dias) =>
+  api.get('/drivers/sin-centro', { params: dias ? { dias } : {} })
+export const aplicarCentroConductores = (body) =>
+  api.post('/drivers/sin-centro/aplicar', body || {})
 export const getDriverAccounts = () => api.get('/auth/driver-accounts')
 export const setDriverPassword = (driverId, password) => api.post('/auth/set-driver-password', { driver_id: driverId, password })
 /* Da acceso al portal a todos los que aun no lo tienen. Devuelve las claves
