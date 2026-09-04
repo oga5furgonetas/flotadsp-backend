@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.27.0';
+  const VERSION_INTERCEPTOR = '2.28.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -599,6 +599,19 @@
      `latitude/longitude` sueltos del nodo, que en route-details son el último
      escaneo. Solo se acepta si viene dentro de `address` (o `geocode`) y son
      números; si no, null y el panel dice «sin ubicación», que es la verdad. */
+  /* EL IDENTIFICADOR DE LA DIRECCION, en el parser generico. Es el que procesa
+     el informe `packagesByStatus`, que es la UNICA fuente con la direccion y su
+     geocode. Sin mandarlo desde aqui, el catalogo del backend no se llena
+     nunca: route-details da el addressId pero no la direccion, y el informe da
+     la direccion pero no decia de que addressId era. Los dos lados de la llave
+     tienen que viajar o no hay nada que cruzar. */
+  const addrId = (node) => {
+    if (!node || typeof node !== 'object') return null;
+    const ad = node.address && typeof node.address === 'object' ? node.address : null;
+    const v = (ad && ad.addressId) || node.addressId || null;
+    return (typeof v === 'string' && v.trim()) ? v.trim().slice(0, 64) : null;
+  };
+
   const destGeo = (node) => {
     if (!node || typeof node !== 'object') return null;
     const ad = node.address && typeof node.address === 'object' ? node.address : null;
@@ -682,6 +695,9 @@
       // El DESTINO (geocode de la dirección), aparte del último escaneo.
       dest_lat: destGeo(node)?.lat ?? null,
       dest_lng: destGeo(node)?.lng ?? null,
+      // Y de QUE direccion es: sin esto la direccion que trae el informe no se
+      // puede reutilizar para los demas paquetes de ese mismo portal.
+      address_id: addrId(node),
       observed_at: firstKey(node, KEYS.time) || null,
       events,
     };
