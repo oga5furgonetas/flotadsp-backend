@@ -99,6 +99,60 @@ internos, ni otros conductores, ni nada de la empresa.
 | Con dirección en Cortex | 99 (17 %) → por eso «Ir» usa coordenadas |
 | Frescura (`seen_at`) | 1,5 min |
 
+## En vivo, reintentos y de quién es el teléfono (04-09-2026)
+
+Tres cosas que se pidieron juntas —«que las paradas se vayan actualizando a
+tiempo real», «los reintentos en otro color» y «no me vale de nada un estaba
+aquí hace 45 minutos»— y una cuarta que salió al comprobarlas.
+
+**El dato nunca estuvo viejo; la pantalla sí.** Las paradas y la posición se
+pedían SOLO al pulsar el conductor y no se volvían a pedir nunca: el «hace 45
+minutos» era el mismo `hace_min` de hacía tres cuartos de hora, congelado.
+Medido sobre 4.653 huecos entre escaneo y escaneo, la mediana entre capturas es
+de 2,8 min y el 90 % está por debajo de 9; y por conductor, en un día entero
+(03-09, 98 escaneos en calle) el hueco mediano es de 3,1 min, el p90 de 12,4 y
+el máximo de 28. O sea que el límite lo pone Cortex, no nosotros, y con un
+refresco de **20 s** la posición está tan viva como se puede. Comprobado en
+producción: 3 llamadas a `/apoyo/paradas` y 3 a `/apoyo/situacion` en 60 s.
+
+Dos detalles sin los cuales el refresco molesta más de lo que ayuda:
+
+- **el encuadre no se toca** salvo al cambiar de conductor (`encuadrado` +
+  `claveEncuadre`); si `fitBounds` corriera en cada refresco, el mapa se movería
+  solo mientras estás eligiendo paradas;
+- **lo elegido se conserva**: las paradas marcadas que sigan pendientes siguen
+  marcadas, y las que se entreguen desaparecen solas de la selección.
+
+**El reintento lo decide el backend.** Cada parada viaja con `reintento`,
+calculado con `_cx_ruta_cajon(state) == "attempted"`. Llegué a mirar el literal
+`ATTEMPTED` desde el JSX: hoy acierta, y por eso es peor —el día que entre otro
+estado reintentable el mapa dejaría de pintar en rojo lo que más urge, sin un
+solo error—. Lo vigila la regla `estado-cortex-en-el-cliente` de
+`check-patrones`. En el mapa: gris hecha, azul elegida, **rojo reintento**,
+naranja primer intento, con leyenda y contador. La insignia de la posición
+cambia de color con su antigüedad: verde ≤10 min, ámbar ≤30, rojo por encima.
+
+**El teléfono, otra vez (gotcha 53).** El respaldo del día anterior solo entraba
+si NO había NINGÚN `cortex_resumen` de hoy, y el resumen de hoy se llena según
+la extensión va pasando por Cortex. A las 11:00 del 04-09 traía **2 personas** y
+en ruta había **39**: 33 estaban en el de ayer con teléfono y **16 con un número
+distinto al de su ficha**. Ahora se completa **por persona** (quien está en el
+de hoy no se toca) y lo de ayer va marcado «sin corroborar».
+
+| | antes | después |
+|---|---|---|
+| Sin teléfono | 8 | 0 |
+| Teléfono de Cortex | 2 | 35 (2 de hoy + 33 marcados) |
+| Teléfono de la ficha | 29 | 4 |
+| Avisando de discrepancia | 0 | 10 |
+
+**Y quién es quién.** Se veían ids crudos (`A1W24EJA0PO5F0`). Como último
+recurso se coge el nombre de la ficha dada de baja, y la lista lo dice: «ficha
+de baja» (3 personas hoy) y «sin enlazar» (5 ids de Cortex sin `transporter_id`
+en ninguna ficha). No se enlaza solo a propósito: dos de esos cinco tienen la
+ficha duplicada —una con una errata en el nombre— y adivinar pondría el
+historial de uno en la ficha del otro.
+
 ## Lo que falta (en orden)
 
 0. **Que las paradas en furgoneta tengan destino (extensión 2.23).** El único
