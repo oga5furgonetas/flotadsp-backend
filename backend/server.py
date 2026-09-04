@@ -898,6 +898,37 @@ def _decimal(valor, campo, defecto=None, minimo=None, maximo=None):
     return round(n, 2)
 
 
+def _texto_cuerpo(valor, maximo: int = None) -> str:
+    """Un campo de TEXTO que llega en el cuerpo de una peticion, sin reventar.
+
+    Sustituye al `(data.get("x") or "").strip()` de siempre, que es correcto
+    mientras lo que llegue sea texto y **un 500 en cuanto no lo es**: una lista,
+    un objeto o un booleano no tienen `.strip()`. Medido contra staging mandando
+    a cada endpoint SUS PROPIOS campos con el tipo cambiado: **43 de las 216
+    mutaciones devolvian «Error interno del servidor»**, dos de ellas publicas
+    (`/auth/lead` y `/auth/forgot-password`, o sea al alcance de cualquiera).
+    Y un 500 no es solo un codigo feo: dispara la alerta de Telegram por un dato
+    mal escrito, que es justo lo que `_entero` vino a evitar para los numeros.
+
+    Se comporta EXACTAMENTE igual que lo que sustituye siempre que no reventara:
+    lo falso (None, "", 0, listas y objetos vacios) da "", y el texto se recorta
+    igual. Lo unico que cambia es lo que antes era una excepcion: un numero pasa
+    a su texto —12345 es lo que quiso escribir quien lo mando— y una lista, un
+    objeto o un booleano dan "", que hace que la validacion de despues conteste
+    400 con su mensaje en vez de 500 sin ninguno.
+
+    No se llama `_texto` ni `_cadena` a proposito —`_cadena` ya existe
+    como variable local en el arranque—: en un fichero de 40.000 lineas un nombre
+    generico puede estar pisando otro sin que Python diga nada (gotcha 24).
+    """
+    if not valor:
+        return ""
+    if isinstance(valor, bool) or not isinstance(valor, (str, int, float)):
+        return ""
+    s = str(valor).strip()
+    return s[:maximo] if maximo else s
+
+
 def _entero(valor, campo: str, defecto=None, minimo=None, maximo=None) -> int:
     """Convierte a entero o lanza 400 con un mensaje util.
 
@@ -4942,7 +4973,7 @@ async def admin_conciliar(file: UploadFile = File(...), mes: Optional[str] = For
 async def admin_marcar_cobro(cobro_id: str, data: dict = Body(...),
                              user: dict = Depends(require_superadmin)):
     """Marca un cobro como cobrado o lo devuelve a pendiente."""
-    estado = (data.get("estado") or "").strip()
+    estado = _texto_cuerpo(data.get("estado"))
     if estado not in ("pendiente", "cobrado"):
         raise HTTPException(400, "estado debe ser pendiente o cobrado")
     patch = {"estado": estado}
@@ -5208,7 +5239,7 @@ async def org_centros_geo(_=Depends(require_admin)):
 @api_router.post("/org/centers")
 async def add_org_center(data: dict = Body(...), user: dict = Depends(require_admin)):
     """Añade un centro a tu organización. Pasado el límite del plan → 402 (de pago)."""
-    name = (data.get("name") or "").strip().upper()
+    name = _texto_cuerpo(data.get("name")).upper()
     if not name:
         raise HTTPException(status_code=400, detail="Indica el nombre del centro")
     org = await get_org(user.get("org_id"))
@@ -5238,12 +5269,12 @@ async def capture_lead(data: dict = Body(...), request: Request = None):
                       detail="Has enviado muchos mensajes en poco tiempo. Espera un minuto.")
     _rl_public_action(f"lead-ip-day:{ip}", max_count=30, window_s=86400,
                       detail="Has alcanzado el límite diario de envíos desde esta red.")
-    email = (data.get("email") or "").strip().lower()
+    email = _texto_cuerpo(data.get("email")).lower()
     if "@" not in email:
         raise HTTPException(status_code=400, detail="Pon un email válido")
-    name = (data.get("name") or "").strip()
-    company = (data.get("company") or "").strip()
-    plan = (data.get("plan") or "").strip()  # también usado como "asunto + mensaje" desde el form
+    name = _texto_cuerpo(data.get("name"))
+    company = _texto_cuerpo(data.get("company"))
+    plan = _texto_cuerpo(data.get("plan"))  # también usado como "asunto + mensaje" desde el form
     now = datetime.now(timezone.utc).isoformat()
     # CRM: 1 lead por email (upsert).
     await global_db.leads.update_one(
@@ -5349,7 +5380,7 @@ async def admin_update_org(data: dict = Body(...), _: dict = Depends(require_sup
     if data.get("status") in ("trial", "active", "suspended", "canceled"):
         patch["status"] = data["status"]
     if "plan" in data:
-        patch["plan"] = (data.get("plan") or "").strip() or None
+        patch["plan"] = _texto_cuerpo(data.get("plan")) or None
     if "max_centers" in data:
         patch["max_centers"] = _entero(data["max_centers"], "max_centers",
                                        minimo=1, maximo=500)
@@ -5664,7 +5695,7 @@ async def forgot_password(data: dict, request: Request):
     SIEMPRE responde éxito (sin revelar si el email existe). Rate-limited por IP."""
     import hashlib as _hl
     import secrets as _sec
-    email = (data.get("email") or "").strip().lower()
+    email = _texto_cuerpo(data.get("email")).lower()
     _rl_public_action(f"fp:{_rl_key_ip(request)}", max_count=5, window_s=900,
                       detail="Demasiadas solicitudes. Inténtalo en 15 minutos.")
     if not email or "@" not in email:
@@ -5719,7 +5750,7 @@ async def reset_password(data: dict, request: Request):
     """Cambia la contraseña con un token de restablecimiento válido (un solo uso)."""
     import hashlib as _hl
     _rl_public_action(f"rp:{_rl_key_ip(request)}", max_count=10, window_s=900)
-    token = (data.get("token") or "").strip()
+    token = _texto_cuerpo(data.get("token"))
     new = data.get("new_password") or ""
     if len(new) < 6:
         raise HTTPException(status_code=400, detail="La contraseña debe tener al menos 6 caracteres")
@@ -5876,7 +5907,7 @@ async def assistant_ask(data: dict, user: dict = Depends(require_admin)):
     """Responde preguntas en lenguaje natural sobre LA FLOTA DE ESTA ORG.
     Enfoque fiable: se recopila un resumen compacto de datos reales (solo
     lectura, acotado) y Gemini responde SOLO con esos datos."""
-    question = (data.get("question") or "").strip()[:300]
+    question = _texto_cuerpo(data.get("question"))[:300]
     if len(question) < 4:
         raise HTTPException(status_code=400, detail="Escribe una pregunta")
     _rl_public_action(f"ask:{user.get('org_id') or user.get('sub')}", max_count=15, window_s=300,
@@ -6220,7 +6251,7 @@ async def set_my_email(data: dict, user: dict = Depends(get_current_user)):
     """Cada admin vincula (o borra) su propio email de recuperación."""
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Solo administradores")
-    em = (data.get("email") or "").strip().lower()
+    em = _texto_cuerpo(data.get("email")).lower()
     if em and not _EMAIL_RE.match(em):
         raise HTTPException(status_code=400, detail="Email no válido")
     # Evita que dos cuentas compartan email (rompería recuperar-contraseña).
@@ -6334,7 +6365,7 @@ async def update_admin_permissions(admin_id: str, data: dict = Body(...), _admin
                 raise HTTPException(403, "Solo super-admin puede asignar rol de gestor de centro")
             patch["admin_role"] = ar
     if "email" in data:
-        em = (data.get("email") or "").strip().lower()
+        em = _texto_cuerpo(data.get("email")).lower()
         if em and not _EMAIL_RE.match(em):
             raise HTTPException(status_code=400, detail="Email no válido")
         patch["email"] = em or None
@@ -6432,7 +6463,7 @@ async def change_my_password(data: dict, user: dict = Depends(get_current_user))
 @auth_router.post("/reset-admin-password")
 async def reset_admin_password(data: dict, _admin: dict = Depends(require_admin)):
     """Cambia la contraseña de un admin existente. Solo admins de la misma organización."""
-    username = (data.get("username") or "").strip()
+    username = _texto_cuerpo(data.get("username"))
     new_password = data.get("password") or ""
     if not username or len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Usuario y contraseña (mín. 6 caracteres) requeridos")
@@ -10775,7 +10806,7 @@ async def missed_damage(inspection_id: str, data: dict, user: dict = Depends(get
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Solo administradores")
     box = data.get("box_2d")
-    part = (data.get("part") or "").strip()[:80]
+    part = _texto_cuerpo(data.get("part"))[:80]
     if not part:
         raise HTTPException(status_code=400, detail="Indica la pieza (ej: tulipa trasera)")
     if not (isinstance(box, list) and len(box) == 4):
@@ -10796,7 +10827,7 @@ async def missed_damage(inspection_id: str, data: dict, user: dict = Depends(get
         "damage": {
             "part": part,
             "severity": data.get("severity") or "leve",
-            "description": (data.get("description") or "").strip()[:300],
+            "description": _texto_cuerpo(data.get("description"))[:300],
             "box_2d": [int(b) for b in box],
             "photo_index": photo_index,
         },
@@ -13392,7 +13423,7 @@ async def push_subscribe(data: dict, user: dict = Depends(require_any_auth)):
 
 @api_router.post("/push/unsubscribe")
 async def push_unsubscribe(data: dict, user: dict = Depends(require_any_auth)):
-    ep = (data.get("endpoint") or "").strip()
+    ep = _texto_cuerpo(data.get("endpoint"))
     if ep:
         await global_db.push_subscriptions.delete_one({"endpoint": ep})
     return {"ok": True}
@@ -13499,7 +13530,7 @@ async def chat_post(center: str, data: dict = Body(...), user: dict = Depends(re
     await _require_plan_feature(user, "chat")
     if not await _chat_room_can_access(user, center):
         raise HTTPException(403, "No tienes acceso a este chat")
-    text = (data.get("text") or "").strip()
+    text = _texto_cuerpo(data.get("text"))
     if not text:
         raise HTTPException(400, "Mensaje vacío")
     if len(text) > 2000:
@@ -19719,7 +19750,7 @@ async def partner_crear_token(data: dict = Body(...), user: dict = Depends(requi
     if not nombre:
         raise HTTPException(400, "Dile de quién es la llave (por ejemplo, «Amazon Logistics»)")
     scopes = [s for s in (data.get("scopes") or ["flota"]) if s in PARTNER_SCOPES] or ["flota"]
-    dias = max(1, min(int(data.get("dias") or PARTNER_DIAS_DEF), 1095))
+    dias = _entero(data.get("dias"), "dias", defecto=PARTNER_DIAS_DEF, minimo=1, maximo=1095)
     centro = str(data.get("center") or "").strip()
 
     crudo = "fd_" + secrets.token_urlsafe(32)
@@ -23138,7 +23169,7 @@ async def get_mery_stickers(_=Depends(require_admin)):
 
 @api_router.put("/mery/stickers")
 async def set_mery_sticker(data: dict, _=Depends(require_admin)):
-    key = (data.get("key") or "").strip()[:120].replace(".", "_").replace("$", "_")
+    key = _texto_cuerpo(data.get("key"))[:120].replace(".", "_").replace("$", "_")
     value = data.get("value")
     if not key:
         raise HTTPException(status_code=400, detail="key requerida")
@@ -24394,8 +24425,9 @@ async def drivers_sin_centro_aplicar(body: dict = Body(default={}),
     bastaria con mandar el centro que a uno le apeteciera para saltarse la regla
     de «una sola nave». Del cuerpo solo se admite a QUIENES aplicar.
     """
-    solo = set(str(x) for x in (body.get("conductores") or []) if x)
-    dias = int(body.get("dias") or 60)
+    _quienes = body.get("conductores")
+    solo = set(str(x) for x in _quienes if x) if isinstance(_quienes, list) else set()
+    dias = _entero(body.get("dias"), "dias", defecto=60, minimo=1, maximo=180)
     antes = await _drivers_sin_centro(dias)
     aplicables = [x for x in antes["sin_centro"]
                   if x["sugerencia"] and (not solo or x["id"] in solo)]
@@ -26411,18 +26443,18 @@ async def list_rentals(center: Optional[str] = None, _=Depends(require_admin)):
 @api_router.post("/rentals")
 async def create_rental(data: dict, _=Depends(require_admin)):
     """Añade una empresa de alquiler manualmente."""
-    name = (data.get("name") or "").strip()
-    center = (data.get("center") or "").strip()
+    name = _texto_cuerpo(data.get("name"))
+    center = _texto_cuerpo(data.get("center"))
     if not name or center not in ("OGA5", "DGA1", "DGA2"):
         raise HTTPException(status_code=400, detail="Nombre y centro (OGA5/DGA1/DGA2) requeridos")
     doc = {
         "id": str(uuid.uuid4()),
         "name": name, "center": center,
-        "address": (data.get("address") or "").strip(),
+        "address": _texto_cuerpo(data.get("address")),
         "phone": re.sub(r"[^0-9+]", "", data.get("phone") or ""),
-        "email": (data.get("email") or "").strip(),
-        "website": (data.get("website") or "").strip(),
-        "notes": (data.get("notes") or "").strip(),
+        "email": _texto_cuerpo(data.get("email")),
+        "website": _texto_cuerpo(data.get("website")),
+        "notes": _texto_cuerpo(data.get("notes")),
         "maps_url": "https://www.google.com/maps/search/?api=1&query=" + ((data.get("address") or name).replace(" ", "+")),
         "active": True, "last_check": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -26456,7 +26488,7 @@ async def verify_rental_availability(rental_id: str, data: dict, user: dict = De
         "date": datetime.now(timezone.utc).isoformat(),
         "by": user.get("name", "?"),
         "available": data.get("available"),          # nº de furgonetas o texto
-        "note": (data.get("note") or "").strip()[:200],
+        "note": _texto_cuerpo(data.get("note"))[:200],
     }
     result = await db.rental_companies.update_one(
         {"id": rental_id}, {"$set": {"last_check": check}}
@@ -27681,7 +27713,7 @@ async def create_shift_request(data: dict = Body(...), user: dict = Depends(requ
         "driver_id": did, "driver_name": drv.get("name", ""),
         "date": d, "type": typ, "status": "pendiente",
         "motivo": motivo, "motivo_label": MOTIVOS_PETICION[motivo],
-        "note": (data.get("note") or "").strip()[:300],
+        "note": _texto_cuerpo(data.get("note"))[:300],
         "created_at": ahora, "resolved_by": None, "resolved_at": None,
     } for d in nuevas]
     await db.shift_requests.insert_many([dict(f) for f in filas])
@@ -27805,7 +27837,7 @@ async def resolve_shift_request(req_id: str, data: dict = Body(...),
     if not _puede(admin, "aprobar-dias"):
         raise HTTPException(status_code=403,
                             detail="No tienes permiso para aprobar o rechazar días")
-    motivo = (data.get("motivo") or "").strip()[:300]
+    motivo = _texto_cuerpo(data.get("motivo"))[:300]
     if action == "rechazar" and len(motivo) < 3:
         raise HTTPException(status_code=400,
                             detail="Para rechazar hay que escribir el motivo: lo va a leer el conductor")
@@ -27981,8 +28013,8 @@ async def import_shifts_pegado(data: dict = Body(...), _=Depends(require_admin))
     hasta el día 23 — así que no se exige el mes entero. Lo que no se admite es
     pasarse de los días que tiene el mes.
     """
-    center = (data.get("center") or "").strip()
-    mes = (data.get("mes") or "").strip()
+    center = _texto_cuerpo(data.get("center"))
+    mes = _texto_cuerpo(data.get("mes"))
     confirmar = bool(data.get("confirmar"))
     if not center:
         raise HTTPException(400, "Falta el centro")
@@ -29167,7 +29199,7 @@ async def vincular_transporter_ids(data: dict = Body(...), user: dict = Depends(
     # EL CENTRO ACOTA. Estando en DGA1 no tiene sentido proponer las parejas de
     # OGA5: son gente de otro centro y sus DNR se cuentan aparte. Antes se
     # recorria el historial entero y salian nombres de todas partes.
-    centro = (data.get("center") or "").strip()
+    centro = _texto_cuerpo(data.get("center"))
     if centro and centro.lower() != "todos" and not _user_can_see_center(user, centro):
         raise HTTPException(403, "No tienes acceso a ese centro")
     filtro_centro = {}
@@ -29268,7 +29300,7 @@ async def vincular_transporter_ids(data: dict = Body(...), user: dict = Depends(
 
 async def _dia_vincula(pares, mal, no_parecen, formato, data, user):
     """Empareja los pares ya leidos con las fichas y, si se confirma, los guarda."""
-    centro = (data.get("center") or "").strip()
+    centro = _texto_cuerpo(data.get("center"))
     filtro_centro = {}
     if centro and centro.lower() != "todos":
         filtro_centro = {"center": {"$regex": re.escape(centro), "$options": "i"}}
@@ -29698,7 +29730,7 @@ async def set_route_demand(data: dict = Body(...), user: dict = Depends(require_
     generador exige que haya objetivo para funcionar, así que confundirlos
     haría que generase un cuadrante vacío creyendo que ese día no se trabaja.
     """
-    center = (data.get("center") or "").strip()
+    center = _texto_cuerpo(data.get("center"))
     if not center:
         raise HTTPException(400, "Falta el centro")
     if not _user_can_see_center(user, center):
@@ -30274,7 +30306,7 @@ async def _guardar_standings(data: dict, center: str) -> int:
     seria condenar a las dos copias a separarse: la de arriba se arreglaria y
     esta no, y nadie lo notaria porque las dos responden 200.
     """
-    semana = (data.get("semana") or "").strip()[:80]
+    semana = _texto_cuerpo(data.get("semana"))[:80]
     conductores = data.get("conductores") or []
     if not semana or not conductores:
         return 0
@@ -33693,8 +33725,8 @@ def _plantilla_validar_filas(rows: list, conductores: list, matriculas: dict, ru
 async def plantilla_validar(data: dict = Body(...), user: dict = Depends(require_admin)):
     """Avisos de la plantilla contra la empresa y contra Cortex, con sugerencia."""
     rows = data.get("rows") or []
-    center = (data.get("center") or "").strip()
-    fecha = (data.get("date") or "").strip()
+    center = _texto_cuerpo(data.get("center"))
+    fecha = _texto_cuerpo(data.get("date"))
     # dd/mm/aaaa -> aaaa-mm-dd, que es como Cortex guarda el dia.
     dia = fecha
     m = re.match(r"^(\d{2})/(\d{2})/(\d{4})$", fecha)
@@ -36047,7 +36079,7 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
     # Excepciones que Amazon ya reporto esta semana (de la hoja "Drivers With
     # Working Hour Exceptions"). Si no se dan, se asume 0 y el WHC sale al 100 %.
     try:
-        excepciones = max(0, int(data.get("excepciones") or 0))
+        excepciones = _entero(data.get("excepciones"), "excepciones", defecto=0, minimo=0)
     except (TypeError, ValueError):
         excepciones = 0
 
@@ -36578,7 +36610,7 @@ async def cortex_portal_nota(data: dict = Body(...), user: dict = Depends(requir
     celdas = [str(c).strip() for c in celdas if c and re.match(r"^-?\d+:-?\d+$", str(c).strip())]
     if not celdas:
         raise HTTPException(400, "Celda no valida")
-    nota = (data.get("nota") or "").strip()[:600]
+    nota = _texto_cuerpo(data.get("nota"))[:600]
     if not nota:
         # Borrar la nota NO puede llevarse por delante lo que calculó el mapa,
         # que vive en el mismo documento y lo puso otra acción distinta. Son DOS

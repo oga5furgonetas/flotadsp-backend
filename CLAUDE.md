@@ -1033,6 +1033,39 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `ast` (gotcha 40) y probados reintroduciendo el fallo.
 
 
+61. **Un cuerpo vacio no prueba nada: lo que rompe es el campo con el TIPO
+   cambiado.** El barrido del 02-09 mando `{}` a las 175 mutaciones y salio casi
+   limpio, y eso dejo la impresion de que estaban validadas. No lo estaban.
+   `(data.get("x") or "").strip()` es correcto mientras llegue texto y **un 500
+   en cuanto no lo es**, porque una lista no tiene `.strip()`.
+   Medido el 05-09-2026 contra staging: **43 de las 216 mutaciones devolvian
+   «Error interno del servidor»**, dos de ellas PUBLICAS —`/auth/lead` y
+   `/auth/forgot-password`, o sea al alcance de cualquiera con curl—. Y un 500
+   no es solo un codigo feo: dispara la alerta de Telegram por un dato mal
+   escrito, que es exactamente lo que `_entero` vino a evitar para los numeros.
+   **Y ojo con como se mide.** La primera version del barrido mandaba diez
+   nombres de campo fijos y encontro 11: solo los que casualmente usan esos
+   nombres. Sacando los campos del CODIGO de cada endpoint salieron 43. Un
+   barrido que lleva la lista dentro mide su lista, no el sistema.
+   `_texto_cuerpo` sustituye a esa lectura y **es seguro por construccion**:
+   para todo valor con el que la forma vieja no reventaba devuelve exactamente
+   lo mismo (None, "", 0, listas vacias -> ""; texto -> recortado igual), asi
+   que reescribir 37 sitios de golpe no puede cambiar ningun comportamiento con
+   datos buenos. Es el mismo argumento que el gotcha 51. Probado en
+   `test_texto_cuerpo.py` comparando las dos formas valor a valor.
+   Detalle que muerde: `isinstance(True, int)` es cierto en Python, asi que sin
+   una guarda explicita un booleano se colaria como el texto 'True' y se
+   guardaria un centro llamado True.
+   Y al reescribir con expresion regular, `(?<![\w)])` no es adorno: sin el, el
+   parentesis que casa puede ser el de `str(...)` y salen 40 `str_texto_cuerpo`
+   — nombres inexistentes que `py_compile` NO ve porque son sintacticamente
+   validos. Los caza `pyflakes` (gotcha 19), que por eso se pasa siempre.
+   Quedan **30**, ninguna publica, y fallan dentro de helpers o iterando algo
+   que no es una lista: `backend/scripts/smoke_cuerpos_raros.py` las lista y
+   lleva trinquete en 30, asi que un endpoint nuevo que lea el cuerpo a pelo se
+   nota el mismo dia.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
