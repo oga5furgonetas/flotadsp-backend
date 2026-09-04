@@ -317,7 +317,8 @@ function SaludFichas({ onCambio }) {
     try {
       const { data } = await crearFichaDeTransporterId(x.transporter_id, {
         nombre: x.nombre_cortex, telefono: x.telefono_cortex, centro: x.centro })
-      setHecho(`Ficha creada: ${data.nombre}${data.centro ? ` · ${data.centro}` : ''}`)
+      setHecho(`Ficha creada: ${data.nombre}${data.centro ? ` · ${data.centro}` : ''}`
+        + (data.aviso ? ` — ${data.aviso}` : ''))
       cargar(); onCambio?.()
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se ha podido crear la ficha.')
@@ -432,6 +433,16 @@ function SaludFichas({ onCambio }) {
                   <span className="flex items-center gap-1.5">
                     <b className="text-[13.5px] text-dark-100">{x.nombre_cortex}</b>
                     <span className="font-mono text-[11px] text-dark-500">{x.transporter_id}</span>
+                    {/* Cortex da a veces el mismo numero a dos personas (visto el
+                        04-09-2026). Una ficha con el telefono de otro parece
+                        completa y acaba en una llamada a quien no es, asi que se
+                        avisa y el alta de un clic lo deja en blanco. */}
+                    {x.telefono_repetido && (
+                      <span title="Cortex da este telefono a mas de una persona: la ficha se creara sin el"
+                        className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+                        teléfono dudoso
+                      </span>
+                    )}
                   </span>
                 ) : (
                   <span className="font-mono text-[12.5px] font-semibold text-dark-100">{x.transporter_id}</span>
@@ -941,7 +952,19 @@ function TablaConductores({ list, accounts, onAbrir, t }) {
                   <td className="max-w-[220px] truncate px-2 py-1 font-medium text-dark-100">{d.name}</td>
                   <td className="px-2 py-1 text-dark-400">{d.center || '—'}</td>
                   <td className="max-w-[150px] truncate px-2 py-1 text-dark-500">{d.alojamiento || '—'}</td>
-                  <td className="cifra px-2 py-1 text-dark-400">{d.phone || '—'}{d.phone && d.telefono_por === 'cortex' && <span className="ml-1 text-[10px] font-normal text-dark-500" title={t('drv.telDeCortex')}>Cortex</span>}</td>
+                  <td className="cifra px-2 py-1 text-dark-400">
+                    {d.phone || '—'}
+                    {d.phone && d.telefono_por === 'cortex' && <span className="ml-1 text-[10px] font-normal text-dark-500" title={t('drv.telDeCortex')}>Cortex</span>}
+                    {/* Cortex da ese numero a mas de una persona. No se borra
+                        —puede que compartan movil de verdad— pero se avisa aqui,
+                        que es donde se mira justo antes de llamar. */}
+                    {d.telefono_dudoso && (
+                      <span className="ml-1 rounded bg-amber-500/15 px-1 py-px text-[10px] font-semibold text-amber-300"
+                        title="Cortex da este telefono a mas de una persona. Comprueba cual es el suyo y escribelo a mano.">
+                        ?
+                      </span>
+                    )}
+                  </td>
                   <td className="max-w-[210px] truncate px-2 py-1 text-dark-500">{d.email || '—'}</td>
                   <td className="whitespace-nowrap px-2 py-1">
                     {cc ? <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${cc}`}>{cl}</span>
@@ -983,6 +1006,10 @@ export default function Conductores() {
     try {
       const { data } = await telefonosDesdeCortex()
       const lineas = [t('drv.telCortexOk').replace('{n}', data.rellenados)]
+      if (data.dudosos?.length) {
+        lineas.push('', `${data.dudosos.length} con un teléfono que Cortex da a más de una persona (no se ha puesto):`)
+        lineas.push(...data.dudosos.slice(0, 12).map((d) => `· ${d.name}: ${d.cortex} — también de ${(d.tambien_de || []).join(', ') || '?'}`))
+      }
       if (data.distintos?.length) {
         lineas.push(t('drv.telCortexDistintos').replace('{n}', data.distintos.length))
         lineas.push(...data.distintos.slice(0, 12).map((d) => `· ${d.name}: ${d.app} / Cortex ${d.cortex}`))

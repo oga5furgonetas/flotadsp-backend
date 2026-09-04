@@ -25,7 +25,7 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUTA = os.path.join(RAIZ, "server.py")
 
 FUNCS = ("_cx_ruta_cajon", "_apoyo_textos", "_apoyo_url", "enlace_wa", "_apoyo_minutos_desde",
-         "_apoyo_fundir_gente",
+         "_apoyo_fundir_gente", "_apoyo_marcar_repetidos",
          "_apoyo_posicion_de", "_apoyo_estados_en_calle",
          "_apoyo_telefono", "_telefono_limpio", "_telefono_digitos", "_apoyo_todas_hechas")
 CONSTS = ("_CX_OK", "_CX_EN_VUELO", "_CX_NO_DESPACHADO", "_CX_REINTENTABLE", "_APOYO_CAJONES_PENDIENTES",
@@ -280,6 +280,43 @@ def test_el_backend_marca_el_reintento_con_el_cajon_no_con_el_literal():
     cuerpo = fuente[i:i + 4000]
     assert 'x["reintento"] = True' in cuerpo, "la parada ya no marca el reintento"
     assert '_cx_ruta_cajon(p.get("state")) == "attempted"' in cuerpo,         "el reintento se ha vuelto a decidir con un estado escrito a mano"
+
+
+
+# ── Un telefono que Cortex da a DOS personas ──────────────────────────────
+# Encontrado el 04-09-2026 probando el alta de un clic: Cortex daba el mismo
+# +34...316 para JOSE ANTONIO PORTO MATO y para Karim Errifai Haddaoui, con dos
+# transporterId distintos y en dos dias distintos. No es un fallo de lectura, es
+# un dato sucio de Cortex — pero una ficha con el telefono de otro parece
+# completa y acaba en una llamada a quien no es, que es justo el fallo que se
+# venia arrastrando.
+# Probado reintroduciendo el fallo: sin `_apoyo_marcar_repetidos`, ninguno queda
+# marcado y `test_dos_personas_con_el_mismo_telefono` falla.
+
+def test_dos_personas_con_el_mismo_telefono():
+    mapa = {"A1": {"nombre": "ANA", "telefono": "+34600111222"},
+            "A2": {"nombre": "BEA", "telefono": "600111222"}}
+    NS["_apoyo_marcar_repetidos"](mapa)
+    assert mapa["A1"]["telefono_repetido"] is True
+    assert mapa["A2"]["telefono_repetido"] is True, "el prefijo no puede esconder que es el mismo"
+
+
+def test_un_telefono_de_una_sola_persona_no_se_marca():
+    mapa = {"A1": {"nombre": "ANA", "telefono": "600111222"},
+            "A2": {"nombre": "BEA", "telefono": "600333444"}}
+    NS["_apoyo_marcar_repetidos"](mapa)
+    assert mapa["A1"]["telefono_repetido"] is False
+    assert mapa["A2"]["telefono_repetido"] is False
+
+
+def test_sin_telefono_no_cuenta_como_repetido():
+    # Dos vacios no son «el mismo numero»: marcarlos seria un aviso en falso, y
+    # un aviso en falso se deja de mirar.
+    mapa = {"A1": {"nombre": "ANA", "telefono": ""},
+            "A2": {"nombre": "BEA", "telefono": ""}}
+    NS["_apoyo_marcar_repetidos"](mapa)
+    assert mapa["A1"]["telefono_repetido"] is False
+    assert mapa["A2"]["telefono_repetido"] is False
 
 
 def main() -> int:

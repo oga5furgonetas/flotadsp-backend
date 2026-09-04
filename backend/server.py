@@ -351,6 +351,9 @@ class Driver(BaseModel):
     phone: Optional[str] = None
     telefono_por: Optional[str] = None   # quien lo puso: oficina | portal | cortex
     telefono_en: Optional[str] = None
+    # Cortex da ese numero a mas de una persona: no se borra —puede que sea
+    # correcto y compartan movil— pero se avisa (04-09-2026: 15 fichas asi).
+    telefono_dudoso: Optional[bool] = None
     email: Optional[str] = None
     license_number: Optional[str] = None
     login: Optional[str] = None        # login del conductor
@@ -8194,27 +8197,66 @@ async def _telefonos_desde_cortex() -> dict:
     `$unset` de `phone` donde `telefono_por == "cortex"`.
     """
     mapa: dict = {}
+    nombres: dict = {}
     async for r in db.cortex_resumen.find({}, {"gente": 1, "dia": 1}).sort("dia", -1):
         for p in r.get("gente") or []:
             tid, tel = p.get("transporterId"), _telefono_limpio(p.get("telefono"))
             if tid and tel and tid not in mapa:
                 mapa[tid] = tel
+                nombres[tid] = (p.get("nombre") or "").strip()
     if not mapa:
-        return {"rellenados": 0, "distintos": [], "cortex": 0}
-    rellenados, distintos = 0, []
+        return {"rellenados": 0, "distintos": [], "dudosos": [], "cortex": 0}
+
+    # UN NUMERO QUE CORTEX DA A DOS PERSONAS NO SE RELLENA SOLO. Medido el
+    # 04-09-2026: 20 numeros compartidos entre 43 transporterIds, y 15
+    # conductores activos ya tenian el telefono de otro puesto automaticamente.
+    # Llamar a quien no es, con un dato que parece bueno, es exactamente el
+    # fallo que se venia arrastrando. No se adivina cual de los dos es el
+    # correcto: se deja sin poner y se dice.
+    de_quien: dict = {}
+    for tid, tel in mapa.items():
+        de_quien.setdefault(_telefono_digitos(tel)[-9:], []).append(tid)
+    compartido = {k for k, v in de_quien.items() if len(v) > 1}
+
+    rellenados, distintos, dudosos = 0, [], []
     ahora = datetime.now(timezone.utc).isoformat()
     cur = db.drivers.find({"active": True, "transporter_id": {"$in": list(mapa)}},
-                          {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1})
+                          {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1,
+                           "telefono_por": 1, "telefono_dudoso": 1})
     async for d in cur:
         tel = mapa[d["transporter_id"]]
         actual = str(d.get("phone") or "").strip()
+        repe = _telefono_digitos(tel)[-9:] in compartido
+        otros = [nombres.get(x) or x for x in de_quien.get(_telefono_digitos(tel)[-9:], [])
+                 if x != d["transporter_id"]]
         if not actual:
+            if repe:
+                dudosos.append({"id": d["id"], "name": d.get("name"), "cortex": tel,
+                                "tambien_de": otros[:3], "puesto": False})
+                continue                      # mejor sin telefono que con el de otro
             await db.drivers.update_one({"id": d["id"]}, {"$set": {
                 "phone": tel, "telefono_por": "cortex", "telefono_en": ahora}})
             rellenados += 1
         elif _telefono_digitos(actual) != _telefono_digitos(tel):
             distintos.append({"id": d["id"], "name": d.get("name"), "app": actual, "cortex": tel})
-    return {"rellenados": rellenados, "distintos": distintos, "cortex": len(mapa)}
+        # LOS QUE YA LO TIENEN PUESTO POR NOSOTROS Y RESULTA SER COMPARTIDO se
+        # MARCAN, no se borran: puede que alguno sea correcto —dos personas que
+        # comparten movil de verdad— y borrarlo seria decidir por la oficina
+        # sobre un dato que no es nuestro. Se marca y ella lo mira.
+        marca = bool(repe and d.get("telefono_por") == "cortex"
+                     and _telefono_digitos(actual) == _telefono_digitos(tel))
+        if marca and not d.get("telefono_dudoso"):
+            await db.drivers.update_one({"id": d["id"]}, {"$set": {"telefono_dudoso": True}})
+            dudosos.append({"id": d["id"], "name": d.get("name"), "cortex": tel,
+                            "tambien_de": otros[:3], "puesto": True})
+        elif marca:
+            dudosos.append({"id": d["id"], "name": d.get("name"), "cortex": tel,
+                            "tambien_de": otros[:3], "puesto": True})
+        elif d.get("telefono_dudoso") and not repe:
+            # Dejo de estar compartido (lo corrigieron en Cortex): fuera la marca.
+            await db.drivers.update_one({"id": d["id"]}, {"$unset": {"telefono_dudoso": ""}})
+    return {"rellenados": rellenados, "distintos": distintos, "dudosos": dudosos,
+            "cortex": len(mapa)}
 
 
 @api_router.post("/drivers/telefonos-desde-cortex")
@@ -9582,6 +9624,10 @@ async def update_driver(driver_id: str, data: dict, _=Depends(require_admin)):
         # Sin esto en la whitelist, el campo se descartaria en silencio al
         # guardar y la casilla del panel no haria nada (gotcha 1).
         "whatsapp_opt_in",
+        # Se pone solo cuando Cortex da ese numero a dos personas; la oficina lo
+        # quita al poner el bueno. Sin esto en la whitelist, quitarlo desde el
+        # panel no haria nada y el aviso se quedaria puesto para siempre.
+        "telefono_dudoso",
     }
     data = {k: v for k, v in data.items() if k in _DRIVER_ALLOWED}
 
@@ -9611,6 +9657,12 @@ async def update_driver(driver_id: str, data: dict, _=Depends(require_admin)):
             # Y si estaba como etiqueta suelta, sobra: manda la ficha.
             await db.app_meta.update_one({"_id": "transporter_alias"},
                                          {"$unset": {f"mapa.{tid}": ""}})
+
+    # Un telefono escrito a mano manda: la marca de «dudoso» era sobre el que
+    # habiamos puesto nosotros desde Cortex, no sobre este.
+    if "phone" in data and str(data.get("phone") or "").strip():
+        data["telefono_por"] = "oficina"
+        data["telefono_dudoso"] = False
 
     cambio = {}
     if data:
@@ -17628,6 +17680,30 @@ async def _apoyo_gente_cortex(dia: str) -> dict:
         previos = await db.cortex_resumen.find(
             {"dia": ultimo["dia"]}, {"_id": 0, "gente": 1}).to_list(20)
         _apoyo_fundir_gente(mapa, previos, False)
+    _apoyo_marcar_repetidos(mapa)
+    return mapa
+
+
+def _apoyo_marcar_repetidos(mapa: dict) -> dict:
+    """Marca los telefonos que Cortex da a MAS DE UNA persona.
+
+    Encontrado el 04-09-2026: Cortex daba el mismo `+34...316` para JOSE ANTONIO
+    PORTO MATO y para Karim Errifai Haddaoui, con dos transporterId distintos y
+    en dos dias distintos. No es un fallo de lectura, es un dato sucio —alguien
+    lo tecleo mal alli, o comparten movil—, pero llamar a la persona equivocada
+    es justo el fallo que se venia arrastrando.
+
+    No se decide cual es el bueno ni se borra ninguno: adivinar aqui es como no
+    tener el dato pero creyendo que se tiene. Se marca y quien llama lo ve.
+    """
+    cuenta: dict = {}
+    for tid, p in (mapa or {}).items():
+        tel = _telefono_digitos(p.get("telefono") or "")[-9:]
+        if tel:
+            cuenta.setdefault(tel, set()).add(tid)
+    for tid, p in (mapa or {}).items():
+        tel = _telefono_digitos(p.get("telefono") or "")[-9:]
+        p["telefono_repetido"] = bool(tel and len(cuenta.get(tel, ())) > 1)
     return mapa
 
 
@@ -24153,6 +24229,9 @@ async def transporter_ids_sin_ficha(dias: int = 30, _=Depends(require_admin)):
                 cx[tid] = {"nombre": (p.get("nombre") or "").strip(),
                            "telefono": _telefono_limpio(p.get("telefono")),
                            "visto": doc.get("dia")}
+    # Un numero que Cortex da a dos personas distintas no se puede usar a
+    # ciegas: se marca para que no se ponga en una ficha sin mirarlo.
+    _apoyo_marcar_repetidos(cx)
 
     fuera = []
     for t, v in vistos.items():
@@ -24162,6 +24241,7 @@ async def transporter_ids_sin_ficha(dias: int = 30, _=Depends(require_admin)):
             "transporter_id": t,
             "nombre_cortex": quien.get("nombre") or "",
             "telefono_cortex": quien.get("telefono") or "",
+            "telefono_repetido": bool(quien.get("telefono_repetido")),
             "nombre_visto": quien.get("visto"),
             "paquetes": v["paquetes"],
             "dias": len(v["dias"]),
@@ -24214,6 +24294,16 @@ async def transporter_id_crear_ficha(tid: str, body: dict = Body(default={}),
     nombre = _empleo_texto(body.get("nombre"), 120)
     telefono = _telefono_limpio(body.get("telefono"))
     centro = _centro_norm(body.get("centro") or "")
+    # UN TELEFONO QUE CORTEX DA A DOS PERSONAS NO ENTRA EN LA FICHA. Una ficha
+    # sin telefono se ve y se arregla; una con el de otro parece completa y
+    # acaba en una llamada a quien no es. Se avisa en la respuesta.
+    aviso = ""
+    if telefono:
+        gente = await _apoyo_gente_cortex(_apoyo_hoy())
+        if (gente.get(tid) or {}).get("telefono_repetido"):
+            aviso = ("Cortex da ese telefono a mas de una persona, asi que la ficha "
+                     "se ha creado SIN telefono. Compruebalo y ponlo a mano.")
+            telefono = ""
     if not nombre:
         # Si el panel no lo manda, se busca en Cortex: nunca se inventa.
         desde = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d")
@@ -24245,7 +24335,7 @@ async def transporter_id_crear_ficha(tid: str, body: dict = Body(default={}),
     await db.app_meta.update_one({"_id": "transporter_alias"},
                                  {"$unset": {"mapa.%s" % tid: ""}})
     return {"ok": True, "id": d.id, "nombre": d.name, "telefono": d.phone or "",
-            "centro": d.center or ""}
+            "centro": d.center or "", "aviso": aviso}
 
 
 @api_router.get("/transporter-ids/propuestas")

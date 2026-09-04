@@ -931,6 +931,31 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    devuelvas la version.
 
 
+57. **Cortex da el MISMO telefono a mas de una persona, y el relleno automatico
+   lo repartia.** `_telefonos_desde_cortex` rellena por `transporter_id` el
+   telefono de quien lo tiene vacio y corre SOLO en cada ingesta. Nadie habia
+   comprobado si un numero se repite: medido el 04-09-2026, **20 numeros
+   compartidos entre 43 transporterIds** y **15 conductores activos con el
+   telefono de otro**, puesto por nosotros y con toda la pinta de dato bueno.
+   Llamas a PABLO OTERO GENDRA y te coge MARCOS SUAREZ LORENZO. Es el fallo que
+   Dani lleva reportando desde el principio, entrando por otra puerta distinta
+   de la del gotcha 49.
+   Se encontro PROBANDO el boton de «crear ficha», no leyendo el codigo: al dar
+   de alta a JOSE ANTONIO PORTO MATO le puso el numero de Karim Errifai.
+   Reglas: un numero que Cortex da a dos personas **no se rellena solo** y sale
+   en `dudosos`; los que ya estaban puestos se **marcan** (`telefono_dudoso`) y
+   **no se borran** —puede que alguno sea correcto, dos que comparten movil— y
+   borrarlo seria decidir por la oficina sobre un dato que no es nuestro. El
+   panel lo enseña con un «?» al lado del telefono, que es donde se mira justo
+   antes de llamar, y escribir uno a mano quita la marca.
+   Y el campo hubo que meterlo en el modelo `Driver` **y** en `_DRIVER_ALLOWED`
+   (gotcha 1): sin las dos cosas, el aviso no habria salido del backend.
+   Probado reintroduciendo el fallo en `test_apoyo.py`.
+   Regla general: **antes de copiar un dato de una fuente a una ficha,
+   preguntarse si esa fuente puede dar el mismo valor a dos sujetos.** Un dato
+   copiado a quien no es no se nota nunca, porque parece completo.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
