@@ -1066,6 +1066,47 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    nota el mismo dia.
 
 
+62. **Ordenar por un numero y cortar por los N primeros deja la ultima fila en
+   manos del azar.** `/cortex/dsc` ordenaba a los conductores por `exceso` y se
+   quedaba con `[:40]`. Python ordena de forma ESTABLE, asi que dos empatados
+   quedan en el orden en que llegaron — y llegan de un `$group` de Mongo, cuyo
+   orden **no esta definido**. Medido el 05-09-2026 con `dias=30`: dos
+   peticiones seguidas con los MISMOS datos (total identico, 174.150 paquetes,
+   los 17 contextos iguales) devolvian una MARCKSON FELIPE y otra Borja
+   Salvado, los dos con exceso 10,5, justo en el puesto 40; y otros dos
+   empatados en 12,1 se intercambiaban de sitio.
+   No parece un fallo por pantalla: parece que el dato se ha movido. Y es una
+   tabla que sirve para hablar con una persona sobre su trabajo, asi que un
+   conductor que aparece y desaparece solo es exactamente el falso positivo que
+   no puede haber.
+   Regla: **toda lista que se ordene y se corte necesita un desempate
+   determinista**, y el ultimo criterio tiene que ser algo unico (el id). Aqui:
+   `(-exceso, -entregas, driver_id)` — a igual exceso manda quien mas mueve,
+   que es el dato mas solido, y el id cierra. Cinco casos en
+   `test_dsc_orden.py`, uno de ellos las 24 permutaciones de la misma entrada.
+   Salio buscando rendimiento, no correccion: al comparar la respuesta de antes
+   y la de despues de una optimizacion para probar que eran iguales. Sin esa
+   comparacion no se habria visto nunca.
+
+63. **Mil llamadas pequenas en fila son lentas aunque ninguna lo sea.**
+   `/admin/salud` pedia un `collStats` por CADA coleccion de CADA base, una
+   detras de otra: 46 dbStats + 46 listCollections + **1.290 collStats = 1.382
+   idas y vueltas** a Atlas. A ~7 ms cada una salen los **9,8 s** medidos
+   (mediana de tres tiradas, una de 22 s). No habia ninguna consulta lenta: la
+   arquitectura del endpoint era la lentitud. Con `asyncio.gather` y un
+   semaforo de 24 baja a **3,5 s (2,7x)**.
+   El semaforo no es adorno: sin tope se le mandan 1.382 comandos de golpe al
+   mismo pool de conexiones y se cambia un problema por otro — el resto del
+   backend dejaria de responder mientras tanto.
+   Y en la misma tanda, `/cortex/dsc` hacia DOS `aggregate` con el mismo
+   `$match` + `$filter` sobre el `timeline` de cada paquete: la etapa cara,
+   calculada dos veces sobre los mismos ~48.000 paquetes. Un `$facet` la calcula
+   una vez y agrupa dos: **2,2 s -> 1,1 s (2x)**, con la respuesta comprobada
+   campo a campo antes y despues.
+   Regla: antes de tocar una consulta, contar cuantas VECES se llama. El
+   `explain` de una consulta rapida no dice nada si se ejecuta mil veces.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

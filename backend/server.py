@@ -5469,33 +5469,53 @@ async def admin_salud(_: dict = Depends(require_superadmin)):
     except Exception as e:
         raise HTTPException(503, f"No se pudo consultar Mongo: {e}")
 
-    for nombre in nombres:
-        try:
-            st = await client[nombre].command("dbStats", scale=1024 * 1024)
-        except Exception:
-            continue
-        mb = round(float(st.get("dataSize") or 0), 1)
-        idx = round(float(st.get("indexSize") or 0), 1)
-        total_mb += mb + idx
+    # EN PARALELO, Y NO ES UN CAPRICHO. Esto pedia un `collStats` por CADA
+    # coleccion de CADA base, una detras de otra: medido el 05-09-2026 son 46
+    # dbStats + 46 listCollections + **1.290 collStats = 1.382 idas y vueltas**
+    # a Atlas en serie. A ~7 ms cada una salen los 9,8 s que tardaba (mediana de
+    # tres tiradas, con una de 22 s). No habia nada lento: habia mil llamadas
+    # puestas en fila.
+    # El semaforo no es adorno: sin tope se le mandan 1.382 comandos de golpe al
+    # mismo pool de conexiones y se pasa de un problema a otro. Con 24 sale una
+    # cola corta y el resto del backend sigue respondiendo mientras tanto.
+    _sem = asyncio.Semaphore(24)
 
+    async def _stats_col(nombre, col):
+        async with _sem:
+            try:
+                cs = await client[nombre].command("collStats", col, scale=1024 * 1024)
+            except Exception:
+                return None
+        return {"coleccion": col,
+                "mb": round(float(cs.get("size") or 0), 1),
+                "docs": int(cs.get("count") or 0)}
+
+    async def _stats_base(nombre):
+        async with _sem:
+            try:
+                st = await client[nombre].command("dbStats", scale=1024 * 1024)
+            except Exception:
+                return None
+            try:
+                cols = await client[nombre].list_collection_names()
+            except Exception:
+                cols = []
         # Las colecciones más pesadas de esa base, que es donde se mira primero.
-        gordas = []
-        try:
-            for col in await client[nombre].list_collection_names():
-                try:
-                    cs = await client[nombre].command("collStats", col, scale=1024 * 1024)
-                except Exception:
-                    continue
-                gordas.append({"coleccion": col,
-                               "mb": round(float(cs.get("size") or 0), 1),
-                               "docs": int(cs.get("count") or 0)})
-        except Exception:
-            pass
+        gordas = [g for g in await asyncio.gather(*[_stats_col(nombre, c) for c in cols]) if g]
         gordas.sort(key=lambda c: -c["mb"])
+        return {"base": nombre,
+                "datos_mb": round(float(st.get("dataSize") or 0), 1),
+                "indices_mb": round(float(st.get("indexSize") or 0), 1),
+                "colecciones": int(st.get("collections") or 0),
+                "top": gordas[:6]}
 
-        bases.append({"base": nombre, "datos_mb": mb, "indices_mb": idx,
-                      "colecciones": int(st.get("collections") or 0),
-                      "top": gordas[:6]})
+    # `gather` conserva el orden de `nombres`, asi que la respuesta sale igual
+    # que antes; una base que falle se salta, exactamente como hacia el `continue`.
+    for b in await asyncio.gather(*[_stats_base(n) for n in nombres]):
+        if not b:
+            continue
+        total_mb += b["datos_mb"] + b["indices_mb"]
+        bases.append(b)
 
     total_mb = round(total_mb, 1)
     libre_mb = round(LIMITE_ATLAS_MB - total_mb, 1)
@@ -35536,9 +35556,30 @@ async def cortex_dsc(dias: int = 7, _=Depends(require_admin)):
     # "AsyncIOMotorLatentCommandCursor object is not iterable".
     # El length va holgado y explicito: son ~20 contextos y ~120 conductores,
     # pero un to_list sin tope corta EN SILENCIO (ya paso con los backups).
-    reparto = await db.cortex_packages.aggregate(
-        base + [{"$group": {"_id": "$ctx", "n": {"$sum": 1}}}, {"$sort": {"n": -1}}],
-        maxTimeMS=25000).to_list(length=200)
+    # LAS DOS CUENTAS EN UNA PASADA. Antes eran dos `aggregate` con el MISMO
+    # `base`, y ese base no es barato: recorre el `timeline` de cada paquete con
+    # un `$filter` para sacar el ultimo DELIVERED. Hacerlo dos veces sobre los
+    # mismos ~40.000 paquetes de siete dias es trabajo tirado. Con `$facet` el
+    # flujo se calcula UNA vez y se agrupa dos, y el resultado es identico
+    # —comprobado campo a campo contra produccion antes y despues—.
+    # Cabe de sobra en los 16 MB de un `$facet`: son ~20 contextos y ~120
+    # conductores, no los paquetes.
+    _f = await db.cortex_packages.aggregate(base + [
+        {"$facet": {
+            "reparto": [{"$group": {"_id": "$ctx", "n": {"$sum": 1}}}, {"$sort": {"n": -1}}],
+            "crudo": [{"$group": {"_id": "$driver_id", "n": {"$sum": 1},
+                    "riesgo": {"$sum": {"$cond": [{"$in": ["$ctx", list(_DSC_RIESGO)]}, 1, 0]}},
+                    "mano": {"$sum": {"$cond": [{"$in": ["$ctx", list(_DSC_EN_MANO)]}, 1, 0]}},
+                    # Marcado como entregado pero con el evento crudo diciendo
+                    # lo contrario. Es una contradiccion del propio dato, no una
+                    # interpretacion mia: por eso se puede afirmar.
+                    "contradicciones": {"$sum": {"$cond": [{"$eq": ["$rw", "NOT_DELIVERED"]}, 1, 0]}}}}],
+        }},
+    ], maxTimeMS=25000).to_list(length=1)
+    _f = _f[0] if _f else {}
+    reparto = _f.get("reparto") or []
+    crudo = _f.get("crudo") or []
+
     total = sum(r["n"] for r in reparto)
     if not total:
         return {"dias": dias, "desde": desde, "total": 0, "reparto": [],
@@ -35546,16 +35587,6 @@ async def cortex_dsc(dias: int = 7, _=Depends(require_admin)):
 
     riesgo_tot = sum(r["n"] for r in reparto if r["_id"] in _DSC_RIESGO)
     tasa_flota = riesgo_tot / total
-
-    crudo = await db.cortex_packages.aggregate(base + [
-        {"$group": {"_id": "$driver_id", "n": {"$sum": 1},
-                    "riesgo": {"$sum": {"$cond": [{"$in": ["$ctx", list(_DSC_RIESGO)]}, 1, 0]}},
-                    "mano": {"$sum": {"$cond": [{"$in": ["$ctx", list(_DSC_EN_MANO)]}, 1, 0]}},
-                    # Marcado como entregado pero con el evento crudo diciendo
-                    # lo contrario. Es una contradiccion del propio dato, no una
-                    # interpretacion mia: por eso se puede afirmar.
-                    "contradicciones": {"$sum": {"$cond": [{"$eq": ["$rw", "NOT_DELIVERED"]}, 1, 0]}}}},
-    ], maxTimeMS=25000).to_list(length=2000)
 
     nombres = await _cx_nombres({r["_id"] for r in crudo if r.get("_id")})
     conductores = []
@@ -35590,7 +35621,18 @@ async def cortex_dsc(dias: int = 7, _=Depends(require_admin)):
             "contradicciones": r["contradicciones"],
             "muestra_corta": n < _DSC_MUESTRA_FIABLE,
         })
-    conductores.sort(key=lambda c: c["exceso"], reverse=True)
+    # EL DESEMPATE NO PUEDE SER EL AZAR. Ordenar solo por `exceso` y cortar por
+    # los 40 primeros deja la ultima fila en manos del orden en que Mongo
+    # devuelve un `$group`, que **no esta definido**. Medido en produccion el
+    # 05-09-2026 con dias=30: MARCKSON FELIPE y Borja Salvado empatan en 10,5
+    # justo en el corte, y entre dos peticiones con los MISMOS datos —total
+    # identico, 174.150— salia uno o el otro. Dos mas empataban en 12,1 y se
+    # intercambiaban de sitio. Por pantalla no parece un fallo: parece que el
+    # dato se ha movido, y eso en una tabla que sirve para hablar con una
+    # persona es peor que un error visible.
+    # Con el mismo exceso manda quien mas mueve —mas entregas, mas solido el
+    # dato— y el id cierra el desempate para que sea siempre el mismo.
+    conductores.sort(key=lambda c: (-c["exceso"], -c["entregas"], str(c["driver_id"] or "")))
 
     # ── Los que vuelven a la estacion, POR CAUSA ────────────────────────
     # El motor de calidad ya los cuenta, pero solo como "fallo". Sin la causa
