@@ -255,6 +255,33 @@ def test_sin_transporter_id_se_ignora():
     assert mapa == {}
 
 
+
+# ── El reintento lo decide el cajon canonico, no una lista a mano ──────────
+# La chincheta roja del mapa sale de `reintento`, que el backend calcula con
+# `_cx_ruta_cajon`. Llegue a mirarlo desde el JS con el literal "ATTEMPTED":
+# hoy acierta, pero el dia que entre otro estado reintentable el mapa dejaria
+# de pintarlo y nadie se enteraria (gotcha 28/40).
+
+def test_todo_estado_reintentable_cae_en_el_cajon_attempted():
+    cajon = NS["_cx_ruta_cajon"]
+    for s in NS["_CX_REINTENTABLE"]:
+        assert cajon(s) == "attempted", "%s no cae en attempted" % s
+
+
+def test_una_parada_reintentable_se_ofrece_como_pendiente():
+    # Si "attempted" saliera de los cajones pendientes, la parada que MAS urge
+    # —ya se intento y fallo— desapareceria de la pantalla de apoyo.
+    assert "attempted" in NS["_APOYO_CAJONES_PENDIENTES"]
+
+
+def test_el_backend_marca_el_reintento_con_el_cajon_no_con_el_literal():
+    fuente = io.open(RUTA, encoding="utf-8-sig").read()
+    i = fuente.index("async def _apoyo_paradas_pendientes")
+    cuerpo = fuente[i:i + 4000]
+    assert 'x["reintento"] = True' in cuerpo, "la parada ya no marca el reintento"
+    assert '_cx_ruta_cajon(p.get("state")) == "attempted"' in cuerpo,         "el reintento se ha vuelto a decidir con un estado escrito a mano"
+
+
 def main() -> int:
     fallos = 0
     for nombre, fn in sorted(globals().items()):

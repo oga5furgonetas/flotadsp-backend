@@ -834,6 +834,44 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
      de fuera devuelve el de hace dos segundos y restauraria una letra vieja.
 
 
+53. **Un respaldo que solo entra cuando NO hay NADA no cubre el caso normal,
+   que es que haya algo A MEDIAS.** `_apoyo_gente_cortex` cogia el resumen del
+   dia anterior solo si `cortex_resumen` no tenia NINGUN documento de hoy. Pero
+   el resumen de hoy se llena segun la extension va pasando por Cortex: a media
+   manana existe y trae cuatro personas. Medido el 04-09-2026 a las 11:00 — el
+   resumen del dia traia **2 personas** y en ruta habia **39**; de esas, 33
+   estaban en el resumen de ayer CON telefono y **16 con un numero DISTINTO al
+   de su ficha**. O sea 16 llamadas que acababan en otra persona, que es
+   exactamente el fallo que el gotcha 49 daba por arreglado: se arreglo la
+   lectura de VARIOS centros y se dejo sin arreglar la de un dia INCOMPLETO.
+   Se completa **por persona, no por dia**: quien esta en el resumen de hoy no
+   se toca (Cortex de hoy manda) y quien falta se rellena del dia anterior mas
+   cercano, marcado `del_dia: False` para que salga «sin corroborar». La fusion
+   vive aparte en `_apoyo_fundir_gente` justo para poder probarla sin base de
+   datos; 5 casos en `test_apoyo.py`, probados reintroduciendo el fallo.
+   Despues: 0 sin telefono (antes 8), 35 de Cortex (antes 2) y 10 avisando de
+   que la ficha dice otra cosa.
+   Regla general: un respaldo se decide **por el dato que falta**, no por si la
+   fuente entera esta vacia. «Vacio» casi nunca es el estado real: el estado
+   real es «a medias».
+
+54. **Un estado de Cortex escrito en el frontend es una copia que se queda
+   vieja sin avisar.** Al pintar los reintentos de otro color en el mapa de
+   apoyo puse en el JSX `(p.estados || []).includes('ATTEMPTED')`. Hoy acierta,
+   porque `_CX_REINTENTABLE` solo tiene ese estado — y por eso es peor: no falla
+   nada, no hay sintoma, y el dia que entre otro estado reintentable el mapa
+   dejaria de pintar en rojo las paradas que MAS urgen. Es el gotcha 28/40 otra
+   vez, esta vez a un lado del cable donde ni los tests de estados ni los
+   scripts miran. Ahora **la bandera la calcula el backend** (`reintento`, con
+   `_cx_ruta_cajon`) y el cliente solo la pinta. Lo vigila la regla
+   `estado-cortex-en-el-cliente` de `check-patrones.mjs`, probada
+   reintroduciendo el literal. Saco de paso el unico sitio mas que los nombra:
+   los botones de filtro de Paquetes IA, que NO clasifican —mandan el estado
+   tal cual al backend como `?state=`— y quedan anotados en REVISADOS.
+   Regla: el cliente pinta cajones y banderas; **quien reparte en cajones es
+   siempre el servidor**, que es donde viven las listas canonicas.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

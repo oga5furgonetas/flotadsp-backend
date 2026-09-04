@@ -58,6 +58,14 @@ const REVISADOS = new Map([
    'datos, asi que len(puntos) == len(datos) y ya se sabe que no es cero.'],
   ['scripts/conciliar_diarios.py:division-sin-guard',
    'Dentro de `if v:`. Y es un script de analisis que se lanza a mano, no codigo servido.'],
+  // ── ESTADOS DE CORTEX EN EL CLIENTE ───────────────────────────────────
+  ['frontend-v2/src/panel/pages/PackageIntel.jsx:estado-cortex-en-el-cliente',
+   'Mirado el 04-09-2026. No clasifica: son los botones de filtro y el valor viaja ' +
+   'tal cual al backend como `?state=`, una igualdad exacta, con el propio estado ' +
+   'escrito en la etiqueta del boton. Lo que el gotcha 28/40 prohibe es REPARTIR EN ' +
+   'CAJONES con una lista copiada —eso se queda viejo sin avisar—, y aqui no hay ' +
+   'cajon ninguno. Si algun dia se quiere filtrar por "reintentables", ese filtro lo ' +
+   'tiene que dar el backend.'],
   // ── FECHAS POR ISO ────────────────────────────────────────────────────
   // Los ocho revisados el 31-08-2026. Ninguno pinta un dato de nadie:
   ['frontend-v2/src/panel/pages/Scorecard.jsx:toisostring-fecha-local',
@@ -180,6 +188,16 @@ const PATRONES = [
     re: /https:\/\/wa\.me\//g,
     que: 'Enlace de WhatsApp construido a mano en el frontend',
     porque: 'Sin el prefijo del pais abre un numero que no existe. Usa el campo `wa` que devuelve el backend',
+  },
+  {
+    id: 'estado-cortex-en-el-cliente',
+    gotcha: 28,
+    // Solo el frontend: el backend SI tiene que nombrarlos, ahi viven las listas
+    // canonicas (`_CX_OK`, `_CX_REINTENTABLE`...) y `_cx_ruta_cajon`.
+    soloEn: /^frontend-v2\/src\//,
+    re: /'(ATTEMPTED|PICKED_UP|NOT_DELIVERED|BACK_TO_ORIGIN|PENDING_PICKUP|YOU_ARE_NEXT|UNCOLLECTED|NOT_READY|TR_CANCELLED|CUSTOMER_UNAVAILABLE|ADDRESS_NOT_FOUND)'/g,
+    que: 'Estado de Cortex escrito a mano en el frontend',
+    porque: 'Las listas canonicas viven en el backend y cambian: una copia en el cliente se queda vieja SIN AVISAR (gotcha 28/40). Que el backend mande el cajon o una bandera ya calculada',
   },
 ]
 

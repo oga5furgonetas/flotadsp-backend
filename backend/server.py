@@ -17694,12 +17694,21 @@ async def _apoyo_paradas_pendientes(driver_id: str, dia: str) -> dict:
         if not sid:
             continue
         x = paradas.setdefault(sid, {"stop_id": sid, "lat": None, "lng": None, "direccion": "",
-                                     "ubicacion": None, "n": 0, "tbas": [], "estados": []})
+                                     "ubicacion": None, "n": 0, "tbas": [], "estados": [],
+                                     "reintento": False})
         x["n"] += 1
         if p.get("tba"):
             x["tbas"].append(p["tba"])
         if p.get("state") and p["state"] not in x["estados"]:
             x["estados"].append(p["state"])
+        # QUIEN DECIDE QUE ES UN REINTENTO ES EL BACKEND, con el cajon canonico.
+        # La pantalla lo pinta de otro color y llegue a mirar el literal
+        # "ATTEMPTED" desde el JS: hoy acierta porque `_CX_REINTENTABLE` solo
+        # tiene ese, pero es una lista de estados escrita a mano en el cliente,
+        # que es justo el gotcha 28/40. El dia que entre otro estado
+        # reintentable, el mapa dejaria de pintarlo y nadie se enteraria.
+        if _cx_ruta_cajon(p.get("state")) == "attempted":
+            x["reintento"] = True
         # `lat/lng` del paquete es DONDE SE ESCANEO POR ULTIMA VEZ, no el destino:
         # medido el 02-09-2026, 191 de 200 PICKED_UP tenian la coordenada de la
         # nave. Solo vale cuando el escaneo fue en el destino (intento de

@@ -37,8 +37,11 @@ const NUM_ICON = (n, sel, hecha, reintento) => L.divIcon({
   iconSize: [26, 26], iconAnchor: [13, 13],
 })
 
-// Un reintento es una parada donde ya se intento entregar y no se pudo.
-const ES_REINTENTO = (p) => (p.estados || []).includes('ATTEMPTED')
+/* Un reintento es una parada donde ya se intento entregar y no se pudo. LO
+   DICE EL BACKEND (`reintento`), con el cajon canonico `_cx_ruta_cajon`: una
+   lista de estados de Cortex escrita a mano en el cliente se queda vieja sin
+   avisar, y aqui eso serian paradas urgentes pintadas como si no lo fueran. */
+const ES_REINTENTO = (p) => p.reintento === true
 
 function useMapa(ref, paradas, seleccion, onToggle, posicion, claveEncuadre) {
   const mapRef = useRef(null)
