@@ -797,6 +797,13 @@
           driver_name: drivers[tid] || soloDriver || null, driver_id: tid || null,
           stop_id: seq != null ? String(seq) : null,
           stop_address: addrStr,
+          /* EL IDENTIFICADOR DE LA DIRECCION. `route-details` lo trae en cada
+             tarea pero NO manda la direccion (comprobado en el esquema real que
+             captura esta misma extension: no hay `addresses` en la raiz, por eso
+             `addrs` sale vacio siempre). El informe `packagesByStatus` SI trae
+             la direccion con su `addressId`. Mandando el id, el backend cruza
+             las dos fuentes y una direccion vista UNA vez vale para siempre. */
+          address_id: task.addressId || stop.addressId || null,
           container_id: task.containerScannableId || null,
           state: task.taskState || task.executionStatus || null,
           raw_state: task.taskState || null,
@@ -950,13 +957,13 @@
       if (!schemaSent && isDetails && parsed) {
         try {
           schemaSent = true;
-          post({ kind: 'schema', which: 'details', url: url.slice(0, 120), schema: JSON.stringify(schemaOf(parsed, 0)).slice(0, 7000) });
+          post({ kind: 'schema', which: 'details', url: url.slice(0, 400), schema: JSON.stringify(schemaOf(parsed, 0)).slice(0, 7000) });
         } catch (_) {}
       }
       if (!schemaSummarySent && isSummary && parsed) {
         try {
           schemaSummarySent = true;
-          post({ kind: 'schema', which: 'summary', url: url.slice(0, 120), schema: JSON.stringify(schemaOf(parsed, 0)).slice(0, 7000) });
+          post({ kind: 'schema', which: 'summary', url: url.slice(0, 400), schema: JSON.stringify(schemaOf(parsed, 0)).slice(0, 7000) });
         } catch (_) {}
       }
       // Esquema del informe de faltas/motivos (una vez), para afinar su parser.
@@ -964,7 +971,10 @@
           && /missing|falta|reason|exception|report/i.test(url) && MARK.test(text)) {
         try {
           schemaReportSent = true;
-          post({ kind: 'schema', which: 'report', url: url.slice(0, 120), schema: JSON.stringify(schemaOf(parsed, 0)).slice(0, 7000) });
+          /* SIN CORTAR A 120: la URL del informe lleva al final los parametros
+             que dicen COMO se puede pedir, y cortarla los escondia justo cuando
+             hacian falta. Es una URL de API, no lleva datos de nadie. */
+          post({ kind: 'schema', which: 'report', url: url.slice(0, 400), schema: JSON.stringify(schemaOf(parsed, 0)).slice(0, 7000) });
         } catch (_) {}
       }
       // Diagnóstico: registra CADA respuesta relevante, aunque saque 0 paquetes.

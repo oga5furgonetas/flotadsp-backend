@@ -17697,8 +17697,10 @@ async def _apoyo_paradas_pendientes(driver_id: str, dia: str) -> dict:
     cur = db.cortex_packages.find(
         {"service_day": dia, "driver_id": driver_id},
         {"_id": 0, "stop_id": 1, "lat": 1, "lng": 1, "dest_lat": 1, "dest_lng": 1,
-         "stop_address": 1, "state": 1, "tba": 1, "seen_at": 1, "route_code": 1, "priority": 1})
+         "stop_address": 1, "state": 1, "tba": 1, "seen_at": 1, "route_code": 1,
+         "priority": 1, "address_id": 1})
     paradas: dict = {}
+    pendientes_sin_sitio: list = []      # (parada, address_id) a resolver despues
     ultima = None
     rutas: list = []
     async for p in cur:
@@ -17730,6 +17732,8 @@ async def _apoyo_paradas_pendientes(driver_id: str, dia: str) -> dict:
         # medido el 02-09-2026, 191 de 200 PICKED_UP tenian la coordenada de la
         # nave. Solo vale cuando el escaneo fue en el destino (intento de
         # entrega). Pintar la nave como parada mandaria al ayudante a la nave.
+        if p.get("address_id") and not x.get("address_id"):
+            x["address_id"] = p["address_id"]
         if x["lat"] is None and p.get("dest_lat") is not None and p.get("dest_lng") is not None:
             x["lat"], x["lng"], x["ubicacion"] = p["dest_lat"], p["dest_lng"], "cortex"
         elif (x["lat"] is None and _cx_ruta_cajon(p.get("state")) == "attempted"
@@ -17738,6 +17742,21 @@ async def _apoyo_paradas_pendientes(driver_id: str, dia: str) -> dict:
         if not x["direccion"] and p.get("stop_address"):
             x["direccion"] = p["stop_address"]
             x["ubicacion"] = x["ubicacion"] or "direccion"
+
+    # EL CATALOGO, PARA LAS QUE CORTEX NO UBICA HOY. Una direccion vista una
+    # sola vez —en el informe de otro dia, o de otra ruta— sirve para siempre:
+    # el reparto vuelve a los mismos portales. Solo se rellena lo que falta y se
+    # marca de donde sale, para no venderlo como dato de hoy.
+    faltan = [x for x in paradas.values() if x["lat"] is None and x.get("address_id")]
+    if faltan:
+        cat = await _cortex_direcciones_de([x["address_id"] for x in faltan])
+        for x in faltan:
+            d = cat.get(x["address_id"]) or {}
+            if isinstance(d.get("lat"), (int, float)) and isinstance(d.get("lng"), (int, float)):
+                x["lat"], x["lng"], x["ubicacion"] = d["lat"], d["lng"], "catalogo"
+            if not x["direccion"] and d.get("texto"):
+                x["direccion"] = d["texto"]
+                x["ubicacion"] = x["ubicacion"] or "direccion"
 
     def _orden(s):
         try:
@@ -18909,6 +18928,15 @@ async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request):
         raise HTTPException(400, "Escribe tu nombre y apellidos")
     if len(_telefono_digitos(telefono)) < 9:
         raise HTTPException(400, "Ese telefono no parece completo")
+    # EL DNI/NIE ES OBLIGATORIO: hace falta para el alta, y pedirlo despues por
+    # telefono es una llamada mas y una persona menos. Se comprueba la FORMA, no
+    # la letra: un NIE mal tecleado se corrige al llamar, pero rechazar uno bueno
+    # por una regla nuestra es perder a alguien que si valia.
+    dni = re.sub(r"[\s-]", "", _empleo_texto(datos.get("dni"), 20)).upper()
+    if not (re.match(r"^\d{8}[A-Z]$", dni) or re.match(r"^[XYZ]\d{7}[A-Z]$", dni)):
+        raise HTTPException(400, "Escribe tu DNI o NIE (por ejemplo 12345678A)")
+    if not _empleo_texto(datos.get("disponibilidad"), 120):
+        raise HTTPException(400, "Dinos cuando puedes empezar")
     if not datos.get("consiento"):
         raise HTTPException(400, "Hay que aceptar que guardemos tus datos para el proceso")
 
@@ -18933,7 +18961,7 @@ async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request):
         # El DNI es dato sensible: viaja en la lista blanca del panel y NO sale
         # en ninguna respuesta publica. Se guarda tal cual lo escriba: validar
         # la letra dejaria fuera a los NIE y a quien lo teclee con un guion.
-        "dni": _empleo_texto(datos.get("dni"), 20).upper(),
+        "dni": dni,
         # La FECHA y el numero. El numero envejece —una candidatura de hoy dice
         # 24 y dentro de ocho meses sigue diciendo 24— y la fecha no; se guardan
         # las dos porque la fecha es opcional y el numero puede venir sin ella.
@@ -34263,6 +34291,48 @@ def _cortex_evento_doc(ev: dict, tba: str) -> dict:
     return doc
 
 
+async def _cortex_guardar_direccion(obs: dict) -> None:
+    """Apunta {addressId -> lat, lng, texto} cuando una observacion las trae.
+
+    Que falle no puede tumbar la ingesta: lo peor que pasa es que una direccion
+    no se aprenda hoy y se aprenda mañana.
+    """
+    aid = str(obs.get("address_id") or "").strip()[:64]
+    if not aid:
+        return
+    lat, lng = obs.get("dest_lat"), obs.get("dest_lng")
+    texto = _cortex_addr_str(obs.get("stop_address") or obs.get("address"))
+    if lat is None and not texto:
+        return
+    dato = {"visto_en": datetime.now(timezone.utc).isoformat()}
+    if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
+        dato["lat"] = float(lat)
+        dato["lng"] = float(lng)
+    if texto:
+        dato["texto"] = texto[:300]
+    try:
+        # `$setOnInsert` no vale: una direccion puede llegar primero solo con
+        # texto y despues con geocode. `$set` de lo que venga, sin borrar lo que
+        # ya hubiera (los campos ausentes no se tocan).
+        await db.cortex_direcciones.update_one({"_id": aid}, {"$set": dato}, upsert=True)
+    except Exception as e:
+        logger.debug("catalogo de direcciones: %s", e)
+
+
+async def _cortex_direcciones_de(ids) -> dict:
+    """{addressId: {lat, lng, texto}} para los ids que se pidan. UNA consulta."""
+    ids = [i for i in {str(x or "").strip() for x in (ids or [])} if i]
+    if not ids:
+        return {}
+    out = {}
+    try:
+        async for d in db.cortex_direcciones.find({"_id": {"$in": ids}}):
+            out[d["_id"]] = d
+    except Exception as e:
+        logger.debug("catalogo de direcciones: %s", e)
+    return out
+
+
 async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     """Aplica una observación canónica: crea o actualiza el paquete guardando
     solo los cambios de estado en el histórico. Devuelve 'new'|'changed'|'same'."""
@@ -34347,6 +34417,11 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         # Destino (geocode de la direccion), distinto del ultimo escaneo. Lo
         # manda la extension 2.22+; nulo no pisa lo conocido (regla de abajo).
         "dest_lat": obs.get("dest_lat"), "dest_lng": obs.get("dest_lng"),
+        # LA LLAVE QUE FALTABA. `route-details` trae el addressId de cada tarea
+        # pero NO la direccion; el informe trae la direccion CON su addressId.
+        # Guardandolo se pueden cruzar, y una direccion vista una vez vale para
+        # siempre (ver `_cortex_guardar_direccion`).
+        "address_id": str(obs.get("address_id") or "")[:64] or None,
     }
     # Las fuentes se COMPLEMENTAN: el informe de faltas no trae conductor pero
     # route-details sí. Un campo null/"" de una fuente pobre NUNCA pisa el dato
@@ -34368,6 +34443,9 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
     # barrido estaba muerto y estaba funcionando. Sin este campo, "esta al dia"
     # no se puede ni preguntar.
     common["seen_at"] = datetime.now(timezone.utc).isoformat()
+    # Si esta observacion trae direccion Y su identificador, al catalogo: es lo
+    # que hara que el proximo paquete a ese mismo portal ya tenga ubicacion.
+    await _cortex_guardar_direccion(obs)
     # Día de servicio (el que el usuario tiene seleccionado en Cortex). Se guarda
     # una sola vez y no se pisa con null: cada paquete pertenece a un día.
     service_day = str(obs.get("service_day") or "").strip()[:10]
@@ -38598,7 +38676,7 @@ async def cortex_ingest(request: Request):
                 {"_id": f"{kind}:{cual}"},
                 {"$set": {
                     "kind": kind, "which": cual,
-                    "url": str(body.get("url") or "")[:200],
+                    "url": str(body.get("url") or "")[:400],
                     # El esquema, no los datos: llega ya recortado por la extensión.
                     "schema": str(body.get("schema") or "")[:8000],
                     "count": body.get("count"), "bytes": body.get("bytes"),
