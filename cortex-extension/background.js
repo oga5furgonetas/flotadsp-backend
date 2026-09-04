@@ -267,18 +267,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
      el interceptor coge la de la estacion que esta mirando y descarta el resto.
      Nada de esto son datos de cliente: son nombres de estado y una URL. */
   if (msg?.type === 'informeAprendido') {
-    chrome.storage.local.get({ informe: { estados: [], plantillas: {} } }).then(({ informe }) => {
+    chrome.storage.local.get({ informe: { estados: [], descartados: [], plantillas: {} } }).then(({ informe }) => {
       const estados = [...new Set([...(informe.estados || []),
                                    ...(Array.isArray(msg.estados) ? msg.estados : [])])];
+      /* Un estado que ALGUNA vez trajo paquetes deja de estar descartado: puede
+         venir vacio un dia flojo y no por eso hay que dejar de pedirlo. */
+      const descartados = [...new Set([...(informe.descartados || []),
+                                       ...(Array.isArray(msg.descartados) ? msg.descartados : [])])]
+        .filter((s) => !estados.includes(s));
       const plantillas = { ...(informe.plantillas || {}) };
       if (msg.sa && typeof msg.plantilla === 'string' && msg.plantilla) plantillas[msg.sa] = msg.plantilla;
-      chrome.storage.local.set({ informe: { estados, plantillas, at: Date.now() } });
+      chrome.storage.local.set({ informe: { estados, descartados, plantillas, at: Date.now() } });
     });
     return false;
   }
   if (msg?.type === 'informeGuardado') {
-    chrome.storage.local.get({ informe: { estados: [], plantillas: {} } })
+    chrome.storage.local.get({ informe: { estados: [], descartados: [], plantillas: {} } })
       .then(({ informe }) => reply?.({ estados: informe.estados || [],
+                                       descartados: informe.descartados || [],
                                        plantillas: informe.plantillas || {} }));
     return true;   // respuesta asincrona: hay que mantener el canal abierto
   }

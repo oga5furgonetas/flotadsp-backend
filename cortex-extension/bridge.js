@@ -29,13 +29,14 @@ if (!window.__flotadspBridge) {
        ventana. `__flotadspIn` (no `__flotadsp`) para que no se confunda con los
        mensajes de ida y el bucle de arriba no se lo coma. */
     else if (d.kind === 'informe_aprendido') {
-      chrome.runtime.sendMessage({ type: 'informeAprendido', estados: d.estados, plantilla: d.plantilla, sa: d.sa });
+      chrome.runtime.sendMessage({ type: 'informeAprendido', estados: d.estados, descartados: d.descartados, plantilla: d.plantilla, sa: d.sa });
     } else if (d.kind === 'informe_pedir') {
       try {
         chrome.runtime.sendMessage({ type: 'informeGuardado' }, (r) => {
           if (chrome.runtime.lastError || !r) return;   // service worker dormido: se reintenta
           window.postMessage({ __flotadspIn: true, kind: 'informe_guardado',
-                               estados: r.estados || [], plantillas: r.plantillas || {} }, '*');
+                               estados: r.estados || [], descartados: r.descartados || [],
+                               plantillas: r.plantillas || {} }, '*');
         });
       } catch (_) {}
     }

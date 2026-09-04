@@ -147,6 +147,7 @@
       return window.fetch(url, { credentials: 'include', headers: { accept: 'application/json, text/plain, */*', ...apiHeaders } })
         .then((r) => {
           if (!r || !r.ok) post({ kind: 'debug', url: `HTTP ${r ? r.status : '?'} · ${url.replace(/^https?:\/\/[^/]+/, '').slice(0, 100)}`, count: 0, bytes: 0 });
+          return r;   // hace falta para poder CONTAR lo que trae un estado a prueba
         })
         .catch(() => post({ kind: 'debug', url: `sin respuesta · ${url.replace(/^https?:\/\/[^/]+/, '').slice(0, 100)}`, count: 0, bytes: 0 }));
     } catch (_) { return Promise.resolve(); }
@@ -342,6 +343,33 @@
      pasa nada: no se inventa ningún dato. */
   let plantillaInforme = null;
   const estadosInforme = new Set(['REATTEMPTABLE']);
+
+  /* ── QUE LOS DESCUBRA ELLA, EN VEZ DE ESPERAR A QUE ALGUIEN ABRA UNA PANTALLA ──
+     Hasta la 2.23 un estado solo entraba en la lista si una persona abria
+     «Packages by status» con ese estado en Cortex. Y eso no paso nunca: medido
+     el 04-09-2026 con la 2.23 ya instalada en todos los equipos, 40 de 41
+     paquetes REATTEMPTABLE tenian destino (97 %) y solo 42 de 2.592 en
+     furgoneta (1,6 %). O sea que el arreglo anterior funcionaba y el problema
+     era otro — nadie habia abierto esa pantalla con el estado de los que van en
+     la furgoneta, que son justo los que necesita «Apoyo en ruta».
+
+     Depender de que alguien navegue a un sitio concreto no es un diseno, es una
+     esperanza. Asi que se PRUEBAN candidatos, que no es adivinar:
+       · se pide cada uno UNA vez y se MIRA cuantos paquetes trae;
+       · el que trae paquetes se aprende para siempre;
+       · el que viene vacio se apunta como descartado y no se vuelve a pedir,
+         asi que el coste es una tanda por equipo y no se repite cada dia;
+       · si falla la red no se aprende NI se descarta: se probara otro dia.
+     Un estado que Cortex no reconozca contesta vacio y no se inventa ni un
+     dato. Los nombres salen de los que ya hemos visto de verdad en las URLs
+     capturadas (REATTEMPTABLE y MISSING) mas las formas con las que Cortex
+     nombra lo mismo en otras pantallas. Si ninguno trae los de la furgoneta se
+     sabra, porque la lista de descartados queda escrita y se puede leer. */
+  const CANDIDATOS_INFORME = [
+    'PICKED_UP', 'OUT_FOR_DELIVERY', 'IN_TRANSIT', 'ON_ROAD', 'DISPATCHED',
+    'LOADED', 'UNDELIVERED', 'NOT_DELIVERED', 'PENDING_PICKUP', 'MISSING',
+  ];
+  const descartadosInforme = new Set();   // probados y vacios: no se repiten
   /* …Y SE RECUERDAN ENTRE SESIONES. Ese «para siempre» de arriba no lo era: el
      Set y la plantilla vivían sólo en la memoria de la pestaña. Un F5 en Cortex
      —o cerrarla y volver por la mañana— y se arrancaba otra vez pidiendo
@@ -364,6 +392,7 @@
   let informeRespondido = false;
   const guardarInforme = () => post({
     kind: 'informe_aprendido', estados: [...estadosInforme],
+    descartados: [...descartadosInforme],
     plantilla: plantillaInforme, sa: saId,
   });
   const plantillaInformeValida = (u) => {
@@ -385,6 +414,10 @@
     for (const st of (Array.isArray(d.estados) ? d.estados : [])) {
       const s = String(st || '').trim().toUpperCase();
       if (ESTADO_INFORME_OK.test(s) && !estadosInforme.has(s)) { estadosInforme.add(s); n++; }
+    }
+    for (const st of (Array.isArray(d.descartados) ? d.descartados : [])) {
+      const s = String(st || '').trim().toUpperCase();
+      if (ESTADO_INFORME_OK.test(s)) descartadosInforme.add(s);
     }
     const ps = (d.plantillas && typeof d.plantillas === 'object') ? d.plantillas : {};
     for (const [sa, u] of Object.entries(ps)) {
@@ -443,7 +476,40 @@
       try { await syntheticFetch(u); } catch (_) {}
     }
   };
+  /* Prueba los candidatos que no se hayan probado nunca en este equipo. Va
+     DESPUES del primer barrido para no competir con la carga de la pagina, y
+     deja 15 s entre uno y otro: esto se hace una vez en la vida del equipo, no
+     hay ninguna prisa. */
+  const probarCandidatos = async () => {
+    const porProbar = CANDIDATOS_INFORME.filter(
+      (s) => !estadosInforme.has(s) && !descartadosInforme.has(s));
+    if (!porProbar.length) return;
+    post({ kind: 'debug', url: `informe: probando ${porProbar.length} estado(s) a ver cual trae los de la furgoneta`, count: porProbar.length, bytes: 0 });
+    for (const estado of porProbar) {
+      const u = urlInforme(estado);
+      if (!u) return;                    // sin estacion todavia: se probara luego
+      await new Promise((r) => setTimeout(r, 15000));
+      let trajo = -1;                    // -1 = no se pudo saber
+      try {
+        const res = await syntheticFetch(u);
+        if (res && res.ok) {
+          const j = await res.clone().json();
+          trajo = Array.isArray(j && j.packages) ? j.packages.length : 0;
+        }
+      } catch (_) { trajo = -1; }
+      if (trajo > 0) {
+        estadosInforme.add(estado);
+        post({ kind: 'debug', url: `informe: ${estado} trae ${trajo} paquetes, se queda`, count: trajo, bytes: 0 });
+      } else if (trajo === 0) {
+        descartadosInforme.add(estado);
+        post({ kind: 'debug', url: `informe: ${estado} viene vacio, descartado`, count: 0, bytes: 0 });
+      }
+      if (trajo >= 0) guardarInforme();
+    }
+  };
+
   setTimeout(pedirInforme, 9000);      // una vez al entrar, sin agobiar la carga
+  setTimeout(probarCandidatos, 40000); // y luego los que no se hayan probado
   /* Ya NO tiene reloj propio: lo dispara el barrido al final de cada tanda.
      Tenerlo aparte a 180 s hacia que la pantalla mas mirada del debrief
      ("se puede volver a intentar") fuera la que peor se refrescaba. */

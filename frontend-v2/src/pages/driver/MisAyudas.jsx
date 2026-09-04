@@ -54,11 +54,12 @@ export default function MisAyudas({ onBack }) {
           <>
             <div className="rounded-2xl border border-dark-700/60 bg-dark-900/70 px-4 py-6 text-center">
               <LifeBuoy size={22} className="mx-auto mb-2 text-brand-400" />
-              <div className="cifra text-[58px] font-extrabold leading-none text-brand-400">{datos.hechas}</div>
+              <div className="cifra text-[58px] font-extrabold leading-none text-brand-400">{datos.paquetes ?? datos.hechas}</div>
               <p className="mt-1.5 text-[15px] font-bold">
-                {datos.hechas === 1 ? 'parada salvada' : 'paradas salvadas'} este mes
+                {(datos.paquetes ?? datos.hechas) === 1 ? 'paquete salvado' : 'paquetes salvados'} este mes
               </p>
               <p className="mt-1 text-[12.5px] text-dark-400">
+                {datos.hechas > 0 && <>{datos.hechas} {datos.hechas === 1 ? 'parada' : 'paradas'} · </>}
                 {datos.veces === 0
                   ? 'Todavía no has ido a echar una mano este mes'
                   : <>en {datos.veces} {datos.veces === 1 ? 'salida' : 'salidas'}, de {datos.asignadas} que te pasaron</>}
@@ -92,9 +93,9 @@ export default function MisAyudas({ onBack }) {
                         </div>
                       </div>
                       <div className="text-right">
-                        <b className="cifra text-[15px] font-bold">{x.hechas}</b>
+                        <b className="cifra text-[15px] font-bold">{x.paquetes ?? x.hechas}</b>
                         <span className="block text-[9.5px] uppercase tracking-wider text-dark-500">
-                          {x.hechas === 1 ? 'parada' : 'paradas'}
+                          {(x.paquetes ?? x.hechas) === 1 ? 'paquete' : 'paquetes'}
                         </span>
                       </div>
                     </div>
@@ -110,7 +111,7 @@ export default function MisAyudas({ onBack }) {
                 </div>
                 <p className="text-[13px] text-dark-300">
                   Te echaron una mano <b className="text-dark-50">{datos.me_ayudaron.veces}</b> {datos.me_ayudaron.veces === 1 ? 'vez' : 'veces'}
-                  {datos.me_ayudaron.paradas > 0 && <>, <b className="cifra text-dark-50">{datos.me_ayudaron.paradas}</b> paradas</>}
+                  {datos.me_ayudaron.paquetes > 0 && <>, <b className="cifra text-dark-50">{datos.me_ayudaron.paquetes}</b> paquetes</>}
                   {datos.me_ayudaron.quien?.length > 0 && <>: {datos.me_ayudaron.quien.map((q) => q.nombre.split(' ')[0]).join(', ')}</>}.
                 </p>
               </div>
@@ -127,7 +128,7 @@ export default function MisAyudas({ onBack }) {
             </div>
 
             <p className="px-1 text-[11.5px] leading-relaxed text-dark-600">
-              Solo cuentan las paradas que marcas como hechas, y los apoyos que no se anularon.
+              Cuentan los paquetes que constan entregados en Cortex, más los que marcas tú a mano. Los apoyos anulados no cuentan.
               Para que este número suba hay que ir y entregarlas.
             </p>
           </>

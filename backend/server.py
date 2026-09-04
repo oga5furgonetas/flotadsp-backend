@@ -18063,6 +18063,57 @@ async def portal_mis_numeros(user: dict = Depends(require_any_auth)):
             "dias": dias, "mes": mes, "semana": mes}
 
 
+async def _apoyo_hechas_de(apoyos: list) -> dict:
+    """{id_apoyo: (paradas, paquetes)} que ya estan entregadas de verdad.
+
+    POR QUE NO BASTA `hecha`, que es lo que se contaba antes: `hecha` la pone el
+    ayudante pulsando el boton de su enlace, y quien esta repartiendo no lo
+    pulsa. Medido el 04-09-2026 sobre los apoyos ya cerrados: de 28 paradas,
+    CERO tenian `hecha` y 19 estaban entregadas segun Cortex. Por eso TODOS los
+    conductores veian «0 paquetes» en su portal — un contador a cero no falla,
+    solo parece que no has ayudado a nadie.
+
+    Se cuenta por TBA, que es el paquete, no por la parada: si de tres paquetes
+    de un portal se entregaron dos, ayudo con dos. Y se busca por el paquete y
+    el dia, sin filtrar por conductor, porque a quien se lo apunta Cortex lo
+    decide Cortex: medido, 19 de 19 al conductor AYUDADO y ninguna al ayudante,
+    pero eso no hace falta suponerlo para contar.
+
+    Una sola consulta para todo el periodo: con un mes de apoyos, preguntar
+    apoyo por apoyo serian cientos de viajes a la base.
+    """
+    dias = sorted({a.get("dia") for a in apoyos if a.get("dia")})
+    tbas = []
+    for a in apoyos:
+        for p in a.get("paradas") or []:
+            tbas.extend([x for x in (p.get("tbas") or []) if x])
+    entregados = set()
+    if dias and tbas:
+        cur = db.cortex_packages.find(
+            {"service_day": {"$in": dias}, "tba": {"$in": tbas}},
+            {"_id": 0, "tba": 1, "state": 1})
+        async for d in cur:
+            if _cx_ruta_cajon(d.get("state")) == "delivered":
+                entregados.add(d.get("tba"))
+    out = {}
+    for a in apoyos:
+        par = pkg = 0
+        for p in a.get("paradas") or []:
+            sus = [x for x in (p.get("tbas") or []) if x]
+            suyos = sum(1 for x in sus if x in entregados)
+            if p.get("hecha") and not suyos:
+                # La marco el ayudante pero Cortex aun no lo refleja: se cuenta
+                # igual, es su palabra y la puso a mano.
+                par += 1
+                pkg += p.get("n") or len(sus) or 1
+            elif suyos:
+                pkg += suyos
+                if suyos == len(sus):
+                    par += 1
+        out[a.get("id")] = (par, pkg)
+    return out
+
+
 @api_router.get("/portal/mis-ayudas")
 async def portal_mis_ayudas(user: dict = Depends(require_any_auth)):
     """Las veces que ha sacado de un apuro a un companero, y las que se lo hicieron a el."""
@@ -18071,37 +18122,42 @@ async def portal_mis_ayudas(user: dict = Depends(require_any_auth)):
     mes = _apoyo_hoy()[:7]
     vivos = {"$nin": ["anulado"]}      # un apoyo anulado no ocurrio
 
-    def _cuenta(a):
-        ps = a.get("paradas") or []
-        return len(ps), sum(1 for p in ps if p.get("hecha"))
-
     ayude = await db.apoyos.find(
         {"dia": {"$regex": "^" + mes}, "fase": vivos, "a.driver_id": {"$in": claves}},
-        {"_id": 0, "dia": 1, "de": 1, "paradas": 1, "nota": 1, "created_at": 1}).sort("dia", -1).to_list(200)
-    hechas = asignadas = 0
-    gracias = []
-    for a in ayude:
-        n, h = _cuenta(a)
-        asignadas += n
-        hechas += h
-        gracias.append({"nombre": (a.get("de") or {}).get("nombre") or "", "dia": a.get("dia"),
-                        "ruta": (a.get("de") or {}).get("ruta") or "", "paradas": n, "hechas": h,
-                        "nota": a.get("nota") or ""})
-
+        {"_id": 0, "id": 1, "dia": 1, "de": 1, "paradas": 1, "nota": 1, "created_at": 1}).sort("dia", -1).to_list(200)
     recibi = await db.apoyos.find(
         {"dia": {"$regex": "^" + mes}, "fase": vivos, "de.driver_id": {"$in": claves}},
-        {"_id": 0, "dia": 1, "a": 1, "paradas": 1}).sort("dia", -1).to_list(200)
-    me_ayudaron = [{"nombre": (a.get("a") or {}).get("nombre") or "", "dia": a.get("dia"),
-                    "paradas": _cuenta(a)[1]} for a in recibi]
+        {"_id": 0, "id": 1, "dia": 1, "a": 1, "paradas": 1}).sort("dia", -1).to_list(200)
+    todos = await db.apoyos.find(
+        {"dia": {"$regex": "^" + mes}, "fase": vivos},
+        {"_id": 0, "id": 1, "dia": 1, "paradas": 1}).to_list(2000)
+    # Una sola pasada por Cortex para los tres: los del mes entero.
+    hecho = await _apoyo_hechas_de(todos + ayude + recibi)
 
-    equipo = 0
-    async for a in db.apoyos.find({"dia": {"$regex": "^" + mes}, "fase": vivos}, {"_id": 0, "paradas": 1}):
-        equipo += _cuenta(a)[1]
+    hechas = asignadas = paquetes = 0
+    gracias = []
+    for a in ayude:
+        par, pkg = hecho.get(a.get("id"), (0, 0))
+        asignadas += len(a.get("paradas") or [])
+        hechas += par
+        paquetes += pkg
+        gracias.append({"nombre": (a.get("de") or {}).get("nombre") or "", "dia": a.get("dia"),
+                        "ruta": (a.get("de") or {}).get("ruta") or "",
+                        "paradas": len(a.get("paradas") or []), "hechas": par, "paquetes": pkg,
+                        "nota": a.get("nota") or ""})
+
+    me_ayudaron = [{"nombre": (a.get("a") or {}).get("nombre") or "", "dia": a.get("dia"),
+                    "paradas": hecho.get(a.get("id"), (0, 0))[0],
+                    "paquetes": hecho.get(a.get("id"), (0, 0))[1]} for a in recibi]
+
+    equipo = sum(hecho.get(a.get("id"), (0, 0))[1] for a in todos)
 
     return {"mes": mes, "centro": center,
-            "hechas": hechas, "asignadas": asignadas, "veces": len(ayude),
+            "hechas": hechas, "asignadas": asignadas, "paquetes": paquetes, "veces": len(ayude),
             "gracias": gracias[:20],
-            "me_ayudaron": {"veces": len(recibi), "paradas": sum(x["paradas"] for x in me_ayudaron),
+            "me_ayudaron": {"veces": len(recibi),
+                            "paradas": sum(x["paradas"] for x in me_ayudaron),
+                            "paquetes": sum(x["paquetes"] for x in me_ayudaron),
                             "quien": me_ayudaron[:10]},
             "equipo": equipo}
 
