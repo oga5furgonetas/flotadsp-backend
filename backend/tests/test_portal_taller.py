@@ -137,3 +137,82 @@ async def test_fechas_imposibles_se_rechazan(taller, fecha):
     with pytest.raises(HTTPException) as exc:
         await taller({"fecha": fecha})
     assert exc.value.status_code == 400
+
+
+# ── El enlace de OTRA cosa no puede entrar por la puerta de las ordenes ──────
+#
+# `taller_enlaces` guarda TRES clases de enlace en la misma coleccion: el de una
+# orden (lleva `orden_id`), el fijo de un taller (`tipo: taller`, lleva
+# `workshop_id`) y el de un apoyo en ruta (`tipo: apoyo`, lleva `apoyo_id`).
+# `_ot_por_token` buscaba solo por token, sin mirar de cual se trata, y despues
+# hacia `enlace["orden_id"]`: con cualquiera de los otros dos reventaba con
+# KeyError y salia un 500 en un endpoint PUBLICO. Medido en produccion el
+# 04-09-2026: el enlace fijo de Talleres Muñiz y el de un apoyo real daban
+# "Error interno del servidor" en `/api/taller/<token>`, mientras que sus
+# hermanos (`/taller/t/<token>` y `/apoyo/t/<token>`) contestaban 404 bien.
+#
+# Lo que cuenta no es el codigo de estado en si: es que un taller que guarde el
+# enlace sin el `/t/` ve una pagina rota en vez de "este enlace no es valido", y
+# que un resolutor que acepta tokens de otra clase es la clase de puerta que un
+# dia deja pasar lo que no debe.
+
+ENLACES = {
+    "tok-de-orden-1234567890": {"token": "tok-de-orden-1234567890",
+                                "orden_id": "ot-test", "db_name": "flotadsp"},
+    "tok-de-taller-1234567890": {"token": "tok-de-taller-1234567890", "tipo": "taller",
+                                 "workshop_id": "w-1", "db_name": "flotadsp"},
+    "tok-de-apoyo-1234567890": {"token": "tok-de-apoyo-1234567890", "tipo": "apoyo",
+                                "apoyo_id": "ap-1", "db_name": "flotadsp"},
+}
+
+
+@pytest.fixture
+def enlaces(monkeypatch):
+    """`global_db` y `db` falseados: aqui no hace falta Mongo para nada."""
+    class _Enlaces:
+        async def find_one(self, filtro, proyeccion=None):
+            e = ENLACES.get(filtro.get("token"))
+            if not e:
+                return None
+            for k, v in filtro.items():
+                if k == "token":
+                    continue
+                if e.get(k) != v:
+                    return None
+            return dict(e)
+
+    class _GlobalDB:
+        taller_enlaces = _Enlaces()
+
+    class _Ordenes:
+        async def find_one(self, filtro, proyeccion=None):
+            return dict(ORDEN) if filtro.get("id") == "ot-test" else None
+
+    class _DBOrdenes:
+        ordenes_trabajo = _Ordenes()
+
+    monkeypatch.setattr(server, "global_db", _GlobalDB())
+    monkeypatch.setattr(server, "db", _DBOrdenes())
+    monkeypatch.setattr(server, "set_current_org_db", lambda *a, **k: None)
+    monkeypatch.setattr(server, "_ot_freno", lambda token, limite=40: None)
+
+
+async def test_el_enlace_de_una_orden_sigue_abriendo(enlaces):
+    """Lo que ya funcionaba tiene que seguir igual."""
+    orden = await server._ot_por_token("tok-de-orden-1234567890")
+    assert orden["id"] == "ot-test"
+
+
+@pytest.mark.parametrize("token", ["tok-de-taller-1234567890", "tok-de-apoyo-1234567890"])
+async def test_un_enlace_de_otra_clase_da_404_y_no_revienta(enlaces, token):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await server._ot_por_token(token)
+    assert exc.value.status_code == 404
+
+
+async def test_un_token_que_no_existe_da_404(enlaces):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await server._ot_por_token("tok-inventado-1234567890")
+    assert exc.value.status_code == 404

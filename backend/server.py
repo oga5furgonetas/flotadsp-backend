@@ -15926,7 +15926,12 @@ async def _ot_por_token(token: str) -> dict:
     if len(tok) < 20 or len(tok) > 120:
         raise HTTPException(404, "Este enlace no es válido")
     enlace = await global_db.taller_enlaces.find_one({"token": tok}, {"_id": 0})
-    if not enlace or enlace.get("revocado"):
+    # `orden_id` NO es opcional: en esta coleccion conviven los enlaces de una
+    # orden con los del taller (`tipo: taller`) y los de un apoyo en ruta
+    # (`tipo: apoyo`), y sin esta comprobacion el `enlace["orden_id"]` de abajo
+    # reventaba con KeyError -> 500 en un endpoint PUBLICO (gotcha 59). Sus dos
+    # hermanos (`portal_taller_lista`, `_apoyo_por_token`) ya exigian el suyo.
+    if not enlace or enlace.get("revocado") or not enlace.get("orden_id"):
         raise HTTPException(404, "Este enlace no es válido")
     if enlace.get("expira_en") and enlace["expira_en"] < _ot_ahora():
         raise HTTPException(404, "Este enlace ha caducado. Pídele uno nuevo a la oficina.")

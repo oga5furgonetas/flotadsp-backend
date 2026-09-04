@@ -14,8 +14,16 @@ Se descubrio que hacian falta las dos al ver que `test_piezas` y
 `test_estados_cortex` daban "0 de 0" con un runner que solo buscaba `test_*`:
 no fallaban, es que no se estaban ejecutando. Un test que no corre es peor que
 no tenerlo, porque parece que cubre algo.
+
+Y por eso mismo, lo que aqui NO se puede ejecutar se dice en voz alta en vez de
+darlo por bueno: una funcion `async` llamada a pelo devuelve una corrutina y no
+ejecuta ni una linea del test —contarla como aprobada seria el gotcha 36 otra
+vez—, y una que pide fixtures necesita pytest. Las dos salen listadas como
+«las corre pytest», nunca sumadas.
 """
 import importlib
+import inspect
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -24,12 +32,26 @@ AQUI = Path(__file__).resolve().parent
 sys.path.insert(0, str(AQUI))
 sys.path.insert(0, str(AQUI.parent))
 
+# El mismo entorno minimo que `conftest.py`, y por el mismo motivo: `server.py`
+# exige SECRET_KEY al importarse. Sin esto, cualquiera que tenga instaladas las
+# dependencias del backend veia CUATRO FALLOS que no lo son —el import reventaba
+# por la variable, no por el codigo—, y con las dependencias sin instalar los
+# mismos cuatro ficheros salian como saltados. El mismo estado contado de dos
+# maneras segun el ordenador es justo lo que hace que un runner deje de creerse.
+os.environ.setdefault("SECRET_KEY", "test-secret-key-only-for-tests")
+os.environ.setdefault("MONGO_URL", "mongodb://localhost:27017")
+os.environ.setdefault("DB_NAME", "test_flotadsp")
+os.environ.setdefault("GLOBAL_DB_NAME", "test_flotadsp_global")
+os.environ.setdefault("ADMIN_USERNAME", "")
+os.environ.setdefault("ADMIN_PASSWORD", "")
+
 
 def main():
     ficheros = sorted(p.stem for p in AQUI.glob("test_*.py"))
     total_ok = total_mal = 0
     sin_nada = []
     saltados = []
+    solo_pytest = []
 
     for nombre in ficheros:
         try:
@@ -47,7 +69,15 @@ def main():
             total_mal += 1
             continue
 
-        funcs = [k for k in sorted(dir(m)) if k.startswith("test_") and callable(getattr(m, k))]
+        todas = [k for k in sorted(dir(m)) if k.startswith("test_") and callable(getattr(m, k))]
+        # Lo que aqui no se puede ejecutar de verdad: corrutinas (llamarlas no
+        # ejecuta nada) y las que piden fixtures de pytest.
+        de_pytest = [k for k in todas
+                     if inspect.iscoroutinefunction(getattr(m, k))
+                     or len(inspect.signature(getattr(m, k)).parameters) > 0]
+        funcs = [k for k in todas if k not in de_pytest]
+        if de_pytest:
+            solo_pytest.append((nombre, len(de_pytest)))
         if funcs:
             ok = mal = 0
             for k in funcs:
@@ -80,8 +110,14 @@ def main():
                 total_mal += 1
                 print("  %-30s REVIENTA" % nombre)
                 print("      " + traceback.format_exc().strip().splitlines()[-1][:140])
-        else:
+        elif not de_pytest:
             sin_nada.append(nombre)
+
+    if solo_pytest:
+        print("\n  LAS CORRE PYTEST (son async o piden fixtures), no se cuentan aqui:")
+        for nombre, cuantas in solo_pytest:
+            print("    %-28s %d" % (nombre, cuantas))
+        print("  CI las ejecuta con `pytest backend/tests -q` y su Mongo.")
 
     if sin_nada:
         print("\n  SIN NADA QUE EJECUTAR (ni funciones test_ ni main): %s"

@@ -978,6 +978,32 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    en el sitio equivocado.
 
 
+59. **Tres clases de enlace publico viven en la MISMA coleccion, y el resolutor
+   de una de ellas aceptaba los tokens de las otras dos.** `taller_enlaces`
+   guarda el enlace de una orden (`orden_id`), el fijo de un taller
+   (`tipo: taller`, con `workshop_id`) y el de un apoyo en ruta
+   (`tipo: apoyo`, con `apoyo_id`). `portal_taller_lista` y `_apoyo_por_token`
+   exigen cada uno lo suyo; **`_ot_por_token` buscaba solo por token** y despues
+   hacia `enlace["orden_id"]`: con cualquiera de los otros dos, `KeyError` ->
+   **500 en un endpoint PUBLICO**. Medido en produccion el 04-09-2026 barriendo
+   las 196 rutas GET contra la empresa REAL —no la vacia—: el enlace fijo de
+   Talleres Muniz y el de un apoyo daban «Error interno del servidor» en
+   `/api/taller/<token>`, mientras sus hermanos contestaban 404 correctamente.
+   Afecta tambien a los cinco POST del portal del taller, que usan el mismo
+   resolutor.
+   Lo que se ve desde fuera: un taller que guarde su enlace sin el `/t/` —o que
+   lo escriba a mano— se encuentra una pagina rota en vez de «este enlace no es
+   valido», y llama por telefono, que es la llamada que este modulo venia a
+   quitar.
+   Regla: **cuando varias clases de cosa comparten coleccion, cada resolutor
+   filtra por su clase Y exige su campo obligatorio.** Un `find_one` por token a
+   secas es una puerta que hoy revienta y manana deja pasar. Cuatro casos en
+   `test_portal_taller.py`, probados reintroduciendo el fallo.
+   Y de paso: **el barrido con la empresa vacia no sustituye al barrido con la
+   empresa llena.** Este 500 solo aparece si existen enlaces de las tres clases,
+   y en una empresa recien creada no existe ninguno.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
