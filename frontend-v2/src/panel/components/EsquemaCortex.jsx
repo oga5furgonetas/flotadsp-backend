@@ -44,6 +44,7 @@ export default function EsquemaCortex() {
 
   const esquemas = (datos?.diagnostico || []).filter((d) => d.kind === 'schema' && d.schema)
   const versiones = datos?.versiones || []
+  const estadosInforme = (datos?.diagnostico || []).find((d) => d.which === 'estados_informe')
 
   return (
     <div className="rounded-xl border border-dark-800 bg-dark-900/30 p-4">
@@ -69,6 +70,16 @@ export default function EsquemaCortex() {
               <span className="text-dark-500"> · {v.equipos} {v.equipos === 1 ? 'equipo' : 'equipos'}</span>
             </span>
           ))}
+        </div>
+      )}
+
+      {/* De que estados pide Cortex el informe de direcciones. Es lo unico que
+          decide si «Apoyo en ruta» tiene ubicaciones o solo numeros de parada,
+          y hasta ahora solo se veia en el popup del equipo que lo probo. */}
+      {estadosInforme && (
+        <div className="mt-2 rounded-lg border border-dark-800 bg-dark-950/40 px-3 py-2 text-[11.5px] leading-relaxed text-dark-300">
+          <span className="font-semibold text-dark-100">Informe de direcciones · </span>
+          {estadosInforme.url}
         </div>
       )}
 

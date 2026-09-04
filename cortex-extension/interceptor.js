@@ -480,14 +480,24 @@
      DESPUES del primer barrido para no competir con la carga de la pagina, y
      deja 15 s entre uno y otro: esto se hace una vez en la vida del equipo, no
      hay ninguna prisa. */
+  let intentosPrueba = 0;
   const probarCandidatos = async () => {
     const porProbar = CANDIDATOS_INFORME.filter(
       (s) => !estadosInforme.has(s) && !descartadosInforme.has(s));
-    if (!porProbar.length) return;
+    if (!porProbar.length) { contarEstados(); return; }
+    /* LA ESTACION NO SE SABE HASTA QUE CORTEX CONTESTA la primera vez, asi que
+       arrancar a los 40 s es una carrera que se puede perder. Antes se hacia
+       `return` y no se volvia a intentar en toda la sesion: la prueba no corria
+       nunca y no habia forma de saberlo. Ahora se espera y se reintenta. */
+    if (!saId) {
+      if (++intentosPrueba > 20) return;          // 10 min y no hay estacion: se deja
+      setTimeout(probarCandidatos, 30000);
+      return;
+    }
     post({ kind: 'debug', url: `informe: probando ${porProbar.length} estado(s) a ver cual trae los de la furgoneta`, count: porProbar.length, bytes: 0 });
     for (const estado of porProbar) {
       const u = urlInforme(estado);
-      if (!u) return;                    // sin estacion todavia: se probara luego
+      if (!u) break;
       await new Promise((r) => setTimeout(r, 15000));
       let trajo = -1;                    // -1 = no se pudo saber
       try {
@@ -506,7 +516,18 @@
       }
       if (trajo >= 0) guardarInforme();
     }
+    contarEstados();
   };
+
+  /* Y QUE SE SEPA FUERA DE ESTE NAVEGADOR. Hasta ahora el resultado de la
+     prueba se quedaba en la actividad del popup, o sea en el equipo de quien
+     instalo la extension: el unico sitio desde el que no se puede comprobar
+     nada. Va al servidor como diagnostico —es estructura, no datos de nadie— y
+     se ve en el panel, al lado de las versiones. */
+  const contarEstados = () => post({
+    kind: 'estados_informe',
+    estados: [...estadosInforme], descartados: [...descartadosInforme],
+  });
 
   setTimeout(pedirInforme, 9000);      // una vez al entrar, sin agobiar la carga
   setTimeout(probarCandidatos, 40000); // y luego los que no se hayan probado

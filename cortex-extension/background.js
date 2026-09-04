@@ -258,6 +258,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
       chrome.storage.local.set({ diag: { ...diag, keys: msg.keys || [], node: msg.node || '', at: Date.now() } }));
     return false;
   }
+  if (msg?.type === 'estadosInforme') {
+    /* Al servidor por el mismo camino que el esquema. Sin esto el resultado de
+       la prueba vive solo en el popup de un equipo y no hay manera de saber si
+       el informe de Cortex trae los paquetes que van en la furgoneta. */
+    const usa = Array.isArray(msg.estados) ? msg.estados : [];
+    const no = Array.isArray(msg.descartados) ? msg.descartados : [];
+    enviarDiagnostico({
+      kind: 'debug', which: 'estados_informe',
+      url: `usa: ${usa.join(', ') || '(ninguno)'} · vacios: ${no.join(', ') || '(ninguno)'}`,
+      count: usa.length, bytes: no.length,
+    });
+    return false;
+  }
   if (msg?.type === 'schema') {
     const key = msg.which === 'summary' ? 'schemaSummary' : (msg.which === 'report' ? 'schemaReport' : 'schema');
     chrome.storage.local.get({ diag: {} }).then(({ diag }) =>

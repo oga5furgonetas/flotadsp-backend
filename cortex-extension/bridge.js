@@ -17,6 +17,9 @@ if (!window.__flotadspBridge) {
     else if (d.kind === 'debug') chrome.runtime.sendMessage({ type: 'debug', url: d.url, count: d.count, bytes: d.bytes });
     else if (d.kind === 'sample') chrome.runtime.sendMessage({ type: 'sample', keys: d.keys, node: d.node });
     else if (d.kind === 'schema') chrome.runtime.sendMessage({ type: 'schema', which: d.which, url: d.url, schema: d.schema });
+    /* Que estados del informe traen paquetes y cuales vienen vacios. Es lo
+       unico que dice si «Apoyo en ruta» va a tener direcciones o no. */
+    else if (d.kind === 'estados_informe') chrome.runtime.sendMessage({ type: 'estadosInforme', estados: d.estados, descartados: d.descartados });
     /* EL RESUMEN DE CORTEX. Faltaba en esta lista y el mensaje se tiraba aqui
        en silencio: el interceptor lo mandaba, nadie lo recogia y `cortex_resumen`
        llevaba vacia desde que se monto. Es el mismo fallo que el gotcha 1 —una
