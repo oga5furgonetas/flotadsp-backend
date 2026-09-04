@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url'
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'frontend-v2', 'src')
 
 // Prefijos usados dinámicamente: t('sev.' + x). Se validan aparte, no como clave literal.
-const DYNAMIC_PREFIXES = ['sev.']
+const DYNAMIC_PREFIXES = ['sev.', 'empleo.fase.']
 
 function walk(dir, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {

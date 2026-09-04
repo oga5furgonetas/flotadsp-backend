@@ -7,6 +7,7 @@ import {
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX,
   PackageSearch, PackageCheck, MapPin, Timer, MapPinned, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
+  Briefcase,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
 import { getMe, contarPeticionesPendientes } from './api'
@@ -82,6 +83,7 @@ const NAV_DEF = [
   ]},
   { g: 'nav.g.team', gIcon: Users, iconCls: 'text-violet-400', iconBg: 'bg-violet-500/10', items: [
     { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
+    { to: '/panel/empleo', labelKey: 'nav.empleo', icon: Briefcase },
     { to: '/panel/scorecard', labelKey: 'nav.scorecard', icon: Trophy },
     { to: '/panel/diarios', labelKey: 'nav.diarios', icon: PackageX },
     { to: '/panel/whc', labelKey: 'nav.whc', icon: Timer },

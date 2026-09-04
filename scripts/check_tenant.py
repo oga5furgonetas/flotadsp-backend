@@ -38,7 +38,10 @@ CON_SESION = {"get_current_user", "require_admin", "require_superadmin",
 # Llamadas que fijan la empresa a mano.
 FIJAN = {"_set_tenant_by_slug", "set_current_org_db", "_ot_por_token", "_apoyo_por_token", "_partner_auth",
          # Autentica la extension por su token de ingesta y fija la BD dentro.
-         "_cortex_ingest_org"}
+         "_cortex_ingest_org",
+         # Resuelve empresa + oferta desde la URL publica de empleo y llama a
+         # `_set_tenant_by_slug` en su primera linea.
+         "_empleo_oferta_publica"}
 
 
 def es_endpoint(fn):

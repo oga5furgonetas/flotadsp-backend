@@ -889,6 +889,48 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    parece un nombre corto.
 
 
+56. **Guardar lo TUYO no te pone al dia, y creerte al dia con los datos viejos
+   es lo que borra a la otra persona.** El gotcha 52 arreglo ESCRIBIR celda a
+   celda, y Mery lo confirmo el 04-09: «lo de las horas si, lo de hacer cambios
+   las dos a la vez no». Faltaba todo lo demas de esa pantalla —marcar una ruta
+   en rojo o amarilla, una furgo en rosa, un conductor, anadir o quitar una
+   fila, pegar las horas—, que seguia mandando la HOJA ENTERA.
+   Y el control de version no protegia nada, por algo que no se ve leyendo el
+   codigo: **guardar UNA celda devuelve la revision nueva y el cliente se la
+   queda sin recargar los datos.** Con la revision al dia y la hoja vieja, su
+   siguiente guardado completo pasaba la comprobacion y pisaba. Reproducido
+   contra produccion, en este orden exacto:
+
+   | paso | quien | revision | resultado |
+   |---|---|---|---|
+   | 1 | Mery escribe en la fila 0 | 2 | ok |
+   | 2 | Judit escribe en la fila 1 | 3 | ok |
+   | 3 | Judit marca una ruta en rojo | 3 | **la fila 0 se queda vacia**, HTTP 200 |
+
+   Dos arreglos, y hacen falta los dos:
+   · **cada cambio manda solo lo suyo**, con operaciones que no pueden pisarse:
+     `/celda` ($set de un campo), `/marca` ($addToSet/$pull), `/fila` ($push y
+     borrado con `ruta_ref`), `/meta` y `/horas` (solo las tres horas). El
+     guardado completo (`PUT`) ya no escribe: contesta 409 pidiendo recargar,
+     **porque un despliegue no cierra el navegador de nadie** y la pestana que
+     alguien tenga abierta desde por la manana seguiria mandando la hoja entera
+     durante horas;
+   · **la respuesta de cada guardado trae la hoja del servidor y se aplica.**
+     Sin esto los datos ya no se perdian pero la pantalla de Mery no llegaba a
+     ver nunca lo de Judit: el refresco de 2,5 s solo entra si la revision del
+     servidor es MAYOR, y su propio guardado ya se la habia igualado. Al
+     aplicar se respetan TODAS las celdas con guardado pendiente, no solo la que
+     tiene el foco: escribiendo dos seguidas, la primera puede estar aun en el
+     aire y volveria borrada.
+   Comprobado con dos pestanas de verdad en flotadsp.com, escribiendo las dos en
+   la MISMA fila a la vez y marcando colores: las dos pantallas acaban iguales y
+   no se pierde nada. Trinquete en `test_plantilla_compartida.py`, probado
+   devolviendo el `update_one` al guardado completo.
+   Regla general: **una respuesta de escritura que devuelve version pero no
+   datos deja al cliente creyendose al dia.** O devuelve las dos cosas, o no
+   devuelvas la version.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

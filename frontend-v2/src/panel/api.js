@@ -88,6 +88,15 @@ export const getApoyoParadas = (params) => api.get('/apoyo/paradas', { params })
 export const getApoyos = (params) => api.get('/apoyo', { params })
 export const crearApoyo = (body) => api.post('/apoyo', body)
 export const cambiarApoyo = (id, body) => api.patch(`/apoyo/${id}`, body)
+/* Empleo: ofertas, cuestionario y candidatos. La oferta va SIEMPRE atada a un
+   centro y el candidato hereda el suyo, para que no se mezclen las naves. */
+export const getOfertas = (params) => api.get('/empleo/ofertas', { params })
+export const crearOferta = (body) => api.post('/empleo/ofertas', body)
+export const editarOferta = (id, body) => api.patch(`/empleo/ofertas/${id}`, body)
+export const getCandidatos = (params) => api.get('/empleo/candidatos', { params })
+export const moverCandidato = (id, body) => api.patch(`/empleo/candidatos/${id}`, body)
+export const contratarCandidato = (id) => api.post(`/empleo/candidatos/${id}/contratar`)
+export const borrarCandidato = (id) => api.delete(`/empleo/candidatos/${id}`)
 export const deleteDriver = (id) => api.delete(`/drivers/${id}`)
 export const uploadDriverPhoto = (id, file) => { const fd = new FormData(); fd.append('file', file); return api.post(`/drivers/${id}/photo`, fd) }
 

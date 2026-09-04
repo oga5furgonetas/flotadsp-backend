@@ -265,6 +265,8 @@ const PanelIncidencias = lazy(() => import('./panel/pages/Incidencias'))
 const PanelContactos = lazy(() => import('./panel/pages/Contactos'))
 const PanelPaquetes = lazy(() => import('./panel/pages/PackageIntel'))
 const PanelApoyo = lazy(() => import('./panel/pages/ApoyoRuta'))
+const PanelEmpleo = lazy(() => import('./panel/pages/Empleo'))
+const EmpleoPublica = lazy(() => import('./pages/Empleo'))
 const PanelWHC = lazy(() => import('./panel/pages/WHC'))
 const PanelDSC = lazy(() => import('./panel/pages/DSC'))
 /* FlotaDSP 2.0 — la aplicación entera reorganizada, sólo en el laboratorio.
@@ -331,6 +333,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/app" element={<AppRedirect />} />
               <Route path="/taller/t/:token" element={<PortalTallerLista />} />
               <Route path="/apoyo/t/:token" element={<PortalApoyo />} />
+              <Route path="/empleo/:slug/:oferta" element={<EmpleoPublica />} />
               <Route path="/taller/:token" element={<PortalTaller />} />
               <Route path="/conductor" element={<DriverPortal />} />
               <Route path="/conductor/:slug" element={<DriverPortal />} />
@@ -377,6 +380,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="contactos" element={<PanelContactos />} />
                 <Route path="paquetes" element={<PanelPaquetes />} />
                 <Route path="apoyo" element={<PanelApoyo />} />
+                <Route path="empleo" element={<PanelEmpleo />} />
                 <Route path="whc" element={<PanelWHC />} />
                 <Route path="dsc" element={<PanelDSC />} />
                 {/* Experimentos DENTRO del panel: heredan barra lateral,

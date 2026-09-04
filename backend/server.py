@@ -1231,6 +1231,23 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.drivers, [("email", 1)], unique=True, name="email_unico_activo",
                partialFilterExpression={"active": True, "email": {"$type": "string", "$gt": ""}},
                collation={"locale": "en", "strength": 2})
+    # ── Empleo: ofertas y candidatos ───────────────────────────────────────
+    await _idx(tdb.ofertas_empleo, "id")
+    # El slug es la URL publica: dos ofertas con el mismo dejarian una
+    # inalcanzable. `_empleo_slug_libre` ya lo evita, pero dos creaciones a la
+    # vez pasan las dos la comprobacion y solo la base puede pararlas (gotcha 46).
+    await _idx(tdb.ofertas_empleo, [("slug", 1)], unique=True, name="slug_oferta_unico")
+    await _idx(tdb.candidatos, "id")
+    await _idx(tdb.candidatos, [("oferta_id", 1), ("fase", 1)])
+    await _idx(tdb.candidatos, "centro")
+    # UNA CANDIDATURA POR PERSONA Y OFERTA. Sin esto, dar dos veces a enviar
+    # con mala cobertura deja dos candidatos iguales y alguien llama dos veces.
+    await _idx(tdb.candidatos, [("oferta_id", 1), ("tel_clave", 1)], unique=True,
+               name="candidato_unico_por_oferta",
+               partialFilterExpression={"tel_clave": {"$type": "string", "$gt": ""}})
+    # Datos personales con fecha de caducidad: Mongo los borra solo a los 12
+    # meses. Es la unica forma de que el plazo se cumpla sin que nadie se acuerde.
+    await _idx(tdb.candidatos, "expira_en", expireAfterSeconds=0)
     # Bloqueos de dias: se consultan en CADA peticion del conductor.
     await _idx(tdb.shift_blocks, [("hasta", 1), ("desde", 1)])
     await _idx(tdb.shift_blocks, "driver_id")
@@ -18493,6 +18510,527 @@ async def apoyo_publico_parada(token: str, stop_id: str, data: dict = Body(defau
     return await _apoyo_publico_con_posicion(a)
 
 
+# ── EMPLEO: OFERTAS Y CANDIDATOS ─────────────────────────────────────────────
+# El anuncio (Indeed, un grupo de WhatsApp, donde sea) apunta a la pagina
+# publica de la oferta; quien se apunta rellena el formulario y, al marcarlo
+# «contratado», se crea la ficha del conductor con lo que el mismo escribio.
+# Ese ultimo paso es el que de verdad vale: hoy el alta la teclea alguien a
+# mano y por eso hay 17 personas con la ficha duplicada, 33 sin telefono y 26
+# sin transporter_id (medido el 04-09-2026).
+#
+# Reglas que aqui no son negociables:
+#  · la pagina publica NO lleva sesion, asi que fija la empresa a mano con
+#    `_set_tenant_by_slug` (gotcha 26) y devuelve LISTA BLANCA de campos;
+#  · las respuestas que descartan NO viajan al candidato: si sabe cual le deja
+#    fuera, contesta lo que haga falta;
+#  · un descarte automatico se VE y se puede deshacer. Un filtro que aparta en
+#    silencio es como no tener candidatos y no enterarse;
+#  · son datos personales: caducan solos a los 12 meses (TTL) y hay borrado a
+#    mano para cuando alguien lo pida.
+
+EMPLEO_FASES = ("nuevo", "llamado", "entrevista", "prueba", "contratado", "descartado")
+EMPLEO_TIPOS = ("si_no", "opcion", "varias", "texto", "numero")
+_EMPLEO_MESES_GUARDA = 12
+_EMPLEO_MAX_POR_IP_H = 5
+_EMPLEO_MAX_POR_OFERTA_DIA = 200
+_EMPLEO_MAX_PREGUNTAS = 12
+_EMPLEO_MAX_OPCIONES = 8
+
+
+class PreguntaEmpleo(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:8])
+    texto: str
+    tipo: str = "si_no"
+    opciones: List[str] = []
+    obligatoria: bool = True
+    # Respuestas que apartan solas. Se guardan en forma canonica (minusculas,
+    # sin acentos) para poder compararlas; lo que se enseña es `opciones`, que
+    # conserva como se escribio.
+    descarta: List[str] = []
+
+
+class OfertaEmpleo(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    slug: str = ""
+    titulo: str
+    centro: Optional[str] = None
+    ciudad: str = ""
+    jornada: str = ""
+    salario: str = ""
+    descripcion: str = ""
+    requisitos: str = ""
+    activa: bool = True
+    preguntas: List[PreguntaEmpleo] = []
+    creada_en: str = ""
+    creada_por: str = ""
+
+
+def _empleo_texto(v, maximo: int) -> str:
+    """Texto que viene de fuera: recortado y sin caracteres de control."""
+    s = "" if v is None else str(v)
+    s = "".join(c for c in s if c == "\n" or ord(c) >= 32)
+    return s.strip()[:maximo]
+
+
+def _empleo_sin_tildes(s: str) -> str:
+    """Quita tildes y eñes-con-diacritico. Con prefijo del modulo a proposito.
+
+    No hay un unico normalizador de texto en este fichero —cada modulo tiene el
+    suyo, ajustado a lo que compara— y meter uno generico llamado
+    `_quitar_acentos` seria justo el gotcha 24: un nombre a nivel de modulo que
+    puede estar pisando otro sin que Python diga nada.
+    """
+    return "".join(c for c in unicodedata.normalize("NFD", s or "")
+                   if unicodedata.category(c) != "Mn")
+
+
+def _empleo_clave(v) -> str:
+    """Forma canonica de una respuesta, para poder compararla sin sustos.
+
+    Minusculas, sin acentos y sin espacios de mas: «Sí» y «si» son la misma
+    respuesta, y el que descarta se escribio en el panel de otra manera que la
+    que marca el candidato. Comparar en crudo hacia que `descarta` no saltara
+    nunca: un filtro que no filtra y ademas no avisa.
+    """
+    s = _empleo_sin_tildes(str(v or "")).lower().strip()
+    return re.sub(r"\s+", " ", s)
+
+
+def _empleo_slugificar(texto: str) -> str:
+    s = _empleo_sin_tildes(str(texto or "")).lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
+    return s[:60] or "oferta"
+
+
+async def _empleo_slug_libre(base: str, oferta_id: str = "") -> str:
+    """Un slug que no choque con otro de la MISMA empresa.
+
+    El slug va en la URL publica, asi que dos ofertas con el mismo titulo se
+    pisarian y la segunda seria inalcanzable.
+    """
+    raiz = _empleo_slugificar(base)
+    slug, n = raiz, 1
+    while n < 50:
+        otra = await db.ofertas_empleo.find_one({"slug": slug}, {"_id": 0, "id": 1})
+        if not otra or otra.get("id") == oferta_id:
+            return slug
+        n += 1
+        slug = "%s-%d" % (raiz, n)
+    return "%s-%s" % (raiz, uuid.uuid4().hex[:6])
+
+
+def _empleo_normaliza_preguntas(preguntas) -> list:
+    """Valida el cuestionario y lo deja listo para guardar.
+
+    Lo que se comprueba, y por que cada cosa:
+      · el tipo tiene que existir: uno inventado no se pintaria en la pagina y
+        la pregunta desapareceria sin dar ningun error;
+      · «opcion» y «varias» necesitan al menos dos opciones, o no hay nada que
+        marcar;
+      · una respuesta de `descarta` que no este entre las opciones no puede
+        saltar NUNCA. Ese es el caso peligroso: parece que filtras y no filtras.
+    """
+    out = []
+    for i, p in enumerate(preguntas or []):
+        if len(out) >= _EMPLEO_MAX_PREGUNTAS:
+            raise HTTPException(400, "Como mucho %d preguntas" % _EMPLEO_MAX_PREGUNTAS)
+        p = dict(p or {})
+        texto = _empleo_texto(p.get("texto"), 160)
+        if not texto:
+            raise HTTPException(400, "La pregunta %d no tiene enunciado" % (i + 1))
+        tipo = str(p.get("tipo") or "si_no").strip()
+        if tipo not in EMPLEO_TIPOS:
+            raise HTTPException(400, "Tipo de pregunta no valido: %s" % tipo)
+        if tipo == "si_no":
+            opciones = ["Si", "No"]
+        elif tipo in ("opcion", "varias"):
+            opciones = [_empleo_texto(o, 60) for o in (p.get("opciones") or [])]
+            opciones = [o for o in opciones if o][:_EMPLEO_MAX_OPCIONES]
+            if len(opciones) < 2:
+                raise HTTPException(400, "«%s» necesita al menos dos opciones" % texto)
+            if len({_empleo_clave(o) for o in opciones}) != len(opciones):
+                raise HTTPException(400, "«%s» tiene dos opciones iguales" % texto)
+        else:
+            opciones = []
+        validas = {_empleo_clave(o) for o in opciones}
+        descarta = []
+        for d in (p.get("descarta") or []):
+            k = _empleo_clave(d)
+            if not k:
+                continue
+            if tipo in ("texto", "numero"):
+                raise HTTPException(400, "Una pregunta de texto libre no puede descartar sola")
+            if k not in validas:
+                raise HTTPException(
+                    400, "«%s» no es una de las opciones de «%s», asi que no descartaria "
+                         "nunca" % (d, texto))
+            descarta.append(k)
+        out.append(PreguntaEmpleo(
+            id=str(p.get("id") or uuid.uuid4().hex[:8])[:16],
+            texto=texto, tipo=tipo, opciones=opciones,
+            obligatoria=bool(p.get("obligatoria", True)),
+            descarta=sorted(set(descarta)),
+        ).model_dump())
+    return out
+
+
+def _empleo_publica_oferta(o: dict) -> dict:
+    """Lo que ve el candidato. LISTA BLANCA, y sin las respuestas que descartan.
+
+    La pagina es publica y su enlace acaba en cualquier sitio, asi que va por
+    lista blanca y no por lista negra (gotcha 26). Y `descarta` se cae aqui a
+    proposito: si el candidato sabe que contestar para no quedar fuera, el
+    cuestionario deja de medir nada.
+    """
+    return {
+        "id": o.get("id"), "slug": o.get("slug"), "titulo": o.get("titulo"),
+        "ciudad": o.get("ciudad") or "", "jornada": o.get("jornada") or "",
+        "salario": o.get("salario") or "", "descripcion": o.get("descripcion") or "",
+        "requisitos": o.get("requisitos") or "",
+        "preguntas": [{"id": p.get("id"), "texto": p.get("texto"), "tipo": p.get("tipo"),
+                       "opciones": p.get("opciones") or [],
+                       "obligatoria": bool(p.get("obligatoria", True))}
+                      for p in (o.get("preguntas") or [])],
+    }
+
+
+def _empleo_revisa_respuestas(preguntas: list, respuestas: dict):
+    """Devuelve (respuestas_limpias, motivo_de_descarte_o_None).
+
+    Pura a proposito, para poder probarla sin base de datos. Solo se guardan
+    valores que estan entre las opciones de la pregunta: lo que llega por el
+    cuerpo de una peticion publica no se cree.
+    """
+    limpias, fuera = {}, []
+    for p in preguntas or []:
+        pid = p.get("id")
+        tipo = p.get("tipo")
+        bruto = (respuestas or {}).get(pid)
+        if tipo == "varias":
+            crudas = bruto if isinstance(bruto, list) else [bruto]
+            validas = {_empleo_clave(o): o for o in (p.get("opciones") or [])}
+            vals, vistas = [], set()
+            for x in crudas:
+                k = _empleo_clave(_empleo_texto(x, 60))
+                if k in validas and k not in vistas:
+                    vistas.add(k)
+                    vals.append(validas[k])
+            marcado, valor = vals, vals
+        elif tipo in ("si_no", "opcion"):
+            validas = {_empleo_clave(o): o for o in (p.get("opciones") or [])}
+            v = validas.get(_empleo_clave(_empleo_texto(bruto, 60)), "")
+            marcado, valor = ([v] if v else []), v
+        elif tipo == "numero":
+            v = _empleo_texto(bruto, 12)
+            marcado, valor = [], (v if re.match(r"^-?\d+([.,]\d+)?$", v) else "")
+        else:
+            marcado, valor = [], _empleo_texto(bruto, 500)
+        if p.get("obligatoria") and (valor == "" or valor == []):
+            raise HTTPException(400, "Falta contestar: %s" % p.get("texto"))
+        limpias[pid] = valor
+        for m in marcado:
+            if _empleo_clave(m) in (p.get("descarta") or []):
+                fuera.append("%s: %s" % (p.get("texto"), m))
+    return limpias, ("; ".join(fuera)[:400] if fuera else None)
+
+
+async def _empleo_oferta_publica(slug: str, oferta_slug: str) -> dict:
+    """Resuelve empresa + oferta desde la URL publica. Fija la BD a mano."""
+    await _set_tenant_by_slug(slug)
+    o = await db.ofertas_empleo.find_one(
+        {"slug": _empleo_slugificar(oferta_slug), "activa": True}, {"_id": 0})
+    if not o:
+        raise HTTPException(404, "Esta oferta ya no esta disponible")
+    return o
+
+
+async def _empleo_con_enlace(o: dict) -> dict:
+    """La oferta con su URL publica montada y el texto para compartirla."""
+    org = await global_db.organizations.find_one(
+        {"db_name": _current_db_name.get()}, {"_id": 0, "slug": 1})
+    if not org and _current_db_name.get() == _DEFAULT_DB_NAME:
+        # La organizacion principal no guarda `db_name` (ver `_centro_por_defecto`).
+        org = await global_db.organizations.find_one({"account_type": "owner"}, {"_id": 0, "slug": 1})
+    slug = (org or {}).get("slug") or ""
+    o = {k: v for k, v in o.items() if k != "_id"}
+    url = "%s/empleo/%s/%s" % (_PORTAL_BASE_FRONT.rstrip("/"), slug, o.get("slug"))
+    o["url"] = url
+    o["url_indeed"] = url + "?de=indeed"
+    o["texto"] = ("%s%s. Apuntate aqui: %s"
+                  % (o.get("titulo") or "",
+                     (" en " + o["ciudad"]) if o.get("ciudad") else "", url))
+    return o
+
+
+async def _empleo_centro_valido(valor) -> str:
+    """El centro de una oferta se ELIGE, no se hereda de un valor por defecto.
+
+    Una oferta de Coruña guardada en OGA5 mete a esos candidatos en el tablero
+    de Santiago y, al contratarlos, la ficha nace en la nave equivocada: sale
+    en el cuadrante que no es y no sale en el que toca. Es justo el fallo del
+    gotcha 43 —un valor por defecto que parece inocente— pero con personas.
+    Asi que aqui no hay defecto: si no viene centro, o no es uno de los de la
+    empresa, se contesta 400 y lo arregla quien crea la oferta.
+    """
+    centro = _centro_norm(_empleo_texto(valor, 30) or "")
+    org = await global_db.organizations.find_one(
+        {"db_name": _current_db_name.get()}, {"_id": 0, "centers": 1})
+    if not org and _current_db_name.get() == _DEFAULT_DB_NAME:
+        org = await global_db.organizations.find_one({"account_type": "owner"}, {"_id": 0, "centers": 1})
+    validos = [str(c).strip().upper() for c in ((org or {}).get("centers") or []) if str(c).strip()]
+    if not validos:
+        validos = sorted(c for c in await _centros_conocidos() if c)
+    if not centro:
+        raise HTTPException(400, "Elige a que centro va esta oferta (%s)" % ", ".join(validos))
+    if validos and centro.upper() not in validos:
+        raise HTTPException(400, "«%s» no es un centro de esta empresa (%s)"
+                            % (centro, ", ".join(validos)))
+    return centro.upper()
+
+
+@api_router.get("/empleo/publica/{slug}/{oferta_slug}")
+async def empleo_oferta_publica(slug: str, oferta_slug: str):
+    """La oferta tal y como la ve quien se va a apuntar. Sin sesion."""
+    o = await _empleo_oferta_publica(slug, oferta_slug)
+    return _empleo_publica_oferta(o)
+
+
+@api_router.post("/empleo/publica/{slug}/{oferta_slug}")
+async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request,
+                           datos: dict = Body(...)):
+    """Alguien se apunta. Endpoint publico: todo lo que entra es sospechoso."""
+    # EL CAMPO TRAMPA. Un bot rellena todos los inputs que encuentra; una
+    # persona no ve este porque esta escondido. Se responde OK y no se guarda:
+    # devolviendo un error, el bot aprenderia a dejarlo vacio.
+    if _empleo_texto(datos.get("web"), 50):
+        return {"ok": True}
+    _rl_public_action("empleo:%s" % _rl_key_ip(request), _EMPLEO_MAX_POR_IP_H, 3600,
+                      "Has enviado varias candidaturas seguidas. Intentalo en un rato.")
+    o = await _empleo_oferta_publica(slug, oferta_slug)
+
+    nombre = _empleo_texto(datos.get("nombre"), 120)
+    telefono = _telefono_limpio(datos.get("telefono"))
+    if len(nombre) < 3:
+        raise HTTPException(400, "Escribe tu nombre y apellidos")
+    if len(_telefono_digitos(telefono)) < 9:
+        raise HTTPException(400, "Ese telefono no parece completo")
+    if not datos.get("consiento"):
+        raise HTTPException(400, "Hay que aceptar que guardemos tus datos para el proceso")
+
+    hoy = _apoyo_hoy()
+    cuantos = await db.candidatos.count_documents(
+        {"oferta_id": o["id"], "creado_en": {"$regex": "^%s" % re.escape(hoy)}})
+    if cuantos >= _EMPLEO_MAX_POR_OFERTA_DIA:
+        raise HTTPException(429, "Hemos recibido muchas candidaturas hoy. Prueba mañana.")
+
+    limpias, motivo = _empleo_revisa_respuestas(o.get("preguntas") or [],
+                                                datos.get("respuestas") or {})
+    ahora = datetime.now(timezone.utc)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "oferta_id": o["id"], "oferta_titulo": o.get("titulo") or "",
+        "nombre": nombre, "telefono": telefono,
+        "tel_clave": _telefono_digitos(telefono)[-9:],
+        "email": _empleo_texto(datos.get("email"), 160).lower(),
+        "ciudad": _empleo_texto(datos.get("ciudad"), 80),
+        "centro": o.get("centro") or "",
+        "carnet_desde": _empleo_texto(datos.get("carnet_desde"), 20),
+        "experiencia": _empleo_texto(datos.get("experiencia"), 60),
+        "disponibilidad": _empleo_texto(datos.get("disponibilidad"), 120),
+        "respuestas": limpias,
+        # De donde viene: el enlace lleva `?de=indeed`, `?de=whatsapp`... Sin
+        # esto no hay forma de saber que anuncio trae gente y cual se paga en balde.
+        "origen": _empleo_texto(datos.get("origen"), 40) or "directo",
+        "fase": "descartado" if motivo else "nuevo",
+        "motivo_descarte": motivo or "",
+        "descarte_automatico": bool(motivo),
+        "notas": "", "driver_id": None,
+        "creado_en": ahora.isoformat(),
+        # Datos personales con fecha de caducidad: se van solos a los 12 meses.
+        "expira_en": ahora + timedelta(days=30 * _EMPLEO_MESES_GUARDA),
+    }
+    try:
+        await db.candidatos.insert_one(dict(doc))   # copia: insert_one muta (gotcha 42)
+    except DuplicateKeyError:
+        raise HTTPException(409, "Ya nos llego tu candidatura para esta oferta. Gracias.")
+    return {"ok": True, "nombre": nombre}
+
+
+@api_router.post("/empleo/ofertas")
+async def empleo_crear_oferta(datos: dict = Body(...), user: dict = Depends(require_admin)):
+    titulo = _empleo_texto(datos.get("titulo"), 120)
+    if len(titulo) < 3:
+        raise HTTPException(400, "Ponle un titulo a la oferta")
+    centro = await _empleo_centro_valido(datos.get("centro"))
+    o = OfertaEmpleo(
+        titulo=titulo, centro=centro,
+        ciudad=_empleo_texto(datos.get("ciudad"), 80),
+        jornada=_empleo_texto(datos.get("jornada"), 60),
+        salario=_empleo_texto(datos.get("salario"), 60),
+        descripcion=_empleo_texto(datos.get("descripcion"), 4000),
+        requisitos=_empleo_texto(datos.get("requisitos"), 2000),
+        activa=bool(datos.get("activa", True)),
+        preguntas=_empleo_normaliza_preguntas(datos.get("preguntas")),
+        creada_en=datetime.now(timezone.utc).isoformat(),
+        creada_por=user.get("name") or user.get("username") or "",
+    )
+    doc = serialize_doc(o.model_dump())
+    doc["slug"] = await _empleo_slug_libre("%s %s" % (titulo, doc.get("ciudad") or ""))
+    await db.ofertas_empleo.insert_one(dict(doc))
+    return await _empleo_con_enlace(doc)
+
+
+@api_router.get("/empleo/ofertas")
+async def empleo_listar_ofertas(center: Optional[str] = None, user: dict = Depends(require_admin)):
+    q = _filtro_centro(user, center)
+    if "center" in q:
+        q["centro"] = q.pop("center")
+    ofertas = await db.ofertas_empleo.find(q, {"_id": 0}).sort("creada_en", -1).to_list(200)
+    ids = [o["id"] for o in ofertas]
+    por: dict = {}
+    if ids:
+        async for r in db.candidatos.aggregate([
+                {"$match": {"oferta_id": {"$in": ids}}},
+                {"$group": {"_id": {"o": "$oferta_id", "f": "$fase"}, "n": {"$sum": 1}}}]):
+            k = r["_id"]
+            por.setdefault(k.get("o"), {})[k.get("f") or "nuevo"] = r["n"]
+    salida = []
+    for o in ofertas:
+        o = await _empleo_con_enlace(o)
+        o["por_fase"] = por.get(o["id"], {})
+        o["candidatos"] = sum(o["por_fase"].values())
+        salida.append(o)
+    return {"ofertas": salida, "fases": list(EMPLEO_FASES), "tipos": list(EMPLEO_TIPOS)}
+
+
+@api_router.patch("/empleo/ofertas/{oferta_id}")
+async def empleo_editar_oferta(oferta_id: str, datos: dict = Body(...),
+                               user: dict = Depends(require_admin)):
+    o = await db.ofertas_empleo.find_one({"id": oferta_id}, {"_id": 0})
+    if not o:
+        raise HTTPException(404, "Esa oferta no existe")
+    cambios: dict = {}
+    for campo, largo in (("titulo", 120), ("ciudad", 80), ("jornada", 60), ("salario", 60),
+                         ("descripcion", 4000), ("requisitos", 2000)):
+        if campo in datos:
+            cambios[campo] = _empleo_texto(datos[campo], largo)
+    if "centro" in datos:
+        cambios["centro"] = await _empleo_centro_valido(datos.get("centro"))
+    if "activa" in datos:
+        cambios["activa"] = bool(datos["activa"])
+    if "preguntas" in datos:
+        cambios["preguntas"] = _empleo_normaliza_preguntas(datos["preguntas"])
+    if cambios.get("titulo") and cambios["titulo"] != o.get("titulo"):
+        cambios["slug"] = await _empleo_slug_libre(
+            "%s %s" % (cambios["titulo"], cambios.get("ciudad", o.get("ciudad") or "")), oferta_id)
+    if cambios:
+        await db.ofertas_empleo.update_one({"id": oferta_id}, {"$set": cambios})
+        o = await db.ofertas_empleo.find_one({"id": oferta_id}, {"_id": 0})
+    return await _empleo_con_enlace(o)
+
+
+@api_router.get("/empleo/candidatos")
+async def empleo_listar_candidatos(oferta: Optional[str] = None, fase: Optional[str] = None,
+                                   center: Optional[str] = None,
+                                   user: dict = Depends(require_admin)):
+    q = _filtro_centro(user, center)
+    if "center" in q:
+        q["centro"] = q.pop("center")
+    if oferta:
+        q["oferta_id"] = oferta
+    if fase:
+        if fase not in EMPLEO_FASES:
+            raise HTTPException(400, "Esa fase no existe")
+        q["fase"] = fase
+    cands = await db.candidatos.find(q, {"_id": 0, "expira_en": 0}).sort("creado_en", -1).to_list(500)
+    for c in cands:
+        # El enlace de WhatsApp lo arma SIEMPRE el backend (gotcha 47): a mano
+        # sale sin prefijo y abre un numero que no existe.
+        c["wa"] = enlace_wa(c.get("telefono") or "",
+                            "Hola %s, te escribimos por la oferta de %s."
+                            % ((c.get("nombre") or "").split(" ")[0],
+                               c.get("oferta_titulo") or "reparto"))
+    return {"candidatos": cands, "fases": list(EMPLEO_FASES)}
+
+
+@api_router.patch("/empleo/candidatos/{cand_id}")
+async def empleo_mover_candidato(cand_id: str, datos: dict = Body(...),
+                                 user: dict = Depends(require_admin)):
+    c = await db.candidatos.find_one({"id": cand_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(404, "Ese candidato no existe")
+    cambios: dict = {}
+    if "fase" in datos:
+        f = str(datos["fase"] or "").strip()
+        if f not in EMPLEO_FASES:
+            raise HTTPException(400, "Esa fase no existe")
+        if f == "contratado" and not c.get("driver_id"):
+            raise HTTPException(400, "Para contratar usa el boton que crea la ficha")
+        cambios["fase"] = f
+        if f != "descartado":
+            # Deshacer un descarte automatico: se limpia el motivo, o quedaria
+            # una persona en «llamado» con un cartel de descartada encima.
+            cambios["motivo_descarte"] = ""
+            cambios["descarte_automatico"] = False
+    if "notas" in datos:
+        cambios["notas"] = _empleo_texto(datos["notas"], 2000)
+    if "motivo_descarte" in datos:
+        cambios["motivo_descarte"] = _empleo_texto(datos["motivo_descarte"], 400)
+    if cambios:
+        await db.candidatos.update_one({"id": cand_id}, {"$set": cambios})
+    return await db.candidatos.find_one({"id": cand_id}, {"_id": 0, "expira_en": 0})
+
+
+@api_router.post("/empleo/candidatos/{cand_id}/contratar")
+async def empleo_contratar(cand_id: str, user: dict = Depends(require_admin)):
+    """Crea la ficha del conductor con lo que escribio el propio candidato.
+
+    Es el motivo de todo el modulo: el alta a mano es de donde salen las fichas
+    duplicadas y los telefonos que faltan. El `transporter_id` sigue sin poder
+    rellenarse solo —lo da Amazon— pero queda pendiente y a la vista, no en
+    blanco y olvidado.
+    """
+    c = await db.candidatos.find_one({"id": cand_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(404, "Ese candidato no existe")
+    if c.get("driver_id"):
+        raise HTTPException(409, "Este candidato ya tiene ficha de conductor")
+    email = (c.get("email") or "").strip()
+    if email:
+        otra = await db.drivers.find_one(
+            {"email": {"$regex": "^%s$" % re.escape(email), "$options": "i"},
+             "active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1})
+        if otra:
+            raise HTTPException(409, "Ya hay un conductor activo con ese correo (%s)"
+                                % (otra.get("name") or otra.get("id")))
+    d = Driver(name=c.get("nombre") or "", phone=c.get("telefono") or "",
+               email=email or None, center=c.get("centro") or None,
+               telefono_por="empleo", telefono_en=datetime.now(timezone.utc).isoformat(),
+               notas=("Alta desde la oferta «%s»." % (c.get("oferta_titulo") or "")).strip())
+    doc = serialize_doc(d.model_dump())
+    try:
+        await db.drivers.insert_one(dict(doc))
+    except DuplicateKeyError:
+        raise HTTPException(409, "Ya hay un conductor activo con ese correo")
+    await db.candidatos.update_one(
+        {"id": cand_id},
+        {"$set": {"fase": "contratado", "driver_id": d.id,
+                  "contratado_en": datetime.now(timezone.utc).isoformat(),
+                  "contratado_por": user.get("name") or user.get("username") or ""}})
+    return {"ok": True, "driver_id": d.id, "nombre": d.name, "falta_transporter_id": True}
+
+
+@api_router.delete("/empleo/candidatos/{cand_id}")
+async def empleo_borrar_candidato(cand_id: str, user: dict = Depends(require_admin)):
+    """Borrado a mano: alguien pide que quitemos sus datos y hay que poder."""
+    r = await db.candidatos.delete_one({"id": cand_id})
+    if not r.deleted_count:
+        raise HTTPException(404, "Ese candidato no existe")
+    return {"ok": True}
+
+
 # ── EL CANAL CON EL TALLER, EN LOS DOS SENTIDOS ─────────────────────────────
 # Lo que sale (los recordatorios) ya existía. Lo que faltaba es lo que ENTRA:
 # si el taller termina la reparación el martes y a nosotros no nos tocaba
@@ -32804,27 +33342,32 @@ async def cerrar_plantilla_compartida(draft_id: str, admin=Depends(require_admin
 
 @app.put("/api/tools/plantilla-compartida/{draft_id}", dependencies=[Depends(require_admin)])
 async def guardar_plantilla_compartida(draft_id: str, body: dict = Body(...), admin=Depends(require_admin)):
-    """Guardado optimista: si otro equipo acaba de guardar, no se pisa en silencio."""
-    state = body.get("state")
-    revision = body.get("revision")
-    if not isinstance(state, dict) or not isinstance(state.get("rows"), list) or not isinstance(revision, int):
-        raise HTTPException(400, "Actualización de plantilla inválida.")
+    """YA NO SE GUARDA LA HOJA ENTERA. Nunca. Ni con la revision al dia.
+
+    Esta era la puerta por la que se borraba el trabajo de la otra persona
+    (Mery y Judit). El control de version no bastaba: guardar UNA celda devuelve
+    la revision nueva y el cliente se la queda sin recargar los datos, asi que
+    su siguiente guardado completo pasaba la comprobacion y pisaba lo de la otra
+    con un HTTP 200 limpio. Reproducido contra produccion el 04-09-2026.
+
+    Se deja la ruta a proposito, en vez de borrarla: un despliegue no cierra el
+    navegador de nadie, y la pantalla que Mery tenga abierta desde por la manana
+    seguira mandando esto durante horas. Con un 409 esa pestana hace lo que ya
+    sabe hacer —recargar la hoja del servidor— y como mucho pierde SU ultimo
+    clic, nunca el trabajo de la otra. Cada cambio va ahora por su operacion:
+    `/celda`, `/marca`, `/fila`, `/meta` y `/horas`.
+    """
     doc = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "La plantilla compartida ya no existe.")
     allowed = admin.get("allowed_centers") or []
     if allowed and doc.get("center") not in allowed:
         raise HTTPException(403, "Sin acceso a este centro")
-    now = datetime.now(timezone.utc).isoformat()
-    result = await db.plantillas_compartidas.update_one(
-        {"id": draft_id, "revision": revision},
-        {"$set": {"state": state, "updated_at": now, "updated_by": admin.get("name") or "Usuario"}, "$inc": {"revision": 1}},
-    )
-    if not result.modified_count:
-        latest = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
-        raise HTTPException(409, detail={"message": "Otro dispositivo acaba de guardar cambios.", "draft": _plantilla_shared_payload(latest or {})})
-    saved = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
-    return _plantilla_shared_payload(saved)
+    raise HTTPException(409, detail={
+        "message": "Recarga la pagina (F5): esta pantalla es de una version anterior "
+                   "y guardaba la plantilla entera, que es lo que borraba el trabajo "
+                   "de la otra persona.",
+        "draft": _plantilla_shared_payload(doc)})
 
 
 # ── Historial de plantillas ──
@@ -32873,6 +33416,146 @@ async def plantilla_compartida_celda(draft_id: str, body: dict = Body(...), admi
                                          "draft": _plantilla_shared_payload(doc)})
     doc = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
     return _plantilla_shared_payload(doc)
+
+
+# ── LO QUE NO ES UNA CELDA TAMBIEN TIENE QUE VIAJAR SOLO ──────────────────────
+# Mery, 04-09-2026: «lo de las horas si, lo de hacer cambios las dos a la vez
+# no». Y tenia razon. El arreglo del 03-09 solo cubrio ESCRIBIR en una celda;
+# todo lo demas de esta pantalla —marcar una ruta en rojo o amarillo, una furgo
+# en rosa, un conductor, anadir o quitar una fila, pegar las horas en todas—
+# seguia guardando la HOJA ENTERA.
+#
+# Y el control de version no salvaba nada, por un motivo que no se ve leyendo el
+# codigo: el guardado de UNA celda devuelve la revision nueva y el cliente se la
+# queda, pero NO recarga la hoja. Asi que despues de escribir su propia celda,
+# el cliente tiene la revision al dia y los datos viejos: su siguiente guardado
+# completo pasa la comprobacion y pisa a la otra persona con un 200 limpio.
+#
+# Reproducido contra produccion el 04-09-2026, en este orden exacto:
+#   1. Mery escribe en la fila 0        -> revision 2
+#   2. Judit escribe en la fila 1       -> revision 3 (Judit se queda con la 3)
+#   3. Judit marca una ruta en rojo     -> PUT de la hoja entera con revision 3
+#   4. la fila 0 vuelve a estar VACIA, con HTTP 200 y sin ningun aviso
+#
+# Por eso cada cosa tiene aqui su propia operacion, y todas son de las que no
+# pueden pisarse: conjuntos con $addToSet/$pull, filas con $push, y campos
+# sueltos con $set. La hoja entera solo se manda al CREAR el borrador.
+_PLANTILLA_MARCAS = ("red_routes", "yellow_routes", "pink_furgos", "marked_conductors")
+_PLANTILLA_HORAS = ("h_salida", "h_bajada", "h_llegada")
+_PLANTILLA_META = ("week", "date")
+_PLANTILLA_MAX_FILAS = 300
+
+
+async def _plantilla_doc(draft_id: str, admin: dict) -> dict:
+    doc = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Esa plantilla ya no existe")
+    permitidos = admin.get("allowed_centers") or []
+    if permitidos and doc.get("center") not in permitidos:
+        raise HTTPException(403, "Sin acceso a este centro")
+    return doc
+
+
+async def _plantilla_tocada(draft_id: str, cambios: dict, admin: dict, extra: dict = None) -> dict:
+    """Aplica un cambio pequeno y devuelve la plantilla ya guardada."""
+    orden = {"$set": {**cambios,
+                      "updated_at": datetime.now(timezone.utc).isoformat(),
+                      "updated_by": admin.get("name") or "Usuario"},
+             "$inc": {"revision": 1}}
+    if extra:
+        orden.update(extra)
+    await db.plantillas_compartidas.update_one({"id": draft_id}, orden)
+    doc = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
+    return _plantilla_shared_payload(doc or {})
+
+
+@api_router.patch("/tools/plantilla-compartida/{draft_id}/marca")
+async def plantilla_compartida_marca(draft_id: str, body: dict = Body(...),
+                                     admin=Depends(require_admin)):
+    """Pone o quita UNA marca de color. `$addToSet`/`$pull`, nunca la lista entera.
+
+    Dos personas marcando cosas distintas no pueden pisarse, y marcar dos veces
+    lo mismo tampoco rompe nada: es justo lo que dan estas dos operaciones.
+    """
+    await _plantilla_doc(draft_id, admin)
+    tipo = str(body.get("tipo") or "")
+    if tipo not in _PLANTILLA_MARCAS:
+        raise HTTPException(400, "Marca desconocida")
+    valor = str(body.get("valor") or "").strip()[:120]
+    if not valor:
+        raise HTTPException(400, "Falta que marcar")
+    campo = "state.%s" % tipo
+    ahora = datetime.now(timezone.utc).isoformat()
+    op = "$addToSet" if body.get("activo") else "$pull"
+    await db.plantillas_compartidas.update_one(
+        {"id": draft_id},
+        {op: {campo: valor},
+         "$set": {"updated_at": ahora, "updated_by": admin.get("name") or "Usuario"},
+         "$inc": {"revision": 1}})
+    doc = await db.plantillas_compartidas.find_one({"id": draft_id}, {"_id": 0})
+    return _plantilla_shared_payload(doc or {})
+
+
+@api_router.post("/tools/plantilla-compartida/{draft_id}/fila")
+async def plantilla_compartida_anadir_fila(draft_id: str, admin=Depends(require_admin)):
+    """Anade una fila vacia al final. Con `$push`: si las dos anaden, salen dos."""
+    doc = await _plantilla_doc(draft_id, admin)
+    if len((doc.get("state") or {}).get("rows") or []) >= _PLANTILLA_MAX_FILAS:
+        raise HTTPException(400, "Esta plantilla ya tiene demasiadas filas")
+    vacia = {c: "" for c in _PLANTILLA_CELDAS}
+    return await _plantilla_tocada(draft_id, {}, admin, {"$push": {"state.rows": vacia}})
+
+
+@api_router.delete("/tools/plantilla-compartida/{draft_id}/fila/{fila}")
+async def plantilla_compartida_quitar_fila(draft_id: str, fila: int, ruta_ref: str = "",
+                                           admin=Depends(require_admin)):
+    """Quita una fila. Comprueba que sigue siendo LA MISMA antes de tocarla.
+
+    Sin `ruta_ref`, si la otra persona anadio o quito filas entre medias, los
+    indices bailan y se borraria la fila equivocada: un dato falso, que es peor
+    que un error.
+    """
+    doc = await _plantilla_doc(draft_id, admin)
+    filas = list((doc.get("state") or {}).get("rows") or [])
+    if fila < 0 or fila >= len(filas):
+        raise HTTPException(409, "Esa fila ya no existe")
+    if ruta_ref and str(filas[fila].get("ruta") or "") != ruta_ref:
+        raise HTTPException(409, "Las filas han cambiado, se recarga la plantilla")
+    del filas[fila]
+    return await _plantilla_tocada(draft_id, {"state.rows": filas}, admin)
+
+
+@api_router.patch("/tools/plantilla-compartida/{draft_id}/meta")
+async def plantilla_compartida_meta(draft_id: str, body: dict = Body(...),
+                                    admin=Depends(require_admin)):
+    """La semana y la fecha de la cabecera, cada una por su lado."""
+    await _plantilla_doc(draft_id, admin)
+    cambios = {"state.%s" % k: str(body.get(k) or "")[:40]
+               for k in _PLANTILLA_META if k in body}
+    if not cambios:
+        raise HTTPException(400, "Nada que cambiar")
+    return await _plantilla_tocada(draft_id, cambios, admin)
+
+
+@api_router.patch("/tools/plantilla-compartida/{draft_id}/horas")
+async def plantilla_compartida_horas(draft_id: str, body: dict = Body(...),
+                                     admin=Depends(require_admin)):
+    """Pega las mismas horas en TODAS las filas, sin tocar el resto de campos.
+
+    Es el unico cambio que toca muchas filas de golpe, y aun asi solo escribe
+    las tres horas: lo que haya escrito la otra persona en conductor, movil o
+    furgo se queda como esta.
+    """
+    doc = await _plantilla_doc(draft_id, admin)
+    filas = (doc.get("state") or {}).get("rows") or []
+    horas = {h: str(body.get(h) or "")[:20] for h in _PLANTILLA_HORAS if body.get(h)}
+    if not horas:
+        raise HTTPException(400, "No hay horas que pegar")
+    cambios = {}
+    for i in range(len(filas)):
+        for h, v in horas.items():
+            cambios["state.rows.%d.%s" % (i, h)] = v
+    return await _plantilla_tocada(draft_id, cambios, admin)
 
 
 @api_router.get("/plantillas")

@@ -61,6 +61,18 @@ export const AYUDA = {
     ],
     ojo: 'La carpeta que descomprimes NO se puede borrar ni mover: Chrome carga la extensión desde ahí. Y solo se ve lo que la extensión haya capturado — si nadie tuvo Cortex abierto, de esas horas no hay nada.',
   },
+  empleo: {
+    que: 'Tus ofertas de trabajo con su enlace publico, el cuestionario que quieras y quien se apunta. Al contratar se crea la ficha del conductor sola.',
+    pasos: [
+      'Crea la oferta y ELIGE EL CENTRO: eso decide en que tablero salen sus candidatos y en que nave nace la ficha al contratar.',
+      'Anade las preguntas que quieras: si/no, elegir una, marcar varias, texto o un numero.',
+      'Si marcas una respuesta como «descarta», quien la elija se aparta solo y sale en la columna Descartado con el motivo. Se puede deshacer moviendolo de columna.',
+      'Copia el enlace y pegalo en Indeed como URL de candidatura, o mandalo por WhatsApp. El de Indeed lleva `?de=indeed` para saber que anuncio trae gente.',
+      'Cuando alguien se apunta, sale en Nuevo. Abre la tarjeta para ver sus respuestas y escribirle por WhatsApp.',
+      'Al darle a Contratar se crea la ficha del conductor con sus datos. El Transporter ID hay que ponerlo a mano: lo da Amazon.',
+    ],
+    ojo: 'Lo que descarta NO lo ve el candidato: si supiera que respuesta le deja fuera, contestaria eso. Y los datos se borran solos a los 12 meses; si alguien pide que los quites antes, la papelera de su tarjeta lo hace de verdad.',
+  },
   apoyo: {
     que: 'Cuando alguien va tarde: elegir qué paradas le quita otro conductor y mandárselo por WhatsApp con el mapa. Queda registrado.',
     pasos: [

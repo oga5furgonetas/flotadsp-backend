@@ -185,12 +185,10 @@ export default function PlantillaGenerador() {
   const [markedSet,  setMarkedSet]  = useState(new Set())
   const [sharedDraft, setSharedDraft] = useState(null) // { id, revision, updated_by }
   const celdaTimers = useRef({})        // un temporizador por celda
-  const soloCelda = useRef(false)       // el ultimo cambio fue de una celda
   const celdaEnFoco = useRef(null)      // { fila, campo } mientras se escribe
   const focoTimer = useRef(null)
+  const metaTimer = useRef(null)
   const [sharedNote, setSharedNote] = useState('')
-  const skipSharedSave = useRef(false)
-  const sharedTimer = useRef(null)
   // Tras "Nueva plantilla" NO nos re-unimos al borrador compartido (era el bug:
   // el auto-join re-enganchaba al borrador viejo y el botón parecía roto).
   const suppressJoin = useRef(false)
@@ -205,25 +203,29 @@ export default function PlantillaGenerador() {
   const [hideNY, setHideNY] = useState(false)
   useEffect(() => { setHideNY((center || '').toUpperCase() === 'OGA5') }, [center])
 
-  const sharedPayload = useCallback(() => ({
-    ...(data || {}),
-    red_routes: [...redSet], yellow_routes: [...yellowSet],
-    pink_furgos: [...pinkSet], marked_conductors: [...markedSet],
-  }), [data, redSet, yellowSet, pinkSet, markedSet])
-
   function applySharedDraft(draft) {
     const s = draft?.state
     if (!s?.rows) return
-    skipSharedSave.current = true
     // La celda que se está escribiendo AHORA no se toca: su versión del
     // servidor llega medio segundo tarde y borraría las últimas letras.
     // Se lee con la forma funcional de `setData` A PROPÓSITO: esta función la
     // llama un temporizador, y leer `data` de fuera daría el valor de hace dos
     // segundos — se restauraría una letra vieja, que es peor que no hacer nada.
     setData(prev => {
-      const foco = celdaEnFoco.current
-      const rows = (foco && s.rows[foco.fila] && prev?.rows?.[foco.fila])
-        ? s.rows.map((r, i) => (i === foco.fila ? { ...r, [foco.campo]: prev.rows[i][foco.campo] } : r))
+      // No basta con respetar la celda que se esta escribiendo: si se escriben
+      // dos seguidas, la primera puede tener su guardado aun en el aire y la
+      // version del servidor llegaria sin ella, borrandola en pantalla. Se
+      // respetan TODAS las que tengan un guardado pendiente.
+      const pend = Object.keys(celdaTimers.current)
+      const rows = (pend.length && prev?.rows?.length)
+        ? s.rows.map((r, i) => {
+            const mios = {}
+            for (const k of pend) {
+              const [fila, campo] = k.split(':')
+              if (Number(fila) === i && prev.rows[i] && campo in prev.rows[i]) mios[campo] = prev.rows[i][campo]
+            }
+            return Object.keys(mios).length ? { ...r, ...mios } : r
+          })
         : s.rows
       return { week: s.week, date: s.date, rows }
     })
@@ -258,32 +260,49 @@ export default function PlantillaGenerador() {
     return () => clearInterval(id)
   }, [sharedDraft?.id, sharedDraft?.revision])
 
-  // Guardado automático con control de versión. Si dos personas cambian a la vez,
-  // no se pierde nada silenciosamente: se recarga la versión compartida y avisa.
-  useEffect(() => {
-    if (!sharedDraft?.id || !data) return
-    if (skipSharedSave.current) { skipSharedSave.current = false; return }
-    // Una celda ya se guardó sola: no hace falta mandar la hoja entera, y
-    // mandarla es justo lo que pisaba el trabajo de la otra persona.
-    if (soloCelda.current) { soloCelda.current = false; return }
-    clearTimeout(sharedTimer.current)
-    sharedTimer.current = setTimeout(async () => {
-      try {
-        const r = await apiFetch(`/tools/plantilla-compartida/${sharedDraft.id}`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ revision: sharedDraft.revision, state: sharedPayload() }),
-        })
-        const saved = await r.json()
-        skipSharedSave.current = true
-        setSharedDraft(p => p && ({ ...p, revision: saved.revision, updated_by: saved.updated_by }))
-        setSharedNote(t('pg.sync'))
-      } catch (e) {
-        setSharedNote(t('pg.conflicto'))
-        try { const d = await (await apiFetch(`/tools/plantilla-compartida/${sharedDraft.id}`)).json(); applySharedDraft(d) } catch {}
+  /* AQUI YA NO SE GUARDA LA HOJA ENTERA, Y ESE ERA EL FALLO.
+     ─────────────────────────────────────────────────────────────────────
+     Mery, 04-09-2026: «lo de las horas si, lo de hacer cambios las dos a la
+     vez no». El arreglo anterior solo cubrio ESCRIBIR en una celda; marcar una
+     ruta en rojo, una furgo en rosa, un conductor, anadir o quitar una fila o
+     pegar las horas seguian mandando la hoja completa.
+
+     Y el control de version no salvaba nada, por algo que no se ve leyendo el
+     codigo: guardar UNA celda devuelve la revision nueva y este cliente se la
+     queda, pero no recarga los datos. Con la revision al dia y los datos
+     viejos, el siguiente guardado completo pasaba la comprobacion y borraba lo
+     de la otra, con un 200 limpio. Reproducido contra produccion:
+
+       Mery escribe fila 0 -> Judit escribe fila 1 -> Judit marca una ruta en
+       rojo -> la fila 0 vuelve a estar vacia.
+
+     Ahora cada cambio manda SOLO lo que ha cambiado (`mandar`), y las
+     operaciones del servidor son de las que no pueden pisarse. La hoja entera
+     solo se manda al crear el borrador. */
+  const mandar = useCallback(async (ruta, opciones) => {
+    if (!sharedDraft?.id) return null
+    try {
+      const r = await apiFetch(`/tools/plantilla-compartida/${sharedDraft.id}${ruta}`, opciones)
+      if (!r.ok) {
+        // 409: las filas se movieron. Se recarga y se sigue desde ahi.
+        const d = await (await apiFetch(`/tools/plantilla-compartida/${sharedDraft.id}`)).json()
+        if (d?.id) applySharedDraft(d)
+        return null
       }
-    }, 900)
-    return () => clearTimeout(sharedTimer.current)
-  }, [data, redSet, yellowSet, pinkSet, markedSet, sharedDraft?.id, sharedDraft?.revision, sharedPayload])
+      const saved = await r.json()
+      // La respuesta trae la hoja del servidor: se aplica. Quedarse solo con la
+      // revision dejaba a esta pantalla creyendose al dia con los datos viejos,
+      // y entonces el refresco de 2,5 s (`revision` mayor) no entraba NUNCA.
+      if (saved?.state?.rows) applySharedDraft(saved)
+      else setSharedDraft(p => p && ({ ...p, revision: saved.revision, updated_by: saved.updated_by }))
+      setSharedNote(t('pg.sync'))
+      return saved
+    } catch { setSharedNote(t('pg.conflicto')); return null }
+  }, [sharedDraft?.id, t]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const json = (cuerpo) => ({
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cuerpo),
+  })
 
   // Furgos activas del centro
   const [furgosDisp, setFurgosDisp] = useState([]) // ['2865NGX', ...]
@@ -323,7 +342,6 @@ export default function PlantillaGenerador() {
   function reset() {
     // Cierra el borrador compartido para TODOS los dispositivos y evita que el
     // auto-join nos re-enganche al borrador viejo (era el bug de "Nueva plantilla").
-    clearTimeout(sharedTimer.current)
     suppressJoin.current = true
     const draftId = sharedDraft?.id
     if (draftId) apiFetch(`/tools/plantilla-compartida/${draftId}`, { method: 'DELETE' }).catch(() => {})
@@ -394,8 +412,13 @@ export default function PlantillaGenerador() {
     setLoading(false)
   }
 
-  function toggle(set, setter, key) {
+  /* Una marca de color es un conjunto, no una celda: viaja sola con
+     `$addToSet`/`$pull`. Dos personas marcando cosas distintas no pueden
+     pisarse, y marcar dos veces lo mismo tampoco rompe nada. */
+  function toggle(set, setter, key, tipo) {
+    const activo = !set.has(key)
     setter(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n })
+    if (tipo) mandar('/marca', json({ tipo, valor: key, activo }))
   }
 
   /* DOS PERSONAS A LA VEZ EN LA MISMA PLANTILLA (Mery y Judit, 03-09-2026).
@@ -421,9 +444,14 @@ export default function PlantillaGenerador() {
           return
         }
         const saved = await r.json()
-        setSharedDraft(p => p && ({ ...p, revision: saved.revision, updated_by: saved.updated_by }))
+        // Igual que en `mandar`: al guardar una celda tambien llega la hoja de
+        // los demas. La celda que se acaba de escribir esta protegida porque su
+        // temporizador sigue registrado hasta el `finally` de justo debajo.
+        if (saved?.state?.rows) applySharedDraft(saved)
+        else setSharedDraft(p => p && ({ ...p, revision: saved.revision, updated_by: saved.updated_by }))
         setSharedNote(t('pg.sync'))
       } catch { setSharedNote(t('pg.conflicto')) }
+      finally { delete celdaTimers.current[clave] }
     }, 500)
   }
 
@@ -437,7 +465,6 @@ export default function PlantillaGenerador() {
       clearTimeout(focoTimer.current)
       focoTimer.current = setTimeout(() => { celdaEnFoco.current = null }, 3000)
     }
-    soloCelda.current = (field !== '_paste_hours')
     setData(prev => ({
       ...prev,
       rows: prev.rows.map((r, i) => {
@@ -447,7 +474,11 @@ export default function PlantillaGenerador() {
       })
     }))
   }
-  function editMeta(field, value) { setData(prev => ({ ...prev, [field]: value })) }
+  function editMeta(field, value) {
+    setData(prev => ({ ...prev, [field]: value }))
+    clearTimeout(metaTimer.current)
+    metaTimer.current = setTimeout(() => mandar('/meta', json({ [field]: value })), 500)
+  }
 
   // Validar contra lo que la empresa ya sabe, medio segundo después del
   // último cambio: cada aviso trae su sugerencia y se aplica con un clic.
@@ -469,13 +500,23 @@ export default function PlantillaGenerador() {
     return () => { vivo = false; clearTimeout(t) }
   }, [data?.rows, data?.date, step]) // eslint-disable-line
   const conAviso = new Set(avisos.map(a => `${a.fila}:${a.campo}`))
-  function addRow() {
+  /* Anadir y quitar filas mueven los INDICES, que es de lo que se fia el
+     guardado por celda. Por eso van al servidor y la version buena vuelve de
+     alli: si las dos anaden una fila, salen las dos; y al quitar se comprueba
+     que la fila sigue siendo la misma (`ruta_ref`) antes de tocarla. */
+  async function addRow() {
     setData(prev => ({
       ...prev,
       rows: [...prev.rows, { ruta: '', conductor: '', movil: '', furgo: '', h_salida: '', h_bajada: '', h_llegada: '', observaciones: '' }],
     }))
+    await mandar('/fila', { method: 'POST' })   // `mandar` ya aplica lo que vuelve
   }
-  function removeRow(idx) { setData(prev => ({ ...prev, rows: prev.rows.filter((_, i) => i !== idx) })) }
+
+  async function removeRow(idx) {
+    const ref = data?.rows?.[idx]?.ruta || ''
+    setData(prev => ({ ...prev, rows: prev.rows.filter((_, i) => i !== idx) }))
+    await mandar(`/fila/${idx}?ruta_ref=${encodeURIComponent(ref)}`, { method: 'DELETE' })
+  }
 
   function isBlueRow(row) {
     const h = row.h_llegada || ''
@@ -671,6 +712,12 @@ export default function PlantillaGenerador() {
                       h_salida:  copiedHours.h_salida  || r.h_salida,
                     }))
                   }))
+                  // Solo las tres horas: lo que haya escrito la otra persona en
+                  // conductor, movil o furgo no se toca.
+                  mandar('/horas', json({
+                    h_llegada: copiedHours.h_llegada || '', h_bajada: copiedHours.h_bajada || '',
+                    h_salida: copiedHours.h_salida || '',
+                  }))
                 }}
                 className="ml-auto rounded bg-brand-500/20 px-2 py-0.5 text-brand-300 hover:bg-brand-500/40 transition font-semibold"
               >
@@ -745,7 +792,7 @@ export default function PlantillaGenerador() {
                       <td className={`border border-[#BFBFBF] px-1 py-0.5 ${isMarked && !isRed ? 'bg-[#FCE4D6]' : ''}`}>
                         <div className="flex items-center gap-1">
                           <button
-                            onClick={() => toggle(markedSet, setMarkedSet, row.conductor)}
+                            onClick={() => toggle(markedSet, setMarkedSet, row.conductor, 'marked_conductors')}
                             title={t('pg.tMarcar')}
                             className={`h-3.5 w-3.5 shrink-0 rounded-sm border transition ${
                               isMarked
@@ -777,7 +824,7 @@ export default function PlantillaGenerador() {
                           isRed={isRed}
                           furgosDisp={furgosDisp}
                           usedFurgos={data.rows.filter((_, ri) => ri !== i).map(r => (r.furgo || '').toUpperCase()).filter(Boolean)}
-                          onTogglePink={() => row.furgo && toggle(pinkSet, setPinkSet, row.furgo)}
+                          onTogglePink={() => row.furgo && toggle(pinkSet, setPinkSet, row.furgo, 'pink_furgos')}
                           textCl={textCl}
                         />
                       </td>
@@ -808,12 +855,12 @@ export default function PlantillaGenerador() {
                       <td className="border border-[#BFBFBF] px-1 py-0.5">
                         <div className="flex items-center justify-center gap-1">
                           <button
-                            onClick={() => toggle(yellowSet, setYellowSet, rowKey)}
+                            onClick={() => toggle(yellowSet, setYellowSet, rowKey, 'yellow_routes')}
                             title={t('pg.tAmarilla')}
                             className={`h-3.5 w-3.5 rounded-sm border transition ${isYellow ? 'bg-yellow-300 border-yellow-500' : 'border-gray-300 hover:border-yellow-400'}`}
                           />
                           <button
-                            onClick={() => toggle(redSet, setRedSet, rowKey)}
+                            onClick={() => toggle(redSet, setRedSet, rowKey, 'red_routes')}
                             title={t('pg.tRoja')}
                             className={`h-3.5 w-3.5 rounded-sm border transition ${isRed ? 'bg-red-500 border-red-300' : 'border-gray-300 hover:border-red-400'}`}
                           />
