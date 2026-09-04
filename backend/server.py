@@ -17557,6 +17557,27 @@ def _apoyo_telefono(fi_tel, cx_tel, cx_del_dia: bool = True) -> dict:
             "telefono_discrepa": False}
 
 
+def _apoyo_fundir_gente(mapa: dict, docs: list, del_dia: bool) -> dict:
+    """Vuelca la `gente` de varios `cortex_resumen` sobre `mapa`, sin pisar.
+
+    Aparte para poder probarla sin base de datos. Dos reglas:
+    - lo que ya esta en el mapa NO se toca, asi lo de hoy gana sobre lo de ayer;
+    - dentro del mismo dia, con varios centros, gana el que traiga telefono.
+    """
+    for doc in docs or []:
+        for p in doc.get("gente") or []:
+            tid = p.get("transporterId")
+            if not tid:
+                continue
+            prev = mapa.get(tid)
+            tel = _telefono_limpio(p.get("telefono"))
+            if prev is not None and not (prev.get("del_dia") == del_dia and tel and not prev.get("telefono")):
+                continue
+            mapa[tid] = {"nombre": (p.get("nombre") or "").strip(),
+                         "telefono": tel, "del_dia": del_dia}
+    return mapa
+
+
 async def _apoyo_gente_cortex(dia: str) -> dict:
     """transporterId -> {nombre, telefono} SEGUN CORTEX ESE DIA.
 
@@ -17571,29 +17592,25 @@ async def _apoyo_gente_cortex(dia: str) -> dict:
     # entero: medido el 03-09-2026, el 02-09 habia 49 personas en OGA5 y 25 en
     # DGA1, y con `find_one` esas 25 —todas con telefono en Cortex— salian con
     # el numero de la ficha, que es justo el que puede estar mal.
-    docs = await db.cortex_resumen.find({"dia": dia}, {"_id": 0, "gente": 1}).to_list(20)
-    del_dia = True
-    if not docs:
-        # Sin resumen de hoy se coge el dia anterior mas cercano, pero MARCADO:
-        # ese numero no esta corroborado con el dia de hoy.
-        ultimo = await db.cortex_resumen.find_one(
-            {"dia": {"$lt": dia}}, {"_id": 0, "dia": 1}, sort=[("dia", -1)])
-        if not ultimo:
-            return {}
-        docs = await db.cortex_resumen.find(
-            {"dia": ultimo["dia"]}, {"_id": 0, "gente": 1}).to_list(20)
-        del_dia = False
     mapa: dict = {}
-    for doc in docs:
-        for p in doc.get("gente") or []:
-            tid = p.get("transporterId")
-            if not tid:
-                continue
-            tel = _telefono_limpio(p.get("telefono"))
-            # Con varios centros, gana la entrada que trae telefono.
-            if tid not in mapa or (tel and not mapa[tid].get("telefono")):
-                mapa[tid] = {"nombre": (p.get("nombre") or "").strip(),
-                             "telefono": tel, "del_dia": del_dia}
+    docs = await db.cortex_resumen.find({"dia": dia}, {"_id": 0, "gente": 1}).to_list(20)
+    _apoyo_fundir_gente(mapa, docs, True)
+    # EL RESUMEN DE HOY PUEDE ESTAR A MEDIAS, y hasta el 04-09-2026 eso dejaba
+    # sin corroborar a todos los que faltaran: el respaldo del dia anterior solo
+    # entraba cuando NO habia ningun documento del dia. Medido ese mismo dia a
+    # media manana: el resumen de hoy traia 2 personas y en ruta habia 39, de
+    # las cuales 33 estaban en el de ayer CON telefono y 16 con un numero
+    # DISTINTO al de su ficha. O sea, 16 llamadas que acababan en otra persona,
+    # que es justo el fallo que se creia arreglado.
+    # Se completa por PERSONA, no por dia: quien esta en el de hoy no se toca
+    # (Cortex de hoy sigue mandando) y quien falta se rellena del anterior mas
+    # cercano, marcado `del_dia: False` para que salga como sin corroborar.
+    ultimo = await db.cortex_resumen.find_one(
+        {"dia": {"$lt": dia}}, {"_id": 0, "dia": 1}, sort=[("dia", -1)])
+    if ultimo:
+        previos = await db.cortex_resumen.find(
+            {"dia": ultimo["dia"]}, {"_id": 0, "gente": 1}).to_list(20)
+        _apoyo_fundir_gente(mapa, previos, False)
     return mapa
 
 
@@ -17623,6 +17640,22 @@ async def _apoyo_personas(ids: set, dia: Optional[str] = None, gente: Optional[d
         prev = fichas.get(clave)
         if prev is None or (not str(prev.get("phone") or "").strip() and str(d.get("phone") or "").strip()):
             fichas[clave] = d
+    # QUIEN CONDUCE HOY PERO TIENE LA FICHA DE BAJA. Pasa de verdad: el
+    # 04-09-2026 habia 3 personas en ruta con la ficha dada de baja y otras 5
+    # sin ficha ninguna. Sin esto la pantalla enseñaba `A1W24EJA0PO5F0` en vez
+    # de «JOSE MANUEL ARES VILAS», que no le dice nada a nadie.
+    # Solo como ULTIMO recurso y marcado: si Cortex trae a esa persona ese dia,
+    # Cortex manda igual que antes; esto es para que la oficina lea un nombre y
+    # sepa que hay una ficha que arreglar.
+    faltan = [i for i in ids if i not in fichas]
+    if faltan:
+        cur = db.drivers.find({"active": {"$ne": True},
+                               "$or": [{"transporter_id": {"$in": faltan}}, {"id": {"$in": faltan}}]},
+                              {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1})
+        async for d in cur:
+            clave = d.get("transporter_id") if d.get("transporter_id") in ids else d["id"]
+            if clave not in fichas:
+                fichas[clave] = {**d, "de_baja": True}
     cortex = gente if gente is not None else await _apoyo_gente_cortex(dia)
     for i in ids:
         fi = fichas.get(i)
@@ -17636,7 +17669,9 @@ async def _apoyo_personas(ids: set, dia: Optional[str] = None, gente: Optional[d
             nombre = ((cx or {}).get("nombre") or (fi or {}).get("name") or i).strip()
         else:
             nombre = ((fi or {}).get("name") or (cx or {}).get("nombre") or i).strip()
-        out[i] = {"nombre": nombre or i, "ficha_id": (fi or {}).get("id"), **tel}
+        out[i] = {"nombre": nombre or i, "ficha_id": (fi or {}).get("id"),
+                  "sin_ficha": fi is None,
+                  "ficha_de_baja": bool((fi or {}).get("de_baja")), **tel}
     return out
 
 
@@ -18092,6 +18127,8 @@ async def apoyo_situacion(center: Optional[str] = None, day: Optional[str] = Non
         p = personas.get(did, {})
         conductores.append({**x, "ruta": " + ".join(sorted(x["rutas"])), "paradas": len(x["paradas"]),
                             "con_destino": len(x["con_destino"]), "nombre": p.get("nombre") or did,
+                            "sin_ficha": p.get("sin_ficha", False),
+                            "ficha_de_baja": p.get("ficha_de_baja", False),
                             "telefono": p.get("telefono") or "",
                             "telefono_fuente": p.get("telefono_fuente"),
                             "telefono_sin_corroborar": p.get("telefono_sin_corroborar", False),

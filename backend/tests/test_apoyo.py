@@ -25,6 +25,7 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUTA = os.path.join(RAIZ, "server.py")
 
 FUNCS = ("_cx_ruta_cajon", "_apoyo_textos", "_apoyo_url", "enlace_wa", "_apoyo_minutos_desde",
+         "_apoyo_fundir_gente",
          "_apoyo_posicion_de", "_apoyo_estados_en_calle",
          "_apoyo_telefono", "_telefono_limpio", "_telefono_digitos", "_apoyo_todas_hechas")
 CONSTS = ("_CX_OK", "_CX_EN_VUELO", "_CX_NO_DESPACHADO", "_CX_REINTENTABLE", "_APOYO_CAJONES_PENDIENTES",
@@ -198,6 +199,60 @@ def test_todas_hechas_dispara_el_cierre_y_la_cola():
     # Un apoyo sin paradas NO cuenta como hecho (si no, se cerraria en el aire).
     assert not NS["_apoyo_todas_hechas"]([])
     assert not NS["_apoyo_todas_hechas"](None)
+
+
+
+# ── Completar la gente de Cortex cuando el resumen del dia viene a medias ──
+# El 04-09-2026 el resumen de hoy traia 2 personas y en ruta habia 39. El
+# respaldo del dia anterior solo entraba si NO habia NINGUN documento del dia,
+# asi que 33 personas se quedaban con el telefono de la ficha y 16 de ellas lo
+# tenian distinto al de Cortex: 16 llamadas a la persona equivocada.
+# Probado reintroduciendo el fallo: si `_apoyo_fundir_gente` pisa lo que ya
+# esta en el mapa, `test_lo_de_hoy_manda_sobre_lo_de_ayer` falla.
+
+def _doc(*personas):
+    return {"gente": [{"transporterId": t, "nombre": n, "telefono": tel}
+                      for t, n, tel in personas]}
+
+
+def test_resumen_a_medias_se_completa_con_el_dia_anterior():
+    mapa = {}
+    NS["_apoyo_fundir_gente"](mapa, [_doc(("A1", "ANA", "600111222"))], True)
+    NS["_apoyo_fundir_gente"](mapa, [_doc(("A1", "ANA", "600111222"), ("A2", "BEA", "600333444"))], False)
+    assert set(mapa) == {"A1", "A2"}
+    assert mapa["A2"]["telefono"] == "600333444"
+    assert mapa["A2"]["del_dia"] is False, "el de ayer tiene que ir marcado"
+
+
+def test_lo_de_hoy_manda_sobre_lo_de_ayer():
+    mapa = {}
+    NS["_apoyo_fundir_gente"](mapa, [_doc(("A1", "ANA", "600111222"))], True)
+    NS["_apoyo_fundir_gente"](mapa, [_doc(("A1", "ANA VIEJA", "600999999"))], False)
+    assert mapa["A1"]["telefono"] == "600111222"
+    assert mapa["A1"]["nombre"] == "ANA"
+    assert mapa["A1"]["del_dia"] is True
+
+
+def test_dos_centros_el_mismo_dia_gana_el_que_trae_telefono():
+    mapa = {}
+    NS["_apoyo_fundir_gente"](mapa, [_doc(("A1", "ANA", "")), _doc(("A1", "ANA", "600111222"))], True)
+    assert mapa["A1"]["telefono"] == "600111222"
+
+
+def test_un_telefono_de_ayer_no_pisa_a_uno_vacio_de_hoy():
+    # Si hoy Cortex la trae SIN telefono, ese vacio es de hoy y manda: poner el
+    # de ayer aqui lo venderia como del dia y es justo lo que no se quiere.
+    mapa = {}
+    NS["_apoyo_fundir_gente"](mapa, [_doc(("A1", "ANA", ""))], True)
+    NS["_apoyo_fundir_gente"](mapa, [_doc(("A1", "ANA", "600999999"))], False)
+    assert mapa["A1"]["telefono"] == ""
+    assert mapa["A1"]["del_dia"] is True
+
+
+def test_sin_transporter_id_se_ignora():
+    mapa = {}
+    NS["_apoyo_fundir_gente"](mapa, [{"gente": [{"nombre": "X", "telefono": "600111222"}]}], True)
+    assert mapa == {}
 
 
 def main() -> int:

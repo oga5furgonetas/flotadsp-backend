@@ -25,15 +25,25 @@ const ICONO_PERSONA = L.divIcon({
   iconSize: [30, 30], iconAnchor: [15, 15],
 })
 
-const NUM_ICON = (n, sel, hecha) => L.divIcon({
+/* Los colores dicen QUE es cada parada de un vistazo, que es lo que se mira
+   con prisa: gris ya hecha, azul elegida para el apoyo, ROJO un reintento
+   —una entrega que ya fallo una vez, la que mas urge— y naranja el resto. */
+const COLOR_PARADA = (sel, hecha, reintento) =>
+  hecha ? '#64748b' : sel ? '#0ea5e9' : reintento ? '#e11d48' : '#f97316'
+
+const NUM_ICON = (n, sel, hecha, reintento) => L.divIcon({
   className: '',
-  html: `<div style="width:26px;height:26px;border-radius:13px;display:flex;align-items:center;justify-content:center;font:700 12px system-ui;color:#fff;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5);background:${hecha ? '#64748b' : sel ? '#0ea5e9' : '#f97316'}">${n}</div>`,
+  html: `<div style="width:26px;height:26px;border-radius:13px;display:flex;align-items:center;justify-content:center;font:700 12px system-ui;color:#fff;border:2px solid ${reintento && !hecha ? '#fecdd3' : '#fff'};box-shadow:0 1px 4px rgba(0,0,0,.5);background:${COLOR_PARADA(sel, hecha, reintento)}">${n}</div>`,
   iconSize: [26, 26], iconAnchor: [13, 13],
 })
 
-function useMapa(ref, paradas, seleccion, onToggle, posicion) {
+// Un reintento es una parada donde ya se intento entregar y no se pudo.
+const ES_REINTENTO = (p) => (p.estados || []).includes('ATTEMPTED')
+
+function useMapa(ref, paradas, seleccion, onToggle, posicion, claveEncuadre) {
   const mapRef = useRef(null)
   const capaRef = useRef(null)
+  const encuadrado = useRef(null)
   useEffect(() => {
     if (!ref.current || mapRef.current) return
     const m = L.map(ref.current, { zoomControl: true, attributionControl: true })
@@ -51,21 +61,28 @@ function useMapa(ref, paradas, seleccion, onToggle, posicion) {
     paradas.forEach((p) => {
       if (p.lat == null || p.lng == null) return
       const sel = seleccion.has(p.stop_id)
-      const mk = L.marker([p.lat, p.lng], { icon: NUM_ICON(p.stop_id, sel, p.hecha || p.entregada) })
+      const re = ES_REINTENTO(p)
+      const mk = L.marker([p.lat, p.lng], { icon: NUM_ICON(p.stop_id, sel, p.hecha || p.entregada, re) })
       mk.on('click', () => onToggle(p.stop_id))
-      mk.bindTooltip(`${p.stop_id} · ${p.n} ${p.n === 1 ? 'paquete' : 'paquetes'}${p.direccion ? ' · ' + p.direccion : ''}`)
+      mk.bindTooltip(`${p.stop_id} · ${p.n} ${p.n === 1 ? 'paquete' : 'paquetes'}${re ? ' · REINTENTO' : ''}${p.direccion ? ' · ' + p.direccion : ''}`)
       capa.addLayer(mk)
       puntos.push([p.lat, p.lng])
     })
     if (posicion) {
       const mk = L.marker([posicion.lat, posicion.lng], { icon: ICONO_PERSONA, zIndexOffset: 1000 })
-      mk.bindTooltip(`Estaba aquí hace ${posicion.hace_min} min`)
+      mk.bindTooltip(`Su último escaneo, hace ${posicion.hace_min} min`)
       capa.addLayer(mk)
       puntos.push([posicion.lat, posicion.lng])
     }
-    if (puntos.length) m.fitBounds(L.latLngBounds(puntos).pad(0.2), { maxZoom: 15 })
+    /* El encuadre SOLO se toca al cambiar de conductor. La pantalla se refresca
+       sola cada 20 s, y si en cada refresco volviera a encuadrar te movería el
+       mapa mientras estás eligiendo paradas: inservible. */
+    if (puntos.length && encuadrado.current !== claveEncuadre) {
+      m.fitBounds(L.latLngBounds(puntos).pad(0.2), { maxZoom: 15 })
+      encuadrado.current = claveEncuadre
+    }
     setTimeout(() => m.invalidateSize(), 50)
-  }, [paradas, seleccion, onToggle, posicion])
+  }, [paradas, seleccion, onToggle, posicion, claveEncuadre])
 }
 
 export default function ApoyoRuta() {
@@ -87,6 +104,7 @@ export default function ApoyoRuta() {
   const [apoyos, setApoyos] = useState([])
   const [copiado, setCopiado] = useState('')
   const mapaRef = useRef(null)
+  const driverRef = useRef(null)
 
   const cargarSit = useCallback(async () => {
     try {
@@ -96,7 +114,37 @@ export default function ApoyoRuta() {
   }, [center, dia])
 
   useEffect(() => { setCargando(true); cargarSit() }, [cargarSit])
-  useEffect(() => { const id = setInterval(cargarSit, 60000); return () => clearInterval(id) }, [cargarSit])
+  /* LO QUE FALTABA PARA QUE ESTO FUERA EN VIVO. Las paradas y la posición se
+     pedían SOLO al pulsar el conductor y no se volvían a pedir nunca: por eso
+     Dani veía «estaba aquí hace 45 minutos» — el dato no estaba viejo, la
+     pantalla sí. Medido el 03-09-2026 sobre 4.653 huecos entre escaneo y
+     escaneo: la mediana es de 2,8 min y el 90 % está por debajo de 9, así que
+     refrescando cada 20 s la posición está tan viva como Cortex permite.
+     Se conserva lo que la persona ha marcado: las paradas elegidas que sigan
+     pendientes siguen elegidas, y las que se entreguen desaparecen solas. */
+  const refrescarSeleccion = useCallback(async (driverId) => {
+    if (!driverId) return
+    try {
+      const { data } = await getApoyoParadas({ driver_id: driverId, day: dia })
+      setParadas((antes) => {
+        const hechas = new Set(antes.filter((p) => p.hecha).map((p) => p.stop_id))
+        return (data.paradas || []).map((p) => ({ ...p, hecha: hechas.has(p.stop_id) }))
+      })
+      setInfoParadas(data)
+      const vivas = new Set((data.paradas || []).map((p) => p.stop_id))
+      setSel((s) => new Set([...s].filter((id) => vivas.has(id))))
+    } catch { /* un refresco que falla no rompe la pantalla */ }
+  }, [dia])
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      cargarSit()
+      if (driverRef.current) refrescarSeleccion(driverRef.current)
+    }, 20000)
+    return () => clearInterval(id)
+  }, [cargarSit, refrescarSeleccion])
+  // El intervalo no puede depender de `driver` o se reinicia en cada refresco.
+  useEffect(() => { driverRef.current = driver?.driver_id || null }, [driver])
 
   const elegirConductor = useCallback(async (c, apoyo = null) => {
     setDriver(c); setResultado(null); setEditando(apoyo)
@@ -113,7 +161,7 @@ export default function ApoyoRuta() {
   }, [dia])
 
   const toggle = useCallback((id) => setSel((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n }), [])
-  useMapa(mapaRef, paradas, sel, toggle, infoParadas?.posicion || null)
+  useMapa(mapaRef, paradas, sel, toggle, infoParadas?.posicion || null, driver?.driver_id || null)
 
   const ultimas = (n) => setSel(new Set(paradas.slice(-n).map((p) => p.stop_id)))
 
@@ -142,6 +190,7 @@ export default function ApoyoRuta() {
   const ayudantes = sit?.ayudantes || []
   const conductores = sit?.conductores || []
   const ayudanteSel = ayudantes.find((a) => a.driver_id === ayudante)
+  const reintentos = useMemo(() => paradas.filter(ES_REINTENTO).length, [paradas])
   const paquetesSel = useMemo(() => paradas.filter((p) => sel.has(p.stop_id)).reduce((s, p) => s + (p.n || 0), 0), [paradas, sel])
   const viejo = sit?.bajado_hace_min != null && sit.bajado_hace_min > 10
 
@@ -175,7 +224,19 @@ export default function ApoyoRuta() {
               <button key={c.driver_id} onClick={() => elegirConductor(c)}
                 className={`flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-dark-800/60 ${driver?.driver_id === c.driver_id ? 'bg-sky-500/10' : ''}`}>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-dark-100">{c.nombre}</div>
+                  <div className="truncate text-sm font-medium text-dark-100">
+                    {c.nombre}
+                    {/* Conduce hoy pero su ficha no esta al dia: se dice, porque
+                        si no la oficina ve un nombre y no sabe que hay algo que
+                        arreglar. Medido el 04-09-2026: 3 con la ficha de baja y
+                        5 cuyo id de Cortex no esta enlazado a ninguna ficha (de
+                        esos, dos SI tienen ficha pero sin `transporter_id`, y
+                        una hasta duplicada con una errata en el nombre). No se
+                        enlaza solo a proposito: con fichas repetidas, adivinar
+                        pondria el historial de uno en la ficha del otro. */}
+                    {c.ficha_de_baja && <span title="Esta persona conduce hoy pero su ficha esta dada de baja" className="ml-1.5 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">ficha de baja</span>}
+                    {c.sin_ficha && <span title="Su id de Cortex no esta enlazado a ninguna ficha: falta el transporter_id" className="ml-1.5 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">sin enlazar</span>}
+                  </div>
                   <div className="text-xs text-dark-500">{c.ruta || '—'} · {c.entregados}/{c.paquetes} {t('apoyo.entregados')}</div>
                 </div>
                 <div className="text-right">
@@ -195,8 +256,14 @@ export default function ApoyoRuta() {
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-dark-800 px-4 py-3">
               <div className="text-sm font-semibold text-dark-200">
                 {driver ? <>{driver.nombre} <span className="text-dark-500">· {infoParadas?.ruta || driver.ruta || ''}</span></> : t('apoyo.elegir')}
+{/* La antigüedad manda sobre el punto: verde = está ahí ahora mismo,
+                    ámbar = ya tiene unos minutos, rojo = no te fíes, llámale.
+                    Se refresca sola cada 20 s con el resto de la pantalla. */}
                 {infoParadas?.posicion && (
-                  <span className="ml-2 rounded bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+                  <span className={`ml-2 rounded px-2 py-0.5 text-[11px] font-medium ${
+                    infoParadas.posicion.hace_min <= 10 ? 'bg-emerald-500/15 text-emerald-300'
+                      : infoParadas.posicion.hace_min <= 30 ? 'bg-amber-500/15 text-amber-300'
+                      : 'bg-red-500/15 text-red-300'}`}>
                     ♟ {t('apoyo.visto').replace('{n}', infoParadas.posicion.hace_min)}
                   </span>
                 )}
@@ -219,6 +286,18 @@ export default function ApoyoRuta() {
             {driver && infoParadas && (
               <div className="flex flex-wrap items-center gap-3 border-t border-dark-800 px-4 py-2 text-xs text-dark-400">
                 <span><MapPin size={12} className="mr-1 inline" />{paradas.length} {t('apoyo.paradas')} · {infoParadas.paquetes} {t('apoyo.paquetes')}</span>
+                <span className="flex items-center gap-1.5">
+                  <i className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: '#e11d48' }} />
+                  {reintentos} {t('apoyo.reintentos')}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <i className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: '#f97316' }} />
+                  {t('apoyo.primeraVez')}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <i className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: '#0ea5e9' }} />
+                  {t('apoyo.elegidas')}
+                </span>
                 {infoParadas.sin_ubicacion > 0 && <span className="text-amber-300">{t('apoyo.sinCoord').replace('{n}', infoParadas.sin_ubicacion)}</span>}
                 <span className="ml-auto font-medium text-sky-300">{sel.size} {t('apoyo.elegidas')} · {paquetesSel} {t('apoyo.paquetes')}</span>
               </div>
@@ -233,10 +312,15 @@ export default function ApoyoRuta() {
                 {paradas.map((p) => (
                   <label key={p.stop_id} className={`flex cursor-pointer items-start gap-3 border-b border-dark-800 px-4 py-2 hover:bg-dark-800/50 ${sel.has(p.stop_id) ? 'bg-sky-500/5' : ''}`}>
                     <input type="checkbox" className="mt-1" checked={sel.has(p.stop_id)} onChange={() => toggle(p.stop_id)} />
-                    <span className={`cifra mt-0.5 w-8 shrink-0 text-center text-xs font-bold ${p.hecha ? 'text-dark-500 line-through' : 'text-orange-300'}`}>{p.stop_id}</span>
+                    <span className={`cifra mt-0.5 w-8 shrink-0 text-center text-xs font-bold ${
+                      p.hecha ? 'text-dark-500 line-through' : ES_REINTENTO(p) ? 'text-rose-400' : 'text-orange-300'}`}>{p.stop_id}</span>
                     <span className="min-w-0 flex-1">
                       <span className={`block truncate text-sm ${p.ubicacion ? 'text-dark-200' : 'text-amber-300/80'}`}>{p.direccion || (p.lat != null ? `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : t('apoyo.sinCoordUna'))}</span>
-                      <span className="block text-[11px] text-dark-500">{p.n} {p.n === 1 ? t('apoyo.paquete') : t('apoyo.paquetes')} · {(p.estados || []).join(', ')}{p.hecha ? ` · ${t('apoyo.hecha')}` : ''}</span>
+                      <span className="block text-[11px] text-dark-500">
+                        {p.n} {p.n === 1 ? t('apoyo.paquete') : t('apoyo.paquetes')}
+                        {ES_REINTENTO(p) && <span className="ml-1.5 rounded bg-rose-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-rose-300">{t('apoyo.reintento')}</span>}
+                        {p.hecha ? ` · ${t('apoyo.hecha')}` : ''}
+                      </span>
                     </span>
                   </label>
                 ))}
