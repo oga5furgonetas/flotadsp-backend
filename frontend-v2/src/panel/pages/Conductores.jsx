@@ -8,7 +8,7 @@ import {
   Loader2, Search, Plus, X, Pencil, Trash2, UserCheck, FileSpreadsheet,
   Phone, Mail, IdCard, Car, MapPin, FileText, Building2, Save, Camera,
   Trophy, TrendingUp, TrendingDown, Minus, Flame, BarChart2, ChevronDown, ChevronUp, AlertCircle,
-  Lock, LockOpen, Eye, EyeOff, ShieldCheck, Share2,
+  Lock, LockOpen, Eye, EyeOff, ShieldCheck, Share2, UserPlus,
 } from 'lucide-react'
 import {
   getDrivers, createDriver, updateDriver, deleteDriver, uploadDriverPhoto,
@@ -16,7 +16,8 @@ import {
   generarAccesosConductores,
   deleteDriverAccount,
   getDriversDuplicados, fusionarConductores,
-  getPropuestasTransporterId, confirmarTransporterId, getTransporterIdsSinFicha, telefonosDesdeCortex, } from '../api'
+  getPropuestasTransporterId, confirmarTransporterId, getTransporterIdsSinFicha, telefonosDesdeCortex,
+  crearFichaDeTransporterId, } from '../api'
 
 const EMPTY = {
   name: '', dni: '', phone: '', email: '', driver_id: '', transporter_id: '',
@@ -285,6 +286,7 @@ function SaludFichas({ onCambio }) {
   const [sinFicha, setSinFicha] = useState(null)
   const [ocupado, setOcupado] = useState('')
   const [err, setErr] = useState('')
+  const [hecho, setHecho] = useState('')
   const [elegida, setElegida] = useState({})   // email -> id que se conserva
 
   const cargar = () => {
@@ -310,6 +312,18 @@ function SaludFichas({ onCambio }) {
      desplegable. El cerrojo se pone sobre el ID y no sobre el conductor porque
      la lista de arriba va por ID; si no, al elegir en un desplegable se
      bloquearía una fila que no es. */
+  const crearFicha = async (x) => {
+    setOcupado(x.transporter_id); setErr(''); setHecho('')
+    try {
+      const { data } = await crearFichaDeTransporterId(x.transporter_id, {
+        nombre: x.nombre_cortex, telefono: x.telefono_cortex, centro: x.centro })
+      setHecho(`Ficha creada: ${data.nombre}${data.centro ? ` · ${data.centro}` : ''}`)
+      cargar(); onCambio?.()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se ha podido crear la ficha.')
+    } finally { setOcupado('') }
+  }
+
   const confirmarId = async (p) => {
     setOcupado(p.transporter_id || p.driver_id); setErr('')
     try {
@@ -325,6 +339,7 @@ function SaludFichas({ onCambio }) {
   return (
     <div className="space-y-6">
       {err && <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{err}</p>}
+      {hecho && <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">{hecho}</p>}
 
       {/* ── Duplicadas ─────────────────────────────────────────────── */}
       <section>
@@ -410,7 +425,17 @@ function SaludFichas({ onCambio }) {
           <div className="space-y-1.5">
             {(sinFicha?.sin_ficha || []).map((x) => (
               <div key={x.transporter_id} className="card flex flex-wrap items-center gap-2 p-3 text-[13px]">
-                <span className="font-mono text-[12.5px] font-semibold text-dark-100">{x.transporter_id}</span>
+                {/* EL NOMBRE LO SABE CORTEX y antes no se enseñaba: solo salía
+                    el código, que no le dice nada a nadie. Si Cortex lo trae,
+                    manda el nombre y el código pasa a segunda línea. */}
+                {x.nombre_cortex ? (
+                  <span className="flex items-center gap-1.5">
+                    <b className="text-[13.5px] text-dark-100">{x.nombre_cortex}</b>
+                    <span className="font-mono text-[11px] text-dark-500">{x.transporter_id}</span>
+                  </span>
+                ) : (
+                  <span className="font-mono text-[12.5px] font-semibold text-dark-100">{x.transporter_id}</span>
+                )}
                 <span className="text-dark-400">
                   {x.ruta_habitual && <b className="text-brand-300">{x.ruta_habitual}</b>}
                   {x.rutas.length > 1 && <span className="text-dark-500"> · {x.rutas.slice(1).join(', ')}</span>}
@@ -419,12 +444,25 @@ function SaludFichas({ onCambio }) {
                   {x.paquetes.toLocaleString('es-ES')} paquetes · {x.dias} día{x.dias === 1 ? '' : 's'}
                   {x.ultimo_dia && ` · último ${x.ultimo_dia.slice(8)}/${x.ultimo_dia.slice(5, 7)}`}
                 </span>
+                {/* Crear la ficha de un tirón, con el nombre y el teléfono de
+                    Cortex ya dentro. Solo sale cuando Cortex da el nombre: sin
+                    nombre habría que teclearlo, que es de donde salen las fichas
+                    duplicadas. Y ojo con el orden — primero mirar si ya tiene
+                    ficha y solo enlazarla; por eso el desplegable va al lado. */}
+                {x.nombre_cortex && (
+                  <button
+                    onClick={() => crearFicha(x)}
+                    disabled={ocupado === x.transporter_id}
+                    className="ml-auto flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-2.5 py-1.5 text-[12.5px] font-semibold text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25 disabled:opacity-50">
+                    <UserPlus size={13} /> {ocupado === x.transporter_id ? 'Creando…' : 'Crear ficha'}
+                  </button>
+                )}
                 <select
                   value=""
                   onChange={(e) => e.target.value && confirmarId({
                     driver_id: e.target.value, transporter_id: x.transporter_id })}
                   disabled={ocupado === x.transporter_id}
-                  className="ml-auto max-w-[15rem] rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12.5px] text-dark-100 outline-none disabled:opacity-50">
+                  className={`${x.nombre_cortex ? '' : 'ml-auto '}max-w-[15rem] rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12.5px] text-dark-100 outline-none disabled:opacity-50`}>
                   <option value="">
                     {ocupado === x.transporter_id ? 'Guardando…' : '¿Quién es? — elegir'}
                   </option>

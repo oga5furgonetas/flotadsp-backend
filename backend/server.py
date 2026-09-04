@@ -24006,13 +24006,15 @@ async def transporter_ids_sin_ficha(dias: int = 30, _=Depends(require_admin)):
         {"$match": {"service_day": {"$gte": desde},
                     "driver_id": {"$nin": [None, "", "sin-asignar"]}}},
         {"$group": {"_id": {"t": "$driver_id", "d": "$service_day", "r": "$route_code"},
-                    "n": {"$sum": 1}}},
+                    "n": {"$sum": 1}, "centro": {"$first": "$center"}}},
     ]):
         k = r["_id"]
         t = k.get("t")
         if not t or t in conocidos:
             continue
-        v = vistos.setdefault(t, {"paquetes": 0, "dias": set(), "rutas": {}})
+        v = vistos.setdefault(t, {"paquetes": 0, "dias": set(), "rutas": {}, "centro": ""})
+        if not v["centro"] and r.get("centro"):
+            v["centro"] = r["centro"]
         v["paquetes"] += r.get("n", 0)
         if k.get("d"):
             v["dias"].add(k["d"])
@@ -24020,15 +24022,35 @@ async def transporter_ids_sin_ficha(dias: int = 30, _=Depends(require_admin)):
         if ruta:
             v["rutas"][ruta] = v["rutas"].get(ruta, 0) + r.get("n", 0)
 
+    # EL NOMBRE LO TIENE CORTEX Y NO SE ENSEÑABA. `cortex_resumen.gente` trae
+    # nombre y telefono de cada transporterId, un documento por centro y dia
+    # (gotcha 49). Con el codigo solo, dar de alta a alguien es un interrogatorio;
+    # con el nombre es un clic. Se recorre el periodo entero y manda el mas
+    # reciente: quien conduce una ruta cambia, pero el nombre de una persona no.
+    cx: dict = {}
+    async for doc in db.cortex_resumen.find(
+            {"dia": {"$gte": desde}}, {"_id": 0, "dia": 1, "gente": 1}).sort("dia", 1):
+        for p in doc.get("gente") or []:
+            tid = (p.get("transporterId") or "").strip()
+            if tid:
+                cx[tid] = {"nombre": (p.get("nombre") or "").strip(),
+                           "telefono": _telefono_limpio(p.get("telefono")),
+                           "visto": doc.get("dia")}
+
     fuera = []
     for t, v in vistos.items():
         rutas = sorted(v["rutas"].items(), key=lambda x: -x[1])
+        quien = cx.get(t) or {}
         fuera.append({
             "transporter_id": t,
+            "nombre_cortex": quien.get("nombre") or "",
+            "telefono_cortex": quien.get("telefono") or "",
+            "nombre_visto": quien.get("visto"),
             "paquetes": v["paquetes"],
             "dias": len(v["dias"]),
             "ultimo_dia": max(v["dias"]) if v["dias"] else None,
             "primer_dia": min(v["dias"]) if v["dias"] else None,
+            "centro": v.get("centro") or "",
             # Las tres mas repetidas: es con lo que se le reconoce.
             "rutas": [r for r, _ in rutas[:3]],
             "ruta_habitual": rutas[0][0] if rutas else None,
@@ -24049,6 +24071,64 @@ async def transporter_ids_sin_ficha(dias: int = 30, _=Depends(require_admin)):
 
     return {"sin_ficha": fuera, "total": len(fuera),
             "con_ficha": len(conocidos), "candidatos": libres, "dias": dias}
+
+
+@api_router.post("/transporter-ids/{tid}/crear-ficha")
+async def transporter_id_crear_ficha(tid: str, body: dict = Body(default={}),
+                                     admin: dict = Depends(require_admin)):
+    """Da de alta al que conduce ese id, con lo que ya sabe Cortex.
+
+    Antes habia que ir a «Nuevo conductor», teclear el nombre a mano y volver a
+    enlazar el id. Teclear el nombre es de donde salen las fichas duplicadas
+    —«SERGIO LUIS ROJAS PEREZ » y «SERGIO LUIS ROJAS PEREZ» son dos personas
+    para Mongo (gotcha 15)—, asi que aqui viene de Cortex y no se teclea.
+
+    Se comprueba antes que ese id no lo tenga ya nadie: crear una segunda ficha
+    para la misma persona es exactamente lo que rompe el portal del conductor.
+    """
+    tid = str(tid or "").strip().upper()
+    if not _DIA_TID.match(tid):
+        raise HTTPException(400, "Ese no parece un Transporter ID de Cortex")
+    ya = await db.drivers.find_one(
+        {"$or": [{"transporter_id": tid}, {"driver_id": tid}]}, {"_id": 0, "id": 1, "name": 1})
+    if ya:
+        raise HTTPException(409, "Ese ID ya es de %s" % (ya.get("name") or ya.get("id")))
+
+    nombre = _empleo_texto(body.get("nombre"), 120)
+    telefono = _telefono_limpio(body.get("telefono"))
+    centro = _centro_norm(body.get("centro") or "")
+    if not nombre:
+        # Si el panel no lo manda, se busca en Cortex: nunca se inventa.
+        desde = (datetime.now(timezone.utc) - timedelta(days=60)).strftime("%Y-%m-%d")
+        async for doc in db.cortex_resumen.find(
+                {"dia": {"$gte": desde}}, {"_id": 0, "gente": 1}).sort("dia", -1):
+            for p in doc.get("gente") or []:
+                if (p.get("transporterId") or "").strip().upper() == tid:
+                    nombre = _empleo_texto(p.get("nombre"), 120)
+                    telefono = telefono or _telefono_limpio(p.get("telefono"))
+                    break
+            if nombre:
+                break
+    if len(nombre) < 3:
+        raise HTTPException(
+            400, "Cortex no da el nombre de ese ID todavia. Escribelo tu o usa "
+                 "«quien es» para enlazarlo con una ficha que ya exista.")
+
+    d = Driver(name=nombre, phone=telefono or None, center=centro or None,
+               transporter_id=tid,
+               telefono_por=("cortex" if telefono else None),
+               telefono_en=(datetime.now(timezone.utc).isoformat() if telefono else None),
+               notas="Alta desde los IDs sin ficha, con el nombre de Cortex.")
+    doc = serialize_doc(d.model_dump())
+    try:
+        await db.drivers.insert_one(dict(doc))
+    except DuplicateKeyError:
+        raise HTTPException(409, "Ya hay un conductor activo con esos datos")
+    # La etiqueta suelta sobra: manda la ficha (mismo criterio que el PATCH).
+    await db.app_meta.update_one({"_id": "transporter_alias"},
+                                 {"$unset": {"mapa.%s" % tid: ""}})
+    return {"ok": True, "id": d.id, "nombre": d.name, "telefono": d.phone or "",
+            "centro": d.center or ""}
 
 
 @api_router.get("/transporter-ids/propuestas")

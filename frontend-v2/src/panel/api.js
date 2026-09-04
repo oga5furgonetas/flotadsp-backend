@@ -106,6 +106,10 @@ export const getDriversDuplicados = () => api.get('/drivers/duplicados')
 export const fusionarConductores = (body) => api.post('/drivers/fusionar', body)
 export const getPropuestasTransporterId = () => api.get('/transporter-ids/propuestas')
 /* Los IDs que salen a ruta y no tienen ficha, con sus rutas para reconocerlos. */
+/* Alta de un tiron del que conduce un id, con el nombre que da Cortex: sin
+   teclear el nombre no hay fichas duplicadas por un espacio de mas. */
+export const crearFichaDeTransporterId = (tid, body) =>
+  api.post(`/transporter-ids/${encodeURIComponent(tid)}/crear-ficha`, body || {})
 export const getTransporterIdsSinFicha = (dias) =>
   api.get('/transporter-ids/sin-ficha', { params: dias ? { dias } : {} })
 export const confirmarTransporterId = (body) => api.post('/transporter-ids/confirmar', body)
