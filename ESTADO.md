@@ -39,6 +39,52 @@ decisiones con ellos.
 
 ---
 
+## Estado a 2026-09-05 (undécima pasada: cuerpos mal formados y rendimiento medido)
+
+### Validación de entrada
+
+El barrido del 02-09 mandaba el cuerpo VACÍO y salía limpio. Lo que rompe es el
+campo con el **tipo** cambiado: `(data.get("x") or "").strip()` no tiene
+`.strip()` que llamar si llega una lista. Mandando a cada endpoint **sus propios
+campos** —sacados de su código, no de una lista fija— salieron **43 de 216
+mutaciones con 500**, dos de ellas públicas (`/auth/lead`,
+`/auth/forgot-password`). `_texto_cuerpo` (hermano de `_entero`) y tres
+`int(...)` a pelo: **43 → 30**. Las 30 restantes no son públicas y quedan
+medidas en `backend/scripts/smoke_cuerpos_raros.py`, con trinquete.
+Gotcha 61. Comprobado con `smoke_empresa_nueva.py` contra staging: 28 de 29
+(el que falla es la IA, que en staging no está configurada a propósito).
+
+### Rendimiento, medido con tres tiradas y mediana
+
+| | antes | después | |
+|---|---|---|---|
+| `/admin/salud` | 9.430 ms | **3.529 ms** | 2,7x |
+| `/vehicles/duplicados` | 900 ms | **276 ms** | 3,3x |
+| `/cortex/dsc?dias=7` | 2.238 ms | **1.110 ms** | 2,0x |
+| `/cortex/dsc?dias=30` | 2.901 ms | 1.905 ms | 1,5x |
+
+Los tres tenían la misma forma y ninguno tenía una consulta lenta: **tenían
+muchas consultas puestas en fila**. `/admin/salud` hacía 1.382 idas y vueltas a
+Atlas en serie; `/vehicles/duplicados`, ~340; `/cortex/dsc` recorría el
+`timeline` de 48.000 paquetes dos veces. Gotcha 63.
+
+### Y un fallo que salió de comparar antes/después
+
+`/cortex/dsc` ordenaba por `exceso` y cortaba en 40 **sin desempate**. Dos
+peticiones seguidas con los mismos datos devolvían distinta fila 40 (dos
+conductores empatados en 10,5). Por pantalla parece que el dato se movió, en una
+tabla que sirve para hablar con una persona. Desempate determinista y
+comprobado: tres peticiones, la misma lista. Gotcha 62.
+
+### Lo que queda medido y sin tocar
+
+`/cortex/portales` (2,5 s) calcula la celda geográfica de ~250.000 paquetes para
+quedarse con 300: se arregla guardando la celda en la ingesta e indexándola, que
+pide backfill y no se hace a ciegas. `/cortex/stations` (743 ms) agrupa el
+histórico entero en cada llamada.
+
+---
+
 ## Estado a 2026-09-05 (décima pasada: los filtros y las rutas públicas)
 
 Baseline al empezar: 112 tests, 18 checkers, pyflakes 0, smoke de producción
