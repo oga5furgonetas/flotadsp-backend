@@ -38341,12 +38341,22 @@ async def cortex_ingest(request: Request):
     # estacion y se ve en /cortex/diagnostico.
     _ver = str(request.headers.get("x-ext-version") or "")[:16]
     if _ver:
+        # UNA FILA POR INSTALACION, no una por empresa. Antes se guardaba en un
+        # unico `version:extension` y el ultimo equipo que hablara pisaba a los
+        # demas: con cuatro PCs en la oficina, la version que se veia era la del
+        # que acababa de refrescar. Asi no se puede probar una version nueva en
+        # un equipo sin perder de vista a los otros, que es justo lo que hacia
+        # falta el 04-09-2026. El id lo genera la extension al instalarse y no
+        # dice quien es nadie: solo distingue una instalacion de otra.
+        _inst = re.sub(r"[^A-Za-z0-9_-]", "", str(request.headers.get("x-ext-install") or ""))[:40]
         try:
+            ahora = datetime.now(timezone.utc)
             await db.cortex_diagnostico.update_one(
-                {"_id": "version:extension"},
+                {"_id": "version:%s" % (_inst or "extension")},
                 {"$set": {"kind": "version", "which": "extension", "url": _ver,
-                          "visto_en": datetime.now(timezone.utc).isoformat(),
-                          "expira_en": datetime.now(timezone.utc) + timedelta(days=30)}},
+                          "instalacion": _inst or None,
+                          "visto_en": ahora.isoformat(),
+                          "expira_en": ahora + timedelta(days=30)}},
                 upsert=True)
         except Exception:
             pass
@@ -38473,9 +38483,21 @@ async def cortex_diagnostico(_=Depends(require_admin)):
     parada— cualquier exclusión del DCR es una suposición, y una suposición que
     mueve el DCR es peor que no tocarlo.
     """
-    docs = await db.cortex_diagnostico.find({}, {"_id": 0, "expira_en": 0}).to_list(50)
+    docs = await db.cortex_diagnostico.find({}, {"_id": 0, "expira_en": 0}).to_list(200)
     docs.sort(key=lambda d: str(d.get("visto_en") or ""), reverse=True)
+    # Las versiones, agrupadas: cuantos equipos llevan cada una y cuando hablo
+    # el ultimo. Es lo que permite instalar una version nueva en UN equipo y
+    # comprobar que efectivamente es ese el que la lleva.
+    vers: dict = {}
+    for d in docs:
+        if d.get("kind") != "version":
+            continue
+        v = vers.setdefault(d.get("url") or "?", {"version": d.get("url") or "?",
+                                                  "equipos": 0, "ultima": ""})
+        v["equipos"] += 1
+        v["ultima"] = max(v["ultima"], str(d.get("visto_en") or ""))
     return {"diagnostico": docs,
+            "versiones": sorted(vers.values(), key=lambda v: v["ultima"], reverse=True),
             "hay_esquema": any(d.get("kind") == "schema" for d in docs)}
 
 

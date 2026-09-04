@@ -43,6 +43,7 @@ export default function EsquemaCortex() {
   }, [])
 
   const esquemas = (datos?.diagnostico || []).filter((d) => d.kind === 'schema' && d.schema)
+  const versiones = datos?.versiones || []
 
   return (
     <div className="rounded-xl border border-dark-800 bg-dark-900/30 p-4">
@@ -56,6 +57,20 @@ export default function EsquemaCortex() {
         decidir con pruebas qué campo marca una anulación en nave, en vez de inventarse un
         umbral de hora y dirección para tocar el DCR.
       </p>
+
+      {/* QUE VERSION LLEVA CADA EQUIPO. Antes se guardaba una sola por empresa
+          y el ultimo PC que hablara pisaba a los demas, asi que no habia forma
+          de instalar una version nueva en uno solo y comprobar que era ese. */}
+      {versiones.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {versiones.map((v) => (
+            <span key={v.version} className="rounded-lg border border-dark-800 bg-dark-950/40 px-2.5 py-1 text-[11.5px] text-dark-300">
+              extensión <b className="text-dark-100">{v.version}</b>
+              <span className="text-dark-500"> · {v.equipos} {v.equipos === 1 ? 'equipo' : 'equipos'}</span>
+            </span>
+          ))}
+        </div>
+      )}
 
       {!cargando && esquemas.length === 0 ? (
         <p className="mt-3 rounded-lg border border-dark-800 bg-dark-950/40 px-3 py-2 text-[11.5px] leading-relaxed text-dark-300">

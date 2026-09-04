@@ -7,6 +7,25 @@ const DEFAULT_URL = 'https://flotadsp-backend.fly.dev/api/cortex/ingest';
 const MAX_BATCH = 200;
 const ALARM = 'flotadsp-flush';
 
+/* QUE VERSION LLEVA ESTE EQUIPO. Un uuid que se crea la primera vez y vive en
+   el almacen local del navegador. No identifica a nadie —ni nombre, ni usuario,
+   ni maquina—: solo distingue una instalacion de otra, que es lo que hacia
+   falta para poder probar una version nueva en UN solo PC sin dejar de ver la
+   de los demas. Antes el backend guardaba una unica version por empresa y el
+   ultimo equipo que hablara pisaba a los otros. */
+let _idInst = null;
+async function idInstalacion() {
+  if (_idInst !== null) return _idInst;
+  try {
+    const { instalacion } = await chrome.storage.local.get({ instalacion: '' });
+    if (instalacion) { _idInst = instalacion; return _idInst; }
+    const nuevo = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random()).slice(0, 36);
+    await chrome.storage.local.set({ instalacion: nuevo });
+    _idInst = nuevo;
+  } catch (_) { _idInst = ''; }
+  return _idInst;
+}
+
 const AMZ = ['https://logistics.amazon.es/*', 'https://*.amazon.es/*'];
 
 // Inyecta el interceptor (MAIN) + puente (ISOLATED) en una pestaña. Los scripts
@@ -143,7 +162,11 @@ async function flush() {
         const part = packages.slice(i, i + CHUNK);
         const r = await fetch(ingestUrl, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': ingestToken },
+          headers: {
+            'Content-Type': 'application/json', 'X-Ingest-Token': ingestToken,
+            'X-Ext-Version': chrome.runtime.getManifest().version,
+            'X-Ext-Install': await idInstalacion(),
+          },
           body: JSON.stringify({ captured_at: new Date().toISOString(), packages: part }),
         });
         if (!r.ok) {
@@ -198,6 +221,7 @@ async function enviarDiagnostico(payload) {
         // Que version esta corriendo en cada nave. Con la extension repartida a
         // varias estaciones, sin esto no hay forma de saber quien tiene cual.
         'X-Ext-Version': chrome.runtime.getManifest().version,
+        'X-Ext-Install': await idInstalacion(),
       },
       body: JSON.stringify(payload),
     });
