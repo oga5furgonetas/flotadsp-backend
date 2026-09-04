@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
@@ -7,6 +7,8 @@ import {
 } from 'lucide-react'
 import { whcAnalizar, getWhcPlan, deleteWhcPlan } from '../api'
 import { lista } from '../../lib/lista'
+import { useOrden } from '../../lib/orden'
+import ThOrden from '../components/ThOrden'
 
 /* ────────────────────────────────────────────────────────────────────────────
    WHC — Working Hours Compliance.
@@ -96,7 +98,10 @@ export default function WHC() {
     setGuardado(null); setTexto(''); setDatos(null); setEditando(true)
   }
 
-  const filas = lista(datos?.conductores)
+  /* Ordenar pulsando la cabecera: quien mas horas lleva, a quien le queda
+     menos margen. Los campos son los que pinta la propia tabla. */
+  const { orden, pulsar, ordenar } = useOrden()
+  const filas = useMemo(() => ordenar(lista(datos?.conductores)), [datos, ordenar])
   const r = datos?.resumen
 
   return (
@@ -380,11 +385,11 @@ export default function WHC() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-dark-800 text-[11px] uppercase tracking-wide text-dark-500">
-                  <th className="px-4 py-2.5 text-left font-semibold">{t('whc.col.conductor')}</th>
-                  <th className="px-3 py-2.5 text-right font-semibold">{t('whc.col.trabajado')}</th>
-                  <th className="px-3 py-2.5 text-right font-semibold">{t('whc.col.margen')}</th>
-                  <th className="px-3 py-2.5 text-center font-semibold">{t('whc.col.bloques')}</th>
-                  <th className="px-4 py-2.5 text-left font-semibold">{t('whc.col.estado')}</th>
+                  <ThOrden campo="nombre" orden={orden} pulsar={pulsar} className="px-4 py-2.5 text-left">{t('whc.col.conductor')}</ThOrden>
+                  <ThOrden campo="trabajado" orden={orden} pulsar={pulsar} className="px-3 py-2.5 text-right">{t('whc.col.trabajado')}</ThOrden>
+                  <ThOrden campo="margen_semanal" orden={orden} pulsar={pulsar} className="px-3 py-2.5 text-right">{t('whc.col.margen')}</ThOrden>
+                  <ThOrden campo="bloques" orden={orden} pulsar={pulsar} className="px-3 py-2.5 text-center">{t('whc.col.bloques')}</ThOrden>
+                  <ThOrden campo="riesgo" orden={orden} pulsar={pulsar} className="px-4 py-2.5 text-left">{t('whc.col.estado')}</ThOrden>
                 </tr>
               </thead>
               <tbody className="divide-y divide-dark-800">

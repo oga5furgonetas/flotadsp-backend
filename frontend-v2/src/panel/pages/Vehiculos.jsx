@@ -2747,6 +2747,9 @@ function PanelDuplicados() {
 
 
 export default function Vehiculos() {
+  /* Ordenar la tabla pulsando la cabecera. Los campos son los que pinta la
+     propia celda: license_plate, model, center, mileage, itv_date y status. */
+  const { orden: ordenTabla, pulsar: pulsarTabla, ordenar: ordenarTabla } = useOrden()
   const { center, centers } = useOutletContext()
   const { t, lang } = useT()
   const [vehicles, setVehicles] = useState(null)
@@ -2982,18 +2985,22 @@ export default function Vehiculos() {
                 <thead className="sticky top-0 z-10 bg-dark-900">
                   <tr className="border-b border-dark-800">
                     <th className="w-6 px-2 py-2"></th>
-                    <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Matrícula</th>
-                    <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Modelo</th>
-                    <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Centro</th>
-                    <th className="px-2 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-dark-500">Km</th>
+                    <ThOrden campo="license_plate" orden={ordenTabla} pulsar={pulsarTabla} className="px-2 py-2 text-[10px] font-medium uppercase tracking-wider text-dark-500 text-left">Matrícula</ThOrden>
+                    <ThOrden campo="model" orden={ordenTabla} pulsar={pulsarTabla} className="px-2 py-2 text-[10px] font-medium uppercase tracking-wider text-dark-500 text-left">Modelo</ThOrden>
+                    <ThOrden campo="center" orden={ordenTabla} pulsar={pulsarTabla} className="px-2 py-2 text-[10px] font-medium uppercase tracking-wider text-dark-500 text-left">Centro</ThOrden>
+                    <ThOrden campo="mileage" orden={ordenTabla} pulsar={pulsarTabla} className="px-2 py-2 text-[10px] font-medium uppercase tracking-wider text-dark-500 text-right">Km</ThOrden>
+                    {/* Sin orden a proposito: esta columna no sale de un campo de la
+                        fila sino de la ultima inspeccion, que se busca aparte. Ordenar
+                        por un campo que no existe deja la tabla igual y no da error:
+                        pareceria que el boton esta roto. */}
                     <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Revisión</th>
-                    <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">ITV</th>
-                    <th className="px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-dark-500">Estado</th>
+                    <ThOrden campo="itv_date" orden={ordenTabla} pulsar={pulsarTabla} className="px-2 py-2 text-[10px] font-medium uppercase tracking-wider text-dark-500 text-left">ITV</ThOrden>
+                    <ThOrden campo="status" orden={ordenTabla} pulsar={pulsarTabla} className="px-2 py-2 text-[10px] font-medium uppercase tracking-wider text-dark-500 text-left">Estado</ThOrden>
                     <th className="w-6 px-2 py-2"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {list.map(v => {
+                  {ordenarTabla(list).map(v => {
                     const st = STATUS_MAP[v.status] || STATUS_MAP.baja
                     const dot = lastInspDot(lastInsp[v.id])
                     return (

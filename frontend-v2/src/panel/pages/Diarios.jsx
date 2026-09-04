@@ -9,6 +9,8 @@ import {
   subirDiarios,
 } from '../api'
 import { lista } from '../../lib/lista'
+import { useOrden } from '../../lib/orden'
+import ThOrden from '../components/ThOrden'
 import { isoLocal } from '../../lib/fecha'
 
 /* ── CONTADOR DE DNRs ────────────────────────────────────────────────────────
@@ -225,12 +227,18 @@ export default function Diarios() {
     } finally { setAsignando('') }
   }
 
+  /* Ordenar pulsando la cabecera: quien mas DNRs, mas defectos, mas euros.
+     Sin orden propio se respeta el que trae el backend, que ya viene por
+     importe — por eso la tercera pulsada quita el orden en vez de invertirlo. */
+  const { orden, pulsar, ordenar } = useOrden()
   const filas = useMemo(() => {
     const q = busca.trim().toLowerCase()
     const cs = lista(datos?.conductores)
-    if (!q) return cs
-    return cs.filter((c) => (c.driver_name || c.transporter_id || '').toLowerCase().includes(q))
-  }, [datos, busca])
+    const base = q
+      ? cs.filter((c) => (c.driver_name || c.transporter_id || '').toLowerCase().includes(q))
+      : cs
+    return ordenar(base)
+  }, [datos, busca, ordenar])
 
   if (noCenter) {
     return (
@@ -670,16 +678,16 @@ export default function Diarios() {
           <table className="w-full text-left text-[13px]">
             <thead>
               <tr className="text-[10.5px] uppercase tracking-wider text-dark-600">
-                <th className="px-3 py-2 font-semibold">Conductor</th>
-                <th className="px-3 py-2 font-semibold">Transporter ID</th>
-                <th className="px-2 py-2 text-center font-semibold">DNRs</th>
-                <th className="px-2 py-2 text-center font-semibold text-red-400/80">Defectos</th>
-                <th className="px-2 py-2 text-right font-semibold text-red-400/80">€ que puntúan</th>
-                <th className="px-2 py-2 text-center font-semibold">No puntúan</th>
-                <th className="px-2 py-2 text-center font-semibold">Sin clasif.</th>
-                <th className="px-2 py-2 text-center font-semibold">RTS</th>
-                <th className="px-2 py-2 text-center font-semibold">POD</th>
-                <th className="px-2 py-2 text-center font-semibold">CC</th>
+                <ThOrden campo="driver_name" orden={orden} pulsar={pulsar} className="px-3 py-2 text-left">Conductor</ThOrden>
+                <ThOrden campo="transporter_id" orden={orden} pulsar={pulsar} className="px-3 py-2 text-left">Transporter ID</ThOrden>
+                <ThOrden campo="dnr_total" orden={orden} pulsar={pulsar} className="px-2 py-2 text-center">DNRs</ThOrden>
+                <ThOrden campo="defectos" orden={orden} pulsar={pulsar} className="px-2 py-2 text-center text-red-400/80">Defectos</ThOrden>
+                <ThOrden campo="euros_defectos" orden={orden} pulsar={pulsar} className="px-2 py-2 text-right text-red-400/80">€ que puntúan</ThOrden>
+                <ThOrden campo="limpias" orden={orden} pulsar={pulsar} className="px-2 py-2 text-center">No puntúan</ThOrden>
+                <ThOrden campo="sin_clasificar" orden={orden} pulsar={pulsar} className="px-2 py-2 text-center">Sin clasif.</ThOrden>
+                <ThOrden campo="rts" orden={orden} pulsar={pulsar} className="px-2 py-2 text-center">RTS</ThOrden>
+                <ThOrden campo="pod_fails" orden={orden} pulsar={pulsar} className="px-2 py-2 text-center">POD</ThOrden>
+                <ThOrden campo="cc_fails" orden={orden} pulsar={pulsar} className="px-2 py-2 text-center">CC</ThOrden>
               </tr>
             </thead>
             <tbody>

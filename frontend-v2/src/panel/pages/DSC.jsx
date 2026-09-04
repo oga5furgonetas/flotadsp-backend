@@ -3,6 +3,8 @@ import { useOutletContext } from 'react-router-dom'
 import { MapPinned, AlertTriangle, Hand, RefreshCw, Loader2, ChevronRight, StickyNote } from 'lucide-react'
 import { cortexDsc, getDireccionesProblema, guardarNotaDireccion, consolidarDirecciones } from '../api'
 import { useT } from '../../i18n'
+import { useOrden } from '../../lib/orden'
+import ThOrden from '../components/ThOrden'
 
 /* Dónde se deja cada paquete.
    Es la métrica que más le cuesta a un DSP: en 17 scorecards reales de OGA5,
@@ -212,6 +214,8 @@ function DireccionesProblema({ center }) {
 
 
 export default function DSC() {
+  /* Ordenar pulsando la cabecera: quien mas entregas, quien mas riesgo. */
+  const { orden, pulsar, ordenar } = useOrden()
   // `useT()` devuelve el contexto entero ({ lang, setLang, t }), no la funcion.
   // Sin desestructurar, `t('...')` es "t is not a function" y la pantalla se
   // cae entera en cuanto pinta la primera etiqueta.
@@ -340,14 +344,14 @@ export default function DSC() {
                 <table className="w-full text-sm">
                   <thead className="bg-dark-900/60 text-[11px] uppercase tracking-wide text-dark-500">
                     <tr>
-                      <th className="p-3 text-left font-semibold">{t('dsc.th.cond')}</th>
-                      <th className="p-3 text-right font-semibold">{t('dsc.th.entregas')}</th>
-                      <th className="p-3 text-right font-semibold">{t('dsc.th.pct')}</th>
-                      <th className="p-3 text-right font-semibold">{t('dsc.th.exceso')}</th>
+                      <ThOrden campo="nombre" orden={orden} pulsar={pulsar} className="p-3 text-left">{t('dsc.th.cond')}</ThOrden>
+                      <ThOrden campo="entregas" orden={orden} pulsar={pulsar} className="p-3 text-right">{t('dsc.th.entregas')}</ThOrden>
+                      <ThOrden campo="pct_riesgo" orden={orden} pulsar={pulsar} className="p-3 text-right">{t('dsc.th.pct')}</ThOrden>
+                      <ThOrden campo="exceso" orden={orden} pulsar={pulsar} className="p-3 text-right">{t('dsc.th.exceso')}</ThOrden>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-dark-800">
-                    {d.conductores.map((c) => (
+                    {ordenar(d.conductores).map((c) => (
                       <tr key={c.driver_id} className="hover:bg-dark-900/40">
                         <td className="p-3">
                           <div className="font-medium text-dark-100">{c.nombre}</div>
