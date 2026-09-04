@@ -1105,6 +1105,14 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    campo a campo antes y despues.
    Regla: antes de tocar una consulta, contar cuantas VECES se llama. El
    `explain` de una consulta rapida no dice nada si se ejecuta mil veces.
+   La misma forma, tercera vez el mismo dia: `/vehicles/duplicados` hacia un
+   `count_documents` por cada pareja (ficha, coleccion) — 24 matriculas
+   repetidas x 7 colecciones = ~340 consultas en fila para 186 furgonetas, y
+   **1.033 ms**. Una consulta por coleccion con `$group` sobre el `$in` de los
+   ids: **276 ms (3,3x)**, y la respuesta identica —24 grupos, 28 fichas de
+   mas, los mismos conteos y el mismo orden—. El patron bueno YA estaba en el
+   fichero, en `/drivers/duplicados`: antes de escribir uno nuevo, mirar como
+   se resolvio el hermano.
 
 
 ## Reglas de trabajo

@@ -6847,20 +6847,53 @@ async def vehiculos_duplicados(_=Depends(require_admin)):
         if k:
             grupos.setdefault(k, []).append(v)
 
+    repetidas = {k: f for k, f in grupos.items() if len(f) >= 2}
+
+    # UNA CONSULTA POR COLECCION, no una por ficha y coleccion. Antes esto hacia
+    # `count_documents` para cada pareja (ficha, coleccion): con 24 matriculas
+    # repetidas y 7 colecciones son ~340 idas y vueltas a Atlas en fila, y por
+    # eso el endpoint tardaba 1.033 ms para 186 furgonetas (medido el
+    # 05-09-2026). Agrupando salen 7 consultas, una por coleccion.
+    # `/drivers/duplicados` ya lo hacia asi: el patron estaba en casa.
+    ids = [v["id"] for f in repetidas.values() for v in f if v.get("id")]
+
+    async def _cuenta(col, campo):
+        out: dict = {}
+        if not ids:
+            return out
+        try:
+            async for r in db[col].aggregate([
+                {"$match": {campo: {"$in": ids}}},
+                {"$group": {"_id": "$" + campo, "n": {"$sum": 1}}},
+            ]):
+                out[r["_id"]] = r["n"]
+        except Exception:                                    # noqa: BLE001
+            pass
+        return out
+
+    por_col = {col: await _cuenta(col, campo) for col, campo in _VEH_COLS}
+    # El cuadrante guarda la furgoneta DENTRO de `slots`, asi que se agrupa
+    # sobre el array desplegado en vez de contar documento a documento.
+    cuadrante: dict = {}
+    if ids:
+        try:
+            async for r in db.daily_assignments.aggregate([
+                {"$match": {"slots.vehicle_id": {"$in": ids}}},
+                {"$unwind": "$slots"},
+                {"$match": {"slots.vehicle_id": {"$in": ids}}},
+                {"$group": {"_id": {"v": "$slots.vehicle_id", "d": "$_id"}}},
+                {"$group": {"_id": "$_id.v", "n": {"$sum": 1}}},
+            ]):
+                cuadrante[r["_id"]] = r["n"]
+        except Exception:                                    # noqa: BLE001
+            pass
+
     salida = []
-    for k, fichas in grupos.items():
-        if len(fichas) < 2:
-            continue
+    for k, fichas in repetidas.items():
         detalle = []
         for v in fichas:
-            cuenta = {}
-            for col, campo in _VEH_COLS:
-                try:
-                    cuenta[col] = await db[col].count_documents({campo: v["id"]})
-                except Exception:                            # noqa: BLE001
-                    cuenta[col] = 0
-            cuenta["cuadrante"] = await db.daily_assignments.count_documents(
-                {"slots.vehicle_id": v["id"]})
+            cuenta = {col: por_col.get(col, {}).get(v["id"], 0) for col, _ in _VEH_COLS}
+            cuenta["cuadrante"] = cuadrante.get(v["id"], 0)
             detalle.append({
                 "id": v["id"],
                 "matricula": v.get("license_plate"),
