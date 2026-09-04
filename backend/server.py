@@ -18853,10 +18853,47 @@ async def empleo_oferta_publica(slug: str, oferta_slug: str):
     return _empleo_publica_oferta(o)
 
 
+_EMPLEO_CV_MAX = 8 * 1024 * 1024
+_EMPLEO_CV_TIPOS = (".pdf", ".doc", ".docx", ".jpg", ".jpeg", ".png", ".webp", ".heic")
+
+
+async def _empleo_cuerpo(request: Request):
+    """Devuelve (datos, nombre_cv, bytes_cv). Acepta multipart Y JSON.
+
+    Las dos formas a proposito: la pagina manda multipart desde que hay
+    curriculum, pero un navegador con la version anterior cacheada sigue
+    mandando JSON durante horas. Romperle la candidatura a alguien que se esta
+    apuntando por un despliegue nuestro no es aceptable.
+    """
+    ctype = (request.headers.get("content-type") or "").lower()
+    if ctype.startswith("multipart/"):
+        form = await request.form()
+        try:
+            datos = json.loads(str(form.get("datos") or "{}"))
+        except Exception:
+            raise HTTPException(400, "No hemos entendido el formulario")
+        if not isinstance(datos, dict):
+            raise HTTPException(400, "No hemos entendido el formulario")
+        f = form.get("cv")
+        if f is None or not hasattr(f, "read"):
+            return datos, "", None
+        nombre = str(getattr(f, "filename", "") or "")[:120]
+        if not nombre.lower().endswith(_EMPLEO_CV_TIPOS):
+            raise HTTPException(400, "El curriculum tiene que ser un PDF, un Word o una foto")
+        contenido = await f.read()
+        if len(contenido) > _EMPLEO_CV_MAX:
+            raise HTTPException(413, "El curriculum no puede pasar de 8 MB")
+        return datos, nombre, (contenido or None)
+    cuerpo = await request.json()
+    if not isinstance(cuerpo, dict):
+        raise HTTPException(400, "No hemos entendido el formulario")
+    return cuerpo, "", None
+
+
 @api_router.post("/empleo/publica/{slug}/{oferta_slug}")
-async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request,
-                           datos: dict = Body(...)):
+async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request):
     """Alguien se apunta. Endpoint publico: todo lo que entra es sospechoso."""
+    datos, cv_nombre, cv_bytes = await _empleo_cuerpo(request)
     # EL CAMPO TRAMPA. Un bot rellena todos los inputs que encuentra; una
     # persona no ve este porque esta escondido. Se responde OK y no se guarda:
     # devolviendo un error, el bot aprenderia a dejarlo vacio.
@@ -18893,6 +18930,16 @@ async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request,
         "ciudad": _empleo_texto(datos.get("ciudad"), 80),
         "centro": o.get("centro") or "",
         "carnet_desde": _empleo_texto(datos.get("carnet_desde"), 20),
+        # El DNI es dato sensible: viaja en la lista blanca del panel y NO sale
+        # en ninguna respuesta publica. Se guarda tal cual lo escriba: validar
+        # la letra dejaria fuera a los NIE y a quien lo teclee con un guion.
+        "dni": _empleo_texto(datos.get("dni"), 20).upper(),
+        # La FECHA y el numero. El numero envejece —una candidatura de hoy dice
+        # 24 y dentro de ocho meses sigue diciendo 24— y la fecha no; se guardan
+        # las dos porque la fecha es opcional y el numero puede venir sin ella.
+        "nacimiento": _empleo_texto(datos.get("nacimiento"), 10),
+        "edad": (int(datos["edad"]) if str(datos.get("edad") or "").strip().isdigit()
+                 and 14 <= int(datos["edad"]) <= 90 else None),
         "experiencia": _empleo_texto(datos.get("experiencia"), 60),
         "disponibilidad": _empleo_texto(datos.get("disponibilidad"), 120),
         "respuestas": limpias,
@@ -18907,6 +18954,24 @@ async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request,
         # Datos personales con fecha de caducidad: se van solos a los 12 meses.
         "expira_en": ahora + timedelta(days=30 * _EMPLEO_MESES_GUARDA),
     }
+    # EL CURRICULUM SE SUBE ANTES DE GUARDAR NADA. Si falla la subida se
+    # contesta el error y no queda un candidato a medias con un enlace roto;
+    # y si el candidato ya estaba (409) no se ha gastado espacio en R2.
+    if cv_bytes:
+        s3 = get_r2()
+        if s3:
+            ext = cv_nombre.rsplit(".", 1)[-1].lower() if "." in cv_nombre else "pdf"
+            clave = "cv/%s/%s.%s" % (o["id"], uuid.uuid4().hex, re.sub(r"[^a-z0-9]", "", ext)[:5] or "pdf")
+            try:
+                await asyncio.get_running_loop().run_in_executor(
+                    _executor,
+                    lambda: s3.put_object(Bucket=R2_BUCKET, Key=clave, Body=cv_bytes,
+                                          ContentType="application/octet-stream"))
+                base = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
+                doc["cv_url"] = ("%s/%s" % (base, clave)) if base else clave
+                doc["cv_nombre"] = cv_nombre
+            except Exception as e:
+                logger.warning("CV de candidato: %s", e)
     try:
         await db.candidatos.insert_one(dict(doc))   # copia: insert_one muta (gotcha 42)
     except DuplicateKeyError:
@@ -18946,16 +19011,23 @@ async def empleo_listar_ofertas(center: Optional[str] = None, user: dict = Depen
     ofertas = await db.ofertas_empleo.find(q, {"_id": 0}).sort("creada_en", -1).to_list(200)
     ids = [o["id"] for o in ofertas]
     por: dict = {}
+    origen: dict = {}
     if ids:
         async for r in db.candidatos.aggregate([
                 {"$match": {"oferta_id": {"$in": ids}}},
                 {"$group": {"_id": {"o": "$oferta_id", "f": "$fase"}, "n": {"$sum": 1}}}]):
             k = r["_id"]
             por.setdefault(k.get("o"), {})[k.get("f") or "nuevo"] = r["n"]
+        async for r in db.candidatos.aggregate([
+                {"$match": {"oferta_id": {"$in": ids}}},
+                {"$group": {"_id": {"o": "$oferta_id", "d": "$origen"}, "n": {"$sum": 1}}}]):
+            k = r["_id"]
+            origen.setdefault(k.get("o"), {})[k.get("d") or "directo"] = r["n"]
     salida = []
     for o in ofertas:
         o = await _empleo_con_enlace(o)
         o["por_fase"] = por.get(o["id"], {})
+        o["por_origen"] = origen.get(o["id"], {})
         o["candidatos"] = sum(o["por_fase"].values())
         salida.append(o)
     return {"ofertas": salida, "fases": list(EMPLEO_FASES), "tipos": list(EMPLEO_TIPOS)}

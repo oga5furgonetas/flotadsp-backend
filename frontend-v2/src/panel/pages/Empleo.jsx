@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import {
   Briefcase, Plus, Copy, Check, Loader2, AlertTriangle, Trash2, X,
-  MessageCircle, IdCard, ChevronRight, Link2,
+  MessageCircle, IdCard, ChevronRight, Link2, Search, Download, FileText,
+  Phone, Mail, Calendar, Filter,
 } from 'lucide-react'
 import { useT } from '../../i18n'
 import {
@@ -20,7 +21,11 @@ import {
    candidatos y en qué nave nace la ficha al contratarlos. Una oferta de
    Coruña guardada en OGA5 mete a esa gente en el cuadrante de Santiago, así
    que aquí es obligatorio y el backend lo comprueba contra los centros de la
-   empresa. */
+   empresa.
+
+   DE DÓNDE VIENE CADA UNO se enseña por oferta (`?de=indeed`, `?de=whatsapp`).
+   Es la mitad de la decisión de dónde gastar en anuncios, y sin verlo en
+   pantalla el dato estaba guardado y no servía para nada. */
 
 const FASES = ['nuevo', 'llamado', 'entrevista', 'prueba', 'contratado', 'descartado']
 
@@ -44,7 +49,9 @@ const OFERTA_VACIA = (centro) => ({
   activa: true, preguntas: [],
 })
 
-const clave = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
+const clave = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim()
+
+const dia = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : '—')
 
 export default function Empleo() {
   const { t } = useT()
@@ -58,6 +65,8 @@ export default function Empleo() {
   const [guardando, setGuardando] = useState(false)
   const [copiado, setCopiado] = useState('')
   const [abierto, setAbierto] = useState(null)
+  const [busca, setBusca] = useState('')
+  const [soloOrigen, setSoloOrigen] = useState('')
 
   const centrosReales = useMemo(
     () => (centers || []).filter((c) => c && c !== 'Todos'), [centers])
@@ -76,7 +85,7 @@ export default function Empleo() {
   useEffect(() => { cargar() }, [cargar])
 
   const cargarCands = useCallback(async (oferta) => {
-    setSel(oferta)
+    setSel(oferta); setBusca(''); setSoloOrigen('')
     try {
       const { data } = await getCandidatos({ oferta: oferta?.id, center })
       setCands(data.candidatos || [])
@@ -95,8 +104,7 @@ export default function Empleo() {
     try {
       if (o.id) await editarOferta(o.id, o)
       else await crearOferta(o)
-      setEditando(null)
-      setError('')
+      setEditando(null); setError('')
       await cargar()
     } catch (e) {
       setError(e?.response?.data?.detail || t('empleo.errGuardar'))
@@ -113,8 +121,7 @@ export default function Empleo() {
   const contratar = async (c) => {
     try {
       await contratarCandidato(c.id)
-      await cargarCands(sel)
-      await cargar()
+      await cargarCands(sel); await cargar()
     } catch (e) { setError(e?.response?.data?.detail || t('empleo.errContratar')) }
   }
 
@@ -126,11 +133,46 @@ export default function Empleo() {
     } catch (e) { setError(e?.response?.data?.detail || t('empleo.errBorrar')) }
   }
 
+  /* Buscar y filtrar por origen antes de repartir en columnas: si se filtrara
+     después, los contadores de cada columna dirían una cosa y la columna
+     enseñaría otra. */
+  const visibles = useMemo(() => {
+    const q = clave(busca)
+    return cands.filter((c) => {
+      if (soloOrigen && (c.origen || 'directo') !== soloOrigen) return false
+      if (!q) return true
+      return clave(`${c.nombre} ${c.telefono} ${c.ciudad} ${c.email}`).includes(q)
+    })
+  }, [cands, busca, soloOrigen])
+
   const porFase = useMemo(() => {
     const m = {}
-    for (const f of FASES) m[f] = cands.filter((c) => (c.fase || 'nuevo') === f)
+    for (const f of FASES) m[f] = visibles.filter((c) => (c.fase || 'nuevo') === f)
     return m
-  }, [cands])
+  }, [visibles])
+
+  const origenes = useMemo(
+    () => [...new Set(cands.map((c) => c.origen || 'directo'))].sort(), [cands])
+
+  /* Descargar lo que se está viendo. Un CSV con punto y coma y BOM: es lo que
+     Excel en español abre en columnas de una vez, sin el asistente de
+     importación que nadie usa bien. */
+  const exportar = () => {
+    const cab = ['Nombre', 'Teléfono', 'Correo', 'DNI', 'Edad', 'Ciudad',
+      'Carnet desde', 'Experiencia', 'Disponibilidad', 'Origen', 'Fase', 'Motivo', 'Día', 'CV']
+    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    const filas = visibles.map((c) => [
+      c.nombre, c.telefono, c.email, c.dni, c.edad, c.ciudad, c.carnet_desde,
+      c.experiencia, c.disponibilidad, c.origen, c.fase, c.motivo_descarte,
+      (c.creado_en || '').slice(0, 10), c.cv_url,
+    ].map(esc).join(';'))
+    const csv = '﻿' + [cab.map(esc).join(';'), ...filas].join('\r\n')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    a.download = `candidatos-${(sel?.slug || 'oferta')}.csv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
 
   return (
     <div className="space-y-5 p-4 sm:p-6">
@@ -182,12 +224,32 @@ export default function Empleo() {
                     {[o.ciudad, o.jornada, o.salario].filter(Boolean).join(' · ') || '—'}
                   </div>
                 </button>
+                <div className="hidden shrink-0 gap-1.5 sm:flex">
+                  {FASES.filter((f) => o.por_fase?.[f]).map((f) => (
+                    <span key={f} className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ring-1 ${COLOR_FASE[f]}`}
+                      title={t('empleo.fase.' + f)}>
+                      {o.por_fase[f]}
+                    </span>
+                  ))}
+                </div>
                 <div className="w-[70px] shrink-0 text-right leading-tight">
                   <div className="cifra text-base font-bold text-dark-200">{o.candidatos || 0}</div>
                   <div className="text-[10px] uppercase text-dark-500">{t('empleo.candidatos')}</div>
                 </div>
                 <ChevronRight size={14} className="shrink-0 text-dark-600" />
               </div>
+
+              {/* De dónde vienen: es lo que dice qué anuncio trae gente. */}
+              {Object.keys(o.por_origen || {}).length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  {Object.entries(o.por_origen).sort((a, b) => b[1] - a[1]).map(([k, n]) => (
+                    <span key={k} className="rounded bg-dark-900 px-1.5 py-0.5 text-[10px] text-dark-400">
+                      {k} · <b className="text-dark-200">{n}</b>
+                    </span>
+                  ))}
+                </div>
+              )}
+
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <code className="max-w-full truncate rounded bg-dark-900 px-2 py-1 text-[11px] text-dark-400">{o.url}</code>
                 <button onClick={() => copiar(o.url, o.id)}
@@ -200,6 +262,10 @@ export default function Empleo() {
                   {copiado === o.id + 'i' ? <Check size={12} className="text-emerald-400" /> : <Link2 size={12} />}
                   {t('empleo.paraIndeed')}
                 </button>
+                <a href={o.url} target="_blank" rel="noreferrer"
+                  className="rounded-lg px-2 py-1 text-[11px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100">
+                  {t('empleo.verla')}
+                </a>
                 <button onClick={() => { setEditando({ ...o, preguntas: (o.preguntas || []).map((p) => ({ ...p })) }); setError('') }}
                   className="rounded-lg px-2 py-1 text-[11px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100">{t('empleo.editar')}</button>
                 <button onClick={() => editarOferta(o.id, { activa: !o.activa }).then(cargar)}
@@ -214,12 +280,36 @@ export default function Empleo() {
 
       {sel && (
         <div className="card overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-dark-800 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-2 border-b border-dark-800 px-4 py-3">
             <div className="text-sm font-semibold text-dark-200">
               {sel.titulo} <span className="text-dark-500">· {sel.centro}</span>
             </div>
+            <div className="relative ml-auto">
+              <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dark-600" />
+              <input value={busca} onChange={(e) => setBusca(e.target.value)}
+                placeholder={t('empleo.buscar')}
+                className="w-44 rounded-lg border border-dark-700 bg-dark-950 py-1.5 pl-7 pr-2 text-[12px] text-dark-100 outline-none focus:border-brand-500/40" />
+            </div>
+            {origenes.length > 1 && (
+              <select value={soloOrigen} onChange={(e) => setSoloOrigen(e.target.value)}
+                className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12px] text-dark-100">
+                <option value="">{t('empleo.todosOrigenes')}</option>
+                {origenes.map((x) => <option key={x} value={x}>{x}</option>)}
+              </select>
+            )}
+            <button onClick={exportar} disabled={!visibles.length}
+              className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[12px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100 disabled:opacity-40">
+              <Download size={13} /> {t('empleo.exportar')}
+            </button>
             <button onClick={() => { setSel(null); setCands([]) }} className="text-dark-500 hover:text-dark-200"><X size={16} /></button>
           </div>
+
+          {(busca || soloOrigen) && (
+            <div className="flex items-center gap-1.5 border-b border-dark-800 px-4 py-1.5 text-[11.5px] text-dark-500">
+              <Filter size={11} /> {visibles.length} de {cands.length}
+            </div>
+          )}
+
           <div className="grid gap-3 overflow-x-auto p-4 md:grid-cols-3 xl:grid-cols-6">
             {FASES.map((f) => (
               <div key={f} className="min-w-0">
@@ -231,7 +321,14 @@ export default function Empleo() {
                     <div key={c.id} className="rounded-lg border border-dark-800 bg-dark-900/60 p-2">
                       <button onClick={() => setAbierto(abierto === c.id ? null : c.id)} className="w-full text-left">
                         <div className="truncate text-xs font-medium text-dark-100">{c.nombre}</div>
-                        <div className="truncate text-[11px] text-dark-500">{[c.ciudad, c.experiencia].filter(Boolean).join(' · ') || '—'}</div>
+                        <div className="truncate text-[11px] text-dark-500">
+                          {[c.ciudad, c.edad ? `${c.edad} años` : '', c.experiencia].filter(Boolean).join(' · ') || '—'}
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[10px] text-dark-600">
+                          <span>{dia(c.creado_en)}</span>
+                          <span className="rounded bg-dark-800 px-1 py-px">{c.origen}</span>
+                          {c.cv_url && <FileText size={10} className="text-brand-400" title="Trae currículum" />}
+                        </div>
                       </button>
                       {c.descarte_automatico && (
                         <div className="mt-1 rounded bg-amber-500/10 px-1.5 py-1 text-[10px] text-amber-300">
@@ -239,52 +336,94 @@ export default function Empleo() {
                         </div>
                       )}
                       {abierto === c.id && (
-                        <div className="mt-2 space-y-1.5 border-t border-dark-800 pt-2">
-                          <div className="text-[11px] text-dark-400">{c.telefono || '—'} · {c.origen}</div>
-                          {c.email && <div className="truncate text-[11px] text-dark-400">{c.email}</div>}
-                          {(sel.preguntas || []).map((p) => (
-                            <div key={p.id} className="text-[11px]">
-                              <span className="text-dark-500">{p.texto}: </span>
-                              <span className="text-dark-200">
-                                {Array.isArray(c.respuestas?.[p.id]) ? (c.respuestas[p.id].join(', ') || '—') : (c.respuestas?.[p.id] || '—')}
-                              </span>
-                            </div>
-                          ))}
-                          <div className="flex flex-wrap gap-1 pt-1">
-                            {/* El enlace de WhatsApp lo da el backend (gotcha 47). */}
-                            {c.wa && (
-                              <a href={c.wa} target="_blank" rel="noreferrer"
-                                className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-emerald-300 ring-1 ring-emerald-500/30">
-                                <MessageCircle size={11} /> WhatsApp
-                              </a>
-                            )}
-                            {FASES.filter((x) => x !== f && x !== 'contratado').map((x) => (
-                              <button key={x} onClick={() => mover(c, x)}
-                                className="rounded px-1.5 py-1 text-[10px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100">
-                                {t('empleo.fase.' + x)}
-                              </button>
-                            ))}
-                            {!c.driver_id && (
-                              <button onClick={() => contratar(c)}
-                                className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] font-semibold text-emerald-300 ring-1 ring-emerald-500/30">
-                                <IdCard size={11} /> {t('empleo.contratar')}
-                              </button>
-                            )}
-                            <button onClick={() => borrar(c)} aria-label={t('empleo.borrar')}
-                              className="rounded px-1.5 py-1 text-[10px] text-red-300 ring-1 ring-red-500/30">
-                              <Trash2 size={11} />
-                            </button>
-                          </div>
-                        </div>
+                        <Ficha c={c} sel={sel} t={t} mover={mover} contratar={contratar} borrar={borrar} fase={f} />
                       )}
                     </div>
                   ))}
+                  {porFase[f].length === 0 && (
+                    <p className="rounded-lg border border-dashed border-dark-800 px-2 py-3 text-center text-[11px] text-dark-700">—</p>
+                  )}
                 </div>
               </div>
             ))}
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/* La ficha del candidato: todo lo que hace falta para llamarle sin salir de
+   aquí. El DNI y la fecha de nacimiento solo se ven abriendo la tarjeta —son
+   datos sensibles y no tienen por qué estar a la vista de toda la oficina. */
+function Ficha({ c, sel, t, mover, contratar, borrar, fase }) {
+  return (
+    <div className="mt-2 space-y-2 border-t border-dark-800 pt-2">
+      <div className="grid gap-1 text-[11px]">
+        {c.telefono && (
+          <a href={`tel:${c.telefono}`} className="flex items-center gap-1.5 text-dark-300 hover:text-dark-100">
+            <Phone size={11} className="shrink-0 text-dark-500" /> {c.telefono}
+          </a>
+        )}
+        {c.email && (
+          <a href={`mailto:${c.email}`} className="flex items-center gap-1.5 truncate text-dark-300 hover:text-dark-100">
+            <Mail size={11} className="shrink-0 text-dark-500" /> <span className="truncate">{c.email}</span>
+          </a>
+        )}
+        {(c.dni || c.nacimiento) && (
+          <div className="flex items-center gap-1.5 text-dark-400">
+            <IdCard size={11} className="shrink-0 text-dark-500" />
+            {[c.dni, c.nacimiento].filter(Boolean).join(' · ')}
+          </div>
+        )}
+        {(c.carnet_desde || c.disponibilidad) && (
+          <div className="flex items-center gap-1.5 text-dark-400">
+            <Calendar size={11} className="shrink-0 text-dark-500" />
+            {[c.carnet_desde && `carnet ${c.carnet_desde}`, c.disponibilidad].filter(Boolean).join(' · ')}
+          </div>
+        )}
+      </div>
+
+      {(sel.preguntas || []).map((p) => (
+        <div key={p.id} className="text-[11px]">
+          <span className="text-dark-500">{p.texto}: </span>
+          <span className="text-dark-200">
+            {Array.isArray(c.respuestas?.[p.id]) ? (c.respuestas[p.id].join(', ') || '—') : (c.respuestas?.[p.id] || '—')}
+          </span>
+        </div>
+      ))}
+
+      <div className="flex flex-wrap gap-1 pt-1">
+        {/* El enlace de WhatsApp lo da el backend (gotcha 47). */}
+        {c.wa && (
+          <a href={c.wa} target="_blank" rel="noreferrer"
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-emerald-300 ring-1 ring-emerald-500/30">
+            <MessageCircle size={11} /> WhatsApp
+          </a>
+        )}
+        {c.cv_url && (
+          <a href={c.cv_url} target="_blank" rel="noreferrer"
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-brand-300 ring-1 ring-brand-500/30">
+            <FileText size={11} /> {t('empleo.verCv')}
+          </a>
+        )}
+        {FASES.filter((x) => x !== fase && x !== 'contratado').map((x) => (
+          <button key={x} onClick={() => mover(c, x)}
+            className="rounded px-1.5 py-1 text-[10px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100">
+            {t('empleo.fase.' + x)}
+          </button>
+        ))}
+        {!c.driver_id && (
+          <button onClick={() => contratar(c)}
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] font-semibold text-emerald-300 ring-1 ring-emerald-500/30">
+            <IdCard size={11} /> {t('empleo.contratar')}
+          </button>
+        )}
+        <button onClick={() => borrar(c)} aria-label={t('empleo.borrar')}
+          className="rounded px-1.5 py-1 text-[10px] text-red-300 ring-1 ring-red-500/30">
+          <Trash2 size={11} />
+        </button>
+      </div>
     </div>
   )
 }
