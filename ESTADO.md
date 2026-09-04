@@ -39,6 +39,49 @@ decisiones con ellos.
 
 ---
 
+## Estado a 2026-09-05 (décima pasada: los filtros y las rutas públicas)
+
+Baseline al empezar: 112 tests, 18 checkers, pyflakes 0, smoke de producción
+21/21, y el código desplegado idéntico byte a byte al del repositorio.
+
+**Dos hallazgos, los dos midiendo contra producción y ninguno leyendo código.**
+
+- **Un 500 en un endpoint público.** Barrido de las 196 rutas GET contra la
+  empresa REAL —el barrido anterior fue con la empresa vacía, y este fallo solo
+  existe si hay enlaces de las tres clases—. `taller_enlaces` guarda el enlace
+  de una orden, el fijo de un taller y el de un apoyo; `_ot_por_token` los
+  aceptaba todos y luego hacía `enlace["orden_id"]`: KeyError en
+  `/api/taller/<token>` y en los cinco POST del portal del taller. Un taller que
+  guarde su enlace sin el `/t/` veía una página rota. Corregido, verificado con
+  los cuatro casos en producción y con cuatro tests. Gotcha 59.
+- **Cuatro personas invisibles.** Reconciliando filtros: `GET /drivers` daba 150
+  activos y la suma por centro 146. Los cuatro tienen `center: ""`, así que con
+  un centro elegido —siempre— no salían en ninguna pantalla. Uno de ellos
+  llevaba **469 paquetes repartidos en OGA5**. `/checkers/centros` decía «0
+  hallazgos» porque unifica variantes sucias y vacío no es una variante.
+  `GET /drivers/sin-centro` los enseña con lo que sabe Cortex y
+  `POST /drivers/sin-centro/aplicar` pone la nave solo cuando no hay duda (una
+  sola nave, mínimo 20 paquetes). Aplicado: 1 puesto, 3 esperando a que lo diga
+  una persona y ya visibles con el motivo. Gotcha 60.
+
+**Comprobado y descartado** (sin evidencia de fallo): los 38 endpoints públicos
+fijan la empresa con `_set_tenant_by_slug`/`set_current_org_db`/`_ot_por_token`
+(gotcha 26 sigue cerrado); el enlace público de un apoyo caduca a los 3 días y
+va por lista blanca de campos; los 127 paquetes de Cortex sin centro son de
+julio, sin `station_id` ni ruta, de una versión antigua de la extensión; las 33
+BDs `dsp_*` huérfanas son restos de smoke y ocupan ~15 MB de los 10 GB.
+
+**Pendiente sin resolver:** la sección nueva de Conductores está desplegada y
+verificada por API, pero **no se ha visto renderizada en un navegador** — hace
+falta una sesión del panel. Es lo único de esta pasada sin comprobar a ojo.
+
+`run_all.py` deja de contar como aprobado lo que no ejecuta (una función `async`
+llamada a pelo no corre ni una línea) y pone el mismo entorno que `conftest.py`:
+112 → **126 casos reales** en local. En este PC ya están instaladas las
+dependencias del backend, así que `pytest backend/tests -q` corre aquí.
+
+---
+
 ## Estado a 2026-09-02 (auditoría completa, dos pasadas)
 
 ### Lo grave, y ya resuelto
