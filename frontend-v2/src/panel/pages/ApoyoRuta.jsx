@@ -227,8 +227,13 @@ export default function ApoyoRuta() {
               <button key={c.driver_id} onClick={() => elegirConductor(c)}
                 className={`flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-dark-800/60 ${driver?.driver_id === c.driver_id ? 'bg-sky-500/10' : ''}`}>
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium text-dark-100">
-                    {c.nombre}
+                  {/* EL NOMBRE MANDA EN ESTA FILA. Con el bloque de la derecha
+                      sin acotar, el 04-09-2026 medi la columna del nombre en
+                      44 px de 309 y filas de 185 px de alto: se leia «GER...» y
+                      los codigos de ruta caian uno por linea. Un `flex-1` no
+                      basta si el hermano puede crecer sin limite. */}
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-sm font-medium text-dark-100">{c.nombre}</span>
                     {/* Conduce hoy pero su ficha no esta al dia: se dice, porque
                         si no la oficina ve un nombre y no sabe que hay algo que
                         arreglar. Medido el 04-09-2026: 3 con la ficha de baja y
@@ -237,14 +242,19 @@ export default function ApoyoRuta() {
                         una hasta duplicada con una errata en el nombre). No se
                         enlaza solo a proposito: con fichas repetidas, adivinar
                         pondria el historial de uno en la ficha del otro. */}
-                    {c.ficha_de_baja && <span title="Esta persona conduce hoy pero su ficha esta dada de baja" className="ml-1.5 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">ficha de baja</span>}
-                    {c.sin_ficha && <span title="Su id de Cortex no esta enlazado a ninguna ficha: falta el transporter_id" className="ml-1.5 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">sin enlazar</span>}
+                    {c.ficha_de_baja && <span title="Conduce hoy pero su ficha esta dada de baja" className="shrink-0 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-semibold uppercase text-amber-300">{t('apoyo.deBaja')}</span>}
+                    {c.sin_ficha && <span title="Su id de Cortex no esta enlazado a ninguna ficha: falta el transporter_id" className="shrink-0 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-semibold uppercase text-amber-300">{t('apoyo.sinFicha')}</span>}
                   </div>
-                  <div className="text-xs text-dark-500">{c.ruta || '—'} · {c.entregados}/{c.paquetes} {t('apoyo.entregados')}</div>
+                  <div className="truncate text-xs text-dark-500" title={`${c.ruta || ''} · ${c.entregados}/${c.paquetes}`}>{c.ruta || '—'} · {c.entregados}/{c.paquetes} {t('apoyo.entregados')}</div>
                 </div>
-                <div className="text-right">
+                <div className="w-[70px] shrink-0 text-right leading-tight">
                   <div className={`cifra text-base font-bold ${c.pendientes > 40 ? 'text-orange-400' : 'text-dark-200'}`}>{c.pendientes}</div>
-                  <div className="text-[10px] uppercase text-dark-500">{c.paradas} {t('apoyo.paradas')}{c.con_destino != null && c.con_destino < c.paradas ? ` · ${c.con_destino} ${t('apoyo.conDestino')}` : ''}</div>
+                  <div className="text-[10px] uppercase text-dark-500">{c.paradas} {t('apoyo.paradas')}</div>
+                  {/* Lo que importa de verdad no es cuantas se pueden pintar,
+                      sino cuantas NO: son las que no se pueden mandar a nadie. */}
+                  {c.con_destino != null && c.con_destino < c.paradas && (
+                    <div className="text-[10px] text-amber-400/80">{c.paradas - c.con_destino} {t('apoyo.sinUbicar')}</div>
+                  )}
                 </div>
                 {c.apoyo_id && <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300">{t('apoyo.enApoyo')}</span>}
                 <ChevronRight size={14} className="text-dark-600" />

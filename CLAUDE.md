@@ -872,6 +872,23 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    siempre el servidor**, que es donde viven las listas canonicas.
 
 
+55. **`flex-1` no protege de nada si el hermano puede crecer sin limite.** La
+   fila de un conductor en Apoyo en ruta es `[nombre flex-1][cifras][chevron]`,
+   y el bloque de cifras llevaba un texto largo sin acotar: «7 PARADAS · 5 CON
+   DESTINO CONOCIDO». Medido en produccion el 04-09-2026 con la captura de Dani
+   delante: la columna del nombre se quedaba en **44 px de 309** y la fila
+   media **185 px de alto** —se leia «GER...» y los codigos de ruta caian uno
+   por linea—. `min-w-0 flex-1` deja encoger al nombre, que es lo que se
+   pretendia, pero no impide que el hermano se lleve 195 px. Lo que hace falta
+   es acotar al HERMANO (`w-[70px] shrink-0`) y partir su texto en lineas
+   cortas. Despues: nombre 169 px, fila 70 px de alto, las 39 filas sin
+   desbordar y sin scroll horizontal, tambien a 375 px.
+   Regla: en una fila flex, la parte que NO se trunca es la que hay que medir y
+   acotar. Y se mide, no se mira: `getBoundingClientRect().width` de cada hijo
+   y `scrollWidth > clientWidth` para el desbordamiento — a ojo, «GER...»
+   parece un nombre corto.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
