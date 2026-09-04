@@ -4,7 +4,7 @@
 if (!window.__flotadspBridge) {
   window.__flotadspBridge = true;
 
-  const hb = (src) => { try { chrome.runtime.sendMessage({ type: 'heartbeat', src, url: location.href }); } catch (_) {} };
+  const hb = (src, v) => { try { chrome.runtime.sendMessage({ type: 'heartbeat', src, v, url: location.href }); } catch (_) {} };
   hb('bridge');                 // la extensión está inyectada en esta pestaña
   setInterval(() => hb('bridge'), 20000);
 
@@ -13,7 +13,7 @@ if (!window.__flotadspBridge) {
     const d = ev.data;
     if (!d || d.__flotadsp !== true) return;
     if (d.kind === 'cortex') chrome.runtime.sendMessage({ type: 'cortexPackages', url: d.url, packages: d.packages });
-    else if (d.kind === 'heartbeat') hb('main'); // el hook de red (MAIN) está vivo
+    else if (d.kind === 'heartbeat') hb('main', d.v); // el hook de red (MAIN) está vivo, y con qué versión
     else if (d.kind === 'debug') chrome.runtime.sendMessage({ type: 'debug', url: d.url, count: d.count, bytes: d.bytes });
     else if (d.kind === 'sample') chrome.runtime.sendMessage({ type: 'sample', keys: d.keys, node: d.node });
     else if (d.kind === 'schema') chrome.runtime.sendMessage({ type: 'schema', which: d.which, url: d.url, schema: d.schema });

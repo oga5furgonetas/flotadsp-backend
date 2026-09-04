@@ -65,9 +65,18 @@ export default function EsquemaCortex() {
       {versiones.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
           {versiones.map((v) => (
-            <span key={v.version} className="rounded-lg border border-dark-800 bg-dark-950/40 px-2.5 py-1 text-[11.5px] text-dark-300">
-              extensión <b className="text-dark-100">{v.version}</b>
-              <span className="text-dark-500"> · {v.equipos} {v.equipos === 1 ? 'equipo' : 'equipos'}</span>
+            <span key={v.version} className={`rounded-lg border px-2.5 py-1 text-[11.5px] ${
+              v.hay_que_recargar ? 'border-amber-500/40 bg-amber-500/10 text-amber-200' : 'border-dark-800 bg-dark-950/40 text-dark-300'}`}>
+              extensión <b className={v.hay_que_recargar ? 'text-amber-100' : 'text-dark-100'}>{v.version}</b>
+              <span className={v.hay_que_recargar ? 'text-amber-300/80' : 'text-dark-500'}> · {v.equipos} {v.equipos === 1 ? 'equipo' : 'equipos'}</span>
+              {/* La pestaña de Cortex se queda con el código viejo hasta que
+                  alguien pulsa F5: el número del manifiesto se actualiza al
+                  reinstalar, pero el que construye los paquetes no. */}
+              {v.hay_que_recargar && (
+                <span className="ml-1 font-semibold">
+                  · recarga Cortex (F5): ahí corre la {v.interceptor}
+                </span>
+              )}
             </span>
           ))}
         </div>

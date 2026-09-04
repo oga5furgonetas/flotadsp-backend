@@ -13,6 +13,7 @@ const ALARM = 'flotadsp-flush';
    falta para poder probar una version nueva en UN solo PC sin dejar de ver la
    de los demas. Antes el backend guardaba una unica version por empresa y el
    ultimo equipo que hablara pisaba a los otros. */
+let _vInterceptor = '';   // la version que corre dentro de la pagina de Cortex
 let _idInst = null;
 async function idInstalacion() {
   if (_idInst !== null) return _idInst;
@@ -166,6 +167,7 @@ async function flush() {
             'Content-Type': 'application/json', 'X-Ingest-Token': ingestToken,
             'X-Ext-Version': chrome.runtime.getManifest().version,
             'X-Ext-Install': await idInstalacion(),
+            'X-Ext-Interceptor': _vInterceptor || '',
           },
           body: JSON.stringify({ captured_at: new Date().toISOString(), packages: part }),
         });
@@ -222,6 +224,7 @@ async function enviarDiagnostico(payload) {
         // varias estaciones, sin esto no hay forma de saber quien tiene cual.
         'X-Ext-Version': chrome.runtime.getManifest().version,
         'X-Ext-Install': await idInstalacion(),
+        'X-Ext-Interceptor': _vInterceptor || '',
       },
       body: JSON.stringify(payload),
     });
@@ -243,6 +246,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     return true;
   }
   if (msg?.type === 'heartbeat') {
+    /* Que version corre DENTRO de la pagina. No es la del manifiesto: el
+       interceptor se queda inyectado hasta que se recarga la pestaña de Cortex,
+       asi que puede ser mas vieja — y creerse la del manifiesto es lo que hizo
+       dar por instaladas tres versiones que no estaban corriendo. */
+    if (msg.src === 'main' && typeof msg.v === 'string' && /^[0-9.]{1,12}$/.test(msg.v)) _vInterceptor = msg.v;
     const patch = { connected: true, hbUrl: msg.url, hbAt: Date.now() };
     if (msg.src === 'main') patch.mainAt = Date.now(); // el hook de red (MAIN) está vivo
     setState(patch);

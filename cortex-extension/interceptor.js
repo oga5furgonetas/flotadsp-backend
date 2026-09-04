@@ -11,7 +11,13 @@
 
   const post = (msg) => { try { window.postMessage({ __flotadsp: true, ...msg }, '*'); } catch (_) {} };
   // Heartbeat: le dice al popup que el interceptor está vivo en esta pestaña.
-  const beat = () => post({ kind: 'heartbeat', url: location.href });
+  /* LA VERSION DEL CODIGO QUE DE VERDAD CORRE EN LA PAGINA. El manifiesto lo
+     lee el service worker, que se actualiza al reinstalar; este fichero vive
+     inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
+     Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
+     eso di por instaladas tres versiones seguidas que no estaban corriendo. */
+  const VERSION_INTERCEPTOR = '2.27.0';
+  const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
 

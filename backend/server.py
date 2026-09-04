@@ -38686,11 +38686,20 @@ async def cortex_ingest(request: Request):
         # falta el 04-09-2026. El id lo genera la extension al instalarse y no
         # dice quien es nadie: solo distingue una instalacion de otra.
         _inst = re.sub(r"[^A-Za-z0-9_-]", "", str(request.headers.get("x-ext-install") or ""))[:40]
+        # LA VERSION QUE DE VERDAD CORRE EN LA PAGINA. `x-ext-version` sale del
+        # manifiesto, o sea del service worker, que SI se actualiza al
+        # reinstalar; pero `interceptor.js` se queda inyectado en la pestaña de
+        # Cortex hasta que alguien pulsa F5, y es el que construye los paquetes.
+        # Medido el 04-09-2026: el panel decia 2.26.0 y llegaban 9.472 paquetes
+        # en tres minutos con CERO `address_id`, porque el interceptor era el de
+        # antes. Con esto se ve la diferencia en vez de adivinarla.
+        _int = re.sub(r"[^0-9.]", "", str(request.headers.get("x-ext-interceptor") or ""))[:12]
         try:
             ahora = datetime.now(timezone.utc)
             await db.cortex_diagnostico.update_one(
                 {"_id": "version:%s" % (_inst or "extension")},
                 {"$set": {"kind": "version", "which": "extension", "url": _ver,
+                          "interceptor": _int or None,
                           "instalacion": _inst or None,
                           "visto_en": ahora.isoformat(),
                           "expira_en": ahora + timedelta(days=30)}},
@@ -38830,9 +38839,16 @@ async def cortex_diagnostico(_=Depends(require_admin)):
         if d.get("kind") != "version":
             continue
         v = vers.setdefault(d.get("url") or "?", {"version": d.get("url") or "?",
-                                                  "equipos": 0, "ultima": ""})
+                                                  "equipos": 0, "ultima": "",
+                                                  "interceptor": "", "hay_que_recargar": False})
         v["equipos"] += 1
         v["ultima"] = max(v["ultima"], str(d.get("visto_en") or ""))
+        if d.get("interceptor"):
+            v["interceptor"] = d["interceptor"]
+            # La pestaña de Cortex sigue con codigo viejo: hay que pulsar F5 ahi,
+            # o los cambios de la extension no se aplican por mucho que la
+            # version del manifiesto diga otra cosa.
+            v["hay_que_recargar"] = d["interceptor"] != (d.get("url") or "")
     return {"diagnostico": docs,
             "versiones": sorted(vers.values(), key=lambda v: v["ultima"], reverse=True),
             "hay_esquema": any(d.get("kind") == "schema" for d in docs)}

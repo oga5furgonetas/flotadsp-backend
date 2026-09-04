@@ -956,6 +956,28 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    copiado a quien no es no se nota nunca, porque parece completo.
 
 
+58. **La version que enseñaba el panel NO era la del codigo que corria, y con
+   eso di por instaladas TRES versiones seguidas que no estaban funcionando.**
+   `X-Ext-Version` sale de `chrome.runtime.getManifest().version`, o sea del
+   service worker, que SI se actualiza al reinstalar la extension. Pero
+   `interceptor.js` —el que construye cada paquete— vive inyectado en la pestaña
+   de Cortex y se auto-protege contra la doble carga
+   (`if (window.__flotadspCortexHooked) return`): **mientras esa pestaña no se
+   recargue, sigue corriendo el codigo viejo**, por muchas veces que se
+   reinstale la extension.
+   Medido el 04-09-2026: el panel decia «2.26.0 · 1 equipo» y en tres minutos
+   entraron **9.472 paquetes con CERO `address_id`**, el campo que acababa de
+   añadir. Lo mismo explica por que la prueba de estados de la 2.24 y la 2.25 no
+   llego a correr nunca: no era que fallara, es que no estaba ahi.
+   Ahora el interceptor dice SU propia version (`VERSION_INTERCEPTOR`), viaja
+   por el latido hasta el backend en `X-Ext-Interceptor`, y el panel pinta el
+   aviso en ambar: «recarga Cortex (F5): ahi corre la 2.23».
+   Regla general: **un numero de version que no sale del codigo que de verdad
+   se esta ejecutando es peor que no tener ninguno**, porque cierra la
+   investigacion en falso — tres veces mire el dato equivocado y busque el fallo
+   en el sitio equivocado.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
