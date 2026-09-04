@@ -19134,8 +19134,20 @@ async def empleo_mover_candidato(cand_id: str, datos: dict = Body(...),
         cambios["notas"] = _empleo_texto(datos["notas"], 2000)
     if "motivo_descarte" in datos:
         cambios["motivo_descarte"] = _empleo_texto(datos["motivo_descarte"], 400)
-    if cambios:
-        await db.candidatos.update_one({"id": cand_id}, {"$set": cambios})
+    if not cambios:
+        return c
+    orden: dict = {"$set": {**cambios, "tocado_en": datetime.now(timezone.utc).isoformat(),
+                            "tocado_por": user.get("name") or user.get("username") or ""}}
+    # QUIEN LO MOVIO Y CUANDO. Es lo que permite contestar «cuanto lleva este sin
+    # que lo toque nadie», que es la pregunta que evita perder candidatos: a los
+    # tres dias sin llamar ya estan en otra empresa. Se guarda solo el cambio de
+    # fase, no cada tecla de las notas.
+    if "fase" in cambios and cambios["fase"] != (c.get("fase") or "nuevo"):
+        orden["$push"] = {"historial": {
+            "en": datetime.now(timezone.utc).isoformat(),
+            "por": user.get("name") or user.get("username") or "",
+            "de": c.get("fase") or "nuevo", "a": cambios["fase"]}}
+    await db.candidatos.update_one({"id": cand_id}, orden)
     return await db.candidatos.find_one({"id": cand_id}, {"_id": 0, "expira_en": 0})
 
 
@@ -19174,7 +19186,12 @@ async def empleo_contratar(cand_id: str, user: dict = Depends(require_admin)):
         {"id": cand_id},
         {"$set": {"fase": "contratado", "driver_id": d.id,
                   "contratado_en": datetime.now(timezone.utc).isoformat(),
-                  "contratado_por": user.get("name") or user.get("username") or ""}})
+                  "tocado_en": datetime.now(timezone.utc).isoformat(),
+                  "tocado_por": user.get("name") or user.get("username") or "",
+                  "contratado_por": user.get("name") or user.get("username") or ""},
+         "$push": {"historial": {"en": datetime.now(timezone.utc).isoformat(),
+                                 "por": user.get("name") or user.get("username") or "",
+                                 "de": c.get("fase") or "nuevo", "a": "contratado"}}})
     return {"ok": True, "driver_id": d.id, "nombre": d.name, "falta_transporter_id": True}
 
 
