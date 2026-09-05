@@ -39227,8 +39227,34 @@ async def cortex_llaves(user: dict = Depends(require_admin)):
     paso todas las sesiones de todo el mundo.
     """
     dbn = user.get("db_name") or _DEFAULT_DB_NAME
+    # SOLO LAS QUE ESTAN EN USO AHORA, que es lo que dice el titulo.
+    # Antes salian TODAS: una llave por cada vez que alguien la habia pedido
+    # —veinte «Sin nombre»— mas la lista entera de revocadas con su boton de
+    # volver a activar. Eso no es informacion, es ruido: en una pantalla que
+    # sirve para «apagar la que sobra», veinte filas iguales garantizan que
+    # nadie la mire. Se quedan las de nave y la de empresa (las que llevan
+    # `centro`, del esquema nuevo) y sin revocar.
     filas = await global_db[CORTEX_LLAVES].find(
-        {"db_name": dbn}, {"_id": 0}).sort("creada_en", -1).to_list(100)
+        {"db_name": dbn, "centro": {"$exists": True}, "revocada": {"$ne": True}},
+        {"_id": 0}).sort("creada_en", -1).to_list(50)
+    # Las de antes siguen valiendo y puede haber equipos usandolas: no se
+    # esconden del todo ni se apagan solas —eso dejaria a alguien sin enviar sin
+    # avisar—, se dice cuantas quedan y se apagan de una vez cuando se quiera.
+    antiguas = await global_db[CORTEX_LLAVES].count_documents(
+        {"db_name": dbn, "centro": {"$exists": False}, "revocada": {"$ne": True}})
+
+    # CADA LLAVE, LISTA PARA COPIAR desde su propia fila. No se guarda el token
+    # en ninguna parte —seria guardar una contraseña—: se vuelve a firmar con
+    # los mismos claims, y HS256 es determinista, asi que sale exactamente la
+    # misma cadena que se pego la primera vez. Sin esto habia que cambiar el
+    # selector de centro y volver a generar solo para copiar la de otra nave.
+    for f in filas:
+        if f.get("jti") and f.get("exp"):
+            f["token"] = jwt.encode(
+                {"scope": "cortex_ingest", "org_id": f.get("org_id", ""),
+                 "db_name": f.get("db_name"), "name": f.get("centro") or "empresa",
+                 "jti": f["jti"], "exp": int(f["exp"])},
+                SECRET_KEY, algorithm=JWT_ALGORITHM)
     # Que version y que equipo esta usando cada una: sale del diagnostico, que
     # es donde la ingesta apunta quien habla.
     equipos = []
@@ -39239,10 +39265,29 @@ async def cortex_llaves(user: dict = Depends(require_admin)):
     except Exception:
         pass
     equipos.sort(key=lambda x: str(x.get("visto_en") or ""), reverse=True)
-    return {"llaves": filas, "equipos": equipos,
+    return {"llaves": filas, "equipos": equipos, "antiguas_activas": antiguas,
             # Las emitidas antes del registro no llevan `jti`: valen todas por
             # igual y solo se pueden apagar en bloque.
             "heredadas_activas": True}
+
+
+@api_router.post("/cortex/llaves/antiguas/revocar")
+async def cortex_llaves_antiguas_revocar(user: dict = Depends(require_admin)):
+    """Apaga de una vez las llaves de antes de las llaves por nave.
+
+    NO se hace solo, y por eso es un boton aparte: cualquier equipo que siga con
+    una de esas pegada deja de enviar en menos de 30 s. Primero se reparte la
+    llave de la nave, y cuando todos la tengan, se pulsa esto.
+
+    OJO AL ORDEN: declarado ANTES de `/cortex/llaves/{jti}/revocar`, o
+    'antiguas' entraria como si fuera un jti (gotcha 2).
+    """
+    dbn = user.get("db_name") or _DEFAULT_DB_NAME
+    r = await global_db[CORTEX_LLAVES].update_many(
+        {"db_name": dbn, "centro": {"$exists": False}, "revocada": {"$ne": True}},
+        {"$set": {"revocada": True, "revocada_en": datetime.now(timezone.utc).isoformat(),
+                  "revocada_por": user.get("name") or user.get("username") or ""}})
+    return {"apagadas": r.modified_count}
 
 
 @api_router.post("/cortex/llaves/{jti}/revocar")

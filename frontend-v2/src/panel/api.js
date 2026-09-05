@@ -511,6 +511,8 @@ export const cortexLlaves = () => api.get('/cortex/llaves')
 export const cortexReconstruirDirecciones = () => api.post('/cortex/direcciones/reconstruir')
 export const cortexRevocarLlave = (jti) => api.post(`/cortex/llaves/${jti}/revocar`)
 export const cortexReactivarLlave = (jti) => api.post(`/cortex/llaves/${jti}/reactivar`)
+/* Las de antes de las llaves por nave, de una vez. */
+export const cortexRevocarLlavesAntiguas = () => api.post('/cortex/llaves/antiguas/revocar')
 export const cortexSeedDemo = () => api.post('/cortex/seed-demo')
 export const cortexClearDemo = () => api.post('/cortex/clear-demo')
 export const cortexReset = (body) => api.post('/cortex/reset', body) // {confirmar: 'BORRAR'}, solo super-admin

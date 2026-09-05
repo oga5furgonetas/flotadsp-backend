@@ -9,6 +9,7 @@ import {
   cortexOverview, cortexPackages, cortexPackage, cortexAlerts, cortexRoutes,
   cortexIngestToken, cortexSeedDemo, cortexClearDemo, cortexDays, cortexReset,
   cortexLlaves, cortexRevocarLlave, cortexReactivarLlave, cortexReconstruirDirecciones,
+  cortexRevocarLlavesAntiguas,
   cortexStations, cortexAssignStation, cortexStationsAuto,
 } from '../api'
 import { isSuperAdmin } from '../auth'
@@ -259,23 +260,36 @@ function SetupCard({ onSeed, onReset, seeding, center }) {
             <div className="space-y-1.5">
               {llaves.llaves.map((l) => (
                 <div key={l.jti} className="flex flex-wrap items-center gap-2 text-[12px]">
-                  <span className={l.revocada ? 'text-dark-600 line-through' : 'text-dark-200'}>{l.nombre}</span>
+                  <span className="text-dark-200">{l.nombre}</span>
                   <span className="text-dark-600">{(l.creada_en || '').slice(0, 10)}</span>
-                  {l.revocada
-                    ? (
-                      <button onClick={() => cortexReactivarLlave(l.jti).then(cargarLlaves)}
-                        className="ml-auto rounded px-2 py-0.5 text-[11px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100">
-                        Volver a activar
-                      </button>
-                    ) : (
-                      <button onClick={() => { if (window.confirm(`Apagar «${l.nombre}»? El equipo que la use deja de mandar datos en menos de 30 segundos. Se puede volver a activar.`)) cortexRevocarLlave(l.jti).then(cargarLlaves) }}
-                        className="ml-auto rounded px-2 py-0.5 text-[11px] text-red-300 ring-1 ring-red-500/30 hover:bg-red-500/10">
-                        Apagar
-                      </button>
-                    )}
+                  {/* Copiar LA DE ESA NAVE desde su fila. Antes habia que cambiar
+                      el selector de centro y volver a generar solo para copiar
+                      otra: tres pasos para un portapapeles. */}
+                  {l.token && (
+                    <button onClick={() => copy(l.token, 'k' + l.jti)}
+                      className="ml-auto rounded px-2 py-0.5 text-[11px] text-brand-200 ring-1 ring-brand-500/30 hover:bg-brand-500/10">
+                      {copied === 'k' + l.jti ? 'Copiada ✓' : 'Copiar llave'}
+                    </button>
+                  )}
+                  <button onClick={() => { if (window.confirm(`Apagar «${l.nombre}»? Los equipos que la usen dejan de mandar datos en menos de 30 segundos. Se puede volver a activar.`)) cortexRevocarLlave(l.jti).then(cargarLlaves) }}
+                    className={`${l.token ? '' : 'ml-auto '}rounded px-2 py-0.5 text-[11px] text-red-300 ring-1 ring-red-500/30 hover:bg-red-500/10`}>
+                    Apagar
+                  </button>
                 </div>
               ))}
             </div>
+            {llaves.antiguas_activas > 0 && (
+              /* Las de antes de las llaves por nave. No se apagan solas: si un
+                 equipo sigue con una pegada, deja de enviar sin avisar. Primero
+                 se reparte la de la nave y luego se pulsa esto. */
+              <div className="mt-2 flex flex-wrap items-center gap-2 rounded border border-dark-800 px-2 py-1.5 text-[11.5px] text-dark-500">
+                <span>Quedan {llaves.antiguas_activas} llaves antiguas activas (una por cada vez que alguien la pidió).</span>
+                <button onClick={() => { if (window.confirm(`Apagar ${llaves.antiguas_activas} llaves antiguas? Cualquier equipo que siga usando una dejará de mandar datos. Asegúrate antes de que todos tengan la llave de su nave.`)) cortexRevocarLlavesAntiguas().then(cargarLlaves) }}
+                  className="ml-auto rounded px-2 py-0.5 text-[11px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100">
+                  Apagarlas todas
+                </button>
+              </div>
+            )}
             {/* Las direcciones que ya estan en los paquetes guardados sirven
                 igual: esto las recoge de una vez en vez de esperar a que vuelvan
                 a pasar por Cortex. */}
