@@ -18143,6 +18143,30 @@ async def _apoyo_posicion(driver_id: str, dia: str) -> Optional[dict]:
                     "cuando": cuando, "stop_id": "", "que": "conductor",
                     "hora_estimada": not v.get("driver_pos_at")}
 
+    # SEGUNDA FUENTE: el resumen de rutas, que es de donde sale el mapa con las
+    # iniciales de cada conductor en la propia pagina de Cortex. En
+    # `route-details` la posicion viene vacia (medido el 05-09-2026: `posiciones:
+    # 0` vuelta tras vuelta), asi que la buena esta aqui.
+    # UN DOCUMENTO POR CENTRO Y DIA (gotcha 49): se recorren todos, que leer uno
+    # solo se lleva por delante una nave entera.
+    mejor = None
+    async for doc in db.cortex_resumen.find({"dia": dia}, {"_id": 0, "gente": 1}):
+        for g in (doc.get("gente") or []):
+            if g.get("transporterId") != driver_id:
+                continue
+            if not isinstance(g.get("lat"), (int, float)) or not isinstance(g.get("lng"), (int, float)):
+                continue
+            cuando = g.get("pos_at") or doc.get("visto_en")
+            mins = _apoyo_minutos_desde(cuando)
+            if mins is None or mins > _APOYO_POSICION_MAX_MIN:
+                continue
+            if mejor is None or mins < mejor["hace_min"]:
+                mejor = {"lat": g["lat"], "lng": g["lng"], "hace_min": mins,
+                         "cuando": cuando, "stop_id": "", "que": "conductor",
+                         "hora_estimada": not g.get("pos_at")}
+    if mejor:
+        return mejor
+
     docs = await db.cortex_packages.find(
         {"service_day": dia, "driver_id": driver_id, "lat": {"$ne": None},
          "state": {"$in": _apoyo_estados_en_calle()}},

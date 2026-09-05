@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.33.0';
+  const VERSION_INTERCEPTOR = '2.34.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -802,6 +802,28 @@
   const prefixCenter = {};  // prefijo de ruta (XA_C, CA_A) → centro
   const routePrefix = (rc) => { const m = String(rc || '').match(/^(.*?)(\d+)\s*$/); return m ? m[1] : null; };
 
+  /* DONDE ESTA UNA PERSONA, si Cortex lo dice y lo dice de forma reconocible.
+     Se usa con `route-details` y con `route-summaries` —el mapa de la pagina de
+     rutas sale de este ultimo—. NO SE ADIVINA LA FORMA: solo una pareja de
+     NUMEROS bajo los nombres de siempre. Si viene y no encaja se apunta el
+     nombre de sus campos (nunca los valores) y no se da posicion: mandar al que
+     va a ayudar a un sitio equivocado es peor que no mandarlo. */
+  let formaRaraPos = null;
+  const leerPos = (lv) => {
+    if (!lv || typeof lv !== 'object') return null;
+    const g = (typeof lv.geocode === 'object' && lv.geocode) ||
+              (typeof lv.position === 'object' && lv.position) ||
+              (typeof lv.coordinates === 'object' && lv.coordinates) || lv;
+    const la = g.latitude ?? g.lat, ln = g.longitude ?? g.lng ?? g.lon;
+    if (typeof la !== 'number' || typeof ln !== 'number') {
+      if (!formaRaraPos) formaRaraPos = Object.keys(lv).slice(0, 12).join(',');
+      return null;
+    }
+    const t = lv.timestamp ?? lv.time ?? lv.at ?? lv.lastUpdated ?? lv.updatedAt ?? g.timestamp ?? null;
+    return { lat: la, lng: ln, at: (typeof t === 'number' || typeof t === 'string') ? t : null };
+  };
+  const posDe = (x) => leerPos(x && (x.lastLocation || x.lastKnownLocation || x.location));
+
   const extractRouteDetails = (json) => {
     /* LA RESPUESTA TIENE DOS NIVELES Y LO BUENO ESTA EN EL DE ARRIBA.
        ─────────────────────────────────────────────────────────────────────
@@ -861,22 +883,6 @@
        ayuda a otro sitio. */
     const posiciones = {};
     let formaRara = null;
-    const leerPos = (lv) => {
-      if (!lv || typeof lv !== 'object') return null;
-      const g = (typeof lv.geocode === 'object' && lv.geocode) ||
-                (typeof lv.position === 'object' && lv.position) ||
-                (typeof lv.coordinates === 'object' && lv.coordinates) || lv;
-      const la = g.latitude ?? g.lat, ln = g.longitude ?? g.lng ?? g.lon;
-      if (typeof la !== 'number' || typeof ln !== 'number') {
-        if (!formaRara) formaRara = Object.keys(lv).slice(0, 12).join(',');
-        return null;
-      }
-      // La hora, si la trae. Si no viene NO se inventa: el panel dira que no
-      // sabe de cuando es, que es la verdad.
-      const t = lv.timestamp ?? lv.time ?? lv.at ?? lv.lastUpdated ?? lv.updatedAt ?? g.timestamp ?? null;
-      return { lat: la, lng: ln, at: (typeof t === 'number' || typeof t === 'string') ? t : null };
-    };
-
     /* Los nombres viven en el `transporters` DE ARRIBA (el de dentro solo trae
        ids y descansos). Se recorren los dos por si Amazon mueve el campo: lo
        que tenga nombre, manda. */
@@ -888,7 +894,7 @@
       if (n && !drivers[t.transporterId]) drivers[t.transporterId] = n;
       const f = t.workPhoneNumber || t.phoneNumber || null;
       if (f && !fonos[t.transporterId]) fonos[t.transporterId] = String(f).trim();
-      const p = leerPos(t.lastLocation || t.lastKnownLocation || t.location);
+      const p = posDe(t);
       if (p && !posiciones[t.transporterId]) posiciones[t.transporterId] = p;
     }
     // Ruta con UN solo conductor: se lo asignamos a todas sus tareas aunque el
@@ -990,7 +996,7 @@
                   + `addresses en la respuesta: ${Object.keys(addrs).length} · `
                   + `nombres: ${Object.keys(drivers).length} · `
                   + `posiciones: ${Object.keys(posiciones).length}`
-                  + (formaRara ? ` · lastLocation con forma rara: {${formaRara}}` : ''),
+                  + (formaRaraPos ? ` · lastLocation con forma rara: {${formaRaraPos}}` : ''),
                count: con, bytes: out.length });
       }
     } catch (_) {}
@@ -1063,11 +1069,28 @@
             totalStops: (r.routeDeliveryProgress || {}).totalStops,
             completedStops: (r.routeDeliveryProgress || {}).completedStops,
           }));
-          const gente = (parsed.transporters || []).map((x) => ({
-            transporterId: t(x.transporterId),
-            nombre: [t(x.firstName), t(x.lastName)].filter(Boolean).join(' ').trim(),
-            telefono: t(x.workPhoneNumber),
-          })).filter((x) => x.transporterId);
+          /* LA POSICION DE CADA UNO, que es lo que pinta el mapa de la pagina
+             de rutas de Cortex. En `route-details` viene vacia (medido el
+             05-09-2026: `posiciones: 0` vuelta tras vuelta), asi que se busca
+             tambien aqui, que es de donde sale ese mapa. Misma regla estricta:
+             o son dos numeros reconocibles, o no hay posicion. */
+          const gente = (parsed.transporters || []).map((x) => {
+            const pos = posDe(x);
+            return {
+              transporterId: t(x.transporterId),
+              nombre: [t(x.firstName), t(x.lastName)].filter(Boolean).join(' ').trim(),
+              telefono: t(x.workPhoneNumber),
+              lat: pos ? pos.lat : null, lng: pos ? pos.lng : null,
+              pos_at: pos ? pos.at : null,
+            };
+          }).filter((x) => x.transporterId);
+          try {
+            const conPos = gente.filter((x) => x.lat != null).length;
+            post({ kind: 'debug', which: 'posiciones',
+                   url: `resumen: ${conPos}/${gente.length} personas con posicion`
+                      + (formaRaraPos ? ` · forma rara: {${formaRaraPos}}` : ''),
+                   count: conPos, bytes: gente.length });
+          } catch (_) {}
           const cuentas = (parsed.transporterPackageSummaries || []).map((x) => ({
             transporterId: t(x.transporterId), paquetes: x.packageStatus || null,
           })).filter((x) => x.transporterId);

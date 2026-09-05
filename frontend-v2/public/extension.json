@@ -1,5 +1,5 @@
 {
-  "version": "2.33.0",
+  "version": "2.34.0",
   "ficheros": [
     "README.md",
     "background.js",
@@ -9,6 +9,6 @@
     "popup.html",
     "popup.js"
   ],
-  "kb": 39,
+  "kb": 40,
   "generado": "2026-09-05"
 }
