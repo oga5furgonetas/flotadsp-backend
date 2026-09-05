@@ -5,7 +5,7 @@ import 'leaflet/dist/leaflet.css'
 import { LifeBuoy, RefreshCw, MessageCircle, Copy, Check, Loader2, MapPin, Phone, AlertTriangle, ChevronRight, Pencil, XCircle, CheckCircle2, ListPlus } from 'lucide-react'
 import { useT } from '../../i18n'
 import { hoyLocal } from '../../lib/fecha'
-import { getApoyoSituacion, getApoyoParadas, crearApoyo, cambiarApoyo, getApoyos } from '../api'
+import { getApoyoSituacion, getApoyoParadas, crearApoyo, cambiarApoyo, getApoyos, cortexDiagnostico } from '../api'
 
 /* APOYO EN RUTA — quién le quita paradas a quién, con mapa por WhatsApp.
    ═══════════════════════════════════════════════════════════════════════
@@ -197,6 +197,31 @@ export default function ApoyoRuta() {
   const paquetesSel = useMemo(() => paradas.filter((p) => sel.has(p.stop_id)).reduce((s, p) => s + (p.n || 0), 0), [paradas, sel])
   const viejo = sit?.bajado_hace_min != null && sit.bajado_hace_min > 10
 
+  /* ── LA PESTAÑA DE CORTEX SE HA QUEDADO CON CODIGO VIEJO ─────────────────
+     El aviso existia, pero vivia dentro de Paquetes IA, o sea donde NO se mira
+     cuando esto falla. El 05-09-2026 se instalo la 2.29.0 —la que arregla que
+     las paradas no tuvieran ubicacion— y el panel siguio diciendo «Cortex no da
+     la ubicacion» en 66 de 67 paradas: la extension estaba puesta, pero
+     `interceptor.js` sigue inyectado en la pestaña de Cortex hasta que alguien
+     pulsa F5 ahi (gotcha 58), asi que el codigo que corria seguia siendo el
+     viejo. Desde fuera es indistinguible de «no funciona», y esa confusion se
+     comio una semana y veinte instalaciones.
+     El aviso tiene que estar DONDE SE VE EL SINTOMA. */
+  const [recargarCortex, setRecargarCortex] = useState(null)
+  useEffect(() => {
+    let vivo = true
+    const mirar = () => cortexDiagnostico()
+      .then((r) => {
+        if (!vivo) return
+        const v = (r.data?.versiones || []).find((x) => x.hay_que_recargar)
+        setRecargarCortex(v || null)
+      })
+      .catch(() => {})
+    mirar()
+    const id = setInterval(mirar, 60000)
+    return () => { vivo = false; clearInterval(id) }
+  }, [])
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -214,6 +239,17 @@ export default function ApoyoRuta() {
         </div>
       </div>
 
+      {recargarCortex && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <div>
+            <b>La pestaña de Cortex está corriendo código viejo.</b>{' '}
+            Tienes instalada la extensión <b>{recargarCortex.version}</b> pero en la página sigue
+            la <b>{recargarCortex.interceptor}</b>: hasta que no pulses <b>F5</b> en la pestaña de
+            Cortex, lo que se arregló no se aplica y las paradas seguirán saliendo sin ubicación.
+          </div>
+        </div>
+      )}
       {error && <div className="flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300"><AlertTriangle size={16} /> {error}</div>}
 
       <div className="grid gap-5 lg:grid-cols-[320px_1fr]">

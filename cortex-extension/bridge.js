@@ -14,7 +14,11 @@ if (!window.__flotadspBridge) {
     if (!d || d.__flotadsp !== true) return;
     if (d.kind === 'cortex') chrome.runtime.sendMessage({ type: 'cortexPackages', url: d.url, packages: d.packages });
     else if (d.kind === 'heartbeat') hb('main', d.v); // el hook de red (MAIN) está vivo, y con qué versión
-    else if (d.kind === 'debug') chrome.runtime.sendMessage({ type: 'debug', url: d.url, count: d.count, bytes: d.bytes });
+    /* `which` viaja tambien en los debug: sin el, un aviso con nombre llegaba
+       al fondo sin identidad y el backend no podia guardarlo (se perdio el de
+       cobertura de destinos, 05-09-2026). No basta con dar de alta el `kind`:
+       cada CAMPO que el interceptor manda hay que reenviarlo aqui. */
+    else if (d.kind === 'debug') chrome.runtime.sendMessage({ type: 'debug', which: d.which, url: d.url, count: d.count, bytes: d.bytes });
     else if (d.kind === 'sample') chrome.runtime.sendMessage({ type: 'sample', keys: d.keys, node: d.node });
     else if (d.kind === 'schema') chrome.runtime.sendMessage({ type: 'schema', which: d.which, url: d.url, schema: d.schema });
     /* Que estados del informe traen paquetes y cuales vienen vacios. Es lo

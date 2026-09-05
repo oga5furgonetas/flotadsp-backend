@@ -259,6 +259,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.type === 'reinject') { injectAll().then(() => reply?.({ ok: true })); return true; }
   if (msg?.type === 'debug') {
     pushActivity(msg.url, msg.count || 0);
+    /* Un debug CON NOMBRE es un dato de diagnostico, no una linea de actividad:
+       ademas de la lista del popup se guarda en el servidor, que es donde se
+       puede mirar sin pedirle a nadie que abra el navegador. Asi se comprueba si
+       una version nueva funciona en segundos en vez de al dia siguiente. */
+    if (msg.which) enviarDiagnostico({ kind: 'debug', which: msg.which, url: msg.url,
+                                       count: msg.count, bytes: msg.bytes });
     return false;
   }
   if (msg?.type === 'sample') {

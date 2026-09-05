@@ -36,6 +36,17 @@ for (const k of new Set(mandaKind)) {
   }
 }
 
+/* NO HAY CHECKER DE CAMPOS, Y ES A PROPOSITO.
+ * El 05-09-2026 se perdio el campo `which` de un `debug`: el interceptor lo
+ * mandaba, `bridge.js` no lo copiaba, y el aviso llegaba sin identidad. La
+ * tentacion es comprobar que cada campo de cada `post({...})` se reenvia, y se
+ * probo: da SEIS avisos en falso, porque hay campos que el puente no reenvia a
+ * proposito —`heartbeat` manda `url` y solo se usa `v`— y otros que renombra.
+ * Un checker con lista de excepciones no distingue lo nuevo de lo viejo, que es
+ * justo lo que aqui no se tolera, asi que mejor ninguno: al anadir un campo,
+ * mirar bridge.js Y background.js, como con los `kind`.
+ */
+
 /* ── 2. bridge -> background ──────────────────────────────────────────── */
 const mandaType = [...bridge.matchAll(/type:\s*'([a-zA-Z]+)'/g)].map((m) => m[1])
 const recogeType = [...background.matchAll(/msg\?\.type\s*===\s*'([a-zA-Z]+)'/g)].map((m) => m[1])
