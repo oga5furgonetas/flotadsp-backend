@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.31.0';
+  const VERSION_INTERCEPTOR = '2.32.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -151,7 +151,22 @@
      serviria y acabariamos en un 429. */
   const syntheticFetch = (url) => {
     try {
-      return window.fetch(url, { credentials: 'include', headers: { accept: 'application/json, text/plain, */*', ...apiHeaders } })
+      /* `cache: 'no-store'` NO ES UN DETALLE: es la diferencia entre ir al dia y
+         ir nueve minutos por detras.
+         ─────────────────────────────────────────────────────────────────────
+         Sin esto, `fetch` usa la cache del navegador. Como el barrido pide
+         SIEMPRE LA MISMA URL cada minuto y medio, Chrome contestaba con la
+         copia guardada: la captura parecia fresquisima y el contenido era
+         viejo. Medido el 05-09-2026 en la XA_C12 de PABLO OTERO: nosotros
+         teniamos 38 entregados y Cortex 87, con `seen_at` a 1,4 min —o sea
+         pidiendolo constantemente— y el evento mas reciente de la respuesta a
+         **8,7 minutos**, mediana 46. Es el peor sintoma posible: todo parece
+         funcionar y el numero esta mal.
+         `no-store` ademas no guarda la respuesta, asi que tampoco ensucia la
+         cache de la pagina de Cortex. */
+      return window.fetch(url, { credentials: 'include', cache: 'no-store',
+                                 headers: { accept: 'application/json, text/plain, */*',
+                                            'cache-control': 'no-cache', ...apiHeaders } })
         .then((r) => {
           if (!r || !r.ok) post({ kind: 'debug', url: `HTTP ${r ? r.status : '?'} · ${url.replace(/^https?:\/\/[^/]+/, '').slice(0, 100)}`, count: 0, bytes: 0 });
           return r;   // hace falta para poder CONTAR lo que trae un estado a prueba
@@ -936,8 +951,17 @@
       if (!avisadoDestinos) {
         avisadoDestinos = true;
         const con = out.filter((o) => typeof o.dest_lat === 'number').length;
+        /* LO FRESCA QUE VIENE LA RESPUESTA, que es distinto de cada cuanto la
+           pedimos. Si esto sube, es que nos estan sirviendo copia guardada. */
+        let masNuevo = 0;
+        for (const o of out) for (const e of (o.events || [])) {
+          const t = typeof e.at === 'number' ? e.at : Date.parse(e.at);
+          if (t > masNuevo) masNuevo = t;
+        }
+        const fresco = masNuevo ? Math.round((Date.now() - masNuevo) / 60000) : null;
         post({ kind: 'debug', which: 'destinos',
                url: `${routeCode || '?'}: ${con}/${out.length} con destino · `
+                  + (fresco === null ? '' : `evento mas nuevo hace ${fresco} min · `)
                   + `addresses en la respuesta: ${Object.keys(addrs).length} · `
                   + `nombres: ${Object.keys(drivers).length} · `
                   + `posiciones: ${Object.keys(posiciones).length}`
