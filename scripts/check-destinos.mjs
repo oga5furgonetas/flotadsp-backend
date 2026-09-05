@@ -121,7 +121,8 @@ const RESPUESTA = {
   ],
   transporters: [{
     transporterId: 'A2GH1OM90XUWP1', firstName: 'Belen', lastName: 'Fernandez Larino',
-    initials: 'BF', workPhoneNumber: '+34600111222', lastLocation: null,
+    initials: 'BF', workPhoneNumber: '+34600111222',
+    lastLocation: { latitude: 42.7001, longitude: -8.8002, timestamp: 1757060000000 },
   }],
   company: { companyId: 'x' },
 }
@@ -165,6 +166,21 @@ if (!problemas.length) {
       }
     }
 
+    // DONDE ESTA LA PERSONA. Sin esto, al que va a ayudar se le manda el
+    // ultimo portal donde entrego el otro, que puede ser de hace 20 minutos.
+    if (a) {
+      if (a.driver_lat !== 42.7001 || a.driver_lng !== -8.8002) {
+        problemas.push(`no sale la posicion en vivo del conductor `
+          + `(driver_lat=${a.driver_lat}, driver_lng=${a.driver_lng})`)
+      }
+      if (a.driver_pos_at !== 1757060000000) {
+        problemas.push(`no sale la hora de esa posicion: ${a.driver_pos_at}`)
+      }
+      if (a.driver_phone !== '+34600111222') {
+        problemas.push(`no sale el telefono del conductor: ${a.driver_phone}`)
+      }
+    }
+
     if (!b) problemas.push('no sale el paquete de la parada intentada')
     else {
       if (b.lat !== 42.9 || b.lng !== -8.5) {
@@ -173,6 +189,27 @@ if (!problemas.length) {
       if (b.dest_lat !== 42.6122) {
         problemas.push(`la parada intentada tambien tiene que traer su destino: ${b.dest_lat}`)
       }
+    }
+  }
+}
+
+/* ── Y LO QUE NO SE PUEDE HACER NUNCA: inventarse una posicion ───────────
+   Si Amazon manda `lastLocation` con otra forma, la respuesta correcta es NO
+   dar posicion —y decirlo— en vez de colocar a la persona en un punto que no
+   es. Mandar al que ayuda a otro sitio es peor que no mandarlo. */
+if (!problemas.length) {
+  const raro = JSON.parse(JSON.stringify(RESPUESTA))
+  raro.transporters[0].lastLocation = { x: 42.7, y: -8.8, precision: 5 }
+  let filas2 = null
+  try { filas2 = ctx.__extract(raro) } catch (e) { problemas.push(`revienta con una forma rara: ${e.message}`) }
+  if (filas2) {
+    const c = filas2.find((f) => f.tba === 'ES2601567644')
+    if (c && (c.driver_lat != null || c.driver_lng != null)) {
+      problemas.push(`con un lastLocation que no entendemos se inventa una posicion: `
+        + `${c.driver_lat},${c.driver_lng} — mandaria al que ayuda a otro sitio`)
+    }
+    if (c && c.dest_lat !== 42.5563) {
+      problemas.push('un lastLocation raro se lleva por delante los destinos')
     }
   }
 }

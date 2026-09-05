@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.30.0';
+  const VERSION_INTERCEPTOR = '2.31.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -804,6 +804,39 @@
     // Prioridad: mapa por estación (duro) → página → mapa por prefijo de ruta.
     const center = (said && saCenter[said]) || pageCenter || (prefix && prefixCenter[prefix]) || null;
     const stationCode = info.code || null;
+    /* DONDE ESTA CADA CONDUCTOR AHORA MISMO.
+       ─────────────────────────────────────────────────────────────────────
+       Es lo que le falta al que va a ayudar: hasta hoy se le mandaba «donde
+       escaneo el ultimo paquete», que a media manana puede ser de hace veinte
+       minutos y ademas es un portal, no la persona. Medido el 05-09-2026: de
+       12 conductores en ruta, solo 2 tenian posicion, y las dos de hace 8-10
+       minutos.
+       Cortex lo publica en `transporters[].lastLocation` —el de la raiz— y es
+       lo que pinta en su propio mapa.
+       NO SE ADIVINA LA FORMA: solo se acepta una pareja de numeros bajo los
+       nombres de siempre. Si viene y no encaja, se manda un diagnostico con
+       los NOMBRES de sus campos (nunca los valores) y se sabe en un minuto que
+       hay que leer, en vez de inventarse un campo y pintar a alguien donde no
+       esta — que es el peor falso positivo posible aqui: mandarias al que
+       ayuda a otro sitio. */
+    const posiciones = {};
+    let formaRara = null;
+    const leerPos = (lv) => {
+      if (!lv || typeof lv !== 'object') return null;
+      const g = (typeof lv.geocode === 'object' && lv.geocode) ||
+                (typeof lv.position === 'object' && lv.position) ||
+                (typeof lv.coordinates === 'object' && lv.coordinates) || lv;
+      const la = g.latitude ?? g.lat, ln = g.longitude ?? g.lng ?? g.lon;
+      if (typeof la !== 'number' || typeof ln !== 'number') {
+        if (!formaRara) formaRara = Object.keys(lv).slice(0, 12).join(',');
+        return null;
+      }
+      // La hora, si la trae. Si no viene NO se inventa: el panel dira que no
+      // sabe de cuando es, que es la verdad.
+      const t = lv.timestamp ?? lv.time ?? lv.at ?? lv.lastUpdated ?? lv.updatedAt ?? g.timestamp ?? null;
+      return { lat: la, lng: ln, at: (typeof t === 'number' || typeof t === 'string') ? t : null };
+    };
+
     /* Los nombres viven en el `transporters` DE ARRIBA (el de dentro solo trae
        ids y descansos). Se recorren los dos por si Amazon mueve el campo: lo
        que tenga nombre, manda. */
@@ -815,6 +848,8 @@
       if (n && !drivers[t.transporterId]) drivers[t.transporterId] = n;
       const f = t.workPhoneNumber || t.phoneNumber || null;
       if (f && !fonos[t.transporterId]) fonos[t.transporterId] = String(f).trim();
+      const p = leerPos(t.lastLocation || t.lastKnownLocation || t.location);
+      if (p && !posiciones[t.transporterId]) posiciones[t.transporterId] = p;
     }
     // Ruta con UN solo conductor: se lo asignamos a todas sus tareas aunque el
     // transporterId de la tarea no cuadre (rescates/ediciones lo desalinean).
@@ -864,6 +899,10 @@
           service_area_id: said, center, station_code: stationCode,
           driver_name: drivers[tid] || soloDriver || null, driver_id: tid || null,
           driver_phone: fonos[tid] || null,
+          // Donde esta AHORA quien lleva esta ruta (lo dice Cortex, no nosotros).
+          driver_lat: (posiciones[tid] || {}).lat ?? null,
+          driver_lng: (posiciones[tid] || {}).lng ?? null,
+          driver_pos_at: (posiciones[tid] || {}).at ?? null,
           stop_id: seq != null ? String(seq) : null,
           stop_address: addrStr,
           /* EL IDENTIFICADOR DE LA DIRECCION, que ahora SI cruza: es el mismo
@@ -900,7 +939,9 @@
         post({ kind: 'debug', which: 'destinos',
                url: `${routeCode || '?'}: ${con}/${out.length} con destino · `
                   + `addresses en la respuesta: ${Object.keys(addrs).length} · `
-                  + `nombres: ${Object.keys(drivers).length}`,
+                  + `nombres: ${Object.keys(drivers).length} · `
+                  + `posiciones: ${Object.keys(posiciones).length}`
+                  + (formaRara ? ` · lastLocation con forma rara: {${formaRara}}` : ''),
                count: con, bytes: out.length });
       }
     } catch (_) {}

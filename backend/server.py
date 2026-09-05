@@ -18115,7 +18115,34 @@ def _apoyo_posicion_de(p: Optional[dict]) -> Optional[dict]:
 
 
 async def _apoyo_posicion(driver_id: str, dia: str) -> Optional[dict]:
-    """Donde se vio por ultima vez a esa persona hoy, segun Cortex."""
+    """Donde esta esa persona ahora. PRIMERO la posicion en vivo de Cortex.
+
+    Cortex publica en `transporters[].lastLocation` donde esta el conductor —es
+    lo que pinta en su propio mapa— y eso es lo que necesita el que va a ayudar.
+    Lo otro, el ultimo escaneo, es un PORTAL y no la persona: a media manana
+    puede ser de hace veinte minutos. Medido el 05-09-2026 antes de esto: de 12
+    conductores en ruta, **solo 2 tenian posicion** y las dos de hace 8-10 min.
+
+    Se prefiere la viva y se cae al escaneo si no hay, diciendo siempre de cual
+    de las dos se trata (`que`): mandar a alguien a un sitio equivocado es el
+    peor fallo posible aqui, asi que la pantalla tiene que poder decir si esta
+    ensenando a la persona o el ultimo portal donde entrego.
+    """
+    viva = await db.cortex_packages.find(
+        {"service_day": dia, "driver_id": driver_id, "driver_lat": {"$ne": None}},
+        {"_id": 0, "driver_lat": 1, "driver_lng": 1, "driver_pos_at": 1, "seen_at": 1},
+    ).sort("seen_at", -1).limit(1).to_list(1)
+    if viva:
+        v = viva[0]
+        # Sin hora de Cortex se usa la de nuestra captura, que es una cota
+        # superior honesta: la posicion no puede ser mas nueva que eso.
+        cuando = v.get("driver_pos_at") or v.get("seen_at")
+        mins = _apoyo_minutos_desde(cuando)
+        if mins is not None and mins <= _APOYO_POSICION_MAX_MIN:
+            return {"lat": v["driver_lat"], "lng": v["driver_lng"], "hace_min": mins,
+                    "cuando": cuando, "stop_id": "", "que": "conductor",
+                    "hora_estimada": not v.get("driver_pos_at")}
+
     docs = await db.cortex_packages.find(
         {"service_day": dia, "driver_id": driver_id, "lat": {"$ne": None},
          "state": {"$in": _apoyo_estados_en_calle()}},
@@ -34813,6 +34840,13 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         # Se guarda, pero NO se copia solo a ninguna ficha: Cortex da el mismo
         # numero a mas de una persona (gotcha 57) y eso se decide aparte.
         "driver_phone": _telefono_limpio(obs.get("driver_phone")) or None,
+        # DONDE ESTA EL CONDUCTOR AHORA, dicho por Cortex (`transporters[].
+        # lastLocation` de route-details). Es lo que necesita el que va a ayudar:
+        # hasta ahora se le mandaba el ultimo escaneo, que es un portal y puede
+        # ser de hace 20 minutos. Se guarda en el paquete porque llega por esa
+        # via; `_apoyo_posicion` se queda con la mas reciente del conductor.
+        "driver_lat": obs.get("driver_lat"), "driver_lng": obs.get("driver_lng"),
+        "driver_pos_at": obs.get("driver_pos_at"),
         "stop_id": obs.get("stop_id"),
         "stop_address": _cortex_addr_str(obs.get("stop_address") or obs.get("address")),
         "container_id": obs.get("container_id"), "station": obs.get("station"),
