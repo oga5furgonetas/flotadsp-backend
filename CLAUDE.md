@@ -1184,28 +1184,47 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    campo que ya usan 281.559 documentos (gotcha 29).
 
 
-65. **Cortex NO publica donde esta el conductor. Comprobado por tres caminos,
-   para que nadie lo vuelva a buscar.** `lastLocation` es el UNICO campo de
-   coordenadas por PERSONA que aparece en la API, y llega vacio:
-   · en `route-details` -> `posiciones: 0` en las 37 rutas;
-   · en `route-summaries` -> `0 de 38 personas` (y su esquema real, capturado el
-     05-09-2026, lo confirma: `transporters[].lastLocation = null`);
-   · y un barrido AUTOMATICO de todas las respuestas buscando una pareja
-     lat/lng en rango solo encontro `executionGeocode` —el escaneo— y
-     `rmsRouteSummaries[].centroid`, que es el centro de la zona de la ruta, no
-     una persona.
-   O sea que el mapa de Cortex con las iniciales no es GPS en vivo.
-   **Lo mejor que existe es el ULTIMO ESCANEO**, y hay que cogerlo entero: el
-   filtro solo miraba estados «en calle» y dejaba fuera la ENTREGA, que es el
-   escaneo que mas se repite en un reparto. Medido sobre 37 conductores:
-   solo en calle -> mediana **40,5 min**; cualquier escaneo -> mediana **8,7**
-   (el mejor 2,0). En la pantalla de apoyo paso de 2 de 12 conductores con
-   posicion a **16 de 16**, mediana 6 min.
-   La respuesta dice SIEMPRE que es ese punto (`que`: entrega / intento /
-   escaneo) y cuanto hace: no es donde esta, es donde estuvo, y venderlo como
-   otra cosa mandaria al que va a ayudar a un sitio equivocado.
-   Regla general: **cuando una fuente no da el dato, se dice y se busca el mejor
-   sustituto EXPLICADO — no se maquilla el sustituto como si fuera el dato.**
+65. **La posicion en vivo del conductor SI existe, y esta en
+   `/transporters/locationUpdate` -> `transportersLocation[].geocode`.**
+   Es el endpoint que mueve los puntos del mapa de Cortex.
+
+   **Lo escribo asi porque primero escribi lo contrario, y esa es la leccion.**
+   El 05-09-2026 di por bueno que Cortex no la publicaba, con estas pruebas:
+   `lastLocation` vacio en `route-details` (0 de 37 rutas) y en
+   `route-summaries` (0 de 38 personas), y un barrido automatico que solo
+   encontraba `executionGeocode` y `centroid`. Todo cierto — y la conclusion,
+   falsa. El barrido estaba enganchado DESPUES de
+   `if (!marked && !isSummary && !RELEVANT_URL.test(url)) return;`, o sea que
+   solo miraba los tres sitios donde ya sabiamos que no estaba. Y los hallazgos
+   se guardaban todos bajo el mismo `_id`, asi que se pisaban y solo se veia el
+   ultimo. **Demostre «no esta en los tres sitios que miro» y escribi «no
+   existe».** Es exactamente el fallo del gotcha 64 —una conclusion de mas
+   fijada en un comentario— cometido por segunda vez en el mismo dia, y lo
+   corrigio Dani preguntando lo obvio: «los puntos se van actualizando, eso
+   tiene que llegar de algun sitio».
+   Con el buscador movido delante del filtro salieron CUATRO sitios con
+   coordenadas y uno era este.
+
+   Como esta montado: `posiciones_vivas` con sus tres saltos dados de alta
+   (interceptor -> bridge -> background; si falta uno se pierde en silencio) y
+   `cortex_posiciones` en la BD de cada empresa, un documento por persona y dia
+   con TTL de 3 dias. Se queda SIEMPRE la mas reciente (`$max` sobre la hora):
+   con dos pestañas abiertas puede llegar una vieja detras de una nueva, y que
+   la posicion de alguien retroceda es peor que no tenerla. Si Cortex no manda
+   hora se usa la de la captura y se marca `hora_estimada`.
+   Medido nada mas conectarlo: **39 conductores con posicion, antiguedad 0,4
+   min**, y 14 de 14 en la pantalla de apoyo a 0 min.
+
+   `_apoyo_posicion` tiene CUATRO fuentes por orden y la respuesta dice siempre
+   cual es (`que`): la viva -> `route-details` -> el resumen -> el ultimo
+   escaneo. Ese ultimo hay que cogerlo entero, sin filtrar por estados «en
+   calle»: dejaba fuera la ENTREGA, que es el escaneo mas repetido de un
+   reparto, y la posicion pasaba de 8,7 a 40,5 minutos de antiguedad.
+
+   Regla general, y va en serio: **una prueba negativa solo vale dentro de lo
+   que ha mirado.** Antes de escribir «no existe», comprobar que el instrumento
+   podia verlo — aqui bastaba con mirar si el buscador se ejecutaba para esa
+   respuesta, y no lo hice.
 
 
 ## Reglas de trabajo
