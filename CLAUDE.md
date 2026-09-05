@@ -1284,6 +1284,21 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
      `ToastProvider`, que SI esta importado, salia como que no.
    Regla: cuando el mismo cambio toca N pantallas, la que se olvida no falla al
    compilar. O lo comprueba un checker, o lo descubre un usuario.
+   **Y el checker se estreno cubriendo media clase de fallo, que es peor que no
+   tenerlo.** Miraba solo `lib/` y `api.js`, asi que arreglo `useOrden`, se
+   desplego... y la MISMA pantalla volvio a caer con **`ThOrden is not
+   defined`**: el mismo commit habia olvidado DOS importaciones en el mismo
+   fichero, y la segunda vive en `panel/components/`. Los errores que la propia
+   app se reporta (`client_errors`) lo dijeron en un minuto —el bundle nuevo
+   fallaba distinto que el viejo—, que es la unica razon de que se viera
+   enseguida. Ahora cubre `components/` y los `export default`, cuyo nombre es
+   el del fichero.
+   Al ampliarlo saltaron 18 avisos en falso de golpe: un componente
+   `export default function ThOrden` no se reconocia como definido en su PROPIO
+   fichero y salia acusandose a si mismo. La leccion se repite: **la primera
+   version de un checker miente de las dos maneras** —deja pasar lo que no cubre
+   y acusa lo que no entiende—, asi que hay que probarlo en los dos sentidos:
+   con el fallo puesto (¿lo caza?) y con el arbol limpio (¿calla?).
 
 
 ## Reglas de trabajo

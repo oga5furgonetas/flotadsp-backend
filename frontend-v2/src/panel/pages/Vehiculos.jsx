@@ -9,6 +9,7 @@ import GuidedEmpty from '../components/GuidedEmpty'
 import VidaVehiculo from '../components/VidaVehiculo'
 import { ultimaRueda } from '../../lib/rueda'
 import { useOrden } from '../../lib/orden'
+import ThOrden from '../components/ThOrden'
 import QRCode from 'qrcode'
 import {
   Loader2, Search, Truck, X, Save, Download, QrCode,

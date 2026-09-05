@@ -57,10 +57,24 @@ const todos = ficheros(RAIZ)
 /* Lo que exportan nuestros modulos propios. */
 const nuestros = new Set()
 for (const f of todos) {
-  if (!/[\\/]lib[\\/]|[\\/]api\.js$/.test(f)) continue
-  for (const m of readFileSync(f, 'utf8').split(String.fromCharCode(13)).join('').matchAll(
+  /* `lib/`, `api.js` Y `panel/components/`. Los componentes faltaban en la
+     primera version, y por eso NO cazo `ThOrden`: se arreglo `useOrden`, se
+     desplego, y la misma pantalla volvio a caer con el import de al lado — dos
+     olvidados en el mismo fichero por el mismo commit. Un checker que cubre la
+     mitad de una clase de fallo deja pasar la otra mitad y encima da la
+     sensacion de que esta cubierta, que es peor que no tenerlo. */
+  if (!/[\\/]lib[\\/]|[\\/]components[\\/]|[\\/]api\.js$/.test(f)) continue
+  const src = readFileSync(f, 'utf8').split(String.fromCharCode(13)).join('')
+  for (const m of src.matchAll(
     /^export\s+(?:async\s+)?(?:function|const|let|class)\s+([A-Za-z_$][\w$]*)/gm)) {
     nuestros.add(m[1])
+  }
+  /* Un componente se exporta por DEFECTO y su nombre es el del fichero: asi lo
+     importan los demas (`import ThOrden from '../components/ThOrden'`) y asi es
+     como se olvida. */
+  if (/^export\s+default\b/m.test(src)) {
+    const base = f.split(/[\\/]/).pop().replace(/\.\w+$/, '')
+    if (/^[A-Z]/.test(base)) nuestros.add(base)
   }
 }
 
@@ -96,7 +110,10 @@ for (const f of todos) {
     }
   }
   for (const m of txt.matchAll(
-    /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/g)) {
+    // El `default` no es opcional aqui: sin el, un componente
+    // (`export default function ThOrden`) no se reconoce como definido en su
+    // PROPIO fichero y sale acusandose a si mismo — 18 avisos en falso.
+    /(?:^|\n)\s*(?:export\s+(?:default\s+)?)?(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/g)) {
     disponibles.add(m[1])
   }
 
