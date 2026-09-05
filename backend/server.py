@@ -19255,6 +19255,32 @@ async def empleo_editar_oferta(oferta_id: str, datos: dict = Body(...),
     return await _empleo_con_enlace(o)
 
 
+@api_router.get("/empleo/candidatos/nuevos")
+async def empleo_contar_nuevos(center: Optional[str] = None,
+                               user: dict = Depends(require_admin)):
+    """Cuantas candidaturas SIN MIRAR hay, para el aviso del menu.
+
+    Solo `fase: "nuevo"`: en cuanto alguien la mueve —a en_proceso, descartado,
+    contratado— deja de contar, que es justo lo que se pidio. Las que el
+    formulario descarta solo (`descarte_automatico`) nacen ya en `descartado`,
+    asi que tampoco suman: el numero es «personas a las que tengo que mirar».
+
+    Endpoint propio y no la lista con `?fase=nuevo`, por lo mismo que
+    `/shift-requests/pendientes`: esto lo pide el menu cada dos minutos desde
+    TODAS las pantallas, y la lista devuelve hasta 500 candidatos enteros —con
+    DNI y telefono— para acabar mirando su longitud.
+
+    OJO AL ORDEN: declarado ANTES de `/empleo/candidatos/{cand_id}`, o
+    'nuevos' entraria como si fuera un id.
+    """
+    q = _filtro_centro(user, center)
+    if "center" in q:
+        q["centro"] = q.pop("center")
+    q["fase"] = "nuevo"
+    n = await db.candidatos.count_documents(q)
+    return {"nuevos": n}
+
+
 @api_router.get("/empleo/candidatos")
 async def empleo_listar_candidatos(oferta: Optional[str] = None, fase: Optional[str] = None,
                                    center: Optional[str] = None,
@@ -34783,6 +34809,10 @@ async def _cortex_apply_observation(obs: dict, captured_at) -> str:
         "route_id": obs.get("route_id"),
         "service_area_id": said, "center": center,
         "driver_name": obs.get("driver_name"), "driver_id": obs.get("driver_id"),
+        # El telefono que publica Cortex en `transporters[]` de route-details.
+        # Se guarda, pero NO se copia solo a ninguna ficha: Cortex da el mismo
+        # numero a mas de una persona (gotcha 57) y eso se decide aparte.
+        "driver_phone": _telefono_limpio(obs.get("driver_phone")) or None,
         "stop_id": obs.get("stop_id"),
         "stop_address": _cortex_addr_str(obs.get("stop_address") or obs.get("address")),
         "container_id": obs.get("container_id"), "station": obs.get("station"),

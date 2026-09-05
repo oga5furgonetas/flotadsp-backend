@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.28.0';
+  const VERSION_INTERCEPTOR = '2.29.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -65,6 +65,7 @@
     return typeof v;
   };
   let schemaSent = false, schemaSummarySent = false, schemaReportSent = false;
+  let avisadoDestinos = false;   // el aviso de cobertura sale UNA vez por carga
 
   // Auto-refresco: memorizamos las URLs GET de Cortex que devuelven paquetes y
   // las volvemos a pedir nosotros cada pocos minutos. Así todas las rutas se
@@ -762,7 +763,35 @@
   const routePrefix = (rc) => { const m = String(rc || '').match(/^(.*?)(\d+)\s*$/); return m ? m[1] : null; };
 
   const extractRouteDetails = (json) => {
-    const root = (json && json.rmsRouteDetails) || json;
+    /* LA RESPUESTA TIENE DOS NIVELES Y LO BUENO ESTA EN EL DE ARRIBA.
+       ─────────────────────────────────────────────────────────────────────
+       `route-details` devuelve:
+
+         { rmsRouteDetails: { stops[], transporters[], ... },
+           addresses:    [ { addressId, address1, city, postalCode,
+                             geocode: { latitude, longitude } } ],
+           transporters: [ { transporterId, firstName, lastName,
+                             workPhoneNumber, lastLocation } ],
+           company, itineraryPartners }
+
+       `addresses` y `transporters` son HERMANOS de `rmsRouteDetails`, no
+       hijos. Esto leia `root.addresses` con `root = json.rmsRouteDetails`, o
+       sea SIEMPRE `undefined`, y de ahi se concluyo por escrito que "no hay
+       addresses en la raiz" — la conclusion equivocada quedo fijada en un
+       comentario y nadie volvio a mirar.
+
+       Lo que costo: cada parada pendiente sale en Apoyo en ruta como «Cortex
+       no da la ubicacion» (66 de 67 en la XA_C29 del 05-09-2026) y el mapa
+       queda vacio, teniendo Cortex las coordenadas del destino en cada
+       respuesta que ya nos bajabamos. Y lo mismo con los nombres: el
+       `transporters` de dentro NO lleva `firstName`, asi que
+       `driver_name` estaba a **0 paquetes de 292.927** desde el primer dia.
+
+       Verificado contra el esquema REAL que captura esta misma extension
+       (`cortex_diagnostico._id = "schema:details"`), no contra lo que
+       suponiamos. */
+    const raiz = json || {};
+    const root = raiz.rmsRouteDetails || raiz;
     if (!root || !Array.isArray(root.stops)) return null;
     const routeCode = root.routeCode || null;
     const routeId = root.routeId || null;
@@ -775,18 +804,28 @@
     // Prioridad: mapa por estación (duro) → página → mapa por prefijo de ruta.
     const center = (said && saCenter[said]) || pageCenter || (prefix && prefixCenter[prefix]) || null;
     const stationCode = info.code || null;
+    /* Los nombres viven en el `transporters` DE ARRIBA (el de dentro solo trae
+       ids y descansos). Se recorren los dos por si Amazon mueve el campo: lo
+       que tenga nombre, manda. */
     const drivers = {};
-    for (const t of (root.transporters || [])) {
-      if (t && t.transporterId) {
-        drivers[t.transporterId] = [t.firstName, t.lastName].filter(Boolean).join(' ').trim() || null;
-      }
+    const fonos = {};
+    for (const t of [].concat(raiz.transporters || [], root.transporters || [])) {
+      if (!t || !t.transporterId) continue;
+      const n = [t.firstName, t.lastName].filter(Boolean).join(' ').trim();
+      if (n && !drivers[t.transporterId]) drivers[t.transporterId] = n;
+      const f = t.workPhoneNumber || t.phoneNumber || null;
+      if (f && !fonos[t.transporterId]) fonos[t.transporterId] = String(f).trim();
     }
     // Ruta con UN solo conductor: se lo asignamos a todas sus tareas aunque el
     // transporterId de la tarea no cuadre (rescates/ediciones lo desalinean).
     const driverVals = Object.values(drivers).filter(Boolean);
     const soloDriver = driverVals.length === 1 ? driverVals[0] : null;
+    /* EL CATALOGO DE DIRECCIONES DE ESTA RUTA, con sus coordenadas. Tambien
+       de la raiz, y se acepta el de dentro por si algun dia lo mueven. */
     const addrs = {};
-    for (const a of (root.addresses || [])) if (a && a.addressId) addrs[a.addressId] = a;
+    for (const a of [].concat(raiz.addresses || [], root.addresses || [])) {
+      if (a && a.addressId != null) addrs[String(a.addressId)] = a;
+    }
     let day = null;
     const ld = root.localDate;
     if (Array.isArray(ld) && ld.length >= 3) {
@@ -799,9 +838,16 @@
         const dm = task.domainMap || {};
         const tba = pickTba(dm) || pickTba(task);
         if (!tba) continue;
-        const a = addrs[task.addressId || stop.addressId] || {};
+        const aid = task.addressId != null ? String(task.addressId)
+                  : (stop.addressId != null ? String(stop.addressId) : null);
+        const a = (aid && addrs[aid]) || {};
         const addrStr = a.address1 ? [a.address1, a.address2, a.city].filter(Boolean).join(', ') : null;
-        const geo = task.executionGeocode || a.geocode || {};
+        /* `lat`/`lng` siguen siendo SOLO el escaneo real, como hasta hoy. El
+           destino va aparte en `dest_lat`/`dest_lng`: si se mezclaran, un
+           paquete pendiente pasaria a tener `lat` de destino y cambiaria en
+           silencio el significado de un campo que ya usan 281.559 documentos
+           y media aplicacion. */
+        const geo = task.executionGeocode || {};
         const tid = task.transporterId || stop.transporterId;
         let events = null;
         if (Array.isArray(task.recentTaskEvents)) {
@@ -817,15 +863,15 @@
           route_code: routeCode, route_id: routeId,
           service_area_id: said, center, station_code: stationCode,
           driver_name: drivers[tid] || soloDriver || null, driver_id: tid || null,
+          driver_phone: fonos[tid] || null,
           stop_id: seq != null ? String(seq) : null,
           stop_address: addrStr,
-          /* EL IDENTIFICADOR DE LA DIRECCION. `route-details` lo trae en cada
-             tarea pero NO manda la direccion (comprobado en el esquema real que
-             captura esta misma extension: no hay `addresses` en la raiz, por eso
-             `addrs` sale vacio siempre). El informe `packagesByStatus` SI trae
-             la direccion con su `addressId`. Mandando el id, el backend cruza
-             las dos fuentes y una direccion vista UNA vez vale para siempre. */
-          address_id: task.addressId || stop.addressId || null,
+          /* EL IDENTIFICADOR DE LA DIRECCION, que ahora SI cruza: es el mismo
+             `addressId` que traen `addresses[]` de esta respuesta y el informe
+             `packagesByStatus`. Se manda igualmente para que el backend pueda
+             resolver una parada de la que hoy no venga la direccion con lo que
+             se vio otro dia. */
+          address_id: aid,
           container_id: task.containerScannableId || null,
           state: task.taskState || task.executionStatus || null,
           raw_state: task.taskState || null,
@@ -841,6 +887,23 @@
         });
       }
     }
+    /* CUANTAS PARADAS SALEN CON DESTINO, dicho por el propio interceptor.
+       Sin esto, saber si una version funciona exige instalarla y mirar la
+       pantalla al dia siguiente — que es como se fueron 20 versiones. Con esto
+       se ve en `GET /cortex/diagnostico` a los pocos segundos de recargar
+       Cortex, y dice ademas cuantas direcciones traia la respuesta, que es lo
+       que distingue «no lo leemos» de «Amazon no lo manda». */
+    try {
+      if (!avisadoDestinos) {
+        avisadoDestinos = true;
+        const con = out.filter((o) => typeof o.dest_lat === 'number').length;
+        post({ kind: 'debug', which: 'destinos',
+               url: `${routeCode || '?'}: ${con}/${out.length} con destino · `
+                  + `addresses en la respuesta: ${Object.keys(addrs).length} · `
+                  + `nombres: ${Object.keys(drivers).length}`,
+               count: con, bytes: out.length });
+      }
+    } catch (_) {}
     return out.length ? out : null;
   };
 

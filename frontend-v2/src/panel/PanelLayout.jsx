@@ -10,7 +10,7 @@ import {
   Briefcase,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
-import { getMe, contarPeticionesPendientes } from './api'
+import { getMe, contarPeticionesPendientes, contarCandidatosNuevos } from './api'
 import TrialBanner from './TrialBanner'
 import CommandPalette from './CommandPalette'
 import { BotonAyuda, PanelAyuda, PrimerosPasos } from './Ayuda'
@@ -41,6 +41,9 @@ const ROUTE_FEATURE = {
    linea y no haya que tocar el render. */
 const AVISOS = {
   '/panel/turnos': ({ peticionesPend }) => peticionesPend,
+  // Candidaturas que nadie ha mirado todavia. Dejan de contar en cuanto se les
+  // cambia la fase, que es lo que se pidio: el numero es «gente por mirar».
+  '/panel/empleo': ({ candidatosNuevos }) => candidatosNuevos,
 }
 
 const NAV_DEF = [
@@ -317,6 +320,7 @@ export default function PanelLayout() {
      ultimo numero bueno, porque un cero falso es la unica respuesta que hace
      que alguien deje de mirar. */
   const [peticionesPend, setPeticionesPend] = useState(0)
+  const [candidatosNuevos, setCandidatosNuevos] = useState(0)
   useEffect(() => {
     if (!isAuthed()) return
     let vivo = true
@@ -324,6 +328,11 @@ export default function PanelLayout() {
       if (!vivo || !isAuthed() || document.hidden) return
       contarPeticionesPendientes(center)
         .then((r) => { if (vivo) setPeticionesPend(r.data?.pendientes || 0) })
+        .catch(() => {})
+      // Mismo latido y misma regla: si falla NO se pone a cero, se deja el
+      // ultimo numero bueno. Un cero falso hace que se deje de mirar.
+      contarCandidatosNuevos(center)
+        .then((r) => { if (vivo) setCandidatosNuevos(r.data?.nuevos || 0) })
         .catch(() => {})
     }
     mirar()
@@ -402,7 +411,7 @@ export default function PanelLayout() {
       ...it, label: t(it.labelKey),
       // El aviso se cuelga aqui, del sitio donde ya se traduce el menu, para
       // que cualquier entrada futura solo tenga que anadir su clave a AVISOS.
-      aviso: AVISOS[it.to] ? AVISOS[it.to]({ peticionesPend }) : 0,
+      aviso: AVISOS[it.to] ? AVISOS[it.to]({ peticionesPend, candidatosNuevos }) : 0,
     })) }))
     .filter((g) => g.items.length > 0)
   const flatItems = groups.flatMap((g) => g.items)

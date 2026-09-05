@@ -1143,6 +1143,47 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    se resolvio el hermano.
 
 
+64. **`route-details` tiene DOS niveles y lo bueno esta en el de arriba. Una
+   linea que miraba un nivel de mas costo ~20 versiones de la extension en una
+   semana.** La respuesta es:
+
+   ```
+   { rmsRouteDetails: { stops[], transporters[] },
+     addresses:    [ { addressId, address1, city, geocode:{latitude,longitude} } ],
+     transporters: [ { transporterId, firstName, lastName, workPhoneNumber } ] }
+   ```
+
+   `addresses` y `transporters` son **hermanos** de `rmsRouteDetails`, no hijos.
+   El interceptor hacia `const root = json.rmsRouteDetails` y luego
+   `root.addresses`, o sea SIEMPRE `undefined`. Y lo peor no es el fallo: es que
+   de ahi se concluyo por escrito «route-details no trae la direccion, por eso
+   `addrs` sale vacio siempre», ese comentario quedo en el codigo, y cada
+   version siguiente lo dio por cierto y busco la solucion en otro sitio.
+   Lo que costo, medido el 05-09-2026: en Apoyo en ruta, **66 de las 67 paradas
+   de la XA_C29 decian «Cortex no da la ubicacion»** con el mapa vacio, teniendo
+   Cortex la coordenada del destino en cada respuesta que ya nos bajabamos. Y
+   por el mismo motivo `driver_name` estaba a **0 de 292.927 paquetes** desde el
+   primer dia: el `transporters` de dentro no lleva `firstName`.
+   **Como se encontro, que es lo que importa:** leyendo el ESQUEMA REAL que la
+   propia extension captura y guarda en `cortex_diagnostico` (`schema:details`),
+   no el codigo ni lo que recordabamos. El esquema decia `addresses` a primer
+   nivel, con `geocode`. Antes de eso llegue a dar por buenas dos hipotesis
+   falsas —que los `addressId` eran de dos espacios distintos y que habia que
+   cruzar por TBA— y las dos se cayeron al mirar el dato.
+   Reglas: **antes de concluir que una fuente no trae un dato, mirar el esquema
+   real completo, no el trozo por donde se entra**; y un comentario que afirma
+   que algo no existe necesita la misma prueba que un test — si se equivoca,
+   cierra la investigacion para todos los que vengan detras.
+   Lo vigila `scripts/check-destinos.mjs`, que ejecuta el parser DE VERDAD
+   (extraido del fichero, gotcha 40) contra una respuesta con la forma real y
+   comprueba que cada parada sale con direccion, destino, conductor y telefono.
+   Probado reintroduciendo el fallo: da los cuatro avisos. **Es la primera vez
+   que se puede saber si una version de la extension funciona sin instalarla.**
+   Y `lat`/`lng` siguen siendo SOLO el escaneo: el destino va en
+   `dest_lat`/`dest_lng`. Mezclarlos cambiaria en silencio el significado de un
+   campo que ya usan 281.559 documentos (gotcha 29).
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

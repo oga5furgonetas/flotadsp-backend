@@ -115,6 +115,10 @@ export const getTransporterIdsSinFicha = (dias) =>
 export const confirmarTransporterId = (body) => api.post('/transporter-ids/confirmar', body)
 /* Fichas activas sin centro: salen en el total y en ningun centro, o sea que
    con un centro elegido —como se trabaja siempre— no las ve nadie. */
+/* Solo el numero de candidaturas sin mirar, para el aviso del menu: la lista
+   devuelve hasta 500 candidatos con DNI y telefono y esto se pide cada 2 min. */
+export const contarCandidatosNuevos = (center) =>
+  api.get('/empleo/candidatos/nuevos', { params: centerParam(center) })
 export const getDriversSinCentro = (dias) =>
   api.get('/drivers/sin-centro', { params: dias ? { dias } : {} })
 export const aplicarCentroConductores = (body) =>
