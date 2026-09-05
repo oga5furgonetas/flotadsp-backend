@@ -1261,6 +1261,31 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `_centro_norm` (gotcha 6): 'oga5' y 'OGA5 ' no pueden acabar con dos llaves.
 
 
+68. **Un `import` que falta NO lo ve ni el build ni el linter: revienta en el
+   navegador.** El 04-09-2026 a las 16:34 un commit añadio `useOrden()` a cuatro
+   pantallas y puso el `import` en TRES. La cuarta —Vehiculos— quedo llamando a
+   una funcion que en ese fichero no existe: **pantalla en negro con «useOrden
+   is not defined» durante 19 horas**, en produccion, y lo reporto Mery.
+   `useOrden()` es JavaScript perfectamente valido; esbuild no resuelve
+   identificadores libres, asi que compila y despliega sin una queja. Es el
+   gotcha 19 —los `undefined name` que caza pyflakes en el backend— del lado del
+   cliente, donde no habia absolutamente nada mirando.
+   Lo vigila `scripts/check-importados.mjs`: comprueba que todo nombre que
+   exporta ESTE repositorio (`src/lib/`, `panel/api.js`) y se usa en un fichero
+   este importado en ese fichero. Solo lo nuestro — React, los iconos y los
+   globales del navegador quedan fuera a proposito: un checker que grita en
+   falso deja de leerse. Probado reintroduciendo el fallo.
+   **Dos falsos positivos costo afinarlo, y los dos enseñan algo:**
+   · estos ficheros van en **CRLF**, y `.*$` no cruza el retorno de carro: los
+     comentarios `//` no se borraban y la palabra «lista» dentro de «no los
+     lista (datos viejos)» contaba como una llamada a `lista(`;
+   · `import './index.css'` no trae nombres, y al no saltarlo dejaba abierto el
+     acumulador del parser y se comia los `import` de debajo — por eso
+     `ToastProvider`, que SI esta importado, salia como que no.
+   Regla: cuando el mismo cambio toca N pantallas, la que se olvida no falla al
+   compilar. O lo comprueba un checker, o lo descubre un usuario.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
