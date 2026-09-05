@@ -97,5 +97,60 @@ def main():
     return 1 if fallos else 0
 
 
+
+# ── La misma familia en las listas de SUGERENCIA ─────────────────────────────
+#
+# `/inspections/{id}/damages/{i}/suggested-workshops` puntua cada taller sumando
+# bonos fijos (80 convenio, 60 universal, 50 especialista, 40, 30...), asi que
+# empatan constantemente. Medido contra produccion el 05-09-2026 sobre doce
+# danos reales: **las doce listas tenian empate**, y en dos el empate estaba en
+# el PRIMER puesto —Chapisteria Riazor y AutoFix Tambre, los dos a 155—. Sin
+# desempate, cual sale como taller recomendado lo decide el orden en que
+# `find()` devolvio la coleccion, que no esta definido.
+#
+# Y la de emparejar un Transporter ID con una ficha es peor si se equivoca: el
+# `_parecido` es un cociente de enteros pequenos (0.5, 0.66, 0.75, 1.0), o sea
+# que empata con facilidad, y elegir la ficha que no es cuelga las entregas de
+# una persona a otra (gotchas 15 y 49).
+
+def _lambda_de(marca):
+    """Saca del `server.py` real la `key=` que contiene esa marca."""
+    txt = io.open(SERVER, encoding="utf-8-sig").read()
+    ms = [m for m in re.finditer(r"\.sort\(key=(lambda [a-z]: [^\n]*?)\)\n", txt)
+          if marca in m.group(1)]
+    assert len(ms) == 1, "esperaba UN sort con %r, hay %d" % (marca, len(ms))
+    return eval(ms[0].group(1))                                # noqa: S307
+
+
+def test_talleres_empatados_salen_siempre_en_el_mismo_orden():
+    clave = _lambda_de("_match_score")
+    lista = [{"name": "Zeta Motor", "_match_score": 155},
+             {"name": "AutoFix Tambre", "_match_score": 155},
+             {"name": "Chapisteria Riazor", "_match_score": 155},
+             {"name": "Talleres Muniz", "_match_score": 149}]
+    import itertools
+    vistos = {tuple(x["name"] for x in sorted(p, key=clave))
+              for p in itertools.permutations(lista)}
+    assert len(vistos) == 1, "el orden cambia segun llegan: %s" % vistos
+    # Y la puntuacion sigue mandando sobre el desempate.
+    assert sorted(lista, key=clave)[-1]["name"] == "Talleres Muniz"
+
+
+def test_un_taller_sin_nombre_no_revienta():
+    clave = _lambda_de("_match_score")
+    sorted([{"_match_score": 10}, {"name": None, "_match_score": 10}], key=clave)
+
+
+def test_sugerencias_de_ficha_empatadas_no_dependen_de_mongo():
+    clave = _lambda_de('"parecido"')
+    lista = [{"nombre": "ZACARIAS OTERO", "parecido": 0.67},
+             {"nombre": "ALBERTO OTERO", "parecido": 0.67},
+             {"nombre": "MANUEL OTERO", "parecido": 1.0}]
+    import itertools
+    vistos = {tuple(x["nombre"] for x in sorted(p, key=clave))
+              for p in itertools.permutations(lista)}
+    assert len(vistos) == 1, "el orden cambia segun llegan: %s" % vistos
+    # El mas parecido sigue primero: el desempate no puede cambiar eso.
+    assert sorted(lista, key=clave)[0]["nombre"] == "MANUEL OTERO"
 if __name__ == "__main__":
     raise SystemExit(main())

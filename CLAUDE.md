@@ -1087,6 +1087,34 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    Salio buscando rendimiento, no correccion: al comparar la respuesta de antes
    y la de despues de una optimizacion para probar que eran iguales. Sin esa
    comparacion no se habria visto nunca.
+   **Y no era un caso suelto.** Barriendo el fichero con `ast` en busca de la
+   misma forma —ordenar y cortar— salieron ocho sitios; mirados uno a uno con
+   datos reales quedaron estos, y **dos se descartaron por no serlo**:
+   `generate_schedule_auto` ya devuelve una tupla de cinco criterios acabada en
+   el nombre, y el `palabras.sort(key=len)` del Catastro ordena una lista sacada
+   de un TEXTO, que es deterministica —ahi el orden entre palabras de igual
+   longitud sale de la direccion, no de Mongo—. Comprobarlo antes de tocar
+   ahorro dos cambios que no arreglaban nada.
+   Los que si lo eran, y con evidencia:
+   · **taller recomendado para un dano** — las puntuaciones son sumas de bonos
+     fijos (80, 60, 50, 40, 30), asi que empatan siempre: medido sobre doce
+     danos reales, **las doce listas tenian empate y en dos estaba en el PRIMER
+     puesto** (Chapisteria Riazor y AutoFix Tambre, los dos a 155). Cual salia
+     recomendado dependia del orden de `find()`;
+   · **sugerencias de ficha para un Transporter ID** — `_parecido` es un
+     cociente de enteros pequenos (0.5, 0.66, 0.75, 1), o sea que empata con
+     facilidad, y elegir la ficha que no es cuelga las entregas de una persona a
+     otra (gotchas 15 y 49);
+   · el ranking de talleres de una orden y las colecciones mas gordas de
+     `/admin/salud`.
+   Todos con desempate por nombre. **El nombre no aporta significado de negocio
+   —eso seria inventarselo— pero hace la lista ESTABLE**, que es lo que se
+   pedia; la puntuacion y sus motivos van a la vista para que decida una
+   persona. Ojo con `reverse=True`: con un desempate por texto ordenaria de la
+   Z a la A, asi que se niegan los numeros y el nombre sube normal.
+   Comprobado en produccion: las 8 listas conservan EXACTAMENTE el mismo
+   contenido y las mismas puntuaciones —solo cambia el orden entre empatados— y
+   tres peticiones seguidas dan lo mismo. Ocho casos en `test_dsc_orden.py`.
 
 63. **Mil llamadas pequenas en fila son lentas aunque ninguna lo sea.**
    `/admin/salud` pedia un `collStats` por CADA coleccion de CADA base, una

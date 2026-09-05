@@ -5502,7 +5502,7 @@ async def admin_salud(_: dict = Depends(require_superadmin)):
                 cols = []
         # Las colecciones más pesadas de esa base, que es donde se mira primero.
         gordas = [g for g in await asyncio.gather(*[_stats_col(nombre, c) for c in cols]) if g]
-        gordas.sort(key=lambda c: -c["mb"])
+        gordas.sort(key=lambda c: (-c["mb"], c["coleccion"]))  # gotcha 62
         return {"base": nombre,
                 "datos_mb": round(float(st.get("dataSize") or 0), 1),
                 "indices_mb": round(float(st.get("indexSize") or 0), 1),
@@ -16817,7 +16817,10 @@ async def ot_preparar(vehicle_id: str, _=Depends(require_admin)):
     def _puntua(w):
         return (1 if (w.get("phone") or w.get("email")) else 0,
                 hechas.get(w.get("id"), 0))
-    talleres.sort(key=_puntua, reverse=True)
+    # Desempate por nombre: sin el, cual sale primero lo decide Mongo (gotcha 62).
+    # `reverse=True` con un desempate por nombre lo ordenaria de la Z a la A:
+    # se niegan los numeros y el nombre sube normal.
+    talleres.sort(key=lambda w: (tuple(-x for x in _puntua(w)), str(w.get('name') or '')))
 
     # ── El problema, escrito ─────────────────────────────────────────────────
     # Redactado a partir del libro, que es lo que el taller necesita saber. Si
@@ -21061,7 +21064,7 @@ async def workshops_nearby(
             w["distance_km"] = round(dist, 1)
             results.append(w)
 
-    results.sort(key=lambda x: x["distance_km"])
+    results.sort(key=lambda x: (x["distance_km"], str(x.get("name") or "")))  # gotcha 62
     results = results[:limit]
 
     # Inyectar info de asistencia en carretera
@@ -21298,7 +21301,17 @@ async def suggest_workshops_for_damage(
             w_copy["_match_reasons"] = reasons
             scored.append(w_copy)
 
-    scored.sort(key=lambda x: -x.get("_match_score", 0))
+    # EL EMPATE NO LO PUEDE DECIDIR MONGO. Las puntuaciones son sumas de
+    # bonos fijos (80, 60, 50, 40, 30...), asi que empatan constantemente:
+    # medido el 05-09-2026 sobre doce danos reales, **las doce listas tenian
+    # empate y en dos estaba en el PRIMER puesto** —Chapisteria Riazor y
+    # AutoFix Tambre, los dos a 155—. Sin desempate, cual sale como taller
+    # recomendado depende del orden en que `find()` devolvio los talleres, que
+    # no esta definido y cambia en cuanto se toca cualquier ficha.
+    # El nombre desempata: no aporta significado de negocio (que seria
+    # inventarselo) pero hace la lista ESTABLE, y la puntuacion y sus motivos
+    # van a la vista para que decida una persona. Gotcha 62.
+    scored.sort(key=lambda x: (-x.get("_match_score", 0), str(x.get("name") or "")))
 
     # Marcar talleres de otro centro cuando se usó el respaldo
     if other_center_fallback:
@@ -35793,7 +35806,10 @@ async def cortex_emparejar(dias: int = 30, _=Depends(require_admin)):
                 if p >= 0.5:
                     sug.append({"ficha_id": f["id"], "nombre": f.get("name"),
                                 "centro": f.get("center"), "parecido": round(p, 2)})
-            sug.sort(key=lambda x: x["parecido"], reverse=True)
+            # Emparejar un ID con la ficha equivocada cuelga las entregas de
+            # una persona a otra (gotchas 15 y 49): el orden de las
+            # sugerencias no puede depender de Mongo. Gotcha 62.
+            sug.sort(key=lambda x: (-x["parecido"], str(x.get("nombre") or "")))
         pendientes.append({
             "driver_id": did, "paquetes": a["paquetes"], "ultimo_dia": a["ultimo"],
             "centro": (a.get("centro") or "").strip(),
