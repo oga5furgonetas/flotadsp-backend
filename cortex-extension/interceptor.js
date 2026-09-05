@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.36.0';
+  const VERSION_INTERCEPTOR = '2.37.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -65,6 +65,7 @@
     return typeof v;
   };
   let schemaSent = false, schemaSummarySent = false, schemaReportSent = false;
+  let schemaLocSent = false;
   let avisadoDestinos = false;   // el aviso de cobertura sale UNA vez por carga
 
   // Auto-refresco: memorizamos las URLs GET de Cortex que devuelven paquetes y
@@ -1080,6 +1081,39 @@
          latitud, no hay nada que buscar y no se gasta un JSON.parse. */
       if (/"lat(itude)?"\s*:/.test(text) && text.length < 3000000) {
         try { buscarPosicion(JSON.parse(text), url); } catch (_) {}
+      }
+      /* ── DONDE ESTA CADA CONDUCTOR, DE VERDAD ──────────────────────────
+         `/transporters/locationUpdate` -> `transportersLocation[].geocode`.
+         Es el endpoint que mueve los puntos del mapa de Cortex, y no lo
+         miraba nadie: no lo encontre adivinando —lo intente dos veces y
+         falle— sino haciendo que la extension buscara EL DATO en todas las
+         respuestas.
+         Misma regla estricta de siempre: dos numeros reconocibles o no hay
+         posicion. Y el id de la persona se busca por varios nombres porque
+         del esquema solo conocemos el `geocode`; si ninguno encaja se manda
+         igualmente el esquema para verlo en un minuto. */
+      if (/locationUpdate/i.test(url)) {
+        try {
+          const j = JSON.parse(text);
+          const lista = j.transportersLocation || j.transporterLocations || j.locations || [];
+          const datos = [];
+          for (const it of (Array.isArray(lista) ? lista : [])) {
+            const pos = leerPos(it.geocode || it.location || it);
+            const tid = it.transporterId || it.transporterID || it.driverId || it.id || null;
+            if (pos && tid) datos.push({ transporterId: String(tid).slice(0, 40),
+                                         lat: pos.lat, lng: pos.lng,
+                                         at: pos.at || it.timestamp || it.lastUpdated || null });
+          }
+          if (datos.length) {
+            post({ kind: 'posiciones_vivas', url: url.slice(0, 160),
+                   dia: serviceDay(), sa: saId, datos });
+          } else if (!schemaLocSent) {
+            // Ni una: se manda el ESQUEMA (nombres, no valores) para saber que leer.
+            schemaLocSent = true;
+            post({ kind: 'schema', which: 'locationUpdate', url: url.slice(0, 200),
+                   schema: JSON.stringify(schemaOf(j, 0)).slice(0, 4000) });
+          }
+        } catch (_) {}
       }
       const marked = MARK.test(text);
       // Nos interesan respuestas de datos (por URL o por contenido) y el sumario.

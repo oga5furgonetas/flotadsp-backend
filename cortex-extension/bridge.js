@@ -29,6 +29,7 @@ if (!window.__flotadspBridge) {
        llevaba vacia desde que se monto. Es el mismo fallo que el gotcha 1 —una
        lista blanca que descarta sin avisar— en otro sitio.
        Al anadir un `kind` nuevo hay que tocarlo AQUI y en background.js. */
+    else if (d.kind === 'posiciones_vivas') chrome.runtime.sendMessage({ type: 'posicionesVivas', url: d.url, dia: d.dia, sa: d.sa, datos: d.datos });
     else if (d.kind === 'resumen_cortex') chrome.runtime.sendMessage({ type: 'resumenCortex', url: d.url, dia: d.dia, sa: d.sa, datos: d.datos });
     /* LO QUE APRENDE EL INFORME DE DIRECCIONES, GUARDADO ENTRE SESIONES.
        Único camino de VUELTA del puente: el interceptor vive en MAIN y no puede

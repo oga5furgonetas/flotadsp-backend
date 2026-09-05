@@ -18148,6 +18148,15 @@ async def _apoyo_posicion(driver_id: str, dia: str) -> Optional[dict]:
                     "cuando": cuando, "stop_id": "", "que": "conductor",
                     "hora_estimada": not v.get("driver_pos_at")}
 
+    # LA BUENA: la que mueve los puntos del mapa de Cortex.
+    p = await db.cortex_posiciones.find_one({"_id": f"{dia}:{driver_id}"}, {"_id": 0})
+    if p and isinstance(p.get("lat"), (int, float)):
+        mins = _apoyo_minutos_desde(p.get("at"))
+        if mins is not None and mins <= _APOYO_POSICION_MAX_MIN:
+            return {"lat": p["lat"], "lng": p["lng"], "hace_min": mins,
+                    "cuando": p.get("at"), "stop_id": "", "que": "conductor",
+                    "hora_estimada": bool(p.get("hora_estimada"))}
+
     # SEGUNDA FUENTE: el resumen de rutas, que es de donde sale el mapa con las
     # iniciales de cada conductor en la propia pagina de Cortex. En
     # `route-details` la posicion viene vacia (medido el 05-09-2026: `posiciones:
@@ -39328,6 +39337,44 @@ async def cortex_ingest(request: Request):
         except Exception as e:
             logger.warning(f"Resumen de Cortex: {e}")
         return {"ok": True, "guardado": "resumen_cortex"}
+
+    if kind == "posiciones_vivas":
+        """Donde esta cada conductor AHORA, de `/transporters/locationUpdate`.
+
+        Es el endpoint que mueve los puntos del mapa de Cortex. No se encontro
+        adivinando —se probo `route-details` y `route-summaries` y en los dos
+        `lastLocation` llega vacio— sino haciendo que la extension buscara el
+        DATO en todas las respuestas.
+
+        Un documento por persona y dia, y se queda SIEMPRE la mas reciente: dos
+        pestañas abiertas pueden mandar una vieja detras de una nueva, y
+        retroceder la posicion de alguien es peor que no tenerla.
+        """
+        try:
+            dia = str(body.get("dia") or "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            ahora = datetime.now(timezone.utc)
+            n = 0
+            for it in (body.get("datos") or [])[:400]:
+                tid = str(it.get("transporterId") or "").strip()[:40]
+                lat, lng = it.get("lat"), it.get("lng")
+                if not tid or not isinstance(lat, (int, float)) or not isinstance(lng, (int, float)):
+                    continue
+                # La hora que da Cortex si viene; si no, la de la captura, que es
+                # una cota superior honesta (no puede ser mas nueva que eso).
+                cuando = _cortex_parse_dt(it.get("at")) or ahora
+                await db.cortex_posiciones.update_one(
+                    {"_id": f"{dia}:{tid}"},
+                    {"$max": {"at": cuando.isoformat()},
+                     "$set": {"dia": dia, "transporter_id": tid, "lat": lat, "lng": lng,
+                              "hora_estimada": not it.get("at"),
+                              "visto_en": ahora.isoformat(),
+                              "expira_en": ahora + timedelta(days=3)}},
+                    upsert=True)
+                n += 1
+            return {"ok": True, "guardado": "posiciones_vivas", "n": n}
+        except Exception as e:
+            logger.warning(f"Posiciones vivas: {e}")
+            return {"ok": True, "guardado": "posiciones_vivas", "n": 0}
 
     if kind in ("schema", "debug"):
         try:

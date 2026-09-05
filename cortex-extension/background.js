@@ -302,6 +302,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
      —diagnostico, no paquetes— porque no son datos de cliente: son totales por
      ruta y por conductor, mas el nombre y el telefono que Amazon publica de su
      propia plantilla. */
+  if (msg?.type === 'posicionesVivas') {
+    enviarDiagnostico({ kind: 'posiciones_vivas', url: msg.url, dia: msg.dia,
+                        sa: msg.sa, datos: msg.datos });
+    return false;
+  }
   if (msg?.type === 'resumenCortex') {
     enviarDiagnostico({ kind: 'resumen_cortex', url: msg.url, dia: msg.dia,
                         sa: msg.sa, datos: msg.datos });
