@@ -40087,7 +40087,18 @@ async def cortex_packages(q: str = "", state: str = "", priority: str = "", day:
         query["route_code"] = route
     if ands:
         query["$and"] = ands
-    pkgs = await db.cortex_packages.find(query, {"_id": 0, "timeline": 0}).sort("updated_at", -1).to_list(limit)
+    # SOLO LO QUE PINTA LA LISTA, no el paquete entero. La fila ensena ocho
+    # campos; se estaban mandando veintiseis, 802 B por paquete medidos, y con
+    # 300 filas eso son 240 KB por cada tecla del buscador y por cada cambio de
+    # filtro. El detalle no se resiente: al abrir un paquete se pide aparte
+    # (`/cortex/package/{tba}`), que si devuelve el documento completo.
+    #
+    # Es lista BLANCA a proposito, no negra: si manana la ingesta guarda un
+    # campo nuevo y gordo, no se cuela solo en todas las respuestas.
+    campos = {"_id": 0, "tba": 1, "reference_id": 1, "route_code": 1, "stop_id": 1,
+              "stop_address": 1, "state": 1, "priority": 1, "updated_at": 1,
+              "driver_name": 1}
+    pkgs = await db.cortex_packages.find(query, campos).sort("updated_at", -1).to_list(limit)
     for _p in pkgs:                      # defensa: nunca devolver un objeto aqui
         _p["stop_address"] = _cortex_addr_str(_p.get("stop_address"))
     if route:
