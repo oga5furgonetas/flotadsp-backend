@@ -1227,6 +1227,40 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    respuesta, y no lo hice.
 
 
+66. **El telefono que da Cortex es el DEL DIA, no el de la persona — y por eso
+   no puede entrar en una ficha.** Lo dijo Dani («seguramente el que tienen ese
+   dia al dia siguiente cambie») y los datos le dan la razon: sobre 11 dias de
+   `cortex_resumen`, de **83 personas vistas en dos o mas dias, 40 (48 %)
+   tienen un numero distinto de un dia para otro** —una llego a cuatro numeros
+   en nueve dias— y el mismo numero aparece compartido por varias personas el
+   mismo dia (hasta 11 en una jornada). Es el movil que lleva esa ruta, no la
+   persona.
+   Guardarlo en la ficha es exactamente el fallo de «llamas y contesta otro»
+   que se venia arrastrando: de las 53 fichas que rellenamos asi, **10 de las
+   22 comparables ya no coinciden** con lo que Cortex dice hoy.
+   `_telefonos_desde_cortex` **ya no escribe en la ficha**. Lo que escribio
+   antes se MARCA (`telefono_dudoso` + `telefono_motivo: "cortex_dia"`, 43
+   fichas) y no se borra: alguno puede ser el movil real de esa persona, y
+   borrarlo seria decidir por la oficina sobre un dato que no es nuestro. El
+   panel pinta el «?» donde se mira antes de llamar.
+   El uso CORRECTO de ese numero es el de hoy y para hoy: el WhatsApp de «apoyo
+   en ruta» va al que conduce esa ruta ahora, y ahi acierta siempre.
+   Regla general, tercera vez esta semana: **antes de copiar un dato de una
+   fuente a una ficha, preguntarse de QUE es ese dato** —de la persona o del
+   turno— y si la fuente puede darle el mismo valor a dos sujetos (gotcha 57) o
+   valores distintos al mismo sujeto (esto).
+
+67. **Una llave por CENTRO, y estable.** Cada persona que pedia la llave de la
+   extension se llevaba una nueva: la oficina y la nave acababan con tres
+   llaves para lo mismo, tres cosas que revocar y tres formas de equivocarse al
+   pegarla. Ahora `GET /cortex/ingest-token?centro=OGA5` devuelve SIEMPRE LA
+   MISMA CADENA para esa nave: la llave viva se vuelve a firmar con los mismos
+   claims —`jti` y `exp` guardados— y HS256 es determinista, asi que no hace
+   falta guardar el token en ninguna parte (que seria guardar una contraseña).
+   Revocar una nave no toca a las otras. El centro se normaliza con
+   `_centro_norm` (gotcha 6): 'oga5' y 'OGA5 ' no pueden acabar con dos llaves.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

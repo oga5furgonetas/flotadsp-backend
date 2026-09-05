@@ -8302,6 +8302,19 @@ async def _telefonos_desde_cortex() -> dict:
         de_quien.setdefault(_telefono_digitos(tel)[-9:], []).append(tid)
     compartido = {k for k, v in de_quien.items() if len(v) > 1}
 
+    # LOS QUE YA ESCRIBIMOS ANTES DE SABER ESTO quedan MARCADOS, no borrados:
+    # alguno puede ser correcto —el movil de esa persona— y borrarlo seria
+    # decidir por la oficina sobre un dato que no es nuestro. Con la marca, el
+    # panel pinta el «?» ambar justo donde se mira antes de llamar, y escribir
+    # uno a mano la quita. Deshacer: `$unset` de `telefono_dudoso` donde
+    # `telefono_motivo == "cortex_dia"`.
+    try:
+        await db.drivers.update_many(
+            {"telefono_por": "cortex", "telefono_dudoso": {"$ne": True}},
+            {"$set": {"telefono_dudoso": True, "telefono_motivo": "cortex_dia"}})
+    except Exception as e:                                   # noqa: BLE001
+        logger.warning("marcando telefonos del dia: %s", e)
+
     rellenados, distintos, dudosos = 0, [], []
     ahora = datetime.now(timezone.utc).isoformat()
     cur = db.drivers.find({"active": True, "transporter_id": {"$in": list(mapa)}},
@@ -8314,13 +8327,24 @@ async def _telefonos_desde_cortex() -> dict:
         otros = [nombres.get(x) or x for x in de_quien.get(_telefono_digitos(tel)[-9:], [])
                  if x != d["transporter_id"]]
         if not actual:
-            if repe:
-                dudosos.append({"id": d["id"], "name": d.get("name"), "cortex": tel,
-                                "tambien_de": otros[:3], "puesto": False})
-                continue                      # mejor sin telefono que con el de otro
-            await db.drivers.update_one({"id": d["id"]}, {"$set": {
-                "phone": tel, "telefono_por": "cortex", "telefono_en": ahora}})
-            rellenados += 1
+            # YA NO SE ESCRIBE EN LA FICHA. NUNCA.
+            #
+            # El telefono que da Cortex es el DEL DIA —el del movil que lleva esa
+            # ruta hoy—, no el de la persona. Medido el 05-09-2026 sobre 11 dias
+            # de resumenes: de 83 personas vistas en dos o mas dias, **40 (48 %)
+            # tienen un numero distinto de un dia para otro**; una llego a tener
+            # cuatro en nueve dias. Y el mismo numero aparece compartido por
+            # varias personas el mismo dia (hasta 11 en un dia).
+            #
+            # Guardarlo en la ficha como si fuera suyo es justo el fallo que Dani
+            # lleva reportando: llamas manana al numero de ayer y contesta otro.
+            # Se sigue devolviendo en `dudosos` para que la oficina lo vea y
+            # decida, y la pantalla de apoyo usa el de HOY para escribir por
+            # WhatsApp, que es el uso correcto: hoy conduce esa persona.
+            dudosos.append({"id": d["id"], "name": d.get("name"), "cortex": tel,
+                            "tambien_de": otros[:3], "puesto": False,
+                            "motivo": "es el telefono del dia, no el de la persona"})
+            continue
         elif _telefono_digitos(actual) != _telefono_digitos(tel):
             distintos.append({"id": d["id"], "name": d.get("name"), "app": actual, "cortex": tel})
         # LOS QUE YA LO TIENEN PUESTO POR NOSOTROS Y RESULTA SER COMPARTIDO se
@@ -39086,14 +39110,26 @@ async def _llave_viva(jti: str) -> bool:
 
 
 @api_router.get("/cortex/ingest-token")
-async def cortex_ingest_token(nombre: str = "", user: dict = Depends(require_admin)):
-    """La llave de la extensión. UNA POR EMPRESA, y nunca compartida.
+async def cortex_ingest_token(nombre: str = "", centro: str = "",
+                              user: dict = Depends(require_admin)):
+    """La llave de la extensión: UNA POR CENTRO, y la misma para todo el equipo.
 
-    El `db_name` es lo que separa los datos de una empresa de los de otra: va
-    dentro del token y la ingesta lo aplica antes de escribir nada. Si faltara,
-    `set_current_org_db(None)` caería en la base por defecto y los paquetes de
-    un DSP acabarían mezclados con los de otro — en silencio, con HTTP 200 y
-    sin un solo error en los logs (gotcha 26).
+    Antes cada persona que la pedía se llevaba una llave nueva. Con la oficina y
+    la nave usando la misma nave eso son tres llaves para lo mismo, tres cosas
+    que revocar y tres formas de equivocarse al pegarla. Dani lo pidió al revés
+    y tiene razón: **los que trabajan en OGA5 comparten llave**, y si algún día
+    hay que cortar, se corta la de esa nave y no la de las otras.
+
+    Es estable de verdad, no «parecida»: la llave viva de ese centro se vuelve a
+    FIRMAR con exactamente los mismos claims —el `jti` y el `exp` guardados— y
+    HS256 es determinista, así que sale la MISMA cadena. Quien la copie hoy y
+    quien la copie mañana pegan lo mismo, y no hace falta guardar el token en
+    ninguna parte (que sería guardar una contraseña).
+
+    El `db_name` sigue yendo dentro y es lo que separa una empresa de otra: sin
+    él, `set_current_org_db(None)` caería en la base por defecto y los paquetes
+    de un DSP acabarían mezclados con los de otro, en silencio y con HTTP 200
+    (gotcha 26). Por eso, sin empresa no se da llave.
     """
     db_name = user.get("db_name")
     if not db_name:
@@ -39103,22 +39139,46 @@ async def cortex_ingest_token(nombre: str = "", user: dict = Depends(require_adm
         raise HTTPException(
             500, "Tu cuenta no tiene empresa asignada, así que no se puede generar "
                  "una llave que aísle tus datos. Avísanos antes de instalar la extensión.")
+    # El centro se normaliza igual que en todas partes (gotcha 6): 'oga5' y
+    # 'OGA5 ' son la misma nave y no pueden acabar con dos llaves distintas.
+    centro = _centro_norm(centro, await _centros_conocidos()) if centro else ""
+    if centro and not _user_can_see_center(user, centro):
+        raise HTTPException(403, "Ese centro no es tuyo")
+
+    ahora = datetime.now(timezone.utc)
+    def _firma(jti: str, exp: int) -> str:
+        return jwt.encode({"scope": "cortex_ingest", "org_id": user.get("org_id", ""),
+                           "db_name": db_name, "name": centro or "empresa",
+                           "jti": jti, "exp": exp},
+                          SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+    # ¿Ya hay una viva para este centro? Entonces esa, y la misma cadena.
+    try:
+        viva = await global_db[CORTEX_LLAVES].find_one(
+            {"db_name": db_name, "centro": centro, "revocada": {"$ne": True},
+             "exp": {"$gt": int(ahora.timestamp()) + 86400}},
+            sort=[("creada_en", -1)])
+    except Exception as e:                                   # noqa: BLE001
+        logger.warning("buscando llave de ingesta: %s", e)
+        viva = None
+    if viva and viva.get("jti") and viva.get("exp"):
+        return {"token": _firma(viva["jti"], int(viva["exp"])),
+                "ingest_url": f"{PUBLIC_BASE_URL}/api/cortex/ingest",
+                "empresa": user.get("org_id") or "", "jti": viva["jti"],
+                "centro": centro, "compartida": True,
+                "caduca": datetime.fromtimestamp(int(viva["exp"]), timezone.utc).strftime("%Y-%m-%d")}
+
     # CADA LLAVE, APUNTADA Y REVOCABLE. Antes se firmaba un JWT de un año sin
     # dejar rastro: no habia forma de apagar el de un equipo concreto, ni de
     # cortarle el acceso a quien se llevara el token, salvo cambiar la
     # SECRET_KEY y tumbar de paso todas las sesiones.
-    ahora = datetime.now(timezone.utc)
     jti = uuid.uuid4().hex
-    payload = {
-        "scope": "cortex_ingest", "org_id": user.get("org_id", ""),
-        "db_name": db_name, "name": user.get("name", ""),
-        "jti": jti,
-        "exp": ahora + timedelta(days=365),
-    }
+    exp = int((ahora + timedelta(days=365)).timestamp())
     try:
         await global_db[CORTEX_LLAVES].insert_one({
             "jti": jti, "db_name": db_name, "org_id": user.get("org_id", ""),
-            "nombre": _empleo_texto(nombre, 60) or "Sin nombre",
+            "centro": centro, "exp": exp,
+            "nombre": _empleo_texto(nombre, 60) or (("Equipo de " + centro) if centro else "Toda la empresa"),
             "creada_en": ahora.isoformat(),
             "creada_por": user.get("name") or user.get("username") or "",
             "revocada": False, "usos": 0, "ultimo_uso": None,
@@ -39127,10 +39187,11 @@ async def cortex_ingest_token(nombre: str = "", user: dict = Depends(require_adm
         # Que falle el registro NO puede dejar sin llave a quien la pide, pero
         # si se avisa: una llave sin apuntar no se podra revocar.
         logger.warning("registro de llave de ingesta: %s", e)
-    return {"token": jwt.encode(payload, SECRET_KEY, algorithm=JWT_ALGORITHM),
+    return {"token": _firma(jti, exp),
             "ingest_url": f"{PUBLIC_BASE_URL}/api/cortex/ingest",
             "empresa": user.get("org_id") or "", "jti": jti,
-            "caduca": (ahora + timedelta(days=365)).strftime("%Y-%m-%d")}
+            "centro": centro, "compartida": False,
+            "caduca": datetime.fromtimestamp(exp, timezone.utc).strftime("%Y-%m-%d")}
 
 
 @api_router.post("/cortex/direcciones/reconstruir")

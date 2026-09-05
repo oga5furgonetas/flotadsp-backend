@@ -499,7 +499,10 @@ export const cortexAssignStation = (service_area_id, center) => api.post('/corte
 // Reparto automático por geografía. Sin `aplicar` solo propone: se puede mirar
 // antes de que toque nada.
 export const cortexStationsAuto = (aplicar = false) => api.post(`/cortex/stations/auto?aplicar=${aplicar ? 'true' : 'false'}`)
-export const cortexIngestToken = (nombre) => api.get('/cortex/ingest-token', { params: { nombre } })
+/* La llave es UNA POR CENTRO y la misma para todo el equipo: quien la pida
+   para OGA5 recibe siempre la misma cadena (backend, gotcha 66). */
+export const cortexIngestToken = (nombre, centro) =>
+  api.get('/cortex/ingest-token', { params: { nombre, ...(centro && centro !== 'Todos' ? { centro } : {}) } })
 /* Las llaves de la extension: que equipos escriben y como apagar el que sobre.
    Antes la llave era un JWT de un año sin rastro y no se podia revocar. */
 export const cortexLlaves = () => api.get('/cortex/llaves')

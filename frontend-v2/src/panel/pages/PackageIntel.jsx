@@ -202,14 +202,14 @@ function Investigator({ tba, onClose }) {
 }
 
 /* ── Setup / instalación de la extensión ── */
-function SetupCard({ onSeed, onReset, seeding }) {
+function SetupCard({ onSeed, onReset, seeding, center }) {
   const { t } = useT()
   const [tok, setTok] = useState(null)
   const [copied, setCopied] = useState('')
   const [ext, setExt] = useState(null)
   const [llaves, setLlaves] = useState(null)
   const [nombreLlave, setNombreLlave] = useState('')
-  const load = (nombre) => cortexIngestToken(nombre).then(r => { setTok(r.data); cargarLlaves() }).catch(() => {})
+  const load = (nombre) => cortexIngestToken(nombre, center).then(r => { setTok(r.data); cargarLlaves() }).catch(() => {})
   const cargarLlaves = () => cortexLlaves().then(r => setLlaves(r.data)).catch(() => {})
   useEffect(() => {
     load()
@@ -218,7 +218,9 @@ function SetupCard({ onSeed, onReset, seeding }) {
     // despliegue: sin esto, un cliente con un fallo ya arreglado no sabe si
     // tiene la última, y nosotros tampoco.
     fetch('/extension.json').then((r) => r.json()).then(setExt).catch(() => {})
-  }, [])
+    // Al cambiar de nave hay que volver a pedirla: la llave es POR CENTRO y con
+    // la lista vacia se copiaria la de la nave anterior sin enterarse.
+  }, [center])  // eslint-disable-line react-hooks/exhaustive-deps
   const copy = (txt, key) => { navigator.clipboard?.writeText(txt).catch(() => {}); setCopied(key); setTimeout(() => setCopied(''), 1500) }
   return (
     <div className="rounded-2xl border border-white/[0.05] bg-white/[0.02] p-5">
@@ -669,7 +671,7 @@ export default function PackageIntel() {
       )}
 
       {showSetup && (
-        <div className="mb-5 mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={puedeBorrarTodo ? reset : null} seeding={seeding} /></div>
+        <div className="mb-5 mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={puedeBorrarTodo ? reset : null} seeding={seeding} center={center} /></div>
       )}
 
       {/* ── ESTACIONES → CENTRO ────────────────────────────────────────────
@@ -773,7 +775,7 @@ export default function PackageIntel() {
       </div>
 
       {empty ? (
-        <div className="mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={puedeBorrarTodo ? reset : null} seeding={seeding} /></div>
+        <div className="mx-auto max-w-xl"><SetupCard onSeed={seed} onReset={puedeBorrarTodo ? reset : null} seeding={seeding} center={center} /></div>
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_420px]">
           {/* Columna izquierda */}

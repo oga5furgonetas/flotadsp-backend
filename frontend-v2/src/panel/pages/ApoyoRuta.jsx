@@ -5,7 +5,7 @@ import 'leaflet/dist/leaflet.css'
 import { LifeBuoy, RefreshCw, MessageCircle, Copy, Check, Loader2, MapPin, Phone, AlertTriangle, ChevronRight, Pencil, XCircle, CheckCircle2, ListPlus } from 'lucide-react'
 import { useT } from '../../i18n'
 import { hoyLocal } from '../../lib/fecha'
-import { getApoyoSituacion, getApoyoParadas, crearApoyo, cambiarApoyo, getApoyos, cortexDiagnostico } from '../api'
+import { getApoyoSituacion, getApoyoParadas, crearApoyo, cambiarApoyo, getApoyos, cortexDiagnostico, crearFichaDeTransporterId } from '../api'
 
 /* APOYO EN RUTA — quién le quita paradas a quién, con mapa por WhatsApp.
    ═══════════════════════════════════════════════════════════════════════
@@ -207,6 +207,34 @@ export default function ApoyoRuta() {
      viejo. Desde fuera es indistinguible de «no funciona», y esa confusion se
      comio una semana y veinte instalaciones.
      El aviso tiene que estar DONDE SE VE EL SINTOMA. */
+  /* ── FICHA DE UN CLIC PARA EL QUE NO LA TIENE ───────────────────────────
+     Un conductor sin ficha no se puede elegir como ayudante ni recibir ayuda:
+     esta trabajando y para la aplicacion no existe. El alta la hace el
+     endpoint de siempre, que coge el nombre de CORTEX y no lo teclea nadie
+     —teclearlo es de donde salen las fichas duplicadas (gotcha 15)— y que NO
+     pone el telefono si Cortex se lo da a mas de una persona (gotcha 57).
+     El correo no se puede poner: Cortex solo publica nombre, telefono e id
+     (comprobado en `cortex_resumen.gente`). Por eso, en cuanto se crea, se
+     ofrece ir a la ficha a completar lo que falta. */
+  const [creando, setCreando] = useState('')
+  const [creada, setCreada] = useState(null)
+  const crearFicha = async (c) => {
+    setCreando(c.driver_id); setError(''); setCreada(null)
+    try {
+      /* SIN TELEFONO A PROPOSITO. El que da Cortex es el del movil que lleva
+         esa ruta HOY, no el de la persona: medido sobre 11 dias, 40 de 83
+         personas cambian de numero de un dia para otro. Meterlo en la ficha
+         seria firmar el fallo de "llamas y contesta otro". Se crea con nombre,
+         id y centro, y el correo y el telefono se completan a mano. */
+      const { data } = await crearFichaDeTransporterId(c.driver_id, {
+        nombre: c.nombre, centro: c.center || '' })
+      setCreada({ id: data.id, nombre: data.nombre, aviso: data.aviso || '' })
+      cargarSit()
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'No se pudo crear la ficha.')
+    } finally { setCreando('') }
+  }
+
   const [recargarCortex, setRecargarCortex] = useState(null)
   useEffect(() => {
     let vivo = true
@@ -322,6 +350,25 @@ export default function ApoyoRuta() {
                   </span>
                 )}
               </div>
+              {driver?.sin_ficha && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-1.5 text-[12px] text-amber-200">
+                  <AlertTriangle size={13} className="shrink-0" />
+                  <span>Está en ruta y no tiene ficha: no se le puede mandar ayuda ni pedirle que ayude.</span>
+                  <button onClick={() => crearFicha(driver)} disabled={creando === driver.driver_id}
+                    className="rounded-md bg-amber-500/25 px-2.5 py-1 font-semibold text-amber-100 hover:bg-amber-500/35 disabled:opacity-50">
+                    {creando === driver.driver_id ? 'Creando…' : 'Crear ficha'}
+                  </button>
+                </div>
+              )}
+              {creada && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg bg-emerald-500/10 px-3 py-1.5 text-[12px] text-emerald-200">
+                  <span>Ficha creada: <b>{creada.nombre}</b>.{creada.aviso ? ' ' + creada.aviso : ''} Falta el correo y el telefono: Cortex solo da el del movil de la ruta de hoy, que manana puede ser otro.</span>
+                  <a href={`/panel/conductores?open=${creada.id}`}
+                     className="rounded-md bg-emerald-500/25 px-2.5 py-1 font-semibold text-emerald-100 hover:bg-emerald-500/35">
+                    Completar ficha
+                  </a>
+                </div>
+              )}
               {driver && paradas.length > 0 && (
                 <div className="flex items-center gap-1 text-xs">
                   <span className="text-dark-500">{t('apoyo.ultimas')}:</span>
