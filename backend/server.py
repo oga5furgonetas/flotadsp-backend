@@ -18111,7 +18111,12 @@ def _apoyo_posicion_de(p: Optional[dict]) -> Optional[dict]:
         return None
     return {"lat": lat, "lng": lng, "hace_min": mins, "cuando": p.get("updated_at"),
             "stop_id": str(p.get("stop_id") or ""),
-            "que": "intento" if p.get("state") in tuple(_CX_REINTENTABLE) else "entrega"}
+            # Se dice QUE es ese punto, porque no es lo mismo para quien va a
+            # ayudar: una entrega es un portal donde estuvo; un intento, uno
+            # donde no pudo. Y si el escaneo no es ni una cosa ni otra
+            # —recogidas, vueltas a nave— se dice "escaneo" y no se disfraza.
+            "que": ("intento" if p.get("state") in tuple(_CX_REINTENTABLE)
+                    else "entrega" if p.get("state") in tuple(_CX_OK) else "escaneo")}
 
 
 async def _apoyo_posicion(driver_id: str, dia: str) -> Optional[dict]:
@@ -18167,9 +18172,29 @@ async def _apoyo_posicion(driver_id: str, dia: str) -> Optional[dict]:
     if mejor:
         return mejor
 
+    # TERCERA: SU ULTIMO ESCANEO, SEA CUAL SEA EL ESTADO.
+    #
+    # Antes solo valian los estados «en calle» (`_CX_OK` + reintentables), y eso
+    # dejaba fuera el escaneo que MAS se repite en un reparto: la entrega. El
+    # resultado era una posicion vieja o ninguna. Medido el 05-09-2026 sobre 37
+    # conductores en ruta:
+    #
+    #     solo estados en calle -> mediana 40,5 min de antiguedad
+    #     cualquier escaneo     -> mediana  8,7 min (el mejor 2,0; 25 de 37 < 15 min)
+    #
+    # Cinco veces mas fresco y la misma cobertura. No es GPS —Cortex no nos lo
+    # da, ver abajo— pero es un sitio donde esa persona ESTUVO de verdad, con su
+    # hora, y eso el que va a ayudar lo puede usar.
+    #
+    # POR QUE NO HAY GPS, para que nadie lo vuelva a buscar: `lastLocation` es el
+    # unico campo de coordenadas por PERSONA que publica Cortex, y llega vacio
+    # tanto en `route-details` (0 de 37 rutas) como en `route-summaries` (0 de 38
+    # personas), medido el 05-09-2026 con la extension 2.34. Un barrido
+    # automatico de TODAS las respuestas en busca de una pareja lat/lng solo
+    # encontro `executionGeocode` —el escaneo, esto mismo— y el `centroid` de
+    # cada ruta, que es el centro de su zona y no una persona.
     docs = await db.cortex_packages.find(
-        {"service_day": dia, "driver_id": driver_id, "lat": {"$ne": None},
-         "state": {"$in": _apoyo_estados_en_calle()}},
+        {"service_day": dia, "driver_id": driver_id, "lat": {"$ne": None}},
         {"_id": 0, "lat": 1, "lng": 1, "updated_at": 1, "state": 1, "stop_id": 1},
     ).sort("updated_at", -1).limit(1).to_list(1)
     return _apoyo_posicion_de(docs[0] if docs else None)
