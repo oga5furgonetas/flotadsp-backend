@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.34.0';
+  const VERSION_INTERCEPTOR = '2.35.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -824,6 +824,53 @@
   };
   const posDe = (x) => leerPos(x && (x.lastLocation || x.lastKnownLocation || x.location));
 
+  /* ── EL BUSCADOR DE LA POSICION DEL CONDUCTOR ──────────────────────────
+     Se probo en `route-details` (0 de 37 rutas) y en `route-summaries` (0 de 38
+     personas): en los dos, `lastLocation` llega a null. Cortex pinta a la gente
+     en su mapa, asi que el dato esta en ALGUNA respuesta — pero adivinar el
+     endpoint ya ha fallado dos veces.
+     Asi que en vez de buscar la URL, se busca EL DATO: se recorre cada
+     respuesta JSON en busca de un objeto que tenga a la vez algo con pinta de
+     transporterId y una pareja de numeros lat/lng en rango. Cuando aparece se
+     manda la RUTA DE LA CLAVE donde estaba y el path de la URL —nunca los
+     valores, que son la posicion de una persona— y con eso se sabe exactamente
+     que leer.
+     Se apaga solo en cuanto encuentra uno: es un buscador, no un vigilante. */
+  let buscadasPos = 0;
+  const vistasPos = new Set();
+  const buscarPosicion = (json, url) => {
+    if (buscadasPos > 6 || !json || typeof json !== 'object') return;
+    const esLat = (v) => typeof v === 'number' && v > -90 && v < 90 && v !== 0;
+    const esLng = (v) => typeof v === 'number' && v > -180 && v < 180 && v !== 0;
+    const encontrados = [];
+    const anda = (n, ruta, hondo) => {
+      if (encontrados.length > 8 || !n || typeof n !== 'object' || hondo > 8) return;
+      if (Array.isArray(n)) { for (let i = 0; i < Math.min(n.length, 30); i++) anda(n[i], ruta + '[]', hondo + 1); return; }
+      const k = Object.keys(n);
+      const lat = k.find((x) => /^(lat|latitude)$/i.test(x) && esLat(n[x]));
+      const lng = k.find((x) => /^(lng|lon|longitude)$/i.test(x) && esLng(n[x]));
+      /* Las de `addresses` YA las conocemos: son el destino de cada parada, no
+         la persona. Si no se descartan, el buscador para en la primera y no
+         sirve para nada. */
+      if (lat && lng && !/addresses|\.address|geocodeAddress/i.test(ruta)) {
+        encontrados.push(ruta + '.' + lat + ' {' + k.slice(0, 12).join(',') + '}');
+        return;
+      }
+      for (const x of k) anda(n[x], ruta + '.' + x, hondo + 1);
+    };
+    try { anda(json, '', 0); } catch (_) { return; }
+    if (!encontrados.length) return;
+    let u = url;
+    try { u = new URL(url, location.origin).pathname; } catch (_) {}
+    const clave = u + '|' + encontrados[0];
+    if (vistasPos.has(clave)) return;
+    vistasPos.add(clave);
+    buscadasPos++;
+    post({ kind: 'debug', which: 'donde_esta_la_posicion',
+           url: `${u} -> ${encontrados.slice(0, 3).join(' ｜ ')}`.slice(0, 380),
+           count: encontrados.length, bytes: 0 });
+  };
+
   const extractRouteDetails = (json) => {
     /* LA RESPUESTA TIENE DOS NIVELES Y LO BUENO ESTA EN EL DE ARRIBA.
        ─────────────────────────────────────────────────────────────────────
@@ -1102,6 +1149,7 @@
           }
         } catch (_) {}
       }
+      if (parsed) buscarPosicion(parsed, url);
       let packages = [];
       if (parsed && (marked || isDetails)) packages = extractRouteDetails(parsed) || extract(parsed);
 
