@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.35.0';
+  const VERSION_INTERCEPTOR = '2.36.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -839,7 +839,7 @@
   let buscadasPos = 0;
   const vistasPos = new Set();
   const buscarPosicion = (json, url) => {
-    if (buscadasPos > 6 || !json || typeof json !== 'object') return;
+    if (buscadasPos > 25 || !json || typeof json !== 'object') return;
     const esLat = (v) => typeof v === 'number' && v > -90 && v < 90 && v !== 0;
     const esLng = (v) => typeof v === 'number' && v > -180 && v < 180 && v !== 0;
     const encontrados = [];
@@ -866,8 +866,13 @@
     if (vistasPos.has(clave)) return;
     vistasPos.add(clave);
     buscadasPos++;
-    post({ kind: 'debug', which: 'donde_esta_la_posicion',
-           url: `${u} -> ${encontrados.slice(0, 3).join(' ｜ ')}`.slice(0, 380),
+    /* UNA FICHA POR SITIO. El backend guarda el diagnostico por su `which`, asi
+       que con un nombre unico los hallazgos se PISABAN entre si y solo se veia
+       el ultimo — por eso la primera vuelta solo enseño `route-details` y me
+       hizo concluir de mas. */
+    const mote = u.replace(/[^a-z]+/gi, '_').slice(-24).toLowerCase();
+    post({ kind: 'debug', which: 'pos_' + mote,
+           url: `${u} -> ${encontrados.slice(0, 3).join(' | ')}`.slice(0, 380),
            count: encontrados.length, bytes: 0 });
   };
 
@@ -1065,6 +1070,17 @@
       if (isSummary) { try { urlResumen = new URL(url, location.origin).href } catch (_) {} }
       // La petición REAL del informe manda sobre la que construimos nosotros.
       if (/packagesByStatus/i.test(url)) { learnTemplate(url); aprenderInforme(url); }
+      /* EL BUSCADOR VA ANTES DEL FILTRO, y esto era el fallo de mi
+         comprobacion anterior: iba despues del `return` de abajo, asi que solo
+         miraba `route-details`, `route-summaries` y lo ya marcado — o sea, los
+         tres sitios donde ya sabiamos que NO estaba. Los puntos del mapa de
+         Cortex se mueven, luego el dato llega por alguna respuesta: hay que
+         mirarlas TODAS.
+         Filtro barato antes de parsear: si el texto no menciona siquiera una
+         latitud, no hay nada que buscar y no se gasta un JSON.parse. */
+      if (/"lat(itude)?"\s*:/.test(text) && text.length < 3000000) {
+        try { buscarPosicion(JSON.parse(text), url); } catch (_) {}
+      }
       const marked = MARK.test(text);
       // Nos interesan respuestas de datos (por URL o por contenido) y el sumario.
       if (!marked && !isSummary && !RELEVANT_URL.test(url)) return;
@@ -1149,7 +1165,6 @@
           }
         } catch (_) {}
       }
-      if (parsed) buscarPosicion(parsed, url);
       let packages = [];
       if (parsed && (marked || isDetails)) packages = extractRouteDetails(parsed) || extract(parsed);
 
