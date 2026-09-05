@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.32.0';
+  const VERSION_INTERCEPTOR = '2.33.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -182,9 +182,10 @@
 
      Y sin temporizadores DENTRO de la vuelta, que es lo que la rompia: ver el
      comentario de `replay`. */
-  const PAUSA_ENTRE = 20000;   // respiro entre barridos
+  const PAUSA_ENTRE = 6000;    // respiro entre barridos (era 20 s con 137 peticiones)
   const CERROJO_MAX = 360000;  // si el cerrojo lleva 6 min puesto, algo fue mal
   let barriendo = 0;           // marca de tiempo de inicio, 0 = libre
+  let vueltaN = 0;             // para pedir los extras una vuelta de cada cinco
 
   const replay = () => {
     /* EL VIGILANTE, ANTES QUE EL CERROJO. Un cerrojo que se queda puesto
@@ -220,7 +221,19 @@
        rafagas parecidas, y 39 peticiones simultaneas son las que acaban en un
        429 y en dejarnos sin datos del todo. */
     (async () => {
-      const urls = todasLasUrls();
+      /* LAS RUTAS EN TODAS LAS VUELTAS; LO DEMAS, UNA DE CADA CINCO.
+         ──────────────────────────────────────────────────────────────────
+         `knownGets` guarda hasta 100 llamadas sueltas de la pagina —catalogos,
+         pantallas que alguien abrio, contadores— y se volvian a pedir TODAS en
+         cada vuelta. Con 37 rutas eso son 137 peticiones por vuelta y solo 37
+         traen entregas: tres cuartas partes del tiempo se iban en lo que no
+         cambia. Medido el 05-09-2026: una entrega tardaba 3-4,6 min en
+         llegarnos, con la vuelta a 3,7 min de media.
+         Siguen pidiendose —son la red por si algun dia los paquetes llegan por
+         otra via— pero una vez de cada cinco, que para un catalogo sobra. */
+      const conExtras = (vueltaN++ % 5) === 0;
+      const urls = conExtras ? todasLasUrls() : [...rutaGets];
+      const t0 = Date.now();
       const cola = urls.slice();
       const obrero = async () => {
         while (cola.length) {
@@ -236,7 +249,19 @@
          rutas —Cortex es una SPA y, si nadie navega, esa peticion no se repite
          nunca, asi que una ruta nueva no se descubriria jamas. */
       try { await pedirInforme(); } catch (_) {}
-      try { await pedirResumen(); } catch (_) {}
+      // El resumen SOLO descubre rutas nuevas: no trae entregas. En las vueltas
+      // rapidas se salta, que es donde se gana el tiempo que importa.
+      if (conExtras) { try { await pedirResumen(); } catch (_) {} }
+
+      /* CUANTO TARDA UNA VUELTA, dicho por quien la da. Hasta hoy se medi­a
+         «cada cuanto lo pido» (que salia bien) y no «cuanto tardo en dar la
+         vuelta entera», que es lo que de verdad marca el retraso. */
+      try {
+        post({ kind: 'debug', which: 'vuelta',
+               url: `${urls.length} peticiones en ${Math.round((Date.now() - t0) / 1000)} s`
+                  + ` (${rutaGets.size} rutas${conExtras ? ' + extras' : ''})`,
+               count: urls.length, bytes: Date.now() - t0 });
+      } catch (_) {}
 
       barriendo = 0;
       setTimeout(replay, PAUSA_ENTRE);
