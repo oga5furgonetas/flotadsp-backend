@@ -10709,6 +10709,40 @@ async def get_review_queue(center: Optional[str] = None, user: dict = Depends(re
             "ia_revisadas": ia_total, "ia_revisadas_7d": ia_7d}
 
 
+# OJO AL ORDEN: esta ruta va ANTES de `/inspections/{inspection_id}`, y no
+# puede bajar de aqui. FastAPI prueba las rutas en el orden en que se
+# declaran, asi que declarada despues, 'rebuild-status' entra como si fuera
+# un id y el servidor contesta «Inspección no encontrada» (gotcha 2).
+#
+# Estuvo declarada en la linea 21971, o sea muerta: la barra de progreso de
+# IA y Peritaje llevaba meses sin salir y nadie lo sabia, porque el frontend
+# hace `.catch(() => {})` y un 404 no deja ni rastro. Lo caza para siempre
+# `scripts/check_rutas_tapadas.py`.
+@api_router.get("/inspections/rebuild-status")
+async def rebuild_status(_=Depends(require_admin)):
+    """Progreso en vivo de la reconstrucción de flota (para la barra del panel)."""
+    batch = await db.inspections.find(
+        {"rebuild_pass": {"$exists": True}, "deleted": {"$ne": True}},
+        {"_id": 0, "analysis_status": 1, "reviewed": 1, "rebuild_pass": 1,
+         "analysis.new_damages": 1}).to_list(5000)
+    total = len(batch)
+    if not total:
+        return {"active": False, "total": 0}
+    analyzed = sum(1 for i in batch if i.get("analysis_status") == "ok")
+    pending = sum(1 for i in batch if i.get("analysis_status") == "pending")
+    reviewed = sum(1 for i in batch if i.get("reviewed") is True)
+    with_new = sum(1 for i in batch
+                   if (i.get("analysis") or {}).get("new_damages"))
+    last = max((i.get("rebuild_pass") or "" for i in batch), default="")
+    return {
+        "active": pending > 0,
+        "total": total, "analyzed": analyzed, "pending": pending,
+        "reviewed": reviewed, "with_new_damages": with_new,
+        "pct": round(100 * analyzed / total) if total else 0,
+        "started_at": last,
+    }
+
+
 @api_router.get("/inspections/{inspection_id}", response_model=Inspection)
 async def get_inspection(inspection_id: str, _=Depends(require_admin)):
     insp = await db.inspections.find_one({"id": inspection_id}, {"_id": 0})
@@ -21968,29 +22002,6 @@ async def rebuild_fleet_damages(_=Depends(require_admin)):
     }
 
 
-@api_router.get("/inspections/rebuild-status")
-async def rebuild_status(_=Depends(require_admin)):
-    """Progreso en vivo de la reconstrucción de flota (para la barra del panel)."""
-    batch = await db.inspections.find(
-        {"rebuild_pass": {"$exists": True}, "deleted": {"$ne": True}},
-        {"_id": 0, "analysis_status": 1, "reviewed": 1, "rebuild_pass": 1,
-         "analysis.new_damages": 1}).to_list(5000)
-    total = len(batch)
-    if not total:
-        return {"active": False, "total": 0}
-    analyzed = sum(1 for i in batch if i.get("analysis_status") == "ok")
-    pending = sum(1 for i in batch if i.get("analysis_status") == "pending")
-    reviewed = sum(1 for i in batch if i.get("reviewed") is True)
-    with_new = sum(1 for i in batch
-                   if (i.get("analysis") or {}).get("new_damages"))
-    last = max((i.get("rebuild_pass") or "" for i in batch), default="")
-    return {
-        "active": pending > 0,
-        "total": total, "analyzed": analyzed, "pending": pending,
-        "reviewed": reviewed, "with_new_damages": with_new,
-        "pct": round(100 * analyzed / total) if total else 0,
-        "started_at": last,
-    }
 
 
 @api_router.post("/inspections/reanalyze-failed")
@@ -25497,8 +25508,36 @@ async def ai_detection_status(inspection_id: str, _=Depends(require_admin)):
     }
 
 
+def _cajas_de_cache(ai_result):
+    """Las cajas que el visor ya guardo para esta foto, o None si nunca pregunto.
+
+    SE MIRA LA MARCA, NO LA LISTA. Cuando Gemini contesta «esta foto no tiene
+    daños» lo que se guarda es una lista VACIA, y una lista vacia es
+    indistinguible de «no hay nada guardado» si solo se mira su longitud. Sin
+    esta distincion, el caso mas frecuente —la furgoneta esta bien— volveria a
+    preguntar en cada visita y la cache no serviria justo cuando mas falta hace.
+
+    Solo reconoce lo que guardo ESTE visor (`gemini_anotada`). Un registro de
+    YOLO sin detecciones sigue su camino de siempre —daños del analisis y,
+    si tampoco hay, Gemini—, que es el comportamiento que ya habia.
+    """
+    if (ai_result or {}).get("source") != "gemini_anotada":
+        return None
+    return list(ai_result.get("detections") or [])
+
+
 async def _detectar_cajas_danos(img_bytes):
-    """Pide a Gemini las cajas de daños sobre una foto. Devuelve lista [{label, box_2d, severity}]."""
+    """Pide a Gemini las cajas de daños sobre una foto.
+
+    Devuelve **(cajas, contesto)**, no solo la lista. El booleano no es un
+    adorno: sin el, una lista vacia significa a la vez «esta foto no tiene
+    daños» y «la llamada fallo», y quien quiera guardar el resultado en cache
+    no puede distinguirlos. Guardar un vacio que en realidad era un fallo
+    esconderia los daños de esa foto para siempre.
+
+    Y el caso de fallo aqui es el FRECUENTE, no la excepcion: la clave de
+    Gemini va en plan gratuito y se agota casi a diario.
+    """
     try:
         from google import genai as genai_sdk
         from google.genai import types as genai_types
@@ -25548,16 +25587,19 @@ async def _detectar_cajas_danos(img_bytes):
         globals()["_ultimo_raw_gemini"] = f"len={len(raw)} | {raw[:200]}"
         # Extraer el array JSON [...] esté donde esté (dentro de markdown o no)
         m = _re2.search(r"\[.*\]", raw, _re2.DOTALL)
-        json_str = m.group(0) if m else "[]"
+        if not raw or not m:
+            # Sin respuesta o sin array: eso NO es "no hay daños".
+            logger.warning("detectar_cajas sin respuesta utilizable (len=%d)", len(raw))
+            return [], False
         try:
-            data = _json2.loads(json_str)
+            data = _json2.loads(m.group(0))
         except Exception as _je:
-            logger.error(f"detectar_cajas parseo falló: {_je} | json_str={json_str[:100]}")
-            data = []
-        return data if isinstance(data, list) else []
+            logger.error(f"detectar_cajas parseo falló: {_je} | json_str={m.group(0)[:100]}")
+            return [], False
+        return (data if isinstance(data, list) else []), True
     except Exception as e:
         logger.error(f"detectar_cajas error: {type(e).__name__}: {e}")
-        return []
+        return [], False
 
 
 def _dibujar_numeros(img_bytes, boxes, start_num=0):
@@ -25778,7 +25820,38 @@ async def inspection_annotated(inspection_id: str, photo_index: int = 0, _=Depen
                 for det in _damages_to_detections(damages):
                     boxes.append({"label": det.label, "severity": det.severity, "box_2d": det.box_2d})
         if not boxes:
-            boxes = await _detectar_cajas_danos(img_bytes)
+            # ULTIMO RECURSO, Y SE GUARDA. Antes se le preguntaba a Gemini en
+            # VIVO en cada visita y no se apuntaba la respuesta en ninguna
+            # parte: medido el 06-09-2026 contra produccion, **34,5 s** para
+            # una inspeccion de 4 fotos, y esos son 4 tiros de una cuota
+            # gratuita de ~20 al dia. Abrir cinco fichas por la mañana dejaba
+            # sin IA al resto del dia — al analisis de verdad, no a esto.
+            #
+            # Le pasa al 3% de las inspecciones (121 de 4.196): las que no
+            # tienen detecciones de YOLO guardadas NI daños en su analisis.
+            # Al 93% restante no le afecta, que es justo por lo que no se veia.
+            guardadas = _cajas_de_cache(ai_result)
+            if guardadas is not None:
+                cajas_ia, contesto = guardadas, False
+            else:
+                cajas_ia, contesto = await _detectar_cajas_danos(img_bytes)
+            boxes = cajas_ia
+            if contesto:
+                # Solo si Gemini CONTESTO. Guardar un vacio que era un fallo de
+                # cuota dejaria esa foto sin daños para siempre.
+                try:
+                    guardado = InspectionAIResult(
+                        inspection_id=inspection_id, photo_index=idx,
+                        detections=[AIDetection(**{**c, "source": "gemini_anotada"})
+                                    for c in cajas_ia if len(c.get("box_2d") or []) == 4],
+                        source="gemini_anotada",
+                        updated_at=datetime.now(timezone.utc))
+                    await db.inspection_ai_results.update_one(
+                        {"inspection_id": inspection_id, "photo_index": idx},
+                        {"$set": serialize_doc(guardado.model_dump())}, upsert=True)
+                except Exception as e:                       # noqa: BLE001
+                    # Que falle el guardado NO puede impedir enseñar la foto.
+                    logger.warning("no se pudo guardar la deteccion en vivo: %s", e)
         annotated_bytes, _ = _dibujar_numeros(img_bytes, boxes, start_num=start_num)
         return annotated_bytes, boxes
 
@@ -26044,7 +26117,7 @@ async def inspection_pdf(inspection_id: str, boxes: int = 0, _=Depends(require_a
     # --- Foto con daños numerados + leyenda (solo si se pide con ?boxes=1, porque la IA tarda ~15s) ---
     if photo_bytes and boxes:
         try:
-            boxes = await _detectar_cajas_danos(photo_bytes[0])
+            boxes, _contesto = await _detectar_cajas_danos(photo_bytes[0])
             if boxes:
                 annotated, n_boxes = _dibujar_numeros(photo_bytes[0], boxes)
                 if y < 90*mm:
