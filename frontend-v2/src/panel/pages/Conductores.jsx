@@ -1542,7 +1542,7 @@ function DriverModal({ driver, centers, hasAccount, onSave, onDelete, onClose, o
 
                 <div>
                   <Label>DNI / NIE</Label>
-                  <input className="input w-full" value={form.dni || ''} onChange={e => set('dni', e.target.value)} placeholder="12345678A" />
+                  <input className="input w-full" value={form.dni || ''} onChange={e => set('dni', e.target.value)} placeholder="12345678A o X1234567A" />
                 </div>
 
                 <div>

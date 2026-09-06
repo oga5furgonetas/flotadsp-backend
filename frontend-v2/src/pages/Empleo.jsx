@@ -226,10 +226,14 @@ export default function Empleo() {
             <Campo label="Nombre y apellidos" value={f.nombre} onChange={(v) => set('nombre', v)} required autoComplete="name" />
             <div className="grid gap-4 sm:grid-cols-2">
               <Campo label="Teléfono" value={f.telefono} onChange={(v) => set('telefono', v)} required type="tel" autoComplete="tel" pista="Te llamamos aquí" />
+              {/* El ejemplo lleva LAS DOS FORMAS. Con un ejemplo de DNI a secas,
+                  quien tiene NIE se queda con la duda de si esto es para el — y
+                  ocho de nuestros trece candidatos entraron con NIE. */}
               <Campo label="DNI o NIE" value={f.dni} onChange={(v) => set('dni', v.toUpperCase())} required
-                placeholder="12345678A"
+                placeholder="12345678A o X1234567A"
                 pista={f.dni && !dniOk ? 'Revísalo' : 'Para el alta'}
-                mal={!!f.dni && !dniOk} />
+                mal={!!f.dni && !dniOk}
+                ayuda="DNI: 8 cifras y una letra (12345678A). NIE: X, Y o Z, 7 cifras y una letra (X1234567A)." />
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <Campo label="Ciudad" value={f.ciudad} onChange={(v) => set('ciudad', v)} autoComplete="address-level2" pista="Opcional" />
@@ -415,7 +419,7 @@ function Opcion({ activa, onClick, children }) {
   )
 }
 
-function Campo({ label, value, onChange, required, type = 'text', placeholder, autoComplete, pista, mal }) {
+function Campo({ label, value, onChange, required, type = 'text', placeholder, autoComplete, pista, mal, ayuda }) {
   return (
     <div>
       <div className="mb-1.5 flex items-baseline justify-between gap-2">
@@ -430,6 +434,10 @@ function Campo({ label, value, onChange, required, type = 'text', placeholder, a
         required={required} placeholder={placeholder} autoComplete={autoComplete}
         className={`w-full rounded-xl border bg-white px-3.5 py-3 text-base text-slate-900 placeholder-slate-400 outline-none focus:ring-2 ${
           mal ? 'border-red-400 focus:border-red-500 focus:ring-red-100' : 'border-slate-300 focus:border-orange-500 focus:ring-orange-100'}`} />
+      {/* «Revisalo» a secas no dice NADA. Quien lo ve no sabe si sobra un
+          digito, si falta la letra o si su documento no vale aqui — y se va.
+          Cuando algo esta mal, se dice exactamente que se espera. */}
+      {mal && ayuda && <p className="mt-1.5 text-[12.5px] leading-snug text-red-600">{ayuda}</p>}
     </div>
   )
 }

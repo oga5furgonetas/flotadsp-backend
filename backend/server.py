@@ -19261,7 +19261,7 @@ async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request):
     # por una regla nuestra es perder a alguien que si valia.
     dni = re.sub(r"[\s-]", "", _empleo_texto(datos.get("dni"), 20)).upper()
     if not (re.match(r"^\d{8}[A-Z]$", dni) or re.match(r"^[XYZ]\d{7}[A-Z]$", dni)):
-        raise HTTPException(400, "Escribe tu DNI o NIE (por ejemplo 12345678A)")
+        raise HTTPException(400, "Escribe tu DNI (8 cifras y una letra, 12345678A) o tu NIE (X, Y o Z, 7 cifras y una letra, X1234567A)")
     if not _empleo_texto(datos.get("disponibilidad"), 120):
         raise HTTPException(400, "Dinos cuando puedes empezar")
     if not datos.get("consiento"):
