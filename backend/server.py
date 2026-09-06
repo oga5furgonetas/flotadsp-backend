@@ -1433,6 +1433,10 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.inspection_ai_results,
         [("inspection_id", 1), ("photo_index", 1)], unique=True
     )
+    # Un paso de la tienda, un documento. Sin el unico, dos pulsaciones a la vez
+    # sobre la misma casilla dejan dos documentos del mismo paso y la pantalla
+    # empieza a contar mal el progreso.
+    await _idx(tdb.tienda_pasos, "paso", unique=True)
     await _idx(tdb.workshops, "id")
     await _idx(tdb.workshops, "center")
     await _idx(tdb.workshops, "convenios")
@@ -40778,6 +40782,213 @@ async def whc_plan_delete(center: str, _=Depends(require_admin)):
     sun, _sat = _sun_sat_week(datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     r = await db.whc_planes.delete_many({"center": (center or "").upper(), "week": sun})
     return {"ok": True, "borrados": r.deleted_count, "semana": sun}
+
+
+# =========================
+# TIENDA DE ROPA Y MATERIAL — preparación para vender
+# =========================
+"""Lo que hace falta para empezar a vender ropa y material a los conductores.
+
+No es una lista de tareas genérica: parte de las casillas se contestan solas
+con los datos de la app (cuánta gente activa hay, cuántas fichas tienen talla,
+cuántas altas al mes), porque una lista que hay que rellenar entera a mano deja
+de mirarse a la semana.
+
+Las CASILLAS viven aquí, en el código, y solo se guarda el ESTADO de cada una.
+Así se puede mejorar la lista sin migrar nada y sin que a nadie se le quede una
+versión vieja pegada.
+
+Los números de coste y margen son ESTIMACIONES de mercado a septiembre de 2026,
+no presupuestos: se sustituyen en cuanto haya tres presupuestos reales. La
+respuesta lo dice (`costes_estimados`) y la pantalla lo enseña, para que nadie
+los tome por ciertos.
+"""
+
+_TIENDA_COL = "tienda_pasos"
+
+# Pedido de referencia de todos los cálculos: 40 unidades, entrega en la nave.
+_TIENDA_UNIDADES_REF = 40
+_TIENDA_IVA = 0.21
+
+_TIENDA_CATALOGO = [
+    # coste = prenda + personalización, por unidad, a 40 uds
+    {"id": "camiseta", "nombre": "Camiseta técnica", "personalizacion": "Logo 1 color en pecho",
+     "coste": 6.00, "pvp": 18.00, "estrella": True},
+    {"id": "polo", "nombre": "Polo piqué", "personalizacion": "Logo bordado en pecho",
+     "coste": 10.45, "pvp": 25.00, "estrella": False},
+    {"id": "sudadera", "nombre": "Sudadera con capucha", "personalizacion": "Logo y nombre detrás",
+     "coste": 17.45, "pvp": 38.00, "estrella": True},
+    {"id": "chubasquero", "nombre": "Chubasquero / softshell", "personalizacion": "Logo bordado",
+     "coste": 24.50, "pvp": 52.00, "estrella": False},
+    {"id": "pantalon", "nombre": "Pantalón multibolsillos", "personalizacion": "Logo pequeño",
+     "coste": 16.50, "pvp": 32.00, "estrella": False},
+    {"id": "gorra", "nombre": "Gorra", "personalizacion": "Logo bordado",
+     "coste": 4.70, "pvp": 12.00, "estrella": False},
+]
+
+
+def _tienda_margen(art: dict) -> dict:
+    """El margen REAL: lo que queda tras quitarle el IVA al PVP.
+
+    Es donde la gente se hace ilusiones. Un PVP de 18 € con un coste de 6 € no
+    deja 12 €: deja 8,88 €, porque de esos 18 hay 3,12 € que son de Hacienda.
+    """
+    neto = round(art["pvp"] / (1 + _TIENDA_IVA), 2)
+    margen = round(neto - art["coste"], 2)
+    return {**art, "neto": neto, "margen": margen,
+            "margen_pct": round(100 * margen / neto) if neto else 0}
+
+
+_TIENDA_PASOS = [
+    # ---- FASE 1: el producto ----------------------------------------------
+    {"id": "logo_vectorial", "fase": "producto",
+     "titulo": "Logo en vectorial y su versión reducida",
+     "porque": "Sin un .ai o .svg no se puede pedir ni un presupuesto: el taller no estampa desde una captura de pantalla. Y la versión manuscrita tiene el trazo fino, así que a 8 cm sobre sudadera se rompe si no te dan una variante con el trazo engordado.",
+     "como": "Pídeselo a quien te hizo el diseño: logo vectorial, versión reducida de trazo engordado, versión a una tinta blanca y versión a una tinta cian.",
+     "coste": "0 € si ya lo tienes"},
+    {"id": "medidas_estampacion", "fase": "producto",
+     "titulo": "Medidas de estampación cerradas",
+     "porque": "Cada color de más y cada posición de más es dinero por unidad. Con dos tintas y una posición el margen se queda en el 50-60%; con cuatro colores y estampación delante y detrás baja al 35% sin vender una unidad más.",
+     "como": "Pecho máximo 8 cm, espalda 22 cm, máximo 2 tintas y nada de degradados.",
+     "coste": "0 €"},
+    {"id": "prenda_catalogo", "fase": "producto",
+     "titulo": "Elegir la prenda base de catálogo",
+     "porque": "La franja de contraste de la manga NO es serigrafía: o la trae la prenda de fábrica, o hay que coserla (mínimos por talla y modelo, coste disparado) o ponerla en vinilo (se cuartea con los lavados, y la manga es zona de roce). Eligiendo un blanco que ya la trae, sale gratis.",
+     "como": "Camiseta técnica de 140-160 g y sudadera de 280-320 g, en negro, buscando modelo con panel de contraste en manga. Pide muestra física antes de nada.",
+     "enlace": {"texto": "Ecamisetas — Roly, Makito, fábrica propia",
+                "url": "https://www.ecamisetas.com/catalogo/20/ropa-laboral"},
+     "coste": "Muestra: 15-40 €"},
+    {"id": "presupuestos", "fase": "producto",
+     "titulo": "Tres presupuestos de estampación",
+     "porque": "Hasta que no tengas tres cifras reales, todos los números de margen de esta pantalla son estimaciones de mercado. Con tres presupuestos comparables dejan de serlo.",
+     "como": "Manda el arte final y pide precio para 40, 80 y 150 unidades, desglosado en prenda + estampación + preparación + IVA, y con plazo. Pregunta expresamente serigrafía contra DTF: con trazo fino el DTF suele ganar.",
+     "enlace": {"texto": "Sregalo — distribuidor oficial Roly",
+                "url": "https://www.sregalo.com/textil-laboral"},
+     "coste": "0 €"},
+    {"id": "muestra_lavada", "fase": "producto",
+     "titulo": "Muestra física, lavada cinco veces",
+     "porque": "Es donde se ve si el cian se apaga o el vinilo se abre. Una muestra mala cuesta 40 €; un pedido de 40 malo cuesta 600 € y la credibilidad con tu gente.",
+     "como": "Produce 3-5 unidades, pruébatelas y lávalas cinco veces mirando costuras y estampado.",
+     "coste": "40-120 €"},
+    {"id": "campo_talla", "fase": "producto",
+     "titulo": "La talla, en la ficha de cada conductor",
+     "porque": "Sin talla guardada, cada pedido personalizado es una ronda de WhatsApps y una lista en papel. Es lo que convierte «vender ropa» en «un botón».",
+     "como": "Añadir el campo a la ficha y que cada conductor la rellene una vez desde su portal.",
+     "coste": "0 €"},
+
+    # ---- FASE 2: poder cobrar ---------------------------------------------
+    {"id": "alta_hacienda", "fase": "cobrar",
+     "titulo": "Alta en Hacienda con el epígrafe correcto",
+     "porque": "Para emitir una factura por vender ropa hay que estar dado de alta en la actividad. El epígrafe del comercio al por menor de prendas de vestir es el 651.2.",
+     "como": "Modelo 036 con el epígrafe 651.2 y su CNAE. El IAE está exento por debajo del millón de euros de facturación, pero el epígrafe hay que declararlo igual.",
+     "enlace": {"texto": "Modelo 036, paso a paso", "url": "https://declarando.es/modelo-036"},
+     "coste": "0 € el trámite"},
+    {"id": "alta_reta", "fase": "cobrar",
+     "titulo": "Autónomo o sociedad: desde dónde facturas",
+     "porque": "Hoy no tienes la sociedad constituida, así que no hay desde dónde emitir la factura de una sudadera. Sin esto resuelto, cobrar no es posible.",
+     "como": "O alta en el RETA, o esperar a constituir la sociedad, o —para la primera tanda— que el propio serigrafiador facture a cada conductor y tú solo organices el pedido: cero exposición fiscal y compruebas la demanda igual.",
+     "coste": "Cuota de autónomo si vas por ahí"},
+    {"id": "regimen_iva", "fase": "cobrar",
+     "titulo": "Decidir el régimen de IVA",
+     "porque": "Vender a tus conductores es venta a particulares, o sea comercio minorista, y eso normalmente cae en recargo de equivalencia: no liquidas IVA pero tu proveedor te carga un recargo. Vender a otros DSP es B2B y funciona distinto. Elegir mal cambia todos los márgenes de esta pantalla.",
+     "como": "Llévale a tu gestoría las dos vías de venta —a tus conductores y a otros DSP— y que te diga el régimen. No es una decisión para tomarla solo.",
+     "enlace": {"texto": "Epígrafes del IAE explicados",
+                "url": "https://www.infoautonomos.com/fiscalidad/los-epigrafes-iae/"},
+     "coste": "Consulta a gestoría"},
+    {"id": "pasarela", "fase": "cobrar",
+     "titulo": "Pasarela de pago para producto FÍSICO",
+     "porque": "La que ya tienes NO vale: Lemon Squeezy es solo para producto digital. Si cobras la ropa por ahí te arriesgas a que te cierren la cuenta, y de paso te quedas sin cobrar las suscripciones de FlotaDSP.",
+     "como": "Stripe aparte para el producto físico, o que el checkout lo ponga el proveedor y tú te lleves la comisión.",
+     "coste": "1,5-2,9% por cobro"},
+    {"id": "serie_facturas", "fase": "cobrar",
+     "titulo": "Serie de facturación y datos obligatorios",
+     "porque": "Una factura sin los datos obligatorios no le vale como gasto a quien te la pide, y quien te compre un kit de alta va a querer deducírselo.",
+     "como": "Serie propia y numeración correlativa, con NIF, nombre, dirección, base imponible e IVA desglosado.",
+     "coste": "0 €"},
+
+    # ---- FASE 3: de dónde salen los ingresos -------------------------------
+    {"id": "canal_pedido_nave", "fase": "canales",
+     "titulo": "Pedido agrupado por nave",
+     "porque": "Es la vía que puedes probar mañana: cobras por adelantado, cierras el viernes y pagas al proveedor el lunes. Riesgo de stock CERO, y agrupar es justo lo que hace barata la personalización.",
+     "como": "Se elige prenda, talla y nombre desde el portal del conductor, con fecha de cierre y un mínimo: si no llegas a 30 unidades no lanzas y devuelves.",
+     "coste": "0 € de stock"},
+    {"id": "canal_kit_alta", "fase": "canales",
+     "titulo": "Kit de alta, lo paga la empresa",
+     "porque": "Aquí está el ingreso recurrente, y no depende de que a nadie le apetezca comprar: cada persona nueva necesita ropa, y eso pasa todos los meses. Lo decide quien tiene presupuesto, no el repartidor.",
+     "como": "Se dispara al pasar un candidato a contratado, con la talla ya en su ficha. 2 camisetas + 1 sudadera + 1 gorra: coste 34,15 €, PVP al DSP 65 €.",
+     "coste": "Se cobra al DSP"},
+    {"id": "canal_otros_dsp", "fase": "canales",
+     "titulo": "Los otros DSP que usen FlotaDSP",
+     "porque": "Es lo que multiplica: el mismo mecanismo por cada empresa que entre. Y es argumento de venta de la propia app, no solo un ingreso aparte.",
+     "como": "Cuando haya un segundo DSP en la app, se le ofrece su propia tienda con su logo.",
+     "coste": "0 €"},
+    {"id": "canal_afiliacion", "fase": "canales",
+     "titulo": "Lo genérico, por afiliación",
+     "porque": "Powerbanks y soportes de móvil compiten contra Amazon Prime: mismo producto, más barato y mañana en casa. Comprar stock de eso es dejar dinero parado en una caja.",
+     "como": "Enlace de afiliado y comisión. Cero stock, cero devoluciones, cero riesgo.",
+     "coste": "0 €"},
+]
+
+_TIENDA_FASES = [
+    {"id": "producto", "titulo": "El producto", "sub": "Qué vendes y a cuánto te sale"},
+    {"id": "cobrar", "titulo": "Poder cobrar", "sub": "Sin esto no puedes emitir una factura"},
+    {"id": "canales", "titulo": "De dónde salen los ingresos", "sub": "Las vías, por lo que valen"},
+]
+
+
+async def _tienda_datos_vivos() -> dict:
+    """Lo que la app ya sabe y no hay que preguntarle a nadie."""
+    activos = await db.drivers.count_documents({"active": True})
+    con_talla = await db.drivers.count_documents(
+        {"active": True, "talla": {"$nin": [None, ""]}})
+    desde = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    altas = await db.drivers.count_documents({"created_at": {"$gte": desde}})
+    centros = sorted(c for c in await db.drivers.distinct("center") if c)
+    return {"conductores_activos": activos, "con_talla": con_talla,
+            "altas_30d": altas, "centros": centros}
+
+
+@api_router.get("/tienda/preparacion")
+async def tienda_preparacion(_=Depends(require_admin)):
+    """Todo lo que hace falta para vender ropa, y por dónde vas."""
+    guardado = {p["paso"]: p async for p in db[_TIENDA_COL].find({}, {"_id": 0})}
+    pasos = []
+    for p in _TIENDA_PASOS:
+        est = guardado.get(p["id"]) or {}
+        pasos.append({**p, "hecho": bool(est.get("hecho")),
+                      "nota": est.get("nota") or "",
+                      "at": est.get("at"), "por": est.get("por")})
+    hechos = sum(1 for p in pasos if p["hecho"])
+    return {
+        "pasos": pasos, "fases": _TIENDA_FASES,
+        "hechos": hechos, "total": len(pasos),
+        "pct": round(100 * hechos / len(pasos)) if pasos else 0,
+        "catalogo": [_tienda_margen(a) for a in _TIENDA_CATALOGO],
+        "unidades_ref": _TIENDA_UNIDADES_REF,
+        "datos": await _tienda_datos_vivos(),
+        # Que quede escrito en la respuesta, no solo en la pantalla: son
+        # estimaciones hasta que haya presupuestos de verdad.
+        "costes_estimados": True,
+    }
+
+
+@api_router.post("/tienda/preparacion")
+async def tienda_marcar_paso(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Marca o desmarca un paso, con su nota."""
+    paso = _texto_cuerpo(body.get("paso"), 60)
+    if paso not in {p["id"] for p in _TIENDA_PASOS}:
+        # Solo pasos que existen: si no, el estado se llena de basura que
+        # despues nadie sabe a que corresponde.
+        raise HTTPException(400, "Ese paso no existe")
+    hecho = bool(body.get("hecho"))
+    nota = _texto_cuerpo(body.get("nota"), 400)
+    await db[_TIENDA_COL].update_one(
+        {"paso": paso},
+        {"$set": {"paso": paso, "hecho": hecho, "nota": nota,
+                  "at": datetime.now(timezone.utc).isoformat(),
+                  "por": user.get("name") or user.get("username") or ""}},
+        upsert=True)
+    return {"ok": True, "paso": paso, "hecho": hecho}
 
 
 app.include_router(auth_router)
