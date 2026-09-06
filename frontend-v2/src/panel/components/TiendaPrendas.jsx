@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Plus, Trash2, Pencil, X, Shirt, RotateCcw } from 'lucide-react'
-import { tiendaPrendas, tiendaCrearPrenda, tiendaEditarPrenda, tiendaArchivarPrenda } from '../api'
+import { Loader2, Plus, Trash2, Pencil, X, Shirt, RotateCcw, Wand2, Copy, Check, Calculator } from 'lucide-react'
+import {
+  tiendaPrendas, tiendaCrearPrenda, tiendaEditarPrenda, tiendaArchivarPrenda,
+  tiendaInterpretar, tiendaFicha,
+} from '../api'
 
 /* ────────────────────────────────────────────────────────────────────────────
    EL TALLER DE PRENDAS — crear tu propia ropa y verla antes de encargarla
@@ -140,85 +143,109 @@ export default function TiendaPrendas() {
 
 /* ───────────────────────── El dibujo ───────────────────────── */
 
-/* Cada prenda es un `path` y nada más: sin degradados ni sombras, porque lo
-   que se está decidiendo es dónde va el logo y de qué tamaño, no si el dibujo
-   es bonito. */
+/* Cada prenda son cuatro o cinco trazos, y ni uno mas: lo que se decide aqui
+   es donde va el logo y de que tamaño, no si el dibujo es bonito. Aun asi
+   tienen que PARECER ropa — la primera version dibujaba la capucha como una
+   bola gris flotando sobre los hombros y el cuerpo como un ladrillo, y con eso
+   no se puede decidir nada.
+
+   Lo que hace que se lean: hombros redondeados en vez de esquinas, mangas que
+   se estrechan y acaban en puño, bajo con su costura, y en la sudadera la
+   capucha DETRAS de los hombros (se dibuja primero y el cuerpo la tapa por
+   abajo, que es como se ve de verdad) con sus cordones y su bolsillo canguro.
+
+   Los seis se miraron en pantalla, en negro y en blanco, antes de entrar aqui.
+
+   `c` es el color de la prenda, `b` el borde y `l` la linea de costura. */
 const CUERPOS = {
   camiseta: {
-    trazos: (c, b) => (
+    trazos: (c, b, l) => (
       <>
-        <path d="M 58,28 Q 100,46 142,28 L 172,52 L 150,78 L 134,66 L 134,232 L 66,232 L 66,66 L 50,78 L 28,52 Z" fill={c} stroke={b} strokeWidth="0.8" />
-        <path d="M 64,31 Q 100,49 136,31" fill="none" stroke={b} strokeWidth="1" />
+        <path d="M 70,38 Q 100,58 130,38 L 154,45 C 167,50 173,58 172,65 L 161,93 C 157,99 148,99 144,94 L 138,87 L 138,220 C 138,228 133,233 125,233 L 75,233 C 67,233 62,228 62,220 L 62,87 L 56,94 C 52,99 43,99 39,93 L 28,65 C 27,58 33,50 46,45 Z" fill={c} stroke={b} strokeWidth="1" />
+        <path d="M 76,40 Q 100,62 124,40" fill="none" stroke={l} strokeWidth="1.6" />
+        <path d="M 145,88 L 160,88 M 55,88 L 40,88" fill="none" stroke={l} strokeWidth="1.2" />
+        <path d="M 62,222 L 138,222" fill="none" stroke={l} strokeWidth="1" />
       </>
     ),
-    mangas: [[150, 74, 168, 54], [50, 74, 32, 54]],
+    mangas: [[166, 55, 157, 86], [34, 55, 43, 86]],
   },
   polo: {
-    trazos: (c, b) => (
+    trazos: (c, b, l) => (
       <>
-        <path d="M 58,28 Q 100,46 142,28 L 172,52 L 150,78 L 134,66 L 134,232 L 66,232 L 66,66 L 50,78 L 28,52 Z" fill={c} stroke={b} strokeWidth="0.8" />
-        <path d="M 82,30 L 96,52 L 100,44 L 104,52 L 118,30" fill="none" stroke={b} strokeWidth="1.2" />
-        <path d="M 96,52 L 96,84 M 104,52 L 104,84" fill="none" stroke={b} strokeWidth="1" />
+        <path d="M 70,38 Q 100,54 130,38 L 154,45 C 167,50 173,58 172,65 L 161,93 C 157,99 148,99 144,94 L 138,87 L 138,220 C 138,228 133,233 125,233 L 75,233 C 67,233 62,228 62,220 L 62,87 L 56,94 C 52,99 43,99 39,93 L 28,65 C 27,58 33,50 46,45 Z" fill={c} stroke={b} strokeWidth="1" />
+        <path d="M 78,38 L 96,60 L 100,52 L 104,60 L 122,38" fill={l} stroke={b} strokeWidth="1" />
+        <path d="M 96,60 L 95,92 M 104,60 L 105,92" fill="none" stroke={l} strokeWidth="1.3" />
+        <circle cx="99" cy="70" r="1.6" fill={l} />
+        <circle cx="99" cy="84" r="1.6" fill={l} />
+        <path d="M 62,222 L 138,222" fill="none" stroke={l} strokeWidth="1" />
       </>
     ),
-    mangas: [[150, 74, 168, 54], [50, 74, 32, 54]],
+    mangas: [[166, 55, 157, 86], [34, 55, 43, 86]],
   },
   sudadera: {
-    trazos: (c, b) => (
+    trazos: (c, b, l) => (
       <>
-        <path d="M 72,36 C 72,6 128,6 128,36 L 122,52 Q 100,68 78,52 Z" fill={c} stroke={b} strokeWidth="0.8" opacity="0.82" />
-        <path d="M 58,36 Q 100,56 142,36 L 176,62 L 152,92 L 136,78 L 136,240 L 64,240 L 64,78 L 48,92 L 24,62 Z" fill={c} stroke={b} strokeWidth="0.8" />
-        <path d="M 66,41 Q 100,60 134,41" fill="none" stroke={b} strokeWidth="1" />
-        <path d="M 90,66 L 90,92 M 110,66 L 110,92" fill="none" stroke={b} strokeWidth="1.4" />
-        <rect x="74" y="188" width="52" height="30" rx="3" fill="none" stroke={b} strokeWidth="1" />
+        <path d="M 70,58 C 70,20 130,20 130,58 L 130,80 L 70,80 Z" fill={c} stroke={b} strokeWidth="1" />
+        <path d="M 78,58 C 80,32 120,32 122,58" fill="none" stroke={l} strokeWidth="1.6" />
+        <path d="M 70,42 Q 100,66 130,42 L 156,50 C 170,55 177,64 176,72 L 164,102 C 160,109 150,109 146,103 L 140,95 L 140,216 L 60,216 L 60,95 L 54,103 C 50,109 40,109 36,102 L 24,72 C 23,64 30,55 44,50 Z" fill={c} stroke={b} strokeWidth="1" />
+        <path d="M 60,216 L 140,216 L 140,232 C 140,235 137,237 134,237 L 66,237 C 63,237 60,235 60,232 Z" fill={c} stroke={b} strokeWidth="1" />
+        <path d="M 70,219 L 70,235 M 82,219 L 82,235 M 94,219 L 94,235 M 106,219 L 106,235 M 118,219 L 118,235 M 130,219 L 130,235" stroke={l} strokeWidth="0.8" />
+        <path d="M 146,96 L 164,96 M 54,96 L 36,96" stroke={l} strokeWidth="1.2" />
+        <path d="M 92,66 L 90,98 M 108,66 L 110,98" stroke="#D8DCDF" strokeWidth="1.8" fill="none" />
+        <circle cx="90" cy="99" r="1.8" fill="#D8DCDF" />
+        <circle cx="110" cy="99" r="1.8" fill="#D8DCDF" />
+        <path d="M 72,168 L 128,168 L 132,206 L 68,206 Z" fill="none" stroke={l} strokeWidth="1.3" />
       </>
     ),
-    mangas: [[152, 88, 172, 64], [48, 88, 28, 64]],
+    mangas: [[170, 60, 160, 95], [30, 60, 40, 95]],
   },
   chubasquero: {
-    trazos: (c, b) => (
+    trazos: (c, b, l) => (
       <>
-        <path d="M 58,36 Q 100,56 142,36 L 176,62 L 152,92 L 136,78 L 136,240 L 64,240 L 64,78 L 48,92 L 24,62 Z" fill={c} stroke={b} strokeWidth="0.8" />
-        <path d="M 72,32 L 100,52 L 128,32" fill="none" stroke={b} strokeWidth="1.4" />
-        <path d="M 100,52 L 100,240" fill="none" stroke={b} strokeWidth="1.2" />
-        <rect x="70" y="176" width="24" height="12" rx="2" fill="none" stroke={b} strokeWidth="1" />
-        <rect x="106" y="176" width="24" height="12" rx="2" fill="none" stroke={b} strokeWidth="1" />
+        <path d="M 72,44 L 100,58 L 128,44 L 130,30 L 70,30 Z" fill={c} stroke={b} strokeWidth="1" />
+        <path d="M 70,42 Q 100,62 130,42 L 156,50 C 170,55 177,64 176,72 L 164,102 C 160,109 150,109 146,103 L 140,95 L 140,228 C 140,232 137,235 133,235 L 67,235 C 63,235 60,232 60,228 L 60,95 L 54,103 C 50,109 40,109 36,102 L 24,72 C 23,64 30,55 44,50 Z" fill={c} stroke={b} strokeWidth="1" />
+        <path d="M 100,58 L 100,235" stroke={l} strokeWidth="1.6" fill="none" />
+        <path d="M 70,168 L 92,168 L 92,182 L 70,182 Z M 108,168 L 130,168 L 130,182 L 108,182 Z" fill="none" stroke={l} strokeWidth="1.2" />
+        <path d="M 146,96 L 164,96 M 54,96 L 36,96" stroke={l} strokeWidth="1.2" />
       </>
     ),
-    mangas: [[152, 88, 172, 64], [48, 88, 28, 64]],
+    mangas: [[170, 60, 160, 95], [30, 60, 40, 95]],
   },
   pantalon: {
-    trazos: (c, b) => (
+    trazos: (c, b, l) => (
       <>
-        <rect x="62" y="30" width="76" height="14" rx="2" fill={c} stroke={b} strokeWidth="0.8" />
-        <path d="M 62,44 L 138,44 L 131,244 L 108,244 L 100,112 L 92,244 L 69,244 Z" fill={c} stroke={b} strokeWidth="0.8" />
-        <rect x="68" y="70" width="22" height="26" rx="2" fill="none" stroke={b} strokeWidth="1" />
-        <rect x="110" y="70" width="22" height="26" rx="2" fill="none" stroke={b} strokeWidth="1" />
+        <path d="M 60,34 L 140,34 L 140,52 L 60,52 Z" fill={c} stroke={b} strokeWidth="1" />
+        <path d="M 60,52 L 140,52 L 133,236 C 133,240 130,242 126,242 L 110,242 C 106,242 104,240 104,236 L 100,120 L 96,236 C 96,240 94,242 90,242 L 74,242 C 70,242 67,240 67,236 Z" fill={c} stroke={b} strokeWidth="1" />
+        <path d="M 60,42 L 140,42" stroke={l} strokeWidth="1" />
+        <path d="M 66,66 L 88,66 L 90,96 L 68,96 Z M 134,66 L 112,66 L 110,96 L 132,96 Z" fill="none" stroke={l} strokeWidth="1.2" />
+        <path d="M 100,52 L 100,120" stroke={l} strokeWidth="1" fill="none" />
       </>
     ),
     mangas: [],
   },
   gorra: {
-    trazos: (c, b) => (
+    trazos: (c, b, l) => (
       <>
-        <path d="M 58,150 C 58,100 142,100 142,150 Z" fill={c} stroke={b} strokeWidth="0.8" />
-        <rect x="58" y="150" width="84" height="9" fill={c} stroke={b} strokeWidth="0.8" />
-        <path d="M 142,154 C 176,155 190,170 162,176 L 142,168 Z" fill={c} stroke={b} strokeWidth="0.8" />
+        <path d="M 56,180 C 56,126 144,126 144,180 Z" fill={c} stroke={b} strokeWidth="1" />
+        <path d="M 100,129 L 100,180 M 78,134 C 86,150 88,166 88,180 M 122,134 C 114,150 112,166 112,180" fill="none" stroke={l} strokeWidth="1" />
+        <circle cx="100" cy="129" r="3.5" fill={l} stroke={b} strokeWidth="0.8" />
+        <path d="M 56,180 L 144,180 L 144,191 L 56,191 Z" fill={c} stroke={b} strokeWidth="1" />
+        <path d="M 144,183 C 178,185 192,202 162,210 L 143,202 Z" fill={c} stroke={b} strokeWidth="1" />
       </>
     ),
     mangas: [],
   },
 }
 
-/* Dónde cae cada estampación en el dibujo, por tipo de prenda. Van aquí y no
-   repartidas por el componente para que no puedan descuadrarse entre sí. */
+/* Donde cae cada estampacion en el dibujo, por tipo de prenda. Van aqui y no
+   repartidas por el componente para que no puedan descuadrarse entre si. */
 const ANCLAS = {
-  camiseta: { pecho: [82, 100], espalda: [100, 108], manga: [158, 66] },
-  polo: { pecho: [82, 104], espalda: [100, 108], manga: [158, 66] },
-  sudadera: { pecho: [84, 112], espalda: [100, 118], manga: [160, 78] },
-  chubasquero: { pecho: [84, 112], espalda: [100, 118], manga: [160, 78] },
-  pantalon: { pecho: [78, 60], espalda: [100, 120], manga: [100, 200] },
-  gorra: { pecho: [100, 132], espalda: [100, 132], manga: [100, 132] },
+  camiseta: { pecho: [82, 112], espalda: [100, 122], manga: [156, 68] },
+  polo: { pecho: [82, 118], espalda: [100, 122], manga: [156, 68] },
+  sudadera: { pecho: [84, 122], espalda: [100, 132], manga: [160, 78] },
+  chubasquero: { pecho: [80, 122], espalda: [100, 132], manga: [160, 78] },
+  pantalon: { pecho: [78, 62], espalda: [100, 150], manga: [100, 200] },
+  gorra: { pecho: [100, 158], espalda: [100, 158], manga: [100, 158] },
 }
 
 export function Lienzo({ prenda, datos, cara = 'delante' }) {
@@ -226,6 +253,9 @@ export function Lienzo({ prenda, datos, cara = 'delante' }) {
   const tipo = CUERPOS[prenda.tipo] ? prenda.tipo : 'camiseta'
   const cuerpo = CUERPOS[tipo]
   const borde = color.claro ? '#C9CFD3' : '#0A0C0D'
+  // La costura tiene que verse sobre la prenda: mas clara en las oscuras y mas
+  // oscura en las claras. Con un gris fijo, en la blanca desaparecia.
+  const costura = color.claro ? '#DDE2E6' : '#2E343A'
   const anclas = ANCLAS[tipo]
   const tintaHex = (id) => ((datos.tintas || []).find((t) => t.id === id) || {}).hex || '#F5F7F8'
 
@@ -238,7 +268,7 @@ export function Lienzo({ prenda, datos, cara = 'delante' }) {
   return (
     <svg viewBox="0 0 200 260" width="100%" role="img"
       aria-label={`Vista ${cara} de ${prenda.nombre || 'la prenda'}`}>
-      {cuerpo.trazos(color.hex, borde)}
+      {cuerpo.trazos(color.hex, borde, costura)}
       {franja && cuerpo.mangas.map(([x1, y1, x2, y2], i) => (
         <path key={i} d={`M ${x1},${y1} L ${x2},${y2}`} fill="none"
           stroke={tintaHex((prenda.estampaciones?.[0]?.tinta) || 'cian')} strokeWidth="2.6" />
@@ -280,7 +310,56 @@ function Editor({ prenda, datos, onCerrar, onGuardado }) {
   const [cara, setCara] = useState('delante')
   const [guardando, setGuardando] = useState(false)
   const [err, setErr] = useState('')
+  const [pedido, setPedido] = useState('')
+  const [leyendo, setLeyendo] = useState(false)
+  const [lectura, setLectura] = useState(null)
+  const [ficha, setFicha] = useState(null)
+  const [calculando, setCalculando] = useState(false)
+  const [copiado, setCopiado] = useState(false)
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }))
+
+  /* Pidelo con palabras. NO lo hace una IA a proposito: la clave de Gemini va
+     en plan gratuito con 20 peticiones al dia para TODO el backend, asi que un
+     generador ahi estaria muerto media jornada y encima le robaria cuota al
+     analisis de daños. El vocabulario aqui es nuestro y cerrado —seis prendas,
+     cinco colores, cuatro tintas, tres posiciones—, o sea que no hace falta un
+     modelo: hace falta un diccionario. Y sale siempre lo mismo. */
+  const dibujar = async () => {
+    if (pedido.trim().length < 3) return
+    setLeyendo(true); setErr(''); setFicha(null)
+    try {
+      const r = await tiendaInterpretar(pedido.trim())
+      const rec = r.data.receta
+      setF((x) => ({ ...x, ...rec, nombre: x.nombre || rec.nombre,
+        coste: rec.coste ?? '', pvp: x.pvp ?? '' }))
+      setLectura({ entendido: r.data.entendido, dudas: r.data.dudas })
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No he podido interpretarlo.')
+    } finally { setLeyendo(false) }
+  }
+
+  const calcular = async () => {
+    setCalculando(true); setErr('')
+    try {
+      const cuerpo = {
+        nombre: f.nombre.trim() || 'Prenda', tipo: f.tipo, color: f.color,
+        tallas: f.tallas, estampaciones: f.estampaciones,
+        franja_manga: !!f.franja_manga,
+      }
+      const r = await tiendaFicha(cuerpo, 40)
+      setFicha(r.data)
+      if (!f.pvp) set('pvp', String(r.data.pvp_sugerido).replace('.', ','))
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No he podido calcularlo.')
+    } finally { setCalculando(false) }
+  }
+
+  const copiarTaller = () => {
+    navigator.clipboard?.writeText(ficha?.texto_para_el_taller || '').then(() => {
+      setCopiado(true)
+      setTimeout(() => setCopiado(false), 1800)
+    }).catch(() => {})
+  }
 
   const tintasUsadas = new Set((f.estampaciones || []).map((e) => e.tinta))
   const demasiadas = tintasUsadas.size > (datos.max_tintas || 2)
@@ -332,6 +411,33 @@ function Editor({ prenda, datos, onCerrar, onGuardado }) {
         <div className="grid gap-5 sm:grid-cols-[1fr_240px]">
           {/* Formulario */}
           <div className="order-2 space-y-3 sm:order-1">
+            {/* Dilo con palabras y sale dibujada */}
+            <div className="rounded-xl border border-brand-500/25 bg-brand-500/[0.06] p-3">
+              <label className="label mb-1.5">Dime como la quieres</label>
+              <textarea rows={2} className="input resize-none text-[13px]"
+                placeholder="sudadera negra con el logo pequeno en cian en el pecho, flotadsp grande y el nombre detras, y franja en la manga"
+                value={pedido} onChange={(e) => setPedido(e.target.value)} />
+              <div className="mt-2 flex items-center gap-2">
+                <button type="button" onClick={dibujar} disabled={leyendo || pedido.trim().length < 3}
+                  className="btn-primary inline-flex items-center gap-1.5 py-1.5 text-[12.5px] disabled:opacity-50">
+                  {leyendo ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />} Dibujala
+                </button>
+                <span className="text-[11.5px] text-dark-500">Luego la retocas abajo.</span>
+              </div>
+              {lectura && (
+                <div className="mt-2 space-y-1 text-[12px]">
+                  {lectura.entendido.length > 0 && (
+                    <p className="text-dark-400">
+                      <b className="text-dark-300">He entendido:</b> {lectura.entendido.join(' · ')}
+                    </p>
+                  )}
+                  {lectura.dudas.map((d, i) => (
+                    <p key={i} className="text-amber-300">{d}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div>
               <label className="label">Nombre</label>
               <input className="input" value={f.nombre} placeholder="Camiseta OGA5"
@@ -468,9 +574,83 @@ function Editor({ prenda, datos, onCerrar, onGuardado }) {
               va a ver puesta. Es una maqueta para decidir y para enseñarle al taller, no
               el archivo de estampación.
             </p>
+            <button onClick={calcular} disabled={calculando}
+              className="btn-secondary mt-3 inline-flex w-full items-center justify-center gap-1.5 text-[12px]">
+              {calculando ? <Loader2 size={13} className="animate-spin" /> : <Calculator size={13} />}
+              Como hacerla y a cuanto sale
+            </button>
           </div>
         </div>
+
+        {ficha && <Ficha ficha={ficha} onCopiar={copiarTaller} copiado={copiado} />}
       </div>
+    </div>
+  )
+}
+
+/* Como se hace y a cuanto sale. Los costes son ESTIMACIONES y se dice aqui, no
+   en una nota al pie: con un numero que parece cerrado se encargan 40 unidades. */
+function Ficha({ ficha, onCopiar, copiado }) {
+  return (
+    <div className="mt-5 rounded-xl border border-dark-800 bg-dark-900/40 p-4">
+      <div className="mb-2 text-[13px] font-semibold text-dark-100">
+        Como hacerla · pedido de {ficha.unidades} unidades
+      </div>
+
+      <div className="space-y-2">
+        {ficha.lineas.map((l, i) => (
+          <div key={i} className="rounded-lg border border-dark-800 px-3 py-2 text-[12.5px]">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+              <span className="font-medium text-dark-100">{l.que}</span>
+              <span className="text-brand-300">{l.tecnica}</span>
+            </div>
+            <div className="mt-0.5 text-[11.5px] text-dark-500">{l.porque}</div>
+            {(l.por_unidad > 0 || l.preparacion > 0) && (
+              <div className="mt-1 text-[11.5px] tabular-nums text-dark-400">
+                {eur(l.por_unidad)}/unidad
+                {l.preparacion > 0 && <> · {eur(l.preparacion)} de preparacion, una sola vez</>}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <Cifra t="Prenda" v={eur(ficha.coste_prenda)} />
+        <Cifra t="Estampacion" v={eur(ficha.coste_estampacion)} />
+        <Cifra t="Preparacion" v={eur(ficha.preparacion_por_unidad) + '/ud'} />
+        <Cifra t="Te cuesta" v={eur(ficha.coste)} fuerte />
+      </div>
+
+      <div className="mt-2 rounded-lg border border-emerald-500/25 bg-emerald-500/[0.07] px-3 py-2 text-[12.5px] text-dark-300">
+        Vendela a <b className="text-emerald-300">{eur(ficha.pvp_sugerido)}</b> y te quedan{' '}
+        <b className="text-emerald-300">{eur(ficha.margen)}</b> ({ficha.margen_pct}%), ya quitado el IVA.
+        <span className="text-dark-500"> Objetivo: {ficha.objetivo_pct}%.</span>
+      </div>
+
+      <div className="mt-3">
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-[12px] font-medium text-dark-300">Que mandarle al taller</span>
+          <button onClick={onCopiar} className="inline-flex items-center gap-1 text-[12px] text-brand-400 hover:text-brand-300">
+            {copiado ? <Check size={12} /> : <Copy size={12} />} {copiado ? 'Copiado' : 'Copiar'}
+          </button>
+        </div>
+        <pre className="overflow-x-auto whitespace-pre-wrap rounded-lg border border-dark-800 bg-dark-950 p-3 text-[11.5px] leading-relaxed text-dark-300">{ficha.texto_para_el_taller}</pre>
+      </div>
+
+      <p className="mt-2 text-[11.5px] leading-snug text-dark-500">
+        Los costes son estimaciones de mercado, no presupuestos. Manda ese texto a tres
+        talleres y sustituye los numeros: entonces este margen es tu cuenta.
+      </p>
+    </div>
+  )
+}
+
+function Cifra({ t, v, fuerte }) {
+  return (
+    <div className="rounded-lg border border-dark-800 px-2.5 py-1.5">
+      <div className="text-[11px] text-dark-500">{t}</div>
+      <div className={`text-[13px] tabular-nums ${fuerte ? 'font-semibold text-dark-100' : 'text-dark-300'}`}>{v}</div>
     </div>
   )
 }

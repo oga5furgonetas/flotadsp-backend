@@ -41235,5 +41235,381 @@ async def tienda_archivar_prenda(prenda_id: str, user: dict = Depends(require_ad
     return {"ok": True, "archivada": prenda_id}
 
 
+# -------------------------------------------------------------------------
+# TIENDA — PIDELO CON PALABRAS, Y LUEGO COMO SE HACE
+# -------------------------------------------------------------------------
+"""Describes la prenda y sale dibujada; cuando te gusta, te dice como hacerla.
+
+POR QUE NO LO HACE UNA IA. Seria lo facil y seria peor: la clave de Gemini va
+en plan gratuito con **20 peticiones al dia para todo el backend** (comprobado
+el 06-09-2026 en los logs: `quotaId GenerateRequestsPerDayPerProjectPerModel-
+FreeTier, limit 20`). Un generador de bocetos ahi funcionaria un rato por la
+manana y el resto del dia diria «no disponible» — y ademas le robaria cuota al
+analisis de daños, que es lo que de verdad vale.
+
+Aqui el vocabulario es CERRADO y nuestro: seis prendas, cinco colores, cuatro
+tintas, tres posiciones. Eso no necesita un modelo, necesita un diccionario. Y
+asi es instantaneo, gratis, no se cae nunca y da SIEMPRE lo mismo con la misma
+frase — que en algo que va a acabar en un pedido de 40 unidades importa mas que
+ser listo.
+
+Y lo que no entiende, LO DICE. Un interprete que rellena huecos por su cuenta
+te deja encargar una prenda que no habias pedido.
+"""
+
+# Cada palabra que reconocemos, con la forma en que la escribe la gente.
+# Se comparan sin tildes y en minusculas.
+_BOC_TIPOS = {
+    "camiseta": ("camiseta", "camisetas", "playera", "tshirt", "t-shirt"),
+    "sudadera": ("sudadera", "sudaderas", "hoodie", "capucha", "buzo"),
+    "polo": ("polo", "polos"),
+    "chubasquero": ("chubasquero", "impermeable", "softshell", "cortavientos", "chaqueta"),
+    "pantalon": ("pantalon", "pantalones", "pantalon de trabajo"),
+    "gorra": ("gorra", "gorras", "cap"),
+}
+_BOC_COLORES = {
+    "negro": ("negro", "negra", "negras", "negros"),
+    "antracita": ("antracita", "gris oscuro", "grafito"),
+    "marino": ("marino", "azul marino", "navy"),
+    "blanco": ("blanco", "blanca", "blancas", "blancos"),
+    "gris": ("gris", "jaspeado", "gris jaspeado"),
+}
+_BOC_TINTAS = {
+    "cian": ("cian", "turquesa", "verde agua"),
+    "azul": ("azul", "azulon"),
+    "blanco": ("blanco", "blanca"),
+    "negro": ("negro", "negra"),
+}
+_BOC_POSICIONES = {
+    "pecho": ("pecho", "delante", "delantera", "frontal", "corazon"),
+    "espalda": ("espalda", "detras", "atras", "trasera", "trasero"),
+    "manga": ("manga", "mangas", "brazo"),
+}
+# Tamaños en palabras -> centimetros, por posicion.
+_BOC_TAMANOS = {
+    "pequeno": {"pecho": 6, "espalda": 15, "manga": 5},
+    "mediano": {"pecho": 8, "espalda": 22, "manga": 8},
+    "grande": {"pecho": 8, "espalda": 28, "manga": 11},
+}
+_BOC_PALABRAS_TAMANO = {
+    "pequeno": ("pequeno", "pequena", "discreto", "discreta", "mini", "chico"),
+    "grande": ("grande", "gordo", "enorme", "bien grande", "a lo ancho"),
+    "mediano": ("mediano", "normal", "medio"),
+}
+
+
+def _boc_normaliza(t: str) -> str:
+    """Minusculas y sin tildes, que es como se compara todo aqui."""
+    t = (t or "").lower()
+    for a, b in (("á", "a"), ("é", "e"), ("í", "i"), ("ó", "o"), ("ú", "u"), ("ü", "u"), ("ñ", "n")):
+        t = t.replace(a, b)
+    return t
+
+
+def _boc_busca(texto: str, tabla: dict):
+    """El primer id de la tabla que aparece en el texto, y donde aparece.
+
+    Se prueban las palabras MAS LARGAS primero: sin eso, 'azul marino' se
+    reconoceria como 'azul' y saldria un color que no es.
+    """
+    mejor = None
+    for clave, palabras in tabla.items():
+        for pal in sorted(palabras, key=len, reverse=True):
+            i = texto.find(pal)
+            if i >= 0 and (mejor is None or i < mejor[1] or len(pal) > mejor[2]):
+                if mejor is None or i < mejor[1]:
+                    mejor = (clave, i, len(pal))
+    return mejor
+
+
+def _boc_todas(texto: str, tabla: dict):
+    """Todas las claves que aparecen, con su posicion en el texto."""
+    salida = {}
+    for clave, palabras in tabla.items():
+        for pal in palabras:
+            i = texto.find(pal)
+            if i >= 0 and (clave not in salida or i < salida[clave]):
+                salida[clave] = i
+    return salida
+
+
+def _boc_ultimo_en(texto: str, tabla: dict, inicio: int, fin: int):
+    """La ultima palabra de la tabla dentro de `texto[inicio:fin]`.
+
+    En castellano el color va DELANTE de su sitio: «logo cian en el pecho,
+    flotadsp blanco en la espalda y azul en la manga». Asi que la tinta de
+    cada estampacion es el ultimo color que aparece entre la posicion
+    anterior y la suya — no el primero de la frase (le pondria a todas el de
+    la primera) ni el mas cercano (a la espalda le pondria el azul de la
+    manga, que va justo detras).
+    """
+    trozo = texto[max(0, inicio):max(0, fin)]
+    mejor = None
+    for clave, palabras in tabla.items():
+        for pal in palabras:
+            i = trozo.rfind(pal)
+            if i >= 0:
+                cand = (i, len(pal), clave)
+                if mejor is None or cand > mejor:
+                    mejor = cand
+    return mejor[2] if mejor else None
+
+
+def _prenda_interpreta(texto: str) -> dict:
+    """De una frase a una receta de prenda. Dice lo que ha entendido y lo que no."""
+    t = _boc_normaliza(texto)
+    entendido, dudas = [], []
+
+    tipo = _boc_busca(t, _BOC_TIPOS)
+    if tipo:
+        entendido.append("prenda: %s" % next(x["nombre"] for x in _PRENDA_TIPOS if x["id"] == tipo[0]))
+    else:
+        dudas.append("No he visto qué prenda quieres, he puesto camiseta.")
+
+    color = _boc_busca(t, _BOC_COLORES)
+    if color:
+        entendido.append("color: %s" % next(c["nombre"] for c in _PRENDA_COLORES if c["id"] == color[0]))
+    else:
+        dudas.append("No has dicho color, la dejo en negro.")
+    color_id = color[0] if color else "negro"
+    claro = next(c["claro"] for c in _PRENDA_COLORES if c["id"] == color_id)
+
+    # LA PALABRA DEL COLOR DE LA PRENDA SE TACHA antes de buscar tintas. En
+    # «sudadera NEGRA con el logo en CIAN en el pecho», las dos palabras son
+    # colores y las dos caen en la ventana de «pecho»: sin tacharla gana
+    # «negra» por ir antes, y salia el logo del color de la prenda —o sea
+    # invisible—. Se sustituye por espacios, no se borra, para que los indices
+    # de las posiciones sigan valiendo.
+    t_tinta = t
+    if color:
+        _i, _n = color[1], color[2]
+        t_tinta = t[:_i] + (" " * _n) + t[_i + _n:]
+
+    # ¿Cuánto de grande? Se busca POR CLÁUSULA, igual que la tinta: en «logo
+    # pequeño en el pecho, flotadsp grande detrás» hay dos tamaños distintos, y
+    # con una sola palabra para toda la frase la espalda salía pequeña — que es
+    # justo lo contrario de lo pedido. La de la frase entera queda de respaldo
+    # para cuando solo se dice una vez.
+    def _tam_en(desde, hasta):
+        trozo = t[max(0, desde):max(0, hasta)]
+        mejor = None
+        for clave, palabras in _BOC_PALABRAS_TAMANO.items():
+            for pal in palabras:
+                i = trozo.rfind(pal)
+                if i >= 0 and (mejor is None or i > mejor[0]):
+                    mejor = (i, clave)
+        return mejor[1] if mejor else None
+
+    tam = _tam_en(0, len(t)) or "mediano" 
+
+    # LA FRANJA DE LA MANGA NO ES UNA ESTAMPACION EN LA MANGA. «...y franja en
+    # la manga» nombra la manga, asi que sin esto salia ademas un logo cosido
+    # en el brazo que nadie habia pedido — y encima gastando una tinta de las
+    # dos que hay. Se mira si la palabra 'manga' viene detras de 'franja',
+    # 'raya' o 'banda'; si la manga se nombra en otro sitio ademas, se respeta.
+    _es_franja = any(p in t for p in ("franja", "raya", "banda", "ribete", "linea en la manga"))
+    posiciones = _boc_todas(t, _BOC_POSICIONES)
+    if _es_franja and "manga" in posiciones:
+        _antes = t[max(0, posiciones["manga"] - 30): posiciones["manga"]]
+        if any(w in _antes for w in ("franja", "raya", "banda", "ribete")):
+            posiciones.pop("manga")
+    if not posiciones:
+        posiciones = {"pecho": 0}
+        dudas.append("No has dicho dónde va, la pongo en el pecho.")
+
+    estampaciones = []
+    orden = sorted(posiciones.items(), key=lambda x: x[1])
+    for _i_pos, (pos, donde) in enumerate(orden):
+        # La tinta se busca CERCA de la posición, no en toda la frase: en
+        # «sudadera negra con el logo cian en el pecho», negro es la prenda y
+        # cian es la tinta, y las dos palabras son colores.
+        ventana = t[max(0, donde - 45): donde + 45]
+        # La clausula de esta posicion: desde la posicion anterior hasta esta.
+        _desde = orden[_i_pos - 1][1] + 1 if _i_pos else 0
+        tinta = _boc_ultimo_en(t_tinta, _BOC_TINTAS, _desde, donde)
+        if not tinta:
+            # Tambien se escribe al reves: «en el pecho, en cian».
+            _hasta = orden[_i_pos + 1][1] if _i_pos + 1 < len(orden) else len(t_tinta)
+            _cerca = _boc_busca(t_tinta[donde:min(_hasta, donde + 30)], _BOC_TINTAS)
+            tinta = _cerca[0] if _cerca else None
+        tinta_id = tinta or ("negro" if claro else "blanco")
+        if not tinta and _i_pos == 0:
+            dudas.append("No has dicho de qué color va el logo: lo pongo en %s, que es lo que se lee sobre esa prenda."
+                         % ("negro" if claro else "blanco"))
+        # Un número de centímetros escrito gana a la palabra de tamaño.
+        cm = None
+        m = re.search(r"(\d{1,2})\s*cm", ventana)
+        if m:
+            cm = int(m.group(1))
+        if cm is None:
+            cm = _BOC_TAMANOS[_tam_en(_desde, donde) or tam][pos]
+        limite = next(x["cm_max"] for x in _PRENDA_POSICIONES if x["id"] == pos)
+        if cm > limite:
+            dudas.append("%d cm no cabe en %s: lo dejo en %d." % (cm, pos, limite))
+            cm = limite
+        estampaciones.append({
+            "posicion": pos, "tinta": tinta_id, "cm": max(2, cm),
+            "texto": "flotadsp" if pos == "espalda" else "FDs",
+            "con_nombre": pos == "espalda" and ("nombre" in t or "su nombre" in t),
+        })
+        entendido.append("%s: %d cm en %s" % (
+            next(x["nombre"] for x in _PRENDA_POSICIONES if x["id"] == pos), cm, tinta_id))
+
+    # Máximo de tintas: se recorta aquí en vez de dejar que falle al guardar.
+    tintas = []
+    for e in estampaciones:
+        if e["tinta"] not in tintas:
+            tintas.append(e["tinta"])
+    if len(tintas) > _PRENDA_MAX_TINTAS:
+        sobra = tintas[_PRENDA_MAX_TINTAS:]
+        for e in estampaciones:
+            if e["tinta"] in sobra:
+                e["tinta"] = tintas[0]
+        dudas.append("Pedías más de %d tintas; las he juntado en %s, que es lo que mantiene el margen."
+                     % (_PRENDA_MAX_TINTAS, tintas[0]))
+
+    franja = any(p in t for p in ("franja", "raya", "banda", "linea en la manga", "ribete"))
+    if franja:
+        entendido.append("franja de contraste en la manga")
+
+    # LAS TALLAS SOLO SI SE DICE «TALLA», y solo lo que venga DESPUES.
+    #
+    # Buscar sueltas las letras S, M, L o XL en toda la frase es un coladero:
+    # con «...la parte final de la S hasta el principio de la F» —una frase real
+    # describiendo el logo— salia «tallas: S», y el pedido habria ido con una
+    # sola talla. Una letra suelta en castellano casi nunca es una talla; lo que
+    # la convierte en talla es la palabra que la presenta.
+    tallas = []
+    _m_talla = re.search(r"\btallas?\b", t)
+    if _m_talla:
+        _resto = t[_m_talla.end():]
+        tallas = [x for x in _PRENDA_TALLAS
+                  if re.search(r"\b%s\b" % x.lower(), _resto)]
+    if not tallas:
+        tallas = ["S", "M", "L", "XL"]
+    else:
+        entendido.append("tallas: %s" % " ".join(tallas))
+
+    tipo_id = tipo[0] if tipo else "camiseta"
+    return {
+        "receta": {
+            "nombre": _texto_cuerpo(texto, 60) or "Prenda nueva",
+            "tipo": tipo_id, "color": color_id, "tallas": tallas,
+            "estampaciones": estampaciones, "franja_manga": franja,
+            "coste": next(x["coste"] for x in _PRENDA_TIPOS if x["id"] == tipo_id),
+            "pvp": None, "notas": "",
+        },
+        "entendido": entendido, "dudas": dudas,
+    }
+
+
+# Lo que cuesta estampar, por unidad y por posicion. ESTIMACIONES de mercado a
+# septiembre de 2026, no presupuestos: la ficha lo dice.
+_BOC_TECNICAS = {
+    "serigrafia": {"nombre": "Serigrafía", "ud": 1.20, "preparacion": 25.0,
+                   "porque": "la más barata a partir de 40 unidades, y el color aguanta lavados"},
+    "serigrafia2": {"nombre": "Serigrafía a 2 tintas", "ud": 2.20, "preparacion": 40.0,
+                    "porque": "dos pasadas de máquina, una por tinta"},
+    "dtf": {"nombre": "DTF (transfer digital)", "ud": 2.20, "preparacion": 0.0,
+            "porque": "no tiene coste de preparación y aguanta el trazo fino, que la serigrafía rompe a tamaño pequeño"},
+    "bordado": {"nombre": "Bordado", "ud": 2.40, "preparacion": 30.0,
+                "porque": "en piqué y en softshell la serigrafía se ve barata; el bordado es lo que se espera"},
+    "nombre": {"nombre": "Nombre individual (vinilo o DTF)", "ud": 3.00, "preparacion": 0.0,
+               "porque": "es lo único que cambia en cada prenda, así que no se beneficia del pedido agrupado"},
+}
+_BOC_MARGEN_OBJETIVO = 0.55
+
+
+def _prenda_ficha(p: dict, unidades: int) -> dict:
+    """Cómo se hace y a cuánto sale. Todo calculado, nada inventado sobre la marcha."""
+    est = p.get("estampaciones") or []
+    lineas, prep_total, ud_total = [], 0.0, 0.0
+
+    for e in est:
+        cm = int(e.get("cm") or 8)
+        # Qué técnica: la prenda manda primero (en piqué y softshell, bordado),
+        # luego el tamaño (pequeño = trazo fino = DTF).
+        if p.get("tipo") in ("polo", "chubasquero"):
+            tec = "bordado"
+        elif cm <= 10:
+            tec = "dtf"
+        else:
+            tec = "serigrafia"
+        t = _BOC_TECNICAS[tec]
+        lineas.append({"que": "%s en %s, %d cm" % (e.get("texto") or "logo", e["posicion"], cm),
+                       "tecnica": t["nombre"], "porque": t["porque"],
+                       "por_unidad": t["ud"], "preparacion": t["preparacion"]})
+        ud_total += t["ud"]
+        prep_total += t["preparacion"]
+        if e.get("con_nombre"):
+            n = _BOC_TECNICAS["nombre"]
+            lineas.append({"que": "el nombre del conductor, debajo", "tecnica": n["nombre"],
+                           "porque": n["porque"], "por_unidad": n["ud"], "preparacion": 0.0})
+            ud_total += n["ud"]
+
+    if p.get("franja_manga"):
+        lineas.append({"que": "franja de contraste en la manga", "tecnica": "De fábrica",
+                       "porque": "elige un modelo de catálogo que ya la traiga: cosida cuesta mínimos por talla, y en vinilo se cuartea con los lavados",
+                       "por_unidad": 0.0, "preparacion": 0.0})
+
+    base = next((x["coste"] for x in _PRENDA_TIPOS if x["id"] == p.get("tipo")), 6.0)
+    # El coste guardado de la prenda ya incluye una estampación típica: para la
+    # ficha se parte de la prenda DESNUDA y se suma lo que lleva de verdad.
+    desnuda = round(base - 1.20, 2) if base > 2 else base
+    unidades = max(1, unidades)
+    prep_ud = round(prep_total / unidades, 2)
+    coste = round(desnuda + ud_total + prep_ud, 2)
+    neto = round(coste / (1 - _BOC_MARGEN_OBJETIVO), 2)
+    # Se redondea HACIA ARRIBA al medio euro: un precio a la baja se come el
+    # margen que se acaba de calcular.
+    pvp = math.ceil(neto * (1 + _TIENDA_IVA) * 2) / 2
+    neto_real = round(pvp / (1 + _TIENDA_IVA), 2)
+    margen = round(neto_real - coste, 2)
+
+    color = next((c for c in _PRENDA_COLORES if c["id"] == p.get("color")), _PRENDA_COLORES[0])
+    tipo_n = next((x["nombre"] for x in _PRENDA_TIPOS if x["id"] == p.get("tipo")), "Camiseta")
+    piezas = ", ".join("%s (%s)" % (l["que"], l["tecnica"]) for l in lineas) or "sin estampación"
+    pedido = (
+        "Presupuesto para %d unidades.\n"
+        "Prenda: %s en %s, tallas %s.\n"
+        "Estampación: %s.\n"
+        "Necesito el precio DESGLOSADO en prenda + estampación + preparación + IVA, "
+        "el plazo, y si tenéis un modelo de catálogo con panel de contraste en la manga.\n"
+        "Adjunto el arte en vectorial."
+        % (unidades, tipo_n, color["nombre"].lower(), " ".join(p.get("tallas") or []), piezas))
+
+    return {
+        "unidades": unidades, "lineas": lineas,
+        "coste_prenda": desnuda, "coste_estampacion": round(ud_total, 2),
+        "preparacion_total": round(prep_total, 2), "preparacion_por_unidad": prep_ud,
+        "coste": coste, "pvp_sugerido": pvp, "margen": margen,
+        "margen_pct": round(100 * margen / neto_real) if neto_real else 0,
+        "objetivo_pct": int(_BOC_MARGEN_OBJETIVO * 100),
+        "texto_para_el_taller": pedido,
+        "costes_estimados": True,
+    }
+
+
+@api_router.post("/tienda/prendas/interpretar")
+async def tienda_interpretar(body: dict = Body(...), _=Depends(require_admin)):
+    """De una frase a una prenda dibujable. Sin IA: vocabulario cerrado."""
+    texto = _texto_cuerpo(body.get("texto"), 300)
+    if len(texto) < 3:
+        raise HTTPException(400, "Escribe cómo la quieres")
+    return _prenda_interpreta(texto)
+
+
+@api_router.post("/tienda/prendas/ficha")
+async def tienda_ficha_produccion(body: dict = Body(...), _=Depends(require_admin)):
+    """Cómo hacer esta prenda y a cuánto sale. Vale para una sin guardar."""
+    receta = body.get("prenda")
+    if not isinstance(receta, dict):
+        raise HTTPException(400, "Falta la prenda")
+    limpia = _prenda_limpia(receta)
+    unidades = _entero(body.get("unidades"), "las unidades",
+                       defecto=_TIENDA_UNIDADES_REF, minimo=1, maximo=5000)
+    return _prenda_ficha(limpia, unidades)
+
+
 app.include_router(auth_router)
 app.include_router(api_router)
