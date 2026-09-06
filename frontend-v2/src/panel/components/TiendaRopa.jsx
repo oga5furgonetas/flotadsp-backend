@@ -3,6 +3,7 @@ import {
   Shirt, Loader2, ExternalLink, ChevronDown, Check, AlertTriangle, Info,
 } from 'lucide-react'
 import { tiendaPreparacion, tiendaMarcarPaso } from '../api'
+import TiendaPrendas from './TiendaPrendas'
 
 /* ────────────────────────────────────────────────────────────────────────────
    TIENDA DE ROPA Y MATERIAL — todo lo que hace falta para empezar a vender
@@ -147,6 +148,9 @@ export default function TiendaRopa() {
           </div>
         )
       })}
+
+      {/* El taller: tus propias prendas */}
+      <TiendaPrendas />
 
       {/* Catálogo y márgenes */}
       <div className="mt-6">

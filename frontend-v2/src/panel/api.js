@@ -490,6 +490,10 @@ export const cortexPackages = (params) => api.get('/cortex/packages', { params }
 export const tiendaPreparacion = () => api.get('/tienda/preparacion')
 export const tiendaMarcarPaso = (paso, hecho, nota = '') =>
   api.post('/tienda/preparacion', { paso, hecho, nota })
+export const tiendaPrendas = () => api.get('/tienda/prendas')
+export const tiendaCrearPrenda = (body) => api.post('/tienda/prendas', body)
+export const tiendaEditarPrenda = (id, body) => api.patch(`/tienda/prendas/${id}`, body)
+export const tiendaArchivarPrenda = (id) => api.delete(`/tienda/prendas/${id}`)
 export const cortexRoutes = (day, center) => api.get('/cortex/routes', { params: { day, center } })
 export const cortexPackage = (tba) => api.get(`/cortex/package/${tba}`)
 export const cortexAlerts = (day, center) => api.get('/cortex/alerts', { params: { day, center } })

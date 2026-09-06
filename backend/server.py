@@ -1437,6 +1437,7 @@ async def _ensure_tenant_indexes(db_name: str):
     # sobre la misma casilla dejan dos documentos del mismo paso y la pantalla
     # empieza a contar mal el progreso.
     await _idx(tdb.tienda_pasos, "paso", unique=True)
+    await _idx(tdb.tienda_prendas, "id", unique=True)
     await _idx(tdb.workshops, "id")
     await _idx(tdb.workshops, "center")
     await _idx(tdb.workshops, "convenios")
@@ -40989,6 +40990,249 @@ async def tienda_marcar_paso(body: dict = Body(...), user: dict = Depends(requir
                   "por": user.get("name") or user.get("username") or ""}},
         upsert=True)
     return {"ok": True, "paso": paso, "hecho": hecho}
+
+
+# -------------------------------------------------------------------------
+# TIENDA — TUS PROPIAS PRENDAS
+# -------------------------------------------------------------------------
+"""El taller: crear prendas, verlas y guardarlas. Todavia NO se venden.
+
+Es a proposito una MAQUETA, no un archivo listo para el serigrafiador: sirve
+para decidir —que prenda, que color, donde va el logo y de que tamaño— y para
+enseñarsela al taller cuando pidas presupuesto. El arte final en vectorial lo
+sigue haciendo el diseñador; una maqueta de pantalla no estampa nada.
+
+Lo que se guarda es la RECETA (tipo, color, estampaciones, tallas, coste), no
+un dibujo: asi el dia que cambie el logo o el precio, cambian todas las
+prendas sin volver a dibujarlas.
+
+El precio es OPCIONAL: hoy esto es un taller privado. Cuando haya presupuestos
+reales se rellena `pvp` y la prenda se puede publicar. Mientras tanto vive en
+`borrador` y no la ve nadie mas.
+"""
+
+_PRENDAS_COL = "tienda_prendas"
+_PRENDAS_MAX = 60          # tope sano: es un taller, no un catalogo de 5.000
+
+# Los tipos que sabe dibujar la pantalla. El coste orientativo es el mismo de
+# la tabla de margenes (prenda + personalizacion, a 40 uds) y se puede cambiar
+# prenda a prenda en cuanto haya un presupuesto de verdad.
+_PRENDA_TIPOS = [
+    {"id": "camiseta", "nombre": "Camiseta técnica", "coste": 6.00},
+    {"id": "sudadera", "nombre": "Sudadera con capucha", "coste": 17.45},
+    {"id": "polo", "nombre": "Polo piqué", "coste": 10.45},
+    {"id": "chubasquero", "nombre": "Chubasquero / softshell", "coste": 24.50},
+    {"id": "pantalon", "nombre": "Pantalón multibolsillos", "coste": 16.50},
+    {"id": "gorra", "nombre": "Gorra", "coste": 4.70},
+]
+
+# Paleta CERRADA, no un color libre. Dos razones: la pantalla tiene que poder
+# dibujar el contraste del texto encima, y cada color de prenda que se añade
+# es otra referencia de stock y otra forma de partir un pedido.
+_PRENDA_COLORES = [
+    {"id": "negro", "nombre": "Negro", "hex": "#16191C", "claro": False},
+    {"id": "antracita", "nombre": "Antracita", "hex": "#3A4046", "claro": False},
+    {"id": "marino", "nombre": "Azul marino", "hex": "#1B2A41", "claro": False},
+    {"id": "blanco", "nombre": "Blanco", "hex": "#F5F7F8", "claro": True},
+    {"id": "gris", "nombre": "Gris jaspeado", "hex": "#B9C0C6", "claro": True},
+]
+
+# Tintas de estampacion. Maximo dos por prenda: es la regla que mantiene el
+# margen por encima del 50%, y por eso se comprueba aqui y no solo se sugiere.
+_PRENDA_TINTAS = [
+    {"id": "blanco", "nombre": "Blanco", "hex": "#F5F7F8"},
+    {"id": "negro", "nombre": "Negro", "hex": "#16191C"},
+    {"id": "cian", "nombre": "Cian FlotaDSP", "hex": "#14E7D8"},
+    {"id": "azul", "nombre": "Azul FlotaDSP", "hex": "#0AACD3"},
+]
+_PRENDA_MAX_TINTAS = 2
+
+_PRENDA_POSICIONES = [
+    {"id": "pecho", "nombre": "Pecho izquierdo", "cara": "delante", "cm_max": 8},
+    {"id": "espalda", "nombre": "Espalda", "cara": "detras", "cm_max": 30},
+    {"id": "manga", "nombre": "Manga", "cara": "delante", "cm_max": 12},
+]
+_PRENDA_TALLAS = ["XS", "S", "M", "L", "XL", "XXL", "3XL"]
+_PRENDA_MAX_ESTAMPACIONES = 3
+
+
+def _prenda_dinero(valor, nombre, maximo=1000.0):
+    """Un importe del cuerpo, o None. Nunca revienta con lo que no es numero."""
+    if valor in (None, "", False):
+        return None
+    try:
+        n = round(float(str(valor).replace(",", ".")), 2)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "%s tiene que ser un numero" % nombre)
+    if n < 0 or n > maximo:
+        raise HTTPException(400, "%s tiene que estar entre 0 y %g" % (nombre, maximo))
+    return n
+
+
+def _prenda_limpia(body: dict, previa: dict | None = None) -> dict:
+    """Valida y normaliza una prenda. Lo que no esta en las listas, no entra.
+
+    Se valida TODO contra listas cerradas —tipo, color, tinta, posicion,
+    talla— en vez de guardar lo que llegue. Un color inventado no rompe nada
+    en el servidor, pero deja una prenda que la pantalla no sabe dibujar y que
+    nadie entiende de donde salio.
+    """
+    p = previa or {}
+    nombre = _texto_cuerpo(body.get("nombre"), 60) or p.get("nombre") or ""
+    if len(nombre) < 2:
+        raise HTTPException(400, "Ponle un nombre a la prenda")
+
+    tipo = _texto_cuerpo(body.get("tipo"), 20) or p.get("tipo") or ""
+    if tipo not in {t["id"] for t in _PRENDA_TIPOS}:
+        raise HTTPException(400, "Ese tipo de prenda no existe")
+
+    color = _texto_cuerpo(body.get("color"), 20) or p.get("color") or "negro"
+    if color not in {c["id"] for c in _PRENDA_COLORES}:
+        raise HTTPException(400, "Ese color no esta en la paleta")
+
+    # Si viene y NO es una lista, es un error del que llama y se dice. Antes se
+    # caia al valor por defecto en silencio: mandando `tallas: "M"` se creaba la
+    # prenda con S/M/L/XL y nadie se enteraba de que las tallas no eran las
+    # pedidas. Un dato falso que parece bueno es peor que un 400.
+    tallas_in = body.get("tallas")
+    if tallas_in is None:
+        tallas_in = p.get("tallas") or ["S", "M", "L", "XL"]
+    elif not isinstance(tallas_in, list):
+        raise HTTPException(400, "Las tallas tienen que venir en una lista")
+    tallas = [t for t in _PRENDA_TALLAS if t in {str(x).upper() for x in tallas_in}]
+    if not tallas:
+        raise HTTPException(400, "Elige al menos una talla")
+
+    est_in = body.get("estampaciones")
+    if est_in is None:
+        est_in = p.get("estampaciones") or []
+    elif not isinstance(est_in, list):
+        raise HTTPException(400, "Las estampaciones tienen que venir en una lista")
+    if len(est_in) > _PRENDA_MAX_ESTAMPACIONES:
+        raise HTTPException(400, "Como mucho %d estampaciones" % _PRENDA_MAX_ESTAMPACIONES)
+    validas, posiciones = [], set()
+    for e in est_in:
+        if not isinstance(e, dict):
+            continue
+        pos = _texto_cuerpo(e.get("posicion"), 20)
+        if pos not in {x["id"] for x in _PRENDA_POSICIONES}:
+            raise HTTPException(400, "Esa posicion de estampacion no existe")
+        if pos in posiciones:
+            raise HTTPException(400, "Hay dos estampaciones en la misma posicion")
+        posiciones.add(pos)
+        tinta = _texto_cuerpo(e.get("tinta"), 20) or "blanco"
+        if tinta not in {x["id"] for x in _PRENDA_TINTAS}:
+            raise HTTPException(400, "Esa tinta no esta en la paleta")
+        lim = next(x["cm_max"] for x in _PRENDA_POSICIONES if x["id"] == pos)
+        cm = _entero(e.get("cm"), "el tamaño de la estampacion",
+                     defecto=8 if pos == "pecho" else 22, minimo=2, maximo=lim)
+        validas.append({"posicion": pos, "tinta": tinta, "cm": cm,
+                        "texto": _texto_cuerpo(e.get("texto"), 24),
+                        # El nombre de quien la lleva se pone al pedir, no aqui:
+                        # aqui solo se decide SI la prenda lo lleva.
+                        "con_nombre": bool(e.get("con_nombre"))})
+
+    tintas = {e["tinta"] for e in validas}
+    if len(tintas) > _PRENDA_MAX_TINTAS:
+        # No es un capricho: cada tinta de mas es otra pasada de maquina, y con
+        # cuatro colores el margen del 60% se queda en el 35% sin vender una
+        # unidad mas. Se corta aqui para que no se descubra en el presupuesto.
+        raise HTTPException(
+            400, "Maximo %d tintas por prenda: cada una de mas es otra pasada de "
+                 "maquina y se come el margen" % _PRENDA_MAX_TINTAS)
+
+    tipo_def = next(t for t in _PRENDA_TIPOS if t["id"] == tipo)
+    coste = _prenda_dinero(body.get("coste"), "El coste")
+    if coste is None:
+        coste = p.get("coste") if p.get("coste") is not None else tipo_def["coste"]
+    pvp = _prenda_dinero(body.get("pvp"), "El precio de venta")
+    if pvp is None and "pvp" not in body:
+        pvp = p.get("pvp")
+
+    return {"nombre": nombre, "tipo": tipo, "color": color, "tallas": tallas,
+            "estampaciones": validas, "franja_manga": bool(body.get("franja_manga")),
+            "coste": coste, "pvp": pvp,
+            "notas": _texto_cuerpo(body.get("notas"), 400)}
+
+
+def _prenda_con_cuentas(p: dict) -> dict:
+    """La prenda con lo que deja, si ya tiene precio puesto."""
+    salida = {k: v for k, v in p.items() if k != "_id"}
+    coste, pvp = p.get("coste"), p.get("pvp")
+    if coste is not None and pvp:
+        neto = round(pvp / (1 + _TIENDA_IVA), 2)
+        margen = round(neto - coste, 2)
+        salida["neto"] = neto
+        salida["margen"] = margen
+        salida["margen_pct"] = round(100 * margen / neto) if neto else 0
+    return salida
+
+
+@api_router.get("/tienda/prendas")
+async def tienda_prendas(_=Depends(require_admin)):
+    """Tus prendas y las piezas con las que se montan."""
+    docs = await db[_PRENDAS_COL].find(
+        {"archivada": {"$ne": True}}, {"_id": 0}).sort("creada_en", -1).to_list(_PRENDAS_MAX)
+    return {
+        "prendas": [_prenda_con_cuentas(d) for d in docs],
+        "tipos": _PRENDA_TIPOS, "colores": _PRENDA_COLORES, "tintas": _PRENDA_TINTAS,
+        "posiciones": _PRENDA_POSICIONES, "tallas": _PRENDA_TALLAS,
+        "max_tintas": _PRENDA_MAX_TINTAS, "max_estampaciones": _PRENDA_MAX_ESTAMPACIONES,
+        "iva": _TIENDA_IVA,
+    }
+
+
+@api_router.post("/tienda/prendas")
+async def tienda_crear_prenda(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Crea una prenda. Nace en borrador: aqui todavia no se vende nada."""
+    cuantas = await db[_PRENDAS_COL].count_documents({"archivada": {"$ne": True}})
+    if cuantas >= _PRENDAS_MAX:
+        raise HTTPException(400, "Tienes %d prendas: archiva alguna antes de crear otra"
+                            % _PRENDAS_MAX)
+    doc = _prenda_limpia(body)
+    doc.update({"id": str(uuid.uuid4()), "estado": "borrador",
+                "creada_en": datetime.now(timezone.utc).isoformat(),
+                "creada_por": user.get("name") or user.get("username") or ""})
+    await db[_PRENDAS_COL].insert_one(dict(doc))   # copia: insert_one muta (gotcha 42)
+    return _prenda_con_cuentas(doc)
+
+
+@api_router.patch("/tienda/prendas/{prenda_id}")
+async def tienda_editar_prenda(prenda_id: str, body: dict = Body(...),
+                               user: dict = Depends(require_admin)):
+    """Cambia una prenda. Publicar exige precio: sin el no hay nada que cobrar."""
+    previa = await db[_PRENDAS_COL].find_one({"id": prenda_id}, {"_id": 0})
+    if not previa or previa.get("archivada"):
+        raise HTTPException(404, "Esa prenda no existe")
+    doc = _prenda_limpia(body, previa)
+    estado = _texto_cuerpo(body.get("estado"), 20) or previa.get("estado") or "borrador"
+    if estado not in ("borrador", "publicada"):
+        raise HTTPException(400, "Estado no valido")
+    if estado == "publicada" and not doc.get("pvp"):
+        raise HTTPException(400, "Ponle precio antes de publicarla")
+    doc["estado"] = estado
+    doc["editada_en"] = datetime.now(timezone.utc).isoformat()
+    doc["editada_por"] = user.get("name") or user.get("username") or ""
+    await db[_PRENDAS_COL].update_one({"id": prenda_id}, {"$set": doc})
+    return _prenda_con_cuentas({**previa, **doc})
+
+
+@api_router.delete("/tienda/prendas/{prenda_id}")
+async def tienda_archivar_prenda(prenda_id: str, user: dict = Depends(require_admin)):
+    """Quita una prenda de la lista. NO la borra: la marca archivada.
+
+    Es trabajo de diseño y cuesta rehacerlo; un clic de mas no puede perderlo.
+    Deja de verse en todas partes, pero se puede recuperar de la base si hace
+    falta.
+    """
+    r = await db[_PRENDAS_COL].update_one(
+        {"id": prenda_id, "archivada": {"$ne": True}},
+        {"$set": {"archivada": True,
+                  "archivada_en": datetime.now(timezone.utc).isoformat(),
+                  "archivada_por": user.get("name") or user.get("username") or ""}})
+    if not r.matched_count:
+        raise HTTPException(404, "Esa prenda no existe")
+    return {"ok": True, "archivada": prenda_id}
 
 
 app.include_router(auth_router)
