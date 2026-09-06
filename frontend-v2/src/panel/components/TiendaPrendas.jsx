@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Plus, Trash2, Pencil, X, Shirt, RotateCcw, Wand2, Copy, Check, Calculator } from 'lucide-react'
+import { Loader2, Plus, Trash2, Pencil, X, Shirt, RotateCcw, Wand2, Copy, Check, Calculator, Upload } from 'lucide-react'
 import {
   tiendaPrendas, tiendaCrearPrenda, tiendaEditarPrenda, tiendaArchivarPrenda,
-  tiendaInterpretar, tiendaFicha,
+  tiendaInterpretar, tiendaFicha, tiendaLogos, tiendaSubirLogo, tiendaBorrarLogo,
 } from '../api'
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -40,6 +40,7 @@ export default function TiendaPrendas() {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
   const [editando, setEditando] = useState(null)   // objeto prenda o null
+  const [logos, setLogos] = useState(null)
 
   const cargar = useCallback(() => {
     setCargando(true)
@@ -49,7 +50,12 @@ export default function TiendaPrendas() {
       .finally(() => setCargando(false))
   }, [])
 
+  const cargarLogos = useCallback(() => {
+    tiendaLogos().then((r) => setLogos(r.data)).catch(() => setLogos({ logos: {} }))
+  }, [])
+
   useEffect(() => { cargar() }, [cargar])
+  useEffect(() => { cargarLogos() }, [cargarLogos])
 
   const archivar = async (p) => {
     if (!window.confirm(`¿Quitar «${p.nombre}» de la lista? Se archiva, no se borra.`)) return
@@ -89,6 +95,8 @@ export default function TiendaPrendas() {
 
       {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
 
+      <ElLogo datos={logos} onCambio={cargarLogos} />
+
       {prendas.length === 0 ? (
         <div className="mt-3 rounded-xl border border-dashed border-dark-700 px-4 py-8 text-center">
           <Shirt size={22} className="mx-auto mb-2 text-dark-600" />
@@ -103,7 +111,7 @@ export default function TiendaPrendas() {
             <div key={p.id} className="rounded-xl border border-dark-800 bg-dark-900/40 p-3">
               <div className="flex gap-3">
                 <div className="w-[92px] shrink-0 rounded-lg bg-dark-950/60 p-1">
-                  <Lienzo prenda={p} datos={datos} cara="delante" />
+                  <Lienzo prenda={p} datos={datos} logos={logos?.logos} cara="delante" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13.5px] font-medium text-dark-100">{p.nombre}</div>
@@ -133,7 +141,7 @@ export default function TiendaPrendas() {
       )}
 
       {editando && (
-        <Editor prenda={editando} datos={datos}
+        <Editor prenda={editando} datos={datos} logos={logos?.logos}
           onCerrar={() => setEditando(null)}
           onGuardado={() => { setEditando(null); cargar() }} />
       )}
@@ -248,7 +256,20 @@ const ANCLAS = {
   gorra: { pecho: [100, 158], espalda: [100, 158], manga: [100, 158] },
 }
 
-export function Lienzo({ prenda, datos, cara = 'delante' }) {
+/* Que variante del logo toca para esta tinta. Es lo que pide un taller: sobre
+   prenda oscura la blanca a una tinta, sobre clara la negra, y la de color solo
+   cuando el presupuesto admite dos tintas. Si la que toca no esta subida se cae
+   a otra antes que no pintar nada. */
+function logoDe(logos, tinta, claro) {
+  if (!logos) return null
+  const orden = tinta === 'blanco' ? ['blanco', 'color', 'negro']
+    : tinta === 'negro' ? ['negro', 'color', 'blanco']
+      : ['color', claro ? 'negro' : 'blanco', claro ? 'blanco' : 'negro']
+  for (const v of orden) if (logos[v]?.url) return logos[v].url
+  return null
+}
+
+export function Lienzo({ prenda, datos, logos, cara = 'delante' }) {
   const color = (datos.colores || []).find((c) => c.id === prenda.color) || datos.colores[0]
   const tipo = CUERPOS[prenda.tipo] ? prenda.tipo : 'camiseta'
   const cuerpo = CUERPOS[tipo]
@@ -280,12 +301,24 @@ export function Lienzo({ prenda, datos, cara = 'delante' }) {
         // El tamaño de letra sale del ANCHO pedido, no al revés: lo que manda
         // son los centímetros que va a medir la estampación de verdad.
         const fs = Math.max(2.5, Math.min(22, ancho / (texto.length * 0.56)))
+        const url = e.usa_logo !== false ? logoDe(logos, e.tinta, color.claro) : null
         return (
           <g key={e.posicion}>
+            {url ? (
+              /* Va dentro de un <image> y NUNCA incrustado en la página: un SVG
+                 puede llevar `<script>` dentro, y pegado en el DOM correría con
+                 nuestro origen y la sesión abierta. En un <image> el navegador
+                 lo pinta en modo estático seguro. Y `meet` conserva la
+                 proporción: lo que se respeta son los centímetros de ANCHO,
+                 que es lo que se estampa. */
+              <image href={url} x={x - ancho / 2} y={y - ancho / 2}
+                width={ancho} height={ancho} preserveAspectRatio="xMidYMid meet" />
+            ) : (
             <text x={x} y={y} textAnchor="middle" dominantBaseline="middle"
               textLength={ancho} lengthAdjust="spacingAndGlyphs"
               fontSize={fs} fontWeight="600" fill={tintaHex(e.tinta)}
               fontFamily="Archivo Variable, system-ui, sans-serif">{texto}</text>
+            )}
             {e.con_nombre && (
               <text x={x} y={y + fs * 1.5} textAnchor="middle" dominantBaseline="middle"
                 textLength={ancho * 0.75} lengthAdjust="spacingAndGlyphs"
@@ -301,7 +334,7 @@ export function Lienzo({ prenda, datos, cara = 'delante' }) {
 
 /* ───────────────────────── El editor ───────────────────────── */
 
-function Editor({ prenda, datos, onCerrar, onGuardado }) {
+function Editor({ prenda, datos, logos, onCerrar, onGuardado }) {
   const [f, setF] = useState(() => ({
     ...VACIA, ...prenda,
     coste: prenda.coste ?? '', pvp: prenda.pvp ?? '',
@@ -361,6 +394,7 @@ function Editor({ prenda, datos, onCerrar, onGuardado }) {
     }).catch(() => {})
   }
 
+  const hayLogo = !!(logos && Object.keys(logos).length)
   const tintasUsadas = new Set((f.estampaciones || []).map((e) => e.tinta))
   const demasiadas = tintasUsadas.size > (datos.max_tintas || 2)
 
@@ -506,11 +540,19 @@ function Editor({ prenda, datos, onCerrar, onGuardado }) {
                       </div>
                     </div>
                     <div className="mt-2 flex items-center justify-between">
-                      <label className="flex items-center gap-1.5 text-[12px] text-dark-400">
-                        <input type="checkbox" checked={!!e.con_nombre}
-                          onChange={(ev) => setEst(i, 'con_nombre', ev.target.checked)} />
-                        Lleva el nombre del conductor
-                      </label>
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                        <label className="flex items-center gap-1.5 text-[12px] text-dark-400">
+                          <input type="checkbox" checked={!!e.con_nombre}
+                            onChange={(ev) => setEst(i, 'con_nombre', ev.target.checked)} />
+                          Lleva el nombre del conductor
+                        </label>
+                        <label className={`flex items-center gap-1.5 text-[12px] ${hayLogo ? 'text-dark-400' : 'text-dark-600'}`}
+                          title={hayLogo ? '' : 'Sube tu logo arriba para poder usarlo'}>
+                          <input type="checkbox" disabled={!hayLogo} checked={hayLogo && e.usa_logo !== false}
+                            onChange={(ev) => setEst(i, 'usa_logo', ev.target.checked)} />
+                          Usar mi logo
+                        </label>
+                      </div>
                       <button type="button" onClick={() => quitarEst(i)}
                         className="text-[12px] text-dark-500 hover:text-red-400">Quitar</button>
                     </div>
@@ -563,7 +605,7 @@ function Editor({ prenda, datos, onCerrar, onGuardado }) {
           {/* Vista previa */}
           <div className="order-1 sm:order-2">
             <div className="rounded-xl border border-dark-800 bg-dark-900/40 p-3">
-              <Lienzo prenda={f} datos={datos} cara={cara} />
+              <Lienzo prenda={f} datos={datos} logos={logos} cara={cara} />
             </div>
             <button onClick={() => setCara(cara === 'delante' ? 'detras' : 'delante')}
               className="btn-secondary mt-2 inline-flex w-full items-center justify-center gap-1.5 text-[12px]">
@@ -651,6 +693,93 @@ function Cifra({ t, v, fuerte }) {
     <div className="rounded-lg border border-dark-800 px-2.5 py-1.5">
       <div className="text-[11px] text-dark-500">{t}</div>
       <div className={`text-[13px] tabular-nums ${fuerte ? 'font-semibold text-dark-100' : 'text-dark-300'}`}>{v}</div>
+    </div>
+  )
+}
+
+
+/* ───────────────────────── Tu logo ───────────────────────── */
+
+/* TRES VARIANTES, no una. No es capricho de diseño: es lo que pide un taller.
+   Sobre prenda oscura se estampa la blanca a una tinta, sobre clara la negra, y
+   la de color solo cuando el presupuesto admite dos. Guardando solo la de color
+   habria que recolorearla en pantalla —que con un vectorial ajeno sale mal— y
+   ademas no es lo que se le manda al serigrafiador. */
+const VARIANTES = [
+  { id: 'blanco', titulo: 'Blanco', para: 'para prenda oscura', fondo: '#16191C' },
+  { id: 'negro', titulo: 'Negro', para: 'para prenda clara', fondo: '#F5F7F8' },
+  { id: 'color', titulo: 'Color', para: 'solo si hay 2 tintas', fondo: '#2A2F33' },
+]
+
+function ElLogo({ datos, onCambio }) {
+  const [subiendo, setSubiendo] = useState('')
+  const [err, setErr] = useState('')
+  const logos = datos?.logos || {}
+  const hay = Object.keys(logos).length
+
+  const subir = async (variante, archivo) => {
+    if (!archivo) return
+    setSubiendo(variante); setErr('')
+    try {
+      await tiendaSubirLogo(variante, archivo)
+      onCambio()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se ha podido subir.')
+    } finally { setSubiendo('') }
+  }
+
+  const quitar = async (variante) => {
+    setErr('')
+    try {
+      await tiendaBorrarLogo(variante)
+      onCambio()
+    } catch { setErr('No se ha podido quitar.') }
+  }
+
+  return (
+    <div className="mt-4 rounded-xl border border-dark-800 bg-dark-900/40 p-3">
+      <div className="mb-1 text-[13px] font-semibold text-dark-100">Tu logo</div>
+      <p className="mb-2.5 text-[12px] leading-snug text-dark-500">
+        Súbelo en vectorial (.svg) y se dibujará él en las prendas en vez de las letras.
+        {hay ? '' : ' Mientras no lo subas se pinta «FDs» de muestra.'}
+      </p>
+      <div className="grid gap-2 sm:grid-cols-3">
+        {VARIANTES.map((v) => {
+          const l = logos[v.id]
+          return (
+            <div key={v.id} className="rounded-lg border border-dark-800 p-2">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[12.5px] font-medium text-dark-200">{v.titulo}</span>
+                <span className="text-[11px] text-dark-500">{v.para}</span>
+              </div>
+              <div className="mt-1.5 flex h-[54px] items-center justify-center rounded"
+                style={{ background: v.fondo }}>
+                {l ? <img src={l.url} alt={`Logo ${v.titulo}`} style={{ maxHeight: 44, maxWidth: '90%' }} />
+                  : <span className="text-[11px] text-dark-600">sin subir</span>}
+              </div>
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <label className="cursor-pointer text-[11.5px] text-brand-400 hover:text-brand-300">
+                  {subiendo === v.id
+                    ? <span className="inline-flex items-center gap-1"><Loader2 size={11} className="animate-spin" /> Subiendo</span>
+                    : <span className="inline-flex items-center gap-1"><Upload size={11} /> {l ? 'Cambiar' : 'Subir'}</span>}
+                  <input type="file" accept=".svg,.png,image/svg+xml,image/png" className="hidden"
+                    onChange={(e) => { subir(v.id, e.target.files?.[0]); e.target.value = '' }} />
+                </label>
+                {l && (
+                  <button onClick={() => quitar(v.id)}
+                    className="text-[11.5px] text-dark-500 hover:text-red-400">Quitar</button>
+                )}
+              </div>
+              {l && (
+                <div className="mt-0.5 truncate text-[10.5px] text-dark-600">
+                  {l.nombre} · {Math.round(l.bytes / 1024)} KB{l.vectorial ? ' · vectorial' : ' · PNG'}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      {err && <p className="mt-2 text-[12px] text-red-400">{err}</p>}
     </div>
   )
 }

@@ -1438,6 +1438,7 @@ async def _ensure_tenant_indexes(db_name: str):
     # empieza a contar mal el progreso.
     await _idx(tdb.tienda_pasos, "paso", unique=True)
     await _idx(tdb.tienda_prendas, "id", unique=True)
+    await _idx(tdb.tienda_logos, "variante", unique=True)
     await _idx(tdb.workshops, "id")
     await _idx(tdb.workshops, "center")
     await _idx(tdb.workshops, "convenios")
@@ -41128,6 +41129,9 @@ def _prenda_limpia(body: dict, previa: dict | None = None) -> dict:
                      defecto=8 if pos == "pecho" else 22, minimo=2, maximo=lim)
         validas.append({"posicion": pos, "tinta": tinta, "cm": cm,
                         "texto": _texto_cuerpo(e.get("texto"), 24),
+                        # Con el logo subido se dibuja EL LOGO; el texto se
+                        # queda de respaldo para cuando aun no lo hay.
+                        "usa_logo": bool(e.get("usa_logo")),
                         # El nombre de quien la lleva se pone al pedir, no aqui:
                         # aqui solo se decide SI la prenda lo lleva.
                         "con_nombre": bool(e.get("con_nombre"))})
@@ -41450,6 +41454,7 @@ def _prenda_interpreta(texto: str) -> dict:
         estampaciones.append({
             "posicion": pos, "tinta": tinta_id, "cm": max(2, cm),
             "texto": "flotadsp" if pos == "espalda" else "FDs",
+            "usa_logo": True,
             "con_nombre": pos == "espalda" and ("nombre" in t or "su nombre" in t),
         })
         entendido.append("%s: %d cm en %s" % (
@@ -41609,6 +41614,121 @@ async def tienda_ficha_produccion(body: dict = Body(...), _=Depends(require_admi
     unidades = _entero(body.get("unidades"), "las unidades",
                        defecto=_TIENDA_UNIDADES_REF, minimo=1, maximo=5000)
     return _prenda_ficha(limpia, unidades)
+
+
+# -------------------------------------------------------------------------
+# TIENDA — TU LOGO DE VERDAD
+# -------------------------------------------------------------------------
+"""Sube el logo y se dibuja el logo, no la palabra «FDs».
+
+TRES VARIANTES, no una, y no es un capricho de diseño: es lo que pide un
+taller. Sobre prenda oscura se estampa la version BLANCA a una tinta, sobre
+prenda clara la NEGRA, y la de COLOR solo cuando el presupuesto admite dos
+tintas. Guardar solo el logo a color obligaria a recolorearlo en pantalla —que
+con un vectorial ajeno sale mal casi siempre— y ademas no es lo que se le
+manda al serigrafiador.
+
+SE DIBUJA CON `<image>`, NUNCA INCRUSTANDO EL SVG EN LA PAGINA. Un SVG puede
+llevar `<script>` dentro, y pegado en el DOM se ejecutaria con nuestro origen y
+con la sesion del super-admin. Dentro de un `<image>` el navegador lo pinta en
+modo estatico seguro: sin scripts y sin cargas externas. Es la diferencia entre
+confiar en un fichero y no tener que confiar.
+
+Se guarda en Mongo y no en R2 a proposito: un logo vectorial pesa entre 5 y 50
+KB, cabe de sobra, y asi viaja como `data:` en la misma respuesta —sin una
+segunda peticion, sin URL publica que caduque y sin tener que abrir el CSP a
+otro dominio.
+"""
+
+_LOGOS_COL = "tienda_logos"
+_LOGO_VARIANTES = ("blanco", "negro", "color")
+_LOGO_MAX_BYTES = 200 * 1024
+_LOGO_TIPOS = {"svg": "image/svg+xml", "png": "image/png"}
+
+# Lo que NO puede llevar dentro un SVG. Aunque `<image>` ya lo pinta en modo
+# seguro, se rechaza igual: si algun dia alguien decide incrustarlo para poder
+# recolorearlo, el fichero peligroso ya no estara guardado.
+_LOGO_PROHIBIDO = ("<script", "javascript:", "<foreignobject", "<iframe",
+                   "onload=", "onerror=", "onclick=", "<!entity", "<!doctype svg system")
+
+
+def _logo_valida(nombre: str, datos: bytes) -> str:
+    """Comprueba el fichero y devuelve su mime. Lanza 400 con el motivo."""
+    ext = (nombre or "").rsplit(".", 1)[-1].lower() if "." in (nombre or "") else ""
+    if ext not in _LOGO_TIPOS:
+        raise HTTPException(400, "El logo tiene que ser .svg (mejor) o .png")
+    if not datos:
+        raise HTTPException(400, "El fichero está vacío")
+    if len(datos) > _LOGO_MAX_BYTES:
+        raise HTTPException(400, "El logo no puede pasar de %d KB (el tuyo: %d KB)"
+                            % (_LOGO_MAX_BYTES // 1024, len(datos) // 1024))
+    if ext == "svg":
+        try:
+            texto = datos.decode("utf-8", "ignore").lower()
+        except Exception:                                        # noqa: BLE001
+            raise HTTPException(400, "Ese .svg no se puede leer")
+        if "<svg" not in texto:
+            raise HTTPException(400, "Ese fichero no es un SVG de verdad")
+        malo = next((x for x in _LOGO_PROHIBIDO if x in texto), None)
+        if malo:
+            raise HTTPException(400, "Ese SVG lleva código dentro (%s) y no se guarda. "
+                                     "Pídele al diseñador el vectorial limpio." % malo.strip("<"))
+    elif not datos.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise HTTPException(400, "Ese fichero no es un PNG de verdad")
+    return _LOGO_TIPOS[ext]
+
+
+def _logo_uri(doc: dict) -> str:
+    return "data:%s;base64,%s" % (doc.get("mime") or "image/svg+xml", doc.get("datos") or "")
+
+
+async def _logos_mapa() -> dict:
+    """Las variantes que hay, listas para pintar."""
+    salida = {}
+    async for d in db[_LOGOS_COL].find({}, {"_id": 0}):
+        if d.get("variante") in _LOGO_VARIANTES:
+            salida[d["variante"]] = {
+                "url": _logo_uri(d), "nombre": d.get("nombre") or "",
+                "bytes": d.get("bytes") or 0, "at": d.get("at"),
+                "vectorial": (d.get("mime") == "image/svg+xml"),
+            }
+    return salida
+
+
+@api_router.get("/tienda/logos")
+async def tienda_logos(_=Depends(require_admin)):
+    return {"logos": await _logos_mapa(), "variantes": list(_LOGO_VARIANTES),
+            "max_kb": _LOGO_MAX_BYTES // 1024}
+
+
+@api_router.post("/tienda/logos")
+async def tienda_subir_logo(variante: str = Form(...), file: UploadFile = File(...),
+                            user: dict = Depends(require_admin)):
+    """Sube una variante del logo. Sustituye la que hubiera."""
+    variante = _texto_cuerpo(variante, 20).lower()
+    if variante not in _LOGO_VARIANTES:
+        raise HTTPException(400, "Esa variante no existe: %s" % ", ".join(_LOGO_VARIANTES))
+    datos = await file.read()
+    mime = _logo_valida(file.filename or "", datos)
+    await db[_LOGOS_COL].update_one(
+        {"variante": variante},
+        {"$set": {"variante": variante, "mime": mime,
+                  "datos": base64.b64encode(datos).decode("ascii"),
+                  "nombre": _texto_cuerpo(file.filename, 120), "bytes": len(datos),
+                  "at": datetime.now(timezone.utc).isoformat(),
+                  "por": user.get("name") or user.get("username") or ""}},
+        upsert=True)
+    return {"ok": True, "variante": variante, "logos": await _logos_mapa()}
+
+
+@api_router.delete("/tienda/logos/{variante}")
+async def tienda_borrar_logo(variante: str, _=Depends(require_admin)):
+    """Quita una variante. Es un fichero que el diseñador puede volver a dar."""
+    variante = _texto_cuerpo(variante, 20).lower()
+    r = await db[_LOGOS_COL].delete_one({"variante": variante})
+    if not r.deleted_count:
+        raise HTTPException(404, "No hay logo de esa variante")
+    return {"ok": True, "logos": await _logos_mapa()}
 
 
 app.include_router(auth_router)

@@ -496,6 +496,14 @@ export const tiendaEditarPrenda = (id, body) => api.patch(`/tienda/prendas/${id}
 export const tiendaArchivarPrenda = (id) => api.delete(`/tienda/prendas/${id}`)
 export const tiendaInterpretar = (texto) => api.post('/tienda/prendas/interpretar', { texto })
 export const tiendaFicha = (prenda, unidades) => api.post('/tienda/prendas/ficha', { prenda, unidades })
+export const tiendaLogos = () => api.get('/tienda/logos')
+export const tiendaSubirLogo = (variante, archivo) => {
+  const fd = new FormData()
+  fd.append('variante', variante)
+  fd.append('file', archivo)
+  return api.post('/tienda/logos', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+}
+export const tiendaBorrarLogo = (variante) => api.delete(`/tienda/logos/${variante}`)
 export const cortexRoutes = (day, center) => api.get('/cortex/routes', { params: { day, center } })
 export const cortexPackage = (tba) => api.get(`/cortex/package/${tba}`)
 export const cortexAlerts = (day, center) => api.get('/cortex/alerts', { params: { day, center } })
