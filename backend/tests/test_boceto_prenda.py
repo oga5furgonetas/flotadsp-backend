@@ -137,6 +137,15 @@ CASOS = [
      lambda r: _est(r, "manga") is not None,
      "si la manga se nombra aparte de la franja, esa estampacion SI se respeta"),
 
+    # De los bocetos que le gustaron a Dani el 06-09-2026.
+    ("chaqueta softshell gris marengo con monograma tonal",
+     lambda r: r["receta"]["color"] == "marengo" and _est(r, "pecho")["tinta"] == "tonal",
+     "«gris marengo» no es «gris», y la tinta se lee aunque no se diga donde va"),
+
+    ("sudadera rosa empolvado con el logo tonal en el pecho",
+     lambda r: r["receta"]["color"] == "rosa" and _est(r, "pecho")["tinta"] == "tonal",
+     "rosa empolvado y bordado tono sobre tono"),
+
     ("camisetá negrá con logo pequeñó",
      lambda r: r["receta"]["tipo"] == "camiseta" and r["receta"]["color"] == "negro",
      "con tildes de mas tiene que dar lo mismo"),

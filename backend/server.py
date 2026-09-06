@@ -41036,6 +41036,11 @@ _PRENDA_COLORES = [
     {"id": "marino", "nombre": "Azul marino", "hex": "#1B2A41", "claro": False},
     {"id": "blanco", "nombre": "Blanco", "hex": "#F5F7F8", "claro": True},
     {"id": "gris", "nombre": "Gris jaspeado", "hex": "#B9C0C6", "claro": True},
+    # De los bocetos del 06-09-2026. Los tres primeros son prenda de mujer o
+    # de calle: es donde funciona el logo tono sobre tono.
+    {"id": "marengo", "nombre": "Gris marengo", "hex": "#4A4F54", "claro": False},
+    {"id": "rosa", "nombre": "Rosa empolvado", "hex": "#DDB5B4", "claro": True},
+    {"id": "crema", "nombre": "Crema", "hex": "#E9E2D3", "claro": True},
 ]
 
 # Tintas de estampacion. Maximo dos por prenda: es la regla que mantiene el
@@ -41045,6 +41050,11 @@ _PRENDA_TINTAS = [
     {"id": "negro", "nombre": "Negro", "hex": "#16191C"},
     {"id": "cian", "nombre": "Cian FlotaDSP", "hex": "#14E7D8"},
     {"id": "azul", "nombre": "Azul FlotaDSP", "hex": "#0AACD3"},
+    # TONAL: bordado del mismo color que la prenda, un tono por encima. No
+    # lleva hex porque no es un color fijo — sale de la prenda, y por eso lo
+    # calcula el lienzo. Es la que mas se lleva en prenda de calle: se ve de
+    # cerca y no convierte la sudadera en un cartel.
+    {"id": "tonal", "nombre": "Tonal (tono sobre tono)", "hex": None},
 ]
 _PRENDA_MAX_TINTAS = 2
 
@@ -41277,12 +41287,16 @@ _BOC_COLORES = {
     "marino": ("marino", "azul marino", "navy"),
     "blanco": ("blanco", "blanca", "blancas", "blancos"),
     "gris": ("gris", "jaspeado", "gris jaspeado"),
+    "marengo": ("marengo", "gris marengo", "antracita oscuro"),
+    "rosa": ("rosa", "rosa empolvado", "rosa pastel", "empolvado"),
+    "crema": ("crema", "hueso", "beige", "arena"),
 }
 _BOC_TINTAS = {
     "cian": ("cian", "turquesa", "verde agua"),
     "azul": ("azul", "azulon"),
     "blanco": ("blanco", "blanca"),
     "negro": ("negro", "negra"),
+    "tonal": ("tonal", "tono sobre tono", "del mismo color", "sutil"),
 }
 _BOC_POSICIONES = {
     "pecho": ("pecho", "delante", "delantera", "frontal", "corazon"),
@@ -41320,9 +41334,13 @@ def _boc_busca(texto: str, tabla: dict):
     for clave, palabras in tabla.items():
         for pal in sorted(palabras, key=len, reverse=True):
             i = texto.find(pal)
-            if i >= 0 and (mejor is None or i < mejor[1] or len(pal) > mejor[2]):
-                if mejor is None or i < mejor[1]:
-                    mejor = (clave, i, len(pal))
+            if i < 0:
+                continue
+            # Antes: solo se cambiaba si el indice era MENOR, asi que dos
+            # palabras que empiezan en el mismo sitio —«gris» y «gris
+            # marengo»— las ganaba siempre la corta y salia el color que no es.
+            if mejor is None or i < mejor[1] or (i == mejor[1] and len(pal) > mejor[2]):
+                mejor = (clave, i, len(pal))
     return mejor
 
 
@@ -41413,6 +41431,7 @@ def _prenda_interpreta(texto: str) -> dict:
     # 'raya' o 'banda'; si la manga se nombra en otro sitio ademas, se respeta.
     _es_franja = any(p in t for p in ("franja", "raya", "banda", "ribete", "linea en la manga"))
     posiciones = _boc_todas(t, _BOC_POSICIONES)
+    _pos_dicha = bool(posiciones)
     if _es_franja and "manga" in posiciones:
         _antes = t[max(0, posiciones["manga"] - 30): posiciones["manga"]]
         if any(w in _antes for w in ("franja", "raya", "banda", "ribete")):
@@ -41430,7 +41449,11 @@ def _prenda_interpreta(texto: str) -> dict:
         ventana = t[max(0, donde - 45): donde + 45]
         # La clausula de esta posicion: desde la posicion anterior hasta esta.
         _desde = orden[_i_pos - 1][1] + 1 if _i_pos else 0
-        tinta = _boc_ultimo_en(t_tinta, _BOC_TINTAS, _desde, donde)
+        # Si la posicion la hemos puesto nosotros, la clausula sale vacia y la
+        # tinta se perderia: «softshell con monograma tonal» no dice donde va,
+        # pero si dice de que color. En ese caso se mira la frase entera.
+        tinta = (_boc_ultimo_en(t_tinta, _BOC_TINTAS, _desde, donde) if _pos_dicha
+                 else _boc_ultimo_en(t_tinta, _BOC_TINTAS, 0, len(t_tinta)))
         if not tinta:
             # Tambien se escribe al reves: «en el pecho, en cian».
             _hasta = orden[_i_pos + 1][1] if _i_pos + 1 < len(orden) else len(t_tinta)

@@ -278,7 +278,18 @@ export function Lienzo({ prenda, datos, logos, cara = 'delante' }) {
   // oscura en las claras. Con un gris fijo, en la blanca desaparecia.
   const costura = color.claro ? '#DDE2E6' : '#2E343A'
   const anclas = ANCLAS[tipo]
-  const tintaHex = (id) => ((datos.tintas || []).find((t) => t.id === id) || {}).hex || '#F5F7F8'
+  /* TONAL: el bordado del mismo color que la prenda, un tono por encima. No es
+     un color fijo —sale de la prenda—, asi que se calcula: se aclara la prenda
+     oscura y se oscurece la clara. Sin desplazarlo no se veria nada, y con
+     demasiado dejaria de ser tonal. */
+  const desplaza = (hex, d) => '#' + [1, 3, 5].map((i) => {
+    const v = Math.round(Math.min(255, Math.max(0, parseInt(hex.slice(i, i + 2), 16) + d)))
+    return v.toString(16).padStart(2, '0')
+  }).join('')
+  const tintaHex = (id) => {
+    if (id === 'tonal') return desplaza(color.hex, color.claro ? -34 : 42)
+    return ((datos.tintas || []).find((t) => t.id === id) || {}).hex || '#F5F7F8'
+  }
 
   const visibles = (prenda.estampaciones || []).filter((e) => {
     const pos = (datos.posiciones || []).find((p) => p.id === e.posicion)
@@ -301,7 +312,11 @@ export function Lienzo({ prenda, datos, logos, cara = 'delante' }) {
         // El tamaño de letra sale del ANCHO pedido, no al revés: lo que manda
         // son los centímetros que va a medir la estampación de verdad.
         const fs = Math.max(2.5, Math.min(22, ancho / (texto.length * 0.56)))
-        const url = e.usa_logo !== false ? logoDe(logos, e.tinta, color.claro) : null
+        // Con tinta TONAL se dibuja el texto y no el logo subido: recolorear
+        // un vectorial ajeno sale mal, y aqui el color es justo lo que define
+        // la estampacion. Cuando tengas el logo tonal, se sube como variante.
+        const url = (e.usa_logo !== false && e.tinta !== 'tonal')
+          ? logoDe(logos, e.tinta, color.claro) : null
         return (
           <g key={e.posicion}>
             {url ? (
