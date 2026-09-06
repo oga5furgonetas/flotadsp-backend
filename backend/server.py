@@ -14424,9 +14424,25 @@ async def report_client_error(data: dict, request: Request):
     if any(x in stack for x in _AJENO) or any(x in url for x in _AJENO):
         logger.info("Error de una extension del navegador, no nuestro: %s", message[:120])
         return {"success": True, "ignorado": "extension del navegador"}
-    # El traductor de Chrome reescribe el DOM por debajo de React y provoca
-    # esto sin que nada nuestro falle. Se reconoce por el mensaje exacto.
-    if "insertBefore" in message and "not a child of this node" in message:
+    # El traductor del navegador reescribe el DOM por debajo de React y provoca
+    # esto sin que nada nuestro falle.
+    #
+    # CADA MOTOR LO DICE CON OTRAS PALABRAS, y por mirar solo la frase de
+    # Chrome este filtro dejaba pasar la mitad de los casos. El 06-09-2026 un
+    # iPhone (Chrome sobre WebKit) mando "The object can not be found here."
+    # con `insertBefore@[native code]` en la pila: exactamente el mismo fallo
+    # del traductor, guardado y avisando por Telegram como si fuera nuestro.
+    # Es el mismo error que ya se cometio en `lib/chunkError.js`, donde los
+    # iPhone no se curaban solos porque Safari nombra distinto el chunk roto.
+    #
+    # Se exige la señal DURA —`insertBefore` en el mensaje o en la pila— ademas
+    # de la frase: asi es mas estricto que la regla anterior, que se contentaba
+    # con el mensaje. Nuestro codigo no toca el DOM a mano en ningun sitio; el
+    # unico que llama a insertBefore es React al confirmar un render.
+    _FRASES_DOM = ("not a child of this node",      # Chrome / Firefox
+                   "the object can not be found here")  # WebKit (Safari, iOS)
+    _msg_bajo = message.lower()
+    if "insertbefore" in (_msg_bajo + stack.lower()) and any(f in _msg_bajo for f in _FRASES_DOM):
         logger.info("Error del traductor del navegador, no nuestro")
         return {"success": True, "ignorado": "traductor del navegador"}
 
