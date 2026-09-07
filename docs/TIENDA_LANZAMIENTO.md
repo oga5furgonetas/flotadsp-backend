@@ -43,12 +43,19 @@ en **pecho izquierdo, 8 cm de ancho** → guardar como plantilla.
 | # | Producto en Printful | Tu prenda en la app | Coste |
 |---|---|---|---|
 | 1 | [Gildan 5000](https://www.printful.com/es/personalizables/hombre/camisetas/camiseta-clasica-unisex-5000) · negra | Camiseta FDs negra | 7,72 € |
-| 2 | [Gildan 64000L](https://www.printful.com/es/personalizables/mujer/camisetas/camiseta-basica-mujer-gildan-64000l) · negra | Camiseta FDs mujer | 7,72 € |
+| 2 | [Gildan 64000 softstyle](https://www.printful.com/es/personalizables/hombre/camisetas/camiseta-basica-softstyle-unisex-gildan-64000) · negra | Camiseta FDs entallada | 7,72 € |
 | 3 | [Gildan 18000](https://www.printful.com/es/personalizables/hombre/sudaderas/sudadera-unisex-gildan-18000) · antracita | Sudadera FDs | 17,90 € |
 | 4 | [Gildan 18500](https://www.printful.com/es/personalizables/hombre/sudaderas/sudadera-invierno-con-capucha-unisex-gildan-18500) · negra | Hoodie FDs | 23,39 € |
 | 5 | [SOL'S 32000](https://www.printful.com/es/personalizables/hombre/chaquetas/cortavientos-basico-unisex-sols-32000) · marino | Cortavientos FDs | 22,16 € |
 | 6 | [Yupoong 6245CM](https://www.printful.com/es/personalizables/bordadas/gorras/gorra-beisbol-yupoong-6245cm) · negra | Gorra FDs | 16,65 € |
 | 7 | [Yupoong 1501KC](https://www.printful.com/es/personalizables/bordadas/gorras/gorro-invierno-yupoong-1501kc) · negro | Gorro de invierno FDs | 14,18 € |
+
+**Las dos camisetas son distintas a propósito**: la 5000 es la clásica gruesa
+y de corte recto; la 64000 softstyle es más fina y entallada, de calle. Mismo
+precio las dos. No hay referencia «de mujer»: se descartó la Gildan 64000L
+porque tiene 3,5 estrellas, y la softstyle unisex tiene 4,5 con 3.673
+opiniones. Es lo que hace casi todo el streetwear — una sola referencia de la
+S a la 3XL y cada uno coge su talla.
 
 Los dos últimos son **bordado**, no impresión. Es lo que se espera en una
 gorra: una gorra serigrafiada se ve barata.
