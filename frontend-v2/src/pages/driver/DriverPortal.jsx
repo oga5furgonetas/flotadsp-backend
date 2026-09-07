@@ -88,12 +88,17 @@ export default function DriverPortal() {
      que alguien pueda encontrar por su cuenta. Un `if` en el cliente seria
      una cortina: la ruta seguiria ahi. */
   useEffect(() => {
+    // SIN SESIÓN NO SE PREGUNTA. Esta pantalla también se monta cuando no hay
+    // token —es la que enseña el formulario de entrada—, y una llamada con
+    // sesión obligatoria desde ahí solo puede devolver 401. Fue la que destapó
+    // el bucle de recargas del 07-09-2026.
+    if (!localStorage.getItem(DRIVER_TOKEN_KEY)) return undefined
     let vivo = true
     tiendaEscaparate()
       .then((r) => { if (vivo) setTienda(!!r.data?.visible) })
       .catch(() => {})
     return () => { vivo = false }
-  }, [])
+  }, [driver])
 
   const [vista, setVista] = useState('inicio') // inicio | auditoria | dias | turnos | clave
   const [faltaTel, setFaltaTel] = useState(false)

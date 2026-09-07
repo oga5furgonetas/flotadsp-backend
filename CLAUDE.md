@@ -1309,6 +1309,42 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    con el fallo puesto (¿lo caza?) y con el arbol limpio (¿calla?).
 
 
+69. **Expulsar por un 401 a quien YA esta fuera es una recarga, y una recarga
+   vuelve a pedir.** El portal del conductor tiene la pantalla de entrada en la
+   MISMA ruta a la que se redirige al caducar la sesion (`/conductor`), asi que
+   `location.replace('/conductor')` estando ya alli no navega: **recarga la
+   pagina entera**. La app monta, pide, recibe 401, recarga. Bucle infinito.
+   Medido el 07-09-2026 en los logs del backend de staging:
+   `GET /api/tienda/escaparate` devolviendo **401 cinco o seis veces por
+   segundo sin parar**, con el portal recargandose a ese ritmo. Desde fuera el
+   sintoma es solo «no para de resetearse», que no se parece en nada a la
+   causa: yo mismo lo achaque primero al gotcha 8 —habia un `chunk_curacion`
+   con n=2 en el sessionStorage, coherente con un despliegue reciente— y
+   arregle eso, que estaba mal por su cuenta pero no era esto. Lo que lo
+   resolvio fue mirar QUE peticion se repetia, en los logs del backend, no en
+   el navegador.
+   Lo destapo una llamada NUEVA —`tiendaEscaparate()` en el `useEffect` de
+   `DriverPortal`— que se hacia al montar sin mirar si habia token, y esa
+   pantalla tambien se monta cuando no lo hay: es la que enseña el formulario
+   de entrada. Pero la trampa estaba en el interceptor desde antes, y
+   cualquier otra llamada futura la habria vuelto a pisar. Su propio
+   comentario ya lo avisaba por escrito: «vuelve a la pantalla de inicio para
+   fallar otra vez: un bucle en vez de un aviso».
+   Dos arreglos, y hacen falta los dos: el interceptor solo expulsa **si habia
+   sesion** (`teniaSesion`) —sin token no hay a quien echar, el 401 es la
+   respuesta correcta—, y ninguna llamada con sesion obligatoria sale de esa
+   pantalla sin comprobar el token antes.
+   **En produccion no llego a verse**, y no por suerte del todo: el token del
+   conductor dura 30 dias y la tienda se desplego hace dos, asi que aun no le
+   habia caducado a nadie. Los logs de produccion daban CERO 401 mientras
+   staging ardia. Era una bomba con la mecha puesta.
+   Lo vigila la regla `expulsar-a-quien-ya-esta-fuera` de `check-patrones.mjs`
+   —que estrena `salvoSi`, para reglas que exigen que la guarda acompañe al
+   patron— probada quitando la guarda: da los 2 avisos.
+   Regla general: **antes de redirigir por un error de sesion, preguntarse si
+   el destino es donde ya estas.** Y una pantalla de login puede montarse sin
+   sesion por definicion: lo que salga de ella no puede exigirla.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.

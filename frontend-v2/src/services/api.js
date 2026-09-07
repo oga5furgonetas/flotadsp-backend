@@ -70,8 +70,25 @@ api.interceptors.response.use(
        decía qué hacer.
 
        Aquí se borra SOLO su llave —la del panel no se toca— y se le devuelve a
-       su pantalla de entrada conservando el slug del DSP, que va en el hash. */
-    if (status === 401 && enPortalConductor()
+       su pantalla de entrada conservando el slug del DSP, que va en el hash.
+
+       Y SOLO SI TENÍA SESIÓN. Sin esta guarda, un 401 estando ya en la pantalla
+       de entrada hace `location.replace('/conductor')` sobre `/conductor`, que
+       es una RECARGA ENTERA: la app vuelve a montar, vuelve a pedir, vuelve a
+       recibir 401, vuelve a recargar. Bucle infinito, y desde fuera parece que
+       la pantalla «no para de resetearse».
+       Pasó el 07-09-2026, medido en los logs del backend: `/tienda/escaparate`
+       devolviendo 401 CINCO O SEIS VECES POR SEGUNDO sin parar, con el portal
+       recargándose a ese ritmo. Lo destapó una llamada nueva —la de la tienda—
+       que se hacía al montar sin mirar si había sesión, pero la trampa estaba
+       aquí desde antes y cualquier otra llamada futura la habría vuelto a
+       pisar. Sin token no hay a quien expulsar: el 401 es la respuesta
+       correcta y no hay nada que hacer.
+       El propio comentario de arriba ya avisaba de esto: «vuelve a la pantalla
+       de inicio para fallar otra vez: un bucle en vez de un aviso». */
+    const teniaSesion = !!(localStorage.getItem(DRIVER_TOKEN_KEY)
+      || localStorage.getItem('flotadsp_token'))
+    if (status === 401 && enPortalConductor() && teniaSesion
       && !url.includes('/auth/driver-login')
       && !url.includes('/auth/driver-lookup')
       && !url.includes('/auth/change-my-password')) {

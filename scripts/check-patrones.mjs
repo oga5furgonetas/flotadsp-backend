@@ -199,6 +199,19 @@ const PATRONES = [
     que: 'Estado de Cortex escrito a mano en el frontend',
     porque: 'Las listas canonicas viven en el backend y cambian: una copia en el cliente se queda vieja SIN AVISAR (gotcha 28/40). Que el backend mande el cajon o una bandera ya calculada',
   },
+  {
+    id: 'expulsar-a-quien-ya-esta-fuera',
+    gotcha: 69,
+    // Solo el portal del conductor: es donde la pantalla de ENTRADA vive en la
+    // misma ruta a la que se redirige al expulsar, y por eso un replace ahi es
+    // una recarga. En el panel el login tiene ruta propia (/panel/login).
+    soloEn: /^frontend-v2\/src\/(services|pages\/driver)\//,
+    // Una redireccion a /conductor sin que se compruebe antes que HABIA sesion.
+    re: /location\.replace\(\s*['"`]\/conductor/g,
+    salvoSi: /teniaSesion/,
+    que: 'Redirigir a /conductor por un 401 sin comprobar que habia sesion',
+    porque: 'Estando ya en /conductor, ese replace es una RECARGA ENTERA: monta, pide, 401, recarga. Bucle infinito a 5-6 peticiones por segundo (gotcha 69, 07-09-2026). Sin token no hay a quien expulsar',
+  },
 ]
 
 /* Ficheros a mirar. El frontend viejo y las dependencias no. */
@@ -227,6 +240,10 @@ for (const f of ficheros(RAIZ)) {
     // `soloEn`: hay patrones que solo son un bug en una parte del arbol. El de
     // WhatsApp, por ejemplo, es correcto dentro de `enlace_wa` del backend.
     if (p.soloEn && !p.soloEn.test(rel)) continue
+    // `salvoSi`: la regla no busca la ausencia de algo (eso no se puede con una
+    // expresion sobre una linea), sino que el fichero que USA el patron peligroso
+    // lleve ademas la guarda. Si esta, el patron es correcto.
+    if (p.salvoSi && p.salvoSi.test(txt)) continue
     lineas.forEach((linea, i) => {
       // Los comentarios no ejecutan nada: citar el patrón para explicarlo no es un bug.
       // El `//` de una URL NO abre comentario: cortando ahí, `https://wa.me/…`
