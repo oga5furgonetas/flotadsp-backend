@@ -19401,8 +19401,11 @@ async def empleo_editar_oferta(oferta_id: str, datos: dict = Body(...),
     if not o:
         raise HTTPException(404, "Esa oferta no existe")
     cambios: dict = {}
+    # La direccion de la nave va en la LISTA BLANCA o se descarta en silencio
+    # (gotcha 1): el PATCH solo copia lo que esta aqui.
     for campo, largo in (("titulo", 120), ("ciudad", 80), ("jornada", 60), ("salario", 60),
-                         ("descripcion", 4000), ("requisitos", 2000)):
+                         ("descripcion", 4000), ("requisitos", 2000),
+                         ("direccion", 160), ("cp", 10), ("localidad", 80), ("provincia", 60)):
         if campo in datos:
             cambios[campo] = _empleo_texto(datos[campo], largo)
     if "centro" in datos:
@@ -41868,7 +41871,14 @@ def _empleo_jsonld(o: dict, org: dict, url: str) -> dict:
             "@type": "Place",
             "address": {
                 "@type": "PostalAddress",
-                "addressLocality": _empleo_texto(o.get("ciudad"), 80) or "España",
+                # La LOCALIDAD es donde se trabaja, no la ciudad del anuncio.
+                # No siempre coinciden: la nave de «Vigo» esta en O Porriño, a
+                # 15 km. Google geolocaliza por la direccion, asi que mezclar
+                # «Vigo» con un codigo postal de O Porriño le da datos que se
+                # contradicen. El titulo del anuncio sigue diciendo Vigo, que es
+                # lo que busca la gente, y la comarca es la misma.
+                "addressLocality": (_empleo_texto(o.get("localidad"), 80)
+                                    or _empleo_texto(o.get("ciudad"), 80) or "España"),
                 "addressCountry": "ES",
             },
         },
@@ -41881,9 +41891,23 @@ def _empleo_jsonld(o: dict, org: dict, url: str) -> dict:
     # oferta en «trabajos cerca de mi». Es opcional, asi que omitirla no rompe
     # nada — ponerla mal si, y ademas no se nota: solo se nota en que no llama
     # nadie de la zona.
-    _prov = _empleo_provincia(o.get("ciudad"))
+    _dir = ld["jobLocation"]["address"]
+    # Calle y codigo postal de la nave, si estan guardados. Son OPCIONALES para
+    # Google —la oferta ya vale sin ellos— pero le dejan colocar el puesto en el
+    # punto exacto en vez de en el centro de la ciudad, que en reparto es la
+    # diferencia entre salirle a quien vive al lado y no salirle.
+    _calle = _empleo_texto(o.get("direccion"), 160)
+    if _calle:
+        _dir["streetAddress"] = _calle
+    _cp = re.sub(r"[^0-9]", "", _empleo_texto(o.get("cp"), 10))[:5]
+    if len(_cp) == 5:
+        _dir["postalCode"] = _cp
+    # La provincia: la guardada si la hay, y si no la que se deduce de la
+    # localidad. Nunca inventada (ver `_empleo_provincia`).
+    _prov = (_empleo_texto(o.get("provincia"), 60)
+             or _empleo_provincia(o.get("localidad") or o.get("ciudad")))
     if _prov:
-        ld["jobLocation"]["address"]["addressRegion"] = _prov
+        _dir["addressRegion"] = _prov
     if o.get("requisitos"):
         ld["qualifications"] = _empleo_texto(o.get("requisitos"), 2000)
     jornada = _empleo_tipo_jornada(o.get("jornada"))
