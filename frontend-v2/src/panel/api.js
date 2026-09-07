@@ -504,6 +504,10 @@ export const tiendaSubirLogo = (variante, archivo) => {
   return api.post('/tienda/logos', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
 }
 export const tiendaBorrarLogo = (variante) => api.delete(`/tienda/logos/${variante}`)
+export const tiendaPedidos = () => api.get('/tienda/pedidos')
+export const tiendaConfig = (body) => api.post('/tienda/config', body)
+export const tiendaEstadoPedido = (id, estado) =>
+  api.post(`/tienda/pedidos/${id}/estado`, { estado })
 export const cortexRoutes = (day, center) => api.get('/cortex/routes', { params: { day, center } })
 export const cortexPackage = (tba) => api.get(`/cortex/package/${tba}`)
 export const cortexAlerts = (day, center) => api.get('/cortex/alerts', { params: { day, center } })

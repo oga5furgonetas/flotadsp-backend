@@ -4,6 +4,7 @@ import {
 } from 'lucide-react'
 import { tiendaPreparacion, tiendaMarcarPaso } from '../api'
 import TiendaPrendas from './TiendaPrendas'
+import TiendaPedidos from './TiendaPedidos'
 
 /* ────────────────────────────────────────────────────────────────────────────
    TIENDA DE ROPA Y MATERIAL — todo lo que hace falta para empezar a vender
@@ -148,6 +149,9 @@ export default function TiendaRopa() {
           </div>
         )
       })}
+
+      {/* La tienda de verdad: abrirla, la tanda y los pedidos */}
+      <TiendaPedidos />
 
       {/* El taller: tus propias prendas */}
       <TiendaPrendas />

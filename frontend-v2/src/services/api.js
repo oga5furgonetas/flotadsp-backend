@@ -122,6 +122,15 @@ export const getPortalVehicles = () => api.get('/vehicles/portal')
 /* Lo que le falta a su propia ficha, y como rellenarlo el mismo. */
 export const getMiFicha = () => api.get('/portal/mi-ficha')
 export const guardarMiTelefono = (telefono) => api.post('/portal/mi-telefono', { telefono })
+
+// Tienda del conductor. La cuenta de la tienda es aparte de la del trabajo:
+// aqui se llama con la sesion del portal, que es la que ya tiene.
+export const tiendaEscaparate = () => api.get('/tienda/escaparate')
+export const tiendaCrearPedido = (lineas) => api.post('/tienda/pedido', { lineas })
+export const tiendaMisPedidos = () => api.get('/tienda/mis-pedidos')
+export const tiendaCuenta = () => api.get('/tienda/cuenta')
+export const tiendaVincularCuenta = (email, password) =>
+  api.post('/tienda/cuenta/vincular', { email, password })
 /* Turnos del propio conductor: su calendario y sus peticiones de día. */
 export const getMyShifts = (desde, hasta) => api.get('/shifts/mine', { params: { desde, hasta } })
 // Lo suyo, para el: sus numeros de Cortex y las ayudas del mes

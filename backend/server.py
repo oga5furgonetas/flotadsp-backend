@@ -1438,6 +1438,14 @@ async def _ensure_tenant_indexes(db_name: str):
     # empieza a contar mal el progreso.
     await _idx(tdb.tienda_pasos, "paso", unique=True)
     await _idx(tdb.tienda_prendas, "id", unique=True)
+    await _idx(tdb.tienda_clientes, "id", unique=True)
+    # El correo es la identidad de una cuenta de tienda: unico y sin distinguir
+    # mayusculas. Comprobarlo con un `find` antes de insertar no vale con dos
+    # peticiones a la vez (gotcha 46).
+    await _idx(tdb.tienda_clientes, "email", unique=True,
+               collation={"locale": "es", "strength": 2})
+    await _idx(tdb.tienda_pedidos, "id", unique=True)
+    await _idx(tdb.tienda_pedidos, [("driver_id", 1), ("creado_en", -1)])
     await _idx(tdb.tienda_logos, "variante", unique=True)
     await _idx(tdb.workshops, "id")
     await _idx(tdb.workshops, "center")
@@ -41995,6 +42003,491 @@ async def empleo_seo_sitemap():
         except Exception as e:                                   # noqa: BLE001
             logger.warning("sitemap de empleo (%s): %s", dbn, e)
     return {"ofertas": salida}
+
+
+# =========================
+# TIENDA DEL CONDUCTOR — el escaparate, el pedido y el justificante
+# =========================
+"""Lo que ve el conductor en su portal: elige, pide y paga. Sin stock.
+
+EL MODELO ES PEDIDO AGRUPADO, no una tienda normal. Se recogen pedidos hasta
+el viernes, se cobra por adelantado, y el lunes se hace UN pedido al taller con
+todo junto. Eso es lo que hace barata la personalizacion —el coste de
+preparacion se reparte entre 40 prendas en vez de pagarlo cada una— y lo que
+deja el riesgo de stock en CERO: no se compra nada que no este vendido.
+
+Por eso hay un MINIMO. Si al cerrar no se llega, no se lanza y se devuelve: es
+mejor devolver treinta euros que encargar veinte prendas a precio de veinte
+prendas y perder dinero en cada una.
+
+NACE APAGADA. `visible` es False mientras no haya con que cobrar: la sociedad
+no esta constituida, asi que hoy no se puede emitir una factura. Enseñarles un
+escaparate donde no se puede comprar es peor que no tenerlo.
+
+Y LO QUE SE EMITE ES UN JUSTIFICANTE, NO UNA FACTURA. Sin sociedad y sin NIF no
+hay factura que valga, y llamarle factura a un papel que no lo es le crea un
+problema a quien se la intente deducir. El dia que exista la SL, esto pasa a
+llevar serie, NIF e IVA desglosado — y hasta entonces lo dice claro.
+"""
+
+_TCOL_CONFIG = "tienda_config"
+_TCOL_PEDIDOS = "tienda_pedidos"
+
+_TIENDA_MIN_DEFECTO = 30
+_TIENDA_DIA_CIERRE = 4              # 0=lunes ... 4=viernes
+_TIENDA_MAX_UDS_LINEA = 5
+_TIENDA_MAX_LINEAS = 8
+
+
+async def _tienda_conf() -> dict:
+    """La configuracion de la tienda, con los valores por defecto puestos."""
+    c = await db[_TCOL_CONFIG].find_one({"_id": "config"}, {"_id": 0}) or {}
+    return {
+        # APAGADA salvo que alguien la encienda a proposito.
+        "visible": bool(c.get("visible")),
+        "minimo": int(c.get("minimo") or _TIENDA_MIN_DEFECTO),
+        "dia_cierre": int(c.get("dia_cierre") if c.get("dia_cierre") is not None
+                          else _TIENDA_DIA_CIERRE),
+        "aviso": c.get("aviso") or "",
+        # Mientras no haya pasarela, el pedido queda a la espera y lo marca la
+        # oficina al recibir el pago. El dia que haya Stripe, esto cambia solo.
+        "pasarela": c.get("pasarela") or "ninguna",
+    }
+
+
+def _tienda_cierre(dia_cierre: int) -> str:
+    """El proximo cierre, en ISO. Siempre el mismo dia de la semana, a las 23:59.
+
+    Si HOY es el dia de cierre, cierra hoy: quien pide el viernes por la mañana
+    entra en esta tanda, no en la siguiente. Es lo que espera cualquiera.
+    """
+    ahora = datetime.now(timezone.utc)
+    faltan = (int(dia_cierre) - ahora.weekday()) % 7
+    dia = (ahora + timedelta(days=faltan)).replace(hour=23, minute=59, second=0, microsecond=0)
+    return dia.isoformat()
+
+
+def _tienda_precio(p: dict) -> float | None:
+    """El precio de venta de una prenda publicada, o None si no lo tiene."""
+    try:
+        v = float(p.get("pvp") or 0)
+    except (TypeError, ValueError):
+        return None
+    return round(v, 2) if v > 0 else None
+
+
+async def _tienda_prendas_publicas() -> list:
+    """Las prendas PUBLICADAS y con precio. Nada mas sale al escaparate."""
+    docs = await db[_PRENDAS_COL].find(
+        {"archivada": {"$ne": True}, "estado": "publicada"},
+        {"_id": 0}).sort("creada_en", -1).to_list(_PRENDAS_MAX)
+    return [p for p in docs if _tienda_precio(p) is not None]
+
+
+def _tienda_driver(user: dict) -> str:
+    """El id del conductor que hace la peticion. Solo conductores."""
+    if user.get("role") != "driver":
+        raise HTTPException(403, "Esto es del portal del conductor")
+    return user.get("sub") or ""
+
+
+@api_router.get("/tienda/escaparate")
+async def tienda_escaparate(user: dict = Depends(require_any_auth)):
+    """Lo que ve el conductor. Si esta apagada, no se cuenta nada mas."""
+    _tienda_driver(user)
+    conf = await _tienda_conf()
+    if not conf["visible"]:
+        # Ni prendas ni precios ni fechas: apagada es apagada.
+        return {"visible": False}
+    cierre = _tienda_cierre(conf["dia_cierre"])
+    prendas = await _tienda_prendas_publicas()
+    # Cuantas unidades lleva la tanda: es lo que dice si va a salir o no, y
+    # enseñarlo hace que la gente avise a un compañero.
+    llevan = 0
+    async for p in db[_TCOL_PEDIDOS].find(
+            {"cierre": cierre, "estado": {"$in": ["pendiente_pago", "pagado"]}},
+            {"_id": 0, "unidades": 1}):
+        llevan += int(p.get("unidades") or 0)
+    return {
+        "visible": True, "cierre": cierre, "minimo": conf["minimo"],
+        "unidades": llevan, "aviso": conf["aviso"],
+        "pasarela": conf["pasarela"],
+        "prendas": [{
+            "id": p["id"], "nombre": p.get("nombre"), "tipo": p.get("tipo"),
+            "color": p.get("color"), "tallas": p.get("tallas") or [],
+            "estampaciones": p.get("estampaciones") or [],
+            "franja_manga": bool(p.get("franja_manga")),
+            "precio": _tienda_precio(p),
+            "lleva_nombre": any(e.get("con_nombre") for e in (p.get("estampaciones") or [])),
+        } for p in prendas],
+    }
+
+
+@api_router.post("/tienda/pedido")
+async def tienda_crear_pedido(body: dict = Body(...), user: dict = Depends(require_any_auth)):
+    """El conductor hace su pedido. El precio lo pone el SERVIDOR, siempre."""
+    did = _tienda_driver(user)
+    conf = await _tienda_conf()
+    if not conf["visible"]:
+        raise HTTPException(400, "La tienda no está abierta")
+
+    lineas_in = body.get("lineas")
+    if not isinstance(lineas_in, list) or not lineas_in:
+        raise HTTPException(400, "No has elegido nada")
+    if len(lineas_in) > _TIENDA_MAX_LINEAS:
+        raise HTTPException(400, "Como mucho %d artículos por pedido" % _TIENDA_MAX_LINEAS)
+
+    catalogo = {p["id"]: p for p in await _tienda_prendas_publicas()}
+    lineas, total, unidades = [], 0.0, 0
+    for l in lineas_in:
+        if not isinstance(l, dict):
+            raise HTTPException(400, "Pedido mal formado")
+        p = catalogo.get(_texto_cuerpo(l.get("prenda"), 60))
+        if not p:
+            raise HTTPException(400, "Una de las prendas ya no está a la venta")
+        talla = _texto_cuerpo(l.get("talla"), 6).upper()
+        if talla not in (p.get("tallas") or []):
+            raise HTTPException(400, "Esa talla no existe para %s" % p.get("nombre"))
+        uds = _entero(l.get("cantidad"), "la cantidad", defecto=1, minimo=1,
+                      maximo=_TIENDA_MAX_UDS_LINEA)
+        # EL PRECIO SALE DEL CATALOGO, NUNCA DEL CUERPO. Si viniera del cliente,
+        # bastaria con mandar 0,01 € para llevarse una sudadera.
+        precio = _tienda_precio(p)
+        lineas.append({
+            "prenda": p["id"], "nombre": p.get("nombre"), "talla": talla,
+            "cantidad": uds, "precio": precio, "importe": round(precio * uds, 2),
+            # El nombre bordado es del conductor: se recorta y se guarda como lo
+            # escribe, que es como va a ir en la prenda.
+            "personalizado": _texto_cuerpo(l.get("personalizado"), 20),
+        })
+        total += precio * uds
+        unidades += uds
+
+    ficha = await db.drivers.find_one({"id": did}, {"_id": 0, "name": 1, "center": 1, "email": 1})
+    ahora = datetime.now(timezone.utc)
+    doc = {
+        "id": str(uuid.uuid4()),
+        # Referencia corta y legible, que es lo que se dice por teléfono.
+        "ref": "P-%s-%s" % (ahora.strftime("%y%m%d"), uuid.uuid4().hex[:4].upper()),
+        "driver_id": did, "driver_nombre": (ficha or {}).get("name") or "",
+        "centro": (ficha or {}).get("center") or "",
+        "email": _texto_cuerpo(body.get("email"), 160).lower() or ((ficha or {}).get("email") or ""),
+        "lineas": lineas, "total": round(total, 2), "unidades": unidades,
+        "cierre": _tienda_cierre(conf["dia_cierre"]),
+        "estado": "pendiente_pago",
+        "creado_en": ahora.isoformat(),
+    }
+    await db[_TCOL_PEDIDOS].insert_one(dict(doc))   # copia: insert_one muta (gotcha 42)
+    return _tienda_pedido_publico(doc)
+
+
+def _tienda_pedido_publico(p: dict) -> dict:
+    """Un pedido tal y como lo ve su dueño. Sin campos internos."""
+    return {k: v for k, v in p.items() if k not in ("_id", "driver_id")}
+
+
+@api_router.get("/tienda/mis-pedidos")
+async def tienda_mis_pedidos(user: dict = Depends(require_any_auth)):
+    """Los pedidos del conductor que pregunta. SOLO los suyos."""
+    did = _tienda_driver(user)
+    docs = await db[_TCOL_PEDIDOS].find(
+        {"driver_id": did}, {"_id": 0}).sort("creado_en", -1).to_list(50)
+    return {"pedidos": [_tienda_pedido_publico(p) for p in docs]}
+
+
+@api_router.get("/tienda/pedido/{pedido_id}/justificante")
+async def tienda_justificante(pedido_id: str, user: dict = Depends(require_any_auth)):
+    """El justificante del pedido. Solo su dueño, y comprobado en la consulta.
+
+    NO ES UNA FACTURA y lo dice: sin sociedad constituida no hay NIF con el que
+    emitirla, y llamarle factura a esto le crearia un problema a quien se la
+    intentara deducir. Cuando exista la SL, esto pasa a llevar serie, NIF e IVA
+    desglosado.
+    """
+    did = _tienda_driver(user)
+    # El dueño va en el FILTRO, no en una comprobacion despues: asi no hay forma
+    # de leer el pedido de otro ni por error de programacion.
+    p = await db[_TCOL_PEDIDOS].find_one({"id": pedido_id, "driver_id": did}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Ese pedido no existe")
+    return {
+        "documento": "justificante",
+        "es_factura": False,
+        "nota": ("Este documento es un justificante de pedido, no una factura. "
+                 "La factura se emite al entregar el pedido."),
+        "pedido": _tienda_pedido_publico(p),
+    }
+
+
+# ---- lado de la oficina --------------------------------------------------
+
+@api_router.get("/tienda/pedidos")
+async def tienda_pedidos_oficina(_=Depends(require_admin)):
+    """La tanda que se esta juntando, para saber si sale y que hay que pedir."""
+    conf = await _tienda_conf()
+    cierre = _tienda_cierre(conf["dia_cierre"])
+    docs = await db[_TCOL_PEDIDOS].find(
+        {"estado": {"$ne": "anulado"}}, {"_id": 0}).sort("creado_en", -1).to_list(500)
+    tanda = [p for p in docs if p.get("cierre") == cierre]
+    # Que hay que pedirle al taller: agrupado por prenda y talla, que es como
+    # se encarga. Sumar a mano una lista de pedidos es como se equivoca uno.
+    resumen: dict = {}
+    for p in tanda:
+        for l in p.get("lineas") or []:
+            k = "%s · %s" % (l.get("nombre"), l.get("talla"))
+            resumen[k] = resumen.get(k, 0) + int(l.get("cantidad") or 0)
+    uds = sum(int(p.get("unidades") or 0) for p in tanda)
+    return {
+        "config": conf, "cierre": cierre,
+        "unidades": uds, "minimo": conf["minimo"],
+        "sale": uds >= conf["minimo"],
+        "importe": round(sum(float(p.get("total") or 0) for p in tanda), 2),
+        "pagados": sum(1 for p in tanda if p.get("estado") == "pagado"),
+        "para_el_taller": [{"que": k, "unidades": v}
+                           for k, v in sorted(resumen.items(), key=lambda x: (-x[1], x[0]))],
+        "pedidos": docs,
+    }
+
+
+@api_router.post("/tienda/config")
+async def tienda_guardar_config(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Abrir o cerrar la tienda y ajustar el minimo. Solo la oficina."""
+    conf = await _tienda_conf()
+    cambios = {}
+    if "visible" in body:
+        cambios["visible"] = bool(body["visible"])
+    if "minimo" in body:
+        cambios["minimo"] = _entero(body.get("minimo"), "el mínimo", defecto=conf["minimo"],
+                                    minimo=1, maximo=500)
+    if "dia_cierre" in body:
+        cambios["dia_cierre"] = _entero(body.get("dia_cierre"), "el día de cierre",
+                                        defecto=conf["dia_cierre"], minimo=0, maximo=6)
+    if "aviso" in body:
+        cambios["aviso"] = _texto_cuerpo(body.get("aviso"), 200)
+    if not cambios:
+        return conf
+    cambios["at"] = datetime.now(timezone.utc).isoformat()
+    cambios["por"] = user.get("name") or user.get("username") or ""
+    await db[_TCOL_CONFIG].update_one({"_id": "config"}, {"$set": cambios}, upsert=True)
+    return await _tienda_conf()
+
+
+@api_router.post("/tienda/pedidos/{pedido_id}/estado")
+async def tienda_marcar_pedido(pedido_id: str, body: dict = Body(...),
+                               user: dict = Depends(require_admin)):
+    """Marca un pedido como pagado, encargado, entregado o anulado."""
+    estado = _texto_cuerpo(body.get("estado"), 20)
+    if estado not in ("pendiente_pago", "pagado", "encargado", "entregado", "anulado"):
+        raise HTTPException(400, "Ese estado no existe")
+    r = await db[_TCOL_PEDIDOS].update_one(
+        {"id": pedido_id},
+        {"$set": {"estado": estado,
+                  "estado_at": datetime.now(timezone.utc).isoformat(),
+                  "estado_por": user.get("name") or user.get("username") or ""}})
+    if not r.matched_count:
+        raise HTTPException(404, "Ese pedido no existe")
+    return {"ok": True, "id": pedido_id, "estado": estado}
+
+
+# -------------------------------------------------------------------------
+# TIENDA — CUENTAS DE CLIENTE, APARTE DE LAS DEL TRABAJO
+# -------------------------------------------------------------------------
+"""Quien compra tiene su propia cuenta, y NO es la del trabajo.
+
+DOS IDENTIDADES SEPARADAS A PROPOSITO:
+
+· La cuenta de TRABAJO (`driver_accounts`) la crea la oficina, va con el correo
+  de la empresa y sirve para auditar la furgoneta y pedir dias. Esa no se toca:
+  el conductor sigue entrando con ella exactamente igual.
+· La cuenta de TIENDA (`tienda_clientes`) la crea la persona, con SU correo de
+  verdad y SU contraseña. Sirve para comprar y para recibir el aviso de un
+  drop nuevo.
+
+Por que separadas y no un campo mas en la ficha:
+ 1. El correo del trabajo se lo lee la oficina; el suyo, no. Un justificante de
+    compra es cosa suya.
+ 2. El dia que alguien deja la empresa, su cuenta de trabajo se apaga — y su
+    pedido pagado no puede desaparecer con ella.
+ 3. Y sobre todo: **puede comprar quien no trabaja aqui**. Un amigo, un
+    conductor de otro DSP, cualquiera. Con una sola identidad eso seria
+    imposible sin darle acceso al portal de la empresa.
+
+El vinculo es opcional (`driver_id`): si la cuenta la crea un conductor desde
+su portal, queda enganchada a su ficha y no tiene que volver a identificarse.
+
+EL TOKEN DE TIENDA ES SUYO Y NO SE MEZCLA. Lleva `scope: "tienda"` y se lee con
+una dependencia aparte, sin tocar `get_current_user`: un fallo aqui no puede
+abrirle a nadie el panel ni el portal del conductor.
+"""
+
+_TCOL_CLIENTES = "tienda_clientes"
+_TIENDA_CLAVE_MIN = 8
+_TIENDA_TOKEN_DIAS = 60
+
+
+def _tienda_correo(valor) -> str:
+    """El correo, normalizado. Sin correo no hay cuenta: es donde va todo."""
+    c = _texto_cuerpo(valor, 160).lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[a-z]{2,}$", c):
+        raise HTTPException(400, "Ese correo no parece válido")
+    return c
+
+
+def _tienda_clave_ok(valor) -> str:
+    """La contraseña, con el minimo comprobado EN EL SERVIDOR.
+
+    El navegador ya avisa mientras se escribe, pero eso es una comodidad, no
+    una defensa: quien mande la peticion a mano se salta la pantalla entera.
+    """
+    c = str(valor or "")
+    if len(c) < _TIENDA_CLAVE_MIN:
+        raise HTTPException(400, "La contraseña necesita al menos %d caracteres"
+                            % _TIENDA_CLAVE_MIN)
+    if len(c) > 200:
+        raise HTTPException(400, "Esa contraseña es demasiado larga")
+    return c
+
+
+def _tienda_token_cliente(cliente: dict, db_name: str) -> str:
+    """Token de la tienda. `scope` lo separa de los del panel y del portal."""
+    return jwt.encode({
+        "sub": cliente["id"], "scope": "tienda", "db_name": db_name,
+        "email": cliente.get("email"),
+        "exp": datetime.now(timezone.utc) + timedelta(days=_TIENDA_TOKEN_DIAS),
+    }, SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+async def _tienda_cliente_del_token(request: Request) -> dict | None:
+    """El cliente de tienda del Bearer, o None. NUNCA acepta otro scope."""
+    cab = request.headers.get("authorization") or ""
+    if not cab.lower().startswith("bearer "):
+        return None
+    try:
+        datos = decode_token(cab[7:]) or {}
+    except Exception:                                            # noqa: BLE001
+        return None
+    if datos.get("scope") != "tienda":
+        return None
+    # La empresa la fija el token, como en todo endpoint sin sesion de panel
+    # (gotcha 26): sin esto caeria en la BD por defecto.
+    if datos.get("db_name"):
+        set_current_org_db(datos["db_name"])
+    return await db[_TCOL_CLIENTES].find_one(
+        {"id": datos.get("sub"), "activo": {"$ne": False}}, {"_id": 0, "hashed_password": 0})
+
+
+def _tienda_cliente_publico(c: dict) -> dict:
+    return {"id": c.get("id"), "email": c.get("email"), "nombre": c.get("nombre") or "",
+            "es_conductor": bool(c.get("driver_id")), "avisos": bool(c.get("avisos"))}
+
+
+async def _tienda_crear_cliente(correo: str, clave: str, nombre: str,
+                                driver_id: str = "", avisos: bool = True) -> dict:
+    """Crea la cuenta. El correo unico lo garantiza el INDICE, no un `find`.
+
+    Comprobarlo antes con una consulta no sirve con dos peticiones a la vez:
+    las dos pasan la comprobacion y las dos insertan (gotcha 46).
+    """
+    doc = {
+        "id": str(uuid.uuid4()), "email": correo,
+        "hashed_password": hash_password(clave),
+        "nombre": _texto_cuerpo(nombre, 80),
+        "driver_id": driver_id or None,
+        "avisos": bool(avisos), "activo": True,
+        "creado_en": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await db[_TCOL_CLIENTES].insert_one(dict(doc))
+    except DuplicateKeyError:
+        raise HTTPException(409, "Ya hay una cuenta con ese correo. Entra con ella.")
+    return doc
+
+
+@api_router.post("/tienda/cuenta/registro")
+async def tienda_registro(body: dict = Body(...), request: Request = None):
+    """Cuenta nueva de tienda. PUBLICA: puede comprar quien no trabaja aqui."""
+    _rl_public_action("tregistro:%s" % _rl_key_ip(request), max_count=8, window_s=3600,
+                      detail="Demasiadas cuentas seguidas. Inténtalo en un rato.")
+    await _set_tenant_by_slug(_texto_cuerpo(body.get("slug"), 60))
+    correo = _tienda_correo(body.get("email"))
+    clave = _tienda_clave_ok(body.get("password"))
+    nombre = _texto_cuerpo(body.get("nombre"), 80)
+    if len(nombre) < 2:
+        raise HTTPException(400, "Escribe tu nombre")
+    c = await _tienda_crear_cliente(correo, clave, nombre,
+                                    avisos=bool(body.get("avisos", True)))
+    return {"token": _tienda_token_cliente(c, _current_db_name.get()),
+            "cliente": _tienda_cliente_publico(c)}
+
+
+@api_router.post("/tienda/cuenta/entrar")
+async def tienda_entrar(body: dict = Body(...), request: Request = None):
+    """Entrar en la tienda con la cuenta de tienda."""
+    correo = _texto_cuerpo(body.get("email"), 160).lower()
+    rl = "tentrar:%s" % (correo or _rl_key_ip(request))
+    _rl_check(rl)
+    await _set_tenant_by_slug(_texto_cuerpo(body.get("slug"), 60))
+    c = await db[_TCOL_CLIENTES].find_one({"email": correo, "activo": {"$ne": False}})
+    if not c or not verify_password(str(body.get("password") or ""), c["hashed_password"]):
+        await _rl_fail(rl, "tienda '%s' (IP %s)" % (correo, _rl_key_ip(request)))
+        # La misma espera que en los otros logins: sin ella, el tiempo de
+        # respuesta dice si el correo existe.
+        await asyncio.sleep(0.8)
+        raise HTTPException(401, "Correo o contraseña incorrectos")
+    _rl_ok(rl)
+    return {"token": _tienda_token_cliente(c, _current_db_name.get()),
+            "cliente": _tienda_cliente_publico(c)}
+
+
+@api_router.post("/tienda/cuenta/vincular")
+async def tienda_vincular_cuenta(body: dict = Body(...), user: dict = Depends(require_any_auth)):
+    """El conductor se crea SU cuenta de tienda desde el portal, ya identificado.
+
+    No vuelve a entrar en ningun sitio: ya ha demostrado quien es con la cuenta
+    del trabajo. Aqui solo dice con que correo suyo quiere que le lleguen las
+    cosas y que contraseña quiere para la tienda.
+    """
+    did = _tienda_driver(user)
+    correo = _tienda_correo(body.get("email"))
+    clave = _tienda_clave_ok(body.get("password"))
+    ya = await db[_TCOL_CLIENTES].find_one({"driver_id": did}, {"_id": 0})
+    if ya:
+        raise HTTPException(409, "Ya tienes cuenta de tienda con %s" % ya.get("email"))
+    ficha = await db.drivers.find_one({"id": did}, {"_id": 0, "name": 1})
+    c = await _tienda_crear_cliente(correo, clave, (ficha or {}).get("name") or "",
+                                    driver_id=did, avisos=bool(body.get("avisos", True)))
+    return {"token": _tienda_token_cliente(c, _current_db_name.get()),
+            "cliente": _tienda_cliente_publico(c)}
+
+
+@api_router.get("/tienda/cuenta")
+async def tienda_mi_cuenta(request: Request):
+    """Quien soy en la tienda. Vale el token de tienda Y el del conductor."""
+    c = await _tienda_cliente_del_token(request)
+    if c:
+        return {"cliente": _tienda_cliente_publico(c), "via": "tienda"}
+    # Si viene del portal, se busca su cuenta por la ficha.
+    try:
+        user = await get_current_user(request, await _bearer(request))
+    except Exception:                                            # noqa: BLE001
+        return {"cliente": None}
+    if user.get("role") != "driver":
+        return {"cliente": None}
+    c = await db[_TCOL_CLIENTES].find_one(
+        {"driver_id": user.get("sub"), "activo": {"$ne": False}}, {"_id": 0})
+    return {"cliente": _tienda_cliente_publico(c) if c else None,
+            "via": "conductor" if c else None}
+
+
+@api_router.post("/tienda/cuenta/avisos")
+async def tienda_avisos(body: dict = Body(...), request: Request = None):
+    """Activa o quita los avisos de drops nuevos. Lo decide la persona."""
+    c = await _tienda_cliente_del_token(request)
+    if not c:
+        raise HTTPException(401, "Entra en tu cuenta de tienda")
+    quiere = bool(body.get("avisos"))
+    await db[_TCOL_CLIENTES].update_one({"id": c["id"]}, {"$set": {"avisos": quiere}})
+    return {"ok": True, "avisos": quiere}
 
 
 app.include_router(auth_router)

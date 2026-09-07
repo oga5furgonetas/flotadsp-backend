@@ -38,29 +38,43 @@ def _constantes():
 def _estados_en_filtros():
     """Los literales que aparecen en un filtro sobre el campo `estado`.
 
-    Busca `{"estado": {"$nin": [...]}}` y `{"$in": [...]}` en cualquier parte
-    del fichero, que es como se escriben las consultas a Mongo aqui.
+    Busca `{"estado": {"$nin": [...]}}` y `{"$in": [...]}`, que es como se
+    escriben las consultas a Mongo aqui.
+
+    SOLO EN LAS FUNCIONES QUE HABLAN DE `ordenes_trabajo`. Antes miraba el
+    fichero entero, y eso da por hecho que `estado` significa siempre lo mismo
+    en 42.000 lineas. En cuanto entro la tienda —cuyos pedidos tienen su propio
+    `estado`: pendiente_pago, pagado, entregado— el checker acuso a dos filtros
+    perfectamente correctos de usar estados inventados. Un checker que grita en
+    falso deja de leerse, asi que se acota al sitio del que habla.
     """
     arbol = ast.parse(io.open(RUTA, encoding="utf-8-sig").read())
+    ambito = []
+    for fn in ast.walk(arbol):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            volcado = ast.dump(fn)
+            if "ordenes_trabajo" in volcado or "OT_ESTADOS" in volcado:
+                ambito.append(fn)
     encontrados = []
-    for n in ast.walk(arbol):
-        if not isinstance(n, ast.Dict):
-            continue
-        for clave, valor in zip(n.keys, n.values):
-            if getattr(clave, "value", None) != "estado":
-                continue
-            if not isinstance(valor, ast.Dict):
-                continue
-            for k2, v2 in zip(valor.keys, valor.values):
-                if getattr(k2, "value", None) not in ("$nin", "$in"):
-                    continue
-                try:
-                    lista = ast.literal_eval(v2)
-                except Exception:                                # noqa: BLE001
-                    continue                # `list(OT_ESTADOS_CERRADOS)`: ya es la constante
-                for e in (lista or []):
-                    if isinstance(e, str):
-                        encontrados.append((e, getattr(n, "lineno", 0)))
+    for raiz in ambito:
+      for n in ast.walk(raiz):
+          if not isinstance(n, ast.Dict):
+              continue
+          for clave, valor in zip(n.keys, n.values):
+              if getattr(clave, "value", None) != "estado":
+                  continue
+              if not isinstance(valor, ast.Dict):
+                  continue
+              for k2, v2 in zip(valor.keys, valor.values):
+                  if getattr(k2, "value", None) not in ("$nin", "$in"):
+                      continue
+                  try:
+                      lista = ast.literal_eval(v2)
+                  except Exception:                                # noqa: BLE001
+                      continue                # `list(OT_ESTADOS_CERRADOS)`: ya es la constante
+                  for e in (lista or []):
+                      if isinstance(e, str):
+                          encontrados.append((e, getattr(n, "lineno", 0)))
     return encontrados
 
 

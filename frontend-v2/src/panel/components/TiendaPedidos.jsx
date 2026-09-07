@@ -1,0 +1,196 @@
+import { useCallback, useEffect, useState } from 'react'
+import { Loader2, Store, Check, Package, AlertTriangle } from 'lucide-react'
+import { tiendaPedidos, tiendaConfig, tiendaEstadoPedido } from '../api'
+
+/* ────────────────────────────────────────────────────────────────────────────
+   LA TIENDA, DESDE LA OFICINA — abrirla, ver la tanda y marcar los pagos
+   ---------------------------------------------------------------------------
+   NACE CERRADA y el interruptor está aquí. Mientras esté cerrada, en el móvil
+   del conductor no aparece ni la entrada del menú: no es que la pantalla esté
+   oculta, es que el servidor no contesta nada.
+
+   Lo que hay que mirar antes de encargar es UNA cifra: cuántas unidades lleva
+   la tanda. Por debajo del mínimo no compensa —el coste de preparación se
+   reparte entre menos prendas— y lo honesto es no lanzarla y devolver.
+
+   Y la lista «para el taller» va agrupada por prenda y talla, que es como se
+   encarga. Sumar a mano una lista de pedidos es exactamente como se pide una
+   talla de menos.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+const eur = (n) => `${Number(n || 0).toFixed(2).replace('.', ',')} €`
+const DIAS = ['lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo']
+
+const ESTADOS = [
+  ['pendiente_pago', 'Pendiente'], ['pagado', 'Pagado'],
+  ['encargado', 'Encargado'], ['entregado', 'Entregado'], ['anulado', 'Anulado'],
+]
+
+export default function TiendaPedidos() {
+  const [d, setD] = useState(null)
+  const [cargando, setCargando] = useState(true)
+  const [guardando, setGuardando] = useState('')
+  const [err, setErr] = useState('')
+
+  const cargar = useCallback(() => {
+    setCargando(true)
+    tiendaPedidos()
+      .then((r) => { setD(r.data); setErr('') })
+      .catch(() => setErr('No se ha podido cargar la tienda.'))
+      .finally(() => setCargando(false))
+  }, [])
+
+  useEffect(() => { cargar() }, [cargar])
+
+  const guardar = async (cambios) => {
+    setGuardando('config'); setErr('')
+    try { await tiendaConfig(cambios); cargar() } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se ha podido guardar.')
+    } finally { setGuardando('') }
+  }
+
+  const marcar = async (id, estado) => {
+    setGuardando(id)
+    try { await tiendaEstadoPedido(id, estado); cargar() } catch {
+      setErr('No se ha podido cambiar el estado.')
+    } finally { setGuardando('') }
+  }
+
+  if (cargando && !d) {
+    return (
+      <div className="mt-6 flex items-center gap-2 text-sm text-dark-400">
+        <Loader2 size={15} className="animate-spin" /> Cargando la tienda…
+      </div>
+    )
+  }
+  if (!d) return <p className="mt-6 text-sm text-red-400">{err}</p>
+
+  const { config, unidades, minimo, sale, importe, pagados, para_el_taller: lista, pedidos } = d
+  const enTanda = pedidos.filter((p) => p.cierre === d.cierre)
+
+  return (
+    <div className="mt-6">
+      <div className="mb-2 flex items-center gap-2 text-[13px] font-semibold text-dark-100">
+        <Store size={15} /> La tienda
+      </div>
+
+      {/* El interruptor */}
+      <div className="rounded-xl border border-dark-800 bg-dark-900/40 p-3">
+        <label className="flex items-start gap-2.5">
+          <input type="checkbox" className="mt-0.5" checked={!!config.visible}
+            disabled={guardando === 'config'}
+            onChange={(e) => guardar({ visible: e.target.checked })} />
+          <span className="text-[12.5px] leading-snug text-dark-300">
+            <b className="text-dark-100">Abierta para los conductores</b>
+            <span className="block text-dark-500">
+              {config.visible
+                ? 'La ven en su portal y pueden pedir.'
+                : 'Apagada: en su móvil no aparece ni la entrada del menú.'}
+            </span>
+          </span>
+        </label>
+
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <div>
+            <label className="label">Mínimo de prendas</label>
+            <input type="number" min="1" className="input py-1.5 text-[13px]"
+              defaultValue={config.minimo}
+              onBlur={(e) => {
+                const v = Number(e.target.value)
+                if (v && v !== config.minimo) guardar({ minimo: v })
+              }} />
+          </div>
+          <div>
+            <label className="label">Cierra los</label>
+            <select className="input py-1.5 text-[13px]" value={config.dia_cierre}
+              onChange={(e) => guardar({ dia_cierre: Number(e.target.value) })}>
+              {DIAS.map((n, i) => <option key={n} value={i}>{n}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {config.pasarela === 'ninguna' && (
+          <div className="mt-3 flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-[12px] text-amber-200">
+            <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+            <span>
+              Todavía no hay pasarela de pago: los pedidos se quedan en «pendiente» y
+              los marcas tú al cobrar. Cuando tengas la cuenta de la SL se conecta y
+              se marcan solos.
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* La tanda */}
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <Cifra t="Prendas" v={`${unidades}/${minimo}`} mal={!sale} />
+        <Cifra t="Pedidos" v={enTanda.length} />
+        <Cifra t="Importe" v={eur(importe)} />
+      </div>
+      <p className="mt-1.5 text-[12px] text-dark-500">
+        {sale
+          ? <>Cierra el {new Date(d.cierre).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })} y <b className="text-emerald-400">ya sale</b>. {pagados} pedidos pagados.</>
+          : <>Faltan <b className="text-amber-300">{minimo - unidades}</b> prendas para que compense lanzarla.</>}
+      </p>
+
+      {/* Qué pedirle al taller */}
+      {lista.length > 0 && (
+        <div className="mt-3 rounded-xl border border-dark-800">
+          <div className="border-b border-dark-800 px-3 py-2 text-[12px] font-medium text-dark-300">
+            <Package size={12} className="mr-1 inline" /> Qué pedirle al taller
+          </div>
+          {lista.map((l) => (
+            <div key={l.que} className="flex items-center justify-between border-b border-dark-800 px-3 py-1.5 text-[12.5px] last:border-0">
+              <span className="text-dark-300">{l.que}</span>
+              <span className="font-semibold tabular-nums text-dark-100">{l.unidades}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {err && <p className="mt-2 text-[12.5px] text-red-400">{err}</p>}
+
+      {/* Los pedidos */}
+      {pedidos.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {pedidos.slice(0, 25).map((p) => (
+            <div key={p.id} className="rounded-xl border border-dark-800 bg-dark-900/40 p-2.5">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+                <span className="font-mono text-[11.5px] text-dark-400">{p.ref}</span>
+                <span className="text-[12.5px] font-medium text-dark-100">{p.driver_nombre || '—'}</span>
+                <span className="text-[12.5px] font-semibold tabular-nums text-dark-200">{eur(p.total)}</span>
+              </div>
+              <div className="mt-0.5 text-[11.5px] text-dark-500">
+                {(p.lineas || []).map((l) => `${l.cantidad}× ${l.nombre} ${l.talla}`).join(' · ')}
+              </div>
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {ESTADOS.map(([id, txt]) => (
+                  <button key={id} disabled={guardando === p.id}
+                    onClick={() => marcar(p.id, id)}
+                    className={`rounded-lg border px-2 py-0.5 text-[11.5px] ${
+                      p.estado === id
+                        ? 'border-brand-500 bg-brand-500/15 text-brand-300'
+                        : 'border-dark-700 text-dark-500 hover:border-dark-500'}`}>
+                    {p.estado === id && <Check size={10} className="mr-0.5 inline" />}{txt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {pedidos.length === 0 && (
+        <p className="mt-3 text-[12.5px] text-dark-500">Todavía no ha pedido nadie.</p>
+      )}
+    </div>
+  )
+}
+
+function Cifra({ t, v, mal }) {
+  return (
+    <div className="rounded-lg border border-dark-800 bg-dark-900/40 px-2.5 py-1.5">
+      <div className="text-[11px] text-dark-500">{t}</div>
+      <div className={`text-[15px] font-semibold tabular-nums ${mal ? 'text-amber-300' : 'text-dark-100'}`}>{v}</div>
+    </div>
+  )
+}

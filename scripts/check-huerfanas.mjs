@@ -20,6 +20,15 @@ const RAIZ = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
    a mano (curl / consola) o endpoints de diagnóstico. Están aquí para que el
    checker no las cante cada vez; si borras una, bórrala también de esta lista. */
 const SIN_UI_A_PROPOSITO = new Set([
+  // ── LA TIENDA PUBLICA, TODAVIA SIN PANTALLA ──────────────────────────
+  // Las cuentas de tienda existen para que pueda comprar quien NO trabaja
+  // aqui (un amigo, un conductor de otro DSP). El conductor no las usa: desde
+  // su portal se vincula ya identificado, con `/tienda/cuenta/vincular`, que
+  // si esta enganchada. Estas tres son la puerta de la tienda publica, que se
+  // monta cuando la tienda se abra — hoy nace apagada a proposito.
+  'POST /tienda/cuenta/registro',
+  'POST /tienda/cuenta/entrar',
+  'POST /tienda/cuenta/avisos',
   // ── LAS LLAMA CLOUDFLARE, NO EL NAVEGADOR ─────────────────────────────
   // Estas dos las consume `frontend-v2/functions/`, que corre en el borde de
   // Cloudflare y mete los datos DENTRO del HTML antes de servirlo. No pueden

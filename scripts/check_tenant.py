@@ -41,7 +41,11 @@ FIJAN = {"_set_tenant_by_slug", "set_current_org_db", "_ot_por_token", "_apoyo_p
          "_cortex_ingest_org",
          # Resuelve empresa + oferta desde la URL publica de empleo y llama a
          # `_set_tenant_by_slug` en su primera linea.
-         "_empleo_oferta_publica"}
+         "_empleo_oferta_publica",
+         # Lee el token de la tienda (`scope: "tienda"`) y fija la empresa que
+         # lleva dentro antes de tocar `db`. Es el mismo patron que
+         # `_ot_por_token`: la identidad del que llama trae su `db_name`.
+         "_tienda_cliente_del_token"}
 
 
 def es_endpoint(fn):

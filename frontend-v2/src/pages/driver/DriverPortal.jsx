@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { ClipboardCheck, CalendarDays, CalendarClock, LogOut, Lock, Ban, BarChart3, LifeBuoy } from 'lucide-react'
-import { getPortalVehicles, getMyShifts, getMiFicha, guardarMiTelefono, DRIVER_TOKEN_KEY } from '../../services/api'
+import { ClipboardCheck, CalendarDays, CalendarClock, LogOut, Lock, Ban, BarChart3, LifeBuoy, ShoppingBag } from 'lucide-react'
+import { getPortalVehicles, getMyShifts, getMiFicha, guardarMiTelefono, tiendaEscaparate, DRIVER_TOKEN_KEY } from '../../services/api'
 import { lista } from '../../lib/lista'
 import DriverLogin from './DriverLogin'
 import InspectionFlow from './InspectionFlow'
@@ -10,6 +10,7 @@ import MisNumeros from './MisNumeros'
 import MisAyudas from './MisAyudas'
 import MiClave from './MiClave'
 import PedirDias from './PedirDias'
+import Tienda from './Tienda'
 
 const DRIVER_KEY = 'flotadsp_driver'
 
@@ -78,6 +79,22 @@ export default function DriverPortal() {
   const [portal, setPortal] = useState(null)   // {vehicles, puede_auditar, motivo}
   const [result, setResult] = useState(null)
   const [sinVer, setSinVer] = useState(0)      // respuestas que aún no ha leído
+  const [tienda, setTienda] = useState(false)
+
+  /* LA TIENDA NO SE VE HASTA QUE SE ENCIENDE, y la decision es del servidor.
+     Se pregunta al escaparate: si contesta `visible: false` no se pinta ni la
+     entrada del menu. Asi el dia que la oficina la abre, aparece sola en el
+     movil de todos sin desplegar nada; y mientras tanto no hay ninguna puerta
+     que alguien pueda encontrar por su cuenta. Un `if` en el cliente seria
+     una cortina: la ruta seguiria ahi. */
+  useEffect(() => {
+    let vivo = true
+    tiendaEscaparate()
+      .then((r) => { if (vivo) setTienda(!!r.data?.visible) })
+      .catch(() => {})
+    return () => { vivo = false }
+  }, [])
+
   const [vista, setVista] = useState('inicio') // inicio | auditoria | dias | turnos | clave
   const [faltaTel, setFaltaTel] = useState(false)
   const [tel, setTel] = useState('')
@@ -142,6 +159,7 @@ export default function DriverPortal() {
   if (vista === 'dias') return <PedirDias onBack={() => setVista('inicio')} />
   if (vista === 'turnos') return <MisTurnos onBack={() => setVista('inicio')} />
   if (vista === 'clave') return <MiClave onBack={() => setVista('inicio')} />
+  if (vista === 'tienda') return <Tienda onBack={() => setVista('inicio')} />
   if (vista === 'numeros') return <MisNumeros onBack={() => setVista('inicio')} />
   if (vista === 'ayudas') return <MisAyudas onBack={() => setVista('inicio')} />
   if (result) {
@@ -259,6 +277,14 @@ export default function DriverPortal() {
             sub="Las paradas que has salvado a un compañero"
             onClick={() => setVista('ayudas')}
           />
+          {tienda && (
+            <Opcion
+              icono={ShoppingBag}
+              titulo="Tienda"
+              sub="La ropa de la nave, con tu nombre"
+              onClick={() => setVista('tienda')}
+            />
+          )}
           <Opcion
             icono={Lock}
             titulo="Cambiar mi contraseña"
