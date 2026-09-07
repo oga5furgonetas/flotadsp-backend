@@ -150,6 +150,7 @@ export const tiendaVincularCuenta = (email, password) =>
   api.post('/tienda/cuenta/vincular', { email, password })
 export const tiendaFotoBlob = (id) =>
   api.get(`/tienda/prendas/${id}/foto`, { responseType: 'blob' })
+export const tiendaPagar = (pedidoId) => api.post(`/tienda/pedido/${pedidoId}/pagar`)
 /* Turnos del propio conductor: su calendario y sus peticiones de día. */
 export const getMyShifts = (desde, hasta) => api.get('/shifts/mine', { params: { desde, hasta } })
 // Lo suyo, para el: sus numeros de Cortex y las ayudas del mes

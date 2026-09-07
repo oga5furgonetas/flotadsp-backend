@@ -1,42 +1,33 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  ArrowLeft, Loader2, ShoppingBag, Check, Clock, Minus, Plus, Receipt,
+  ArrowLeft, Loader2, ShoppingBag, Check, Minus, Plus, Receipt, CreditCard,
   Mail, KeyRound, ShieldCheck, RefreshCw,
 } from 'lucide-react'
 import {
   tiendaEscaparate, tiendaCrearPedido, tiendaMisPedidos,
-  tiendaCuenta, tiendaVincularCuenta, tiendaFotoBlob,
+  tiendaCuenta, tiendaVincularCuenta, tiendaFotoBlob, tiendaPagar,
 } from '../../services/api'
 import { FotoPrenda } from '../../panel/components/TiendaPrendas'
 
 /* ────────────────────────────────────────────────────────────────────────────
    LA TIENDA, EN EL PORTAL DEL CONDUCTOR
    ---------------------------------------------------------------------------
-   Pedido agrupado, no tienda normal: se juntan pedidos hasta el viernes y el
-   lunes se encarga todo de una vez. Por eso la pantalla enseña SIEMPRE dos
-   cosas que una tienda corriente no tiene —cuánto queda para el cierre y
-   cuántas unidades lleva la tanda—: son las que hacen que alguien avise a un
-   compañero, y sin llegar al mínimo no sale ninguno.
-
-   Y por eso el precio se ve, pero el compromiso también: si no se llega al
-   mínimo se devuelve. Decirlo antes de pagar es lo que evita el enfado después.
+   POR DROPS, Y AQUI NO SE CUENTA LA LOGISTICA.
+   La version anterior enseñaba una cuenta atras ("se cierra en 4 dias") y un
+   minimo ("faltan 28 prendas para que salga"), porque el proveedor de entonces
+   exigia juntar 40 unidades. Eso obligaba a explicarle al conductor como
+   funciona nuestro almacen antes de venderle una camiseta, y a pedirle que
+   confiara en que se le devolveria si no salia. Con el proveedor de ahora no
+   hay minimo ni espera: se compra cuando el ya ha pagado.
+   Asi que lo que se enseña es lo que hay — y lo que QUEDA. Un drop de doce
+   unidades vende por lo que es, no por un plazo.
 
    La cuenta de la tienda es SUYA y no la del trabajo (correo personal y
-   contraseña propia): el justificante de una compra no tiene por qué pasar por
+   contraseña propia): el justificante de una compra no tiene por que pasar por
    el correo de la empresa.
    ──────────────────────────────────────────────────────────────────────────── */
 
 const eur = (n) => `${Number(n || 0).toFixed(2).replace('.', ',')} €`
-
-/* Cuenta atrás en palabras. «2 días» se entiende; una fecha ISO, no. */
-function faltan(iso) {
-  const ms = new Date(iso).getTime() - Date.now()
-  if (!Number.isFinite(ms) || ms <= 0) return 'cerrando hoy'
-  const h = Math.floor(ms / 3600000)
-  if (h < 1) return `${Math.max(1, Math.floor(ms / 60000))} min`
-  if (h < 24) return `${h} h`
-  return `${Math.round(h / 24)} días`
-}
 
 export default function Tienda({ onBack }) {
   const [datos, setDatos] = useState(null)
@@ -125,56 +116,44 @@ export default function Tienda({ onBack }) {
   if (hecho) {
     return (
       <Marco onBack={() => { setHecho(null); onBack() }}>
-        <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.07] p-5 text-center">
-          <Check size={26} className="mx-auto mb-2 text-emerald-400" />
-          <p className="text-[15px] font-semibold text-dark-100">Pedido enviado</p>
-          <p className="mt-1 text-[13px] text-dark-400">
-            Referencia <b className="text-dark-200">{hecho.ref}</b> · {eur(hecho.total)}
-          </p>
-          <p className="mt-3 text-[12.5px] leading-snug text-dark-500">
-            Se cierra el {new Date(hecho.cierre).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })}.
-            Te avisamos para pagarlo. Si la tanda no llega al mínimo, no se cobra nada.
+        <div className="rounded-3xl border border-emerald-500/20 bg-emerald-500/[0.06] px-5 py-7 text-center">
+          <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-emerald-500/15">
+            <Check size={22} className="text-emerald-400" />
+          </div>
+          <p className="text-[16px] font-semibold text-dark-50">Es tuyo</p>
+          <p className="mt-1.5 font-mono text-[12px] tracking-wide text-dark-400">{hecho.ref}</p>
+          <p className="mt-3 text-[22px] font-semibold tabular-nums text-dark-50">{eur(hecho.total)}</p>
+          <p className="mx-auto mt-4 max-w-[17rem] text-[12.5px] leading-relaxed text-dark-500">
+            Te escribimos para el pago y te avisamos en cuanto llegue a la nave.
           </p>
         </div>
-        <MisPedidos pedidos={[hecho, ...pedidos]} />
+        <MisPedidos pedidos={[hecho, ...pedidos]} pasarela={datos?.pasarela} />
       </Marco>
     )
   }
 
-  const { prendas = [], cierre, minimo, unidades } = datos
-  const restan = Math.max(0, minimo - unidades)
+  const { prendas = [] } = datos
 
   return (
     <Marco onBack={onBack}>
-      {/* La tanda: es lo que explica por qué esto no es una tienda normal */}
-      <div className="mb-4 rounded-2xl border border-dark-800 bg-dark-900/50 p-4">
-        <div className="flex items-center gap-2 text-[13px] font-semibold text-dark-100">
-          <Clock size={15} className="text-brand-400" /> Se cierra en {faltan(cierre)}
-        </div>
-        <p className="mt-1 text-[12.5px] leading-snug text-dark-400">
-          Se junta todo y se encarga de una vez: por eso sale a este precio.
-          {restan > 0
-            ? <> Faltan <b className="text-dark-200">{restan} prendas</b> para que salga.</>
-            : <> Ya sale: <b className="text-emerald-400">{unidades} prendas</b> pedidas.</>}
+      {datos.aviso && (
+        <p className="mb-5 rounded-2xl border border-brand-500/20 bg-brand-500/[0.05] px-4 py-3 text-[12.5px] leading-relaxed text-dark-300">
+          {datos.aviso}
         </p>
-        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-dark-800">
-          <div className="h-full rounded-full bg-brand-500 transition-all"
-            style={{ width: `${Math.min(100, Math.round((unidades / (minimo || 1)) * 100))}%` }} />
-        </div>
-        {datos.aviso && <p className="mt-2 text-[12px] text-amber-300">{datos.aviso}</p>}
-      </div>
+      )}
 
       <CuentaTienda cuenta={cuenta} onHecho={cargar} />
 
-      {/* Catálogo */}
-      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+      {/* El catálogo. Una columna en el móvil: la foto es el argumento de
+          venta y a media pantalla no se ve la prenda. */}
+      <div className="mt-6 space-y-5">
         {prendas.map((p) => (
           <Producto key={p.id} p={p} onAñadir={añadir} />
         ))}
       </div>
       {prendas.length === 0 && (
-        <p className="mt-6 text-center text-[13px] text-dark-500">
-          Todavía no hay prendas a la venta.
+        <p className="mt-10 text-center text-[13px] text-dark-500">
+          Todavía no hay nada a la venta.
         </p>
       )}
 
@@ -223,27 +202,37 @@ export default function Tienda({ onBack }) {
 
           <button onClick={enviar} disabled={enviando}
             className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-brand-500 py-3 text-[14px] font-semibold text-dark-950 disabled:opacity-50">
-            {enviando && <Loader2 size={15} className="animate-spin" />} Reservar mi pedido
+            {enviando && <Loader2 size={15} className="animate-spin" />} Lo quiero
           </button>
           <p className="mt-2 text-center text-[11.5px] leading-snug text-dark-500">
-            Reservas ahora y te avisamos para pagar. Si no se llega al mínimo, no se cobra nada.
+            Te escribimos para el pago. Nada se cobra hasta entonces.
           </p>
         </div>
       )}
 
-      <MisPedidos pedidos={pedidos} />
+      <MisPedidos pedidos={pedidos} pasarela={datos?.pasarela} />
     </Marco>
   )
 }
 
+/* El marco. La marca arriba y aire alrededor: lo que separa una tienda de un
+   formulario es el espacio, no los adornos. */
 function Marco({ children, onBack }) {
   return (
-    <div className="min-h-screen bg-dark-950 px-4 py-6">
+    <div className="min-h-screen bg-dark-950 px-5 pb-16 pt-6">
       <div className="mx-auto max-w-md">
-        <button onClick={onBack} className="mb-5 flex items-center gap-1.5 text-[13px] text-dark-400">
+        <button onClick={onBack}
+          className="mb-8 flex items-center gap-1.5 text-[13px] text-dark-500 transition-colors hover:text-dark-300">
           <ArrowLeft size={15} /> Volver
         </button>
-        <h1 className="mb-4 text-[19px] font-bold text-dark-50">Tienda</h1>
+        <div className="mb-8">
+          <div className="text-[28px] font-bold leading-none tracking-tight text-dark-50">
+            FDs
+          </div>
+          <div className="mt-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-brand-400">
+            Equipo · edicion limitada
+          </div>
+        </div>
         {children}
       </div>
     </div>
@@ -253,42 +242,71 @@ function Marco({ children, onBack }) {
 function Producto({ p, onAñadir }) {
   const [talla, setTalla] = useState('')
   const grande = (p.tallas_grandes || []).includes(talla)
+  const precio = (p.precio || 0) + (grande ? (p.recargo_talla || 0) : 0)
+  const quedan = p.quedan            // null = sin limite de drop
+  const agotado = quedan === 0
+  // "Quedan 3" solo cuando de verdad quedan pocas. Ponerlo siempre lo convierte
+  // en decorado y deja de significar nada el dia que importa.
+  const pocas = typeof quedan === 'number' && quedan > 0 && quedan <= 5
+
   return (
-    <div className="overflow-hidden rounded-2xl border border-dark-800 bg-dark-900/50">
-      <div className="flex items-center justify-center overflow-hidden bg-dark-950/60">
-        <div className={p.foto_ver ? 'w-full' : 'w-[104px] py-2'}>
+    <article className={`overflow-hidden rounded-3xl border border-dark-800/80 bg-dark-900/40 ${agotado ? 'opacity-55' : ''}`}>
+      <div className="relative flex items-center justify-center overflow-hidden bg-gradient-to-b from-dark-900 to-dark-950">
+        <div className={p.foto_ver ? 'w-full' : 'w-[132px] py-6'}>
           <FotoPrenda prenda={p} traer={tiendaFotoBlob}
             datos={{ colores: COLORES, tintas: TINTAS, posiciones: POSICIONES }} cara="delante" />
         </div>
-      </div>
-      <div className="p-3">
-        <div className="text-[14px] font-medium text-dark-100">{p.nombre}</div>
-        <div className="mt-0.5 text-[15px] font-semibold tabular-nums text-brand-300">
-          {p.recargo_talla > 0 ? <span className="text-[11.5px] font-normal text-dark-500">desde </span> : null}
-          {eur(p.precio)}
-        </div>
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {(p.tallas || []).map((t) => (
-            <button key={t} onClick={() => setTalla(t)}
-              className={`rounded-lg border px-2.5 py-1 text-[12px] font-medium ${
-                talla === t ? 'border-brand-500 bg-brand-500/15 text-brand-300'
-                  : 'border-dark-700 text-dark-400'}`}>
-              {t}
-            </button>
-          ))}
-        </div>
-        {grande && (
-          <p className="mt-1.5 text-[11.5px] leading-snug text-dark-400">
-            Talla {talla}: {eur(p.precio + (p.recargo_talla || 0))} — el fabricante
-            cobra más de la XXL para arriba.
-          </p>
+        {agotado && (
+          <span className="absolute left-3 top-3 rounded-full bg-dark-950/90 px-2.5 py-1 text-[10.5px] font-semibold uppercase tracking-wider text-dark-400">
+            Agotado
+          </span>
         )}
-        <button onClick={() => talla && onAñadir(p, talla)} disabled={!talla}
-          className="mt-2.5 w-full rounded-xl border border-dark-700 py-2 text-[13px] font-medium text-dark-200 disabled:opacity-40">
-          {talla ? 'Añadir' : 'Elige talla'}
-        </button>
+        {pocas && (
+          <span className="absolute left-3 top-3 rounded-full bg-amber-500/15 px-2.5 py-1 text-[10.5px] font-semibold uppercase tracking-wider text-amber-300">
+            Quedan {quedan}
+          </span>
+        )}
       </div>
-    </div>
+
+      <div className="px-4 pb-4 pt-3.5">
+        <div className="flex items-baseline justify-between gap-3">
+          <h2 className="text-[15.5px] font-semibold leading-tight text-dark-50">{p.nombre}</h2>
+          <div className="shrink-0 text-[17px] font-semibold tabular-nums text-dark-50">
+            {eur(precio)}
+          </div>
+        </div>
+
+        {!agotado && (
+          <>
+            <div className="mt-3.5 flex flex-wrap gap-1.5">
+              {(p.tallas || []).map((t) => (
+                <button key={t} onClick={() => setTalla(t)}
+                  className={`min-w-[2.6rem] rounded-xl border px-2.5 py-1.5 text-[12.5px] font-medium transition-colors ${
+                    talla === t
+                      ? 'border-dark-100 bg-dark-100 text-dark-950'
+                      : 'border-dark-700 text-dark-300 hover:border-dark-500'}`}>
+                  {t === 'U' ? 'Única' : t}
+                </button>
+              ))}
+            </div>
+
+            {grande && (
+              <p className="mt-2 text-[11.5px] leading-snug text-dark-500">
+                La {talla} sube {eur(p.recargo_talla)}: el fabricante cobra más de esa talla en adelante.
+              </p>
+            )}
+
+            <button onClick={() => talla && onAñadir(p, talla)} disabled={!talla}
+              className={`mt-4 w-full rounded-2xl py-3 text-[13.5px] font-semibold transition-colors ${
+                talla
+                  ? 'bg-dark-50 text-dark-950 hover:bg-white'
+                  : 'cursor-not-allowed border border-dark-800 text-dark-600'}`}>
+              {talla ? 'Añadir' : 'Elige tu talla'}
+            </button>
+          </>
+        )}
+      </div>
+    </article>
   )
 }
 
@@ -401,7 +419,7 @@ function Fuerza({ clave }) {
   )
 }
 
-function MisPedidos({ pedidos }) {
+function MisPedidos({ pedidos, pasarela }) {
   if (!pedidos?.length) return null
   const ESTADOS = {
     pendiente_pago: ['Pendiente de pago', 'text-amber-300'],
@@ -428,11 +446,45 @@ function MisPedidos({ pedidos }) {
                 {(p.lineas || []).map((l) => `${l.cantidad}× ${l.nombre} (${l.talla})`).join(' · ')}
               </div>
               <div className="mt-1 text-[13px] font-semibold tabular-nums text-dark-100">{eur(p.total)}</div>
+              {pasarela === 'stripe' && p.estado === 'pendiente_pago' && (
+                <BotonPagar pedido={p} />
+              )}
             </div>
           )
         })}
       </div>
     </div>
+  )
+}
+
+/* Pagar. El enlace lo da el SERVIDOR: aqui no se construye ninguna URL de
+   pago ni se toca un importe. Se abre en la misma pestaña a proposito —una
+   pestaña nueva en el movil se pierde detras y la gente cree que no ha
+   funcionado—. */
+function BotonPagar({ pedido }) {
+  const [yendo, setYendo] = useState(false)
+  const [err, setErr] = useState('')
+  return (
+    <>
+      <button
+        disabled={yendo}
+        onClick={async () => {
+          setYendo(true); setErr('')
+          try {
+            const r = await tiendaPagar(pedido.id)
+            if (r.data?.url) window.location.href = r.data.url
+            else { setErr('No se ha podido abrir el pago.'); setYendo(false) }
+          } catch (e) {
+            setErr(e?.response?.data?.detail || 'No se ha podido abrir el pago.')
+            setYendo(false)
+          }
+        }}
+        className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-xl bg-dark-50 py-2.5 text-[13px] font-semibold text-dark-950 disabled:opacity-50">
+        {yendo ? <Loader2 size={14} className="animate-spin" /> : <CreditCard size={14} />}
+        Pagar {eur(pedido.total)}
+      </button>
+      {err && <p className="mt-1.5 text-[12px] text-red-400">{err}</p>}
+    </>
   )
 }
 

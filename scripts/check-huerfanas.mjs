@@ -26,6 +26,9 @@ const SIN_UI_A_PROPOSITO = new Set([
   // su portal se vincula ya identificado, con `/tienda/cuenta/vincular`, que
   // si esta enganchada. Estas tres son la puerta de la tienda publica, que se
   // monta cuando la tienda se abra — hoy nace apagada a proposito.
+  // El webhook de Stripe NO lo llama ningun cliente nuestro: lo llama
+  // Stripe cuando alguien paga. No tiene ni puede tener pantalla.
+  'POST /tienda/stripe/webhook',
   'POST /tienda/cuenta/registro',
   'POST /tienda/cuenta/entrar',
   'POST /tienda/cuenta/avisos',

@@ -168,7 +168,11 @@ def _cargar_cuentas():
         if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") in quiero:
             amb[n.targets[0].id] = ast.literal_eval(n.value)
     for n in _ARBOL.body:
+        # `_tienda_quedan` va tambien: `_prenda_con_cuentas` la llama, y sin
+        # ella el test da NameError — que no es un fallo del codigo sino del
+        # ambito que monta el test.
         if isinstance(n, ast.FunctionDef) and n.name in ("_tienda_gastos",
+                                                         "_tienda_quedan",
                                                          "_prenda_con_cuentas"):
             mod = ast.Module(body=[n], type_ignores=[])
             exec(compile(ast.fix_missing_locations(mod), "<server>", "exec"), amb)  # noqa: S102
@@ -218,3 +222,91 @@ def test_sin_precio_no_hay_cuentas():
     c = CUENTAS({"coste": 7.72, "pvp": None})
     for k in ("neto", "margen", "queda", "gastos"):
         assert k not in c
+
+
+# ---------------------------------------------------------------------------
+# Drops: unidades limitadas
+# ---------------------------------------------------------------------------
+"""Lo que queda de un drop. El numero que hace que alguien compre hoy.
+
+Si dice de mas, se vende algo que no hay y hay que devolver el dinero; si dice
+de menos, se deja de vender. Las dos cosas se notan tarde.
+"""
+
+
+def _cargar_quedan():
+    amb = {}
+    for n in _ARBOL.body:
+        if isinstance(n, ast.FunctionDef) and n.name == "_tienda_quedan":
+            mod = ast.Module(body=[n], type_ignores=[])
+            exec(compile(ast.fix_missing_locations(mod), "<server>", "exec"), amb)  # noqa: S102
+    assert "_tienda_quedan" in amb, "no esta _tienda_quedan en server.py"
+    return amb["_tienda_quedan"]
+
+
+QUEDAN = _cargar_quedan()
+
+
+def test_sin_limite_no_es_cero():
+    """None significa «sin drop», y hay que distinguirlo de «agotado».
+
+    Es la trampa del `or`: con `lim or 0` una prenda sin limite saldria
+    agotada y no la podria comprar nadie.
+    """
+    for p in ({}, {"unidades": None}, {"unidades": ""}, {"unidades": 0}):
+        assert QUEDAN(p) is None, p
+
+
+def test_lo_que_queda_es_lo_puesto_menos_lo_vendido():
+    assert QUEDAN({"unidades": 12, "vendidas": 0}) == 12
+    assert QUEDAN({"unidades": 12, "vendidas": 5}) == 7
+    assert QUEDAN({"unidades": 12}) == 12          # sin vender aun
+
+
+def test_agotado_es_cero_y_nunca_negativo():
+    assert QUEDAN({"unidades": 12, "vendidas": 12}) == 0
+    # Si por lo que sea se hubiera pasado, se dice 0, no -3: un numero
+    # negativo en pantalla es peor que la propia incidencia.
+    assert QUEDAN({"unidades": 12, "vendidas": 15}) == 0
+
+
+def test_basura_no_tumba_el_escaparate():
+    for p in ({"unidades": "doce"}, {"unidades": 12, "vendidas": "tres"},
+              {"unidades": [1]}, {"unidades": 12, "vendidas": None}):
+        v = QUEDAN(p)
+        assert v is None or isinstance(v, int), p
+
+
+def test_la_reserva_es_atomica():
+    """La comprobacion y el descuento van en la MISMA operacion de Mongo.
+
+    Si se leyera el stock y luego se restara, dos conductores comprando la
+    ultima unidad a la vez leerian 1 los dos y se venderian dos (gotcha 46).
+    No se puede probar sin base de datos, asi que se comprueba la FORMA: que
+    el filtro del update lleve la condicion dentro.
+    """
+    for n in _ARBOL.body:
+        if isinstance(n, ast.AsyncFunctionDef) and n.name == "_tienda_reservar":
+            fuente = ast.unparse(n)
+            assert "$expr" in fuente and "$lte" in fuente, (
+                "la reserva ya no comprueba el stock DENTRO del update: "
+                "leer y luego restar vende dos veces la ultima unidad")
+            assert "update_one" in fuente
+            return
+    raise AssertionError("no esta _tienda_reservar en server.py")
+
+
+def test_el_escaparate_ya_no_cuenta_la_logistica():
+    """Fuera el cierre y el minimo: eran del pedido agrupado.
+
+    Con el proveedor de ahora no hay minimo ni espera, asi que enseñarlos era
+    pedirle al conductor que entendiera nuestro almacen para comprar una
+    camiseta — y prometerle una devolucion que ya no tiene por que existir.
+    """
+    fuente = io.open(SERVER, encoding="utf-8-sig").read()
+    i = fuente.find("async def tienda_escaparate")
+    assert i > 0
+    trozo = fuente[i:i + 2500]
+    assert '"cierre"' not in trozo, "el escaparate sigue mandando la cuenta atras"
+    assert '"minimo"' not in trozo, "el escaparate sigue mandando el minimo"
+    assert '"quedan"' in trozo, "el escaparate no dice cuantas quedan"

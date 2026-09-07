@@ -31,7 +31,7 @@ const PX_POR_CM = 68 / 52
 const VACIA = {
   nombre: '', tipo: 'camiseta', color: 'negro', tallas: ['S', 'M', 'L', 'XL'],
   estampaciones: [{ posicion: 'pecho', tinta: 'cian', cm: 8, texto: 'FDs', con_nombre: false }],
-  franja_manga: true, coste: '', pvp: '', recargo_talla: '', notas: '',
+  franja_manga: true, coste: '', pvp: '', recargo_talla: '', unidades: '', notas: '',
 }
 
 const eur = (n) => `${Number(n).toFixed(2).replace('.', ',')} €`
@@ -133,6 +133,13 @@ export default function TiendaPrendas() {
                       Ya descontados IVA, envío y pasarela ({eur(p.gastos)}). Bruto: {eur(p.margen)}.
                     </div>
                   ) : null}
+                  {typeof p.quedan === 'number' && (
+                    <div className={`mt-0.5 text-[11.5px] ${p.quedan === 0 ? 'text-red-400' : p.quedan <= 5 ? 'text-amber-400' : 'text-dark-500'}`}>
+                      {p.quedan === 0
+                        ? `Agotada · ${p.vendidas} vendidas`
+                        : `Quedan ${p.quedan} de ${p.unidades}` + (p.vendidas ? ` · ${p.vendidas} vendidas` : '')}
+                    </div>
+                  )}
                   <div className="mt-2 flex gap-1.5">
                     <button onClick={() => setEditando(p)}
                       className="btn-secondary inline-flex items-center gap-1 px-2 py-1 text-[12px]">
@@ -398,6 +405,7 @@ function Editor({ prenda, datos, logos, onCerrar, onGuardado }) {
     ...VACIA, ...prenda,
     coste: prenda.coste ?? '', pvp: prenda.pvp ?? '',
     recargo_talla: prenda.recargo_talla ?? '',
+    unidades: prenda.unidades ?? '',
     estampaciones: prenda.estampaciones?.length ? prenda.estampaciones : VACIA.estampaciones,
   }))
   const [cara, setCara] = useState('delante')
@@ -478,6 +486,7 @@ function Editor({ prenda, datos, logos, onCerrar, onGuardado }) {
       coste: f.coste === '' ? null : f.coste,
       pvp: f.pvp === '' ? null : f.pvp,
       recargo_talla: f.recargo_talla === '' ? null : f.recargo_talla,
+      unidades: f.unidades === '' ? null : f.unidades,
       notas: f.notas,
     }
     try {
@@ -643,6 +652,15 @@ function Editor({ prenda, datos, logos, onCerrar, onGuardado }) {
                 <label className="label">La vendes a (€) — opcional</label>
                 <input className="input" inputMode="decimal" value={f.pvp} placeholder="Aún sin precio"
                   onChange={(e) => set('pvp', e.target.value)} />
+              </div>
+              <div>
+                <label className="label">Unidades del drop</label>
+                <input className="input" inputMode="numeric" value={f.unidades}
+                  placeholder="Sin límite" onChange={(e) => set('unidades', e.target.value)} />
+                <p className="mt-1 text-[11px] leading-snug text-dark-500">
+                  Lo que se pone a la venta de esta prenda. Cuando quedan cinco o menos,
+                  el conductor lo ve. Vacío = sin límite.
+                </p>
               </div>
               <div>
                 <label className="label">Recargo XXL y 3XL (€)</label>

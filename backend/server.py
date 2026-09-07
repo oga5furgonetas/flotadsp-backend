@@ -1478,6 +1478,10 @@ async def create_indexes():
         await _idx(global_db.admin_users, "username")
         await _idx(global_db.inbox_messages, [("created_at", -1)])
         await _idx(global_db.ls_webhook_events, "event_uid", unique=True)
+        # Sin este unico, el `except DuplicateKeyError` del webhook de Stripe
+        # no saltaria NUNCA y un aviso reintentado se procesaria dos veces
+        # (gotcha 46: el except sin indice detras es papel mojado).
+        await _idx(global_db.stripe_events, "event_id", unique=True)
         await _idx(global_db.forensic_index, "content_hash", unique=True)
         await _idx(global_db.forensic_index, [("signed_at", -1)])
         # Enlaces del portal de talleres. El token es la unica llave que hay:
@@ -41232,9 +41236,24 @@ def _prenda_limpia(body: dict, previa: dict | None = None) -> dict:
         recargo = (p.get("recargo_talla") if p.get("recargo_talla") is not None
                    else _RECARGO_TALLA_DEF)
 
+    # UNIDADES DEL DROP. None = sin limite. Es lo que sustituye al minimo y a la
+    # cuenta atras: con el proveedor de ahora no hay minimo de fabricacion que
+    # obligue a esperar a nadie, asi que lo que mueve a comprar ya no es "corre,
+    # que cierra el viernes" —que ademas obliga a explicar por que hay plazo—
+    # sino "quedan pocas". Y es verdad: el drop es de las unidades que se digan.
+    unid = body.get("unidades")
+    if unid in ("", None) and "unidades" in body:
+        unid = None                      # vaciar el campo = sin limite
+    elif unid is None:
+        unid = p.get("unidades")
+    else:
+        unid = _entero(unid, "las unidades del drop", defecto=None,
+                       minimo=1, maximo=5000)
+
     return {"nombre": nombre, "tipo": tipo, "color": color, "tallas": tallas,
             "estampaciones": validas, "franja_manga": bool(body.get("franja_manga")),
             "coste": coste, "pvp": pvp, "recargo_talla": recargo,
+            "unidades": unid,
             "notas": _texto_cuerpo(body.get("notas"), 400)}
 
 
@@ -41261,6 +41280,8 @@ def _prenda_con_cuentas(p: dict) -> dict:
         salida["gastos"] = gastos
         salida["queda"] = queda
         salida["queda_pct"] = round(100 * queda / neto) if neto else 0
+    salida["quedan"] = _tienda_quedan(p)
+    salida["vendidas"] = int(p.get("vendidas") or 0)
     return salida
 
 
@@ -42136,7 +42157,10 @@ async def _tienda_conf() -> dict:
         "aviso": c.get("aviso") or "",
         # Mientras no haya pasarela, el pedido queda a la espera y lo marca la
         # oficina al recibir el pago. El dia que haya Stripe, esto cambia solo.
-        "pasarela": c.get("pasarela") or "ninguna",
+        # LA PASARELA LA DICE EL ENTORNO, no un campo guardado. Si alguien
+        # dejara "stripe" escrito aqui sin las claves puestas, el conductor
+        # veria un boton de pagar que solo puede dar error.
+        "pasarela": "stripe" if _stripe_encendido() else "ninguna",
     }
 
 
@@ -42150,6 +42174,49 @@ def _tienda_cierre(dia_cierre: int) -> str:
     faltan = (int(dia_cierre) - ahora.weekday()) % 7
     dia = (ahora + timedelta(days=faltan)).replace(hour=23, minute=59, second=0, microsecond=0)
     return dia.isoformat()
+
+
+def _tienda_quedan(p: dict):
+    """Unidades que quedan del drop, o None si la prenda no tiene limite.
+
+    `vendidas` lo lleva el propio documento y sube con cada pedido, en la MISMA
+    operacion que comprueba que quedan (ver `_tienda_reservar`): contarlo aqui
+    recorriendo pedidos daria un numero que dos personas comprando a la vez
+    pueden leer igual y agotar dos veces.
+    """
+    lim = p.get("unidades")
+    if lim in (None, "", 0):
+        return None
+    try:
+        return max(0, int(lim) - int(p.get("vendidas") or 0))
+    except (TypeError, ValueError):
+        return None
+
+
+async def _tienda_reservar(prenda_id: str, cuantas: int) -> bool:
+    """Aparta `cuantas` unidades del drop. False si ya no quedan.
+
+    ATOMICO A PROPOSITO. La comprobacion y el descuento van en la MISMA
+    operacion de Mongo: si se leyera el stock y despues se restara, dos
+    conductores comprando la ultima unidad a la vez leerian 1 los dos y se
+    venderian dos. Es el gotcha 46 con otra cara —lo que tiene que ser cierto
+    lo decide la base, no una guarda en Python—.
+    `$expr` compara dos campos del propio documento, que es justo lo que hace
+    falta: vendidas + cuantas <= unidades.
+    """
+    r = await db[_PRENDAS_COL].update_one(
+        {"id": prenda_id,
+         "$expr": {"$lte": [{"$add": [{"$ifNull": ["$vendidas", 0]}, cuantas]},
+                            {"$ifNull": ["$unidades", 10 ** 9]}]}},
+        {"$inc": {"vendidas": cuantas}})
+    return bool(r.modified_count)
+
+
+async def _tienda_devolver(prenda_id: str, cuantas: int) -> None:
+    """Devuelve al drop lo que se habia apartado. Nunca baja de cero."""
+    await db[_PRENDAS_COL].update_one(
+        {"id": prenda_id, "vendidas": {"$gte": cuantas}},
+        {"$inc": {"vendidas": -cuantas}})
 
 
 def _tienda_precio(p: dict, talla: str | None = None) -> float | None:
@@ -42199,18 +42266,18 @@ async def tienda_escaparate(user: dict = Depends(require_any_auth)):
     if not conf["visible"]:
         # Ni prendas ni precios ni fechas: apagada es apagada.
         return {"visible": False}
-    cierre = _tienda_cierre(conf["dia_cierre"])
     prendas = await _tienda_prendas_publicas()
-    # Cuantas unidades lleva la tanda: es lo que dice si va a salir o no, y
-    # enseñarlo hace que la gente avise a un compañero.
-    llevan = 0
-    async for p in db[_TCOL_PEDIDOS].find(
-            {"cierre": cierre, "estado": {"$in": ["pendiente_pago", "pagado"]}},
-            {"_id": 0, "unidades": 1}):
-        llevan += int(p.get("unidades") or 0)
+    # NI CIERRE NI MINIMO. Los dos eran del pedido agrupado: habia que esperar
+    # al viernes y juntar 30 prendas o no salia ninguna, y eso obligaba a
+    # contarselo al conductor —"si no se llega, se devuelve"— que es pedirle
+    # que entienda nuestra logistica antes de comprar una camiseta. Con el
+    # proveedor de ahora no hay minimo ni espera, asi que no hay nada que
+    # explicar: lo que se enseña es lo que queda de cada drop.
+    # El `cierre` se sigue guardando EN EL PEDIDO, que es donde sirve: agrupa
+    # lo que hay que encargar. Simplemente no se enseña.
     return {
-        "visible": True, "cierre": cierre, "minimo": conf["minimo"],
-        "unidades": llevan, "aviso": conf["aviso"],
+        "visible": True,
+        "aviso": conf["aviso"],
         "pasarela": conf["pasarela"],
         "prendas": [{
             "id": p["id"], "nombre": p.get("nombre"), "tipo": p.get("tipo"),
@@ -42222,6 +42289,8 @@ async def tienda_escaparate(user: dict = Depends(require_any_auth)):
             # en el cliente para que no haya dos reglas de precio (gotcha 54).
             "recargo_talla": (_tienda_precio(p, "XXL") or 0) - (_tienda_precio(p) or 0),
             "tallas_grandes": list(_TALLAS_GRANDES),
+            "quedan": _tienda_quedan(p),
+            "notas": p.get("notas") or "",
             "foto_ver": p.get("foto_ver"),
             "lleva_nombre": any(e.get("con_nombre") for e in (p.get("estampaciones") or [])),
         } for p in prendas],
@@ -42244,6 +42313,7 @@ async def tienda_crear_pedido(body: dict = Body(...), user: dict = Depends(requi
 
     catalogo = {p["id"]: p for p in await _tienda_prendas_publicas()}
     lineas, total, unidades = [], 0.0, 0
+    apartadas = []          # lo reservado del drop, por si hay que devolverlo
     for l in lineas_in:
         if not isinstance(l, dict):
             raise HTTPException(400, "Pedido mal formado")
@@ -42258,6 +42328,19 @@ async def tienda_crear_pedido(body: dict = Body(...), user: dict = Depends(requi
         # EL PRECIO SALE DEL CATALOGO, NUNCA DEL CUERPO. Si viniera del cliente,
         # bastaria con mandar 0,01 € para llevarse una sudadera.
         precio = _tienda_precio(p, talla)
+        # SE APARTA AQUI, NO AL PAGAR. Un drop de doce unidades con veinte
+        # personas mirando se agota en minutos: si se reservara al cobrar,
+        # cuatro habrian metido la talla, el nombre y la tarjeta para que les
+        # dijeran que no quedaba. Y si el pedido no llega a crearse, lo
+        # apartado se devuelve antes de contestar (mas abajo).
+        if not await _tienda_reservar(p["id"], uds):
+            for hecha in apartadas:
+                await _tienda_devolver(hecha[0], hecha[1])
+            quedan = _tienda_quedan(await db[_PRENDAS_COL].find_one(
+                {"id": p["id"]}, {"_id": 0, "unidades": 1, "vendidas": 1}) or {})
+            raise HTTPException(
+                409, "De %s ya no quedan %d: quedan %d" % (p.get("nombre"), uds, quedan or 0))
+        apartadas.append((p["id"], uds))
         lineas.append({
             "prenda": p["id"], "nombre": p.get("nombre"), "talla": talla,
             "cantidad": uds, "precio": precio, "importe": round(precio * uds, 2),
@@ -42282,7 +42365,15 @@ async def tienda_crear_pedido(body: dict = Body(...), user: dict = Depends(requi
         "estado": "pendiente_pago",
         "creado_en": ahora.isoformat(),
     }
-    await db[_TCOL_PEDIDOS].insert_one(dict(doc))   # copia: insert_one muta (gotcha 42)
+    try:
+        await db[_TCOL_PEDIDOS].insert_one(dict(doc))   # copia: insert_one muta (gotcha 42)
+    except Exception:
+        # Sin esto, un fallo al guardar dejaria el drop mordido para siempre:
+        # unidades apartadas para un pedido que no existe, y nadie con quien
+        # reclamarlas.
+        for pid, n_uds in apartadas:
+            await _tienda_devolver(pid, n_uds)
+        raise
     return _tienda_pedido_publico(doc)
 
 
@@ -42384,6 +42475,25 @@ async def tienda_marcar_pedido(pedido_id: str, body: dict = Body(...),
     estado = _texto_cuerpo(body.get("estado"), 20)
     if estado not in ("pendiente_pago", "pagado", "encargado", "entregado", "anulado"):
         raise HTTPException(400, "Ese estado no existe")
+    previo = await db[_TCOL_PEDIDOS].find_one({"id": pedido_id},
+                                              {"_id": 0, "estado": 1, "lineas": 1})
+    if not previo:
+        raise HTTPException(404, "Ese pedido no existe")
+    # ANULAR DEVUELVE LAS UNIDADES AL DROP. Las aparta el pedido al crearse, asi
+    # que si el pedido se cae hay que soltarlas o el drop se queda corto para
+    # siempre: doce unidades de las que dos estan reservadas para alguien que
+    # no va a pagar. Solo la PRIMERA vez que se anula —de ahi la comparacion
+    # con el estado previo—: marcarlo dos veces devolveria el doble.
+    if estado == "anulado" and previo.get("estado") != "anulado":
+        for l in (previo.get("lineas") or []):
+            await _tienda_devolver(l.get("prenda"), int(l.get("cantidad") or 0))
+    # Y desanular vuelve a apartarlas, si es que quedan.
+    elif previo.get("estado") == "anulado" and estado != "anulado":
+        for l in (previo.get("lineas") or []):
+            if not await _tienda_reservar(l.get("prenda"), int(l.get("cantidad") or 0)):
+                raise HTTPException(
+                    409, "No se puede reactivar: de %s ya no quedan unidades"
+                         % (l.get("nombre") or "esa prenda"))
     r = await db[_TCOL_PEDIDOS].update_one(
         {"id": pedido_id},
         {"$set": {"estado": estado,
@@ -42392,6 +42502,212 @@ async def tienda_marcar_pedido(pedido_id: str, body: dict = Body(...),
     if not r.matched_count:
         raise HTTPException(404, "Ese pedido no existe")
     return {"ok": True, "id": pedido_id, "estado": estado}
+
+
+# -------------------------------------------------------------------------
+# TIENDA - COBRAR CON STRIPE
+# -------------------------------------------------------------------------
+"""El pago con tarjeta. Apagado hasta que existan las claves.
+
+NACE APAGADO Y ESO NO ES PROVISIONAL: sin `STRIPE_SECRET_KEY` en el entorno,
+`/pagar` contesta 503 con un texto que se entiende y la tienda sigue como
+hasta ahora (la oficina marca el cobro a mano). El dia que se pongan las dos
+claves por `fly secrets`, se enciende sin tocar codigo ni desplegar frontend.
+
+TRES COSAS QUE NO SON OPCIONALES:
+
+1. EL IMPORTE SALE DEL PEDIDO GUARDADO, nunca del cuerpo de la peticion ni de
+   lo que diga el navegador. Es la misma regla que en `tienda_crear_pedido`:
+   si el precio viajara desde el cliente, bastaria con mandar 1 centimo.
+
+2. EL WEBHOOK ES PUBLICO, asi que FIJA LA EMPRESA A MANO (gotcha 26). El
+   `db_name` viaja en los metadatos de la sesion -los ponemos nosotros y
+   vuelven firmados por Stripe- y ademas se comprueba contra `organizations`
+   antes de usarlo: un endpoint sin sesion que se fie del contextvar por
+   defecto escribiria en la BD principal pasara lo que pasara.
+
+3. FAIL-CLOSED EN LA FIRMA. Sin `STRIPE_WEBHOOK_SECRET` no se acepta ni un
+   aviso: es el endpoint que decide quien ha pagado, y sin firma cualquiera
+   podria marcar sus pedidos como pagados con un `curl`. Mismo criterio que el
+   webhook de Lemon Squeezy.
+
+Y la idempotencia va por indice unico, no por una comprobacion en Python:
+Stripe REINTENTA los avisos, y `count == 0` seguido de `insert` deja pasar dos
+si llegan a la vez (gotcha 46).
+"""
+
+_STRIPE_API = "https://api.stripe.com/v1"
+_STRIPE_TOL_SEG = 300          # margen de reloj admitido en la firma
+
+
+def _stripe_clave() -> str:
+    return os.environ.get("STRIPE_SECRET_KEY", "").strip()
+
+
+def _stripe_encendido() -> bool:
+    return bool(_stripe_clave())
+
+
+def _stripe_firma_ok(raw: bytes, cabecera: str, secreto: str) -> bool:
+    """Comprueba la cabecera `Stripe-Signature`: `t=<ts>,v1=<hmac>`.
+
+    Se verifica a mano en vez de traer la libreria de Stripe: es HMAC-SHA256
+    sobre `<t>.<cuerpo>` y son quince lineas, frente a una dependencia mas en
+    un fichero que ya despliega en Fly.
+    El timestamp se comprueba de verdad -no es adorno-: sin eso, un aviso
+    valido capturado hace meses se podria reenviar tal cual y volveria a
+    marcar el pedido como pagado.
+    """
+    import hmac as _hmac
+    import hashlib as _hashlib
+    if not (raw and cabecera and secreto):
+        return False
+    partes = {}
+    for trozo in cabecera.split(","):
+        if "=" in trozo:
+            k, v = trozo.split("=", 1)
+            partes.setdefault(k.strip(), []).append(v.strip())
+    try:
+        ts = int(partes.get("t", ["0"])[0])
+    except (TypeError, ValueError):
+        return False
+    if abs(int(time.time()) - ts) > _STRIPE_TOL_SEG:
+        return False
+    esperado = _hmac.new(secreto.encode(),
+                         str(ts).encode() + b"." + raw, _hashlib.sha256).hexdigest()
+    # Stripe puede mandar varias v1 durante una rotacion de secreto.
+    return any(_hmac.compare_digest(esperado, v) for v in partes.get("v1", []))
+
+
+@api_router.post("/tienda/pedido/{pedido_id}/pagar")
+async def tienda_pagar(pedido_id: str, user: dict = Depends(require_any_auth)):
+    """Devuelve el enlace de pago de Stripe para un pedido propio."""
+    did = _tienda_driver(user)
+    if not _stripe_encendido():
+        raise HTTPException(
+            503, "El pago con tarjeta todavia no esta activo. La oficina te dira como pagar.")
+    # El dueño va en el FILTRO: asi no hay forma de pagar -ni de mirar- el
+    # pedido de otro ni por error de programacion.
+    p = await db[_TCOL_PEDIDOS].find_one({"id": pedido_id, "driver_id": did}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "Ese pedido no existe")
+    if p.get("estado") != "pendiente_pago":
+        raise HTTPException(409, "Ese pedido ya no esta pendiente de pago")
+
+    base = (PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
+    datos = [
+        ("mode", "payment"),
+        ("success_url", "%s/conductor?pago=ok&ref=%s" % (base, p.get("ref") or "")),
+        ("cancel_url", "%s/conductor?pago=no" % base),
+        ("client_reference_id", pedido_id),
+        ("metadata[pedido_id]", pedido_id),
+        # La empresa, para que el webhook -que no tiene sesion- sepa donde
+        # escribir. Sin esto caeria en la principal (gotcha 26).
+        ("metadata[db_name]", _current_db_name.get()),
+        ("metadata[ref]", p.get("ref") or ""),
+    ]
+    if p.get("email"):
+        datos.append(("customer_email", p["email"]))
+    for i, linea in enumerate(p.get("lineas") or []):
+        # EN CENTIMOS Y DESDE EL PEDIDO. `round` y no `int`: 27.90 * 100 en
+        # coma flotante es 2789.9999..., y truncando se cobraria un centimo de
+        # menos en cada linea.
+        datos += [
+            ("line_items[%d][quantity]" % i, str(int(linea.get("cantidad") or 1))),
+            ("line_items[%d][price_data][currency]" % i, "eur"),
+            ("line_items[%d][price_data][unit_amount]" % i,
+             str(int(round(float(linea.get("precio") or 0) * 100)))),
+            ("line_items[%d][price_data][product_data][name]" % i,
+             "%s - talla %s" % (linea.get("nombre") or "Prenda", linea.get("talla") or "")),
+        ]
+
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=25) as cli:
+            r = await cli.post(_STRIPE_API + "/checkout/sessions", data=datos,
+                               auth=(_stripe_clave(), ""))
+    except Exception as e:
+        logger.error("Stripe checkout: %s", e)
+        raise HTTPException(502, "No se ha podido abrir el pago. Intentalo en un minuto.")
+    if r.status_code >= 300:
+        logger.error("Stripe checkout %s: %s", r.status_code, r.text[:300])
+        raise HTTPException(502, "No se ha podido abrir el pago. Intentalo en un minuto.")
+    ses = r.json()
+    await db[_TCOL_PEDIDOS].update_one(
+        {"id": pedido_id}, {"$set": {"stripe_session": ses.get("id"),
+                                     "pago_pedido_at": datetime.now(timezone.utc).isoformat()}})
+    return {"url": ses.get("url")}
+
+
+@api_router.post("/tienda/stripe/webhook")
+async def tienda_stripe_webhook(request: Request):
+    """Stripe avisa de que un pedido esta pagado."""
+    secreto = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
+    raw = await request.body()
+    if not secreto:
+        logger.error("Webhook Stripe rechazado: STRIPE_WEBHOOK_SECRET no configurada")
+        raise HTTPException(503, "Webhook no configurado")
+    if not _stripe_firma_ok(raw, request.headers.get("Stripe-Signature", ""), secreto):
+        raise HTTPException(401, "Firma invalida")
+    try:
+        ev = json.loads(raw)
+    except Exception:
+        raise HTTPException(400, "JSON invalido")
+
+    # Idempotencia por INDICE UNICO: Stripe reintenta, y dos avisos a la vez
+    # pasarian los dos por un `count == 0` (gotcha 46).
+    try:
+        await global_db.stripe_events.insert_one(
+            {"event_id": ev.get("id"), "tipo": ev.get("type"),
+             "at": datetime.now(timezone.utc).isoformat()})
+    except DuplicateKeyError:
+        return {"ok": True, "dedup": True}
+
+    if ev.get("type") != "checkout.session.completed":
+        return {"ok": True, "ignorado": ev.get("type")}
+
+    ses = (ev.get("data") or {}).get("object") or {}
+    meta = ses.get("metadata") or {}
+    pedido_id = meta.get("pedido_id") or ses.get("client_reference_id")
+    db_name = meta.get("db_name") or ""
+    if not pedido_id:
+        return {"ok": True, "sin_pedido": True}
+
+    # LA EMPRESA, A MANO Y COMPROBADA. El db_name lo pusimos nosotros y vuelve
+    # firmado, pero se contrasta igual contra las organizaciones: un nombre de
+    # BD que no exista no puede acabar creando una base nueva a la primera
+    # escritura.
+    if db_name and db_name != _DEFAULT_DB_NAME:
+        org = await global_db.organizations.find_one({"db_name": db_name}, {"_id": 0, "id": 1})
+        if not org:
+            logger.error("Webhook Stripe con db_name desconocida: %s", db_name)
+            raise HTTPException(400, "Empresa desconocida")
+    set_current_org_db(db_name or _DEFAULT_DB_NAME)
+
+    # Y QUE EL IMPORTE CUADRE. Stripe dice lo que ha cobrado; si no coincide
+    # con lo que vale el pedido, no se marca pagado y se deja constancia: es
+    # mejor una revision a mano que dar por cobrado un importe que no es.
+    ped = await db[_TCOL_PEDIDOS].find_one({"id": pedido_id},
+                                           {"_id": 0, "total": 1, "estado": 1})
+    if not ped:
+        return {"ok": True, "pedido_no_encontrado": True}
+    cobrado = int(ses.get("amount_total") or 0)
+    esperado = int(round(float(ped.get("total") or 0) * 100))
+    if cobrado != esperado:
+        logger.error("Stripe cobro %s y el pedido %s vale %s", cobrado, pedido_id, esperado)
+        await db[_TCOL_PEDIDOS].update_one(
+            {"id": pedido_id},
+            {"$set": {"pago_descuadre": {"cobrado": cobrado, "esperado": esperado}}})
+        return {"ok": False, "descuadre": True}
+
+    await db[_TCOL_PEDIDOS].update_one(
+        {"id": pedido_id},
+        {"$set": {"estado": "pagado",
+                  "estado_at": datetime.now(timezone.utc).isoformat(),
+                  "estado_por": "Stripe",
+                  "pagado_at": datetime.now(timezone.utc).isoformat(),
+                  "stripe_pago": ses.get("payment_intent")}})
+    return {"ok": True, "pedido": pedido_id}
 
 
 # -------------------------------------------------------------------------
