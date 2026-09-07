@@ -116,8 +116,8 @@ export default function TiendaRopa() {
           <AlertTriangle size={15} className="mt-0.5 shrink-0" />
           <span>
             Hoy no puedes cobrar: no hay sociedad ni alta de autónomo desde la que facturar.
-            Para la primera tanda, que el serigrafiador le facture a cada conductor y tú solo
-            organices el pedido — compruebas la demanda con cero exposición fiscal.
+            Y hay un coste que no se ve: sin NIF de empresa, Printful te repercute el IVA, así
+            que cada prenda te cuesta hoy un 21% más que el día que exista la SL.
           </span>
         </div>
       )}

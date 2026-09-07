@@ -40866,26 +40866,19 @@ _TIENDA_PASOS = [
      "porque": "Cada color de más y cada posición de más es dinero por unidad. Con dos tintas y una posición el margen se queda en el 50-60%; con cuatro colores y estampación delante y detrás baja al 35% sin vender una unidad más.",
      "como": "Pecho máximo 8 cm, espalda 22 cm, máximo 2 tintas y nada de degradados.",
      "coste": "0 €"},
-    {"id": "prenda_catalogo", "fase": "producto",
-     "titulo": "Elegir la prenda base de catálogo",
-     "porque": "La franja de contraste de la manga NO es serigrafía: o la trae la prenda de fábrica, o hay que coserla (mínimos por talla y modelo, coste disparado) o ponerla en vinilo (se cuartea con los lavados, y la manga es zona de roce). Eligiendo un blanco que ya la trae, sale gratis.",
-     "como": "Camiseta técnica de 140-160 g y sudadera de 280-320 g, en negro, buscando modelo con panel de contraste en manga. Pide muestra física antes de nada.",
-     "enlace": {"texto": "Ecamisetas — Roly, Makito, fábrica propia",
-                "url": "https://www.ecamisetas.com/catalogo/20/ropa-laboral"},
-     "coste": "Muestra: 15-40 €"},
-    {"id": "presupuestos", "fase": "producto",
-     "titulo": "Tres presupuestos de estampación",
-     "porque": "Hasta que no tengas tres cifras reales, todos los números de margen de esta pantalla son estimaciones de mercado. Con tres presupuestos comparables dejan de serlo.",
-     "como": "Manda el arte final y pide precio para 40, 80 y 150 unidades, desglosado en prenda + estampación + preparación + IVA, y con plazo. Pregunta expresamente serigrafía contra DTF: con trazo fino el DTF suele ganar.",
-     "ancla": "tienda-prendas", "accion": "Montar la prenda y sacar el texto",
-     "enlace": {"texto": "Sregalo — distribuidor oficial Roly",
-                "url": "https://www.sregalo.com/textil-laboral"},
-     "coste": "0 €"},
+    {"id": "cuenta_proveedor", "fase": "producto",
+     "titulo": "Cuenta en Printful y el logo subido",
+     "porque": "Printful fabrica y envía cuando el pedido ya está pagado: no hay que adelantar dinero, no hay mínimo y no puede pasar que alguien pague y no le llegue. A cambio cuesta más por prenda que un pedido agrupado de 40, y por eso los precios de esta pantalla son los que son.",
+     "como": "Crea la cuenta, sube el logo en vectorial y colócalo al pecho izquierdo, 8 cm. Con el logo puesto el precio ya es el definitivo: la impresión va incluida.",
+     "enlace": {"texto": "Printful — catálogo en español",
+                "url": "https://www.printful.com/es/productos-personalizados"},
+     "coste": "0 € la cuenta"},
     {"id": "muestra_lavada", "fase": "producto",
-     "titulo": "Muestra física, lavada cinco veces",
-     "porque": "Es donde se ve si el cian se apaga o el vinilo se abre. Una muestra mala cuesta 40 €; un pedido de 40 malo cuesta 600 € y la credibilidad con tu gente.",
-     "como": "Produce 3-5 unidades, pruébatelas y lávalas cinco veces mirando costuras y estampado.",
-     "coste": "40-120 €"},
+     "titulo": "Una muestra a tu casa, y lavarla cinco veces",
+     "porque": "Es donde se ve si el cian se apaga o la prenda encoge. Una muestra cuesta unos 20 €; una tanda mala cuesta el dinero de tu gente y la credibilidad con ellos, que no se recupera.",
+     "como": "En Printful: New order → Sample order, que lleva un 20% de descuento. Pídete la camiseta negra, pruébatela y lávala cinco veces mirando costuras y estampado. Y hazle la foto: es la que va en la tienda.",
+     "ancla": "tienda-prendas", "accion": "Subir la foto a la prenda",
+     "coste": "~20 € con el descuento"},
     {"id": "campo_talla", "fase": "producto",
      "titulo": "La talla, en la ficha de cada conductor",
      "porque": "Sin talla guardada, cada pedido personalizado es una ronda de WhatsApps y una lista en papel. Es lo que convierte «vender ropa» en «un botón».",
@@ -40902,7 +40895,7 @@ _TIENDA_PASOS = [
     {"id": "alta_reta", "fase": "cobrar",
      "titulo": "Autónomo o sociedad: desde dónde facturas",
      "porque": "Hoy no tienes la sociedad constituida, así que no hay desde dónde emitir la factura de una sudadera. Sin esto resuelto, cobrar no es posible.",
-     "como": "O alta en el RETA, o esperar a constituir la sociedad, o —para la primera tanda— que el propio serigrafiador facture a cada conductor y tú solo organices el pedido: cero exposición fiscal y compruebas la demanda igual.",
+     "como": "O alta en el RETA, o esperar a constituir la sociedad. Ojo con un efecto que no se ve: sin NIF de empresa, Printful te repercute el IVA, así que hoy cada prenda te cuesta un 21% más que el día que exista la SL — y ese día el margen sube solo.",
      "coste": "Cuota de autónomo si vas por ahí"},
     {"id": "regimen_iva", "fase": "cobrar",
      "titulo": "Decidir el régimen de IVA",
@@ -40924,9 +40917,9 @@ _TIENDA_PASOS = [
 
     # ---- FASE 3: de dónde salen los ingresos -------------------------------
     {"id": "canal_pedido_nave", "fase": "canales",
-     "titulo": "Pedido agrupado por nave",
-     "porque": "Es la vía que puedes probar mañana: cobras por adelantado, cierras el viernes y pagas al proveedor el lunes. Riesgo de stock CERO, y agrupar es justo lo que hace barata la personalización.",
-     "como": "Se elige prenda, talla y nombre desde el portal del conductor, con fecha de cierre y un mínimo: si no llegas a 30 unidades no lanzas y devuelves.",
+     "titulo": "Tanda semanal por nave",
+     "porque": "Es la vía que puedes probar mañana: cobras por adelantado, cierras el viernes y pides el lunes con ese dinero. Riesgo de stock CERO y ni un euro adelantado. Agrupar ya no abarata la prenda —Printful cobra igual por una que por veinte— pero SÍ el envío, que va por pedido: veinte prendas en un envío a la nave en vez de veinte envíos.",
+     "como": "Se elige prenda, talla y nombre desde el portal del conductor, con fecha de cierre y un mínimo: si no llegas al mínimo no lanzas y devuelves.",
      "ancla": "tienda-control", "accion": "Abrir la tienda",
      "coste": "0 € de stock"},
     {"id": "canal_kit_alta", "fase": "canales",
@@ -41044,12 +41037,17 @@ _PRENDAS_MAX = 60          # tope sano: es un taller, no un catalogo de 5.000
 #     que el precio de venta tiene que cubrirlo — ver `_TIENDA_GASTOS_UD`.
 # El de aqui es solo el valor por DEFECTO al crear: cada prenda lleva el suyo.
 _PRENDA_TIPOS = [
-    {"id": "camiseta", "nombre": "Camiseta · Gildan 5000", "coste": 7.72},
-    {"id": "sudadera", "nombre": "Sudadera · Gildan 18000", "coste": 17.90},
-    {"id": "polo", "nombre": "Polo piqué · Gildan 64800", "coste": 18.75},
-    {"id": "chubasquero", "nombre": "Cortavientos · SOL'S 32000", "coste": 22.16},
+    # El NOMBRE va sin modelo a proposito. Cada tipo tiene varios productos
+    # detras —la camiseta de hombre es una Gildan 5000 y la de mujer una
+    # 64000L— y poner uno aqui hacia que la ficha de mujer dijera "Gildan
+    # 5000" en pantalla. Un dato falso que ademas parece bueno: el modelo de
+    # verdad vive en las notas de cada prenda, que es donde se mira al pedir.
+    {"id": "camiseta", "nombre": "Camiseta", "coste": 7.72},
+    {"id": "sudadera", "nombre": "Sudadera", "coste": 17.90},
+    {"id": "polo", "nombre": "Polo piqué", "coste": 18.75},
+    {"id": "chubasquero", "nombre": "Cortavientos", "coste": 22.16},
     {"id": "pantalon", "nombre": "Pantalón de chándal", "coste": 32.06},
-    {"id": "gorra", "nombre": "Gorra / gorro · Yupoong", "coste": 16.65},
+    {"id": "gorra", "nombre": "Gorra / gorro", "coste": 16.65},
 ]
 
 # LAS TALLAS GRANDES CUESTAN MAS, Y SI NO SE COBRAN SE PIERDE EN LAS QUE MAS SE
