@@ -20,6 +20,13 @@ const RAIZ = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
    a mano (curl / consola) o endpoints de diagnóstico. Están aquí para que el
    checker no las cante cada vez; si borras una, bórrala también de esta lista. */
 const SIN_UI_A_PROPOSITO = new Set([
+  // ── LAS LLAMA CLOUDFLARE, NO EL NAVEGADOR ─────────────────────────────
+  // Estas dos las consume `frontend-v2/functions/`, que corre en el borde de
+  // Cloudflare y mete los datos DENTRO del HTML antes de servirlo. No pueden
+  // llamarse desde `api.js`: si el dato lo pintara React, Google a veces lo
+  // veria y a veces no, y en Google for Jobs no verlo es no existir.
+  'GET /empleo/seo/{slug}/{oferta_slug}',
+  'GET /empleo/seo/sitemap',
   // ── NO ENGANCHAR: parece un boton inofensivo y no lo es ────────────────
   // `read` tiene DOS usos en `alerts`, y el segundo no es evidente: ademas de
   // "visto", es lo que evita duplicar el aviso —`find_one({vehicle_id, title,

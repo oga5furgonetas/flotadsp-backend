@@ -41754,5 +41754,185 @@ async def tienda_borrar_logo(variante: str, _=Depends(require_admin)):
     return {"ok": True, "logos": await _logos_mapa()}
 
 
+# =========================
+# EMPLEO — SALIR EN GOOGLE SIN PORTALES DE POR MEDIO
+# =========================
+"""Que la oferta aparezca en Google y la gente se apunte AQUI.
+
+Esto es Google for Jobs: si la pagina de una oferta lleva dentro un bloque
+`JobPosting` de schema.org, Google la muestra en su buscador de empleo con la
+tarjeta grande, gratis y sin pasar por Indeed ni InfoJobs. La pieza que lo
+convierte en «se apuntan aqui» es `directApply: true`: le dice a Google que en
+esta pagina se puede solicitar de verdad, sin cadena de redirecciones. Google
+prioriza las que lo tienen.
+
+POR QUE ESTOS DATOS Y NO OTROS. Google exige `title`, `description`,
+`datePosted` y `hiringOrganization`, y recomienda `validThrough`, `jobLocation`,
+`baseSalary` y `employmentType`. Lo que NO se sabe, no se inventa: una oferta
+sin jornada reconocible sale sin `employmentType` en vez de con uno supuesto —
+un dato falso en datos estructurados es motivo de penalizacion, no un adorno.
+
+`validThrough` NO es opcional en la practica aunque Google lo llame recomendado:
+sin fecha de caducidad la oferta se queda en el buscador para siempre y acabas
+recibiendo candidaturas de un puesto que cerraste hace meses. Se calcula a 90
+dias de la publicacion, que es lo que dura viva una oferta de reparto.
+
+SE RETROALIMENTA SOLO: el sitemap se genera en cada peticion desde las ofertas
+ACTIVAS, asi que publicar una oferta la mete en Google y desactivarla la saca,
+sin tocar ningun fichero.
+"""
+
+_SEO_DIAS_VIGENCIA = 90
+
+
+def _empleo_salario_rango(texto: str) -> dict | None:
+    """De «1500/2500», «1.500 - 2.500 €» o «1800» a un rango con numeros.
+
+    Devuelve None si no hay ninguna cifra creible: es mejor una oferta sin
+    salario que una con un salario inventado, que ademas Google contrasta.
+    """
+    if not texto:
+        return None
+    # Se quitan los puntos de millar antes de buscar: «1.500» son 1500, no 1 y 500.
+    limpio = re.sub(r"(?<=\d)[.\s](?=\d{3}\b)", "", str(texto))
+    nums = [int(n) for n in re.findall(r"\d{3,6}", limpio)]
+    # Un sueldo mensual de reparto no baja de 600 ni pasa de 10.000: fuera de
+    # ahi es que hemos leido otra cosa (un año, un codigo postal, un telefono).
+    nums = [n for n in nums if 600 <= n <= 10000]
+    if not nums:
+        return None
+    return {"min": min(nums), "max": max(nums)}
+
+
+def _empleo_tipo_jornada(texto: str) -> str | None:
+    """FULL_TIME / PART_TIME, o None si no se sabe. No se adivina."""
+    t = (texto or "").lower()
+    if any(x in t for x in ("completa", "full", "40 h", "40h", "jornada entera")):
+        return "FULL_TIME"
+    if any(x in t for x in ("parcial", "media jornada", "part", "20 h", "20h")):
+        return "PART_TIME"
+    return None
+
+
+def _empleo_jsonld(o: dict, org: dict, url: str) -> dict:
+    """El bloque JobPosting de esta oferta, listo para meter en el HTML."""
+    creada = str(o.get("creada_en") or "")[:19] or datetime.now(timezone.utc).isoformat()[:19]
+    try:
+        caduca = (datetime.fromisoformat(creada.replace("Z", ""))
+                  + timedelta(days=_SEO_DIAS_VIGENCIA)).isoformat()
+    except Exception:                                            # noqa: BLE001
+        caduca = (datetime.now(timezone.utc) + timedelta(days=_SEO_DIAS_VIGENCIA)).isoformat()
+
+    empresa = (org or {}).get("name") or (org or {}).get("nombre") or "FlotaDSP"
+    ld = {
+        "@context": "https://schema.org/",
+        "@type": "JobPosting",
+        # El titulo es SOLO el puesto: Google penaliza meter aqui la ciudad o
+        # la empresa, que van en sus propios campos.
+        "title": _empleo_texto(o.get("titulo"), 120),
+        "description": _empleo_texto(o.get("descripcion"), 8000) or _empleo_texto(o.get("titulo"), 120),
+        "identifier": {"@type": "PropertyValue", "name": empresa, "value": o.get("id") or o.get("slug")},
+        "datePosted": creada,
+        "validThrough": caduca,
+        "hiringOrganization": {
+            "@type": "Organization", "name": empresa,
+            "sameAs": PUBLIC_BASE_URL,
+            "logo": "%s/logo-fd.png" % _PORTAL_BASE_FRONT.rstrip("/"),
+        },
+        "jobLocation": {
+            "@type": "Place",
+            "address": {
+                "@type": "PostalAddress",
+                "addressLocality": _empleo_texto(o.get("ciudad"), 80) or "España",
+                "addressCountry": "ES",
+            },
+        },
+        # LA PIEZA QUE IMPORTA: «se solicita AQUI». Google prioriza las ofertas
+        # con solicitud directa frente a las que rebotan a un portal.
+        "directApply": True,
+        "url": url,
+    }
+    if o.get("requisitos"):
+        ld["qualifications"] = _empleo_texto(o.get("requisitos"), 2000)
+    jornada = _empleo_tipo_jornada(o.get("jornada"))
+    if jornada:
+        ld["employmentType"] = jornada
+    sal = _empleo_salario_rango(o.get("salario"))
+    if sal:
+        ld["baseSalary"] = {
+            "@type": "MonetaryAmount", "currency": "EUR",
+            "value": {"@type": "QuantitativeValue", "minValue": sal["min"],
+                      "maxValue": sal["max"], "unitText": "MONTH"},
+        }
+    return ld
+
+
+@api_router.get("/empleo/seo/{slug}/{oferta_slug}")
+async def empleo_seo_oferta(slug: str, oferta_slug: str):
+    """Titulo, descripcion y JobPosting de una oferta. Publico y sin sesion.
+
+    Lo consume la funcion de Cloudflare que sirve la pagina: el HTML tiene que
+    llevar esto DENTRO cuando llega el robot. Una SPA que lo pinta con
+    JavaScript despues es una loteria — Google a veces lo ve y a veces no, y
+    con Google for Jobs, no verlo es no existir.
+    """
+    o = await _empleo_oferta_publica(slug, oferta_slug)
+    org = await global_db.organizations.find_one(
+        {"db_name": _current_db_name.get()}, {"_id": 0, "name": 1, "slug": 1})
+    if not org and _current_db_name.get() == _DEFAULT_DB_NAME:
+        org = await global_db.organizations.find_one(
+            {"account_type": "owner"}, {"_id": 0, "name": 1, "slug": 1})
+    url = "%s/empleo/%s/%s" % (_PORTAL_BASE_FRONT.rstrip("/"), slug, o.get("slug"))
+    ciudad = _empleo_texto(o.get("ciudad"), 80)
+    titulo = _empleo_texto(o.get("titulo"), 110)
+    desc = re.sub(r"\s+", " ", _empleo_texto(o.get("descripcion"), 600) or "")[:300]
+    return {
+        # El <title> SI lleva ciudad y empresa: eso es para la persona que lo
+        # ve en la lista de resultados, no para el dato estructurado.
+        "titulo": ("%s%s | %s" % (titulo, (" en " + ciudad) if ciudad else "",
+                                  (org or {}).get("name") or "FlotaDSP"))[:120],
+        "descripcion": desc or titulo,
+        "url": url,
+        "jsonld": _empleo_jsonld(o, org or {}, url),
+    }
+
+
+@api_router.get("/empleo/seo/sitemap")
+async def empleo_seo_sitemap():
+    """Las ofertas ACTIVAS de todas las empresas, para el sitemap.
+
+    Publico a proposito y sin sesion: una oferta de empleo existe para que la
+    encuentren. Se recorren todas las bases porque cada empresa tiene la suya
+    (y la principal se llama `flotadsp`, no `dsp_*` — gotcha 5: un barrido que
+    solo mire `dsp_*` se salta justo las ofertas de Dani).
+    """
+    salida = []
+    try:
+        orgs = await global_db.organizations.find(
+            {}, {"_id": 0, "slug": 1, "db_name": 1, "account_type": 1}).to_list(200)
+    except Exception as e:                                       # noqa: BLE001
+        logger.warning("sitemap de empleo: %s", e)
+        return {"ofertas": []}
+    for org in orgs:
+        slug = org.get("slug")
+        if not slug:
+            continue
+        dbn = org.get("db_name") or (_DEFAULT_DB_NAME if org.get("account_type") == "owner" else None)
+        if not dbn:
+            continue
+        try:
+            cur = client[dbn].ofertas_empleo.find(
+                {"activa": True}, {"_id": 0, "slug": 1, "creada_en": 1})
+            async for o in cur:
+                if o.get("slug"):
+                    salida.append({
+                        "url": "%s/empleo/%s/%s" % (_PORTAL_BASE_FRONT.rstrip("/"), slug, o["slug"]),
+                        "lastmod": str(o.get("creada_en") or "")[:10],
+                    })
+        except Exception as e:                                   # noqa: BLE001
+            logger.warning("sitemap de empleo (%s): %s", dbn, e)
+    return {"ofertas": salida}
+
+
 app.include_router(auth_router)
 app.include_router(api_router)
