@@ -752,7 +752,7 @@ function ElLogo({ datos, onCambio }) {
   }
 
   return (
-    <div className="mt-4 rounded-xl border border-dark-800 bg-dark-900/40 p-3">
+    <div id="tienda-logo" className="mt-4 rounded-xl border border-dark-800 bg-dark-900/40 p-3">
       <div className="mb-1 text-[13px] font-semibold text-dark-100">Tu logo</div>
       <p className="mb-2.5 text-[12px] leading-snug text-dark-500">
         Súbelo en vectorial (.svg) y se dibujará él en las prendas en vez de las letras.

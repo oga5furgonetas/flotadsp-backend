@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import {
+  Store, useEffect, useRef, useState } from 'react'
 import { NavLink, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Trophy, Users, CalendarClock, CalendarCheck, BarChart3, Activity,
@@ -96,6 +97,7 @@ const NAV_DEF = [
   { g: 'nav.g.system', gIcon: Settings, iconCls: 'text-dark-300', iconBg: 'bg-white/[0.07]', items: [
     { to: '/panel/origen-danos', labelKey: 'nav.origen', icon: ShieldAlert },
     { to: '/panel/ia-peritaje', labelKey: 'nav.ai', icon: BrainCircuit },
+    { to: '/panel/tienda', labelKey: 'nav.tienda', icon: Store },
     { to: '/panel/configuracion', labelKey: 'nav.settings', icon: Settings },
   ]},
 ]

@@ -151,10 +151,10 @@ export default function TiendaRopa() {
       })}
 
       {/* La tienda de verdad: abrirla, la tanda y los pedidos */}
-      <TiendaPedidos />
+      <div id="tienda-control"><TiendaPedidos /></div>
 
       {/* El taller: tus propias prendas */}
-      <TiendaPrendas />
+      <div id="tienda-prendas"><TiendaPrendas /></div>
 
       {/* Catálogo y márgenes */}
       <div className="mt-6">
@@ -247,12 +247,25 @@ function Paso({ p, abierto, onAbrir, onMarcar, guardando }) {
         <div className="space-y-2 border-t border-dark-800 bg-dark-950/40 px-3 py-3 pl-11 text-[12.5px]">
           <p className="text-dark-400"><b className="text-dark-300">Por qué:</b> {p.porque}</p>
           <p className="text-dark-400"><b className="text-dark-300">Cómo:</b> {p.como}</p>
-          {p.enlace && (
-            <a href={p.enlace.url} target="_blank" rel="noreferrer"
-              className="inline-flex items-center gap-1.5 text-brand-400 hover:text-brand-300">
-              {p.enlace.texto} <ExternalLink size={12} />
-            </a>
-          )}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            {p.enlace && (
+              <a href={p.enlace.url} target="_blank" rel="noreferrer"
+                className="inline-flex items-center gap-1.5 text-brand-400 hover:text-brand-300">
+                {p.enlace.texto} <ExternalLink size={12} />
+              </a>
+            )}
+            {/* UN PASO QUE SOLO SE MARCA ES UNA LISTA DE DESEOS. Los que se
+                hacen aqui llevan al sitio donde se hacen, en vez de dejarte
+                buscandolo por la pantalla. */}
+            {p.ancla && (
+              <button type="button"
+                onClick={() => document.getElementById(p.ancla)?.scrollIntoView(
+                  { behavior: 'smooth', block: 'center' })}
+                className="inline-flex items-center gap-1 rounded-lg border border-brand-500/40 bg-brand-500/10 px-2 py-0.5 text-[12px] font-medium text-brand-300">
+                {p.accion || 'Ir'} <ChevronDown size={11} className="-rotate-90" />
+              </button>
+            )}
+          </div>
           {p.at && (
             <p className="text-[11.5px] text-dark-600">
               {p.hecho ? 'Marcado' : 'Desmarcado'} el {String(p.at).slice(0, 10)}

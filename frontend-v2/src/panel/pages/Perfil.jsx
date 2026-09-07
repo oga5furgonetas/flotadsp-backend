@@ -3,7 +3,6 @@ import { useT } from '../../i18n'
 import { Loader2, KeyRound, User, Mail, Receipt, ExternalLink, ShieldCheck, Check } from 'lucide-react'
 import { getAdmin, isSuperAdmin } from '../auth'
 import { changeMyPassword, getMe, setMyEmail } from '../api'
-import TiendaRopa from '../components/TiendaRopa'
 
 export default function Perfil() {
   const { t } = useT()
@@ -96,11 +95,6 @@ export default function Perfil() {
         </div>
         {emailMsg && <p className={`mt-2 text-sm ${emailMsg.ok ? 'text-emerald-400' : 'text-red-400'}`}>{emailMsg.text}</p>}
       </div>
-
-      {/* Tienda de ropa y material. Solo el super-admin: es la preparacion del
-          NEGOCIO, no una pantalla de operaciones, y hasta que no este montada
-          no tiene sentido enseñarsela a los trece admins. */}
-      {isSuperAdmin() && <TiendaRopa />}
 
       {/* Facturación */}
       <div className="card p-5">

@@ -533,6 +533,7 @@ const DICT = {
   'nav.origen':     { es: 'Origen de daños',  en: 'Damage origin', fr: 'Origine dégâts',  de: 'Schadensherkunft', it: 'Origine danni', pt: 'Origem dos danos' },
   'nav.ai':         { es: 'IA Peritaje',      en: 'AI Assessment', fr: 'IA Expertise',    de: 'KI-Schätzung',    it: 'IA Perizia',     pt: 'IA Peritagem' },
   'nav.imports':    { es: 'Importaciones',    en: 'Imports',       fr: 'Importations',    de: 'Importe',         it: 'Importazioni',   pt: 'Importações' },
+  'nav.tienda':       { es: 'Tienda', en: 'Shop', fr: 'Boutique', de: 'Shop', it: 'Negozio', pt: 'Loja' },
   'nav.settings':   { es: 'Configuración',    en: 'Settings',      fr: 'Paramètres',      de: 'Einstellungen',   it: 'Impostazioni',   pt: 'Configurações' },
   'nav.business':   { es: 'Negocio (super-admin)', en: 'Business (super-admin)', fr: 'Activité (super-admin)', de: 'Geschäft (Super-Admin)', it: 'Business (super-admin)', pt: 'Negócio (super-admin)' },
   'nav.help':       { es: 'Ayuda',            en: 'Help',          fr: 'Aide',            de: 'Hilfe',           it: 'Aiuto',          pt: 'Ajuda' },

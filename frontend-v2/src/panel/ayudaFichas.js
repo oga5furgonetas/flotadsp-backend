@@ -270,6 +270,16 @@ export const AYUDA = {
     pasos: ['Sube las fotos del daño y la IA propone una valoración.'],
     estado: 'Poco usada: 4 peritajes y el último hace tres meses.',
   },
+  tienda: {
+    que: 'La ropa que le vendes a tu gente: qué falta para poder venderla, tus prendas y los pedidos.',
+    pasos: [
+      'Los pasos de arriba se marcan solos cuando los completas: el logo, el precio, abrir la tienda.',
+      'En «Tus prendas» las montas y les pones precio. Sin precio no se pueden publicar.',
+      'La tienda nace APAGADA: mientras lo esté, en el móvil del conductor no aparece ni la entrada.',
+      'Cada tanda se cierra el día que elijas y hay un mínimo: por debajo no compensa lanzarla.',
+    ],
+    ojo: 'Lo que se emite es un justificante, no una factura: hasta que exista la sociedad no hay NIF con el que emitirla.',
+  },
   configuracion: {
     que: 'Ajustes de la cuenta, centros, avisos y quién recibe qué.',
     pasos: ['Los avisos de Telegram y los destinatarios se configuran aquí.'],

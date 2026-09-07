@@ -248,6 +248,7 @@ const PortalTaller = lazy(() => import('./pages/PortalTaller'))
 const PortalTallerLista = lazy(() => import('./pages/PortalTallerLista'))
 const PortalApoyo = lazy(() => import('./pages/PortalApoyo'))
 const PanelConfiguracion = lazy(() => import('./panel/pages/Configuracion'))
+const PanelTienda = lazy(() => import('./panel/pages/Tienda'))
 const PanelTurnos = lazy(() => import('./panel/pages/Turnos'))
 const PanelUsuarios = lazy(() => import('./panel/pages/Usuarios'))
 const PanelIAPeritaje = lazy(() => import('./panel/pages/IAPeritaje'))
@@ -371,6 +372,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="origen-danos" element={<PanelOrigenDanos />} />
                 <Route path="importaciones" element={<PanelImportaciones />} />
                 <Route path="configuracion" element={<PanelConfiguracion />} />
+                <Route path="tienda" element={<PanelTienda />} />
                 <Route path="admin" element={<PanelNegocio />} />
                 <Route path="usuarios" element={<PanelUsuarios />} />
                 <Route path="perfil" element={<PanelPerfil />} />
