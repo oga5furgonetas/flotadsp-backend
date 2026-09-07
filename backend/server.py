@@ -1445,6 +1445,7 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.tienda_clientes, "email", unique=True,
                collation={"locale": "es", "strength": 2})
     await _idx(tdb.tienda_pedidos, "id", unique=True)
+    await _idx(tdb.tienda_fotos, "prenda", unique=True)
     await _idx(tdb.tienda_pedidos, [("driver_id", 1), ("creado_en", -1)])
     await _idx(tdb.tienda_logos, "variante", unique=True)
     await _idx(tdb.workshops, "id")
@@ -42121,6 +42122,7 @@ async def tienda_escaparate(user: dict = Depends(require_any_auth)):
             "estampaciones": p.get("estampaciones") or [],
             "franja_manga": bool(p.get("franja_manga")),
             "precio": _tienda_precio(p),
+            "foto_ver": p.get("foto_ver"),
             "lleva_nombre": any(e.get("con_nombre") for e in (p.get("estampaciones") or [])),
         } for p in prendas],
     }
@@ -42491,6 +42493,101 @@ async def tienda_avisos(body: dict = Body(...), request: Request = None):
     quiere = bool(body.get("avisos"))
     await db[_TCOL_CLIENTES].update_one({"id": c["id"]}, {"$set": {"avisos": quiere}})
     return {"ok": True, "avisos": quiere}
+
+
+# -------------------------------------------------------------------------
+# TIENDA — LA FOTO DE LA PRENDA
+# -------------------------------------------------------------------------
+"""La foto real de cada prenda. El dibujo no basta para que alguien pague.
+
+El lienzo vectorial sirve para DECIDIR —donde va el logo, de que tamaño— pero
+nadie saca la tarjeta mirando un dibujo de linea. Quien compra tiene que ver
+la prenda que le va a llegar.
+
+LA FOTO VA EN SU PROPIA COLECCION, no dentro del documento de la prenda. Con
+doce prendas a medio mega, la lista del escaparate pesaria siete megas y se
+bajaria entera en cada carga: la lista lleva solo `tiene_foto`, y la imagen se
+pide por su URL, que el navegador cachea un año porque cambia de id al
+cambiar de foto.
+"""
+
+_TCOL_FOTOS = "tienda_fotos"
+_FOTO_MAX_BYTES = 900 * 1024
+_FOTO_TIPOS = {
+    "jpg": "image/jpeg", "jpeg": "image/jpeg",
+    "png": "image/png", "webp": "image/webp",
+}
+# Los primeros bytes de cada formato. La extension la pone quien sube; esto es
+# lo que dice de verdad que es: un .exe renombrado a .jpg no pasa de aqui.
+_FOTO_FIRMAS = {
+    "image/jpeg": [b"\xff\xd8\xff"],
+    "image/png": [b"\x89PNG\r\n\x1a\n"],
+    "image/webp": [b"RIFF"],
+}
+
+
+def _foto_valida(nombre: str, datos: bytes) -> str:
+    ext = (nombre or "").rsplit(".", 1)[-1].lower() if "." in (nombre or "") else ""
+    if ext not in _FOTO_TIPOS:
+        raise HTTPException(400, "La foto tiene que ser .jpg, .png o .webp")
+    if not datos:
+        raise HTTPException(400, "El fichero está vacío")
+    if len(datos) > _FOTO_MAX_BYTES:
+        raise HTTPException(400, "La foto no puede pasar de %d KB (la tuya: %d KB). "
+                                 "Redúcela y vuelve a subirla."
+                            % (_FOTO_MAX_BYTES // 1024, len(datos) // 1024))
+    mime = _FOTO_TIPOS[ext]
+    if not any(datos.startswith(f) for f in _FOTO_FIRMAS[mime]):
+        raise HTTPException(400, "Ese fichero no es una imagen %s de verdad" % ext)
+    return mime
+
+
+@api_router.post("/tienda/prendas/{prenda_id}/foto")
+async def tienda_subir_foto(prenda_id: str, file: UploadFile = File(...),
+                            user: dict = Depends(require_admin)):
+    """Sube la foto de una prenda. Sustituye la que hubiera."""
+    p = await db[_PRENDAS_COL].find_one({"id": prenda_id, "archivada": {"$ne": True}},
+                                        {"_id": 0, "id": 1})
+    if not p:
+        raise HTTPException(404, "Esa prenda no existe")
+    datos = await file.read()
+    mime = _foto_valida(file.filename or "", datos)
+    # `ver` cambia con cada foto y viaja en la URL: asi el navegador puede
+    # cachearla un año y aun asi ver la nueva al instante.
+    ver = uuid.uuid4().hex[:8]
+    await db[_TCOL_FOTOS].update_one(
+        {"prenda": prenda_id},
+        {"$set": {"prenda": prenda_id, "mime": mime,
+                  "datos": base64.b64encode(datos).decode("ascii"),
+                  "bytes": len(datos), "ver": ver,
+                  "at": datetime.now(timezone.utc).isoformat(),
+                  "por": user.get("name") or user.get("username") or ""}},
+        upsert=True)
+    await db[_PRENDAS_COL].update_one({"id": prenda_id}, {"$set": {"foto_ver": ver}})
+    return {"ok": True, "foto_ver": ver}
+
+
+@api_router.delete("/tienda/prendas/{prenda_id}/foto")
+async def tienda_borrar_foto(prenda_id: str, _=Depends(require_admin)):
+    await db[_TCOL_FOTOS].delete_one({"prenda": prenda_id})
+    await db[_PRENDAS_COL].update_one({"id": prenda_id}, {"$unset": {"foto_ver": ""}})
+    return {"ok": True}
+
+
+@api_router.get("/tienda/prendas/{prenda_id}/foto")
+async def tienda_ver_foto(prenda_id: str, user: dict = Depends(require_any_auth)):
+    """La foto. La ve quien tiene sesion —oficina o conductor—, no el mundo."""
+    f = await db[_TCOL_FOTOS].find_one({"prenda": prenda_id}, {"_id": 0})
+    if not f:
+        raise HTTPException(404, "Esa prenda no tiene foto")
+    from fastapi.responses import Response as _Resp
+    return _Resp(
+        content=base64.b64decode(f.get("datos") or ""),
+        media_type=f.get("mime") or "image/jpeg",
+        # Un año: la URL lleva la version dentro, asi que una foto nueva es
+        # otra URL y no hay que invalidar nada.
+        headers={"cache-control": "private, max-age=31536000, immutable"},
+    )
 
 
 app.include_router(auth_router)

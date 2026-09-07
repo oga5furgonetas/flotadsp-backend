@@ -5,9 +5,9 @@ import {
 } from 'lucide-react'
 import {
   tiendaEscaparate, tiendaCrearPedido, tiendaMisPedidos,
-  tiendaCuenta, tiendaVincularCuenta,
+  tiendaCuenta, tiendaVincularCuenta, tiendaFotoBlob,
 } from '../../services/api'
-import { Lienzo } from '../../panel/components/TiendaPrendas'
+import { FotoPrenda } from '../../panel/components/TiendaPrendas'
 
 /* ────────────────────────────────────────────────────────────────────────────
    LA TIENDA, EN EL PORTAL DEL CONDUCTOR
@@ -246,9 +246,10 @@ function Producto({ p, onAñadir }) {
   const [talla, setTalla] = useState('')
   return (
     <div className="overflow-hidden rounded-2xl border border-dark-800 bg-dark-900/50">
-      <div className="flex items-center justify-center bg-dark-950/60 py-2">
-        <div className="w-[104px]">
-          <Lienzo prenda={p} datos={{ colores: COLORES, tintas: TINTAS, posiciones: POSICIONES }} cara="delante" />
+      <div className="flex items-center justify-center overflow-hidden bg-dark-950/60">
+        <div className={p.foto_ver ? 'w-full' : 'w-[104px] py-2'}>
+          <FotoPrenda prenda={p} traer={tiendaFotoBlob}
+            datos={{ colores: COLORES, tintas: TINTAS, posiciones: POSICIONES }} cara="delante" />
         </div>
       </div>
       <div className="p-3">

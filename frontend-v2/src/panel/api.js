@@ -508,6 +508,18 @@ export const tiendaPedidos = () => api.get('/tienda/pedidos')
 export const tiendaConfig = (body) => api.post('/tienda/config', body)
 export const tiendaEstadoPedido = (id, estado) =>
   api.post(`/tienda/pedidos/${id}/estado`, { estado })
+export const tiendaSubirFoto = (id, archivo) => {
+  const fd = new FormData()
+  fd.append('file', archivo)
+  return api.post(`/tienda/prendas/${id}/foto`, fd,
+    { headers: { 'Content-Type': 'multipart/form-data' } })
+}
+export const tiendaBorrarFoto = (id) => api.delete(`/tienda/prendas/${id}/foto`)
+// La foto pide sesion, asi que un <img src> normal no vale: el navegador no
+// manda el token en la peticion de una imagen. Se baja con el cliente que si
+// lo lleva y se pinta como blob.
+export const tiendaFotoBlob = (id) =>
+  api.get(`/tienda/prendas/${id}/foto`, { responseType: 'blob' })
 export const cortexRoutes = (day, center) => api.get('/cortex/routes', { params: { day, center } })
 export const cortexPackage = (tba) => api.get(`/cortex/package/${tba}`)
 export const cortexAlerts = (day, center) => api.get('/cortex/alerts', { params: { day, center } })

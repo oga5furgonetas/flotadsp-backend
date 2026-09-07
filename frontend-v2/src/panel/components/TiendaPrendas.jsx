@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Plus, Trash2, Pencil, X, Shirt, RotateCcw, Wand2, Copy, Check, Calculator, Upload } from 'lucide-react'
+import { Loader2, Plus, Trash2, Pencil, X, Shirt, RotateCcw, Wand2, Copy, Check, Calculator, Upload, Camera } from 'lucide-react'
 import {
   tiendaPrendas, tiendaCrearPrenda, tiendaEditarPrenda, tiendaArchivarPrenda,
   tiendaInterpretar, tiendaFicha, tiendaLogos, tiendaSubirLogo, tiendaBorrarLogo,
+  tiendaSubirFoto, tiendaBorrarFoto, tiendaFotoBlob,
 } from '../api'
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -111,7 +112,7 @@ export default function TiendaPrendas() {
             <div key={p.id} className="rounded-xl border border-dark-800 bg-dark-900/40 p-3">
               <div className="flex gap-3">
                 <div className="w-[92px] shrink-0 rounded-lg bg-dark-950/60 p-1">
-                  <Lienzo prenda={p} datos={datos} logos={logos?.logos} cara="delante" />
+                  <FotoPrenda prenda={p} datos={datos} logos={logos?.logos} cara="delante" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[13.5px] font-medium text-dark-100">{p.nombre}</div>
@@ -345,6 +346,40 @@ export function Lienzo({ prenda, datos, logos, cara = 'delante' }) {
       })}
     </svg>
   )
+}
+
+
+/* LA FOTO MANDA SOBRE EL DIBUJO. El lienzo vectorial sirve para decidir donde
+   va el logo; nadie saca la tarjeta mirando un dibujo de linea. Cuando la
+   prenda tiene foto real, es lo que se ve.
+
+   Se baja con el cliente que lleva el token —un `<img src>` no manda la
+   cabecera de sesion— y se pinta como blob, que se libera al desmontar para
+   no dejar memoria colgada. `foto_ver` cambia con cada foto, asi que basta
+   con mirarlo para saber que hay que recargarla. */
+export function FotoPrenda({ prenda, datos, logos, cara = 'delante', traer }) {
+  const [url, setUrl] = useState('')
+  const ver = prenda?.foto_ver
+  const id = prenda?.id
+  useEffect(() => {
+    if (!ver || !id) { setUrl(''); return undefined }
+    let vivo = true
+    let creada = ''
+    ;(traer || tiendaFotoBlob)(id)
+      .then((r) => {
+        if (!vivo) return
+        creada = URL.createObjectURL(r.data)
+        setUrl(creada)
+      })
+      .catch(() => {})
+    return () => { vivo = false; if (creada) URL.revokeObjectURL(creada) }
+  }, [id, ver, traer])
+
+  if (url) {
+    return <img src={url} alt={prenda.nombre || 'Prenda'}
+      className="h-full w-full object-cover" style={{ aspectRatio: '1/1' }} />
+  }
+  return <Lienzo prenda={prenda} datos={datos} logos={logos} cara={cara} />
 }
 
 /* ───────────────────────── El editor ───────────────────────── */
@@ -600,6 +635,8 @@ function Editor({ prenda, datos, logos, onCerrar, onGuardado }) {
               </div>
             </div>
 
+            {f.id && <SubirFoto prenda={f} onHecho={onGuardado} />}
+
             <div>
               <label className="label">Notas</label>
               <input className="input" value={f.notas || ''} placeholder="Modelo del proveedor, referencia…"
@@ -795,6 +832,45 @@ function ElLogo({ datos, onCambio }) {
         })}
       </div>
       {err && <p className="mt-2 text-[12px] text-red-400">{err}</p>}
+    </div>
+  )
+}
+
+
+/* Subir la foto real. Solo con la prenda ya guardada: la foto cuelga de su id. */
+function SubirFoto({ prenda, onHecho }) {
+  const [subiendo, setSubiendo] = useState(false)
+  const [err, setErr] = useState('')
+  return (
+    <div className="rounded-xl border border-dark-800 p-3">
+      <div className="mb-1 text-[12.5px] font-medium text-dark-200">Foto real de la prenda</div>
+      <p className="mb-2 text-[11.5px] leading-snug text-dark-500">
+        Es lo que ve quien compra. Sin foto se enseña el dibujo, que sirve para decidir
+        pero no para vender. Máximo 900 KB.
+      </p>
+      <div className="flex items-center gap-3">
+        <label className="btn-secondary inline-flex cursor-pointer items-center gap-1.5 text-[12.5px]">
+          {subiendo ? <Loader2 size={13} className="animate-spin" /> : <Camera size={13} />}
+          {prenda.foto_ver ? 'Cambiar foto' : 'Subir foto'}
+          <input type="file" accept=".jpg,.jpeg,.png,.webp,image/*" className="hidden"
+            onChange={async (e) => {
+              const f = e.target.files?.[0]
+              e.target.value = ''
+              if (!f) return
+              setSubiendo(true); setErr('')
+              try { await tiendaSubirFoto(prenda.id, f); onHecho() } catch (x) {
+                setErr(x?.response?.data?.detail || 'No se ha podido subir.')
+              } finally { setSubiendo(false) }
+            }} />
+        </label>
+        {prenda.foto_ver && (
+          <button type="button" className="text-[12px] text-dark-500 hover:text-red-400"
+            onClick={async () => { await tiendaBorrarFoto(prenda.id); onHecho() }}>
+            Quitar
+          </button>
+        )}
+      </div>
+      {err && <p className="mt-1.5 text-[12px] text-red-400">{err}</p>}
     </div>
   )
 }
