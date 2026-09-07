@@ -1,5 +1,4 @@
-import {
-  Store, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Trophy, Users, CalendarClock, CalendarCheck, BarChart3, Activity,
@@ -8,7 +7,7 @@ import {
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX,
   PackageSearch, PackageCheck, MapPin, Timer, MapPinned, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
-  Briefcase,
+  Briefcase, Store,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
 import { getMe, contarPeticionesPendientes, contarCandidatosNuevos } from './api'
