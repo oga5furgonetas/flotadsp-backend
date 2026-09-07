@@ -41864,8 +41864,15 @@ def _empleo_jsonld(o: dict, org: dict, url: str) -> dict:
         "validThrough": caduca,
         "hiringOrganization": {
             "@type": "Organization", "name": empresa,
-            "sameAs": PUBLIC_BASE_URL,
-            "logo": "%s/logo-fd.png" % _PORTAL_BASE_FRONT.rstrip("/"),
+            # `sameAs` es la WEB DE LA EMPRESA que Google enseña junto a la
+            # oferta. Aqui ponia `PUBLIC_BASE_URL`, que es el servidor de la
+            # API (`flotadsp-backend.fly.dev`): a quien pulsara le habria salido
+            # un JSON o un error, y Google lo usa para reconocer la marca.
+            # Comprobado en produccion antes de cambiarlo.
+            "sameAs": _PORTAL_BASE_FRONT.rstrip("/"),
+            # El de marca y no `logo-fd.png`: ese pesa 1 MB y este 90 KB, y es
+            # el mismo logotipo.
+            "logo": "%s/logo-fd-marca.png" % _PORTAL_BASE_FRONT.rstrip("/"),
         },
         "jobLocation": {
             "@type": "Place",
