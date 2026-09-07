@@ -39,8 +39,16 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   a propósito. Login staging: usuario `admin` (password en secrets de Fly).
   `cd backend && fly deploy -c fly.staging.toml --strategy immediate`
 - Frontend: **https://staging.flotadsp-v2.pages.dev** — alias de rama del mismo
-  proyecto Pages, compilado apuntando al backend de staging:
-  `cd frontend-v2 && VITE_API_URL=https://flotadsp-backend-staging.fly.dev/api npm run build -- --outDir dist-staging && npx wrangler pages deploy dist-staging --project-name flotadsp-v2 --branch staging --commit-dirty=true`
+  proyecto Pages, compilado apuntando al backend de staging.
+  **`.\scripts\deploy-staging.ps1`** — compila, despliega, comprueba que
+  staging sirve ese bundle y **calienta su edge**. Usa esto, no los comandos a
+  mano: el paso de calentar no estaba en ninguna nota y `calentar-edge.ps1`
+  llevaba la URL de producción clavada dentro, así que **staging se
+  desplegaba siempre en frío**. El 07-09-2026 se le pasó a Dani un enlace de
+  staging recién desplegado y se le recargaba solo una y otra vez — era el
+  gotcha 8 con la defensa del cliente funcionando bien; desde fuera, «no para
+  de resetearse». `calentar-edge.ps1` acepta ahora `-Web` y `-Dist`.
+  A mano sería: `cd frontend-v2 && VITE_API_URL=https://flotadsp-backend-staging.fly.dev/api npm run build -- --outDir dist-staging && npx wrangler pages deploy dist-staging --project-name flotadsp-v2 --branch staging --commit-dirty=true`
   (usa `dist-staging/` para NO pisar el `dist/` de producción).
 - CORS ya admite `*.flotadsp-v2.pages.dev` por regex: no hay que tocar nada.
 - MongoDB Atlas + Cloudflare R2 (fotos/documentos) + Gemini (análisis) + ai-service YOLO11+SAM2.

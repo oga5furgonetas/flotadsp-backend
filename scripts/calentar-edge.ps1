@@ -34,14 +34,22 @@
 # -----------------------------------------------------------------
 param(
     [int]$Intentos = 4,          # vueltas antes de rendirse
-    [int]$EsperaSeg = 10         # pausa entre vueltas
+    [int]$EsperaSeg = 10,        # pausa entre vueltas
+    # A QUE SITIO. Por defecto produccion, que es como se ha usado siempre.
+    # Estaban clavados dentro, asi que STAGING SE DESPLEGABA SIN CALENTAR: el
+    # 07-09-2026 se le paso a Dani un enlace de staging recien desplegado y se
+    # le recargaba solo una y otra vez. La ventana del gotcha 8 es la misma en
+    # los dos sitios; lo unico que faltaba era poder apuntar aqui.
+    [string]$Web  = "https://flotadsp.com",
+    [string]$Dist = ""
 )
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$WEB  = "https://flotadsp.com"
-$DIST = Join-Path $PSScriptRoot "..\frontend-v2\dist"
+$WEB  = $Web.TrimEnd("/")
+if ($Dist) { $DIST = $Dist }
+else       { $DIST = Join-Path $PSScriptRoot "..\frontend-v2\dist" }
 
 if (-not (Test-Path $DIST)) {
     Write-Host "No hay dist/ - compila antes." -ForegroundColor Red
