@@ -26,16 +26,22 @@ def _cargar():
     arbol = ast.parse(io.open(SERVER, encoding="utf-8-sig").read())
     ambito = {"re": re}
     for n in arbol.body:
-        if isinstance(n, ast.FunctionDef) and n.name in ("_empleo_salario_rango",
-                                                         "_empleo_tipo_jornada"):
+        if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "_EMPLEO_PROVINCIAS":
+            ambito["_EMPLEO_PROVINCIAS"] = ast.literal_eval(n.value)
+        elif isinstance(n, ast.FunctionDef) and n.name in ("_empleo_salario_rango",
+                                                           "_empleo_tipo_jornada",
+                                                           "_boc_normaliza",
+                                                           "_empleo_provincia"):
             mod = ast.Module(body=[n], type_ignores=[])
             exec(compile(ast.fix_missing_locations(mod), "<server>", "exec"), ambito)  # noqa: S102
-    faltan = [x for x in ("_empleo_salario_rango", "_empleo_tipo_jornada") if x not in ambito]
+    faltan = [x for x in ("_empleo_salario_rango", "_empleo_tipo_jornada",
+                          "_empleo_provincia", "_EMPLEO_PROVINCIAS") if x not in ambito]
     assert not faltan, "no estan en server.py: %s" % faltan
-    return ambito["_empleo_salario_rango"], ambito["_empleo_tipo_jornada"]
+    return (ambito["_empleo_salario_rango"], ambito["_empleo_tipo_jornada"],
+            ambito["_empleo_provincia"])
 
 
-salario, jornada = _cargar()
+salario, jornada, provincia = _cargar()
 
 SALARIOS = [
     # (lo escrito, lo esperado, por que importa)
@@ -70,8 +76,28 @@ JORNADAS = [
 ]
 
 
+PROVINCIAS = [
+    # La provincia es un DATO. Se comprueba que acierta donde la sabe y que
+    # NO se inventa nada donde no: una oferta colocada en otra provincia no
+    # falla, solo hace que no la vea quien la buscaba.
+    ("Santiago de Compostela", "A Coruña", "la nave de Dani"),
+    ("A Coruña", "A Coruña", "con el articulo delante"),
+    ("Vigo", "Pontevedra", "Vigo NO es provincia: es Pontevedra"),
+    ("VIGO", "Pontevedra", "en mayusculas igual"),
+    ("Ourense", "Ourense", "aqui ciudad y provincia coinciden"),
+    ("Bilbao", "Bizkaia", "el nombre oficial de la provincia"),
+    ("Cuenca", "", "no esta en la tabla: no se inventa"),
+    ("", "", "sin ciudad"),
+    ("Villarriba del Alcornoque", "", "un pueblo cualquiera: se omite"),
+]
+
+
 def probar():
     fallos = []
+    for ciudad, esperado, porque in PROVINCIAS:
+        obtenido = provincia(ciudad)
+        if obtenido != esperado:
+            fallos.append("provincia %r -> %r, esperaba %r  (%s)" % (ciudad, obtenido, esperado, porque))
     for texto, esperado, porque in SALARIOS:
         obtenido = salario(texto)
         if obtenido != esperado:
@@ -86,7 +112,7 @@ def probar():
         r = salario(texto)
         if r and r["min"] > r["max"]:
             fallos.append("el rango de %r sale invertido: %r" % (texto, r))
-    return fallos, len(SALARIOS) + len(JORNADAS) + 1
+    return fallos, len(SALARIOS) + len(JORNADAS) + len(PROVINCIAS) + 1
 
 
 def test_empleo_seo():

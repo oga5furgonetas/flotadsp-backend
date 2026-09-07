@@ -41814,6 +41814,31 @@ def _empleo_tipo_jornada(texto: str) -> str | None:
     return None
 
 
+# La provincia de una ciudad es un DATO, no una suposicion, y Google la usa
+# para colocar la oferta en «trabajos cerca de mi». Solo las que sabemos
+# seguro: si la ciudad no esta en la tabla se omite el campo, que es opcional.
+# Adivinarla pondria la oferta en otra provincia, y eso no se nota — solo se
+# nota en que no llama nadie.
+_EMPLEO_PROVINCIAS = {
+    "santiago de compostela": "A Coruña", "a coruna": "A Coruña",
+    "coruna": "A Coruña", "ferrol": "A Coruña", "carballo": "A Coruña",
+    "vigo": "Pontevedra", "pontevedra": "Pontevedra", "vilagarcia de arousa": "Pontevedra",
+    "ourense": "Ourense", "lugo": "Lugo",
+    "madrid": "Madrid", "barcelona": "Barcelona", "valencia": "Valencia",
+    "sevilla": "Sevilla", "zaragoza": "Zaragoza", "malaga": "Málaga",
+    "murcia": "Murcia", "bilbao": "Bizkaia", "alicante": "Alicante",
+    "valladolid": "Valladolid", "gijon": "Asturias", "oviedo": "Asturias",
+    "vitoria": "Álava", "granada": "Granada", "san sebastian": "Gipuzkoa",
+}
+
+
+def _empleo_provincia(ciudad: str) -> str:
+    """La provincia de esa ciudad, o "" si no la sabemos con certeza."""
+    c = _boc_normaliza(ciudad or "").strip()
+    c = re.sub(r"^(a|la|el|las|los)\s+", "", c)
+    return _EMPLEO_PROVINCIAS.get(c, "")
+
+
 def _empleo_jsonld(o: dict, org: dict, url: str) -> dict:
     """El bloque JobPosting de esta oferta, listo para meter en el HTML."""
     creada = str(o.get("creada_en") or "")[:19] or datetime.now(timezone.utc).isoformat()[:19]
@@ -41852,6 +41877,13 @@ def _empleo_jsonld(o: dict, org: dict, url: str) -> dict:
         "directApply": True,
         "url": url,
     }
+    # La provincia SOLO si la sabemos de verdad: Google la usa para colocar la
+    # oferta en «trabajos cerca de mi». Es opcional, asi que omitirla no rompe
+    # nada — ponerla mal si, y ademas no se nota: solo se nota en que no llama
+    # nadie de la zona.
+    _prov = _empleo_provincia(o.get("ciudad"))
+    if _prov:
+        ld["jobLocation"]["address"]["addressRegion"] = _prov
     if o.get("requisitos"):
         ld["qualifications"] = _empleo_texto(o.get("requisitos"), 2000)
     jornada = _empleo_tipo_jornada(o.get("jornada"))
