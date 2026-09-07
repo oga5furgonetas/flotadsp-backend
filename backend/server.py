@@ -41030,17 +41030,61 @@ reales se rellena `pvp` y la prenda se puede publicar. Mientras tanto vive en
 _PRENDAS_COL = "tienda_prendas"
 _PRENDAS_MAX = 60          # tope sano: es un taller, no un catalogo de 5.000
 
-# Los tipos que sabe dibujar la pantalla. El coste orientativo es el mismo de
-# la tabla de margenes (prenda + personalizacion, a 40 uds) y se puede cambiar
-# prenda a prenda en cuanto haya un presupuesto de verdad.
+# Los tipos que sabe dibujar la pantalla, con el COSTE REAL DEL PROVEEDOR.
+#
+# Medidos en el catalogo de Printful el 07-09-2026, y hay tres cosas que no se
+# ven si uno mira el precio de pasada:
+#   · son precios CON IVA, que es lo que se paga mientras no haya NIF de
+#     sociedad. El dia que exista la SL, Printful deja de repercutirlo y estos
+#     costes bajan un 21% solos;
+#   · LLEVAN UNA IMPRESION INCLUIDA. Lo dice la ficha del producto
+#     ("Incluye una impresion"), y es la diferencia entre que el negocio salga
+#     o no: dandolo por aparte se descartan productos que si valen;
+#   · el envio va SIEMPRE aparte (desde 4,49 EUR el primer articulo), asi
+#     que el precio de venta tiene que cubrirlo — ver `_TIENDA_GASTOS_UD`.
+# El de aqui es solo el valor por DEFECTO al crear: cada prenda lleva el suyo.
 _PRENDA_TIPOS = [
-    {"id": "camiseta", "nombre": "Camiseta técnica", "coste": 6.00},
-    {"id": "sudadera", "nombre": "Sudadera con capucha", "coste": 17.45},
-    {"id": "polo", "nombre": "Polo piqué", "coste": 10.45},
-    {"id": "chubasquero", "nombre": "Chubasquero / softshell", "coste": 24.50},
-    {"id": "pantalon", "nombre": "Pantalón multibolsillos", "coste": 16.50},
-    {"id": "gorra", "nombre": "Gorra", "coste": 4.70},
+    {"id": "camiseta", "nombre": "Camiseta · Gildan 5000", "coste": 7.72},
+    {"id": "sudadera", "nombre": "Sudadera · Gildan 18000", "coste": 17.90},
+    {"id": "polo", "nombre": "Polo piqué · Gildan 64800", "coste": 18.75},
+    {"id": "chubasquero", "nombre": "Cortavientos · SOL'S 32000", "coste": 22.16},
+    {"id": "pantalon", "nombre": "Pantalón de chándal", "coste": 32.06},
+    {"id": "gorra", "nombre": "Gorra / gorro · Yupoong", "coste": 16.65},
 ]
+
+# LAS TALLAS GRANDES CUESTAN MAS, Y SI NO SE COBRAN SE PIERDE EN LAS QUE MAS SE
+# PIDEN. Medido el 07-09-2026 en el catalogo: +1,57 EUR de la 2XL en adelante,
+# igual en la camiseta Gildan 5000 (7,72 -> 9,29) que en la sudadera con
+# capucha 18500 (23,39 -> 24,96), y PLANO hasta la 5XL — no es una escalera,
+# es un escalon. Se repercute redondeado a 3 EUR, que cubre el sobrecoste mas
+# su parte de IVA y de pasarela sin obligar a nadie a hacer cuentas por talla.
+_TALLAS_GRANDES = ("XXL", "3XL")
+_RECARGO_TALLA_DEF = 3.00
+
+# LO QUE SE VA ANTES DE QUE EL DINERO LLEGUE. Un margen que solo resta el coste
+# de la prenda es un numero bonito y FALSO: con la camiseta a 24,90 y coste
+# 7,72 sale un 62%, y lo que queda de verdad es el 43%. Esa diferencia son 4
+# euros por prenda — en una tanda de cuarenta, 160 euros que no existen.
+# Por eso los gastos se restan AQUI y no "se tienen en cuenta" de memoria.
+#   · ENVIO: Printful cobra por pedido, desde 4,49 EUR el primer articulo y
+#     menos los siguientes. Con la tanda entera en un envio a la nave sale muy
+#     por debajo de 2,50; se reserva de mas a proposito, porque un margen que
+#     se queda corto se descubre cobrando.
+#   · PASARELA: Stripe en España, 1,9% + 0,25 EUR (tarjeta premium del EEE, que
+#     es el caso caro; la estandar es 1,5%).
+#   · COLCHON: cambios de talla, una prenda que llega mal, un envio perdido.
+#     No es pesimismo: es lo que evita que el primer incidente se coma la tanda.
+_TIENDA_ENVIO_UD = 2.50
+_TIENDA_PASARELA_PCT = 0.019
+_TIENDA_PASARELA_FIJO = 0.25
+_TIENDA_COLCHON_PCT = 0.03
+
+
+def _tienda_gastos(pvp: float) -> float:
+    """Todo lo que se va de una venta, aparte del coste de la prenda."""
+    return round(_TIENDA_ENVIO_UD
+                 + _TIENDA_PASARELA_PCT * pvp + _TIENDA_PASARELA_FIJO
+                 + _TIENDA_COLCHON_PCT * pvp, 2)
 
 # Paleta CERRADA, no un color libre. Dos razones: la pantalla tiene que poder
 # dibujar el contraste del texto encima, y cada color de prenda que se añade
@@ -41078,7 +41122,10 @@ _PRENDA_POSICIONES = [
     {"id": "espalda", "nombre": "Espalda", "cara": "detras", "cm_max": 30},
     {"id": "manga", "nombre": "Manga", "cara": "delante", "cm_max": 12},
 ]
-_PRENDA_TALLAS = ["XS", "S", "M", "L", "XL", "XXL", "3XL"]
+# "U" es talla unica: la gorra y el gorro no tienen tallaje, y sin este valor
+# habria que darlos de alta con una talla inventada — un dato falso que ademas
+# saldria impreso en el pedido.
+_PRENDA_TALLAS = ["U", "XS", "S", "M", "L", "XL", "XXL", "3XL"]
 _PRENDA_MAX_ESTAMPACIONES = 3
 
 
@@ -41177,23 +41224,45 @@ def _prenda_limpia(body: dict, previa: dict | None = None) -> dict:
     pvp = _prenda_dinero(body.get("pvp"), "El precio de venta")
     if pvp is None and "pvp" not in body:
         pvp = p.get("pvp")
+    # Lo que se suma de la XXL para arriba. Se guarda POR PRENDA y no como
+    # constante: el sobrecoste del proveedor es el mismo en euros para una
+    # camiseta que para una sudadera, pero puede dejar de serlo en cuanto se
+    # cambie de producto, y entonces habria que tocar codigo para arreglar un
+    # precio — que es justo lo que no puede pasar en una tienda.
+    recargo = _prenda_dinero(body.get("recargo_talla"), "El recargo de talla", 50.0)
+    if recargo is None:
+        recargo = (p.get("recargo_talla") if p.get("recargo_talla") is not None
+                   else _RECARGO_TALLA_DEF)
 
     return {"nombre": nombre, "tipo": tipo, "color": color, "tallas": tallas,
             "estampaciones": validas, "franja_manga": bool(body.get("franja_manga")),
-            "coste": coste, "pvp": pvp,
+            "coste": coste, "pvp": pvp, "recargo_talla": recargo,
             "notas": _texto_cuerpo(body.get("notas"), 400)}
 
 
 def _prenda_con_cuentas(p: dict) -> dict:
-    """La prenda con lo que deja, si ya tiene precio puesto."""
+    """La prenda con lo que deja. DOS numeros, y el que manda es el segundo.
+
+    `margen` es el bruto de toda la vida —precio sin IVA menos lo que cuesta la
+    prenda— y se sigue dando porque es con lo que se compara un proveedor con
+    otro. Pero el que se enseña grande es `queda`, que ademas descuenta envio,
+    pasarela y colchon: es el dinero que acaba en la cuenta.
+    Enseñar solo el bruto es como decir que una furgoneta gasta lo que marca el
+    ticket de la gasolinera.
+    """
     salida = {k: v for k, v in p.items() if k != "_id"}
     coste, pvp = p.get("coste"), p.get("pvp")
     if coste is not None and pvp:
         neto = round(pvp / (1 + _TIENDA_IVA), 2)
         margen = round(neto - coste, 2)
+        gastos = _tienda_gastos(pvp)
+        queda = round(margen - gastos, 2)
         salida["neto"] = neto
         salida["margen"] = margen
         salida["margen_pct"] = round(100 * margen / neto) if neto else 0
+        salida["gastos"] = gastos
+        salida["queda"] = queda
+        salida["queda_pct"] = round(100 * queda / neto) if neto else 0
     return salida
 
 
@@ -41526,8 +41595,12 @@ def _prenda_interpreta(texto: str) -> dict:
     _m_talla = re.search(r"\btallas?\b", t)
     if _m_talla:
         _resto = t[_m_talla.end():]
-        tallas = [x for x in _PRENDA_TALLAS
-                  if re.search(r"\b%s\b" % x.lower(), _resto)]
+        # "U" (talla unica) se queda FUERA del reconocimiento por texto: en
+        # castellano la "u" suelta es una conjuncion ("siete u ocho"), asi
+        # que buscarla aqui convertiria una frase normal en una talla. Se
+        # elige a mano en el editor, que es donde tiene sentido.
+        tallas = [x for x in _PRENDA_TALLAS if x != "U"
+                  and re.search(r"\b%s\b" % x.lower(), _resto)]
     if not tallas:
         tallas = ["S", "M", "L", "XL"]
     else:
@@ -41581,6 +41654,10 @@ def _prenda_ficha(p: dict, unidades: int) -> dict:
         t = _BOC_TECNICAS[tec]
         lineas.append({"que": "%s en %s, %d cm" % (e.get("texto") or "logo", e["posicion"], cm),
                        "tecnica": t["nombre"], "porque": t["porque"],
+                       # La primera va incluida en el precio del proveedor; se
+                       # marca aqui para que la ficha lo pueda decir en vez de
+                       # enseñar un coste que nadie va a pagar.
+                       "incluida": not lineas,
                        "por_unidad": t["ud"], "preparacion": t["preparacion"]})
         ud_total += t["ud"]
         prep_total += t["preparacion"]
@@ -41595,13 +41672,19 @@ def _prenda_ficha(p: dict, unidades: int) -> dict:
                        "porque": "elige un modelo de catálogo que ya la traiga: cosida cuesta mínimos por talla, y en vinilo se cuartea con los lavados",
                        "por_unidad": 0.0, "preparacion": 0.0})
 
-    base = next((x["coste"] for x in _PRENDA_TIPOS if x["id"] == p.get("tipo")), 6.0)
-    # El coste guardado de la prenda ya incluye una estampación típica: para la
-    # ficha se parte de la prenda DESNUDA y se suma lo que lleva de verdad.
-    desnuda = round(base - 1.20, 2) if base > 2 else base
+    base = next((x["coste"] for x in _PRENDA_TIPOS if x["id"] == p.get("tipo")), 7.72)
+    # EL PRECIO DEL PROVEEDOR YA LLEVA UNA IMPRESION DENTRO. Lo dice la ficha
+    # de cada producto de Printful ("Incluye una impresion"), y por eso la
+    # primera estampacion NO se cobra otra vez: sumandola, una camiseta con el
+    # logo al pecho saldria un 15% mas cara de lo que cuesta, y con ese numero
+    # se pondria un precio de venta mas alto del necesario o se descartaria un
+    # producto que si vale. Solo se paga de la SEGUNDA en adelante — y ahi si,
+    # porque Printful cobra cada colocacion extra.
+    incluida = lineas[0]["por_unidad"] if lineas else 0.0
     unidades = max(1, unidades)
     prep_ud = round(prep_total / unidades, 2)
-    coste = round(desnuda + ud_total + prep_ud, 2)
+    coste = round(base + max(0.0, ud_total - incluida) + prep_ud, 2)
+    desnuda = base
     neto = round(coste / (1 - _BOC_MARGEN_OBJETIVO), 2)
     # Se redondea HACIA ARRIBA al medio euro: un precio a la baja se come el
     # margen que se acaba de calcular.
@@ -42071,13 +42154,28 @@ def _tienda_cierre(dia_cierre: int) -> str:
     return dia.isoformat()
 
 
-def _tienda_precio(p: dict) -> float | None:
-    """El precio de venta de una prenda publicada, o None si no lo tiene."""
+def _tienda_precio(p: dict, talla: str | None = None) -> float | None:
+    """El precio de una prenda publicada, o None si no lo tiene.
+
+    CON TALLA suma el recargo de las grandes; sin talla devuelve el precio
+    "desde", que es el que se enseña en el escaparate. Los dos salen de aqui a
+    proposito: si el escaparate y el pedido calcularan el precio cada uno por
+    su lado, el dia que cambie la regla se quedaria uno de los dos con la vieja
+    y el conductor veria un precio y pagaria otro.
+    """
     try:
         v = float(p.get("pvp") or 0)
     except (TypeError, ValueError):
         return None
-    return round(v, 2) if v > 0 else None
+    if v <= 0:
+        return None
+    if talla and str(talla).upper() in _TALLAS_GRANDES:
+        try:
+            r = p.get("recargo_talla")
+            v += float(r) if r is not None else _RECARGO_TALLA_DEF
+        except (TypeError, ValueError):
+            v += _RECARGO_TALLA_DEF
+    return round(v, 2)
 
 
 async def _tienda_prendas_publicas() -> list:
@@ -42122,6 +42220,10 @@ async def tienda_escaparate(user: dict = Depends(require_any_auth)):
             "estampaciones": p.get("estampaciones") or [],
             "franja_manga": bool(p.get("franja_manga")),
             "precio": _tienda_precio(p),
+            # Lo que se suma de la XXL para arriba, y cuales son. Va aqui y no
+            # en el cliente para que no haya dos reglas de precio (gotcha 54).
+            "recargo_talla": (_tienda_precio(p, "XXL") or 0) - (_tienda_precio(p) or 0),
+            "tallas_grandes": list(_TALLAS_GRANDES),
             "foto_ver": p.get("foto_ver"),
             "lleva_nombre": any(e.get("con_nombre") for e in (p.get("estampaciones") or [])),
         } for p in prendas],
@@ -42157,7 +42259,7 @@ async def tienda_crear_pedido(body: dict = Body(...), user: dict = Depends(requi
                       maximo=_TIENDA_MAX_UDS_LINEA)
         # EL PRECIO SALE DEL CATALOGO, NUNCA DEL CUERPO. Si viniera del cliente,
         # bastaria con mandar 0,01 € para llevarse una sudadera.
-        precio = _tienda_precio(p)
+        precio = _tienda_precio(p, talla)
         lineas.append({
             "prenda": p["id"], "nombre": p.get("nombre"), "talla": talla,
             "cantidad": uds, "precio": precio, "importe": round(precio * uds, 2),

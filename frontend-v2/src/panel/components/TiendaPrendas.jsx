@@ -31,7 +31,7 @@ const PX_POR_CM = 68 / 52
 const VACIA = {
   nombre: '', tipo: 'camiseta', color: 'negro', tallas: ['S', 'M', 'L', 'XL'],
   estampaciones: [{ posicion: 'pecho', tinta: 'cian', cm: 8, texto: 'FDs', con_nombre: false }],
-  franja_manga: true, coste: '', pvp: '', notas: '',
+  franja_manga: true, coste: '', pvp: '', recargo_talla: '', notas: '',
 }
 
 const eur = (n) => `${Number(n).toFixed(2).replace('.', ',')} €`
@@ -119,11 +119,20 @@ export default function TiendaPrendas() {
                   <div className="text-[11.5px] text-dark-500">
                     {(tipos.find((t) => t.id === p.tipo) || {}).nombre} · {p.tallas.join(' ')}
                   </div>
+                  {/* Lo que se enseña es lo que QUEDA, no el margen bruto: el
+                      bruto de la camiseta es 62% y lo que llega a la cuenta es
+                      el 43%. Un numero optimista aqui se convierte en una
+                      decision de precio equivocada. */}
                   <div className="mt-1 text-[12px] text-dark-400">
                     Cuesta {eur(p.coste)}
-                    {p.pvp ? <> · vendes {eur(p.pvp)} · <b className="text-dark-200">queda {eur(p.margen)}</b> ({p.margen_pct}%)</>
+                    {p.pvp ? <> · vendes {eur(p.pvp)} · <b className="text-dark-200">te quedan {eur(p.queda)}</b> ({p.queda_pct}%)</>
                       : <span className="text-dark-500"> · sin precio todavía</span>}
                   </div>
+                  {p.pvp ? (
+                    <div className="text-[11px] leading-snug text-dark-500">
+                      Ya descontados IVA, envío y pasarela ({eur(p.gastos)}). Bruto: {eur(p.margen)}.
+                    </div>
+                  ) : null}
                   <div className="mt-2 flex gap-1.5">
                     <button onClick={() => setEditando(p)}
                       className="btn-secondary inline-flex items-center gap-1 px-2 py-1 text-[12px]">
@@ -388,6 +397,7 @@ function Editor({ prenda, datos, logos, onCerrar, onGuardado }) {
   const [f, setF] = useState(() => ({
     ...VACIA, ...prenda,
     coste: prenda.coste ?? '', pvp: prenda.pvp ?? '',
+    recargo_talla: prenda.recargo_talla ?? '',
     estampaciones: prenda.estampaciones?.length ? prenda.estampaciones : VACIA.estampaciones,
   }))
   const [cara, setCara] = useState('delante')
@@ -467,6 +477,7 @@ function Editor({ prenda, datos, logos, onCerrar, onGuardado }) {
       estampaciones: f.estampaciones, franja_manga: !!f.franja_manga,
       coste: f.coste === '' ? null : f.coste,
       pvp: f.pvp === '' ? null : f.pvp,
+      recargo_talla: f.recargo_talla === '' ? null : f.recargo_talla,
       notas: f.notas,
     }
     try {
@@ -633,6 +644,15 @@ function Editor({ prenda, datos, logos, onCerrar, onGuardado }) {
                 <input className="input" inputMode="decimal" value={f.pvp} placeholder="Aún sin precio"
                   onChange={(e) => set('pvp', e.target.value)} />
               </div>
+              <div>
+                <label className="label">Recargo XXL y 3XL (€)</label>
+                <input className="input" inputMode="decimal" value={f.recargo_talla}
+                  placeholder="3,00" onChange={(e) => set('recargo_talla', e.target.value)} />
+                <p className="mt-1 text-[11px] leading-snug text-dark-500">
+                  El proveedor cobra más de la XXL para arriba. Si no lo repercutes,
+                  pierdes justo en las tallas que más se piden en reparto.
+                </p>
+              </div>
             </div>
 
             {f.id && <SubirFoto prenda={f} onHecho={onGuardado} />}
@@ -699,7 +719,11 @@ function Ficha({ ficha, onCopiar, copiado }) {
               <span className="text-brand-300">{l.tecnica}</span>
             </div>
             <div className="mt-0.5 text-[11.5px] text-dark-500">{l.porque}</div>
-            {(l.por_unidad > 0 || l.preparacion > 0) && (
+            {l.incluida ? (
+              <div className="mt-1 text-[11.5px] text-emerald-400/80">
+                Incluida en el precio del proveedor — no se paga aparte.
+              </div>
+            ) : (l.por_unidad > 0 || l.preparacion > 0) && (
               <div className="mt-1 text-[11.5px] tabular-nums text-dark-400">
                 {eur(l.por_unidad)}/unidad
                 {l.preparacion > 0 && <> · {eur(l.preparacion)} de preparacion, una sola vez</>}
@@ -733,8 +757,9 @@ function Ficha({ ficha, onCopiar, copiado }) {
       </div>
 
       <p className="mt-2 text-[11.5px] leading-snug text-dark-500">
-        Los costes son estimaciones de mercado, no presupuestos. Manda ese texto a tres
-        talleres y sustituye los numeros: entonces este margen es tu cuenta.
+        La prenda sale del catálogo de Printful, con su precio real y una impresión
+        incluida. Lo que se estima es solo la estampación de más: si le añades espalda
+        o manga, pide el precio antes de fijar el de venta.
       </p>
     </div>
   )

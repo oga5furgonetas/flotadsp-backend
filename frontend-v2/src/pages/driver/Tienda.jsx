@@ -61,6 +61,14 @@ export default function Tienda({ onBack }) {
 
   useEffect(() => { cargar() }, [cargar])
 
+  /* El precio de una talla concreta. La regla la manda el SERVIDOR —que talla
+     es grande y cuanto suma vienen en el escaparate—: aqui solo se aplica,
+     para que lo que se ve en pantalla sea exactamente lo que se va a cobrar.
+     Si el cliente llevara su propia lista de tallas grandes, el dia que
+     cambiara se veria un precio y se pagaria otro (gotcha 54). */
+  const precioDe = (p, talla) =>
+    (p.precio || 0) + ((p.tallas_grandes || []).includes(talla) ? (p.recargo_talla || 0) : 0)
+
   const total = useMemo(
     () => cesta.reduce((s, l) => s + (l.precio || 0) * l.cantidad, 0), [cesta])
 
@@ -74,7 +82,7 @@ export default function Tienda({ onBack }) {
         return copia
       }
       return [...c, { prenda: p.id, nombre: p.nombre, talla, cantidad: 1,
-        precio: p.precio, lleva_nombre: p.lleva_nombre, personalizado: '' }]
+        precio: precioDe(p, talla), lleva_nombre: p.lleva_nombre, personalizado: '' }]
     })
   }
   const cambiar = (i, k, v) => setCesta((c) => c.map((l, j) => (j === i ? { ...l, [k]: v } : l)))
@@ -244,6 +252,7 @@ function Marco({ children, onBack }) {
 
 function Producto({ p, onAñadir }) {
   const [talla, setTalla] = useState('')
+  const grande = (p.tallas_grandes || []).includes(talla)
   return (
     <div className="overflow-hidden rounded-2xl border border-dark-800 bg-dark-900/50">
       <div className="flex items-center justify-center overflow-hidden bg-dark-950/60">
@@ -254,7 +263,10 @@ function Producto({ p, onAñadir }) {
       </div>
       <div className="p-3">
         <div className="text-[14px] font-medium text-dark-100">{p.nombre}</div>
-        <div className="mt-0.5 text-[15px] font-semibold tabular-nums text-brand-300">{eur(p.precio)}</div>
+        <div className="mt-0.5 text-[15px] font-semibold tabular-nums text-brand-300">
+          {p.recargo_talla > 0 ? <span className="text-[11.5px] font-normal text-dark-500">desde </span> : null}
+          {eur(p.precio)}
+        </div>
         <div className="mt-2 flex flex-wrap gap-1.5">
           {(p.tallas || []).map((t) => (
             <button key={t} onClick={() => setTalla(t)}
@@ -265,6 +277,12 @@ function Producto({ p, onAñadir }) {
             </button>
           ))}
         </div>
+        {grande && (
+          <p className="mt-1.5 text-[11.5px] leading-snug text-dark-400">
+            Talla {talla}: {eur(p.precio + (p.recargo_talla || 0))} — el fabricante
+            cobra más de la XXL para arriba.
+          </p>
+        )}
         <button onClick={() => talla && onAñadir(p, talla)} disabled={!talla}
           className="mt-2.5 w-full rounded-xl border border-dark-700 py-2 text-[13px] font-medium text-dark-200 disabled:opacity-40">
           {talla ? 'Añadir' : 'Elige talla'}
