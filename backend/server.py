@@ -5697,7 +5697,9 @@ async def admin_login(data: LoginRequest, request: Request):
 # RECUPERACIÓN DE CONTRASEÑA (admins / DSPs)
 # =========================
 
-async def _send_resend_email(to: str, subject: str, html: str) -> bool:
+async def _send_resend_email(to: str, subject: str, html: str,
+                             responder_a: str = "", copia: Optional[list] = None,
+                             texto: str = "") -> bool:
     """Envía un email transaccional con Resend. Devuelve False si falla.
     Remitente configurable con EMAIL_FROM (por defecto hola@flotadsp.com); OJO:
     el dominio del remitente DEBE estar verificado en resend.com/domains o Resend
@@ -5714,7 +5716,18 @@ async def _send_resend_email(to: str, subject: str, html: str) -> bool:
             r = await _c.post(
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {resend_key}", "Content-Type": "application/json"},
-                json={"from": sender, "to": [to], "subject": subject, "html": html},
+                json={k: v for k, v in {
+                    "from": sender, "to": [to], "subject": subject, "html": html,
+                    # RESPONDER-A ES LO QUE HACE QUE LA RESPUESTA LLEGUE. El
+                    # correo sale de contacto@flotadsp.com, asi que sin esto la
+                    # contestacion se queda en ese buzon; con esto va a donde
+                    # de verdad se lee.
+                    "reply_to": responder_a or None,
+                    "cc": list(copia) if copia else None,
+                    # Version en texto plano: hay clientes -y filtros de spam-
+                    # que puntuan peor un correo que solo trae HTML.
+                    "text": texto or None,
+                }.items() if v is not None},
             )
         if r.status_code >= 300:
             logger.error(f"email: Resend rechazó el envío a {to} ({r.status_code}): {r.text[:300]}")
@@ -18870,6 +18883,114 @@ Y el orden es DETERMINISTA (gotcha 62): a igual numero manda quien mas mueve, y
 el transporter cierra. Sin eso, dos peticiones seguidas devuelven la tabla en
 distinto orden y parece que el dato se ha movido.
 """
+
+
+# ---------------------------------------------------------------------------
+# ESCRIBIR UN CORREO DESDE contacto@flotadsp.com
+# ---------------------------------------------------------------------------
+"""Un correo escrito a mano, saliendo de la direccion de la empresa.
+
+PARA QUE. A Dani le piden que conteste desde `contacto@flotadsp.com` y no
+tiene forma de hacerlo: el buzon existe para recibir, pero escribir desde el
+requiere configurar un cliente de correo con ese dominio. La aplicacion ya
+manda correos por Resend desde esa misma direccion -avisos, restablecer
+contrasena-, asi que lo unico que faltaba era una caja donde escribir.
+
+TRES COSAS QUE NO SON DECORACION:
+
+- SOLO EL SUPER-ADMIN. Cualquiera que pueda escribir desde la direccion de la
+  empresa habla en nombre de la empresa. No es un permiso mas de la lista: va
+  con `require_superadmin`.
+
+- RESPONDER-A, SIEMPRE. El correo sale de contacto@, asi que la respuesta
+  vuelve a contacto@. Si ese buzon no se lee a diario -o no existe como buzon,
+  solo como remitente-, la contestacion se pierde y encima no se nota: para
+  quien escribio, el correo se envio bien. Por defecto se pone el correo del
+  que escribe.
+
+- QUEDA APUNTADO. Quien, a quien, cuando y si salio. Un correo que se manda en
+  nombre de la empresa y del que no queda rastro es imposible de reconstruir
+  tres semanas despues, que es justo cuando alguien pregunta.
+
+El cuerpo se escribe en texto y se escapa entero antes de meterlo en el HTML:
+un `<` en un correo tiene que verse como un `<`, no romper el mensaje.
+"""
+
+_CORREOS_COL = "correos_enviados"
+_CORREO_MAX_HORA = 40
+
+
+def _correo_valido(x: str) -> bool:
+    return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$", (x or "").strip()))
+
+
+def _correo_html(texto: str, firma: str = "") -> str:
+    """El texto tal cual, escapado, con los saltos de linea respetados."""
+    import html as _html
+    cuerpo = _html.escape(texto or "").replace("\n", "<br>")
+    pie = ("<p style='margin:22px 0 0;color:#6b7280;font-size:13px'>%s</p>"
+           % _html.escape(firma)) if firma else ""
+    return ("<div style=\"font-family:-apple-system,Segoe UI,Inter,sans-serif;"
+            "font-size:15px;line-height:1.6;color:#111827\">%s%s</div>" % (cuerpo, pie))
+
+
+@api_router.get("/admin/correo")
+async def admin_correo_estado(user: dict = Depends(require_superadmin)):
+    """Desde que direccion sale y los ultimos que se han mandado."""
+    enviados = await global_db[_CORREOS_COL].find(
+        {}, {"_id": 0, "cuerpo": 0}).sort("at", -1).to_list(30)
+    return {
+        "de": os.environ.get("EMAIL_FROM", ""),
+        "configurado": bool(os.environ.get("RESEND_API_KEY")),
+        "responder_a": (user.get("email") or ""),
+        "enviados": enviados,
+    }
+
+
+@api_router.post("/admin/correo")
+async def admin_correo_enviar(body: dict = Body(...), user: dict = Depends(require_superadmin)):
+    para = _texto_cuerpo(body.get("para"), 160).lower()
+    asunto = _texto_cuerpo(body.get("asunto"), 200)
+    cuerpo = _texto_cuerpo(body.get("cuerpo"), 8000)
+    responder = _texto_cuerpo(body.get("responder_a"), 160).lower()
+    copia = [c for c in (_texto_cuerpo(x, 160).lower() for x in (body.get("copia") or []))
+             if _correo_valido(c)][:5]
+    if not _correo_valido(para):
+        raise HTTPException(400, "Ese correo de destino no es valido")
+    if len(asunto) < 2:
+        raise HTTPException(400, "Ponle un asunto")
+    if len(cuerpo) < 2:
+        raise HTTPException(400, "El correo esta vacio")
+    if responder and not _correo_valido(responder):
+        raise HTTPException(400, "El correo de respuesta no es valido")
+    if not os.environ.get("RESEND_API_KEY"):
+        raise HTTPException(503, "El envio de correo no esta configurado")
+
+    # Un tope por hora. No es por desconfianza: es que una tecla enganchada o
+    # un doble clic en un boton que manda correos en nombre de la empresa se
+    # arregla mal.
+    hace_una_hora = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+    recientes = await global_db[_CORREOS_COL].count_documents(
+        {"at": {"$gte": hace_una_hora}, "ok": True})
+    if recientes >= _CORREO_MAX_HORA:
+        raise HTTPException(429, "Has mandado %d correos en la ultima hora: espera un poco"
+                            % recientes)
+
+    quien = user.get("name") or user.get("username") or ""
+    ok = await _send_resend_email(
+        para, asunto, _correo_html(cuerpo), responder_a=responder,
+        copia=copia or None, texto=cuerpo)
+    doc = {
+        "id": str(uuid.uuid4()), "para": para, "copia": copia, "asunto": asunto,
+        "cuerpo": cuerpo, "responder_a": responder,
+        "por": quien, "at": datetime.now(timezone.utc).isoformat(), "ok": bool(ok),
+    }
+    await global_db[_CORREOS_COL].insert_one(dict(doc))   # copia (gotcha 42)
+    if not ok:
+        # SE DICE QUE NO SALIO. Un correo que se da por enviado y no llego es
+        # peor que uno que falla: nadie vuelve a intentarlo.
+        raise HTTPException(502, "No se ha podido enviar. Queda apuntado el intento.")
+    return {"ok": True, "id": doc["id"], "para": para}
 
 
 @api_router.get("/conductores/rendimiento")

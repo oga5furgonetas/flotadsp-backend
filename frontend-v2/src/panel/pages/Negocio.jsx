@@ -5,7 +5,7 @@ import {
   Loader2, Building2, CheckCircle2, Clock, Euro, Sparkles, Gift, PauseCircle,
   LogIn, Trash2, Database, BrainCircuit, ExternalLink, RefreshCw, Megaphone,
   Play, Pause, Plus, Star, Eye, MousePointerClick, Tag, Save,
-  Receipt, Upload, Check, Undo2, Building, Coins,
+  Receipt, Upload, Check, Undo2, Building, Coins, Mail,
 } from 'lucide-react'
 import {
   getAdminOverview, getAdminOrgs, getLeads, updateOrg, impersonateOrg, deleteOrg,
@@ -14,6 +14,7 @@ import {
   adminGetPlanes, adminSetPlanes,
   adminGetCobros, adminMarcarCobro, adminConciliar,
   adminGetEmisor, adminSetEmisor, revisarFacturacion as revisarFacturacionApi, getSaludSistema,
+  getCorreoEstado, enviarCorreo,
 } from '../api'
 import { API_BASE } from '../../services/api'
 import { hoyLocal } from '../../lib/fecha'
@@ -595,6 +596,7 @@ export default function Negocio() {
         <Kpi icon={Sparkles} label={t('neg.kpi.leads')} value={ov?.interesados ?? '—'} accent="#fb923c" />
       </div>
 
+      <EscribirCorreo />
       <SaludSistema />
       <EditorTarifas />
       <Cobros />
@@ -804,6 +806,140 @@ export default function Negocio() {
           <BrainCircuit size={15} /> {t('neg.export.ai')}
         </a>
       </div>
+    </div>
+  )
+}
+
+
+/* ── ESCRIBIR UN CORREO DESDE contacto@flotadsp.com ──────────────────────────
+   A Dani le piden que conteste desde esa dirección y no tenía forma: el buzón
+   sirve para recibir, pero escribir desde él exige configurar un cliente con
+   ese dominio. La aplicación ya manda correos desde ahí —avisos, restablecer
+   contraseña—, así que lo único que faltaba era una caja donde escribir.
+
+   RESPONDER-A NO ES UN EXTRA. El correo sale de contacto@, así que la
+   respuesta vuelve a contacto@. Si ese buzón no se lee a diario, la
+   contestación se pierde y encima no se nota: para quien escribió, el correo
+   salió bien. Por eso viene relleno y se puede cambiar, pero está a la vista.
+
+   Y se pide confirmación antes de mandar: es un correo en nombre de la
+   empresa, y no hay «deshacer». */
+function EscribirCorreo() {
+  const [d, setD] = useState(null)
+  const [para, setPara] = useState('')
+  const [asunto, setAsunto] = useState('')
+  const [cuerpo, setCuerpo] = useState('')
+  const [responder, setResponder] = useState('')
+  const [confirmando, setConfirmando] = useState(false)
+  const [yendo, setYendo] = useState(false)
+  const [msg, setMsg] = useState('')
+  const [err, setErr] = useState('')
+
+  const cargar = () => getCorreoEstado()
+    .then((r) => { setD(r.data); setResponder((v) => v || r.data.responder_a || '') })
+    .catch(() => setErr('No se ha podido leer la configuración del correo.'))
+  useEffect(() => { cargar() }, [])
+
+  const puede = /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(para) && asunto.trim().length > 1
+    && cuerpo.trim().length > 1 && !yendo
+
+  const enviar = async () => {
+    setYendo(true); setErr(''); setMsg('')
+    try {
+      await enviarCorreo({ para, asunto, cuerpo, responder_a: responder })
+      setMsg(`Enviado a ${para}.`)
+      setPara(''); setAsunto(''); setCuerpo(''); setConfirmando(false)
+      cargar()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se ha podido enviar.')
+      setConfirmando(false)
+    } finally { setYendo(false) }
+  }
+
+  return (
+    <div className="card p-4">
+      <div className="mb-1 flex items-center gap-2 text-[14px] font-bold text-dark-100">
+        <Mail size={15} /> Escribir un correo
+      </div>
+      <p className="mb-3 max-w-[70ch] text-[12.5px] text-dark-400">
+        Sale desde <b className="text-dark-200">{d?.de || 'la dirección de la empresa'}</b>.
+        Lo que pongas en «responder a» es donde te llegará la contestación: sin eso,
+        vuelve al buzón de contacto y puede quedarse ahí sin que nadie lo vea.
+      </p>
+
+      {d && !d.configurado && (
+        <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[12.5px] text-amber-200">
+          El envío de correo no está configurado en el servidor: no se puede mandar nada.
+        </p>
+      )}
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div>
+          <label className="label">Para</label>
+          <input className="input py-1.5 text-[13px]" placeholder="alguien@empresa.com"
+            value={para} onChange={(e) => { setPara(e.target.value); setConfirmando(false) }} />
+        </div>
+        <div>
+          <label className="label">Responder a</label>
+          <input className="input py-1.5 text-[13px]" placeholder="tu correo"
+            value={responder} onChange={(e) => setResponder(e.target.value)} />
+        </div>
+      </div>
+      <div className="mt-2">
+        <label className="label">Asunto</label>
+        <input className="input py-1.5 text-[13px]" value={asunto}
+          onChange={(e) => { setAsunto(e.target.value); setConfirmando(false) }} />
+      </div>
+      <div className="mt-2">
+        <label className="label">Mensaje</label>
+        <textarea rows={8} className="input w-full text-[13px]" value={cuerpo}
+          onChange={(e) => { setCuerpo(e.target.value); setConfirmando(false) }}
+          placeholder="Escríbelo tal cual. Los saltos de línea se respetan." />
+      </div>
+
+      {err && <p className="mt-2 text-[12.5px] text-red-400">{err}</p>}
+      {msg && <p className="mt-2 text-[12.5px] text-emerald-300">{msg}</p>}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {!confirmando ? (
+          <button onClick={() => setConfirmando(true)} disabled={!puede}
+            className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-[13px] font-semibold text-brand-200 disabled:opacity-40">
+            Enviar
+          </button>
+        ) : (
+          <>
+            <span className="text-[12.5px] text-dark-300">
+              Va a salir a <b className="text-dark-100">{para}</b> desde {d?.de}. ¿Lo mando?
+            </span>
+            <button onClick={enviar} disabled={yendo}
+              className="rounded-lg bg-emerald-500/20 px-3 py-1.5 text-[13px] font-semibold text-emerald-200 disabled:opacity-50">
+              {yendo ? 'Enviando…' : 'Sí, envíalo'}
+            </button>
+            <button onClick={() => setConfirmando(false)}
+              className="rounded-lg border border-dark-700 px-3 py-1.5 text-[13px] text-dark-400">
+              Mejor no
+            </button>
+          </>
+        )}
+      </div>
+
+      {!!d?.enviados?.length && (
+        <div className="mt-4 border-t border-dark-800 pt-3">
+          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-dark-500">
+            Últimos enviados
+          </div>
+          <div className="space-y-1">
+            {d.enviados.slice(0, 8).map((x) => (
+              <div key={x.id} className="flex flex-wrap items-baseline gap-2 text-[12px]">
+                <span className={x.ok ? 'text-emerald-400' : 'text-red-400'}>{x.ok ? '✓' : '✕'}</span>
+                <span className="text-dark-300">{x.para}</span>
+                <span className="truncate text-dark-500">{x.asunto}</span>
+                <span className="ml-auto text-dark-600">{String(x.at).slice(0, 16).replace('T', ' ')}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

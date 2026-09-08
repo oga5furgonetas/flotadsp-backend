@@ -267,6 +267,8 @@ export const getBillingUso = () => api.get('/billing/uso')
 export const revisarFacturacion = () => api.post('/billing/revisar')
 // Cuánto sitio queda antes de que algo se rompa. Atlas M0 y una máquina de 1 GB
 // no avisan: se ponen lentos primero y dejan de aceptar escrituras después.
+export const getCorreoEstado = () => api.get('/admin/correo')
+export const enviarCorreo = (body) => api.post('/admin/correo', body)
 export const getSaludSistema = () => api.get('/admin/salud')
 export const getMe = () => api.get('/auth/me')
 
