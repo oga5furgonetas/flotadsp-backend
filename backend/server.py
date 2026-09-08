@@ -6475,15 +6475,42 @@ async def change_my_password(data: dict, user: dict = Depends(get_current_user))
 
     if user.get("role") == "driver":
         cuenta = await db.driver_accounts.find_one({"driver_id": user["sub"]})
-        if not cuenta or not verify_password(current, cuenta["hashed_password"]):
-            await asyncio.sleep(0.8)
-            raise HTTPException(status_code=401, detail="La contraseña actual no es correcta")
-        await db.driver_accounts.update_one(
-            {"driver_id": user["sub"]},
-            {"$set": {"hashed_password": hash_password(new),
-                      "password_changed_at": datetime.now(timezone.utc).isoformat()}})
-        logger.info("Conductor %s cambió su contraseña", user["sub"][:8])
-        return {"success": True}
+        if cuenta:
+            if not verify_password(current, cuenta["hashed_password"]):
+                await asyncio.sleep(0.8)
+                raise HTTPException(status_code=401,
+                                    detail="La contraseña actual no es correcta")
+            await db.driver_accounts.update_one(
+                {"driver_id": user["sub"]},
+                {"$set": {"hashed_password": hash_password(new),
+                          "password_changed_at": datetime.now(timezone.utc).isoformat()}})
+            logger.info("Conductor %s cambió su contraseña", user["sub"][:8])
+            return {"success": True}
+
+        # NO TIENE NINGUNA: la esta CREANDO, y pedirle la anterior es pedirle
+        # algo que no existe. Al portal se entra por correo, sin contrasena, y
+        # `driver_accounts` estaba vacia entera: esta pantalla devolvia "la
+        # contrasena actual no es correcta" a los 140, siempre.
+        # Se puede crear sin la anterior porque quien la crea YA esta dentro
+        # con su sesion, y porque hasta hoy bastaba el correo para entrar:
+        # ponerse una solo puede subir el liston, nunca bajarlo.
+        d = await db.drivers.find_one({"id": user["sub"]}, {"_id": 0, "email": 1})
+        correo = ((d or {}).get("email") or "").strip().lower()
+        if not correo:
+            raise HTTPException(400, "Tu ficha no tiene correo: díselo a la oficina")
+        try:
+            await db.driver_accounts.insert_one({
+                "id": str(uuid.uuid4()), "driver_id": user["sub"], "email": correo,
+                "hashed_password": hash_password(new), "active": True,
+                "creada_por": "el conductor",
+                "password_changed_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat()})
+        except DuplicateKeyError:
+            # Dos pulsaciones a la vez, o una cuenta creada por la oficina entre
+            # medias: que exista es lo que se queria: se cambia la que hay.
+            raise HTTPException(409, "Ya tenías una contraseña: vuelve a entrar e inténtalo")
+        logger.info("Conductor %s creo su contraseña", user["sub"][:8])
+        return {"success": True, "creada": True}
 
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="No autorizado")
@@ -8267,7 +8294,15 @@ async def portal_mi_ficha(user: dict = Depends(require_any_auth)):
     if not d:
         return {"falta_telefono": False}
     tel = (d.get("phone") or d.get("telefono") or "").strip()
-    return {"falta_telefono": not tel, "nombre": d.get("name")}
+    # Y si tiene contrasena propia o entra solo con el correo. Al portal se
+    # entra HOY sin contrasena -`_driver_token_impl`, login por email-, y
+    # `driver_accounts` esta vacia: ninguno tiene. La pantalla de "cambiar
+    # contrasena" les pedia por tanto la ACTUAL, que no existe, asi que
+    # devolvia siempre "la contrasena actual no es correcta". Con esto la
+    # pantalla sabe si tiene que decir "crear" o "cambiar".
+    tiene = await db.driver_accounts.count_documents({"driver_id": user.get("sub")}, limit=1)
+    return {"falta_telefono": not tel, "nombre": d.get("name"),
+            "tiene_clave": bool(tiene)}
 
 
 def _telefono_limpio(valor) -> str:
@@ -18524,6 +18559,15 @@ async def portal_mis_ayudas(user: dict = Depends(require_any_auth)):
                             "paradas": sum(x["paradas"] for x in me_ayudaron),
                             "paquetes": sum(x["paquetes"] for x in me_ayudaron),
                             "quien": me_ayudaron[:10]},
+            # CUANTAS HAY APUNTADAS EN TODA LA EMPRESA. Sin este numero, un
+            # cero se lee como "no has ayudado a nadie", y eso es una
+            # afirmacion sobre la PERSONA cuando lo unico cierto es que no hay
+            # nada apuntado: el modulo se estreno el 02-09-2026 y una ayuda
+            # solo cuenta si la oficina la registra. Con el, la pantalla puede
+            # decir la verdad —«aun no se apunta casi nada»— en vez de darle a
+            # entender a alguien que echa una mano todos los dias que no lo
+            # hace. Es el gotcha 33/34 de siempre: un cero parece un hallazgo.
+            "equipo_veces": len(todos),
             "equipo": equipo}
 
 

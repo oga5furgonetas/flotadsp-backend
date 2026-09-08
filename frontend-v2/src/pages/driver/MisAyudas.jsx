@@ -61,13 +61,26 @@ export default function MisAyudas({ onBack }) {
               <p className="mt-1 text-[12.5px] text-dark-400">
                 {datos.hechas > 0 && <>{datos.hechas} {datos.hechas === 1 ? 'parada' : 'paradas'} · </>}
                 {datos.veces === 0
-                  ? 'Todavía no has ido a echar una mano este mes'
+                  ? 'Aún no hay ninguna ayuda tuya apuntada este mes'
                   : <>en {datos.veces} {datos.veces === 1 ? 'salida' : 'salidas'}, de {datos.asignadas} que te pasaron</>}
               </p>
             </div>
 
             {/* Si le pasaron paradas y no las marcó, se le dice: si no, el
                 contador se queda a cero y parece que la pantalla no funciona. */}
+            {/* UN CERO NO ES UNA NOTA. Aquí solo cuentan las ayudas que la
+                oficina apunta en el sistema, y el módulo se estrenó el
+                02-09-2026: en toda la empresa hay muy pocas. Sin decirlo, a
+                quien echa una mano todos los días le sale un 0 que parece un
+                juicio sobre él. */}
+            {datos.veces === 0 && (
+              <div className="rounded-2xl border border-dark-700/60 bg-dark-900/70 px-4 py-3.5 text-[12.5px] leading-relaxed text-dark-400">
+                Aquí solo salen las ayudas que la oficina apunta al pasarte las paradas
+                {datos.equipo_veces >= 0 && <> — este mes hay <b className="text-dark-200">{datos.equipo_veces}</b> apuntadas en toda la empresa</>}.
+                Si echaste una mano y no aparece, díselo y te la añaden.
+              </div>
+            )}
+
             {pendientesDeMarcar > 0 && (
               <div className="rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3.5 text-[12.5px] leading-relaxed text-amber-200/90">
                 Tienes {pendientesDeMarcar} {pendientesDeMarcar === 1 ? 'parada' : 'paradas'} sin marcar en el enlace que

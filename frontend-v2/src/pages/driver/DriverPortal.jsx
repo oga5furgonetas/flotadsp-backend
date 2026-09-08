@@ -102,6 +102,7 @@ export default function DriverPortal() {
 
   const [vista, setVista] = useState('inicio') // inicio | auditoria | dias | turnos | clave
   const [faltaTel, setFaltaTel] = useState(false)
+  const [tieneClave, setTieneClave] = useState(true)
   const [tel, setTel] = useState('')
   const [telOk, setTelOk] = useState(false)
   const [guardandoTel, setGuardandoTel] = useState(false)
@@ -111,7 +112,12 @@ export default function DriverPortal() {
      formulario roto a alguien que solo queria hacer su inspeccion. */
   useEffect(() => {
     if (!driver) return
-    getMiFicha().then((r) => setFaltaTel(!!r.data?.falta_telefono)).catch(() => {})
+    getMiFicha().then((r) => {
+      setFaltaTel(!!r.data?.falta_telefono)
+      // Al portal se entra con el correo: casi ninguno tiene contrasena, y a
+      // ese la entrada del menu tiene que decirle CREAR, no cambiar.
+      setTieneClave(r.data?.tiene_clave !== false)
+    }).catch(() => {})
   }, [driver])
 
   const guardarTel = async () => {
@@ -292,8 +298,8 @@ export default function DriverPortal() {
           )}
           <Opcion
             icono={Lock}
-            titulo="Cambiar mi contraseña"
-            sub="Ponte la que quieras"
+            titulo={tieneClave ? 'Cambiar mi contraseña' : 'Crear mi contraseña'}
+            sub={tieneClave ? 'Ponte la que quieras' : 'Ahora entras solo con el correo'}
             onClick={() => setVista('clave')}
           />
         </div>

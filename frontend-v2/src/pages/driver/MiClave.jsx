@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowLeft, Check, Loader2, Lock } from 'lucide-react'
-import { changeMyPassword } from '../../services/api'
+import { changeMyPassword, getMiFicha } from '../../services/api'
 
 /* Cambiar la contraseña uno mismo.
 
@@ -8,6 +8,17 @@ import { changeMyPassword } from '../../services/api'
    cambiarla tenía que pedírselo a la oficina y decirle cuál quería — es decir,
    contarle su contraseña a otra persona. Ahora se la pone él y nadie más la ve. */
 export default function MiClave({ onBack }) {
+  /* CREAR NO ES CAMBIAR. Al portal se entra con el correo y ya: `driver_accounts`
+     estaba VACIA, o sea que ninguno de los 140 tenia contrasena. Esta pantalla
+     les pedia igualmente la ACTUAL y devolvia siempre «la contrasena actual no
+     es correcta» — una pantalla que no podia funcionar para nadie. El servidor
+     dice si la tiene (`tiene_clave`) y aqui solo se pinta lo que toca. */
+  const [tieneClave, setTieneClave] = useState(null)
+  useEffect(() => {
+    getMiFicha().then((r) => setTieneClave(!!r.data?.tiene_clave)).catch(() => setTieneClave(true))
+  }, [])
+  const creando = tieneClave === false
+
   const [actual, setActual] = useState('')
   const [nueva, setNueva] = useState('')
   const [repetir, setRepetir] = useState('')
@@ -17,7 +28,8 @@ export default function MiClave({ onBack }) {
 
   const corta = nueva.length > 0 && nueva.length < 6
   const distintas = repetir.length > 0 && nueva !== repetir
-  const puede = actual && nueva.length >= 6 && nueva === repetir && !ocupado
+  const puede = (creando || actual) && nueva.length >= 6 && nueva === repetir && !ocupado
+    && tieneClave !== null
 
   async function guardar() {
     setOcupado(true); setErr('')
@@ -39,19 +51,23 @@ export default function MiClave({ onBack }) {
         </button>
 
         <h1 className="font-display text-[22px] font-bold tracking-[-.02em] text-dark-50">
-          Cambiar mi contraseña
+          {creando ? 'Crear mi contraseña' : 'Cambiar mi contraseña'}
         </h1>
         <p className="mt-1 text-[13px] leading-relaxed text-dark-500">
-          Ponte la que quieras, mínimo 6 caracteres. Nadie de la oficina la va a ver.
+          {creando
+            ? 'Ahora entras solo con tu correo. Ponte una contraseña y a partir de la próxima vez te la pedirá también a ti — y solo a ti: nadie de la oficina la ve.'
+            : 'Ponte la que quieras, mínimo 6 caracteres. Nadie de la oficina la va a ver.'}
         </p>
 
         {hecho ? (
           <div className="mt-6 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.07] p-4">
             <p className="flex items-center gap-2 text-[14px] font-semibold text-emerald-300">
-              <Check size={16} /> Contraseña cambiada
+              <Check size={16} /> {creando ? 'Contraseña creada' : 'Contraseña cambiada'}
             </p>
             <p className="mt-1.5 text-[13px] leading-relaxed text-emerald-200/80">
-              La próxima vez entra con la nueva. Tu email no cambia.
+              {creando
+                ? 'La próxima vez entra con tu correo y esta contraseña. El correo no cambia.'
+                : 'La próxima vez entra con la nueva. Tu email no cambia.'}
             </p>
             <button onClick={onBack} className="mt-4 w-full rounded-xl bg-dark-800 py-2.5 text-[14px] font-semibold text-dark-100">
               Volver al inicio
@@ -59,17 +75,21 @@ export default function MiClave({ onBack }) {
           </div>
         ) : (
           <div className="mt-6 flex flex-col gap-3">
+            {/* Solo si YA tiene una. Pedirle la anterior a quien nunca la tuvo
+                es lo que hacia que esta pantalla no funcionara para nadie. */}
+            {!creando && (
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">
+                  Tu contraseña de ahora
+                </label>
+                <input type="password" value={actual} onChange={(e) => setActual(e.target.value)}
+                  autoComplete="current-password"
+                  className="w-full rounded-xl border border-dark-700 bg-dark-900 px-3.5 py-3 text-[15px] text-dark-50 outline-none focus:border-brand-500/60" />
+              </div>
+            )}
             <div>
               <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">
-                Tu contraseña de ahora
-              </label>
-              <input type="password" value={actual} onChange={(e) => setActual(e.target.value)}
-                autoComplete="current-password"
-                className="w-full rounded-xl border border-dark-700 bg-dark-900 px-3.5 py-3 text-[15px] text-dark-50 outline-none focus:border-brand-500/60" />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-dark-500">
-                La nueva
+                {creando ? 'Tu contraseña' : 'La nueva'}
               </label>
               <input type="password" value={nueva} onChange={(e) => setNueva(e.target.value)}
                 autoComplete="new-password"
@@ -91,7 +111,7 @@ export default function MiClave({ onBack }) {
             <button onClick={guardar} disabled={!puede}
               className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl bg-brand-500 py-3.5 text-[15px] font-bold text-white disabled:opacity-40">
               {ocupado ? <Loader2 size={16} className="animate-spin" /> : <Lock size={16} />}
-              Guardar
+              {creando ? 'Crear mi contraseña' : 'Guardar'}
             </button>
           </div>
         )}
