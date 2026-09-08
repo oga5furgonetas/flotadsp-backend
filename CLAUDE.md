@@ -1407,6 +1407,44 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    segundo dice `true` y la cosa se ve igual.
 
 
+73. **Una ruta de Cortex puede tener MAS DE UN transportista, y ahi estaban
+   las ayudas que el portal daba por cero.** «Mis ayudas» se contaba sobre
+   `apoyos`, que es lo que la oficina apunta a mano al pasar paradas por
+   WhatsApp: **18 apuntes en toda la empresa** en septiembre de 2026. Mientras
+   tanto Cortex, solo el dia 7, tenia **30 de 48 rutas con dos o mas
+   transportistas**. A JOSE ARTURO BLANCO —de los que mas ayudan— el portal le
+   decia «todavia no has ido a echar una mano este mes» teniendo 28 paquetes
+   entregados ese dia en la XA_C18, que es de Jose Maria Vilanova.
+   **Y yo di el cero por bueno**: mire `apoyos`, no encontre nada suyo y escribi
+   que «la cuenta esta bien y lo que falta son los apuntes». La primera mitad
+   era falsa. Es el gotcha 65 por tercera vez —una prueba negativa solo vale
+   dentro de lo que ha mirado— y lo corrigio Dani con dos capturas de Cortex.
+   Como se mide bien, con los cuatro detalles que importan:
+   · el TITULAR de la ruta lo dice Cortex en
+     `cortex_resumen.rutas[].transporterId`, uno por ruta. Adivinarlo por «quien
+     lleva mas paradas» seria suponer habiendo respuesta;
+   · quien entrego cada paquete esta en **`cortex_packages.driver_id`**, que
+     guarda el TRANSPORTER y no el id de la ficha (`transporter_id` esta al
+     0 %). Ojo tambien con `cortex_resumen.gente`, que usa `transporterId` en
+     camelCase: mirar el campo que no es da «no existe» con el dato delante;
+   · se cuenta por PAQUETE, no por parada: en la XA_C18, 38 + 28 = los 66 que
+     dice Cortex, mientras las paradas bailan una arriba o abajo por los
+     portales compartidos;
+   · **`driver_name` no sirve para agrupar**: lo trae el 49,7 % de los paquetes
+     y el mismo id aparece con nombres distintos. Agrupando por (id, nombre) a
+     Iago Barreiro le salian 7 salidas y 144 paquetes; agrupando por id, 14 y
+     315.
+   Y el minimo no es un adorno: de 156 casos de «alguien entrego en ruta
+   ajena», 43 son de UN paquete y 17 de dos —el 38 %—, que no es ir a ayudar
+   sino un paquete que cambio de furgoneta en la nave. `_AYUDA_MIN_PAQUETES`
+   esta en 3. Ocho casos en `test_ayudas_cortex.py`.
+   Resultado: de 0 a 4 salidas y 103 paquetes el; de 18 apuntes a 100 salidas y
+   1.468 paquetes la empresa.
+   Regla general: **antes de dar por bueno un contador a cero, buscar el mismo
+   hecho en la fuente que no depende de que alguien lo escriba.** Un modulo que
+   se rellena a mano mide la constancia de quien lo rellena, no la realidad.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
