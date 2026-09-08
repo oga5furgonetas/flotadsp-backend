@@ -1345,6 +1345,68 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    el destino es donde ya estas.** Y una pantalla de login puede montarse sin
    sesion por definicion: lo que salga de ella no puede exigirla.
 
+70. **`data=` con una LISTA no sale por un `AsyncClient` de httpx, y el error
+   no menciona ni a Stripe ni a la clave.** La primera compra de verdad desde
+   el enlace publico, el 08-09-2026, devolvio *"No se ha podido abrir el pago.
+   Intentalo en un minuto"*. En los logs del backend estaba entero:
+   `Stripe checkout publico: Attempted to send an sync request with an
+   AsyncClient instance`. Stripe quiere sus arrays como
+   `line_items[0][price_data][currency]`, asi que los pares se arman en una
+   **lista** -claves anidadas y en orden-; pero httpx solo trata `data=` como
+   formulario cuando es un **diccionario**, y con cualquier otra cosa se va por
+   la rama antigua de "contenido en crudo", fabrica un `IteratorByteStream`
+   sincrono y el `AsyncClient` lo rechaza AL ENVIAR. La peticion no llega a
+   salir de la maquina.
+   Afectaba a los **dos** botones de pagar -el del conductor y el del enlace
+   publico-, o sea que la pasarela entera estaba muerta desde que se escribio.
+   Y lo que lo escondia: la llamada vive dentro de un `except Exception` ancho,
+   que convierte un error de programacion en un aviso de problema **pasajero**
+   para algo que no iba a funcionar nunca (gotcha 19 con otra cara).
+   La cura no es pasar un diccionario -eso obliga a claves unicas y el dia que
+   haya dos `line_items` se come uno en silencio-: se codifica a mano,
+   `content=_url_encode(pares).encode()` con `Content-Type:
+   application/x-www-form-urlencoded`, que conserva orden y repeticiones.
+   Cinco casos en `test_stripe_form.py`: comprueban la forma **contra el httpx
+   instalado** (`build_request` y si el flujo tiene `__aiter__`) y leen las dos
+   llamadas reales de `server.py` con expresion regular (gotcha 40). Probados
+   devolviendo el `data=`.
+   Regla general: **una integracion de pago no esta hecha hasta que ha creado
+   una sesion de verdad.** Que las claves esten puestas y respondan a un `curl`
+   no dice nada del codigo que las usa; aqui las claves eran correctas y el
+   `curl` desde la maquina funcionaba.
+
+71. **Cloudflare Pages NO sustituye la regla `/*` de `_headers` cuando hay una
+   mas concreta: la SUMA.** La pagina sale entonces con **dos** cabeceras
+   `Content-Security-Policy`, y dos politicas se aplican por **interseccion**:
+   cada una veta por su cuenta. O sea que un bloque mas permisivo **no permite
+   nada**, solo puede apretar.
+   Se vio con el catalogo publico (`/t/*`): se le escribio un bloque propio que
+   abria `fonts.googleapis.com` y la tipografia **siguio bloqueada**, sin
+   ningun error en la consola que apuntara a la causa. `curl -I` lo enseña de
+   golpe: dos lineas `content-security-policy`.
+   La cura fue quitar la dependencia, no ampliar la regla global -abrir Google
+   Fonts para toda la app, panel incluido, por una pagina suelta-: las fuentes
+   se sirven desde `/t/<token>/fonts/`. Y de paso salio que las siete caras que
+   sirve Google son **tres ficheros**: son variables (`archivo` wght 100-900,
+   `bricolage` opsz 12-96 + wght 200-800, `martian mono` wght 100-800) y el
+   mismo binario se reparte en siete URLs. Con un `@font-face` por familia y el
+   peso como RANGO: 299 KB -> 132, tres peticiones en vez de siete, y una
+   visita menos que le da su IP a Google.
+   El bloque `/t/*` se queda porque si sabe apretar: sin googletagmanager, sin
+   wasm y `connect-src` solo al backend.
+
+72. **El atributo `hidden` pierde contra cualquier clase que ponga `display`.**
+   La regla del navegador es `[hidden]{display:none}`, un selector de atributo;
+   `.ficha{display:grid}` tiene mas peso y la anula. Resultado en el catalogo
+   publico: las tres fichas de producto se veian **siempre**, una detras de
+   otra -3.625 px de pagina-, mientras el JS ponia y quitaba `hidden` sin que
+   cambiara nada. Es exactamente el sintoma que se venia a quitar, y por
+   pantalla parece que el JS no funciona.
+   La linea que falta es `.ficha[hidden]{display:none}`. Despues, 1.203 px.
+   Se comprueba con `getComputedStyle(el).display`, no con `el.hidden`: lo
+   segundo dice `true` y la cosa se ve igual.
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
