@@ -271,6 +271,7 @@ const EmpleoPublica = lazy(() => import('./pages/Empleo'))
 const PanelWHC = lazy(() => import('./panel/pages/WHC'))
 const PanelDSC = lazy(() => import('./panel/pages/DSC'))
 const PanelRendimiento = lazy(() => import('./panel/pages/Rendimiento'))
+const PanelCorreo = lazy(() => import('./panel/pages/Correo'))
 /* FlotaDSP 2.0 — la aplicación entera reorganizada, sólo en el laboratorio.
    Sustituye a los doce prototipos sueltos que había aquí: eran experimentos,
    no un producto. Vive en /lab y no toca ni una pantalla de las de siempre.
@@ -387,6 +388,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="whc" element={<PanelWHC />} />
                 <Route path="dsc" element={<PanelDSC />} />
                 <Route path="rendimiento" element={<PanelRendimiento />} />
+                <Route path="correo" element={<PanelCorreo />} />
                 {/* Experimentos DENTRO del panel: heredan barra lateral,
                     selector de centro, tema y sesión. Sin entrada en el menú. */}
                 <Route path="lab" element={<LabMarco />} />

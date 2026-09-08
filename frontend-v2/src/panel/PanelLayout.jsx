@@ -6,7 +6,7 @@ import {
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX,
-  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, Gauge, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
+  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, Gauge, Mail, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
   Briefcase, Store,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
@@ -184,6 +184,16 @@ function MenuUsuario({ admin, showAdmin, lang, setLang, langs, onLogout, t }) {
             className="flex items-center gap-2.5 px-3 py-2 text-[13px] text-dark-200 hover:bg-dark-800">
             <Shield size={15} className="text-dark-400" /> {t('nav.portal')}
           </NavLink>
+          {/* EL CORREO DE LA EMPRESA VIVE AQUI, no en el menu de la izquierda:
+              es del dueño, no de la operativa, y se busca donde esta el nombre
+              de uno. Solo lo ve el super-admin, que es el unico que puede
+              escribir en nombre de la empresa. */}
+          {showAdmin && (
+            <NavLink to="/panel/correo" onClick={() => setAbierto(false)} role="menuitem"
+              className="flex items-center gap-2.5 px-3 py-2 text-[13px] text-dark-200 hover:bg-dark-800">
+              <Mail size={15} className="text-dark-400" /> Correo de la empresa
+            </NavLink>
+          )}
 
           {/* El idioma vive aqui y no suelto en la barra: se cambia una vez y
               ocupaba sitio fijo en una cabecera que ya iba llena. */}

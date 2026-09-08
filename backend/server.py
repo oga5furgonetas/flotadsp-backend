@@ -18957,9 +18957,12 @@ async def admin_correo_enviar(body: dict = Body(...), user: dict = Depends(requi
              if _correo_valido(c)][:5]
     if not _correo_valido(para):
         raise HTTPException(400, "Ese correo de destino no es valido")
-    if len(asunto) < 2:
+    # UNA LETRA ES UN ASUNTO. El minimo de dos dejaba el boton apagado sin
+    # decir por que —paso al primer uso real, con el asunto «a»— y ademas no
+    # protege de nada: quien escribe el correo sabe que asunto quiere ponerle.
+    if not asunto:
         raise HTTPException(400, "Ponle un asunto")
-    if len(cuerpo) < 2:
+    if not cuerpo:
         raise HTTPException(400, "El correo esta vacio")
     if responder and not _correo_valido(responder):
         raise HTTPException(400, "El correo de respuesta no es valido")
