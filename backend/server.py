@@ -24933,6 +24933,166 @@ async def _drivers_sin_centro(dias: int = 60) -> dict:
             "dias": dias, "centros": sorted(conocidos)}
 
 
+@api_router.get("/drivers/sin-transporter")
+async def drivers_sin_transporter(dias: int = 30, _=Depends(require_admin)):
+    """Fichas sin `transporter_id` a las que Cortex si conoce. Solo mira.
+
+    SIN ESE CAMPO, LA PERSONA NO EXISTE PARA NADA QUE VENGA DE CORTEX: sus
+    ayudas, sus paquetes y sus numeros salen a cero y no falla nada — el mismo
+    cero silencioso del gotcha 60 con los centros. Medido el 08-09-2026: 75 de
+    230 fichas vivas no lo tienen, y 18 de ellas estaban trabajando ese mes.
+    Lo que da confianza para emparejar por nombre es que de las 155 fichas que
+    SI lo tienen, las 155 coinciden con lo que dice Cortex hoy: cero
+    discrepancias.
+    """
+    return await _drivers_sin_transporter(dias)
+
+
+def _correo_de(fichas: list, fid: str) -> bool:
+    """Si esa ficha tiene correo. Se prefiere para colgarle el emparejamiento."""
+    for f in fichas:
+        if f.get("id") == fid:
+            return bool((f.get("email") or "").strip())
+    return False
+
+
+def _tr_nombre(n: str) -> str:
+    """El nombre a efectos de emparejar. Reusa `_normalize_name`, no otra copia.
+
+    Ahi esta ya la regla de siempre —mayusculas, sin tildes, sin puntuacion— y
+    solo se le anade juntar los espacios de mas, que en las fichas hay 26
+    nombres con espacios sobrantes (gotcha 15).
+    """
+    return " ".join(_normalize_name(n or "").split())
+
+
+async def _drivers_sin_transporter(dias: int = 30) -> dict:
+    """Quien esta sin emparejar y a quien se puede emparejar sin dudar.
+
+    NO ADIVINA (misma regla que `_centro_norm` y que `sin-centro`): solo se
+    propone cuando el nombre lleva a UNA sola persona en Cortex y a UNA sola
+    ficha. Con dos tocayos no se propone nada, porque colgarle las entregas de
+    una persona a otra no se nota —la ficha parece completa— y es peor que
+    dejarlo vacio (gotchas 15 y 49).
+    """
+    desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
+    # Lo que Cortex sabe: nombre -> transporters vistos con ese nombre.
+    porNombre: dict = {}
+    async for d in db.cortex_resumen.find({"dia": {"$gte": desde}}, {"_id": 0, "gente": 1}):
+        for g in (d.get("gente") or []):
+            n, t = (g.get("nombre") or "").strip(), g.get("transporterId")
+            if n and t:
+                porNombre.setdefault(_tr_nombre(n), set()).add(t)
+
+    fichas = await db.drivers.find(
+        {"status": {"$nin": ["deleted", "baja"]}},
+        {"_id": 0, "id": 1, "name": 1, "center": 1, "transporter_id": 1,
+         "email": 1}).to_list(2000)
+    # DOS FICHAS DEL MISMO CORREO SON LA MISMA PERSONA, no un tocayo. Es la
+    # regla de `_fichas_misma_persona` (gotcha 15) y aqui cambia el resultado:
+    # de los 8 nombres repetidos que Cortex ve con un unico id, los 8 comparten
+    # correo. Tratarlos como ambiguos dejaria fuera a gente por un duplicado
+    # nuestro. Con dos correos DISTINTOS si son dos personas y no se toca nada:
+    # colgarle las entregas de una a la otra no se nota y es peor que un hueco.
+    porNom: dict = {}
+    for f in fichas:
+        porNom.setdefault(_tr_nombre(f.get("name") or ""), []).append(f)
+
+    def _misma_persona(grupo):
+        correos = {(x.get("email") or "").strip().lower() for x in grupo}
+        correos.discard("")
+        return len(correos) <= 1
+
+    def _ya_lo_tiene(grupo):
+        return any(x.get("transporter_id") for x in grupo)
+    # Un transporter que ya esta en otra ficha no se reparte dos veces.
+    pillados = {f["transporter_id"] for f in fichas if f.get("transporter_id")}
+
+    fuera = []
+    for f in fichas:
+        if f.get("transporter_id"):
+            continue
+        llano = _tr_nombre(f.get("name") or "")
+        grupo = porNom.get(llano) or [f]
+        vistos = porNombre.get(llano) or set()
+        libres = vistos - pillados
+        if not vistos:
+            motivo, sug = "Cortex no le ha visto en %d dias" % dias, ""
+        elif len(vistos) > 1:
+            motivo, sug = "Cortex le da %d identidades distintas" % len(vistos), ""
+        elif len(grupo) > 1 and not _misma_persona(grupo):
+            motivo, sug = "hay %d fichas con ese nombre y correos distintos" % len(grupo), ""
+        elif len(grupo) > 1 and _ya_lo_tiene(grupo):
+            # Otra ficha suya ya lo tiene y el portal las junta por correo:
+            # ya ve sus datos, y escribirlo aqui seria repetir el id.
+            motivo, sug = "ya emparejado en otra ficha suya", ""
+        elif not libres:
+            motivo, sug = "ese transporter ya esta en otra ficha", ""
+        else:
+            sug = sorted(libres)[0]
+            motivo = ("Cortex le ve con un unico id en los ultimos %d dias" % dias
+                      if len(grupo) == 1
+                      else "sus %d fichas comparten correo: es la misma persona" % len(grupo))
+        fuera.append({"id": f["id"], "name": f.get("name") or "",
+                      "center": f.get("center") or "", "sugerencia": sug, "motivo": motivo})
+    # Si la persona tiene varias fichas, la sugerencia va SOLO a una —la que
+    # tiene correo, que es a la que resuelve el login—: repartir el mismo id
+    # entre dos fichas seria crear el duplicado a proposito.
+    yapuesto = set()
+    for x in sorted(fuera, key=lambda x: (not _correo_de(fichas, x["id"]), x["name"].upper())):
+        if not x["sugerencia"]:
+            continue
+        if x["sugerencia"] in yapuesto:
+            x["sugerencia"], x["motivo"] = "", "otra ficha suya se lleva el emparejamiento"
+        else:
+            yapuesto.add(x["sugerencia"])
+    fuera.sort(key=lambda x: (not x["sugerencia"], x["name"].upper()))
+    return {"total": len(fuera), "con_sugerencia": sum(1 for x in fuera if x["sugerencia"]),
+            "dias": dias, "sin_transporter": fuera}
+
+
+@api_router.post("/drivers/sin-transporter/aplicar")
+async def drivers_sin_transporter_aplicar(body: dict = Body(default={}),
+                                          admin: dict = Depends(require_admin)):
+    """Empareja SOLO a los que no dejan duda. La regla se recalcula aqui."""
+    _quienes = body.get("conductores")
+    solo = set(str(x) for x in _quienes if x) if isinstance(_quienes, list) else set()
+    dias = _entero(body.get("dias"), "dias", defecto=30, minimo=1, maximo=180)
+    antes = await _drivers_sin_transporter(dias)
+    aplicables = [x for x in antes["sin_transporter"]
+                  if x["sugerencia"] and (not solo or x["id"] in solo)]
+    if not aplicables:
+        return {"puestos": 0, "verificado": True,
+                "motivo": "Ninguno tiene evidencia suficiente: lo decide una persona.",
+                "pendientes": antes["total"]}
+
+    quien = admin.get("name") or admin.get("username") or "oficina"
+    ahora = datetime.now(timezone.utc).isoformat()
+    await db.app_meta.update_one(
+        {"_id": "respaldo_transporter_conductores"},
+        {"$set": {"at": ahora, "por": quien,
+                  "cambios": [{"id": x["id"], "name": x["name"], "de": "",
+                               "a": x["sugerencia"], "motivo": x["motivo"]}
+                              for x in aplicables]}},
+        upsert=True)
+
+    puestos = 0
+    for x in aplicables:
+        # Condicionado a que SIGA vacio: lo que escriba una persona manda.
+        r = await db.drivers.update_one(
+            {"id": x["id"], "$or": [{"transporter_id": ""}, {"transporter_id": None},
+                                    {"transporter_id": {"$exists": False}}]},
+            {"$set": {"transporter_id": x["sugerencia"], "transporter_por": "cortex",
+                      "transporter_puesto_en": ahora}})
+        puestos += r.modified_count
+
+    despues = await _drivers_sin_transporter(dias)
+    return {"puestos": puestos, "pendientes": despues["total"],
+            "verificado": despues["con_sugerencia"] == 0,
+            "quedan_por_decidir": [{"name": x["name"], "motivo": x["motivo"]}
+                                   for x in despues["sin_transporter"]][:40]}
+
+
 @api_router.get("/drivers/sin-centro")
 async def drivers_sin_centro(dias: int = 60, _=Depends(require_admin)):
     """Fichas activas que no salen en ningun centro. Solo mira, no toca nada."""

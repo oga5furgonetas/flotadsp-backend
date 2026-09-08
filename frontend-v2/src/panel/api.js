@@ -123,6 +123,10 @@ export const getDriversSinCentro = (dias) =>
   api.get('/drivers/sin-centro', { params: dias ? { dias } : {} })
 export const aplicarCentroConductores = (body) =>
   api.post('/drivers/sin-centro/aplicar', body || {})
+export const getDriversSinTransporter = (dias) =>
+  api.get('/drivers/sin-transporter', { params: dias ? { dias } : {} })
+export const aplicarTransporterConductores = (body) =>
+  api.post('/drivers/sin-transporter/aplicar', body || {})
 export const getDriverAccounts = () => api.get('/auth/driver-accounts')
 export const setDriverPassword = (driverId, password) => api.post('/auth/set-driver-password', { driver_id: driverId, password })
 /* Da acceso al portal a todos los que aun no lo tienen. Devuelve las claves

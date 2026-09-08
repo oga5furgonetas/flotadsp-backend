@@ -17,7 +17,8 @@ import {
   deleteDriverAccount,
   getDriversDuplicados, fusionarConductores,
   getPropuestasTransporterId, confirmarTransporterId, getTransporterIdsSinFicha, telefonosDesdeCortex,
-  crearFichaDeTransporterId, getDriversSinCentro, aplicarCentroConductores, } from '../api'
+  crearFichaDeTransporterId, getDriversSinCentro, aplicarCentroConductores,
+  getDriversSinTransporter, aplicarTransporterConductores, } from '../api'
 
 const EMPTY = {
   name: '', dni: '', phone: '', email: '', driver_id: '', transporter_id: '',
@@ -285,6 +286,7 @@ function SaludFichas({ onCambio }) {
   const [ids, setIds] = useState(null)
   const [sinFicha, setSinFicha] = useState(null)
   const [sinCentro, setSinCentro] = useState(null)
+  const [sinTr, setSinTr] = useState(null)
   const [ocupado, setOcupado] = useState('')
   const [err, setErr] = useState('')
   const [hecho, setHecho] = useState('')
@@ -295,12 +297,31 @@ function SaludFichas({ onCambio }) {
     getPropuestasTransporterId().then((r) => setIds(r.data)).catch(() => {})
     getTransporterIdsSinFicha().then((r) => setSinFicha(r.data)).catch(() => {})
     getDriversSinCentro().then((r) => setSinCentro(r.data)).catch(() => {})
+    getDriversSinTransporter().then((r) => setSinTr(r.data)).catch(() => {})
   }
   useEffect(cargar, [])
 
   /* El centro NO viaja en la petición a propósito: lo vuelve a calcular el
      servidor con los paquetes de Cortex (gotcha 38). Si lo mandara el panel,
      bastaría con cambiarlo aquí para saltarse la regla de «una sola nave». */
+  /* Sin `transporter_id` la persona NO EXISTE para nada que venga de Cortex:
+     sus ayudas, sus paquetes y sus numeros salen a cero sin que falle nada.
+     Medido el 08-09-2026: 75 de 230 fichas vivas no lo tenian y 18 estaban
+     trabajando ese mes. Solo se propone cuando el nombre lleva a UNA persona
+     en Cortex y a UNA ficha; con tocayos no se toca nada. */
+  const ponerTransporters = async () => {
+    setOcupado('tr'); setErr(''); setHecho('')
+    try {
+      const { data } = await aplicarTransporterConductores({})
+      setHecho(data.puestos
+        ? `Emparejadas ${data.puestos} ${data.puestos === 1 ? 'ficha' : 'fichas'} con Cortex.`
+        : (data.motivo || 'No había ninguna con evidencia suficiente.'))
+      cargar(); onCambio?.()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo emparejar.')
+    } finally { setOcupado('') }
+  }
+
   const ponerCentros = async () => {
     setOcupado('centros'); setErr(''); setHecho('')
     try {
@@ -516,6 +537,48 @@ function SaludFichas({ onCambio }) {
           El centro solo se propone cuando Cortex no deja duda —todos sus
           paquetes en una sola nave—; con dos naves se dice y lo decide una
           persona, que es la misma regla que `_centro_norm`. */}
+      {!!sinTr?.con_sugerencia && (
+        <section>
+          <h2 className="mb-1 text-[15px] font-bold text-dark-100">
+            Sin emparejar con Cortex
+            <span className="ml-2 rounded-full bg-amber-500/20 px-2 py-0.5 text-[11.5px] font-bold text-amber-300">
+              {sinTr.con_sugerencia}
+            </span>
+          </h2>
+          <p className="mb-3 max-w-[72ch] text-[13px] text-dark-400">
+            Su ficha no tiene el id de transportista, así que para todo lo que viene de
+            Cortex —sus ayudas, sus paquetes, sus números— esa persona no existe y le
+            sale cero sin que falle nada. Estas son las que Cortex reconoce sin ninguna
+            duda: un solo id para ese nombre y una sola ficha con él.
+          </p>
+          <div className="space-y-1.5">
+            {(sinTr.sin_transporter || []).filter((x) => x.sugerencia).map((x) => (
+              <div key={x.id} className="card flex flex-wrap items-center gap-2 p-3 text-[13px]">
+                <b className="text-[13.5px] text-dark-100">{x.name || 'Sin nombre'}</b>
+                {x.center && <span className="text-[12.5px] text-dark-500">{x.center}</span>}
+                <span className="rounded-md bg-brand-500/15 px-2 py-0.5 font-mono text-[12px] font-semibold text-brand-200">
+                  {x.sugerencia}
+                </span>
+                <span className="ml-auto text-[12px] text-dark-600">{x.motivo}</span>
+              </div>
+            ))}
+          </div>
+          <button onClick={ponerTransporters} disabled={ocupado === 'tr'}
+            className="mt-2 rounded-lg bg-brand-500/20 px-3 py-1.5 text-[13px] font-semibold text-brand-200 hover:bg-brand-500/30 disabled:opacity-50">
+            {ocupado === 'tr'
+              ? 'Emparejando…'
+              : `Emparejar ${sinTr.con_sugerencia} ${sinTr.con_sugerencia === 1 ? 'ficha' : 'fichas'} con Cortex`}
+          </button>
+          {sinTr.total > sinTr.con_sugerencia && (
+            <p className="mt-1.5 text-[12px] text-dark-500">
+              Otras {sinTr.total - sinTr.con_sugerencia} se quedan como están: o Cortex no
+              las ha visto, o hay varias fichas con el mismo nombre y elegir mal cuelga las
+              entregas de una persona a otra.
+            </p>
+          )}
+        </section>
+      )}
+
       {!!sinCentro?.total && (
         <section>
           <h2 className="mb-1 text-[15px] font-bold text-dark-100">
