@@ -15,7 +15,7 @@ import {
   getDriversScoring, getScoringLeaderboard, getDriverAccounts, setDriverPassword,
   generarAccesosConductores,
   deleteDriverAccount,
-  getDriversDuplicados, fusionarConductores,
+  getDriversDuplicados, fusionarConductores, repasarFusiones,
   getPropuestasTransporterId, confirmarTransporterId, getTransporterIdsSinFicha, telefonosDesdeCortex,
   crearFichaDeTransporterId, getDriversSinCentro, aplicarCentroConductores,
   getDriversSinTransporter, aplicarTransporterConductores, } from '../api'
@@ -335,6 +335,26 @@ function SaludFichas({ onCambio }) {
     } finally { setOcupado('') }
   }
 
+  /* REPASAR LO YA FUSIONADO. Hace falta aunque fusionar este bien: una
+     inspeccion creada DESPUES de la fusion —alguien que entro con la ficha
+     vieja antes de que se le cerrara— vuelve a quedarse colgando de ella. Y
+     hasta hoy la fusion no repuntaba ni los kilometros ni los apoyos: quedaban
+     55 apuntes y 14 inspecciones sueltas. Es idempotente: si no hay nada que
+     mover, no mueve. */
+  const repasar = async () => {
+    setOcupado('repaso'); setErr(''); setHecho('')
+    try {
+      const { data } = await repasarFusiones()
+      const n = Object.values(data.movidos || {}).reduce((a, b) => a + b, 0)
+      setHecho(n
+        ? `Repuntados ${n} documentos que colgaban de fichas ya fusionadas.`
+        : 'Nada que repuntar: no queda nada colgando de una ficha fusionada.')
+      cargar(); onCambio?.()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo repasar.')
+    } finally { setOcupado('') }
+  }
+
   const fusionar = async (grupo) => {
     const conservar = elegida[grupo.email] || grupo.sugerida
     const absorber = grupo.fichas.filter((f) => f.id !== conservar).map((f) => f.id)
@@ -393,6 +413,10 @@ function SaludFichas({ onCambio }) {
           Se conserva la ficha con más historial y la otra se marca fusionada — no se
           borra, así que se puede deshacer.
         </p>
+        <button onClick={repasar} disabled={ocupado === 'repaso'}
+          className="mb-3 rounded-lg border border-dark-700 px-3 py-1.5 text-[12.5px] text-dark-300 hover:border-dark-500 disabled:opacity-50">
+          {ocupado === 'repaso' ? 'Repasando…' : 'Repasar las ya fusionadas'}
+        </button>
         {dups.total === 0 ? (
           <div className="card p-6 text-center text-[13.5px] text-dark-400">Ninguna. Todas las fichas son de personas distintas.</div>
         ) : (

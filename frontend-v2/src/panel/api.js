@@ -104,6 +104,7 @@ export const uploadDriverPhoto = (id, file) => { const fd = new FormData(); fd.a
 /* Salud de las fichas: duplicadas por correo y Transporter IDs que faltan. */
 export const getDriversDuplicados = () => api.get('/drivers/duplicados')
 export const fusionarConductores = (body) => api.post('/drivers/fusionar', body)
+export const repasarFusiones = () => api.post('/drivers/fusiones/repasar')
 export const getPropuestasTransporterId = () => api.get('/transporter-ids/propuestas')
 /* Los IDs que salen a ruta y no tienen ficha, con sus rutas para reconocerlos. */
 /* Alta de un tiron del que conduce un id, con el nombre que da Cortex: sin

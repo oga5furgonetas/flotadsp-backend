@@ -9692,6 +9692,79 @@ async def drivers_importar(file: UploadFile = File(...), center: str = Form(""),
             "nombres": [d["name"] for d in nuevos][:50]}
 
 
+# DONDE SE APUNTA A UN CONDUCTOR. Una sola lista, porque el fallo de fusionar
+# no es fusionar mal: es OLVIDARSE de un sitio, y eso deja el historial de una
+# persona partido en dos sin que nada falle. Sacada de la base de produccion
+# barriendo TODAS las colecciones en busca de campos con forma de uuid de ficha
+# —no de memoria—, el 08-09-2026. Las dos ultimas no estaban y por eso 41
+# apuntes de kilometros y 14 inspecciones seguian colgando de fichas ya
+# absorbidas.
+_DONDE_EL_CONDUCTOR = (
+    ("inspections", "driver_id"),
+    ("shifts", "driver_id"),
+    ("shift_requests", "driver_id"),
+    ("incidents", "driver_id"),
+    ("tienda_pedidos", "driver_id"),
+    ("parking_assignments", "driver_id"),
+    ("candidatos", "driver_id"),
+    ("driver_accounts", "driver_id"),
+    ("apoyos", "a.ficha_id"),
+    ("apoyos", "de.ficha_id"),
+)
+
+
+async def _repuntar_conductor(absorber: list, conservar: str, nombre: str) -> dict:
+    """Manda a `conservar` todo lo que apuntaba a las fichas absorbidas."""
+    movidos = {}
+    for col, campo in _DONDE_EL_CONDUCTOR:
+        r = await db[col].update_many({campo: {"$in": absorber}},
+                                      {"$set": {campo: conservar}})
+        if r.modified_count:
+            movidos["%s.%s" % (col, campo)] = r.modified_count
+    # Los dos que viven dentro de un array necesitan `array_filters`.
+    r = await db.daily_assignments.update_many(
+        {"slots.driver_id": {"$in": absorber}},
+        {"$set": {"slots.$[s].driver_id": conservar, "slots.$[s].driver_name": nombre}},
+        array_filters=[{"s.driver_id": {"$in": absorber}}])
+    if r.modified_count:
+        movidos["daily_assignments.slots"] = r.modified_count
+    # Los kilometros: aqui estaba el agujero mas gordo —41 apuntes— y no se veia
+    # porque un historial de km no lo echa en falta nadie hasta que hay que
+    # mirar quien puso ese numero.
+    r = await db.vehicles.update_many(
+        {"mileage_history.driver_id": {"$in": absorber}},
+        {"$set": {"mileage_history.$[m].driver_id": conservar}},
+        array_filters=[{"m.driver_id": {"$in": absorber}}])
+    if r.modified_count:
+        movidos["vehicles.mileage_history"] = r.modified_count
+    return movidos
+
+
+@api_router.post("/drivers/fusiones/repasar")
+async def drivers_fusiones_repasar(_=Depends(require_admin)):
+    """Repunta lo que siga colgando de una ficha ya absorbida.
+
+    Hace falta aunque fusionar este bien: una inspeccion creada DESPUES de la
+    fusion —alguien que entro con la ficha vieja antes de que se le cerrara—
+    vuelve a quedarse huerfana, y ademas los dos sitios que faltaban llevan
+    meses sin repuntarse. Es idempotente: si no hay nada que mover, no mueve.
+    """
+    absorbidas = await db.drivers.find(
+        {"merged_into": {"$exists": True}},
+        {"_id": 0, "id": 1, "merged_into": 1}).to_list(500)
+    porDestino: dict = {}
+    for f in absorbidas:
+        porDestino.setdefault(f["merged_into"], []).append(f["id"])
+    total: dict = {}
+    for destino, ids in porDestino.items():
+        buena = await db.drivers.find_one({"id": destino}, {"_id": 0, "name": 1})
+        if not buena:
+            continue          # la superviviente ya no esta: no se inventa un destino
+        for k, v in (await _repuntar_conductor(ids, destino, buena.get("name") or "")).items():
+            total[k] = total.get(k, 0) + v
+    return {"ok": True, "fusiones": len(porDestino), "movidos": total}
+
+
 @api_router.post("/drivers/fusionar")
 async def drivers_fusionar(data: dict = Body(...), user: dict = Depends(require_admin)):
     """Une dos fichas de la misma persona en una.
@@ -9726,18 +9799,7 @@ async def drivers_fusionar(data: dict = Body(...), user: dict = Depends(require_
                                 "Solo se fusionan fichas con el MISMO correo. "
                                 "Por nombre no: dos tocayos acabarian mezclados.")
 
-    movidos = {}
-    for col, campo in (("inspections", "driver_id"), ("shifts", "driver_id"),
-                       ("shift_requests", "driver_id")):
-        r = await db[col].update_many({campo: {"$in": absorber}},
-                                      {"$set": {campo: conservar}})
-        movidos[col] = r.modified_count
-    r = await db.daily_assignments.update_many(
-        {"slots.driver_id": {"$in": absorber}},
-        {"$set": {"slots.$[s].driver_id": conservar,
-                  "slots.$[s].driver_name": buena.get("name")}},
-        array_filters=[{"s.driver_id": {"$in": absorber}}])
-    movidos["daily_assignments"] = r.modified_count
+    movidos = await _repuntar_conductor(absorber, conservar, buena.get("name") or "")
 
     # Lo que le falte a la buena se lo queda de las otras: telefono, transporter
     # id, foto... Nunca al reves — la buena manda.
@@ -25200,6 +25262,29 @@ async def transporter_id_crear_ficha(tid: str, body: dict = Body(default={}),
         raise HTTPException(
             400, "Cortex no da el nombre de ese ID todavia. Escribelo tu o usa "
                  "«quien es» para enlazarlo con una ficha que ya exista.")
+
+    # ¿YA TIENE FICHA ESTA PERSONA? Por aqui es por donde entro el ultimo
+    # duplicado: Cesar Garcia Grana tenia ficha desde el 30-08 —inactiva— y el
+    # 05-09 se le creo otra desde esta pantalla, porque aqui solo se miraba que
+    # el transporter no estuviera cogido. El indice unico del correo tampoco lo
+    # frena: solo cubre las fichas ACTIVAS, y la suya no lo estaba.
+    # Se compara por nombre normalizado —es lo unico que da Cortex, que no
+    # trae correo— y NO se decide por nadie: se para y se dice con quien
+    # choca. Quien sepa que son dos personas distintas lo repite con
+    # `forzar: true`, que es una decision consciente y queda en el cuerpo.
+    if not body.get("forzar"):
+        llano = _tr_nombre(nombre)
+        gemelas = [f async for f in db.drivers.find(
+            {"status": {"$nin": ["deleted", "fusionada"]}, "merged_into": {"$exists": False}},
+            {"_id": 0, "id": 1, "name": 1, "active": 1, "email": 1})
+            if _tr_nombre(f.get("name") or "") == llano]
+        if gemelas:
+            g = gemelas[0]
+            raise HTTPException(409,
+                "Ya hay una ficha de %s%s. Enlazale este ID con «quien es» en vez de "
+                "crear otra, o repite marcando que son personas distintas." % (
+                    g.get("name") or g["id"],
+                    "" if g.get("active", True) else " (esta dada de baja)"))
 
     d = Driver(name=nombre, phone=telefono or None, center=centro or None,
                transporter_id=tid,
