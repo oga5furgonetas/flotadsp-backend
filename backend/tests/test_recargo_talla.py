@@ -317,3 +317,112 @@ def test_el_escaparate_ya_no_cuenta_la_logistica():
     assert '"cierre"' not in trozo, "el escaparate sigue mandando la cuenta atras"
     assert '"minimo"' not in trozo, "el escaparate sigue mandando el minimo"
     assert '"quedan"' in trozo, "el escaparate no dice cuantas quedan"
+
+
+# ---------------------------------------------------------------------------
+# EL DESCUENTO DE LOS CINCO PRIMEROS
+# ---------------------------------------------------------------------------
+# 15 % para los cinco primeros conductores. Lo delicado no es el porcentaje:
+# es que sean CINCO de verdad y que la plaza no se pierda cuando un pedido se
+# cae. Los tres agujeros posibles, y estan los tres cubiertos aqui:
+#
+#  · contar las plazas en Python y decidir despues -tres conductores pulsando
+#    a la vez con cuatro dadas pasarian los tres y saldrian ocho descuentos
+#    (gotcha 46)-, asi que la condicion tiene que viajar DENTRO del filtro;
+#  · descontar del total en vez de linea a linea: Stripe cobra las LINEAS, asi
+#    que se veria un total y la tarjeta pediria otro;
+#  · no soltar la plaza al anular: cinco pedidos caidos dejarian la promocion
+#    agotada sin haber vendido nada, igual que pasaria con las unidades.
+
+
+def _funcion(nombre):
+    for n in ast.walk(_ARBOL):
+        if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef)) and n.name == nombre:
+            return n
+    raise AssertionError("no existe %s en server.py" % nombre)
+
+
+_TEXTO = io.open(SERVER, encoding="utf-8-sig").read()
+
+
+def _fuente(nombre):
+    """El codigo TAL Y COMO ESTA ESCRITO, no reimprimido.
+
+    `ast.unparse` normaliza las comillas -`l["precio"]` sale como
+    `l['precio']`-, asi que buscar literales sobre eso da falsos negativos.
+    """
+    n = _funcion(nombre)
+    return chr(10).join(_TEXTO.splitlines()[n.lineno - 1:n.end_lineno])
+
+
+def test_la_plaza_se_pide_en_una_sola_operacion():
+    """La condicion va en el FILTRO, no en un `if` de Python."""
+    src = _fuente("_tienda_desc_pedir")
+    assert "update_one" in src
+    assert "$ne" in src, "sin esto, el mismo conductor podria coger dos plazas"
+    assert "$expr" in src and "$lt" in src and "$size" in src, (
+        "el tope de plazas tiene que ir dentro del filtro: contarlo antes y "
+        "decidir despues no protege de dos pedidos a la vez")
+    assert "modified_count" in src, "solo cuenta si la plaza se coge en esta llamada"
+
+
+def test_una_plaza_por_conductor_y_no_dos():
+    """Quien ya la gasto no vuelve a tenerla mientras su pedido siga vivo."""
+    src = _fuente("_tienda_desc_pedir")
+    assert "return r.modified_count == 1" in src, (
+        "devolver True porque ya estaba en la lista daria 15 % en todos sus pedidos")
+
+
+def test_anular_devuelve_la_plaza():
+    src = _fuente("tienda_marcar_pedido")
+    assert "_tienda_desc_soltar" in src, (
+        "sin esto, cinco pedidos anulados agotan la promocion sin vender nada")
+    assert "descuento_pct" in src, "hay que mirar si ese pedido llevaba descuento"
+
+
+def test_el_pedido_descuenta_linea_a_linea():
+    """Y rehace el total sumando las lineas, que es lo que cobra Stripe."""
+    src = _fuente("tienda_crear_pedido")
+    assert "_tienda_desc_pedir" in src
+    assert 'l["precio"] = round(l["precio"] * (1 - pct), 2)' in src, (
+        "descontar solo del total dejaria las lineas -y el cobro- sin descontar")
+    assert 'l["precio_sin_descuento"]' in src, "se guarda el precio de antes"
+    assert '"descuento_pct": pct' in src, "el pedido tiene que decir que se le aplico"
+
+
+def test_el_escaparate_manda_la_regla_y_no_el_movil():
+    src = _fuente("tienda_escaparate")
+    assert "_tienda_desc_estado" in src and '"descuento": desc' in src, (
+        "con el 15 % escrito en el cliente, el dia que cambie se veria un "
+        "precio y se cobraria otro (gotcha 54)")
+
+
+def _constante(nombre):
+    for n in _ARBOL.body:
+        if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == nombre:
+            return ast.literal_eval(n.value)
+    raise AssertionError("no existe %s en server.py" % nombre)
+
+
+def test_las_cuentas_del_descuento_cuadran():
+    """El numero que ve el conductor y el que cobra la tarjeta son el mismo."""
+    pct = _constante("_TIENDA_DESC_PCT")
+    assert pct == 0.15
+    prenda = {"pvp": 59.90, "tallas_grandes": ["XXL", "3XL"], "recargo_talla": 3.0}
+    assert round(PRECIO(prenda, "M") * (1 - pct), 2) == 50.91
+    # Con talla grande el descuento cae sobre el precio YA recargado: esa talla
+    # le cuesta mas al proveedor, asi que descontar antes del recargo seria
+    # regalar parte de lo que se cobra justo para cubrirlo.
+    grande = PRECIO(prenda, "XXL")
+    assert grande == 62.90
+    # 62,90 x 0,85 = 53,465, y en coma flotante eso es 53,46499..., asi que
+    # baja a 53,46 -no sube a 53,47-. Se deja escrito el numero exacto porque
+    # es el que tiene que salir en las dos puntas: el movil hace la misma
+    # cuenta con `Math.round(x * 100) / 100` y da lo mismo. Si algun dia no
+    # coincidieran, manda el del servidor: la pantalla de "es tuyo" enseña el
+    # total que devuelve el pedido, no el que calculo el movil.
+    assert round(grande * (1 - pct), 2) == 53.46
+
+
+def test_cinco_plazas_y_no_mas():
+    assert _constante("_TIENDA_DESC_PRIMEROS") == 5

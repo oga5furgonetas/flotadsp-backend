@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Store, Check, Package, AlertTriangle } from 'lucide-react'
-import { tiendaPedidos, tiendaConfig, tiendaEstadoPedido } from '../api'
+import { Loader2, Store, Check, Package, AlertTriangle, Euro, Trash2 } from 'lucide-react'
+import { tiendaPedidos, tiendaConfig, tiendaEstadoPedido, tiendaBorrarPedido } from '../api'
 
 /* ────────────────────────────────────────────────────────────────────────────
    LA TIENDA, DESDE LA OFICINA — abrirla, ver la tanda y marcar los pagos
@@ -42,6 +42,17 @@ export default function TiendaPedidos() {
 
   useEffect(() => { cargar() }, [cargar])
 
+  /* Borrar de la lista, y SOLO lo ya anulado: anular es lo que devuelve las
+     unidades al drop y la plaza del descuento, asi que quitar de golpe un
+     pedido vivo dejaria el drop mordido sin nadie a quien reclamar. El camino
+     es anular primero -que se deshace- y borrar despues. */
+  const borrar = async (id) => {
+    setGuardando(id); setErr('')
+    try { await tiendaBorrarPedido(id); cargar() } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se ha podido borrar.')
+    } finally { setGuardando('') }
+  }
+
   const guardar = async (cambios) => {
     setGuardando('config'); setErr('')
     try { await tiendaConfig(cambios); cargar() } catch (e) {
@@ -66,7 +77,13 @@ export default function TiendaPedidos() {
   if (!d) return <p className="mt-6 text-sm text-red-400">{err}</p>
 
   const { config, unidades, minimo, sale, importe, pagados, para_el_taller: lista, pedidos } = d
-  const enTanda = pedidos.filter((p) => p.cierre === d.cierre)
+  const ventas = d.ventas || {}
+  const cobrado = ventas.pagado || {}
+  const enElAire = ventas.pendiente || {}
+  const caidos = ventas.anulado || {}
+  const desc = d.descuento || {}
+  // La tanda es solo lo de esta semana; los anulados no cuentan para encargar.
+  const enTanda = pedidos.filter((p) => p.cierre === d.cierre && p.estado !== 'anulado')
 
   return (
     <div className="mt-6">
@@ -140,6 +157,39 @@ export default function TiendaPedidos() {
         )}
       </div>
 
+      {/* LAS VENTAS. Va lo primero porque es lo que se viene a mirar, y va
+          SIN el corte por semana: la tanda dice que hay que encargar, no
+          cuanto se ha vendido. `queda` no es el bruto —descuenta IVA, coste
+          de la prenda, envio, pasarela y colchon—, que es el numero con el
+          que se decide si esto merece la pena. */}
+      <div className="mt-3 rounded-xl border border-dark-800 bg-dark-900/40 p-3">
+        <div className="mb-2 flex items-baseline justify-between">
+          <span className="text-[12px] font-medium text-dark-300">
+            <Euro size={12} className="mr-1 inline" /> Ventas cobradas
+          </span>
+          <span className="text-[11.5px] text-dark-500">
+            {cobrado.pedidos || 0} pedidos · {ventas.de_la_nave || 0} de la nave ·{' '}
+            {ventas.de_fuera || 0} de fuera
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <Cifra t="Cobrado" v={eur(cobrado.importe || 0)} />
+          <Cifra t="Te queda" v={eur(cobrado.queda || 0)} />
+          <Cifra t="Este mes" v={eur((ventas.mes || {}).importe || 0)} />
+        </div>
+        <p className="mt-2 text-[11.5px] leading-relaxed text-dark-500">
+          {enElAire.pedidos > 0 && (
+            <>Hay <b className="text-amber-300">{enElAire.pedidos}</b> pedidos sin pagar
+              ({eur(enElAire.importe || 0)}) con sus unidades apartadas. </>
+          )}
+          {caidos.pedidos > 0 && <>Se han caido {caidos.pedidos}. </>}
+          {desc.plazas > 0 && (
+            <>Descuento de arranque: quedan <b className="text-dark-300">{desc.quedan}</b>{' '}
+              de {desc.plazas} plazas al {Math.round((desc.pct || 0) * 100)} %.</>
+          )}
+        </p>
+      </div>
+
       {/* La tanda */}
       <div className="mt-3 grid grid-cols-3 gap-2">
         <Cifra t="Prendas" v={`${unidades}/${minimo}`} mal={!sale} />
@@ -156,12 +206,28 @@ export default function TiendaPedidos() {
       {lista.length > 0 && (
         <div className="mt-3 rounded-xl border border-dark-800">
           <div className="border-b border-dark-800 px-3 py-2 text-[12px] font-medium text-dark-300">
-            <Package size={12} className="mr-1 inline" /> Qué pedirle al taller
+            <Package size={12} className="mr-1 inline" /> Qué encargar (solo lo pagado)
           </div>
           {lista.map((l) => (
             <div key={l.que} className="flex items-center justify-between border-b border-dark-800 px-3 py-1.5 text-[12.5px] last:border-0">
               <span className="text-dark-300">{l.que}</span>
               <span className="font-semibold tabular-nums text-dark-100">{l.unidades}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Lo que viene pero AUN NO ESTA COBRADO. Aparte a proposito: encargarlo
+          al proveedor es poner el dinero por alguien que todavia no ha pagado. */}
+      {(d.aun_sin_cobrar || []).length > 0 && (
+        <div className="mt-3 rounded-xl border border-dark-800">
+          <div className="border-b border-dark-800 px-3 py-2 text-[12px] font-medium text-amber-300">
+            <AlertTriangle size={12} className="mr-1 inline" /> Pedido pero sin pagar — no lo encargues aún
+          </div>
+          {d.aun_sin_cobrar.map((l) => (
+            <div key={l.que} className="flex items-center justify-between border-b border-dark-800 px-3 py-1.5 text-[12.5px] last:border-0">
+              <span className="text-dark-400">{l.que}</span>
+              <span className="font-semibold tabular-nums text-dark-300">{l.unidades}</span>
             </div>
           ))}
         </div>
@@ -176,7 +242,14 @@ export default function TiendaPedidos() {
             <div key={p.id} className="rounded-xl border border-dark-800 bg-dark-900/40 p-2.5">
               <div className="flex flex-wrap items-baseline justify-between gap-x-2">
                 <span className="font-mono text-[11.5px] text-dark-400">{p.ref}</span>
-                <span className="text-[12.5px] font-medium text-dark-100">{p.driver_nombre || '—'}</span>
+                <span className="text-[12.5px] font-medium text-dark-100">
+                  {p.driver_nombre || (p.externo ? 'De fuera' : '—')}
+                  {p.descuento_pct > 0 && (
+                    <span className="ml-1.5 text-[11px] font-semibold text-brand-400">
+                      -{Math.round(p.descuento_pct * 100)} %
+                    </span>
+                  )}
+                </span>
                 <span className="text-[12.5px] font-semibold tabular-nums text-dark-200">{eur(p.total)}</span>
               </div>
               <div className="mt-0.5 text-[11.5px] text-dark-500">
@@ -193,6 +266,13 @@ export default function TiendaPedidos() {
                     {p.estado === id && <Check size={10} className="mr-0.5 inline" />}{txt}
                   </button>
                 ))}
+                {p.estado === 'anulado' && (
+                  <button disabled={guardando === p.id} onClick={() => borrar(p.id)}
+                    title="Quitarlo de la lista para siempre"
+                    className="ml-auto rounded-lg border border-dark-800 px-2 py-0.5 text-[11.5px] text-dark-600 hover:border-red-500/40 hover:text-red-400">
+                    <Trash2 size={10} className="mr-0.5 inline" />Borrar
+                  </button>
+                )}
               </div>
             </div>
           ))}

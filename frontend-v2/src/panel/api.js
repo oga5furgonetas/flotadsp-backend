@@ -506,6 +506,7 @@ export const tiendaSubirLogo = (variante, archivo) => {
 export const tiendaBorrarLogo = (variante) => api.delete(`/tienda/logos/${variante}`)
 export const tiendaPedidos = () => api.get('/tienda/pedidos')
 export const tiendaConfig = (body) => api.post('/tienda/config', body)
+export const tiendaBorrarPedido = (id) => api.delete(`/tienda/pedidos/${id}`)
 export const tiendaEstadoPedido = (id, estado) =>
   api.post(`/tienda/pedidos/${id}/estado`, { estado })
 export const tiendaSubirFoto = (id, archivo) => {

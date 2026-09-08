@@ -4,7 +4,7 @@ import {
   Mail, KeyRound, ShieldCheck, RefreshCw,
 } from 'lucide-react'
 import {
-  tiendaEscaparate, tiendaCrearPedido, tiendaMisPedidos,
+  tiendaEscaparate, tiendaCrearPedido, tiendaAnularMiPedido, tiendaMisPedidos,
   tiendaCuenta, tiendaVincularCuenta, tiendaFotoBlob, tiendaPagar,
 } from '../../services/api'
 import { FotoPrenda } from '../../panel/components/TiendaPrendas'
@@ -31,6 +31,7 @@ const eur = (n) => `${Number(n || 0).toFixed(2).replace('.', ',')} €`
 
 export default function Tienda({ onBack }) {
   const [datos, setDatos] = useState(null)
+  const [correo, setCorreo] = useState('')
   const [cargando, setCargando] = useState(true)
   const [cesta, setCesta] = useState([])      // {prenda, talla, cantidad, personalizado}
   const [pedidos, setPedidos] = useState([])
@@ -47,6 +48,8 @@ export default function Tienda({ onBack }) {
       tiendaCuenta().then((r) => r.data.cliente).catch(() => null),
     ]).then(([e, p, c]) => {
       setDatos(e); setPedidos(p); setCuenta(c)
+      // Solo el de SU cuenta de tienda: el de la ficha es el del trabajo.
+      if (c?.email) setCorreo((v) => v || c.email)
     }).finally(() => setCargando(false))
   }, [])
 
@@ -62,6 +65,19 @@ export default function Tienda({ onBack }) {
 
   const total = useMemo(
     () => cesta.reduce((s, l) => s + (l.precio || 0) * l.cantidad, 0), [cesta])
+
+  /* EL DESCUENTO DE LOS PRIMEROS. El porcentaje, cuantas plazas quedan y si
+     esta persona tiene derecho vienen del servidor, por lo mismo que el
+     recargo de talla: aqui solo se pinta. Y se aplica LINEA A LINEA, igual
+     que en el backend, porque redondear el total entero daria un centimo de
+     diferencia con lo que cobra la tarjeta. */
+  const desc = datos?.descuento || {}
+  const rebaja = useMemo(() => {
+    if (!desc.para_ti || !desc.pct) return 0
+    const con = cesta.reduce(
+      (s, l) => s + Math.round((l.precio || 0) * (1 - desc.pct) * 100) / 100 * l.cantidad, 0)
+    return Math.round((total - con) * 100) / 100
+  }, [cesta, total, desc.para_ti, desc.pct])
 
   const añadir = (p, talla) => {
     setErr('')
@@ -80,11 +96,19 @@ export default function Tienda({ onBack }) {
   const quitar = (i) => setCesta((c) => c.filter((_, j) => j !== i))
 
   const enviar = async () => {
+    /* EL CORREO ES SUYO, NO EL DEL TRABAJO. La ficha lleva el de la empresa
+       -@winiw.es en 123 de 140- y a ese buzon no tiene acceso: el justificante
+       de una compra pagada con su dinero acabaria donde no puede leerlo. Se
+       pide aqui, y si lo deja en blanco no se manda ninguno: ya lo pregunta la
+       pantalla de la tarjeta. */
+    if (correo && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(correo)) {
+      setErr('Ese correo no parece correcto. Revísalo o déjalo en blanco.'); return
+    }
     setEnviando(true); setErr('')
     try {
       const r = await tiendaCrearPedido(cesta.map((l) => ({
         prenda: l.prenda, talla: l.talla, cantidad: l.cantidad, personalizado: l.personalizado,
-      })))
+      })), correo)
       setHecho(r.data); setCesta([]); cargar()
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se ha podido enviar el pedido.')
@@ -123,11 +147,19 @@ export default function Tienda({ onBack }) {
           <p className="text-[16px] font-semibold text-dark-50">Es tuyo</p>
           <p className="mt-1.5 font-mono text-[12px] tracking-wide text-dark-400">{hecho.ref}</p>
           <p className="mt-3 text-[22px] font-semibold tabular-nums text-dark-50">{eur(hecho.total)}</p>
+          {/* Lo que se aplico DE VERDAD, dicho por el servidor. Entre mirar el
+              escaparate y pulsar puede llevarse la ultima plaza otro, asi que
+              el numero que vale es este y no el que calculo la cesta. */}
+          {hecho.descuento_pct > 0 && (
+            <p className="mt-1 text-[12.5px] font-semibold text-brand-400">
+              Con el -{Math.round(hecho.descuento_pct * 100)} % de los primeros
+            </p>
+          )}
           <p className="mx-auto mt-4 max-w-[17rem] text-[12.5px] leading-relaxed text-dark-500">
             Te escribimos para el pago y te avisamos en cuanto llegue a la nave.
           </p>
         </div>
-        <MisPedidos pedidos={[hecho, ...pedidos]} pasarela={datos?.pasarela} />
+        <MisPedidos pedidos={[hecho, ...pedidos]} pasarela={datos?.pasarela} onCambio={cargar} />
       </Marco>
     )
   }
@@ -136,6 +168,13 @@ export default function Tienda({ onBack }) {
 
   return (
     <Marco onBack={onBack}>
+      {desc.para_ti && desc.quedan > 0 && (
+        <p className="mb-4 rounded-2xl border border-brand-500/25 bg-brand-500/[0.07] px-4 py-3 text-[12.5px] leading-relaxed text-dark-200">
+          <b className="text-brand-400">-{Math.round(desc.pct * 100)} % por ser de los primeros.</b>{' '}
+          Se aplica solo al primer pedido y quedan{' '}
+          <b className="text-dark-100">{desc.quedan} de {desc.plazas}</b> plazas.
+        </p>
+      )}
       {datos.aviso && (
         <p className="mb-5 rounded-2xl border border-brand-500/20 bg-brand-500/[0.05] px-4 py-3 text-[12.5px] leading-relaxed text-dark-300">
           {datos.aviso}
@@ -193,10 +232,32 @@ export default function Tienda({ onBack }) {
             ))}
           </div>
 
+          {rebaja > 0 && (
+            <div className="mt-3 space-y-1">
+              <div className="flex items-baseline justify-between text-[13px] text-dark-400">
+                <span>Subtotal</span>
+                <span className="tabular-nums">{eur(total)}</span>
+              </div>
+              <div className="flex items-baseline justify-between text-[13px] text-brand-400">
+                <span>Descuento de los {desc.plazas} primeros</span>
+                <span className="tabular-nums">-{eur(rebaja)}</span>
+              </div>
+            </div>
+          )}
           <div className="mt-3 flex items-baseline justify-between">
             <span className="text-[13px] text-dark-400">Total</span>
-            <span className="text-[17px] font-semibold tabular-nums text-dark-100">{eur(total)}</span>
+            <span className="text-[17px] font-semibold tabular-nums text-dark-100">{eur(total - rebaja)}</span>
           </div>
+
+          <label className="mt-3 block text-[12px] text-dark-400">
+            Tu correo, para el justificante
+          </label>
+          <input type="email" inputMode="email" autoComplete="email" value={correo}
+            onChange={(e) => setCorreo(e.target.value)} placeholder="tucorreo@gmail.com"
+            className="mt-1 w-full rounded-xl border border-dark-700 bg-dark-950 px-3 py-2.5 text-[15px] text-dark-100" />
+          <p className="mt-1 text-[11.5px] leading-snug text-dark-500">
+            El tuyo de siempre, no el del trabajo: ahí es donde te llega el recibo.
+          </p>
 
           {err && <p className="mt-2 text-[13px] text-red-400">{err}</p>}
 
@@ -210,7 +271,7 @@ export default function Tienda({ onBack }) {
         </div>
       )}
 
-      <MisPedidos pedidos={pedidos} pasarela={datos?.pasarela} />
+      <MisPedidos pedidos={pedidos} pasarela={datos?.pasarela} onCambio={cargar} />
     </Marco>
   )
 }
@@ -419,7 +480,46 @@ function Fuerza({ clave }) {
   )
 }
 
-function MisPedidos({ pedidos, pasarela }) {
+function Anular({ pedido, onHecho }) {
+  const [seguro, setSeguro] = useState(false)
+  const [yendo, setYendo] = useState(false)
+  const [err, setErr] = useState('')
+
+  /* Pregunta antes de hacerlo: el boton vive justo debajo del de pagar y en un
+     movil se pulsa con el pulgar. Un pedido anulado por error no se deshace
+     desde aqui —hay que pedirlo otra vez y la talla puede haberse agotado—. */
+  const hazlo = async () => {
+    setYendo(true); setErr('')
+    try { await tiendaAnularMiPedido(pedido.id); onHecho?.() } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se ha podido anular.')
+      setYendo(false); setSeguro(false)
+    }
+  }
+
+  if (err) return <p className="mt-2 text-[12px] text-red-400">{err}</p>
+  if (!seguro) {
+    return (
+      <button onClick={() => setSeguro(true)}
+        className="mt-2 w-full rounded-xl border border-dark-700 py-2 text-[12.5px] text-dark-400">
+        Anular este pedido
+      </button>
+    )
+  }
+  return (
+    <div className="mt-2 flex gap-2">
+      <button onClick={hazlo} disabled={yendo}
+        className="flex-1 rounded-xl border border-red-500/40 bg-red-500/10 py-2 text-[12.5px] font-semibold text-red-300 disabled:opacity-50">
+        {yendo ? 'Anulando…' : 'Sí, anúlalo'}
+      </button>
+      <button onClick={() => setSeguro(false)}
+        className="flex-1 rounded-xl border border-dark-700 py-2 text-[12.5px] text-dark-400">
+        Mejor no
+      </button>
+    </div>
+  )
+}
+
+function MisPedidos({ pedidos, pasarela, onCambio }) {
   if (!pedidos?.length) return null
   const ESTADOS = {
     pendiente_pago: ['Pendiente de pago', 'text-amber-300'],
@@ -448,6 +548,12 @@ function MisPedidos({ pedidos, pasarela }) {
               <div className="mt-1 text-[13px] font-semibold tabular-nums text-dark-100">{eur(p.total)}</div>
               {pasarela === 'stripe' && p.estado === 'pendiente_pago' && (
                 <BotonPagar pedido={p} />
+              )}
+              {/* Poder echarse atras uno mismo. Sin esto, equivocarse de talla
+                  significaba escribirle a alguien de la oficina, y mientras
+                  tanto su unidad seguia apartada del drop sin estar vendida. */}
+              {p.estado === 'pendiente_pago' && (
+                <Anular pedido={p} onHecho={onCambio} />
               )}
             </div>
           )

@@ -42158,6 +42158,77 @@ _TIENDA_DIA_CIERRE = 4              # 0=lunes ... 4=viernes
 _TIENDA_MAX_UDS_LINEA = 5
 _TIENDA_MAX_LINEAS = 8
 
+# EL DESCUENTO DE ARRANQUE: 15 % para los CINCO primeros conductores.
+# Es una plaza por persona y por orden de llegada, no un cupon: quien ya tiene
+# la suya no puede coger otra, asi que uno solo no puede quedarse las cinco
+# pidiendo cinco veces.
+_TIENDA_DESC_PCT = 0.15
+_TIENDA_DESC_PRIMEROS = 5
+_TIENDA_DESC_ID = "descuento"
+
+
+async def _tienda_desc_doc() -> dict:
+    """El apunte de quien ya tiene plaza. Se crea solo la primera vez.
+
+    El `$setOnInsert` puede chocar si dos conductores entran a la vez el primer
+    dia -es justo el caso del gotcha 32-, y que el documento ya exista es
+    exactamente lo que se queria: se traga el duplicado.
+    """
+    try:
+        await db[_TCOL_CONFIG].update_one({"_id": _TIENDA_DESC_ID},
+                                          {"$setOnInsert": {"quien": []}}, upsert=True)
+    except DuplicateKeyError:
+        pass
+    return await db[_TCOL_CONFIG].find_one({"_id": _TIENDA_DESC_ID}, {"_id": 0}) or {}
+
+
+async def _tienda_desc_estado(did: str = "") -> dict:
+    """Cuantas plazas quedan y si la de este conductor ya esta cogida."""
+    quien = (await _tienda_desc_doc()).get("quien") or []
+    return {
+        "pct": _TIENDA_DESC_PCT,
+        "plazas": _TIENDA_DESC_PRIMEROS,
+        "quedan": max(0, _TIENDA_DESC_PRIMEROS - len(quien)),
+        # `para_ti` es lo unico que el movil necesita para pintar el precio.
+        # Quien YA la gasto no vuelve a tenerla: "los cinco primeros" son cinco
+        # pedidos, no cinco personas con el 15 % de por vida.
+        "para_ti": bool(did) and did not in quien and len(quien) < _TIENDA_DESC_PRIMEROS,
+        "gastada": bool(did) and did in quien,
+    }
+
+
+async def _tienda_desc_pedir(did: str) -> bool:
+    """Coge una plaza para este conductor. En UNA operacion, no en tres.
+
+    Contar en Python y decidir despues no protege de dos pedidos a la vez
+    (gotcha 46): con cuatro plazas dadas, tres conductores pulsando a la vez
+    pasarian los tres y saldrian ocho descuentos. Aqui la condicion viaja
+    DENTRO del filtro, asi que Mongo solo deja pasar a uno.
+    """
+    if not did:
+        return False
+    await _tienda_desc_doc()
+    r = await db[_TCOL_CONFIG].update_one(
+        {"_id": _TIENDA_DESC_ID,
+         "quien": {"$ne": did},
+         "$expr": {"$lt": [{"$size": {"$ifNull": ["$quien", []]}}, _TIENDA_DESC_PRIMEROS]}},
+        {"$addToSet": {"quien": did}})
+    # Solo cuenta si la plaza se coge AQUI. Si ya estaba cogida por un pedido
+    # vivo suyo, no hay segunda: la plaza se gasta con el pedido y solo vuelve
+    # si ese pedido se anula.
+    return r.modified_count == 1
+
+
+async def _tienda_desc_soltar(did: str) -> None:
+    """Devuelve la plaza al anularse el pedido que la uso.
+
+    Sin esto, cinco pedidos anulados dejarian el descuento agotado para siempre
+    sin haber vendido nada — el mismo agujero que las unidades del drop.
+    """
+    if did:
+        await db[_TCOL_CONFIG].update_one({"_id": _TIENDA_DESC_ID},
+                                          {"$pull": {"quien": did}})
+
 
 async def _tienda_conf() -> dict:
     """La configuracion de la tienda, con los valores por defecto puestos."""
@@ -42288,6 +42359,10 @@ async def tienda_escaparate(user: dict = Depends(require_any_auth)):
         # Ni prendas ni precios ni fechas: apagada es apagada.
         return {"visible": False}
     prendas = await _tienda_prendas_publicas()
+    # EL DESCUENTO LO CALCULA EL SERVIDOR y el movil solo lo pinta, igual que
+    # el recargo de las tallas grandes: con una copia del 15 % en el cliente,
+    # el dia que cambie se veria un precio y se cobraria otro.
+    desc = await _tienda_desc_estado(_tienda_driver(user))
     # NI CIERRE NI MINIMO. Los dos eran del pedido agrupado: habia que esperar
     # al viernes y juntar 30 prendas o no salia ninguna, y eso obligaba a
     # contarselo al conductor —"si no se llega, se devuelve"— que es pedirle
@@ -42300,6 +42375,7 @@ async def tienda_escaparate(user: dict = Depends(require_any_auth)):
         "visible": True,
         "aviso": conf["aviso"],
         "pasarela": conf["pasarela"],
+        "descuento": desc,
         "prendas": [{
             "id": p["id"], "nombre": p.get("nombre"), "tipo": p.get("tipo"),
             "color": p.get("color"), "tallas": p.get("tallas") or [],
@@ -42378,7 +42454,30 @@ async def tienda_crear_pedido(body: dict = Body(...), user: dict = Depends(requi
         total += precio * uds
         unidades += uds
 
-    ficha = await db.drivers.find_one({"id": did}, {"_id": 0, "name": 1, "center": 1, "email": 1})
+    # LA PLAZA SE COGE AQUI, con las lineas ya montadas y antes de guardar.
+    # Se aplica LINEA A LINEA y no al total, porque lo que Stripe cobra son las
+    # lineas: descontando solo el total, el conductor veria 63,66 y la pantalla
+    # de la tarjeta le pediria 74,90.
+    pct = _TIENDA_DESC_PCT if await _tienda_desc_pedir(did) else 0.0
+    if pct:
+        total = 0.0
+        for l in lineas:
+            l["precio_sin_descuento"] = l["precio"]
+            l["precio"] = round(l["precio"] * (1 - pct), 2)
+            l["importe"] = round(l["precio"] * l["cantidad"], 2)
+            total += l["importe"]
+
+    ficha = await db.drivers.find_one({"id": did}, {"_id": 0, "name": 1, "center": 1})
+    # EL CORREO DEL PEDIDO NO PUEDE SER EL DE LA FICHA. En la ficha esta el
+    # del trabajo -123 de 140 son @winiw.es-, y a ese buzon el conductor NO
+    # tiene acceso: el justificante de una compra suya, pagada con su dinero,
+    # acabaria en un correo de la empresa que el no puede abrir. Se usa el que
+    # escriba, y si no el de su cuenta de la tienda, que se puso el mismo.
+    # Si no hay ninguno se deja vacio A PROPOSITO: la pantalla de Stripe pide
+    # el correo cuando no se lo damos, y eso es mejor que mandarle el recibo a
+    # un sitio donde no lo va a leer nadie.
+    cuenta = await db[_TCOL_CLIENTES].find_one(
+        {"driver_id": did, "activo": {"$ne": False}}, {"_id": 0, "email": 1})
     ahora = datetime.now(timezone.utc)
     doc = {
         "id": str(uuid.uuid4()),
@@ -42386,8 +42485,10 @@ async def tienda_crear_pedido(body: dict = Body(...), user: dict = Depends(requi
         "ref": "P-%s-%s" % (ahora.strftime("%y%m%d"), uuid.uuid4().hex[:4].upper()),
         "driver_id": did, "driver_nombre": (ficha or {}).get("name") or "",
         "centro": (ficha or {}).get("center") or "",
-        "email": _texto_cuerpo(body.get("email"), 160).lower() or ((ficha or {}).get("email") or ""),
+        "email": (_texto_cuerpo(body.get("email"), 160).lower()
+                  or ((cuenta or {}).get("email") or "")),
         "lineas": lineas, "total": round(total, 2), "unidades": unidades,
+        "descuento_pct": pct,
         "cierre": _tienda_cierre(conf["dia_cierre"]),
         "estado": "pendiente_pago",
         "creado_en": ahora.isoformat(),
@@ -42400,6 +42501,8 @@ async def tienda_crear_pedido(body: dict = Body(...), user: dict = Depends(requi
         # reclamarlas.
         for pid, n_uds in apartadas:
             await _tienda_devolver(pid, n_uds)
+        if pct:
+            await _tienda_desc_soltar(did)
         raise
     return _tienda_pedido_publico(doc)
 
@@ -42449,25 +42552,74 @@ async def tienda_pedidos_oficina(_=Depends(require_admin)):
     """La tanda que se esta juntando, para saber si sale y que hay que pedir."""
     conf = await _tienda_conf()
     cierre = _tienda_cierre(conf["dia_cierre"])
-    docs = await db[_TCOL_PEDIDOS].find(
-        {"estado": {"$ne": "anulado"}}, {"_id": 0}).sort("creado_en", -1).to_list(500)
-    tanda = [p for p in docs if p.get("cierre") == cierre]
+    # LOS ANULADOS TAMBIEN VIENEN. Antes se filtraban en la consulta, asi que
+    # un pedido que se cae desaparecia de la pantalla y no habia forma de saber
+    # si hubo diez ventas o veinte con la mitad caidas (gotcha 30: lo que no
+    # entra en ningun cajon deja de existir). Vienen marcados y la pantalla los
+    # separa; para las cuentas se cuentan aparte.
+    docs = await db[_TCOL_PEDIDOS].find({}, {"_id": 0}).sort("creado_en", -1).to_list(500)
+    vivos = [p for p in docs if p.get("estado") != "anulado"]
+    tanda = [p for p in vivos if p.get("cierre") == cierre]
     # Que hay que pedirle al taller: agrupado por prenda y talla, que es como
     # se encarga. Sumar a mano una lista de pedidos es como se equivoca uno.
+    # QUE HAY QUE ENCARGAR: solo de lo PAGADO. Antes entraba toda la tanda,
+    # pendientes incluidos, y con la tarjeta eso es comprarle al proveedor
+    # prendas de pedidos que nadie ha pagado. Lo que aun no esta cobrado va en
+    # su propia lista, para verlo venir sin gastarse el dinero.
     resumen: dict = {}
+    pendiente: dict = {}
     for p in tanda:
+        cajon = resumen if p.get("estado") in ("pagado", "encargado", "entregado") else pendiente
         for l in p.get("lineas") or []:
             k = "%s · %s" % (l.get("nombre"), l.get("talla"))
-            resumen[k] = resumen.get(k, 0) + int(l.get("cantidad") or 0)
+            cajon[k] = cajon.get(k, 0) + int(l.get("cantidad") or 0)
     uds = sum(int(p.get("unidades") or 0) for p in tanda)
+
+    # LAS CUENTAS, SIN EL CORTE POR SEMANA. La tanda sirve para saber que
+    # encargar; para saber cuanto se ha vendido, cortar por `cierre` esconde
+    # todo lo de las semanas anteriores.
+    costes = {x["id"]: x.get("coste") for x in await db[_PRENDAS_COL].find(
+        {}, {"_id": 0, "id": 1, "coste": 1}).to_list(200)}
+    mes = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    def _cuenta(lista):
+        cobrado = round(sum(float(x.get("total") or 0) for x in lista), 2)
+        coste = 0.0
+        for x in lista:
+            for l in x.get("lineas") or []:
+                c = costes.get(l.get("prenda"))
+                if c is not None:
+                    coste += float(c) * int(l.get("cantidad") or 0)
+        # Lo que queda descuenta ademas IVA, envio, pasarela y colchon: es el
+        # mismo calculo que se le ensena a cada prenda, no el bruto.
+        gastos = round(sum(_tienda_gastos(float(x.get("total") or 0)) for x in lista), 2)
+        neto = round(cobrado / (1 + _TIENDA_IVA), 2)
+        return {"pedidos": len(lista), "importe": cobrado,
+                "unidades": sum(int(x.get("unidades") or 0) for x in lista),
+                "coste": round(coste, 2), "gastos": gastos,
+                "queda": round(neto - coste - gastos, 2)}
+
+    pagados = [x for x in docs if x.get("estado") in ("pagado", "encargado", "entregado")]
+    ventas = {
+        "pagado": _cuenta(pagados),
+        "pendiente": _cuenta([x for x in docs if x.get("estado") == "pendiente_pago"]),
+        "anulado": _cuenta([x for x in docs if x.get("estado") == "anulado"]),
+        "mes": _cuenta([x for x in pagados if (x.get("creado_en") or "")[:7] == mes]),
+        "de_fuera": sum(1 for x in pagados if x.get("externo")),
+        "de_la_nave": sum(1 for x in pagados if not x.get("externo")),
+    }
     return {
         "config": conf, "cierre": cierre,
         "unidades": uds, "minimo": conf["minimo"],
         "sale": uds >= conf["minimo"],
         "importe": round(sum(float(p.get("total") or 0) for p in tanda), 2),
         "pagados": sum(1 for p in tanda if p.get("estado") == "pagado"),
+        "ventas": ventas,
+        "descuento": await _tienda_desc_estado(),
         "para_el_taller": [{"que": k, "unidades": v}
                            for k, v in sorted(resumen.items(), key=lambda x: (-x[1], x[0]))],
+        "aun_sin_cobrar": [{"que": k, "unidades": v}
+                           for k, v in sorted(pendiente.items(), key=lambda x: (-x[1], x[0]))],
         "pedidos": docs,
     }
 
@@ -42504,8 +42656,9 @@ async def tienda_marcar_pedido(pedido_id: str, body: dict = Body(...),
     estado = _texto_cuerpo(body.get("estado"), 20)
     if estado not in ("pendiente_pago", "pagado", "encargado", "entregado", "anulado"):
         raise HTTPException(400, "Ese estado no existe")
-    previo = await db[_TCOL_PEDIDOS].find_one({"id": pedido_id},
-                                              {"_id": 0, "estado": 1, "lineas": 1})
+    previo = await db[_TCOL_PEDIDOS].find_one(
+        {"id": pedido_id},
+        {"_id": 0, "estado": 1, "lineas": 1, "descuento_pct": 1, "driver_id": 1})
     if not previo:
         raise HTTPException(404, "Ese pedido no existe")
     # ANULAR DEVUELVE LAS UNIDADES AL DROP. Las aparta el pedido al crearse, asi
@@ -42516,6 +42669,10 @@ async def tienda_marcar_pedido(pedido_id: str, body: dict = Body(...),
     if estado == "anulado" and previo.get("estado") != "anulado":
         for l in (previo.get("lineas") or []):
             await _tienda_devolver(l.get("prenda"), int(l.get("cantidad") or 0))
+        # Y la plaza del descuento, por lo mismo: cinco pedidos anulados
+        # dejarian la promocion agotada sin haber vendido nada.
+        if previo.get("descuento_pct"):
+            await _tienda_desc_soltar(previo.get("driver_id") or "")
     # Y desanular vuelve a apartarlas, si es que quedan.
     elif previo.get("estado") == "anulado" and estado != "anulado":
         for l in (previo.get("lineas") or []):
@@ -42813,6 +42970,70 @@ def _stripe_firma_ok(raw: bytes, cabecera: str, secreto: str) -> bool:
                          str(ts).encode() + b"." + raw, _hashlib.sha256).hexdigest()
     # Stripe puede mandar varias v1 durante una rotacion de secreto.
     return any(_hmac.compare_digest(esperado, v) for v in partes.get("v1", []))
+
+
+@api_router.post("/tienda/pedido/{pedido_id}/anular")
+async def tienda_anular_mi_pedido(pedido_id: str, user: dict = Depends(require_any_auth)):
+    """El conductor se echa atras con un pedido que aun no ha pagado.
+
+    Hasta ahora solo podia anularlo la oficina, asi que quien se equivocaba de
+    talla tenia que escribir a alguien — y mientras tanto su unidad seguia
+    apartada del drop, contando como vendida sin estarlo. Que lo haga el mismo
+    es ademas lo unico que devuelve las cosas a su sitio en el momento.
+
+    Solo lo SUYO y solo si esta pendiente de pago: el dueño va en el filtro,
+    no en un `if` posterior, para que no haya forma de anular el de otro ni
+    por un error de programacion. Lo ya pagado no se toca desde aqui — eso es
+    una devolucion, con su dinero de por medio, y la ve una persona.
+    """
+    did = _tienda_driver(user)
+    p = await db[_TCOL_PEDIDOS].find_one(
+        {"id": pedido_id, "driver_id": did},
+        {"_id": 0, "estado": 1, "lineas": 1, "descuento_pct": 1})
+    if not p:
+        raise HTTPException(404, "Ese pedido no existe")
+    if p.get("estado") != "pendiente_pago":
+        raise HTTPException(409, "Ese pedido ya no se puede anular: habla con la oficina")
+    # La condicion viaja en el filtro: dos toques seguidos al boton no pueden
+    # devolver las unidades dos veces (gotcha 46).
+    r = await db[_TCOL_PEDIDOS].update_one(
+        {"id": pedido_id, "driver_id": did, "estado": "pendiente_pago"},
+        {"$set": {"estado": "anulado", "estado_por": "el conductor",
+                  "estado_at": datetime.now(timezone.utc).isoformat()}})
+    if not r.modified_count:
+        raise HTTPException(409, "Ese pedido ya no se puede anular")
+    for l in (p.get("lineas") or []):
+        await _tienda_devolver(l.get("prenda"), int(l.get("cantidad") or 0))
+    if p.get("descuento_pct"):
+        await _tienda_desc_soltar(did)
+    return {"ok": True, "estado": "anulado"}
+
+
+@api_router.delete("/tienda/pedidos/{pedido_id}")
+async def tienda_borrar_pedido(pedido_id: str, user: dict = Depends(require_admin)):
+    """Quita de la lista un pedido ya anulado. Para las pruebas, sobre todo.
+
+    SOLO lo que ya esta anulado, y esa guarda es el punto: anular es lo que
+    devuelve las unidades al drop y la plaza del descuento, asi que borrar de
+    golpe un pedido vivo dejaria el drop mordido para siempre sin nadie a quien
+    reclamar. El camino es siempre el mismo: anular primero -reversible- y
+    borrar despues.
+    Queda apuntado en `audit_log`: un borrado sin rastro es como se pierden las
+    cosas sin que nadie sepa cuando (gotcha 45).
+    """
+    p = await db[_TCOL_PEDIDOS].find_one({"id": pedido_id},
+                                         {"_id": 0, "estado": 1, "ref": 1, "total": 1})
+    if not p:
+        raise HTTPException(404, "Ese pedido no existe")
+    if p.get("estado") != "anulado":
+        raise HTTPException(409, "Solo se borran pedidos anulados: anulalo primero")
+    await db[_TCOL_PEDIDOS].delete_one({"id": pedido_id, "estado": "anulado"})
+    await db.audit_log.insert_one({
+        "que": "tienda_pedido_borrado", "pedido": pedido_id, "ref": p.get("ref"),
+        "total": p.get("total"),
+        "quien": user.get("name") or user.get("username") or "",
+        "at": datetime.now(timezone.utc).isoformat()})
+    return {"ok": True, "borrado": pedido_id}
 
 
 @api_router.post("/tienda/pedido/{pedido_id}/pagar")
