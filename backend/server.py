@@ -41076,10 +41076,18 @@ _RECARGO_TALLA_DEF = 3.00
 #     es el caso caro; la estandar es 1,5%).
 #   · COLCHON: cambios de talla, una prenda que llega mal, un envio perdido.
 #     No es pesimismo: es lo que evita que el primer incidente se coma la tanda.
-_TIENDA_ENVIO_UD = 2.50
+# SUBIDOS EL 08-09-2026, y no por prudencia abstracta: los dos estaban cortos.
+#   · ENVIO. Se puso 2,50 contando con que todo iria en una tanda agrupada.
+#     Pero Printful cobra el primer articulo entero — 4,49 la camiseta, 6,59
+#     la sudadera, 8,29 el pantalon — y al principio los pedidos van a salir
+#     de uno en uno. Con 2,50 la primera venta suelta ya perdia dinero.
+#   · COLCHON. Un 3% de una camiseta son 75 centimos; un cambio de talla de
+#     una sudadera cuesta 30 EUR. Con quince unidades, UN solo cambio son dos
+#     euros por unidad. El 5% lo cubre; el 3% no.
+_TIENDA_ENVIO_UD = 4.00
 _TIENDA_PASARELA_PCT = 0.019
 _TIENDA_PASARELA_FIJO = 0.25
-_TIENDA_COLCHON_PCT = 0.03
+_TIENDA_COLCHON_PCT = 0.05
 
 
 def _tienda_gastos(pvp: float) -> float:

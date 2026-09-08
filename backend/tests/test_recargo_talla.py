@@ -108,8 +108,8 @@ def test_el_recargo_cubre_lo_que_cobra_printful():
     empieza a dar menos que la normal.
     """
     IVA, SOBRECOSTE = 0.21, 1.57
-    base_neto = 24.90 / (1 + IVA)
-    gran_neto = PRECIO({"pvp": 24.90, "recargo_talla": DEF}, "XXL") / (1 + IVA)
+    base_neto = 29.90 / (1 + IVA)
+    gran_neto = PRECIO({"pvp": 29.90, "recargo_talla": DEF}, "XXL") / (1 + IVA)
     assert gran_neto - (7.72 + SOBRECOSTE) >= base_neto - 7.72
 
 
@@ -184,8 +184,8 @@ CUENTAS = _cargar_cuentas()
 
 
 def test_lo_que_queda_es_menos_que_el_bruto():
-    c = CUENTAS({"coste": 7.72, "pvp": 24.90})
-    assert c["margen_pct"] == 62          # el bruto de siempre, que se sigue dando
+    c = CUENTAS({"coste": 7.72, "pvp": 29.90})
+    assert c["margen_pct"] == 69          # el bruto de siempre, que se sigue dando
     assert c["queda_pct"] == 43           # el que llega a la cuenta
     assert c["queda"] < c["margen"]
     assert round(c["margen"] - c["gastos"], 2) == c["queda"]
@@ -194,11 +194,15 @@ def test_lo_que_queda_es_menos_que_el_bruto():
 def test_los_ocho_productos_de_printful_dan_lo_que_dicen():
     """Los costes son los MEDIDOS en el catalogo el 07-09-2026. Si alguien
     cambia un precio de venta a la baja sin mirar, esto lo dice."""
+    # Precios y costes REALES del 08-09-2026, con los productos que Dani ha
+    # montado de verdad en Printful — que no son todos los que se apuntaron:
+    # el hoodie es el premium (29,74, no 23,39) y la gorra la trucker de malla
+    # (18,75, no 16,65).
     catalogo = [
-        ("camiseta", 7.72, 24.90, 43), ("camiseta mujer", 7.72, 24.90, 43),
-        ("sudadera", 17.90, 49.90, 44), ("hoodie", 23.39, 59.90, 41),
-        ("cortavientos", 22.16, 59.90, 44), ("chandal", 32.06, 79.90, 41),
-        ("gorra", 16.65, 39.90, 35), ("gorro", 14.18, 34.90, 35),
+        ("camiseta", 7.72, 29.90, 43), ("camiseta entallada", 7.72, 29.90, 43),
+        ("sudadera", 17.90, 59.90, 47), ("hoodie", 29.74, 74.90, 37),
+        ("cortavientos", 22.16, 69.90, 46), ("chandal", 32.06, 89.90, 43),
+        ("gorra", 18.75, 49.90, 36), ("gorro", 14.18, 39.90, 36),
     ]
     for nombre, coste, pvp, pct in catalogo:
         c = CUENTAS({"coste": coste, "pvp": pvp})
@@ -216,6 +220,9 @@ def test_el_precio_que_no_da_margen_se_ve():
     c = CUENTAS({"coste": 15.04, "pvp": 19.90})
     assert c["margen"] > 0            # el bruto aun parece positivo
     assert c["queda"] < 0             # y de verdad se pierde
+    # Y con el envio real (4 EUR, no 2,50) la perdida es aun mayor: subir esa
+    # partida no fue prudencia, fue corregir un numero que estaba mal.
+    assert c["queda"] < -2
 
 
 def test_sin_precio_no_hay_cuentas():
