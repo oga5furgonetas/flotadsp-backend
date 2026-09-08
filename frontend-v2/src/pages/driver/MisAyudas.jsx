@@ -5,11 +5,15 @@ import { getMisAyudas } from '../../services/api'
 /* AYUDAS DE ESTE MES — las veces que ha sacado de un apuro a un compañero.
    ═══════════════════════════════════════════════════════════════════════
    Es el único número del portal que no se puede mejorar escondiendo un
-   problema: para que suba hay que ir y entregar la parada.
-   Dos decisiones que evitan que mienta:
-   · Una parada suma cuando el que fue a ayudar la marca como hecha. Es él
-     diciendo que la hizo, no una suposición nuestra.
-   · Un apoyo anulado no cuenta, aunque tuviera paradas asignadas.
+   problema: para que suba hay que ir y entregar el paquete.
+
+   EL NÚMERO SALE DE CORTEX, no de lo que alguien apunte. Antes se contaba
+   sobre `apoyos` —lo que la oficina registra a mano al pasar paradas por
+   WhatsApp— y por eso a gente que ayuda a diario le salía un CERO: en
+   septiembre de 2026 había 18 apuntes en toda la empresa mientras Cortex
+   enseñaba 30 de 48 rutas con más de un transportista solo el día 7. Ahora se
+   cuentan los paquetes entregados en una ruta cuyo titular es otro, que es lo
+   que Cortex responde y además cuadra con su pantalla.
    Y se enseña también lo que a él le ayudaron, para que echar una mano no
    acabe pareciendo la lista de los tontos. */
 
@@ -59,32 +63,31 @@ export default function MisAyudas({ onBack }) {
                 {(datos.paquetes ?? datos.hechas) === 1 ? 'paquete salvado' : 'paquetes salvados'} este mes
               </p>
               <p className="mt-1 text-[12.5px] text-dark-400">
-                {datos.hechas > 0 && <>{datos.hechas} {datos.hechas === 1 ? 'parada' : 'paradas'} · </>}
                 {datos.veces === 0
-                  ? 'Aún no hay ninguna ayuda tuya apuntada este mes'
-                  : <>en {datos.veces} {datos.veces === 1 ? 'salida' : 'salidas'}, de {datos.asignadas} que te pasaron</>}
+                  ? 'Este mes no has entrado en la ruta de nadie'
+                  : <>en {datos.veces} {datos.veces === 1 ? 'salida' : 'salidas'} a rutas de otros</>}
               </p>
             </div>
 
             {/* Si le pasaron paradas y no las marcó, se le dice: si no, el
                 contador se queda a cero y parece que la pantalla no funciona. */}
-            {/* UN CERO NO ES UNA NOTA. Aquí solo cuentan las ayudas que la
-                oficina apunta en el sistema, y el módulo se estrenó el
-                02-09-2026: en toda la empresa hay muy pocas. Sin decirlo, a
-                quien echa una mano todos los días le sale un 0 que parece un
-                juicio sobre él. */}
+            {/* UN CERO NO ES UNA NOTA, y por eso se dice de dónde sale el
+                número. Esto ya no depende de que nadie lo apunte: se cuenta
+                de Cortex —paquetes que entregaste en una ruta cuyo titular es
+                otro—, así que un cero aquí sí significa algo. */}
             {datos.veces === 0 && (
               <div className="rounded-2xl border border-dark-700/60 bg-dark-900/70 px-4 py-3.5 text-[12.5px] leading-relaxed text-dark-400">
-                Aquí solo salen las ayudas que la oficina apunta al pasarte las paradas
-                {datos.equipo_veces >= 0 && <> — este mes hay <b className="text-dark-200">{datos.equipo_veces}</b> apuntadas en toda la empresa</>}.
-                Si echaste una mano y no aparece, díselo y te la añaden.
+                Cuentan los paquetes que entregas en la ruta de otro, y sale de Cortex:
+                no hace falta que nadie lo apunte
+                {datos.equipo_veces > 0 && <> — este mes ha habido <b className="text-dark-200">{datos.equipo_veces}</b> salidas así en la empresa</>}.
               </div>
             )}
 
             {pendientesDeMarcar > 0 && (
               <div className="rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3.5 text-[12.5px] leading-relaxed text-amber-200/90">
                 Tienes {pendientesDeMarcar} {pendientesDeMarcar === 1 ? 'parada' : 'paradas'} sin marcar en el enlace que
-                te llegó por WhatsApp. Márcalas al hacerlas y cuentan aquí.
+                te llegó por WhatsApp. Márcalas al hacerlas: así la oficina sabe cómo vas
+                sin tener que llamarte. Lo de arriba lo cuenta Cortex solo.
               </div>
             )}
 

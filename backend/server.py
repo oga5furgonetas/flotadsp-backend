@@ -18514,61 +18514,154 @@ async def _apoyo_hechas_de(apoyos: list) -> dict:
     return out
 
 
+# ---------------------------------------------------------------------------
+# AYUDAS MEDIDAS EN CORTEX, no las que alguien se acuerde de apuntar
+# ---------------------------------------------------------------------------
+"""Quien ha echado una mano de verdad sale de Cortex, no de `apoyos`.
+
+`apoyos` es lo que la oficina registra a mano al pasar paradas por WhatsApp, y
+por eso el portal decia CERO a gente que ayuda todos los dias: en septiembre de
+2026 habia 18 apuntes en toda la empresa mientras Cortex ensenaba, solo el dia
+7, **30 de 48 rutas con mas de un transportista**. El dato estaba, en un sitio
+donde no se habia mirado.
+
+Como se mide, y por que asi:
+  · el TITULAR de una ruta lo dice Cortex (`cortex_resumen.rutas[].transporterId`,
+    uno por ruta). No se adivina por «quien lleva mas paradas»: eso es una
+    suposicion y aqui hay una respuesta;
+  · quien entrego cada paquete lo dice `cortex_packages.driver_id` —que guarda
+    el transporter, no el id de la ficha—, y se cuenta por PAQUETE porque es lo
+    que cuadra con Cortex: el 07-09 en la XA_C18, 38 + 28 = los 66 que dice
+    Cortex, mientras las paradas bailan una arriba o abajo por los portales
+    compartidos;
+  · `driver_name` NO sirve para agrupar: solo lo trae el 49,7 % de los
+    paquetes, y el mismo id aparece con nombres distintos. Se agrupa por id y
+    el nombre se resuelve aparte.
+
+EL MINIMO NO ES UN ADORNO. Medido sobre septiembre entero: de 156 casos de
+«alguien entrego en ruta ajena», 43 son de UN paquete y 17 de dos —el 38 %—, y
+eso no es ir a ayudar: es un paquete que cambio de furgoneta en la nave. Sin
+minimo, todo el mundo saldria ayudando todos los dias y el numero dejaria de
+significar nada. Con 3, quedan las salidas de verdad.
+"""
+
+_AYUDA_MIN_PAQUETES = 3
+
+
+async def _ayuda_titulares(mes: str) -> dict:
+    """{(dia, ruta): transporter del titular}, segun Cortex."""
+    out = {}
+    async for d in db.cortex_resumen.find(
+            {"dia": {"$regex": "^" + mes}}, {"_id": 0, "dia": 1, "rutas": 1}):
+        for r in (d.get("rutas") or []):
+            if r.get("routeCode") and r.get("transporterId"):
+                out[(d["dia"], r["routeCode"])] = r["transporterId"]
+    return out
+
+
+async def _ayuda_nombres(mes: str) -> dict:
+    """{transporter: nombre}. De `cortex_resumen.gente`, que lo trae entero."""
+    out = {}
+    async for d in db.cortex_resumen.find(
+            {"dia": {"$regex": "^" + mes}}, {"_id": 0, "gente": 1}):
+        for g in (d.get("gente") or []):
+            if g.get("transporterId") and g.get("nombre"):
+                out.setdefault(g["transporterId"], g["nombre"])
+    return out
+
+
+async def _ayudas_del_mes(mes: str) -> list:
+    """Una entrada por (dia, ruta, quien entrego) con sus paquetes entregados.
+
+    UNA sola agregacion para todo el mes: son ~525 grupos. Preguntar ruta por
+    ruta serian cientos de viajes a la base para la misma respuesta (gotcha 63).
+    """
+    cur = db.cortex_packages.aggregate([
+        {"$match": {"service_day": {"$regex": "^" + mes}, "state": "DELIVERED"}},
+        {"$group": {"_id": {"d": "$service_day", "r": "$route_code", "t": "$driver_id"},
+                    "paq": {"$sum": 1}}},
+    ])
+    out = []
+    async for a in cur:
+        k = a["_id"]
+        # Mongo OMITE la clave cuando el campo no existe (gotcha 14).
+        if k.get("d") and k.get("r") and k.get("t"):
+            out.append((k["d"], k["r"], k["t"], a["paq"]))
+    return out
+
+
+def _ayudas_reparte(grupos: list, titulares: dict, mias: set) -> dict:
+    """Reparte los grupos en: lo que hice yo, lo que me hicieron y el total.
+
+    Aparte y sin base de datos a proposito, para poder probarla con casos
+    escritos a mano.
+    """
+    hice, recibi, equipo = [], [], 0
+    for dia, ruta, quien, paq in grupos:
+        tit = titulares.get((dia, ruta))
+        if not tit or tit == quien or paq < _AYUDA_MIN_PAQUETES:
+            continue
+        equipo += paq
+        if quien in mias:
+            hice.append({"dia": dia, "ruta": ruta, "de": tit, "paquetes": paq})
+        elif tit in mias:
+            recibi.append({"dia": dia, "ruta": ruta, "quien": quien, "paquetes": paq})
+    hice.sort(key=lambda x: (x["dia"], x["ruta"]), reverse=True)
+    recibi.sort(key=lambda x: (x["dia"], x["ruta"]), reverse=True)
+    return {"hice": hice, "recibi": recibi, "equipo": equipo}
+
+
 @api_router.get("/portal/mis-ayudas")
 async def portal_mis_ayudas(user: dict = Depends(require_any_auth)):
-    """Las veces que ha sacado de un apuro a un companero, y las que se lo hicieron a el."""
-    mis_ids, tids, center = await _portal_quien_es(user)
-    claves = list(mis_ids | tids)      # el que ayuda puede ir por ficha o por transporter
-    mes = _apoyo_hoy()[:7]
-    vivos = {"$nin": ["anulado"]}      # un apoyo anulado no ocurrio
+    """Las veces que ha sacado de un apuro a un companero, y las que se lo hicieron a el.
 
+    EL NUMERO SALE DE CORTEX. Antes salia de `apoyos` —lo que la oficina apunta
+    a mano al pasar paradas por WhatsApp— y por eso a gente que ayuda todos los
+    dias le ponia un cero: en septiembre de 2026 habia 18 apuntes en toda la
+    empresa. Un cero asi no es un dato, es un juicio sobre alguien.
+    Los apoyos apuntados se siguen leyendo, pero solo para lo que aportan y
+    Cortex no sabe: cuantas paradas le PASARON y cuantas quedan por marcar.
+    """
+    mis_ids, tids, center = await _portal_quien_es(user)
+    claves = list(mis_ids | tids)
+    mes = _apoyo_hoy()[:7]
+
+    titulares, nombres, grupos = await asyncio.gather(
+        _ayuda_titulares(mes), _ayuda_nombres(mes), _ayudas_del_mes(mes))
+    r = _ayudas_reparte(grupos, titulares, set(tids))
+
+    paquetes = sum(x["paquetes"] for x in r["hice"])
+    gracias = [{"nombre": nombres.get(x["de"], ""), "dia": x["dia"], "ruta": x["ruta"],
+                "paquetes": x["paquetes"], "hechas": x["paquetes"], "paradas": x["paquetes"],
+                "nota": ""} for x in r["hice"]]
+    me_ayudaron = [{"nombre": nombres.get(x["quien"], ""), "dia": x["dia"],
+                    "paquetes": x["paquetes"], "paradas": x["paquetes"]} for x in r["recibi"]]
+
+    # Lo apuntado a mano: cuantas paradas le pasaron y cuantas dejo sin marcar.
+    # Es lo unico de `apoyos` que Cortex no puede contestar.
+    vivos = {"$nin": ["anulado"]}
     ayude = await db.apoyos.find(
         {"dia": {"$regex": "^" + mes}, "fase": vivos, "a.driver_id": {"$in": claves}},
-        {"_id": 0, "id": 1, "dia": 1, "de": 1, "paradas": 1, "nota": 1, "created_at": 1}).sort("dia", -1).to_list(200)
-    recibi = await db.apoyos.find(
-        {"dia": {"$regex": "^" + mes}, "fase": vivos, "de.driver_id": {"$in": claves}},
-        {"_id": 0, "id": 1, "dia": 1, "a": 1, "paradas": 1}).sort("dia", -1).to_list(200)
-    todos = await db.apoyos.find(
-        {"dia": {"$regex": "^" + mes}, "fase": vivos},
-        {"_id": 0, "id": 1, "dia": 1, "paradas": 1}).to_list(2000)
-    # Una sola pasada por Cortex para los tres: los del mes entero.
-    hecho = await _apoyo_hechas_de(todos + ayude + recibi)
-
-    hechas = asignadas = paquetes = 0
-    gracias = []
-    for a in ayude:
-        par, pkg = hecho.get(a.get("id"), (0, 0))
-        asignadas += len(a.get("paradas") or [])
-        hechas += par
-        paquetes += pkg
-        gracias.append({"nombre": (a.get("de") or {}).get("nombre") or "", "dia": a.get("dia"),
-                        "ruta": (a.get("de") or {}).get("ruta") or "",
-                        "paradas": len(a.get("paradas") or []), "hechas": par, "paquetes": pkg,
-                        "nota": a.get("nota") or ""})
-
-    me_ayudaron = [{"nombre": (a.get("a") or {}).get("nombre") or "", "dia": a.get("dia"),
-                    "paradas": hecho.get(a.get("id"), (0, 0))[0],
-                    "paquetes": hecho.get(a.get("id"), (0, 0))[1]} for a in recibi]
-
-    equipo = sum(hecho.get(a.get("id"), (0, 0))[1] for a in todos)
+        {"_id": 0, "id": 1, "dia": 1, "paradas": 1}).to_list(200)
+    hecho = await _apoyo_hechas_de(ayude)
+    asignadas = sum(len(a.get("paradas") or []) for a in ayude)
+    hechas = sum(hecho.get(a.get("id"), (0, 0))[0] for a in ayude)
 
     return {"mes": mes, "centro": center,
-            "hechas": hechas, "asignadas": asignadas, "paquetes": paquetes, "veces": len(ayude),
+            "hechas": hechas, "asignadas": asignadas,
+            "paquetes": paquetes, "veces": len(r["hice"]),
             "gracias": gracias[:20],
-            "me_ayudaron": {"veces": len(recibi),
-                            "paradas": sum(x["paradas"] for x in me_ayudaron),
-                            "paquetes": sum(x["paquetes"] for x in me_ayudaron),
+            "me_ayudaron": {"veces": len(r["recibi"]),
+                            "paradas": sum(x["paquetes"] for x in r["recibi"]),
+                            "paquetes": sum(x["paquetes"] for x in r["recibi"]),
                             "quien": me_ayudaron[:10]},
-            # CUANTAS HAY APUNTADAS EN TODA LA EMPRESA. Sin este numero, un
-            # cero se lee como "no has ayudado a nadie", y eso es una
-            # afirmacion sobre la PERSONA cuando lo unico cierto es que no hay
-            # nada apuntado: el modulo se estreno el 02-09-2026 y una ayuda
-            # solo cuenta si la oficina la registra. Con el, la pantalla puede
-            # decir la verdad —«aun no se apunta casi nada»— en vez de darle a
-            # entender a alguien que echa una mano todos los dias que no lo
-            # hace. Es el gotcha 33/34 de siempre: un cero parece un hallazgo.
-            "equipo_veces": len(todos),
-            "equipo": equipo}
+            # Cuantas salidas de ayuda hay en toda la empresa este mes. Sirve
+            # para que un cero se pueda leer bien: si en la empresa tampoco hay
+            # ninguna, es que ese dia no hizo falta ayudar a nadie.
+            "equipo_veces": sum(1 for g in grupos
+                                if titulares.get((g[0], g[1])) not in (None, g[2])
+                                and g[3] >= _AYUDA_MIN_PAQUETES),
+            "equipo": r["equipo"]}
 
 
 @api_router.get("/apoyo/situacion")
