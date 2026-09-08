@@ -19828,13 +19828,20 @@ prefijo y abre un numero que no existe (gotcha 47).
 """
 
 _ETT_COL = "etts"
-# El mensaje que abre WhatsApp. Con las tildes puestas: lo lee una persona
-# de la ETT, y un texto sin acentos parece escrito por una maquina.
+# El mensaje que abre WhatsApp. Con las tildes puestas: lo lee una persona de
+# la ETT, y un texto sin acentos parece escrito por una maquina.
+# LOS DATOS EN LINEAS SUELTAS y no metidos en un parrafo: al otro lado alguien
+# tiene que copiar el nombre y el telefono a su sistema, y de una frase corrida
+# se copia mal. Cada dato en su linea se selecciona de un toque en el movil.
 _ETT_PLANTILLA = (
-    "Hola, te env\u00edo este candidato para {puesto}.\n"
-    "Ya est\u00e1 contactado y le interesa trabajar.\n"
-    "Disponibilidad: {disponibilidad}.\n"
-    "Ciudad: {ciudad}.\n"
+    "Hola {contacto}, te adjunto este nuevo candidato para {puesto}.\n"
+    "Ya hemos hablado con \u00e9l y le interesa. Te dejo sus datos:\n"
+    "\n"
+    "Nombre: {candidato}\n"
+    "Tel\u00e9fono: {telefono}\n"
+    "Disponibilidad: {disponibilidad}\n"
+    "Ciudad: {ciudad}\n"
+    "\n"
     "Un saludo."
 )
 
@@ -19870,9 +19877,17 @@ def _ett_mensaje(ett: dict, c: dict) -> str:
         except Exception:                                        # noqa: BLE001
             puesta = linea          # una llave mal escrita no puede tumbar el envio
         if re.match(r"^[^:]{1,24}:\s*$", puesta.strip()):
-            continue                # "Disponibilidad:" a secas no se manda
+            continue                # "Tel\u00e9fono:" a secas no se manda
         salida.append(puesta)
-    return "\n".join(x for x in salida if x.strip())
+    # LAS LINEAS EN BLANCO SE RESPETAN: separan el saludo de los datos y sin
+    # ellas el mensaje sale como un ladrillo. Lo que se limpia es lo que deja
+    # un hueco al sustituir —"Hola , te adjunto" cuando la ETT no tiene persona
+    # de contacto— y los blancos de sobra si se cayo alguna linea entera.
+    texto = "\n".join(salida)
+    texto = re.sub(r"[ \t]{2,}", " ", texto)
+    texto = re.sub(r"\s+([,.:;])", r"\1", texto)
+    texto = re.sub(r"\n{3,}", "\n\n", texto)
+    return texto.strip()
 
 
 @api_router.get("/empleo/etts")
