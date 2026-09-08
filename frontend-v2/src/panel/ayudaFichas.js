@@ -251,6 +251,14 @@ export const AYUDA = {
     ],
     ojo: 'En 17 scorecards reales de OGA5, DSC salió como área de foco en 14 y fue la número 1 en 12. Es la pantalla con más recorrido de todas.',
   },
+  rendimiento: {
+    que: 'Cómo va cada conductor: lo que entrega, lo que reintenta, a quién ayuda y lo que le apunta Amazon.',
+    pasos: [
+      'Elige el periodo -hoy, siete días, treinta o el que quieras- y ordena por la columna que te interese.',
+      'Pulsa en una cabecera para ordenar por ella; la tabla no vuelve a pedir nada.',
+    ],
+    ojo: 'Las columnas se llenan de DOS sitios y no van al mismo ritmo. Ayudas, reintentos y DCR salen de Cortex y están al día; contacto, POD, RTS y DNR salen del reporte diario, que se sube a mano y llega con días de retraso. Arriba pone hasta qué día llega cada uno: un cero en contacto puede ser que no haya fallado o que aún no haya reporte de ese día.',
+  },
   contactos: {
     que: 'La agenda: talleres, proveedores, Amazon y quien haga falta.',
     pasos: ['Busca por nombre o por lo que hace.'],

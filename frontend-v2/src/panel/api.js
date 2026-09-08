@@ -110,6 +110,8 @@ export const uploadDriverPhoto = (id, file) => { const fd = new FormData(); fd.a
 
 /* ── Cuentas de conductor (acceso con contraseña) ── */
 /* Salud de las fichas: duplicadas por correo y Transporter IDs que faltan. */
+export const getRendimientoConductores = (params) =>
+  api.get('/conductores/rendimiento', { params })
 export const getDriversDuplicados = () => api.get('/drivers/duplicados')
 export const fusionarConductores = (body) => api.post('/drivers/fusionar', body)
 export const repasarFusiones = () => api.post('/drivers/fusiones/repasar')

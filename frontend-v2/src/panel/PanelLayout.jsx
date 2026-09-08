@@ -6,7 +6,7 @@ import {
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX,
-  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
+  PackageSearch, PackageCheck, MapPin, Timer, MapPinned, Gauge, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
   Briefcase, Store,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
@@ -91,6 +91,7 @@ const NAV_DEF = [
     { to: '/panel/diarios', labelKey: 'nav.diarios', icon: PackageX },
     { to: '/panel/whc', labelKey: 'nav.whc', icon: Timer },
     { to: '/panel/dsc', labelKey: 'nav.dsc', icon: MapPinned },
+    { to: '/panel/rendimiento', labelKey: 'nav.rendimiento', icon: Gauge },
     { to: '/panel/contactos', labelKey: 'nav.contacts', icon: BookUser },
   ]},
   { g: 'nav.g.system', gIcon: Settings, iconCls: 'text-dark-300', iconBg: 'bg-white/[0.07]', items: [

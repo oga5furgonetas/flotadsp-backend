@@ -18662,7 +18662,13 @@ def _ayudas_de_un_resumen(rutas: list, cuentas: list) -> dict:
     return out
 
 
-async def _ayuda_titulares(mes: str) -> dict:
+def _rango(desde: str, hasta: str) -> dict:
+    """El filtro de fechas, en un solo sitio. Las tres consultas de las ayudas
+    lo usaban con `^mes` y eso no sirve para «esta semana»."""
+    return {"$gte": desde, "$lte": hasta}
+
+
+async def _ayuda_titulares(desde: str, hasta: str) -> dict:
     """{(dia, nave, ruta): transporter del titular}, segun Cortex.
 
     LA NAVE VA EN LA CLAVE. `cortex_resumen` tiene un documento por centro y
@@ -18675,7 +18681,7 @@ async def _ayuda_titulares(mes: str) -> dict:
     """
     out = {}
     async for d in db.cortex_resumen.find(
-            {"dia": {"$regex": "^" + mes}},
+            {"dia": _rango(desde, hasta)},
             {"_id": 0, "dia": 1, "rutas": 1, "service_area_id": 1}):
         for r in (d.get("rutas") or []):
             if r.get("routeCode") and r.get("transporterId"):
@@ -18683,14 +18689,14 @@ async def _ayuda_titulares(mes: str) -> dict:
     return out
 
 
-async def _ayudas_del_resumen(mes: str) -> list:
+async def _ayudas_del_resumen(desde: str, hasta: str) -> list:
     """Lo mismo que `_ayudas_del_mes` pero sacado del RESUMEN de cada dia.
 
     Es la fuente completa: no depende de que nadie haya abierto la ruta.
     """
     out = []
     async for d in db.cortex_resumen.find(
-            {"dia": {"$regex": "^" + mes}},
+            {"dia": _rango(desde, hasta)},
             {"_id": 0, "dia": 1, "rutas": 1, "cuentas": 1, "service_area_id": 1}):
         reparto = _ayudas_de_un_resumen(d.get("rutas") or [], d.get("cuentas") or [])
         for ruta, gente in reparto.items():
@@ -18699,18 +18705,18 @@ async def _ayudas_del_resumen(mes: str) -> list:
     return out
 
 
-async def _ayuda_nombres(mes: str) -> dict:
+async def _ayuda_nombres(desde: str, hasta: str) -> dict:
     """{transporter: nombre}. De `cortex_resumen.gente`, que lo trae entero."""
     out = {}
     async for d in db.cortex_resumen.find(
-            {"dia": {"$regex": "^" + mes}}, {"_id": 0, "gente": 1}):
+            {"dia": _rango(desde, hasta)}, {"_id": 0, "gente": 1}):
         for g in (d.get("gente") or []):
             if g.get("transporterId") and g.get("nombre"):
                 out.setdefault(g["transporterId"], g["nombre"])
     return out
 
 
-async def _ayudas_del_mes(mes: str) -> list:
+async def _ayudas_del_mes(desde: str, hasta: str) -> list:
     """Una entrada por (dia, ruta, quien entrego) con sus paquetes entregados.
 
     UNA sola agregacion para todo el mes: son ~525 grupos. Preguntar ruta por
@@ -18725,7 +18731,7 @@ async def _ayudas_del_mes(mes: str) -> list:
     # Fuera se quedan solo los que NUNCA llegaron a sus manos, que son los de
     # `_CX_NO_DESPACHADO` — la lista canonica, no una copia (gotcha 40).
     cur = db.cortex_packages.aggregate([
-        {"$match": {"service_day": {"$regex": "^" + mes},
+        {"$match": {"service_day": _rango(desde, hasta),
                     "state": {"$nin": list(_CX_NO_DESPACHADO)}}},
         {"$group": {"_id": {"d": "$service_day", "a": "$service_area_id",
                             "r": "$route_code", "t": "$driver_id"},
@@ -18802,6 +18808,156 @@ def _ayudas_reparte(grupos: list, titulares: dict, mias: set) -> dict:
     return {"hice": hice, "recibi": recibi, "equipo": equipo, "salidas": salidas}
 
 
+# ---------------------------------------------------------------------------
+# RENDIMIENTO POR CONDUCTOR
+# ---------------------------------------------------------------------------
+"""Como va cada uno, en una tabla y en el periodo que se elija.
+
+DE DONDE SALE CADA COLUMNA, que no es lo mismo y por eso se dice:
+
+  · AYUDAS, REINTENTOS y DCR salen de Cortex, que se captura solo y esta al
+    dia. El DCR se calcula con `_cx_reparte`, el mismo reparto que usa la
+    scorecard en vivo — un segundo medidor con su propia regla acabaria dando
+    otro numero para lo mismo (gotcha 41).
+  · FALLOS DE CONTACTO, FALLOS DE POD, RTS y DNR salen del reporte diario, que
+    alguien tiene que subir. Van con retraso —el bloque DNR de un dia llega dos
+    dias despues (gotcha 25)— y por eso la respuesta dice HASTA QUE DIA hay
+    reporte. Sin ese dato, un cero se lee como «no ha fallado» cuando lo que
+    pasa es que todavia no hay reporte de esos dias, que es exactamente el
+    falso positivo que hay que evitar en una tabla con la que se habla con una
+    persona sobre su trabajo.
+
+Y el orden es DETERMINISTA (gotcha 62): a igual numero manda quien mas mueve, y
+el transporter cierra. Sin eso, dos peticiones seguidas devuelven la tabla en
+distinto orden y parece que el dato se ha movido.
+"""
+
+
+@api_router.get("/conductores/rendimiento")
+async def conductores_rendimiento(desde: str = "", hasta: str = "", center: str = "",
+                                  _=Depends(require_admin)):
+    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    d1 = _texto_cuerpo(hasta, 10) or hoy
+    d0 = _texto_cuerpo(desde, 10) or d1[:8] + "01"
+    if not (re.match(r"^\d{4}-\d{2}-\d{2}$", d0) and re.match(r"^\d{4}-\d{2}-\d{2}$", d1)):
+        raise HTTPException(400, "Las fechas van como 2026-09-01")
+    if d0 > d1:
+        d0, d1 = d1, d0
+    q: dict = {"service_day": _rango(d0, d1)}
+    # «TODOS» SE MIRA ANTES DE NORMALIZAR. `_centro_norm` devuelve el original
+    # en MAYUSCULAS cuando no reconoce el codigo, asi que «Todos» sale como
+    # «TODOS» y deja de coincidir con la lista de excepciones: la pantalla
+    # acababa filtrando por un centro llamado TODOS y devolvia las ayudas
+    # -que no filtran por centro- con todo lo demas en blanco. Se ve como una
+    # tabla a medias, no como un error.
+    crudo = (center or "").strip()
+    centro = "" if crudo.lower() in ("", "todos") else _centro_norm(crudo)
+    if centro:
+        q["center"] = {"$regex": re.escape(centro), "$options": "i"}
+
+    # ---- Cortex: estados, reintentos y dias trabajados --------------------
+    por_estado: dict = {}
+    dias: dict = {}
+    async for r in db.cortex_packages.aggregate([
+            {"$match": q},
+            {"$group": {"_id": {"t": "$driver_id", "s": "$state"},
+                        "n": {"$sum": 1}, "d": {"$addToSet": "$service_day"}}}]):
+        t = r["_id"].get("t")
+        if not t:
+            continue                      # Mongo omite la clave si falta (gotcha 14)
+        por_estado.setdefault(t, {})[r["_id"].get("s") or "NONE"] = r["n"]
+        dias.setdefault(t, set()).update(r.get("d") or [])
+
+    reintentos: dict = {}
+    async for r in db.cortex_packages.aggregate([
+            {"$match": {**q, "timeline.state": {"$in": list(_CX_REINTENTABLE)}}},
+            {"$group": {"_id": "$driver_id", "n": {"$sum": 1}}}]):
+        if r["_id"]:
+            reintentos[r["_id"]] = r["n"]
+
+    # ---- El reporte diario: contacto, POD, RTS y DNR ----------------------
+    qr: dict = {"fecha": _rango(d0, d1)}
+    if centro:
+        qr["center"] = {"$regex": re.escape(centro), "$options": "i"}
+    reporte: dict = {}
+    async for r in db.daily_reports.aggregate([
+            {"$match": qr},
+            {"$group": {"_id": "$transporter_id",
+                        "cc": {"$sum": "$cc_fails"}, "pod": {"$sum": "$pod_fails"},
+                        "rts": {"$sum": "$rts"}, "dnr": {"$sum": "$dnr"}}}]):
+        if r["_id"]:
+            reporte[r["_id"]] = r
+
+    # ---- Ayudas -----------------------------------------------------------
+    titulares, nombres, grupos, del_resumen = await asyncio.gather(
+        _ayuda_titulares(d0, d1), _ayuda_nombres(d0, d1),
+        _ayudas_del_mes(d0, d1), _ayudas_del_resumen(d0, d1))
+    juntos = _ayudas_juntar(grupos, del_resumen)
+    dio: dict = {}
+    recibio: dict = {}
+    porruta: dict = {}
+    for dia, nave, ruta, quien, paq, _ent in juntos:
+        porruta.setdefault((dia, nave, ruta), {})[quien] = paq
+    for clave, reparto in porruta.items():
+        tit = titulares.get(clave)
+        if not tit or not reparto.get(tit):
+            continue
+        for quien, paq in reparto.items():
+            if quien == tit or paq < _AYUDA_MIN_PAQUETES:
+                continue
+            a = dio.setdefault(quien, [0, 0])
+            a[0] += 1
+            a[1] += paq
+            b = recibio.setdefault(tit, [0, 0])
+            b[0] += 1
+            b[1] += paq
+
+    # ---- La ficha de cada uno, para poder poner el nombre -----------------
+    fichas: dict = {}
+    async for f in db.drivers.find(
+            {"transporter_id": {"$nin": [None, ""]}},
+            {"_id": 0, "id": 1, "name": 1, "center": 1, "transporter_id": 1}):
+        fichas[f["transporter_id"]] = f
+
+    filas = []
+    for t in set(por_estado) | set(dio) | set(recibio) | set(reporte):
+        rep = _cx_reparte(por_estado.get(t) or {})
+        f = fichas.get(t) or {}
+        r = reporte.get(t) or {}
+        d_ = dio.get(t) or [0, 0]
+        b_ = recibio.get(t) or [0, 0]
+        filas.append({
+            "transporter": t, "driver_id": f.get("id") or "",
+            "nombre": f.get("name") or nombres.get(t) or "",
+            "centro": f.get("center") or "",
+            "ficha": bool(f),
+            "dias": len(dias.get(t) or ()),
+            "entregas": rep["entregados"], "fallos": rep["fallos"],
+            "dcr": rep["dcr"],
+            "reintentos": reintentos.get(t, 0),
+            "ayudas": d_[0], "ayuda_paquetes": d_[1],
+            "recibidas": b_[0], "recibidas_paquetes": b_[1],
+            "cc_fails": int(r.get("cc") or 0), "pod_fails": int(r.get("pod") or 0),
+            "rts": int(r.get("rts") or 0), "dnr": int(r.get("dnr") or 0),
+        })
+    # Desempate deterministico (gotcha 62): a igual ayuda manda quien mas mueve.
+    filas.sort(key=lambda x: (-x["ayuda_paquetes"], -x["entregas"], x["transporter"]))
+
+    ult_cx = await db.cortex_packages.find_one(
+        {}, {"_id": 0, "service_day": 1}, sort=[("service_day", -1)])
+    ult_rep = await db.daily_reports.find_one(
+        {}, {"_id": 0, "fecha": 1}, sort=[("fecha", -1)])
+    return {
+        "desde": d0, "hasta": d1, "centro": centro,
+        # HASTA CUANDO LLEGA CADA FUENTE. Sin esto, un cero en «fallos de
+        # contacto» se lee como que no fallo, cuando puede ser que aun no haya
+        # reporte de esos dias.
+        "cobertura": {"cortex": (ult_cx or {}).get("service_day") or "",
+                      "reporte": (ult_rep or {}).get("fecha") or ""},
+        "filas": filas,
+    }
+
+
 @api_router.get("/portal/mis-ayudas")
 async def portal_mis_ayudas(user: dict = Depends(require_any_auth)):
     """Las veces que ha sacado de un apuro a un companero, y las que se lo hicieron a el.
@@ -18817,9 +18973,12 @@ async def portal_mis_ayudas(user: dict = Depends(require_any_auth)):
     claves = list(mis_ids | tids)
     mes = _apoyo_hoy()[:7]
 
+    # El mes en curso, del dia 1 al 31: el rango cubre el mes entero sin tener
+    # que saber cuantos dias tiene.
+    d0, d1 = mes + "-01", mes + "-31"
     titulares, nombres, grupos, del_resumen = await asyncio.gather(
-        _ayuda_titulares(mes), _ayuda_nombres(mes),
-        _ayudas_del_mes(mes), _ayudas_del_resumen(mes))
+        _ayuda_titulares(d0, d1), _ayuda_nombres(d0, d1),
+        _ayudas_del_mes(d0, d1), _ayudas_del_resumen(d0, d1))
     r = _ayudas_reparte(_ayudas_juntar(grupos, del_resumen), titulares, set(tids))
 
     paquetes = sum(x["paquetes"] for x in r["hice"])
