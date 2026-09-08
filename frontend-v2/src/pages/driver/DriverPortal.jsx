@@ -291,8 +291,8 @@ export default function DriverPortal() {
           {tienda && (
             <Opcion
               icono={ShoppingBag}
-              titulo="Tienda"
-              sub="La ropa de la nave, con tu nombre"
+              titulo="Ropa"
+              sub="La del equipo, con tu nombre"
               onClick={() => setVista('tienda')}
             />
           )}

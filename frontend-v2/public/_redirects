@@ -1,3 +1,12 @@
+# LA ROPA, CON UNA DIRECCION QUE SE PUEDA DECIR EN VOZ ALTA.
+# La pagina vive en /t/<token>/ porque nacio como enlace privado para
+# pasar por WhatsApp; ahora esta enlazada desde la portada y «flotadsp
+# punto com barra ropa» se puede dictar por telefono, que el token no.
+# Es un 302 a proposito: si algun dia la tienda cambia de sitio, nadie
+# se queda con la vieja cacheada para siempre.
+/ropa    /t/c9d87d2c73589c989e11/    302
+/tienda  /t/c9d87d2c73589c989e11/    302
+
 # OJO antes de "mejorar" esto:
 #
 # Un asset que no existe devuelve el index.html con HTTP 200, no un 404. Eso es

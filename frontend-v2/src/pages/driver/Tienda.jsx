@@ -130,7 +130,7 @@ export default function Tienda({ onBack }) {
       <Marco onBack={onBack}>
         <div className="rounded-2xl border border-dark-800 bg-dark-900/50 px-5 py-10 text-center">
           <ShoppingBag size={26} className="mx-auto mb-3 text-dark-600" />
-          <p className="text-[15px] font-medium text-dark-200">La tienda todavía no está abierta</p>
+          <p className="text-[15px] font-medium text-dark-200">La ropa todavía no está a la venta</p>
           <p className="mt-1 text-[13px] text-dark-500">Te avisaremos cuando lo esté.</p>
         </div>
       </Marco>

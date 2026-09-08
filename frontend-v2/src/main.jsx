@@ -268,6 +268,7 @@ const PanelPaquetes = lazy(() => import('./panel/pages/PackageIntel'))
 const PanelApoyo = lazy(() => import('./panel/pages/ApoyoRuta'))
 const PanelEmpleo = lazy(() => import('./panel/pages/Empleo'))
 const EmpleoPublica = lazy(() => import('./pages/Empleo'))
+const Ofertas = lazy(() => import('./pages/Ofertas'))
 const PanelWHC = lazy(() => import('./panel/pages/WHC'))
 const PanelDSC = lazy(() => import('./panel/pages/DSC'))
 const PanelRendimiento = lazy(() => import('./panel/pages/Rendimiento'))
@@ -336,6 +337,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/app" element={<AppRedirect />} />
               <Route path="/taller/t/:token" element={<PortalTallerLista />} />
               <Route path="/apoyo/t/:token" element={<PortalApoyo />} />
+              <Route path="/empleo" element={<Ofertas />} />
               <Route path="/empleo/:slug/:oferta" element={<EmpleoPublica />} />
               <Route path="/taller/:token" element={<PortalTaller />} />
               <Route path="/conductor" element={<DriverPortal />} />

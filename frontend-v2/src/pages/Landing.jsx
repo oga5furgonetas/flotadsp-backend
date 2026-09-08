@@ -508,6 +508,14 @@ export default function Landing() {
             <select className="ld-solo-ancho" value={lang} onChange={e => setLang(e.target.value)} style={{ background: 'transparent', color: 'var(--ld-muted)', border: '1px solid var(--ld-border-strong)', borderRadius: 8, padding: '5px 8px', fontSize: 12, cursor: 'pointer' }}>
               {Object.entries(LANGS).map(([k, v]) => <option key={k} value={k} style={{ background: 'var(--ld-surface2)', color: 'var(--ld-text)' }}>{v}</option>)}
             </select>
+            {/* LO QUE HAY, ARRIBA Y A UN CLIC. Quien llega por Google no sabe
+                que ademas de la aplicacion hay ofertas de trabajo y ropa; sin
+                estos enlaces no habia forma de llegar mas que teniendo la URL.
+                `ld-solo-ancho` los esconde en movil, donde la barra no da para
+                cinco cosas — ahi mandan «Entrar» y «Probar». */}
+            <a className="ld-solo-ancho" href="#producto" style={{ color: 'var(--ld-muted)', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>Qué hace</a>
+            <a className="ld-solo-ancho" href="/empleo" style={{ color: 'var(--ld-muted)', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>Empleo</a>
+            <a className="ld-solo-ancho" href="/ropa" style={{ color: 'var(--ld-muted)', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>Ropa</a>
             <a className="ld-solo-ancho" href="/planes" style={{ color: 'var(--ld-muted)', textDecoration: 'none', fontSize: 13, fontWeight: 600 }}>{t('nav.plans')}</a>
             <a href="/panel/login" style={{ color: 'var(--ld-muted)', textDecoration: 'none', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>{t('nav.login')}</a>
             <a href="/registro" style={{ background: 'linear-gradient(135deg,#fb923c,#ea6800)', color: '#fff', textDecoration: 'none', padding: '7px 16px', borderRadius: 9, fontSize: 13, fontWeight: 800, whiteSpace: 'nowrap' }}>{t('nav.try')}</a>
@@ -622,7 +630,9 @@ export default function Landing() {
       </section>
 
       {/* ── FEATURES GRID ── */}
-      <section style={{ maxWidth: 1100, margin: '0 auto', padding: '80px 20px' }}>
+      {/* El ancla de «Que hace» de la barra de arriba. Lleva a «Como funciona»,
+          que es donde se explica el producto. */}
+      <section id="producto" style={{ maxWidth: 1100, margin: '0 auto', padding: '80px 20px', scrollMarginTop: 70 }}>
         <div style={{ textAlign: 'center', marginBottom: 44 }}>
           <h2 style={{ fontSize: 'clamp(22px,3vw,34px)', fontWeight: 900, margin: '0 0 10px' }}>{t('how.t')}</h2>
           <p style={{ color: 'var(--ld-muted)', fontSize: 15, margin: 0 }}>{tl('ld.trust.d')}</p>

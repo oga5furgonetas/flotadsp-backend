@@ -50,7 +50,7 @@ const MODULES = [
     ['origen-danos', 'Origen de daños'], ['ia-peritaje', 'IA Peritaje'], ['configuracion', 'Configuración'],
     // Sin esta casilla la pantalla no la ve NADIE con permisos definidos,
     // y el menu no dice por que (gotcha 27).
-    ['tienda', 'Tienda de ropa'],
+    ['tienda', 'Ropa del equipo'],
   ]},
 ]
 const ALL_KEYS = MODULES.flatMap((g) => g.items.map(([k]) => k))

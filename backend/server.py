@@ -19857,6 +19857,55 @@ async def _empleo_centro_valido(valor) -> str:
     return centro.upper()
 
 
+@api_router.get("/empleo/publicas")
+async def empleo_ofertas_publicas(empresa: str = ""):
+    """Las ofertas abiertas de una empresa, para su pagina de empleo. Sin sesion.
+
+    POR QUE EXISTE. Hasta hoy una oferta solo se podia ver si alguien te pasaba
+    SU enlace: no habia ningun sitio donde estuvieran todas. Quien llega a
+    flotadsp.com buscando trabajo no tiene nada que abrir, y las tres ofertas
+    de Vigo, Santiago y A Coruna solo circulaban por WhatsApp.
+
+    LA EMPRESA VA EN LA URL, no por defecto. `empresa` es el slug publico
+    (`/empleo/<slug>/<oferta>` usa el mismo), y sin el se toma la de este
+    despliegue — flotadsp.com es de una empresa concreta—. Pero el tenant se
+    fija A MANO en los dos casos (gotcha 26): sin eso, el listado de un DSP
+    acabaria enseñando las ofertas de otro, con HTTP 200 y sin un error.
+
+    LISTA BLANCA de campos, como la oferta suelta: esto lo abre cualquiera desde
+    Google, y las preguntas del cuestionario —con sus respuestas que descartan—
+    no pueden viajar aqui.
+    """
+    slug = _texto_cuerpo(empresa, 60)
+    if slug:
+        await _set_tenant_by_slug(slug)
+    else:
+        org = await global_db.organizations.find_one(
+            {"db_name": _DEFAULT_DB_NAME}, {"_id": 0, "slug": 1, "name": 1})
+        slug = (org or {}).get("slug") or ""
+        set_current_org_db(_DEFAULT_DB_NAME)
+    org = await global_db.organizations.find_one(
+        {"db_name": _current_db_name.get()}, {"_id": 0, "name": 1, "slug": 1})
+
+    docs = await db.ofertas_empleo.find(
+        {"activa": True}, {"_id": 0}).sort("creada_en", -1).to_list(60)
+    ofertas = []
+    for o in docs:
+        ofertas.append({
+            "slug": o.get("slug"), "titulo": o.get("titulo"),
+            "ciudad": o.get("ciudad") or "", "jornada": o.get("jornada") or "",
+            "salario": o.get("salario") or "",
+            # Un resumen, no la descripcion entera: la tarjeta de una lista se
+            # lee de un vistazo y el detalle esta a un clic.
+            "resumen": (o.get("descripcion") or "").strip()[:220],
+            "url": "/empleo/%s/%s" % (slug, o.get("slug") or ""),
+        })
+    return {"empresa": (org or {}).get("name") or "", "slug": slug,
+            "ciudades": sorted({o["ciudad"] for o in ofertas if o["ciudad"]}),
+            "jornadas": sorted({o["jornada"] for o in ofertas if o["jornada"]}),
+            "ofertas": ofertas}
+
+
 @api_router.get("/empleo/publica/{slug}/{oferta_slug}")
 async def empleo_oferta_publica(slug: str, oferta_slug: str):
     """La oferta tal y como la ve quien se va a apuntar. Sin sesion."""
