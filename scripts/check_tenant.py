@@ -37,6 +37,10 @@ CON_SESION = {"get_current_user", "require_admin", "require_superadmin",
               "require_any_auth", "require_driver", "get_current_admin"}
 # Llamadas que fijan la empresa a mano.
 FIJAN = {"_set_tenant_by_slug", "set_current_org_db", "_ot_por_token", "_apoyo_por_token", "_partner_auth",
+         # `_tienda_por_token`: el enlace publico de la tienda lleva su
+         # `db_name` dentro y lo fija antes de devolver, igual que los del
+         # taller y los de apoyo.
+         "_tienda_por_token",
          # Autentica la extension por su token de ingesta y fija la BD dentro.
          "_cortex_ingest_org",
          # Resuelve empresa + oferta desde la URL publica de empleo y llama a

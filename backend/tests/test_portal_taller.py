@@ -163,6 +163,12 @@ ENLACES = {
                                  "workshop_id": "w-1", "db_name": "flotadsp"},
     "tok-de-apoyo-1234567890": {"token": "tok-de-apoyo-1234567890", "tipo": "apoyo",
                                 "apoyo_id": "ap-1", "db_name": "flotadsp"},
+    "tok-de-tienda-123456789a": {"token": "tok-de-tienda-123456789a", "tipo": "tienda",
+                                 "db_name": "flotadsp"},
+    # Una tienda a la que se le olvido la empresa: sin `db_name`, `db` resuelve
+    # por el valor por defecto y el enlace acabaria leyendo y escribiendo en la
+    # base principal, con 200 y sin un solo error en los logs (gotcha 26).
+    "tok-tienda-sin-empresa-1": {"token": "tok-tienda-sin-empresa-1", "tipo": "tienda"},
 }
 
 
@@ -215,4 +221,47 @@ async def test_un_token_que_no_existe_da_404(enlaces):
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc:
         await server._ot_por_token("tok-inventado-1234567890")
+    assert exc.value.status_code == 404
+
+
+# La tienda publica es la CUARTA clase que entra en esa coleccion, y por tanto
+# la cuarta oportunidad de repetir el gotcha 59. Su enlace es el que mas circula
+# -se manda por WhatsApp a gente de fuera- y detras hay un cobro, asi que un
+# resolutor suyo que acepte el token de un taller abriria una tienda desde un
+# enlace que no lo es.
+
+
+async def test_el_enlace_de_la_tienda_abre_y_fija_la_empresa(enlaces, monkeypatch):
+    """Lo que tiene que funcionar: su propio token, con su empresa."""
+    fijada = []
+    monkeypatch.setattr(server, "set_current_org_db", lambda n: fijada.append(n))
+    enlace = await server._tienda_por_token("tok-de-tienda-123456789a")
+    assert enlace["tipo"] == "tienda"
+    assert fijada == ["flotadsp"], "un endpoint publico fija la empresa a mano"
+
+
+@pytest.mark.parametrize("token", ["tok-de-orden-1234567890", "tok-de-taller-1234567890",
+                                   "tok-de-apoyo-1234567890"])
+async def test_la_tienda_no_acepta_tokens_de_otra_clase(enlaces, token):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await server._tienda_por_token(token)
+    assert exc.value.status_code == 404
+
+
+async def test_una_tienda_sin_empresa_no_cae_en_la_principal(enlaces, monkeypatch):
+    """Sin `db_name` se rechaza, en vez de servir los datos de otro."""
+    fijada = []
+    monkeypatch.setattr(server, "set_current_org_db", lambda n: fijada.append(n))
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await server._tienda_por_token("tok-tienda-sin-empresa-1")
+    assert exc.value.status_code == 404
+    assert fijada == [], "no se toca la empresa si el enlace no dice cual es"
+
+
+async def test_la_tienda_con_un_token_que_no_existe_da_404(enlaces):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        await server._tienda_por_token("tok-inventado-1234567890")
     assert exc.value.status_code == 404

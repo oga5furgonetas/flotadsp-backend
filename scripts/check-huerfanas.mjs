@@ -26,6 +26,10 @@ const SIN_UI_A_PROPOSITO = new Set([
   // su portal se vincula ya identificado, con `/tienda/cuenta/vincular`, que
   // si esta enganchada. Estas tres son la puerta de la tienda publica, que se
   // monta cuando la tienda se abra — hoy nace apagada a proposito.
+  // La tienda publica la consume la pagina estatica de /t/<token>/, que es
+  // HTML plano fuera de src/ y este checker solo mira el codigo de React.
+  'GET /tienda/publico/{token}',
+  'POST /tienda/publico/{token}/comprar',
   // El webhook de Stripe NO lo llama ningun cliente nuestro: lo llama
   // Stripe cuando alguien paga. No tiene ni puede tener pantalla.
   'POST /tienda/stripe/webhook',

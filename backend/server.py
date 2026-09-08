@@ -42298,7 +42298,13 @@ async def tienda_escaparate(user: dict = Depends(require_any_auth)):
             "recargo_talla": (_tienda_precio(p, "XXL") or 0) - (_tienda_precio(p) or 0),
             "tallas_grandes": list(_TALLAS_GRANDES),
             "quedan": _tienda_quedan(p),
-            "notas": p.get("notas") or "",
+            # LAS NOTAS NO SALEN. Son internas y llevan dentro el proveedor, la
+            # referencia del fabricante y hasta el enlace del producto
+            # ("Printful - Gildan 5000 ... printful.com/..."). Quien compra no
+            # tiene por que saber de donde sale la prenda, y menos poder ir a
+            # comprarla el mismo por 7,72.
+            # Lo que se enseña de cada prenda se elige campo a campo aqui; que
+            # el escaparate devolviera el documento entero fue el fallo.
             "foto_ver": p.get("foto_ver"),
             "lleva_nombre": any(e.get("con_nombre") for e in (p.get("estampaciones") or [])),
         } for p in prendas],
@@ -42514,6 +42520,175 @@ async def tienda_marcar_pedido(pedido_id: str, body: dict = Body(...),
 
 # -------------------------------------------------------------------------
 # TIENDA - COBRAR CON STRIPE
+# -------------------------------------------------------------------------
+# TIENDA PUBLICA - COMPRAR DESDE EL ENLACE, SIN CUENTA
+# -------------------------------------------------------------------------
+"""La pagina que se pasa por WhatsApp, con boton de comprar.
+
+Quien entra ahi NO trabaja aqui: es un amigo, un conductor de otro DSP, la
+familia. No tiene cuenta, no la va a crear por una camiseta, y pedirsela es la
+forma mas segura de perder la venta. Asi que:
+
+  · LA LLAVE ES EL ENLACE. El token de la URL identifica la tienda Y la
+    empresa. Sin el no hay catalogo ni compra;
+  · LOS DATOS LOS PIDE STRIPE, no un formulario nuestro. Nombre, correo y
+    direccion de envio se recogen en su pantalla de pago, que ya esta hecha,
+    traducida y es la que la gente reconoce. Nosotros no tocamos una tarjeta
+    ni guardamos una direccion antes de cobrar.
+
+ES UN ENDPOINT PUBLICO, asi que fija la empresa A MANO (gotcha 26): el token
+vive en `taller_enlaces` de `global_db` con su `db_name` dentro, igual que los
+del taller y los de apoyo. Y filtra por su clase Y exige su campo, porque esa
+coleccion guarda tres tipos de enlace y un `find_one` por token a secas es una
+puerta que hoy revienta y mañana deja pasar (gotcha 59).
+"""
+
+_TIENDA_RESERVA_MIN = 60          # lo que se aparta el stock sin pagar
+
+
+async def _tienda_por_token(token: str) -> dict:
+    """La tienda de un enlace publico. Fija la empresa antes de devolver."""
+    t = _texto_cuerpo(token, 64)
+    if not t:
+        raise HTTPException(404, "Ese enlace no es válido")
+    enlace = await global_db.taller_enlaces.find_one(
+        {"token": t, "tipo": "tienda"}, {"_id": 0})
+    if not enlace or not enlace.get("db_name"):
+        raise HTTPException(404, "Ese enlace no es válido")
+    set_current_org_db(enlace["db_name"])
+    return enlace
+
+
+async def _tienda_soltar_caducadas() -> None:
+    """Devuelve al drop lo que se aparto para un pago que nunca llego.
+
+    Sin esto, cada persona que abre el pago y se arrepiente deja una unidad
+    bloqueada para siempre: con drops de diez, tres arrepentidos dejan la
+    prenda en 'quedan 7' sin haber vendido ninguna.
+    Se hace aqui, al mirar el catalogo, y no en un cron: pasa pocas veces y
+    un proceso de fondo para esto es mas cosas que pueden romperse.
+    """
+    limite = (datetime.now(timezone.utc) - timedelta(minutes=_TIENDA_RESERVA_MIN)).isoformat()
+    async for p in db[_TCOL_PEDIDOS].find(
+            {"estado": "pendiente_pago", "externo": True,
+             "reserva_hasta": {"$lt": limite}}, {"_id": 0, "id": 1, "lineas": 1}):
+        for l in (p.get("lineas") or []):
+            await _tienda_devolver(l.get("prenda"), int(l.get("cantidad") or 0))
+        await db[_TCOL_PEDIDOS].update_one(
+            {"id": p["id"], "estado": "pendiente_pago"},
+            {"$set": {"estado": "anulado", "estado_por": "reserva caducada",
+                      "estado_at": datetime.now(timezone.utc).isoformat()}})
+
+
+@api_router.get("/tienda/publico/{token}")
+async def tienda_publica(token: str):
+    """El catalogo que ve quien tiene el enlace. Sin sesion."""
+    await _tienda_por_token(token)
+    await _tienda_soltar_caducadas()
+    conf = await _tienda_conf()
+    prendas = await _tienda_prendas_publicas()
+    return {
+        "abierta": bool(conf["visible"]),
+        "pasarela": conf["pasarela"],
+        "prendas": [{
+            "id": p["id"], "nombre": p.get("nombre"), "tipo": p.get("tipo"),
+            "color": p.get("color"), "tallas": p.get("tallas") or [],
+            "precio": _tienda_precio(p),
+            "recargo_talla": (_tienda_precio(p, "XXL") or 0) - (_tienda_precio(p) or 0),
+            "tallas_grandes": list(_TALLAS_GRANDES),
+            "quedan": _tienda_quedan(p),
+        } for p in prendas],
+    }
+
+
+@api_router.post("/tienda/publico/{token}/comprar")
+async def tienda_publica_comprar(token: str, body: dict = Body(...)):
+    """Aparta la prenda y devuelve el enlace de pago de Stripe."""
+    enlace = await _tienda_por_token(token)
+    await _tienda_soltar_caducadas()
+    conf = await _tienda_conf()
+    if not conf["visible"]:
+        raise HTTPException(400, "La tienda no está abierta")
+    if not _stripe_encendido():
+        raise HTTPException(503, "El pago con tarjeta todavía no está activo")
+
+    catalogo = {p["id"]: p for p in await _tienda_prendas_publicas()}
+    p = catalogo.get(_texto_cuerpo(body.get("prenda"), 60))
+    if not p:
+        raise HTTPException(400, "Esa prenda ya no está a la venta")
+    talla = _texto_cuerpo(body.get("talla"), 6).upper()
+    if talla not in (p.get("tallas") or []):
+        raise HTTPException(400, "Esa talla no existe para %s" % p.get("nombre"))
+    uds = _entero(body.get("cantidad"), "la cantidad", defecto=1, minimo=1,
+                  maximo=_TIENDA_MAX_UDS_LINEA)
+    if not await _tienda_reservar(p["id"], uds):
+        quedan = _tienda_quedan(await db[_PRENDAS_COL].find_one(
+            {"id": p["id"]}, {"_id": 0, "unidades": 1, "vendidas": 1}) or {})
+        raise HTTPException(409, "De %s quedan %d" % (p.get("nombre"), quedan or 0))
+
+    # EL PRECIO SALE DEL CATALOGO, con la talla. Nunca del cuerpo.
+    precio = _tienda_precio(p, talla)
+    ahora = datetime.now(timezone.utc)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "ref": "W-%s-%s" % (ahora.strftime("%y%m%d"), uuid.uuid4().hex[:4].upper()),
+        # Sin conductor: es una venta de fuera. `driver_id` vacio es lo que la
+        # separa de las de la nave en la pantalla de la oficina.
+        "driver_id": "", "externo": True,
+        "driver_nombre": "", "centro": "", "email": "",
+        "lineas": [{"prenda": p["id"], "nombre": p.get("nombre"), "talla": talla,
+                    "cantidad": uds, "precio": precio,
+                    "importe": round(precio * uds, 2), "personalizado": ""}],
+        "total": round(precio * uds, 2), "unidades": uds,
+        "cierre": _tienda_cierre(conf["dia_cierre"]),
+        "estado": "pendiente_pago",
+        "reserva_hasta": (ahora + timedelta(minutes=_TIENDA_RESERVA_MIN)).isoformat(),
+        "creado_en": ahora.isoformat(),
+    }
+
+    base = (enlace.get("web") or PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
+    datos = [
+        ("mode", "payment"),
+        ("success_url", "%s/t/%s/?pago=ok&ref=%s" % (base, token, doc["ref"])),
+        ("cancel_url", "%s/t/%s/?pago=no" % (base, token)),
+        ("client_reference_id", doc["id"]),
+        ("metadata[pedido_id]", doc["id"]),
+        ("metadata[db_name]", _current_db_name.get()),
+        ("metadata[ref]", doc["ref"]),
+        # Que Stripe pida la direccion: su pantalla ya lo hace bien y nosotros
+        # no guardamos una direccion de alguien que al final no paga.
+        ("shipping_address_collection[allowed_countries][0]", "ES"),
+        ("phone_number_collection[enabled]", "true"),
+        ("line_items[0][quantity]", str(uds)),
+        ("line_items[0][price_data][currency]", "eur"),
+        ("line_items[0][price_data][unit_amount]", str(int(round(precio * 100)))),
+        ("line_items[0][price_data][product_data][name]",
+         "%s - talla %s" % (p.get("nombre") or "Prenda", talla)),
+    ]
+
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=25) as cli:
+            r = await cli.post(_STRIPE_API + "/checkout/sessions", data=datos,
+                               auth=(_stripe_clave(), ""))
+    except Exception as e:
+        await _tienda_devolver(p["id"], uds)
+        logger.error("Stripe checkout publico: %s", e)
+        raise HTTPException(502, "No se ha podido abrir el pago. Inténtalo en un minuto.")
+    if r.status_code >= 300:
+        await _tienda_devolver(p["id"], uds)
+        logger.error("Stripe checkout publico %s: %s", r.status_code, r.text[:300])
+        raise HTTPException(502, "No se ha podido abrir el pago. Inténtalo en un minuto.")
+    ses = r.json()
+    doc["stripe_session"] = ses.get("id")
+    try:
+        await db[_TCOL_PEDIDOS].insert_one(dict(doc))   # copia (gotcha 42)
+    except Exception:
+        await _tienda_devolver(p["id"], uds)
+        raise
+    return {"url": ses.get("url"), "ref": doc["ref"]}
+
+
 # -------------------------------------------------------------------------
 """El pago con tarjeta. Apagado hasta que existan las claves.
 

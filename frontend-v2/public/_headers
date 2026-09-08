@@ -6,6 +6,19 @@
   Permissions-Policy: camera=(self), microphone=(), geolocation=(self)
   Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: https:; connect-src 'self' blob: https://www.cartociudad.es https://photon.komoot.io https://www.googletagmanager.com https://www.google.com https://ad.doubleclick.net https://www.google-analytics.com https://googleads.g.doubleclick.net https://flotadsp-backend.fly.dev https://flotadsp-backend-staging.fly.dev https://api.qrserver.com https://nominatim.openstreetmap.org; font-src 'self' data:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; worker-src 'self'
 
+# EL CATALOGO PUBLICO aprieta la politica; no puede aflojarla.
+# Cloudflare Pages NO sustituye la regla `/*` cuando hay una mas concreta: la
+# SUMA, y la pagina sale con DOS cabeceras Content-Security-Policy. Dos
+# politicas se aplican por INTERSECCION -cada una veta por su cuenta-, asi que
+# lo que se abra aqui sigue cerrado por la de arriba. Probado: este bloque
+# nacio abriendo fonts.googleapis.com y la tipografia siguio bloqueada; por eso
+# las fuentes de esa pagina se sirven desde `/t/<token>/fonts/`.
+# Lo que si hace, y por eso se queda: quitarle todo lo que no necesita -nada de
+# googletagmanager, nada de wasm, `connect-src` solo al backend y las imagenes
+# solo nuestras-.
+/t/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://flotadsp-backend.fly.dev; font-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'
+
 # El service worker no debe cachearse: así las actualizaciones llegan al momento
 /sw.js
   Cache-Control: no-cache, no-store, must-revalidate

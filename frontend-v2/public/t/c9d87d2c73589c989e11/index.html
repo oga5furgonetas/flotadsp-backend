@@ -8,233 +8,136 @@
 <meta property="og:title" content="Colección FDs">
 <meta property="og:description" content="Ropa FlotaDSP. Edición limitada.">
 <title>Colección FDs</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Martian+Mono:wght@400;500&display=swap">
 <style>
+@font-face{font-family:'Archivo';font-style:normal;font-weight:400 600;font-display:swap;src:url('fonts/archivo.woff2') format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:'Bricolage Grotesque';font-style:normal;font-weight:700 800;font-display:swap;src:url('fonts/bricolage-grotesque.woff2') format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+@font-face{font-family:'Martian Mono';font-style:normal;font-weight:400 500;font-display:swap;src:url('fonts/martian-mono.woff2') format('woff2');unicode-range:U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD}
+:root{
+  --ground:#0A0C0F; --surface:#14181C; --raise:#1B2026; --line:#242A31;
+  --ink:#F2F5F7; --muted:#7E8A96; --accent:#14E7D8;
+  --d:"Bricolage Grotesque","Archivo",system-ui,sans-serif;
+  --b:"Archivo",system-ui,-apple-system,sans-serif;
+  --m:"Martian Mono",ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--b);
+  font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto;padding:0 20px}
+header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:26px 0 8px}
+.marca{display:block;width:104px;height:auto}
+.marca path{fill:var(--ink)}
+.eyebrow{font-family:var(--m);font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent)}
+.intro{color:var(--muted);font-size:15px;margin:14px 0 30px;max-width:38em}
 
-/* ─────────────────────────────────────────────────────────────────────────
-   HOODIE FDs — pagina de producto, enlace privado.
+/* ── rejilla ────────────────────────────────────────────────────────────
+   Los tres de un vistazo. Apilados obligaban a bajar tres pantallas para
+   saber que hay. */
+.rejilla{display:grid;grid-template-columns:1fr;gap:14px;margin-bottom:20px}
+@media(min-width:680px){.rejilla{grid-template-columns:repeat(3,1fr)}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;
+  overflow:hidden;cursor:pointer;display:flex;flex-direction:column}
+.card:hover{border-color:#39424C}
+.card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.card-foto{background:#0E1114;aspect-ratio:4/5;overflow:hidden}
+.card-foto img{width:100%;height:100%;object-fit:cover;display:block}
+.card-txt{padding:15px 16px 17px;display:flex;flex-direction:column;gap:5px;flex:1}
+.card h2{font-family:var(--d);font-weight:700;font-size:19px;margin:0;letter-spacing:-.01em}
+.claim{font-size:13px;color:var(--muted);margin:0;flex:1}
+.card-pie{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-top:8px}
+.card-precio{font-family:var(--m);font-size:17px;color:var(--ink)}
+.card-stock{font-family:var(--m);font-size:10.5px;letter-spacing:.05em;color:var(--muted)}
+.card-stock.poco{color:var(--accent)}
+.card-stock.cero{color:#E8705F}
 
-   MONOCROMA OSCURA A PROPOSITO, sin tema claro. La prenda es negra, las
-   fotos vienen sobre fondo claro y el contraste entre las dos cosas ES la
-   pagina. En claro, las fotos se funden con el fondo y no queda nada.
-   Por eso todo color se pinta explicitamente, incluido el del body: asi la
-   pagina se sostiene sobre cualquier fondo del visor.
-   ───────────────────────────────────────────────────────────────────────── */
-:root {
-  --ground:  #0A0C0F;   /* casi negro, con sesgo azul hacia el cian */
-  --surface: #14181C;
-  --raise:   #1B2026;
-  --line:    #242A31;
-  --ink:     #F2F5F7;
-  --muted:   #7E8A96;
-  --accent:  #14E7D8;
-  --deep:    #0AACD3;
+/* ── ficha ──────────────────────────────────────────────────────────── */
+.ficha[hidden]{display:none}
+/* Sin esta linea las tres fichas se ven SIEMPRE, una detras de otra:
+   `hidden` es un atributo, y la regla del navegador que lo esconde
+   (`[hidden]{display:none}`) pierde contra cualquier clase que ponga
+   `display`. O sea que `.ficha{display:grid}` lo anula en silencio y
+   el JS puede poner y quitar `hidden` todo el dia sin que cambie nada.
+   Es exactamente lo que se venia a quitar: los tres productos seguidos. */
+.ficha{display:grid;grid-template-columns:1fr;gap:26px;padding:30px 0 10px;
+  border-top:1px solid var(--line);margin-top:14px}
+@media(min-width:860px){.ficha{grid-template-columns:1.15fr .85fr;gap:44px}}
+.tira{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;
+  max-height:74vh;overflow-y:auto;padding-right:4px}
+.tira img{width:100%;height:auto;border-radius:12px;background:var(--surface);
+  cursor:zoom-in;display:block}
+.datos h2{font-family:var(--d);font-weight:800;font-size:clamp(30px,6vw,44px);
+  line-height:1;letter-spacing:-.02em;margin:0 0 12px}
+.sub{color:var(--muted);font-size:15px;margin:0 0 20px;max-width:34em}
+.precio{display:flex;align-items:baseline;gap:6px;margin-bottom:3px}
+.precio b{font-family:var(--m);font-weight:500;font-size:42px;letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums}
+.precio span{font-family:var(--m);font-size:16px;color:var(--muted)}
+.iva{font-size:12.5px;color:var(--muted);margin:0 0 20px}
+.tallas{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:16px}
+.talla{font-family:var(--m);font-size:12.5px;padding:9px 13px;border-radius:10px;
+  border:1px solid var(--line);background:var(--surface);color:var(--ink);cursor:pointer}
+.talla:hover{border-color:#39424C}
+.talla[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+.talla:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.cant{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.cant button{width:36px;height:36px;border-radius:10px;border:1px solid var(--line);
+  background:var(--surface);color:var(--ink);font-size:17px;cursor:pointer}
+.cant button:hover{border-color:#39424C}
+.cant span{font-family:var(--m);font-size:15px;min-width:20px;text-align:center}
+.comprar{width:100%;padding:15px;border:0;border-radius:14px;background:var(--ink);
+  color:var(--ground);font-family:var(--b);font-size:15px;font-weight:600;cursor:pointer}
+.comprar:hover:not(:disabled){background:#fff}
+.comprar:disabled{background:transparent;border:1px solid var(--line);color:var(--muted);cursor:not-allowed}
+.aviso{font-size:12.5px;color:var(--muted);margin:10px 0 0;min-height:1.2em}
+.aviso.mal{color:#E8705F}
+.specs{border-top:1px solid var(--line);margin-top:24px}
+.specs dl{display:grid;grid-template-columns:auto 1fr;margin:0}
+.specs dt,.specs dd{padding:12px 0;border-bottom:1px solid var(--line);margin:0;
+  font-family:var(--m);font-size:11.5px;line-height:1.5}
+.specs dt{color:var(--muted);letter-spacing:.04em;padding-right:20px;white-space:nowrap}
+.specs dd{color:var(--ink);text-align:right}
 
-  --d: "Bricolage Grotesque", "Archivo", system-ui, sans-serif;
-  --b: "Archivo", system-ui, -apple-system, sans-serif;
-  --m: "Martian Mono", ui-monospace, "SF Mono", Menlo, monospace;
-}
+.volver{display:inline-flex;align-items:center;gap:7px;background:none;border:0;
+  color:var(--muted);font-family:var(--b);font-size:13.5px;cursor:pointer;padding:0;margin:22px 0 0}
+.volver:hover{color:var(--ink)}
 
-* { box-sizing: border-box; }
+.pedir{margin:52px 0 0;padding:32px 26px;background:var(--surface);
+  border:1px solid var(--line);border-radius:18px}
+.pedir h2{font-family:var(--d);font-weight:700;font-size:23px;margin:0 0 18px}
+.pasos{list-style:none;margin:0;padding:0;display:grid;gap:15px;counter-reset:p}
+.pasos li{display:grid;grid-template-columns:26px 1fr;gap:14px;align-items:start;counter-increment:p}
+.pasos li::before{content:counter(p);font-family:var(--m);font-size:11px;color:var(--accent);
+  border:1px solid rgba(20,231,216,.3);border-radius:7px;width:26px;height:26px;
+  display:grid;place-items:center}
+.pasos p{margin:0;font-size:14.5px;line-height:1.55}
+.pasos p b{font-weight:600}
+.pasos span{color:var(--muted)}
+footer{margin:44px 0 60px;padding-top:22px;border-top:1px solid var(--line);
+  display:flex;flex-wrap:wrap;gap:10px 22px;justify-content:space-between;
+  font-family:var(--m);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
 
-body {
-  margin: 0;
-  background: var(--ground);
-  color: var(--ink);
-  font-family: var(--b);
-  font-size: 16px;
-  line-height: 1.6;
-  -webkit-font-smoothing: antialiased;
+dialog.visor{border:0;padding:0;width:100%;height:100%;max-width:100vw;max-height:100vh;
+  background:rgba(6,8,10,.96)}
+dialog.visor::backdrop{background:rgba(6,8,10,.9)}
+dialog.visor img{max-width:96vw;max-height:90vh;width:auto;height:auto;margin:auto;
+  display:block;border-radius:10px}
+.visor-caja{height:100%;display:grid;place-items:center;padding:16px;cursor:zoom-out}
+/* CON EL DEDO NO SE ACIERTA A 35 px. Esta pagina se abre desde un WhatsApp,
+   o sea en un movil, y elegir la talla es LA accion. Medido en produccion a
+   375 px: las tallas salian a 36x35, los botones de cantidad a 36x36 y el
+   «Ver todo» a 335x19 -diecinueve pixeles de alto-. La guia de Apple y la
+   WCAG 2.5.8 piden 44; por debajo se pulsa la M queriendo la S y eso aqui es
+   una talla equivocada fabricada y pagada.
+   Va por `pointer:coarse` y no por ancho de pantalla: lo que manda es con que
+   se toca, no cuanto mide la ventana. Con raton se queda como estaba. */
+@media(pointer:coarse){
+  .talla{min-height:44px;min-width:44px;padding:9px 15px}
+  .cant button{width:44px;height:44px}
+  .volver{padding:12px 0}
 }
-
-.wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
-
-/* ── cabecera ─────────────────────────────────────────────────────────── */
-header {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 20px; padding: 26px 0 30px;
+@media(prefers-reduced-motion:no-preference){
+  .card,.talla,.comprar{transition:border-color .18s ease,background .18s ease,color .18s ease}
+  dialog.visor[open]{animation:e .18s ease}@keyframes e{from{opacity:0}to{opacity:1}}
 }
-.marca { display: block; width: 108px; height: auto; }
-.marca path { fill: var(--ink); }
-.eyebrow {
-  font-family: var(--m); font-size: 10px; letter-spacing: .22em;
-  text-transform: uppercase; color: var(--accent);
-}
-
-/* ── producto: foto y ficha ───────────────────────────────────────────
-   EN PARALELO EN PANTALLA ANCHA. Apilados, la foto ocupaba el alto entero
-   de la pantalla y la primera vista de la pagina no llegaba ni al nombre
-   del producto: quien abre el enlace tiene que ver la prenda Y el precio
-   sin tocar nada. En el movil se apilan, que es donde eso si funciona. */
-.producto { display: grid; grid-template-columns: 1fr; gap: 28px; align-items: start; }
-@media (min-width: 860px) {
-  .producto { grid-template-columns: 1.05fr .95fr; gap: 46px; }
-  .lado { position: sticky; top: 28px; }
-}
-
-.hero { position: relative; border-radius: 18px; overflow: hidden; background: var(--surface); }
-.hero img { display: block; width: 100%; height: auto; }
-
-/* ── ficha ────────────────────────────────────────────────────────────── */
-.ficha { display: grid; gap: 26px; align-items: start; padding: 4px 0 8px; }
-
-h2.nombre, .producto h2 {
-  font-family: var(--d); font-weight: 800;
-  font-size: clamp(38px, 8vw, 62px); line-height: .96;
-  letter-spacing: -.02em; margin: 0 0 14px; text-wrap: balance;
-}
-.sub { color: var(--muted); font-size: 15.5px; margin: 0 0 22px; max-width: 34em; }
-
-/* El precio con el numero grande y la moneda pequena: es como se lee un
-   precio en una tienda, no como se escribe en una hoja de calculo. */
-.precio { display: flex; align-items: baseline; gap: 6px; margin-bottom: 4px; }
-.precio b {
-  font-family: var(--m); font-weight: 500; font-size: 46px;
-  letter-spacing: -.03em; color: var(--ink); font-variant-numeric: tabular-nums;
-}
-.precio span { font-family: var(--m); font-size: 17px; color: var(--muted); }
-.iva { font-size: 12.5px; color: var(--muted); margin: 0 0 22px; }
-
-.tallas { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 18px; }
-.talla {
-  font-family: var(--m); font-size: 12px; padding: 8px 11px;
-  border: 1px solid var(--line); border-radius: 9px; color: var(--ink);
-  background: var(--surface);
-}
-.recargo { font-size: 12.5px; color: var(--muted); margin: 0 0 22px; }
-
-/* El contador de unidades es el argumento de venta: se marca, no se decora */
-.quedan {
-  display: inline-flex; align-items: center; gap: 9px;
-  font-family: var(--m); font-size: 12px; letter-spacing: .04em;
-  color: var(--accent); background: rgba(20, 231, 216, .07);
-  border: 1px solid rgba(20, 231, 216, .22);
-  padding: 9px 13px; border-radius: 999px;
-}
-.punto { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-
-/* ── especificaciones ─────────────────────────────────────────────────── */
-.specs { border-top: 1px solid var(--line); }
-.specs dl { display: grid; grid-template-columns: auto 1fr; gap: 0; margin: 0; }
-.specs dt, .specs dd {
-  padding: 13px 0; border-bottom: 1px solid var(--line); margin: 0;
-  font-family: var(--m); font-size: 11.5px; line-height: 1.5;
-}
-.specs dt { color: var(--muted); letter-spacing: .04em; padding-right: 22px; white-space: nowrap; }
-.specs dd { color: var(--ink); text-align: right; }
-
-/* ── galeria ──────────────────────────────────────────────────────────── */
-.galeria {
-  display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;
-  margin: 52px 0 12px;
-}
-@media (min-width: 760px) { .galeria { grid-template-columns: repeat(4, 1fr); } }
-.galeria img {
-  display: block; width: 100%; height: auto;
-  border-radius: 12px; background: var(--surface);
-}
-
-/* Lo que se puede ampliar se nota ANTES de tocarlo: el cursor y un ligero
-   levantar al pasar por encima. Sin eso, nadie descubre que se amplia. */
-.zoom { cursor: zoom-in; }
-@media (prefers-reduced-motion: no-preference) {
-  .zoom { transition: transform .22s ease, opacity .22s ease; }
-  .zoom:hover { transform: scale(1.012); opacity: .93; }
-}
-.zoom:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-
-.detalle { margin: 12px 0 0; border-radius: 18px; overflow: hidden; }
-.detalle img { display: block; width: 100%; height: auto; }
-.pie-foto {
-  font-family: var(--m); font-size: 11px; color: var(--muted);
-  letter-spacing: .05em; margin: 12px 0 0;
-}
-
-/* ── como se pide ─────────────────────────────────────────────────────── */
-.pedir {
-  margin: 56px 0 0; padding: 34px 26px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 18px;
-}
-.pedir h2 {
-  font-family: var(--d); font-weight: 700; font-size: 25px;
-  letter-spacing: -.01em; margin: 0 0 20px;
-}
-.pasos { list-style: none; margin: 0; padding: 0; display: grid; gap: 16px; counter-reset: p; }
-.pasos li {
-  display: grid; grid-template-columns: 26px 1fr; gap: 14px;
-  align-items: start; counter-increment: p;
-}
-.pasos li::before {
-  content: counter(p);
-  font-family: var(--m); font-size: 11px; color: var(--accent);
-  border: 1px solid rgba(20, 231, 216, .3); border-radius: 7px;
-  width: 26px; height: 26px; display: grid; place-items: center;
-}
-.pasos p { margin: 0; font-size: 14.5px; line-height: 1.55; }
-.pasos p b { color: var(--ink); font-weight: 600; }
-.pasos span { color: var(--muted); }
-
-footer {
-  margin: 46px 0 60px; padding-top: 24px; border-top: 1px solid var(--line);
-  display: flex; flex-wrap: wrap; gap: 10px 22px; justify-content: space-between;
-  font-family: var(--m); font-size: 10.5px; letter-spacing: .12em;
-  text-transform: uppercase; color: var(--muted);
-}
-
-/* ── el visor ─────────────────────────────────────────────────────────
-   Un `<dialog>` y no un div flotante: el navegador ya sabe cerrarlo con
-   Escape, atrapar el foco dentro y taparlo todo. Escribir eso a mano son
-   cuarenta lineas peor hechas. */
-dialog.visor {
-  border: 0; padding: 0; max-width: 100vw; max-height: 100vh;
-  width: 100%; height: 100%; background: rgba(6, 8, 10, .96); color: var(--ink);
-}
-dialog.visor::backdrop { background: rgba(6, 8, 10, .9); }
-dialog.visor img {
-  display: block; max-width: 96vw; max-height: 88vh;
-  width: auto; height: auto; margin: auto; border-radius: 10px;
-}
-.visor-caja {
-  height: 100%; display: grid; place-items: center; padding: 18px;
-  cursor: zoom-out;
-}
-.cerrar {
-  position: fixed; top: 14px; right: 14px; z-index: 2;
-  width: 42px; height: 42px; border-radius: 50%;
-  background: rgba(255, 255, 255, .1); border: 1px solid rgba(255, 255, 255, .16);
-  color: var(--ink); font-size: 20px; line-height: 1; cursor: pointer;
-}
-.cerrar:hover { background: rgba(255, 255, 255, .18); }
-.cerrar:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-@media (prefers-reduced-motion: no-preference) {
-  .hero img, .galeria img, .detalle img { transition: opacity .3s ease; }
-  dialog.visor[open] { animation: entra .18s ease; }
-  @keyframes entra { from { opacity: 0 } to { opacity: 1 } }
-}
-
-/* ── indice ───────────────────────────────────────────────────────────
-   Con tres productos hace falta saber que hay ANTES de bajar. Es la unica
-   pieza nueva del catalogo respecto a la pagina de un solo producto. */
-.indice { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 34px; }
-.indice a {
-  display: inline-flex; align-items: baseline; gap: 8px;
-  font-family: var(--m); font-size: 12px; text-decoration: none;
-  color: var(--muted); background: var(--surface);
-  border: 1px solid var(--line); border-radius: 999px; padding: 9px 15px;
-}
-.indice a b { color: var(--ink); font-weight: 500; }
-.indice a:hover { border-color: var(--accent); color: var(--ink); }
-.indice a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-/* Cada producto empieza donde acaba el anterior, con una linea que lo diga */
-.producto { padding-top: 46px; }
-.producto + .producto, .galeria + .producto,
-.pie-foto + .producto, .detalle + .producto { border-top: 1px solid var(--line); margin-top: 46px; }
-.producto h2 { margin-top: 0; }
-.pedir { border-top: 1px solid var(--line); border-radius: 18px; }
 
 </style>
 </head>
@@ -244,98 +147,123 @@ dialog.visor img {
     <svg class="marca" viewBox="83.0 39.3 223.4 126.7" role="img" aria-label="FDs"><path fill-rule="evenodd" d="M 207.5,45.9 C 226.6,52.199999999999996 240.8,66.1 247.1,84.5 C 249.0,90.3 249.4,93.5 249.4,103.0 C 249.4,113.0 249.1,115.5 246.70000000000002,121.9 C 242.9,132.4 239.60000000000002,137.6 232.00000000000003,145.1 C 220.50000000000003,156.5 205.90000000000003,162.0 187.20000000000005,162.0 C 173.50000000000006,162.0 167.30000000000004,159.4 163.40000000000003,151.8 C 161.30000000000004,147.70000000000002 161.40000000000003,86.10000000000001 163.50000000000003,82.00000000000001 C 165.40000000000003,78.20000000000002 169.80000000000004,76.00000000000001 175.10000000000002,76.00000000000001 C 178.40000000000003,76.00000000000001 179.8,76.60000000000001 182.60000000000002,79.40000000000002 L 186.00000000000003,82.80000000000003 L 186.20000000000002,93.60000000000002 C 186.3,99.60000000000002 186.3,110.20000000000002 186.10000000000002,117.10000000000002 C 185.70000000000002,130.70000000000002 186.3,135.50000000000003 188.50000000000003,136.40000000000003 C 191.20000000000002,137.40000000000003 202.40000000000003,134.90000000000003 207.40000000000003,132.20000000000005 C 213.50000000000003,128.90000000000003 220.50000000000003,120.30000000000004 222.50000000000003,113.60000000000005 C 227.50000000000003,96.80000000000005 219.70000000000002,78.90000000000005 204.10000000000002,71.70000000000005 C 199.70000000000002,69.60000000000005 198.10000000000002,69.50000000000004 156.8,69.20000000000005 L 114.10000000000001,68.90000000000005 L 113.60000000000001,71.20000000000005 C 113.30000000000001,72.50000000000004 112.9,75.90000000000005 112.7,78.80000000000004 C 112.2,84.80000000000004 111.60000000000001,85.90000000000003 109.2,84.40000000000003 C 107.9,83.50000000000003 107.4,81.60000000000004 107.2,76.10000000000004 C 106.9,69.30000000000004 107.10000000000001,68.80000000000004 109.9,66.00000000000004 L 112.80000000000001,63.00000000000004 L 154.20000000000002,63.00000000000004 C 199.8,63.00000000000004 201.8,63.200000000000045 211.3,69.20000000000005 C 218.0,73.50000000000004 224.5,81.10000000000005 227.10000000000002,87.80000000000004 C 230.3,95.90000000000003 230.3,110.10000000000004 227.10000000000002,118.20000000000005 C 224.00000000000003,126.10000000000005 216.8,133.80000000000004 208.50000000000003,138.00000000000006 C 203.10000000000002,140.70000000000005 200.50000000000003,141.40000000000006 193.90000000000003,141.80000000000007 C 186.60000000000002,142.20000000000007 185.70000000000005,142.10000000000008 183.50000000000003,140.00000000000006 L 181.00000000000003,137.70000000000005 L 181.00000000000003,111.80000000000004 C 181.00000000000003,87.30000000000004 180.90000000000003,85.90000000000003 179.00000000000003,84.00000000000004 C 176.10000000000002,81.10000000000004 171.60000000000002,81.40000000000005 169.10000000000002,84.60000000000004 C 167.10000000000002,87.20000000000003 167.00000000000003,88.40000000000003 167.00000000000003,116.60000000000004 C 167.00000000000003,148.80000000000004 167.30000000000004,151.00000000000003 173.00000000000003,154.40000000000003 C 176.90000000000003,156.60000000000002 196.40000000000003,156.70000000000005 204.10000000000002,154.40000000000003 C 228.3,147.30000000000004 244.00000000000003,127.10000000000004 244.00000000000003,103.10000000000004 C 244.00000000000003,83.10000000000004 233.00000000000003,64.90000000000003 215.40000000000003,55.70000000000004 C 202.90000000000003,49.20000000000004 200.80000000000004,49.000000000000036 150.50000000000003,49.000000000000036 C 105.70000000000003,49.000000000000036 105.40000000000003,49.000000000000036 101.00000000000003,51.20000000000004 C 94.30000000000003,54.60000000000004 93.00000000000003,58.000000000000036 93.00000000000003,71.70000000000005 C 93.00000000000003,82.10000000000005 93.20000000000003,83.10000000000005 95.40000000000003,85.70000000000005 L 97.80000000000004,88.50000000000004 L 120.20000000000005,89.00000000000004 C 135.70000000000005,89.30000000000004 143.20000000000005,89.90000000000005 144.70000000000005,90.80000000000004 C 150.00000000000006,93.80000000000004 151.70000000000005,103.50000000000004 147.90000000000003,108.40000000000003 C 143.80000000000004,113.60000000000004 141.80000000000004,114.00000000000003 120.00000000000003,114.00000000000003 C 108.10000000000002,114.00000000000003 99.10000000000002,114.40000000000003 97.90000000000003,115.00000000000003 C 93.90000000000003,117.20000000000003 93.00000000000003,121.10000000000002 93.00000000000003,136.90000000000003 C 93.00000000000003,151.10000000000002 93.10000000000002,152.00000000000003 95.20000000000003,154.00000000000003 C 98.00000000000003,156.60000000000002 101.00000000000003,156.60000000000002 104.30000000000003,153.90000000000003 C 106.90000000000002,151.90000000000003 107.00000000000003,151.70000000000005 107.20000000000003,137.80000000000004 C 107.50000000000003,125.80000000000004 107.80000000000003,123.60000000000004 109.20000000000003,122.60000000000004 C 110.10000000000004,122.10000000000004 111.30000000000003,121.90000000000003 111.70000000000003,122.40000000000003 C 112.10000000000004,122.80000000000004 112.60000000000004,129.30000000000004 112.80000000000003,136.80000000000004 C 113.10000000000002,152.40000000000003 112.10000000000002,155.70000000000005 106.10000000000002,159.70000000000005 C 102.00000000000003,162.50000000000006 98.60000000000002,162.60000000000005 94.10000000000002,160.20000000000005 C 87.70000000000002,156.80000000000004 86.90000000000002,153.70000000000005 87.20000000000002,135.00000000000006 C 87.50000000000001,119.40000000000006 87.60000000000002,118.30000000000005 89.90000000000002,115.10000000000005 C 94.40000000000002,108.90000000000005 97.90000000000002,108.00000000000006 120.60000000000002,108.00000000000006 C 139.3,108.00000000000006 140.8,107.90000000000006 142.50000000000003,106.00000000000006 C 144.70000000000002,103.50000000000006 144.70000000000002,99.50000000000006 142.50000000000003,97.00000000000006 C 140.80000000000004,95.10000000000005 139.30000000000004,95.00000000000006 121.00000000000003,95.00000000000006 C 100.40000000000003,95.00000000000006 96.40000000000003,94.40000000000006 92.10000000000002,90.60000000000005 C 88.1,87.0 87.0,82.9 87.0,71.0 C 87.0,53.9 91.2,47.0 103.5,43.9 C 105.2,43.5 127.7,43.199999999999996 153.5,43.4 C 199.5,43.6 200.6,43.6 207.5,45.9 M 297.1,85.8 C 299.3,88.3 300.0,90.0 300.0,93.3 C 300.0,101.1 296.3,104.1 285.5,104.89999999999999 C 276.3,105.69999999999999 276.4,107.3 285.8,111.99999999999999 C 298.5,118.49999999999999 302.40000000000003,123.89999999999999 302.40000000000003,135.5 C 302.40000000000003,144.0 299.70000000000005,150.4 293.90000000000003,155.3 C 287.6,160.8 282.1,162.0 264.1,162.0 C 250.20000000000002,162.0 248.10000000000002,161.8 245.20000000000002,160.0 C 238.50000000000003,155.9 237.50000000000003,146.8 243.20000000000002,141.3 L 246.10000000000002,138.5 L 262.8,138.0 C 278.40000000000003,137.5 279.5,137.4 279.5,135.6 C 279.5,134.2 277.6,132.7 273.1,130.4 C 261.1,124.30000000000001 256.0,117.2 256.0,106.5 C 256.0,98.8 258.4,93.6 264.4,88.3 C 270.2,83.2 274.09999999999997,82.1 285.29999999999995,82.3 C 293.9,82.5 294.19999999999993,82.6 297.09999999999997,85.8 M273.4 89.1c-4.2 1.2-10.1 7.9-11 12.4-2.1 11.6 3.2 20.3 14.9 24.6 7.2 2.6 10.3 7.9 7.6 12.8-2.5 4.4-5.3 5.1-21.1 5.1-13.5 0-15 .2-16.8 2-1.1 1.1-2 2.9-2 4s.9 2.9 2 4c1.8 1.8 3.3 2 17.8 2 14.9 0 16.1-.1 20.9-2.5 9.5-4.8 13.6-15.1 9.9-24.9-2.1-5.4-3.4-6.6-13.2-11.9-9.3-5-11.4-7.8-9.4-12.6 1.6-3.9 4.3-5.1 11.8-5.1 3.1 0 6.5-.7 7.5-1.4 2.4-1.8 2.3-7.2-.2-8.6-2.4-1.2-14.4-1.2-18.7.1"/></svg>
     <span class="eyebrow">Colección 01 · Galicia</span>
   </header>
-  <nav class="indice"><a href="#hoodie">Hoodie FDs <b>74,90 €</b></a><a href="#cortavientos">Cortavientos FDs <b>69,90 €</b></a><a href="#gorra">Gorra FDs <b>49,90 €</b></a></nav>
+  <p class="intro">Ropa de trabajo y de calle, en negro, con el escudo de
+  Galicia. Se fabrica cuando la pides, así que no hay tallas agotadas por
+  sorpresa — pero cada modelo tiene unidades contadas.</p>
 
-  <section class="producto" id="hoodie">
-    <div class="hero"><img class="zoom" src="img/hood-hero.jpg" alt="Hoodie FDs" width="1100" height="1375"></div>
-    <div class="lado ficha">
-      <div>
+  <div class="rejilla">
+    <article class="card" data-prod="hoodie" tabindex="0" role="button"
+             aria-label="Ver Hoodie FDs">
+      <div class="card-foto"><img src="img/hood-hero.jpg" alt="Hoodie FDs"
+           width="1100" height="1375" loading="lazy"></div>
+      <div class="card-txt">
         <h2>Hoodie FDs</h2>
-        <p class="sub">Sudadera con capucha de algodón pesado. Logo al pecho y escudo de Galicia a la espalda. Corte unisex.</p>
-        <div class="precio"><b>74,90</b><span>€</span></div>
-        <p class="iva">IVA incluido · envío a la nave</p>
-        <div class="tallas"><span class="talla">S</span><span class="talla">M</span><span class="talla">L</span><span class="talla">XL</span><span class="talla">2XL</span><span class="talla">3XL</span></div>
-        <p class="recargo">Las tallas 2XL y 3XL suman 3 € — el fabricante cobra más a partir de ahí.</p>
-        <div class="quedan"><span class="punto"></span>Quedan 15 de este drop</div>
+        <p class="claim">Algodón pesado, interior afelpado</p>
+        <div class="card-pie">
+          <span class="card-precio" data-precio>—</span>
+          <span class="card-stock" data-stock></span>
+        </div>
       </div>
-      <div class="specs"><dl><dt>Prenda</dt><dd>Premium pullover hoodie</dd><dt>Color</dt><dd>Negro</dd><dt>Pecho</dt><dd>Logo FDs bordado</dd><dt>Espalda</dt><dd>Escudo FDs Galicia</dd><dt>Tallas</dt><dd>S a 3XL</dd><dt>Unidades</dt><dd>15</dd></dl></div>
-    </div>
-  </section>
-  <div class="galeria"><img class="zoom" src="img/hood-1.jpg" alt="Hoodie FDs, vista 1" width="800" height="1067" loading="lazy"><img class="zoom" src="img/hood-2.jpg" alt="Hoodie FDs, vista 2" width="800" height="1067" loading="lazy"><img class="zoom" src="img/hood-3.jpg" alt="Hoodie FDs, vista 3" width="800" height="1067" loading="lazy"><img class="zoom" src="img/hood-4.jpg" alt="Hoodie FDs, vista 4" width="800" height="1067" loading="lazy"></div>
-  <div class="detalle"><img class="zoom" src="img/hood-det.jpg" alt="Bordado al pecho izquierdo, 8 cm" width="1300" height="812" loading="lazy"></div><p class="pie-foto">Bordado al pecho izquierdo, 8 cm</p><div class="detalle"><img class="zoom" src="img/hood-esp.jpg" alt="Escudo a la espalda" width="1300" height="812" loading="lazy"></div><p class="pie-foto">Escudo a la espalda</p>
-
-  <section class="producto" id="cortavientos">
-    <div class="hero"><img class="zoom" src="img/cort-hero.jpg" alt="Cortavientos FDs" width="1100" height="1375" loading="lazy"></div>
-    <div class="lado ficha">
-      <div>
+    </article>
+    <article class="card" data-prod="cortavientos" tabindex="0" role="button"
+             aria-label="Ver Cortavientos FDs">
+      <div class="card-foto"><img src="img/cort-hero.jpg" alt="Cortavientos FDs"
+           width="1100" height="1375" loading="lazy"></div>
+      <div class="card-txt">
         <h2>Cortavientos FDs</h2>
-        <p class="sub">Chubasquero ligero con capucha, plegable. Escudo Galicia al pecho. Para la lluvia de todos los días.</p>
-        <div class="precio"><b>69,90</b><span>€</span></div>
-        <p class="iva">IVA incluido · envío a la nave</p>
-        <div class="tallas"><span class="talla">S</span><span class="talla">M</span><span class="talla">L</span><span class="talla">XL</span><span class="talla">2XL</span></div>
-        <p class="recargo">Las tallas 2XL y 3XL suman 3 € — el fabricante cobra más a partir de ahí.</p>
-        <div class="quedan"><span class="punto"></span>Quedan 10 de este drop</div>
+        <p class="claim">Ligero, cortaviento, con capucha</p>
+        <div class="card-pie">
+          <span class="card-precio" data-precio>—</span>
+          <span class="card-stock" data-stock></span>
+        </div>
       </div>
-      <div class="specs"><dl><dt>Prenda</dt><dd>Cortavientos SOL'S 32000</dd><dt>Color</dt><dd>Negro</dd><dt>Pecho</dt><dd>Escudo Galicia</dd><dt>Espalda</dt><dd>Limpia</dd><dt>Tallas</dt><dd>S a 2XL</dd><dt>Unidades</dt><dd>10</dd></dl></div>
-    </div>
-  </section>
-  <div class="galeria"><img class="zoom" src="img/cort-1.jpg" alt="Cortavientos FDs, vista 1" width="800" height="1067" loading="lazy"><img class="zoom" src="img/cort-2.jpg" alt="Cortavientos FDs, vista 2" width="800" height="1067" loading="lazy"><img class="zoom" src="img/cort-3.jpg" alt="Cortavientos FDs, vista 3" width="800" height="1067" loading="lazy"><img class="zoom" src="img/cort-4.jpg" alt="Cortavientos FDs, vista 4" width="800" height="1067" loading="lazy"></div>
-  <div class="detalle"><img class="zoom" src="img/cort-det.jpg" alt="Escudo al pecho izquierdo" width="1300" height="812" loading="lazy"></div><p class="pie-foto">Escudo al pecho izquierdo</p>
-
-  <section class="producto" id="gorra">
-    <div class="hero"><img class="zoom" src="img/gorr-hero.jpg" alt="Gorra FDs" width="1100" height="1375" loading="lazy"></div>
-    <div class="lado ficha">
-      <div>
+    </article>
+    <article class="card" data-prod="gorra" tabindex="0" role="button"
+             aria-label="Ver Gorra FDs">
+      <div class="card-foto"><img src="img/gorr-hero.jpg" alt="Gorra FDs"
+           width="1100" height="1375" loading="lazy"></div>
+      <div class="card-txt">
         <h2>Gorra FDs</h2>
-        <p class="sub">Gorra trucker con malla trasera. Escudo Galicia bordado al frente. Talla única, ajustable.</p>
-        <div class="precio"><b>49,90</b><span>€</span></div>
-        <p class="iva">IVA incluido · envío a la nave</p>
-        <div class="tallas"><span class="talla">Única</span></div>
-        
-        <div class="quedan"><span class="punto"></span>Quedan 20 de este drop</div>
+        <p class="claim">Frontal estructurado, malla trasera</p>
+        <div class="card-pie">
+          <span class="card-precio" data-precio>—</span>
+          <span class="card-stock" data-stock></span>
+        </div>
       </div>
-      <div class="specs"><dl><dt>Prenda</dt><dd>Trucker con malla trasera</dd><dt>Color</dt><dd>Negra o negra y blanca</dd><dt>Frente</dt><dd>Escudo Galicia bordado</dd><dt>Talla</dt><dd>Única</dd><dt>Unidades</dt><dd>20</dd></dl></div>
-    </div>
-  </section>
-  <div class="galeria"><img class="zoom" src="img/gorr-1.jpg" alt="Gorra FDs, vista 1" width="800" height="1067" loading="lazy"><img class="zoom" src="img/gorr-2.jpg" alt="Gorra FDs, vista 2" width="800" height="1067" loading="lazy"><img class="zoom" src="img/gorr-3.jpg" alt="Gorra FDs, vista 3" width="800" height="1067" loading="lazy"><img class="zoom" src="img/gorr-4.jpg" alt="Gorra FDs, vista 4" width="800" height="1067" loading="lazy"></div>
-  
+    </article>
+  </div>
 
+  <section class="ficha" id="f-hoodie" hidden>
+    <div class="tira"><img src="img/hood-1.jpg" alt="Hoodie FDs" width="900" height="1200" loading="lazy"><img src="img/hood-2.jpg" alt="Hoodie FDs" width="900" height="1200" loading="lazy"><img src="img/hood-3.jpg" alt="Hoodie FDs" width="900" height="1200" loading="lazy"><img src="img/hood-4.jpg" alt="Hoodie FDs" width="900" height="1200" loading="lazy"><img src="img/hood-det.jpg" alt="Hoodie FDs" width="900" height="1200" loading="lazy"><img src="img/hood-esp.jpg" alt="Hoodie FDs" width="900" height="1200" loading="lazy"></div>
+    <div class="datos">
+      <h2>Hoodie FDs</h2>
+      <p class="sub">La prenda de invierno. Logo bordado al pecho y el escudo de Galicia a la espalda.</p>
+      <div class="precio"><b data-precio-grande>—</b><span>€</span></div>
+      <p class="iva" data-nota-talla>IVA incluido · envío incluido</p>
+      <div class="tallas" data-tallas></div>
+      <div class="cant">
+        <button type="button" data-menos aria-label="Una menos">−</button>
+        <span data-cant>1</span>
+        <button type="button" data-mas aria-label="Una más">+</button>
+      </div>
+      <button class="comprar" type="button" data-comprar disabled>Elige tu talla</button>
+      <p class="aviso" data-aviso></p>
+      <div class="specs"><dl><dt>Tejido</dt><dd>Algodón pesado, afelpado</dd><dt>Color</dt><dd>Negro</dd><dt>Pecho</dt><dd>Logo FDs bordado</dd><dt>Espalda</dt><dd>Escudo Galicia</dd><dt>Corte</dt><dd>Unisex</dd></dl></div>
+    </div>
+      <button class="volver" type="button">&larr; Ver todo</button>
+  </section>
+  <section class="ficha" id="f-cortavientos" hidden>
+    <div class="tira"><img src="img/cort-1.jpg" alt="Cortavientos FDs" width="900" height="1200" loading="lazy"><img src="img/cort-2.jpg" alt="Cortavientos FDs" width="900" height="1200" loading="lazy"><img src="img/cort-3.jpg" alt="Cortavientos FDs" width="900" height="1200" loading="lazy"><img src="img/cort-4.jpg" alt="Cortavientos FDs" width="900" height="1200" loading="lazy"><img src="img/cort-det.jpg" alt="Cortavientos FDs" width="900" height="1200" loading="lazy"></div>
+    <div class="datos">
+      <h2>Cortavientos FDs</h2>
+      <p class="sub">Para la lluvia de todos los días. Se pliega y cabe en cualquier sitio. Escudo Galicia al pecho.</p>
+      <div class="precio"><b data-precio-grande>—</b><span>€</span></div>
+      <p class="iva" data-nota-talla>IVA incluido · envío incluido</p>
+      <div class="tallas" data-tallas></div>
+      <div class="cant">
+        <button type="button" data-menos aria-label="Una menos">−</button>
+        <span data-cant>1</span>
+        <button type="button" data-mas aria-label="Una más">+</button>
+      </div>
+      <button class="comprar" type="button" data-comprar disabled>Elige tu talla</button>
+      <p class="aviso" data-aviso></p>
+      <div class="specs"><dl><dt>Tejido</dt><dd>Poliéster ligero</dd><dt>Color</dt><dd>Negro</dd><dt>Pecho</dt><dd>Escudo Galicia</dd><dt>Espalda</dt><dd>Limpia</dd><dt>Corte</dt><dd>Unisex</dd></dl></div>
+    </div>
+      <button class="volver" type="button">&larr; Ver todo</button>
+  </section>
+  <section class="ficha" id="f-gorra" hidden>
+    <div class="tira"><img src="img/gorr-1.jpg" alt="Gorra FDs" width="900" height="1200" loading="lazy"><img src="img/gorr-2.jpg" alt="Gorra FDs" width="900" height="1200" loading="lazy"><img src="img/gorr-3.jpg" alt="Gorra FDs" width="900" height="1200" loading="lazy"><img src="img/gorr-4.jpg" alt="Gorra FDs" width="900" height="1200" loading="lazy"></div>
+    <div class="datos">
+      <h2>Gorra FDs</h2>
+      <p class="sub">Trucker clásica con el escudo bordado al frente. Ajustable, vale para todos.</p>
+      <div class="precio"><b data-precio-grande>—</b><span>€</span></div>
+      <p class="iva" data-nota-talla>IVA incluido · envío incluido</p>
+      <div class="tallas" data-tallas></div>
+      <div class="cant">
+        <button type="button" data-menos aria-label="Una menos">−</button>
+        <span data-cant>1</span>
+        <button type="button" data-mas aria-label="Una más">+</button>
+      </div>
+      <button class="comprar" type="button" data-comprar disabled>Elige tu talla</button>
+      <p class="aviso" data-aviso></p>
+      <div class="specs"><dl><dt>Tejido</dt><dd>Frontal rígido, malla trasera</dd><dt>Color</dt><dd>Negra o negra y blanca</dd><dt>Frente</dt><dd>Escudo Galicia bordado</dd><dt>Cierre</dt><dd>Ajustable</dd></dl></div>
+    </div>
+      <button class="volver" type="button">&larr; Ver todo</button>
+  </section>
   <section class="pedir">
-    <h2>Cómo se pide</h2>
+    <h2>Cómo funciona</h2>
     <ol class="pasos">
-      <li><p><b>Dime qué quieres y tu talla.</b> <span>Por el grupo o directamente a mí.</span></p></li>
-      <li><p><b>Pagas.</b> <span>Bizum o transferencia. No se encarga nada antes de cobrar.</span></p></li>
-      <li><p><b>Se fabrica y llega a la nave.</b> <span>Te aviso en cuanto esté y te la doy en mano.</span></p></li>
+      <li><p><b>Eliges y pagas con tarjeta.</b> <span>El pago va por Stripe. Aquí no se guarda ningún dato de tu tarjeta.</span></p></li>
+      <li><p><b>Se fabrica.</b> <span>Tarda entre cuatro y siete días. No hay stock: se hace para ti.</span></p></li>
+      <li><p><b>Te llega.</b> <span>A tu casa, o a la nave si trabajas aquí — lo dices al pagar.</span></p></li>
     </ol>
   </section>
   <footer><span>FlotaDSP · Galicia</span><span>Unidades limitadas</span></footer>
 </div>
 
 <dialog class="visor" aria-label="Foto ampliada">
-  <button class="cerrar" type="button" aria-label="Cerrar">&times;</button>
   <div class="visor-caja"><img alt=""></div>
 </dialog>
-<script>
-(function () {
-  var visor = document.querySelector('.visor');
-  var grande = visor.querySelector('img');
-  if (!visor.showModal) {
-    document.querySelectorAll('.zoom').forEach(function (i) { i.classList.remove('zoom'); });
-    return;
-  }
-  document.querySelectorAll('.zoom').forEach(function (img) {
-    img.tabIndex = 0;
-    img.setAttribute('role', 'button');
-    img.setAttribute('aria-label', 'Ampliar: ' + (img.alt || 'foto'));
-    function abrir() { grande.src = img.currentSrc || img.src; grande.alt = img.alt; visor.showModal(); }
-    img.addEventListener('click', abrir);
-    img.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); abrir(); }
-    });
-  });
-  visor.addEventListener('click', function () { visor.close(); });
-  visor.addEventListener('close', function () { grande.removeAttribute('src'); });
-})();
-</script>
+<script src="app.js"></script>
 </body>
 </html>
