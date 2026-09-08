@@ -86,9 +86,41 @@ async function recuento(queue) {
   return { porEstacion, sinEstacion };
 }
 
+/* ── POR QUE HAY UN BUFFER EN MEMORIA ANTES DE LA COLA ────────────────────────
+   Esto era, con diferencia, lo que ponia lento el ordenador de la oficina.
+   Cada respuesta capturada llamaba a `enqueue`, y `enqueue` leia la cola
+   ENTERA de `chrome.storage.local`, la fundia y la volvia a escribir ENTERA —
+   mas `recuento`, que la recorre otra vez y escribe, mas tres lecturas sueltas
+   y el `setState`—: seis idas y venidas al almacen por respuesta, dos de ellas
+   serializando toda la cola a disco.
+
+   Y el barrido vuelve a capturar TODAS las rutas cada minuto: unas cincuenta
+   respuestas seguidas, o sea unas cien serializaciones por minuto de una
+   estructura que puede tener miles de paquetes. Ahi se iba la RAM y la CPU, no
+   en leer la API.
+
+   Ahora se acumula en memoria y se vuelca UNA vez —al llegar al lote o al
+   segundo de calma—, asi que el barrido entero hace uno o dos volcados en vez
+   de cien. La cola sigue viviendo en el almacen, que es lo que la protege de
+   que MV3 duerma al service worker; lo que se pierde si el worker muere en ese
+   segundo es como mucho un segundo de capturas, y el barrido las vuelve a
+   traer al minuto siguiente. Ademas se vuelca al suspenderse. */
+let _pend = new Map();      // tba -> paquete, aun sin escribir
+let _temporizador = null;
+
 async function enqueue(packages) {
+  for (const o of packages) if (o && o.tba) _pend.set(o.tba, o);
+  if (_pend.size >= MAX_BATCH) return volcar();
+  if (!_temporizador) _temporizador = setTimeout(() => { _temporizador = null; volcar(); }, 1000);
+}
+
+async function volcar() {
+  if (_temporizador) { clearTimeout(_temporizador); _temporizador = null; }
+  if (!_pend.size) return;
+  const lote = _pend;
+  _pend = new Map();        // lo nuevo que llegue mientras se escribe no se pierde
   const { queue = {} } = await chrome.storage.local.get({ queue: {} });
-  for (const o of packages) if (o && o.tba) queue[o.tba] = o;
+  for (const [tba, o] of lote) queue[tba] = o;
   await chrome.storage.local.set({ queue });
   const n = Object.keys(queue).length;
   const { porEstacion, sinEstacion } = await recuento(queue);
@@ -128,6 +160,9 @@ async function flush() {
   if (flushing) return;
   flushing = true;
   try {
+    // Lo que este en memoria entra en este envio: si no, un paquete capturado
+    // en el ultimo segundo esperaria al ciclo siguiente sin motivo.
+    await volcar();
     const { queue = {} } = await chrome.storage.local.get({ queue: {} });
     const todos = Object.values(queue);
     if (!todos.length) return;
@@ -239,6 +274,9 @@ async function pushActivity(url, count) {
   activity.unshift({ url: (url || '').replace(/^https?:\/\/[^/]+/, '').slice(0, 60), count, at: Date.now() });
   await chrome.storage.local.set({ activity: activity.slice(0, 12) });
 }
+
+/* Antes de que MV3 apague el worker, lo que quede en memoria se escribe. */
+try { chrome.runtime.onSuspend?.addListener(() => { volcar(); }); } catch (_) {}
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.type === 'cortexPackages' && Array.isArray(msg.packages)) {

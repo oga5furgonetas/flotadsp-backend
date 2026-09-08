@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.37.0';
+  const VERSION_INTERCEPTOR = '2.38.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -351,7 +351,8 @@
       nuevos++;
       const url = `${location.origin}/operations/execution/api/route-details/${id}`
         + `?historicalDay=${histParam}&routeId=${id}${saId ? `&serviceAreaId=${saId}` : ''}`;
-      rutaGets.add(url); // lista sin tope: una ruta no puede caerse del barrido
+      rutaGets.add(url); // una ruta no puede caerse del barrido...
+      acotar(rutaGets, 400); // ...pero 400 son ocho dias de rutas: mas es una fuga
       setTimeout(() => syntheticFetch(url), (i++) * 1500); // 1 ruta cada 1,5 s
     }
     if (nuevos) {
@@ -838,7 +839,11 @@
      que leer.
      Se apaga solo en cuanto encuentra uno: es un buscador, no un vigilante. */
   let buscadasPos = 0;
+  /* Con la pestaña abierta doce horas estos conjuntos solo crecen. Son
+     pequeños, pero el de posiciones guarda una clave por sitio distinto
+     encontrado y no tiene motivo para pasar de unos pocos cientos. */
   const vistasPos = new Set();
+  const acotar = (s, tope) => { while (s.size > tope) s.delete(s.values().next().value); };
   const buscarPosicion = (json, url) => {
     if (buscadasPos > 25 || !json || typeof json !== 'object') return;
     const esLat = (v) => typeof v === 'number' && v > -90 && v < 90 && v !== 0;
@@ -866,6 +871,7 @@
     const clave = u + '|' + encontrados[0];
     if (vistasPos.has(clave)) return;
     vistasPos.add(clave);
+    acotar(vistasPos, 300);
     buscadasPos++;
     /* UNA FICHA POR SITIO. El backend guarda el diagnostico por su `which`, asi
        que con un nombre unico los hallazgos se PISABAN entre si y solo se veia
@@ -1061,6 +1067,17 @@
       if (!text || text.length < 2) return;
       const c = text[0];
       if (c !== '{' && c !== '[') return;
+      /* UNA SOLA PASADA DE `JSON.parse` POR RESPUESTA.
+         Antes se parseaba dos veces lo mismo: una para el buscador de
+         posiciones y otra para `parsed`, y con `route-details` eso son varios
+         megas analizados dos veces por cada respuesta y en cada barrido. En el
+         ordenador de la oficina, con Cortex abierto todo el dia, es de lo que
+         mas se nota. Se parsea a la primera que haga falta y se guarda. */
+      let _obj = null, _hecho = false;
+      const comoObjeto = () => {
+        if (!_hecho) { _hecho = true; try { _obj = JSON.parse(text); } catch (_) { _obj = null; } }
+        return _obj;
+      };
       const isSummary = /route-summaries/i.test(url);
       const isDetails = /route-details/i.test(url);
       if (isDetails) learnTemplate(url);
@@ -1079,8 +1096,14 @@
          mirarlas TODAS.
          Filtro barato antes de parsear: si el texto no menciona siquiera una
          latitud, no hay nada que buscar y no se gasta un JSON.parse. */
-      if (/"lat(itude)?"\s*:/.test(text) && text.length < 3000000) {
-        try { buscarPosicion(JSON.parse(text), url); } catch (_) {}
+      /* El tope baja de 3 MB a 512 KB, y no es por ahorrar por ahorrar: lo
+         unico grande que trae latitudes es `route-details`, y ahi las
+         coordenadas son las de `addresses` —el destino de cada parada—, que
+         este buscador DESCARTA a proposito dos lineas mas abajo. O sea que
+         analizar esos megas no puede encontrar nada por definicion. Lo que si
+         busca —`locationUpdate` y compañia— son respuestas pequeñas. */
+      if (/"lat(itude)?"\s*:/.test(text) && text.length < 512000) {
+        try { buscarPosicion(comoObjeto(), url); } catch (_) {}
       }
       /* ── DONDE ESTA CADA CONDUCTOR, DE VERDAD ──────────────────────────
          `/transporters/locationUpdate` -> `transportersLocation[].geocode`.
@@ -1094,7 +1117,7 @@
          igualmente el esquema para verlo en un minuto. */
       if (/locationUpdate/i.test(url)) {
         try {
-          const j = JSON.parse(text);
+          const j = comoObjeto();
           const lista = j.transportersLocation || j.transporterLocations || j.locations || [];
           const datos = [];
           for (const it of (Array.isArray(lista) ? lista : [])) {
@@ -1118,8 +1141,7 @@
       const marked = MARK.test(text);
       // Nos interesan respuestas de datos (por URL o por contenido) y el sumario.
       if (!marked && !isSummary && !RELEVANT_URL.test(url)) return;
-      let parsed = null;
-      try { parsed = JSON.parse(text); } catch (_) {}
+      const parsed = comoObjeto();
       // De route-summaries sacamos TODAS las rutas del día y pedimos su detalle.
       if (parsed && isSummary) harvestRoutes(parsed);
 
@@ -1309,7 +1331,20 @@
         const method = (args[1]?.method) || (typeof args[0] === 'object' ? args[0]?.method : '') || 'GET';
         const ct = res.headers.get('content-type') || '';
         if (ct.includes('json') || /route|task|stop|package|parcel|delivery|itinerary|summar/i.test(url)) {
-          res.clone().text().then((t) => emit(url, t, method)).catch(() => {});
+          /* `clone()` DUPLICA EL CUERPO EN MEMORIA: el navegador tiene que
+             guardarlo entero hasta que se consumen las dos copias. Con Cortex
+             abierto todo el dia eso es lo que se come la RAM del ordenador de
+             la oficina. Una respuesta enorme cuya URL no reconocemos no la
+             vamos a usar —la pesca por contenido (`MARK`) es para respuestas
+             de datos, que son pequeñas—, asi que no se copia.
+             Las que si nos importan no tienen tope: `route-details`,
+             `route-summaries` y el informe entran siempre, sea cual sea su
+             tamaño. */
+          const largo = Number(res.headers.get('content-length') || 0);
+          const nuestra = /route-details|route-summaries|packagesByStatus/i.test(url);
+          if (nuestra || !largo || largo < 4000000) {
+            res.clone().text().then((t) => emit(url, t, method)).catch(() => {});
+          }
         }
       } catch (_) {}
     }).catch(() => {});

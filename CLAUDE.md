@@ -1494,6 +1494,37 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    se rellena a mano mide la constancia de quien lo rellena, no la realidad.
 
 
+74. **`chrome.storage.local` no es una variable: cada `get`/`set` serializa la
+   estructura ENTERA, y hacerlo por respuesta capturada es lo que ponia de
+   rodillas al ordenador de la oficina.** `enqueue` leia la cola entera, la
+   fundia y la reescribia entera —mas `recuento`, que la recorre otra vez y
+   escribe, mas tres lecturas sueltas y el `setState`—: **seis idas y venidas
+   al almacen por cada respuesta**, dos de ellas serializando toda la cola. Y
+   el barrido recaptura TODAS las rutas cada minuto: unas cincuenta respuestas
+   seguidas, o sea unas cien serializaciones por minuto de algo que puede tener
+   miles de paquetes. No era leer la API de Cortex: era esto.
+   Ahora se acumula en memoria y se vuelca al llegar al lote o al segundo de
+   calma — **5 escrituras en vez de 50** para un barrido de 50 respuestas,
+   medido en `scripts/check-cola-extension.mjs`, que ejecuta el `background.js`
+   de verdad con un `chrome` de mentira. La cola sigue viviendo en el almacen,
+   que es lo que la protege de que MV3 duerma al worker, y se vuelca tambien en
+   `onSuspend`; lo que se puede perder es un segundo de capturas que el barrido
+   vuelve a traer al minuto.
+   Y en el interceptor, dos de la misma familia: se parseaba **dos veces** cada
+   respuesta —una para el buscador de posiciones y otra para el uso real, 8,3 ms
+   contra 4,1 en un `route-details` de 0,8 MB—, y se hacia `res.clone()` de
+   TODA respuesta JSON aunque no se fuera a mirar, lo que obliga al navegador a
+   guardar el cuerpo entero por duplicado. Ahora se parsea una vez, no se copia
+   lo grande cuya URL no reconocemos (`route-details`, `route-summaries` y el
+   informe entran siempre, sin tope) y el buscador de posiciones baja su tope de
+   3 MB a 512 KB: lo unico grande con latitudes es `route-details`, y ahi las
+   coordenadas son las de `addresses`, que ese buscador descarta a proposito.
+   Regla general: **en una extension, cualquier trabajo que se haga "por
+   respuesta" se multiplica por el barrido.** Antes de tocar el tamaño de una
+   estructura, contar cuantas veces se lee y se escribe (gotcha 63 del lado del
+   navegador).
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
@@ -1517,10 +1548,11 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   despues de tocar multiempresa, importaciones, centros o el flujo de taller.
   Deja la empresa creada a proposito —no se borra sola: un script de smoke no
   debe poder borrar nada—; se quita desde el panel de super-admin.
-- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son dieciocho:
+- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son veintiuno:
   `check-i18n`, `check-routes`, `check-huerfanas`, `check-permisos`, `check-tema`,
   `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones`,
   `check-tema-mezclado`, `check-efectos`, `check-chunk-error`,
+  `check-importados`, `check-destinos`, `check-cola-extension`,
   `check_contracts.py`, `check_objectid.py`, `check_tenant.py`,
   `check_multiempresa.py`, `check_borrado.py` y `check_unicos.py`.
   `check-patrones` admite `soloEn` en una regla: hay patrones que solo son un
