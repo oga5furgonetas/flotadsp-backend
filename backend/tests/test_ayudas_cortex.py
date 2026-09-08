@@ -193,3 +193,108 @@ def test_la_consulta_no_filtra_por_entregados():
     assert "_CX_NO_DESPACHADO" in src, (
         "hay que dejar fuera lo que nunca llego a sus manos, con la lista canonica")
     assert "_CX_OK" in src, "y contar aparte cuantos van entregados"
+
+
+# ---------------------------------------------------------------------------
+# EL RESUMEN COMO FUENTE: lo que destapo Christian Gallego el 08-09-2026
+# ---------------------------------------------------------------------------
+# «Los numeros me cuadran, pero el primer dia quite 60 paquetes y no aparecen.»
+# Eran 65, en la ruta XA_C9 de Sergio Luis Rojas, y no aparecian porque el
+# reparto por persona solo llega a `cortex_packages` cuando ALGUIEN ABRE esa
+# ruta en Cortex: el paquete guarda un unico transportista, el de la ultima
+# captura. Se vio en el propio dato — los paquetes del 01-09 se volvieron a
+# capturar a las 11:22 del dia 8, justo cuando Dani abrio la ruta para hacer la
+# captura de pantalla, y ahi aparecieron los 65.
+# O sea que el contador estaba midiendo QUE RUTAS SE HABIAN MIRADO.
+# El resumen del dia si trae el reparto entero y se captura solo: `cuentas`
+# tiene una entrada por ruta y transportista. El 01-09, 44 rutas y 70 cuentas.
+
+def _resumen():
+    amb = {}
+    for n in _ARBOL.body:
+        if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "_CX_NO_DESPACHADO":
+            amb["_CX_NO_DESPACHADO"] = ast.literal_eval(n.value)
+    for n in _ARBOL.body:
+        if isinstance(n, ast.FunctionDef) and n.name in ("_cuenta_paquetes", "_ayudas_de_un_resumen"):
+            exec(compile(ast.fix_missing_locations(ast.Module(body=[n], type_ignores=[])),  # noqa: S102
+                         "<server>", "exec"), amb)
+    return amb["_ayudas_de_un_resumen"], amb["_cuenta_paquetes"]
+
+
+DEL_RESUMEN, CUENTA = _resumen()
+
+# El dia 1 de verdad, recortado a las dos rutas que importan.
+RUTAS_1 = [{"routeCode": "XA_C8", "transporterId": YO, "paquetes": {"DELIVERED": 90, "REMAINING": 0}},
+           {"routeCode": "XA_C9", "transporterId": "SERGIO", "paquetes": {"DELIVERED": 214, "REMAINING": 0}}]
+CUENTAS_1 = [{"transporterId": YO, "paquetes": {"DELIVERED": 90, "REMAINING": 0}},
+             {"transporterId": "SERGIO", "paquetes": {"DELIVERED": 138, "REMAINING": 0}},
+             {"transporterId": "IAGO", "paquetes": {"DELIVERED": 11, "REMAINING": 0}},
+             {"transporterId": "CHRISTIAN", "paquetes": {"DELIVERED": 65, "REMAINING": 0}}]
+
+
+def test_el_resumen_reparte_la_ruta_entre_los_tres():
+    r = DEL_RESUMEN(RUTAS_1, CUENTAS_1)
+    assert r["XA_C8"] == {YO: (90, 90)}
+    assert r["XA_C9"] == {"SERGIO": (138, 138), "IAGO": (11, 11), "CHRISTIAN": (65, 65)}
+
+
+def test_remaining_no_es_un_estado_y_no_se_suma():
+    """`REMAINING` es lo que le queda por repartir; sumarlo lo contaria dos veces."""
+    assert CUENTA({"DELIVERED": 10, "REMAINING": 40}) == (10, 10)
+    assert CUENTA({"DELIVERED": 2, "PICKED_UP": 48, "REMAINING": 48}) == (50, 2)
+
+
+def test_lo_que_nunca_llego_a_sus_manos_no_cuenta():
+    assert CUENTA({"DELIVERED": 5, "NOT_READY": 3, "UNCOLLECTED": 2}) == (5, 5)
+
+
+def test_una_ruta_que_no_cuadra_se_descarta_entera():
+    """Si la suma no da, se prefiere no decir nada a repartir mal.
+
+    El emparejamiento es por ORDEN —`cuentas` no trae el codigo de ruta—, asi
+    que la unica defensa es exigir que cuadre al paquete. Medido sobre los 8
+    dias de septiembre: cuadran 386 de 400, y las 14 que no son de la otra nave.
+    """
+    rutas = [{"routeCode": "R1", "transporterId": "A", "paquetes": {"DELIVERED": 100}}]
+    cuentas = [{"transporterId": "A", "paquetes": {"DELIVERED": 40}}]
+    assert DEL_RESUMEN(rutas, cuentas) == {}
+
+
+def test_unassigned_no_es_una_persona():
+    rutas = [{"routeCode": "R1", "transporterId": "A", "paquetes": {"DELIVERED": 30}}]
+    cuentas = [{"transporterId": "unassigned", "paquetes": {"DELIVERED": 10}},
+               {"transporterId": "A", "paquetes": {"DELIVERED": 20}}]
+    r = DEL_RESUMEN(rutas, cuentas)
+    assert r["R1"] == {"A": (20, 20)}, "los sueltos sin dueno no se le cuelgan a nadie"
+
+
+def _juntar():
+    amb = {}
+    for n in _ARBOL.body:
+        if isinstance(n, ast.FunctionDef) and n.name == "_ayudas_juntar":
+            exec(compile(ast.fix_missing_locations(ast.Module(body=[n], type_ignores=[])),  # noqa: S102
+                         "<server>", "exec"), amb)
+    return amb["_ayudas_juntar"]
+
+
+JUNTAR = _juntar()
+
+
+def test_juntar_se_queda_con_la_cifra_mayor_y_no_suma():
+    """Son dos miradas al MISMO hecho: sumarlas lo contaria dos veces."""
+    a = [("2026-09-01", "N", "XA_C9", "CHRISTIAN", 65, 65)]
+    b = [("2026-09-01", "N", "XA_C9", "CHRISTIAN", 65, 65)]
+    assert JUNTAR(a, b) == [("2026-09-01", "N", "XA_C9", "CHRISTIAN", 65, 65)]
+
+
+def test_juntar_toma_de_cada_fuente_lo_que_la_otra_no_ve():
+    """El resumen no ve lo que aun va en la furgoneta; los paquetes si.
+
+    Y al reves: los paquetes solo tienen el reparto de las rutas que alguien
+    abrio en Cortex.
+    """
+    resumen = [("2026-09-08", "N", "XA_C9", "CHRISTIAN", 2, 2)]
+    paquetes = [("2026-09-08", "N", "XA_C9", "CHRISTIAN", 51, 2)]
+    assert JUNTAR(resumen, paquetes) == [("2026-09-08", "N", "XA_C9", "CHRISTIAN", 51, 2)]
+    solo_resumen = [("2026-09-01", "N", "XA_C9", "CHRISTIAN", 65, 65)]
+    assert JUNTAR(solo_resumen, []) == [("2026-09-01", "N", "XA_C9", "CHRISTIAN", 65, 65)]

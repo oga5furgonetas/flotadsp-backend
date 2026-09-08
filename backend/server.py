@@ -18548,6 +18548,58 @@ significar nada. Con 3, quedan las salidas de verdad.
 _AYUDA_MIN_PAQUETES = 3
 
 
+def _cuenta_paquetes(paquetes: dict) -> tuple:
+    """(asumidos, entregados) de un bloque `paquetes` del resumen de Cortex.
+
+    `REMAINING` NO es un estado: es cuantos le quedan por repartir, y sumarlo
+    contaria dos veces lo mismo. Y fuera lo que nunca llego a sus manos, con la
+    lista canonica y no una copia (gotcha 40).
+    """
+    asumidos = sum(n for k, n in (paquetes or {}).items()
+                   if k != "REMAINING" and k not in _CX_NO_DESPACHADO)
+    return asumidos, int((paquetes or {}).get("DELIVERED") or 0)
+
+
+def _ayudas_de_un_resumen(rutas: list, cuentas: list) -> dict:
+    """{ruta: {transporter: (asumidos, entregados)}} a partir del resumen.
+
+    POR QUE HACE FALTA, y es lo que destapo Christian Gallego. Los paquetes
+    guardan UN transportista, el de la ultima captura, y ese reparto solo
+    aparece cuando alguien abre esa ruta en Cortex: sus 65 paquetes del 01-09
+    en la ruta de Sergio no existian para nosotros hasta que Dani abrio la ruta
+    el dia 8 para hacer una captura de pantalla —y entonces aparecieron—. O sea
+    que el contador medía QUE RUTAS SE HABIAN MIRADO.
+    El resumen del dia si trae el reparto entero: `cuentas` tiene una entrada
+    por ruta Y transportista, y se captura solo. El 01-09: 44 rutas y 70
+    cuentas, y las 26 de mas son los segundos.
+
+    LO QUE NO TRAE es el codigo de ruta, asi que hay que emparejar por ORDEN:
+    las cuentas vienen agrupadas por ruta, en el mismo orden que `rutas`. Se
+    consumen hasta completar los entregados de cada ruta y **solo se acepta la
+    ruta si la suma cuadra EXACTAMENTE**; si no cuadra se descarta esa ruta y
+    se sigue. Comprobado sobre los 8 dias de septiembre: las 344 rutas cuadran
+    al paquete. Una ruta sin entregas no se puede alinear —no consume nada— y
+    se deja para los paquetes, que ahi si mandan.
+    """
+    out, i = {}, 0
+    for r in rutas or []:
+        objetivo = int(((r.get("paquetes") or {}).get("DELIVERED")) or 0)
+        if not objetivo:
+            continue
+        gente, ent = {}, 0
+        while i < len(cuentas) and ent < objetivo:
+            c = cuentas[i]; i += 1
+            tid = c.get("transporterId")
+            a, e = _cuenta_paquetes(c.get("paquetes"))
+            ent += e
+            if tid and tid != "unassigned":
+                x = gente.get(tid, (0, 0))
+                gente[tid] = (x[0] + a, x[1] + e)
+        if ent == objetivo and r.get("routeCode"):
+            out[r["routeCode"]] = gente
+    return out
+
+
 async def _ayuda_titulares(mes: str) -> dict:
     """{(dia, nave, ruta): transporter del titular}, segun Cortex.
 
@@ -18566,6 +18618,22 @@ async def _ayuda_titulares(mes: str) -> dict:
         for r in (d.get("rutas") or []):
             if r.get("routeCode") and r.get("transporterId"):
                 out[(d["dia"], d.get("service_area_id"), r["routeCode"])] = r["transporterId"]
+    return out
+
+
+async def _ayudas_del_resumen(mes: str) -> list:
+    """Lo mismo que `_ayudas_del_mes` pero sacado del RESUMEN de cada dia.
+
+    Es la fuente completa: no depende de que nadie haya abierto la ruta.
+    """
+    out = []
+    async for d in db.cortex_resumen.find(
+            {"dia": {"$regex": "^" + mes}},
+            {"_id": 0, "dia": 1, "rutas": 1, "cuentas": 1, "service_area_id": 1}):
+        reparto = _ayudas_de_un_resumen(d.get("rutas") or [], d.get("cuentas") or [])
+        for ruta, gente in reparto.items():
+            for tid, (a, e) in gente.items():
+                out.append((d["dia"], d.get("service_area_id"), ruta, tid, a, e))
     return out
 
 
@@ -18609,6 +18677,25 @@ async def _ayudas_del_mes(mes: str) -> list:
         if k.get("d") and k.get("r") and k.get("t"):
             out.append((k["d"], k.get("a"), k["r"], k["t"], a["paq"], a["ent"]))
     return out
+
+
+def _ayudas_juntar(*fuentes) -> list:
+    """Junta las fuentes quedandose con la CIFRA MAYOR de cada una.
+
+    Son dos miradas al mismo hecho y cada una ve algo que la otra no: el
+    resumen trae el reparto de TODAS las rutas pero solo lo que ya esta
+    cerrado, y los paquetes traen lo que se lleva encima ahora mismo —lo
+    recogido y aun sin entregar— pero solo de las rutas que alguien ha abierto.
+    Quedarse con la mayor no infla nada: las dos cuentan lo mismo, y la que se
+    queda corta es siempre la que todavia no lo ha visto.
+    """
+    mejor = {}
+    for f in fuentes:
+        for dia, nave, ruta, quien, asumidos, entregados in f:
+            k = (dia, nave, ruta, quien)
+            a, e = mejor.get(k, (0, 0))
+            mejor[k] = (max(a, asumidos), max(e, entregados))
+    return [(k[0], k[1], k[2], k[3], v[0], v[1]) for k, v in mejor.items()]
 
 
 def _ayudas_reparte(grupos: list, titulares: dict, mias: set) -> dict:
@@ -18668,9 +18755,10 @@ async def portal_mis_ayudas(user: dict = Depends(require_any_auth)):
     claves = list(mis_ids | tids)
     mes = _apoyo_hoy()[:7]
 
-    titulares, nombres, grupos = await asyncio.gather(
-        _ayuda_titulares(mes), _ayuda_nombres(mes), _ayudas_del_mes(mes))
-    r = _ayudas_reparte(grupos, titulares, set(tids))
+    titulares, nombres, grupos, del_resumen = await asyncio.gather(
+        _ayuda_titulares(mes), _ayuda_nombres(mes),
+        _ayudas_del_mes(mes), _ayudas_del_resumen(mes))
+    r = _ayudas_reparte(_ayudas_juntar(grupos, del_resumen), titulares, set(tids))
 
     paquetes = sum(x["paquetes"] for x in r["hice"])
     entregados = sum(x["entregados"] for x in r["hice"])

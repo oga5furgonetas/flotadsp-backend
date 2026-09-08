@@ -1465,10 +1465,30 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `state: DELIVERED` en la CONSULTA pasaba en verde. Hizo falta un caso que lea
    la consulta de verdad; un trinquete que no cubre la puerta por la que entro
    el fallo no es un trinquete.
+   **Y el cuarto es el que mas ensena: `cortex_packages.driver_id` guarda UN
+   transportista, el de la ultima captura, y el reparto real de una ruta solo
+   llega ahi cuando alguien ABRE esa ruta en Cortex.** Lo canto Christian
+   Gallego: «el primer dia quite 60 paquetes y no aparecen». Eran 65, en la
+   XA_C9 de Sergio Luis Rojas el 01-09, y para nosotros no existian... hasta
+   que Dani abrio esa ruta el dia 8 para hacer una captura de pantalla: los
+   paquetes del 01-09 se re-capturaron a las 11:22 de ese dia y ahi aparecieron
+   los 65. O sea que **el contador media que rutas se habian mirado**, y por eso
+   el 07-09 salian 32 rutas compartidas de 49 y el 06-09 solo 6 de 36.
+   La fuente completa estaba al lado: **`cortex_resumen.cuentas`**, una entrada
+   por ruta Y transportista, capturada con el resumen del dia sin que nadie
+   abra nada — el 01-09, 44 rutas y 70 cuentas, y las 26 de mas son los
+   segundos. No trae el codigo de ruta, asi que se empareja por ORDEN
+   consumiendo cuentas hasta completar los entregados de cada ruta, y **una
+   ruta solo se acepta si la suma cuadra al paquete**; cuadran 386 de 400 en
+   septiembre y las 14 que no son de otra nave. Las dos fuentes se juntan
+   quedandose con la CIFRA MAYOR de cada una —son dos miradas al mismo hecho,
+   sumarlas lo contaria dos veces—: el resumen ve todas las rutas pero solo lo
+   cerrado, los paquetes ven lo que va en la furgoneta ahora pero solo de lo
+   que alguien miro.
    Resultado, comparado grupo a grupo contra el dato crudo: Jose Arturo, de 0 a
-   4 salidas y 103 paquetes; Christian, de 3 salidas y 69 paquetes a 4 y 120
-   (71 entregados); la empresa, 113 salidas y 1.540 paquetes frente a 18 apuntes
-   a mano.
+   5 salidas y 135 paquetes; Christian, de 0 a 5 y 185 —con sus 65 del dia 1—;
+   Iago Barreiro, 19 salidas y 409 paquetes; la empresa, **143 salidas y 2.154
+   paquetes** frente a los 18 apuntes a mano del modulo.
    Regla general: **antes de dar por bueno un contador a cero, buscar el mismo
    hecho en la fuente que no depende de que alguien lo escriba.** Un modulo que
    se rellena a mano mide la constancia de quien lo rellena, no la realidad.
