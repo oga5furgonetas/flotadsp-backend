@@ -18662,6 +18662,45 @@ def _ayudas_de_un_resumen(rutas: list, cuentas: list) -> dict:
     return out
 
 
+# ---------------------------------------------------------------------------
+# EL MES DE AYUDAS SE CALCULA UNA VEZ PARA TODOS
+# ---------------------------------------------------------------------------
+# `/portal/mis-ayudas` mira un MES ENTERO de paquetes: la agregacion recorre
+# unos 47.000 documentos y tarda ~200 ms. Lo que cambia de un conductor a otro
+# es solo el ultimo paso -repartir esos grupos entre "lo hice yo" y "me lo
+# hicieron"-; los grupos son IDENTICOS para los 140.
+# Sin esto, un cambio de turno con cuarenta portales abriendose a la vez son
+# cuarenta barridos del mismo mes en un minuto. Con el, uno.
+#
+# LA CACHE VA SEPARADA POR EMPRESA. Es la regla de siempre en este fichero: una
+# cache en memoria que no lleve el `db_name` en la clave le sirve a un DSP los
+# datos de otro, en silencio y con HTTP 200.
+# Y dura poco a proposito: dos minutos. El conductor que acaba de entregar
+# quiere ver su numero subir, y ese es justo el momento en que mira.
+_AYUDAS_CACHE: dict = {}
+_AYUDAS_CACHE_SEG = 120
+
+
+async def _ayudas_del_periodo(desde: str, hasta: str) -> tuple:
+    """(titulares, nombres, grupos_juntos) del periodo, cacheado por empresa."""
+    clave = (_current_db_name.get(), desde, hasta)
+    guardado = _AYUDAS_CACHE.get(clave)
+    ahora = time.time()
+    if guardado and ahora - guardado[0] < _AYUDAS_CACHE_SEG:
+        return guardado[1]
+    titulares, nombres, grupos, del_resumen = await asyncio.gather(
+        _ayuda_titulares(desde, hasta), _ayuda_nombres(desde, hasta),
+        _ayudas_del_mes(desde, hasta), _ayudas_del_resumen(desde, hasta))
+    datos = (titulares, nombres, _ayudas_juntar(grupos, del_resumen))
+    # Se limpia lo viejo aqui mismo: sin esto la cache guarda un mes por cada
+    # combinacion de fechas que alguien pida y no la vacia nadie.
+    for k, v in list(_AYUDAS_CACHE.items()):
+        if ahora - v[0] > _AYUDAS_CACHE_SEG * 5:
+            _AYUDAS_CACHE.pop(k, None)
+    _AYUDAS_CACHE[clave] = (ahora, datos)
+    return datos
+
+
 def _rango(desde: str, hasta: str) -> dict:
     """El filtro de fechas, en un solo sitio. Las tres consultas de las ayudas
     lo usaban con `^mes` y eso no sirve para «esta semana»."""
@@ -18889,10 +18928,7 @@ async def conductores_rendimiento(desde: str = "", hasta: str = "", center: str 
             reporte[r["_id"]] = r
 
     # ---- Ayudas -----------------------------------------------------------
-    titulares, nombres, grupos, del_resumen = await asyncio.gather(
-        _ayuda_titulares(d0, d1), _ayuda_nombres(d0, d1),
-        _ayudas_del_mes(d0, d1), _ayudas_del_resumen(d0, d1))
-    juntos = _ayudas_juntar(grupos, del_resumen)
+    titulares, nombres, juntos = await _ayudas_del_periodo(d0, d1)
     dio: dict = {}
     recibio: dict = {}
     porruta: dict = {}
@@ -18976,10 +19012,8 @@ async def portal_mis_ayudas(user: dict = Depends(require_any_auth)):
     # El mes en curso, del dia 1 al 31: el rango cubre el mes entero sin tener
     # que saber cuantos dias tiene.
     d0, d1 = mes + "-01", mes + "-31"
-    titulares, nombres, grupos, del_resumen = await asyncio.gather(
-        _ayuda_titulares(d0, d1), _ayuda_nombres(d0, d1),
-        _ayudas_del_mes(d0, d1), _ayudas_del_resumen(d0, d1))
-    r = _ayudas_reparte(_ayudas_juntar(grupos, del_resumen), titulares, set(tids))
+    titulares, nombres, juntos = await _ayudas_del_periodo(d0, d1)
+    r = _ayudas_reparte(juntos, titulares, set(tids))
 
     paquetes = sum(x["paquetes"] for x in r["hice"])
     entregados = sum(x["entregados"] for x in r["hice"])
