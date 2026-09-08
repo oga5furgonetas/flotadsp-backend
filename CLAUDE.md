@@ -1438,8 +1438,25 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    ajena», 43 son de UN paquete y 17 de dos —el 38 %—, que no es ir a ayudar
    sino un paquete que cambio de furgoneta en la nave. `_AYUDA_MIN_PAQUETES`
    esta en 3. Ocho casos en `test_ayudas_cortex.py`.
-   Resultado: de 0 a 4 salidas y 103 paquetes el; de 18 apuntes a 100 salidas y
-   1.468 paquetes la empresa.
+   **Y la primera version del contador traia dos falsos positivos**, los dos
+   con la misma cara: rutas de RESCATE (`RDM_...`, que Cortex crea para recoger
+   lo que otra ruta no pudo) donde el titular del resumen figura con CERO
+   entregas. El 07-09 se le habrian apuntado a KEVIN FERNEY 111 paquetes de una
+   ruta entera, ademas de los 166 de la suya. Si el titular no entrego ni un
+   paquete no se puede decir que nadie le este ayudando: la guarda es
+   `if not tit or not reparto.get(tit)`, y es la regla del gotcha 31 —un
+   cociente contra un cero no dice la verdad aunque salga un numero—.
+   Y uno mas que hoy no muerde y manana si: **el titular hay que indexarlo por
+   (dia, NAVE, ruta)**. `cortex_resumen` es un documento por centro y dia y los
+   codigos se repiten entre naves —el 05-09-2026, CA_A42, CA_A44 y CA_A45
+   estaban en dos areas con transportistas distintos—: con la clave sin la nave
+   se queda el ultimo leido y todo el que reparta esa ruta en la otra nave sale
+   ayudando a un desconocido. Hoy solo entran paquetes de OGA5, asi que no se
+   ve; se veria en silencio el dia que entre la segunda.
+   Resultado, comparado grupo a grupo contra el dato crudo: de 0 a 4 salidas y
+   103 paquetes el; la empresa, 102 salidas y 1.429 paquetes (frente a 18
+   apuntes a mano), y las dos unicas cosas que se caen respecto a la version sin
+   guardas son esas dos rutas de rescate.
    Regla general: **antes de dar por bueno un contador a cero, buscar el mismo
    hecho en la fuente que no depende de que alguien lo escriba.** Un modulo que
    se rellena a mano mide la constancia de quien lo rellena, no la realidad.

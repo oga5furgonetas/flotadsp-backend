@@ -18549,13 +18549,23 @@ _AYUDA_MIN_PAQUETES = 3
 
 
 async def _ayuda_titulares(mes: str) -> dict:
-    """{(dia, ruta): transporter del titular}, segun Cortex."""
+    """{(dia, nave, ruta): transporter del titular}, segun Cortex.
+
+    LA NAVE VA EN LA CLAVE. `cortex_resumen` tiene un documento por centro y
+    dia (gotcha 49) y los codigos de ruta SE REPITEN entre naves: el 05-09-2026,
+    CA_A42, CA_A44 y CA_A45 estaban en dos areas a la vez con transportistas
+    distintos. Con la clave solo (dia, ruta) se queda el ultimo que se lea, y
+    entonces todo el que reparta esa ruta en la otra nave sale «ayudando» a
+    alguien que no conoce. Hoy no se nota porque solo entran paquetes de OGA5;
+    se veria el dia que entre la segunda nave, y en silencio.
+    """
     out = {}
     async for d in db.cortex_resumen.find(
-            {"dia": {"$regex": "^" + mes}}, {"_id": 0, "dia": 1, "rutas": 1}):
+            {"dia": {"$regex": "^" + mes}},
+            {"_id": 0, "dia": 1, "rutas": 1, "service_area_id": 1}):
         for r in (d.get("rutas") or []):
             if r.get("routeCode") and r.get("transporterId"):
-                out[(d["dia"], r["routeCode"])] = r["transporterId"]
+                out[(d["dia"], d.get("service_area_id"), r["routeCode"])] = r["transporterId"]
     return out
 
 
@@ -18578,7 +18588,8 @@ async def _ayudas_del_mes(mes: str) -> list:
     """
     cur = db.cortex_packages.aggregate([
         {"$match": {"service_day": {"$regex": "^" + mes}, "state": "DELIVERED"}},
-        {"$group": {"_id": {"d": "$service_day", "r": "$route_code", "t": "$driver_id"},
+        {"$group": {"_id": {"d": "$service_day", "a": "$service_area_id",
+                            "r": "$route_code", "t": "$driver_id"},
                     "paq": {"$sum": 1}}},
     ])
     out = []
@@ -18586,7 +18597,7 @@ async def _ayudas_del_mes(mes: str) -> list:
         k = a["_id"]
         # Mongo OMITE la clave cuando el campo no existe (gotcha 14).
         if k.get("d") and k.get("r") and k.get("t"):
-            out.append((k["d"], k["r"], k["t"], a["paq"]))
+            out.append((k["d"], k.get("a"), k["r"], k["t"], a["paq"]))
     return out
 
 
@@ -18595,20 +18606,39 @@ def _ayudas_reparte(grupos: list, titulares: dict, mias: set) -> dict:
 
     Aparte y sin base de datos a proposito, para poder probarla con casos
     escritos a mano.
+
+    LA GUARDA QUE PARECE DE MAS Y NO LO ES: si el titular no entrego NI UN
+    paquete en su ruta, no se cuenta nada. Sin ella salian dos falsos positivos
+    en septiembre, los dos en rutas de RESCATE (`RDM_...`, que Cortex crea para
+    recoger lo que otra ruta no pudo): el 07-09 se le habrian apuntado a KEVIN
+    FERNEY **111 paquetes** de una ruta cuyo titular figura con cero, ademas de
+    los 166 de la suya. Eso no es echar una mano en la ruta de alguien: es una
+    ruta entera, y de quien la «ayuda» no se puede decir nada porque el titular
+    no aparece. Es la regla del gotcha 31: un cociente contra un cero no dice
+    la verdad aunque el numero salga.
     """
-    hice, recibi, equipo = [], [], 0
-    for dia, ruta, quien, paq in grupos:
-        tit = titulares.get((dia, ruta))
-        if not tit or tit == quien or paq < _AYUDA_MIN_PAQUETES:
-            continue
-        equipo += paq
-        if quien in mias:
-            hice.append({"dia": dia, "ruta": ruta, "de": tit, "paquetes": paq})
-        elif tit in mias:
-            recibi.append({"dia": dia, "ruta": ruta, "quien": quien, "paquetes": paq})
+    porruta = {}
+    for dia, nave, ruta, quien, paq in grupos:
+        porruta.setdefault((dia, nave, ruta), {})[quien] = paq
+
+    hice, recibi, equipo, salidas = [], [], 0, 0
+    for clave, reparto in porruta.items():
+        tit = titulares.get(clave)
+        if not tit or not reparto.get(tit):
+            continue                      # ruta sin titular, o titular que no entrego nada
+        dia, _nave, ruta = clave
+        for quien, paq in reparto.items():
+            if quien == tit or paq < _AYUDA_MIN_PAQUETES:
+                continue
+            equipo += paq
+            salidas += 1
+            if quien in mias:
+                hice.append({"dia": dia, "ruta": ruta, "de": tit, "paquetes": paq})
+            elif tit in mias:
+                recibi.append({"dia": dia, "ruta": ruta, "quien": quien, "paquetes": paq})
     hice.sort(key=lambda x: (x["dia"], x["ruta"]), reverse=True)
     recibi.sort(key=lambda x: (x["dia"], x["ruta"]), reverse=True)
-    return {"hice": hice, "recibi": recibi, "equipo": equipo}
+    return {"hice": hice, "recibi": recibi, "equipo": equipo, "salidas": salidas}
 
 
 @api_router.get("/portal/mis-ayudas")
@@ -18658,9 +18688,7 @@ async def portal_mis_ayudas(user: dict = Depends(require_any_auth)):
             # Cuantas salidas de ayuda hay en toda la empresa este mes. Sirve
             # para que un cero se pueda leer bien: si en la empresa tampoco hay
             # ninguna, es que ese dia no hizo falta ayudar a nadie.
-            "equipo_veces": sum(1 for g in grupos
-                                if titulares.get((g[0], g[1])) not in (None, g[2])
-                                and g[3] >= _AYUDA_MIN_PAQUETES),
+            "equipo_veces": r["salidas"],
             "equipo": r["equipo"]}
 
 
