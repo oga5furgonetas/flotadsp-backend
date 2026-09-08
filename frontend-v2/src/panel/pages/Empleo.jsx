@@ -4,12 +4,13 @@ import {
   Briefcase, Plus, Copy, Check, Loader2, AlertTriangle, Trash2, X,
   MessageCircle, IdCard, Link2, Search, Download, FileText,
   Phone, Mail, Calendar, MapPin, Clock, ExternalLink, Save, History,
-  TrendingUp, UserPlus,
+  TrendingUp, UserPlus, Send,
 } from 'lucide-react'
 import { useT } from '../../i18n'
 import {
   getOfertas, crearOferta, editarOferta,
   getCandidatos, moverCandidato, contratarCandidato, borrarCandidato,
+  getEtts, crearEtt, editarEtt, borrarEtt, enviarCandidatoAEtt, deshacerEnvioEtt,
 } from '../api'
 
 /* EMPLEO — DE LA OFERTA AL ALTA DEL CONDUCTOR.
@@ -257,6 +258,11 @@ export default function Empleo() {
         onCerrarOferta={(o) => editarOferta(o.id, { activa: !o.activa }).then(cargar)}
         copiar={copiar} copiado={copiado} />
 
+      {/* La agenda va aquí y no en Configuración: la usa la misma persona que
+          mueve candidatos, y mandarla a otra pantalla es garantizar que las
+          ETT se queden sin dar de alta. */}
+      {!sel && <AgendaEtts onCambio={() => sel && cargarCands(sel)} />}
+
       {sel && (
         <div className="card overflow-hidden">
           <div className="flex flex-wrap items-center gap-2 border-b border-dark-800 px-4 py-3">
@@ -330,7 +336,8 @@ export default function Empleo() {
               {ficha ? (
                 <FichaCandidato c={cands.find((x) => x.id === ficha.id) || ficha} oferta={sel} t={t}
                   onCerrar={() => setFicha(null)} onMover={mover} onContratar={contratar}
-                  onBorrar={borrar} onNotas={guardarNotas} />
+                  onBorrar={borrar} onNotas={guardarNotas}
+                  onRecargar={() => cargarCands(sel)} />
               ) : (
                 <div className="rounded-xl border border-dashed border-dark-800 p-6 text-center text-[12.5px] text-dark-600">
                   {t('empleo.eligeCandidato')}
@@ -408,7 +415,8 @@ function Tarjeta({ c, t, activa, onAbrir, onArrastrar, onSoltar }) {
 }
 
 /* ── La ficha completa ────────────────────────────────────────────────── */
-function FichaCandidato({ c, oferta, t, onCerrar, onMover, onContratar, onBorrar, onNotas }) {
+function FichaCandidato({ c, oferta, t, onCerrar, onMover, onContratar, onBorrar, onNotas,
+                         onRecargar }) {
   const [notas, setNotas] = useState(c.notas || '')
   const [guardando, setGuardando] = useState(false)
   const idRef = useRef(c.id)
@@ -459,6 +467,8 @@ function FichaCandidato({ c, oferta, t, onCerrar, onMover, onContratar, onBorrar
 
       <div className="space-y-3 px-3.5 py-3">
         <Datos c={c} t={t} />
+
+        <EnviarAEtt c={c} onEnviado={onRecargar} />
 
         {(oferta.preguntas || []).length > 0 && (
           <div className="space-y-1.5 rounded-lg bg-dark-900/60 p-2.5">
@@ -806,6 +816,228 @@ function Campo({ label, value, onChange, placeholder }) {
       <label className="mb-1 block text-xs text-dark-500">{label}</label>
       <input value={value || ''} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
         className="w-full rounded-lg border border-dark-700 bg-dark-900 px-3 py-2 text-sm text-dark-100" />
+    </div>
+  )
+}
+
+
+/* ── ENVIAR A UNA ETT ────────────────────────────────────────────────────────
+   Pasar un candidato a Adecco eran siete pasos: copiar el teléfono, abrir
+   WhatsApp, buscar el contacto, escribir el mensaje con el puesto y la
+   disponibilidad, enviarlo, volver aquí y acordarse de apuntar a quién se lo
+   mandaste. Con cuarenta candidatos a la semana eso no se hace entero.
+
+   ABRIR WHATSAPP NO ES HABER ENVIADO, y por eso hay dos pasos. El enlace deja
+   el mensaje escrito, pero quien lo abre puede cerrarlo sin darle a enviar;
+   marcarlo solo por pulsar llenaría la ficha de envíos que no ocurrieron, y
+   eso es peor que no apuntar nada — se deja de llamar a alguien porque «ya
+   está mandado». Lo confirma la persona al volver.
+
+   El enlace lo arma el backend (gotcha 47): a mano sale sin prefijo y abre un
+   número que no existe. */
+function EnviarAEtt({ c, onEnviado }) {
+  const [preguntando, setPreguntando] = useState(null)   // la ETT que se acaba de abrir
+  const [yendo, setYendo] = useState('')
+  const [err, setErr] = useState('')
+  const etts = c.etts_para || []
+
+  const confirmar = async (ett) => {
+    setYendo(ett.id); setErr('')
+    try { await enviarCandidatoAEtt(c.id, ett.id); setPreguntando(null); onEnviado?.() } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo apuntar el envío.')
+    } finally { setYendo('') }
+  }
+
+  const deshacer = async (ett) => {
+    setYendo(ett.id); setErr('')
+    try { await deshacerEnvioEtt(c.id, ett.id); onEnviado?.() } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo deshacer.')
+    } finally { setYendo('') }
+  }
+
+  if (!etts.length) {
+    return (
+      <div className="rounded-lg border border-dashed border-dark-700 p-2.5 text-[11.5px] text-dark-500">
+        No hay ninguna ETT dada de alta. Añádelas arriba, en «ETTs», y aquí saldrá
+        un botón por cada una.
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-dark-500">
+        <Send size={11} /> Enviar a ETT
+      </div>
+      {etts.map((e) => (
+        <div key={e.id} className="rounded-lg bg-dark-900/60 p-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <b className="text-[12.5px] text-dark-100">{e.nombre}</b>
+            {e.enviado_en ? (
+              <span className="rounded bg-emerald-500/15 px-1.5 py-px text-[11px] font-semibold text-emerald-300">
+                enviado {dia(e.enviado_en)}{e.enviado_por ? ` · ${e.enviado_por}` : ''}
+              </span>
+            ) : (
+              <span className="text-[11px] text-dark-500">sin enviar</span>
+            )}
+            <a href={e.wa} target="_blank" rel="noreferrer"
+              onClick={() => setPreguntando(e.id)}
+              className="ml-auto flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-2.5 py-1 text-[12px] font-medium text-emerald-300 ring-1 ring-emerald-500/25">
+              <MessageCircle size={12} /> WhatsApp
+            </a>
+          </div>
+          {preguntando === e.id && !e.enviado_en && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-dark-800 pt-2">
+              <span className="text-[11.5px] text-dark-300">¿Se lo has enviado?</span>
+              <button onClick={() => confirmar(e)} disabled={yendo === e.id}
+                className="rounded-lg bg-emerald-500/20 px-2.5 py-1 text-[12px] font-semibold text-emerald-200 disabled:opacity-50">
+                {yendo === e.id ? 'Apuntando…' : 'Sí, enviado'}
+              </button>
+              <button onClick={() => setPreguntando(null)}
+                className="rounded-lg border border-dark-700 px-2.5 py-1 text-[12px] text-dark-400">
+                Todavía no
+              </button>
+            </div>
+          )}
+          {e.enviado_en && (
+            <button onClick={() => deshacer(e)} disabled={yendo === e.id}
+              className="mt-1 text-[11px] text-dark-600 hover:text-dark-400">
+              Lo apunté por error
+            </button>
+          )}
+        </div>
+      ))}
+      {err && <p className="text-[11.5px] text-red-400">{err}</p>}
+    </div>
+  )
+}
+
+/* La agenda de ETTs. Existe para que añadir una ETT nueva no sea tocar código:
+   nombre, WhatsApp y —si se quiere— el mensaje que se le manda. */
+function AgendaEtts({ onCambio }) {
+  const [d, setD] = useState(null)
+  const [nueva, setNueva] = useState({ nombre: '', telefono: '', contacto: '' })
+  const [editando, setEditando] = useState('')
+  const [plantilla, setPlantilla] = useState('')
+  const [err, setErr] = useState('')
+  const [yendo, setYendo] = useState(false)
+
+  const cargar = useCallback(() => {
+    getEtts().then((r) => setD(r.data)).catch(() => setErr('No se pudo cargar la agenda.'))
+  }, [])
+  useEffect(() => { cargar() }, [cargar])
+
+  const crear = async () => {
+    setYendo(true); setErr('')
+    try {
+      await crearEtt(nueva)
+      setNueva({ nombre: '', telefono: '', contacto: '' }); cargar(); onCambio?.()
+    } catch (e) { setErr(e?.response?.data?.detail || 'No se pudo crear.') } finally { setYendo(false) }
+  }
+
+  const guardarPlantilla = async (e) => {
+    setYendo(true); setErr('')
+    try { await editarEtt(e.id, { plantilla }); setEditando(''); cargar(); onCambio?.() } catch (x) {
+      setErr(x?.response?.data?.detail || 'No se pudo guardar.')
+    } finally { setYendo(false) }
+  }
+
+  const quitar = async (e) => {
+    if (!window.confirm(`¿Quitar ${e.nombre} de la agenda? Los envíos ya apuntados se quedan.`)) return
+    try { await borrarEtt(e.id); cargar(); onCambio?.() } catch (x) {
+      setErr(x?.response?.data?.detail || 'No se pudo quitar.')
+    }
+  }
+
+  if (!d) return <div className="card p-4 text-[13px] text-dark-400">Cargando la agenda…</div>
+
+  return (
+    <div className="card p-3.5">
+      <h3 className="mb-1 text-[14px] font-bold text-dark-100">ETTs</h3>
+      <p className="mb-3 max-w-[70ch] text-[12.5px] text-dark-400">
+        A quién se le pasan los candidatos. Cada una con su WhatsApp y, si quieres, su
+        propio mensaje: en la ficha de cada candidato sale un botón por ETT con el
+        texto ya escrito.
+      </p>
+
+      <div className="space-y-2">
+        {(d.etts || []).map((e) => (
+          <div key={e.id} className="rounded-lg border border-dark-800 p-2.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <b className="text-[13px] text-dark-100">{e.nombre}</b>
+              <span className="font-mono text-[12px] text-dark-400">{e.telefono}</span>
+              {e.contacto && <span className="text-[12px] text-dark-500">{e.contacto}</span>}
+              {e.activa === false && (
+                <span className="rounded bg-dark-800 px-1.5 py-px text-[11px] text-dark-300">inactiva</span>
+              )}
+              <div className="ml-auto flex gap-1.5">
+                <button onClick={() => { setEditando(e.id); setPlantilla(e.plantilla || d.plantilla_defecto) }}
+                  className="rounded-lg border border-dark-700 px-2 py-1 text-[11.5px] text-dark-400 hover:border-dark-500">
+                  Mensaje
+                </button>
+                <button onClick={() => editarEtt(e.id, { activa: e.activa === false }).then(cargar)}
+                  className="rounded-lg border border-dark-700 px-2 py-1 text-[11.5px] text-dark-400 hover:border-dark-500">
+                  {e.activa === false ? 'Activar' : 'Desactivar'}
+                </button>
+                <button onClick={() => quitar(e)}
+                  className="rounded-lg border border-dark-800 px-2 py-1 text-[11.5px] text-dark-600 hover:border-red-500/40 hover:text-red-400">
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            </div>
+            {editando === e.id && (
+              <div className="mt-2 border-t border-dark-800 pt-2">
+                <p className="mb-1 text-[11.5px] text-dark-500">
+                  Se sustituyen solos: <b className="text-dark-300">{'{puesto}'}</b>,{' '}
+                  <b className="text-dark-300">{'{disponibilidad}'}</b>,{' '}
+                  <b className="text-dark-300">{'{ciudad}'}</b>,{' '}
+                  <b className="text-dark-300">{'{candidato}'}</b>,{' '}
+                  <b className="text-dark-300">{'{experiencia}'}</b>. Una línea cuyo dato
+                  salga vacío no se manda.
+                </p>
+                <textarea value={plantilla} onChange={(x) => setPlantilla(x.target.value)}
+                  rows={5} className="input w-full text-[12.5px]" />
+                <div className="mt-1.5 flex gap-1.5">
+                  <button onClick={() => guardarPlantilla(e)} disabled={yendo}
+                    className="rounded-lg bg-brand-500/20 px-2.5 py-1 text-[12px] font-semibold text-brand-200 disabled:opacity-50">
+                    Guardar
+                  </button>
+                  <button onClick={() => setEditando('')}
+                    className="rounded-lg border border-dark-700 px-2.5 py-1 text-[12px] text-dark-400">
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+        {!(d.etts || []).length && (
+          <p className="text-[12.5px] text-dark-500">Todavía no hay ninguna.</p>
+        )}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-end gap-2 border-t border-dark-800 pt-3">
+        <div>
+          <label className="label">Nombre</label>
+          <input className="input py-1.5 text-[13px]" placeholder="Adecco"
+            value={nueva.nombre} onChange={(e) => setNueva({ ...nueva, nombre: e.target.value })} />
+        </div>
+        <div>
+          <label className="label">WhatsApp</label>
+          <input className="input py-1.5 text-[13px]" placeholder="600 000 000"
+            value={nueva.telefono} onChange={(e) => setNueva({ ...nueva, telefono: e.target.value })} />
+        </div>
+        <div>
+          <label className="label">Persona de contacto</label>
+          <input className="input py-1.5 text-[13px]" placeholder="opcional"
+            value={nueva.contacto} onChange={(e) => setNueva({ ...nueva, contacto: e.target.value })} />
+        </div>
+        <button onClick={crear} disabled={yendo || nueva.nombre.length < 2 || !nueva.telefono}
+          className="rounded-lg bg-brand-500/20 px-3 py-1.5 text-[13px] font-semibold text-brand-200 disabled:opacity-40">
+          Añadir ETT
+        </button>
+      </div>
+      {err && <p className="mt-2 text-[12.5px] text-red-400">{err}</p>}
     </div>
   )
 }

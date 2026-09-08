@@ -96,6 +96,14 @@ export const editarOferta = (id, body) => api.patch(`/empleo/ofertas/${id}`, bod
 export const getCandidatos = (params) => api.get('/empleo/candidatos', { params })
 export const moverCandidato = (id, body) => api.patch(`/empleo/candidatos/${id}`, body)
 export const contratarCandidato = (id) => api.post(`/empleo/candidatos/${id}/contratar`)
+export const getEtts = () => api.get('/empleo/etts')
+export const crearEtt = (body) => api.post('/empleo/etts', body)
+export const editarEtt = (id, body) => api.patch(`/empleo/etts/${id}`, body)
+export const borrarEtt = (id) => api.delete(`/empleo/etts/${id}`)
+export const enviarCandidatoAEtt = (candId, ett) =>
+  api.post(`/empleo/candidatos/${candId}/ett`, { ett })
+export const deshacerEnvioEtt = (candId, ettId) =>
+  api.delete(`/empleo/candidatos/${candId}/ett/${ettId}`)
 export const borrarCandidato = (id) => api.delete(`/empleo/candidatos/${id}`)
 export const deleteDriver = (id) => api.delete(`/drivers/${id}`)
 export const uploadDriverPhoto = (id, file) => { const fd = new FormData(); fd.append('file', file); return api.post(`/drivers/${id}/photo`, fd) }

@@ -19797,6 +19797,223 @@ async def empleo_contar_nuevos(center: Optional[str] = None,
     return {"nuevos": n}
 
 
+# ---------------------------------------------------------------------------
+# LAS ETT: A QUIEN SE LE PASA UN CANDIDATO
+# ---------------------------------------------------------------------------
+"""La agenda de empresas de trabajo temporal y el envio por WhatsApp.
+
+QUE PROBLEMA RESUELVE. Pasar un candidato a Adecco eran siete pasos a mano:
+copiar el telefono, abrir WhatsApp, buscar el contacto, escribir el mensaje con
+el puesto y la disponibilidad, enviarlo, volver a la aplicacion y acordarse de
+apuntar a quien se lo mandaste. Con cuarenta candidatos a la semana eso no se
+hace entero: se hace a medias y luego nadie sabe a quien se envio cada uno.
+
+DOS DECISIONES QUE NO SON OBVIAS:
+
+- LA ETT NO ES UNA FASE, es un dato aparte. Un mismo candidato puede
+  interesarle a Adecco Y a Gi Group, y una fase solo admite un valor: en cuanto
+  se manda a la segunda se pierde la primera. Por eso `candidato.etts` es una
+  LISTA, y las fases del embudo (`nuevo`, `llamado`...) se quedan como estaban
+  -renombrarlas obligaria a repasar todo lo que las lee y no aporta nada
+  (gotcha 20)-.
+
+- ABRIR WHATSAPP NO ES HABER ENVIADO. El enlace `wa.me` deja el mensaje
+  escrito, pero quien lo abre puede cerrarlo sin darle a enviar. Marcarlo solo
+  por pulsar el boton llenaria la ficha de envios que no ocurrieron, y eso es
+  peor que no apuntar nada: se deja de llamar a un candidato porque "ya esta
+  mandado". El registro lo confirma una persona, en otra llamada.
+
+Y el enlace lo arma el BACKEND con `enlace_wa`, nunca el movil: a mano sale sin
+prefijo y abre un numero que no existe (gotcha 47).
+"""
+
+_ETT_COL = "etts"
+# El mensaje que abre WhatsApp. Con las tildes puestas: lo lee una persona
+# de la ETT, y un texto sin acentos parece escrito por una maquina.
+_ETT_PLANTILLA = (
+    "Hola, te env\u00edo este candidato para {puesto}.\n"
+    "Ya est\u00e1 contactado y le interesa trabajar.\n"
+    "Disponibilidad: {disponibilidad}.\n"
+    "Ciudad: {ciudad}.\n"
+    "Un saludo."
+)
+
+
+def _ett_publica(e: dict) -> dict:
+    """Lo que ve el panel."""
+    return {k: v for k, v in e.items() if k != "_id"}
+
+
+def _ett_mensaje(ett: dict, c: dict) -> str:
+    """Rellena la plantilla de esa ETT con los datos del candidato.
+
+    Lo que no se sepa se deja fuera: una linea que pone "Disponibilidad:" y
+    nada detras cuenta peor de lo que calla, y ademas delata que el mensaje lo
+    escribio una maquina a medias.
+    """
+    datos = {
+        "candidato": (c.get("nombre") or "").strip(),
+        "nombre": (c.get("nombre") or "").strip().split(" ")[0],
+        "puesto": (c.get("oferta_titulo") or "reparto de paqueteria").strip(),
+        "ciudad": (c.get("ciudad") or c.get("centro") or "").strip(),
+        "disponibilidad": (c.get("disponibilidad") or "").strip(),
+        "experiencia": (c.get("experiencia") or "").strip(),
+        "telefono": (c.get("telefono") or "").strip(),
+        "ett": (ett.get("nombre") or "").strip(),
+        "contacto": (ett.get("contacto") or "").strip(),
+    }
+    txt = ett.get("plantilla") or _ETT_PLANTILLA
+    salida = []
+    for linea in txt.split("\n"):
+        try:
+            puesta = linea.format(**datos)
+        except Exception:                                        # noqa: BLE001
+            puesta = linea          # una llave mal escrita no puede tumbar el envio
+        if re.match(r"^[^:]{1,24}:\s*$", puesta.strip()):
+            continue                # "Disponibilidad:" a secas no se manda
+        salida.append(puesta)
+    return "\n".join(x for x in salida if x.strip())
+
+
+@api_router.get("/empleo/etts")
+async def empleo_etts(_=Depends(require_admin)):
+    """La agenda. Anadir una ETT nueva no toca el codigo."""
+    docs = await db[_ETT_COL].find({}, {"_id": 0}).sort("nombre", 1).to_list(100)
+    return {"etts": [_ett_publica(e) for e in docs], "plantilla_defecto": _ETT_PLANTILLA}
+
+
+@api_router.post("/empleo/etts")
+async def empleo_ett_crear(body: dict = Body(...), user: dict = Depends(require_admin)):
+    nombre = _texto_cuerpo(body.get("nombre"), 60)
+    if len(nombre) < 2:
+        raise HTTPException(400, "Ponle un nombre a la ETT")
+    tel = _telefono_limpio(body.get("telefono"))
+    if not tel:
+        raise HTTPException(400, "Hace falta un WhatsApp valido: sin el no se puede enviar")
+    doc = {
+        "id": str(uuid.uuid4()), "nombre": nombre, "telefono": tel,
+        "contacto": _texto_cuerpo(body.get("contacto"), 60),
+        "email": _texto_cuerpo(body.get("email"), 160).lower(),
+        "plantilla": _texto_cuerpo(body.get("plantilla"), 900) or _ETT_PLANTILLA,
+        "activa": bool(body.get("activa", True)),
+        "creada_en": datetime.now(timezone.utc).isoformat(),
+        "creada_por": user.get("name") or user.get("username") or "",
+    }
+    await db[_ETT_COL].insert_one(dict(doc))    # copia: insert_one muta (gotcha 42)
+    return _ett_publica(doc)
+
+
+@api_router.patch("/empleo/etts/{ett_id}")
+async def empleo_ett_editar(ett_id: str, body: dict = Body(...), _=Depends(require_admin)):
+    cambios: dict = {}
+    if "nombre" in body:
+        n = _texto_cuerpo(body.get("nombre"), 60)
+        if len(n) < 2:
+            raise HTTPException(400, "Ponle un nombre a la ETT")
+        cambios["nombre"] = n
+    if "telefono" in body:
+        t = _telefono_limpio(body.get("telefono"))
+        if not t:
+            raise HTTPException(400, "Ese WhatsApp no vale: sin el no se puede enviar")
+        cambios["telefono"] = t
+    for campo, largo in (("contacto", 60), ("email", 160), ("plantilla", 900)):
+        if campo in body:
+            cambios[campo] = _texto_cuerpo(body.get(campo), largo)
+    if "activa" in body:
+        cambios["activa"] = bool(body["activa"])
+    if not cambios:
+        raise HTTPException(400, "No hay nada que cambiar")
+    r = await db[_ETT_COL].update_one({"id": ett_id}, {"$set": cambios})
+    if not r.matched_count:
+        raise HTTPException(404, "Esa ETT no existe")
+    return _ett_publica(await db[_ETT_COL].find_one({"id": ett_id}, {"_id": 0}) or {})
+
+
+@api_router.delete("/empleo/etts/{ett_id}")
+async def empleo_ett_borrar(ett_id: str, _=Depends(require_admin)):
+    """La quita de la agenda. Los envios ya hechos NO se tocan.
+
+    El nombre se guarda dentro de cada envio justo para esto: borrar una ETT no
+    puede dejar el historial de un candidato diciendo "enviado a (nada)".
+    """
+    r = await db[_ETT_COL].delete_one({"id": ett_id})
+    if not r.deleted_count:
+        raise HTTPException(404, "Esa ETT no existe")
+    return {"ok": True}
+
+
+async def _etts_activas() -> list:
+    """La agenda, UNA sola vez. Leerla por candidato serian 500 consultas para
+    la misma respuesta (gotcha 63)."""
+    return await db[_ETT_COL].find({"activa": {"$ne": False}},
+                                   {"_id": 0}).sort("nombre", 1).to_list(100)
+
+
+def _etts_para(c: dict, docs: list) -> list:
+    """Las ETT activas, cada una con SU enlace de WhatsApp para este candidato."""
+    ya = {x.get("ett_id"): x for x in (c.get("etts") or [])}
+    fuera = []
+    for e in docs:
+        enviado = ya.get(e["id"]) or {}
+        fuera.append({
+            "id": e["id"], "nombre": e.get("nombre"), "contacto": e.get("contacto") or "",
+            "wa": enlace_wa(e.get("telefono") or "", _ett_mensaje(e, c)),
+            "enviado_en": enviado.get("en") or "", "enviado_por": enviado.get("por") or "",
+        })
+    return fuera
+
+
+@api_router.post("/empleo/candidatos/{cand_id}/ett")
+async def empleo_candidato_a_ett(cand_id: str, body: dict = Body(...),
+                                 user: dict = Depends(require_admin)):
+    """Apunta que este candidato se le ha ENVIADO a esa ETT.
+
+    Lo confirma una persona despues de mandarlo (ver la nota de arriba): abrir
+    WhatsApp no es haber enviado.
+    """
+    c = await db.candidatos.find_one({"id": cand_id}, {"_id": 0})
+    if not c:
+        raise HTTPException(404, "Ese candidato no existe")
+    ett_id = _texto_cuerpo(body.get("ett"), 60)
+    ett = await db[_ETT_COL].find_one({"id": ett_id}, {"_id": 0})
+    if not ett:
+        raise HTTPException(404, "Esa ETT no existe")
+    quien = user.get("name") or user.get("username") or ""
+    ahora = datetime.now(timezone.utc).isoformat()
+    # El NOMBRE viaja dentro del apunte: si manana se borra la ETT de la agenda,
+    # el historial tiene que seguir diciendo a quien se mando.
+    apunte = {"ett_id": ett["id"], "nombre": ett.get("nombre"), "en": ahora, "por": quien}
+    if any(x.get("ett_id") == ett["id"] for x in (c.get("etts") or [])):
+        # Reenviar no duplica: se actualiza la fecha del que ya estaba.
+        await db.candidatos.update_one(
+            {"id": cand_id, "etts.ett_id": ett["id"]},
+            {"$set": {"etts.$.en": ahora, "etts.$.por": quien,
+                      "tocado_en": ahora, "tocado_por": quien}})
+    else:
+        await db.candidatos.update_one({"id": cand_id}, {
+            "$push": {"etts": apunte,
+                      "historial": {"en": ahora, "por": quien,
+                                    "que": "enviado a %s" % (ett.get("nombre") or "")}},
+            "$set": {"tocado_en": ahora, "tocado_por": quien}})
+    d = await db.candidatos.find_one({"id": cand_id}, {"_id": 0, "expira_en": 0})
+    return {"ok": True, "etts": d.get("etts") or [], "historial": d.get("historial") or []}
+
+
+@api_router.delete("/empleo/candidatos/{cand_id}/ett/{ett_id}")
+async def empleo_candidato_quitar_ett(cand_id: str, ett_id: str,
+                                      user: dict = Depends(require_admin)):
+    """Deshace un envio apuntado por error. Queda dicho en el historial."""
+    quien = user.get("name") or user.get("username") or ""
+    ahora = datetime.now(timezone.utc).isoformat()
+    r = await db.candidatos.update_one({"id": cand_id}, {
+        "$pull": {"etts": {"ett_id": ett_id}},
+        "$push": {"historial": {"en": ahora, "por": quien, "que": "envio a ETT deshecho"}},
+        "$set": {"tocado_en": ahora, "tocado_por": quien}})
+    if not r.matched_count:
+        raise HTTPException(404, "Ese candidato no existe")
+    return {"ok": True}
+
+
 @api_router.get("/empleo/candidatos")
 async def empleo_listar_candidatos(oferta: Optional[str] = None, fase: Optional[str] = None,
                                    center: Optional[str] = None,
@@ -19811,6 +20028,7 @@ async def empleo_listar_candidatos(oferta: Optional[str] = None, fase: Optional[
             raise HTTPException(400, "Esa fase no existe")
         q["fase"] = fase
     cands = await db.candidatos.find(q, {"_id": 0, "expira_en": 0}).sort("creado_en", -1).to_list(500)
+    agenda = await _etts_activas()
     for c in cands:
         # El enlace de WhatsApp lo arma SIEMPRE el backend (gotcha 47): a mano
         # sale sin prefijo y abre un numero que no existe.
@@ -19818,6 +20036,9 @@ async def empleo_listar_candidatos(oferta: Optional[str] = None, fase: Optional[
                             "Hola %s, te escribimos por la oferta de %s."
                             % ((c.get("nombre") or "").split(" ")[0],
                                c.get("oferta_titulo") or "reparto"))
+        # A que ETT se le ha mandado ya, para verlo sin abrir la ficha.
+        c["etts"] = c.get("etts") or []
+        c["etts_para"] = _etts_para(c, agenda)
     return {"candidatos": cands, "fases": list(EMPLEO_FASES)}
 
 
