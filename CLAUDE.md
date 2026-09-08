@@ -1453,10 +1453,22 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    se queda el ultimo leido y todo el que reparta esa ruta en la otra nave sale
    ayudando a un desconocido. Hoy solo entran paquetes de OGA5, asi que no se
    ve; se veria en silencio el dia que entre la segunda.
-   Resultado, comparado grupo a grupo contra el dato crudo: de 0 a 4 salidas y
-   103 paquetes el; la empresa, 102 salidas y 1.429 paquetes (frente a 18
-   apuntes a mano), y las dos unicas cosas que se caen respecto a la version sin
-   guardas son esas dos rutas de rescate.
+   **Y el tercero lo encontro un conductor: contar solo lo ENTREGADO deja a
+   cero a quien va a media ruta.** Christian Gallego llevaba el 08-09-2026
+   cincuenta y un paquetes de la ruta de Miguel Oscar Rojas —48 recogidos, 2
+   entregados y 1 en camino— y la pantalla le decia cero. La ayuda es lo que te
+   echas a la furgoneta, no lo que ya ha llegado, y esta pantalla se mira a
+   media manana. Se cuenta ahora todo lo que ha pasado por sus manos —fuera
+   solo `_CX_NO_DESPACHADO`, que son los que nunca las tocaron— y los entregados
+   van aparte, que es el detalle. El aviso: los diez casos que ya existian
+   probaban el REPARTO, que recibe los grupos ya hechos, asi que volver a poner
+   `state: DELIVERED` en la CONSULTA pasaba en verde. Hizo falta un caso que lea
+   la consulta de verdad; un trinquete que no cubre la puerta por la que entro
+   el fallo no es un trinquete.
+   Resultado, comparado grupo a grupo contra el dato crudo: Jose Arturo, de 0 a
+   4 salidas y 103 paquetes; Christian, de 3 salidas y 69 paquetes a 4 y 120
+   (71 entregados); la empresa, 113 salidas y 1.540 paquetes frente a 18 apuntes
+   a mano.
    Regla general: **antes de dar por bueno un contador a cero, buscar el mismo
    hecho en la fuente que no depende de que alguien lo escriba.** Un modulo que
    se rellena a mano mide la constancia de quien lo rellena, no la realidad.

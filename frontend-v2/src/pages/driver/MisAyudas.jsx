@@ -12,8 +12,13 @@ import { getMisAyudas } from '../../services/api'
    WhatsApp— y por eso a gente que ayuda a diario le salía un CERO: en
    septiembre de 2026 había 18 apuntes en toda la empresa mientras Cortex
    enseñaba 30 de 48 rutas con más de un transportista solo el día 7. Ahora se
-   cuentan los paquetes entregados en una ruta cuyo titular es otro, que es lo
-   que Cortex responde y además cuadra con su pantalla.
+   cuentan los paquetes de una ruta cuyo titular es otro que ha cargado él, que
+   es lo que Cortex responde y además cuadra con su pantalla.
+
+   Y se cuenta lo CARGADO, no lo entregado. Christian Gallego llevaba el
+   08-09-2026 cincuenta y un paquetes de la ruta de Miguel Oscar Rojas —48
+   recogidos, 2 entregados— y la pantalla le decía cero: se contaban entregas y
+   a media mañana aún no las había. Esto se mira A MEDIA RUTA, no al acabar.
    Y se enseña también lo que a él le ayudaron, para que echar una mano no
    acabe pareciendo la lista de los tontos. */
 
@@ -67,18 +72,25 @@ export default function MisAyudas({ onBack }) {
                   ? 'Este mes no has entrado en la ruta de nadie'
                   : <>en {datos.veces} {datos.veces === 1 ? 'salida' : 'salidas'} a rutas de otros</>}
               </p>
+              {/* CUENTA LO QUE TE ECHAS A LA FURGONETA, no lo que ya llegó:
+                  quien mira esto lo mira a media ruta. Si aún te quedan por
+                  entregar se dice, para que el número grande no parezca que
+                  cuenta entregas. */}
+              {datos.veces > 0 && datos.entregados < datos.paquetes && (
+                <p className="mt-1 text-[11.5px] text-dark-500">
+                  {datos.entregados} entregados · {datos.paquetes - datos.entregados} aún en la furgoneta
+                </p>
+              )}
             </div>
 
-            {/* Si le pasaron paradas y no las marcó, se le dice: si no, el
-                contador se queda a cero y parece que la pantalla no funciona. */}
             {/* UN CERO NO ES UNA NOTA, y por eso se dice de dónde sale el
                 número. Esto ya no depende de que nadie lo apunte: se cuenta
-                de Cortex —paquetes que entregaste en una ruta cuyo titular es
-                otro—, así que un cero aquí sí significa algo. */}
+                de Cortex —paquetes de una ruta cuyo titular es otro que has
+                cargado tú—, así que un cero aquí sí significa algo. */}
             {datos.veces === 0 && (
               <div className="rounded-2xl border border-dark-700/60 bg-dark-900/70 px-4 py-3.5 text-[12.5px] leading-relaxed text-dark-400">
-                Cuentan los paquetes que entregas en la ruta de otro, y sale de Cortex:
-                no hace falta que nadie lo apunte
+                Cuentan los paquetes que cargas de la ruta de otro, y sale de Cortex:
+                no hace falta que nadie lo apunte, y se ven en cuanto los recoges
                 {datos.equipo_veces > 0 && <> — este mes ha habido <b className="text-dark-200">{datos.equipo_veces}</b> salidas así en la empresa</>}.
               </div>
             )}
@@ -111,7 +123,9 @@ export default function MisAyudas({ onBack }) {
                       <div className="text-right">
                         <b className="cifra text-[15px] font-bold">{x.paquetes ?? x.hechas}</b>
                         <span className="block text-[9.5px] uppercase tracking-wider text-dark-500">
-                          {(x.paquetes ?? x.hechas) === 1 ? 'paquete' : 'paquetes'}
+                          {x.entregados != null && x.entregados < x.paquetes
+                            ? `${x.entregados} entregados`
+                            : ((x.paquetes ?? x.hechas) === 1 ? 'paquete' : 'paquetes')}
                         </span>
                       </div>
                     </div>

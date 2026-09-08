@@ -18586,18 +18586,28 @@ async def _ayudas_del_mes(mes: str) -> list:
     UNA sola agregacion para todo el mes: son ~525 grupos. Preguntar ruta por
     ruta serian cientos de viajes a la base para la misma respuesta (gotcha 63).
     """
+    # NO SE FILTRA POR "DELIVERED". Lo que mide la ayuda es lo que se echa uno
+    # a la furgoneta, no lo que ya ha llegado: Christian llevaba hoy 51 paquetes
+    # de la ruta de otro —48 recogidos, 2 entregados y 1 en camino— y la
+    # pantalla le decia CERO porque solo contaba entregas. Quien mira esto lo
+    # mira A MEDIA RUTA, no al terminar. Y un paquete que se intenta y vuelve
+    # (BACK_TO_ORIGIN, NOT_DELIVERED) tambien se cargo y se condujo.
+    # Fuera se quedan solo los que NUNCA llegaron a sus manos, que son los de
+    # `_CX_NO_DESPACHADO` — la lista canonica, no una copia (gotcha 40).
     cur = db.cortex_packages.aggregate([
-        {"$match": {"service_day": {"$regex": "^" + mes}, "state": "DELIVERED"}},
+        {"$match": {"service_day": {"$regex": "^" + mes},
+                    "state": {"$nin": list(_CX_NO_DESPACHADO)}}},
         {"$group": {"_id": {"d": "$service_day", "a": "$service_area_id",
                             "r": "$route_code", "t": "$driver_id"},
-                    "paq": {"$sum": 1}}},
+                    "paq": {"$sum": 1},
+                    "ent": {"$sum": {"$cond": [{"$in": ["$state", list(_CX_OK)]}, 1, 0]}}}},
     ])
     out = []
     async for a in cur:
         k = a["_id"]
         # Mongo OMITE la clave cuando el campo no existe (gotcha 14).
         if k.get("d") and k.get("r") and k.get("t"):
-            out.append((k["d"], k.get("a"), k["r"], k["t"], a["paq"]))
+            out.append((k["d"], k.get("a"), k["r"], k["t"], a["paq"], a["ent"]))
     return out
 
 
@@ -18618,24 +18628,26 @@ def _ayudas_reparte(grupos: list, titulares: dict, mias: set) -> dict:
     la verdad aunque el numero salga.
     """
     porruta = {}
-    for dia, nave, ruta, quien, paq in grupos:
-        porruta.setdefault((dia, nave, ruta), {})[quien] = paq
+    for dia, nave, ruta, quien, paq, ent in grupos:
+        porruta.setdefault((dia, nave, ruta), {})[quien] = (paq, ent)
 
     hice, recibi, equipo, salidas = [], [], 0, 0
     for clave, reparto in porruta.items():
         tit = titulares.get(clave)
-        if not tit or not reparto.get(tit):
-            continue                      # ruta sin titular, o titular que no entrego nada
+        if not tit or not (reparto.get(tit) or (0, 0))[0]:
+            continue                      # ruta sin titular, o titular que no llevo nada
         dia, _nave, ruta = clave
-        for quien, paq in reparto.items():
+        for quien, (paq, ent) in reparto.items():
             if quien == tit or paq < _AYUDA_MIN_PAQUETES:
                 continue
             equipo += paq
             salidas += 1
             if quien in mias:
-                hice.append({"dia": dia, "ruta": ruta, "de": tit, "paquetes": paq})
+                hice.append({"dia": dia, "ruta": ruta, "de": tit,
+                             "paquetes": paq, "entregados": ent})
             elif tit in mias:
-                recibi.append({"dia": dia, "ruta": ruta, "quien": quien, "paquetes": paq})
+                recibi.append({"dia": dia, "ruta": ruta, "quien": quien,
+                               "paquetes": paq, "entregados": ent})
     hice.sort(key=lambda x: (x["dia"], x["ruta"]), reverse=True)
     recibi.sort(key=lambda x: (x["dia"], x["ruta"]), reverse=True)
     return {"hice": hice, "recibi": recibi, "equipo": equipo, "salidas": salidas}
@@ -18661,8 +18673,10 @@ async def portal_mis_ayudas(user: dict = Depends(require_any_auth)):
     r = _ayudas_reparte(grupos, titulares, set(tids))
 
     paquetes = sum(x["paquetes"] for x in r["hice"])
+    entregados = sum(x["entregados"] for x in r["hice"])
     gracias = [{"nombre": nombres.get(x["de"], ""), "dia": x["dia"], "ruta": x["ruta"],
-                "paquetes": x["paquetes"], "hechas": x["paquetes"], "paradas": x["paquetes"],
+                "paquetes": x["paquetes"], "entregados": x["entregados"],
+                "hechas": x["paquetes"], "paradas": x["paquetes"],
                 "nota": ""} for x in r["hice"]]
     me_ayudaron = [{"nombre": nombres.get(x["quien"], ""), "dia": x["dia"],
                     "paquetes": x["paquetes"], "paradas": x["paquetes"]} for x in r["recibi"]]
@@ -18679,7 +18693,7 @@ async def portal_mis_ayudas(user: dict = Depends(require_any_auth)):
 
     return {"mes": mes, "centro": center,
             "hechas": hechas, "asignadas": asignadas,
-            "paquetes": paquetes, "veces": len(r["hice"]),
+            "paquetes": paquetes, "entregados": entregados, "veces": len(r["hice"]),
             "gracias": gracias[:20],
             "me_ayudaron": {"veces": len(r["recibi"]),
                             "paradas": sum(x["paquetes"] for x in r["recibi"]),
