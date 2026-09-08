@@ -40,7 +40,7 @@ import time
 import asyncio
 import os
 import io
-from urllib.parse import quote as _url_quote
+from urllib.parse import quote as _url_quote, urlencode as _url_encode
 import json
 import uuid
 import secrets
@@ -19215,7 +19215,13 @@ async def _empleo_centro_valido(valor) -> str:
 async def empleo_oferta_publica(slug: str, oferta_slug: str):
     """La oferta tal y como la ve quien se va a apuntar. Sin sesion."""
     o = await _empleo_oferta_publica(slug, oferta_slug)
-    return _empleo_publica_oferta(o)
+    d = _empleo_publica_oferta(o)
+    # La tienda se anuncia al FINAL, cuando la candidatura ya esta enviada:
+    # antes seria ruido justo donde la persona esta decidiendo apuntarse.
+    # Viene aqui y no en una llamada aparte porque la pagina ya tiene esta
+    # respuesta en la mano cuando llega a esa pantalla.
+    d["tienda"] = await _tienda_enlace_publico()
+    return d
 
 
 _EMPLEO_CV_MAX = 8 * 1024 * 1024
@@ -42158,7 +42164,14 @@ async def _tienda_conf() -> dict:
     c = await db[_TCOL_CONFIG].find_one({"_id": "config"}, {"_id": 0}) or {}
     return {
         # APAGADA salvo que alguien la encienda a proposito.
+        # DOS INTERRUPTORES, y hacen falta los dos. `visible` es la tienda del
+        # portal del conductor -140 personas de la casa- y `publico` es el
+        # enlace que se reenvia fuera. Con uno solo no se puede probar una
+        # compra de verdad sin encenderselo de golpe a toda la plantilla, ni
+        # abrir la venta a la calle dejando el portal tranquilo. Son dos
+        # publicos distintos y se abren por separado.
         "visible": bool(c.get("visible")),
+        "publico": bool(c.get("publico")),
         "minimo": int(c.get("minimo") or _TIENDA_MIN_DEFECTO),
         "dia_cierre": int(c.get("dia_cierre") if c.get("dia_cierre") is not None
                           else _TIENDA_DIA_CIERRE),
@@ -42466,6 +42479,8 @@ async def tienda_guardar_config(body: dict = Body(...), user: dict = Depends(req
     cambios = {}
     if "visible" in body:
         cambios["visible"] = bool(body["visible"])
+    if "publico" in body:
+        cambios["publico"] = bool(body["publico"])
     if "minimo" in body:
         cambios["minimo"] = _entero(body.get("minimo"), "el mínimo", defecto=conf["minimo"],
                                     minimo=1, maximo=500)
@@ -42559,6 +42574,31 @@ async def _tienda_por_token(token: str) -> dict:
     return enlace
 
 
+async def _tienda_enlace_publico() -> str:
+    """La direccion de la tienda de ESTA empresa, o "" si no hay que enseñarla.
+
+    Sirve para colgarla de otras paginas publicas -hoy, del final de una
+    candidatura de empleo-. Devuelve cadena vacia en cuanto falta algo, y ese
+    es el punto: la pagina que la pinte no decide nada, solo pinta lo que le
+    llegue. Asi cerrar la tienda basta para que el anuncio desaparezca de
+    todos los sitios a la vez, sin volver a publicar nada.
+
+    El enlace sale de `taller_enlaces` filtrando por la EMPRESA en curso: sin
+    ese filtro, una empresa acabaria anunciando la tienda de otra (gotcha 26),
+    y en una pagina publica eso es una fuga con HTTP 200 y sin un error.
+    """
+    conf = await _tienda_conf()
+    if not conf["publico"]:
+        return ""
+    e = await global_db.taller_enlaces.find_one(
+        {"tipo": "tienda", "db_name": _current_db_name.get()},
+        {"_id": 0, "token": 1, "web": 1})
+    if not e or not e.get("token"):
+        return ""
+    base = (e.get("web") or PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
+    return "%s/t/%s/" % (base, e["token"])
+
+
 async def _tienda_soltar_caducadas() -> None:
     """Devuelve al drop lo que se aparto para un pago que nunca llego.
 
@@ -42588,7 +42628,7 @@ async def tienda_publica(token: str):
     conf = await _tienda_conf()
     prendas = await _tienda_prendas_publicas()
     return {
-        "abierta": bool(conf["visible"]),
+        "abierta": bool(conf["publico"]),
         "pasarela": conf["pasarela"],
         "prendas": [{
             "id": p["id"], "nombre": p.get("nombre"), "tipo": p.get("tipo"),
@@ -42607,7 +42647,7 @@ async def tienda_publica_comprar(token: str, body: dict = Body(...)):
     enlace = await _tienda_por_token(token)
     await _tienda_soltar_caducadas()
     conf = await _tienda_conf()
-    if not conf["visible"]:
+    if not conf["publico"]:
         raise HTTPException(400, "La tienda no está abierta")
     if not _stripe_encendido():
         raise HTTPException(503, "El pago con tarjeta todavía no está activo")
@@ -42667,10 +42707,23 @@ async def tienda_publica_comprar(token: str, body: dict = Body(...)):
     ]
 
     import httpx as _httpx
+    # OJO CON `data=` Y UNA LISTA. httpx solo trata `data` como formulario
+    # cuando es un diccionario; con cualquier otra cosa se va por la rama
+    # antigua de "contenido en crudo", fabrica un flujo SINCRONO y el
+    # AsyncClient lo rechaza con "Attempted to send an sync request with an
+    # AsyncClient instance". No es un fallo de Stripe ni de la clave: la
+    # peticion no llega a salir. Y como estaba dentro de un `except Exception`
+    # ancho, por pantalla salia "no se ha podido abrir el pago, intentalo en un
+    # minuto" -un problema pasajero- cuando no iba a funcionar nunca.
+    # Se codifica a mano y viaja como contenido, que ademas conserva el orden y
+    # las claves repetidas.
     try:
         async with _httpx.AsyncClient(timeout=25) as cli:
-            r = await cli.post(_STRIPE_API + "/checkout/sessions", data=datos,
-                               auth=(_stripe_clave(), ""))
+            r = await cli.post(
+                _STRIPE_API + "/checkout/sessions",
+                content=_url_encode(datos).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                auth=(_stripe_clave(), ""))
     except Exception as e:
         await _tienda_devolver(p["id"], uds)
         logger.error("Stripe checkout publico: %s", e)
@@ -42807,8 +42860,11 @@ async def tienda_pagar(pedido_id: str, user: dict = Depends(require_any_auth)):
     import httpx as _httpx
     try:
         async with _httpx.AsyncClient(timeout=25) as cli:
-            r = await cli.post(_STRIPE_API + "/checkout/sessions", data=datos,
-                               auth=(_stripe_clave(), ""))
+            r = await cli.post(
+                _STRIPE_API + "/checkout/sessions",
+                content=_url_encode(datos).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                auth=(_stripe_clave(), ""))
     except Exception as e:
         logger.error("Stripe checkout: %s", e)
         raise HTTPException(502, "No se ha podido abrir el pago. Intentalo en un minuto.")

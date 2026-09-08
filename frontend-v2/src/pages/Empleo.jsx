@@ -3,7 +3,7 @@ import { useParams, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import {
   Loader2, AlertTriangle, CheckCircle2, MapPin, Clock, Euro, Package,
-  ChevronRight, ShieldCheck, Paperclip, X, Truck, CalendarCheck, Users,
+  ChevronRight, ShieldCheck, Paperclip, X, Truck, CalendarCheck, Users, Shirt,
 } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
 
@@ -160,6 +160,31 @@ export default function Empleo() {
             una persona, no un robot. Si encajas te llamamos al{' '}
             <b className="text-slate-900">{f.telefono}</b>.
           </p>
+          {/* LA TIENDA, AQUI Y NO ANTES. Esta persona acaba de apuntarse: es
+              el unico momento del embudo en que se le puede ensenar otra cosa
+              sin quitarle atencion a lo que vino a hacer. Y solo aparece si el
+              backend manda el enlace -o sea, si la tienda esta abierta-, asi
+              que cerrarla lo borra de aqui sin tocar esta pantalla. */}
+          {oferta.tienda && (
+            <div className="mx-auto mt-9 max-w-sm rounded-2xl border border-slate-200 bg-slate-50 p-5 text-left">
+              <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">
+                <Shirt size={13} /> Mientras tanto
+              </div>
+              <p className="mt-2.5 text-[16px] font-bold text-slate-900">La ropa del equipo</p>
+              <p className="mt-1 text-[13.5px] leading-relaxed text-slate-600">
+                Sudaderas, cortavientos y gorras con el escudo de Galicia. Se
+                fabrican por encargo y cada modelo lleva unidades contadas.
+              </p>
+              <a
+                href={oferta.tienda}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2.5 text-[13.5px] font-semibold text-white hover:bg-slate-800"
+              >
+                Ver la colección <ChevronRight size={15} />
+              </a>
+            </div>
+          )}
           <p className="mt-8 text-[12px] text-slate-400">
             Puedes pedirnos que borremos tus datos cuando quieras.
           </p>

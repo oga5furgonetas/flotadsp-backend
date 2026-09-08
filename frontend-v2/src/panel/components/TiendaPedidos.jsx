@@ -90,6 +90,25 @@ export default function TiendaPedidos() {
           </span>
         </label>
 
+        {/* EL SEGUNDO INTERRUPTOR, y no sobra. El de arriba enciende la tienda
+            a las 140 personas de la casa; este abre el enlace que se reenvía
+            fuera -y el anuncio del final de una candidatura-. Con uno solo no
+            se podía probar una compra de verdad sin enseñársela de golpe a
+            toda la plantilla. Son dos públicos distintos. */}
+        <label className="mt-3 flex items-start gap-2.5 border-t border-dark-800 pt-3">
+          <input type="checkbox" className="mt-0.5" checked={!!config.publico}
+            disabled={guardando === 'config'}
+            onChange={(e) => guardar({ publico: e.target.checked })} />
+          <span className="text-[12.5px] leading-snug text-dark-300">
+            <b className="text-dark-100">Abierta para gente de fuera</b>
+            <span className="block text-dark-500">
+              {config.publico
+                ? 'El enlace vende y se anuncia al final de las candidaturas.'
+                : 'Cerrada: quien abra el enlace ve la ropa pero no puede comprar.'}
+            </span>
+          </span>
+        </label>
+
         <div className="mt-3 grid grid-cols-2 gap-2">
           <div>
             <label className="label">Mínimo de prendas</label>
