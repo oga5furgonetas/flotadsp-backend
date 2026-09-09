@@ -276,6 +276,43 @@ def test_el_carnet_fisico_es_obligatorio_y_va_como_campo_fijo():
     assert '"carnet_fisico": carnet_fisico,' in src, "se pregunta pero no se guarda"
 
 
+def test_una_pagina_vieja_no_se_queda_sin_poder_apuntarse():
+    """UN CAMPO NUEVO OBLIGATORIO TUMBA A QUIEN TIENE LA PESTANA ABIERTA.
+
+    Paso el 09-09-2026, en produccion y con gente real: el backend salio antes
+    que la pagina, y quien la tenia cargada de antes mando su candidatura sin
+    `carnet_fisico` y se llevo un 400 hablandole de un carnet que su pantalla
+    no le habia preguntado. Dos intentos y detras once 429 de esa persona
+    dandole a enviar (gotcha 56: un despliegue no cierra el navegador de nadie).
+
+    La regla es distinguir NO PREGUNTADO de NO CONTESTADO: si la clave ni
+    siquiera viene, la candidatura entra con el campo vacio. Perder a un
+    candidato por un despliegue nuestro no es aceptable.
+    """
+    src = _fuente_de("empleo_apuntarse")
+    assert 'if "carnet_fisico" in datos:' in src, (
+        "si el campo se exige sin mirar si la pagina lo manda, la pagina vieja "
+        "deja de poder apuntar a nadie")
+    # Y el 400 sigue existiendo para la pagina nueva, que si lo manda.
+    assert 'raise HTTPException(400, "Dinos si tienes el carnet B fisicamente")' in src
+
+
+def test_reintentar_tras_un_error_no_gasta_el_cupo():
+    """El tope es de CANDIDATURAS, no de intentos.
+
+    Contando intentos, un error nuestro deja a la persona una hora sin poder
+    apuntarse — y con ella a todo el que comparta su IP. El cupo se gasta justo
+    antes de guardar; antes solo se mira.
+    """
+    src = _fuente_de("empleo_apuntarse")
+    assert "contar=False" in src, "el tope de candidaturas se gasta con los intentos"
+    assert "_EMPLEO_MAX_INTENTOS_H" in src, "falta el tope holgado contra bots"
+    # El que gasta cupo va DESPUES de todas las comprobaciones, o vuelve a
+    # contar intentos fallidos por otra puerta.
+    assert src.index("contar=False") < src.index("insert_one")
+    assert src.rindex('_rl_public_action("empleo:%s"') < src.index("insert_one")
+
+
 def _fuente_de(nombre):
     """El codigo de una funcion de server.py, tal cual esta escrito."""
     texto = io.open(RUTA, encoding="utf-8-sig").read()

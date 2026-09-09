@@ -4385,13 +4385,23 @@ def _rl_check(key: str):
 _public_actions: dict = _dd(list)
 
 
-def _rl_public_action(key: str, max_count: int, window_s: int, detail: str = "Demasiadas peticiones. Inténtalo en unos minutos."):
-    """Lanza 429 si la clave supera max_count en window_s segundos. Para endpoints anónimos."""
+def _rl_public_action(key: str, max_count: int, window_s: int,
+                      detail: str = "Demasiadas peticiones. Inténtalo en unos minutos.",
+                      contar: bool = True):
+    """Lanza 429 si la clave supera max_count en window_s segundos. Para endpoints anónimos.
+
+    `contar=False` solo MIRA, sin gastar cupo. Sirve para separar «lo ha
+    intentado» de «lo ha conseguido»: si cada intento fallido gasta cupo, a la
+    persona a la que le sale un error y vuelve a darle a enviar la deja fuera
+    una hora el error, no el abuso. Pasó el 09-09-2026 en el formulario de
+    empleo: once 429 seguidos de alguien que solo estaba reintentando.
+    """
     now = datetime.now(timezone.utc).timestamp()
     _public_actions[key] = [t for t in _public_actions[key] if now - t < window_s]
     if len(_public_actions[key]) >= max_count:
         raise HTTPException(status_code=429, detail=detail)
-    _public_actions[key].append(now)
+    if contar:
+        _public_actions[key].append(now)
 
 
 @auth_router.post("/register", response_model=TokenResponse)
@@ -19606,6 +19616,9 @@ EMPLEO_FASES = ("nuevo", "llamado", "entrevista", "prueba", "contratado", "desca
 EMPLEO_TIPOS = ("si_no", "opcion", "varias", "texto", "numero")
 _EMPLEO_MESES_GUARDA = 12
 _EMPLEO_MAX_POR_IP_H = 5
+# INTENTOS, no candidaturas. Alto a proposito: esto solo esta para frenar a un
+# bot, no a una persona a la que le sale un error y vuelve a darle a enviar.
+_EMPLEO_MAX_INTENTOS_H = 40
 _EMPLEO_MAX_POR_OFERTA_DIA = 200
 _EMPLEO_MAX_PREGUNTAS = 12
 _EMPLEO_MAX_OPCIONES = 8
@@ -19980,8 +19993,18 @@ async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request):
     # devolviendo un error, el bot aprenderia a dejarlo vacio.
     if _empleo_texto(datos.get("web"), 50):
         return {"ok": True}
-    _rl_public_action("empleo:%s" % _rl_key_ip(request), _EMPLEO_MAX_POR_IP_H, 3600,
-                      "Has enviado varias candidaturas seguidas. Intentalo en un rato.")
+    # DOS TOPES, Y MIDEN COSAS DISTINTAS. El primero frena a quien machaca el
+    # endpoint —un bot— y es holgado a proposito. El segundo, el de verdad, se
+    # GASTA solo cuando la candidatura entra, y por eso aqui solo se mira. Con
+    # un unico tope contando intentos, un error nuestro dejaba a la persona sin
+    # poder apuntarse durante una hora, y con ella a todo el que compartiera su
+    # IP —una oficina, una wifi, el 4G de una operadora—.
+    _ip = _rl_key_ip(request)
+    _rl_public_action("empleo-intentos:%s" % _ip, _EMPLEO_MAX_INTENTOS_H, 3600,
+                      "Demasiados intentos seguidos. Espera unos minutos.")
+    _rl_public_action("empleo:%s" % _ip, _EMPLEO_MAX_POR_IP_H, 3600,
+                      "Has enviado varias candidaturas seguidas. Intentalo en un rato.",
+                      contar=False)
     o = await _empleo_oferta_publica(slug, oferta_slug)
 
     nombre = _empleo_texto(datos.get("nombre"), 120)
@@ -20007,9 +20030,26 @@ async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request):
     # alta. Va como campo FIJO y no como pregunta de la oferta: una pregunta
     # del cuestionario hay que acordarse de ponerla en cada oferta nueva, y el
     # dia que se olvide nadie lo echaria en falta (gotcha 27 con otra cara).
-    carnet_fisico = _empleo_clave(datos.get("carnet_fisico"))
-    if carnet_fisico not in ("si", "no"):
-        raise HTTPException(400, "Dinos si tienes el carnet B fisicamente")
+    # LA PAGINA QUE ALGUIEN TIENE ABIERTA NO SE ENTERA DE QUE HEMOS DESPLEGADO.
+    # Este campo se añadio el 09-09-2026 y el backend salio ANTES que la pagina:
+    # durante esos minutos, quien tenia la pestaña abierta desde antes mandaba
+    # su candidatura sin el campo y se llevaba un 400 que ademas le hablaba de
+    # un carnet que su pantalla no le habia preguntado. En el registro quedaron
+    # dos intentos seguidos de la misma IP y detras once 429 de esa persona
+    # dandole a enviar. Perder a un candidato por un despliegue nuestro no es
+    # aceptable —es el gotcha 56: un despliegue no cierra el navegador de
+    # nadie—, y seguiria pasando con cualquier pestaña que lleve horas abierta.
+    #
+    # Por eso se distingue NO PREGUNTADO de NO CONTESTADO:
+    #  · la clave no viene -> pagina vieja: la candidatura ENTRA y el campo se
+    #    queda vacio, que en el panel se pinta «no consta» y no como un «no»;
+    #  · la clave viene vacia o con otra cosa -> pagina nueva, donde es
+    #    obligatorio y el propio formulario ya lo bloquea: eso si es un 400.
+    carnet_fisico = ""
+    if "carnet_fisico" in datos:
+        carnet_fisico = _empleo_clave(datos.get("carnet_fisico"))
+        if carnet_fisico not in ("si", "no"):
+            raise HTTPException(400, "Dinos si tienes el carnet B fisicamente")
     if not datos.get("consiento"):
         raise HTTPException(400, "Hay que aceptar que guardemos tus datos para el proceso")
 
@@ -20031,9 +20071,9 @@ async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request):
         "ciudad": _empleo_texto(datos.get("ciudad"), 80),
         "centro": o.get("centro") or "",
         "carnet_desde": _empleo_texto(datos.get("carnet_desde"), 20),
-        # "si" o "no", nunca vacio: el formulario obliga a marcarlo. Un tercer
-        # valor —el hueco— se leeria como «no lo tiene» y seria acusar a
-        # alguien de algo que no dijo.
+        # "si", "no" o vacio. El vacio es NO CONSTA —la pagina de esa persona
+        # no llego a preguntarlo— y no «no lo tiene»: leerlo como un no seria
+        # acusar a alguien de algo que nunca dijo (gotcha 33).
         "carnet_fisico": carnet_fisico,
         # El DNI es dato sensible: viaja en la lista blanca del panel y NO sale
         # en ninguna respuesta publica. Se guarda tal cual lo escriba: validar
@@ -20077,6 +20117,9 @@ async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request):
                 doc["cv_nombre"] = cv_nombre
             except Exception as e:
                 logger.warning("CV de candidato: %s", e)
+    # Aqui SI se gasta el cupo: la candidatura es buena y se va a guardar.
+    _rl_public_action("empleo:%s" % _ip, _EMPLEO_MAX_POR_IP_H, 3600,
+                      "Has enviado varias candidaturas seguidas. Intentalo en un rato.")
     try:
         await db.candidatos.insert_one(dict(doc))   # copia: insert_one muta (gotcha 42)
     except DuplicateKeyError:

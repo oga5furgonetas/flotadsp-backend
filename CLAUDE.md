@@ -1552,6 +1552,41 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `!(x > 0)`, no `x <= 0`.
 
 
+76. **Un campo nuevo OBLIGATORIO en el backend tumba a todo el que tenga la
+   pagina ya abierta — y si ademas el tope de peticiones cuenta intentos, lo
+   deja fuera una hora.** El 09-09-2026 se añadio «¿tienes el carnet B
+   fisicamente?» al formulario publico de empleo. El backend salio a las 16:50
+   y la pagina, once minutos despues. En esa ventana, quien tenia la pestaña
+   cargada de antes mandaba su candidatura SIN el campo y se llevaba un
+   **400 hablandole de un carnet que su pantalla no le habia preguntado**.
+   Medido en `audit_requests`: una IP con **cinco 400 seguidos** (16:50:52 a
+   16:52:51) y detras **doce 429** en dos segundos — esa persona dandole a
+   enviar una y otra vez. No llego a apuntarse: es un candidato perdido por un
+   despliegue nuestro. Y el sintoma que llego a la oficina fue *«la pagina da
+   error al subir el carnet»*, que no se parece a la causa y ademas apunta a
+   una subida de fichero que **no existe** — el unico fichero de esa pagina es
+   el curriculum, que estaba (y esta) perfecto: probado con PDF, JPG y HEIC
+   contra produccion, los tres 200 y los tres en R2.
+   Es el gotcha 56 —«un despliegue no cierra el navegador de nadie»— entrando
+   por otra puerta, y no es solo cosa de la ventana del despliegue: una pestaña
+   abierta desde por la mañana sigue mandando el cuerpo viejo horas despues.
+   **La regla: distinguir NO PREGUNTADO de NO CONTESTADO.** Si la clave ni
+   siquiera viene en el cuerpo, la peticion ENTRA y el campo se queda vacio
+   (que en pantalla es «no consta», nunca un «no» — gotcha 33); si viene vacia
+   o mal, entonces si es un 400, porque esa pagina si lo pregunta. Un campo
+   nuevo se exige al FORMULARIO, no al servidor, hasta que no quede ninguna
+   pestaña vieja.
+   **Y la segunda mitad, que es la que multiplica el daño:** `_rl_public_action`
+   contaba cada INTENTO, asi que los cinco fallos gastaron el cupo de cinco
+   candidaturas por IP y hora. Reintentar tras un error nuestro te dejaba
+   bloqueado sesenta minutos — y con la IP compartida (una oficina, una wifi,
+   el 4G de una operadora), a todo el que estuviera detras. Ahora hay dos
+   topes: uno holgado de intentos (40/h, para bots) y el de verdad, que se
+   **gasta solo cuando la candidatura entra** (`contar=False` para mirar sin
+   gastar). Un limite tiene que castigar el abuso, nunca el error.
+   Cubierto en `test_empleo.py` con dos casos leidos de `server.py` (gotcha 40).
+
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
