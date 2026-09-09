@@ -19900,10 +19900,15 @@ async def empleo_ofertas_publicas(empresa: str = ""):
             "resumen": (o.get("descripcion") or "").strip()[:220],
             "url": "/empleo/%s/%s" % (slug, o.get("slug") or ""),
         })
+    reclamo = await _tienda_reclamo()
     return {"empresa": (org or {}).get("name") or "", "slug": slug,
             "ciudades": sorted({o["ciudad"] for o in ofertas if o["ciudad"]}),
             "jornadas": sorted({o["jornada"] for o in ofertas if o["jornada"]}),
-            "ofertas": ofertas}
+            "ofertas": ofertas,
+            # La ropa tambien desde aqui: quien mira las ofertas es justo quien
+            # todavia no conoce a la empresa.
+            "tienda": reclamo["url"], "tienda_desde": reclamo["desde"],
+            "tienda_prendas": reclamo["prendas"]}
 
 
 @api_router.get("/empleo/publica/{slug}/{oferta_slug}")
@@ -19915,7 +19920,10 @@ async def empleo_oferta_publica(slug: str, oferta_slug: str):
     # antes seria ruido justo donde la persona esta decidiendo apuntarse.
     # Viene aqui y no en una llamada aparte porque la pagina ya tiene esta
     # respuesta en la mano cuando llega a esa pantalla.
-    d["tienda"] = await _tienda_enlace_publico()
+    reclamo = await _tienda_reclamo()
+    d["tienda"] = reclamo["url"]
+    d["tienda_desde"] = reclamo["desde"]
+    d["tienda_prendas"] = reclamo["prendas"]
     return d
 
 
@@ -19984,6 +19992,17 @@ async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request):
         raise HTTPException(400, "Escribe tu DNI (8 cifras y una letra, 12345678A) o tu NIE (X, Y o Z, 7 cifras y una letra, X1234567A)")
     if not _empleo_texto(datos.get("disponibilidad"), 120):
         raise HTTPException(400, "Dinos cuando puedes empezar")
+    # EL CARNET B, EN LA MANO — NO APROBADO, NI EN TRAMITE, NI EN EL PUEBLO.
+    # Tener el examen aprobado y tener la tarjeta no es lo mismo, y sin la
+    # tarjeta no se puede coger la furgoneta: es el requisito que decide si
+    # alguien puede empezar el lunes o dentro de dos meses. Hasta hoy se
+    # descubria por telefono —una llamada por candidato— o, peor, el dia del
+    # alta. Va como campo FIJO y no como pregunta de la oferta: una pregunta
+    # del cuestionario hay que acordarse de ponerla en cada oferta nueva, y el
+    # dia que se olvide nadie lo echaria en falta (gotcha 27 con otra cara).
+    carnet_fisico = _empleo_clave(datos.get("carnet_fisico"))
+    if carnet_fisico not in ("si", "no"):
+        raise HTTPException(400, "Dinos si tienes el carnet B fisicamente")
     if not datos.get("consiento"):
         raise HTTPException(400, "Hay que aceptar que guardemos tus datos para el proceso")
 
@@ -20005,6 +20024,10 @@ async def empleo_apuntarse(slug: str, oferta_slug: str, request: Request):
         "ciudad": _empleo_texto(datos.get("ciudad"), 80),
         "centro": o.get("centro") or "",
         "carnet_desde": _empleo_texto(datos.get("carnet_desde"), 20),
+        # "si" o "no", nunca vacio: el formulario obliga a marcarlo. Un tercer
+        # valor —el hueco— se leeria como «no lo tiene» y seria acusar a
+        # alguien de algo que no dijo.
+        "carnet_fisico": carnet_fisico,
         # El DNI es dato sensible: viaja en la lista blanca del panel y NO sale
         # en ninguna respuesta publica. Se guarda tal cual lo escriba: validar
         # la letra dejaria fuera a los NIE y a quien lo teclee con un guion.
@@ -43272,11 +43295,19 @@ _TIENDA_DIA_CIERRE = 4              # 0=lunes ... 4=viernes
 _TIENDA_MAX_UDS_LINEA = 5
 _TIENDA_MAX_LINEAS = 8
 
-# EL DESCUENTO DE ARRANQUE: 15 % para los CINCO primeros conductores.
-# Es una plaza por persona y por orden de llegada, no un cupon: quien ya tiene
-# la suya no puede coger otra, asi que uno solo no puede quedarse las cinco
-# pidiendo cinco veces.
-_TIENDA_DESC_PCT = 0.15
+# EL DESCUENTO DE ARRANQUE, HOY APAGADO. Es una plaza por persona y por orden
+# de llegada, no un cupon: quien ya tiene la suya no puede coger otra, asi que
+# uno solo no puede quedarse las cinco pidiendo cinco veces.
+#
+# APAGADO EL 09-09-2026 porque LA BAJADA DE PRECIO SE LO COMIO, y sumar las dos
+# cosas seria vender por debajo del suelo que puso Dani. Las cuentas, con la
+# formula de `_prenda_con_cuentas`: el hoodie paso de 74,90 a 52,90 -un 29 %
+# menos PARA TODOS, no para cinco-, y ahi quedan 6,08 EUR. Aplicandole ademas
+# el 15 % se cobrarian 44,97 y quedarian 0,07: se regalaria la prenda y encima
+# solo a los cinco primeros. Nadie habia cogido plaza todavia (`quien: []` en
+# `tienda_config`, 09-09-2026), asi que no se le quita nada a nadie.
+# La maquinaria se queda entera y probada: subir este numero la enciende.
+_TIENDA_DESC_PCT = 0.0
 _TIENDA_DESC_PRIMEROS = 5
 _TIENDA_DESC_ID = "descuento"
 
@@ -43306,7 +43337,11 @@ async def _tienda_desc_estado(did: str = "") -> dict:
         # `para_ti` es lo unico que el movil necesita para pintar el precio.
         # Quien YA la gasto no vuelve a tenerla: "los cinco primeros" son cinco
         # pedidos, no cinco personas con el 15 % de por vida.
-        "para_ti": bool(did) and did not in quien and len(quien) < _TIENDA_DESC_PRIMEROS,
+        # Con el descuento a cero NO hay plaza para nadie: sin esta guarda el
+        # movil pintaria «-0 % por ser de los primeros», que es peor que no
+        # ofrecer nada — promete algo y no descuenta.
+        "para_ti": (_TIENDA_DESC_PCT > 0 and bool(did) and did not in quien
+                    and len(quien) < _TIENDA_DESC_PRIMEROS),
         "gastada": bool(did) and did in quien,
     }
 
@@ -43319,7 +43354,7 @@ async def _tienda_desc_pedir(did: str) -> bool:
     pasarian los tres y saldrian ocho descuentos. Aqui la condicion viaja
     DENTRO del filtro, asi que Mongo solo deja pasar a uno.
     """
-    if not did:
+    if not did or _TIENDA_DESC_PCT <= 0:
         return False
     await _tienda_desc_doc()
     r = await db[_TCOL_CONFIG].update_one(
@@ -43868,6 +43903,28 @@ async def _tienda_enlace_publico() -> str:
         return ""
     base = (e.get("web") or PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
     return "%s/t/%s/" % (base, e["token"])
+
+
+async def _tienda_reclamo() -> dict:
+    """El anuncio de la ropa para una pagina publica: enlace, precio y cuantas.
+
+    Un enlace pelado —«ver la coleccion»— no dice si esto cuesta 20 EUR o 200,
+    y con la duda no lo abre nadie. Con «5 prendas desde 37,90 EUR» se decide
+    en un vistazo, que es todo el tiempo que tiene esta tarjeta.
+
+    Sin tienda publica devuelve `{"url": ""}` y quien lo pinte no pinta nada:
+    la decision de enseñarla vive AQUI, no repartida por cada pagina.
+    """
+    url = await _tienda_enlace_publico()
+    if not url:
+        return {"url": "", "desde": None, "prendas": 0}
+    prendas = await _tienda_prendas_publicas()
+    # El "desde" es el precio SIN recargo de talla, igual que el escaparate:
+    # `_tienda_precio(p)` sin talla. Si se colara el recargo, la persona veria
+    # un "desde" mas alto que el precio real de casi todas las tallas.
+    precios = [x for x in (_tienda_precio(p) for p in prendas) if x]
+    return {"url": url, "desde": (min(precios) if precios else None),
+            "prendas": len(prendas)}
 
 
 async def _tienda_soltar_caducadas() -> None:

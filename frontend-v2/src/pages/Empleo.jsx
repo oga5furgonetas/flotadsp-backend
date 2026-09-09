@@ -3,9 +3,10 @@ import { useParams, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import {
   Loader2, AlertTriangle, CheckCircle2, MapPin, Clock, Euro, Package,
-  ChevronRight, ShieldCheck, Paperclip, X, Truck, CalendarCheck, Users, Shirt,
+  ChevronRight, ShieldCheck, Paperclip, X, Truck, CalendarCheck, Users,
 } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
+import RopaCartel from './RopaCartel'
 
 /* LA PÁGINA DONDE SE APUNTA LA GENTE — sin login y desde el móvil.
    ══════════════════════════════════════════════════════════════════════════
@@ -33,7 +34,8 @@ const http = axios.create({ baseURL: API_BASE, timeout: 30000 })
 
 const VACIO = {
   nombre: '', telefono: '', email: '', ciudad: '', dni: '', nacimiento: '',
-  carnet_desde: '', experiencia: '', disponibilidad: '', consiento: false, web: '',
+  carnet_desde: '', carnet_fisico: '', experiencia: '', disponibilidad: '',
+  consiento: false, web: '',
 }
 
 const CUANDO = ['Ya mismo', 'Esta semana', 'En 15 días', 'En un mes']
@@ -118,6 +120,7 @@ export default function Empleo() {
 
   const enviar = async (e) => {
     e.preventDefault()
+    if (!f.carnet_fisico) { setError('Dinos si tienes el carnet B contigo.'); return }
     if (!f.disponibilidad) { setError('Dinos cuándo puedes empezar.'); return }
     if (!f.consiento) { setError('Acepta que guardemos tus datos para poder enviar la candidatura.'); return }
     setEnviando(true)
@@ -165,26 +168,15 @@ export default function Empleo() {
               sin quitarle atencion a lo que vino a hacer. Y solo aparece si el
               backend manda el enlace -o sea, si la tienda esta abierta-, asi
               que cerrarla lo borra de aqui sin tocar esta pantalla. */}
-          {oferta.tienda && (
-            <div className="mx-auto mt-9 max-w-sm rounded-2xl border border-slate-200 bg-slate-50 p-5 text-left">
-              <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">
-                <Shirt size={13} /> Mientras tanto
-              </div>
-              <p className="mt-2.5 text-[16px] font-bold text-slate-900">La ropa del equipo</p>
-              <p className="mt-1 text-[13.5px] leading-relaxed text-slate-600">
-                Sudaderas, cortavientos y gorras con el escudo de Galicia. Se
-                fabrican por encargo y cada modelo lleva unidades contadas.
-              </p>
-              <a
-                href={oferta.tienda}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2.5 text-[13.5px] font-semibold text-white hover:bg-slate-800"
-              >
-                Ver la colección <ChevronRight size={15} />
-              </a>
-            </div>
-          )}
+          {/* LA TIENDA, AQUI Y NO ANTES. Esta persona acaba de apuntarse: es el
+              unico momento del embudo en que se le puede ensenar otra cosa sin
+              quitarle atencion a lo que vino a hacer. Y solo aparece si el
+              backend manda el enlace —o sea, si la tienda esta abierta—, asi
+              que cerrarla lo borra de aqui sin tocar esta pantalla. */}
+          <div className="mx-auto mt-9 max-w-sm">
+            <RopaCartel url={oferta.tienda} desde={oferta.tienda_desde}
+              prendas={oferta.tienda_prendas} titulo="La ropa del equipo" />
+          </div>
           <p className="mt-8 text-[12px] text-slate-400">
             Puedes pedirnos que borremos tus datos cuando quieras.
           </p>
@@ -281,6 +273,29 @@ export default function Empleo() {
           </div>
         ) : (
           <div className="space-y-5">
+            {/* EL CARNET, EN LA MANO. No es lo mismo tenerlo aprobado que tener
+                la tarjeta, y sin la tarjeta no se puede coger la furgoneta: es
+                lo que decide si alguien empieza el lunes o dentro de dos meses.
+                Hasta ahora se descubría llamando —una llamada por candidato— o,
+                peor, el día del alta. Va la primera de este paso porque es la
+                pregunta que más manda.
+                Se pregunta en claro y sin trampa: aquí no se descarta a nadie
+                solo por marcar «no». La respuesta se guarda y la oficina la ve
+                antes de llamar, que es justo lo que faltaba. */}
+            <div>
+              <label className="mb-1 block text-[15px] font-medium text-slate-800">
+                ¿Tienes el carnet B físicamente? <span className="text-red-500">*</span>
+              </label>
+              <p className="mb-2 text-[13px] leading-snug text-slate-500">
+                La tarjeta en la mano, no el examen aprobado. Hace falta para conducir la furgoneta.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {['Sí', 'No'].map((o) => (
+                  <Opcion key={o} activa={f.carnet_fisico === o} onClick={() => set('carnet_fisico', o)}>{o}</Opcion>
+                ))}
+              </div>
+            </div>
+
             <div>
               <label className="mb-2 block text-[15px] font-medium text-slate-800">
                 ¿Cuándo puedes empezar? <span className="text-red-500">*</span>

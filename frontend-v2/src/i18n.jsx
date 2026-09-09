@@ -375,6 +375,8 @@ const DICT = {
   'empleo.tieneFicha': { es: 'Ya tiene ficha', en: 'Already has a record', fr: 'A deja une fiche', de: 'Hat bereits einen Datensatz', it: 'Ha gia la scheda', pt: 'Ja tem ficha' },
   'empleo.anos': { es: 'anos', en: 'years', fr: 'ans', de: 'Jahre', it: 'anni', pt: 'anos' },
   'empleo.carnet': { es: 'carnet', en: 'licence', fr: 'permis', de: 'Fuehrerschein', it: 'patente', pt: 'carta' },
+  'empleo.carnetSi': { es: 'Carnet B en la mano', en: 'Has the licence card', fr: 'Permis en main', de: 'Fuehrerschein vorhanden', it: 'Patente in mano', pt: 'Carta na mao' },
+  'empleo.carnetNo': { es: 'NO tiene el carnet fisico', en: 'No physical licence yet', fr: 'Pas encore le permis', de: 'Fuehrerschein noch nicht da', it: 'Patente non ancora in mano', pt: 'Ainda sem a carta' },
   'empleo.titulo': { es: 'Empleo', en: 'Hiring', fr: 'Recrutement', de: 'Stellen', it: 'Assunzioni', pt: 'Emprego' },
   'empleo.sub': { es: 'Tus ofertas, el cuestionario y quien se apunta. Al contratar se crea la ficha sola.', en: 'Your job ads, the questionnaire and who applies. Hiring creates the driver record.', fr: 'Vos offres, le questionnaire et les candidats. Embaucher cree la fiche.', de: 'Deine Anzeigen, der Fragebogen und die Bewerber. Beim Einstellen entsteht der Datensatz.', it: 'Le tue offerte, il questionario e chi si candida. Assumendo si crea la scheda.', pt: 'As tuas ofertas, o questionario e quem se candidata. Ao contratar cria-se a ficha.' },
   'empleo.nueva': { es: 'Nueva oferta', en: 'New job ad', fr: 'Nouvelle offre', de: 'Neue Anzeige', it: 'Nuova offerta', pt: 'Nova oferta' },

@@ -211,10 +211,12 @@ export default function Empleo() {
      Excel en español abre en columnas de una vez, sin el asistente. */
   const exportar = () => {
     const cab = ['Nombre', 'Teléfono', 'Correo', 'DNI', 'Edad', 'Ciudad', 'Carnet desde',
-      'Experiencia', 'Disponibilidad', 'Origen', 'Fase', 'Motivo', 'Notas', 'Día', 'CV']
+      'Carnet físico', 'Experiencia', 'Disponibilidad', 'Origen', 'Fase', 'Motivo', 'Notas', 'Día', 'CV']
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
     const filas = visibles.map((c) => [
       c.nombre, c.telefono, c.email, c.dni, c.edad, c.ciudad, c.carnet_desde,
+      // Vacío cuando no consta, no un «no»: el campo existe desde el 09-09-2026.
+      c.carnet_fisico === 'si' ? 'Sí' : c.carnet_fisico === 'no' ? 'No' : '',
       c.experiencia, c.disponibilidad, c.origen, c.fase, c.motivo_descarte, c.notas,
       (c.creado_en || '').slice(0, 10), c.cv_url,
     ].map(esc).join(';'))
@@ -558,6 +560,13 @@ function FichaCandidato({ c, oferta, t, onCerrar, onMover, onContratar, onBorrar
 }
 
 function Datos({ c, t }) {
+  /* EL CARNET FÍSICO SE PINTA, Y EL «NO» SE VE. Es lo que decide si esta
+     persona puede empezar el lunes o dentro de dos meses, y en una lista gris
+     de cuarenta candidatos un dato así se pierde. En ámbar, no en rojo: no es
+     un descarte —lo decide quien llama—, es un aviso.
+     Los candidatos anteriores al 09-09-2026 no traen el campo y no se pinta
+     nada: un hueco no es un «no», y pintarlo sería acusar a alguien de algo
+     que no dijo (gotcha 33). */
   const filas = [
     [Mail, c.email],
     [IdCard, [c.dni, c.edad ? `${c.edad} ${t('empleo.anos')}` : ''].filter(Boolean).join(' · ')],
@@ -565,7 +574,9 @@ function Datos({ c, t }) {
     [Calendar, [c.carnet_desde && `${t('empleo.carnet')} ${c.carnet_desde}`, c.disponibilidad].filter(Boolean).join(' · ')],
     [Briefcase, c.experiencia],
   ].filter(([, v]) => v)
-  if (!filas.length) return null
+  const carnet = c.carnet_fisico === 'si' ? t('empleo.carnetSi')
+    : c.carnet_fisico === 'no' ? t('empleo.carnetNo') : ''
+  if (!filas.length && !carnet) return null
   return (
     <div className="grid gap-1">
       {filas.map(([Icon, v], i) => (
@@ -573,6 +584,13 @@ function Datos({ c, t }) {
           <Icon size={12} className="shrink-0 text-dark-600" /> <span className="min-w-0 truncate">{v}</span>
         </div>
       ))}
+      {carnet && (
+        <div className={`flex items-center gap-1.5 text-[12px] ${
+          c.carnet_fisico === 'no' ? 'font-semibold text-amber-300' : 'text-dark-300'}`}>
+          <IdCard size={12} className={`shrink-0 ${c.carnet_fisico === 'no' ? 'text-amber-400' : 'text-dark-600'}`} />
+          <span className="min-w-0 truncate">{carnet}</span>
+        </div>
+      )}
     </div>
   )
 }

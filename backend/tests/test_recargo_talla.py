@@ -191,24 +191,76 @@ def test_lo_que_queda_es_menos_que_el_bruto():
     assert round(c["margen"] - c["gastos"], 2) == c["queda"]
 
 
-def test_los_ocho_productos_de_printful_dan_lo_que_dicen():
-    """Los costes son los MEDIDOS en el catalogo el 07-09-2026. Si alguien
-    cambia un precio de venta a la baja sin mirar, esto lo dice."""
-    # Precios y costes REALES del 08-09-2026, con los productos que Dani ha
-    # montado de verdad en Printful — que no son todos los que se apuntaron:
-    # el hoodie es el premium (29,74, no 23,39) y la gorra la trucker de malla
-    # (18,75, no 16,65).
+def test_los_ocho_productos_dejan_entre_cinco_y_diez_euros():
+    """Los precios del 09-09-2026, despues de bajarlos. La regla cambio.
+
+    Antes se pedia un 33% de margen sobre el neto y salian precios de 74,90
+    para un hoodie. **No compro nadie**: ocho pedidos, los ocho pruebas de
+    Dani, cero ventas reales. El 09-09-2026 decidio otra regla, y es la que se
+    prueba aqui: «baja los precios para que puedan comprar y que no les sea
+    cara, aunque gane 5 o 10 euros por prenda».
+
+    O sea que el numero que manda ya NO es un porcentaje sino un IMPORTE, y el
+    porcentaje que sale es el que sea. En una prenda cara el porcentaje se
+    hunde —el hoodie deja un 14% del neto— y esta bien: un 40% de cero ventas
+    son cero euros. Lo que no puede pasar es que una prenda deje menos de 5,
+    que es vender por debajo de lo que el dueno dijo, ni mas de 11, que es
+    haberla dejado cara sin querer.
+
+    Los costes son los MEDIDOS en el catalogo de Printful (07-09-2026) con los
+    productos que Dani monto de verdad: el hoodie es el premium (29,74, no
+    23,39) y la gorra la trucker de malla (18,75, no 16,65).
+    """
     catalogo = [
-        ("camiseta", 7.72, 29.90, 43), ("camiseta entallada", 7.72, 29.90, 43),
-        ("sudadera", 17.90, 59.90, 47), ("hoodie", 29.74, 74.90, 37),
-        ("cortavientos", 22.16, 69.90, 46), ("chandal", 32.06, 89.90, 43),
-        ("gorra", 18.75, 49.90, 36), ("gorro", 14.18, 39.90, 36),
+        ("camiseta", 7.72, 22.90), ("camiseta entallada", 7.72, 22.90),
+        ("sudadera", 17.90, 37.90), ("hoodie", 29.74, 52.90),
+        ("cortavientos", 22.16, 42.90), ("chandal", 32.06, 56.90),
+        ("gorra", 18.75, 37.90), ("gorro", 14.18, 32.90),
     ]
-    for nombre, coste, pvp, pct in catalogo:
+    for nombre, coste, pvp in catalogo:
         c = CUENTAS({"coste": coste, "pvp": pvp})
-        assert c["queda_pct"] == pct, (nombre, c["queda_pct"], pct)
-        # Y ninguno por debajo de un tercio: ahi deja de compensar el lio.
-        assert c["queda_pct"] >= 33, nombre
+        assert 5.0 <= c["queda"] <= 11.0, (nombre, c["queda"])
+
+
+def test_bajar_el_precio_y_ademas_descontar_es_vender_regalando():
+    """Por que se apago el 15% de los cinco primeros.
+
+    Con el precio viejo el descuento cabia de sobra. Con el nuevo se come el
+    margen entero: el hoodie a 52,90 deja 6,08 EUR, y con un 15% encima se
+    cobrarian 44,97 y quedarian centimos. Las dos rebajas no se suman.
+    """
+    entero = CUENTAS({"coste": 29.74, "pvp": 52.90})
+    con_desc = CUENTAS({"coste": 29.74, "pvp": round(52.90 * 0.85, 2)})
+    assert entero["queda"] >= 5
+    assert con_desc["queda"] < 1, con_desc["queda"]
+
+
+def test_el_descuento_de_los_primeros_esta_apagado():
+    """Y apagado significa que NO hay plaza para nadie, no que sea del 0%.
+
+    Sin la guarda en `para_ti`, el movil pintaria «-0 % por ser de los
+    primeros»: promete una rebaja y no descuenta nada, que es peor que callar.
+    """
+    texto = io.open(SERVER, encoding="utf-8-sig").read()
+    assert "_TIENDA_DESC_PCT = 0.0" in texto, "el descuento vuelve a estar encendido"
+    # Y las dos guardas, cada una en su funcion: leer el fichero entero valdria
+    # para las dos aunque estuvieran en el sitio que no es.
+    estado = _trozo(texto, "async def _tienda_desc_estado")
+    assert "_TIENDA_DESC_PCT > 0" in estado, (
+        "con el descuento a cero, `para_ti` tiene que ser False")
+    pedir = _trozo(texto, "async def _tienda_desc_pedir")
+    assert "_TIENDA_DESC_PCT <= 0" in pedir, "apagado, no se puede gastar una plaza"
+
+
+def _trozo(texto, cabecera):
+    """El cuerpo de una funcion: de su `def` al siguiente que empieza en columna 0."""
+    i = texto.index(cabecera)
+    resto = texto[i + len(cabecera):]
+    corte = resto.find(chr(10) + "async def ")
+    otro = resto.find(chr(10) + "def ")
+    if otro != -1 and (corte == -1 or otro < corte):
+        corte = otro
+    return resto[:corte if corte != -1 else len(resto)]
 
 
 def test_el_precio_que_no_da_margen_se_ve():
@@ -405,9 +457,16 @@ def _constante(nombre):
 
 
 def test_las_cuentas_del_descuento_cuadran():
-    """El numero que ve el conductor y el que cobra la tarjeta son el mismo."""
-    pct = _constante("_TIENDA_DESC_PCT")
-    assert pct == 0.15
+    """El numero que ve el conductor y el que cobra la tarjeta son el mismo.
+
+    El porcentaje va ESCRITO AQUI y no leido de `server.py`: hoy el descuento
+    esta apagado (0,0) y lo que se prueba es la MAQUINARIA —que el recargo de
+    talla entra antes que la rebaja y que el redondeo cae del mismo lado en el
+    movil y en el servidor—, no cuanto vale hoy la constante. Eso lo mira
+    `test_el_descuento_de_los_primeros_esta_apagado`. Atandolo a la constante,
+    encender o apagar la promocion rompia un test que no va de eso.
+    """
+    pct = 0.15
     prenda = {"pvp": 59.90, "tallas_grandes": ["XXL", "3XL"], "recargo_talla": 3.0}
     assert round(PRECIO(prenda, "M") * (1 - pct), 2) == 50.91
     # Con talla grande el descuento cae sobre el precio YA recargado: esa talla

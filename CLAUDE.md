@@ -1524,6 +1524,33 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    estructura, contar cuantas veces se lee y se escribe (gotcha 63 del lado del
    navegador).
 
+75. **Dos rebajas no se suman: la segunda se come el margen entero, y apagar
+   una promocion no apaga su cartel.** El 09-09-2026 Dani bajo los precios de
+   la ropa —«que puedan comprar, aunque gane 5 o 10 euros por prenda»— porque
+   con el precio anterior no habia comprado nadie: ocho pedidos, los ocho
+   pruebas suyas. El hoodie paso de 74,90 a 52,90 y ahi quedan 6,08 EUR con la
+   formula de `_prenda_con_cuentas` (envio, pasarela y colchon dentro). Pero
+   encima seguia vivo el **15 % de los cinco primeros**, que estaba dimensionado
+   contra el precio VIEJO: 52,90 x 0,85 = 44,97, y de ahi quedan **7 centimos**.
+   O sea que la promocion habria regalado la prenda, y solo a cinco personas,
+   justo despues de haberla abaratado un 29 % para todos.
+   Regla: **al mover un precio hay que repasar todo lo que le resta despues**
+   —descuentos, promociones, portes incluidos—, porque cada uno se calculo
+   contra el precio que habia entonces.
+   Y la segunda mitad, que es la que no se ve: apagar el descuento poniendo la
+   constante a 0 **no basta**. El movil pintaba el cartel con
+   `desc.para_ti && desc.quedan > 0`, sin mirar el porcentaje, asi que habria
+   salido «**-0 % por ser de los primeros**»: promete una rebaja y no descuenta
+   nada, que es peor que no ofrecer ninguna. La guarda va en el SERVIDOR
+   (`para_ti` es False con el porcentaje a cero) y no en cada pantalla que lo
+   pinte, que es la misma regla del gotcha 54.
+   De la misma tanda, una comparacion que parece inofensiva: la insignia nueva
+   del portal se pintaba con `aviso <= 0`, y `aviso` llega **sin definir** en
+   casi todas las entradas del menu — `undefined <= 0` es **false**, asi que no
+   se habria pintado nunca y no habria fallado nada. Con `undefined`, todas las
+   comparaciones numericas son false, tambien `>=`: hay que preguntar
+   `!(x > 0)`, no `x <= 0`.
+
 
 ## Reglas de trabajo
 

@@ -26,7 +26,7 @@ const DRIVER_KEY = 'flotadsp_driver'
    hace todos los días antes de salir. Lo demás está debajo, a un toque.
    ──────────────────────────────────────────────────────────────────────────── */
 
-function Opcion({ icono: Icono, titulo, sub, onClick, principal, bloqueado, pronto, aviso }) {
+function Opcion({ icono: Icono, titulo, sub, onClick, principal, bloqueado, pronto, aviso, insignia }) {
   const off = bloqueado || pronto
   return (
     <button
@@ -37,9 +37,22 @@ function Opcion({ icono: Icono, titulo, sub, onClick, principal, bloqueado, pron
           ? 'cursor-not-allowed border-dark-800 bg-dark-900/40 opacity-60'
           : principal
             ? 'border-brand-400/60 bg-gradient-to-br from-brand-500 to-brand-700 shadow-lg shadow-brand-900/30 active:scale-[.99]'
-            : 'border-dark-700 bg-dark-900 active:scale-[.99]'
+            : insignia
+              ? 'border-amber-400/50 bg-amber-500/[.07] active:scale-[.99]'
+              : 'border-dark-700 bg-dark-900 active:scale-[.99]'
       }`}
     >
+      {/* Una etiqueta corta arriba a la derecha para lo que hay que mirar hoy.
+          No es un adorno permanente: se quita en cuanto deja de ser noticia, o
+          se convierte en el aviso de siempre que nadie lee. */}
+      {/* `!(aviso > 0)` y no `aviso <= 0`: `aviso` llega sin definir en casi
+          todas las entradas, y `undefined <= 0` es false — la insignia no se
+          habria pintado nunca y no habria fallado nada. */}
+      {insignia && !off && !(aviso > 0) && (
+        <span className="absolute right-3 top-3 rounded-full bg-amber-400/15 px-2 py-0.5 text-[9.5px] font-bold uppercase tracking-wider text-amber-300">
+          {insignia}
+        </span>
+      )}
       {/* "Pronto" en vez de esconderlo: si la opción no está, la gente pregunta
           si existe; si está y dice cuándo, no pregunta nadie. */}
       {pronto && (
@@ -79,7 +92,9 @@ export default function DriverPortal() {
   const [portal, setPortal] = useState(null)   // {vehicles, puede_auditar, motivo}
   const [result, setResult] = useState(null)
   const [sinVer, setSinVer] = useState(0)      // respuestas que aún no ha leído
-  const [tienda, setTienda] = useState(false)
+  // null = apagada o todavía sin contestar. Con datos: {desde, n} para poder
+  // poner el precio en la entrada del menú, que es lo que hace que se entre.
+  const [tienda, setTienda] = useState(null)
 
   /* LA TIENDA NO SE VE HASTA QUE SE ENCIENDE, y la decision es del servidor.
      Se pregunta al escaparate: si contesta `visible: false` no se pinta ni la
@@ -95,7 +110,11 @@ export default function DriverPortal() {
     if (!localStorage.getItem(DRIVER_TOKEN_KEY)) return undefined
     let vivo = true
     tiendaEscaparate()
-      .then((r) => { if (vivo) setTienda(!!r.data?.visible) })
+      .then((r) => {
+        if (!vivo) return
+        const ps = (r.data?.prendas || []).map((p) => p.precio).filter((x) => x > 0)
+        setTienda(r.data?.visible ? { desde: ps.length ? Math.min(...ps) : null, n: ps.length } : null)
+      })
       .catch(() => {})
     return () => { vivo = false }
   }, [driver])
@@ -288,11 +307,20 @@ export default function DriverPortal() {
             sub="Las paradas que has salvado a un compañero"
             onClick={() => setVista('ayudas')}
           />
+          {/* LA ROPA, CON EL PRECIO EN LA PROPIA ENTRADA. Estaba aquí desde el
+              08-09 y no entró casi nadie: decía «La del equipo, con tu nombre»
+              y nada más, así que abrirla era averiguar si costaba 20 € o 200.
+              Con el precio delante la decisión se toma antes de entrar, y el
+              «desde» sale del escaparate —o sea, del precio de verdad—, no de
+              un número escrito aquí que se quedaría viejo (gotcha 54). */}
           {tienda && (
             <Opcion
               icono={ShoppingBag}
-              titulo="Ropa"
-              sub="La del equipo, con tu nombre"
+              titulo="Ropa del equipo"
+              sub={tienda.desde
+                ? `Sudadera, cortavientos y gorra desde ${tienda.desde.toFixed(2).replace('.', ',')} €`
+                : 'La del equipo, con tu nombre'}
+              insignia="Nuevo precio"
               onClick={() => setVista('tienda')}
             />
           )}

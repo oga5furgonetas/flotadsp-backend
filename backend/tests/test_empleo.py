@@ -254,6 +254,38 @@ def test_slug_limpio():
     assert f("   ") == "oferta"
 
 
+def test_el_carnet_fisico_es_obligatorio_y_va_como_campo_fijo():
+    """La pregunta que Dani pidio el 09-09-2026: «tienes el carnet fisicamente».
+
+    VA COMO CAMPO FIJO, no como pregunta del cuestionario de la oferta. Una
+    pregunta del cuestionario hay que acordarse de ponerla en CADA oferta
+    nueva, y el dia que se olvide no lo echaria nadie en falta —es el gotcha 27
+    con otra cara: lo que falta no da error, simplemente no esta—. Siendo un
+    campo fijo, toda oferta presente y futura lo pregunta.
+
+    Y se guarda "si" o "no", nunca vacio: el hueco se leeria como «no lo
+    tiene», que es acusar a alguien de algo que no dijo (gotcha 33).
+    """
+    src = _fuente_de("empleo_apuntarse")
+    assert "carnet_fisico" in src, "el alta publica no pregunta por el carnet fisico"
+    assert 'raise HTTPException(400, "Dinos si tienes el carnet B fisicamente")' in src, (
+        "sin el 400, quien no lo marque entra igual y el dato queda vacio")
+    # La respuesta se normaliza como las del cuestionario: el movil manda «Sí»
+    # con tilde y comparando en crudo no casaria con "si" nunca.
+    assert "_empleo_clave(datos.get(\"carnet_fisico\"))" in src
+    assert '"carnet_fisico": carnet_fisico,' in src, "se pregunta pero no se guarda"
+
+
+def _fuente_de(nombre):
+    """El codigo de una funcion de server.py, tal cual esta escrito."""
+    texto = io.open(RUTA, encoding="utf-8-sig").read()
+    arbol = ast.parse(texto)
+    for n in ast.walk(arbol):
+        if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef)) and n.name == nombre:
+            return chr(10).join(texto.splitlines()[n.lineno - 1:n.end_lineno])
+    raise AssertionError("no existe %s en server.py" % nombre)
+
+
 def main() -> int:
     fallos = 0
     for nombre, fn in sorted(globals().items()):

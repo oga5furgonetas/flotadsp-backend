@@ -4,6 +4,7 @@ import {
   Loader2, MapPin, Clock, Euro, Package, ChevronRight, AlertTriangle, Truck,
 } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
+import RopaCartel from './RopaCartel'
 
 /* LAS OFERTAS ABIERTAS — la página a la que llega quien busca trabajo.
    ══════════════════════════════════════════════════════════════════════════
@@ -137,6 +138,16 @@ export default function Ofertas() {
                 </p>
               </div>
             )}
+          </div>
+        )}
+
+        {/* LA ROPA, DESPUES DE LAS OFERTAS Y NO ANTES. Quien entra aquí viene a
+            buscar trabajo: ponerla arriba le taparía lo que vino a leer. Debajo
+            de la última oferta sí, que es donde se sigue mirando. */}
+        {d?.tienda && (
+          <div className="mt-8">
+            <RopaCartel url={d.tienda} desde={d.tienda_desde} prendas={d.tienda_prendas}
+              titulo="La ropa del equipo" />
           </div>
         )}
 
