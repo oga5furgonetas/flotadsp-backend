@@ -6,6 +6,7 @@ import {
   ChevronRight, ShieldCheck, Paperclip, X, Truck, CalendarCheck, Users,
 } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
+import { enviarCandidatura } from '../lib/enviarCandidatura'
 import RopaCartel from './RopaCartel'
 
 /* LA PÁGINA DONDE SE APUNTA LA GENTE — sin login y desde el móvil.
@@ -32,6 +33,26 @@ import RopaCartel from './RopaCartel'
 
 const http = axios.create({ baseURL: API_BASE, timeout: 30000 })
 
+/* Que quede rastro. La vez anterior no se pudo saber qué había fallado porque
+   una petición que no llega al servidor no deja nada en ninguna parte: ni en
+   los logs ni en el registro de escrituras. Esto es lo único que lo cuenta. */
+function avisarDelFallo(e, slug, ofertaSlug) {
+  try {
+    const estado = e?.response?.status
+    fetch(`${API_BASE}/client-error`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: `empleo: no se pudo enviar la candidatura (${
+          estado ? `HTTP ${estado}` : e?.code || 'sin respuesta del servidor'})`,
+        stack: String(e?.message || '').slice(0, 300),
+        url: `/empleo/${slug}/${ofertaSlug}`,
+      }),
+      keepalive: true,
+    }).catch(() => {})
+  } catch { /* avisar del fallo no puede provocar otro */ }
+}
+
 const VACIO = {
   nombre: '', telefono: '', email: '', ciudad: '', dni: '', nacimiento: '',
   carnet_desde: '', carnet_fisico: '', experiencia: '', disponibilidad: '',
@@ -47,6 +68,7 @@ export default function Empleo() {
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
   const [enviando, setEnviando] = useState(false)
+  const [reintento, setReintento] = useState('')
   const [hecho, setHecho] = useState(false)
   const [paso, setPaso] = useState(1)
   const [f, setF] = useState(VACIO)
@@ -123,16 +145,32 @@ export default function Empleo() {
     if (!f.carnet_fisico) { setError('Dinos si tienes el carnet B contigo.'); return }
     if (!f.disponibilidad) { setError('Dinos cuándo puedes empezar.'); return }
     if (!f.consiento) { setError('Acepta que guardemos tus datos para poder enviar la candidatura.'); return }
-    setEnviando(true)
+    setEnviando(true); setError('')
     try {
       const fd = new FormData()
       fd.append('datos', JSON.stringify({ ...f, respuestas: resp, edad, origen: params.get('de') || 'directo' }))
       if (cv) fd.append('cv', cv, cv.name)
-      await http.post(`/empleo/publica/${encodeURIComponent(slug)}/${encodeURIComponent(ofertaSlug)}`, fd)
-      setHecho(true); setError('')
+      await enviarCandidatura(http,
+        `/empleo/publica/${encodeURIComponent(slug)}/${encodeURIComponent(ofertaSlug)}`, fd,
+        { alReintentar: (n, total) => setReintento(`Se ha cortado el envío. Reintentando… (${n} de ${total})`) })
+      setHecho(true); setError(''); setReintento('')
     } catch (err) {
-      setError(err?.response?.data?.detail || 'No hemos podido enviar tu candidatura. Inténtalo otra vez.')
-    } finally { setEnviando(false) }
+      /* DOS FALLOS DISTINTOS Y DOS MENSAJES DISTINTOS. Si el servidor contesta,
+         dice qué falta y hay que arreglarlo. Si no contesta, no hay nada que
+         arreglar: no ha llegado a salir, y lo que la persona necesita saber es
+         que no ha perdido lo que escribió y que puede volver a darle. El
+         mensaje de antes —«no hemos podido enviar, inténtalo otra vez»— no
+         distinguía, y ante eso se abandona el formulario. */
+      const detalle = err?.response?.data?.detail
+      const yaEstaba = err?.response?.status === 409
+      if (yaEstaba) { setHecho(true); setError(''); return }
+      avisarDelFallo(err, slug, ofertaSlug)
+      setError(detalle || (err?.response
+        ? 'No hemos podido enviar tu candidatura. Inténtalo otra vez.'
+        : 'No ha llegado a salir: parece que se cortó la conexión. Lo hemos '
+          + 'intentado tres veces. No has perdido nada de lo que escribiste — '
+          + 'vuelve a darle a enviar en un momento.'))
+    } finally { setEnviando(false); setReintento('') }
   }
 
   if (cargando) {
@@ -392,6 +430,15 @@ export default function Empleo() {
                 {enviando && <Loader2 size={17} className="animate-spin" />} Enviar candidatura
               </button>
             </div>
+            {/* DECIR QUE SE ESTÁ REINTENTANDO. El reintento puede tardar hasta
+                diecisiete segundos, y una rueda girando sin explicación se lee
+                como que la página se ha colgado: ahí se cierra la pestaña y se
+                pierde el candidato, que es justo lo que esto viene a evitar. */}
+            {reintento && (
+              <p className="flex items-center justify-center gap-1.5 text-[13px] font-medium text-amber-700">
+                <Loader2 size={13} className="animate-spin" /> {reintento}
+              </p>
+            )}
             <p className="flex items-center justify-center gap-1.5 text-[12.5px] text-slate-500">
               <ShieldCheck size={13} className="text-emerald-600" /> Tus datos no se comparten con nadie más.
             </p>

@@ -1586,6 +1586,41 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    gastar). Un limite tiene que castigar el abuso, nunca el error.
    Cubierto en `test_empleo.py` con dos casos leidos de `server.py` (gotcha 40).
 
+77. **Una peticion que NO LLEGA al servidor no deja rastro en ninguna parte, y
+   el formulario se rendia al primer intento.** El mismo dia, otro candidato
+   —Ricardo— mando la captura de «No hemos podido enviar tu candidatura». Su
+   IP tenia en `audit_requests` exactamente DOS peticiones, las dos 200, las
+   dos mas tarde: **ninguna fallida**. Ni logs, ni auditoria, ni nada. Eso solo
+   pasa cuando la peticion no llega a salir, y se distingue por el mensaje que
+   se vio: el generico. Con respuesta del servidor la pantalla enseña el
+   `detail`; el generico significa que `err.response` era `undefined`.
+   Tres causas, y las tres duran segundos: se cae la cobertura al darle a
+   enviar, la subida de la foto del CV pasa de los 30 s del timeout en 4G, o
+   **el backend esta reiniciandose por un despliegue nuestro** — comprobado con
+   `fly status`: hay UNA sola maquina, asi que cada `fly deploy` deja unos
+   segundos sin servicio, y ese dia hubo cuatro despliegues.
+   Lo caro no es el fallo: es que **nadie vuelve a rellenar un formulario que
+   ya le ha fallado**. Ahi se pierde el candidato, y encima sin que quede nada
+   que mirar.
+   La cura tiene tres partes y hacen falta las tres:
+   · **reintentar solo lo que se arregla solo** —sin respuesta, o 502/503/504—.
+     Un 400 es el servidor diciendo que falta algo: repetirlo da el mismo 400
+     tres veces y tarda mas en decirlo. Esperas de 2, 5 y 10 s para cruzar la
+     ventana del despliegue, y avisando en pantalla («reintentando 2 de 4»):
+     diecisiete segundos de rueda sin explicacion se leen como colgado;
+   · **un 409 en un REINTENTO es un exito**, no un error: significa que el
+     primer envio si entro y solo se perdio la respuesta. Lo que hace seguro
+     reintentar es el indice unico de (oferta, telefono) — por eso esto se
+     puede reintentar y una compra no;
+   · **dejar rastro**: si el envio se cae del todo, se reporta a
+     `/client-error`. Sin eso la proxima vez vuelve a no haber nada que mirar,
+     que es lo que costo media hora de reconstruccion.
+   Lo vigila `scripts/check-envio-candidatura.mjs`, que ejecuta la funcion de
+   verdad (`src/lib/enviarCandidatura.js`) con un cliente de mentira. Probado
+   reintroduciendo los tres fallos.
+   **Pendiente y es de Dani**: una SEGUNDA maquina en Fly quita la ventana del
+   despliegue del todo. Cuesta dinero al mes; el reintento es la red de abajo.
+
 
 ## Reglas de trabajo
 
@@ -1610,11 +1645,12 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   despues de tocar multiempresa, importaciones, centros o el flujo de taller.
   Deja la empresa creada a proposito —no se borra sola: un script de smoke no
   debe poder borrar nada—; se quita desde el panel de super-admin.
-- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son veintiuno:
+- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son veintidós:
   `check-i18n`, `check-routes`, `check-huerfanas`, `check-permisos`, `check-tema`,
   `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones`,
   `check-tema-mezclado`, `check-efectos`, `check-chunk-error`,
   `check-importados`, `check-destinos`, `check-cola-extension`,
+  `check-envio-candidatura`,
   `check_contracts.py`, `check_objectid.py`, `check_tenant.py`,
   `check_multiempresa.py`, `check_borrado.py` y `check_unicos.py`.
   `check-patrones` admite `soloEn` en una regla: hay patrones que solo son un

@@ -55,6 +55,8 @@ jobs:
         run: node scripts/check-extension.mjs
       - name: Cola de la extension (no pierde paquetes y no escribe de mas)
         run: node scripts/check-cola-extension.mjs
+      - name: Envio de una candidatura (se reintenta, y reintentarlo es seguro)
+        run: node scripts/check-envio-candidatura.mjs
       - name: Checker patrones (codigo que repite un bug ya conocido)
         run: node scripts/check-patrones.mjs
 
