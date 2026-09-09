@@ -31,7 +31,8 @@ const PX_POR_CM = 68 / 52
 const VACIA = {
   nombre: '', tipo: 'camiseta', color: 'negro', tallas: ['S', 'M', 'L', 'XL'],
   estampaciones: [{ posicion: 'pecho', tinta: 'cian', cm: 8, texto: 'FDs', con_nombre: false }],
-  franja_manga: true, coste: '', pvp: '', recargo_talla: '', unidades: '', notas: '',
+  franja_manga: true, coste: '', pvp: '', recargo_talla: '', unidades: '',
+  proveedor: '', referencia: '', enlace: '', notas: '',
 }
 
 const eur = (n) => `${Number(n).toFixed(2).replace('.', ',')} €`
@@ -487,6 +488,9 @@ function Editor({ prenda, datos, logos, onCerrar, onGuardado }) {
       pvp: f.pvp === '' ? null : f.pvp,
       recargo_talla: f.recargo_talla === '' ? null : f.recargo_talla,
       unidades: f.unidades === '' ? null : f.unidades,
+      proveedor: f.proveedor || '',
+      referencia: f.referencia || '',
+      enlace: (f.enlace || '').trim(),
       notas: f.notas,
     }
     try {
@@ -675,9 +679,40 @@ function Editor({ prenda, datos, logos, onCerrar, onGuardado }) {
 
             {f.id && <SubirFoto prenda={f} onHecho={onGuardado} />}
 
+            {/* DE DÓNDE SE ENCARGA. Sin esto, cuando entra una venta la lista
+                dice «Hoodie FDs · L ×2» y hay que acordarse de cuál de los
+                cuarenta hoodies del catálogo era ese — que es justo donde se
+                pide la prenda equivocada, con el cliente ya pagado esperando.
+                Estos tres viajan hasta la lista de «Qué encargar», que es donde
+                se miran: con el pedido delante, no aquí. */}
+            <div className="rounded-xl border border-dark-800 p-3">
+              <div className="mb-2 text-[12px] font-semibold text-dark-200">Dónde se encarga</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="label">Proveedor</label>
+                  <input className="input" value={f.proveedor || ''} placeholder="Printful, Printify…"
+                    onChange={(e) => set('proveedor', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Referencia</label>
+                  <input className="input" value={f.referencia || ''} placeholder="Gildan 18500 negro"
+                    onChange={(e) => set('referencia', e.target.value)} />
+                </div>
+              </div>
+              <div className="mt-3">
+                <label className="label">Enlace al producto</label>
+                <input className="input" value={f.enlace || ''} placeholder="https://…"
+                  onChange={(e) => set('enlace', e.target.value)} />
+                <p className="mt-1 text-[11px] leading-snug text-dark-500">
+                  El enlace exacto del producto en el proveedor. Cuando alguien compre,
+                  sale aquí al lado de lo que hay que pedir y se encarga de un clic.
+                </p>
+              </div>
+            </div>
+
             <div>
               <label className="label">Notas</label>
-              <input className="input" value={f.notas || ''} placeholder="Modelo del proveedor, referencia…"
+              <input className="input" value={f.notas || ''} placeholder="Color, acabado, lo que haya que recordar…"
                 onChange={(e) => set('notas', e.target.value)} />
             </div>
 

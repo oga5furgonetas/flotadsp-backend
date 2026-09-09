@@ -263,6 +263,55 @@ def _trozo(texto, cabecera):
     return resto[:corte if corte != -1 else len(resto)]
 
 
+def test_que_encargar_no_junta_dos_prendas_distintas_con_el_mismo_nombre():
+    """La lista se agrupa por (prenda, talla), no por el texto que se pinta.
+
+    Dos prendas pueden llamarse igual —«Camiseta FDs» de hombre y de mujer, o
+    la misma renombrada— y agrupando por «nombre · talla» se sumarian en una
+    linea. Encargarias dos del mismo producto y ninguna del otro, sin que nada
+    falle: la suma cuadra y la lista parece correcta.
+    """
+    encargar = _cargar_que_encargar()
+    grupos = {("p1", "Camiseta FDs", "L"): 2, ("p2", "Camiseta FDs", "L"): 3}
+    donde = {"p1": {"proveedor": "Printful", "referencia": "Gildan 5000",
+                    "enlace": "https://printful.com/a"},
+             "p2": {"proveedor": "Printify", "referencia": "Bella 6400"}}
+    salida = encargar(grupos, donde)
+    assert len(salida) == 2, "se han fundido dos productos distintos"
+    assert {x["referencia"] for x in salida} == {"Gildan 5000", "Bella 6400"}
+
+
+def test_que_encargar_dice_de_donde_se_pide():
+    """Es el dato que faltaba: «Hoodie FDs · L ×2» no dice cual de los cuarenta
+    hoodies del catalogo del proveedor hay que comprar."""
+    encargar = _cargar_que_encargar()
+    salida = encargar({("p1", "Hoodie FDs", "L"): 2},
+                      {"p1": {"proveedor": "Printful", "referencia": "Gildan 18500",
+                              "enlace": "https://printful.com/x"}})
+    assert salida[0]["que"] == "Hoodie FDs · L", "el texto de siempre no cambia (gotcha 20)"
+    assert salida[0]["unidades"] == 2
+    assert salida[0]["proveedor"] == "Printful"
+    assert salida[0]["enlace"] == "https://printful.com/x"
+
+
+def test_una_prenda_sin_proveedor_no_inventa_uno():
+    """Vacio se pinta como «sin proveedor puesto», que es lo que pasa. Poner
+    uno por defecto seria mandar a comprar al sitio equivocado."""
+    encargar = _cargar_que_encargar()
+    salida = encargar({("p9", "Gorra FDs", "U"): 1}, {})
+    assert salida[0]["proveedor"] == "" and salida[0]["enlace"] == ""
+
+
+def _cargar_que_encargar():
+    amb = {}
+    for n in ast.parse(io.open(SERVER, encoding="utf-8-sig").read()).body:
+        if isinstance(n, ast.FunctionDef) and n.name == "_tienda_que_encargar":
+            exec(compile(ast.fix_missing_locations(ast.Module(body=[n], type_ignores=[])),  # noqa: S102
+                         "<server>", "exec"), amb)
+    assert "_tienda_que_encargar" in amb, "no existe _tienda_que_encargar en server.py"
+    return amb["_tienda_que_encargar"]
+
+
 def test_el_precio_que_no_da_margen_se_ve():
     """La trampa que casi cuela: la Next Level 3600 a 15,04 vendida a 19,90.
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Store, Check, Package, AlertTriangle, Euro, Trash2 } from 'lucide-react'
+import { Loader2, Store, Check, Package, AlertTriangle, Euro, Trash2, ExternalLink } from 'lucide-react'
 import { tiendaPedidos, tiendaConfig, tiendaEstadoPedido, tiendaBorrarPedido } from '../api'
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -208,12 +208,7 @@ export default function TiendaPedidos() {
           <div className="border-b border-dark-800 px-3 py-2 text-[12px] font-medium text-dark-300">
             <Package size={12} className="mr-1 inline" /> Qué encargar (solo lo pagado)
           </div>
-          {lista.map((l) => (
-            <div key={l.que} className="flex items-center justify-between border-b border-dark-800 px-3 py-1.5 text-[12.5px] last:border-0">
-              <span className="text-dark-300">{l.que}</span>
-              <span className="font-semibold tabular-nums text-dark-100">{l.unidades}</span>
-            </div>
-          ))}
+          {lista.map((l) => <Encargo key={l.que} l={l} />)}
         </div>
       )}
 
@@ -224,12 +219,7 @@ export default function TiendaPedidos() {
           <div className="border-b border-dark-800 px-3 py-2 text-[12px] font-medium text-amber-300">
             <AlertTriangle size={12} className="mr-1 inline" /> Pedido pero sin pagar — no lo encargues aún
           </div>
-          {d.aun_sin_cobrar.map((l) => (
-            <div key={l.que} className="flex items-center justify-between border-b border-dark-800 px-3 py-1.5 text-[12.5px] last:border-0">
-              <span className="text-dark-400">{l.que}</span>
-              <span className="font-semibold tabular-nums text-dark-300">{l.unidades}</span>
-            </div>
-          ))}
+          {d.aun_sin_cobrar.map((l) => <Encargo key={l.que} l={l} apagado />)}
         </div>
       )}
 
@@ -281,6 +271,41 @@ export default function TiendaPedidos() {
       {pedidos.length === 0 && (
         <p className="mt-3 text-[12.5px] text-dark-500">Todavía no ha pedido nadie.</p>
       )}
+    </div>
+  )
+}
+
+/* UNA LÍNEA DE «QUÉ ENCARGAR», CON DE DÓNDE SE PIDE.
+   Antes ponía «Hoodie FDs · L — 2» y ahí acababa: con cuarenta hoodies en el
+   catálogo del proveedor, acordarse de cuál era es justo donde se encarga la
+   prenda equivocada, con el cliente ya pagado y esperando. Ahora la referencia
+   va al lado y el enlace abre el producto exacto.
+   Si la prenda no lo tiene puesto se dice —«sin proveedor»— en vez de dejar el
+   hueco: un hueco parece que no hace falta, y lo que pasa es que falta. */
+function Encargo({ l, apagado }) {
+  return (
+    <div className="border-b border-dark-800 px-3 py-2 text-[12.5px] last:border-0">
+      <div className="flex items-center justify-between gap-2">
+        <span className={apagado ? 'text-dark-400' : 'text-dark-300'}>{l.que}</span>
+        <span className={`font-semibold tabular-nums ${apagado ? 'text-dark-300' : 'text-dark-100'}`}>
+          {l.unidades}
+        </span>
+      </div>
+      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11.5px]">
+        {(l.proveedor || l.referencia) ? (
+          <span className="text-dark-500">
+            {[l.proveedor, l.referencia].filter(Boolean).join(' · ')}
+          </span>
+        ) : (
+          <span className="text-amber-300/70">Sin proveedor puesto — ponlo en la prenda</span>
+        )}
+        {l.enlace && (
+          <a href={l.enlace} target="_blank" rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 font-semibold text-brand-300 hover:underline">
+            <ExternalLink size={11} /> Encargar
+          </a>
+        )}
+      </div>
     </div>
   )
 }

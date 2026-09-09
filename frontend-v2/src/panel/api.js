@@ -105,6 +105,15 @@ export const enviarCandidatoAEtt = (candId, ett) =>
 export const deshacerEnvioEtt = (candId, ettId) =>
   api.delete(`/empleo/candidatos/${candId}/ett/${ettId}`)
 export const borrarCandidato = (id) => api.delete(`/empleo/candidatos/${id}`)
+/* Por contactar: gente de Indeed a la que hay que escribir para que se apunte.
+   El enlace de WhatsApp lo arma el backend y viaja en `wa` (gotcha 47). */
+export const getInvitados = () => api.get('/empleo/invitados')
+export const crearInvitado = (body) => api.post('/empleo/invitados', body)
+export const marcarInvitadoEscrito = (id, escrito) =>
+  api.post(`/empleo/invitados/${id}/escrito`, { escrito })
+export const borrarInvitado = (id) => api.delete(`/empleo/invitados/${id}`)
+export const guardarPlantillaInvitacion = (texto) =>
+  api.put('/empleo/invitados/plantilla', { texto })
 export const deleteDriver = (id) => api.delete(`/drivers/${id}`)
 export const uploadDriverPhoto = (id, file) => { const fd = new FormData(); fd.append('file', file); return api.post(`/drivers/${id}/photo`, fd) }
 

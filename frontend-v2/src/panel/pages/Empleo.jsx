@@ -11,6 +11,8 @@ import {
   getOfertas, crearOferta, editarOferta,
   getCandidatos, moverCandidato, contratarCandidato, borrarCandidato,
   getEtts, crearEtt, editarEtt, borrarEtt, enviarCandidatoAEtt, deshacerEnvioEtt,
+  getInvitados, crearInvitado, marcarInvitadoEscrito, borrarInvitado,
+  guardarPlantillaInvitacion,
 } from '../api'
 
 /* EMPLEO — DE LA OFERTA AL ALTA DEL CONDUCTOR.
@@ -254,6 +256,10 @@ export default function Empleo() {
         <EditorOferta oferta={editando} setOferta={setEditando} centros={centrosReales}
           guardando={guardando} onGuardar={guardar} onCerrar={() => setEditando(null)} t={t} />
       )}
+
+      {/* ARRIBA DEL TODO: es lo primero del embudo y lo que se hace a diario.
+          Debajo de las ofertas se queda fuera de la vista y no se usa. */}
+      {!sel && <PorContactar />}
 
       <ListaOfertas ofertas={ofertas} cargando={cargando} sel={sel} t={t}
         onAbrir={cargarCands} onEditar={(o) => { setEditando({ ...o, preguntas: (o.preguntas || []).map((p) => ({ ...p })) }); setError('') }}
@@ -932,6 +938,173 @@ function EnviarAEtt({ c, onEnviado }) {
 
 /* La agenda de ETTs. Existe para que añadir una ETT nueva no sea tocar código:
    nombre, WhatsApp y —si se quiere— el mensaje que se le manda. */
+/* ── POR CONTACTAR: LA GENTE DE INDEED QUE AÚN NO SE HA APUNTADO ────────────
+   Un nombre, un teléfono y un WhatsApp ya escrito. Antes esto era copiar el
+   texto de una nota, cambiarle el nombre a mano y buscar el contacto en el
+   móvil: con veinte al día se hace a medias y luego nadie sabe a quién se
+   escribió.
+
+   DOS COSAS QUE NO SON OBVIAS:
+   · ABRIR WHATSAPP NO ES HABER ESCRITO. El botón deja el mensaje puesto, pero
+     se puede cerrar sin enviar. Se marca aparte y lo confirma una persona:
+     apuntar envíos que no ocurrieron hace que se deje de escribir a alguien
+     creyendo que ya está hecho.
+   · QUIEN SE APUNTA SE MARCA SOLO. El backend cruza el teléfono con los
+     candidatos, así que la lista dice a quién ya no hay que volver a escribir.
+     Sin eso, esto sería otra libreta más que se queda vieja. */
+function PorContactar() {
+  const [d, setD] = useState(null)
+  const [nuevo, setNuevo] = useState({ nombre: '', telefono: '' })
+  const [err, setErr] = useState('')
+  const [yendo, setYendo] = useState(false)
+  const [verTexto, setVerTexto] = useState(false)
+  const [texto, setTexto] = useState('')
+
+  const cargar = useCallback(() => {
+    getInvitados()
+      .then((r) => { setD(r.data); setTexto((v) => v || r.data.plantilla || '') })
+      .catch(() => setErr('No se ha podido cargar la lista.'))
+  }, [])
+  useEffect(() => { cargar() }, [cargar])
+
+  const anadir = async () => {
+    setYendo(true); setErr('')
+    try {
+      await crearInvitado(nuevo)
+      setNuevo({ nombre: '', telefono: '' })
+      cargar()
+    } catch (e) { setErr(e?.response?.data?.detail || 'No se ha podido guardar.') } finally { setYendo(false) }
+  }
+
+  const guardarTexto = async () => {
+    setYendo(true); setErr('')
+    try { await guardarPlantillaInvitacion(texto); setVerTexto(false); cargar() } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se ha podido guardar el mensaje.')
+    } finally { setYendo(false) }
+  }
+
+  const quitar = async (x) => {
+    if (!window.confirm(`¿Quitar a ${x.nombre} de la lista?`)) return
+    try { await borrarInvitado(x.id); cargar() } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se ha podido quitar.')
+    }
+  }
+
+  const listo = nuevo.nombre.trim().length >= 2 && nuevo.telefono.replace(/\D/g, '').length >= 9
+
+  if (!d) return <div className="card p-4 text-[13px] text-dark-400">Cargando la lista…</div>
+
+  return (
+    <div className="card p-3.5">
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <h3 className="text-[14px] font-bold text-dark-100">Por contactar</h3>
+        {d.sin_escribir > 0 && (
+          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-300">
+            {d.sin_escribir} sin escribir
+          </span>
+        )}
+        {d.apuntados > 0 && (
+          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+            {d.apuntados} ya se apuntaron
+          </span>
+        )}
+        <button onClick={() => setVerTexto((v) => !v)}
+          className="ml-auto rounded-lg border border-dark-700 px-2 py-1 text-[11.5px] text-dark-400 hover:border-dark-500">
+          {verTexto ? 'Cerrar' : 'Ver el mensaje'}
+        </button>
+      </div>
+      <p className="mb-3 max-w-[75ch] text-[12.5px] text-dark-400">
+        Gente que ves en Indeed y que todavía no se ha apuntado en la web. Guarda el
+        nombre y el número y mándale el mensaje de un toque. Cuando se apunte, aquí
+        se marca solo.
+      </p>
+
+      {verTexto && (
+        <div className="mb-3 rounded-lg border border-dark-800 p-2.5">
+          <textarea rows={9} value={texto} onChange={(e) => setTexto(e.target.value)}
+            className="w-full rounded-lg border border-dark-700 bg-dark-950 px-2.5 py-2 text-[12.5px] leading-relaxed text-dark-100 outline-none focus:border-brand-500/40" />
+          <p className="mt-1 text-[11.5px] text-dark-500">
+            <b className="text-dark-300">{'{nombre}'}</b> se cambia por su nombre de pila y{' '}
+            <b className="text-dark-300">{'{enlace}'}</b> por {d.enlace}. Los dos tienen que estar.
+          </p>
+          <button onClick={guardarTexto} disabled={yendo}
+            className="mt-2 rounded-lg bg-brand-500/15 px-2.5 py-1 text-[11.5px] font-semibold text-brand-300 ring-1 ring-brand-500/30 disabled:opacity-50">
+            Guardar el mensaje
+          </button>
+        </div>
+      )}
+
+      <div className="mb-3 flex flex-wrap items-end gap-2">
+        <div className="min-w-[160px] flex-1">
+          <label className="label">Nombre</label>
+          <input className="input py-1.5 text-[13px]" value={nuevo.nombre} placeholder="Como se llame"
+            onChange={(e) => setNuevo((x) => ({ ...x, nombre: e.target.value }))} />
+        </div>
+        <div className="min-w-[130px]">
+          <label className="label">Teléfono</label>
+          <input className="input py-1.5 text-[13px]" value={nuevo.telefono} placeholder="600 11 22 33"
+            inputMode="tel"
+            onChange={(e) => setNuevo((x) => ({ ...x, telefono: e.target.value }))}
+            onKeyDown={(e) => { if (e.key === 'Enter' && listo) anadir() }} />
+        </div>
+        <button onClick={anadir} disabled={!listo || yendo}
+          className="rounded-lg bg-brand-500/15 px-3 py-2 text-[12.5px] font-semibold text-brand-300 ring-1 ring-brand-500/30 disabled:opacity-40">
+          Añadir
+        </button>
+      </div>
+
+      {err && <p className="mb-2 text-[12.5px] text-red-400">{err}</p>}
+
+      <div className="space-y-1.5">
+        {(d.invitados || []).map((x) => (
+          <div key={x.id} className={`flex flex-wrap items-center gap-2 rounded-lg border p-2.5 ${
+            x.se_apunto ? 'border-emerald-500/25 bg-emerald-500/[.06]' : 'border-dark-800'}`}>
+            <b className="text-[13px] text-dark-100">{x.nombre}</b>
+            <span className="font-mono text-[12px] text-dark-400">{x.telefono}</span>
+            {x.se_apunto && (
+              <span className="rounded bg-emerald-500/15 px-1.5 py-px text-[11px] font-semibold text-emerald-300">
+                ya se apuntó
+              </span>
+            )}
+            {x.escrito_en && !x.se_apunto && (
+              <span className="rounded bg-dark-800 px-1.5 py-px text-[11px] text-dark-400">
+                escrito el {dia(x.escrito_en)}
+              </span>
+            )}
+            <div className="ml-auto flex items-center gap-1.5">
+              {x.wa ? (
+                <a href={x.wa} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/15 px-2.5 py-1 text-[11.5px] font-semibold text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25">
+                  <MessageCircle size={12} /> WhatsApp
+                </a>
+              ) : (
+                <span className="text-[11.5px] text-amber-300">sin teléfono</span>
+              )}
+              <button onClick={() => marcarInvitadoEscrito(x.id, !x.escrito_en).then(cargar)}
+                title={x.escrito_en ? 'Marcar como no escrito' : 'Ya le he escrito'}
+                className={`rounded-lg border px-2 py-1 text-[11.5px] ${
+                  x.escrito_en
+                    ? 'border-dark-700 text-dark-400 hover:border-dark-500'
+                    : 'border-brand-500/30 text-brand-300 hover:bg-brand-500/10'}`}>
+                {x.escrito_en ? 'Deshacer' : 'Ya escrito'}
+              </button>
+              <button onClick={() => quitar(x)} aria-label={`Quitar a ${x.nombre}`}
+                className="rounded-lg px-2 py-1 text-red-300 ring-1 ring-red-500/25 hover:bg-red-500/10">
+                <Trash2 size={12} />
+              </button>
+            </div>
+          </div>
+        ))}
+        {!(d.invitados || []).length && (
+          <p className="text-[12.5px] text-dark-500">
+            Todavía no has guardado a nadie. Pon el nombre y el número de arriba.
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function AgendaEtts({ onCambio }) {
   const [d, setD] = useState(null)
   const [nueva, setNueva] = useState({ nombre: '', telefono: '', contacto: '' })

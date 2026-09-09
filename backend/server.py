@@ -1282,6 +1282,13 @@ async def _ensure_tenant_indexes(db_name: str):
     # Datos personales con fecha de caducidad: Mongo los borra solo a los 12
     # meses. Es la unica forma de que el plazo se cumpla sin que nadie se acuerde.
     await _idx(tdb.candidatos, "expira_en", expireAfterSeconds=0)
+    # POR CONTACTAR: una persona, una ficha. Sin el unico, apuntar el mismo
+    # telefono dos veces -que pasa, porque se copia de Indeed a mano- deja dos
+    # filas y se le escribe dos veces al mismo (gotcha 46).
+    await _idx(tdb[_INVITA_COL], "id")
+    await _idx(tdb[_INVITA_COL], "tel_clave", unique=True, name="invitado_unico",
+               partialFilterExpression={"tel_clave": {"$type": "string", "$gt": ""}})
+    await _idx(tdb[_INVITA_COL], "expira_en", expireAfterSeconds=0)
     # Bloqueos de dias: se consultan en CADA peticion del conductor.
     await _idx(tdb.shift_blocks, [("hasta", 1), ("desde", 1)])
     await _idx(tdb.shift_blocks, "driver_id")
@@ -20184,6 +20191,194 @@ async def empleo_contar_nuevos(center: Optional[str] = None,
     q["fase"] = "nuevo"
     n = await db.candidatos.count_documents(q)
     return {"nuevos": n}
+
+
+# ---------------------------------------------------------------------------
+# POR CONTACTAR: LA GENTE DE INDEED QUE AUN NO SE HA APUNTADO
+# ---------------------------------------------------------------------------
+"""Un nombre, un telefono y un WhatsApp ya escrito. Nada mas.
+
+QUE PROBLEMA RESUELVE. En Indeed aparecen personas interesadas de las que solo
+se tiene el nombre y el numero: no son candidatos todavia -no han rellenado
+nada- pero hay que escribirles uno a uno el mismo mensaje pidiendoles que se
+apunten en la web. Eso se hacia copiando el texto de una nota, cambiando el
+nombre a mano y buscando el contacto en WhatsApp. Con veinte personas al dia
+eso no se hace entero: se hace a medias, y luego nadie sabe a quien se escribio.
+
+TRES DECISIONES:
+
+- NO SON CANDIDATOS y no van a `candidatos`. Un candidato tiene DNI,
+  disponibilidad y respuestas; esto es un nombre y un numero. Meterlos juntos
+  llenaria el embudo de fichas vacias y las cuentas de «cuantos se apuntaron»
+  dejarian de significar nada.
+
+- ABRIR WHATSAPP NO ES HABER ESCRITO. El enlace deja el mensaje puesto, pero
+  quien lo abre puede cerrarlo sin enviar. Se marca en otra llamada, igual que
+  con las ETT: apuntar envios que no ocurrieron es peor que no apuntar nada,
+  porque se deja de escribir a alguien creyendo que ya se hizo.
+
+- SE CRUZAN SOLOS CON LOS CANDIDATOS por el telefono. Es todo el sentido de
+  esto: saber a quien escribiste que SI acabo apuntandose y a quien no, para
+  no volver a escribirle al que ya esta dentro.
+
+El texto lo puede cambiar la oficina sin tocar codigo: vive en `app_meta`.
+Y el enlace de WhatsApp lo arma SIEMPRE el backend con `enlace_wa` (gotcha 47).
+"""
+
+_INVITA_COL = "empleo_invitados"
+_INVITA_MESES_GUARDA = 6
+_INVITA_MAX = 500
+_INVITA_ENLACE = "https://flotadsp.com/empleo"
+# El texto que escribio Dani, con los saltos de linea puestos y el enlace en su
+# propia linea: dentro de un parrafo WhatsApp lo enlaza igual, pero se toca
+# peor y se lee peor, y esto lo abre alguien en el movil.
+_INVITA_PLANTILLA = (
+    "Hola {nombre}, he visto que te has apuntado en Indeed.\n"
+    "\n"
+    "Para seguir con el proceso necesitamos que te apuntes desde nuestra web:\n"
+    "{enlace}\n"
+    "\n"
+    "Elige la oferta que mejor te venga por ubicación y tu candidatura le llega "
+    "directamente a nuestro equipo de RRHH.\n"
+    "\n"
+    "Un saludo, y cualquier duda por aquí estoy.\n"
+    "Gracias."
+)
+
+
+async def _invita_plantilla() -> str:
+    """El texto de hoy: el guardado, o el de serie si no han tocado nada."""
+    d = await db.app_meta.find_one({"_id": "empleo_invitacion"}, {"_id": 0})
+    return ((d or {}).get("texto") or "").strip() or _INVITA_PLANTILLA
+
+
+def _invita_mensaje(plantilla: str, nombre: str) -> str:
+    """Rellena el hueco del nombre. Nunca revienta por una llave mal escrita.
+
+    Alguien escribira {Nombre} o {nombre_completo} alguna vez. Que salga tal
+    cual es feo; que el boton de WhatsApp deje de funcionar, peor.
+
+    SOLO EL NOMBRE DE PILA. «Hola Bruno Filipe Loureiro Baltazar,» no lo
+    escribe una persona, y este mensaje tiene que parecer escrito por una.
+    """
+    corto = (str(nombre or "").strip().split(" ") or [""])[0]
+    try:
+        return plantilla.format(nombre=corto, enlace=_INVITA_ENLACE)
+    except (KeyError, IndexError, ValueError):
+        return (plantilla.replace("{nombre}", corto)
+                         .replace("{enlace}", _INVITA_ENLACE))
+
+
+def _invita_publico(x: dict, ya: set, plantilla: str) -> dict:
+    texto = _invita_mensaje(plantilla, x.get("nombre") or "")
+    return {
+        "id": x.get("id"), "nombre": x.get("nombre") or "",
+        "telefono": x.get("telefono") or "", "nota": x.get("nota") or "",
+        "escrito_en": x.get("escrito_en") or "", "escrito_por": x.get("escrito_por") or "",
+        "creado_en": x.get("creado_en") or "",
+        # Si viene vacio es que no hay telefono, y eso se DICE en la pantalla:
+        # un boton que abre WhatsApp sin destinatario hace perder el tiempo
+        # y parece cosa de WhatsApp (gotcha 47).
+        "wa": enlace_wa(x.get("telefono") or "", texto),
+        "mensaje": texto,
+        # Lo que hace que esto sirva para algo: quien SI acabo apuntandose.
+        "se_apunto": bool(x.get("tel_clave")) and x.get("tel_clave") in ya,
+    }
+
+
+@api_router.get("/empleo/invitados")
+async def empleo_invitados(_=Depends(require_admin)):
+    """A quien hay que escribir, a quien ya se escribio y quien se apunto."""
+    docs = await db[_INVITA_COL].find({}, {"_id": 0}).sort("creado_en", -1).to_list(_INVITA_MAX)
+    # Los telefonos que YA estan en el embudo. Una sola consulta para todos:
+    # preguntarlo uno a uno serian quinientas idas y venidas (gotcha 63).
+    claves = [x.get("tel_clave") for x in docs if x.get("tel_clave")]
+    ya = set()
+    if claves:
+        ya = {c.get("tel_clave") for c in await db.candidatos.find(
+            {"tel_clave": {"$in": claves}}, {"_id": 0, "tel_clave": 1}).to_list(2000)}
+    plantilla = await _invita_plantilla()
+    lista = [_invita_publico(x, ya, plantilla) for x in docs]
+    return {
+        "invitados": lista,
+        "plantilla": plantilla,
+        "enlace": _INVITA_ENLACE,
+        "sin_escribir": sum(1 for x in lista if not x["escrito_en"]),
+        "escritos": sum(1 for x in lista if x["escrito_en"]),
+        "apuntados": sum(1 for x in lista if x["se_apunto"]),
+    }
+
+
+@api_router.post("/empleo/invitados")
+async def empleo_invitado_crear(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Guarda a alguien de Indeed. Nombre y telefono, nada mas."""
+    nombre = _texto_cuerpo(body.get("nombre"), 120)
+    telefono = _telefono_limpio(body.get("telefono"))
+    if len(nombre) < 2:
+        raise HTTPException(400, "Escribe el nombre")
+    if len(_telefono_digitos(telefono)) < 9:
+        raise HTTPException(400, "Ese telefono no parece completo")
+    if await db[_INVITA_COL].count_documents({}) >= _INVITA_MAX:
+        raise HTTPException(400, "Tienes %d en la lista: borra los que ya no valgan"
+                            % _INVITA_MAX)
+    ahora = datetime.now(timezone.utc)
+    doc = {"id": str(uuid.uuid4()), "nombre": nombre, "telefono": telefono,
+           "tel_clave": _telefono_digitos(telefono)[-9:],
+           "nota": _texto_cuerpo(body.get("nota"), 200),
+           "escrito_en": "", "escrito_por": "",
+           "creado_en": ahora.isoformat(),
+           "creado_por": user.get("name") or user.get("username") or "",
+           # Datos personales de alguien que ni siquiera se ha apuntado: se van
+           # solos a los 6 meses, antes que los de un candidato.
+           "expira_en": ahora + timedelta(days=30 * _INVITA_MESES_GUARDA)}
+    try:
+        await db[_INVITA_COL].insert_one(dict(doc))   # copia: insert_one muta (gotcha 42)
+    except DuplicateKeyError:
+        raise HTTPException(409, "Ese telefono ya esta en la lista")
+    return _invita_publico(doc, set(), await _invita_plantilla())
+
+
+@api_router.post("/empleo/invitados/{invitado_id}/escrito")
+async def empleo_invitado_escrito(invitado_id: str, body: dict = Body(default={}),
+                                  user: dict = Depends(require_admin)):
+    """Confirma que se le escribio. Lo dice una persona, no el boton.
+
+    Se puede desmarcar: si te equivocas de fila, dejarlo marcado significa que
+    esa persona no recibe el mensaje nunca.
+    """
+    marcar = bool(body.get("escrito", True))
+    ahora = datetime.now(timezone.utc).isoformat() if marcar else ""
+    r = await db[_INVITA_COL].update_one(
+        {"id": invitado_id},
+        {"$set": {"escrito_en": ahora,
+                  "escrito_por": ((user.get("name") or user.get("username") or "")
+                                  if marcar else "")}})
+    if not r.matched_count:
+        raise HTTPException(404, "Ese contacto ya no esta")
+    return {"ok": True, "escrito_en": ahora}
+
+
+@api_router.put("/empleo/invitados/plantilla")
+async def empleo_invitados_plantilla(body: dict = Body(...), _=Depends(require_admin)):
+    """Cambia el texto sin tocar codigo. Con `{nombre}` y `{enlace}` dentro."""
+    texto = _texto_cuerpo(body.get("texto"), 1200)
+    if len(texto) < 20:
+        raise HTTPException(400, "El mensaje se ha quedado demasiado corto")
+    if "{nombre}" not in texto:
+        raise HTTPException(400, "Deja {nombre} en el texto: es donde va el suyo")
+    if "{enlace}" not in texto and _INVITA_ENLACE not in texto:
+        raise HTTPException(400, "Deja {enlace} en el texto, o no sabran donde apuntarse")
+    await db.app_meta.update_one({"_id": "empleo_invitacion"},
+                                 {"$set": {"texto": texto}}, upsert=True)
+    return {"ok": True, "plantilla": texto}
+
+
+@api_router.delete("/empleo/invitados/{invitado_id}")
+async def empleo_invitado_borrar(invitado_id: str, _=Depends(require_admin)):
+    r = await db[_INVITA_COL].delete_one({"id": invitado_id})
+    if not r.deleted_count:
+        raise HTTPException(404, "Ese contacto ya no esta")
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
@@ -42401,10 +42596,32 @@ def _prenda_limpia(body: dict, previa: dict | None = None) -> dict:
         unid = _entero(unid, "las unidades del drop", defecto=None,
                        minimo=1, maximo=5000)
 
+    # DE DONDE SE ENCARGA ESTA PRENDA. Sin esto, cuando entra una venta la
+    # pantalla dice «Hoodie FDs - L x2» y hay que acordarse de cual de los
+    # cuarenta hoodies del catalogo del proveedor era ese. Es el paso en el que
+    # se equivoca uno y llega la prenda que no es, con el cliente esperando.
+    # Va POR PRENDA y no en una nota suelta porque tiene que viajar hasta la
+    # lista de «que encargar», que es donde se mira con el pedido delante.
+    proveedor = _texto_cuerpo(body.get("proveedor"), 40)
+    if proveedor == "" and "proveedor" not in body:
+        proveedor = p.get("proveedor") or ""
+    referencia = _texto_cuerpo(body.get("referencia"), 120)
+    if referencia == "" and "referencia" not in body:
+        referencia = p.get("referencia") or ""
+    enlace = _texto_cuerpo(body.get("enlace"), 400)
+    if enlace == "" and "enlace" not in body:
+        enlace = p.get("enlace") or ""
+    # Una direccion que no sea http(s) no la abre el navegador y encima puede
+    # ser un `javascript:`. Se rechaza en vez de guardarla: un enlace que no
+    # lleva a ningun sitio es peor que no tener enlace.
+    if enlace and not enlace.lower().startswith(("http://", "https://")):
+        raise HTTPException(400, "El enlace del proveedor tiene que empezar por https://")
+
     return {"nombre": nombre, "tipo": tipo, "color": color, "tallas": tallas,
             "estampaciones": validas, "franja_manga": bool(body.get("franja_manga")),
             "coste": coste, "pvp": pvp, "recargo_talla": recargo,
             "unidades": unid,
+            "proveedor": proveedor, "referencia": referencia, "enlace": enlace,
             "notas": _texto_cuerpo(body.get("notas"), 400)}
 
 
@@ -43696,6 +43913,24 @@ async def tienda_justificante(pedido_id: str, user: dict = Depends(require_any_a
 
 # ---- lado de la oficina --------------------------------------------------
 
+def _tienda_que_encargar(grupos: dict, donde: dict) -> list:
+    """La lista de lo que hay que pedir, con de donde se pide cada cosa.
+
+    `que` se conserva con el mismo formato de siempre —«Hoodie FDs · L»— para
+    no romper nada que ya lo pinte (gotcha 20); lo nuevo va en campos aparte y
+    la pantalla los enseña solo si estan.
+    """
+    salida = []
+    for (pid, nombre, talla), uds in sorted(grupos.items(), key=lambda x: (-x[1], x[0][1:])):
+        d = donde.get(pid) or {}
+        salida.append({"que": "%s · %s" % (nombre, talla), "unidades": uds,
+                       "prenda": pid, "talla": talla,
+                       "proveedor": d.get("proveedor") or "",
+                       "referencia": d.get("referencia") or "",
+                       "enlace": d.get("enlace") or ""})
+    return salida
+
+
 @api_router.get("/tienda/pedidos")
 async def tienda_pedidos_oficina(_=Depends(require_admin)):
     """La tanda que se esta juntando, para saber si sale y que hay que pedir."""
@@ -43715,12 +43950,18 @@ async def tienda_pedidos_oficina(_=Depends(require_admin)):
     # pendientes incluidos, y con la tarjeta eso es comprarle al proveedor
     # prendas de pedidos que nadie ha pagado. Lo que aun no esta cobrado va en
     # su propia lista, para verlo venir sin gastarse el dinero.
+    # DE DONDE SE PIDE CADA UNA, junto a lo que hay que pedir. Se agrupa por
+    # (prenda, talla) y no por el texto: el nombre puede repetirse entre dos
+    # prendas distintas y se sumarian dos productos diferentes en una linea,
+    # que es encargar mal sin que nada falle.
+    donde = {x["id"]: x for x in await db[_PRENDAS_COL].find(
+        {}, {"_id": 0, "id": 1, "proveedor": 1, "referencia": 1, "enlace": 1}).to_list(200)}
     resumen: dict = {}
     pendiente: dict = {}
     for p in tanda:
         cajon = resumen if p.get("estado") in ("pagado", "encargado", "entregado") else pendiente
         for l in p.get("lineas") or []:
-            k = "%s · %s" % (l.get("nombre"), l.get("talla"))
+            k = (l.get("prenda") or "", l.get("nombre") or "", l.get("talla") or "")
             cajon[k] = cajon.get(k, 0) + int(l.get("cantidad") or 0)
     uds = sum(int(p.get("unidades") or 0) for p in tanda)
 
@@ -43765,10 +44006,8 @@ async def tienda_pedidos_oficina(_=Depends(require_admin)):
         "pagados": sum(1 for p in tanda if p.get("estado") == "pagado"),
         "ventas": ventas,
         "descuento": await _tienda_desc_estado(),
-        "para_el_taller": [{"que": k, "unidades": v}
-                           for k, v in sorted(resumen.items(), key=lambda x: (-x[1], x[0]))],
-        "aun_sin_cobrar": [{"que": k, "unidades": v}
-                           for k, v in sorted(pendiente.items(), key=lambda x: (-x[1], x[0]))],
+        "para_el_taller": _tienda_que_encargar(resumen, donde),
+        "aun_sin_cobrar": _tienda_que_encargar(pendiente, donde),
         "pedidos": docs,
     }
 
