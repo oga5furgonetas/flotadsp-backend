@@ -119,6 +119,58 @@ def test_football_predict():
     assert j["fair_home"] > 1.0
 
 
+def _auth_client(pw="k1"):
+    mod = _fresh(pw)
+    c = _client(mod)
+    tok = c.post("/zzz-test/api/login", json={"password": pw}).json()["token"]
+    return c, {"Authorization": "Bearer " + tok}
+
+
+def test_sports_and_live_with_mock():
+    c, h = _auth_client()
+    sp = c.get("/zzz-test/api/sports", headers=h).json()
+    assert sp["real"] is False
+    assert any("MOCK" in s["title"] for s in sp["sports"])
+
+    lv = c.get("/zzz-test/api/live?sport=soccer_spain_la_liga", headers=h).json()
+    assert "rows" in lv and lv["mock"] is True
+    for r in lv["rows"]:
+        assert r["verdict"] in ("VALOR_SIN_VALIDAR", "ARBITRAJE", "DUDOSO")
+        assert r["odds"] is None or r["odds"] >= 1.30
+    evs = [r["ev"] for r in lv["rows"]]
+    assert evs == sorted(evs, reverse=True)
+
+
+def test_check_bad_inputs():
+    c, h = _auth_client()
+    assert c.post("/zzz-test/api/check", headers=h,
+                  json={"odds": 1.0, "side": "home"}).status_code == 400
+    assert c.post("/zzz-test/api/check", headers=h,
+                  json={"odds": 2.0, "side": "loquesea"}).status_code == 400
+
+
+def test_check_low_odds_is_no_meter():
+    c, h = _auth_client()
+    r = c.post("/zzz-test/api/check", headers=h, json={
+        "sport": "soccer_spain_la_liga", "home": "Real Madrid", "away": "Sevilla",
+        "side": "home", "odds": 1.04, "stake": 100})
+    j = r.json()
+    # o casa el partido (y da NO_METER por cuota baja) o dice que no lo encuentra
+    if "verdict" in j:
+        assert j["verdict"] == "NO_METER"
+        assert "baja" in j["title"]
+    else:
+        assert "error" in j
+
+
+def test_check_unknown_match_lists_options():
+    c, h = _auth_client()
+    j = c.post("/zzz-test/api/check", headers=h, json={
+        "sport": "soccer_spain_la_liga", "home": "Equipo Inventado FC",
+        "away": "Otro Inventado", "side": "home", "odds": 2.0}).json()
+    assert "error" in j and isinstance(j.get("disponibles"), list)
+
+
 def test_module_does_not_import_server_or_touch_db():
     """Aislamiento por AST: nada de importar server ni usar los proxies de BD."""
     import ast
