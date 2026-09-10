@@ -84,6 +84,10 @@ def evaluate_bet(
     min_edge: float = 0.03,
     above_market_gap: float = 0.05,      # tu cuota > mejor del mercado*(1+esto) => sospechosa
     better_price_gap: float = 0.025,     # >esto de mejora en otra casa => coge esa
+    min_books_value: int = 6,            # menos casas que esto => no me fio del precio justo
+    require_sharp: bool = True,          # sin Pinnacle/Betfair => consenso poco fiable
+    max_edge_plausible: float = 0.20,    # +EV mayor que esto casi siempre es error de datos
+    max_dispersion: float = 0.055,       # desv. de la prob. implicita entre casas
     kelly_fraction: float = 0.25,
     kelly_cap: float = 0.03,
     exchange_commission: float = 0.02,
@@ -162,6 +166,19 @@ def evaluate_bet(
 
     arb = market_arbitrage(book_prices, outcomes, commission=exchange_commission)
 
+    # ¿podemos fiarnos del precio justo de este mercado?
+    has_sharp = bool(sharp_rows)
+    trust_reason = ""
+    if n_books < min_books_value:
+        trust_reason = (f"mercado demasiado fino: solo {n_books} casa(s). Con tan "
+                        f"pocas, el 'precio justo' no es fiable.")
+    elif require_sharp and not has_sharp:
+        trust_reason = ("sin casa de referencia (Pinnacle / Betfair) en este "
+                        "mercado. El consenso de casas blandas no es fiable.")
+    elif disp > max_dispersion:
+        trust_reason = (f"las casas no se ponen de acuerdo (dispersion "
+                        f"{disp:.3f}): el precio justo es poco fiable.")
+
     # ── cascada de veredicto ────────────────────────────────
     #  Se mira PRIMERO el MEJOR precio del mercado. Si ni con ese hay valor, el
     #  resultado esta caro en todas partes -> NO METER. Si tu cuota esta por
@@ -177,6 +194,9 @@ def evaluate_bet(
                  f"el resto del mercado esta en {second_od:.2f} o menos. O es un "
                  f"error / va a caer, o esa casa sabe algo. Comprueba limites y "
                  f"reglas antes de tocarla.")
+    elif trust_reason:
+        verdict = "DUDOSO"
+        title = f"No me fio de este mercado: {trust_reason}"
     elif taken_odds > eff_best_odds * (1.0 + above_market_gap):
         verdict = "DUDOSO"
         title = (f"Sospechosa. Tu cuota ({taken_odds:.2f}) esta por encima de todo "
@@ -196,6 +216,11 @@ def evaluate_bet(
         title = (f"No cojas esta ({taken_odds:.2f}). Al mismo resultado hay "
                  f"{eff_best_odds:.2f} en {eff_best_book} (+{ev_best * 100:.1f}%), "
                  f"mismo riesgo y mejor precio.")
+    elif ev >= max_edge_plausible:
+        verdict = "DUDOSO"
+        title = (f"Demasiado bueno: +{ev * 100:.0f}% de EV. Un mercado con casas "
+                 f"sharp casi nunca se equivoca tanto. Lo normal es que sea una "
+                 f"linea vieja, un partido cruzado o un error del dato. No me fio.")
     elif ev < min_edge:
         verdict = "NO_METER"
         title = (f"NO. Tu cuota concreta ({taken_odds:.2f}) solo da +{ev * 100:.1f}%, "
@@ -229,7 +254,8 @@ def evaluate_bet(
         "ev_best": round(ev_best, 4),
         "best_book": eff_best_book, "best_odds": round(eff_best_odds, 2),
         "lone_outlier": {"book": best_book, "odds": round(best_odds, 2)} if lone_outlier else None,
-        "n_books": n_books, "dispersion": round(disp, 4),
+        "n_books": n_books, "dispersion": round(disp, 4), "has_sharp": has_sharp,
+        "trusted": not trust_reason, "trust_reason": trust_reason or None,
         "consensus_src": src, "arb": arb, "stake": stake_info,
         "outcomes": outcomes,
     }

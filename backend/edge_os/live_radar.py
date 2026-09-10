@@ -23,6 +23,8 @@ def radar_from_books(
     sharp_books: Sequence[str],
     min_odds: float = 1.30,
     min_edge: float = 0.03,
+    min_arb_roi: float = 0.01,     # arbitrajes por debajo de esto no se muestran
+    min_books: int = 6,            # mercados con menos casas ni se miran
     include_dudoso: bool = False,
     model_probs_for=None,          # callable(book) -> dict|None  (opcional, futbol)
     model_trust: float = 0.0,
@@ -36,7 +38,7 @@ def radar_from_books(
             for bk, price in oc.prices.items():
                 book_prices.setdefault(bk, {})[oc.outcome] = price
         outcomes = [oc.outcome for oc in mb.outcomes]
-        if len(book_prices) < 2:
+        if len(book_prices) < min_books:
             continue
 
         mprobs = None
@@ -77,7 +79,7 @@ def radar_from_books(
                 best_row = row
         if best_row is not None:
             out.append(best_row)
-        elif arb and arb["roi"] >= 0.003:
+        elif arb and arb["roi"] >= min_arb_roi:
             out.append({
                 "match": mb.match, "sport": mb.sport, "market": "h2h",
                 "outcome": "(arbitraje)", "book": "-", "odds": None,
