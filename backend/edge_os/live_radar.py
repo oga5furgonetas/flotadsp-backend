@@ -17,6 +17,28 @@ from .quant.betcheck import evaluate_bet, market_arbitrage
 _SHOW = {"VALOR_SIN_VALIDAR", "ARBITRAJE"}
 
 
+def _robust_arb(book_prices: dict, outcomes) -> dict | None:
+    """Arbitraje que sobrevive quitando la MEJOR cuota de cada resultado.
+
+    Un arb que solo existe con el precio top de una casa suele estar montado
+    sobre una linea rancia o de otro partido. Si tambien sale con la 2ª mejor
+    cuota, es mucho mas creible.
+    """
+    arb = market_arbitrage(book_prices, outcomes, commission=0.02)
+    if not arb:
+        return None
+    second = {}
+    for o in outcomes:
+        od = sorted((pr[o] for pr in book_prices.values()
+                     if pr.get(o) and pr[o] > 1.0), reverse=True)
+        if len(od) < 2:
+            return None
+        second[o] = od[1]
+    if sum(1.0 / second[o] for o in outcomes) >= 1.0:
+        return None            # solo existe con el outlier: no me fio
+    return arb
+
+
 def radar_from_books(
     books: Sequence[MarketBook],
     *,
@@ -48,7 +70,7 @@ def radar_from_books(
             except Exception:                       # noqa: BLE001
                 mprobs = None
 
-        arb = market_arbitrage(book_prices, outcomes, commission=0.02)
+        arb = _robust_arb(book_prices, outcomes)
         best_row = None
         for oc in mb.outcomes:
             if not oc.prices:
