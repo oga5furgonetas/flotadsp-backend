@@ -44921,3 +44921,14 @@ async def tienda_ver_foto(prenda_id: str, user: dict = Depends(require_any_auth)
 
 app.include_router(auth_router)
 app.include_router(api_router)
+
+# ── EDGE OS ────────────────────────────────────────────────────────────────
+# Panel privado propio, en un modulo aparte y AISLADO: no toca `db`/`global_db`
+# ni comparte nada con el resto del backend. Solo se monta si existe el secret
+# EDGE_OS_PASSWORD; sin el, su path devuelve 404. El try/except es a proposito:
+# un fallo suyo NUNCA puede impedir que arranque FlotaDSP.
+try:
+    from edge_os_api import register as _edge_os_register
+    _edge_os_register(app)
+except Exception as _edge_os_err:                                # noqa: BLE001
+    logger.warning("edge_os no cargado: %s", _edge_os_err)

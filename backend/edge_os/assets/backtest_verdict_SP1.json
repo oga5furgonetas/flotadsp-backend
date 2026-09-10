@@ -1,0 +1,17 @@
+{
+  "league": "SP1",
+  "date": "2025-05-25",
+  "beats_market": false,
+  "brier_model": 0.5831,
+  "brier_market": 0.5633,
+  "roi": -0.1598,
+  "n_bets": 663,
+  "params": {
+    "warmup_days": 365,
+    "refit_days": 30,
+    "half_life_days": 180.0,
+    "min_edge": 0.05,
+    "price": "avg",
+    "closing": "psc"
+  }
+}
