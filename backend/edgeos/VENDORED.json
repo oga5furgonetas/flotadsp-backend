@@ -1,0 +1,43 @@
+{
+ "commit": "98d8e73",
+ "copied_at": "2026-09-11T21:23:56.570031+00:00",
+ "dirty": false,
+ "files": {
+  "__init__.py": "c71b0b43689ca2f8f2d8f5fe0d2f9a2c2cbe56f0135e9a2c228ea9f661004e6f",
+  "api.py": "3faae6845398a650e4ab61373bea34addc94a9ae77c1088c82ec83db8dbe8b5b",
+  "assets.py": "135b0dadb85174f925aa0bceb815494e23bfdc3c1cf2dbaa63508a893ab4968c",
+  "assets/calibration.json": "a5f4e78dab03223870d3ccf8bdcd280e26f6d36123be577879c6a7ad60650395",
+  "core/__init__.py": "263e45d0d889aa762b03ca179b323a1900d6b941f303a094f2cca6d9f6522004",
+  "core/odds.py": "463a7ae5217cea0507adb588fcd9ae6dd42452cc877bb8f1d68892e87fd7c11e",
+  "core/stats.py": "0de58779852006e26626822d8e5714861228d2210351ee5960fde7294b8f4478",
+  "decision/__init__.py": "b74e26b12ace2376cfd1d60db305f4c011eecf69ada82a1f372774ceb7d95c96",
+  "decision/engine.py": "d5f56d398b447ed96ee1e78aae48a2305efe62cce64d955140eca8613b211075",
+  "domain.py": "cfb5b879a24537865949571a79e84966fb19788f374bea6e19adcca2290a54db",
+  "market/__init__.py": "39473120d01ac60e0f7e8a745ca35f49e6d44a327a4ad9dc0e860dc981d3891c",
+  "market/quality.py": "46a1ca3aca1fe01c728daceac71feca6d9dbe55b8787f6bde79d7bee3928ac70",
+  "market/reference.py": "e2ce08608aded0946abec9624ab15258b4cc920f86871ff51d8b7ecaed5395f1",
+  "pricing/__init__.py": "97aca85622e2f153290bbc9970219d09d0f65d9ddf83c26bad70c46982620782",
+  "pricing/edge_model.py": "0ff63bc7f10f415d12d3347c8bee2d75be4214060c83ac3d5ed677560cc9567a",
+  "pricing/settle.py": "b28807548bee71aef99e96fa25b4912557c6a9a0a6faae3f075da5d3a8b4227b",
+  "providers/base.py": "4e12ccaebe9e3edfe46f34431ddd411ac9082db3477f818557ebbe519446ad3e",
+  "providers/mock.py": "c0b9397cb7f1e65024ad66e2dd05927ce9a9b955f81ebbc71f7851f6f4e8f8b7",
+  "providers/theoddsapi.py": "1c55d2c566e66a4b8b3e5ce06c47d55717c42cf86e7d90019c40e9d7f35fe482",
+  "services/__init__.py": "625e693caa0125bae55ef47e0a7c420a12df7b6e4478b64452a24076666a3be8",
+  "services/budget.py": "5ab6286d995e2a30491b811807283db86f4b8a6d280b72112e74f9916752b56b",
+  "services/performance.py": "13619dc3ede12ee1526f3be03bcf9ad78e9a67c4d4f558651deb3fec2cd25ab2",
+  "services/service.py": "3a8eefee3b4072006677b81cc6a7195c0b3cb23815f9ad2a32d759c7fb24eee5",
+  "store/__init__.py": "97766733ade7da98273d6e146182b9776cbf677712932ec5445a899209d1df0e",
+  "store/base.py": "79506faa582d291ce27fc0d020a5f167ae762dfc2c4de5189d66a9867fb30bbb",
+  "store/codec.py": "25c6ae7318fdaf816b26c1b5c8afd423d265246396d9979d02f0b358fae217be",
+  "store/memory.py": "311708fd76dbea47c1e1c72ac457c89b9f090ea075c6bc812fc1737fee15a492",
+  "store/mongo.py": "d65c4171c86ecd7babb90d81267f111b81d5269cba45486b49ffdeb344cde043",
+  "web/app.css": "59c6de8a19d031d194a0e6a07e873b0cd5bc5fac4a1c5272b20f710425feb4ac",
+  "web/app.js": "76c0f3863747aceeae08193b48d1cd99fd17e0c589151010582bf175ab184a8a",
+  "web/index.html": "586e3c5abebccd6e8bbd7b0b50a25af570b73dd0e9f48a9b8184e48cdd9c5f21"
+ },
+ "integration": {
+  "edge_os_api.py": "3f93742a11451051211fffc1d161385b760e767cb267dea13999608a11ab6079",
+  "tests/test_edge_os.py": "d739c3d0a1fa615a82f33d4e61215238853f2ab3e7d63574833ae820e107cd6d"
+ },
+ "source": "apuestas-edge"
+}
