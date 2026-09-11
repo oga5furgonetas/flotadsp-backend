@@ -105,14 +105,22 @@ def test_module_and_engine_do_not_touch_flotadsp():
                 assert n.id not in ("db", "global_db"), (f, n.id)
 
 
+def _digest(raw):
+    # finales de línea a LF: con core.autocrlf, git hace checkout de estos ficheros con CRLF
+    # y una copia intacta no puede parecer «editada a mano» en el otro ordenador
+    return hashlib.sha256(raw.replace(b"\r\n", b"\n")).hexdigest()
+
+
 def test_vendored_copy_matches_its_manifest():
     manifest = json.loads(_read(os.path.join(PKG, "VENDORED.json")))
     listed = manifest["files"]
     for rel, digest in listed.items():
         path = os.path.join(PKG, *rel.split("/"))
         assert os.path.exists(path), f"falta {rel}"
-        got = hashlib.sha256(_read(path, binary=True)).hexdigest()
-        assert got == digest, f"{rel} se ha editado a mano: se edita en apuestas-edge y se vuelve a copiar"
+        raw = _read(path, binary=True)
+        assert _digest(raw) == digest, f"{rel} se ha editado a mano: se edita en apuestas-edge y se vuelve a copiar"
+        crlf = raw.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        assert _digest(crlf) == digest, f"{rel}: un checkout con CRLF lo daría por editado"
     for root, dirs, names in os.walk(PKG):
         dirs[:] = [d for d in dirs if d != "__pycache__"]
         for n in names:

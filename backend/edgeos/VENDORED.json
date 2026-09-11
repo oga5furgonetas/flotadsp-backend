@@ -1,12 +1,12 @@
 {
- "commit": "98d8e73",
- "copied_at": "2026-09-11T21:23:56.570031+00:00",
+ "commit": "8abadc3",
+ "copied_at": "2026-09-11T21:34:31.946032+00:00",
  "dirty": false,
  "files": {
   "__init__.py": "c71b0b43689ca2f8f2d8f5fe0d2f9a2c2cbe56f0135e9a2c228ea9f661004e6f",
   "api.py": "3faae6845398a650e4ab61373bea34addc94a9ae77c1088c82ec83db8dbe8b5b",
   "assets.py": "135b0dadb85174f925aa0bceb815494e23bfdc3c1cf2dbaa63508a893ab4968c",
-  "assets/calibration.json": "a5f4e78dab03223870d3ccf8bdcd280e26f6d36123be577879c6a7ad60650395",
+  "assets/calibration.json": "d3043682b436d0ef224def20869edb42fa6964e09be5e25faac205594c2a137e",
   "core/__init__.py": "263e45d0d889aa762b03ca179b323a1900d6b941f303a094f2cca6d9f6522004",
   "core/odds.py": "463a7ae5217cea0507adb588fcd9ae6dd42452cc877bb8f1d68892e87fd7c11e",
   "core/stats.py": "0de58779852006e26626822d8e5714861228d2210351ee5960fde7294b8f4478",
@@ -37,7 +37,7 @@
  },
  "integration": {
   "edge_os_api.py": "3f93742a11451051211fffc1d161385b760e767cb267dea13999608a11ab6079",
-  "tests/test_edge_os.py": "d739c3d0a1fa615a82f33d4e61215238853f2ab3e7d63574833ae820e107cd6d"
+  "tests/test_edge_os.py": "80954dc4707ad0f75fd4a3fb66336f9fc545b33e678d0d6ca4f56e1a37f4a55f"
  },
  "source": "apuestas-edge"
 }
