@@ -30,6 +30,7 @@ import logging
 import os
 import time
 import unicodedata
+from datetime import datetime, timezone
 
 from pathlib import Path
 from typing import Optional
@@ -109,27 +110,86 @@ def _provider(sport: str):
     from edge_os.providers import build_provider
     return build_provider(Config({
         "provider": "the-odds-api" if _real_odds() else "mock",
-        "sport": sport, "markets": ["h2h"], "regions": ["eu", "uk"],
+        "sport": sport, "markets": ["h2h"], "regions": _REGIONS,
     }))
 
 
+# UNA sola region = 1 credito por llamada. Con "eu,uk" eran 2 y la cuota
+# mensual se iba al doble de rapido; en `eu` ya estan Pinnacle, Betfair
+# exchange y Marathonbet, que son las que mandan en el consenso.
+_REGIONS = [r for r in (os.environ.get("EDGE_OS_REGIONS") or "eu").split(",") if r]
+
 _odds_cache: dict[str, tuple] = {}        # sport -> (quotes, at, remaining)
-_credits_used = {"n": 0}
+_events_cache: dict[str, tuple] = {}      # sport -> (events, at)
+_EVENTS_TTL = 120
 
 
 def _fetch_sport(sport: str) -> tuple[list, Optional[str], bool]:
-    """(quotes, peticiones_restantes, venia_de_cache). Cachea `_ODDS_TTL` s."""
+    """(quotes, peticiones_restantes, venia_de_cache). Cachea `_ODDS_TTL` s.
+    CUESTA CREDITOS: una por region."""
     hit = _odds_cache.get(sport)
     now = time.time()
     if hit and now - hit[1] < _ODDS_TTL:
         return hit[0], hit[2], True
     prov = _provider(sport)
-    quotes = prov.fetch(sport, ["h2h"], ["eu", "uk"])
+    quotes = prov.fetch(sport, ["h2h"], _REGIONS)
     rem = getattr(prov, "last_remaining", None)
     _odds_cache[sport] = (quotes, now, rem)
-    if _real_odds():
-        _credits_used["n"] += 1
     return quotes, rem, False
+
+
+def _fetch_events(sport: str) -> list[dict]:
+    """Eventos SIN cuotas. GRATIS (x-requests-last: 0). Es lo que permite
+    barrer los 75 deportes y gastar credito solo donde hay algo jugandose."""
+    hit = _events_cache.get(sport)
+    now = time.time()
+    if hit and now - hit[1] < _EVENTS_TTL:
+        return hit[0]
+    try:
+        ev = _provider(sport).list_events(sport)
+    except Exception:                                        # noqa: BLE001
+        ev = []
+    _events_cache[sport] = (ev, now)
+    return ev
+
+
+def _pulse(keys: list[str], soon_min: float = 180.0) -> dict:
+    """Barrido gratuito: cuantos eventos hay en vivo / a punto, por deporte."""
+    from concurrent.futures import ThreadPoolExecutor
+    now = datetime.now(timezone.utc)
+
+    def one(k):
+        live = soon = 0
+        evs = _fetch_events(k)
+        for e in evs:
+            ct = e.get("commence_time")
+            if not ct:
+                continue
+            try:
+                t = datetime.fromisoformat(ct.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            mins = (t - now).total_seconds() / 60.0
+            if mins <= 0:
+                live += 1
+            elif mins <= soon_min:
+                soon += 1
+        return {"sport": k, "live": live, "soon": soon, "n": len(evs)}
+
+    with ThreadPoolExecutor(max_workers=12) as ex:
+        rows = list(ex.map(one, keys))
+    n_events = sum(r["n"] for r in rows)
+    return {"sports": [r for r in rows if r["live"] or r["soon"]],
+            "n_scanned": len(keys),
+            "n_events": n_events,
+            # "no hay nada" y "no veo nada" se parecen en pantalla y no son lo
+            # mismo. Si el barrido no devuelve NI UN evento —ni siquiera los de
+            # dentro de tres dias— es que esta ciego, no que el catalogo este
+            # vacio: ningun proveedor tiene cero partidos proximos en todos sus
+            # deportes a la vez.
+            "blind": bool(keys) and n_events == 0,
+            "total_live": sum(r["live"] for r in rows),
+            "total_soon": sum(r["soon"] for r in rows)}
 
 
 # ── ensemble de futbol (cache 6 h) ──────────────────────────────────────────
@@ -278,17 +338,51 @@ async def _edgeos_board(sport: str = Query(...),
 _SCOPES = {"live": None, "soon": 180.0, "today": 1440.0}
 
 
+@router.get(_P + "/api/pulse")
+async def _edgeos_pulse(_=Depends(_require_token)) -> dict:
+    """Que hay vivo AHORA en todo el catalogo. Cuesta 0 creditos."""
+    sp = await _sports()
+    keys = [s["key"] for s in sp]
+    out = await asyncio.to_thread(_pulse, keys)
+    titles = _titles()
+    for r in out["sports"]:
+        r["title"] = titles.get(r["sport"], r["sport"])
+    out["sports"].sort(key=lambda r: (-r["live"], -r["soon"]))
+    out["mock"] = not _real_odds()
+    out["free"] = True
+    return out
+
+
 @router.get(_P + "/api/top")
-async def _edgeos_top(scope: str = Query("soon"),
+async def _edgeos_top(scope: str = Query("live"),
                       sports: str = Query(""),
+                      max_fetch: int = Query(5),
                       _=Depends(_require_token)) -> dict:
+    """Lo mejor que hay ahora mismo.
+
+    Primero barre GRATIS que deportes tienen algo en la ventana pedida, y solo
+    entonces paga las cuotas de esos (hasta `max_fetch`). Asi un escaneo de
+    todo el catalogo cuesta 0-5 creditos en vez de 75.
+    """
     if scope not in _SCOPES:
         raise HTTPException(status_code=400, detail="scope: live | soon | today")
     sp = await _sports()
-    keys = [k.strip() for k in sports.split(",") if k.strip()]
-    if not keys:
-        keys = _DEFAULT_SPORTS or [s["key"] for s in sp[:5]]
-    keys = keys[:10]                      # tope duro: cada uno gasta 1 consulta
+    pedidos = [k.strip() for k in sports.split(",") if k.strip()]
+    universo = pedidos or [s["key"] for s in sp]
+    soon_min = _SCOPES[scope] or 180.0
+
+    pulso = await asyncio.to_thread(_pulse, universo, soon_min)
+    if scope == "live":
+        con_algo = [r["sport"] for r in pulso["sports"] if r["live"]]
+    else:
+        con_algo = [r["sport"] for r in pulso["sports"] if r["live"] or r["soon"]]
+    tope = max(1, min(max_fetch, 10))
+    # Barrido ciego: se paga por los deportes de siempre en vez de contestar
+    # "no hay nada", que seria dar por buena una respuesta que no se ha mirado.
+    if pulso.get("blind"):
+        keys = (pedidos or _DEFAULT_SPORTS or universo)[:tope]
+    else:
+        keys = con_algo[:tope]
 
     def _run():
         from edge_os.board import build_board, top_opportunities
@@ -310,12 +404,19 @@ async def _edgeos_top(scope: str = Query("soon"),
             sel = [e for e in all_events if e["live"]]
         else:
             sel = [e for e in all_events
-                   if not e["live"] and e["starts_in_min"] is not None
-                   and 0 <= e["starts_in_min"] <= limit]
-        picks = top_opportunities(sel)
-        return {"scope": scope, "sports": keys, "picks": picks,
-                "n_scanned": n_raw, "n_in_scope": len(sel),
-                "remaining": rem, "errors": errs, "mock": not _real_odds()}
+                   if e["live"] or (e["starts_in_min"] is not None
+                                    and 0 <= e["starts_in_min"] <= limit)]
+        return {
+            "scope": scope, "sports": keys, "picks": top_opportunities(sel),
+            "events": sorted(sel, key=lambda e: (not e["live"],
+                                                 e["starts_in_min"] or 0)),
+            "n_scanned": n_raw, "n_in_scope": len(sel),
+            "pulse": {"scanned": pulso["n_scanned"], "live": pulso["total_live"],
+                      "soon": pulso["total_soon"], "events": pulso["n_events"],
+                      "blind": pulso.get("blind", False),
+                      "with_action": len(con_algo)},
+            "remaining": rem, "errors": errs, "mock": not _real_odds(),
+        }
 
     return await asyncio.to_thread(_run)
 
@@ -473,331 +574,362 @@ _PAGE = r"""<!doctype html><html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><title>EDGE OS</title>
 <style>
-:root{--bg:#0a0d12;--card:#121721;--card2:#0f141c;--line:#212a38;--fg:#e8ecf3;
- --dim:#7d8799;--accent:#4da3ff;--valor:#2ea043;--justa:#57657d;
- --floja:#c99026;--malo:#e5534b;--duda:#8b5cf6}
+:root{--bg:#07090d;--card:#111620;--card2:#0c1017;--line:#1e2734;--fg:#eaeef5;
+ --dim:#77839a;--accent:#4d9fff;--val:#31c25d;--just:#5b6a82;--flo:#d29a2b;
+ --mal:#e8544b;--dud:#9b6cf0;--live:#ff4d4d}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
  font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-.wrap{max-width:1180px;margin:0 auto;padding:16px}
-.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px}
-h1{font-size:17px;letter-spacing:1px;margin:0;font-weight:800}
-.pill{font-size:11px;padding:3px 9px;border-radius:999px;background:#18202c;
- color:var(--dim);border:1px solid var(--line)}
-.pill.ok{color:var(--valor);border-color:#1d3a26}
-.pill.warn{color:var(--floja);border-color:#3a3018}
-.sub{color:var(--dim);font-size:12px;margin:2px 0 16px}
+.wrap{max-width:1150px;margin:0 auto;padding:14px}
+header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+ padding-bottom:10px;border-bottom:1px solid var(--line);margin-bottom:14px}
+h1{font-size:16px;letter-spacing:1.4px;margin:0;font-weight:800}
+.pill{font-size:11px;padding:3px 9px;border-radius:999px;background:#131a26;
+ color:var(--dim);border:1px solid var(--line);white-space:nowrap}
+.pill.ok{color:var(--val);border-color:#17381f}
+.pill.warn{color:var(--flo);border-color:#3b2f15}
+.pill.bad{color:var(--mal);border-color:#40191c}
+#aviso{background:#241a0c;border:1px solid #3b2f15;color:var(--flo);
+ border-radius:10px;padding:10px 12px;font-size:12.5px;margin-bottom:10px}
+.grow{flex:1}
+button{font:inherit;color:#04121f;background:var(--accent);border:0;
+ border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer}
+button.g{background:#0e131c;color:var(--dim);border:1px solid var(--line);font-weight:600}
+button.g.on{background:#16263a;color:#cfe6ff;border-color:#2f5a8c}
+button:disabled{opacity:.45;cursor:default}
+input,select{font:inherit;color:var(--fg);background:#0b0f16;
+ border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+label{display:block;color:var(--dim);font-size:11px;margin:0 0 4px;
+ letter-spacing:.4px;text-transform:uppercase}
+.muted{color:var(--dim);font-size:12px}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
  padding:14px;margin-bottom:12px}
-input,select,button{font:inherit;color:var(--fg);background:#0d1219;
- border:1px solid var(--line);border-radius:8px;padding:9px 11px}
-button{background:var(--accent);color:#05121f;border:0;font-weight:700;cursor:pointer}
-button.ghost{background:#0d1219;color:var(--fg);border:1px solid var(--line);font-weight:600}
-button:disabled{opacity:.45;cursor:default}
-label{display:block;color:var(--dim);font-size:11px;margin:0 0 4px;
+.empty{padding:34px 16px;text-align:center;color:var(--dim)}
+/* la mejor */
+.hero{border:1px solid #1f5e35;border-radius:14px;padding:0;overflow:hidden;
+ background:linear-gradient(180deg,#0d2318,#0b1018);margin-bottom:14px}
+.hero.arb{border-color:#2f5a8c;background:linear-gradient(180deg,#0d1b2c,#0b1018)}
+.hero-top{display:flex;justify-content:space-between;align-items:center;gap:8px;
+ padding:10px 16px;background:rgba(255,255,255,.03);flex-wrap:wrap}
+.hero-b{padding:16px}
+.tagx{font-size:11px;font-weight:800;padding:3px 10px;border-radius:999px;
+ background:#123422;color:#3fd166;letter-spacing:.5px}
+.tagx.a{background:#122a44;color:#79b4ff}
+.tagx.live{background:#3a1113;color:#ff6b6b}
+.pickline{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:6px 0 2px}
+.pickname{font-size:24px;font-weight:800;letter-spacing:-.3px}
+.pickodds{font-size:30px;font-weight:800;color:var(--val);letter-spacing:-1px}
+.nums{display:flex;gap:22px;flex-wrap:wrap;margin:12px 0 6px}
+.nums div span{display:block;font-size:10.5px;color:var(--dim);
  text-transform:uppercase;letter-spacing:.4px}
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
-.tabs{display:flex;gap:6px;margin:14px 0;flex-wrap:wrap}
-.tabs button{background:#0d1219;color:var(--dim);border:1px solid var(--line);
- font-weight:600;padding:8px 14px}
-.tabs button.on{background:var(--card);color:var(--fg);border-color:#31405a}
-.muted{color:var(--dim)}
-.chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
-.chip{font-size:12px;padding:5px 10px;border-radius:999px;background:#0d1219;
- border:1px solid var(--line);color:var(--dim);cursor:pointer;user-select:none}
-.chip.on{background:#16283d;border-color:#31507a;color:#cfe4ff}
+.nums div b{font-size:17px}
+.why{margin:10px 0 0;padding-left:17px;color:#b7c3d6;font-size:12.5px}
+.why li{margin:3px 0}
+.vs{margin-top:12px;padding:10px 12px;border-radius:9px;background:#0b1220;
+ border:1px solid #24405f;font-size:12.5px;color:#cfe0f5}
+.vs b{color:#fff}
 /* tablero */
-.ev{border:1px solid var(--line);border-radius:10px;margin-bottom:8px;
+.ev{border:1px solid var(--line);border-radius:11px;margin-bottom:8px;
  background:var(--card2);overflow:hidden}
 .ev-h{display:flex;justify-content:space-between;align-items:center;gap:10px;
- padding:10px 12px;cursor:pointer}
-.ev-h:hover{background:#141b26}
-.ev-t{font-weight:700}
-.ev-s{font-size:11px;color:var(--dim)}
-.tiles{display:grid;gap:8px;padding:0 12px 12px;
- grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
-.tile{border:1px solid var(--line);border-radius:9px;padding:9px 10px;
- background:#0d1219;display:flex;flex-direction:column;gap:2px}
-.tile .n{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;
+ padding:9px 12px;cursor:pointer}
+.ev-h:hover{background:#121926}
+.ev-t{font-weight:700;font-size:13.5px}
+.tiles{display:grid;gap:7px;padding:0 12px 11px;
+ grid-template-columns:repeat(auto-fit,minmax(142px,1fr))}
+.tile{border:1px solid var(--line);border-radius:9px;padding:8px 10px;
+ background:#0b0f16;display:flex;flex-direction:column;gap:1px}
+.tile .n{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;
  text-overflow:ellipsis}
-.tile .o{font-size:20px;font-weight:800;letter-spacing:-.5px}
-.tile .b{font-size:11px;color:var(--dim)}
-.tile .lab{font-size:10px;font-weight:800;letter-spacing:.6px;margin-top:3px}
-.t-VALOR{border-color:#1f5130;background:#0e1d14}.t-VALOR .lab{color:var(--valor)}
-.t-JUSTA .lab{color:var(--justa)}
-.t-FLOJA .lab{color:var(--floja)}
-.t-NI_LOCOS{border-color:#4a2320}.t-NI_LOCOS .lab{color:var(--malo)}
-.t-DUDOSA .lab{color:var(--duda)}
-.duda{color:var(--duda)}
+.tile .o{font-size:19px;font-weight:800;letter-spacing:-.4px}
+.tile .b{font-size:10.5px;color:var(--dim)}
+.tile .l{font-size:10px;font-weight:800;letter-spacing:.5px;margin-top:2px}
+.t-VALOR{border-color:#1f5e35;background:#0c1c13}.t-VALOR .l{color:var(--val)}
+.t-JUSTA .l{color:var(--just)}
+.t-FLOJA .l{color:var(--flo)}
+.t-NI_LOCOS{border-color:#4a221f}.t-NI_LOCOS .l{color:var(--mal)}
+.t-DUDOSA .l{color:var(--dud)}
 .det{padding:0 12px 12px;font-size:12px}
 .det table{width:100%;border-collapse:collapse}
-.det td,.det th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
+.det td,.det th{padding:3px 6px;border-bottom:1px solid var(--line);text-align:left}
 .det th{color:var(--dim);font-weight:600}
-/* picks */
-.pick{border:1px solid #1f5130;background:linear-gradient(180deg,#0f1e16,#0d1219);
- border-radius:12px;padding:14px;margin-bottom:10px}
-.pick.arb{border-color:#31507a;background:linear-gradient(180deg,#0e1825,#0d1219)}
-.pick-h{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;
- align-items:baseline}
-.pick .sel{font-size:19px;font-weight:800;margin:6px 0 2px}
-.pick .nums{display:flex;gap:18px;flex-wrap:wrap;margin:8px 0}
-.pick .nums div span{display:block;font-size:11px;color:var(--dim)}
-.pick .nums div b{font-size:17px}
-.why{margin:8px 0 0;padding-left:18px;color:#b9c3d3;font-size:12.5px}
-.why li{margin:3px 0}
-.badge{font-size:11px;font-weight:800;padding:3px 9px;border-radius:999px}
-.badge.v{background:#123420;color:#3fd166}
-.badge.a{background:#132540;color:#6aa6ff}
-.badge.live{background:#3a1417;color:#ff6b6b}
-.empty{padding:26px;text-align:center;color:var(--dim)}
-.note{border-left:3px solid #31405a;background:#0f1620;padding:9px 12px;
- border-radius:6px;font-size:12px;color:#9fb0c7;margin-bottom:12px}
+.tabs{display:flex;gap:6px;margin:16px 0 10px;flex-wrap:wrap}
+.sec{display:none}.sec.on{display:block}
 </style></head><body><div class="wrap">
-<div class="top"><h1>EDGE&nbsp;OS</h1>
-  <span class="pill" id="p-odds">…</span>
-  <span class="pill" id="p-cred"></span></div>
-<div class="sub">Cuotas de todas las casas, cada una con su veredicto</div>
 
-<div id="login" class="card" style="max-width:340px">
+<header>
+  <h1>EDGE&nbsp;OS</h1>
+  <span class="pill" id="p-odds">…</span>
+  <span class="pill" id="p-cred"></span>
+  <span class="grow"></span>
+  <button class="g" id="b-auto">⟳ auto</button>
+</header>
+
+<div id="login" class="card" style="max-width:330px">
   <label>Clave</label>
-  <div class="row"><input id="pw" type="password" style="flex:1">
+  <div class="bar"><input id="pw" type="password" style="flex:1">
   <button id="go">Entrar</button></div>
-  <div id="lerr" style="margin-top:8px;color:var(--malo);font-size:12px"></div>
+  <div id="lerr" style="color:var(--mal);font-size:12px"></div>
 </div>
 
 <div id="app" style="display:none">
+
 <div class="tabs">
-  <button data-tab="top" class="on">🔥 No dejes escapar</button>
-  <button data-tab="board">📋 Tablero</button>
-  <button data-tab="check">🧮 ¿Merece la pena?</button>
-  <button data-tab="fut">⚽ Fútbol</button>
+  <button class="g on" data-s="vivo">En directo</button>
+  <button class="g" data-s="check">¿Merece la pena?</button>
+  <button class="g" data-s="fut">Fútbol</button>
 </div>
 
-<!-- TOP -->
-<div id="tab-top">
- <div class="card">
-  <div class="row">
-   <div><label>Cuándo</label><select id="t-scope">
-     <option value="live">🔴 En vivo ahora</option>
-     <option value="soon" selected>Próximas 3 h</option>
-     <option value="today">Hoy (24 h)</option></select></div>
-   <div style="flex:1"><label>Bankroll €</label><input id="t-bank" type="number" value="1000" style="width:120px"></div>
-   <button id="t-go">Buscar</button>
+<!-- ═══ EN DIRECTO ═══ -->
+<section id="s-vivo" class="sec on">
+  <div class="bar">
+    <button class="g on" data-sc="live">🔴 En vivo</button>
+    <button class="g" data-sc="soon">Próximas 3 h</button>
+    <button class="g" data-sc="today">Hoy</button>
+    <span class="grow"></span>
+    <label style="margin:0;text-transform:none">Bote €</label>
+    <input id="bank" type="number" value="1000" style="width:96px">
+    <button id="scan">Buscar</button>
   </div>
-  <label style="margin-top:12px">Deportes a escanear (cada uno gasta 1 consulta)</label>
-  <div class="chips" id="t-chips"></div>
-  <div class="muted" id="t-meta" style="font-size:12px"></div>
- </div>
- <div id="t-out"></div>
-</div>
+  <div class="muted" id="pulse" style="margin-bottom:10px"></div>
+  <div id="aviso" style="display:none"></div>
+  <div id="hero"></div>
+  <div id="board"></div>
+</section>
 
-<!-- TABLERO -->
-<div id="tab-board" style="display:none">
- <div class="card"><div class="row">
-   <div style="flex:1;min-width:220px"><label>Deporte</label><select id="b-sport"></select></div>
-   <button id="b-go">Ver cuotas</button>
-   <label style="display:flex;gap:6px;align-items:center;margin:0;text-transform:none">
-     <input type="checkbox" id="b-only" style="width:auto"> solo con valor</label>
-   <span class="muted" id="b-meta" style="font-size:12px"></span>
- </div></div>
- <div id="b-out"></div>
-</div>
-
-<!-- CHECK -->
-<div id="tab-check" style="display:none">
- <div class="card">
-  <div class="row">
-   <div style="flex:1;min-width:170px"><label>Deporte</label><select id="c-sport"></select></div>
-   <div style="flex:1;min-width:130px"><label>Local</label><input id="c-home"></div>
-   <div style="flex:1;min-width:130px"><label>Visitante</label><input id="c-away"></div>
+<!-- ═══ ¿MERECE LA PENA? ═══ -->
+<section id="s-check" class="sec">
+  <div class="card">
+    <div class="bar">
+      <div style="flex:1;min-width:170px"><label>Deporte</label><select id="c-sport"></select></div>
+      <div style="flex:1;min-width:120px"><label>Local</label><input id="c-home" style="width:100%"></div>
+      <div style="flex:1;min-width:120px"><label>Visitante</label><input id="c-away" style="width:100%"></div>
+    </div>
+    <div class="bar">
+      <div><label>A quién</label><select id="c-side">
+        <option value="home">Gana local</option><option value="draw">Empate</option>
+        <option value="away">Gana visitante</option></select></div>
+      <div><label>Cuota</label><input id="c-odds" type="number" step="0.01" style="width:92px"></div>
+      <div><label>Importe €</label><input id="c-stake" type="number" value="100" style="width:92px"></div>
+      <button id="c-go">Comprobar</button>
+    </div>
+    <div id="c-out" style="margin-top:10px"></div>
   </div>
-  <div class="row" style="margin-top:8px">
-   <div><label>A quién</label><select id="c-side">
-     <option value="home">Gana local</option><option value="draw">Empate</option>
-     <option value="away">Gana visitante</option></select></div>
-   <div><label>Cuota</label><input id="c-odds" type="number" step="0.01" style="width:100px"></div>
-   <div><label>Importe €</label><input id="c-stake" type="number" value="100" style="width:100px"></div>
-   <button id="c-go">Comprobar</button>
-  </div>
-  <div id="c-out" style="margin-top:12px"></div>
- </div>
-</div>
+</section>
 
-<!-- FUTBOL -->
-<div id="tab-fut" style="display:none">
- <div class="card"><div class="row">
-   <div><label>Liga</label><select id="f-liga"></select></div>
-   <div><label>Local</label><input id="f-home"></div>
-   <div><label>Visitante</label><input id="f-away"></div>
-   <button id="f-go">Predecir</button>
-   <button id="f-tab" class="ghost">Valoraciones</button>
- </div><div id="f-out" style="margin-top:12px"></div></div>
- <div id="f-tout"></div>
-</div>
+<!-- ═══ FÚTBOL ═══ -->
+<section id="s-fut" class="sec">
+  <div class="card">
+    <div class="bar">
+      <div><label>Liga</label><select id="f-liga"></select></div>
+      <div><label>Local</label><input id="f-home"></div>
+      <div><label>Visitante</label><input id="f-away"></div>
+      <button id="f-go">Predecir</button>
+    </div>
+    <div id="f-out" style="margin-top:10px"></div>
+  </div>
+</section>
+
 </div>
 
 <script>
 const BASE="__BASE__";
 let TOKEN=sessionStorage.getItem("edgeos_tok")||"";
-let SPORTS=[],PICKED=new Set();
+let SCOPE="live", AUTO=null, LAST=null;
+const CRED_AVISO=120, CRED_MIN=40;   // consultas del plan mensual que quedan
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const pc=x=>(x*100).toFixed(1)+"%";
-const sgn=x=>(x>=0?"+":"")+(x*100).toFixed(1)+"%";
+const sg=x=>(x>=0?"+":"")+(x*100).toFixed(1)+"%";
+const LBL={VALOR:"VALOR",JUSTA:"PRECIO JUSTO",FLOJA:"FLOJA",NI_LOCOS:"NI LOCOS",DUDOSA:"NO ME FÍO"};
 
 async function api(p,o){o=o||{};o.headers=Object.assign({"content-type":"application/json"},o.headers||{});
  if(TOKEN)o.headers.authorization="Bearer "+TOKEN;
  const r=await fetch(BASE+p,o);
- if(r.status===401){logout();throw new Error("sesión caducada, vuelve a entrar");}
+ if(r.status===401){salir();throw new Error("sesión caducada, entra otra vez");}
  const j=await r.json().catch(()=>({}));
  if(!r.ok)throw new Error(j.detail||("error "+r.status));return j;}
-function logout(){TOKEN="";sessionStorage.removeItem("edgeos_tok");
+function salir(){TOKEN="";sessionStorage.removeItem("edgeos_tok");
  $("#app").style.display="none";$("#login").style.display="";}
 
 $("#go").onclick=async()=>{$("#lerr").textContent="";
  try{const j=await api("/api/login",{method:"POST",body:JSON.stringify({password:$("#pw").value})});
-  TOKEN=j.token;sessionStorage.setItem("edgeos_tok",TOKEN);boot();}
+  TOKEN=j.token;sessionStorage.setItem("edgeos_tok",TOKEN);arrancar();}
  catch(e){$("#lerr").textContent=e.message;}};
 $("#pw").addEventListener("keydown",e=>{if(e.key==="Enter")$("#go").click();});
+
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
  document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));
- ["top","board","check","fut"].forEach(t=>$("#tab-"+t).style.display=(b.dataset.tab===t)?"":"none");});
+ ["vivo","check","fut"].forEach(s=>$("#s-"+s).classList.toggle("on",b.dataset.s===s));});
+document.querySelectorAll("[data-sc]").forEach(b=>b.onclick=()=>{
+ document.querySelectorAll("[data-sc]").forEach(x=>x.classList.toggle("on",x===b));
+ SCOPE=b.dataset.sc;buscar();});
+function autoOff(){if(AUTO)clearInterval(AUTO);AUTO=null;
+ $("#b-auto").classList.remove("on");$("#b-auto").textContent="⟳ auto";}
+$("#b-auto").onclick=()=>{
+ if(AUTO){autoOff();}
+ else{$("#aviso").style.display="none";
+  AUTO=setInterval(buscar,60000);$("#b-auto").classList.add("on");$("#b-auto").textContent="⟳ auto 60s";buscar();}};
+$("#scan").onclick=buscar;
+$("#bank").onchange=()=>{if(LAST)pintar(LAST);};
 
-async function boot(){
+async function arrancar(){
  $("#login").style.display="none";$("#app").style.display="";
  try{const h=await fetch(BASE+"/health").then(r=>r.json());
-  $("#p-odds").textContent=h.odds==="real"?"cuotas reales":"MOCK (cuotas falsas)";
+  $("#p-odds").textContent=h.odds==="real"?"cuotas reales":"MOCK";
   $("#p-odds").className="pill "+(h.odds==="real"?"ok":"warn");}catch(e){}
- try{const j=await api("/api/sports");SPORTS=j.sports;
-  const opts=SPORTS.map(s=>`<option value="${esc(s.key)}">${esc(s.title)}</option>`).join("");
-  $("#b-sport").innerHTML=opts;$("#c-sport").innerHTML=opts;
-  PICKED=new Set(j.defaults);drawChips();}catch(e){}
+ try{const j=await api("/api/sports");
+  $("#c-sport").innerHTML=j.sports.map(s=>`<option value="${esc(s.key)}">${esc(s.title)}</option>`).join("");}catch(e){}
  try{const j=await api("/api/football/leagues");
   $("#f-liga").innerHTML=j.leagues.map(l=>`<option value="${l.code}">${esc(l.name)}</option>`).join("");}catch(e){}
+ buscar();
 }
-function drawChips(){
- $("#t-chips").innerHTML=SPORTS.map(s=>
-  `<span class="chip${PICKED.has(s.key)?" on":""}" data-k="${esc(s.key)}">${esc(s.title)}</span>`).join("");
- $("#t-chips").querySelectorAll(".chip").forEach(c=>c.onclick=()=>{
-  const k=c.dataset.k;if(PICKED.has(k))PICKED.delete(k);else if(PICKED.size<10)PICKED.add(k);
-  drawChips();});
- $("#t-meta").textContent=PICKED.size+" deporte(s) · gastará "+PICKED.size+" consulta(s) (se cachean 60 s)";
-}
-function cred(r){if(r!=null)$("#p-cred").textContent="quedan "+r+" consultas";}
 
-/* ── NO DEJES ESCAPAR ── */
-$("#t-go").onclick=async()=>{
- const out=$("#t-out");out.innerHTML='<div class="card empty">buscando…</div>';
+async function buscar(){
+ const hero=$("#hero"),board=$("#board");
+ if(!LAST){hero.innerHTML='<div class="card empty">buscando…</div>';board.innerHTML="";}
  try{
-  const j=await api("/api/top?scope="+$("#t-scope").value+"&sports="+encodeURIComponent([...PICKED].join(",")));
-  cred(j.remaining);
-  const bank=parseFloat($("#t-bank").value)||1000;
-  let head=`<div class="note">Escaneados <b>${j.n_scanned}</b> partidos · <b>${j.n_in_scope}</b> en la ventana elegida · <b>${j.picks.length}</b> pasan todos los filtros.`+
-   (j.mock?" · <b>MOCK: no vale</b>":"")+
-   (j.errors&&j.errors.length?" · errores: "+esc(j.errors.join("; ")):"")+"</div>";
-  if(!j.picks.length){out.innerHTML=head+
-   '<div class="card empty">Nada que merezca la pena ahora mismo.<br><span style="font-size:12px">Es lo normal: la mayoría de precios son correctos. Prueba otra ventana o más deportes.</span></div>';return;}
-  out.innerHTML=head+j.picks.map(p=>{
-   const arb=p.kind==="ARBITRAJE";
-   const stake=p.kelly_pct?(bank*p.kelly_pct/100):null;
-   const legs=arb?`<table style="width:100%;margin-top:8px;font-size:12.5px">${
-     p.arb.legs.map(l=>`<tr><td>${esc(l.outcome)}</td><td class="muted">${esc(l.book)}</td>
-     <td><b>${l.odds}</b></td><td>${(bank*l.stake_pct/100).toFixed(0)} €</td></tr>`).join("")}</table>`:"";
-   return `<div class="pick${arb?" arb":""}">
-    <div class="pick-h">
-      <div><span class="badge ${arb?"a":"v"}">${arb?"ARBITRAJE":"VALOR"}</span>
-        ${p.live?'<span class="badge live">EN VIVO</span>':""}
-        <span class="muted" style="font-size:12px">&nbsp;${esc(p.sport_title||p.sport)}</span></div>
-      <div class="muted" style="font-size:12px">${p.live?"en juego":(p.starts_in_min!=null?"empieza en "+Math.round(p.starts_in_min)+" min":"")}</div>
+  const j=await api("/api/top?scope="+SCOPE+"&max_fetch=5");
+  LAST=j;pintar(j);
+ }catch(e){hero.innerHTML=`<div class="card" style="color:var(--mal)">${esc(e.message)}</div>`;}
+}
+
+function pintar(j){
+ // El plan del proveedor es mensual y cada barrido con accion cuesta varios
+ // creditos. Con el auto encendido se agota en un par de horas, y agotado el
+ // panel se queda vacio: exactamente igual que si no hubiera nada. Se apaga
+ // solo antes de llegar ahi y se dice por que.
+ if(j.remaining!=null){
+  const q=parseInt(j.remaining,10);
+  $("#p-cred").textContent="quedan "+j.remaining;
+  $("#p-cred").className="pill "+(isNaN(q)?"":q<=CRED_MIN?"bad":q<=CRED_AVISO?"warn":"ok");
+  if(!isNaN(q)&&q<=CRED_MIN&&AUTO){autoOff();
+   $("#aviso").innerHTML=`<b>He apagado la actualización automática</b>: quedan ${q} consultas `+
+    `del plan mensual y cada barrido gasta varias. Dale a <b>Buscar</b> cuando quieras mirar.`;
+   $("#aviso").style.display="";}
+ }
+ const pu=j.pulse||{};
+ $("#pulse").innerHTML=(pu.blind
+   ? `<b style="color:var(--flo)">El barrido no ve nada</b>: el proveedor no devolvió ni un partido `+
+     `en ${pu.scanned||0} deportes, así que no me fío y pido cuotas directamente`
+   : `Barrido <b>gratis</b> de ${pu.scanned||0} deportes: `+
+     `<b style="color:var(--live)">${pu.live||0}</b> en vivo · ${pu.soon||0} en 3 h`)+
+  ` · cuotas pedidas de ${(j.sports||[]).length} (${j.n_scanned||0} partidos)`+
+  (j.mock?' · <b style="color:var(--flo)">MOCK: no vale</b>':"")+
+  ((j.errors||[]).length?" · "+esc(j.errors.join("; ")):"");
+
+ const bank=parseFloat($("#bank").value)||1000;
+ const picks=j.picks||[];
+ // "no hay nada" y "no he podido mirar" se leen igual, y solo uno es verdad.
+ const ciego=(j.errors||[]).length>0 && !j.n_scanned;
+ $("#hero").innerHTML = picks.length? picks.map((p,k)=>heroCard(p,bank,k===0)).join("")
+  : ciego? `<div class="card" style="border-color:var(--mal)">
+     <b style="color:var(--mal)">No he podido mirar el mercado.</b><br>
+     <span style="font-size:12px">Esto <u>no</u> quiere decir que no haya nada: quiere decir que no lo sé.
+     ${esc((j.errors||[]).join("; "))}</span></div>`
+  : `<div class="card empty"><b>Nada que merezca la pena ahora mismo.</b><br>
+     <span style="font-size:12px">Y eso es lo normal: casi todos los precios están bien puestos.
+     Solo sale algo cuando una casa se queda por detrás del dinero listo
+     <u>y</u> la cuota está en la franja donde el dato es fiable (1.40–3.20).</span></div>`;
+
+ const evs=j.events||[];
+ $("#board").innerHTML = evs.length? `<div class="muted" style="margin:14px 0 8px">
+   TODOS LOS PARTIDOS (${evs.length}) — cada cuota con su veredicto</div>`+
+   evs.map((e,i)=>evCard(e,i)).join("") : "";
+}
+
+function heroCard(p,bank,big){
+ const arb=p.kind==="ARBITRAJE";
+ const stake=p.kelly_pct?(bank*p.kelly_pct/100):null;
+ const legs=arb&&p.arb?`<table style="width:100%;margin-top:10px;font-size:12.5px">${
+   p.arb.legs.map(l=>`<tr><td>${esc(l.outcome)}</td><td class="muted">${esc(l.book)}</td>
+   <td><b>${l.odds}</b></td><td>${(bank*l.stake_pct/100).toFixed(0)} €</td></tr>`).join("")}</table>`:"";
+ const vs=p.compare?`<div class="vs">⚖ ${esc(p.compare.texto)}</div>`:"";
+ return `<div class="hero${arb?" arb":""}">
+  <div class="hero-top">
+    <div><span class="tagx ${arb?"a":""}">${arb?"ARBITRAJE":(big?"LA MEJOR AHORA":"VALOR")}</span>
+      ${p.live?'<span class="tagx live">EN VIVO</span>':""}
+      <span class="muted">&nbsp;${esc(p.sport_title||p.sport)}</span></div>
+    <span class="muted">${p.live?"jugándose":(p.starts_in_min!=null?"empieza en "+Math.round(p.starts_in_min)+" min":"")}</span>
+  </div>
+  <div class="hero-b">
+    <div class="muted">${esc(p.match)}</div>
+    <div class="pickline">
+      <span class="pickname">${esc(p.outcome)}</span>
+      ${p.odds?`<span class="pickodds">${p.odds}</span>
+        <span class="muted">en <b style="color:var(--fg)">${esc(p.book)}</b></span>`:""}
     </div>
-    <div class="muted" style="font-size:13px">${esc(p.match)}</div>
-    <div class="sel">${esc(p.outcome)}${p.odds?` &nbsp;<span style="color:var(--valor)">@ ${p.odds}</span>`:""}
-      ${p.book&&p.book!=="varias"?`<span class="muted" style="font-size:13px;font-weight:600"> en ${esc(p.book)}</span>`:""}</div>
     <div class="nums">
       ${p.fair_odds?`<div><span>Cuota justa</span><b>${p.fair_odds}</b></div>`:""}
-      <div><span>Ventaja (EV)</span><b style="color:var(--valor)">${sgn(p.ev)}</b></div>
-      ${stake?`<div><span>Meter (Kelly ¼)</span><b>${stake.toFixed(0)} €</b></div>`:""}
+      <div><span>Ventaja</span><b style="color:var(--val)">${sg(p.ev)}</b></div>
+      ${p.ev_z?`<div><span>Señal / ruido</span><b>${p.ev_z}×</b></div>`:""}
+      ${stake?`<div><span>Meter</span><b>${stake.toFixed(0)} €</b></div>`:""}
       <div><span>Casas</span><b>${p.n_books}</b></div>
     </div>
-    <ul class="why">${p.why.map(w=>"<li>"+esc(w)+"</li>").join("")}</ul>${legs}</div>`;}).join("");
- }catch(e){out.innerHTML=`<div class="card" style="color:var(--malo)">${esc(e.message)}</div>`;}
-};
+    <ul class="why">${p.why.map(w=>"<li>"+esc(w)+"</li>").join("")}</ul>
+    ${vs}${legs}
+  </div></div>`;
+}
 
-/* ── TABLERO ── */
-const LBL={VALOR:"VALOR",JUSTA:"PRECIO JUSTO",FLOJA:"FLOJA",NI_LOCOS:"NI LOCOS",DUDOSA:"NO ME FÍO"};
-$("#b-go").onclick=async()=>{
- const out=$("#b-out");out.innerHTML='<div class="card empty">cargando cuotas…</div>';
- try{
-  const j=await api("/api/board?sport="+encodeURIComponent($("#b-sport").value));
-  if(j.error){out.innerHTML=`<div class="card" style="color:var(--malo)">${esc(j.error)}</div>`;return;}
-  cred(j.remaining);
-  const only=$("#b-only").checked;
-  let evs=j.events.filter(e=>!only||e.best_tag==="VALOR");
-  $("#b-meta").textContent=`${j.events.length} partidos${j.cached?" (caché)":""}${j.mock?" · MOCK":""}`;
-  if(!evs.length){out.innerHTML='<div class="card empty">Sin partidos que mostrar.</div>';return;}
-  out.innerHTML=evs.map((e,i)=>`<div class="ev">
-    <div class="ev-h" onclick="tog(${i})">
-      <div><div class="ev-t">${esc(e.match)}</div>
-        <div class="ev-s">${e.live?'<span style="color:#ff6b6b">● EN VIVO</span>':
-          (e.starts_in_min!=null?"empieza en "+Math.round(e.starts_in_min)+" min":"")}
-          · ${e.n_books} casas${e.trusted?"":" · <span class='duda'>"+esc(e.trust_reason)+"</span>"}
-          ${e.arb?' · <span style="color:#6aa6ff">ARBITRAJE '+sgn(e.arb.roi)+'</span>':""}</div></div>
-      <div class="muted" style="font-size:11px">detalle ▾</div></div>
-    <div class="tiles">${e.outcomes.map(o=>`<div class="tile t-${o.tag}">
-       <div class="n">${esc(o.name)}</div><div class="o">${o.best_odds}</div>
-       <div class="b">${esc(o.best_book)}${o.fair_odds?" · justa "+o.fair_odds:""}</div>
-       <div class="lab">${LBL[o.tag]}${o.ev!=null&&o.tag!=="DUDOSA"?" "+sgn(o.ev):""}</div></div>`).join("")}</div>
-    <div class="det" id="d${i}" style="display:none">${e.outcomes.map(o=>
-      `<div style="margin-bottom:8px"><b>${esc(o.name)}</b>
-       <table><tr><th>Casa</th><th>Cuota</th><th>EV</th><th>Veredicto</th></tr>
-       ${(o.books||[]).map(b=>`<tr><td>${esc(b.book)}</td><td>${b.odds}</td>
-         <td>${sgn(b.ev)}</td><td style="color:var(--${b.tag==="VALOR"?"valor":b.tag==="NI_LOCOS"?"malo":b.tag==="FLOJA"?"floja":b.tag==="DUDOSA"?"duda":"justa"})">${LBL[b.tag]}</td></tr>`).join("")}
-       </table></div>`).join("")}</div></div>`).join("");
- }catch(e){out.innerHTML=`<div class="card" style="color:var(--malo)">${esc(e.message)}</div>`;}
-};
+function evCard(e,i){
+ const cmp=(e.compare||[])[0];
+ return `<div class="ev">
+  <div class="ev-h" onclick="tog(${i})">
+   <div><div class="ev-t">${esc(e.match)}</div>
+    <div class="muted">${e.live?'<span style="color:var(--live)">● EN VIVO</span>':
+      (e.starts_in_min!=null?"en "+Math.round(e.starts_in_min)+" min":"")}
+      · ${esc(e.sport_title||e.sport)} · ${e.n_books} casas${
+      e.trusted?"":' · <span style="color:var(--dud)">'+esc(e.trust_reason)+"</span>"}${
+      e.arb?' · <span style="color:#79b4ff">ARB '+sg(e.arb.roi)+"</span>":""}</div></div>
+   <span class="muted">detalle ▾</span></div>
+  <div class="tiles">${e.outcomes.map(o=>`<div class="tile t-${o.tag}">
+    <div class="n">${esc(o.name)}</div><div class="o">${o.best_odds}</div>
+    <div class="b">${esc(o.best_book)}${o.fair_odds?" · justa "+o.fair_odds:""}</div>
+    <div class="l">${LBL[o.tag]}${o.ev!=null&&o.tag!=="DUDOSA"?" "+sg(o.ev):""}</div></div>`).join("")}</div>
+  ${cmp?`<div style="padding:0 12px 11px"><div class="vs">⚖ ${esc(cmp.texto)}</div></div>`:""}
+  <div class="det" id="d${i}" style="display:none">${e.outcomes.map(o=>
+    `<div style="margin-bottom:8px"><b>${esc(o.name)}</b>
+     <span class="muted">— justa ${o.fair_odds} · error del EV ±${o.ev_noise!=null?(o.ev_noise*100).toFixed(1):"?"}%</span>
+     <table><tr><th>Casa</th><th>Cuota</th><th>EV</th><th>Señal</th><th>Veredicto</th></tr>
+     ${(o.books||[]).map(b=>`<tr><td>${esc(b.book)}</td><td>${b.odds}</td>
+       <td>${sg(b.ev)}</td><td>${b.ev_z!=null?b.ev_z+"×":"—"}</td>
+       <td style="color:var(--${b.tag==="VALOR"?"val":b.tag==="NI_LOCOS"?"mal":b.tag==="FLOJA"?"flo":b.tag==="DUDOSA"?"dud":"just"})">${LBL[b.tag]}</td></tr>`).join("")}
+     </table></div>`).join("")}</div></div>`;
+}
 function tog(i){const d=$("#d"+i);d.style.display=d.style.display==="none"?"":"none";}
 
-/* ── CHECK ── */
 $("#c-go").onclick=async()=>{
  const out=$("#c-out");out.innerHTML='<span class="muted">comprobando…</span>';
  try{
   const j=await api("/api/check",{method:"POST",body:JSON.stringify({
     sport:$("#c-sport").value,home:$("#c-home").value,away:$("#c-away").value,
     side:$("#c-side").value,odds:$("#c-odds").value,stake:$("#c-stake").value})});
-  if(j.error){out.innerHTML=`<span style="color:var(--malo)">${esc(j.error)}</span>`+
+  if(j.error){out.innerHTML=`<span style="color:var(--mal)">${esc(j.error)}</span>`+
     ((j.disponibles||[]).length?'<div class="muted" style="margin-top:6px">Hay ahora: '+
       j.disponibles.map(esc).join(" · ")+"</div>":"");return;}
-  cred(j.remaining);
-  const col=j.verdict==="VALOR_SIN_VALIDAR"?"var(--valor)":j.verdict==="DUDOSO"?"var(--duda)":"var(--malo)";
-  out.innerHTML=`<div style="font-size:16px;font-weight:800;color:${col};margin-bottom:6px">${esc(j.title)}</div>
+  const col=j.verdict==="VALOR_SIN_VALIDAR"?"var(--val)":j.verdict==="DUDOSO"?"var(--dud)":"var(--mal)";
+  out.innerHTML=`<div style="font-size:15px;font-weight:800;color:${col}">${esc(j.title)}</div>
    <div class="muted">${esc(j.match)} — ${esc(j.target)}</div>
    <ul class="why">${j.reasons.map(r=>"<li>"+esc(r)+"</li>").join("")}</ul>
    <div class="muted" style="margin-top:8px">${esc(j.stake.msg)}</div>`;
- }catch(e){out.innerHTML=`<span style="color:var(--malo)">${esc(e.message)}</span>`;}
+ }catch(e){out.innerHTML=`<span style="color:var(--mal)">${esc(e.message)}</span>`;}
 };
 
-/* ── FUTBOL ── */
 $("#f-go").onclick=async()=>{
  const out=$("#f-out");out.innerHTML='<span class="muted">calculando…</span>';
  try{const j=await api("/api/football/predict",{method:"POST",body:JSON.stringify({
    league:$("#f-liga").value,home:$("#f-home").value,away:$("#f-away").value})});
-  out.innerHTML=`<div class="row" style="gap:26px">
-    <div><div class="muted">${esc(j.home)}</div><div style="font-size:24px;font-weight:800">${pc(j.p_home)}</div></div>
-    <div><div class="muted">Empate</div><div style="font-size:24px;font-weight:800">${pc(j.p_draw)}</div></div>
-    <div><div class="muted">${esc(j.away)}</div><div style="font-size:24px;font-weight:800">${pc(j.p_away)}</div></div></div>
-   <div class="muted" style="margin-top:6px">Justas ${j.fair_home} / ${j.fair_draw} / ${j.fair_away}
-    · Over 2.5 ${j.over_2_5!=null?pc(j.over_2_5):"—"} · acuerdo modelos ${j.model_agreement}</div>
-   <div class="note" style="margin-top:10px">Este modelo, en backtest sobre La Liga, <b>no bate al mercado</b>. Úsalo como segunda opinión, no como fuente.</div>`;
- }catch(e){out.innerHTML=`<span style="color:var(--malo)">${esc(e.message)}</span>`;}
+  out.innerHTML=`<div class="nums">
+    <div><span>${esc(j.home)}</span><b>${pc(j.p_home)}</b></div>
+    <div><span>Empate</span><b>${pc(j.p_draw)}</b></div>
+    <div><span>${esc(j.away)}</span><b>${pc(j.p_away)}</b></div></div>
+   <div class="muted">Justas ${j.fair_home} / ${j.fair_draw} / ${j.fair_away}
+    · acuerdo modelos ${j.model_agreement}</div>
+   <div class="vs" style="margin-top:10px">Este modelo, en backtest sobre La Liga,
+    <b>no bate al mercado</b>. Segunda opinión, no fuente.</div>`;
+ }catch(e){out.innerHTML=`<span style="color:var(--mal)">${esc(e.message)}</span>`;}
 };
-$("#f-tab").onclick=async()=>{
- const out=$("#f-tout");out.innerHTML='<div class="card empty">cargando…</div>';
- try{const j=await api("/api/football/table?league="+encodeURIComponent($("#f-liga").value));
-  out.innerHTML=`<div class="card"><div class="muted">${esc(j.league)} · ${j.n_matches} partidos · ${esc(j.source)}</div>
-   <table style="width:100%;margin-top:8px;font-size:13px"><tr><th style="text-align:left;color:var(--dim)">Equipo</th>
-   <th style="text-align:left;color:var(--dim)">Fuerza</th><th style="text-align:left;color:var(--dim)">Elo</th></tr>
-   ${j.teams.map(t=>`<tr><td>${esc(t.team)}</td><td>${t.strength}</td><td>${t.elo}</td></tr>`).join("")}</table></div>`;
- }catch(e){out.innerHTML=`<div class="card" style="color:var(--malo)">${esc(e.message)}</div>`;}
-};
-if(TOKEN)boot();
+
+if(TOKEN)arrancar();
 </script></div></body></html>"""

@@ -37,10 +37,22 @@ _SPORTS = [
 ]
 
 
+#: minutos hasta el saque de cada fixture. Negativo = ya empezado (en vivo).
+#: Los dos primeros estan EN VIVO y los dos siguientes dentro de la ventana de
+#: 3 h a proposito: sin esto el barrido gratuito no encuentra nada en modo mock
+#: y el panel sale vacio, que es indistinguible de una averia.
+_KICKOFF_MIN = [-37.0, -12.0, -4.0, 140.0, 400.0, 1500.0]
+
+
 def _seed(sport: str) -> int:
     bucket = int(datetime.now(timezone.utc).timestamp() // 300)  # 5-min bucket
     h = hashlib.sha256(f"{sport}:{bucket}".encode()).hexdigest()
     return int(h[:12], 16)
+
+
+def _commence(i: int) -> datetime:
+    mins = _KICKOFF_MIN[i % len(_KICKOFF_MIN)]
+    return datetime.now(timezone.utc) + timedelta(minutes=mins)
 
 
 def _overround(rng: random.Random, book: str) -> float:
@@ -55,6 +67,18 @@ class MockProvider(OddsProvider):
     def list_sports(self) -> list[dict]:
         return list(_SPORTS)
 
+    def list_events(self, sport: str) -> list[dict]:
+        """Mismo catalogo que `fetch`, sin cuotas. Tiene que existir: el radar
+        decide DONDE gastar credito con esta llamada, asi que un proveedor sin
+        ella deja el panel en blanco sin que falle nada."""
+        return [{
+            "id": f"mock-{sport}-{i}",
+            "sport_key": sport,
+            "commence_time": _commence(i).isoformat().replace("+00:00", "Z"),
+            "home_team": home,
+            "away_team": away,
+        } for i, (home, away) in enumerate(_FIXTURES)]
+
     def fetch(
         self, sport: str, markets: list[str], regions: list[str]
     ) -> list[Quote]:
@@ -64,11 +88,17 @@ class MockProvider(OddsProvider):
         quotes: list[Quote] = []
 
         for i, (home, away) in enumerate(_FIXTURES):
-            commence = now + timedelta(hours=6 + 12 * i)
+            commence = _commence(i)
             # probabilidad "verdadera" del partido
             ph = rng.uniform(0.30, 0.60)
             pa = rng.uniform(0.15, min(0.55, 0.95 - ph))
             pd = max(0.05, 1.0 - ph - pa)
+            if i == 2:
+                # partido 2: local y visitante acaban casi a la MISMA cuota
+                # teniendo probabilidades distintas. Es el caso que el
+                # comparador existe para enseñar («las dos a 1.80, pero metele
+                # a esta»); sin un partido asi no se puede ver funcionando.
+                ph, pd, pa = 0.470, 0.110, 0.420
             true = {"home": ph, "draw": pd, "away": pa}
             names = {"home": home, "draw": "Draw", "away": away}
             # deriva de mercado compartida: las casas se mueven juntas
@@ -89,9 +119,21 @@ class MockProvider(OddsProvider):
                 # partido 1: 'unibet' infravalora la 'home' -> value claro
                 if i == 1 and book == "unibet":
                     probs["home"] *= 0.85
+                # partido 2: 'betway' sube la 'home' justo hasta la cuota de la
+                # 'away'. Mismo precio en pantalla, valor muy distinto.
+                if i == 2 and book == "betway":
+                    probs["home"] *= 0.86
                 # ---------------------------------------------------------
 
-                lu = now - timedelta(minutes=rng.uniform(0.2, 6.0))
+                # un mercado en vivo se repinta cada pocos segundos; uno
+                # prepartido, no. `888sport` va siempre rezagado: asi el panel
+                # enseña tambien el caso «precio viejo, no me fio de el».
+                if book == "888sport":
+                    lu = now - timedelta(minutes=9.0)
+                elif _KICKOFF_MIN[i % len(_KICKOFF_MIN)] <= 0:
+                    lu = now - timedelta(minutes=rng.uniform(0.1, 2.4))
+                else:
+                    lu = now - timedelta(minutes=rng.uniform(0.2, 6.0))
                 if "h2h" in markets:
                     for k in ("home", "draw", "away"):
                         # overround: Σ (prob·margin) = margin > 1

@@ -61,6 +61,23 @@ LONE_OUTLIER = 1.35     # mejor cuota > 2a mejor * esto -> outlier solitario
 STALE_LIVE_SEC = 180    # en vivo, un precio mas viejo que esto no vale
 STALE_PRE_SEC = 3600    # pre-partido se puede ser mas laxo
 
+# ── por que una cuota de 7 casi nunca puede ser "valor" ─────
+#
+#   EV = p * cuota - 1.  Si la probabilidad justa tiene un error tipico σ,
+#   el error del EV es  cuota * σ.  O sea: EL RUIDO DEL EV CRECE CON LA CUOTA.
+#
+#   Con σ = 0.008 (lo que se afinan entre si las casas de referencia):
+#     cuota 1.80  ->  ruido 1.4 %   un +4 % son casi 3 sigmas: señal
+#     cuota 4.00  ->  ruido 3.2 %   un +4 % es 1.2 sigmas: ruido
+#     cuota 7.50  ->  ruido 6.0 %   un +4 % no significa NADA
+#
+#   Por eso no basta con pedir "+3 % de EV": se pide ademas que el EV sea
+#   varias veces su propio ruido. Esto tira solo los longshots y deja pasar
+#   las cuotas de 1.5-2.5, que es donde el dinero es real.
+SIGMA_FLOOR = 0.008     # error irreducible de la probabilidad justa
+Z_MIN = 1.8             # cuantas veces su ruido tiene que valer el EV
+BAND_LO, BAND_HI = 1.40, 3.20   # franja util: donde se apuesta de verdad
+
 _TAG_ORDER = {"VALOR": 0, "DUDOSA": 1, "JUSTA": 2, "FLOJA": 3, "NI_LOCOS": 4}
 
 
@@ -131,14 +148,28 @@ def fair_probabilities(
             "n_sharp": len([b for b in dev if b != exclude_book])}
 
 
+def sigma_of(devigged: dict[str, list[float]], idx: int) -> float:
+    """Error tipico de la probabilidad justa de un resultado.
+
+    Se mide por lo que se separan entre si las casas de referencia. Con pocas
+    casas ese numero se queda corto, asi que hay un suelo: nunca se pretende
+    saber la probabilidad mejor que +-0.8 puntos.
+    """
+    vals = [p[idx] for p in devigged.values()]
+    if len(vals) < 2:
+        return SIGMA_FLOOR
+    return max(SIGMA_FLOOR, _stats.pstdev(vals) / math.sqrt(len(vals)))
+
+
 def _tag(ev: float, *, trusted: bool, suspicious: bool,
-         allow_valor: bool = True) -> str:
-    """`allow_valor=False` para cuotas fuera del rango util (1.30-15): ahi una
-    diferencia de dos centesimas mueve el EV varios puntos, asi que se muestran
-    pero NUNCA se marcan como valor."""
+         allow_valor: bool = True, ev_z: Optional[float] = None) -> str:
+    """`allow_valor=False` para cuotas fuera de la franja util. `ev_z` es el EV
+    medido en veces-su-propio-ruido: por debajo de Z_MIN no es valor, es ruido
+    (y eso es justo lo que descarta los longshots de cuota 5-15)."""
     if suspicious or not trusted:
         return "DUDOSA"
-    if ev >= TAG_VALOR and allow_valor:
+    if (ev >= TAG_VALOR and allow_valor
+            and (ev_z is None or ev_z >= Z_MIN)):
         return "VALOR"
     if ev >= TAG_JUSTA:
         return "JUSTA"
@@ -179,6 +210,50 @@ def _arbitrage(book_prices: dict, outcomes: Sequence[str],
                   "stake_pct": round((1.0 / od) / s * 100, 1)}
                  for o, (bk, od) in zip(outcomes, best)],
     }
+
+
+def compare_outcomes(rows: Sequence[dict], *, same_odds_pct: float = 0.08,
+                     min_gap: float = 0.03) -> list[dict]:
+    """«Estas dos estan a 1.80 las dos, pero a esta metele.»
+
+    Busca parejas de resultados del MISMO partido cuyas cuotas son practicamente
+    iguales (±8 %) y cuyo EV NO lo es. Es la comparacion que una casa de apuestas
+    nunca te va a enseñar: mismo precio, mismo riesgo aparente, y uno de los dos
+    esta bien pagado y el otro no.
+    """
+    out = []
+    usable = [r for r in rows if r.get("ev") is not None and r.get("best_odds")]
+    for i in range(len(usable)):
+        for j in range(i + 1, len(usable)):
+            a, b = usable[i], usable[j]
+            lo = min(a["best_odds"], b["best_odds"])
+            if lo <= 0 or abs(a["best_odds"] - b["best_odds"]) / lo > same_odds_pct:
+                continue
+            gap = a["ev"] - b["ev"]
+            if abs(gap) < min_gap:
+                continue
+            mejor, peor = (a, b) if gap > 0 else (b, a)
+            # «Metele a este» es una recomendacion: no puede recaer sobre un
+            # precio del que el propio motor desconfia (viejo, fuera de banda o
+            # una casa sola pagando de mas). Que el otro lado sea malo no basta
+            # para que este sea bueno.
+            if (mejor["tag"] in ("DUDOSA", "NI_LOCOS") or mejor.get("stale")
+                    or mejor.get("lone_outlier") or not mejor.get("in_band")):
+                continue
+            out.append({
+                "mejor": mejor["name"], "peor": peor["name"],
+                "odds_mejor": mejor["best_odds"], "odds_peor": peor["best_odds"],
+                "book_mejor": mejor["best_book"], "book_peor": peor["best_book"],
+                "ev_mejor": mejor["ev"], "ev_peor": peor["ev"],
+                "gap": round(abs(gap), 4),
+                "texto": (f"{mejor['name']} y {peor['name']} estan casi a la misma "
+                          f"cuota ({mejor['best_odds']} vs {peor['best_odds']}), pero "
+                          f"lo justo seria {mejor['fair_odds']} y {peor['fair_odds']}: "
+                          f"{mejor['name']} paga {abs(gap) * 100:.1f} puntos mejor. "
+                          f"Metele a {mejor['name']}, no a {peor['name']}."),
+            })
+    out.sort(key=lambda c: c["gap"], reverse=True)
+    return out
 
 
 def build_event(
@@ -240,6 +315,8 @@ def build_event(
         lone = (len(ordered) >= 3 and second_odds
                 and best_odds > second_odds * LONE_OUTLIER)
 
+        sigma = sigma_of(devigged, idx) if devigged else SIGMA_FLOOR
+
         per_book = []
         p_fair = None
         if trusted:
@@ -249,13 +326,15 @@ def build_event(
                     continue
                 pf = ref[idx]
                 ev = pf * od - 1.0
+                z = ev / (od * sigma) if od * sigma > 0 else 0.0
                 age = last_seen.get(bk, {}).get(oc.outcome)
                 stale = bool(age and (now - age).total_seconds() > stale_limit)
                 susp = (stale or ev > MAX_EV_PLAUSIBLE
                         or (lone and od == best_odds))
                 per_book.append({
                     "book": bk, "odds": round(od, 3), "ev": round(ev, 4),
-                    "tag": _tag(ev, trusted=True, suspicious=susp,
+                    "ev_z": round(z, 2),
+                    "tag": _tag(ev, trusted=True, suspicious=susp, ev_z=z,
                                 allow_valor=MIN_ODDS <= od <= MAX_ODDS),
                     "stale": stale,
                 })
@@ -266,11 +345,14 @@ def build_event(
             p_fair = ref[idx] if ref else None
 
         ev_best = (p_fair * best_odds - 1.0) if p_fair else None
+        noise = best_odds * sigma
+        ev_z_best = (ev_best / noise) if (ev_best is not None and noise > 0) else None
         age_best = last_seen.get(best_book, {}).get(oc.outcome)
         stale_best = bool(age_best and (now - age_best).total_seconds() > stale_limit)
         susp_best = (ev_best is None or stale_best
                      or ev_best > MAX_EV_PLAUSIBLE or bool(lone))
         tag = _tag(ev_best or 0.0, trusted=trusted, suspicious=susp_best,
+                   ev_z=ev_z_best,
                    allow_valor=MIN_ODDS <= best_odds <= MAX_ODDS)
 
         kelly_pct = 0.0
@@ -283,6 +365,9 @@ def build_event(
             "p_fair": round(p_fair, 4) if p_fair else None,
             "fair_odds": round(1.0 / p_fair, 2) if p_fair else None,
             "ev": round(ev_best, 4) if ev_best is not None else None,
+            "ev_z": round(ev_z_best, 2) if ev_z_best is not None else None,
+            "sigma": round(sigma, 4), "ev_noise": round(noise, 4),
+            "in_band": BAND_LO <= best_odds <= BAND_HI,
             "tag": tag, "kelly_pct": kelly_pct,
             "stale": stale_best,
             "lone_outlier": bool(lone),
@@ -299,10 +384,13 @@ def build_event(
         "dispersion": round(disp, 4),
         "arb": _arbitrage(book_prices, outcomes) if trusted else None,
         "outcomes": out_rows,
+        "compare": compare_outcomes(out_rows) if trusted else [],
         "best_tag": min((o["tag"] for o in out_rows),
                         key=lambda t: _TAG_ORDER.get(t, 9)),
         "best_ev": max((o["ev"] for o in out_rows if o["ev"] is not None),
                        default=None),
+        "best_z": max((o["ev_z"] for o in out_rows if o["ev_z"] is not None),
+                      default=None),
     }
 
 
@@ -330,12 +418,14 @@ def top_opportunities(
     min_ev: float = TAG_VALOR,
     min_books: int = 8,
     max_items: int = 20,
+    band: Optional[tuple[float, float]] = (BAND_LO, BAND_HI),
 ) -> list[dict]:
     """"No dejes escapar esto": solo lo que pasa TODAS las puertas.
 
-    Mas estricto que el tablero: exige mas casas y descarta cualquier cosa
-    marcada como dudosa. Los arbitrajes van primero porque son la unica
-    ventaja que no depende de acertar ninguna probabilidad.
+    Mas estricto que el tablero: mas casas, nada dudoso, y SOLO cuotas dentro
+    de la franja apostable (`band`). Se ordena por señal/ruido, no por EV: a
+    cuota alta el EV es casi todo ruido. Los arbitrajes van primero porque son
+    la unica ventaja que no depende de acertar ninguna probabilidad.
     """
     picks: list[dict] = []
     for e in events:
@@ -360,6 +450,20 @@ def top_opportunities(
         for o in e["outcomes"]:
             if o["tag"] != "VALOR" or o["ev"] is None or o["ev"] < min_ev:
                 continue
+            if band and not (band[0] <= o["best_odds"] <= band[1]):
+                continue            # fuera de la franja apostable
+            comp = next((c for c in e.get("compare", [])
+                         if c["mejor"] == o["name"]), None)
+            why = [
+                f"El consenso de las casas de referencia, quitado el margen, "
+                f"da {o['p_fair'] * 100:.1f}% -> cuota justa {o['fair_odds']}.",
+                f"{o['best_book']} paga {o['best_odds']}: EV {o['ev'] * 100:+.1f}%.",
+                f"Ese EV es {o['ev_z']}x su propio margen de error "
+                f"(±{o['ev_noise'] * 100:.1f}% a esta cuota), asi que no es ruido.",
+                f"{e['n_books']} casas y coinciden (dispersion {e['dispersion']}).",
+            ]
+            if comp:
+                why.append(comp["texto"])
             picks.append({
                 "kind": "VALOR", "event_id": e["event_id"],
                 "match": e["match"], "sport": e["sport"],
@@ -367,18 +471,12 @@ def top_opportunities(
                 "commence": e["commence"], "starts_in_min": e["starts_in_min"],
                 "outcome": o["name"], "book": o["best_book"],
                 "odds": o["best_odds"], "fair_odds": o["fair_odds"],
-                "ev": o["ev"], "kelly_pct": o["kelly_pct"],
-                "n_books": e["n_books"], "arb": None,
-                "why": [
-                    f"El consenso de las casas de referencia, quitado el "
-                    f"margen, da {o['p_fair'] * 100:.1f}% -> cuota justa "
-                    f"{o['fair_odds']}.",
-                    f"{o['best_book']} paga {o['best_odds']}, que esta por "
-                    f"encima: EV {o['ev'] * 100:+.1f}%.",
-                    f"{e['n_books']} casas en el mercado y coinciden "
-                    f"(dispersion {e['dispersion']}), asi que el precio justo "
-                    f"es de fiar.",
-                ],
+                "ev": o["ev"], "ev_z": o["ev_z"], "kelly_pct": o["kelly_pct"],
+                "n_books": e["n_books"], "arb": None, "compare": comp,
+                "why": why,
             })
-    picks.sort(key=lambda p: (0 if p["kind"] == "ARBITRAJE" else 1, -p["ev"]))
+    # se ordena por SEÑAL/RUIDO, no por EV pelado: un +5 % a cuota 1.8 vale
+    # mucho mas que un +5 % a cuota 7, y ordenando por EV salia al reves.
+    picks.sort(key=lambda p: (0 if p["kind"] == "ARBITRAJE" else 1,
+                              -(p.get("ev_z") or 0.0), -p["ev"]))
     return picks[:max_items]

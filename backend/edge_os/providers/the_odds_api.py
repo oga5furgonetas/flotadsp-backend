@@ -50,6 +50,17 @@ class TheOddsAPIProvider(OddsProvider):
     def list_sports(self) -> list[dict]:
         return self._get("/sports", {}).json()
 
+    def list_events(self, sport: str) -> list[dict]:
+        """Eventos sin cuotas. Comprobado contra la API: `x-requests-last: 0`,
+        o sea GRATIS. Es lo que hace viable un radar en vivo con el plan
+        gratuito: se barre todo y solo se pagan las cuotas de lo que esta
+        jugandose."""
+        try:
+            return self._get(f"/sports/{sport}/events",
+                             {"dateFormat": "iso"}).json()
+        except Exception:                                    # noqa: BLE001
+            return []
+
     def fetch(
         self, sport: str, markets: list[str], regions: list[str]
     ) -> list[Quote]:

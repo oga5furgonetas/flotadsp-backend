@@ -161,8 +161,12 @@ def test_top_solo_devuelve_lo_que_pasa_los_filtros():
             assert p["odds"] is None or p["odds"] >= 1.30
             assert p["why"] and len(p["why"]) >= 2
             assert p["n_books"] >= 8
-        evs = [p["ev"] for p in j["picks"] if p["kind"] == "VALOR"]
-        assert evs == sorted(evs, reverse=True)
+        # Ordena por SEÑAL/RUIDO, no por EV pelado: un +5 % a cuota 1.8 vale
+        # mucho mas que un +5 % a cuota 7, porque el error de la probabilidad
+        # se multiplica por la cuota. Ordenando por EV salia justo al reves, y
+        # es lo que ponia arriba los "cuota 4 rentable" que no valen nada.
+        zs = [p["ev_z"] for p in j["picks"] if p["kind"] == "VALOR"]
+        assert zs == sorted(zs, reverse=True), zs
 
 
 def test_top_scope_invalido():
@@ -200,6 +204,49 @@ def test_check_unknown_match_lists_options():
     assert "error" in j and isinstance(j.get("disponibles"), list)
 
 
+def test_barrido_ciego_no_se_traga_el_silencio():
+    """«No hay nada» y «no veo nada» se leen igual en pantalla.
+
+    El radar barre gratis con `/events` y solo paga cuotas donde hay accion. Si
+    esa llamada devuelve vacia —un proveedor que no la implemente, un fallo de
+    la API— el panel diria «no hay nada ahora mismo» sin haber mirado UNA sola
+    cuota. Entonces se paga por los deportes de siempre y se avisa.
+    """
+    mod = _fresh("k-ciego")
+    mod._events_cache.clear()
+    mod._odds_cache.clear()
+    original = mod._fetch_events
+    mod._fetch_events = lambda sport: []              # barrido ciego
+    try:
+        c = _client(mod)
+        tok = c.post("/zzz-test/api/login",
+                     json={"password": "k-ciego"}).json()["token"]
+        j = c.get("/zzz-test/api/top?scope=live",
+                  headers={"Authorization": "Bearer " + tok}).json()
+    finally:
+        mod._fetch_events = original
+        mod._events_cache.clear()
+        mod._odds_cache.clear()
+
+    assert j["pulse"]["blind"] is True, "un barrido a cero tiene que decirlo"
+    assert j["sports"], "con el barrido ciego hay que pedir cuotas igualmente"
+    assert j["n_scanned"] > 0, "no se ha mirado ni un mercado"
+
+
+def test_el_barrido_normal_no_se_marca_como_ciego():
+    """La guarda no puede saltar cuando el barrido funciona: seria gastar
+    credito en todo el catalogo por sistema."""
+    mod = _fresh("k-ve")
+    mod._events_cache.clear()
+    mod._odds_cache.clear()
+    c = _client(mod)
+    tok = c.post("/zzz-test/api/login", json={"password": "k-ve"}).json()["token"]
+    j = c.get("/zzz-test/api/top?scope=live",
+              headers={"Authorization": "Bearer " + tok}).json()
+    assert j["pulse"]["events"] > 0
+    assert j["pulse"]["blind"] is False
+
+
 def test_el_javascript_del_panel_no_tiene_errores_de_sintaxis():
     """El panel es UNA pagina: si su <script> no parsea, no funciona NADA y
     por pantalla solo se ve el formulario de entrada que no responde.
@@ -232,10 +279,14 @@ def test_el_javascript_del_panel_no_tiene_errores_de_sintaxis():
 
 
 def test_el_html_del_panel_cierra_sus_etiquetas():
+    import re
     mod = _fresh("k")
     html = mod._PAGE
-    for tag in ("html", "head", "body", "style", "script"):
-        assert html.count(f"<{tag}") == html.count(f"</{tag}>"), tag
+    for tag in ("html", "head", "body", "style", "script", "header", "section"):
+        # \b para que `<head` no cuente tambien `<header>`
+        abre = len(re.findall(rf"<{tag}\b", html))
+        cierra = len(re.findall(rf"</{tag}>", html))
+        assert abre == cierra, f"{tag}: {abre} abiertas, {cierra} cerradas"
     assert "__BASE__" in html          # el placeholder se sustituye al servir
 
 

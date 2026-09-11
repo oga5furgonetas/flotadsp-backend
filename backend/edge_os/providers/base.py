@@ -26,3 +26,12 @@ class OddsProvider(ABC):
         regions: list[str],
     ) -> list[Quote]:
         """Cuotas actuales (una Quote por casa x resultado)."""
+
+    def list_events(self, sport: str) -> list[dict]:
+        """Eventos SIN cuotas: [{id, commence_time, home_team, away_team}, ...].
+
+        Existe aparte de `fetch` porque en The Odds API esta llamada **cuesta 0
+        creditos**: permite barrer los 75 deportes para saber que hay en vivo y
+        gastar cuota solo donde de verdad hay algo. Por defecto, sin soporte.
+        """
+        return []
