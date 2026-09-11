@@ -91,6 +91,28 @@ def _devig_book(prices: dict, outcomes: Sequence[str]) -> Optional[list[float]]:
         return None
 
 
+def sharp_devigged(book_prices: dict, outcomes: Sequence[str],
+                   sharp_books: Sequence[str]) -> dict[str, list[float]]:
+    """{casa_sharp: probabilidades sin margen}. Se calcula UNA vez por mercado:
+    el de-vig de Shin resuelve una ecuacion y repetirlo por cada precio del
+    tablero multiplicaba el coste por 60."""
+    sharp = set(sharp_books)
+    out: dict[str, list[float]] = {}
+    for bk, prices in book_prices.items():
+        if bk not in sharp:
+            continue
+        p = _devig_book(prices, outcomes)
+        if p is not None:
+            out[bk] = p
+    return out
+
+
+def _pool_excluding(devigged: dict[str, list[float]],
+                    exclude_book: Optional[str] = None) -> Optional[list[float]]:
+    rows = [(1.0, p) for bk, p in devigged.items() if bk != exclude_book]
+    return _pool_logit(rows) if rows else None
+
+
 def fair_probabilities(
     book_prices: dict, outcomes: Sequence[str], sharp_books: Sequence[str],
     *, exclude_book: Optional[str] = None,
@@ -101,17 +123,12 @@ def fair_probabilities(
     NO se emite veredicto de valor (es la puerta que evita inventarse un
     precio justo a partir de casas blandas).
     """
-    sharp = set(sharp_books)
-    rows: list[tuple[float, list[float]]] = []
-    for bk, prices in book_prices.items():
-        if bk not in sharp or bk == exclude_book:
-            continue
-        p = _devig_book(prices, outcomes)
-        if p is not None:
-            rows.append((1.0, p))
-    if not rows:
+    dev = sharp_devigged(book_prices, outcomes, sharp_books)
+    probs = _pool_excluding(dev, exclude_book)
+    if probs is None:
         return None
-    return {"probs": _pool_logit(rows), "n_sharp": len(rows)}
+    return {"probs": probs,
+            "n_sharp": len([b for b in dev if b != exclude_book])}
 
 
 def _tag(ev: float, *, trusted: bool, suspicious: bool,
@@ -191,8 +208,8 @@ def build_event(
     starts_in = ((mb.commence_time - now).total_seconds() / 60.0
                  if mb.commence_time else None)
 
-    base = fair_probabilities(book_prices, outcomes, sharp_books)
-    has_sharp = base is not None
+    devigged = sharp_devigged(book_prices, outcomes, sharp_books)
+    has_sharp = bool(devigged)
 
     # dispersion media de la probabilidad implicita entre casas
     disps = []
@@ -227,11 +244,10 @@ def build_event(
         p_fair = None
         if trusted:
             for bk, od in ordered:
-                ref = fair_probabilities(book_prices, outcomes, sharp_books,
-                                         exclude_book=bk)
+                ref = _pool_excluding(devigged, exclude_book=bk)
                 if ref is None:
                     continue
-                pf = ref["probs"][idx]
+                pf = ref[idx]
                 ev = pf * od - 1.0
                 age = last_seen.get(bk, {}).get(oc.outcome)
                 stale = bool(age and (now - age).total_seconds() > stale_limit)
@@ -246,9 +262,8 @@ def build_event(
                 if bk == best_book:
                     p_fair = pf
         if p_fair is None:
-            ref = fair_probabilities(book_prices, outcomes, sharp_books,
-                                     exclude_book=best_book)
-            p_fair = ref["probs"][idx] if ref else None
+            ref = _pool_excluding(devigged, exclude_book=best_book)
+            p_fair = ref[idx] if ref else None
 
         ev_best = (p_fair * best_odds - 1.0) if p_fair else None
         age_best = last_seen.get(best_book, {}).get(oc.outcome)
