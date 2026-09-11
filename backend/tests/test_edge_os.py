@@ -126,19 +126,48 @@ def _auth_client(pw="k1"):
     return c, {"Authorization": "Bearer " + tok}
 
 
-def test_sports_and_live_with_mock():
+def test_sports_listado():
     c, h = _auth_client()
     sp = c.get("/zzz-test/api/sports", headers=h).json()
     assert sp["real"] is False
     assert any("MOCK" in s["title"] for s in sp["sports"])
+    assert sp["defaults"]
 
-    lv = c.get("/zzz-test/api/live?sport=soccer_spain_la_liga", headers=h).json()
-    assert "rows" in lv and lv["mock"] is True
-    for r in lv["rows"]:
-        assert r["verdict"] in ("VALOR_SIN_VALIDAR", "ARBITRAJE", "DUDOSO")
-        assert r["odds"] is None or r["odds"] >= 1.30
-    evs = [r["ev"] for r in lv["rows"]]
-    assert evs == sorted(evs, reverse=True)
+
+def test_board_trae_todas_las_cuotas_etiquetadas():
+    c, h = _auth_client()
+    j = c.get("/zzz-test/api/board?sport=soccer_spain_la_liga", headers=h).json()
+    assert j["mock"] is True and j["events"]
+    tags = {"VALOR", "JUSTA", "FLOJA", "NI_LOCOS", "DUDOSA"}
+    for e in j["events"]:
+        assert e["match"] and e["outcomes"]
+        for o in e["outcomes"]:
+            assert o["tag"] in tags
+            assert o["best_odds"] > 1.0 and o["best_book"]
+        assert e["best_tag"] in tags
+    # el valor va primero
+    order = [e["best_tag"] for e in j["events"]]
+    assert order == sorted(order, key=lambda t: 0 if t == "VALOR" else 1)
+
+
+def test_top_solo_devuelve_lo_que_pasa_los_filtros():
+    c, h = _auth_client()
+    for scope in ("live", "soon", "today"):
+        j = c.get(f"/zzz-test/api/top?scope={scope}&sports=soccer_spain_la_liga",
+                  headers=h).json()
+        assert "picks" in j and j["scope"] == scope
+        for p in j["picks"]:
+            assert p["kind"] in ("VALOR", "ARBITRAJE")
+            assert p["odds"] is None or p["odds"] >= 1.30
+            assert p["why"] and len(p["why"]) >= 2
+            assert p["n_books"] >= 8
+        evs = [p["ev"] for p in j["picks"] if p["kind"] == "VALOR"]
+        assert evs == sorted(evs, reverse=True)
+
+
+def test_top_scope_invalido():
+    c, h = _auth_client()
+    assert c.get("/zzz-test/api/top?scope=loquesea", headers=h).status_code == 400
 
 
 def test_check_bad_inputs():
@@ -169,6 +198,45 @@ def test_check_unknown_match_lists_options():
         "sport": "soccer_spain_la_liga", "home": "Equipo Inventado FC",
         "away": "Otro Inventado", "side": "home", "odds": 2.0}).json()
     assert "error" in j and isinstance(j.get("disponibles"), list)
+
+
+def test_el_javascript_del_panel_no_tiene_errores_de_sintaxis():
+    """El panel es UNA pagina: si su <script> no parsea, no funciona NADA y
+    por pantalla solo se ve el formulario de entrada que no responde.
+
+    Paso de verdad el 11-09-2026: un `\\"` de mas dentro de un template
+    literal tumbo el panel entero y los tests de API seguian en verde, porque
+    prueban el backend y no el navegador.
+    """
+    import re
+    import shutil
+    import subprocess
+    import tempfile
+
+    node = shutil.which("node")
+    if not node:                                  # pragma: no cover
+        import pytest
+        pytest.skip("node no instalado")
+
+    mod = _fresh("k")
+    html = mod._PAGE.replace("__BASE__", "/p")
+    m = re.search(r"<script>(.*?)</script>", html, re.S)
+    assert m, "el panel no trae <script>"
+
+    with tempfile.TemporaryDirectory() as d:
+        f = os.path.join(d, "panel.js")
+        with open(f, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(m.group(1))
+        r = subprocess.run([node, "--check", f], capture_output=True, text=True)
+    assert r.returncode == 0, "JS del panel roto:\n" + (r.stderr or "")[:2000]
+
+
+def test_el_html_del_panel_cierra_sus_etiquetas():
+    mod = _fresh("k")
+    html = mod._PAGE
+    for tag in ("html", "head", "body", "style", "script"):
+        assert html.count(f"<{tag}") == html.count(f"</{tag}>"), tag
+    assert "__BASE__" in html          # el placeholder se sustituye al servir
 
 
 def test_module_does_not_import_server_or_touch_db():

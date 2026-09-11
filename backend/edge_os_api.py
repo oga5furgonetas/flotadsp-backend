@@ -5,24 +5,19 @@ AISLADO A PROPOSITO:
   * No importa nada de server.py ni toca `db` / `global_db` (gotcha 26).
   * Se activa solo si existe el secret EDGE_OS_PASSWORD. Sin el, `register()`
     no monta ninguna ruta: el path devuelve 404, no existe.
-  * Vive bajo un path no adivinable (EDGE_OS_PATH). "Oculto" = path raro + clave.
-  * Todo el computo va en threadpool y se cachea; nada pesado en el event loop.
+  * Vive bajo un path no adivinable (EDGE_OS_PATH).
+  * Todo el computo va en threadpool; las cuotas se cachean para no quemar la
+    cuota mensual del proveedor.
 
-Rutas (con P = EDGE_OS_PATH):
-  GET  /{P}                       -> el panel (login + UI, HTML autocontenido)
-  GET  /{P}/health                -> {"ok": true}   (sin auth)
-  POST /{P}/api/login             -> {password} -> {token, exp}
-  GET  /{P}/api/sports            -> deportes que ofrece el proveedor
-  POST /{P}/api/check             -> {sport,home,away,side,odds,stake} -> veredicto
-  GET  /{P}/api/live              -> ?sport= : radar de oportunidades ahora mismo
-  GET  /{P}/api/football/leagues  -> ligas con datos empaquetados
-  GET  /{P}/api/football/table    -> ?league= : valoraciones de equipos
-  POST /{P}/api/football/predict  -> {league,home,away} -> 1X2 + mercados
-  GET  /{P}/api/football/backtest -> ?league= : veredicto walk-forward
-
-Sin THE_ODDS_API_KEY las cuotas son de MENTIRA (mock) y el panel lo grita.
-El veredicto mas favorable es "VALOR (sin validar)": el sistema NO promete ganar
-y NO coloca apuestas. Una cuota 1.01 sale como "NO METER".
+Rutas (P = EDGE_OS_PATH):
+  GET  /{P}                       el panel (HTML autocontenido)
+  GET  /{P}/health                {"ok": true, "odds": "real"|"mock"}
+  POST /{P}/api/login             {password} -> {token, exp}
+  GET  /{P}/api/sports            deportes activos del proveedor
+  GET  /{P}/api/board             ?sport= : tablero tipo casa de apuestas
+  GET  /{P}/api/top               ?scope=live|soon|today&sports=csv
+  POST /{P}/api/check             {sport,home,away,side,odds,stake} -> veredicto
+  GET  /{P}/api/football/*        modelo propio de futbol
 """
 
 from __future__ import annotations
@@ -35,6 +30,7 @@ import logging
 import os
 import time
 import unicodedata
+
 from pathlib import Path
 from typing import Optional
 
@@ -50,12 +46,14 @@ _CSV_DIR = _ASSETS / "football"
 
 EDGE_OS_PASSWORD = os.environ.get("EDGE_OS_PASSWORD") or ""
 EDGE_OS_PATH = (os.environ.get("EDGE_OS_PATH") or "panel-x7q2m9").strip("/")
-EDGE_OS_SPORT = os.environ.get("EDGE_OS_SPORT") or "soccer_spain_la_liga"
 _TOKEN_TTL = int(os.environ.get("EDGE_OS_TOKEN_TTL", "43200"))       # 12 h
-_SHARP = ["pinnacle", "betfair_ex_eu", "betfair_ex_uk", "marathonbet", "matchbook"]
+_ODDS_TTL = int(os.environ.get("EDGE_OS_ODDS_TTL", "60"))            # cache cuotas
+_SHARP = ["pinnacle", "betfair_ex_eu", "betfair_ex_uk", "marathonbet",
+          "matchbook", "smarkets"]
+_DEFAULT_SPORTS = [s for s in (os.environ.get("EDGE_OS_SPORTS") or "").split(",") if s]
 
 
-# ── token propio (HMAC sobre la caducidad, clave derivada de la password) ────
+# ── token propio (HMAC sobre la caducidad) ──────────────────────────────────
 def _secret() -> bytes:
     return hashlib.sha256(b"edge_os|v1|" + EDGE_OS_PASSWORD.encode("utf-8")).digest()
 
@@ -78,10 +76,8 @@ def _edgeos_check_token(tok: str) -> bool:
     return hmac.compare_digest(mac, good)
 
 
-# ── anti fuerza bruta (en memoria; el proceso es de larga vida) ─────────────
 _fails: dict[str, list] = {}
-_LOCK_AFTER = 6
-_LOCK_SECS = 300
+_LOCK_AFTER, _LOCK_SECS = 6, 300
 
 
 def _edgeos_locked(ip: str) -> bool:
@@ -96,10 +92,6 @@ def _edgeos_note_fail(ip: str) -> None:
         rec[1] = time.time() + _LOCK_SECS
 
 
-def _edgeos_note_ok(ip: str) -> None:
-    _fails.pop(ip, None)
-
-
 async def _require_token(authorization: str = Header(default="")) -> bool:
     tok = authorization[7:] if authorization.lower().startswith("bearer ") else ""
     if not tok or not _edgeos_check_token(tok):
@@ -107,21 +99,40 @@ async def _require_token(authorization: str = Header(default="")) -> bool:
     return True
 
 
-# ── proveedor de cuotas (mock salvo THE_ODDS_API_KEY) ───────────────────────
-def _make_cfg(sport: str):
-    from edge_os.config import Config
-    return Config({
-        "provider": "the-odds-api" if os.environ.get("THE_ODDS_API_KEY") else "mock",
-        "sport": sport, "markets": ["h2h"], "regions": ["eu", "uk"],
-    })
+# ── proveedor de cuotas + cache (protege la cuota mensual) ──────────────────
+def _real_odds() -> bool:
+    return bool(os.environ.get("THE_ODDS_API_KEY"))
 
 
 def _provider(sport: str):
+    from edge_os.config import Config
     from edge_os.providers import build_provider
-    return build_provider(_make_cfg(sport))
+    return build_provider(Config({
+        "provider": "the-odds-api" if _real_odds() else "mock",
+        "sport": sport, "markets": ["h2h"], "regions": ["eu", "uk"],
+    }))
 
 
-# ── cache del ensemble de futbol por liga (rebuild cada 6 h) ────────────────
+_odds_cache: dict[str, tuple] = {}        # sport -> (quotes, at, remaining)
+_credits_used = {"n": 0}
+
+
+def _fetch_sport(sport: str) -> tuple[list, Optional[str], bool]:
+    """(quotes, peticiones_restantes, venia_de_cache). Cachea `_ODDS_TTL` s."""
+    hit = _odds_cache.get(sport)
+    now = time.time()
+    if hit and now - hit[1] < _ODDS_TTL:
+        return hit[0], hit[2], True
+    prov = _provider(sport)
+    quotes = prov.fetch(sport, ["h2h"], ["eu", "uk"])
+    rem = getattr(prov, "last_remaining", None)
+    _odds_cache[sport] = (quotes, now, rem)
+    if _real_odds():
+        _credits_used["n"] += 1
+    return quotes, rem, False
+
+
+# ── ensemble de futbol (cache 6 h) ──────────────────────────────────────────
 _ens_cache: dict[str, tuple] = {}
 _ens_lock = None
 _ENS_TTL = 6 * 3600
@@ -133,14 +144,6 @@ def _csv_paths(league: str) -> list[str]:
 
 def _leagues_available() -> list[str]:
     return sorted({p.name.split("_")[0] for p in _CSV_DIR.glob("*.csv")})
-
-
-def _build_ensemble(league: str):
-    from edge_os.modeling.football import build_football_ensemble
-    return build_football_ensemble(
-        csv_paths=_csv_paths(league) or None, half_life_days=180.0,
-        include_market=False, synthetic_if_empty=True,
-    )
 
 
 async def _get_ensemble(league: str):
@@ -155,7 +158,14 @@ async def _get_ensemble(league: str):
         hit = _ens_cache.get(league)
         if hit and now - hit[2] < _ENS_TTL:
             return hit[0], hit[1]
-        ens, meta = await asyncio.to_thread(_build_ensemble, league)
+
+        def _build():
+            from edge_os.modeling.football import build_football_ensemble
+            return build_football_ensemble(
+                csv_paths=_csv_paths(league) or None, half_life_days=180.0,
+                include_market=False, synthetic_if_empty=True)
+
+        ens, meta = await asyncio.to_thread(_build)
         _ens_cache[league] = (ens, meta, now)
         return ens, meta
 
@@ -189,7 +199,7 @@ async def _edgeos_index() -> HTMLResponse:
 @router.get(_P + "/health")
 async def _edgeos_health() -> dict:
     return {"ok": True, "service": "edge_os",
-            "odds": "real" if os.environ.get("THE_ODDS_API_KEY") else "mock"}
+            "odds": "real" if _real_odds() else "mock"}
 
 
 @router.post(_P + "/api/login")
@@ -198,12 +208,12 @@ async def _edgeos_login(payload: dict = Body(...),
     ip = (x_forwarded_for.split(",")[0].strip() or "?")[:64]
     if _edgeos_locked(ip):
         raise HTTPException(status_code=429, detail="demasiados intentos, espera unos minutos")
-    given = str(payload.get("password") or "")
-    if not EDGE_OS_PASSWORD or not hmac.compare_digest(given, EDGE_OS_PASSWORD):
+    if not EDGE_OS_PASSWORD or not hmac.compare_digest(
+            str(payload.get("password") or ""), EDGE_OS_PASSWORD):
         _edgeos_note_fail(ip)
         await asyncio.sleep(0.8)
         raise HTTPException(status_code=401, detail="clave incorrecta")
-    _edgeos_note_ok(ip)
+    _fails.pop(ip, None)
     tok, exp = _edgeos_make_token()
     return JSONResponse({"token": tok, "exp": exp})
 
@@ -213,32 +223,108 @@ _sports_cache: list = []
 _sports_at = 0.0
 
 
-@router.get(_P + "/api/sports")
-async def _edgeos_sports(_=Depends(_require_token)) -> dict:
+async def _sports() -> list:
     global _sports_cache, _sports_at
-    real = bool(os.environ.get("THE_ODDS_API_KEY"))
     now = time.time()
-    if not _sports_cache or now - _sports_at > 1800:
+    if not _sports_cache or now - _sports_at > 3600:
         def _run():
             return _provider("upcoming").list_sports()
         try:
             raw = await asyncio.to_thread(_run)
         except Exception as e:                                 # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"proveedor: {e}")
-        sfx = "" if real else " (MOCK)"
-        _sports_cache = [{"key": s["key"],
-                          "title": s.get("title", s["key"]) + sfx,
+        sfx = "" if _real_odds() else " (MOCK)"
+        _sports_cache = [{"key": s["key"], "title": s.get("title", s["key"]) + sfx,
                           "group": s.get("group", "")}
-                         for s in raw if s.get("active")]
+                         for s in raw if s.get("active")
+                         and not s.get("has_outrights")]
         _sports_at = now
-    return {"real": real, "sports": _sports_cache}
+    return _sports_cache
 
 
-# ── ¿meto X? ───────────────────────────────────────────────────────────────
+@router.get(_P + "/api/sports")
+async def _edgeos_sports(_=Depends(_require_token)) -> dict:
+    sp = await _sports()
+    defaults = _DEFAULT_SPORTS or [s["key"] for s in sp[:6]]
+    return {"real": _real_odds(), "sports": sp, "defaults": defaults}
+
+
+def _titles() -> dict:
+    return {s["key"]: s["title"] for s in _sports_cache}
+
+
+# ── tablero ────────────────────────────────────────────────────────────────
+@router.get(_P + "/api/board")
+async def _edgeos_board(sport: str = Query(...),
+                        _=Depends(_require_token)) -> dict:
+    await _sports()
+
+    def _run():
+        from edge_os.board import build_board
+        from edge_os.engine import group_into_books
+        try:
+            quotes, rem, cached = _fetch_sport(sport)
+        except Exception as e:                                 # noqa: BLE001
+            return {"error": f"no pude bajar cuotas: {e}"}
+        books = [b for b in group_into_books(quotes) if b.market == "h2h"]
+        events = build_board(books, sharp_books=_SHARP, sport_titles=_titles())
+        return {"sport": sport, "events": events, "n_events": len(books),
+                "remaining": rem, "cached": cached, "mock": not _real_odds()}
+
+    return await asyncio.to_thread(_run)
+
+
+# ── "no dejes escapar esto" ────────────────────────────────────────────────
+_SCOPES = {"live": None, "soon": 180.0, "today": 1440.0}
+
+
+@router.get(_P + "/api/top")
+async def _edgeos_top(scope: str = Query("soon"),
+                      sports: str = Query(""),
+                      _=Depends(_require_token)) -> dict:
+    if scope not in _SCOPES:
+        raise HTTPException(status_code=400, detail="scope: live | soon | today")
+    sp = await _sports()
+    keys = [k.strip() for k in sports.split(",") if k.strip()]
+    if not keys:
+        keys = _DEFAULT_SPORTS or [s["key"] for s in sp[:5]]
+    keys = keys[:10]                      # tope duro: cada uno gasta 1 consulta
+
+    def _run():
+        from edge_os.board import build_board, top_opportunities
+        from edge_os.engine import group_into_books
+        all_events, rem, errs, n_raw = [], None, [], 0
+        for k in keys:
+            try:
+                quotes, r, _c = _fetch_sport(k)
+            except Exception as e:                             # noqa: BLE001
+                errs.append(f"{k}: {e}")
+                continue
+            rem = r if r is not None else rem
+            books = [b for b in group_into_books(quotes) if b.market == "h2h"]
+            n_raw += len(books)
+            all_events += build_board(books, sharp_books=_SHARP,
+                                      sport_titles=_titles())
+        limit = _SCOPES[scope]
+        if scope == "live":
+            sel = [e for e in all_events if e["live"]]
+        else:
+            sel = [e for e in all_events
+                   if not e["live"] and e["starts_in_min"] is not None
+                   and 0 <= e["starts_in_min"] <= limit]
+        picks = top_opportunities(sel)
+        return {"scope": scope, "sports": keys, "picks": picks,
+                "n_scanned": n_raw, "n_in_scope": len(sel),
+                "remaining": rem, "errors": errs, "mock": not _real_odds()}
+
+    return await asyncio.to_thread(_run)
+
+
+# ── ¿merece la pena esta cuota? ────────────────────────────────────────────
 @router.post(_P + "/api/check")
 async def _edgeos_check(payload: dict = Body(...),
                         _=Depends(_require_token)) -> dict:
-    sport = str(payload.get("sport") or EDGE_OS_SPORT)
+    sport = str(payload.get("sport") or "")
     home = str(payload.get("home") or "").strip()
     away = str(payload.get("away") or "").strip()
     side = str(payload.get("side") or "").strip().lower()
@@ -249,15 +335,14 @@ async def _edgeos_check(payload: dict = Body(...),
         raise HTTPException(status_code=400, detail="cuota o importe no validos")
     if odds <= 1.0:
         raise HTTPException(status_code=400, detail="la cuota debe ser > 1.0")
-    if side not in ("home", "draw", "away", "local", "empate", "visitante"):
-        raise HTTPException(status_code=400, detail="elige local / empate / visitante")
     side = {"local": "home", "empate": "draw", "visitante": "away"}.get(side, side)
+    if side not in ("home", "draw", "away"):
+        raise HTTPException(status_code=400, detail="elige local / empate / visitante")
 
     def _fetch():
         from edge_os.engine import group_into_books
         try:
-            prov = _provider(sport)
-            quotes = prov.fetch(sport, ["h2h"], ["eu", "uk"])
+            quotes, rem, _c = _fetch_sport(sport)
         except Exception as e:                                 # noqa: BLE001
             return {"error": f"no pude bajar cuotas: {e}"}
         books = [b for b in group_into_books(quotes) if b.market == "h2h"]
@@ -265,29 +350,23 @@ async def _edgeos_check(payload: dict = Body(...),
         cand = [b for b in books
                 if (not nh or nh in _norm(b.home) or _norm(b.home) in nh)
                 and (not na or na in _norm(b.away) or _norm(b.away) in na)]
-        if not cand:
-            return {"error": "no encuentro ese partido",
-                    "disponibles": sorted(f"{b.home} vs {b.away}" for b in books)[:40],
-                    "mock": getattr(prov, "name", "") == "mock"}
-        if len(cand) > 1:
-            return {"error": "varios partidos encajan, se mas concreto",
-                    "disponibles": sorted(f"{b.home} vs {b.away}" for b in cand)[:20]}
+        if len(cand) != 1:
+            return {"error": ("no encuentro ese partido" if not cand
+                              else "varios encajan, se mas concreto"),
+                    "disponibles": sorted(f"{b.home} vs {b.away}" for b in
+                                          (cand or books))[:40]}
         mb = cand[0]
         bp: dict[str, dict[str, float]] = {}
         for oc in mb.outcomes:
             for bk, pr in oc.prices.items():
                 bp.setdefault(bk, {})[oc.outcome] = pr
-        return {"home": mb.home, "away": mb.away,
-                "outcomes": [oc.outcome for oc in mb.outcomes], "book_prices": bp,
-                "mock": getattr(prov, "name", "") == "mock",
-                "remaining": getattr(prov, "last_remaining", None)}
+        return {"home": mb.home, "away": mb.away, "book_prices": bp,
+                "outcomes": [oc.outcome for oc in mb.outcomes], "remaining": rem}
 
     got = await asyncio.to_thread(_fetch)
     if "error" in got:
         return got
-
-    labels = {"home": got["home"], "away": got["away"], "draw": "Draw"}
-    target = labels[side]
+    target = {"home": got["home"], "away": got["away"], "draw": "Draw"}[side]
     if target not in got["outcomes"]:
         return {"error": f"ese mercado no tiene '{side}'", "resultados": got["outcomes"]}
 
@@ -309,46 +388,13 @@ async def _edgeos_check(payload: dict = Body(...),
             model_probs, trust = None, 0.0
 
     from edge_os.quant.betcheck import evaluate_bet
-    res = evaluate_bet(
-        book_prices=got["book_prices"], outcomes=got["outcomes"], target=target,
-        taken_odds=odds, stake=stake, sharp_books=_SHARP,
-        model_probs=model_probs, model_trust=trust,
-    )
-    res["match"] = f"{got['home']} vs {got['away']}"
-    res["sport"] = sport
-    res["side"] = side
-    res["mock"] = got["mock"]
-    res["remaining"] = got["remaining"]
+    res = evaluate_bet(book_prices=got["book_prices"], outcomes=got["outcomes"],
+                       target=target, taken_odds=odds, stake=stake,
+                       sharp_books=_SHARP, model_probs=model_probs,
+                       model_trust=trust)
+    res.update(match=f"{got['home']} vs {got['away']}", sport=sport, side=side,
+               mock=not _real_odds(), remaining=got.get("remaining"))
     return res
-
-
-# ── ahora mismo ────────────────────────────────────────────────────────────
-@router.get(_P + "/api/live")
-async def _edgeos_live(sport: str = Query(default=""),
-                       dudoso: int = Query(default=0),
-                       _=Depends(_require_token)) -> dict:
-    sport = sport or EDGE_OS_SPORT
-
-    def _run():
-        from edge_os.engine import group_into_books
-        from edge_os.live_radar import radar_from_books
-        try:
-            prov = _provider(sport)
-            quotes = prov.fetch(sport, ["h2h"], ["eu", "uk"])
-        except Exception as e:                                 # noqa: BLE001
-            return {"error": f"no pude bajar cuotas: {e}"}
-        books = group_into_books(quotes)
-        rows = radar_from_books(books, sharp_books=_SHARP, min_odds=1.30,
-                                min_edge=0.03, include_dudoso=bool(dudoso))
-        return {
-            "sport": sport, "provider": getattr(prov, "name", "?"),
-            "mock": getattr(prov, "name", "") == "mock",
-            "remaining": getattr(prov, "last_remaining", None),
-            "n_events": len([b for b in books if b.market == "h2h"]),
-            "rows": rows,
-        }
-
-    return await asyncio.to_thread(_run)
 
 
 # ── futbol (modelo propio) ─────────────────────────────────────────────────
@@ -365,24 +411,19 @@ async def _edgeos_table(league: str = Query("SP1"),
     ens, meta = await _get_ensemble(league)
     dc = ens._members.get("dixon_coles")
     elo = ens._members.get("elo")
-    rows = []
-    for t in sorted(getattr(dc, "teams_", [])):
-        rows.append({
-            "team": t,
-            "atk": round(dc.attack_.get(t, 0.0), 3),
-            "dfn": round(dc.defense_.get(t, 0.0), 3),
-            "strength": round(dc.attack_.get(t, 0.0) + dc.defense_.get(t, 0.0), 3),
-            "elo": round(getattr(elo, "ratings_", {}).get(t, 0.0), 1),
-            "eff_matches": round(getattr(dc, "eff_matches_", {}).get(t, 0.0), 1),
-        })
+    rows = [{
+        "team": t,
+        "strength": round(dc.attack_.get(t, 0.0) + dc.defense_.get(t, 0.0), 3),
+        "atk": round(dc.attack_.get(t, 0.0), 3),
+        "dfn": round(dc.defense_.get(t, 0.0), 3),
+        "elo": round(getattr(elo, "ratings_", {}).get(t, 0.0), 1),
+    } for t in sorted(getattr(dc, "teams_", []))]
     rows.sort(key=lambda r: r["strength"], reverse=True)
-    return {
-        "league": league, "source": meta.get("source"),
-        "simulated": bool(meta.get("simulated")), "n_matches": meta.get("n_matches"),
-        "home_adv": round(getattr(dc, "home_adv_", 0.0), 3),
-        "rho": round(getattr(dc, "rho_", 0.0), 3),
-        "teams": rows, "verdict": _verdict_file(league),
-    }
+    return {"league": league, "source": meta.get("source"),
+            "simulated": bool(meta.get("simulated")),
+            "n_matches": meta.get("n_matches"),
+            "home_adv": round(getattr(dc, "home_adv_", 0.0), 3),
+            "teams": rows, "verdict": _verdict_file(league)}
 
 
 @router.post(_P + "/api/football/predict")
@@ -397,314 +438,366 @@ async def _edgeos_predict(payload: dict = Body(...),
     from edge_os.modeling.entities import resolve_pair
     rh, ra = resolve_pair(home, away, set(meta.get("teams", [])))
     if rh is None or ra is None:
-        falta = home if rh is None else away
-        raise HTTPException(status_code=404,
-                            detail=f"equipo no reconocido en {league}: {falta}")
-
-    def _run():
-        fc = ens.predict(rh, ra)
-        dcm = ens._members.get("dixon_coles")
-        mk = dcm.predict(rh, ra).markets if dcm else None
-        return fc, mk
-
-    fc, mk = await asyncio.to_thread(_run)
+        raise HTTPException(status_code=404, detail="equipo no reconocido: "
+                            + (home if rh is None else away))
+    fc = await asyncio.to_thread(ens.predict, rh, ra)
     if fc is None:
         raise HTTPException(status_code=500, detail="el ensemble no pudo predecir")
-    out = {
-        "league": league, "home": rh, "away": ra,
-        "p_home": round(fc.p_home, 4), "p_draw": round(fc.p_draw, 4),
-        "p_away": round(fc.p_away, 4),
-        "fair_home": round(1 / fc.p_home, 2), "fair_draw": round(1 / fc.p_draw, 2),
-        "fair_away": round(1 / fc.p_away, 2),
-        "interval_home": [round(fc.p_home_interval[0], 3),
-                          round(fc.p_home_interval[1], 3)],
-        "model_agreement": fc.model_agreement,
-        "members": {k: [round(x, 3) for x in v] for k, v in fc.members.items()},
-        "notes": fc.notes, "verdict": _verdict_file(league),
-    }
+    dcm = ens._members.get("dixon_coles")
+    mk = dcm.predict(rh, ra).markets if dcm else None
+    out = {"league": league, "home": rh, "away": ra,
+           "p_home": round(fc.p_home, 4), "p_draw": round(fc.p_draw, 4),
+           "p_away": round(fc.p_away, 4),
+           "fair_home": round(1 / fc.p_home, 2),
+           "fair_draw": round(1 / fc.p_draw, 2),
+           "fair_away": round(1 / fc.p_away, 2),
+           "model_agreement": fc.model_agreement,
+           "members": {k: [round(x, 3) for x in v] for k, v in fc.members.items()},
+           "verdict": _verdict_file(league)}
     if mk is not None:
         out["over_2_5"] = round(mk.over.get(2.5, 0.0), 4)
         out["btts_yes"] = round(mk.btts_yes, 4)
-        out["fair_over_2_5"] = round(1 / mk.over[2.5], 2) if mk.over.get(2.5) else None
     return out
 
 
-@router.get(_P + "/api/football/backtest")
-async def _edgeos_backtest(league: str = Query("SP1"),
-                           _=Depends(_require_token)) -> dict:
-    v = _verdict_file(league)
-    if not v:
-        return {"league": league, "available": False}
-    return {"league": league, "available": True, **v}
-
-
-# ── registro (lo llama server.py, protegido con try/except) ─────────────────
+# ── registro ───────────────────────────────────────────────────────────────
 def register(app) -> None:
     if not EDGE_OS_PASSWORD:
         _log.info("edge_os desactivado (sin EDGE_OS_PASSWORD)")
         return
     app.include_router(router)
-    _log.info("edge_os montado en /%s (oculto tras clave)", EDGE_OS_PATH)
+    _log.info("edge_os montado en /%s", EDGE_OS_PATH)
 
 
-# ── el panel (HTML autocontenido, sin dependencias externas) ───────────────
 _PAGE = r"""<!doctype html><html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><title>EDGE OS</title>
 <style>
- :root{--bg:#0b0e13;--panel:#141922;--line:#232b38;--fg:#e6e9ef;--dim:#8a94a6;
-       --accent:#4da3ff;--good:#3fb950;--warn:#d29922;--bad:#f85149}
- *{box-sizing:border-box}
- body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,
-      Segoe UI,Roboto,Helvetica,Arial,sans-serif}
- .wrap{max-width:1080px;margin:0 auto;padding:20px}
- h1{font-size:18px;letter-spacing:.5px;margin:0 0 2px}
- .sub{color:var(--dim);font-size:12px;margin-bottom:16px}
- .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-       padding:16px;margin-bottom:16px}
- input,select,button{font:inherit;color:var(--fg);background:#0e131b;
-       border:1px solid var(--line);border-radius:7px;padding:9px 10px}
- button{background:var(--accent);color:#04121f;border:0;font-weight:600;cursor:pointer}
- button.ghost{background:#0e131b;color:var(--fg);border:1px solid var(--line);font-weight:500}
- button:disabled{opacity:.5;cursor:default}
- label{display:block;color:var(--dim);font-size:12px;margin:10px 0 4px}
- table{width:100%;border-collapse:collapse;font-size:13px}
- th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
- th{color:var(--dim);font-weight:600}
- .tag{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:800}
- .t-bad{background:rgba(248,81,73,.16);color:var(--bad)}
- .t-warn{background:rgba(210,153,34,.18);color:var(--warn)}
- .t-good{background:rgba(63,185,80,.18);color:var(--good)}
- .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
- .tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
- .tabs button{background:#0e131b;color:var(--dim);border:1px solid var(--line)}
- .tabs button.on{background:var(--panel);color:var(--fg)}
- .verdict{font-size:16px;font-weight:700;margin:4px 0 10px}
- .muted{color:var(--dim)}
- ul{margin:8px 0 0;padding-left:18px}li{margin:2px 0}
- pre{white-space:pre-wrap;font-size:12px;color:var(--dim);margin:6px 0 0}
- .banner{border-left:3px solid var(--bad);background:rgba(248,81,73,.08);
-         padding:10px 12px;border-radius:6px;font-size:12px;margin-bottom:12px}
- .warnmock{border-left:3px solid var(--warn);background:rgba(210,153,34,.10);
-           padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:12px}
+:root{--bg:#0a0d12;--card:#121721;--card2:#0f141c;--line:#212a38;--fg:#e8ecf3;
+ --dim:#7d8799;--accent:#4da3ff;--valor:#2ea043;--justa:#57657d;
+ --floja:#c99026;--malo:#e5534b;--duda:#8b5cf6}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+ font:14px/1.45 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:1180px;margin:0 auto;padding:16px}
+.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+h1{font-size:17px;letter-spacing:1px;margin:0;font-weight:800}
+.pill{font-size:11px;padding:3px 9px;border-radius:999px;background:#18202c;
+ color:var(--dim);border:1px solid var(--line)}
+.pill.ok{color:var(--valor);border-color:#1d3a26}
+.pill.warn{color:var(--floja);border-color:#3a3018}
+.sub{color:var(--dim);font-size:12px;margin:2px 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+ padding:14px;margin-bottom:12px}
+input,select,button{font:inherit;color:var(--fg);background:#0d1219;
+ border:1px solid var(--line);border-radius:8px;padding:9px 11px}
+button{background:var(--accent);color:#05121f;border:0;font-weight:700;cursor:pointer}
+button.ghost{background:#0d1219;color:var(--fg);border:1px solid var(--line);font-weight:600}
+button:disabled{opacity:.45;cursor:default}
+label{display:block;color:var(--dim);font-size:11px;margin:0 0 4px;
+ text-transform:uppercase;letter-spacing:.4px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.tabs{display:flex;gap:6px;margin:14px 0;flex-wrap:wrap}
+.tabs button{background:#0d1219;color:var(--dim);border:1px solid var(--line);
+ font-weight:600;padding:8px 14px}
+.tabs button.on{background:var(--card);color:var(--fg);border-color:#31405a}
+.muted{color:var(--dim)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+.chip{font-size:12px;padding:5px 10px;border-radius:999px;background:#0d1219;
+ border:1px solid var(--line);color:var(--dim);cursor:pointer;user-select:none}
+.chip.on{background:#16283d;border-color:#31507a;color:#cfe4ff}
+/* tablero */
+.ev{border:1px solid var(--line);border-radius:10px;margin-bottom:8px;
+ background:var(--card2);overflow:hidden}
+.ev-h{display:flex;justify-content:space-between;align-items:center;gap:10px;
+ padding:10px 12px;cursor:pointer}
+.ev-h:hover{background:#141b26}
+.ev-t{font-weight:700}
+.ev-s{font-size:11px;color:var(--dim)}
+.tiles{display:grid;gap:8px;padding:0 12px 12px;
+ grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.tile{border:1px solid var(--line);border-radius:9px;padding:9px 10px;
+ background:#0d1219;display:flex;flex-direction:column;gap:2px}
+.tile .n{font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;
+ text-overflow:ellipsis}
+.tile .o{font-size:20px;font-weight:800;letter-spacing:-.5px}
+.tile .b{font-size:11px;color:var(--dim)}
+.tile .lab{font-size:10px;font-weight:800;letter-spacing:.6px;margin-top:3px}
+.t-VALOR{border-color:#1f5130;background:#0e1d14}.t-VALOR .lab{color:var(--valor)}
+.t-JUSTA .lab{color:var(--justa)}
+.t-FLOJA .lab{color:var(--floja)}
+.t-NI_LOCOS{border-color:#4a2320}.t-NI_LOCOS .lab{color:var(--malo)}
+.t-DUDOSA .lab{color:var(--duda)}
+.duda{color:var(--duda)}
+.det{padding:0 12px 12px;font-size:12px}
+.det table{width:100%;border-collapse:collapse}
+.det td,.det th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
+.det th{color:var(--dim);font-weight:600}
+/* picks */
+.pick{border:1px solid #1f5130;background:linear-gradient(180deg,#0f1e16,#0d1219);
+ border-radius:12px;padding:14px;margin-bottom:10px}
+.pick.arb{border-color:#31507a;background:linear-gradient(180deg,#0e1825,#0d1219)}
+.pick-h{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;
+ align-items:baseline}
+.pick .sel{font-size:19px;font-weight:800;margin:6px 0 2px}
+.pick .nums{display:flex;gap:18px;flex-wrap:wrap;margin:8px 0}
+.pick .nums div span{display:block;font-size:11px;color:var(--dim)}
+.pick .nums div b{font-size:17px}
+.why{margin:8px 0 0;padding-left:18px;color:#b9c3d3;font-size:12.5px}
+.why li{margin:3px 0}
+.badge{font-size:11px;font-weight:800;padding:3px 9px;border-radius:999px}
+.badge.v{background:#123420;color:#3fd166}
+.badge.a{background:#132540;color:#6aa6ff}
+.badge.live{background:#3a1417;color:#ff6b6b}
+.empty{padding:26px;text-align:center;color:var(--dim)}
+.note{border-left:3px solid #31405a;background:#0f1620;padding:9px 12px;
+ border-radius:6px;font-size:12px;color:#9fb0c7;margin-bottom:12px}
 </style></head><body><div class="wrap">
-<h1>EDGE&nbsp;OS</h1>
-<div class="sub">Inteligencia cuantitativa de mercados deportivos &mdash; panel privado</div>
+<div class="top"><h1>EDGE&nbsp;OS</h1>
+  <span class="pill" id="p-odds">…</span>
+  <span class="pill" id="p-cred"></span></div>
+<div class="sub">Cuotas de todas las casas, cada una con su veredicto</div>
 
 <div id="login" class="card" style="max-width:340px">
   <label>Clave</label>
-  <div class="row"><input id="pw" type="password" autocomplete="current-password" style="flex:1">
+  <div class="row"><input id="pw" type="password" style="flex:1">
   <button id="go">Entrar</button></div>
-  <div id="lerr" class="muted" style="margin-top:8px;color:var(--bad)"></div>
+  <div id="lerr" style="margin-top:8px;color:var(--malo);font-size:12px"></div>
 </div>
 
 <div id="app" style="display:none">
-  <div class="banner">Esto es <b>analisis, no consejo de apuesta</b>, y no coloca
-    ninguna apuesta. El veredicto mas favorable es &laquo;VALOR (sin validar)&raquo;:
-    el sistema <b>no demuestra ganar a largo plazo</b>.</div>
-  <div id="mockw" class="warnmock" style="display:none"></div>
-  <div class="tabs">
-    <button data-tab="check" class="on">&iquest;Meto 100&euro;?</button>
-    <button data-tab="live">Ahora mismo</button>
-    <button data-tab="futbol">Futbol</button>
-  </div>
+<div class="tabs">
+  <button data-tab="top" class="on">🔥 No dejes escapar</button>
+  <button data-tab="board">📋 Tablero</button>
+  <button data-tab="check">🧮 ¿Merece la pena?</button>
+  <button data-tab="fut">⚽ Fútbol</button>
+</div>
 
-  <div id="tab-check">
-    <div class="card">
-      <div class="row">
-        <div style="flex:1;min-width:180px"><label>Deporte</label><select id="c-sport"></select></div>
-        <div style="flex:1;min-width:130px"><label>Equipo local</label><input id="c-home" placeholder="Real Madrid"></div>
-        <div style="flex:1;min-width:130px"><label>Equipo visitante</label><input id="c-away" placeholder="Sevilla"></div>
-      </div>
-      <div class="row" style="margin-top:8px">
-        <div><label>A quien apuestas</label><select id="c-side">
-          <option value="home">Gana el local</option>
-          <option value="draw">Empate</option>
-          <option value="away">Gana el visitante</option></select></div>
-        <div><label>Cuota que ves</label><input id="c-odds" type="number" step="0.01" placeholder="2.10" style="width:110px"></div>
-        <div><label>Importe (&euro;)</label><input id="c-stake" type="number" step="10" value="100" style="width:100px"></div>
-        <button id="c-go">Comprobar</button>
-      </div>
-      <div id="c-out" style="margin-top:14px"></div>
-    </div>
+<!-- TOP -->
+<div id="tab-top">
+ <div class="card">
+  <div class="row">
+   <div><label>Cuándo</label><select id="t-scope">
+     <option value="live">🔴 En vivo ahora</option>
+     <option value="soon" selected>Próximas 3 h</option>
+     <option value="today">Hoy (24 h)</option></select></div>
+   <div style="flex:1"><label>Bankroll €</label><input id="t-bank" type="number" value="1000" style="width:120px"></div>
+   <button id="t-go">Buscar</button>
   </div>
+  <label style="margin-top:12px">Deportes a escanear (cada uno gasta 1 consulta)</label>
+  <div class="chips" id="t-chips"></div>
+  <div class="muted" id="t-meta" style="font-size:12px"></div>
+ </div>
+ <div id="t-out"></div>
+</div>
 
-  <div id="tab-live" style="display:none">
-    <div class="card">
-      <div class="row">
-        <div style="flex:1;min-width:200px"><label>Deporte</label><select id="l-sport"></select></div>
-        <button id="l-go">Escanear ahora</button>
-        <label style="display:flex;gap:6px;align-items:center;margin:0"><input type="checkbox" id="l-auto" style="width:auto"> auto (5 min)</label>
-        <span class="muted" id="l-meta"></span>
-      </div>
-      <div id="l-out" style="margin-top:14px"><span class="muted">Pulsa &laquo;Escanear ahora&raquo;.</span></div>
-    </div>
-  </div>
+<!-- TABLERO -->
+<div id="tab-board" style="display:none">
+ <div class="card"><div class="row">
+   <div style="flex:1;min-width:220px"><label>Deporte</label><select id="b-sport"></select></div>
+   <button id="b-go">Ver cuotas</button>
+   <label style="display:flex;gap:6px;align-items:center;margin:0;text-transform:none">
+     <input type="checkbox" id="b-only" style="width:auto"> solo con valor</label>
+   <span class="muted" id="b-meta" style="font-size:12px"></span>
+ </div></div>
+ <div id="b-out"></div>
+</div>
 
-  <div id="tab-futbol" style="display:none">
-    <div class="card">
-      <div class="row">
-        <div><label>Liga</label><select id="f-liga"></select></div>
-        <div><label>Local</label><input id="f-home" placeholder="Real Madrid"></div>
-        <div><label>Visitante</label><input id="f-away" placeholder="Barcelona"></div>
-        <button id="f-pred">Predecir</button>
-        <button id="f-tabla" class="ghost">Ver valoraciones</button>
-      </div>
-      <div id="f-out" style="margin-top:14px"></div>
-    </div>
-    <div id="f-tabla-out"></div>
+<!-- CHECK -->
+<div id="tab-check" style="display:none">
+ <div class="card">
+  <div class="row">
+   <div style="flex:1;min-width:170px"><label>Deporte</label><select id="c-sport"></select></div>
+   <div style="flex:1;min-width:130px"><label>Local</label><input id="c-home"></div>
+   <div style="flex:1;min-width:130px"><label>Visitante</label><input id="c-away"></div>
   </div>
+  <div class="row" style="margin-top:8px">
+   <div><label>A quién</label><select id="c-side">
+     <option value="home">Gana local</option><option value="draw">Empate</option>
+     <option value="away">Gana visitante</option></select></div>
+   <div><label>Cuota</label><input id="c-odds" type="number" step="0.01" style="width:100px"></div>
+   <div><label>Importe €</label><input id="c-stake" type="number" value="100" style="width:100px"></div>
+   <button id="c-go">Comprobar</button>
+  </div>
+  <div id="c-out" style="margin-top:12px"></div>
+ </div>
+</div>
+
+<!-- FUTBOL -->
+<div id="tab-fut" style="display:none">
+ <div class="card"><div class="row">
+   <div><label>Liga</label><select id="f-liga"></select></div>
+   <div><label>Local</label><input id="f-home"></div>
+   <div><label>Visitante</label><input id="f-away"></div>
+   <button id="f-go">Predecir</button>
+   <button id="f-tab" class="ghost">Valoraciones</button>
+ </div><div id="f-out" style="margin-top:12px"></div></div>
+ <div id="f-tout"></div>
+</div>
 </div>
 
 <script>
 const BASE="__BASE__";
 let TOKEN=sessionStorage.getItem("edgeos_tok")||"";
-let AUTO=null;
+let SPORTS=[],PICKED=new Set();
 const $=s=>document.querySelector(s);
-async function api(path,opts){
-  opts=opts||{};opts.headers=Object.assign({"content-type":"application/json"},opts.headers||{});
-  if(TOKEN)opts.headers.authorization="Bearer "+TOKEN;
-  const r=await fetch(BASE+path,opts);
-  if(r.status===401){logout();throw new Error("sesion caducada, entra otra vez");}
-  const j=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error(j.detail||("error "+r.status));
-  return j;
-}
-function logout(){TOKEN="";sessionStorage.removeItem("edgeos_tok");$("#app").style.display="none";$("#login").style.display="";}
-function pct(x){return (x*100).toFixed(1)+"%";}
-function tagFor(v){
-  if(v==="ARBITRAJE")return '<span class="tag t-good">ARBITRAJE</span>';
-  if(v==="VALOR_SIN_VALIDAR")return '<span class="tag t-good">VALOR (sin validar)</span>';
-  if(v==="DUDOSO")return '<span class="tag t-warn">DUDOSO</span>';
-  if(v==="NO_METER")return '<span class="tag t-bad">NO METER</span>';
-  return '<span class="tag t-warn">SIN DATOS</span>';
-}
-async function showApp(){
-  $("#login").style.display="none";$("#app").style.display="";
-  try{
-    const h=await fetch(BASE+"/health").then(r=>r.json());
-    if(h.odds==="mock"){
-      $("#mockw").style.display="";
-      $("#mockw").innerHTML="Sin <b>THE_ODDS_API_KEY</b>: las cuotas de abajo son "+
-        "<b>ALEATORIAS</b>, no valen para nada. Ponla con <code>fly secrets set "+
-        "THE_ODDS_API_KEY=...</code> y vuelve a entrar.";
-    }
-  }catch(e){}
-  loadSports();loadLeagues();
-}
-$("#go").onclick=async()=>{
-  $("#lerr").textContent="";
-  try{
-    const j=await api("/api/login",{method:"POST",body:JSON.stringify({password:$("#pw").value})});
-    TOKEN=j.token;sessionStorage.setItem("edgeos_tok",TOKEN);showApp();
-  }catch(e){$("#lerr").textContent=e.message;}
-};
+const esc=s=>String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pc=x=>(x*100).toFixed(1)+"%";
+const sgn=x=>(x>=0?"+":"")+(x*100).toFixed(1)+"%";
+
+async function api(p,o){o=o||{};o.headers=Object.assign({"content-type":"application/json"},o.headers||{});
+ if(TOKEN)o.headers.authorization="Bearer "+TOKEN;
+ const r=await fetch(BASE+p,o);
+ if(r.status===401){logout();throw new Error("sesión caducada, vuelve a entrar");}
+ const j=await r.json().catch(()=>({}));
+ if(!r.ok)throw new Error(j.detail||("error "+r.status));return j;}
+function logout(){TOKEN="";sessionStorage.removeItem("edgeos_tok");
+ $("#app").style.display="none";$("#login").style.display="";}
+
+$("#go").onclick=async()=>{$("#lerr").textContent="";
+ try{const j=await api("/api/login",{method:"POST",body:JSON.stringify({password:$("#pw").value})});
+  TOKEN=j.token;sessionStorage.setItem("edgeos_tok",TOKEN);boot();}
+ catch(e){$("#lerr").textContent=e.message;}};
 $("#pw").addEventListener("keydown",e=>{if(e.key==="Enter")$("#go").click();});
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
-  document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));
-  ["check","live","futbol"].forEach(t=>$("#tab-"+t).style.display=(b.dataset.tab===t)?"":"none");
-});
+ document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on",x===b));
+ ["top","board","check","fut"].forEach(t=>$("#tab-"+t).style.display=(b.dataset.tab===t)?"":"none");});
 
-async function loadSports(){
-  try{
-    const j=await api("/api/sports");
-    const opts=j.sports.map(s=>`<option value="${s.key}">${s.title}</option>`).join("");
-    $("#c-sport").innerHTML=opts;$("#l-sport").innerHTML=opts;
-  }catch(e){}
+async function boot(){
+ $("#login").style.display="none";$("#app").style.display="";
+ try{const h=await fetch(BASE+"/health").then(r=>r.json());
+  $("#p-odds").textContent=h.odds==="real"?"cuotas reales":"MOCK (cuotas falsas)";
+  $("#p-odds").className="pill "+(h.odds==="real"?"ok":"warn");}catch(e){}
+ try{const j=await api("/api/sports");SPORTS=j.sports;
+  const opts=SPORTS.map(s=>`<option value="${esc(s.key)}">${esc(s.title)}</option>`).join("");
+  $("#b-sport").innerHTML=opts;$("#c-sport").innerHTML=opts;
+  PICKED=new Set(j.defaults);drawChips();}catch(e){}
+ try{const j=await api("/api/football/leagues");
+  $("#f-liga").innerHTML=j.leagues.map(l=>`<option value="${l.code}">${esc(l.name)}</option>`).join("");}catch(e){}
 }
-async function loadLeagues(){
-  try{
-    const j=await api("/api/football/leagues");
-    $("#f-liga").innerHTML=j.leagues.map(l=>`<option value="${l.code}">${l.name}</option>`).join("");
-  }catch(e){}
+function drawChips(){
+ $("#t-chips").innerHTML=SPORTS.map(s=>
+  `<span class="chip${PICKED.has(s.key)?" on":""}" data-k="${esc(s.key)}">${esc(s.title)}</span>`).join("");
+ $("#t-chips").querySelectorAll(".chip").forEach(c=>c.onclick=()=>{
+  const k=c.dataset.k;if(PICKED.has(k))PICKED.delete(k);else if(PICKED.size<10)PICKED.add(k);
+  drawChips();});
+ $("#t-meta").textContent=PICKED.size+" deporte(s) · gastará "+PICKED.size+" consulta(s) (se cachean 60 s)";
 }
+function cred(r){if(r!=null)$("#p-cred").textContent="quedan "+r+" consultas";}
 
+/* ── NO DEJES ESCAPAR ── */
+$("#t-go").onclick=async()=>{
+ const out=$("#t-out");out.innerHTML='<div class="card empty">buscando…</div>';
+ try{
+  const j=await api("/api/top?scope="+$("#t-scope").value+"&sports="+encodeURIComponent([...PICKED].join(",")));
+  cred(j.remaining);
+  const bank=parseFloat($("#t-bank").value)||1000;
+  let head=`<div class="note">Escaneados <b>${j.n_scanned}</b> partidos · <b>${j.n_in_scope}</b> en la ventana elegida · <b>${j.picks.length}</b> pasan todos los filtros.`+
+   (j.mock?" · <b>MOCK: no vale</b>":"")+
+   (j.errors&&j.errors.length?" · errores: "+esc(j.errors.join("; ")):"")+"</div>";
+  if(!j.picks.length){out.innerHTML=head+
+   '<div class="card empty">Nada que merezca la pena ahora mismo.<br><span style="font-size:12px">Es lo normal: la mayoría de precios son correctos. Prueba otra ventana o más deportes.</span></div>';return;}
+  out.innerHTML=head+j.picks.map(p=>{
+   const arb=p.kind==="ARBITRAJE";
+   const stake=p.kelly_pct?(bank*p.kelly_pct/100):null;
+   const legs=arb?`<table style="width:100%;margin-top:8px;font-size:12.5px">${
+     p.arb.legs.map(l=>`<tr><td>${esc(l.outcome)}</td><td class="muted">${esc(l.book)}</td>
+     <td><b>${l.odds}</b></td><td>${(bank*l.stake_pct/100).toFixed(0)} €</td></tr>`).join("")}</table>`:"";
+   return `<div class="pick${arb?" arb":""}">
+    <div class="pick-h">
+      <div><span class="badge ${arb?"a":"v"}">${arb?"ARBITRAJE":"VALOR"}</span>
+        ${p.live?'<span class="badge live">EN VIVO</span>':""}
+        <span class="muted" style="font-size:12px">&nbsp;${esc(p.sport_title||p.sport)}</span></div>
+      <div class="muted" style="font-size:12px">${p.live?"en juego":(p.starts_in_min!=null?"empieza en "+Math.round(p.starts_in_min)+" min":"")}</div>
+    </div>
+    <div class="muted" style="font-size:13px">${esc(p.match)}</div>
+    <div class="sel">${esc(p.outcome)}${p.odds?` &nbsp;<span style="color:var(--valor)">@ ${p.odds}</span>`:""}
+      ${p.book&&p.book!=="varias"?`<span class="muted" style="font-size:13px;font-weight:600"> en ${esc(p.book)}</span>`:""}</div>
+    <div class="nums">
+      ${p.fair_odds?`<div><span>Cuota justa</span><b>${p.fair_odds}</b></div>`:""}
+      <div><span>Ventaja (EV)</span><b style="color:var(--valor)">${sgn(p.ev)}</b></div>
+      ${stake?`<div><span>Meter (Kelly ¼)</span><b>${stake.toFixed(0)} €</b></div>`:""}
+      <div><span>Casas</span><b>${p.n_books}</b></div>
+    </div>
+    <ul class="why">${p.why.map(w=>"<li>"+esc(w)+"</li>").join("")}</ul>${legs}</div>`;}).join("");
+ }catch(e){out.innerHTML=`<div class="card" style="color:var(--malo)">${esc(e.message)}</div>`;}
+};
+
+/* ── TABLERO ── */
+const LBL={VALOR:"VALOR",JUSTA:"PRECIO JUSTO",FLOJA:"FLOJA",NI_LOCOS:"NI LOCOS",DUDOSA:"NO ME FÍO"};
+$("#b-go").onclick=async()=>{
+ const out=$("#b-out");out.innerHTML='<div class="card empty">cargando cuotas…</div>';
+ try{
+  const j=await api("/api/board?sport="+encodeURIComponent($("#b-sport").value));
+  if(j.error){out.innerHTML=`<div class="card" style="color:var(--malo)">${esc(j.error)}</div>`;return;}
+  cred(j.remaining);
+  const only=$("#b-only").checked;
+  let evs=j.events.filter(e=>!only||e.best_tag==="VALOR");
+  $("#b-meta").textContent=`${j.events.length} partidos${j.cached?" (caché)":""}${j.mock?" · MOCK":""}`;
+  if(!evs.length){out.innerHTML='<div class="card empty">Sin partidos que mostrar.</div>';return;}
+  out.innerHTML=evs.map((e,i)=>`<div class="ev">
+    <div class="ev-h" onclick="tog(${i})">
+      <div><div class="ev-t">${esc(e.match)}</div>
+        <div class="ev-s">${e.live?'<span style="color:#ff6b6b">● EN VIVO</span>':
+          (e.starts_in_min!=null?"empieza en "+Math.round(e.starts_in_min)+" min":"")}
+          · ${e.n_books} casas${e.trusted?"":" · <span class='duda'>"+esc(e.trust_reason)+"</span>"}
+          ${e.arb?' · <span style="color:#6aa6ff">ARBITRAJE '+sgn(e.arb.roi)+'</span>':""}</div></div>
+      <div class="muted" style="font-size:11px">detalle ▾</div></div>
+    <div class="tiles">${e.outcomes.map(o=>`<div class="tile t-${o.tag}">
+       <div class="n">${esc(o.name)}</div><div class="o">${o.best_odds}</div>
+       <div class="b">${esc(o.best_book)}${o.fair_odds?" · justa "+o.fair_odds:""}</div>
+       <div class="lab">${LBL[o.tag]}${o.ev!=null&&o.tag!=="DUDOSA"?" "+sgn(o.ev):""}</div></div>`).join("")}</div>
+    <div class="det" id="d${i}" style="display:none">${e.outcomes.map(o=>
+      `<div style="margin-bottom:8px"><b>${esc(o.name)}</b>
+       <table><tr><th>Casa</th><th>Cuota</th><th>EV</th><th>Veredicto</th></tr>
+       ${(o.books||[]).map(b=>`<tr><td>${esc(b.book)}</td><td>${b.odds}</td>
+         <td>${sgn(b.ev)}</td><td style="color:var(--${b.tag==="VALOR"?"valor":b.tag==="NI_LOCOS"?"malo":b.tag==="FLOJA"?"floja":b.tag==="DUDOSA"?"duda":"justa"})">${LBL[b.tag]}</td></tr>`).join("")}
+       </table></div>`).join("")}</div></div>`).join("");
+ }catch(e){out.innerHTML=`<div class="card" style="color:var(--malo)">${esc(e.message)}</div>`;}
+};
+function tog(i){const d=$("#d"+i);d.style.display=d.style.display==="none"?"":"none";}
+
+/* ── CHECK ── */
 $("#c-go").onclick=async()=>{
-  const out=$("#c-out");out.innerHTML="<span class=muted>comprobando...</span>";
-  try{
-    const j=await api("/api/check",{method:"POST",body:JSON.stringify({
-      sport:$("#c-sport").value,home:$("#c-home").value,away:$("#c-away").value,
-      side:$("#c-side").value,odds:$("#c-odds").value,stake:$("#c-stake").value})});
-    if(j.error){
-      let d=(j.disponibles||[]).map(x=>"<li>"+x+"</li>").join("");
-      out.innerHTML=`<span style="color:var(--bad)">${j.error}</span>`+
-        (d?`<div class="muted" style="margin-top:6px">Partidos que hay ahora:</div><ul>${d}</ul>`:"");
-      return;
-    }
-    const arb=j.arb?`<div style="margin-top:8px">${tagFor("ARBITRAJE")} `+
-      `${(j.arb.roi*100).toFixed(2)}% cubriendo todo el mercado: `+
-      j.arb.legs.map(l=>l.outcome+" "+l.book+" @"+l.odds+" ("+l.stake_pct+"%)").join(" · ")+`</div>`:"";
-    out.innerHTML=`
-      <div class="verdict">${tagFor(j.verdict)} &nbsp;${j.title}</div>
-      <div class="muted">${j.match} — apuestas a: <b>${j.target}</b></div>
-      <ul>${j.reasons.map(r=>"<li>"+r+"</li>").join("")}</ul>
-      <div class="muted" style="margin-top:8px">${j.stake.msg}</div>
-      ${arb}
-      ${j.mock?'<pre>cuotas MOCK: este resultado no vale</pre>':''}`;
-  }catch(e){out.innerHTML=`<span style="color:var(--bad)">${e.message}</span>`;}
+ const out=$("#c-out");out.innerHTML='<span class="muted">comprobando…</span>';
+ try{
+  const j=await api("/api/check",{method:"POST",body:JSON.stringify({
+    sport:$("#c-sport").value,home:$("#c-home").value,away:$("#c-away").value,
+    side:$("#c-side").value,odds:$("#c-odds").value,stake:$("#c-stake").value})});
+  if(j.error){out.innerHTML=`<span style="color:var(--malo)">${esc(j.error)}</span>`+
+    ((j.disponibles||[]).length?'<div class="muted" style="margin-top:6px">Hay ahora: '+
+      j.disponibles.map(esc).join(" · ")+"</div>":"");return;}
+  cred(j.remaining);
+  const col=j.verdict==="VALOR_SIN_VALIDAR"?"var(--valor)":j.verdict==="DUDOSO"?"var(--duda)":"var(--malo)";
+  out.innerHTML=`<div style="font-size:16px;font-weight:800;color:${col};margin-bottom:6px">${esc(j.title)}</div>
+   <div class="muted">${esc(j.match)} — ${esc(j.target)}</div>
+   <ul class="why">${j.reasons.map(r=>"<li>"+esc(r)+"</li>").join("")}</ul>
+   <div class="muted" style="margin-top:8px">${esc(j.stake.msg)}</div>`;
+ }catch(e){out.innerHTML=`<span style="color:var(--malo)">${esc(e.message)}</span>`;}
 };
 
-async function scanLive(){
-  const out=$("#l-out");out.innerHTML="<span class=muted>escaneando...</span>";
-  try{
-    const j=await api("/api/live?sport="+encodeURIComponent($("#l-sport").value)+"&dudoso=1");
-    if(j.error){out.innerHTML=`<span style="color:var(--bad)">${j.error}</span>`;return;}
-    $("#l-meta").textContent=`${j.n_events} eventos · ${j.rows.length} para mirar`+
-      (j.remaining!=null?` · quedan ${j.remaining} consultas`:"")+
-      (j.mock?" · MOCK (no vale)":"");
-    if(!j.rows.length){out.innerHTML="<span class=muted>Nada con sentido ahora mismo. Eso es lo normal.</span>";return;}
-    out.innerHTML=`<table><thead><tr><th>Partido</th><th>A quien</th><th>Casa</th>
-      <th>Cuota</th><th>Justa</th><th>EV</th><th>Empieza</th><th></th></tr></thead><tbody>`+
-      j.rows.map(r=>`<tr>
-        <td>${r.match}<div class="muted" style="font-size:11px">${r.title}</div></td>
-        <td>${r.outcome}</td><td>${r.book}</td>
-        <td>${r.odds??"-"}</td><td>${r.fair_odds??"-"}</td>
-        <td>${(r.ev*100).toFixed(1)}%</td>
-        <td class="muted">${r.hours_to_start>0?("en "+r.hours_to_start+"h"):"en juego"}</td>
-        <td>${tagFor(r.verdict)}</td></tr>`).join("")+`</tbody></table>`;
-  }catch(e){out.innerHTML=`<span style="color:var(--bad)">${e.message}</span>`;}
-}
-$("#l-go").onclick=scanLive;
-$("#l-auto").onchange=e=>{
-  if(AUTO){clearInterval(AUTO);AUTO=null;}
-  if(e.target.checked){scanLive();AUTO=setInterval(scanLive,300000);}
+/* ── FUTBOL ── */
+$("#f-go").onclick=async()=>{
+ const out=$("#f-out");out.innerHTML='<span class="muted">calculando…</span>';
+ try{const j=await api("/api/football/predict",{method:"POST",body:JSON.stringify({
+   league:$("#f-liga").value,home:$("#f-home").value,away:$("#f-away").value})});
+  out.innerHTML=`<div class="row" style="gap:26px">
+    <div><div class="muted">${esc(j.home)}</div><div style="font-size:24px;font-weight:800">${pc(j.p_home)}</div></div>
+    <div><div class="muted">Empate</div><div style="font-size:24px;font-weight:800">${pc(j.p_draw)}</div></div>
+    <div><div class="muted">${esc(j.away)}</div><div style="font-size:24px;font-weight:800">${pc(j.p_away)}</div></div></div>
+   <div class="muted" style="margin-top:6px">Justas ${j.fair_home} / ${j.fair_draw} / ${j.fair_away}
+    · Over 2.5 ${j.over_2_5!=null?pc(j.over_2_5):"—"} · acuerdo modelos ${j.model_agreement}</div>
+   <div class="note" style="margin-top:10px">Este modelo, en backtest sobre La Liga, <b>no bate al mercado</b>. Úsalo como segunda opinión, no como fuente.</div>`;
+ }catch(e){out.innerHTML=`<span style="color:var(--malo)">${esc(e.message)}</span>`;}
 };
-
-$("#f-pred").onclick=async()=>{
-  const out=$("#f-out");out.innerHTML="<span class=muted>calculando...</span>";
-  try{
-    const j=await api("/api/football/predict",{method:"POST",body:JSON.stringify({
-      league:$("#f-liga").value,home:$("#f-home").value,away:$("#f-away").value})});
-    let mem="";for(const k in j.members)mem+=`<div><b>${k}</b> ${j.members[k].map(pct).join(" / ")}</div>`;
-    const v=j.verdict;
-    const vb=v?`<div style="margin:6px 0">${(v.beats_market===false||(v.roi!=null&&v.roi<0))?
-      '<span class="tag t-bad">este modelo pierde vs mercado en backtest</span>':
-      '<span class="tag t-good">modelo &ge; mercado</span>'}</div>`:"";
-    out.innerHTML=vb+`
-      <div class="row" style="gap:24px">
-        <div><div class="muted">${j.home}</div><div class="verdict">${pct(j.p_home)}</div></div>
-        <div><div class="muted">Empate</div><div class="verdict">${pct(j.p_draw)}</div></div>
-        <div><div class="muted">${j.away}</div><div class="verdict">${pct(j.p_away)}</div></div>
-      </div>
-      <div class="muted">Cuotas justas ${j.fair_home} / ${j.fair_draw} / ${j.fair_away}
-        · Over 2.5 ${j.over_2_5!=null?pct(j.over_2_5):"—"} · acuerdo ${j.model_agreement}</div>
-      <div class="muted" style="margin-top:6px">${mem}</div>`;
-  }catch(e){out.innerHTML=`<span style="color:var(--bad)">${e.message}</span>`;}
+$("#f-tab").onclick=async()=>{
+ const out=$("#f-tout");out.innerHTML='<div class="card empty">cargando…</div>';
+ try{const j=await api("/api/football/table?league="+encodeURIComponent($("#f-liga").value));
+  out.innerHTML=`<div class="card"><div class="muted">${esc(j.league)} · ${j.n_matches} partidos · ${esc(j.source)}</div>
+   <table style="width:100%;margin-top:8px;font-size:13px"><tr><th style="text-align:left;color:var(--dim)">Equipo</th>
+   <th style="text-align:left;color:var(--dim)">Fuerza</th><th style="text-align:left;color:var(--dim)">Elo</th></tr>
+   ${j.teams.map(t=>`<tr><td>${esc(t.team)}</td><td>${t.strength}</td><td>${t.elo}</td></tr>`).join("")}</table></div>`;
+ }catch(e){out.innerHTML=`<div class="card" style="color:var(--malo)">${esc(e.message)}</div>`;}
 };
-$("#f-tabla").onclick=async()=>{
-  const out=$("#f-tabla-out");out.innerHTML="<div class=card><span class=muted>cargando...</span></div>";
-  try{
-    const j=await api("/api/football/table?league="+encodeURIComponent($("#f-liga").value));
-    const rows=j.teams.map(t=>`<tr><td>${t.team}</td><td>${t.strength}</td>
-      <td>${t.elo}</td><td>${t.eff_matches}</td></tr>`).join("");
-    out.innerHTML=`<div class="card"><div class="muted">${j.league} · ${j.n_matches} partidos
-      · fuente ${j.source} ${j.simulated?'<span class="tag t-warn">SIMULADO</span>':''}
-      · ventaja local ${j.home_adv} · rho ${j.rho}</div>
-      <table><thead><tr><th>Equipo</th><th>Fuerza</th><th>Elo</th><th>Muestra ef.</th></tr></thead>
-      <tbody>${rows}</tbody></table></div>`;
-  }catch(e){out.innerHTML=`<div class=card style="color:var(--bad)">${e.message}</div>`;}
-};
-
-if(TOKEN)showApp();
-</script>
-</div></body></html>"""
+if(TOKEN)boot();
+</script></div></body></html>"""
