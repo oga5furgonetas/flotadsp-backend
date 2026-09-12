@@ -111,11 +111,13 @@ def research_view(asset: Asset) -> dict:
 
 
 def build_router(*, prefix: str, password: str, service: EdgeService,
-                 on_request: Callable[[], None] | None = None) -> APIRouter:
+                 on_request: Callable[[], None] | None = None,
+                 spend_lock: asyncio.Lock | None = None) -> APIRouter:
     router = APIRouter()
     auth = Auth(password)
     base = "/" + prefix.strip("/")
-    spend_lock = asyncio.Lock()
+    # el mismo cerrojo que usa el bucle de fondo: dos cosas no pueden gastar a la vez
+    spend_lock = spend_lock or asyncio.Lock()
 
     async def require(authorization: str = Header(default="")) -> bool:
         if on_request:
@@ -301,15 +303,16 @@ class _LoopStarter:
     """Arranca el bucle de fondo una sola vez, con el arranque de la app o con la primera
     petición (las versiones nuevas de FastAPI quitan los eventos de arranque)."""
 
-    def __init__(self, service: EdgeService):
+    def __init__(self, service: EdgeService, lock: asyncio.Lock | None = None):
         self.service = service
+        self.lock = lock
         self.task: asyncio.Task | None = None
 
     def __call__(self) -> None:
         if self.task is not None and not self.task.done():
             return
         try:
-            self.task = asyncio.get_running_loop().create_task(_loop(self.service))
+            self.task = asyncio.get_running_loop().create_task(_loop(self.service, self.lock))
         except RuntimeError:
             self.task = None
 
@@ -319,19 +322,39 @@ class _LoopStarter:
 
 
 async def _loop(service: EdgeService, lock: asyncio.Lock | None = None) -> None:
-    """Captura cierres y liquida en segundo plano. Un fallo aquí se registra y se sigue:
-    nunca debe tumbar la aplicación que lo aloja."""
+    """Captura cierres, liquida y BUSCA SOLA en segundo plano.
+
+    La búsqueda automática es lo que hace que el panel tenga algo cuando entras: un precio
+    mal puesto dura minutos. Gasta solo su parte del presupuesto (ver `auto_scan`) y usa el
+    mismo cerrojo que el panel, así que nunca se gasta dos veces a la vez. Un fallo aquí se
+    registra y se sigue: nunca debe tumbar la aplicación que lo aloja.
+    """
+    lock = lock or asyncio.Lock()
     last_settle = 0.0
+    last_auto: float | None = None
     while True:
         try:
-            await service.capture_closings()
-            if time.time() - last_settle >= SETTLE_EVERY_S:
-                await service.settle()
-                last_settle = time.time()
+            async with lock:
+                await service.capture_closings()
+                if time.time() - last_settle >= SETTLE_EVERY_S:
+                    await service.settle()
+                    last_settle = time.time()
+            st = await service.settings()
+            every = float(st.get("auto_scan_every_min") or 60) * 60.0
+            if last_auto is None:                       # tras arrancar, la primera a los 5 min
+                last_auto = time.time() - max(every - 300.0, 0.0)
+            if st.get("auto_scan", True) and time.time() - last_auto >= every:
+                async with lock:
+                    out = await service.auto_scan()
+                last_auto = time.time()
+                if out.get("ran"):
+                    log.info("edgeos: búsqueda automática %s en %s → %s (%s avisos)", out.get("scan_id"),
+                             ", ".join(out.get("sports") or []) or "ninguna liga", out.get("headline"),
+                             out.get("alerts"))
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            log.warning("edgeos: bucle de cierres/liquidación: %s", e)
+            log.warning("edgeos: bucle de fondo: %s", e)
         await asyncio.sleep(CLOSING_EVERY_S)
 
 
@@ -342,8 +365,10 @@ def attach(app: FastAPI, *, prefix: str, password: str, service_factory: Callabl
         log.info("edgeos: sin contraseña, no se monta")
         return False
     service = service_factory()
-    starter = _LoopStarter(service) if background else None
-    app.include_router(build_router(prefix=prefix, password=password, service=service, on_request=starter))
+    spend_lock = asyncio.Lock()
+    starter = _LoopStarter(service, spend_lock) if background else None
+    app.include_router(build_router(prefix=prefix, password=password, service=service, on_request=starter,
+                                    spend_lock=spend_lock))
     if starter is not None:
         # arranque normal si la versión de FastAPI lo admite; si no, con la primera petición
         add = getattr(app, "add_event_handler", None)

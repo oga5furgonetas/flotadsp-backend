@@ -27,7 +27,8 @@ from . import performance as P
 DEFAULTS: dict = {
     "my_books": None, "bankroll": 1000.0, "odds_range": None, "monthly_credits": 500, "reset_day": 1,
     "regions": ["eu"], "markets": None, "max_snapshot_age_s": 600, "board_lookback_h": 8,
-    "extra_sports": [],
+    "extra_sports": [], "auto_scan": True, "auto_scan_every_min": 60, "auto_scan_max_sports": 3,
+    "auto_scan_share": 0.5,
 }
 MARKET_OF_CODE = {"1X2": "h2h", "OU25": "totals", "AH": "spreads"}
 SCOPES = {"live", "soon", "today"}
@@ -109,6 +110,14 @@ class EdgeService:
             clean["markets"] = None if not ms or ms == evidence_markets(self.asset) else ms
         if "extra_sports" in fields:
             clean["extra_sports"] = sorted({str(s) for s in fields["extra_sports"]})
+        if "auto_scan" in fields:
+            clean["auto_scan"] = bool(fields["auto_scan"])
+        if "auto_scan_every_min" in fields:
+            clean["auto_scan_every_min"] = min(720, max(15, int(fields["auto_scan_every_min"])))
+        if "auto_scan_max_sports" in fields:
+            clean["auto_scan_max_sports"] = min(6, max(1, int(fields["auto_scan_max_sports"])))
+        if "auto_scan_share" in fields:
+            clean["auto_scan_share"] = min(1.0, max(0.05, float(fields["auto_scan_share"])))
         await self.store.put_settings(clean)
         return await self.settings()
 
@@ -202,7 +211,7 @@ class EdgeService:
 
     # ── escaneo (gasta) ──────────────────────────────────────────────────
     async def scan(self, *, scope: str = "soon", sports: list[str] | None = None, forced: bool = False,
-                   max_sports: int = 6) -> dict:
+                   max_sports: int = 6, purpose: str = "user") -> dict:
         if scope not in SCOPES:
             raise ValueError(f"alcance no válido: {scope}")
         st = await self.settings()
@@ -220,7 +229,7 @@ class EdgeService:
         events: list[Event] = []
         fetched, skipped, errors = [], [], []
         for sport in chosen:
-            dec = await self._spend(cost=cost, purpose="user", forced=forced)
+            dec = await self._spend(cost=cost, purpose=purpose, forced=forced)
             if not dec.ok:
                 skipped.append({"sport": sport, "reason": dec.reason})
                 continue
@@ -228,15 +237,15 @@ class EdgeService:
                 got = await asyncio.to_thread(self.feed.odds, sport, markets, regions)
             except ProviderError as e:
                 errors.append(f"{sport}: {e}")
-                await self._log_last_call("user", sport, scan_id)
+                await self._log_last_call(purpose, sport, scan_id)
                 continue
-            await self._log_last_call("user", sport, scan_id)
+            await self._log_last_call(purpose, sport, scan_id)
             fetched.append(sport)
             events.extend(got)
 
         frozen: dict[str, str] = {}
         if scope == "live" and fetched:
-            frozen = await self._live_scores(events, fetched, scan_id, forced)
+            frozen = await self._live_scores(events, fetched, scan_id, forced, purpose)
 
         prev_docs = await self.store.snapshots_asof(started - timedelta(microseconds=1),
                                                     lookback=timedelta(hours=st["board_lookback_h"]),
@@ -251,19 +260,49 @@ class EdgeService:
                 "data_observed_at": _latest_observed(events),
                 "budget": await self.budget_status(), "side_effects": side, **self._pack(decisions)}
 
-    async def _live_scores(self, events: list[Event], sports: list[str], scan_id: str, forced: bool) -> dict:
+    async def auto_scan(self) -> dict:
+        """Busca sola, dentro del presupuesto.
+
+        Es lo que hace que, cuando entres, ya haya algo mirado: un precio mal puesto no
+        espera a que abras el panel, y con el cierre delante desaparece. Gasta como mucho
+        una parte de la asignación del día (`auto_scan_share`), para que siempre te quede
+        presupuesto para mirar tú, y solo la ventana corta, que es donde un precio todavía
+        se puede coger.
+        """
+        st = await self.settings()
+        if not st.get("auto_scan", True):
+            return {"ran": False, "reason": "la búsqueda automática está desactivada en Ajustes"}
+        now = self.clock()
+        day = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        spent_auto = sum(int(r.get("cost") or 0) for r in await self.store.credit_log(day)
+                         if r.get("purpose") == "auto")
+        b = await self.budget_status()
+        allowance = b.get("allowance_today")
+        share = min(max(float(st.get("auto_scan_share", 0.5)), 0.05), 1.0)
+        if allowance is not None and spent_auto >= allowance * share:
+            return {"ran": False, "spent_auto_today": spent_auto,
+                    "reason": f"la parte automática del presupuesto de hoy ya se ha gastado "
+                              f"({spent_auto} de {allowance * share:.0f} créditos)"}
+        res = await self.scan(scope="soon", max_sports=int(st.get("auto_scan_max_sports", 3)), purpose="auto")
+        return {"ran": True, "scan_id": res["scan_id"], "sports": res["sports_fetched"],
+                "alerts": res["side_effects"]["alerts"], "bets": res["side_effects"]["paper_bets_opened"],
+                "spent_auto_today": spent_auto, "headline": res["headline"]["title"]}
+
+    async def _live_scores(self, events: list[Event], sports: list[str], scan_id: str, forced: bool,
+                           purpose: str = "user") -> dict:
         frozen: dict[str, str] = {}
         now = self.clock()
         by_id = {e.id: e for e in events}
         for sport in sports:
-            dec = await self._spend(cost=self.feed.estimated_cost("scores") // 2 or 1, purpose="user", forced=forced)
+            dec = await self._spend(cost=self.feed.estimated_cost("scores") // 2 or 1, purpose=purpose,
+                                    forced=forced)
             if not dec.ok:
                 continue
             try:
                 rows = await asyncio.to_thread(self.feed.scores, sport, None)
             except ProviderError:
                 continue
-            await self._log_last_call("user", sport, scan_id)
+            await self._log_last_call(purpose, sport, scan_id)
             ids = [r["id"] for r in rows if r.get("id") in by_id]
             before = await self.store.scores_asof(now - timedelta(microseconds=1), ids)
             docs = []
