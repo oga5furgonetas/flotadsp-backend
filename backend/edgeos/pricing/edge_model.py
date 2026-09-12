@@ -107,9 +107,13 @@ class EdgeModel:
         """Cuota más baja a la que se seguiría apostando, recorriendo hacia abajo desde
         la actual. Se exige que TODAS las cuotas entre esa y la actual pasen: una
         mínima que dejara huecos sería mentira."""
-        if self.pstar is None:
+        if self.pstar is None or not self.passes(self.estimate(p_fair, current_odds)):
             return None
-        best = None
+        # La cuota que tienes delante cuenta: la escalera va de céntimo en céntimo y un precio
+        # neto de comisión cae entre dos peldaños (2.1564). Sin esto, cuando el peldaño de abajo
+        # no pasaba se devolvía «ninguna» y la tarjeta se quedaba sin «hasta qué cuota», que es
+        # justo lo que hay que saber antes de apostar.
+        best = round(float(current_odds), 4)
         for o in reversed(self._ticks(p_fair, current_odds)):
             if o > current_odds + 1e-9:
                 continue

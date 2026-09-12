@@ -29,6 +29,7 @@ const STRAT = {
   DISABLED: ["off", "DESACTIVADA"], REJECTED: ["off", "RECHAZADA"],
 };
 const MCODE = { "1X2": "Resultado (1X2)", OU25: "Más/Menos 2.5", AH: "Hándicap asiático" };
+const fuenteJusta = (d) => (d.reference_kind === "consenso" ? `consenso de ${d.reference_books} casas` : "Pinnacle");
 const MARKET = { h2h: "Resultado", totals: "Goles", spreads: "Hándicap" };
 const ACTIONABLE = ["EXCEPCIONAL", "APOSTAR", "INTERESANTE"];
 
@@ -311,7 +312,7 @@ function heroBet(d) {
       <div class="big-odds">${odds(d.best_odds)}<small>en ${esc(d.best_book)}</small></div>
       <div class="kvs">
         ${kv("Nuestra probabilidad", pct(d.p_fair), isNum(d.p_close_lo) ? "cierre probable " + pct(d.p_close_lo) + "–" + pct(d.p_close_hi) : "")}
-        ${kv("Cuota justa", odds(d.fair_odds))}
+        ${kv("Cuota justa", odds(d.fair_odds), "según " + fuenteJusta(d))}
         ${kv("Ventaja estimada", esc(e.t), e.i, true)}
         ${kv("Hasta qué cuota", odds(d.min_odds), "por debajo, no", true)}
       </div>
@@ -331,6 +332,15 @@ function heroBet(d) {
     </div>
   </div>`;
 }
+function gatesBlock(h) {
+  const todas = h.gates || [];
+  const total = todas.reduce((s, x) => s + x.n, 0);
+  const g = todas.filter((x) => !["apostar", "excepcional", "interesante"].includes(x.gate));
+  if (!g.length) return "";
+  return `<details class="note" style="margin-top:14px"><summary>Por qué no sale nada: ${total} selecciones miradas</summary>
+    <ul style="margin:8px 0 0 18px;padding:0;line-height:1.7">${g.slice(0, 8).map((x) => `<li>${x.n} · ${esc(x.text)}</li>`).join("")}</ul></details>`;
+}
+
 function heroNothing(b) {
   const h = b.headline;
   const counts = STATE_ORDER.filter((k) => h.counts[k]).map((k) => `<span class="badge s-${STATE[k].cls}">${STATE[k].emoji} ${STATE[k].label} · ${h.counts[k]}</span>`).join("");
@@ -347,6 +357,7 @@ function heroNothing(b) {
     <h1>No hay nada que merezca la pena ahora mismo.</h1>
     <p class="dim">${esc(why)}</p>
     <div class="counts">${counts}</div>
+    ${gatesBlock(h)}
     ${c ? `<h2 style="margin-top:18px">Lo más cercano · no es una recomendación</h2><div class="cards">${decisionCard(c)}</div>` : ""}
   </div>`;
 }
@@ -430,7 +441,7 @@ function viewBest() {
         <td class="n">${esc(edgeLabel(d).t)}<div class="dim" style="font-size:12px">${spct(d.e_clv)}</div></td>
         <td class="n">${odds(d.min_odds || d.target_odds)}</td></tr>`).join("")}</tbody></table></div>`
     : '<div class="note">Nada con este filtro. Es lo normal: la mayoría de los precios están bien puestos.</div>'}
-    ${noref ? `<p class="mute" style="font-size:13px">${noref} selecciones no se enseñan porque Pinnacle no cotiza esa línea: sin referencia no hay precio justo.</p>` : ""}`;
+    ${noref ? `<p class="mute" style="font-size:13px">${noref} selecciones no se enseñan: en esa línea no está Pinnacle ni hay bastantes casas para un consenso.</p>` : ""}`;
   $$("[data-f]").forEach((c) => c.addEventListener("click", () => { S.bestFilter = c.dataset.f; viewBest(); }));
   bindCards($("#main"));
 }
@@ -457,7 +468,7 @@ function viewOpp(id) {
       <div class="bigrow"><div class="big-odds">${odds(d.best_odds)}<small>${d.best_book ? "en " + esc(d.best_book) : ""}${isNum(d.best_odds_net) && d.best_odds_net !== d.best_odds ? " · " + odds(d.best_odds_net) + " tras comisión" : ""}</small></div>
         <div class="kvs">
           ${kv("Nuestra probabilidad", pct(d.p_fair), isNum(d.p_close_lo) ? "al cierre, 90 % entre " + pct(d.p_close_lo) + " y " + pct(d.p_close_hi) : "")}
-          ${kv("Cuota justa", odds(d.fair_odds))}
+          ${kv("Cuota justa", odds(d.fair_odds), "según " + fuenteJusta(d))}
           ${kv("Ventaja estimada", esc(e.t), e.i, true)}
           ${kv("Hasta qué cuota", odds(d.min_odds), "cuota mínima aceptable", true)}
           ${kv("Se cancela por debajo de", odds(d.invalidation_odds))}
@@ -545,7 +556,7 @@ async function viewEvent(id, fetch) {
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>${esc(marketName(ms[0]))}${ms[0].line != null ? " · línea " + esc(ms[0].line) : ""}</b><span class="dim">${ms[0].n_books} casas</span></div>
       <div class="tiles" style="margin-top:10px">${ms.map(tile).join("")}</div>
       ${chart(r.series[seriesKey(ms[0])], ms)}</div>`).join("")}
-    ${Array.from(byMarket.values()).filter((ms) => ms.every((x) => x.no_reference)).length ? `<p class="mute" style="font-size:13px">Hay ${Array.from(byMarket.values()).filter((ms) => ms.every((x) => x.no_reference)).length} líneas más sin Pinnacle (sin precio justo): no se evalúan.</p>` : ""}`;
+    ${Array.from(byMarket.values()).filter((ms) => ms.every((x) => x.no_reference)).length ? `<p class="mute" style="font-size:13px">Hay ${Array.from(byMarket.values()).filter((ms) => ms.every((x) => x.no_reference)).length} líneas sin Pinnacle y con pocas casas (sin precio justo fiable): no se evalúan.</p>` : ""}`;
   $("#more-markets").addEventListener("click", () => viewEvent(id, true));
   bindCards($("#main"));
 }

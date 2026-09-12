@@ -31,13 +31,15 @@ EXCHANGES = {"betfair_ex_eu": 0.05, "betfair_ex_uk": 0.05, "betfair_ex_au": 0.05
 
 @dataclass(frozen=True)
 class Reference:
-    status: str                         # ok | missing | incomplete | invalid
+    status: str                         # ok | missing | incomplete | invalid | few_books
     book: str | None
     method: str
     probs: dict[str, float] | None
     margin: float | None
     updated: datetime | None
     note: str = ""
+    kind: str = "pinnacle"              # pinnacle | consenso
+    n_books: int = 0
 
     @property
     def ok(self) -> bool:
@@ -58,7 +60,7 @@ def reference(snap: MarketSnapshot, method: str, book: str = REFERENCE_BOOK) -> 
     except O.OddsError as e:
         return Reference("invalid", book, method, None, None, snap.book_updated(book), str(e))
     return Reference("ok", book, method, dict(zip(snap.outcomes, probs, strict=True)), margin,
-                     snap.book_updated(book))
+                     snap.book_updated(book), n_books=len(snap.complete_books()))
 
 
 def average_close(snap: MarketSnapshot, method: str, exclude: set[str] | frozenset[str] = frozenset({REFERENCE_BOOK}),
@@ -84,3 +86,45 @@ def executable_price(book: str, price: float, commissions: dict[str, float] | No
     table = EXCHANGES if commissions is None else commissions
     c = table.get(book)
     return O.net_odds(price, c) if c else price
+
+
+def consensus(snap: MarketSnapshot, method: str, min_books: int = 6) -> Reference:
+    """Precio justo cuando Pinnacle no cotiza ESA línea: el consenso del mercado.
+
+    Es la misma medida que la media del histórico (``Avg``) con la que se validó la
+    estrategia de consenso: media aritmética de cuotas por resultado entre las casas que
+    cotizan el mercado completo —incluida la que ofrece el mejor precio, igual que en el
+    histórico— y de-vig con el método del mercado.
+
+    Hace falta un mínimo de casas: una «media» de dos no es un mercado. El mínimo es una
+    regla de higiene, no un número validado (en el histórico la media era de más de diez
+    casas en las ligas grandes).
+    """
+    books = snap.complete_books()
+    if len(books) < min_books:
+        return Reference("few_books", None, method, None, None, None,
+                         f"solo {len(books)} casas cotizan esta línea completa: no hay consenso fiable",
+                         kind="consenso", n_books=len(books))
+    probs = average_close(snap, method, exclude=frozenset(), min_books=min_books)
+    if probs is None:
+        return Reference("invalid", None, method, None, None, None,
+                         "el consenso de esta línea no da un precio válido", kind="consenso",
+                         n_books=len(books))
+    avg = []
+    for o in snap.outcomes:
+        vals = [snap.quotes[o][b].price for b in books]
+        avg.append(sum(vals) / max(len(vals), 1))
+    updated = max((q.last_update for o in snap.outcomes for b, q in snap.quotes[o].items()
+                   if b in books and q.last_update is not None), default=None)
+    return Reference("ok", None, method, probs, O.overround(avg), updated,
+                     f"consenso de {len(books)} casas", kind="consenso", n_books=len(books))
+
+
+def best_reference(snap: MarketSnapshot, method: str, min_books: int = 6,
+                   book: str = REFERENCE_BOOK) -> Reference:
+    """Pinnacle si cotiza esta línea; si no, el consenso del mercado en esta misma línea."""
+    ref = reference(snap, method, book)
+    if ref.ok:
+        return ref
+    cons = consensus(snap, method, min_books)
+    return cons if cons.ok else (ref if ref.status != "missing" else cons)

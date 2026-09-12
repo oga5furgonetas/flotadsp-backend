@@ -32,6 +32,11 @@ class Strategy:
         return self.spec["method"]
 
     @property
+    def reference(self) -> str:
+        """``pin`` = comparada con Pinnacle · ``avg`` = comparada con el consenso del mercado."""
+        return str(self.spec.get("reference", "pin"))
+
+    @property
     def kelly_fraction(self) -> float:
         return float(self.spec.get("kelly_fraction") or 0.0)
 
@@ -72,6 +77,11 @@ class Asset:
     def implausible_ev(self) -> float:
         return float(self.data.get("runtime", {}).get("implausible_ev", 1.0))
 
+    @property
+    def consensus_min_books(self) -> int:
+        """Casas mínimas para fiarse del consenso como precio justo cuando Pinnacle no cotiza."""
+        return int(self.data.get("runtime", {}).get("consensus_min_books", 6))
+
     def league(self, sport: str) -> dict | None:
         return self._leagues.get(sport)
 
@@ -97,10 +107,13 @@ class Asset:
         # mercado sin validar: el método del mercado validado con la misma forma
         return dv.get("1X2" if n_outcomes == 3 else "OU25", {}).get("method", "multiplicative")
 
-    def strategy(self, market_code: str | None) -> Strategy | None:
+    def strategy(self, market_code: str | None, reference: str = "pinnacle") -> Strategy | None:
+        """La evidencia depende del mercado Y de contra qué se compara el precio: la ventaja
+        frente a Pinnacle y la ventaja frente al consenso del mercado se validan por separado
+        y pueden estar en estados distintos."""
         if not market_code:
             return None
-        key = f"{market_code}|{PRICE_CLASS}"
+        key = f"{market_code}|{PRICE_CLASS}" + ("" if reference == "pinnacle" else "|avg")
         spec = self.data.get("strategies", {}).get(key)
         return Strategy(key, spec) if spec else None
 

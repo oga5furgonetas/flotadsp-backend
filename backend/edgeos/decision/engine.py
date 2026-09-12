@@ -33,7 +33,7 @@ from datetime import datetime
 from ..assets import Asset, Strategy
 from ..domain import Event, MarketSnapshot
 from ..market.quality import implausible, max_plausible_odds
-from ..market.reference import EXCHANGES, REFERENCE_BOOK, executable_price, reference
+from ..market.reference import EXCHANGES, REFERENCE_BOOK, best_reference, executable_price
 from ..providers.base import LineupsFeed, NullLineups, Unknown
 
 EXCEPCIONAL = "EXCEPCIONAL"
@@ -132,6 +132,9 @@ class Decision:
     strategy_state: str | None = None
     outside_user_range: bool = False
     no_reference: bool = False
+    gate: str = ""                          # por qué puerta salió: para contar en el panel
+    reference_kind: str = "pinnacle"        # pinnacle | consenso
+    reference_books: int = 0
     why: list[str] = field(default_factory=list)
     why_not: list[str] = field(default_factory=list)
     risks: list[str] = field(default_factory=list)
@@ -192,6 +195,30 @@ def below_fair_txt(book: str, price: float, net: float, fair: float) -> str:
     return f"La mejor cuota ({price_txt(book, price, net)}) {verb} lo que vale ({fair:.2f})."
 
 
+# Por qué se cayó cada selección, en cristiano. Contarlas es la diferencia entre «no hay
+# nada» y «no he podido mirar»: en un escaneo real de 926 selecciones, 574 se caían solo
+# porque Pinnacle no cotizaba esa línea, y eso no se veía en ninguna pantalla.
+GATE_ES = {
+    "datos_viejos": "precios demasiado viejos",
+    "congelado": "congelado tras un cambio de marcador",
+    "sin_referencia": "sin precio justo: Pinnacle no cotiza esa línea",
+    "pocas_casas": "pocas casas en esa línea para un consenso",
+    "sin_precio": "ninguna otra casa cotiza ese resultado",
+    "precio_imposible": "precio imposible: error del proveedor",
+    "directo_sin_validar": "en directo y sin validar",
+    "sin_validar": "mercado sin estrategia validada",
+    "desactivada": "estrategia desactivada o rechazada",
+    "por_debajo": "la cuota no supera lo que vale",
+    "corrige_antes": "el mercado corrige esa diferencia antes del cierre",
+    "esperar": "hay ventaja, pero a esa cuota aún no compensa",
+    "poca_ventaja": "ventaja pequeña y demasiado incierta",
+    "apostar": "apuesta",
+    "directo": "en directo",
+    "interesante": "interesante, pero la estrategia no está activa",
+    "excepcional": "excepcional",
+}
+
+
 # ── motor ───────────────────────────────────────────────────────────────────
 def evaluate(events: list[Event], ctx: Context) -> list[Decision]:
     out: list[Decision] = []
@@ -226,34 +253,47 @@ def evaluate_selection(ev: Event, snap: MarketSnapshot, outcome: str, ctx: Conte
     asset = ctx.asset
     mcode = asset.market_code(ev.sport, snap.market, snap.line, len(snap.outcomes))
     d = _base(ev, snap, outcome, ctx, mcode)
-    strat = asset.strategy(mcode)
+
+    # 1. datos
+    if d.data_age_s > ctx.max_snapshot_age_s:
+        d.set_state(NO_FIABLE)
+        d.gate = "datos_viejos"
+        d.why_not.append(f"Los precios son de hace {ago(d.data_age_s)}: actualiza antes de decidir nada.")
+        return d
+    if ev.id in ctx.frozen:
+        d.set_state(NO_FIABLE)
+        d.gate = "congelado"
+        d.why_not.append(ctx.frozen[ev.id])
+        d.would_change.append("En cuanto llegue un precio posterior al cambio, se recalcula.")
+        return d
+
+    # 3. probabilidad: Pinnacle si cotiza ESTA línea; si no, el consenso del mercado en ella
+    method = asset.devig_method(mcode, len(snap.outcomes))
+    ref = best_reference(snap, method, asset.consensus_min_books)
+    d.reference_kind, d.reference_books = ref.kind, ref.n_books
+    if not ref.ok or ref.probs is None:
+        d.set_state(NO_FIABLE)
+        d.gate = "sin_referencia"
+        d.no_reference = True
+        if ref.status == "few_books":
+            d.why_not.append(f"Pinnacle no cotiza esta línea y solo hay {ref.n_books} casas en ella: la media "
+                             "de tan pocas no es un precio justo fiable.")
+            d.gate = "pocas_casas"
+            d.would_change.append("Si más casas cotizan esta línea, se evalúa con el consenso del mercado.")
+        else:
+            d.why_not.append("Pinnacle no cotiza este mercado completo: no hay precio justo en el que confiar."
+                             if ref.status in ("missing", "incomplete")
+                             else f"Precio de referencia no válido ({ref.note}).")
+            d.would_change.append("Si Pinnacle abre este mercado, se evalúa.")
+        return d
+
+    # la evidencia depende de la referencia: contra Pinnacle y contra el consenso se validaron aparte
+    strat = asset.strategy(mcode, reference=ref.kind)
     override = ctx.state_overrides.get(strat.key) if strat else None
     s_state = override[0] if override else (strat.state if strat else None)
     s_reasons = list(override[1]) if override else (strat.reasons if strat else [])
     d.strategy_key = strat.key if strat else None
     d.strategy_state = s_state
-
-    # 1. datos
-    if d.data_age_s > ctx.max_snapshot_age_s:
-        d.set_state(NO_FIABLE)
-        d.why_not.append(f"Los precios son de hace {ago(d.data_age_s)}: actualiza antes de decidir nada.")
-        return d
-    if ev.id in ctx.frozen:
-        d.set_state(NO_FIABLE)
-        d.why_not.append(ctx.frozen[ev.id])
-        d.would_change.append("En cuanto llegue un precio posterior al cambio, se recalcula.")
-        return d
-
-    # 3. probabilidad
-    method = asset.devig_method(mcode, len(snap.outcomes))
-    ref = reference(snap, method)
-    if not ref.ok or ref.probs is None:
-        d.set_state(NO_FIABLE)
-        d.no_reference = True
-        d.why_not.append("Pinnacle no cotiza este mercado completo: no hay precio justo en el que confiar." if
-                         ref.status in ("missing", "incomplete") else f"Precio de referencia no válido ({ref.note}).")
-        d.would_change.append("Si Pinnacle abre este mercado, se evalúa.")
-        return d
     p = ref.probs[outcome]
     d.p_fair = p
     d.fair_odds = 1.0 / p
@@ -264,6 +304,7 @@ def evaluate_selection(ev: Event, snap: MarketSnapshot, outcome: str, ctx: Conte
     best = snap.best(outcome, allowed=ctx.my_books, exclude={REFERENCE_BOOK})
     if best is None:
         d.set_state(NO_BET)
+        d.gate = "sin_precio"
         d.why_not.append("Ninguna de tus casas cotiza este resultado." if ctx.my_books is not None
                          else "Ninguna casa, aparte de la referencia, cotiza este resultado.")
         return d
@@ -281,6 +322,7 @@ def evaluate_selection(ev: Event, snap: MarketSnapshot, outcome: str, ctx: Conte
     thr = strat.implausible_ev if strat else asset.implausible_ev
     if implausible(d.ev_raw, thr):
         d.set_state(NO_FIABLE)
+        d.gate = "precio_imposible"
         d.why_not.append(f"{best.book} paga {best.price:.2f} por algo que vale {d.fair_odds:.2f}: más del doble. "
                          "En el histórico, precios así eran errores del feed, y las casas anulan esas apuestas "
                          "por «error palpable».")
@@ -290,11 +332,14 @@ def evaluate_selection(ev: Event, snap: MarketSnapshot, outcome: str, ctx: Conte
     if strat is None or strat.model is None:
         if d.live:
             d.set_state(NO_FIABLE)
+            d.gate = "directo_sin_validar"
             d.why_not.append("Partido en directo en un mercado sin validar.")
             return d
         if d.ev_raw > 0:
             d.set_state(WATCH)
-            d.why.append(f"{best.book} paga {best.price:.2f}; según Pinnacle sin margen vale {d.fair_odds:.2f} "
+            d.gate = "sin_validar"
+            quien = "Pinnacle" if ref.kind == "pinnacle" else f"el consenso de {ref.n_books} casas"
+            d.why.append(f"{best.book} paga {best.price:.2f}; según {quien} sin margen vale {d.fair_odds:.2f} "
                          f"(ventaja aparente {pct(d.ev_raw, True)}).")
             d.why_not.append("Este deporte o mercado no está validado con datos: no se sabe si ventajas así "
                              "sobreviven al cierre. Se sigue en papel, no se recomienda.")
@@ -316,6 +361,7 @@ def evaluate_selection(ev: Event, snap: MarketSnapshot, outcome: str, ctx: Conte
 
     if s_state in ("DISABLED", "REJECTED"):
         d.set_state(DESACTIVADO)
+        d.gate = "desactivada"
         d.why_not.append(f"La estrategia de {MARKET_ES.get(mcode or '', mcode)} está "
                          f"{'desactivada' if s_state == 'DISABLED' else 'rechazada'}: " +
                          (s_reasons[0] if s_reasons else "sin evidencia."))
@@ -324,17 +370,20 @@ def evaluate_selection(ev: Event, snap: MarketSnapshot, outcome: str, ctx: Conte
 
     if d.ev_raw <= 0:
         d.set_state(NO_BET)
+        d.gate = "por_debajo"
         d.why_not.append(below_fair_txt(best.book, best.price, o_net, d.fair_odds))
         return d
     if est.e_clv <= 0:
         d.set_state(NO_BET)
+        d.gate = "corrige_antes"
         d.why_not.append(f"Parece barata ({pct(d.ev_raw, True)}), pero en casos parecidos el mercado corrige esa "
                          f"diferencia antes del cierre: ventaja esperada {pct(est.e_clv, True)}.")
         return d
 
     passes = em.passes(est)
     common_why = [
-        f"{best.book} paga {best.price:.2f} por «{d.selection}». Sin margen, Pinnacle le da un "
+        f"{best.book} paga {best.price:.2f} por «{d.selection}». Sin margen, "
+        f"{'Pinnacle' if ref.kind == 'pinnacle' else f'el consenso de {ref.n_books} casas'} le da un "
         f"{pct(p, digits=0)}: vale {d.fair_odds:.2f}.",
         f"De {d.p_real_n} precios parecidos del histórico, el cierre confirmó la ventaja en "
         f"~{pct_round5(est.p_real)} de los casos.",
@@ -346,6 +395,7 @@ def evaluate_selection(ev: Event, snap: MarketSnapshot, outcome: str, ctx: Conte
         target = _target_odds(em, p, o_net, cap_price)
         if target is not None:
             d.set_state(ESPERAR)
+            d.gate = "esperar"
             d.target_odds = target
             d.why.extend(common_why)
             net = f" ({o_net:.2f} tras comisión)" if best.book in EXCHANGES else ""
@@ -355,6 +405,7 @@ def evaluate_selection(ev: Event, snap: MarketSnapshot, outcome: str, ctx: Conte
                 d.would_change.append(f"Si baja de {d.invalidation_odds:.2f} → descartar.")
         else:
             d.set_state(WATCH)
+            d.gate = "poca_ventaja"
             d.why.extend(common_why)
             d.why_not.append("Ventaja pequeña y demasiado incierta; ninguna cuota razonable la haría apostable.")
         return d
@@ -370,6 +421,10 @@ def evaluate_selection(ev: Event, snap: MarketSnapshot, outcome: str, ctx: Conte
         d.would_change.append(f"Por debajo de {d.invalidation_odds:.2f} → se cancela (sin ventaja esperada).")
     d.risks.append(f"Precio visto en {best.book}; en tu casa puede ser otro. Si te dan menos de "
                    f"{(d.min_odds or o_net):.2f}, no.")
+    if ref.kind == "consenso":
+        d.risks.append(f"El precio justo sale del consenso de {ref.n_books} casas, no de Pinnacle, que no "
+                       "cotiza esta línea. Esa ventaja se midió en partidos donde Pinnacle SÍ cotizaba: "
+                       "aquí es una extrapolación, y el seguimiento en papel la vigila por separado.")
     if best.book in EXCHANGES:
         d.risks.append(f"Es un exchange: la cuota ya descuenta un {EXCHANGES[best.book]:.0%} de comisión "
                        "(compruébalo en tu cuenta).")
@@ -391,13 +446,16 @@ def evaluate_selection(ev: Event, snap: MarketSnapshot, outcome: str, ctx: Conte
                        "a punto de cambiar.")
 
     d.set_state(APOSTAR)
+    d.gate = "apostar"
     if d.live:
         d.set_state(NO_FIABLE)
+        d.gate = "directo"
         d.why_not.insert(0, "Partido en directo: el feed no da minuto, tiros ni tarjetas y los precios cambian "
                             "antes de poder confirmarlos. Nada en directo está validado.")
         return d
     if s_state != "ACTIVE":
         d.set_state(INTERESANTE)
+        d.gate = "interesante"
         label = {"DEGRADED": "degradada", "WATCH": "sin evidencia suficiente"}.get(s_state or "", s_state)
         d.why_not.append(f"No llega a «apostar» porque la estrategia está {label}: " +
                          "; ".join(s_reasons[1:3] or s_reasons[:1]))
@@ -406,6 +464,7 @@ def evaluate_selection(ev: Event, snap: MarketSnapshot, outcome: str, ctx: Conte
     exc = strat.exceptional or {}
     checks = [
         (d.state == APOSTAR, "la estrategia no está activa"),
+        (ref.kind == "pinnacle", "el precio justo es el consenso del mercado, no Pinnacle"),
         (bool(exc), "no hay umbral de excepcional aprendido"),
         (bool(exc) and est.p_real >= exc.get("p_real_p90", math.inf),
          "la probabilidad de que la ventaja sea real no está entre el 10 % más alto"),
@@ -418,6 +477,7 @@ def evaluate_selection(ev: Event, snap: MarketSnapshot, outcome: str, ctx: Conte
     d.not_exceptional = [msg for ok, msg in checks if not ok]
     if not d.not_exceptional:
         d.set_state(EXCEPCIONAL)
+        d.gate = "excepcional"
 
     if d.state in (APOSTAR, EXCEPCIONAL) and strat.kelly_fraction > 0:
         f = strat.kelly_fraction * max(est.e_clv, 0.0) / (o_net - 1.0)
@@ -516,12 +576,18 @@ def headline(decisions: list[Decision]) -> dict:
     counts: dict[str, int] = {}
     for d in decisions:
         counts[d.state] = counts.get(d.state, 0) + 1
+    gates: dict[str, int] = {}
+    for d in decisions:
+        if d.gate:
+            gates[d.gate] = gates.get(d.gate, 0) + 1
+    por_que = [{"gate": g, "text": GATE_ES.get(g, g), "n": n}
+               for g, n in sorted(gates.items(), key=lambda kv: (-kv[1], kv[0]))]
     if top is not None:
-        return {"has_bet": True, "top": top, "counts": counts,
+        return {"has_bet": True, "top": top, "counts": counts, "gates": por_que,
                 "title": "🔥 ESTA ES LA QUE MÁS SENTIDO TIENE AHORA" if top.state == EXCEPCIONAL
                 else "🟢 MEJOR OPORTUNIDAD AHORA"}
     closest = next((d for d in ranked if d.state in (INTERESANTE, ESPERAR)), None)
-    return {"has_bet": False, "top": None, "closest": closest, "counts": counts,
+    return {"has_bet": False, "top": None, "closest": closest, "counts": counts, "gates": por_que,
             "title": "NO HAY NADA QUE MEREZCA LA PENA AHORA MISMO"}
 
 

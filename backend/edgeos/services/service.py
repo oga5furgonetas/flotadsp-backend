@@ -16,7 +16,7 @@ from ..assets import Asset
 from ..core import odds as O
 from ..decision import engine as E
 from ..domain import Event, market_key, parse_ts, utcnow
-from ..market.reference import REFERENCE_BOOK, average_close, executable_price, reference
+from ..market.reference import REFERENCE_BOOK, average_close, best_reference, executable_price, reference
 from ..pricing.settle import settle_fraction, unit_return
 from ..providers.base import LineupsFeed, NullLineups, OddsFeed, ProviderError
 from ..store import codec
@@ -299,7 +299,8 @@ class EdgeService:
                 return []
             ev = next((e for e in prev if e.id == eid), None)
             code = self.asset.market_code(snap.sport, snap.market, snap.line, len(snap.outcomes))
-            ref = reference(snap, self.asset.devig_method(code, len(snap.outcomes)))
+            ref = best_reference(snap, self.asset.devig_method(code, len(snap.outcomes)),
+                                self.asset.consensus_min_books)
             best = snap.best(outcome, allowed=my_books, exclude={REFERENCE_BOOK})
             return [E.HistoryPoint(observed_at=snap.observed_at, best_odds=best.price if best else None,
                                    best_book=best.book if best else None,
@@ -319,6 +320,7 @@ class EdgeService:
             return None if x is None else x.to_dict()
 
         return {"headline": {"title": h["title"], "has_bet": h["has_bet"], "counts": h["counts"],
+                             "gates": h.get("gates") or [],
                              "top": dd(h.get("top")), "closest": dd(h.get("closest"))},
                 "views": {k: dd(x) for k, x in v.items()},
                 "decisions": [d.to_dict() for d in decisions],
@@ -431,7 +433,8 @@ class EdgeService:
         for doc in hist:
             snap = codec.snapshot_from_doc(doc)
             code = self.asset.market_code(snap.sport, snap.market, snap.line, len(snap.outcomes))
-            ref = reference(snap, self.asset.devig_method(code, len(snap.outcomes)))
+            ref = best_reference(snap, self.asset.devig_method(code, len(snap.outcomes)),
+                                self.asset.consensus_min_books)
             for o in snap.outcomes:
                 best = snap.best(o, exclude={REFERENCE_BOOK})
                 out[snap.key][o].append({"t": snap.observed_at.isoformat(),
