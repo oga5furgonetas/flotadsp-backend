@@ -283,8 +283,16 @@ class EdgeService:
             return {"ran": False, "spent_auto_today": spent_auto,
                     "reason": f"la parte automática del presupuesto de hoy ya se ha gastado "
                               f"({spent_auto} de {allowance * share:.0f} créditos)"}
-        res = await self.scan(scope="soon", max_sports=int(st.get("auto_scan_max_sports", 3)), purpose="auto")
-        return {"ran": True, "scan_id": res["scan_id"], "sports": res["sports_fetched"],
+        # Repartir la parte automática en varios momentos del día: gastársela entera en la
+        # primera pasada (que puede ser de madrugada) deja sin mirar la tarde, que es cuando
+        # hay partidos. Como mucho un tercio por pasada, y nunca más de lo que queda.
+        coste = max(self.feed.estimated_cost("odds", markets=len(st["markets"]), regions=len(st["regions"])), 1)
+        tope = int(st.get("auto_scan_max_sports", 3))
+        if allowance is not None:
+            queda = max(allowance * share - spent_auto, 0.0)
+            tope = max(1, min(tope, int(min(allowance * share / 3.0, queda) // coste)))
+        res = await self.scan(scope="soon", max_sports=tope, purpose="auto")
+        return {"ran": True, "scan_id": res["scan_id"], "sports": res["sports_fetched"], "max_sports": tope,
                 "alerts": res["side_effects"]["alerts"], "bets": res["side_effects"]["paper_bets_opened"],
                 "spent_auto_today": spent_auto, "headline": res["headline"]["title"]}
 
