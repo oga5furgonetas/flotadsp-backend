@@ -19,6 +19,7 @@ from ..domain import Event, market_key, parse_ts, utcnow
 from ..market.reference import REFERENCE_BOOK, average_close, best_reference, executable_price, reference
 from ..pricing.settle import settle_fraction, unit_return
 from ..providers.base import LineupsFeed, NullLineups, OddsFeed, ProviderError
+from ..providers.fdfree import FreeCloses
 from ..store import codec
 from ..store.base import Store
 from . import budget as B
@@ -28,8 +29,9 @@ DEFAULTS: dict = {
     "my_books": None, "bankroll": 1000.0, "odds_range": None, "monthly_credits": 500, "reset_day": 1,
     "regions": ["eu"], "markets": None, "max_snapshot_age_s": 600, "board_lookback_h": 8,
     "extra_sports": [], "auto_scan": True, "auto_scan_every_min": 60, "auto_scan_max_sports": 3,
-    "auto_scan_share": 0.5,
+    "auto_scan_share": 0.5, "free_closings": True,
 }
+FREE_FALLBACK_DAYS = 4      # si football-data no publica el partido en este plazo, se paga con créditos
 MARKET_OF_CODE = {"1X2": "h2h", "OU25": "totals", "AH": "spreads"}
 SCOPES = {"live", "soon", "today"}
 SOON_MIN = 180.0
@@ -64,8 +66,10 @@ def evidence_markets(asset: Asset) -> list[str]:
 
 class EdgeService:
     def __init__(self, feed: OddsFeed, store: Store, asset: Asset, *, clock: Callable[[], datetime] = utcnow,
-                 lineups: LineupsFeed | None = None):
+                 lineups: LineupsFeed | None = None, free: FreeCloses | None = None):
         self.feed = feed
+        # cierres y resultados gratis (football-data): no gastan créditos del proveedor de cuotas
+        self.free = free if free is not None else FreeCloses()
         self.store = store
         self.asset = asset
         self.clock = clock
@@ -110,6 +114,8 @@ class EdgeService:
             clean["markets"] = None if not ms or ms == evidence_markets(self.asset) else ms
         if "extra_sports" in fields:
             clean["extra_sports"] = sorted({str(s) for s in fields["extra_sports"]})
+        if "free_closings" in fields:
+            clean["free_closings"] = bool(fields["free_closings"])
         if "auto_scan" in fields:
             clean["auto_scan"] = bool(fields["auto_scan"])
         if "auto_scan_every_min" in fields:
@@ -175,12 +181,17 @@ class EdgeService:
 
     async def _reserve(self) -> int:
         st = await self.settings()
+        gratis = bool(st.get("free_closings", True))
+        now = self.clock()
         to_close: dict[tuple[str, str], set[str]] = defaultdict(set)
         to_settle: set[tuple[str, str]] = set()
         for b in await self.store.paper_bets():
-            if b["status"] == "open" and not b.get("closing"):
+            # lo que football-data cubre no necesita reserva: se cierra y liquida gratis
+            cubierta = gratis and self._div(b["sport"]) is not None
+            viejuna = (now - b["commence_time"]) > timedelta(days=FREE_FALLBACK_DAYS)
+            if b["status"] == "open" and not b.get("closing") and not cubierta:
                 to_close[(b["sport"], str(b["commence_time"]))].add(b["market"])
-            if b["status"] in ("open", "closed"):
+            if b["status"] in ("open", "closed") and (not cubierta or viejuna):
                 to_settle.add((b["sport"], str(b["commence_time"])[:10]))
         return B.reserve_needed([len(ms) for ms in to_close.values()], len(to_settle), len(st["regions"]))
 
@@ -505,7 +516,10 @@ class EdgeService:
 
     async def capture_closings(self, *, force_window_min: float = CLOSING_WINDOW_MIN) -> dict:
         now = self.clock()
-        bets = [b for b in await self.store.paper_bets(status="open") if not b.get("closing")]
+        st0 = await self.settings()
+        gratis = bool(st0.get("free_closings", True))
+        bets = [b for b in await self.store.paper_bets(status="open") if not b.get("closing")
+                and not (gratis and self._div(b["sport"]) is not None)]
         due = [b for b in bets if 0 < (b["commence_time"] - now).total_seconds() / 60 <= force_window_min]
         done, skipped = 0, []
         st = await self.settings()
@@ -584,12 +598,97 @@ class EdgeService:
                                                  "first_seen": s["observed_at"], "entry_odds": s["best_odds"],
                                                  "strategy_key": s.get("strategy_key"), **closing})
 
+    # ── cierres y resultados gratis (football-data) ──────────────────────
+    def _div(self, sport: str) -> str | None:
+        liga = self.asset.league(sport)
+        return (liga or {}).get("code")
+
+    def _free_closing(self, b: dict, row) -> dict | None:
+        """Cierre de una apuesta con la media del mercado que publica football-data.
+
+        Es la MISMA medida con la que se validó la ventaja (`AvgC`), así que es más fiel
+        que una foto propia tomada doce minutos antes del inicio, y además no cuesta nada.
+        """
+        code = b.get("market_code")
+        precios = (row.close or {}).get(code or "")
+        base = {"source": "football-data", "observed_at": self.clock(), "minutes_before": None}
+        if not precios:
+            return None
+        if code == "AH":
+            if b.get("line") is None or abs(float(precios["line"]) - float(b["line"])) > 1e-9:
+                return {**base, "missing": f"al cierre el mercado daba la línea {precios['line']}, no la tuya"}
+            cuotas: list[float] = [precios["home"], precios["away"]]
+            outcomes: tuple[str, ...] = ("home", "away")
+        elif code == "OU25":
+            cuotas, outcomes = [precios["over"], precios["under"]], ("over", "under")
+        else:
+            cuotas, outcomes = [precios["home"], precios["draw"], precios["away"]], ("home", "draw", "away")
+        try:
+            probs = O.devig(cuotas, self.asset.devig_method(code, len(outcomes)))
+        except O.OddsError:
+            return {**base, "missing": "el cierre publicado no da un precio válido"}
+        p_avg = dict(zip(outcomes, probs, strict=True)).get(b["outcome"])
+        if p_avg is None:
+            return None
+        return {**base, "n_books": None, "p_avg": p_avg, "clv_avg": p_avg * float(b["odds_net"]) - 1.0,
+                "p_pin": None, "clv_pin": None, "p_bfe": None, "clv_bfe": None}
+
+    async def free_settlement(self) -> dict:
+        """Cierra y liquida GRATIS todo lo que football-data ya haya publicado.
+
+        Antes esto se pagaba dos veces: un /odds por deporte y hora de inicio para el
+        cierre, y un /scores por deporte y día para el resultado. Con el plan de 500
+        créditos al mes, eso se comía la mayor parte del presupuesto.
+        """
+        st = await self.settings()
+        if not st.get("free_closings", True):
+            return {"closed": 0, "settled": 0, "skipped": "desactivado en Ajustes"}
+        now = self.clock()
+        bets = [b for b in await self.store.paper_bets()
+                if b["status"] in ("open", "closed", "unsettled")
+                and (now - b["commence_time"]).total_seconds() / 60 >= SETTLE_AFTER_MIN]
+        cerradas = liquidadas = 0
+        sin_datos: list[str] = []
+        for b in bets:
+            div = self._div(b["sport"])
+            if not div:
+                continue
+            row = await asyncio.to_thread(self.free.find, div, b["commence_time"].date(), b["home"], b["away"])
+            if row is None:
+                sin_datos.append(b["bet_id"])
+                continue
+            cambios: dict = {}
+            if not b.get("closing"):
+                cierre = self._free_closing(b, row)
+                if cierre:
+                    cambios["closing"] = cierre
+                    cambios["status"] = "closed"
+                    cerradas += 1
+            if b["status"] != "settled":
+                win, lose = settle_fraction(b["market"], b["outcome"], b.get("line"),
+                                            row.home_goals, row.away_goals)
+                ret = unit_return(win, lose, float(b["odds_net"])) * float(b["stake_units"])
+                cambios["status"] = "settled"
+                cambios["result"] = {"home_score": row.home_goals, "away_score": row.away_goals, "win": win,
+                                     "lose": lose, "return_units": ret, "settled_at": now,
+                                     "source": "football-data"}
+                liquidadas += 1
+            if cambios:
+                await self.store.update_paper_bet(b["bet_id"], cambios)
+        return {"closed": cerradas, "settled": liquidadas, "pending": len(sin_datos)}
+
     async def settle(self) -> dict:
         now = self.clock()
+        libre = await self.free_settlement()          # lo que football-data ya publica, gratis
+        st0 = await self.settings()
+        gratis = bool(st0.get("free_closings", True))
         bets = [b for b in await self.store.paper_bets() if b["status"] in ("open", "closed")]
         due = [b for b in bets if (now - b["commence_time"]).total_seconds() / 60 >= SETTLE_AFTER_MIN
                and (b.get("settle_attempt_at") is None
-                    or (now - b["settle_attempt_at"]).total_seconds() / 60 >= SETTLE_RETRY_MIN)]
+                    or (now - b["settle_attempt_at"]).total_seconds() / 60 >= SETTLE_RETRY_MIN)
+               # una liga cubierta solo se paga si football-data no la ha publicado en varios días
+               and not (gratis and self._div(b["sport"]) is not None
+                        and (now - b["commence_time"]) <= timedelta(days=FREE_FALLBACK_DAYS))]
         by_sport: dict[str, list[dict]] = defaultdict(list)
         for b in due:
             by_sport[b["sport"]].append(b)
@@ -620,7 +719,7 @@ class EdgeService:
                     "home_score": int(r["home_score"]), "away_score": int(r["away_score"]), "win": win, "lose": lose,
                     "return_units": ret, "settled_at": now}})
                 settled += 1
-        return {"due": len(due), "settled": settled, "pending": pending, "skipped": skipped}
+        return {"due": len(due), "settled": settled, "pending": pending, "skipped": skipped, "free": libre}
 
     async def performance(self) -> dict:
         bets = await self.store.paper_bets()

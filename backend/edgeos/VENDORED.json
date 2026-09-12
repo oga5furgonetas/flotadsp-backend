@@ -1,6 +1,6 @@
 {
- "commit": "d59d24f",
- "copied_at": "2026-09-12T11:45:27.178897+00:00",
+ "commit": "bc26b1b",
+ "copied_at": "2026-09-12T13:28:49.755611+00:00",
  "dirty": false,
  "files": {
   "__init__.py": "c71b0b43689ca2f8f2d8f5fe0d2f9a2c2cbe56f0135e9a2c228ea9f661004e6f",
@@ -20,19 +20,20 @@
   "pricing/edge_model.py": "432c7131faa832fb74f36b660ad82c8ad652d6e1799ab399192cc33bc7af3fc5",
   "pricing/settle.py": "b28807548bee71aef99e96fa25b4912557c6a9a0a6faae3f075da5d3a8b4227b",
   "providers/base.py": "4e12ccaebe9e3edfe46f34431ddd411ac9082db3477f818557ebbe519446ad3e",
+  "providers/fdfree.py": "6d9fc06d8c8fb1233066c93e12497b0b4695a349ab968db901442169e7437431",
   "providers/mock.py": "c0b9397cb7f1e65024ad66e2dd05927ce9a9b955f81ebbc71f7851f6f4e8f8b7",
   "providers/theoddsapi.py": "1c55d2c566e66a4b8b3e5ce06c47d55717c42cf86e7d90019c40e9d7f35fe482",
   "services/__init__.py": "625e693caa0125bae55ef47e0a7c420a12df7b6e4478b64452a24076666a3be8",
   "services/budget.py": "5ab6286d995e2a30491b811807283db86f4b8a6d280b72112e74f9916752b56b",
   "services/performance.py": "13619dc3ede12ee1526f3be03bcf9ad78e9a67c4d4f558651deb3fec2cd25ab2",
-  "services/service.py": "c2467216072355835f506bca96bde4a9cccb14dd534f1dade5c87a381ed26c19",
+  "services/service.py": "f1f4f0d25092a8c8b11c9f21460bc203d059400c94365c7114eaf8a8507b4102",
   "store/__init__.py": "97766733ade7da98273d6e146182b9776cbf677712932ec5445a899209d1df0e",
   "store/base.py": "79506faa582d291ce27fc0d020a5f167ae762dfc2c4de5189d66a9867fb30bbb",
   "store/codec.py": "25c6ae7318fdaf816b26c1b5c8afd423d265246396d9979d02f0b358fae217be",
   "store/memory.py": "311708fd76dbea47c1e1c72ac457c89b9f090ea075c6bc812fc1737fee15a492",
   "store/mongo.py": "d65c4171c86ecd7babb90d81267f111b81d5269cba45486b49ffdeb344cde043",
   "web/app.css": "59c6de8a19d031d194a0e6a07e873b0cd5bc5fac4a1c5272b20f710425feb4ac",
-  "web/app.js": "412634677e39a47fbb7a1f7885816651e0f1ed7887c183b6ab98e8f9fdd5ac44",
+  "web/app.js": "ab8ba3332c7b6303ec7835d36cb8a81de13c19f1ef36673533fcb74dcb5ec6bd",
   "web/index.html": "586e3c5abebccd6e8bbd7b0b50a25af570b73dd0e9f48a9b8184e48cdd9c5f21"
  },
  "integration": {

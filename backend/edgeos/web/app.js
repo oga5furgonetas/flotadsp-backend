@@ -646,7 +646,7 @@ async function viewHistory() {
         <td><b>${esc(b.selection)}</b><div class="dim" style="font-size:12px">${esc(b.event_name)} · ${esc(MCODE[b.market_code] || b.market)}</div></td>
         <td class="n">${odds(b.odds)}<div class="dim" style="font-size:12px">${esc(b.book)}</div></td>
         <td>${badge({ state: b.state })}</td>
-        <td class="n">${c.missing ? '<span class="dim">no capturado</span>' : spct(c.clv_avg, 2)}</td><td class="n">${spct(c.clv_pin, 2)}</td>
+        <td class="n">${c.missing ? `<span class="dim" title="${esc(c.missing)}">no capturado</span>` : spct(c.clv_avg, 2)}${c.source === "football-data" ? '<div class="dim" style="font-size:11px">football-data</div>' : ""}</td><td class="n">${spct(c.clv_pin, 2)}</td>
         <td>${b.status === "settled" ? esc(r.home_score + "-" + r.away_score) : esc({ open: "pendiente", closed: "cerrada, sin resultado", unsettled: "sin resultado" }[b.status] || b.status)}</td>
         <td class="n">${isNum(r.return_units) ? (r.return_units >= 0 ? "+" : "") + r.return_units.toFixed(2) : "—"}</td></tr>`; }).join("")}</tbody></table></div>`
     : '<div class="note">Todavía no hay apuestas registradas.</div>'}`;
@@ -774,6 +774,8 @@ async function viewSettings() {
     <div class="row2"><div><label>Cuota mínima que prefiero</label><input name="lo" type="number" step="0.01" min="1.01" value="${st.odds_range ? esc(st.odds_range[0]) : ""}" placeholder="sin límite"></div>
       <div><label>Cuota máxima que prefiero</label><input name="hi" type="number" step="0.01" min="1.02" value="${st.odds_range ? esc(st.odds_range[1]) : ""}" placeholder="sin límite"></div></div>
     <p class="mute" style="font-size:13px;margin:-6px 0 0">Es tu preferencia de riesgo: no cambia ninguna decisión, solo marca lo que queda fuera. En el histórico la ventaja media no depende de la cuota; el ruido sí.</p>
+    <div><label class="check"><input type="checkbox" name="free" ${st.free_closings ? "checked" : ""}> Cerrar y liquidar con football-data (gratis)</label>
+      <p class="dim" style="margin:4px 0 10px">Las cuotas de cierre y los resultados de las ligas validadas salen de la misma fuente con la que se validó todo, sin gastar créditos: llegan con uno o dos días de retraso. Desactivarlo lo hace al momento, pero se paga con créditos que entonces no hay para buscar.</p></div>
     <div><label>Buscar sola</label><p class="dim" style="margin:4px 0 8px">Un precio mal puesto dura minutos y no espera a que abras el panel. EDGE OS mira solo cada rato y te deja el aviso; nunca gasta más que su parte del presupuesto del día.</p>
       <div class="row2"><label class="check"><input type="checkbox" name="auto" ${st.auto_scan ? "checked" : ""}> activada, cada <input name="auto_min" type="number" min="15" max="720" step="15" value="${esc(st.auto_scan_every_min)}" style="width:80px"> min</label>
         <div><label>Su parte del presupuesto del día</label><input name="auto_share" type="number" min="0.05" max="1" step="0.05" value="${esc(st.auto_scan_share)}"></div></div></div>
@@ -787,7 +789,7 @@ async function viewSettings() {
     const body = {
       my_books: fd.getAll("book"), bankroll: parseFloat(fd.get("bankroll")), markets: fd.getAll("market"),
       odds_range: isNum(lo) && isNum(hi) ? [lo, hi] : null, monthly_credits: parseInt(fd.get("monthly"), 10), reset_day: parseInt(fd.get("reset"), 10),
-      auto_scan: fd.get("auto") !== null, auto_scan_every_min: parseInt(fd.get("auto_min"), 10),
+      free_closings: fd.get("free") !== null, auto_scan: fd.get("auto") !== null, auto_scan_every_min: parseInt(fd.get("auto_min"), 10),
       auto_scan_share: parseFloat(fd.get("auto_share")),
     };
     try { S.settings = await api("/api/settings", { method: "PUT", body: JSON.stringify(body) }); toast("Guardado."); await refreshBoard(); } catch (err) { toast("No se pudo guardar: " + esc(err.message)); }
