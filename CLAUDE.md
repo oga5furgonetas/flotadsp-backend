@@ -1523,6 +1523,34 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    respuesta" se multiplica por el barrido.** Antes de tocar el tamaño de una
    estructura, contar cuantas veces se lee y se escribe (gotcha 63 del lado del
    navegador).
+   **Y el 13-09-2026 Dani dijo que SEGUIA comiendose el PC de oficina, porque
+   lo de arriba arreglo las ESCRITURAS y no el BARRIDO, que es donde estaba el
+   grueso.** Contando `captures_n` en produccion: el 04-09, **2.058.095
+   capturas para 6.810 paquetes** (media 302, maximo 2.121 para un solo
+   paquete). Un paquete cambia de estado cinco o seis veces en su vida.
+   Tres causas, todas en el barrido:
+   · **`PAUSA_ENTRE` estaba en 6 s** y la vuelta tarda 10-20 s, o sea que
+     encadenaba casi sin respirar. A 45 rutas y ~0,8 MB por `route-details`
+     salen unos 140 MB por minuto de JSON descargado y parseado;
+   · **una ruta terminada se seguia pidiendo igual que una viva.** A media
+     tarde casi todas las del dia estan cerradas y devuelven exactamente lo
+     mismo, vuelta tras vuelta;
+   · **y la peor, la que explica por que muere ESE ordenador y no los otros:
+     la lista de rutas solo tenia un tope de 400 y no se vaciaba nunca.** El PC
+     de oficina no se apaga, asi que el viernes estaba re-pidiendo enteras las
+     ~225 rutas de toda la semana, cada seis segundos, para siempre. Rutas
+     cerradas hace dias.
+   Arreglo: pausa a 30 s, **enfriamiento por tamaño de respuesta** (si una ruta
+   devuelve lo mismo dos veces pasa a una vuelta de cada cinco, y luego de cada
+   veinte; en cuanto cambia vuelve sola al ritmo normal) y **la lista se olvida
+   al cambiar el dia**. Medido con la funcion real sacada del fichero:
+   **x4,1 recien abierto y x20,5 con el navegador abierto desde hace una
+   semana** — de 352 GB de JSON al dia a 17.
+   Regla general: **un barrido que se repite no se mide por lo que cuesta una
+   vuelta, sino por cuantas veces pide lo que ya tiene.** Y toda lista que
+   alimenta un bucle necesita saber cuando VACIARSE, no solo un tope: un tope
+   de 400 con 45 rutas al dia es «acumula ocho dias», que es justo lo que
+   parecia que evitaba.
 
 75. **Dos rebajas no se suman: la segunda se come el margen entero, y apagar
    una promocion no apaga su cartel.** El 09-09-2026 Dani bajo los precios de

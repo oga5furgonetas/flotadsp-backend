@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.38.0';
+  const VERSION_INTERCEPTOR = '2.39.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -170,6 +170,10 @@
                                             'cache-control': 'no-cache', ...apiHeaders } })
         .then((r) => {
           if (!r || !r.ok) post({ kind: 'debug', url: `HTTP ${r ? r.status : '?'} · ${url.replace(/^https?:\/\/[^/]+/, '').slice(0, 100)}`, count: 0, bytes: 0 });
+          // Para el enfriamiento: si esta ruta devuelve lo mismo vuelta tras
+          // vuelta, deja de pedirse cada vez. La cabecera va antes de leer el
+          // cuerpo, así que esto no cuesta nada.
+          try { if (r) anotarTamano(url, Number(r.headers.get('content-length'))); } catch (_) {}
           return r;   // hace falta para poder CONTAR lo que trae un estado a prueba
         })
         .catch(() => post({ kind: 'debug', url: `sin respuesta · ${url.replace(/^https?:\/\/[^/]+/, '').slice(0, 100)}`, count: 0, bytes: 0 }));
@@ -183,7 +187,56 @@
 
      Y sin temporizadores DENTRO de la vuelta, que es lo que la rompia: ver el
      comentario de `replay`. */
-  const PAUSA_ENTRE = 6000;    // respiro entre barridos (era 20 s con 137 peticiones)
+  /* ── LO QUE SE COMÍA EL ORDENADOR DE LA OFICINA ──────────────────────────
+     Medido en producción el 13-09-2026, contando `captures_n` de cada paquete:
+
+         día        paquetes   capturas   media por paquete
+         04-09        6.810   2.058.095       302
+         05-09        4.594   1.268.716       276
+         09-09        6.429   1.073.827       167
+         (máximo de un solo paquete: 2.121 veces)
+
+     Dos MILLONES de capturas para 6.810 paquetes. Un paquete cambia de estado
+     cinco o seis veces en su vida; lo bajábamos trescientas. Cada vuelta se
+     re-piden TODAS las rutas y se parsea el JSON entero de cada una (~0,8 MB
+     en un `route-details`), así que con 45 rutas son ~36 MB por vuelta. Con la
+     pausa en 6 s eso salían unos 140 MB por minuto de JSON descargado y
+     parseado, todo el día, en el PC que tiene Cortex siempre abierto. No es
+     que la extensión tenga una fuga: es que hacía treinta veces el trabajo que
+     hacía falta.
+
+     Tres frenos, y ninguno cambia lo que se captura:
+       · la pausa sube de 6 s a 30 s. La vuelta ya tardaba 10-20 s, así que
+         antes encadenaba casi sin respirar;
+       · una ruta que devuelve LO MISMO se enfría: se deja de pedir cada vuelta
+         y se pasa a una de cada cinco, y luego una de cada veinte. Una ruta
+         terminada a mediodía deja de costar dinero por la tarde, que es donde
+         está el grueso del ahorro. En cuanto vuelve a cambiar, vuelve al ritmo
+         normal sola;
+       · al cambiar el día se olvida la lista de rutas. El PC de oficina no se
+         apaga, y la lista guardaba hasta 400 URLs = ocho días de rutas viejas
+         que se re-pedían enteras cada vuelta para siempre. */
+  const PAUSA_ENTRE = 30000;   // respiro entre barridos (era 6 s: ver arriba)
+  const ENFRIA = new Map();    // url -> { largo, iguales }
+  /* Cada cuántas vueltas se pide una ruta que no cambia. El 1 de la izquierda
+     es «siempre»: hasta que no repite dos veces lo mismo, no se enfría nada. */
+  const RITMO = (iguales) => (iguales < 2 ? 1 : iguales < 6 ? 5 : 20);
+  const tocaPedir = (url, vuelta) => {
+    const e = ENFRIA.get(url);
+    if (!e) return true;
+    return (vuelta % RITMO(e.iguales)) === 0;
+  };
+  /* Se compara el TAMAÑO, no el contenido: comparar 0,8 MB de texto cuesta
+     casi lo mismo que parsearlo, que es justo lo que se quiere evitar. Dos
+     respuestas del mismo tamaño pueden diferir —un estado que cambia sin mover
+     un byte— pero eso solo retrasa esa ruta una vuelta, y las rutas vivas
+     cambian de tamaño constantemente porque el timeline crece. */
+  const anotarTamano = (url, largo) => {
+    if (!Number.isFinite(largo)) return;
+    const e = ENFRIA.get(url);
+    if (e && e.largo === largo) e.iguales += 1;
+    else ENFRIA.set(url, { largo, iguales: 0 });
+  };
   const CERROJO_MAX = 360000;  // si el cerrojo lleva 6 min puesto, algo fue mal
   let barriendo = 0;           // marca de tiempo de inicio, 0 = libre
   let vueltaN = 0;             // para pedir los extras una vuelta de cada cinco
@@ -233,7 +286,12 @@
          Siguen pidiendose —son la red por si algun dia los paquetes llegan por
          otra via— pero una vez de cada cinco, que para un catalogo sobra. */
       const conExtras = (vueltaN++ % 5) === 0;
-      const urls = conExtras ? todasLasUrls() : [...rutaGets];
+      /* Las que TOCAN esta vuelta. Una ruta que lleva rato devolviendo lo
+         mismo —o sea, terminada— se pide una de cada cinco o de cada veinte.
+         Es de donde sale el grueso del ahorro: a media tarde casi todas las
+         rutas del día están cerradas y antes se bajaban enteras cada 6 s. */
+      const urls = (conExtras ? todasLasUrls() : [...rutaGets])
+        .filter((u) => tocaPedir(u, vueltaN));
       const t0 = Date.now();
       const cola = urls.slice();
       const obrero = async () => {
@@ -341,7 +399,29 @@
     return { ids: [...ids], sa };
   };
   const fetchedRoutes = new Set();
+
+  /* ── AL CAMBIAR EL DÍA SE OLVIDA LA LISTA ────────────────────────────────
+     El PC de la oficina no se apaga y esta pestaña lleva días abierta. La
+     lista de rutas solo tenía un tope de 400 —«ocho días de rutas»— y todo lo
+     de ayer y anteayer se seguía re-pidiendo ENTERO en cada vuelta, para
+     siempre, aunque esas rutas llevaran cerradas una semana. Con 45 rutas al
+     día, el viernes se estaban bajando las 225 de la semana cada vez.
+     Las rutas de ayer no cambian: se olvidan y se acabó. Si alguien mira un
+     día pasado en Cortex, esa petición la hace la propia página y la volvemos
+     a aprender por `rememberGet`. */
+  let diaDeLaLista = null;
+  const olvidarSiCambioElDia = () => {
+    const hoy = new Date().toDateString();
+    if (diaDeLaLista === hoy) return;
+    if (diaDeLaLista !== null) {
+      rutaGets.clear(); fetchedRoutes.clear(); ENFRIA.clear();
+      post({ kind: 'debug', url: 'dia nuevo: se olvidan las rutas de ayer', count: 0, bytes: 0 });
+    }
+    diaDeLaLista = hoy;
+  };
+
   const harvestRoutes = (summaryJson) => {
+    olvidarSiCambioElDia();
     const { ids, sa } = collectRoutes(summaryJson);
     if (sa && !saId) saId = normSa(sa);
     let i = 0, nuevos = 0;
@@ -352,7 +432,9 @@
       const url = `${location.origin}/operations/execution/api/route-details/${id}`
         + `?historicalDay=${histParam}&routeId=${id}${saId ? `&serviceAreaId=${saId}` : ''}`;
       rutaGets.add(url); // una ruta no puede caerse del barrido...
-      acotar(rutaGets, 400); // ...pero 400 son ocho dias de rutas: mas es una fuga
+      // ...pero 150 ya son el triple del dia mas cargado que hemos visto (62 el
+      // 26-08). Antes eran 400 —ocho dias— y ese era justo el problema.
+      acotar(rutaGets, 150);
       setTimeout(() => syntheticFetch(url), (i++) * 1500); // 1 ruta cada 1,5 s
     }
     if (nuevos) {
