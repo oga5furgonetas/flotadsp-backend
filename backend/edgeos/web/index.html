@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="es" data-base="__BASE__" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0b0e14">
+<title>EDGE OS</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="__BASE__/static/app.css?v=__VERSION__">
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form id="login-form" class="login-card" autocomplete="off">
+    <div class="brand big">EDGE<span>OS</span></div>
+    <p class="dim">Precios mal puestos, y cuándo no hay nada.</p>
+    <label for="pw">Contraseña</label>
+    <input id="pw" type="password" autocomplete="current-password" required>
+    <button type="submit" class="btn primary wide">Entrar</button>
+    <p id="login-err" class="err" role="alert"></p>
+  </form>
+</div>
+
+<div id="app" class="app" hidden>
+  <aside class="side">
+    <div class="brand">EDGE<span>OS</span></div>
+    <nav class="nav" id="nav">
+      <a href="#/ahora" data-r="ahora"><i>◎</i>Ahora</a>
+      <a href="#/directo" data-r="directo"><i>●</i>En directo</a>
+      <a href="#/mejores" data-r="mejores"><i>▤</i>Mejores apuestas</a>
+      <a href="#/comparar" data-r="comparar"><i>⇄</i>Comparar</a>
+      <a href="#/vigilar" data-r="vigilar"><i>◔</i>Vigilando</a>
+      <a href="#/historial" data-r="historial"><i>☰</i>Historial</a>
+      <a href="#/rendimiento" data-r="rendimiento"><i>↗</i>Rendimiento</a>
+      <a href="#/investigacion" data-r="investigacion"><i>⌘</i>Investigación</a>
+      <a href="#/ajustes" data-r="ajustes"><i>⚙</i>Ajustes</a>
+    </nav>
+    <div class="side-foot dim" id="side-foot"></div>
+  </aside>
+
+  <header class="top">
+    <div class="brand mobile-only">EDGE<span>OS</span></div>
+    <div class="scope" role="group" aria-label="Qué mirar">
+      <button class="chip" data-scope="soon">Próximas 3 h</button>
+      <button class="chip" data-scope="today">Hoy</button>
+      <button class="chip" data-scope="live">En directo</button>
+    </div>
+    <button id="scan" class="btn primary">Actualizar precios</button>
+    <span id="credits" class="pill" title="Créditos del proveedor de cuotas"></span>
+    <button id="bell" class="icon-btn" aria-label="Alertas">🔔<b id="bell-n" hidden></b></button>
+    <div id="alerts-pop" class="pop" hidden></div>
+  </header>
+
+  <main id="main" class="main" tabindex="-1"></main>
+
+  <nav class="tabbar" id="tabbar">
+    <a href="#/ahora" data-r="ahora"><i>◎</i>Ahora</a>
+    <a href="#/directo" data-r="directo"><i>●</i>Directo</a>
+    <a href="#/mejores" data-r="mejores"><i>▤</i>Mejores</a>
+    <a href="#/historial" data-r="historial"><i>☰</i>Historial</a>
+    <a href="#/mas" data-r="mas"><i>⋯</i>Más</a>
+  </nav>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<noscript>EDGE OS necesita JavaScript.</noscript>
+<script src="__BASE__/static/app.js?v=__VERSION__"></script>
+</body>
+</html>
