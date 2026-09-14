@@ -117,6 +117,28 @@ for (const f of todos) {
     disponibles.add(m[1])
   }
 
+  /* ── Y LOS DE REACT ROUTER, QUE SON LISTA CERRADA ──────────────────────
+     El 14-09-2026 volvió a pasar, esta vez con `<Navigate>`: se añadieron dos
+     redirecciones en `main.jsx` y el import se quedó fuera. El build pasó, los
+     23 checkers pasaron, y **el panel entero se quedó en blanco** con
+     «Navigate is not defined» — main.jsx es el fichero donde monta todo, así
+     que ahí no se cae una pantalla: se caen todas. Lo vi al abrirlo en el
+     navegador antes de entregarlo; si no, habría salido a producción.
+
+     El checker solo miraba lo NUESTRO a propósito, para no gritar en falso con
+     React ni con los iconos. Pero estos siete son una lista CERRADA y sus
+     nombres no se parecen a nada más: o vienen de react-router-dom o no
+     existen. Cubrirlos no puede dar un aviso en falso y cierra la mitad de la
+     clase de fallo que quedaba abierta. */
+  const ROUTER = ['Navigate', 'NavLink', 'Outlet', 'Routes', 'Route', 'BrowserRouter', 'Link']
+  for (const nombre of ROUTER) {
+    if (disponibles.has(nombre)) continue
+    if (new RegExp('<' + nombre + '[\\s/>]').test(txt)) {
+      problemas.push(`${f.slice(RAIZ.length + 1).replace(/\\/g, '/')} usa <${nombre}> de react-router-dom `
+        + `y no lo importa: pantalla en blanco con «${nombre} is not defined»`)
+    }
+  }
+
   for (const nombre of nuestros) {
     if (disponibles.has(nombre)) continue
     // Se usa como llamada `nombre(` o como componente `<Nombre`.

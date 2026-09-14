@@ -227,6 +227,20 @@ export const AYUDA = {
     ],
     ojo: 'Sin subir el PDF no hay scorecard: la app no lo puede descargar sola.',
   },
+  /* Las dos pantallas viven ahora bajo una sola entrada, con pestañas: la
+     ficha de la entrada tiene que hablar de las dos, porque es la que se abre
+     con el «?» desde cualquiera de ellas. Las de `diarios` y `whc` se quedan:
+     siguen siendo dos permisos distintos y quien tenga uno solo ve su
+     pestaña. */
+  informes: {
+    que: 'Los dos informes que Amazon publica de tu nave: los DNR del día a día y las horas trabajadas.',
+    pasos: [
+      'Elige arriba la pestaña: «DNR y diarios» para saber qué no llegó, «Horas · WHC» para ver quién se acerca al límite.',
+      'No hay que pegar ni subir nada: la extensión se los baja sola del portal cada pocas horas.',
+      'Si algún día falta un informe, se puede seguir pegando a mano como antes.',
+    ],
+    ojo: 'El bloque de DNR de un reporte es de DOS DÍAS ANTES, y la columna DSC se rellena tarde: un día recién bajado sale con menos defectos de los que acabará teniendo. Por eso se vuelven a pedir los días anteriores.',
+  },
   diarios: {
     que: 'Los Daily Report de Cortex: DNR, devoluciones, POD y cumplimiento de llamada.',
     pasos: [

@@ -1,6 +1,6 @@
 import React, { Suspense, lazy } from 'react'
 import ReactDOM from 'react-dom/client'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 /* Tipografía self-hosted (la CSP bloquea Google Fonts). Vite las sirve desde
    el propio dominio.
 
@@ -241,7 +241,7 @@ const PanelTalleres = lazy(() => import('./panel/pages/Talleres'))
 const PanelAparcamiento = lazy(() => import('./panel/pages/Aparcamiento'))
 const PanelCasasAlquiler = lazy(() => import('./panel/pages/CasasAlquiler'))
 const PanelScorecard = lazy(() => import('./panel/pages/Scorecard'))
-const PanelDiarios = lazy(() => import('./panel/pages/Diarios'))
+const PanelInformes = lazy(() => import('./panel/pages/Informes'))
 const PanelOrdenes = lazy(() => import('./panel/pages/OrdenesTrabajo'))
 const PanelDebrief = lazy(() => import('./panel/pages/Debrief'))
 const PortalTaller = lazy(() => import('./pages/PortalTaller'))
@@ -269,7 +269,6 @@ const PanelApoyo = lazy(() => import('./panel/pages/ApoyoRuta'))
 const PanelEmpleo = lazy(() => import('./panel/pages/Empleo'))
 const EmpleoPublica = lazy(() => import('./pages/Empleo'))
 const Ofertas = lazy(() => import('./pages/Ofertas'))
-const PanelWHC = lazy(() => import('./panel/pages/WHC'))
 const PanelDSC = lazy(() => import('./panel/pages/DSC'))
 const PanelRendimiento = lazy(() => import('./panel/pages/Rendimiento'))
 const PanelCorreo = lazy(() => import('./panel/pages/Correo'))
@@ -351,7 +350,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route index element={<PanelDashboard />} />
                 <Route path="mi-dia" element={<PanelMiDia />} />
                 <Route path="scorecard" element={<PanelScorecard />} />
-                <Route path="diarios" element={<PanelDiarios />} />
+                <Route path="informes" element={<PanelInformes />} />
+                <Route path="diarios" element={<Navigate to="/panel/informes?t=dnr" replace />} />
                 <Route path="ordenes" element={<PanelOrdenes />} />
                 <Route path="debrief" element={<PanelDebrief />} />
                 <Route path="conductores" element={<PanelConductores />} />
@@ -387,7 +387,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="paquetes" element={<PanelPaquetes />} />
                 <Route path="apoyo" element={<PanelApoyo />} />
                 <Route path="empleo" element={<PanelEmpleo />} />
-                <Route path="whc" element={<PanelWHC />} />
+                <Route path="whc" element={<Navigate to="/panel/informes?t=whc" replace />} />
                 <Route path="dsc" element={<PanelDSC />} />
                 <Route path="rendimiento" element={<PanelRendimiento />} />
                 <Route path="correo" element={<PanelCorreo />} />

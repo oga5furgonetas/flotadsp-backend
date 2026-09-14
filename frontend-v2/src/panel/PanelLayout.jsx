@@ -5,7 +5,7 @@ import {
   CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
-  PackageX,
+  PackageX, FileBarChart,
   PackageSearch, PackageCheck, MapPin, Timer, MapPinned, Gauge, Mail, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
   Briefcase, Store,
 } from 'lucide-react'
@@ -88,8 +88,11 @@ const NAV_DEF = [
     { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
     { to: '/panel/empleo', labelKey: 'nav.empleo', icon: Briefcase },
     { to: '/panel/scorecard', labelKey: 'nav.scorecard', icon: Trophy },
-    { to: '/panel/diarios', labelKey: 'nav.diarios', icon: PackageX },
-    { to: '/panel/whc', labelKey: 'nav.whc', icon: Timer },
+    /* UNA SOLA ENTRADA para los dos informes del portal. Eran dos —«DNR ·
+       Diarios» y «Horas · WHC»— y salen del MISMO documento: tenerlas
+       separadas obligaba a saber de antemano en cual esta lo que buscas.
+       Dentro van por pestañas, cada una con SU permiso. */
+    { to: '/panel/informes', labelKey: 'nav.informes', icon: FileBarChart },
     { to: '/panel/dsc', labelKey: 'nav.dsc', icon: MapPinned },
     { to: '/panel/rendimiento', labelKey: 'nav.rendimiento', icon: Gauge },
     { to: '/panel/contactos', labelKey: 'nav.contacts', icon: BookUser },
@@ -412,6 +415,8 @@ export default function PanelLayout() {
     // para todo el que tenga permisos definidos —el permiso no existe en
     // ninguna lista— y la entrada desaparecía del menú sin ningún error.
     if (k === 'ordenes') return canSee('talleres')
+    // Informes junta DNR y WHC: basta con tener uno de los dos permisos.
+    if (k === 'informes') return canSee('diarios') || canSee('whc')
     if (!SIEMPRE_VISIBLES.has(k) && !canSee(k)) return false
     const feat = ROUTE_FEATURE[k]
     if (feat && limits && limits[feat] === false) return false
@@ -438,6 +443,7 @@ export default function PanelLayout() {
     if (SIEMPRE_VISIBLES.has(k)) return true
     if (k === 'vencimientos') return EXPIRY_KEYS.some((ek) => canSee(ek))
     if (k === 'ordenes') return canSee('talleres')
+    if (k === 'informes') return canSee('diarios') || canSee('whc')
     if (k === 'admin' || k === 'bandeja') return sa
     if (k === 'usuarios') return sa || cm
     return canSee(k)
