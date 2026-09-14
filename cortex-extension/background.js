@@ -369,6 +369,79 @@ function diasAPedir() {
   return out;
 }
 
+/* ── PEDIRLE A AMAZON QUE FIRME LOS ENLACES, NOSOTROS ────────────────────────
+   La sonda encontro la peticion (14-09-2026):
+
+     GET /performance/api/v1/getData ?dataSetId,dsp,from,station,timeFrame,to
+     -> { tableData: { dsp_station_weekly_supp_reports: { rows: [ <url firmada> ] } } }
+
+   Repitiendola con la sesion que ya hay abierta salen enlaces FRESCOS. Eso es
+   lo que convierte esto en automatico de verdad: ya no hace falta que nadie
+   abra la pantalla de informes.
+
+   DOS DECISIONES:
+
+   · LAS URLS SE BUSCAN POR CONTENIDO, no por la ruta del JSON. Da igual que
+     manana `rows` pase a llamarse de otra forma o que la tabla cambie de
+     sitio: se recorre la respuesta entera y se coge todo texto que apunte al
+     bucket. Es la leccion de `addresses`, que estaba un nivel mas arriba de
+     donde se buscaba y costo veinte versiones (gotcha 64).
+
+   · LA LLAMADA SE GUARDA TAL CUAL, con sus parametros. No se construye a mano:
+     `from`/`to` y el id del DSP no se adivinan. Cada vez que alguien pasa por
+     la pantalla se refresca, y entre medias se repite la ultima. */
+const LLAMADA_CADA_MS = 6 * 60 * 60 * 1000;      // cuatro veces al dia
+
+async function guardarLlamadaInformes(url) {
+  if (typeof url !== 'string' || !/\/performance\/api\//i.test(url)) return false;
+  const { llamadaInformes } = await chrome.storage.local.get({ llamadaInformes: null });
+  // Se sobrescribe siempre: la ultima que hizo la pagina es la mas reciente y
+  // la que apunta a la semana que se esta mirando.
+  await chrome.storage.local.set({ llamadaInformes: { url, visto: Date.now(),
+                                                      pedido: (llamadaInformes || {}).pedido || 0 } });
+  return true;
+}
+
+/** Recorre cualquier JSON y saca todo texto que apunte al bucket de informes. */
+function urlsFirmadasDe(v, salida = [], prof = 0) {
+  if (prof > 8 || salida.length > 40) return salida;
+  if (typeof v === 'string') {
+    if (/^https?:\/\/[^\s"']*flex-peer-performance-reports/i.test(v)) salida.push(v);
+    return salida;
+  }
+  if (Array.isArray(v)) { for (const x of v) urlsFirmadasDe(x, salida, prof + 1); return salida; }
+  if (v && typeof v === 'object') { for (const k of Object.keys(v)) urlsFirmadasDe(v[k], salida, prof + 1); }
+  return salida;
+}
+
+async function pedirEnlacesFrescos() {
+  const { llamadaInformes } = await chrome.storage.local.get({ llamadaInformes: null });
+  if (!llamadaInformes || !llamadaInformes.url) return 0;
+  if (Date.now() - (llamadaInformes.pedido || 0) < LLAMADA_CADA_MS) return 0;
+  llamadaInformes.pedido = Date.now();
+  await chrome.storage.local.set({ llamadaInformes });
+  try {
+    const r = await fetch(llamadaInformes.url, { credentials: 'include', cache: 'no-store' });
+    if (!r || !r.ok) {
+      await enviarDiagnostico({ kind: 'debug', which: 'enlaces-frescos',
+                                url: `HTTP ${r ? r.status : '?'}`, count: 0, bytes: 0 });
+      return 0;
+    }
+    const j = await r.json().catch(() => null);
+    const urls = j ? urlsFirmadasDe(j) : [];
+    const n = await recordarInformes(urls, '');
+    await enviarDiagnostico({ kind: 'debug', which: 'enlaces-frescos',
+                              url: `firmadas=${urls.length} nuevas=${n}`,
+                              count: urls.length, bytes: n });
+    if (n) await bajarInformesPendientes();
+    return urls.length;
+  } catch (e) {
+    await enviarDiagnostico({ kind: 'debug', which: 'enlaces-frescos',
+                              url: String(e).slice(0, 80), count: 0, bytes: 0 });
+    return 0;
+  }
+}
+
 async function deducirYGuardar() {
   const { informes = {} } = await chrome.storage.local.get({ informes: {} });
   /* SOLO SE DEDUCE LO QUE NO VA FIRMADO, Y HOY NO VA NINGUNO.
@@ -633,6 +706,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   /* La sonda del portal: qué petición devuelve los enlaces firmados. Viaja la
      FORMA —ruta, nombres de parámetros y esqueleto de la respuesta—, nunca una
      firma ni un valor. Es lo único que falta para poder pedirlos nosotros. */
+  /* La llamada que devuelve los enlaces firmados. Se guarda para repetirla;
+     no sale del navegador. */
+  if (msg?.type === 'llamadaInformes') {
+    guardarLlamadaInformes(msg.url).then((ok) => {
+      if (ok) pedirEnlacesFrescos();   // con una recien vista, ya
+      reply?.({ ok });
+    });
+    return true;
+  }
   if (msg?.type === 'firmaVista') {
     enviarDiagnostico({ kind: 'schema', which: 'firma-informes', url: msg.url,
                         schema: `campos:${msg.campos || '-'} :: ${msg.esqueleto || ''}`.slice(0, 7000) });
@@ -680,6 +762,9 @@ chrome.alarms.onAlarm.addListener((a) => {
   if (a.name !== ALARM) return;
   flush();
   bajarInformesPendientes();
+  // Y pedirle a Amazon enlaces frescos: la funcion decide sola si toca (cada
+  // seis horas), asi que llamarla cada minuto no pide nada de mas.
+  pedirEnlacesFrescos();
 });
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status === 'complete' && /amazon\.es/.test(tab.url || '')) inject(tabId);

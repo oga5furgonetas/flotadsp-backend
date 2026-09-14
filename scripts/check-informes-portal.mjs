@@ -100,6 +100,53 @@ if (diasAPedir) {
 ok(/async function bajarInformesPendientes\(\)\s*\{\s*await deducirYGuardar\(\)/.test(src),
   'bajarInformesPendientes tiene que deducir primero, o vuelve a depender de que alguien abra la carpeta')
 
+/* ── SACAR LOS ENLACES FIRMADOS DE LA RESPUESTA ───────────────────────────
+   La sonda encontro el 14-09-2026 la peticion que los devuelve:
+
+     GET /performance/api/v1/getData ?dataSetId,dsp,from,station,timeFrame,to
+     -> { tableData: { dsp_station_weekly_supp_reports: { rows: [ ... ] } } }
+
+   Se buscan POR CONTENIDO y no por esa ruta: si manana `rows` se llama de otra
+   forma o la tabla cambia de sitio, esto tiene que seguir encontrandolos. Es
+   la leccion de `addresses`, que estaba un nivel mas arriba de donde se
+   buscaba y costo veinte versiones (gotcha 64). */
+{
+  const iU = src.indexOf('function urlsFirmadasDe')
+  const jU = src.indexOf('async function pedirEnlacesFrescos')
+  ok(iU > 0 && jU > iU, 'no se encuentra urlsFirmadasDe en background.js')
+  let urlsFirmadasDe
+  if (iU > 0 && jU > iU) {
+    // eslint-disable-next-line no-new-func
+    urlsFirmadasDe = new Function(`${src.slice(iU, jU)}; return urlsFirmadasDe`)()
+  }
+  ok(typeof urlsFirmadasDe === 'function', 'urlsFirmadasDe no se ha cargado: no se prueba nada')
+
+  if (urlsFirmadasDe) {
+    const FIRMADA = 'https://flex-peer-performance-reports-prod-euamazon.s3.eu-west-1.amazonaws.com'
+      + '/es/tdsl/oga5/2026/week-38/ES-TDSL-OGA5-Daily-Report_2026-09-13_Sun.html?X-Amz-Signature=abc'
+    // La forma REAL que devolvio el portal.
+    const real = { tableData: { dsp_station_weekly_supp_reports: { rows: [FIRMADA] } } }
+    ok(urlsFirmadasDe(real).length === 1, 'no saca el enlace de la forma real que vimos')
+    ok(urlsFirmadasDe(real)[0] === FIRMADA, 'lo saca cambiado')
+
+    // Y si manana cambia de sitio o de nombre, tiene que seguir saliendo.
+    ok(urlsFirmadasDe({ otra: { cosa: [{ x: [FIRMADA] }] } }).length === 1,
+      'busca por ruta fija en vez de por contenido: es el gotcha 64 otra vez')
+
+    // Lo que NO es del bucket no se toca: pedir una URL cualquiera del portal
+    // con la sesion abierta es hacer algo que nadie pidio.
+    ok(urlsFirmadasDe({ a: 'https://logistics.amazon.es/performance' }).length === 0,
+      'se cuela una URL que no es del bucket de informes')
+    ok(urlsFirmadasDe({ a: 'texto cualquiera', b: 42, c: null }).length === 0,
+      'saca cosas que no son URLs')
+
+    // Sin fondo: una respuesta enorme no puede colgar el service worker.
+    let hondo = FIRMADA
+    for (let i = 0; i < 30; i++) hondo = { x: hondo }
+    ok(urlsFirmadasDe(hondo).length === 0, 'no hay tope de profundidad')
+  }
+}
+
 /* ── NINGUNA FIRMA PUEDE SALIR EN UN DIAGNOSTICO ──────────────────────────
    Las direcciones del portal van FIRMADAS: llevan `X-Amz-Security-Token` y
    `X-Amz-Signature`, o sea una credencial temporal de AWS. El 14-09-2026 una

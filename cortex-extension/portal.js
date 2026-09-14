@@ -87,6 +87,27 @@
     encontrados += 1;
     post({ kind: 'firma_vista', url: dondeVa(url, metodo).slice(0, 200),
            campos: campos.slice(0, 200), esqueleto });
+
+    /* ── Y SE GUARDA LA LLAMADA PARA PODER REPETIRLA ─────────────────────
+       Esta es la pieza que faltaba. La peticion es
+         GET /performance/api/v1/getData ?dataSetId,dsp,from,station,timeFrame,to
+       y devuelve los enlaces ya firmados. Repitiendola con la sesion que hay
+       abierta salen enlaces FRESCOS, y con eso los informes entran sin que
+       nadie abra ninguna pantalla.
+
+       LA URL COMPLETA SE QUEDA EN EL NAVEGADOR. Va al service worker, que la
+       guarda en `chrome.storage`; al diagnostico solo viaja la forma. Los
+       parametros llevan el id del DSP y de la nave: no son credenciales, pero
+       tampoco hacen falta en nuestro servidor.
+
+       Solo se guarda si es un GET: repetir un POST a ciegas puede tener
+       efectos, y esta no los necesita. */
+    if (metodo.toUpperCase() === 'GET') {
+      try {
+        chrome.runtime?.sendMessage?.({ type: 'llamadaInformes', url: String(url) });
+      } catch (_) { /* MAIN world: el puente lo recoge por postMessage */ }
+      post({ kind: 'llamada_informes', url: String(url) });
+    }
     console.log('%c[FlotaDSP] encontrada la peticion que firma los enlaces', 'color:#34d399;font-weight:bold');
   };
 

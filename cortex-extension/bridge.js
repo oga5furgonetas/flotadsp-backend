@@ -25,6 +25,10 @@ if (!window.__flotadspBridge) {
        viaja la FORMA -ruta, nombres de parametros y esqueleto-, nunca una
        firma. */
     else if (d.kind === 'firma_vista') chrome.runtime.sendMessage({ type: 'firmaVista', url: d.url, campos: d.campos, esqueleto: d.esqueleto });
+    /* La llamada que devuelve los enlaces FIRMADOS, entera. Se queda en el
+       navegador: el service worker la guarda para repetirla. Al servidor solo
+       va la forma (`firma_vista`), nunca esto. */
+    else if (d.kind === 'llamada_informes') chrome.runtime.sendMessage({ type: 'llamadaInformes', url: d.url });
     /* Que estados del informe traen paquetes y cuales vienen vacios. Es lo
        unico que dice si «Apoyo en ruta» va a tener direcciones o no. */
     else if (d.kind === 'estados_informe') chrome.runtime.sendMessage({ type: 'estadosInforme', estados: d.estados, descartados: d.descartados });
