@@ -347,11 +347,15 @@ function deducirInforme(urlConocida, fechaISO) {
    está completo hasta el día siguiente —la columna DSC se rellena tarde— así
    que volver a pedir los de atrás es lo que hace que acabe cuadrando. */
 function diasAPedir() {
+  /* LA FECHA SE COMPONE A MANO, no con `toISOString`. `new Date()` es hora
+     LOCAL y su ISO es UTC: en España, entre medianoche y las dos de la mañana,
+     `toISOString().slice(0,10)` devuelve el día ANTERIOR (gotcha 11). Aquí eso
+     seria pedir el informe de un día creyendo que es el de otro — y como el
+     nombre del fichero lleva la fecha dentro, saldría un 404 o, peor, el
+     informe que no es. Lo cazó `check-patrones`. */
+  const clave = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   const out = [];
-  for (let k = 0; k <= 3; k++) {
-    const d = new Date(Date.now() - k * 86400000);
-    out.push(d.toISOString().slice(0, 10));
-  }
+  for (let k = 0; k <= 3; k++) out.push(clave(new Date(Date.now() - k * 86400000)));
   return out;
 }
 
@@ -615,6 +619,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.type === 'informePortal') {
     mandarInforme(msg.tipo, msg.texto, msg.center).then((r) => reply?.(r));
     return true;   // respuesta asincrona
+  }
+  /* La sonda del portal: qué petición devuelve los enlaces firmados. Viaja la
+     FORMA —ruta, nombres de parámetros y esqueleto de la respuesta—, nunca una
+     firma ni un valor. Es lo único que falta para poder pedirlos nosotros. */
+  if (msg?.type === 'firmaVista') {
+    enviarDiagnostico({ kind: 'schema', which: 'firma-informes', url: msg.url,
+                        schema: `campos:${msg.campos || '-'} :: ${msg.esqueleto || ''}`.slice(0, 7000) });
+    return false;
   }
   if (msg?.type === 'caminoPortal') {
     enviarDiagnostico({ kind: 'url_vista', which: 'portal', url: msg.camino,

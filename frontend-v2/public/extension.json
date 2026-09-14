@@ -1,5 +1,5 @@
 {
-  "version": "2.47.0",
+  "version": "2.48.0",
   "ficheros": [
     "README.md",
     "background.js",
@@ -8,8 +8,9 @@
     "interceptor.js",
     "manifest.json",
     "popup.html",
-    "popup.js"
+    "popup.js",
+    "portal.js"
   ],
-  "kb": 55,
+  "kb": 59,
   "generado": "2026-09-14"
 }

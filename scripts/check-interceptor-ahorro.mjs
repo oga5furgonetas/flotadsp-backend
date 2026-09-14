@@ -63,7 +63,7 @@ const URL_RUTA = 'https://logistics.amazon.es/operations/execution/api/route-det
 
 /* Monta una ventana de mentira y ejecuta el interceptor dentro. Devuelve el
  * `fetch` ya enganchado y la lista de mensajes que salen hacia el bridge. */
-function arrancar() {
+function arrancar(href = 'https://logistics.amazon.es/operations/execution?serviceAreaId=abc') {
   const mensajes = []
   let cuerpoServido = null      // lo que devolverá el fetch falso
   let lecturasDeCuerpo = 0      // cuántas veces se ha abierto de verdad
@@ -84,7 +84,7 @@ function arrancar() {
 
   const win = {
     __flotadspCortexHooked: false,
-    location: { href: 'https://logistics.amazon.es/operations/execution?serviceAreaId=abc', origin: 'https://logistics.amazon.es' },
+    location: { href, origin: new URL(href).origin, pathname: new URL(href).pathname },
     postMessage: (m) => mensajes.push(m),
     addEventListener: () => {},
     // Nada de relojes: el barrido no debe arrancar solo dentro del test.
@@ -115,6 +115,10 @@ function arrancar() {
     servir: (obj, largo) => { cuerpoServido = { obj, largo } },
     pedir: () => win.fetch(URL_RUTA),
     lecturas: () => lecturasDeCuerpo,
+    // Para poder cargar OTRO script en la misma ventana y ver si estorba.
+    ejecutar: (codigo) => vm.runInContext(codigo, win, { filename: 'otro.js' }),
+    fetchActual: () => win.fetch,
+    marcaPortal: () => win.__flotadspPortal,
   }
 }
 
@@ -179,6 +183,35 @@ const paquetesDe = (mensajes) => mensajes
   ok(tope > 0 && tope <= 200, `el tope de rutas (${tope}) vuelve a acumular días`)
   ok(/rutaGets\.clear\(\)/.test(fuente), 'falta el olvido al cambiar de día: la lista crece sin fin')
   ok(/const PAUSA_DORMIDA/.test(fuente), 'falta la pausa larga de cuando no se mueve nada')
+}
+
+/* ── 9. LA SONDA DEL PORTAL NO SE METE EN CORTEX ────────────────────────
+   `portal.js` engancha `fetch` para averiguar qué petición firma los enlaces
+   de los informes. Corre en las mismas páginas de Amazon que el interceptor,
+   así que lo que hay que demostrar es que en Cortex NO se activa y que la
+   captura de paquetes sigue dando exactamente lo mismo. Un segundo gancho
+   encima del que lleva veinte versiones afinándose es justo lo que no puede
+   pasar sin comprobarlo. */
+{
+  const { readFileSync: leer } = await import('node:fs')
+  const fuentePortal = leer(join(RAIZ, 'portal.js'), 'utf8')
+
+  // (a) En una página de Cortex: la sonda se apaga sola y no toca el fetch.
+  const w = arrancar()
+  const antesDeLaSonda = w.fetchActual()
+  w.ejecutar(fuentePortal)
+  ok(w.marcaPortal() !== true, 'la sonda NO debe activarse en las páginas de Cortex')
+  ok(w.fetchActual() === antesDeLaSonda, 'la sonda ha envuelto el fetch de Cortex: no debe tocarlo')
+  w.servir(respuesta(1), 5000)
+  await w.pedir()
+  await new Promise((r) => setImmediate(r))
+  ok(paquetesDe(w.mensajes).length === 3,
+    'con la sonda cargada, la captura de Cortex tiene que seguir dando los mismos paquetes')
+
+  // (b) En una página del portal: ahí sí se activa.
+  const p = arrancar('https://logistics.amazon.es/performance')
+  p.ejecutar(fuentePortal)
+  ok(p.marcaPortal() === true, 'en el portal la sonda tiene que activarse')
 }
 
 if (fallos.length) {
