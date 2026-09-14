@@ -90,6 +90,25 @@
     console.log('%c[FlotaDSP] encontrada la peticion que firma los enlaces', 'color:#34d399;font-weight:bold');
   };
 
+  /* ── ¿Y SI NO HAY PETICIÓN, Y VIENEN YA EN EL HTML? ──────────────────────
+     Es la otra posibilidad real, y hay que poder distinguirla: si la página se
+     sirve ya con los enlaces firmados dentro, no hay ninguna llamada que
+     copiar y el camino es otro (leer el HTML, como hace `dsp.js`).
+     Decirlo es tan útil como encontrar la petición: cierra una de las dos
+     puertas en vez de dejarnos otra ronda adivinando. */
+  const mirarElHtml = () => {
+    if (encontrados >= MAX) return;
+    let html = '';
+    try { html = document.documentElement ? document.documentElement.outerHTML : ''; } catch (_) { return; }
+    if (!html || !BUCKET.test(html)) return;
+    encontrados += 1;
+    post({ kind: 'firma_vista',
+           url: `EN-EL-HTML-DE-LA-PAGINA ${location.pathname}`.slice(0, 200),
+           campos: '', esqueleto: 'los enlaces firmados vienen dentro del HTML, no de una peticion aparte' });
+  };
+  // Al cargar y a los 4 y 12 s: estas pantallas pintan la lista con retraso.
+  for (const ms of [0, 4000, 12000]) setTimeout(mirarElHtml, ms);
+
   // ── fetch ──
   const origFetch = window.fetch;
   window.fetch = function (...args) {
@@ -99,8 +118,12 @@
         try {
           const url = (typeof args[0] === 'string' ? args[0] : args[0]?.url) || res.url || '';
           const metodo = (args[1]?.method) || (typeof args[0] === 'object' ? args[0]?.method : '') || 'GET';
+          /* No se exige `content-type: json`. Una API que devuelve JSON con
+             `text/plain` —o sin cabecera— es de lo más normal, y filtrar por
+             ahí es dejar fuera justo lo que se busca sin enterarse. Lo que se
+             acota es el TAMAÑO, que es lo que de verdad cuesta. */
           const ct = res.headers.get('content-type') || '';
-          if (!ct.includes('json')) return;
+          if (/image|font|video|audio|css|javascript/i.test(ct)) return;
           const largo = Number(res.headers.get('content-length') || 0);
           if (largo > 2000000) return;              // no se copia lo enorme
           const cuerpo = typeof args[1]?.body === 'string' ? args[1].body : '';

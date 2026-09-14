@@ -33,8 +33,18 @@ const AMZ = ['https://logistics.amazon.es/*', 'https://*.amazon.es/*'];
 // se auto-protegen contra doble carga, así que es seguro llamarlo varias veces.
 async function inject(tabId) {
   try {
+    /* LOS CUATRO, NO DOS. `dsp.js` y `portal.js` se declaran en el manifiesto,
+       o sea que solo entran al CARGAR la página — y al reinstalar la extensión
+       las pestañas ya abiertas no se recargan. Resultado: se instalaba una
+       versión nueva, se abría el portal que ya estaba abierto, y allí seguía
+       corriendo el código viejo (o ninguno). Eso costó tres rondas enteras
+       —14-09-2026— buscando el fallo en el sitio equivocado.
+       Los cuatro se auto-protegen contra la doble carga, así que reinyectar es
+       seguro y se puede llamar tantas veces como haga falta. */
     await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', files: ['interceptor.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', files: ['portal.js'] });
     await chrome.scripting.executeScript({ target: { tabId }, world: 'ISOLATED', files: ['bridge.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, world: 'ISOLATED', files: ['dsp.js'] });
   } catch (_) { /* pestaña sin permiso o descargándose */ }
 }
 // Inyecta en TODAS las pestañas de Amazon ya abiertas (sin depender de recargar).
