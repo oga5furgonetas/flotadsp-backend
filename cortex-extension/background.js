@@ -388,22 +388,41 @@ async function bajarInformesPendientes() {
   const pendientes = Object.keys(informes)
     .filter((u) => ahora - (informes[u].pedido || 0) > INFORME_CADA_MS)
     .sort().reverse().slice(0, 3);
-  if (!pendientes.length) return 0;
+  /* ── SE CUENTA LO QUE PASA, AUNQUE NO PASE NADA ───────────────────────────
+     El 14-09-2026 esto no bajó ni un informe y no había forma de saber por qué:
+     el backend solo veía lo que llegaba, y aquí no llegaba nada. Tres rondas
+     mirando el sitio equivocado. Ahora cada pasada manda UNA línea de
+     diagnóstico —cuántas direcciones conoce, cuáles intentó y con qué
+     resultado— por el mismo canal que ya funciona. Cuesta una petición cada
+     media hora y es la diferencia entre saber y adivinar (gotcha 65). */
+  const traza = [];
   let ok = 0;
+  if (!pendientes.length) {
+    await enviarDiagnostico({ kind: 'debug', which: 'informes',
+                              url: `conocidas=${Object.keys(informes).length} pendientes=0`,
+                              schema: Object.keys(informes).slice(0, 5).join(' | ').slice(0, 700) });
+    return 0;
+  }
   for (const u of pendientes) {
     informes[u].pedido = ahora;
+    const corto = u.replace(/^https?:\/\/[^/]+/, '').slice(-46);
     try {
       const r = await fetch(u, { credentials: 'include', cache: 'no-store' });
-      if (!r || !r.ok) { await pushActivity(`informe: HTTP ${r ? r.status : '?'}`, 0); continue; }
+      if (!r || !r.ok) { traza.push(`${corto} HTTP${r ? r.status : '?'}`); continue; }
       const html = await r.text();
-      if (!html || html.length < 400) continue;
+      if (!html || html.length < 400) { traza.push(`${corto} vacio(${html ? html.length : 0})`); continue; }
       const res = await mandarInforme('diario', html.slice(0, 8000000), informes[u].center || '');
-      if (res && res.ok) ok++;
+      if (res && res.ok) { ok++; traza.push(`${corto} OK(${html.length})`); }
+      else traza.push(`${corto} rechazado:${String(res && res.motivo).slice(0, 40)}`);
     } catch (e) {
-      await pushActivity(`informe: ${String(e).slice(0, 50)}`, 0);
+      traza.push(`${corto} ERR:${String(e).slice(0, 40)}`);
     }
   }
   await chrome.storage.local.set({ informes });
+  await enviarDiagnostico({ kind: 'debug', which: 'informes',
+                            url: `conocidas=${Object.keys(informes).length} intentadas=${pendientes.length} ok=${ok}`,
+                            count: ok, bytes: pendientes.length,
+                            schema: traza.join(' || ').slice(0, 1500) });
   return ok;
 }
 
