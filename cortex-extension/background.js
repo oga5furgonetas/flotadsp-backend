@@ -357,7 +357,18 @@ function diasAPedir() {
 
 async function deducirYGuardar() {
   const { informes = {} } = await chrome.storage.local.get({ informes: {} });
-  const conocidas = Object.keys(informes).filter((u) => /Daily-Report_/i.test(u));
+  /* SOLO SE DEDUCE LO QUE NO VA FIRMADO, Y HOY NO VA NINGUNO.
+     Descubierto el 14-09-2026: los informes no los sirve el portal, los sirve
+     un bucket de S3
+     (`flex-peer-performance-reports-prod-euamazon.s3.eu-west-1.amazonaws.com`)
+     con una URL FIRMADA — el enlace lleva una firma al final y caduca. Abrirlo
+     sin ella devuelve `AccessDenied`.
+     Eso tumba la idea de deducir la dirección de mañana: una firma no se puede
+     inventar. Lo que hay que hacer es coger el enlace FRESCO cada vez y
+     pedirlo en el momento, no guardarlo para dentro de media hora.
+     La deducción se queda para el día que alguno venga sin firmar. */
+  const conocidas = Object.keys(informes)
+    .filter((u) => /Daily-Report_/i.test(u) && !/[?&](X-Amz-|Signature|Expires)/i.test(u));
   if (!conocidas.length) return 0;
   // Una ancla por NAVE: con dos naves hay que deducir las dos.
   const porNave = {};
@@ -385,9 +396,16 @@ async function bajarInformesPendientes() {
   const ahora = Date.now();
   // Los más recientes primero: el nombre lleva la fecha, así que ordenar por
   // nombre ordena por día sin tener que parsearla.
+  /* UNA URL FIRMADA CADUCA, ASÍ QUE SE PIDE YA O NO SE PIDE.
+     Guardarla para dentro de media hora es guardar una llave que para entonces
+     ya no abre: se intenta una sola vez, en cuanto llega, y si falla se espera
+     a que alguien vuelva a pasar por la pantalla y la firme de nuevo. Las que
+     no van firmadas —si algún día las hay— siguen reintentándose cada rato. */
+  const firmada = (u) => /[?&](X-Amz-|Signature|Expires)/i.test(u);
   const pendientes = Object.keys(informes)
-    .filter((u) => ahora - (informes[u].pedido || 0) > INFORME_CADA_MS)
-    .sort().reverse().slice(0, 3);
+    .filter((u) => (firmada(u) ? !informes[u].pedido
+                               : ahora - (informes[u].pedido || 0) > INFORME_CADA_MS))
+    .sort().reverse().slice(0, 4);
   /* ── SE CUENTA LO QUE PASA, AUNQUE NO PASE NADA ───────────────────────────
      El 14-09-2026 esto no bajó ni un informe y no había forma de saber por qué:
      el backend solo veía lo que llegaba, y aquí no llegaba nada. Tres rondas
@@ -405,7 +423,12 @@ async function bajarInformesPendientes() {
   }
   for (const u of pendientes) {
     informes[u].pedido = ahora;
-    const corto = u.replace(/^https?:\/\/[^/]+/, '').slice(-46);
+    /* EL NOMBRE DEL FICHERO, NO EL FINAL DE LA URL. Con las direcciones
+       firmadas, los últimos 46 caracteres son la FIRMA: la traza salía como
+       `0c61e25c26949756...` y no había forma de saber de qué informe hablaba —
+       me costó una ronda entera. Y además una firma es una credencial: no
+       tiene por qué viajar a nuestro servidor. */
+    const corto = ((u.split('?')[0].split('/').pop()) || u).slice(-44);
     try {
       const r = await fetch(u, { credentials: 'include', cache: 'no-store' });
       if (!r || !r.ok) { traza.push(`${corto} HTTP${r ? r.status : '?'}`); continue; }

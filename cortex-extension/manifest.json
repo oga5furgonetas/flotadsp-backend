@@ -1,26 +1,48 @@
 {
   "manifest_version": 3,
   "name": "FlotaDSP · Cortex Bridge",
-  "version": "2.45.0",
+  "version": "2.46.0",
   "description": "Lee la API de Cortex (route-summaries / route-details) con tu sesión y la envía a tu Package Intelligence Center. Eliges qué estaciones se envían, para no mezclar dos naves. No lee la pantalla ni usa OCR.",
-  "permissions": ["storage", "scripting", "tabs", "alarms"],
+  "permissions": [
+    "storage",
+    "scripting",
+    "tabs",
+    "alarms"
+  ],
   "host_permissions": [
     "https://logistics.amazon.es/*",
     "https://*.amazon.es/*",
-    "https://flotadsp-backend.fly.dev/*"
+    "https://flotadsp-backend.fly.dev/*",
+    "https://flex-peer-performance-reports-prod-euamazon.s3.eu-west-1.amazonaws.com/*"
   ],
-  "background": { "service_worker": "background.js" },
-  "action": { "default_title": "FlotaDSP Cortex Bridge", "default_popup": "popup.html" },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "FlotaDSP Cortex Bridge",
+    "default_popup": "popup.html"
+  },
   "content_scripts": [
     {
-      "matches": ["https://logistics.amazon.es/*", "https://*.amazon.es/*"],
-      "js": ["interceptor.js"],
+      "matches": [
+        "https://logistics.amazon.es/*",
+        "https://*.amazon.es/*"
+      ],
+      "js": [
+        "interceptor.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://logistics.amazon.es/*", "https://*.amazon.es/*"],
-      "js": ["bridge.js", "dsp.js"],
+      "matches": [
+        "https://logistics.amazon.es/*",
+        "https://*.amazon.es/*"
+      ],
+      "js": [
+        "bridge.js",
+        "dsp.js"
+      ],
       "run_at": "document_start",
       "world": "ISOLATED"
     }
