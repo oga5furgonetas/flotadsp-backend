@@ -172,6 +172,42 @@ $('diag').addEventListener('click', async () => {
   }
 });
 
+/* ── MODO DE CAPTURA ──────────────────────────────────────────────────────
+   «Ahorro» es para el ordenador que además se usa para trabajar: tres pasadas
+   al día y entre medias nada. Lo que se pierde se dice AQUÍ y no en un manual
+   que nadie abre — si alguien lo pone en ahorro sin saber que Apoyo en ruta
+   deja de ir al minuto, lo que va a pensar es que la aplicación está rota. */
+const notaModo = (m) => (m === 'ahorro'
+  ? 'Solo barre a las 9:00, 14:00 y 20:00. Entre pasada y pasada no consume nada. '
+    + 'Lo que abras tú en Cortex se sigue capturando. OJO: Apoyo en ruta y las '
+    + 'posiciones en vivo dejan de ir al minuto.'
+  : 'Barre cada 30 s durante el turno y se duerme cuando nada se mueve. Es lo que '
+    + 'hace falta para Apoyo en ruta.');
+
+try {
+  chrome.runtime.sendMessage({ type: 'modoCaptura' }, (r) => {
+    if (chrome.runtime.lastError || !r) return;
+    const sel = $('modo');
+    if (sel) { sel.value = r.modo || 'vivo'; $('modoNota').textContent = notaModo(sel.value); }
+  });
+} catch (_) {}
+
+$('modo')?.addEventListener('change', (e) => {
+  const m = e.target.value === 'ahorro' ? 'ahorro' : 'vivo';
+  $('modoNota').textContent = notaModo(m);
+  try {
+    chrome.runtime.sendMessage({ type: 'setModoCaptura', modo: m }, () => {
+      const s = $('status');
+      // El interceptor pregunta el modo cada diez minutos: decirlo evita el
+      // «lo he cambiado y sigue igual», que parece un fallo y no lo es.
+      s.textContent = m === 'ahorro'
+        ? 'Modo ahorro guardado. Se aplica en menos de 10 min, o al instante si recargas Cortex (F5).'
+        : 'Modo en vivo guardado. Se aplica en menos de 10 min, o al instante con F5 en Cortex.';
+      s.className = 'status ok';
+    });
+  } catch (_) {}
+});
+
 // Al abrir el popup, fuerza reinyección en las pestañas de Cortex ya abiertas
 // (por si el service worker se durmió o la pestaña se abrió antes que la extensión).
 try { chrome.runtime.sendMessage({ type: 'reinject' }); } catch (_) {}

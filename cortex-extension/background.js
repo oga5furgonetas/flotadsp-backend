@@ -323,6 +323,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     });
     return false;
   }
+  /* CAMINOS DEL PORTAL QUE AUN NO SABEMOS USAR. Solo la ruta y las claves de
+     primer nivel — nunca el contenido. Es lo que permite automatizar el DNR
+     diario y el plan de horas SIN adivinar una URL (gotcha 64). */
+  if (msg?.type === 'urlVista') {
+    enviarDiagnostico({ kind: 'url_vista', which: 'portal', url: msg.url,
+                        schema: String(msg.claves || '').slice(0, 300) });
+    return false;
+  }
   if (msg?.type === 'schema') {
     const key = msg.which === 'summary' ? 'schemaSummary' : (msg.which === 'report' ? 'schemaReport' : 'schema');
     chrome.storage.local.get({ diag: {} }).then(({ diag }) =>
@@ -381,6 +389,29 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
                                        descartados: informe.descartados || [],
                                        plantillas: informe.plantillas || {} }));
     return true;   // respuesta asincrona: hay que mantener el canal abierto
+  }
+  /* ── EN QUÉ MODO CAPTURA ESTA INSTALACIÓN ─────────────────────────────────
+     'vivo'   = barrido continuo (lo de siempre). Hace falta para Apoyo en
+                ruta y para cualquier pantalla que se mire durante el turno.
+     'ahorro' = tres pasadas al día y el resto del tiempo NADA. Para el equipo
+                que además se usa para trabajar.
+     Lo decide el popup y lo guarda el service worker, que es el único que ve
+     `chrome.storage`; el interceptor vive en MAIN y lo pregunta por el puente. */
+  if (msg?.type === 'modoCaptura') {
+    chrome.storage.local.get({ modo: 'vivo', ventanas: [9, 14, 20] })
+      .then(({ modo, ventanas }) => reply?.({
+        modo: modo === 'ahorro' ? 'ahorro' : 'vivo',
+        ventanas: Array.isArray(ventanas) && ventanas.length ? ventanas : [9, 14, 20],
+      }));
+    return true;   // respuesta asincrona: hay que mantener el canal abierto
+  }
+  if (msg?.type === 'setModoCaptura') {
+    const modo = msg.modo === 'ahorro' ? 'ahorro' : 'vivo';
+    const ventanas = (Array.isArray(msg.ventanas) ? msg.ventanas : [])
+      .map((h) => parseInt(h, 10)).filter((h) => h >= 0 && h <= 23);
+    chrome.storage.local.set({ modo, ventanas: ventanas.length ? ventanas : [9, 14, 20] })
+      .then(() => reply?.({ ok: true, modo }));
+    return true;
   }
   if (msg?.type === 'flushNow') { flush().then(() => reply?.({ ok: true })); return true; }
   /* El popup manda aquí qué estaciones se envían. Lista vacía = no enviar nada. */

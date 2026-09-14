@@ -41118,9 +41118,16 @@ async def cortex_ingest(request: Request):
             logger.warning(f"Posiciones vivas: {e}")
             return {"ok": True, "guardado": "posiciones_vivas", "n": 0}
 
-    if kind in ("schema", "debug"):
+    if kind in ("schema", "debug", "url_vista"):
         try:
-            cual = str(body.get("which") or kind)[:40]
+            # UN DOCUMENTO POR CAMINO, no uno por tipo. `url_vista` sirve para
+            # descubrir qué más ofrece el portal —el DNR diario y el plan de
+            # horas, que hoy se copian y pegan a mano—, y con la clave normal
+            # (`url_vista:portal`) cada camino nuevo pisaría al anterior y solo
+            # se vería el último. Es el gotcha 9 otra vez: la clave tiene que
+            # distinguir lo que de verdad es distinto.
+            cual = (str(body.get("url") or "")[:120] if kind == "url_vista"
+                    else str(body.get("which") or kind)[:40])
             await db.cortex_diagnostico.update_one(
                 {"_id": f"{kind}:{cual}"},
                 {"$set": {

@@ -64,6 +64,18 @@
 
   <div id="status" class="status">Se captura todo, pero sólo se envía lo que marques. Con dos pestañas de estaciones distintas, esto evita mezclarlas.</div>
 
+  <!-- EL MODO, JUSTO DEBAJO DEL ESTADO: es lo que decide si este ordenador se
+       puede usar para trabajar o no. En «ahorro» no barre salvo tres veces al
+       día, y entre pasada y pasada no hace absolutamente nada. -->
+  <div style="margin-top:10px;padding:8px 10px;border-radius:8px;background:#111827">
+    <label style="display:block;font-size:11px;color:#94a3b8;margin-bottom:4px">Modo de captura</label>
+    <select id="modo" style="width:100%;padding:6px;border-radius:6px;background:#0b1220;color:#e2e8f0;border:1px solid #334155">
+      <option value="vivo">En vivo — todo el día (hace falta para Apoyo en ruta)</option>
+      <option value="ahorro">Ahorro — 3 pasadas al día (9:00, 14:00 y 20:00)</option>
+    </select>
+    <div id="modoNota" style="margin-top:5px;font-size:11px;color:#64748b"></div>
+  </div>
+
   <div class="act">
     <h3>Actividad (lo que ve la extensión)</h3>
     <ul id="activity"><li class="empty">Nada aún. Recarga la pestaña de Cortex y navega.</li></ul>

@@ -20,6 +20,9 @@ if (!window.__flotadspBridge) {
        cada CAMPO que el interceptor manda hay que reenviarlo aqui. */
     else if (d.kind === 'debug') chrome.runtime.sendMessage({ type: 'debug', which: d.which, url: d.url, count: d.count, bytes: d.bytes });
     else if (d.kind === 'sample') chrome.runtime.sendMessage({ type: 'sample', keys: d.keys, node: d.node });
+    /* Caminos del portal que aun no sabemos usar (DNR diario, plan de horas).
+       Sin el contenido: solo la ruta, para poder automatizarlos sin adivinar. */
+    else if (d.kind === 'url_vista') chrome.runtime.sendMessage({ type: 'urlVista', url: d.url, bytes: d.bytes, claves: d.claves });
     else if (d.kind === 'schema') chrome.runtime.sendMessage({ type: 'schema', which: d.which, url: d.url, schema: d.schema });
     /* Que estados del informe traen paquetes y cuales vienen vacios. Es lo
        unico que dice si «Apoyo en ruta» va a tener direcciones o no. */
@@ -38,6 +41,17 @@ if (!window.__flotadspBridge) {
        mensajes de ida y el bucle de arriba no se lo coma. */
     else if (d.kind === 'informe_aprendido') {
       chrome.runtime.sendMessage({ type: 'informeAprendido', estados: d.estados, descartados: d.descartados, plantilla: d.plantilla, sa: d.sa });
+    /* EN QUÉ MODO CAPTURA ESTE EQUIPO. Mismo camino de vuelta que el informe:
+       el interceptor está en MAIN y no puede tocar `chrome.storage`, así que
+       pregunta y se le contesta por la misma ventana. */
+    } else if (d.kind === 'modo_pedir') {
+      try {
+        chrome.runtime.sendMessage({ type: 'modoCaptura' }, (r) => {
+          if (chrome.runtime.lastError || !r) return;   // worker dormido: se reintenta
+          window.postMessage({ __flotadspIn: true, kind: 'modo',
+                               modo: r.modo, ventanas: r.ventanas }, '*');
+        });
+      } catch (_) {}
     } else if (d.kind === 'informe_pedir') {
       try {
         chrome.runtime.sendMessage({ type: 'informeGuardado' }, (r) => {
