@@ -415,10 +415,18 @@ async function bajarInformesPendientes() {
      media hora y es la diferencia entre saber y adivinar (gotcha 65). */
   const traza = [];
   let ok = 0;
+  /* SOLO EL NOMBRE DEL FICHERO, NUNCA LA URL. Las direcciones del portal van
+     FIRMADAS: llevan `X-Amz-Security-Token` y `X-Amz-Signature`, o sea una
+     credencial temporal de AWS. Esta rama mandaba las URLs enteras al
+     diagnóstico «para ver qué conoce», y con eso una firma acabó guardada en
+     nuestra base (14-09-2026, borrada en cuanto se vio). Caducaba en 30
+     minutos, pero eso no lo hace correcto: un diagnóstico no puede llevarse
+     credenciales de nadie. */
+  const soloNombre = (u) => (u.split('?')[0].split('/').pop() || '').slice(-44);
   if (!pendientes.length) {
     await enviarDiagnostico({ kind: 'debug', which: 'informes',
                               url: `conocidas=${Object.keys(informes).length} pendientes=0`,
-                              schema: Object.keys(informes).slice(0, 5).join(' | ').slice(0, 700) });
+                              schema: Object.keys(informes).slice(0, 6).map(soloNombre).join(' | ').slice(0, 700) });
     return 0;
   }
   for (const u of pendientes) {

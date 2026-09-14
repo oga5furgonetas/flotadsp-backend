@@ -100,6 +100,32 @@ if (diasAPedir) {
 ok(/async function bajarInformesPendientes\(\)\s*\{\s*await deducirYGuardar\(\)/.test(src),
   'bajarInformesPendientes tiene que deducir primero, o vuelve a depender de que alguien abra la carpeta')
 
+/* ── NINGUNA FIRMA PUEDE SALIR EN UN DIAGNOSTICO ──────────────────────────
+   Las direcciones del portal van FIRMADAS: llevan `X-Amz-Security-Token` y
+   `X-Amz-Signature`, o sea una credencial temporal de AWS. El 14-09-2026 una
+   acabó guardada en nuestra base porque una rama del diagnóstico mandaba las
+   URLs enteras «para ver qué conoce». Caducaba en 30 minutos; da igual: un
+   diagnóstico no se lleva credenciales de nadie.
+   Aquí se comprueba que todo lo que va a `enviarDiagnostico` pase antes por
+   algo que se quede solo con el nombre del fichero. */
+{
+  const llamadas = src.split('enviarDiagnostico(').slice(1)
+    .map((t) => t.slice(0, t.indexOf('});') + 1))
+  for (const c of llamadas) {
+    /* Solo molesta cuando las claves de `informes` se usan como LISTA. Contar
+       cuántas hay (`.length`) no lleva ninguna URL dentro, y marcarlo sería un
+       aviso en falso — y un checker que grita en falso deja de leerse, que es
+       justo como se cuelan los de verdad. */
+    const comoLista = /Object\.keys\(informes\)(?!\.length)/.test(c)
+    if (!comoLista) continue
+    ok(/\.map\(soloNombre\)/.test(c),
+      `las URLs de los informes salen al diagnostico sin recortar —ahi va la firma de AWS—:\n      ${c.replace(/\s+/g, ' ').slice(0, 170)}`)
+  }
+  // Y la traza de cada intento, que fue la otra puerta.
+  ok(/const corto = \(\(u\.split\('\?'\)\[0\]/.test(src),
+    'la traza de cada intento vuelve a cortar la URL por el final, que es la firma')
+}
+
 if (fallos.length) {
   console.error(`\n[check-informes-portal] ${fallos.length} problema(s):`)
   for (const f of fallos) console.error('  - ' + f)
