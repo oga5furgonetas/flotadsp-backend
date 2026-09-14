@@ -13569,6 +13569,10 @@ async def start_itv_whatsapp_scheduler():
     # A medianoche cierra los apoyos que quedaron abiertos, para que no se
     # acumulen ni cuenten como en marcha al dia siguiente.
     asyncio.create_task(_bucle_apoyo_cierre())
+    # Y que avise si la captura de Cortex se ha parado. Es lo unico que no
+    # corre en nuestros servidores —vive en un navegador— y por eso es lo unico
+    # que puede morirse sin que nada falle aqui.
+    asyncio.create_task(_bucle_captura_viva())
 
 
 @api_router.post("/whatsapp/avisar-itv")
@@ -34042,6 +34046,146 @@ async def admin_latidos(_=Depends(require_admin)):
     out.sort(key=lambda x: x["bucle"])
     return {"latidos": out,
             "todos_vivos": all(x["vivo"] for x in out) if out else None}
+
+
+# ── LA CAPTURA SE PARA Y NADIE SE ENTERA ────────────────────────────────────
+"""Cortex no tiene API: la unica forma de sacar el dato es un navegador con la
+sesion abierta y la extension puesta. Eso funciona, pero tiene un fallo que no
+da error: **el dia que ese ordenador se apaga, se actualiza o alguien cierra la
+pestaña, deja de entrar todo y la aplicacion sigue enseñando lo de ayer con la
+misma seguridad.**
+
+Paso: el 12 y el 13-09-2026 no entro ni un paquete y no se supo hasta que
+alguien fue a mirar la base de datos tres dias despues. Es el mismo fallo que
+`avisar_bucles_muertos` resuelve para los bucles del backend, pero del lado del
+navegador, que es donde ademas no lo controlamos nosotros.
+
+COMO SE MIDE. Cada ingesta deja una fila por INSTALACION en
+`cortex_diagnostico` con `visto_en` (la escribe el propio endpoint para saber
+que version tiene cada equipo). Ese es el pulso: si la mas reciente de todas se
+queda atras, la captura esta parada. No se mira `cortex_packages`: un dia
+tranquilo puede no traer paquetes nuevos durante un rato y eso NO es una averia
+—seria el gotcha 33, un cero que parece un hallazgo—, mientras que la ingesta
+habla en cada barrido pase lo que pase.
+
+SOLO EN HORARIO DE REPARTO. De madrugada no hay nada que capturar y la
+extension se duerme a proposito, asi que avisar a las cuatro de la mañana seria
+un aviso en falso cada noche — y un aviso que se equivoca deja de leerse, que
+es como se colo el gotcha 42.
+"""
+
+CAPTURA_DESDE_H = 8          # hora de Madrid en la que ya deberia haber datos
+CAPTURA_HASTA_H = 22
+CAPTURA_SILENCIO_MIN = 120   # el doble de lo que tarda el barrido mas lento
+CAPTURA_CADA_MIN = 30
+
+
+async def _captura_ultimo_pulso() -> Optional[datetime]:
+    """Cuando hablo por ultima vez CUALQUIER instalacion de esta empresa."""
+    ultimo = None
+    async for d in db.cortex_diagnostico.find(
+            {"kind": "version"}, {"_id": 0, "visto_en": 1, "instalacion": 1}):
+        v = d.get("visto_en")
+        if not v:
+            continue
+        try:
+            t = datetime.fromisoformat(str(v))
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if ultimo is None or t > ultimo:
+            ultimo = t
+    return ultimo
+
+
+async def revisar_captura_viva() -> dict:
+    """Recorre las empresas y avisa de las que llevan rato sin capturar.
+
+    Es un cron: no hay sesion, asi que la empresa se fija A MANO en cada vuelta
+    (gotcha 26). Sin eso miraria siempre la principal y las demas se quedarian
+    sin vigilancia, en silencio, que es justo el fallo que esto viene a evitar.
+    """
+    from zoneinfo import ZoneInfo
+    ahora_madrid = datetime.now(ZoneInfo("Europe/Madrid"))
+    if not (CAPTURA_DESDE_H <= ahora_madrid.hour < CAPTURA_HASTA_H):
+        return {"fuera_de_horario": True}
+
+    ahora = datetime.now(timezone.utc)
+    orgs = await global_db.organizations.find(
+        {"status": {"$in": ["active", "trial"]}},
+        {"_id": 0, "name": 1, "db_name": 1}).to_list(500)
+    paradas, vivas = [], []
+    for o in orgs:
+        if not o.get("db_name"):
+            continue
+        set_current_org_db(o["db_name"])
+        try:
+            ultimo = await _captura_ultimo_pulso()
+        except Exception as e:                                   # noqa: BLE001
+            logger.warning("Vigilante de captura (%s): %s", o.get("db_name"), e)
+            continue
+        # Una empresa que NO ha capturado nunca no esta averiada: es que todavia
+        # no ha puesto la extension. Avisar de eso seria dar la lata a quien no
+        # usa el modulo.
+        if ultimo is None:
+            continue
+        mins = (ahora - ultimo).total_seconds() / 60
+        (paradas if mins > CAPTURA_SILENCIO_MIN else vivas).append(
+            {"empresa": o.get("name") or o["db_name"], "minutos": round(mins)})
+
+    if not paradas:
+        await _latido("captura_viva", vivas=len(vivas), cada_min=CAPTURA_CADA_MIN)
+        return {"paradas": [], "vivas": vivas}
+
+    # Un aviso al dia por empresa: si no, con el ordenador apagado el fin de
+    # semana saldrian veintiocho mensajes y se dejarian de leer todos.
+    avisadas = []
+    for p in paradas:
+        clave = "captura_parada_%s" % re.sub(r"[^a-z0-9]", "", p["empresa"].lower())[:24]
+        if await _ya_enviado_hoy(clave, ahora.strftime("%Y-%m-%d")):
+            continue
+        avisadas.append(p)
+    if avisadas:
+        lineas = ["\U0001F53B <b>La captura de Cortex esta parada</b>"]
+        for p in avisadas:
+            lineas.append("\u2022 <b>%s</b>: sin recibir nada desde hace %d min"
+                          % (p["empresa"], p["minutos"]))
+        lineas.append("")
+        lineas.append("El ordenador que tiene Cortex abierto se ha apagado, ha "
+                      "cerrado la pestaña o ha perdido la sesion.")
+        lineas.append("Abre Cortex en ese equipo y pulsa F5. Mientras tanto, la "
+                      "aplicacion sigue enseñando los datos de la ultima captura.")
+        await _telegram_aviso("\n".join(lineas))
+    await _latido("captura_viva", paradas=len(paradas), cada_min=CAPTURA_CADA_MIN)
+    return {"paradas": paradas, "avisadas": len(avisadas), "vivas": vivas}
+
+
+async def _bucle_captura_viva():
+    """Cada media hora, y no una vez al dia: una captura parada a las nueve de
+    la mañana cuesta un dia entero de datos que ademas NO se pueden recuperar
+    (gotcha 39: `cortex_packages.state` es el estado de ahora, y a los tres dias
+    se ha borrado el 97 % de las devoluciones de ese dia)."""
+    while True:
+        try:
+            await revisar_captura_viva()
+        except Exception as e:                                   # noqa: BLE001
+            logger.error("Bucle de captura viva: %s", e)
+        await asyncio.sleep(CAPTURA_CADA_MIN * 60)
+
+
+@api_router.get("/cortex/captura-viva")
+async def cortex_captura_viva(_=Depends(require_admin)):
+    """Para verlo sin esperar al aviso, y para probarlo."""
+    ultimo = await _captura_ultimo_pulso()
+    mins = None
+    if ultimo:
+        mins = round((datetime.now(timezone.utc) - ultimo).total_seconds() / 60)
+    return {"ultimo": ultimo.isoformat() if ultimo else None,
+            "hace_min": mins,
+            "silencio_max_min": CAPTURA_SILENCIO_MIN,
+            "parada": bool(mins is not None and mins > CAPTURA_SILENCIO_MIN),
+            "nunca": ultimo is None}
 
 
 async def _bucle_congelar():
