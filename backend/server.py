@@ -34106,6 +34106,31 @@ async def cortex_ingest_informe(request: Request):
         raise HTTPException(413, "El informe es demasiado grande")
 
     center = _texto_cuerpo(body.get("center"), 30)
+
+    async def _anotar(ok: bool, motivo: str, res):
+        """SE APUNTA TODO INTENTO, salga bien o mal.
+
+        La primera version solo guardaba los buenos, y con eso me quede ciego
+        justo en el caso que importaba: el 14-09-2026 el informe llegaba al
+        backend, el lector lo rechazaba, y desde fuera se veia exactamente igual
+        que si la extension no hubiera mandado nada. Tres rondas buscando el
+        fallo en el sitio equivocado. Un fallo que no deja rastro obliga a
+        adivinar, y adivinar es lo que hay que evitar (gotcha 65).
+        """
+        await db.app_meta.update_one(
+            {"_id": "informe_auto_%s" % tipo},
+            {"$set": {"en": datetime.now(timezone.utc).isoformat(),
+                      "ok": ok, "motivo": motivo,
+                      "center": center or None,
+                      "bytes": len(texto),
+                      # Un trozo del principio: si el lector lo rechaza, esto
+                      # dice si lo que llego era el informe o una pagina de
+                      # login, que es la otra cosa que puede devolver el portal.
+                      "cabeza": texto[:300],
+                      "resumen": {k: v for k, v in (res or {}).items()
+                                  if isinstance(v, (int, float, str, bool))}}},
+            upsert=True)
+
     try:
         if tipo == "diario":
             r = await pegar_diario({"texto": texto, "center": center}, _USUARIO_INGESTA)
@@ -34116,15 +34141,13 @@ async def cortex_ingest_informe(request: Request):
         # ser que esa pantalla no sea la que creiamos. Se contesta 200 con el
         # motivo para que la extension deje de reintentarlo y quede constancia,
         # en vez de llenar los logs de 400 iguales.
+        await _anotar(False, str(e.detail)[:300], None)
         return {"ok": False, "tipo": tipo, "motivo": str(e.detail)[:200]}
+    except Exception as e:                                       # noqa: BLE001
+        await _anotar(False, "error inesperado: %s" % str(e)[:200], None)
+        raise
 
-    await db.app_meta.update_one(
-        {"_id": "informe_auto_%s" % tipo},
-        {"$set": {"en": datetime.now(timezone.utc).isoformat(),
-                  "center": center or None,
-                  "resumen": {k: v for k, v in (r or {}).items()
-                              if isinstance(v, (int, float, str, bool))}}},
-        upsert=True)
+    await _anotar(True, "", r)
     return {"ok": True, "tipo": tipo, "resultado": r}
 
 
