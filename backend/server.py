@@ -34093,7 +34093,15 @@ async def cortex_ingest_informe(request: Request):
     if _jti and not await _llave_viva(_jti):
         raise HTTPException(401, "Esta llave se ha revocado. Copia una nueva desde "
                                  "Paquetes IA en la aplicación.")
-    body = await request.json()
+    # Un cuerpo vacio o mal formado es un 400, no un 500: un 500 despierta la
+    # alarma de Telegram por un dato mal escrito, que es justo lo que se quiso
+    # evitar en las otras 216 mutaciones (gotcha 61). Salio probandolo.
+    try:
+        body = await request.json()
+    except Exception:                                            # noqa: BLE001
+        raise HTTPException(400, "El cuerpo no es JSON valido")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "El cuerpo tiene que ser un objeto JSON")
     tipo = str(body.get("tipo") or "").strip().lower()
     if tipo not in _INFORME_TIPOS:
         raise HTTPException(400, "Tipo de informe desconocido: %s" % tipo[:20])
@@ -34133,7 +34141,32 @@ async def cortex_ingest_informe(request: Request):
 
     try:
         if tipo == "diario":
-            r = await pegar_diario({"texto": texto, "center": center}, _USUARIO_INGESTA)
+            # ── DOS PASADAS: PRIMERO SE LEE, Y SOLO SE GUARDA SI CUADRA ─────
+            # `pegar_diario` SIN `confirmar` solo lee y devuelve el resumen: es
+            # el paso de revision que hace una persona antes de importar. La
+            # primera version automatica se quedaba ahi y no guardaba NADA —
+            # devolvia un resumen perfecto, con sus 18 conductores y sus 6 DNR,
+            # y las colecciones seguian igual. Un exito de mentira, que es peor
+            # que un error (14-09-2026).
+            #
+            # Sin persona que revise, revisa el propio documento: el lector
+            # cruza la columna DNR del resumen con las filas del detalle,
+            # conductor a conductor. Si no cuadra es que el informe llego a
+            # medias, y a medias NO se guarda: media tabla importada en
+            # silencio es justo el dato falso que parece bueno.
+            previo = await pegar_diario({"texto": texto, "center": center}, _USUARIO_INGESTA)
+            descuadres = previo.get("descuadres") or []
+            vacio = not (previo.get("conductores") or previo.get("filas_dnr")
+                         or previo.get("filas_rts") or previo.get("filas_cc"))
+            if descuadres:
+                await _anotar(False, "no cuadra: %s" % json.dumps(descuadres[:4])[:200], previo)
+                return {"ok": False, "tipo": tipo, "motivo": "el informe no cuadra",
+                        "descuadres": descuadres[:4]}
+            if vacio:
+                await _anotar(False, "el informe no trae ninguna fila", previo)
+                return {"ok": False, "tipo": tipo, "motivo": "sin filas"}
+            r = await pegar_diario({"texto": texto, "center": center, "confirmar": True},
+                                   _USUARIO_INGESTA)
         else:
             r = await whc_analizar({"texto": texto, "center": center})
     except HTTPException as e:
