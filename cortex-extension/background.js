@@ -304,7 +304,83 @@ async function recordarInformes(urls, center) {
   return nuevos;
 }
 
+/* ── DEDUCIR EL INFORME DE UN DÍA A PARTIR DE UNO CONOCIDO ───────────────────
+   Hasta aquí, para bajar el informe de hoy había que pasar otra vez por la
+   carpeta. Eso no es automático: es acordarse de hacerlo.
+
+   Pero la forma del nombre es completamente regular, y no lo digo de memoria —
+   está medido con los enlaces reales de DOS naves y DOS semanas (14-09-2026):
+
+     /es/tdsl/oga5/2026/week-37/ES-TDSL-OGA5-Daily-Report_2026-09-08_Tue.html
+     /es/tdsl/dga1/2026/week-37/ES-TDSL-DGA1-Daily-Report_2026-09-11_Fri.html
+     /es/tdsl/oga5/2026/week-38/ES-TDSL-OGA5-Daily-Report_2026-09-13_Sun.html
+
+   La semana 37 va del domingo 06 al sábado 12, y el 13 (domingo) ya es la 38:
+   o sea que la semana del portal EMPIEZA EN DOMINGO, igual que la de los
+   reportes diarios. Con un enlace conocido como ancla —su fecha y su número de
+   semana— se calcula el de cualquier otro día contando semanas desde ahí.
+
+   NO ES ADIVINAR: es extrapolar de lo observado, y encima se comprueba solo. Si
+   la dirección deducida no existe, el portal contesta 404, se apunta y ya está
+   — no se inventa ningún dato, solo se pierde una petición. */
+const DIA_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function deducirInforme(urlConocida, fechaISO) {
+  const m = String(urlConocida).match(
+    /^(https:\/\/[^/]+)(\/[a-z]{2}\/tdsl\/[a-z0-9]+\/)(\d{4})\/week-(\d{1,2})\/(.*Daily-Report_)(\d{4}-\d{2}-\d{2})(_[A-Za-z]{3}\.html?)$/i);
+  if (!m) return null;
+  const [, origen, base, , semana, prefijo, fechaBase, sufijo] = m;
+  const d0 = new Date(fechaBase + 'T12:00:00Z');       // mediodía: sin sustos de huso
+  const d1 = new Date(fechaISO + 'T12:00:00Z');
+  if (Number.isNaN(d0.getTime()) || Number.isNaN(d1.getTime())) return null;
+  // Domingo de cada una de las dos semanas, y cuántas semanas hay entre ellas.
+  const domingoDe = (d) => { const x = new Date(d); x.setUTCDate(x.getUTCDate() - x.getUTCDay()); return x; };
+  const semanas = Math.round((domingoDe(d1) - domingoDe(d0)) / (7 * 86400000));
+  const nSemana = Number(semana) + semanas;
+  if (nSemana < 1 || nSemana > 53) return null;
+  const anio = d1.getUTCFullYear();
+  const dia = DIA_EN[d1.getUTCDay()];
+  return `${origen}${base}${anio}/week-${nSemana}/${prefijo}${fechaISO}${sufijo.slice(0, 1)}${dia}${sufijo.slice(4)}`;
+}
+
+/* Los días que interesan: hoy y los tres anteriores. El reporte de un día no
+   está completo hasta el día siguiente —la columna DSC se rellena tarde— así
+   que volver a pedir los de atrás es lo que hace que acabe cuadrando. */
+function diasAPedir() {
+  const out = [];
+  for (let k = 0; k <= 3; k++) {
+    const d = new Date(Date.now() - k * 86400000);
+    out.push(d.toISOString().slice(0, 10));
+  }
+  return out;
+}
+
+async function deducirYGuardar() {
+  const { informes = {} } = await chrome.storage.local.get({ informes: {} });
+  const conocidas = Object.keys(informes).filter((u) => /Daily-Report_/i.test(u));
+  if (!conocidas.length) return 0;
+  // Una ancla por NAVE: con dos naves hay que deducir las dos.
+  const porNave = {};
+  for (const u of conocidas) {
+    const m = u.match(/\/tdsl\/([a-z0-9]+)\//i);
+    const nave = m ? m[1].toLowerCase() : '?';
+    if (!porNave[nave] || u > porNave[nave]) porNave[nave] = u;   // la más reciente
+  }
+  const nuevas = [];
+  for (const [nave, ancla] of Object.entries(porNave)) {
+    for (const dia of diasAPedir()) {
+      const u = deducirInforme(ancla, dia);
+      if (u && !informes[u]) nuevas.push([u, nave.toUpperCase()]);
+    }
+  }
+  if (!nuevas.length) return 0;
+  for (const [u, nave] of nuevas) informes[u] = { visto: Date.now(), pedido: 0, center: nave, deducida: true };
+  await chrome.storage.local.set({ informes });
+  return nuevas.length;
+}
+
 async function bajarInformesPendientes() {
+  await deducirYGuardar();
   const { informes = {} } = await chrome.storage.local.get({ informes: {} });
   const ahora = Date.now();
   // Los más recientes primero: el nombre lleva la fecha, así que ordenar por
