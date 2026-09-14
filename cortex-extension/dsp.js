@@ -29,10 +29,13 @@
  * Si el documento no es lo que creemos, el backend contesta que no lo reconoce
  * y aquí se deja de insistir. No se inventa nada.
  *
- * NO PIDE NADA POR SU CUENTA. Solo mira lo que ya está abierto: si alguien abre
- * el informe, entra solo. Cuando sepamos qué petición lo devuelve —para eso
- * está el apuntador de caminos de abajo— se podrá pedir 2 o 3 veces al día sin
- * que nadie abra nada.
+ * DOS CAMINOS DE ENTRADA, y el segundo es el que de verdad quita trabajo:
+ *   1. lo que ya está abierto: si alguien abre el informe, entra solo;
+ *   2. **los informes se piden solos.** El 14-09-2026, con la v2.41 puesta,
+ *      aparecieron los enlaces reales del portal y resultó que son ficheros
+ *      .html colgados de una ruta fija —uno por día—. Con la sesión que ya hay
+ *      abierta se piden y se mandan, sin que nadie abra ni descargue nada.
+ *      Ver `pedirInformes`.
  */
 if (!window.__flotadspDsp) {
   window.__flotadspDsp = true;
@@ -98,8 +101,74 @@ if (!window.__flotadspDsp) {
     }
     // El plan de horas va en TEXTO: es lo que se pegaba a mano y lo que
     // `_whc_parsear` sabe leer.
+    //
+    // EL CENTRO SALE DE LA RUTA (`/es/tdsl/oga5/...`). El plan no lo dice en
+    // ninguna parte, y sin centro el backend analiza pero NO GUARDA la semana:
+    // la primera vez que entró solo, el 14-09-2026, se evaluó correctamente y
+    // se perdió. Un dato que se calcula y no se guarda parece que funciona.
     if (texto && texto.length > MIN_LARGO && MARCA_WHC.test(texto)) {
-      mandar('whc', texto.slice(0, 2000000), '');
+      mandar('whc', texto.slice(0, 2000000), centroDeRuta());
+    }
+  };
+
+  /* ── LOS INFORMES SE PIDEN SOLOS ─────────────────────────────────────────
+     Descubierto el 14-09-2026, mirando los enlaces REALES del portal (no
+     adivinando): los informes son ficheros .html colgados de una ruta con
+     forma fija, uno por día y semana:
+
+       /es/tdsl/oga5/2026/week-37/ES-TDSL-OGA5-Daily-Report_2026-09-12_Sat.html
+       /es/tdsl/oga5/2026/week-37/DNR_Investigations_ES-TDSL-OGA5.html
+       /es/tdsl/oga5/2026/week-37/ES-TDSL-OGA5-Week37-Contact-Compliance-report.html
+
+     O sea que no hace falta que nadie abra ni descargue nada: basta con pedir
+     esas direcciones con la sesión que ya hay abierta, igual que se hace con
+     el informe de direcciones de Cortex.
+
+     NO SE CONSTRUYEN A MANO. Se usan los enlaces que la página trae: el número
+     de semana del portal no es el ISO (su semana va de domingo a sábado) y
+     calcularlo por nuestra cuenta acabaría pidiendo una semana que no existe y
+     recibiendo un 404 en silencio. Si están en pantalla, están bien.
+
+     UNA VEZ POR FICHERO Y RATO. Se vuelve a mirar cada media hora —las dos o
+     tres pasadas al día que pedía Dani— y el backend descarta el repetido por
+     su propio id, así que reenviar no duplica nada. */
+  const HORA_MS = 3600000;
+  const RE_DIARIO = /Daily-Report_(\d{4}-\d{2}-\d{2})/i;
+  const pedidos = new Map();      // camino -> cuándo se pidió
+
+  const centroDeRuta = () => {
+    const m = location.pathname.match(/\/es\/tdsl\/([a-z0-9]{3,6})\//i);
+    return m ? m[1].toUpperCase() : '';
+  };
+
+  const pedirInformes = async () => {
+    let enlaces = [];
+    try {
+      enlaces = [...document.querySelectorAll('a[href]')]
+        .map((a) => a.getAttribute('href') || '')
+        .filter((h) => RE_DIARIO.test(h) && /\.html?($|\?)/i.test(h));
+    } catch (_) { return; }
+    if (!enlaces.length) return;
+
+    /* Los más recientes primero y como mucho tres por vuelta: la semana trae
+       siete y bajarlos todos de golpe es una ráfaga que no hace falta — el de
+       hoy y el de ayer son los que mueven algo. */
+    const ordenados = [...new Set(enlaces)].sort().reverse().slice(0, 3);
+    for (const href of ordenados) {
+      let url;
+      try { url = new URL(href, location.origin); } catch (_) { continue; }
+      if (url.origin !== location.origin) continue;      // solo el portal
+      const antes = pedidos.get(url.pathname);
+      if (antes && Date.now() - antes < HORA_MS) continue;
+      pedidos.set(url.pathname, Date.now());
+      try {
+        const r = await fetch(url.href, { credentials: 'include', cache: 'no-store' });
+        if (!r || !r.ok) continue;
+        const html = await r.text();
+        if (!html || html.length < MIN_LARGO) continue;
+        // El centro sale del propio documento; el de la ruta es el respaldo.
+        mandar('diario', html.slice(0, 8000000), centroDe(html) || centroDeRuta());
+      } catch (_) { /* sin red o sin permiso: se reintenta a la próxima */ }
     }
   };
 
@@ -128,7 +197,7 @@ if (!window.__flotadspDsp) {
     } catch (_) {}
   };
 
-  const vuelta = () => { mirar(); apuntarCaminos(); };
+  const vuelta = () => { mirar(); apuntarCaminos(); pedirInformes(); };
   // Al cargar y luego cada 15 s: el portal es una SPA y la pantalla del informe
   // aparece sin recargar la página, así que mirar una sola vez no vale.
   if (document.readyState === 'loading') {
