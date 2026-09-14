@@ -141,35 +141,31 @@ if (!window.__flotadspDsp) {
     return m ? m[1].toUpperCase() : '';
   };
 
-  const pedirInformes = async () => {
+  /* LOS ENLACES SE RECUERDAN, NO SE MIRAN SOLO AQUÍ. La primera versión pedía
+     los informes únicamente si la carpeta estaba abierta en esa pestaña, y en
+     la primera prueba real (14-09-2026, 17:51) Dani tenía delante
+     `/performance`: los enlaces se habían descubierto a las 17:33 y no se pidió
+     ni uno, porque la pestaña ya estaba en otra pantalla. Una captura que
+     depende de en qué pantalla esté alguien no es automática.
+
+     Ahora se mandan al service worker, que los guarda y los pide él por su
+     cuenta cada media hora desde cualquier pestaña de Amazon — y con los
+     permisos de la extensión, así que tampoco le afecta el CORS de la página. */
+  const pedirInformes = () => {
     let enlaces = [];
     try {
       enlaces = [...document.querySelectorAll('a[href]')]
-        .map((a) => a.getAttribute('href') || '')
-        .filter((h) => RE_DIARIO.test(h) && /\.html?($|\?)/i.test(h));
+        .map((a) => { try { return new URL(a.getAttribute('href'), location.href).href; } catch (_) { return ''; } })
+        .filter((h) => h && RE_DIARIO.test(h) && /\.html?($|\?|#)/i.test(h));
     } catch (_) { return; }
     if (!enlaces.length) return;
-
-    /* Los más recientes primero y como mucho tres por vuelta: la semana trae
-       siete y bajarlos todos de golpe es una ráfaga que no hace falta — el de
-       hoy y el de ayer son los que mueven algo. */
-    const ordenados = [...new Set(enlaces)].sort().reverse().slice(0, 3);
-    for (const href of ordenados) {
-      let url;
-      try { url = new URL(href, location.origin); } catch (_) { continue; }
-      if (url.origin !== location.origin) continue;      // solo el portal
-      const antes = pedidos.get(url.pathname);
-      if (antes && Date.now() - antes < HORA_MS) continue;
-      pedidos.set(url.pathname, Date.now());
-      try {
-        const r = await fetch(url.href, { credentials: 'include', cache: 'no-store' });
-        if (!r || !r.ok) continue;
-        const html = await r.text();
-        if (!html || html.length < MIN_LARGO) continue;
-        // El centro sale del propio documento; el de la ruta es el respaldo.
-        mandar('diario', html.slice(0, 8000000), centroDe(html) || centroDeRuta());
-      } catch (_) { /* sin red o sin permiso: se reintenta a la próxima */ }
-    }
+    const nuevos = [...new Set(enlaces)].filter((u) => !pedidos.has(u));
+    if (!nuevos.length) return;
+    for (const u of nuevos) pedidos.set(u, Date.now());
+    try {
+      chrome.runtime.sendMessage({ type: 'informesVistos', urls: nuevos.slice(0, 20),
+                                   center: centroDeRuta() });
+    } catch (_) {}
   };
 
   /* ── APUNTADOR DE CAMINOS ────────────────────────────────────────────────

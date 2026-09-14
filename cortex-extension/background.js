@@ -269,6 +269,68 @@ async function mandarInforme(tipo, texto, center) {
   }
 }
 
+/* ── LOS INFORMES DEL PORTAL, PEDIDOS POR EL SERVICE WORKER ──────────────────
+   Los enlaces los descubre `dsp.js` cuando alguien pasa por la carpeta, PERO
+   quien los pide es esto, por dos razones que se aprendieron probándolo:
+
+   · UNA CAPTURA QUE DEPENDE DE QUÉ PANTALLA ESTÉ ABIERTA NO ES AUTOMÁTICA. En
+     la primera prueba real (14-09-2026) los enlaces se descubrieron a las
+     17:33 y a las 17:51 la pestaña estaba en otra pantalla: no se pidió ni
+     uno. Guardándolos, se piden desde cualquier pestaña de Amazon.
+   · EL SERVICE WORKER NO TIENE EL CORS DE LA PÁGINA: usa los permisos de la
+     extensión (`host_permissions`) y manda las cookies de la sesión igual.
+
+   Cada media hora y tres como mucho: la semana trae siete informes y bajarlos
+   todos de golpe es una ráfaga que no hace falta. El backend descarta el
+   repetido por su propio id, así que volver a mandarlo no duplica nada. */
+const INFORME_CADA_MS = 30 * 60 * 1000;
+const INFORME_MAX_GUARDADOS = 40;
+
+async function recordarInformes(urls, center) {
+  const { informes = {} } = await chrome.storage.local.get({ informes: {} });
+  let nuevos = 0;
+  for (const u of urls || []) {
+    if (typeof u !== 'string' || !/^https:\/\//i.test(u)) continue;
+    if (!informes[u]) { informes[u] = { visto: Date.now(), pedido: 0, center: center || '' }; nuevos++; }
+  }
+  // Los más viejos se caen: son ficheros por día y semana, no crecen sin fin
+  // pero tampoco hay que guardar los de hace dos meses.
+  const claves = Object.keys(informes);
+  if (claves.length > INFORME_MAX_GUARDADOS) {
+    claves.sort((a, b) => (informes[a].visto || 0) - (informes[b].visto || 0));
+    for (const k of claves.slice(0, claves.length - INFORME_MAX_GUARDADOS)) delete informes[k];
+  }
+  if (nuevos) await chrome.storage.local.set({ informes });
+  return nuevos;
+}
+
+async function bajarInformesPendientes() {
+  const { informes = {} } = await chrome.storage.local.get({ informes: {} });
+  const ahora = Date.now();
+  // Los más recientes primero: el nombre lleva la fecha, así que ordenar por
+  // nombre ordena por día sin tener que parsearla.
+  const pendientes = Object.keys(informes)
+    .filter((u) => ahora - (informes[u].pedido || 0) > INFORME_CADA_MS)
+    .sort().reverse().slice(0, 3);
+  if (!pendientes.length) return 0;
+  let ok = 0;
+  for (const u of pendientes) {
+    informes[u].pedido = ahora;
+    try {
+      const r = await fetch(u, { credentials: 'include', cache: 'no-store' });
+      if (!r || !r.ok) { await pushActivity(`informe: HTTP ${r ? r.status : '?'}`, 0); continue; }
+      const html = await r.text();
+      if (!html || html.length < 400) continue;
+      const res = await mandarInforme('diario', html.slice(0, 8000000), informes[u].center || '');
+      if (res && res.ok) ok++;
+    } catch (e) {
+      await pushActivity(`informe: ${String(e).slice(0, 50)}`, 0);
+    }
+  }
+  await chrome.storage.local.set({ informes });
+  return ok;
+}
+
 async function enviarDiagnostico(payload) {
   /* SI FALLA, SE DICE. Antes se tragaba el error entero y por eso el resumen de
      Cortex estuvo un dia entero sin llegar sin que nada lo delatara: el mensaje
@@ -417,6 +479,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
      paquetes: no son observaciones que se acumulen, es un documento entero que
      el backend ya sabe leer. Mezclarlos en la cola habria significado
      reescribir el lector que ya existe y esta probado. */
+  if (msg?.type === 'informesVistos') {
+    recordarInformes(msg.urls, msg.center).then((n) => {
+      if (n) bajarInformesPendientes();   // los recien descubiertos, ya
+      reply?.({ ok: true, nuevos: n });
+    });
+    return true;
+  }
   if (msg?.type === 'informePortal') {
     mandarInforme(msg.tipo, msg.texto, msg.center).then((r) => reply?.(r));
     return true;   // respuesta asincrona
@@ -456,7 +525,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
 // arranque el último: así, aunque boot() fallara, los listeners ya están vivos.
 chrome.runtime.onInstalled.addListener(boot);
 chrome.runtime.onStartup.addListener(boot);
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === ALARM) flush(); });
+/* La misma alarma de cada minuto tira tambien de los informes: la funcion
+   decide sola si toca (media hora por fichero), asi que llamarla cada minuto
+   no pide nada de mas y la deja pedir aunque nadie abra ninguna pestaña. */
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name !== ALARM) return;
+  flush();
+  bajarInformesPendientes();
+});
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status === 'complete' && /amazon\.es/.test(tab.url || '')) inject(tabId);
 });
