@@ -1551,6 +1551,34 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    alimenta un bucle necesita saber cuando VACIARSE, no solo un tope: un tope
    de 400 con 45 rutas al dia es «acumula ocho dias», que es justo lo que
    parecia que evitaba.
+   **Rematado el 14-09-2026 (v2.40.0)**, con tres cosas mas:
+   · **una respuesta con el mismo `content-length` que la anterior ni se abre**
+     — ni `clone()`, ni cadena, ni `JSON.parse`. En un `route-details` vivo el
+     timeline crece con cada evento, asi que el tamaño es un detector de cambio
+     fiable. Con relectura forzada cada 8 saltos: sin esa guarda, una ruta que
+     cambiara sin mover un byte se quedaria congelada para siempre y en
+     silencio;
+   · **`route-details` se parsea DEL FLUJO** (`.json()`) en vez de `.text()` +
+     `JSON.parse`. Lo segundo tiene los 0,8 MB de cadena y el arbol de objetos
+     en memoria A LA VEZ; lo primero no llega a crear la cadena. Dentro de
+     `emit` eso deja el `text` vacio, y las tres comprobaciones que lo miran son
+     filtros para respuestas DESCONOCIDAS — esta se conoce por la URL;
+   · **si tres vueltas seguidas no traen ningun cambio, se pasa a una cada 5
+     minutos.** El PC de oficina no se apaga y de madrugada no hay nada que
+     capturar. No se para del todo a proposito: parar es no enterarse de que
+     empieza el dia siguiente.
+   Y una leccion de donde poner las cosas: el tamaño se anotaba en
+   `syntheticFetch` y la decision de saltar estaba en el hook de `fetch`. Por
+   ahi solo pasan NUESTRAS peticiones, asi que una ruta que abriera una persona
+   en Cortex no entraba en la cuenta nunca. **El dato y la decision que lo usa
+   viven en el mismo sitio**, o uno de los dos se queda cojo.
+   De 352 GB de JSON abiertos al dia a **16,6 — x21**, y cada lectura con la
+   mitad de pico de memoria.
+   Lo vigila `scripts/check-interceptor-ahorro.mjs`, que es la primera forma de
+   saber si el interceptor captura **sin instalarlo**: ejecuta el fichero real
+   en una ventana falsa, le mete respuestas por el `fetch` que el mismo
+   engancha y mira lo que manda al bridge. Probado reintroduciendo los dos
+   fallos.
 
 75. **Dos rebajas no se suman: la segunda se come el margen entero, y apagar
    una promocion no apaga su cartel.** El 09-09-2026 Dani bajo los precios de
@@ -1673,12 +1701,12 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   despues de tocar multiempresa, importaciones, centros o el flujo de taller.
   Deja la empresa creada a proposito —no se borra sola: un script de smoke no
   debe poder borrar nada—; se quita desde el panel de super-admin.
-- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son veintidós:
+- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son veintitrés:
   `check-i18n`, `check-routes`, `check-huerfanas`, `check-permisos`, `check-tema`,
   `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones`,
   `check-tema-mezclado`, `check-efectos`, `check-chunk-error`,
   `check-importados`, `check-destinos`, `check-cola-extension`,
-  `check-envio-candidatura`,
+  `check-envio-candidatura`, `check-interceptor-ahorro`,
   `check_contracts.py`, `check_objectid.py`, `check_tenant.py`,
   `check_multiempresa.py`, `check_borrado.py` y `check_unicos.py`.
   `check-patrones` admite `soloEn` en una regla: hay patrones que solo son un

@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.39.0';
+  const VERSION_INTERCEPTOR = '2.40.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -170,10 +170,6 @@
                                             'cache-control': 'no-cache', ...apiHeaders } })
         .then((r) => {
           if (!r || !r.ok) post({ kind: 'debug', url: `HTTP ${r ? r.status : '?'} · ${url.replace(/^https?:\/\/[^/]+/, '').slice(0, 100)}`, count: 0, bytes: 0 });
-          // Para el enfriamiento: si esta ruta devuelve lo mismo vuelta tras
-          // vuelta, deja de pedirse cada vez. La cabecera va antes de leer el
-          // cuerpo, así que esto no cuesta nada.
-          try { if (r) anotarTamano(url, Number(r.headers.get('content-length'))); } catch (_) {}
           return r;   // hace falta para poder CONTAR lo que trae un estado a prueba
         })
         .catch(() => post({ kind: 'debug', url: `sin respuesta · ${url.replace(/^https?:\/\/[^/]+/, '').slice(0, 100)}`, count: 0, bytes: 0 }));
@@ -231,12 +227,51 @@
      respuestas del mismo tamaño pueden diferir —un estado que cambia sin mover
      un byte— pero eso solo retrasa esa ruta una vuelta, y las rutas vivas
      cambian de tamaño constantemente porque el timeline crece. */
+  let algoSeMovio = true;      // ¿ha cambiado algo en esta vuelta?
   const anotarTamano = (url, largo) => {
-    if (!Number.isFinite(largo)) return;
+    if (!Number.isFinite(largo) || largo <= 0) return;
     const e = ENFRIA.get(url);
     if (e && e.largo === largo) e.iguales += 1;
-    else ENFRIA.set(url, { largo, iguales: 0 });
+    else { ENFRIA.set(url, { largo, iguales: 0, saltos: 0 }); algoSeMovio = true; }
   };
+
+  /* ── NI SIQUIERA LEER EL CUERPO SI NO HA CAMBIADO ────────────────────────
+     Enfriar la ruta ahorra PEDIRLA. Pero cuando le toca turno, la respuesta se
+     clonaba, se convertía en una cadena de 0,8 MB y se parseaba entera — para
+     acabar guardando exactamente los mismos paquetes que ya teníamos.
+
+     Si `content-length` es idéntico al de la vez anterior, el contenido lo es
+     casi con total seguridad: en un `route-details` vivo el timeline crece con
+     cada evento, así que cualquier cambio real mueve el tamaño. Cuando coincide
+     se descarta la respuesta sin tocarla: cero clonado, cero cadena, cero
+     `JSON.parse`. Es el ahorro más grande que queda, porque es justo lo que se
+     hace cientos de veces al día con rutas ya cerradas.
+
+     LA GUARDA: cada `FORZAR_LECTURA` saltos se lee entera de todas formas. Un
+     cambio que no mueva un solo byte —raro, pero no imposible— llegaría tarde,
+     nunca tardísimo. Sin esta guarda, una ruta podría quedarse congelada para
+     siempre, que es el tipo de fallo que no da error y no se ve. */
+  const FORZAR_LECTURA = 8;
+  const puedeSaltarCuerpo = (url, largo) => {
+    if (!Number.isFinite(largo) || largo <= 0) return false;
+    const e = ENFRIA.get(url);
+    // `iguales >= 1`: hace falta haberlo visto repetido al menos una vez.
+    if (!e || e.largo !== largo || e.iguales < 1) return false;
+    if (e.saltos >= FORZAR_LECTURA) { e.saltos = 0; return false; }
+    e.saltos += 1;
+    return true;
+  };
+
+  /* ── SI NO SE MUEVE NADA, SE MIRA MUCHO MENOS ────────────────────────────
+     El PC de la oficina no se apaga. De madrugada, con el día cerrado, no hay
+     absolutamente nada que capturar y aun así daba una vuelta cada 30 s toda
+     la noche. Cuando tres vueltas seguidas no traen un solo cambio se pasa a
+     una vuelta cada cinco minutos; al primer cambio vuelve al ritmo normal.
+     No se para del todo a propósito: parar es no enterarse de que empieza el
+     día siguiente. */
+  const PAUSA_DORMIDA = 300000;
+  let vueltasQuietas = 0;
+  const pausaAhora = () => (vueltasQuietas >= 3 ? PAUSA_DORMIDA : PAUSA_ENTRE);
   const CERROJO_MAX = 360000;  // si el cerrojo lleva 6 min puesto, algo fue mal
   let barriendo = 0;           // marca de tiempo de inicio, 0 = libre
   let vueltaN = 0;             // para pedir los extras una vuelta de cada cinco
@@ -322,8 +357,17 @@
                count: urls.length, bytes: Date.now() - t0 });
       } catch (_) {}
 
+      /* ¿Ha traído algo esta vuelta? Si tres seguidas no traen nada, se baja
+         el ritmo a una cada cinco minutos: de madrugada el día está cerrado y
+         no hay nada que capturar. Al primer cambio vuelve al ritmo normal. */
+      vueltasQuietas = algoSeMovio ? 0 : vueltasQuietas + 1;
+      if (vueltasQuietas === 3) {
+        post({ kind: 'debug', url: 'nada se mueve: se baja a una vuelta cada 5 min', count: 0, bytes: 0 });
+      }
+      algoSeMovio = false;
+
       barriendo = 0;
-      setTimeout(replay, PAUSA_ENTRE);
+      setTimeout(replay, pausaAhora());
     })();
   };
   setTimeout(replay, 12000);   // el primero, tras dejar cargar la pagina
@@ -1144,18 +1188,25 @@
     return out.length ? out : null;
   };
 
-  const emit = (url, text, method) => {
+  /* `yaParseado` llega SOLO desde `route-details`, que se parsea del flujo con
+     `.json()` para no materializar una cadena de 0,8 MB. En ese caso `text` va
+     vacío y todo lo que mira el texto se salta: son filtros baratos para
+     decidir si una respuesta DESCONOCIDA nos interesa, y esta la conocemos por
+     la URL. */
+  const emit = (url, text, method, yaParseado, largoReal) => {
     try {
-      if (!text || text.length < 2) return;
-      const c = text[0];
-      if (c !== '{' && c !== '[') return;
+      if (!yaParseado) {
+        if (!text || text.length < 2) return;
+        const c = text[0];
+        if (c !== '{' && c !== '[') return;
+      }
       /* UNA SOLA PASADA DE `JSON.parse` POR RESPUESTA.
          Antes se parseaba dos veces lo mismo: una para el buscador de
          posiciones y otra para `parsed`, y con `route-details` eso son varios
          megas analizados dos veces por cada respuesta y en cada barrido. En el
          ordenador de la oficina, con Cortex abierto todo el dia, es de lo que
          mas se nota. Se parsea a la primera que haga falta y se guarda. */
-      let _obj = null, _hecho = false;
+      let _obj = yaParseado || null, _hecho = !!yaParseado;
       const comoObjeto = () => {
         if (!_hecho) { _hecho = true; try { _obj = JSON.parse(text); } catch (_) { _obj = null; } }
         return _obj;
@@ -1377,7 +1428,11 @@
         } catch (_) {}
       }
       // Diagnóstico: registra CADA respuesta relevante, aunque saque 0 paquetes.
-      post({ kind: 'debug', url: url.slice(0, 130), count: packages.length, bytes: text.length });
+      // `text.length` es 0 cuando la respuesta se parseó del flujo: ahí manda
+      // el content-length. Un 0 en la pantalla de actividad se leería como
+      // «no ha traído nada», que es justo lo contrario de lo que pasa.
+      post({ kind: 'debug', url: url.slice(0, 130), count: packages.length,
+             bytes: text.length || largoReal || 0 });
       if (packages.length) {
         const day = serviceDay();
         // El día de route-details viene de localDate (fiable). Solo rellenamos con
@@ -1424,8 +1479,30 @@
              tamaño. */
           const largo = Number(res.headers.get('content-length') || 0);
           const nuestra = /route-details|route-summaries|packagesByStatus/i.test(url);
+          /* LA RESPUESTA QUE NO HA CAMBIADO NI SE ABRE. Mismo tamaño que la
+             vez anterior = mismos datos: no se clona, no se convierte en
+             cadena y no se parsea. Es lo que hacía que una ruta cerrada
+             costara lo mismo que una en la calle. */
+          if (/route-details/i.test(url) && puedeSaltarCuerpo(url, largo)) return;
+          /* El tamaño se anota AQUÍ y no en `syntheticFetch`, que es donde
+             estaba: ahí solo pasaban nuestras propias peticiones, así que una
+             ruta que abriera la persona en Cortex no entraba nunca en la
+             cuenta. La decisión de saltar y el dato con el que se decide tienen
+             que vivir en el mismo sitio, o uno de los dos se queda cojo. */
+          anotarTamano(url, largo);
           if (nuestra || !largo || largo < 4000000) {
-            res.clone().text().then((t) => emit(url, t, method)).catch(() => {});
+            /* `route-details` SE PARSEA DEL FLUJO, no desde una cadena.
+               `.text()` materializa 0,8 MB de texto y DESPUÉS `JSON.parse`
+               construye los objetos: durante ese rato están las dos cosas en
+               memoria a la vez. `.json()` deja que el navegador parsee según
+               llega y la cadena no llega a existir. Solo para esta URL: el
+               resto pasa por el texto porque hay comprobaciones que lo
+               necesitan (la pesca por contenido y el filtro de latitudes). */
+            if (/route-details/i.test(url)) {
+              res.clone().json().then((j) => emit(url, '', method, j, largo)).catch(() => {});
+            } else {
+              res.clone().text().then((t) => emit(url, t, method)).catch(() => {});
+            }
           }
         }
       } catch (_) {}
