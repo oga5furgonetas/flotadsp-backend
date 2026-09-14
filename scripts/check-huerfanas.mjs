@@ -20,6 +20,17 @@ const RAIZ = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
    a mano (curl / consola) o endpoints de diagnóstico. Están aquí para que el
    checker no las cante cada vez; si borras una, bórrala también de esta lista. */
 const SIN_UI_A_PROPOSITO = new Set([
+  // ── LA RAMA DSP DE LA EXTENSION ──────────────────────────────────────
+  // `ingest-informe` la llama `dsp.js` con el token de ingesta, igual que
+  // `/cortex/ingest` llama background.js: es una puerta para la extension,
+  // no una pantalla. Nunca tendra UI.
+  'POST /cortex/ingest-informe',
+  // `informes-auto` dice cuando entro solo el ultimo Daily Report y el ultimo
+  // plan de horas. HOY no tiene pantalla a proposito: la rama DSP acaba de
+  // nacer y hasta que no se confirme con los informes de verdad no se sabe si
+  // se enseña como una tarjeta o como una fila del estado de la extension.
+  // PENDIENTE: engancharla en cuanto entre el primer informe automatico.
+  'GET /cortex/informes-auto',
   // ── LA TIENDA PUBLICA, TODAVIA SIN PANTALLA ──────────────────────────
   // Las cuentas de tienda existen para que pueda comprar quien NO trabaja
   // aqui (un amigo, un conductor de otro DSP). El conductor no las usa: desde

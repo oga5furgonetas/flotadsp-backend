@@ -239,6 +239,36 @@ async function flush() {
    Va por libre y de forma silenciosa — si falla no se reintenta ni se avisa: es
    una foto del esquema, no un dato operativo, y no puede estorbar al envío de
    paquetes ni ensuciar el estado que ve el usuario en el popup. */
+/* ── UN INFORME DEL PORTAL AL BACKEND ────────────────────────────────────────
+   Puerta propia: `/cortex/ingest-informe`, no la cola de paquetes. Un Daily
+   Report es un documento entero que el backend ya sabe leer —el mismo lector
+   que usa el pegado a mano—, no observaciones que se acumulen.
+
+   Y el resultado SE DEVUELVE a quien lo mandó. Si el documento no se reconoce,
+   `dsp.js` lo marca y deja de insistir con lo mismo; si se tragara el error, la
+   pestaña reintentaria el mismo informe cada quince segundos para siempre. */
+async function mandarInforme(tipo, texto, center) {
+  try {
+    const { ingestToken, ingestUrl } = await cfg();
+    if (!ingestToken) { await pushActivity(`informe ${tipo}: sin token`, 0); return { ok: false, motivo: 'sin token' }; }
+    // La URL de informes sale de la de ingesta, para no tener dos ajustes que
+    // puedan quedarse desparejados.
+    const url = String(ingestUrl).replace(/\/ingest$/, '/ingest-informe');
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': ingestToken },
+      body: JSON.stringify({ tipo, texto, center: center || '' }),
+    });
+    const j = await r.json().catch(() => null);
+    await pushActivity(`informe ${tipo}: ${r.ok && j?.ok ? 'guardado' : (j?.motivo || 'HTTP ' + r.status)}`,
+                       r.ok && j?.ok ? 1 : 0);
+    return j || { ok: false, motivo: 'HTTP ' + r.status };
+  } catch (e) {
+    await pushActivity(`informe ${tipo}: ${String(e).slice(0, 60)}`, 0);
+    return { ok: false, motivo: String(e).slice(0, 120) };
+  }
+}
+
 async function enviarDiagnostico(payload) {
   /* SI FALLA, SE DICE. Antes se tragaba el error entero y por eso el resumen de
      Cortex estuvo un dia entero sin llegar sin que nada lo delatara: el mensaje
@@ -323,14 +353,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     });
     return false;
   }
-  /* CAMINOS DEL PORTAL QUE AUN NO SABEMOS USAR. Solo la ruta y las claves de
-     primer nivel — nunca el contenido. Es lo que permite automatizar el DNR
-     diario y el plan de horas SIN adivinar una URL (gotcha 64). */
-  if (msg?.type === 'urlVista') {
-    enviarDiagnostico({ kind: 'url_vista', which: 'portal', url: msg.url,
-                        schema: String(msg.claves || '').slice(0, 300) });
-    return false;
-  }
   if (msg?.type === 'schema') {
     const key = msg.which === 'summary' ? 'schemaSummary' : (msg.which === 'report' ? 'schemaReport' : 'schema');
     chrome.storage.local.get({ diag: {} }).then(({ diag }) =>
@@ -390,28 +412,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
                                        plantillas: informe.plantillas || {} }));
     return true;   // respuesta asincrona: hay que mantener el canal abierto
   }
-  /* ── EN QUÉ MODO CAPTURA ESTA INSTALACIÓN ─────────────────────────────────
-     'vivo'   = barrido continuo (lo de siempre). Hace falta para Apoyo en
-                ruta y para cualquier pantalla que se mire durante el turno.
-     'ahorro' = tres pasadas al día y el resto del tiempo NADA. Para el equipo
-                que además se usa para trabajar.
-     Lo decide el popup y lo guarda el service worker, que es el único que ve
-     `chrome.storage`; el interceptor vive en MAIN y lo pregunta por el puente. */
-  if (msg?.type === 'modoCaptura') {
-    chrome.storage.local.get({ modo: 'vivo', ventanas: [9, 14, 20] })
-      .then(({ modo, ventanas }) => reply?.({
-        modo: modo === 'ahorro' ? 'ahorro' : 'vivo',
-        ventanas: Array.isArray(ventanas) && ventanas.length ? ventanas : [9, 14, 20],
-      }));
-    return true;   // respuesta asincrona: hay que mantener el canal abierto
+  /* ── RAMA DSP: los informes del portal ─────────────────────────────────
+     Van por su propia puerta (`/cortex/ingest-informe`) y NO por la cola de
+     paquetes: no son observaciones que se acumulen, es un documento entero que
+     el backend ya sabe leer. Mezclarlos en la cola habria significado
+     reescribir el lector que ya existe y esta probado. */
+  if (msg?.type === 'informePortal') {
+    mandarInforme(msg.tipo, msg.texto, msg.center).then((r) => reply?.(r));
+    return true;   // respuesta asincrona
   }
-  if (msg?.type === 'setModoCaptura') {
-    const modo = msg.modo === 'ahorro' ? 'ahorro' : 'vivo';
-    const ventanas = (Array.isArray(msg.ventanas) ? msg.ventanas : [])
-      .map((h) => parseInt(h, 10)).filter((h) => h >= 0 && h <= 23);
-    chrome.storage.local.set({ modo, ventanas: ventanas.length ? ventanas : [9, 14, 20] })
-      .then(() => reply?.({ ok: true, modo }));
-    return true;
+  if (msg?.type === 'caminoPortal') {
+    enviarDiagnostico({ kind: 'url_vista', which: 'portal', url: msg.camino,
+                        schema: String(msg.texto || '').slice(0, 120) });
+    return false;
   }
   if (msg?.type === 'flushNow') { flush().then(() => reply?.({ ok: true })); return true; }
   /* El popup manda aquí qué estaciones se envían. Lista vacía = no enviar nada. */

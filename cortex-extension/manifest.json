@@ -20,7 +20,7 @@
     },
     {
       "matches": ["https://logistics.amazon.es/*", "https://*.amazon.es/*"],
-      "js": ["bridge.js"],
+      "js": ["bridge.js", "dsp.js"],
       "run_at": "document_start",
       "world": "ISOLATED"
     }

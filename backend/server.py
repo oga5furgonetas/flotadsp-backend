@@ -34048,6 +34048,96 @@ async def admin_latidos(_=Depends(require_admin)):
             "todos_vivos": all(x["vivo"] for x in out) if out else None}
 
 
+# ── LOS INFORMES DEL PORTAL, SIN COPIAR Y PEGAR ─────────────────────────────
+"""El Daily Report (DNR) y el plan de horas (WHC) entran hoy a mano: alguien los
+descarga del portal del DSP y los pega en la aplicacion. Todos los dias. Y el
+dia que no lo hace, la pantalla de Rendimiento enseña ceros en «fallos de
+contacto» que se leen como «no ha fallado nadie».
+
+Esto es la puerta para que los traiga la extension sola. NO se reescribe nada
+de como se leen: `pegar_diario` y `whc_analizar` ya saben hacerlo y estan
+probados — lo unico que faltaba era una entrada que no exija sesion de usuario,
+porque la extension tiene token de INGESTA, no un JWT.
+
+DOS DECISIONES:
+
+- SE REUSAN LOS ENDPOINTS DE SIEMPRE, llamandolos con un usuario sintetico.
+  Copiar aqui las 110 lineas de `pegar_diario` seria tener dos lectores del
+  mismo documento, y el dia que se arregle uno el otro se queda viejo — que es
+  exactamente el gotcha 40 con otra cara.
+
+- EL CENTRO LO DICE EL DOCUMENTO, no quien lo manda. El titulo del Daily Report
+  pone «ES TDSL OGA5 Daily Report ...», y `_parsea_diario_html` lo saca de ahi.
+  Es mas fiable que cualquier cosa que traiga la peticion, y ademas la extension
+  puede estar mirando una nave distinta a la que descargo el informe.
+"""
+
+# Usuario sintetico para las entradas por token de ingesta. `account_type:
+# owner` para que `_user_can_see_center` no lo limite: la empresa ya la fija el
+# token, y el centro lo declara el propio documento.
+_USUARIO_INGESTA = {"sub": "extension", "name": "extension",
+                    "account_type": "owner", "role": "admin"}
+
+_INFORME_TIPOS = ("diario", "whc")
+
+
+@api_router.post("/cortex/ingest-informe")
+async def cortex_ingest_informe(request: Request):
+    """Recibe un informe del portal capturado por la extension.
+
+    body: {tipo: "diario"|"whc", texto, center?}
+    El `texto` es el documento TAL CUAL: el Daily Report es un .html entero y
+    el plan de horas es texto pegado. Los dos los lee quien ya sabia leerlos.
+    """
+    _org, _jti = _cortex_ingest_org(request)
+    if _jti and not await _llave_viva(_jti):
+        raise HTTPException(401, "Esta llave se ha revocado. Copia una nueva desde "
+                                 "Paquetes IA en la aplicación.")
+    body = await request.json()
+    tipo = str(body.get("tipo") or "").strip().lower()
+    if tipo not in _INFORME_TIPOS:
+        raise HTTPException(400, "Tipo de informe desconocido: %s" % tipo[:20])
+    texto = body.get("texto") or ""
+    if not isinstance(texto, str) or len(texto.strip()) < 40:
+        raise HTTPException(400, "El informe viene vacio")
+    # Tope de tamaño: un Daily Report ronda el medio mega, pero una pagina
+    # cualquiera del portal puede ser mucho mayor y no queremos tragarnosla.
+    if len(texto) > 8_000_000:
+        raise HTTPException(413, "El informe es demasiado grande")
+
+    center = _texto_cuerpo(body.get("center"), 30)
+    try:
+        if tipo == "diario":
+            r = await pegar_diario({"texto": texto, "center": center}, _USUARIO_INGESTA)
+        else:
+            r = await whc_analizar({"texto": texto, "center": center})
+    except HTTPException as e:
+        # Un informe que no se reconoce NO es un error de la extension: puede
+        # ser que esa pantalla no sea la que creiamos. Se contesta 200 con el
+        # motivo para que la extension deje de reintentarlo y quede constancia,
+        # en vez de llenar los logs de 400 iguales.
+        return {"ok": False, "tipo": tipo, "motivo": str(e.detail)[:200]}
+
+    await db.app_meta.update_one(
+        {"_id": "informe_auto_%s" % tipo},
+        {"$set": {"en": datetime.now(timezone.utc).isoformat(),
+                  "center": center or None,
+                  "resumen": {k: v for k, v in (r or {}).items()
+                              if isinstance(v, (int, float, str, bool))}}},
+        upsert=True)
+    return {"ok": True, "tipo": tipo, "resultado": r}
+
+
+@api_router.get("/cortex/informes-auto")
+async def cortex_informes_auto(_=Depends(require_admin)):
+    """Cuando entro solo cada informe. Para verlo sin abrir la base de datos."""
+    out = {}
+    for tipo in _INFORME_TIPOS:
+        d = await db.app_meta.find_one({"_id": "informe_auto_%s" % tipo}, {"_id": 0})
+        out[tipo] = d or None
+    return out
+
+
 # ── LA CAPTURA SE PARA Y NADIE SE ENTERA ────────────────────────────────────
 """Cortex no tiene API: la unica forma de sacar el dato es un navegador con la
 sesion abierta y la extension puesta. Eso funciona, pero tiene un fallo que no

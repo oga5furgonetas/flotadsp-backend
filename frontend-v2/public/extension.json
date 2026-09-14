@@ -4,6 +4,7 @@
     "README.md",
     "background.js",
     "bridge.js",
+    "dsp.js",
     "interceptor.js",
     "manifest.json",
     "popup.html",

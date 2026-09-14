@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.41.0';
+  const VERSION_INTERCEPTOR = '2.40.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -271,66 +271,7 @@
      día siguiente. */
   const PAUSA_DORMIDA = 300000;
   let vueltasQuietas = 0;
-
-  /* ── MODO AHORRO: TRES PASADAS AL DÍA Y EL RESTO, NADA ───────────────────
-     Para el equipo que además se usa para trabajar. En «vivo» (lo de siempre)
-     el barrido no para, y hace falta para Apoyo en ruta y para cualquier
-     pantalla que se mire durante el turno. En «ahorro» solo se barre dentro de
-     unas horas concretas: se hace UNA pasada completa y se apaga hasta la
-     siguiente.
-
-     DOS COSAS QUE NO SON OBVIAS:
-
-     · EL GANCHO SE QUEDA PUESTO. Aunque no barra, todo lo que la persona abra
-       en Cortex se sigue capturando — gratis, porque esa petición la hace ella
-       de todas formas. Apagar el barrido no es apagar la extensión.
-
-     · EN AHORRO NO SE ENFRÍA NADA. El enfriamiento sirve para no repetir
-       trabajo cuando se pasa cada treinta segundos; con tres oportunidades al
-       día, cada pasada tiene que mirarlo todo o se perderían rutas enteras.
-
-     LO QUE SE PIERDE, dicho claro: la posición de los conductores y las
-     paradas al minuto. O sea Apoyo en ruta. Lo que se mira una vez al día
-     —debrief, ayudas, DCR, el congelado del día— aguanta de sobra, siempre que
-     una de las ventanas caiga después de cerrar las rutas. */
-  let modo = 'vivo';
-  let ventanas = [9, 14, 20];
-  const hechas = new Set();          // "2026-09-14:20" ya barrido
-  const PAUSA_AHORRO = 300000;       // cada 5 min mira el reloj; no barre
-  const claveVentana = (d, h) => `${d.toDateString()}:${h}`;
-
-  const tocaVentana = () => {
-    const ahora = new Date();
-    const h = ahora.getHours();
-    if (!ventanas.includes(h)) return false;
-    const k = claveVentana(ahora, h);
-    if (hechas.has(k)) return false;
-    hechas.add(k);
-    if (hechas.size > 40) hechas.clear();   // no crece: son 3 al día
-    return true;
-  };
-
-  const pausaAhora = () => (modo === 'ahorro' ? PAUSA_AHORRO
-    : vueltasQuietas >= 3 ? PAUSA_DORMIDA : PAUSA_ENTRE);
-
-  /* Se pregunta al arrancar y cada diez minutos: cambiarlo desde el popup no
-     tiene que obligar a recargar Cortex. Diez minutos es el retraso máximo. */
-  const pedirModo = () => { try { post({ kind: 'modo_pedir' }); } catch (_) {} };
-  window.addEventListener('message', (ev) => {
-    if (ev.source !== window) return;
-    const d = ev.data;
-    if (!d || d.__flotadspIn !== true || d.kind !== 'modo') return;
-    /* Llega por `postMessage`, que cualquier script de la página puede
-       falsificar: se valida antes de usarlo. Un modo inventado solo apagaría
-       el barrido, pero una lista de horas con basura dentro lo dejaría sin
-       barrer nunca y en silencio. */
-    modo = d.modo === 'ahorro' ? 'ahorro' : 'vivo';
-    const hs = (Array.isArray(d.ventanas) ? d.ventanas : [])
-      .map((x) => parseInt(x, 10)).filter((x) => Number.isInteger(x) && x >= 0 && x <= 23);
-    if (hs.length) ventanas = hs;
-  });
-  pedirModo();
-  setInterval(pedirModo, 600000);
+  const pausaAhora = () => (vueltasQuietas >= 3 ? PAUSA_DORMIDA : PAUSA_ENTRE);
   const CERROJO_MAX = 360000;  // si el cerrojo lleva 6 min puesto, algo fue mal
   let barriendo = 0;           // marca de tiempo de inicio, 0 = libre
   let vueltaN = 0;             // para pedir los extras una vuelta de cada cinco
@@ -379,19 +320,13 @@
          llegarnos, con la vuelta a 3,7 min de media.
          Siguen pidiendose —son la red por si algun dia los paquetes llegan por
          otra via— pero una vez de cada cinco, que para un catalogo sobra. */
-      /* EN AHORRO: solo se barre dentro de la ventana, y entonces ENTERO.
-         Con tres oportunidades al día, una pasada a medias es un agujero que
-         no se recupera — a los tres días Cortex ha borrado el 97 % de las
-         devoluciones de ese día. */
-      const enVentana = modo === 'ahorro' ? tocaVentana() : true;
-      if (!enVentana) { barriendo = 0; setTimeout(replay, pausaAhora()); return; }
-      const conExtras = modo === 'ahorro' ? true : (vueltaN++ % 5) === 0;
+      const conExtras = (vueltaN++ % 5) === 0;
       /* Las que TOCAN esta vuelta. Una ruta que lleva rato devolviendo lo
          mismo —o sea, terminada— se pide una de cada cinco o de cada veinte.
          Es de donde sale el grueso del ahorro: a media tarde casi todas las
          rutas del día están cerradas y antes se bajaban enteras cada 6 s. */
       const urls = (conExtras ? todasLasUrls() : [...rutaGets])
-        .filter((u) => modo === 'ahorro' || tocaPedir(u, vueltaN));
+        .filter((u) => tocaPedir(u, vueltaN));
       const t0 = Date.now();
       const cola = urls.slice();
       const obrero = async () => {
@@ -610,17 +545,6 @@
     'LOADED', 'UNDELIVERED', 'NOT_DELIVERED', 'PENDING_PICKUP', 'MISSING',
   ];
   const descartadosInforme = new Set();   // probados y vacios: no se repiten
-  /* Caminos ya anotados: una pantalla que se refresca sola mandaría el mismo
-     aviso cien veces y el diagnóstico dejaría de leerse. */
-  const vistasUrl = new Set();
-  const marcadaVista = (u) => {
-    let p = u;
-    try { p = new URL(u, location.origin).pathname; } catch (_) {}
-    if (vistasUrl.has(p)) return true;
-    vistasUrl.add(p);
-    if (vistasUrl.size > 200) vistasUrl.clear();
-    return false;
-  };
   /* …Y SE RECUERDAN ENTRE SESIONES. Ese «para siempre» de arriba no lo era: el
      Set y la plantilla vivían sólo en la memoria de la pestaña. Un F5 en Cortex
      —o cerrarla y volver por la mañana— y se arrancaba otra vez pidiendo
@@ -1344,29 +1268,6 @@
             schemaLocSent = true;
             post({ kind: 'schema', which: 'locationUpdate', url: url.slice(0, 200),
                    schema: JSON.stringify(schemaOf(j, 0)).slice(0, 4000) });
-          }
-        } catch (_) {}
-      }
-      /* ── QUÉ MÁS SIRVE EL PORTAL, ANOTADO SIN ADIVINAR ──────────────────
-         Hay dos cosas que hoy alguien copia y pega a mano todos los días: el
-         reporte diario (DNR) y el plan de horas (WHC). Para que la extensión
-         las traiga sola hace falta saber QUÉ petición las devuelve — y eso no
-         se adivina: escribir una URL a ojo es exactamente el fallo que costó
-         veinte versiones con `addresses` (gotcha 64).
-
-         Así que se apunta el CAMINO de las respuestas JSON que no reconocemos,
-         sin el contenido: solo la ruta, el tamaño y si la trae la propia
-         página. Con que alguien abra esa pantalla UNA vez, aparece aquí y ya
-         se puede automatizar como se hizo con el informe de direcciones.
-
-         Solo la ruta, nunca los parámetros: ahí van ids de estación y de día,
-         y esto es un diagnóstico, no un registro de lo que mira la gente. */
-      if (!marcadaVista(url) && text && text.length > 200) {
-        try {
-          const u = new URL(url, location.origin);
-          if (u.origin === location.origin && /\/api\/|\/service\/|Report|report|hours|Hours|whc|WHC|dnr|DNR/.test(u.pathname)) {
-            post({ kind: 'url_vista', url: u.pathname.slice(0, 180),
-                   bytes: text.length, claves: Object.keys(comoObjeto() || {}).slice(0, 12).join(',') });
           }
         } catch (_) {}
       }
