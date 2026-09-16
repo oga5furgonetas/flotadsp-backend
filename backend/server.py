@@ -39,6 +39,7 @@ import time
 
 import asyncio
 import os
+import csv
 import io
 from urllib.parse import quote as _url_quote, urlencode as _url_encode
 from html import escape as html_escape
@@ -1280,6 +1281,11 @@ async def _ensure_tenant_indexes(db_name: str):
     await _idx(tdb.candidatos, [("oferta_id", 1), ("tel_clave", 1)], unique=True,
                name="candidato_unico_por_oferta",
                partialFilterExpression={"tel_clave": {"$type": "string", "$gt": ""}})
+    # UNA CANDIDATURA DE JOIN POR OFERTA: sincronizar dos veces, o subir el CSV
+    # despues de la API, no puede dejar a la misma persona repetida.
+    await _idx(tdb.candidatos, [("oferta_id", 1), ("join_id", 1)], unique=True,
+               name="candidato_join_unico",
+               partialFilterExpression={"join_id": {"$type": "string", "$gt": ""}})
     # Datos personales con fecha de caducidad: Mongo los borra solo a los 12
     # meses. Es la unica forma de que el plazo se cumpla sin que nadie se acuerde.
     await _idx(tdb.candidatos, "expira_en", expireAfterSeconds=0)
@@ -20790,6 +20796,425 @@ async def empleo_borrar_candidato(cand_id: str, user: dict = Depends(require_adm
     r = await db.candidatos.delete_one({"id": cand_id})
     if not r.deleted_count:
         raise HTTPException(404, "Ese candidato no existe")
+    return {"ok": True}
+
+
+# ── JOIN (join.com): LAS CANDIDATURAS QUE LLEGAN POR FUERA ──────────────────
+# El 16-09-2026 habia 106 candidatos de la oferta de Santiago en JOIN y ninguno
+# en el tablero: se miraban en otra web y se copiaban a mano. Y de esos 106,
+# JOIN solo tenia el telefono de 28 — el resto lo escribio en el CURRICULUM,
+# no en el formulario. Por eso la sincronizacion baja el CV y busca el numero
+# dentro, y lo marca (`telefono_de: "cv"`) para que se sepa de donde salio.
+#
+# Dos puertas y un mismo guardado (`_join_guardar`):
+#  · la API, con el token de CADA EMPRESA guardado en su propia base. Un token
+#    en un secret del servidor seria el de Dani para todas las empresas: la
+#    segunda veria los candidatos de la primera (gotcha 26);
+#  · el CSV que exporta JOIN, que no necesita token pero trae el CV como un
+#    enlace de join.com que solo abre quien tenga sesion alli.
+# La clave es el id de la candidatura de JOIN (`join_id`), con indice unico por
+# oferta: sincronizar dos veces, o el CSV despues de la API, no duplica nada.
+
+_JOIN_API = "https://api.join.com/v2"
+_JOIN_META = "join_conexion"
+_JOIN_TAREAS: set = set()
+
+# Un telefono en un CV. Se busca por orden de fiabilidad y se para en el
+# primero: (1) detras de una palabra que lo anuncia, (2) con prefijo
+# internacional, (3) un movil español de 9 cifras suelto. Un fijo suelto NO:
+# en un curriculum hay años seguidos («1998 2000 2003») que dan nueve cifras
+# empezando por 9, y un numero inventado es peor que ninguno (gotcha 57).
+_JOIN_TEL_ETIQUETA = re.compile(
+    r"(?:tel[eé]?f?o?n?o?|tlf|tfno|m[oó]vil|movil|cel(?:ular)?|phone|mobile|whats ?app|contacto)"
+    r"\s*[:.]?\s*((?:\+|00)?[\d][\d\s().-]{7,18}\d)", re.I)
+_JOIN_TEL_PREFIJO = re.compile(r"(?<![\w+])((?:\+|00)\s?\d{1,3}[\s.-]?(?:\(?\d+\)?[\s.-]?){2,6}\d)")
+_JOIN_TEL_MOVIL = re.compile(
+    r"(?<![\d.,/-])([67]\d{2}(?:[\s.-]?\d{3}[\s.-]?\d{3}|[\s.-]?\d{2}[\s.-]?\d{2}[\s.-]?\d{2}))(?![\d.,/-])")
+
+
+def _join_tel_de_texto(texto: str) -> str:
+    """El telefono mas fiable que aparezca en el texto, limpio, o ""."""
+    t = str(texto or "")
+    for patron in (_JOIN_TEL_ETIQUETA, _JOIN_TEL_PREFIJO, _JOIN_TEL_MOVIL):
+        for m in patron.finditer(t):
+            bruto = m.group(1).strip()
+            if bruto.startswith("00"):
+                bruto = "+" + bruto[2:]
+            tel = _telefono_limpio(bruto)
+            dig = _telefono_digitos(tel)
+            if not tel or len(dig) < 9:
+                continue
+            # Sin prefijo, un numero español tiene exactamente 9 cifras y
+            # empieza por 6, 7, 8 o 9. Otra cosa sin «+» no se sabe de donde es.
+            if not tel.startswith("+"):
+                solo = re.sub(r"\D", "", tel)
+                if solo.startswith("34") and len(solo) == 11:
+                    solo = solo[2:]
+                if len(solo) != 9 or solo[0] not in "6789":
+                    continue
+                tel = solo
+            return tel
+    return ""
+
+
+def _join_texto_de_cv(contenido: bytes, nombre: str) -> str:
+    """Texto de un CV en PDF. Word e imagenes se quedan sin leer (se dice)."""
+    if not contenido or not (nombre.lower().endswith(".pdf") or contenido[:5] == b"%PDF-"):
+        return ""
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(contenido)) as pdf:
+            return "\n".join((p.extract_text() or "") for p in pdf.pages[:4])
+    except Exception as e:
+        logger.info("CV de JOIN sin texto legible: %s", e)
+        return ""
+
+
+def _join_fecha(valor) -> Optional[datetime]:
+    """Fecha de JOIN: ISO de la API o «2026-09-04 11:24:38» del CSV."""
+    s = str(valor or "").strip()
+    if not s:
+        return None
+    for fmt in (None, "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
+        try:
+            d = datetime.fromisoformat(s.replace("Z", "+00:00")) if fmt is None else datetime.strptime(s, fmt)
+            return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+async def _join_oferta(oferta_id: str) -> dict:
+    o = await db.ofertas_empleo.find_one({"id": str(oferta_id or "")}, {"_id": 0})
+    if not o:
+        raise HTTPException(404, "Esa oferta no existe")
+    return o
+
+
+async def _join_guardar(o: dict, cand: dict) -> str:
+    """Guarda una candidatura de JOIN. Devuelve nuevo | completado | igual | repetido.
+
+    Si ya estaba (mismo `join_id`) solo se RELLENA lo que faltaba —telefono y
+    curriculum—: lo que la oficina haya escrito o movido no se toca nunca.
+    """
+    join_id = str(cand.get("join_id") or "").strip()
+    if not join_id:
+        return "igual"
+    telefono = _telefono_limpio(cand.get("telefono"))
+    ya = await db.candidatos.find_one({"oferta_id": o["id"], "join_id": join_id}, {"_id": 0})
+    if ya:
+        cambios = {}
+        if telefono and not ya.get("telefono"):
+            cambios.update(telefono=telefono, tel_clave=_telefono_digitos(telefono),
+                           telefono_de=cand.get("telefono_de") or "join")
+        for campo in ("cv_url", "cv_nombre", "cv_join_url", "email", "ciudad", "respuestas_join"):
+            if cand.get(campo) and not ya.get(campo):
+                cambios[campo] = cand[campo]
+        if not cambios:
+            return "igual"
+        try:
+            await db.candidatos.update_one({"id": ya["id"]}, {"$set": cambios})
+        except DuplicateKeyError:
+            # Ese telefono ya lo tiene otro candidato de la oferta (se apunto
+            # tambien por nuestra pagina): se completa todo menos el numero.
+            for k in ("telefono", "tel_clave", "telefono_de"):
+                cambios.pop(k, None)
+            if not cambios:
+                return "repetido"
+            await db.candidatos.update_one({"id": ya["id"]}, {"$set": cambios})
+        return "completado"
+    creado = _join_fecha(cand.get("creado_en")) or datetime.now(timezone.utc)
+    doc = {
+        "id": str(uuid.uuid4()),
+        "oferta_id": o["id"], "oferta_titulo": o.get("titulo") or "",
+        "nombre": _empleo_texto(cand.get("nombre"), 120),
+        "telefono": telefono,
+        "tel_clave": _telefono_digitos(telefono) if telefono else "",
+        "telefono_de": (cand.get("telefono_de") or "join") if telefono else "",
+        "email": _empleo_texto(cand.get("email"), 160).lower(),
+        "ciudad": _empleo_texto(cand.get("ciudad"), 80),
+        "centro": o.get("centro") or "",
+        # Lo que JOIN no pregunta queda VACIO, que el panel pinta «no consta»
+        # y no como un «no» (gotcha 33).
+        "carnet_desde": "", "carnet_fisico": "", "dni": "",
+        "nacimiento": "", "edad": None, "experiencia": "", "disponibilidad": "",
+        "respuestas": {},
+        "respuestas_join": cand.get("respuestas_join") or [],
+        "origen": "join",
+        "join_id": join_id,
+        "fase": "nuevo", "motivo_descarte": "", "descarte_automatico": False,
+        "notas": "", "driver_id": None,
+        # La fecha de la candidatura, no la de hoy: «cuantos dias lleva sin que
+        # nadie le llame» se cuenta desde que se apunto.
+        "creado_en": creado.isoformat(),
+        "importado_en": datetime.now(timezone.utc).isoformat(),
+        "expira_en": creado + timedelta(days=30 * _EMPLEO_MESES_GUARDA),
+    }
+    for campo in ("cv_url", "cv_nombre", "cv_join_url"):
+        if cand.get(campo):
+            doc[campo] = cand[campo]
+    try:
+        await db.candidatos.insert_one(dict(doc))   # copia: insert_one muta (gotcha 42)
+    except DuplicateKeyError:
+        return "repetido"
+    return "nuevo"
+
+
+def _join_csv_filas(contenido: bytes) -> list:
+    """Filas del CSV de JOIN. Acepta el original (UTF-8, comas) y el que ha
+    pasado por Excel en español (punto y coma, y a veces Windows-1252)."""
+    texto = None
+    for cod in ("utf-8-sig", "cp1252"):
+        try:
+            texto = contenido.decode(cod)
+            break
+        except UnicodeDecodeError:
+            continue
+    if texto is None:
+        raise HTTPException(400, "No se puede leer el fichero: guardalo como CSV")
+    primera = texto.split("\n", 1)[0]
+    sep = ";" if primera.count(";") > primera.count(",") else ("\t" if "\t" in primera else ",")
+    filas = list(csv.DictReader(io.StringIO(texto), delimiter=sep))
+    if not filas or "Application ID" not in filas[0]:
+        raise HTTPException(400, "Ese fichero no parece la exportacion de candidatos de JOIN")
+    return filas
+
+
+@api_router.post("/empleo/join/csv")
+async def empleo_join_csv(file: UploadFile = File(...), oferta_id: str = Form(...),
+                          _=Depends(require_admin)):
+    """Importa la exportacion de candidatos de JOIN a una oferta."""
+    o = await _join_oferta(oferta_id)
+    contenido = await file.read()
+    if len(contenido) > 5 * 1024 * 1024:
+        raise HTTPException(413, "El fichero no puede pasar de 5 MB")
+    cuenta = {"nuevo": 0, "completado": 0, "igual": 0, "repetido": 0, "sin_telefono": 0}
+    for f in _join_csv_filas(contenido):
+        tel_bruto = (f.get("Telephone") or "").strip()
+        # Excel convierte 584245064615 en «5,84245E+11»: ese numero ya no es el
+        # suyo y se descarta en vez de guardar uno inventado.
+        if re.search(r"[eE][+-]?\d", tel_bruto):
+            tel_bruto = ""
+        cand = {
+            "join_id": (f.get("Application ID") or "").strip(),
+            "nombre": " ".join(x for x in ((f.get("First Name") or "").strip(),
+                                           (f.get("Last Name") or "").strip()) if x),
+            "email": f.get("E-Mail Address"),
+            "telefono": tel_bruto, "telefono_de": "join",
+            "ciudad": f.get("Country of Residence") or "",
+            "creado_en": f.get("Application Date"),
+            "cv_join_url": (f.get("URL to CV") or "").strip(),
+        }
+        cand["cv_url"] = cand["cv_join_url"]
+        r = await _join_guardar(o, cand)
+        cuenta[r] += 1
+        if not _telefono_limpio(tel_bruto):
+            cuenta["sin_telefono"] += 1
+    return {"ok": True, **cuenta}
+
+
+async def _join_token() -> str:
+    doc = await db.app_meta.find_one({"_id": _JOIN_META}, {"_id": 0, "token": 1})
+    return (doc or {}).get("token") or ""
+
+
+async def _join_pedir(cli, ruta: str, token: str, params: Optional[dict] = None):
+    """GET a la API de JOIN respetando su limite (cabeceras x-ratelimit-*)."""
+    for _intento in range(5):
+        r = await cli.get(_JOIN_API + ruta, params=params or {}, headers={"Authorization": token})
+        if r.status_code == 429:
+            await asyncio.sleep(min(int(r.headers.get("x-ratelimit-reset") or 5), 30))
+            continue
+        if r.status_code == 401:
+            raise HTTPException(400, "JOIN no acepta el token: genera uno nuevo en join.com/user/api")
+        r.raise_for_status()
+        return r
+    raise HTTPException(503, "JOIN esta limitando las peticiones: prueba en un minuto")
+
+
+@api_router.get("/empleo/join")
+async def empleo_join_estado(_=Depends(require_admin)):
+    """Si hay token (solo sus cuatro ultimos caracteres) y como fue la ultima sincronizacion."""
+    doc = await db.app_meta.find_one({"_id": _JOIN_META}, {"_id": 0}) or {}
+    token = doc.pop("token", "")
+    return {"conectado": bool(token), "token_fin": token[-4:] if token else "", **doc}
+
+
+@api_router.put("/empleo/join/token")
+async def empleo_join_token(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Guarda (o quita, con token vacio) el token de la API de JOIN de ESTA empresa."""
+    token = _texto_cuerpo(body.get("token"))[:400]
+    if not token:
+        await db.app_meta.update_one({"_id": _JOIN_META}, {"$unset": {"token": ""}}, upsert=True)
+        return {"ok": True, "conectado": False}
+    import httpx as _httpx
+    async with _httpx.AsyncClient(timeout=20) as cli:
+        try:
+            await _join_pedir(cli, "/jobs", token, {"pageSize": 1})
+        except _httpx.HTTPError:
+            raise HTTPException(502, "No se ha podido hablar con JOIN: prueba en un minuto")
+    await db.app_meta.update_one(
+        {"_id": _JOIN_META},
+        {"$set": {"token": token, "conectado_en": datetime.now(timezone.utc).isoformat(),
+                  "conectado_por": user.get("name") or user.get("username") or ""}},
+        upsert=True)
+    return {"ok": True, "conectado": True, "token_fin": token[-4:]}
+
+
+@api_router.get("/empleo/join/ofertas")
+async def empleo_join_ofertas(_=Depends(require_admin)):
+    """Las ofertas que hay en JOIN, para elegir cual va a cada oferta nuestra."""
+    token = await _join_token()
+    if not token:
+        raise HTTPException(400, "Primero conecta JOIN con su token")
+    import httpx as _httpx
+    trabajos = []
+    async with _httpx.AsyncClient(timeout=20) as cli:
+        for pagina in range(1, 11):
+            try:
+                r = await _join_pedir(cli, "/jobs", token, {
+                    "page": pagina, "pageSize": 50, "status": "ONLINE,OFFLINE,ARCHIVED"})
+            except _httpx.HTTPError:
+                raise HTTPException(502, "No se ha podido hablar con JOIN: prueba en un minuto")
+            lote = r.json() if isinstance(r.json(), list) else []
+            trabajos += [{"id": j.get("id"), "titulo": j.get("title") or "",
+                          "estado": str(j.get("status") or "").lower()}
+                         for j in lote if isinstance(j, dict)]
+            if len(lote) < 50:
+                break
+    return {"ofertas": trabajos}
+
+
+async def _join_sincronizar(o: dict, job_id: Optional[int], token: str):
+    """Baja las candidaturas (y sus CV) y las guarda. Va en segundo plano:
+    con cien CV tarda minutos y una peticion web no puede esperar tanto."""
+    import httpx as _httpx
+    prog = {"en_marcha": True, "oferta_id": o["id"], "empezado": datetime.now(timezone.utc).isoformat(),
+            "vistas": 0, "nuevo": 0, "completado": 0, "igual": 0, "repetido": 0,
+            "tel_del_cv": 0, "sin_telefono": 0, "cv_guardados": 0, "error": ""}
+
+    async def apuntar():
+        await db.app_meta.update_one({"_id": _JOIN_META}, {"$set": {"sync": dict(prog)}}, upsert=True)
+
+    s3 = get_r2()
+    base_r2 = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
+    try:
+        async with _httpx.AsyncClient(timeout=45, follow_redirects=True) as cli:
+            for pagina in range(1, 101):
+                params = {"page": pagina, "pageSize": 50}
+                if job_id:
+                    params["jobId"] = job_id
+                r = await _join_pedir(cli, "/applications", token, params)
+                lote = r.json() if isinstance(r.json(), list) else []
+                for a in lote:
+                    if not isinstance(a, dict):
+                        continue
+                    prog["vistas"] += 1
+                    c = a.get("candidate") or {}
+                    cand = {
+                        "join_id": str(a.get("id") or ""),
+                        "nombre": " ".join(x for x in ((c.get("firstName") or "").strip(),
+                                                       (c.get("lastName") or "").strip()) if x),
+                        "email": c.get("email"),
+                        "telefono": c.get("phoneNumber") or "", "telefono_de": "join",
+                        "ciudad": ((c.get("country") or {}).get("name") or ""),
+                        "creado_en": a.get("createdAt"),
+                        # Lista y no diccionario: `respuestas` va por id de
+                        # pregunta de NUESTRA oferta y estas son de la de JOIN.
+                        "respuestas_join": [
+                            {"pregunta": _empleo_texto(q.get("question"), 200),
+                             "respuesta": _empleo_texto(q.get("answer"), 500)}
+                            for q in (a.get("screeningQuestions") or [])
+                            if isinstance(q, dict) and q.get("question") and q.get("type") != "FILE"],
+                    }
+                    ya = await db.candidatos.find_one(
+                        {"oferta_id": o["id"], "join_id": cand["join_id"]},
+                        {"_id": 0, "telefono": 1, "cv_url": 1, "cv_join_url": 1})
+                    # El CV solo se baja si hace falta: si ya lo tenemos en R2 y
+                    # el telefono tambien, no se vuelve a pedir.
+                    necesita_cv = not (ya and ya.get("telefono") and ya.get("cv_url")
+                                       and not ya.get("cv_join_url"))
+                    adj = next((x for x in (a.get("attachments") or [])
+                                if isinstance(x, dict) and x.get("type") in ("CV", "JOIN_CV") and x.get("url")), None)
+                    if adj and necesita_cv:
+                        try:
+                            rc = await cli.get(adj["url"])
+                            if rc.status_code == 401:
+                                rc = await cli.get(adj["url"], headers={"Authorization": token})
+                            if rc.status_code == 200 and rc.content and len(rc.content) <= _EMPLEO_CV_MAX:
+                                nombre_cv = adj["url"].split("?")[0].rsplit("/", 1)[-1][:120] or "cv.pdf"
+                                if not _telefono_limpio(cand["telefono"]):
+                                    texto = await asyncio.get_running_loop().run_in_executor(
+                                        _executor, _join_texto_de_cv, rc.content, nombre_cv)
+                                    tel = _join_tel_de_texto(texto)
+                                    if tel:
+                                        cand.update(telefono=tel, telefono_de="cv")
+                                        prog["tel_del_cv"] += 1
+                                if s3:
+                                    ext = nombre_cv.rsplit(".", 1)[-1].lower() if "." in nombre_cv else "pdf"
+                                    clave_r2 = "cv/%s/%s.%s" % (o["id"], uuid.uuid4().hex,
+                                                                re.sub(r"[^a-z0-9]", "", ext)[:5] or "pdf")
+                                    await asyncio.get_running_loop().run_in_executor(
+                                        _executor, lambda: s3.put_object(
+                                            Bucket=R2_BUCKET, Key=clave_r2, Body=rc.content,
+                                            ContentType="application/octet-stream"))
+                                    cand["cv_url"] = ("%s/%s" % (base_r2, clave_r2)) if base_r2 else clave_r2
+                                    cand["cv_nombre"] = nombre_cv
+                                    prog["cv_guardados"] += 1
+                        except Exception as e:
+                            logger.info("CV de JOIN %s: %s", cand["join_id"], e)
+                    resultado = await _join_guardar(o, cand)
+                    # Un CV que ya estaba con el enlace de join.com (del CSV)
+                    # se sustituye por el nuestro, que abre sin sesion.
+                    if ya and ya.get("cv_join_url") and cand.get("cv_url"):
+                        await db.candidatos.update_one(
+                            {"oferta_id": o["id"], "join_id": cand["join_id"]},
+                            {"$set": {"cv_url": cand["cv_url"], "cv_nombre": cand.get("cv_nombre", "")},
+                             "$unset": {"cv_join_url": ""}})
+                        if resultado == "igual":
+                            resultado = "completado"
+                    prog[resultado] += 1
+                    if not _telefono_limpio(cand["telefono"]) and not (ya and ya.get("telefono")):
+                        prog["sin_telefono"] += 1
+                    if prog["vistas"] % 10 == 0:
+                        await apuntar()
+                if len(lote) < 50:
+                    break
+    except HTTPException as e:
+        prog["error"] = e.detail
+    except Exception as e:
+        logger.warning("Sincronizacion con JOIN: %s", e)
+        prog["error"] = "JOIN no ha respondido bien: prueba en un rato"
+    prog["en_marcha"] = False
+    prog["terminado"] = datetime.now(timezone.utc).isoformat()
+    await apuntar()
+
+
+@api_router.post("/empleo/join/sincronizar")
+async def empleo_join_sincronizar(body: dict = Body(...), _=Depends(require_admin)):
+    """Arranca la sincronizacion de una oferta de JOIN con una oferta nuestra."""
+    o = await _join_oferta(_texto_cuerpo(body.get("oferta_id")))
+    token = await _join_token()
+    if not token:
+        raise HTTPException(400, "Primero conecta JOIN con su token")
+    job = str(body.get("job_id") or "").strip()
+    job_id = int(job) if job.isdigit() else None
+    # UNA A LA VEZ POR EMPRESA, y lo decide la base: dos clics seguidos no
+    # pueden lanzar dos descargas de los mismos cien CV. Una que lleve mas de
+    # media hora «en marcha» se da por muerta (reinicio del servidor).
+    hace_media_hora = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    r = await db.app_meta.update_one(
+        {"_id": _JOIN_META, "$or": [{"sync.en_marcha": {"$ne": True}},
+                                    {"sync.empezado": {"$lt": hace_media_hora}}]},
+        {"$set": {"sync": {"en_marcha": True, "oferta_id": o["id"], "vistas": 0,
+                           "empezado": datetime.now(timezone.utc).isoformat()}}})
+    if not r.matched_count:
+        raise HTTPException(409, "Ya hay una sincronizacion con JOIN en marcha")
+    # Se guarda la tarea: una que nadie referencia la puede recoger el
+    # recolector de basura a medias.
+    tarea = asyncio.create_task(_join_sincronizar(o, job_id, token))
+    _JOIN_TAREAS.add(tarea)
+    tarea.add_done_callback(_JOIN_TAREAS.discard)
     return {"ok": True}
 
 

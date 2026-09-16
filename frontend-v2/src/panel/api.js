@@ -105,6 +105,17 @@ export const enviarCandidatoAEtt = (candId, ett) =>
 export const deshacerEnvioEtt = (candId, ettId) =>
   api.delete(`/empleo/candidatos/${candId}/ett/${ettId}`)
 export const borrarCandidato = (id) => api.delete(`/empleo/candidatos/${id}`)
+// JOIN (join.com): el token es de cada empresa y nunca vuelve entero.
+export const getJoin = () => api.get('/empleo/join')
+export const guardarTokenJoin = (token) => api.put('/empleo/join/token', { token })
+export const getOfertasJoin = () => api.get('/empleo/join/ofertas')
+export const sincronizarJoin = (body) => api.post('/empleo/join/sincronizar', body)
+export const importarCsvJoin = (file, ofertaId) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('oferta_id', ofertaId)
+  return api.post('/empleo/join/csv', fd, { timeout: 120000 })
+}
 /* Por contactar: gente de Indeed a la que hay que escribir para que se apunte.
    El enlace de WhatsApp lo arma el backend y viaja en `wa` (gotcha 47). */
 export const getInvitados = () => api.get('/empleo/invitados')

@@ -13,6 +13,7 @@ import {
   getEtts, crearEtt, editarEtt, borrarEtt, enviarCandidatoAEtt, deshacerEnvioEtt,
   getInvitados, crearInvitado, marcarInvitadoEscrito, borrarInvitado,
   guardarPlantillaInvitacion,
+  getJoin, guardarTokenJoin, getOfertasJoin, sincronizarJoin, importarCsvJoin,
 } from '../api'
 
 /* EMPLEO — DE LA OFERTA AL ALTA DEL CONDUCTOR.
@@ -271,6 +272,8 @@ export default function Empleo() {
           ETT se queden sin dar de alta. */}
       {!sel && <AgendaEtts onCambio={() => sel && cargarCands(sel)} />}
 
+      {!sel && <ConexionJoin ofertas={ofertas} onHecho={cargar} />}
+
       {sel && (
         <div className="card overflow-hidden">
           <div className="flex flex-wrap items-center gap-2 border-b border-dark-800 px-4 py-3">
@@ -457,6 +460,21 @@ function FichaCandidato({ c, oferta, t, onCerrar, onMover, onContratar, onBorrar
         {c.telefono && (
           <a href={`tel:${c.telefono}`} className="flex items-center gap-1.5 rounded-lg bg-dark-800/60 px-2.5 py-1.5 text-[12px] font-medium text-dark-200 hover:bg-dark-800">
             <Phone size={12} /> {c.telefono}
+            {/* Leído del currículum por la importación de JOIN: se avisa,
+                porque en un CV puede salir el número de otra persona. */}
+            {c.telefono_de === 'cv' && (
+              <span className="rounded bg-amber-500/15 px-1 text-[10px] text-amber-300" title="Leído del currículum: compruébalo al llamar">del CV</span>
+            )}
+          </a>
+        )}
+        {!c.telefono && c.origen === 'join' && (
+          <span className="flex items-center gap-1.5 rounded-lg bg-dark-800/60 px-2.5 py-1.5 text-[12px] text-dark-400">
+            <Phone size={12} /> Sin teléfono: míralo en el CV o escríbele
+          </span>
+        )}
+        {c.email && (
+          <a href={`mailto:${c.email}`} className="flex items-center gap-1.5 rounded-lg bg-dark-800/60 px-2.5 py-1.5 text-[12px] font-medium text-dark-200 hover:bg-dark-800">
+            <Mail size={12} /> {c.email}
           </a>
         )}
         {c.wa && (
@@ -477,6 +495,18 @@ function FichaCandidato({ c, oferta, t, onCerrar, onMover, onContratar, onBorrar
         <Datos c={c} t={t} />
 
         <EnviarAEtt c={c} onEnviado={onRecargar} />
+
+        {(c.respuestas_join || []).length > 0 && (
+          <div className="space-y-1.5 rounded-lg bg-dark-900/60 p-2.5">
+            <div className="text-[10px] font-semibold uppercase text-dark-500">Respuestas en JOIN</div>
+            {c.respuestas_join.map((r, i) => (
+              <div key={i} className="text-[11.5px]">
+                <div className="text-dark-500">{r.pregunta}</div>
+                <div className="text-dark-200">{r.respuesta || '—'}</div>
+              </div>
+            ))}
+          </div>
+        )}
 
         {(oferta.preguntas || []).length > 0 && (
           <div className="space-y-1.5 rounded-lg bg-dark-900/60 p-2.5">
@@ -1229,6 +1259,171 @@ function AgendaEtts({ onCambio }) {
         </button>
       </div>
       {err && <p className="mt-2 text-[12.5px] text-red-400">{err}</p>}
+    </div>
+  )
+}
+
+
+/* JOIN — LAS CANDIDATURAS QUE ENTRAN POR JOIN.COM, EN ESTE TABLERO.
+   Dos caminos, porque el primero depende de un token que hay que ir a buscar:
+   · CONECTAR: con el token de la API se bajan candidatos y currículums, y del
+     currículum sale el teléfono de quien no lo dejó en el formulario.
+   · SUBIR EL CSV que exporta JOIN: sin token, pero sin CV y solo con los
+     teléfonos que traiga el fichero.
+   Repetir cualquiera de los dos no duplica: la clave es el id de JOIN. */
+function ConexionJoin({ ofertas, onHecho }) {
+  const [d, setD] = useState(null)
+  const [token, setToken] = useState('')
+  const [trabajos, setTrabajos] = useState(null)
+  const [oferta, setOferta] = useState('')
+  const [job, setJob] = useState('')
+  const [err, setErr] = useState('')
+  const [aviso, setAviso] = useState('')
+  const [yendo, setYendo] = useState(false)
+  const ficheroRef = useRef(null)
+
+  const cargar = useCallback(() => getJoin()
+    .then((r) => { setD(r.data); return r.data })
+    .catch(() => { setErr('No se pudo leer la conexión con JOIN.'); return null }), [])
+  useEffect(() => { cargar() }, [cargar])
+
+  // La oferta por defecto: la única activa, si solo hay una.
+  useEffect(() => {
+    if (oferta) return
+    const activas = ofertas.filter((o) => o.activa !== false)
+    if (activas.length === 1) setOferta(activas[0].id)
+  }, [ofertas, oferta])
+
+  useEffect(() => {
+    if (!d?.conectado || trabajos) return
+    getOfertasJoin().then((r) => setTrabajos(r.data.ofertas || []))
+      .catch((e) => { setTrabajos([]); setErr(e?.response?.data?.detail || 'No se pudieron leer las ofertas de JOIN.') })
+  }, [d, trabajos])
+
+  // Mientras trae candidatos, se mira el progreso cada 3 s.
+  const enMarcha = !!d?.sync?.en_marcha
+  useEffect(() => {
+    if (!enMarcha) return undefined
+    const id = setInterval(async () => {
+      const nuevo = await cargar()
+      if (nuevo && !nuevo.sync?.en_marcha) onHecho?.()
+    }, 3000)
+    return () => clearInterval(id)
+  }, [enMarcha, cargar, onHecho])
+
+  const conectar = async () => {
+    setYendo(true); setErr('')
+    try {
+      await guardarTokenJoin(token.trim())
+      setToken(''); setTrabajos(null)
+      await cargar()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo guardar el token.')
+    } finally { setYendo(false) }
+  }
+
+  const desconectar = async () => {
+    if (!window.confirm('¿Quitar el token de JOIN? Los candidatos ya traídos se quedan.')) return
+    try { await guardarTokenJoin(''); setTrabajos(null); await cargar() } catch { setErr('No se pudo quitar.') }
+  }
+
+  const sincronizar = async () => {
+    if (!oferta) { setErr('Elige a qué oferta van los candidatos.'); return }
+    setYendo(true); setErr(''); setAviso('')
+    try {
+      await sincronizarJoin({ oferta_id: oferta, job_id: job })
+      await cargar()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo empezar a traer candidatos.')
+    } finally { setYendo(false) }
+  }
+
+  const subirCsv = async (f) => {
+    if (!f) return
+    if (!oferta) { setErr('Elige primero a qué oferta van los candidatos.'); return }
+    setYendo(true); setErr(''); setAviso('')
+    try {
+      const { data: r } = await importarCsvJoin(f, oferta)
+      setAviso(`${r.nuevo} nuevos, ${r.completado} completados, ${r.igual + r.repetido} ya estaban. `
+        + `${r.sin_telefono} sin teléfono en el fichero: conecta la API para buscarlo en su CV.`)
+      onHecho?.()
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudo importar el fichero.')
+    } finally {
+      setYendo(false)
+      if (ficheroRef.current) ficheroRef.current.value = ''
+    }
+  }
+
+  if (!d) return null
+  const s = d.sync || {}
+
+  return (
+    <div className="card p-3.5">
+      <h3 className="mb-1 text-[14px] font-bold text-dark-100">JOIN</h3>
+      <p className="mb-3 max-w-[70ch] text-[12.5px] text-dark-400">
+        Trae a este tablero a quien se apunta en join.com. Con el token se bajan también los
+        currículums y, si alguien no dejó el teléfono, se busca en su CV.
+      </p>
+
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <select value={oferta} onChange={(e) => setOferta(e.target.value)}
+          className="max-w-full rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12px] text-dark-100">
+          <option value="">¿A qué oferta van?</option>
+          {ofertas.map((o) => <option key={o.id} value={o.id}>{o.titulo} · {o.centro}</option>)}
+        </select>
+        <input ref={ficheroRef} type="file" accept=".csv,text/csv" className="hidden"
+          onChange={(e) => subirCsv(e.target.files?.[0])} />
+        <button onClick={() => ficheroRef.current?.click()} disabled={yendo}
+          className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100 disabled:opacity-40">
+          <FileText size={13} /> Subir CSV de JOIN
+        </button>
+      </div>
+
+      {d.conectado ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="rounded bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-300 ring-1 ring-emerald-500/25">
+            Conectado · …{d.token_fin}
+          </span>
+          <select value={job} onChange={(e) => setJob(e.target.value)}
+            className="max-w-[260px] rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12px] text-dark-100">
+            <option value="">Todas las ofertas de JOIN</option>
+            {(trabajos || []).map((j) => (
+              <option key={j.id} value={j.id}>{j.titulo}{j.estado && j.estado !== 'online' ? ` (${j.estado})` : ''}</option>
+            ))}
+          </select>
+          <button onClick={sincronizar} disabled={yendo || enMarcha}
+            className="flex items-center gap-1.5 rounded-lg bg-brand-500/15 px-3 py-1.5 text-[12px] font-semibold text-brand-300 ring-1 ring-brand-500/30 hover:bg-brand-500/25 disabled:opacity-40">
+            {enMarcha ? <Loader2 size={13} className="animate-spin" /> : <UserPlus size={13} />}
+            {enMarcha ? `Trayendo… ${s.vistas || 0}` : 'Traer candidatos'}
+          </button>
+          <button onClick={desconectar} className="text-[11px] text-dark-500 hover:text-dark-300">Quitar token</button>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <input value={token} onChange={(e) => setToken(e.target.value)} type="password" autoComplete="off"
+            placeholder="Token de la API de JOIN"
+            className="w-64 max-w-full rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12px] text-dark-100 outline-none focus:border-brand-500/40" />
+          <button onClick={conectar} disabled={yendo || !token.trim()}
+            className="flex items-center gap-1.5 rounded-lg bg-brand-500/15 px-3 py-1.5 text-[12px] font-semibold text-brand-300 ring-1 ring-brand-500/30 disabled:opacity-40">
+            <Link2 size={13} /> Conectar
+          </button>
+          <a href="https://join.com/user/api" target="_blank" rel="noreferrer"
+            className="flex items-center gap-1 text-[11px] text-dark-400 hover:text-dark-200">
+            Sacar el token en JOIN <ExternalLink size={10} />
+          </a>
+        </div>
+      )}
+
+      {!enMarcha && s.terminado && (
+        <p className="mt-2 text-[12px] text-dark-400">
+          Última vez ({dia(s.terminado)}): {s.vistas} vistos · {s.nuevo} nuevos · {s.completado} completados
+          · {s.tel_del_cv} teléfonos sacados del CV · {s.sin_telefono} siguen sin teléfono
+          {s.error ? <span className="text-red-300"> · {s.error}</span> : null}
+        </p>
+      )}
+      {aviso && <p className="mt-2 text-[12px] text-emerald-300">{aviso}</p>}
+      {err && <p className="mt-2 text-[12px] text-red-300">{err}</p>}
     </div>
   )
 }
