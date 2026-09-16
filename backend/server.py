@@ -651,6 +651,36 @@ PLAN_LIMITS = {
 }
 PLAN_DEFAULT = PLAN_LIMITS["pro"]  # trial sin plan elegido → acceso Pro para evaluación
 
+_SIN_TOPE = 999
+
+
+def _tope_centros(org: dict) -> int:
+    """Cuantos centros puede tener una empresa: lo que diga su PLAN.
+
+    El registro guardaba `max_centers: 1` a todo el mundo y «añadir centro» solo
+    miraba ese numero, asi que una empresa del plan Completo —que se vende como
+    «varios centros, sin limite»— no podia dar de alta su segunda nave. El tope
+    guardado en la organizacion solo cuenta si es MAYOR (lo sube el
+    super-admin a mano); nunca recorta lo que el plan da.
+    """
+    org = org or {}
+    lim = PLAN_LIMITS.get((org.get("plan") or "").lower(), PLAN_DEFAULT).get("max_centers", 1)
+    try:
+        propio = int(org.get("max_centers") or 1)
+    except (TypeError, ValueError):
+        propio = 1
+    return _SIN_TOPE if lim == -1 else max(int(lim), propio)
+
+
+def _centros_de_texto(texto) -> list:
+    """«OGA5, dga1 ; DGA2» -> ['OGA5', 'DGA1', 'DGA2'], sin repetir."""
+    fuera = []
+    for trozo in re.split(r"[,;/\n]+", str(texto or "")):
+        c = re.sub(r"\s+", " ", trozo).strip().upper()
+        if c and c not in fuera:
+            fuera.append(c[:30])
+    return fuera
+
 
 def _slugify(s):
     s = (s or "").lower().strip()
@@ -4455,16 +4485,22 @@ async def register_dsp(data: RegisterRequest, request: Request):
         raise HTTPException(status_code=409, detail=f"El identificador '{slug}' ya está cogido, elige otro")
 
     org_id = uuid.uuid4().hex[:12]   # corto: el nombre de BD de Atlas no pasa de 38 chars
-    first_center = (data.center or "").strip().upper() or "PRINCIPAL"
+    # Una empresa con varias naves las escribe todas de una vez («OGA5, DGA1»);
+    # el plan de una sola nave se queda con la primera.
+    plan_elegido = (data.plan or "").strip().lower() or None
+    centros_alta = _centros_de_texto(data.center) or ["PRINCIPAL"]
+    tope = _tope_centros({"plan": plan_elegido})
+    centros_alta = centros_alta[:tope]
+    first_center = centros_alta[0]
     org = {
         "id": org_id, "name": org_name, "account_type": "dsp", "slug": slug,
         "db_name": f"dsp_{org_id}",
         "status": "trial",
         "trial_ends": (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(),
         "email": (data.email or "").strip().lower() or None,
-        "plan": (data.plan or "").strip().lower() or None,
-        "centers": [first_center],   # cada DSP empieza con UN centro (el suyo)
-        "max_centers": 1,            # añadir más = de pago (sube este límite)
+        "plan": plan_elegido,
+        "centers": centros_alta,
+        "max_centers": tope,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await global_db.organizations.insert_one(dict(org))
@@ -5265,7 +5301,7 @@ async def list_org_centers(user: dict = Depends(get_current_user)):
     """Centros de TU organización (cada uno ve solo los suyos)."""
     org = await get_org(user.get("org_id"))
     return {"centers": (org or {}).get("centers") or [],
-            "max_centers": (org or {}).get("max_centers", 1),
+            "max_centers": _tope_centros(org),
             "account_type": (org or {}).get("account_type")}
 
 
@@ -5310,7 +5346,7 @@ async def add_org_center(data: dict = Body(...), user: dict = Depends(require_ad
     centers = org.get("centers") or []
     if name in centers:
         raise HTTPException(status_code=409, detail="Ese centro ya existe")
-    if len(centers) >= org.get("max_centers", 1):
+    if len(centers) >= _tope_centros(org):
         raise HTTPException(status_code=402,
                             detail="Has alcanzado el límite de centros de tu plan. Amplía tu suscripción para añadir más.")
     centers.append(name)

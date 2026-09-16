@@ -259,8 +259,14 @@ export default function Registro() {
           <p style={{ color: '#64748b', fontSize: 12, marginBottom: 22 }}>
             Puedes acceder ahora y verificar tu email después.
           </p>
-          <button style={{ ...btn, marginTop: 0 }} onClick={() => { window.location.href = '/panel' }}>
-            Entrar al panel →
+          {/* El primer paso de verdad es traer lo que ya tiene: se le lleva
+              directo, y el panel queda a un clic. */}
+          <button style={{ ...btn, marginTop: 0 }} onClick={() => { window.location.href = '/panel/importaciones' }}>
+            Traer mis furgonetas y conductores →
+          </button>
+          <button onClick={() => { window.location.href = '/panel' }}
+            style={{ marginTop: 10, background: 'none', border: 'none', color: '#8b94a3', fontSize: 13, cursor: 'pointer' }}>
+            Ir al panel
           </button>
         </div>
       </div>
@@ -311,8 +317,12 @@ export default function Registro() {
         </div>
         <div style={hint}>{t('reg.urlhint')}</div>
 
-        <label style={lbl}>{t('reg.center')}</label>
-        <input style={inp} value={center} onChange={(e) => setCenter(e.target.value)} placeholder="OGA5" />
+        {/* Con varias naves se escriben todas: el plan de una sola se queda
+            con la primera. Sin esto la segunda nave no se podía dar de alta. */}
+        <label style={lbl}>{selectedPlan === 'operacion' ? t('reg.center') : 'Tus centros / estaciones'}</label>
+        <input style={inp} value={center} onChange={(e) => setCenter(e.target.value)}
+          placeholder={selectedPlan === 'operacion' ? 'OGA5' : 'OGA5, DGA1, DGA2'} />
+        {selectedPlan !== 'operacion' && <div style={hint}>Sepáralos con comas. Podrás añadir más después.</div>}
 
         <label style={lbl}>Email de contacto</label>
         <input style={inp} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="admin@tuempresa.com" autoComplete="email" />
