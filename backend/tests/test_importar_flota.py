@@ -95,7 +95,7 @@ def test_la_matricula_nueva_se_guarda_de_una_sola_forma():
 
 def test_la_persona_corrige_la_asignacion_de_columnas():
     m = G["_veh_aplicar_mapeo"]
-    cols = G["_veh_columnas"](["Placa coche", "Centro", "Kms actuales"])
+    cols = G["_veh_columnas"](["Identificador", "Centro", "Recorrido"])
     assert "license_plate" not in cols           # no se reconoce sola
     cols = m(cols, 3, '{"0": "license_plate", "2": "mileage"}')
     assert cols == {"license_plate": 0, "center": 1, "mileage": 2}
@@ -114,3 +114,10 @@ def test_csv_de_excel_espanol_y_pegado_con_tabuladores():
     comas = "\ufeffMatricula,Centro\n1,2\n".encode("utf-8")
     assert f(comas)[0] == ["Matricula", "Centro"]
     assert f(b"solo una columna\nx\n") == [["solo una columna"], ["x"]]
+
+
+def test_cabeceras_que_empiezan_por_el_nombre():
+    cols = G["_veh_columnas"](["Placa", "Nave", "Fabricante", "Kms actuales", "Centro de coste"])
+    assert cols == {"license_plate": 0, "center": 1, "brand": 2, "mileage": 3}
+    # «Centro de coste» no es el centro, y «Kmart» no son kilometros
+    assert G["_veh_columnas"](["Matricula", "Centro de coste", "Kmart"]) == {"license_plate": 0}

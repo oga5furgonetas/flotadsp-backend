@@ -23505,15 +23505,28 @@ def _veh_fecha(val):
 
 
 def _veh_columnas(headers: list) -> dict:
-    """{campo: indice} de las cabeceras que se entienden."""
+    """{campo: indice} de las cabeceras que se entienden.
+
+    Primero el nombre exacto; si no, la cabecera que EMPIEZA por el alias
+    («Kms actuales», «Matrícula vehículo»). Solo por el principio y con alias
+    de mas de dos letras: «contiene» mapearia «Centro de coste» a centro.
+    Cada columna se usa una vez.
+    """
     norm = [_veh_sin_tildes(h) for h in headers]
-    fuera = {}
-    for campo, alias in _VEH_COLUMNAS.items():
-        for a in alias:
-            a = _veh_sin_tildes(a)
-            if a in norm:
-                fuera[campo] = norm.index(a)
-                break
+    fuera, usadas = {}, set()
+    for exacto in (True, False):
+        for campo, alias in _VEH_COLUMNAS.items():
+            if campo in fuera:
+                continue
+            for a in alias:
+                a = _veh_sin_tildes(a)
+                hits = [i for i, h in enumerate(norm) if i not in usadas and (
+                    h == a if exacto else (len(a) > 2 and re.match(re.escape(a) + r"\b", h)
+                                           and not h.startswith(("centro de coste", "centro coste"))))]
+                if hits:
+                    fuera[campo] = hits[0]
+                    usadas.add(hits[0])
+                    break
     return fuera
 
 

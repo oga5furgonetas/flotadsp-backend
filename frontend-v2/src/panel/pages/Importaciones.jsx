@@ -186,7 +186,7 @@ function ImportarFlota({ center, alTerminar }) {
             <label className="flex cursor-pointer items-center gap-2 text-[13px] text-dark-200">
               <input type="checkbox" checked={crear} onChange={(e) => setCrear(e.target.checked)}
                 className="h-4 w-4 accent-brand-500" />
-              Dar de alta las {resumen.nuevas} nuevas
+              {resumen.nuevas === 1 ? 'Dar de alta la nueva' : `Dar de alta las ${resumen.nuevas} nuevas`}
             </label>
             <div className="flex items-center gap-3">
               <span className="text-[12px] text-dark-500">
