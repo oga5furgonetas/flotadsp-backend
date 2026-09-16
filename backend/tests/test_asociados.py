@@ -659,3 +659,23 @@ def test_la_extension_pide_las_dos_llamadas_de_la_ficha():
     # Y solo por LOS NUESTROS: se llama despues de filtrar por nave.
     j = js.index("pedirDetalleAsociados(suyas)")
     assert j > js.index("const suyas = msg.personas.filter")
+
+
+def test_los_codigos_de_amazon_se_leen_en_cristiano():
+    """«En Amazon le toca a Amazon y da»: `da` es la propia persona (Delivery
+    Associate). Lo guardado antes con el codigo crudo se traduce al leer."""
+    amb = {}
+    for n in _ARBOL.body:
+        nombre = getattr(n, "name", None) or (
+            getattr(n.targets[0], "id", None) if isinstance(n, ast.Assign) else None)
+        if nombre in ("_ASOC_TAREAS", "_ASOC_DE_QUIEN", "_asoc_legible"):
+            exec(compile(ast.Module(body=[n], type_ignores=[]), "<s>", "exec"), amb)  # noqa: S102
+    leg = amb["_asoc_legible"]
+    c = leg({"toca_a": ["Amazon", "da"],
+             "pendientes": [{"que": "VettingAssessment", "de": "da"},
+                            {"que": "La sesión de formación", "de": "la persona"}]})
+    assert c["toca_a"] == ["Amazon", "la persona"]
+    assert c["pendientes"][0]["que"] == "Evaluación de idoneidad (Vetting)"
+    assert c["pendientes"][0]["de"] == "la persona"
+    assert c["pendientes"][1]["que"] == "La sesión de formación"
+    assert leg(None) is None and leg({}) == {}

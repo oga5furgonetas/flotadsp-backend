@@ -35153,7 +35153,10 @@ def _onb_camino(p: dict, cuenta: dict, en_el_listado=None) -> dict:
     amazon = {"vista": bool(cuenta)}
     if cuenta:
         amazon.update({
-            "hechas": cuenta.get("hechas") if cuenta.get("total") else cuenta.get("hechos"),
+            # `hechas` (tareas de la ficha) si se ha leido el detalle; si no,
+            # `hechos` (modulos). Luisaly salia con «null de 14» teniendo 11.
+            "hechas": (cuenta.get("hechas") if cuenta.get("hechas") is not None
+                       else cuenta.get("hechos")),
             "total": cuenta.get("total"),
             "pendientes": [x.get("que") for x in (cuenta.get("pendientes") or [])][:8],
             "toca_a": cuenta.get("toca_a") or [],
@@ -36606,6 +36609,9 @@ _ASOC_TAREAS = {
     "BasicInfo":                 "Introducir su información personal",
     "ProviderInfo":              "Su permiso de conducir",
     "BGCAgreementReAcceptance":  "Aceptar el aviso de privacidad",
+    # Visto el 16-09-2026 en Leticia Duro. Amazon no le da un nombre en
+    # castellano en la ficha; se dice qué es y se deja el término original.
+    "VettingAssessment":         "Evaluación de idoneidad (Vetting)",
     # Esta NO es del onboarding: es la de dar de baja la cuenta, y aparece
     # pendiente en todo el mundo justamente porque nadie se ha ido. Contarla
     # como pendiente hace que nadie llegue nunca al 100 %.
@@ -36617,7 +36623,31 @@ _ASOC_DE_QUIEN = {
     "DSP": "nosotros",
     "ASSOCIATE": "la persona",
     "PROVIDER": "la persona",
+    # «DA» es Delivery Associate: la propia persona. Sin esto la pantalla
+    # decia «En Amazon le toca a Amazon y da» (16-09-2026).
+    "DA": "la persona",
 }
+
+
+def _asoc_legible(c: dict) -> dict:
+    """La cuenta con los nombres en cristiano, AL LEER.
+
+    Lo guardado antes de conocer un codigo se queda con el codigo crudo
+    («da», «VettingAssessment»). Traducirlo al leer arregla las fichas viejas
+    sin reescribir la base, y las nuevas ya entran bien.
+    """
+    if not c:
+        return c
+    c = dict(c)
+    if c.get("toca_a"):
+        c["toca_a"] = sorted({_ASOC_DE_QUIEN.get(str(x).upper(), x) for x in c["toca_a"]})
+    if c.get("pendientes"):
+        c["pendientes"] = [
+            {**x, "que": _ASOC_TAREAS.get(x.get("que"), x.get("que")) or x.get("que"),
+             "de": _ASOC_DE_QUIEN.get(str(x.get("de") or "").upper(), x.get("de"))}
+            if isinstance(x, dict) else x
+            for x in c["pendientes"]]
+    return c
 
 # Un estado que NO es «hecho». Amazon usa COMPLETED, y cualquier otra cosa
 # —PENDING, NOT_STARTED, IN_PROGRESS, o una que inventen manana— es que falta.
@@ -36829,6 +36859,7 @@ async def _asoc_por_persona() -> dict:
     """
     por_correo, por_nombre, todas = {}, {}, []
     for c in await db[_ASOC_COL].find({}, {"_id": 0}).to_list(2000):
+        c = _asoc_legible(c)
         todas.append(c)
         if c.get("correo"):
             por_correo[c["correo"]] = c
@@ -36878,7 +36909,7 @@ async def asociados_listar(center: Optional[str] = None,
         nave = (_centro_norm(center) or center or "").upper()
         if nave:
             q["naves"] = nave
-    filas = await db[_ASOC_COL].find(q, {"_id": 0}).to_list(2000)
+    filas = [_asoc_legible(f) for f in await db[_ASOC_COL].find(q, {"_id": 0}).to_list(2000)]
     fuera_de_mi_lista = 0
     if not todas:
         # Las de MI gente: las que cruzan con alguien de Incorporaciones.
