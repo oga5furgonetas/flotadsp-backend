@@ -34470,6 +34470,18 @@ async def _cx_dias_reparto(center: str, desde: str, hasta: Optional[str] = None)
     return dias_out
 
 
+def _sc_fallos_de_mas(entregados: int, fallos: int, objetivo) -> int:
+    """Fallos por encima de los que permite el objetivo con ese volumen."""
+    try:
+        obj = float(objetivo)
+    except (TypeError, ValueError):
+        return 0
+    total = (entregados or 0) + (fallos or 0)
+    if total <= 0 or not 0 < obj <= 100:
+        return 0
+    return max(0, math.ceil((fallos or 0) - total * (1 - obj / 100) - 1e-9))
+
+
 @api_router.get("/scorecard/en-vivo")
 async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(require_admin)):
     """El DCR real de esta semana contado desde Cortex, contra su umbral."""
@@ -34496,9 +34508,15 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
         acc = porsem.setdefault(sd, {"entregados": 0, "fallos": 0, "en_vuelo": 0,
                                      "no_despachados": 0, "dias": 0, "abiertos": 0})
         acc["dias"] += 1
-        for k in ("entregados", "fallos", "en_vuelo", "no_despachados"):
-            acc[k] += rep[k]
-        if not rep["cerrado"]:
+        # SOLO LOS DIAS CERRADOS PUNTUAN, igual que en /cortex/calidad. Sumando
+        # tambien el dia abierto, la MISMA semana salia en la misma pantalla con
+        # dos notas: 96,68 % aqui y 96,06 % en «Calidad de entrega» (medido el
+        # 17-09-2026, 817 fallos contra 742). Lo del dia abierto va aparte.
+        acc["en_vuelo"] += rep["en_vuelo"]
+        if rep["cerrado"]:
+            for k in ("entregados", "fallos", "no_despachados"):
+                acc[k] += rep[k]
+        else:
             acc["abiertos"] += 1
 
     for sd in sorted(porsem, reverse=True):
@@ -34520,6 +34538,10 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
                                   - a["entregados"]) / max(1e-9, 1 - thr_dcr["fantastic"] / 100)))
                 if dcr is not None and thr_dcr.get("fantastic") and dcr < thr_dcr["fantastic"]
                 else 0),
+            # El numero que se entiende: cuantos fallos SOBRAN respecto a lo que
+            # Fantastic permite con este volumen. «Entregar 16.229 mas sin fallar
+            # ninguno» es correcto y no le sirve a nadie.
+            "fallos_de_mas": _sc_fallos_de_mas(a["entregados"], a["fallos"], thr_dcr.get("fantastic")),
         })
 
     # LA SEMANA QUE ACABA DE EMPEZAR NO ES "LA ACTUAL" PARA ENSEÑAR.
@@ -42136,7 +42158,9 @@ async def cortex_calidad(desde: str = "", hasta: str = "", center: str = "",
     Por defecto la semana scorecard en curso (domingo->sabado, como Amazon).
     Solo puntuan los dias cerrados; el dia en curso va aparte como progreso.
     """
-    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # El dia de reparto es el de Espana: en UTC, a la una de la madrugada
+    # «hoy» seguia siendo ayer y la jornada de ayer salia como la de hoy.
+    hoy = _dia_negocio()
     if not desde or not hasta:
         desde, hasta = _sun_sat_week(hoy)
     for v in (desde, hasta):
@@ -42275,17 +42299,35 @@ async def cortex_calidad(desde: str = "", hasta: str = "", center: str = "",
                     "avance_pct": round(v["ok"] / v["total"] * 100, 1) if v["total"] else 0,
                     "nota": "Jornada sin cerrar: no puntua todavia."}
 
+    # LA REFERENCIA ES EL UMBRAL DE ESTA NAVE, no un 99 escrito a mano. Amazon
+    # publica en cada scorecard el suyo (OGA5: Fantastic desde 98 %), y contra
+    # el 99 fijo la pantalla avisaba de que un objetivo de 98,5 era «mas blando
+    # que el de Amazon» siendo mas exigente. Sin scorecard de la nave, la
+    # referencia generica de siempre.
+    referencia = dict(_TARGETS_FANTASTIC)
+    referencia_de = "general"
+    try:
+        thr, meta = await _sc_thresholds(center or await _centro_por_defecto(),
+                                         _sun_to_week_num(desde))
+        fant = ((thr or {}).get("dcr") or {}).get("fantastic")
+        if fant is not None and (meta.get("dcr") or {}).get("fiable"):
+            referencia["dcr"] = float(fant)
+            referencia_de = "nave"
+    except Exception as e:                                   # noqa: BLE001
+        logger.warning(f"calidad: sin umbral de la nave: {e}")
+
     return {"desde": desde, "hasta": hasta, "center": center, "hay_datos": True,
             "dias": dias, "total": total, "conductores": conductores,
             "impacto": impacto[:8], "en_curso": en_curso, "objetivos": obj,
             # Dias del rango que no puntuan por captura incompleta. Que se vean:
             # un scorecard calculado sobre datos con huecos hay que poder auditarlo.
             "dias_incompletos": [d for d in abiertos if d != hoy],
-            "referencia_fantastic": _TARGETS_FANTASTIC,
+            "referencia_fantastic": referencia,
+            "referencia_de": referencia_de,
             # True si el objetivo configurado es MAS BLANDO que el de Amazon: la
             # pantalla lo avisa en vez de dar por bueno un aprobado que Amazon
             # no daria.
-            "objetivo_blando": float(obj["dcr"]) < _TARGETS_FANTASTIC["dcr"],
+            "objetivo_blando": float(obj["dcr"]) < referencia["dcr"],
             "margen": margen,
             "sin_ficha": sorted({c["driver_id"] for c in conductores if c["sin_ficha"]})}
 

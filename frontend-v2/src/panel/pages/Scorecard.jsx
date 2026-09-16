@@ -3,8 +3,9 @@ import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
   Loader2, Upload, Trophy, ChevronLeft, ChevronRight, Pencil, Check, X,
-  TrendingUp, TrendingDown, Minus, RefreshCw, FileText, Trash2, Info,
-  ChevronDown, ChevronUp, RotateCcw, ExternalLink, BookOpen, AlertCircle,
+  TrendingUp, Minus, RefreshCw, FileText, Trash2, Info,
+  ChevronDown, ChevronUp, RotateCcw, BookOpen, AlertCircle,
+  Activity, SlidersHorizontal,
 } from 'lucide-react'
 import {
   getScorecardFull, setScorecardValue, getScorecardEnVivo, revisarDiaScorecard,
@@ -18,6 +19,17 @@ import {
 } from '../api'
 import { diasAtras } from '../../lib/fecha'
 import CalidadViva from '../components/CalidadViva'
+import Pestanas, { usePestana } from '../components/Pestanas'
+
+/* Cuatro preguntas distintas, cuatro pestañas. Antes era una sola página de
+   seis pantallas de alto donde lo de hoy, la nota oficial de hace dos meses y
+   los umbrales se mezclaban, y la misma semana salía con dos DCR. */
+const PESTANAS_SC = [
+  { id: 'semana', label: 'Esta semana', icono: Activity },
+  { id: 'oficial', label: 'Nota de Amazon', icono: Trophy },
+  { id: 'subir', label: 'Subir datos', icono: Upload },
+  { id: 'umbrales', label: 'Umbrales', icono: SlidersHorizontal },
+]
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 /* La escala va LIMA → amarillo → ámbar → rojo, sin verde azulado. El esmeralda
@@ -454,7 +466,7 @@ function DailyTrendTable({ trend }) {
 }
 
 // ── ImportGuide ───────────────────────────────────────────────────────────────
-function ImportGuide({ center, fileRef, uploadBusy, onUpload }) {
+function ImportGuide({ center, uploadBusy }) {
   const { t } = useT()
   const [open, setOpen] = useState(false)
   const FILES = [
@@ -591,8 +603,7 @@ function ImportGuide({ center, fileRef, uploadBusy, onUpload }) {
                 <div className="text-xs font-semibold text-brand-300">{t('sc.upload.title').replace('{center}', center)}</div>
                 <div className="mt-0.5 text-[11px] text-dark-400">{t('sc.upload.hint')}</div>
               </div>
-              <input ref={fileRef} type="file" accept=".pdf,.html,.htm,.xlsx,.xls,.xlsm,.csv" onChange={onUpload} className="hidden" id="sc-upload-guide" />
-              <label htmlFor="sc-upload-guide" className="btn-primary shrink-0 inline-flex cursor-pointer items-center gap-2">
+              <label htmlFor="sc-upload" className="btn-primary shrink-0 inline-flex cursor-pointer items-center gap-2">
                 {uploadBusy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
                 {uploadBusy ? t('sc.uploading') : t('sc.choose.file')}
               </label>
@@ -922,11 +933,11 @@ export default function Scorecard() {
   const [loadingFull, setLoadingFull] = useState(false)
   const [uploadBusy, setUploadBusy] = useState(false)
   const [msg, setMsg] = useState(null)
-  const [showBaremos, setShowBaremos] = useState(false)
   const [showSources, setShowSources] = useState(false)
   const [confirmReset, setConfirmReset] = useState(false)
   const [resetBusy, setResetBusy] = useState(false)
   const [umbrales, setUmbrales] = useState(null)
+  const [tab, setTab] = usePestana(PESTANAS_SC, 'semana')
 
   const loadFull = useCallback(async (c, w) => {
     if (!c || c === 'Todos') return
@@ -1032,7 +1043,11 @@ export default function Scorecard() {
   const overallCfg = tierCfg(full?.overall)
   const metrics = full?.metrics || []
   const byGroup = (g) => metrics.filter(m => m.group === g)
-  const hasScore = full?.overall != null || predict?.predicted_score != null
+  // Una predicción con 0 % de datos reales NO es una nota: es la última
+  // oficial (que puede tener dos meses) pintada como si fuera de esta semana.
+  // Se enseñaba en grande «76,79 Great» con confidence 0.
+  const prediccionReal = predict?.predicted_score != null && Number(predict.confidence) > 0
+  const hasScore = full?.overall != null || prediccionReal
 
   return (
     <div className="mx-auto max-w-5xl space-y-5">
@@ -1041,35 +1056,48 @@ export default function Scorecard() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">Scorecard <span className="text-dark-600">· {center}</span></h1>
-          {full && <p className="text-xs text-dark-500">{fmtDate(full.desde)} – {fmtDate(full.hasta)} · W{full.week_num}</p>}
+          {full && tab !== 'semana' && tab !== 'umbrales' && (
+            <p className="mt-1 text-xs text-dark-500">{fmtDate(full.desde)} – {fmtDate(full.hasta)} · W{full.week_num}</p>
+          )}
         </div>
-        <div className="flex items-center gap-2">
+        {tab !== 'semana' && tab !== 'umbrales' && <div className="flex items-center gap-2">
           <button onClick={() => navWeek(-1)} className="btn-ghost p-1.5"><ChevronLeft size={16} /></button>
           <span className="text-sm text-dark-300">{weekSun ? `W${full?.week_num || '?'}` : '—'}</span>
           <button onClick={() => navWeek(1)} className="btn-ghost p-1.5"><ChevronRight size={16} /></button>
           <button onClick={reload} disabled={loadingFull} className="btn-ghost p-1.5" title="Recargar">
             {loadingFull ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
           </button>
-        </div>
+        </div>}
       </div>
+
+      <Pestanas pestanas={PESTANAS_SC.map((p) => (p.id === 'oficial' && full?.oficial_semanas_retraso >= 2
+        ? { ...p, marca: <span className="rounded-full bg-amber-500/15 px-1.5 text-[10px] text-amber-300">{full.oficial_semanas_retraso} sem</span> }
+        : p))}
+        activa={tab} onElegir={setTab} etiqueta="Secciones de la scorecard" />
+
+      {/* Siempre montado: «Subir mi scorecard» lo pulsa desde otras pestañas. */}
+      <input ref={fileRef} type="file" accept=".pdf,.html,.htm,.xlsx,.xls,.xlsm,.csv" onChange={onUpload} className="hidden" id="sc-upload" />
 
       {msg && <div className={`rounded-lg px-3 py-2 text-sm ${msg.ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'}`}>{msg.t}</div>}
 
-      {/* Lo vivo va ARRIBA a propósito: es lo único que está actualizado hoy.
-          Lo de abajo depende de que alguien suba el PDF de Amazon del viernes,
-          y en producción eso no lo hace nadie — esta pantalla llevaba meses
-          vacía por eso mismo. */}
-      <CalidadViva center={center} />
+      {/* Lo vivo es la pestaña de entrada: es lo único que está al día. La nota
+          oficial depende de que alguien suba el PDF de Amazon del viernes. */}
+      {tab === 'semana' && (
+        <div className="space-y-5">
+          <CalidadViva center={center} />
+          <ComoVaLaSemana center={center} />
+        </div>
+      )}
 
-      {loadingFull && !full && (
+      {tab === 'oficial' && loadingFull && !full && (
         <div className="flex items-center gap-2 text-dark-400"><Loader2 className="animate-spin" size={16} /> {t('ui.loading')}</div>
       )}
 
       {/* Cada nave tiene sus propios baremos: si no tenemos scorecard de ésta,
           se dice ANTES de enseñar ningún tier. */}
-      <AvisoUmbrales info={umbrales} onSubir={() => fileRef.current?.click()} />
+      {tab === 'oficial' && <AvisoUmbrales info={umbrales} onSubir={() => fileRef.current?.click()} />}
 
-      {full && (
+      {tab === 'oficial' && full && (
         <>
           {/* Overall banner */}
           <div className={`rounded-xl border p-5 ${hasScore && overallCfg.ring ? `ring-1 ${overallCfg.ring}` : ''} border-dark-800`}>
@@ -1083,7 +1111,7 @@ export default function Scorecard() {
                       <span className={`text-xl font-mono font-semibold ${overallCfg.text}`}>{Number(full.overall_score).toFixed(2)}</span>
                     )}
                   </div>
-                ) : predict?.predicted_score != null ? (
+                ) : prediccionReal ? (
                   <div>
                     <div className="flex items-baseline gap-3">
                       <span className={`text-3xl font-bold tabular-nums ${tierCfg(predict.predicted_tier).text}`}>
@@ -1101,7 +1129,15 @@ export default function Scorecard() {
                 ) : (
                   <div>
                     <span className="text-2xl font-bold text-dark-500">{t('sc.no.data.simple')}</span>
-                    <p className="mt-1 text-[11px] text-dark-500">{t('sc.no.data.long')}</p>
+                    <p className="mt-1 max-w-md text-[12px] leading-relaxed text-dark-500">
+                      {full.oficial_ultima_semana
+                        ? <>La última scorecard oficial cargada es la <span className="cifra">{full.oficial_ultima_semana}</span>. Sube la de esta semana para tener la nota; mientras, el DCR real está en «Esta semana».</>
+                        : t('sc.no.data.long')}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button onClick={() => setTab('subir')} className="btn-primary px-3 py-1.5 text-xs">Subir scorecard</button>
+                      <button onClick={() => setTab('semana')} className="btn-ghost px-3 py-1.5 text-xs">Ver esta semana</button>
+                    </div>
                   </div>
                 )}
                 {full.overall_method && <p className="mt-1 text-[10px] text-dark-600">{full.overall_method}</p>}
@@ -1194,10 +1230,6 @@ export default function Scorecard() {
                 })}
               </div>
 
-              {/* Lo primero: como va la semana EN CURSO. La tabla de abajo
-                  es la ultima oficial, que puede tener un mes. */}
-              <ComoVaLaSemana center={center} />
-
               <TablaMetricas metricas={full.metrics || []} weekSun={full.week}
                 center={center} onSaved={reload} />
 
@@ -1219,7 +1251,7 @@ export default function Scorecard() {
                     <TrendingUp size={14} className="text-brand-400" />
                     <span className="text-sm font-semibold">{t('sc.predict.panel')}</span>
                   </div>
-                  {predict.predicted_tier || predict.predicted_score != null ? (
+                  {prediccionReal ? (
                     <>
                       {/* Score exacto */}
                       <div className="mb-3 rounded-lg border border-dark-700 bg-dark-950 px-4 py-3 text-center">
@@ -1287,7 +1319,14 @@ export default function Scorecard() {
                     </>
                   ) : (
                     <div className="space-y-3">
-                      <p className="text-xs text-dark-400">Aún no hay datos suficientes para calcular el score de esta semana.</p>
+                      <p className="text-xs text-dark-400">Aún no hay datos de esta semana para calcular la nota.</p>
+                      {predict.predicted_score != null && predict.estimado_desde && (
+                        <p className="text-[11px] leading-relaxed text-dark-500">
+                          Con la scorecard de la W{predict.estimado_desde} saldría{' '}
+                          <span className="cifra">{Number(predict.predicted_score).toFixed(2)}</span> ({predict.predicted_tier}),
+                          pero eso es la nota de entonces, no la de ahora.
+                        </p>
+                      )}
                       <div className="rounded-lg border border-dark-700 bg-dark-900 p-3 text-[11px] text-dark-400 space-y-1.5">
                         <div className="font-semibold text-dark-300 mb-2">Para ver la predicción, sube alguno de estos:</div>
                         <div>📄 <span className="text-emerald-400">PDF oficial</span> → todas las métricas</div>
@@ -1332,12 +1371,12 @@ export default function Scorecard() {
         </>
       )}
 
+      {tab === 'subir' && <>
       {/* Upload + guide */}
       <div className="card p-5">
         <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-dark-200"><Upload size={15} /> {t('sc.upload.title').replace('{center}', center)}</div>
         <p className="mb-3 text-xs text-dark-400">{t('sc.upload.hint')}</p>
         <div className="flex flex-wrap items-center gap-3">
-          <input ref={fileRef} type="file" accept=".pdf,.html,.htm,.xlsx,.xls,.xlsm,.csv" onChange={onUpload} className="hidden" id="sc-upload" />
           <label htmlFor="sc-upload" className="btn-primary inline-flex cursor-pointer items-center gap-2">
             {uploadBusy ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
             {uploadBusy ? t('sc.uploading') : t('sc.choose.file')}
@@ -1422,22 +1461,18 @@ export default function Scorecard() {
       </div>
 
       {/* Guía de importación */}
-      <ImportGuide center={center} fileRef={fileRef} uploadBusy={uploadBusy} onUpload={onUpload} />
+      <ImportGuide center={center} uploadBusy={uploadBusy} />
+      </>}
 
-      {/* Baremos */}
-      <div className="card p-5">
-        <button onClick={() => setShowBaremos(s => !s)} className="flex w-full items-center justify-between">
-          <div className="flex items-center gap-2 text-sm font-semibold text-dark-200">
+      {tab === 'umbrales' && (
+        <div className="card p-5">
+          <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-dark-200">
             <Trophy size={15} /> {t('sc.baremos.title').replace('{center}', center)}
           </div>
-          {showBaremos ? <ChevronUp size={15} className="text-dark-500" /> : <ChevronDown size={15} className="text-dark-500" />}
-        </button>
-        {showBaremos && (
-          <div className="mt-4 border-t border-dark-800 pt-4">
-            <BaremosEditor full={full} center={center} onSaved={reload} />
-          </div>
-        )}
-      </div>
+          {full ? <BaremosEditor full={full} center={center} onSaved={reload} />
+            : <div className="flex items-center gap-2 text-sm text-dark-400"><Loader2 size={14} className="animate-spin" /> {t('ui.loading')}</div>}
+        </div>
+      )}
     </div>
   )
 }

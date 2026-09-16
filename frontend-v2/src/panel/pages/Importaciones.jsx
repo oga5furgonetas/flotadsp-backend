@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
+import { Link, useOutletContext } from 'react-router-dom'
+import Pestanas, { usePestana } from '../components/Pestanas'
 import { useT } from '../../i18n'
 import {
   Loader2, Truck, Check, AlertTriangle, RotateCcw, ArrowRight, Users, CalendarDays,
@@ -236,8 +237,7 @@ function Atajo({ titulo, detalle, to, cta, naves }) {
 export default function Importaciones() {
   const { center } = useOutletContext()
   const { t } = useT()
-  const [params, setParams] = useSearchParams()
-  const tab = PESTANAS.some((p) => p.id === params.get('t')) ? params.get('t') : 'furgonetas'
+  const [tab, setTab] = usePestana(PESTANAS, 'furgonetas')
   const [estado, setEstado] = useState(null)
 
   const cargarEstado = () => getOnboarding().then((r) => setEstado(r.data)).catch(() => {})
@@ -260,22 +260,9 @@ export default function Importaciones() {
         <p className="mt-2 text-[13.5px] text-dark-400">Trae lo que ya tienes. Nada se guarda sin revisarlo antes.</p>
       </header>
 
-      <nav role="tablist" aria-label="Qué integrar" className="mb-4 flex gap-1 overflow-x-auto border-b border-dark-800">
-        {PESTANAS.map((p) => {
-          const Icono = p.icono
-          const activa = tab === p.id
-          return (
-            <button key={p.id} role="tab" aria-selected={activa}
-              onClick={() => setParams({ t: p.id }, { replace: true })}
-              className={`-mb-px flex shrink-0 items-center gap-2 border-b-2 px-3.5 py-2.5 text-[13px] font-medium transition ${
-                activa ? 'border-brand-400 text-dark-50' : 'border-transparent text-dark-500 hover:text-dark-200'}`}>
-              <Icono size={15} />
-              {p.label}
-              {hecho(p) && <Check size={13} className="text-emerald-400" aria-label="hecho" />}
-            </button>
-          )
-        })}
-      </nav>
+      <Pestanas className="mb-4" etiqueta="Qué integrar" activa={tab} onElegir={setTab}
+        pestanas={PESTANAS.map((p) => ({ ...p,
+          marca: hecho(p) ? <Check size={13} className="text-emerald-400" aria-label="hecho" /> : null }))} />
 
       <section role="tabpanel" className="card p-5">
         {tab === 'furgonetas' && <ImportarFlota center={center} alTerminar={cargarEstado} />}
