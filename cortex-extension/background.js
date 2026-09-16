@@ -806,6 +806,10 @@ async function pedirAsociados() {
   if (!recienActualizada && Date.now() - asociadosEn < cada) return 0;
   await chrome.storage.local.set({ asociadosEn: Date.now() });
 
+  /* La lista de a quien seguimos, al almacen ANTES de abrir: el puente de la
+     pestaña la lee de ahi para preguntar por correo, y sin ella esa vuelta
+     solo podria barrer. */
+  try { await aQuienSeguimos(); } catch (_) {}
   try {
     const t = await chrome.tabs.create({ url: ASOCIADOS_URL, active: false });
     await chrome.storage.local.set({ tabAsociados: t.id, tabAsociadosEn: Date.now() });
@@ -1225,20 +1229,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     });
     return false;
   }
-  /* A QUIEN SEGUIMOS, PARA LA PAGINA. `portal.js` vive en el mundo MAIN y no
-     puede tocar `chrome.storage` ni llamar al backend: pregunta por la ventana
-     y se le contesta por el mismo camino que el informe.
-
-     Va solo el CORREO y el nombre de la gente que ya estamos siguiendo —la que
-     el propio backend devuelve en `/cortex/seguimiento`—, y se usa para
-     preguntarle a Amazon por ellos uno a uno en la MISMA pantalla donde la
-     oficina los buscaria a mano. No sale de la sesion de Amazon del navegador. */
-  if (msg?.type === 'seguidosPedir') {
-    aQuienSeguimos()
-      .then((j) => reply?.({ correos: (j.correos || []).slice(0, 400),
-                             nombres: (j.nombres || []).slice(0, 400) }))
-      .catch(() => reply?.({ correos: [], nombres: [] }));
-    return true;   // respuesta asincrona: hay que mantener el canal abierto
+  /* A QUIEN SEGUIMOS: QUE LA TRAIGA. El puente lee la lista directamente de
+     `chrome.storage.local` (ver bridge.js: pedirla con respuesta fallaba 4 de 4
+     en Chrome). Si aun no esta, pide esto y el siguiente intento ya la tiene.
+     No se contesta nada, a proposito. */
+  if (msg?.type === 'seguidosRefrescar') {
+    aQuienSeguimos().catch(() => {});
+    return false;
   }
   if (msg?.type === 'informeGuardado') {
     chrome.storage.local.get({ informe: { estados: [], descartados: [], plantillas: {} } })

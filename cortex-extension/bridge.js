@@ -68,23 +68,38 @@ if (!window.__flotadspBridge) {
     /* Los correos de nuestra gente, de vuelta hacia la pagina. Mismo camino
        que `informe_pedir`: `__flotadspIn` para no confundirlo con la ida. */
     } else if (d.kind === 'seguidos_pedir') {
+      /* SE LEE DEL ALMACEN, SIN PEDIRSELO AL SERVICE WORKER.
+         Primero se pedia con `sendMessage` y respuesta. Medido el 16-09-2026
+         con la 2.90: 4 intentos de 4 acabaron en «The message port closed
+         before a response was received», mientras el mismo worker SI recibia
+         los avisos (que no esperan respuesta). En Node el mismo background.js
+         contesta bien, asi que la causa esta en como Chrome trata ese canal y
+         no se sabe cual es. En vez de adivinarla se quita el salto: el worker
+         ya guarda la lista en `chrome.storage.local.seguimiento`, y un content
+         script puede leerla directamente. Sin respuesta que esperar, no hay
+         puerto que se cierre. */
+      const avisar = (texto) => {
+        try {
+          chrome.runtime.sendMessage({ type: 'debug', which: 'asociados-correo-x-puente',
+                                       url: texto.slice(0, 160), count: 0, bytes: 0 });
+        } catch (_) {}
+      };
       try {
-        chrome.runtime.sendMessage({ type: 'seguidosPedir' }, (r) => {
-          /* Antes aqui se volvia en silencio. Es el unico sitio de la cadena
-             donde el fallo tiene nombre (el `lastError`), asi que se apunta:
-             la pagina reintenta, pero si no llega nunca hay que saber por que. */
-          if (chrome.runtime.lastError || !r) {
-            const e = chrome.runtime.lastError ? String(chrome.runtime.lastError.message || '') : 'respuesta vacia';
-            try {
-              chrome.runtime.sendMessage({ type: 'debug', which: 'asociados-correo-x-puente',
-                                           url: 'sin lista: ' + e.slice(0, 120), count: 0, bytes: 0 });
-            } catch (_) {}
+        chrome.storage.local.get({ seguimiento: null }).then(({ seguimiento }) => {
+          const s = seguimiento || {};
+          if (!Array.isArray(s.correos) || !s.correos.length) {
+            // Aun no hay lista: que el worker la traiga para el siguiente intento.
+            avisar('sin lista en el almacen: se pide al service worker que la traiga');
+            try { chrome.runtime.sendMessage({ type: 'seguidosRefrescar' }); } catch (_) {}
             return;
           }
           window.postMessage({ __flotadspIn: true, kind: 'seguidos',
-                               correos: r.correos || [], nombres: r.nombres || [] }, '*');
-        });
-      } catch (_) {}
+                               correos: s.correos.slice(0, 400),
+                               nombres: (s.nombres || []).slice(0, 400) }, '*');
+        }).catch((e) => avisar('no se pudo leer el almacen: ' + String(e && e.message || e)));
+      } catch (e) {
+        avisar('no se pudo leer el almacen: ' + String(e && e.message || e));
+      }
     } else if (d.kind === 'informe_pedir') {
       try {
         chrome.runtime.sendMessage({ type: 'informeGuardado' }, (r) => {

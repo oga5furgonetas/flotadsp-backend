@@ -181,7 +181,62 @@ const respirar = () => new Promise((r) => setImmediate(r))
   ok(/seguidos_pedir/.test(puente) && /kind: 'seguidos'/.test(puente),
     'el puente no relaya la lista: el mensaje se tiraria en silencio (lista blanca)')
   const fondo = readFileSync(join(RAIZ, 'background.js'), 'utf8')
-  ok(/seguidosPedir/.test(fondo), 'el service worker no contesta a quien seguimos')
+  ok(/seguidosRefrescar/.test(fondo), 'el service worker no sabe traer la lista cuando falta')
+  ok(/try \{ await aQuienSeguimos\(\); \} catch/.test(fondo),
+    'la lista no se deja en el almacen ANTES de abrir la pestaña: esa vuelta solo podria barrer')
+}
+
+/* ── 6b. EL PUENTE, EJECUTADO: lee la lista del almacen, sin esperar respuesta ─
+   Con la 2.90 se pedia al worker con `sendMessage` y respuesta, y Chrome
+   cerraba el canal 4 de 4 veces («message port closed before a response was
+   received»). Aqui se comprueba que el puente ya NO depende de esa respuesta. */
+function arrancarPuente(almacen) {
+  const salen = []
+  const alWorker = []
+  let oyente = null
+  const chrome = {
+    runtime: {
+      sendMessage: (m, cb) => {
+        alWorker.push(m)
+        // Como el Chrome de verdad el 16-09-2026: el canal se cierra sin respuesta.
+        if (cb) { chrome.runtime.lastError = { message: 'The message port closed before a response was received.' }; cb(undefined); chrome.runtime.lastError = undefined }
+      },
+      lastError: undefined,
+    },
+    storage: { local: { get: async (def) => ({ ...def, ...almacen }) } },
+  }
+  const win = {
+    postMessage: (m) => salen.push(m),
+    addEventListener: (ev, fn) => { if (ev === 'message') oyente = fn },
+  }
+  win.window = win
+  const ctx = { window: win, chrome, setInterval: () => 0, console: { log() {}, warn() {}, error() {} },
+                Array, String, Object, JSON, Promise }
+  vm.createContext(ctx)
+  vm.runInContext(readFileSync(join(RAIZ, 'bridge.js'), 'utf8'), ctx, { filename: 'bridge.js' })
+  const pedir = async () => {
+    oyente({ source: win, data: { __flotadsp: true, kind: 'seguidos_pedir' } })
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
+  }
+  return { salen, alWorker, pedir }
+}
+{
+  const p = arrancarPuente({ seguimiento: { correos: ['loibarfig@winiw.es', 'b@winiw.es'], nombres: [] } })
+  await p.pedir()
+  const lista = p.salen.find((m) => m && m.__flotadspIn === true && m.kind === 'seguidos')
+  ok(!!lista, 'el puente no le da la lista a la pagina: vuelve a depender de una respuesta que Chrome no entrega')
+  ok(lista && lista.correos.length === 2 && lista.correos.includes('loibarfig@winiw.es'),
+    'la lista llega incompleta a la pagina')
+}
+{
+  const p = arrancarPuente({ seguimiento: null })
+  await p.pedir()
+  ok(p.alWorker.some((m) => m.type === 'seguidosRefrescar'),
+    'sin lista en el almacen, el puente no le pide al worker que la traiga para el siguiente intento')
+  ok(p.alWorker.some((m) => m.type === 'debug' && m.which === 'asociados-correo-x-puente'),
+    'sin lista en el almacen no se dice nada: otro silencio')
+  ok(!p.salen.some((m) => m && m.kind === 'seguidos'),
+    'sin lista, el puente se inventa una vacia y la vuelta diria «0 preguntados» como si fuera un resultado')
 }
 
 /* ── 7. LA VUELTA POR CORREO, CON EL portal.js REAL ────────────────────────
