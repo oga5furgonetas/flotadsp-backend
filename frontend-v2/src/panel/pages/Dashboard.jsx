@@ -570,6 +570,10 @@ export default function Dashboard() {
           enCurso,
           total,
           entregados,
+          // De cuándo son estos números: la última vez que la extensión bajó
+          // algo de Cortex. Sin esto, una captura parada enseñaba cifras de
+          // hace dos horas como si fueran de ahora (16-09-2026: 1 h 43 min).
+          captura: r.data?.captura || null,
           review: queue.length,
           // Direcciones que un conductor no encontró hoy y que aún no se han
           // podido resolver: es trabajo pendiente de HOY, no histórico.
@@ -684,7 +688,22 @@ export default function Dashboard() {
      3.019 y 2.938 de 3.019 son "97%" los dos, y en una operación de 3.000
      paquetes cada décima son tres paquetes. Delante de Amazon eso se nota. */
   const pctEntrega = nowLive?.total ? (nowLive.entregados / nowLive.total) * 100 : null
-  const pctEnt = pctEntrega != null ? pctEntrega.toFixed(2) : null
+  /* Con el separador decimal del idioma. Antes el titular decía «47.35%» y la
+     cifra grande de debajo «47,35 %»: el mismo dato escrito de dos maneras en
+     la misma pantalla. */
+  const fmtPct = (v) => v.toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const pctEnt = pctEntrega != null ? fmtPct(pctEntrega) : null
+  const decimalesPct = pctEntrega != null
+    ? (fmtPct(pctEntrega).match(/[^0-9]([0-9]{2})$/) || [])[0] || ''
+    : ''
+  /* ¿Siguen llegando datos? Solo importa si lo que se enseña es HOY: un día
+     pasado no se captura y no tiene sentido avisar. 20 minutos es holgado: con
+     la extensión viva, la mediana entre capturas es de uno o dos minutos. */
+  const capturaMin = nowLive?.captura?.hace_min
+  const capturaParada = nowLive?.esHoy !== false && capturaMin != null && capturaMin >= 20
+  const horaCaptura = nowLive?.captura?.ultima
+    ? new Date(nowLive.captura.ultima).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
+    : ''
 
   /* Los 7 últimos días de inspecciones, del backend (`weekly_activity`). El día
      de hoy va el último y es el único marcado: es sobre el que aún se actúa. */
@@ -729,7 +748,7 @@ export default function Dashboard() {
                "hoy" ni "siguen en la calle": esas rutas terminaron hace días.
                Es el mismo falso positivo de las rutas que "seguían repartiendo"
                a la 1 de la madrugada, pero en la portada y a cinco días vista. */
-            <><b className="font-semibold text-dark-50">{pctEnt}%</b>{' '}
+            <><b className="font-semibold text-dark-50">{pctEnt} %</b>{' '}
               {nowLive.esHoy === false
                 ? t('ops.brief.delivered.dia').replace('{d}', fechaCorta(nowLive.dia))
                 : t('ops.brief.delivered')}
@@ -759,7 +778,10 @@ export default function Dashboard() {
           arriba no había NADA hasta que empezaba la operación: a las 6:45 de la
           mañana el panel se abría prácticamente vacío. */}
       {fleet > 0 && (
-        <div className="rise mb-2 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5" style={{ animationDelay: '20ms' }}>
+        /* Cinco cifras: o las cinco en fila o de dos en dos con la última a lo
+           ancho. Con tres columnas quedaba un hueco al final de la segunda fila
+           que parecía una tarjeta que no había cargado. */
+        <div className="rise mb-2 grid grid-cols-2 gap-3 lg:grid-cols-5 [&>*:last-child]:col-span-2 lg:[&>*:last-child]:col-span-1" style={{ animationDelay: '20ms' }}>
           <Cifra icono={Truck} color="#60a5fa" n={active} label={t('ops.active.veh')}
             sub={`${t('ops.of')} ${fleet}`} onIr={() => navTop('/panel/vehiculos')} />
           <Cifra icono={ClipboardList} color="#34d399" n={semana.reduce((a, d) => a + d.n, 0)}
@@ -792,11 +814,11 @@ export default function Dashboard() {
                 datos de hace cinco días late igual y dice lo contrario de la
                 verdad: si no es de hoy, se queda quieto y en ámbar. */}
             <span className="relative flex h-1.5 w-1.5">
-              {nowLive.esHoy !== false && (
+              {nowLive.esHoy !== false && !capturaParada && (
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
               )}
               <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${
-                nowLive.esHoy === false ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                nowLive.esHoy === false || capturaParada ? 'bg-amber-400' : 'bg-emerald-400'}`} />
             </span>
             {nowLive.esHoy === false ? t('ops.hoy.no') : t('ops.hoy')}
             {/* Si lo que se enseña NO es de hoy, se dice. Enseñar los datos de
@@ -806,7 +828,22 @@ export default function Dashboard() {
                 {t('ops.lastday').replace('{d}', nowLive.dia)}
               </span>
             )}
+            {nowLive.esHoy !== false && capturaMin != null && !capturaParada && (
+              <span className="ml-auto font-normal normal-case tracking-normal text-dark-600">
+                {t('ops.fresh').replace('{n}', capturaMin)}
+              </span>
+            )}
           </h2>
+
+          {capturaParada && (
+            <div role="status" className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[12.5px] text-amber-200">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-400" />
+              <span>
+                {t('ops.stale').replace('{h}', horaCaptura).replace('{n}', capturaMin >= 90
+                  ? `${Math.floor(capturaMin / 60)} h ${capturaMin % 60} min` : `${capturaMin} min`)}
+              </span>
+            </div>
+          )}
 
           <div className="mt-4 flex flex-wrap items-end gap-x-10 gap-y-4">
             <div>
@@ -815,7 +852,7 @@ export default function Dashboard() {
                   {/* Entero animado + decimales fijos: el contador sube y la
                       precisión no se pierde. */}
                   <Count v={Math.floor(pctEntrega)} />
-                  <span className="text-[26px] text-dark-300">,{pctEnt.split('.')[1]}</span>
+                  <span className="text-[26px] text-dark-300">{decimalesPct}</span>
                 </span>
                 <span className="text-lg font-medium text-dark-500">%</span>
               </div>

@@ -5,6 +5,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { LifeBuoy, Phone, Navigation, Loader2, AlertTriangle, CheckCircle2, MapPin } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
+import { normalizarDetalle } from '../services/api'
 
 /* LA PÁGINA DEL QUE VA A AYUDAR — mapa y lista de SUS paradas, sin login.
    ═══════════════════════════════════════════════════════════════════════
@@ -16,6 +17,11 @@ import { API_BASE } from '../lib/apiBase'
    propio: sin sesión que meter ni que borrar. */
 
 const http = axios.create({ baseURL: API_BASE })
+// El mensaje de error llega siempre como texto (ver normalizarDetalle).
+http.interceptors.response.use((r) => r, (e) => {
+  if (e?.response?.data) e.response.data = normalizarDetalle(e.response.data)
+  return Promise.reject(e)
+})
 
 const ICONO = (n, apagada) => L.divIcon({
   className: '',

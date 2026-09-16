@@ -1306,6 +1306,9 @@ async def _ensure_tenant_indexes(db_name: str):
     # 'tba' y 'updated_at' ya los auto-creo Atlas (con sufijo _autocreated):
     # volver a pedirlos daba error 85 y abortaba el resto.
     await _idx(tdb.cortex_packages, [("service_day", -1)])
+    # La frescura de la captura se pregunta en cada carga del panel: sin indice
+    # es un recorrido de 350.000 paquetes (0,45 s medidos el 16-09-2026).
+    await _idx(tdb.cortex_packages, [("seen_at", -1)])
     # Compuesto para la calidad por conductor: sin el, cada consulta del
     # scorecard en vivo recorre los ~100.000 paquetes del mes enteros.
     await _idx(tdb.cortex_packages, [("driver_id", 1), ("service_day", -1)])
@@ -7470,6 +7473,9 @@ async def itv_guardar_lote(data: dict = Body(...), user: dict = Depends(require_
 # contar. Si el juicio estuviera mal, esta ahi para verlo.
 
 ODO_SALTO_MAX_DIA = 900       # km/dia por encima de los cuales no es reparto urbano
+# Por encima de esto no es un kilometraje de furgoneta de reparto: es un dedo
+# de mas. Una Proace de flota DSP hace 60.000 km al año.
+ODO_KM_IMPOSIBLE = 1_000_000
 
 
 def _odo_sospechosas(hist: list) -> list:
@@ -7494,19 +7500,30 @@ def _odo_sospechosas(hist: list) -> list:
     marcaba 56518 del 9 al 17 de agosto y el 18 puso 57682. Contando de un dia
     para otro son 1.164 km/dia e imposible; contando desde que se vio por
     primera vez son nueve dias y 129 km/dia, que es su ritmo normal.
+
+    LO IMPOSIBLE SALE ANTES DE CONTAR. La 3328 NFY tenia 17 lecturas de
+    1.880.404 a 1.880.930 km —subiendo de uno en uno: cada conductor copiaba
+    la de ayer— y despues 7 reales de 25.282 a 26.773, subiendo 200-300 al
+    dia. La cadena mas larga era la falsa, asi que se marcaban como malas las
+    siete buenas y la ficha daba por bueno 1.880.930 (16-09-2026). Un valor
+    que no puede existir no vota.
     """
-    puntos = []
+    puntos, imposibles = [], [] = [], []
     for i, h in enumerate(hist or []):
         if h.get("descartada"):
             continue
         km = h.get("km")
         f = _fecha_suave(h.get("date"))
         if isinstance(km, (int, float)) and not isinstance(km, bool) and f:
+            if km > ODO_KM_IMPOSIBLE:
+                imposibles.append((i, "%d km: mas de un millon, no es un kilometraje de "
+                                      "furgoneta" % int(km)))
+                continue
             puntos.append((i, int(km), f))
     if len(puntos) < 3:
         # Con dos lecturas no hay mayoria que valga: cualquiera de las dos
         # podria ser la mala y marcar una al azar es peor que no marcar.
-        return []
+        return imposibles
     puntos.sort(key=lambda x: (x[2], x[1]))
     n = len(puntos)
 
@@ -7542,9 +7559,9 @@ def _odo_sospechosas(hist: list) -> list:
     # mitad de las lecturas seria inventar: mejor no tocar nada y que lo mire
     # una persona.
     if len(buena) * 2 < n:
-        return []
+        return imposibles
 
-    malos = []
+    malos = list(imposibles)
     for k in range(n):
         if k in buena:
             continue
@@ -7574,7 +7591,7 @@ async def odometro_sospechosas(_=Depends(require_admin)):
     # la 3328 NFY llevaba 14 lecturas coherentes entre si alrededor de
     # 1.880.712 km (02-09-2026) y, como todas encajaban, la cadena mas larga
     # no las veia. Se enseña para que alguien lo corrija; no se adivina.
-    _KM_IMPOSIBLE = 1_000_000
+    _KM_IMPOSIBLE = ODO_KM_IMPOSIBLE
     for v in vs:
         hist = v.get("mileage_history") or []
         total += len(hist)
@@ -9274,7 +9291,8 @@ async def update_vehicle(vehicle_id: str, data: dict, _=Depends(require_admin)):
 # =========================
 
 @api_router.post("/drivers", response_model=Driver)
-async def create_driver(data: DriverCreate, admin: dict = Depends(require_admin)):
+async def create_driver(data: DriverCreate, nueva: bool = False,
+                        admin: dict = Depends(require_admin)):
     driver_data = data.model_dump()
     password = driver_data.pop("password", None)
 
@@ -9293,6 +9311,24 @@ async def create_driver(data: DriverCreate, admin: dict = Depends(require_admin)
             raise HTTPException(
                 409, "Ya hay un conductor activo con el correo %s (%s). Edita esa "
                      "ficha o cambia el correo." % (email, otra.get("name") or otra.get("id")))
+        # UNA PERSONA QUE VUELVE TRAS UNA BAJA RECUPERA SU FICHA. Crear otra
+        # partia su historial en dos: el 09-09-2026 se dio de alta a David
+        # Freire con ficha nueva mientras la suya —con su Transporter ID y
+        # cuatro inspecciones— seguia de baja, y /drivers/duplicados lo marco.
+        # No se decide por nadie: se para y se ofrece reactivar; quien sepa que
+        # es otra persona con el mismo correo lo repite con `?nueva=true`.
+        if not nueva:
+            baja = await db.drivers.find_one(
+                {"email": {"$regex": "^%s$" % re.escape(email), "$options": "i"},
+                 "active": False, "status": {"$nin": ["deleted", "fusionada"]},
+                 "merged_into": {"$exists": False}},
+                {"_id": 0, "id": 1, "name": 1, "transporter_id": 1})
+            if baja:
+                raise HTTPException(409, {
+                    "mensaje": "%s ya tiene una ficha dada de baja con este correo. "
+                               "Reactivala para conservar su historial." % (baja.get("name") or email),
+                    "reactivar_id": baja["id"], "nombre": baja.get("name") or "",
+                })
     doc = serialize_doc(driver.model_dump())
     try:
         await db.drivers.insert_one(doc)
@@ -25194,7 +25230,7 @@ async def validate_inspection_photo(
 
 ODO_MAX_KM_DIA = 500          # tope diario que pidio flota (furgo DSP real: 150-250)
 ODO_MIN_CONFIANZA = 0.80      # por debajo, la lectura no vale
-ODO_MAX_ABSOLUTO = 2_000_000  # ningun odometro real pasa de aqui
+ODO_MAX_ABSOLUTO = ODO_KM_IMPOSIBLE  # ningun odometro de furgoneta DSP pasa de aqui
 
 
 def _odo_lecturas(v: dict) -> list:
@@ -25222,9 +25258,12 @@ def _odo_ultima_fecha(v: dict):
         if not d:
             continue
         try:
-            return datetime.fromisoformat(str(d).replace("Z", "+00:00"))
+            f = datetime.fromisoformat(str(d).replace("Z", "+00:00"))
         except Exception:
             continue
+        # Una fecha sin zona («2026-08-10», de una importacion) reventaba al
+        # restarla de `now(timezone.utc)`: 500 al subir la foto del cuadro.
+        return f if f.tzinfo else f.replace(tzinfo=timezone.utc)
     upd = v.get("updated_at")
     if isinstance(upd, datetime):
         return upd if upd.tzinfo else upd.replace(tzinfo=timezone.utc)
@@ -25239,6 +25278,25 @@ def _odo_margen(v: dict):
     vacaciones no se queda bloqueada al volver.
     """
     actual = int(v.get("mileage") or 0)
+    # EL MINIMO NO PUEDE SER UN DATO QUE YA SABEMOS FALSO. Si la IA no lee el
+    # cuentakilometros, el conductor escribe los km a mano y no se le deja
+    # poner menos que lo registrado. En la 3328 NFY lo registrado era
+    # 1.880.404: el conductor veia 25.000 en el salpicadero, no podia
+    # escribirlo, y durante tres semanas cada uno copio el de ayer mas uno.
+    # El formulario FABRICABA el dato falso. Ahora el minimo es el ultimo km
+    # bueno de la serie; si no hay ninguno creible, no hay minimo.
+    if actual > ODO_KM_IMPOSIBLE:
+        actual = 0
+    malos = _odo_sospechosas(v.get("mileage_history") or [])
+    if actual and malos:
+        hist = v.get("mileage_history") or []
+        km_malos = {hist[i].get("km") for i, _ in malos}
+        if actual in km_malos:
+            buenos = [h.get("km") for j, h in enumerate(hist)
+                      if j not in {i for i, _ in malos} and not h.get("descartada")
+                      and isinstance(h.get("km"), (int, float))
+                      and not isinstance(h.get("km"), bool)]
+            actual = int(max(buenos)) if buenos else 0
     ultima = _odo_ultima_fecha(v)
     dias = 1
     if ultima:
@@ -45048,9 +45106,12 @@ async def cortex_overview(day: str = "", center: str = "", _=Depends(require_adm
         {"_id": 0, "state": 1, "driver_name": 1, "route_code": 1,
          "timeline.state": 1, "timeline.at": 1}).to_list(20000)
     # Frescura de la captura (org completa, cualquier día): la señal de
-    # confianza del panel — "¿la extensión sigue viva?"
-    _last = await db.cortex_packages.find({}, {"_id": 0, "updated_at": 1}).sort("updated_at", -1).to_list(1)
-    last_capture_at = _last[0].get("updated_at") if _last else None
+    # confianza del panel — "¿la extensión sigue viva?". Es `seen_at`, que lo
+    # escribe la ingesta, y NO `updated_at`, que es la hora del evento en
+    # Cortex (gotcha 29): por la tarde, con las rutas cerradas, `updated_at`
+    # deja de moverse aunque la captura funcione, y con la captura parada no
+    # hay forma de distinguirlo.
+    last_capture_at = await _cx_ultima_captura()
     n = len(pkgs)
     missing = [p for p in pkgs if p.get("state") == "MISSING"]
     recovered_today, lost, missing_today, rec_times, attempts_pre = [], [], [], [], []
@@ -45092,6 +45153,12 @@ async def cortex_overview(day: str = "", center: str = "", _=Depends(require_adm
         "by_driver": sorted([{"name": k, "n": v} for k, v in by_driver.items()], key=lambda x: -x["n"])[:8],
         "by_route": sorted([{"route": k, "n": v} for k, v in by_route.items()], key=lambda x: -x["n"])[:8],
     }
+
+
+async def _cx_ultima_captura(filtro: Optional[dict] = None) -> Optional[str]:
+    """Hora (ISO) de la ultima vez que la extension bajo algun paquete."""
+    ult = await db.cortex_packages.find(filtro or {}, {"_id": 0, "seen_at": 1})         .sort("seen_at", -1).limit(1).to_list(1)
+    return (ult[0].get("seen_at") if ult else None) or None
 
 
 def _cx_ruta_cajon(state) -> str:
@@ -45153,7 +45220,20 @@ async def cortex_routes(day: str = "", center: str = "", _=Depends(require_admin
             r["ultima_entrega"] = u
 
     nombres = await _cx_nombres({r["driver_id"] for r in routes.values() if r.get("driver_id")})
+    # LOS MINUTOS SIN ENTREGAR SE CUENTAN HASTA LA ULTIMA CAPTURA, no hasta
+    # ahora. Si la extension deja de capturar, «ahora» sigue avanzando y TODAS
+    # las rutas parecian paradas a la vez: el 16-09-2026 la captura estuvo
+    # 1 h 43 min quieta y el dashboard pintaba 44 rutas en rojo con 250-321 min
+    # «sin entregar». Lo que sabemos es que hasta la ultima captura no habian
+    # entregado; despues, no lo sabemos, y eso se dice aparte (`captura`).
     ahora = datetime.now(timezone.utc)
+    ultima_captura = await _cx_ultima_captura()
+    referencia = ahora
+    uc = _cortex_parse_dt(ultima_captura) if ultima_captura else None
+    if uc:
+        if uc.tzinfo is None:
+            uc = uc.replace(tzinfo=timezone.utc)
+        referencia = min(ahora, uc)
     for r in routes.values():
         n = nombres.get(r.get("driver_id") or "")
         if n:
@@ -45183,10 +45263,12 @@ async def cortex_routes(day: str = "", center: str = "", _=Depends(require_admin
             if ue:
                 if ue.tzinfo is None:
                     ue = ue.replace(tzinfo=timezone.utc)
-                r["min_sin_entregar"] = max(0, int((ahora - ue).total_seconds() // 60))
+                r["min_sin_entregar"] = max(0, int((referencia - ue).total_seconds() // 60))
 
     out = sorted(routes.values(), key=lambda r: str(r["route_code"] or ""))
-    return {"routes": out, "total_packages": len(pkgs)}
+    return {"routes": out, "total_packages": len(pkgs),
+            "captura": {"ultima": ultima_captura,
+                        "hace_min": int((ahora - uc).total_seconds() // 60) if uc else None}}
 
 
 @api_router.get("/cortex/packages")

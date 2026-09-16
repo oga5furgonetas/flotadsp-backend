@@ -6,6 +6,7 @@ import {
   CalendarClock, History, ThumbsUp, Clock3, X, ChevronLeft, ChevronRight, Wrench,
 } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
+import { normalizarDetalle } from '../services/api'
 
 /* PORTAL DEL TALLER — sin usuario y sin contraseña, y de UNO EN UNO.
    ═══════════════════════════════════════════════════════════════════════
@@ -30,6 +31,11 @@ import { API_BASE } from '../lib/apiBase'
    el token de sesión en cada petición y, si algo devuelve 401 dentro de
    /panel, borra la sesión. Aquí no hay sesión que meter ni que borrar. */
 const apiTaller = axios.create({ baseURL: API_BASE, timeout: 60000 })
+// El mensaje de error llega siempre como texto (ver normalizarDetalle).
+apiTaller.interceptors.response.use((r) => r, (e) => {
+  if (e?.response?.data) e.response.data = normalizarDetalle(e.response.data)
+  return Promise.reject(e)
+})
 
 const CHIP = {
   abierta: 'bg-slate-100 text-slate-700 ring-slate-200',

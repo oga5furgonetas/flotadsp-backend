@@ -41,9 +41,32 @@ api.interceptors.request.use((config) => {
 // Sesión expirada/inválida dentro del panel → limpiar y volver al login.
 // OJO: change-my-password devuelve 401 cuando la contraseña actual es errónea
 // (no es un problema de sesión), por eso se excluye.
+/* `detail` SIEMPRE TEXTO. Hay 186 sitios que pintan
+   `error.response.data.detail` tal cual, y FastAPI no siempre manda texto: un
+   422 por un campo mal formado trae una LISTA de objetos, y React revienta la
+   pantalla entera al intentar pintar un objeto. Se normaliza aquí, una vez:
+   `detail` pasa a ser el mensaje legible y el original queda en `detalle`
+   para quien necesite sus campos (p. ej. `reactivar_id` al dar de alta). */
+export function normalizarDetalle(data) {
+  if (!data || typeof data !== 'object' || data.detail == null || typeof data.detail === 'string') return data
+  const d = data.detail
+  let texto
+  if (Array.isArray(d)) {
+    texto = d.map((x) => {
+      if (typeof x === 'string') return x
+      const campo = Array.isArray(x?.loc) ? x.loc.filter((p) => p !== 'body').join('.') : ''
+      return campo ? `${campo}: ${x?.msg || 'valor no válido'}` : (x?.msg || '')
+    }).filter(Boolean).join(' · ') || 'Algún dato no tiene el formato correcto.'
+  } else {
+    texto = d.mensaje || d.message || d.msg || 'No se ha podido completar la operación.'
+  }
+  return { ...data, detail: texto, detalle: d }
+}
+
 api.interceptors.response.use(
   (res) => res,
   (error) => {
+    if (error?.response?.data) error.response.data = normalizarDetalle(error.response.data)
     const status = error?.response?.status
     const url = error?.config?.url || ''
     const path = window.location.pathname

@@ -8,6 +8,7 @@ import {
 import { API_BASE } from '../lib/apiBase'
 import { enviarCandidatura } from '../lib/enviarCandidatura'
 import RopaCartel from './RopaCartel'
+import { normalizarDetalle } from '../services/api'
 
 /* LA PÁGINA DONDE SE APUNTA LA GENTE — sin login y desde el móvil.
    ══════════════════════════════════════════════════════════════════════════
@@ -32,6 +33,11 @@ import RopaCartel from './RopaCartel'
    qué respuesta le deja fuera, el cuestionario no mediría nada. */
 
 const http = axios.create({ baseURL: API_BASE, timeout: 30000 })
+// El mensaje de error llega siempre como texto (ver normalizarDetalle).
+http.interceptors.response.use((r) => r, (e) => {
+  if (e?.response?.data) e.response.data = normalizarDetalle(e.response.data)
+  return Promise.reject(e)
+})
 
 /* Que quede rastro. La vez anterior no se pudo saber qué había fallado porque
    una petición que no llega al servidor no deja nada en ninguna parte: ni en

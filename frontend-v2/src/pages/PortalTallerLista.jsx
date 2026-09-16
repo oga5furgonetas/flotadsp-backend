@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import axios from 'axios'
 import { Wrench, ChevronRight, AlertTriangle, Loader2, Euro, CalendarClock } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
+import { normalizarDetalle } from '../services/api'
 
 /* LA PUERTA DE UN TALLER — un solo enlace, para siempre.
    ═══════════════════════════════════════════════════════════════════════
@@ -13,6 +14,11 @@ import { API_BASE } from '../lib/apiBase'
    grandes, como el portal por orden: se mira de pie, con el móvil, al lado de
    la furgoneta. Cliente HTTP propio, sin sesión que meter ni que borrar. */
 const apiTaller = axios.create({ baseURL: API_BASE, timeout: 60000 })
+// El mensaje de error llega siempre como texto (ver normalizarDetalle).
+apiTaller.interceptors.response.use((r) => r, (e) => {
+  if (e?.response?.data) e.response.data = normalizarDetalle(e.response.data)
+  return Promise.reject(e)
+})
 
 const CHIP = {
   abierta: 'bg-slate-100 text-slate-700 ring-slate-200',

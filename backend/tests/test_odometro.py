@@ -15,102 +15,22 @@ DOS INTENTOS ANTERIORES FALLARON, y por eso estan aqui como casos:
 El que funciona busca la cadena valida mas larga: cuatro lecturas malas no
 ganan a veintiseis buenas.
 """
-from datetime import datetime
+import ast
+from datetime import datetime, timezone
+from pathlib import Path
 
-ODO_SALTO_MAX_DIA = 900
-
-
-def _odo_sospechosas(hist: list) -> list:
-    """Indices del historico que no pueden ser ciertos.
-
-    SE BUSCA LA CADENA VALIDA MAS LARGA, y lo que queda fuera es lo malo. Dos
-    intentos anteriores fallaron por comparar de dos en dos:
-
-      · Contra la lectura anterior a secas: un pico marca ADEMAS el dato bueno
-        que viene detras, porque respecto al pico ha "bajado". Se limpiaba el
-        error y se tiraba el dato correcto.
-      · Contra el ultimo punto bueno, con los siguientes como confirmacion: en
-        la 2851 NGX hay CUATRO lecturas malas seguidas (253030 y 271000 x3), y
-        entre ellas se confirman. El algoritmo se dejaba convencer y marcaba
-        como mala la serie buena entera.
-
-    Con la cadena mas larga eso no pasa: 4 lecturas malas nunca ganan a 26
-    buenas. Es la mayoria la que define que es normal, no el vecino.
-
-    LOS DIAS SE CUENTAN DESDE LA PRIMERA VEZ QUE SE VIO ESE KILOMETRAJE. El
-    cuentakilometros se queda pegado dias entre inspecciones: la 4523MZG
-    marcaba 56518 del 9 al 17 de agosto y el 18 puso 57682. Contando de un dia
-    para otro son 1.164 km/dia e imposible; contando desde que se vio por
-    primera vez son nueve dias y 129 km/dia, que es su ritmo normal.
-    """
-    puntos = []
-    for i, h in enumerate(hist or []):
-        if h.get("descartada"):
-            continue
-        km = h.get("km")
-        f = _fecha_suave(h.get("date"))
-        if isinstance(km, (int, float)) and not isinstance(km, bool) and f:
-            puntos.append((i, int(km), f))
-    if len(puntos) < 3:
-        # Con dos lecturas no hay mayoria que valga: cualquiera de las dos
-        # podria ser la mala y marcar una al azar es peor que no marcar.
-        return []
-    puntos.sort(key=lambda x: (x[2], x[1]))
-    n = len(puntos)
-
-    # Primera vez que se vio cada kilometraje: es desde donde cuenta el salto.
-    primera = {}
-    for _, km, f in puntos:
-        if km not in primera or f < primera[km]:
-            primera[km] = f
-
-    def _encaja(a, b):
-        """b puede venir despues de a en una misma cadena real."""
-        if b[1] < a[1]:
-            return False                      # un cuentakilometros no baja
-        dias = max(1, (b[2] - primera.get(a[1], a[2])).days)
-        return (b[1] - a[1]) / dias <= ODO_SALTO_MAX_DIA
-
-    # Cadena valida mas larga (n es de decenas: O(n^2) sobra).
-    largo = [1] * n
-    prev = [-1] * n
-    for b in range(n):
-        for a in range(b):
-            if largo[a] + 1 > largo[b] and _encaja(puntos[a], puntos[b]):
-                largo[b] = largo[a] + 1
-                prev[b] = a
-    fin = max(range(n), key=lambda k: (largo[k], puntos[k][2]))
-    buena = set()
-    k = fin
-    while k != -1:
-        buena.add(k)
-        k = prev[k]
-
-    # Si la cadena no llega ni a la mitad, esta serie es un caos y marcar la
-    # mitad de las lecturas seria inventar: mejor no tocar nada y que lo mire
-    # una persona.
-    if len(buena) * 2 < n:
-        return []
-
-    malos = []
-    for k in range(n):
-        if k in buena:
-            continue
-        idx, km, f = puntos[k]
-        malos.append((idx, "%d km no encaja con la serie de esta furgoneta" % km))
-    return malos
-
-
-def _fecha_suave(x):
-    try:
-        return datetime.fromisoformat(str(x).replace("Z", "+00:00")).replace(tzinfo=None)
-    except Exception:                                        # noqa: BLE001
-        try:
-            return datetime.strptime(str(x)[:10], "%Y-%m-%d")
-        except Exception:                                    # noqa: BLE001
-            return None
-
-
+# Las funciones se leen de server.py (gotcha 40): este fichero tenia una COPIA
+# y, al corregir el backend el 16-09-2026, la copia seguia pasando en verde.
+_SRC = (Path(__file__).resolve().parents[1] / "server.py").read_text(encoding="utf-8-sig")
+_NS = {"datetime": datetime, "timezone": timezone}
+for _n in ast.parse(_SRC).body:
+    _nombre = getattr(_n, "name", None) or (
+        getattr(_n.targets[0], "id", None) if isinstance(_n, ast.Assign) else None)
+    if _nombre in {"ODO_SALTO_MAX_DIA", "ODO_KM_IMPOSIBLE", "ODO_MAX_KM_DIA", "ODO_MAX_ABSOLUTO",
+                   "_odo_sospechosas", "_fecha_suave", "_odo_margen", "_odo_ultima_fecha",
+                   "_odo_lecturas"}:
+        exec(compile(ast.Module([_n], []), "server.py", "exec"), _NS)
+_odo_sospechosas = _NS["_odo_sospechosas"]
 
 
 def _h(*pares):
@@ -171,3 +91,33 @@ def test_las_ya_descartadas_no_se_vuelven_a_mirar():
     hist = _h((6, 1, 10000), (6, 2, 99999), (6, 3, 10400), (6, 4, 10800))
     hist[1]["descartada"] = True
     assert _odo_sospechosas(hist) == []
+
+
+def test_lo_imposible_no_vota(  # la 3328 NFY real, 16-09-2026
+):
+    """17 lecturas copiadas de 1.880.xxx km no pueden ganar a 7 reales."""
+    falsas = [(8, d, 1880404 + d) for d in range(10, 27)]
+    reales = [(9, 8, 25282), (9, 9, 25485), (9, 10, 25747), (9, 11, 26052),
+              (9, 12, 26257), (9, 13, 26501), (9, 14, 26773)]
+    hist = _h(*falsas, *reales)
+    malos = sorted(i for i, _ in _odo_sospechosas(hist))
+    assert malos == list(range(17)), malos
+
+
+def test_imposibles_se_marcan_aunque_queden_pocas():
+    hist = _h((6, 1, 1880404), (6, 2, 25000), (6, 3, 25200))
+    assert [i for i, _ in _odo_sospechosas(hist)] == [0]
+
+
+def test_el_minimo_a_mano_no_es_un_dato_falso():
+    """El portal no puede obligar a escribir mas que un km que sabemos falso."""
+    margen = _NS["_odo_margen"]
+    falsas = [(8, d, 1880404 + d) for d in range(10, 27)]
+    reales = [(9, 8, 25282), (9, 9, 25485), (9, 10, 25747)]
+    # km actual imposible: sin minimo
+    assert margen({"mileage": 1880930, "mileage_history": _h(*falsas)})[0] == 0
+    # km actual entre los malos de la serie: el minimo es el ultimo bueno
+    hist = _h((6, 1, 25167), (6, 2, 25300), (6, 3, 25400), (6, 4, 253030))
+    assert margen({"mileage": 253030, "mileage_history": hist})[0] == 25400
+    # serie sana: el minimo es el actual, como siempre
+    assert margen({"mileage": 25747, "mileage_history": _h(*reales)})[0] == 25747

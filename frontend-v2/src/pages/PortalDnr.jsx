@@ -5,6 +5,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { Loader2, AlertTriangle, CheckCircle2, MapPin, PackageSearch } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
+import { normalizarDetalle } from '../services/api'
 
 /* LA PÁGINA DEL CONDUCTOR — «¿dónde dejaste este paquete?»
    ═══════════════════════════════════════════════════════════════════════
@@ -37,6 +38,11 @@ import { API_BASE } from '../lib/apiBase'
    «añádele la dirección».) */
 
 const http = axios.create({ baseURL: API_BASE })
+// El mensaje de error llega siempre como texto (ver normalizarDetalle).
+http.interceptors.response.use((r) => r, (e) => {
+  if (e?.response?.data) e.response.data = normalizarDetalle(e.response.data)
+  return Promise.reject(e)
+})
 
 const CHINCHETA = (color, letra) => L.divIcon({
   className: '',

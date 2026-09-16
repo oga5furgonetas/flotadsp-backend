@@ -1701,13 +1701,13 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   despues de tocar multiempresa, importaciones, centros o el flujo de taller.
   Deja la empresa creada a proposito —no se borra sola: un script de smoke no
   debe poder borrar nada—; se quita desde el panel de super-admin.
-- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son veintiseis:
+- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son veintisiete:
   `check-i18n`, `check-routes`, `check-huerfanas`, `check-permisos`, `check-tema`,
   `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones`,
   `check-tema-mezclado`, `check-efectos`, `check-chunk-error`,
   `check-importados`, `check-destinos`, `check-cola-extension`,
   `check-envio-candidatura`, `check-interceptor-ahorro`, `check-informes-portal`,
-  `check-asociados`, `check-hooks`,
+  `check-asociados`, `check-hooks`, `check-detalle-error`,
   `check_contracts.py`, `check_objectid.py`, `check_tenant.py`,
   `check_multiempresa.py`, `check_borrado.py` y `check_unicos.py`.
   `check-patrones` admite `soloEn` en una regla: hay patrones que solo son un

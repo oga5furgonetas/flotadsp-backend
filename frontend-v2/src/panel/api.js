@@ -79,7 +79,7 @@ export const getDriverRanking = () => api.get('/drivers/ranking')
 export const getDriverScore = (id) => api.get(`/drivers/${id}/score`)
 export const getDriversScoring = (month, year) => api.get('/scoring/drivers', { params: { ...(month ? { month } : {}), ...(year ? { year } : {}) } })
 export const getScoringLeaderboard = (month, year) => api.get('/scoring/leaderboard', { params: { ...(month ? { month } : {}), ...(year ? { year } : {}) } })
-export const createDriver = (data) => api.post('/drivers', data)
+export const createDriver = (data, params) => api.post('/drivers', data, { params })
 export const updateDriver = (id, data) => api.patch(`/drivers/${id}`, data)
 export const telefonosDesdeCortex = () => api.post('/drivers/telefonos-desde-cortex')
 // Apoyo en ruta: quien le quita paradas a quien, con mapa por WhatsApp

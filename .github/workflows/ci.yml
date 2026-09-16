@@ -59,6 +59,8 @@ jobs:
         run: node scripts/check-interceptor-ahorro.mjs
       - name: Asociados (cada cuenta llega, sin perder a nadie ni repetir)
         run: node scripts/check-asociados.mjs
+      - name: Mensajes de error (siempre texto, nunca un objeto que tumbe la pantalla)
+        run: node scripts/check-detalle-error.mjs
       - name: Informes del portal (la direccion de cada dia se deduce bien)
         run: node scripts/check-informes-portal.mjs
       - name: Envio de una candidatura (se reintenta, y reintentarlo es seguro)

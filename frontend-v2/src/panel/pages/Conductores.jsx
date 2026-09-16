@@ -1206,7 +1206,27 @@ export default function Conductores() {
   [drivers, q])
 
   async function handleSave(id, data) {
-    if (id) await updateDriver(id, data); else await createDriver(data)
+    if (id) {
+      await updateDriver(id, data)
+    } else {
+      try {
+        await createDriver(data)
+      } catch (e) {
+        /* Alguien que vuelve tras una baja: el servidor ofrece su ficha de
+           siempre en vez de crear otra y partir su historial en dos. */
+        const d = e?.response?.data?.detalle
+        if (e?.response?.status !== 409 || !d?.reactivar_id) throw e
+        if (window.confirm(`${d.mensaje}
+
+Aceptar: reactivar su ficha (conserva inspecciones, Transporter ID y turnos).
+Cancelar: es otra persona, crear una ficha nueva.`)) {
+          const { password: _pw, ...resto } = data
+          await updateDriver(d.reactivar_id, { ...resto, active: true })
+        } else {
+          await createDriver(data, { nueva: true })
+        }
+      }
+    }
     setModal(null); setDrivers(null); load()
   }
   async function handleDelete(d) {
@@ -1383,7 +1403,9 @@ function DriverModal({ driver, centers, hasAccount, onSave, onDelete, onClose, o
     if (!form.name?.trim()) { setErr('El nombre es obligatorio.'); return }
     setBusy(true); setErr('')
     try { await onSave(driver?.id || null, form) }
-    catch (ex) { setErr(ex?.response?.data?.detail || 'Error al guardar.'); setBusy(false) }
+    catch (ex) {
+      setErr(ex?.response?.data?.detail || 'Error al guardar.'); setBusy(false)
+    }
   }
 
   async function handlePhoto(e) {
