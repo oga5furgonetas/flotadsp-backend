@@ -49,7 +49,17 @@ const MAINT_LABEL = {
 
 const EJE_LABEL = { delante: 'Delanteras', detras: 'Traseras' }
 
-const daysTo = (d) => d ? Math.ceil((new Date(d) - new Date()) / 86400000) : null
+/* Días de CALENDARIO hasta una fecha «YYYY-MM-DD», como los cuenta el
+   servidor. `new Date('2026-09-20')` es medianoche UTC y restarle «ahora»
+   daba un día de más o de menos según la hora (gotcha 11). */
+const daysTo = (d) => {
+  if (!d) return null
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d))
+  if (!m) return null
+  const f = new Date(+m[1], +m[2] - 1, +m[3])
+  const h = new Date(); h.setHours(0, 0, 0, 0)
+  return Math.round((f - h) / 86400000)
+}
 
 function itvBadge(itv) {
   const d = daysTo(itv)
@@ -2811,7 +2821,10 @@ export default function Vehiculos() {
     return {
       total: vs.length,
       taller: vs.filter(v => v.status === 'taller').length,
-      itv: vs.filter(v => { const d = daysTo(v.itv_date); return d != null && d <= 30 }).length,
+      /* Mismo criterio que el dashboard y /alerts/itv (ITV_AVISO_DIAS = 60):
+         vencida o en los próximos 60 días. Con 30 aquí y 60 allí, la misma
+         flota daba «10» en una pantalla y «5» en la otra. */
+      itv: vs.filter(v => { const d = daysTo(v.itv_date); return d != null && d <= 60 }).length,
       sinInsp: vs.filter(v => !lastInsp[v.id]).length,
       // SOLO las declaradas ausentes. Las que nunca se preguntaron no entran:
       // no saber si la lleva no es lo mismo que saber que no la lleva.
@@ -2932,7 +2945,7 @@ export default function Vehiculos() {
           {[
             { val: kpis.total,   label: t('veh.all'),        color: 'text-dark-50' },
             { val: kpis.taller,  label: t('veh.workshop'),   color: 'text-amber-300' },
-            { val: kpis.itv,     label: 'ITV ≤ 30 días',     color: 'text-amber-300' },
+            { val: kpis.itv,     label: 'ITV vencida o en 60 días', color: 'text-amber-300' },
             { val: kpis.sinInsp, label: t('veh.never.insp'), color: 'text-red-300' },
             // Clicable: filtra la lista. Solo se ofrece si hay alguna, para no
             // dejar un filtro que no lleva a ningún sitio.

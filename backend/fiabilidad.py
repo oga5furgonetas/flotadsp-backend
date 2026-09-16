@@ -31,7 +31,21 @@ QUE SI FUNCIONA. Cuatro rasgos que emite la propia IA, mas sus interacciones:
 En cristiano: cuando suelta una lista larga de danos leves, del cuarto en
 adelante se los esta inventando.
 
-RENDIMIENTO, VALIDADO FUERA DE MUESTRA (5 pliegues, 1.423 revisiones):
+TRES RASGOS MAS, AÑADIDOS EL 16-09-2026 (1.448 revisiones, 5 pliegues, tres
+semillas): la CONFIANZA que dice Gemini (0,9 -> 56 % reales, 0,8 -> 20 %: no
+esta calibrada, pero si ordena), si el dano es NUEVO respecto a la inspeccion
+anterior, y en que FOTO lo vio. Juntos:
+
+    AUC 0,756 -> 0,767
+    descarta solo 249 (90,8 % bien) -> 276 (92,8 % bien)
+    confirma solo  27 (85,2 % bien) ->  53 (86,8 % bien)
+
+Probados y NO añadidos: el tamaño del recuadro (no aporta) y si hay poligono
+de segmentacion (sube el AUC a 0,78, pero es una FUGA: casi ninguna revision
+de junio tiene poligono y todas desde julio si, asi que mide la version del
+pipeline y no el dano; a partir de ahora valdria siempre lo mismo).
+
+RENDIMIENTO ORIGINAL, VALIDADO FUERA DE MUESTRA (5 pliegues, 1.423 revisiones):
 
     AUC 0,762
     puntuacion < 0,15  ->  91,6 % son inventados de verdad
@@ -74,9 +88,23 @@ def rasgos(dano: dict, total_danos, indice: int) -> list:
     n = "1-2" if t <= 2 else "3-4" if t <= 4 else "5+"
     pos = "0" if indice == 0 else "1-2" if indice <= 2 else "3+"
     pz = cn[0][0] if cn else "?"
+    conf = _confianza(dano)
     return ["sev=" + sev, "n=" + n, "pos=" + pos, "pz=" + pz,
             "sev*n=" + sev + "|" + n, "sev*pos=" + sev + "|" + pos,
-            "pz*sev=" + pz + "|" + sev, "n*pos=" + n + "|" + pos]
+            "pz*sev=" + pz + "|" + sev, "n*pos=" + n + "|" + pos,
+            "conf=" + conf, "conf*sev=" + conf + "|" + sev,
+            "new=" + str((dano or {}).get("is_new")),
+            "foto=" + str((dano or {}).get("photo_index"))]
+
+
+def _confianza(dano: dict) -> str:
+    """La confianza que declara Gemini, en tres tramos. No esta calibrada (con
+    0,8 acierta el 20 %), pero ORDENA: con 0,9 acierta el 56 %."""
+    try:
+        c = float((dano or {}).get("confidence"))
+    except (TypeError, ValueError):
+        return "?"
+    return "hi" if c >= 0.9 else "mid" if c >= 0.75 else "lo"
 
 
 # ── Regresion logistica, a mano ──────────────────────────────────────────────

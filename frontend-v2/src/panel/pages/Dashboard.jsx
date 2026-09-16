@@ -637,7 +637,11 @@ export default function Dashboard() {
      como "vencidas o inminentes" y 57 eran simplemente desconocidas: el
      aviso exageraba, y un aviso que exagera deja de leerse (gotcha 41). */
   const itvVencidas = itv.filter((a) => a.status === 'caducada')
-  const itvProximas = itv.filter((a) => a.status === 'proxima')
+  /* `urgente` (7 días o menos) TAMBIÉN es próxima. Contando solo `proxima`,
+     las ITV que caducaban esa misma semana —las que más urgen— no salían en
+     el dashboard (16-09-2026). El backend reparte en caducada / urgente /
+     proxima / sin_fecha. */
+  const itvProximas = itv.filter((a) => a.status === 'proxima' || a.status === 'urgente')
   const itvSinFecha = itv.filter((a) => a.status === 'sin_fecha')
 
   const fleetSub = `${fleet} ${t('chart.total')} · ${inShop} ${t('dash.workshop').toLowerCase()}`
