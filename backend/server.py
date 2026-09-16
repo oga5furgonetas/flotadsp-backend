@@ -5288,9 +5288,14 @@ async def org_centros_geo(_=Depends(require_admin)):
     out = {c: {"lat": _mediana([p[0] for p in ps]), "lng": _mediana([p[1] for p in ps]),
                "origen": "talleres"}
            for c, ps in acc.items() if len(ps) >= 3}
+    # Las coordenadas de referencia salen de los talleres semilla, que son de
+    # las naves de Dani. Sin filtrar, una empresa recien creada recibia OGA5,
+    # DGA1 y DGA2 como si fueran suyas (medido el 16-09-2026).
+    naves = set(await _centros_de_la_empresa())
     for c, (la, ln) in _centros_referencia().items():
-        out.setdefault(c, {"lat": la, "lng": ln, "origen": "referencia"})
-    return {"centros": out}
+        if c in naves:
+            out.setdefault(c, {"lat": la, "lng": ln, "origen": "referencia"})
+    return {"centros": {c: v for c, v in out.items() if not naves or c in naves}}
 
 
 @api_router.post("/org/centers")
@@ -28655,8 +28660,14 @@ async def create_rental(data: dict, _=Depends(require_admin)):
     """Añade una empresa de alquiler manualmente."""
     name = _texto_cuerpo(data.get("name"))
     center = _texto_cuerpo(data.get("center"))
-    if not name or center not in ("OGA5", "DGA1", "DGA2"):
-        raise HTTPException(status_code=400, detail="Nombre y centro (OGA5/DGA1/DGA2) requeridos")
+    # Las naves de LA EMPRESA, no las de Dani escritas a mano: con la lista fija
+    # ninguna otra empresa podia dar de alta una alquiladora, y Dani tampoco en
+    # una nave nueva (medido con una empresa recien creada el 16-09-2026).
+    center = center.upper()
+    naves = await _centros_de_la_empresa()
+    if not name or center not in naves:
+        raise HTTPException(status_code=400, detail="Nombre y centro (%s) requeridos"
+                            % "/".join(naves or ["tu nave"]))
     doc = {
         "id": str(uuid.uuid4()),
         "name": name, "center": center,
@@ -45808,12 +45819,98 @@ async def onboarding_status(user: dict = Depends(require_any_auth)):
     ]
     obligatorios = [x for x in pasos if not x.get("opcional")]
     hechos = sum(1 for x in obligatorios if x["hecho"])
+    # CADA NAVE, POR SEPARADO. La guia daba la empresa por «completa» con una
+    # furgoneta, un conductor y una inspeccion en total. No miraba ni la
+    # extension de Cortex —de la que viven Paquetes IA, el DCR en vivo, Apoyo en
+    # ruta y las investigaciones de DNR— ni que cada nave tuviera lo suyo.
+    # Medido el 16-09-2026 en la empresa de Dani, con la guia ya «completa»:
+    # DGA1 llevaba 20 dias sin un paquete de Cortex y DGA2, 36. Una nave nueva
+    # habria estado igual sin que nada lo dijera.
+    naves = []
+    try:
+        naves = await _arranque_naves(await _centros_de_la_empresa())
+    except Exception as e:                                        # noqa: BLE001
+        logger.warning("onboarding naves: %s", e)
+    naves_ok = all(n["completa"] for n in naves)
     return {
         "pasos": pasos,
         "hechos": hechos,
         "total": len(obligatorios),
-        "completo": hechos == len(obligatorios),
+        "naves": naves,
+        "completo": hechos == len(obligatorios) and naves_ok,
     }
+
+
+# Lo que tarda de verdad es «¿cuando fue el ultimo dato de esta nave?» (~0,6 s
+# por nave sin indice compuesto), y solo hace falta para las que llevan dias sin
+# nada. Se guarda 15 min por empresa y nave: la guia se pide en cada visita al
+# panel y ese dato no cambia de un minuto a otro.
+_ARRANQUE_ULTIMO: dict = {}
+
+
+async def _arranque_ultimo_dia(centro: str):
+    clave = (_current_db_name.get(), centro)
+    hit = _ARRANQUE_ULTIMO.get(clave)
+    if hit and time.time() - hit[0] < 900:
+        return hit[1]
+    d = await db.cortex_packages.find_one(
+        {"center": centro}, {"_id": 0, "service_day": 1}, sort=[("service_day", -1)])
+    dia = (d or {}).get("service_day")
+    _ARRANQUE_ULTIMO[clave] = (time.time(), dia)
+    return dia
+
+
+async def _arranque_naves(centros: list) -> list:
+    """Que tiene cada nave para trabajar, medido con sus datos y no con marcas.
+
+    Obligatorio (sin esto la nave no funciona): furgonetas, conductores y
+    Cortex llegando. Recomendado (funciona, pero peor): objetivos de SU propia
+    scorecard —los de otra nave dan falsos positivos, gotcha del 30-08—,
+    talleres y cuadrante. Un paso recomendado nunca deja la guia abierta.
+    """
+    if not centros:
+        return []
+    hace3 = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    hace30 = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    recientes: dict = {}
+    async for r in db.cortex_packages.aggregate([
+            {"$match": {"seen_at": {"$gte": hace3}}},
+            {"$group": {"_id": "$center", "n": {"$sum": 1}}}]):
+        if r.get("_id"):
+            recientes[str(r["_id"]).strip().upper()] = r["n"]
+    # Si la extension no ha mandado NADA de ninguna nave, no esta instalada: el
+    # consejo es instalarla, no «abre esta nave en Cortex».
+    extension = bool(recientes)
+    salida = []
+    for c in centros:
+        rx = {"$regex": re.escape(c), "$options": "i"}   # centro sucio: gotcha 6
+        furgos = await db.vehicles.count_documents(
+            {"center": rx, "status": {"$nin": ["deleted", "baja"]}})
+        gente = await db.drivers.count_documents({"center": rx, "active": {"$ne": False}})
+        paquetes = recientes.get(c, 0)
+        cortex = {"id": "cortex", "hecho": paquetes > 0, "n": paquetes}
+        if not paquetes:
+            cortex["ultimo_dia"] = await _arranque_ultimo_dia(c)
+            cortex["extension"] = extension
+            # Si ya se sabe que area de Amazon es, la extension la barre sola
+            # (desde la 2.92) y no hay que pedirle a nadie que la abra; si no,
+            # hay que abrirla UNA vez en Cortex para que se aprenda.
+            cortex["area"] = bool(await db.cortex_stations.count_documents(
+                {"center": c, "service_area_id": {"$type": "string"}}))
+        objetivos = await db.scorecard_thresholds.count_documents({"center": c, "tipo": "sls"})
+        talleres = await db.workshops.count_documents({"center": rx})
+        turnos = await db.shifts.count_documents({"center": rx, "date": {"$gte": hace30}})
+        pasos = [
+            {"id": "vehiculos", "hecho": furgos > 0, "n": furgos},
+            {"id": "conductores", "hecho": gente > 0, "n": gente},
+            cortex,
+            {"id": "objetivos", "hecho": objetivos > 0, "n": objetivos, "opcional": True},
+            {"id": "talleres", "hecho": talleres > 0, "n": talleres, "opcional": True},
+            {"id": "turnos", "hecho": turnos > 0, "n": turnos, "opcional": True},
+        ]
+        salida.append({"centro": c, "pasos": pasos,
+                       "completa": all(x["hecho"] for x in pasos if not x.get("opcional"))})
+    return salida
 
 
 @api_router.post("/parking/zone-image")

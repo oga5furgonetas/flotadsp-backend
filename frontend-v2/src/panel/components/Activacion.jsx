@@ -54,6 +54,67 @@ function Paso({ icon: Icon, n, titulo, hint, hecho, resumen, cta, to, cta2, to2,
   )
 }
 
+/* ── Cada nave, por separado ───────────────────────────────────────────────
+   La guia daba la empresa por lista con una furgoneta, un conductor y una
+   auditoria EN TOTAL. El 16-09-2026, con la guia «completa», DGA1 llevaba 20
+   dias sin un paquete de Cortex y DGA2 36, y nada lo decia. Cada nave enseña
+   lo que tiene medido con sus datos (el backend lo cuenta) y, si le falta
+   algo, la accion concreta con su enlace. Lo recomendado se ve, pero no deja
+   la guia abierta. */
+const PASO_NAVE = {
+  vehiculos:   { tit: 'ob.n.vehiculos',   falta: 'ob.n.falta.vehiculos',   to: '/panel/importaciones' },
+  conductores: { tit: 'ob.n.conductores', falta: 'ob.n.falta.conductores', to: '/panel/conductores' },
+  cortex:      { tit: 'ob.n.cortex',      falta: 'ob.n.cortex.instalar',   to: '/panel/paquetes' },
+  objetivos:   { tit: 'ob.n.objetivos',   falta: 'ob.n.falta.objetivos',   to: '/panel/scorecard' },
+  talleres:    { tit: 'ob.n.talleres',    falta: 'ob.n.falta.talleres',    to: '/panel/talleres' },
+  turnos:      { tit: 'ob.n.turnos',      falta: 'ob.n.falta.turnos',      to: '/panel/turnos' },
+}
+
+// '2026-08-27' -> '27-08'. Troceando el texto: por fecha local se corre un dia (gotcha 11).
+const diaCorto = (d) => (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d.slice(8, 10)}-${d.slice(5, 7)}` : '')
+
+function mensajeCortex(paso, t) {
+  if (!paso.extension) return t('ob.n.cortex.instalar')
+  if (!paso.area) return t('ob.n.cortex.abrir')
+  return t('ob.n.cortex.esperando').replace('{dia}', diaCorto(paso.ultimo_dia) || '—')
+}
+
+function Nave({ nave, t }) {
+  const pasos = (nave.pasos || []).filter((p) => PASO_NAVE[p.id])
+  const pendiente = pasos.find((p) => !p.hecho && !p.opcional) || (nave.completa ? null : pasos.find((p) => !p.hecho))
+  return (
+    <li className={`rounded-xl border p-3 ${nave.completa ? 'border-emerald-500/15 bg-emerald-500/[0.03]' : 'border-white/[0.07] bg-white/[0.02]'}`}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span className="font-mono text-[13px] font-semibold text-dark-100">{nave.centro}</span>
+        {nave.completa && (
+          <span className="inline-flex items-center gap-1 text-[11.5px] text-emerald-300"><Check size={12} />{t('ob.nave.lista')}</span>
+        )}
+        <div className="flex flex-wrap gap-1.5">
+          {pasos.map((p) => (
+            <span key={p.id} title={p.opcional ? t('ob.n.recomendado') : undefined}
+              className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11.5px] ${
+                p.hecho ? 'bg-emerald-500/10 text-emerald-200'
+                  : p.opcional ? 'bg-white/[0.04] text-dark-400'
+                    : 'bg-amber-500/10 text-amber-200'}`}>
+              {p.hecho ? <Check size={11} /> : <X size={11} />}
+              {t(PASO_NAVE[p.id].tit)}
+              {p.hecho && p.n > 0 && p.id !== 'objetivos' && <span className="tabular-nums opacity-70">{p.n}</span>}
+            </span>
+          ))}
+        </div>
+      </div>
+      {pendiente && (
+        <p className="mt-2 text-[12px] leading-relaxed text-dark-300">
+          {pendiente.id === 'cortex' ? mensajeCortex(pendiente, t) : t(PASO_NAVE[pendiente.id].falta)}{' '}
+          <Link to={PASO_NAVE[pendiente.id].to} className="inline-flex items-center gap-1 font-semibold text-brand-300 hover:text-brand-200">
+            {t('ob.n.ir')} <ArrowRight size={11} />
+          </Link>
+        </p>
+      )}
+    </li>
+  )
+}
+
 export default function Activacion() {
   const { t } = useT()
   const [data, setData] = useState(null)
@@ -72,7 +133,17 @@ export default function Activacion() {
 
   const paso = (id) => data.pasos.find((x) => x.id === id) || { hecho: false, n: 0 }
   const v = paso('vehiculos'), c = paso('conductores'), i = paso('inspeccion')
-  const pct = Math.round((data.hechos / data.total) * 100)
+  const naves = Array.isArray(data.naves) ? data.naves : []
+  const navesListas = naves.filter((n) => n.completa).length
+  // Con los tres pasos de la empresa hechos, lo que queda abierto son las naves:
+  // la cabecera y la barra pasan a contar naves, no a repetir un 3/3.
+  const soloNaves = data.hechos === data.total && naves.length > 0
+  const pct = soloNaves
+    ? Math.round((navesListas / naves.length) * 100)
+    : Math.round((data.hechos / data.total) * 100)
+  // Primero las que tienen algo pendiente: es lo que hay que mirar.
+  const navesOrden = [...naves].sort((a, b) => Number(a.completa) - Number(b.completa)
+    || String(a.centro).localeCompare(String(b.centro), 'es', { sensitivity: 'base' }))
   // "1 furgoneta", no "1 furgonetas": el singular importa en los 6 idiomas.
   const cuenta = (n, clave) => `${n} ${t(n === 1 ? `${clave}1` : clave)}`
 
@@ -80,13 +151,15 @@ export default function Activacion() {
     <section className="rise mb-6 rounded-2xl border border-brand-500/20 bg-brand-500/[0.03] p-4 sm:p-5">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h2 className="font-display text-[17px] font-semibold tracking-[-0.02em] text-dark-50">{t('ob.titulo')}</h2>
-          <p className="mt-1 text-[12.5px] leading-relaxed text-dark-400">{t('ob.sub')}</p>
+          <h2 className="font-display text-[17px] font-semibold tracking-[-0.02em] text-dark-50">{t(soloNaves ? 'ob.naves.tit' : 'ob.titulo')}</h2>
+          <p className="mt-1 text-[12.5px] leading-relaxed text-dark-400">{t(soloNaves ? 'ob.naves.sub' : 'ob.sub')}</p>
         </div>
         <div className="flex items-center gap-3">
           <div className="text-right">
-            <p className="font-display text-[15px] font-semibold tabular-nums text-brand-300">{data.hechos}/{data.total}</p>
-            <p className="text-[10.5px] text-dark-500">{t('ob.progreso')}</p>
+            <p className="font-display text-[15px] font-semibold tabular-nums text-brand-300">
+              {soloNaves ? `${navesListas}/${naves.length}` : `${data.hechos}/${data.total}`}
+            </p>
+            <p className="text-[10.5px] text-dark-500">{t(soloNaves ? 'ob.naves.progreso' : 'ob.progreso')}</p>
           </div>
           <button onClick={() => { sessionStorage.setItem('ob_oculto', '1'); setOculto(true) }}
             title={t('ob.ocultar')} aria-label={t('ob.ocultar')}
@@ -101,6 +174,7 @@ export default function Activacion() {
           style={{ width: `${pct}%` }} />
       </div>
 
+      {!soloNaves && (
       <ol className="grid gap-2 lg:grid-cols-3">
         <Paso icon={Upload} n="1" hecho={v.hecho}
           titulo={t('ob.v.tit')} hint={t('ob.v.hint')}
@@ -119,6 +193,16 @@ export default function Activacion() {
           // dejar que lo intente y choque, se explica el porqué.
           bloqueado={!v.hecho || !c.hecho} bloqueadoMsg={t('ob.bloqueado')} />
       </ol>
+      )}
+
+      {naves.length > 0 && (
+        <div className={soloNaves ? '' : 'mt-4'}>
+          {!soloNaves && <h3 className="mb-2 text-[13px] font-semibold text-dark-100">{t('ob.naves.tit')}</h3>}
+          <ul className="grid gap-2">
+            {navesOrden.map((n) => <Nave key={n.centro} nave={n} t={t} />)}
+          </ul>
+        </div>
+      )}
     </section>
   )
 }
