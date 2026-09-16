@@ -36673,15 +36673,17 @@ def _asoc_legible(c: dict) -> dict:
                 else x.get("que"))}
             if isinstance(x, dict) else x
             for x in c["faltan"]]
-    if c.get("pendientes"):
-        c["pendientes"] = [
-            {**x, "que": _ASOC_TAREAS.get(x.get("que")) or (
-                _asoc_humano(x.get("que")) if re.fullmatch(r"[A-Za-z]+(-Onboarding)?", str(x.get("que") or ""))
-                and not re.search(r"[áéíóúñ ]", str(x.get("que") or "")) else x.get("que")),
-             "de": _ASOC_DE_QUIEN.get(str(x.get("de") or "").upper(), x.get("de"))}
-            if isinstance(x, dict) else x
-            for x in c["pendientes"]]
+    for campo in ("pendientes", "tareas"):
+        if c.get(campo):
+            c[campo] = [
+                {**x, "que": _ASOC_TAREAS.get(x.get("que")) or (
+                    _asoc_humano(x.get("que")) if re.fullmatch(r"[A-Za-z]+(-Onboarding)?", str(x.get("que") or ""))
+                    and not re.search(r"[áéíóúñ ]", str(x.get("que") or "")) else x.get("que")),
+                 "de": _ASOC_DE_QUIEN.get(str(x.get("de") or "").upper(), x.get("de"))}
+                if isinstance(x, dict) else x
+                for x in c[campo]]
     return c
+
 
 # Un estado que NO es «hecho». Amazon usa COMPLETED, y cualquier otra cosa
 # —PENDING, NOT_STARTED, IN_PROGRESS, o una que inventen manana— es que falta.
