@@ -976,6 +976,7 @@ const DICT = {
   'rev.ia.working':        { es: 'Revisando…', en: 'Reviewing…', fr: 'Vérification…', de: 'Prüft…', it: 'Revisione…', pt: 'A rever…' },
   'rev.pending':           { es: 'pendientes',         en: 'pending',              fr: 'en attente',             de: 'ausstehend',            it: 'in attesa',             pt: 'pendentes' },
   'rev.ai.examples':       { es: 'ejemplos',           en: 'examples',             fr: 'exemples',               de: 'Beispiele',             it: 'esempi',                pt: 'exemplos' },
+  'rev.damage.one':          { es: 'daño',               en: 'damage',               fr: 'dommage',                de: 'Schaden',               it: 'danno',                 pt: 'dano' },
   'rev.damages':           { es: 'daños',              en: 'damages',              fr: 'dommages',               de: 'Schäden',               it: 'danni',                 pt: 'danos' },
   'rev.of':                { es: 'de',                 en: 'of',                   fr: 'sur',                    de: 'von',                   it: 'di',                    pt: 'de' },
   'rev.in.center':         { es: 'en',                 en: 'in',                   fr: 'à',                      de: 'in',                    it: 'in',                    pt: 'em' },

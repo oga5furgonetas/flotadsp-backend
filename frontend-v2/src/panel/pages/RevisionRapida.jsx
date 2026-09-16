@@ -311,7 +311,10 @@ function Autoexamen({ datos, total, alRevisar, recargar }) {
      dos entre el total de revisiones daba números que no significaban nada
      —y hundía a la pieza que acierta todo lo que dice pero no ve mucho—. */
   const pct = (k, den) => (den ? Math.round((100 * (datos.global?.[k] || 0)) / den) : null)
-  const conSigno = (v) => (v == null ? '—' : `${v}%`)
+  /* Porcentajes como se escriben en español: «63,3 %». Antes la misma tarjeta
+     decía «63.3%», «0,764» y «90 %». */
+  const conSigno = (v) => (v == null || v === '' ? '—'
+    : `${Number(v).toLocaleString('es-ES', { maximumFractionDigits: 1 })} %`)
 
   /* `cuentas` separa las dos preguntas que el numero viejo mezclaba:
      ¿existe el daño? y ¿acerto tambien donde estaba? */
@@ -376,7 +379,7 @@ function Autoexamen({ datos, total, alRevisar, recargar }) {
           bonito y falso. */}
       {modelo?.auc ? (
         <div className="mt-3 rounded-lg border border-violet-500/30 bg-violet-500/[0.07] px-3 py-2.5">
-          <p className="mb-2 flex items-center gap-2 text-[12.5px] font-semibold text-violet-200">
+          <p className="mb-2 flex items-center gap-2 text-[12.5px] font-semibold text-violet-300">
             <BrainCircuit size={14} className="flex-none" />
             Se está comprobando sola, con {modelo.muestras?.toLocaleString('es-ES')} revisiones vuestras
           </p>
@@ -384,21 +387,21 @@ function Autoexamen({ datos, total, alRevisar, recargar }) {
             <div>
               <p className="text-[10.5px] uppercase tracking-wider text-dark-500">Lo que descarta</p>
               <p className="text-[19px] font-bold leading-none tabular-nums text-dark-50">
-                {modelo.descarte_acierto_pct}%
+                {conSigno(modelo.descarte_acierto_pct)}
               </p>
               <p className="text-[11px] leading-tight text-dark-600">era inventado de verdad</p>
             </div>
             <div>
               <p className="text-[10.5px] uppercase tracking-wider text-dark-500">Lo que confirma</p>
               <p className="text-[19px] font-bold leading-none tabular-nums text-dark-50">
-                {modelo.confirma_acierto_pct}%
+                {conSigno(modelo.confirma_acierto_pct)}
               </p>
               <p className="text-[11px] leading-tight text-dark-600">era real de verdad</p>
             </div>
             <div>
               <p className="text-[10.5px] uppercase tracking-wider text-dark-500">Capacidad de separar</p>
               <p className="text-[19px] font-bold leading-none tabular-nums text-dark-50">
-                {String(modelo.auc).replace('.', ',')}
+                {Number(modelo.auc).toLocaleString('es-ES', { minimumFractionDigits: 3 })}
               </p>
               <p className="text-[11px] leading-tight text-dark-600">0,5 sería no saber nada</p>
             </div>
@@ -425,7 +428,7 @@ function Autoexamen({ datos, total, alRevisar, recargar }) {
           <Zap size={15} /> Revisar en 5 segundos
         </button>
         <button onClick={() => setAbierto((v) => !v)}
-          className="text-[12.5px] font-semibold text-violet-300 hover:text-violet-200">
+          className="text-[12.5px] font-semibold text-violet-300 hover:text-violet-300">
           {abierto ? 'Ocultar detalle' : 'Ver en qué falla'}
         </button>
         {/* Normalmente no hace falta: el modelo se reentrena solo cada 25
@@ -592,6 +595,7 @@ export default function RevisionRapida() {
   // Calcular item actual antes de cualquier return para poder usar hooks
   const displayQueue = queue ? (filterIA ? queue.filter(i => (i.annotated_photos || []).some(Boolean)) : queue) : []
   const item = displayQueue[idx] ?? null
+  const nDanos = item ? (item.new_damages_count || item.total_damages_count || 0) : 0
   const total = stats?.total ?? 0
 
   useEffect(() => {
@@ -817,7 +821,7 @@ export default function RevisionRapida() {
           {/* barra superior de la tarjeta */}
           <div className="flex items-center justify-between gap-2 border-b border-dark-800 px-4 py-2.5">
             <span className={`rounded px-2 py-0.5 text-xs font-bold ${SEV_CLS[item.severity] || SEV_CLS.sin_analisis}`}>
-              {sevLabel(item.severity || 'sin_analisis').toUpperCase()} · {item.new_damages_count || item.total_damages_count || 0} {t('rev.damages')}
+              {sevLabel(item.severity || 'sin_analisis').toUpperCase()} · {nDanos} {t(nDanos === 1 ? 'rev.damage.one' : 'rev.damages')}
             </span>
             <div className="flex items-center gap-2 text-sm text-dark-400">
               <span className="mr-1 hidden items-center gap-1 text-[10px] text-dark-600 lg:flex" title={`← → · Enter — ${t('rev.kbd.hint')}`}>
