@@ -753,6 +753,8 @@ function BaremosEditor({ full, center, onSaved }) {
    Esto NO predice: cuenta lo que YA ha pasado, con los paquetes de Cortex, y
    lo compara contra los umbrales oficiales que la app ya tiene. Un acumulado
    real no se equivoca; una predicción con cinco semanas de histórico sí. */
+const pctEs = (v) => Number(v).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
 const DIAS_SEM = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb']
 // «2026-09-16» -> «mié 16/09». Se compone a mano: nada de toISOString (gotcha 11).
 function diaCorto(f) {
@@ -824,7 +826,7 @@ function ComoVaLaSemana({ center }) {
           {arrancando ? 'Última semana con datos' : 'Cómo va la semana'} {actual.semana}
         </span>
         <span className="cifra text-[22px] font-semibold leading-none text-dark-50">
-          {actual.dcr != null ? `${actual.dcr}%` : '—'}
+          {actual.dcr != null ? `${pctEs(actual.dcr)} %` : '—'}
         </span>
         <span className={`text-[11px] font-semibold uppercase tracking-wide ${tierCls(actual.tier)}`}
           title={d.umbral_fiable ? undefined : 'Orientativo: umbral no publicado para esta nave'}>
@@ -863,10 +865,10 @@ function ComoVaLaSemana({ center }) {
               <span key={x.fecha}>
                 {i > 0 && ', '}
                 <span className="cifra font-semibold">{x.fecha.slice(8)}/{x.fecha.slice(5, 7)}</span>
-                {' '}(<span className="cifra">{x.dcr}%</span>)
+                {' '}(<span className="cifra">{pctEs(x.dcr)} %</span>)
               </span>
             ))}
-            {' '}por debajo de lo normal, que ronda el <span className="cifra">{mediana}%</span>.
+            {' '}por debajo de lo normal, que ronda el <span className="cifra">{pctEs(mediana)} %</span>.
             {' '}Son <span className="cifra font-semibold">{malos.reduce((s, x) => s + x.fallos, 0)}</span> paquetes
             que no salieron.
           </p>
@@ -900,7 +902,7 @@ function ComoVaLaSemana({ center }) {
                         devoluciones ya se re-repartieron: el DCR sale mejor de
                         lo que fue. El simbolo avisa de que ese numero es un
                         suelo, no una medida. */}
-                    {x.dcr != null ? `${aprox ? '≥' : ''}${x.dcr}%` : '—'}
+                    {x.dcr != null ? `${aprox ? '≥' : ''}${pctEs(x.dcr)} %` : '—'}
                   </td>
                   <td className="px-3 py-1.5 text-[11px] text-dark-600">
                     {/* Un día ya pasado que sigue «abierto» no tiene a nadie en

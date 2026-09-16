@@ -43,3 +43,11 @@ def test_la_referencia_de_calidad_es_la_de_la_nave():
     assert "_sc_thresholds" in src
     assert 'float(obj["dcr"]) < referencia["dcr"]' in src
     assert "_dia_negocio()" in src
+
+
+def test_emparejar_mira_los_dos_campos_del_id():
+    """9 personas con el Transporter ID puesto salian «sin ficha» (9.091 paquetes)."""
+    src = _fuente("cortex_emparejar")
+    assert src.count('"transporter_id": {"$in": list(ids)}') == 1
+    assert "_cx_nombres_resumen" in src
+    assert "_cx_nombres_resumen" in _fuente("_cx_nombres")

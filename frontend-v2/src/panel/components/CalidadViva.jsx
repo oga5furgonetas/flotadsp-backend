@@ -24,7 +24,8 @@ import Emparejar from './Emparejar'
    DCR, en cambio, solo usa días cerrados. Son dos preguntas distintas.
    ──────────────────────────────────────────────────────────────────────────── */
 
-const pct = (v) => (v === null || v === undefined ? '—' : `${Number(v).toFixed(2)} %`)
+const pct = (v) => (v === null || v === undefined ? '—'
+  : `${Number(v).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`)
 const num = (v) => Number(v || 0).toLocaleString('es-ES')
 
 function Barra({ valor, objetivo }) {
@@ -277,7 +278,7 @@ export default function CalidadViva({ center }) {
             {pct(tot?.dcr)}
           </div>
           <p className="mb-3 text-xs text-dark-400">
-            {t('cal.objetivo')} {obj} %
+            {t('cal.objetivo')} {obj.toLocaleString('es-ES')} %{' '}
             {/* Que nadie apruebe con una vara mas blanda que la de Amazon sin
                 saberlo: el objetivo se puede bajar, pero a conciencia. */}
             {datos.objetivo_blando && (

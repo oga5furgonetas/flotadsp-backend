@@ -40597,6 +40597,30 @@ def _cx_tasas(ok: int, fallo: int, rts: int) -> dict:
             "dcr": round(ok / desp * 100, 2), "rts_pct": round(rts / desp * 100, 2)}
 
 
+async def _cx_nombres_resumen(ids: set, dias: int = 60) -> dict:
+    """transporterId -> nombre, tal como lo da Cortex en el resumen del dia.
+
+    El NOMBRE si es de la persona (el telefono no: gotcha 66). Se queda con el
+    del dia mas reciente. Medido el 17-09-2026: de 25 IDs sin ficha y sin
+    historico, 18 tenian nombre aqui y la pantalla los enseñaba como codigos.
+    """
+    faltan = set(ids or ())
+    fuera: dict = {}
+    if not faltan:
+        return fuera
+    desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
+    async for d in db.cortex_resumen.find({"dia": {"$gte": desde}},
+                                          {"_id": 0, "gente": 1}).sort("dia", -1):
+        for g in d.get("gente") or []:
+            tid = (g.get("transporterId") or "").strip()
+            nombre = re.sub(r"\s+", " ", str(g.get("nombre") or "")).strip()
+            if tid in faltan and nombre and tid not in fuera:
+                fuera[tid] = nombre
+        if len(fuera) == len(faltan):
+            break
+    return fuera
+
+
 async def _cx_nombres(ids: set) -> dict:
     """ID de Amazon -> nombre. Primero la ficha; si no, el historico de rutas.
 
@@ -40636,6 +40660,11 @@ async def _cx_nombres(ids: set) -> dict:
             if r.get("driver_name") and r["transporter_id"] not in mapa:
                 mapa[r["transporter_id"]] = {"nombre": r["driver_name"], "ficha_id": None,
                                              "activo": True, "origen": "historico"}
+    faltan = ids - set(mapa)
+    if faltan:
+        for tid, nombre in (await _cx_nombres_resumen(faltan)).items():
+            mapa[tid] = {"nombre": nombre, "ficha_id": None, "activo": True,
+                         "origen": "historico"}
     return mapa
 
 
@@ -41286,9 +41315,17 @@ async def cortex_emparejar(dias: int = 30, _=Depends(require_admin)):
     ids = {a["_id"] for a in activos}
 
     # Los que YA tienen ficha se descartan: aqui solo interesa lo que falta.
+    # El ID vive en DOS campos de la ficha (ver _cx_nombres). Mirando solo
+    # `driver_id`, 9 personas con su Transporter ID puesto salian «sin ficha»
+    # con 9.091 paquetes (17-09-2026).
     con_ficha = set()
-    async for dv in db.drivers.find({"driver_id": {"$in": list(ids)}}, {"_id": 0, "driver_id": 1}):
-        con_ficha.add(dv["driver_id"])
+    async for dv in db.drivers.find(
+            {"$or": [{"driver_id": {"$in": list(ids)}}, {"transporter_id": {"$in": list(ids)}}]},
+            {"_id": 0, "driver_id": 1, "transporter_id": 1}):
+        for campo in ("driver_id", "transporter_id"):
+            v = (dv.get(campo) or "").strip()
+            if v in ids:
+                con_ficha.add(v)
 
     # Nombre que Amazon dio en el historico de rutas, si lo hay.
     historico = {}
@@ -41296,10 +41333,15 @@ async def cortex_emparejar(dias: int = 30, _=Depends(require_admin)):
                                          {"_id": 0, "transporter_id": 1, "driver_name": 1}):
         if r.get("driver_name"):
             historico.setdefault(r["transporter_id"], r["driver_name"])
+    for tid, nombre in (await _cx_nombres_resumen(ids - con_ficha - set(historico))).items():
+        historico[tid] = nombre
 
-    # Fichas que aun no tienen ID asignado: son las candidatas.
+    # Fichas que aun no tienen ID asignado (en NINGUNO de los dos campos).
     libres = await db.drivers.find(
-        {"$or": [{"driver_id": {"$in": [None, ""]}}, {"driver_id": {"$exists": False}}]},
+        {"$and": [
+            {"$or": [{"driver_id": {"$in": [None, ""]}}, {"driver_id": {"$exists": False}}]},
+            {"$or": [{"transporter_id": {"$in": [None, ""]}}, {"transporter_id": {"$exists": False}}]},
+        ]},
         {"_id": 0, "id": 1, "name": 1, "center": 1, "active": 1}).to_list(500)
 
     pendientes = []
@@ -42260,11 +42302,18 @@ async def cortex_calidad(desde: str = "", hasta: str = "", center: str = "",
         # Los dias que faltan por venir cuentan: si no, un martes se preveia una
         # semana de 3 dias y el margen salia por los suelos (alarma falsa justo
         # los dias en que mas se mira la pantalla).
+        # Cuentan los dias del rango que aun no tienen datos y no han pasado,
+        # HOY INCLUIDO: a primera hora hoy no tiene paquetes y se quedaba fuera,
+        # asi que la semana se preveia de 6 dias y el margen salia en negativo
+        # de mas (medido el 17-09-2026 a la 01:30).
         por_venir = 0
         try:
-            d_hoy = datetime.strptime(hoy, "%Y-%m-%d")
+            d = datetime.strptime(max(hoy, desde), "%Y-%m-%d")
             d_fin = datetime.strptime(hasta, "%Y-%m-%d")
-            por_venir = max(0, (d_fin - d_hoy).days)
+            while d <= d_fin:
+                if d.strftime("%Y-%m-%d") not in dias:
+                    por_venir += 1
+                d += timedelta(days=1)
         except ValueError:
             pass
         dias_previstos = max(len(dias) + por_venir, len(cerrados))
