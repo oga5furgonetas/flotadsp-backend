@@ -34564,6 +34564,10 @@ async def scorecard_en_vivo(center: str = "", semanas: int = 4, _=Depends(requir
     return {
         "center": center or "Todos",
         "umbral_dcr": thr_dcr,
+        # Si el umbral es el que Amazon publico para ESTA nave o uno generico /
+        # puesto a mano. La pantalla decia «el umbral de tu nave es 98 %» con un
+        # valor manual: OGA5 no tiene ninguna scorecard subida.
+        "umbral_fiable": bool((_meta.get("dcr") or {}).get("fiable")),
         "semanas": semanas_out,
         # Cual debe enseñar la pantalla arriba del todo, y si es la de esta
         # semana o hubo que retroceder porque la actual no ha arrancado.

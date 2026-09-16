@@ -282,7 +282,10 @@ export default function CalidadViva({ center }) {
                 saberlo: el objetivo se puede bajar, pero a conciencia. */}
             {datos.objetivo_blando && (
               <span className="ml-1.5 text-amber-400/90">
-                {t('cal.objetivo.blando').replace('{r}', datos.referencia_fantastic?.dcr)}
+                {/* «Amazon pide» solo cuando es el umbral publicado para ESTA
+                    nave; si no, es una referencia general y se dice así. */}
+                {t(datos.referencia_de === 'nave' ? 'cal.objetivo.blando' : 'cal.objetivo.ref')
+                  .replace('{r}', datos.referencia_fantastic?.dcr)}
               </span>
             )}
           </p>

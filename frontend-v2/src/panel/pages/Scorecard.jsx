@@ -753,6 +753,14 @@ function BaremosEditor({ full, center, onSaved }) {
    Esto NO predice: cuenta lo que YA ha pasado, con los paquetes de Cortex, y
    lo compara contra los umbrales oficiales que la app ya tiene. Un acumulado
    real no se equivoca; una predicción con cinco semanas de histórico sí. */
+const DIAS_SEM = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb']
+// «2026-09-16» -> «mié 16/09». Se compone a mano: nada de toISOString (gotcha 11).
+function diaCorto(f) {
+  const [y, m, d] = String(f).split('-').map(Number)
+  if (!y || !m || !d) return f
+  return `${DIAS_SEM[new Date(y, m - 1, d).getDay()]} ${String(d).padStart(2, '0')}/${String(m).padStart(2, '0')}`
+}
+
 function ComoVaLaSemana({ center }) {
   const [d, setD] = useState(null)
   const [cargando, setCargando] = useState(true)
@@ -818,9 +826,15 @@ function ComoVaLaSemana({ center }) {
         <span className="cifra text-[22px] font-semibold leading-none text-dark-50">
           {actual.dcr != null ? `${actual.dcr}%` : '—'}
         </span>
-        <span className={`text-[11px] font-semibold uppercase tracking-wide ${tierCls(actual.tier)}`}>
-          {actual.tier || '—'}
+        <span className={`text-[11px] font-semibold uppercase tracking-wide ${tierCls(actual.tier)}`}
+          title={d.umbral_fiable ? undefined : 'Orientativo: umbral no publicado para esta nave'}>
+          {actual.tier || '—'}{actual.tier && !d.umbral_fiable && <span className="text-dark-500">*</span>}
         </span>
+        {actual.fallos_de_mas > 0 && (
+          <span className="text-[11.5px] text-orange-300">
+            <span className="cifra font-semibold">{actual.fallos_de_mas.toLocaleString('es')}</span> fallos por encima de Fantastic
+          </span>
+        )}
         {arrancando && (
           <span className="text-[11.5px] text-dark-500">
             · la {enCurso.semana} acaba de empezar
@@ -834,8 +848,8 @@ function ComoVaLaSemana({ center }) {
         </button>
         <span className="text-[11.5px] text-dark-500">
           <span className="cifra">{actual.entregados.toLocaleString('es')}</span> entregados ·{' '}
-          <span className="cifra text-orange-300">{actual.fallos}</span> fallos
-          {actual.en_vuelo > 0 && <> · <span className="cifra">{actual.en_vuelo}</span> aún en la calle</>}
+          <span className="cifra text-orange-300">{actual.fallos.toLocaleString('es')}</span> fallos
+          {actual.dias_sin_cerrar > 0 && <> · {actual.dias_sin_cerrar === 1 ? '1 día sin cerrar' : `${actual.dias_sin_cerrar} días sin cerrar`} (no cuenta{actual.dias_sin_cerrar === 1 ? '' : 'n'})</>}
         </span>
       </div>
 
@@ -876,7 +890,7 @@ function ComoVaLaSemana({ center }) {
               const aprox = !x.congelado && x.cerrado && diasAtras(x.fecha) > 1
               return (
                 <tr key={x.fecha} className="border-b border-dark-800/50 last:border-0">
-                  <td className="cifra px-3 py-1.5 text-dark-300">{x.fecha}</td>
+                  <td className="cifra px-3 py-1.5 text-dark-300">{diaCorto(x.fecha)}</td>
                   <td className="cifra px-3 py-1.5 text-right text-dark-300">{x.entregados.toLocaleString('es')}</td>
                   <td className={`cifra px-3 py-1.5 text-right ${x.fallos > 40 ? 'text-orange-300' : 'text-dark-500'}`}>
                     {x.fallos || '—'}
@@ -889,7 +903,11 @@ function ComoVaLaSemana({ center }) {
                     {x.dcr != null ? `${aprox ? '≥' : ''}${x.dcr}%` : '—'}
                   </td>
                   <td className="px-3 py-1.5 text-[11px] text-dark-600">
-                    {!x.cerrado ? `${x.en_vuelo} en la calle`
+                    {/* Un día ya pasado que sigue «abierto» no tiene a nadie en
+                        la calle: es que la extensión no llegó a bajar el cierre. */}
+                    {!x.cerrado ? (diasAtras(x.fecha) >= 1
+                      ? <span className="text-amber-400/80" title={`${x.en_vuelo.toLocaleString('es')} paquetes sin estado final: falta la captura del cierre de ese día. No cuenta para la semana.`}>captura incompleta</span>
+                      : `${x.en_vuelo.toLocaleString('es')} en reparto`)
                       : x.congelado ? <span className="text-lime-400/70">foto del día</span>
                         : aprox ? <span title="Sin foto de ese día: los paquetes devueltos que ya se re-repartieron no se ven, así que el DCR real fue peor">sin foto</span>
                           : null}
@@ -904,8 +922,10 @@ function ComoVaLaSemana({ center }) {
       <p className="border-t border-dark-800 px-3 py-2 text-[11.5px] leading-relaxed text-dark-500">
         Contado sobre los paquetes de Cortex, no es una predicción. Los días con paquetes
         aún en la furgoneta no cuentan para el acumulado: todavía pueden entregarse.
-        {d.umbral_dcr?.fantastic && <> El umbral de Fantastic de tu nave es{' '}
-          <span className="cifra">{d.umbral_dcr.fantastic}%</span>.</>}
+        {d.umbral_dcr?.fantastic && (d.umbral_fiable
+          ? <> El umbral de Fantastic de tu nave es <span className="cifra">{d.umbral_dcr.fantastic}%</span>.</>
+          : <> El nivel se calcula con un umbral de Fantastic de <span className="cifra">{d.umbral_dcr.fantastic}%</span> que
+            no es el publicado para tu nave: sube una scorecard suya y pasa a ser exacto.</>)}
         {sinFoto > 0 && (
           <> <span className="text-dark-400">Los {sinFoto} días marcados «sin foto» son
             anteriores a que se guardara el cierre de cada día: sus paquetes devueltos ya se
