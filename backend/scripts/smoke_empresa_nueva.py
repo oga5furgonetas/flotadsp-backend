@@ -335,7 +335,51 @@ def main() -> int:
     ss = a_la_vez("/work-orders/seguimiento", "POST", {"center": CENTRO})
     paso("tocar a los talleres, 5 a la vez", all(c == 200 for c in ss), str(ss))
 
-    # ── 8. RECOGER ────────────────────────────────────────────────────────
+    # ── 8. LO QUE ESTABA ATADO A LAS NAVES DE DANI ───────────────────────
+    # Medido el 16-09-2026 entrando como una empresa recien creada. Nada de
+    # esto fallaba con la flota de Dani, porque sus naves SON las que estaban
+    # escritas a mano.
+    _, ob = pide("/onboarding", token=T)
+    naves_ob = {n.get("centro"): n for n in (ob.get("naves") or [])}
+    cortex_paso = next((p for p in (naves_ob.get(CENTRO) or {}).get("pasos", [])
+                        if p.get("id") == "cortex"), {})
+    paso("la guia mira SU nave y pide Cortex",
+         CENTRO in naves_ob and cortex_paso.get("hecho") is False and ob.get("completo") is False,
+         "naves: %s · cortex: %s" % (sorted(naves_ob), cortex_paso))
+    paso("y sin extension le dice que la instale (no «abre la nave»)",
+         cortex_paso.get("extension") is False, "extension=%s" % cortex_paso.get("extension"))
+
+    _, geo = pide("/org/centros-geo", token=T)
+    ajenas = [c for c in (geo.get("centros") or {}) if c != CENTRO]
+    paso("la ubicacion de naves no le da las de otra empresa", not ajenas,
+         "ajenas: %s" % ajenas if ajenas else "solo las suyas")
+
+    c, _ = pide("/rentals", "POST", {"name": "Alquiler Smoke", "center": CENTRO}, token=T)
+    paso("puede dar de alta una alquiladora en SU nave", c == 200, "HTTP %s" % c)
+
+    c, d = pide("/cortex/ingest-token?centro=%s" % CENTRO, token=T)
+    llave = (d or {}).get("token") if isinstance(d, dict) else None
+    if llave:
+        req = urllib.request.Request(API + "/cortex/naves", headers={"X-Ingest-Token": llave})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                nv = json.loads(r.read().decode())
+        except Exception as e:                                    # noqa: BLE001
+            nv = {"error": str(e)}
+        paso("la extension recibe SUS naves y ninguna area inventada",
+             nv.get("naves") == [CENTRO] and nv.get("areas") == [], str(nv)[:80])
+    else:
+        paso("la extension recibe SUS naves y ninguna area inventada", False, "sin llave: HTTP %s" % c)
+
+    tabla = ("Nombre\tTeléfono\tEmail\tNave\n"
+             "Eva Smoke\t600 222 333\teva.%s@ejemplo.invalid\t%s\n"
+             "Sin Contacto\t\tnadie.%s@ejemplo.invalid\t%s\n" % (suf, CENTRO, suf, CENTRO))
+    c, d = pide("/incorporaciones/personas/importar", "POST", {"texto": tabla}, token=T)
+    paso("importa candidatos desde un Excel cualquiera (no solo su ETT)",
+         c == 200 and d.get("nuevas") == 1 and d.get("sin_clave") == 1,
+         "HTTP %s · %s" % (c, {k: d.get(k) for k in ("nuevas", "sin_clave", "formato")} if isinstance(d, dict) else d))
+
+    # ── 9. RECOGER ────────────────────────────────────────────────────────
     if args.dejar:
         print("\nLa empresa %s se queda (--dejar). Borrala tu cuando acabes." % slug)
     else:
