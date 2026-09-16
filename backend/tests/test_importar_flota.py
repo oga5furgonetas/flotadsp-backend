@@ -10,9 +10,10 @@ from datetime import datetime
 from pathlib import Path
 
 _TEXTO = io.open(Path(__file__).resolve().parents[1] / "server.py", encoding="utf-8-sig").read()
-_NS = {"re": re, "datetime": datetime}
+import json
+_NS = {"re": re, "datetime": datetime, "json": json, "HTTPException": Exception}
 _QUIERO = {"_CENTRO_RE", "_VEH_COLUMNAS", "_centro_norm", "_grupos_por_centro", "_veh_sin_tildes", "_veh_clave",
-           "_veh_fecha", "_veh_matricula", "_veh_columnas", "_veh_fila", "_veh_centro_de", "_veh_agrupar"}
+           "_veh_fecha", "_veh_matricula", "_veh_aplicar_mapeo", "_csv_filas", "_veh_columnas", "_veh_fila", "_veh_centro_de", "_veh_agrupar"}
 for _n in ast.parse(_TEXTO).body:
     _nombre = getattr(_n, "name", None) or (
         getattr(_n.targets[0], "id", None) if isinstance(_n, ast.Assign) else None)
@@ -90,3 +91,26 @@ def test_la_matricula_nueva_se_guarda_de_una_sola_forma():
     m = G["_veh_matricula"]
     assert m("1111-xyz") == m("1111XYZ") == m(" 1111  xyz ") == "1111 XYZ"
     assert m("pt-12-ab") == "PT 12 AB"          # extranjera: sin inventar formato
+
+
+def test_la_persona_corrige_la_asignacion_de_columnas():
+    m = G["_veh_aplicar_mapeo"]
+    cols = G["_veh_columnas"](["Placa coche", "Centro", "Kms actuales"])
+    assert "license_plate" not in cols           # no se reconoce sola
+    cols = m(cols, 3, '{"0": "license_plate", "2": "mileage"}')
+    assert cols == {"license_plate": 0, "center": 1, "mileage": 2}
+    # un campo viene de una sola columna, y "" ignora la columna
+    assert m(cols, 3, '{"1": "", "2": "license_plate"}') == {"license_plate": 2}
+    # indices fuera de rango y campos inventados no hacen nada
+    assert m({"center": 1}, 3, '{"9": "brand", "0": "inventado"}') == {"center": 1}
+
+
+def test_csv_de_excel_espanol_y_pegado_con_tabuladores():
+    f = G["_csv_filas"]
+    es = "Matrícula;Centro;Km\r\n1234 ABC;OGA5;25.300\r\n".encode("cp1252")
+    assert f(es) == [["Matrícula", "Centro", "Km"], ["1234 ABC", "OGA5", "25.300"]]
+    pegado = "Matrícula\tCentro\n1234 ABC\tAMZL OGA5, SANTIAGO\n".encode("utf-8")
+    assert f(pegado)[1] == ["1234 ABC", "AMZL OGA5, SANTIAGO"]
+    comas = "\ufeffMatricula,Centro\n1,2\n".encode("utf-8")
+    assert f(comas)[0] == ["Matricula", "Centro"]
+    assert f(b"solo una columna\nx\n") == [["solo una columna"], ["x"]]

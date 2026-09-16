@@ -23425,6 +23425,38 @@ _VEH_COLUMNAS = {
 }
 
 
+_VEH_CAMPO_NOMBRE = {
+    "license_plate": "Matrícula", "center": "Centro", "brand": "Marca", "model": "Modelo",
+    "color": "Color", "provider": "Renting / proveedor", "vehicle_type": "Tipo",
+    "vin": "Bastidor (VIN)", "mileage": "Kilómetros", "itv_date": "Próxima ITV",
+    "renting_end_date": "Fin del renting", "renting_baja_date": "Baja del renting", "year": "Año",
+}
+
+
+def _veh_aplicar_mapeo(cols: dict, ncols: int, mapeo) -> dict:
+    """Lo que la persona corrigio en la vista previa manda sobre lo deducido.
+
+    `mapeo` es {indice de columna: campo} ("" = ignorar esa columna). Un campo
+    solo puede venir de UNA columna: si se asigna otra, la anterior se suelta.
+    """
+    if not mapeo:
+        return cols
+    try:
+        pedido = {int(k): str(v or "") for k, v in (json.loads(mapeo) if isinstance(mapeo, str) else mapeo).items()}
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(400, "La asignación de columnas no es válida.")
+    fuera = dict(cols)
+    for i, campo in pedido.items():
+        if not 0 <= i < ncols:
+            continue
+        for c, j in list(fuera.items()):
+            if j == i:
+                del fuera[c]
+        if campo in _VEH_COLUMNAS:
+            fuera[campo] = i
+    return fuera
+
+
 def _veh_sin_tildes(txt: str) -> str:
     import unicodedata
     return "".join(c for c in unicodedata.normalize("NFD", str(txt or ""))
@@ -23607,7 +23639,7 @@ def _veh_agrupar(filas: list, claves_flota: set, conocidos) -> dict:
             "repetidas": repetidas, "matriculas": len(vistas)}
 
 
-async def _veh_leer_fichero(file: UploadFile):
+async def _veh_leer_fichero(file: UploadFile, mapeo=None, exigir_matricula=True):
     """(cabeceras, filas) de un Excel o CSV. La cabecera no tiene por que ir en
     la primera fila: los Excel de gestoria traen logo y titulo delante."""
     content = await file.read()
@@ -23653,8 +23685,8 @@ async def _veh_leer_fichero(file: UploadFile):
     fila_cab = max(range(min(15, len(all_rows))),
                    key=lambda i: len(_veh_columnas([str(c or "") for c in all_rows[i]])), default=0)
     headers = [str(c).strip() if c is not None else "" for c in all_rows[fila_cab]]
-    cols = _veh_columnas(headers)
-    if "license_plate" not in cols:
+    cols = _veh_aplicar_mapeo(_veh_columnas(headers), len(headers), mapeo)
+    if "license_plate" not in cols and exigir_matricula:
         raise HTTPException(
             400, "No encuentro la columna de la matrícula. Hace falta una columna que se "
                  "llame «Matrícula», «Matricula» o «License plate».")
@@ -23675,10 +23707,23 @@ async def _veh_contexto():
 
 @api_router.post("/import/vehicles/previsualizar")
 async def import_vehicles_previsualizar(file: UploadFile = File(...),
+                                        columnas: Optional[str] = Form(None),
                                         _=Depends(require_admin)):
     """Que trae el fichero, SIN importar nada."""
-    headers, cols, filas_crudas = await _veh_leer_fichero(file)
+    headers, cols, filas_crudas = await _veh_leer_fichero(file, columnas, exigir_matricula=False)
     conocidos, flota = await _veh_contexto()
+    cabeceras = [{"indice": i, "nombre": h,
+                  "campo": next((c for c, j in cols.items() if j == i), ""),
+                  "ejemplo": next((str(r[i]) for r in filas_crudas
+                                   if i < len(r) and r[i] not in (None, "")), "")[:40]}
+                 for i, h in enumerate(headers) if h][:40]
+    campos = [{"id": c, "nombre": n} for c, n in _VEH_CAMPO_NOMBRE.items()]
+    if "license_plate" not in cols:
+        # Sin matricula no hay nada que importar, pero en vez de un error se
+        # devuelven las columnas para que la persona diga cual es.
+        return {"falta_matricula": True, "cabeceras": cabeceras, "campos": campos,
+                "nombre": file.filename, "centros": [], "matriculas": 0,
+                "centros_empresa": sorted(conocidos), "flota_actual": len(flota)}
     filas = [_veh_fila(cols, r) for r in filas_crudas]
     res = _veh_agrupar(filas, set(flota), conocidos)
     usadas = set(cols.values())
@@ -23691,6 +23736,9 @@ async def import_vehicles_previsualizar(file: UploadFile = File(...),
         # una forma que no conocemos, que lo vea antes de importar.
         "ignoradas": [h for i, h in enumerate(headers) if h and i not in usadas][:30],
         "nombre": file.filename,
+        # Cada columna del fichero, a que campo va y un ejemplo: es lo que deja
+        # corregir la asignacion cuando una cabecera no se reconoce.
+        "cabeceras": cabeceras, "campos": campos,
     }
 
 
@@ -23701,6 +23749,7 @@ async def import_vehicles(
     crear: bool = Form(False),
     centros: Optional[str] = Form(None),
     mapa: Optional[str] = Form(None),
+    columnas: Optional[str] = Form(None),
     user: dict = Depends(require_admin)
 ):
     """Importa la flota desde Excel o CSV.
@@ -23714,7 +23763,7 @@ async def import_vehicles(
     por defecto solo se ACTUALIZAN las que ya tienes; una empresa que sube SU
     flota marca crear para darlas de alta.
     """
-    headers, cols, filas_crudas = await _veh_leer_fichero(file)
+    headers, cols, filas_crudas = await _veh_leer_fichero(file, columnas)
     conocidos, flota = await _veh_contexto()
     elegidos, destino = _eleccion_centros(centros, mapa, conocidos)
     filtro = _centro_norm(center_filter, conocidos) if center_filter and center_filter != "Todos" else ""
@@ -33811,6 +33860,33 @@ _MESES_ES = {"enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio
              "noviembre": 11, "diciembre": 12}
 
 
+def _csv_filas(content: bytes) -> list:
+    """Filas de un CSV tal y como lo guarda cada cual.
+
+    Solo se leian comas en UTF-8, y el Excel en español guarda el «CSV» con
+    PUNTO Y COMA y en Windows-1252: un fichero normal de un cliente llegaba
+    como una sola columna y la importacion decia «no encuentro la matricula».
+    Lo pegado desde Excel va con TABULADORES. Se prueba la codificacion y se
+    elige el separador que mas aparece en la primera linea con datos.
+    """
+    import csv, io
+    txt = None
+    for cod in ("utf-8-sig", "cp1252"):
+        try:
+            txt = content.decode(cod)
+            break
+        except UnicodeDecodeError:
+            continue
+    if txt is None:
+        txt = content.decode("utf-8", errors="ignore")
+    txt = txt.replace("\r\n", "\n").replace("\r", "\n")
+    primera = next((l for l in txt.split("\n") if l.strip()), "")
+    sep = max(("\t", ";", ",", "|"), key=lambda s: primera.count(s))
+    if not primera.count(sep):
+        sep = ","
+    return [r for r in csv.reader(io.StringIO(txt), delimiter=sep)]
+
+
 def _read_table_any(content: bytes, filename: str):
     """Devuelve filas (listas de str) de xlsx/xls/csv/html."""
     fn = (filename or "").lower()
@@ -33827,11 +33903,8 @@ def _read_table_any(content: bytes, filename: str):
         for sh in book.sheets():
             for ri in range(sh.nrows):
                 rows.append([str(sh.cell_value(ri, ci)) for ci in range(sh.ncols)])
-    elif fn.endswith(".csv"):
-        import csv, io
-        txt = content.decode("utf-8", errors="ignore")
-        for r in csv.reader(io.StringIO(txt)):
-            rows.append(r)
+    elif fn.endswith((".csv", ".txt", ".tsv")):
+        rows = _csv_filas(content)
     else:
         html = content.decode("utf-8", errors="ignore")
         for tbl in re.findall(r"<table.*?</table>", html, re.S | re.I):

@@ -345,12 +345,14 @@ export const importVehicles = (file, center, crear, eleccion) => {
   // Con la vista previa hecha: que centros del fichero y a donde va cada uno.
   if (eleccion?.centros) fd.append('centros', JSON.stringify(eleccion.centros))
   if (eleccion?.mapa) fd.append('mapa', JSON.stringify(eleccion.mapa))
+  if (eleccion?.columnas) fd.append('columnas', JSON.stringify(eleccion.columnas))
   return api.post('/import/vehicles', fd, { timeout: 120000, headers: { 'Content-Type': undefined } })
 }
 // Que trae el fichero, por centro, SIN importar nada.
-export const previsualizarVehiculos = (file) => {
+export const previsualizarVehiculos = (file, columnas) => {
   const fd = new FormData()
   fd.append('file', file, file.name)
+  if (columnas && Object.keys(columnas).length) fd.append('columnas', JSON.stringify(columnas))
   return api.post('/import/vehicles/previsualizar', fd, { timeout: 120000, headers: { 'Content-Type': undefined } })
 }
 

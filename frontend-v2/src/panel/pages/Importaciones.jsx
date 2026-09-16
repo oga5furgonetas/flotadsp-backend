@@ -3,13 +3,14 @@ import { Link, useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
   Loader2, Truck, Check, AlertTriangle, RotateCcw, ArrowRight, Users, CalendarDays,
-  PackageSearch, Trophy, CircleDashed,
+  PackageSearch, Trophy, CircleDashed, ClipboardPaste, Download, Columns3,
 } from 'lucide-react'
 import { importVehicles, previsualizarVehiculos, getOnboarding } from '../api'
 import EleccionCentros, { seleccionInicial, resumenSeleccion, eleccionParaEnviar } from '../components/EleccionCentros'
 import ImportarConductores from '../components/ImportarConductores'
 import SubirFichero from '../components/SubirFichero'
 import Pasos from '../components/Pasos'
+import MapeoColumnas, { textoAFichero, descargarPlantilla } from '../components/MapeoColumnas'
 
 /* INTEGRAR LO QUE YA TIENES.
    Un sitio para todo lo que una empresa nueva trae de fuera, una pestaña por
@@ -35,29 +36,41 @@ function ImportarFlota({ center, alTerminar }) {
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
   const [hecho, setHecho] = useState(null)
+  const [columnas, setColumnas] = useState({})   // correcciones: {índice: campo}
+  const [verColumnas, setVerColumnas] = useState(false)
+  const [pegando, setPegando] = useState(false)
+  const [pegado, setPegado] = useState('')
 
-  const reiniciar = () => { setFichero(null); setVista(null); setSel({}); setErr(''); setHecho(null) }
+  const reiniciar = () => {
+    setFichero(null); setVista(null); setSel({}); setErr(''); setHecho(null)
+    setColumnas({}); setVerColumnas(false); setPegando(false); setPegado('')
+  }
 
-  const leer = async (file) => {
+  const leer = async (file, cols = {}) => {
     setBusy('leyendo'); setErr(''); setHecho(null)
     try {
-      const { data: d } = await previsualizarVehiculos(file)
+      const { data: d } = await previsualizarVehiculos(file, cols)
       const emp = d.centros_empresa || []
       setEmpresa(emp)
       setSel(seleccionInicial(d.centros, emp, center))
       setCrear((d.flota_actual || 0) === 0)   // flota vacía: este fichero ES su flota
-      setFichero(file); setVista(d)
+      setFichero(file); setVista(d); setColumnas(cols)
+      if (d.falta_matricula) setVerColumnas(true)
     } catch (ex) {
       setErr(ex?.response?.data?.detail || 'No se ha podido leer el fichero.')
     } finally { setBusy('') }
   }
+
+  // Corregir una columna vuelve a leer el fichero con la asignación nueva.
+  const cambiarColumna = (indice, campo) => leer(fichero, { ...columnas, [indice]: campo })
 
   const resumen = useMemo(() => (vista ? resumenSeleccion(vista.centros, sel) : null), [vista, sel])
 
   const importar = async () => {
     setBusy('importando'); setErr('')
     try {
-      const { data: d } = await importVehicles(fichero, null, crear, eleccionParaEnviar(vista.centros, sel))
+      const { data: d } = await importVehicles(fichero, null, crear,
+        { ...eleccionParaEnviar(vista.centros, sel), columnas })
       setHecho(d); setVista(null); setFichero(null)
       alTerminar?.()
     } catch (ex) {
@@ -65,7 +78,7 @@ function ImportarFlota({ center, alTerminar }) {
     } finally { setBusy('') }
   }
 
-  const puede = vista && resumen && resumen.sinDestino === 0
+  const puede = vista && !vista.falta_matricula && resumen && resumen.sinDestino === 0
     && (resumen.existentes > 0 || (crear && resumen.nuevas > 0))
 
   return (
@@ -85,10 +98,40 @@ function ImportarFlota({ center, alTerminar }) {
         </p>
       )}
 
-      {!vista && !hecho && (
-        <SubirFichero onFile={leer} ocupado={busy === 'leyendo'}
-          titulo="Arrastra el Excel de tus furgonetas"
-          pie="el tuyo, el de la gestoría o el de Amazon" />
+      {!vista && !hecho && !pegando && (
+        <>
+          <SubirFichero onFile={(f) => leer(f)} ocupado={busy === 'leyendo'}
+            titulo="Arrastra el Excel de tus furgonetas"
+            pie="el tuyo, el de la gestoría o el de Amazon" />
+          <div className="flex flex-wrap items-center justify-center gap-2 text-[12.5px]">
+            <button onClick={() => setPegando(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-dark-300 ring-1 ring-dark-700 hover:text-dark-100">
+              <ClipboardPaste size={14} /> Pegar desde Excel
+            </button>
+            <button onClick={() => descargarPlantilla('plantilla-furgonetas.csv',
+              ['Matrícula', 'Centro', 'Marca', 'Modelo', 'Kilómetros', 'Bastidor', 'Próxima ITV', 'Renting'],
+              ['1234 ABC', center && center !== 'Todos' ? center : 'OGA5', 'Toyota', 'Proace', '25300', 'VF1ABCDEFGH123456', '15/03/2027', 'Arval'])}
+              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-dark-300 ring-1 ring-dark-700 hover:text-dark-100">
+              <Download size={14} /> Descargar plantilla
+            </button>
+          </div>
+        </>
+      )}
+
+      {pegando && !vista && (
+        <div className="space-y-2">
+          <textarea value={pegado} onChange={(e) => setPegado(e.target.value)} rows={8} autoFocus
+            placeholder={'Copia las filas en Excel (con la cabecera) y pégalas aquí.\nMatrícula\tCentro\tMarca\n1234 ABC\tOGA5\tToyota'}
+            className="w-full rounded-lg border border-dark-700 bg-dark-950 p-3 font-mono text-[12.5px] text-dark-100 outline-none focus:border-brand-500/50" />
+          <div className="flex justify-end gap-2">
+            <button onClick={() => { setPegando(false); setPegado('') }} className="px-3 py-1.5 text-[13px] text-dark-400 hover:text-dark-200">Cancelar</button>
+            <button onClick={() => leer(textoAFichero(pegado, 'pegado-desde-excel.csv'))}
+              disabled={!pegado.trim() || busy === 'leyendo'}
+              className="btn-primary inline-flex items-center gap-2 disabled:opacity-50">
+              {busy === 'leyendo' ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />} Revisar
+            </button>
+          </div>
+        </div>
       )}
 
       {hecho && (
@@ -100,7 +143,17 @@ function ImportarFlota({ center, alTerminar }) {
         </div>
       )}
 
-      {vista && (
+      {vista?.falta_matricula && (
+        <div className="space-y-3">
+          <p className="flex items-center gap-2 text-[13.5px] font-semibold text-amber-200">
+            <Columns3 size={15} /> ¿Qué columna es la matrícula?
+          </p>
+          <MapeoColumnas cabeceras={vista.cabeceras} campos={vista.campos}
+            onCambio={cambiarColumna} ocupado={busy === 'leyendo'} />
+        </div>
+      )}
+
+      {vista && !vista.falta_matricula && (
         <>
           <div className="grid grid-cols-3 gap-2 text-center">
             {[[vista.matriculas, 'matrículas'], [vista.centros.length, vista.centros.length === 1 ? 'centro' : 'centros'],
@@ -115,13 +168,19 @@ function ImportarFlota({ center, alTerminar }) {
           <EleccionCentros grupos={vista.centros} empresa={empresa} sel={sel} setSel={setSel}
             onEmpresa={setEmpresa} onError={setErr} />
 
-          <details className="text-[12px] text-dark-500">
-            <summary className="cursor-pointer select-none hover:text-dark-300">
-              {vista.columnas.length} columnas entendidas{vista.ignoradas?.length ? ` · ${vista.ignoradas.length} ignoradas` : ''}
-            </summary>
-            <p className="mt-1.5">Entendidas: <span className="text-dark-300">{vista.columnas.join(', ')}</span></p>
-            {vista.ignoradas?.length > 0 && <p>Ignoradas: {vista.ignoradas.join(', ')}</p>}
-          </details>
+          <div>
+            <button onClick={() => setVerColumnas((v) => !v)}
+              className="inline-flex items-center gap-1.5 text-[12px] text-dark-500 hover:text-dark-300">
+              <Columns3 size={13} />
+              {vista.columnas.length} columnas usadas{vista.ignoradas?.length ? ` · ${vista.ignoradas.length} sin usar` : ''} · {verColumnas ? 'ocultar' : 'revisar'}
+            </button>
+            {verColumnas && (
+              <div className="mt-2">
+                <MapeoColumnas cabeceras={vista.cabeceras} campos={vista.campos}
+                  onCambio={cambiarColumna} ocupado={busy === 'leyendo'} />
+              </div>
+            )}
+          </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-dark-800 pt-4">
             <label className="flex cursor-pointer items-center gap-2 text-[13px] text-dark-200">
