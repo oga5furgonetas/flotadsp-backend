@@ -88,6 +88,8 @@ def test_un_modulo_desconocido_se_enseña_no_se_esconde():
     justo el falso positivo que no se puede permitir.
     """
     persona = _cargar("_asoc_persona", {"_ASOC_MODULOS": _constante("_ASOC_MODULOS"),
+                                        "_ASOC_MODULOS_NOMBRE": _constante("_ASOC_MODULOS"),
+                                        "_asoc_humano": _cargar("_asoc_humano", {"re": re}),
                                         "_asoc_falta": _cargar("_asoc_falta",
                                             {"_ASOC_HECHO": _constante("_ASOC_HECHO")})})
     f = persona({"id": "x", "nombre": "Prueba",
@@ -96,7 +98,8 @@ def test_un_modulo_desconocido_se_enseña_no_se_esconde():
                              "OMW-DA-Training": "Complete"}})
     faltan = {x["que"] for x in f["faltan"]}
     assert "Global Check" in faltan
-    assert "OMW-DA-PasoNuevoDeAmazon" in faltan, "un paso desconocido se esta escondiendo"
+    # Se enseña (legible, sin el prefijo tecnico), no se esconde.
+    assert "Paso Nuevo De Amazon" in faltan, "un paso desconocido se esta escondiendo"
     assert f["hechos"] == 1 and f["total"] == 3
     assert f["completa"] is False
 
@@ -105,6 +108,8 @@ def test_una_cuenta_sin_modulos_no_se_da_por_completa():
     """Sin datos no se afirma nada. `completa` con `modulos` vacio diria que
     esta lista una cuenta de la que no sabemos absolutamente nada."""
     persona = _cargar("_asoc_persona", {"_ASOC_MODULOS": _constante("_ASOC_MODULOS"),
+                                        "_ASOC_MODULOS_NOMBRE": _constante("_ASOC_MODULOS"),
+                                        "_asoc_humano": _cargar("_asoc_humano", {"re": re}),
                                         "_asoc_falta": _cargar("_asoc_falta",
                                             {"_ASOC_HECHO": _constante("_ASOC_HECHO")})})
     assert persona({"id": "x", "modulos": {}})["completa"] is False
@@ -391,6 +396,8 @@ def test_solo_llegan_los_pasos_pendientes_y_las_cuentas_cuadran():
     16-09-2026 ese envio gordo no llegaba al otro lado, en silencio.
     """
     persona = _cargar("_asoc_persona", {"_ASOC_MODULOS": _constante("_ASOC_MODULOS"),
+                                        "_ASOC_MODULOS_NOMBRE": _constante("_ASOC_MODULOS"),
+                                        "_asoc_humano": _cargar("_asoc_humano", {"re": re}),
                                         "_asoc_falta": _cargar("_asoc_falta",
                                             {"_ASOC_HECHO": _constante("_ASOC_HECHO")})})
     f = persona({"id": "x", "nombre": "Prueba", "hechos": 11, "total": 13,
@@ -403,6 +410,8 @@ def test_solo_llegan_los_pasos_pendientes_y_las_cuentas_cuadran():
 
 def test_una_cuenta_sin_pendientes_sale_completa():
     persona = _cargar("_asoc_persona", {"_ASOC_MODULOS": _constante("_ASOC_MODULOS"),
+                                        "_ASOC_MODULOS_NOMBRE": _constante("_ASOC_MODULOS"),
+                                        "_asoc_humano": _cargar("_asoc_humano", {"re": re}),
                                         "_asoc_falta": _cargar("_asoc_falta",
                                             {"_ASOC_HECHO": _constante("_ASOC_HECHO")})})
     f = persona({"id": "x", "hechos": 13, "total": 13, "modulos": {}})
@@ -412,6 +421,8 @@ def test_una_cuenta_sin_pendientes_sale_completa():
 def test_sin_contadores_no_se_afirma_que_esta_completa():
     """Sin saber cuantos pasos hay, «lista» seria inventarselo."""
     persona = _cargar("_asoc_persona", {"_ASOC_MODULOS": _constante("_ASOC_MODULOS"),
+                                        "_ASOC_MODULOS_NOMBRE": _constante("_ASOC_MODULOS"),
+                                        "_asoc_humano": _cargar("_asoc_humano", {"re": re}),
                                         "_asoc_falta": _cargar("_asoc_falta",
                                             {"_ASOC_HECHO": _constante("_ASOC_HECHO")})})
     assert persona({"id": "x", "modulos": {}})["completa"] is False
@@ -664,11 +675,12 @@ def test_la_extension_pide_las_dos_llamadas_de_la_ficha():
 def test_los_codigos_de_amazon_se_leen_en_cristiano():
     """«En Amazon le toca a Amazon y da»: `da` es la propia persona (Delivery
     Associate). Lo guardado antes con el codigo crudo se traduce al leer."""
-    amb = {}
+    amb = {"re": re}
     for n in _ARBOL.body:
         nombre = getattr(n, "name", None) or (
             getattr(n.targets[0], "id", None) if isinstance(n, ast.Assign) else None)
-        if nombre in ("_ASOC_TAREAS", "_ASOC_DE_QUIEN", "_asoc_legible"):
+        if nombre in ("_ASOC_TAREAS", "_ASOC_DE_QUIEN", "_asoc_legible",
+                      "_ASOC_MODULOS", "_ASOC_MODULOS_NOMBRE", "_asoc_humano"):
             exec(compile(ast.Module(body=[n], type_ignores=[]), "<s>", "exec"), amb)  # noqa: S102
     leg = amb["_asoc_legible"]
     c = leg({"toca_a": ["Amazon", "da"],
@@ -679,3 +691,9 @@ def test_los_codigos_de_amazon_se_leen_en_cristiano():
     assert c["pendientes"][0]["de"] == "la persona"
     assert c["pendientes"][1]["que"] == "La sesión de formación"
     assert leg(None) is None and leg({}) == {}
+    # Los modulos que faltan tambien, y un codigo nuevo sale al menos legible.
+    c = leg({"faltan": [{"que": "OMW-DL-Verification"}, {"que": "OMW-DA-SomethingNew"},
+                        {"que": "la tarjeta"}]})
+    assert [x["que"] for x in c["faltan"]] == ["verificar el carnet", "Something New", "la tarjeta"]
+    c = leg({"pendientes": [{"que": "BrandNewTask-Onboarding", "de": "Amazon"}]})
+    assert c["pendientes"][0]["que"] == "Brand New Task"

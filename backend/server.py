@@ -36567,6 +36567,28 @@ _ASOC_MODULOS = {
     "OMW-DA-AccountProvisioning":      "crearle la cuenta",
     "OMW-DA-BadgePrinting":            "la tarjeta",
 }
+# Nombres de modulos que aparecen en algunas cuentas y NO son columnas del
+# recorrido (el panel pinta `_ASOC_MODULOS` como columnas). Vistos en
+# produccion el 16-09-2026 saliendo con el codigo crudo.
+_ASOC_MODULOS_NOMBRE = {
+    **_ASOC_MODULOS,
+    "OMW-DL-Verification":             "verificar el carnet",
+    "OMW-DA-PrivacyAgreement":         "aviso de privacidad",
+    "OMW-DA-DeclarationFormsSigned":   "formularios firmados",
+}
+
+
+def _asoc_humano(codigo) -> str:
+    """Un codigo de Amazon que aun no conocemos, al menos legible.
+
+    «OMW-DA-DeclarationFormsSigned» -> «Declaration Forms Signed». No se
+    traduce (seria inventarlo), pero deja de parecer un error de programa.
+    """
+    s = str(codigo or "")
+    s = re.sub(r"^OMW-[A-Z]{2}-", "", s)
+    s = re.sub(r"-Onboarding$", "", s)
+    s = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", s)
+    return s.strip() or str(codigo or "")
 # Lo que cuenta como HECHO. Amazon escribe «Complete»; cualquier otra cosa
 # —«Pending», «NotStarted», «InProgress»— es algo que falta. Se compara en
 # minusculas y se acepta solo lo que de verdad significa hecho: dar por bueno lo
@@ -36612,6 +36634,9 @@ _ASOC_TAREAS = {
     # Visto el 16-09-2026 en Leticia Duro. Amazon no le da un nombre en
     # castellano en la ficha; se dice qué es y se deja el término original.
     "VettingAssessment":         "Evaluación de idoneidad (Vetting)",
+    "DriverLicenseVerification-Onboarding": "Verificación de la licencia de conducir",
+    "PrivacyAgreement":          "Aceptar el aviso de privacidad",
+    "DeclarationFormsSigned":    "Formularios de declaración firmados",
     # Esta NO es del onboarding: es la de dar de baja la cuenta, y aparece
     # pendiente en todo el mundo justamente porque nadie se ha ido. Contarla
     # como pendiente hace que nadie llegue nunca al 100 %.
@@ -36641,9 +36666,18 @@ def _asoc_legible(c: dict) -> dict:
     c = dict(c)
     if c.get("toca_a"):
         c["toca_a"] = sorted({_ASOC_DE_QUIEN.get(str(x).upper(), x) for x in c["toca_a"]})
+    if c.get("faltan"):
+        c["faltan"] = [
+            {**x, "que": _ASOC_MODULOS_NOMBRE.get(x.get("que")) or (
+                _asoc_humano(x.get("que")) if str(x.get("que") or "").startswith("OMW-")
+                else x.get("que"))}
+            if isinstance(x, dict) else x
+            for x in c["faltan"]]
     if c.get("pendientes"):
         c["pendientes"] = [
-            {**x, "que": _ASOC_TAREAS.get(x.get("que"), x.get("que")) or x.get("que"),
+            {**x, "que": _ASOC_TAREAS.get(x.get("que")) or (
+                _asoc_humano(x.get("que")) if re.fullmatch(r"[A-Za-z]+(-Onboarding)?", str(x.get("que") or ""))
+                and not re.search(r"[áéíóúñ ]", str(x.get("que") or "")) else x.get("que")),
              "de": _ASOC_DE_QUIEN.get(str(x.get("de") or "").upper(), x.get("de"))}
             if isinstance(x, dict) else x
             for x in c["pendientes"]]
@@ -36726,7 +36760,7 @@ def _asoc_persona(p: dict) -> dict:
         if _asoc_falta(estado):
             # Un modulo que no conocemos se enseña con su nombre de Amazon en
             # vez de callarse: el dia que añadan uno, se vera que existe.
-            faltan.append({"que": _ASOC_MODULOS.get(clave, clave),
+            faltan.append({"que": _ASOC_MODULOS_NOMBRE.get(clave) or _asoc_humano(clave),
                            "estado": str(estado or "")[:30],
                            "clave": clave})
         else:
