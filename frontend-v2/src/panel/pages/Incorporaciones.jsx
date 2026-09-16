@@ -68,6 +68,8 @@ const EMBUDO = [
    pone la pantalla; en QUE fase esta cada uno lo decide el servidor (gotcha
    54), que es donde vive la regla. */
 const FASES = [
+  { id: 'formacion', titulo: 'Formación sin mandar', icono: Send, pie: 'Tiene los papeles y espera su acceso',
+    tono: 'text-brand-300', borde: 'border-brand-500/30', oculta: true },
   { id: 'por_pedir', titulo: 'Por pedir', icono: Inbox, pie: 'Le falta algo y nadie le ha escrito',
     tono: 'text-amber-300', borde: 'border-amber-500/30' },
   { id: 'esperando', titulo: 'A la espera', icono: Hourglass, pie: 'Se le ha pedido; falta que lo mande',
@@ -193,7 +195,7 @@ export default function Incorporaciones() {
 
   const columnas = useMemo(() => {
     if (agrupar === 'fase') {
-      return FASES.map((f) => ({
+      return FASES.filter((f) => !f.oculta).map((f) => ({
         id: f.id, titulo: f.titulo, pie: f.pie, icono: f.icono,
         tono: f.tono, borde: f.borde,
         gente: (motivo ? personas : (paso ? grupos[paso] || [] : personas))
@@ -650,7 +652,11 @@ function Ficha({ p, motivosCat, nombres, abierta, onAbrir, onGuardar, onMensaje 
             Un ojo escanea una columna de puntos mucho más rápido que ocho
             etiquetas repartidas. */}
         <span className="mt-[5px] shrink-0">
-          <Punto fase={p.fase} />
+          {/* Quien ya tiene los papeles y solo espera su acceso NO está «por
+              pedir»: la etiqueta de los papeles contradecía a la de al lado. */}
+          {p.camino?.siguiente === 'acceso'
+            ? <Punto fase="formacion" />
+            : <Punto fase={p.fase} />}
         </span>
 
         <span className="min-w-0 flex-1">
@@ -706,9 +712,19 @@ function Ficha({ p, motivosCat, nombres, abierta, onAbrir, onGuardar, onMensaje 
 
         {/* CUÁNTO LLEVA, alineado a la derecha y en columna fija: así se leen
             los quince días de uno y el de hoy del otro de un vistazo. Solo se
-            colorea cuando ya duele. */}
+            colorea cuando ya duele.
+            Si espera su acceso a la formación, lo que cuenta es cuánto hace que
+            tenía que haberla empezado, no cuándo lo colgó la ETT: Jonatan salía
+            con «2 d» teniendo la formación pasada desde hacía seis. */}
         <span className="w-14 shrink-0 text-right">
-          {p.dias_esperando != null && !completo && (
+          {p.camino?.siguiente === 'acceso' && p.camino?.formacion_atrasada != null ? (
+            <span title="Días desde su fecha de formación sin haberle mandado el acceso"
+              className={`text-[12px] font-semibold tabular-nums ${
+                p.camino.formacion_atrasada >= 2 ? 'text-red-300'
+                  : p.camino.formacion_atrasada >= 1 ? 'text-amber-300' : 'text-dark-500'}`}>
+              {p.camino.formacion_atrasada === 0 ? 'hoy' : `+${p.camino.formacion_atrasada} d`}
+            </span>
+          ) : p.dias_esperando != null && !completo && (
             <span className={`text-[12px] font-semibold tabular-nums ${
               p.dias_esperando >= 14 ? 'text-red-300'
                 : p.dias_esperando >= 7 ? 'text-amber-300' : 'text-dark-500'}`}>
