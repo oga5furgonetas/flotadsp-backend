@@ -280,49 +280,94 @@
     for (const k of Object.keys(cabeceras)) {
       try { x.setRequestHeader(k, cabeceras[k]); } catch (_) {}
     }
-    if (alCargar) x.addEventListener('load', function () { alCargar.call(this); });
-    try { x.send(JSON.stringify(cuerpoJson)); } catch (_) {}
+    /* `loadend`, NO `load`. `load` solo salta cuando llega respuesta; con un
+       corte de red, un abort o un timeout no salta nunca — y como la siguiente
+       peticion se lanza desde aqui, UNA sola que fallara paraba la cadena
+       entera, sin error y sin aviso. `loadend` salta siempre, y una sola vez. */
+    try { x.timeout = 20000; } catch (_) {}
+    if (alCargar) {
+      let hecho = false;
+      x.addEventListener('loadend', function () {
+        if (hecho) return;
+        hecho = true;
+        alCargar.call(this);
+      });
+    }
+    try { x.send(JSON.stringify(cuerpoJson)); }
+    catch (_) { if (alCargar) alCargar.call(x); }   // ni salio: se sigue igual
   };
+
+  /* Un aviso por PASO, cada uno con su nombre. El 16-09-2026 la vuelta por
+     correo corrio con la 2.89 y no dejo NADA: solo avisaba al terminar, asi que
+     «no arranco», «nadie le contesto» y «se atasco en el correo 5» se veian
+     igual. Con un nombre por paso, el ultimo que aparezca dice donde se corto. */
+  const aviso = (paso, texto, n) => post({ kind: 'debug', which: 'asociados-correo-' + paso,
+                                           url: texto, count: n || 0, bytes: 0 });
 
   /* (b) UNO A UNO, POR CORREO. */
   let preguntados = false;
   const preguntarPorLosNuestros = (xhrOriginal, j) => {
     if (preguntados) return;
     preguntados = true;
+    let recibida = false;
     const alLlegar = (ev) => {
       const d = ev.data;
       if (!d || d.__flotadspIn !== true || d.kind !== 'seguidos') return;
+      if (recibida) return;
+      recibida = true;
       window.removeEventListener('message', alLlegar);
       const correos = (d.correos || []).filter((c) => /.+@.+/.test(String(c))).slice(0, 400);
+      aviso('2-lista', 'lista recibida: ' + correos.length + ' correos', correos.length);
       /* De uno en uno y sin prisa: es la sesion de Amazon de la oficina y no se
          le va a echar encima una rafaga de cuatrocientas peticiones. */
-      let i = 0, conCuenta = 0, sinCuenta = 0;
+      let i = 0, conCuenta = 0, sinCuenta = 0, fallidas = 0;
       const siguiente = () => {
         if (i >= correos.length) {
-          /* QUE DIGA LO QUE HA ENCONTRADO. «Preguntamos por 28» no vale de
-             nada: lo que hay que saber es cuantos tienen cuenta y cuantos no,
-             y sobre todo si Amazon esta entendiendo la busqueda por correo.
-             Si `encontrados` fuera 0 con 28 preguntas, el filtro no funciona
-             como creemos y hay que verlo, no suponerlo. */
-          post({ kind: 'debug', which: 'asociados-por-correo',
-                 url: 'preguntados=' + correos.length + ' con_cuenta=' + conCuenta
-                      + ' sin_cuenta=' + sinCuenta,
-                 count: conCuenta, bytes: 0 });
+          /* QUE DIGA LO QUE HA ENCONTRADO. Si `con_cuenta` fuera 0 con 28
+             preguntas, Amazon no esta entendiendo la busqueda por correo como
+             creemos, y hay que verlo, no suponerlo. `fallidas` separa «no tiene
+             cuenta» de «la peticion no volvio». */
+          aviso('3-fin', 'preguntados=' + correos.length + ' con_cuenta=' + conCuenta
+                         + ' sin_cuenta=' + sinCuenta + ' fallidas=' + fallidas, conCuenta);
           return;
         }
         const correo = correos[i++];
         repetir(xhrOriginal, { ...j, email: correo, searchStart: 0, searchSize: 10 },
                 function () {
-                  if (cuantosVinieron(this.responseText) > 0) conCuenta++; else sinCuenta++;
+                  const n = this.status >= 200 && this.status < 300
+                    ? cuantosVinieron(this.responseText) : -1;
+                  if (n > 0) conCuenta++;
+                  else if (n === 0) sinCuenta++;
+                  else fallidas++;
+                  // El primer fallo se cuenta con su codigo: un 400 aqui diria
+                  // que a Amazon le falta un campo en la busqueda.
+                  if (n < 0 && fallidas === 1) {
+                    aviso('x-fallo', 'correo ' + i + ': HTTP ' + this.status, this.status);
+                  }
                   setTimeout(siguiente, 250);
                 });
       };
       siguiente();
     };
     window.addEventListener('message', alLlegar);
-    post({ kind: 'seguidos_pedir' });
-    // Si el worker esta dormido no contesta: se reintenta en la siguiente carga.
-    setTimeout(() => window.removeEventListener('message', alLlegar), 30000);
+
+    /* PEDIR LA LISTA, CON REINTENTOS. Si el service worker esta despertando no
+       contesta a la primera, y antes eso era un silencio de 30 s y a otra cosa.
+       Ahora se vuelve a pedir y, si no llega nunca, se DICE. */
+    let intentos = 0;
+    const pedirLista = () => {
+      if (recibida) return;
+      if (intentos >= 4) {
+        window.removeEventListener('message', alLlegar);
+        aviso('x-sin-respuesta', 'el service worker no dio la lista tras ' + intentos + ' intentos', intentos);
+        return;
+      }
+      intentos++;
+      post({ kind: 'seguidos_pedir' });
+      setTimeout(pedirLista, 8000);
+    };
+    aviso('1-pide', 'pidiendo la lista de a quien seguimos', 0);
+    pedirLista();
   };
 
   /* (a) EL BARRIDO, de red. */

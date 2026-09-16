@@ -70,7 +70,17 @@ if (!window.__flotadspBridge) {
     } else if (d.kind === 'seguidos_pedir') {
       try {
         chrome.runtime.sendMessage({ type: 'seguidosPedir' }, (r) => {
-          if (chrome.runtime.lastError || !r) return;   // worker dormido: se reintenta
+          /* Antes aqui se volvia en silencio. Es el unico sitio de la cadena
+             donde el fallo tiene nombre (el `lastError`), asi que se apunta:
+             la pagina reintenta, pero si no llega nunca hay que saber por que. */
+          if (chrome.runtime.lastError || !r) {
+            const e = chrome.runtime.lastError ? String(chrome.runtime.lastError.message || '') : 'respuesta vacia';
+            try {
+              chrome.runtime.sendMessage({ type: 'debug', which: 'asociados-correo-x-puente',
+                                           url: 'sin lista: ' + e.slice(0, 120), count: 0, bytes: 0 });
+            } catch (_) {}
+            return;
+          }
           window.postMessage({ __flotadspIn: true, kind: 'seguidos',
                                correos: r.correos || [], nombres: r.nombres || [] }, '*');
         });

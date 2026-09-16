@@ -184,6 +184,106 @@ const respirar = () => new Promise((r) => setImmediate(r))
   ok(/seguidosPedir/.test(fondo), 'el service worker no contesta a quien seguimos')
 }
 
+/* ── 7. LA VUELTA POR CORREO, CON EL portal.js REAL ────────────────────────
+   El 16-09-2026 corrio con la 2.89 y no dejo NI UN rastro: solo avisaba al
+   terminar, y la siguiente peticion se lanzaba en `load`, que no salta si la
+   anterior falla por red. Una sola caida paraba la cadena en silencio. */
+function arrancarPortal() {
+  const mensajes = []
+  const oyentes = []
+  const timers = []
+  const enviadas = []
+  function XHR() { this._l = {}; this.responseText = ''; this.responseType = ''; this.status = 0 }
+  XHR.prototype.open = function (m, u) { this._m = m; this._u = u }
+  XHR.prototype.setRequestHeader = function () {}
+  XHR.prototype.addEventListener = function (ev, fn) { (this._l[ev] = this._l[ev] || []).push(fn) }
+  XHR.prototype.send = function (body) { this._body = body; enviadas.push(this) }
+  const href = 'https://logistics.amazon.es/account-management/delivery-associates'
+  const win = {
+    location: { href, origin: 'https://logistics.amazon.es', pathname: '/account-management/delivery-associates' },
+    postMessage: (m) => mensajes.push(m),
+    addEventListener: (ev, fn) => { if (ev === 'message') oyentes.push(fn) },
+    removeEventListener: (ev, fn) => { const i = oyentes.indexOf(fn); if (i >= 0) oyentes.splice(i, 1) },
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length },
+    clearTimeout: () => {},
+    setInterval: () => 0,
+    fetch: () => new Promise(() => {}),
+    XMLHttpRequest: XHR,
+    document: {
+      querySelectorAll: () => [], querySelector: () => null, addEventListener: () => {},
+      documentElement: { outerHTML: '' }, body: {}, readyState: 'loading',
+    },
+    MutationObserver: function () { this.observe = () => {} },
+    console: { log: () => {}, warn: () => {}, error: () => {} },
+    URL, JSON, Date, Math, RegExp, Number, String, Array, Object, Promise, Set, Map,
+  }
+  win.window = win
+  win.self = win
+  win.globalThis = win
+  vm.createContext(win)
+  vm.runInContext(portal, win, { filename: 'portal.js' })
+  /* Como el navegador: `load` solo si hubo respuesta, `loadend` SIEMPRE. */
+  const responder = (x, obj, status) => {
+    x.status = status
+    x.responseText = obj ? JSON.stringify(obj) : ''
+    if (obj) for (const fn of x._l.load || []) fn.call(x)
+    for (const fn of x._l.loadend || []) fn.call(x)
+  }
+  const correr = () => { const t = timers.splice(0); for (const { fn } of t) fn() }
+  // La pagina pide su propia lista, como hace al abrirse.
+  const x = new win.XMLHttpRequest()
+  x.open('POST', '/account-management/data/search-providers')
+  x.send(JSON.stringify({ providerType: 'DA', searchStart: 0, searchSize: 100 }))
+  responder(x, { data: { resultList: [{ providerId: 'x' }], totalResults: 1 } }, 200)
+  const contestar = (correos) => {
+    for (const fn of [...oyentes]) fn({ data: { __flotadspIn: true, kind: 'seguidos', correos, nombres: [] } })
+  }
+  const porCorreo = () => enviadas.filter((e) => /"email"/.test(e._body || ''))
+  const avisos = () => mensajes.filter((m) => /^asociados-correo-/.test(m.which || ''))
+  return { mensajes, contestar, porCorreo, responder, correr, avisos }
+}
+
+/* 7a. Una peticion que falla a mitad NO para a las demas. */
+{
+  const p = arrancarPortal()
+  p.contestar(['a@winiw.es', 'loibarfig@winiw.es', 'c@winiw.es'])
+  for (let v = 0; v < 12; v++) {
+    for (const e of p.porCorreo()) {
+      if (e._hecha) continue
+      e._hecha = true
+      if (/a@winiw/.test(e._body)) p.responder(e, null, 0)          // corte de red
+      else p.responder(e, { data: { resultList: /loibarfig/.test(e._body) ? [{ providerId: 'L' }] : [] } }, 200)
+    }
+    p.correr()
+  }
+  ok(p.porCorreo().length === 3,
+    'una peticion caida paro la cadena: se preguntaron ' + p.porCorreo().length + ' de 3'
+    + ' (la siguiente se lanza en `load`, que no salta si la anterior falla)')
+  const fin = p.avisos().find((m) => m.which === 'asociados-correo-3-fin')
+  ok(!!fin, 'la vuelta por correo no dijo como acabo')
+  ok(fin && /con_cuenta=1 /.test(fin.url) && /fallidas=1/.test(fin.url),
+    'el resumen no separa «tiene cuenta», «no la tiene» y «la peticion no volvio»: ' + (fin && fin.url))
+  ok(p.avisos().some((m) => m.which === 'asociados-correo-1-pide'),
+    'no avisa al arrancar: «no arranco» y «se atasco» se verian igual')
+}
+
+/* 7b. Si el service worker no contesta, se reintenta y se DICE. */
+{
+  const p = arrancarPortal()
+  for (let v = 0; v < 10; v++) p.correr()
+  const pedidas = p.mensajes.filter((m) => m.kind === 'seguidos_pedir').length
+  ok(pedidas > 1, 'si el worker no contesta a la primera no se vuelve a pedir la lista')
+  ok(p.avisos().some((m) => m.which === 'asociados-correo-x-sin-respuesta'),
+    'el worker no contesto nunca y no quedo ningun aviso: es el silencio del 16-09-2026')
+}
+
+/* 7c. Y el puente, si falla, lo apunta. */
+{
+  const puente = readFileSync(join(RAIZ, 'bridge.js'), 'utf8')
+  ok(/asociados-correo-x-puente/.test(puente),
+    'el puente vuelve a tragarse el `lastError` sin decir nada')
+}
+
 if (fallos.length) {
   console.error('\nasociados: ' + fallos.length + ' fallos\n')
   for (const f of fallos) console.error('  - ' + f)
