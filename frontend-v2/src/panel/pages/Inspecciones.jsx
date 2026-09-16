@@ -7,6 +7,7 @@ import {
   ShieldCheck, FileSignature, ShieldAlert, RefreshCw, Wrench, Check, Euro, Undo2,
   ClipboardList, ChevronRight,
 } from 'lucide-react'
+import GuidedEmpty from '../components/GuidedEmpty'
 import { getInspections, getInspection, getCoberturaInspecciones, getVehicles, getDrivers, getVehicleInspections, fetchAuthedBlob, getForensicStatus, signInspectionAdmin, recheckFraud, getSuggestedWorkshops, updateDamage } from '../api'
 
 const SEV_CLS = {
@@ -188,7 +189,10 @@ export default function Inspecciones() {
       </div>
 
       {list.length === 0 ? (
-        <div className="card p-10 text-center text-dark-400">{t('insp.empty')}</div>
+        /* «No hay inspecciones» a secas no decia quien las hace ni desde donde. */
+        <GuidedEmpty emoji="📷" title={t('insp.empty')} hint={t('insp.empty.hint')}
+          actionLabel={t('empty.portal.cta')} to="/panel/portal-conductor"
+          secondary={{ to: '/panel/conductores', label: t('nav.drivers') }} />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {list.map((i) => {

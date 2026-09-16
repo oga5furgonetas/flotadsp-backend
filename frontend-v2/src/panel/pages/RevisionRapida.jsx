@@ -10,6 +10,7 @@ import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markR
 import PolygonEditor from '../components/PolygonEditor'
 import BboxEditor from '../components/BboxEditor'
 import CompareSlider from '../components/CompareSlider'
+import GuidedEmpty from '../components/GuidedEmpty'
 
 /* REVISION EXPRES
    ─────────────────────────────────────────────────────────────────────────
@@ -597,6 +598,11 @@ export default function RevisionRapida() {
   const item = displayQueue[idx] ?? null
   const nDanos = item ? (item.new_damages_count || item.total_damages_count || 0) : 0
   const total = stats?.total ?? 0
+  // Nunca ha habido nada que revisar: ni inspecciones este mes, ni revisiones
+  // de la IA, ni ejemplos corregidos por una persona. Una empresa que dejo de
+  // inspeccionar hace dos meses NO entra aqui: tiene historial que ver.
+  const sinInspecciones = Array.isArray(queue) && queue.length === 0 && !!autoex
+    && (autoex.cobertura?.inspecciones_30d ?? 1) === 0 && !(colaMeta?.ia_revisadas) && total === 0
 
   useEffect(() => {
     setQueue(null); setIdx(0); setPhotoIdx(0); setErr(''); setFullInsp(null)
@@ -781,10 +787,17 @@ export default function RevisionRapida() {
         </div>
       </header>
 
+      {/* SIN NINGUNA INSPECCION TODAVIA. Una pared de metricas a cero y un
+          «Reentrenar ahora» no le dicen a una empresa nueva que esta pantalla
+          se llena sola cuando sus conductores suben fotos. */}
+      {sinInspecciones && (
+        <GuidedEmpty emoji="🔍" title={t('rev.empty.tit')} hint={t('rev.empty.hint')}
+          actionLabel={t('empty.portal.cta')} to="/panel/portal-conductor" />
+      )}
       {/* La IA se revisa sola: aqui solo llega lo que no tiene claro. Que se
           vea cuanto ha cerrado ella, si no "35 pendientes" parece que no
           hace nada. */}
-      {colaMeta && (
+      {colaMeta && !sinInspecciones && (
         <div className="rise mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-brand-500/20 bg-brand-500/[0.06] px-4 py-3 text-[13px] text-dark-300">
           <span>
             <b className="text-dark-50">{(colaMeta.ia_revisadas_7d ?? 0).toLocaleString('es-ES')}</b> {t('rev.ia.week')}
@@ -798,14 +811,14 @@ export default function RevisionRapida() {
         </div>
       )}
 
-      <Autoexamen datos={autoex} total={total} alRevisar={() => setExpres(true)}
-                  recargar={() => autoexamenIA().then((r) => setAutoex(r.data)).catch(() => {})} />
+      {!sinInspecciones && <Autoexamen datos={autoex} total={total} alRevisar={() => setExpres(true)}
+                  recargar={() => autoexamenIA().then((r) => setAutoex(r.data)).catch(() => {})} />}
       {expres && (
         <RevisionExpres center={center} alCerrar={() => { setExpres(false); loadStats() }}
           alGuardar={loadStats} />
       )}
 
-      {queue.length === 0 ? (
+      {sinInspecciones ? null : queue.length === 0 ? (
         <div className="card flex flex-col items-center gap-2 p-12 text-center text-dark-300">
           <CheckCircle2 size={32} className="text-emerald-400" /> {t('rev.no.pending')} {center !== 'Todos' && `${t('rev.in.center')} ${center}`}.
         </div>

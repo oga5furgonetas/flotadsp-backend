@@ -4,6 +4,7 @@ import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
 import { Loader2, Activity, Camera } from 'lucide-react'
 import { getInspections, getVehicles } from '../api'
+import GuidedEmpty from '../components/GuidedEmpty'
 
 const SEV_CLS = {
   leve: 'text-amber-300', moderado: 'text-orange-300', grave: 'text-red-300',
@@ -38,7 +39,13 @@ export default function Actividad() {
   return (
     <div className="mx-auto max-w-2xl">
       <h1 className="rise mb-6 font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('act.title')}</h1>
-      <div className="card divide-y divide-dark-800">
+      {/* Vacia, la pantalla era solo el titulo: no decia de donde sale lo que
+          aqui aparece ni como empezar. */}
+      {list.length === 0 && (
+        <GuidedEmpty emoji="📷" title={t('act.empty.tit')} hint={t('act.empty.hint')}
+          actionLabel={t('empty.portal.cta')} to="/panel/portal-conductor" />
+      )}
+      {list.length > 0 && <div className="card divide-y divide-dark-800">
         {list.map((i) => {
           const v = vmap[i.vehicle_id] || {}
           const sev = i.analysis?.severity || 'sin_analisis'
@@ -51,7 +58,7 @@ export default function Actividad() {
             </div>
           )
         })}
-      </div>
+      </div>}
     </div>
   )
 }

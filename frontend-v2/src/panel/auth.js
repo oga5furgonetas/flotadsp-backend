@@ -95,6 +95,15 @@ export function getOrgId() {
   return decodeToken()?.org_id || null
 }
 
+/* LA EMPRESA DUEÑA DE LA PLATAFORMA. Hay pantallas que son del negocio de
+   FlotaDSP y no de la flota de cada cliente —la tienda de ropa con su plan de
+   negocio, la conexion de WhatsApp del servidor—. Un cliente recien registrado
+   las veia en su menu el 16-09-2026. Se lee del JWT, que firma el servidor. */
+export function esPlataforma() {
+  const p = decodeToken()
+  return !!(p && (p.sa || p.account_type === 'owner'))
+}
+
 export function isSuperAdmin() {
   // Lee del token JWT (más fiable que localStorage que puede ser manipulado por el usuario)
   const payload = decodeToken()

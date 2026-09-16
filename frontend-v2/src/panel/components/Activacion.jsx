@@ -79,8 +79,11 @@ function mensajeCortex(paso, t) {
   return t('ob.n.cortex.esperando').replace('{dia}', diaCorto(paso.ultimo_dia) || '—')
 }
 
-function Nave({ nave, t }) {
-  const pasos = (nave.pasos || []).filter((p) => PASO_NAVE[p.id])
+function Nave({ nave, t, basicosArriba }) {
+  // Con los pasos de la empresa aun pendientes, furgonetas y conductores ya
+  // se piden arriba: repetirlos en la nave es decir lo mismo dos veces.
+  const pasos = (nave.pasos || []).filter((p) => PASO_NAVE[p.id]
+    && !(basicosArriba && (p.id === 'vehiculos' || p.id === 'conductores')))
   const pendiente = pasos.find((p) => !p.hecho && !p.opcional) || (nave.completa ? null : pasos.find((p) => !p.hecho))
   return (
     <li className={`rounded-xl border p-3 ${nave.completa ? 'border-emerald-500/15 bg-emerald-500/[0.03]' : 'border-white/[0.07] bg-white/[0.02]'}`}>
@@ -199,7 +202,7 @@ export default function Activacion() {
         <div className={soloNaves ? '' : 'mt-4'}>
           {!soloNaves && <h3 className="mb-2 text-[13px] font-semibold text-dark-100">{t('ob.naves.tit')}</h3>}
           <ul className="grid gap-2">
-            {navesOrden.map((n) => <Nave key={n.centro} nave={n} t={t} />)}
+            {navesOrden.map((n) => <Nave key={n.centro} nave={n} t={t} basicosArriba={!soloNaves} />)}
           </ul>
         </div>
       )}

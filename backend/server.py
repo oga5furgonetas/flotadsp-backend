@@ -45850,7 +45850,9 @@ def _pk_default_layout(center):
         ext.append(_pk_bay(15 + i, 4, 6 + i * 15.2, 37, 11, -40))
     for i in range(6):
         ext.append(_pk_bay(21 + i, 59, 6 + i * 15.2, 37, 11, 40))
-    return {"center": c, "name": c, "v": _PK_LAYOUT_V, "zones": [
+    # "plantilla": el plano generico de una nave que nadie ha dibujado. La
+    # pantalla lo dice y no enseña estado ni disponibilidad sobre el.
+    return {"center": c, "name": c, "v": _PK_LAYOUT_V, "plantilla": True, "zones": [
         {"id": "nave", "name": "Dentro de la nave", "color": "violet",
          "note": "Plantilla de partida - ajusta el numero de plazas",
          "ratio": 0.7, "aisle": "vertical", "spots": nave},
@@ -45866,6 +45868,9 @@ async def _pk_get_layout(center):
     # Un plano editado por una persona (seeded=False) es sagrado: no se toca.
     # Uno auto-generado de version anterior se regenera con la geometria nueva.
     if doc and not (doc.get("seeded") and doc.get("v", 1) < _PK_LAYOUT_V):
+        # Se calcula al leer, no se guarda: los planos sembrados antes de este
+        # campo no lo tienen, y uno guardado por una persona nunca es plantilla.
+        doc["plantilla"] = bool(doc.get("seeded")) and bool(_pk_default_layout(c).get("plantilla"))
         return doc
     doc = _pk_default_layout(c)
     doc["seeded"] = True          # plano por defecto, aun sin revisar por humano
@@ -46410,8 +46415,21 @@ async def _tienda_datos_vivos() -> dict:
             "altas_30d": altas, "centros": centros}
 
 
+async def require_plataforma(user: dict = Depends(require_admin)) -> dict:
+    """Solo la empresa duena de la plataforma (o el super-admin).
+
+    La tienda de ropa es el negocio de FlotaDSP (sociedad, IVA, proveedor,
+    costes), no algo de la flota de un cliente. El menu ya no se la enseña,
+    pero las rutas tienen que decir lo mismo: esconder el enlace no cierra la
+    puerta. El escaparate del conductor NO pasa por aqui.
+    """
+    if not (user.get("sa") or user.get("account_type") == "owner"):
+        raise HTTPException(403, "Esta pantalla es de FlotaDSP, no de tu flota.")
+    return user
+
+
 @api_router.get("/tienda/preparacion")
-async def tienda_preparacion(_=Depends(require_admin)):
+async def tienda_preparacion(user: dict = Depends(require_plataforma)):
     """Todo lo que hace falta para vender ropa, y por dónde vas."""
     guardado = {p["paso"]: p async for p in db[_TIENDA_COL].find({}, {"_id": 0})}
     pasos = []
@@ -46435,7 +46453,7 @@ async def tienda_preparacion(_=Depends(require_admin)):
 
 
 @api_router.post("/tienda/preparacion")
-async def tienda_marcar_paso(body: dict = Body(...), user: dict = Depends(require_admin)):
+async def tienda_marcar_paso(body: dict = Body(...), user: dict = Depends(require_plataforma)):
     """Marca o desmarca un paso, con su nota."""
     paso = _texto_cuerpo(body.get("paso"), 60)
     if paso not in {p["id"] for p in _TIENDA_PASOS}:
@@ -46764,7 +46782,7 @@ def _prenda_con_cuentas(p: dict) -> dict:
 
 
 @api_router.get("/tienda/prendas")
-async def tienda_prendas(_=Depends(require_admin)):
+async def tienda_prendas(_=Depends(require_plataforma)):
     """Tus prendas y las piezas con las que se montan."""
     docs = await db[_PRENDAS_COL].find(
         {"archivada": {"$ne": True}}, {"_id": 0}).sort("creada_en", -1).to_list(_PRENDAS_MAX)
@@ -46778,7 +46796,7 @@ async def tienda_prendas(_=Depends(require_admin)):
 
 
 @api_router.post("/tienda/prendas")
-async def tienda_crear_prenda(body: dict = Body(...), user: dict = Depends(require_admin)):
+async def tienda_crear_prenda(body: dict = Body(...), user: dict = Depends(require_plataforma)):
     """Crea una prenda. Nace en borrador: aqui todavia no se vende nada."""
     cuantas = await db[_PRENDAS_COL].count_documents({"archivada": {"$ne": True}})
     if cuantas >= _PRENDAS_MAX:
@@ -46794,7 +46812,7 @@ async def tienda_crear_prenda(body: dict = Body(...), user: dict = Depends(requi
 
 @api_router.patch("/tienda/prendas/{prenda_id}")
 async def tienda_editar_prenda(prenda_id: str, body: dict = Body(...),
-                               user: dict = Depends(require_admin)):
+                               user: dict = Depends(require_plataforma)):
     """Cambia una prenda. Publicar exige precio: sin el no hay nada que cobrar."""
     previa = await db[_PRENDAS_COL].find_one({"id": prenda_id}, {"_id": 0})
     if not previa or previa.get("archivada"):
@@ -46813,7 +46831,7 @@ async def tienda_editar_prenda(prenda_id: str, body: dict = Body(...),
 
 
 @api_router.delete("/tienda/prendas/{prenda_id}")
-async def tienda_archivar_prenda(prenda_id: str, user: dict = Depends(require_admin)):
+async def tienda_archivar_prenda(prenda_id: str, user: dict = Depends(require_plataforma)):
     """Quita una prenda de la lista. NO la borra: la marca archivada.
 
     Es trabajo de diseño y cuesta rehacerlo; un clic de mas no puede perderlo.
@@ -47214,7 +47232,7 @@ def _prenda_ficha(p: dict, unidades: int) -> dict:
 
 
 @api_router.post("/tienda/prendas/interpretar")
-async def tienda_interpretar(body: dict = Body(...), _=Depends(require_admin)):
+async def tienda_interpretar(body: dict = Body(...), _=Depends(require_plataforma)):
     """De una frase a una prenda dibujable. Sin IA: vocabulario cerrado."""
     texto = _texto_cuerpo(body.get("texto"), 300)
     if len(texto) < 3:
@@ -47223,7 +47241,7 @@ async def tienda_interpretar(body: dict = Body(...), _=Depends(require_admin)):
 
 
 @api_router.post("/tienda/prendas/ficha")
-async def tienda_ficha_produccion(body: dict = Body(...), _=Depends(require_admin)):
+async def tienda_ficha_produccion(body: dict = Body(...), _=Depends(require_plataforma)):
     """Cómo hacer esta prenda y a cuánto sale. Vale para una sin guardar."""
     receta = body.get("prenda")
     if not isinstance(receta, dict):
@@ -47314,14 +47332,14 @@ async def _logos_mapa() -> dict:
 
 
 @api_router.get("/tienda/logos")
-async def tienda_logos(_=Depends(require_admin)):
+async def tienda_logos(_=Depends(require_plataforma)):
     return {"logos": await _logos_mapa(), "variantes": list(_LOGO_VARIANTES),
             "max_kb": _LOGO_MAX_BYTES // 1024}
 
 
 @api_router.post("/tienda/logos")
 async def tienda_subir_logo(variante: str = Form(...), file: UploadFile = File(...),
-                            user: dict = Depends(require_admin)):
+                            user: dict = Depends(require_plataforma)):
     """Sube una variante del logo. Sustituye la que hubiera."""
     variante = _texto_cuerpo(variante, 20).lower()
     if variante not in _LOGO_VARIANTES:

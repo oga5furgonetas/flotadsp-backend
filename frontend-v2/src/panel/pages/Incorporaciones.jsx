@@ -541,7 +541,7 @@ export default function Incorporaciones() {
 
       {!ordenadas.length && (
         <p className="card p-6 text-center text-[13px] text-dark-400">
-          {q ? 'Nadie con ese nombre.' : 'Todavía no hay nadie. Pega el listado de la ETT.'}
+          {q ? 'Nadie con ese nombre.' : 'Todavía no hay nadie. Pega el listado de tu ETT o una tabla de Excel.'}
         </p>
       )}
 

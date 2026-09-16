@@ -768,7 +768,10 @@ export default function Debrief() {
           </div>
         )}
 
-        {datos && !r.fiable && (
+        {/* Con CERO paquetes no hay nada que haya dejado de observarse: el aviso
+            salia a una empresa sin Cortex conectado, y encima con el porcentaje
+            vacio («El % de los paquetes…»). */}
+        {datos && !r.fiable && (r.paquetes || 0) > 0 && (
           <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
             <EyeOff size={17} className="mt-0.5 shrink-0 text-amber-600" />
             <div className="text-[13.5px] text-amber-900">

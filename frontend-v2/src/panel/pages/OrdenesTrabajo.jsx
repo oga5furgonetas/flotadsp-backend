@@ -754,7 +754,7 @@ export default function OrdenesTrabajo() {
           <div className="flex flex-wrap gap-x-8 gap-y-2 px-4 py-3">
             <div>
               <div className="tabular-nums text-[22px] font-bold leading-none text-emerald-700">
-                {informe.inspeccion_diaria.con_fotografia_pct}%
+                {informe.inspeccion_diaria.con_fotografia_pct != null ? `${informe.inspeccion_diaria.con_fotografia_pct}%` : '—'}
               </div>
               <div className="mt-0.5 text-[12px] text-slate-500">
                 de {informe.inspeccion_diaria.inspecciones.toLocaleString('es')} inspecciones con foto
@@ -762,7 +762,7 @@ export default function OrdenesTrabajo() {
             </div>
             <div>
               <div className="tabular-nums text-[22px] font-bold leading-none text-emerald-700">
-                {informe.inspeccion_diaria.con_conductor_pct}%
+                {informe.inspeccion_diaria.con_conductor_pct != null ? `${informe.inspeccion_diaria.con_conductor_pct}%` : '—'}
               </div>
               <div className="mt-0.5 text-[12px] text-slate-500">con conductor identificado</div>
             </div>

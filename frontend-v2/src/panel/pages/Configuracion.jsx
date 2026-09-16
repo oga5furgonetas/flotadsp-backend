@@ -4,7 +4,7 @@ import { Loader2, Plus, Building, Send, CreditCard, Check, Copy, ExternalLink, B
 import { getOrgCenters, addOrgCenter, getTelegramConfig,
   getWhatsappEstado, setWhatsappConfig, probarWhatsapp, crearPlantillasWhatsapp, getOrgBilling, getBillingUso, listarDestinatarios, guardarDestinatario, borrarDestinatario, enviarResumenDiario, getHorariosAvisos, setHorariosAvisos } from '../api'
 import { lista } from '../../lib/lista'
-import { getAdmin } from '../auth'
+import { getAdmin, isSuperAdmin } from '../auth'
 
 const PORTAL_BASE = 'https://flotadsp.com'
 
@@ -155,6 +155,12 @@ function WhatsAppCard() {
 
   const c = est?.config || {}
   const listo = est?.configurado
+  // SIN CONECTAR, ESTO ES COSA DEL SERVIDOR. Las credenciales de Meta son de la
+  // plataforma entera y se ponen con un comando en Fly: a un cliente no le
+  // sirve de nada verlo, y le enseñaba la infraestructura por dentro (visto el
+  // 16-09-2026 con una empresa recien registrada). Conectado, si le sirve:
+  // enciende y apaga sus avisos.
+  if (est && !listo && !isSuperAdmin()) return null
 
   return (
     <div className="card p-5">

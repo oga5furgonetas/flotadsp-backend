@@ -214,6 +214,10 @@ export default function Aparcamiento() {
   }, [byAssigned, byReported])
 
   const zones = (edit && draft) ? draft : (data?.layout?.zones || [])
+  // El plano generico que se crea solo para una nave nueva. Enseñarlo como
+  // «OPERATIVO · 26 plazas · 100 % disponible» era inventarse un aparcamiento
+  // que nadie ha dibujado (visto con una empresa recien registrada).
+  const plantilla = !!data?.layout?.plantilla && !edit
 
   // Métricas de cabecera y por zona
   const stats = useMemo(() => {
@@ -471,8 +475,13 @@ export default function Aparcamiento() {
       <header className="rise mb-3 flex flex-wrap items-center gap-x-6 gap-y-3 rounded-2xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
         <div className="flex items-center gap-2.5">
           <h1 className="font-display text-[19px] font-semibold tracking-[-0.02em] text-dark-50">{t('pk.title')} {center}</h1>
-          <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-300 ring-1 ring-emerald-500/25">{t('pk.operativo')}</span>
+          {plantilla ? (
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-200 ring-1 ring-amber-500/25">{t('pk.ejemplo')}</span>
+          ) : (
+            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-300 ring-1 ring-emerald-500/25">{t('pk.operativo')}</span>
+          )}
         </div>
+        {!plantilla && (
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
           <Metric n={stats.total} l={t('pk.m.total')} />
           <Metric n={stats.libre} l={t('pk.m.libres')} c="text-dark-200" />
@@ -483,6 +492,7 @@ export default function Aparcamiento() {
             <span className="text-[11.5px] leading-tight text-dark-500">{t('pk.m.disp')}</span>
           </div>
         </div>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <div className="relative">
             <Calendar size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dark-500" />
@@ -506,6 +516,15 @@ export default function Aparcamiento() {
         </div>
       </header>
 
+      {plantilla && (
+        <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-3">
+          <p className="min-w-0 flex-1 text-[13px] leading-relaxed text-dark-200">{t('pk.ejemplo.hint')}</p>
+          <button onClick={startEdit}
+            className="flex items-center gap-1.5 rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 px-3 py-1.5 text-[12px] font-semibold text-white">
+            <Pencil size={12} /> {t('pk.ejemplo.cta')}
+          </button>
+        </div>
+      )}
       {err && <div className="mb-3 flex items-center gap-2 rounded-xl border border-red-500/25 bg-red-500/[0.07] px-4 py-2.5 text-[13px] text-red-300"><ShieldAlert size={14} /> {err}</div>}
       {toast && <div className={`mb-3 rounded-xl border px-4 py-2.5 text-[13px] ${toast.ok ? 'border-emerald-500/25 bg-emerald-500/[0.07] text-emerald-300' : 'border-red-500/25 bg-red-500/[0.07] text-red-300'}`}>{toast.msg}</div>}
 

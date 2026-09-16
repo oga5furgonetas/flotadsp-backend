@@ -82,9 +82,9 @@ export default function Informes() {
         <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 max-w-[86ch] text-[13px] text-dark-400">
           Los dos salen del informe semanal de la nave.
           <span className="inline-flex items-center gap-1 text-emerald-400">
-            <CheckCircle2 size={12} /> Entran solos
+            <CheckCircle2 size={12} /> Entran solos con la extensión de Cortex
           </span>
-          — ya no hay que pegar nada.
+          — no hay que pegar nada.
         </p>
       </div>
 

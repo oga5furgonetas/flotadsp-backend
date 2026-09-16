@@ -9,7 +9,7 @@ import {
   PackageSearch, PackageCheck, MapPin, Timer, MapPinned, Gauge, Mail, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
   Briefcase, Store, UserCheck,
 } from 'lucide-react'
-import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
+import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco, esPlataforma } from './auth'
 import { getMe, contarPeticionesPendientes, contarCandidatosNuevos } from './api'
 import TrialBanner from './TrialBanner'
 import CommandPalette from './CommandPalette'
@@ -425,6 +425,8 @@ export default function PanelLayout() {
   const itemVisible = (it) => {
     const k = keyOf(it.to)
     if (k === 'vencimientos') return EXPIRY_KEYS.some((ek) => canSee(ek))
+    // La tienda de ropa es del negocio de FlotaDSP, no de la flota del cliente.
+    if (k === 'tienda' && !esPlataforma()) return false
     // Las órdenes de taller van con Talleres: quien puede ver los talleres
     // puede ver lo que está en ellos. Sin esto, `canSee('ordenes')` es false
     // para todo el que tenga permisos definidos —el permiso no existe en
@@ -460,6 +462,7 @@ export default function PanelLayout() {
     if (k === 'ordenes') return canSee('talleres')
     if (k === 'informes') return canSee('diarios') || canSee('whc')
     if (k === 'admin' || k === 'bandeja') return sa
+    if (k === 'tienda' && !esPlataforma()) return false
     if (k === 'usuarios') return sa || cm
     return canSee(k)
   }

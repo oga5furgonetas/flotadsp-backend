@@ -34,7 +34,9 @@ RUTA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "backend",
 
 # Depends() que ya traen la empresa dentro del JWT y fijan el contextvar.
 CON_SESION = {"get_current_user", "require_admin", "require_superadmin",
-              "require_any_auth", "require_driver", "get_current_admin"}
+              "require_any_auth", "require_driver", "get_current_admin",
+              # require_plataforma depende de require_admin: trae la empresa.
+              "require_plataforma"}
 # Llamadas que fijan la empresa a mano.
 FIJAN = {"_set_tenant_by_slug", "set_current_org_db", "_ot_por_token", "_apoyo_por_token", "_partner_auth",
          # `_tienda_por_token`: el enlace publico de la tienda lleva su

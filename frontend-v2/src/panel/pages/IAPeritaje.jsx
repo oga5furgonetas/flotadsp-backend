@@ -3,6 +3,7 @@ import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
 import { Loader2, BrainCircuit, RefreshCw, CheckCircle2, AlertTriangle, Clock, Image, Sparkles, X, ChevronLeft, ChevronRight, ThumbsUp, ThumbsDown, Pencil } from 'lucide-react'
 import { getHealth, getInspections, reanalyzeFailed, reanalyzeInspection, submitAiFeedback, rebuildFleetDamages, rebuildStatus } from '../api'
+import { isSuperAdmin } from '../auth'
 import BboxEditor from '../components/BboxEditor'
 import PolygonEditor from '../components/PolygonEditor'
 
@@ -161,7 +162,9 @@ export default function IAPeritaje() {
         </div>
       )}
 
-      {/* Motor IA */}
+      {/* Motor IA. Nombres de modelos y modos: sirven para diagnosticar, no
+          para usar la pantalla, y un cliente no tiene por que verlos. */}
+      {isSuperAdmin() && (
       <div className="card mb-5 p-5">
         <div className="mb-3 text-sm font-semibold text-dark-200">{t('ia.engine')}</div>
         {!health ? <Loader2 className="animate-spin text-dark-400" size={16} /> : (
@@ -173,6 +176,7 @@ export default function IAPeritaje() {
           </div>
         )}
       </div>
+      )}
 
       {/* Stats */}
       <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">

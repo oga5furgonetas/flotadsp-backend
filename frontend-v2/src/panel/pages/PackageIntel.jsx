@@ -833,7 +833,9 @@ export default function PackageIntel() {
 
       {/* KPIs */}
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Kpi icon={Activity} label="Health" value={ov ? `${ov.health}` : '—'} sub="/100" accent={ov && ov.health < 70 ? 'red' : 'emerald'} />
+        {/* Sin un paquete rastreado no hay salud que medir: «100/100» con cero
+            datos parece un sistema perfecto y es un sistema vacio. */}
+        <Kpi icon={Activity} label="Health" value={ov && ov.tracked ? `${ov.health}` : '—'} sub="/100" accent={ov && ov.tracked && ov.health < 70 ? 'red' : 'emerald'} />
         <Kpi icon={PackageSearch} label={t('px.kRastreados')} value={ov?.tracked?.toLocaleString(locale)} sub={t('px.kPaquetes')} />
         <Kpi icon={ShieldAlert} label={t('px.kMissing')} value={ov?.missing_now} sub={ov?.missing_today != null ? `${ov.missing_today} ${t('px.hoyMin')}` : ''} accent={ov?.missing_now ? 'red' : 'emerald'} />
         <Kpi icon={RefreshCw} label={t('px.kRecup')} value={ov?.recovery_pct != null ? `${ov.recovery_pct}%` : '—'} sub={ov?.avg_recovery_min != null ? `~${ov.avg_recovery_min} min` : ''} accent="emerald" />

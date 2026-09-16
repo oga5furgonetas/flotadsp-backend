@@ -763,7 +763,11 @@ export default function Dashboard() {
                 <> · <span className="text-amber-300/90">{t('ops.brief.sindatos')}</span></>
               )}.
             </>
-          ) : urgentTotal > 0
+          ) : fleet === 0
+            /* Sin una sola furgoneta, «la flota está en orden» es mentira: no
+               hay flota. Una empresa recien registrada lo leia el primer dia. */
+            ? t('ops.brief.empty')
+            : urgentTotal > 0
             ? (<><b className="font-semibold text-dark-50"><Count v={urgentTotal} /></b> {t('ops.brief.items')}.</>)
             : t('ops.brief.calm')}
           {availPct != null && (
