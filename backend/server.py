@@ -20729,6 +20729,14 @@ async def empleo_mover_candidato(cand_id: str, datos: dict = Body(...),
         cambios["notas"] = _empleo_texto(datos["notas"], 2000)
     if "motivo_descarte" in datos:
         cambios["motivo_descarte"] = _empleo_texto(datos["motivo_descarte"], 400)
+    # EL TELEFONO SE PUEDE ESCRIBIR A MANO: quien llega por JOIN suele dejarlo
+    # solo en el curriculum. Escrito por una persona deja de ser «del CV».
+    if "telefono" in datos:
+        tel = _telefono_limpio(datos["telefono"])
+        if datos["telefono"] and not tel:
+            raise HTTPException(400, "Ese telefono no parece completo")
+        cambios.update(telefono=tel, tel_clave=_telefono_digitos(tel) if tel else "",
+                       telefono_de=_empleo_texto(datos.get("telefono_de"), 20) or "a_mano")
     if not cambios:
         return c
     orden: dict = {"$set": {**cambios, "tocado_en": datetime.now(timezone.utc).isoformat(),
@@ -20742,7 +20750,10 @@ async def empleo_mover_candidato(cand_id: str, datos: dict = Body(...),
             "en": datetime.now(timezone.utc).isoformat(),
             "por": user.get("name") or user.get("username") or "",
             "de": c.get("fase") or "nuevo", "a": cambios["fase"]}}
-    await db.candidatos.update_one({"id": cand_id}, orden)
+    try:
+        await db.candidatos.update_one({"id": cand_id}, orden)
+    except DuplicateKeyError:
+        raise HTTPException(409, "Ese telefono ya lo tiene otro candidato de esta oferta")
     return await db.candidatos.find_one({"id": cand_id}, {"_id": 0, "expira_en": 0})
 
 

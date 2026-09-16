@@ -171,6 +171,17 @@ export default function Empleo() {
     } catch (e) { setError(e?.response?.data?.detail || t('empleo.errBorrar')) }
   }
 
+  /* El telefono escrito a mano. Se recarga la lista SIN cerrar la ficha: el
+     enlace de WhatsApp lo arma el servidor al listar (gotcha 47). */
+  const guardarTelefono = async (c, telefono) => {
+    const { data } = await moverCandidato(c.id, { telefono })
+    actualizar(c, data)
+    try {
+      const r = await getCandidatos({ oferta: sel?.id, center })
+      setCands(r.data.candidatos || [])
+    } catch { /* se queda con lo guardado */ }
+  }
+
   const guardarNotas = async (c, notas) => {
     try {
       const { data } = await moverCandidato(c.id, { notas })
@@ -347,7 +358,7 @@ export default function Empleo() {
               {ficha ? (
                 <FichaCandidato c={cands.find((x) => x.id === ficha.id) || ficha} oferta={sel} t={t}
                   onCerrar={() => setFicha(null)} onMover={mover} onContratar={contratar}
-                  onBorrar={borrar} onNotas={guardarNotas}
+                  onBorrar={borrar} onNotas={guardarNotas} onTelefono={guardarTelefono}
                   onRecargar={() => cargarCands(sel)} />
               ) : (
                 <div className="rounded-xl border border-dashed border-dark-800 p-6 text-center text-[12.5px] text-dark-600">
@@ -427,7 +438,9 @@ function Tarjeta({ c, t, activa, onAbrir, onArrastrar, onSoltar }) {
 
 /* ── La ficha completa ────────────────────────────────────────────────── */
 function FichaCandidato({ c, oferta, t, onCerrar, onMover, onContratar, onBorrar, onNotas,
-                         onRecargar }) {
+                         onRecargar, onTelefono }) {
+  const [tel, setTel] = useState('')
+  const [telErr, setTelErr] = useState('')
   const [notas, setNotas] = useState(c.notas || '')
   const [guardando, setGuardando] = useState(false)
   const idRef = useRef(c.id)
@@ -467,10 +480,22 @@ function FichaCandidato({ c, oferta, t, onCerrar, onMover, onContratar, onBorrar
             )}
           </a>
         )}
-        {!c.telefono && c.origen === 'join' && (
-          <span className="flex items-center gap-1.5 rounded-lg bg-dark-800/60 px-2.5 py-1.5 text-[12px] text-dark-400">
-            <Phone size={12} /> Sin teléfono: míralo en el CV o escríbele
-          </span>
+        {!c.telefono && (
+          <form className="flex items-center gap-1.5"
+            onSubmit={async (e) => {
+              e.preventDefault(); setTelErr('')
+              try { await onTelefono(c, tel); setTel('') } catch (x) {
+                setTelErr(x?.response?.data?.detail || 'No se pudo guardar.')
+              }
+            }}>
+            <input value={tel} onChange={(e) => setTel(e.target.value)} inputMode="tel"
+              placeholder="Sin teléfono: escríbelo"
+              className="w-40 rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12px] text-dark-100 outline-none focus:border-brand-500/40" />
+            <button disabled={!tel.trim()} className="rounded-lg px-2 py-1.5 text-dark-300 ring-1 ring-dark-700 disabled:opacity-40" aria-label="Guardar teléfono">
+              <Save size={12} />
+            </button>
+            {telErr && <span className="text-[11px] text-red-300">{telErr}</span>}
+          </form>
         )}
         {c.email && (
           <a href={`mailto:${c.email}`} className="flex items-center gap-1.5 rounded-lg bg-dark-800/60 px-2.5 py-1.5 text-[12px] font-medium text-dark-200 hover:bg-dark-800">

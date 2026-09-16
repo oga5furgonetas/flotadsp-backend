@@ -1,5 +1,5 @@
 {
-  "version": "2.88.0",
+  "version": "2.89.0",
   "ficheros": [
     "README.md",
     "background.js",
@@ -12,6 +12,6 @@
     "portal.js",
     "winiw.js"
   ],
-  "kb": 83,
+  "kb": 86,
   "generado": "2026-09-16"
 }
