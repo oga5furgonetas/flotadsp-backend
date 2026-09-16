@@ -9656,6 +9656,7 @@ def _imp_lee(filas: list) -> dict:
             "email": correo or None,
             "driver_id": (d.get("driver_id") or "").strip() or None,
             "center": (d.get("center") or "").strip() or None,
+            "centro_texto": (d.get("center") or "").strip(),
             "license_number": (d.get("license_number") or "").strip() or None,
             "fila": n,
         })
@@ -9698,6 +9699,12 @@ async def drivers_importar_prev(file: UploadFile = File(...), center: str = Form
             repetidos += 1
         else:
             nuevos += 1
+    conocidos = set(c.upper() for c in (await _centros_de_la_empresa()) if c)
+    # Un fichero de varias naves: se reparte por centro para que se elija cual
+    # entra. Es la misma pieza que usan las furgonetas.
+    centros = _grupos_por_centro(
+        [{"centro_texto": p["centro_texto"], "nueva": not p["ya_existe"], "ejemplo": p["name"]}
+         for p in r["personas"]], conocidos)
 
     return {
         "columnas_reconocidas": r["mapa"],
@@ -9710,11 +9717,15 @@ async def drivers_importar_prev(file: UploadFile = File(...), center: str = Form
         "muestra": r["personas"][:12],
         "centro_por_defecto": center,
         "sin_correo": sum(1 for p in r["personas"] if not p["email"]),
+        "centros": centros,
+        "centros_empresa": sorted(conocidos),
     }
 
 
 @api_router.post("/drivers/importar")
 async def drivers_importar(file: UploadFile = File(...), center: str = Form(""),
+                           centros: Optional[str] = Form(None),
+                           mapa: Optional[str] = Form(None),
                            user: dict = Depends(require_admin)):
     """Da de alta lo que no esté ya. Nunca pisa una ficha existente."""
     contenido = await file.read()
@@ -9745,8 +9756,20 @@ async def drivers_importar(file: UploadFile = File(...), center: str = Form(""),
             unico_centro = centros[0]
     except Exception:                                            # noqa: BLE001
         pass
-    nuevos, saltados = [], []
+    conocidos = set(c.upper() for c in (await _centros_de_la_empresa()) if c)
+    elegidos, destino = _eleccion_centros(centros, mapa, conocidos)
+    nuevos, saltados, fuera_seleccion = [], [], 0
     for p in r["personas"]:
+        clave = p.pop("centro_texto", "").upper()
+        if elegidos is not None and clave not in elegidos:
+            fuera_seleccion += 1
+            continue
+        # El centro, como CODIGO: el que se eligio para ese grupo, o el que se
+        # lee en el texto. Antes se guardaba «AMZL OGA5 SANTIAGO XPT» tal cual
+        # y esa persona no salia en las listas filtradas por OGA5 (gotcha 6).
+        codigo = destino.get(clave) or _veh_centro_de(clave, conocidos)
+        if codigo:
+            p["center"] = codigo
         existe = (p["email"] and p["email"] in ya) or \
             (not p["email"] and _imp_norm(p["name"]) in nombres_bd)
         if existe:
@@ -9784,7 +9807,7 @@ async def drivers_importar(file: UploadFile = File(...), center: str = Form(""),
             saltados = saltados + [None] * (len(nuevos) - metidos)
     logger.info("Conductores importados: %d nuevos, %d ya estaban", metidos, len(saltados))
     return {"importados": metidos, "ya_estaban": len(saltados),
-            "no_leidas": len(r["saltadas"]),
+            "no_leidas": len(r["saltadas"]), "fuera_seleccion": fuera_seleccion,
             "nombres": [d["name"] for d in nuevos][:50]}
 
 
@@ -23370,278 +23393,407 @@ def _load_workbook_reparado(content):
     return openpyxl.load_workbook(out, data_only=False)
 
 
+# ── IMPORTAR LA FLOTA, EN DOS PASOS ─────────────────────────────────────────
+# Lo que el primer dia hace un cliente es subir un Excel con sus furgonetas. Y
+# ese Excel casi nunca es solo suyo: el de Amazon trae las de toda la region,
+# el de la gestoria las de varias naves, y el centro viene escrito como
+# «AMZL OGA5 SANTIAGO XPT». El importador de antes lo hacia a ciegas:
+#   · el filtro por centro comparaba el texto EXACTO, asi que eligiendo OGA5 y
+#     con el fichero diciendo «AMZL OGA5 SANTIAGO XPT» no entraba NINGUNA
+#     furgoneta (gotcha 6), y el mensaje solo decia «600 omitidas»;
+#   · un centro que la empresa no tenia se guardaba tal cual, y esas furgonetas
+#     no salian luego en ninguna lista filtrada;
+#   · no habia forma de ver QUE traia el fichero antes de importarlo.
+# Ahora primero se PREVISUALIZA (que centros trae, cuantas son nuevas y cuantas
+# ya estan, que columnas se han entendido) y luego se importa SOLO lo elegido,
+# con cada centro del fichero llevado a uno de la empresa.
+
+_VEH_COLUMNAS = {
+    "license_plate": ("matricula", "license_plate", "matrícula", "license plate", "placa"),
+    "center": ("centro", "center", "nave", "estacion", "station"),
+    "brand": ("marca", "brand", "vehículo", "vehiculo", "fabricante"),
+    "model": ("modelo", "model"),
+    "color": ("color",),
+    "provider": ("proveedor", "provider", "renting", "empresa renting"),
+    "vehicle_type": ("tipo", "vehicle_type"),
+    "vin": ("vin", "bastidor", "numero de bastidor", "nº bastidor"),
+    "mileage": ("kilómetros", "kilometros", "km", "kms", "mileage", "kilometraje", "odometro"),
+    "itv_date": ("i.t.v.", "itv", "fecha itv", "proxima itv"),
+    "renting_end_date": ("vto. cont.renting.", "vto cont renting", "vto renting", "vencimiento renting"),
+    "renting_baja_date": ("fecha baja renting", "baja renting"),
+    "year": ("año", "year", "ano"),
+}
+
+
+def _veh_sin_tildes(txt: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", str(txt or ""))
+                   if unicodedata.category(c) != "Mn").strip().lower()
+
+
+def _veh_clave(plate) -> str:
+    """La matricula para COMPARAR: sin espacios ni guiones. «1234-ABC»,
+    «1234 abc» y «1234ABC» son la misma furgoneta."""
+    return re.sub(r"[^A-Z0-9]", "", str(plate or "").upper())
+
+
+def _veh_matricula(plate) -> str:
+    """Como se GUARDA una matricula nueva: la española como «1234 ABC» y el
+    resto en mayusculas sin guiones. En la base conviven «2829NGX» y
+    «3328 NFY»; lo que entra desde hoy entra de una sola forma."""
+    k = _veh_clave(plate)
+    if re.fullmatch(r"\d{4}[A-Z]{3}", k):
+        return "%s %s" % (k[:4], k[4:])
+    return re.sub(r"[\s-]+", " ", str(plate or "").upper()).strip()
+
+
+def _veh_fecha(val):
+    """DD/MM/AAAA, AAAA-MM-DD o una fecha de Excel -> AAAA-MM-DD."""
+    if val is None or val == "":
+        return None
+    if isinstance(val, datetime):
+        return val.strftime("%Y-%m-%d")
+    txt = str(val).strip()[:10]
+    for sep in ("/", "-", "."):
+        if sep in txt:
+            parts = txt.split(sep)
+            if len(parts) == 3:
+                try:
+                    if len(parts[0]) == 4:
+                        y, m, d = parts
+                    else:
+                        d, m, y = parts
+                    y = int(y)
+                    if y < 100:
+                        y += 2000
+                    return f"{y:04d}-{int(m):02d}-{int(d):02d}"
+                except (TypeError, ValueError):
+                    return None
+    return None
+
+
+def _veh_columnas(headers: list) -> dict:
+    """{campo: indice} de las cabeceras que se entienden."""
+    norm = [_veh_sin_tildes(h) for h in headers]
+    fuera = {}
+    for campo, alias in _VEH_COLUMNAS.items():
+        for a in alias:
+            a = _veh_sin_tildes(a)
+            if a in norm:
+                fuera[campo] = norm.index(a)
+                break
+    return fuera
+
+
+def _veh_fila(cols: dict, row) -> dict:
+    """Lo que dice UNA fila, ya limpio. Solo los campos que traen valor."""
+    def v(campo):
+        i = cols.get(campo)
+        if i is None or i >= len(row) or row[i] is None:
+            return ""
+        return row[i] if isinstance(row[i], datetime) else str(row[i]).strip()
+    campos = {}
+    for campo in ("brand", "model", "color", "provider", "vehicle_type"):
+        if v(campo):
+            campos[campo] = v(campo)
+    vin = re.sub(r"\s", "", str(v("vin"))).upper()
+    if len(vin) == 17:          # un VIN tiene 17 caracteres; otra cosa no se guarda
+        campos["vin"] = vin
+    km = v("mileage")
+    if km:
+        try:
+            n = int(float(str(km).replace(".", "").replace(",", "").replace(" ", "")))
+            if 0 < n < 1_000_000:
+                campos["mileage"] = n
+        except (TypeError, ValueError):
+            pass
+    for campo in ("itv_date", "renting_end_date", "renting_baja_date"):
+        f = _veh_fecha(v(campo))
+        if f:
+            campos[campo] = f
+    try:
+        y = int(float(str(v("year"))))
+        if 1990 <= y <= 2100:
+            campos["year"] = y
+    except (TypeError, ValueError):
+        pass
+    return {"plate": str(v("license_plate")).upper().strip(),
+            "centro_texto": str(v("center")).strip(), "campos": campos}
+
+
+def _veh_centro_de(texto: str, conocidos) -> str:
+    """El codigo de centro que se lee en el texto del fichero, o "".
+
+    Con la empresa ya dada de alta manda `_centro_norm` (no adivina: solo si
+    hay EXACTAMENTE un codigo conocido). Si no conoce ninguno, se sugiere el
+    unico codigo con forma de nave que aparezca («AMZL XYZ1 CIUDAD» -> XYZ1):
+    es solo una SUGERENCIA que la persona confirma antes de importar.
+    """
+    t = str(texto or "").strip().upper()
+    if not t:
+        return ""
+    n = _centro_norm(t, conocidos or None)
+    if conocidos and n in conocidos:
+        return n
+    hallados = set(_CENTRO_RE.findall(t))
+    return hallados.pop() if len(hallados) == 1 else ""
+
+
+def _grupos_por_centro(items: list, conocidos) -> list:
+    """Lo que trae un fichero, repartido por el centro que dice cada fila.
+
+    Es la pieza COMUN de todas las importaciones (furgonetas, conductores...):
+    cada una le pasa sus filas ya leidas como {centro_texto, nueva, ejemplo} y
+    recibe un grupo por centro con su codigo sugerido, si ya es de la empresa y
+    cuantas son nuevas. Las filas sin centro forman su propio grupo y van al
+    final: no se pierden nunca (gotcha 30).
+    """
+    grupos = {}
+    for it in items:
+        texto = str(it.get("centro_texto") or "").strip()
+        clave = texto.upper()
+        g = grupos.setdefault(clave, {
+            "clave": clave, "texto": texto,
+            "sugerido": _veh_centro_de(clave, conocidos),
+            "filas": 0, "nuevas": 0, "ya_estan": 0, "ejemplos": []})
+        g["filas"] += 1
+        if it.get("nueva"):
+            g["nuevas"] += 1
+        else:
+            g["ya_estan"] += 1
+        if len(g["ejemplos"]) < 3 and it.get("ejemplo"):
+            g["ejemplos"].append(str(it["ejemplo"]))
+    for g in grupos.values():
+        g["conocido"] = bool(g["sugerido"]) and bool(conocidos) and g["sugerido"] in conocidos
+    return sorted(grupos.values(), key=lambda g: (g["clave"] == "", -g["filas"], g["clave"]))
+
+
+def _eleccion_centros(centros, mapa, conocidos):
+    """(elegidos, destino) de lo que la persona marco en la vista previa.
+
+    `elegidos` es None cuando no hubo vista previa (se importa todo, como
+    antes). Un destino que no es de la empresa se rechaza: dejaria esas filas en
+    un centro que no sale en ningun selector.
+    """
+    try:
+        elegidos = None if centros is None else {str(x).strip().upper() for x in json.loads(centros)}
+        destino = {} if not mapa else {str(k).strip().upper(): str(v).strip().upper()
+                                       for k, v in json.loads(mapa).items() if v}
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(400, "La selección de centros no es válida. Vuelve a elegir el fichero.")
+    fuera = sorted(set(destino.values()) - set(conocidos or ()))
+    if fuera:
+        raise HTTPException(400, "Estos centros no son de tu empresa: %s. Añádelos primero."
+                            % ", ".join(fuera))
+    return elegidos, destino
+
+
+def _veh_agrupar(filas: list, claves_flota: set, conocidos) -> dict:
+    """Lo que trae el fichero de furgonetas, por centro. Es la vista previa."""
+    vistas, items = set(), []
+    sin_matricula = repetidas = 0
+    for f in filas:
+        k = _veh_clave(f["plate"])
+        if not k:
+            sin_matricula += 1
+            continue
+        if k in vistas:
+            repetidas += 1
+            continue
+        vistas.add(k)
+        items.append({"centro_texto": f["centro_texto"], "nueva": k not in claves_flota,
+                      "ejemplo": f["plate"]})
+    return {"centros": _grupos_por_centro(items, conocidos), "sin_matricula": sin_matricula,
+            "repetidas": repetidas, "matriculas": len(vistas)}
+
+
+async def _veh_leer_fichero(file: UploadFile):
+    """(cabeceras, filas) de un Excel o CSV. La cabecera no tiene por que ir en
+    la primera fila: los Excel de gestoria traen logo y titulo delante."""
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:
+        raise HTTPException(413, "El fichero no puede pasar de 20 MB")
+    es_csv = (file.filename or "").lower().endswith((".csv", ".txt"))
+    try:
+        if es_csv:
+            all_rows = [tuple(f) for f in _read_table_any(content, file.filename)]
+        else:
+            import openpyxl
+            try:
+                wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+            except Exception:                                    # noqa: BLE001
+                try:
+                    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=False)
+                except Exception:                                # noqa: BLE001
+                    # El Excel de Amazon Fleet trae la hoja de estilos rota.
+                    wb = _load_workbook_reparado(content)
+            hojas = [w for w in wb.worksheets if (w.max_row or 0) > 0]
+            if not hojas:
+                raise HTTPException(400, "El Excel no tiene hojas con datos")
+            # La hoja con MAS matriculas, no la activa ni la mas larga: un
+            # Excel con una hoja de instrucciones larga delante se equivocaba.
+            def _puntua(w):
+                filas = list(w.iter_rows(values_only=True, max_row=20))
+                return (max((len(_veh_columnas([str(c or "") for c in r])) for r in filas), default=0),
+                        w.max_row or 0)
+            ws = max(hojas, key=_puntua)
+            try:
+                ws.reset_dimensions()
+            except Exception:                                    # noqa: BLE001
+                pass
+            all_rows = list(ws.iter_rows(values_only=True))
+    except HTTPException:
+        raise
+    except Exception as e:                                       # noqa: BLE001
+        logger.warning("Importar flota: no se pudo leer %s: %s", file.filename, e)
+        raise HTTPException(400, "No se ha podido leer el fichero. Guárdalo como Excel (.xlsx) o CSV y vuelve a subirlo.")
+    all_rows = [r for r in all_rows if r is not None and any(c is not None and str(c).strip() for c in r)]
+    if not all_rows:
+        raise HTTPException(400, "El fichero no tiene filas con datos")
+    fila_cab = max(range(min(15, len(all_rows))),
+                   key=lambda i: len(_veh_columnas([str(c or "") for c in all_rows[i]])), default=0)
+    headers = [str(c).strip() if c is not None else "" for c in all_rows[fila_cab]]
+    cols = _veh_columnas(headers)
+    if "license_plate" not in cols:
+        raise HTTPException(
+            400, "No encuentro la columna de la matrícula. Hace falta una columna que se "
+                 "llame «Matrícula», «Matricula» o «License plate».")
+    return headers, cols, all_rows[fila_cab + 1:]
+
+
+async def _veh_contexto():
+    """Centros de la empresa y matriculas que ya tiene."""
+    conocidos = set(c.upper() for c in (await _centros_de_la_empresa()) if c)
+    flota = {}
+    async for v in db.vehicles.find({"status": {"$ne": "deleted"}},
+                                    {"_id": 0, "id": 1, "license_plate": 1, "center": 1}):
+        k = _veh_clave(v.get("license_plate"))
+        if k:
+            flota[k] = v
+    return conocidos, flota
+
+
+@api_router.post("/import/vehicles/previsualizar")
+async def import_vehicles_previsualizar(file: UploadFile = File(...),
+                                        _=Depends(require_admin)):
+    """Que trae el fichero, SIN importar nada."""
+    headers, cols, filas_crudas = await _veh_leer_fichero(file)
+    conocidos, flota = await _veh_contexto()
+    filas = [_veh_fila(cols, r) for r in filas_crudas]
+    res = _veh_agrupar(filas, set(flota), conocidos)
+    usadas = set(cols.values())
+    return {
+        **res,
+        "centros_empresa": sorted(conocidos),
+        "flota_actual": len(flota),
+        "columnas": sorted(cols),
+        # Lo que se ignora se DICE: si su columna de kilometros se llama de
+        # una forma que no conocemos, que lo vea antes de importar.
+        "ignoradas": [h for i, h in enumerate(headers) if h and i not in usadas][:30],
+        "nombre": file.filename,
+    }
+
+
 @api_router.post("/import/vehicles")
 async def import_vehicles(
     file: UploadFile = File(...),
     center_filter: Optional[str] = Form(None),
     crear: bool = Form(False),
+    centros: Optional[str] = Form(None),
+    mapa: Optional[str] = Form(None),
     user: dict = Depends(require_admin)
 ):
-    """Importa flota desde Excel o CSV.
+    """Importa la flota desde Excel o CSV.
 
-    DOS USOS DISTINTOS, y por eso `crear` existe:
+    Con la vista previa hecha llegan `centros` (las claves del fichero que se
+    quieren, "" = filas sin centro) y `mapa` ({clave: centro de la empresa}).
+    Sin ellos se comporta como antes, pero el filtro por centro compara el
+    CODIGO y no el texto.
 
-      · El Excel de Amazon trae 600 furgonetas de toda la region, de las que
-        solo unas pocas son tuyas. Ahi lo que se quiere es ACTUALIZAR las que
-        ya tienes y no dar de alta las 600 ajenas. Es el comportamiento por
-        defecto y no se toca.
-      · Una empresa que empieza sube SU flota. Ahi no hay nada que actualizar:
-        si no se crean, no pasa nada y el mensaje decia solo "3 omitidos", que
-        no explica nada. Con `crear=true` se dan de alta.
-
-    Poner `crear` por defecto a false es deliberado: crear de mas ensucia la
-    flota con furgonetas que no son tuyas y hay que borrarlas una a una;
-    no crear solo obliga a repetir la importacion marcando la casilla.
+    `crear`: el Excel de Amazon trae las furgonetas de toda la region, asi que
+    por defecto solo se ACTUALIZAN las que ya tienes; una empresa que sube SU
+    flota marca crear para darlas de alta.
     """
-    content = await file.read()
-    # Un CSV tambien vale. El importador solo leia Excel, y hay empresas que
-    # tienen la flota en una hoja exportada a CSV: pedirles que la conviertan
-    # es trasladarles trabajo que se hace aqui en tres lineas.
-    es_csv = (file.filename or "").lower().endswith((".csv", ".txt"))
-    all_rows = None
-    if es_csv:
-        try:
-            all_rows = [tuple(f) for f in _read_table_any(content, file.filename)]
-        except Exception as e:                                   # noqa: BLE001
-            raise HTTPException(400, "No se pudo leer el fichero: %s" % str(e)[:120])
-        if not all_rows:
-            raise HTTPException(400, "El fichero no tiene filas legibles")
+    headers, cols, filas_crudas = await _veh_leer_fichero(file)
+    conocidos, flota = await _veh_contexto()
+    elegidos, destino = _eleccion_centros(centros, mapa, conocidos)
+    filtro = _centro_norm(center_filter, conocidos) if center_filter and center_filter != "Todos" else ""
+    unico = next(iter(conocidos)) if len(conocidos) == 1 else ""
 
-    try:
-        # Con un CSV las filas ya están leídas arriba: openpyxl no pinta nada
-        # aquí, y sus tres intentos de carga fallarían uno detrás de otro.
-        if not es_csv:
-            import openpyxl
-            wb = None
-            # Intento 1: carga normal con data_only
-            try:
-                wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
-            except Exception as e1:
-                # Intento 2: sin data_only (evita leer la hoja de estilos calculada)
-                try:
-                    wb = openpyxl.load_workbook(io.BytesIO(content), data_only=False)
-                except Exception as e2:
-                    # Intento 3: reparar el XML de estilos corrupto del Excel de Amazon
-                    wb = _load_workbook_reparado(content)
-            if wb is None:
-                raise HTTPException(status_code=400, detail="No se pudo leer el Excel")
-            # Elegir la hoja con MÁS filas (no siempre es la activa)
-            hojas_validas = [w for w in wb.worksheets if (w.max_row or 0) > 0]
-            if not hojas_validas:
-                raise HTTPException(status_code=400, detail="El Excel no tiene hojas con datos")
-            ws = max(hojas_validas, key=lambda w: w.max_row or 0)
-            # Forzar recálculo de dimensiones por si vienen mal declaradas
-            try:
-                ws.reset_dimensions()
-            except Exception:
-                pass
-            # Leer todas las filas como valores
-            all_rows = list(ws.iter_rows(values_only=True))
-        # Filtrar filas completamente vacías al principio
-        all_rows = [r for r in all_rows if r is not None]
-        if not all_rows or len(all_rows) < 1:
-            raise HTTPException(status_code=400, detail="El fichero no tiene filas legibles")
-        # LA CABECERA NO SIEMPRE ESTA EN LA PRIMERA FILA. Los Excel de gestoria
-        # traen el logo, el mes y un par de filas en blanco delante, y asumiendo
-        # `all_rows[0]` el importador respondia "no se detectaron cabeceras" —
-        # que es verdad, pero no ayuda a nadie. Se busca la fila que MAS
-        # columnas conocidas tenga, igual que hace el de conductores.
-        _CLAVES = ("matricula", "license_plate", "matrícula", "centro", "center",
-                   "marca", "brand", "modelo", "model", "vin", "bastidor")
-        def _cuantas(fila):
-            n = 0
-            for c in fila:
-                t = str(c or "").strip().lower()
-                if t and any(k in t for k in _CLAVES):
-                    n += 1
-            return n
-        _fila_cab = max(range(min(15, len(all_rows))),
-                        key=lambda i: _cuantas(all_rows[i]), default=0)
-        if _cuantas(all_rows[_fila_cab]) == 0:
-            _fila_cab = 0
-        headers = [str(c).strip().lower() if c is not None else ""
-                   for c in all_rows[_fila_cab]]
-        all_rows = all_rows[_fila_cab:]
-        if not any(headers):
-            raise HTTPException(
-                status_code=400,
-                detail="No se han encontrado las cabeceras. Hace falta una columna de "
-                       "matrícula — puede llamarse «Matrícula», «Matricula» o "
-                       "«License plate».")
-    except HTTPException:
-        raise
-    except Exception as e:
-        import traceback
-        logger.error(f"IMPORT-ERR lectura Excel: {e}\n{traceback.format_exc()}")
-        raise HTTPException(status_code=400, detail=f"Error leyendo Excel: {e}")
-
-    import unicodedata
-    def _strip_accents(txt):
-        return "".join(c for c in unicodedata.normalize("NFD", txt) if unicodedata.category(c) != "Mn")
-    # Normalizar cabeceras: minúsculas y sin tildes
-    headers_norm = [_strip_accents(h) for h in headers]
-
-    def col(row, *names):
-        for name in names:
-            key = _strip_accents(name.lower())
-            if key in headers_norm:
-                idx = headers_norm.index(key)
-                v = row[idx] if idx < len(row) else None
-                return str(v).strip() if v is not None else ""
-        return ""
-
-    imported = 0
-    updated = 0
-    skipped = 0
-    no_estaban = 0
-    errors = []
-
-    unico_centro_veh = ""
-    try:
-        _org = await get_org(user.get("org_id"))
-        _cs = [c for c in ((_org or {}).get("centers") or []) if c]
-        if len(_cs) == 1:
-            unico_centro_veh = _cs[0]
-    except Exception:                                            # noqa: BLE001
-        pass
-
-    # Precargar todas las furgonetas indexadas por matrícula normalizada (sin espacios)
-    _all_vehicles = await db.vehicles.find({}).to_list(10000)
-    _plate_map = {}
-    for _v in _all_vehicles:
-        _key = (_v.get("license_plate","") or "").replace(" ","").upper()
-        if _key:
-            _plate_map[_key] = _v
-
-    _diag_count = 0
-    _diag_examples = []
-    for row in all_rows[1:]:
-        if not any(c is not None and str(c).strip() for c in row):
-            continue
-        plate = col(row, "matricula", "license_plate", "matrícula").upper()
-        if not plate:
+    imported = updated = sin_cambios = skipped = no_estaban = fuera_seleccion = 0
+    errors, vistas = [], set()
+    ahora = datetime.now(timezone.utc).isoformat()
+    for r in filas_crudas:
+        f = _veh_fila(cols, r)
+        k = _veh_clave(f["plate"])
+        if not k:
             skipped += 1
             continue
+        if k in vistas:          # la misma matricula dos veces en el fichero
+            skipped += 1
+            continue
+        vistas.add(k)
+        clave = f["centro_texto"].upper()
+        if elegidos is not None and clave not in elegidos:
+            fuera_seleccion += 1
+            continue
+        centro = destino.get(clave) or _veh_centro_de(clave, conocidos) or (unico if not clave else "")
+        if elegidos is None and filtro and centro != filtro:
+            fuera_seleccion += 1
+            continue
+        campos = dict(f["campos"])
+        if centro:
+            campos["center"] = centro
+        elif f["centro_texto"]:
+            campos["center"] = f["centro_texto"]
         try:
-            center = col(row, "centro", "center")
-            if center_filter and center != center_filter:
-                skipped += 1
-                continue
-            # Buscar usando el mapa normalizado precargado
-            plate_nospace = plate.replace(" ", "").upper()
-            existing = _plate_map.get(plate_nospace)
-            if len(_diag_examples) < 8:
-                _diag_examples.append({"excel_plate": plate, "normalizada": plate_nospace, "encontrada_en_bd": bool(existing)})
+            existing = flota.get(k)
             if existing:
-                plate = existing.get("license_plate", plate)
-
-            # Construir solo los campos que vienen con valor en el Excel
-            campos = {}
-            field_map = [
-                (["marca","brand","vehículo","vehiculo"], "brand"),
-                (["modelo","model"], "model"),
-                (["color"], "color"),
-                (["centro","center"], "center"),
-                (["proveedor","provider"], "provider"),
-                (["tipo","vehicle_type"], "vehicle_type"),
-            ]
-            for names, field in field_map:
-                val = col(row, *names)
-                if val:
-                    campos[field] = val
-            km_val = col(row, "kilómetros", "kilometros", "km", "mileage")
-            if km_val:
-                try:
-                    campos["mileage"] = int(float(str(km_val).replace(".","").replace(",","").replace(" ","")))
-                except Exception:
-                    pass
-            # Fechas de ITV y renting (formato Excel DD/MM/YYYY -> guardamos tal cual y normalizada ISO)
-            def _parse_fecha(val):
-                if not val:
-                    return None
-                txt = str(val).strip()[:10]
-                for sep in ["/", "-"]:
-                    if sep in txt:
-                        parts = txt.split(sep)
-                        if len(parts) == 3:
-                            try:
-                                if len(parts[0]) == 4:  # YYYY-MM-DD
-                                    y, m, d = parts
-                                else:  # DD/MM/YYYY
-                                    d, m, y = parts
-                                return f"{int(y):04d}-{int(m):02d}-{int(d):02d}"
-                            except Exception:
-                                return None
-                return None
-            itv = _parse_fecha(col(row, "i.t.v.", "itv", "fecha itv"))
-            if itv:
-                campos["itv_date"] = itv
-            vto_renting = _parse_fecha(col(row, "vto. cont.renting.", "vto cont renting", "vto renting", "vencimiento renting"))
-            if vto_renting:
-                campos["renting_end_date"] = vto_renting
-            baja_renting = _parse_fecha(col(row, "fecha baja renting", "baja renting"))
-            if baja_renting:
-                campos["renting_baja_date"] = baja_renting
-            yr = col(row, "año", "year")
-            if yr:
-                try: campos["year"] = int(yr)
-                except Exception: pass
-
-            if existing:
-                if campos:
-                    campos["updated_at"] = datetime.now(timezone.utc)
-                    await db.vehicles.update_one({"license_plate": plate}, {"$set": campos})
+                # Solo cuenta como actualizada si algo CAMBIO: repetir la misma
+                # importacion decia «3 actualizadas» sin haber tocado nada.
+                res = await db.vehicles.update_one({"id": existing["id"]}, {"$set": campos})                     if campos else None
+                if res is not None and res.modified_count:
+                    await db.vehicles.update_one({"id": existing["id"]}, {"$set": {"updated_at": ahora}})
                     updated += 1
                 else:
-                    skipped += 1
+                    sin_cambios += 1
                 continue
-
-            # No esta en tu flota. Se crea solo si te lo has pedido.
             if not crear:
                 no_estaban += 1
-                skipped += 1
                 continue
-            nueva = {
-                "id": str(uuid.uuid4()), "license_plate": plate,
-                "status": "active",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-                **campos,
-            }
-            # Si el fichero no trae centro y la empresa solo tiene uno, ese.
-            # Sin centro, una furgoneta no sale en ninguna lista filtrada.
-            if not nueva.get("center") and unico_centro_veh:
-                nueva["center"] = unico_centro_veh
-            await db.vehicles.insert_one(nueva)
+            nueva = {"id": str(uuid.uuid4()), "license_plate": _veh_matricula(f["plate"]), "status": "active",
+                     "created_at": ahora, "updated_at": ahora, "origen": "importacion", **campos}
+            await db.vehicles.insert_one(dict(nueva))
+            flota[k] = nueva
             imported += 1
         except DuplicateKeyError:
             # Dos importaciones a la vez con la misma fila: ya esta dada de
-            # alta, que es lo que se queria. No es un error de la fila.
+            # alta, que es lo que se queria.
             skipped += 1
-        except Exception as row_err:
-            errors.append(f"{plate}: {str(row_err)[:80]}")
+        except Exception as row_err:                             # noqa: BLE001
+            errors.append(f"{f['plate']}: {str(row_err)[:80]}")
             skipped += 1
-            continue
 
-    return {
-        "imported": imported,
-        "updated": updated,
-        "skipped": skipped,
-        "errors": errors[:10],
-        "diag_total_filas": len(all_rows),
-        "diag_furgonetas_bd": len(_plate_map),
-        "diag_ejemplos_excel": _diag_examples,
-        "no_estaban": no_estaban,
-        # El mensaje tiene que decir QUE HACER. «3 omitidos» es verdad y no
-        # sirve de nada: quien sube su flota entera y ve eso cree que la
-        # aplicación no funciona, y no vuelve a intentarlo.
-        "message": (
-            f"{imported} creadas, {updated} actualizadas, {skipped} omitidas"
-            + (f". {no_estaban} no estaban en tu flota: si este fichero ES tu flota, "
-               f"vuelve a subirlo marcando «dar de alta las que no estén»."
-               if no_estaban and not crear else "")
-        )
-    }
+    def _n(n, uno, varios):
+        return "%d %s" % (n, uno if n == 1 else varios)
+    partes = []
+    if imported:
+        partes.append(_n(imported, "dada de alta", "dadas de alta"))
+    if updated:
+        partes.append(_n(updated, "actualizada", "actualizadas"))
+    if sin_cambios:
+        partes.append(_n(sin_cambios, "ya estaba al día", "ya estaban al día"))
+    if fuera_seleccion:
+        partes.append(_n(fuera_seleccion, "de otros centros sin tocar", "de otros centros sin tocar"))
+    if skipped:
+        partes.append(_n(skipped, "fila sin matrícula o repetida", "filas sin matrícula o repetidas"))
+    msg = (", ".join(partes) or "No había nada que importar").capitalize()
+    if no_estaban and not crear:
+        msg += (f". {no_estaban} no estaban en tu flota: si son tuyas, vuelve a importar "
+                f"marcando «dar de alta las que no estén».")
+    return {"imported": imported, "updated": updated, "sin_cambios": sin_cambios, "skipped": skipped,
+            "no_estaban": no_estaban, "fuera_seleccion": fuera_seleccion,
+            "errors": errors[:10], "message": msg}
 
 
 # =========================

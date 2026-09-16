@@ -1157,6 +1157,9 @@ export default function Conductores() {
   const [q, setQ] = useState('')
   const [modal, setModal] = useState(null)
   const [verImportar, setVerImportar] = useState(false) // null | { driver: obj|null }
+  // /panel/conductores?importar=1 abre directamente la importación.
+  const [paramsImp] = useSearchParams()
+  useEffect(() => { if (paramsImp.get('importar')) setVerImportar(true) }, [paramsImp])
   const [telCortex, setTelCortex] = useState(false)
   const completarTelefonos = async () => {
     setTelCortex(true)
@@ -1285,8 +1288,10 @@ Cancelar: es otra persona, crear una ficha nueva.`)) {
       </header>
 
       {verImportar && (
-        <div className="mb-5">
-          <ImportarConductores center={center} alTerminar={() => { setVerImportar(false); load() }} />
+        <div className="card mb-5 p-5">
+          {/* Al terminar solo se recarga la lista: cerrarlo escondia el
+              resultado antes de poder leerlo. */}
+          <ImportarConductores center={center} alTerminar={() => load()} />
         </div>
       )}
 

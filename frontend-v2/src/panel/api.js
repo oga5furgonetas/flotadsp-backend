@@ -337,12 +337,21 @@ export const uploadDailyReport = (file) => _subir('/metrics/upload-daily', file)
 export const getDailyWeek = (center, desde, hasta) => api.get('/metrics/daily-week', { params: { center, desde, hasta } })
 export const getRoutePlanAvailable = (center) => api.get('/metrics/routeplan-available', { params: { center } })
 export const getDriverRouteHistory = (tid) => api.get(`/metrics/driver-history/${encodeURIComponent(tid)}`)
-export const importVehicles = (file, center, crear) => {
+export const importVehicles = (file, center, crear, eleccion) => {
   const fd = new FormData()
   fd.append('file', file, file.name)
   if (center && center !== 'Todos') fd.append('center_filter', center)
   if (crear) fd.append('crear', 'true')
+  // Con la vista previa hecha: que centros del fichero y a donde va cada uno.
+  if (eleccion?.centros) fd.append('centros', JSON.stringify(eleccion.centros))
+  if (eleccion?.mapa) fd.append('mapa', JSON.stringify(eleccion.mapa))
   return api.post('/import/vehicles', fd, { timeout: 120000, headers: { 'Content-Type': undefined } })
+}
+// Que trae el fichero, por centro, SIN importar nada.
+export const previsualizarVehiculos = (file) => {
+  const fd = new FormData()
+  fd.append('file', file, file.name)
+  return api.post('/import/vehicles/previsualizar', fd, { timeout: 120000, headers: { 'Content-Type': undefined } })
 }
 
 /* ── Turnos ── */
