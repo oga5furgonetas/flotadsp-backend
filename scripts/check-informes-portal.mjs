@@ -173,6 +173,264 @@ ok(/async function bajarInformesPendientes\(\)\s*\{\s*await deducirYGuardar\(\)/
     'la traza de cada intento vuelve a cortar la URL por el final, que es la firma')
 }
 
+/* ── LAS INVESTIGACIONES DE DNR SON OTRO FICHERO DE LA MISMA CARPETA ──────
+   `DNR_Investigations_ES-TDSL-OGA5.html` va al lado del Daily Report y se pide
+   igual, pero NO lleva fecha en el nombre —es siempre el mismo y Amazon lo
+   sobrescribe con las que siguen abiertas—, así que no se puede deducir: o se
+   reconoce el enlace tal cual aparece, o no se pide nunca.
+
+   Se ejecuta el `esInforme` DE VERDAD de dsp.js, no una copia (gotcha 40): una
+   copia deja de probar el código que corre en cuanto alguien toca el original.
+   Y se comprueba que se ha cargado, porque un reconocedor que no llega a
+   ejecutarse pasaría en verde sin mirar nada. */
+{
+  const dsp = readFileSync(new URL('../cortex-extension/dsp.js', import.meta.url), 'utf8')
+  const iD = dsp.indexOf('const RE_DIARIO')
+  const jD = dsp.indexOf('const pedidos')
+  ok(iD > 0 && jD > iD, 'no se encuentra el reconocedor de informes en dsp.js')
+  let esInforme
+  if (iD > 0 && jD > iD) {
+    try {
+      esInforme = new Function(`${dsp.slice(iD, jD)}; return esInforme`)()
+    } catch (e) { ok(false, `el reconocedor de dsp.js no carga: ${e.message}`) }
+  }
+  ok(typeof esInforme === 'function',
+    'esInforme no se ha cargado: nada de lo de abajo se habría probado')
+  if (typeof esInforme === 'function') {
+    const O = 'https://logistics.amazon.es/es/tdsl/oga5/2026/week-37'
+    ok(esInforme(`${O}/DNR_Investigations_ES-TDSL-OGA5.html`),
+      'no se reconoce el fichero de investigaciones: no se pediría nunca')
+    ok(esInforme(`${O}/ES-TDSL-OGA5-Daily-Report_2026-09-12_Sat.html`),
+      'se ha dejado de reconocer el Daily Report al añadir el de investigaciones')
+    /* Y lo que NO es ninguno de los dos se queda fuera: pedir de más es pedir,
+       con la sesión de la nave, páginas que no sabemos leer. */
+    ok(!esInforme(`${O}/ES-TDSL-OGA5-Week37-Contact-Compliance-report.html`),
+      'se reconoce un informe que todavía no sabemos leer')
+    ok(!esInforme(`${O}/DNR_Investigations_ES-TDSL-OGA5.pdf`),
+      'solo se piden los .html')
+  }
+
+  /* Y que al mandarlo se le ponga el TIPO que es. El backend guarda por tipo:
+     mandar las investigaciones como 'diario' las metería en el parser del
+     Daily Report, que no las reconoce — y se perderían en silencio. */
+  // A LA LINEA QUE ES, no a la primera que se llame `tipo`. Buscando solo
+  // `const tipo = ` este control cogio una variable nueva de otra funcion y
+  // reviento con «r is not defined»: un control que falla por el nombre de
+  // una variable ajena no protege nada, solo estorba.
+  const iT = src.indexOf('function lectorDe(')
+  ok(iT > 0, 'background.js ya no decide el tipo del informe que manda')
+  if (iT > 0) {
+    const jT = src.indexOf(String.fromCharCode(10) + '}', iT)
+    let tipoDe
+    try {
+      tipoDe = new Function(`${src.slice(iT, jT + 2)}; return lectorDe`)()
+    } catch (e) { ok(false, `la decisión del tipo no carga: ${e.message}`) }
+    if (tipoDe) {
+      ok(tipoDe('https://x/es/tdsl/oga5/2026/week-37/DNR_Investigations_ES-TDSL-OGA5.html') === 'dnr_inv',
+        'las investigaciones se mandarían como diario y el backend no las reconocería')
+      ok(tipoDe('https://x/es/tdsl/oga5/2026/week-37/ES-TDSL-OGA5-Daily-Report_2026-09-12_Sat.html') === 'diario',
+        'el Daily Report ha dejado de mandarse como diario')
+      /* Y LO QUE NO SABEMOS LEER NO SE PIDE. Antes todo lo que no fuera
+         `DNR_Investigations` se mandaba como 'diario', el backend lo rechazaba
+         y el hueco de bajada se perdia — con una firma que caduca en media
+         hora, un hueco perdido es un informe que ese dia no entra. Medido el
+         15-09-2026: 4 de las 12 bajadas de una vuelta se iban en DWC-IADC, y se
+         volvian a pedir en la vuelta siguiente porque cada firma es otra URL. */
+      for (const nada of [
+        'https://x/es/tdsl/oga5/2026/week-38/ES-TDSL-OGA5-DWC-IADC-Report_2026-38.html',
+        'https://x/es/tdsl/oga5/2026/week-37/ES-TDSL-OGA5-Week37-Contact-Compliance-report.html',
+        'https://x/es/tdsl/oga5/2026/week-37/ES-TDSL-OGA5-Week37-Customer-Escalation-report.pdf']) {
+        ok(tipoDe(nada) === null, `se sigue bajando ${nada.split('/').pop()}, que nadie sabe leer`)
+      }
+      ok(/sinLector\+\+/.test(src), 'los ficheros sin lector ya no se descartan de la cola')
+    }
+  }
+}
+
+/* ── LOS INFORMES DE LAS TRES NAVES ─────────────────────────────
+   El portal firma los enlaces por nave y la peticion que los firma lleva
+   `station`. Cambiar ESE parametro —y solo ese— es lo que trae los informes de
+   las naves que nadie tiene abiertas. El 15-09-2026 entraban los de OGA5 y DGA2
+   y los de DGA1 no llegaban nunca, sin fallar nada.
+
+   Lo que se vigila aqui es que no se toque nada mas de la URL: son peticiones
+   firmadas contra el portal de Amazon con la sesion de la oficina, y cambiar de
+   mas es pedir cosas que nadie ha pedido. */
+{
+  const iC = src.indexOf('function conNave')
+  const jC = src.indexOf('async function pedirEnlacesFrescos')
+  ok(iC > 0 && jC > iC, 'no se encuentra conNave en background.js')
+  let conNave
+  if (iC > 0 && jC > iC) {
+    try { conNave = new Function(`${src.slice(iC, jC)}; return conNave`)() }
+    catch (e) { ok(false, `conNave no carga: ${e.message}`) }
+  }
+  ok(typeof conNave === 'function', 'conNave no se ha cargado: no se prueba nada')
+  if (typeof conNave === 'function') {
+    const base = 'https://logistics.amazon.es/performance/api/v1/getData'
+      + '?dataSetId=dsp_station_weekly_supp_reports&dsp=TDSL&from=2026-09-13'
+      + '&station=OGA5&timeFrame=WEEK&to=2026-09-19'
+    const salida = conNave(base, 'DGA1')
+    ok(salida && salida.includes('station=DGA1'), 'no cambia la nave')
+    ok(salida && !salida.includes('station=OGA5'), 'deja la nave vieja dentro')
+    // Y NADA MAS cambia: mismo host, misma ruta, mismos demas parametros.
+    const a = new URL(base); const b = new URL(salida)
+    ok(a.origin === b.origin && a.pathname === b.pathname, 'ha cambiado el destino')
+    for (const k of ['dataSetId', 'dsp', 'from', 'timeFrame', 'to']) {
+      ok(a.searchParams.get(k) === b.searchParams.get(k), `ha tocado ${k}`)
+    }
+    // Una URL que no lleva `station` NO se toca: seria pedir a ciegas.
+    ok(conNave('https://logistics.amazon.es/performance/api/v1/getData?dsp=TDSL', 'DGA1') === null,
+      'toca una URL que no tiene nave')
+    ok(conNave('no es una url', 'DGA1') === null, 'no aguanta una URL rota')
+  }
+
+  /* Y que la vuelta se haga POR NAVE, no una sola vez. */
+  ok(/for \(const nave of naves\)/.test(src),
+    'pedirEnlacesFrescos ya no recorre las naves: vuelve a entrar solo la que este abierta')
+  ok(/navesDeLaEmpresa/.test(src), 'no pide la lista de naves al backend')
+  // Un fallo en una nave no puede dejar sin informe a las demas.
+  const iP = src.indexOf('async function pedirEnlacesFrescos')
+  // Hasta el final de la funcion, no los primeros 1.800 caracteres: al
+  // añadirle el diagnostico de «sin llamada guardada» el `catch` se salio de
+  // la ventana y este control empezo a fallar sin que nada estuviera mal.
+  const cuerpo = src.slice(iP, src.indexOf(String.fromCharCode(10) + 'async function', iP + 10))
+  ok(/catch \(e\) \{\s*traza\.push/.test(cuerpo),
+    'un error en una nave tumba la vuelta entera')
+}
+
+/* ── LA LLAMADA QUE SE GUARDA TIENE QUE PODER REPETIRSE ──────────────────────
+   El 15-09-2026 los informes de DGA1 y DGA2 no entraron NUNCA —cero intentos en
+   el historial del backend, mientras los horarios de las tres naves entraban
+   sin problema— y la unica pista era `?:TypeError: Failed to fetch` en la
+   traza. La causa: la pagina de Amazon pide `getData` con una URL RELATIVA y se
+   guardaba tal cual. Desde el service worker una ruta relativa no se puede
+   pedir (no hay origen) ni se puede parsear (por eso la nave salia como `?`),
+   asi que la vuelta por naves moria antes de empezar.
+   Se cierra por los dos lados: quien la captura la deja absoluta, y quien la
+   guarda no acepta ninguna que no sirva para lo unico que se le pide —cambiarle
+   la nave. */
+{
+  const portal = readFileSync(new URL('../cortex-extension/portal.js', import.meta.url), 'utf8')
+  const fondo = src
+
+  // 1) Al capturarla: absoluta, con el origen de la pagina.
+  const iG = portal.indexOf("type: 'llamadaInformes'")
+  const alrededor = portal.slice(Math.max(0, iG - 700), iG + 200)
+  ok(/new URL\(url, location\.origin\)/.test(alrededor),
+    'portal.js guarda la llamada sin origen: relativa no se puede repetir desde el service worker')
+  ok(!/type: 'llamadaInformes', url: String\(url\)/.test(portal),
+    'portal.js vuelve a mandar la URL en crudo')
+
+  // 2) Al guardarla: solo la que lleva `station`, y solo absoluta.
+  let guardar = null
+  const iS = fondo.indexOf('async function guardarLlamadaInformes')
+  if (iS < 0) ok(false, 'no existe guardarLlamadaInformes')
+  else {
+    const jS = fondo.indexOf(String.fromCharCode(10) + '}', iS)
+    try {
+      guardar = new Function('chrome', `${fondo.slice(iS, jS + 2)}; return guardarLlamadaInformes`)(
+        { storage: { local: { get: async () => ({}), set: async () => {} } } })
+    } catch (e) { ok(false, `guardarLlamadaInformes no carga: ${e.message}`) }
+  }
+  if (guardar) {
+    const buena = 'https://logistics.amazon.es/performance/api/v1/getData'
+      + '?dataSetId=x&dsp=TDSL&from=2026-09-13&station=OGA5&timeFrame=WEEK&to=2026-09-19'
+    const prueba = async () => {
+      ok(await guardar(buena) === true, 'rechaza la llamada buena')
+      // La que reventaba todo: relativa.
+      ok(await guardar('/performance/api/v1/getData?station=OGA5') === false,
+        'acepta una URL relativa: desde el service worker no se puede pedir')
+      // Las otras de la misma pantalla, que no firman nada y la pisaban.
+      ok(await guardar('https://logistics.amazon.es/performance/api/v1/getPageConfig?page=x') === false,
+        'acepta getPageConfig: sin `station` la vuelta por naves se queda en una')
+      ok(await guardar('https://logistics.amazon.es/otra/cosa?station=OGA5') === false,
+        'acepta algo que no es de /performance/api/')
+    }
+    await prueba()
+  }
+}
+
+/* ── SACAR EL ENLACE ESTE DONDE ESTE ────────────────────────────────────────
+   `portal.js` decide que una respuesta trae enlaces buscandolos en CUALQUIER
+   parte del texto; `urlsFirmadasDe` solo se quedaba con el texto si EMPEZABA
+   por la URL. Dos piezas que tienen que estar de acuerdo y no lo estaban: una
+   respuesta con el enlace dentro de un trozo de HTML se guardaba como «la
+   llamada buena» y luego daba cero enlaces, sin error ninguno. Es el
+   `DIC1:0 OGA5:0 DGA1:0 DGA2:0` del 15-09-2026. */
+{
+  const iU = src.indexOf('function urlsFirmadasDe')
+  let sacar = null
+  if (iU < 0) ok(false, 'ya no existe urlsFirmadasDe')
+  else {
+    const jU = src.indexOf(String.fromCharCode(10) + '}', iU)
+    try { sacar = new Function(`${src.slice(iU, jU + 2)}; return urlsFirmadasDe`)() }
+    catch (e) { ok(false, `urlsFirmadasDe no carga: ${e.message}`) }
+  }
+  if (sacar) {
+    const U = 'https://flex-peer-performance-reports-eu.s3.eu-west-1.amazonaws.com'
+      + '/es/tdsl/dga2/2026/week-38/DNR_Investigations_ES-TDSL-DGA2.html'
+      + '?X-Amz-Signature=abc123&X-Amz-Expires=1800'
+    // Lo que ya funcionaba tiene que seguir funcionando.
+    ok(sacar({ rows: [{ url: U }] }).length === 1, 'ha dejado de ver un enlace suelto')
+    // Y lo que fallaba: el enlace metido dentro de otra cosa.
+    ok(sacar({ rows: [{ html: `<a href="${U}">Descargar</a>` }] })[0] === U,
+      'no ve el enlace cuando viene dentro de un trozo de HTML')
+    ok(sacar([`ver el informe en ${U} antes del viernes`])[0] === U,
+      'no ve el enlace cuando viene dentro de una frase')
+    // LAS DOS FORMAS DE ESCAPAR EL `&`. Sin deshacerlas la URL parece buena y
+    // devuelve 403, porque la firma se calcula sobre los parametros. Y como una
+    // URL firmada solo se intenta UNA vez, ese informe se pierde entero.
+    const conAmp = U.replace(/&/g, '&amp;')
+    ok(sacar({ a: `<a href="${conAmp}">x</a>` })[0] === U, 'deja el &amp; dentro: la firma no valdria')
+    const conJson = U.replace(/&/g, String.fromCharCode(92) + 'u0026')
+    ok(sacar({ a: `{"url":"${conJson}"}` })[0] === U, String.fromCharCode(92) + 'u0026 sin deshacer: la firma no valdria')
+    // Y no se repite el mismo enlace por salir dos veces en la misma cadena.
+    ok(sacar([`${U} y otra vez ${U}`]).length === 1, 'duplica el mismo enlace')
+    // Lo que NO es del bucket de informes no se toca.
+    ok(sacar({ x: 'https://logistics.amazon.es/performance' }).length === 0, 'se trae URLs que no son informes')
+  }
+}
+
+/* ── EL REPARTO DE BAJADAS ENTRE NAVES ──────────────────────────────────────
+   Doce ficheros por vuelta y una URL firmada que dura media hora. Con una nave
+   daba igual; con cuatro, coger «los doce primeros por nombre» se los lleva
+   todos la misma nave —la ruta lleva la nave dentro, asi que ordenar agrupa— y
+   las otras esperan a la vuelta siguiente con la firma ya caducada. O sea que
+   la nave que va detras en el abecedario no baja NUNCA su informe, sin que
+   falle nada. Aqui se comprueba que a cada nave le toca algo. */
+{
+  const iN = src.indexOf('function naveDeLaUrl')
+  ok(iN > 0, 'ya no existe naveDeLaUrl: la nave se vuelve a sacar por varios sitios')
+  // Y que NO haya vuelto a aparecer una segunda forma de sacarla.
+  ok(!src.includes("/tdsl/([a-z0-9]"),
+    'vuelve a haber un extractor de nave con el DSP escrito a mano')
+
+  const iB = src.indexOf('const porNave = new Map()')
+  ok(iB > 0, 'el reparto por naves ha desaparecido: volveria a llevarselo todo una')
+  if (iB > 0 && iN > 0) {
+    const jN = src.indexOf(String.fromCharCode(10) + '}', iN)
+    const nave = new Function(`${src.slice(iN, jN + 2)}; return naveDeLaUrl`)()
+    const jB = src.indexOf('while (pendientes.length < 12', iB)
+    const fin = src.indexOf(String.fromCharCode(10) + '  }', jB)
+    const cuerpo = `${src.slice(iB, fin + 4)}`
+    const hacer = new Function('candidatos', 'informes', 'naveDeLaUrl',
+      `${cuerpo} return pendientes`)
+    // Cuatro naves con once ficheros cada una: el caso real del 15-09-2026.
+    const candidatos = []
+    for (const n of ['oga5', 'dga1', 'dga2', 'dic1']) {
+      for (let k = 0; k < 11; k++) {
+        candidatos.push(`https://b.s3.amazonaws.com/es/tdsl/${n}/2026/week-38/f${k}.html?X-Amz-Signature=s`)
+      }
+    }
+    candidatos.sort().reverse()
+    const salen = hacer(candidatos, {}, nave)
+    ok(salen.length === 12, `deberia coger 12 y coge ${salen.length}`)
+    const naves = new Set(salen.map(nave))
+    ok(naves.size === 4, `solo baja de ${naves.size} nave(s) de 4: las demas caducan`)
+  }
+}
+
 if (fallos.length) {
   console.error(`\n[check-informes-portal] ${fallos.length} problema(s):`)
   for (const f of fallos) console.error('  - ' + f)

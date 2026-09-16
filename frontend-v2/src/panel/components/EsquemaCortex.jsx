@@ -44,6 +44,7 @@ export default function EsquemaCortex() {
 
   const esquemas = (datos?.diagnostico || []).filter((d) => d.kind === 'schema' && d.schema)
   const versiones = datos?.versiones || []
+  const dormidas = datos?.dormidas || 0
   const estadosInforme = (datos?.diagnostico || []).find((d) => d.which === 'estados_informe')
 
   return (
@@ -59,9 +60,17 @@ export default function EsquemaCortex() {
         umbral de hora y dirección para tocar el DCR.
       </p>
 
-      {/* QUE VERSION LLEVA CADA EQUIPO. Antes se guardaba una sola por empresa
-          y el ultimo PC que hablara pisaba a los demas, asi que no habia forma
-          de instalar una version nueva en uno solo y comprobar que era ese. */}
+      {/* QUE VERSION LLEVA CADA EQUIPO ENCENDIDO. Antes salian tambien las
+          instalaciones muertas —cada vez que se quita y se vuelve a poner la
+          extension queda un documento con la version que llevaba— y se pintaban
+          como equipos: el 16-09-2026 habia 48 rastros para 2 equipos reales, y
+          el cartel daba como version viva la 2.51, de un PC que no existia. */}
+      {versiones.length === 0 && !cargando && (
+        <p className="mt-3 rounded-lg border border-dark-800 bg-dark-950/40 px-3 py-2 text-[11.5px] text-dark-400">
+          Ningún equipo con la extensión ha hablado en la última media hora.
+          {dormidas > 0 && <> Hay <b className="text-dark-200">{dormidas}</b> instalaciones antiguas registradas, pero ninguna encendida.</>}
+        </p>
+      )}
       {versiones.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
           {versiones.map((v) => (
@@ -69,16 +78,24 @@ export default function EsquemaCortex() {
               v.hay_que_recargar ? 'border-amber-500/40 bg-amber-500/10 text-amber-200' : 'border-dark-800 bg-dark-950/40 text-dark-300'}`}>
               extensión <b className={v.hay_que_recargar ? 'text-amber-100' : 'text-dark-100'}>{v.version}</b>
               <span className={v.hay_que_recargar ? 'text-amber-300/80' : 'text-dark-500'}> · {v.equipos} {v.equipos === 1 ? 'equipo' : 'equipos'}</span>
+              {/* Cuando hablo por ultima vez. Sin esto, «1 equipo» se lee como
+                  «esta encendido ahora», que es justo lo que no se sabe. */}
+              <span className="text-dark-500"> · hace {v.hace_min <= 1 ? 'un momento' : `${v.hace_min} min`}</span>
               {/* La pestaña de Cortex se queda con el código viejo hasta que
                   alguien pulsa F5: el número del manifiesto se actualiza al
                   reinstalar, pero el que construye los paquetes no. */}
               {v.hay_que_recargar && (
                 <span className="ml-1 font-semibold">
-                  · recarga Cortex (F5): ahí corre la {v.interceptor}
+                  · recarga Cortex (F5): lleva el lector {v.esperada} y ahí corre el {v.interceptor}
                 </span>
               )}
             </span>
           ))}
+          {dormidas > 0 && (
+            <span className="rounded-lg border border-dark-800 bg-dark-950/40 px-2.5 py-1 text-[11.5px] text-dark-400">
+              + {dormidas} instalaciones que ya no hablan
+            </span>
+          )}
         </div>
       )}
 

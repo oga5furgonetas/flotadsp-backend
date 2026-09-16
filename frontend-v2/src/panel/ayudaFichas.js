@@ -241,6 +241,15 @@ export const AYUDA = {
     ],
     ojo: 'El bloque de DNR de un reporte es de DOS DÍAS ANTES, y la columna DSC se rellena tarde: un día recién bajado sale con menos defectos de los que acabará teniendo. Por eso se vuelven a pedir los días anteriores.',
   },
+  incorporaciones: {
+    que: 'Quién está entrando, qué papel le falta y el WhatsApp escrito para pedírselo.',
+    pasos: [
+      'Pega el listado de la ETT entero: se puede pegar todos los días, quien ya esté no se duplica.',
+      'Cada papel se pulsa y avanza: falta → se lo he pedido → en revisión → correcto.',
+      'Marca lo que falte y abre el WhatsApp; luego «ya se lo he enviado» para que quede constancia.',
+    ],
+    ojo: 'Las contraseñas del listado NO se guardan en el pegado — la cuenta de onboarding sí, para poder entrar a revisarla. Y una persona sin nada marcado está SIN REVISAR, no completa: por eso empieza en «Pendiente de revisar» hasta que alguien dice qué le falta.',
+  },
   diarios: {
     que: 'Los Daily Report de Cortex: DNR, devoluciones, POD y cumplimiento de llamada.',
     pasos: [

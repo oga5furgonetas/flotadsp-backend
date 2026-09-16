@@ -57,6 +57,8 @@ jobs:
         run: node scripts/check-cola-extension.mjs
       - name: Interceptor (captura lo mismo y no abre lo que no ha cambiado)
         run: node scripts/check-interceptor-ahorro.mjs
+      - name: Asociados (cada cuenta llega, sin perder a nadie ni repetir)
+        run: node scripts/check-asociados.mjs
       - name: Informes del portal (la direccion de cada dia se deduce bien)
         run: node scripts/check-informes-portal.mjs
       - name: Envio de una candidatura (se reintenta, y reintentarlo es seguro)

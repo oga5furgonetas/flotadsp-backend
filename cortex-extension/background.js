@@ -14,6 +14,28 @@ const ALARM = 'flotadsp-flush';
    de los demas. Antes el backend guardaba una unica version por empresa y el
    ultimo equipo que hablara pisaba a los otros. */
 let _vInterceptor = '';   // la version que corre dentro de la pagina de Cortex
+let _vEsperada = '';      // la que ESTE paquete lleva dentro (leida del fichero)
+
+/* Cual DEBERIA estar corriendo. Se lee del `interceptor.js` que va dentro de la
+   propia extension, no de una constante copiada aqui: una copia se queda vieja
+   el dia que alguien toque el otro fichero y volveriamos a comparar contra algo
+   que no es (gotcha 40).
+
+   Hace falta porque la version de la extension y la del interceptor son DOS
+   contadores distintos —2.89.0 frente a 2.54.0— y compararlos entre si da
+   «distinto» SIEMPRE: el aviso de «recarga Cortex (F5)» llevaba encendido
+   permanentemente, o sea que no avisaba de nada. */
+async function versionEsperada() {
+  if (_vEsperada) return _vEsperada;
+  try {
+    const txt = await (await fetch(chrome.runtime.getURL('interceptor.js'))).text();
+    const m = txt.match(new RegExp("VERSION_INTERCEPTOR" + String.fromCharCode(92) + "s*=" +
+                                   String.fromCharCode(92) + "s*['" + String.fromCharCode(34) +
+                                   "]([0-9.]{1,12})"));
+    if (m) _vEsperada = m[1];
+  } catch (_) {}
+  return _vEsperada;
+}
 let _idInst = null;
 async function idInstalacion() {
   if (_idInst !== null) return _idInst;
@@ -213,6 +235,7 @@ async function flush() {
             'X-Ext-Version': chrome.runtime.getManifest().version,
             'X-Ext-Install': await idInstalacion(),
             'X-Ext-Interceptor': _vInterceptor || '',
+            'X-Ext-Interceptor-Esperado': await versionEsperada(),
           },
           body: JSON.stringify({ captured_at: new Date().toISOString(), packages: part }),
         });
@@ -257,7 +280,7 @@ async function flush() {
    Y el resultado SE DEVUELVE a quien lo mandó. Si el documento no se reconoce,
    `dsp.js` lo marca y deja de insistir con lo mismo; si se tragara el error, la
    pestaña reintentaria el mismo informe cada quince segundos para siempre. */
-async function mandarInforme(tipo, texto, center) {
+async function mandarInforme(tipo, texto, center, extra) {
   try {
     const { ingestToken, ingestUrl } = await cfg();
     if (!ingestToken) { await pushActivity(`informe ${tipo}: sin token`, 0); return { ok: false, motivo: 'sin token' }; }
@@ -267,7 +290,9 @@ async function mandarInforme(tipo, texto, center) {
     const r = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Ingest-Token': ingestToken },
-      body: JSON.stringify({ tipo, texto, center: center || '' }),
+      // `extra` son datos del propio envio (por ejemplo, si lo de asociados es
+      // el listado o una ficha). Opcional: quien no lo manda queda igual.
+      body: JSON.stringify({ tipo, texto, center: center || '', ...(extra || {}) }),
     });
     const j = await r.json().catch(() => null);
     await pushActivity(`informe ${tipo}: ${r.ok && j?.ok ? 'guardado' : (j?.motivo || 'HTTP ' + r.status)}`,
@@ -394,6 +419,18 @@ const LLAMADA_CADA_MS = 6 * 60 * 60 * 1000;      // cuatro veces al dia
 
 async function guardarLlamadaInformes(url) {
   if (typeof url !== 'string' || !/\/performance\/api\//i.test(url)) return false;
+  /* SOLO LA QUE SE PUEDE REPETIR POR NAVE, y tiene que ser absoluta.
+     `/performance/api/` lo cumplen varias llamadas de esa pantalla
+     —`getPageConfig`, el widget de avisos— y cualquiera de ellas podia pisar a
+     la buena. La util es la que firma los enlaces, y se reconoce porque lleva
+     `station`: es el parametro que se cambia para pedir las otras naves. Sin
+     el, la vuelta por naves se queda en una sola y no sirve para nada.
+     Y absoluta, porque quien la va a repetir es el service worker, que no
+     tiene origen del que colgar una ruta relativa. */
+  let abs;
+  try { abs = new URL(url); } catch (_) { return false; }
+  if (!/^https?:$/.test(abs.protocol) || !abs.searchParams.has('station')) return false;
+  url = abs.toString();
   const { llamadaInformes } = await chrome.storage.local.get({ llamadaInformes: null });
   // Se sobrescribe siempre: la ultima que hizo la pagina es la mas reciente y
   // la que apunta a la semana que se esta mirando.
@@ -403,10 +440,65 @@ async function guardarLlamadaInformes(url) {
 }
 
 /** Recorre cualquier JSON y saca todo texto que apunte al bucket de informes. */
+/** La nave que lleva dentro la ruta de un informe.
+ *
+ *  UNA SOLA FORMA DE SACARLA. Habia dos escritas por separado en este fichero
+ *  —una para deducir los diarios y otra para repartir las bajadas— y eran
+ *  distintas. Hoy mismo, 15-09-2026, un desacuerdo asi entre dos trozos de
+ *  codigo (`portal.js` buscando el enlace en todo el texto y `urlsFirmadasDe`
+ *  exigiendo que empezara por el) dejo sin informes a dos naves durante dias.
+ *  No hacen falta dos.
+ *
+ *  La ruta es `/es/{dsp}/{nave}/{año}/week-NN/...`. Se coge el segmento de la
+ *  nave, no un `tdsl` fijo: el dia que el DSP sea otro esto sigue valiendo. */
+/** Que sabemos hacer con este fichero: 'dnr_inv', 'diario', o nada.
+ *
+ *  DOS COSAS EN UNA A PROPOSITO. Antes el tipo se decidia en el momento de
+ *  mandarlo (`DNR_Investigations` -> dnr_inv, y TODO lo demas -> diario), y eso
+ *  hacia que se bajaran ficheros que el backend no sabe leer y los rechazara
+ *  uno por uno. Medido el 15-09-2026: de las 12 bajadas de una vuelta, 4 se
+ *  iban en informes DWC-IADC que volvian rechazados... y a la vuelta siguiente
+ *  se volvian a pedir, porque cada firma nueva es una URL distinta.
+ *
+ *  Si no hay lector, no se pide. No es tirar informacion: el fichero sigue
+ *  apuntado y sale en el diagnostico, asi que el dia que se escriba su lector
+ *  ya sabemos que esta ahi. Lo que se ahorra son huecos de bajada, y un hueco
+ *  perdido con una URL que caduca en media hora es un informe que ese dia no
+ *  entra. */
+function lectorDe(u) {
+  if (/DNR_Investigations_/i.test(u)) return 'dnr_inv';
+  if (/-Daily-Report_/i.test(u)) return 'diario';
+  return null;
+}
+
+function naveDeLaUrl(u) {
+  const m = /\/es\/[a-z0-9]+\/([a-z0-9]{3,6})\/[0-9]{4}\//i.exec(String(u || ''));
+  return m ? m[1].toLowerCase() : '';
+}
+
 function urlsFirmadasDe(v, salida = [], prof = 0) {
   if (prof > 8 || salida.length > 40) return salida;
   if (typeof v === 'string') {
-    if (/^https?:\/\/[^\s"']*flex-peer-performance-reports/i.test(v)) salida.push(v);
+    /* DENTRO DEL TEXTO, NO SOLO AL PRINCIPIO.
+       Esto pedia que la cadena EMPEZARA por la URL. Pero quien decide que una
+       respuesta trae enlaces —`portal.js`— los busca en cualquier parte del
+       texto. O sea que una respuesta con el enlace metido dentro de un trozo de
+       HTML pasaba el primer filtro, se guardaba como «la llamada que firma los
+       enlaces»... y aqui daba CERO. Sin error, sin HTTP raro, sin nada: el
+       `DIC1:0 OGA5:0 DGA1:0 DGA2:0` del 15-09-2026.
+       Dos trozos de codigo que tienen que estar de acuerdo y no lo estaban.
+
+       Y las dos formas de escapar el `&`: dentro de HTML viene `&amp;` y dentro
+       de JSON incrustado `&`. Dejarlas sin deshacer da una URL que PARECE
+       buena y devuelve 403 —la firma se calcula sobre los parametros—, y como
+       una URL firmada solo se intenta una vez, ese informe se pierde del todo.
+       Un fallo asi no avisa: simplemente ese dia no hay informe. */
+    const DENTRO = /https?:\/\/[^\s"'<>]*flex-peer-performance-reports[^\s"'<>]*/gi;
+    for (const encontrada of (v.match(DENTRO) || [])) {
+      const limpia = encontrada.replace(/&amp;/gi, '&').replace(/\\u0026/gi, '&');
+      if (!salida.includes(limpia)) salida.push(limpia);
+      if (salida.length > 40) break;
+    }
     return salida;
   }
   if (Array.isArray(v)) { for (const x of v) urlsFirmadasDe(x, salida, prof + 1); return salida; }
@@ -414,32 +506,371 @@ function urlsFirmadasDe(v, salida = [], prof = 0) {
   return salida;
 }
 
+/* ── LAS NAVES DE LA EMPRESA ─────────────────────────────────────────────────
+   El portal firma los enlaces de sus informes por NAVE, y la peticion que los
+   firma lleva `station` como parametro. O sea que se pueden pedir los de las
+   tres... si se sabe cuales son las tres.
+
+   La extension no lo sabe: su llave es de una nave y la pantalla que ve es la
+   que alguien tenga abierta. Por eso el 15-09-2026 entraban los informes de
+   OGA5 y de DGA2 —las dos que se abrieron— y los de DGA1 no llegaban NUNCA, sin
+   que fallara nada y sin dejar rastro. La lista la da el backend. */
+const NAVES_CADA_MS = 12 * 60 * 60 * 1000;
+
+async function navesDeLaEmpresa() {
+  const { naves, navesEn } = await chrome.storage.local.get({ naves: null, navesEn: 0 });
+  if (Array.isArray(naves) && naves.length && Date.now() - navesEn < NAVES_CADA_MS) return naves;
+  try {
+    const { ingestToken, ingestUrl } = await cfg();
+    if (!ingestToken) return naves || [];
+    const url = String(ingestUrl).replace(/\/ingest$/, '/naves');
+    const r = await fetch(url, { headers: { 'X-Ingest-Token': ingestToken } });
+    const j = await r.json().catch(() => null);
+    const lista = (j && Array.isArray(j.naves) ? j.naves : []).filter(Boolean).slice(0, 12);
+    if (lista.length) {
+      await chrome.storage.local.set({ naves: lista, navesEn: Date.now() });
+      return lista;
+    }
+  } catch (_) { /* sin lista se sigue con la nave de la pantalla, como antes */ }
+  return naves || [];
+}
+
+/** La misma peticion, cambiandole la nave. No se inventa nada: es el parametro
+ *  que la propia pagina usa. Si la URL no lo trae, se devuelve tal cual. */
+function conNave(url, nave) {
+  try {
+    const u = new URL(url);
+    if (!u.searchParams.has('station')) return null;
+    u.searchParams.set('station', nave);
+    return u.toString();
+  } catch (_) { return null; }
+}
+
 async function pedirEnlacesFrescos() {
   const { llamadaInformes } = await chrome.storage.local.get({ llamadaInformes: null });
-  if (!llamadaInformes || !llamadaInformes.url) return 0;
-  if (Date.now() - (llamadaInformes.pedido || 0) < LLAMADA_CADA_MS) return 0;
-  llamadaInformes.pedido = Date.now();
-  await chrome.storage.local.set({ llamadaInformes });
-  try {
-    const r = await fetch(llamadaInformes.url, { credentials: 'include', cache: 'no-store' });
-    if (!r || !r.ok) {
-      await enviarDiagnostico({ kind: 'debug', which: 'enlaces-frescos',
-                                url: `HTTP ${r ? r.status : '?'}`, count: 0, bytes: 0 });
-      return 0;
-    }
-    const j = await r.json().catch(() => null);
-    const urls = j ? urlsFirmadasDe(j) : [];
-    const n = await recordarInformes(urls, '');
+  if (!llamadaInformes || !llamadaInformes.url) {
+    // Callarse aqui fue lo que hizo falta tres rondas para ver el fallo: desde
+    // fuera, «no hay llamada guardada» y «la vuelta fallo» se veian igual.
     await enviarDiagnostico({ kind: 'debug', which: 'enlaces-frescos',
-                              url: `firmadas=${urls.length} nuevas=${n}`,
-                              count: urls.length, bytes: n });
-    if (n) await bajarInformesPendientes();
-    return urls.length;
-  } catch (e) {
-    await enviarDiagnostico({ kind: 'debug', which: 'enlaces-frescos',
-                              url: String(e).slice(0, 80), count: 0, bytes: 0 });
+                              url: 'sin llamada guardada: hay que abrir Informes complementarios una vez',
+                              count: 0, bytes: 0 });
     return 0;
   }
+  /* UNA VERSION NUEVA SE PRUEBA YA, NO DENTRO DE SEIS HORAS.
+     La espera existe para no machacar el portal repitiendo lo mismo. Pero si lo
+     que ha cambiado es justo el codigo que hace la vuelta, repetir NO es hacer
+     lo mismo: es la unica forma de ver si el arreglo sirve. El 15-09-2026 la
+     vuelta corrio a las 21:12 y con la espera puesta el siguiente intento
+     habria sido a las 3 de la manana — o sea, sin saber nada hasta el dia
+     siguiente. */
+  const version = chrome.runtime.getManifest().version;
+  const recienActualizada = llamadaInformes.version !== version;
+  if (!recienActualizada && Date.now() - (llamadaInformes.pedido || 0) < LLAMADA_CADA_MS) return 0;
+  llamadaInformes.pedido = Date.now();
+  llamadaInformes.version = version;
+  await chrome.storage.local.set({ llamadaInformes });
+
+  /* UNA VUELTA POR NAVE. La de la pantalla va siempre —es la que seguro
+     funciona— y las demas solo si la URL trae `station`. Si una falla, las
+     otras siguen: que DGA1 de error no puede dejar sin informe a OGA5. */
+  const naves = await navesDeLaEmpresa();
+  const destinos = [llamadaInformes.url];
+  for (const nave of naves) {
+    const u = conNave(llamadaInformes.url, nave);
+    if (u && !destinos.includes(u)) destinos.push(u);
+  }
+
+  let urls = [];
+  const traza = [];
+  for (const destino of destinos.slice(0, 6)) {
+    const nave = (() => { try { return new URL(destino).searchParams.get('station') || '?'; }
+                          catch (_) { return '?'; } })();
+    try {
+      /* `Accept: application/json`. La pagina la manda; el service worker no la
+         mandaba. Un portal que no la ve puede contestar 200 con el HTML de la
+         aplicacion en vez del JSON, y entonces `r.json()` falla, `j` queda en
+         null y la cuenta sale 0 SIN error: exactamente lo que se vio el
+         15-09-2026 con las cuatro naves a cero.
+         Es una apuesta, no una certeza — por eso, justo debajo, la traza dice
+         que llego de verdad. Si no era esto, la proxima vuelta lo dira sola en
+         vez de dejarnos otra ronda adivinando. */
+      const r = await fetch(destino, { credentials: 'include', cache: 'no-store',
+                                       headers: { Accept: 'application/json' } });
+      if (!r || !r.ok) { traza.push(`${nave}:HTTP${r ? r.status : '?'}`); continue; }
+      const claseRespuesta = (r.headers.get('content-type') || '?').split(';')[0];
+      const j = await r.json().catch(() => null);
+      /* TRES CASOS DISTINTOS, TRES PALABRAS DISTINTAS. Antes los tres salian
+         como `0` y no habia forma de saber cual era: si no es JSON el problema
+         es la peticion, y si es JSON y no trae enlaces el problema es que esa
+         nave no tiene informes esa semana. Cosas opuestas. */
+      if (!j) { traza.push(`${nave}:noJSON(${claseRespuesta})`); continue; }
+      const suyas = urlsFirmadasDe(j);
+      traza.push(`${nave}:${suyas.length || 'sinEnlaces'}`);
+      urls = urls.concat(suyas);
+    } catch (e) {
+      traza.push(`${nave}:${String(e).slice(0, 24)}`);
+    }
+  }
+  const n = await recordarInformes(urls, '');
+  await enviarDiagnostico({ kind: 'debug', which: 'enlaces-frescos',
+                            url: `${traza.join(' ')} · nuevas=${n}`,
+                            count: urls.length, bytes: n });
+  if (n) await bajarInformesPendientes();
+  return urls.length;
+}
+
+/* ── EL PLAN DE HORAS, PEDIDO DIRECTAMENTE ───────────────────────────────────
+   Hasta ahora el plan semanal (WHC) se leia de la PANTALLA: el texto que hay a
+   la vista en «Programacion». Por eso solo entraba el de la nave que alguien
+   tuviera abierta, y el de DGA1 no llego nunca.
+
+   La sonda del 15-09-2026 apunto lo que pide esa pantalla, y ahi estaba:
+
+     GET /scheduling/home/api/v2/service-areas
+         -> [{ serviceAreaId, serviceAreaName, defaultStationCode }, x37]
+     GET /scheduling/home/api/v2/rosters ?serviceAreaId,fromDate,toDate
+         -> el turno de cada persona (va en `meta`, no en `data`)
+     GET /scheduling/home/api/v2/service-area-config ?serviceAreaId
+         -> `leapConfig`: los umbrales DE AMAZON, semanal y diario
+
+   O sea que se puede pedir por nave, igual que se hizo con los informes
+   cambiando `station`. Nadie tiene que abrir nada.
+
+   SOLO NUESTRAS NAVES. `service-areas` devuelve 37, y ahi hay areas que no son
+   nuestras. Se cruza contra la lista que da el backend y se exige coincidencia
+   EXACTA; si una nave casara con dos areas no se pide ninguna. Pedir el
+   cuadrante de otro DSP no es un error tecnico, es mirar donde no se debe. */
+const HORARIOS_CADA_MS = 3 * 60 * 60 * 1000;      // cuatro veces al dia
+const CORTEX_ORIGEN = 'https://logistics.amazon.es';
+
+/** Domingo y sabado de la semana de HOY, en AAAA-MM-DD.
+ *  Compuesta a mano: `toISOString()` sobre una fecha local corre el dia en
+ *  Espana y pediria la semana que no es (gotcha 11). */
+function semanaAmazon() {
+  const h = new Date();
+  const clave = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const dom = new Date(h); dom.setDate(dom.getDate() - dom.getDay());
+  const sab = new Date(dom); sab.setDate(sab.getDate() + 6);
+  return { desde: clave(dom), hasta: clave(sab) };
+}
+
+async function jsonDeCortex(camino) {
+  const r = await fetch(CORTEX_ORIGEN + camino, { credentials: 'include', cache: 'no-store' });
+  if (!r || !r.ok) return { error: `HTTP ${r ? r.status : '?'}` };
+  const j = await r.json().catch(() => null);
+  return j ? { json: j } : { error: 'respuesta no es JSON' };
+}
+
+/* ── LAS CUENTAS DE ONBOARDING, SIN QUE NADIE ABRA NADA ──────────────────────
+   `search-providers` trae, por persona, los trece pasos del onboarding y como
+   va cada uno. Pero va por POST y no se sabe como se llama su cuerpo, asi que
+   no se puede repetir la peticion a mano — y adivinarla seria inventarse una
+   estructura, el fallo que costo veinte versiones con las direcciones.
+
+   La forma honesta de conseguirlo es que la pagina la haga ELLA: se abre la
+   pantalla de Asociados en una pestaña de fondo, la propia web hace sus
+   llamadas, el interceptor las recoge como siempre, y se cierra la pestaña.
+   Ni un dato inventado y ni una peticion que la pagina no haga por su cuenta.
+
+   POR QUE HACE FALTA. Si depende de que alguien abra esa pantalla, los dias que
+   nadie la abra no hay datos — y el 16-09-2026 Dani se fue a trabajar dejando
+   el ordenador encendido justo con eso pendiente. Un dato que solo llega si
+   alguien se acuerda no es automatico.
+
+   CON CUIDADO: en segundo plano (`active: false`), una vez cada cuatro horas, y
+   la pestaña se cierra sola pase lo que pase. */
+const ASOCIADOS_CADA_MS = 4 * 60 * 60 * 1000;
+const ASOCIADOS_URL = 'https://logistics.amazon.es/account-management/delivery-associates';
+
+/* A QUIEN SEGUIMOS. La lista de la gente que esta entrando —correo y nombre—
+   que da el backend. Se guarda y se refresca cada hora: cambia cuando alguien
+   pega un listado nuevo, no cada minuto. */
+const SEGUIMIENTO_CADA_MS = 60 * 60 * 1000;
+
+async function aQuienSeguimos() {
+  const { seguimiento, seguimientoEn = 0 } =
+    await chrome.storage.local.get({ seguimiento: null, seguimientoEn: 0 });
+  if (seguimiento && Date.now() - seguimientoEn < SEGUIMIENTO_CADA_MS) return seguimiento;
+  try {
+    const { ingestToken, ingestUrl } = await cfg();
+    if (!ingestToken) return seguimiento || { correos: [], nombres: [] };
+    const url = String(ingestUrl).replace(/\/ingest$/, '/seguimiento');
+    const r = await fetch(url, { headers: { 'X-Ingest-Token': ingestToken } });
+    const j = await r.json().catch(() => null);
+    if (j && Array.isArray(j.correos)) {
+      await chrome.storage.local.set({ seguimiento: j, seguimientoEn: Date.now() });
+      return j;
+    }
+  } catch (_) { /* sin lista se sigue con la de antes */ }
+  return seguimiento || { correos: [], nombres: [] };
+}
+
+/** El nombre sin tildes ni orden, igual que lo normaliza el backend. */
+function clavesDeNombre(n) {
+  const t = String(n || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  return t.replace(/,/g, ' ').split(/\s+/).filter((w) => w.length > 2);
+}
+
+/* ── CÓMO ESTÁ CADA CUENTA POR DENTRO ───────────────────────────────────────
+   La lista de Asociados da un resumen. La FICHA de cada persona da las tareas
+   de verdad, repartidas en tres grupos: las que hace la DSP, las que hace
+   Amazon y las que tiene que hacer la propia persona. Es la diferencia entre
+   «le falta algo» y «le falta la sesion de formacion».
+
+   Dos peticiones por persona, las mismas que hace la pagina al abrir su ficha,
+   y GET con la sesion abierta: ni CSRF ni cuerpo que inventar. */
+const ASOC_DETALLE_MAX = 60;
+
+async function pedirDetalleAsociados(gente) {
+  const base = 'https://logistics.amazon.es/account-management/data/';
+  const fuera = [];
+  let fallos = 0;
+  for (const p of (gente || []).slice(0, ASOC_DETALLE_MAX)) {
+    if (!p || !p.id) continue;
+    const q = `?providerId=${encodeURIComponent(p.id)}`;
+    try {
+      const [rt, rc] = await Promise.all([
+        fetch(`${base}get-workflow-modules${q}`,
+              { credentials: 'include', cache: 'no-store', headers: { Accept: 'application/json' } }),
+        fetch(`${base}get-qualification${q}`,
+              { credentials: 'include', cache: 'no-store', headers: { Accept: 'application/json' } }),
+      ]);
+      const jt = rt && rt.ok ? await rt.json().catch(() => null) : null;
+      const jc = rc && rc.ok ? await rc.json().catch(() => null) : null;
+      const lista = (jt && Array.isArray(jt.data)) ? jt.data : null;
+      if (!lista) { fallos++; continue; }
+      fuera.push({
+        id: p.id,
+        // De cada tarea: como se llama, quien la tiene que hacer y como va. Ni
+        // fechas ni URLs: no hacen falta para saber que falta.
+        tareas: lista.slice(0, 40).map((m) => ({
+          que: String(m.moduleName || '').slice(0, 60),
+          de: String(m.moduleOwner || '').slice(0, 20),
+          estado: String(m.moduleClientStatus || m.moduleStatus || '').slice(0, 30),
+          nota: String(m.moduleMessage || '').slice(0, 60),
+        })).filter((x) => x.que),
+        cualifica: Object.values(((jc || {}).data || {}).qualifications || {})
+          .slice(0, 8)
+          .map((x) => ({ que: String(x.id || '').slice(0, 20),
+                         estado: String(x.status || '').slice(0, 20) }))
+          .filter((x) => x.que),
+      });
+    } catch (_) { fallos++; }
+    // Un respiro: esto no tiene ninguna prisa y el portal es de Amazon.
+    await new Promise((ok) => setTimeout(ok, 150));
+  }
+  await enviarDiagnostico({ kind: 'debug', which: 'asociados-detalle',
+                            url: `pedidos=${Math.min((gente || []).length, ASOC_DETALLE_MAX)}`
+                                 + ` con_tareas=${fuera.length} fallos=${fallos}`,
+                            count: fuera.length, bytes: 0 });
+  if (!fuera.length) return 0;
+  // En tandas: un mensaje con sesenta fichas dentro es el que no llega.
+  for (let i = 0; i < fuera.length; i += 15) {
+    await mandarInforme('asociados', JSON.stringify({ detalle: fuera.slice(i, i + 15) }), '');
+  }
+  return fuera.length;
+}
+
+async function pedirAsociados() {
+  const { asociadosEn = 0, asociadosOk = 0, asociadosVersion = '', tabAsociados = 0 } =
+    await chrome.storage.local.get({ asociadosEn: 0, asociadosOk: 0,
+                                     asociadosVersion: '', tabAsociados: 0 });
+
+  /* ── PRIMERO: ¿HAY UNA PESTAÑA ABIERTA DE LA VUELTA ANTERIOR? ───────────
+     El service worker de MV3 lo mata Chrome a los pocos segundos de estar
+     quieto. La primera version esperaba TRES MINUTOS dentro de la propia
+     funcion para dar tiempo a paginar, y si Chrome la mataba a mitad, la
+     pestaña se quedaba abierta y la vuelta a medias — pero ya marcada como
+     hecha, asi que no se reintentaba hasta dentro de cuatro horas.
+     Ahora se abre y se sale. La pestaña se cierra en una vuelta POSTERIOR del
+     aviso, que llega cada minuto: sobrevive a que Chrome apague el worker. */
+  if (tabAsociados) {
+    const abierta = Date.now() - (await chrome.storage.local.get({ tabAsociadosEn: 0 })).tabAsociadosEn;
+    if (abierta > 3 * 60 * 1000) {
+      try { await chrome.tabs.remove(tabAsociados); } catch (_) {}
+      await chrome.storage.local.set({ tabAsociados: 0 });
+      // AHORA si se da la version por probada: cuando la vuelta ha terminado
+      // de verdad, no cuando se empezo.
+      await chrome.storage.local.set({ asociadosVersion: chrome.runtime.getManifest().version });
+      await enviarDiagnostico({ kind: 'debug', which: 'asociados-solo',
+                                url: 'vuelta terminada y pestaña cerrada',
+                                count: 0, bytes: 0 });
+    }
+    return 0;                       // mientras haya una abierta, no se abre otra
+  }
+
+  const cada = asociadosOk ? ASOCIADOS_CADA_MS : 20 * 60 * 1000;
+  // Una ronda tras cada actualizacion: si lo que ha cambiado es el codigo que
+  // captura, esperar cuatro horas a saber si sirve no tiene sentido.
+  const recienActualizada = asociadosVersion !== chrome.runtime.getManifest().version;
+  if (!recienActualizada && Date.now() - asociadosEn < cada) return 0;
+  await chrome.storage.local.set({ asociadosEn: Date.now() });
+
+  try {
+    const t = await chrome.tabs.create({ url: ASOCIADOS_URL, active: false });
+    await chrome.storage.local.set({ tabAsociados: t.id, tabAsociadosEn: Date.now() });
+    await enviarDiagnostico({ kind: 'debug', which: 'asociados-solo',
+                              url: 'abierta en segundo plano', count: 0, bytes: 0 });
+    return 1;
+  } catch (e) {
+    await chrome.storage.local.set({ tabAsociados: 0 });
+    await enviarDiagnostico({ kind: 'debug', which: 'asociados-solo',
+                              url: `no se pudo abrir: ${String(e).slice(0, 80)}`,
+                              count: 0, bytes: 0 });
+    return 0;
+  }
+}
+
+async function pedirHorarios() {
+  const { horariosEn } = await chrome.storage.local.get({ horariosEn: 0 });
+  if (Date.now() - horariosEn < HORARIOS_CADA_MS) return 0;
+  await chrome.storage.local.set({ horariosEn: Date.now() });
+
+  const naves = await navesDeLaEmpresa();
+  if (!naves.length) return 0;
+
+  const areas = await jsonDeCortex('/scheduling/home/api/v2/service-areas');
+  if (areas.error) {
+    await enviarDiagnostico({ kind: 'debug', which: 'horarios',
+                              url: `service-areas: ${areas.error}`, count: 0, bytes: 0 });
+    return 0;
+  }
+  const lista = Array.isArray(areas.json && areas.json.data) ? areas.json.data : [];
+  const { desde, hasta } = semanaAmazon();
+  const traza = [];
+  let mandados = 0;
+
+  for (const nave of naves) {
+    /* COINCIDENCIA EXACTA, Y UNA SOLA. `defaultStationCode` es el codigo de la
+       nave; el nombre se mira tambien porque no todas lo traen, pero como
+       palabra entera. Con dos candidatas no se elige: se dice y se pasa. */
+    const suyas = lista.filter((a) => {
+      const cod = String((a && a.defaultStationCode) || '').toUpperCase();
+      const nom = String((a && a.serviceAreaName) || '').toUpperCase();
+      return cod === nave || new RegExp(`\\b${nave}\\b`).test(nom);
+    });
+    if (suyas.length !== 1) { traza.push(`${nave}:${suyas.length}areas`); continue; }
+    const said = suyas[0].serviceAreaId;
+    if (!said) { traza.push(`${nave}:sin-id`); continue; }
+
+    const q = encodeURIComponent(said);
+    const cfg = await jsonDeCortex(`/scheduling/home/api/v2/service-area-config?serviceAreaId=${q}`);
+    const ros = await jsonDeCortex(
+      `/scheduling/home/api/v2/rosters?serviceAreaId=${q}&fromDate=${desde}&toDate=${hasta}`);
+    if (ros.error) { traza.push(`${nave}:${ros.error}`); continue; }
+
+    const carga = JSON.stringify({
+      nave, serviceAreaId: said, desde, hasta,
+      config: cfg.json || null, rosters: ros.json || null,
+    });
+    const r = await mandarInforme('horarios', carga, nave);
+    traza.push(`${nave}:${r && r.ok ? 'ok' : (r && r.motivo) || 'falla'}`);
+    if (r && r.ok) mandados++;
+  }
+  await enviarDiagnostico({ kind: 'debug', which: 'horarios',
+                            url: `${desde}..${hasta} · ${traza.join(' ')}`.slice(0, 300),
+                            count: naves.length, bytes: mandados });
+  return mandados;
 }
 
 async function deducirYGuardar() {
@@ -460,8 +891,7 @@ async function deducirYGuardar() {
   // Una ancla por NAVE: con dos naves hay que deducir las dos.
   const porNave = {};
   for (const u of conocidas) {
-    const m = u.match(/\/tdsl\/([a-z0-9]+)\//i);
-    const nave = m ? m[1].toLowerCase() : '?';
+    const nave = naveDeLaUrl(u) || '?';
     if (!porNave[nave] || u > porNave[nave]) porNave[nave] = u;   // la más reciente
   }
   const nuevas = [];
@@ -489,10 +919,36 @@ async function bajarInformesPendientes() {
      a que alguien vuelva a pasar por la pantalla y la firme de nuevo. Las que
      no van firmadas —si algún día las hay— siguen reintentándose cada rato. */
   const firmada = (u) => /[?&](X-Amz-|Signature|Expires)/i.test(u);
-  const pendientes = Object.keys(informes)
+  let sinLector = 0;
+  const candidatos = Object.keys(informes)
     .filter((u) => (firmada(u) ? !informes[u].pedido
                                : ahora - (informes[u].pedido || 0) > INFORME_CADA_MS))
-    .sort().reverse().slice(0, 4);
+    .filter((u) => { if (lectorDe(u)) return true; sinLector++; return false; })
+    .sort().reverse();
+  /* UN POCO DE CADA NAVE, NO DOCE DE LA PRIMERA.
+     Antes se cogian los doce primeros por nombre. Con una sola nave daba igual;
+     con cuatro, no: la ruta lleva la nave dentro (`/es/tdsl/dga1/...`) y ordenar
+     por nombre agrupa todos los de una nave seguidos. O sea que OGA5 se llevaba
+     la vuelta entera y DGA1 y DGA2 esperaban a la siguiente... con la URL ya
+     caducada, porque una firma dura media hora y estas se intentan UNA vez.
+     Resultado: la nave que va detras en el abecedario no baja NUNCA su informe.
+     Se reparte en vueltas: uno de cada nave, luego el segundo de cada nave, y
+     asi. Si una nave tiene menos ficheros, su hueco lo aprovechan las demas. */
+  const porNave = new Map();
+  for (const u of candidatos) {
+    const nave = naveDeLaUrl(u) || (informes[u].center || '?').toLowerCase();
+    if (!porNave.has(nave)) porNave.set(nave, []);
+    porNave.get(nave).push(u);
+  }
+  const pendientes = [];
+  const colas = [...porNave.values()];
+  while (pendientes.length < 12 && colas.some((c) => c.length)) {
+    for (const cola of colas) {
+      if (!cola.length) continue;
+      pendientes.push(cola.shift());
+      if (pendientes.length >= 12) break;
+    }
+  }
   /* ── SE CUENTA LO QUE PASA, AUNQUE NO PASE NADA ───────────────────────────
      El 14-09-2026 esto no bajó ni un informe y no había forma de saber por qué:
      el backend solo veía lo que llegaba, y aquí no llegaba nada. Tres rondas
@@ -529,7 +985,12 @@ async function bajarInformesPendientes() {
       if (!r || !r.ok) { traza.push(`${corto} HTTP${r ? r.status : '?'}`); continue; }
       const html = await r.text();
       if (!html || html.length < 400) { traza.push(`${corto} vacio(${html ? html.length : 0})`); continue; }
-      const res = await mandarInforme('diario', html.slice(0, 8000000), informes[u].center || '');
+      /* CADA FICHERO CON SU TIPO. El Daily Report y las investigaciones de
+         DNR salen de la misma carpeta y se bajan igual, pero los lee gente
+         distinta en el backend: mandar los dos como 'diario' haria que el
+         lector de diarios rechazara las investigaciones y no entraran nunca. */
+      const tipo = lectorDe(u);
+      const res = await mandarInforme(tipo, html.slice(0, 8000000), informes[u].center || '');
       if (res && res.ok) { ok++; traza.push(`${corto} OK(${html.length})`); }
       else traza.push(`${corto} rechazado:${String(res && res.motivo).slice(0, 40)}`);
     } catch (e) {
@@ -538,7 +999,8 @@ async function bajarInformesPendientes() {
   }
   await chrome.storage.local.set({ informes });
   await enviarDiagnostico({ kind: 'debug', which: 'informes',
-                            url: `conocidas=${Object.keys(informes).length} intentadas=${pendientes.length} ok=${ok}`,
+                            url: `conocidas=${Object.keys(informes).length} intentadas=${pendientes.length} ok=${ok}`
+                                 + (sinLector ? ` sin-lector=${sinLector}` : ''),
                             count: ok, bytes: pendientes.length,
                             schema: traza.join(' || ').slice(0, 1500) });
   return ok;
@@ -565,6 +1027,7 @@ async function enviarDiagnostico(payload) {
         'X-Ext-Version': chrome.runtime.getManifest().version,
         'X-Ext-Install': await idInstalacion(),
         'X-Ext-Interceptor': _vInterceptor || '',
+        'X-Ext-Interceptor-Esperado': await versionEsperada(),
       },
       body: JSON.stringify(payload),
     });
@@ -582,6 +1045,88 @@ async function pushActivity(url, count) {
 
 /* Antes de que MV3 apague el worker, lo que quede en memoria se escribe. */
 try { chrome.runtime.onSuspend?.addListener(() => { volcar(); }); } catch (_) {}
+
+/* ── SE ACTUALIZA SOLA ───────────────────────────────────────────────────────
+   Dani se instalo la extension a mano CINCO veces en una noche. Y no por
+   cambios de fondo: la mayoria eran patrones y filtros, o sea datos. Cincuenta
+   y tantas carpetas «FlotaDSP-Cortex (35)» en Descargas es la prueba de que el
+   metodo estaba mal, no el que lo usaba.
+
+   COMO FUNCIONA. Cargada descomprimida desde una carpeta FIJA,
+   `chrome.runtime.reload()` vuelve a leer los ficheros DEL DISCO. O sea que si
+   alguien deja ahi la version nueva, la extension se pone al dia sola. Lo unico
+   que hace falta es enterarse, y para eso ya esta `extension.json`, que el
+   propio despliegue publica con la version.
+
+   NO ES CODIGO REMOTO —que ademas MV3 prohibe—: lo que se descarga es un numero
+   de version. El codigo sale del disco de Dani, puesto ahi por el despliegue.
+
+   EL SEGURO CONTRA EL BUCLE. Si la carpeta NO se ha actualizado, al recargar
+   seguiriamos en la version vieja y esto se reiniciaria cada cinco minutos para
+   siempre. Por eso se apunta la version por la que ya se intento: si se vuelve
+   a mirar y seguimos igual, no se insiste. Un fallo que se repite solo es peor
+   que el problema que arregla. */
+const VERSION_CADA_MS = 5 * 60 * 1000;
+
+function esMasNueva(a, b) {
+  const pa = String(a).split('.').map(Number);
+  const pb = String(b).split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
+async function mirarSiHayVersionNueva() {
+  const mia = chrome.runtime.getManifest().version;
+  const { versionMirada = 0, recargaIntento = '' } =
+    await chrome.storage.local.get({ versionMirada: 0, recargaIntento: '' });
+  if (Date.now() - versionMirada < VERSION_CADA_MS) return;
+  await chrome.storage.local.set({ versionMirada: Date.now() });
+
+  /* QUE SE SEPA QUE PASO, PASE LO QUE PASE.
+     La primera version se tragaba el fallo del `fetch` con un `catch` mudo, y
+     el 15-09-2026 la 2.65 se quedo sin actualizar a la 2.66 sin que hubiera
+     forma de saber por que: ni fallo, ni aviso, ni nada. Es el mismo error que
+     llevo el dia entero arreglando en otros sitios (gotcha 65), cometido por mi
+     en el codigo que tenia que arreglar justo eso.
+     Ahora cada intento deja una linea en el servidor. Cuesta una peticion cada
+     cinco minutos y es la diferencia entre saber y adivinar. */
+  const contar = (que) => enviarDiagnostico({
+    kind: 'debug', which: 'autoactualizar',
+    url: `${que} · corriendo=${mia}`, count: 0, bytes: 0,
+  }).catch(() => {});
+
+  let fuera = '';
+  try {
+    const r = await fetch('https://flotadsp.com/extension.json', { cache: 'no-store' });
+    if (!r || !r.ok) { await contar(`HTTP ${r ? r.status : '?'} al pedir la version`); return; }
+    fuera = String(((await r.json()) || {}).version || '');
+  } catch (e) {
+    await contar(`no se pudo pedir la version: ${String(e).slice(0, 60)}`);
+    return;
+  }
+  if (!fuera) { await contar('la respuesta no traia version'); return; }
+  if (!esMasNueva(fuera, mia)) { await contar(`al dia (publicada ${fuera})`); return; }
+  if (recargaIntento === fuera) {
+    await contar(`ya lo intente con la ${fuera} y sigo en la ${mia}: la carpeta no esta al dia`);
+    await pushActivity(`hay una version ${fuera} y esta carpeta sigue en la ${mia}`, 0);
+    return;
+  }
+  await chrome.storage.local.set({ recargaIntento: fuera });
+  await contar(`recargando: ${mia} -> ${fuera}`);
+  /* CON TOPE DE TIEMPO. `flush()` sale a la red; si se queda colgado, el
+     `await` no vuelve NUNCA y no se llega a recargar — un cuelgue silencioso
+     que deja la extension vieja para siempre. Cinco segundos y se sigue: como
+     mucho se reintenta el envio despues de recargar, que es reversible;
+     quedarse sin actualizar no lo es. */
+  try {
+    await Promise.race([flush(), new Promise((ok) => setTimeout(ok, 5000))]);
+  } catch (_) {}
+  try { await pushActivity(`actualizando: ${mia} -> ${fuera}`, 1); } catch (_) {}
+  chrome.runtime.reload();
+}
 
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   if (msg?.type === 'cortexPackages' && Array.isArray(msg.packages)) {
@@ -680,6 +1225,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     });
     return false;
   }
+  /* A QUIEN SEGUIMOS, PARA LA PAGINA. `portal.js` vive en el mundo MAIN y no
+     puede tocar `chrome.storage` ni llamar al backend: pregunta por la ventana
+     y se le contesta por el mismo camino que el informe.
+
+     Va solo el CORREO y el nombre de la gente que ya estamos siguiendo —la que
+     el propio backend devuelve en `/cortex/seguimiento`—, y se usa para
+     preguntarle a Amazon por ellos uno a uno en la MISMA pantalla donde la
+     oficina los buscaria a mano. No sale de la sesion de Amazon del navegador. */
+  if (msg?.type === 'seguidosPedir') {
+    aQuienSeguimos()
+      .then((j) => reply?.({ correos: (j.correos || []).slice(0, 400),
+                             nombres: (j.nombres || []).slice(0, 400) }))
+      .catch(() => reply?.({ correos: [], nombres: [] }));
+    return true;   // respuesta asincrona: hay que mantener el canal abierto
+  }
   if (msg?.type === 'informeGuardado') {
     chrome.storage.local.get({ informe: { estados: [], descartados: [], plantillas: {} } })
       .then(({ informe }) => reply?.({ estados: informe.estados || [],
@@ -708,11 +1268,105 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
      firma ni un valor. Es lo único que falta para poder pedirlos nosotros. */
   /* La llamada que devuelve los enlaces firmados. Se guarda para repetirla;
      no sale del navegador. */
+  /* LA LLAMADA QUE FIRMA LOS ENLACES DE LOS INFORMES. Se guarda para poder
+     repetirla por cada nave; sin esto solo entran los informes de la estacion
+     que alguien tenga abierta, que es lo que dejo a DGA1 y DGA2 sin pre-DNR
+     durante dias.
+     EL CUERPO DE ESTE MANEJADOR SE PERDIO el 16-09-2026 al borrar dos
+     manejadores muertos de al lado: quedo un `if` abierto y los manejadores
+     siguientes acabaron DENTRO de el, o sea que ni se guardaba la llamada ni
+     entraban las cuentas de asociados. Sintacticamente valido, silencioso, y
+     solo se vio al medir por que no llegaban los datos. */
   if (msg?.type === 'llamadaInformes') {
     guardarLlamadaInformes(msg.url).then((ok) => {
       if (ok) pedirEnlacesFrescos();   // con una recien vista, ya
       reply?.({ ok });
     });
+    return true;
+  }
+  if (msg?.type === 'asociadosAreas' && msg.mapa) {
+    // El mapa area -> nave, guardado. Asi el orden en que lleguen las dos
+    // llamadas deja de importar (ver `mirarAsociados` en interceptor.js).
+    chrome.storage.local.get({ areasNave: {} }).then(({ areasNave }) => {
+      chrome.storage.local.set({ areasNave: { ...areasNave, ...msg.mapa } });
+    });
+    reply?.({ ok: true });
+    return true;
+  }
+  if (msg?.type === 'asociadosCuentas' && Array.isArray(msg.personas)) {
+    /* SOLO LA GENTE DE NUESTRAS NAVES. La pantalla de Asociados llega a
+       devolver personas de otras estaciones —en la primera captura salio una de
+       Murcia, de otra empresa— y esas no son nuestras: no tienen por que salir
+       de este navegador. Se filtra AQUI, que es donde se sabe cuales son las
+       naves, y antes de mandar nada.
+       Si de alguien no consta la nave, no se manda: mejor perderse uno que
+       llevarse a quien no toca. */
+    navesDeLaEmpresa().then(async (naves) => {
+      const mias = new Set((naves || []).map((n) => String(n).toUpperCase()));
+      /* Si la lista llego ANTES que el mapa de areas, las personas vienen sin
+         nave resuelta. Se resuelve aqui con el mapa guardado de la vuelta
+         anterior, en vez de descartarlas: descartar en silencio a todo el mundo
+         por un problema de orden es exactamente lo que paso el 16-09-2026. */
+      const { areasNave = {} } = await chrome.storage.local.get({ areasNave: {} });
+      for (const p of msg.personas) {
+        if ((!p.naves || !p.naves.length) && Array.isArray(p.areas)) {
+          p.naves = p.areas.map((a) => areasNave[a]).filter(Boolean);
+        }
+      }
+      /* QUIEN ESTA EN NUESTRA LISTA, PRIMERO. Filtrar solo por nave tiraba a
+         quien mas importa: el 16-09-2026 Lois Barreiro Figueira estaba en la
+         lista de la ETT para OGA5, tenia su cuenta al 11/14, y su Service Area
+         en Amazon era «Madrid (VAD4)» — se descartaba, y la pantalla decia que
+         no tenia cuenta. La nave de la cuenta NO es la nave de la ETT.
+         Asi que manda la lista: si esa persona esta en Incorporaciones, entra
+         este donde este. Y ademas, los de nuestras naves, para poder mirar la
+         estacion entera cuando haga falta. */
+      const sigo = await aQuienSeguimos();
+      const correos = new Set((sigo.correos || []).map((x) => String(x).toLowerCase()));
+      const nombres = new Set(sigo.nombres || []);
+      const esDeLaLista = (p) => {
+        if (p.correo && correos.has(String(p.correo).toLowerCase())) return true;
+        const pal = clavesDeNombre(p.nombre);
+        if (pal.length < 3) return false;
+        // Mismo criterio que el backend: uno contiene al otro, con tres o mas
+        // palabras en comun. Dos no bastan: «Garcia Lopez» casaria media Galicia.
+        for (const n of nombres) {
+          const otras = n.split(' ').filter((w) => w.length > 2);
+          if (otras.length < 3) continue;
+          const comunes = pal.filter((w) => otras.includes(w)).length;
+          if (comunes >= 3 && (comunes === pal.length || comunes === otras.length)) return true;
+        }
+        return false;
+      };
+      const suyas = msg.personas.filter((p) =>
+        esDeLaLista(p)
+        || (Array.isArray(p.naves) && p.naves.some((n) => mias.has(String(n).toUpperCase()))));
+      if (!suyas.length) {
+        await enviarDiagnostico({ kind: 'debug', which: 'asociados-cuentas',
+                                  url: `vistas=${msg.personas.length} de los nuestros=0`
+                                       + ` naves=${[...mias].join('/')}`
+                                       + ` lista=${correos.size}+${nombres.size}`,
+                                  count: msg.personas.length, bytes: 0 });
+        reply?.({ ok: false, motivo: 'ninguna de nuestras naves' });
+        return;
+      }
+      const r = await mandarInforme('asociados', JSON.stringify({ personas: suyas }), '');
+      // Ya ha traido datos: a partir de aqui basta con refrescar cada 4 h.
+      if (r && r.ok) await chrome.storage.local.set({ asociadosOk: Date.now() });
+      // Y AHORA EL DETALLE de cada uno: las veinte tareas de su ficha. Aqui y
+      // no antes, porque hasta ahora no se sabia quienes son los nuestros.
+      try { await pedirDetalleAsociados(suyas); } catch (_) {}
+      reply?.(r || { ok: false });
+    });
+    return true;
+  }
+  if (msg.type === 'candidatosWiniw') {
+    /* Los candidatos de la ETT. Va por la misma puerta que los informes —el
+       token de ingesta— y con el MISMO texto que se pegaba a mano, que es lo
+       que lo hace seguro: el lector del backend esta escrito contra ese texto
+       y probado con las 26 fichas de verdad. */
+    mandarInforme('candidatos', String(msg.texto || '').slice(0, 2000000), '')
+      .then((r) => reply?.(r || { ok: false }));
     return true;
   }
   if (msg?.type === 'firmaVista') {
@@ -761,10 +1415,20 @@ chrome.runtime.onStartup.addListener(boot);
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name !== ALARM) return;
   flush();
+  // ¿Hay una version nueva en el disco? Se mira cada cinco minutos (la propia
+  // funcion se encarga), no cada vuelta del aviso.
+  mirarSiHayVersionNueva();
   bajarInformesPendientes();
   // Y pedirle a Amazon enlaces frescos: la funcion decide sola si toca (cada
   // seis horas), asi que llamarla cada minuto no pide nada de mas.
   pedirEnlacesFrescos();
+  /* Y el plan de horas de las tres naves, que ya no depende de que nadie abra
+     la pantalla de Programacion: se pide a la API que esa pantalla usa. Cada
+     tres horas, y la funcion decide sola si toca. */
+  pedirHorarios();
+  // Y las cuentas de onboarding, que si no dependen de que alguien abra esa
+  // pantalla. Cada cuatro horas; la funcion decide sola si toca.
+  pedirAsociados();
 });
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status === 'complete' && /amazon\.es/.test(tab.url || '')) inject(tabId);

@@ -23,7 +23,7 @@ const MODULES = [
   ]},
   { g: 'Operación diaria', items: [
     ['paquetes', 'Paquetes IA'], ['apoyo', 'Apoyo en ruta'],
-    ['empleo', 'Empleo · candidatos'],
+    ['empleo', 'Empleo · candidatos'], ['incorporaciones', 'Incorporaciones'],
     ['asignacion', 'Asignación diaria'], ['turnos', 'Días libres'],
     ['aprobar-dias', 'Aprobar días libres'],
     ['checklist-operativo', 'Checklist turno'],

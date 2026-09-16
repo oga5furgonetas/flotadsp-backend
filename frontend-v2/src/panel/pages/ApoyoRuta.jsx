@@ -272,8 +272,9 @@ export default function ApoyoRuta() {
           <AlertTriangle size={16} className="mt-0.5 shrink-0" />
           <div>
             <b>La pestaña de Cortex está corriendo código viejo.</b>{' '}
-            Tienes instalada la extensión <b>{recargarCortex.version}</b> pero en la página sigue
-            la <b>{recargarCortex.interceptor}</b>: hasta que no pulses <b>F5</b> en la pestaña de
+            La extensión <b>{recargarCortex.version}</b> lleva dentro el lector{' '}
+            <b>{recargarCortex.esperada}</b>, pero en la página sigue corriendo el{' '}
+            <b>{recargarCortex.interceptor}</b>: hasta que no pulses <b>F5</b> en la pestaña de
             Cortex, lo que se arregló no se aplica y las paradas seguirán saliendo sin ubicación.
           </div>
         </div>

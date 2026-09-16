@@ -242,11 +242,13 @@ const PanelAparcamiento = lazy(() => import('./panel/pages/Aparcamiento'))
 const PanelCasasAlquiler = lazy(() => import('./panel/pages/CasasAlquiler'))
 const PanelScorecard = lazy(() => import('./panel/pages/Scorecard'))
 const PanelInformes = lazy(() => import('./panel/pages/Informes'))
+const PanelIncorporaciones = lazy(() => import('./panel/pages/Incorporaciones'))
 const PanelOrdenes = lazy(() => import('./panel/pages/OrdenesTrabajo'))
 const PanelDebrief = lazy(() => import('./panel/pages/Debrief'))
 const PortalTaller = lazy(() => import('./pages/PortalTaller'))
 const PortalTallerLista = lazy(() => import('./pages/PortalTallerLista'))
 const PortalApoyo = lazy(() => import('./pages/PortalApoyo'))
+const PortalDnr = lazy(() => import('./pages/PortalDnr'))
 const PanelConfiguracion = lazy(() => import('./panel/pages/Configuracion'))
 const PanelTienda = lazy(() => import('./panel/pages/Tienda'))
 const PanelTurnos = lazy(() => import('./panel/pages/Turnos'))
@@ -336,6 +338,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/app" element={<AppRedirect />} />
               <Route path="/taller/t/:token" element={<PortalTallerLista />} />
               <Route path="/apoyo/t/:token" element={<PortalApoyo />} />
+              {/* La pagina del conductor: «donde dejaste este paquete». Sin
+                  sesion, se abre desde un WhatsApp. */}
+              <Route path="/dnr/t/:token" element={<PortalDnr />} />
               <Route path="/empleo" element={<Ofertas />} />
               <Route path="/empleo/:slug/:oferta" element={<EmpleoPublica />} />
               <Route path="/taller/:token" element={<PortalTaller />} />
@@ -351,6 +356,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="mi-dia" element={<PanelMiDia />} />
                 <Route path="scorecard" element={<PanelScorecard />} />
                 <Route path="informes" element={<PanelInformes />} />
+            <Route path="incorporaciones" element={<PanelIncorporaciones />} />
                 <Route path="diarios" element={<Navigate to="/panel/informes?t=dnr" replace />} />
                 <Route path="ordenes" element={<PanelOrdenes />} />
                 <Route path="debrief" element={<PanelDebrief />} />

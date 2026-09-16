@@ -134,6 +134,12 @@ if (!window.__flotadspDsp) {
      su propio id, así que reenviar no duplica nada. */
   const HORA_MS = 3600000;
   const RE_DIARIO = /Daily-Report_(\d{4}-\d{2}-\d{2})/i;
+  /* Y las INVESTIGACIONES DE DNR, que son otro fichero de la misma carpeta:
+     `DNR_Investigations_ES-TDSL-OGA5.html`. No lleva fecha en el nombre —es
+     siempre el mismo y se sobrescribe con las que siguen abiertas—, asi que no
+     se puede ordenar por nombre ni deducir: se coge tal cual aparezca. */
+  const RE_DNR = /DNR_Investigations_/i;
+  const esInforme = (h) => (RE_DIARIO.test(h) || RE_DNR.test(h)) && /\.html?($|\?|#)/i.test(h);
   const pedidos = new Map();      // camino -> cuándo se pidió
 
   const centroDeRuta = () => {
@@ -156,7 +162,7 @@ if (!window.__flotadspDsp) {
     try {
       enlaces = [...document.querySelectorAll('a[href]')]
         .map((a) => { try { return new URL(a.getAttribute('href'), location.href).href; } catch (_) { return ''; } })
-        .filter((h) => h && RE_DIARIO.test(h) && /\.html?($|\?|#)/i.test(h));
+        .filter((h) => h && esInforme(h));
     } catch (_) { return; }
     if (!enlaces.length) return;
     const nuevos = [...new Set(enlaces)].filter((u) => !pedidos.has(u));

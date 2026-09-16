@@ -10,7 +10,7 @@ import {
   cortexIngestToken, cortexSeedDemo, cortexClearDemo, cortexDays, cortexReset,
   cortexLlaves, cortexRevocarLlave, cortexReactivarLlave, cortexReconstruirDirecciones,
   cortexRevocarLlavesAntiguas,
-  cortexStations, cortexAssignStation, cortexStationsAuto,
+  cortexStations, cortexAssignStation, cortexStationsAuto, cortexDiagnostico,
 } from '../api'
 import { isSuperAdmin } from '../auth'
 import LibretaPortales from '../components/LibretaPortales'
@@ -223,6 +223,7 @@ function SetupCard({ onSeed, onReset, seeding, center }) {
     // la lista vacia se copiaria la de la nave anterior sin enterarse.
   }, [center])  // eslint-disable-line react-hooks/exhaustive-deps
   const copy = (txt, key) => { navigator.clipboard?.writeText(txt).catch(() => {}); setCopied(key); setTimeout(() => setCopied(''), 1500) }
+
   return (
     <div className="rounded-2xl border border-white/[0.05] bg-white/[0.02] p-5">
       <div className="flex items-center gap-2 text-dark-100"><Radar size={16} className="text-brand-400" /><span className="text-[15px] font-bold">{t('px.conecta')}</span></div>
@@ -415,6 +416,39 @@ export default function PackageIntel() {
   const [day, setDay] = useState(todayISO())
   const [days, setDays] = useState([])
   const [showSetup, setShowSetup] = useState(false)
+  /* QUE VERSION CORRE DE VERDAD frente a la publicada. Tener la ultima
+     publicada no sirve de nada si el navegador sigue con una vieja: el
+     15-09-2026 se quedo en la 2.65 con la 2.68 ya publicada y desde la app no
+     habia forma de verlo — solo mirando la base de datos. */
+  const [extAtrasada, setExtAtrasada] = useState(null)
+  useEffect(() => {
+    let vivo = true
+    const masNueva = (a, b) => {
+      // Por numero, no por texto: «2.10» es mas nueva que «2.9».
+      const pa = String(a || '').split('.').map(Number)
+      const pb = String(b || '').split('.').map(Number)
+      for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        const x = pa[i] || 0, y = pb[i] || 0
+        if (x !== y) return x > y
+      }
+      return false
+    }
+    Promise.all([
+      fetch('/extension.json').then((r) => r.json()).catch(() => null),
+      cortexDiagnostico().then((r) => r.data).catch(() => null),
+    ]).then(([pub, diag]) => {
+      if (!vivo || !pub?.version || !diag) return
+      // La MAS NUEVA de las que corren: el aviso es para quien se quedo atras,
+      // y con varios equipos manda el que mejor esta.
+      const corriendo = (diag.versiones || []).map((v) => v.version)
+        .filter((v) => /^[0-9.]+$/.test(v || ''))
+        .sort((a, b) => (masNueva(a, b) ? -1 : 1))[0]
+      if (corriendo && masNueva(pub.version, corriendo)) {
+        setExtAtrasada({ corriendo, ultima: pub.version })
+      } else { setExtAtrasada(null) }
+    })
+    return () => { vivo = false }
+  }, [])
   const [vista, setVista] = useState('hoy')   // hoy | portales
   const [routes, setRoutes] = useState([])
   const [activeRoute, setActiveRoute] = useState(null) // ruta abierta (o null = vista de rutas)
@@ -676,6 +710,23 @@ export default function PackageIntel() {
       {toast && (
         <div className={`mb-4 rounded-xl border px-4 py-2.5 text-[13px] ${toast.ok ? 'border-emerald-500/25 bg-emerald-500/[0.07] text-emerald-300' : 'border-red-500/25 bg-red-500/[0.07] text-red-300'}`}>
           {toast.msg}
+        </div>
+      )}
+      {/* LA EXTENSION SE HA QUEDADO ATRAS. Va AQUI, donde se ve al entrar, y no
+          dentro de la tarjeta de instalacion: esa esta plegada y puede pasar
+          semanas sin abrirse. Mientras la extension no se actualice, lo nuevo
+          NO llega — y desde fuera eso se parece demasiado a «no funciona». */}
+      {extAtrasada && (
+        <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-[13px]">
+          <p className="font-semibold text-amber-200">
+            La extensión que está corriendo es la {extAtrasada.corriendo} y la última es la {extAtrasada.ultima}.
+          </p>
+          <p className="mt-1 text-[12.5px] leading-relaxed text-amber-100/80">
+            Hasta que se actualice, lo nuevo no entra. Entra en{' '}
+            <code className="rounded bg-dark-800 px-1">chrome://extensions</code> y dale al botón
+            de recargar (↻) de FlotaDSP Cortex: coge los ficheros del disco, que ya están al día.
+            No hace falta descargar nada.
+          </p>
         </div>
       )}
       {fresh.warn && !empty && (

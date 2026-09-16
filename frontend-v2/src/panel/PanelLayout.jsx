@@ -7,7 +7,7 @@ import {
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX, FileBarChart,
   PackageSearch, PackageCheck, MapPin, Timer, MapPinned, Gauge, Mail, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
-  Briefcase, Store,
+  Briefcase, Store, UserCheck,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco } from './auth'
 import { getMe, contarPeticionesPendientes, contarCandidatosNuevos } from './api'
@@ -18,6 +18,7 @@ import LiveNotifier from './LiveNotifier'
 import MenuMovil from './components/MenuMovil'
 import { useT, LANGS } from '../i18n'
 import { usePlan } from '../lib/usePlan'
+import { vigilarVersion } from '../lib/versionApp'
 
 const keyOf = (to) => (to === '/panel' ? 'dashboard' : to.split('/').pop())
 
@@ -87,6 +88,9 @@ const NAV_DEF = [
   { g: 'nav.g.team', gIcon: Users, iconCls: 'text-violet-400', iconBg: 'bg-violet-500/10', items: [
     { to: '/panel/conductores', labelKey: 'nav.drivers', icon: Users },
     { to: '/panel/empleo', labelKey: 'nav.empleo', icon: Briefcase },
+    /* Va detras de Empleo porque es el paso siguiente: primero se apunta
+       la gente, despues se la mete dentro. */
+    { to: '/panel/incorporaciones', labelKey: 'nav.incorporaciones', icon: UserCheck },
     { to: '/panel/scorecard', labelKey: 'nav.scorecard', icon: Trophy },
     /* UNA SOLA ENTRADA para los dos informes del portal. Eran dos —«DNR ·
        Diarios» y «Horas · WHC»— y salen del MISMO documento: tenerlas
@@ -227,6 +231,17 @@ export default function PanelLayout() {
   const { limits } = usePlan()
   const [center, setCenter] = useState(() => localStorage.getItem('panel_center') || 'Todos')
   const [cmdOpen, setCmdOpen] = useState(false)
+  /* Si se publica una compilación distinta a la que tiene esta pestaña, se
+     avisa. Se mira cada cinco minutos y al volver a la pestaña, que es cuando
+     de verdad importa: alguien vuelve del café y sigue con lo de hace horas. */
+  const [hayVersionNueva, setHayVersionNueva] = useState(false)
+  useEffect(() => {
+    // Con llaves y una variable: desde fuera no se puede saber si lo que
+    // devuelve una llamada es una función de limpieza, y React lo llamaría
+    // igual al salir de la pantalla. Así se lee de un vistazo.
+    const dejarDeVigilar = vigilarVersion(() => setHayVersionNueva(true))
+    return dejarDeVigilar
+  }, [])
   const [ayudaOpen, setAyudaOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   /* La tecla `?` abre la ficha de la pantalla actual. Se ignora si el foco
@@ -617,6 +632,23 @@ export default function PanelLayout() {
           <div className="flex items-center justify-between gap-2 bg-purple-500/15 px-4 py-2 text-sm text-purple-200">
             <span>▶ {t('demo.banner')}</span>
             <a href="/registro" className="rounded-md bg-purple-500/30 px-3 py-1 text-xs font-semibold hover:bg-purple-500/40">{t('demo.banner.cta')}</a>
+          </div>
+        )}
+        {/* HAY UNA VERSIÓN NUEVA DE LA APP.
+            El 16-09-2026 Dani dijo «Eddy no me aparece para enviarle la
+            formación». Eddy estaba bien en los datos: su pestaña llevaba horas
+            abierta con la compilación anterior. La app no fallaba — enseñaba lo
+            de antes, que es peor, porque lleva a desconfiar de los datos cuando
+            el problema es la pestaña. */}
+        {hayVersionNueva && (
+          <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-brand-500/40 bg-brand-500/10 px-3.5 py-2.5">
+            <span className="text-[13px] text-brand-200">
+              Hay una versión nueva de la aplicación. Lo que ves puede estar desactualizado.
+            </span>
+            <button onClick={() => window.location.reload()}
+              className="ml-auto rounded-lg bg-brand-400 px-3 py-1.5 text-[12.5px] font-semibold text-brand-tinta hover:brightness-110">
+              Recargar
+            </button>
           </div>
         )}
         <TrialBanner />

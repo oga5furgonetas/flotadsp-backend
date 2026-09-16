@@ -25,6 +25,19 @@ const SIN_UI_A_PROPOSITO = new Set([
   // `/cortex/ingest` llama background.js: es una puerta para la extension,
   // no una pantalla. Nunca tendra UI.
   'POST /cortex/ingest-informe',
+  // `naves` se la pide la extension con su token de ingesta para saber de
+  // cuantas naves tiene que traer los informes: el portal firma los enlaces
+  // por nave y la peticion que los firma lleva `station`. Sin esta lista
+  // solo entraban los de la nave que alguien tuviera abierta —el 15-09-2026
+  // los de DGA1 no llegaron nunca—. Es una puerta para la extension, como
+  // las de ingesta: no tendra pantalla.
+  'GET /cortex/naves',
+  /* A quien seguimos, para la extension. Filtrar las cuentas de Asociados por
+     NAVE tiraba justo a quien importa: alguien de la lista de la ETT para OGA5
+     puede tener su cuenta en otra Service Area (paso con Lois Barreiro, que
+     estaba en Madrid VAD4), y se descartaba diciendo que no tenia cuenta. Lo
+     que manda es si esta en NUESTRA lista, y eso lo sabe el backend. */
+  'GET /cortex/seguimiento',
   // `informes-auto` dice cuando entro solo el ultimo Daily Report y el ultimo
   // plan de horas. HOY no tiene pantalla a proposito: la rama DSP acaba de
   // nacer y hasta que no se confirme con los informes de verdad no se sabe si

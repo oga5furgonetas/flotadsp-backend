@@ -108,6 +108,29 @@ export const borrarCandidato = (id) => api.delete(`/empleo/candidatos/${id}`)
 /* Por contactar: gente de Indeed a la que hay que escribir para que se apunte.
    El enlace de WhatsApp lo arma el backend y viaja en `wa` (gotcha 47). */
 export const getInvitados = () => api.get('/empleo/invitados')
+
+/* Incorporaciones: quien esta entrando, que le falta y el WhatsApp para
+   pedirselo. El texto y el enlace `wa.me` los monta el BACKEND (gotcha 47);
+   `marcarAvisoOnboarding` es aparte porque abrir WhatsApp no es haber enviado. */
+/* `centerParam` y no `{ center }` a pelo: con el selector en «Todos» el panel
+   manda la CADENA 'Todos' y el backend buscaria un centro que se llama asi —
+   cero resultados, sin error y con 26 personas en la base (gotcha 12). */
+export const getIncorporaciones = (center) => api.get('/incorporaciones/personas', { params: centerParam(center) })
+// Las cuentas de Amazon y QUE le falta a cada una, de la pantalla de Asociados.
+// Por defecto solo las cuentas de la gente que esta entrando (la del listado
+// de la ETT). `todas` las trae todas, para buscar a alguien que no este.
+export const getAsociados = (center, todas) =>
+  api.get('/asociados', { params: { ...centerParam(center), ...(todas ? { todas: true } : {}) } })
+export const altaIncorporacion = (body) => api.post('/incorporaciones/personas', body)
+export const importarIncorporaciones = (body) => api.post('/incorporaciones/personas/importar', body)
+export const editarIncorporacion = (id, body) => api.patch(`/incorporaciones/personas/${id}`, body)
+export const mensajeIncorporacion = (id, body) => api.post(`/incorporaciones/personas/${id}/mensaje`, body)
+export const marcarAvisoIncorporacion = (id, body) => api.post(`/incorporaciones/personas/${id}/enviado`, body)
+export const guardarPlantillaIncorporaciones = (body) => api.put('/incorporaciones/plantillas', body)
+/* La descarga va como `blob`: sin esto axios intenta leerlo como texto y
+   el fichero llega con los acentos rotos. */
+export const exportarIncorporaciones = (center) =>
+  api.get('/incorporaciones/export', { params: centerParam(center), responseType: 'blob' })
 export const crearInvitado = (body) => api.post('/empleo/invitados', body)
 export const marcarInvitadoEscrito = (id, escrito) =>
   api.post(`/empleo/invitados/${id}/escrito`, { escrito })
@@ -607,7 +630,30 @@ export const cortexEmparejar = () => api.get('/cortex/emparejar')
 export const whcAnalizar = (body) => api.post('/whc/analizar', body)
 // El plan pegado se guarda por (centro, semana) para no tener que repegarlo.
 export const getWhcPlan = (center) => api.get('/whc/plan', { params: { center } })
+/* Que nave tiene plan de esta semana y cual no. Sin esto, una nave sin plan
+   se ve igual que una pantalla rota: un hueco no dice si falta el dato o si
+   no hay nada que contar. */
+export const getWhcEstado = () => api.get('/whc/estado')
+/* Las horas de la semana con el dato de AMAZON: nada estimado, umbrales
+   suyos y la proyección es lo que cada uno tiene puesto. Si devuelve
+   `hay: false` todavía no ha entrado y la pantalla sigue con el pegado. */
+export const getWhcSemana = (center) => api.get('/whc/semana', { params: { center } })
 export const deleteWhcPlan = (center) => api.delete('/whc/plan', { params: { center } })
+
+/* Investigaciones de DNR: Amazon pregunta donde se entrego un paquete que el
+   cliente dice no haber recibido. `responder` PREPARA el correo (no lo manda) y
+   `marcarDnrEnviada` lo confirma despues, cuando ya se le ha dado a enviar:
+   abrir el correo no es haberlo enviado. */
+export const getDnrInvestigaciones = (center) => api.get('/dnr/investigaciones', { params: centerParam(center) })
+export const responderDnr = (body) => api.post('/dnr/investigaciones/responder', body)
+/* Lo manda el servidor. `responder` solo PREPARA (abre tu correo); esto lo
+   envía de verdad, que es lo único que funciona con más de 3 paquetes: el
+   `mailto` pasa de 2.000 caracteres y Windows lo corta. */
+export const enviarDnr = (body) => api.post('/dnr/investigaciones/enviar', body)
+export const marcarDnrEnviada = (body) => api.post('/dnr/investigaciones/enviada', body)
+/* Crea (o reutiliza) el enlace que se le manda al conductor y devuelve el
+   WhatsApp ya escrito. El texto y el `wa.me` los arma el backend. */
+export const preguntarConductorDnr = (body) => api.post('/dnr/investigaciones/preguntar', body)
 
 // ── Aparcamiento: plano por centro + trazabilidad diaria ──
 export const parkingLayout = (center) => api.get('/parking/layout', { params: { center } })

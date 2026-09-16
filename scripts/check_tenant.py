@@ -41,6 +41,13 @@ FIJAN = {"_set_tenant_by_slug", "set_current_org_db", "_ot_por_token", "_apoyo_p
          # `db_name` dentro y lo fija antes de devolver, igual que los del
          # taller y los de apoyo.
          "_tienda_por_token",
+         # `_dnr_por_token`: el enlace que se le manda al conductor para
+         # preguntarle donde dejo un paquete. Lleva su `db_name` dentro, filtra
+         # por `tipo: "dnr"` y exige `dnr_id` —lo que evita que acepte tokens de
+         # las otras tres clases (gotcha 59)— y fija la empresa antes de tocar
+         # `db`. Lo vigila un caso de `test_dnr_investigaciones.py`, asi que si
+         # alguien le quita el `set_current_org_db` no basta con que este aqui.
+         "_dnr_por_token",
          # Autentica la extension por su token de ingesta y fija la BD dentro.
          "_cortex_ingest_org",
          # Resuelve empresa + oferta desde la URL publica de empleo y llama a

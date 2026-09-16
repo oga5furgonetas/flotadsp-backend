@@ -345,6 +345,7 @@ const DICT = {
   'nav.dashboard':  { es: 'Dashboard',        en: 'Dashboard',     fr: 'Tableau de bord', de: 'Übersicht',       it: 'Dashboard',      pt: 'Dashboard' },
   'nav.scorecard':  { es: 'Scorecard',        en: 'Scorecard',     fr: 'Scorecard',       de: 'Scorecard',       it: 'Scorecard',      pt: 'Scorecard' },
   'nav.ordenes':    { es: 'Órdenes de taller', en: 'Work orders', fr: 'Ordres de travail', de: 'Werkstattaufträge', it: 'Ordini di lavoro', pt: 'Ordens de trabalho' },
+  'nav.incorporaciones': { es: 'Incorporaciones', en: 'Onboarding', fr: 'Intégrations', de: 'Einarbeitung', it: 'Inserimenti', pt: 'Integrações' },
   'nav.informes': { es: 'Informes de Amazon', en: 'Amazon reports', fr: 'Rapports Amazon', de: 'Amazon-Berichte', it: 'Report Amazon', pt: 'Relatorios Amazon' },
   'nav.diarios':    { es: 'DNR · Diarios',   en: 'DNR · Daily',   fr: 'DNR · Quotidien', de: 'DNR · Täglich',   it: 'DNR · Giornaliero', pt: 'DNR · Diários' },
   'nav.apoyo': { es: 'Apoyo en ruta', en: 'Route support', fr: 'Renfort en tournée', de: 'Unterstützung auf Tour', it: 'Supporto in rotta', pt: 'Apoio em rota' },

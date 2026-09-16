@@ -8,7 +8,7 @@ from ai_learning import (
     get_pattern_lessons, get_part_lesson, save_feedback as _save_ai_feedback,
 )
 from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Depends, Body, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from starlette.middleware.cors import CORSMiddleware
@@ -41,6 +41,7 @@ import asyncio
 import os
 import io
 from urllib.parse import quote as _url_quote, urlencode as _url_encode
+from html import escape as html_escape
 import json
 import uuid
 import secrets
@@ -1344,6 +1345,17 @@ async def _ensure_tenant_indexes(db_name: str):
     # Al revés, la creación falla (ya hay duplicados) y todo se queda igual.
     await _dedupe_cortex_stations(tdb)
     await _idx_unico(tdb.cortex_stations, "service_area_id")
+    # Las investigaciones de DNR entran por `upsert` y el mismo fichero se manda
+    # varias veces al dia, tambien desde dos pestanas a la vez: sin el UNICO,
+    # dos upserts que no encuentran documento insertan los dos y el paquete sale
+    # repetido en la pantalla (gotchas 9 y 46). Quien decide que es unico es la
+    # base, no un `if`.
+    await _idx_unico(tdb[_DNR_COL], "tracking_id")
+    # El listado de incorporaciones se pega entero cada vez: sin el unico,
+    # dos pegadas simultaneas crean dos fichas de la misma persona y el
+    # trabajo se parte en dos (gotchas 9, 15 y 46).
+    await _idx_unico(tdb[_ONB_COL], "clave")
+    await _idx(tdb[_ONB_COL], "id")
     # La foto diaria: se consulta por dia y por centro.
     # Un unico parcial: dos analisis a la vez del mismo vehiculo creaban dos
     # entradas del mismo golpe (gotcha 9). Solo sobre los ABIERTOS, porque el
@@ -34048,6 +34060,1886 @@ async def admin_latidos(_=Depends(require_admin)):
             "todos_vivos": all(x["vivo"] for x in out) if out else None}
 
 
+# ── INVESTIGACIONES DE DNR ──────────────────────────────────────────────────
+"""Contestar a Amazon cuando un cliente dice que no recibio su paquete.
+
+QUE ES. El portal publica «Ongoing DNR Investigations»: una tabla con los
+paquetes reclamados y, por cada uno, cuatro desplegables para decir DONDE se
+entrego. Al final se pulsa un boton que genera un bloque de texto y se manda
+por correo a `dnr-investigations@eulmdxdasboard.amzl.amazon.dev`. Cada DNR que
+no se contesta cuenta en contra en la scorecard.
+
+Hoy eso se hace a mano, paquete a paquete, y son decenas por semana.
+
+COMO SE GENERA EL CODIGO, y por que se puede reproducir exacto. La propia
+pagina lo dice en su JavaScript:
+
+    `---###START###---${btoa(String.fromCharCode(...new TextEncoder()
+       .encode(JSON.stringify({version:1, data}))))}---###END###---`
+
+O sea: base64 del JSON en UTF-8. `data` es una lista con UN objeto por fila, y
+las claves van en el ORDEN DEL DOM: tracking_id, order_id, marketplace_id,
+case_datetime, completion, location, additional, property, building_number,
+building_floor.
+
+**Comprobado byte a byte** (14-09-2026) contra la misma expresion ejecutada en
+Node con las 27 filas del fichero real: identico. Por eso esto no es adivinar.
+
+LO QUE ESTO NO HACE, Y NO VA A HACER. No inventa respuestas. Los desplegables
+salen de lo que diga el conductor: la aplicacion traduce sus palabras a las
+opciones que Amazon acepta, y la respuesta la revisa una persona antes de
+mandarla. Declarar donde se dejo un paquete es una afirmacion ante Amazon sobre
+un hecho; rellenarla sola con lo que suene bien seria inventar pruebas.
+
+EL CATALOGO NO SE TECLEA. Sale de las constantes de la propia pagina
+(`backend/datos/dnr_opciones.json`): una opcion inventada es una respuesta que
+Amazon rechaza sin decir por que.
+"""
+
+# ── INCORPORACIONES: A QUIEN LE FALTA ALGO, Y COMO DECIRSELO ────────────
+"""Una persona que empieza en Amazon pasa por una lista de papeles, y mientras
+falte uno NO puede subirse a una furgoneta. La foto del carnet borrosa, el alta
+en la Seguridad Social que no llego, la formacion sin hacer. Hoy eso se lleva
+en una pestana de otro sistema que el centro solo puede CONSULTAR, y avisar a
+cada uno es abrir WhatsApp, buscar el numero, acordarse de que le faltaba y
+escribir el mismo mensaje por enesima vez.
+
+Aqui se hace en un clic: se elige a quien, se marca que le falta, y sale el
+WhatsApp con el texto ya escrito.
+
+LO QUE NO SE GUARDA, Y ES A PROPOSITO. El listado del que salen estos datos
+trae tambien la contrasena del correo y la del Rabbit de cada persona. **No se
+guardan.** Para avisar a alguien de que su foto del carnet esta mal no hace
+falta su contrasena, y una copia mas de una credencial es una copia mas que
+puede filtrarse. Lo que se guarda es lo que hace falta para hablar con esa
+persona: como se llama, su telefono, de que ETT viene y que le falta.
+
+EL MENSAJE LO ESCRIBE EL SERVIDOR. El enlace `wa.me` tambien (`enlace_wa`): 61
+de 114 telefonos estan guardados sin prefijo y un `wa.me/6xxxxxxxx` abre un
+numero que no existe (gotcha 47). Y abrir WhatsApp no es haber enviado: eso lo
+confirma la persona, como en las ETT y en las investigaciones de DNR.
+"""
+_ONB_COL = "incorporaciones"
+# A partir de aqui alguien lleva demasiado esperando. Siete dias no es un numero
+# redondo por gusto: es una semana entera de rutas que esa persona no ha hecho y
+# que ha tenido que cubrir otro.
+_ONB_DIAS_URGE = 7
+
+# Los motivos de siempre, con el texto que se manda. Se pueden editar desde la
+# pantalla (`PUT /onboarding/plantillas`): quien habla con la gente todos los
+# dias sabe mejor que nadie como pedirlo.
+_ONB_MOTIVOS = {
+    # DICE «DE CONDUCIR» A PROPOSITO, y dos veces. El 15-09-2026 el mensaje
+    # ponia solo «tu foto del carnet» y Miguel mando un SELFIE: para el, el
+    # carnet era la foto de carnet de toda la vida. Es su lectura, no un
+    # despiste — «foto de carnet» en espanol significa justo eso. Media hora
+    # de ida y vuelta y la incorporacion otro dia parada.
+    "carnet": {
+        "titulo": "Foto del carnet de conducir",
+        "texto": ("la foto de tu CARNET DE CONDUCIR est\u00e1 mal (el permiso B, no "
+                  "una foto tuya) y necesito que me la vuelvas a sacar: apoya el "
+                  "carnet en una mesa, que salga n\u00edtida y se vea bien por "
+                  "delante y por detr\u00e1s, sin reflejos"),
+    },
+    "ss": {
+        "titulo": "Falta el alta en la Seguridad Social",
+        "texto": ("nos falta tu alta en la Seguridad Social; en cuanto la ETT te "
+                  "la mande, pas\u00e1mela por aqu\u00ed"),
+    },
+    "dni": {
+        "titulo": "Falta el DNI / NIE",
+        "texto": ("nos falta tu DNI o NIE (el documento, por las dos caras) en "
+                  "foto n\u00edtida, apoyado en una mesa y sin reflejos"),
+    },
+    "banco": {
+        "titulo": "Falta el n\u00famero de cuenta",
+        "texto": "nos falta tu n\u00famero de cuenta (IBAN) para poder darte de alta",
+    },
+    "formacion": {
+        "titulo": "Formaci\u00f3n sin hacer",
+        "texto": ("te falta terminar la formaci\u00f3n online; en cuanto la acabes "
+                  "av\u00edsame y seguimos"),
+    },
+}
+
+# Por lo que pasa UN papel. El orden es el del recorrido y se usa para decidir
+# en que columna cae la persona: manda siempre el mas atrasado, porque lo que
+# hay que hacer hoy es lo que falta, no lo que ya esta.
+_ONB_ESTADOS = ("falta", "pedido", "revision", "ok")
+_ONB_ESTADO_NOMBRE = {
+    "falta": "Falta",
+    "pedido": "Se lo he pedido",
+    "revision": "En revision",
+    "ok": "Correcto",
+}
+
+_ONB_SALUDO = "Hola {nombre}, \u00bfqu\u00e9 tal?"
+_ONB_CUERPO = ("Disculpa, hemos tenido un problema con tu incorporaci\u00f3n en Amazon "
+               "y por eso est\u00e1 tardando.")
+_ONB_CIERRE = "Cualquier duda me dices. \u00a1Gracias!"
+
+
+# ── EL MENSAJE PARA EMPEZAR LA FORMACION ────────────────────────────────────
+#
+# Cuando alguien pasa a «En incorporacion», Amazon le genera un usuario para la
+# formacion —el «Codigo Test Formacion» del listado de la ETT— y la contraseña
+# es la misma para todos. Hasta ahora eso se copiaba a mano ficha por ficha.
+#
+# La contraseña va en el texto A PROPOSITO: es la misma para todo el mundo y la
+# da la propia empresa, no es la de nadie. El USUARIO si es de cada persona y
+# sale de su ficha: por eso a quien no tenga codigo NO se le manda nada, en vez
+# de mandarle un mensaje con un hueco vacio.
+_ONB_FORMACION_CONTRASENA = "welcome"
+# La app de la formacion y su enlace de Play Store. Aqui y no dentro del
+# texto: el dia que cambie, se cambia en un sitio.
+_ONB_FORMACION_APP = "Amiigo"
+_ONB_FORMACION_ENLACE = (
+    "https://play.google.com/store/apps/details?id=com.disprz.amiigo&hl=es_419")
+_ONB_FORMACION = (
+    "Ya tienes lista la formación de Amazon, que es el último paso."
+    "\n\nDescárgate la app {app} en Play Store:\n{enlace}"
+    "\n\nY entra con estos datos:\n"
+    "Usuario: {codigo}\n"
+    "Contraseña: {clave}\n\n"
+    "Cuanto antes la termines, antes puedes empezar a trabajar. "
+    "Cualquier duda me preguntas y te ayudo."
+)
+
+
+async def _onb_plantilla() -> dict:
+    """Las plantillas, con las de fabrica cuando nadie las ha tocado."""
+    doc = await db.app_meta.find_one({"_id": "incorporaciones_plantilla"}) or {}
+    motivos = dict(_ONB_MOTIVOS)
+    for k, v in (doc.get("motivos") or {}).items():
+        if k in motivos and isinstance(v, dict) and v.get("texto"):
+            motivos[k] = {"titulo": v.get("titulo") or motivos[k]["titulo"],
+                          "texto": v["texto"]}
+    return {"saludo": doc.get("saludo") or _ONB_SALUDO,
+            "cuerpo": doc.get("cuerpo") or _ONB_CUERPO,
+            "cierre": doc.get("cierre") or _ONB_CIERRE,
+            "motivos": motivos}
+
+
+def _onb_nombre_corto(nombre: str) -> str:
+    """El nombre de pila, que es como se le habla a alguien por WhatsApp.
+
+    El listado viene como «Apellido Apellido, Nombre», asi que el nombre esta
+    DETRAS de la coma. Sin esto el mensaje empieza por «Hola Anestiadi», que es
+    su apellido y se lee como un correo automatico.
+    """
+    n = (nombre or "").strip()
+    if "," in n:
+        n = n.split(",", 1)[1]
+    trozos = [t for t in n.replace(".", " ").split() if len(t) > 1]
+    return trozos[0].strip().title() if trozos else n.strip().title()
+
+
+# Palabras que por si solas no dicen nada: si lo unico que queda de una nota
+# despues de quitar lo que ya dicen los motivos son estas, la nota sobra.
+_ONB_RELLENO = {
+    "falta", "faltan", "le", "la", "el", "los", "las", "de", "del", "su", "sus",
+    "y", "e", "o", "en", "por", "para", "que", "no", "ni", "tiene", "hacer",
+    "pendiente", "pendientes", "sin", "aun", "todavia", "a", "al", "un", "una",
+}
+
+
+def _onb_palabras(t: str) -> set:
+    """Las palabras de un texto, sin tildes y en minusculas."""
+    x = unicodedata.normalize("NFD", str(t or ""))
+    x = "".join(c for c in x if unicodedata.category(c) != "Mn").lower()
+    return {w for w in re.split(r"[^a-z0-9]+", x) if w}
+
+
+def _onb_nota_util(nota: str, motivos: list, plantilla: dict) -> str:
+    """La nota interna, SOLO si dice algo que los motivos no digan ya.
+
+    POR QUE. Cuando no se escribe un texto a mano, el mensaje usaba la `nota`
+    de la ficha. Y la nota suele ser el apunte interno de lo que falta, asi que
+    el mensaje decia lo mismo dos veces — la segunda con la palabra tal cual la
+    escribio quien la apunto: «Para poder seguir nos falta: 1) te falta terminar
+    la formacion online; 2) falta formacion». Eso se le manda a una persona.
+
+    Pero la nota tambien puede aportar de verdad («vive en Vigo, llamar por la
+    tarde»), asi que no se tira a ciegas: se quitan las palabras que ya estan en
+    los motivos y el relleno, y si no queda nada, sobra.
+    """
+    if not nota:
+        return ""
+    ya = set()
+    for m in motivos or []:
+        ya |= _onb_palabras(m)
+        ya |= _onb_palabras((plantilla.get("motivos", {}).get(m) or {}).get("texto"))
+    resto = _onb_palabras(nota) - ya - _ONB_RELLENO
+    return nota if resto else ""
+
+
+def _onb_mensaje_formacion(persona: dict, plantilla: dict) -> str:
+    """«Empieza la formacion», con SU usuario dentro.
+
+    Devuelve vacio si no hay codigo: un mensaje con el usuario en blanco es peor
+    que no mandarlo — la persona lo intenta, no puede entrar, y deja de hacer
+    caso al siguiente.
+    """
+    codigo = str(persona.get("codigo_formacion") or "").strip()
+    if not codigo:
+        return ""
+    return " ".join(x for x in [
+        plantilla["saludo"].replace("{nombre}", _onb_nombre_corto(persona.get("nombre"))),
+        _ONB_FORMACION.format(codigo=codigo, clave=_ONB_FORMACION_CONTRASENA,
+                              app=_ONB_FORMACION_APP, enlace=_ONB_FORMACION_ENLACE),
+    ] if x and x.strip())
+
+
+async def _onb_mensaje(persona: dict, motivos: list, extra: str = "") -> str:
+    """El texto que se le manda. Lo arma el servidor, no la pantalla."""
+    pl = await _onb_plantilla()
+    partes = [pl["saludo"].replace("{nombre}", _onb_nombre_corto(persona.get("nombre"))),
+              pl["cuerpo"]]
+    faltas = []
+    for m in motivos or []:
+        t = (pl["motivos"].get(m) or {}).get("texto")
+        if t:
+            faltas.append(t)
+    if extra:
+        faltas.append(extra)
+    if faltas:
+        # Se encadenan en una sola frase: tres mensajes seguidos diciendo «te
+        # falta» se leen como una bronca, y uno solo se contesta mejor.
+        if len(faltas) == 1:
+            partes.append("Para poder seguir, %s." % faltas[0])
+        else:
+            partes.append("Para poder seguir nos falta: %s."
+                          % "; ".join("%d) %s" % (i + 1, f) for i, f in enumerate(faltas)))
+    partes.append(pl["cierre"])
+    return " ".join(x.strip() for x in partes if x and x.strip())
+
+
+_ONB_TEL = re.compile(r"(?<!\d)((?:\+34[ .-]?)?[6789]\d{2}(?:[ .-]?\d{2}){3})(?!\d)")
+_ONB_CAB = re.compile(
+    r"^(?P<nombre>[^\n]{4,80}?)\s+(?P<ett>GI GROUP|ADECCO|ATELODIS|RANDSTAD|NORTEMPO|"
+    r"EUROFIRMS|SYNERGIE|IMAN|CRIT)\b", re.I | re.M)
+
+
+def _onb_tel_limpio(t: str) -> str:
+    """Solo digitos, que es lo que compara. `enlace_wa` ya pone el prefijo."""
+    d = "".join(c for c in str(t or "") if c.isdigit())
+    if d.startswith("34") and len(d) == 11:
+        d = d[2:]
+    return d
+
+
+def _onb_parsear(texto: str) -> list:
+    """Lee el listado que se copia del sistema de la ETT, tal cual se pega.
+
+    SE PARTE POR LA CABECERA DE CADA FICHA (nombre + ETT), que es la unica
+    linea que aparece una vez por persona. Partir por el telefono o por el DNI
+    dejaria fuera a quien no lo tenga, y una persona que no entra no se echa de
+    menos: no sale por ninguna parte y parece que no existe.
+
+    Lo que NO se lee: contrasenas. Estan en el texto pegado y se quedan ahi.
+    """
+    t = (texto or "").replace("\r", "")
+    cabeceras = list(_ONB_CAB.finditer(t))
+    fuera = []
+    for i, m in enumerate(cabeceras):
+        fin = cabeceras[i + 1].start() if i + 1 < len(cabeceras) else len(t)
+        trozo = t[m.start():fin]
+        nombre = m.group("nombre").strip()
+        # La marca de estado («N», «A») va pegada al final del nombre.
+        nombre = re.sub(r"\s+[A-Z]$", "", nombre).strip(" ,;\u00b7")
+        tel = _ONB_TEL.search(trozo)
+        dni = re.search(r"\bDNI\s+([0-9A-Z]{6,12})\b", trozo, re.I)
+        idper = re.search(r"\bIDPER\s+(\d{3,8})\b", trozo, re.I)
+        # CUANDO LO COLGO LA ETT. Estaba delante todo el tiempo —«Registrado
+        # 04/09/2026 18:28»— y no se leia, asi que la antiguedad se contaba
+        # desde que se importo: los 26 salian con «0 dias» el mismo dia que
+        # llevaban once esperando. Sin esta fecha la pantalla no puede decir a
+        # quien hay que llamar primero, que es para lo unico que sirve.
+        mreg = re.search(r"Registrado\s+(\d{2})/(\d{2})/(\d{4})", trozo, re.I)
+        registrado = ("%s-%s-%s" % (mreg.group(3), mreg.group(2), mreg.group(1))
+                      if mreg else "")
+        centro = re.search(r"\b(?:AMZL\s+)?([A-Z]{3}\d)\b", trozo)
+        # Lo que le falta: la linea de debajo de «Doc. faltante(s)». «Completo»
+        # significa que no falta nada, y eso NO es un motivo para escribirle.
+        falta = ""
+        mf = re.search(r"Doc\.\s*faltantes?\s*\n\s*(.+)", trozo, re.I)
+        if mf:
+            v = mf.group(1).strip()
+            # «Completo» y la raya son lo mismo: NO falta nada. Una raya
+            # tomada por un documento pendiente haria que se le escribiera a
+            # alguien para pedirle un papel que no debe, y esa persona
+            # contestaria que ya lo mando. Un hueco vacio no es un hallazgo
+            # (gotcha 33).
+            falta = "" if (v.lower().startswith("completo")
+                           or v.strip("—–-·. ") == "") else v[:120]
+        estado = "en_incorporacion" if re.search(r"En incorporaci", trozo, re.I) else "contactado"
+        # LA CUENTA DE ONBOARDING. Se guarda porque la oficina entra a revisarla
+        # —es la unica forma de ver en que punto esta el expediente de alguien—.
+        # Va SOLO en el endpoint de admin y NUNCA en el mensaje que se le manda
+        # a la persona: `_onb_mensaje` no la toca, y hay un caso que lo vigila.
+        mcorreo = re.search(r"Email\s+winiw\s*\n\s*([^\s@]+@[^\s]+)", trozo, re.I)
+        mclave = re.search(r"Contrase\u00f1a\s+Email\s*\n\s*(\S+)", trozo, re.I)
+        mrabbit = re.search(r"Contrase\u00f1a\s+Rabbit\s*\n\s*(\S+)", trozo, re.I)
+        mform = re.search(r"C\u00f3digo\s+Test\s+Formaci\u00f3n\s*\n\s*(\S+)", trozo, re.I)
+        codigo = (mform.group(1) if mform else "").strip("\u2014\u2013-. ")
+        fuera.append({
+            "nombre": nombre[:80],
+            "telefono": _onb_tel_limpio(tel.group(1)) if tel else "",
+            "dni": (dni.group(1).upper() if dni else "")[:12],
+            "idper": (idper.group(1) if idper else "")[:8],
+            "ett": m.group("ett").upper(),
+            "centro": (centro.group(1).upper() if centro else ""),
+            "falta_texto": falta,
+            "estado": estado,
+            "registrado": registrado,
+            "email": (mcorreo.group(1) if mcorreo else "")[:80],
+            "clave_email": (mclave.group(1) if mclave else "")[:60],
+            "clave_rabbit": (mrabbit.group(1) if mrabbit else "")[:60],
+            "codigo_formacion": codigo[:40],
+        })
+    return fuera
+
+
+# Lo que escribe la ETT en «Doc. faltantes» y a que motivo nuestro corresponde.
+# Es SOLO una sugerencia: se enseña marcada pero la decide la oficina, porque el
+# texto de la ETT es libre y manana puede decir otra cosa.
+_ONB_PISTAS = (
+    ("ss", ("seguridad social", "alta ss", "seg social")),
+    ("dni", ("dni", "nie", "identidad", "pasaporte")),
+    ("banco", ("cuenta", "iban", "banco", "bancari")),
+    ("carnet", ("carnet", "permiso de conducir", "licencia")),
+    ("formacion", ("formacion", "formaci\u00f3n", "curso", "test")),
+)
+
+
+def _onb_motivo_de_falta(texto: str) -> str:
+    """Que motivo pega con lo que dice el listado. Vacio si no se reconoce.
+
+    No se adivina: si no casa ninguna pista se devuelve vacio y la persona sale
+    igual en la lista con su texto tal cual. Colgarle un motivo que no es haria
+    que se le mandara el mensaje equivocado, que es peor que no sugerir nada.
+    """
+    t = (texto or "").lower()
+    if not t:
+        return ""
+    for motivo, pistas in _ONB_PISTAS:
+        if any(x in t for x in pistas):
+            return motivo
+    return ""
+
+
+# Las cuatro columnas de la pantalla, en el orden en que pasa una persona.
+_ONB_FASES = ("por_pedir", "esperando", "revision", "listo")
+
+
+def _onb_fase(p: dict) -> str:
+    """En que punto esta cada uno. Es lo que hace que se MUEVAN de sitio.
+
+    · `por_pedir` — le falta algo y nadie le ha escrito todavia. Es la unica
+      columna que pide trabajo hoy;
+    · `esperando` — se le ha escrito y estamos esperando a que lo mande. La
+      pelota esta en su tejado;
+    · `revision` — ya lo ha mandado y esta en revision (nuestra o de
+      Coordinacion). Esto lo marca una persona: que llegue una foto al WhatsApp
+      no lo sabe la aplicacion;
+    · `listo` — no le falta nada.
+
+    El orden importa: `revision` gana a `esperando` aunque se le haya vuelto a
+    escribir, porque lo ultimo que se sabe de verdad es que el papel llego.
+    """
+    if p.get("triaje") == "completo":
+        return "listo"
+    es = _onb_estados(p)
+    if not es:
+        # Sin nada marcado y sin que nadie lo haya dado por bueno: esta sin
+        # revisar, que es trabajo por hacer y no un expediente terminado.
+        return "por_pedir"
+    valores = set(es.values())
+    if valores <= {"ok"}:
+        return "listo"
+    if "falta" in valores:
+        return "por_pedir"
+    if "pedido" in valores:
+        return "esperando"
+    return "revision"
+
+
+def _onb_estados(p: dict) -> dict:
+    """Los papeles de una persona y por donde va cada uno.
+
+    Traduce lo que habia antes —una lista `motivos` de «esto le falta»— para que
+    lo ya marcado no se pierda: sin esto, el dia del cambio todo el mundo
+    volveria al monton de entrada y habria que revisarlo otra vez.
+    """
+    es = {k: v for k, v in (p.get("estados") or {}).items()
+          if v in _ONB_ESTADOS}
+    if es:
+        return es
+    es = {m: "falta" for m in (p.get("motivos") or [])}
+    if not es:
+        sug = _onb_motivo_de_falta(p.get("falta_texto"))
+        if sug:
+            es = {sug: "falta"}
+    return es
+
+
+def _onb_pendientes(p: dict) -> list:
+    """Lo que hay que pedirle HOY: lo que falta y lo que se pidio y no ha
+    llegado. Lo que esta en revision NO entra — ya lo mando, y volver a
+    pedirselo es el mensaje que hace que alguien deje de contestar."""
+    es = _onb_estados(p)
+    return [k for k in es if es[k] in ("falta", "pedido")]
+
+
+def _onb_dias(desde: str) -> int:
+    """Dias entre una fecha y hoy. None si no hay fecha."""
+    if not desde:
+        return None
+    try:
+        d = date_cls.fromisoformat(desde[:10])
+    except ValueError:
+        return None
+    return max(0, (datetime.now(timezone.utc).date() - d).days)
+
+
+def _onb_espera(p: dict) -> dict:
+    """Cuanto lleva esperando, y desde cuando no se le dice nada.
+
+    ES LO UNICO QUE ACELERA. Una lista de veintiseis fichas no dice por donde
+    empezar; «este lleva once dias y nadie le ha escrito» si. El 15-09-2026, de
+    26 personas, 25 no habian recibido un solo mensaje y la mas antigua llevaba
+    esperando desde el 24 de agosto.
+
+    `dias_desde_aviso` es None cuando no se le ha escrito NUNCA, que no es lo
+    mismo que cero: lo primero es una persona a la que nadie ha dicho nada, y lo
+    segundo una a la que se le escribio hoy (gotcha 76).
+    """
+    esperando = _onb_dias(p.get("registrado"))
+    if esperando is None:
+        esperando = _onb_dias(p.get("creado_en"))
+    avisado = _onb_dias(p.get("ultimo_aviso"))
+    return {
+        "dias_esperando": esperando,
+        "dias_desde_aviso": avisado,
+        "nunca_avisado": not p.get("ultimo_aviso"),
+    }
+
+
+# ── EL CAMINO COMPLETO, PASO A PASO ─────────────────────────────────────────
+#
+# Los cinco pasos por los que pasa una persona desde que la ETT la cuelga hasta
+# que puede subirse a una furgoneta. Cada uno se da por hecho SOLO cuando hay un
+# dato que lo demuestra — no cuando "deberia" estarlo:
+#
+#   1 apuntado   la ETT la colgo en winiw.              (fecha «Registrado»)
+#   2 papeles    Coordinacion los dio por completos.    (tiene codigo de formacion)
+#   3 acceso     le mandamos la app y su usuario.       (lo marca quien lo manda)
+#   4 cuenta     Amazon le creo la cuenta.              (aparece en Asociados)
+#   5 dentro     los trece modulos completos.           (13/13 en Asociados)
+#
+# NADA SE DEDUCE HACIA ATRAS. Que este en el paso 4 no marca el 3 como hecho: si
+# nadie le mando el acceso, ese paso NO esta dado aunque haya llegado igual por
+# otro lado. Lo contrario seria dar por enviado un mensaje que nadie envio, y
+# sobre eso Dani decide a quien llama.
+_ONB_PASOS = (
+    ("apuntado", "Lo colgo la ETT"),
+    ("papeles", "Papeles completos"),
+    ("acceso", "Acceso a la formacion enviado"),
+    ("cuenta", "Cuenta creada en Amazon"),
+    ("dentro", "Formacion terminada"),
+)
+
+
+def _onb_camino(p: dict, cuenta: dict, en_el_listado=None) -> dict:
+    """En que punto esta, en DOS CARRILES que van en paralelo.
+
+    NO ES UNA FILA, y creerlo dio un dato falso sobre una persona. El 16-09-2026
+    la pantalla decia de Lois Barreiro «Coordinacion aun no ha dado sus papeles
+    por completos» — cierto— pero ademas su cuenta de Amazon ya estaba al 11/14.
+    Las dos cosas a la vez. Poniendolas en fila, la segunda no se veia.
+
+      · EL CARRIL DE LA ETT   lo colgaron -> papeles completos -> acceso enviado
+      · EL CARRIL DE AMAZON   su cuenta, con sus tareas repartidas entre Amazon,
+                              nosotros y la propia persona
+
+    Y LO QUE NO SE SABE SE DICE ASI. Sin cuenta vista no se afirma que no la
+    tenga: lo unico cierto es que no la hemos visto. Justo lo que paso con Lois,
+    que la tenia y se estaba descartando por su nave.
+    """
+    fuera = bool(en_el_listado is False and p.get("codigo_formacion"))
+
+    ett = []
+    if p.get("registrado"):
+        ett.append({"id": "apuntado", "que": "Lo colgó la ETT",
+                    "hecho": True, "cuando": p["registrado"]})
+    else:
+        ett.append({"id": "apuntado", "que": "Lo colgó la ETT", "hecho": False})
+    ett.append({"id": "papeles", "que": "Papeles completos",
+                "hecho": bool(p.get("codigo_formacion")),
+                "cuando": (p.get("visto_en") or "")[:10] if p.get("codigo_formacion") else None})
+    acceso = bool(p.get("ultimo_aviso") and p.get("codigo_formacion"))
+    ett.append({"id": "acceso", "que": "Acceso a la formación enviado",
+                "hecho": acceso,
+                "cuando": (p.get("ultimo_aviso") or "")[:10] if acceso else None})
+
+    # ── El carril de Amazon ────────────────────────────────────────────────
+    amazon = {"vista": bool(cuenta)}
+    if cuenta:
+        amazon.update({
+            "hechas": cuenta.get("hechas") if cuenta.get("total") else cuenta.get("hechos"),
+            "total": cuenta.get("total"),
+            "pendientes": [x.get("que") for x in (cuenta.get("pendientes") or [])][:8],
+            "toca_a": cuenta.get("toca_a") or [],
+            "estado": cuenta.get("estado") or "",
+            "naves": cuenta.get("naves") or [],
+            "completa": bool(cuenta.get("completa")),
+        })
+
+    # ── QUE TOCA AHORA ─────────────────────────────────────────────────────
+    # Lo de los dos carriles a la vez, no lo primero de una lista. Y siempre
+    # dicho como lo que es: lo que sabemos, no lo que suponemos.
+    pendiente = []
+    if fuera:
+        que_toca = "Ya no está en formación: la terminó o se fue"
+    else:
+        if not p.get("codigo_formacion"):
+            pendiente.append("Coordinación tiene que dar sus papeles por completos")
+        elif not acceso:
+            pendiente.append("Mándale el acceso a la formación")
+        if not cuenta:
+            pendiente.append("Su cuenta de Amazon no la hemos visto todavía")
+        elif not cuenta.get("completa"):
+            quien = cuenta.get("toca_a") or []
+            if quien:
+                pendiente.append("En Amazon le toca a %s" % " y ".join(quien))
+            else:
+                pendiente.append("Le quedan tareas en Amazon")
+        que_toca = " · ".join(pendiente) if pendiente else "Listo para empezar"
+
+    return {
+        "ett": ett,
+        "amazon": amazon,
+        "dados": sum(1 for x in ett if x["hecho"]) + (1 if cuenta else 0),
+        "total": len(ett) + 1,
+        "fuera": fuera,
+        "que_toca": que_toca,
+        # El primer carril que pide algo, para agrupar en el embudo.
+        "siguiente": None if fuera or not pendiente else (
+            "papeles" if not p.get("codigo_formacion")
+            else "acceso" if not acceso
+            else "cuenta" if not cuenta
+            else "dentro"),
+    }
+
+
+def _onb_etapa(p: dict, en_el_listado) -> str:
+    """En que ETAPA del proceso real esta, que es lo que ordena la pantalla.
+
+    Las columnas de «que papel le falta» contestan una pregunta de detalle. La
+    que hay que contestar primero al abrir es otra: ¿a quien le toca que HOY?
+
+    · `formacion` — Coordinacion ya le dio sus papeles por completos y le genero
+      el usuario de la formacion. Lo unico que le falta es hacerla, y lo unico
+      que hay que hacer es mandarsela. Manda sobre todo lo demas: es el ultimo
+      paso antes de entrar.
+    · `papeles`   — le falta algo o nadie lo ha mirado todavia.
+    · `listo`     — no le falta nada y no tiene formacion pendiente.
+
+    Quien ya no sale en el ultimo listado pegado NO esta en formacion aunque
+    tenga codigo: ya la hizo o se fue (paso el 16-09-2026 con Victor).
+    """
+    if p.get("codigo_formacion") and en_el_listado is not False:
+        return "formacion"
+    return "listo" if _onb_fase(p) == "listo" else "papeles"
+
+
+def _onb_columna(p: dict) -> str:
+    """En que columna se pinta. Es lo que hace que se MUEVAN al ir marcando.
+
+    · `pendiente` — nadie ha dicho todavia que le falta. Es el monton de
+      entrada, y lo que hay que vaciar;
+    · el motivo (`carnet`, `ss`, ...) — en cuanto se marca que le falta, sale de
+      pendiente y se va a su columna. Con varios manda el primero: una persona
+      esta en un sitio, y repetirla en dos columnas haria que se le escribiera
+      dos veces;
+    · `completo` — alguien ha dicho expresamente que ya esta.
+
+    OJO CON LO QUE NO ES: «sin nada marcado» NO es completo. Son justo los que
+    nadie ha mirado, y darlos por buenos los sacaria de la pantalla — que es la
+    forma mas silenciosa de perder a una persona (gotcha 33).
+    """
+    if p.get("triaje") == "completo":
+        return "completo"
+    es = _onb_estados(p)
+    if not es:
+        return "pendiente"
+    # Manda el papel MAS ATRASADO: alguien con el carnet en revision y la
+    # Seguridad Social sin pedir tiene trabajo pendiente, y ponerle en «en
+    # revision» lo sacaria de la lista de lo que hay que hacer hoy.
+    for estado in _ONB_ESTADOS:
+        for m in es:
+            if es[m] == estado:
+                return m if estado in ("falta", "pedido") else (
+                    "revision" if estado == "revision" else "completo")
+    return "pendiente"
+
+
+def _onb_clave(p: dict) -> str:
+    """Quien es quien. El DNI manda; si no lo hay, el telefono.
+
+    Hace falta una clave estable porque el listado se pega entero cada vez y no
+    puede crear una ficha nueva en cada pegada (gotcha 15: dos fichas de la
+    misma persona y el trabajo se parte en dos).
+    """
+    return ("dni:" + p["dni"]) if p.get("dni") else ("tel:" + (p.get("telefono") or ""))
+
+
+@api_router.get("/incorporaciones/personas")
+async def onb_listar(center: Optional[str] = None, _=Depends(require_admin)):
+    q = {"archivada": {"$ne": True}}
+    if center:
+        q["centro"] = {"$regex": re.escape(_centro_norm(center) or center), "$options": "i"}
+    # POR QUIEN LLEVA MAS ESPERANDO. Ordenar por fecha de alta ponia arriba al
+    # ultimo que llego, que es justo el que menos urge.
+    filas = await db[_ONB_COL].find(q, {"_id": 0}).to_list(500)
+    # LAS CUENTAS DE AMAZON, PEDIDAS UNA VEZ. Buscarlas persona a persona serian
+    # veintiseis viajes a la base para lo mismo.
+    indice_cuentas = await _asoc_por_persona()
+    _u = await db.app_meta.find_one({"_id": "incorporaciones_ultimo_listado"}) or {}
+    ultimo = str(_u.get("en") or "")
+    # El enlace de WhatsApp de cada uno, ya montado por el servidor. Vacio
+    # significa que no hay telefono, y eso la pantalla lo DICE (gotcha 47).
+    cuenta, fases, cols = {}, {}, {}
+    for f in filas:
+        f["wa_vacio"] = not enlace_wa(f.get("telefono"))
+        f["estados"] = _onb_estados(f)
+        f["fase"] = _onb_fase(f)
+        f["columna"] = _onb_columna(f)
+        f.update(_onb_espera(f))
+        # ¿Sigue en el ultimo listado que se pego? Si no, su ficha es de antes y
+        # no entra en ninguna tanda: mandarle algo seria hablarle de un estado
+        # que ya no tiene.
+        # TRES ESTADOS, NO DOS: si, no, y NO SE. Mientras no se haya pegado
+        # ningun listado desde que esto existe, no se sabe quien sigue dentro —
+        # y tratar «no lo se» como «ya no esta» dejaria las tandas vacias sin
+        # explicar por que.
+        f["en_el_listado"] = (None if not ultimo
+                              else str(f.get("visto_en") or "") >= ultimo)
+        f["etapa"] = _onb_etapa(f, f["en_el_listado"])
+        # SU CUENTA DE AMAZON, SI LA TENEMOS. Va ANTES del camino, que la
+        # necesita para saber si Amazon ya le creo la cuenta. Esto es lo que
+        # convierte la lista en algo accionable: no «a este le falta el carnet segun la ETT», sino
+        # «a este Amazon le esta pidiendo el Global Check». Y si NO tiene
+        # cuenta, eso tambien se dice: significa que el onboarding ni siquiera
+        # ha empezado, que es peor que ir lento.
+        # `cuenta_amz` y no `cuenta`: en este mismo bucle ya habia una variable
+        # llamada `cuenta` —el diccionario que cuenta los motivos— y llamar
+        # igual a esto la pisaba. Con una persona sin cuenta valia None y la
+        # linea de abajo reventaba con «NoneType has no attribute get»: un 500
+        # en la pantalla de Incorporaciones entera. Paso el 15-09-2026.
+        cuenta_amz = _asoc_de(f, indice_cuentas)
+        if cuenta_amz:
+            f["cuenta"] = {
+                # El detalle de la ficha, si ya se ha leido: las veinte tareas,
+                # cuantas van y a quien le toca mover. Es la diferencia entre
+                # «le falta algo» y «le falta la sesion de formacion».
+                "pendientes": [x.get("que") for x in (cuenta_amz.get("pendientes") or [])][:8],
+                "toca_a": cuenta_amz.get("toca_a") or [],
+                "tareas_hechas": cuenta_amz.get("hechas"),
+                "tareas_total": cuenta_amz.get("total"),
+                "cualificaciones": cuenta_amz.get("cualificaciones") or [],
+                "nombre": cuenta_amz.get("nombre"),
+                "paso": cuenta_amz.get("paso"),
+                "estado": cuenta_amz.get("estado"),
+                "hechos": cuenta_amz.get("hechos"),
+                "total": cuenta_amz.get("total"),
+                "completa": cuenta_amz.get("completa"),
+                "faltan": [x.get("que") for x in (cuenta_amz.get("faltan") or [])][:6],
+                "cruce": cuenta_amz.get("cruce"),
+            }
+        # EL CAMINO, con la cuenta ya resuelta. Aqui y no antes: sin la cuenta
+        # no se puede saber si Amazon se la ha creado, y adivinarlo seria dar un
+        # paso por hecho sin dato que lo demuestre.
+        f["camino"] = _onb_camino(f, cuenta_amz, f["en_el_listado"])
+        f["sugerido"] = _onb_motivo_de_falta(f.get("falta_texto"))
+        fases[f["fase"]] = fases.get(f["fase"], 0) + 1
+        cols[f["columna"]] = cols.get(f["columna"], 0) + 1
+        # El filtro cuenta los marcados A MANO y tambien el que sugiere el
+        # listado: si solo contara los marcados, buscar «los del carnet»
+        # dejaria fuera justo a los que aun no ha tocado nadie, que son los
+        # que hay que mirar.
+        for m in f["estados"]:
+            if f["estados"][m] != "ok":
+                cuenta[m] = cuenta.get(m, 0) + 1
+    filas.sort(key=lambda f: (-(f.get("dias_esperando") or 0),
+                              f.get("nombre") or ""))
+    # Lo que hay que hacer HOY, contado aparte para que no haya que buscarlo.
+    urgentes = [f for f in filas
+                if f.get("columna") != "completo"
+                and (f.get("dias_esperando") or 0) >= _ONB_DIAS_URGE]
+    return {"personas": filas, "plantilla": await _onb_plantilla(),
+            "urgentes": len(urgentes),
+            "dias_urge": _ONB_DIAS_URGE,
+            "sin_avisar": sum(1 for f in filas
+                              if f.get("columna") != "completo" and f.get("nunca_avisado")),
+            "por_motivo": cuenta, "por_fase": fases, "por_columna": cols,
+            "estados": _ONB_ESTADOS, "estado_nombre": _ONB_ESTADO_NOMBRE,
+            "pendientes": sum(1 for f in filas if f.get("falta_texto") or f.get("motivos"))}
+
+
+@api_router.post("/incorporaciones/personas")
+async def onb_alta(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Alta a mano: nombre y telefono, que es lo minimo para poder escribirle."""
+    nombre = _texto_cuerpo(body.get("nombre"), 80)
+    tel = _onb_tel_limpio(_texto_cuerpo(body.get("telefono"), 30))
+    if not nombre:
+        raise HTTPException(400, "Falta el nombre")
+    if len(tel) < 9:
+        raise HTTPException(400, "El tel\u00e9fono no parece v\u00e1lido")
+    p = {"nombre": nombre, "telefono": tel,
+         "dni": _texto_cuerpo(body.get("dni"), 12).upper(),
+         "idper": _texto_cuerpo(body.get("idper"), 8),
+         "ett": _texto_cuerpo(body.get("ett"), 30).upper(),
+         "centro": _centro_norm(_texto_cuerpo(body.get("centro"), 20)) or "",
+         "falta_texto": _texto_cuerpo(body.get("falta_texto"), 120),
+         "email": _texto_cuerpo(body.get("email"), 80),
+         "estado": "contactado"}
+    doc = dict(p, id=str(uuid.uuid4()), clave=_onb_clave(p),
+               creado_en=datetime.now(timezone.utc).isoformat(),
+               creado_por=user.get("name") or "")
+    try:
+        await db[_ONB_COL].insert_one(dict(doc))       # copia: insert_one muta (gotcha 42)
+    except DuplicateKeyError:
+        raise HTTPException(409, "Esa persona ya est\u00e1 en la lista")
+    return {"ok": True, "persona": doc}
+
+
+@api_router.post("/incorporaciones/personas/importar")
+async def onb_importar(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Pega el listado entero y se queda con lo que hace falta para hablarles.
+
+    Se puede pegar todos los dias: quien ya esta no se duplica, y lo que cambia
+    —el telefono, lo que le falta— se actualiza. Lo que NO se pisa es lo que
+    haya escrito la oficina a mano (`motivos`, `nota`): el listado no sabe nada
+    de eso y lo borraria en silencio.
+    """
+    texto = body.get("texto")
+    if not isinstance(texto, str) or len(texto) < 40:
+        raise HTTPException(400, "Pega el listado de candidatos")
+    filas = _onb_parsear(texto)
+    if not filas:
+        raise HTTPException(400, "No he reconocido ninguna ficha en ese texto")
+    ahora = datetime.now(timezone.utc).isoformat()
+    nuevas, actualizadas, sin_telefono = 0, 0, 0
+    for p in filas:
+        if not p["telefono"]:
+            sin_telefono += 1
+        clave = _onb_clave(p)
+        r = await db[_ONB_COL].update_one(
+            {"clave": clave},
+            {"$set": {**p, "visto_en": ahora},
+             "$setOnInsert": {"id": str(uuid.uuid4()), "clave": clave,
+                              "creado_en": ahora,
+                              "creado_por": user.get("name") or "",
+                              "motivos": [], "nota": ""}},
+            upsert=True)
+        if r.upserted_id is not None:
+            nuevas += 1
+        elif r.modified_count:
+            actualizadas += 1
+    # EL LISTADO QUE SE PEGA ES LA VERDAD DE AHORA. Quien no sale en el ya no
+    # esta en ese estado: acabo, se fue, o paso a otra cosa. El 16-09-2026
+    # Victor salia como «en incorporacion» porque su ficha era de hace dias, y
+    # se le habria mandado a empezar una formacion que ya habia terminado.
+    #
+    # No se borra a nadie —el historial dice a quien se aviso y cuando— pero se
+    # apunta cuando se le vio por ultima vez, y las tandas solo miran a los del
+    # ultimo listado. Es lo mismo que con las investigaciones de DNR: una que
+    # desaparece del informe es una que Amazon cerro.
+    await db.app_meta.update_one(
+        {"_id": "incorporaciones_ultimo_listado"},
+        {"$set": {"en": ahora, "cuantos": len(filas)}}, upsert=True)
+    return {"ok": True, "leidas": len(filas), "nuevas": nuevas,
+            "actualizadas": actualizadas, "sin_telefono": sin_telefono}
+
+
+@api_router.patch("/incorporaciones/personas/{pid}")
+async def onb_editar(pid: str, body: dict = Body(...), _=Depends(require_admin)):
+    """Lo que marca la oficina: que le falta y la nota."""
+    cambios = {}
+    if "motivos" in body:
+        pl = await _onb_plantilla()
+        ms = [m for m in (body.get("motivos") or []) if m in pl["motivos"]]
+        cambios["motivos"] = ms[:6]
+    if "estados" in body:
+        # Por documento. Lo que no este en el catalogo o no sea un estado de los
+        # nuestros se cae: guardarlo dejaria una ficha en un punto que ninguna
+        # pantalla sabe pintar, y esa persona no saldria en ninguna columna.
+        pl = await _onb_plantilla()
+        es = {}
+        for k, v in (body.get("estados") or {}).items():
+            if k in pl["motivos"] and v in _ONB_ESTADOS:
+                es[k] = v
+        cambios["estados"] = es
+        # `motivos` se mantiene al dia para lo que aun lo lee.
+        cambios["motivos"] = [k for k in es if es[k] in ("falta", "pedido")][:6]
+    if "nota" in body:
+        cambios["nota"] = _texto_cuerpo(body.get("nota"), 400)
+    if "falta_texto" in body:
+        cambios["falta_texto"] = _texto_cuerpo(body.get("falta_texto"), 120)
+    if "telefono" in body:
+        t = _onb_tel_limpio(_texto_cuerpo(body.get("telefono"), 30))
+        if len(t) < 9:
+            raise HTTPException(400, "El tel\u00e9fono no parece v\u00e1lido")
+        cambios["telefono"] = t
+    for k, tope in (("email", 80), ("clave_email", 60), ("clave_rabbit", 60),
+                    ("codigo_formacion", 40)):
+        if k in body:
+            cambios[k] = _texto_cuerpo(body.get(k), tope)
+    if "triaje" in body:
+        # "completo" o vacio. Es una decision de una persona, no algo deducido:
+        # por eso se guarda, en vez de mirar si quedan motivos marcados.
+        v = _texto_cuerpo(body.get("triaje"), 20)
+        cambios["triaje"] = v if v == "completo" else ""
+    if "archivada" in body:
+        cambios["archivada"] = bool(body.get("archivada"))
+    if "recibido" in body:
+        # «Ya me lo ha mandado»: lo marca una persona. Que llegue una foto a un
+        # WhatsApp no lo sabe la aplicacion, y darlo por recibido solo porque se
+        # escribio el mensaje pondria a alguien en revision sin que haya mandado
+        # nada — y entonces nadie vuelve a mirarle.
+        cambios["recibido_en"] = (datetime.now(timezone.utc).isoformat()
+                                  if body.get("recibido") else None)
+    if not cambios:
+        raise HTTPException(400, "No hay nada que cambiar")
+    quitar = {k: "" for k, v in cambios.items() if v is None}
+    poner = {k: v for k, v in cambios.items() if v is not None}
+    op = {}
+    if poner:
+        op["$set"] = poner
+    if quitar:
+        op["$unset"] = quitar
+    r = await db[_ONB_COL].update_one({"id": pid}, op)
+    if not r.matched_count:
+        raise HTTPException(404, "No existe esa persona")
+    return {"ok": True, **cambios}
+
+
+@api_router.post("/incorporaciones/personas/{pid}/mensaje")
+async def onb_mensaje(pid: str, body: dict = Body(default={}), _=Depends(require_admin)):
+    """El WhatsApp listo para enviar: texto y enlace. NO lo envia."""
+    p = await db[_ONB_COL].find_one({"id": pid}, {"_id": 0})
+    if not p:
+        raise HTTPException(404, "No existe esa persona")
+    # El mensaje de empezar la formacion es otro: no dice «te falta», da su
+    # usuario y su contraseña. Se pide aparte para no mezclarlo con los motivos.
+    if str(body.get("tipo") or "") == "formacion":
+        texto = _onb_mensaje_formacion(p, await _onb_plantilla())
+        if not texto:
+            raise HTTPException(400, "Esa persona no tiene código de formación "
+                                     "guardado todavía")
+        wa = enlace_wa(p.get("telefono"), texto)
+        if not wa:
+            raise HTTPException(400, "Esa persona no tiene teléfono guardado")
+        return {"ok": True, "texto": texto, "wa": wa, "nombre": p.get("nombre")}
+    motivos = body.get("motivos")
+    if not isinstance(motivos, list):
+        # Lo que esta EN REVISION no se pide: ya lo mando. Volver a pedirselo es
+        # el mensaje que hace que alguien deje de contestar.
+        motivos = _onb_pendientes(p)
+    extra = _texto_cuerpo(body.get("extra"), 400)
+    if not extra:
+        # La nota interna, pero solo si aporta algo que los motivos no digan ya:
+        # si no, el mensaje repite lo mismo dos veces (ver `_onb_nota_util`).
+        extra = _onb_nota_util(_texto_cuerpo(p.get("nota"), 400), motivos,
+                               await _onb_plantilla())
+    texto = await _onb_mensaje(p, motivos, extra)
+    wa = enlace_wa(p.get("telefono"), texto)
+    if not wa:
+        raise HTTPException(400, "Esa persona no tiene tel\u00e9fono guardado")
+    return {"ok": True, "texto": texto, "wa": wa, "nombre": p.get("nombre")}
+
+
+@api_router.post("/incorporaciones/personas/{pid}/enviado")
+async def onb_enviado(pid: str, body: dict = Body(default={}), user: dict = Depends(require_admin)):
+    """Lo confirma una persona despues de darle a enviar en WhatsApp.
+
+    Abrir WhatsApp no es haber enviado: si se marcara solo, se daria por avisada
+    a gente a la que no le llego nada, que es peor que no marcarlo.
+    """
+    ahora = datetime.now(timezone.utc).isoformat()
+    # Lo que se le acaba de pedir pasa de «falta» a «pedido»: la pelota esta en
+    # su tejado y la pantalla tiene que decirlo sola. Si hubiera que marcarlo a
+    # mano aparte, nadie lo haria y todo seguiria pareciendo sin pedir.
+    p = await db[_ONB_COL].find_one({"id": pid}, {"_id": 0}) or {}
+    es = dict(_onb_estados(p))
+    for k in list(es):
+        if es[k] == "falta":
+            es[k] = "pedido"
+    r = await db[_ONB_COL].update_one(
+        {"id": pid},
+        {"$set": {"ultimo_aviso": ahora, "ultimo_aviso_por": user.get("name") or "",
+                  "estados": es},
+         "$push": {"avisos": {"$each": [{"cuando": ahora,
+                                         "quien": user.get("name") or "",
+                                         "texto": _texto_cuerpo(body.get("texto"), 600)}],
+                              "$slice": -20}}})
+    if not r.matched_count:
+        raise HTTPException(404, "No existe esa persona")
+    return {"ok": True, "cuando": ahora}
+
+
+@api_router.get("/incorporaciones/export")
+async def onb_export(center: Optional[str] = None, _=Depends(require_admin)):
+    """El estado de todos, en un CSV que abre Excel.
+
+    Para mandarselo a la ETT o a Coordinacion sin tener que contarlo a mano, que
+    es lo que hoy se hace copiando fila a fila.
+
+    VA CON `;` Y CON BOM. El Excel espanol separa por punto y coma —con comas
+    mete la fila entera en una celda— y sin BOM se come los acentos. Las dos
+    cosas juntas son la diferencia entre un fichero que se abre y uno que hay
+    que arreglar a mano.
+
+    Y NO LLEVA CONTRASENAS. Un CSV se reenvia por correo y acaba en sitios que
+    no controlamos; la cuenta se mira en la pantalla, que pide sesion.
+    """
+    q = {"archivada": {"$ne": True}}
+    if center:
+        q["centro"] = {"$regex": re.escape(_centro_norm(center) or center), "$options": "i"}
+    filas = await db[_ONB_COL].find(q, {"_id": 0}).to_list(2000)
+    pl = await _onb_plantilla()
+    docs = list(pl["motivos"].keys())
+
+    cab = ["Nombre", "Telefono", "DNI", "IDPER", "ETT", "Nave",
+           "En que punto esta"] + [pl["motivos"][d]["titulo"] for d in docs] + [
+           "Lo que dice la ETT", "Nota", "Ultimo aviso", "Cuenta"]
+
+    def celda(v):
+        t = str(v if v is not None else "")
+        # Un punto y coma dentro de una celda parte la fila en dos.
+        return '"%s"' % t.replace('"', '""') if (";" in t or '"' in t or chr(10) in t) else t
+
+    lineas = [";".join(cab)]
+    for f in sorted(filas, key=lambda x: (x.get("nombre") or "").lower()):
+        es = _onb_estados(f)
+        fila = [f.get("nombre", ""), f.get("telefono", ""), f.get("dni", ""),
+                f.get("idper", ""), f.get("ett", ""), f.get("centro", ""),
+                {"por_pedir": "Por pedir", "esperando": "A la espera",
+                 "revision": "En revision", "listo": "Completo"}.get(_onb_fase(f), "")]
+        for d in docs:
+            fila.append(_ONB_ESTADO_NOMBRE.get(es.get(d, ""), ""))
+        fila += [f.get("falta_texto", ""), f.get("nota", ""),
+                 (f.get("ultimo_aviso") or "")[:10], f.get("email", "")]
+        lineas.append(";".join(celda(x) for x in fila))
+
+    cuerpo = "\ufeff" + chr(10).join(lineas)
+    nombre = "incorporaciones-%s.csv" % datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return Response(
+        content=cuerpo.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="%s"' % nombre})
+
+
+@api_router.put("/incorporaciones/plantillas")
+async def onb_plantillas(body: dict = Body(...), _=Depends(require_admin)):
+    """Cambiar como se pide cada cosa. Quien habla con la gente sabe mejor."""
+    doc = {}
+    for k in ("saludo", "cuerpo", "cierre"):
+        if k in body:
+            doc[k] = _texto_cuerpo(body.get(k), 400)
+    if "motivos" in body and isinstance(body.get("motivos"), dict):
+        ms = {}
+        for k, v in body["motivos"].items():
+            if k in _ONB_MOTIVOS and isinstance(v, dict):
+                ms[k] = {"titulo": _texto_cuerpo(v.get("titulo"), 60),
+                         "texto": _texto_cuerpo(v.get("texto"), 400)}
+        doc["motivos"] = ms
+    if not doc:
+        raise HTTPException(400, "No hay nada que guardar")
+    await db.app_meta.update_one({"_id": "incorporaciones_plantilla"}, {"$set": doc}, upsert=True)
+    return {"ok": True, "plantilla": await _onb_plantilla()}
+
+
+# ── EL PLAN DE HORAS, PEDIDO A LA API ───────────────────────────────────────
+"""Hasta el 15-09-2026 el plan se leia de la PANTALLA de Cortex: se copiaba el
+texto a la vista. De ahi salian dos problemas que no se podian arreglar leyendo
+mejor, porque el dato no estaba:
+
+  · solo entraba la nave que alguien tuviera abierta —DGA1 no entro nunca—;
+  · los bloques sin hora de fin habia que ESTIMARLOS repartiendo el total de la
+    semana, y eso produjo diez avisos falsos de jornadas de 17 y 18 horas.
+
+La sonda encontro de donde lo saca la propia pantalla:
+
+    GET /scheduling/home/api/v2/rosters ?serviceAreaId,fromDate,toDate
+
+y ahi cada persona trae `reservationsMap`: un dia, una reserva, con
+`durationInMinutes` (lo planificado), `startTimeInMinutes` (desde medianoche) y
+`clockInEpoch`/`clockOutEpoch` (lo fichado de verdad). Sin estimar nada. Y con
+los dias FUTUROS incluidos, asi que la proyeccion deja de ser una suposicion de
+«seis bloques de nueve horas» y pasa a ser lo que esa persona tiene puesto.
+
+LO QUE AMAZON MARCA COMO CONFIDENCIAL. La propia respuesta trae
+`confidentialFields`: `workPhoneNumber`, `driverEmail`, `driverName`,
+`driverFirstName`, `driverLastName`. El nombre se guarda —hace falta para poder
+hablar con esa persona, y ya salia en la pantalla de antes— pero **el correo y
+el telefono no se copian**: no hacen falta para contar horas, y de todas formas
+el telefono bueno no es ese (gotcha 66).
+"""
+_WHC_API_COL = "whc_api"
+
+
+def _hm_desde_medianoche(minutos) -> str:
+    """«660» -> «11:00am». Es como lo escribe la pantalla de la que veniamos."""
+    try:
+        m = int(minutos)
+    except (TypeError, ValueError):
+        return ""
+    h, mm = (m // 60) % 24, m % 60
+    ampm = "am" if h < 12 else "pm"
+    h12 = h % 12 or 12
+    return "%d:%02d%s" % (h12, mm, ampm)
+
+
+def _horarios_conductores(rosters: dict, hoy: str) -> list:
+    """Del roster de Amazon a la forma que ya sabe evaluar `_whc_evaluar`.
+
+    TRABAJADO vs PLANIFICADO, que es la distincion que lo hace util:
+      · un bloque con entrada Y salida fichadas -> lo que duro de verdad;
+      · uno con entrada y sin salida -> esta en ello ahora: cuenta lo planificado
+        y se marca `en_curso`;
+      · uno de un dia que aun no ha llegado -> NO cuenta como trabajado, cuenta
+        como lo que le queda por hacer.
+    Meter los tres en el mismo saco es lo que hacia que alguien que no ha
+    empezado la semana pareciera que la lleva hecha.
+    """
+    fuera = []
+    for c in (rosters or {}).get("data") or []:
+        if not isinstance(c, dict):
+            continue
+        bloques, trabajado, pendiente, dias_pend = [], 0, 0, 0
+        for dia in sorted((c.get("reservationsMap") or {})):
+            for r in (c["reservationsMap"][dia] or []):
+                if not isinstance(r, dict):
+                    continue
+                dur = r.get("durationInMinutes") or 0
+                ci, co = r.get("clockInEpoch"), r.get("clockOutEpoch")
+                futuro = dia > hoy
+                if ci and co and co > ci:
+                    minutos = int((co - ci) / 60000)
+                    en_curso = False
+                elif ci:
+                    minutos = int(dur)
+                    en_curso = True
+                else:
+                    minutos = int(dur)
+                    en_curso = False
+                if futuro or not ci:
+                    pendiente += int(dur)
+                    dias_pend += 1
+                    continue
+                trabajado += minutos
+                ini = r.get("startTimeInMinutes")
+                bloques.append({
+                    "dia": dia,
+                    "inicio": _hm_desde_medianoche(ini),
+                    "fin": ("" if en_curso else _hm_desde_medianoche(
+                        (ini or 0) + minutos)),
+                    "minutos": minutos,
+                    # NUNCA estimado: lo da Amazon. Es lo que quita de golpe los
+                    # avisos falsos de jornadas de dieciocho horas.
+                    "estimado": False,
+                    "en_curso": en_curso,
+                    "tipo": _texto_cuerpo(r.get("serviceTypeName"), 40),
+                })
+        if not bloques and not pendiente:
+            continue
+        fuera.append({
+            "nombre": _texto_cuerpo(c.get("driverName"), 80),
+            "driver_id": _texto_cuerpo(c.get("driverProviderId"), 80),
+            "estado": _texto_cuerpo(c.get("driverOperationalStatus"), 20),
+            "trabajado": trabajado,
+            "trabajado_origen": "amazon",
+            "planificado_restante": pendiente,
+            "bloques_restantes": dias_pend,
+            "bloques": bloques,
+        })
+    return fuera
+
+
+def _forma_de(v, prof: int):
+    """La FORMA de una respuesta, sin un solo valor dentro.
+
+    Para poder mirar que campos trae algo que aun no sabemos leer sin sacar por
+    ahi el contenido. Los numeros y los textos se reducen a su tipo; de una
+    lista se describe el primer elemento y se dice cuantos hay.
+    """
+    if prof > 6:
+        return "..."
+    if isinstance(v, dict):
+        return {k: _forma_de(v[k], prof + 1) for k in list(v)[:40]}
+    if isinstance(v, list):
+        if not v:
+            return []
+        return [_forma_de(v[0], prof + 1), "x%d" % len(v)]
+    if isinstance(v, bool):
+        return "bool"
+    if isinstance(v, (int, float)):
+        return "num"
+    if v is None:
+        return "null"
+    return "str"
+
+
+_DNR_COL = "dnr_investigaciones"
+_DNR_CORREO = "dnr-investigations@eulmdxdasboard.amzl.amazon.dev"
+# El orden es el del DOM y NO se puede cambiar: el JSON que espera Amazon lleva
+# las claves en ese orden porque asi las recorre su propio script.
+_DNR_CAMPOS = ["tracking_id", "order_id", "marketplace_id", "case_datetime",
+               "completion", "location", "additional", "property",
+               "building_number", "building_floor"]
+
+
+@functools.lru_cache(maxsize=1)
+def _dnr_opciones() -> dict:
+    """Los cuatro desplegables tal y como los define la pagina de Amazon."""
+    try:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "datos", "dnr_opciones.json")
+        with io.open(p, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:                                       # noqa: BLE001
+        logger.warning("Opciones de DNR: %s", e)
+        return {"completion": {}, "location": {}, "additional": {}, "property": {}}
+
+
+_DNR_FILA = re.compile(r"<tr data-dsp-action>(.*?)</tr>", re.S)
+_DNR_EPOCH = re.compile(r'data-epoch="(\d+)"')
+# 24 h desde el epoch: lo dice el setInterval de la propia pagina.
+_DNR_PLAZO_MS = 24 * 60 * 60 * 1000
+_DNR_CELDA = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
+_DNR_INPUT = re.compile(r'<input[^>]*name="([^"]+)"[^>]*value="([^"]*)"')
+_DNR_TAGS = re.compile(r"<[^>]+>")
+
+
+def _dnr_inv_parsear(html: str) -> list:
+    """Las filas de «Ongoing DNR Investigations», tal cual vienen.
+
+    Se lee el HTML y no se pide nada: el fichero lo baja la extension del mismo
+    sitio que el Daily Report.
+    """
+    filas = []
+    for m in _DNR_FILA.finditer(html or ""):
+        bruto = m.group(1)
+        datos = {k: v for k, v in _DNR_INPUT.findall(bruto)}
+        if not datos.get("tracking_id"):
+            continue
+        celdas = [_DNR_TAGS.sub("", c).strip() for c in _DNR_CELDA.findall(bruto)]
+        # LA PRIMERA COLUMNA ES «Time Left» Y ES LA QUE MANDA.
+        # Con texto «Response Received», Amazon ya tiene la respuesta y esa fila
+        # no hay que contestarla — darla por pendiente hace que se conteste dos
+        # veces y llena la pantalla de trabajo que no existe.
+        # Con `data-epoch`, esta viva: el plazo es ese epoch mas 24 h.
+        ep = _DNR_EPOCH.search(bruto)
+        vence = None
+        if ep:
+            try:
+                vence = datetime.fromtimestamp(
+                    (int(ep.group(1)) + _DNR_PLAZO_MS) / 1000.0, timezone.utc).isoformat()
+            except (ValueError, OSError, OverflowError):
+                vence = None
+        texto0 = celdas[0] if celdas else ""
+        contestada_amz = "response received" in texto0.lower()
+        filas.append({
+            "vence": vence,
+            "contestada_amazon": contestada_amz,
+            "tracking_id": datos["tracking_id"],
+            "order_id": datos.get("order_id", ""),
+            "marketplace_id": datos.get("marketplace_id", ""),
+            "case_datetime": datos.get("case_datetime", ""),
+            "plazo": celdas[0] if celdas else "",
+            "entregado_en": celdas[2] if len(celdas) > 2 else "",
+            "scan": celdas[3] if len(celdas) > 3 else "",
+        })
+    return filas
+
+
+# ── LO QUE AMAZON YA SABE Y NOS ESTA PREGUNTANDO IGUAL ──────────────────
+# Cada investigacion trae el escaneo con el que el conductor cerro la entrega.
+# No es una suposicion nuestra: es lo que esa persona declaro en la furgoneta, en
+# el momento, en el sistema de Amazon. Medido el 15-09-2026 sobre las 32
+# investigaciones de OGA5: las 32 traen escaneo, ninguna vacio.
+#
+# Y la mitad de ese escaneo ES la respuesta que piden. `DELIVERED_TO_GARDEN` es
+# literalmente «lugar seguro / jardin», que son las dos primeras casillas.
+#
+# DONDE SE PARA, Y POR QUE. Dos escaneos dicen el tipo de entrega pero NO el
+# sitio, que es justo lo que se pregunta:
+#   · DELIVERED_TO_SAFE_LOCATION -> «un lugar seguro», pero no cual;
+#   · DELIVERED_TO_STORE         -> «un comercio», pero no a quien.
+# Esos se quedan con la primera casilla puesta y las demas vacias, marcados para
+# preguntar al conductor. Rellenarlos a ojo seria declararle a Amazon un sitio
+# que nadie ha dicho, y eso no se puede deshacer.
+#
+# `property` (tipo de edificio) no sale del escaneo en ningun caso, asi que va
+# vacio: la pagina lo admite vacio, y un dato inventado ahi vale menos que nada.
+_DNR_DEL_ESCANEO = {
+    "DELIVERED_TO_DOORSTEP":         ("SAFE_PLACE", "FRONT_DOOR"),
+    "DELIVERED_TO_GARDEN":           ("SAFE_PLACE", "GARDEN"),
+    "DELIVERED_TO_REAR_DOOR":        ("SAFE_PLACE", "BACK_DOOR"),
+    "DELIVERED_TO_MAIL_SLOT":        ("SAFE_PLACE", "MAILBOX"),
+    "DELIVERED_TO_HOUSEHOLD_MEMBER": ("CUSTOMER_HHM", "HHM"),
+    "DELIVERED_TO_RECEPTIONIST":     ("ALTERNATIVE", "RECEPTIONIST"),
+    # Estos dos NO dicen el sitio: solo la primera casilla.
+    "DELIVERED_TO_SAFE_LOCATION":    ("SAFE_PLACE", ""),
+    "DELIVERED_TO_STORE":            ("COMMERCIAL", ""),
+    # ── LOS DOS QUE FALTABAN, vistos al entrar por fin las de DGA1 ──────────
+    # El 15-09-2026, con cuatro naves dentro, quedaban 4 investigaciones de 77
+    # que esta tabla no sabia contestar: estas dos. Las dos tienen opcion EXACTA
+    # en el catalogo de Amazon —comprobado contra `dnr_opciones.json`, no
+    # deducido— asi que no habia razon para dejarlas a mano.
+    #
+    # Ojo con la letra: el escaneo de Amazon dice NEIGHBOR (a la americana) y su
+    # propia opcion se llama NEIGHBOUR. Escribirlo «como suena» habria mandado
+    # una opcion que no existe, y eso tumba el bloque ENTERO sin decir por que.
+    "DELIVERED_TO_NEIGHBOR":         ("ALTERNATIVE", "NEIGHBOUR"),
+    # El locker no tiene tercera casilla (`additional` viene vacio para LOCKER
+    # en el catalogo), asi que con estas dos la respuesta esta completa.
+    "DELIVERED_TO_LOCKER":           ("LOCKER", "AMZN_LOCKER"),
+}
+
+
+# Como se lee el escaneo en la pantalla del conductor. Es SU propio escaneo, el
+# que hizo al entregar: verlo escrito es lo que mas le hace acordarse — «ah, si,
+# ese se lo di a la senora». Las palabras son las que usa el propio Cortex en
+# espanol donde las sabemos («Entregado a un miembro de la familia»), para que
+# le suenen de la aplicacion que usa todos los dias.
+_DNR_ESCANEO_EN_CRISTIANO = {
+    "DELIVERED_TO_DOORSTEP":         "en la puerta",
+    "DELIVERED_TO_GARDEN":           "en el jard\u00edn",
+    "DELIVERED_TO_REAR_DOOR":        "por la puerta de atr\u00e1s",
+    "DELIVERED_TO_MAIL_SLOT":        "en el buz\u00f3n",
+    "DELIVERED_TO_SAFE_LOCATION":    "en un lugar seguro",
+    "DELIVERED_TO_HOUSEHOLD_MEMBER": "a un miembro de la familia",
+    "DELIVERED_TO_RECEPTIONIST":     "a la recepci\u00f3n",
+    "DELIVERED_TO_STORE":            "en un comercio",
+    "DELIVERED_TO_NEIGHBOR":         "a un vecino",
+    "DELIVERED_TO_LOCKER":           "en un locker",
+}
+
+
+def _dnr_marcaste(scan: str) -> str:
+    """Lo que puso el conductor al cerrar la entrega, para recordarselo.
+
+    Si no conocemos ese escaneo se devuelve vacio y la pagina no dice nada: mal
+    traducido seria peor que callado — le estariamos diciendo que marco algo que
+    no marco, y sobre eso contestaria.
+    """
+    return _DNR_ESCANEO_EN_CRISTIANO.get((scan or "").strip().upper(), "")
+
+
+def _dnr_sugerencia(fila: dict) -> dict:
+    """Lo que contesta el escaneo, y si con eso basta.
+
+    `completa` significa que las dos casillas que Amazon pregunta salen del
+    escaneo. Si es False, hay que preguntarle al conductor: la pantalla lo dice
+    y no se manda como si estuviera contestada.
+    """
+    scan = (fila.get("scan") or "").strip().upper()
+    par = _DNR_DEL_ESCANEO.get(scan)
+    if not par:
+        return {"completa": False, "de": scan,
+                "porque": "Amazon no dice con que se cerro esta entrega"}
+    comp, loc = par
+    # Se comprueba contra el catalogo REAL, no contra esta tabla: si Amazon
+    # cambia una opcion, esto tiene que dejar de proponerla en vez de mandar
+    # algo que rechaza el bloque entero y sin decir por que.
+    op = _dnr_opciones()
+    if comp not in (op.get("completion") or {}):
+        return {"completa": False, "de": scan,
+                "porque": "«%s» ya no esta en el catalogo de Amazon" % comp}
+    if loc and loc not in ((op.get("location") or {}).get(comp) or {}):
+        loc = ""
+    return {"completion": comp, "location": loc, "additional": "", "property": "",
+            "completa": bool(loc), "de": scan, "en_cristiano": _dnr_marcaste(scan),
+            "porque": ("Lo dice el escaneo del conductor al entregar"
+                       if loc else
+                       "El escaneo dice el tipo de entrega pero no el sitio: "
+                       "preguntale al conductor")}
+
+
+def _dnr_codigo(filas: list) -> str:
+    """El bloque que espera Amazon. Mismo formato, byte a byte.
+
+    `separators` sin espacios y `ensure_ascii=False`, que es lo que hace
+    `JSON.stringify`: con los separadores por defecto de Python el base64 sale
+    distinto y Amazon lo rechaza sin decir por que.
+    """
+    data = []
+    for f in filas:
+        data.append({k: str(f.get(k) or "") for k in _DNR_CAMPOS})
+    crudo = json.dumps({"version": 1, "data": data}, separators=(",", ":"),
+                       ensure_ascii=False)
+    b64 = base64.b64encode(crudo.encode("utf-8")).decode("ascii")
+    return "\n\n---###START###---%s---###END###---\n\n\n" % b64
+
+
+def _dnr_correo(centro: str, filas: list) -> dict:
+    """El correo listo para enviar: destinatario, asunto y cuerpo.
+
+    El texto de cabecera es el que pone la propia pagina, palabra por palabra.
+    Cambiarlo seria mandarle a Amazon algo distinto de lo que espera leer.
+    """
+    cuerpo = ("PLEASE DO NOT MODIFY OR ADD ANY DETAILS IN THIS EMAIL. JUST CLICK "
+              "'Send' TO SHARE RELEVANT FEEDBACK WITH AMZL. THANK YOU.\n"
+              + _dnr_codigo(filas))
+    asunto = "TDSL-%s" % (_centro_norm(centro or "") or centro or "")
+    return {"para": _DNR_CORREO, "asunto": asunto, "cuerpo": cuerpo,
+            "mailto": "mailto:%s?subject=%s&body=%s" % (
+                _DNR_CORREO, _url_quote(asunto), _url_quote(cuerpo))}
+
+
+def _dnr_metros(a_lat, a_lng, b_lat, b_lng):
+    """Distancia en metros entre dos puntos. None si falta alguno."""
+    try:
+        if None in (a_lat, a_lng, b_lat, b_lng):
+            return None
+        dy = (float(a_lat) - float(b_lat)) * 111320.0
+        dx = (float(a_lng) - float(b_lng)) * 111320.0 * math.cos(math.radians(float(a_lat)))
+        return round(math.hypot(dx, dy))
+    except (TypeError, ValueError):
+        return None
+
+
+def _dnr_pregunta(d: dict) -> str:
+    """Lo que se le pregunta al conductor por WhatsApp.
+
+    Con el dia y la ruta delante, que es lo que le permite acordarse: «un
+    paquete» a secas, dos semanas despues, no lo situa nadie. La direccion solo
+    entra si Cortex la trae; no se rellena con la coordenada, que a una persona
+    no le dice nada.
+    """
+    trozos = ["Hola! Amazon nos pregunta por un paquete"]
+    if d.get("service_day"):
+        trozos.append("del %s" % d["service_day"])
+    if d.get("route_code"):
+        trozos.append("(ruta %s)" % d["route_code"])
+    sitio = (d.get("stop_address") or "").strip()
+    if sitio:
+        trozos.append("en %s" % sitio)
+    return " ".join(trozos) + ". Te acuerdas de donde lo dejaste? Gracias!"
+
+
+async def _dnr_contexto(tbas: list) -> dict:
+    """Lo que Cortex sabe de esos paquetes. Es lo que hace util la pantalla.
+
+    LO IMPORTANTE NO ES LA DIRECCION, ES LA DISTANCIA. Cortex guarda dos
+    puntos: donde estaba el DESTINO (`dest_lat/lng`, del propio route-details) y
+    donde estaba el REPARTIDOR al marcar la entrega (`lat/lng`, su escaneo).
+    Si estan a veinte metros, el paquete se dejo en esa puerta y eso es un dato
+    objetivo que contestar; si estan a trescientos, la pregunta al conductor es
+    otra. Medido el 14-09-2026 sobre las 27 investigaciones de OGA5: 18 estaban
+    en Cortex y 17 traian los dos puntos.
+
+    Lo que NO esta se dice (`en_cortex: false`), no se rellena con nada: un
+    paquete de hace mas de dos semanas ya no esta, y fingir que si lo esta es
+    peor que decir que no se sabe.
+    """
+    if not tbas:
+        return {}
+    docs = await db.cortex_packages.find(
+        {"tba": {"$in": list(tbas)}},
+        # `stop_address`, NO `address`: es como lo guarda el interceptor
+        # (address1 + address2 + city ya juntos). Pedir `address` devuelve
+        # siempre vacio y parece que Cortex no trae la direccion — que es lo que
+        # llegue a escribir, y era falso.
+        {"_id": 0, "tba": 1, "stop_address": 1, "dest_lat": 1, "dest_lng": 1,
+         "lat": 1, "lng": 1, "driver_id": 1, "service_day": 1, "route_code": 1,
+         "state": 1, "center": 1}).to_list(500)
+    # El nombre del conductor, para saber A QUIEN preguntar. `driver_id` de
+    # Cortex es el TRANSPORTER, no el id de la ficha (gotcha 73).
+    tids = [d.get("driver_id") for d in docs if d.get("driver_id")]
+    nombres = {}
+    if tids:
+        async for c in db.drivers.find({"transporter_id": {"$in": tids}},
+                                       {"_id": 0, "transporter_id": 1, "name": 1, "phone": 1}):
+            nombres[c["transporter_id"]] = {"nombre": c.get("name"), "telefono": c.get("phone")}
+    out = {}
+    for d in docs:
+        tid = d.get("driver_id")
+        out[d["tba"]] = {
+            "en_cortex": True,
+            "dia": d.get("service_day"), "ruta": d.get("route_code"),
+            "estado": d.get("state"), "centro": d.get("center"),
+            # La ciudad ya va dentro de `stop_address`: separarla seria
+            # partir un texto que Amazon nos da junto y volver a pegarlo mal.
+            "direccion": d.get("stop_address"), "ciudad": None,
+            "dest": {"lat": d.get("dest_lat"), "lng": d.get("dest_lng")},
+            "escaneo": {"lat": d.get("lat"), "lng": d.get("lng")},
+            "metros": _dnr_metros(d.get("dest_lat"), d.get("dest_lng"), d.get("lat"), d.get("lng")),
+            "transporter": tid,
+            "conductor": nombres.get(tid, {}).get("nombre"),
+            "telefono": nombres.get(tid, {}).get("telefono"),
+            # El enlace de WhatsApp lo monta el SERVIDOR, con la pregunta ya
+            # escrita: 61 de 114 conductores tienen el telefono guardado sin
+            # prefijo, y `wa.me/612345678` abre un numero que no existe
+            # (gotcha 47). Vacio significa que no hay telefono, y eso la
+            # pantalla lo dice en vez de disimularlo con un boton muerto.
+            "wa": enlace_wa(nombres.get(tid, {}).get("telefono"),
+                            _dnr_pregunta(d)),
+            "mapa": ("https://www.google.com/maps/search/?api=1&query=%s,%s"
+                     % (d.get("lat"), d.get("lng"))) if d.get("lat") else None,
+            # Y el DESTINO aparte, que es lo que se le ensena al conductor para
+            # preguntarle: «esta puerta, te suena?». Las dos URLs las monta el
+            # servidor, nunca la pantalla (gotcha 47).
+            "mapa_destino": ("https://www.google.com/maps/search/?api=1&query=%s,%s"
+                             % (d.get("dest_lat"), d.get("dest_lng"))) if d.get("dest_lat") else None,
+        }
+    return out
+
+
+# ── PREGUNTARLE AL CONDUCTOR, Y QUE SU RESPUESTA ENTRE YA TRADUCIDA ──────
+"""No se le manda una captura: se le manda un ENLACE.
+
+POR QUE NO UNA CAPTURA. Una imagen no se puede contestar. Volveria un audio o un
+«en la puerta de la izquierda», y alguien de oficina tendria que traducir eso a
+las casillas de Amazon — que es justo el trabajo que se venia a quitar, mas la
+posibilidad de traducirlo mal.
+
+El enlace abre una pagina con la direccion, el mapa con los DOS puntos (a que
+puerta iba y donde marco el la entrega) y la hora. Debajo, botones con las
+opciones en cristiano. Toca uno y su respuesta entra **ya en el formato exacto
+que pide Amazon**, porque los botones SON el catalogo.
+
+Y no hace falta que tenga la aplicacion ni que se acuerde de ninguna clave: es
+un enlace, se abre y ya esta. El conductor que mas ayuda es el que menos
+paciencia tiene para instalar cosas.
+
+LO QUE SE LE ENSEnA ESTA EN LISTA BLANCA (gotcha 26): el enlace acaba en un
+WhatsApp y de ahi puede acabar en cualquier sitio. Va lo de SU paquete y nada
+mas — ni el nombre de nadie, ni ids internos, ni el correo de Amazon.
+"""
+# Las opciones tal y como se las lee una persona, y a que casillas van. Cada una
+# se comprueba contra el catalogo REAL en los tests: una opcion que Amazon no
+# reconozca tumba el bloque entero y sin decir cual ha sido.
+_DNR_LO_QUE_DIJO = [
+    ("mano",      "Se lo di al cliente en mano",        "CUSTOMER_HHM", "CUSTOMER", ""),
+    ("casa",      "Se lo di a alguien de la casa",      "CUSTOMER_HHM", "HHM", ""),
+    ("vecino",    "Se lo di a un vecino",               "ALTERNATIVE", "NEIGHBOUR", ""),
+    ("recepcion", "Lo dej\u00e9 en recepci\u00f3n o conserjer\u00eda", "ALTERNATIVE", "RECEPTIONIST", ""),
+    ("puerta",    "Lo dej\u00e9 en la puerta",                "SAFE_PLACE", "FRONT_DOOR", "FRONT"),
+    ("felpudo",   "Lo dej\u00e9 bajo el felpudo",             "SAFE_PLACE", "FRONT_DOOR", "DOORMAT"),
+    ("buzon",     "Lo dej\u00e9 en el buz\u00f3n",                "SAFE_PLACE", "MAILBOX", "MAILBOX"),
+    ("jardin",    "Lo dej\u00e9 en el jard\u00edn",               "SAFE_PLACE", "GARDEN", ""),
+    ("porche",    "Lo dej\u00e9 en el porche",                "SAFE_PLACE", "PORCH", ""),
+    ("garaje",    "Lo dej\u00e9 en el garaje",                "SAFE_PLACE", "GARAGE", ""),
+    ("atras",     "Lo dej\u00e9 por la puerta de atr\u00e1s",     "SAFE_PLACE", "BACK_DOOR", "SIDE"),
+    ("portal",    "Lo dej\u00e9 en el portal o el vest\u00edbulo", "SAFE_PLACE", "LOBBY", ""),
+    ("valla",     "Lo dej\u00e9 detr\u00e1s de la valla",         "SAFE_PLACE", "FENCE", ""),
+    ("terraza",   "Lo dej\u00e9 en la terraza",               "SAFE_PLACE", "TERRACE", ""),
+    ("tienda",    "Lo dej\u00e9 en una tienda o comercio",    "COMMERCIAL", "CUSTOMER", ""),
+    ("locker",    "Lo dej\u00e9 en un locker",                "LOCKER", "", ""),
+    # «No me acuerdo» tiene que estar. Sin esa opcion, quien no se acuerde
+    # tocara la que mas se le parezca, y eso es peor que un hueco: seria una
+    # declaracion falsa a Amazon con su nombre detras.
+    ("nose",      "No me acuerdo de ese paquete",       "", "", ""),
+]
+
+
+def _dnr_opciones_conductor() -> list:
+    """Las que de verdad existen hoy en el catalogo de Amazon.
+
+    Si Amazon quita una, esta deja de ofrecerse en vez de mandarla: el bloque lo
+    rechaza entero y sin decir cual ha sido.
+    """
+    op = _dnr_opciones()
+    fuera = []
+    for clave, texto, comp, loc, adic in _DNR_LO_QUE_DIJO:
+        if comp and comp not in (op.get("completion") or {}):
+            continue
+        if loc and loc not in ((op.get("location") or {}).get(comp) or {}):
+            continue
+        fuera.append({"clave": clave, "texto": texto})
+    return fuera
+
+
+def _dnr_traducir(clave: str) -> dict:
+    """De lo que toco el conductor a las casillas de Amazon."""
+    for c, _t, comp, loc, adic in _DNR_LO_QUE_DIJO:
+        if c == clave:
+            return {"completion": comp, "location": loc, "additional": adic}
+    return {}
+
+
+async def _dnr_por_token(token: str) -> dict:
+    """La investigacion de un enlace. Filtra por SU clase y exige SU campo.
+
+    `taller_enlaces` guarda cuatro clases de enlace. Un `find_one` por token a
+    secas acepta los de las otras tres y revienta despues con un KeyError, que
+    en un endpoint publico es un 500 (gotcha 59).
+    """
+    _ot_freno(token, limite=120)
+    tok = (token or "").strip()
+    if len(tok) < 20 or len(tok) > 120:
+        raise HTTPException(404, "Este enlace no es v\u00e1lido")
+    enlace = await global_db.taller_enlaces.find_one({"token": tok, "tipo": "dnr"}, {"_id": 0})
+    if not enlace or enlace.get("revocado") or not enlace.get("dnr_id"):
+        raise HTTPException(404, "Este enlace no es v\u00e1lido")
+    if enlace.get("expira_en") and enlace["expira_en"] < _ot_ahora():
+        raise HTTPException(404, "Este enlace ha caducado. P\u00eddele otro a la oficina.")
+    # LA LINEA QUE EVITA EL DESASTRE MULTIEMPRESA (gotcha 26).
+    set_current_org_db(enlace.get("db_name"))
+    d = await db[_DNR_COL].find_one({"tracking_id": enlace["dnr_id"]}, {"_id": 0})
+    if not d:
+        raise HTTPException(404, "Este enlace ya no es v\u00e1lido")
+    return d
+
+
+@api_router.post("/dnr/investigaciones/preguntar")
+async def dnr_preguntar(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Crea el enlace para UNA investigacion y devuelve el WhatsApp escrito."""
+    tid = _texto_cuerpo(body.get("tracking_id"), 40)
+    d = await db[_DNR_COL].find_one({"tracking_id": tid}, {"_id": 0})
+    if not d:
+        raise HTTPException(404, "No conocemos esa investigaci\u00f3n")
+    ctx = (await _dnr_contexto([tid])).get(tid) or {}
+    ahora = datetime.now(timezone.utc).isoformat()
+    # UN ENLACE POR INVESTIGACION, y el mismo si ya existe: dos enlaces vivos
+    # para el mismo paquete son dos respuestas posibles y ninguna forma de saber
+    # cual vale.
+    enlace = await global_db.taller_enlaces.find_one(
+        {"tipo": "dnr", "dnr_id": tid, "revocado": {"$ne": True}}, {"_id": 0})
+    if not enlace or (enlace.get("expira_en") or "") < _ot_ahora():
+        token = secrets.token_urlsafe(24)
+        await global_db.taller_enlaces.insert_one({
+            "token": token, "tipo": "dnr", "dnr_id": tid,
+            "db_name": _current_db_name.get(), "creado_por": user.get("sub"),
+            "creado_en": ahora,
+            "expira_en": (datetime.now(timezone.utc) + timedelta(days=3)).isoformat(),
+            "revocado": False})
+    else:
+        token = enlace["token"]
+    url = "%s/dnr/t/%s" % (_PORTAL_BASE_FRONT, token)
+    # El texto y el enlace `wa.me` los arma el SERVIDOR (gotcha 47): 61 de 114
+    # telefonos estan guardados sin prefijo y `wa.me/6xx…` abre un numero que no
+    # existe.
+    trozos = ["Hola%s! Amazon nos pregunta por un paquete"
+              % ((" " + ctx["conductor"].split()[0].title()) if ctx.get("conductor") else "")]
+    if ctx.get("dia"):
+        trozos.append("del %s" % ctx["dia"])
+    if ctx.get("ruta"):
+        trozos.append("(ruta %s)" % ctx["ruta"])
+    if ctx.get("direccion"):
+        trozos.append("de %s" % ctx["direccion"])
+    texto = (" ".join(trozos) + ". Abre esto y dime d\u00f3nde lo dejaste, "
+             "es un momento: " + url)
+    await db[_DNR_COL].update_one({"tracking_id": tid},
+                                  {"$set": {"preguntado_en": ahora, "enlace": url}})
+    return {"ok": True, "url": url, "texto": texto,
+            "wa": enlace_wa(ctx.get("telefono"), texto),
+            "conductor": ctx.get("conductor"), "sin_telefono": not ctx.get("telefono")}
+
+
+@api_router.get("/dnr/p/{token}")
+async def dnr_publico(token: str):
+    """Lo que ve el conductor en su movil. Lista blanca de campos."""
+    d = await _dnr_por_token(token)
+    ctx = (await _dnr_contexto([d["tracking_id"]])).get(d["tracking_id"]) or {}
+    return {
+        "tracking_id": d["tracking_id"],
+        "entregado_en": d.get("entregado_en", ""),
+        "dia": ctx.get("dia"), "ruta": ctx.get("ruta"),
+        "direccion": ctx.get("direccion"), "ciudad": ctx.get("ciudad"),
+        "dest": ctx.get("dest"), "escaneo": ctx.get("escaneo"),
+        "metros": ctx.get("metros"),
+        # Lo que el mismo marco ese dia. No se preselecciona ningun boton con
+        # esto a proposito: la pregunta de Amazon es DONDE, y el escaneo muchas
+        # veces no lo dice. Preseleccionar seria ponerle la respuesta en la boca.
+        "marcaste": _dnr_marcaste(d.get("scan")),
+        "opciones": _dnr_opciones_conductor(),
+        "ya_contesto": (d.get("respuesta_conductor") or {}).get("en"),
+        "lo_que_dijo": (d.get("respuesta_conductor") or {}).get("texto"),
+    }
+
+
+@api_router.post("/dnr/p/{token}")
+async def dnr_publico_responder(token: str, body: dict = Body(...)):
+    """El conductor contesta. Entra ya traducido a las casillas de Amazon."""
+    d = await _dnr_por_token(token)
+    clave = _texto_cuerpo(body.get("opcion"), 20)
+    validas = {o["clave"] for o in _dnr_opciones_conductor()}
+    if clave not in validas:
+        raise HTTPException(400, "Esa opci\u00f3n no existe")
+    ahora = datetime.now(timezone.utc).isoformat()
+    # QUIEN TRADUCE ES EL SERVIDOR (gotcha 54). Si la pagina mandara las casillas
+    # ya puestas, bastaria con cambiarlas en el navegador para declararle a
+    # Amazon cualquier cosa en nombre de esa persona.
+    trad = _dnr_traducir(clave)
+    texto = next((t for c, t, *_ in _DNR_LO_QUE_DIJO if c == clave), clave)
+    await db[_DNR_COL].update_one(
+        {"tracking_id": d["tracking_id"]},
+        {"$set": {"respuesta_conductor": {
+            "opcion": clave, "texto": texto, **trad,
+            "nota": _texto_cuerpo(body.get("nota"), 400), "en": ahora}}})
+    return {"ok": True, "gracias": True}
+
+
+async def _dnr_naves() -> list:
+    """De que naves ha llegado el informe de investigaciones, y cuando.
+
+    UNA LISTA VACIA NO SIGNIFICA «NO HAY». El 15-09-2026 Dani pregunto por que
+    no aparecian las pre-DNR de DGA1 y la pantalla le estaba enseñando lo mismo
+    que si esa nave no tuviera ninguna: nada. La verdad era otra —el informe de
+    DGA1 no se habia bajado NUNCA, cero intentos— y desde la pantalla no habia
+    forma de distinguir las dos cosas.
+
+    Son estados distintos y hay que decirlos distintos: «no tiene ninguna
+    abierta» es una buena noticia, y «no ha llegado su informe» es trabajo sin
+    hacer que ademas se esta escapando el plazo de 24 h.
+    """
+    centros = await _centros_de_la_empresa()
+    por_centro = {}
+    for r in await db[_DNR_COL].aggregate([
+            {"$group": {"_id": "$centro",
+                        "ultimo": {"$max": "$visto_en"},
+                        "abiertas": {"$sum": {"$cond": [
+                            {"$and": [{"$ne": ["$contestada", True]},
+                                      {"$eq": [{"$type": "$cerrada_en"}, "missing"]}]},
+                            1, 0]}},
+                        "total": {"$sum": 1}}}]).to_list(30):
+        if r["_id"]:
+            por_centro[str(r["_id"]).upper()] = r
+    # Las de la empresa primero —esas son las que tienen que estar— y detras
+    # cualquier otra de la que hayan llegado datos, que tambien hay que verla.
+    nombres = list(dict.fromkeys([c.upper() for c in centros] + list(por_centro)))
+    salida = []
+    for n in nombres:
+        r = por_centro.get(n)
+        salida.append({"centro": n,
+                       "tiene_informe": bool(r),
+                       "ultimo": (r or {}).get("ultimo"),
+                       "abiertas": (r or {}).get("abiertas", 0),
+                       "total": (r or {}).get("total", 0),
+                       "de_la_empresa": n in {c.upper() for c in centros}})
+    return salida
+
+
+@api_router.get("/dnr/investigaciones")
+async def dnr_investigaciones(center: Optional[str] = None, _=Depends(require_admin)):
+    """Las que estan abiertas, con lo que Cortex sabe de cada paquete."""
+    # Abierta = ni contestada por nosotros ni cerrada por Amazon.
+    q = {"contestada": {"$ne": True}, "cerrada_en": {"$exists": False}}
+    if center:
+        q["centro"] = {"$regex": re.escape(_centro_norm(center) or center), "$options": "i"}
+    # POR LO QUE VENCE ANTES, que es el orden en que hay que contestarlas. Por
+    # fecha del caso salia primero la mas reciente, que es justo la que mas
+    # tiempo tiene. Las que no traen plazo van al final (`""` ordena despues de
+    # cualquier fecha ISO) en vez de colarse arriba como si urgieran.
+    # ORDENA MONGO, Y DESPUES SE CORTA. Con el corte antes del orden, el dia que
+    # haya mas de 400 abiertas entrarian 400 CUALESQUIERA y se ordenarian esas:
+    # las mas urgentes podrian no estar, sin ningun error y con la pantalla
+    # llena (gotcha 10). Hoy hay 38, asi que no muerde; muerde en la semana mala,
+    # que es justo cuando se mira. `$ifNull` no basta: `vence` tambien puede
+    # venir como cadena vacia, y `"" or "9999"` es lo que hacia la version de
+    # Python — el `$cond` reproduce eso exactamente, campo por campo.
+    filas = await db[_DNR_COL].aggregate([
+        {"$match": q},
+        {"$addFields": {"_orden": {"$cond": [{"$in": [{"$ifNull": ["$vence", ""]}, ["", None]]},
+                                             "9999", "$vence"]}}},
+        {"$sort": {"_orden": 1, "tracking_id": 1}},
+        {"$limit": 400},
+        {"$project": {"_id": 0, "_orden": 0}},
+    ]).to_list(400)
+    ctx = await _dnr_contexto([f["tracking_id"] for f in filas])
+    ahora = datetime.now(timezone.utc).isoformat()
+    listas, vivas, caducadas = 0, 0, 0
+    for f in filas:
+        f["cortex"] = ctx.get(f["tracking_id"], {"en_cortex": False})
+        f["sugerencia"] = _dnr_sugerencia(f)
+        if f["sugerencia"].get("completa"):
+            listas += 1
+        # Caducada NO es lo mismo que pendiente: el plazo son 24 h y pasado eso
+        # la pagina de Amazon pone una X. Se siguen enseñando —hay que saber
+        # cuantas se escapan— pero aparte, para que no tapen a las que aun se
+        # pueden contestar.
+        f["caducada"] = bool(f.get("vence")) and f["vence"] < ahora
+        # ENVIADA NO ES CONTESTADA. Lo segundo lo dice el informe de Amazon
+        # («Response Received»); lo primero solo dice que salio de aqui. Si
+        # pasan mas de 24 h sin que lo confirme, hay que mandarlo a mano.
+        if f.get("enviada_en") and not f.get("contestada"):
+            f["esperando_confirmacion"] = True
+            f["sin_confirmar_horas"] = round(
+                (datetime.fromisoformat(ahora) - datetime.fromisoformat(f["enviada_en"]))
+                .total_seconds() / 3600.0, 1)
+        if f["caducada"]:
+            caducadas += 1
+        elif f.get("vence"):
+            vivas += 1
+    return {"investigaciones": filas, "opciones": _dnr_opciones(),
+            "correo": _DNR_CORREO, "ya_contestadas_por_el_escaneo": listas,
+            "vivas": vivas, "caducadas": caducadas, "ahora": ahora,
+            "naves": await _dnr_naves(),
+            "contestadas": await db[_DNR_COL].count_documents({"contestada": True})}
+
+
+@api_router.post("/dnr/investigaciones/responder")
+async def dnr_responder(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Genera el correo con las respuestas dadas. NO lo envia: lo prepara.
+
+    Enviar por nuestra cuenta una declaracion a Amazon sobre donde se dejo un
+    paquete no es nuestro papel: lo revisa y lo manda una persona. Aqui se
+    monta el codigo, que es la parte que no se puede hacer a mano.
+    """
+    respuestas = body.get("respuestas")
+    if not isinstance(respuestas, list) or not respuestas:
+        raise HTTPException(400, "No hay ninguna respuesta que mandar")
+    opciones = _dnr_opciones()
+    filas, guardar = [], []
+    for r in respuestas:
+        if not isinstance(r, dict):
+            continue
+        tid = _texto_cuerpo(r.get("tracking_id"), 40)
+        doc = await db[_DNR_COL].find_one({"tracking_id": tid}, {"_id": 0})
+        if not doc:
+            raise HTTPException(404, "No conocemos la investigacion %s" % tid[:20])
+        comp = _texto_cuerpo(r.get("completion"), 40)
+        loc = _texto_cuerpo(r.get("location"), 40)
+        adic = _texto_cuerpo(r.get("additional"), 40)
+        prop = _texto_cuerpo(r.get("property"), 40)
+        # LO QUE NO ESTA EN EL CATALOGO NO SE MANDA. Amazon rechaza el bloque
+        # entero por una opcion que no reconoce, y sin decir cual.
+        if comp and comp not in (opciones.get("completion") or {}):
+            raise HTTPException(400, "«%s» no es una opcion de entrega" % comp[:30])
+        if loc and loc not in ((opciones.get("location") or {}).get(comp) or {}):
+            raise HTTPException(400, "«%s» no vale para ese tipo de entrega" % loc[:30])
+        if adic and adic not in ((opciones.get("additional") or {}).get(comp) or {}):
+            raise HTTPException(400, "«%s» no vale para ese tipo de entrega" % adic[:30])
+        if prop and prop not in (opciones.get("property") or {}):
+            raise HTTPException(400, "«%s» no es un tipo de propiedad" % prop[:30])
+        fila = {
+            "tracking_id": tid, "order_id": doc.get("order_id", ""),
+            "marketplace_id": doc.get("marketplace_id", ""),
+            "case_datetime": doc.get("case_datetime", ""),
+            "completion": comp, "location": loc, "additional": adic, "property": prop,
+            "building_number": _texto_cuerpo(r.get("building_number"), 20),
+            "building_floor": _texto_cuerpo(r.get("building_floor"), 10),
+        }
+        filas.append(fila)
+        guardar.append((tid, fila, _texto_cuerpo(r.get("nota"), 600)))
+
+    # EL ASUNTO LO DECIDEN LAS INVESTIGACIONES, NO EL SELECTOR DEL PANEL. Con el
+    # centro en «Todos» llegaria la cadena "Todos" y el asunto seria
+    # «TDSL-Todos»: Amazon no lo asocia a ninguna nave y la respuesta se pierde
+    # sin que nadie lo note. Cada investigacion ya sabe de que nave es.
+    centros = {c for c in (x.get("centro") for x in await db[_DNR_COL].find(
+        {"tracking_id": {"$in": [f["tracking_id"] for f in filas]}},
+        {"_id": 0, "centro": 1}).to_list(400)) if c}
+    if len(centros) > 1:
+        # Un correo por nave: el asunto es la nave, y mezclarlas mandaria las de
+        # una bajo el nombre de la otra.
+        raise HTTPException(400, "Has mezclado investigaciones de %s. Contesta "
+                                 "las de cada nave por separado."
+                                 % " y ".join(sorted(centros)))
+    correo = _dnr_correo(next(iter(centros), "")
+                         or _texto_cuerpo(body.get("center"), 20) or "", filas)
+
+    # Se apunta lo que se ha preparado, con quien y cuando. `contestada` solo se
+    # marca cuando la persona confirma que lo ha enviado: abrir el correo no es
+    # haberlo mandado, igual que con las ETT.
+    ahora = datetime.now(timezone.utc).isoformat()
+    for tid, fila, nota in guardar:
+        await db[_DNR_COL].update_one(
+            {"tracking_id": tid},
+            {"$set": {"respuesta": fila, "nota_conductor": nota,
+                      "preparada_en": ahora,
+                      "preparada_por": user.get("name") or user.get("username") or ""}})
+    return {"ok": True, "paquetes": len(filas), **correo}
+
+
+@api_router.post("/dnr/investigaciones/enviar")
+async def dnr_enviar(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Manda el correo a Amazon desde la aplicacion. Y avisa de lo que NO sabe.
+
+    POR QUE HACE FALTA, y no es comodidad. El `mailto:` de la pagina de Amazon
+    —y el nuestro, que lo copiaba— mete el bloque entero dentro de la URL.
+    Medido el 15-09-2026 contra produccion:
+
+        1 paquete   ->    713 caracteres
+        3 paquetes  ->  1.437
+        5 paquetes  ->  ~2.200   <- Windows corta aqui
+        27 paquetes -> ~10.900
+
+    Windows y los navegadores cortan las URL `mailto` largas por encima de unos
+    2.000 caracteres, y **un bloque base64 cortado lo rechaza Amazon entero**,
+    sin decir por que y llevandose por delante las respuestas buenas de esa
+    misma tanda. O sea que contestar de cinco en cinco no funcionaba y no habia
+    forma de notarlo. Mandandolo desde aqui no hay limite.
+
+    LO QUE NO PODEMOS GARANTIZAR, Y POR ESO NO SE DA POR CONTESTADA. El correo
+    sale de `contacto@flotadsp.com`, no del buzon de la nave. Amazon no publica
+    si su puerta acepta remitentes distintos: puede que lo procese igual —el
+    bloque lleva dentro el DSP, la nave y cada caso— o puede que lo ignore en
+    silencio. No hay forma de saberlo mandandolo, solo mirando DESPUES.
+
+    Y esa forma existe: **el informe del dia siguiente dice «Response
+    Received»** en las que Amazon ha recibido. Asi que aqui se marca
+    `enviada_en` y NADA MAS; `contestada` la pone el informe cuando lo confirma
+    (ver la ingesta de `dnr_inv`). Si pasan 24 h y no lo confirma, la pantalla
+    lo dice en rojo y se manda desde el correo de siempre. Dar por contestado lo
+    que no se ha confirmado seria dejar de contestar investigaciones creyendo
+    que estan hechas — que es peor que no mandarlas.
+    """
+    respuestas = body.get("respuestas")
+    if not isinstance(respuestas, list) or not respuestas:
+        raise HTTPException(400, "No hay ninguna respuesta que mandar")
+    # Se reutiliza el MISMO codigo que prepara el correo: si se montara aparte,
+    # el dia que cambie el formato habria dos verdades y una de las dos mandaria
+    # a Amazon algo que rechaza.
+    preparado = await dnr_responder(body, user)
+    cuerpo = preparado["cuerpo"]
+    copia = [c for c in (body.get("copia") or []) if isinstance(c, str) and "@" in c][:3]
+    if not copia and user.get("email"):
+        copia = [user["email"]]
+
+    # EL BLOQUE VIAJA EN TEXTO PLANO Y TAL CUAL. En el HTML va dentro de un
+    # <pre> para que ningun cliente de correo le meta saltos de linea: un salto
+    # dentro del base64 lo parte.
+    html = ("<pre style=\"font-family:monospace;white-space:pre-wrap;"
+            "word-break:break-all\">%s</pre>" % html_escape(cuerpo))
+    ok = await _send_resend_email(
+        _DNR_CORREO, preparado["asunto"], html,
+        responder_a=(copia[0] if copia else ""), copia=copia, texto=cuerpo)
+    if not ok:
+        raise HTTPException(502, "No se ha podido enviar el correo. Abrelo en tu "
+                                 "correo con el boton de al lado y mandalo desde ahi.")
+
+    ahora = datetime.now(timezone.utc).isoformat()
+    tbas = [r.get("tracking_id") for r in respuestas if isinstance(r, dict)]
+    await db[_DNR_COL].update_many(
+        {"tracking_id": {"$in": tbas}},
+        {"$set": {"enviada_en": ahora,
+                  "enviada_por": user.get("name") or user.get("username") or ""}})
+    await _audit(user, "dnr_enviar", {"paquetes": len(tbas), "copia": copia})
+    return {"ok": True, "paquetes": len(tbas), "copia": copia,
+            "asunto": preparado["asunto"], "cuando": ahora,
+            "aviso": ("Enviado. Amazon lo confirma en el informe del dia siguiente: "
+                      "hasta entonces sale como «pendiente de confirmar».")}
+
+
+@api_router.post("/dnr/investigaciones/enviada")
+async def dnr_marcar_enviada(body: dict = Body(...), user: dict = Depends(require_admin)):
+    """Lo confirma una persona despues de darle a enviar en su correo."""
+    tbas = [t for t in (body.get("tracking_ids") or []) if isinstance(t, str)][:300]
+    if not tbas:
+        raise HTTPException(400, "No has dicho cuales")
+    r = await db[_DNR_COL].update_many(
+        {"tracking_id": {"$in": tbas}},
+        {"$set": {"contestada": True,
+                  "contestada_en": datetime.now(timezone.utc).isoformat(),
+                  "contestada_por": user.get("name") or user.get("username") or ""}})
+    return {"ok": True, "marcadas": r.modified_count}
+
+
 # ── LOS INFORMES DEL PORTAL, SIN COPIAR Y PEGAR ─────────────────────────────
 """El Daily Report (DNR) y el plan de horas (WHC) entran hoy a mano: alguien los
 descarga del portal del DSP y los pega en la aplicacion. Todos los dias. Y el
@@ -34078,7 +35970,466 @@ DOS DECISIONES:
 _USUARIO_INGESTA = {"sub": "extension", "name": "extension",
                     "account_type": "owner", "role": "admin"}
 
-_INFORME_TIPOS = ("diario", "whc")
+# «horarios» es el plan pedido a la API de Cortex, no leido de la pantalla:
+# viene ya por nave y no depende de que nadie abra nada.
+# «candidatos» es el listado de la plataforma de la ETT, que hasta ahora se
+# pegaba a mano todos los dias.
+_INFORME_TIPOS = ("diario", "whc", "dnr_inv", "horarios", "candidatos", "asociados")
+
+
+# ── LAS CUENTAS DE ONBOARDING, DE ASOCIADOS ─────────────────────────────────
+#
+# «En programacion no; yo puedo buscar las cuentas en Asociados y ver su
+# estado.» Tenia razon, y ademas esa pantalla SI tiene API: llama a
+# `/account-management/data/search-providers`, que por cada persona devuelve un
+# `moduleStatusMap` con los trece pasos del onboarding y el estado de cada uno.
+# Eso es «que le falta a esta cuenta» sin entrar una por una, que es lo que hace
+# que un onboarding tarde semanas.
+#
+# No se adivino: se capturo la respuesta real el 15-09-2026 y se escribio esto
+# mirandola.
+_ASOC_COL = "asociados_cuentas"
+
+# Los trece pasos, en cristiano. El nombre de Amazon no le dice nada a nadie:
+# «OMW-DA-BackgroundCheck» es el Global Check, y eso es lo que hay que leer en
+# pantalla cuando toca decidir a quien se llama primero.
+_ASOC_MODULOS = {
+    "OMW-DA-ProviderAcceptInvitation": "aceptar la invitación",
+    "OMW-DA-BasicInfo":                "datos básicos",
+    "OMW-DA-ProviderInfo":             "sus datos",
+    "OMW-DA-AmazonPolicy":             "política de Amazon",
+    "OMW-DA-EligibilityToWork":        "permiso de trabajo",
+    "OMW-DA-PhotoUpload":              "la foto",
+    "OMW-DA-DeliveryAttributes":       "datos de reparto",
+    "OMW-DA-DrivingRecordVerification": "el carnet de conducir",
+    "OMW-DA-BackgroundCheck":          "Global Check",
+    "OMW-DA-MedicalCheck":             "reconocimiento médico",
+    "OMW-DA-Training":                 "la formación",
+    "OMW-DA-AccountProvisioning":      "crearle la cuenta",
+    "OMW-DA-BadgePrinting":            "la tarjeta",
+}
+# Lo que cuenta como HECHO. Amazon escribe «Complete»; cualquier otra cosa
+# —«Pending», «NotStarted», «InProgress»— es algo que falta. Se compara en
+# minusculas y se acepta solo lo que de verdad significa hecho: dar por bueno lo
+# que no conocemos seria decirle que una cuenta esta lista cuando no lo esta.
+_ASOC_HECHO = {"complete", "completed", "done", "approved", "passed", "notapplicable", "na"}
+
+
+# ── QUIEN TIENE QUE HACER CADA TAREA ────────────────────────────────────────
+#
+# La ficha de Asociados reparte las veinte tareas en tres grupos, y esa es la
+# informacion que de verdad dice que hacer:
+#
+#   AMAZON     lo hace Amazon y solo se puede esperar (Global Check, badge...)
+#   DSP        lo tenemos que hacer NOSOTROS (permiso de trabajo, formularios)
+#   ASSOCIATE  lo tiene que hacer LA PERSONA (la formacion, su foto, su carnet)
+#
+# Sin esto, «le faltan dos cosas» no dice si hay que llamar a alguien, rellenar
+# un formulario o simplemente esperar. Con esto, si.
+# Las tareas de la ficha, con el nombre que Amazon les pone EN SU PROPIA
+# PANTALLA — copiado de ahi, no traducido por mi. Si algun dia añaden una, sale
+# con su nombre interno en vez de esconderse.
+_ASOC_TAREAS = {
+    # Lo que hace Amazon
+    "AccountProvisioning":       "Configuración de la cuenta",
+    "BackgroundCheck":           "Verificación Global Check",
+    "BadgePrinting":             "Impresión de distintivos",
+    "DriverLicenseVerification": "Relleno de licencia de conducir",
+    "DriverRecordVerification":  "Verificación del registro del conductor",
+    "FaceBiometricsEnrollment":  "Inscripción en la verificación de identidad",
+    "TrainingAccountSetup":      "Configuración de cuenta de aprendizaje",
+    # Lo que hacemos nosotros
+    "DeliveryAttributes":        "Información del driver",
+    "EligibilityToWork":         "Permiso de trabajo",
+    "AmazonPolicy":              "Formularios de declaración firmados",
+    "MedicalCheck":              "Reconocimiento médico",
+    # Lo que tiene que hacer la persona
+    "Invitation":                "Aceptar la invitación",
+    "PhotoUpload":               "Foto para el badge",
+    "InstructionalVideos":       "La sesión de formación",
+    "BasicInfo":                 "Introducir su información personal",
+    "ProviderInfo":              "Su permiso de conducir",
+    "BGCAgreementReAcceptance":  "Aceptar el aviso de privacidad",
+    # Esta NO es del onboarding: es la de dar de baja la cuenta, y aparece
+    # pendiente en todo el mundo justamente porque nadie se ha ido. Contarla
+    # como pendiente hace que nadie llegue nunca al 100 %.
+    "AccountDeprovisioning":     "",
+}
+
+_ASOC_DE_QUIEN = {
+    "AMAZON": "Amazon",
+    "DSP": "nosotros",
+    "ASSOCIATE": "la persona",
+    "PROVIDER": "la persona",
+}
+
+# Un estado que NO es «hecho». Amazon usa COMPLETED, y cualquier otra cosa
+# —PENDING, NOT_STARTED, IN_PROGRESS, o una que inventen manana— es que falta.
+_ASOC_HECHA = {"completed", "complete", "done", "approved", "not_applicable", "skipped"}
+
+
+def _asoc_tarea_hecha(estado: str) -> bool:
+    return str(estado or "").strip().lower() in _ASOC_HECHA
+
+
+def _asoc_detalle(bruto: dict) -> dict:
+    """Las veinte tareas de una ficha, contadas y repartidas por quien las hace.
+
+    De cada una se guarda como se llama, de quien es y como va. Lo que NO se
+    guarda: la URL del modulo ni las fechas — no hacen falta para saber que
+    falta, y son mas datos de una persona en nuestra base.
+    """
+    tareas = bruto.get("tareas") if isinstance(bruto.get("tareas"), list) else []
+    limpias, pendientes = [], []
+    for t in tareas[:40]:
+        if not isinstance(t, dict) or not t.get("que"):
+            continue
+        hecha = _asoc_tarea_hecha(t.get("estado"))
+        # Un dueño que no conocemos se enseña tal cual: esconderlo haria
+        # parecer que esa tarea no es de nadie.
+        crudo = str(t.get("de") or "").upper()
+        de = _ASOC_DE_QUIEN.get(crudo, crudo.lower()[:20])
+        # LA DE DAR DE BAJA NO CUENTA. `AccountDeprovisioning` sale pendiente
+        # en TODAS las cuentas —precisamente porque nadie se ha dado de baja— y
+        # contarla dejaria a todo el mundo eternamente a una tarea del final.
+        # Se comprueba con los datos, no de memoria: si algun dia sale hecha en
+        # alguien, es que si significaba algo y habra que volver a mirarlo.
+        nombre = _ASOC_TAREAS.get(t["que"], _ASOC_MODULOS.get(t["que"], t["que"]))
+        if not nombre:
+            continue
+        fila = {"que": str(nombre)[:60],
+                "clave": str(t["que"])[:60],
+                "de": de,
+                "estado": str(t.get("estado") or "")[:30],
+                "hecha": hecha}
+        limpias.append(fila)
+        if not hecha:
+            pendientes.append(fila)
+    cual = [{"que": str(c.get("que") or "")[:20], "estado": str(c.get("estado") or "")[:20]}
+            for c in (bruto.get("cualifica") or [])[:8] if isinstance(c, dict) and c.get("que")]
+    return {
+        "tareas": limpias,
+        "pendientes": pendientes,
+        "hechas": sum(1 for x in limpias if x["hecha"]),
+        "total": len(limpias),
+        "cualificaciones": cual,
+        # A QUIEN LE TOCA MOVER FICHA. Si todo lo que falta es de Amazon, no hay
+        # nada que hacer salvo esperar — y decirlo evita llamar a alguien para
+        # pedirle algo que no depende de el.
+        "toca_a": sorted({x["de"] for x in pendientes if x["de"]}),
+    }
+
+
+def _asoc_falta(estado: str) -> bool:
+    return str(estado or "").strip().lower() not in _ASOC_HECHO
+
+
+def _asoc_persona(p: dict) -> dict:
+    """Una persona tal y como se va a ver: que le falta, dicho en cristiano.
+
+    LLEGA SOLO LO QUE FALTA. La extension manda los pasos pendientes y, aparte,
+    cuantos hay hechos y cuantos en total: con cien personas, mandar los trece
+    modulos de cada una son trece veces mas datos cruzando de la pagina al
+    service worker para enseñar exactamente lo mismo.
+    Se sigue comprobando cada estado que llega —por si algun dia mandan uno ya
+    hecho— en vez de fiarse de que la extension haya filtrado bien.
+    """
+    modulos = p.get("modulos") if isinstance(p.get("modulos"), dict) else {}
+    faltan, hechos = [], 0
+    for clave, estado in modulos.items():
+        if _asoc_falta(estado):
+            # Un modulo que no conocemos se enseña con su nombre de Amazon en
+            # vez de callarse: el dia que añadan uno, se vera que existe.
+            faltan.append({"que": _ASOC_MODULOS.get(clave, clave),
+                           "estado": str(estado or "")[:30],
+                           "clave": clave})
+        else:
+            hechos += 1
+    # Los contadores que manda la extension mandan sobre los de aqui: aqui solo
+    # llegan los pendientes, asi que contar «hechos» con esto daria cero.
+    try:
+        hechos = max(hechos, int(p.get("hechos")))
+    except (TypeError, ValueError):
+        pass
+    try:
+        total = max(int(p.get("total")), len(modulos))
+    except (TypeError, ValueError):
+        total = len(modulos)
+    return {
+        "id": str(p.get("id") or "")[:80],
+        "nombre": str(p.get("nombre") or "")[:80],
+        "correo": str(p.get("correo") or "").strip().lower()[:90],
+        "estado": str(p.get("estado") or "")[:40],
+        "motivo": str(p.get("motivo") or "")[:60],
+        "paso": str(p.get("paso") or "")[:40],
+        "naves": [str(x).upper()[:8] for x in (p.get("naves") or [])][:6],
+        "faltan": faltan,
+        "hechos": hechos,
+        "total": total,
+        # `completa` solo si SABEMOS cuantos pasos hay y ninguno falta. Sin
+        # total no se afirma nada: decir «lista» de una cuenta de la que no
+        # sabemos nada es el falso positivo que mas caro sale aqui.
+        "completa": total > 0 and not faltan,
+    }
+
+
+async def _asoc_guardar(texto: str, _ruta=None) -> dict:
+    """Guarda lo que manda la extension desde la pantalla de Asociados.
+
+    Llega ya filtrado a nuestras naves (lo hace el service worker, que es quien
+    sabe cuales son) y sin correo ni telefono: para decir «a este le falta el
+    carnet» no hacen falta.
+    """
+    try:
+        datos = json.loads(texto)
+    except ValueError:
+        raise HTTPException(400, "Las cuentas de Asociados no vienen en JSON")
+    # EL DETALLE DE UNA FICHA: las veinte tareas. Viene aparte de la lista
+    # porque se pide aparte (una peticion por persona) y llega despues.
+    detalle = datos.get("detalle") if isinstance(datos, dict) else None
+    if isinstance(detalle, list) and detalle:
+        ahora_d = datetime.now(timezone.utc).isoformat()
+        tocadas = 0
+        for bruto in detalle[:100]:
+            if not isinstance(bruto, dict) or not bruto.get("id"):
+                continue
+            d = _asoc_detalle(bruto)
+            if not d["total"]:
+                continue
+            r = await db[_ASOC_COL].update_one(
+                {"id": str(bruto["id"])[:80]},
+                {"$set": {**d, "detalle_en": ahora_d}})
+            tocadas += r.matched_count
+        return {"detalles": len(detalle), "guardados": tocadas,
+                "resumen": "%d fichas al detalle" % tocadas}
+
+    personas = datos.get("personas") if isinstance(datos, dict) else None
+    if not isinstance(personas, list) or not personas:
+        raise HTTPException(400, "No viene ninguna cuenta")
+    ahora = datetime.now(timezone.utc).isoformat()
+    nuevas = 0
+    for bruta in personas[:400]:
+        if not isinstance(bruta, dict) or not bruta.get("id"):
+            continue
+        f = _asoc_persona(bruta)
+        r = await db[_ASOC_COL].update_one(
+            {"id": f["id"]},
+            {"$set": {**f, "visto_en": ahora},
+             "$setOnInsert": {"creado_en": ahora}},
+            upsert=True)
+        if r.upserted_id is not None:
+            nuevas += 1
+    total = await db[_ASOC_COL].count_documents({})
+    return {"cuentas": len(personas), "nuevas": nuevas, "total": total,
+            "resumen": "%d cuentas (%d nuevas)" % (len(personas), nuevas)}
+
+
+def _asoc_clave_nombre(n: str) -> str:
+    """Un nombre comparable: sin tildes, sin dobles espacios, en minusculas.
+
+    «MARÍA  LÓPEZ» y «Maria Lopez» son la misma persona y el portal de Amazon
+    las escribe distinto que la ETT.
+    """
+    t = unicodedata.normalize("NFD", str(n or ""))
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+    return " ".join(t.lower().split())
+
+
+def _asoc_palabras(n: str) -> frozenset:
+    """Las palabras de un nombre, sin tildes y sin el orden.
+
+    POR QUE NO VALE COMPARAR LA CADENA. La ETT escribe «Vicente Diaz, Jorge» y
+    Amazon «JORGE VICENTE DIAZ»: es la misma persona y no se parecen en nada
+    como texto. Comparando el CONJUNTO de palabras, si.
+
+    Se tiran las de dos letras o menos («de», «la»): no distinguen a nadie y
+    hacen que dos personas parezcan la misma.
+    """
+    t = unicodedata.normalize("NFD", str(n or ""))
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn").lower()
+    return frozenset(w for w in t.replace(",", " ").split() if len(w) > 2)
+
+
+def _asoc_mismo_nombre(a: str, b: str) -> bool:
+    """La misma persona: uno de los dos nombres contiene al otro, entero.
+
+    Con al menos TRES palabras en comun. Con dos, «Garcia Lopez» casaria con
+    media Galicia — y cruzar mal es peor que no cruzar: Dani miraria el
+    expediente de otro y le pediria lo que no le falta (gotcha 15).
+    """
+    pa, pb = _asoc_palabras(a), _asoc_palabras(b)
+    if len(pa) < 3 or len(pb) < 3:
+        return False
+    return (pa <= pb or pb <= pa) and len(pa & pb) >= 3
+
+
+async def _asoc_por_persona() -> dict:
+    """Las cuentas indexadas por correo y por nombre, para cruzarlas.
+
+    POR CORREO PRIMERO. Por nombre, dos tocayos acaban mezclados y uno veria el
+    expediente del otro (gotcha 15). El nombre es el segundo intento, solo
+    cuando no hay correo, y la ficha dice que el cruce fue por nombre para que
+    quien lo mire sepa que es menos seguro.
+    """
+    por_correo, por_nombre, todas = {}, {}, []
+    for c in await db[_ASOC_COL].find({}, {"_id": 0}).to_list(2000):
+        todas.append(c)
+        if c.get("correo"):
+            por_correo[c["correo"]] = c
+        clave = _asoc_clave_nombre(c.get("nombre"))
+        if clave:
+            # Un nombre repetido NO sirve para cruzar: se marca y no se usa.
+            por_nombre[clave] = None if clave in por_nombre else c
+    return {"correo": por_correo, "nombre": por_nombre, "todas": todas}
+
+
+def _asoc_de(persona: dict, indice: dict) -> dict:
+    correo = str(persona.get("email") or "").strip().lower()
+    if correo and correo in indice["correo"]:
+        return {**indice["correo"][correo], "cruce": "correo"}
+    clave = _asoc_clave_nombre(persona.get("nombre"))
+    c = indice["nombre"].get(clave) if clave else None
+    if c:
+        return {**c, "cruce": "nombre"}
+    # Y por PALABRAS, que es lo que de verdad cruza: la ETT escribe «Apellidos,
+    # Nombre» y Amazon «NOMBRE APELLIDOS». Si encaja con mas de una cuenta no se
+    # cruza: ambiguo es peor que nada.
+    posibles = [x for x in indice.get("todas", [])
+                if _asoc_mismo_nombre(persona.get("nombre"), x.get("nombre"))]
+    if len(posibles) == 1:
+        return {**posibles[0], "cruce": "nombre"}
+    return None
+
+
+@api_router.get("/asociados")
+async def asociados_listar(center: Optional[str] = None,
+                           solo_incompletas: bool = False,
+                           todas: bool = False,
+                           _=Depends(require_admin)):
+    """Las cuentas de onboarding y QUE le falta a cada una.
+
+    SOLO LAS DE LA GENTE QUE ESTA ENTRANDO, no todas las de la nave. Amazon
+    devuelve tambien a los que llevan meses dentro y a los que ya se fueron, y
+    Dani lo dijo claro el 16-09-2026: «ninguno de estos los tengo en formacion
+    ahora, son antiguos o ya estan dentro; debes filtrar con lo que yo tengo de
+    winiw». Una lista con gente que no toca es una lista que no se mira.
+
+    `todas=true` las enseña todas, para cuando haga falta buscar a alguien que
+    no esta en el listado de la ETT.
+    """
+    q = {}
+    if center:
+        nave = (_centro_norm(center) or center or "").upper()
+        if nave:
+            q["naves"] = nave
+    filas = await db[_ASOC_COL].find(q, {"_id": 0}).to_list(2000)
+    fuera_de_mi_lista = 0
+    if not todas:
+        # Las de MI gente: las que cruzan con alguien de Incorporaciones.
+        mios = await db[_ONB_COL].find({}, {"_id": 0, "nombre": 1, "email": 1}).to_list(500)
+        correos = {str(x.get("email") or "").strip().lower() for x in mios} - {""}
+        suyas = []
+        for f in filas:
+            if (f.get("correo") or "") in correos or any(
+                    _asoc_mismo_nombre(x.get("nombre"), f.get("nombre")) for x in mios):
+                suyas.append(f)
+        fuera_de_mi_lista = len(filas) - len(suyas)
+        filas = suyas
+    if solo_incompletas:
+        filas = [f for f in filas if not f.get("completa")]
+    # Por quien esta MAS cerca de terminar: es a quien menos trabajo cuesta
+    # desatascar, y desatascar uno es una ruta mas cubierta.
+    filas.sort(key=lambda f: (len(f.get("faltan") or []), f.get("nombre") or ""))
+    # Y lo que mas se repite, para poder atacarlo de una vez en vez de uno a uno.
+    cuenta = {}
+    for f in filas:
+        for x in (f.get("faltan") or []):
+            cuenta[x["que"]] = cuenta.get(x["que"], 0) + 1
+    atascos = sorted(({"que": k, "cuantos": v} for k, v in cuenta.items()),
+                     key=lambda x: -x["cuantos"])
+    return {"cuentas": filas,
+            "incompletas": sum(1 for f in filas if not f.get("completa")),
+            "atascos": atascos[:8],
+            # Cuantas se han dejado fuera por no estar en el listado de la ETT.
+            # Se dice: si un dia falta alguien, que se vea que hay mas y como
+            # verlas, en vez de pensar que no existen.
+            "fuera_de_mi_lista": fuera_de_mi_lista,
+            "modulos": _ASOC_MODULOS}
+
+
+async def _centros_de_la_empresa() -> list:
+    """Las naves de la empresa: las de la ficha de la organizacion.
+
+    Estaba escrito dentro de `/cortex/naves` y ahora hace falta tambien en la
+    pantalla de investigaciones, para poder decir «de DGA1 no ha llegado el
+    informe» en vez de enseñar una lista vacia. Copiarlo seria dejar que las dos
+    listas se separaran el dia que cambie una nave.
+    """
+    try:
+        org = await global_db.organizations.find_one(
+            {"db_name": _current_db_name.get()}, {"_id": 0, "centers": 1})
+        if not org and _current_db_name.get() == _DEFAULT_DB_NAME:
+            org = await global_db.organizations.find_one(
+                {"account_type": "owner"}, {"_id": 0, "centers": 1})
+        naves = [str(c).strip().upper() for c in ((org or {}).get("centers") or [])
+                 if str(c).strip()]
+    except Exception:                                            # noqa: BLE001
+        naves = []
+    if not naves:
+        naves = sorted(c for c in await _centros_conocidos() if c)
+    return naves[:12]
+
+
+@api_router.get("/cortex/seguimiento")
+async def cortex_seguimiento(request: Request):
+    """A QUIEN ESTAMOS SIGUIENDO, para que la extension sepa a quien mirar.
+
+    POR QUE EXISTE. La extension filtraba las cuentas de Asociados por NAVE:
+    se quedaba con las de OGA5/DGA1/DGA2/DIC1 y tiraba el resto. El 16-09-2026
+    se vio que eso tira justo a quien importa: Lois Barreiro Figueira estaba en
+    la lista de la ETT para OGA5, tenia su cuenta al 11/14... y su Service Area
+    en Amazon era «Madrid (VAD4)». Se descartaba, y la pantalla decia que no
+    tenia cuenta. Decia una cosa falsa sobre una persona.
+
+    La nave de la cuenta NO es la nave de la ETT, y no tiene por que serlo. Lo
+    que manda es otra cosa: si esa persona esta en NUESTRA lista. Eso lo sabe el
+    backend, asi que se lo dice a la extension.
+
+    Solo salen correo y nombre —lo justo para reconocer a alguien— y va con el
+    token de ingesta, el mismo que ya usa para mandar.
+    """
+    _cortex_ingest_org(request)
+    correos, nombres = [], []
+    for p in await db[_ONB_COL].find({}, {"_id": 0, "nombre": 1, "email": 1}).to_list(500):
+        c = str(p.get("email") or "").strip().lower()
+        if c:
+            correos.append(c[:90])
+        n = _asoc_clave_nombre(p.get("nombre"))
+        if n:
+            nombres.append(n[:80])
+    return {"correos": sorted(set(correos)), "nombres": sorted(set(nombres))}
+
+
+@api_router.get("/cortex/naves")
+async def cortex_naves(request: Request):
+    """Las naves de la empresa, para la extension.
+
+    POR QUE HACE FALTA. Los informes del portal (el diario y las
+    investigaciones de DNR) viven en URLs FIRMADAS de S3: no se pueden
+    construir, hay que pedirle al portal que las firme. Y la peticion que las
+    firma —`/performance/api/v1/getData`— lleva `station` como parametro, asi
+    que se le puede pedir la de CADA nave... si se sabe cuales son.
+
+    La extension no lo sabe: su llave es de una nave y la pantalla que ve es la
+    que alguien tenga abierta. Por eso el 15-09-2026 entraban los informes de
+    OGA5 y de DGA2 —las dos que Dani abrio— y DGA1 no llegaba nunca, sin que
+    fallara nada. Con esta lista pide las tres sin que nadie abra nada.
+
+    Va con el token de ingesta, el mismo que ya usa para mandar: no abre ninguna
+    puerta nueva y lo unico que devuelve son tres codigos de nave.
+    """
+    _cortex_ingest_org(request)
+    return {"naves": await _centros_de_la_empresa()}
 
 
 @api_router.post("/cortex/ingest-informe")
@@ -34138,6 +36489,28 @@ async def cortex_ingest_informe(request: Request):
                       "resumen": {k: v for k, v in (res or {}).items()
                                   if isinstance(v, (int, float, str, bool))}}},
             upsert=True)
+        # Y EL HISTORIAL, que es lo que faltaba. El apunte de arriba se pisa en
+        # cada intento: un informe que falla y otro que entra treinta segundos
+        # despues dejan el mismo rastro que si el primero no hubiera existido.
+        # Paso el 15-09-2026: llegaron OGA5 y DGA2, se pregunto por DGA1 y no
+        # habia forma de saber si habia fallado o si no habia llegado nunca.
+        # Veinte intentos es suficiente para un dia y no crece sin fin.
+        try:
+            await db.app_meta.update_one(
+                {"_id": "informe_auto_historial"},
+                {"$push": {"intentos": {
+                    "$each": [{"en": datetime.now(timezone.utc).isoformat(),
+                               "tipo": tipo, "ok": ok, "motivo": motivo,
+                               "centro": (((res or {}).get("centro")
+                                           or (res or {}).get("centro_deducido")
+                                           or (res or {}).get("center")) or center or None),
+                               "bytes": len(texto)}],
+                    "$slice": -20}}},
+                upsert=True)
+        except Exception as e:                                   # noqa: BLE001
+            # El historial es para diagnosticar: si falla, no puede tumbar la
+            # ingesta —que es lo que de verdad importa— pero se anota.
+            logger.warning("historial de informes: %s", e)
 
     try:
         if tipo == "diario":
@@ -34167,6 +36540,166 @@ async def cortex_ingest_informe(request: Request):
                 return {"ok": False, "tipo": tipo, "motivo": "sin filas"}
             r = await pegar_diario({"texto": texto, "center": center, "confirmar": True},
                                    _USUARIO_INGESTA)
+        elif tipo == "asociados":
+            r = await _asoc_guardar(texto, body.get("ruta"))
+        elif tipo == "candidatos":
+            # ── LOS CANDIDATOS DE LA ETT, SIN PEGAR NADA ────────────────────
+            # Llega el MISMO texto que se pegaba, asi que lo lee el mismo
+            # `_onb_parsear` que ya estaba probado contra las 26 fichas reales.
+            # No hay lector nuevo que pueda equivocarse: es la parte que hace
+            # segura esta puerta.
+            #
+            # Y lo que no se guarda sigue sin guardarse: el listado trae la
+            # contrasena del correo y la del Rabbit, y el lector no las toca
+            # (hay un caso que lo comprueba). Que el texto entre solo no cambia
+            # quien decide que se queda.
+            filas = _onb_parsear(texto)
+            if not filas:
+                await _anotar(False, "no parece el listado de candidatos", None)
+                return {"ok": False, "tipo": tipo, "motivo": "sin fichas"}
+            ahora_iso = datetime.now(timezone.utc).isoformat()
+            nuevas, actualizadas, sin_tel = 0, 0, 0
+            for f in filas:
+                if not f.get("telefono"):
+                    sin_tel += 1
+                clave = _onb_clave(f)
+                res = await db[_ONB_COL].update_one(
+                    {"clave": clave},
+                    {"$set": {**f, "visto_en": ahora_iso},
+                     # Lo que haya escrito la oficina NO se pisa: el listado no
+                     # sabe nada de los estados que se marcan a mano.
+                     "$setOnInsert": {"id": str(uuid.uuid4()), "clave": clave,
+                                      "creado_en": ahora_iso,
+                                      "creado_por": "la plataforma",
+                                      "motivos": [], "nota": ""}},
+                    upsert=True)
+                if res.upserted_id is not None:
+                    nuevas += 1
+                elif res.modified_count:
+                    actualizadas += 1
+            r = {"leidas": len(filas), "nuevas": nuevas,
+                 "actualizadas": actualizadas, "sin_telefono": sin_tel}
+        elif tipo == "horarios":
+            # ── EL PLAN DE HORAS, PEDIDO A LA API EN VEZ DE LEIDO DE LA PANTALLA
+            # Lo manda la extension ya pedido por nave:
+            #   {nave, serviceAreaId, desde, hasta, config, rosters}
+            #
+            # DE MOMENTO SE GUARDA Y NO SE INTERPRETA. El esquema que vio la
+            # sonda dice que el turno de cada persona va en
+            # `rosters.meta.daRosterAndAsmDetailsList`, pero colapsado a
+            # «object»: no se sabe que campos trae dentro. Escribir el lector a
+            # partir de eso seria adivinar, y adivinar aqui son horas de trabajo
+            # de personas puestas en el dia que no es.
+            #
+            # Asi que primero llega el dato de verdad y despues se lee. Es el
+            # orden que funciono con `addresses` y con `locationUpdate`, y el que
+            # no segui las dos veces que me equivoque.
+            try:
+                carga = json.loads(texto)
+            except Exception:                                    # noqa: BLE001
+                await _anotar(False, "el plan de horas no es JSON valido", None)
+                return {"ok": False, "tipo": tipo, "motivo": "no es JSON"}
+            nave = _centro_norm(_texto_cuerpo(carga.get("nave"), 20)) or center or ""
+            if not nave:
+                await _anotar(False, "sin nave", None)
+                return {"ok": False, "tipo": tipo, "motivo": "sin nave"}
+            ahora_iso = datetime.now(timezone.utc).isoformat()
+            await db.app_meta.update_one(
+                {"_id": "horarios_api_%s" % nave},
+                {"$set": {"nave": nave, "en": ahora_iso,
+                          "desde": _texto_cuerpo(carga.get("desde"), 12),
+                          "hasta": _texto_cuerpo(carga.get("hasta"), 12),
+                          "service_area_id": _texto_cuerpo(carga.get("serviceAreaId"), 60),
+                          # Los umbrales REALES de Amazon, que hasta ahora se
+                          # suponian: `leapConfig` los trae.
+                          "leap": (((carga.get("config") or {}).get("data") or {})
+                                   .get("leapConfig")),
+                          # La respuesta entera, recortada: es de lo que se
+                          # escribira el lector. Va en la BD de la empresa, que
+                          # es donde ya estan sus conductores y sus horas.
+                          # Una muestra, no la respuesta entera. Cuando no se
+                          # sabia que traia hacia falta guardarla toda —y la de
+                          # OGA5 se corto a los 400 KB, o sea que quedo rota—;
+                          # ahora ya se lee, y lo que se guarda es solo para
+                          # poder mirar el dia que cambie el formato.
+                          "rosters": json.dumps(carga.get("rosters"))[:20000],
+                          "forma": _forma_de(carga.get("rosters"), 0)}},
+                upsert=True)
+            leap = (((carga.get("config") or {}).get("data") or {}).get("leapConfig")) or {}
+            hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            gente = _horarios_conductores(carga.get("rosters") or {}, hoy)
+            await db[_WHC_API_COL].update_one(
+                {"center": nave, "week": _texto_cuerpo(carga.get("desde"), 12)},
+                {"$set": {"center": nave,
+                          "week": _texto_cuerpo(carga.get("desde"), 12),
+                          "hasta": _texto_cuerpo(carga.get("hasta"), 12),
+                          "conductores": gente,
+                          # Los umbrales que dice AMAZON, no los que suponiamos.
+                          "leap": {k: v for k, v in leap.items()
+                                   if isinstance(v, (int, float))},
+                          "updated_at": ahora_iso}},
+                upsert=True)
+            r = {"nave": nave, "semana": carga.get("desde"),
+                 "conductores": len(gente),
+                 "leap": bool(leap),
+                 "bytes_rosters": len(json.dumps(carga.get("rosters") or {}))}
+        elif tipo == "dnr_inv":
+            # Las investigaciones se GUARDAN tal cual vienen y se actualizan:
+            # el fichero trae todas las abiertas, asi que una que desaparece es
+            # una que Amazon ya cerro. No se borra —el historial dice a que se
+            # contesto— pero deja de salir como pendiente.
+            filas = _dnr_inv_parsear(texto)
+            if not filas:
+                await _anotar(False, "no parece la pagina de investigaciones de DNR", None)
+                return {"ok": False, "tipo": tipo, "motivo": "sin filas"}
+            mc = re.search(r"ES[- ]TDSL[- ]([A-Z0-9]{3,6})", texto, re.I)
+            centro = (mc.group(1).upper() if mc else center) or ""
+            ahora_iso = datetime.now(timezone.utc).isoformat()
+            vistas = []
+            for f in filas:
+                vistas.append(f["tracking_id"])
+                # SI AMAZON DICE QUE YA TIENE RESPUESTA, esa fila deja de ser
+                # trabajo pendiente aunque nosotros no la hayamos marcado: puede
+                # haberla contestado otra persona, o haberse contestado desde el
+                # portal antes de que existiera esta pantalla. Quien tiene la
+                # verdad sobre si le ha llegado una respuesta es Amazon.
+                extra = {"contestada": True, "contestada_por": "el portal"} \
+                    if f.get("contestada_amazon") else {}
+                # `contestada` NO puede ir en `$set` y en `$setOnInsert` a la
+                # vez: Mongo rechaza el mismo campo en dos operadores con
+                # «would create a conflict» y la ingesta entera se cae con un
+                # 500. Solo se siembra cuando el `$set` no lo trae ya.
+                al_crear = {} if "contestada" in extra else {"contestada": False}
+                await db[_DNR_COL].update_one(
+                    {"tracking_id": f["tracking_id"]},
+                    {"$set": {**f, **extra, "centro": centro, "visto_en": ahora_iso},
+                     # Si vuelve a aparecer, vuelve a estar abierta: Amazon
+                     # reabre casos. Sin este `$unset` una reabierta se quedaria
+                     # escondida para siempre, que es peor que no cerrarlas.
+                     "$unset": {"cerrada_en": "", "cerrada_motivo": ""},
+                     **({"$setOnInsert": al_crear} if al_crear else {})},
+                    upsert=True)
+            # LAS QUE YA NO ESTAN EN EL FICHERO ESTAN CERRADAS, y hay que
+            # decirlo. El comentario de arriba lo daba por hecho y el codigo no
+            # lo hacia: `vistas` se llenaba y no se usaba. Sin esto la lista
+            # crece para siempre y se contestan casos que Amazon cerro hace
+            # semanas — trabajo inventado que ademas parece pendiente.
+            #
+            # Se marca APARTE de `contestada`: nosotros no la hemos contestado,
+            # solo ha dejado de estar. Decir «contestada» seria apuntarnos un
+            # trabajo que no hicimos, y el dia que se revise por que bajo la
+            # scorecard ese apunte mentiria (gotcha 33).
+            #
+            # Solo del MISMO centro: el fichero de OGA5 no dice nada de las de
+            # DGA1, y cerrarlas por no venir en el seria cerrar a ciegas.
+            cerradas = await db[_DNR_COL].update_many(
+                {"centro": centro, "contestada": {"$ne": True},
+                 "cerrada_en": {"$exists": False},
+                 "tracking_id": {"$nin": vistas}},
+                {"$set": {"cerrada_en": ahora_iso,
+                          "cerrada_motivo": "ya no viene en el informe de Amazon"}})
+            r = {"centro": centro, "investigaciones": len(filas),
+                 "cerradas": cerradas.modified_count}
         else:
             r = await whc_analizar({"texto": texto, "center": center})
     except HTTPException as e:
@@ -34191,6 +36724,9 @@ async def cortex_informes_auto(_=Depends(require_admin)):
     for tipo in _INFORME_TIPOS:
         d = await db.app_meta.find_one({"_id": "informe_auto_%s" % tipo}, {"_id": 0})
         out[tipo] = d or None
+    hist = await db.app_meta.find_one({"_id": "informe_auto_historial"}, {"_id": 0})
+    # Del mas reciente al mas antiguo, que es como se mira cuando algo no llega.
+    out["historial"] = list(reversed((hist or {}).get("intentos") or []))
     return out
 
 
@@ -37787,6 +40323,19 @@ _WHC_BLOQUE_LIMITE = 11 * 60
 # 8 h 59 m – 9 h 14 m, una ruta estandar. Solo se usa para reconstruir el total
 # de un conductor cuyo pegado no trajo la linea de horas, y queda marcado.
 _WHC_BLOQUE_IMPLICITO = 9 * 60
+# Por encima de esto un bloque NO es una jornada: es aritmetica que no ha
+# cuadrado. Medido el 15-09-2026 en el plan real de OGA5 de la semana 38: diez
+# conductores salian con bloques de 17, 18 y 18h30 y la pantalla avisaba de que
+# se habian pasado de las once horas. Ninguno era cierto. David Sierra Ferro,
+# por ejemplo: el portal da 28h48 en la semana, el lector le encuentra UN bloque
+# de 10h18 y otro «en curso» sin hora de fin, y el resto de la semana entera
+# —18h30— se le metia a ese bloque. Faltaban filas por leer (las que el plan
+# escribe sin horas, tipo «11:30»), y el hueco se tapaba con el unico sitio
+# donde cabia.
+#
+# Catorce horas es generoso a proposito: una jornada larguisima con esperas
+# sigue siendo creible; dieciocho ya no lo es para nadie.
+_WHC_BLOQUE_MAX_CREIBLE = 14 * 60
 # Ritmo: la semana son 6 bloques de ~9 h. A mitad de semana lo que importa no es
 # el total (todavia bajo) sino si vas por encima de lo que te tocaria a estas
 # alturas: el miercoles llevas 4 dias, o sea 4 bloques y 36 h como maximo.
@@ -37882,6 +40431,83 @@ def _whc_dur(txt: str) -> int:
 # Tipos de bloque que el portal escribe debajo de la hora.
 _WHC_TIPOS = ("standard parcel", "nursery route", "dsp initiated work",
               "cycle 1", "cycle 2", "sameday", "multi-use")
+
+
+def _whc_linea_de_dia(l: str) -> bool:
+    """Una linea de cabecera de dia («dom., sep. 13»)."""
+    return bool(re.match(r"^\s*(%s)\.?,?\s+[a-z\u00e9]{3}\.?\s+\d{1,2}\s*$"
+                         % "|".join(_WHC_DIAS), (l or "").strip(), re.I))
+
+
+async def _whc_centro_del_texto(texto: str) -> str:
+    """La nave del plan. Solo mira la CABECERA, y vacio si no esta clara.
+
+    POR QUE SOLO LA CABECERA. El codigo de nave aparece tambien DENTRO de la
+    tabla, una vez por bloque de trabajo: es donde se hace ese bloque, no de
+    quien es el plan. Probado con el plan real de DGA1 —9.838 caracteres—:
+    buscando en todo el texto sale «OGA5» nueve veces y «DGA1» ninguna, porque
+    sus conductores hicieron bloques en OGA5 esa semana. Archivar ese plan en
+    OGA5 pondria las horas de la gente de una nave en el cuadro de la otra, y
+    eso no se nota hasta que alguien se pasa de horas y nadie le avisa.
+
+    La cabecera es lo que va antes del primer dia («Editar asignacion de ruta ·
+    OGA5 · Ir a esta semana · Semana 38…»). Si el pegado empieza mas abajo —como
+    el de DGA1, que arranca en «Buscar asociados»— no hay cabecera y se devuelve
+    vacio: que lo diga quien lo pega.
+    """
+    lineas = (texto or "").split("\n")
+    corte = next((k for k, l in enumerate(lineas) if _whc_linea_de_dia(l)), 0)
+    if not corte:
+        return ""
+    cabecera = "\n".join(lineas[:corte]).upper()
+    candidatos = set()
+    try:
+        org = await global_db.organizations.find_one(
+            {"db_name": _current_db_name.get()}, {"_id": 0, "centers": 1})
+        if not org and _current_db_name.get() == _DEFAULT_DB_NAME:
+            org = await global_db.organizations.find_one(
+                {"account_type": "owner"}, {"_id": 0, "centers": 1})
+        candidatos = {str(c).strip().upper() for c in ((org or {}).get("centers") or [])
+                      if str(c).strip()}
+    except Exception:                                            # noqa: BLE001
+        candidatos = set()
+    if not candidatos:
+        candidatos = {c for c in await _centros_conocidos() if c}
+    vistos = {c for c in candidatos if re.search(r"\b%s\b" % re.escape(c), cabecera)}
+    return vistos.pop() if len(vistos) == 1 else ""
+
+
+def _whc_semana_del_plan(texto: str) -> str:
+    """El domingo de la semana que trae el plan. Vacio si no lo dice.
+
+    SALE DEL PLAN, NO DEL RELOJ. Se guardaba con la semana de hoy, asi que pegar
+    el plan de la semana pasada lo archivaba como el de esta y pisaba el bueno.
+    Paso de verdad: el documento «DGA1 semana 2026-09-13» es el del 06 segun su
+    propia cabecera, pegado el dia 14.
+    """
+    from datetime import date, timedelta
+    meses = {"ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6,
+             "jul": 7, "ago": 8, "sep": 9, "oct": 10, "nov": 11, "dic": 12}
+    hoy = datetime.now(timezone.utc).date()
+    for l in (texto or "").split("\n"):
+        m = re.match(r"^\s*(%s)\.?,?\s+([a-z\u00e9]{3})\.?\s+(\d{1,2})\s*$"
+                     % "|".join(_WHC_DIAS), l.strip(), re.I)
+        if not m:
+            continue
+        mes = meses.get(m.group(2)[:3].lower())
+        if not mes:
+            continue
+        for anio in (hoy.year, hoy.year - 1, hoy.year + 1):
+            try:
+                f = date(anio, mes, int(m.group(3)))
+            except ValueError:
+                continue
+            # El plan es de hace poco: con eso se resuelve el cambio de ano sin
+            # adivinar (un plan de diciembre pegado en enero).
+            if abs((f - hoy).days) <= 200:
+                # El primer dia que trae es el domingo de esa semana.
+                return (f - timedelta(days=(f.weekday() + 1) % 7)).isoformat()
+    return ""
 
 
 def _whc_parsear(texto: str) -> list:
@@ -37991,10 +40617,22 @@ def _whc_ritmo(c: dict, dia: int, limite_min: int) -> dict:
     bloques_ref = min(dia, _WHC_BLOQUES_SEMANA)
     horas_ref = bloques_ref * _WHC_BLOQUE_IMPLICITO
     exceso = c["trabajado"] - horas_ref
-    # Bloques que aún le caben: los que le faltan para 6, pero nunca más que los
-    # días que quedan de semana. Sin ese tope, un jueves con 4 bloques proyectaba
-    # sólo 1 día más cuando en realidad le quedan 2.
-    restantes = max(0, min(_WHC_BLOQUES_SEMANA - len(c["bloques"]), 7 - dia))
+    # CUANTOS BLOQUES LLEVA DE VERDAD. `len(bloques)` es lo que el lector ha
+    # sabido reconocer, y el plan escribe filas que no parecen un horario —
+    # «11:30», «11 AM»— que tambien son bloques. Contar de menos ahi hace que la
+    # proyeccion le sume jornadas que ya ha hecho.
+    #
+    # Medido el 15-09-2026, David Sierra Ferro: el portal da 28h48 trabajadas y
+    # el lector le encontraba 2 bloques, asi que le proyectaba 4 jornadas mas
+    # (36 h) -> **64h48**, y salia «en peligro». Con 28h48 ya lleva unas tres
+    # jornadas, le quedan tres, y el numero honesto es ~55h48.
+    #
+    # Las horas SI son fiables (las da el portal), asi que se usan para poner un
+    # suelo al recuento: nunca menos bloques de los que explican esas horas.
+    bloques_hechos = max(len(c["bloques"]),
+                         round(c["trabajado"] / _WHC_BLOQUE_IMPLICITO)) if c["trabajado"] \
+        else len(c["bloques"])
+    restantes = max(0, min(_WHC_BLOQUES_SEMANA - bloques_hechos, 7 - dia))
     proyeccion = c["trabajado"] + restantes * _WHC_BLOQUE_IMPLICITO
     if limite_min and c["trabajado"] > limite_min:
         estado = "pasado"
@@ -38008,6 +40646,11 @@ def _whc_ritmo(c: dict, dia: int, limite_min: int) -> dict:
         estado = "ok"
     return {"dia_semana": dia, "bloques_ref": bloques_ref, "horas_ref": horas_ref,
             "exceso_ritmo": exceso, "bloques_restantes": restantes,
+            # Lo que el lector vio y lo que de verdad lleva: si no coinciden, la
+            # pantalla puede decir que la proyeccion es aproximada en vez de
+            # darla como un numero exacto.
+            "bloques_hechos": bloques_hechos,
+            "bloques_leidos": len(c["bloques"]),
             "proyeccion": proyeccion,
             "proyeccion_pasa": bool(limite_min and proyeccion > limite_min),
             "estado_ritmo": estado}
@@ -38030,6 +40673,12 @@ def _whc_evaluar(conductores: list, limite_min: int, bloque_limite: int = None,
         # para poder estimarlos, y se marca como estimado.
         resto = c["trabajado"] - sum(con_hora)
         est = int(resto / sin_hora) if sin_hora and resto > 0 else 0
+        # SI EL REPARTO DA UN BLOQUE IMPOSIBLE, ES QUE FALTAN FILAS POR LEER.
+        # Entonces no se reparte: se dice que no cuadra. Un numero inventado que
+        # ademas dispara una alarma es lo peor de los dos mundos — manda a
+        # hablar con alguien que no ha hecho nada malo, y la proxima vez ya
+        # nadie se cree la pantalla.
+        reparto_imposible = est > _WHC_BLOQUE_MAX_CREIBLE
         origen = c.get("trabajado_origen") or ("portal" if c["trabajado"] else None)
         if not c["trabajado"] and c["bloques"]:
             # Red de seguridad: el portal no dio el total pero SI hay bloques.
@@ -38042,14 +40691,21 @@ def _whc_evaluar(conductores: list, limite_min: int, bloque_limite: int = None,
             est = _WHC_BLOQUE_IMPLICITO
             origen = "bloques"
         for b in c["bloques"]:
-            if b["minutos"] is None:
+            if b["minutos"] is None and not reparto_imposible:
                 b["minutos"] = est
         if origen == "bloques":
             c["trabajado"] = sum(b["minutos"] or 0 for b in c["bloques"])
 
         blim = bloque_limite or _WHC_BLOQUE_LIMITE
-        largos = [b for b in c["bloques"] if (b["minutos"] or 0) >= _WHC_BLOQUE_RIESGO]
-        pasados = [b for b in c["bloques"] if (b["minutos"] or 0) >= blim]
+        # SOLO BLOQUES MEDIDOS. Un bloque estimado es una deduccion nuestra a
+        # partir del total de la semana; decir que alguien «se paso de las once
+        # horas» apoyandose en eso es acusar con un numero que nos hemos hecho
+        # nosotros. El total semanal SI vale —lo da el portal— y por eso
+        # `supera_semanal` se queda como esta.
+        largos = [b for b in c["bloques"]
+                  if (b["minutos"] or 0) >= _WHC_BLOQUE_RIESGO and not b.get("estimado")]
+        pasados = [b for b in c["bloques"]
+                   if (b["minutos"] or 0) >= blim and not b.get("estimado")]
         margen = (limite_min - c["trabajado"]) if limite_min else None
         supera = bool(limite_min and c["trabajado"] > limite_min)
         out.append({
@@ -38078,12 +40734,147 @@ def _whc_evaluar(conductores: list, limite_min: int, bloque_limite: int = None,
             # jornada. Esto NO es la excepcion de Amazon, que se calcula sobre lo
             # fichado y sale en su hoja de excepciones.
             "incumple_propio": bool(supera or pasados),
-            "cuadra": abs(c["trabajado"] - sum(b["minutos"] or 0 for b in c["bloques"])) <= 10,
+            # OJO: antes esto salia True SIEMPRE que hubiera un bloque sin
+            # hora, porque el reparto acababa de forzar que la suma cuadrara.
+            # La comprobacion se anulaba justo en el caso que venia a detectar.
+            "cuadra": (not reparto_imposible
+                       and abs(c["trabajado"]
+                               - sum(b["minutos"] or 0 for b in c["bloques"])) <= 10),
+            # Hay horas de la semana que no sabemos en que dia van: el plan trae
+            # filas sin horario. Se dice, en vez de inventarse el reparto.
+            "horas_sin_ubicar": (max(0, resto) if reparto_imposible else 0),
         })
     orden = {True: 0, False: 1}
     out.sort(key=lambda c: (orden[c["incumple_propio"]], orden[c["supera_semanal"]],
                             -(c["trabajado"] or 0)))
     return out
+
+
+@api_router.get("/whc/semana")
+async def whc_semana(center: str, _=Depends(require_admin)):
+    """Las horas de la semana con el dato de Amazon, no con el texto pegado.
+
+    Lo que cambia respecto de la pantalla de siempre, y no es poco:
+
+      · **nada estimado.** Cada bloque trae su duracion y su fichaje. Los diez
+        avisos falsos de jornadas de 17 y 18 horas del 15-09-2026 salian de
+        repartir el total de la semana entre los bloques sin hora de fin;
+      · **los umbrales los dice Amazon** (`leapConfig`), no los suponemos: 55 h
+        semanales duras, 13 h de jornada duras, 11 h blandas;
+      · **la proyeccion es lo que tiene puesto**, no «seis bloques de nueve
+        horas». Los dias que le quedan vienen en el mismo roster;
+      · y entra de las tres naves sin que nadie abra nada.
+
+    Si no hay dato de la API todavia se devuelve `hay: False` y la pantalla
+    sigue con el plan pegado: media verdad presentada como entera es peor que
+    decir que aun no esta.
+    """
+    nave = _centro_norm(center or "") or (center or "")
+    if not nave or nave.upper() in ("TODOS", "TODAS"):
+        return {"hay": False, "porque": "elige una nave"}
+    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    sun, _sat = _sun_sat_week(hoy)
+    d = await db[_WHC_API_COL].find_one({"center": nave, "week": sun}, {"_id": 0})
+    if not d:
+        return {"hay": False, "semana": sun, "centro": nave,
+                "porque": "Todavia no ha entrado el plan de esta nave desde Cortex."}
+    leap = d.get("leap") or {}
+    # Los de Amazon; si faltara alguno se cae a los de siempre, que son los
+    # mismos numeros pero supuestos.
+    limite = int(leap.get("weeklyHardThreshold") or _WHC_LIMITE_PROPIO)
+    bloque = int(leap.get("dailySoftThreshold") or _WHC_BLOQUE_LIMITE)
+    bloque_duro = int(leap.get("dailyHardThreshold") or 0)
+    acerca = int(leap.get("approachingWeeklyThreshold") or 0)
+
+    gente = d.get("conductores") or []
+    ev = _whc_evaluar([dict(c) for c in gente], limite, bloque, None)
+    # La proyeccion EXACTA: lo trabajado mas lo que tiene puesto por delante.
+    for c in ev:
+        pend = c.get("planificado_restante") or 0
+        c["proyeccion"] = (c.get("trabajado") or 0) + pend
+        c["proyeccion_pasa"] = bool(limite and c["proyeccion"] > limite)
+        c["acercandose"] = bool(acerca and c["proyeccion"] >= acerca
+                                and not c["proyeccion_pasa"])
+    ev.sort(key=lambda c: (not c["proyeccion_pasa"], -(c.get("proyeccion") or 0)))
+    return {
+        "hay": True, "centro": nave, "semana": sun, "hasta": d.get("hasta"),
+        "actualizado": d.get("updated_at"),
+        "fuente": "amazon",
+        "limites": {
+            "semanal_duro": limite, "semanal_blando": leap.get("weeklySoftThreshold"),
+            "acercandose": acerca or None,
+            "jornada_blanda": bloque, "jornada_dura": bloque_duro or None,
+            "de_amazon": bool(leap),
+        },
+        "conductores": ev,
+        "resumen": {
+            "total": len(ev),
+            "pasan_proyectando": sum(1 for c in ev if c["proyeccion_pasa"]),
+            "acercandose": sum(1 for c in ev if c.get("acercandose")),
+            "ya_pasados": sum(1 for c in ev if c.get("supera_semanal")),
+            "jornada_pasada": sum(1 for c in ev if c.get("bloques_pasados")),
+        },
+    }
+
+
+@api_router.get("/whc/estado")
+async def whc_estado(_=Depends(require_admin)):
+    """Que nave tiene plan de esta semana y cual no.
+
+    POR QUE EXISTE. La pantalla de Horas es por nave: eliges una y ves la suya.
+    Si esa nave no tiene plan, no sale nada — ni un aviso, ni un motivo. El
+    15-09-2026 OGA5 estaba vacia y DGA2 no habia tenido plan NUNCA, y desde
+    fuera se veia igual que si la pantalla estuviera rota: «no lo veo
+    resuelto».
+
+    Un hueco no dice si falta el dato o si no hay nada que contar (gotcha 33).
+    Esto lo dice: que naves hay, cual es su ultimo plan, y cuales le faltan.
+    """
+    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    sun, _sat = _sun_sat_week(hoy)
+    naves = []
+    try:
+        org = await global_db.organizations.find_one(
+            {"db_name": _current_db_name.get()}, {"_id": 0, "centers": 1})
+        if not org and _current_db_name.get() == _DEFAULT_DB_NAME:
+            org = await global_db.organizations.find_one(
+                {"account_type": "owner"}, {"_id": 0, "centers": 1})
+        naves = [str(c).strip().upper() for c in ((org or {}).get("centers") or [])
+                 if str(c).strip()]
+    except Exception:                                            # noqa: BLE001
+        naves = []
+    if not naves:
+        naves = sorted(c for c in await _centros_conocidos() if c)
+
+    fuera = []
+    for nave in naves:
+        ult = await db.whc_planes.find_one({"center": nave}, {"_id": 0},
+                                           sort=[("week", -1)])
+        fuera.append({
+            "centro": nave,
+            "semana": (ult or {}).get("week"),
+            "actualizado": (ult or {}).get("updated_at"),
+            "al_dia": bool(ult and ult.get("week") == sun),
+            # Semanas de retraso, para que se vea de un vistazo cuanto hace.
+            "semanas_atras": (
+                None if not ult or not ult.get("week")
+                else max(0, (date_cls.fromisoformat(sun)
+                             - date_cls.fromisoformat(ult["week"])).days // 7)),
+        })
+    faltan = [x["centro"] for x in fuera if not x["al_dia"]]
+    return {
+        "semana_en_curso": sun,
+        "naves": fuera,
+        "faltan": faltan,
+        # Lo que hay que hacer, escrito, porque no es adivinable: la extension
+        # manda la pantalla que este abierta, asi que el plan de una nave solo
+        # entra si alguien abre SU pantalla de Programacion en Cortex.
+        "como_se_arregla": (
+            "Abre en el PC de la oficina la pantalla de Programacion de Cortex "
+            "con %s seleccionad%s. La extension lo manda sola en unos segundos "
+            "y ya no hay que volver a hacerlo esa semana."
+            % (" y ".join(faltan), "a" if len(faltan) == 1 else "as")) if faltan else "",
+    }
 
 
 @api_router.post("/whc/analizar")
@@ -38096,11 +40887,30 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
     if data.get("limite_horas"):
         limite = int(_decimal(data["limite_horas"], "limite_horas", minimo=0, maximo=100) * 60)
     # Excepciones que Amazon ya reporto esta semana (de la hoja "Drivers With
-    # Working Hour Exceptions"). Si no se dan, se asume 0 y el WHC sale al 100 %.
+    # Working Hour Exceptions").
+    #
+    # DISTINGUIR «CERO PORQUE LO SABEMOS» DE «CERO PORQUE NADIE LO HA DICHO».
+    # Antes se asumia 0 cuando no venian, y el WHC salia al **100 % Fantastic**.
+    # Con el plan pegado a mano eso era medio aceptable —quien lo pega mira la
+    # hoja—, pero desde que el plan entra SOLO desde la extension nadie manda las
+    # excepciones nunca: la pantalla decia «100 %, Fantastic» todas las semanas,
+    # pasara lo que pasara. Un numero inventado que ademas tranquiliza es peor
+    # que no tener numero (gotcha 33), y en esta metrica UNA excepcion te quita
+    # el Fantastic.
+    #
+    # El plan NO las trae: comprobado sobre el de OGA5 de la semana 38, 13.660
+    # caracteres, ni una sola mencion. Vienen de otra hoja del portal.
+    #
+    # Asi que: si la clave no viene, el porcentaje de Amazon se devuelve como
+    # desconocido. Lo que SI se puede calcular del plan —quien se pasa de tu
+    # limite, quien lleva un bloque de once horas, a que ritmo va— se sigue
+    # calculando y es lo util del dia a dia.
+    excepciones_conocidas = "excepciones" in data and data.get("excepciones") is not None
     try:
         excepciones = _entero(data.get("excepciones"), "excepciones", defecto=0, minimo=0)
     except (TypeError, ValueError):
         excepciones = 0
+        excepciones_conocidas = False
 
     bloque_limite = _WHC_BLOQUE_LIMITE
     if data.get("limite_bloque_horas"):
@@ -38117,8 +40927,26 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
     # El plan se guarda para no tener que volver a pegarlo cada vez. Se guarda
     # por (centro, semana): una semana nueva no pisa la anterior.
     center = (data.get("center") or "").upper().strip()
+    # «TODOS» NO ES UNA NAVE. El selector del panel manda la palabra cuando esta
+    # en «Todos», y aqui se guardaba tal cual: el 13-09-2026 quedo un plan de
+    # horas archivado bajo un centro llamado TODOS, o sea invisible para todas
+    # las pantallas, que filtran por una nave de verdad. Es el gotcha 12 al
+    # reves —escribiendo en vez de leyendo— y no da ningun error.
+    if center in ("TODOS", "TODAS", "ALL", "TODOS LOS CENTROS"):
+        center = ""
+    # Si quien lo manda no dice la nave, se saca del propio plan. Es lo que hace
+    # que el plan que entra solo desde la extension SE GUARDE: sin esto se
+    # analizaba, se devolvia bien y se perdia.
+    deducido = ""
+    if not center:
+        deducido = await _whc_centro_del_texto(texto)
+        center = deducido
     if center and data.get("guardar") is not False:
-        sun, _sat = _sun_sat_week((datetime.now(timezone.utc)).strftime("%Y-%m-%d"))
+        # La semana la dice el PLAN. Con la de hoy, pegar el de la semana
+        # pasada pisaba el de esta (paso el 14-09-2026).
+        sun = _whc_semana_del_plan(texto)
+        if not sun:
+            sun, _sat = _sun_sat_week((datetime.now(timezone.utc)).strftime("%Y-%m-%d"))
         await db.whc_planes.update_one(
             {"center": center, "week": sun},
             {"$set": {"center": center, "week": sun, "texto": texto[:400000],
@@ -38136,12 +40964,27 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
     # 67/69 = 97,101 %, que es el 97,1 % impreso en el PDF.
     con_actividad = sum(1 for c in ev if c["trabajado"] > 0)
     whc = None
-    if con_actividad:
+    if con_actividad and not excepciones_conocidas:
+        # Lo unico honesto: el denominador SI lo sabemos, el numerador no.
+        whc = {
+            "conductores_con_actividad": con_actividad,
+            "excepciones": None,
+            "excepciones_conocidas": False,
+            "porcentaje": None,
+            "tier": None,
+            "coste_por_excepcion": round(100 / con_actividad, 2),
+            "porque": ("Falta la hoja de excepciones de Amazon («Drivers With Working "
+                       "Hour Exceptions»). Sin ella no se puede saber el WHC real: "
+                       "el plan no las trae. Cada excepcion cuesta %s puntos."
+                       % round(100 / con_actividad, 2)),
+        }
+    elif con_actividad:
         cumplen = max(0, con_actividad - excepciones)
         pct = round(cumplen / con_actividad * 100, 1)
         whc = {
             "conductores_con_actividad": con_actividad,
             "excepciones": excepciones,
+            "excepciones_conocidas": True,
             "porcentaje": pct,
             # None cuando el porcentaje cae en una zona sin ningun scorecard
             # observado: no nos inventamos el tier.
@@ -38209,6 +41052,12 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
               "proyeccion": c.get("proyeccion"),
               "proyeccion_pasa": c.get("proyeccion_pasa"),
               "bloques": len(c["bloques"]),
+              # Los dos: lo que el lector vio y lo que de verdad lleva. Si no
+              # coinciden, el plan traia filas sin horario y la proyeccion es
+              # aproximada — la pantalla lo marca con una «~» en vez de dar un
+              # numero exacto que no lo es.
+              "bloques_leidos": c.get("bloques_leidos"),
+              "bloques_hechos": c.get("bloques_hechos"),
               "bloques_restantes": c.get("bloques_restantes"),
               "trabajando_ahora": c["trabajando_ahora"]}
              for c in en_ritmo if c.get("estado_ritmo") in ("pasado", "peligro", "justo")],
@@ -38217,6 +41066,13 @@ async def whc_analizar(data: dict = Body(...), _=Depends(require_admin)):
 
     return {
         "semana": (data.get("semana") or "")[:40],
+        # SE DICE SI SE HA GUARDADO Y EN QUE NAVE. Un plan que se analiza, se
+        # enseña bien y no se guarda parece que ha ido perfecto — y es como el
+        # WHC se quedo un mes entero sin actualizarse sin que nadie lo notara.
+        "centro": center or None,
+        "centro_deducido": deducido or None,
+        "semana_del_plan": _whc_semana_del_plan(texto) or None,
+        "guardado": bool(center and data.get("guardar") is not False),
         "whc": whc,
         "whc_propio": whc_propio,
         "ritmo": ritmo,
@@ -41135,12 +43991,18 @@ async def cortex_ingest(request: Request):
         # en tres minutos con CERO `address_id`, porque el interceptor era el de
         # antes. Con esto se ve la diferencia en vez de adivinarla.
         _int = re.sub(r"[^0-9.]", "", str(request.headers.get("x-ext-interceptor") or ""))[:12]
+        # La que ESE paquete lleva dentro, leida por la propia extension de su
+        # `interceptor.js`. Sin ella no se puede saber si la pestana esta vieja:
+        # la version de la extension (2.88.0) y la del interceptor (2.54.0) son
+        # contadores distintos, asi que compararlas da «distinto» siempre.
+        _esp = re.sub(r"[^0-9.]", "", str(request.headers.get("x-ext-interceptor-esperado") or ""))[:12]
         try:
             ahora = datetime.now(timezone.utc)
             await db.cortex_diagnostico.update_one(
                 {"_id": "version:%s" % (_inst or "extension")},
                 {"$set": {"kind": "version", "which": "extension", "url": _ver,
                           "interceptor": _int or None,
+                          "esperada": _esp or None,
                           "instalacion": _inst or None,
                           "visto_en": ahora.isoformat(),
                           "expira_en": ahora + timedelta(days=30)}},
@@ -41315,28 +44177,64 @@ async def cortex_diagnostico(_=Depends(require_admin)):
     parada— cualquier exclusión del DCR es una suposición, y una suposición que
     mueve el DCR es peor que no tocarlo.
     """
-    docs = await db.cortex_diagnostico.find({}, {"_id": 0, "expira_en": 0}).to_list(200)
-    docs.sort(key=lambda d: str(d.get("visto_en") or ""), reverse=True)
-    # Las versiones, agrupadas: cuantos equipos llevan cada una y cuando hablo
-    # el ultimo. Es lo que permite instalar una version nueva en UN equipo y
-    # comprobar que efectivamente es ese el que la lleva.
+    # ORDENA MONGO, NO PYTHON. Cortar a 200 y ordenar despues se queda con 200
+    # documentos CUALESQUIERA —los que la coleccion devuelva primero— y ordena
+    # esos: con 264 documentos el 16-09-2026 se caian fuera justo los dos
+    # equipos vivos (2.87 y 2.85) y la pantalla daba como ultima version la
+    # 2.51, de un equipo que no existe desde hace dias. Es el gotcha 10.
+    docs = await db.cortex_diagnostico.find(
+        {}, {"_id": 0, "expira_en": 0}).sort("visto_en", -1).to_list(200)
+
+    # Las versiones NO salen de esa lista recortada: se piden aparte y enteras.
+    # Son pocas (una por instalacion) y son justo lo que no puede faltar.
     vers: dict = {}
-    for d in docs:
-        if d.get("kind") != "version":
+    dormidas = 0
+    ahora = datetime.now(timezone.utc)
+    async for d in db.cortex_diagnostico.find({"kind": "version"}, {"_id": 0}):
+        # VIVO o FOSIL. Cada reinstalacion de la extension estrena `instalacion`
+        # (se guarda en `chrome.storage.local`, que se borra al quitarla), asi
+        # que cada una deja un documento congelado con la version que llevaba.
+        # Habia 48 para 2 equipos reales. Contarlos como «equipos» dice que hay
+        # diez versiones corriendo a la vez, y el aviso de «actualiza» se toma
+        # el numero de un PC que ya no existe.
+        hace = None
+        try:
+            hace = (ahora - datetime.fromisoformat(str(d.get("visto_en")))).total_seconds() / 60
+        except Exception:
+            pass
+        # 30 min: la extension habla en cada ingesta y el barrido mas lento es
+        # de 5 min (gotcha 74), o sea 6x de margen. Pasado eso no decimos que
+        # esa version no exista —solo que ese equipo no nos habla—, y por eso
+        # las dormidas se cuentan aparte en vez de desaparecer (gotcha 30).
+        if hace is None or hace > 30:
+            dormidas += 1
             continue
         v = vers.setdefault(d.get("url") or "?", {"version": d.get("url") or "?",
                                                   "equipos": 0, "ultima": "",
-                                                  "interceptor": "", "hay_que_recargar": False})
+                                                  "interceptor": "", "esperada": "",
+                                                  "hace_min": 99999,
+                                                  "hay_que_recargar": False})
         v["equipos"] += 1
         v["ultima"] = max(v["ultima"], str(d.get("visto_en") or ""))
+        v["hace_min"] = min(v["hace_min"], round(hace))
         if d.get("interceptor"):
             v["interceptor"] = d["interceptor"]
-            # La pestaña de Cortex sigue con codigo viejo: hay que pulsar F5 ahi,
-            # o los cambios de la extension no se aplican por mucho que la
-            # version del manifiesto diga otra cosa.
-            v["hay_que_recargar"] = d["interceptor"] != (d.get("url") or "")
+            v["esperada"] = d.get("esperada") or ""
+            # La pestaña de Cortex sigue con el codigo viejo: hay que pulsar F5
+            # ahi, o los cambios no se aplican por mucho que el manifiesto diga
+            # otra cosa (gotcha 58). Se compara contra la version que ESE
+            # paquete lleva dentro, que la manda la propia extension.
+            # Antes se comparaba contra la version de la EXTENSION, que es otro
+            # contador: 2.88.0 nunca es igual a 2.54.0, asi que el aviso salia
+            # SIEMPRE y por tanto no avisaba de nada. Sin el dato —extension
+            # vieja que no lo manda— no se afirma nada: False.
+            v["hay_que_recargar"] = bool(d.get("esperada")) and d["interceptor"] != d["esperada"]
     return {"diagnostico": docs,
             "versiones": sorted(vers.values(), key=lambda v: v["ultima"], reverse=True),
+            # Las instalaciones que ya no hablan. No es un fallo: es el rastro
+            # de cada reinstalacion. Sale a la vista para que nadie las confunda
+            # con equipos encendidos.
+            "dormidas": dormidas,
             "hay_esquema": any(d.get("kind") == "schema" for d in docs)}
 
 

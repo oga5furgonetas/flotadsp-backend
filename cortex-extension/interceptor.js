@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.40.0';
+  const VERSION_INTERCEPTOR = '2.55.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -50,6 +50,153 @@
   // Esquema de una respuesta: describe la ESTRUCTURA (claves + valores cortos)
   // sin volcar miles de items. Los estados de entrega son strings cortos, así
   // que aparecen literalmente y podemos localizar el campo real.
+  // Campos que son de una persona por su propio nombre. La lista es corta a
+  // proposito: si hay duda, no se manda el valor.
+  /* Sin `foto|photo|badge`: esas palabras salen en los NOMBRES DE LOS MODULOS
+     de onboarding (`OMW-DA-PhotoUpload`, `OMW-DA-BadgePrinting`), cuyo valor es
+     un estado —«Complete», «Pending»— y es justo lo que hay que poder ver.
+     Taparlos habria dejado el diagnostico inutil para lo unico que se queria.
+     Lo que de verdad identifica a alguien sigue tapado, y ademas por el valor
+     (un nombre lleva espacios y un correo una arroba). */
+  const ES_DE_UNA_PERSONA =
+    /name|nombre|apellido|mail|phone|tel|address|direccion|dni|nif|nie|passport|iban|birth|nacim/i;
+  /* Y los identificadores DE UNA PERSONA. `providerId` y `personId` señalan a
+     alguien igual que su nombre; que quepan en 32 caracteres no los hace menos
+     suyos. Los ids de sitio (`serviceAreaId`, `stationId`) no entran aqui: no
+     son de nadie y hacen falta para saber de que nave se habla. */
+  const ES_ID_DE_ALGUIEN = /provider_?id|person_?id|transporter_?id|associate_?id|da_?id/i;
+  // Un estado: sin espacios ni arrobas, corto, y con pinta de codigo.
+  const ES_UN_ESTADO = /^[A-Za-z0-9_.:/-]{1,32}$/;
+
+  /* ── LAS CUENTAS DE ONBOARDING, DE LA PROPIA PANTALLA DE ASOCIADOS ────────
+     `/account-management/data/search-providers` devuelve, por persona, un
+     `moduleStatusMap` con los TRECE pasos del onboarding y el estado de cada
+     uno: el Global Check, la foto, el carnet, la formacion... Eso es
+     exactamente «que le falta a esta cuenta» sin entrar una por una, que es lo
+     que hace que un onboarding tarde semanas.
+
+     SOLO LO QUE HACE FALTA. De cada persona van el nombre —hay que saber de
+     quien se habla—, sus estados y sus areas. Ni el correo, ni el telefono, ni
+     el DNI: para decir «a este le falta el carnet» no hacen falta.
+
+     Y EL FILTRO POR NAVE LO HACE EL SERVICE WORKER, que es quien sabe cuales
+     son las naves de la empresa. Esta pantalla llega a devolver gente de otras
+     estaciones —en la primera captura salio una de Murcia— y esa no es nuestra:
+     no tiene por que salir de este navegador. Aqui se manda con sus areas
+     dentro para que alla se pueda separar. */
+  const NAVE_DE_AREA = new Map();
+  /* Un CONJUNTO, no una sola huella: hay que saber quien se ha mandado ya,
+     no solo como era la ultima respuesta. */
+  const asociadosMandados = new Set();
+
+  const mirarAsociados = (json, url) => {
+    let u = '';
+    try { u = new URL(url, location.origin).pathname; } catch (_) { return; }
+
+    if (/\/account-management\/data\/get-company-service-areas/i.test(u)) {
+      const mapa = {};
+      for (const a of (json && json.data) || []) {
+        if (a && a.serviceAreaId && a.stationCode) {
+          NAVE_DE_AREA.set(a.serviceAreaId, a.stationCode);
+          mapa[a.serviceAreaId] = a.stationCode;
+        }
+      }
+      /* EL MAPA SE GUARDA, y con eso el ORDEN deja de importar. Las dos
+         llamadas —el mapa de areas y la lista de personas— salen en el mismo
+         segundo, asi que a veces la lista llega ANTES: entonces no se sabe de
+         que nave es nadie y se descartan todas, en silencio. Paso el
+         16-09-2026 con la pestaña automatica. Mandandolo al service worker, que
+         lo guarda, la proxima vuelta ya lo tiene aunque llegue al reves. */
+      if (Object.keys(mapa).length) post({ kind: 'asociados_areas', mapa });
+      return;
+    }
+    if (!/\/account-management\/data\/search-providers/i.test(u)) return;
+    const lista = ((json || {}).data || {}).resultList;
+    if (!Array.isArray(lista) || !lista.length) return;
+
+    const personas = [];
+    for (const p of lista.slice(0, 400)) {
+      if (!p || !p.providerId) continue;
+      const areas = Array.isArray(p.serviceAreaIds) ? p.serviceAreaIds : [];
+      const mapa = (p.moduleStatusMap && typeof p.moduleStatusMap === 'object')
+        ? p.moduleStatusMap : {};
+      // «Complete» es lo unico que cuenta como hecho; cualquier otra cosa
+      // —incluida una que Amazon invente mañana— es algo que falta.
+      const faltan = {};
+      for (const k of Object.keys(mapa)) {
+        if (!/^complete/i.test(String(mapa[k] || ''))) faltan[k] = String(mapa[k] || '').slice(0, 30);
+      }
+      personas.push({
+        id: String(p.providerId).slice(0, 80),
+        nombre: String(p.fullName || '').slice(0, 80),
+        /* EL CORREO, Y SOLO PARA CRUZAR. Es la unica clave fiable para saber
+           que esta cuenta es la del candidato que la ETT colgo: por nombre, dos
+           tocayos acaban mezclados y uno ve el expediente del otro (gotcha 15).
+           Es el mismo correo que ya esta en `incorporaciones` de esas mismas
+           personas, asi que no se lleva nada que no estuviera ya. El telefono y
+           el documento siguen sin salir: para cruzar no hacen falta. */
+        correo: String(p.emailAddress || '').slice(0, 90).toLowerCase(),
+        estado: String(p.operationalStatus || '').slice(0, 40),
+        motivo: String(p.operationalStatusReasonCode || '').slice(0, 60),
+        paso: String(p.onboardingWorkflowState || '').slice(0, 40),
+        /* SOLO LOS PASOS QUE FALTAN, no los trece de cada persona.
+           Con cien personas, mandar el mapa entero son trece veces mas datos
+           cruzando de la pagina al service worker para enseñar exactamente lo
+           mismo: lo que se pinta es lo que falta. Los que estan hechos se
+           cuentan y se manda el numero.
+           Y menos datos por mensaje es ademas lo que lo hace fiable: el
+           16-09-2026 el envio con los cien mapas completos no llegaba al otro
+           lado y no habia forma de verlo. */
+        modulos: faltan,
+        hechos: Object.keys(mapa).length - Object.keys(faltan).length,
+        total: Object.keys(mapa).length,
+        // Las naves ya resueltas si las conocemos, y los ids por si no.
+        naves: areas.map((x) => NAVE_DE_AREA.get(x)).filter(Boolean).slice(0, 6),
+        areas: areas.slice(0, 6),
+      });
+    }
+    /* QUE DIGA QUE HA DECIDIDO. Sin esto, «no llego nada» y «llego y se
+       descarto» se ven igual desde fuera — el fallo que llevo dos dias
+       arreglando en otros sitios. Solo numeros, ni un dato de nadie. */
+    const conNave = personas.filter((x) => x.naves.length).length;
+    /* `total` dice cuanta gente hay EN TOTAL. Sin eso no se puede afirmar que
+       el barrido fue completo — y «ninguno de tus 26 tiene cuenta» solo vale si
+       se han mirado todos, no los mil primeros. */
+    const total = (((json || {}).data || {}).totalResults) || 0;
+    post({ kind: 'debug', which: 'asociados-visto',
+           url: `lista=${lista.length} con_id=${personas.length} con_nave=${conNave}`
+                + ` mapa=${NAVE_DE_AREA.size} total=${total}`,
+           count: personas.length, bytes: 0 });
+    if (!personas.length) return;
+    /* NO MANDAR DOS VECES LO MISMO, PERO SIN PERDER A NADIE.
+
+       La huella de antes era `personas.length + ':' + (...).join('').length`:
+       una LONGITUD, no el contenido. Dos respuestas distintas con el mismo
+       numero de personas y nombres de parecido tamaño daban la misma huella y
+       la segunda se tiraba entera, en silencio. Con el barrido por paginas ya
+       era una loteria; preguntando por correo —una persona por respuesta— la
+       huella habria sido «1:38» para TODOS y solo habria entrado el primero.
+
+       Ahora se recuerda a cada persona por su id y por lo que lleva hecho: se
+       manda quien no se haya mandado ya, y quien haya avanzado desde entonces.
+       Repintar la tabla no manda nada; una persona nueva si. */
+    const nuevos = personas.filter((x) => {
+      const clave = x.id + ':' + x.hechos + '/' + x.total + ':' + x.estado;
+      if (asociadosMandados.has(clave)) return false;
+      asociadosMandados.add(clave);
+      return true;
+    });
+    if (!nuevos.length) return;
+    personas.length = 0;
+    personas.push(...nuevos);
+    /* EN TANDAS DE CUARENTA. Un solo mensaje con todo el mundo dentro es el que
+       no llegaba: si algo falla por el camino se pierde la lista ENTERA y en
+       silencio. Partido, lo que falle es una tanda, no todo. */
+    for (let i = 0; i < personas.length; i += 40) {
+      post({ kind: 'asociados', personas: personas.slice(i, i + 40) });
+    }
+  };
+
   const schemaOf = (v, depth) => {
     if (depth > 6) return '…';
     if (Array.isArray(v)) return v.length ? [schemaOf(v[0], depth + 1), `×${v.length}`] : [];
@@ -57,11 +204,24 @@
       const o = {}; let i = 0;
       for (const k of Object.keys(v)) {
         if (i++ > 45) { o['…'] = '…'; break; }
-        o[k] = schemaOf(v[k], depth + 1);
+        // Si el NOMBRE del campo ya dice que es de una persona, ni se mira el
+        // valor. Es el cinturon, y abajo van los tirantes.
+        o[k] = (ES_DE_UNA_PERSONA.test(k) || ES_ID_DE_ALGUIEN.test(k))
+                 ? typeof v[k] : schemaOf(v[k], depth + 1);
       }
       return o;
     }
-    if (typeof v === 'string') return v.length > 32 ? 'str' : v; // conserva valores cortos (estados)
+    /* LOS VALORES CORTOS SOLO SI SON ESTADOS, NUNCA SI SON DE ALGUIEN.
+       Esto se quedaba con TODA cadena de 32 o menos «para conservar los
+       estados», y el 15-09-2026 eso mando a nuestra base un nombre completo y
+       un correo de una persona al sondear la pantalla de Asociados. Un
+       diagnostico no puede llevarse datos de nadie — es el mismo fallo que el
+       14-09 con una firma de AWS, y las dos veces lo delato mirarlo.
+       Un estado no lleva espacios ni arrobas: `OFFBOARDED`, `Complete`,
+       `ROUTE`, `13/13`, `OQB1` pasan; «ALFONSO CUBAS GARCIA» y
+       «alguien@correo.com» no. Lo que no pasa el filtro sale como 'str', que es
+       lo unico que hace falta para entender la forma. */
+    if (typeof v === 'string') return ES_UN_ESTADO.test(v) ? v : 'str';
     return typeof v;
   };
   let schemaSent = false, schemaSummarySent = false, schemaReportSent = false;
@@ -969,7 +1129,11 @@
      pequeños, pero el de posiciones guarda una clave por sitio distinto
      encontrado y no tiene motivo para pasar de unos pocos cientos. */
   const vistasPos = new Set();
-  const acotar = (s, tope) => { while (s.size > tope) s.delete(s.values().next().value); };
+  /* Vale para Set y para Map: de un Set, `values()` da el elemento; de un Map,
+     el VALOR, que no sirve para borrar. Por eso se usa `keys()`, que en un Set
+     devuelve el propio elemento. Sin esto, acotar un Map no borraba nada y la
+     lista crecia sin fin. */
+  const acotar = (s, tope) => { while (s.size > tope) s.delete(s.keys().next().value); };
   const buscarPosicion = (json, url) => {
     if (buscadasPos > 25 || !json || typeof json !== 'object') return;
     const esLat = (v) => typeof v === 'number' && v > -90 && v < 90 && v !== 0;
@@ -1007,6 +1171,143 @@
     post({ kind: 'debug', which: 'pos_' + mote,
            url: `${u} -> ${encontrados.slice(0, 3).join(' | ')}`.slice(0, 380),
            count: encontrados.length, bytes: 0 });
+  };
+
+  /* ── DE DONDE SALE EL PLAN DE HORAS ──────────────────────────────────────
+     El plan semanal (WHC) es lo unico que seguimos leyendo de la PANTALLA: se
+     copia el texto que hay a la vista. Por eso solo entra el de la nave que
+     alguien tenga abierta, y el 15-09-2026 DGA1 no llego nunca.
+
+     Los informes del portal ya se resolvieron pidiendo la peticion que los
+     firma con otro `station`. Aqui hace falta lo mismo: saber QUE peticion
+     devuelve las horas, para poder pedirsela a Cortex por cada nave.
+
+     No se adivina. Se apunta lo que la propia pagina pide —esto ya ha visto
+     `/scheduling/home/api/v2/service-area-config`, asi que esa familia es la
+     buena— y con la lista delante se escribe el lector. Es exactamente como
+     salio la peticion que firma los informes (14-09-2026) y como salio
+     `locationUpdate` (05-09-2026), las dos despues de intentar adivinarlas y
+     fallar.
+
+     LO QUE SE APUNTA Y LO QUE NO. El camino, los NOMBRES de los parametros y
+     la forma de la respuesta. **Nunca los valores**: una URL de Cortex puede
+     llevar identificadores, y una firma acabo guardada en nuestra base por no
+     tener cuidado con esto (14-09-2026). Los nombres bastan para saber si se
+     le puede cambiar la nave. */
+  /* UNA SOLA VEZ POR CAMINO NO BASTA, y esto lo aprendi el mismo dia.
+     `associate-attributes` —que por el nombre trae la elegibilidad de cada
+     persona, o sea el estado del onboarding— se apunto la primera vez con
+     `daWorkSummaryAndEligibility` VACIO, porque la pantalla aun no habia
+     entrado en la ficha de nadie. Y como ya estaba apuntado, no se volvia a
+     mirar nunca: la unica captura que servia era justo la que la sonda ya no
+     iba a coger.
+     Asi que se vuelve a apuntar cuando la respuesta trae MAS que la anterior.
+     El tamaño basta como señal y no obliga a entender el contenido. */
+  const vistasHorario = new Map();
+  const sondaHorarios = (json, url, largo) => {
+    let u = url, params = [];
+    try {
+      const w = new URL(url, location.origin);
+      u = w.pathname;
+      params = [...w.searchParams.keys()];
+    } catch (_) { return; }
+    /* No solo `/scheduling/`. La pantalla de ASOCIADOS —donde Dani dice que se
+       ve el estado de cada cuenta— es la que de verdad interesa, y no consta
+       que cuelgue de ahi. Se añaden las palabras que la nombrarian pase donde
+       pase: apuntar de mas aqui no cuesta nada (solo se guarda el camino y los
+       nombres de los parametros), y apuntar de menos es volver a quedarse
+       ciego donde ya me pasó (gotcha 65). */
+    /* Y `/account-management/data/`, que es DONDE ESTABA. El 15-09-2026, con
+       la sonda de caminos ensanchada, aparecieron dieciocho llamadas ahi:
+       `search-providers`, `get-qualification`, `get-workflow-modules`,
+       `get-driving-info`... o sea el estado de cada cuenta de onboarding, que
+       es justo lo que se buscaba. Ninguna lleva `/api/` ni la palabra
+       «associate» en la ruta, asi que los dos filtros anteriores las dejaban
+       fuera y yo llegue a decir que esa pantalla no tenia API. La tenia. */
+    if (!/\/scheduling\/|\/account-management\/data\/|associate|onboard|eligib|roster/i.test(u)) return;
+    const antes = vistasHorario.get(u) || 0;
+    // Con un 20 % mas de contenido se vuelve a mirar: es que se ha llenado.
+    if (antes && largo <= antes * 1.2) return;
+    vistasHorario.set(u, largo);
+    acotar(vistasHorario, 60);
+    // La forma de la respuesta, sin un solo valor dentro.
+    let forma = '';
+    try { forma = JSON.stringify(schemaOf(json, 0)).slice(0, 1200); } catch (_) {}
+    const mote = u.replace(/[^a-z]+/gi, '_').slice(-26).toLowerCase();
+    post({ kind: 'schema', which: 'horario_' + mote,
+           url: `${u}${params.length ? ' ?' + params.join(',') : ''}`.slice(0, 300),
+           schema: forma, count: params.length, bytes: 0 });
+  };
+
+  /* ── EL MAPA DE LO QUE PIDE CORTEX ───────────────────────────────────────
+     La sonda de horarios filtra por `/scheduling/|associate|onboard|eligib`, y
+     eso fue un acierto para la pantalla de Programacion y un fallo para la de
+     ASOCIADOS: Dani la abrio con la sonda viva y no se apunto ni un camino
+     nuevo. O sea que sus peticiones no llevan ninguna de esas palabras, y yo
+     habia vuelto a adivinar donde mirar.
+
+     Asi que se deja de adivinar: se apunta el CAMINO de toda peticion que pase
+     por aqui, una vez cada uno. Solo el camino y los nombres de sus
+     parametros — ni valores, ni cuerpo, ni respuesta. Con eso se ve de un
+     vistazo que pide cada pantalla y se decide despues, con la lista delante.
+
+     Es barato: un apunte por camino distinto y se acaba. Y es la tercera vez
+     hoy que el metodo «mira primero, decide despues» encuentra en una tarde lo
+     que adivinar no encontro en semanas. */
+  const caminosVistos = new Set();
+  const apuntarCamino = (url) => {
+    let u = url, params = [];
+    try {
+      const w = new URL(url, location.origin);
+      u = w.pathname;
+      params = [...w.searchParams.keys()];
+    } catch (_) { return; }
+    /* Solo API: los .js, las imagenes y las fuentes no dicen nada.
+
+       Y `/account-management/` SIEMPRE, lleve `/api/` o no. Con el filtro de
+       arriba a secas dije que «Asociados no tiene API» porque no se apunto
+       ningun camino — pero es que una llamada a
+       `/account-management/delivery-associates/search` no lleva `/api/` dentro
+       y habria sido invisible. O sea que no lo sabia: lo estaba suponiendo, que
+       es justo lo que esta sonda existe para evitar. */
+    if (!/\/api\/|\/graphql|\/account-management\//i.test(u)) return;
+    // Los ids dentro del camino se tapan: no aportan y son datos.
+    const limpio = u.replace(/\/[0-9a-f]{8,}(-[0-9a-f]{4,})*/gi, '/{id}')
+                    .replace(/\/\d{3,}/g, '/{n}');
+    /* EL `dataSetId`, Y SOLO ESE. `/performance/api/v1/getData` es una puerta
+       generica: el mismo endpoint sirve los informes semanales y —segun lo que
+       se vio el 15-09-2026 al buscar una cuenta en Asociados— tambien esa
+       pantalla. Lo unico que cambia entre una cosa y otra es el `dataSetId`,
+       asi que sin su VALOR no se puede pedir nada, y apuntar solo el nombre del
+       parametro deja el trabajo a medias.
+       Es el nombre de un conjunto de datos, no una credencial ni el dato de
+       ninguna persona. Los demas parametros se siguen apuntando solo por su
+       nombre. */
+    let ds = '';
+    try {
+      const q = new URL(url, location.origin).searchParams;
+      // `page` va con `dataSetId` por la misma razon: es la pantalla, y es
+      // `getPageConfig ?page` quien dice QUE conjuntos pide cada una. Con las
+      // dos piezas se puede pedir lo de Asociados sin abrir Asociados.
+      for (const k of ['page', 'dataSetId']) {
+        const v = q.get(k);
+        if (v && /^[\w.:-]{1,80}$/.test(v)) ds += (ds ? ' ' : '') + k + '=' + v;
+      }
+    } catch (_) {}
+    // Un apunte por conjunto, no por camino: si no, el primer `getData` que
+    // pasara taparia a todos los demas, que es justo lo que se busca.
+    const clave = ds ? limpio + '|' + ds : limpio;  // uno por conjunto, no por camino
+    if (caminosVistos.has(clave)) return;
+    caminosVistos.add(clave);
+    acotar(caminosVistos, 80);
+    const mote = (limpio + ds).replace(/[^a-z]+/gi, '_').slice(-26).toLowerCase();
+    /* `kind: 'debug'` y no `url_vista`: el puente entre la pagina y el service
+       worker solo reenvia los tipos que conoce, y `url_vista` no esta en su
+       lista — esto se habria perdido en silencio. Lo cazó `check-extension`
+       antes de salir. */
+    post({ kind: 'debug', which: 'api_' + mote,
+           url: `${limpio}${params.length ? ' ?' + params.join(',') : ''}${ds ? '  ' + ds : ''}`.slice(0, 260),
+           count: params.length, bytes: 0 });
   };
 
   const extractRouteDetails = (json) => {
@@ -1238,6 +1539,24 @@
       if (/"lat(itude)?"\s*:/.test(text) && text.length < 512000) {
         try { buscarPosicion(comoObjeto(), url); } catch (_) {}
       }
+      /* La sonda de horarios va AQUI, delante del filtro de URLs relevantes:
+         `/scheduling/...` no casa con ese filtro, asi que enganchada mas abajo
+         no vería nunca la pantalla que venimos a entender. Es la leccion del
+         gotcha 65, que costo escribir «no existe» sobre algo que si estaba. */
+      /* UN SOLO FILTRO, Y ESTA DENTRO DE LA SONDA. Aqui habia un segundo
+         `/scheduling/` que mandaba sobre el de la propia sonda: ensanchar el de
+         dentro no servia de nada porque este no dejaba llegar nada. Es la
+         TERCERA vez el mismo dia que dos trozos de codigo que tenian que estar
+         de acuerdo no lo estaban (los enlaces firmados, la nave de la URL, y
+         esto). La sonda decide sola lo que mira; aqui solo se acota el tamaño,
+         que es lo unico que este sitio sabe. */
+      if (text && text.length < 2000000) {
+        try { sondaHorarios(comoObjeto(), url, text.length); } catch (_) {}
+        try { mirarAsociados(comoObjeto(), url); } catch (_) {}
+      }
+      // Y el mapa de caminos, sin filtrar por nada: es lo unico que no puede
+      // dejarse fuera justo la pantalla que se busca.
+      try { apuntarCamino(url); } catch (_) {}
       /* ── DONDE ESTA CADA CONDUCTOR, DE VERDAD ──────────────────────────
          `/transporters/locationUpdate` -> `transportersLocation[].geocode`.
          Es el endpoint que mueve los puntos del mapa de Cortex, y no lo

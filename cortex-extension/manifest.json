@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FlotaDSP · Cortex Bridge",
-  "version": "2.50.0",
+  "version": "2.89.0",
   "description": "Lee la API de Cortex (route-summaries / route-details) con tu sesión y la envía a tu Package Intelligence Center. Eliges qué estaciones se envían, para no mezclar dos naves. No lee la pantalla ni usa OCR.",
   "permissions": [
     "storage",
@@ -13,7 +13,8 @@
     "https://logistics.amazon.es/*",
     "https://*.amazon.es/*",
     "https://flotadsp-backend.fly.dev/*",
-    "https://flex-peer-performance-reports-prod-euamazon.s3.eu-west-1.amazonaws.com/*"
+    "https://flex-peer-performance-reports-prod-euamazon.s3.eu-west-1.amazonaws.com/*",
+    "https://flotadsp.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -45,6 +46,17 @@
         "dsp.js"
       ],
       "run_at": "document_start",
+      "world": "ISOLATED"
+    },
+    {
+      "matches": [
+        "https://winiw.es/winiw/centro_candidatos.php*",
+        "https://www.winiw.es/winiw/centro_candidatos.php*"
+      ],
+      "js": [
+        "winiw.js"
+      ],
+      "run_at": "document_idle",
       "world": "ISOLATED"
     }
   ]

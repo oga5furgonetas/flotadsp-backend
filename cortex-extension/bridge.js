@@ -31,6 +31,25 @@ if (!window.__flotadspBridge) {
     else if (d.kind === 'llamada_informes') chrome.runtime.sendMessage({ type: 'llamadaInformes', url: d.url });
     /* Que estados del informe traen paquetes y cuales vienen vacios. Es lo
        unico que dice si «Apoyo en ruta» va a tener direcciones o no. */
+    /* LAS CUENTAS DE ONBOARDING. Solo nombre, estados y areas: ni correo, ni
+       telefono, ni documento. El filtro por nave lo hace el service worker,
+       que es quien sabe cuales son las naves de la empresa. */
+    /* CON RED. Si `sendMessage` falla —mensaje demasiado grande, worker
+       caido—, la excepcion sale del listener y se pierde SIN RASTRO: el
+       16-09-2026 la lista de asociados no llegaba y desde fuera se veia igual
+       que si la pagina no la hubiera pedido. Ahora se dice. */
+    else if (d.kind === 'asociados') {
+      try {
+        chrome.runtime.sendMessage({ type: 'asociadosCuentas', personas: d.personas });
+      } catch (e) {
+        chrome.runtime.sendMessage({ type: 'debug', which: 'asociados-puente',
+                                     url: `no se pudo reenviar: ${String(e).slice(0, 80)}`,
+                                     count: (d.personas || []).length, bytes: 0 });
+      }
+    }
+    /* El mapa area -> nave. Se guarda en el service worker para que el orden
+       en que lleguen las dos llamadas deje de importar. */
+    else if (d.kind === 'asociados_areas') chrome.runtime.sendMessage({ type: 'asociadosAreas', mapa: d.mapa });
     else if (d.kind === 'estados_informe') chrome.runtime.sendMessage({ type: 'estadosInforme', estados: d.estados, descartados: d.descartados });
     /* EL RESUMEN DE CORTEX. Faltaba en esta lista y el mensaje se tiraba aqui
        en silencio: el interceptor lo mandaba, nadie lo recogia y `cortex_resumen`
@@ -46,6 +65,16 @@ if (!window.__flotadspBridge) {
        mensajes de ida y el bucle de arriba no se lo coma. */
     else if (d.kind === 'informe_aprendido') {
       chrome.runtime.sendMessage({ type: 'informeAprendido', estados: d.estados, descartados: d.descartados, plantilla: d.plantilla, sa: d.sa });
+    /* Los correos de nuestra gente, de vuelta hacia la pagina. Mismo camino
+       que `informe_pedir`: `__flotadspIn` para no confundirlo con la ida. */
+    } else if (d.kind === 'seguidos_pedir') {
+      try {
+        chrome.runtime.sendMessage({ type: 'seguidosPedir' }, (r) => {
+          if (chrome.runtime.lastError || !r) return;   // worker dormido: se reintenta
+          window.postMessage({ __flotadspIn: true, kind: 'seguidos',
+                               correos: r.correos || [], nombres: r.nombres || [] }, '*');
+        });
+      } catch (_) {}
     } else if (d.kind === 'informe_pedir') {
       try {
         chrome.runtime.sendMessage({ type: 'informeGuardado' }, (r) => {

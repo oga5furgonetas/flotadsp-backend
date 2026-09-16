@@ -47,6 +47,42 @@ for (const k of new Set(mandaKind)) {
  * mirar bridge.js Y background.js, como con los `kind`.
  */
 
+/* ── 1bis. CADA MANEJADOR, EN SU SITIO ─────────────────────────────────────
+   El 16-09-2026 una edicion se llevo por delante el CUERPO de un manejador y
+   dejo su `if (...) {` abierto. Los manejadores siguientes quedaron ANIDADOS
+   dentro de el: solo se ejecutarian para mensajes de otro tipo, o sea nunca.
+
+   El fichero seguia siendo JavaScript valido, `node --check` pasaba, y este
+   checker tambien —porque solo buscaba que el texto estuviera—. Resultado: ni
+   se guardaba la llamada que firma los informes ni entraban las cuentas de
+   asociados, las dos cosas en silencio y durante horas.
+
+   Aqui se cuentan las llaves: todo `if (msg.type === ...)` tiene que estar al
+   primer nivel del listener, nunca dentro de otro. */
+{
+  const i = background.indexOf('chrome.runtime.onMessage.addListener')
+  if (i < 0) problemas.push('no existe el listener de mensajes del background')
+  else {
+    const abre = background.indexOf('{', i)
+    let prof = 0
+    let j = abre
+    const anidados = []
+    for (; j < background.length; j++) {
+      const ch = background[j]
+      if (ch === '{') prof++
+      else if (ch === '}') { prof--; if (prof === 0) break }
+      else if (ch === 'i' && /^if \(msg\??\.type === '([a-zA-Z]+)'/.test(background.slice(j, j + 40))) {
+        const nombre = background.slice(j, j + 40).match(/'([a-zA-Z]+)'/)[1]
+        // prof 1 = directamente dentro del listener, que es lo correcto.
+        if (prof !== 1) anidados.push(`${nombre} (nivel ${prof})`)
+      }
+    }
+    for (const a of anidados) {
+      problemas.push(`el manejador ${a} esta anidado dentro de otro: no se ejecutara nunca`)
+    }
+  }
+}
+
 /* ── 2. bridge -> background ──────────────────────────────────────────── */
 const mandaType = [...bridge.matchAll(/type:\s*'([a-zA-Z]+)'/g)].map((m) => m[1])
 const recogeType = [...background.matchAll(/msg\?\.type\s*===\s*'([a-zA-Z]+)'/g)].map((m) => m[1])

@@ -3,9 +3,9 @@ import { useOutletContext } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
   Loader2, Clock, AlertTriangle, CircleCheck, Info, ChevronDown, ChevronUp,
-  Trash2, RefreshCw, Lock,
+  Trash2, RefreshCw, Lock, CalendarX2,
 } from 'lucide-react'
-import { whcAnalizar, getWhcPlan, deleteWhcPlan } from '../api'
+import { whcAnalizar, getWhcPlan, deleteWhcPlan , getWhcEstado , getWhcSemana } from '../api'
 import { lista } from '../../lib/lista'
 import { useOrden } from '../../lib/orden'
 import ThOrden from '../components/ThOrden'
@@ -48,7 +48,13 @@ export default function WHC() {
      conductor. */
   const LIMITE_H = 54.5
   const limite = LIMITE_H
-  const [excepciones, setExcepciones] = useState(0)
+  /* VACIA, no 0. Con 0 de partida, quien no la toca está afirmando «cero
+     excepciones» sin querer, y el WHC sale al 100 % Fantastic. Vacía
+     significa «no lo sé», que es distinto y es lo que hay que decir
+     (misma regla que el gotcha 76: NO PREGUNTADO no es NO CONTESTADO). */
+  const [excepciones, setExcepciones] = useState('')
+  const [estado, setEstado] = useState(null)   // que nave tiene plan y cual no
+  const [semana, setSemana] = useState(null)  // las horas con el dato de Amazon
   const [datos, setDatos] = useState(null)
   const [cargando, setCargando] = useState(false)
   const [err, setErr] = useState('')
@@ -64,7 +70,11 @@ export default function WHC() {
       // `center` hace que el backend GUARDE el plan de esta semana.
       const r = await whcAnalizar({
         texto: cuerpo, limite_horas: lim ?? limite,
-        excepciones: exc ?? excepciones, center,
+        // Solo se manda si de verdad se sabe: si va vacía, el backend
+        // devuelve el WHC como desconocido en vez de inventarse un 100 %.
+        ...(((exc ?? excepciones) === '' || (exc ?? excepciones) == null)
+          ? {} : { excepciones: Number(exc ?? excepciones) }),
+        center,
       })
       setDatos(r.data)
       setEditando(false)
@@ -76,6 +86,29 @@ export default function WHC() {
   // Al entrar, se recupera el plan de ESTA semana y se analiza solo. Nada de
   // volver a pegarlo cada vez. Si cambia la semana, el backend no devuelve el
   // de la anterior: seria ver horas viejas creyendo que son las de ahora.
+  /* El estado de TODAS las naves, siempre. Va aparte del plan de la nave
+     elegida a propósito: cuando la seleccionada no tiene plan, esto es lo único
+     que hay en pantalla, y sin ello un hueco no dice si falta el dato o si no
+     hay nada que contar. */
+  useEffect(() => {
+    let vivo = true
+    getWhcEstado().then(({ data }) => { if (vivo) setEstado(data) }).catch(() => {})
+    return () => { vivo = false }
+  }, [])
+
+  /* Las horas segun AMAZON. Se pide siempre que haya nave: si ha entrado, es
+     mejor dato que el pegado —nada estimado, umbrales suyos y la proyección es
+     lo que cada uno tiene puesto en el cuadrante— y sustituye al «ritmo de la
+     semana», que es justo el bloque donde salían los avisos falsos. */
+  useEffect(() => {
+    let vivo = true
+    setSemana(null)
+    if (!center || center === 'Todos') return undefined
+    getWhcSemana(center).then(({ data }) => { if (vivo && data?.hay) setSemana(data) })
+      .catch(() => {})
+    return () => { vivo = false }
+  }, [center])
+
   useEffect(() => {
     let vivo = true
     setDatos(null); setGuardado(null); setTexto(''); setEditando(false)
@@ -111,6 +144,34 @@ export default function WHC() {
           WHC <span className="text-dark-600">· {center}</span>
         </h1>
         <p className="mt-1 text-xs text-dark-500">{t('whc.sub')}</p>
+
+        {/* QUÉ NAVE TIENE PLAN Y CUÁL NO. Lo que faltaba el 15-09-2026: OGA5
+            estaba vacía, DGA2 no había tenido plan nunca, y la pantalla no
+            decía nada — se veía igual que si estuviera rota. */}
+        {estado?.naves?.length > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
+            {estado.naves.map((n) => (
+              <span key={n.centro}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 ring-1 ${
+                  n.al_dia ? 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/25'
+                    : 'bg-amber-500/10 text-amber-300 ring-amber-500/25'}`}>
+                {n.al_dia ? <CircleCheck size={12} /> : <CalendarX2 size={12} />}
+                <b>{n.centro}</b>
+                {n.al_dia ? 'al día'
+                  : !n.semana ? 'sin plan nunca'
+                  : n.semanas_atras === 1 ? 'de la semana pasada'
+                  : `${n.semanas_atras} semanas atrás`}
+              </span>
+            ))}
+          </div>
+        )}
+        {semana && <HorasDeAmazon d={semana} hm={hm} />}
+
+        {estado?.como_se_arregla && (
+          <p className="mt-2 max-w-[74ch] rounded-lg border border-amber-500/25 bg-amber-500/5 px-3 py-2 text-xs leading-relaxed text-amber-200/90">
+            {estado.como_se_arregla}
+          </p>
+        )}
       </div>
 
       <div className="card p-4">
@@ -169,7 +230,7 @@ export default function WHC() {
               dice nada, lo que avisa es ir por encima de lo que toca a estas
               alturas. 6 bloques de ~9 h por semana -> el miercoles (dia 4) el
               tope razonable son 4 bloques, 36 h. */}
-          {datos.ritmo && datos.ritmo.dia_semana < 7 && (
+          {!semana && datos.ritmo && datos.ritmo.dia_semana < 7 && (
             <div className="card p-5">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <div className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">
@@ -195,24 +256,37 @@ export default function WHC() {
               {!!datos.ritmo.avisos?.length && (
                 <ul className="mt-3 space-y-1.5">
                   {datos.ritmo.avisos.map((a, i) => (
-                    <li key={i} className="flex flex-wrap items-center justify-between gap-2 border-t border-dark-800 pt-1.5 text-xs first:border-0 first:pt-0">
+                    <li key={i} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-dark-800 py-1.5 text-xs first:border-0 first:pt-0">
                       <span className="flex min-w-0 items-center gap-1.5">
-                        <span className="truncate text-dark-200">{a.nombre}</span>
+                        {/* UN PUNTO, NO UNA ETIQUETA. «En ruta ahora» lo están
+                            casi todos a media mañana —49 de 83 el 15-09-2026—, y
+                            una etiqueta repetida en cincuenta filas no informa:
+                            solo ensancha la columna del nombre y lo trunca. El
+                            punto se ve de un vistazo y el texto sigue en el
+                            title. Y en `sky-400`, no `sky-200`: a 9 px sobre
+                            fondo claro lo segundo no se leía. */}
                         {a.trabajando_ahora && (
-                          <span className="shrink-0 rounded bg-sky-500/20 px-1.5 py-0.5 text-[9px] font-semibold text-sky-200"
-                                title="Tiene un bloque en curso: está en ruta ahora mismo. Todavía se le puede cortar el día.">
-                            en ruta ahora
-                          </span>
+                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400"
+                                title="Tiene un bloque en curso: está en ruta ahora mismo. Todavía se le puede cortar el día." />
                         )}
+                        <span className="truncate text-dark-200">{a.nombre}</span>
                       </span>
-                      <span className="shrink-0 tabular-nums text-dark-400">
-                        {hm(a.trabajado)} · {a.bloques} bloques
-                        {a.exceso > 0 && <span className="ml-2 text-orange-300">+{hm(a.exceso)} de más</span>}
-                        {a.bloques_restantes > 0 && (
-                          <span className={`ml-2 ${a.proyeccion_pasa ? 'text-red-300' : 'text-dark-500'}`}>
-                            acabaría en {hm(a.proyeccion)}
-                          </span>
-                        )}
+                      <span className="flex shrink-0 items-baseline gap-3 tabular-nums">
+                        <span className="text-dark-300">{hm(a.trabajado)}</span>
+                        <span className="w-[4.5rem] text-right text-orange-300">
+                          {a.exceso > 0 ? `+${hm(a.exceso)}` : ''}
+                        </span>
+                        <span className={`w-[7.5rem] text-right ${
+                          a.proyeccion_pasa ? 'font-semibold text-red-300' : 'text-dark-500'}`}>
+                          {a.bloques_restantes > 0 ? `acabaría en ${hm(a.proyeccion)}` : ''}
+                          {/* Si el lector no ha sabido leer todos sus bloques, la
+                              proyección es aproximada y hay que decirlo: el
+                              número se calcula con las horas, que sí son del
+                              portal, pero el reparto en días no se sabe. */}
+                          {a.bloques_leidos != null && a.bloques_hechos > a.bloques_leidos && (
+                            <span className="ml-1 text-dark-600" title="El plan trae filas sin horario: las horas son del portal, el reparto en días es aproximado.">~</span>
+                          )}
+                        </span>
                       </span>
                     </li>
                   ))}
@@ -301,41 +375,52 @@ export default function WHC() {
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">
                     {t('whc.pct.titulo')}
                   </div>
-                  {/* Con 0 excepciones esto NO es una medición: es lo que saldría
-                      si Amazon no marca ninguna. Pintarlo en verde como un hecho
-                      mientras la tabla enseña conductores pasados es un falso
-                      positivo, aunque cada número por separado sea correcto. */}
+                  {/* SIN LA HOJA DE EXCEPCIONES NO HAY PORCENTAJE. Antes se
+                      asumía cero y salía «100 %, Fantastic» — y desde que el
+                      plan entra solo, eso pasaba TODAS las semanas pasara lo
+                      que pasara. Un número inventado que además tranquiliza es
+                      peor que no tener número, y aquí una sola excepción te
+                      quita el Fantastic. */}
                   <div className="mt-1 flex flex-wrap items-center gap-2.5">
+                    {datos.whc.porcentaje == null ? (
+                      <span className="text-2xl font-bold text-dark-400">No se sabe todavía</span>
+                    ) : (
                     <span className={`text-4xl font-bold tabular-nums ${
-                      datos.whc.excepciones === 0 ? 'text-dark-200'
-                        : datos.whc.porcentaje >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>
-                      {datos.whc.excepciones === 0 && <span className="opacity-60">~</span>}
+                      datos.whc.porcentaje >= 100 ? 'text-emerald-300' : 'text-amber-300'}`}>
                       {datos.whc.porcentaje} %
                     </span>
+                    )}
                     {/* El tier solo se pinta cuando hay scorecards reales que lo
                         respaldan. Si el backend manda null, se dice que no se
                         sabe en vez de adivinar un tier que no consta. */}
                     <span className={`rounded-lg px-2 py-1 text-xs font-semibold ${
-                      datos.whc.excepciones === 0 ? 'border border-dashed border-dark-600 text-dark-300'
-                        : datos.whc.tier === 'Fantastic' ? 'bg-emerald-500/15 text-emerald-300'
+                      datos.whc.tier === 'Fantastic' ? 'bg-emerald-500/15 text-emerald-300'
                         : datos.whc.tier === 'Great' ? 'bg-sky-500/15 text-sky-300'
                         : datos.whc.tier ? 'bg-red-500/15 text-red-300'
                         : 'bg-dark-800 text-dark-400'}`}>
                       {datos.whc.tier || t('whc.pct.tierdesconocido')}
                     </span>
-                    {datos.whc.excepciones === 0 && (
-                      <span className="text-xs text-amber-300/90">{t('whc.pct.condicional')}</span>
-                    )}
                   </div>
-                  <p className="mt-1 text-xs text-dark-400">
-                    {t('whc.pct.formula')
-                      .replace('{ok}', datos.whc.conductores_con_actividad - datos.whc.excepciones)
-                      .replace('{n}', datos.whc.conductores_con_actividad)}
-                  </p>
-                  {datos.whc.excepciones === 0 && (
+                  {datos.whc.porcentaje != null && (
+                    <p className="mt-1 text-xs text-dark-400">
+                      {t('whc.pct.formula')
+                        .replace('{ok}', datos.whc.conductores_con_actividad - datos.whc.excepciones)
+                        .replace('{n}', datos.whc.conductores_con_actividad)}
+                    </p>
+                  )}
+                  {/* El motivo lo escribe el servidor: es quien sabe por qué no
+                      hay número, y así no hay dos versiones de la explicación. */}
+                  {datos.whc.porque && (
+                    <p className="mt-1.5 max-w-[60ch] text-xs leading-relaxed text-amber-200/90">
+                      {datos.whc.porque}
+                    </p>
+                  )}
+                  {datos.whc.porcentaje == null && (
                     <>
-                      <p className="mt-1.5 text-xs text-amber-200/90">
-                        {t('whc.pct.nosabemos')}
+                      <p className="mt-1.5 text-xs text-dark-400">
+                        Con <b className="text-dark-200">{datos.whc.conductores_con_actividad}</b> conductores
+                        {' '}con actividad, cada excepción cuesta <b className="text-dark-200">
+                        {datos.whc.coste_por_excepcion} puntos</b>.
                       </p>
                       {datos.resumen?.superan > 0 && (
                         <p className="mt-1 text-xs text-dark-400">
@@ -478,6 +563,84 @@ export default function WHC() {
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+/* ── LAS HORAS SEGÚN AMAZON ──────────────────────────────────────────────────
+   Esto no sale de copiar la pantalla: sale de la misma API que usa Cortex para
+   pintarla (`/scheduling/home/api/v2/rosters`). La diferencia no es cosmética:
+
+   · **nada estimado.** Antes, los bloques sin hora de fin se calculaban
+     repartiendo el total de la semana, y eso produjo diez avisos de jornadas de
+     17 y 18 horas que no existían;
+   · **los umbrales los dice Amazon** (`leapConfig`), no los suponemos;
+   · **la proyección es lo que cada uno tiene puesto**, no «seis bloques de
+     nueve horas». Con el dato real, de 38 conductores de DGA1 no se pasa
+     ninguno; con la suposición salían casi todos «en peligro»;
+   · y entra de las tres naves sin que nadie abra ninguna pantalla. */
+function HorasDeAmazon({ d, hm }) {
+  const r = d.resumen
+  const l = d.limites
+  const chips = [
+    ['se pasarían', r.pasan_proyectando, 'bg-red-500/15 text-red-300'],
+    ['ya pasados', r.ya_pasados, 'bg-red-500/15 text-red-300'],
+    ['acercándose', r.acercandose, 'bg-amber-500/15 text-amber-200'],
+    ['jornada larga', r.jornada_pasada, 'bg-orange-500/15 text-orange-300'],
+  ].filter(([, n]) => n > 0)
+
+  return (
+    <div className="card mt-3 p-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-emerald-400">
+          Horas de la semana · dato de Amazon
+        </span>
+        <span className="text-[11.5px] text-dark-500">
+          límites suyos: {hm(l.semanal_duro)} a la semana · {hm(l.jornada_blanda)} de jornada
+          {l.jornada_dura ? ` (${hm(l.jornada_dura)} tope)` : ''}
+        </span>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        <span className="rounded-lg bg-white/[0.04] px-2 py-1 text-xs text-dark-300">
+          {r.total} conductores
+        </span>
+        {chips.length === 0 ? (
+          <span className="rounded-lg bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300">
+            nadie se pasa ni se acerca
+          </span>
+        ) : chips.map(([t, n, cls]) => (
+          <span key={t} className={`rounded-lg px-2 py-1 text-xs font-semibold ${cls}`}>{n} {t}</span>
+        ))}
+      </div>
+
+      {/* Solo los que hay que mirar. Una lista de treinta y ocho personas que
+          van bien no es información, es scroll. */}
+      <ul className="mt-3 space-y-1.5">
+        {d.conductores.filter((c) => c.proyeccion_pasa || c.acercandose
+                                     || c.supera_semanal || c.bloques_pasados?.length)
+          .slice(0, 12).map((c, i) => (
+          <li key={i} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-dark-800 py-1.5 text-xs first:border-0 first:pt-0">
+            <span className="truncate text-dark-200">{c.nombre}</span>
+            <span className="flex shrink-0 items-baseline gap-3 tabular-nums">
+              <span className="text-dark-300">{hm(c.trabajado)} hechas</span>
+              {c.planificado_restante > 0 && (
+                <span className="text-dark-500">+{hm(c.planificado_restante)} puestas</span>
+              )}
+              <span className={`w-[5.5rem] text-right font-semibold ${
+                c.proyeccion_pasa ? 'text-red-300' : 'text-amber-200'}`}>
+                = {hm(c.proyeccion)}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+
+      <p className="mt-3 border-t border-dark-800 pt-2 text-[11px] leading-relaxed text-dark-500">
+        Cada bloque trae su duración y su fichaje: aquí no se estima nada. Lo de «puestas»
+        es lo que tiene en el cuadrante los días que le quedan, así que la suma es la
+        semana que va a hacer si no se cambia nada.
+      </p>
     </div>
   )
 }

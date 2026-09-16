@@ -1,0 +1,153 @@
+{
+ "completion": {
+  "CUSTOMER_HHM": "El envío fue entregado directamente al cliente / otro miembro del hogar",
+  "ALTERNATIVE": "El envío fue entregado a un destinatario alternativo / residente",
+  "SAFE_PLACE": "El envío fue dejado en un lugar seguro / punto de entrega",
+  "COMMERCIAL": "El envío fue entregado en una dirección comercial / tienda",
+  "LOCKER": "El envío fue entregado o redirigido a un locker",
+  "PICKUP_POINT": "El envío fue entregado en un punto de recogida / mostrador"
+ },
+ "location": {
+  "CUSTOMER_HHM": {
+   "CUSTOMER": "Cliente",
+   "CHILD": "Niño",
+   "HHM": "Miembro de la familia",
+   "STAFF": "Personal / Cuidador"
+  },
+  "ALTERNATIVE": {
+   "NEIGHBOUR": "Vecino",
+   "STAFF": "Personal del edificio",
+   "RECEPTIONIST": "Recepcionista",
+   "CONCIERGE": "Conserje",
+   "POST_ROOM": "Empleado de la sala de correos",
+   "SECURITY": "Seguridad del edificio",
+   "CARETAKER": "Asistente/Conserje"
+  },
+  "SAFE_PLACE": {
+   "FRONT_DOOR": "Puerta principal",
+   "MAILBOX": "Buzón",
+   "PORCH": "Porche (delantero o trasero)",
+   "GARAGE": "Garaje",
+   "SHED": "Cobertizo",
+   "LOBBY": "Vestíbulo",
+   "FOYER": "Vestíbulo del edificio",
+   "BACK_DOOR": "Puerta trasera",
+   "GARDEN": "Jardín",
+   "BOX": "Caja de almacenamiento",
+   "WHEELIE_BIN": "Detrás del contenedor de basura",
+   "FENCE": "Cerca",
+   "GREENHOUSE": "Invernadero",
+   "TERRACE": "Terraza",
+   "PARCEL_BOX": "Caja de paquetes",
+   "SIDE_GATE": "Puerta lateral",
+   "POST_ROOM": "Sala de correo",
+   "BBQ": "Parrilla",
+   "HEDGE": "Seto/Arbusto",
+   "FLOWER_BED": "Macizo de flores",
+   "DRAIN_PIPE": "Tubería de desagüe"
+  },
+  "COMMERCIAL": {
+   "CUSTOMER": "Cliente comercial",
+   "OWNER": "Dueño del negocio",
+   "EMPLOYEE": "Empleado de la empresa",
+   "HHM": "Miembro de la familia del dueño del negocio",
+   "CASHIER": "Cajero",
+   "MANAGER": "Gerente",
+   "RECEPTIONIST": "Recepcionista / Mostrador",
+   "SECURITY": "Guardia de seguridad",
+   "FACILITIES": "Gerente de instalaciones",
+   "OFFICE_MANAGER": "Gerente de oficina",
+   "WAREHOUSE_MANAGER": "Gerente de almacén",
+   "CLERK": "Empleado de envío/recepción",
+   "INFOPOINT": "Punto de información",
+   "STOCKROOM": "Almacén",
+   "LOADING_DOCK": "Muelle de carga"
+  },
+  "LOCKER": {
+   "AMZN_LOCKER": "Amazon Locker"
+  },
+  "PICKUP_POINT": {
+   "OWNER": "Dueño del negocio",
+   "EMPLOYEE": "Empleado de la empresa",
+   "CASHIER": "Cajero",
+   "CLERK": "Empleado de envío/recepción",
+   "MANAGER": "Gerente",
+   "RECEPTIONIST": "Recepcionista / Mostrador",
+   "SECURITY": "Guardia de seguridad",
+   "FACILITIES": "Gerente de instalaciones",
+   "OFFICE_MANAGER": "Gerente de oficina",
+   "WAREHOUSE_MANAGER": "Gerente de almacén"
+  }
+ },
+ "additional": {
+  "CUSTOMER_HHM": {
+   "DOOR_STEP": "El envío fue aceptado cara a cara en la puerta",
+   "OUT_FRONT": "El envío fue aceptado cara a cara frente al edificio / en la propiedad del cliente",
+   "INTERCOM": "El envío fue aceptado a través del interfono",
+   "PHONE": "El envío fue aceptado a través de una llamada telefónica",
+   "ALTERNATIVE": "El envío fue aceptado en una ubicación alternativa (fuera de la propiedad)"
+  },
+  "ALTERNATIVE": {
+   "IN_BUILDING": "Aceptado en el edificio del cliente",
+   "SAME_STREET": "Aceptado en un edificio alternativo (misma calle)",
+   "NEARBY_STREET": "Aceptado en un edificio alternativo (calle cercana)",
+   "SAME_FLOOR": "Aceptado en el mismo piso / puerta vecina",
+   "MAIL_AREA": "Aceptado en un punto de recogida de paquetes designado en el edificio"
+  },
+  "SAFE_PLACE": {
+   "FRONT": "En la entrada principal",
+   "SIDE": "En la entrada lateral",
+   "DOORMAT": "Bajo el felpudo",
+   "STAIRS": "Detrás/debajo de las escaleras",
+   "MAILBOX": "Sobre el buzón",
+   "DESK": "Detrás del escritorio",
+   "WINDOW": "En el alféizar",
+   "BENCH": "Debajo del banco/silla",
+   "CAR": "Debajo del coche",
+   "ITEM": "Cubierto detrás de otro objeto",
+   "PLANT": "Detrás de la maceta",
+   "BOX": "Caja de almacenamiento",
+   "TABLE": "Puesto debajo de la mesa",
+   "TRAILER": "Escondido dentro del remolque"
+  },
+  "COMMERCIAL": {
+   "DOOR_STEP": "El envío fue aceptado cara a cara en la puerta",
+   "RECEPTION": "El envío fue aceptado en el mostrador/recepción dentro del edificio",
+   "BACK": "El envío fue aceptado en la entrada trasera",
+   "OFFICE": "El envío fue aceptado en la oficina administrativa del edificio",
+   "OUT_FRONT": "El envío fue aceptado cara a cara frente al edificio / en la propiedad de la tienda",
+   "CAR_PARK": "El envío fue entregado en el estacionamiento",
+   "INTERCOM": "El envío fue aceptado a través del interfono",
+   "PHONE": "El envío fue aceptado a través de una llamada telefónica",
+   "ALTERNATIVE": "El envío fue aceptado en una ubicación alternativa (fuera de la propiedad)"
+  },
+  "LOCKER": {},
+  "PICKUP_POINT": {}
+ },
+ "property": {
+  "HOUSE": "Casa unifamiliar",
+  "APARTMENT": "Apartamento/Condominio",
+  "APARTMENT_BLOCK": "Edificio de apartamentos",
+  "TOWNHOUSE": "Casa adosada",
+  "SKYSCRAPER": "Rascacielos",
+  "DUPLEX": "Dúplex",
+  "GATED": "Urbanización cerrada",
+  "SHOP": "Tienda minorista",
+  "OFFICE": "Edificio de oficinas",
+  "RESTAURANT": "Restaurante",
+  "HOTEL": "Hotel",
+  "HOSPITAL": "Hospital / Centro médico",
+  "SALON": "Peluquería",
+  "GARAGE": "Taller mecánico",
+  "WAREHOUSE": "Almacén",
+  "FACTORY": "Instalación industrial",
+  "SHOPPING_CENTRE": "Centro comercial",
+  "SUPERMARKET": "Supermercado",
+  "SCHOOL": "Escuela",
+  "GOVERNMENT_BUILDING": "Edificio gubernamental",
+  "LIBRARY": "Biblioteca",
+  "GYM": "Gimnasio",
+  "CAFE": "Café"
+ },
+ "_origen": "Extraido de DNR_Investigations_ES-TDSL-OGA5 (14-09-2026) ejecutando las propias constantes de la pagina. No se teclea a mano: una opcion inventada es una respuesta que Amazon rechaza sin decir por que."
+}

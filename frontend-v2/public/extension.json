@@ -1,5 +1,5 @@
 {
-  "version": "2.50.0",
+  "version": "2.88.0",
   "ficheros": [
     "README.md",
     "background.js",
@@ -9,8 +9,9 @@
     "manifest.json",
     "popup.html",
     "popup.js",
-    "portal.js"
+    "portal.js",
+    "winiw.js"
   ],
-  "kb": 61,
-  "generado": "2026-09-14"
+  "kb": 83,
+  "generado": "2026-09-16"
 }

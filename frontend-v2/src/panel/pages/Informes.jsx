@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Loader2, PackageX, Timer, CheckCircle2 } from 'lucide-react'
+import { Loader2, PackageX, Timer, CheckCircle2, Mail } from 'lucide-react'
 import { useT } from '../../i18n'
 import { canSee } from '../auth'
 
@@ -31,12 +31,20 @@ import { canSee } from '../auth'
    diarios es de las más pesadas del panel. */
 const Diarios = lazy(() => import('./Diarios'))
 const WHC = lazy(() => import('./WHC'))
+const DnrInvestigaciones = lazy(() => import('./DnrInvestigaciones'))
 
+/* La tercera, «Investigaciones», va con el permiso `diarios` A PROPOSITO: son
+   los DNR de siempre, solo que preguntados uno a uno. Inventarle un permiso
+   nuevo obligaria a ir a Usuarios a marcarle la casilla a cada persona que hoy
+   ya ve los DNR, y hasta entonces la pantalla no existiria para nadie — que es
+   exactamente el gotcha 27. */
 const PESTANAS = [
   { id: 'dnr', permiso: 'diarios', icono: PackageX, titulo: 'DNR y diarios',
-    pie: 'Lo que no llegó, y por qué' },
+    pie: 'Lo que no llegó, y por qué', Pantalla: Diarios },
+  { id: 'inv', permiso: 'diarios', icono: Mail, titulo: 'Investigaciones',
+    pie: 'Contestar a Amazon dónde se dejó', Pantalla: DnrInvestigaciones },
   { id: 'whc', permiso: 'whc', icono: Timer, titulo: 'Horas · WHC',
-    pie: 'Quién se acerca al límite' },
+    pie: 'Quién se acerca al límite', Pantalla: WHC },
 ]
 
 export default function Informes() {
@@ -120,7 +128,7 @@ export default function Informes() {
           <Loader2 size={15} className="animate-spin" /> Cargando…
         </div>
       )}>
-        {activa.id === 'dnr' ? <Diarios /> : <WHC />}
+        <activa.Pantalla />
       </Suspense>
     </div>
   )
