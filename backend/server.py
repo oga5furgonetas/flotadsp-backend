@@ -34830,7 +34830,10 @@ def _onb_parsear(texto: str) -> list:
     dejaria fuera a quien no lo tenga, y una persona que no entra no se echa de
     menos: no sale por ninguna parte y parece que no existe.
 
-    Lo que NO se lee: contrasenas. Estan en el texto pegado y se quedan ahi.
+    LAS CONTRASENAS SI SE LEEN (la oficina las necesita para entrar a revisar
+    el expediente). Se enseñan ocultas y solo en el panel; NUNCA van en el
+    WhatsApp (`_onb_mensaje`) ni en el CSV (`onb_export`), y hay un caso que lo
+    vigila en `test_incorporaciones.py`.
     """
     t = (texto or "").replace("\r", "")
     cabeceras = list(_ONB_CAB.finditer(t))
@@ -34876,6 +34879,15 @@ def _onb_parsear(texto: str) -> list:
         mrabbit = re.search(r"Contrase\u00f1a\s+Rabbit\s*\n\s*(\S+)", trozo, re.I)
         mform = re.search(r"C\u00f3digo\s+Test\s+Formaci\u00f3n\s*\n\s*(\S+)", trozo, re.I)
         codigo = (mform.group(1) if mform else "").strip("\u2014\u2013-. ")
+        # EL DIA DE LA FORMACION. Sin el, la pantalla no podia decir que a
+        # Jonatan le tocaba el 10/09 y el 16/09 aun no se le habia mandado el
+        # acceso: salia igual que alguien de hoy.
+        mfecha = re.search(r"Fecha\s+formaci\u00f3n\s*\n\s*(\d{2})/(\d{2})/(\d{4})", trozo, re.I)
+        fecha_formacion = ("%s-%s-%s" % (mfecha.group(3), mfecha.group(2), mfecha.group(1))
+                           if mfecha else "")
+        # Quien de Coordinacion dio los papeles por buenos, y cuando.
+        mcomp = re.search(r"Completado\s+por\s*\n\s*([A-Z0-9_]{2,20})\s*[\u00b7.-]\s*"
+                          r"(\d{2})/(\d{2})/(\d{4})", trozo, re.I)
         fuera.append({
             "nombre": nombre[:80],
             "telefono": _onb_tel_limpio(tel.group(1)) if tel else "",
@@ -34890,8 +34902,50 @@ def _onb_parsear(texto: str) -> list:
             "clave_email": (mclave.group(1) if mclave else "")[:60],
             "clave_rabbit": (mrabbit.group(1) if mrabbit else "")[:60],
             "codigo_formacion": codigo[:40],
+            "fecha_formacion": fecha_formacion,
+            "papeles_por": (mcomp.group(1).upper() if mcomp else ""),
+            "papeles_en": ("%s-%s-%s" % (mcomp.group(4), mcomp.group(3), mcomp.group(2))
+                           if mcomp else ""),
         })
     return fuera
+
+
+# Lo que el listado puede traer VACIO sin que signifique que ya no existe: una
+# ficha plegada no enseña «Datos de incorporacion», y guardar esos huecos
+# borraria el codigo de formacion y el correo que ya teniamos. `falta_texto`
+# NO esta aqui: vacio si significa algo («Completo»).
+_ONB_NO_PISAR_CON_VACIO = ("telefono", "dni", "idper", "centro", "registrado", "email",
+                           "clave_email", "clave_rabbit", "codigo_formacion",
+                           "fecha_formacion", "papeles_por", "papeles_en")
+
+
+async def _onb_guardar_listado(filas: list, quien: str) -> dict:
+    """Guarda lo leido del listado. UN SOLO SITIO para el pegado a mano y para
+    la extension: antes eran dos copias del mismo bucle, y un arreglo en una no
+    llegaba a la otra."""
+    ahora = datetime.now(timezone.utc).isoformat()
+    nuevas, actualizadas, sin_telefono = 0, 0, 0
+    for p in filas:
+        if not p.get("telefono"):
+            sin_telefono += 1
+        clave = _onb_clave(p)
+        poner = {k: v for k, v in p.items()
+                 if not (k in _ONB_NO_PISAR_CON_VACIO and v in ("", None))}
+        r = await db[_ONB_COL].update_one(
+            {"clave": clave},
+            {"$set": {**poner, "visto_en": ahora},
+             # Lo que haya escrito la oficina NO se pisa: el listado no sabe
+             # nada de los estados que se marcan a mano.
+             "$setOnInsert": {"id": str(uuid.uuid4()), "clave": clave,
+                              "creado_en": ahora, "creado_por": quien,
+                              "motivos": [], "nota": ""}},
+            upsert=True)
+        if r.upserted_id is not None:
+            nuevas += 1
+        elif r.modified_count:
+            actualizadas += 1
+    return {"leidas": len(filas), "nuevas": nuevas, "actualizadas": actualizadas,
+            "sin_telefono": sin_telefono, "en": ahora}
 
 
 # Lo que escribe la ETT en «Doc. faltantes» y a que motivo nuestro corresponde.
@@ -35044,6 +35098,25 @@ _ONB_PASOS = (
 )
 
 
+def _onb_cuando_formacion(p: dict) -> str:
+    """«: la tenía el 10/09, hace 6 días» — o vacío si no se sabe el día."""
+    f = str(p.get("fecha_formacion") or "")[:10]
+    try:
+        d = date_cls.fromisoformat(f)
+    except ValueError:
+        return ""
+    hoy = datetime.now(timezone.utc).date()
+    dm = d.strftime("%d/%m")
+    n = (hoy - d).days
+    if n > 1:
+        return ": la tenía el %s, hace %d días" % (dm, n)
+    if n == 1:
+        return ": la tenía ayer (%s)" % dm
+    if n == 0:
+        return ": la tiene hoy"
+    return ": la tiene el %s" % dm
+
+
 def _onb_camino(p: dict, cuenta: dict, en_el_listado=None) -> dict:
     """En que punto esta, en DOS CARRILES que van en paralelo.
 
@@ -35099,7 +35172,7 @@ def _onb_camino(p: dict, cuenta: dict, en_el_listado=None) -> dict:
         if not p.get("codigo_formacion"):
             pendiente.append("Coordinación tiene que dar sus papeles por completos")
         elif not acceso:
-            pendiente.append("Mándale el acceso a la formación")
+            pendiente.append("Mándale el acceso a la formación" + _onb_cuando_formacion(p))
         if not cuenta:
             pendiente.append("Su cuenta de Amazon no la hemos visto todavía")
         elif not cuenta.get("completa"):
@@ -35113,6 +35186,11 @@ def _onb_camino(p: dict, cuenta: dict, en_el_listado=None) -> dict:
     return {
         "ett": ett,
         "amazon": amazon,
+        # Dias desde el dia de formacion SIN haber mandado el acceso (None si
+        # no aplica). Es lo que ordena la tanda: primero a quien mas se le paso.
+        "formacion_atrasada": (_onb_dias(p.get("fecha_formacion"))
+                               if (p.get("codigo_formacion") and not acceso
+                                   and p.get("fecha_formacion")) else None),
         "dados": sum(1 for x in ett if x["hecho"]) + (1 if cuenta else 0),
         "total": len(ett) + 1,
         "fuera": fuera,
@@ -35323,24 +35401,8 @@ async def onb_importar(body: dict = Body(...), user: dict = Depends(require_admi
     filas = _onb_parsear(texto)
     if not filas:
         raise HTTPException(400, "No he reconocido ninguna ficha en ese texto")
-    ahora = datetime.now(timezone.utc).isoformat()
-    nuevas, actualizadas, sin_telefono = 0, 0, 0
-    for p in filas:
-        if not p["telefono"]:
-            sin_telefono += 1
-        clave = _onb_clave(p)
-        r = await db[_ONB_COL].update_one(
-            {"clave": clave},
-            {"$set": {**p, "visto_en": ahora},
-             "$setOnInsert": {"id": str(uuid.uuid4()), "clave": clave,
-                              "creado_en": ahora,
-                              "creado_por": user.get("name") or "",
-                              "motivos": [], "nota": ""}},
-            upsert=True)
-        if r.upserted_id is not None:
-            nuevas += 1
-        elif r.modified_count:
-            actualizadas += 1
+    res = await _onb_guardar_listado(filas, user.get("name") or "")
+    ahora = res["en"]
     # EL LISTADO QUE SE PEGA ES LA VERDAD DE AHORA. Quien no sale en el ya no
     # esta en ese estado: acabo, se fue, o paso a otra cosa. El 16-09-2026
     # Victor salia como «en incorporacion» porque su ficha era de hace dias, y
@@ -35353,8 +35415,8 @@ async def onb_importar(body: dict = Body(...), user: dict = Depends(require_admi
     await db.app_meta.update_one(
         {"_id": "incorporaciones_ultimo_listado"},
         {"$set": {"en": ahora, "cuantos": len(filas)}}, upsert=True)
-    return {"ok": True, "leidas": len(filas), "nuevas": nuevas,
-            "actualizadas": actualizadas, "sin_telefono": sin_telefono}
+    return {"ok": True, "leidas": res["leidas"], "nuevas": res["nuevas"],
+            "actualizadas": res["actualizadas"], "sin_telefono": res["sin_telefono"]}
 
 
 @api_router.patch("/incorporaciones/personas/{pid}")
@@ -37043,36 +37105,15 @@ async def cortex_ingest_informe(request: Request):
             # No hay lector nuevo que pueda equivocarse: es la parte que hace
             # segura esta puerta.
             #
-            # Y lo que no se guarda sigue sin guardarse: el listado trae la
-            # contrasena del correo y la del Rabbit, y el lector no las toca
-            # (hay un caso que lo comprueba). Que el texto entre solo no cambia
-            # quien decide que se queda.
+            # La extension manda tambien vistas FILTRADAS (por semana o por
+            # centro), asi que aqui NO se apunta «ultimo listado»: eso marcaria
+            # como fuera a todo el que no saliera en el filtro.
             filas = _onb_parsear(texto)
             if not filas:
                 await _anotar(False, "no parece el listado de candidatos", None)
                 return {"ok": False, "tipo": tipo, "motivo": "sin fichas"}
-            ahora_iso = datetime.now(timezone.utc).isoformat()
-            nuevas, actualizadas, sin_tel = 0, 0, 0
-            for f in filas:
-                if not f.get("telefono"):
-                    sin_tel += 1
-                clave = _onb_clave(f)
-                res = await db[_ONB_COL].update_one(
-                    {"clave": clave},
-                    {"$set": {**f, "visto_en": ahora_iso},
-                     # Lo que haya escrito la oficina NO se pisa: el listado no
-                     # sabe nada de los estados que se marcan a mano.
-                     "$setOnInsert": {"id": str(uuid.uuid4()), "clave": clave,
-                                      "creado_en": ahora_iso,
-                                      "creado_por": "la plataforma",
-                                      "motivos": [], "nota": ""}},
-                    upsert=True)
-                if res.upserted_id is not None:
-                    nuevas += 1
-                elif res.modified_count:
-                    actualizadas += 1
-            r = {"leidas": len(filas), "nuevas": nuevas,
-                 "actualizadas": actualizadas, "sin_telefono": sin_tel}
+            r = await _onb_guardar_listado(filas, "la plataforma")
+            r.pop("en", None)
         elif tipo == "horarios":
             # ── EL PLAN DE HORAS, PEDIDO A LA API EN VEZ DE LEIDO DE LA PANTALLA
             # Lo manda la extension ya pedido por nave:

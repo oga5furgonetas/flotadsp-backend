@@ -26,11 +26,11 @@ import {
 
    Aquí son tres clics: se marca qué le falta, se ve el mensaje, se envía.
 
-   LO QUE NO SE GUARDA. El listado del que salen estos datos trae también la
-   contraseña del correo y la del Rabbit de cada persona. No se guardan ni se
-   piden: para decirle a alguien que su foto está mal no hace falta su
-   contraseña, y una copia más de una credencial es una copia más que puede
-   filtrarse.
+   LAS CONTRASEÑAS. El listado trae la del correo y la del Rabbit de cada
+   persona. Se guardan porque la oficina entra con ellas a revisar el
+   expediente, pero se enseñan OCULTAS (hay que pulsar para verlas) y nunca
+   salen de esta pantalla: ni en el WhatsApp ni en el CSV. Lo vigila
+   `test_incorporaciones.py`.
 
    EL MENSAJE Y EL ENLACE LOS ESCRIBE EL SERVIDOR. Montar el `wa.me` aquí es el
    gotcha 47: 61 de 114 teléfonos están guardados sin prefijo y `wa.me/6xx…`
@@ -349,7 +349,10 @@ export default function Incorporaciones() {
      decidir antes de hacer, y por eso los tres bloques de antes no se usaban. */
   const accionDelPaso = useMemo(() => {
     if (paso === 'acceso') {
+      /* Primero a quien MÁS se le pasó el día de formación: Jonatan la tenía
+         el 10/09 y el 16/09 seguía sin su acceso, en medio de la lista. */
       const cola = grupos.acceso.filter(entraEnFormacion)
+        .sort((a, b) => (b.camino?.formacion_atrasada ?? -1) - (a.camino?.formacion_atrasada ?? -1))
       if (!cola.length) return null
       return { ...EMBUDO[1], titulo: `${cola.length} esperan su acceso a la formación`,
         pie: 'Se les manda la app Amiigo con su usuario y la contraseña, uno detrás de otro.',

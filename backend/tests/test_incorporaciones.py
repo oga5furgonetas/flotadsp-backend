@@ -216,15 +216,17 @@ def test_lo_que_entra_solo_lo_lee_EL_MISMO_lector_probado():
     i = src.index('elif tipo == "candidatos":')
     trozo = src[i:i + 1800]
     assert "_onb_parsear(texto)" in trozo, "se ha escrito otro lector"
-    assert "_onb_clave(f)" in trozo, "sin clave estable se duplican las fichas"
+    # Se guarda por la funcion comun, que es la que usa la clave estable.
+    assert "_onb_guardar_listado(filas" in trozo, "la extension guarda por su cuenta"
+    assert "_onb_clave(p)" in _fuente("_onb_guardar_listado"), (
+        "sin clave estable se duplican las fichas")
 
 
 def test_lo_que_entra_solo_no_pisa_lo_que_marca_la_oficina():
     """El listado no sabe nada de los estados que se marcan a mano. Si los
     pisara, cada vez que entrara el listado se borraria el trabajo del dia."""
-    src = _fuente("cortex_ingest_informe")
-    i = src.index('elif tipo == "candidatos":')
-    trozo = src[i:i + 1800]
+    # Las dos puertas guardan por `_onb_guardar_listado`: se mira ahi.
+    trozo = _fuente("_onb_guardar_listado")
     j = trozo.index("$setOnInsert")
     assert '"motivos": []' in trozo[j:j + 260] and '"nota": ""' in trozo[j:j + 260], (
         "motivos y nota tienen que ir en $setOnInsert, no en $set")
@@ -411,3 +413,70 @@ def test_no_estar_en_el_listado_sin_codigo_no_significa_nada():
     Tratar toda ausencia como «ya no esta» dio por idas a DIECISEIS personas."""
     r = _camino()({"registrado": "2026-09-04"}, None, False)
     assert not r.get("fuera")
+
+
+FICHA_FORMACION = """Rodriguez Gonzalez, Jonatan N
+ATELODIS  AMZL OGA5 SANTIAGO XPT DNI 44092698L  \u00b7  IDPER 25345  \u00b7   Registrado 14/09/2026 15:34 W38
+ 613 14 19 66
+Pulsa para llamar
+ En incorporaci\u00f3n
+Email winiw
+jonrodgon@winiw.es
+Fecha formaci\u00f3n
+10/09/2026
+Link formaci\u00f3n
+\u2014
+C\u00f3digo Test Formaci\u00f3n
+FV2TMB43LD5AD0ZA
+Fecha incorporaci\u00f3n
+\u2014
+Doc. faltantes
+ Completo
+Completado por
+PROME \u00b7 10/09/2026
+"""
+
+
+def test_lee_el_dia_de_formacion_y_quien_dio_los_papeles():
+    """Sin el dia, la pantalla no podia decir que a Jonatan se le paso el 10/09
+    sin mandarle el acceso (16-09-2026)."""
+    f = PARSEAR(FICHA_FORMACION)[0]
+    assert f["fecha_formacion"] == "2026-09-10"
+    assert f["papeles_por"] == "PROME"
+    assert f["papeles_en"] == "2026-09-10"
+    assert f["codigo_formacion"] == "FV2TMB43LD5AD0ZA"
+    assert f["falta_texto"] == ""
+    # Sin esos bloques no se inventa nada.
+    g = PARSEAR(FICHA)[0]
+    assert g["fecha_formacion"] == "" and g["papeles_por"] == ""
+
+
+def test_un_hueco_del_listado_no_borra_un_dato_bueno():
+    """Una ficha plegada no trae «Datos de incorporacion»: guardar esos vacios
+    borraria el codigo de formacion y el correo."""
+    amb = {}
+    for n in _ARBOL.body:
+        if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "_ONB_NO_PISAR_CON_VACIO":
+            exec(compile(ast.Module(body=[n], type_ignores=[]), "<s>", "exec"), amb)  # noqa: S102
+    campos = amb["_ONB_NO_PISAR_CON_VACIO"]
+    for k in ("codigo_formacion", "email", "clave_email", "fecha_formacion", "telefono"):
+        assert k in campos, k
+    # «Completo» deja falta_texto vacio y ESO si hay que guardarlo.
+    assert "falta_texto" not in campos
+    # Y las dos puertas (pegar a mano y la extension) pasan por el mismo sitio.
+    assert "_onb_guardar_listado" in _fuente("onb_importar")
+    assert "_onb_guardar_listado(filas" in _TEXTO.split("elif tipo == \"candidatos\":")[1][:1500]
+
+
+def test_dice_cuanto_hace_que_tocaba_la_formacion():
+    from datetime import date, datetime, timedelta, timezone
+    amb = {"datetime": datetime, "timezone": timezone, "date_cls": date}
+    for n in _ARBOL.body:
+        if isinstance(n, ast.FunctionDef) and n.name == "_onb_cuando_formacion":
+            exec(compile(ast.Module(body=[n], type_ignores=[]), "<s>", "exec"), amb)  # noqa: S102
+    f = amb["_onb_cuando_formacion"]
+    hoy = datetime.now(timezone.utc).date()
+    assert f({"fecha_formacion": (hoy - timedelta(days=6)).isoformat()}).endswith("hace 6 d\u00edas")
+    assert "ayer" in f({"fecha_formacion": (hoy - timedelta(days=1)).isoformat()})
+    assert f({"fecha_formacion": hoy.isoformat()}) == ": la tiene hoy"
+    assert f({}) == "" and f({"fecha_formacion": "basura"}) == ""
