@@ -34928,6 +34928,102 @@ def _onb_parsear(texto: str) -> list:
     return fuera
 
 
+# ── UNA TABLA CUALQUIERA ─────────────────────────────────────────────────
+# El lector de arriba entiende UN formato: el listado de la ETT de Dani copiado
+# de su web. Cualquier otra empresa —otra ETT, su propio Excel, un CSV— pegaba
+# su lista y recibia «No he reconocido ninguna ficha» (medido el 16-09-2026).
+# Esto lee una tabla con cabecera, pegada desde Excel (tabuladores) o como CSV.
+_ONB_COLUMNAS = (
+    # (campo, palabras de la cabecera que lo nombran; se comparan sin tildes)
+    ("nombre", ("nombre completo", "apellidos y nombre", "nombre y apellidos", "nombre", "candidato", "persona")),
+    ("email", ("correo electronico", "e-mail", "email", "correo", "mail")),
+    ("telefono", ("telefono movil", "telefono", "movil", "tlf", "tel", "phone")),
+    ("dni", ("dni/nie", "dni", "nie", "documento", "pasaporte")),
+    ("centro", ("nave", "centro", "estacion", "station")),
+    ("codigo_formacion", ("codigo test formacion", "codigo formacion", "usuario formacion", "codigo")),
+    ("fecha_formacion", ("fecha formacion", "fecha de formacion", "dia formacion")),
+    ("ett", ("empresa de trabajo temporal", "ett", "agencia")),
+)
+
+
+def _onb_sin_tildes(t: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", str(t or "").lower())
+                   if unicodedata.category(c) != "Mn").strip()
+
+
+def _onb_parsear_tabla(texto: str) -> dict:
+    """Lee una tabla con cabecera. Devuelve {"filas", "sin_clave", "columnas"}.
+
+    Tres reglas que no son obvias:
+      · cada fila lleva SOLO las columnas que la tabla trae. El guardado pisa lo
+        que haya con lo que llegue, y un `falta_texto` o un `ett` vacios
+        borrarian lo que ya sabia el listado de la ETT (vacio en `falta_texto`
+        significa «Completo»);
+      · una persona se identifica por DNI o telefono (`_onb_clave`). Una fila
+        sin ninguno de los dos acabaria juntada con todas las demas que tampoco
+        lo tienen, asi que no se guarda y se cuenta en `sin_clave`;
+      · las contraseñas NO se leen de aqui, aunque vengan: solo del listado de
+        la ETT, que es donde la oficina las necesita.
+    """
+    import csv
+    lineas = [l for l in (texto or "").replace("\r", "").split("\n") if l.strip()]
+    if len(lineas) < 2:
+        return {"filas": [], "sin_clave": 0, "columnas": []}
+    cab = lineas[0]
+    sep = "\t" if "\t" in cab else (";" if cab.count(";") >= cab.count(",") and ";" in cab else ",")
+    try:
+        tabla = list(csv.reader(lineas, delimiter=sep))
+    except Exception:                                             # noqa: BLE001
+        return {"filas": [], "sin_clave": 0, "columnas": []}
+    nombres = [_onb_sin_tildes(c) for c in tabla[0]]
+    donde: dict = {}
+    for campo, palabras in _ONB_COLUMNAS:
+        for i, n in enumerate(nombres):
+            if i in donde.values():
+                continue
+            # La cabecera ENTERA, o una de las palabras clave como palabra
+            # completa: «codigo postal» no es el codigo de formacion.
+            if any(n == w or re.search(r"(^|[^a-z])%s([^a-z]|$)" % re.escape(w), n) and
+                   not (campo == "codigo_formacion" and w == "codigo" and n != "codigo")
+                   for w in palabras):
+                donde[campo] = i
+                break
+    # Sin nombre, o sin ninguna forma de reconocer a la persona, no es una
+    # lista de candidatos: mejor decir que no se entiende que guardar basura.
+    if "nombre" not in donde or not ({"email", "telefono", "dni"} & set(donde)):
+        return {"filas": [], "sin_clave": 0, "columnas": sorted(donde)}
+    filas, sin_clave = [], 0
+    for fila in tabla[1:]:
+        val = lambda campo: (fila[donde[campo]].strip() if campo in donde and donde[campo] < len(fila) else "")
+        nombre = val("nombre")
+        if not nombre:
+            continue
+        p = {"nombre": nombre[:80]}
+        if "telefono" in donde:
+            p["telefono"] = _onb_tel_limpio(val("telefono"))
+        if "dni" in donde:
+            p["dni"] = re.sub(r"[^0-9A-Z]", "", val("dni").upper())[:12]
+        if "email" in donde:
+            p["email"] = val("email").lower()[:80]
+        if "centro" in donde:
+            p["centro"] = (_centro_norm(val("centro")) or val("centro")).upper()[:12]
+        if "codigo_formacion" in donde:
+            p["codigo_formacion"] = val("codigo_formacion")[:40]
+        if "fecha_formacion" in donde:
+            f = val("fecha_formacion")
+            m = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})", f)
+            p["fecha_formacion"] = ("%s-%02d-%02d" % (m.group(3), int(m.group(2)), int(m.group(1)))
+                                    if m else (f if re.fullmatch(r"\d{4}-\d{2}-\d{2}", f) else ""))
+        if "ett" in donde:
+            p["ett"] = val("ett").upper()[:30]
+        if not p.get("dni") and not p.get("telefono"):
+            sin_clave += 1
+            continue
+        filas.append(p)
+    return {"filas": filas, "sin_clave": sin_clave, "columnas": sorted(donde)}
+
+
 # Lo que el listado puede traer VACIO sin que signifique que ya no existe: una
 # ficha plegada no enseña «Datos de incorporacion», y guardar esos huecos
 # borraria el codigo de formacion y el correo que ya teniamos. `falta_texto`
@@ -35417,11 +35513,22 @@ async def onb_importar(body: dict = Body(...), user: dict = Depends(require_admi
     de eso y lo borraria en silencio.
     """
     texto = body.get("texto")
-    if not isinstance(texto, str) or len(texto) < 40:
+    if not isinstance(texto, str) or len(texto) < 20:
         raise HTTPException(400, "Pega el listado de candidatos")
     filas = _onb_parsear(texto)
+    sin_clave = 0
+    formato = "ett"
     if not filas:
-        raise HTTPException(400, "No he reconocido ninguna ficha en ese texto")
+        # No es el listado de la ETT: se prueba como tabla (Excel o CSV).
+        tabla = _onb_parsear_tabla(texto)
+        filas, sin_clave, formato = tabla["filas"], tabla["sin_clave"], "tabla"
+    if not filas:
+        raise HTTPException(400, (
+            "No he reconocido ninguna ficha. Pega el listado de la ETT tal cual, o una "
+            "tabla de Excel con cabecera: una columna Nombre y otra con Teléfono o DNI "
+            "(y si quieres Email, Nave, Código formación, Fecha formación)."
+            + (" Hay %d filas sin teléfono ni DNI: sin eso no se puede saber quién es quién."
+               % sin_clave if sin_clave else "")))
     res = await _onb_guardar_listado(filas, user.get("name") or "")
     ahora = res["en"]
     # EL LISTADO QUE SE PEGA ES LA VERDAD DE AHORA. Quien no sale en el ya no
@@ -35437,7 +35544,8 @@ async def onb_importar(body: dict = Body(...), user: dict = Depends(require_admi
         {"_id": "incorporaciones_ultimo_listado"},
         {"$set": {"en": ahora, "cuantos": len(filas)}}, upsert=True)
     return {"ok": True, "leidas": res["leidas"], "nuevas": res["nuevas"],
-            "actualizadas": res["actualizadas"], "sin_telefono": res["sin_telefono"]}
+            "actualizadas": res["actualizadas"], "sin_telefono": res["sin_telefono"],
+            "formato": formato, "sin_clave": sin_clave}
 
 
 @api_router.patch("/incorporaciones/personas/{pid}")
@@ -41228,8 +41336,15 @@ def _whc_parsear(texto: str) -> list:
                                           "tipo": lineas[i + 1][:40], "estimado": True})
             i += 1
             continue
-        # Ruido conocido del pegado
-        if l.lower() in ("estandar", "estándar", "standard") or l.startswith("```") or l in ("DGA1", "DGA2", "OGA5"):
+        # Ruido conocido del pegado. El codigo de la nave donde se trabajo el
+        # bloque va en su propia linea (en un plan de DGA1 aparece OGA5). Solo se
+        # conocian las tres naves de Dani: con cualquier otra —DIC1, una nave
+        # nueva, otra empresa— esa linea se leia como una PERSONA nueva. Medido
+        # el 16-09-2026 sobre los 15 planes guardados: en 13 salia un conductor
+        # fantasma con el nombre de la nave. Un nombre de persona nunca es letras
+        # pegadas a un numero, asi que se reconoce por la FORMA, no por la lista.
+        if (l.lower() in ("estandar", "estándar", "standard") or l.startswith("```")
+                or re.fullmatch(r"[A-Z]{2,5}[0-9]{1,2}", l)):
             i += 1
             continue
         if any(t in l.lower() for t in _WHC_TIPOS):

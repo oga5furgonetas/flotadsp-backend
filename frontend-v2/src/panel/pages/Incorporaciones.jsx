@@ -975,26 +975,42 @@ function Pegar({ onHecho, onCerrar }) {
     <div className="card border-brand-500/30 p-4">
       <div className="flex items-center gap-2">
         <ClipboardPaste size={15} className="text-brand-300" />
-        <b className="text-[14px] text-dark-100">Pegar el listado de la ETT</b>
+        <b className="text-[14px] text-dark-100">Pegar el listado de candidatos</b>
         <button onClick={onCerrar} className="ml-auto text-dark-500 hover:text-dark-300"><X size={16} /></button>
       </div>
-      <p className="mt-1 text-[12px] text-dark-500">
-        Selecciona el listado entero y pégalo aquí. Se puede pegar todos los días: quien
-        ya esté no se duplica. Las contraseñas que vengan en el texto no se guardan.
+      {/* DOS FORMAS, Y LA VERDAD SOBRE LAS CONTRASENAS. Solo entendia el listado
+          de la web de la ETT: otra ETT o un Excel propio daban «no he reconocido
+          ninguna ficha». Y aqui ponia que las contraseñas no se guardan, cuando
+          el lector de la ETT SI las guarda (ocultas, para revisar el expediente).
+          Un texto que promete lo contrario de lo que pasa es peor que no decir nada. */}
+      <p className="mt-1 text-[12px] leading-relaxed text-dark-400">
+        Vale el listado de la ETT copiado tal cual, o una tabla de Excel con cabecera: una
+        columna <b className="text-dark-200">Nombre</b> y otra con <b className="text-dark-200">Teléfono</b> o{' '}
+        <b className="text-dark-200">DNI</b> (y si la tienes, Email, Nave, Código formación y Fecha
+        formación). Se puede pegar todos los días: quien ya esté no se duplica.
+      </p>
+      <p className="mt-1 text-[11.5px] leading-relaxed text-dark-400">
+        Del listado de la ETT se guardan también sus contraseñas, ocultas, para revisar el
+        expediente; nunca salen en WhatsApp ni en el CSV. De una tabla de Excel no se leen.
       </p>
       <textarea className="input mt-2 h-32 font-mono text-[11.5px]" value={texto}
         placeholder="Pega aquí…" onChange={(e) => setTexto(e.target.value)} />
       {err && <p className="mt-2 text-[12.5px] text-red-300">{err}</p>}
       {r && (
         <p className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-[12.5px] text-emerald-300">
-          {r.leidas} fichas leídas · {r.nuevas} nuevas · {r.actualizadas} actualizadas
+          {r.leidas} fichas leídas{r.formato === 'tabla' ? ' de la tabla' : ''} · {r.nuevas} nuevas · {r.actualizadas} actualizadas
           {r.sin_telefono > 0 && (
             <span className="text-amber-300"> · {r.sin_telefono} sin teléfono (a esos no se les puede escribir)</span>
+          )}
+          {/* Filas de la tabla sin teléfono ni DNI: no se guardan, porque sin eso
+              no se sabe quién es quién y acabarían juntadas en una sola ficha. */}
+          {r.sin_clave > 0 && (
+            <span className="text-amber-300"> · {r.sin_clave} filas sin teléfono ni DNI, no guardadas</span>
           )}
         </p>
       )}
       <div className="mt-3 flex gap-2">
-        <button onClick={enviar} disabled={yendo || texto.trim().length < 40}
+        <button onClick={enviar} disabled={yendo || texto.trim().length < 20}
           className="btn-primary inline-flex items-center gap-2 disabled:opacity-40">
           {yendo ? <Loader2 size={14} className="animate-spin" /> : <ClipboardPaste size={14} />} Leer
         </button>
