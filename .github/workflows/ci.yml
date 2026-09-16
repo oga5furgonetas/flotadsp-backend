@@ -57,6 +57,8 @@ jobs:
         run: node scripts/check-cola-extension.mjs
       - name: Interceptor (captura lo mismo y no abre lo que no ha cambiado)
         run: node scripts/check-interceptor-ahorro.mjs
+      - name: Todas las naves desde una pestana (y cada cosa con su nave)
+        run: node scripts/check-naves-barrido.mjs
       - name: Asociados (cada cuenta llega, sin perder a nadie ni repetir)
         run: node scripts/check-asociados.mjs
       - name: Mensajes de error (siempre texto, nunca un objeto que tumbe la pantalla)

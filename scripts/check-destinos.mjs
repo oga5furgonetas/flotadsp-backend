@@ -51,6 +51,7 @@ function linea(desde) {
 
 const codigo = [
   linea('const normSa ='),
+  trozo('const saDeUrlG =', '  /* Se arranca con el de la BARRA'),   // saDeUrlG + areasEmpresa + esAjena
   linea('const TBA_RE ='),
   trozo('const KEYS = {', '  const firstKey'),
   trozo('const firstKey =', '  const buildObs'),      // firstKey + pickTba + addrId + destGeo
@@ -64,6 +65,9 @@ const ctx = {
   saCenter: {},
   prefixCenter: {},
   stationInfo: () => ({ center: 'OGA5', code: 'XA' }),
+  // Como en la pagina: sin esto `saDeUrlG` no puede leer el area de la URL.
+  location: { origin: 'https://logistics.amazon.es', href: 'https://logistics.amazon.es/operations/execution' },
+  URL,
   post: () => {},
 }
 try {
@@ -212,6 +216,55 @@ if (!problemas.length) {
       problemas.push('un lastLocation raro se lleva por delante los destinos')
     }
   }
+}
+
+/* ── UNA RUTA DE OTRA NAVE NO PUEDE SALIR CON EL CENTRO DE LA PESTANA ─────
+   Desde el 16-09-2026 una sola pestaña barre todas las naves de la empresa.
+   La pagina enseña SU nave, y el parser tomaba de ella el centro y el codigo:
+   una ruta de DGA1 pedida desde la pestaña de OGA5 habria salido como OGA5,
+   hundiendo el DCR de OGA5 sin un error. Tampoco puede «aprender» de ella. */
+if (!problemas.length) {
+  const SA_OGA5 = '10ef2406-a250-45ce-8fa5-639099edff1a'
+  const SA_DGA1 = '2bf00778-6e51-40de-ad52-15c62e4892b9'
+  vm.runInContext(`areasEmpresa.set('${SA_OGA5}', 'OGA5'); areasEmpresa.set('${SA_DGA1}', 'DGA1');`, ctx)
+  ctx.saId = SA_OGA5                       // la pestaña esta en OGA5
+  ctx.saCenter = {}
+  ctx.prefixCenter = {}
+
+  // (a) la ruta trae su area dentro
+  const deDga1 = JSON.parse(JSON.stringify(RESPUESTA))
+  deDga1.rmsRouteDetails.serviceAreaId = SA_DGA1
+  let f1 = null
+  try { f1 = ctx.__extract(deDga1, `https://logistics.amazon.es/operations/execution/api/route-details/1?serviceAreaId=${SA_DGA1}`) }
+  catch (e) { problemas.push(`revienta con una ruta de otra nave: ${e.message}`) }
+  if (f1 && f1.length) {
+    const malas = f1.filter((p) => p.center !== 'DGA1' || p.service_area_id !== SA_DGA1)
+    if (malas.length) {
+      problemas.push(`una ruta de DGA1 pedida desde la pestaña de OGA5 sale como `
+        + `${malas[0].center}/${malas[0].service_area_id}: se contaria en la nave equivocada`)
+    }
+    if (f1.some((p) => p.station_code)) problemas.push('una ruta de otra nave se lleva el codigo de estacion de la pestaña')
+  } else if (!problemas.length) {
+    problemas.push('una ruta de otra nave no devuelve paquetes')
+  }
+  if (ctx.saCenter[SA_DGA1]) problemas.push(`la pestaña aprende que DGA1 es ${ctx.saCenter[SA_DGA1]}: el error se quedaria para todo el dia`)
+
+  // (b) la ruta NO trae su area: manda la de la peticion, nunca la de la pestaña
+  const sinArea = JSON.parse(JSON.stringify(RESPUESTA))
+  delete sinArea.rmsRouteDetails.serviceAreaId
+  let f2 = null
+  try { f2 = ctx.__extract(sinArea, `https://logistics.amazon.es/operations/execution/api/route-details/1?serviceAreaId=${SA_DGA1}`) }
+  catch (e) { problemas.push(`revienta con una ruta sin area: ${e.message}`) }
+  if (f2 && f2.some((p) => p.service_area_id !== SA_DGA1 || p.center !== 'DGA1')) {
+    problemas.push('una ruta sin area dentro coge la de la pestaña en vez de la de su peticion')
+  }
+
+  // (c) y la de la propia nave sigue como siempre
+  let f3 = null
+  try { f3 = ctx.__extract(RESPUESTA, `https://logistics.amazon.es/operations/execution/api/route-details/1?serviceAreaId=${SA_OGA5}`) }
+  catch (e) { problemas.push(`revienta con la ruta de la propia nave: ${e.message}`) }
+  if (!f3 || f3.some((p) => p.center !== 'OGA5')) problemas.push('la ruta de la propia nave ya no sale con su centro')
+  ctx.saId = null
 }
 
 if (problemas.length) {

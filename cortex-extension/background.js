@@ -528,7 +528,11 @@ async function navesDeLaEmpresa() {
     const j = await r.json().catch(() => null);
     const lista = (j && Array.isArray(j.naves) ? j.naves : []).filter(Boolean).slice(0, 12);
     if (lista.length) {
-      await chrome.storage.local.set({ naves: lista, navesEn: Date.now() });
+      /* Y el area de Amazon de cada una: la pestana de Cortex la lee de aqui
+         (por el puente) para barrer todas las naves, no solo la que se ve. */
+      const areas = (j && Array.isArray(j.areas) ? j.areas : []).slice(0, 12);
+      await chrome.storage.local.set({ naves: lista, navesEn: Date.now(),
+                                       areasCortex: areas, areasCortexEn: Date.now() });
       return lista;
     }
   } catch (_) { /* sin lista se sigue con la nave de la pantalla, como antes */ }
@@ -1233,6 +1237,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
      `chrome.storage.local` (ver bridge.js: pedirla con respuesta fallaba 4 de 4
      en Chrome). Si aun no esta, pide esto y el siguiente intento ya la tiene.
      No se contesta nada, a proposito. */
+  /* LAS AREAS DE LAS NAVES: que las traiga. El puente las lee del almacen; si
+     faltan o son viejas, pide esto (sin esperar respuesta, igual que con la
+     lista de Asociados: esperar respuesta desde una pestana fallaba en Chrome). */
+  if (msg?.type === 'areasRefrescar') {
+    chrome.storage.local.set({ navesEn: 0 }).then(() => navesDeLaEmpresa()).catch(() => {});
+    return false;
+  }
   if (msg?.type === 'seguidosRefrescar') {
     aQuienSeguimos().catch(() => {});
     return false;

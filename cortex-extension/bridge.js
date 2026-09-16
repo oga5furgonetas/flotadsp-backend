@@ -67,6 +67,22 @@ if (!window.__flotadspBridge) {
       chrome.runtime.sendMessage({ type: 'informeAprendido', estados: d.estados, descartados: d.descartados, plantilla: d.plantilla, sa: d.sa });
     /* Los correos de nuestra gente, de vuelta hacia la pagina. Mismo camino
        que `informe_pedir`: `__flotadspIn` para no confundirlo con la ida. */
+    } else if (d.kind === 'areas_pedir') {
+      /* LAS AREAS DE LAS NAVES, para que la pestana de Cortex barra todas. Se
+         leen del almacen (las guarda el service worker con `/cortex/naves`);
+         si faltan o tienen mas de 6 h, se le pide que las traiga para la
+         siguiente vuelta. */
+      try {
+        chrome.storage.local.get({ areasCortex: [], areasCortexEn: 0 }).then(({ areasCortex, areasCortexEn }) => {
+          const areas = Array.isArray(areasCortex) ? areasCortex.slice(0, 12) : [];
+          if (areas.length) {
+            window.postMessage({ __flotadspIn: true, kind: 'areas_cortex', areas }, '*');
+          }
+          if (!areas.length || Date.now() - (areasCortexEn || 0) > 6 * 3600 * 1000) {
+            try { chrome.runtime.sendMessage({ type: 'areasRefrescar' }); } catch (_) {}
+          }
+        }).catch(() => {});
+      } catch (_) {}
     } else if (d.kind === 'seguidos_pedir') {
       /* SE LEE DEL ALMACEN, SIN PEDIRSELO AL SERVICE WORKER.
          Primero se pedia con `sendMessage` y respuesta. Medido el 16-09-2026

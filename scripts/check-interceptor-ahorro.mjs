@@ -178,7 +178,9 @@ const paquetesDe = (mensajes) => mensajes
 /* ── 5. Los frenos siguen puestos (que nadie los suba sin querer) ───────── */
 {
   const pausa = Number((fuente.match(/const PAUSA_ENTRE = (\d+)/) || [])[1] || 0)
-  const tope = Number((fuente.match(/acotar\(rutaGets, (\d+)\)/) || [])[1] || 0)
+  // Tope POR NAVE: con varias naves barridas desde una pestana se multiplica por
+  // cuantas hay, pero cada una sigue sin poder acumular dias.
+  const tope = Number((fuente.match(/acotar\(rutaGets, (\d+)(?: \* \(1 \+ areasEmpresa\.size\))?\)/) || [])[1] || 0)
   ok(pausa >= 20000, `PAUSA_ENTRE en ${pausa} ms: por debajo de 20 s el barrido encadena sin respirar`)
   ok(tope > 0 && tope <= 200, `el tope de rutas (${tope}) vuelve a acumular días`)
   ok(/rutaGets\.clear\(\)/.test(fuente), 'falta el olvido al cambiar de día: la lista crece sin fin')

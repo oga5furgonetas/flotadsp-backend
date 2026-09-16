@@ -16,7 +16,7 @@
      inyectado en la pestaña y NO se recarga hasta que alguien pulsa F5 en
      Cortex. Sin decirlo, el panel enseñaba una version y corria otra — y con
      eso di por instaladas tres versiones seguidas que no estaban corriendo. */
-  const VERSION_INTERCEPTOR = '2.55.0';
+  const VERSION_INTERCEPTOR = '2.56.0';
   const beat = () => post({ kind: 'heartbeat', url: location.href, v: VERSION_INTERCEPTOR });
   beat();
   setInterval(beat, 25000);
@@ -284,6 +284,55 @@
     return u ? syntheticFetch(u) : Promise.resolve();
   };
 
+  /* Los resumenes de las OTRAS naves: la misma peticion que hace la pagina,
+     cambiando solo el area (asi van la fecha y los parametros de verdad). Sin
+     saber aun cual es la nave de esta pestana no se pide nada: no habria forma
+     de distinguir lo nuestro de lo ajeno. */
+  const pedirResumenesOtrasNaves = async () => {
+    if (!saId || !areasEmpresa.size) return;
+    const base = urlResumen || urlResumenFallback();
+    if (!base) return;
+    const pedidas = [];
+    for (const sa of areasEmpresa.keys()) {
+      if (sa === saId) continue;
+      try {
+        const u = new URL(base, location.origin);
+        u.searchParams.set('serviceAreaId', sa);
+        rutasPorArea.set(sa, 0);
+        pedidas.push(Promise.resolve(syntheticFetch(u.href)).catch(() => {}));
+      } catch (_) {}
+    }
+    await Promise.all(pedidas);
+    /* QUE DIGA CUANTAS RUTAS HA ENCONTRADO EN CADA NAVE. Un 0 es la señal de
+       que Amazon no deja ver esa nave desde esta cuenta, o de que hoy no hay
+       reparto: las dos cosas hay que verlas, no suponerlas. */
+    const partes = [];
+    for (const [sa, centro] of areasEmpresa) {
+      partes.push(centro + (sa === saId ? ' (esta pestaña)' : '') + ': ' + (rutasPorArea.get(sa) || 0) + ' rutas');
+    }
+    post({ kind: 'debug', which: 'naves-barrido', url: partes.join(' · ').slice(0, 250),
+           count: areasEmpresa.size, bytes: 0 });
+  };
+
+  /* La lista de areas la guarda el service worker; se lee por el puente. */
+  window.addEventListener('message', (ev) => {
+    if (ev.source !== window) return;
+    const d = ev.data;
+    if (!d || d.__flotadspIn !== true || d.kind !== 'areas_cortex') return;
+    // Llega por postMessage, que cualquier script de la pagina puede imitar:
+    // solo se aceptan ids con forma de area y codigos con forma de nave.
+    for (const a of (Array.isArray(d.areas) ? d.areas : []).slice(0, 12)) {
+      const sa = normSa(a && a.sa);
+      const centro = String((a && a.centro) || '').trim().toUpperCase();
+      if (sa && /^[0-9a-f-]{20,40}$/.test(sa) && /^[A-Z0-9]{2,8}$/.test(centro)) {
+        areasEmpresa.set(sa, centro);
+      }
+    }
+  });
+  const pedirAreas = () => {
+    try { window.postMessage({ __flotadsp: true, kind: 'areas_pedir' }, '*'); } catch (_) {}
+  };
+
   const rememberGet = (url, method) => {
     if ((method || 'GET').toUpperCase() !== 'GET') return;
     let abs;
@@ -506,6 +555,10 @@
       // El resumen SOLO descubre rutas nuevas: no trae entregas. En las vueltas
       // rapidas se salta, que es donde se gana el tiempo que importa.
       if (conExtras) { try { await pedirResumen(); } catch (_) {} }
+      if (conExtras) {
+        pedirAreas();
+        try { await pedirResumenesOtrasNaves(); } catch (_) {}
+      }
 
       /* CUANTO TARDA UNA VUELTA, dicho por quien la da. Hasta hoy se medi­a
          «cada cuanto lo pido» (que salia bien) y no «cuanto tardo en dar la
@@ -541,6 +594,32 @@
      la misma: dos casillas que marcar, el mapeo de centro duplicado y la mitad
      de los paquetes sin centro. Una sola forma y se acabó el problema. */
   const normSa = (s) => (typeof s === 'string' && s.trim() ? s.trim().toLowerCase() : null);
+  const saDeUrlG = (u) => {
+    try { return normSa(new URL(u, location.origin).searchParams.get('serviceAreaId')); }
+    catch (_) { return null; }
+  };
+
+  /* LAS OTRAS NAVES DE LA EMPRESA, BARRIDAS DESDE ESTA PESTANA.
+     ─────────────────────────────────────────────────────────────────────
+     El barrido solo miraba la nave de la barra de direcciones. Medido el
+     16-09-2026: OGA5 con paquetes de hoy, DGA1 sin NADA desde el 27-08 y DGA2
+     desde el 11-08 — entraban solo mientras alguien las tenia abiertas en su
+     equipo. Una nave nueva habria estado igual: vacia hasta que alguien
+     dejara una pestana de Cortex abierta en ella, para siempre.
+     Ahora el backend dice que area de Amazon es cada nave (`cortex_stations`,
+     el mapeo que ya se usa para etiquetar) y se piden tambien sus rutas.
+     Una nave que Cortex no haya enseñado nunca no esta en esa lista: basta con
+     abrirla UNA vez para que quede aprendida.
+
+     LO PELIGROSO NO ES PEDIRLAS, ES ETIQUETARLAS. Cinco sitios usaban el area
+     o el centro DE LA PESTANA, y con rutas de otra nave cada uno corrompia
+     algo en silencio: los paquetes de DGA1 saldrian como OGA5 (hundiendo su
+     DCR), el resumen de DGA1 pisaria el de OGA5 de ese dia, y la pestana
+     «aprenderia» que su nave es DGA1. Todo lo de otra area se etiqueta con SU
+     area y SU centro, o con nada. */
+  const areasEmpresa = new Map();      // serviceAreaId -> centro
+  const esAjena = (sa) => !!(sa && saId && sa !== saId);
+  const rutasPorArea = new Map();      // para el aviso: cuantas rutas por nave
   /* Se arranca con el de la BARRA DE DIRECCIONES. Si sólo se aprendiera de las
      peticiones, una pestaña recién abierta se queda sin estación hasta que pase
      una, y hasta entonces no se puede pedir el informe de direcciones — que es
@@ -624,21 +703,24 @@
     diaDeLaLista = hoy;
   };
 
-  const harvestRoutes = (summaryJson) => {
+  const harvestRoutes = (summaryJson, saPeticion) => {
     olvidarSiCambioElDia();
     const { ids, sa } = collectRoutes(summaryJson);
-    if (sa && !saId) saId = normSa(sa);
+    if (sa && !saId && !saPeticion) saId = normSa(sa);
+    // Cada ruta se pide con el area de la nave a la que pertenece.
+    const saRuta = saPeticion || saId;
+    if (saRuta) rutasPorArea.set(saRuta, ids.length);
     let i = 0, nuevos = 0;
     for (const id of ids) {
       if (fetchedRoutes.has(id)) continue;
       fetchedRoutes.add(id);
       nuevos++;
       const url = `${location.origin}/operations/execution/api/route-details/${id}`
-        + `?historicalDay=${histParam}&routeId=${id}${saId ? `&serviceAreaId=${saId}` : ''}`;
+        + `?historicalDay=${histParam}&routeId=${id}${saRuta ? `&serviceAreaId=${saRuta}` : ''}`;
       rutaGets.add(url); // una ruta no puede caerse del barrido...
       // ...pero 150 ya son el triple del dia mas cargado que hemos visto (62 el
       // 26-08). Antes eran 400 —ocho dias— y ese era justo el problema.
-      acotar(rutaGets, 150);
+      acotar(rutaGets, 150 * (1 + areasEmpresa.size));   // 150 por nave
       setTimeout(() => syntheticFetch(url), (i++) * 1500); // 1 ruta cada 1,5 s
     }
     if (nuevos) {
@@ -1310,7 +1392,7 @@
            count: params.length, bytes: 0 });
   };
 
-  const extractRouteDetails = (json) => {
+  const extractRouteDetails = (json, urlPeticion) => {
     /* LA RESPUESTA TIENE DOS NIVELES Y LO BUENO ESTA EN EL DE ARRIBA.
        ─────────────────────────────────────────────────────────────────────
        `route-details` devuelve:
@@ -1343,15 +1425,25 @@
     if (!root || !Array.isArray(root.stops)) return null;
     const routeCode = root.routeCode || null;
     const routeId = root.routeId || null;
-    const said = normSa(root.serviceAreaId) || saId || null;
+    const said = normSa(root.serviceAreaId) || saDeUrlG(urlPeticion) || saId || null;
     const info = stationInfo();
-    const pageCenter = info.center;
     const prefix = routePrefix(routeCode);
-    if (said && pageCenter && !saCenter[said]) saCenter[said] = pageCenter; // 1ª vez = navegación real
-    if (prefix && pageCenter && !prefixCenter[prefix]) prefixCenter[prefix] = pageCenter;
-    // Prioridad: mapa por estación (duro) → página → mapa por prefijo de ruta.
-    const center = (said && saCenter[said]) || pageCenter || (prefix && prefixCenter[prefix]) || null;
-    const stationCode = info.code || null;
+    let center, stationCode;
+    if (esAjena(said)) {
+      /* Ruta de OTRA nave pedida desde esta pestana: la pagina enseña la suya,
+         asi que ni su centro ni su codigo valen aqui, y tampoco se aprende nada
+         de ella. Sin centro conocido va sin centro: el backend lo resuelve con
+         el mapeo de `cortex_stations`, que es de donde salio esta area. */
+      center = areasEmpresa.get(said) || null;
+      stationCode = null;
+    } else {
+      const pageCenter = info.center;
+      if (said && pageCenter && !saCenter[said]) saCenter[said] = pageCenter; // 1ª vez = navegación real
+      if (prefix && pageCenter && !prefixCenter[prefix]) prefixCenter[prefix] = pageCenter;
+      // Prioridad: mapa por estación (duro) → página → mapa por prefijo de ruta.
+      center = (said && saCenter[said]) || pageCenter || (prefix && prefixCenter[prefix]) || null;
+      stationCode = info.code || null;
+    }
     /* DONDE ESTA CADA CONDUCTOR AHORA MISMO.
        ─────────────────────────────────────────────────────────────────────
        Es lo que le falta al que va a ayudar: hasta hoy se le mandaba «donde
@@ -1514,12 +1606,13 @@
       };
       const isSummary = /route-summaries/i.test(url);
       const isDetails = /route-details/i.test(url);
-      if (isDetails) learnTemplate(url);
+      const ajenaEsta = esAjena(saDeUrlG(url));
+      if (isDetails && !ajenaEsta) learnTemplate(url);
       /* Guardar la URL REAL del resumen para poder volver a pedirla en cada
          barrido. Se toma la que hace la página, con sus parámetros tal cual:
          construirla a mano significaría adivinar el serviceAreaId y la fecha,
          y una URL mal montada devuelve vacío sin avisar. */
-      if (isSummary) { try { urlResumen = new URL(url, location.origin).href } catch (_) {} }
+      if (isSummary && !ajenaEsta) { try { urlResumen = new URL(url, location.origin).href } catch (_) {} }
       // La petición REAL del informe manda sobre la que construimos nosotros.
       if (/packagesByStatus/i.test(url)) { learnTemplate(url); aprenderInforme(url); }
       /* EL BUSCADOR VA ANTES DEL FILTRO, y esto era el fallo de mi
@@ -1581,7 +1674,7 @@
           }
           if (datos.length) {
             post({ kind: 'posiciones_vivas', url: url.slice(0, 160),
-                   dia: serviceDay(), sa: saId, datos });
+                   dia: serviceDay(), sa: saDeUrlG(url) || saId, datos });
           } else if (!schemaLocSent) {
             // Ni una: se manda el ESQUEMA (nombres, no valores) para saber que leer.
             schemaLocSent = true;
@@ -1595,7 +1688,7 @@
       if (!marked && !isSummary && !RELEVANT_URL.test(url)) return;
       const parsed = comoObjeto();
       // De route-summaries sacamos TODAS las rutas del día y pedimos su detalle.
-      if (parsed && isSummary) harvestRoutes(parsed);
+      if (parsed && isSummary) harvestRoutes(parsed, saDeUrlG(url));
 
       /* ── LOS CONTADORES DEL PROPIO CORTEX ─────────────────────────────────
          `route-summaries` trae `rmsRouteSummaries` y `transporterPackageSummaries`:
@@ -1668,13 +1761,13 @@
 
           if (rutas.length || gente.length || cuentas.length) {
             post({ kind: 'resumen_cortex', url: url.slice(0, 160),
-                   dia: serviceDay(), sa: saId,
+                   dia: serviceDay(), sa: saDeUrlG(url) || saId,
                    datos: { rutas, gente, cuentas } });
           }
         } catch (_) {}
       }
       let packages = [];
-      if (parsed && (marked || isDetails)) packages = extractRouteDetails(parsed) || extract(parsed);
+      if (parsed && (marked || isDetails)) packages = extractRouteDetails(parsed, url) || extract(parsed);
 
       /* ── ADOPTAR LOS PAQUETES DEL INFORME DE FALTAS ──────────────────────
          `packagesByStatus` es el ÚNICO sitio de Cortex que da la DIRECCIÓN de

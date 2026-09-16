@@ -37059,7 +37059,24 @@ async def cortex_naves(request: Request):
     puerta nueva y lo unico que devuelve son tres codigos de nave.
     """
     _cortex_ingest_org(request)
-    return {"naves": await _centros_de_la_empresa()}
+    naves = await _centros_de_la_empresa()
+    # EL AREA DE AMAZON DE CADA NAVE, para que una sola pestana de Cortex las
+    # barra todas. Sale de `cortex_stations`, el mismo mapeo con el que ya se
+    # etiqueta cada paquete, asi que no se inventa ninguna: una nave que Cortex
+    # no haya enseñado nunca no tiene area aqui hasta que alguien la abra una
+    # vez. Medido el 16-09-2026: DGA1 sin paquetes desde el 27-08 y DGA2 desde
+    # el 11-08, porque solo entraba la nave que hubiera abierta en pantalla.
+    areas = []
+    try:
+        async for st in db.cortex_stations.find(
+                {"service_area_id": {"$type": "string"}, "center": {"$in": naves}},
+                {"_id": 0, "service_area_id": 1, "center": 1}):
+            sa = str(st.get("service_area_id") or "").strip().lower()
+            if sa:
+                areas.append({"sa": sa, "centro": st["center"]})
+    except Exception:
+        areas = []
+    return {"naves": naves, "areas": areas[:12]}
 
 
 @api_router.post("/cortex/ingest-informe")
