@@ -8205,14 +8205,21 @@ async def corregir_estados_vehiculo(data: dict = Body(...), user: dict = Depends
         hechos.append({"matricula": h["matricula"], "accion": "fecha de entrada puesta",
                        "taller_desde": str(fecha)[:10], "dias": h.get("dias_estimados")})
 
-    # VERIFICAR: el hallazgo tiene que haber desaparecido.
+    # VERIFICAR: los hallazgos TOCADOS tienen que haber desaparecido. Los que
+    # no se pidio tocar (`vehiculos`) no cuentan: antes, corregir dos de cuatro
+    # respondia «verificado: false» aunque los dos hubieran salido bien.
     despues = await _est_hallazgos()
-    quedan = sum(1 for h in despues["hallazgos"]
-                 if h["problema"] in ("taller_sin_fecha", "taller_circulando")
-                 and h["clase"] == "SAFE_TO_AUTOCORRECT")
-    logger.info("Estados de vehiculo: %d corregidos, quedan %d seguros", len(hechos), quedan)
+    tocados = {h["vehicle_id"] for h in seguros}
+    siguen = [h for h in despues["hallazgos"]
+              if h["problema"] in ("taller_sin_fecha", "taller_circulando")
+              and h["clase"] == "SAFE_TO_AUTOCORRECT"]
+    quedan = sum(1 for h in siguen if h["vehicle_id"] not in tocados)
+    fallidos = [h["matricula"] for h in siguen if h["vehicle_id"] in tocados]
+    logger.info("Estados de vehiculo: %d corregidos, quedan %d seguros sin tocar",
+                len(hechos), quedan)
     return {"corregidos": len(hechos), "detalle": hechos,
-            "quedan_sin_fecha": quedan, "verificado": quedan == 0}
+            "quedan_sin_fecha": quedan, "no_se_corrigieron": fallidos,
+            "verificado": not fallidos}
 
 
 @api_router.get("/vehicles/last-inspections")
@@ -45181,25 +45188,35 @@ async def cortex_days(center: str = "", _=Depends(require_admin)):
     nada, no vuelve a degradarse según crezca la colección.
     """
     q = await _cortex_scope("", center)
-    cur = db.cortex_packages.aggregate([
-        {"$match": q},
-        # El día bueno es `service_day`; si falta, la fecha de captura. Se
-        # normaliza aquí para que el $group no tenga que decidir nada.
-        {"$project": {"d": {"$cond": [
-            {"$and": [{"$ne": ["$service_day", None]}, {"$ne": ["$service_day", ""]}]},
-            "$service_day",
-            {"$substr": [{"$ifNull": [{"$toString": "$updated_at"}, ""]}, 0, 10]},
-        ]}}},
-        {"$match": {"d": {"$nin": [None, ""]}}},
-        {"$group": {"_id": "$d", "n": {"$sum": 1}}},
+    # POR EL INDICE DE `service_day`. Normalizar el dia con $cond/$substr
+    # obligaba a recorrer los 358.000 paquetes en cada llamada: 1,5 s medidos
+    # el 16-09-2026, y el dashboard lo pide cada minuto. Agrupando directamente
+    # por `service_day` son 0,27 s. Los que no lo tengan (hoy ninguno) se
+    # cuentan aparte por su fecha de captura, solo si existen.
+    cuenta = {}
+    async for r in db.cortex_packages.aggregate([
+        {"$match": {"$and": [q, {"service_day": {"$gt": ""}}]} if q else {"service_day": {"$gt": ""}}},
+        {"$group": {"_id": "$service_day", "n": {"$sum": 1}}},
         {"$sort": {"_id": -1}},
         # Un selector de días no necesita más de medio año; el resto sería
         # peso muerto en cada carga del panel.
         {"$limit": 180},
-    ], allowDiskUse=True)
-    # `.get()` siempre: $group omite la clave _id cuando el campo no existe
-    # (gotcha 9), y un KeyError aquí tumbaría el selector entero.
-    days = [{"day": r.get("_id"), "n": r.get("n", 0)} async for r in cur if r.get("_id")]
+    ], allowDiskUse=True):
+        # `.get()` siempre: $group omite la clave _id cuando el campo no existe
+        # (gotcha 9), y un KeyError aquí tumbaría el selector entero.
+        if r.get("_id"):
+            cuenta[r["_id"]] = cuenta.get(r["_id"], 0) + r.get("n", 0)
+    sin_dia = {"$or": [{"service_day": None}, {"service_day": ""}]}
+    if await db.cortex_packages.find_one({"$and": [q, sin_dia]} if q else sin_dia, {"_id": 1}):
+        async for r in db.cortex_packages.aggregate([
+            {"$match": {"$and": [q, sin_dia]} if q else sin_dia},
+            {"$project": {"d": {"$substr": [{"$ifNull": [{"$toString": "$updated_at"}, ""]}, 0, 10]}}},
+            {"$match": {"d": {"$nin": [None, ""]}}},
+            {"$group": {"_id": "$d", "n": {"$sum": 1}}},
+        ], allowDiskUse=True):
+            if r.get("_id"):
+                cuenta[r["_id"]] = cuenta.get(r["_id"], 0) + r.get("n", 0)
+    days = [{"day": d, "n": n} for d, n in sorted(cuenta.items(), reverse=True)[:180]]
     return {"days": days, "today": datetime.now(timezone.utc).strftime("%Y-%m-%d")}
 
 
