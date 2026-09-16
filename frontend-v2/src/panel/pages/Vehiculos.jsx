@@ -2979,7 +2979,7 @@ export default function Vehiculos() {
             hint={t('empty.veh.hint')}
             actionLabel={`+ ${t('empty.veh.add')}`}
             onAction={() => setAddOpen(true)}
-            secondary={{ to: '/panel/importaciones', label: t('empty.veh.import') }}
+            secondary={{ to: '/panel/importaciones?t=furgonetas', label: t('empty.veh.import') }}
           />
         ) : (
           <div className="card flex flex-col items-center gap-2 p-10 text-center text-dark-400">

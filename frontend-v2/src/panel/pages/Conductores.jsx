@@ -1203,10 +1203,16 @@ export default function Conductores() {
   }
   useEffect(() => { setDrivers(null); setModal(null); load() }, [center]) // eslint-disable-line
 
-  const list = useMemo(() => (drivers || [])
-    .filter(d => !q || [d.name, d.email, d.center].some(v => (v || '').toLowerCase().includes(q.toLowerCase())))
-    .sort((a, b) => (a.name || '').localeCompare(b.name || '')),
-  [drivers, q])
+  // Se busca también por Transporter ID y teléfono (es lo que se copia de
+  // Cortex) y sin tildes: «nunez» encuentra a «NÚÑEZ».
+  const list = useMemo(() => {
+    const plano = (v) => String(v || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    const b = plano(q).trim()
+    return (drivers || [])
+      .filter(d => !b || [d.name, d.email, d.center, d.driver_id, d.transporter_id, d.phone]
+        .some(v => plano(v).includes(b)))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'es', { sensitivity: 'base' }))
+  }, [drivers, q])
 
   async function handleSave(id, data) {
     if (id) {
@@ -1313,14 +1319,28 @@ Cancelar: es otra persona, crear una ficha nueva.`)) {
       {tab === 'directorio' && (
         !drivers
           ? <div className="flex items-center gap-2 py-16 text-dark-400"><Loader2 size={18} className="animate-spin" /> {t('ui.loading')}</div>
+          : list.length === 0 && q && drivers.length > 0
+            ? <div className="rounded-2xl border border-dashed border-dark-700 py-12 text-center">
+                <p className="font-medium text-dark-300">Nadie coincide con «{q}»</p>
+                <p className="mt-1 text-sm text-dark-500">Se busca por nombre, correo, nave, Transporter ID y teléfono.</p>
+                <button onClick={() => setQ('')} className="btn-ghost mt-4 px-3 py-1.5 text-sm">Borrar búsqueda</button>
+              </div>
           : list.length === 0
-            ? <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-dark-700 py-24 text-center">
-                <UserCheck size={48} className="mb-4 text-dark-700" />
-                <p className="font-medium text-dark-400">{t('drv.empty')}{center !== 'Todos' ? ` en ${center}` : ''}</p>
-                <p className="mt-1 text-sm text-dark-600">{t('drv.add')}</p>
-                <button onClick={() => setModal({ driver: null })} className="mt-5 flex items-center gap-1.5 rounded-lg bg-brand-500/15 px-4 py-2 text-sm font-semibold text-brand-300 hover:bg-brand-500/25">
-                  <Plus size={14} /> {t('drv.add')}
-                </button>
+            ? <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-dark-700 px-6 py-20 text-center">
+                <UserCheck size={44} className="mb-4 text-dark-600" />
+                <p className="text-base font-semibold text-dark-100">{t('drv.empty')}{center !== 'Todos' ? ` en ${center}` : ''}</p>
+                <p className="mt-1.5 max-w-md text-sm leading-relaxed text-dark-400">
+                  Trae tu lista de Excel o la de Amazon: se reconoce cada columna, eliges la nave y
+                  cada conductor recibe su acceso al portal para hacer las auditorías desde el móvil.
+                </p>
+                <div className="mt-5 flex flex-wrap items-center justify-center gap-2">
+                  <button onClick={() => setVerImportar(true)} className="btn-primary flex items-center gap-1.5 px-4 py-2 text-sm">
+                    <FileSpreadsheet size={14} /> {t('drv.importar')}
+                  </button>
+                  <button onClick={() => setModal({ driver: null })} className="btn-ghost flex items-center gap-1.5 px-4 py-2 text-sm">
+                    <Plus size={14} /> {t('drv.add')}
+                  </button>
+                </div>
               </div>
             : <>
                 <AvisoAccesos list={list} accounts={accounts} onHecho={load} />

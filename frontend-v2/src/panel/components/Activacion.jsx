@@ -62,10 +62,10 @@ function Paso({ icon: Icon, n, titulo, hint, hecho, resumen, cta, to, cta2, to2,
    algo, la accion concreta con su enlace. Lo recomendado se ve, pero no deja
    la guia abierta. */
 const PASO_NAVE = {
-  vehiculos:   { tit: 'ob.n.vehiculos',   falta: 'ob.n.falta.vehiculos',   to: '/panel/importaciones' },
-  conductores: { tit: 'ob.n.conductores', falta: 'ob.n.falta.conductores', to: '/panel/conductores' },
+  vehiculos:   { tit: 'ob.n.vehiculos',   falta: 'ob.n.falta.vehiculos',   to: '/panel/importaciones?t=furgonetas' },
+  conductores: { tit: 'ob.n.conductores', falta: 'ob.n.falta.conductores', to: '/panel/importaciones?t=conductores' },
   cortex:      { tit: 'ob.n.cortex',      falta: 'ob.n.cortex.instalar',   to: '/panel/paquetes' },
-  objetivos:   { tit: 'ob.n.objetivos',   falta: 'ob.n.falta.objetivos',   to: '/panel/scorecard' },
+  objetivos:   { tit: 'ob.n.objetivos',   falta: 'ob.n.falta.objetivos',   to: '/panel/scorecard?t=subir' },
   talleres:    { tit: 'ob.n.talleres',    falta: 'ob.n.falta.talleres',    to: '/panel/talleres' },
   turnos:      { tit: 'ob.n.turnos',      falta: 'ob.n.falta.turnos',      to: '/panel/turnos' },
 }
@@ -182,12 +182,15 @@ export default function Activacion() {
         <Paso icon={Upload} n="1" hecho={v.hecho}
           titulo={t('ob.v.tit')} hint={t('ob.v.hint')}
           resumen={cuenta(v.n, 'ob.v.ok')}
-          cta={t('ob.v.cta')} to="/panel/importaciones"
+          cta={t('ob.v.cta')} to="/panel/importaciones?t=furgonetas"
           cta2={t('ob.v.cta2')} to2="/panel/vehiculos" />
         <Paso icon={Users} n="2" hecho={c.hecho}
           titulo={t('ob.c.tit')} hint={t('ob.c.hint')}
           resumen={cuenta(c.n, 'ob.c.ok')}
-          cta={t('ob.c.cta')} to="/panel/conductores" />
+          // Al asistente de importar, que lee el Excel y deja elegir la nave;
+          // el alta a mano sigue a un clic.
+          cta={t('ob.c.cta')} to="/panel/importaciones?t=conductores"
+          cta2={t('ob.c.cta2')} to2="/panel/conductores" />
         <Paso icon={Camera} n="3" hecho={i.hecho}
           titulo={t('ob.i.tit')} hint={t('ob.i.hint')}
           resumen={cuenta(i.n, 'ob.i.ok')}
