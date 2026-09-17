@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useOutletContext, Link } from 'react-router-dom'
 import { useT } from '../../i18n'
+import { verMatricula } from '../../lib/matricula'
 import { Sun, Camera, AlertTriangle, ClipboardCheck, BellRing, CheckCircle2, ChevronRight } from 'lucide-react'
 import { getDailyAssignment, getInspections, getIncidents, getItvAlerts } from '../api'
 import { PageSkeleton } from '../components/Skeleton'
@@ -89,7 +90,8 @@ export default function MiDia() {
           {defaulted && <span className="ml-2 normal-case tracking-normal text-dark-500">· {t('midia.default.center')}</span>}
         </p>
         <h1 className="mt-2 font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('midia.title')}</h1>
-        <p className="mt-3 text-[13.5px] capitalize text-dark-500">{new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+        {/* Solo la primera letra en mayúscula: `capitalize` ponía «17 De Septiembre». */}
+        <p className="mt-3 text-[13.5px] text-dark-500">{(() => { const f = new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }); return f.charAt(0).toUpperCase() + f.slice(1) })()}</p>
       </header>
 
       {allClear && (
@@ -144,9 +146,9 @@ export default function MiDia() {
           <div className="flex flex-wrap gap-2">
             {itvSoon.slice(0, 8).map((a, i) => (
               <span key={i} className={`rounded-full px-2.5 py-1 text-xs font-mono ${a.days_left < 0 ? 'bg-red-500/20 text-red-200' : 'bg-black/25'}`}>
-                {a.license_plate || a.vehicle_plate} · {a.days_left < 0
+                {verMatricula(a.license_plate || a.vehicle_plate)} · {a.days_left < 0
                   ? t('midia.itv.expired.chip').replace('{n}', -a.days_left)
-                  : `${a.days_left}d`}
+                  : a.days_left === 0 ? 'vence hoy' : a.days_left === 1 ? 'vence mañana' : `en ${a.days_left} días`}
               </span>
             ))}
           </div>
