@@ -734,7 +734,12 @@ function ScoringView({ center }) {
     return filtered
   }, [data, activeCtr])
 
-  const ranked   = scores.filter(s => !s.insufficient)
+  // Los que optan al premio van PRIMERO en la clasificación: con la misma
+  // nota, alguien con tres días salía #2 por delante de quien trabajó el mes
+  // entero. Dentro de cada grupo se respeta el orden del servidor.
+  const conDatos = scores.filter(s => !s.insufficient)
+  const ranked   = [...conDatos.filter(s => s.prize_eligible !== false),
+                    ...conDatos.filter(s => s.prize_eligible === false)]
   const unranked = scores.filter(s => s.insufficient)
   // El PODIO solo admite elegibles para el premio (≥35% de días asignados):
   // nadie gana el mes con 3 días buenos. La lista completa muestra a todos.
