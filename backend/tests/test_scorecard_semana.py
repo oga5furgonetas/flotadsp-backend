@@ -51,3 +51,18 @@ def test_emparejar_mira_los_dos_campos_del_id():
     assert src.count('"transporter_id": {"$in": list(ids)}') == 1
     assert "_cx_nombres_resumen" in src
     assert "_cx_nombres_resumen" in _fuente("_cx_nombres")
+
+
+def test_la_ficha_casa_por_cualquiera_de_sus_dos_ids():
+    ns = {}
+    for n in _ARBOL.body:
+        if getattr(n, "name", None) == "_clave_ficha_en":
+            exec(compile(ast.Module([n], []), "server.py", "exec"), ns)  # noqa: S102
+    clave = ns["_clave_ficha_en"]
+    ids = {"A1B2C3", "uuid-9"}
+    assert clave({"id": "x", "transporter_id": "A1B2C3"}, ids) == "A1B2C3"
+    assert clave({"id": "x", "driver_id": " A1B2C3 "}, ids) == "A1B2C3"
+    assert clave({"id": "uuid-9", "driver_id": "OTRO"}, ids) == "uuid-9"
+    # Las dos consultas que antes miraban un solo campo, ahora miran los dos.
+    assert '{"driver_id": {"$in": tids}}' in _TEXTO
+    assert '{"driver_id": {"$in": list(ids)}}' in _TEXTO

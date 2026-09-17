@@ -18215,10 +18215,13 @@ async def _apoyo_personas(ids: set, dia: Optional[str] = None, gente: Optional[d
     # Ficha por id. Ante DUPLICADOS de la misma clave (gotcha 15), preferir la
     # que tenga telefono; nombre y telefono se toman SIEMPRE del mismo documento.
     fichas: dict = {}
-    cur = db.drivers.find({"active": True, "$or": [{"transporter_id": {"$in": list(ids)}}, {"id": {"$in": list(ids)}}]},
-                          {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1})
+    # El ID de Amazon vive en DOS campos de la ficha (ver _cx_nombres).
+    cur = db.drivers.find({"active": True, "$or": [{"transporter_id": {"$in": list(ids)}},
+                                                   {"driver_id": {"$in": list(ids)}},
+                                                   {"id": {"$in": list(ids)}}]},
+                          {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1, "driver_id": 1})
     async for d in cur:
-        clave = d.get("transporter_id") if d.get("transporter_id") in ids else d["id"]
+        clave = _clave_ficha_en(d, ids)
         prev = fichas.get(clave)
         if prev is None or (not str(prev.get("phone") or "").strip() and str(d.get("phone") or "").strip()):
             fichas[clave] = d
@@ -18232,10 +18235,11 @@ async def _apoyo_personas(ids: set, dia: Optional[str] = None, gente: Optional[d
     faltan = [i for i in ids if i not in fichas]
     if faltan:
         cur = db.drivers.find({"active": {"$ne": True},
-                               "$or": [{"transporter_id": {"$in": faltan}}, {"id": {"$in": faltan}}]},
-                              {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1})
+                               "$or": [{"transporter_id": {"$in": faltan}}, {"driver_id": {"$in": faltan}},
+                                       {"id": {"$in": faltan}}]},
+                              {"_id": 0, "id": 1, "name": 1, "phone": 1, "transporter_id": 1, "driver_id": 1})
         async for d in cur:
-            clave = d.get("transporter_id") if d.get("transporter_id") in ids else d["id"]
+            clave = _clave_ficha_en(d, ids)
             if clave not in fichas:
                 fichas[clave] = {**d, "de_baja": True}
     cortex = gente if gente is not None else await _apoyo_gente_cortex(dia)
@@ -36584,9 +36588,13 @@ async def _dnr_contexto(tbas: list) -> dict:
     tids = [d.get("driver_id") for d in docs if d.get("driver_id")]
     nombres = {}
     if tids:
-        async for c in db.drivers.find({"transporter_id": {"$in": tids}},
-                                       {"_id": 0, "transporter_id": 1, "name": 1, "phone": 1}):
-            nombres[c["transporter_id"]] = {"nombre": c.get("name"), "telefono": c.get("phone")}
+        async for c in db.drivers.find(
+                {"$or": [{"transporter_id": {"$in": tids}}, {"driver_id": {"$in": tids}}]},
+                {"_id": 0, "transporter_id": 1, "driver_id": 1, "name": 1, "phone": 1, "active": 1}):
+            clave = _clave_ficha_en(c, set(tids))
+            # Una activa manda sobre una de baja con el mismo ID.
+            if clave not in nombres or c.get("active") is not False:
+                nombres[clave] = {"nombre": c.get("name"), "telefono": c.get("phone")}
     out = {}
     for d in docs:
         tid = d.get("driver_id")
@@ -40733,6 +40741,15 @@ def _cx_tasas(ok: int, fallo: int, rts: int) -> dict:
                 "dcr": None, "rts_pct": None}
     return {"despachados": desp, "entregados": ok, "fallos": fallo, "rts": rts,
             "dcr": round(ok / desp * 100, 2), "rts_pct": round(rts / desp * 100, 2)}
+
+
+def _clave_ficha_en(ficha: dict, ids) -> str:
+    """Con que clave de `ids` casa esta ficha: transporter_id, driver_id o id."""
+    for campo in ("transporter_id", "driver_id"):
+        v = str(ficha.get(campo) or "").strip()
+        if v and v in ids:
+            return v
+    return ficha.get("id")
 
 
 async def _cx_nombres_resumen(ids: set, dias: int = 60) -> dict:
