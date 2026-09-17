@@ -669,6 +669,10 @@ export const deleteWhcPlan = (center) => api.delete('/whc/plan', { params: { cen
    `marcarDnrEnviada` lo confirma despues, cuando ya se le ha dado a enviar:
    abrir el correo no es haberlo enviado. */
 export const getDnrInvestigaciones = (center) => api.get('/dnr/investigaciones', { params: centerParam(center) })
+/* Solo el numero, para el aviso del menu y del notificador en vivo: pedir la
+   lista completa (con el contexto de Cortex de cada una) cada dos minutos
+   desde todas las pantallas sería tirar trabajo para acabar mirando `.length`. */
+export const contarDnrPendientes = (center) => api.get('/dnr/investigaciones/pendientes', { params: centerParam(center) })
 export const responderDnr = (body) => api.post('/dnr/investigaciones/responder', body)
 /* Lo manda el servidor. `responder` solo PREPARA (abre tu correo); esto lo
    envía de verdad, que es lo único que funciona con más de 3 paquetes: el

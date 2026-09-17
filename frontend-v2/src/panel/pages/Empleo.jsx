@@ -4,10 +4,11 @@ import {
   Briefcase, Plus, Copy, Check, Loader2, AlertTriangle, Trash2, X,
   MessageCircle, IdCard, Link2, Search, Download, FileText,
   Phone, Mail, Calendar, MapPin, Clock, ExternalLink, Save, History,
-  ChevronRight, UserPlus, Send,
+  ChevronRight, ChevronLeft, UserPlus, Send,
 } from 'lucide-react'
 import { useT } from '../../i18n'
 import Pestanas, { usePestana } from '../components/Pestanas'
+import { getAdmin } from '../auth'
 
 /* Sin oferta abierta, cuatro cosas distintas en pestañas en vez de una
    página de cuatro pantallas de alto. */
@@ -89,9 +90,40 @@ function diasQuieto(c) {
   return Number.isFinite(d) && d >= 0 ? d : null
 }
 
+/* «Nuevo» es desde tu ÚLTIMA VISITA, no un cronómetro fijo. Con 48h a secas,
+   alguien que lleva días importado seguía luciendo «nuevo» aunque ya lo
+   hubieras mirado y movido a Contactado o Descartado — la ironía que hizo
+   saltar la alarma. Dos condiciones a la vez: `importado_en` (cuándo LLEGÓ a
+   nuestro sistema, no cuándo se apuntó en JOIN) posterior a tu última entrada
+   aquí, Y que siga en la fase inicial — en cuanto alguien lo mueve, deja de
+   ser «sin mirar» aunque el reloj no haya llegado a ningún sitio. */
+function marcaVisita() {
+  const id = getAdmin()?.id || 'anon'
+  return `empleo_visto_${id}`
+}
+function esRecienLlegado(c, ultimaVisita) {
+  if (c.fase && c.fase !== 'nuevo') return false
+  const t = c.importado_en ? new Date(c.importado_en).getTime() : NaN
+  return Number.isFinite(t) && t > ultimaVisita
+}
+
 export default function Empleo() {
   const { t } = useT()
   const { center, centers } = useOutletContext()
+  // La marca de «visto hasta aquí» se lee UNA vez al entrar y se escribe ya
+  // mismo con la hora de ahora: la frontera para el PRÓXIMO «nuevo» es este
+  // instante, y mientras dure esta visita todo lo importado antes se ve igual
+  // (recargar la pantalla a media revisión no puede irle borrando candidatos
+  // de la vista sobre la marcha). Sin nada guardado (primera vez de esta
+  // persona) no se marca nada como nuevo — un alta no puede recibir un aluvión
+  // de «nuevo» por candidatos de hace meses.
+  const [ultimaVisita] = useState(() => {
+    try {
+      const guardada = Number(localStorage.getItem(marcaVisita()))
+      localStorage.setItem(marcaVisita(), String(Date.now()))
+      return Number.isFinite(guardada) && guardada > 0 ? guardada : Date.now()
+    } catch { return Date.now() }
+  })
   const [ofertas, setOfertas] = useState([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
@@ -422,7 +454,7 @@ export default function Empleo() {
                   )}
                   <div className="space-y-2">
                     {items.map((c) => (
-                      <Tarjeta key={c.id} c={c} t={t} activa={ficha?.id === c.id}
+                      <Tarjeta key={c.id} c={c} t={t} activa={ficha?.id === c.id} ultimaVisita={ultimaVisita}
                         onAbrir={() => setFicha(c)}
                         onArrastrar={(e) => {
                           arrastraRef.current = c
@@ -437,15 +469,19 @@ export default function Empleo() {
                     )}
                   </div>
                   {totalPaginas > 1 && (
-                    <div className="mt-2 flex items-center justify-between gap-1 text-[11px] text-dark-500">
+                    <div className="mt-2 flex items-center justify-between gap-1 border-t border-dark-800 pt-2">
                       <button onClick={() => irA(pagina - 1)} disabled={pagina <= 1}
-                        className="rounded px-1.5 py-0.5 hover:bg-dark-800 hover:text-dark-200 disabled:opacity-30">
-                        ‹
+                        title={t('empleo.paginaAnterior')}
+                        className="flex items-center gap-0.5 rounded-md px-2 py-1 text-[11px] font-medium text-dark-300 ring-1 ring-dark-700 hover:bg-dark-800 hover:text-dark-100 disabled:pointer-events-none disabled:opacity-25">
+                        <ChevronLeft size={13} />
                       </button>
-                      <span className="cifra">{pagina} / {totalPaginas}</span>
+                      <span className="cifra text-[11px] font-semibold text-dark-300">
+                        {t('empleo.pagina')} {pagina} {t('empleo.de')} {totalPaginas}
+                      </span>
                       <button onClick={() => irA(pagina + 1)} disabled={pagina >= totalPaginas}
-                        className="rounded px-1.5 py-0.5 hover:bg-dark-800 hover:text-dark-200 disabled:opacity-30">
-                        ›
+                        title={t('empleo.paginaSiguiente')}
+                        className="flex items-center gap-0.5 rounded-md px-2 py-1 text-[11px] font-medium text-dark-300 ring-1 ring-dark-700 hover:bg-dark-800 hover:text-dark-100 disabled:pointer-events-none disabled:opacity-25">
+                        <ChevronRight size={13} />
                       </button>
                     </div>
                   )}
@@ -518,9 +554,10 @@ function Embudo({ e, t }) {
 }
 
 /* ── Una tarjeta del tablero ──────────────────────────────────────────── */
-function Tarjeta({ c, t, activa, onAbrir, onArrastrar, onSoltar }) {
+function Tarjeta({ c, t, activa, ultimaVisita, onAbrir, onArrastrar, onSoltar }) {
   const quieto = diasQuieto(c)
   const urge = c.fase === 'nuevo' && (quieto ?? 0) >= 3
+  const nuevo = esRecienLlegado(c, ultimaVisita)
   return (
     <button
       draggable
@@ -528,8 +565,17 @@ function Tarjeta({ c, t, activa, onAbrir, onArrastrar, onSoltar }) {
       onDragEnd={onSoltar}
       onClick={onAbrir}
       className={`w-full cursor-grab rounded-lg border bg-dark-900/60 p-2 text-left transition active:cursor-grabbing ${
-        activa ? 'border-brand-500/50 bg-brand-500/5' : 'border-dark-800 hover:border-dark-700'}`}>
-      <div className="truncate text-xs font-medium text-dark-100">{c.nombre}</div>
+        activa ? 'border-brand-500/50 bg-brand-500/5'
+          : nuevo ? 'border-emerald-500/40 hover:border-emerald-500/60'
+          : 'border-dark-800 hover:border-dark-700'}`}>
+      <div className="flex items-center gap-1.5">
+        <div className="min-w-0 flex-1 truncate text-xs font-medium text-dark-100">{c.nombre}</div>
+        {nuevo && (
+          <span className="shrink-0 rounded bg-emerald-500/15 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-emerald-300">
+            {t('empleo.nuevo')}
+          </span>
+        )}
+      </div>
       <div className="truncate text-[11px] text-dark-500">
         {[c.ciudad, c.edad ? `${c.edad} a` : '', c.disponibilidad].filter(Boolean).join(' · ') || '—'}
       </div>

@@ -37441,6 +37441,25 @@ async def _dnr_naves() -> list:
     return salida
 
 
+@api_router.get("/dnr/investigaciones/pendientes")
+async def dnr_contar_pendientes(center: Optional[str] = None, _=Depends(require_admin)):
+    """Cuantas investigaciones DNR siguen abiertas y a tiempo, para el aviso del
+    menu. Mismo motivo que /empleo/candidatos/nuevos: esto lo pide el menu cada
+    dos minutos desde todas las pantallas, y /dnr/investigaciones trae encima el
+    contexto de Cortex de cada una para acabar mirando solo un numero.
+
+    OJO AL ORDEN: declarado ANTES de /dnr/investigaciones, que si no 'pendientes'
+    no puede colarse por delante en ninguna ruta con parametro.
+    """
+    ahora = datetime.now(timezone.utc).isoformat()
+    q = {"contestada": {"$ne": True}, "cerrada_en": {"$exists": False},
+         "$or": [{"vence": {"$exists": False}}, {"vence": ""}, {"vence": {"$gte": ahora}}]}
+    if center:
+        q["centro"] = {"$regex": re.escape(_centro_norm(center) or center), "$options": "i"}
+    n = await db[_DNR_COL].count_documents(q)
+    return {"pendientes": n}
+
+
 @api_router.get("/dnr/investigaciones")
 async def dnr_investigaciones(center: Optional[str] = None, _=Depends(require_admin)):
     """Las que estan abiertas, con lo que Cortex sabe de cada paquete."""

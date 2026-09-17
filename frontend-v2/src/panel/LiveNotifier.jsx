@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { MessageSquare, CheckSquare, X, BellRing } from 'lucide-react'
-import { getChat, getChecklist } from './api'
+import { MessageSquare, CheckSquare, X, BellRing, AlertTriangle, UserPlus } from 'lucide-react'
+import { getChat, getChecklist, contarDnrPendientes, contarCandidatosNuevos } from './api'
 import { getAdmin } from './auth'
 import { hoyLocal } from '../lib/fecha'
+
+const ICONOS = { chat: MessageSquare, task: CheckSquare, dnr: AlertTriangle, candidato: UserPlus }
 
 /* ── Avisos EN VIVO dentro del panel (PC) ─────────────────────────────────────
    Con la app abierta en cualquier página: si alguien escribe en el chat de tu
@@ -138,6 +140,47 @@ export default function LiveNotifier({ center, centers }) {
           }
           localStorage.setItem(k, JSON.stringify(ids))
         } catch { /* siguiente tick */ }
+
+        // ── DNR: ¿han entrado investigaciones nuevas sin contestar? ──
+        // Solo el NUMERO (endpoint aparte, ligero a proposito: la lista trae el
+        // contexto de Cortex de cada una). Se avisa solo si SUBE respecto al
+        // ultimo visto — bajar (se contesto una) no es una novedad que avisar.
+        try {
+          const r = await contarDnrPendientes(c)
+          const n = r.data?.pendientes || 0
+          const k = `ln_dnr_${c}`
+          const antes = localStorage.getItem(k)
+          const antesN = antes === null ? null : Number(antes)
+          if (antesN !== null && n > antesN && !pathRef.current.startsWith('/panel/informes')) {
+            const nuevas = n - antesN
+            addNote({
+              key: `dnr-${c}-${n}`, icon: 'dnr',
+              title: `DNR sin contestar · ${c}`,
+              body: `${nuevas} investigación${nuevas === 1 ? '' : 'es'} nueva${nuevas === 1 ? '' : 's'} de Amazon esperando respuesta (${n} en total).`,
+              to: '/panel/informes',
+            })
+          }
+          localStorage.setItem(k, String(n))
+        } catch { /* siguiente tick */ }
+
+        // ── CANDIDATOS: ¿ha entrado gente nueva a Empleo sin mirar? ──
+        try {
+          const r = await contarCandidatosNuevos(c)
+          const n = r.data?.nuevos || 0
+          const k = `ln_cand_${c}`
+          const antes = localStorage.getItem(k)
+          const antesN = antes === null ? null : Number(antes)
+          if (antesN !== null && n > antesN && !pathRef.current.startsWith('/panel/empleo')) {
+            const nuevos = n - antesN
+            addNote({
+              key: `cand-${c}-${n}`, icon: 'candidato',
+              title: `Candidatos nuevos · ${c}`,
+              body: `${nuevos} candidatura${nuevos === 1 ? '' : 's'} nueva${nuevos === 1 ? '' : 's'} sin mirar (${n} en total).`,
+              to: '/panel/empleo',
+            })
+          }
+          localStorage.setItem(k, String(n))
+        } catch { /* siguiente tick */ }
       }
     }
 
@@ -192,7 +235,7 @@ export default function LiveNotifier({ center, centers }) {
           onClick={() => { dismiss(n.key); nav(n.to) }}>
           <div className="flex items-start gap-3">
             <span className="relative mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-brand-500/20 text-brand-300">
-              {n.icon === 'chat' ? <MessageSquare size={20} /> : <CheckSquare size={20} />}
+              {(() => { const Icono = ICONOS[n.icon] || MessageSquare; return <Icono size={20} /> })()}
               <span className="absolute -right-1 -top-1 flex h-3.5 w-3.5">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-75" />
                 <span className="relative inline-flex h-3.5 w-3.5 rounded-full bg-brand-500" />
