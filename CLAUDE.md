@@ -1713,6 +1713,18 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    `_cx_nombres_resumen` (el resumen diario de Cortex): el NOMBRE si es de la
    persona; el telefono no (gotcha 66).
 
+80. **Lo que ve cada empresa es una lista de PERMITIDOS, y una pantalla nueva
+   no la ve ningun cliente hasta que se le activa.** `hidden_modules` (lista
+   de ocultos) se mandaba al entrar y el panel no lo leia nunca: los DSP lo
+   veian todo, IA Peritaje incluida. Ahora `organizations.modulos` vale
+   `"todos"`, `"estandar"` o una lista; sin nada, el estandar
+   (`MODULOS_ESTANDAR`). La de Dani (`owner`) y la demo lo ven todo.
+   Se edita en Negocio -> Clientes -> Modulos y llega al panel por
+   `/org/billing` (`modulos`). **Al añadir una pantalla al menu, añadirla a
+   `MODULOS_PANEL`**: lo vigila `scripts/check-modulos.mjs` (probado quitando
+   una). Ojo: filtra el MENU y las RUTAS del panel, no la API — la API sigue
+   respondiendo a quien la llame con su token.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
@@ -1736,12 +1748,12 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
   despues de tocar multiempresa, importaciones, centros o el flujo de taller.
   Deja la empresa creada a proposito —no se borra sola: un script de smoke no
   debe poder borrar nada—; se quita desde el panel de super-admin.
-- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son veintiocho:
+- Los checkers de `scripts/` deben quedar a cero antes de commitear. Son veintinueve:
   `check-i18n`, `check-routes`, `check-huerfanas`, `check-permisos`, `check-tema`,
   `check-ayuda`, `check-contraste`, `check-extension`, `check-patrones`,
   `check-tema-mezclado`, `check-efectos`, `check-chunk-error`,
   `check-importados`, `check-destinos`, `check-cola-extension`,
-  `check-envio-candidatura`, `check-interceptor-ahorro`, `check-informes-portal`,
+  `check-envio-candidatura`, `check-interceptor-ahorro`, `check-informes-portal`, `check-modulos`,
   `check-asociados`, `check-naves-barrido`, `check-hooks`, `check-detalle-error`,
   `check_contracts.py`, `check_objectid.py`, `check_tenant.py`,
   `check_multiempresa.py`, `check_borrado.py` y `check_unicos.py`.

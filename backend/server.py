@@ -1056,6 +1056,74 @@ async def get_org(org_id):
 HIDDEN_MODULES_DSP = ["ia-peritaje", "scorecard", "turnos"]
 
 
+# ── MODULOS QUE VE CADA EMPRESA ───────────────────────────────────────────────
+# Lista de PERMITIDOS, no de ocultos (17-09-2026). Con una lista de ocultos,
+# cada pantalla nueva aparecia sola en todos los clientes antes de estar
+# rematada; asi una empresa solo ve lo que Dani le haya activado. Y
+# `hidden_modules` no lo leia el panel: los DSP lo veian todo.
+# La clave es la ultima parte de la ruta del panel (/panel/<clave>).
+# `scripts/check-modulos.mjs` comprueba que este catalogo y el menu coinciden:
+# una pantalla del menu que no este aqui no se podria activar nunca (gotcha 27).
+MODULOS_PANEL = [
+    {"clave": "dashboard", "nombre": "Inicio", "grupo": "Hoy", "que": "Resumen del dia"},
+    {"clave": "mi-dia", "nombre": "Mi dia", "grupo": "Hoy", "que": "Tareas del responsable"},
+    {"clave": "actividad", "nombre": "Actividad", "grupo": "Hoy", "que": "Lo ultimo que ha pasado"},
+    {"clave": "paquetes", "nombre": "Paquetes IA", "grupo": "Operacion diaria", "que": "Cortex en vivo (necesita la extension)"},
+    {"clave": "apoyo", "nombre": "Apoyo en ruta", "grupo": "Operacion diaria", "que": "Pasar paradas entre conductores"},
+    {"clave": "debrief", "nombre": "Debrief", "grupo": "Operacion diaria", "que": "Cierre de rutas"},
+    {"clave": "asignacion", "nombre": "Asignacion", "grupo": "Operacion diaria", "que": "Que furgoneta lleva cada conductor"},
+    {"clave": "turnos", "nombre": "Turnos", "grupo": "Operacion diaria", "que": "Cuadrante y peticiones de dias"},
+    {"clave": "checklist-operativo", "nombre": "Checklist", "grupo": "Operacion diaria", "que": "Tareas de apertura y cierre"},
+    {"clave": "plantilla", "nombre": "Plantilla diaria", "grupo": "Operacion diaria", "que": "Hoja de salida compartida"},
+    {"clave": "vehiculos", "nombre": "Vehiculos", "grupo": "Flota", "que": "Fichas de las furgonetas"},
+    {"clave": "revision", "nombre": "Revision rapida", "grupo": "Flota", "que": "Validar los daños que ve la IA"},
+    {"clave": "inspecciones", "nombre": "Inspecciones", "grupo": "Flota", "que": "Fotos de cada dia"},
+    {"clave": "incidencias", "nombre": "Incidencias", "grupo": "Flota", "que": "Golpes y averias"},
+    {"clave": "talleres", "nombre": "Talleres", "grupo": "Flota", "que": "Agenda de talleres"},
+    {"clave": "ordenes", "nombre": "Ordenes de taller", "grupo": "Flota", "que": "Reparaciones en curso"},
+    {"clave": "aparcamiento", "nombre": "Aparcamiento", "grupo": "Flota", "que": "Donde queda cada furgoneta"},
+    {"clave": "vencimientos", "nombre": "Vencimientos", "grupo": "Flota", "que": "ITV, renting y alquileres"},
+    {"clave": "importaciones", "nombre": "Importaciones", "grupo": "Flota", "que": "Subir flota y conductores de Excel"},
+    {"clave": "conductores", "nombre": "Conductores", "grupo": "Equipo", "que": "Fichas y accesos al portal"},
+    {"clave": "empleo", "nombre": "Empleo", "grupo": "Equipo", "que": "Ofertas y candidatos"},
+    {"clave": "incorporaciones", "nombre": "Incorporaciones", "grupo": "Equipo", "que": "Altas de gente nueva"},
+    {"clave": "scorecard", "nombre": "Scorecard", "grupo": "Equipo", "que": "Nota de Amazon"},
+    {"clave": "informes", "nombre": "Informes", "grupo": "Equipo", "que": "DNR diarios y horas WHC"},
+    {"clave": "dsc", "nombre": "DSC", "grupo": "Equipo", "que": "Entregas dudosas por conductor"},
+    {"clave": "rendimiento", "nombre": "Rendimiento", "grupo": "Equipo", "que": "Ritmo de cada conductor"},
+    {"clave": "contactos", "nombre": "Contactos", "grupo": "Equipo", "que": "Agenda de telefonos"},
+    {"clave": "origen-danos", "nombre": "Origen de daños", "grupo": "Sistema", "que": "Quien causa los golpes"},
+    {"clave": "ia-peritaje", "nombre": "IA Peritaje", "grupo": "Sistema", "que": "Informes periciales con IA"},
+    {"clave": "configuracion", "nombre": "Configuracion", "grupo": "Sistema", "que": "Ajustes de la empresa"},
+]
+_MODULOS_CLAVES = [m["clave"] for m in MODULOS_PANEL]
+# Lo que ve una empresa nueva: la flota y su gente, sin lo que aun se esta
+# afinando con la flota de Dani.
+MODULOS_ESTANDAR = ["dashboard", "mi-dia", "asignacion", "vehiculos", "revision", "inspecciones",
+                    "incidencias", "talleres", "ordenes", "vencimientos", "importaciones",
+                    "conductores", "configuracion"]
+# Sin estas no se puede ni empezar: no se pueden quitar.
+_MODULOS_FIJOS = ("dashboard", "configuracion")
+
+
+def org_modulos(org) -> Optional[list]:
+    """Claves que ve la empresa, o None si lo ve TODO."""
+    if not org or org.get("account_type") == "owner" or org.get("id") == "demo":
+        return None
+    m = org.get("modulos")
+    if m == "todos":
+        return None
+    if not isinstance(m, list):
+        m = MODULOS_ESTANDAR
+    vistos = set(m) | set(_MODULOS_FIJOS)
+    return [k for k in _MODULOS_CLAVES if k in vistos]
+
+
+def _modulos_modo(org) -> str:
+    m = (org or {}).get("modulos")
+    return "todos" if m == "todos" else "medida" if isinstance(m, list) else "estandar"
+
+
 def org_hidden_modules(org):
     if not org or org.get("account_type") == "owner":
         return []
@@ -4735,6 +4803,7 @@ async def org_billing(user: dict = Depends(get_current_user)):
     b = _org_billing(org)
     b["account_type"] = (org or {}).get("account_type")
     b["org_name"] = (org or {}).get("name")
+    b["modulos"] = org_modulos(org)
     return b
 
 
@@ -5579,8 +5648,15 @@ async def admin_list_orgs(_: dict = Depends(require_superadmin)):
             "centers": o.get("centers") or [], "max_centers": o.get("max_centers", 1),
             "email": o.get("email"), "trial_ends": o.get("trial_ends"),
             "dias_prueba": b.get("days_left"), "created_at": o.get("created_at"),
+            "modulos": org_modulos(o), "modulos_modo": _modulos_modo(o),
         })
     return {"total": len(out), "orgs": out}
+
+
+@api_router.get("/admin/modulos")
+async def admin_catalogo_modulos(_: dict = Depends(require_superadmin)):
+    """Las pantallas que se pueden activar a una empresa y el paquete estandar."""
+    return {"modulos": MODULOS_PANEL, "estandar": MODULOS_ESTANDAR, "fijos": list(_MODULOS_FIJOS)}
 
 
 @api_router.post("/admin/org")
@@ -5613,6 +5689,17 @@ async def admin_update_org(data: dict = Body(...), _: dict = Depends(require_sup
             patch["max_centers"] = max(org.get("max_centers", 1), len(centers))
     if isinstance(data.get("hidden_modules"), list):
         patch["hidden_modules"] = [str(m) for m in data["hidden_modules"]]
+    if "modulos" in data:
+        m = data["modulos"]
+        if m in ("todos", "estandar"):
+            patch["modulos"] = m
+        elif isinstance(m, list):
+            desconocidos = [x for x in m if x not in _MODULOS_CLAVES]
+            if desconocidos:
+                raise HTTPException(400, "Modulos que no existen: %s" % ", ".join(map(str, desconocidos[:5])))
+            patch["modulos"] = [k for k in _MODULOS_CLAVES if k in set(m) | set(_MODULOS_FIJOS)]
+        else:
+            raise HTTPException(400, "modulos tiene que ser «todos», «estandar» o una lista")
     if not patch:
         raise HTTPException(status_code=400, detail="Nada que actualizar")
     await global_db.organizations.update_one({"id": org_id}, {"$set": patch})

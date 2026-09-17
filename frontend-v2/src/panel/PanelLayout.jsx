@@ -115,6 +115,10 @@ const PALETTE_EXTRA = [
   { to: '/panel/casas-alquiler', labelKey: 'nav.rental', icon: Building2, key: 'casas-alquiler' },
 ]
 const EXPIRY_KEYS = ['avisos-itv', 'renting', 'casas-alquiler']
+// Pantallas que van con otro modulo al activarlo en una empresa.
+const MODULO_DE = { 'avisos-itv': 'vencimientos', renting: 'vencimientos', 'casas-alquiler': 'vencimientos' }
+// Las del propio usuario: ninguna empresa se queda sin ellas.
+const SIN_MODULO = new Set(['perfil', 'login', 'portal-conductor'])
 
 /* ── MENU DE USUARIO ───────────────────────────────────────────────────────
    Arriba a la derecha, que es donde lo busca todo el mundo. Antes vivia al
@@ -228,7 +232,9 @@ export default function PanelLayout() {
   const loc = useLocation()
   const admin = getAdmin()
   const { lang, setLang, t } = useT()
-  const { limits } = usePlan()
+  const { limits, modulos } = usePlan()
+  // ¿Tiene la empresa activada esta pantalla? (Negocio → Clientes → Módulos)
+  const moduloOk = (k) => !Array.isArray(modulos) || SIN_MODULO.has(k) || modulos.includes(MODULO_DE[k] || k)
   const [center, setCenter] = useState(() => localStorage.getItem('panel_center') || 'Todos')
   const [cmdOpen, setCmdOpen] = useState(false)
   /* Si se publica una compilación distinta a la que tiene esta pestaña, se
@@ -424,6 +430,7 @@ export default function PanelLayout() {
   // ¿Es visible este item con los permisos + plan actuales?
   const itemVisible = (it) => {
     const k = keyOf(it.to)
+    if (!moduloOk(k)) return false
     if (k === 'vencimientos') return EXPIRY_KEYS.some((ek) => canSee(ek))
     // La tienda de ropa es del negocio de FlotaDSP, no de la flota del cliente.
     if (k === 'tienda' && !esPlataforma()) return false
@@ -455,6 +462,7 @@ export default function PanelLayout() {
   const routeAllowed = (k) => {
     // Pantallas propias del usuario, sin permiso que valga.
     if (k === 'perfil' || k === 'login' || k === 'portal-conductor') return true
+    if (!moduloOk(k)) return false
     // Y las de la operación diaria, de la MISMA lista que usa el menú: si el
     // menú la enseña, la ruta abre; si el menú la esconde, la ruta no abre.
     if (SIEMPRE_VISIBLES.has(k)) return true
@@ -480,7 +488,7 @@ export default function PanelLayout() {
   // Paleta ⌘K: menú + rutas fusionadas (ITV/Renting/Alquiler directas) + admin
   const paletteBase = [
     ...flatItems,
-    ...PALETTE_EXTRA.filter((p) => canSee(p.key)).map((p) => ({ ...p, label: t(p.labelKey) })),
+    ...PALETTE_EXTRA.filter((p) => canSee(p.key) && moduloOk(p.key)).map((p) => ({ ...p, label: t(p.labelKey) })),
   ]
   const palettePages = showAdmin
     ? [...paletteBase, { to: '/panel/admin', label: t('nav.business'), icon: Shield }, { to: '/panel/bandeja', label: t('nav.inbox'), icon: Inbox }]
@@ -768,7 +776,7 @@ export default function PanelLayout() {
           { to: '/panel/revision', label: t('nav.revision'), icon: CheckCircle2 },
           { to: '/panel/asignacion', label: t('nav.assign'), icon: ClipboardCheck },
           { to: '/panel/vehiculos', label: t('nav.vehicles'), icon: Truck },
-        ].map((it) => (
+        ].filter((it) => moduloOk(keyOf(it.to))).map((it) => (
           <NavLink key={it.to} to={it.to} end={it.end}
             className={({ isActive }) =>
               `flex min-h-[52px] flex-1 flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-semibold transition-colors ${

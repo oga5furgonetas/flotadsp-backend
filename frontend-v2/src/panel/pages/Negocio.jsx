@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '../../i18n'
 import {
   Loader2, Building2, CheckCircle2, Clock, Euro, Sparkles, Gift, PauseCircle,
   LogIn, Trash2, Database, BrainCircuit, ExternalLink, RefreshCw, Megaphone,
   Play, Pause, Plus, Star, Eye, MousePointerClick, Tag, Save,
-  Receipt, Upload, Check, Undo2, Building, Coins,
+  Receipt, Upload, Check, Undo2, Building, Coins, LayoutGrid, X,
 } from 'lucide-react'
 import {
   getAdminOverview, getAdminOrgs, getLeads, updateOrg, impersonateOrg, deleteOrg,
@@ -14,11 +14,99 @@ import {
   adminGetPlanes, adminSetPlanes,
   adminGetCobros, adminMarcarCobro, adminConciliar,
   adminGetEmisor, adminSetEmisor, revisarFacturacion as revisarFacturacionApi, getSaludSistema,
+  getAdminModulos,
 } from '../api'
 import { API_BASE } from '../../services/api'
 import { hoyLocal } from '../../lib/fecha'
 
 // ST labels are now translated inside the component via t()
+
+/* ── QUÉ VE CADA EMPRESA ───────────────────────────────────────────────────
+   Una empresa nueva empieza con el paquete estándar; lo demás se le activa a
+   mano cuando esté rematado. «Todo» es lo que ve la flota de Dani. */
+function EditorModulos({ org, catalogo, onGuardado, onCerrar }) {
+  const [modo, setModo] = useState(org.modulos_modo || 'estandar')
+  const [marcados, setMarcados] = useState(() => new Set(
+    org.modulos || (catalogo?.modulos || []).map((m) => m.clave)))
+  const [guardando, setGuardando] = useState(false)
+  const [err, setErr] = useState('')
+  if (!catalogo) return <div className="p-4 text-sm text-dark-400"><Loader2 size={14} className="inline animate-spin" /> Cargando módulos…</div>
+  const fijos = new Set(catalogo.fijos || [])
+  const grupos = []
+  for (const m of catalogo.modulos) {
+    let g = grupos.find((x) => x.nombre === m.grupo)
+    if (!g) { g = { nombre: m.grupo, items: [] }; grupos.push(g) }
+    g.items.push(m)
+  }
+  const visibles = modo === 'todos' ? new Set(catalogo.modulos.map((m) => m.clave))
+    : modo === 'estandar' ? new Set([...catalogo.estandar, ...fijos]) : marcados
+  const elegir = (m) => {
+    if (m === 'medida') setMarcados(new Set(visibles))
+    setModo(m)
+  }
+  const alternar = (k) => {
+    if (fijos.has(k)) return
+    const s = new Set(visibles)
+    if (s.has(k)) s.delete(k); else s.add(k)
+    setMarcados(s); setModo('medida')
+  }
+  const guardar = async () => {
+    setGuardando(true); setErr('')
+    try {
+      await updateOrg({ id: org.id, modulos: modo === 'medida' ? [...marcados] : modo })
+      onGuardado()
+    } catch (e) { setErr(e?.response?.data?.detail || 'No se pudo guardar') } finally { setGuardando(false) }
+  }
+  return (
+    <div className="border-t border-dark-800 bg-dark-900/40 p-4">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="text-[12px] font-semibold uppercase tracking-wider text-dark-500">Qué ve {org.name}</span>
+        {[['estandar', 'Estándar'], ['todos', 'Todo'], ['medida', 'A medida']].map(([k, l]) => (
+          <button key={k} onClick={() => elegir(k)}
+            className={`rounded-lg px-2.5 py-1 text-[12px] font-semibold ring-1 ${modo === k
+              ? 'bg-brand-500/15 text-brand-300 ring-brand-500/40' : 'text-dark-400 ring-dark-700 hover:text-dark-100'}`}>
+            {l}
+          </button>
+        ))}
+        <span className="cifra text-[12px] text-dark-500">{visibles.size} de {catalogo.modulos.length} pantallas</span>
+        <button onClick={onCerrar} className="ml-auto text-dark-500 hover:text-dark-200" title="Cerrar"><X size={15} /></button>
+      </div>
+      {modo === 'todos' && (
+        <p className="mb-3 text-[12px] text-amber-300/90">Con «Todo» también verá cada pantalla nueva en cuanto se publique, esté rematada o no.</p>
+      )}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        {grupos.map((g) => (
+          <div key={g.nombre}>
+            <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-dark-600">{g.nombre}</div>
+            <div className="space-y-1">
+              {g.items.map((m) => {
+                const on = visibles.has(m.clave)
+                return (
+                  <label key={m.clave} title={m.que}
+                    className={`flex cursor-pointer items-start gap-2 rounded-md px-1.5 py-1 text-[12.5px] hover:bg-dark-800/60 ${fijos.has(m.clave) ? 'cursor-default opacity-70' : ''}`}>
+                    <input type="checkbox" checked={on} disabled={fijos.has(m.clave)} onChange={() => alternar(m.clave)}
+                      className="mt-0.5 accent-brand-500" />
+                    <span>
+                      <span className={on ? 'text-dark-100' : 'text-dark-500'}>{m.nombre}</span>
+                      <span className="block text-[10.5px] leading-tight text-dark-600">{m.que}</span>
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex items-center gap-3">
+        <button onClick={guardar} disabled={guardando} className="btn-primary flex items-center gap-1.5 text-sm">
+          {guardando ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Guardar
+        </button>
+        <span className="text-[12px] text-dark-500">Lo verán al recargar el panel.</span>
+        {err && <span className="text-[12px] text-red-400">{err}</span>}
+      </div>
+    </div>
+  )
+}
 
 function Kpi({ icon: Icon, label, value, accent }) {
   return (
@@ -520,6 +608,11 @@ export default function Negocio() {
     adminGetFounderReservations().then((r) => setFounders(r.data?.reservations || [])).catch(() => setFounders([]))
   }
   useEffect(load, [])
+  const [modulosDe, setModulosDe] = useState(null)   // id de la empresa abierta
+  const [catalogoMod, setCatalogoMod] = useState(null)
+  useEffect(() => {
+    if (modulosDe && !catalogoMod) getAdminModulos().then((r) => setCatalogoMod(r.data)).catch(() => {})
+  }, [modulosDe, catalogoMod])
 
   async function saveOffer(e) {
     e.preventDefault()
@@ -630,19 +723,29 @@ export default function Negocio() {
           <table className="w-full text-sm">
             <thead><tr className="border-b border-dark-800 text-left text-xs uppercase tracking-wide text-dark-500">
               <th className="px-3 py-2.5">{t('neg.col.company')}</th><th className="px-3 py-2.5">{t('neg.col.status')}</th><th className="px-3 py-2.5">{t('neg.col.plan')}</th>
-              <th className="px-3 py-2.5">{t('neg.col.centers')}</th><th className="px-3 py-2.5">{t('neg.col.trial')}</th><th className="px-3 py-2.5 text-right">{t('neg.col.actions')}</th>
+              <th className="px-3 py-2.5">{t('neg.col.centers')}</th><th className="px-3 py-2.5">{t('neg.col.trial')}</th>
+              <th className="px-3 py-2.5">Módulos</th><th className="px-3 py-2.5 text-right">{t('neg.col.actions')}</th>
             </tr></thead>
             <tbody>
               {orgs.map((o) => {
                 const st = ST[o.status] || ST.canceled
                 const isBusy = busy === o.id
                 return (
-                  <tr key={o.id} className="border-b border-dark-800/60 align-middle hover:bg-dark-800/30">
+                  <Fragment key={o.id}>
+                  <tr className="border-b border-dark-800/60 align-middle hover:bg-dark-800/30">
                     <td className="px-3 py-2.5"><div className="font-semibold">{o.name}</div><div className="text-[11px] text-dark-500">/{o.slug}</div></td>
                     <td className="px-3 py-2.5"><span className={`rounded px-2 py-0.5 text-[11px] font-semibold ${st.cls}`}>{st.label}</span></td>
                     <td className="px-3 py-2.5 text-dark-300">{o.plan || '—'}</td>
                     <td className="px-3 py-2.5 text-dark-400">{(o.centers || []).join(', ') || '—'}</td>
                     <td className="px-3 py-2.5 text-dark-400">{o.dias_prueba != null ? `${o.dias_prueba}d` : '—'}</td>
+                    <td className="px-3 py-2.5">
+                      <button onClick={() => setModulosDe(modulosDe === o.id ? null : o.id)}
+                        className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-[12px] ring-1 ${modulosDe === o.id
+                          ? 'bg-brand-500/15 text-brand-300 ring-brand-500/40' : 'text-dark-300 ring-dark-700 hover:text-dark-100'}`}>
+                        <LayoutGrid size={12} />
+                        {o.modulos_modo === 'todos' ? 'Todo' : o.modulos_modo === 'medida' ? `A medida · ${(o.modulos || []).length}` : `Estándar · ${(o.modulos || []).length}`}
+                      </button>
+                    </td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center justify-end gap-1">
                         {o.status !== 'active' && (
@@ -658,6 +761,14 @@ export default function Negocio() {
                       </div>
                     </td>
                   </tr>
+                  {modulosDe === o.id && (
+                    <tr><td colSpan={7} className="p-0">
+                      <EditorModulos org={o} catalogo={catalogoMod}
+                        onCerrar={() => setModulosDe(null)}
+                        onGuardado={() => { setModulosDe(null); setMsg(`Módulos de ${o.name} guardados ✓`); load() }} />
+                    </td></tr>
+                  )}
+                  </Fragment>
                 )
               })}
             </tbody>

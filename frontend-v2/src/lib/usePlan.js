@@ -30,8 +30,11 @@ export function usePlan() {
   const daysLeft = billing?.days_left ?? null
   const isTrialing = status === 'trial'
   const isBlocked = billing?.required === true
+  // Pantallas que tiene activadas la empresa. null = todas (la de Dani);
+  // undefined mientras carga, que tambien deja ver para no parpadear.
+  const modulos = billing?.modulos
 
-  return { plan, limits, status, daysLeft, isTrialing, isBlocked, billing }
+  return { plan, limits, status, daysLeft, isTrialing, isBlocked, billing, modulos }
 }
 
 // Invalida cache tras cambios de plan

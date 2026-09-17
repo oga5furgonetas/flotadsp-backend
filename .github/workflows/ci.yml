@@ -67,6 +67,8 @@ jobs:
         run: node scripts/check-informes-portal.mjs
       - name: Envio de una candidatura (se reintenta, y reintentarlo es seguro)
         run: node scripts/check-envio-candidatura.mjs
+      - name: Modulos por empresa (el menu y el catalogo cuadran)
+        run: node scripts/check-modulos.mjs
       - name: Checker patrones (codigo que repite un bug ya conocido)
         run: node scripts/check-patrones.mjs
 

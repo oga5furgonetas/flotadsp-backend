@@ -513,7 +513,8 @@ export const putDailyAssignment = (body) => api.put('/assignments/daily', body) 
 /* ── Negocio (super-admin) ── */
 export const getAdminOverview = () => api.get('/admin/overview')
 export const getAdminOrgs = () => api.get('/admin/orgs')
-export const updateOrg = (body) => api.post('/admin/org', body) // {id, status?, plan?, extend_trial_days?, add_center?, max_centers?}
+export const updateOrg = (body) => api.post('/admin/org', body) // {id, status?, plan?, extend_trial_days?, add_center?, max_centers?, modulos?}
+export const getAdminModulos = () => api.get('/admin/modulos')
 export const impersonateOrg = (id) => api.post('/admin/impersonate', { id })
 export const deleteOrg = (id) => api.delete(`/admin/org/${id}`)
 export const getLeads = () => api.get('/leads')
