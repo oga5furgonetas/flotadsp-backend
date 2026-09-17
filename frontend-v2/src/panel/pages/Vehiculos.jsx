@@ -2829,8 +2829,10 @@ export default function Vehiculos() {
   const list = useMemo(() => (vehicles || []).filter(v => {
     if (soloSinRueda && spare[v.id]?.estado !== 'no') return false
     if (!q) return true
-    const s = q.toLowerCase()
-    return [v.license_plate, v.brand, v.model, v.center, v.vin].some(x => (x || '').toLowerCase().includes(s))
+    // Sin espacios ni guiones: «5995lyf» encuentra «5995 LYF» y al revés.
+    const plano = (x) => String(x || '').toLowerCase().replace(/[\s-]/g, '')
+    const s = plano(q)
+    return [v.license_plate, v.brand, v.model, v.center, v.vin].some(x => plano(x).includes(s))
   }), [vehicles, q, soloSinRueda, spare])
 
   const kpis = useMemo(() => {
