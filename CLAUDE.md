@@ -1686,6 +1686,22 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    despliegue del todo. Cuesta dinero al mes; el reintento es la red de abajo.
 
 
+78. **Una variable local con el nombre de un campo del formulario lo PISA, y
+   el endpoint falla con un mensaje que apunta al usuario.** En
+   `drivers_importar`, `centros = [naves de la empresa]` sustituia al campo
+   `centros` del `Form` (lo elegido en la vista previa); despues
+   `json.loads(lista)` lanzaba `TypeError` y salia «La seleccion de centros no
+   es valida. Vuelve a elegir el fichero». **Importar conductores daba 400
+   siempre**, con o sin eleccion, desde el 16-09 a las 00:58 hasta el 17-09 por
+   la manana. No lo sufrio nadie (cero 400 en `audit_requests`); lo cazo
+   `smoke_empresa_nueva.py` contra staging, no los tests, que probaban las
+   funciones puras y no el endpoint. Trinquete en
+   `test_importar_conductores.py`, probado contra la version con el fallo.
+   Y la otra mitad: un campo nuevo del formulario llega VACIO desde una
+   pestana vieja; vacio es «no hubo vista previa», no un error (gotcha 76).
+   Regla: **despues de tocar un endpoint, pasar el smoke que lo llama**; un test
+   de la funcion de dentro no prueba el cableado de fuera.
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
