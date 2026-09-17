@@ -1068,7 +1068,6 @@ MODULOS_PANEL = [
     {"clave": "dashboard", "nombre": "Inicio", "grupo": "Hoy", "que": "Resumen del dia"},
     {"clave": "mi-dia", "nombre": "Mi dia", "grupo": "Hoy", "que": "Tareas del responsable"},
     {"clave": "actividad", "nombre": "Actividad", "grupo": "Hoy", "que": "Lo ultimo que ha pasado"},
-    {"clave": "ai-asistente", "nombre": "FlotaDSP AI", "grupo": "Hoy", "que": "El asistente de cada nave"},
     {"clave": "paquetes", "nombre": "Paquetes IA", "grupo": "Operacion diaria", "que": "Cortex en vivo (necesita la extension)"},
     {"clave": "apoyo", "nombre": "Apoyo en ruta", "grupo": "Operacion diaria", "que": "Pasar paradas entre conductores"},
     {"clave": "debrief", "nombre": "Debrief", "grupo": "Operacion diaria", "que": "Cierre de rutas"},
@@ -1100,7 +1099,7 @@ MODULOS_PANEL = [
 _MODULOS_CLAVES = [m["clave"] for m in MODULOS_PANEL]
 # Lo que ve una empresa nueva: la flota y su gente, sin lo que aun se esta
 # afinando con la flota de Dani.
-MODULOS_ESTANDAR = ["dashboard", "mi-dia", "ai-asistente", "asignacion", "vehiculos", "revision",
+MODULOS_ESTANDAR = ["dashboard", "mi-dia", "asignacion", "vehiculos", "revision",
                     "inspecciones", "incidencias", "talleres", "ordenes", "vencimientos", "importaciones",
                     "conductores", "configuracion"]
 # Sin estas no se puede ni empezar: no se pueden quitar.
@@ -50338,21 +50337,65 @@ REGLAS QUE NO PUEDES SALTARTE:
   relleno ni de repetir la pregunta.
 - Los datos en vivo de abajo son la ÚNICA verdad sobre el estado de este
   centro ahora mismo — nunca inventes un número que no esté ahí.
-
 DATOS EN VIVO DE {center}:
 {contexto}
 
 {_IA_ASISTENTE_MANUAL}
 
+REGLA OBLIGATORIA SOBRE "tarjeta" (no es opcional, léela dos veces):
+Si tu "respuesta" menciona AUNQUE SEA UN SOLO NÚMERO de los datos en vivo de
+arriba (WHC, DNR, candidatos...), "tarjeta" NO PUEDE quedarse en null: tiene
+que llevar ese mismo número, o varios, en filas cortas — la persona lo va a
+LEER de un vistazo en una tarjeta, no buscarlo dentro de una frase. Solo se
+deja "tarjeta" en null cuando la respuesta NO lleva ningún número (un "cómo
+se hace X", una charla, un "no lo sé"). Ejemplo de cuándo SÍ:
+  pregunta: "¿cómo va mi WHC?"
+  respuesta: "En OGA5 van bien las horas, con una persona a vigilar."
+  tarjeta: {{"titulo": "WHC de OGA5", "filas": [
+    {{"etiqueta": "Conductores con horas", "valor": "97", "tono": "neutro"}},
+    {{"etiqueta": "Van a pasarse", "valor": "1", "tono": "alerta"}},
+    {{"etiqueta": "Se acercan", "valor": "13", "tono": "aviso"}}]}}
+tono: "ok" (verde, va bien) | "aviso" (ámbar, vigilar) | "alerta" (rojo, ya
+es un problema) | "neutro" (gris, un dato sin más).
+
 Responde ÚNICAMENTE con este JSON, sin markdown ni texto fuera de él:
 {{
-  "respuesta": "tu respuesta en español, para leer en un chat",
+  "respuesta": "tu respuesta en español, para leer en un chat — breve si ya va tarjeta detrás",
+  "tarjeta": null o {{"titulo": "...", "filas": [{{"etiqueta": "...", "valor": "...", "tono": "..."}}]}},
   "accion_propuesta": null o {{
     "tipo": "crear_vehiculo" | "crear_conductor",
     "campos": {{"license_plate": "...", "brand": "...", "model": "...", "color": "...", "vin": "..."}}
     // para conductor: {{"name": "...", "phone": "...", "email": "...", "dni": "..."}}
   }}
 }}"""
+
+
+_IA_ASISTENTE_TONOS = ("ok", "aviso", "alerta", "neutro")
+
+
+def _ai_asistente_validar_tarjeta(t):
+    """No nos fiamos de que Gemini respete el esquema al pie de la letra
+    (gotcha 38: nunca del cliente, y un LLM es el cliente menos fiable de
+    todos). Cualquier fila rara se descarta en vez de romper la pantalla."""
+    if not isinstance(t, dict):
+        return None
+    titulo = _texto_cuerpo(t.get("titulo"), 60)
+    filas_in = t.get("filas")
+    if not titulo or not isinstance(filas_in, list):
+        return None
+    filas = []
+    for f in filas_in[:8]:
+        if not isinstance(f, dict):
+            continue
+        etiqueta = _texto_cuerpo(f.get("etiqueta"), 40)
+        valor = _texto_cuerpo(f.get("valor"), 20)
+        if not etiqueta or not valor:
+            continue
+        tono = f.get("tono") if f.get("tono") in _IA_ASISTENTE_TONOS else "neutro"
+        filas.append({"etiqueta": etiqueta, "valor": valor, "tono": tono})
+    if not filas:
+        return None
+    return {"titulo": titulo, "filas": filas}
 
 
 class _IAAsistenteEntrada(BaseModel):
@@ -50434,6 +50477,7 @@ async def ai_asistente_hablar(data: _IAAsistenteEntrada, user: dict = Depends(re
     if not (isinstance(accion, dict) and accion.get("tipo") in _IA_ASISTENTE_ACCIONES
             and isinstance(accion.get("campos"), dict)):
         accion = None
+    tarjeta = _ai_asistente_validar_tarjeta(salida.get("tarjeta"))
 
     ahora = datetime.now(timezone.utc).isoformat()
     uid = user.get("sub") or user.get("id")
@@ -50441,9 +50485,9 @@ async def ai_asistente_hablar(data: _IAAsistenteEntrada, user: dict = Depends(re
         {"id": str(uuid.uuid4()), "user_id": uid, "center": center, "rol": "usuario",
          "texto": mensaje, "creado_en": ahora},
         {"id": str(uuid.uuid4()), "user_id": uid, "center": center, "rol": "asistente",
-         "texto": respuesta, "accion_propuesta": accion, "creado_en": ahora},
+         "texto": respuesta, "accion_propuesta": accion, "tarjeta": tarjeta, "creado_en": ahora},
     ])
-    return {"respuesta": respuesta, "accion_propuesta": accion}
+    return {"respuesta": respuesta, "accion_propuesta": accion, "tarjeta": tarjeta}
 
 
 @api_router.get("/ai/asistente/historial")

@@ -258,7 +258,6 @@ const PanelOrigenDanos = lazy(() => import('./panel/pages/OrigenDanos'))
 const PanelMetricas = lazy(() => import('./panel/pages/Metricas'))
 const PanelImportaciones = lazy(() => import('./panel/pages/Importaciones'))
 const PanelActividad = lazy(() => import('./panel/pages/Actividad'))
-const PanelAsistenteIA = lazy(() => import('./panel/pages/AsistenteIA'))
 const PanelPortalConductor = lazy(() => import('./panel/pages/PortalConductor'))
 const PanelAsignacion = lazy(() => import('./panel/pages/Asignacion'))
 const PanelChecklistOp = lazy(() => import('./panel/pages/ChecklistOperativo'))
@@ -369,7 +368,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="plantilla" element={<PanelPlantilla />} />
                 <Route path="metricas" element={<PanelMetricas />} />
                 <Route path="actividad" element={<PanelActividad />} />
-                <Route path="ai-asistente" element={<PanelAsistenteIA />} />
                 {/* Furgonetas */}
                 <Route path="revision" element={<PanelRevision />} />
                 <Route path="inspecciones" element={<PanelInspecciones />} />

@@ -20,7 +20,6 @@ import { lista } from '../../lib/lista'
 const MODULES = [
   { g: 'Hoy', items: [
     ['dashboard', 'Dashboard'], ['mi-dia', 'Mi día'], ['actividad', 'Actividad'],
-    ['ai-asistente', 'FlotaDSP AI'],
   ]},
   { g: 'Operación diaria', items: [
     ['paquetes', 'Paquetes IA'], ['apoyo', 'Apoyo en ruta'],
