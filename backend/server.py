@@ -6019,6 +6019,12 @@ _DEMO_RUTAS = 8
 _DEMO_PAQ_RUTA = 110
 _DEMO_DIAS = 8
 _DEMO_FALLOS = ("BACK_TO_ORIGIN", "NOT_DELIVERED", "CUSTOMER_UNAVAILABLE")
+# Donde se deja cada paquete entregado (para la pantalla DSC). Una ruta deja
+# bastante mas sin nadie delante, que es lo que esa pantalla sirve para ver.
+_DEMO_LUGARES = (("DELIVERED_TO_HOUSEHOLD_MEMBER", 46), ("DELIVERED_TO_STORE", 30),
+                 ("DELIVERED_TO_RECEPTIONIST", 6), ("DELIVERED_TO_LOCKER", 5),
+                 ("DELIVERED_TO_SAFE_LOCATION", 5), ("DELIVERED_TO_NEIGHBOR", 3),
+                 ("DELIVERED_TO_GARDEN", 3), ("DELIVERED_TO_MAIL_SLOT", 2))
 _DEMO_CALLES = ("Calle de Alcalá", "Gran Vía", "Calle de Atocha", "Paseo de la Castellana",
                 "Calle de Bravo Murillo", "Calle de Toledo", "Calle de Serrano", "Calle de O'Donnell")
 
@@ -6049,7 +6055,16 @@ def _demo_paquetes(hoy: str, hora: int) -> tuple:
                 else:
                     estado = "DELIVERED"
                 estados[estado] = estados.get(estado, 0) + 1
+                extra = {}
+                if estado == "DELIVERED":
+                    lugares = [x for x, _ in _DEMO_LUGARES]
+                    pesos = [w * (4 if ruta == 6 and x in ("DELIVERED_TO_GARDEN", "DELIVERED_TO_NEIGHBOR",
+                                                           "DELIVERED_TO_SAFE_LOCATION") else 1)
+                             for x, w in _DEMO_LUGARES]
+                    extra["timeline"] = [{"state": "DELIVERED",
+                                          "context": rnd.choices(lugares, pesos)[0]}]
                 paquetes.append({
+                    **extra,
                     "tba": f"TBADEMO{dia.replace('-', '')}{ruta}{n:03d}",
                     "service_day": dia, "state": estado, "center": "MADRID",
                     "route_code": f"XA_C{ruta + 1}", "driver_id": tid,
