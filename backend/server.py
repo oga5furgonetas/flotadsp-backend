@@ -36931,8 +36931,18 @@ def _horarios_conductores(rosters: dict, hoy: str) -> list:
                 })
         if not bloques and not pendiente:
             continue
+        # `driverName` va al nivel de arriba (comprobado contra el esquema
+        # real capturado el 17-09-2026: `confidentialFields` no existe en
+        # este objeto — solo dentro de `shiftAssignmentsMap`, que es otra
+        # cosa. Se llego a sospechar por ahi y no era). Respaldo con nombre y
+        # apellidos por separado, por si `driverName` viniera vacio para
+        # alguien en concreto y los otros dos no.
+        nombre = _texto_cuerpo(c.get("driverName"), 80)
+        if not nombre:
+            nombre = _texto_cuerpo(
+                " ".join(x for x in (c.get("driverFirstName"), c.get("driverLastName")) if x), 80)
         fuera.append({
-            "nombre": _texto_cuerpo(c.get("driverName"), 80),
+            "nombre": nombre,
             "driver_id": _texto_cuerpo(c.get("driverProviderId"), 80),
             "estado": _texto_cuerpo(c.get("driverOperationalStatus"), 20),
             "trabajado": trabajado,
