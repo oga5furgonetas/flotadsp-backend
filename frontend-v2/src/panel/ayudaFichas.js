@@ -45,6 +45,14 @@ export const AYUDA = {
     que: 'Lo tuyo, no lo de todos: lo que tienes asignado y lo que te falta hacer hoy.',
     pasos: ['Repásalo antes de salir de la oficina: lo que quede aquí, queda sin hacer.'],
   },
+  'ai-asistente': {
+    que: 'El asistente de tu nave: pregúntale cómo se hace algo, o cómo va tu WHC, tus DNR o tus candidatos.',
+    pasos: [
+      'Escribe tu pregunta como se la harías a un compañero.',
+      'Si le pides crear un vehículo o un conductor, te propone la ficha y tú confirmas con un clic — nunca la crea sola.',
+    ],
+    ojo: 'Solo ve y toca el centro que tienes elegido arriba, y solo puede crear, nunca borrar ni editar.',
+  },
   actividad: {
     que: 'Quién ha tocado qué y cuándo. Sirve para reconstruir por qué algo cambió.',
     pasos: ['Filtra por persona o por fecha cuando alguien pregunte "¿quién ha hecho esto?".'],

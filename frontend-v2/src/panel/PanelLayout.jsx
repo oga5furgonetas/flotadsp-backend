@@ -7,7 +7,7 @@ import {
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX, FileBarChart,
   PackageSearch, PackageCheck, MapPin, Timer, MapPinned, Gauge, Mail, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
-  Briefcase, Store, UserCheck,
+  Briefcase, Store, UserCheck, Sparkles,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco, esPlataforma } from './auth'
 import { getMe, contarPeticionesPendientes, contarCandidatosNuevos, contarDnrPendientes } from './api'
@@ -55,6 +55,7 @@ const NAV_DEF = [
     { to: '/panel', labelKey: 'nav.dashboard', icon: LayoutDashboard, end: true },
     { to: '/panel/mi-dia', labelKey: 'nav.miDia', icon: Sun },
     { to: '/panel/actividad', labelKey: 'nav.activity', icon: Activity },
+    { to: '/panel/ai-asistente', labelKey: 'nav.aiAsistente', icon: Sparkles },
   ]},
   // Nada mas: aqui solo va lo que hay que CONTESTAR, no lo que hay que hacer.
   // Un numero rojo permanente en el menu deja de mirarse a los dos dias.

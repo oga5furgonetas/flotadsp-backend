@@ -18,7 +18,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from PIL import Image
 
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator, ValidationError
 
 from typing import List, Optional, Tuple
 
@@ -1068,6 +1068,7 @@ MODULOS_PANEL = [
     {"clave": "dashboard", "nombre": "Inicio", "grupo": "Hoy", "que": "Resumen del dia"},
     {"clave": "mi-dia", "nombre": "Mi dia", "grupo": "Hoy", "que": "Tareas del responsable"},
     {"clave": "actividad", "nombre": "Actividad", "grupo": "Hoy", "que": "Lo ultimo que ha pasado"},
+    {"clave": "ai-asistente", "nombre": "FlotaDSP AI", "grupo": "Hoy", "que": "El asistente de cada nave"},
     {"clave": "paquetes", "nombre": "Paquetes IA", "grupo": "Operacion diaria", "que": "Cortex en vivo (necesita la extension)"},
     {"clave": "apoyo", "nombre": "Apoyo en ruta", "grupo": "Operacion diaria", "que": "Pasar paradas entre conductores"},
     {"clave": "debrief", "nombre": "Debrief", "grupo": "Operacion diaria", "que": "Cierre de rutas"},
@@ -1099,8 +1100,8 @@ MODULOS_PANEL = [
 _MODULOS_CLAVES = [m["clave"] for m in MODULOS_PANEL]
 # Lo que ve una empresa nueva: la flota y su gente, sin lo que aun se esta
 # afinando con la flota de Dani.
-MODULOS_ESTANDAR = ["dashboard", "mi-dia", "asignacion", "vehiculos", "revision", "inspecciones",
-                    "incidencias", "talleres", "ordenes", "vencimientos", "importaciones",
+MODULOS_ESTANDAR = ["dashboard", "mi-dia", "ai-asistente", "asignacion", "vehiculos", "revision",
+                    "inspecciones", "incidencias", "talleres", "ordenes", "vencimientos", "importaciones",
                     "conductores", "configuracion"]
 # Sin estas no se puede ni empezar: no se pueden quitar.
 _MODULOS_FIJOS = ("dashboard", "configuracion")
@@ -1551,6 +1552,7 @@ async def _ensure_tenant_indexes(db_name: str):
         [("inspection_id", 1), ("scope", 1), ("damage_index", 1)], unique=True,
         name="feedback_unico", partialFilterExpression={"damage_index": {"$type": "number"}}
     )
+    await _idx(tdb.ai_chat_msgs, [("user_id", 1), ("center", 1), ("creado_en", 1)])
     await _idx(tdb.incidents, "vehicle_id")
     await _idx(tdb.incidents, "status")
     await _idx(tdb.forensic_signatures, [("inspection_id", 1), ("revision", 1)], unique=True)
@@ -50211,6 +50213,271 @@ async def tienda_ver_foto(prenda_id: str, user: dict = Depends(require_any_auth)
         # otra URL y no hay que invalidar nada.
         headers={"cache-control": "private, max-age=31536000, immutable"},
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# FLOTADSP AI — el asistente de cada centro, sin más poder que quien lo usa
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Responde "¿cómo hago X?" con el manual de abajo, y "¿cómo va mi WHC?" con
+# datos EN VIVO del propio centro — los mismos que ya usan /whc/semana,
+# /dnr/investigaciones/pendientes y /empleo/candidatos/nuevos, nunca un
+# número aparte que pudiera decir otra cosa (gotcha 40: un dato copiado dejar
+# de ser el mismo dato en cuanto el original cambia).
+#
+# LO QUE NO PUEDE HACER, por diseño y no por promesa a la IA:
+#   · nunca ve ni toca un centro que el usuario no pueda ver
+#     (_user_can_see_center, la misma regla que toda la app);
+#   · no borra ni edita nada, solo puede PROPONER crear un vehículo o un
+#     conductor — nunca lo ejecuta ella sola. La propuesta vuelve al
+#     frontend, y hace falta un clic humano de confirmación que llama a
+#     /ai/asistente/ejecutar, que a su vez llama a la MISMA función que usa
+#     el formulario normal (create_vehicle/create_driver): pasa por sus
+#     mismas comprobaciones (matrícula duplicada, correo duplicado...) sin
+#     ninguna lógica nueva que pueda tener un fallo propio (gotcha 38: cinco
+#     condiciones para que algo se ejecute solo, y aquí ni siquiera se
+#     cumple la primera a propósito).
+
+_IA_ASISTENTE_COL = "ai_chat_msgs"
+_IA_ASISTENTE_ACCIONES = ("crear_vehiculo", "crear_conductor")
+
+_IA_ASISTENTE_MANUAL = """
+=== MANUAL BREVE DE FLOTADSP (para explicar "cómo se hace X") ===
+Vehículos: ficha de cada furgoneta (estado, papeles, daños, gemelo 3D). Busca
+por matrícula. Documentación tiene seguro/ITV/renting. Las de baja no salen
+en listados normales.
+Conductores: ficha de cada persona. Para varios de golpe, «Importar Excel»
+(vale cualquier columna que tenga el nombre). El Transporter ID reparte los
+DNR: si está mal puesto, los fallos van a otra persona.
+Inspecciones: las fotos que hacen los conductores al coger/dejar furgoneta.
+Revisión rápida: aquí se valida lo que ve la IA — es lo ÚNICO que la hace
+mejorar. Botones: acierto, no existe, "sí pero no ahí" (el daño es real pero
+el recuadro está mal puesto), "no se ve" (la foto no permite juzgarlo).
+Incidencias: partes de golpes/averías con foto; desde una se abre una orden
+de taller sin volver a escribir nada.
+Talleres / Órdenes de taller: agenda de talleres y seguimiento sin llamar:
+el parte sale con daños y taller ya puestos, se manda por WhatsApp con un
+enlace público (sin registro), y la app pregunta sola cada pocos días.
+Asignación diaria: qué furgoneta lleva cada conductor hoy; asígnalo antes de
+que salgan las rutas.
+Turnos (cuadrante): quién trabaja qué día. Se pinta con el pincel de código;
+los días aprobados salen en rosa y no se mueven sin permiso.
+Plantilla de turno: la plantilla de personal, generada desde Turnos —cierra
+el cuadrante antes de descargarla.
+WHC (cumplimiento de horas): quién se acerca o se pasa del límite semanal de
+Amazon (54h30 fijas, no las cambia cada nave). Entra solo desde la extensión;
+avisa antes del viernes, que es cuando ya no se puede arreglar.
+Informes de Amazon (DNR y diarios): los Daily Report de Cortex, con qué no
+se entregó. El bloque de DNR es de DOS DÍAS ANTES y la columna de defectos se
+rellena tarde: un día recién bajado sale mejor de lo que acabará quedando.
+Dónde se entrega (DSC): direcciones que fallan al entregar — la métrica que
+más le cuesta a un DSP. Corregir una dirección la arregla para siempre.
+Empleo: ofertas con enlace público. Al crear una oferta, EL CENTRO que
+elijas decide en qué tablero salen sus candidatos y en qué nave nace la
+ficha al contratar. JOIN se conecta con un token propio (join.com/user/api);
+si hay más de un puesto en JOIN hay que elegir a cuál corresponde, o mezcla
+naves.
+Apoyo en ruta: cuando alguien va tarde, quitarle paradas y dárselas a otro
+conductor por WhatsApp con el mapa. El backup del día sale marcado primero.
+Scorecard: sube el PDF que manda Amazon cada miércoles para ver el tier y
+qué métrica hay que atacar.
+Vencimientos: ITV, seguro y permisos que caducan; lo que está en rojo ya
+venció.
+Importaciones: subir ficheros de furgonetas/conductores/datos externos, con
+vista previa antes de confirmar.
+"""
+
+
+async def _ai_asistente_contexto(user: dict, center: str) -> str:
+    """Lo que la IA puede CONTAR de este centro ahora mismo. Cada pieza sale
+    de la misma función que ya usa su pantalla — nunca un número calculado
+    aparte que pudiera no cuadrar con lo que el usuario ve al abrirla."""
+    piezas = []
+    try:
+        w = await whc_semana(center, user)
+        if w.get("hay"):
+            r = w["resumen"]
+            piezas.append(
+                f"WHC de {center} (actualizado {w.get('actualizado', '?')}): {r['total']} conductores con "
+                f"horas esta semana, {r['pasan_proyectando']} van a pasarse del límite semanal proyectando lo "
+                f"que tienen puesto, {r['acercandose']} se acercan, {r['ya_pasados']} ya se han pasado.")
+        else:
+            piezas.append(f"WHC de {center}: {w.get('porque') or 'todavía no hay datos de esta nave'}.")
+    except Exception as e:                                        # noqa: BLE001
+        logger.debug(f"[IA asistente] contexto WHC: {e}")
+    try:
+        d = await dnr_contar_pendientes(center, user)
+        piezas.append(f"Investigaciones DNR de Amazon sin contestar en {center}: {d.get('pendientes', 0)}.")
+    except Exception as e:                                        # noqa: BLE001
+        logger.debug(f"[IA asistente] contexto DNR: {e}")
+    try:
+        c = await empleo_contar_nuevos(center, user)
+        piezas.append(f"Candidaturas nuevas sin mirar en Empleo de {center}: {c.get('nuevos', 0)}.")
+    except Exception as e:                                        # noqa: BLE001
+        logger.debug(f"[IA asistente] contexto candidatos: {e}")
+    return "\n".join(piezas) or "Sin datos en vivo disponibles ahora mismo para este centro."
+
+
+def _ai_asistente_prompt(center: str, contexto: str) -> str:
+    return f"""Eres FLOTADSP AI, el asistente del panel de FlotaDSP para el centro {center}.
+
+QUIÉN TE HABLA: alguien de la oficina de esta nave, no un desarrollador. Puede
+ser nuevo en la herramienta.
+
+REGLAS QUE NO PUEDES SALTARTE:
+- Solo hablas del centro {center}. Si preguntan por otra nave, di que tú solo
+  ves la suya y que cambien de centro arriba para verla.
+- No sabes nada de código ni puedes cambiar nada "importante" (permisos,
+  precios, configuración) — eso lo dices y ya está, no lo intentes.
+- Solo puedes PROPONER dos acciones: crear un vehículo o crear un conductor.
+  Nunca las ejecutas tú: propones y una persona confirma con un clic.
+  Para un vehículo hace falta al menos la matrícula. Para un conductor, al
+  menos el nombre. Si falta algo imprescindible, pregúntalo en tu respuesta
+  y NO propongas la acción todavía.
+- Respuestas completas pero sin rollo: la persona tiene prisa. Nada de
+  relleno ni de repetir la pregunta.
+- Los datos en vivo de abajo son la ÚNICA verdad sobre el estado de este
+  centro ahora mismo — nunca inventes un número que no esté ahí.
+
+DATOS EN VIVO DE {center}:
+{contexto}
+
+{_IA_ASISTENTE_MANUAL}
+
+Responde ÚNICAMENTE con este JSON, sin markdown ni texto fuera de él:
+{{
+  "respuesta": "tu respuesta en español, para leer en un chat",
+  "accion_propuesta": null o {{
+    "tipo": "crear_vehiculo" | "crear_conductor",
+    "campos": {{"license_plate": "...", "brand": "...", "model": "...", "color": "...", "vin": "..."}}
+    // para conductor: {{"name": "...", "phone": "...", "email": "...", "dni": "..."}}
+  }}
+}}"""
+
+
+class _IAAsistenteEntrada(BaseModel):
+    mensaje: str
+    center: str
+
+
+@api_router.post("/ai/asistente")
+async def ai_asistente_hablar(data: _IAAsistenteEntrada, user: dict = Depends(require_admin)):
+    mensaje = _texto_cuerpo(data.mensaje, 2000)
+    center = _texto_cuerpo(data.center, 20)
+    if not mensaje:
+        raise HTTPException(400, "Escribe algo primero")
+    if not center or not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not gemini_key and os.environ.get("USE_VERTEX_AI", "").lower() not in ("1", "true", "yes"):
+        raise HTTPException(503, "El asistente no está configurado todavía")
+
+    contexto = await _ai_asistente_contexto(user, center)
+    # Un poco de historial para que no se le olvide de que estaban hablando,
+    # sin arrastrar la conversación entera en cada turno.
+    previas = await db[_IA_ASISTENTE_COL].find(
+        {"user_id": user.get("sub") or user.get("id"), "center": center},
+        {"_id": 0, "rol": 1, "texto": 1}, sort=[("creado_en", -1)], limit=10).to_list(10)
+    previas.reverse()
+
+    contents = [_ai_asistente_prompt(center, contexto)]
+    for p in previas:
+        contents.append(f"{'USUARIO' if p['rol'] == 'usuario' else 'ASISTENTE'}: {p['texto']}")
+    contents.append(f"USUARIO: {mensaje}")
+
+    try:
+        from google import genai as genai_sdk
+        from google.genai import types as genai_types
+        if os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes"):
+            from google.oauth2 import service_account
+            sa = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+            if sa and not sa.startswith("{"):
+                sa = base64.b64decode(sa).decode("utf-8")
+            creds = (service_account.Credentials.from_service_account_info(
+                json.loads(sa), scopes=["https://www.googleapis.com/auth/cloud-platform"]) if sa else None)
+            client = genai_sdk.Client(vertexai=True, project=os.environ.get("GCP_PROJECT", ""),
+                                      location=os.environ.get("GCP_LOCATION", "us-central1"), credentials=creds)
+        else:
+            client = genai_sdk.Client(api_key=gemini_key)
+        cfg = genai_types.GenerateContentConfig(temperature=0.3, response_mime_type="application/json")
+        loop = asyncio.get_running_loop()
+        async with _gemini_sem:
+            resp = await asyncio.wait_for(
+                loop.run_in_executor(_executor, lambda: client.models.generate_content(
+                    model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
+                    contents=contents, config=cfg)),
+                timeout=30.0)
+        salida = json.loads(_strip_markdown_json(resp.text or "{}"))
+    except Exception as e:                                        # noqa: BLE001
+        logger.warning(f"[IA asistente] fallo Gemini: {e}")
+        raise HTTPException(502, "El asistente no ha podido responder, prueba en un minuto")
+
+    respuesta = _texto_cuerpo(salida.get("respuesta"), 4000) or "No he sabido qué contestar a eso."
+    accion = salida.get("accion_propuesta")
+    if not (isinstance(accion, dict) and accion.get("tipo") in _IA_ASISTENTE_ACCIONES
+            and isinstance(accion.get("campos"), dict)):
+        accion = None
+
+    ahora = datetime.now(timezone.utc).isoformat()
+    uid = user.get("sub") or user.get("id")
+    await db[_IA_ASISTENTE_COL].insert_many([
+        {"id": str(uuid.uuid4()), "user_id": uid, "center": center, "rol": "usuario",
+         "texto": mensaje, "creado_en": ahora},
+        {"id": str(uuid.uuid4()), "user_id": uid, "center": center, "rol": "asistente",
+         "texto": respuesta, "accion_propuesta": accion, "creado_en": ahora},
+    ])
+    return {"respuesta": respuesta, "accion_propuesta": accion}
+
+
+@api_router.get("/ai/asistente/historial")
+async def ai_asistente_historial(center: str, user: dict = Depends(require_admin)):
+    center = _texto_cuerpo(center, 20)
+    if not center or not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+    uid = user.get("sub") or user.get("id")
+    msgs = await db[_IA_ASISTENTE_COL].find(
+        {"user_id": uid, "center": center}, {"_id": 0},
+        sort=[("creado_en", 1)], limit=200).to_list(200)
+    return {"mensajes": msgs}
+
+
+class _IAAsistenteAccion(BaseModel):
+    tipo: str
+    campos: dict
+    center: str
+
+
+@api_router.post("/ai/asistente/ejecutar")
+async def ai_asistente_ejecutar(data: _IAAsistenteAccion, user: dict = Depends(require_admin)):
+    """Ejecuta una acción que la IA propuso y una persona confirmó con un
+    clic. Llama a la MISMA función que el formulario normal — no hay una
+    segunda copia de "cómo se crea un vehículo" que se pueda desincronizar."""
+    if data.tipo not in _IA_ASISTENTE_ACCIONES:
+        raise HTTPException(400, "Esa acción no existe")
+    center = _texto_cuerpo(data.center, 20)
+    if not center or not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+    campos = dict(data.campos or {})
+    # El centro lo decide SIEMPRE la sesión, nunca lo que la IA haya
+    # entendido o lo que venga en el cuerpo: es la frontera de "no más poder
+    # que quien lo usa" hecha código, no una promesa del prompt.
+    campos["center"] = center
+
+    if data.tipo == "crear_vehiculo":
+        try:
+            vehiculo = VehicleCreate(**campos)
+        except ValidationError as e:
+            raise HTTPException(400, f"Faltan datos del vehículo: {e.errors()[0].get('msg', 'revisa los campos')}")
+        creado = await create_vehicle(vehiculo, user)
+        return {"ok": True, "tipo": data.tipo, "creado": creado.model_dump()}
+
+    try:
+        conductor = DriverCreate(**campos)
+    except ValidationError as e:
+        raise HTTPException(400, f"Faltan datos del conductor: {e.errors()[0].get('msg', 'revisa los campos')}")
+    creado = await create_driver(conductor, False, user)
+    return {"ok": True, "tipo": data.tipo, "creado": creado.model_dump() if hasattr(creado, "model_dump") else creado}
 
 
 app.include_router(auth_router)

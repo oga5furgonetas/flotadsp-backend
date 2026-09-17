@@ -21,6 +21,11 @@ export const toggleChecklistItem = (body) => api.post('/checklist/toggle', body)
 export const getChat = (center, since) => api.get(`/chat/${center}`, { params: since ? { since } : {} })
 export const postChat = (center, text) => api.post(`/chat/${center}`, { text })
 export const deleteChatMessage = (center, messageId) => api.delete(`/chat/${center}/${messageId}`)
+
+/* ── FlotaDSP AI: el asistente de cada centro ── */
+export const getAiHistorial = (center) => api.get('/ai/asistente/historial', { params: { center } })
+export const enviarMensajeIA = (mensaje, center) => api.post('/ai/asistente', { mensaje, center })
+export const ejecutarAccionIA = (tipo, campos, center) => api.post('/ai/asistente/ejecutar', { tipo, campos, center })
 export const saveChecklistTemplate = (body) => api.post('/checklist/template', body) // {center, shift, items}
 // Cierre de turno: sale solo a su hora, esto lo dispara ahora para probarlo.
 export const enviarResumenTurno = (body) => api.post('/checklist/enviar-resumen', body)
