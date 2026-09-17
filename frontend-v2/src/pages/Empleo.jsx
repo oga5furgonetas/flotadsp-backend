@@ -3,7 +3,7 @@ import { useParams, useSearchParams } from 'react-router-dom'
 import axios from 'axios'
 import {
   Loader2, AlertTriangle, CheckCircle2, MapPin, Clock, Euro, Package,
-  ChevronRight, ShieldCheck, Paperclip, X, Truck, CalendarCheck, Users,
+  ChevronRight, ShieldCheck, Paperclip, X, Truck, GraduationCap, Users,
 } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
 import { enviarCandidatura } from '../lib/enviarCandidatura'
@@ -269,7 +269,8 @@ export default function Empleo() {
         {/* Lo que de verdad quiere saber quien se está pensando apuntarse. */}
         <div className="mt-5 grid grid-cols-3 gap-2">
           <Ventaja icon={Truck} titulo="Furgoneta" pie="La pone la empresa" />
-          <Ventaja icon={CalendarCheck} titulo="Turno fijo" pie="Sabes tu horario" />
+          {/* Era «Turno fijo», y las ofertas hablan de descansos rotativos. */}
+          <Ventaja icon={GraduationCap} titulo="Formación" pie="Te enseñamos" />
           <Ventaja icon={Users} titulo="Con equipo" pie="No vas solo" />
         </div>
 
