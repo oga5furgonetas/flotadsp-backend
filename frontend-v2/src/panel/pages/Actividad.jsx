@@ -32,13 +32,16 @@ export default function Actividad() {
   const [err, setErr] = useState('')
 
   useEffect(() => {
-    Promise.all([getInspections({ limit: 80 }), getVehicles('Todos')])
+    // La nave va al servidor: pidiendo las 80 últimas de la empresa y
+    // filtrando aquí, con una nave elegida salían muchas menos de 80.
+    setInsps(null)
+    Promise.all([getInspections({ limit: 80, ...(center && center !== 'Todos' ? { center } : {}) }), getVehicles('Todos')])
       .then(([ri, rv]) => {
         const m = {}; (lista(rv.data)).forEach((v) => { m[v.id] = { plate: verMatricula(v.license_plate), center: v.center || '' } })
         setVmap(m); setInsps(lista(ri.data))
       })
       .catch(() => setErr(t('act.load.err')))
-  }, [])
+  }, [center]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const list = useMemo(() => (insps || []).filter((i) => {
     if (center === 'Todos') return true
