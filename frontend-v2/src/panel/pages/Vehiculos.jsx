@@ -61,20 +61,36 @@ const daysTo = (d) => {
   return Math.round((f - h) / 86400000)
 }
 
+// '2026-11-20' -> '20/11/2026', troceando el texto (gotcha 11).
+const fechaEs = (f) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(f || ''))
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : (f || '')
+}
+
+// El aviso ámbar empieza a los 60 días, igual que la tarjeta «ITV vencida o
+// en 60 días» de arriba: con 30 aquí, la tarjeta contaba furgonetas que en la
+// tabla no se veían marcadas.
 function itvBadge(itv) {
   const d = daysTo(itv)
   if (d == null) return <span className="text-dark-600">—</span>
-  if (d < 0)   return <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-semibold text-red-400 ring-1 ring-red-500/20">ITV vencida</span>
-  if (d <= 30) return <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-400 ring-1 ring-amber-500/20">ITV en {d}d</span>
-  return <span className="text-[11px] text-dark-500">{itv}</span>
+  if (d < 0) {
+    return <span title={`Venció el ${fechaEs(itv)}`} className="rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-semibold text-red-400 ring-1 ring-red-500/20">
+      Vencida · {-d === 1 ? 'ayer' : `hace ${-d} días`}</span>
+  }
+  if (d <= 60) {
+    return <span title={fechaEs(itv)} className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-400 ring-1 ring-amber-500/20">
+      {d === 0 ? 'Vence hoy' : d === 1 ? 'Vence mañana' : `En ${d} días`}</span>
+  }
+  return <span className="cifra text-[11px] text-dark-500">{fechaEs(itv)}</span>
 }
 
 function lastInspDot(date) {
   if (!date) return { cls: 'bg-dark-600', txt: 'Nunca inspeccionada' }
-  const d = Math.floor((new Date() - new Date(date)) / 86400000)
-  if (d <= 7)  return { cls: 'bg-emerald-400', txt: `Insp. hace ${d}d` }
-  if (d <= 30) return { cls: 'bg-amber-400',   txt: `Insp. hace ${d}d` }
-  return { cls: 'bg-red-400', txt: `Insp. hace ${d}d` }
+  const d = Math.max(0, Math.floor((new Date() - new Date(date)) / 86400000))
+  const txt = d === 0 ? 'Revisada hoy' : d === 1 ? 'Revisada ayer' : `Hace ${d} días`
+  if (d <= 7)  return { cls: 'bg-emerald-400', txt }
+  if (d <= 30) return { cls: 'bg-amber-400',   txt }
+  return { cls: 'bg-red-400', txt }
 }
 
 /* ── QR Lightbox ── */
