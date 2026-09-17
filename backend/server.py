@@ -20155,7 +20155,15 @@ async def apoyo_publico_parada(token: str, stop_id: str, data: dict = Body(defau
 #  · son datos personales: caducan solos a los 12 meses (TTL) y hay borrado a
 #    mano para cuando alguien lo pida.
 
-EMPLEO_FASES = ("nuevo", "llamado", "entrevista", "prueba", "contratado", "descartado")
+# El tablero de la oficina (Judith, 17-09-2026): se llama, se espera respuesta
+# y si cuadra se pasa a la ETT. «otra_estacion» guarda A CUAL quieren ir
+# (`estacion`), para poder contarlos por estacion al pasarlos.
+# «entrevista» y «prueba» eran las columnas de antes: siguen siendo validas
+# para no dejar invisibles a quienes ya estan ahi (gotcha 17), pero ya no se
+# ofrecen para mover.
+EMPLEO_FASES = ("nuevo", "llamado", "ett", "otra_estacion", "contratado", "descartado",
+                "entrevista", "prueba")
+_EMPLEO_FASES_ANTES_DE_ETT = ("nuevo", "llamado", "entrevista", "prueba")
 EMPLEO_TIPOS = ("si_no", "opcion", "varias", "texto", "numero")
 _EMPLEO_MESES_GUARDA = 12
 _EMPLEO_MAX_POR_IP_H = 5
@@ -21168,6 +21176,13 @@ async def empleo_candidato_a_ett(cand_id: str, body: dict = Body(...),
     # El NOMBRE viaja dentro del apunte: si manana se borra la ETT de la agenda,
     # el historial tiene que seguir diciendo a quien se mando.
     apunte = {"ett_id": ett["id"], "nombre": ett.get("nombre"), "en": ahora, "por": quien}
+    # Mandarlo a una ETT ES pasarlo a la ETT: la columna se mueve sola, o la
+    # oficina tendria que hacer dos cosas para una y el conteo mentiria.
+    fase = c.get("fase") or "nuevo"
+    if fase in _EMPLEO_FASES_ANTES_DE_ETT:
+        await db.candidatos.update_one({"id": cand_id, "fase": c.get("fase")}, {
+            "$set": {"fase": "ett", "motivo_descarte": "", "descarte_automatico": False},
+            "$push": {"historial": {"en": ahora, "por": quien, "de": fase, "a": "ett"}}})
     if any(x.get("ett_id") == ett["id"] for x in (c.get("etts") or [])):
         # Reenviar no duplica: se actualiza la fecha del que ya estaba.
         await db.candidatos.update_one(
@@ -21196,6 +21211,12 @@ async def empleo_candidato_quitar_ett(cand_id: str, ett_id: str,
         "$set": {"tocado_en": ahora, "tocado_por": quien}})
     if not r.matched_count:
         raise HTTPException(404, "Ese candidato no existe")
+    # Si ya no queda ninguna ETT, vuelve a «llamado»: seguir en la columna de
+    # la ETT sin haberselo mandado a ninguna seria un conteo falso.
+    await db.candidatos.update_one(
+        {"id": cand_id, "fase": "ett", "etts.0": {"$exists": False}},
+        {"$set": {"fase": "llamado"},
+         "$push": {"historial": {"en": ahora, "por": quien, "de": "ett", "a": "llamado"}}})
     return {"ok": True}
 
 
@@ -21248,6 +21269,8 @@ async def empleo_mover_candidato(cand_id: str, datos: dict = Body(...),
             cambios["descarte_automatico"] = False
     if "notas" in datos:
         cambios["notas"] = _empleo_texto(datos["notas"], 2000)
+    if "estacion" in datos:
+        cambios["estacion"] = _empleo_texto(datos["estacion"], 60)
     if "motivo_descarte" in datos:
         cambios["motivo_descarte"] = _empleo_texto(datos["motivo_descarte"], 400)
     # EL TELEFONO SE PUEDE ESCRIBIR A MANO: quien llega por JOIN suele dejarlo
@@ -21267,10 +21290,12 @@ async def empleo_mover_candidato(cand_id: str, datos: dict = Body(...),
     # tres dias sin llamar ya estan en otra empresa. Se guarda solo el cambio de
     # fase, no cada tecla de las notas.
     if "fase" in cambios and cambios["fase"] != (c.get("fase") or "nuevo"):
-        orden["$push"] = {"historial": {
-            "en": datetime.now(timezone.utc).isoformat(),
-            "por": user.get("name") or user.get("username") or "",
-            "de": c.get("fase") or "nuevo", "a": cambios["fase"]}}
+        apunte = {"en": datetime.now(timezone.utc).isoformat(),
+                  "por": user.get("name") or user.get("username") or "",
+                  "de": c.get("fase") or "nuevo", "a": cambios["fase"]}
+        if cambios["fase"] == "otra_estacion" and cambios.get("estacion"):
+            apunte["que"] = "quiere ir a %s" % cambios["estacion"]
+        orden["$push"] = {"historial": apunte}
     try:
         await db.candidatos.update_one({"id": cand_id}, orden)
     except DuplicateKeyError:

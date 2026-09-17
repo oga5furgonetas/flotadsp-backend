@@ -343,3 +343,16 @@ def test_todos_los_casos():
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_fases_del_tablero_y_las_antiguas_siguen_validas():
+    """Columnas de la oficina (17-09-2026). Quitar «entrevista» o «prueba» de la
+    lista dejaria sin poder moverse a quien ya esta ahi."""
+    fases = NS["EMPLEO_FASES"]
+    for f in ("nuevo", "llamado", "ett", "otra_estacion", "contratado", "descartado",
+              "entrevista", "prueba"):
+        assert f in fases, f
+    fuente = open(RUTA, encoding="utf-8-sig").read()
+    # Mandar a una ETT mueve la columna, y deshacer el ultimo envio la devuelve.
+    assert '"$set": {"fase": "ett"' in fuente
+    assert '"fase": "ett", "etts.0": {"$exists": False}' in fuente

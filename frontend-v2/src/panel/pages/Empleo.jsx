@@ -45,13 +45,22 @@ import {
    El CENTRO de la oferta no es decorativo: decide en qué tablero salen sus
    candidatos y en qué nave nace la ficha al contratarlos. */
 
-const FASES = ['nuevo', 'llamado', 'entrevista', 'prueba', 'contratado', 'descartado']
+/* Las columnas del tablero, en el orden en que la oficina trabaja (Judith,
+   17-09-2026): se llama, se espera respuesta y si cuadra se pasa a la ETT.
+   «Entrevista» y «Prueba» eran las de antes: solo salen si queda alguien en
+   ellas, para que nadie desaparezca del tablero (gotcha 17). */
+const FASES_TABLERO = ['nuevo', 'llamado', 'ett', 'otra_estacion', 'contratado', 'descartado']
+const FASES_ANTIGUAS = ['entrevista', 'prueba']
+const FASES = [...FASES_TABLERO, ...FASES_ANTIGUAS]
+const ESTACIONES_SUGERIDAS = ['Santiago', 'Vigo', 'A Coruña', 'Ourense', 'Lugo', 'Pontevedra', 'Ferrol']
 
 const FASE = {
   nuevo: { pill: 'bg-sky-500/10 text-sky-300 ring-sky-500/20', barra: 'bg-sky-500' },
   llamado: { pill: 'bg-violet-500/10 text-violet-300 ring-violet-500/20', barra: 'bg-violet-500' },
-  entrevista: { pill: 'bg-amber-500/10 text-amber-300 ring-amber-500/20', barra: 'bg-amber-500' },
-  prueba: { pill: 'bg-orange-500/10 text-orange-300 ring-orange-500/20', barra: 'bg-orange-500' },
+  ett: { pill: 'bg-amber-500/10 text-amber-300 ring-amber-500/20', barra: 'bg-amber-500' },
+  otra_estacion: { pill: 'bg-cyan-500/10 text-cyan-300 ring-cyan-500/20', barra: 'bg-cyan-500' },
+  entrevista: { pill: 'bg-dark-800 text-dark-300 ring-dark-700', barra: 'bg-dark-600' },
+  prueba: { pill: 'bg-dark-800 text-dark-300 ring-dark-700', barra: 'bg-dark-600' },
   contratado: { pill: 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/20', barra: 'bg-emerald-500' },
   descartado: { pill: 'bg-dark-800 text-dark-400 ring-dark-700', barra: 'bg-dark-700' },
 }
@@ -147,15 +156,18 @@ export default function Empleo() {
 
   const actualizar = (c, datos) => setCands((xs) => xs.map((x) => (x.id === c.id ? { ...x, ...datos } : x)))
 
-  const mover = async (c, fase) => {
-    if (!c || c.fase === fase) return
+  const mover = async (c, fase, extra = {}) => {
+    if (!c || (c.fase === fase && !Object.keys(extra).length)) return
     // Se pinta ya y se corrige si el servidor dice otra cosa: arrastrar tiene
     // que responder al instante o no se siente como arrastrar.
     const antes = c.fase
-    actualizar(c, { fase })
-    if (ficha?.id === c.id) setFicha((f) => ({ ...f, fase }))
+    actualizar(c, { fase, ...extra })
+    if (ficha?.id === c.id) setFicha((f) => ({ ...f, fase, ...extra }))
+    // Soltarlo en «otra estación» sin decir cuál: se abre su ficha para
+    // escribirla, que es lo que luego se cuenta.
+    if (fase === 'otra_estacion' && !extra.estacion && !c.estacion) setFicha({ ...c, fase })
     try {
-      const { data } = await moverCandidato(c.id, { fase })
+      const { data } = await moverCandidato(c.id, { fase, ...extra })
       actualizar(c, data)
       if (ficha?.id === c.id) setFicha((f) => ({ ...f, ...data }))
     } catch (e) {
@@ -215,8 +227,31 @@ export default function Empleo() {
   const porFase = useMemo(() => {
     const m = {}
     for (const f of FASES) m[f] = visibles.filter((c) => (c.fase || 'nuevo') === f)
+    // Cualquier fase que no conozca este tablero va a «Nuevo» antes que
+    // desaparecer (gotcha 30: los cajones tienen que sumar el total).
+    const raras = visibles.filter((c) => c.fase && !FASES.includes(c.fase))
+    if (raras.length) m.nuevo = [...m.nuevo, ...raras]
     return m
   }, [visibles])
+
+  const columnas = useMemo(
+    () => [...FASES_TABLERO, ...FASES_ANTIGUAS.filter((f) => porFase[f].length > 0)], [porFase])
+
+  // Cuántos quieren ir a cada estación: es el conteo que se pasa a las otras naves.
+  const porEstacion = useMemo(() => {
+    const m = {}
+    for (const c of porFase.otra_estacion) {
+      const k = (c.estacion || '').trim() || '¿cuál?'
+      m[k] = (m[k] || 0) + 1
+    }
+    return Object.entries(m).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'es', { sensitivity: 'base' }))
+  }, [porFase])
+
+  const estacionesConocidas = useMemo(() => {
+    const s = new Set(ESTACIONES_SUGERIDAS)
+    for (const c of cands) if (c.estacion) s.add(c.estacion)
+    return [...s].sort((a, b) => a.localeCompare(b, 'es', { sensitivity: 'base' }))
+  }, [cands])
 
   const origenes = useMemo(
     () => [...new Set(cands.map((c) => c.origen || 'directo'))].sort(), [cands])
@@ -226,10 +261,12 @@ export default function Empleo() {
   const embudo = useMemo(() => {
     const n = cands.length
     const enProceso = cands.filter((c) => ['llamado', 'entrevista', 'prueba'].includes(c.fase)).length
+    const enEtt = cands.filter((c) => c.fase === 'ett').length
+    const otraEst = cands.filter((c) => c.fase === 'otra_estacion').length
     const alta = cands.filter((c) => c.fase === 'contratado').length
     const tocados = cands.filter((c) => c.fase !== 'nuevo').length
     const olvidados = cands.filter((c) => c.fase === 'nuevo' && (diasQuieto(c) ?? 0) >= 3).length
-    return { n, enProceso, alta, olvidados, pct: n ? Math.round((tocados / n) * 100) : 0 }
+    return { n, enProceso, enEtt, otraEst, alta, olvidados, pct: n ? Math.round((tocados / n) * 100) : 0 }
   }, [cands])
 
   /* Descargar lo que se está viendo. CSV con punto y coma y BOM: es lo que
@@ -327,8 +364,8 @@ export default function Empleo() {
 
           <div className="grid gap-4 p-4 xl:grid-cols-[1fr_340px]">
             {/* ── El tablero ─────────────────────────────────────────── */}
-            <div className="grid gap-2.5 overflow-x-auto md:grid-cols-3 2xl:grid-cols-6">
-              {FASES.map((f) => (
+            <div className={`grid gap-2.5 overflow-x-auto md:grid-cols-3 ${columnas.length > 6 ? '2xl:grid-cols-8' : '2xl:grid-cols-6'}`}>
+              {columnas.map((f) => (
                 <div key={f}
                   onDragOver={(e) => { e.preventDefault(); setEncima(f) }}
                   onDragLeave={() => setEncima((x) => (x === f ? '' : x))}
@@ -346,6 +383,18 @@ export default function Empleo() {
                     </span>
                     <span className="cifra text-[11px] font-bold text-dark-500">{porFase[f].length}</span>
                   </div>
+                  {FASES_ANTIGUAS.includes(f) && (
+                    <p className="mb-2 text-[10px] leading-snug text-dark-600">Columna antigua: muévelos a la que toque.</p>
+                  )}
+                  {f === 'otra_estacion' && porEstacion.length > 0 && (
+                    <div className="mb-2 flex flex-wrap gap-1">
+                      {porEstacion.map(([k, n]) => (
+                        <span key={k} className={`rounded px-1.5 py-px text-[10px] font-semibold ${k === '¿cuál?' ? 'bg-amber-500/15 text-amber-300' : 'bg-cyan-500/10 text-cyan-300'}`}>
+                          {k} <span className="cifra">{n}</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <div className="space-y-2">
                     {porFase[f].map((c) => (
                       <Tarjeta key={c.id} c={c} t={t} activa={ficha?.id === c.id}
@@ -372,6 +421,7 @@ export default function Empleo() {
                 <FichaCandidato c={cands.find((x) => x.id === ficha.id) || ficha} oferta={sel} t={t}
                   onCerrar={() => setFicha(null)} onMover={mover} onContratar={contratar}
                   onBorrar={borrar} onNotas={guardarNotas} onTelefono={guardarTelefono}
+                  estaciones={estacionesConocidas}
                   onRecargar={() => cargarCands(sel)} />
               ) : (
                 <div className="rounded-xl border border-dashed border-dark-800 p-6 text-center text-[12.5px] text-dark-600">
@@ -397,6 +447,14 @@ function Embudo({ e, t }) {
       <span className="text-dark-400">
         <b className="cifra text-[15px] text-dark-100">{e.enProceso}</b> {t('empleo.enProceso')}
       </span>
+      <span className="text-dark-400">
+        <b className="cifra text-[15px] text-amber-300">{e.enEtt}</b> {t('empleo.enEtt')}
+      </span>
+      {e.otraEst > 0 && (
+        <span className="text-dark-400">
+          <b className="cifra text-[15px] text-cyan-300">{e.otraEst}</b> {t('empleo.otraEst')}
+        </span>
+      )}
       <span className="text-dark-400">
         <b className="cifra text-[15px] text-emerald-300">{e.alta}</b> {t('empleo.deAlta')}
       </span>
@@ -434,6 +492,14 @@ function Tarjeta({ c, t, activa, onAbrir, onArrastrar, onSoltar }) {
         <span className="rounded bg-dark-800 px-1 py-px text-dark-400">{c.origen}</span>
         <span className="text-dark-600">{dia(c.creado_en)}</span>
         {c.cv_url && <FileText size={10} className="text-brand-400" />}
+        {c.fase === 'otra_estacion' && (
+          <span className={`rounded px-1 py-px font-semibold ${c.estacion ? 'bg-cyan-500/10 text-cyan-300' : 'bg-amber-500/15 text-amber-300'}`}>
+            {c.estacion || '¿qué estación?'}
+          </span>
+        )}
+        {c.fase === 'ett' && (c.etts || []).length > 0 && (
+          <span className="truncate rounded bg-amber-500/10 px-1 py-px text-amber-300">{c.etts.map((x) => x.nombre).join(', ')}</span>
+        )}
         {urge && (
           <span className="ml-auto rounded bg-red-500/15 px-1 py-px font-semibold text-red-300">
             {quieto} {t('empleo.dias')}
@@ -451,8 +517,10 @@ function Tarjeta({ c, t, activa, onAbrir, onArrastrar, onSoltar }) {
 
 /* ── La ficha completa ────────────────────────────────────────────────── */
 function FichaCandidato({ c, oferta, t, onCerrar, onMover, onContratar, onBorrar, onNotas,
-                         onRecargar, onTelefono }) {
+                         onRecargar, onTelefono, estaciones = [] }) {
   const [tel, setTel] = useState('')
+  const [est, setEst] = useState(c.estacion || '')
+  const [pideEst, setPideEst] = useState(false)
   const [telErr, setTelErr] = useState('')
   const [notas, setNotas] = useState(c.notas || '')
   const [guardando, setGuardando] = useState(false)
@@ -460,8 +528,11 @@ function FichaCandidato({ c, oferta, t, onCerrar, onMover, onContratar, onBorrar
   useEffect(() => {
     // Al cambiar de candidato se recarga su nota; si no, se le escribiría la
     // del anterior encima, que es un dato falso en la ficha de otra persona.
-    if (idRef.current !== c.id) { idRef.current = c.id; setNotas(c.notas || '') }
-  }, [c.id, c.notas])
+    if (idRef.current !== c.id) {
+      idRef.current = c.id; setNotas(c.notas || ''); setEst(c.estacion || ''); setPideEst(false)
+    }
+  }, [c.id, c.notas, c.estacion])
+  const pedirEstacion = pideEst || (c.fase === 'otra_estacion' && !c.estacion)
 
   const hist = [...(c.historial || [])].reverse()
 
@@ -569,14 +640,35 @@ function FichaCandidato({ c, oferta, t, onCerrar, onMover, onContratar, onBorrar
         <div>
           <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-dark-600">{t('empleo.moverA')}</div>
           <div className="flex flex-wrap gap-1.5">
-            {FASES.filter((x) => x !== 'contratado').map((x) => (
-              <button key={x} onClick={() => onMover(c, x)} disabled={c.fase === x}
+            {FASES_TABLERO.filter((x) => x !== 'contratado').map((x) => (
+              <button key={x} disabled={c.fase === x && x !== 'otra_estacion'}
+                onClick={() => (x === 'otra_estacion' ? setPideEst(true) : onMover(c, x))}
                 className={`rounded-lg px-2 py-1 text-[11.5px] ring-1 ${
                   c.fase === x ? 'bg-dark-800 text-dark-500 ring-dark-700' : 'text-dark-300 ring-dark-700 hover:text-dark-100'}`}>
-                {t('empleo.fase.' + x)}
+                {t('empleo.fase.' + x)}{x === 'otra_estacion' && c.estacion ? ` · ${c.estacion}` : ''}
               </button>
             ))}
           </div>
+          {pedirEstacion && (
+            <form className="mt-2 flex items-center gap-1.5"
+              onSubmit={(e) => {
+                e.preventDefault()
+                const v = est.trim()
+                if (!v) return
+                onMover(c, 'otra_estacion', { estacion: v }); setPideEst(false)
+              }}>
+              <input value={est} onChange={(e) => setEst(e.target.value)} list="empleo-estaciones" autoFocus
+                placeholder="¿A qué estación quiere ir?"
+                className="min-w-0 flex-1 rounded-lg border border-cyan-500/30 bg-dark-950 px-2.5 py-1 text-[12px] text-dark-100 outline-none focus:border-cyan-400/60" />
+              <datalist id="empleo-estaciones">
+                {estaciones.map((x) => <option key={x} value={x} />)}
+              </datalist>
+              <button type="submit" disabled={!est.trim()}
+                className="rounded-lg bg-cyan-500/15 px-2.5 py-1 text-[11.5px] font-semibold text-cyan-300 ring-1 ring-cyan-500/30 disabled:opacity-40">
+                Guardar
+              </button>
+            </form>
+          )}
         </div>
 
         <div>
