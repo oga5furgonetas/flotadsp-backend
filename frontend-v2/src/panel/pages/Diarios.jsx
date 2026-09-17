@@ -346,7 +346,12 @@ export default function Diarios() {
               Pegar la lista
             </button>
           </p>
-          <p className="mt-1 font-mono text-[11px] text-amber-200/60">{datos.sin_nombre.join(' · ')}</p>
+          {/* La lista de códigos, plegada: una ristra de IDs abierta no le dice
+              nada a nadie hasta que va a pegar sus nombres. */}
+          <details className="mt-1">
+            <summary className="cursor-pointer text-[11.5px] text-amber-200/70 hover:text-amber-100">Ver cuáles</summary>
+            <p className="mt-1 font-mono text-[11px] text-amber-200/60">{datos.sin_nombre.join(' · ')}</p>
+          </details>
         </div>
       )}
 

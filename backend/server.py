@@ -31545,6 +31545,14 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
             {"_id": 0, "name": 1, "transporter_id": 1, "id": 1, "active": 1}).sort("active", 1):
         nombres[(d.get("transporter_id") or "").upper()] = {
             "name": d["name"], "id": d["id"], "de_baja": d.get("active") is False}
+    # El mismo ID vive tambien en `driver_id` («ID Amazon»): 32 fichas lo tienen
+    # SOLO ahi (ver _cx_nombres). Sin esto salian como un codigo sin nombre.
+    async for d in db.drivers.find(
+            {"driver_id": {"$nin": [None, ""]}},
+            {"_id": 0, "name": 1, "driver_id": 1, "id": 1, "active": 1}).sort("active", 1):
+        clave = str(d.get("driver_id") or "").strip().upper()
+        if clave and clave not in nombres:
+            nombres[clave] = {"name": d["name"], "id": d["id"], "de_baja": d.get("active") is False}
     # Etiquetas sueltas: gente sin ficha de conductor (oficina, o que se fue).
     doc_alias = await db.app_meta.find_one({"_id": "transporter_alias"}) or {}
     for tid, nm in (doc_alias.get("mapa") or {}).items():
@@ -31569,6 +31577,13 @@ async def diarios_por_conductor(center: str, desde: str, hasta: str,
             nm = (r.get("driver_name") or "").strip()
             if not (tid and nm) or tid in nombres:
                 continue
+            fichas = por_clave.get(_clave_nombre(nm), [])
+            nombres[tid] = {"name": nm, "id": None, "solo_historial": True,
+                            "ficha_sin_vincular": len(fichas) == 1,
+                            "ficha_id": fichas[0]["id"] if len(fichas) == 1 else None}
+        # Lo que el historial no sabe, lo sabe el resumen diario de Cortex, que
+        # trae nombre y transporterId de cada persona que reparte.
+        for tid, nm in (await _cx_nombres_resumen({x for x in faltan if x not in nombres}, 120)).items():
             fichas = por_clave.get(_clave_nombre(nm), [])
             nombres[tid] = {"name": nm, "id": None, "solo_historial": True,
                             "ficha_sin_vincular": len(fichas) == 1,
