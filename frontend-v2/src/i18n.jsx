@@ -679,6 +679,8 @@ const DICT = {
 
   // ── Incidencias ──────────────────────────────────────────────────────────
   'inc.title':        { es: 'Incidencias',    en: 'Incidents',    fr: 'Incidents',     de: 'Vorfälle',     it: 'Incidenti',      pt: 'Incidências' },
+  'inc.open.n':       { es: 'Abiertas', en: 'Open', fr: 'Ouvertes', de: 'Offen', it: 'Aperte', pt: 'Abertas' },
+  'inc.closed.n':     { es: 'Cerradas', en: 'Closed', fr: 'Fermées', de: 'Geschlossen', it: 'Chiuse', pt: 'Fechadas' },
   'inc.open':         { es: 'Abierta',        en: 'Open',         fr: 'Ouverte',       de: 'Offen',        it: 'Aperto',         pt: 'Aberta' },
   'inc.closed':       { es: 'Cerrada',        en: 'Closed',       fr: 'Fermée',        de: 'Geschlossen',  it: 'Chiuso',         pt: 'Fechada' },
   'inc.add':          { es: 'Nueva incidencia', en: 'New incident', fr: 'Nouvel incident', de: 'Neuer Vorfall', it: 'Nuovo incidente', pt: 'Nova incidência' },

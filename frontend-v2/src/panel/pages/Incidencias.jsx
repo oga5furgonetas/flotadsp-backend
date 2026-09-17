@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
+import { verMatricula } from '../../lib/matricula'
 import { useT } from '../../i18n'
 import {
   AlertTriangle, Check, CheckCircle2, ChevronDown, ChevronUp,
@@ -146,7 +147,8 @@ function IncCard({ inc, vehicleMap, onEdit, onDelete, onResolve, onReopen }) {
   const [expanded, setExpanded] = useState(false)
   const sevCls = SEV_CLS[inc.severity] || SEV_CLS.leve
   const stCls  = STATUS_CLS[inc.status] || STATUS_CLS.open
-  const plate = vehicleMap[inc.vehicle_id] || inc.vehicle_id || '—'
+  // Una furgoneta borrada no tiene matrícula que enseñar: el id interno no le dice nada a nadie.
+  const plate = vehicleMap[inc.vehicle_id] || (inc.vehicle_id ? 'Furgoneta borrada' : '—')
   const isOpen = inc.status === 'open'
 
   function fmtRelative(iso) {
@@ -263,7 +265,7 @@ export default function Incidencias() {
   const [modal,     setModal]     = useState(null)
   const [delId,     setDelId]     = useState(null)
 
-  const vehicleMap = Object.fromEntries(vehicles.map(v => [v.id, v.license_plate]))
+  const vehicleMap = Object.fromEntries(vehicles.map(v => [v.id, verMatricula(v.license_plate)]))
 
   const [tick, setTick] = useState(0)
   const load = useCallback(() => setTick(t => t + 1), [])
@@ -271,13 +273,20 @@ export default function Incidencias() {
   useEffect(() => {
     let active = true
     setLoading(true)
+    // LA NAVE VA AL SERVIDOR. Se pedían todas las incidencias de la empresa
+    // y solo las furgonetas de la nave: con OGA5 elegido salían las de DGA1 y
+    // DGA2, y como su furgoneta no estaba en el mapa, con el id interno en vez
+    // de la matrícula. Las de baja se piden aparte: una furgoneta devuelta
+    // tiene incidencias viejas y también merecen su matrícula.
+    const nave = center && center !== 'Todos' ? { center } : {}
     Promise.all([
-      getIncidents(),
+      getIncidents(nave),
       getVehicles(center).catch(() => ({ data: [] })),
-    ]).then(([inc, vs]) => {
+      getVehicles(center, 'baja').catch(() => ({ data: [] })),
+    ]).then(([inc, vs, bajas]) => {
       if (!active) return
       setIncidents(Array.isArray(inc.data) ? inc.data : [])
-      setVehicles(Array.isArray(vs.data) ? vs.data : [])
+      setVehicles([...(Array.isArray(vs.data) ? vs.data : []), ...(Array.isArray(bajas.data) ? bajas.data : [])])
     }).catch(() => {}).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [center, tick])
@@ -317,9 +326,9 @@ export default function Incidencias() {
           <div>
             <h1 className="font-display text-[clamp(28px,3.4vw,42px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('inc.title')}</h1>
             <p className="mt-3 text-[13.5px] text-dark-500">
-              <span className={`font-semibold tabular-nums ${openCount > 0 ? 'text-red-300' : 'text-dark-300'}`}>{openCount}</span> {t('inc.open')}
+              <span className={`font-semibold tabular-nums ${openCount > 0 ? 'text-red-300' : 'text-dark-300'}`}>{openCount}</span> {t(openCount === 1 ? 'inc.open' : 'inc.open.n').toLowerCase()}
               <span className="mx-2 text-dark-700">·</span>
-              <span className="font-semibold tabular-nums text-dark-300">{resolvedCount}</span> {t('inc.closed')}
+              <span className="font-semibold tabular-nums text-dark-300">{resolvedCount}</span> {t(resolvedCount === 1 ? 'inc.closed' : 'inc.closed.n').toLowerCase()}
             </p>
           </div>
           <button
@@ -380,7 +389,7 @@ export default function Incidencias() {
       {modal && (
         <IncModal
           inc={modal === 'new' ? null : modal}
-          vehicles={vehicles}
+          vehicles={vehicles.filter(v => v.status !== 'baja')}
           onSave={() => { setModal(null); load() }}
           onClose={() => setModal(null)}
         />
