@@ -367,6 +367,14 @@ function SetupCard({ onSeed, onReset, seeding, center }) {
 }
 
 /* ── Tarjeta de ruta (vista principal con miles de paquetes) ── */
+// Las rutas de rescate llegan como «RDM_C35_XA_QjmHdlD/efo=»: el sufijo es un
+// id interno de Amazon que no dice nada. Se enseña «Rescate · C35» y el código
+// entero queda en el title.
+function verRuta(code) {
+  const m = /^RDM_([A-Z]+\d+)_/i.exec(String(code || ''))
+  return m ? `Rescate · ${m[1]}` : code
+}
+
 function RouteCard({ r, onOpen }) {
   const { t } = useT()
   const done = r.total ? Math.round(100 * r.delivered / r.total) : 0
@@ -378,7 +386,8 @@ function RouteCard({ r, onOpen }) {
       className="float-row group flex flex-col rounded-2xl border border-white/[0.05] bg-white/[0.02] p-4 text-left hover:border-white/[0.1]">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-[15px] font-bold text-dark-50">
-          <RouteIcon size={15} className="text-brand-400" /> {r.route_code}
+          <RouteIcon size={15} className="text-brand-400" />
+          <span title={r.route_code}>{verRuta(r.route_code)}</span>
           {r.critical > 0 && <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />}
         </div>
         <span className="font-mono text-[11px] font-bold tabular-nums text-dark-400">{r.total}</span>
@@ -598,13 +607,20 @@ export default function PackageIntel() {
 
   // Frescura de la captura: LA señal de confianza. Verde = extensión viva.
   const freshMin = ov?.last_capture_at ? Math.max(0, Math.floor((Date.now() - new Date(ov.last_capture_at)) / 60000)) : null
+  // DE NOCHE NO HAY QUE CAPTURAR. Sin reparto, las rutas no cambian y la
+  // extensión no manda nada (gotcha 74): a las 3:00 salía en rojo «lleva 4 h
+  // sin enviar datos», un aviso que nadie puede atender y que enseña a
+  // ignorarlo. Fuera de 8:00-23:00 (hora de España) la frescura se enseña,
+  // pero sin alarma.
+  const horaEs = Number(new Intl.DateTimeFormat('es-ES', { hour: 'numeric', hourCycle: 'h23', timeZone: 'Europe/Madrid' }).format(new Date()))
+  const horaReparto = horaEs >= 8 && horaEs < 23
   const fresh = freshMin == null
     ? { c: 'bg-dark-600', txt: t('px.freshNunca'), ping: false, warn: false }
     : freshMin <= 6
       ? { c: 'bg-emerald-400', txt: `${t('px.freshVivo')} ${freshMin} min`, ping: true, warn: false }
       : freshMin <= 20
         ? { c: 'bg-amber-400', txt: `${t('px.freshUltima')} ${freshMin} min`, ping: false, warn: false }
-        : { c: 'bg-red-400', txt: `${t('px.freshSin')} ${freshMin >= 120 ? Math.floor(freshMin / 60) + ' h' : freshMin + ' min'}`, ping: false, warn: true }
+        : { c: horaReparto ? 'bg-red-400' : 'bg-dark-500', txt: `${t('px.freshSin')} ${freshMin >= 120 ? Math.floor(freshMin / 60) + ' h' : freshMin + ' min'}`, ping: false, warn: horaReparto }
   const searching = (q || '').trim().length > 0
   const empty = !loading && routes.length === 0 && days.length === 0
   const hasDemo = alerts.some(a => (a.tba || '').startsWith('TBADEMO')) ||
