@@ -5,6 +5,9 @@ import {
 } from 'lucide-react'
 import { getRendimientoConductores } from '../api'
 
+// '2026-09-16' -> '16/09/2026', troceando el texto (gotcha 11).
+const fechaEs = (f) => (/^\d{4}-\d{2}-\d{2}/.test(String(f || '')) ? `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)}` : (f || ''))
+
 /* CÓMO VA CADA CONDUCTOR — una tabla, y en el periodo que se elija.
    ══════════════════════════════════════════════════════════════════════════
    Es la pantalla con la que se habla con una persona sobre su trabajo, así que
@@ -134,9 +137,9 @@ export default function Rendimiento() {
 
       {d && (
         <p className="text-[12px] text-dark-500">
-          Cortex tiene datos hasta el <b className="text-dark-300">{d.cobertura.cortex || '—'}</b>;
+          Cortex tiene datos hasta el <b className="text-dark-300">{fechaEs(d.cobertura.cortex) || '—'}</b>;
           el reporte diario, hasta el <b className={reporteCorto ? 'text-amber-300' : 'text-dark-300'}>
-            {d.cobertura.reporte || '—'}</b>.
+            {fechaEs(d.cobertura.reporte) || '—'}</b>.
           {reporteCorto && ' Contacto, POD, RTS y DNR de los días posteriores todavía no están: un cero ahí no significa que no haya fallos.'}
         </p>
       )}

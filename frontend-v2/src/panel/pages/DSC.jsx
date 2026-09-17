@@ -6,6 +6,9 @@ import { useT } from '../../i18n'
 import { useOrden } from '../../lib/orden'
 import ThOrden from '../components/ThOrden'
 
+// Porcentaje con coma decimal: «8,76», no «8.76».
+const pc = (v) => (v == null || Number.isNaN(Number(v)) ? '—' : Number(v).toLocaleString('es-ES', { maximumFractionDigits: 2 }))
+
 /* Dónde se deja cada paquete.
    Es la métrica que más le cuesta a un DSP: en 17 scorecards reales de OGA5,
    "Delivery Success Conditions (DSC) DPMO" salió como área de foco en 14 y fue
@@ -291,8 +294,8 @@ export default function DSC() {
         <>
           <div className="grid gap-3 sm:grid-cols-4">
             {[
-              [`${f.pct_riesgo} %`, t('dsc.kpi.riesgo'), f.pct_riesgo > 10 ? 'text-red-300' : 'text-amber-300', AlertTriangle],
-              [`${f.pct_mano} %`, t('dsc.kpi.mano'), 'text-emerald-300', Hand],
+              [`${pc(f.pct_riesgo)} %`, t('dsc.kpi.riesgo'), f.pct_riesgo > 10 ? 'text-red-300' : 'text-amber-300', AlertTriangle],
+              [`${pc(f.pct_mano)} %`, t('dsc.kpi.mano'), 'text-emerald-300', Hand],
               [d.total.toLocaleString('es-ES'), t('dsc.kpi.total'), 'text-dark-100', null],
               [f.contradicciones, t('dsc.kpi.contra'), f.contradicciones ? 'text-amber-300' : 'text-dark-300', null],
             ].map(([v, l, c, Icon]) => (
@@ -313,7 +316,7 @@ export default function DSC() {
             <div className="mt-3 flex h-3 overflow-hidden rounded-full bg-dark-800">
               {d.reparto.map((r) => (
                 <div key={r.ctx} className={COLOR[r.grupo]} style={{ width: `${r.pct}%` }}
-                  title={`${r.etiqueta}: ${r.n} (${r.pct} %)`} />
+                  title={`${r.etiqueta}: ${r.n} (${pc(r.pct)} %)`} />
               ))}
             </div>
             <div className="mt-3 grid gap-x-5 gap-y-1.5 sm:grid-cols-2 lg:grid-cols-3">
@@ -323,7 +326,7 @@ export default function DSC() {
                   <span className="flex-1 truncate text-dark-300">{r.etiqueta}</span>
                   <span className="tabular-nums text-dark-500">{r.n.toLocaleString('es-ES')}</span>
                   <span className={`w-14 text-right tabular-nums font-semibold ${
-                    r.grupo === 'riesgo' ? 'text-red-300' : 'text-dark-400'}`}>{r.pct} %</span>
+                    r.grupo === 'riesgo' ? 'text-red-300' : 'text-dark-400'}`}>{pc(r.pct)} %</span>
                 </div>
               ))}
             </div>
@@ -356,7 +359,7 @@ export default function DSC() {
                         <td className="p-3">
                           <div className="font-medium text-dark-100">{c.nombre}</div>
                           <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-dark-500">
-                            <span>{c.pct_mano} % {t('dsc.enmano')}</span>
+                            <span>{pc(c.pct_mano)} % {t('dsc.enmano')}</span>
                             {/* Aviso honesto: con poca muestra el % baila. */}
                             {c.muestra_corta && (
                               <span className="rounded bg-dark-800 px-1.5 py-0.5 text-dark-400">
@@ -373,7 +376,7 @@ export default function DSC() {
                         <td className="p-3 text-right tabular-nums text-dark-300">{c.entregas}</td>
                         <td className={`p-3 text-right tabular-nums font-semibold ${
                           c.pct_riesgo > f.pct_riesgo * 1.5 ? 'text-red-300' : 'text-amber-300'}`}>
-                          {c.pct_riesgo} %
+                          {pc(c.pct_riesgo)} %
                         </td>
                         <td className="p-3 text-right">
                           <span className="font-bold tabular-nums text-dark-100">+{c.exceso}</span>
@@ -406,7 +409,7 @@ export default function DSC() {
                 {d.retornos.causas.slice(0, 8).map((c) => (
                   <div key={c.ctx} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                     <span className="w-11 shrink-0 text-right tabular-nums font-semibold text-dark-200">
-                      {c.pct} %
+                      {pc(c.pct)} %
                     </span>
                     <span className="w-44 shrink-0 truncate text-dark-300">{c.etiqueta}</span>
                     <span className="tabular-nums text-dark-500">{c.n}</span>
@@ -425,7 +428,7 @@ export default function DSC() {
                 <div className="mt-5 border-t border-dark-800 pt-4">
                   <div className="text-sm text-dark-300">
                     <span className="font-semibold text-amber-300">
-                      {d.retornos.cerrado_pct_siesta} %
+                      {pc(d.retornos.cerrado_pct_siesta)} %
                     </span>{' '}
                     {t('dsc.ret.siesta').replace('{n}', d.retornos.cerrado)}
                   </div>
