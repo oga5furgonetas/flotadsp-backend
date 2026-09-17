@@ -1702,6 +1702,17 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    Regla: **despues de tocar un endpoint, pasar el smoke que lo llama**; un test
    de la funcion de dentro no prueba el cableado de fuera.
 
+79. **El ID de Amazon vive en DOS campos de la ficha (`driver_id` y
+   `transporter_id`), y cada consulta que mira solo uno pierde gente.** Ya se
+   sabia desde el 29-08 (`_cx_nombres`), pero la regla vivia en un comentario
+   de UNA funcion. El 17-09-2026 aparecio igual en cuatro sitios mas:
+   «sin ficha» de Scorecard (9 personas y 9.091 paquetes de mas), DNR · Diarios
+   (IDs sin nombre), Apoyo en ruta y las investigaciones de DNR. Para buscar una
+   ficha por ID de Amazon: `$or` de los dos campos y `_clave_ficha_en` para
+   saber por cual caso. Y cuando no hay ficha, el nombre sale de
+   `_cx_nombres_resumen` (el resumen diario de Cortex): el NOMBRE si es de la
+   persona; el telefono no (gotcha 66).
+
 ## Reglas de trabajo
 
 - Tras cambios: `npm run build` (frontend) y deploy de lo tocado; siempre smoke test.
