@@ -106,7 +106,7 @@ function PlanPicker({ onSelect, furgonetas }) {
               >
                 {p.popular && (
                   <div style={{ position: 'absolute', top: -11, left: '50%', transform: 'translateX(-50%)', background: p.color, borderRadius: 20, padding: '3px 12px', fontSize: 10, fontWeight: 800, whiteSpace: 'nowrap' }}>
-                    Más elegido
+                    Recomendado
                   </div>
                 )}
 
