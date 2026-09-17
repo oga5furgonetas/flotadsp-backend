@@ -889,6 +889,14 @@ async def get_current_user(
     # AÍSLA: fija la BD de la organización del token para TODA esta petición.
     # Tokens antiguos sin db_name → BD por defecto (tu data) = sin cambios.
     set_current_org_db(payload.get("db_name"))
+    # Un conductor que entro con una ficha de baja (el login elegia la que
+    # fuera) sigue con ese token 30 dias: se le lleva a su ficha activa, en vez
+    # de obligarle a salir y entrar sin que nadie sepa por que.
+    if payload.get("role") == "driver" and payload.get("sub"):
+        try:
+            payload["sub"] = await _ficha_activa_de(payload["sub"])
+        except Exception as e:                               # noqa: BLE001
+            logger.warning(f"ficha activa de {payload.get('sub')}: {e}")
     return payload
 
 
@@ -3188,6 +3196,8 @@ async def analyze_images_with_gemini(
     db=None,
     known_damages_text: str = "",
     cv_detections_text: str = "",
+    reference_labels: Optional[List[str]] = None,
+    current_labels: Optional[List[str]] = None,
 ) -> tuple[InspectionAnalysis, str, Optional[str]]:
     """
     Retorna (analysis, status, error_message).
@@ -3300,18 +3310,23 @@ async def analyze_images_with_gemini(
         for i, img_b64 in enumerate(images_base64):
             img_data = base64.b64decode(img_b64)
             contents.append(genai_types.Part.from_bytes(data=img_data, mime_type="image/jpeg"))
-            contents.append(f"Imagen actual {i+1} de {len(images_base64)}")
+            _vl = (current_labels[i] if current_labels and i < len(current_labels) else "")
+            contents.append(f"Imagen actual {i+1} de {len(images_base64)}" + (f" · vista {_vl}" if _vl else ""))
 
         if reference_images_bytes:
             contents.append(
                 "\n=== IMÁGENES DE REFERENCIA (estado anterior del mismo vehículo) ===\n"
                 "Compara con las imágenes actuales. Reporta SOLO los daños NUEVOS.\n"
                 "Si un daño aparece igual en referencia y en actual, NO lo incluyas en damages[].\n"
+                + ("Cada referencia indica su VISTA: compara cada foto actual SOLO con la referencia "
+                   "de su misma vista (frontal con frontal, lateral izquierdo con lateral izquierdo...).\n"
+                   if reference_labels else "")
             )
             for i, ref_bytes in enumerate(reference_images_bytes):
                 try:
                     contents.append(genai_types.Part.from_bytes(data=ref_bytes, mime_type="image/jpeg"))
-                    contents.append(f"Imagen de referencia {i+1}")
+                    _rl = (reference_labels[i] if reference_labels and i < len(reference_labels) else "")
+                    contents.append(f"Imagen de referencia {i+1}" + (f" · vista {_rl}" if _rl else ""))
                 except Exception as e:
                     logger.warning(f"Error añadiendo referencia {i}: {e}")
 
@@ -4314,6 +4329,100 @@ async def process_and_save_image(content: bytes, vehicle_id: str) -> Tuple[str, 
     local_url = f"{base}/uploads/{filename}"
     logger.warning(f"Imagen guardada en local (R2 no disponible): {local_url}")
     return local_url, processed_bytes
+
+
+# ── LA MISMA VISTA CONTRA LA MISMA VISTA ─────────────────────────────────────
+# El «antes / después» comparaba cada foto con la foto de la MISMA POSICION de
+# la inspeccion anterior, y solo se guardaban las dos primeras: el lateral y el
+# cuentakilometros se comparaban con la FRONTAL (lo vio Dani revisando, 17-09-2026).
+# El portal sube siempre frontal, trasera, lateral izquierdo y lateral derecho,
+# y luego el cuentakilometros y el checklist, con la vista en el nombre del
+# fichero (`angle_0_frontal.jpg`). Ahora se guarda esa vista (`photo_vistas`)
+# y cada foto se compara con la ULTIMA foto de SU vista de esa furgoneta.
+_VISTAS_CARROCERIA = ("frontal", "trasera", "lateral_izq", "lateral_der")
+_VISTA_NOMBRE = {"frontal": "FRONTAL", "trasera": "TRASERA", "lateral_izq": "LATERAL IZQUIERDO",
+                 "lateral_der": "LATERAL DERECHO", "odometro": "CUENTAKILÓMETROS"}
+
+
+def _vista_de_fichero(nombre) -> Optional[str]:
+    n = str(nombre or "").strip().lower()
+    m = re.match(r"angle_\d+_([a-z_]+)\.", n)
+    if m:
+        return m.group(1) if m.group(1) in _VISTAS_CARROCERIA else None
+    if n.startswith("odometro"):
+        return "odometro"
+    if n.startswith("checklist_"):
+        return "checklist:" + n[len("checklist_"):].rsplit(".", 1)[0][:40]
+    return None
+
+
+def _vistas_inspeccion(insp: dict) -> list:
+    """La vista de cada foto de una inspeccion, alineada con `photos`.
+
+    Las nuevas la traen guardada. Las de antes se reconstruyen con
+    `photo_roles` (desde el 11-07-2026), porque el portal sube las cuatro de
+    carroceria siempre en el mismo orden. Sin roles no se adivina: None, y esa
+    foto se queda sin comparacion antes que compararla con la que no es.
+    """
+    fotos = insp.get("photos") or []
+    vis = insp.get("photo_vistas")
+    if isinstance(vis, list) and len(vis) == len(fotos):
+        return vis
+    roles = insp.get("photo_roles")
+    if not (isinstance(roles, list) and len(roles) == len(fotos)):
+        return [None] * len(fotos)
+    out, k = [], 0
+    for r in roles:
+        if r == "angle":
+            out.append(_VISTAS_CARROCERIA[k] if k < len(_VISTAS_CARROCERIA) else None)
+            k += 1
+        elif r == "odometer":
+            out.append("odometro")
+        else:
+            out.append(None)
+    # Mas de cuatro fotos de carroceria = orden desconocido: no se afirma nada.
+    return out if k == len(_VISTAS_CARROCERIA) else [None] * len(fotos)
+
+
+async def _referencias_por_vista(vehicle_id: str, vistas: list, antes_de: Optional[str] = None,
+                                 excluir_id: Optional[str] = None) -> list:
+    """Para cada foto, la ULTIMA foto de su MISMA vista de esa furgoneta.
+
+    Alineada con `vistas`; "" donde no hay con que comparar. Cada vista puede
+    salir de una inspeccion distinta: vale la ultima que la tenga.
+    """
+    faltan = {v for v in vistas if v}
+    if not vehicle_id or not faltan:
+        return [""] * len(vistas)
+    q: dict = {"deleted": {"$ne": True}, "vehicle_id": vehicle_id, "photos.0": {"$exists": True}}
+    if antes_de:
+        q["created_at"] = {"$lt": antes_de}
+    if excluir_id:
+        q["id"] = {"$ne": excluir_id}
+    halladas: dict = {}
+    async for prev in db.inspections.find(
+            q, {"_id": 0, "photos": 1, "photo_vistas": 1, "photo_roles": 1}
+    ).sort("created_at", -1).limit(30):
+        for url, v in zip(prev.get("photos") or [], _vistas_inspeccion(prev)):
+            if v in faltan and v not in halladas and url:
+                halladas[v] = url
+        if len(halladas) == len(faltan):
+            break
+    return [halladas.get(v, "") if v else "" for v in vistas]
+
+
+async def _referencias_para_ia(photo_urls_ref: list, vistas: list, idx_analisis: list):
+    """(bytes, etiquetas) de las referencias de las fotos de carroceria, en el
+    orden del analisis y cada una con el nombre de su vista."""
+    pares = [(vistas[i], photo_urls_ref[i]) for i in idx_analisis
+             if i < len(photo_urls_ref) and photo_urls_ref[i]]
+    datos, etiquetas = [], []
+    for vista, url in pares:
+        b = await load_reference_images([url])
+        if b:
+            datos.append(b[0])
+            etiquetas.append(_VISTA_NOMBRE.get(vista, str(vista or "").upper()))
+    return datos, etiquetas
 
 
 async def load_reference_images(ref_photo_urls: List[str]) -> List[bytes]:
@@ -6353,9 +6462,11 @@ async def driver_lookup(data: dict, request: Request):
         raise HTTPException(status_code=400, detail="Email no valido")
     org = await _set_tenant_by_slug(data.get("slug"))
 
-    driver = await db.drivers.find_one(
-        {"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}},
-        {"_id": 0, "id": 1, "name": 1, "center": 1})
+    driver = await _ficha_por_correo(email)
+    if driver and driver.get("active") is False:
+        raise HTTPException(status_code=403, detail=(
+            "Tu ficha está dada de baja. Pide a tu responsable que la active "
+            "(Conductores, en el panel) y vuelve a entrar."))
     if not driver:
         # Mismo mensaje siempre: no confirmamos si el email existe o no.
         raise HTTPException(status_code=404, detail="No encontramos ese email. Contacta con tu responsable de flota.")
@@ -8497,6 +8608,53 @@ async def vehicles_spare_wheel(_=Depends(require_admin)):
     return {f.pop("vid"): f for f in filas}
 
 
+def _elegir_ficha(fichas: list) -> Optional[dict]:
+    """De varias fichas con el mismo correo, con cual se entra: la ACTIVA y,
+    si hay varias activas, la mas reciente.
+
+    `find_one` por correo devolvia la primera que tuviera Mongo. A Araceli
+    Ramallo (DGA1) le tocaba una ficha dada de baja del 4 de agosto: la oficina
+    le asignaba furgoneta en la activa, el portal nunca la veia asignada y Mery
+    le volvio a crear la ficha una y otra vez (cuatro, 17-09-2026).
+    """
+    fichas = [f for f in (fichas or []) if f and f.get("id")]
+    if not fichas:
+        return None
+    return max(fichas, key=lambda f: (f.get("active") is not False, str(f.get("created_at") or "")))
+
+
+async def _ficha_por_correo(email: str) -> Optional[dict]:
+    email = str(email or "").strip().lower()
+    if not email:
+        return None
+    fichas = await db.drivers.find(
+        {"email": {"$regex": f"^{re.escape(email)}$", "$options": "i"}},
+        {"_id": 0, "id": 1, "name": 1, "center": 1, "active": 1, "created_at": 1}).to_list(20)
+    return _elegir_ficha(fichas)
+
+
+_FICHA_ACTIVA_CACHE: dict = {}
+
+
+async def _ficha_activa_de(driver_id: str) -> str:
+    """Si la ficha de un token esta de baja y la persona tiene otra activa
+    (mismo correo), el id de la activa. Si no, el mismo. Cacheado 5 min."""
+    if not driver_id:
+        return driver_id
+    clave = (_current_db_name.get(), driver_id)
+    hit = _FICHA_ACTIVA_CACHE.get(clave)
+    if hit and time.time() - hit[0] < 300:
+        return hit[1]
+    destino = driver_id
+    ficha = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "id": 1, "active": 1, "email": 1})
+    if ficha and ficha.get("active") is False and ficha.get("email"):
+        mejor = await _ficha_por_correo(ficha["email"])
+        if mejor and mejor.get("active") is not False:
+            destino = mejor["id"]
+    _FICHA_ACTIVA_CACHE[clave] = (time.time(), destino)
+    return destino
+
+
 async def _fichas_misma_persona(driver: dict) -> tuple:
     """Todos los ids de ficha de una misma persona, y el centro que le consta.
 
@@ -10305,11 +10463,13 @@ async def upload_inspection_photos(
         if not vehicle_doc:
             raise HTTPException(status_code=404, detail="Vehículo no encontrado")
 
+        _yo = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "id": 1, "center": 1, "email": 1})
+        mis_ids, _ = await _fichas_misma_persona(_yo or {"id": driver_id})
         asignada_hoy = await db.daily_assignments.find_one(
             {"date": _dia_negocio(),
-             "slots": {"$elemMatch": {"driver_id": driver_id, "vehicle_id": vehicle_id}}},
+             "slots": {"$elemMatch": {"driver_id": {"$in": list(mis_ids)}, "vehicle_id": vehicle_id}}},
             {"_id": 0, "center": 1})
-        asignada_fija = vehicle_doc.get("current_driver_id") == driver_id
+        asignada_fija = vehicle_doc.get("current_driver_id") in mis_ids
 
         if not (asignada_hoy or asignada_fija):
             driver_doc = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "center": 1})
@@ -10333,6 +10493,7 @@ async def upload_inspection_photos(
         photo_urls = []
         photos_base64 = []
         photo_roles = []  # angle | odometer | checklist — por nombre de archivo del portal
+        photo_vistas = []  # frontal | trasera | lateral_izq | lateral_der | odometro | checklist:x
 
         for file in files:
             content = await file.read()
@@ -10348,6 +10509,7 @@ async def upload_inspection_photos(
                 "odometer" if _fn.startswith("odometro")
                 else "checklist" if _fn.startswith("checklist")
                 else "angle")
+            photo_vistas.append(_vista_de_fichero(_fn))
 
         if not photo_urls:
             raise HTTPException(status_code=400, detail="No se procesó ninguna imagen válida.")
@@ -10364,28 +10526,24 @@ async def upload_inspection_photos(
 
         logger.info(f"Guardadas {len(photo_urls)} fotos — vehículo {vehicle_id}")
 
-        # Cargar fotos de referencia de la última inspección analizada
-        ref_results = await db.inspections.find(
-            {"deleted": {"$ne": True}, "vehicle_id": vehicle_id, "analysis": {"$ne": None}, "analysis_status": "ok"},
-            {"_id": 0, "photos": 1}
-        ).sort("created_at", -1).to_list(1)
-
-        last_insp = ref_results[0] if ref_results else None
-        ref_photo_urls = last_insp.get("photos", [])[:4] if last_insp else []
-
-        # Cargar bytes de referencias desde R2 o disco
-        ref_bytes_list: List[bytes] = []
-        if ref_photo_urls:
-            logger.info(f"Cargando {len(ref_photo_urls)} fotos de referencia")
-            ref_bytes_list = await load_reference_images(ref_photo_urls)
-            logger.info(f"Referencia cargada: {len(ref_bytes_list)} imágenes")
+        # Si el nombre de algun fichero no trae la vista, se reconstruye por el
+        # orden (mismo criterio que para las inspecciones antiguas).
+        if any(v is None for v in photo_vistas):
+            photo_vistas = _vistas_inspeccion({"photos": photo_urls, "photo_roles": photo_roles})
+        # Referencia de cada foto: la ultima de SU misma vista de esta furgoneta.
+        ref_photo_urls = await _referencias_por_vista(vehicle_id, photo_vistas)
+        ref_bytes_list, ref_labels = await _referencias_para_ia(
+            ref_photo_urls, photo_vistas, analysis_photo_idx)
+        cur_labels = [_VISTA_NOMBRE.get(photo_vistas[i], "") for i in analysis_photo_idx]
+        if ref_bytes_list:
+            logger.info(f"Referencia cargada: {len(ref_bytes_list)} imágenes ({', '.join(ref_labels)})")
 
         # Guardar inspección PRIMERO (sin esperar a Gemini) para responder rápido al conductor
         inspection = Inspection(
             vehicle_id=vehicle_id,
             driver_id=driver_id,
             photos=photo_urls,
-            reference_photos=(ref_photo_urls[:2] if ref_photo_urls else []),
+            reference_photos=ref_photo_urls if any(ref_photo_urls) else [],
             analysis=None,
             analysis_status="pending",
             analysis_error=None,
@@ -10394,6 +10552,7 @@ async def upload_inspection_photos(
         )
         doc = serialize_doc(inspection.model_dump())
         doc["photo_roles"] = photo_roles  # para reanálisis: qué fotos son carrocería
+        doc["photo_vistas"] = photo_vistas
         await db.inspections.insert_one(doc)
 
         # Actualizar automáticamente el kilometraje de la furgoneta con el que la
@@ -10464,6 +10623,8 @@ async def upload_inspection_photos(
 
                 analysis, analysis_status, analysis_error = await asyncio.wait_for(
                     analyze_images_with_gemini(analysis_b64, ref_bytes_list if ref_bytes_list else None, db=db,
+                                               reference_labels=ref_labels or None,
+                                               current_labels=cur_labels,
                                                cv_detections_text=cv_text),
                     timeout=120.0
                 )
@@ -11716,8 +11877,19 @@ async def reanalyze_inspection(inspection_id: str, silent: bool = False, _=Depen
     inv_mode = bool(insp.get("rebuild_pass")) and not insp.get("inventory_done")
 
     # Fotos de referencia (estado anterior) si las había — salvo en inventario
-    ref_urls = [] if inv_mode else (insp.get("reference_photos") or [])
-    ref_bytes_list = await load_reference_images(ref_urls) if ref_urls else None
+    _vistas = _vistas_inspeccion({**insp, "photos": insp.get("photos") or []})
+    ref_urls, ref_labels = [], []
+    ref_bytes_list = None
+    if not inv_mode:
+        # Siempre recalculadas: las guardadas antes del 17-09-2026 eran las dos
+        # primeras fotos de la inspeccion anterior, sin mirar la vista.
+        ref_urls = await _referencias_por_vista(insp.get("vehicle_id"), _vistas,
+                                                antes_de=insp.get("created_at"), excluir_id=inspection_id)
+        ref_bytes_list, ref_labels = await _referencias_para_ia(ref_urls, _vistas, _aidx)
+        await db.inspections.update_one(
+            {"id": inspection_id},
+            {"$set": {"reference_photos": ref_urls if any(ref_urls) else [], "photo_vistas": _vistas}})
+    _cur_labels = [_VISTA_NOMBRE.get(_vistas[i], "") if i < len(_vistas) else "" for i in _aidx]
 
     # Marcar como pendiente mientras se reanaliza
     await db.inspections.update_one(
@@ -11758,6 +11930,8 @@ async def reanalyze_inspection(inspection_id: str, silent: bool = False, _=Depen
         analysis_b64, ref_bytes_list if ref_bytes_list else None, db=db,
         known_damages_text=_known_txt,
         cv_detections_text=cv_text,
+        reference_labels=ref_labels or None,
+        current_labels=_cur_labels,
     )
     if analysis:
         _remap_photo_indexes(analysis, _idx_map)
@@ -25447,7 +25621,10 @@ async def _process_single_inspection(vehicle_id, driver_id, photo_urls, photos_b
 
     inspection = Inspection(
         vehicle_id=vehicle_id, driver_id=driver_id, photos=photo_urls,
-        reference_photos=(ref_photo_urls[:2] if ref_photo_urls else []),
+        # Sin la vista de cada foto no se guarda un «antes»: la pantalla lo
+        # emparejaria por posicion y compararia un lateral con la frontal.
+        # A la IA si le llegan (sin etiqueta), que las empareja ella mirandolas.
+        reference_photos=[],
         analysis=analysis, analysis_status=analysis_status, analysis_error=analysis_error,
         notes="Subida masiva", analyzed_at=datetime.now(timezone.utc)
     )

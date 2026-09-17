@@ -868,9 +868,11 @@ export default function RevisionRapida() {
                 )}
 
                 {/* Comparador antes/después — cuando hay foto de referencia */}
+                {/* SOLO la referencia de ESTA foto (misma vista). Antes, sin
+                    referencia propia se usaba la primera —la frontal— y un
+                    lateral o el cuentakilómetros se comparaban con ella. */}
                 {(() => {
-                  const refs = fullInsp?.reference_photos || []
-                  const refUrl = refs[photoIdx] || refs[0]
+                  const refUrl = (fullInsp?.reference_photos || [])[photoIdx]
                   return refUrl && !drawMode ? (
                     <button
                       onClick={() => setCompareMode((c) => !c)}
@@ -887,9 +889,9 @@ export default function RevisionRapida() {
                   onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}>
 
                   {/* Foto: comparador / anotada (profesional) / original */}
-                  {compareMode && (fullInsp?.reference_photos?.[photoIdx] || fullInsp?.reference_photos?.[0])
+                  {compareMode && fullInsp?.reference_photos?.[photoIdx]
                     ? <CompareSlider
-                        beforeUrl={fullInsp.reference_photos[photoIdx] || fullInsp.reference_photos[0]}
+                        beforeUrl={fullInsp.reference_photos[photoIdx]}
                         afterUrl={item.photos[photoIdx]} />
                     : showAnnotated && item.annotated_photos?.[photoIdx]
                       ? <img src={item.annotated_photos[photoIdx]} alt="Análisis IA" className="block w-full" draggable={false} />
