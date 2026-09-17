@@ -364,6 +364,8 @@ const DICT = {
   'empleo.buscar': { es: 'Buscar candidato', en: 'Search applicant', fr: 'Chercher un candidat', de: 'Bewerber suchen', it: 'Cerca candidato', pt: 'Procurar candidato' },
   'empleo.todosOrigenes': { es: 'De donde sea', en: 'Any source', fr: 'Toute source', de: 'Alle Quellen', it: 'Qualsiasi origine', pt: 'Qualquer origem' },
   'empleo.exportar': { es: 'Excel', en: 'Excel', fr: 'Excel', de: 'Excel', it: 'Excel', pt: 'Excel' },
+  'empleo.porPagina': { es: 'Candidatos por página', en: 'Applicants per page', fr: 'Candidats par page', de: 'Bewerber pro Seite', it: 'Candidati per pagina', pt: 'Candidatos por pagina' },
+  'empleo.pagina': { es: 'página', en: 'page', fr: 'page', de: 'Seite', it: 'pagina', pt: 'pagina' },
   'empleo.verCv': { es: 'Curriculum', en: 'CV', fr: 'CV', de: 'Lebenslauf', it: 'CV', pt: 'Curriculo' },
   'empleo.enProceso': { es: 'en proceso', en: 'in progress', fr: 'en cours', de: 'in Bearbeitung', it: 'in corso', pt: 'em curso' },
   'empleo.deAlta': { es: 'de alta', en: 'hired', fr: 'embauches', de: 'eingestellt', it: 'assunti', pt: 'contratados' },

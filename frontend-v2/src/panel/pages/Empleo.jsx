@@ -103,6 +103,11 @@ export default function Empleo() {
   const [ficha, setFicha] = useState(null)
   const [busca, setBusca] = useState('')
   const [soloOrigen, setSoloOrigen] = useState('')
+  // Cuántos por página en cada columna, y en cuál está cada una. Object en vez
+  // de un solo número: cada columna se pasea por su propia lista de golpear
+  // "siguiente" en Contactado no puede reiniciar Por contactar.
+  const [porPagina, setPorPagina] = useState(15)
+  const [paginaPorFase, setPaginaPorFase] = useState({})
   /* QUE SE ARRASTRA, EN UN REF Y NO EN UN ESTADO. `setState` no se aplica
      hasta el siguiente render, asi que un arrastre corto —o rapido— llegaba al
      `drop` con el valor todavia vacio y la tarjeta no se movia: el tablero
@@ -223,6 +228,10 @@ export default function Empleo() {
       return clave(`${c.nombre} ${c.telefono} ${c.ciudad} ${c.email} ${c.dni}`).includes(q)
     })
   }, [cands, busca, soloOrigen])
+
+  // Buscar o cambiar de filtro vuelve todas las columnas a la página 1: si no,
+  // una búsqueda que deja tres resultados se queda mostrando la página 4 vacía.
+  useEffect(() => { setPaginaPorFase({}) }, [busca, soloOrigen, sel?.id])
 
   const porFase = useMemo(() => {
     const m = {}
@@ -358,6 +367,11 @@ export default function Empleo() {
                 {origenes.map((x) => <option key={x} value={x}>{x}</option>)}
               </select>
             )}
+            <select value={porPagina} onChange={(e) => { setPorPagina(Number(e.target.value)); setPaginaPorFase({}) }}
+              title={t('empleo.porPagina')}
+              className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12px] text-dark-100">
+              {[10, 15, 20].map((n) => <option key={n} value={n}>{n} / {t('empleo.pagina')}</option>)}
+            </select>
             <button onClick={exportar} disabled={!visibles.length}
               className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[12px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100 disabled:opacity-40">
               <Download size={13} /> {t('empleo.exportar')}
@@ -370,7 +384,13 @@ export default function Empleo() {
           <div className="grid gap-4 p-4 xl:grid-cols-[1fr_340px]">
             {/* ── El tablero ─────────────────────────────────────────── */}
             <div className={`grid gap-2.5 overflow-x-auto md:grid-cols-3 ${columnas.length > 6 ? '2xl:grid-cols-8' : '2xl:grid-cols-6'}`}>
-              {columnas.map((f) => (
+              {columnas.map((f) => {
+                const total = porFase[f].length
+                const totalPaginas = Math.max(1, Math.ceil(total / porPagina))
+                const pagina = Math.min(paginaPorFase[f] || 1, totalPaginas)
+                const items = porFase[f].slice((pagina - 1) * porPagina, pagina * porPagina)
+                const irA = (p) => setPaginaPorFase((m) => ({ ...m, [f]: p }))
+                return (
                 <div key={f}
                   onDragOver={(e) => { e.preventDefault(); setEncima(f) }}
                   onDragLeave={() => setEncima((x) => (x === f ? '' : x))}
@@ -386,7 +406,7 @@ export default function Empleo() {
                     <span className={`inline-flex rounded px-2 py-0.5 text-[10px] font-semibold uppercase ring-1 ${FASE[f].pill}`}>
                       {t('empleo.fase.' + f)}
                     </span>
-                    <span className="cifra text-[11px] font-bold text-dark-500">{porFase[f].length}</span>
+                    <span className="cifra text-[11px] font-bold text-dark-500">{total}</span>
                   </div>
                   <p className={`-mt-1 mb-2 truncate px-0.5 text-[10.5px] ${FASES_ANTIGUAS.includes(f) ? 'text-amber-400/80' : 'text-dark-600'}`}>
                     {t('empleo.faseAyuda.' + f)}
@@ -401,7 +421,7 @@ export default function Empleo() {
                     </div>
                   )}
                   <div className="space-y-2">
-                    {porFase[f].map((c) => (
+                    {items.map((c) => (
                       <Tarjeta key={c.id} c={c} t={t} activa={ficha?.id === c.id}
                         onAbrir={() => setFicha(c)}
                         onArrastrar={(e) => {
@@ -410,14 +430,28 @@ export default function Empleo() {
                         }}
                         onSoltar={() => { arrastraRef.current = null }} />
                     ))}
-                    {porFase[f].length === 0 && (
+                    {total === 0 && (
                       <p className="rounded-lg border border-dashed border-dark-800 px-2 py-4 text-center text-[11px] text-dark-700">
                         {encima === f ? t('empleo.suelta') : '—'}
                       </p>
                     )}
                   </div>
+                  {totalPaginas > 1 && (
+                    <div className="mt-2 flex items-center justify-between gap-1 text-[11px] text-dark-500">
+                      <button onClick={() => irA(pagina - 1)} disabled={pagina <= 1}
+                        className="rounded px-1.5 py-0.5 hover:bg-dark-800 hover:text-dark-200 disabled:opacity-30">
+                        ‹
+                      </button>
+                      <span className="cifra">{pagina} / {totalPaginas}</span>
+                      <button onClick={() => irA(pagina + 1)} disabled={pagina >= totalPaginas}
+                        className="rounded px-1.5 py-0.5 hover:bg-dark-800 hover:text-dark-200 disabled:opacity-30">
+                        ›
+                      </button>
+                    </div>
+                  )}
                 </div>
-              ))}
+                )
+              })}
             </div>
 
             {/* ── La ficha, al lado ──────────────────────────────────── */}
