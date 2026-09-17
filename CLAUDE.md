@@ -189,6 +189,14 @@ Multi-tenant con planes de pago (Lemon Squeezy). Un solo desarrollador (Dani).
    día tarde: las 5 ITV del 17 salían dentro del recuadro del 18, en silencio y
    sin error. Para una clave `YYYY-MM-DD` de una fecha local hay que componerla
    a mano con `getFullYear/getMonth/getDate`, nunca por ISO.
+   **La misma trampa al reves, 17-09-2026: sacar la HORA cortando el texto ISO
+   del servidor** (`iso.slice(11, 16)`, `iso.slice(0, 16).replace('T', ' ')`)
+   enseña la hora de UTC. Actividad decia 20:00 de una inspeccion hecha a las
+   22:00, y estaba igual en QUINCE sitios (checklist, peticiones de dias, correo,
+   historial de la furgoneta...). Se usa `horaLocal` / `fechaHoraLocal` /
+   `diaMesLocal` de `lib/fecha.js`, y lo vigila la regla `hora-cortando-el-iso`
+   de `check-patrones.mjs`, que al estrenarse encontro cuatro que se me habian
+   escapado a mano.
 12. **La sesión del panel se guarda en DOS sitios y solo uno es fiable.** El JWT
    lo firma el servidor; el blob `flotadsp_admin` de localStorage lo escribe el
    cliente. `pages/Login.jsx` (la pantalla vieja de `/login`, que sigue viva y

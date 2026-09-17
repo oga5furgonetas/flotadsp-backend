@@ -24,3 +24,33 @@ export function diasAtras(iso) {
   const now = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 12, 0, 0)
   return Math.round((now - then) / 86400000)
 }
+
+// Hora y fecha-hora LOCALES de un instante ISO del servidor. Cortar el texto
+// (`iso.slice(11, 16)`) enseña la hora de UTC: en España, dos horas menos en
+// verano. Pasó en Actividad, Mi día, el checklist, las peticiones de días y
+// seis sitios más (17-09-2026). Sin zona en el texto, el navegador lo toma
+// como local y el resultado es el mismo que cortar.
+function aFecha(iso) {
+  if (!iso) return null
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+const dos = (n) => String(n).padStart(2, '0')
+
+// Compuestas a mano: `toLocale*String` con '2-digit' no rellena igual en
+// todos los motores (Node daba «15/9»).
+export function horaLocal(iso) {
+  const d = aFecha(iso)
+  return d ? `${dos(d.getHours())}:${dos(d.getMinutes())}` : ''
+}
+
+export function diaMesLocal(iso) {
+  const d = aFecha(iso)
+  return d ? `${dos(d.getDate())}/${dos(d.getMonth() + 1)}` : ''
+}
+
+export function fechaHoraLocal(iso) {
+  const d = aFecha(iso)
+  return d ? `${diaMesLocal(iso)}/${d.getFullYear()} ${horaLocal(iso)}` : ''
+}

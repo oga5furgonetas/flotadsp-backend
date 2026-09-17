@@ -5,7 +5,7 @@ import { verMatricula } from '../../lib/matricula'
 import { Sun, Camera, AlertTriangle, ClipboardCheck, BellRing, CheckCircle2, ChevronRight } from 'lucide-react'
 import { getDailyAssignment, getInspections, getIncidents, getItvAlerts } from '../api'
 import { PageSkeleton } from '../components/Skeleton'
-import { hoyLocal } from '../../lib/fecha'
+import { hoyLocal, horaLocal } from '../../lib/fecha'
 
 /* ── Torre de control "Mi día" ────────────────────────────────────────────────
    La pantalla de las 8:00 del jefe de turno: todo lo urgente de HOY en un solo
@@ -132,7 +132,7 @@ export default function MiDia() {
             {withDamage.slice(0, 6).map((i) => (
               <div key={i.id} className="flex items-center justify-between rounded-lg bg-black/20 px-3 py-1.5 text-sm">
                 <span>{(i.analysis?.new_damages || []).map((d) => d.part).filter(Boolean).slice(0, 2).join(', ') || t('midia.damage')}</span>
-                <span className="text-xs opacity-70">{(i.created_at || '').slice(11, 16)}</span>
+                <span className="text-xs opacity-70">{horaLocal(i.created_at)}</span>
               </div>
             ))}
           </div>

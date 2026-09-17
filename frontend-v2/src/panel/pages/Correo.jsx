@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Mail, Send, Inbox, Loader2, CheckCircle2, XCircle } from 'lucide-react'
 import { getCorreoEstado, enviarCorreo } from '../api'
+import { fechaHoraLocal } from '../../lib/fecha'
 
 /* EL CORREO DE LA EMPRESA — escribir desde contacto@flotadsp.com.
    ══════════════════════════════════════════════════════════════════════════
@@ -178,7 +179,7 @@ export default function Correo() {
                   <b className="text-[13px] text-dark-100">{x.asunto}</b>
                   <span className="text-[12px] text-dark-400">a {x.para}</span>
                   <span className="ml-auto text-[11.5px] text-dark-600">
-                    {String(x.at).slice(0, 16).replace('T', ' ')}
+                    {fechaHoraLocal(x.at)}
                   </span>
                 </div>
                 <div className="mt-0.5 text-[11.5px] text-dark-500">

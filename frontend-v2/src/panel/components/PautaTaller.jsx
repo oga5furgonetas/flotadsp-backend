@@ -4,6 +4,7 @@ import {
   getPautaTaller, setPautaTaller, setPlantillaTaller,
   getBandejaTaller, marcarLeidoTaller, asignarMensajeTaller, getOrdenes,
 } from '../api'
+import { fechaHoraLocal } from '../../lib/fecha'
 
 /* EL CANAL CON EL TALLER
    ═══════════════════════════════════════════════════════════════════════════
@@ -248,7 +249,7 @@ export default function PautaTaller() {
                     {m.matricula || '¿qué furgoneta?'}
                   </span>
                   <span className="text-[12px] text-slate-500">{m.taller_nombre}</span>
-                  <span className="ml-auto text-[11.5px] text-slate-400">{(m.at || '').slice(0, 16).replace('T', ' ')}</span>
+                  <span className="ml-auto text-[11.5px] text-slate-400">{fechaHoraLocal(m.at)}</span>
                 </div>
                 <p className="mt-1 text-[12.5px] text-slate-600">{m.texto}</p>
                 {!m.orden_id && (

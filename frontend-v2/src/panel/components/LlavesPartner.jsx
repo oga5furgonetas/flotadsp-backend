@@ -3,6 +3,7 @@ import { Loader2, Key, Copy, Check, Trash2, Eye } from 'lucide-react'
 import {
   getLlavesPartner, crearLlavePartner, revocarLlavePartner, getAccesosPartner,
 } from '../api'
+import { fechaHoraLocal } from '../../lib/fecha'
 
 /* ACCESO PARA TERCEROS
    ═══════════════════════════════════════════════════════════════════════════
@@ -143,7 +144,7 @@ export default function LlavesPartner() {
             {accesos.slice(0, 6).map((a, i) => (
               <div key={`${a.at}-${i}`} className="flex flex-wrap items-baseline gap-2 border-b border-slate-100 px-3 py-2 text-[12.5px] last:border-b-0">
                 <span className="font-mono tabular-nums text-slate-400">
-                  {String(a.at).slice(0, 16).replace('T', ' ')}
+                  {fechaHoraLocal(a.at)}
                 </span>
                 <span className="font-semibold text-slate-700">{a.partner}</span>
                 <span className="text-slate-500">consultó {a.recurso}</span>

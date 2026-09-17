@@ -5,7 +5,7 @@ import {
   Loader2, CheckSquare, Sun, Moon, Pencil, Plus, Trash2, Save, X, Calendar, Send, Pin,
 } from 'lucide-react'
 import { getChecklist, upsertChecklist, toggleChecklistItem, saveChecklistTemplate, enviarResumenTurno } from '../api'
-import { hoyLocal } from '../../lib/fecha'
+import { hoyLocal, horaLocal } from '../../lib/fecha'
 
 const isoToday = hoyLocal
 
@@ -239,7 +239,7 @@ export default function ChecklistOperativo() {
                 </div>
                 {it.done && it.done_by && (
                   <div className="mt-0.5 text-[11px] text-dark-500">
-                    {t('chk.done.at').replace('{time}', (it.done_at || '').slice(11, 16)).replace('{name}', it.done_by)}
+                    {t('chk.done.at').replace('{time}', horaLocal(it.done_at)).replace('{name}', it.done_by)}
                   </div>
                 )}
               </div>

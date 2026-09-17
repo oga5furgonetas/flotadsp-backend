@@ -212,6 +212,17 @@ const PATRONES = [
     que: 'Redirigir a /conductor por un 401 sin comprobar que habia sesion',
     porque: 'Estando ya en /conductor, ese replace es una RECARGA ENTERA: monta, pide, 401, recarga. Bucle infinito a 5-6 peticiones por segundo (gotcha 69, 07-09-2026). Sin token no hay a quien expulsar',
   },
+  {
+    id: 'hora-cortando-el-iso',
+    gotcha: 11,
+    // Solo el frontend: cortar el ISO del servidor enseña la hora de UTC. Pasó
+    // en once pantallas a la vez (17-09-2026): Actividad decía 20:00 de una
+    // inspección hecha a las 22:00. El laboratorio (datos de maqueta) no.
+    soloEn: /^frontend-v2\/src\/(?!panel\/lab\/)/,
+    re: /\.slice\(\s*11\s*,\s*16\s*\)|\.slice\(\s*0\s*,\s*16\s*\)\s*\.replace\(\s*['"]T['"]|\.replace\(\s*['"]T['"]\s*,\s*['"] ['"]\s*\)\s*\.slice\(\s*0\s*,\s*16/g,
+    que: 'Hora sacada cortando el texto ISO',
+    porque: 'Enseña la hora de UTC (dos horas menos en verano). Usa horaLocal / fechaHoraLocal de lib/fecha',
+  },
 ]
 
 /* Ficheros a mirar. El frontend viejo y las dependencias no. */

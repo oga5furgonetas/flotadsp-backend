@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { getMyShifts, createShiftRequest, marcarRespuestasVistas, getMisBloqueos } from '../../services/api'
 import { lista } from '../../lib/lista'
+import { horaLocal, diaMesLocal } from '../../lib/fecha'
 import { pushSupported, isPushEnabled, enablePush, disablePush } from '../../lib/push'
 
 /* ────────────────────────────────────────────────────────────────────────────
@@ -335,7 +336,7 @@ export default function PedirDias({ onBack }) {
                   <p className="mt-1.5 text-[13px] leading-relaxed text-dark-200">«{r.motivo_respuesta}»</p>
                 )}
                 <p className="mt-2 text-[11px] text-dark-500">
-                  {r.resolved_by || '—'}{r.resolved_at ? ` · ${r.resolved_at.slice(8, 10)}/${r.resolved_at.slice(5, 7)} ${r.resolved_at.slice(11, 16)}` : ''}
+                  {r.resolved_by || '—'}{r.resolved_at ? ` · ${diaMesLocal(r.resolved_at)} ${horaLocal(r.resolved_at)}` : ''}
                 </p>
               </div>
             ))}

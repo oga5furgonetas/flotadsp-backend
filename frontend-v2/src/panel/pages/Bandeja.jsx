@@ -3,6 +3,7 @@ import { Loader2, Mail, Inbox, RefreshCw, Search, ExternalLink, Building2 } from
 import { getInbox, getLeads } from '../api'
 import { isSuperAdmin } from '../auth'
 import { useT } from '../../i18n'
+import { fechaHoraLocal } from '../../lib/fecha'
 
 // Bandeja de mensajes del super-admin.
 // Lee de /api/inbox (append-only: cada envío del formulario = mensaje).
@@ -85,7 +86,7 @@ export default function Bandeja() {
             <div className="space-y-2 text-sm">
               <div><span className="text-dark-500">{t('inbox.from')}</span> <a href={`mailto:${sel.email}`} className="text-sky-400 hover:underline">{sel.email}</a></div>
               {sel.company && <div><span className="text-dark-500">{t('inbox.company')}</span> {sel.company}</div>}
-              <div><span className="text-dark-500">{t('inbox.received')}</span> {(sel.created_at || '').replace('T', ' ').slice(0, 16)}</div>
+              <div><span className="text-dark-500">{t('inbox.received')}</span> {fechaHoraLocal(sel.created_at)}</div>
               {sel.plan && <div className="rounded-lg border border-dark-800 bg-dark-800/40 p-3"><div className="mb-1 text-[11px] uppercase text-dark-500">{t('inbox.message')}</div><div className="whitespace-pre-wrap text-dark-200">{sel.plan}</div></div>}
               <a href={`mailto:${sel.email}?subject=Re:%20FlotaDSP&body=Hola%20${encodeURIComponent(sel.name || '')}%2C%0A%0A`} className="btn-primary mt-4 inline-flex items-center gap-2 text-sm">
                 <ExternalLink size={14} /> {t('inbox.reply')}

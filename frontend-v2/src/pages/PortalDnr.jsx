@@ -6,6 +6,7 @@ import 'leaflet/dist/leaflet.css'
 import { Loader2, AlertTriangle, CheckCircle2, MapPin, PackageSearch } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
 import { normalizarDetalle } from '../services/api'
+import { horaLocal } from '../lib/fecha'
 
 /* LA PÁGINA DEL CONDUCTOR — «¿dónde dejaste este paquete?»
    ═══════════════════════════════════════════════════════════════════════
@@ -169,7 +170,7 @@ export default function PortalDnr() {
         )}
         <p className="mt-1.5">
           {d.dia && <>Ruta <b>{d.ruta}</b> del <b>{d.dia}</b>. </>}
-          {d.entregado_en && <>Lo marcaste entregado a las <b>{d.entregado_en.slice(11, 16)}</b>.</>}
+          {d.entregado_en && <>Lo marcaste entregado a las <b>{horaLocal(d.entregado_en)}</b>.</>}
         </p>
         {/* SU PROPIO ESCANEO, escrito. Es lo que más le hace acordarse: «ah,
             sí, ese se lo di a la señora». No preselecciona ningún botón a

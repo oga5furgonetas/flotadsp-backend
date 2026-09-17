@@ -16,7 +16,7 @@ import {
 import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
 import { canSee } from '../auth'
-import { isoLocal, hoyLocal } from '../../lib/fecha'
+import { isoLocal, hoyLocal, horaLocal, diaMesLocal } from '../../lib/fecha'
 
 /* Cuantos dias se pueden pintar de una vez. 92 es un trimestre: por encima
    son miles de celdas y la pantalla se arrastra sin que nadie lo necesite. */
@@ -2398,7 +2398,7 @@ export default function Turnos() {
                   {g.note && <p className="mt-1 text-[12.5px] italic text-dark-500">“{g.note}”</p>}
                   {g.created_at && (
                     <p className="mt-1 font-mono text-[10.5px] text-dark-600">
-                      pedido el {g.created_at.slice(8, 10)}/{g.created_at.slice(5, 7)} a las {g.created_at.slice(11, 16)}
+                      pedido el {diaMesLocal(g.created_at)} a las {horaLocal(g.created_at)}
                     </p>
                   )}
                 </div>

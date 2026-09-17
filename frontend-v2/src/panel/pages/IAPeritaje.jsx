@@ -6,6 +6,7 @@ import { getHealth, getInspections, reanalyzeFailed, reanalyzeInspection, submit
 import { isSuperAdmin } from '../auth'
 import BboxEditor from '../components/BboxEditor'
 import PolygonEditor from '../components/PolygonEditor'
+import { fechaHoraLocal } from '../../lib/fecha'
 
 function PhotoModal({ insp, onClose }) {
   const photos = (insp.annotated_photos || []).filter(Boolean)
@@ -263,7 +264,7 @@ export default function IAPeritaje() {
                 <div className="card divide-y divide-dark-800">
                   {failedList.map((i) => (
                     <div key={i.id} className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm">
-                      <span className="text-dark-300">{(i.created_at || '').slice(0, 16).replace('T', ' ')}</span>
+                      <span className="text-dark-300">{fechaHoraLocal(i.created_at)}</span>
                       <span className="rounded bg-red-500/15 px-2 py-0.5 text-[11px] text-red-300">{i.analysis_status}</span>
                       <button onClick={() => doReanalyze(i.id)} disabled={busy === i.id} className="btn-ghost px-2 py-1 text-xs">
                         {busy === i.id ? <Loader2 size={12} className="animate-spin" /> : t('ia.reanalyze')}
@@ -327,7 +328,7 @@ export default function IAPeritaje() {
                   return (
                     <div key={i.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
                       <div className={`h-2 w-2 rounded-full shrink-0 ${hasAnn ? 'bg-emerald-400' : 'bg-dark-700'}`} />
-                      <span className="text-dark-400 text-xs w-32 shrink-0">{(i.created_at || '').slice(0,16).replace('T',' ')}</span>
+                      <span className="text-dark-400 text-xs w-32 shrink-0">{fechaHoraLocal(i.created_at)}</span>
                       <span className="text-dark-300 flex-1 truncate text-xs">{i.vehicle_id || i.id}</span>
                       {hasAnn && (
                         <button onClick={() => setViewing(i)} className="text-[10px] font-semibold text-brand-400 bg-brand-500/10 px-2 py-0.5 rounded-full hover:bg-brand-500/25 transition-colors">⬡ Ver fotos →</button>
@@ -375,7 +376,7 @@ export default function IAPeritaje() {
                     return (
                       <div key={insp.id} className="card p-4">
                         <div className="flex items-center justify-between mb-3">
-                          <div className="text-xs text-dark-400">{(insp.created_at || '').slice(0,16).replace('T',' ')}</div>
+                          <div className="text-xs text-dark-400">{fechaHoraLocal(insp.created_at)}</div>
                           <div className="text-xs font-semibold text-dark-200">{insp.vehicle_id || insp.id}</div>
                         </div>
                         <div className="space-y-2">

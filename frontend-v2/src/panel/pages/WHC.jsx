@@ -9,6 +9,7 @@ import { whcAnalizar, getWhcPlan, deleteWhcPlan , getWhcEstado , getWhcSemana } 
 import { lista } from '../../lib/lista'
 import { useOrden } from '../../lib/orden'
 import ThOrden from '../components/ThOrden'
+import { fechaHoraLocal } from '../../lib/fecha'
 
 /* ────────────────────────────────────────────────────────────────────────────
    WHC — Working Hours Compliance.
@@ -212,7 +213,7 @@ export default function WHC() {
                 <Trash2 size={13} /> Borrar
               </button>
               <span className="text-[11px] text-dark-500">
-                guardado {String(guardado.updated_at || '').slice(0, 16).replace('T', ' ')}
+                guardado {fechaHoraLocal(guardado.updated_at)}
               </span>
             </>
           )}

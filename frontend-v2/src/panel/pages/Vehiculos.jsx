@@ -4,7 +4,7 @@ import { useT, LANG_LOCALE } from '../../i18n'
 import { lista } from '../../lib/lista'
 import { verMatricula } from '../../lib/matricula'
 import { useEscape } from '../../lib/useEscape'
-import { hoyLocal } from '../../lib/fecha'
+import { hoyLocal, fechaHoraLocal } from '../../lib/fecha'
 import { PageSkeleton } from '../components/Skeleton'
 import GuidedEmpty from '../components/GuidedEmpty'
 import VidaVehiculo from '../components/VidaVehiculo'
@@ -530,7 +530,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
   function buildDisputeDoc(evs) {
     const admin = getAdmin()
     const esc = (s) => String(s ?? '').replace(/[<>&"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]))
-    const fmtAt = (at) => esc(String(at).slice(0, 16).replace('T', ' '))
+    const fmtAt = (at) => esc(fechaHoraLocal(at))
     const rows = evs.map((e) => `<tr><td class="dt">${fmtAt(e.at)}</td><td>${esc(e.txt)}</td></tr>`).join('')
 
     // Evidencia: hasta 3 inspecciones con daño nuevo, cada una con su "antes"
@@ -1256,7 +1256,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                         <div key={insp.id} className="flex items-center gap-3 rounded-xl border border-dark-800/60 px-3 py-2.5 transition hover:bg-dark-800/40">
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className="text-xs font-medium text-dark-200">{(insp.created_at || '').slice(0, 16).replace('T', ' ')}</span>
+                              <span className="text-xs font-medium text-dark-200">{fechaHoraLocal(insp.created_at)}</span>
                               {sev && <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${sevCls}`}>{sev}</span>}
                             </div>
                             {insp.driver_name && (
@@ -1384,7 +1384,7 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                         <li key={i} className="group/ev relative ml-5 pb-4 last:pb-0">
                           <span className={`absolute -left-[25.5px] top-1 h-2.5 w-2.5 rounded-full ring-4 ring-dark-950 ${e.dot}`} />
                           <div className="flex items-center gap-2">
-                            <div className="text-[11px] tabular-nums text-dark-500">{String(e.at).slice(0, 16).replace('T', ' · ')}</div>
+                            <div className="text-[11px] tabular-nums text-dark-500">{fechaHoraLocal(e.at).replace(' ', ' · ')}</div>
                             {/* Un apunte de mantenimiento se puede quitar, y al
                                 quitarlo se deshace: el contador de km vuelve a
                                 donde estaba y la cita vuelve a pendiente. */}
