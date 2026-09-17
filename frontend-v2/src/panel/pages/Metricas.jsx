@@ -92,7 +92,7 @@ export default function Metricas() {
 
   return (
     <div className="flex flex-col gap-4">
-      <h1 className="flex items-center gap-2 text-xl font-bold">
+      <h1 className="flex items-center gap-2 rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
         <BarChart3 size={20} /> {t('metrics.title')}
         {reports && <span className="text-dark-500">· {reports.length}</span>}
       </h1>

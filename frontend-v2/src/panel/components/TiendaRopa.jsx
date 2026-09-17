@@ -29,7 +29,7 @@ import TiendaPedidos from './TiendaPedidos'
 
 const eur = (n) => `${Number(n).toFixed(2).replace('.', ',')} €`
 
-export default function TiendaRopa() {
+export default function TiendaRopa({ sinCabecera = false } = {}) {
   const [datos, setDatos] = useState(null)
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
@@ -84,6 +84,9 @@ export default function TiendaRopa() {
 
   return (
     <div className="card p-5">
+      {/* En su propia pantalla la cabecera ya la pone la página: repetirla
+          eran dos títulos seguidos diciendo lo mismo. */}
+      {!sinCabecera && <>
       <div className="mb-1 flex items-center gap-2 text-sm font-semibold text-dark-200">
         <Shirt size={16} /> Tienda de ropa y material
       </div>
@@ -91,6 +94,7 @@ export default function TiendaRopa() {
         Lo que hace falta para venderle ropa a tus conductores y a otros DSP, por dónde vas
         y de dónde puede salir el dinero.
       </p>
+      </>}
 
       {/* Por dónde vas */}
       <div className="mt-4">

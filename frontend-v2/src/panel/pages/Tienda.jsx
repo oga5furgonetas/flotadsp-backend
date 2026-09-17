@@ -16,13 +16,13 @@ export default function Tienda() {
   return (
     <div className="mx-auto max-w-3xl space-y-5">
       <div>
-        <h1 className="text-xl font-bold">Tienda</h1>
-        <p className="mt-0.5 text-sm text-dark-400">
+        <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">Tienda</h1>
+        <p className="mt-2 text-sm text-dark-400">
           La ropa que le vendes a tu gente y a otros DSP: qué falta para poder
           venderla, tus prendas y los pedidos de cada tanda.
         </p>
       </div>
-      <TiendaRopa />
+      <TiendaRopa sinCabecera />
     </div>
   )
 }

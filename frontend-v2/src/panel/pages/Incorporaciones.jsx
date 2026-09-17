@@ -391,7 +391,7 @@ export default function Incorporaciones() {
     /* Hueco abajo cuando hay un mensaje preparado: si no, tapa la última ficha. */
     <div className={`space-y-4 ${msg ? 'pb-56' : ''}`}>
       <div>
-        <h1 className="text-[19px] font-bold text-dark-50">Incorporaciones</h1>
+        <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">Incorporaciones</h1>
         <p className="mt-0.5 max-w-[86ch] text-[13px] text-dark-400">
           En qué paso está cada uno y qué le toca ahora, con el WhatsApp ya escrito.
         </p>

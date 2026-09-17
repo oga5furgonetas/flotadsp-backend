@@ -78,7 +78,7 @@ export default function Informes() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-[19px] font-bold text-dark-50">{t('nav.informes')}</h1>
+        <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('nav.informes')}</h1>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 max-w-[86ch] text-[13px] text-dark-400">
           Los dos salen del informe semanal de la nave.
           <span className="inline-flex items-center gap-1 text-emerald-400">

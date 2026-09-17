@@ -254,9 +254,9 @@ export default function Diarios() {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3">
-        <h1 className="flex items-center gap-2 text-xl font-bold">
+        <h2 className="flex items-center gap-2 text-[17px] font-semibold text-dark-100">
           <AlertTriangle size={20} /> DNR · {center}
-        </h1>
+        </h2>
         {/* Las dos fechas y su nota medían 400 px en un móvil de 375 y movían
             la página de lado; abajo ocupan su propia línea. */}
         <div className="flex w-full flex-wrap items-center gap-1.5 sm:w-auto">

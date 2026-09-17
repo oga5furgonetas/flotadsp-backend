@@ -89,7 +89,7 @@ export default function OrigenDanos() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-[22px] font-semibold text-dark-50">Origen de daños</h1>
+        <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">Origen de daños</h1>
         <p className="mt-1 max-w-[70ch] text-[13px] text-dark-400">
           De cada golpe, la última foto en la que la furgoneta estaba limpia. Con eso
           se sabe qué día apareció y quién la llevaba.

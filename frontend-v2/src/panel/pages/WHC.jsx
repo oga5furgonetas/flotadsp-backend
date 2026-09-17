@@ -141,9 +141,9 @@ export default function WHC() {
   return (
     <div className="mx-auto max-w-5xl space-y-5">
       <div>
-        <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
+        <h2 className="text-[17px] font-semibold text-dark-100">
           WHC <span className="text-dark-600">· {center}</span>
-        </h1>
+        </h2>
         <p className="mt-1 text-xs text-dark-500">{t('whc.sub')}</p>
 
         {/* QUÉ NAVE TIENE PLAN Y CUÁL NO. Lo que faltaba el 15-09-2026: OGA5

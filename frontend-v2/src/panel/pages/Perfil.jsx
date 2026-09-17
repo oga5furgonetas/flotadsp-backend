@@ -49,7 +49,7 @@ export default function Perfil() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-5">
-      <h1 className="text-xl font-bold">{t('prof.title')}</h1>
+      <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('prof.title')}</h1>
 
       {/* Cuenta */}
       <div className="card p-5">

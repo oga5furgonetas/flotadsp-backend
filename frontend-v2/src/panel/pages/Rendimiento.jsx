@@ -104,7 +104,7 @@ export default function Rendimiento() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-[19px] font-bold text-dark-50">Rendimiento</h1>
+        <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">Rendimiento</h1>
         <p className="mt-0.5 max-w-[80ch] text-[13px] text-dark-400">
           Cómo va cada conductor. Ayudas, reintentos y DCR salen de Cortex y están al
           día; contacto, POD, RTS y DNR salen del reporte diario, que se sube a mano.

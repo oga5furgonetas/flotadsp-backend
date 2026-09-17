@@ -29,7 +29,7 @@ export default function Directory({ title, fetcher, icon: Icon }) {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold">{title} <span className="text-dark-500">· {list.length}</span></h1>
+        <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{title} <span className="text-dark-500">· {list.length}</span></h1>
         <div className="relative">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />
           <input className="input w-56 pl-9" placeholder={t('dir.search.ph')} value={q} onChange={(e) => setQ(e.target.value)} />

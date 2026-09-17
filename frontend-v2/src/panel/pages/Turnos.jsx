@@ -1400,7 +1400,7 @@ export default function Turnos() {
   if (noCenter) {
     return (
       <div>
-        <h1 className="mb-4 text-xl font-bold">{t('turns.title')}</h1>
+        <h1 className="mb-4 rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('turns.title')}</h1>
         <div className="card flex flex-col items-center gap-3 p-10 text-center">
           <CalendarClock size={30} className="text-brand-400" />
           <p className="text-dark-200">{t('turns.pick.center')}</p>
@@ -1418,7 +1418,7 @@ export default function Turnos() {
     <div className="flex flex-col gap-4">
       {/* Cabecera: centro + navegación de quincena */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="flex items-center gap-2 text-xl font-bold">
+        <h1 className="flex items-center gap-2 rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
           <CalendarClock size={20} /> {t('turns.title')} · {center}
         </h1>
         {/* ── TRES COSAS DISTINTAS, TRES SITIOS ──────────────────────────────

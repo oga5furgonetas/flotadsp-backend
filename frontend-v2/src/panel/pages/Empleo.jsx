@@ -257,7 +257,7 @@ export default function Empleo() {
     <div className="space-y-5 p-4 sm:p-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-xl font-bold text-dark-50">
+          <h1 className="flex items-center gap-2 rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
             <Briefcase size={20} className="text-brand-400" /> {t('empleo.titulo')}
           </h1>
           <p className="text-sm text-dark-500">{t('empleo.sub')}</p>

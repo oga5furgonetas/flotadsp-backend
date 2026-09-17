@@ -254,7 +254,7 @@ export default function Usuarios() {
       {/* Cabecera */}
       <div className="mb-5 flex items-center justify-between gap-3">
         <div>
-          <h1 className="flex items-center gap-2 text-xl font-bold"><UsersIcon size={20} className="text-brand-400" /> {t('usr.title')}</h1>
+          <h1 className="flex items-center gap-2 rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50"><UsersIcon size={20} className="text-brand-400" /> {t('usr.title')}</h1>
           <p className="mt-0.5 text-sm text-dark-400">Cada usuario ve solo los módulos y centros que le asignes.</p>
         </div>
         <button onClick={() => setShowCreate(s => !s)}

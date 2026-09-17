@@ -85,7 +85,7 @@ export default function Correo() {
   return (
     <div className="mx-auto max-w-3xl space-y-4">
       <div>
-        <h1 className="flex items-center gap-2 text-[19px] font-bold text-dark-50">
+        <h1 className="flex items-center gap-2 rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">
           <Mail size={18} /> Correo de la empresa
         </h1>
         <p className="mt-0.5 text-[13px] text-dark-400">

@@ -36,7 +36,7 @@ export default function ExpiryAlerts({ title, fetcher, dateField, dateLabel, ext
 
   return (
     <div>
-      <h1 className="mb-3 text-xl font-bold">{title} <span className="text-dark-500">· {rows.length}</span></h1>
+      <h1 className="mb-3 rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{title} <span className="text-dark-500">· {rows.length}</span></h1>
 
       {/* ── EL RESUMEN, ANTES DE LA TABLA ──────────────────────────────────
           Una tabla de 90 filas no dice si hay que salir corriendo. Estas tres

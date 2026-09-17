@@ -319,7 +319,7 @@ export default function CasasAlquiler() {
       {/* Header */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold tracking-tight">{t('rental.title')}</h1>
+          <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('rental.title')}</h1>
           <p className="mt-0.5 text-xs text-dark-500">
             {t('rental.subtitle').replace('{n}', MAX_KM)}
           </p>

@@ -40,7 +40,7 @@ export default function Bandeja() {
   return (
     <div className="mx-auto max-w-4xl">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h1 className="flex items-center gap-2 text-xl font-bold"><Inbox size={20} className="text-brand-400" /> {t('inbox.title')} {leads && <span className="text-dark-500">· {list.length}</span>}</h1>
+        <h1 className="flex items-center gap-2 rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50"><Inbox size={20} className="text-brand-400" /> {t('inbox.title')} {leads && <span className="text-dark-500">· {list.length}</span>}</h1>
         <div className="flex items-center gap-2">
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-dark-500" />

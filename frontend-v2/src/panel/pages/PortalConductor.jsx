@@ -50,7 +50,7 @@ export default function PortalConductor() {
     <div className="mx-auto max-w-3xl">
       <div className="mb-4 flex items-center gap-2">
         <Shield size={22} className="text-brand-400" />
-        <h1 className="text-xl font-bold">{t('portal.title')}</h1>
+        <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('portal.title')}</h1>
       </div>
 
       <p className="mb-5 text-sm text-dark-300"><BoldText str={t('portal.intro')} /></p>
