@@ -7,6 +7,16 @@ import {
   TrendingUp, UserPlus, Send,
 } from 'lucide-react'
 import { useT } from '../../i18n'
+import Pestanas, { usePestana } from '../components/Pestanas'
+
+/* Sin oferta abierta, cuatro cosas distintas en pestañas en vez de una
+   página de cuatro pantallas de alto. */
+const PESTANAS_EMP = [
+  { id: 'ofertas', label: 'Ofertas' },
+  { id: 'contactar', label: 'Por contactar' },
+  { id: 'etts', label: 'ETTs' },
+  { id: 'join', label: 'JOIN' },
+]
 import {
   getOfertas, crearOferta, editarOferta,
   getCandidatos, moverCandidato, contratarCandidato, borrarCandidato,
@@ -92,6 +102,7 @@ export default function Empleo() {
      que el navegador de verdad lo trate como un arrastre. */
   const arrastraRef = useRef(null)
   const [encima, setEncima] = useState('')
+  const [tab, setTab] = usePestana(PESTANAS_EMP, 'ofertas')
 
   const centrosReales = useMemo(
     () => (centers || []).filter((c) => c && c !== 'Todos'), [centers])
@@ -269,21 +280,23 @@ export default function Empleo() {
           guardando={guardando} onGuardar={guardar} onCerrar={() => setEditando(null)} t={t} />
       )}
 
-      {/* ARRIBA DEL TODO: es lo primero del embudo y lo que se hace a diario.
-          Debajo de las ofertas se queda fuera de la vista y no se usa. */}
-      {!sel && <PorContactar />}
+      {!sel && <Pestanas pestanas={PESTANAS_EMP} activa={tab} onElegir={setTab} etiqueta="Secciones de empleo" />}
 
-      <ListaOfertas ofertas={ofertas} cargando={cargando} sel={sel} t={t}
+      {/* «Por contactar» es lo que se hace a diario: su propia pestaña, a un
+          clic, en vez de empujar las ofertas fuera de la vista. */}
+      {!sel && tab === 'contactar' && <PorContactar />}
+
+      {(sel || tab === 'ofertas') && <ListaOfertas ofertas={ofertas} cargando={cargando} sel={sel} t={t}
         onAbrir={cargarCands} onEditar={(o) => { setEditando({ ...o, preguntas: (o.preguntas || []).map((p) => ({ ...p })) }); setError('') }}
         onCerrarOferta={(o) => editarOferta(o.id, { activa: !o.activa }).then(cargar)}
-        copiar={copiar} copiado={copiado} />
+        copiar={copiar} copiado={copiado} />}
 
       {/* La agenda va aquí y no en Configuración: la usa la misma persona que
           mueve candidatos, y mandarla a otra pantalla es garantizar que las
           ETT se queden sin dar de alta. */}
-      {!sel && <AgendaEtts onCambio={() => sel && cargarCands(sel)} />}
+      {!sel && tab === 'etts' && <AgendaEtts onCambio={() => sel && cargarCands(sel)} />}
 
-      {!sel && <ConexionJoin ofertas={ofertas} onHecho={cargar} />}
+      {!sel && tab === 'join' && <ConexionJoin ofertas={ofertas} onHecho={cargar} />}
 
       {sel && (
         <div className="card overflow-hidden">
