@@ -42,6 +42,22 @@ http.interceptors.response.use((r) => r, (e) => {
 /* Que quede rastro. La vez anterior no se pudo saber qué había fallado porque
    una petición que no llega al servidor no deja nada en ninguna parte: ni en
    los logs ni en el registro de escrituras. Esto es lo único que lo cuenta. */
+
+// «1600/2500» o «1600-2500» -> «1.600 – 2.500 €». Lo que ya trae texto se deja.
+function verSalario(v) {
+  const m = /^\s*(\d{3,6})\s*[-/–]\s*(\d{3,6})\s*$/.exec(String(v || ''))
+  const n = (x) => Number(x).toLocaleString('es-ES')
+  if (m) return `${n(m[1])} – ${n(m[2])} €`
+  return /^\s*\d{3,6}\s*$/.test(String(v || '')) ? `${n(v)} €` : v
+}
+
+// Muchas descripciones empiezan repitiendo el título, que ya está justo encima.
+function sinTituloRepetido(desc, titulo) {
+  const [primera, ...resto] = String(desc || '').split(/\r?\n/)
+  const plano = (x) => String(x || '').trim().toLowerCase()
+  return plano(primera) && plano(primera) === plano(titulo) ? resto.join('\n').replace(/^\s+/, '') : desc
+}
+
 function avisarDelFallo(e, slug, ofertaSlug) {
   try {
     const estado = e?.response?.status
@@ -247,7 +263,7 @@ export default function Empleo() {
         <div className="mt-4 flex flex-wrap gap-2">
           {oferta.ciudad && <Etiqueta icon={MapPin}>{oferta.ciudad}</Etiqueta>}
           {oferta.jornada && <Etiqueta icon={Clock}>{oferta.jornada}</Etiqueta>}
-          {oferta.salario && <Etiqueta icon={Euro}>{oferta.salario}</Etiqueta>}
+          {oferta.salario && <Etiqueta icon={Euro}>{verSalario(oferta.salario)}</Etiqueta>}
         </div>
 
         {/* Lo que de verdad quiere saber quien se está pensando apuntarse. */}
@@ -258,7 +274,7 @@ export default function Empleo() {
         </div>
 
         {oferta.descripcion && (
-          <p className="mt-6 whitespace-pre-line text-[15px] leading-relaxed text-slate-700">{oferta.descripcion}</p>
+          <p className="mt-6 whitespace-pre-line text-[15px] leading-relaxed text-slate-700">{sinTituloRepetido(oferta.descripcion, oferta.titulo)}</p>
         )}
         {oferta.requisitos && (
           <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
