@@ -54,3 +54,10 @@ export function fechaHoraLocal(iso) {
   const d = aFecha(iso)
   return d ? `${diaMesLocal(iso)}/${d.getFullYear()} ${horaLocal(iso)}` : ''
 }
+
+// '2026-11-20' -> '20/11/2026'. Troceando el texto, sin pasar por Date:
+// es una fecha de calendario, no un instante (gotcha 11).
+export function fechaEs(f) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(f || ''))
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : (f || '')
+}

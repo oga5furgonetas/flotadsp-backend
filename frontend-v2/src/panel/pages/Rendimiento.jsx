@@ -4,9 +4,8 @@ import {
   Loader2, ArrowUpDown, LifeBuoy, RotateCcw, PhoneOff, Camera, Undo2, PackageX, Search,
 } from 'lucide-react'
 import { getRendimientoConductores } from '../api'
+import { fechaEs } from '../../lib/fecha'
 
-// '2026-09-16' -> '16/09/2026', troceando el texto (gotcha 11).
-const fechaEs = (f) => (/^\d{4}-\d{2}-\d{2}/.test(String(f || '')) ? `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)}` : (f || ''))
 
 /* CÓMO VA CADA CONDUCTOR — una tabla, y en el periodo que se elija.
    ══════════════════════════════════════════════════════════════════════════

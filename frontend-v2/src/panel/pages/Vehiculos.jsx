@@ -4,7 +4,7 @@ import { useT, LANG_LOCALE } from '../../i18n'
 import { lista } from '../../lib/lista'
 import { verMatricula } from '../../lib/matricula'
 import { useEscape } from '../../lib/useEscape'
-import { hoyLocal, fechaHoraLocal } from '../../lib/fecha'
+import { hoyLocal, fechaHoraLocal, fechaEs } from '../../lib/fecha'
 import { PageSkeleton } from '../components/Skeleton'
 import GuidedEmpty from '../components/GuidedEmpty'
 import VidaVehiculo from '../components/VidaVehiculo'
@@ -62,11 +62,6 @@ const daysTo = (d) => {
   return Math.round((f - h) / 86400000)
 }
 
-// '2026-11-20' -> '20/11/2026', troceando el texto (gotcha 11).
-const fechaEs = (f) => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(f || ''))
-  return m ? `${m[3]}/${m[2]}/${m[1]}` : (f || '')
-}
 
 // El aviso ámbar empieza a los 60 días, igual que la tarjeta «ITV vencida o
 // en 60 días» de arriba: con 30 aquí, la tarjeta contaba furgonetas que en la

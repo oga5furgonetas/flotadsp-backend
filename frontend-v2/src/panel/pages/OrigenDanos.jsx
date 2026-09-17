@@ -3,9 +3,8 @@ import { useOutletContext } from 'react-router-dom'
 import { Loader2, ShieldAlert, Camera, ChevronRight, Info } from 'lucide-react'
 import { getAtribucionDanos } from '../api'
 import { verMatricula } from '../../lib/matricula'
+import { fechaEs } from '../../lib/fecha'
 
-// '2026-08-07' -> '07/08/2026', troceando el texto (gotcha 11).
-const fechaEs = (f) => (/^\d{4}-\d{2}-\d{2}/.test(String(f || '')) ? `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)}` : (f || ''))
 
 /* La misma pieza viene escrita de dos formas desde la IA ('Paragolpes
    delantero' 30 veces y 'paragolpes delantero' otras 26), y en una lista se
