@@ -50402,11 +50402,17 @@ async def ai_asistente_hablar(data: _IAAsistenteEntrada, user: dict = Depends(re
             client = genai_sdk.Client(api_key=gemini_key)
         cfg = genai_types.GenerateContentConfig(temperature=0.3, response_mime_type="application/json")
         loop = asyncio.get_running_loop()
+        # Modelo APARTE del que usa el análisis de daños (GEMINI_MODEL), con su
+        # propia variable: la cuota gratuita de Google es por modelo, y
+        # "-lite" trae bastante más margen diario que el flash normal. Así el
+        # asistente no le come cupo al análisis de fotos, que es lo crítico
+        # de verdad — y si algún día hace falta, se cambia con un secret,
+        # sin tocar código.
+        modelo = os.environ.get("GEMINI_MODEL_ASISTENTE", "gemini-2.5-flash-lite")
         async with _gemini_sem:
             resp = await asyncio.wait_for(
                 loop.run_in_executor(_executor, lambda: client.models.generate_content(
-                    model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash"),
-                    contents=contents, config=cfg)),
+                    model=modelo, contents=contents, config=cfg)),
                 timeout=30.0)
         salida = json.loads(_strip_markdown_json(resp.text or "{}"))
     except Exception as e:                                        # noqa: BLE001
