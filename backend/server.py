@@ -2833,7 +2833,7 @@ async def _fecha_dano(inspection_id: str) -> str:
 
     Si no se puede saber, se devuelve hoy: es lo que habia antes y no empeora.
     """
-    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    hoy = _dia_negocio()   # dia de Espana (en UTC, de 0 a 2 h era ayer)
     if not inspection_id:
         return hoy
     try:
@@ -15508,7 +15508,7 @@ async def send_weekly_email_digest():
                 {"deleted": {"$ne": True}, "created_at": {"$gte": since},
                  "analysis.new_damages.0": {"$exists": True}})
 
-            hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            hoy = _dia_negocio()   # dia de Espana (en UTC, de 0 a 2 h era ayer)
             limite = (datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d")
             itvs = await db.vehicles.find(
                 {"status": {"$nin": ["deleted", "baja"]}, "itv_date": {"$gte": hoy, "$lte": limite}},
@@ -19193,7 +19193,7 @@ async def admin_correo_enviar(body: dict = Body(...), user: dict = Depends(requi
 @api_router.get("/conductores/rendimiento")
 async def conductores_rendimiento(desde: str = "", hasta: str = "", center: str = "",
                                   _=Depends(require_admin)):
-    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    hoy = _dia_negocio()   # dia de Espana (en UTC, de 0 a 2 h era ayer)
     d1 = _texto_cuerpo(hasta, 10) or hoy
     d0 = _texto_cuerpo(desde, 10) or d1[:8] + "01"
     if not (re.match(r"^\d{4}-\d{2}-\d{2}$", d0) and re.match(r"^\d{4}-\d{2}-\d{2}$", d1)):
@@ -37794,7 +37794,7 @@ async def cortex_ingest_informe(request: Request):
                           "forma": _forma_de(carga.get("rosters"), 0)}},
                 upsert=True)
             leap = (((carga.get("config") or {}).get("data") or {}).get("leapConfig")) or {}
-            hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            hoy = _dia_negocio()   # dia de Espana (en UTC, de 0 a 2 h era ayer)
             gente = _horarios_conductores(carga.get("rosters") or {}, hoy)
             await db[_WHC_API_COL].update_one(
                 {"center": nave, "week": _texto_cuerpo(carga.get("desde"), 12)},
@@ -41045,7 +41045,7 @@ async def consolidar_direcciones() -> dict:
         ya = set(doc.get("dias") or [])
 
     # Solo dias CERRADOS: el de hoy sigue moviendose.
-    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    hoy = _dia_negocio()   # dia de Espana (en UTC, de 0 a 2 h era ayer)
     cur = db.cortex_packages.aggregate([
         {"$match": {"service_day": {"$lt": hoy},
                     "state": {"$nin": list(_CX_OK) + list(_CX_EN_VUELO) + list(_CX_NO_DESPACHADO)}}},
@@ -41989,7 +41989,7 @@ async def whc_semana(center: str, _=Depends(require_admin)):
     nave = _centro_norm(center or "") or (center or "")
     if not nave or nave.upper() in ("TODOS", "TODAS"):
         return {"hay": False, "porque": "elige una nave"}
-    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    hoy = _dia_negocio()   # dia de Espana (en UTC, de 0 a 2 h era ayer)
     sun, _sat = _sun_sat_week(hoy)
     d = await db[_WHC_API_COL].find_one({"center": nave, "week": sun}, {"_id": 0})
     if not d:
@@ -42047,7 +42047,7 @@ async def whc_estado(_=Depends(require_admin)):
     Un hueco no dice si falta el dato o si no hay nada que contar (gotcha 33).
     Esto lo dice: que naves hay, cual es su ultimo plan, y cuales le faltan.
     """
-    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    hoy = _dia_negocio()   # dia de Espana (en UTC, de 0 a 2 h era ayer)
     sun, _sat = _sun_sat_week(hoy)
     naves = []
     try:
@@ -44917,7 +44917,7 @@ async def cortex_portales_mi_ruta(user: dict = Depends(require_any_auth)):
     if not did:
         return {"avisos": [], "motivo": "sin_id_amazon"}
 
-    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    hoy = _dia_negocio()   # dia de Espana (en UTC, de 0 a 2 h era ayer)
     cur = db.cortex_packages.aggregate(
         [{"$match": {"driver_id": did, "service_day": hoy}}] + _stage_celda() +
         [{"$group": {"_id": "$_celda", "paquetes": {"$sum": 1},
