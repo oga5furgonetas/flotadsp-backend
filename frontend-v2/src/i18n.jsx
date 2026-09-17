@@ -138,7 +138,7 @@ const DICT = {
   'pl.days':    { es: '14 días', en: '14 days', fr: '14 jours', de: '14 Tage', it: '14 giorni', pt: '14 dias' },
   'pl.start':   { es: 'Empezar gratis', en: 'Start free', fr: 'Commencer', de: 'Kostenlos starten', it: 'Inizia gratis', pt: 'Começar grátis' },
   'pl.choose':  { es: 'Empezar', en: 'Get started', fr: 'Choisir', de: 'Loslegen', it: 'Inizia', pt: 'Começar' },
-  'pl.popular': { es: 'Más popular', en: 'Most popular', fr: 'Le plus choisi', de: 'Am beliebtesten', it: 'Più scelto', pt: 'Mais popular' },
+  'pl.popular': { es: 'Recomendado', en: 'Recommended', fr: 'Recommandé', de: 'Empfohlen', it: 'Consigliato', pt: 'Recomendado' },
   'pl.who.trial': { es: 'Para probarlo', en: 'To try it out', fr: 'Pour essayer', de: 'Zum Ausprobieren', it: 'Per provare', pt: 'Para experimentar' },
   'pl.who.s':   { es: 'DSP pequeño', en: 'Small DSP', fr: 'Petit DSP', de: 'Kleiner DSP', it: 'Piccolo DSP', pt: 'DSP pequeno' },
   'pl.who.p':   { es: 'El DSP típico', en: 'The typical DSP', fr: 'Le DSP type', de: 'Der typische DSP', it: 'Il DSP tipico', pt: 'O DSP típico' },
