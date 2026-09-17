@@ -33,7 +33,7 @@ from typing import List, Optional
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUTA = os.path.join(RAIZ, "server.py")
 
-FUNCS = ("_empleo_texto", "_empleo_sin_tildes", "_empleo_clave", "_empleo_slugificar",
+FUNCS = ("_empleo_texto", "_empleo_nombre_pila", "_empleo_primer_mensaje", "_empleo_sin_tildes", "_empleo_clave", "_empleo_slugificar",
          "_empleo_normaliza_preguntas", "_empleo_publica_oferta", "_empleo_revisa_respuestas")
 CLASES = ("PreguntaEmpleo",)
 CONSTS = ("EMPLEO_FASES", "EMPLEO_TIPOS", "_EMPLEO_MAX_PREGUNTAS", "_EMPLEO_MAX_OPCIONES")
@@ -356,3 +356,18 @@ def test_fases_del_tablero_y_las_antiguas_siguen_validas():
     # Mandar a una ETT mueve la columna, y deshacer el ultimo envio la devuelve.
     assert '"$set": {"fase": "ett"' in fuente
     assert '"fase": "ett", "etts.0": {"$exists": False}' in fuente
+
+
+def test_primer_whatsapp_con_su_nombre_y_las_cuatro_preguntas():
+    m = NS["_empleo_primer_mensaje"]("LUIS PEREZ GOMEZ",
+                                     "Repartidor/a de Paquetería – Santiago de Compostela",
+                                     "Dani, de Winiw")
+    assert m.startswith("Hola Luis, te escribimos por la oferta de "
+                        "Repartidor/a de Paquetería – Santiago de Compostela.\n"
+                        "¡Hola! Soy Dani, de Winiw 😊 Antes de pasarte con la ETT")
+    assert m.count("✅") == 4 and m.endswith("¡sin problema! 🙂")
+    # Otra empresa no firma con un nombre que no es el suyo.
+    otra = NS["_empleo_primer_mensaje"]("", "", "")
+    assert otra.startswith("Hola, te escribimos por la oferta de reparto.\nAntes de pasarte")
+    assert "Winiw" not in otra and "Soy" not in otra
+    assert NS["_empleo_nombre_pila"]("María José") == "María"

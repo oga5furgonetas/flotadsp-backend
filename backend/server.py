@@ -21220,6 +21220,38 @@ async def empleo_candidato_quitar_ett(cand_id: str, ett_id: str,
     return {"ok": True}
 
 
+# Quien firma el primer WhatsApp a un candidato, por empresa. El nombre
+# comercial no esta guardado en ninguna parte (la organizacion se llama
+# «FlotaDSP»), y firmar «Winiw» en otra empresa seria mentir en su nombre
+# (gotcha 43): sin firma, el mensaje sale igual pero sin presentarse.
+_EMPLEO_FIRMA_POR_BD = {"flotadsp": "Dani, de Winiw"}
+
+
+def _empleo_nombre_pila(nombre) -> str:
+    pila = str(nombre or "").strip().split(" ")[0].strip()
+    # Las fichas llegan en MAYUSCULAS o minusculas (gotcha 23): «ADRIAN» -> «Adrian».
+    return pila.capitalize() if pila.isupper() or pila.islower() else pila
+
+
+def _empleo_primer_mensaje(nombre, oferta, firma: str = "") -> str:
+    """El primer WhatsApp: las cuatro preguntas que deciden si se pasa a la ETT
+    (texto de Dani, 17-09-2026)."""
+    pila = _empleo_nombre_pila(nombre)
+    saludo = ("Hola %s, te escribimos" % pila) if pila else "Hola, te escribimos"
+    presentacion = ("¡Hola! Soy %s 😊 Antes de pasarte con la ETT" % firma) if firma \
+        else "Antes de pasarte con la ETT"
+    return (
+        "%s por la oferta de %s.\n"
+        "%s te pregunto un par de cosas rápidas:\n\n"
+        "✅ ¿Tienes el carnet B en físico? (hace falta sí o sí, no vale solo el digital)\n"
+        "✅ ¿Tienes los papeles en regla? (DNI/NIE, permiso de trabajo si toca...)\n"
+        "✅ ¿Podrías empezar ya?\n"
+        "✅ ¿Vives por la zona?\n\n"
+        "Si todo eso lo tienes claro, dime y seguimos. "
+        "Cualquier duda me preguntas, ¡sin problema! 🙂"
+    ) % (saludo, (str(oferta or "").strip() or "reparto"), presentacion)
+
+
 @api_router.get("/empleo/candidatos")
 async def empleo_listar_candidatos(oferta: Optional[str] = None, fase: Optional[str] = None,
                                    center: Optional[str] = None,
@@ -21235,13 +21267,12 @@ async def empleo_listar_candidatos(oferta: Optional[str] = None, fase: Optional[
         q["fase"] = fase
     cands = await db.candidatos.find(q, {"_id": 0, "expira_en": 0}).sort("creado_en", -1).to_list(500)
     agenda = await _etts_activas()
+    firma = _EMPLEO_FIRMA_POR_BD.get(_current_db_name.get(), "")
     for c in cands:
         # El enlace de WhatsApp lo arma SIEMPRE el backend (gotcha 47): a mano
         # sale sin prefijo y abre un numero que no existe.
         c["wa"] = enlace_wa(c.get("telefono") or "",
-                            "Hola %s, te escribimos por la oferta de %s."
-                            % ((c.get("nombre") or "").split(" ")[0],
-                               c.get("oferta_titulo") or "reparto"))
+                            _empleo_primer_mensaje(c.get("nombre"), c.get("oferta_titulo"), firma))
         # A que ETT se le ha mandado ya, para verlo sin abrir la ficha.
         c["etts"] = c.get("etts") or []
         c["etts_para"] = _etts_para(c, agenda)
