@@ -686,8 +686,8 @@ export default function Asignacion() {
           </div>
           <div>
             <div className="font-medium text-dark-200">{t('asgn.no.roster')}</div>
-            <p className="mt-1 max-w-xs text-sm text-dark-500">
-              {t('asgn.paste.hint')}
+            <p className="mt-1 max-w-md text-sm text-dark-500">
+              {t('asgn.empty.hint')}
             </p>
           </div>
           <div className="flex gap-2">
