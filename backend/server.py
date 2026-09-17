@@ -9344,6 +9344,8 @@ async def create_driver(data: DriverCreate, nueva: bool = False,
     driver_data = data.model_dump()
     password = driver_data.pop("password", None)
 
+    if isinstance(driver_data.get("name"), str):
+        driver_data["name"] = re.sub(r"\s+", " ", driver_data["name"]).strip()
     driver = Driver(**driver_data)
     # UNA PERSONA, UNA FICHA ACTIVA. Esta ruta no comprobaba nada: dos altas
     # con el mismo correo, seguidas o a la vez, daban dos fichas, y el login
@@ -10012,6 +10014,11 @@ async def update_driver(driver_id: str, data: dict, _=Depends(require_admin)):
         "telefono_dudoso",
     }
     data = {k: v for k, v in data.items() if k in _DRIVER_ALLOWED}
+    # El nombre sin espacios de mas: 18 fichas activas los tenian (« Karim…») y
+    # salian las primeras de la lista, y dos iguales con un espacio de diferencia
+    # son la misma persona (gotcha 15).
+    if isinstance(data.get("name"), str):
+        data["name"] = re.sub(r"\s+", " ", data["name"]).strip()
 
     # EL TRANSPORTER ID NO ES UN CAMPO DE TEXTO CUALQUIERA.
     # Es la llave con la que se reparten los DNR, asi que:

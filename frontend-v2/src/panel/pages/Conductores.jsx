@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
+import { verTelefono } from '../../lib/telefono'
 import ImportarConductores from '../components/ImportarConductores'
 import { useEscape } from '../../lib/useEscape'
 import {
@@ -1061,7 +1062,9 @@ function TablaConductores({ list, accounts, onAbrir, t }) {
 
   const filas = useMemo(() => {
     const { col, asc } = orden
-    const txt = (d) => String(d?.[col] ?? '')
+    // Recortado: 18 fichas guardan el nombre con espacios delante («  Karim…»)
+    // y salían las primeras de la lista, antes que las de la A.
+    const txt = (d) => String(d?.[col] ?? '').trim()
     const ms = [...list].sort((a, b) => {
       const r = txt(a).localeCompare(txt(b), 'es', { sensitivity: 'base', numeric: true })
       return asc ? r : -r
@@ -1106,11 +1109,11 @@ function TablaConductores({ list, accounts, onAbrir, t }) {
                 <tr key={d.id} onClick={() => onAbrir(d)}
                   className="float-row cursor-pointer border-b border-dark-800/50 last:border-0">
                   <td className="px-2 py-1"><Avatar driver={d} size={7} /></td>
-                  <td className="max-w-[220px] truncate px-2 py-1 font-medium text-dark-100">{d.name}</td>
+                  <td className="max-w-[220px] truncate px-2 py-1 font-medium text-dark-100">{String(d.name || '').replace(/\s+/g, ' ').trim()}</td>
                   <td className="px-2 py-1 text-dark-400">{d.center || '—'}</td>
                   <td className="max-w-[150px] truncate px-2 py-1 text-dark-500">{d.alojamiento || '—'}</td>
                   <td className="cifra px-2 py-1 text-dark-400">
-                    {d.phone || '—'}
+                    {d.phone ? verTelefono(d.phone) : '—'}
                     {d.phone && d.telefono_por === 'cortex' && <span className="ml-1 text-[10px] font-normal text-dark-500" title={t('drv.telDeCortex')}>Cortex</span>}
                     {/* Cortex da ese numero a mas de una persona. No se borra
                         —puede que compartan movil de verdad— pero se avisa aqui,
