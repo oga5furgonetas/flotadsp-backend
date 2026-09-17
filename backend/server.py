@@ -15820,9 +15820,47 @@ async def get_incidents(vehicle_id: Optional[str] = None, status: Optional[str] 
     return incidents
 
 
+# Minutos en los que una incidencia «Vehiculo en taller» escrita a mano se
+# FUNDE con la automatica en vez de crear otra. El panel hace las dos cosas
+# seguidas (cambia el estado y luego manda el motivo), asi que llegan con
+# segundos de diferencia.
+_TALLER_FUSION_MIN = 10
+
+
+def _es_incidencia_de_taller(titulo) -> bool:
+    return bool(re.match(r"\s*veh[ií]culo en taller", str(titulo or ""), re.I))
+
+
 @api_router.post("/incidents")
 async def create_incident(data: IncidentCreate, user: dict = Depends(require_any_auth)):
     incident = Incident(**data.model_dump())
+    # UNA SOLA INCIDENCIA POR ENTRADA EN TALLER. Al poner una furgoneta en
+    # taller, el panel cambia el estado —y eso crea la incidencia automatica— y
+    # un segundo despues manda la suya con el motivo («EMBRAGUE»). Salian dos
+    # abiertas por cada entrada: 9 parejas en produccion el 17-09-2026, todas
+    # creadas en el mismo minuto. El motivo se escribe en la automatica, que
+    # pasa a ser «de una persona»: ya no se cierra sola al salir del taller.
+    if user["role"] != "driver" and _es_incidencia_de_taller(incident.title):
+        hace = (datetime.now(timezone.utc) - timedelta(minutes=_TALLER_FUSION_MIN)).isoformat()
+        auto = await db.incidents.find_one(
+            {"vehicle_id": incident.vehicle_id, "status": "open", "auto_created": True,
+             # Recien creada, o una vieja que se acaba de reabrir al volver a entrar.
+             "$or": [{"created_at": {"$gte": hace}}, {"reopened_at": {"$gte": hace}}]},
+            {"_id": 0, "id": 1})
+        if auto:
+            ahora = datetime.now(timezone.utc).isoformat()
+            quien = user.get("name") or user.get("username") or "Admin"
+            cambios = {"auto_created": False, "updated_at": ahora, "created_by_name": quien}
+            for campo in ("title", "description", "severity", "notes"):
+                valor = getattr(incident, campo, None)
+                if valor not in (None, ""):
+                    cambios[campo] = valor
+            await db.incidents.update_one(
+                {"id": auto["id"]},
+                {"$set": cambios,
+                 "$push": {"history": {"date": ahora, "event": f"Motivo añadido por {quien}"}}})
+            logger.info("Incidencia de taller fundida con la automatica (%s)", incident.vehicle_id)
+            return await db.incidents.find_one({"id": auto["id"]}, {"_id": 0})
     if user["role"] == "driver":
         incident.driver_id = user["sub"]
         today = _dia_negocio()
