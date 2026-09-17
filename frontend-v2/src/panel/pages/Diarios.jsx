@@ -359,7 +359,7 @@ export default function Diarios() {
 
       {datos?.dias_con_datos?.length > 0 && (
         <p className="px-1 text-[11.5px] text-dark-600">
-          Días cargados en este rango: {datos.dias_con_datos.length} ({datos.dias_con_datos.join(' · ')})
+          Días cargados en este rango: {datos.dias_con_datos.length} ({datos.dias_con_datos.map((d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`).join(' · ')})
         </p>
       )}
 
