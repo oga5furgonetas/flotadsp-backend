@@ -2,6 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { Loader2, ShieldAlert, Camera, ChevronRight, Info } from 'lucide-react'
 import { getAtribucionDanos } from '../api'
+import { verMatricula } from '../../lib/matricula'
+
+// '2026-08-07' -> '07/08/2026', troceando el texto (gotcha 11).
+const fechaEs = (f) => (/^\d{4}-\d{2}-\d{2}/.test(String(f || '')) ? `${f.slice(8, 10)}/${f.slice(5, 7)}/${f.slice(0, 4)}` : (f || ''))
 
 /* La misma pieza viene escrita de dos formas desde la IA ('Paragolpes
    delantero' 30 veces y 'paragolpes delantero' otras 26), y en una lista se
@@ -57,7 +61,7 @@ function Prueba({ d }) {
         <img src={d.foto_golpe} alt="" loading="lazy"
           className="h-36 w-full rounded-lg border border-orange-500/40 object-cover" />
         <figcaption className="mt-1 text-[11px] text-orange-300">
-          Con el golpe el <span className="cifra">{d.aparecio}</span>
+          Con el golpe el <span className="cifra">{fechaEs(d.aparecio)}</span>
         </figcaption>
       </figure>
     </div>
@@ -139,13 +143,13 @@ export default function OrigenDanos() {
               <div key={d.ledger_id} className="card overflow-hidden">
                 <button onClick={() => setAbierto(esta ? null : d.ledger_id)}
                   className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left hover:bg-dark-800/40">
-                  <span className="cifra w-[86px] flex-none font-semibold text-dark-100">{d.matricula}</span>
+                  <span className="cifra w-[86px] flex-none font-semibold text-dark-100">{verMatricula(d.matricula)}</span>
                   <span className="min-w-0 flex-1">
                     <span className={`block truncate text-[13px] ${SEV[d.severity] || 'text-dark-300'}`}>
                       {nombrePieza(d.part || d.panel)}
                     </span>
                     <span className="mt-0.5 block text-[11.5px] text-dark-500">
-                      Apareció el <span className="cifra">{d.aparecio}</span>
+                      Apareció el <span className="cifra">{fechaEs(d.aparecio)}</span>
                       {d.ventana_dias != null && <> · ventana de <span className="cifra">{d.ventana_dias}</span> {d.ventana_dias === 1 ? 'día' : 'días'}</>}
                     </span>
                   </span>
