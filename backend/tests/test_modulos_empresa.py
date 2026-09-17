@@ -22,6 +22,8 @@ def test_la_de_dani_y_la_demo_lo_ven_todo():
     assert mods({"account_type": "owner"}) is None
     assert mods({"id": "demo", "account_type": "dsp"}) is None
     assert mods({"account_type": "dsp", "modulos": "todos"}) is None
+    # Y en Negocio salen como «Todo», no como «Estandar · 0».
+    assert _NS["_modulos_modo"]({"id": "demo", "account_type": "dsp"}) == "todos"
 
 
 def test_una_empresa_nueva_ve_el_estandar():

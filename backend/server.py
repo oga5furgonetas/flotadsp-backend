@@ -1121,7 +1121,7 @@ def org_modulos(org) -> Optional[list]:
 
 def _modulos_modo(org) -> str:
     m = (org or {}).get("modulos")
-    return "todos" if m == "todos" else "medida" if isinstance(m, list) else "estandar"
+    return "todos" if org_modulos(org) is None else "medida" if isinstance(m, list) else "estandar"
 
 
 def org_hidden_modules(org):
