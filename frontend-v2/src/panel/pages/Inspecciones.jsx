@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useOutletContext } from 'react-router-dom'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { lista } from '../../lib/lista'
+import { verMatricula } from '../../lib/matricula'
 import {
   Loader2, Search, X, FileText, Image as ImageIcon, ShieldQuestion, User, ChevronDown,
   ShieldCheck, FileSignature, ShieldAlert, RefreshCw, Wrench, Check, Euro, Undo2,
@@ -53,7 +54,7 @@ export default function Inspecciones() {
     setErr(''); setInsps(null); setSel(null)
     Promise.all([getInspections({ limit: 200, campos: 'lista', ...(center && center !== 'Todos' ? { center } : {}) }), getVehicles('Todos'), getDrivers('Todos').catch(() => ({ data: [] }))])
       .then(([ri, rv, rd]) => {
-        const m = {}; (lista(rv.data)).forEach((v) => { m[v.id] = { plate: v.license_plate, center: v.center || '' } })
+        const m = {}; (lista(rv.data)).forEach((v) => { m[v.id] = { plate: verMatricula(v.license_plate), center: v.center || '' } })
         const dm = {}; (lista(rd.data)).forEach((d) => { dm[d.id] = d.name })
         setVmap(m); setDmap(dm); setInsps(lista(ri.data))
       })
@@ -84,7 +85,8 @@ export default function Inspecciones() {
       if (center !== 'Todos' && !(v.center || '').toUpperCase().includes(center.toUpperCase())) return false
       const s = i.analysis?.severity || 'sin_analisis'
       if (sev !== 'Todas' && s !== sev) return false
-      if (q && !(v.plate || '').toLowerCase().includes(q.toLowerCase())) return false
+      // Sin espacios en los dos lados: «5995lyf» encuentra «5995 LYF».
+      if (q && !(v.plate || '').replace(/\s/g, '').toLowerCase().includes(q.replace(/\s/g, '').toLowerCase())) return false
       return true
     })
   }, [insps, vmap, center, sev, q])
@@ -212,7 +214,7 @@ export default function Inspecciones() {
                 </div>
                 <div className="p-3">
                   <div className="flex items-center justify-between"><span className="font-bold">{v.plate || '—'}</span><span className="text-xs text-dark-500">{fmt(i.created_at)}</span></div>
-                  <div className="mt-1 flex items-center justify-between text-xs text-dark-400"><span>{i.analysis?.total_damages_count || 0} {t('insp.damages')}</span><span>{eur(i.analysis?.total_estimated_cost)}</span></div>
+                  <div className="mt-1 flex items-center justify-between text-xs text-dark-400"><span>{i.analysis?.total_damages_count || 0} {t((i.analysis?.total_damages_count || 0) === 1 ? 'insp.damage1' : 'insp.damages')}</span><span>{eur(i.analysis?.total_estimated_cost)}</span></div>
                 </div>
               </button>
             )
@@ -267,7 +269,7 @@ function Detail({ insp, plate, dmap, onClose, onPdf, fmt, fmtDay, sevLabel, onDa
 
           {/* resumen compacto (chips, no parrafo) */}
           <div className="mt-3 flex flex-wrap gap-2 text-xs">
-            <span className="rounded-full bg-dark-800 px-2.5 py-1">{a.total_damages_count || 0} {t('insp.damages')}</span>
+            <span className="rounded-full bg-dark-800 px-2.5 py-1">{a.total_damages_count || 0} {t((a.total_damages_count || 0) === 1 ? 'insp.damage1' : 'insp.damages')}</span>
             <span className="rounded-full bg-dark-800 px-2.5 py-1 font-semibold text-dark-200">{eur(a.total_estimated_cost)}</span>
             <span className="rounded-full bg-dark-800 px-2.5 py-1">{fmt(insp.created_at)}</span>
             {insp.driver_id && dmap[insp.driver_id] && <span className="flex items-center gap-1 rounded-full bg-dark-800 px-2.5 py-1"><User size={11} /> {dmap[insp.driver_id]}</span>}

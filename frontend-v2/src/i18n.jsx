@@ -753,6 +753,7 @@ const DICT = {
   'sev.media':        { es: 'Media',              en: 'Average',              fr: 'Moyenne',                 de: 'Mittel',                 it: 'Media',                 pt: 'Média' },
 
   // ── Inspecciones (ampliado) ───────────────────────────────────────────────
+  'insp.damage1':          { es: 'daño', en: 'damage', fr: 'dommage', de: 'Schaden', it: 'danno', pt: 'dano' },
   'insp.damages':          { es: 'daños',              en: 'damages',              fr: 'dommages',               de: 'Schäden',               it: 'danni',                 pt: 'danos' },
   'insp.signed':           { es: 'Firmada',            en: 'Signed',               fr: 'Signée',                 de: 'Unterschrieben',        it: 'Firmata',               pt: 'Assinada' },
   'insp.tab.damages':      { es: 'Daños',              en: 'Damages',              fr: 'Dommages',               de: 'Schäden',               it: 'Danni',                 pt: 'Danos' },

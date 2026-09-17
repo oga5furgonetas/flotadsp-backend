@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useT, LANG_LOCALE } from '../../i18n'
 import { lista } from '../../lib/lista'
+import { verMatricula } from '../../lib/matricula'
 import { useEscape } from '../../lib/useEscape'
 import { hoyLocal } from '../../lib/fecha'
 import { PageSkeleton } from '../components/Skeleton'
@@ -3041,7 +3042,7 @@ export default function Vehiculos() {
                           <span className={`block h-2 w-2 rounded-full ${st.dot}`} title={t(st.labelKey)} />
                         </td>
                         <td className="cifra px-2 py-1.5 font-semibold tracking-wider text-dark-50">
-                          {v.license_plate}
+                          {verMatricula(v.license_plate)}
                           {v.vin && <QrCode size={9} className="ml-1.5 inline text-dark-700" title="Tiene VIN" />}
                           {v.bloqueada && <Lock size={10} className="ml-1.5 inline text-amber-400" title="Bloqueada para la plantilla diaria" />}
                         </td>
