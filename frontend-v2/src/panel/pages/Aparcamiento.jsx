@@ -487,10 +487,18 @@ export default function Aparcamiento() {
           <Metric n={stats.libre} l={t('pk.m.libres')} c="text-dark-200" />
           <Metric n={stats.asignada + stats.reportada} l={t('pk.m.pend')} c={(stats.asignada + stats.reportada) ? 'text-amber-300' : 'text-dark-600'} />
           <Metric n={stats.denegada} l={t('pk.st.revisar')} c={stats.denegada ? 'text-red-300' : 'text-dark-600'} />
-          <div className="flex items-center gap-2">
-            <Ring pct={stats.disp} />
-            <span className="text-[11.5px] leading-tight text-dark-500">{t('pk.m.disp')}</span>
-          </div>
+          {/* Con el plano vacío, «100 % disponible» no dice nada: nadie ha
+              colocado todavía su furgoneta ese día. Se dice eso. */}
+          {stats.ocupadas > 0 ? (
+            <div className="flex items-center gap-2">
+              <Ring pct={stats.disp} />
+              <span className="text-[11.5px] leading-tight text-dark-500">{t('pk.m.disp')}</span>
+            </div>
+          ) : (
+            <span className="max-w-[260px] text-[11.5px] leading-snug text-dark-500">
+              Aún no hay ninguna furgoneta colocada este día: arrastra una a su plaza o que el conductor la marque desde el móvil.
+            </span>
+          )}
         </div>
         )}
         <div className="ml-auto flex items-center gap-2">
