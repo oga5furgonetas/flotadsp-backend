@@ -6023,8 +6023,8 @@ _DEMO_FALLOS = ("BACK_TO_ORIGIN", "NOT_DELIVERED", "CUSTOMER_UNAVAILABLE")
 # bastante mas sin nadie delante, que es lo que esa pantalla sirve para ver.
 _DEMO_LUGARES = (("DELIVERED_TO_HOUSEHOLD_MEMBER", 46), ("DELIVERED_TO_STORE", 30),
                  ("DELIVERED_TO_RECEPTIONIST", 6), ("DELIVERED_TO_LOCKER", 5),
-                 ("DELIVERED_TO_SAFE_LOCATION", 5), ("DELIVERED_TO_NEIGHBOR", 3),
-                 ("DELIVERED_TO_GARDEN", 3), ("DELIVERED_TO_MAIL_SLOT", 2))
+                 ("DELIVERED_TO_SAFE_LOCATION", 3), ("DELIVERED_TO_NEIGHBOR", 2),
+                 ("DELIVERED_TO_GARDEN", 1), ("DELIVERED_TO_MAIL_SLOT", 1))
 _DEMO_CALLES = ("Calle de Alcalá", "Gran Vía", "Calle de Atocha", "Paseo de la Castellana",
                 "Calle de Bravo Murillo", "Calle de Toledo", "Calle de Serrano", "Calle de O'Donnell")
 

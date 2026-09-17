@@ -337,7 +337,7 @@ export default function DSC() {
             <div className="border-b border-dark-800 p-4">
               <div className="text-sm font-semibold text-dark-100">{t('dsc.ranking')}</div>
               <p className="mt-0.5 text-xs text-dark-500">
-                {t('dsc.ranking.expl').replace('{p}', f.pct_riesgo).replace('{m}', d.minimo_entregas)}
+                {t('dsc.ranking.expl').replace('{p}', pc(f.pct_riesgo)).replace('{m}', d.minimo_entregas)}
               </p>
             </div>
             {!d.conductores.length ? (
@@ -379,9 +379,9 @@ export default function DSC() {
                           {pc(c.pct_riesgo)} %
                         </td>
                         <td className="p-3 text-right">
-                          <span className="font-bold tabular-nums text-dark-100">+{c.exceso}</span>
+                          <span className="font-bold tabular-nums text-dark-100">{c.exceso > 0 ? '+' : c.exceso < 0 ? '−' : ''}{pc(Math.abs(c.exceso))}</span>
                           <div className="text-[11px] text-dark-500">
-                            {t('dsc.esperaba').replace('{n}', c.esperado)}
+                            {t('dsc.esperaba').replace('{n}', pc(c.esperado))}
                           </div>
                         </td>
                       </tr>
