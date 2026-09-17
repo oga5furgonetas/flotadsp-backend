@@ -5966,7 +5966,14 @@ async def _seed_demo_data():
                 "description": "Rozadura visible en el panel", "estimated_cost": [90, 240, 520][(day + j) % 3],
                 "confirmed": True, "photo_index": 1,
             }] if has_dmg else [])
-            created = (now - timedelta(days=day, hours=4 + j)).isoformat()
+            # A la vuelta de ruta (18:00-20:00 UTC, 20-22 h en Espana), que es
+            # cuando se hacen; las de hoy, hace un rato. Restando horas a «ahora»
+            # salian de madrugada.
+            if day == 0:
+                created = (now - timedelta(minutes=25 * (j + 1))).isoformat()
+            else:
+                vuelta = (now - timedelta(days=day)).replace(hour=18, minute=5, second=0, microsecond=0)
+                created = (vuelta + timedelta(minutes=23 * j)).isoformat()
             insps.append({
                 "id": f"demo-i{day}-{j}", "vehicle_id": vehicles[vi]["id"], "driver_id": drivers[di]["id"],
                 "center": "MADRID", "photos": [], "annotated_photos": [], "notes": "",
