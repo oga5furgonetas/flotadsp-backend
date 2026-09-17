@@ -4,7 +4,7 @@ import {
   Briefcase, Plus, Copy, Check, Loader2, AlertTriangle, Trash2, X,
   MessageCircle, IdCard, Link2, Search, Download, FileText,
   Phone, Mail, Calendar, MapPin, Clock, ExternalLink, Save, History,
-  TrendingUp, UserPlus, Send,
+  ChevronRight, UserPlus, Send,
 } from 'lucide-react'
 import { useT } from '../../i18n'
 import Pestanas, { usePestana } from '../components/Pestanas'
@@ -260,13 +260,18 @@ export default function Empleo() {
      no se la llama, que son dos problemas distintos con dos soluciones. */
   const embudo = useMemo(() => {
     const n = cands.length
-    const enProceso = cands.filter((c) => ['llamado', 'entrevista', 'prueba'].includes(c.fase)).length
-    const enEtt = cands.filter((c) => c.fase === 'ett').length
     const otraEst = cands.filter((c) => c.fase === 'otra_estacion').length
     const alta = cands.filter((c) => c.fase === 'contratado').length
-    const tocados = cands.filter((c) => c.fase !== 'nuevo').length
+    // Cada etapa cuenta a quien la ha ALCANZADO, no solo a quien sigue en ella:
+    // un contratado tambien fue contactado. Un descarte automatico (no cumplia
+    // un requisito) no se llego a contactar.
+    const contactados = cands.filter((c) => (c.fase || 'nuevo') !== 'nuevo'
+      && !(c.fase === 'descartado' && c.descarte_automatico)).length
+    const ettAlcanzado = cands.filter((c) => c.fase === 'ett'
+      || (c.etts || []).length > 0).length
+    const descartados = cands.filter((c) => c.fase === 'descartado').length
     const olvidados = cands.filter((c) => c.fase === 'nuevo' && (diasQuieto(c) ?? 0) >= 3).length
-    return { n, enProceso, enEtt, otraEst, alta, olvidados, pct: n ? Math.round((tocados / n) * 100) : 0 }
+    return { n, otraEst, alta, olvidados, contactados, ettAlcanzado, descartados }
   }, [cands])
 
   /* Descargar lo que se está viendo. CSV con punto y coma y BOM: es lo que
@@ -383,9 +388,9 @@ export default function Empleo() {
                     </span>
                     <span className="cifra text-[11px] font-bold text-dark-500">{porFase[f].length}</span>
                   </div>
-                  {FASES_ANTIGUAS.includes(f) && (
-                    <p className="mb-2 text-[10px] leading-snug text-dark-600">Columna antigua: muévelos a la que toque.</p>
-                  )}
+                  <p className={`-mt-1 mb-2 truncate px-0.5 text-[10.5px] ${FASES_ANTIGUAS.includes(f) ? 'text-amber-400/80' : 'text-dark-600'}`}>
+                    {t('empleo.faseAyuda.' + f)}
+                  </p>
                   {f === 'otra_estacion' && porEstacion.length > 0 && (
                     <div className="mb-2 flex flex-wrap gap-1">
                       {porEstacion.map(([k, n]) => (
@@ -439,32 +444,38 @@ export default function Empleo() {
 /* ── El embudo ────────────────────────────────────────────────────────── */
 function Embudo({ e, t }) {
   if (!e.n) return null
+  const pasos = [
+    { k: 'recibidas', n: e.n, cls: 'text-dark-100' },
+    { k: 'contactados', n: e.contactados, cls: 'text-violet-300' },
+    { k: 'ett', n: e.ettAlcanzado, cls: 'text-amber-300' },
+    { k: 'contratados', n: e.alta, cls: 'text-emerald-300' },
+  ]
   return (
-    <div className="flex flex-wrap items-center gap-4 border-b border-dark-800 px-4 py-2.5 text-[12px]">
-      <span className="text-dark-400">
-        <b className="cifra text-[15px] text-dark-100">{e.n}</b> {t('empleo.candidatos')}
-      </span>
-      <span className="text-dark-400">
-        <b className="cifra text-[15px] text-dark-100">{e.enProceso}</b> {t('empleo.enProceso')}
-      </span>
-      <span className="text-dark-400">
-        <b className="cifra text-[15px] text-amber-300">{e.enEtt}</b> {t('empleo.enEtt')}
-      </span>
-      {e.otraEst > 0 && (
-        <span className="text-dark-400">
-          <b className="cifra text-[15px] text-cyan-300">{e.otraEst}</b> {t('empleo.otraEst')}
-        </span>
-      )}
-      <span className="text-dark-400">
-        <b className="cifra text-[15px] text-emerald-300">{e.alta}</b> {t('empleo.deAlta')}
-      </span>
-      <span className="flex items-center gap-1 text-dark-500">
-        <TrendingUp size={12} /> {e.pct} % {t('empleo.atendidos')}
-      </span>
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-dark-800 px-4 py-3">
+      {/* Embudo de selección: cuántos alcanzan cada etapa y qué parte de lo
+          recibido es. Dice dónde se pierde la gente. */}
+      <ol className="flex flex-wrap items-center gap-1.5">
+        {pasos.map((p, i) => (
+          <li key={p.k} className="flex items-center gap-1.5">
+            {i > 0 && <ChevronRight size={13} className="text-dark-700" />}
+            <div className="rounded-lg bg-dark-900/70 px-3 py-1.5 ring-1 ring-dark-800">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-dark-500">{t('empleo.embudo.' + p.k)}</div>
+              <div className="flex items-baseline gap-1.5">
+                <b className={`cifra text-[17px] leading-tight ${p.cls}`}>{p.n}</b>
+                {i > 0 && <span className="cifra text-[11px] text-dark-500">{Math.round((p.n / e.n) * 100)} %</span>}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ol>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-dark-500">
+        {e.otraEst > 0 && <span><b className="cifra text-cyan-300">{e.otraEst}</b> {t('empleo.otraEst')}</span>}
+        <span><b className="cifra text-dark-300">{e.descartados}</b> {t('empleo.embudo.descartados')}</span>
+      </div>
       {/* El único número que evita perder gente: a los tres días sin llamar ya
           están en otra empresa. */}
       {e.olvidados > 0 && (
-        <span className="ml-auto flex items-center gap-1.5 rounded-lg bg-red-500/10 px-2.5 py-1 font-semibold text-red-300 ring-1 ring-red-500/25">
+        <span className="ml-auto flex items-center gap-1.5 rounded-lg bg-red-500/10 px-2.5 py-1 text-[12px] font-semibold text-red-300 ring-1 ring-red-500/25">
           <Clock size={12} /> {e.olvidados} {t('empleo.sinLlamar')}
         </span>
       )}
