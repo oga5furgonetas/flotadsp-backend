@@ -33,6 +33,22 @@ import {
 } from '../api'
 import { getAdmin } from '../auth'
 
+const NIVEL_TXT = { 10: 'Reserva', 25: '¼', 50: '½', 75: '¾', 100: 'Lleno' }
+
+// Ultimo nivel de deposito que marco el conductor en su inspeccion.
+function NivelDeposito({ c, compacto = false }) {
+  if (c?.pct == null) return null
+  const bajo = c.pct < 50
+  const txt = NIVEL_TXT[c.pct] || `${c.pct} %`
+  return (
+    <span title={`Depósito ${txt} · ${fechaHoraLocal(c.fecha)}`}
+      className={`${compacto ? 'ml-1.5' : ''} inline-flex items-center gap-0.5 rounded px-1 text-[10px] font-semibold ${
+        bajo ? 'bg-amber-500/15 text-amber-300' : 'text-dark-500'}`}>
+      <Fuel size={9} /> {txt}
+    </span>
+  )
+}
+
 // El visor 3D (three.js ~400 kB) se carga solo al abrir la pestaña Gemelo 3D.
 const Vehicle3DViewer = lazy(() => import('../twin3d/Vehicle3DViewer'))
 
@@ -766,6 +782,15 @@ function VehicleDetail({ vehicle: initVehicle, onClose, onSaved }) {
                 titulo="Poner cuántas bolsas quedan" onClick={() => setBolsasOpen(true)} />
               <StatChip icon={<Camera size={12} />} val={insps ? insps.length : '…'} label="Inspecciones" />
             </div>
+            {vehicle.combustible?.pct != null && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-dark-400">
+                <NivelDeposito c={vehicle.combustible} />
+                <span>· {fechaHoraLocal(vehicle.combustible.fecha)}</span>
+                {vehicle.combustible.foto && (
+                  <a href={vehicle.combustible.foto} target="_blank" rel="noreferrer" className="text-brand-400 hover:underline">ver foto</a>
+                )}
+              </div>
+            )}
           </div>
 
           {/* ── TABS ── */}
@@ -3051,6 +3076,7 @@ export default function Vehiculos() {
                         <td className="px-2 py-1.5 text-dark-400">{v.center || '—'}</td>
                         <td className="cifra px-2 py-1.5 text-right text-dark-300">
                           {v.mileage != null ? v.mileage.toLocaleString('es') : '—'}
+                          <NivelDeposito c={v.combustible} compacto />
                         </td>
                         <td className="whitespace-nowrap px-2 py-1.5">
                           <span className={`mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle ${dot.cls}`} />

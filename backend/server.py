@@ -306,6 +306,7 @@ class Vehicle(BaseModel):
     bags_remaining: int = 0
     bags_history: List[dict] = []  # [{date, change, note, remaining_after}]
     mileage_history: List[dict] = []  # [{date, km, source}]
+    combustible: Optional[dict] = None  # ultimo nivel declarado {pct, fecha, inspection_id, driver_id, foto}
     itv_date: Optional[str] = None  # ISO YYYY-MM-DD, caducidad ITV
     renting_end_date: Optional[str] = None  # ISO, vencimiento contrato renting
     renting_baja_date: Optional[str] = None  # ISO, fecha baja renting
@@ -595,6 +596,9 @@ class Inspection(BaseModel):
     analysis_status: str = "ok"           # ok | gemini_failed | gemini_timeout
     analysis_error: Optional[str] = None
     notes: str = ""
+    photo_vistas: List[Optional[str]] = []
+    combustible: Optional[dict] = None     # {pct, fecha, ...} que marco el conductor
+    km_repetido: Optional[dict] = None     # {km, fecha_anterior}: mismos km que otro dia
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     analyzed_at: Optional[datetime] = None
 
@@ -4341,7 +4345,8 @@ async def process_and_save_image(content: bytes, vehicle_id: str) -> Tuple[str, 
 # y cada foto se compara con la ULTIMA foto de SU vista de esa furgoneta.
 _VISTAS_CARROCERIA = ("frontal", "trasera", "lateral_izq", "lateral_der")
 _VISTA_NOMBRE = {"frontal": "FRONTAL", "trasera": "TRASERA", "lateral_izq": "LATERAL IZQUIERDO",
-                 "lateral_der": "LATERAL DERECHO", "odometro": "CUENTAKILÓMETROS"}
+                 "lateral_der": "LATERAL DERECHO", "odometro": "CUENTAKILÓMETROS",
+                 "combustible": "DEPÓSITO"}
 
 
 def _vista_de_fichero(nombre) -> Optional[str]:
@@ -4351,6 +4356,8 @@ def _vista_de_fichero(nombre) -> Optional[str]:
         return m.group(1) if m.group(1) in _VISTAS_CARROCERIA else None
     if n.startswith("odometro"):
         return "odometro"
+    if n.startswith("combustible"):
+        return "combustible"
     if n.startswith("checklist_"):
         return "checklist:" + n[len("checklist_"):].rsplit(".", 1)[0][:40]
     return None
@@ -4378,6 +4385,8 @@ def _vistas_inspeccion(insp: dict) -> list:
             k += 1
         elif r == "odometer":
             out.append("odometro")
+        elif r == "fuel":
+            out.append("combustible")
         else:
             out.append(None)
     # Mas de cuatro fotos de carroceria = orden desconocido: no se afirma nada.
@@ -10507,6 +10516,7 @@ async def upload_inspection_photos(
             _fn = (file.filename or "").lower()
             photo_roles.append(
                 "odometer" if _fn.startswith("odometro")
+                else "fuel" if _fn.startswith("combustible")
                 else "checklist" if _fn.startswith("checklist")
                 else "angle")
             photo_vistas.append(_vista_de_fichero(_fn))
@@ -10570,6 +10580,13 @@ async def upload_inspection_photos(
             if isinstance(odo_km, str) and odo_km.strip().isdigit():
                 odo_km = int(odo_km.strip())
             if isinstance(odo_km, (int, float)) and odo_km > 0:
+                # Antes de registrar: ¿son los mismos km que otro dia?
+                _vh = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "mileage_history": 1})
+                _dia_rep = _km_repetido((_vh or {}).get("mileage_history"), odo_km, _dia_negocio())
+                if _dia_rep:
+                    await db.inspections.update_one(
+                        {"id": doc.get("id")},
+                        {"$set": {"km_repetido": {"km": int(odo_km), "fecha_anterior": _dia_rep}}})
                 _origen = "inspeccion_manual" if (isinstance(_n, dict) and _n.get("odometer_manual")) else "inspeccion_foto"
                 _aplicado, _motivo, _inf = await _odo_registrar(
                     vehicle_id, int(odo_km), _origen,
@@ -10583,6 +10600,18 @@ async def upload_inspection_photos(
                                                         "reason": _motivo}}})
         except Exception as _km_e:
             logger.warning(f"Auto-km inspección: {_km_e}")
+
+        # Deposito: el nivel que marca el conductor, con su foto. Un portal
+        # abierto desde antes no lo manda: entonces no se registra nada (no es
+        # un error, gotcha 76).
+        try:
+            _nn = json.loads(notes) if notes else None
+            _pct = _combustible_nivel(_nn.get("combustible_pct")) if isinstance(_nn, dict) else None
+            if _pct is not None:
+                _foto_dep = next((u for u, vv in zip(photo_urls, photo_vistas) if vv == "combustible"), "")
+                await _combustible_registrar(vehicle_id, doc.get("id"), driver_id, _pct, _foto_dep)
+        except Exception as _dep_e:
+            logger.warning(f"Depósito inspección: {_dep_e}")
 
         # Llamar a Gemini en background SOLO si el plan lo permite
         org = await get_org(user.get("org_id"))
@@ -26060,6 +26089,84 @@ def _odo_validar(v: dict, km):
             f"({ODO_MAX_KM_DIA}/dia x {dias}). Lectura descartada."
         ).replace(",", "."), info
     return True, None, info
+
+
+# ── DEPOSITO Y KM REPETIDOS ──────────────────────────────────────────────────
+# El conductor saca foto del indicador de combustible y marca el nivel que ve.
+# El aviso sale de lo que MARCA (ve la aguja): una lectura automatica que se
+# equivoque avisaria de un deposito vacio que esta lleno, y un aviso falso
+# ensena a ignorarlos todos. La foto queda para comprobarlo.
+_COMBUSTIBLE_NIVELES = (10, 25, 50, 75, 100)   # reserva, 1/4, 1/2, 3/4, lleno
+_COMBUSTIBLE_AVISO_BAJO = 50                   # por DEBAJO de la mitad se avisa
+
+
+def _combustible_nivel(valor) -> Optional[int]:
+    """El nivel declarado, solo si es uno de los del portal. Otra cosa: None."""
+    if isinstance(valor, bool):
+        return None
+    try:
+        n = int(str(valor).strip())
+    except (TypeError, ValueError):
+        return None
+    return n if n in _COMBUSTIBLE_NIVELES else None
+
+
+def _combustible_texto(pct: int) -> str:
+    return {10: "en reserva", 25: "a 1/4", 50: "a 1/2", 75: "a 3/4", 100: "lleno"}.get(pct, f"al {pct} %")
+
+
+def _km_repetido(historial, km, hoy: str) -> Optional[str]:
+    """Si `km` es EXACTAMENTE el ultimo registrado y aquel era de otro dia, la
+    fecha de aquel dia. Puede ser una foto repetida o una furgoneta que no
+    salio: se marca para mirarlo, nunca se bloquea."""
+    try:
+        km = int(km)
+    except (TypeError, ValueError):
+        return None
+    ultimo = None
+    for e in historial or []:
+        if isinstance(e, dict) and e.get("km") is not None and e.get("date"):
+            ultimo = e
+    if not ultimo:
+        return None
+    try:
+        km_ant = int(ultimo["km"])
+    except (TypeError, ValueError):
+        return None
+    dia_ant = str(ultimo["date"])[:10]
+    return dia_ant if km == km_ant and dia_ant and dia_ant < hoy else None
+
+
+async def _combustible_registrar(vehicle_id: str, inspection_id: str, driver_id: str,
+                                 pct: int, foto_url: str) -> None:
+    ahora = datetime.now(timezone.utc).isoformat()
+    dato = {"pct": pct, "fecha": ahora, "inspection_id": inspection_id,
+            "driver_id": driver_id, "foto": foto_url}
+    await db.inspections.update_one({"id": inspection_id}, {"$set": {"combustible": dato}})
+    await db.vehicles.update_one({"id": vehicle_id}, {"$set": {"combustible": dato}})
+    if pct >= _COMBUSTIBLE_AVISO_BAJO:
+        return
+    v = await db.vehicles.find_one({"id": vehicle_id}, {"_id": 0, "license_plate": 1, "center": 1})
+    placa = (v or {}).get("license_plate", "")
+    titulo = f"Depósito bajo en {placa}"
+    # `created_at` de las alertas se guarda en UTC: el dia se compara en UTC.
+    hoy = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # Uno por furgoneta y dia: dos inspecciones el mismo dia no son dos avisos.
+    ya = await db.alerts.find_one({"vehicle_id": vehicle_id, "title": titulo,
+                                   "created_at": {"$regex": f"^{hoy}"}}, {"_id": 0, "id": 1})
+    if ya:
+        return
+    ficha = await db.drivers.find_one({"id": driver_id}, {"_id": 0, "name": 1}) if driver_id else None
+    quien = (ficha or {}).get("name") or "el conductor"
+    desc = f"{placa} está {_combustible_texto(pct)} según {quien} al hacer la inspección."
+    await db.alerts.insert_one(serialize_doc(Alert(
+        vehicle_id=vehicle_id, inspection_id=inspection_id, title=titulo,
+        description=desc, severity="medium").model_dump()))
+    await _telegram_aviso(f"⛽ <b>{titulo}</b>\n{desc}")
+    try:
+        await push_center_event((v or {}).get("center") or "", f"⛽ {titulo}", desc, "/panel/vehiculos")
+    except Exception as e:                                   # noqa: BLE001
+        logger.debug(f"push deposito: {e}")
 
 
 async def _odo_registrar(vehicle_id: str, km: int, source: str, extra: dict = None):

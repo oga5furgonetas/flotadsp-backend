@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   AlertTriangle, Camera, Check, ChevronLeft, ChevronRight,
-  Gauge, Loader2, LogOut, Send, Truck, ArrowRight, ArrowLeft, Shield, Bell, CalendarDays,
+  Gauge, Fuel, Loader2, LogOut, Send, Truck, ArrowRight, ArrowLeft, Shield, Bell, CalendarDays,
 } from 'lucide-react'
 import {
   getAssignedVehicle, readOdometer, uploadInspection, validatePhoto,
@@ -77,6 +77,9 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
   const [photoErrors, setPhotoErrors] = useState({})
   const [validating, setValidating] = useState(null)
   const [odoPhoto, setOdoPhoto] = useState(null)
+  // Depósito: foto del indicador + el nivel que el conductor ve en la aguja.
+  const [fuelPhoto, setFuelPhoto] = useState(null)
+  const [fuelPct, setFuelPct] = useState(null)
   const [odoKm, setOdoKm] = useState(null)
   const [odoError, setOdoError] = useState('')
   const [odoBusy, setOdoBusy] = useState(false)
@@ -114,6 +117,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
     } finally { setPushBusy(false) }
   }
   const odoRef = useRef(null)
+  const fuelRef = useRef(null)
   const checklistRefs = useRef({})
   const ruedaRef = useRef(null)
 
@@ -220,6 +224,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
   // Sin km validos NO se envia auditoria. Es el requisito de flota.
   const allRequiredPhotos = PHOTO_SLOTS.filter((s) => s.required).every((s) => photos[s.id])
     && !!odoPhoto && odoKmFinal > 0
+    && !!fuelPhoto && fuelPct != null
   const missingDamagePhotos = Object.entries(checklist).filter(
     ([id, st]) => (st === 'malo' || st === 'danado') && !checklistPhotos[id],
   )
@@ -228,6 +233,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
     if (!vehicleId) return toast.error(t('dr.eligeVeh'))
     if (!odoPhoto) return toast.error(t('dr.faltaCuenta'))
     if (!(odoKmFinal > 0)) return toast.error(t('dr.sinKm'))
+    if (!fuelPhoto || fuelPct == null) { setStep(1); return toast.error(t('dr.fuel.falta')) }
     if (!allRequiredPhotos) return toast.error(t('dr.faltanFotos'))
     if (missingDamagePhotos.length > 0) return toast.error(t('dr.faltanDanos'))
     // Sin respuesta no se envía: "sin datos" y "no la lleva" no pueden
@@ -245,6 +251,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
         checklist, notes, driver_name: driver.name, center: driver.center,
         odometer_km: odoKmFinal,
         odometer_manual: !odoKm && odoManualValido,
+        combustible_pct: fuelPct,
         checklist_photo_items: Object.keys(checklistPhotos).map((id) => CHECKLIST.find((c) => c.id === id)?.label || id),
         // Declaración del conductor, no un hecho verificado: se guarda con
         // quién lo dijo para que el panel pueda decirlo tal cual.
@@ -255,6 +262,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
         if (photos[slot.id]) fd.append('files', photos[slot.id], `angle_${i}_${slot.id}.jpg`)
       })
       if (odoPhoto) fd.append('files', odoPhoto, 'odometro.jpg')
+      if (fuelPhoto) fd.append('files', fuelPhoto, 'combustible.jpg')
       Object.entries(checklistPhotos).forEach(([itemId, blob]) =>
         fd.append('files', blob, `checklist_${itemId}.jpg`))
       if (ruedaPhoto) fd.append('files', ruedaPhoto, 'checklist_rueda_repuesto.jpg')
@@ -442,7 +450,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
             <div>
               <div className="mb-0.5 flex items-center gap-2">
                 <span className="font-mono text-sm font-bold text-brand-400">{selectedVehicle?.license_plate}</span>
-                {photosOk > 0 && <span className="text-[10px] text-dark-500">{photosOk + (odoPhoto ? 1 : 0)} / 5 fotos</span>}
+                {photosOk > 0 && <span className="text-[10px] text-dark-500">{photosOk + (odoPhoto ? 1 : 0) + (fuelPhoto ? 1 : 0)} / 6 fotos</span>}
               </div>
               <h2 className="text-lg font-bold text-dark-50">{t('dr.fotosObl')}</h2>
               <p className="text-xs text-dark-500">{t('dr.iaVerifica')}</p>
@@ -584,6 +592,47 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
                   </div>
                 )}
               </div>
+
+              {/* Depósito de combustible */}
+              <div className="col-span-2">
+                <input ref={fuelRef} type="file" accept="image/*" capture="environment" className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) setFuelPhoto(f); e.target.value = '' }} />
+                <button onClick={() => fuelRef.current?.click()}
+                  className={`relative flex h-24 w-full flex-col items-center justify-center gap-1.5 overflow-hidden rounded-2xl border-2 border-dashed transition-all ${
+                    fuelPhoto ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-brand-500/30 bg-brand-500/5 hover:border-brand-500/60'}`}>
+                  {fuelPhoto ? (
+                    <>
+                      <img src={getBlobUrl(fuelPhoto)} className="absolute inset-0 h-full w-full object-cover" alt={t('dr.fuel.titulo')} />
+                      <div className="absolute inset-0 bg-black/40" />
+                      <div className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500">
+                        <Check size={13} className="text-white" />
+                      </div>
+                      <span className="relative text-[11px] font-bold text-white">{t('dr.fuel.repetir')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Fuel size={22} className="text-brand-400" />
+                      <span className="text-xs font-semibold text-dark-300">{t('dr.fuel.titulo')}</span>
+                      <span className="text-[9px] font-bold uppercase tracking-wider text-brand-500">{t('dr.required')}</span>
+                    </>
+                  )}
+                </button>
+                <p className="mt-2 text-[11px] font-semibold text-dark-400">{t('dr.fuel.pregunta')}</p>
+                <div className="mt-1.5 grid grid-cols-5 gap-1.5">
+                  {[[10, t('dr.fuel.reserva')], [25, '¼'], [50, '½'], [75, '¾'], [100, t('dr.fuel.lleno')]].map(([v, l]) => (
+                    <button key={v} type="button" onClick={() => setFuelPct(v)}
+                      className={`rounded-xl border py-2.5 text-[12px] font-bold transition active:scale-[0.97] ${
+                        fuelPct === v
+                          ? (v < 50 ? 'border-amber-400 bg-amber-500/20 text-amber-200' : 'border-emerald-400 bg-emerald-500/20 text-emerald-200')
+                          : 'border-dark-700 bg-dark-900/60 text-dark-300'}`}>
+                      {l}
+                    </button>
+                  ))}
+                </div>
+                {fuelPct != null && fuelPct < 50 && (
+                  <p className="mt-1.5 text-[11px] font-semibold text-amber-300">{t('dr.fuel.bajo')}</p>
+                )}
+              </div>
             </div>
 
             {allRequiredPhotos ? (
@@ -592,7 +641,7 @@ export default function InspectionFlow({ driver, vehicles, onComplete, onLogout,
               </button>
             ) : (
               <div className="rounded-xl border border-dark-800 bg-dark-900/50 p-3 text-center text-xs text-dark-500">
-                Necesitas las 4 fotos del vehículo + la del cuentakilómetros para continuar
+                {t('dr.fuel.necesitas')}
               </div>
             )}
           </div>

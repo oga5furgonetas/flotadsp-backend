@@ -4,13 +4,43 @@ import { useT } from '../../i18n'
 import {
   Loader2, CheckCircle2, Check, X, ChevronLeft, ChevronRight, User, Clock,
   AlertTriangle, BrainCircuit, Pencil, Plus, FileText, TrendingUp, EyeOff,
-  Zap, HelpCircle,
+  Zap, HelpCircle, Gauge, Fuel,
 } from 'lucide-react'
 import { getReviewQueue, getInspection, getAiDatasetStats, damageFeedback, markReviewed, missedDamage, submitAiFeedback, fetchAuthedBlob, autoexamenIA, iaParaRevisar, fiabilidadIA, entrenarModeloIA, autorrevisarIA } from '../api'
 import PolygonEditor from '../components/PolygonEditor'
 import BboxEditor from '../components/BboxEditor'
 import CompareSlider from '../components/CompareSlider'
 import GuidedEmpty from '../components/GuidedEmpty'
+
+const NIVEL_TXT = { 10: 'en reserva', 25: 'a ¼', 50: 'a ½', 75: 'a ¾', 100: 'lleno' }
+
+// Km del cuentakilometros y deposito que marco el conductor.
+function DatosMarcados({ insp }) {
+  if (!insp) return null
+  let km = null
+  try { km = JSON.parse(insp.notes || '{}')?.odometer_km ?? null } catch { km = null }
+  const dep = insp.combustible
+  const rep = insp.km_repetido
+  if (km == null && dep?.pct == null && !rep) return null
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+      {km != null && (
+        <span className="flex items-center gap-1 text-dark-400"><Gauge size={12} /> {Number(km).toLocaleString('es')} km</span>
+      )}
+      {rep && (
+        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-300"
+          title="Puede ser una foto repetida o que la furgoneta no salió">
+          mismos km que el {String(rep.fecha_anterior || '').split('-').reverse().join('/')}
+        </span>
+      )}
+      {dep?.pct != null && (
+        <span className={`flex items-center gap-1 rounded px-1.5 py-0.5 ${dep.pct < 50 ? 'bg-amber-500/15 text-amber-300' : 'text-dark-400'}`}>
+          <Fuel size={12} /> depósito {NIVEL_TXT[dep.pct] || `al ${dep.pct} %`}
+        </span>
+      )}
+    </div>
+  )
+}
 
 /* REVISION EXPRES
    ─────────────────────────────────────────────────────────────────────────
@@ -976,6 +1006,7 @@ export default function RevisionRapida() {
               <span className="flex items-center gap-1"><Clock size={13} /> {fmtDate(item.created_at)}</span>
               {item.vehicle_label && <span>· {item.vehicle_label}</span>}
             </div>
+            <DatosMarcados insp={fullInsp} />
 
             {item.image_quality_warnings?.length > 0 && (
               <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-500/10 p-2 text-xs text-amber-300">
