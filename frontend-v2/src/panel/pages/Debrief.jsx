@@ -144,6 +144,13 @@ function Kpi({ n, et, sub, tono = 'slate' }) {
 /* EL RESUMEN DEL FINAL.
    Tres tramos, no dos: lo recogido, lo que no aparece, y lo que nadie ha
    mirado. Ese tercer tramo es el que impide que la pantalla mienta. */
+// '2026-09-17' -> '2026-09-16', sin pasar por UTC (gotcha 11).
+function diaAntes(d) {
+  const [y, m, dd] = String(d).split('-').map(Number)
+  const f = new Date(y, m - 1, dd - 1)
+  return `${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, '0')}-${String(f.getDate()).padStart(2, '0')}`
+}
+
 function Recuento({ r }) {
   const total = r.a_comprobar || 0
   if (!total) return null
@@ -791,7 +798,17 @@ export default function Debrief() {
           <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-[14px] text-rose-800">{error}</div>
         ) : !datos?.conductores?.length ? (
           <div className="rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-slate-500">
-            No hay paquetes de Cortex ese día.
+            {dia === hoyISO()
+              ? 'Hoy todavía no ha entrado ningún paquete de Cortex: el cuadre aparece en cuanto empiece la jornada.'
+              : 'No hay paquetes de Cortex ese día.'}
+            {/* Un botón para ir al día anterior: a primera hora lo que se busca
+                casi siempre es el cuadre de ayer. */}
+            <div className="mt-3">
+              <button onClick={() => setDia(diaAntes(dia))}
+                className="rounded-lg border border-slate-300 px-3 py-1.5 text-[13px] font-medium text-slate-700 hover:bg-slate-50">
+                ← Ver el día anterior
+              </button>
+            </div>
           </div>
         ) : (
           <>
