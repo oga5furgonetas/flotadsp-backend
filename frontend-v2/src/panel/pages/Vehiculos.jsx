@@ -4,7 +4,7 @@ import { useT, LANG_LOCALE } from '../../i18n'
 import { lista } from '../../lib/lista'
 import { verMatricula } from '../../lib/matricula'
 import { useEscape } from '../../lib/useEscape'
-import { hoyLocal, fechaHoraLocal, fechaEs } from '../../lib/fecha'
+import { hoyLocal, fechaHoraLocal, fechaEs, diasAtras, isoLocal } from '../../lib/fecha'
 import { PageSkeleton } from '../components/Skeleton'
 import GuidedEmpty from '../components/GuidedEmpty'
 import VidaVehiculo from '../components/VidaVehiculo'
@@ -82,7 +82,9 @@ function itvBadge(itv) {
 
 function lastInspDot(date) {
   if (!date) return { cls: 'bg-dark-600', txt: 'Nunca inspeccionada' }
-  const d = Math.max(0, Math.floor((new Date() - new Date(date)) / 86400000))
+  // Días de CALENDARIO, no bloques de 24 h: revisada ayer a las 22:00 salía «hoy» a las 8:00.
+  const f = new Date(date)
+  const d = Number.isNaN(f.getTime()) ? 0 : Math.max(0, diasAtras(isoLocal(f)))
   const txt = d === 0 ? 'Revisada hoy' : d === 1 ? 'Revisada ayer' : `Hace ${d} días`
   if (d <= 7)  return { cls: 'bg-emerald-400', txt }
   if (d <= 30) return { cls: 'bg-amber-400',   txt }
