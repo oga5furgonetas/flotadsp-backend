@@ -895,7 +895,8 @@ export default function Dashboard() {
         <section className="rise border-t border-white/[0.05] py-7" style={{ animationDelay: '70ms' }}>
           <div className="mb-3 flex items-baseline justify-between gap-3">
             <h2 className="text-[15px] font-semibold text-dark-100">
-              {t('ops.wall')}
+              {/* Si el día no es hoy, esas rutas ya terminaron: no están «en la calle». */}
+              {nowLive.esHoy === false ? `Rutas del ${fechaCorta(nowLive.dia)}` : t('ops.wall')}
               <span className="ml-2 text-[13px] font-normal tabular-nums text-dark-500">{nowLive.lista.length}</span>
             </h2>
             <button onClick={() => navTop('/panel/paquetes')}
