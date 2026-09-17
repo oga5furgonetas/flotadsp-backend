@@ -293,7 +293,9 @@ export default function Diarios() {
 
       {/* Las cuatro cifras. Separadas a propósito: el total y los defectos NO
           son lo mismo y juntarlos daría un número que no cuadra con Amazon. */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      {/* Sin ningún diario en el rango, seis ceros no dicen nada: se ocultan y
+          habla el aviso de abajo. */}
+      {lista(datos?.conductores).length > 0 && <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         {/* El dinero primero y en grande: es la cifra que decide si esto
             importa esta semana o no. Y son los DEFECTOS, no todos los DNRs:
             los que no puntúan no restan nada. */}
@@ -312,7 +314,7 @@ export default function Diarios() {
             <p className={`text-2xl font-bold tabular-nums ${cls}`}>{v ?? 0}</p>
           </div>
         ))}
-      </div>
+      </div>}
 
       {/* Desglose por semana de Amazon: es como se factura y como se mira la
           scorecard. Solo se enseña si el rango pisa mas de una. */}
@@ -675,8 +677,13 @@ export default function Diarios() {
       ) : !filas.length ? (
         <div className="card flex flex-col items-center gap-3 p-10 text-center">
           <AlertTriangle size={26} className="text-dark-600" />
-          <p className="text-dark-400">No hay diarios cargados en estas fechas.</p>
-          <p className="text-[12.5px] text-dark-600">Pega el Daily Report de Cortex para empezar.</p>
+          <p className="text-dark-400">{busca.trim() ? `Nadie coincide con «${busca.trim()}».` : 'No hay diarios de estas fechas.'}</p>
+          {/* Arriba se dice que entran solos: aquí no se puede decir lo
+              contrario. Se explica qué hacer si no han llegado. */}
+          <p className="max-w-md text-[12.5px] leading-relaxed text-dark-500">
+            Llegan solos cuando la extensión de Cortex está abierta en la nave. Si falta alguno,
+            también puedes subir el Daily Report a mano con «Subir Daily Report».
+          </p>
         </div>
       ) : (
         <div className="card overflow-x-auto">
