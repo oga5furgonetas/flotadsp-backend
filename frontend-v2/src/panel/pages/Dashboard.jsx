@@ -667,21 +667,21 @@ export default function Dashboard() {
        4. Inspecciones por validar → daños sin peritar es dinero sin reclamar.
        5. Incidencias / taller → importan, pero aguantan a mañana. */
   const decisiones = [
-    { n: itvVencidas.length, label: t('ops.itv.expired'), why: t('ops.why.itv'),
+    { n: itvVencidas.length, label: t(itvVencidas.length === 1 ? 'ops.itv.expired.1' : 'ops.itv.expired'), why: t('ops.why.itv'),
       to: '/panel/vencimientos', tono: 'red' },
     { n: itvProximas.length, label: t('ops.itv.soon'), why: t('ops.why.itv.soon'),
       to: '/panel/vencimientos', tono: 'amber' },
     { n: itvSinFecha.length, label: t('ops.itv.nodate'), why: t('ops.why.itv.nodate'),
       to: '/panel/vencimientos', tono: 'dark' },
-    { n: nowLive?.missing || 0, label: t('ops.missing'), why: t('ops.why.missing'),
+    { n: nowLive?.missing || 0, label: t(nowLive?.missing === 1 ? 'ops.missing.1' : 'ops.missing'), why: t('ops.why.missing'),
       to: '/panel/paquetes', tono: 'red' },
     { n: nowLive?.sinDireccion || 0, label: t('ops.nodir'), why: t('ops.why.nodir'),
       to: '/panel/paquetes', tono: 'amber' },
     { n: nowLive?.review || 0, label: t('ops.validate'), why: t('ops.why.validate'),
       to: '/panel/revision', tono: 'amber' },
-    { n: data.open_incidents || 0, label: t('ops.incidents'), why: t('ops.why.incidents'),
+    { n: data.open_incidents || 0, label: t(data.open_incidents === 1 ? 'ops.incidents.1' : 'ops.incidents'), why: t('ops.why.incidents'),
       to: '/panel/incidencias', tono: 'dark' },
-    { n: inShop, label: t('ops.workshop'), why: t('ops.why.workshop'),
+    { n: inShop, label: t(inShop === 1 ? 'ops.workshop.1' : 'ops.workshop'), why: t('ops.why.workshop'),
       to: '/panel/talleres', tono: 'dark' },
   ].filter((u) => u.n > 0)
   // Sólo cuenta como "urgente" lo que no aguanta a mañana. Meter el backlog en
@@ -800,7 +800,7 @@ export default function Dashboard() {
             label={t('ops.incidents')} sub={t('ops.open')} onIr={() => navTop('/panel/incidencias')} />
           <Cifra icono={ShieldAlert} color="#f87171" n={danos?.total ?? 0}
             label={t('ops.damage.open')}
-            sub={t('ops.damage.open.sub').replace('{g}', danos?.graves ?? 0).replace('{v}', danos?.furgonetas_graves ?? 0)}
+            sub={t((danos?.furgonetas_graves ?? 0) === 1 ? ((danos?.graves ?? 0) === 1 ? 'ops.damage.open.sub.1' : 'ops.damage.open.sub.v1') : 'ops.damage.open.sub').replace('{g}', danos?.graves ?? 0).replace('{v}', danos?.furgonetas_graves ?? 0)}
             alerta={(danos?.graves || 0) > 0}
             onIr={() => navTop('/panel/ordenes')} />
           <Cifra icono={BellRing} color="#fb923c" n={itvVencidas.length + itvProximas.length} label={t('ops.itv.due')}

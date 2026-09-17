@@ -6002,6 +6002,133 @@ async def _seed_demo_data():
     logger.info("Demo: datos sintéticos creados en dsp_demo")
 
 
+# ── LA DEMO, VIVA ────────────────────────────────────────────────────────────
+# La demo se sembraba UNA vez y se quedaba congelada: el 17-09-2026 enseñaba
+# «25 % de los paquetes del 20 de julio» (4 paquetes), cero inspecciones en la
+# semana y las ITV caducadas. Es lo primero que ve un cliente que pulsa «Probar
+# la demo». Cada dia que alguien entra se regenera con fechas de HOY y un
+# reparto creible (DCR ~98,6 %). Solo toca la BD aislada de la demo.
+_DEMO_RUTAS = 8
+_DEMO_PAQ_RUTA = 110
+_DEMO_DIAS = 8
+_DEMO_FALLOS = ("BACK_TO_ORIGIN", "NOT_DELIVERED", "CUSTOMER_UNAVAILABLE")
+_DEMO_CALLES = ("Calle de Alcalá", "Gran Vía", "Calle de Atocha", "Paseo de la Castellana",
+                "Calle de Bravo Murillo", "Calle de Toledo", "Calle de Serrano", "Calle de O'Donnell")
+
+
+def _demo_paquetes(hoy: str, hora: int) -> tuple:
+    """(paquetes, fotos) sinteticos de los ultimos dias. Deterministas por dia."""
+    import random as _r
+    base = datetime.strptime(hoy, "%Y-%m-%d")
+    paquetes, fotos = [], []
+    for atras in range(_DEMO_DIAS - 1, -1, -1):
+        dia = (base - timedelta(days=atras)).strftime("%Y-%m-%d")
+        rnd = _r.Random(dia)
+        # Hoy la jornada va por donde vaya el reloj; los dias pasados, cerrados.
+        avance = 1.0 if atras else max(0.0, min(0.97, (hora - 9) / 9))
+        if atras == 0 and avance == 0:
+            continue
+        estados = {}
+        for ruta in range(_DEMO_RUTAS):
+            tid = f"DEMOTID{ruta}"
+            for n in range(_DEMO_PAQ_RUTA - rnd.randint(0, 25)):
+                u = rnd.random()
+                if atras == 0 and u > avance:
+                    estado = "LOADED" if u > avance + 0.02 else "ATTEMPTED"
+                elif u < 0.014:
+                    estado = rnd.choice(_DEMO_FALLOS)
+                elif u < 0.018:
+                    estado = "UNCOLLECTED"
+                else:
+                    estado = "DELIVERED"
+                estados[estado] = estados.get(estado, 0) + 1
+                paquetes.append({
+                    "tba": f"TBADEMO{dia.replace('-', '')}{ruta}{n:03d}",
+                    "service_day": dia, "state": estado, "center": "MADRID",
+                    "route_code": f"XA_C{ruta + 1}", "driver_id": tid,
+                    "stop_id": str(n + 1),
+                    "stop_address": f"{_DEMO_CALLES[(ruta + n) % len(_DEMO_CALLES)]} {1 + (n * 7) % 180}, Madrid",
+                    "lat": round(40.40 + rnd.random() * 0.06, 6),
+                    "lng": round(-3.73 + rnd.random() * 0.08, 6),
+                })
+        if atras:
+            # La foto del cierre vio un par de fallos que luego se re-repartieron,
+            # como pasa de verdad (gotcha 39).
+            foto = dict(estados)
+            foto["BACK_TO_ORIGIN"] = foto.get("BACK_TO_ORIGIN", 0) + 2
+            foto["DELIVERED"] = foto.get("DELIVERED", 0) - 2
+            fotos.append({"service_day": dia, "center": "MADRID", "cerrado": True,
+                          "fotos": 6, "por_estado": foto})
+    return paquetes, fotos
+
+
+_DEMO_CERROJO = asyncio.Lock()
+
+
+async def _demo_refrescar():
+    """Regenera la demo si sus datos no son de hoy. Una vez al dia como mucho.
+
+    Con cerrojo: dos visitas a la vez borrarian e insertarian las dos, y la
+    demo saldria con cada paquete repetido (gotcha 32).
+    """
+    async with _DEMO_CERROJO:
+        await _demo_regenerar()
+
+
+async def _demo_regenerar():
+    ddb = client[_DEMO_DB]
+    hoy = _dia_negocio()
+    from zoneinfo import ZoneInfo
+    hora = datetime.now(ZoneInfo("Europe/Madrid")).hour
+    # Por HORA y no por dia: la jornada de hoy avanza con el reloj, y una
+    # primera visita a las 7:00 dejaria «hoy» vacio el resto del dia.
+    clave = f"{hoy}:{hora}"
+    marca = await ddb.app_meta.find_one({"_id": "demo_dia"}) or {}
+    if marca.get("clave") == clave and await ddb.vehicles.count_documents({}) > 0:
+        return
+    for col in ("vehicles", "drivers", "inspections", "daily_assignments", "incidents",
+                "cortex_day_snapshots"):
+        await ddb[col].delete_many({})
+    await ddb.cortex_packages.delete_many({"tba": {"$regex": "^TBADEMO"}})
+    await ddb.shifts.delete_many({"center": "MADRID"})
+    await _seed_demo_data()
+
+    # Cada conductor con su ID de Amazon: asi los paquetes salen con nombre.
+    drivers = await ddb.drivers.find({}, {"_id": 0, "id": 1, "name": 1}).sort("id", 1).to_list(50)
+    for i, d in enumerate(drivers[:_DEMO_RUTAS]):
+        await ddb.drivers.update_one({"id": d["id"]}, {"$set": {"transporter_id": f"DEMOTID{i}"}})
+
+    paquetes, fotos = _demo_paquetes(hoy, hora)
+    ahora = datetime.now(timezone.utc).isoformat()
+    nombres = {f"DEMOTID{i}": d["name"] for i, d in enumerate(drivers[:_DEMO_RUTAS])}
+    for pq in paquetes:
+        pq.update({"id": str(uuid.uuid4()), "updated_at": ahora, "seen_at": ahora,
+                   "first_seen": ahora, "driver_name": nombres.get(pq["driver_id"], "")})
+    if paquetes:
+        await ddb.cortex_packages.insert_many(paquetes, ordered=False)
+    if fotos:
+        await ddb.cortex_day_snapshots.insert_many(fotos, ordered=False)
+
+    # Cuadrante de la semana y umbrales publicados de la nave de ejemplo.
+    base = datetime.strptime(hoy, "%Y-%m-%d")
+    turnos = []
+    for atras in range(-3, 4):
+        dia = (base - timedelta(days=atras)).strftime("%Y-%m-%d")
+        for i, d in enumerate(drivers):
+            libre = (i + atras) % 7 in (0, 1)
+            turnos.append({"driver_id": d["id"], "driver_name": d["name"], "date": dia,
+                           "center": "MADRID", "type": "libre" if libre else "trabaja",
+                           "cod": "L" if libre else "1"})
+    if turnos:
+        await ddb.shifts.insert_many(turnos, ordered=False)
+    await ddb.scorecard_thresholds.update_one(
+        {"center": "MADRID", "tipo": "sls"},
+        {"$set": {"desde_semana": 1, "bands": {"dcr": {"fantastic": 98.5, "great": 98.0, "fair": 97.0}}}},
+        upsert=True)
+    await ddb.app_meta.update_one({"_id": "demo_dia"}, {"$set": {"dia": hoy, "clave": clave, "at": ahora}}, upsert=True)
+    logger.info("Demo: datos regenerados para %s (%d paquetes)", hoy, len(paquetes))
+
+
 @auth_router.post("/demo-login")
 async def demo_login(request: Request):
     """Acceso instantáneo a una organización DEMO de solo lectura (sin registro).
@@ -6017,7 +6144,7 @@ async def demo_login(request: Request):
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
     try:
-        await _seed_demo_data()
+        await _demo_refrescar()
     except Exception as _se:
         logger.warning(f"Demo seed: {_se}")
     token = create_token("demo-user", "admin", "Demo FlotaDSP",
