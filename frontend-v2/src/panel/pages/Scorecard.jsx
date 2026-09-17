@@ -636,14 +636,17 @@ function BaremosEditor({ full, center, onSaved }) {
   }
 
   async function resetToAmazon() {
-    if (!confirm(`¿Resetear los baremos de ${center} a los valores oficiales del PDF de Amazon? Se borrarán todos los ajustes manuales.`)) return
+    // Lo que hace de verdad: borra los ajustes A MANO. Después mandan los
+    // umbrales que publica Amazon en las scorecards subidas de esta nave, o los
+    // genéricos si no hay ninguna — no «los valores de Amazon» a secas.
+    if (!confirm(`¿Quitar los ajustes a mano de los baremos de ${center}? Se usarán los que publica Amazon en tus scorecards de esta nave (o los genéricos si aún no has subido ninguna).`)) return
     setResetBusy(true); setMsg(null)
     try {
-      await resetScorecardThresholds(center)
-      setMsg({ ok: true, t: `Baremos de ${center} reiniciados a los valores Amazon por defecto.` })
+      const r = await resetScorecardThresholds(center)
+      setMsg({ ok: true, t: r.data?.mensaje || `Ajustes a mano de ${center} quitados.` })
       onSaved()
     } catch (e) {
-      setMsg({ ok: false, t: e?.response?.data?.detail || 'Error al resetear baremos.' })
+      setMsg({ ok: false, t: e?.response?.data?.detail || 'No se han podido quitar los ajustes. Inténtalo de nuevo.' })
     } finally { setResetBusy(false) }
   }
 
