@@ -6025,6 +6025,9 @@ _DEMO_LUGARES = (("DELIVERED_TO_HOUSEHOLD_MEMBER", 46), ("DELIVERED_TO_STORE", 3
                  ("DELIVERED_TO_RECEPTIONIST", 6), ("DELIVERED_TO_LOCKER", 5),
                  ("DELIVERED_TO_SAFE_LOCATION", 3), ("DELIVERED_TO_NEIGHBOR", 2),
                  ("DELIVERED_TO_GARDEN", 1), ("DELIVERED_TO_MAIL_SLOT", 1))
+# Por que vuelve un paquete (pantalla DSC, «paquetes que vuelven»).
+_DEMO_MOTIVOS = (("CUSTOMER_UNAVAILABLE", 40), ("BUSINESS_CLOSED", 20), ("ADDRESS_NOT_FOUND", 15),
+                 ("INACCESSIBLE_DELIVERY_LOCATION", 10), ("OBJECT_MISSING", 5), ("NONE", 10))
 _DEMO_CALLES = ("Calle de Alcalá", "Gran Vía", "Calle de Atocha", "Paseo de la Castellana",
                 "Calle de Bravo Murillo", "Calle de Toledo", "Calle de Serrano", "Calle de O'Donnell")
 
@@ -6063,6 +6066,13 @@ def _demo_paquetes(hoy: str, hora: int) -> tuple:
                              for x, w in _DEMO_LUGARES]
                     extra["timeline"] = [{"state": "DELIVERED",
                                           "context": rnd.choices(lugares, pesos)[0]}]
+                elif estado in _DEMO_FALLOS or estado == "ATTEMPTED":
+                    motivo = rnd.choices([m for m, _ in _DEMO_MOTIVOS], [w for _, w in _DEMO_MOTIVOS])[0]
+                    hora_intento = f"{dia}T{rnd.randint(9, 17):02d}:{rnd.randint(0, 59):02d}:00+00:00"
+                    extra["timeline"] = [{"state": "ATTEMPTED", "context": motivo, "at": hora_intento}]
+                    if estado != "ATTEMPTED":
+                        extra["timeline"].append({"state": "BACK_TO_ORIGIN", "context": motivo,
+                                                  "at": hora_intento})
                 paquetes.append({
                     **extra,
                     "tba": f"TBADEMO{dia.replace('-', '')}{ruta}{n:03d}",

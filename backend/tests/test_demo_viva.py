@@ -11,7 +11,7 @@ _NS = {"datetime": datetime, "timedelta": timedelta}
 for _n in ast.parse(_TEXTO).body:
     _nombre = getattr(_n, "name", None) or (
         getattr(_n.targets[0], "id", None) if isinstance(_n, ast.Assign) else None)
-    if _nombre in {"_DEMO_RUTAS", "_DEMO_PAQ_RUTA", "_DEMO_DIAS", "_DEMO_FALLOS", "_DEMO_LUGARES",
+    if _nombre in {"_DEMO_RUTAS", "_DEMO_PAQ_RUTA", "_DEMO_DIAS", "_DEMO_FALLOS", "_DEMO_LUGARES", "_DEMO_MOTIVOS",
                    "_DEMO_CALLES", "_demo_paquetes"}:
         exec(compile(ast.Module([_n], []), "server.py", "exec"), _NS)  # noqa: S102
 paquetes = _NS["_demo_paquetes"]
