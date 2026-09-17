@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { NavLink, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import {
   LayoutDashboard, Trophy, Users, CalendarClock, CalendarCheck, BarChart3, Activity,
-  CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, BellRing, KeyRound,
+  CheckCircle2, ClipboardList, ClipboardCheck, Truck, Wrench, Hammer, BellRing, KeyRound,
   Building2, BrainCircuit, FileUp, Settings, Shield, LogOut, Zap, Inbox,
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX, FileBarChart,
@@ -80,7 +80,7 @@ const NAV_DEF = [
     { to: '/panel/inspecciones', labelKey: 'nav.inspections', icon: ClipboardList },
     { to: '/panel/incidencias', labelKey: 'nav.incidents', icon: AlertTriangle },
     { to: '/panel/talleres', labelKey: 'nav.workshops', icon: Wrench },
-    { to: '/panel/ordenes', labelKey: 'nav.ordenes', icon: Wrench },
+    { to: '/panel/ordenes', labelKey: 'nav.ordenes', icon: Hammer },
     { to: '/panel/aparcamiento', labelKey: 'nav.parking', icon: MapPin },
     { to: '/panel/vencimientos', labelKey: 'nav.grp.expiry', icon: CalendarClock },
     { to: '/panel/importaciones', labelKey: 'nav.imports', icon: FileUp },

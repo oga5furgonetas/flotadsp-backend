@@ -16,8 +16,9 @@ import { hoyLocal, isoLocal } from '../../lib/fecha'
 /* ── helpers ── */
 function greeting(t) {
   const h = new Date().getHours()
-  if (h < 13) return t('greet.morning')
-  if (h < 20) return t('greet.afternoon')
+  // De madrugada es «buenas noches»: a las 2:00 decía «buenos días».
+  if (h >= 6 && h < 13) return t('greet.morning')
+  if (h >= 13 && h < 20) return t('greet.afternoon')
   return t('greet.evening')
 }
 function fmtDate(locale) {

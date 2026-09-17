@@ -46458,7 +46458,12 @@ async def _arranque_naves(centros: list) -> list:
             cortex["area"] = bool(await db.cortex_stations.count_documents(
                 {"center": c, "service_area_id": {"$type": "string"}}))
         objetivos = await db.scorecard_thresholds.count_documents({"center": c, "tipo": "sls"})
-        talleres = await db.workshops.count_documents({"center": rx})
+        # Un taller dado de alta desde «Talleres» no lleva nave (sirve a todas
+        # las de la zona): contando solo los de la nave, una empresa nueva no
+        # completaba nunca este paso. Los dados de baja no cuentan.
+        talleres = await db.workshops.count_documents({
+            "active": {"$ne": False},
+            "$or": [{"center": rx}, {"center": {"$in": [None, ""]}}, {"center": {"$exists": False}}]})
         turnos = await db.shifts.count_documents({"center": rx, "date": {"$gte": hace30}})
         pasos = [
             {"id": "vehiculos", "hecho": furgos > 0, "n": furgos},
