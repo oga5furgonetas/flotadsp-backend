@@ -1550,6 +1550,14 @@ function ConexionJoin({ ofertas, onHecho }) {
 
   const sincronizar = async () => {
     if (!oferta) { setErr('Elige a qué oferta van los candidatos.'); return }
+    // "Todas las ofertas de JOIN" con dos o mas puestos reales mezcla naves:
+    // el 17-09-2026, 113 candidatos de Santiago (OGA5) acabaron tambien en la
+    // de A Coruna (DGA1) por sincronizar asi. El backend ya lo rechaza; esto
+    // solo evita el viaje de ida y vuelta para verlo.
+    if (!job && (trabajos || []).length > 1) {
+      setErr('Hay varios puestos en JOIN: elige a cuál de ellos van estos candidatos.')
+      return
+    }
     setYendo(true); setErr(''); setAviso('')
     try {
       await sincronizarJoin({ oferta_id: oferta, job_id: job })

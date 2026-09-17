@@ -2495,6 +2495,11 @@ NUNCA reportes como daño:
 - SOMBRAS proyectadas (barandillas, árboles, el propio fotógrafo)
 - MANCHAS de combustible/grasa junto al tapón
 Ante la duda entre cualquiera de estos y un daño real: confidence < 0.65 y márcalo sugerido.
+ATENCIÓN ESPECIAL A LOS PARAGOLPES (delantero y trasero): es donde más se
+confunde arañazo cosmético, suciedad de carretera y reflejo con daño real —
+medido contra validaciones humanas, es la pieza que más falsos positivos
+acumula de toda la carrocería. Antes de reportar un daño en el paragolpes,
+repasa el catálogo de falsos positivos de arriba dos veces, no una.
 
 === SUCIEDAD ===
 "dirt_level": 0 (impecable) → 10 (barro total).
@@ -3516,10 +3521,13 @@ async def analyze_images_with_gemini(
             refined_ids = {id(d) for d in damages}
             new_damages = [d for d in damages if getattr(d, 'is_new', True)]
 
-        # Confidence gating para los daños que no pasaron por 2ª pasada
+        # Confidence gating para los daños que no pasaron por 2ª pasada.
+        # Mismo umbral reforzado por pieza que en _refine_damage_boxes: no
+        # tiene sentido ser estricto solo cuando la 2ª pasada corre.
         for d in damages:
             if not hasattr(d, 'confirmed') or d.confirmed is None:
-                d.confirmed = (getattr(d, 'confidence', 0) or 0) >= 0.65
+                umbral = _UMBRAL_CONFIANZA_PIEZA(getattr(d, 'part', ''))
+                d.confirmed = (getattr(d, 'confidence', 0) or 0) >= umbral
 
         # Recalcular contadores y coste desde las listas de-duplicadas
         critical_count = sum(1 for d in damages if (d.severity or "").lower() in ("grave", "critico", "crítico"))
@@ -3624,6 +3632,27 @@ _REFINE_PROMPT = (
     "El polígono NO debe cubrir ruedas, cristales ni piezas adyacentes sin daño. "
     "Sé conservador: mejor un polígono pequeño preciso que uno grande que tape zonas sanas."
 )
+
+
+# Umbral de confianza para dar un daño por CONFIRMADO (no "sugerido"). 0.65
+# es el de siempre; estas piezas piden más porque acumulan arañazos
+# superficiales, suciedad y reflejos que Gemini no distingue bien de un golpe
+# real — medido con `/ai/fiabilidad` sobre las validaciones humanas de la
+# flota (17-09-2026): paragolpes trasero acertaba el 11,9 % de 109 casos y el
+# delantero el 21,5 % de 121, los dos peores de largo y los de más volumen.
+# Genérico por nombre de pieza (no por centro ni por flota): un parachoques es
+# igual de propenso al arañazo cosmético en cualquier furgoneta.
+_UMBRAL_CONFIANZA_POR_PIEZA = {
+    "paragolpes": 0.85,
+}
+
+
+def _UMBRAL_CONFIANZA_PIEZA(part: str) -> float:
+    p = (part or "").lower()
+    for clave, umbral in _UMBRAL_CONFIANZA_POR_PIEZA.items():
+        if clave in p:
+            return umbral
+    return 0.65
 
 
 async def _refine_damage_boxes(
@@ -3762,10 +3791,23 @@ async def _refine_damage_boxes(
 
     await asyncio.gather(*[_bounded(i, d) for i, d in to_refine])
 
-    # Aplicar confidence gating: < 0.65 → sugerido (confirmed=False)
+    # Aplicar confidence gating: < 0.65 → sugerido (confirmed=False).
+    # EXCEPTO en piezas medidas contra producción como ruido crónico: los
+    # parachoques acumulan arañazos superficiales, suciedad y reflejos que
+    # Gemini confunde con daño real con la MISMA confianza que un golpe de
+    # verdad. `/ai/fiabilidad` (validaciones humanas de esta flota) lo mide:
+    # paragolpes trasero acertaba solo 11,9 % de 109 casos y el delantero
+    # 21,5 % de 121 — con mucho los dos peores de las 25 piezas, y encima los
+    # de más volumen. El aviso de patrones (ai_learning.py) ya le pedía a
+    # Gemini "sé muy exigente aquí" y no bastó: exigirlo aquí, en Python, no
+    # depende de que el modelo obedezca. El trade-off es explícito y aceptado
+    # (Dani, 17-09-2026): algún golpe leve real en el paragolpes puede pasar a
+    # "sugerido" en vez de confirmado, a cambio de dejar de inundar de falsos
+    # positivos las dos piezas que más ruido dan.
     for d in refined:
         conf = getattr(d, 'confidence', 0) or 0
-        d.confirmed = conf >= 0.65
+        umbral = _UMBRAL_CONFIANZA_PIEZA(getattr(d, 'part', ''))
+        d.confirmed = conf >= umbral
 
     logger.info(f"[2ª pasada] completa. Sugeridos: {sum(1 for d in refined if not d.confirmed)}/{len(refined)}")
     return refined
@@ -21874,6 +21916,27 @@ async def empleo_join_sincronizar(body: dict = Body(...), _=Depends(require_admi
         raise HTTPException(400, "Primero conecta JOIN con su token")
     job = str(body.get("job_id") or "").strip()
     job_id = int(job) if job.isdigit() else None
+    # SIN job_id, `/applications` de JOIN devuelve TODOS los puestos juntos, y
+    # aqui se guardarian TODOS bajo la oferta interna que se haya elegido —da
+    # igual cual sea. Con dos o mas puestos reales en JOIN eso mezcla naves:
+    # medido el 17-09-2026, 113 candidatos de la oferta de Santiago (OGA5)
+    # acabaron tambien en la de A Coruna (DGA1) por sincronizar "Todas las
+    # ofertas de JOIN" con DGA1 seleccionada. "Todas" solo tiene sentido
+    # cuando de verdad hay UN puesto en JOIN y no hay nada que confundir.
+    if job_id is None:
+        import httpx as _httpx
+        n_puestos = 0
+        async with _httpx.AsyncClient(timeout=20) as cli:
+            try:
+                r = await _join_pedir(cli, "/jobs", token,
+                                      {"page": 1, "pageSize": 2, "status": "ONLINE,OFFLINE,ARCHIVED"})
+                n_puestos = len(r.json()) if isinstance(r.json(), list) else 0
+            except _httpx.HTTPError:
+                pass
+        if n_puestos > 1:
+            raise HTTPException(
+                400, "Hay varios puestos en JOIN: elige a cuál de ellos van estos candidatos, "
+                     "\"Todas las ofertas\" mezclaría naves.")
     # UNA A LA VEZ POR EMPRESA, y lo decide la base: dos clics seguidos no
     # pueden lanzar dos descargas de los mismos cien CV. Una que lleve mas de
     # media hora «en marcha» se da por muerta (reinicio del servidor).
