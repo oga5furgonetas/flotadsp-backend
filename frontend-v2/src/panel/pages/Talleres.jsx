@@ -5,8 +5,9 @@ import { lista } from '../../lib/lista'
 import {
   Wrench, MapPin, Phone, Globe, BadgeCheck, Loader2, Navigation,
   AlertTriangle, Search, Filter, Star, Clock, ChevronDown, X,
-  ExternalLink, PhoneCall, Zap, Car, RefreshCw, Info, Link2, Copy, Check,
+  ExternalLink, PhoneCall, Zap, Car, RefreshCw, Info, Link2, Copy, Check, Plus, Pencil,
 } from 'lucide-react'
+import TallerForm from '../components/TallerForm'
 import { getWorkshopsNearby, getWorkshops, getVehicles, getCentrosGeo, enlaceTaller } from '../api'
 
 const CATEGORIES = [
@@ -118,7 +119,7 @@ function directionsUrl(w, userCoords) {
     : `https://www.google.com/maps/dir//${destEnc}/`
 }
 
-function WorkshopCard({ w, userCoords }) {
+function WorkshopCard({ w, userCoords, onEditar }) {
   const { t } = useT()
   const [expanded, setExpanded] = useState(false)
   const cats = (w.categories || []).slice(0, 4)
@@ -169,6 +170,12 @@ function WorkshopCard({ w, userCoords }) {
             )}
           </div>
         </div>
+        {onEditar && (
+          <button onClick={() => onEditar(w)} title="Editar taller" aria-label="Editar taller"
+            className="shrink-0 rounded-lg p-1.5 text-dark-600 transition hover:bg-dark-700 hover:text-dark-200">
+            <Pencil size={13} />
+          </button>
+        )}
       </div>
 
       {/* Categorías */}
@@ -293,6 +300,8 @@ export default function Talleres() {
   const [categoryFilter, setCategoryFilter] = useState('')
   const [q, setQ] = useState('')
   const [providers, setProviders] = useState([]) // proveedores únicos en la flota
+  const [form, setForm] = useState(null)          // null | {} (nuevo) | taller
+  const [aviso, setAviso] = useState(null)
 
   // Cargar proveedores de la flota para el selector
   useEffect(() => {
@@ -444,6 +453,17 @@ export default function Talleres() {
     return () => { vivo = false }
   }, [center]) // eslint-disable-line
 
+  const alGuardar = ({ nuevo, ubicado, nombre, conDireccion }) => {
+    setForm(null)
+    setAviso(ubicado
+      ? { ok: true, t: `${nombre} ${nuevo ? 'añadido' : 'guardado'} y ubicado en el mapa.` }
+      : conDireccion
+        ? { ok: false, t: `${nombre} guardado, pero no encuentro esa dirección: revísala para que salga por distancia.` }
+        : { ok: false, t: `${nombre} guardado sin dirección: añádela para que salga por distancia.` })
+    if (coords) fetchNearby(coords.lat, coords.lng, providerFilter || undefined, categoryFilter || undefined)
+  }
+  const sinUbicacion = result?.sin_ubicacion || []
+
   const workshops = (result?.workshops || []).filter(w => {
     if (!q) return true
     const s = q.toLowerCase()
@@ -461,6 +481,10 @@ export default function Talleres() {
             {t('ws.concerted')}
           </p>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+        <button onClick={() => setForm({})} className="btn-primary flex items-center gap-1.5 px-3 py-2 text-xs">
+          <Plus size={13} /> Añadir taller
+        </button>
         {geoState === 'ok' && coords && (
           <div className="flex flex-wrap items-center gap-2">
             {locationLabel && (
@@ -481,7 +505,16 @@ export default function Talleres() {
             </button>
           </div>
         )}
+        </div>
       </div>
+
+      {aviso && (
+        <div className={`flex items-start justify-between gap-3 rounded-xl px-3 py-2 text-sm ${aviso.ok ? 'bg-emerald-500/10 text-emerald-300' : 'bg-amber-500/10 text-amber-200'}`}>
+          <span>{aviso.t}</span>
+          <button onClick={() => setAviso(null)} aria-label="Cerrar" className="shrink-0 opacity-70 hover:opacity-100"><X size={14} /></button>
+        </div>
+      )}
+      {form && <TallerForm taller={form} proveedores={providers} onCerrar={() => setForm(null)} onGuardado={alGuardar} />}
 
       {/* Panel de geolocalización — estado inicial */}
       {geoState === 'idle' && (
@@ -651,9 +684,33 @@ export default function Talleres() {
                 {providerFilter && <span>{t('ws.filtered.by')} <b className="text-dark-300">{providerFilter}</b></span>}
               </div>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {workshops.map(w => <WorkshopCard key={w.id} w={w} userCoords={coords} />)}
+                {workshops.map(w => <WorkshopCard key={w.id} w={w} userCoords={coords} onEditar={setForm} />)}
               </div>
             </>
+          )}
+
+          {/* Los que no tienen ubicación no salen por distancia: se listan
+              aquí para completarlos, en vez de desaparecer. */}
+          {!loading && sinUbicacion.length > 0 && (
+            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/[0.04] p-4">
+              <p className="text-sm font-semibold text-amber-200">
+                {sinUbicacion.length === 1 ? '1 taller sin dirección' : `${sinUbicacion.length} talleres sin dirección`}
+              </p>
+              <p className="mt-0.5 text-[12px] text-dark-400">No salen en la lista por distancia ni en las recomendaciones. Completa la dirección y se ubican solos.</p>
+              <ul className="mt-3 divide-y divide-dark-800">
+                {sinUbicacion.map((w) => (
+                  <li key={w.id} className="flex items-center justify-between gap-3 py-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm text-dark-100">{w.name}</p>
+                      <p className="truncate text-[11.5px] text-dark-500">{[w.phone, w.address, w.city].filter(Boolean).join(' · ') || 'Sin datos de contacto'}</p>
+                    </div>
+                    <button onClick={() => setForm(w)} className="btn-ghost flex shrink-0 items-center gap-1 px-2.5 py-1 text-xs">
+                      <Pencil size={12} /> Completar
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </>
       )}

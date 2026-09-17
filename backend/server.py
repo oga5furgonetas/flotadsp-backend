@@ -23031,10 +23031,20 @@ async def workshops_nearby(
     results.sort(key=lambda x: (x["distance_km"], str(x.get("name") or "")))  # gotcha 62
     results = results[:limit]
 
+    # LOS QUE NO TIENEN UBICACION NO PUEDEN DESAPARECER (gotchas 17 y 30). Un
+    # taller dado de alta desde una orden lleva nombre y telefono y nada mas:
+    # esta lista lo saltaba y en «Talleres» no existia. Van aparte, para
+    # completarles la direccion.
+    sin_ubicacion = sorted(
+        ({k: w.get(k) for k in ("id", "name", "phone", "address", "city", "categories", "convenios")}
+         for w in workshops if w.get("latitude") is None or w.get("longitude") is None),
+        key=lambda w: str(w.get("name") or "").lower())
+
     # Inyectar info de asistencia en carretera
     roadside = _provider_roadside(provider or "")
     return {
         "workshops": results,
+        "sin_ubicacion": sin_ubicacion,
         "roadside": roadside,
         "provider": provider,
         "user_lat": lat,
@@ -23042,8 +23052,57 @@ async def workshops_nearby(
     }
 
 
+def _taller_consulta(address, city) -> str:
+    partes = [str(x or "").strip() for x in (address, city)]
+    partes = [x for x in partes if x]
+    # Si la ciudad ya va dentro de la direccion no se repite.
+    if len(partes) == 2 and _geo_sin_acentos(partes[1]).lower() in _geo_sin_acentos(partes[0]).lower():
+        partes = partes[:1]
+    return ", ".join(partes)
+
+
+async def _taller_ubicar(address, city) -> Optional[tuple]:
+    """Direccion de un taller -> (lat, lng), o None si no se encuentra.
+
+    Sin esto un taller dado de alta a mano no salia NUNCA en «Talleres», que
+    ordena por distancia y se salta los que no tienen coordenadas. Solo se
+    acepta un punto dentro de Espana: un homonimo en otro pais pondria el
+    taller a 1.500 km y tambien desapareceria, pero pareciendo ubicado.
+    """
+    consulta = _taller_consulta(address, city)
+    if len(consulta) < 4:
+        return None
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=8, headers={
+                "User-Agent": "FlotaDSP/1.0 (talleres; contacto@flotadsp.com)",
+                "Accept-Language": "es"}) as c:
+            r = await _geo_pide(c, "https://nominatim.openstreetmap.org/search",
+                                params={"q": consulta, "format": "json", "limit": 1,
+                                        "countrycodes": "es"}, intentos=2)
+            datos = r.json() if r.status_code == 200 else []
+    except Exception as e:                                   # noqa: BLE001
+        logger.warning(f"talleres: no se pudo ubicar «{consulta}»: {e}")
+        return None
+    if not datos:
+        return None
+    try:
+        lat, lng = float(datos[0]["lat"]), float(datos[0]["lon"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (27.0 <= lat <= 44.5 and -19.0 <= lng <= 5.0):
+        return None
+    return lat, lng
+
+
 @api_router.post("/workshops", response_model=Workshop)
 async def create_workshop(data: WorkshopCreate, _=Depends(require_admin)):
+    if not (data.name or "").strip():
+        raise HTTPException(400, "Pon el nombre del taller")
+    if (data.latitude is None or data.longitude is None) and (data.address or data.city):
+        punto = await _taller_ubicar(data.address, data.city)
+        if punto:
+            data.latitude, data.longitude = punto
     w = Workshop(**data.model_dump())
     doc = serialize_doc(w.model_dump())
     await db.workshops.insert_one(doc)
@@ -23069,11 +23128,23 @@ async def get_workshop(workshop_id: str, _=Depends(require_admin)):
 async def update_workshop(workshop_id: str, data: dict, _=Depends(require_admin)):
     data.pop("_id", None)
     data.pop("id", None)
+    # Direccion nueva sin coordenadas nuevas: se vuelve a ubicar. Si no se
+    # encuentra, las coordenadas viejas se BORRAN — apuntarian a la direccion
+    # anterior y el taller saldria donde ya no esta.
+    ubicado = None
+    if ("address" in data or "city" in data) and "latitude" not in data and "longitude" not in data:
+        previo = await db.workshops.find_one({"id": workshop_id},
+                                             {"_id": 0, "address": 1, "city": 1}) or {}
+        nueva = (data.get("address", previo.get("address")), data.get("city", previo.get("city")))
+        if _taller_consulta(*nueva) != _taller_consulta(previo.get("address"), previo.get("city")):
+            punto = await _taller_ubicar(*nueva)
+            data["latitude"], data["longitude"] = punto if punto else (None, None)
+            ubicado = bool(punto)
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.workshops.update_one({"id": workshop_id}, {"$set": data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Taller no encontrado")
-    return {"success": True}
+    return {"success": True, "ubicado": ubicado}
 
 
 @api_router.delete("/workshops/{workshop_id}")

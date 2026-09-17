@@ -415,6 +415,7 @@ export const ordenesPorTaller = (center) =>
 export const exportarOrdenes = (params) =>
   api.get('/work-orders/export', { params, responseType: 'blob' })
 export const crearTaller = (body) => api.post('/workshops', body)
+export const editarTaller = (id, body) => api.put(`/workshops/${id}`, body)
 export const getOrdenes = (params) => api.get('/work-orders', { params })
 export const getResumenOrdenes = (center) =>
   api.get('/work-orders/resumen', { params: centerParam(center) })
