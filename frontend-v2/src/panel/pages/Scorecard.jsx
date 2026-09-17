@@ -156,10 +156,10 @@ function AvisoUmbrales({ info, onSubir }) {
             Los tiers que ves son orientativos
           </p>
           <p className="mt-1 text-sm text-amber-100/80">
-            Amazon pone un baremo distinto a cada nave. Todavía no tenemos ninguna
-            scorecard de <span className="font-semibold">{info.center}</span>, así
-            que estamos usando umbrales genéricos que <span className="font-semibold">no
-            son los tuyos</span>. Sube una scorecard reciente y los tiers pasan a ser exactos.
+            Amazon pone un baremo distinto a cada nave y lo publica en las páginas 6 a 8
+            del PDF de la scorecard. De <span className="font-semibold">{info.center}</span> todavía
+            no los tenemos, así que se usan umbrales genéricos que <span className="font-semibold">no
+            son los tuyos</span>. Sube el PDF completo de una semana reciente y los tiers pasan a ser exactos.
           </p>
           <p className="mt-1 text-xs text-amber-100/60">
             Con una basta: los umbrales sólo cambian cuando Amazon cambia de temporada.
@@ -387,7 +387,7 @@ function CategoryCard({ groupKey, tier, metrics }) {
         <span className="text-[10px] text-dark-500">{cfg.weight}</span>
       </div>
       <TierBadge tier={tier} />
-      <div className="mt-2 text-[10px] text-dark-600">{t('sc.filled').replace('{n}', filled)}/{metrics.length}</div>
+      <div className="mt-2 text-[10px] text-dark-600">{t('sc.filled').replace('{n}', `${filled}/${metrics.length}`)}</div>
     </div>
   )
 }
@@ -1153,7 +1153,7 @@ export default function Scorecard() {
                     <span className="text-2xl font-bold text-dark-500">{t('sc.no.data.simple')}</span>
                     <p className="mt-1 max-w-md text-[12px] leading-relaxed text-dark-500">
                       {full.oficial_ultima_semana
-                        ? <>La última scorecard oficial cargada es la <span className="cifra">{full.oficial_ultima_semana}</span>. Sube la de esta semana para tener la nota; mientras, el DCR real está en «Esta semana».</>
+                        ? <>La última scorecard oficial cargada es la de la semana <span className="cifra">{full.oficial_ultima_semana}</span>. Sube la de esta semana para tener la nota; mientras, el DCR real está en «Esta semana».</>
                         : t('sc.no.data.long')}
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
@@ -1203,7 +1203,7 @@ export default function Scorecard() {
                   title={`La última scorecard oficial cargada es la semana ${full.oficial_ultima_semana}. Va la ${full.oficial_semana_actual}.`}>
                   <AlertCircle size={11} />
                   {full.oficial_semanas_retraso} semanas sin cargar la oficial
-                  {' '}(última: la {full.oficial_ultima_semana})
+                  {' '}(última: semana {full.oficial_ultima_semana})
                 </span>
               )}
               {confirmReset ? (
