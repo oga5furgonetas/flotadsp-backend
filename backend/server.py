@@ -9787,9 +9787,12 @@ async def drivers_importar(file: UploadFile = File(...), center: str = Form(""),
     unico_centro = ""
     try:
         org = await get_org(user.get("org_id"))
-        centros = [c for c in ((org or {}).get("centers") or []) if c]
-        if len(centros) == 1:
-            unico_centro = centros[0]
+        # OJO con el nombre: `centros` es el campo del formulario (lo que se
+        # eligio en la vista previa). Esta lista se llamaba igual y lo PISABA,
+        # asi que importar conductores daba 400 siempre (17-09-2026).
+        naves_org = [c for c in ((org or {}).get("centers") or []) if c]
+        if len(naves_org) == 1:
+            unico_centro = naves_org[0]
     except Exception:                                            # noqa: BLE001
         pass
     conocidos = set(c.upper() for c in (await _centros_de_la_empresa()) if c)
@@ -23727,6 +23730,10 @@ def _eleccion_centros(centros, mapa, conocidos):
     antes). Un destino que no es de la empresa se rechaza: dejaria esas filas en
     un centro que no sale en ningun selector.
     """
+    # Campo vacio = no hubo vista previa (una pestaña abierta de antes, o una
+    # integracion): se importa todo, como antes. No es un error (gotcha 76).
+    if isinstance(centros, str) and not centros.strip():
+        centros = None
     try:
         elegidos = None if centros is None else {str(x).strip().upper() for x in json.loads(centros)}
         destino = {} if not mapa else {str(k).strip().upper(): str(v).strip().upper()
@@ -24960,7 +24967,7 @@ async def import_roster_image(
     matrícula↔conductor y los cruza con la BD para rellenar el cuadrante."""
     await _require_plan_feature(user, "assignments")
     if not date:
-        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date = _dia_negocio()   # dia de Espana: en UTC, de 0 a 2 h era ayer
 
     img_bytes = await file.read()
     if not img_bytes:

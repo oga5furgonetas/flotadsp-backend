@@ -63,3 +63,18 @@ def test_la_importacion_obedece_la_eleccion():
     assert "_eleccion_centros(centros, mapa, conocidos)" in src
     assert "clave not in elegidos" in src
     assert 'p["center"] = codigo' in src
+
+
+def test_ningun_local_pisa_los_campos_del_formulario():
+    """`centros` (lo elegido en la vista previa) lo pisaba una lista local con
+    las naves de la empresa: importar conductores daba 400 SIEMPRE."""
+    import ast as _ast
+    import io as _io
+    from pathlib import Path as _Path
+    texto = _io.open(_Path(__file__).resolve().parents[1] / "server.py", encoding="utf-8-sig").read()
+    for n in _ast.parse(texto).body:
+        if isinstance(n, _ast.AsyncFunctionDef) and n.name in ("drivers_importar", "import_vehicles"):
+            params = {a.arg for a in n.args.args}
+            asignados = {t.id for nodo in _ast.walk(n) if isinstance(nodo, _ast.Assign)
+                         for t in nodo.targets if isinstance(t, _ast.Name)}
+            assert not (params & asignados & {"centros", "mapa", "columnas"}), n.name
