@@ -364,8 +364,9 @@ def test_primer_whatsapp_con_su_nombre_y_las_cuatro_preguntas():
                                      "Dani, de Winiw")
     assert m.startswith("Hola Luis, te escribimos por la oferta de "
                         "Repartidor/a de Paquetería – Santiago de Compostela.\n"
-                        "¡Hola! Soy Dani, de Winiw 😊 Antes de pasarte con la ETT")
-    assert m.count("✅") == 4 and m.endswith("¡sin problema! 🙂")
+                        "¡Hola! Soy Dani, de Winiw. Antes de pasarte con la ETT")
+    assert m.count("\n- ¿") == 4 and m.endswith("¡sin problema!")
+    assert all(ord(ch) < 0x2000 for ch in m), "sin emojis: WhatsApp no los recibe bien"
     # Otra empresa no firma con un nombre que no es el suyo.
     otra = NS["_empleo_primer_mensaje"]("", "", "")
     assert otra.startswith("Hola, te escribimos por la oferta de reparto.\nAntes de pasarte")

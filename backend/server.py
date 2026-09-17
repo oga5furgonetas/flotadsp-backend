@@ -21238,17 +21238,17 @@ def _empleo_primer_mensaje(nombre, oferta, firma: str = "") -> str:
     (texto de Dani, 17-09-2026)."""
     pila = _empleo_nombre_pila(nombre)
     saludo = ("Hola %s, te escribimos" % pila) if pila else "Hola, te escribimos"
-    presentacion = ("¡Hola! Soy %s 😊 Antes de pasarte con la ETT" % firma) if firma \
+    presentacion = ("¡Hola! Soy %s. Antes de pasarte con la ETT" % firma) if firma \
         else "Antes de pasarte con la ETT"
     return (
         "%s por la oferta de %s.\n"
         "%s te pregunto un par de cosas rápidas:\n\n"
-        "✅ ¿Tienes el carnet B en físico? (hace falta sí o sí, no vale solo el digital)\n"
-        "✅ ¿Tienes los papeles en regla? (DNI/NIE, permiso de trabajo si toca...)\n"
-        "✅ ¿Podrías empezar ya?\n"
-        "✅ ¿Vives por la zona?\n\n"
+        "- ¿Tienes el carnet B en físico? (hace falta sí o sí, no vale solo el digital)\n"
+        "- ¿Tienes los papeles en regla? (DNI/NIE, permiso de trabajo si toca...)\n"
+        "- ¿Podrías empezar ya?\n"
+        "- ¿Vives por la zona?\n\n"
         "Si todo eso lo tienes claro, dime y seguimos. "
-        "Cualquier duda me preguntas, ¡sin problema! 🙂"
+        "Cualquier duda me preguntas, ¡sin problema!"
     ) % (saludo, (str(oferta or "").strip() or "reparto"), presentacion)
 
 
