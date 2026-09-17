@@ -39,11 +39,7 @@ http.interceptors.response.use((r) => r, (e) => {
   return Promise.reject(e)
 })
 
-/* Que quede rastro. La vez anterior no se pudo saber qué había fallado porque
-   una petición que no llega al servidor no deja nada en ninguna parte: ni en
-   los logs ni en el registro de escrituras. Esto es lo único que lo cuenta. */
-
-// «1600/2500» o «1600-2500» -> «1.600 – 2.500 €». Lo que ya trae texto se deja.
+// «1600/2500» o «1600-2500» -> «1600 – 2500 €». Lo que ya trae texto se deja.
 function verSalario(v) {
   const m = /^\s*(\d{3,6})\s*[-/–]\s*(\d{3,6})\s*$/.exec(String(v || ''))
   const n = (x) => Number(x).toLocaleString('es-ES')
@@ -58,6 +54,9 @@ function sinTituloRepetido(desc, titulo) {
   return plano(primera) && plano(primera) === plano(titulo) ? resto.join('\n').replace(/^\s+/, '') : desc
 }
 
+/* Que quede rastro. La vez anterior no se pudo saber qué había fallado porque
+   una petición que no llega al servidor no deja nada en ninguna parte: ni en
+   los logs ni en el registro de escrituras. Esto es lo único que lo cuenta. */
 function avisarDelFallo(e, slug, ofertaSlug) {
   try {
     const estado = e?.response?.status
