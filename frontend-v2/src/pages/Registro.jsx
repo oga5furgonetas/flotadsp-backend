@@ -118,6 +118,12 @@ function PlanPicker({ onSelect, furgonetas }) {
                   <span style={{ color: '#64748b', fontSize: 13 }}>/mes</span>
                   {billing === 'annual' && <span style={{ marginLeft: 6, fontSize: 12, color: '#475569', textDecoration: 'line-through' }}>{mes}€</span>}
                 </div>
+                {/* El precio es por furgoneta: sin esta línea, «200 €/mes» parecía
+                    una cuota fija y chocaba con el «desde 5 €» de la portada. */}
+                <div style={{ fontSize: 11.5, color: '#64748b', marginBottom: 10 }}>
+                  {p.porVehiculo}€ por furgoneta · con {Math.max(furgonetas, p.minimo)} furgonetas
+                  {furgonetas < p.minimo && ` (mínimo ${p.minimo})`}
+                </div>
 
                 {billing === 'annual' && (
                   <div style={{ fontSize: 11, color: '#34d399', fontWeight: 700, marginBottom: 4 }}>{precioMes(p, furgonetas) * MESES_ANUAL}€/año · ahorras {save}€</div>

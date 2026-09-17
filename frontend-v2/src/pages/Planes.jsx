@@ -286,7 +286,7 @@ export default function Planes() {
               }}>
                 {p.recomendado && (
                   <div style={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)', background: p.color, borderRadius: 20, padding: '3px 14px', fontSize: 11, fontWeight: 800, whiteSpace: 'nowrap', letterSpacing: '.04em', color: '#0b0d10' }}>
-                    El de casi todos
+                    Recomendado
                   </div>
                 )}
 
