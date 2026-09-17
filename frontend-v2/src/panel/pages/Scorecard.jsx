@@ -928,8 +928,8 @@ function ComoVaLaSemana({ center }) {
         Contado sobre los paquetes de Cortex, no es una predicción. Los días con paquetes
         aún en la furgoneta no cuentan para el acumulado: todavía pueden entregarse.
         {d.umbral_dcr?.fantastic && (d.umbral_fiable
-          ? <> El umbral de Fantastic de tu nave es <span className="cifra">{d.umbral_dcr.fantastic}%</span>.</>
-          : <> El nivel se calcula con un umbral de Fantastic de <span className="cifra">{d.umbral_dcr.fantastic}%</span> que
+          ? <> El umbral de Fantastic de tu nave es <span className="cifra">{Number(d.umbral_dcr.fantastic).toLocaleString('es-ES')} %</span>.</>
+          : <> El nivel se calcula con un umbral de Fantastic de <span className="cifra">{Number(d.umbral_dcr.fantastic).toLocaleString('es-ES')} %</span> que
             no es el publicado para tu nave: sube una scorecard suya y pasa a ser exacto.</>)}
         {sinFoto > 0 && (
           <> <span className="text-dark-400">Los {sinFoto} días marcados «sin foto» son

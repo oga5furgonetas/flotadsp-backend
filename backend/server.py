@@ -42566,8 +42566,27 @@ async def cortex_calidad(desde: str = "", hasta: str = "", center: str = "",
     tasa_fallo = (tot["fallo"] / (tot["ok"] + tot["fallo"])) if (tot["ok"] + tot["fallo"]) else 0
     impacto = _cx_impacto([c for c in conductores if c["despachados"]], tasa_fallo)
 
+    # LA REFERENCIA ES EL UMBRAL DE ESTA NAVE, no un 99 escrito a mano. Amazon
+    # publica en cada scorecard el suyo (OGA5: Fantastic desde 98 %), y contra
+    # el 99 fijo la pantalla avisaba de que un objetivo de 98,5 era «mas blando
+    # que el de Amazon» siendo mas exigente. Sin scorecard de la nave, la
+    # referencia generica de siempre.
+    referencia = dict(_TARGETS_FANTASTIC)
+    referencia_de = "general"
+    try:
+        thr, meta = await _sc_thresholds(center or await _centro_por_defecto(),
+                                         _sun_to_week_num(desde))
+        fant = ((thr or {}).get("dcr") or {}).get("fantastic")
+        if fant is not None and (meta.get("dcr") or {}).get("fiable"):
+            referencia["dcr"] = float(fant)
+            referencia_de = "nave"
+    except Exception as e:                                   # noqa: BLE001
+        logger.warning(f"calidad: sin umbral de la nave: {e}")
+
     # --- objetivos y margen que queda ---
-    obj = dict(_DEFAULT_TARGETS)
+    # Sin objetivo propio, el de la nave: decir «Objetivo 99 %» y a la vez
+    # «tu umbral de Fantastic es 98,5 %» en la misma pantalla se contradice.
+    obj = dict(_DEFAULT_TARGETS, dcr=referencia["dcr"])
     doc = await db.scorecard_targets.find_one({"center": center or "GLOBAL"}, {"_id": 0}) \
         or await db.scorecard_targets.find_one({"center": "GLOBAL"}, {"_id": 0})
     if doc:
@@ -42633,23 +42652,6 @@ async def cortex_calidad(desde: str = "", hasta: str = "", center: str = "",
                     "fallos_provisionales": v["fallo"], "total": v["total"],
                     "avance_pct": round(v["ok"] / v["total"] * 100, 1) if v["total"] else 0,
                     "nota": "Jornada sin cerrar: no puntua todavia."}
-
-    # LA REFERENCIA ES EL UMBRAL DE ESTA NAVE, no un 99 escrito a mano. Amazon
-    # publica en cada scorecard el suyo (OGA5: Fantastic desde 98 %), y contra
-    # el 99 fijo la pantalla avisaba de que un objetivo de 98,5 era «mas blando
-    # que el de Amazon» siendo mas exigente. Sin scorecard de la nave, la
-    # referencia generica de siempre.
-    referencia = dict(_TARGETS_FANTASTIC)
-    referencia_de = "general"
-    try:
-        thr, meta = await _sc_thresholds(center or await _centro_por_defecto(),
-                                         _sun_to_week_num(desde))
-        fant = ((thr or {}).get("dcr") or {}).get("fantastic")
-        if fant is not None and (meta.get("dcr") or {}).get("fiable"):
-            referencia["dcr"] = float(fant)
-            referencia_de = "nave"
-    except Exception as e:                                   # noqa: BLE001
-        logger.warning(f"calidad: sin umbral de la nave: {e}")
 
     return {"desde": desde, "hasta": hasta, "center": center, "hay_datos": True,
             "dias": dias, "total": total, "conductores": conductores,
