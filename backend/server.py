@@ -50408,7 +50408,7 @@ async def ai_asistente_hablar(data: _IAAsistenteEntrada, user: dict = Depends(re
         # asistente no le come cupo al análisis de fotos, que es lo crítico
         # de verdad — y si algún día hace falta, se cambia con un secret,
         # sin tocar código.
-        modelo = os.environ.get("GEMINI_MODEL_ASISTENTE", "gemini-2.5-flash-lite")
+        modelo = os.environ.get("GEMINI_MODEL_ASISTENTE", "gemini-3.5-flash-lite")
         async with _gemini_sem:
             resp = await asyncio.wait_for(
                 loop.run_in_executor(_executor, lambda: client.models.generate_content(
