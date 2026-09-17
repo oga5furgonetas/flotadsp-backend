@@ -50411,6 +50411,16 @@ async def ai_asistente_hablar(data: _IAAsistenteEntrada, user: dict = Depends(re
         salida = json.loads(_strip_markdown_json(resp.text or "{}"))
     except Exception as e:                                        # noqa: BLE001
         logger.warning(f"[IA asistente] fallo Gemini: {e}")
+        # 429/RESOURCE_EXHAUSTED es la cuota GRATUITA de Gemini agotada por hoy
+        # (20 peticiones/dia en el plan free) — no un fallo pasajero de red, y
+        # "prueba en un minuto" es un consejo falso que hace perder el tiempo.
+        # Es ademas la MISMA clave que usa el analisis de daños de inspecciones,
+        # asi que si esto salta, esa parte tambien esta parada.
+        if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
+            raise HTTPException(
+                429, "Se ha agotado la cuota gratuita de Gemini por hoy (20 peticiones/día). "
+                     "No es un fallo de la app: hay que subir el plan de la API en Google AI Studio. "
+                     "Mientras tanto, el análisis de daños de las inspecciones tampoco funcionará.")
         raise HTTPException(502, "El asistente no ha podido responder, prueba en un minuto")
 
     respuesta = _texto_cuerpo(salida.get("respuesta"), 4000) or "No he sabido qué contestar a eso."
