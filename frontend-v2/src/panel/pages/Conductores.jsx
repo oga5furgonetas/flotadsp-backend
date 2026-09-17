@@ -946,9 +946,21 @@ function AvisoAccesos({ list, accounts, onHecho }) {
   const [hecho, setHecho] = useState(null)
   const [error, setError] = useState('')
 
+  // Plegarlo es cosa de quien mira: se recuerda en este navegador y vuelve si
+  // cambia el número (hay gente nueva sin contraseña).
+  const [plegado, setPlegado] = useState(false)
   const sinAcceso = list.filter((d) => !accounts.includes(d.id))
   const sinCorreo = sinAcceso.filter((d) => !(d.email || '').trim()).length
   const conCorreo = sinAcceso.length - sinCorreo
+
+  const claveAviso = `aviso_accesos_${conCorreo}`
+  useEffect(() => {
+    try { setPlegado(localStorage.getItem('aviso_accesos') === claveAviso) } catch { /* sin almacén */ }
+  }, [claveAviso])
+  const plegar = () => {
+    setPlegado(true)
+    try { localStorage.setItem('aviso_accesos', claveAviso) } catch { /* sin almacén */ }
+  }
 
   const dar = async () => {
     setDando(true); setError('')
@@ -1041,21 +1053,25 @@ function AvisoAccesos({ list, accounts, onHecho }) {
     )
   }
 
+  // UNA LÍNEA, y se puede plegar. Era un párrafo fijo encima de la lista todos
+  // los días; la explicación larga queda en el «?» y en la confirmación.
+  if (plegado) return null
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-dark-700 bg-dark-900/60 px-4 py-3">
-      <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-semibold text-dark-200">
-          {conCorreo} {conCorreo === 1 ? 'conductor entra' : 'conductores entran'} al portal solo con su correo
-        </p>
-        <p className="mt-0.5 text-[12px] leading-relaxed text-dark-400">
-          Funciona y es lo más cómodo, pero cualquiera que sepa su correo entraría por ellos.
-          Si prefieres que haga falta una contraseña, se la pones desde aquí.
-          {sinCorreo > 0 && ` (${sinCorreo} sin correo: a esos hay que ponerles uno en su ficha para que puedan entrar de cualquier forma.)`}
-        </p>
-      </div>
+    <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-dark-800 bg-dark-900/60 px-3 py-2 text-[12.5px]">
+      <Lock size={13} className="shrink-0 text-dark-500" />
+      <span className="min-w-0 flex-1 text-dark-300">
+        <span className="font-semibold text-dark-200">{conCorreo}</span> {conCorreo === 1 ? 'entra' : 'entran'} al portal solo con su correo
+        {sinCorreo > 0 && <> · <span className="text-amber-300">{sinCorreo} sin correo</span></>}
+        <span className="ml-1.5 cursor-help text-dark-500"
+          title={'Es lo más cómodo, pero cualquiera que sepa su correo entraría por ellos. Con contraseña, sin su clave no entran.'
+            + (sinCorreo > 0 ? ` Los ${sinCorreo} sin correo no pueden entrar de ninguna forma hasta ponérselo en su ficha.` : '')}>(?)</span>
+      </span>
       <button onClick={() => setConfirmar(true)}
-        className="flex items-center gap-1.5 rounded-lg bg-dark-800 px-3 py-2 text-[12.5px] font-semibold text-dark-200 hover:bg-dark-700">
-        <Lock size={13} /> Poner contraseña
+        className="rounded-lg bg-dark-800 px-2.5 py-1 font-semibold text-dark-200 hover:bg-dark-700">
+        Poner contraseña
+      </button>
+      <button onClick={plegar} aria-label="Ocultar este aviso" className="rounded p-1 text-dark-600 hover:text-dark-300">
+        <X size={13} />
       </button>
     </div>
   )
