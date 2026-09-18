@@ -241,7 +241,7 @@ export const getWorkshopsNearby = (lat, lng, { provider, category, maxKm = 80 } 
   api.get('/workshops/nearby', { params: { lat, lng, max_km: maxKm, ...(provider ? { provider } : {}), ...(category ? { category } : {}) } })
 
 /* ── Avisos / Alertas ── */
-export const getAlerts = () => api.get('/alerts')
+export const getAlerts = (center, kind) => api.get('/alerts', { params: { ...centerParam(center), ...(kind ? { kind } : {}) } })
 export const getItvAlerts = (center) => api.get('/alerts/itv', { params: centerParam(center) })
 /* Todo lo que vence en un mes (ITV, renting y los cambios previstos por km),
    ya filtrado por centro en el servidor. */
@@ -554,6 +554,11 @@ export const adminCreateDriverOffer = (body) => api.post('/admin/driver-offers',
 export const adminToggleDriverOffer = (id, active) => api.patch(`/admin/driver-offers/${id}`, { active })
 export const adminDeleteDriverOffer = (id) => api.delete(`/admin/driver-offers/${id}`)
 export const adminGetFounderReservations = () => api.get('/admin/founder-reservations')
+
+/* ── Campaña de bienvenida a candidatos (cupón tienda + suscripción empleo) ── */
+export const crearEnlaceTienda = () => api.post('/tienda/enlace')
+export const getSuscripcionesEmpleo = () => api.get('/empleo/suscripciones')
+export const enviarCampanaCandidatos = (body) => api.post('/admin/candidatos/campana-bienvenida', body)
 
 /* ── Usuarios (RBAC) ── */
 export const getAdmins = () => api.get('/auth/admins')

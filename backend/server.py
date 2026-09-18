@@ -613,6 +613,7 @@ class Alert(BaseModel):
     severity: str
     read: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    kind: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -1475,6 +1476,10 @@ async def _ensure_tenant_indexes(db_name: str):
     # trabajo se parte en dos (gotchas 9, 15 y 46).
     await _idx_unico(tdb[_ONB_COL], "clave")
     await _idx(tdb[_ONB_COL], "id")
+    # El webhook de Stripe hace upsert por suscripcion; sin el unico, un
+    # reintento que no encuentra documento (dedupe de eventos aparte) podria
+    # crear dos fichas de la misma suscripcion (gotcha 9).
+    await _idx_unico(tdb.empleo_suscripciones, "stripe_subscription")
     # La foto diaria: se consulta por dia y por centro.
     # Un unico parcial: dos analisis a la vez del mismo vehiculo creaban dos
     # entradas del mismo golpe (gotcha 9). Solo sobre los ABIERTOS, porque el
@@ -6029,10 +6034,11 @@ async def _send_resend_email(to: str, subject: str, html: str,
                              responder_a: str = "", copia: Optional[list] = None,
                              texto: str = "") -> bool:
     """Envía un email transaccional con Resend. Devuelve False si falla.
-    Remitente configurable con EMAIL_FROM (por defecto hola@flotadsp.com); OJO:
-    el dominio del remitente DEBE estar verificado en resend.com/domains o Resend
-    devuelve 403 y no envía nada. Registramos el error REAL para no fallar en
-    silencio (antes un dominio sin verificar parecía 'no configurado')."""
+    Remitente configurable con EMAIL_FROM (contacto@flotadsp.com en
+    producción); OJO: el dominio del remitente DEBE estar verificado en
+    resend.com/domains o Resend devuelve 403 y no envía nada. Registramos el
+    error REAL para no fallar en silencio (antes un dominio sin verificar
+    parecía 'no configurado')."""
     resend_key = os.environ.get("RESEND_API_KEY", "")
     if not (resend_key and to):
         logger.warning("email: RESEND_API_KEY o destinatario ausente — no se envía")
@@ -14690,9 +14696,12 @@ async def recheck_fraud(inspection_id: str, _=Depends(require_admin)):
 # =========================
 
 @api_router.get("/alerts")
-async def get_alerts(unread_only: bool = False, user: dict = Depends(require_admin)):
+async def get_alerts(unread_only: bool = False, center: Optional[str] = None,
+                     kind: Optional[str] = None, user: dict = Depends(require_admin)):
     query = {"read": False} if unread_only else {}
-    query.update(await _filtro_por_vehiculos(user))
+    if kind:
+        query["kind"] = kind
+    query.update(await _filtro_por_vehiculos(user, center))
     alerts = await db.alerts.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
     return alerts
 
@@ -20868,7 +20877,10 @@ async def empleo_crear_oferta(datos: dict = Body(...), user: dict = Depends(requ
     doc = serialize_doc(o.model_dump())
     doc["slug"] = await _empleo_slug_libre("%s %s" % (titulo, doc.get("ciudad") or ""))
     await db.ofertas_empleo.insert_one(dict(doc))
-    return await _empleo_con_enlace(doc)
+    salida = await _empleo_con_enlace(doc)
+    if doc.get("activa"):
+        await _avisar_suscriptores_empleo(salida)
+    return salida
 
 
 @api_router.get("/empleo/ofertas")
@@ -26407,7 +26419,7 @@ async def _combustible_registrar(vehicle_id: str, inspection_id: str, driver_id:
     desc = f"{placa} está {_combustible_texto(pct)} según {quien} al hacer la inspección."
     await db.alerts.insert_one(serialize_doc(Alert(
         vehicle_id=vehicle_id, inspection_id=inspection_id, title=titulo,
-        description=desc, severity="medium").model_dump()))
+        description=desc, severity="medium", kind="combustible").model_dump()))
     await _telegram_aviso(f"⛽ <b>{titulo}</b>\n{desc}")
     try:
         await push_center_event((v or {}).get("center") or "", f"⛽ {titulo}", desc, "/panel/vehiculos")
@@ -49765,6 +49777,12 @@ async def tienda_publica_comprar(token: str, body: dict = Body(...)):
         ("line_items[0][price_data][product_data][name]",
          "%s - talla %s" % (p.get("nombre") or "Prenda", talla)),
     ]
+    # Un cupon de una campaña (ej. bienvenida a candidatos): lo valida STRIPE,
+    # no nosotros (redeem_by dentro del propio cupon) — asi no hay que guardar
+    # ni comprobar caducidad aqui. Si ya no vale (caducado, mal escrito), se
+    # reintenta SIN el: una venta real no se pierde por un cupon viejo.
+    cupon = _texto_cuerpo(body.get("cupon"), 64)
+    intento = datos + [("discounts[0][coupon]", cupon)] if cupon else datos
 
     import httpx as _httpx
     # OJO CON `data=` Y UNA LISTA. httpx solo trata `data` como formulario
@@ -49777,13 +49795,24 @@ async def tienda_publica_comprar(token: str, body: dict = Body(...)):
     # minuto" -un problema pasajero- cuando no iba a funcionar nunca.
     # Se codifica a mano y viaja como contenido, que ademas conserva el orden y
     # las claves repetidas.
+    cupon_aplicado = False
     try:
         async with _httpx.AsyncClient(timeout=25) as cli:
             r = await cli.post(
                 _STRIPE_API + "/checkout/sessions",
-                content=_url_encode(datos).encode(),
+                content=_url_encode(intento).encode(),
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 auth=(_stripe_clave(), ""))
+        if cupon and r.status_code >= 300:
+            logger.warning("Cupon %s rechazado por Stripe, se reintenta sin el: %s", cupon, r.text[:200])
+            async with _httpx.AsyncClient(timeout=25) as cli:
+                r = await cli.post(
+                    _STRIPE_API + "/checkout/sessions",
+                    content=_url_encode(datos).encode(),
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    auth=(_stripe_clave(), ""))
+        else:
+            cupon_aplicado = bool(cupon)
     except Exception as e:
         await _tienda_devolver(p["id"], uds)
         logger.error("Stripe checkout publico: %s", e)
@@ -49794,12 +49823,21 @@ async def tienda_publica_comprar(token: str, body: dict = Body(...)):
         raise HTTPException(502, "No se ha podido abrir el pago. Inténtalo en un minuto.")
     ses = r.json()
     doc["stripe_session"] = ses.get("id")
+    if cupon:
+        doc["cupon"] = cupon
+        doc["cupon_aplicado"] = cupon_aplicado
+        if cupon_aplicado:
+            # El importe del descuento SE LEE DE STRIPE, nunca del cuerpo: si
+            # viniera del cliente, bastaria con mandar un numero enorme para
+            # que la comprobacion del webhook (gotcha 70 con otra cara) dejara
+            # pasar cualquier cobro de menos como "cuadrado".
+            doc["descuento_cent"] = await _stripe_cupon_importe(cupon)
     try:
         await db[_TCOL_PEDIDOS].insert_one(dict(doc))   # copia (gotcha 42)
     except Exception:
         await _tienda_devolver(p["id"], uds)
         raise
-    return {"url": ses.get("url"), "ref": doc["ref"]}
+    return {"url": ses.get("url"), "ref": doc["ref"], "cupon_aplicado": cupon_aplicado}
 
 
 # -------------------------------------------------------------------------
@@ -50026,15 +50064,13 @@ async def tienda_stripe_webhook(request: Request):
     except DuplicateKeyError:
         return {"ok": True, "dedup": True}
 
-    if ev.get("type") != "checkout.session.completed":
+    if ev.get("type") not in ("checkout.session.completed", "customer.subscription.deleted",
+                              "customer.subscription.updated"):
         return {"ok": True, "ignorado": ev.get("type")}
 
-    ses = (ev.get("data") or {}).get("object") or {}
-    meta = ses.get("metadata") or {}
-    pedido_id = meta.get("pedido_id") or ses.get("client_reference_id")
+    obj = (ev.get("data") or {}).get("object") or {}
+    meta = obj.get("metadata") or {}
     db_name = meta.get("db_name") or ""
-    if not pedido_id:
-        return {"ok": True, "sin_pedido": True}
 
     # LA EMPRESA, A MANO Y COMPROBADA. El db_name lo pusimos nosotros y vuelve
     # firmado, pero se contrasta igual contra las organizaciones: un nombre de
@@ -50047,15 +50083,43 @@ async def tienda_stripe_webhook(request: Request):
             raise HTTPException(400, "Empresa desconocida")
     set_current_org_db(db_name or _DEFAULT_DB_NAME)
 
+    # La suscripcion de avisos de empleo (2,99 EUR/mes) NO es un pedido de la
+    # tienda: se sigue por su propio id de suscripcion de Stripe, no por
+    # pedido_id. `deleted`/`updated` llegan con el objeto SUSCRIPCION
+    # directamente (no una sesion de checkout).
+    if ev["type"] in ("customer.subscription.deleted", "customer.subscription.updated"):
+        activa = obj.get("status") in ("active", "trialing", "past_due")
+        await db.empleo_suscripciones.update_one(
+            {"stripe_subscription": obj.get("id")},
+            {"$set": {"activa": activa, "estado_stripe": obj.get("status"),
+                      "actualizado_en": datetime.now(timezone.utc).isoformat()}})
+        return {"ok": True, "suscripcion": obj.get("id"), "activa": activa}
+
+    if meta.get("tipo") == "suscripcion_empleo":
+        await db.empleo_suscripciones.update_one(
+            {"stripe_subscription": obj.get("subscription")},
+            {"$set": {"email": meta.get("email") or obj.get("customer_email") or "",
+                      "stripe_customer": obj.get("customer"),
+                      "stripe_subscription": obj.get("subscription"), "activa": True,
+                      "creado_en": datetime.now(timezone.utc).isoformat()}},
+            upsert=True)
+        return {"ok": True, "suscripcion_empleo": obj.get("subscription")}
+
+    # A partir de aqui, un pedido normal de la tienda.
+    ses = obj
+    pedido_id = meta.get("pedido_id") or ses.get("client_reference_id")
+    if not pedido_id:
+        return {"ok": True, "sin_pedido": True}
+
     # Y QUE EL IMPORTE CUADRE. Stripe dice lo que ha cobrado; si no coincide
     # con lo que vale el pedido, no se marca pagado y se deja constancia: es
     # mejor una revision a mano que dar por cobrado un importe que no es.
     ped = await db[_TCOL_PEDIDOS].find_one({"id": pedido_id},
-                                           {"_id": 0, "total": 1, "estado": 1})
+                                           {"_id": 0, "total": 1, "estado": 1, "descuento_cent": 1})
     if not ped:
         return {"ok": True, "pedido_no_encontrado": True}
     cobrado = int(ses.get("amount_total") or 0)
-    esperado = int(round(float(ped.get("total") or 0) * 100))
+    esperado = int(round(float(ped.get("total") or 0) * 100)) - int(ped.get("descuento_cent") or 0)
     if cobrado != esperado:
         logger.error("Stripe cobro %s y el pedido %s vale %s", cobrado, pedido_id, esperado)
         await db[_TCOL_PEDIDOS].update_one(
@@ -50071,6 +50135,269 @@ async def tienda_stripe_webhook(request: Request):
                   "pagado_at": datetime.now(timezone.utc).isoformat(),
                   "stripe_pago": ses.get("payment_intent")}})
     return {"ok": True, "pedido": pedido_id}
+
+
+# -------------------------------------------------------------------------
+# CAMPAÑA DE BIENVENIDA A CANDIDATOS: cupon de tienda + suscripcion de empleo
+# -------------------------------------------------------------------------
+"""Pedido explícitamente el 18-09-2026: escribir a los CV que tenemos con un
+cupón de 10 EUR de la tienda (caduca a las 4 h) y una suscripción de pago
+(2,99 EUR/mes) para avisos prioritarios de empleo.
+
+ESTOS CORREOS SON DE UNA PERSONA QUE MANDÓ SU CV PARA UN PUESTO DE
+CONDUCTOR, no para recibir publicidad de una tienda de ropa ni una
+suscripción de pago — es un dato dado con OTRO fin, y usarlo así tiene
+exposición real de RGPD/LOPD (no solo un gusto de estilo). Por eso el envío
+real (`modo="real"`) exige escribir `confirmar: "ENVIAR"` a mano, igual que
+`/cortex/reset` exige escribir "BORRAR" (gotcha 45): la decisión de mandarlo
+de verdad a gente real la toma una persona mirando la pantalla, no un script.
+`modo="prueba"` manda solo al correo que se le pase, para poder verlo
+funcionando sin tocar a nadie más.
+"""
+
+
+async def _stripe_crear_cupon(importe_eur: float, horas: int) -> Optional[dict]:
+    """Cupon Stripe de importe fijo con caducidad REAL (`redeem_by`): la
+    valida Stripe al cobrar, no nosotros — así no hay que guardar ni comprobar
+    caducidad en ningún sitio nuestro, y no hay forma de que quede viva de más
+    por un fallo nuestro."""
+    if not _stripe_encendido():
+        return None
+    expira = datetime.now(timezone.utc) + timedelta(hours=horas)
+    datos = [
+        ("amount_off", str(int(round(importe_eur * 100)))),
+        ("currency", "eur"),
+        ("duration", "once"),
+        ("redeem_by", str(int(expira.timestamp()))),
+        ("name", f"Bienvenida {importe_eur:.0f}€"),
+    ]
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=25) as cli:
+            r = await cli.post(_STRIPE_API + "/coupons", content=_url_encode(datos).encode(),
+                               headers={"Content-Type": "application/x-www-form-urlencoded"},
+                               auth=(_stripe_clave(), ""))
+    except Exception as e:                                    # noqa: BLE001
+        logger.error("Stripe crear cupon: %s", e)
+        return None
+    if r.status_code >= 300:
+        logger.error("Stripe crear cupon %s: %s", r.status_code, r.text[:300])
+        return None
+    c = r.json()
+    return {"id": c.get("id"), "expira_en": expira.isoformat()}
+
+
+async def _stripe_cupon_importe(cupon_id: str) -> int:
+    """Cuanto descuenta un cupon YA CREADO, en centimos, leido de Stripe."""
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=15) as cli:
+            r = await cli.get(f"{_STRIPE_API}/coupons/{_url_quote(cupon_id, safe='')}",
+                              auth=(_stripe_clave(), ""))
+        if r.status_code < 300:
+            return int(r.json().get("amount_off") or 0)
+    except Exception as e:                                    # noqa: BLE001
+        logger.warning("Stripe leer cupon %s: %s", cupon_id, e)
+    return 0
+
+
+@api_router.post("/tienda/enlace")
+async def tienda_crear_enlace(user: dict = Depends(require_admin)):
+    """UN enlace público y fijo para la tienda de esta empresa, para siempre
+    (mismo patrón que `enlace_taller`). Se reutiliza si ya existe uno vivo."""
+    dbn = _current_db_name.get()
+    vivo = await global_db.taller_enlaces.find_one(
+        {"tipo": "tienda", "db_name": dbn, "revocado": {"$ne": True}}, {"_id": 0, "token": 1})
+    token = vivo["token"] if vivo else secrets.token_urlsafe(32)
+    if not vivo:
+        await global_db.taller_enlaces.insert_one({
+            "token": token, "tipo": "tienda", "db_name": dbn,
+            "creado_por": user.get("name") or user.get("username") or "oficina",
+            "creado_en": datetime.now(timezone.utc).isoformat(), "revocado": False,
+        })
+    base = (PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
+    return {"url": f"{base}/t/{token}", "token": token}
+
+
+@api_router.post("/empleo/suscripcion/checkout")
+async def empleo_suscripcion_checkout(body: dict = Body(...), request: Request = None):
+    """Suscripción PÚBLICA de 2,99 EUR/mes a avisos prioritarios de empleo.
+    Sin sesión — la empresa se fija por `slug`, igual que el resto de
+    endpoints públicos del portal (gotcha 26); sin slug cae en la principal,
+    que es la única que usa esto hoy."""
+    _rl_public_action("empsub:%s" % _rl_key_ip(request), max_count=8, window_s=3600,
+                      detail="Demasiados intentos. Inténtalo en un rato.")
+    email = _texto_cuerpo(body.get("email"), 120).lower()
+    if not email or not _EMAIL_RE.match(email):
+        raise HTTPException(400, "Pon un correo válido")
+    await _set_tenant_by_slug(_texto_cuerpo(body.get("slug"), 60))
+    if not _stripe_encendido():
+        raise HTTPException(503, "El pago con tarjeta todavía no está activo")
+
+    base = (PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
+    dbn = _current_db_name.get()
+    datos = [
+        ("mode", "subscription"),
+        ("success_url", f"{base}/empleo/prioridad?ok=1"),
+        ("cancel_url", f"{base}/empleo/prioridad?ok=0"),
+        ("customer_email", email),
+        ("metadata[tipo]", "suscripcion_empleo"),
+        ("metadata[db_name]", dbn),
+        ("metadata[email]", email),
+        # Repetido en la SUSCRIPCION (no solo en la sesion de checkout): los
+        # avisos de baja/impago llegan como evento de suscripcion, que no
+        # lleva los metadatos de la sesion que la creo.
+        ("subscription_data[metadata][tipo]", "suscripcion_empleo"),
+        ("subscription_data[metadata][db_name]", dbn),
+        ("subscription_data[metadata][email]", email),
+        ("line_items[0][quantity]", "1"),
+        ("line_items[0][price_data][currency]", "eur"),
+        ("line_items[0][price_data][unit_amount]", "299"),
+        ("line_items[0][price_data][recurring][interval]", "month"),
+        ("line_items[0][price_data][product_data][name]",
+         "Notificaciones prioritarias de empleo FlotaDSP"),
+    ]
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=25) as cli:
+            r = await cli.post(_STRIPE_API + "/checkout/sessions",
+                               content=_url_encode(datos).encode(),
+                               headers={"Content-Type": "application/x-www-form-urlencoded"},
+                               auth=(_stripe_clave(), ""))
+    except Exception as e:                                    # noqa: BLE001
+        logger.error("Stripe suscripcion empleo: %s", e)
+        raise HTTPException(502, "No se ha podido abrir el pago. Inténtalo en un minuto.")
+    if r.status_code >= 300:
+        logger.error("Stripe suscripcion empleo %s: %s", r.status_code, r.text[:300])
+        raise HTTPException(502, "No se ha podido abrir el pago. Inténtalo en un minuto.")
+    return {"url": r.json().get("url")}
+
+
+@api_router.get("/empleo/suscripciones")
+async def empleo_suscripciones_lista(user: dict = Depends(require_superadmin)):
+    """Quién está suscrito a los avisos prioritarios, para verlo en el panel."""
+    activas = await db.empleo_suscripciones.count_documents({"activa": True})
+    total = await db.empleo_suscripciones.count_documents({})
+    filas = await db.empleo_suscripciones.find(
+        {}, {"_id": 0, "email": 1, "activa": 1, "creado_en": 1, "estado_stripe": 1}
+    ).sort("creado_en", -1).to_list(500)
+    return {"activas": activas, "total": total, "suscripciones": filas}
+
+
+async def _avisar_suscriptores_empleo(oferta: dict) -> None:
+    """Escribe a quien paga por avisos prioritarios en cuanto se publica una
+    oferta — es lo que hace que la suscripción sea un producto real y no solo
+    un cobro. No lleva delante embargo de horas (la oferta ya es pública para
+    todos en el momento de crearla): es un aviso inmediato por correo sin
+    tener que estar mirando la web, no una ventana de exclusividad cronometrada.
+    No propaga errores: un fallo de correo no puede tumbar la creación de la
+    oferta, que es lo importante de verdad."""
+    try:
+        subs = await db.empleo_suscripciones.find(
+            {"activa": True}, {"_id": 0, "email": 1}).to_list(2000)
+        if not subs:
+            return
+        asunto = f"Prioridad: nueva oferta — {oferta.get('titulo')}"
+        html = f"""
+        <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
+          <p>Como eres suscriptor prioritario, te avisamos en cuanto la hemos publicado:</p>
+          <h2 style="margin:12px 0">{oferta.get('titulo')}</h2>
+          <p>{(oferta.get('ciudad') or '')}{' · ' + oferta.get('jornada') if oferta.get('jornada') else ''}</p>
+          <p style="text-align:center;margin:24px 0">
+            <a href="{oferta.get('url')}" style="background:#0ea5e9;color:#fff;padding:12px 24px;
+               border-radius:8px;text-decoration:none;font-weight:bold">Ver la oferta y apuntarme</a>
+          </p>
+        </div>"""
+        for s in subs:
+            if s.get("email"):
+                await _send_resend_email(s["email"], asunto, html)  # EMAIL_FROM ya es contacto@flotadsp.com
+    except Exception as e:                                    # noqa: BLE001
+        logger.warning("Aviso a suscriptores de empleo: %s", e)
+
+
+def _candidatos_campana_html(nombre: str, url_tienda: str, url_suscripcion: str, expira_en: str) -> str:
+    saludo = f"Hola {nombre}," if nombre else "Hola,"
+    try:
+        hora_local = datetime.fromisoformat(expira_en).astimezone(
+            timezone(timedelta(hours=2))).strftime("%H:%M")
+    except Exception:                                          # noqa: BLE001
+        hora_local = ""
+    return f"""
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
+      <p>{saludo}</p>
+      <p>Ya te postulaste con nosotros hace un tiempo — gracias por eso. Como
+      agradecimiento, te regalamos <strong>10&nbsp;EUR de descuento</strong> en
+      nuestra tienda, pero solo durante las próximas <strong>4 horas</strong>
+      {f'(hasta las {hora_local})' if hora_local else ''}. Pasado ese plazo el
+      cupón se desactiva solo.</p>
+      <p style="text-align:center;margin:24px 0">
+        <a href="{url_tienda}" style="background:#0ea5e9;color:#fff;padding:12px 24px;
+           border-radius:8px;text-decoration:none;font-weight:bold">Usar mi descuento ahora</a>
+      </p>
+      <hr style="border:none;border-top:1px solid #e5e5e5;margin:24px 0">
+      <p><strong>¿Quieres currar cuanto antes?</strong> Hazte Prioritario: por
+      2,99&nbsp;EUR/mes te escribimos en el momento en que sacamos un puesto
+      nuevo, sin que tengas que estar mirando la web cada día. El primero en
+      enterarse suele ser el primero en conseguirlo.</p>
+      <p style="text-align:center;margin:24px 0">
+        <a href="{url_suscripcion}" style="background:#111827;color:#fff;padding:12px 24px;
+           border-radius:8px;text-decoration:none;font-weight:bold">Ser Prioritario (2,99 EUR/mes)</a>
+      </p>
+      <p style="color:#888;font-size:12px">FlotaDSP — has recibido esto porque dejaste
+      tu candidatura con nosotros. Si no quieres más correos como este, responde
+      a este mensaje y te quitamos de la lista.</p>
+    </div>"""
+
+
+@api_router.post("/admin/candidatos/campana-bienvenida")
+async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Depends(require_superadmin)):
+    modo = _texto_cuerpo(body.get("modo"), 10) or "prueba"
+    if modo not in ("prueba", "real"):
+        raise HTTPException(400, "modo debe ser 'prueba' o 'real'")
+    if modo == "real" and _texto_cuerpo(body.get("confirmar"), 20) != "ENVIAR":
+        raise HTTPException(400, "Escribe confirmar: \"ENVIAR\" para mandarlo a todos de verdad")
+
+    enlace_tienda = await _tienda_enlace_publico()
+    if not enlace_tienda:
+        raise HTTPException(
+            400, "Abre antes la tienda pública (Negocio > Tienda) y crea su enlace con /tienda/enlace")
+
+    cupon = await _stripe_crear_cupon(10.0, 4)
+    if not cupon:
+        raise HTTPException(503, "El cobro con tarjeta no está activo todavía (falta la clave de Stripe)")
+
+    url_tienda = f"{enlace_tienda}?cupon={cupon['id']}"
+    url_suscripcion = f"{(PUBLIC_BASE_URL or 'https://flotadsp.com').rstrip('/')}/empleo/prioridad"
+
+    if modo == "prueba":
+        email_prueba = _texto_cuerpo(body.get("email_prueba"), 120).lower()
+        if not email_prueba or not _EMAIL_RE.match(email_prueba):
+            raise HTTPException(400, "Pon un correo válido en email_prueba para la prueba")
+        destinatarios = [{"email": email_prueba, "nombre": user.get("name") or "Dani"}]
+    else:
+        destinatarios = await db.candidatos.find(
+            {"email": {"$exists": True, "$ne": ""}}, {"_id": 0, "email": 1, "nombre": 1}).to_list(2000)
+
+    enviados, fallidos = 0, 0
+    for d in destinatarios:
+        html = _candidatos_campana_html(d.get("nombre") or "", url_tienda, url_suscripcion, cupon["expira_en"])
+        ok = await _send_resend_email(d["email"], "Tu candidatura + un regalo y la opción de ser Prioritario", html,
+                                      responder_a=os.environ.get("EMAIL_FROM_RESPUESTA", ""))
+        if ok:
+            enviados += 1
+        else:
+            fallidos += 1
+
+    if modo == "real":
+        await db.candidatos_campanas.insert_one({
+            "id": str(uuid.uuid4()), "tipo": "bienvenida_cv", "cupon": cupon["id"],
+            "expira_en": cupon["expira_en"], "enviados": enviados, "fallidos": fallidos,
+            "destinatarios": len(destinatarios),
+            "enviado_en": datetime.now(timezone.utc).isoformat(),
+            "enviado_por": user.get("name") or user.get("username") or "",
+        })
+    return {"ok": True, "modo": modo, "enviados": enviados, "fallidos": fallidos,
+            "destinatarios": len(destinatarios), "cupon": cupon["id"], "expira_en": cupon["expira_en"]}
 
 
 # -------------------------------------------------------------------------
@@ -50660,8 +50987,24 @@ async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict
     if tipo == "dnr":
         d = await dnr_investigaciones(center=center, _=user)
         filas = d.get("investigaciones") or []
-        lineas = [f"{len(filas)} investigaciones DNR abiertas en {center} "
-                  f"({d.get('vivas', 0)} a tiempo, {d.get('caducadas', 0)} caducadas)."]
+        lineas = [f"{len(filas)} investigaciones DNR ABIERTAS AHORA en {center} "
+                  f"({d.get('vivas', 0)} a tiempo, {d.get('caducadas', 0)} caducadas). "
+                  f"Esta es la lista REAL y accionable — para \"quién tiene más DNR\" usa el "
+                  f"ranking de abajo (si lo hay), no el campo DNR de la consulta rendimiento, "
+                  f"que es otra cosa (30 días acumulados, aunque ya estén cerrados)."]
+        # Ranking por conductor de las abiertas AHORA: mucho mas util que el
+        # historico de 30 dias para "quien tiene mas DNR" — es lo que hay que
+        # contestar de verdad, no un acumulado que incluye casos ya resueltos.
+        por_conductor: dict = {}
+        for f in filas:
+            nom = (f.get("cortex") or {}).get("conductor")
+            if nom:
+                por_conductor[nom] = por_conductor.get(nom, 0) + 1
+        if por_conductor:
+            ranking = sorted(por_conductor.items(), key=lambda kv: (-kv[1], kv[0]))
+            lineas.append("Abiertas ahora por conductor (solo las que se sabe quién conducía):")
+            for nom, n in ranking[:15]:
+                lineas.append(f"- {nom}: {n} abierta{'s' if n != 1 else ''}")
         for f in filas[:40]:
             ctx = f.get("cortex") or {}
             lineas.append(f"- {f.get('tracking_id')}: vence {f.get('vence') or 'sin plazo'}"
@@ -50886,7 +51229,11 @@ REGLAS QUE NO PUEDES SALTARTE:
       filtro trae a TODOS con su nombre y su aviso — úsalo para "quiénes
       se pasan/se acercan", nunca digas que no tienes nombres sin haberlo
       pedido antes.
-    · dnr: sin filtros — siempre da las abiertas del centro.
+    · dnr: sin filtros — siempre da las abiertas del centro, y trae también
+      un ranking por conductor de esas mismas abiertas (cuando se sabe quién
+      conducía). USA ESTE ranking para "¿quién tiene más DNR?" — es la
+      respuesta por defecto salvo que pidan explícitamente "el histórico" o
+      "de los últimos 30 días".
     · inspecciones: "matricula" para las de una furgoneta; sin ella, las
       últimas de todo el centro.
     · rendimiento: sin filtros — ranking real por DCR de los últimos 30

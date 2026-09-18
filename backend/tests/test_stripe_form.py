@@ -92,13 +92,16 @@ def test_dos_line_items_sobreviven_a_la_codificacion():
 def test_el_codigo_real_no_manda_el_formulario_en_data():
     """El trinquete: se lee `server.py`, no una copia (gotcha 40).
 
-    Las dos llamadas a Stripe -la del conductor y la del enlace publico- tienen
+    TODAS las llamadas a crear una sesion de Stripe -conductor, enlace
+    publico (con y sin reintento sin cupon) y suscripcion de empleo- tienen
     que ir por `content=`. Volver a `data=datos` las rompe otra vez.
+    El numero minimo sube segun se añaden botones de pagar nuevos: lo que
+    importa es que NINGUNO use `data=`, no una cuenta fija.
     """
     s = io.open(SERVER, encoding="utf-8-sig").read()
     llamadas = re.findall(
         r"cli\.post\(\s*\n?\s*_STRIPE_API \+ \"/checkout/sessions\",(.{0,260})", s, re.S)
-    assert len(llamadas) == 2, "esperaba las dos llamadas a Stripe, hay %d" % len(llamadas)
+    assert len(llamadas) >= 4, "esperaba al menos 4 llamadas a Stripe, hay %d" % len(llamadas)
     for cuerpo in llamadas:
         assert "content=_url_encode(" in cuerpo, "esta llamada volvio a data=: %r" % cuerpo[:90]
         assert re.search(r"\bdata=", cuerpo) is None, "hay un data= en la llamada a Stripe"

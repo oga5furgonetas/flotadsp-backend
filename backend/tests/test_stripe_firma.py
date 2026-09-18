@@ -134,7 +134,8 @@ def test_el_importe_se_comprueba_contra_el_pedido():
     """Que Stripe diga que ha cobrado no basta: tiene que cuadrar con el pedido."""
     fuente = io.open(SERVER, encoding="utf-8-sig").read()
     i = fuente.find("async def tienda_stripe_webhook")
-    trozo = fuente[i:i + 4000]
+    j = fuente.find("\nasync def ", i + 10)   # hasta la SIGUIENTE funcion, no un tamaño fijo
+    trozo = fuente[i:j if j > i else i + 8000]
     assert "amount_total" in trozo and "descuadre" in trozo, (
         "el webhook marca pagado sin comprobar el importe")
 

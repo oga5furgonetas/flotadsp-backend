@@ -271,6 +271,8 @@ const PanelApoyo = lazy(() => import('./panel/pages/ApoyoRuta'))
 const PanelEmpleo = lazy(() => import('./panel/pages/Empleo'))
 const EmpleoPublica = lazy(() => import('./pages/Empleo'))
 const Ofertas = lazy(() => import('./pages/Ofertas'))
+const EmpleoPrioridad = lazy(() => import('./pages/EmpleoPrioridad'))
+const TiendaPublica = lazy(() => import('./pages/TiendaPublica'))
 const PanelDSC = lazy(() => import('./panel/pages/DSC'))
 const PanelRendimiento = lazy(() => import('./panel/pages/Rendimiento'))
 const PanelCorreo = lazy(() => import('./panel/pages/Correo'))
@@ -343,6 +345,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
               <Route path="/dnr/t/:token" element={<PortalDnr />} />
               <Route path="/empleo" element={<Ofertas />} />
               <Route path="/empleo/:slug/:oferta" element={<EmpleoPublica />} />
+              <Route path="/empleo/prioridad" element={<EmpleoPrioridad />} />
+              <Route path="/t/:token" element={<TiendaPublica />} />
               <Route path="/taller/:token" element={<PortalTaller />} />
               <Route path="/conductor" element={<DriverPortal />} />
               <Route path="/conductor/:slug" element={<DriverPortal />} />
