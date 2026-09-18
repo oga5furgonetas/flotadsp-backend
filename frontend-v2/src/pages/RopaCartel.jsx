@@ -1,4 +1,5 @@
 import { Shirt, ChevronRight } from 'lucide-react'
+import { medirAccion } from '../lib/analitica'
 
 /* EL CARTEL DE LA ROPA — el mismo en las dos páginas públicas.
    ══════════════════════════════════════════════════════════════════════════
@@ -26,6 +27,7 @@ export default function RopaCartel({ url, desde, prendas = 0, titulo = 'La ropa 
   return (
     <a
       href={url}
+      onClick={() => medirAccion('tienda_cartel_clic')}
       target="_blank"
       rel="noopener noreferrer"
       className="group block overflow-hidden rounded-2xl bg-slate-900 text-left ring-1 ring-slate-900 transition hover:bg-slate-800"

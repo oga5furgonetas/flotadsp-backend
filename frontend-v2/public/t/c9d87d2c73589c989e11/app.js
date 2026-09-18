@@ -5,6 +5,36 @@
   var sel = {};                // id -> {talla, cant}
   var eur = function (n) { return n.toFixed(2).replace(".", ",") + " €"; };
 
+  /* Cuanta gente entra y hasta donde llega. Anonimo: una clave que muere al
+     cerrar la pestana, sin cookies ni IP. El token de la tienda NO viaja: la
+     ruta va como patron, porque identificaria a quien abre este enlace. */
+  var SID = (function () {
+    try {
+      var v = sessionStorage.getItem("fd_an_sid");
+      if (v) return v;
+    } catch (e) {}
+    var letras = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", v = "";
+    for (var i = 0; i < 16; i++) v += letras[Math.floor(Math.random() * letras.length)];
+    try { sessionStorage.setItem("fd_an_sid", v); } catch (e2) {}
+    return v;
+  })();
+  function medir(cuerpo) {
+    try {
+      var base = { sid: SID, ruta: "/t/:token",
+                   disp: window.innerWidth < 768 ? "movil" : (window.innerWidth < 1200 ? "tablet" : "escritorio") };
+      for (var k in cuerpo) base[k] = cuerpo[k];
+      try {
+        var ref = document.referrer && new URL(document.referrer).hostname;
+        if (ref && ref !== location.hostname) base.ref = ref.toLowerCase();
+      } catch (e3) {}
+      fetch(API + "/analitica/evento", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(base), keepalive: true
+      }).catch(function () {});
+    } catch (e4) {}
+  }
+  medir({ tipo: "vista" });
+
   /* EL PRECIO DE UNA TALLA LO DECIDE EL SERVIDOR. Que talla es grande y
      cuanto suma vienen en la respuesta: aqui solo se aplica. Con una lista
      propia, el dia que cambie se veria un precio y se cobraria otro. */
@@ -70,6 +100,7 @@
   var abierta = false;
 
   function abrirFicha(id) {
+    medir({ tipo: "accion", nombre: "tienda_ficha" });
     document.querySelectorAll(".ficha").forEach(function (f) { f.hidden = true; });
     document.getElementById("f-" + id).hidden = false;
     pintaFicha(id);
@@ -108,6 +139,7 @@
   function comprar(id, f) {
     var d = datos[id], s = sel[id];
     var b = f.querySelector("[data-comprar]"), av = f.querySelector("[data-aviso]");
+    medir({ tipo: "accion", nombre: "tienda_comprar" });
     b.disabled = true; b.textContent = "Abriendo el pago…";
     av.className = "aviso"; av.textContent = "";
     fetch(API + "/tienda/publico/" + TOKEN + "/comprar", {
@@ -116,7 +148,7 @@
     }).then(function (r) {
       return r.json().then(function (j) { return { ok: r.ok, j: j }; });
     }).then(function (x) {
-      if (x.ok && x.j.url) { window.location.href = x.j.url; return; }
+      if (x.ok && x.j.url) { medir({ tipo: "accion", nombre: "tienda_pago" }); window.location.href = x.j.url; return; }
       av.className = "aviso mal";
       av.textContent = (x.j && x.j.detail) || "No se ha podido abrir el pago.";
       pintaFicha(id);

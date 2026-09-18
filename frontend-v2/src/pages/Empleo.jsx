@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
 import { enviarCandidatura } from '../lib/enviarCandidatura'
+import { medirAccion } from '../lib/analitica'
 import RopaCartel from './RopaCartel'
 import { normalizarDetalle } from '../services/api'
 
@@ -174,6 +175,7 @@ export default function Empleo() {
       await enviarCandidatura(http,
         `/empleo/publica/${encodeURIComponent(slug)}/${encodeURIComponent(ofertaSlug)}`, fd,
         { alReintentar: (n, total) => setReintento(`Se ha cortado el envío. Reintentando… (${n} de ${total})`) })
+      medirAccion('candidatura_enviada')
       setHecho(true); setError(''); setReintento('')
     } catch (err) {
       /* DOS FALLOS DISTINTOS Y DOS MENSAJES DISTINTOS. Si el servidor contesta,

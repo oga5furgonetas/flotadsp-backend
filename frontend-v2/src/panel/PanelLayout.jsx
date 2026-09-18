@@ -469,7 +469,7 @@ export default function PanelLayout() {
     if (k === 'vencimientos') return EXPIRY_KEYS.some((ek) => canSee(ek))
     if (k === 'ordenes') return canSee('talleres')
     if (k === 'informes') return canSee('diarios') || canSee('whc')
-    if (k === 'admin' || k === 'bandeja') return sa
+    if (k === 'admin' || k === 'bandeja' || k === 'analitica') return sa
     if (k === 'tienda' && !esPlataforma()) return false
     if (k === 'usuarios') return sa || cm
     return canSee(k)
@@ -491,7 +491,9 @@ export default function PanelLayout() {
     ...PALETTE_EXTRA.filter((p) => canSee(p.key) && moduloOk(p.key)).map((p) => ({ ...p, label: t(p.labelKey) })),
   ]
   const palettePages = showAdmin
-    ? [...paletteBase, { to: '/panel/admin', label: t('nav.business'), icon: Shield }, { to: '/panel/bandeja', label: t('nav.inbox'), icon: Inbox }]
+    ? [...paletteBase, { to: '/panel/admin', label: t('nav.business'), icon: Shield },
+       { to: '/panel/analitica', label: 'Cómo va el negocio', icon: Activity },
+       { to: '/panel/bandeja', label: t('nav.inbox'), icon: Inbox }]
     : paletteBase
 
   const impersonating = !!localStorage.getItem('flotadsp_token_super')

@@ -3,6 +3,7 @@ import fiabilidad
 import piezas
 import seguimiento
 import whatsapp
+import analitica
 from ai_learning import (
     get_few_shot_examples, build_few_shot_prompt_parts_multimodal,
     get_pattern_lessons, get_part_lesson, save_feedback as _save_ai_feedback,
@@ -242,7 +243,8 @@ async def _registro_escrituras(request: Request, call_next):
     inicio = time.time()
     response = await call_next(request)
     if request.method in ("POST", "PUT", "PATCH", "DELETE") \
-            and not request.url.path.startswith("/api/cortex/ingest"):
+            and not request.url.path.startswith("/api/cortex/ingest") \
+            and not request.url.path.startswith("/api/analitica/"):
         try:
             quien: dict = {}
             auth = request.headers.get("authorization") or ""
@@ -759,7 +761,8 @@ def create_token(user_id: str, role: str, name: str,
                  org_id: Optional[str] = None, db_name: Optional[str] = None,
                  account_type: Optional[str] = None, centers: Optional[list] = None,
                  super_admin: bool = False, permissions: Optional[list] = None,
-                 demo: bool = False, allowed_centers: Optional[list] = None) -> str:
+                 demo: bool = False, allowed_centers: Optional[list] = None,
+                 suplantado: bool = False) -> str:
     # El conductor entra en su portal una vez cada muchos dias: pedir dias libres
     # o mirar sus turnos no es algo diario. Con las 72 h del panel, el token le
     # caducaba entre visita y visita y la pantalla le soltaba
@@ -781,6 +784,10 @@ def create_token(user_id: str, role: str, name: str,
         payload["sa"] = True
     if demo:
         payload["demo"] = True  # solo lectura: get_current_user bloquea mutaciones
+    if suplantado:
+        # El super-admin mirando la cuenta de un cliente. Solo lo lee la
+        # analitica, para no contar sus paseos por el panel como uso del cliente.
+        payload["imp"] = True
     # Permisos por usuario (lista de módulos permitidos). None = sin restricción.
     if permissions is not None:
         payload["permissions"] = permissions
@@ -1631,6 +1638,9 @@ async def create_indexes():
         await _idx(global_db.audit_requests, "at", expireAfterSeconds=30 * 24 * 3600)
         await _idx(global_db.audit_requests, [("path", 1), ("at", -1)])
         await _idx(global_db.audit_requests, [("sub", 1), ("at", -1)])
+        # Analitica propia y anonima: 180 dias y fuera.
+        await _idx(global_db.analitica_eventos, "ts", expireAfterSeconds=180 * 24 * 3600)
+        await _idx(global_db.analitica_eventos, [("sid", 1), ("ts", 1)])
         # Crear índices en BDs de DSPs ya existentes (por si arrancamos con DSPs sin índices)
         orgs = await global_db.organizations.find(
             {"account_type": "dsp", "db_name": {"$exists": True}}, {"db_name": 1}
@@ -5889,7 +5899,8 @@ async def admin_impersonate(data: dict = Body(...), user: dict = Depends(require
         raise HTTPException(status_code=404, detail="DSP no encontrado")
     token = create_token(user["sub"], "admin", org.get("name", ""),
                          org_id=org["id"], db_name=_tenant_db_name(org),
-                         account_type="dsp", centers=org.get("centers"))
+                         account_type="dsp", centers=org.get("centers"),
+                         suplantado=True)
     logger.info("Super-admin entra como DSP %s", org.get("slug"))
     await _audit(user, "impersonate", {"org_id": org["id"], "org": org.get("slug")})
     return {"token": token, "slug": org.get("slug"), "name": org.get("name"),
@@ -46836,6 +46847,88 @@ async def admin_actividad(path: str = "", sub: str = "", horas: int = 24, limite
         if isinstance(f.get("at"), datetime):
             f["at"] = f["at"].isoformat()
     return {"total": len(filas), "filas": filas}
+
+
+# ===================================================================
+# ANALITICA PROPIA Y ANONIMA (ver analitica.py)
+# ===================================================================
+# Por que pantallas pasa la gente y donde se va. Sin IP, sin cookies y sin
+# identificar a nadie: una clave de sesion que muere al cerrar la pestana.
+@api_router.post("/analitica/evento")
+async def analitica_evento(request: Request):
+    """Una pantalla vista o una accion. Publico y sin respuesta util.
+
+    Nunca falla hacia fuera: si algo no cuadra devuelve `ok: false` y ya. Medir
+    no puede romperle la pantalla a nadie ni llenar el navegador de errores.
+    No pasa por el registro de escrituras (guardaria la IP de cada visita).
+    """
+    try:
+        _rl_public_action(f"an:{_rl_key_ip(request)}", max_count=300, window_s=600)
+    except HTTPException:
+        return {"ok": False}
+    try:
+        cuerpo = json.loads((await request.body())[:2000] or b"{}")
+    except ValueError:
+        return {"ok": False}
+    claims = None
+    auth = request.headers.get("authorization") or ""
+    if auth.lower().startswith("bearer "):
+        try:
+            claims = jwt.decode(auth[7:], SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        except Exception:                                        # noqa: BLE001
+            claims = None
+    doc = analitica.evento_desde(cuerpo, request.headers.get("user-agent"), claims,
+                                 datetime.now(timezone.utc))
+    if not doc:
+        return {"ok": False}
+    try:
+        await global_db.analitica_eventos.insert_one(doc)
+    except Exception:                                            # noqa: BLE001
+        return {"ok": False}
+    return {"ok": True}
+
+
+_ANALITICA_TOPE = 150_000
+
+
+@api_router.get("/admin/analitica")
+async def admin_analitica(dias: int = 30, seg: str = "externo",
+                          _=Depends(require_superadmin)):
+    """El cuadro de mandos del negocio: trafico, pantallas, embudos y altas."""
+    dias = max(1, min(int(dias), 180))
+    if seg not in ("externo", "todos") + analitica.SEGMENTOS:
+        seg = "externo"
+    ahora = datetime.now(timezone.utc)
+    col = global_db.analitica_eventos
+    # Si un dia no caben todos, se quedan los MAS RECIENTES: un informe de
+    # «que esta pasando» con los eventos mas viejos del periodo enseñaria justo
+    # lo que ya no importa. Se piden al reves y se le dan en orden al informe,
+    # que los necesita ascendentes para reconstruir cada sesion.
+    filas = await col.find({"ts": {"$gte": ahora - timedelta(days=dias)}}, {"_id": 0})         .sort("ts", -1).to_list(_ANALITICA_TOPE + 1)
+    truncado = len(filas) > _ANALITICA_TOPE
+    filas = list(reversed(filas[:_ANALITICA_TOPE]))
+    out = analitica.informe(filas, ahora, seg=seg, dias=dias)
+    primero = await col.find_one({}, {"_id": 0, "ts": 1}, sort=[("ts", 1)])
+    out["medido_desde"] = primero["ts"].replace(tzinfo=timezone.utc).isoformat() if primero else None
+    out["truncado"] = truncado
+    out["dias"] = dias
+
+    # Las altas de empresas salen de la base de datos, no de las visitas: son
+    # las cuentas que existen de verdad. Las de prueba del smoke no cuentan.
+    orgs = await global_db.organizations.find(
+        {"account_type": "dsp"}, {"_id": 0, "created_at": 1, "slug": 1, "email": 1}).to_list(5000)
+    por_dia: dict = {}
+    for o in orgs:
+        if str(o.get("slug") or "").startswith("smoke") or str(o.get("email") or "").endswith(".invalid"):
+            continue
+        d = str(o.get("created_at") or "")[:10]
+        if d:
+            por_dia[d] = por_dia.get(d, 0) + 1
+    dias_serie = [d["dia"] for d in out["serie"]]
+    out["altas"] = {"serie": [{"dia": d, "n": por_dia.get(d, 0)} for d in dias_serie],
+                    "ventana": sum(por_dia.get(d, 0) for d in dias_serie),
+                    "total": sum(por_dia.values())}
+    return out
 
 
 @api_router.post("/cortex/reset")

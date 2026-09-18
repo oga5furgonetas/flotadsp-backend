@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { LANGS, useT } from '../i18n'
 import { Check, Zap, ArrowRight } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
+import { medirAccion } from '../lib/analitica'
 
 /* Tarifa POR FURGONETA. Un DSP sabe lo que le cuesta cada furgoneta al mes;
    "8 € por furgoneta" lo compara solo con lo que le cuesta un golpe. Estos
@@ -97,6 +98,7 @@ function FounderOffer() {
       })
       const j = await r.json()
       if (!r.ok) throw new Error(j?.detail || 'No se pudo reservar')
+      medirAccion('fundador_reservado')
       setDone(true)
       if (typeof j.left === 'number') setSlots(s => ({ ...(s || { total: 10 }), left: j.left }))
     } catch (e2) {
@@ -146,7 +148,7 @@ function FounderOffer() {
               </button>
             </form>
           ) : (
-            <button onClick={() => setOpen(true)} style={{ width: '100%', background: 'linear-gradient(135deg,#fbbf24,#f59e0b)', border: 'none', borderRadius: 12, padding: '15px 24px', fontSize: 15, fontWeight: 900, color: '#0b0d10', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, boxShadow: '0 8px 30px rgba(245,158,11,.25)' }}>
+            <button onClick={() => { medirAccion('fundador_abrir'); setOpen(true) }} style={{ width: '100%', background: 'linear-gradient(135deg,#fbbf24,#f59e0b)', border: 'none', borderRadius: 12, padding: '15px 24px', fontSize: 15, fontWeight: 900, color: '#0b0d10', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8, boxShadow: '0 8px 30px rgba(245,158,11,.25)' }}>
               Reservar mi plaza fundador <ArrowRight size={16} />
             </button>
           )}
@@ -319,6 +321,7 @@ export default function Planes() {
 
                 <a
                   href={aMedida ? '/contacto?asunto=Holding' : `/registro?plan=${p.clave}&billing=${billing}&flota=${furgonetas}`}
+                  onClick={() => medirAccion('plan_elegir')}
                   style={{
                     display: 'block', textAlign: 'center', padding: '12px 0',
                     borderRadius: 12, fontWeight: 800, fontSize: 14, textDecoration: 'none',

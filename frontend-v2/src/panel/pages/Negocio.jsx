@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useT } from '../../i18n'
-import {
+import { Activity,
   Loader2, Building2, CheckCircle2, Clock, Euro, Sparkles, Gift, PauseCircle,
   LogIn, Trash2, Database, BrainCircuit, ExternalLink, RefreshCw, Megaphone,
   Play, Pause, Plus, Star, Eye, MousePointerClick, Tag, Save,
@@ -674,7 +674,14 @@ export default function Negocio() {
     <div className="mx-auto max-w-6xl">
       <div className="mb-4 flex items-center justify-between">
         <h1 className="rise font-display text-[clamp(26px,3vw,36px)] font-semibold leading-none tracking-[-0.03em] text-dark-50">{t('neg.title')}</h1>
-        <button onClick={load} className="btn-secondary flex items-center gap-1.5 text-sm"><RefreshCw size={14} /> {t('neg.refresh')}</button>
+        <div className="flex items-center gap-2">
+          {/* El trafico y los embudos viven en su propia pantalla; aqui estan
+              las cuentas y los cobros. Sin este enlace habia que saberse la URL. */}
+          <Link to="/panel/analitica" className="btn-secondary flex items-center gap-1.5 text-sm">
+            <Activity size={14} /> Cómo va el negocio
+          </Link>
+          <button onClick={load} className="btn-secondary flex items-center gap-1.5 text-sm"><RefreshCw size={14} /> {t('neg.refresh')}</button>
+        </div>
       </div>
 
       {msg && <div className="mb-3 rounded-lg bg-brand-500/10 px-3 py-2 text-sm text-brand-300">{msg}</div>}

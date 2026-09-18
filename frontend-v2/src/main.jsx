@@ -1,6 +1,6 @@
-import React, { Suspense, lazy } from 'react'
+import React, { Suspense, lazy, useEffect } from 'react'
 import ReactDOM from 'react-dom/client'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 /* Tipografía self-hosted (la CSP bloquea Google Fonts). Vite las sirve desde
    el propio dominio.
 
@@ -18,6 +18,7 @@ import '@fontsource-variable/archivo'
 import '@fontsource/ibm-plex-mono/400.css'
 import '@fontsource/ibm-plex-mono/500.css'
 import '@fontsource/ibm-plex-mono/600.css'
+import { medirVista } from './lib/analitica'
 
 /* Señal de vida para /arranque.js. Ese vigilante espera 10 s y, si esta marca
    no aparece, da por hecho que el bundle llegó envenenado (pantalla en blanco)
@@ -232,6 +233,7 @@ const PanelVehiculos = lazy(() => import('./panel/pages/Vehiculos'))
 const PanelVencimientos = lazy(() => import('./panel/pages/Vencimientos'))
 const PanelRevision = lazy(() => import('./panel/pages/RevisionRapida'))
 const PanelNegocio = lazy(() => import('./panel/pages/Negocio'))
+const PanelAnalitica = lazy(() => import('./panel/pages/Analitica'))
 const PanelPerfil = lazy(() => import('./panel/pages/Perfil'))
 const PanelInspecciones = lazy(() => import('./panel/pages/Inspecciones'))
 const PanelConductores = lazy(() => import('./panel/pages/Conductores'))
@@ -311,12 +313,23 @@ function RouteLoader() {
   )
 }
 
+/* Cuenta cada pantalla por la que pasa una visita. Va DENTRO del router para
+   enterarse de los cambios de ruta de la propia app, que no recargan la pagina
+   y son la mayoria: medir solo en el arranque diria que todo el mundo ve una
+   sola pantalla. */
+function Medidor() {
+  const { pathname } = useLocation()
+  useEffect(() => { medirVista(pathname) }, [pathname])
+  return null
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>
     <LangProvider>
       <ToastProvider>
         <BrowserRouter>
+          <Medidor />
           <CookieBanner />
           <Suspense fallback={<RouteLoader />}>
             <Routes>
@@ -384,6 +397,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                 <Route path="configuracion" element={<PanelConfiguracion />} />
                 <Route path="tienda" element={<PanelTienda />} />
                 <Route path="admin" element={<PanelNegocio />} />
+                <Route path="analitica" element={<PanelAnalitica />} />
                 <Route path="usuarios" element={<PanelUsuarios />} />
                 <Route path="perfil" element={<PanelPerfil />} />
                 <Route path="portal-conductor" element={<PanelPortalConductor />} />

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '../services/api'
+import { medirAccion } from '../lib/analitica'
 import { saveSession } from '../panel/auth'
 import { useT, LANGS } from '../i18n'
 import { Check, Zap } from 'lucide-react'
@@ -245,6 +246,7 @@ export default function Registro() {
       saveSession(j)   // le faltaba admin_role; una sola función lo guarda todo
       localStorage.setItem('flota_plan', selectedPlan)
       localStorage.setItem('flota_billing', billingMode)
+      medirAccion('registro_ok')
       setDone(true)
     } catch { setErr('Sin conexión con el servidor. Revisa tu red e inténtalo de nuevo.'); setBusy(false) }
   }

@@ -315,6 +315,14 @@ export const AYUDA = {
     que: 'Ajustes de la cuenta, centros, avisos y quién recibe qué.',
     pasos: ['Los avisos de Telegram y los destinatarios se configuran aquí.'],
   },
+  analitica: {
+    que: 'Cuánta gente entra en la web y en la app, por dónde pasa y dónde se va.',
+    pasos: [
+      'Los embudos dicen cuántos llegan a cada paso: de la web al registro, de la tienda al pago.',
+      'La tabla de pantallas enseña en cuál se queda la gente y a cuál salta después.',
+    ],
+    ojo: 'Son visitas, no personas: la medición es anónima y se olvida al cerrar la pestaña, así que quien vuelve otro día cuenta dos veces.',
+  },
   admin: {
     que: 'El negocio: cuentas, planes, cobros y la salud de la infraestructura.',
     pasos: [

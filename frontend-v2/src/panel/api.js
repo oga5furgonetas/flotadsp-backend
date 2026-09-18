@@ -512,6 +512,7 @@ export const putDailyAssignment = (body) => api.put('/assignments/daily', body) 
 
 /* ── Negocio (super-admin) ── */
 export const getAdminOverview = () => api.get('/admin/overview')
+export const getAnalitica = (dias, seg) => api.get('/admin/analitica', { params: { dias, seg } })
 export const getAdminOrgs = () => api.get('/admin/orgs')
 export const updateOrg = (body) => api.post('/admin/org', body) // {id, status?, plan?, extend_trial_days?, add_center?, max_centers?, modulos?}
 export const getAdminModulos = () => api.get('/admin/modulos')
