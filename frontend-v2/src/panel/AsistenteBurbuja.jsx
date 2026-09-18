@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Send, Loader2, X, Check, Car, UserPlus, ClipboardList, ArrowRight, FileText, Paperclip } from 'lucide-react'
+import { Sparkles, Send, Loader2, X, Check, Car, UserPlus, ClipboardList, ArrowRight, FileText, Paperclip, UserX, Wrench } from 'lucide-react'
 import { getAiHistorial, enviarMensajeIA, ejecutarAccionIA, subirFichasTecnicasIA, confirmarFichasTecnicasIA } from './api'
 
 /* FLOTADSP AI — burbuja de ayuda flotante, abajo a la derecha, como los
@@ -17,16 +17,31 @@ const ETIQUETA_ACCION = {
   crear_vehiculo: { icon: Car, titulo: 'Crear vehículo' },
   crear_conductor: { icon: UserPlus, titulo: 'Crear conductor' },
   generar_plantilla: { icon: ClipboardList, titulo: 'Generar plantilla de hoy con Cortex' },
+  asignar_conductor: { icon: UserPlus, titulo: 'Asignar conductor a furgoneta' },
+  desasignar_conductor: { icon: UserX, titulo: 'Quitar conductor de furgoneta' },
+  cambiar_estado_vehiculo: { icon: Wrench, titulo: 'Cambiar estado de furgoneta' },
 }
 const CAMPO_LABEL = {
   license_plate: 'Matrícula', brand: 'Marca', model: 'Modelo', color: 'Color', vin: 'VIN',
   name: 'Nombre', phone: 'Teléfono', email: 'Correo', dni: 'DNI',
+  matricula: 'Matrícula', conductor_nombre: 'Conductor', estado: 'Nuevo estado',
 }
+const ESTADO_VEHICULO_TXT = { active: 'Activa', taller: 'En taller', baja: 'De baja' }
 const TONO_CLS = {
   ok: 'bg-emerald-500/10 text-emerald-300',
   aviso: 'bg-amber-500/10 text-amber-300',
   alerta: 'bg-red-500/10 text-red-300',
   neutro: 'bg-dark-800 text-dark-300',
+}
+
+function mensajeResultado(r) {
+  if (!r) return 'Hecho.'
+  switch (r.tipo) {
+    case 'asignar_conductor': return `${r.driver_name} lleva ahora la ${r.vehicle_plate}.`
+    case 'desasignar_conductor': return `La ${r.vehicle_plate} se ha quedado sin conductor asignado.`
+    case 'cambiar_estado_vehiculo': return `La ${r.vehicle_plate} ahora está: ${ESTADO_VEHICULO_TXT[r.estado] || r.estado}.`
+    default: return `Creado${r.license_plate ? `: ${r.license_plate}` : r.name ? `: ${r.name}` : ''}`
+  }
 }
 
 function Documentos({ lista }) {
@@ -151,7 +166,8 @@ export default function AsistenteBurbuja({ center, centers }) {
     setEjecutando(idx)
     try {
       const { data } = await ejecutarAccionIA(accion.tipo, accion.campos, center)
-      const resultado = accion.tipo === 'generar_plantilla' ? data : data.creado
+      const resultado = (accion.tipo === 'crear_vehiculo' || accion.tipo === 'crear_conductor')
+        ? { ...data.creado, tipo: accion.tipo } : data
       setMsgs((m) => m.map((x, i) => i === idx ? { ...x, accion_propuesta: null, resultado } : x))
     } catch (e) {
       setMsgs((m) => m.map((x, i) => i === idx
@@ -238,7 +254,7 @@ export default function AsistenteBurbuja({ center, centers }) {
                                   {m.accion_propuesta.tipo === 'generar_plantilla'
                                     ? <div>Ruta y conductor de cada uno, tal como los tiene Cortex capturados hoy.</div>
                                     : Object.entries(m.accion_propuesta.campos).filter(([, v]) => v).map(([k, v]) => (
-                                        <div key={k}>{CAMPO_LABEL[k] || k}: <span className="text-dark-200">{v}</span></div>
+                                        <div key={k}>{CAMPO_LABEL[k] || k}: <span className="text-dark-200">{k === 'estado' ? (ESTADO_VEHICULO_TXT[v] || v) : v}</span></div>
                                       ))}
                                 </div>
                                 <div className="flex gap-1.5">
@@ -267,7 +283,7 @@ export default function AsistenteBurbuja({ center, centers }) {
                               </div>
                             ) : m.resultado && (
                               <div className="mt-1.5 rounded-lg bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-300">
-                                ✅ Creado{m.resultado.license_plate ? `: ${m.resultado.license_plate}` : m.resultado.name ? `: ${m.resultado.name}` : ''}
+                                ✅ {mensajeResultado(m.resultado)}
                               </div>
                             )}
                             {m.error_accion && <div className="mt-1.5 rounded-lg bg-red-500/10 px-2 py-1 text-[11px] text-red-300">{m.error_accion}</div>}

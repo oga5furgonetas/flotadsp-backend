@@ -50355,7 +50355,8 @@ async def tienda_ver_foto(prenda_id: str, user: dict = Depends(require_any_auth)
 #     cumple la primera a propósito).
 
 _IA_ASISTENTE_COL = "ai_chat_msgs"
-_IA_ASISTENTE_ACCIONES = ("crear_vehiculo", "crear_conductor", "generar_plantilla")
+_IA_ASISTENTE_ACCIONES = ("crear_vehiculo", "crear_conductor", "generar_plantilla",
+                          "asignar_conductor", "desasignar_conductor", "cambiar_estado_vehiculo")
 
 _IA_ASISTENTE_MANUAL = """
 === MANUAL BREVE DE FLOTADSP (para explicar "cómo se hace X") ===
@@ -50379,7 +50380,11 @@ Talleres / Órdenes de taller: agenda de talleres y seguimiento sin llamar:
 el parte sale con daños y taller ya puestos, se manda por WhatsApp con un
 enlace público (sin registro), y la app pregunta sola cada pocos días.
 Asignación diaria: qué furgoneta lleva cada conductor hoy; asígnalo antes de
-que salgan las rutas.
+que salgan las rutas. Puedes hacerlo tú por el chat: "que Juan Pérez lleve la
+1234ABC" propone asignar esa furgoneta a ese conductor (busca a los dos por
+lo que ya tienen en la ficha, sin adivinar si hay dudas), y "quítale la
+furgoneta a Juan" la desasigna. También puedes marcar una furgoneta como
+"en taller" o "activa otra vez" — "la 1234ABC ha entrado en taller".
 Turnos (cuadrante): quién trabaja qué día. Se pinta con el pincel de código;
 los días aprobados salen en rosa y no se mueven sin permiso.
 Plantilla de turno: la plantilla de personal, generada desde Turnos —cierra
@@ -50525,6 +50530,50 @@ async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict
     return {"resumen_texto": "Consulta no reconocida.", "documentos": None, "n": 0}
 
 
+async def _ai_resolver_vehiculo(user: dict, center: str, matricula: str) -> dict:
+    """Encuentra LA furgoneta con esa matrícula en el centro de la sesión.
+
+    Nunca adivina: con 0 o con más de una, para y lo dice — mismo principio
+    que `_centro_norm` (gotcha 6): decidir con duda es peor que no decidir.
+    """
+    norm = _matricula_norm(matricula)
+    if not norm:
+        raise HTTPException(400, "Falta la matrícula de la furgoneta")
+    fc = _filtro_centro(user, center) if center and center != "Todos" else {}
+    vehiculos = await db.vehicles.find(
+        {"status": {"$nin": ["deleted", "baja"]}, **fc},
+        {"_id": 0, "id": 1, "license_plate": 1}).to_list(1000)
+    candidatos = [v for v in vehiculos if _matricula_norm(v.get("license_plate")) == norm]
+    if not candidatos:
+        raise HTTPException(404, f"No encuentro ninguna furgoneta con la matrícula {matricula} en {center}.")
+    if len(candidatos) > 1:
+        raise HTTPException(409, "Hay más de una furgoneta con esa matrícula, revísalas a mano.")
+    return candidatos[0]
+
+
+async def _ai_resolver_conductor(user: dict, center: str, nombre: str) -> dict:
+    """Encuentra AL conductor activo cuyo nombre casa con lo pedido.
+
+    Exige que TODAS las palabras del nombre pedido estén en el nombre de la
+    ficha (sin acentos ni mayúsculas, `_norm_name_words`) — nunca elige entre
+    dos que casan igual de bien (gotcha 15: dos personas parecidas no son la
+    misma, y equivocarse aquí le cuelga la furgoneta a quien no toca).
+    """
+    palabras = _norm_name_words(nombre)
+    if not palabras:
+        raise HTTPException(400, "Falta el nombre del conductor")
+    fc = _filtro_centro(user, center) if center and center != "Todos" else {}
+    conductores = await db.drivers.find(
+        {"active": {"$ne": False}, **fc}, {"_id": 0, "id": 1, "name": 1}).to_list(2000)
+    candidatos = [c for c in conductores if palabras <= _norm_name_words(c.get("name"))]
+    if not candidatos:
+        raise HTTPException(404, f'No encuentro ningún conductor activo llamado "{nombre}" en {center}.')
+    if len(candidatos) > 1:
+        nombres = ", ".join(c["name"] for c in candidatos[:6])
+        raise HTTPException(409, f'Hay varios conductores que casan con "{nombre}": {nombres}. Sé más específico.')
+    return candidatos[0]
+
+
 def _ai_asistente_prompt(center: str, contexto: str) -> str:
     return f"""Eres FLOTADSP AI, el asistente del panel de FlotaDSP para el centro {center}.
 
@@ -50536,12 +50585,24 @@ REGLAS QUE NO PUEDES SALTARTE:
   ves la suya y que cambien de centro arriba para verla.
 - No sabes nada de código ni puedes cambiar nada "importante" (permisos,
   precios, configuración) — eso lo dices y ya está, no lo intentes.
-- Solo puedes PROPONER tres acciones: crear un vehículo, crear un conductor o
-  generar la plantilla de turno de HOY desde Cortex. Nunca las ejecutas tú:
-  propones y una persona confirma con un clic.
-  Para un vehículo hace falta al menos la matrícula. Para un conductor, al
-  menos el nombre. Si falta algo imprescindible, pregúntalo en tu respuesta
-  y NO propongas la acción todavía.
+- Solo puedes PROPONER estas acciones — nunca las ejecutas tú: propones y una
+  persona confirma con un clic.
+    · crear_vehiculo — hace falta al menos la matrícula.
+    · crear_conductor — hace falta al menos el nombre.
+    · generar_plantilla — la plantilla de turno de HOY desde Cortex.
+    · asignar_conductor — poner un conductor en una furgoneta. Campos:
+      "matricula" y "conductor_nombre" (tal como lo escriba la persona, el
+      servidor lo busca en las fichas — nunca inventes un nombre completo si
+      solo te dan uno de pila, deja que busque él).
+    · desasignar_conductor — quitar el conductor de una furgoneta. Campos:
+      "matricula".
+    · cambiar_estado_vehiculo — "la 1234ABC ha entrado en taller" o "ya está
+      activa". Campos: "matricula" y "estado" (exactamente "taller", "active"
+      o "baja").
+  Si falta algo imprescindible, pregúntalo en tu respuesta y NO propongas la
+  acción todavía. Si el servidor no encuentra o encuentra más de una
+  furgoneta/conductor con lo que le has pasado, te lo dirá él — tú solo pasa
+  lo que ha escrito la persona, no adivines matrículas ni nombres completos.
 - Si te piden la plantilla/plan de rutas de hoy ("hazme la plantilla",
   "móntala con Cortex", "genera el reparto de hoy"), propón SIEMPRE
   "generar_plantilla" con "campos": {{}} (no necesita ningún dato tuyo: lo saca
@@ -50593,10 +50654,14 @@ que necesites pedir una consulta (arriba), en cuyo caso respondes SOLO con
   "respuesta": "tu respuesta en español, para leer en un chat — breve si ya va tarjeta detrás",
   "tarjeta": null o {{"titulo": "...", "filas": [{{"etiqueta": "...", "valor": "...", "tono": "..."}}]}},
   "accion_propuesta": null o {{
-    "tipo": "crear_vehiculo" | "crear_conductor" | "generar_plantilla",
+    "tipo": "crear_vehiculo" | "crear_conductor" | "generar_plantilla" |
+            "asignar_conductor" | "desasignar_conductor" | "cambiar_estado_vehiculo",
     "campos": {{"license_plate": "...", "brand": "...", "model": "...", "color": "...", "vin": "..."}}
     // para conductor: {{"name": "...", "phone": "...", "email": "...", "dni": "..."}}
     // para generar_plantilla: {{}} (siempre vacío)
+    // para asignar_conductor: {{"matricula": "...", "conductor_nombre": "..."}}
+    // para desasignar_conductor: {{"matricula": "..."}}
+    // para cambiar_estado_vehiculo: {{"matricula": "...", "estado": "taller" | "active" | "baja"}}
   }}
 }}"""
 
@@ -50834,6 +50899,26 @@ async def ai_asistente_ejecutar(data: _IAAsistenteAccion, user: dict = Depends(r
         await db.plantillas_compartidas.insert_one(doc)
         return {"ok": True, "tipo": data.tipo, "draft_id": doc["id"],
                 "filas_cortex": len(filas), "anadidas": len(filas), "ya_existia": False}
+
+    if data.tipo == "asignar_conductor":
+        vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
+        conductor = await _ai_resolver_conductor(user, center, campos.get("conductor_nombre") or "")
+        await assign_driver(vehiculo["id"], AssignDriverRequest(driver_id=conductor["id"]), user)
+        return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"],
+                "driver_name": conductor["name"]}
+
+    if data.tipo == "desasignar_conductor":
+        vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
+        await assign_driver(vehiculo["id"], AssignDriverRequest(driver_id=None), user)
+        return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"]}
+
+    if data.tipo == "cambiar_estado_vehiculo":
+        estado = _texto_cuerpo(campos.get("estado"), 20).lower()
+        if estado not in ("active", "taller", "baja"):
+            raise HTTPException(400, 'El estado tiene que ser "active", "taller" o "baja"')
+        vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
+        await update_vehicle(vehiculo["id"], {"status": estado}, user)
+        return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"], "estado": estado}
 
     try:
         conductor = DriverCreate(**campos)
