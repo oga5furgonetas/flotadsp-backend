@@ -637,7 +637,20 @@ function CampanaCandidatos() {
 
       {subs && (
         <div className="text-[12.5px] text-dark-400">
-          Suscripciones a avisos prioritarios: <span className="cifra font-semibold text-dark-100">{subs.activas}</span> activas de {subs.total} en total.
+          <div>
+            Suscripciones a avisos prioritarios: <span className="cifra font-semibold text-dark-100">{subs.activas}</span> activas de {subs.total} en total.
+          </div>
+          {subs.suscripciones?.some((s) => s.perfil) && (
+            <div className="mt-2 space-y-1">
+              {subs.suscripciones.filter((s) => s.perfil).slice(0, 20).map((s, i) => (
+                <div key={i} className="rounded-lg bg-dark-900/60 px-2.5 py-1.5">
+                  <span className="cifra text-dark-300">{s.email}</span>
+                  <span className="text-dark-500"> — busca: </span>
+                  <span className="text-dark-200">{s.perfil}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

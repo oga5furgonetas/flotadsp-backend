@@ -49645,7 +49645,9 @@ async def _tienda_enlace_publico() -> str:
         {"_id": 0, "token": 1, "web": 1})
     if not e or not e.get("token"):
         return ""
-    base = (e.get("web") or PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
+    # PUBLIC_BASE_URL es el del BACKEND (para URLs que apuntan a si mismo);
+    # un enlace que abre alguien es SIEMPRE de la web, _PORTAL_BASE_FRONT.
+    base = (e.get("web") or _PORTAL_BASE_FRONT).rstrip("/")
     return "%s/t/%s/" % (base, e["token"])
 
 
@@ -49758,7 +49760,7 @@ async def tienda_publica_comprar(token: str, body: dict = Body(...)):
         "creado_en": ahora.isoformat(),
     }
 
-    base = (enlace.get("web") or PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
+    base = (enlace.get("web") or _PORTAL_BASE_FRONT).rstrip("/")
     datos = [
         ("mode", "payment"),
         ("success_url", "%s/t/%s/?pago=ok&ref=%s" % (base, token, doc["ref"])),
@@ -49992,7 +49994,9 @@ async def tienda_pagar(pedido_id: str, user: dict = Depends(require_any_auth)):
     if p.get("estado") != "pendiente_pago":
         raise HTTPException(409, "Ese pedido ya no esta pendiente de pago")
 
-    base = (PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
+    # PUBLIC_BASE_URL es el del BACKEND, no la web: con el, Stripe devolvia al
+    # conductor a flotadsp-backend.fly.dev/conductor tras pagar, que es un 404.
+    base = _PORTAL_BASE_FRONT
     datos = [
         ("mode", "payment"),
         ("success_url", "%s/conductor?pago=ok&ref=%s" % (base, p.get("ref") or "")),
@@ -50099,6 +50103,7 @@ async def tienda_stripe_webhook(request: Request):
         await db.empleo_suscripciones.update_one(
             {"stripe_subscription": obj.get("subscription")},
             {"$set": {"email": meta.get("email") or obj.get("customer_email") or "",
+                      "perfil": meta.get("perfil") or "",
                       "stripe_customer": obj.get("customer"),
                       "stripe_subscription": obj.get("subscription"), "activa": True,
                       "creado_en": datetime.now(timezone.utc).isoformat()}},
@@ -50212,11 +50217,11 @@ async def tienda_crear_enlace(user: dict = Depends(require_admin)):
     if not vivo:
         await global_db.taller_enlaces.insert_one({
             "token": token, "tipo": "tienda", "db_name": dbn,
+            "web": _PORTAL_BASE_FRONT,
             "creado_por": user.get("name") or user.get("username") or "oficina",
             "creado_en": datetime.now(timezone.utc).isoformat(), "revocado": False,
         })
-    base = (PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
-    return {"url": f"{base}/t/{token}", "token": token}
+    return {"url": f"{_PORTAL_BASE_FRONT}/t/{token}", "token": token}
 
 
 @api_router.post("/empleo/suscripcion/checkout")
@@ -50230,11 +50235,16 @@ async def empleo_suscripcion_checkout(body: dict = Body(...), request: Request =
     email = _texto_cuerpo(body.get("email"), 120).lower()
     if not email or not _EMAIL_RE.match(email):
         raise HTTPException(400, "Pon un correo válido")
+    # Lo que busca, en texto libre y OPCIONAL: pedirlo obligatorio en el mismo
+    # paso que se paga solo hace que alguien abandone antes de pagar. Sirve
+    # hoy para que el aviso lo lea una persona con más contexto, y mañana
+    # para poder ordenar ofertas por afinidad sin tener que preguntarlo otra vez.
+    perfil = _texto_cuerpo(body.get("perfil"), 300)
     await _set_tenant_by_slug(_texto_cuerpo(body.get("slug"), 60))
     if not _stripe_encendido():
         raise HTTPException(503, "El pago con tarjeta todavía no está activo")
 
-    base = (PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
+    base = _PORTAL_BASE_FRONT
     dbn = _current_db_name.get()
     datos = [
         ("mode", "subscription"),
@@ -50257,6 +50267,8 @@ async def empleo_suscripcion_checkout(body: dict = Body(...), request: Request =
         ("line_items[0][price_data][product_data][name]",
          "Notificaciones prioritarias de empleo FlotaDSP"),
     ]
+    if perfil:
+        datos += [("metadata[perfil]", perfil), ("subscription_data[metadata][perfil]", perfil)]
     import httpx as _httpx
     try:
         async with _httpx.AsyncClient(timeout=25) as cli:
@@ -50279,7 +50291,7 @@ async def empleo_suscripciones_lista(user: dict = Depends(require_superadmin)):
     activas = await db.empleo_suscripciones.count_documents({"activa": True})
     total = await db.empleo_suscripciones.count_documents({})
     filas = await db.empleo_suscripciones.find(
-        {}, {"_id": 0, "email": 1, "activa": 1, "creado_en": 1, "estado_stripe": 1}
+        {}, {"_id": 0, "email": 1, "activa": 1, "creado_en": 1, "estado_stripe": 1, "perfil": 1}
     ).sort("creado_en", -1).to_list(500)
     return {"activas": activas, "total": total, "suscripciones": filas}
 
@@ -50367,7 +50379,7 @@ async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Dep
         raise HTTPException(503, "El cobro con tarjeta no está activo todavía (falta la clave de Stripe)")
 
     url_tienda = f"{enlace_tienda}?cupon={cupon['id']}"
-    url_suscripcion = f"{(PUBLIC_BASE_URL or 'https://flotadsp.com').rstrip('/')}/empleo/prioridad"
+    url_suscripcion = f"{_PORTAL_BASE_FRONT}/empleo/prioridad"
 
     if modo == "prueba":
         email_prueba = _texto_cuerpo(body.get("email_prueba"), 120).lower()
