@@ -197,9 +197,7 @@ export default function AsistenteBurbuja({ center, centers }) {
     setMsgs((m) => m.map((x, i) => i === idx ? { ...x, accion_propuesta: null, cancelada: true } : x))
   }
 
-  async function subirFichas(e) {
-    const files = Array.from(e.target.files || [])
-    e.target.value = ''  // permite volver a elegir los mismos ficheros despues
+  async function procesarArchivos(files) {
     if (!files.length || subiendoFichas) return
     setErr(''); setSubiendoFichas(true)
     setMsgs((m) => [...m, { rol: 'usuario', texto: `He subido ${files.length} fichero${files.length === 1 ? '' : 's'}: ${files.map((f) => f.name).join(', ')}` }])
@@ -209,6 +207,30 @@ export default function AsistenteBurbuja({ center, centers }) {
     } catch (e) {
       setErr(e?.response?.data?.detail || 'No se han podido leer los ficheros.')
     } finally { setSubiendoFichas(false) }
+  }
+
+  function subirFichas(e) {
+    const files = Array.from(e.target.files || [])
+    e.target.value = ''  // permite volver a elegir los mismos ficheros despues
+    procesarArchivos(files)
+  }
+
+  // Pegar una captura con Ctrl+V hace lo mismo que subirla con el clip: se
+  // trata como ficha técnica a emparejar. Pedido explicitamente el
+  // 18-09-2026 para no tener que guardar la imagen y luego ir a buscarla.
+  function pegarImagenes(e) {
+    const items = Array.from(e.clipboardData?.items || [])
+    const files = items.filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+      .map((it, i) => {
+        const f = it.getAsFile()
+        if (!f) return null
+        // El portapapeles suele dar "image.png" para todo: un nombre por
+        // orden ayuda a distinguirlas en la lista de resultados si son varias.
+        return f.name && f.name !== 'image.png' ? f : new File([f], `pegado-${i + 1}.png`, { type: f.type })
+      }).filter(Boolean)
+    if (!files.length) return
+    e.preventDefault()
+    procesarArchivos(files)
   }
 
   async function confirmarLote(idx, lote_id) {
@@ -224,7 +246,8 @@ export default function AsistenteBurbuja({ center, centers }) {
   return (
     <div className="fixed bottom-4 right-4 z-[95] flex flex-col items-end">
       {abierto && (
-        <div className="mb-3 flex h-[32rem] w-[23rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-dark-700 bg-dark-950 shadow-2xl">
+        <div onPaste={pegarImagenes}
+          className="mb-3 flex h-[32rem] w-[23rem] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-dark-700 bg-dark-950 shadow-2xl">
           <div className="flex items-center justify-between border-b border-dark-800 bg-dark-900/80 px-3.5 py-3">
             <div className="flex items-center gap-2">
               <Sparkles size={16} className="text-brand-400" />
@@ -245,7 +268,7 @@ export default function AsistenteBurbuja({ center, centers }) {
               <div className="flex-1 overflow-y-auto p-2.5">
                 {msgs.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center gap-1 px-4 text-center">
-                    <p className="text-[12.5px] text-dark-400">Pregúntame cómo se hace algo, cómo va el WHC de alguien, las DNR abiertas, las inspecciones de una furgoneta, "dame las furgonetas de Bansacar" o "qué furgoneta lleva Juan". Pídeme que cree, edite o asigne un vehículo o conductor, que abra un parte o mande una furgoneta a un taller, que monte la plantilla de hoy con Cortex, o sube fichas técnicas con el clip.</p>
+                    <p className="text-[12.5px] text-dark-400">Pregúntame cómo se hace algo, cómo va el WHC de alguien, las DNR abiertas, las inspecciones de una furgoneta, "dame las furgonetas de Bansacar" o "qué furgoneta lleva Juan". Pídeme que cree, edite o asigne un vehículo o conductor, que abra un parte o mande una furgoneta a un taller, que monte la plantilla de hoy con Cortex, o sube fichas técnicas con el clip o pegando la captura (Ctrl+V) directamente aquí.</p>
                   </div>
                 ) : (
                   <div className="space-y-2">

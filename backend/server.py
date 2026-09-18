@@ -50699,13 +50699,17 @@ async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict
         # Desempate deterministico (gotcha 62): nunca solo el cociente.
         filas.sort(key=lambda f: (-(f.get("dcr") or 0), -(f.get("entregas") or 0), f.get("transporter") or ""))
         lineas = [f"Ranking por DCR de los últimos 30 días en {center} "
-                  f"(mínimo 40 entregas para entrar, para no señalar a alguien por poco volumen)."]
+                  f"(mínimo 40 entregas para entrar, para no señalar a alguien por poco volumen). "
+                  f"OJO: el 'DNR' de esta lista es el conteo del informe diario de Amazon acumulado "
+                  f"en 30 días (aunque ya estén resueltos) — NO es lo mismo que 'investigaciones DNR "
+                  f"abiertas ahora' de la consulta dnr, que es un número mucho más pequeño y solo las "
+                  f"pendientes de contestar. Si te preguntan por los dos, acláralo, no los mezcles."]
         if not filas:
             lineas.append("Nadie llega a ese mínimo en este periodo todavía.")
         for f in filas[:15]:
             lineas.append(f"- {f.get('nombre') or f.get('transporter')}: DCR {f.get('dcr')}%, "
                           f"{f.get('entregas')} entregas, {f.get('fallos')} fallos"
-                          + (f", {f.get('dnr')} DNR" if f.get('dnr') else ""))
+                          + (f", {f.get('dnr')} DNR (30 días, informe diario)" if f.get('dnr') else ""))
         return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(filas)}
 
     return {"resumen_texto": "Consulta no reconocida.", "documentos": None, "n": 0}
@@ -50888,7 +50892,15 @@ REGLAS QUE NO PUEDES SALTARTE:
     · rendimiento: sin filtros — ranking real por DCR de los últimos 30
       días (con mínimo de entregas, para no señalar a alguien por un
       fallo suelto). Úsalo para "quién es el mejor/peor conductor", "quién
-      rinde mejor", "ranking de repartidores".
+      rinde mejor", "ranking de repartidores". El "DNR" que trae esta lista
+      es OTRO NÚMERO distinto al de la consulta "dnr": aquí es el acumulado
+      de 30 días del informe diario (aunque ya estén cerrados), y en "dnr"
+      son solo las investigaciones ABIERTAS ahora mismo — casi siempre un
+      número mucho más bajo. Si preguntan "quién tiene más DNR" sin más
+      contexto, usa "dnr" (investigaciones reales, con seguimiento); usa el
+      de "rendimiento" solo si piden explícitamente el histórico de 30 días
+      o si ya estás mostrando esa tabla. Nunca los mezcles en la misma
+      respuesta sin decir de cuál hablas.
   Después de pedir la consulta te llegará el resultado real y ahí sí
   contestas con el JSON normal — nunca pidas dos consultas seguidas.
 DATOS EN VIVO DE {center}:
