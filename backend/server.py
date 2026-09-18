@@ -51215,11 +51215,31 @@ REGLAS QUE NO PUEDES SALTARTE:
   acción todavía. Si el servidor no encuentra o encuentra más de una
   furgoneta/conductor con lo que le has pasado, te lo dirá él — tú solo pasa
   lo que ha escrito la persona, no adivines matrículas ni nombres completos.
-- Si te piden la plantilla/plan de rutas de hoy ("hazme la plantilla",
+- Si te piden la plantilla/plan de rutas de HOY ("hazme la plantilla",
   "móntala con Cortex", "genera el reparto de hoy"), propón SIEMPRE
   "generar_plantilla" con "campos": {{}} (no necesita ningún dato tuyo: lo saca
   el servidor de Cortex). No inventes filas ni nombres en la respuesta — di
   solo que vas a montarla con lo que Cortex tenga capturado hoy.
+- "generar_plantilla" SOLO puede montar la de HOY — tira de lo que Cortex
+  tiene capturado EN ESTE MOMENTO, que para mañana o cualquier día futuro
+  simplemente no existe todavía. Si piden la plantilla de "mañana" o de
+  otro día que no sea hoy: dilo tal cual, NO propongas "generar_plantilla"
+  (aunque sea con campos vacíos — no sirve para eso) y NO digas que la vas
+  a preparar tú solo cuando llegue ese momento. TÚ NO EJECUTAS NADA fuera de
+  esta conversación: no hay ningún proceso tuyo funcionando de fondo, ni
+  cron, ni aviso automático — solo existes cuando alguien te escribe y
+  espera. Nunca digas "en cuanto Cortex publique las rutas, la generaré" ni
+  nada que suene a que vas a actuar por tu cuenta más tarde: eso es un
+  compromiso que no puedes cumplir y la persona se quedaría esperando algo
+  que nunca llega. Lo honesto: "eso solo lo puedo montar con datos de hoy —
+  vuelve a pedírmelo mañana cuando Cortex ya tenga las rutas capturadas".
+- "Preasignar" furgonetas ("ponles la furgoneta que le tocaría a cada uno",
+  "asígnales la suya") no es una función que adivines tú: si no te dicen
+  QUÉ matrícula va con QUÉ conductor, no propongas ninguna acción — pregunta
+  explícitamente esos pares, o si lo que quieren es "la furgoneta que ya
+  llevaba cada uno últimamente", diles que eso lo consultan en la ficha del
+  conductor o en Vehículos, porque tú no tienes ese historial para
+  inventarlo sin arriesgarte a emparejar mal (nunca adivines matrículas).
 - Respuestas completas pero sin rollo: la persona tiene prisa. Nada de
   relleno ni de repetir la pregunta.
 - Si preguntan en general "qué sabes hacer" o "qué es lo mejor que puedes
@@ -51645,16 +51665,23 @@ async def ai_asistente_ejecutar(data: _IAAsistenteAccion, user: dict = Depends(r
 # con más de una furgoneta o con ninguna no se asigna sola.
 _FICHAS_MAX_ARCHIVOS = 30
 _FICHAS_MAX_BYTES_TOTAL = 15 * 1024 * 1024
-_FICHAS_TECNICAS_PROMPT = """Cada imagen o PDF que sigue es la FICHA TÉCNICA de
-una furgoneta española (o su permiso de circulación). Para CADA una, en el
-MISMO ORDEN en que aparecen, extrae:
-- "matricula": tal como aparece (4 números + 3 letras, p.ej. "1234ABC").
+_FICHAS_TECNICAS_PROMPT = """Cada imagen o PDF que sigue DEBERÍA ser la FICHA
+TÉCNICA de una furgoneta española (o su permiso de circulación), pero puede
+que alguien haya subido por error otra cosa (una captura de pantalla, una
+foto de un daño, un documento distinto). Para CADA una, en el MISMO ORDEN en
+que aparecen, extrae:
+- "es_ficha_tecnica": true si de verdad parece un permiso de circulación o
+  ficha técnica de vehículo (aunque esté borroso), false si es claramente
+  otra cosa (una captura de una app, una foto sin relación, texto suelto).
+- "matricula": tal como aparece (4 números + 3 letras, p.ej. "1234ABC"), o
+  null si no se lee o "es_ficha_tecnica" es false.
 - "vin": el número de bastidor/VIN si se lee (17 caracteres), si no null.
-Si un fichero no se lee con claridad, pon los dos campos a null para ESE
-fichero — no adivines, y no te saltes ninguno: tiene que haber EXACTAMENTE
-{n} elementos en el array, uno por fichero, en el mismo orden.
+Si un fichero no se lee con claridad pero SÍ parece una ficha técnica, pon
+matricula/vin a null pero "es_ficha_tecnica" a true — no adivines los datos,
+y no te saltes ningún fichero: tiene que haber EXACTAMENTE {n} elementos en
+el array, uno por fichero, en el mismo orden.
 Responde ÚNICAMENTE con este JSON, sin markdown:
-{{"fichas": [{{"matricula": "...", "vin": "..."}}, ...]}}"""
+{{"fichas": [{{"es_ficha_tecnica": true, "matricula": "...", "vin": "..."}}, ...]}}"""
 
 
 @api_router.post("/ai/asistente/fichas-tecnicas")
@@ -51722,14 +51749,22 @@ async def ai_fichas_tecnicas_proponer(
         fi = filas_ia[i] if i < len(filas_ia) and isinstance(filas_ia[i], dict) else {}
         matricula_d = _texto_cuerpo(fi.get("matricula"), 20)
         vin_d = _texto_cuerpo(fi.get("vin"), 30).upper()
-        candidatos = por_matricula.get(_matricula_norm(matricula_d)) or []
         vehiculo, estado = None, "sin_match"
-        if len(candidatos) == 1:
-            vehiculo, estado = candidatos[0], "match"
-        elif len(candidatos) > 1:
-            estado = "ambiguo"
-        elif vin_d and vin_d in por_vin:
-            vehiculo, estado = por_vin[vin_d], "match"
+        # Si Gemini dice explicitamente que esto no es una ficha tecnica, no
+        # tiene sentido intentar emparejar matricula: es honesto decir que no
+        # es lo que parecia, no "sin identificar" como si fuera un permiso
+        # borroso (gotcha del 18-09-2026: una captura ajena entraba aqui y
+        # salia "sin identificar", que suena a que si lo intento y fallo).
+        if fi.get("es_ficha_tecnica") is False:
+            estado = "no_es_ficha"
+        else:
+            candidatos = por_matricula.get(_matricula_norm(matricula_d)) or []
+            if len(candidatos) == 1:
+                vehiculo, estado = candidatos[0], "match"
+            elif len(candidatos) > 1:
+                estado = "ambiguo"
+            elif vin_d and vin_d in por_vin:
+                vehiculo, estado = por_vin[vin_d], "match"
 
         safe_name = re.sub(r"[^a-zA-Z0-9_.]", "_", l["filename"])
         stage_key = f"docs/_pendiente/{lote_id}/{i}_{safe_name}"

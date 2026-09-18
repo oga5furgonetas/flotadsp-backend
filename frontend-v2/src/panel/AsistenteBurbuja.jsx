@@ -79,8 +79,12 @@ function Documentos({ lista }) {
 
 const FICHA_ESTADO_CLS = {
   match: 'text-emerald-300', sin_match: 'text-dark-500', ambiguo: 'text-amber-300',
+  no_es_ficha: 'text-red-300',
 }
-const FICHA_ESTADO_TXT = { sin_match: 'sin identificar', ambiguo: 'varias furgonetas casan' }
+const FICHA_ESTADO_TXT = {
+  sin_match: 'sin identificar', ambiguo: 'varias furgonetas casan',
+  no_es_ficha: 'esto no parece una ficha técnica',
+}
 
 function FichasLote({ lote, resultado, confirmando, onConfirmar }) {
   return (
