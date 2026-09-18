@@ -5,7 +5,7 @@ import { Activity,
   Loader2, Building2, CheckCircle2, Clock, Euro, Sparkles, Gift, PauseCircle,
   LogIn, Trash2, Database, BrainCircuit, ExternalLink, RefreshCw, Megaphone,
   Play, Pause, Plus, Star, Eye, MousePointerClick, Tag, Save,
-  Receipt, Upload, Check, Undo2, Building, Coins, LayoutGrid, X,
+  Receipt, Upload, Check, Undo2, Building, Coins, LayoutGrid, X, Mail,
 } from 'lucide-react'
 import {
   getAdminOverview, getAdminOrgs, getLeads, updateOrg, impersonateOrg, deleteOrg,
@@ -15,6 +15,7 @@ import {
   adminGetCobros, adminMarcarCobro, adminConciliar,
   adminGetEmisor, adminSetEmisor, revisarFacturacion as revisarFacturacionApi, getSaludSistema,
   getAdminModulos,
+  crearEnlaceTienda, getSuscripcionesEmpleo, enviarCampanaCandidatos,
 } from '../api'
 import { API_BASE } from '../../services/api'
 import { hoyLocal } from '../../lib/fecha'
@@ -565,6 +566,129 @@ function DatosEmisor() {
   )
 }
 
+/* ── CAMPAÑA DE BIENVENIDA A CANDIDATOS ───────────────────────────────────
+   Pedido el 18-09-2026: cupón de 10 EUR de la tienda (caduca a las 4 h) +
+   suscripción de 2,99 EUR/mes a avisos prioritarios de empleo, para toda la
+   gente que ha dejado su CV.
+
+   OJO SERIO: esos correos se dieron para una candidatura, no para publicidad
+   ni una suscripción de pago — usarlos así tiene exposición real de
+   RGPD/LOPD. Por eso "enviar a todos" exige escribir ENVIAR a mano (mismo
+   patrón que borrar Cortex, gotcha 45): la decisión la toma una persona
+   mirando la pantalla, nunca un clic accidental. */
+function CampanaCandidatos() {
+  const [enlaceTienda, setEnlaceTienda] = useState('')
+  const [subs, setSubs] = useState(null)
+  const [emailPrueba, setEmailPrueba] = useState('')
+  const [confirmar, setConfirmar] = useState('')
+  const [enviando, setEnviando] = useState('')
+  const [resultado, setResultado] = useState(null)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    getSuscripcionesEmpleo().then((r) => setSubs(r.data)).catch(() => setSubs(null))
+  }, [])
+
+  async function crearEnlace() {
+    setErr('')
+    try {
+      const { data } = await crearEnlaceTienda()
+      setEnlaceTienda(data.url)
+    } catch (e) { setErr(e?.response?.data?.detail || 'No se pudo crear el enlace') }
+  }
+
+  async function enviar(modo) {
+    if (modo === 'prueba' && !emailPrueba.trim()) { setErr('Pon un correo para la prueba'); return }
+    if (modo === 'real' && confirmar.trim() !== 'ENVIAR') { setErr('Escribe ENVIAR para mandarlo a todos de verdad'); return }
+    setEnviando(modo); setErr(''); setResultado(null)
+    try {
+      const { data } = await enviarCampanaCandidatos({
+        modo, email_prueba: emailPrueba.trim(), confirmar: confirmar.trim(),
+      })
+      setResultado(data)
+      if (modo === 'real') { setConfirmar(''); getSuscripcionesEmpleo().then((r) => setSubs(r.data)).catch(() => {}) }
+    } catch (e) { setErr(e?.response?.data?.detail || 'No se pudo enviar') }
+    finally { setEnviando('') }
+  }
+
+  return (
+    <div className="card space-y-4 p-4">
+      <div className="flex items-center gap-2">
+        <Megaphone size={16} className="text-brand-400" />
+        <h3 className="text-sm font-semibold">Campaña de bienvenida a candidatos</h3>
+      </div>
+      <p className="text-[12.5px] text-dark-400">
+        Manda un cupón PERSONAL de 10 € (uno por persona, de un solo uso, caduca
+        a las 4 horas de recibirlo) para la tienda pública y la opción de
+        suscribirse por 2,99 €/mes a avisos prioritarios de empleo.
+      </p>
+      <div className="rounded-lg bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300">
+        Estos correos se dieron para una candidatura, no para publicidad. Antes
+        de mandarlo a todos, piensa si hace falta avisar u ofrecer darse de baja.
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-[12.5px]">
+        <span className="text-dark-400">Enlace público de la tienda:</span>
+        {enlaceTienda ? (
+          <a href={enlaceTienda} target="_blank" rel="noreferrer" className="font-semibold text-brand-300 hover:underline">{enlaceTienda}</a>
+        ) : (
+          <button onClick={crearEnlace} className="btn-secondary text-[12px]">Crear / ver enlace</button>
+        )}
+      </div>
+
+      {subs && (
+        <div className="text-[12.5px] text-dark-400">
+          <div>
+            Suscripciones a avisos prioritarios: <span className="cifra font-semibold text-dark-100">{subs.activas}</span> activas de {subs.total} en total.
+          </div>
+          {subs.suscripciones?.some((s) => s.perfil) && (
+            <div className="mt-2 space-y-1">
+              {subs.suscripciones.filter((s) => s.perfil).slice(0, 20).map((s, i) => (
+                <div key={i} className="rounded-lg bg-dark-900/60 px-2.5 py-1.5">
+                  <span className="cifra text-dark-300">{s.email}</span>
+                  <span className="text-dark-500"> — busca: </span>
+                  <span className="text-dark-200">{s.perfil}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-end gap-2 border-t border-dark-800 pt-3">
+        <div className="flex-1 min-w-[200px]">
+          <label className="mb-1 block text-[11px] text-dark-500">Enviar prueba a tu correo</label>
+          <input value={emailPrueba} onChange={(e) => setEmailPrueba(e.target.value)}
+            placeholder="tu@correo.com" className="input w-full text-[12.5px]" />
+        </div>
+        <button onClick={() => enviar('prueba')} disabled={enviando === 'prueba'} className="btn-secondary flex items-center gap-1.5 text-[12.5px]">
+          {enviando === 'prueba' ? <Loader2 size={13} className="animate-spin" /> : <Mail size={13} />} Enviar prueba
+        </button>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-2 border-t border-dark-800 pt-3">
+        <div className="flex-1 min-w-[200px]">
+          <label className="mb-1 block text-[11px] text-dark-500">Escribe ENVIAR para mandarlo a todos los candidatos de verdad</label>
+          <input value={confirmar} onChange={(e) => setConfirmar(e.target.value)}
+            placeholder="ENVIAR" className="input w-full text-[12.5px]" />
+        </div>
+        <button onClick={() => enviar('real')} disabled={enviando === 'real' || confirmar.trim() !== 'ENVIAR'}
+          className="btn-primary flex items-center gap-1.5 text-[12.5px] disabled:opacity-40">
+          {enviando === 'real' ? <Loader2 size={13} className="animate-spin" /> : <Megaphone size={13} />} Enviar a todos los candidatos
+        </button>
+      </div>
+
+      {err && <div className="rounded-lg bg-red-500/10 px-3 py-2 text-[12px] text-red-300">{err}</div>}
+      {resultado && (
+        <div className="rounded-lg bg-emerald-500/10 px-3 py-2 text-[12px] text-emerald-300">
+          Enviado ({resultado.modo}): {resultado.enviados} de {resultado.destinatarios} — cada uno con su propio cupón, caducan sobre las {resultado.expira_en ? new Date(resultado.expira_en).toLocaleString('es-ES') : '—'}.
+          {resultado.fallidos > 0 && ` ${resultado.fallidos} fallaron.`}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Negocio() {
   const nav = useNavigate()
   const { t } = useT()
@@ -921,6 +1045,10 @@ export default function Negocio() {
         <a href={`${API_BASE}/ai/export-dataset`} target="_blank" rel="noreferrer" className="btn-secondary flex items-center gap-2 text-sm">
           <BrainCircuit size={15} /> {t('neg.export.ai')}
         </a>
+      </div>
+
+      <div className="mt-6">
+        <CampanaCandidatos />
       </div>
     </div>
   )

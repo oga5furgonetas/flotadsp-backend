@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
-import { Loader2, UserPlus, Trash2, Save, ShieldCheck, Mail, KeyRound, ChevronDown, Users as UsersIcon, X, Check } from 'lucide-react'
-import { getAdmins, createAdmin, updateAdmin, deleteAdmin } from '../api'
+import { useEffect, useRef, useState } from 'react'
+import { Loader2, UserPlus, Trash2, Save, ShieldCheck, Mail, KeyRound, ChevronDown, Users as UsersIcon, X, Check, ImagePlus } from 'lucide-react'
+import { getAdmins, createAdmin, updateAdmin, deleteAdmin, subirFotoAdmin } from '../api'
 import { getAdmin, isSuperAdmin, SIEMPRE_VISIBLES } from '../auth'
 import { useT } from '../../i18n'
 import { lista } from '../../lib/lista'
@@ -58,12 +58,28 @@ const FIJOS = SIEMPRE_VISIBLES
 
 /* ── Piezas de UI ── */
 
-function Avatar({ name }) {
+function Avatar({ name, photo, onUpload, subiendo }) {
   const initials = (name || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase()
-  return (
-    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-500/30 to-brand-600/10 font-bold text-[13px] text-brand-200 ring-1 ring-brand-500/30">
-      {initials}
+  const fileRef = useRef(null)
+  const base = (
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-gradient-to-br from-brand-500/30 to-brand-600/10 font-bold text-[13px] text-brand-200 ring-1 ring-brand-500/30">
+      {photo ? <img src={photo} alt="" className="h-full w-full object-cover" /> : initials}
     </div>
+  )
+  // Sin onUpload (super-admin, o quien no puede gestionar a este usuario) el
+  // avatar es solo decorativo — el mismo permiso que ya manda para editarlo.
+  if (!onUpload) return base
+  return (
+    <button type="button" title="Cambiar foto"
+      onClick={() => fileRef.current?.click()}
+      className="group relative h-9 w-9 shrink-0 rounded-full">
+      {base}
+      <input ref={fileRef} type="file" accept="image/*" hidden
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onUpload(f) }} />
+      <span className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
+        {subiendo ? <Loader2 size={13} className="animate-spin text-white" /> : <ImagePlus size={13} className="text-white" />}
+      </span>
+    </button>
   )
 }
 
@@ -191,6 +207,19 @@ export default function Usuarios() {
   }
   useEffect(load, [])
 
+  // Pedido por Dani: "que pueda ponerle yo una a cada uno de primeras". Se
+  // sube y se recarga la lista para ver la foto nueva sin más pasos.
+  const [subiendoFotoId, setSubiendoFotoId] = useState(null)
+  async function subirFoto(userId, file) {
+    setSubiendoFotoId(userId)
+    try {
+      await subirFotoAdmin(userId, file)
+      load()
+    } catch (e) {
+      setMsg({ ok: false, t: e?.response?.data?.detail || 'No se pudo subir la foto.' })
+    } finally { setSubiendoFotoId(null) }
+  }
+
   const roleOptions = sa ? [null, 'center_manager', 'dispatcher'] : ['dispatcher']
 
   async function create() {
@@ -314,7 +343,9 @@ export default function Usuarios() {
               <div key={u.id} className={`${i > 0 ? 'border-t border-dark-800' : ''} bg-dark-900/40`}>
                 {/* Fila */}
                 <div className="flex items-center gap-3 px-4 py-3">
-                  <Avatar name={u.name || u.username} />
+                  <Avatar name={u.name || u.username} photo={u.photo_url}
+                    onUpload={isSuper ? undefined : (file) => subirFoto(u.id, file)}
+                    subiendo={subiendoFotoId === u.id} />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate font-semibold text-dark-50">{u.name || u.username}</span>

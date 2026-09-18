@@ -4,10 +4,11 @@ import {
   Briefcase, Plus, Copy, Check, Loader2, AlertTriangle, Trash2, X,
   MessageCircle, IdCard, Link2, Search, Download, FileText,
   Phone, Mail, Calendar, MapPin, Clock, ExternalLink, Save, History,
-  ChevronRight, UserPlus, Send,
+  ChevronRight, ChevronLeft, UserPlus, Send,
 } from 'lucide-react'
 import { useT } from '../../i18n'
 import Pestanas, { usePestana } from '../components/Pestanas'
+import { getAdmin } from '../auth'
 
 /* Sin oferta abierta, cuatro cosas distintas en pestañas en vez de una
    página de cuatro pantallas de alto. */
@@ -89,9 +90,40 @@ function diasQuieto(c) {
   return Number.isFinite(d) && d >= 0 ? d : null
 }
 
+/* «Nuevo» es desde tu ÚLTIMA VISITA, no un cronómetro fijo. Con 48h a secas,
+   alguien que lleva días importado seguía luciendo «nuevo» aunque ya lo
+   hubieras mirado y movido a Contactado o Descartado — la ironía que hizo
+   saltar la alarma. Dos condiciones a la vez: `importado_en` (cuándo LLEGÓ a
+   nuestro sistema, no cuándo se apuntó en JOIN) posterior a tu última entrada
+   aquí, Y que siga en la fase inicial — en cuanto alguien lo mueve, deja de
+   ser «sin mirar» aunque el reloj no haya llegado a ningún sitio. */
+function marcaVisita() {
+  const id = getAdmin()?.id || 'anon'
+  return `empleo_visto_${id}`
+}
+function esRecienLlegado(c, ultimaVisita) {
+  if (c.fase && c.fase !== 'nuevo') return false
+  const t = c.importado_en ? new Date(c.importado_en).getTime() : NaN
+  return Number.isFinite(t) && t > ultimaVisita
+}
+
 export default function Empleo() {
   const { t } = useT()
   const { center, centers } = useOutletContext()
+  // La marca de «visto hasta aquí» se lee UNA vez al entrar y se escribe ya
+  // mismo con la hora de ahora: la frontera para el PRÓXIMO «nuevo» es este
+  // instante, y mientras dure esta visita todo lo importado antes se ve igual
+  // (recargar la pantalla a media revisión no puede irle borrando candidatos
+  // de la vista sobre la marcha). Sin nada guardado (primera vez de esta
+  // persona) no se marca nada como nuevo — un alta no puede recibir un aluvión
+  // de «nuevo» por candidatos de hace meses.
+  const [ultimaVisita] = useState(() => {
+    try {
+      const guardada = Number(localStorage.getItem(marcaVisita()))
+      localStorage.setItem(marcaVisita(), String(Date.now()))
+      return Number.isFinite(guardada) && guardada > 0 ? guardada : Date.now()
+    } catch { return Date.now() }
+  })
   const [ofertas, setOfertas] = useState([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState('')
@@ -103,6 +135,11 @@ export default function Empleo() {
   const [ficha, setFicha] = useState(null)
   const [busca, setBusca] = useState('')
   const [soloOrigen, setSoloOrigen] = useState('')
+  // Cuántos por página en cada columna, y en cuál está cada una. Object en vez
+  // de un solo número: cada columna se pasea por su propia lista de golpear
+  // "siguiente" en Contactado no puede reiniciar Por contactar.
+  const [porPagina, setPorPagina] = useState(15)
+  const [paginaPorFase, setPaginaPorFase] = useState({})
   /* QUE SE ARRASTRA, EN UN REF Y NO EN UN ESTADO. `setState` no se aplica
      hasta el siguiente render, asi que un arrastre corto —o rapido— llegaba al
      `drop` con el valor todavia vacio y la tarjeta no se movia: el tablero
@@ -223,6 +260,10 @@ export default function Empleo() {
       return clave(`${c.nombre} ${c.telefono} ${c.ciudad} ${c.email} ${c.dni}`).includes(q)
     })
   }, [cands, busca, soloOrigen])
+
+  // Buscar o cambiar de filtro vuelve todas las columnas a la página 1: si no,
+  // una búsqueda que deja tres resultados se queda mostrando la página 4 vacía.
+  useEffect(() => { setPaginaPorFase({}) }, [busca, soloOrigen, sel?.id])
 
   const porFase = useMemo(() => {
     const m = {}
@@ -358,6 +399,11 @@ export default function Empleo() {
                 {origenes.map((x) => <option key={x} value={x}>{x}</option>)}
               </select>
             )}
+            <select value={porPagina} onChange={(e) => { setPorPagina(Number(e.target.value)); setPaginaPorFase({}) }}
+              title={t('empleo.porPagina')}
+              className="rounded-lg border border-dark-700 bg-dark-950 px-2 py-1.5 text-[12px] text-dark-100">
+              {[10, 15, 20].map((n) => <option key={n} value={n}>{n} / {t('empleo.pagina')}</option>)}
+            </select>
             <button onClick={exportar} disabled={!visibles.length}
               className="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[12px] text-dark-300 ring-1 ring-dark-700 hover:text-dark-100 disabled:opacity-40">
               <Download size={13} /> {t('empleo.exportar')}
@@ -370,7 +416,13 @@ export default function Empleo() {
           <div className="grid gap-4 p-4 xl:grid-cols-[1fr_340px]">
             {/* ── El tablero ─────────────────────────────────────────── */}
             <div className={`grid gap-2.5 overflow-x-auto md:grid-cols-3 ${columnas.length > 6 ? '2xl:grid-cols-8' : '2xl:grid-cols-6'}`}>
-              {columnas.map((f) => (
+              {columnas.map((f) => {
+                const total = porFase[f].length
+                const totalPaginas = Math.max(1, Math.ceil(total / porPagina))
+                const pagina = Math.min(paginaPorFase[f] || 1, totalPaginas)
+                const items = porFase[f].slice((pagina - 1) * porPagina, pagina * porPagina)
+                const irA = (p) => setPaginaPorFase((m) => ({ ...m, [f]: p }))
+                return (
                 <div key={f}
                   onDragOver={(e) => { e.preventDefault(); setEncima(f) }}
                   onDragLeave={() => setEncima((x) => (x === f ? '' : x))}
@@ -386,7 +438,7 @@ export default function Empleo() {
                     <span className={`inline-flex rounded px-2 py-0.5 text-[10px] font-semibold uppercase ring-1 ${FASE[f].pill}`}>
                       {t('empleo.fase.' + f)}
                     </span>
-                    <span className="cifra text-[11px] font-bold text-dark-500">{porFase[f].length}</span>
+                    <span className="cifra text-[11px] font-bold text-dark-500">{total}</span>
                   </div>
                   <p className={`-mt-1 mb-2 truncate px-0.5 text-[10.5px] ${FASES_ANTIGUAS.includes(f) ? 'text-amber-400/80' : 'text-dark-600'}`}>
                     {t('empleo.faseAyuda.' + f)}
@@ -401,8 +453,8 @@ export default function Empleo() {
                     </div>
                   )}
                   <div className="space-y-2">
-                    {porFase[f].map((c) => (
-                      <Tarjeta key={c.id} c={c} t={t} activa={ficha?.id === c.id}
+                    {items.map((c) => (
+                      <Tarjeta key={c.id} c={c} t={t} activa={ficha?.id === c.id} ultimaVisita={ultimaVisita}
                         onAbrir={() => setFicha(c)}
                         onArrastrar={(e) => {
                           arrastraRef.current = c
@@ -410,14 +462,32 @@ export default function Empleo() {
                         }}
                         onSoltar={() => { arrastraRef.current = null }} />
                     ))}
-                    {porFase[f].length === 0 && (
+                    {total === 0 && (
                       <p className="rounded-lg border border-dashed border-dark-800 px-2 py-4 text-center text-[11px] text-dark-700">
                         {encima === f ? t('empleo.suelta') : '—'}
                       </p>
                     )}
                   </div>
+                  {totalPaginas > 1 && (
+                    <div className="mt-2 flex items-center justify-between gap-1 border-t border-dark-800 pt-2">
+                      <button onClick={() => irA(pagina - 1)} disabled={pagina <= 1}
+                        title={t('empleo.paginaAnterior')}
+                        className="flex items-center gap-0.5 rounded-md px-2 py-1 text-[11px] font-medium text-dark-300 ring-1 ring-dark-700 hover:bg-dark-800 hover:text-dark-100 disabled:pointer-events-none disabled:opacity-25">
+                        <ChevronLeft size={13} />
+                      </button>
+                      <span className="cifra text-[11px] font-semibold text-dark-300">
+                        {t('empleo.pagina')} {pagina} {t('empleo.de')} {totalPaginas}
+                      </span>
+                      <button onClick={() => irA(pagina + 1)} disabled={pagina >= totalPaginas}
+                        title={t('empleo.paginaSiguiente')}
+                        className="flex items-center gap-0.5 rounded-md px-2 py-1 text-[11px] font-medium text-dark-300 ring-1 ring-dark-700 hover:bg-dark-800 hover:text-dark-100 disabled:pointer-events-none disabled:opacity-25">
+                        <ChevronRight size={13} />
+                      </button>
+                    </div>
+                  )}
                 </div>
-              ))}
+                )
+              })}
             </div>
 
             {/* ── La ficha, al lado ──────────────────────────────────── */}
@@ -484,9 +554,10 @@ function Embudo({ e, t }) {
 }
 
 /* ── Una tarjeta del tablero ──────────────────────────────────────────── */
-function Tarjeta({ c, t, activa, onAbrir, onArrastrar, onSoltar }) {
+function Tarjeta({ c, t, activa, ultimaVisita, onAbrir, onArrastrar, onSoltar }) {
   const quieto = diasQuieto(c)
   const urge = c.fase === 'nuevo' && (quieto ?? 0) >= 3
+  const nuevo = esRecienLlegado(c, ultimaVisita)
   return (
     <button
       draggable
@@ -494,8 +565,17 @@ function Tarjeta({ c, t, activa, onAbrir, onArrastrar, onSoltar }) {
       onDragEnd={onSoltar}
       onClick={onAbrir}
       className={`w-full cursor-grab rounded-lg border bg-dark-900/60 p-2 text-left transition active:cursor-grabbing ${
-        activa ? 'border-brand-500/50 bg-brand-500/5' : 'border-dark-800 hover:border-dark-700'}`}>
-      <div className="truncate text-xs font-medium text-dark-100">{c.nombre}</div>
+        activa ? 'border-brand-500/50 bg-brand-500/5'
+          : nuevo ? 'border-emerald-500/40 hover:border-emerald-500/60'
+          : 'border-dark-800 hover:border-dark-700'}`}>
+      <div className="flex items-center gap-1.5">
+        <div className="min-w-0 flex-1 truncate text-xs font-medium text-dark-100">{c.nombre}</div>
+        {nuevo && (
+          <span className="shrink-0 rounded bg-emerald-500/15 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-emerald-300">
+            {t('empleo.nuevo')}
+          </span>
+        )}
+      </div>
       <div className="truncate text-[11px] text-dark-500">
         {[c.ciudad, c.edad ? `${c.edad} a` : '', c.disponibilidad].filter(Boolean).join(' · ') || '—'}
       </div>
@@ -1470,6 +1550,14 @@ function ConexionJoin({ ofertas, onHecho }) {
 
   const sincronizar = async () => {
     if (!oferta) { setErr('Elige a qué oferta van los candidatos.'); return }
+    // "Todas las ofertas de JOIN" con dos o mas puestos reales mezcla naves:
+    // el 17-09-2026, 113 candidatos de Santiago (OGA5) acabaron tambien en la
+    // de A Coruna (DGA1) por sincronizar asi. El backend ya lo rechaza; esto
+    // solo evita el viaje de ida y vuelta para verlo.
+    if (!job && (trabajos || []).length > 1) {
+      setErr('Hay varios puestos en JOIN: elige a cuál de ellos van estos candidatos.')
+      return
+    }
     setYendo(true); setErr(''); setAviso('')
     try {
       await sincronizarJoin({ oferta_id: oferta, job_id: job })

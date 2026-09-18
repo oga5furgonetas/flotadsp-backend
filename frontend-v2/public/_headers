@@ -19,6 +19,25 @@
 /t/*
   Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://flotadsp-backend.fly.dev; font-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'
 
+# Estas paginas son HECHAS A MANO por coleccion (frontend-v2/public/t/<token>/)
+# y no llevan hash en el nombre como el resto del build: sin esto, Cloudflare
+# les aplicaba su cache por defecto (4 h) y un cambio -como añadir el aviso
+# del cupon de una campaña- tardaba hasta 4 h en verse, sin que nadie supiera
+# por que "no pasa nada". Mismo espiritu que el resto de gotcha 8, aplicado a
+# la unica pagina de este arbol que se queda fuera de esas defensas por no
+# pasar por el build de Vite. Las fotos y fuentes SI se pueden cachear largo:
+# esas no cambian sin cambiar de nombre de fichero.
+# El comodin `/t/*/app.js` NO basta: probado en produccion, Cloudflare lo
+# deja pasar con su cache por defecto igual (el comodin de _headers no
+# combina un segmento fijo despues de el de forma fiable). La ruta EXACTA
+# de cada coleccion se lista aqui a mano — una linea mas por cada drop nuevo.
+/t/c9d87d2c73589c989e11/app.js
+  Cache-Control: no-cache
+/t/*/
+  Cache-Control: no-cache
+/t/*/index.html
+  Cache-Control: no-cache
+
 # El service worker no debe cachearse: así las actualizaciones llegan al momento
 /sw.js
   Cache-Control: no-cache, no-store, must-revalidate

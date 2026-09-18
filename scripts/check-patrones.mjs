@@ -245,7 +245,10 @@ for (const f of ficheros(RAIZ)) {
   const rel = relative(RAIZ, f).replace(/\\/g, '/')
   if (rel.startsWith('scripts/check-')) continue          // los checkers se citan a sí mismos
   const txt = readFileSync(f, 'utf8')
-  const lineas = txt.split('\n')
+  // CRLF (gotcha 68): un '\r' colgando al final de línea es un terminador de
+  // línea para el motor de regex, así que `$` no lo cruza y el borrado de
+  // comentarios `//...` de abajo no llegaba a actuar nunca en estos ficheros.
+  const lineas = txt.split(/\r?\n/)
 
   for (const p of PATRONES) {
     // `soloEn`: hay patrones que solo son un bug en una parte del arbol. El de

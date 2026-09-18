@@ -7,14 +7,15 @@ import {
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX, FileBarChart,
   PackageSearch, PackageCheck, MapPin, Timer, MapPinned, Gauge, Mail, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
-  Briefcase, Store, UserCheck,
+  Briefcase, Store, UserCheck, ImagePlus, Loader2,
 } from 'lucide-react'
-import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco, esPlataforma } from './auth'
-import { getMe, contarPeticionesPendientes, contarCandidatosNuevos } from './api'
+import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco, esPlataforma, actualizarMiFoto } from './auth'
+import { getMe, contarPeticionesPendientes, contarCandidatosNuevos, contarDnrPendientes, subirFotoAdmin } from './api'
 import TrialBanner from './TrialBanner'
 import CommandPalette from './CommandPalette'
 import { BotonAyuda, PanelAyuda, PrimerosPasos } from './Ayuda'
 import LiveNotifier from './LiveNotifier'
+import AsistenteBurbuja from './AsistenteBurbuja'
 import MenuMovil from './components/MenuMovil'
 import { useT, LANGS } from '../i18n'
 import { usePlan } from '../lib/usePlan'
@@ -45,6 +46,9 @@ const AVISOS = {
   // Candidaturas que nadie ha mirado todavia. Dejan de contar en cuanto se les
   // cambia la fase, que es lo que se pidio: el numero es «gente por mirar».
   '/panel/empleo': ({ candidatosNuevos }) => candidatosNuevos,
+  // Investigaciones DNR abiertas y a tiempo (ni contestadas ni caducadas):
+  // lo que Amazon sigue esperando que se le diga donde se entrego.
+  '/panel/informes': ({ dnrPend }) => dnrPend,
 }
 
 const NAV_DEF = [
@@ -130,7 +134,27 @@ const SIN_MODULO = new Set(['perfil', 'login', 'portal-conductor'])
    cerrarlo, y en esta app casi no hay huecos vacios. */
 function MenuUsuario({ admin, showAdmin, lang, setLang, langs, onLogout, t }) {
   const [abierto, setAbierto] = useState(false)
+  const [foto, setFoto] = useState(admin?.photo_url || null)
+  const [subiendoFoto, setSubiendoFoto] = useState(false)
+  const fileRef = useRef(null)
   const caja = useRef(null)
+
+  // Pedida por Dani el 18-09-2026, "le da un toque": cada uno se pone su
+  // foto y sale en la cabecera. Se guarda en el blob de sesion al momento
+  // (actualizarMiFoto) para que no haga falta recargar ni esperar al
+  // siguiente /auth/me para verla.
+  async function cambiarFoto(e) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file || !admin?.id) return
+    setSubiendoFoto(true)
+    try {
+      const { data } = await subirFotoAdmin(admin.id, file)
+      setFoto(data.photo_url)
+      actualizarMiFoto(data.photo_url)
+    } catch { /* la cabecera se queda con la foto de antes, sin romper nada */ }
+    finally { setSubiendoFoto(false) }
+  }
 
   useEffect(() => {
     if (!abierto) return
@@ -164,9 +188,9 @@ function MenuUsuario({ admin, showAdmin, lang, setLang, langs, onLogout, t }) {
         className={`flex items-center gap-2 rounded-lg border px-1.5 py-1 transition-colors ${
           abierto ? 'border-dark-600 bg-dark-800' : 'border-transparent hover:bg-dark-800/70'}`}
       >
-        <span className="grid h-7 w-7 flex-none place-items-center rounded-md bg-brand-400 text-[11px] font-bold"
+        <span className="grid h-7 w-7 flex-none place-items-center overflow-hidden rounded-md bg-brand-400 text-[11px] font-bold"
               style={{ color: 'rgb(var(--brand-tinta))' }}>
-          {iniciales}
+          {foto ? <img src={foto} alt="" className="h-full w-full object-cover" /> : iniciales}
         </span>
         <span className="hidden text-left leading-tight sm:block">
           <span className="block max-w-[130px] truncate text-[12.5px] font-semibold text-dark-100">{nombre}</span>
@@ -191,6 +215,12 @@ function MenuUsuario({ admin, showAdmin, lang, setLang, langs, onLogout, t }) {
             className="flex items-center gap-2.5 px-3 py-2 text-[13px] text-dark-200 hover:bg-dark-800">
             <UserCircle2 size={15} className="text-dark-400" /> {t('nav.profile')}
           </NavLink>
+          <input ref={fileRef} type="file" accept="image/*" hidden onChange={cambiarFoto} />
+          <button onClick={() => fileRef.current?.click()} disabled={subiendoFoto} role="menuitem"
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] text-dark-200 hover:bg-dark-800 disabled:opacity-50">
+            {subiendoFoto ? <Loader2 size={15} className="animate-spin text-dark-400" /> : <ImagePlus size={15} className="text-dark-400" />}
+            Cambiar foto de perfil
+          </button>
           <NavLink to="/panel/portal-conductor" onClick={() => setAbierto(false)} role="menuitem"
             className="flex items-center gap-2.5 px-3 py-2 text-[13px] text-dark-200 hover:bg-dark-800">
             <Shield size={15} className="text-dark-400" /> {t('nav.portal')}
@@ -357,6 +387,7 @@ export default function PanelLayout() {
      que alguien deje de mirar. */
   const [peticionesPend, setPeticionesPend] = useState(0)
   const [candidatosNuevos, setCandidatosNuevos] = useState(0)
+  const [dnrPend, setDnrPend] = useState(0)
   useEffect(() => {
     if (!isAuthed()) return
     let vivo = true
@@ -369,6 +400,9 @@ export default function PanelLayout() {
       // ultimo numero bueno. Un cero falso hace que se deje de mirar.
       contarCandidatosNuevos(center)
         .then((r) => { if (vivo) setCandidatosNuevos(r.data?.nuevos || 0) })
+        .catch(() => {})
+      contarDnrPendientes(center)
+        .then((r) => { if (vivo) setDnrPend(r.data?.pendientes || 0) })
         .catch(() => {})
     }
     mirar()
@@ -452,7 +486,7 @@ export default function PanelLayout() {
       ...it, label: t(it.labelKey),
       // El aviso se cuelga aqui, del sitio donde ya se traduce el menu, para
       // que cualquier entrada futura solo tenga que anadir su clave a AVISOS.
-      aviso: AVISOS[it.to] ? AVISOS[it.to]({ peticionesPend, candidatosNuevos }) : 0,
+      aviso: AVISOS[it.to] ? AVISOS[it.to]({ peticionesPend, candidatosNuevos, dnrPend }) : 0,
     })) }))
     .filter((g) => g.items.length > 0)
   const flatItems = groups.flatMap((g) => g.items)
@@ -824,6 +858,7 @@ export default function PanelLayout() {
         puedeVer={(k) => itemVisible({ to: k === 'dashboard' ? '/panel' : `/panel/${k}` })}
         idUsuario={admin?.id || admin?.sub} />
       <LiveNotifier center={center} centers={centers} />
+      <AsistenteBurbuja center={center} centers={centers} />
     </div>
   )
 }

@@ -301,9 +301,9 @@ export default function Diarios() {
             los que no puntúan no restan nada. */}
         <div className="rounded-xl border border-red-500/30 bg-red-500/[0.07] px-3.5 py-3"
           title="Suma del valor de los paquetes de los DNR que SÍ puntúan (DSC = Y). Es el valor de la mercancía concedida al cliente, tal y como lo da Cortex.">
-          <p className="text-[11px] uppercase tracking-wider text-red-300/70">En paquetes que puntúan</p>
+          <p className="text-[11px] uppercase tracking-wider text-dark-500">En paquetes que puntúan</p>
           <p className="text-2xl font-bold tabular-nums text-red-300">{eur(t.euros_defectos)}</p>
-          <p className="mt-0.5 text-[11px] text-red-200/50">de {eur(t.euros)} en DNRs totales</p>
+          <p className="mt-0.5 text-[11px] text-dark-500">de {eur(t.euros)} en DNRs totales</p>
         </div>
         {[['DNRs en total', t.dnr_total, 'text-dark-100'],
           ['Defectos (DSC = Y)', t.defectos, 'text-red-300'],

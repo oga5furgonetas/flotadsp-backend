@@ -19,7 +19,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 
 from PIL import Image
 
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator, ValidationError
 
 from typing import List, Optional, Tuple
 
@@ -615,6 +615,7 @@ class Alert(BaseModel):
     severity: str
     read: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    kind: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -1106,8 +1107,8 @@ MODULOS_PANEL = [
 _MODULOS_CLAVES = [m["clave"] for m in MODULOS_PANEL]
 # Lo que ve una empresa nueva: la flota y su gente, sin lo que aun se esta
 # afinando con la flota de Dani.
-MODULOS_ESTANDAR = ["dashboard", "mi-dia", "asignacion", "vehiculos", "revision", "inspecciones",
-                    "incidencias", "talleres", "ordenes", "vencimientos", "importaciones",
+MODULOS_ESTANDAR = ["dashboard", "mi-dia", "asignacion", "vehiculos", "revision",
+                    "inspecciones", "incidencias", "talleres", "ordenes", "vencimientos", "importaciones",
                     "conductores", "configuracion"]
 # Sin estas no se puede ni empezar: no se pueden quitar.
 _MODULOS_FIJOS = ("dashboard", "configuracion")
@@ -1482,6 +1483,10 @@ async def _ensure_tenant_indexes(db_name: str):
     # trabajo se parte en dos (gotchas 9, 15 y 46).
     await _idx_unico(tdb[_ONB_COL], "clave")
     await _idx(tdb[_ONB_COL], "id")
+    # El webhook de Stripe hace upsert por suscripcion; sin el unico, un
+    # reintento que no encuentra documento (dedupe de eventos aparte) podria
+    # crear dos fichas de la misma suscripcion (gotcha 9).
+    await _idx_unico(tdb.empleo_suscripciones, "stripe_subscription")
     # La foto diaria: se consulta por dia y por centro.
     # Un unico parcial: dos analisis a la vez del mismo vehiculo creaban dos
     # entradas del mismo golpe (gotcha 9). Solo sobre los ABIERTOS, porque el
@@ -1558,6 +1563,8 @@ async def _ensure_tenant_indexes(db_name: str):
         [("inspection_id", 1), ("scope", 1), ("damage_index", 1)], unique=True,
         name="feedback_unico", partialFilterExpression={"damage_index": {"$type": "number"}}
     )
+    await _idx(tdb.ai_chat_msgs, [("user_id", 1), ("center", 1), ("creado_en", 1)])
+    await _idx(tdb.ai_fichas_lotes, "id", unique=True)
     await _idx(tdb.incidents, "vehicle_id")
     await _idx(tdb.incidents, "status")
     await _idx(tdb.forensic_signatures, [("inspection_id", 1), ("revision", 1)], unique=True)
@@ -2505,6 +2512,11 @@ NUNCA reportes como daño:
 - SOMBRAS proyectadas (barandillas, árboles, el propio fotógrafo)
 - MANCHAS de combustible/grasa junto al tapón
 Ante la duda entre cualquiera de estos y un daño real: confidence < 0.65 y márcalo sugerido.
+ATENCIÓN ESPECIAL A LOS PARAGOLPES (delantero y trasero): es donde más se
+confunde arañazo cosmético, suciedad de carretera y reflejo con daño real —
+medido contra validaciones humanas, es la pieza que más falsos positivos
+acumula de toda la carrocería. Antes de reportar un daño en el paragolpes,
+repasa el catálogo de falsos positivos de arriba dos veces, no una.
 
 === SUCIEDAD ===
 "dirt_level": 0 (impecable) → 10 (barro total).
@@ -3526,10 +3538,13 @@ async def analyze_images_with_gemini(
             refined_ids = {id(d) for d in damages}
             new_damages = [d for d in damages if getattr(d, 'is_new', True)]
 
-        # Confidence gating para los daños que no pasaron por 2ª pasada
+        # Confidence gating para los daños que no pasaron por 2ª pasada.
+        # Mismo umbral reforzado por pieza que en _refine_damage_boxes: no
+        # tiene sentido ser estricto solo cuando la 2ª pasada corre.
         for d in damages:
             if not hasattr(d, 'confirmed') or d.confirmed is None:
-                d.confirmed = (getattr(d, 'confidence', 0) or 0) >= 0.65
+                umbral = _UMBRAL_CONFIANZA_PIEZA(getattr(d, 'part', ''))
+                d.confirmed = (getattr(d, 'confidence', 0) or 0) >= umbral
 
         # Recalcular contadores y coste desde las listas de-duplicadas
         critical_count = sum(1 for d in damages if (d.severity or "").lower() in ("grave", "critico", "crítico"))
@@ -3634,6 +3649,27 @@ _REFINE_PROMPT = (
     "El polígono NO debe cubrir ruedas, cristales ni piezas adyacentes sin daño. "
     "Sé conservador: mejor un polígono pequeño preciso que uno grande que tape zonas sanas."
 )
+
+
+# Umbral de confianza para dar un daño por CONFIRMADO (no "sugerido"). 0.65
+# es el de siempre; estas piezas piden más porque acumulan arañazos
+# superficiales, suciedad y reflejos que Gemini no distingue bien de un golpe
+# real — medido con `/ai/fiabilidad` sobre las validaciones humanas de la
+# flota (17-09-2026): paragolpes trasero acertaba el 11,9 % de 109 casos y el
+# delantero el 21,5 % de 121, los dos peores de largo y los de más volumen.
+# Genérico por nombre de pieza (no por centro ni por flota): un parachoques es
+# igual de propenso al arañazo cosmético en cualquier furgoneta.
+_UMBRAL_CONFIANZA_POR_PIEZA = {
+    "paragolpes": 0.85,
+}
+
+
+def _UMBRAL_CONFIANZA_PIEZA(part: str) -> float:
+    p = (part or "").lower()
+    for clave, umbral in _UMBRAL_CONFIANZA_POR_PIEZA.items():
+        if clave in p:
+            return umbral
+    return 0.65
 
 
 async def _refine_damage_boxes(
@@ -3772,10 +3808,23 @@ async def _refine_damage_boxes(
 
     await asyncio.gather(*[_bounded(i, d) for i, d in to_refine])
 
-    # Aplicar confidence gating: < 0.65 → sugerido (confirmed=False)
+    # Aplicar confidence gating: < 0.65 → sugerido (confirmed=False).
+    # EXCEPTO en piezas medidas contra producción como ruido crónico: los
+    # parachoques acumulan arañazos superficiales, suciedad y reflejos que
+    # Gemini confunde con daño real con la MISMA confianza que un golpe de
+    # verdad. `/ai/fiabilidad` (validaciones humanas de esta flota) lo mide:
+    # paragolpes trasero acertaba solo 11,9 % de 109 casos y el delantero
+    # 21,5 % de 121 — con mucho los dos peores de las 25 piezas, y encima los
+    # de más volumen. El aviso de patrones (ai_learning.py) ya le pedía a
+    # Gemini "sé muy exigente aquí" y no bastó: exigirlo aquí, en Python, no
+    # depende de que el modelo obedezca. El trade-off es explícito y aceptado
+    # (Dani, 17-09-2026): algún golpe leve real en el paragolpes puede pasar a
+    # "sugerido" en vez de confirmado, a cambio de dejar de inundar de falsos
+    # positivos las dos piezas que más ruido dan.
     for d in refined:
         conf = getattr(d, 'confidence', 0) or 0
-        d.confirmed = conf >= 0.65
+        umbral = _UMBRAL_CONFIANZA_PIEZA(getattr(d, 'part', ''))
+        d.confirmed = conf >= umbral
 
     logger.info(f"[2ª pasada] completa. Sugeridos: {sum(1 for d in refined if not d.confirmed)}/{len(refined)}")
     return refined
@@ -5996,10 +6045,11 @@ async def _send_resend_email(to: str, subject: str, html: str,
                              responder_a: str = "", copia: Optional[list] = None,
                              texto: str = "") -> bool:
     """Envía un email transaccional con Resend. Devuelve False si falla.
-    Remitente configurable con EMAIL_FROM (por defecto hola@flotadsp.com); OJO:
-    el dominio del remitente DEBE estar verificado en resend.com/domains o Resend
-    devuelve 403 y no envía nada. Registramos el error REAL para no fallar en
-    silencio (antes un dominio sin verificar parecía 'no configurado')."""
+    Remitente configurable con EMAIL_FROM (contacto@flotadsp.com en
+    producción); OJO: el dominio del remitente DEBE estar verificado en
+    resend.com/domains o Resend devuelve 403 y no envía nada. Registramos el
+    error REAL para no fallar en silencio (antes un dominio sin verificar
+    parecía 'no configurado')."""
     resend_key = os.environ.get("RESEND_API_KEY", "")
     if not (resend_key and to):
         logger.warning("email: RESEND_API_KEY o destinatario ausente — no se envía")
@@ -6727,14 +6777,17 @@ async def get_my_assigned_vehicle(user: dict = Depends(get_current_user)):
 
 @auth_router.get("/me")
 async def get_me(user: dict = Depends(get_current_user)):
-    # Incluir theme y email si existen en la BD (solo admins)
+    # Incluir theme, email y foto si existen en la BD (solo admins)
     theme = None
     email = None
+    photo_url = None
     if user.get("role") == "admin":
-        admin_doc = await global_db.admin_users.find_one({"id": user["sub"]}, {"_id": 0, "theme": 1, "email": 1})
+        admin_doc = await global_db.admin_users.find_one(
+            {"id": user["sub"]}, {"_id": 0, "theme": 1, "email": 1, "photo_url": 1})
         if admin_doc:
             theme = admin_doc.get("theme")
             email = admin_doc.get("email")
+            photo_url = admin_doc.get("photo_url")
     return {
         "id": user["sub"],
         "role": user["role"],
@@ -6743,6 +6796,7 @@ async def get_me(user: dict = Depends(get_current_user)):
         "name": user.get("name"),
         "theme": theme,
         "email": email,
+        "photo_url": photo_url,
         # Permisos, rol y centros TAL COMO ESTAN AHORA en la base de datos
         # (get_current_user ya los ha refrescado). El panel los relee al abrir
         # para no quedarse con lo que dijera un JWT emitido hace hasta 72 h:
@@ -6927,6 +6981,40 @@ async def delete_admin(admin_id: str, _admin: dict = Depends(require_admin)):
                   "deleted_by": _admin.get("sub")}}, upsert=True)
     _ADMIN_EXISTS_CACHE.pop(admin_id, None)
     return {"success": True}
+
+
+@auth_router.post("/admins/{admin_id}/photo")
+async def subir_foto_admin(admin_id: str, file: UploadFile = File(...), _admin: dict = Depends(require_admin)):
+    """Foto de perfil de un usuario del panel — sale en la cabecera y (en
+    breve) en el chat interno. Cada uno puede ponerse la suya; para la de
+    otro hace falta poder gestionarlo, el MISMO permiso que editarle los
+    datos (gotcha 27: un permiso nuevo que no siga la regla de siempre es
+    invisible o se salta a quien no debería)."""
+    es_uno_mismo = admin_id == _admin.get("sub")
+    target = await global_db.admin_users.find_one({"id": admin_id}, {"_id": 0})
+    if not target or target.get("org_id") != _admin.get("org_id"):
+        raise HTTPException(404, "Usuario no encontrado")
+    if not es_uno_mismo:
+        if target.get("super_admin"):
+            raise HTTPException(403, "No puedes modificar a un super-admin")
+        if not _admin.get("sa") and _is_center_manager(_admin):
+            if not _can_manage_user(_admin, target.get("allowed_centers")):
+                raise HTTPException(403, "No tienes acceso para modificar este usuario")
+        elif not _admin.get("sa") and not _is_center_manager(_admin):
+            raise HTTPException(403, "Sin permisos para modificar usuarios")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "Archivo vacío")
+    if len(content) > 8 * 1024 * 1024:
+        raise HTTPException(400, "La foto no puede superar 8 MB")
+    try:
+        photo_url, _bytes = await process_and_save_image(content, f"admin-{admin_id}")
+    except Exception as e:
+        raise HTTPException(500, f"Error procesando imagen: {e}")
+    await global_db.admin_users.update_one({"id": admin_id}, {"$set": {"photo_url": photo_url}})
+    _ADMIN_EXISTS_CACHE.pop(admin_id, None)
+    return {"success": True, "photo_url": photo_url}
 
 
 @auth_router.post("/change-my-password")
@@ -14619,9 +14707,12 @@ async def recheck_fraud(inspection_id: str, _=Depends(require_admin)):
 # =========================
 
 @api_router.get("/alerts")
-async def get_alerts(unread_only: bool = False, user: dict = Depends(require_admin)):
+async def get_alerts(unread_only: bool = False, center: Optional[str] = None,
+                     kind: Optional[str] = None, user: dict = Depends(require_admin)):
     query = {"read": False} if unread_only else {}
-    query.update(await _filtro_por_vehiculos(user))
+    if kind:
+        query["kind"] = kind
+    query.update(await _filtro_por_vehiculos(user, center))
     alerts = await db.alerts.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
     return alerts
 
@@ -20797,7 +20888,10 @@ async def empleo_crear_oferta(datos: dict = Body(...), user: dict = Depends(requ
     doc = serialize_doc(o.model_dump())
     doc["slug"] = await _empleo_slug_libre("%s %s" % (titulo, doc.get("ciudad") or ""))
     await db.ofertas_empleo.insert_one(dict(doc))
-    return await _empleo_con_enlace(doc)
+    salida = await _empleo_con_enlace(doc)
+    if doc.get("activa"):
+        await _avisar_suscriptores_empleo(salida)
+    return salida
 
 
 @api_router.get("/empleo/ofertas")
@@ -21885,6 +21979,27 @@ async def empleo_join_sincronizar(body: dict = Body(...), _=Depends(require_admi
         raise HTTPException(400, "Primero conecta JOIN con su token")
     job = str(body.get("job_id") or "").strip()
     job_id = int(job) if job.isdigit() else None
+    # SIN job_id, `/applications` de JOIN devuelve TODOS los puestos juntos, y
+    # aqui se guardarian TODOS bajo la oferta interna que se haya elegido —da
+    # igual cual sea. Con dos o mas puestos reales en JOIN eso mezcla naves:
+    # medido el 17-09-2026, 113 candidatos de la oferta de Santiago (OGA5)
+    # acabaron tambien en la de A Coruna (DGA1) por sincronizar "Todas las
+    # ofertas de JOIN" con DGA1 seleccionada. "Todas" solo tiene sentido
+    # cuando de verdad hay UN puesto en JOIN y no hay nada que confundir.
+    if job_id is None:
+        import httpx as _httpx
+        n_puestos = 0
+        async with _httpx.AsyncClient(timeout=20) as cli:
+            try:
+                r = await _join_pedir(cli, "/jobs", token,
+                                      {"page": 1, "pageSize": 2, "status": "ONLINE,OFFLINE,ARCHIVED"})
+                n_puestos = len(r.json()) if isinstance(r.json(), list) else 0
+            except _httpx.HTTPError:
+                pass
+        if n_puestos > 1:
+            raise HTTPException(
+                400, "Hay varios puestos en JOIN: elige a cuál de ellos van estos candidatos, "
+                     "\"Todas las ofertas\" mezclaría naves.")
     # UNA A LA VEZ POR EMPRESA, y lo decide la base: dos clics seguidos no
     # pueden lanzar dos descargas de los mismos cien CV. Una que lleve mas de
     # media hora «en marcha» se da por muerta (reinicio del servidor).
@@ -26315,7 +26430,7 @@ async def _combustible_registrar(vehicle_id: str, inspection_id: str, driver_id:
     desc = f"{placa} está {_combustible_texto(pct)} según {quien} al hacer la inspección."
     await db.alerts.insert_one(serialize_doc(Alert(
         vehicle_id=vehicle_id, inspection_id=inspection_id, title=titulo,
-        description=desc, severity="medium").model_dump()))
+        description=desc, severity="medium", kind="combustible").model_dump()))
     await _telegram_aviso(f"⛽ <b>{titulo}</b>\n{desc}")
     try:
         await push_center_event((v or {}).get("center") or "", f"⛽ {titulo}", desc, "/panel/vehiculos")
@@ -36879,8 +36994,18 @@ def _horarios_conductores(rosters: dict, hoy: str) -> list:
                 })
         if not bloques and not pendiente:
             continue
+        # `driverName` va al nivel de arriba (comprobado contra el esquema
+        # real capturado el 17-09-2026: `confidentialFields` no existe en
+        # este objeto — solo dentro de `shiftAssignmentsMap`, que es otra
+        # cosa. Se llego a sospechar por ahi y no era). Respaldo con nombre y
+        # apellidos por separado, por si `driverName` viniera vacio para
+        # alguien en concreto y los otros dos no.
+        nombre = _texto_cuerpo(c.get("driverName"), 80)
+        if not nombre:
+            nombre = _texto_cuerpo(
+                " ".join(x for x in (c.get("driverFirstName"), c.get("driverLastName")) if x), 80)
         fuera.append({
-            "nombre": _texto_cuerpo(c.get("driverName"), 80),
+            "nombre": nombre,
             "driver_id": _texto_cuerpo(c.get("driverProviderId"), 80),
             "estado": _texto_cuerpo(c.get("driverOperationalStatus"), 20),
             "trabajado": trabajado,
@@ -37450,6 +37575,25 @@ async def _dnr_naves() -> list:
                        "total": (r or {}).get("total", 0),
                        "de_la_empresa": n in {c.upper() for c in centros}})
     return salida
+
+
+@api_router.get("/dnr/investigaciones/pendientes")
+async def dnr_contar_pendientes(center: Optional[str] = None, _=Depends(require_admin)):
+    """Cuantas investigaciones DNR siguen abiertas y a tiempo, para el aviso del
+    menu. Mismo motivo que /empleo/candidatos/nuevos: esto lo pide el menu cada
+    dos minutos desde todas las pantallas, y /dnr/investigaciones trae encima el
+    contexto de Cortex de cada una para acabar mirando solo un numero.
+
+    OJO AL ORDEN: declarado ANTES de /dnr/investigaciones, que si no 'pendientes'
+    no puede colarse por delante en ninguna ruta con parametro.
+    """
+    ahora = datetime.now(timezone.utc).isoformat()
+    q = {"contestada": {"$ne": True}, "cerrada_en": {"$exists": False},
+         "$or": [{"vence": {"$exists": False}}, {"vence": ""}, {"vence": {"$gte": ahora}}]}
+    if center:
+        q["centro"] = {"$regex": re.escape(_centro_norm(center) or center), "$options": "i"}
+    n = await db[_DNR_COL].count_documents(q)
+    return {"pendientes": n}
 
 
 @api_router.get("/dnr/investigaciones")
@@ -40223,6 +40367,84 @@ _PLANTILLA_CELDAS = ("ruta", "conductor", "movil", "furgo",
                      "h_salida", "h_bajada", "h_llegada", "observaciones")
 
 
+async def _plantilla_filas_desde_cortex(center: str, dia: str) -> list:
+    """Filas de la plantilla de HOY con lo que ya sabemos de verdad: ruta y
+    conductor los da Cortex (`cortex_resumen`, capturado por la extension sin
+    que nadie teclee nada); telefono y furgo se completan con el cuadrante de
+    Asignacion diaria si la oficina ya lo relleno hoy. Nunca inventa hora de
+    salida ni furgo: Cortex no la da (solo llega por captura de pantalla, ver
+    BLOQUE 4 mas arriba), y adivinarla seria peor que dejarla en blanco para
+    que la oficina la ponga, que es exactamente lo que hace hoy a mano.
+    """
+    saids = []
+    if center and center not in ("Todos", ""):
+        c = center.upper()
+        stations = await db.cortex_stations.find(
+            {}, {"_id": 0, "service_area_id": 1, "center": 1}).to_list(200)
+        saids = [s["service_area_id"] for s in stations
+                 if s.get("service_area_id") and s.get("center") == c]
+
+    q = {"dia": dia}
+    if saids:
+        q["service_area_id"] = {"$in": saids}
+    ruta_a_transporter: dict = {}
+    nombres: dict = {}
+    async for res in db.cortex_resumen.find(q, {"_id": 0, "rutas": 1, "gente": 1}):
+        for g in res.get("gente") or []:
+            tid = str(g.get("transporterId") or "").strip()
+            nombre = re.sub(r"\s+", " ", str(g.get("nombre") or "")).strip()
+            if tid and nombre and tid not in nombres:
+                nombres[tid] = nombre
+        for r in res.get("rutas") or []:
+            rc, tid = r.get("routeCode"), str(r.get("transporterId") or "").strip()
+            if rc and tid:
+                ruta_a_transporter[rc] = tid
+    if not ruta_a_transporter:
+        return []
+
+    faltan = {tid for tid in ruta_a_transporter.values() if tid not in nombres}
+    if faltan:
+        for tid, info in (await _cx_nombres(faltan)).items():
+            if info.get("nombre"):
+                nombres[tid] = info["nombre"]
+
+    # Cuadrante ya tecleado hoy para este centro (Asignacion diaria): trae
+    # furgo real por RUTA, que es el puente que el gotcha 79 dejo guardado a
+    # proposito para esto.
+    por_ruta_asignada = {}
+    if center and center != "Todos":
+        asign = await db.daily_assignments.find_one(
+            {"date": dia, "center": center}, {"_id": 0, "slots": 1})
+        for s in (asign or {}).get("slots") or []:
+            ref = (s.get("route") or "").strip().upper()
+            if ref:
+                por_ruta_asignada[ref] = s
+
+    # Telefono: SIEMPRE de la ficha, nunca del resumen de Cortex (gotcha 66:
+    # el numero de Cortex es del turno, no de la persona).
+    ids = set(nombres)
+    fichas = await db.drivers.find(
+        {"$or": [{"driver_id": {"$in": list(ids)}}, {"transporter_id": {"$in": list(ids)}}]},
+        {"_id": 0, "name": 1, "phone": 1}).to_list(2000) if ids else []
+    tel_por_nombre = {(f.get("name") or "").strip().upper(): f.get("phone")
+                      for f in fichas if f.get("name") and f.get("phone")}
+
+    filas = []
+    for rc in sorted(ruta_a_transporter):
+        tid = ruta_a_transporter[rc]
+        conductor = (nombres.get(tid) or "").upper()
+        asignado = por_ruta_asignada.get(rc) or {}
+        filas.append({
+            "ruta": rc,
+            "conductor": conductor or f"SIN NOMBRE ({tid})",
+            "movil": tel_por_nombre.get(conductor, ""),
+            "furgo": asignado.get("vehicle_plate") or "",
+            "h_salida": "", "h_bajada": "", "h_llegada": "",
+            "observaciones": "" if conductor else "Cortex no da el nombre de este ID: revisar.",
+        })
+    return filas
+
+
 @api_router.patch("/tools/plantilla-compartida/{draft_id}/celda")
 async def plantilla_compartida_celda(draft_id: str, body: dict = Body(...), admin=Depends(require_admin)):
     """Cambia UNA celda de la plantilla compartida.
@@ -41526,11 +41748,15 @@ _DSC_MINIMO = 80
 _DSC_MUESTRA_FIABLE = 250
 
 
-def _dsc_base(desde: str) -> list:
+async def _dsc_base(desde: str, center: str = "") -> list:
     """Etapas comunes: saca de cada paquete entregado DONDE se dejo."""
+    match = {"service_day": {"$gte": desde}, "state": "DELIVERED",
+             "driver_id": {"$nin": [None, ""]}}
+    cc = await _cortex_centro_match(center)
+    if cc:
+        match = {"$and": [match, cc]}
     return [
-        {"$match": {"service_day": {"$gte": desde}, "state": "DELIVERED",
-                    "driver_id": {"$nin": [None, ""]}}},
+        {"$match": match},
         # El ultimo DELIVERED del timeline: un paquete puede tener varios
         # eventos y el que cuenta es el que cerro la entrega.
         {"$addFields": {"_e": {"$last": {"$filter": {
@@ -41881,11 +42107,17 @@ async def guardar_nota_direccion(data: dict = Body(...), user: dict = Depends(re
 
 
 @api_router.get("/cortex/dsc")
-async def cortex_dsc(dias: int = 7, _=Depends(require_admin)):
-    """Dónde deja los paquetes cada conductor y quién se sale de la media."""
+async def cortex_dsc(dias: int = 7, center: str = "", _=Depends(require_admin)):
+    """Dónde deja los paquetes cada conductor y quién se sale de la media.
+
+    Antes no aceptaba `center` en absoluto: la pantalla mandaba el filtro y el
+    backend lo ignoraba entero, así que las tres naves veían siempre el MISMO
+    reparto (el de toda la empresa junta) — el mismo síntoma que
+    `direcciones-problema` ya resolvía al lado, con el mismo mapeo estación→
+    centro (`_cortex_centro_match`, extraído de `_cortex_scope`)."""
     dias = max(1, min(int(dias or 7), 30))
     desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
-    base = _dsc_base(desde)
+    base = await _dsc_base(desde, center)
 
     # Motor es async: aggregate() devuelve un cursor que hay que recorrer con
     # await/to_list. Un list() a secas revienta con
@@ -41918,8 +42150,16 @@ async def cortex_dsc(dias: int = 7, _=Depends(require_admin)):
 
     total = sum(r["n"] for r in reparto)
     if not total:
+        # SIN esto, un centro con la captura parada (ver
+        # [[dga1-dga2-captura-parada]]) enseña "todavía no hay entregas" como
+        # si la pantalla no funcionara — un mensaje que vale para las 8 de la
+        # mañana de un día normal pero no para 22 días sin una sola captura.
+        # `last_capture_at` ya viene scoped por centro (mismo fix de esta
+        # noche en /cortex/overview), así que el frontend puede distinguir
+        # "hoy aún no ha entrado nada" de "esta nave no captura desde hace semanas".
         return {"dias": dias, "desde": desde, "total": 0, "reparto": [],
-                "conductores": [], "flota": None}
+                "conductores": [], "flota": None,
+                "last_capture_at": await _cx_ultima_captura(await _cortex_centro_match(center))}
 
     riesgo_tot = sum(r["n"] for r in reparto if r["_id"] in _DSC_RIESGO)
     tasa_flota = riesgo_tot / total
@@ -41977,10 +42217,14 @@ async def cortex_dsc(dias: int = 7, _=Depends(require_admin)):
     # (libreta de portales). Medido en 14 dias: 767 retornos, y el 44 % de los
     # BUSINESS_CLOSED cae entre las 14 y las 16 h — el cierre comercial
     # espanol. Eso se arregla planificando, no rinendo a nadie.
+    _ret_match = {"service_day": {"$gte": desde},
+                  "state": {"$in": ["BACK_TO_ORIGIN", "ATTEMPTED", "CUSTOMER_UNAVAILABLE",
+                                    "ADDRESS_NOT_FOUND", "REJECTED"]}}
+    _ret_cc = await _cortex_centro_match(center)
+    if _ret_cc:
+        _ret_match = {"$and": [_ret_match, _ret_cc]}
     ret_base = [
-        {"$match": {"service_day": {"$gte": desde},
-                    "state": {"$in": ["BACK_TO_ORIGIN", "ATTEMPTED", "CUSTOMER_UNAVAILABLE",
-                                      "ADDRESS_NOT_FOUND", "REJECTED"]}}},
+        {"$match": _ret_match},
         {"$addFields": {"_r": {"$last": {"$filter": {
             "input": {"$ifNull": ["$timeline", []]}, "as": "t",
             "cond": {"$in": ["$$t.state", ["BACK_TO_ORIGIN", "ATTEMPTED"]]}}}}}},
@@ -46125,6 +46369,37 @@ def _cortex_day_query(day: str) -> dict:
     ]}
 
 
+async def _cortex_centro_match(center: str) -> Optional[dict]:
+    """La condición de CENTRO sola, sin fecha — separada de `_cortex_scope`
+    para que las consultas de RANGO (`$gte`, que `_cortex_day_query` no cubre:
+    es de igualdad exacta) puedan reusar el mismo mapeo estación→centro sin
+    duplicar la lógica de los huérfanos."""
+    if not center or center in ("Todos", "todos", ""):
+        return None
+    c = center.upper()
+    stations = [s async for s in db.cortex_stations.find(
+        {}, {"_id": 0, "service_area_id": 1, "center": 1})]
+    saids = [s["service_area_id"] for s in stations
+             if s.get("service_area_id") and s.get("center") == c]
+    mapped_ids = [s["service_area_id"] for s in stations
+                  if s.get("service_area_id") and s.get("center")]
+    # Un paquete es de este centro si su estación está mapeada a él, o si ya
+    # trae la etiqueta center (captura reciente que la leyó bien).
+    or_c = [{"center": c}]
+    if saids:
+        or_c.append({"service_area_id": {"$in": saids}})
+    # HUÉRFANOS: sin etiqueta de centro Y sin estación mapeada a ningún
+    # centro. Antes desaparecían al filtrar por centro (parecía que "no
+    # había nada"); ahora se ven en TODOS los centros hasta que se asigna
+    # su estación — datos invisibles es peor que datos sin repartir.
+    if mapped_ids:
+        or_c.append({"$and": [{"center": {"$in": [None, ""]}},
+                              {"service_area_id": {"$nin": mapped_ids}}]})
+    else:
+        or_c.append({"center": {"$in": [None, ""]}})
+    return {"$or": or_c}
+
+
 async def _cortex_scope(day: str, center: str) -> dict:
     """Query Mongo combinando día + centro. El centro se resuelve por el MAPEO
     estación→centro (serviceAreaId), que es el identificador duro y siempre
@@ -46133,29 +46408,9 @@ async def _cortex_scope(day: str, center: str) -> dict:
     dq = _cortex_day_query(day)
     if dq:
         conds.append(dq)
-    if center and center not in ("Todos", "todos", ""):
-        c = center.upper()
-        stations = [s async for s in db.cortex_stations.find(
-            {}, {"_id": 0, "service_area_id": 1, "center": 1})]
-        saids = [s["service_area_id"] for s in stations
-                 if s.get("service_area_id") and s.get("center") == c]
-        mapped_ids = [s["service_area_id"] for s in stations
-                      if s.get("service_area_id") and s.get("center")]
-        # Un paquete es de este centro si su estación está mapeada a él, o si ya
-        # trae la etiqueta center (captura reciente que la leyó bien).
-        or_c = [{"center": c}]
-        if saids:
-            or_c.append({"service_area_id": {"$in": saids}})
-        # HUÉRFANOS: sin etiqueta de centro Y sin estación mapeada a ningún
-        # centro. Antes desaparecían al filtrar por centro (parecía que "no
-        # había nada"); ahora se ven en TODOS los centros hasta que se asigna
-        # su estación — datos invisibles es peor que datos sin repartir.
-        if mapped_ids:
-            or_c.append({"$and": [{"center": {"$in": [None, ""]}},
-                                  {"service_area_id": {"$nin": mapped_ids}}]})
-        else:
-            or_c.append({"center": {"$in": [None, ""]}})
-        conds.append({"$or": or_c})
+    cc = await _cortex_centro_match(center)
+    if cc:
+        conds.append(cc)
     if not conds:
         return {}
     return conds[0] if len(conds) == 1 else {"$and": conds}
@@ -46496,13 +46751,18 @@ async def cortex_overview(day: str = "", center: str = "", _=Depends(require_adm
         await _cortex_scope(today, center),
         {"_id": 0, "state": 1, "driver_name": 1, "route_code": 1,
          "timeline.state": 1, "timeline.at": 1}).to_list(20000)
-    # Frescura de la captura (org completa, cualquier día): la señal de
-    # confianza del panel — "¿la extensión sigue viva?". Es `seen_at`, que lo
-    # escribe la ingesta, y NO `updated_at`, que es la hora del evento en
-    # Cortex (gotcha 29): por la tarde, con las rutas cerradas, `updated_at`
-    # deja de moverse aunque la captura funcione, y con la captura parada no
-    # hay forma de distinguirlo.
-    last_capture_at = await _cx_ultima_captura()
+    # Frescura de la captura DE ESTE CENTRO, no de la empresa entera: la señal
+    # de confianza del panel — "¿la extensión sigue viva EN ESTA NAVE?". Antes
+    # se medía sin filtrar centro, así que con OGA5 capturando en vivo, un
+    # dispatcher de DGA1/DGA2 veía "última captura: hace 2 min" aunque SU
+    # propia estación llevara semanas sin una sola captura — medido el
+    # 18-09-2026: DGA1 sin `cortex_packages` nuevos desde el 27-08, DGA2 desde
+    # el 11-08, y el indicador de frescura los tapaba a los dos con el latido
+    # de OGA5. Es `seen_at`, que lo escribe la ingesta, y NO `updated_at`, que
+    # es la hora del evento en Cortex (gotcha 29): por la tarde, con las rutas
+    # cerradas, `updated_at` deja de moverse aunque la captura funcione, y con
+    # la captura parada no hay forma de distinguirlo.
+    last_capture_at = await _cx_ultima_captura(await _cortex_centro_match(center))
     n = len(pkgs)
     missing = [p for p in pkgs if p.get("state") == "MISSING"]
     recovered_today, lost, missing_today, rec_times, attempts_pre = [], [], [], [], []
@@ -46618,7 +46878,7 @@ async def cortex_routes(day: str = "", center: str = "", _=Depends(require_admin
     # «sin entregar». Lo que sabemos es que hasta la ultima captura no habian
     # entregado; despues, no lo sabemos, y eso se dice aparte (`captura`).
     ahora = datetime.now(timezone.utc)
-    ultima_captura = await _cx_ultima_captura()
+    ultima_captura = await _cx_ultima_captura(await _cortex_centro_match(center))
     referencia = ahora
     uc = _cortex_parse_dt(ultima_captura) if ultima_captura else None
     if uc:
@@ -49478,7 +49738,9 @@ async def _tienda_enlace_publico() -> str:
         {"_id": 0, "token": 1, "web": 1})
     if not e or not e.get("token"):
         return ""
-    base = (e.get("web") or PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
+    # PUBLIC_BASE_URL es el del BACKEND (para URLs que apuntan a si mismo);
+    # un enlace que abre alguien es SIEMPRE de la web, _PORTAL_BASE_FRONT.
+    base = (e.get("web") or _PORTAL_BASE_FRONT).rstrip("/")
     return "%s/t/%s/" % (base, e["token"])
 
 
@@ -49591,7 +49853,7 @@ async def tienda_publica_comprar(token: str, body: dict = Body(...)):
         "creado_en": ahora.isoformat(),
     }
 
-    base = (enlace.get("web") or PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
+    base = (enlace.get("web") or _PORTAL_BASE_FRONT).rstrip("/")
     datos = [
         ("mode", "payment"),
         ("success_url", "%s/t/%s/?pago=ok&ref=%s" % (base, token, doc["ref"])),
@@ -49610,6 +49872,12 @@ async def tienda_publica_comprar(token: str, body: dict = Body(...)):
         ("line_items[0][price_data][product_data][name]",
          "%s - talla %s" % (p.get("nombre") or "Prenda", talla)),
     ]
+    # Un cupon de una campaña (ej. bienvenida a candidatos): lo valida STRIPE,
+    # no nosotros (redeem_by dentro del propio cupon) — asi no hay que guardar
+    # ni comprobar caducidad aqui. Si ya no vale (caducado, mal escrito), se
+    # reintenta SIN el: una venta real no se pierde por un cupon viejo.
+    cupon = _texto_cuerpo(body.get("cupon"), 64)
+    intento = datos + [("discounts[0][coupon]", cupon)] if cupon else datos
 
     import httpx as _httpx
     # OJO CON `data=` Y UNA LISTA. httpx solo trata `data` como formulario
@@ -49622,13 +49890,24 @@ async def tienda_publica_comprar(token: str, body: dict = Body(...)):
     # minuto" -un problema pasajero- cuando no iba a funcionar nunca.
     # Se codifica a mano y viaja como contenido, que ademas conserva el orden y
     # las claves repetidas.
+    cupon_aplicado = False
     try:
         async with _httpx.AsyncClient(timeout=25) as cli:
             r = await cli.post(
                 _STRIPE_API + "/checkout/sessions",
-                content=_url_encode(datos).encode(),
+                content=_url_encode(intento).encode(),
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 auth=(_stripe_clave(), ""))
+        if cupon and r.status_code >= 300:
+            logger.warning("Cupon %s rechazado por Stripe, se reintenta sin el: %s", cupon, r.text[:200])
+            async with _httpx.AsyncClient(timeout=25) as cli:
+                r = await cli.post(
+                    _STRIPE_API + "/checkout/sessions",
+                    content=_url_encode(datos).encode(),
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    auth=(_stripe_clave(), ""))
+        else:
+            cupon_aplicado = bool(cupon)
     except Exception as e:
         await _tienda_devolver(p["id"], uds)
         logger.error("Stripe checkout publico: %s", e)
@@ -49639,12 +49918,21 @@ async def tienda_publica_comprar(token: str, body: dict = Body(...)):
         raise HTTPException(502, "No se ha podido abrir el pago. Inténtalo en un minuto.")
     ses = r.json()
     doc["stripe_session"] = ses.get("id")
+    if cupon:
+        doc["cupon"] = cupon
+        doc["cupon_aplicado"] = cupon_aplicado
+        if cupon_aplicado:
+            # El importe del descuento SE LEE DE STRIPE, nunca del cuerpo: si
+            # viniera del cliente, bastaria con mandar un numero enorme para
+            # que la comprobacion del webhook (gotcha 70 con otra cara) dejara
+            # pasar cualquier cobro de menos como "cuadrado".
+            doc["descuento_cent"] = await _stripe_cupon_importe(cupon)
     try:
         await db[_TCOL_PEDIDOS].insert_one(dict(doc))   # copia (gotcha 42)
     except Exception:
         await _tienda_devolver(p["id"], uds)
         raise
-    return {"url": ses.get("url"), "ref": doc["ref"]}
+    return {"url": ses.get("url"), "ref": doc["ref"], "cupon_aplicado": cupon_aplicado}
 
 
 # -------------------------------------------------------------------------
@@ -49799,7 +50087,9 @@ async def tienda_pagar(pedido_id: str, user: dict = Depends(require_any_auth)):
     if p.get("estado") != "pendiente_pago":
         raise HTTPException(409, "Ese pedido ya no esta pendiente de pago")
 
-    base = (PUBLIC_BASE_URL or "https://flotadsp.com").rstrip("/")
+    # PUBLIC_BASE_URL es el del BACKEND, no la web: con el, Stripe devolvia al
+    # conductor a flotadsp-backend.fly.dev/conductor tras pagar, que es un 404.
+    base = _PORTAL_BASE_FRONT
     datos = [
         ("mode", "payment"),
         ("success_url", "%s/conductor?pago=ok&ref=%s" % (base, p.get("ref") or "")),
@@ -49871,15 +50161,13 @@ async def tienda_stripe_webhook(request: Request):
     except DuplicateKeyError:
         return {"ok": True, "dedup": True}
 
-    if ev.get("type") != "checkout.session.completed":
+    if ev.get("type") not in ("checkout.session.completed", "customer.subscription.deleted",
+                              "customer.subscription.updated"):
         return {"ok": True, "ignorado": ev.get("type")}
 
-    ses = (ev.get("data") or {}).get("object") or {}
-    meta = ses.get("metadata") or {}
-    pedido_id = meta.get("pedido_id") or ses.get("client_reference_id")
+    obj = (ev.get("data") or {}).get("object") or {}
+    meta = obj.get("metadata") or {}
     db_name = meta.get("db_name") or ""
-    if not pedido_id:
-        return {"ok": True, "sin_pedido": True}
 
     # LA EMPRESA, A MANO Y COMPROBADA. El db_name lo pusimos nosotros y vuelve
     # firmado, pero se contrasta igual contra las organizaciones: un nombre de
@@ -49892,15 +50180,44 @@ async def tienda_stripe_webhook(request: Request):
             raise HTTPException(400, "Empresa desconocida")
     set_current_org_db(db_name or _DEFAULT_DB_NAME)
 
+    # La suscripcion de avisos de empleo (2,99 EUR/mes) NO es un pedido de la
+    # tienda: se sigue por su propio id de suscripcion de Stripe, no por
+    # pedido_id. `deleted`/`updated` llegan con el objeto SUSCRIPCION
+    # directamente (no una sesion de checkout).
+    if ev["type"] in ("customer.subscription.deleted", "customer.subscription.updated"):
+        activa = obj.get("status") in ("active", "trialing", "past_due")
+        await db.empleo_suscripciones.update_one(
+            {"stripe_subscription": obj.get("id")},
+            {"$set": {"activa": activa, "estado_stripe": obj.get("status"),
+                      "actualizado_en": datetime.now(timezone.utc).isoformat()}})
+        return {"ok": True, "suscripcion": obj.get("id"), "activa": activa}
+
+    if meta.get("tipo") == "suscripcion_empleo":
+        await db.empleo_suscripciones.update_one(
+            {"stripe_subscription": obj.get("subscription")},
+            {"$set": {"email": meta.get("email") or obj.get("customer_email") or "",
+                      "perfil": meta.get("perfil") or "",
+                      "stripe_customer": obj.get("customer"),
+                      "stripe_subscription": obj.get("subscription"), "activa": True,
+                      "creado_en": datetime.now(timezone.utc).isoformat()}},
+            upsert=True)
+        return {"ok": True, "suscripcion_empleo": obj.get("subscription")}
+
+    # A partir de aqui, un pedido normal de la tienda.
+    ses = obj
+    pedido_id = meta.get("pedido_id") or ses.get("client_reference_id")
+    if not pedido_id:
+        return {"ok": True, "sin_pedido": True}
+
     # Y QUE EL IMPORTE CUADRE. Stripe dice lo que ha cobrado; si no coincide
     # con lo que vale el pedido, no se marca pagado y se deja constancia: es
     # mejor una revision a mano que dar por cobrado un importe que no es.
     ped = await db[_TCOL_PEDIDOS].find_one({"id": pedido_id},
-                                           {"_id": 0, "total": 1, "estado": 1})
+                                           {"_id": 0, "total": 1, "estado": 1, "descuento_cent": 1})
     if not ped:
         return {"ok": True, "pedido_no_encontrado": True}
     cobrado = int(ses.get("amount_total") or 0)
-    esperado = int(round(float(ped.get("total") or 0) * 100))
+    esperado = int(round(float(ped.get("total") or 0) * 100)) - int(ped.get("descuento_cent") or 0)
     if cobrado != esperado:
         logger.error("Stripe cobro %s y el pedido %s vale %s", cobrado, pedido_id, esperado)
         await db[_TCOL_PEDIDOS].update_one(
@@ -49916,6 +50233,362 @@ async def tienda_stripe_webhook(request: Request):
                   "pagado_at": datetime.now(timezone.utc).isoformat(),
                   "stripe_pago": ses.get("payment_intent")}})
     return {"ok": True, "pedido": pedido_id}
+
+
+# -------------------------------------------------------------------------
+# CAMPAÑA DE BIENVENIDA A CANDIDATOS: cupon de tienda + suscripcion de empleo
+# -------------------------------------------------------------------------
+"""Pedido explícitamente el 18-09-2026: escribir a los CV que tenemos con un
+cupón de 10 EUR de la tienda (caduca a las 4 h) y una suscripción de pago
+(2,99 EUR/mes) para avisos prioritarios de empleo.
+
+ESTOS CORREOS SON DE UNA PERSONA QUE MANDÓ SU CV PARA UN PUESTO DE
+CONDUCTOR, no para recibir publicidad de una tienda de ropa ni una
+suscripción de pago — es un dato dado con OTRO fin, y usarlo así tiene
+exposición real de RGPD/LOPD (no solo un gusto de estilo). Por eso el envío
+real (`modo="real"`) exige escribir `confirmar: "ENVIAR"` a mano, igual que
+`/cortex/reset` exige escribir "BORRAR" (gotcha 45): la decisión de mandarlo
+de verdad a gente real la toma una persona mirando la pantalla, no un script.
+`modo="prueba"` manda solo al correo que se le pase, para poder verlo
+funcionando sin tocar a nadie más.
+"""
+
+
+async def _stripe_crear_cupon(importe_eur: float, horas: int, un_solo_uso: bool = False) -> Optional[dict]:
+    """Cupon Stripe de importe fijo con caducidad REAL (`redeem_by`): la
+    valida Stripe al cobrar, no nosotros — así no hay que guardar ni comprobar
+    caducidad en ningún sitio nuestro, y no hay forma de que quede viva de más
+    por un fallo nuestro.
+    `un_solo_uso=True` pone `max_redemptions=1`: para un cupón PERSONAL (uno
+    por candidato), no para el compartido de una prueba suelta."""
+    if not _stripe_encendido():
+        return None
+    expira = datetime.now(timezone.utc) + timedelta(hours=horas)
+    datos = [
+        ("amount_off", str(int(round(importe_eur * 100)))),
+        ("currency", "eur"),
+        ("duration", "once"),
+        ("redeem_by", str(int(expira.timestamp()))),
+        ("name", f"Bienvenida {importe_eur:.0f}€"),
+    ]
+    if un_solo_uso:
+        datos.append(("max_redemptions", "1"))
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=25) as cli:
+            r = await cli.post(_STRIPE_API + "/coupons", content=_url_encode(datos).encode(),
+                               headers={"Content-Type": "application/x-www-form-urlencoded"},
+                               auth=(_stripe_clave(), ""))
+    except Exception as e:                                    # noqa: BLE001
+        logger.error("Stripe crear cupon: %s", e)
+        return None
+    if r.status_code >= 300:
+        logger.error("Stripe crear cupon %s: %s", r.status_code, r.text[:300])
+        return None
+    c = r.json()
+    return {"id": c.get("id"), "expira_en": expira.isoformat()}
+
+
+async def _stripe_cupon_importe(cupon_id: str) -> int:
+    """Cuanto descuenta un cupon YA CREADO, en centimos, leido de Stripe."""
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=15) as cli:
+            r = await cli.get(f"{_STRIPE_API}/coupons/{_url_quote(cupon_id, safe='')}",
+                              auth=(_stripe_clave(), ""))
+        if r.status_code < 300:
+            return int(r.json().get("amount_off") or 0)
+    except Exception as e:                                    # noqa: BLE001
+        logger.warning("Stripe leer cupon %s: %s", cupon_id, e)
+    return 0
+
+
+@api_router.post("/tienda/enlace")
+async def tienda_crear_enlace(user: dict = Depends(require_admin)):
+    """UN enlace público y fijo para la tienda de esta empresa, para siempre
+    (mismo patrón que `enlace_taller`). Se reutiliza si ya existe uno vivo."""
+    dbn = _current_db_name.get()
+    vivo = await global_db.taller_enlaces.find_one(
+        {"tipo": "tienda", "db_name": dbn, "revocado": {"$ne": True}}, {"_id": 0, "token": 1})
+    token = vivo["token"] if vivo else secrets.token_urlsafe(32)
+    if not vivo:
+        await global_db.taller_enlaces.insert_one({
+            "token": token, "tipo": "tienda", "db_name": dbn,
+            "web": _PORTAL_BASE_FRONT,
+            "creado_por": user.get("name") or user.get("username") or "oficina",
+            "creado_en": datetime.now(timezone.utc).isoformat(), "revocado": False,
+        })
+    return {"url": f"{_PORTAL_BASE_FRONT}/t/{token}", "token": token}
+
+
+@api_router.post("/empleo/suscripcion/checkout")
+async def empleo_suscripcion_checkout(body: dict = Body(...), request: Request = None):
+    """Suscripción PÚBLICA de 2,99 EUR/mes a avisos prioritarios de empleo.
+    Sin sesión — la empresa se fija por `slug`, igual que el resto de
+    endpoints públicos del portal (gotcha 26); sin slug cae en la principal,
+    que es la única que usa esto hoy."""
+    _rl_public_action("empsub:%s" % _rl_key_ip(request), max_count=8, window_s=3600,
+                      detail="Demasiados intentos. Inténtalo en un rato.")
+    email = _texto_cuerpo(body.get("email"), 120).lower()
+    if not email or not _EMAIL_RE.match(email):
+        raise HTTPException(400, "Pon un correo válido")
+    # Lo que busca, en texto libre y OPCIONAL: pedirlo obligatorio en el mismo
+    # paso que se paga solo hace que alguien abandone antes de pagar. Sirve
+    # hoy para que el aviso lo lea una persona con más contexto, y mañana
+    # para poder ordenar ofertas por afinidad sin tener que preguntarlo otra vez.
+    perfil = _texto_cuerpo(body.get("perfil"), 300)
+    await _set_tenant_by_slug(_texto_cuerpo(body.get("slug"), 60))
+    if not _stripe_encendido():
+        raise HTTPException(503, "El pago con tarjeta todavía no está activo")
+
+    base = _PORTAL_BASE_FRONT
+    dbn = _current_db_name.get()
+    datos = [
+        ("mode", "subscription"),
+        ("success_url", f"{base}/empleo/prioridad?ok=1"),
+        ("cancel_url", f"{base}/empleo/prioridad?ok=0"),
+        ("customer_email", email),
+        ("metadata[tipo]", "suscripcion_empleo"),
+        ("metadata[db_name]", dbn),
+        ("metadata[email]", email),
+        # Repetido en la SUSCRIPCION (no solo en la sesion de checkout): los
+        # avisos de baja/impago llegan como evento de suscripcion, que no
+        # lleva los metadatos de la sesion que la creo.
+        ("subscription_data[metadata][tipo]", "suscripcion_empleo"),
+        ("subscription_data[metadata][db_name]", dbn),
+        ("subscription_data[metadata][email]", email),
+        ("line_items[0][quantity]", "1"),
+        ("line_items[0][price_data][currency]", "eur"),
+        ("line_items[0][price_data][unit_amount]", "299"),
+        ("line_items[0][price_data][recurring][interval]", "month"),
+        ("line_items[0][price_data][product_data][name]",
+         "Notificaciones prioritarias de empleo FlotaDSP"),
+    ]
+    if perfil:
+        datos += [("metadata[perfil]", perfil), ("subscription_data[metadata][perfil]", perfil)]
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=25) as cli:
+            r = await cli.post(_STRIPE_API + "/checkout/sessions",
+                               content=_url_encode(datos).encode(),
+                               headers={"Content-Type": "application/x-www-form-urlencoded"},
+                               auth=(_stripe_clave(), ""))
+    except Exception as e:                                    # noqa: BLE001
+        logger.error("Stripe suscripcion empleo: %s", e)
+        raise HTTPException(502, "No se ha podido abrir el pago. Inténtalo en un minuto.")
+    if r.status_code >= 300:
+        logger.error("Stripe suscripcion empleo %s: %s", r.status_code, r.text[:300])
+        raise HTTPException(502, "No se ha podido abrir el pago. Inténtalo en un minuto.")
+    return {"url": r.json().get("url")}
+
+
+@api_router.post("/empleo/suscripcion/portal")
+async def empleo_suscripcion_portal(body: dict = Body(...), request: Request = None):
+    """Enlace de baja/gestión, PÚBLICO por correo — sin esto, "cancelas cuando
+    quieras" es una promesa sin forma de cumplirla y cada baja se convierte en
+    un correo a mano. Usa el Billing Portal de Stripe: la persona gestiona su
+    tarjeta y cancela ella misma, sin que nosotros veamos ni toquemos nada de
+    pago. No hace falta contraseña porque no se cambia nada aqui — el enlace
+    de Stripe es el que de verdad autoriza la baja, y solo se genera para el
+    `stripe_customer` que YA está en nuestra base ligado a ese correo."""
+    _rl_public_action("empportal:%s" % _rl_key_ip(request), max_count=8, window_s=3600,
+                      detail="Demasiados intentos. Inténtalo en un rato.")
+    email = _texto_cuerpo(body.get("email"), 120).lower()
+    if not email or not _EMAIL_RE.match(email):
+        raise HTTPException(400, "Pon un correo válido")
+    await _set_tenant_by_slug(_texto_cuerpo(body.get("slug"), 60))
+    if not _stripe_encendido():
+        raise HTTPException(503, "El pago con tarjeta todavía no está activo")
+
+    sub = await db.empleo_suscripciones.find_one({"email": email}, {"_id": 0, "stripe_customer": 1})
+    if not sub or not sub.get("stripe_customer"):
+        raise HTTPException(404, "No encontramos ninguna suscripción con ese correo")
+
+    datos = [
+        ("customer", sub["stripe_customer"]),
+        ("return_url", f"{_PORTAL_BASE_FRONT}/empleo/prioridad"),
+    ]
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=25) as cli:
+            r = await cli.post(_STRIPE_API + "/billing_portal/sessions",
+                               content=_url_encode(datos).encode(),
+                               headers={"Content-Type": "application/x-www-form-urlencoded"},
+                               auth=(_stripe_clave(), ""))
+    except Exception as e:                                    # noqa: BLE001
+        logger.error("Stripe billing portal: %s", e)
+        raise HTTPException(502, "No se ha podido abrir la gestión. Inténtalo en un minuto.")
+    if r.status_code >= 300:
+        logger.error("Stripe billing portal %s: %s", r.status_code, r.text[:300])
+        raise HTTPException(502, "No se ha podido abrir la gestión. Inténtalo en un minuto.")
+    return {"url": r.json().get("url")}
+
+
+@api_router.get("/empleo/suscripciones")
+async def empleo_suscripciones_lista(user: dict = Depends(require_superadmin)):
+    """Quién está suscrito a los avisos prioritarios, para verlo en el panel."""
+    activas = await db.empleo_suscripciones.count_documents({"activa": True})
+    total = await db.empleo_suscripciones.count_documents({})
+    filas = await db.empleo_suscripciones.find(
+        {}, {"_id": 0, "email": 1, "activa": 1, "creado_en": 1, "estado_stripe": 1, "perfil": 1}
+    ).sort("creado_en", -1).to_list(500)
+    return {"activas": activas, "total": total, "suscripciones": filas}
+
+
+async def _avisar_suscriptores_empleo(oferta: dict) -> None:
+    """Escribe a quien paga por avisos prioritarios en cuanto se publica una
+    oferta — es lo que hace que la suscripción sea un producto real y no solo
+    un cobro. No lleva delante embargo de horas (la oferta ya es pública para
+    todos en el momento de crearla): es un aviso inmediato por correo sin
+    tener que estar mirando la web, no una ventana de exclusividad cronometrada.
+    No propaga errores: un fallo de correo no puede tumbar la creación de la
+    oferta, que es lo importante de verdad."""
+    try:
+        subs = await db.empleo_suscripciones.find(
+            {"activa": True}, {"_id": 0, "email": 1}).to_list(2000)
+        if not subs:
+            return
+        asunto = f"Prioridad: nueva oferta — {oferta.get('titulo')}"
+        html = f"""
+        <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
+          <p>Como eres suscriptor prioritario, te avisamos en cuanto la hemos publicado:</p>
+          <h2 style="margin:12px 0">{oferta.get('titulo')}</h2>
+          <p>{(oferta.get('ciudad') or '')}{' · ' + oferta.get('jornada') if oferta.get('jornada') else ''}</p>
+          <p style="text-align:center;margin:24px 0">
+            <a href="{oferta.get('url')}" style="background:#0ea5e9;color:#fff;padding:12px 24px;
+               border-radius:8px;text-decoration:none;font-weight:bold">Ver la oferta y apuntarme</a>
+          </p>
+        </div>"""
+        for s in subs:
+            if s.get("email"):
+                await _send_resend_email(s["email"], asunto, html)  # EMAIL_FROM ya es contacto@flotadsp.com
+    except Exception as e:                                    # noqa: BLE001
+        logger.warning("Aviso a suscriptores de empleo: %s", e)
+
+
+def _candidatos_email_pie() -> str:
+    return """
+      <p style="color:#888;font-size:12px">FlotaDSP — has recibido esto porque dejaste
+      tu candidatura con nosotros. Si no quieres más correos como este, responde
+      a este mensaje y te quitamos de la lista.</p>"""
+
+
+def _candidatos_campana_html_cupon(nombre: str, url_tienda: str, expira_en: str) -> str:
+    """El cupón, en SU PROPIO correo. Un solo objetivo por correo: mezclar el
+    cupón con la suscripción en el mismo mensaje probó ser tambien lo que
+    Gmail confundia con contenido repetido y escondia detras de un "..." —
+    ademas de que dos ofertas compitiendo en un mismo correo convierte peor
+    que una sola, bien clara (18-09-2026)."""
+    saludo = f"Hola {nombre}," if nombre else "Hola,"
+    try:
+        hora_local = datetime.fromisoformat(expira_en).astimezone(
+            timezone(timedelta(hours=2))).strftime("%H:%M")
+    except Exception:                                          # noqa: BLE001
+        hora_local = ""
+    preheader = "🎁 10 € de regalo en nuestra tienda — caduca en 4 horas"
+    return f"""
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px;line-height:1px;color:#ffffff">{preheader}</div>
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
+      <p>{saludo}</p>
+      <p>Ya te postulaste con nosotros hace un tiempo — gracias por eso. Como
+      agradecimiento, te regalamos <strong>10&nbsp;EUR de descuento</strong> en
+      nuestra tienda, pero solo durante las próximas <strong>4 horas</strong>
+      {f'(hasta las {hora_local})' if hora_local else ''}. Pasado ese plazo el
+      cupón se desactiva solo.</p>
+      <p style="text-align:center;margin:28px 0">
+        <a href="{url_tienda}" style="background:#0ea5e9;color:#fff;padding:14px 28px;
+           border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;display:inline-block">🎁 Usar mi descuento ahora</a>
+      </p>
+      {_candidatos_email_pie()}
+    </div>"""
+
+
+def _candidatos_campana_html_suscripcion(nombre: str, url_suscripcion: str) -> str:
+    """La suscripción, en SU PROPIO correo — mismo motivo que el cupón."""
+    saludo = f"Hola {nombre}," if nombre else "Hola,"
+    preheader = "⚡ Sé el primero en enterarte de cada puesto nuevo"
+    return f"""
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px;line-height:1px;color:#ffffff">{preheader}</div>
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
+      <p>{saludo}</p>
+      <p><strong>¿Quieres currar cuanto antes?</strong> Hazte Prioritario: por
+      2,99&nbsp;EUR/mes te escribimos en el momento en que sacamos un puesto
+      nuevo, sin que tengas que estar mirando la web cada día. El primero en
+      enterarse suele ser el primero en conseguirlo.</p>
+      <p style="text-align:center;margin:28px 0">
+        <a href="{url_suscripcion}" style="background:#111827;color:#fff;padding:14px 28px;
+           border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;display:inline-block">⚡ Ser Prioritario (2,99 EUR/mes)</a>
+      </p>
+      <p style="color:#888;font-size:12px">Cancelas cuando quieras: pon tu correo en la
+      misma página para darte de baja, sin necesidad de escribirnos.</p>
+      {_candidatos_email_pie()}
+    </div>"""
+
+
+@api_router.post("/admin/candidatos/campana-bienvenida")
+async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Depends(require_superadmin)):
+    modo = _texto_cuerpo(body.get("modo"), 10) or "prueba"
+    if modo not in ("prueba", "real"):
+        raise HTTPException(400, "modo debe ser 'prueba' o 'real'")
+    if modo == "real" and _texto_cuerpo(body.get("confirmar"), 20) != "ENVIAR":
+        raise HTTPException(400, "Escribe confirmar: \"ENVIAR\" para mandarlo a todos de verdad")
+
+    enlace_tienda = await _tienda_enlace_publico()
+    if not enlace_tienda:
+        raise HTTPException(
+            400, "Abre antes la tienda pública (Negocio > Tienda) y crea su enlace con /tienda/enlace")
+    if not _stripe_encendido():
+        raise HTTPException(503, "El cobro con tarjeta no está activo todavía (falta la clave de Stripe)")
+
+    url_suscripcion = f"{_PORTAL_BASE_FRONT}/empleo/prioridad"
+
+    if modo == "prueba":
+        email_prueba = _texto_cuerpo(body.get("email_prueba"), 120).lower()
+        if not email_prueba or not _EMAIL_RE.match(email_prueba):
+            raise HTTPException(400, "Pon un correo válido en email_prueba para la prueba")
+        destinatarios = [{"email": email_prueba, "nombre": user.get("name") or "Dani"}]
+    else:
+        destinatarios = await db.candidatos.find(
+            {"email": {"$exists": True, "$ne": ""}}, {"_id": 0, "email": 1, "nombre": 1}).to_list(2000)
+
+    # Un cupón PERSONAL por destinatario, de un solo uso (max_redemptions=1) y
+    # con su propio reloj de 4h desde que se genera — no uno compartido que
+    # cualquiera pudiera reenviar a otra persona antes de gastarlo.
+    enviados, fallidos, sin_cupon = 0, 0, 0
+    ultima_expira = None
+    for d in destinatarios:
+        cupon = await _stripe_crear_cupon(10.0, 4, un_solo_uso=True)
+        if not cupon:
+            sin_cupon += 1
+            fallidos += 1
+            continue
+        ultima_expira = cupon["expira_en"]
+        # La caducidad viaja en la URL para que la tienda pueda pintar una
+        # cuenta atras real — sin esto, cada persona veia el mismo texto fijo
+        # sin saber si le quedan 10 minutos o 3 horas y media.
+        url_tienda = f"{enlace_tienda}?cupon={cupon['id']}&exp={_url_quote(cupon['expira_en'])}"
+        nombre = d.get("nombre") or ""
+        html_cupon = _candidatos_campana_html_cupon(nombre, url_tienda, cupon["expira_en"])
+        html_sub = _candidatos_campana_html_suscripcion(nombre, url_suscripcion)
+        ok1 = await _send_resend_email(d["email"], "Un regalo por tu candidatura con FlotaDSP", html_cupon,
+                                       responder_a=os.environ.get("EMAIL_FROM_RESPUESTA", ""))
+        ok2 = await _send_resend_email(d["email"], "Entérate el primero de los próximos empleos", html_sub,
+                                       responder_a=os.environ.get("EMAIL_FROM_RESPUESTA", ""))
+        if ok1 or ok2:
+            enviados += 1
+        else:
+            fallidos += 1
+
+    if modo == "real":
+        await db.candidatos_campanas.insert_one({
+            "id": str(uuid.uuid4()), "tipo": "bienvenida_cv",
+            "enviados": enviados, "fallidos": fallidos, "sin_cupon": sin_cupon,
+            "destinatarios": len(destinatarios), "expira_en": ultima_expira,
+            "enviado_en": datetime.now(timezone.utc).isoformat(),
+            "enviado_por": user.get("name") or user.get("username") or "",
+        })
+    return {"ok": True, "modo": modo, "enviados": enviados, "fallidos": fallidos,
+            "destinatarios": len(destinatarios), "expira_en": ultima_expira}
 
 
 # -------------------------------------------------------------------------
@@ -50212,6 +50885,1134 @@ async def tienda_ver_foto(prenda_id: str, user: dict = Depends(require_any_auth)
         # otra URL y no hay que invalidar nada.
         headers={"cache-control": "private, max-age=31536000, immutable"},
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# FLOTADSP AI — el asistente de cada centro, sin más poder que quien lo usa
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Responde "¿cómo hago X?" con el manual de abajo, y "¿cómo va mi WHC?" con
+# datos EN VIVO del propio centro — los mismos que ya usan /whc/semana,
+# /dnr/investigaciones/pendientes y /empleo/candidatos/nuevos, nunca un
+# número aparte que pudiera decir otra cosa (gotcha 40: un dato copiado dejar
+# de ser el mismo dato en cuanto el original cambia).
+#
+# LO QUE NO PUEDE HACER, por diseño y no por promesa a la IA:
+#   · nunca ve ni toca un centro que el usuario no pueda ver
+#     (_user_can_see_center, la misma regla que toda la app);
+#   · no borra ni edita nada, solo puede PROPONER crear un vehículo o un
+#     conductor — nunca lo ejecuta ella sola. La propuesta vuelve al
+#     frontend, y hace falta un clic humano de confirmación que llama a
+#     /ai/asistente/ejecutar, que a su vez llama a la MISMA función que usa
+#     el formulario normal (create_vehicle/create_driver): pasa por sus
+#     mismas comprobaciones (matrícula duplicada, correo duplicado...) sin
+#     ninguna lógica nueva que pueda tener un fallo propio (gotcha 38: cinco
+#     condiciones para que algo se ejecute solo, y aquí ni siquiera se
+#     cumple la primera a propósito).
+
+_IA_ASISTENTE_COL = "ai_chat_msgs"
+_IA_ASISTENTE_ACCIONES = ("crear_vehiculo", "crear_conductor", "generar_plantilla",
+                          "asignar_conductor", "desasignar_conductor", "cambiar_estado_vehiculo",
+                          "crear_incidencia", "editar_vehiculo", "editar_conductor",
+                          "crear_orden_taller")
+
+# Campos que la IA puede tocar en una edición por chat — un subconjunto A
+# PROPÓSITO de la whitelist completa del PATCH normal (gotcha 1): lo que
+# tiene un flujo propio con efectos secundarios (status/taller,
+# current_driver_id, center, active) se queda fuera y pasa por su acción
+# dedicada, nunca por aquí. Editar "lo que sea" no puede significar
+# saltarse esas reglas.
+_IA_VEHICULO_EDITABLE = {"brand", "model", "color", "year", "mileage", "notes", "vin",
+                         "fuel_type", "itv_date", "insurance_expiry", "renting_end_date", "provider"}
+_IA_CONDUCTOR_EDITABLE = {"phone", "email", "dni", "license_number", "address", "notes"}
+
+_IA_ASISTENTE_MANUAL = """
+=== MANUAL BREVE DE FLOTADSP (para explicar "cómo se hace X") ===
+Vehículos: ficha de cada furgoneta (estado, papeles, daños, gemelo 3D). Busca
+por matrícula. Documentación tiene seguro/ITV/renting. Las de baja no salen
+en listados normales. Puedes listar furgonetas por proveedor de renting
+(Bansacar, Kinto, Ayvens...), marca, modelo o matrícula, y decir cuáles
+tienen (o les falta) un documento concreto — «las fichas técnicas de las
+furgonetas Bansacar» te dice cuántas hay y cuáles la tienen subida. También
+puedes editar el dato suelto de una ficha ya existente — «ponle 85000 km a
+la 1234ABC», «cámbiale el color a blanco», «la ITV de la 1234ABC caduca el
+15/03» — todo menos su estado, su centro o su conductor, que van por sus
+propias acciones (arriba).
+SÍ PUEDES recibir VARIAS fichas técnicas de golpe: si te preguntan si pueden
+pasarte 20 o 25 fichas técnicas para que las asignes cada una a su furgoneta,
+la respuesta es SÍ — diles que usen el icono del clip 📎 junto al cuadro de
+texto, elijan todos los ficheros a la vez (PDF o foto) y tú lees la matrícula
+de cada uno y propones a qué furgoneta va cada uno; solo hace falta un clic
+para confirmar las que casen sin dudas. NUNCA digas que no puedes procesarlas
+o que hay que subirlas una a una — SÍ hay una forma de hacerlo de golpe, y es
+esa.
+Conductores: ficha de cada persona. Para varios de golpe, «Importar Excel»
+(vale cualquier columna que tenga el nombre). El Transporter ID reparte los
+DNR: si está mal puesto, los fallos van a otra persona. Puedes listar
+conductores activos/inactivos, buscar por nombre, o editar su teléfono,
+correo, DNI o dirección — «cámbiale el teléfono a Juan Pérez por el
+600111222».
+Inspecciones: las fotos que hacen los conductores al coger/dejar furgoneta.
+Puedes preguntar por las últimas de una furgoneta — "últimas inspecciones de
+la 1234ABC" — y te digo fecha y gravedad de cada una.
+Revisión rápida: aquí se valida lo que ve la IA — es lo ÚNICO que la hace
+mejorar. Botones: acierto, no existe, "sí pero no ahí" (el daño es real pero
+el recuadro está mal puesto), "no se ve" (la foto no permite juzgarlo).
+Incidencias: partes de golpes/averías con foto; desde una se abre una orden
+de taller sin volver a escribir nada. Puedes abrir el parte tú por el chat
+—"la 1234ABC tiene un golpe en la puerta trasera"— sin foto, que se añade
+después desde la ficha; queda igual de registrado en el histórico.
+Talleres / Órdenes de taller: agenda de talleres y seguimiento sin llamar:
+el parte sale con daños y taller ya puestos, se manda por WhatsApp con un
+enlace público (sin registro), y la app pregunta sola cada pocos días.
+Puedes abrir la orden tú por el chat — "manda la 1234ABC a Chapisteria
+Riazor por el golpe del lateral" — buscando el taller por su nombre.
+Asignación diaria: qué furgoneta lleva cada conductor hoy; asígnalo antes de
+que salgan las rutas. Puedes hacerlo tú por el chat: "que Juan Pérez lleve la
+1234ABC" propone asignar esa furgoneta a ese conductor (busca a los dos por
+lo que ya tienen en la ficha, sin adivinar si hay dudas), y "quítale la
+furgoneta a Juan" la desasigna. También puedes marcar una furgoneta como
+"en taller" o "activa otra vez" — "la 1234ABC ha entrado en taller".
+Turnos (cuadrante): quién trabaja qué día. Se pinta con el pincel de código;
+los días aprobados salen en rosa y no se mueven sin permiso.
+Plantilla de turno: la plantilla de personal, generada desde Turnos —cierra
+el cuadrante antes de descargarla. Si te piden "hazme la plantilla de hoy" o
+"móntala con Cortex", TÚ PUEDES: rellenas ruta y conductor con lo que Cortex
+ya ha capturado hoy, y furgo/teléfono si la Asignación diaria de hoy ya está
+rellena. La hora de salida nunca la sabes tú —Cortex no la da— y se queda en
+blanco para que la oficina la ponga, igual que hace hoy a mano.
+WHC (cumplimiento de horas): quién se acerca o se pasa del límite semanal de
+Amazon (54h30 fijas, no las cambia cada nave). Entra solo desde la extensión;
+avisa antes del viernes, que es cuando ya no se puede arreglar. Puedes
+preguntar por una persona en concreto — "cómo va el WHC de Juan" — y te digo
+lo trabajado, la proyección y si va bien, se acerca o ya se ha pasado. Y SÍ
+puedes dar los NOMBRES de quiénes se pasan o se acercan aunque ya hayas dado
+el número total antes — solo tienes que pedir la consulta "whc" otra vez sin
+filtro de nombre.
+Informes de Amazon (DNR y diarios): los Daily Report de Cortex, con qué no
+se entregó. El bloque de DNR es de DOS DÍAS ANTES y la columna de defectos se
+rellena tarde: un día recién bajado sale mejor de lo que acabará quedando.
+Puedes pedir la lista de investigaciones DNR abiertas y sus plazos.
+Rendimiento: quién reparte mejor o peor, por DCR real de los últimos 30 días
+(con un mínimo de entregas, para no señalar a alguien por un fallo suelto en
+poco volumen). "Quién es el mejor conductor", "ranking de repartidores" — lo
+puedes contestar con datos reales, nunca digas que no tienes esa métrica.
+Dónde se entrega (DSC): direcciones que fallan al entregar — la métrica que
+más le cuesta a un DSP. Corregir una dirección la arregla para siempre.
+Empleo: ofertas con enlace público. Al crear una oferta, EL CENTRO que
+elijas decide en qué tablero salen sus candidatos y en qué nave nace la
+ficha al contratar. JOIN se conecta con un token propio (join.com/user/api);
+si hay más de un puesto en JOIN hay que elegir a cuál corresponde, o mezcla
+naves.
+Apoyo en ruta: cuando alguien va tarde, quitarle paradas y dárselas a otro
+conductor por WhatsApp con el mapa. El backup del día sale marcado primero.
+Scorecard: sube el PDF que manda Amazon cada miércoles para ver el tier y
+qué métrica hay que atacar.
+Vencimientos: ITV, seguro y permisos que caducan; lo que está en rojo ya
+venció.
+Importaciones: subir ficheros de furgonetas/conductores/datos externos, con
+vista previa antes de confirmar.
+"""
+
+
+async def _ai_asistente_contexto(user: dict, center: str) -> str:
+    """Lo que la IA puede CONTAR de este centro ahora mismo. Cada pieza sale
+    de la misma función que ya usa su pantalla — nunca un número calculado
+    aparte que pudiera no cuadrar con lo que el usuario ve al abrirla."""
+    piezas = []
+    try:
+        w = await whc_semana(center, user)
+        if w.get("hay"):
+            r = w["resumen"]
+            piezas.append(
+                f"WHC de {center} (actualizado {w.get('actualizado', '?')}): {r['total']} conductores con "
+                f"horas esta semana, {r['pasan_proyectando']} van a pasarse del límite semanal proyectando lo "
+                f"que tienen puesto, {r['acercandose']} se acercan, {r['ya_pasados']} ya se han pasado.")
+        else:
+            piezas.append(f"WHC de {center}: {w.get('porque') or 'todavía no hay datos de esta nave'}.")
+    except Exception as e:                                        # noqa: BLE001
+        logger.debug(f"[IA asistente] contexto WHC: {e}")
+    try:
+        d = await dnr_contar_pendientes(center, user)
+        piezas.append(f"Investigaciones DNR de Amazon sin contestar en {center}: {d.get('pendientes', 0)}.")
+    except Exception as e:                                        # noqa: BLE001
+        logger.debug(f"[IA asistente] contexto DNR: {e}")
+    try:
+        c = await empleo_contar_nuevos(center, user)
+        piezas.append(f"Candidaturas nuevas sin mirar en Empleo de {center}: {c.get('nuevos', 0)}.")
+    except Exception as e:                                        # noqa: BLE001
+        logger.debug(f"[IA asistente] contexto candidatos: {e}")
+    return "\n".join(piezas) or "Sin datos en vivo disponibles ahora mismo para este centro."
+
+
+_IA_CONSULTA_TIPOS = ("vehiculos", "conductores", "whc", "dnr", "inspecciones", "rendimiento")
+
+
+async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict:
+    """Ejecuta una consulta de SOLO LECTURA que la IA pidió para poder
+    contestar algo que no estaba en el contexto fijo (p.ej. "furgonetas de
+    Bansacar"). Nunca escribe nada, y el filtro de centro es SIEMPRE el de la
+    sesión — misma frontera que las acciones de crear: la IA no puede ver más
+    que lo que ya ve el usuario que la usa.
+
+    Las URLs de documentos las pone ESTE código con el dato real de Mongo,
+    nunca el modelo: dejar que un LLM redacte un enlace de descarga sería
+    el fallo más caro posible aquí — bastaría con que se lo inventara bien.
+    """
+    tipo = consulta.get("tipo")
+    filtros_in = consulta.get("filtros") if isinstance(consulta.get("filtros"), dict) else {}
+    fc = _filtro_centro(user, center) if center and center != "Todos" else {}
+
+    if tipo == "vehiculos":
+        q = {"status": {"$nin": ["deleted", "baja"]}, **fc}
+        estado = _texto_cuerpo(filtros_in.get("status"), 20).lower()
+        if estado in ("baja", "taller", "active"):
+            q["status"] = estado
+        for campo in ("provider", "brand", "model"):
+            val = _texto_cuerpo(filtros_in.get(campo), 60)
+            if val:
+                q[campo] = {"$regex": re.escape(val), "$options": "i"}
+        matricula = _texto_cuerpo(filtros_in.get("matricula"), 20)
+        if matricula:
+            q["license_plate"] = {"$regex": re.escape(matricula.replace(" ", "")), "$options": "i"}
+        vehiculos = await db.vehicles.find(
+            q, {"_id": 0, "id": 1, "license_plate": 1, "provider": 1, "status": 1, "brand": 1, "model": 1,
+                "current_driver_id": 1}
+        ).to_list(200)
+
+        # "qué furgoneta lleva Fulano": se filtra DESPUES de traer la flota,
+        # porque el cruce es por el conductor asignado, no por un campo propio
+        # del vehiculo. Aqui SI puede haber varias personas que casen (a
+        # diferencia de _ai_resolver_conductor, que escribe): es solo lectura,
+        # asi que se enseñan todas y que decida quien lee.
+        cond_nombre = _texto_cuerpo(filtros_in.get("conductor_nombre"), 60)
+        if cond_nombre:
+            palabras = _norm_name_words(cond_nombre)
+            ids_cond = {c["id"] for c in await db.drivers.find(
+                {"$and": [{"active": {"$ne": False}}, fc]} if fc else {"active": {"$ne": False}},
+                {"_id": 0, "id": 1, "name": 1}).to_list(2000)
+                if palabras and palabras <= _norm_name_words(c.get("name"))}
+            vehiculos = [v for v in vehiculos if v.get("current_driver_id") in ids_cond]
+
+        nombres_cond = {}
+        ids_asignados = {v["current_driver_id"] for v in vehiculos if v.get("current_driver_id")}
+        if ids_asignados:
+            async for c in db.drivers.find({"id": {"$in": list(ids_asignados)}}, {"_id": 0, "id": 1, "name": 1}):
+                nombres_cond[c["id"]] = c.get("name")
+        vehiculos = vehiculos[:80]
+
+        doc_tipo = _texto_cuerpo(consulta.get("doc_tipo"), 40).lower()
+        documentos, lineas = None, []
+        if doc_tipo:
+            vids = [v["id"] for v in vehiculos]
+            docs = await db.vehicle_documents.find(
+                {"vehicle_id": {"$in": vids}}, {"_id": 0}).to_list(400) if vids else []
+            docs_por_veh: dict = {}
+            for d in docs:
+                if _doc_tipo_norm(d.get("doc_type")) == doc_tipo:
+                    docs_por_veh.setdefault(d["vehicle_id"], []).append(d)
+            documentos, con_doc, sin_doc = [], [], []
+            for v in vehiculos:
+                dv = docs_por_veh.get(v["id"]) or []
+                if dv:
+                    con_doc.append(v["license_plate"])
+                    for d in dv:
+                        documentos.append({"matricula": v["license_plate"], "tipo": doc_tipo,
+                                           "nombre": d.get("name") or "documento", "url": d.get("url") or ""})
+                else:
+                    sin_doc.append(v["license_plate"])
+            lineas.append(f"{len(vehiculos)} furgonetas encajan el filtro. "
+                          f"{len(con_doc)} tienen documento '{doc_tipo}' subido, {len(sin_doc)} no.")
+            if sin_doc:
+                lineas.append("SIN ese documento: " + ", ".join(sin_doc[:40]))
+        else:
+            lineas.append(f"{len(vehiculos)} furgonetas encajan el filtro.")
+            for v in vehiculos[:40]:
+                cond = nombres_cond.get(v.get("current_driver_id"))
+                lineas.append(f"- {v.get('license_plate')}: {v.get('provider') or 'sin proveedor'}, "
+                              f"{v.get('status')}, {(v.get('brand') or '')} {(v.get('model') or '')}".strip()
+                              + (f", conductor: {cond}" if cond else ", sin conductor asignado"))
+        return {"resumen_texto": "\n".join(lineas), "documentos": documentos, "n": len(vehiculos)}
+
+    if tipo == "conductores":
+        q = {"active": {"$ne": False}, **fc}
+        if filtros_in.get("active") is False:
+            q["active"] = False
+        nombre = _texto_cuerpo(filtros_in.get("nombre"), 60)
+        if nombre:
+            q["name"] = {"$regex": re.escape(nombre), "$options": "i"}
+        conductores = await db.drivers.find(
+            q, {"_id": 0, "name": 1, "phone": 1, "center": 1, "active": 1}).to_list(80)
+        lineas = [f"{len(conductores)} conductores encajan el filtro."]
+        for c in conductores[:40]:
+            lineas.append(f"- {c.get('name')} ({c.get('center') or 'sin centro'})"
+                          + (f", tel {c['phone']}" if c.get('phone') else ""))
+        return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(conductores)}
+
+    if tipo == "whc":
+        w = await whc_semana(center, user)
+        if not w.get("hay"):
+            return {"resumen_texto": f"WHC de {center}: {w.get('porque') or 'todavía no hay datos de esta nave'}.",
+                    "documentos": None, "n": 0}
+        conductores = w.get("conductores") or []
+        nombre = _texto_cuerpo(filtros_in.get("nombre"), 60)
+        if nombre:
+            palabras = _norm_name_words(nombre)
+            conductores = [c for c in conductores if palabras and palabras <= _norm_name_words(c.get("nombre"))]
+
+        def _hm(mins):
+            mins = mins or 0
+            return f"{mins // 60}h{mins % 60:02d}"
+
+        limite = (w.get("limites") or {}).get("semanal_duro")
+        lineas = [f"{len(conductores)} conductores encajan (semana {w.get('semana')}"
+                  + (f", límite semanal {_hm(limite)}" if limite else "") + ")."]
+        for c in conductores[:40]:
+            aviso = ("YA SE HA PASADO" if c.get("supera_semanal") else
+                    "se va a pasar" if c.get("proyeccion_pasa") else
+                    "se acerca al límite" if c.get("acercandose") else "va bien")
+            lineas.append(f"- {c.get('nombre')}: trabajado {_hm(c.get('trabajado'))}, "
+                          f"proyección {_hm(c.get('proyeccion'))} — {aviso}")
+        return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(conductores)}
+
+    if tipo == "dnr":
+        d = await dnr_investigaciones(center=center, _=user)
+        filas = d.get("investigaciones") or []
+        lineas = [f"{len(filas)} investigaciones DNR ABIERTAS AHORA en {center} "
+                  f"({d.get('vivas', 0)} a tiempo, {d.get('caducadas', 0)} caducadas). "
+                  f"Esta es la lista REAL y accionable — para \"quién tiene más DNR\" usa el "
+                  f"ranking de abajo (si lo hay), no el campo DNR de la consulta rendimiento, "
+                  f"que es otra cosa (30 días acumulados, aunque ya estén cerrados)."]
+        # Ranking por conductor de las abiertas AHORA: mucho mas util que el
+        # historico de 30 dias para "quien tiene mas DNR" — es lo que hay que
+        # contestar de verdad, no un acumulado que incluye casos ya resueltos.
+        por_conductor: dict = {}
+        for f in filas:
+            nom = (f.get("cortex") or {}).get("conductor")
+            if nom:
+                por_conductor[nom] = por_conductor.get(nom, 0) + 1
+        if por_conductor:
+            ranking = sorted(por_conductor.items(), key=lambda kv: (-kv[1], kv[0]))
+            lineas.append("Abiertas ahora por conductor (solo las que se sabe quién conducía):")
+            for nom, n in ranking[:15]:
+                lineas.append(f"- {nom}: {n} abierta{'s' if n != 1 else ''}")
+        for f in filas[:40]:
+            ctx = f.get("cortex") or {}
+            lineas.append(f"- {f.get('tracking_id')}: vence {f.get('vence') or 'sin plazo'}"
+                          + (f", conductor {ctx['conductor']}" if ctx.get("conductor") else "")
+                          + (", CADUCADA" if f.get("caducada") else ""))
+        return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(filas)}
+
+    if tipo == "inspecciones":
+        matricula = _texto_cuerpo(filtros_in.get("matricula"), 20)
+        vehicle_id = None
+        if matricula:
+            try:
+                vehiculo = await _ai_resolver_vehiculo(user, center, matricula)
+                vehicle_id = vehiculo["id"]
+            except HTTPException as e:
+                return {"resumen_texto": str(e.detail), "documentos": None, "n": 0}
+        inspecciones = await get_inspections(
+            vehicle_id=vehicle_id, center=None if vehicle_id else center,
+            limit=40, campos="lista", user=user)
+        lineas = [f"{len(inspecciones)} inspecciones encajan el filtro (las más recientes primero)."]
+        for insp in inspecciones[:40]:
+            sev = (insp.get("analysis") or {}).get("severity")
+            lineas.append(f"- {str(insp.get('created_at') or '')[:16].replace('T', ' ')}"
+                          + (f", gravedad {sev}" if sev else ", sin analizar"))
+        return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(inspecciones)}
+
+    if tipo == "rendimiento":
+        hoy = _dia_negocio()
+        desde = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+        datos = await conductores_rendimiento(desde=desde, hasta=hoy, center=center, _=user)
+        # Minimo de entregas para entrar en el ranking (misma regla que
+        # _CX_MINIMO_RANKING de /cortex/dsc): con poco volumen un fallo de mas
+        # mueve la tasa muchisimo y señala a alguien por ruido, no por dato.
+        filas = [f for f in (datos.get("filas") or []) if (f.get("entregas") or 0) >= 40]
+        # Desempate deterministico (gotcha 62): nunca solo el cociente.
+        filas.sort(key=lambda f: (-(f.get("dcr") or 0), -(f.get("entregas") or 0), f.get("transporter") or ""))
+        lineas = [f"Ranking por DCR de los últimos 30 días en {center} "
+                  f"(mínimo 40 entregas para entrar, para no señalar a alguien por poco volumen). "
+                  f"OJO: el 'DNR' de esta lista es el conteo del informe diario de Amazon acumulado "
+                  f"en 30 días (aunque ya estén resueltos) — NO es lo mismo que 'investigaciones DNR "
+                  f"abiertas ahora' de la consulta dnr, que es un número mucho más pequeño y solo las "
+                  f"pendientes de contestar. Si te preguntan por los dos, acláralo, no los mezcles."]
+        if not filas:
+            lineas.append("Nadie llega a ese mínimo en este periodo todavía.")
+        for f in filas[:15]:
+            lineas.append(f"- {f.get('nombre') or f.get('transporter')}: DCR {f.get('dcr')}%, "
+                          f"{f.get('entregas')} entregas, {f.get('fallos')} fallos"
+                          + (f", {f.get('dnr')} DNR (30 días, informe diario)" if f.get('dnr') else ""))
+        return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(filas)}
+
+    return {"resumen_texto": "Consulta no reconocida.", "documentos": None, "n": 0}
+
+
+async def _ai_resolver_vehiculo(user: dict, center: str, matricula: str) -> dict:
+    """Encuentra LA furgoneta con esa matrícula en el centro de la sesión.
+
+    Nunca adivina: con 0 o con más de una, para y lo dice — mismo principio
+    que `_centro_norm` (gotcha 6): decidir con duda es peor que no decidir.
+    """
+    norm = _matricula_norm(matricula)
+    if not norm:
+        raise HTTPException(400, "Falta la matrícula de la furgoneta")
+    fc = _filtro_centro(user, center) if center and center != "Todos" else {}
+    vehiculos = await db.vehicles.find(
+        {"status": {"$nin": ["deleted", "baja"]}, **fc},
+        {"_id": 0, "id": 1, "license_plate": 1}).to_list(1000)
+    candidatos = [v for v in vehiculos if _matricula_norm(v.get("license_plate")) == norm]
+    if not candidatos:
+        raise HTTPException(404, f"No encuentro ninguna furgoneta con la matrícula {matricula} en {center}.")
+    if len(candidatos) > 1:
+        raise HTTPException(409, "Hay más de una furgoneta con esa matrícula, revísalas a mano.")
+    return candidatos[0]
+
+
+async def _ai_resolver_conductor(user: dict, center: str, nombre: str) -> dict:
+    """Encuentra AL conductor activo cuyo nombre casa con lo pedido.
+
+    Exige que TODAS las palabras del nombre pedido estén en el nombre de la
+    ficha (sin acentos ni mayúsculas, `_norm_name_words`) — nunca elige entre
+    dos que casan igual de bien (gotcha 15: dos personas parecidas no son la
+    misma, y equivocarse aquí le cuelga la furgoneta a quien no toca).
+    """
+    palabras = _norm_name_words(nombre)
+    if not palabras:
+        raise HTTPException(400, "Falta el nombre del conductor")
+    fc = _filtro_centro(user, center) if center and center != "Todos" else {}
+    conductores = await db.drivers.find(
+        {"active": {"$ne": False}, **fc}, {"_id": 0, "id": 1, "name": 1}).to_list(2000)
+    candidatos = [c for c in conductores if palabras <= _norm_name_words(c.get("name"))]
+    if not candidatos:
+        raise HTTPException(404, f'No encuentro ningún conductor activo llamado "{nombre}" en {center}.')
+    if len(candidatos) > 1:
+        nombres = ", ".join(c["name"] for c in candidatos[:6])
+        raise HTTPException(409, f'Hay varios conductores que casan con "{nombre}": {nombres}. Sé más específico.')
+    return candidatos[0]
+
+
+async def _ai_resolver_taller(nombre: str) -> dict:
+    """Encuentra EL taller activo cuyo nombre casa con lo pedido.
+
+    Los talleres son un recurso compartido de toda la empresa (un mismo
+    taller sirve a varias naves — `Workshop.center` es solo la nave más
+    cercana, no una frontera de acceso), así que aquí NO se filtra por
+    centro como con vehículos y conductores.
+    """
+    nombre = _texto_cuerpo(nombre, 80)
+    if not nombre:
+        raise HTTPException(400, "Falta el nombre del taller")
+    termino = _geo_sin_acentos(nombre).lower().strip()
+    talleres = await db.workshops.find(
+        {"active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1}).to_list(500)
+    candidatos = [w for w in talleres if termino in _geo_sin_acentos(w.get("name") or "").lower()]
+    if not candidatos:
+        raise HTTPException(404, f'No encuentro ningún taller llamado "{nombre}".')
+    if len(candidatos) > 1:
+        nombres = ", ".join(w["name"] for w in candidatos[:6])
+        raise HTTPException(409, f'Hay varios talleres que casan con "{nombre}": {nombres}. Sé más específico.')
+    return candidatos[0]
+
+
+def _ai_asistente_prompt(center: str, contexto: str) -> str:
+    return f"""Eres FLOTADSP AI, el asistente del panel de FlotaDSP para el centro {center}.
+
+QUIÉN TE HABLA: alguien de la oficina de esta nave, no un desarrollador. Puede
+ser nuevo en la herramienta.
+
+TIENES MUCHAS MÁS FUNCIONES DE LAS QUE PARECE A PRIMERA VISTA — lee todo este
+documento antes de decir que no puedes algo. Cuatro respuestas EQUIVOCADAS ya
+dadas por error, para que no se repitan:
+  · "no tengo acceso a código ni puedo generar configuraciones" a quien pide
+    la plantilla de hoy → MAL. SÍ puedes: es la acción "generar_plantilla".
+  · "no puedo procesar fichas técnicas masivas, súbelas una a una" → MAL. SÍ
+    puedes: el icono del clip admite varias de golpe.
+  · "no puedo darte los nombres de quién se pasa del WHC" → MAL. SÍ puedes:
+    pide la consulta "whc" otra vez, sin filtro, y trae la lista con nombres.
+  · "no tengo datos de rendimiento" → MAL. SÍ tienes: la consulta
+    "rendimiento" da el ranking real por DCR.
+Antes de decir "no puedo", repasa las acciones y consultas de más abajo.
+
+REGLAS QUE NO PUEDES SALTARTE:
+- Solo hablas del centro {center}. Si preguntan por otra nave, di que tú solo
+  ves la suya y que cambien de centro arriba para verla.
+- No sabes nada de código ni puedes cambiar nada "importante" DEL NEGOCIO
+  (permisos de usuarios, precios del plan, configuración de la cuenta) —
+  eso lo dices y ya está, no lo intentes. OJO: esto NO incluye nada de la
+  lista de abajo (generar la plantilla, crear/editar/asignar furgonetas y
+  conductores, abrir incidencias o mandar a un taller). Esas SON funciones
+  tuyas normales, no "código" ni "configuración" — nunca uses esta regla
+  como excusa para negarte a alguna de ellas.
+- Solo puedes PROPONER estas acciones — nunca las ejecutas tú: propones y una
+  persona confirma con un clic.
+    · crear_vehiculo — hace falta al menos la matrícula.
+    · crear_conductor — hace falta al menos el nombre.
+    · generar_plantilla — la plantilla de turno de HOY desde Cortex.
+    · asignar_conductor — poner un conductor en una furgoneta. Campos:
+      "matricula" y "conductor_nombre" (tal como lo escriba la persona, el
+      servidor lo busca en las fichas — nunca inventes un nombre completo si
+      solo te dan uno de pila, deja que busque él).
+    · desasignar_conductor — quitar el conductor de una furgoneta. Campos:
+      "matricula".
+    · cambiar_estado_vehiculo — "la 1234ABC ha entrado en taller" o "ya está
+      activa". Campos: "matricula" y "estado" (exactamente "taller", "active"
+      o "baja").
+    · crear_incidencia — abrir un parte de avería/golpe sin foto ("la
+      1234ABC tiene un golpe en la puerta"). Campos: "matricula",
+      "descripcion" (con el detalle que haya dado la persona) y "severidad"
+      ("leve" | "moderado" | "grave" — si no la dicen, "leve").
+    · editar_vehiculo — cambiar UN DATO de una furgoneta que YA EXISTE (no
+      su estado, centro o conductor: eso va por las acciones de arriba).
+      Campos: "matricula" y cualquiera de estos, solo los que pidan:
+      "brand", "model", "color", "year", "mileage", "notes", "vin",
+      "fuel_type", "itv_date", "insurance_expiry", "renting_end_date"
+      (fechas en "YYYY-MM-DD"), "provider".
+    · editar_conductor — cambiar UN DATO de un conductor que YA EXISTE.
+      Campos: "conductor_nombre" y cualquiera de estos, solo los que pidan:
+      "phone", "email", "dni", "license_number", "address", "notes".
+    · crear_orden_taller — mandar una furgoneta a un taller. Campos:
+      "matricula", "taller_nombre" (busca el taller por su nombre, no
+      inventes uno que no te hayan dicho) y "problema" (el motivo, si lo
+      dan — si no, se rellena solo con los daños abiertos de esa furgoneta).
+  Si te piden cambiar algo de una furgoneta o conductor que no esté en esta
+  lista de campos, dilo — no lo intentes por otra vía.
+  Si falta algo imprescindible, pregúntalo en tu respuesta y NO propongas la
+  acción todavía. Si el servidor no encuentra o encuentra más de una
+  furgoneta/conductor con lo que le has pasado, te lo dirá él — tú solo pasa
+  lo que ha escrito la persona, no adivines matrículas ni nombres completos.
+- Si te piden la plantilla/plan de rutas de HOY ("hazme la plantilla",
+  "móntala con Cortex", "genera el reparto de hoy"), propón SIEMPRE
+  "generar_plantilla" con "campos": {{}} (no necesita ningún dato tuyo: lo saca
+  el servidor de Cortex). No inventes filas ni nombres en la respuesta — di
+  solo que vas a montarla con lo que Cortex tenga capturado hoy.
+- "generar_plantilla" SOLO puede montar la de HOY — tira de lo que Cortex
+  tiene capturado EN ESTE MOMENTO, que para mañana o cualquier día futuro
+  simplemente no existe todavía. Si piden la plantilla de "mañana" o de
+  otro día que no sea hoy: dilo tal cual, NO propongas "generar_plantilla"
+  (aunque sea con campos vacíos — no sirve para eso) y NO digas que la vas
+  a preparar tú solo cuando llegue ese momento. TÚ NO EJECUTAS NADA fuera de
+  esta conversación: no hay ningún proceso tuyo funcionando de fondo, ni
+  cron, ni aviso automático — solo existes cuando alguien te escribe y
+  espera. Nunca digas "en cuanto Cortex publique las rutas, la generaré" ni
+  nada que suene a que vas a actuar por tu cuenta más tarde: eso es un
+  compromiso que no puedes cumplir y la persona se quedaría esperando algo
+  que nunca llega. Lo honesto: "eso solo lo puedo montar con datos de hoy —
+  vuelve a pedírmelo mañana cuando Cortex ya tenga las rutas capturadas".
+- "Preasignar" furgonetas ("ponles la furgoneta que le tocaría a cada uno",
+  "asígnales la suya") no es una función que adivines tú: si no te dicen
+  QUÉ matrícula va con QUÉ conductor, no propongas ninguna acción — pregunta
+  explícitamente esos pares, o si lo que quieren es "la furgoneta que ya
+  llevaba cada uno últimamente", diles que eso lo consultan en la ficha del
+  conductor o en Vehículos, porque tú no tienes ese historial para
+  inventarlo sin arriesgarte a emparejar mal (nunca adivines matrículas).
+- Respuestas completas pero sin rollo: la persona tiene prisa. Nada de
+  relleno ni de repetir la pregunta.
+- Si preguntan en general "qué sabes hacer" o "qué es lo mejor que puedes
+  hacer", NO des una lista corta de tres cosas: cuentas de verdad TODO lo
+  que hay aquí — crear/editar/asignar vehículos y conductores, mandar a
+  taller, abrir incidencias, generar la plantilla, leer varias fichas
+  técnicas de golpe, y consultar furgonetas/conductores/WHC/DNR/
+  inspecciones/rendimiento con nombres y cifras reales. Es mucho: dilo.
+- Los datos en vivo de abajo son la ÚNICA verdad sobre el estado de este
+  centro ahora mismo — nunca inventes un número que no esté ahí.
+- Si te preguntan algo que NO esté LITERALMENTE en los datos en vivo de abajo
+  — sobre FURGONETAS, CONDUCTORES, WHC de alguien en concreto o CON NOMBRES,
+  investigaciones DNR abiertas, inspecciones de una furgoneta o quién rinde
+  mejor/peor — NO te lo inventes y NO digas que no puedes: pide una consulta.
+  IMPORTANTE — los datos en vivo de abajo son solo un RESUMEN AGREGADO del
+  centro (totales, cuántos). Que ya tengas el total NO significa que eso sea
+  todo lo que puedes dar: si te piden el DETALLE o LOS NOMBRES de quienes
+  forman ese total (p.ej. "¿quiénes se van a pasar del WHC?", habiendo ya
+  dicho "1 conductor va a pasarse"), PIDES la consulta igualmente — te trae
+  la lista con nombre de cada uno. Responde ÚNICAMENTE con:
+  {{"consulta_pedida": {{"tipo": "vehiculos" | "conductores" | "whc" | "dnr" | "inspecciones" | "rendimiento",
+                        "filtros": {{"provider": "...", "status": "...", "brand": "...", "model": "...", "matricula": "...", "conductor_nombre": "...", "nombre": "...", "active": true}},
+                        "doc_tipo": "ficha_tecnica" | "seguro" | "itv" | "contrato" | null}}}}
+  Todos los filtros son opcionales, pon solo los que pidan.
+    · vehiculos: "provider", "status", "brand", "model", "matricula",
+      "conductor_nombre" (para "qué furgoneta lleva X" — el resultado ya
+      dice qué conductor lleva cada una aunque no uses este filtro) y
+      "doc_tipo" (solo si piden un documento en concreto).
+    · conductores: "active" (true/false) y "nombre".
+    · whc: "nombre" del conductor si preguntan por uno en concreto; SIN
+      filtro trae a TODOS con su nombre y su aviso — úsalo para "quiénes
+      se pasan/se acercan", nunca digas que no tienes nombres sin haberlo
+      pedido antes.
+    · dnr: sin filtros — siempre da las abiertas del centro, y trae también
+      un ranking por conductor de esas mismas abiertas (cuando se sabe quién
+      conducía). USA ESTE ranking para "¿quién tiene más DNR?" — es la
+      respuesta por defecto salvo que pidan explícitamente "el histórico" o
+      "de los últimos 30 días".
+    · inspecciones: "matricula" para las de una furgoneta; sin ella, las
+      últimas de todo el centro.
+    · rendimiento: sin filtros — ranking real por DCR de los últimos 30
+      días (con mínimo de entregas, para no señalar a alguien por un
+      fallo suelto). Úsalo para "quién es el mejor/peor conductor", "quién
+      rinde mejor", "ranking de repartidores". El "DNR" que trae esta lista
+      es OTRO NÚMERO distinto al de la consulta "dnr": aquí es el acumulado
+      de 30 días del informe diario (aunque ya estén cerrados), y en "dnr"
+      son solo las investigaciones ABIERTAS ahora mismo — casi siempre un
+      número mucho más bajo. Si preguntan "quién tiene más DNR" sin más
+      contexto, usa "dnr" (investigaciones reales, con seguimiento); usa el
+      de "rendimiento" solo si piden explícitamente el histórico de 30 días
+      o si ya estás mostrando esa tabla. Nunca los mezcles en la misma
+      respuesta sin decir de cuál hablas.
+  Después de pedir la consulta te llegará el resultado real y ahí sí
+  contestas con el JSON normal — nunca pidas dos consultas seguidas.
+DATOS EN VIVO DE {center}:
+{contexto}
+
+{_IA_ASISTENTE_MANUAL}
+
+REGLA OBLIGATORIA SOBRE "tarjeta" (no es opcional, léela dos veces):
+Si tu "respuesta" menciona AUNQUE SEA UN SOLO NÚMERO de los datos en vivo de
+arriba (WHC, DNR, candidatos...), "tarjeta" NO PUEDE quedarse en null: tiene
+que llevar ese mismo número, o varios, en filas cortas — la persona lo va a
+LEER de un vistazo en una tarjeta, no buscarlo dentro de una frase. Solo se
+deja "tarjeta" en null cuando la respuesta NO lleva ningún número (un "cómo
+se hace X", una charla, un "no lo sé"). Ejemplo de cuándo SÍ:
+  pregunta: "¿cómo va mi WHC?"
+  respuesta: "En OGA5 van bien las horas, con una persona a vigilar."
+  tarjeta: {{"titulo": "WHC de OGA5", "filas": [
+    {{"etiqueta": "Conductores con horas", "valor": "97", "tono": "neutro"}},
+    {{"etiqueta": "Van a pasarse", "valor": "1", "tono": "alerta"}},
+    {{"etiqueta": "Se acercan", "valor": "13", "tono": "aviso"}}]}}
+tono: "ok" (verde, va bien) | "aviso" (ámbar, vigilar) | "alerta" (rojo, ya
+es un problema) | "neutro" (gris, un dato sin más).
+
+Responde ÚNICAMENTE con este JSON, sin markdown ni texto fuera de él — SALVO
+que necesites pedir una consulta (arriba), en cuyo caso respondes SOLO con
+`{{"consulta_pedida": {{...}}}}` y nada más, ni "respuesta" ni el resto:
+{{
+  "respuesta": "tu respuesta en español, para leer en un chat — breve si ya va tarjeta detrás",
+  "tarjeta": null o {{"titulo": "...", "filas": [{{"etiqueta": "...", "valor": "...", "tono": "..."}}]}},
+  "accion_propuesta": null o {{
+    "tipo": "crear_vehiculo" | "crear_conductor" | "generar_plantilla" |
+            "asignar_conductor" | "desasignar_conductor" | "cambiar_estado_vehiculo" |
+            "crear_incidencia" | "editar_vehiculo" | "editar_conductor" |
+            "crear_orden_taller",
+    "campos": {{"license_plate": "...", "brand": "...", "model": "...", "color": "...", "vin": "..."}}
+    // para conductor: {{"name": "...", "phone": "...", "email": "...", "dni": "..."}}
+    // para generar_plantilla: {{}} (siempre vacío)
+    // para asignar_conductor: {{"matricula": "...", "conductor_nombre": "..."}}
+    // para desasignar_conductor: {{"matricula": "..."}}
+    // para cambiar_estado_vehiculo: {{"matricula": "...", "estado": "taller" | "active" | "baja"}}
+    // para crear_incidencia: {{"matricula": "...", "descripcion": "...", "severidad": "leve" | "moderado" | "grave"}}
+    // para editar_vehiculo: {{"matricula": "...", "<campo editable>": "..."}} (solo los campos que pidan)
+    // para editar_conductor: {{"conductor_nombre": "...", "<campo editable>": "..."}} (solo los campos que pidan)
+    // para crear_orden_taller: {{"matricula": "...", "taller_nombre": "...", "problema": "..."}}
+  }}
+}}"""
+
+
+_IA_ASISTENTE_TONOS = ("ok", "aviso", "alerta", "neutro")
+
+
+def _ai_asistente_validar_tarjeta(t):
+    """No nos fiamos de que Gemini respete el esquema al pie de la letra
+    (gotcha 38: nunca del cliente, y un LLM es el cliente menos fiable de
+    todos). Cualquier fila rara se descarta en vez de romper la pantalla."""
+    if not isinstance(t, dict):
+        return None
+    titulo = _texto_cuerpo(t.get("titulo"), 60)
+    filas_in = t.get("filas")
+    if not titulo or not isinstance(filas_in, list):
+        return None
+    filas = []
+    for f in filas_in[:8]:
+        if not isinstance(f, dict):
+            continue
+        etiqueta = _texto_cuerpo(f.get("etiqueta"), 40)
+        valor = _texto_cuerpo(f.get("valor"), 20)
+        if not etiqueta or not valor:
+            continue
+        tono = f.get("tono") if f.get("tono") in _IA_ASISTENTE_TONOS else "neutro"
+        filas.append({"etiqueta": etiqueta, "valor": valor, "tono": tono})
+    if not filas:
+        return None
+    return {"titulo": titulo, "filas": filas}
+
+
+class _IAAsistenteEntrada(BaseModel):
+    mensaje: str
+    center: str
+
+
+async def _ai_llamar_gemini(contents: list) -> dict:
+    """Una llamada a Gemini para el asistente, con el mismo modelo/timeout/
+    manejo de cuota de siempre. Separada de `ai_asistente_hablar` porque una
+    consulta ("furgonetas de Bansacar") necesita DOS pasadas: la primera pide
+    los datos, la segunda ya los tiene y redacta la respuesta final."""
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    try:
+        from google import genai as genai_sdk
+        from google.genai import types as genai_types
+        if os.environ.get("USE_VERTEX_AI", "").lower() in ("1", "true", "yes"):
+            from google.oauth2 import service_account
+            sa = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+            if sa and not sa.startswith("{"):
+                sa = base64.b64decode(sa).decode("utf-8")
+            creds = (service_account.Credentials.from_service_account_info(
+                json.loads(sa), scopes=["https://www.googleapis.com/auth/cloud-platform"]) if sa else None)
+            client = genai_sdk.Client(vertexai=True, project=os.environ.get("GCP_PROJECT", ""),
+                                      location=os.environ.get("GCP_LOCATION", "us-central1"), credentials=creds)
+        else:
+            client = genai_sdk.Client(api_key=gemini_key)
+        cfg = genai_types.GenerateContentConfig(temperature=0.3, response_mime_type="application/json")
+        loop = asyncio.get_running_loop()
+        # Modelo APARTE del que usa el análisis de daños (GEMINI_MODEL), con su
+        # propia variable: la cuota gratuita de Google es por modelo, y
+        # "-lite" trae bastante más margen diario que el flash normal. Así el
+        # asistente no le come cupo al análisis de fotos, que es lo crítico
+        # de verdad — y si algún día hace falta, se cambia con un secret,
+        # sin tocar código.
+        modelo = os.environ.get("GEMINI_MODEL_ASISTENTE", "gemini-3.5-flash-lite")
+        async with _gemini_sem:
+            resp = await asyncio.wait_for(
+                loop.run_in_executor(_executor, lambda: client.models.generate_content(
+                    model=modelo, contents=contents, config=cfg)),
+                timeout=30.0)
+        return json.loads(_strip_markdown_json(resp.text or "{}"))
+    except Exception as e:                                        # noqa: BLE001
+        logger.warning(f"[IA asistente] fallo Gemini: {e}")
+        # 429/RESOURCE_EXHAUSTED es la cuota GRATUITA de Gemini agotada por hoy
+        # (20 peticiones/dia en el plan free) — no un fallo pasajero de red, y
+        # "prueba en un minuto" es un consejo falso que hace perder el tiempo.
+        # Es ademas la MISMA clave que usa el analisis de daños de inspecciones,
+        # asi que si esto salta, esa parte tambien esta parada.
+        if "RESOURCE_EXHAUSTED" in str(e) or "429" in str(e):
+            raise HTTPException(
+                429, "Se ha agotado la cuota gratuita de Gemini por hoy (20 peticiones/día). "
+                     "No es un fallo de la app: hay que subir el plan de la API en Google AI Studio. "
+                     "Mientras tanto, el análisis de daños de las inspecciones tampoco funcionará.")
+        raise HTTPException(502, "El asistente no ha podido responder, prueba en un minuto")
+
+
+@api_router.post("/ai/asistente")
+async def ai_asistente_hablar(data: _IAAsistenteEntrada, user: dict = Depends(require_admin)):
+    mensaje = _texto_cuerpo(data.mensaje, 2000)
+    center = _texto_cuerpo(data.center, 20)
+    if not mensaje:
+        raise HTTPException(400, "Escribe algo primero")
+    if not center or not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not gemini_key and os.environ.get("USE_VERTEX_AI", "").lower() not in ("1", "true", "yes"):
+        raise HTTPException(503, "El asistente no está configurado todavía")
+
+    contexto = await _ai_asistente_contexto(user, center)
+    # Un poco de historial para que no se le olvide de que estaban hablando,
+    # sin arrastrar la conversación entera en cada turno.
+    previas = await db[_IA_ASISTENTE_COL].find(
+        {"user_id": user.get("sub") or user.get("id"), "center": center},
+        {"_id": 0, "rol": 1, "texto": 1}, sort=[("creado_en", -1)], limit=10).to_list(10)
+    previas.reverse()
+
+    contents = [_ai_asistente_prompt(center, contexto)]
+    for p in previas:
+        contents.append(f"{'USUARIO' if p['rol'] == 'usuario' else 'ASISTENTE'}: {p['texto']}")
+    contents.append(f"USUARIO: {mensaje}")
+
+    salida = await _ai_llamar_gemini(contents)
+
+    # ── CONSULTA DE SOLO LECTURA (segunda pasada) ────────────────────────────
+    # Si la IA no puede contestar con lo que ya tenia (WHC/DNR/candidatos), pide
+    # una consulta ("furgonetas de Bansacar", "conductores activos de..."). Se
+    # ejecuta AQUI, en Python, contra la BD real y con el mismo filtro de centro
+    # que cualquier pantalla — nunca la escribe la IA, nunca ve mas centros de
+    # los que ya ve el usuario. No hace falta confirmacion porque es de solo
+    # lectura: la unica diferencia con las tres acciones de arriba es que esas
+    # ESCRIBEN. Los enlaces de documentos los pone este codigo con la URL real
+    # de R2 — jamas el texto que redacte el modelo, que podria inventarla.
+    documentos_consulta = None
+    consulta = salida.get("consulta_pedida")
+    if isinstance(consulta, dict) and consulta.get("tipo") in _IA_CONSULTA_TIPOS:
+        resultado = await _ai_ejecutar_consulta(user, center, consulta)
+        documentos_consulta = resultado.get("documentos")
+        contents.append(f"ASISTENTE: {json.dumps(salida, ensure_ascii=False)}")
+        contents.append(
+            "RESULTADO DE LA CONSULTA (sacado de la base de datos real, es la ÚNICA "
+            "verdad — no repitas números que no estén aquí):\n" + resultado["resumen_texto"] +
+            "\n\nAhora responde YA con el JSON final de siempre (respuesta/tarjeta/"
+            "accion_propuesta). No vuelvas a pedir otra consulta.")
+        salida = await _ai_llamar_gemini(contents)
+
+    respuesta = _texto_cuerpo(salida.get("respuesta"), 4000) or "No he sabido qué contestar a eso."
+    accion = salida.get("accion_propuesta")
+    if not (isinstance(accion, dict) and accion.get("tipo") in _IA_ASISTENTE_ACCIONES
+            and isinstance(accion.get("campos"), dict)):
+        accion = None
+    tarjeta = _ai_asistente_validar_tarjeta(salida.get("tarjeta"))
+    documentos = documentos_consulta[:60] if isinstance(documentos_consulta, list) else None
+
+    ahora = datetime.now(timezone.utc).isoformat()
+    uid = user.get("sub") or user.get("id")
+    await db[_IA_ASISTENTE_COL].insert_many([
+        {"id": str(uuid.uuid4()), "user_id": uid, "center": center, "rol": "usuario",
+         "texto": mensaje, "creado_en": ahora},
+        {"id": str(uuid.uuid4()), "user_id": uid, "center": center, "rol": "asistente",
+         "texto": respuesta, "accion_propuesta": accion, "tarjeta": tarjeta,
+         "documentos": documentos, "creado_en": ahora},
+    ])
+    return {"respuesta": respuesta, "accion_propuesta": accion, "tarjeta": tarjeta, "documentos": documentos}
+
+
+@api_router.get("/ai/asistente/historial")
+async def ai_asistente_historial(center: str, user: dict = Depends(require_admin)):
+    center = _texto_cuerpo(center, 20)
+    if not center or not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+    uid = user.get("sub") or user.get("id")
+    msgs = await db[_IA_ASISTENTE_COL].find(
+        {"user_id": uid, "center": center}, {"_id": 0},
+        sort=[("creado_en", 1)], limit=200).to_list(200)
+    return {"mensajes": msgs}
+
+
+class _IAAsistenteAccion(BaseModel):
+    tipo: str
+    campos: dict
+    center: str
+
+
+@api_router.post("/ai/asistente/ejecutar")
+async def ai_asistente_ejecutar(data: _IAAsistenteAccion, user: dict = Depends(require_admin)):
+    """Ejecuta una acción que la IA propuso y una persona confirmó con un
+    clic. Llama a la MISMA función que el formulario normal — no hay una
+    segunda copia de "cómo se crea un vehículo" que se pueda desincronizar."""
+    if data.tipo not in _IA_ASISTENTE_ACCIONES:
+        raise HTTPException(400, "Esa acción no existe")
+    center = _texto_cuerpo(data.center, 20)
+    if not center or not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+    campos = dict(data.campos or {})
+    # El centro lo decide SIEMPRE la sesión, nunca lo que la IA haya
+    # entendido o lo que venga en el cuerpo: es la frontera de "no más poder
+    # que quien lo usa" hecha código, no una promesa del prompt.
+    campos["center"] = center
+
+    if data.tipo == "crear_vehiculo":
+        try:
+            vehiculo = VehicleCreate(**campos)
+        except ValidationError as e:
+            raise HTTPException(400, f"Faltan datos del vehículo: {e.errors()[0].get('msg', 'revisa los campos')}")
+        creado = await create_vehicle(vehiculo, user)
+        return {"ok": True, "tipo": data.tipo, "creado": creado.model_dump()}
+
+    if data.tipo == "generar_plantilla":
+        dia = _dia_negocio()
+        filas = await _plantilla_filas_desde_cortex(center, dia)
+        if not filas:
+            raise HTTPException(
+                400, "Cortex todavía no tiene ninguna ruta capturada hoy para este "
+                     "centro. Abre Cortex con la extensión activa y prueba de nuevo "
+                     "en unos minutos, o móntala a mano en Turnos.")
+        # Se une al borrador YA ABIERTO del centro (si otro equipo lo tiene
+        # delante ahora mismo) en vez de crear uno nuevo, y solo empuja las
+        # rutas que aún no estaban — nunca toca una fila existente, que es la
+        # misma regla de "cada cambio va solo" de los gotchas 52/56: aquí el
+        # cambio es "añadir N filas".
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=18)).isoformat()
+        activo = await db.plantillas_compartidas.find_one(
+            {"center": center, "updated_at": {"$gte": cutoff}}, {"_id": 0})
+        ahora = datetime.now(timezone.utc).isoformat()
+        quien = user.get("name") or "FlotaDSP AI"
+        if activo:
+            existentes = {(r.get("ruta") or "").strip().upper()
+                          for r in (activo.get("state") or {}).get("rows") or []}
+            nuevas = [f for f in filas if f["ruta"].upper() not in existentes]
+            if nuevas:
+                await db.plantillas_compartidas.update_one(
+                    {"id": activo["id"]},
+                    {"$push": {"state.rows": {"$each": nuevas}},
+                     "$set": {"updated_at": ahora, "updated_by": quien},
+                     "$inc": {"revision": 1}})
+            return {"ok": True, "tipo": data.tipo, "draft_id": activo["id"],
+                    "filas_cortex": len(filas), "anadidas": len(nuevas), "ya_existia": True}
+        fecha_es = "%s/%s/%s" % (dia[8:10], dia[5:7], dia[0:4])
+        semana = datetime.strptime(dia, "%Y-%m-%d").isocalendar()[1]
+        doc = {"id": str(uuid.uuid4()), "center": center,
+               "state": {"rows": filas, "week": semana, "date": fecha_es},
+               "revision": 1, "updated_at": ahora, "updated_by": quien}
+        await db.plantillas_compartidas.insert_one(doc)
+        return {"ok": True, "tipo": data.tipo, "draft_id": doc["id"],
+                "filas_cortex": len(filas), "anadidas": len(filas), "ya_existia": False}
+
+    if data.tipo == "asignar_conductor":
+        vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
+        conductor = await _ai_resolver_conductor(user, center, campos.get("conductor_nombre") or "")
+        await assign_driver(vehiculo["id"], AssignDriverRequest(driver_id=conductor["id"]), user)
+        return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"],
+                "driver_name": conductor["name"]}
+
+    if data.tipo == "desasignar_conductor":
+        vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
+        await assign_driver(vehiculo["id"], AssignDriverRequest(driver_id=None), user)
+        return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"]}
+
+    if data.tipo == "cambiar_estado_vehiculo":
+        estado = _texto_cuerpo(campos.get("estado"), 20).lower()
+        if estado not in ("active", "taller", "baja"):
+            raise HTTPException(400, 'El estado tiene que ser "active", "taller" o "baja"')
+        vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
+        await update_vehicle(vehiculo["id"], {"status": estado}, user)
+        return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"], "estado": estado}
+
+    if data.tipo == "crear_incidencia":
+        descripcion = _texto_cuerpo(campos.get("descripcion"), 2000)
+        if not descripcion:
+            raise HTTPException(400, "Falta describir qué le pasa a la furgoneta")
+        severidad = _texto_cuerpo(campos.get("severidad"), 20).lower()
+        if severidad not in ("leve", "moderado", "grave"):
+            severidad = "leve"
+        vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
+        incidencia = IncidentCreate(vehicle_id=vehiculo["id"], description=descripcion, severity=severidad)
+        creada = await create_incident(incidencia, user)
+        return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"],
+                "severidad": severidad, "incident_id": (creada or {}).get("id")}
+
+    if data.tipo == "editar_vehiculo":
+        vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
+        _fechas = {"itv_date", "insurance_expiry", "renting_end_date"}
+        cambios = {}
+        for campo in _IA_VEHICULO_EDITABLE:
+            if campo not in campos or campos[campo] in (None, ""):
+                continue
+            if campo in ("year", "mileage"):
+                cambios[campo] = _entero(campos[campo], campo)
+            elif campo in _fechas:
+                valor = _texto_cuerpo(campos[campo], 10)
+                if not re.match(r"^\d{4}-\d{2}-\d{2}$", valor):
+                    raise HTTPException(400, f'"{campo}" tiene que ir en formato AAAA-MM-DD')
+                cambios[campo] = valor
+            else:
+                cambios[campo] = _texto_cuerpo(campos[campo], 300)
+        if not cambios:
+            raise HTTPException(400, "No has dicho qué cambiar de la furgoneta")
+        await update_vehicle(vehiculo["id"], cambios, user)
+        return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"], "cambios": cambios}
+
+    if data.tipo == "editar_conductor":
+        conductor = await _ai_resolver_conductor(user, center, campos.get("conductor_nombre") or "")
+        cambios = {campo: _texto_cuerpo(campos[campo], 300) for campo in _IA_CONDUCTOR_EDITABLE
+                  if campo in campos and campos[campo] not in (None, "")}
+        if not cambios:
+            raise HTTPException(400, "No has dicho qué cambiar del conductor")
+        await update_driver(conductor["id"], cambios, user)
+        return {"ok": True, "tipo": data.tipo, "driver_name": conductor["name"], "cambios": cambios}
+
+    if data.tipo == "crear_orden_taller":
+        vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
+        taller = await _ai_resolver_taller(campos.get("taller_nombre") or "")
+        problema = _texto_cuerpo(campos.get("problema"), 2000)
+        orden_datos = OrdenTrabajoCrear(vehicle_id=vehiculo["id"], workshop_id=taller["id"], problema=problema)
+        orden = await crear_orden(orden_datos, user)
+        return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"],
+                "taller_nombre": taller["name"], "numero": (orden or {}).get("numero")}
+
+    try:
+        conductor = DriverCreate(**campos)
+    except ValidationError as e:
+        raise HTTPException(400, f"Faltan datos del conductor: {e.errors()[0].get('msg', 'revisa los campos')}")
+    creado = await create_driver(conductor, False, user)
+    return {"ok": True, "tipo": data.tipo, "creado": creado.model_dump() if hasattr(creado, "model_dump") else creado}
+
+
+# ── SUBIR VARIAS FICHAS TÉCNICAS Y ASIGNAR CADA UNA A SU FURGONETA ──────────
+# Pedido por Dani el 18-09-2026: "si le subo 25 fichas tecnicas y le digo
+# asigna cada una a su propia furgoneta que lo haga". Dos pasos, como toda
+# escritura de la IA: PROPONER (lee la matrícula/VIN de cada fichero con
+# Gemini, cruza contra la flota real, sube cada fichero a un cajón temporal
+# de R2 sin tocar ningún vehículo todavía) y CONFIRMAR (un clic que mueve a
+# su sitio SOLO los ficheros que casaron sin ambigüedad — el resto queda
+# listado para colgarlos a mano). Nunca se adivina: una matrícula que casa
+# con más de una furgoneta o con ninguna no se asigna sola.
+_FICHAS_MAX_ARCHIVOS = 30
+_FICHAS_MAX_BYTES_TOTAL = 15 * 1024 * 1024
+_FICHAS_TECNICAS_PROMPT = """Cada imagen o PDF que sigue DEBERÍA ser la FICHA
+TÉCNICA de una furgoneta española (o su permiso de circulación), pero puede
+que alguien haya subido por error otra cosa (una captura de pantalla, una
+foto de un daño, un documento distinto). Para CADA una, en el MISMO ORDEN en
+que aparecen, extrae:
+- "es_ficha_tecnica": true si de verdad parece un permiso de circulación o
+  ficha técnica de vehículo (aunque esté borroso), false si es claramente
+  otra cosa (una captura de una app, una foto sin relación, texto suelto).
+- "matricula": tal como aparece (4 números + 3 letras, p.ej. "1234ABC"), o
+  null si no se lee o "es_ficha_tecnica" es false.
+- "vin": el número de bastidor/VIN si se lee (17 caracteres), si no null.
+Si un fichero no se lee con claridad pero SÍ parece una ficha técnica, pon
+matricula/vin a null pero "es_ficha_tecnica" a true — no adivines los datos,
+y no te saltes ningún fichero: tiene que haber EXACTAMENTE {n} elementos en
+el array, uno por fichero, en el mismo orden.
+Responde ÚNICAMENTE con este JSON, sin markdown:
+{{"fichas": [{{"es_ficha_tecnica": true, "matricula": "...", "vin": "..."}}, ...]}}"""
+
+
+@api_router.post("/ai/asistente/fichas-tecnicas")
+async def ai_fichas_tecnicas_proponer(
+    center: str = Form(...),
+    files: List[UploadFile] = File(...),
+    user: dict = Depends(require_admin),
+):
+    """Lee matrícula/VIN de cada ficha técnica con Gemini (UNA sola llamada
+    para todo el lote, no una por fichero) y propone a qué furgoneta va cada
+    una. No escribe nada todavía: los ficheros se guardan en un cajón
+    temporal de R2 hasta que se confirme."""
+    center = _texto_cuerpo(center, 20)
+    if not center or not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+    if len(files) > _FICHAS_MAX_ARCHIVOS:
+        raise HTTPException(400, f"Como mucho {_FICHAS_MAX_ARCHIVOS} ficheros de golpe. Sube el resto en otra tanda.")
+
+    s3 = get_r2()
+    if not s3:
+        raise HTTPException(502, "Almacenamiento R2 no configurado")
+
+    leidos = []
+    total_bytes = 0
+    for f in files:
+        content = await f.read()
+        if not content:
+            continue
+        total_bytes += len(content)
+        if total_bytes > _FICHAS_MAX_BYTES_TOTAL:
+            raise HTTPException(400, "Los ficheros juntos pesan demasiado (máx 15 MB en total). Sube menos de golpe.")
+        nombre = f.filename or f"documento_{len(leidos) + 1}"
+        ext = nombre.rsplit(".", 1)[-1].lower() if "." in nombre else ""
+        mime = ("application/pdf" if ext == "pdf" else
+                "image/png" if content[:4] == b"\x89PNG" else "image/jpeg")
+        leidos.append({"filename": nombre, "bytes": content, "mime": mime})
+    if not leidos:
+        raise HTTPException(400, "No se ha podido leer ningún fichero")
+
+    try:
+        from google.genai import types as genai_types
+    except Exception:
+        raise HTTPException(503, "El asistente no está configurado todavía")
+    contents = [_FICHAS_TECNICAS_PROMPT.format(n=len(leidos))]
+    for l in leidos:
+        contents.append(genai_types.Part.from_bytes(data=l["bytes"], mime_type=l["mime"]))
+    extraido = await _ai_llamar_gemini(contents)
+    filas_ia = extraido.get("fichas") if isinstance(extraido.get("fichas"), list) else []
+
+    fc = _filtro_centro(user, center) if center != "Todos" else {}
+    vehiculos = await db.vehicles.find(
+        {"status": {"$nin": ["deleted", "baja"]}, **fc},
+        {"_id": 0, "id": 1, "license_plate": 1, "vin": 1}).to_list(1000)
+    por_matricula: dict = {}
+    for v in vehiculos:
+        norm = _matricula_norm(v.get("license_plate"))
+        if norm:
+            por_matricula.setdefault(norm, []).append(v)
+    por_vin = {v["vin"].upper(): v for v in vehiculos if v.get("vin")}
+
+    lote_id = str(uuid.uuid4())
+    loop = asyncio.get_running_loop()
+    resultados = []
+    for i, l in enumerate(leidos):
+        fi = filas_ia[i] if i < len(filas_ia) and isinstance(filas_ia[i], dict) else {}
+        matricula_d = _texto_cuerpo(fi.get("matricula"), 20)
+        vin_d = _texto_cuerpo(fi.get("vin"), 30).upper()
+        vehiculo, estado = None, "sin_match"
+        # Si Gemini dice explicitamente que esto no es una ficha tecnica, no
+        # tiene sentido intentar emparejar matricula: es honesto decir que no
+        # es lo que parecia, no "sin identificar" como si fuera un permiso
+        # borroso (gotcha del 18-09-2026: una captura ajena entraba aqui y
+        # salia "sin identificar", que suena a que si lo intento y fallo).
+        if fi.get("es_ficha_tecnica") is False:
+            estado = "no_es_ficha"
+        else:
+            candidatos = por_matricula.get(_matricula_norm(matricula_d)) or []
+            if len(candidatos) == 1:
+                vehiculo, estado = candidatos[0], "match"
+            elif len(candidatos) > 1:
+                estado = "ambiguo"
+            elif vin_d and vin_d in por_vin:
+                vehiculo, estado = por_vin[vin_d], "match"
+
+        safe_name = re.sub(r"[^a-zA-Z0-9_.]", "_", l["filename"])
+        stage_key = f"docs/_pendiente/{lote_id}/{i}_{safe_name}"
+        try:
+            await loop.run_in_executor(_executor, lambda k=stage_key, b=l["bytes"], m=l["mime"]: s3.put_object(
+                Bucket=R2_BUCKET, Key=k, Body=b, ContentType=m))
+        except Exception as e:
+            logger.warning(f"fichas-tecnicas: no se pudo subir a staging: {e}")
+            estado = "sin_match" if estado == "match" else estado  # sin el fichero en R2 no hay nada que confirmar
+            vehiculo = None
+            stage_key = None
+
+        resultados.append({
+            "idx": i, "filename": l["filename"], "matricula_detectada": matricula_d or None,
+            "vin_detectada": vin_d or None, "estado": estado,
+            "vehicle_id": vehiculo["id"] if vehiculo else None,
+            "vehicle_plate": vehiculo["license_plate"] if vehiculo else None,
+            "stage_key": stage_key, "mime": l["mime"],
+        })
+
+    await db.ai_fichas_lotes.insert_one({
+        "id": lote_id, "center": center, "user_id": user.get("sub") or user.get("id"),
+        "resultados": resultados, "confirmado": False,
+        "creado_en": datetime.now(timezone.utc).isoformat(),
+    })
+    publicos = [{k: v for k, v in r.items() if k != "stage_key"} for r in resultados]
+    return {"lote_id": lote_id, "n": len(resultados),
+            "n_match": sum(1 for r in resultados if r["estado"] == "match"),
+            "resultados": publicos}
+
+
+@api_router.post("/ai/asistente/fichas-tecnicas/confirmar")
+async def ai_fichas_tecnicas_confirmar(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Mueve a su sitio SOLO los ficheros que casaron sin ambigüedad. El plan
+    ya se calculó y se guardó al proponer — aquí no se vuelve a confiar en
+    nada que venga del cliente, solo en el `lote_id`, igual que las demás
+    acciones de la IA (gotcha 38: quien decide es el servidor)."""
+    lote_id = _texto_cuerpo(data.get("lote_id"), 64)
+    lote = await db.ai_fichas_lotes.find_one({"id": lote_id})
+    if not lote:
+        raise HTTPException(404, "Ese lote ya no existe, vuelve a subir los ficheros")
+    if not _user_can_see_center(user, lote.get("center") or ""):
+        raise HTTPException(403, "Sin acceso a ese centro")
+    # Cerrojo de "solo una vez": un doble clic o un reintento no puede colgar
+    # el mismo documento dos veces (misma familia que el gotcha 32).
+    r = await db.ai_fichas_lotes.update_one(
+        {"id": lote_id, "confirmado": {"$ne": True}}, {"$set": {"confirmado": True}})
+    if r.matched_count == 0:
+        raise HTTPException(409, "Este lote ya se confirmó antes")
+
+    s3 = get_r2()
+    loop = asyncio.get_running_loop()
+    asignados, fallidos = [], []
+    for fila in lote.get("resultados") or []:
+        if fila.get("estado") != "match" or not fila.get("vehicle_id") or not fila.get("stage_key"):
+            continue
+        try:
+            obj = await loop.run_in_executor(
+                _executor, lambda k=fila["stage_key"]: s3.get_object(Bucket=R2_BUCKET, Key=k))
+            content = await loop.run_in_executor(_executor, obj["Body"].read)
+            ext = ("pdf" if fila["mime"] == "application/pdf" else
+                   "png" if fila["mime"] == "image/png" else "jpg")
+            final_key = f"docs/{fila['vehicle_id']}/ficha_tecnica_{uuid.uuid4().hex[:8]}.{ext}"
+            await loop.run_in_executor(_executor, lambda k=final_key, b=content, m=fila["mime"]: s3.put_object(
+                Bucket=R2_BUCKET, Key=k, Body=b, ContentType=m))
+            r2_public = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
+            url = f"{r2_public}/{final_key}" if r2_public else final_key
+            doc = {"id": str(uuid.uuid4()), "vehicle_id": fila["vehicle_id"], "doc_type": "ficha_tecnica",
+                   "name": fila["filename"], "url": url, "uploaded_at": datetime.now(timezone.utc).isoformat()}
+            await db.vehicle_documents.insert_one(dict(doc))
+            asignados.append({"matricula": fila.get("vehicle_plate"), "filename": fila["filename"]})
+            try:
+                await loop.run_in_executor(
+                    _executor, lambda k=fila["stage_key"]: s3.delete_object(Bucket=R2_BUCKET, Key=k))
+            except Exception:                                        # noqa: BLE001
+                pass  # el fichero de sobra en staging no rompe nada, solo ocupa
+        except Exception as e:                                        # noqa: BLE001
+            logger.warning(f"fichas-tecnicas confirmar {fila.get('filename')}: {e}")
+            fallidos.append(fila["filename"])
+
+    return {"ok": True, "asignados": asignados, "fallidos": fallidos}
 
 
 app.include_router(auth_router)

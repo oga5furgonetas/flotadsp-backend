@@ -21,6 +21,18 @@ export const toggleChecklistItem = (body) => api.post('/checklist/toggle', body)
 export const getChat = (center, since) => api.get(`/chat/${center}`, { params: since ? { since } : {} })
 export const postChat = (center, text) => api.post(`/chat/${center}`, { text })
 export const deleteChatMessage = (center, messageId) => api.delete(`/chat/${center}/${messageId}`)
+
+/* ── FlotaDSP AI: el asistente de cada centro ── */
+export const getAiHistorial = (center) => api.get('/ai/asistente/historial', { params: { center } })
+export const enviarMensajeIA = (mensaje, center) => api.post('/ai/asistente', { mensaje, center })
+export const ejecutarAccionIA = (tipo, campos, center) => api.post('/ai/asistente/ejecutar', { tipo, campos, center })
+export const subirFichasTecnicasIA = (files, center) => {
+  const fd = new FormData()
+  fd.append('center', center)
+  for (const f of files) fd.append('files', f)
+  return api.post('/ai/asistente/fichas-tecnicas', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+}
+export const confirmarFichasTecnicasIA = (lote_id) => api.post('/ai/asistente/fichas-tecnicas/confirmar', { lote_id })
 export const saveChecklistTemplate = (body) => api.post('/checklist/template', body) // {center, shift, items}
 // Cierre de turno: sale solo a su hora, esto lo dispara ahora para probarlo.
 export const enviarResumenTurno = (body) => api.post('/checklist/enviar-resumen', body)
@@ -229,7 +241,7 @@ export const getWorkshopsNearby = (lat, lng, { provider, category, maxKm = 80 } 
   api.get('/workshops/nearby', { params: { lat, lng, max_km: maxKm, ...(provider ? { provider } : {}), ...(category ? { category } : {}) } })
 
 /* ── Avisos / Alertas ── */
-export const getAlerts = () => api.get('/alerts')
+export const getAlerts = (center, kind) => api.get('/alerts', { params: { ...centerParam(center), ...(kind ? { kind } : {}) } })
 export const getItvAlerts = (center) => api.get('/alerts/itv', { params: centerParam(center) })
 /* Todo lo que vence en un mes (ITV, renting y los cambios previstos por km),
    ya filtrado por centro en el servidor. */
@@ -544,11 +556,21 @@ export const adminToggleDriverOffer = (id, active) => api.patch(`/admin/driver-o
 export const adminDeleteDriverOffer = (id) => api.delete(`/admin/driver-offers/${id}`)
 export const adminGetFounderReservations = () => api.get('/admin/founder-reservations')
 
+/* ── Campaña de bienvenida a candidatos (cupón tienda + suscripción empleo) ── */
+export const crearEnlaceTienda = () => api.post('/tienda/enlace')
+export const getSuscripcionesEmpleo = () => api.get('/empleo/suscripciones')
+export const enviarCampanaCandidatos = (body) => api.post('/admin/candidatos/campana-bienvenida', body)
+
 /* ── Usuarios (RBAC) ── */
 export const getAdmins = () => api.get('/auth/admins')
 export const createAdmin = (body) => api.post('/auth/create-admin', body) // {username, password, name, permissions:[]}
 export const updateAdmin = (id, body) => api.patch(`/auth/admins/${id}`, body) // {permissions?, name?}
 export const deleteAdmin = (id) => api.delete(`/auth/admins/${id}`)
+export const subirFotoAdmin = (id, file) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  return api.post(`/auth/admins/${id}/photo`, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+}
 
 /* ── Perfil / cuenta ── */
 export const changeMyPassword = (current_password, new_password) =>
@@ -670,6 +692,10 @@ export const deleteWhcPlan = (center) => api.delete('/whc/plan', { params: { cen
    `marcarDnrEnviada` lo confirma despues, cuando ya se le ha dado a enviar:
    abrir el correo no es haberlo enviado. */
 export const getDnrInvestigaciones = (center) => api.get('/dnr/investigaciones', { params: centerParam(center) })
+/* Solo el numero, para el aviso del menu y del notificador en vivo: pedir la
+   lista completa (con el contexto de Cortex de cada una) cada dos minutos
+   desde todas las pantallas sería tirar trabajo para acabar mirando `.length`. */
+export const contarDnrPendientes = (center) => api.get('/dnr/investigaciones/pendientes', { params: centerParam(center) })
 export const responderDnr = (body) => api.post('/dnr/investigaciones/responder', body)
 /* Lo manda el servidor. `responder` solo PREPARA (abre tu correo); esto lo
    envía de verdad, que es lo único que funciona con más de 3 paquetes: el

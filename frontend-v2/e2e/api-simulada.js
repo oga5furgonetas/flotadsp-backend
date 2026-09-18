@@ -115,7 +115,33 @@ function respuesta(ruta, escenario) {
                   { id: 'w3', name: 'Carglass Santiago' }],
       total_matched: 3,
     },
+    // Va ANTES que '/vehicles': el emparejador de abajo es `ruta.includes(clave)`
+    // y para "/vehicles/faltan" ambas claves casan, así que la más específica
+    // tiene que aparecer primero o nunca se alcanza (server.py siempre devuelve
+    // resumen y campos; sin este mock caía en el `{}` de defecto y «Revisar
+    // datos» reventaba con `Object.entries(undefined)`).
+    '/vehicles/faltan': {
+      activas: lleno ? 1 : 0,
+      resumen: lleno ? { itv_date: 0, insurance_date: 1, oil_last_change_km: 1,
+                         oil_interval_km: 0, mileage: 0, model: 0, brand: 0, vin: 1 } : {},
+      campos: {
+        itv_date: 'Fecha de ITV', insurance_date: 'Fecha del seguro',
+        oil_last_change_km: 'Km del último cambio de aceite',
+        oil_interval_km: 'Cada cuántos km toca el aceite',
+        mileage: 'Kilometraje', model: 'Modelo', brand: 'Marca', vin: 'VIN',
+      },
+    },
     '/vehicles': lleno ? [VEHICULO] : [],
+    // Igual que '/vehicles/faltan' arriba: van ANTES que '/drivers', que si no
+    // las tapa a las tres. Formas reales de server.py — todas devuelven listas
+    // vacías cuando no hay nada, nunca `undefined`, así que sin este mock caían
+    // en el `{}` de defecto y los paneles de Conductores reventaban con
+    // `Cannot read properties of undefined (reading 'map')`.
+    '/drivers/duplicados': { grupos: [], total: 0, fichas_de_mas: 0 },
+    '/drivers/sin-centro': { sin_centro: [], total: 0, con_sugerencia: 0, dias: 60, centros: [] },
+    '/drivers/sin-transporter': { total: 0, con_sugerencia: 0, dias: 30, sin_transporter: [] },
+    '/transporter-ids/propuestas': { propuestas: [], ambiguos: [], sin_id: 0, dias_con_ruta: 0, minimo_dias: 2 },
+    '/transporter-ids/sin-ficha': { sin_ficha: [], total: 0, con_ficha: 0, candidatos: [], dias: 30 },
     '/drivers': lleno ? [CONDUCTOR] : [],
     '/inspections': lleno ? [INSPECCION] : [],
     '/incidents': [],
@@ -220,7 +246,12 @@ export async function entrarComoAdmin(page, { superAdmin = false, centros = ['OG
       // asi que el barrido no probaria nada de su contenido real.
       localStorage.setItem('panel_center', centros[0])
       localStorage.setItem('flota_lang', 'es')
-      localStorage.setItem('cookies_ok', '1')
+      // Nombres reales de CookieBanner.jsx y Ayuda.jsx: sin esto los dos
+      // overlays de bienvenida (el segundo es `fixed inset-0 z-[80]`, a
+      // pantalla completa) tapan todos los botones y el barrido no pulsa
+      // ninguno en ninguna pantalla.
+      localStorage.setItem('cookie_consent', '1')
+      localStorage.setItem('ayuda_vista_a1', '1')
     },
     {
       centros,

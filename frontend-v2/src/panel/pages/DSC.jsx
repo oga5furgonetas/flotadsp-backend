@@ -233,12 +233,12 @@ export default function DSC() {
   const cargar = useCallback(async (n) => {
     setCargando(true); setError('')
     try {
-      const { data } = await cortexDsc({ dias: n })
+      const { data } = await cortexDsc({ dias: n, center })
       setD(data)
     } catch (e) {
       setError(e?.response?.data?.detail || t('dsc.error'))
     } finally { setCargando(false) }
-  }, [t])
+  }, [t, center])
 
   useEffect(() => { cargar(dias) }, [cargar, dias])
 
@@ -287,7 +287,20 @@ export default function DSC() {
       {vista === 'donde' && cargando && !d && <div className="card p-8 text-center text-dark-400">{t('dsc.loading')}</div>}
 
       {vista === 'donde' && d && !d.total && (
-        <div className="card p-8 text-center text-dark-400">{t('dsc.vacio')}</div>
+        <div className="card space-y-2 p-8 text-center text-dark-400">
+          <p>{t('dsc.vacio')}</p>
+          {/* Sin esto, una nave con la extensión de Cortex cerrada desde hace
+              semanas (ver memoria dga1-dga2-captura-parada) enseña el mismo
+              mensaje que una mañana normal sin entregas todavía: parece que
+              la pantalla no funciona en vez de decir la causa real. */}
+          {(() => {
+            if (!d.last_capture_at) return <p className="text-[12px] text-amber-300">{t('dsc.sinCapturaNunca')}</p>
+            const dias = Math.floor((Date.now() - new Date(d.last_capture_at)) / 86400000)
+            return dias >= 2
+              ? <p className="text-[12px] text-amber-300">{t('dsc.capturaParadaPre')} {dias} {t('dsc.capturaParadaPost')}</p>
+              : null
+          })()}
+        </div>
       )}
 
       {vista === 'donde' && f && (
