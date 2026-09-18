@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import axios from 'axios'
-import { Loader2, Bell, CheckCircle2, AlertTriangle, Briefcase, MapPin } from 'lucide-react'
+import { Loader2, Bell, CheckCircle2, AlertTriangle, Briefcase, MapPin, Settings } from 'lucide-react'
 import { API_BASE } from '../lib/apiBase'
 import { normalizarDetalle } from '../services/api'
 
@@ -30,6 +30,10 @@ export default function EmpleoPrioridad() {
   const [perfil, setPerfil] = useState('')
   const [enviando, setEnviando] = useState(false)
   const [err, setErr] = useState('')
+  const [gestionAbierta, setGestionAbierta] = useState(false)
+  const [emailGestion, setEmailGestion] = useState('')
+  const [gestionando, setGestionando] = useState(false)
+  const [errGestion, setErrGestion] = useState('')
 
   useEffect(() => {
     http.get('/empleo/publicas', { params: slug ? { empresa: slug } : {} })
@@ -50,6 +54,19 @@ export default function EmpleoPrioridad() {
     } catch (e2) {
       setErr(e2?.response?.data?.detail || 'No se ha podido abrir el pago. Inténtalo en un minuto.')
     } finally { setEnviando(false) }
+  }
+
+  async function gestionarSuscripcion(e) {
+    e.preventDefault()
+    if (!emailGestion.trim()) return
+    setGestionando(true); setErrGestion('')
+    try {
+      const { data } = await http.post('/empleo/suscripcion/portal', { email: emailGestion.trim(), slug })
+      if (data?.url) window.location.href = data.url
+      else setErrGestion('No se ha podido abrir la gestión. Inténtalo en un minuto.')
+    } catch (e2) {
+      setErrGestion(e2?.response?.data?.detail || 'No se ha podido abrir la gestión. Inténtalo en un minuto.')
+    } finally { setGestionando(false) }
   }
 
   if (ok === '1') {
@@ -132,6 +149,30 @@ export default function EmpleoPrioridad() {
         <p className="mt-4 text-center text-xs text-slate-400">
           Cancelas cuando quieras, sin permanencia. El cobro lo gestiona Stripe.
         </p>
+
+        <div className="mt-8 border-t border-slate-100 pt-5">
+          {!gestionAbierta ? (
+            <button type="button" onClick={() => setGestionAbierta(true)}
+              className="flex w-full items-center justify-center gap-1.5 text-xs font-medium text-slate-400 hover:text-slate-600">
+              <Settings size={13} /> ¿Ya eres Prioritario y quieres darte de baja?
+            </button>
+          ) : (
+            <form onSubmit={gestionarSuscripcion} className="space-y-2">
+              <p className="text-xs text-slate-500">Pon el correo con el que te suscribiste:</p>
+              <input
+                type="email" required value={emailGestion} onChange={(e) => setEmailGestion(e.target.value)}
+                placeholder="tu@correo.com"
+                className="w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-900 outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+              />
+              <button type="submit" disabled={gestionando}
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">
+                {gestionando ? <Loader2 size={14} className="animate-spin" /> : null}
+                Gestionar mi suscripción
+              </button>
+              {errGestion && <p className="text-xs text-red-600">{errGestion}</p>}
+            </form>
+          )}
+        </div>
       </div>
     </div>
   )

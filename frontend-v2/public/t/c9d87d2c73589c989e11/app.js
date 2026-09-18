@@ -17,6 +17,8 @@
      quedaba a CADA uno sin mezclarlo con el de otro). */
   var params = new URLSearchParams(location.search);
   var CUPON = params.get("cupon") || "";
+  var CUPON_EUR = 10;      // mismo importe fijo que genera candidatos_campana_bienvenida
+  var cuponVigente = !!CUPON;
   if (CUPON) {
     var banner = document.querySelector("[data-cupon]");
     banner.hidden = false;
@@ -32,6 +34,14 @@
         banner.innerHTML = "El cupón de bienvenida ya ha caducado. Puedes seguir comprando sin él.";
         banner.classList.add("cupon-caducado");
         clearInterval(intervaloCupon);
+        if (cuponVigente) {
+          // Deja de enseñar precios rebajados: el reloj de Stripe es el que
+          // manda de verdad, pero mostrar un precio que ya no se va a aplicar
+          // seria peor que no mostrar ninguno.
+          cuponVigente = false;
+          pintaTarjetas();
+          document.querySelectorAll(".ficha:not([hidden])").forEach(function (f) { pintaFicha(f.id.slice(2)); });
+        }
         return;
       }
       var h = Math.floor(restante / 3600000);
@@ -59,7 +69,13 @@
       var d = datos[c.dataset.prod];
       var p = c.querySelector("[data-precio]"), s = c.querySelector("[data-stock]");
       if (!d) { p.textContent = "—"; return; }
-      p.textContent = (d.recargo_talla > 0 ? "desde " : "") + eur(d.precio);
+      var prefijo = d.recargo_talla > 0 ? "desde " : "";
+      if (cuponVigente) {
+        var rebajado = Math.max(0, d.precio - CUPON_EUR);
+        p.innerHTML = prefijo + "<s style=\"color:var(--muted);font-weight:400\">" + eur(d.precio) + "</s> " + eur(rebajado);
+      } else {
+        p.textContent = prefijo + eur(d.precio);
+      }
       s.className = "card-stock";
       if (d.quedan === null || d.quedan === undefined) { s.textContent = ""; }
       else if (d.quedan === 0) { s.textContent = "AGOTADO"; s.classList.add("cero"); }
@@ -90,20 +106,38 @@
       b.setAttribute("aria-pressed", b.dataset.t === st.talla ? "true" : "false");
     });
     var precio = precioDe(d, st.talla) * st.cant;
-    f.querySelector("[data-precio-grande]").textContent = d ? precio.toFixed(2).replace(".", ",") : "—";
+    // El cupon es un descuento FIJO sobre el TOTAL del pedido (asi lo aplica
+    // Stripe, discounts[0][coupon] en la sesion), no por unidad: comprar 2 no
+    // descuenta el doble.
+    var precioFinal = cuponVigente ? Math.max(0, precio - CUPON_EUR) : precio;
+    var cajaPrecio = f.querySelector(".precio");
+    var tachado = cajaPrecio.querySelector("[data-precio-tachado]");
+    if (cuponVigente && precio > 0) {
+      if (!tachado) {
+        tachado = document.createElement("s");
+        tachado.setAttribute("data-precio-tachado", "");
+        tachado.style.cssText = "font-family:var(--m);font-size:22px;color:var(--muted);margin-right:8px;font-weight:400";
+        cajaPrecio.insertBefore(tachado, cajaPrecio.firstChild);
+      }
+      tachado.hidden = false;
+      tachado.textContent = eur(precio);
+    } else if (tachado) {
+      tachado.hidden = true;
+    }
+    f.querySelector("[data-precio-grande]").textContent = d ? precioFinal.toFixed(2).replace(".", ",") : "—";
     f.querySelector("[data-cant]").textContent = st.cant;
     var nota = f.querySelector("[data-nota-talla]");
     var grande = d && st.talla && (d.tallas_grandes || []).indexOf(st.talla) >= 0;
-    nota.textContent = grande
-      ? "Incluye " + eur(d.recargo_talla) + " de la talla " + st.talla + " · IVA y envío incluidos"
-      : "IVA incluido · envío incluido";
+    nota.textContent = (grande
+      ? "Incluye " + eur(d.recargo_talla) + " de la talla " + st.talla + " · "
+      : "") + (cuponVigente ? "10 € de cupón ya descontados · " : "") + "IVA y envío incluidos";
     var b = f.querySelector("[data-comprar]");
     var agotado = d && d.quedan === 0;
     b.disabled = !d || !st.talla || agotado || !abierta;
     b.textContent = agotado ? "Agotado"
       : !abierta ? "Aún no está a la venta"
       : !st.talla ? "Elige tu talla"
-      : "Comprar · " + eur(precio);
+      : "Comprar · " + eur(precioFinal);
   }
 
   var abierta = false;

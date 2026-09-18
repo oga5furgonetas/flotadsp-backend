@@ -50289,6 +50289,48 @@ async def empleo_suscripcion_checkout(body: dict = Body(...), request: Request =
     return {"url": r.json().get("url")}
 
 
+@api_router.post("/empleo/suscripcion/portal")
+async def empleo_suscripcion_portal(body: dict = Body(...), request: Request = None):
+    """Enlace de baja/gestión, PÚBLICO por correo — sin esto, "cancelas cuando
+    quieras" es una promesa sin forma de cumplirla y cada baja se convierte en
+    un correo a mano. Usa el Billing Portal de Stripe: la persona gestiona su
+    tarjeta y cancela ella misma, sin que nosotros veamos ni toquemos nada de
+    pago. No hace falta contraseña porque no se cambia nada aqui — el enlace
+    de Stripe es el que de verdad autoriza la baja, y solo se genera para el
+    `stripe_customer` que YA está en nuestra base ligado a ese correo."""
+    _rl_public_action("empportal:%s" % _rl_key_ip(request), max_count=8, window_s=3600,
+                      detail="Demasiados intentos. Inténtalo en un rato.")
+    email = _texto_cuerpo(body.get("email"), 120).lower()
+    if not email or not _EMAIL_RE.match(email):
+        raise HTTPException(400, "Pon un correo válido")
+    await _set_tenant_by_slug(_texto_cuerpo(body.get("slug"), 60))
+    if not _stripe_encendido():
+        raise HTTPException(503, "El pago con tarjeta todavía no está activo")
+
+    sub = await db.empleo_suscripciones.find_one({"email": email}, {"_id": 0, "stripe_customer": 1})
+    if not sub or not sub.get("stripe_customer"):
+        raise HTTPException(404, "No encontramos ninguna suscripción con ese correo")
+
+    datos = [
+        ("customer", sub["stripe_customer"]),
+        ("return_url", f"{_PORTAL_BASE_FRONT}/empleo/prioridad"),
+    ]
+    import httpx as _httpx
+    try:
+        async with _httpx.AsyncClient(timeout=25) as cli:
+            r = await cli.post(_STRIPE_API + "/billing_portal/sessions",
+                               content=_url_encode(datos).encode(),
+                               headers={"Content-Type": "application/x-www-form-urlencoded"},
+                               auth=(_stripe_clave(), ""))
+    except Exception as e:                                    # noqa: BLE001
+        logger.error("Stripe billing portal: %s", e)
+        raise HTTPException(502, "No se ha podido abrir la gestión. Inténtalo en un minuto.")
+    if r.status_code >= 300:
+        logger.error("Stripe billing portal %s: %s", r.status_code, r.text[:300])
+        raise HTTPException(502, "No se ha podido abrir la gestión. Inténtalo en un minuto.")
+    return {"url": r.json().get("url")}
+
+
 @api_router.get("/empleo/suscripciones")
 async def empleo_suscripciones_lista(user: dict = Depends(require_superadmin)):
     """Quién está suscrito a los avisos prioritarios, para verlo en el panel."""
@@ -50331,22 +50373,26 @@ async def _avisar_suscriptores_empleo(oferta: dict) -> None:
         logger.warning("Aviso a suscriptores de empleo: %s", e)
 
 
-def _candidatos_campana_html(nombre: str, url_tienda: str, url_suscripcion: str, expira_en: str) -> str:
+def _candidatos_email_pie() -> str:
+    return """
+      <p style="color:#888;font-size:12px">FlotaDSP — has recibido esto porque dejaste
+      tu candidatura con nosotros. Si no quieres más correos como este, responde
+      a este mensaje y te quitamos de la lista.</p>"""
+
+
+def _candidatos_campana_html_cupon(nombre: str, url_tienda: str, expira_en: str) -> str:
+    """El cupón, en SU PROPIO correo. Un solo objetivo por correo: mezclar el
+    cupón con la suscripción en el mismo mensaje probó ser tambien lo que
+    Gmail confundia con contenido repetido y escondia detras de un "..." —
+    ademas de que dos ofertas compitiendo en un mismo correo convierte peor
+    que una sola, bien clara (18-09-2026)."""
     saludo = f"Hola {nombre}," if nombre else "Hola,"
     try:
         hora_local = datetime.fromisoformat(expira_en).astimezone(
             timezone(timedelta(hours=2))).strftime("%H:%M")
     except Exception:                                          # noqa: BLE001
         hora_local = ""
-    # SIN <hr>: es un separador visual que varios clientes de correo (Gmail el
-    # primero) confunden con el corte de un hilo/cita y te esconden TODO lo de
-    # despues detras de un "..." — medido en produccion el 18-09-2026, el
-    # correo se abria mostrando solo el primer parrafo y NINGUN boton. Un
-    # div con borde hace el mismo efecto visual sin disparar esa regla.
-    # El preheader (oculto, 1a linea que se ve en la bandeja de entrada antes
-    # de abrir el correo) es lo que decide si alguien lo abre o no: sin el,
-    # Gmail enseña "Hola Dani," como avance, que no vende nada.
-    preheader = "🎁 10 € de regalo (caduca en 4 horas) + entérate el primero de los próximos empleos"
+    preheader = "🎁 10 € de regalo en nuestra tienda — caduca en 4 horas"
     return f"""
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px;line-height:1px;color:#ffffff">{preheader}</div>
     <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
@@ -50356,22 +50402,33 @@ def _candidatos_campana_html(nombre: str, url_tienda: str, url_suscripcion: str,
       nuestra tienda, pero solo durante las próximas <strong>4 horas</strong>
       {f'(hasta las {hora_local})' if hora_local else ''}. Pasado ese plazo el
       cupón se desactiva solo.</p>
-      <p style="text-align:center;margin:24px 0">
+      <p style="text-align:center;margin:28px 0">
         <a href="{url_tienda}" style="background:#0ea5e9;color:#fff;padding:14px 28px;
            border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;display:inline-block">🎁 Usar mi descuento ahora</a>
       </p>
-      <div style="border-top:1px solid #e5e5e5;margin:28px 0"></div>
+      {_candidatos_email_pie()}
+    </div>"""
+
+
+def _candidatos_campana_html_suscripcion(nombre: str, url_suscripcion: str) -> str:
+    """La suscripción, en SU PROPIO correo — mismo motivo que el cupón."""
+    saludo = f"Hola {nombre}," if nombre else "Hola,"
+    preheader = "⚡ Sé el primero en enterarte de cada puesto nuevo"
+    return f"""
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px;line-height:1px;color:#ffffff">{preheader}</div>
+    <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
+      <p>{saludo}</p>
       <p><strong>¿Quieres currar cuanto antes?</strong> Hazte Prioritario: por
       2,99&nbsp;EUR/mes te escribimos en el momento en que sacamos un puesto
       nuevo, sin que tengas que estar mirando la web cada día. El primero en
       enterarse suele ser el primero en conseguirlo.</p>
-      <p style="text-align:center;margin:24px 0">
+      <p style="text-align:center;margin:28px 0">
         <a href="{url_suscripcion}" style="background:#111827;color:#fff;padding:14px 28px;
            border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;display:inline-block">⚡ Ser Prioritario (2,99 EUR/mes)</a>
       </p>
-      <p style="color:#888;font-size:12px">FlotaDSP — has recibido esto porque dejaste
-      tu candidatura con nosotros. Si no quieres más correos como este, responde
-      a este mensaje y te quitamos de la lista.</p>
+      <p style="color:#888;font-size:12px">Cancelas cuando quieras: pon tu correo en la
+      misma página para darte de baja, sin necesidad de escribirnos.</p>
+      {_candidatos_email_pie()}
     </div>"""
 
 
@@ -50417,10 +50474,14 @@ async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Dep
         # cuenta atras real — sin esto, cada persona veia el mismo texto fijo
         # sin saber si le quedan 10 minutos o 3 horas y media.
         url_tienda = f"{enlace_tienda}?cupon={cupon['id']}&exp={_url_quote(cupon['expira_en'])}"
-        html = _candidatos_campana_html(d.get("nombre") or "", url_tienda, url_suscripcion, cupon["expira_en"])
-        ok = await _send_resend_email(d["email"], "Tu candidatura + un regalo y la opción de ser Prioritario", html,
-                                      responder_a=os.environ.get("EMAIL_FROM_RESPUESTA", ""))
-        if ok:
+        nombre = d.get("nombre") or ""
+        html_cupon = _candidatos_campana_html_cupon(nombre, url_tienda, cupon["expira_en"])
+        html_sub = _candidatos_campana_html_suscripcion(nombre, url_suscripcion)
+        ok1 = await _send_resend_email(d["email"], "Un regalo por tu candidatura con FlotaDSP", html_cupon,
+                                       responder_a=os.environ.get("EMAIL_FROM_RESPUESTA", ""))
+        ok2 = await _send_resend_email(d["email"], "Entérate el primero de los próximos empleos", html_sub,
+                                       responder_a=os.environ.get("EMAIL_FROM_RESPUESTA", ""))
+        if ok1 or ok2:
             enviados += 1
         else:
             fallidos += 1
