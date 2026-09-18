@@ -560,6 +560,11 @@ export const getAdmins = () => api.get('/auth/admins')
 export const createAdmin = (body) => api.post('/auth/create-admin', body) // {username, password, name, permissions:[]}
 export const updateAdmin = (id, body) => api.patch(`/auth/admins/${id}`, body) // {permissions?, name?}
 export const deleteAdmin = (id) => api.delete(`/auth/admins/${id}`)
+export const subirFotoAdmin = (id, file) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  return api.post(`/auth/admins/${id}/photo`, fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+}
 
 /* ── Perfil / cuenta ── */
 export const changeMyPassword = (current_password, new_password) =>

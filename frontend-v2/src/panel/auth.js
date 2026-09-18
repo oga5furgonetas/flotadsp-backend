@@ -197,8 +197,19 @@ export function saveSession(j) {
       allowed_centers: j.allowed_centers ?? null,
       centers: j.centers || [],
       admin_role: j.admin_role ?? null,
+      photo_url: j.photo_url ?? null,
     }),
   )
+}
+
+// Actualiza SOLO la foto en el blob de sesión, sin tocar lo demás — para que
+// se vea al instante tras subirla, sin esperar al siguiente /auth/me (hasta
+// 2 min) ni a un relogin. No es un dato de permisos (no pasa por el mismo
+// cuidado que `guardarAccesoFresco`): es cosmético, así que basta con esto.
+export function actualizarMiFoto(photo_url) {
+  const actual = getAdmin()
+  if (!actual) return
+  localStorage.setItem(ADMIN_KEY, JSON.stringify({ ...actual, photo_url }))
 }
 
 export function getAdminRole() {

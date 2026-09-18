@@ -6760,14 +6760,17 @@ async def get_my_assigned_vehicle(user: dict = Depends(get_current_user)):
 
 @auth_router.get("/me")
 async def get_me(user: dict = Depends(get_current_user)):
-    # Incluir theme y email si existen en la BD (solo admins)
+    # Incluir theme, email y foto si existen en la BD (solo admins)
     theme = None
     email = None
+    photo_url = None
     if user.get("role") == "admin":
-        admin_doc = await global_db.admin_users.find_one({"id": user["sub"]}, {"_id": 0, "theme": 1, "email": 1})
+        admin_doc = await global_db.admin_users.find_one(
+            {"id": user["sub"]}, {"_id": 0, "theme": 1, "email": 1, "photo_url": 1})
         if admin_doc:
             theme = admin_doc.get("theme")
             email = admin_doc.get("email")
+            photo_url = admin_doc.get("photo_url")
     return {
         "id": user["sub"],
         "role": user["role"],
@@ -6776,6 +6779,7 @@ async def get_me(user: dict = Depends(get_current_user)):
         "name": user.get("name"),
         "theme": theme,
         "email": email,
+        "photo_url": photo_url,
         # Permisos, rol y centros TAL COMO ESTAN AHORA en la base de datos
         # (get_current_user ya los ha refrescado). El panel los relee al abrir
         # para no quedarse con lo que dijera un JWT emitido hace hasta 72 h:
@@ -6960,6 +6964,40 @@ async def delete_admin(admin_id: str, _admin: dict = Depends(require_admin)):
                   "deleted_by": _admin.get("sub")}}, upsert=True)
     _ADMIN_EXISTS_CACHE.pop(admin_id, None)
     return {"success": True}
+
+
+@auth_router.post("/admins/{admin_id}/photo")
+async def subir_foto_admin(admin_id: str, file: UploadFile = File(...), _admin: dict = Depends(require_admin)):
+    """Foto de perfil de un usuario del panel — sale en la cabecera y (en
+    breve) en el chat interno. Cada uno puede ponerse la suya; para la de
+    otro hace falta poder gestionarlo, el MISMO permiso que editarle los
+    datos (gotcha 27: un permiso nuevo que no siga la regla de siempre es
+    invisible o se salta a quien no debería)."""
+    es_uno_mismo = admin_id == _admin.get("sub")
+    target = await global_db.admin_users.find_one({"id": admin_id}, {"_id": 0})
+    if not target or target.get("org_id") != _admin.get("org_id"):
+        raise HTTPException(404, "Usuario no encontrado")
+    if not es_uno_mismo:
+        if target.get("super_admin"):
+            raise HTTPException(403, "No puedes modificar a un super-admin")
+        if not _admin.get("sa") and _is_center_manager(_admin):
+            if not _can_manage_user(_admin, target.get("allowed_centers")):
+                raise HTTPException(403, "No tienes acceso para modificar este usuario")
+        elif not _admin.get("sa") and not _is_center_manager(_admin):
+            raise HTTPException(403, "Sin permisos para modificar usuarios")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "Archivo vacío")
+    if len(content) > 8 * 1024 * 1024:
+        raise HTTPException(400, "La foto no puede superar 8 MB")
+    try:
+        photo_url, _bytes = await process_and_save_image(content, f"admin-{admin_id}")
+    except Exception as e:
+        raise HTTPException(500, f"Error procesando imagen: {e}")
+    await global_db.admin_users.update_one({"id": admin_id}, {"$set": {"photo_url": photo_url}})
+    _ADMIN_EXISTS_CACHE.pop(admin_id, None)
+    return {"success": True, "photo_url": photo_url}
 
 
 @auth_router.post("/change-my-password")
