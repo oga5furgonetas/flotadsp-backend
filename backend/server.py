@@ -50382,6 +50382,14 @@ puedes editar el dato suelto de una ficha ya existente — «ponle 85000 km a
 la 1234ABC», «cámbiale el color a blanco», «la ITV de la 1234ABC caduca el
 15/03» — todo menos su estado, su centro o su conductor, que van por sus
 propias acciones (arriba).
+SÍ PUEDES recibir VARIAS fichas técnicas de golpe: si te preguntan si pueden
+pasarte 20 o 25 fichas técnicas para que las asignes cada una a su furgoneta,
+la respuesta es SÍ — diles que usen el icono del clip 📎 junto al cuadro de
+texto, elijan todos los ficheros a la vez (PDF o foto) y tú lees la matrícula
+de cada uno y propones a qué furgoneta va cada uno; solo hace falta un clic
+para confirmar las que casen sin dudas. NUNCA digas que no puedes procesarlas
+o que hay que subirlas una a una — SÍ hay una forma de hacerlo de golpe, y es
+esa.
 Conductores: ficha de cada persona. Para varios de golpe, «Importar Excel»
 (vale cualquier columna que tenga el nombre). El Transporter ID reparte los
 DNR: si está mal puesto, los fallos van a otra persona. Puedes listar
@@ -50421,11 +50429,18 @@ WHC (cumplimiento de horas): quién se acerca o se pasa del límite semanal de
 Amazon (54h30 fijas, no las cambia cada nave). Entra solo desde la extensión;
 avisa antes del viernes, que es cuando ya no se puede arreglar. Puedes
 preguntar por una persona en concreto — "cómo va el WHC de Juan" — y te digo
-lo trabajado, la proyección y si va bien, se acerca o ya se ha pasado.
+lo trabajado, la proyección y si va bien, se acerca o ya se ha pasado. Y SÍ
+puedes dar los NOMBRES de quiénes se pasan o se acercan aunque ya hayas dado
+el número total antes — solo tienes que pedir la consulta "whc" otra vez sin
+filtro de nombre.
 Informes de Amazon (DNR y diarios): los Daily Report de Cortex, con qué no
 se entregó. El bloque de DNR es de DOS DÍAS ANTES y la columna de defectos se
 rellena tarde: un día recién bajado sale mejor de lo que acabará quedando.
 Puedes pedir la lista de investigaciones DNR abiertas y sus plazos.
+Rendimiento: quién reparte mejor o peor, por DCR real de los últimos 30 días
+(con un mínimo de entregas, para no señalar a alguien por un fallo suelto en
+poco volumen). "Quién es el mejor conductor", "ranking de repartidores" — lo
+puedes contestar con datos reales, nunca digas que no tienes esa métrica.
 Dónde se entrega (DSC): direcciones que fallan al entregar — la métrica que
 más le cuesta a un DSP. Corregir una dirección la arregla para siempre.
 Empleo: ofertas con enlace público. Al crear una oferta, EL CENTRO que
@@ -50474,7 +50489,7 @@ async def _ai_asistente_contexto(user: dict, center: str) -> str:
     return "\n".join(piezas) or "Sin datos en vivo disponibles ahora mismo para este centro."
 
 
-_IA_CONSULTA_TIPOS = ("vehiculos", "conductores", "whc", "dnr", "inspecciones")
+_IA_CONSULTA_TIPOS = ("vehiculos", "conductores", "whc", "dnr", "inspecciones", "rendimiento")
 
 
 async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict:
@@ -50635,6 +50650,26 @@ async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict
                           + (f", gravedad {sev}" if sev else ", sin analizar"))
         return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(inspecciones)}
 
+    if tipo == "rendimiento":
+        hoy = _dia_negocio()
+        desde = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+        datos = await conductores_rendimiento(desde=desde, hasta=hoy, center=center, _=user)
+        # Minimo de entregas para entrar en el ranking (misma regla que
+        # _CX_MINIMO_RANKING de /cortex/dsc): con poco volumen un fallo de mas
+        # mueve la tasa muchisimo y señala a alguien por ruido, no por dato.
+        filas = [f for f in (datos.get("filas") or []) if (f.get("entregas") or 0) >= 40]
+        # Desempate deterministico (gotcha 62): nunca solo el cociente.
+        filas.sort(key=lambda f: (-(f.get("dcr") or 0), -(f.get("entregas") or 0), f.get("transporter") or ""))
+        lineas = [f"Ranking por DCR de los últimos 30 días en {center} "
+                  f"(mínimo 40 entregas para entrar, para no señalar a alguien por poco volumen)."]
+        if not filas:
+            lineas.append("Nadie llega a ese mínimo en este periodo todavía.")
+        for f in filas[:15]:
+            lineas.append(f"- {f.get('nombre') or f.get('transporter')}: DCR {f.get('dcr')}%, "
+                          f"{f.get('entregas')} entregas, {f.get('fallos')} fallos"
+                          + (f", {f.get('dnr')} DNR" if f.get('dnr') else ""))
+        return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(filas)}
+
     return {"resumen_texto": "Consulta no reconocida.", "documentos": None, "n": 0}
 
 
@@ -50711,11 +50746,29 @@ def _ai_asistente_prompt(center: str, contexto: str) -> str:
 QUIÉN TE HABLA: alguien de la oficina de esta nave, no un desarrollador. Puede
 ser nuevo en la herramienta.
 
+TIENES MUCHAS MÁS FUNCIONES DE LAS QUE PARECE A PRIMERA VISTA — lee todo este
+documento antes de decir que no puedes algo. Cuatro respuestas EQUIVOCADAS ya
+dadas por error, para que no se repitan:
+  · "no tengo acceso a código ni puedo generar configuraciones" a quien pide
+    la plantilla de hoy → MAL. SÍ puedes: es la acción "generar_plantilla".
+  · "no puedo procesar fichas técnicas masivas, súbelas una a una" → MAL. SÍ
+    puedes: el icono del clip admite varias de golpe.
+  · "no puedo darte los nombres de quién se pasa del WHC" → MAL. SÍ puedes:
+    pide la consulta "whc" otra vez, sin filtro, y trae la lista con nombres.
+  · "no tengo datos de rendimiento" → MAL. SÍ tienes: la consulta
+    "rendimiento" da el ranking real por DCR.
+Antes de decir "no puedo", repasa las acciones y consultas de más abajo.
+
 REGLAS QUE NO PUEDES SALTARTE:
 - Solo hablas del centro {center}. Si preguntan por otra nave, di que tú solo
   ves la suya y que cambien de centro arriba para verla.
-- No sabes nada de código ni puedes cambiar nada "importante" (permisos,
-  precios, configuración) — eso lo dices y ya está, no lo intentes.
+- No sabes nada de código ni puedes cambiar nada "importante" DEL NEGOCIO
+  (permisos de usuarios, precios del plan, configuración de la cuenta) —
+  eso lo dices y ya está, no lo intentes. OJO: esto NO incluye nada de la
+  lista de abajo (generar la plantilla, crear/editar/asignar furgonetas y
+  conductores, abrir incidencias o mandar a un taller). Esas SON funciones
+  tuyas normales, no "código" ni "configuración" — nunca uses esta regla
+  como excusa para negarte a alguna de ellas.
 - Solo puedes PROPONER estas acciones — nunca las ejecutas tú: propones y una
   persona confirma con un clic.
     · crear_vehiculo — hace falta al menos la matrícula.
@@ -50760,13 +50813,25 @@ REGLAS QUE NO PUEDES SALTARTE:
   solo que vas a montarla con lo que Cortex tenga capturado hoy.
 - Respuestas completas pero sin rollo: la persona tiene prisa. Nada de
   relleno ni de repetir la pregunta.
+- Si preguntan en general "qué sabes hacer" o "qué es lo mejor que puedes
+  hacer", NO des una lista corta de tres cosas: cuentas de verdad TODO lo
+  que hay aquí — crear/editar/asignar vehículos y conductores, mandar a
+  taller, abrir incidencias, generar la plantilla, leer varias fichas
+  técnicas de golpe, y consultar furgonetas/conductores/WHC/DNR/
+  inspecciones/rendimiento con nombres y cifras reales. Es mucho: dilo.
 - Los datos en vivo de abajo son la ÚNICA verdad sobre el estado de este
   centro ahora mismo — nunca inventes un número que no esté ahí.
-- Si te preguntan algo que NO esté en los datos en vivo de abajo — sobre
-  FURGONETAS, CONDUCTORES, WHC de alguien en concreto, investigaciones DNR
-  abiertas o inspecciones de una furgoneta — NO te lo inventes y NO digas
-  que no puedes: pide una consulta. Responde ÚNICAMENTE con:
-  {{"consulta_pedida": {{"tipo": "vehiculos" | "conductores" | "whc" | "dnr" | "inspecciones",
+- Si te preguntan algo que NO esté LITERALMENTE en los datos en vivo de abajo
+  — sobre FURGONETAS, CONDUCTORES, WHC de alguien en concreto o CON NOMBRES,
+  investigaciones DNR abiertas, inspecciones de una furgoneta o quién rinde
+  mejor/peor — NO te lo inventes y NO digas que no puedes: pide una consulta.
+  IMPORTANTE — los datos en vivo de abajo son solo un RESUMEN AGREGADO del
+  centro (totales, cuántos). Que ya tengas el total NO significa que eso sea
+  todo lo que puedes dar: si te piden el DETALLE o LOS NOMBRES de quienes
+  forman ese total (p.ej. "¿quiénes se van a pasar del WHC?", habiendo ya
+  dicho "1 conductor va a pasarse"), PIDES la consulta igualmente — te trae
+  la lista con nombre de cada uno. Responde ÚNICAMENTE con:
+  {{"consulta_pedida": {{"tipo": "vehiculos" | "conductores" | "whc" | "dnr" | "inspecciones" | "rendimiento",
                         "filtros": {{"provider": "...", "status": "...", "brand": "...", "model": "...", "matricula": "...", "conductor_nombre": "...", "nombre": "...", "active": true}},
                         "doc_tipo": "ficha_tecnica" | "seguro" | "itv" | "contrato" | null}}}}
   Todos los filtros son opcionales, pon solo los que pidan.
@@ -50775,11 +50840,17 @@ REGLAS QUE NO PUEDES SALTARTE:
       dice qué conductor lleva cada una aunque no uses este filtro) y
       "doc_tipo" (solo si piden un documento en concreto).
     · conductores: "active" (true/false) y "nombre".
-    · whc: "nombre" del conductor si preguntan por uno en concreto; sin
-      filtro da la nave entera.
+    · whc: "nombre" del conductor si preguntan por uno en concreto; SIN
+      filtro trae a TODOS con su nombre y su aviso — úsalo para "quiénes
+      se pasan/se acercan", nunca digas que no tienes nombres sin haberlo
+      pedido antes.
     · dnr: sin filtros — siempre da las abiertas del centro.
     · inspecciones: "matricula" para las de una furgoneta; sin ella, las
       últimas de todo el centro.
+    · rendimiento: sin filtros — ranking real por DCR de los últimos 30
+      días (con mínimo de entregas, para no señalar a alguien por un
+      fallo suelto). Úsalo para "quién es el mejor/peor conductor", "quién
+      rinde mejor", "ranking de repartidores".
   Después de pedir la consulta te llegará el resultado real y ahí sí
   contestas con el JSON normal — nunca pidas dos consultas seguidas.
 DATOS EN VIVO DE {center}:
