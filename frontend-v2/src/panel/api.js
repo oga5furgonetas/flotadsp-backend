@@ -26,6 +26,13 @@ export const deleteChatMessage = (center, messageId) => api.delete(`/chat/${cent
 export const getAiHistorial = (center) => api.get('/ai/asistente/historial', { params: { center } })
 export const enviarMensajeIA = (mensaje, center) => api.post('/ai/asistente', { mensaje, center })
 export const ejecutarAccionIA = (tipo, campos, center) => api.post('/ai/asistente/ejecutar', { tipo, campos, center })
+export const subirFichasTecnicasIA = (files, center) => {
+  const fd = new FormData()
+  fd.append('center', center)
+  for (const f of files) fd.append('files', f)
+  return api.post('/ai/asistente/fichas-tecnicas', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+}
+export const confirmarFichasTecnicasIA = (lote_id) => api.post('/ai/asistente/fichas-tecnicas/confirmar', { lote_id })
 export const saveChecklistTemplate = (body) => api.post('/checklist/template', body) // {center, shift, items}
 // Cierre de turno: sale solo a su hora, esto lo dispara ahora para probarlo.
 export const enviarResumenTurno = (body) => api.post('/checklist/enviar-resumen', body)

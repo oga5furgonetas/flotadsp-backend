@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Send, Loader2, X, Check, Car, UserPlus, ClipboardList, ArrowRight } from 'lucide-react'
-import { getAiHistorial, enviarMensajeIA, ejecutarAccionIA } from './api'
+import { Sparkles, Send, Loader2, X, Check, Car, UserPlus, ClipboardList, ArrowRight, FileText, Paperclip } from 'lucide-react'
+import { getAiHistorial, enviarMensajeIA, ejecutarAccionIA, subirFichasTecnicasIA, confirmarFichasTecnicasIA } from './api'
 
 /* FLOTADSP AI — burbuja de ayuda flotante, abajo a la derecha, como los
    widgets de soporte de cualquier web grande (Intercom, Drift...): se ve
@@ -29,6 +29,62 @@ const TONO_CLS = {
   neutro: 'bg-dark-800 text-dark-300',
 }
 
+function Documentos({ lista }) {
+  return (
+    <div className="mt-2 space-y-1">
+      {lista.map((d, i) => (
+        <a key={i} href={d.url} target="_blank" rel="noreferrer"
+          className="flex items-center gap-2 rounded-lg border border-dark-700 bg-dark-900/70 px-2.5 py-1.5 text-[11.5px] text-dark-200 hover:border-brand-500/40 hover:text-brand-200">
+          <FileText size={13} className="shrink-0 text-brand-400" />
+          <span className="cifra font-semibold">{d.matricula}</span>
+          <span className="truncate text-dark-400">{d.nombre}</span>
+        </a>
+      ))}
+    </div>
+  )
+}
+
+const FICHA_ESTADO_CLS = {
+  match: 'text-emerald-300', sin_match: 'text-dark-500', ambiguo: 'text-amber-300',
+}
+const FICHA_ESTADO_TXT = { sin_match: 'sin identificar', ambiguo: 'varias furgonetas casan' }
+
+function FichasLote({ lote, resultado, confirmando, onConfirmar }) {
+  return (
+    <div className="mt-2 rounded-lg border border-dark-700 bg-dark-900/70 p-2">
+      <div className="mb-1.5 text-[11px] font-semibold text-dark-200">
+        {lote.n_match} de {lote.n} furgonetas identificadas
+      </div>
+      <div className="max-h-40 space-y-1 overflow-y-auto pr-0.5">
+        {lote.resultados.map((r) => (
+          <div key={r.idx} className="flex items-center justify-between gap-2 text-[11px]">
+            <span className="truncate text-dark-400">{r.filename}</span>
+            <span className={`shrink-0 cifra font-semibold ${FICHA_ESTADO_CLS[r.estado] || 'text-dark-500'}`}>
+              {r.estado === 'match' ? r.vehicle_plate
+                : (r.matricula_detectada || FICHA_ESTADO_TXT[r.estado] || r.estado)}
+            </span>
+          </div>
+        ))}
+      </div>
+      {!resultado && lote.n_match > 0 && (
+        <button onClick={onConfirmar} disabled={confirmando}
+          className="mt-2 flex items-center gap-1 rounded-lg bg-emerald-500/15 px-2 py-1 text-[11px] font-semibold text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-500/25 disabled:opacity-50">
+          {confirmando ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
+          Confirmar {lote.n_match} asignación{lote.n_match === 1 ? '' : 'es'}
+        </button>
+      )}
+      {!resultado && lote.n_match === 0 && (
+        <div className="mt-1.5 text-[11px] text-dark-500">Ninguna se pudo emparejar sola: súbelas a mano desde la ficha de cada furgoneta.</div>
+      )}
+      {resultado && (
+        <div className="mt-2 rounded-lg bg-emerald-500/10 px-2 py-1.5 text-[11px] text-emerald-300">
+          ✅ Asignadas {resultado.asignados.length}{resultado.fallidos.length ? `, ${resultado.fallidos.length} fallaron` : ''}.
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Tarjeta({ t }) {
   return (
     <div className="mt-2 overflow-hidden rounded-lg border border-dark-700">
@@ -54,7 +110,10 @@ export default function AsistenteBurbuja({ center, centers }) {
   const [enviando, setEnviando] = useState(false)
   const [err, setErr] = useState('')
   const [ejecutando, setEjecutando] = useState(null)
+  const [subiendoFichas, setSubiendoFichas] = useState(false)
+  const [confirmandoLote, setConfirmandoLote] = useState(null)
   const bottomRef = useRef(null)
+  const fileInputRef = useRef(null)
   const sinCentro = !center || center === 'Todos'
 
   useEffect(() => {
@@ -62,6 +121,7 @@ export default function AsistenteBurbuja({ center, centers }) {
     getAiHistorial(center)
       .then((r) => setMsgs((r.data?.mensajes || []).map((m) => ({
         rol: m.rol, texto: m.texto, accion_propuesta: m.accion_propuesta, tarjeta: m.tarjeta,
+        documentos: m.documentos,
       }))))
       .catch(() => setMsgs([]))
       .finally(() => setCargado(true))
@@ -81,7 +141,7 @@ export default function AsistenteBurbuja({ center, centers }) {
     setMsgs((m) => [...m, { rol: 'usuario', texto: mensaje }])
     try {
       const { data } = await enviarMensajeIA(mensaje, center)
-      setMsgs((m) => [...m, { rol: 'asistente', texto: data.respuesta, accion_propuesta: data.accion_propuesta, tarjeta: data.tarjeta }])
+      setMsgs((m) => [...m, { rol: 'asistente', texto: data.respuesta, accion_propuesta: data.accion_propuesta, tarjeta: data.tarjeta, documentos: data.documentos }])
     } catch (e) {
       setErr(e?.response?.data?.detail || 'El asistente no ha podido responder.')
     } finally { setEnviando(false) }
@@ -101,6 +161,30 @@ export default function AsistenteBurbuja({ center, centers }) {
 
   function cancelar(idx) {
     setMsgs((m) => m.map((x, i) => i === idx ? { ...x, accion_propuesta: null, cancelada: true } : x))
+  }
+
+  async function subirFichas(e) {
+    const files = Array.from(e.target.files || [])
+    e.target.value = ''  // permite volver a elegir los mismos ficheros despues
+    if (!files.length || subiendoFichas) return
+    setErr(''); setSubiendoFichas(true)
+    setMsgs((m) => [...m, { rol: 'usuario', texto: `He subido ${files.length} fichero${files.length === 1 ? '' : 's'}: ${files.map((f) => f.name).join(', ')}` }])
+    try {
+      const { data } = await subirFichasTecnicasIA(files, center)
+      setMsgs((m) => [...m, { rol: 'asistente', texto: 'Esto es lo que he leído en cada ficha técnica:', fichas_lote: data }])
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se han podido leer los ficheros.')
+    } finally { setSubiendoFichas(false) }
+  }
+
+  async function confirmarLote(idx, lote_id) {
+    setConfirmandoLote(idx)
+    try {
+      const { data } = await confirmarFichasTecnicasIA(lote_id)
+      setMsgs((m) => m.map((x, i) => i === idx ? { ...x, ficha_resultado: data } : x))
+    } catch (e) {
+      setErr(e?.response?.data?.detail || 'No se pudieron asignar los documentos.')
+    } finally { setConfirmandoLote(null) }
   }
 
   return (
@@ -127,7 +211,7 @@ export default function AsistenteBurbuja({ center, centers }) {
               <div className="flex-1 overflow-y-auto p-2.5">
                 {msgs.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center gap-1 px-4 text-center">
-                    <p className="text-[12.5px] text-dark-400">Pregúntame cómo se hace algo, cómo va tu WHC, pídeme que cree un vehículo o un conductor, o que monte la plantilla de hoy con Cortex.</p>
+                    <p className="text-[12.5px] text-dark-400">Pregúntame cómo se hace algo, cómo va tu WHC, "dame las furgonetas de Bansacar", pídeme que cree un vehículo o un conductor, que monte la plantilla de hoy con Cortex, o sube varias fichas técnicas con el clip y las asigno a su furgoneta.</p>
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -139,6 +223,12 @@ export default function AsistenteBurbuja({ center, centers }) {
                           <div className={`max-w-[88%] rounded-xl px-3 py-2 text-[12.5px] ${mia ? 'bg-brand-500/20 text-brand-100' : 'bg-dark-800 text-dark-100'}`}>
                             <div className="whitespace-pre-wrap break-words">{m.texto}</div>
                             {m.tarjeta && <Tarjeta t={m.tarjeta} />}
+                            {m.documentos?.length > 0 && <Documentos lista={m.documentos} />}
+                            {m.fichas_lote && (
+                              <FichasLote lote={m.fichas_lote} resultado={m.ficha_resultado}
+                                confirmando={confirmandoLote === i}
+                                onConfirmar={() => confirmarLote(i, m.fichas_lote.lote_id)} />
+                            )}
                             {acc && (
                               <div className="mt-2 rounded-lg border border-dark-700 bg-dark-900/70 p-2">
                                 <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-dark-200">
@@ -193,12 +283,26 @@ export default function AsistenteBurbuja({ center, centers }) {
                         </div>
                       </div>
                     )}
+                    {subiendoFichas && (
+                      <div className="flex justify-start">
+                        <div className="rounded-xl bg-dark-800 px-3 py-2 text-[12px] text-dark-400">
+                          <Loader2 size={12} className="inline animate-spin" /> Leyendo las fichas técnicas…
+                        </div>
+                      </div>
+                    )}
                     <div ref={bottomRef} />
                   </div>
                 )}
               </div>
               {err && <div className="mx-2.5 mb-1.5 rounded-lg bg-red-500/10 px-2.5 py-1.5 text-[11px] text-red-300">{err}</div>}
               <form onSubmit={enviar} className="flex gap-1.5 border-t border-dark-800 p-2.5">
+                <input ref={fileInputRef} type="file" multiple hidden
+                  accept=".pdf,.jpg,.jpeg,.png" onChange={subirFichas} />
+                <button type="button" onClick={() => fileInputRef.current?.click()} disabled={subiendoFichas}
+                  title="Subir fichas técnicas u otros documentos"
+                  className="flex items-center justify-center rounded-lg px-2 text-dark-400 ring-1 ring-dark-700 hover:text-dark-200 disabled:opacity-50">
+                  <Paperclip size={14} />
+                </button>
                 <input value={texto} onChange={(e) => setTexto(e.target.value)} placeholder="Escribe tu pregunta…"
                   className="input flex-1 text-[12.5px]" maxLength={2000} />
                 <button disabled={!texto.trim() || enviando} className="btn-primary flex items-center justify-center px-2.5 disabled:opacity-50">

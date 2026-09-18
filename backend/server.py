@@ -1552,6 +1552,7 @@ async def _ensure_tenant_indexes(db_name: str):
         name="feedback_unico", partialFilterExpression={"damage_index": {"$type": "number"}}
     )
     await _idx(tdb.ai_chat_msgs, [("user_id", 1), ("center", 1), ("creado_en", 1)])
+    await _idx(tdb.ai_fichas_lotes, "id", unique=True)
     await _idx(tdb.incidents, "vehicle_id")
     await _idx(tdb.incidents, "status")
     await _idx(tdb.forensic_signatures, [("inspection_id", 1), ("revision", 1)], unique=True)
@@ -50360,10 +50361,14 @@ _IA_ASISTENTE_MANUAL = """
 === MANUAL BREVE DE FLOTADSP (para explicar "cómo se hace X") ===
 Vehículos: ficha de cada furgoneta (estado, papeles, daños, gemelo 3D). Busca
 por matrícula. Documentación tiene seguro/ITV/renting. Las de baja no salen
-en listados normales.
+en listados normales. Puedes listar furgonetas por proveedor de renting
+(Bansacar, Kinto, Ayvens...), marca, modelo o matrícula, y decir cuáles
+tienen (o les falta) un documento concreto — «las fichas técnicas de las
+furgonetas Bansacar» te dice cuántas hay y cuáles la tienen subida.
 Conductores: ficha de cada persona. Para varios de golpe, «Importar Excel»
 (vale cualquier columna que tenga el nombre). El Transporter ID reparte los
-DNR: si está mal puesto, los fallos van a otra persona.
+DNR: si está mal puesto, los fallos van a otra persona. Puedes listar
+conductores activos/inactivos o buscar por nombre.
 Inspecciones: las fotos que hacen los conductores al coger/dejar furgoneta.
 Revisión rápida: aquí se valida lo que ve la IA — es lo ÚNICO que la hace
 mejorar. Botones: acierto, no existe, "sí pero no ahí" (el daño es real pero
@@ -50437,6 +50442,89 @@ async def _ai_asistente_contexto(user: dict, center: str) -> str:
     return "\n".join(piezas) or "Sin datos en vivo disponibles ahora mismo para este centro."
 
 
+_IA_CONSULTA_TIPOS = ("vehiculos", "conductores")
+
+
+async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict:
+    """Ejecuta una consulta de SOLO LECTURA que la IA pidió para poder
+    contestar algo que no estaba en el contexto fijo (p.ej. "furgonetas de
+    Bansacar"). Nunca escribe nada, y el filtro de centro es SIEMPRE el de la
+    sesión — misma frontera que las acciones de crear: la IA no puede ver más
+    que lo que ya ve el usuario que la usa.
+
+    Las URLs de documentos las pone ESTE código con el dato real de Mongo,
+    nunca el modelo: dejar que un LLM redacte un enlace de descarga sería
+    el fallo más caro posible aquí — bastaría con que se lo inventara bien.
+    """
+    tipo = consulta.get("tipo")
+    filtros_in = consulta.get("filtros") if isinstance(consulta.get("filtros"), dict) else {}
+    fc = _filtro_centro(user, center) if center and center != "Todos" else {}
+
+    if tipo == "vehiculos":
+        q = {"status": {"$nin": ["deleted", "baja"]}, **fc}
+        estado = _texto_cuerpo(filtros_in.get("status"), 20).lower()
+        if estado in ("baja", "taller", "active"):
+            q["status"] = estado
+        for campo in ("provider", "brand", "model"):
+            val = _texto_cuerpo(filtros_in.get(campo), 60)
+            if val:
+                q[campo] = {"$regex": re.escape(val), "$options": "i"}
+        matricula = _texto_cuerpo(filtros_in.get("matricula"), 20)
+        if matricula:
+            q["license_plate"] = {"$regex": re.escape(matricula.replace(" ", "")), "$options": "i"}
+        vehiculos = await db.vehicles.find(
+            q, {"_id": 0, "id": 1, "license_plate": 1, "provider": 1, "status": 1, "brand": 1, "model": 1}
+        ).to_list(80)
+
+        doc_tipo = _texto_cuerpo(consulta.get("doc_tipo"), 40).lower()
+        documentos, lineas = None, []
+        if doc_tipo:
+            vids = [v["id"] for v in vehiculos]
+            docs = await db.vehicle_documents.find(
+                {"vehicle_id": {"$in": vids}}, {"_id": 0}).to_list(400) if vids else []
+            docs_por_veh: dict = {}
+            for d in docs:
+                if _doc_tipo_norm(d.get("doc_type")) == doc_tipo:
+                    docs_por_veh.setdefault(d["vehicle_id"], []).append(d)
+            documentos, con_doc, sin_doc = [], [], []
+            for v in vehiculos:
+                dv = docs_por_veh.get(v["id"]) or []
+                if dv:
+                    con_doc.append(v["license_plate"])
+                    for d in dv:
+                        documentos.append({"matricula": v["license_plate"], "tipo": doc_tipo,
+                                           "nombre": d.get("name") or "documento", "url": d.get("url") or ""})
+                else:
+                    sin_doc.append(v["license_plate"])
+            lineas.append(f"{len(vehiculos)} furgonetas encajan el filtro. "
+                          f"{len(con_doc)} tienen documento '{doc_tipo}' subido, {len(sin_doc)} no.")
+            if sin_doc:
+                lineas.append("SIN ese documento: " + ", ".join(sin_doc[:40]))
+        else:
+            lineas.append(f"{len(vehiculos)} furgonetas encajan el filtro.")
+            for v in vehiculos[:40]:
+                lineas.append(f"- {v.get('license_plate')}: {v.get('provider') or 'sin proveedor'}, "
+                              f"{v.get('status')}, {(v.get('brand') or '')} {(v.get('model') or '')}".strip())
+        return {"resumen_texto": "\n".join(lineas), "documentos": documentos, "n": len(vehiculos)}
+
+    if tipo == "conductores":
+        q = {"active": {"$ne": False}, **fc}
+        if filtros_in.get("active") is False:
+            q["active"] = False
+        nombre = _texto_cuerpo(filtros_in.get("nombre"), 60)
+        if nombre:
+            q["name"] = {"$regex": re.escape(nombre), "$options": "i"}
+        conductores = await db.drivers.find(
+            q, {"_id": 0, "name": 1, "phone": 1, "center": 1, "active": 1}).to_list(80)
+        lineas = [f"{len(conductores)} conductores encajan el filtro."]
+        for c in conductores[:40]:
+            lineas.append(f"- {c.get('name')} ({c.get('center') or 'sin centro'})"
+                          + (f", tel {c['phone']}" if c.get('phone') else ""))
+        return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(conductores)}
+
+    return {"resumen_texto": "Consulta no reconocida.", "documentos": None, "n": 0}
+
+
 def _ai_asistente_prompt(center: str, contexto: str) -> str:
     return f"""Eres FLOTADSP AI, el asistente del panel de FlotaDSP para el centro {center}.
 
@@ -50463,6 +50551,20 @@ REGLAS QUE NO PUEDES SALTARTE:
   relleno ni de repetir la pregunta.
 - Los datos en vivo de abajo son la ÚNICA verdad sobre el estado de este
   centro ahora mismo — nunca inventes un número que no esté ahí.
+- Si te preguntan algo sobre FURGONETAS o CONDUCTORES que NO esté en los
+  datos en vivo de abajo — "furgonetas de Bansacar", "las de Kinto en
+  taller", "dame las fichas técnicas de...", "conductores activos de..." —
+  NO te lo inventes y NO digas que no puedes: pide una consulta. Responde
+  ÚNICAMENTE con:
+  {{"consulta_pedida": {{"tipo": "vehiculos" | "conductores",
+                        "filtros": {{"provider": "...", "status": "...", "brand": "...", "model": "...", "matricula": "..."}},
+                        "doc_tipo": "ficha_tecnica" | "seguro" | "itv" | "contrato" | null}}}}
+  Todos los filtros son opcionales, pon solo los que pidan. "doc_tipo" es
+  SOLO para vehiculos, y solo si piden un documento en concreto (si piden
+  "las fichas técnicas de..." pon doc_tipo: "ficha_tecnica"). Para
+  conductores, "filtros" admite "active" (true/false) y "nombre". Después de
+  pedir la consulta te llegará el resultado real y ahí sí contestas con el
+  JSON normal — nunca pidas dos consultas seguidas.
 DATOS EN VIVO DE {center}:
 {contexto}
 
@@ -50484,7 +50586,9 @@ se hace X", una charla, un "no lo sé"). Ejemplo de cuándo SÍ:
 tono: "ok" (verde, va bien) | "aviso" (ámbar, vigilar) | "alerta" (rojo, ya
 es un problema) | "neutro" (gris, un dato sin más).
 
-Responde ÚNICAMENTE con este JSON, sin markdown ni texto fuera de él:
+Responde ÚNICAMENTE con este JSON, sin markdown ni texto fuera de él — SALVO
+que necesites pedir una consulta (arriba), en cuyo caso respondes SOLO con
+`{{"consulta_pedida": {{...}}}}` y nada más, ni "respuesta" ni el resto:
 {{
   "respuesta": "tu respuesta en español, para leer en un chat — breve si ya va tarjeta detrás",
   "tarjeta": null o {{"titulo": "...", "filas": [{{"etiqueta": "...", "valor": "...", "tono": "..."}}]}},
@@ -50530,32 +50634,12 @@ class _IAAsistenteEntrada(BaseModel):
     center: str
 
 
-@api_router.post("/ai/asistente")
-async def ai_asistente_hablar(data: _IAAsistenteEntrada, user: dict = Depends(require_admin)):
-    mensaje = _texto_cuerpo(data.mensaje, 2000)
-    center = _texto_cuerpo(data.center, 20)
-    if not mensaje:
-        raise HTTPException(400, "Escribe algo primero")
-    if not center or not _user_can_see_center(user, center):
-        raise HTTPException(403, "No tienes acceso a ese centro")
-
+async def _ai_llamar_gemini(contents: list) -> dict:
+    """Una llamada a Gemini para el asistente, con el mismo modelo/timeout/
+    manejo de cuota de siempre. Separada de `ai_asistente_hablar` porque una
+    consulta ("furgonetas de Bansacar") necesita DOS pasadas: la primera pide
+    los datos, la segunda ya los tiene y redacta la respuesta final."""
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
-    if not gemini_key and os.environ.get("USE_VERTEX_AI", "").lower() not in ("1", "true", "yes"):
-        raise HTTPException(503, "El asistente no está configurado todavía")
-
-    contexto = await _ai_asistente_contexto(user, center)
-    # Un poco de historial para que no se le olvide de que estaban hablando,
-    # sin arrastrar la conversación entera en cada turno.
-    previas = await db[_IA_ASISTENTE_COL].find(
-        {"user_id": user.get("sub") or user.get("id"), "center": center},
-        {"_id": 0, "rol": 1, "texto": 1}, sort=[("creado_en", -1)], limit=10).to_list(10)
-    previas.reverse()
-
-    contents = [_ai_asistente_prompt(center, contexto)]
-    for p in previas:
-        contents.append(f"{'USUARIO' if p['rol'] == 'usuario' else 'ASISTENTE'}: {p['texto']}")
-    contents.append(f"USUARIO: {mensaje}")
-
     try:
         from google import genai as genai_sdk
         from google.genai import types as genai_types
@@ -50584,7 +50668,7 @@ async def ai_asistente_hablar(data: _IAAsistenteEntrada, user: dict = Depends(re
                 loop.run_in_executor(_executor, lambda: client.models.generate_content(
                     model=modelo, contents=contents, config=cfg)),
                 timeout=30.0)
-        salida = json.loads(_strip_markdown_json(resp.text or "{}"))
+        return json.loads(_strip_markdown_json(resp.text or "{}"))
     except Exception as e:                                        # noqa: BLE001
         logger.warning(f"[IA asistente] fallo Gemini: {e}")
         # 429/RESOURCE_EXHAUSTED es la cuota GRATUITA de Gemini agotada por hoy
@@ -50599,12 +50683,64 @@ async def ai_asistente_hablar(data: _IAAsistenteEntrada, user: dict = Depends(re
                      "Mientras tanto, el análisis de daños de las inspecciones tampoco funcionará.")
         raise HTTPException(502, "El asistente no ha podido responder, prueba en un minuto")
 
+
+@api_router.post("/ai/asistente")
+async def ai_asistente_hablar(data: _IAAsistenteEntrada, user: dict = Depends(require_admin)):
+    mensaje = _texto_cuerpo(data.mensaje, 2000)
+    center = _texto_cuerpo(data.center, 20)
+    if not mensaje:
+        raise HTTPException(400, "Escribe algo primero")
+    if not center or not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not gemini_key and os.environ.get("USE_VERTEX_AI", "").lower() not in ("1", "true", "yes"):
+        raise HTTPException(503, "El asistente no está configurado todavía")
+
+    contexto = await _ai_asistente_contexto(user, center)
+    # Un poco de historial para que no se le olvide de que estaban hablando,
+    # sin arrastrar la conversación entera en cada turno.
+    previas = await db[_IA_ASISTENTE_COL].find(
+        {"user_id": user.get("sub") or user.get("id"), "center": center},
+        {"_id": 0, "rol": 1, "texto": 1}, sort=[("creado_en", -1)], limit=10).to_list(10)
+    previas.reverse()
+
+    contents = [_ai_asistente_prompt(center, contexto)]
+    for p in previas:
+        contents.append(f"{'USUARIO' if p['rol'] == 'usuario' else 'ASISTENTE'}: {p['texto']}")
+    contents.append(f"USUARIO: {mensaje}")
+
+    salida = await _ai_llamar_gemini(contents)
+
+    # ── CONSULTA DE SOLO LECTURA (segunda pasada) ────────────────────────────
+    # Si la IA no puede contestar con lo que ya tenia (WHC/DNR/candidatos), pide
+    # una consulta ("furgonetas de Bansacar", "conductores activos de..."). Se
+    # ejecuta AQUI, en Python, contra la BD real y con el mismo filtro de centro
+    # que cualquier pantalla — nunca la escribe la IA, nunca ve mas centros de
+    # los que ya ve el usuario. No hace falta confirmacion porque es de solo
+    # lectura: la unica diferencia con las tres acciones de arriba es que esas
+    # ESCRIBEN. Los enlaces de documentos los pone este codigo con la URL real
+    # de R2 — jamas el texto que redacte el modelo, que podria inventarla.
+    documentos_consulta = None
+    consulta = salida.get("consulta_pedida")
+    if isinstance(consulta, dict) and consulta.get("tipo") in _IA_CONSULTA_TIPOS:
+        resultado = await _ai_ejecutar_consulta(user, center, consulta)
+        documentos_consulta = resultado.get("documentos")
+        contents.append(f"ASISTENTE: {json.dumps(salida, ensure_ascii=False)}")
+        contents.append(
+            "RESULTADO DE LA CONSULTA (sacado de la base de datos real, es la ÚNICA "
+            "verdad — no repitas números que no estén aquí):\n" + resultado["resumen_texto"] +
+            "\n\nAhora responde YA con el JSON final de siempre (respuesta/tarjeta/"
+            "accion_propuesta). No vuelvas a pedir otra consulta.")
+        salida = await _ai_llamar_gemini(contents)
+
     respuesta = _texto_cuerpo(salida.get("respuesta"), 4000) or "No he sabido qué contestar a eso."
     accion = salida.get("accion_propuesta")
     if not (isinstance(accion, dict) and accion.get("tipo") in _IA_ASISTENTE_ACCIONES
             and isinstance(accion.get("campos"), dict)):
         accion = None
     tarjeta = _ai_asistente_validar_tarjeta(salida.get("tarjeta"))
+    documentos = documentos_consulta[:60] if isinstance(documentos_consulta, list) else None
 
     ahora = datetime.now(timezone.utc).isoformat()
     uid = user.get("sub") or user.get("id")
@@ -50612,9 +50748,10 @@ async def ai_asistente_hablar(data: _IAAsistenteEntrada, user: dict = Depends(re
         {"id": str(uuid.uuid4()), "user_id": uid, "center": center, "rol": "usuario",
          "texto": mensaje, "creado_en": ahora},
         {"id": str(uuid.uuid4()), "user_id": uid, "center": center, "rol": "asistente",
-         "texto": respuesta, "accion_propuesta": accion, "tarjeta": tarjeta, "creado_en": ahora},
+         "texto": respuesta, "accion_propuesta": accion, "tarjeta": tarjeta,
+         "documentos": documentos, "creado_en": ahora},
     ])
-    return {"respuesta": respuesta, "accion_propuesta": accion, "tarjeta": tarjeta}
+    return {"respuesta": respuesta, "accion_propuesta": accion, "tarjeta": tarjeta, "documentos": documentos}
 
 
 @api_router.get("/ai/asistente/historial")
@@ -50704,6 +50841,185 @@ async def ai_asistente_ejecutar(data: _IAAsistenteAccion, user: dict = Depends(r
         raise HTTPException(400, f"Faltan datos del conductor: {e.errors()[0].get('msg', 'revisa los campos')}")
     creado = await create_driver(conductor, False, user)
     return {"ok": True, "tipo": data.tipo, "creado": creado.model_dump() if hasattr(creado, "model_dump") else creado}
+
+
+# ── SUBIR VARIAS FICHAS TÉCNICAS Y ASIGNAR CADA UNA A SU FURGONETA ──────────
+# Pedido por Dani el 18-09-2026: "si le subo 25 fichas tecnicas y le digo
+# asigna cada una a su propia furgoneta que lo haga". Dos pasos, como toda
+# escritura de la IA: PROPONER (lee la matrícula/VIN de cada fichero con
+# Gemini, cruza contra la flota real, sube cada fichero a un cajón temporal
+# de R2 sin tocar ningún vehículo todavía) y CONFIRMAR (un clic que mueve a
+# su sitio SOLO los ficheros que casaron sin ambigüedad — el resto queda
+# listado para colgarlos a mano). Nunca se adivina: una matrícula que casa
+# con más de una furgoneta o con ninguna no se asigna sola.
+_FICHAS_MAX_ARCHIVOS = 30
+_FICHAS_MAX_BYTES_TOTAL = 15 * 1024 * 1024
+_FICHAS_TECNICAS_PROMPT = """Cada imagen o PDF que sigue es la FICHA TÉCNICA de
+una furgoneta española (o su permiso de circulación). Para CADA una, en el
+MISMO ORDEN en que aparecen, extrae:
+- "matricula": tal como aparece (4 números + 3 letras, p.ej. "1234ABC").
+- "vin": el número de bastidor/VIN si se lee (17 caracteres), si no null.
+Si un fichero no se lee con claridad, pon los dos campos a null para ESE
+fichero — no adivines, y no te saltes ninguno: tiene que haber EXACTAMENTE
+{n} elementos en el array, uno por fichero, en el mismo orden.
+Responde ÚNICAMENTE con este JSON, sin markdown:
+{{"fichas": [{{"matricula": "...", "vin": "..."}}, ...]}}"""
+
+
+@api_router.post("/ai/asistente/fichas-tecnicas")
+async def ai_fichas_tecnicas_proponer(
+    center: str = Form(...),
+    files: List[UploadFile] = File(...),
+    user: dict = Depends(require_admin),
+):
+    """Lee matrícula/VIN de cada ficha técnica con Gemini (UNA sola llamada
+    para todo el lote, no una por fichero) y propone a qué furgoneta va cada
+    una. No escribe nada todavía: los ficheros se guardan en un cajón
+    temporal de R2 hasta que se confirme."""
+    center = _texto_cuerpo(center, 20)
+    if not center or not _user_can_see_center(user, center):
+        raise HTTPException(403, "No tienes acceso a ese centro")
+    if len(files) > _FICHAS_MAX_ARCHIVOS:
+        raise HTTPException(400, f"Como mucho {_FICHAS_MAX_ARCHIVOS} ficheros de golpe. Sube el resto en otra tanda.")
+
+    s3 = get_r2()
+    if not s3:
+        raise HTTPException(502, "Almacenamiento R2 no configurado")
+
+    leidos = []
+    total_bytes = 0
+    for f in files:
+        content = await f.read()
+        if not content:
+            continue
+        total_bytes += len(content)
+        if total_bytes > _FICHAS_MAX_BYTES_TOTAL:
+            raise HTTPException(400, "Los ficheros juntos pesan demasiado (máx 15 MB en total). Sube menos de golpe.")
+        nombre = f.filename or f"documento_{len(leidos) + 1}"
+        ext = nombre.rsplit(".", 1)[-1].lower() if "." in nombre else ""
+        mime = ("application/pdf" if ext == "pdf" else
+                "image/png" if content[:4] == b"\x89PNG" else "image/jpeg")
+        leidos.append({"filename": nombre, "bytes": content, "mime": mime})
+    if not leidos:
+        raise HTTPException(400, "No se ha podido leer ningún fichero")
+
+    try:
+        from google.genai import types as genai_types
+    except Exception:
+        raise HTTPException(503, "El asistente no está configurado todavía")
+    contents = [_FICHAS_TECNICAS_PROMPT.format(n=len(leidos))]
+    for l in leidos:
+        contents.append(genai_types.Part.from_bytes(data=l["bytes"], mime_type=l["mime"]))
+    extraido = await _ai_llamar_gemini(contents)
+    filas_ia = extraido.get("fichas") if isinstance(extraido.get("fichas"), list) else []
+
+    fc = _filtro_centro(user, center) if center != "Todos" else {}
+    vehiculos = await db.vehicles.find(
+        {"status": {"$nin": ["deleted", "baja"]}, **fc},
+        {"_id": 0, "id": 1, "license_plate": 1, "vin": 1}).to_list(1000)
+    por_matricula: dict = {}
+    for v in vehiculos:
+        norm = _matricula_norm(v.get("license_plate"))
+        if norm:
+            por_matricula.setdefault(norm, []).append(v)
+    por_vin = {v["vin"].upper(): v for v in vehiculos if v.get("vin")}
+
+    lote_id = str(uuid.uuid4())
+    loop = asyncio.get_running_loop()
+    resultados = []
+    for i, l in enumerate(leidos):
+        fi = filas_ia[i] if i < len(filas_ia) and isinstance(filas_ia[i], dict) else {}
+        matricula_d = _texto_cuerpo(fi.get("matricula"), 20)
+        vin_d = _texto_cuerpo(fi.get("vin"), 30).upper()
+        candidatos = por_matricula.get(_matricula_norm(matricula_d)) or []
+        vehiculo, estado = None, "sin_match"
+        if len(candidatos) == 1:
+            vehiculo, estado = candidatos[0], "match"
+        elif len(candidatos) > 1:
+            estado = "ambiguo"
+        elif vin_d and vin_d in por_vin:
+            vehiculo, estado = por_vin[vin_d], "match"
+
+        safe_name = re.sub(r"[^a-zA-Z0-9_.]", "_", l["filename"])
+        stage_key = f"docs/_pendiente/{lote_id}/{i}_{safe_name}"
+        try:
+            await loop.run_in_executor(_executor, lambda k=stage_key, b=l["bytes"], m=l["mime"]: s3.put_object(
+                Bucket=R2_BUCKET, Key=k, Body=b, ContentType=m))
+        except Exception as e:
+            logger.warning(f"fichas-tecnicas: no se pudo subir a staging: {e}")
+            estado = "sin_match" if estado == "match" else estado  # sin el fichero en R2 no hay nada que confirmar
+            vehiculo = None
+            stage_key = None
+
+        resultados.append({
+            "idx": i, "filename": l["filename"], "matricula_detectada": matricula_d or None,
+            "vin_detectada": vin_d or None, "estado": estado,
+            "vehicle_id": vehiculo["id"] if vehiculo else None,
+            "vehicle_plate": vehiculo["license_plate"] if vehiculo else None,
+            "stage_key": stage_key, "mime": l["mime"],
+        })
+
+    await db.ai_fichas_lotes.insert_one({
+        "id": lote_id, "center": center, "user_id": user.get("sub") or user.get("id"),
+        "resultados": resultados, "confirmado": False,
+        "creado_en": datetime.now(timezone.utc).isoformat(),
+    })
+    publicos = [{k: v for k, v in r.items() if k != "stage_key"} for r in resultados]
+    return {"lote_id": lote_id, "n": len(resultados),
+            "n_match": sum(1 for r in resultados if r["estado"] == "match"),
+            "resultados": publicos}
+
+
+@api_router.post("/ai/asistente/fichas-tecnicas/confirmar")
+async def ai_fichas_tecnicas_confirmar(data: dict = Body(...), user: dict = Depends(require_admin)):
+    """Mueve a su sitio SOLO los ficheros que casaron sin ambigüedad. El plan
+    ya se calculó y se guardó al proponer — aquí no se vuelve a confiar en
+    nada que venga del cliente, solo en el `lote_id`, igual que las demás
+    acciones de la IA (gotcha 38: quien decide es el servidor)."""
+    lote_id = _texto_cuerpo(data.get("lote_id"), 64)
+    lote = await db.ai_fichas_lotes.find_one({"id": lote_id})
+    if not lote:
+        raise HTTPException(404, "Ese lote ya no existe, vuelve a subir los ficheros")
+    if not _user_can_see_center(user, lote.get("center") or ""):
+        raise HTTPException(403, "Sin acceso a ese centro")
+    # Cerrojo de "solo una vez": un doble clic o un reintento no puede colgar
+    # el mismo documento dos veces (misma familia que el gotcha 32).
+    r = await db.ai_fichas_lotes.update_one(
+        {"id": lote_id, "confirmado": {"$ne": True}}, {"$set": {"confirmado": True}})
+    if r.matched_count == 0:
+        raise HTTPException(409, "Este lote ya se confirmó antes")
+
+    s3 = get_r2()
+    loop = asyncio.get_running_loop()
+    asignados, fallidos = [], []
+    for fila in lote.get("resultados") or []:
+        if fila.get("estado") != "match" or not fila.get("vehicle_id") or not fila.get("stage_key"):
+            continue
+        try:
+            obj = await loop.run_in_executor(
+                _executor, lambda k=fila["stage_key"]: s3.get_object(Bucket=R2_BUCKET, Key=k))
+            content = await loop.run_in_executor(_executor, obj["Body"].read)
+            ext = ("pdf" if fila["mime"] == "application/pdf" else
+                   "png" if fila["mime"] == "image/png" else "jpg")
+            final_key = f"docs/{fila['vehicle_id']}/ficha_tecnica_{uuid.uuid4().hex[:8]}.{ext}"
+            await loop.run_in_executor(_executor, lambda k=final_key, b=content, m=fila["mime"]: s3.put_object(
+                Bucket=R2_BUCKET, Key=k, Body=b, ContentType=m))
+            r2_public = os.environ.get("R2_PUBLIC_URL", "").rstrip("/")
+            url = f"{r2_public}/{final_key}" if r2_public else final_key
+            doc = {"id": str(uuid.uuid4()), "vehicle_id": fila["vehicle_id"], "doc_type": "ficha_tecnica",
+                   "name": fila["filename"], "url": url, "uploaded_at": datetime.now(timezone.utc).isoformat()}
+            await db.vehicle_documents.insert_one(dict(doc))
+            asignados.append({"matricula": fila.get("vehicle_plate"), "filename": fila["filename"]})
+            try:
+                await loop.run_in_executor(
+                    _executor, lambda k=fila["stage_key"]: s3.delete_object(Bucket=R2_BUCKET, Key=k))
+            except Exception:                                        # noqa: BLE001
+                pass  # el fichero de sobra en staging no rompe nada, solo ocupa
+        except Exception as e:                                        # noqa: BLE001
+            logger.warning(f"fichas-tecnicas confirmar {fila.get('filename')}: {e}")
+            fallidos.append(fila["filename"])
+
+    return {"ok": True, "asignados": asignados, "fallidos": fallidos}
 
 
 app.include_router(auth_router)
