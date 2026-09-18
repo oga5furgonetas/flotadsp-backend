@@ -50357,7 +50357,17 @@ async def tienda_ver_foto(prenda_id: str, user: dict = Depends(require_any_auth)
 _IA_ASISTENTE_COL = "ai_chat_msgs"
 _IA_ASISTENTE_ACCIONES = ("crear_vehiculo", "crear_conductor", "generar_plantilla",
                           "asignar_conductor", "desasignar_conductor", "cambiar_estado_vehiculo",
-                          "crear_incidencia")
+                          "crear_incidencia", "editar_vehiculo", "editar_conductor")
+
+# Campos que la IA puede tocar en una edición por chat — un subconjunto A
+# PROPÓSITO de la whitelist completa del PATCH normal (gotcha 1): lo que
+# tiene un flujo propio con efectos secundarios (status/taller,
+# current_driver_id, center, active) se queda fuera y pasa por su acción
+# dedicada, nunca por aquí. Editar "lo que sea" no puede significar
+# saltarse esas reglas.
+_IA_VEHICULO_EDITABLE = {"brand", "model", "color", "year", "mileage", "notes", "vin",
+                         "fuel_type", "itv_date", "insurance_expiry", "renting_end_date", "provider"}
+_IA_CONDUCTOR_EDITABLE = {"phone", "email", "dni", "license_number", "address", "notes"}
 
 _IA_ASISTENTE_MANUAL = """
 === MANUAL BREVE DE FLOTADSP (para explicar "cómo se hace X") ===
@@ -50366,11 +50376,17 @@ por matrícula. Documentación tiene seguro/ITV/renting. Las de baja no salen
 en listados normales. Puedes listar furgonetas por proveedor de renting
 (Bansacar, Kinto, Ayvens...), marca, modelo o matrícula, y decir cuáles
 tienen (o les falta) un documento concreto — «las fichas técnicas de las
-furgonetas Bansacar» te dice cuántas hay y cuáles la tienen subida.
+furgonetas Bansacar» te dice cuántas hay y cuáles la tienen subida. También
+puedes editar el dato suelto de una ficha ya existente — «ponle 85000 km a
+la 1234ABC», «cámbiale el color a blanco», «la ITV de la 1234ABC caduca el
+15/03» — todo menos su estado, su centro o su conductor, que van por sus
+propias acciones (arriba).
 Conductores: ficha de cada persona. Para varios de golpe, «Importar Excel»
 (vale cualquier columna que tenga el nombre). El Transporter ID reparte los
 DNR: si está mal puesto, los fallos van a otra persona. Puedes listar
-conductores activos/inactivos o buscar por nombre.
+conductores activos/inactivos, buscar por nombre, o editar su teléfono,
+correo, DNI o dirección — «cámbiale el teléfono a Juan Pérez por el
+600111222».
 Inspecciones: las fotos que hacen los conductores al coger/dejar furgoneta.
 Revisión rápida: aquí se valida lo que ve la IA — es lo ÚNICO que la hace
 mejorar. Botones: acierto, no existe, "sí pero no ahí" (el daño es real pero
@@ -50630,6 +50646,17 @@ REGLAS QUE NO PUEDES SALTARTE:
       1234ABC tiene un golpe en la puerta"). Campos: "matricula",
       "descripcion" (con el detalle que haya dado la persona) y "severidad"
       ("leve" | "moderado" | "grave" — si no la dicen, "leve").
+    · editar_vehiculo — cambiar UN DATO de una furgoneta que YA EXISTE (no
+      su estado, centro o conductor: eso va por las acciones de arriba).
+      Campos: "matricula" y cualquiera de estos, solo los que pidan:
+      "brand", "model", "color", "year", "mileage", "notes", "vin",
+      "fuel_type", "itv_date", "insurance_expiry", "renting_end_date"
+      (fechas en "YYYY-MM-DD"), "provider".
+    · editar_conductor — cambiar UN DATO de un conductor que YA EXISTE.
+      Campos: "conductor_nombre" y cualquiera de estos, solo los que pidan:
+      "phone", "email", "dni", "license_number", "address", "notes".
+  Si te piden cambiar algo de una furgoneta o conductor que no esté en esta
+  lista de campos, dilo — no lo intentes por otra vía.
   Si falta algo imprescindible, pregúntalo en tu respuesta y NO propongas la
   acción todavía. Si el servidor no encuentra o encuentra más de una
   furgoneta/conductor con lo que le has pasado, te lo dirá él — tú solo pasa
@@ -50690,7 +50717,7 @@ que necesites pedir una consulta (arriba), en cuyo caso respondes SOLO con
   "accion_propuesta": null o {{
     "tipo": "crear_vehiculo" | "crear_conductor" | "generar_plantilla" |
             "asignar_conductor" | "desasignar_conductor" | "cambiar_estado_vehiculo" |
-            "crear_incidencia",
+            "crear_incidencia" | "editar_vehiculo" | "editar_conductor",
     "campos": {{"license_plate": "...", "brand": "...", "model": "...", "color": "...", "vin": "..."}}
     // para conductor: {{"name": "...", "phone": "...", "email": "...", "dni": "..."}}
     // para generar_plantilla: {{}} (siempre vacío)
@@ -50698,6 +50725,8 @@ que necesites pedir una consulta (arriba), en cuyo caso respondes SOLO con
     // para desasignar_conductor: {{"matricula": "..."}}
     // para cambiar_estado_vehiculo: {{"matricula": "...", "estado": "taller" | "active" | "baja"}}
     // para crear_incidencia: {{"matricula": "...", "descripcion": "...", "severidad": "leve" | "moderado" | "grave"}}
+    // para editar_vehiculo: {{"matricula": "...", "<campo editable>": "..."}} (solo los campos que pidan)
+    // para editar_conductor: {{"conductor_nombre": "...", "<campo editable>": "..."}} (solo los campos que pidan)
   }}
 }}"""
 
@@ -50968,6 +50997,36 @@ async def ai_asistente_ejecutar(data: _IAAsistenteAccion, user: dict = Depends(r
         creada = await create_incident(incidencia, user)
         return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"],
                 "severidad": severidad, "incident_id": (creada or {}).get("id")}
+
+    if data.tipo == "editar_vehiculo":
+        vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
+        _fechas = {"itv_date", "insurance_expiry", "renting_end_date"}
+        cambios = {}
+        for campo in _IA_VEHICULO_EDITABLE:
+            if campo not in campos or campos[campo] in (None, ""):
+                continue
+            if campo in ("year", "mileage"):
+                cambios[campo] = _entero(campos[campo], campo)
+            elif campo in _fechas:
+                valor = _texto_cuerpo(campos[campo], 10)
+                if not re.match(r"^\d{4}-\d{2}-\d{2}$", valor):
+                    raise HTTPException(400, f'"{campo}" tiene que ir en formato AAAA-MM-DD')
+                cambios[campo] = valor
+            else:
+                cambios[campo] = _texto_cuerpo(campos[campo], 300)
+        if not cambios:
+            raise HTTPException(400, "No has dicho qué cambiar de la furgoneta")
+        await update_vehicle(vehiculo["id"], cambios, user)
+        return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"], "cambios": cambios}
+
+    if data.tipo == "editar_conductor":
+        conductor = await _ai_resolver_conductor(user, center, campos.get("conductor_nombre") or "")
+        cambios = {campo: _texto_cuerpo(campos[campo], 300) for campo in _IA_CONDUCTOR_EDITABLE
+                  if campo in campos and campos[campo] not in (None, "")}
+        if not cambios:
+            raise HTTPException(400, "No has dicho qué cambiar del conductor")
+        await update_driver(conductor["id"], cambios, user)
+        return {"ok": True, "tipo": data.tipo, "driver_name": conductor["name"], "cambios": cambios}
 
     try:
         conductor = DriverCreate(**campos)

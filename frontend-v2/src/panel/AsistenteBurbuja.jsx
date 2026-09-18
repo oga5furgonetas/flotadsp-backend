@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Send, Loader2, X, Check, Car, UserPlus, ClipboardList, ArrowRight, FileText, Paperclip, UserX, Wrench, AlertTriangle } from 'lucide-react'
+import { Sparkles, Send, Loader2, X, Check, Car, UserPlus, ClipboardList, ArrowRight, FileText, Paperclip, UserX, Wrench, AlertTriangle, Pencil, UserCog } from 'lucide-react'
 import { getAiHistorial, enviarMensajeIA, ejecutarAccionIA, subirFichasTecnicasIA, confirmarFichasTecnicasIA } from './api'
 
 /* FLOTADSP AI — burbuja de ayuda flotante, abajo a la derecha, como los
@@ -21,12 +21,17 @@ const ETIQUETA_ACCION = {
   desasignar_conductor: { icon: UserX, titulo: 'Quitar conductor de furgoneta' },
   cambiar_estado_vehiculo: { icon: Wrench, titulo: 'Cambiar estado de furgoneta' },
   crear_incidencia: { icon: AlertTriangle, titulo: 'Abrir parte de incidencia' },
+  editar_vehiculo: { icon: Pencil, titulo: 'Editar furgoneta' },
+  editar_conductor: { icon: UserCog, titulo: 'Editar conductor' },
 }
 const CAMPO_LABEL = {
   license_plate: 'Matrícula', brand: 'Marca', model: 'Modelo', color: 'Color', vin: 'VIN',
   name: 'Nombre', phone: 'Teléfono', email: 'Correo', dni: 'DNI',
   matricula: 'Matrícula', conductor_nombre: 'Conductor', estado: 'Nuevo estado',
   descripcion: 'Qué le pasa', severidad: 'Gravedad',
+  year: 'Año', mileage: 'Kilómetros', notes: 'Notas', fuel_type: 'Combustible',
+  itv_date: 'ITV', insurance_expiry: 'Seguro hasta', renting_end_date: 'Renting hasta',
+  provider: 'Proveedor renting', license_number: 'Nº carné', address: 'Dirección',
 }
 const SEVERIDAD_TXT = { leve: 'Leve', moderado: 'Moderado', grave: 'Grave' }
 const ESTADO_VEHICULO_TXT = { active: 'Activa', taller: 'En taller', baja: 'De baja' }
@@ -37,6 +42,10 @@ const TONO_CLS = {
   neutro: 'bg-dark-800 text-dark-300',
 }
 
+function textoCambios(cambios) {
+  return Object.entries(cambios || {}).map(([k, v]) => `${CAMPO_LABEL[k] || k}: ${v}`).join(', ')
+}
+
 function mensajeResultado(r) {
   if (!r) return 'Hecho.'
   switch (r.tipo) {
@@ -44,6 +53,8 @@ function mensajeResultado(r) {
     case 'desasignar_conductor': return `La ${r.vehicle_plate} se ha quedado sin conductor asignado.`
     case 'cambiar_estado_vehiculo': return `La ${r.vehicle_plate} ahora está: ${ESTADO_VEHICULO_TXT[r.estado] || r.estado}.`
     case 'crear_incidencia': return `Parte abierto en la ${r.vehicle_plate} (${SEVERIDAD_TXT[r.severidad] || r.severidad}).`
+    case 'editar_vehiculo': return `${r.vehicle_plate} actualizada — ${textoCambios(r.cambios)}.`
+    case 'editar_conductor': return `${r.driver_name} actualizado — ${textoCambios(r.cambios)}.`
     default: return `Creado${r.license_plate ? `: ${r.license_plate}` : r.name ? `: ${r.name}` : ''}`
   }
 }
@@ -231,7 +242,7 @@ export default function AsistenteBurbuja({ center, centers }) {
               <div className="flex-1 overflow-y-auto p-2.5">
                 {msgs.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center gap-1 px-4 text-center">
-                    <p className="text-[12.5px] text-dark-400">Pregúntame cómo se hace algo, cómo va tu WHC, "dame las furgonetas de Bansacar" o "qué furgoneta lleva Juan". Pídeme que cree un vehículo o conductor, que asigne o quite un conductor de una furgoneta, que la mande a taller, que abra un parte de avería, que monte la plantilla de hoy con Cortex, o sube fichas técnicas con el clip.</p>
+                    <p className="text-[12.5px] text-dark-400">Pregúntame cómo se hace algo, cómo va tu WHC, "dame las furgonetas de Bansacar" o "qué furgoneta lleva Juan". Pídeme que cree, edite o asigne un vehículo o conductor, que mande una furgoneta a taller, que abra un parte de avería, que monte la plantilla de hoy con Cortex, o sube fichas técnicas con el clip.</p>
                   </div>
                 ) : (
                   <div className="space-y-2">
