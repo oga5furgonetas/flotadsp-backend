@@ -42088,8 +42088,16 @@ async def cortex_dsc(dias: int = 7, center: str = "", _=Depends(require_admin)):
 
     total = sum(r["n"] for r in reparto)
     if not total:
+        # SIN esto, un centro con la captura parada (ver
+        # [[dga1-dga2-captura-parada]]) enseña "todavía no hay entregas" como
+        # si la pantalla no funcionara — un mensaje que vale para las 8 de la
+        # mañana de un día normal pero no para 22 días sin una sola captura.
+        # `last_capture_at` ya viene scoped por centro (mismo fix de esta
+        # noche en /cortex/overview), así que el frontend puede distinguir
+        # "hoy aún no ha entrado nada" de "esta nave no captura desde hace semanas".
         return {"dias": dias, "desde": desde, "total": 0, "reparto": [],
-                "conductores": [], "flota": None}
+                "conductores": [], "flota": None,
+                "last_capture_at": await _cx_ultima_captura(await _cortex_centro_match(center))}
 
     riesgo_tot = sum(r["n"] for r in reparto if r["_id"] in _DSC_RIESGO)
     tasa_flota = riesgo_tot / total
