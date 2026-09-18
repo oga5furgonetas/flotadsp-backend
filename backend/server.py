@@ -50357,7 +50357,8 @@ async def tienda_ver_foto(prenda_id: str, user: dict = Depends(require_any_auth)
 _IA_ASISTENTE_COL = "ai_chat_msgs"
 _IA_ASISTENTE_ACCIONES = ("crear_vehiculo", "crear_conductor", "generar_plantilla",
                           "asignar_conductor", "desasignar_conductor", "cambiar_estado_vehiculo",
-                          "crear_incidencia", "editar_vehiculo", "editar_conductor")
+                          "crear_incidencia", "editar_vehiculo", "editar_conductor",
+                          "crear_orden_taller")
 
 # Campos que la IA puede tocar en una edición por chat — un subconjunto A
 # PROPÓSITO de la whitelist completa del PATCH normal (gotcha 1): lo que
@@ -50388,6 +50389,8 @@ conductores activos/inactivos, buscar por nombre, o editar su teléfono,
 correo, DNI o dirección — «cámbiale el teléfono a Juan Pérez por el
 600111222».
 Inspecciones: las fotos que hacen los conductores al coger/dejar furgoneta.
+Puedes preguntar por las últimas de una furgoneta — "últimas inspecciones de
+la 1234ABC" — y te digo fecha y gravedad de cada una.
 Revisión rápida: aquí se valida lo que ve la IA — es lo ÚNICO que la hace
 mejorar. Botones: acierto, no existe, "sí pero no ahí" (el daño es real pero
 el recuadro está mal puesto), "no se ve" (la foto no permite juzgarlo).
@@ -50398,6 +50401,8 @@ después desde la ficha; queda igual de registrado en el histórico.
 Talleres / Órdenes de taller: agenda de talleres y seguimiento sin llamar:
 el parte sale con daños y taller ya puestos, se manda por WhatsApp con un
 enlace público (sin registro), y la app pregunta sola cada pocos días.
+Puedes abrir la orden tú por el chat — "manda la 1234ABC a Chapisteria
+Riazor por el golpe del lateral" — buscando el taller por su nombre.
 Asignación diaria: qué furgoneta lleva cada conductor hoy; asígnalo antes de
 que salgan las rutas. Puedes hacerlo tú por el chat: "que Juan Pérez lleve la
 1234ABC" propone asignar esa furgoneta a ese conductor (busca a los dos por
@@ -50414,10 +50419,13 @@ rellena. La hora de salida nunca la sabes tú —Cortex no la da— y se queda e
 blanco para que la oficina la ponga, igual que hace hoy a mano.
 WHC (cumplimiento de horas): quién se acerca o se pasa del límite semanal de
 Amazon (54h30 fijas, no las cambia cada nave). Entra solo desde la extensión;
-avisa antes del viernes, que es cuando ya no se puede arreglar.
+avisa antes del viernes, que es cuando ya no se puede arreglar. Puedes
+preguntar por una persona en concreto — "cómo va el WHC de Juan" — y te digo
+lo trabajado, la proyección y si va bien, se acerca o ya se ha pasado.
 Informes de Amazon (DNR y diarios): los Daily Report de Cortex, con qué no
 se entregó. El bloque de DNR es de DOS DÍAS ANTES y la columna de defectos se
 rellena tarde: un día recién bajado sale mejor de lo que acabará quedando.
+Puedes pedir la lista de investigaciones DNR abiertas y sus plazos.
 Dónde se entrega (DSC): direcciones que fallan al entregar — la métrica que
 más le cuesta a un DSP. Corregir una dirección la arregla para siempre.
 Empleo: ofertas con enlace público. Al crear una oferta, EL CENTRO que
@@ -50466,7 +50474,7 @@ async def _ai_asistente_contexto(user: dict, center: str) -> str:
     return "\n".join(piezas) or "Sin datos en vivo disponibles ahora mismo para este centro."
 
 
-_IA_CONSULTA_TIPOS = ("vehiculos", "conductores")
+_IA_CONSULTA_TIPOS = ("vehiculos", "conductores", "whc", "dnr", "inspecciones")
 
 
 async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict:
@@ -50570,6 +50578,63 @@ async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict
                           + (f", tel {c['phone']}" if c.get('phone') else ""))
         return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(conductores)}
 
+    if tipo == "whc":
+        w = await whc_semana(center, user)
+        if not w.get("hay"):
+            return {"resumen_texto": f"WHC de {center}: {w.get('porque') or 'todavía no hay datos de esta nave'}.",
+                    "documentos": None, "n": 0}
+        conductores = w.get("conductores") or []
+        nombre = _texto_cuerpo(filtros_in.get("nombre"), 60)
+        if nombre:
+            palabras = _norm_name_words(nombre)
+            conductores = [c for c in conductores if palabras and palabras <= _norm_name_words(c.get("nombre"))]
+
+        def _hm(mins):
+            mins = mins or 0
+            return f"{mins // 60}h{mins % 60:02d}"
+
+        limite = (w.get("limites") or {}).get("semanal_duro")
+        lineas = [f"{len(conductores)} conductores encajan (semana {w.get('semana')}"
+                  + (f", límite semanal {_hm(limite)}" if limite else "") + ")."]
+        for c in conductores[:40]:
+            aviso = ("YA SE HA PASADO" if c.get("supera_semanal") else
+                    "se va a pasar" if c.get("proyeccion_pasa") else
+                    "se acerca al límite" if c.get("acercandose") else "va bien")
+            lineas.append(f"- {c.get('nombre')}: trabajado {_hm(c.get('trabajado'))}, "
+                          f"proyección {_hm(c.get('proyeccion'))} — {aviso}")
+        return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(conductores)}
+
+    if tipo == "dnr":
+        d = await dnr_investigaciones(center=center, _=user)
+        filas = d.get("investigaciones") or []
+        lineas = [f"{len(filas)} investigaciones DNR abiertas en {center} "
+                  f"({d.get('vivas', 0)} a tiempo, {d.get('caducadas', 0)} caducadas)."]
+        for f in filas[:40]:
+            ctx = f.get("cortex") or {}
+            lineas.append(f"- {f.get('tracking_id')}: vence {f.get('vence') or 'sin plazo'}"
+                          + (f", conductor {ctx['conductor']}" if ctx.get("conductor") else "")
+                          + (", CADUCADA" if f.get("caducada") else ""))
+        return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(filas)}
+
+    if tipo == "inspecciones":
+        matricula = _texto_cuerpo(filtros_in.get("matricula"), 20)
+        vehicle_id = None
+        if matricula:
+            try:
+                vehiculo = await _ai_resolver_vehiculo(user, center, matricula)
+                vehicle_id = vehiculo["id"]
+            except HTTPException as e:
+                return {"resumen_texto": str(e.detail), "documentos": None, "n": 0}
+        inspecciones = await get_inspections(
+            vehicle_id=vehicle_id, center=None if vehicle_id else center,
+            limit=40, campos="lista", user=user)
+        lineas = [f"{len(inspecciones)} inspecciones encajan el filtro (las más recientes primero)."]
+        for insp in inspecciones[:40]:
+            sev = (insp.get("analysis") or {}).get("severity")
+            lineas.append(f"- {str(insp.get('created_at') or '')[:16].replace('T', ' ')}"
+                          + (f", gravedad {sev}" if sev else ", sin analizar"))
+        return {"resumen_texto": "\n".join(lineas), "documentos": None, "n": len(inspecciones)}
+
     return {"resumen_texto": "Consulta no reconocida.", "documentos": None, "n": 0}
 
 
@@ -50617,6 +50682,29 @@ async def _ai_resolver_conductor(user: dict, center: str, nombre: str) -> dict:
     return candidatos[0]
 
 
+async def _ai_resolver_taller(nombre: str) -> dict:
+    """Encuentra EL taller activo cuyo nombre casa con lo pedido.
+
+    Los talleres son un recurso compartido de toda la empresa (un mismo
+    taller sirve a varias naves — `Workshop.center` es solo la nave más
+    cercana, no una frontera de acceso), así que aquí NO se filtra por
+    centro como con vehículos y conductores.
+    """
+    nombre = _texto_cuerpo(nombre, 80)
+    if not nombre:
+        raise HTTPException(400, "Falta el nombre del taller")
+    termino = _geo_sin_acentos(nombre).lower().strip()
+    talleres = await db.workshops.find(
+        {"active": {"$ne": False}}, {"_id": 0, "id": 1, "name": 1}).to_list(500)
+    candidatos = [w for w in talleres if termino in _geo_sin_acentos(w.get("name") or "").lower()]
+    if not candidatos:
+        raise HTTPException(404, f'No encuentro ningún taller llamado "{nombre}".')
+    if len(candidatos) > 1:
+        nombres = ", ".join(w["name"] for w in candidatos[:6])
+        raise HTTPException(409, f'Hay varios talleres que casan con "{nombre}": {nombres}. Sé más específico.')
+    return candidatos[0]
+
+
 def _ai_asistente_prompt(center: str, contexto: str) -> str:
     return f"""Eres FLOTADSP AI, el asistente del panel de FlotaDSP para el centro {center}.
 
@@ -50655,6 +50743,10 @@ REGLAS QUE NO PUEDES SALTARTE:
     · editar_conductor — cambiar UN DATO de un conductor que YA EXISTE.
       Campos: "conductor_nombre" y cualquiera de estos, solo los que pidan:
       "phone", "email", "dni", "license_number", "address", "notes".
+    · crear_orden_taller — mandar una furgoneta a un taller. Campos:
+      "matricula", "taller_nombre" (busca el taller por su nombre, no
+      inventes uno que no te hayan dicho) y "problema" (el motivo, si lo
+      dan — si no, se rellena solo con los daños abiertos de esa furgoneta).
   Si te piden cambiar algo de una furgoneta o conductor que no esté en esta
   lista de campos, dilo — no lo intentes por otra vía.
   Si falta algo imprescindible, pregúntalo en tu respuesta y NO propongas la
@@ -50670,23 +50762,26 @@ REGLAS QUE NO PUEDES SALTARTE:
   relleno ni de repetir la pregunta.
 - Los datos en vivo de abajo son la ÚNICA verdad sobre el estado de este
   centro ahora mismo — nunca inventes un número que no esté ahí.
-- Si te preguntan algo sobre FURGONETAS o CONDUCTORES que NO esté en los
-  datos en vivo de abajo — "furgonetas de Bansacar", "las de Kinto en
-  taller", "dame las fichas técnicas de...", "conductores activos de...",
-  "qué furgoneta lleva Fulano", "quién lleva la 1234ABC" — NO te lo
-  inventes y NO digas que no puedes: pide una consulta. Responde
-  ÚNICAMENTE con:
-  {{"consulta_pedida": {{"tipo": "vehiculos" | "conductores",
-                        "filtros": {{"provider": "...", "status": "...", "brand": "...", "model": "...", "matricula": "...", "conductor_nombre": "..."}},
+- Si te preguntan algo que NO esté en los datos en vivo de abajo — sobre
+  FURGONETAS, CONDUCTORES, WHC de alguien en concreto, investigaciones DNR
+  abiertas o inspecciones de una furgoneta — NO te lo inventes y NO digas
+  que no puedes: pide una consulta. Responde ÚNICAMENTE con:
+  {{"consulta_pedida": {{"tipo": "vehiculos" | "conductores" | "whc" | "dnr" | "inspecciones",
+                        "filtros": {{"provider": "...", "status": "...", "brand": "...", "model": "...", "matricula": "...", "conductor_nombre": "...", "nombre": "...", "active": true}},
                         "doc_tipo": "ficha_tecnica" | "seguro" | "itv" | "contrato" | null}}}}
-  Todos los filtros son opcionales, pon solo los que pidan. "conductor_nombre"
-  (solo vehiculos) es para "qué furgoneta lleva X" — el resultado ya te dice
-  qué conductor lleva cada furgoneta aunque no uses este filtro. "doc_tipo" es
-  SOLO para vehiculos, y solo si piden un documento en concreto (si piden
-  "las fichas técnicas de..." pon doc_tipo: "ficha_tecnica"). Para
-  conductores, "filtros" admite "active" (true/false) y "nombre". Después de
-  pedir la consulta te llegará el resultado real y ahí sí contestas con el
-  JSON normal — nunca pidas dos consultas seguidas.
+  Todos los filtros son opcionales, pon solo los que pidan.
+    · vehiculos: "provider", "status", "brand", "model", "matricula",
+      "conductor_nombre" (para "qué furgoneta lleva X" — el resultado ya
+      dice qué conductor lleva cada una aunque no uses este filtro) y
+      "doc_tipo" (solo si piden un documento en concreto).
+    · conductores: "active" (true/false) y "nombre".
+    · whc: "nombre" del conductor si preguntan por uno en concreto; sin
+      filtro da la nave entera.
+    · dnr: sin filtros — siempre da las abiertas del centro.
+    · inspecciones: "matricula" para las de una furgoneta; sin ella, las
+      últimas de todo el centro.
+  Después de pedir la consulta te llegará el resultado real y ahí sí
+  contestas con el JSON normal — nunca pidas dos consultas seguidas.
 DATOS EN VIVO DE {center}:
 {contexto}
 
@@ -50717,7 +50812,8 @@ que necesites pedir una consulta (arriba), en cuyo caso respondes SOLO con
   "accion_propuesta": null o {{
     "tipo": "crear_vehiculo" | "crear_conductor" | "generar_plantilla" |
             "asignar_conductor" | "desasignar_conductor" | "cambiar_estado_vehiculo" |
-            "crear_incidencia" | "editar_vehiculo" | "editar_conductor",
+            "crear_incidencia" | "editar_vehiculo" | "editar_conductor" |
+            "crear_orden_taller",
     "campos": {{"license_plate": "...", "brand": "...", "model": "...", "color": "...", "vin": "..."}}
     // para conductor: {{"name": "...", "phone": "...", "email": "...", "dni": "..."}}
     // para generar_plantilla: {{}} (siempre vacío)
@@ -50727,6 +50823,7 @@ que necesites pedir una consulta (arriba), en cuyo caso respondes SOLO con
     // para crear_incidencia: {{"matricula": "...", "descripcion": "...", "severidad": "leve" | "moderado" | "grave"}}
     // para editar_vehiculo: {{"matricula": "...", "<campo editable>": "..."}} (solo los campos que pidan)
     // para editar_conductor: {{"conductor_nombre": "...", "<campo editable>": "..."}} (solo los campos que pidan)
+    // para crear_orden_taller: {{"matricula": "...", "taller_nombre": "...", "problema": "..."}}
   }}
 }}"""
 
@@ -51027,6 +51124,15 @@ async def ai_asistente_ejecutar(data: _IAAsistenteAccion, user: dict = Depends(r
             raise HTTPException(400, "No has dicho qué cambiar del conductor")
         await update_driver(conductor["id"], cambios, user)
         return {"ok": True, "tipo": data.tipo, "driver_name": conductor["name"], "cambios": cambios}
+
+    if data.tipo == "crear_orden_taller":
+        vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
+        taller = await _ai_resolver_taller(campos.get("taller_nombre") or "")
+        problema = _texto_cuerpo(campos.get("problema"), 2000)
+        orden_datos = OrdenTrabajoCrear(vehicle_id=vehiculo["id"], workshop_id=taller["id"], problema=problema)
+        orden = await crear_orden(orden_datos, user)
+        return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"],
+                "taller_nombre": taller["name"], "numero": (orden or {}).get("numero")}
 
     try:
         conductor = DriverCreate(**campos)

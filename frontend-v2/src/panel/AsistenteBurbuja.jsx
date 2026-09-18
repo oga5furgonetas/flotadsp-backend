@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Send, Loader2, X, Check, Car, UserPlus, ClipboardList, ArrowRight, FileText, Paperclip, UserX, Wrench, AlertTriangle, Pencil, UserCog } from 'lucide-react'
+import { Sparkles, Send, Loader2, X, Check, Car, UserPlus, ClipboardList, ArrowRight, FileText, Paperclip, UserX, Wrench, AlertTriangle, Pencil, UserCog, Hammer } from 'lucide-react'
 import { getAiHistorial, enviarMensajeIA, ejecutarAccionIA, subirFichasTecnicasIA, confirmarFichasTecnicasIA } from './api'
 
 /* FLOTADSP AI — burbuja de ayuda flotante, abajo a la derecha, como los
@@ -23,6 +23,7 @@ const ETIQUETA_ACCION = {
   crear_incidencia: { icon: AlertTriangle, titulo: 'Abrir parte de incidencia' },
   editar_vehiculo: { icon: Pencil, titulo: 'Editar furgoneta' },
   editar_conductor: { icon: UserCog, titulo: 'Editar conductor' },
+  crear_orden_taller: { icon: Hammer, titulo: 'Enviar furgoneta al taller' },
 }
 const CAMPO_LABEL = {
   license_plate: 'Matrícula', brand: 'Marca', model: 'Modelo', color: 'Color', vin: 'VIN',
@@ -32,6 +33,7 @@ const CAMPO_LABEL = {
   year: 'Año', mileage: 'Kilómetros', notes: 'Notas', fuel_type: 'Combustible',
   itv_date: 'ITV', insurance_expiry: 'Seguro hasta', renting_end_date: 'Renting hasta',
   provider: 'Proveedor renting', license_number: 'Nº carné', address: 'Dirección',
+  taller_nombre: 'Taller', problema: 'Motivo',
 }
 const SEVERIDAD_TXT = { leve: 'Leve', moderado: 'Moderado', grave: 'Grave' }
 const ESTADO_VEHICULO_TXT = { active: 'Activa', taller: 'En taller', baja: 'De baja' }
@@ -55,6 +57,7 @@ function mensajeResultado(r) {
     case 'crear_incidencia': return `Parte abierto en la ${r.vehicle_plate} (${SEVERIDAD_TXT[r.severidad] || r.severidad}).`
     case 'editar_vehiculo': return `${r.vehicle_plate} actualizada — ${textoCambios(r.cambios)}.`
     case 'editar_conductor': return `${r.driver_name} actualizado — ${textoCambios(r.cambios)}.`
+    case 'crear_orden_taller': return `Orden ${r.numero || ''} abierta: ${r.vehicle_plate} va a ${r.taller_nombre}.`
     default: return `Creado${r.license_plate ? `: ${r.license_plate}` : r.name ? `: ${r.name}` : ''}`
   }
 }
@@ -242,7 +245,7 @@ export default function AsistenteBurbuja({ center, centers }) {
               <div className="flex-1 overflow-y-auto p-2.5">
                 {msgs.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center gap-1 px-4 text-center">
-                    <p className="text-[12.5px] text-dark-400">Pregúntame cómo se hace algo, cómo va tu WHC, "dame las furgonetas de Bansacar" o "qué furgoneta lleva Juan". Pídeme que cree, edite o asigne un vehículo o conductor, que mande una furgoneta a taller, que abra un parte de avería, que monte la plantilla de hoy con Cortex, o sube fichas técnicas con el clip.</p>
+                    <p className="text-[12.5px] text-dark-400">Pregúntame cómo se hace algo, cómo va el WHC de alguien, las DNR abiertas, las inspecciones de una furgoneta, "dame las furgonetas de Bansacar" o "qué furgoneta lleva Juan". Pídeme que cree, edite o asigne un vehículo o conductor, que abra un parte o mande una furgoneta a un taller, que monte la plantilla de hoy con Cortex, o sube fichas técnicas con el clip.</p>
                   </div>
                 ) : (
                   <div className="space-y-2">
