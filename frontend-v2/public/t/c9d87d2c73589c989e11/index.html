@@ -52,6 +52,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:20px;pa
   border-radius:12px;padding:12px 16px;margin-bottom:20px;font-size:13.5px;color:var(--ink)}
 .cupon[hidden]{display:none}
 .cupon b{color:var(--accent)}
+.cupon.cupon-caducado{background:var(--surface);border-color:var(--line);color:var(--muted)}
 
 /* ── ficha ──────────────────────────────────────────────────────────── */
 .ficha[hidden]{display:none}
@@ -270,6 +271,12 @@ dialog.visor img{max-width:96vw;max-height:90vh;width:auto;height:auto;margin:au
 <dialog class="visor" aria-label="Foto ampliada">
   <div class="visor-caja"><img alt=""></div>
 </dialog>
-<script src="app.js"></script>
+<!-- ?v=2 a proposito: Cloudflare Pages cachea los .js 4h SIN respetar el
+     Cache-Control de _headers para ese tipo de fichero (probado en
+     produccion el 18-09-2026 — el HTML si obedece _headers, el JS no).
+     Subir este numero es lo que fuerza una URL nueva y evita servir la
+     version vieja del script tras un cambio, ya que index.html SI se
+     revalida siempre. -->
+<script src="app.js?v=3"></script>
 </body>
 </html>

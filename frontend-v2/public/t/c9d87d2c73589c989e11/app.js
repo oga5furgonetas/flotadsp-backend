@@ -5,17 +5,43 @@
   var sel = {};                // id -> {talla, cant}
   var eur = function (n) { return n.toFixed(2).replace(".", ",") + " €"; };
 
-  /* CUPON DE CAMPAÑA (candidatos): viaje por la URL (?cupon=...), lo valida
-     STRIPE al pagar (redeem_by), no esta pagina — si ya caducó o esta mal
-     escrito, el backend reintenta la compra sin el en vez de bloquearla
+  /* CUPON DE CAMPAÑA (candidatos): viaje por la URL (?cupon=...&exp=...), lo
+     valida STRIPE al pagar (redeem_by), no esta pagina — si ya caducó o esta
+     mal escrito, el backend reintenta la compra sin el en vez de bloquearla
      (ver tienda_publica_comprar). El "10 €" es el importe fijo que genera
      hoy la campaña (candidatos_campana_bienvenida): si algun dia cambia el
-     importe alli, cambialo tambien aqui. */
-  var CUPON = new URLSearchParams(location.search).get("cupon") || "";
+     importe alli, cambialo tambien aqui.
+     LA CUENTA ATRAS ES INFORMATIVA, no la autoridad: cada persona tiene su
+     propio cupon con su propio reloj (uno por candidato, gotcha 18-09-2026 —
+     sin esto, con un solo cupon compartido no habia forma de saber cuanto le
+     quedaba a CADA uno sin mezclarlo con el de otro). */
+  var params = new URLSearchParams(location.search);
+  var CUPON = params.get("cupon") || "";
   if (CUPON) {
     var banner = document.querySelector("[data-cupon]");
     banner.hidden = false;
-    banner.innerHTML = "🎁 Tienes un <b>cupón de 10 € de bienvenida</b> aplicado — se descuenta al pagar, mientras siga vigente.";
+    var expMs = params.get("exp") ? Date.parse(params.get("exp")) : NaN;
+    var intervaloCupon;
+    var pintaCupon = function () {
+      if (isNaN(expMs)) {
+        banner.innerHTML = "🎁 Tienes un <b>cupón de 10 € de bienvenida</b> aplicado — se descuenta al pagar, mientras siga vigente.";
+        return;
+      }
+      var restante = expMs - Date.now();
+      if (restante <= 0) {
+        banner.innerHTML = "El cupón de bienvenida ya ha caducado. Puedes seguir comprando sin él.";
+        banner.classList.add("cupon-caducado");
+        clearInterval(intervaloCupon);
+        return;
+      }
+      var h = Math.floor(restante / 3600000);
+      var m = Math.floor((restante % 3600000) / 60000);
+      var s = Math.floor((restante % 60000) / 1000);
+      var falta = h > 0 ? (h + "h " + m + "min") : (m + "min " + s + "s");
+      banner.innerHTML = "🎁 Tienes un <b>cupón de 10 € de bienvenida</b> — quedan <b>" + falta + "</b> para usarlo.";
+    };
+    pintaCupon();
+    intervaloCupon = setInterval(pintaCupon, 1000);
   }
 
   /* EL PRECIO DE UNA TALLA LO DECIDE EL SERVIDOR. Que talla es grande y

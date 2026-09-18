@@ -50338,7 +50338,17 @@ def _candidatos_campana_html(nombre: str, url_tienda: str, url_suscripcion: str,
             timezone(timedelta(hours=2))).strftime("%H:%M")
     except Exception:                                          # noqa: BLE001
         hora_local = ""
+    # SIN <hr>: es un separador visual que varios clientes de correo (Gmail el
+    # primero) confunden con el corte de un hilo/cita y te esconden TODO lo de
+    # despues detras de un "..." — medido en produccion el 18-09-2026, el
+    # correo se abria mostrando solo el primer parrafo y NINGUN boton. Un
+    # div con borde hace el mismo efecto visual sin disparar esa regla.
+    # El preheader (oculto, 1a linea que se ve en la bandeja de entrada antes
+    # de abrir el correo) es lo que decide si alguien lo abre o no: sin el,
+    # Gmail enseña "Hola Dani," como avance, que no vende nada.
+    preheader = "🎁 10 € de regalo (caduca en 4 horas) + entérate el primero de los próximos empleos"
     return f"""
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;font-size:1px;line-height:1px;color:#ffffff">{preheader}</div>
     <div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;color:#1a1a1a">
       <p>{saludo}</p>
       <p>Ya te postulaste con nosotros hace un tiempo — gracias por eso. Como
@@ -50347,17 +50357,17 @@ def _candidatos_campana_html(nombre: str, url_tienda: str, url_suscripcion: str,
       {f'(hasta las {hora_local})' if hora_local else ''}. Pasado ese plazo el
       cupón se desactiva solo.</p>
       <p style="text-align:center;margin:24px 0">
-        <a href="{url_tienda}" style="background:#0ea5e9;color:#fff;padding:12px 24px;
-           border-radius:8px;text-decoration:none;font-weight:bold">Usar mi descuento ahora</a>
+        <a href="{url_tienda}" style="background:#0ea5e9;color:#fff;padding:14px 28px;
+           border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;display:inline-block">🎁 Usar mi descuento ahora</a>
       </p>
-      <hr style="border:none;border-top:1px solid #e5e5e5;margin:24px 0">
+      <div style="border-top:1px solid #e5e5e5;margin:28px 0"></div>
       <p><strong>¿Quieres currar cuanto antes?</strong> Hazte Prioritario: por
       2,99&nbsp;EUR/mes te escribimos en el momento en que sacamos un puesto
       nuevo, sin que tengas que estar mirando la web cada día. El primero en
       enterarse suele ser el primero en conseguirlo.</p>
       <p style="text-align:center;margin:24px 0">
-        <a href="{url_suscripcion}" style="background:#111827;color:#fff;padding:12px 24px;
-           border-radius:8px;text-decoration:none;font-weight:bold">Ser Prioritario (2,99 EUR/mes)</a>
+        <a href="{url_suscripcion}" style="background:#111827;color:#fff;padding:14px 28px;
+           border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;display:inline-block">⚡ Ser Prioritario (2,99 EUR/mes)</a>
       </p>
       <p style="color:#888;font-size:12px">FlotaDSP — has recibido esto porque dejaste
       tu candidatura con nosotros. Si no quieres más correos como este, responde
@@ -50403,7 +50413,10 @@ async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Dep
             fallidos += 1
             continue
         ultima_expira = cupon["expira_en"]
-        url_tienda = f"{enlace_tienda}?cupon={cupon['id']}"
+        # La caducidad viaja en la URL para que la tienda pueda pintar una
+        # cuenta atras real — sin esto, cada persona veia el mismo texto fijo
+        # sin saber si le quedan 10 minutos o 3 horas y media.
+        url_tienda = f"{enlace_tienda}?cupon={cupon['id']}&exp={_url_quote(cupon['expira_en'])}"
         html = _candidatos_campana_html(d.get("nombre") or "", url_tienda, url_suscripcion, cupon["expira_en"])
         ok = await _send_resend_email(d["email"], "Tu candidatura + un regalo y la opción de ser Prioritario", html,
                                       responder_a=os.environ.get("EMAIL_FROM_RESPUESTA", ""))
