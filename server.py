@@ -10098,3 +10098,28 @@ async def scorecard_predict(center: str, week: Optional[str] = None, _=Depends(r
 
 app.include_router(auth_router)
 app.include_router(api_router)
+
+
+# =============================================================================
+# FLOTADSP AI — encargos para más tarde y preasignación de furgonetas
+# Módulo tareas_ia.py: el dispatcher puede pedir en el chat "monta la plantilla
+# de DGA1 mañana cuando salgan las rutas en Cortex" y se monta sola.
+# =============================================================================
+try:
+    import tareas_ia
+
+    async def _ia_avisar(titulo: str, mensaje: str):
+        """Avisa por Telegram cuando una tarea programada ya está hecha."""
+        await send_telegram_alert(titulo, mensaje, severity="info")
+
+    app.include_router(tareas_ia.construir_router(db, require_admin, notificar=_ia_avisar))
+
+    @app.on_event("startup")
+    async def start_tareas_ia():
+        """Bucle de fondo: cada 10 min mira si ya puede ejecutar lo programado."""
+        tareas_ia.iniciar_bucle(db, notificar=_ia_avisar)
+        logger.info("FlotaDSP AI: tareas programadas activas (revisión cada %ss)",
+                    tareas_ia.INTERVALO_BUCLE_S)
+
+except Exception as _e_ia:
+    logger.error(f"FlotaDSP AI (tareas_ia) no se pudo activar: {_e_ia}")

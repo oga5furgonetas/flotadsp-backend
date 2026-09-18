@@ -11126,3 +11126,46 @@ async def _sc_weights(center):
 
 app.include_router(auth_router)
 app.include_router(api_router)
+
+
+# =============================================================================
+# FLOTADSP AI — encargos para más tarde y preasignación de furgonetas
+# Módulo tareas_ia.py: el dispatcher puede pedir en el chat "monta la plantilla
+# de DGA1 mañana cuando salgan las rutas en Cortex" y se monta sola.
+# =============================================================================
+try:
+    import tareas_ia
+
+    async def _ia_avisar(titulo: str, mensaje: str):
+        """Avisa por Telegram cuando una tarea programada ya está hecha."""
+        await send_telegram_alert(titulo, mensaje, severity="info")
+
+    app.include_router(tareas_ia.construir_router(db, require_admin, notificar=_ia_avisar))
+
+    @app.on_event("startup")
+    async def start_tareas_ia():
+        """Bucle de fondo: cada 10 min mira si ya puede ejecutar lo programado."""
+        async def _bases_de_datos():
+            # Una organización = una BD. Se revisan todas, no solo la principal.
+            nombres = [_DEFAULT_DB_NAME]
+            try:
+                orgs = await global_db.organizations.find(
+                    {}, {"_id": 0, "id": 1, "db_name": 1, "account_type": 1, "status": 1}
+                ).to_list(500)
+                for o in orgs:
+                    if o.get("status") in ("deleted", "cancelled"):
+                        continue
+                    nombre = _tenant_db_name(o)
+                    if nombre and nombre not in nombres:
+                        nombres.append(nombre)
+            except Exception as e:
+                logger.warning(f"tareas_ia: no pude listar las organizaciones: {e}")
+            return nombres
+
+        tareas_ia.iniciar_bucle(db, obtener_bases=_bases_de_datos,
+                                fijar_base=set_current_org_db, notificar=_ia_avisar)
+        logger.info("FlotaDSP AI: tareas programadas activas (revisión cada %ss)",
+                    tareas_ia.INTERVALO_BUCLE_S)
+
+except Exception as _e_ia:
+    logger.error(f"FlotaDSP AI (tareas_ia) no se pudo activar: {_e_ia}")
