@@ -40305,6 +40305,84 @@ _PLANTILLA_CELDAS = ("ruta", "conductor", "movil", "furgo",
                      "h_salida", "h_bajada", "h_llegada", "observaciones")
 
 
+async def _plantilla_filas_desde_cortex(center: str, dia: str) -> list:
+    """Filas de la plantilla de HOY con lo que ya sabemos de verdad: ruta y
+    conductor los da Cortex (`cortex_resumen`, capturado por la extension sin
+    que nadie teclee nada); telefono y furgo se completan con el cuadrante de
+    Asignacion diaria si la oficina ya lo relleno hoy. Nunca inventa hora de
+    salida ni furgo: Cortex no la da (solo llega por captura de pantalla, ver
+    BLOQUE 4 mas arriba), y adivinarla seria peor que dejarla en blanco para
+    que la oficina la ponga, que es exactamente lo que hace hoy a mano.
+    """
+    saids = []
+    if center and center not in ("Todos", ""):
+        c = center.upper()
+        stations = await db.cortex_stations.find(
+            {}, {"_id": 0, "service_area_id": 1, "center": 1}).to_list(200)
+        saids = [s["service_area_id"] for s in stations
+                 if s.get("service_area_id") and s.get("center") == c]
+
+    q = {"dia": dia}
+    if saids:
+        q["service_area_id"] = {"$in": saids}
+    ruta_a_transporter: dict = {}
+    nombres: dict = {}
+    async for res in db.cortex_resumen.find(q, {"_id": 0, "rutas": 1, "gente": 1}):
+        for g in res.get("gente") or []:
+            tid = str(g.get("transporterId") or "").strip()
+            nombre = re.sub(r"\s+", " ", str(g.get("nombre") or "")).strip()
+            if tid and nombre and tid not in nombres:
+                nombres[tid] = nombre
+        for r in res.get("rutas") or []:
+            rc, tid = r.get("routeCode"), str(r.get("transporterId") or "").strip()
+            if rc and tid:
+                ruta_a_transporter[rc] = tid
+    if not ruta_a_transporter:
+        return []
+
+    faltan = {tid for tid in ruta_a_transporter.values() if tid not in nombres}
+    if faltan:
+        for tid, info in (await _cx_nombres(faltan)).items():
+            if info.get("nombre"):
+                nombres[tid] = info["nombre"]
+
+    # Cuadrante ya tecleado hoy para este centro (Asignacion diaria): trae
+    # furgo real por RUTA, que es el puente que el gotcha 79 dejo guardado a
+    # proposito para esto.
+    por_ruta_asignada = {}
+    if center and center != "Todos":
+        asign = await db.daily_assignments.find_one(
+            {"date": dia, "center": center}, {"_id": 0, "slots": 1})
+        for s in (asign or {}).get("slots") or []:
+            ref = (s.get("route") or "").strip().upper()
+            if ref:
+                por_ruta_asignada[ref] = s
+
+    # Telefono: SIEMPRE de la ficha, nunca del resumen de Cortex (gotcha 66:
+    # el numero de Cortex es del turno, no de la persona).
+    ids = set(nombres)
+    fichas = await db.drivers.find(
+        {"$or": [{"driver_id": {"$in": list(ids)}}, {"transporter_id": {"$in": list(ids)}}]},
+        {"_id": 0, "name": 1, "phone": 1}).to_list(2000) if ids else []
+    tel_por_nombre = {(f.get("name") or "").strip().upper(): f.get("phone")
+                      for f in fichas if f.get("name") and f.get("phone")}
+
+    filas = []
+    for rc in sorted(ruta_a_transporter):
+        tid = ruta_a_transporter[rc]
+        conductor = (nombres.get(tid) or "").upper()
+        asignado = por_ruta_asignada.get(rc) or {}
+        filas.append({
+            "ruta": rc,
+            "conductor": conductor or f"SIN NOMBRE ({tid})",
+            "movil": tel_por_nombre.get(conductor, ""),
+            "furgo": asignado.get("vehicle_plate") or "",
+            "h_salida": "", "h_bajada": "", "h_llegada": "",
+            "observaciones": "" if conductor else "Cortex no da el nombre de este ID: revisar.",
+        })
+    return filas
+
+
 @api_router.patch("/tools/plantilla-compartida/{draft_id}/celda")
 async def plantilla_compartida_celda(draft_id: str, body: dict = Body(...), admin=Depends(require_admin)):
     """Cambia UNA celda de la plantilla compartida.
@@ -50238,7 +50316,7 @@ async def tienda_ver_foto(prenda_id: str, user: dict = Depends(require_any_auth)
 #     cumple la primera a propósito).
 
 _IA_ASISTENTE_COL = "ai_chat_msgs"
-_IA_ASISTENTE_ACCIONES = ("crear_vehiculo", "crear_conductor")
+_IA_ASISTENTE_ACCIONES = ("crear_vehiculo", "crear_conductor", "generar_plantilla")
 
 _IA_ASISTENTE_MANUAL = """
 === MANUAL BREVE DE FLOTADSP (para explicar "cómo se hace X") ===
@@ -50262,7 +50340,11 @@ que salgan las rutas.
 Turnos (cuadrante): quién trabaja qué día. Se pinta con el pincel de código;
 los días aprobados salen en rosa y no se mueven sin permiso.
 Plantilla de turno: la plantilla de personal, generada desde Turnos —cierra
-el cuadrante antes de descargarla.
+el cuadrante antes de descargarla. Si te piden "hazme la plantilla de hoy" o
+"móntala con Cortex", TÚ PUEDES: rellenas ruta y conductor con lo que Cortex
+ya ha capturado hoy, y furgo/teléfono si la Asignación diaria de hoy ya está
+rellena. La hora de salida nunca la sabes tú —Cortex no la da— y se queda en
+blanco para que la oficina la ponga, igual que hace hoy a mano.
 WHC (cumplimiento de horas): quién se acerca o se pasa del límite semanal de
 Amazon (54h30 fijas, no las cambia cada nave). Entra solo desde la extensión;
 avisa antes del viernes, que es cuando ya no se puede arreglar.
@@ -50328,11 +50410,17 @@ REGLAS QUE NO PUEDES SALTARTE:
   ves la suya y que cambien de centro arriba para verla.
 - No sabes nada de código ni puedes cambiar nada "importante" (permisos,
   precios, configuración) — eso lo dices y ya está, no lo intentes.
-- Solo puedes PROPONER dos acciones: crear un vehículo o crear un conductor.
-  Nunca las ejecutas tú: propones y una persona confirma con un clic.
+- Solo puedes PROPONER tres acciones: crear un vehículo, crear un conductor o
+  generar la plantilla de turno de HOY desde Cortex. Nunca las ejecutas tú:
+  propones y una persona confirma con un clic.
   Para un vehículo hace falta al menos la matrícula. Para un conductor, al
   menos el nombre. Si falta algo imprescindible, pregúntalo en tu respuesta
   y NO propongas la acción todavía.
+- Si te piden la plantilla/plan de rutas de hoy ("hazme la plantilla",
+  "móntala con Cortex", "genera el reparto de hoy"), propón SIEMPRE
+  "generar_plantilla" con "campos": {{}} (no necesita ningún dato tuyo: lo saca
+  el servidor de Cortex). No inventes filas ni nombres en la respuesta — di
+  solo que vas a montarla con lo que Cortex tenga capturado hoy.
 - Respuestas completas pero sin rollo: la persona tiene prisa. Nada de
   relleno ni de repetir la pregunta.
 - Los datos en vivo de abajo son la ÚNICA verdad sobre el estado de este
@@ -50363,9 +50451,10 @@ Responde ÚNICAMENTE con este JSON, sin markdown ni texto fuera de él:
   "respuesta": "tu respuesta en español, para leer en un chat — breve si ya va tarjeta detrás",
   "tarjeta": null o {{"titulo": "...", "filas": [{{"etiqueta": "...", "valor": "...", "tono": "..."}}]}},
   "accion_propuesta": null o {{
-    "tipo": "crear_vehiculo" | "crear_conductor",
+    "tipo": "crear_vehiculo" | "crear_conductor" | "generar_plantilla",
     "campos": {{"license_plate": "...", "brand": "...", "model": "...", "color": "...", "vin": "..."}}
     // para conductor: {{"name": "...", "phone": "...", "email": "...", "dni": "..."}}
+    // para generar_plantilla: {{}} (siempre vacío)
   }}
 }}"""
 
@@ -50531,6 +50620,45 @@ async def ai_asistente_ejecutar(data: _IAAsistenteAccion, user: dict = Depends(r
             raise HTTPException(400, f"Faltan datos del vehículo: {e.errors()[0].get('msg', 'revisa los campos')}")
         creado = await create_vehicle(vehiculo, user)
         return {"ok": True, "tipo": data.tipo, "creado": creado.model_dump()}
+
+    if data.tipo == "generar_plantilla":
+        dia = _dia_negocio()
+        filas = await _plantilla_filas_desde_cortex(center, dia)
+        if not filas:
+            raise HTTPException(
+                400, "Cortex todavía no tiene ninguna ruta capturada hoy para este "
+                     "centro. Abre Cortex con la extensión activa y prueba de nuevo "
+                     "en unos minutos, o móntala a mano en Turnos.")
+        # Se une al borrador YA ABIERTO del centro (si otro equipo lo tiene
+        # delante ahora mismo) en vez de crear uno nuevo, y solo empuja las
+        # rutas que aún no estaban — nunca toca una fila existente, que es la
+        # misma regla de "cada cambio va solo" de los gotchas 52/56: aquí el
+        # cambio es "añadir N filas".
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=18)).isoformat()
+        activo = await db.plantillas_compartidas.find_one(
+            {"center": center, "updated_at": {"$gte": cutoff}}, {"_id": 0})
+        ahora = datetime.now(timezone.utc).isoformat()
+        quien = user.get("name") or "FlotaDSP AI"
+        if activo:
+            existentes = {(r.get("ruta") or "").strip().upper()
+                          for r in (activo.get("state") or {}).get("rows") or []}
+            nuevas = [f for f in filas if f["ruta"].upper() not in existentes]
+            if nuevas:
+                await db.plantillas_compartidas.update_one(
+                    {"id": activo["id"]},
+                    {"$push": {"state.rows": {"$each": nuevas}},
+                     "$set": {"updated_at": ahora, "updated_by": quien},
+                     "$inc": {"revision": 1}})
+            return {"ok": True, "tipo": data.tipo, "draft_id": activo["id"],
+                    "filas_cortex": len(filas), "anadidas": len(nuevas), "ya_existia": True}
+        fecha_es = "%s/%s/%s" % (dia[8:10], dia[5:7], dia[0:4])
+        semana = datetime.strptime(dia, "%Y-%m-%d").isocalendar()[1]
+        doc = {"id": str(uuid.uuid4()), "center": center,
+               "state": {"rows": filas, "week": semana, "date": fecha_es},
+               "revision": 1, "updated_at": ahora, "updated_by": quien}
+        await db.plantillas_compartidas.insert_one(doc)
+        return {"ok": True, "tipo": data.tipo, "draft_id": doc["id"],
+                "filas_cortex": len(filas), "anadidas": len(filas), "ya_existia": False}
 
     try:
         conductor = DriverCreate(**campos)

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Sparkles, Send, Loader2, X, Check, Car, UserPlus } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Sparkles, Send, Loader2, X, Check, Car, UserPlus, ClipboardList, ArrowRight } from 'lucide-react'
 import { getAiHistorial, enviarMensajeIA, ejecutarAccionIA } from './api'
 
 /* FLOTADSP AI — burbuja de ayuda flotante, abajo a la derecha, como los
@@ -15,6 +16,7 @@ import { getAiHistorial, enviarMensajeIA, ejecutarAccionIA } from './api'
 const ETIQUETA_ACCION = {
   crear_vehiculo: { icon: Car, titulo: 'Crear vehículo' },
   crear_conductor: { icon: UserPlus, titulo: 'Crear conductor' },
+  generar_plantilla: { icon: ClipboardList, titulo: 'Generar plantilla de hoy con Cortex' },
 }
 const CAMPO_LABEL = {
   license_plate: 'Matrícula', brand: 'Marca', model: 'Modelo', color: 'Color', vin: 'VIN',
@@ -44,6 +46,7 @@ function Tarjeta({ t }) {
 }
 
 export default function AsistenteBurbuja({ center, centers }) {
+  const navigate = useNavigate()
   const [abierto, setAbierto] = useState(false)
   const [msgs, setMsgs] = useState([])
   const [cargado, setCargado] = useState(false)
@@ -88,7 +91,8 @@ export default function AsistenteBurbuja({ center, centers }) {
     setEjecutando(idx)
     try {
       const { data } = await ejecutarAccionIA(accion.tipo, accion.campos, center)
-      setMsgs((m) => m.map((x, i) => i === idx ? { ...x, accion_propuesta: null, resultado: data.creado } : x))
+      const resultado = accion.tipo === 'generar_plantilla' ? data : data.creado
+      setMsgs((m) => m.map((x, i) => i === idx ? { ...x, accion_propuesta: null, resultado } : x))
     } catch (e) {
       setMsgs((m) => m.map((x, i) => i === idx
         ? { ...x, error_accion: e?.response?.data?.detail || 'No se pudo completar.' } : x))
@@ -123,7 +127,7 @@ export default function AsistenteBurbuja({ center, centers }) {
               <div className="flex-1 overflow-y-auto p-2.5">
                 {msgs.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center gap-1 px-4 text-center">
-                    <p className="text-[12.5px] text-dark-400">Pregúntame cómo se hace algo, cómo va tu WHC, o pídeme que cree un vehículo o un conductor.</p>
+                    <p className="text-[12.5px] text-dark-400">Pregúntame cómo se hace algo, cómo va tu WHC, pídeme que cree un vehículo o un conductor, o que monte la plantilla de hoy con Cortex.</p>
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -141,9 +145,11 @@ export default function AsistenteBurbuja({ center, centers }) {
                                   <acc.icon size={12} className="text-brand-400" /> {acc.titulo}
                                 </div>
                                 <div className="mb-1.5 space-y-0.5 text-[11px] text-dark-400">
-                                  {Object.entries(m.accion_propuesta.campos).filter(([, v]) => v).map(([k, v]) => (
-                                    <div key={k}>{CAMPO_LABEL[k] || k}: <span className="text-dark-200">{v}</span></div>
-                                  ))}
+                                  {m.accion_propuesta.tipo === 'generar_plantilla'
+                                    ? <div>Ruta y conductor de cada uno, tal como los tiene Cortex capturados hoy.</div>
+                                    : Object.entries(m.accion_propuesta.campos).filter(([, v]) => v).map(([k, v]) => (
+                                        <div key={k}>{CAMPO_LABEL[k] || k}: <span className="text-dark-200">{v}</span></div>
+                                      ))}
                                 </div>
                                 <div className="flex gap-1.5">
                                   <button onClick={() => confirmar(i, m.accion_propuesta)} disabled={ejecutando === i}
@@ -157,7 +163,19 @@ export default function AsistenteBurbuja({ center, centers }) {
                                 </div>
                               </div>
                             )}
-                            {m.resultado && (
+                            {m.resultado && m.resultado.draft_id ? (
+                              <div className="mt-1.5 space-y-1.5 rounded-lg bg-emerald-500/10 px-2 py-1.5 text-[11px] text-emerald-300">
+                                <div>
+                                  ✅ {m.resultado.ya_existia
+                                    ? `Añadidas ${m.resultado.anadidas} ruta${m.resultado.anadidas === 1 ? '' : 's'} nueva${m.resultado.anadidas === 1 ? '' : 's'} a la plantilla que ya estaba abierta.`
+                                    : `Plantilla creada con ${m.resultado.filas_cortex} ruta${m.resultado.filas_cortex === 1 ? '' : 's'} de Cortex.`}
+                                </div>
+                                <button onClick={() => navigate('/panel/plantilla')}
+                                  className="flex items-center gap-1 font-semibold text-emerald-200 hover:text-emerald-100">
+                                  Abrir la plantilla <ArrowRight size={11} />
+                                </button>
+                              </div>
+                            ) : m.resultado && (
                               <div className="mt-1.5 rounded-lg bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-300">
                                 ✅ Creado{m.resultado.license_plate ? `: ${m.resultado.license_plate}` : m.resultado.name ? `: ${m.resultado.name}` : ''}
                               </div>
