@@ -233,12 +233,12 @@ export default function DSC() {
   const cargar = useCallback(async (n) => {
     setCargando(true); setError('')
     try {
-      const { data } = await cortexDsc({ dias: n })
+      const { data } = await cortexDsc({ dias: n, center })
       setD(data)
     } catch (e) {
       setError(e?.response?.data?.detail || t('dsc.error'))
     } finally { setCargando(false) }
-  }, [t])
+  }, [t, center])
 
   useEffect(() => { cargar(dias) }, [cargar, dias])
 

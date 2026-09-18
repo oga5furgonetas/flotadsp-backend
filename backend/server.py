@@ -41686,11 +41686,15 @@ _DSC_MINIMO = 80
 _DSC_MUESTRA_FIABLE = 250
 
 
-def _dsc_base(desde: str) -> list:
+async def _dsc_base(desde: str, center: str = "") -> list:
     """Etapas comunes: saca de cada paquete entregado DONDE se dejo."""
+    match = {"service_day": {"$gte": desde}, "state": "DELIVERED",
+             "driver_id": {"$nin": [None, ""]}}
+    cc = await _cortex_centro_match(center)
+    if cc:
+        match = {"$and": [match, cc]}
     return [
-        {"$match": {"service_day": {"$gte": desde}, "state": "DELIVERED",
-                    "driver_id": {"$nin": [None, ""]}}},
+        {"$match": match},
         # El ultimo DELIVERED del timeline: un paquete puede tener varios
         # eventos y el que cuenta es el que cerro la entrega.
         {"$addFields": {"_e": {"$last": {"$filter": {
@@ -42041,11 +42045,17 @@ async def guardar_nota_direccion(data: dict = Body(...), user: dict = Depends(re
 
 
 @api_router.get("/cortex/dsc")
-async def cortex_dsc(dias: int = 7, _=Depends(require_admin)):
-    """Dónde deja los paquetes cada conductor y quién se sale de la media."""
+async def cortex_dsc(dias: int = 7, center: str = "", _=Depends(require_admin)):
+    """Dónde deja los paquetes cada conductor y quién se sale de la media.
+
+    Antes no aceptaba `center` en absoluto: la pantalla mandaba el filtro y el
+    backend lo ignoraba entero, así que las tres naves veían siempre el MISMO
+    reparto (el de toda la empresa junta) — el mismo síntoma que
+    `direcciones-problema` ya resolvía al lado, con el mismo mapeo estación→
+    centro (`_cortex_centro_match`, extraído de `_cortex_scope`)."""
     dias = max(1, min(int(dias or 7), 30))
     desde = (datetime.now(timezone.utc) - timedelta(days=dias)).strftime("%Y-%m-%d")
-    base = _dsc_base(desde)
+    base = await _dsc_base(desde, center)
 
     # Motor es async: aggregate() devuelve un cursor que hay que recorrer con
     # await/to_list. Un list() a secas revienta con
@@ -42137,10 +42147,14 @@ async def cortex_dsc(dias: int = 7, _=Depends(require_admin)):
     # (libreta de portales). Medido en 14 dias: 767 retornos, y el 44 % de los
     # BUSINESS_CLOSED cae entre las 14 y las 16 h — el cierre comercial
     # espanol. Eso se arregla planificando, no rinendo a nadie.
+    _ret_match = {"service_day": {"$gte": desde},
+                  "state": {"$in": ["BACK_TO_ORIGIN", "ATTEMPTED", "CUSTOMER_UNAVAILABLE",
+                                    "ADDRESS_NOT_FOUND", "REJECTED"]}}
+    _ret_cc = await _cortex_centro_match(center)
+    if _ret_cc:
+        _ret_match = {"$and": [_ret_match, _ret_cc]}
     ret_base = [
-        {"$match": {"service_day": {"$gte": desde},
-                    "state": {"$in": ["BACK_TO_ORIGIN", "ATTEMPTED", "CUSTOMER_UNAVAILABLE",
-                                      "ADDRESS_NOT_FOUND", "REJECTED"]}}},
+        {"$match": _ret_match},
         {"$addFields": {"_r": {"$last": {"$filter": {
             "input": {"$ifNull": ["$timeline", []]}, "as": "t",
             "cond": {"$in": ["$$t.state", ["BACK_TO_ORIGIN", "ATTEMPTED"]]}}}}}},
@@ -46285,6 +46299,37 @@ def _cortex_day_query(day: str) -> dict:
     ]}
 
 
+async def _cortex_centro_match(center: str) -> Optional[dict]:
+    """La condición de CENTRO sola, sin fecha — separada de `_cortex_scope`
+    para que las consultas de RANGO (`$gte`, que `_cortex_day_query` no cubre:
+    es de igualdad exacta) puedan reusar el mismo mapeo estación→centro sin
+    duplicar la lógica de los huérfanos."""
+    if not center or center in ("Todos", "todos", ""):
+        return None
+    c = center.upper()
+    stations = [s async for s in db.cortex_stations.find(
+        {}, {"_id": 0, "service_area_id": 1, "center": 1})]
+    saids = [s["service_area_id"] for s in stations
+             if s.get("service_area_id") and s.get("center") == c]
+    mapped_ids = [s["service_area_id"] for s in stations
+                  if s.get("service_area_id") and s.get("center")]
+    # Un paquete es de este centro si su estación está mapeada a él, o si ya
+    # trae la etiqueta center (captura reciente que la leyó bien).
+    or_c = [{"center": c}]
+    if saids:
+        or_c.append({"service_area_id": {"$in": saids}})
+    # HUÉRFANOS: sin etiqueta de centro Y sin estación mapeada a ningún
+    # centro. Antes desaparecían al filtrar por centro (parecía que "no
+    # había nada"); ahora se ven en TODOS los centros hasta que se asigna
+    # su estación — datos invisibles es peor que datos sin repartir.
+    if mapped_ids:
+        or_c.append({"$and": [{"center": {"$in": [None, ""]}},
+                              {"service_area_id": {"$nin": mapped_ids}}]})
+    else:
+        or_c.append({"center": {"$in": [None, ""]}})
+    return {"$or": or_c}
+
+
 async def _cortex_scope(day: str, center: str) -> dict:
     """Query Mongo combinando día + centro. El centro se resuelve por el MAPEO
     estación→centro (serviceAreaId), que es el identificador duro y siempre
@@ -46293,29 +46338,9 @@ async def _cortex_scope(day: str, center: str) -> dict:
     dq = _cortex_day_query(day)
     if dq:
         conds.append(dq)
-    if center and center not in ("Todos", "todos", ""):
-        c = center.upper()
-        stations = [s async for s in db.cortex_stations.find(
-            {}, {"_id": 0, "service_area_id": 1, "center": 1})]
-        saids = [s["service_area_id"] for s in stations
-                 if s.get("service_area_id") and s.get("center") == c]
-        mapped_ids = [s["service_area_id"] for s in stations
-                      if s.get("service_area_id") and s.get("center")]
-        # Un paquete es de este centro si su estación está mapeada a él, o si ya
-        # trae la etiqueta center (captura reciente que la leyó bien).
-        or_c = [{"center": c}]
-        if saids:
-            or_c.append({"service_area_id": {"$in": saids}})
-        # HUÉRFANOS: sin etiqueta de centro Y sin estación mapeada a ningún
-        # centro. Antes desaparecían al filtrar por centro (parecía que "no
-        # había nada"); ahora se ven en TODOS los centros hasta que se asigna
-        # su estación — datos invisibles es peor que datos sin repartir.
-        if mapped_ids:
-            or_c.append({"$and": [{"center": {"$in": [None, ""]}},
-                                  {"service_area_id": {"$nin": mapped_ids}}]})
-        else:
-            or_c.append({"center": {"$in": [None, ""]}})
-        conds.append({"$or": or_c})
+    cc = await _cortex_centro_match(center)
+    if cc:
+        conds.append(cc)
     if not conds:
         return {}
     return conds[0] if len(conds) == 1 else {"$and": conds}
@@ -46656,13 +46681,18 @@ async def cortex_overview(day: str = "", center: str = "", _=Depends(require_adm
         await _cortex_scope(today, center),
         {"_id": 0, "state": 1, "driver_name": 1, "route_code": 1,
          "timeline.state": 1, "timeline.at": 1}).to_list(20000)
-    # Frescura de la captura (org completa, cualquier día): la señal de
-    # confianza del panel — "¿la extensión sigue viva?". Es `seen_at`, que lo
-    # escribe la ingesta, y NO `updated_at`, que es la hora del evento en
-    # Cortex (gotcha 29): por la tarde, con las rutas cerradas, `updated_at`
-    # deja de moverse aunque la captura funcione, y con la captura parada no
-    # hay forma de distinguirlo.
-    last_capture_at = await _cx_ultima_captura()
+    # Frescura de la captura DE ESTE CENTRO, no de la empresa entera: la señal
+    # de confianza del panel — "¿la extensión sigue viva EN ESTA NAVE?". Antes
+    # se medía sin filtrar centro, así que con OGA5 capturando en vivo, un
+    # dispatcher de DGA1/DGA2 veía "última captura: hace 2 min" aunque SU
+    # propia estación llevara semanas sin una sola captura — medido el
+    # 18-09-2026: DGA1 sin `cortex_packages` nuevos desde el 27-08, DGA2 desde
+    # el 11-08, y el indicador de frescura los tapaba a los dos con el latido
+    # de OGA5. Es `seen_at`, que lo escribe la ingesta, y NO `updated_at`, que
+    # es la hora del evento en Cortex (gotcha 29): por la tarde, con las rutas
+    # cerradas, `updated_at` deja de moverse aunque la captura funcione, y con
+    # la captura parada no hay forma de distinguirlo.
+    last_capture_at = await _cx_ultima_captura(await _cortex_centro_match(center))
     n = len(pkgs)
     missing = [p for p in pkgs if p.get("state") == "MISSING"]
     recovered_today, lost, missing_today, rec_times, attempts_pre = [], [], [], [], []
@@ -46778,7 +46808,7 @@ async def cortex_routes(day: str = "", center: str = "", _=Depends(require_admin
     # «sin entregar». Lo que sabemos es que hasta la ultima captura no habian
     # entregado; despues, no lo sabemos, y eso se dice aparte (`captura`).
     ahora = datetime.now(timezone.utc)
-    ultima_captura = await _cx_ultima_captura()
+    ultima_captura = await _cx_ultima_captura(await _cortex_centro_match(center))
     referencia = ahora
     uc = _cortex_parse_dt(ultima_captura) if ultima_captura else None
     if uc:
