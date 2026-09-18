@@ -50161,11 +50161,13 @@ funcionando sin tocar a nadie más.
 """
 
 
-async def _stripe_crear_cupon(importe_eur: float, horas: int) -> Optional[dict]:
+async def _stripe_crear_cupon(importe_eur: float, horas: int, un_solo_uso: bool = False) -> Optional[dict]:
     """Cupon Stripe de importe fijo con caducidad REAL (`redeem_by`): la
     valida Stripe al cobrar, no nosotros — así no hay que guardar ni comprobar
     caducidad en ningún sitio nuestro, y no hay forma de que quede viva de más
-    por un fallo nuestro."""
+    por un fallo nuestro.
+    `un_solo_uso=True` pone `max_redemptions=1`: para un cupón PERSONAL (uno
+    por candidato), no para el compartido de una prueba suelta."""
     if not _stripe_encendido():
         return None
     expira = datetime.now(timezone.utc) + timedelta(hours=horas)
@@ -50176,6 +50178,8 @@ async def _stripe_crear_cupon(importe_eur: float, horas: int) -> Optional[dict]:
         ("redeem_by", str(int(expira.timestamp()))),
         ("name", f"Bienvenida {importe_eur:.0f}€"),
     ]
+    if un_solo_uso:
+        datos.append(("max_redemptions", "1"))
     import httpx as _httpx
     try:
         async with _httpx.AsyncClient(timeout=25) as cli:
@@ -50373,12 +50377,9 @@ async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Dep
     if not enlace_tienda:
         raise HTTPException(
             400, "Abre antes la tienda pública (Negocio > Tienda) y crea su enlace con /tienda/enlace")
-
-    cupon = await _stripe_crear_cupon(10.0, 4)
-    if not cupon:
+    if not _stripe_encendido():
         raise HTTPException(503, "El cobro con tarjeta no está activo todavía (falta la clave de Stripe)")
 
-    url_tienda = f"{enlace_tienda}?cupon={cupon['id']}"
     url_suscripcion = f"{_PORTAL_BASE_FRONT}/empleo/prioridad"
 
     if modo == "prueba":
@@ -50390,8 +50391,19 @@ async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Dep
         destinatarios = await db.candidatos.find(
             {"email": {"$exists": True, "$ne": ""}}, {"_id": 0, "email": 1, "nombre": 1}).to_list(2000)
 
-    enviados, fallidos = 0, 0
+    # Un cupón PERSONAL por destinatario, de un solo uso (max_redemptions=1) y
+    # con su propio reloj de 4h desde que se genera — no uno compartido que
+    # cualquiera pudiera reenviar a otra persona antes de gastarlo.
+    enviados, fallidos, sin_cupon = 0, 0, 0
+    ultima_expira = None
     for d in destinatarios:
+        cupon = await _stripe_crear_cupon(10.0, 4, un_solo_uso=True)
+        if not cupon:
+            sin_cupon += 1
+            fallidos += 1
+            continue
+        ultima_expira = cupon["expira_en"]
+        url_tienda = f"{enlace_tienda}?cupon={cupon['id']}"
         html = _candidatos_campana_html(d.get("nombre") or "", url_tienda, url_suscripcion, cupon["expira_en"])
         ok = await _send_resend_email(d["email"], "Tu candidatura + un regalo y la opción de ser Prioritario", html,
                                       responder_a=os.environ.get("EMAIL_FROM_RESPUESTA", ""))
@@ -50402,14 +50414,14 @@ async def candidatos_campana_bienvenida(body: dict = Body(...), user: dict = Dep
 
     if modo == "real":
         await db.candidatos_campanas.insert_one({
-            "id": str(uuid.uuid4()), "tipo": "bienvenida_cv", "cupon": cupon["id"],
-            "expira_en": cupon["expira_en"], "enviados": enviados, "fallidos": fallidos,
-            "destinatarios": len(destinatarios),
+            "id": str(uuid.uuid4()), "tipo": "bienvenida_cv",
+            "enviados": enviados, "fallidos": fallidos, "sin_cupon": sin_cupon,
+            "destinatarios": len(destinatarios), "expira_en": ultima_expira,
             "enviado_en": datetime.now(timezone.utc).isoformat(),
             "enviado_por": user.get("name") or user.get("username") or "",
         })
     return {"ok": True, "modo": modo, "enviados": enviados, "fallidos": fallidos,
-            "destinatarios": len(destinatarios), "cupon": cupon["id"], "expira_en": cupon["expira_en"]}
+            "destinatarios": len(destinatarios), "expira_en": ultima_expira}
 
 
 # -------------------------------------------------------------------------

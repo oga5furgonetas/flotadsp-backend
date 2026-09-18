@@ -618,8 +618,9 @@ function CampanaCandidatos() {
         <h3 className="text-sm font-semibold">Campaña de bienvenida a candidatos</h3>
       </div>
       <p className="text-[12.5px] text-dark-400">
-        Manda un cupón de 10 € (caduca a las 4 horas) para la tienda pública y la
-        opción de suscribirse por 2,99 €/mes a avisos prioritarios de empleo.
+        Manda un cupón PERSONAL de 10 € (uno por persona, de un solo uso, caduca
+        a las 4 horas de recibirlo) para la tienda pública y la opción de
+        suscribirse por 2,99 €/mes a avisos prioritarios de empleo.
       </p>
       <div className="rounded-lg bg-amber-500/10 px-3 py-2 text-[12px] text-amber-300">
         Estos correos se dieron para una candidatura, no para publicidad. Antes
@@ -680,7 +681,7 @@ function CampanaCandidatos() {
       {err && <div className="rounded-lg bg-red-500/10 px-3 py-2 text-[12px] text-red-300">{err}</div>}
       {resultado && (
         <div className="rounded-lg bg-emerald-500/10 px-3 py-2 text-[12px] text-emerald-300">
-          Enviado ({resultado.modo}): {resultado.enviados} de {resultado.destinatarios} — cupón {resultado.cupon}, caduca {new Date(resultado.expira_en).toLocaleString('es-ES')}.
+          Enviado ({resultado.modo}): {resultado.enviados} de {resultado.destinatarios} — cada uno con su propio cupón, caducan sobre las {resultado.expira_en ? new Date(resultado.expira_en).toLocaleString('es-ES') : '—'}.
           {resultado.fallidos > 0 && ` ${resultado.fallidos} fallaron.`}
         </div>
       )}

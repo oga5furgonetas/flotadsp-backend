@@ -80,7 +80,10 @@ export default function EmpleoPrioridad() {
         </div>
 
         {ofertas === null ? (
-          <div className="mb-5 flex justify-center"><Loader2 size={18} className="animate-spin text-slate-300" /></div>
+          <div className="mb-5 flex flex-col items-center gap-2 text-slate-400">
+            <Loader2 size={18} className="animate-spin" />
+            <p className="text-xs">Buscando las ofertas abiertas en tu zona…</p>
+          </div>
         ) : ofertas.length > 0 && (
           <div className="mb-5">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -99,6 +102,7 @@ export default function EmpleoPrioridad() {
                 </div>
               ))}
             </div>
+            <p className="mt-2 text-xs text-slate-400">En breve subimos más ofertas de todos los sectores.</p>
           </div>
         )}
 

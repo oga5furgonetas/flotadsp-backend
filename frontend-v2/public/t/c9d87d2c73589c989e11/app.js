@@ -5,6 +5,19 @@
   var sel = {};                // id -> {talla, cant}
   var eur = function (n) { return n.toFixed(2).replace(".", ",") + " €"; };
 
+  /* CUPON DE CAMPAÑA (candidatos): viaje por la URL (?cupon=...), lo valida
+     STRIPE al pagar (redeem_by), no esta pagina — si ya caducó o esta mal
+     escrito, el backend reintenta la compra sin el en vez de bloquearla
+     (ver tienda_publica_comprar). El "10 €" es el importe fijo que genera
+     hoy la campaña (candidatos_campana_bienvenida): si algun dia cambia el
+     importe alli, cambialo tambien aqui. */
+  var CUPON = new URLSearchParams(location.search).get("cupon") || "";
+  if (CUPON) {
+    var banner = document.querySelector("[data-cupon]");
+    banner.hidden = false;
+    banner.innerHTML = "🎁 Tienes un <b>cupón de 10 € de bienvenida</b> aplicado — se descuenta al pagar, mientras siga vigente.";
+  }
+
   /* EL PRECIO DE UNA TALLA LO DECIDE EL SERVIDOR. Que talla es grande y
      cuanto suma vienen en la respuesta: aqui solo se aplica. Con una lista
      propia, el dia que cambie se veria un precio y se cobraria otro. */
@@ -110,9 +123,11 @@
     var b = f.querySelector("[data-comprar]"), av = f.querySelector("[data-aviso]");
     b.disabled = true; b.textContent = "Abriendo el pago…";
     av.className = "aviso"; av.textContent = "";
+    var cuerpo = { prenda: d.id, talla: s.talla, cantidad: s.cant };
+    if (CUPON) cuerpo.cupon = CUPON;
     fetch(API + "/tienda/publico/" + TOKEN + "/comprar", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prenda: d.id, talla: s.talla, cantidad: s.cant })
+      body: JSON.stringify(cuerpo)
     }).then(function (r) {
       return r.json().then(function (j) { return { ok: r.ok, j: j }; });
     }).then(function (x) {
