@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Sparkles, Send, Loader2, X, Check, Car, UserPlus, ClipboardList, ArrowRight, FileText, Paperclip, UserX, Wrench } from 'lucide-react'
+import { Sparkles, Send, Loader2, X, Check, Car, UserPlus, ClipboardList, ArrowRight, FileText, Paperclip, UserX, Wrench, AlertTriangle } from 'lucide-react'
 import { getAiHistorial, enviarMensajeIA, ejecutarAccionIA, subirFichasTecnicasIA, confirmarFichasTecnicasIA } from './api'
 
 /* FLOTADSP AI — burbuja de ayuda flotante, abajo a la derecha, como los
@@ -20,12 +20,15 @@ const ETIQUETA_ACCION = {
   asignar_conductor: { icon: UserPlus, titulo: 'Asignar conductor a furgoneta' },
   desasignar_conductor: { icon: UserX, titulo: 'Quitar conductor de furgoneta' },
   cambiar_estado_vehiculo: { icon: Wrench, titulo: 'Cambiar estado de furgoneta' },
+  crear_incidencia: { icon: AlertTriangle, titulo: 'Abrir parte de incidencia' },
 }
 const CAMPO_LABEL = {
   license_plate: 'Matrícula', brand: 'Marca', model: 'Modelo', color: 'Color', vin: 'VIN',
   name: 'Nombre', phone: 'Teléfono', email: 'Correo', dni: 'DNI',
   matricula: 'Matrícula', conductor_nombre: 'Conductor', estado: 'Nuevo estado',
+  descripcion: 'Qué le pasa', severidad: 'Gravedad',
 }
+const SEVERIDAD_TXT = { leve: 'Leve', moderado: 'Moderado', grave: 'Grave' }
 const ESTADO_VEHICULO_TXT = { active: 'Activa', taller: 'En taller', baja: 'De baja' }
 const TONO_CLS = {
   ok: 'bg-emerald-500/10 text-emerald-300',
@@ -40,6 +43,7 @@ function mensajeResultado(r) {
     case 'asignar_conductor': return `${r.driver_name} lleva ahora la ${r.vehicle_plate}.`
     case 'desasignar_conductor': return `La ${r.vehicle_plate} se ha quedado sin conductor asignado.`
     case 'cambiar_estado_vehiculo': return `La ${r.vehicle_plate} ahora está: ${ESTADO_VEHICULO_TXT[r.estado] || r.estado}.`
+    case 'crear_incidencia': return `Parte abierto en la ${r.vehicle_plate} (${SEVERIDAD_TXT[r.severidad] || r.severidad}).`
     default: return `Creado${r.license_plate ? `: ${r.license_plate}` : r.name ? `: ${r.name}` : ''}`
   }
 }
@@ -227,7 +231,7 @@ export default function AsistenteBurbuja({ center, centers }) {
               <div className="flex-1 overflow-y-auto p-2.5">
                 {msgs.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center gap-1 px-4 text-center">
-                    <p className="text-[12.5px] text-dark-400">Pregúntame cómo se hace algo, cómo va tu WHC, "dame las furgonetas de Bansacar", pídeme que cree un vehículo o un conductor, que monte la plantilla de hoy con Cortex, o sube varias fichas técnicas con el clip y las asigno a su furgoneta.</p>
+                    <p className="text-[12.5px] text-dark-400">Pregúntame cómo se hace algo, cómo va tu WHC, "dame las furgonetas de Bansacar" o "qué furgoneta lleva Juan". Pídeme que cree un vehículo o conductor, que asigne o quite un conductor de una furgoneta, que la mande a taller, que abra un parte de avería, que monte la plantilla de hoy con Cortex, o sube fichas técnicas con el clip.</p>
                   </div>
                 ) : (
                   <div className="space-y-2">
@@ -254,7 +258,7 @@ export default function AsistenteBurbuja({ center, centers }) {
                                   {m.accion_propuesta.tipo === 'generar_plantilla'
                                     ? <div>Ruta y conductor de cada uno, tal como los tiene Cortex capturados hoy.</div>
                                     : Object.entries(m.accion_propuesta.campos).filter(([, v]) => v).map(([k, v]) => (
-                                        <div key={k}>{CAMPO_LABEL[k] || k}: <span className="text-dark-200">{k === 'estado' ? (ESTADO_VEHICULO_TXT[v] || v) : v}</span></div>
+                                        <div key={k}>{CAMPO_LABEL[k] || k}: <span className="text-dark-200">{k === 'estado' ? (ESTADO_VEHICULO_TXT[v] || v) : k === 'severidad' ? (SEVERIDAD_TXT[v] || v) : v}</span></div>
                                       ))}
                                 </div>
                                 <div className="flex gap-1.5">

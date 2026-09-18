@@ -50356,7 +50356,8 @@ async def tienda_ver_foto(prenda_id: str, user: dict = Depends(require_any_auth)
 
 _IA_ASISTENTE_COL = "ai_chat_msgs"
 _IA_ASISTENTE_ACCIONES = ("crear_vehiculo", "crear_conductor", "generar_plantilla",
-                          "asignar_conductor", "desasignar_conductor", "cambiar_estado_vehiculo")
+                          "asignar_conductor", "desasignar_conductor", "cambiar_estado_vehiculo",
+                          "crear_incidencia")
 
 _IA_ASISTENTE_MANUAL = """
 === MANUAL BREVE DE FLOTADSP (para explicar "cómo se hace X") ===
@@ -50375,7 +50376,9 @@ Revisión rápida: aquí se valida lo que ve la IA — es lo ÚNICO que la hace
 mejorar. Botones: acierto, no existe, "sí pero no ahí" (el daño es real pero
 el recuadro está mal puesto), "no se ve" (la foto no permite juzgarlo).
 Incidencias: partes de golpes/averías con foto; desde una se abre una orden
-de taller sin volver a escribir nada.
+de taller sin volver a escribir nada. Puedes abrir el parte tú por el chat
+—"la 1234ABC tiene un golpe en la puerta trasera"— sin foto, que se añade
+después desde la ficha; queda igual de registrado en el histórico.
 Talleres / Órdenes de taller: agenda de talleres y seguimiento sin llamar:
 el parte sale con daños y taller ya puestos, se manda por WhatsApp con un
 enlace público (sin registro), y la app pregunta sola cada pocos días.
@@ -50478,8 +50481,30 @@ async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict
         if matricula:
             q["license_plate"] = {"$regex": re.escape(matricula.replace(" ", "")), "$options": "i"}
         vehiculos = await db.vehicles.find(
-            q, {"_id": 0, "id": 1, "license_plate": 1, "provider": 1, "status": 1, "brand": 1, "model": 1}
-        ).to_list(80)
+            q, {"_id": 0, "id": 1, "license_plate": 1, "provider": 1, "status": 1, "brand": 1, "model": 1,
+                "current_driver_id": 1}
+        ).to_list(200)
+
+        # "qué furgoneta lleva Fulano": se filtra DESPUES de traer la flota,
+        # porque el cruce es por el conductor asignado, no por un campo propio
+        # del vehiculo. Aqui SI puede haber varias personas que casen (a
+        # diferencia de _ai_resolver_conductor, que escribe): es solo lectura,
+        # asi que se enseñan todas y que decida quien lee.
+        cond_nombre = _texto_cuerpo(filtros_in.get("conductor_nombre"), 60)
+        if cond_nombre:
+            palabras = _norm_name_words(cond_nombre)
+            ids_cond = {c["id"] for c in await db.drivers.find(
+                {"$and": [{"active": {"$ne": False}}, fc]} if fc else {"active": {"$ne": False}},
+                {"_id": 0, "id": 1, "name": 1}).to_list(2000)
+                if palabras and palabras <= _norm_name_words(c.get("name"))}
+            vehiculos = [v for v in vehiculos if v.get("current_driver_id") in ids_cond]
+
+        nombres_cond = {}
+        ids_asignados = {v["current_driver_id"] for v in vehiculos if v.get("current_driver_id")}
+        if ids_asignados:
+            async for c in db.drivers.find({"id": {"$in": list(ids_asignados)}}, {"_id": 0, "id": 1, "name": 1}):
+                nombres_cond[c["id"]] = c.get("name")
+        vehiculos = vehiculos[:80]
 
         doc_tipo = _texto_cuerpo(consulta.get("doc_tipo"), 40).lower()
         documentos, lineas = None, []
@@ -50508,8 +50533,10 @@ async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict
         else:
             lineas.append(f"{len(vehiculos)} furgonetas encajan el filtro.")
             for v in vehiculos[:40]:
+                cond = nombres_cond.get(v.get("current_driver_id"))
                 lineas.append(f"- {v.get('license_plate')}: {v.get('provider') or 'sin proveedor'}, "
-                              f"{v.get('status')}, {(v.get('brand') or '')} {(v.get('model') or '')}".strip())
+                              f"{v.get('status')}, {(v.get('brand') or '')} {(v.get('model') or '')}".strip()
+                              + (f", conductor: {cond}" if cond else ", sin conductor asignado"))
         return {"resumen_texto": "\n".join(lineas), "documentos": documentos, "n": len(vehiculos)}
 
     if tipo == "conductores":
@@ -50599,6 +50626,10 @@ REGLAS QUE NO PUEDES SALTARTE:
     · cambiar_estado_vehiculo — "la 1234ABC ha entrado en taller" o "ya está
       activa". Campos: "matricula" y "estado" (exactamente "taller", "active"
       o "baja").
+    · crear_incidencia — abrir un parte de avería/golpe sin foto ("la
+      1234ABC tiene un golpe en la puerta"). Campos: "matricula",
+      "descripcion" (con el detalle que haya dado la persona) y "severidad"
+      ("leve" | "moderado" | "grave" — si no la dicen, "leve").
   Si falta algo imprescindible, pregúntalo en tu respuesta y NO propongas la
   acción todavía. Si el servidor no encuentra o encuentra más de una
   furgoneta/conductor con lo que le has pasado, te lo dirá él — tú solo pasa
@@ -50614,13 +50645,16 @@ REGLAS QUE NO PUEDES SALTARTE:
   centro ahora mismo — nunca inventes un número que no esté ahí.
 - Si te preguntan algo sobre FURGONETAS o CONDUCTORES que NO esté en los
   datos en vivo de abajo — "furgonetas de Bansacar", "las de Kinto en
-  taller", "dame las fichas técnicas de...", "conductores activos de..." —
-  NO te lo inventes y NO digas que no puedes: pide una consulta. Responde
+  taller", "dame las fichas técnicas de...", "conductores activos de...",
+  "qué furgoneta lleva Fulano", "quién lleva la 1234ABC" — NO te lo
+  inventes y NO digas que no puedes: pide una consulta. Responde
   ÚNICAMENTE con:
   {{"consulta_pedida": {{"tipo": "vehiculos" | "conductores",
-                        "filtros": {{"provider": "...", "status": "...", "brand": "...", "model": "...", "matricula": "..."}},
+                        "filtros": {{"provider": "...", "status": "...", "brand": "...", "model": "...", "matricula": "...", "conductor_nombre": "..."}},
                         "doc_tipo": "ficha_tecnica" | "seguro" | "itv" | "contrato" | null}}}}
-  Todos los filtros son opcionales, pon solo los que pidan. "doc_tipo" es
+  Todos los filtros son opcionales, pon solo los que pidan. "conductor_nombre"
+  (solo vehiculos) es para "qué furgoneta lleva X" — el resultado ya te dice
+  qué conductor lleva cada furgoneta aunque no uses este filtro. "doc_tipo" es
   SOLO para vehiculos, y solo si piden un documento en concreto (si piden
   "las fichas técnicas de..." pon doc_tipo: "ficha_tecnica"). Para
   conductores, "filtros" admite "active" (true/false) y "nombre". Después de
@@ -50655,13 +50689,15 @@ que necesites pedir una consulta (arriba), en cuyo caso respondes SOLO con
   "tarjeta": null o {{"titulo": "...", "filas": [{{"etiqueta": "...", "valor": "...", "tono": "..."}}]}},
   "accion_propuesta": null o {{
     "tipo": "crear_vehiculo" | "crear_conductor" | "generar_plantilla" |
-            "asignar_conductor" | "desasignar_conductor" | "cambiar_estado_vehiculo",
+            "asignar_conductor" | "desasignar_conductor" | "cambiar_estado_vehiculo" |
+            "crear_incidencia",
     "campos": {{"license_plate": "...", "brand": "...", "model": "...", "color": "...", "vin": "..."}}
     // para conductor: {{"name": "...", "phone": "...", "email": "...", "dni": "..."}}
     // para generar_plantilla: {{}} (siempre vacío)
     // para asignar_conductor: {{"matricula": "...", "conductor_nombre": "..."}}
     // para desasignar_conductor: {{"matricula": "..."}}
     // para cambiar_estado_vehiculo: {{"matricula": "...", "estado": "taller" | "active" | "baja"}}
+    // para crear_incidencia: {{"matricula": "...", "descripcion": "...", "severidad": "leve" | "moderado" | "grave"}}
   }}
 }}"""
 
@@ -50919,6 +50955,19 @@ async def ai_asistente_ejecutar(data: _IAAsistenteAccion, user: dict = Depends(r
         vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
         await update_vehicle(vehiculo["id"], {"status": estado}, user)
         return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"], "estado": estado}
+
+    if data.tipo == "crear_incidencia":
+        descripcion = _texto_cuerpo(campos.get("descripcion"), 2000)
+        if not descripcion:
+            raise HTTPException(400, "Falta describir qué le pasa a la furgoneta")
+        severidad = _texto_cuerpo(campos.get("severidad"), 20).lower()
+        if severidad not in ("leve", "moderado", "grave"):
+            severidad = "leve"
+        vehiculo = await _ai_resolver_vehiculo(user, center, campos.get("matricula") or "")
+        incidencia = IncidentCreate(vehicle_id=vehiculo["id"], description=descripcion, severity=severidad)
+        creada = await create_incident(incidencia, user)
+        return {"ok": True, "tipo": data.tipo, "vehicle_plate": vehiculo["license_plate"],
+                "severidad": severidad, "incident_id": (creada or {}).get("id")}
 
     try:
         conductor = DriverCreate(**campos)
