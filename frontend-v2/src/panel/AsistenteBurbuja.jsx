@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Sparkles, Send, Loader2, X, Check, Car, UserPlus, ClipboardList, ArrowRight, FileText, Paperclip, UserX, Wrench, AlertTriangle, Pencil, UserCog, Hammer } from 'lucide-react'
 import { getAiHistorial, enviarMensajeIA, ejecutarAccionIA, subirFichasTecnicasIA, confirmarFichasTecnicasIA } from './api'
+import { getAdmin } from './auth'
 
 /* FLOTADSP AI — burbuja de ayuda flotante, abajo a la derecha, como los
    widgets de soporte de cualquier web grande (Intercom, Drift...): se ve
@@ -140,6 +141,12 @@ function Tarjeta({ t }) {
 
 export default function AsistenteBurbuja({ center, centers }) {
   const navigate = useNavigate()
+  // Quien habla se ve de un vistazo: el logo cuando contesta la IA y la foto
+  // de perfil cuando escribe la persona. Sin foto, sus iniciales.
+  const yo = getAdmin()
+  const miFoto = yo?.photo_url || ''
+  const misIniciales = String(yo?.name || yo?.username || '?').trim()
+    .split(/\s+/).slice(0, 2).map((x) => x[0] || '').join('').toUpperCase() || '?' 
   const [abierto, setAbierto] = useState(false)
   const [msgs, setMsgs] = useState([])
   const [cargado, setCargado] = useState(false)
@@ -280,7 +287,11 @@ export default function AsistenteBurbuja({ center, centers }) {
                       const mia = m.rol === 'usuario'
                       const acc = m.accion_propuesta ? ETIQUETA_ACCION[m.accion_propuesta.tipo] : null
                       return (
-                        <div key={i} className={`flex ${mia ? 'justify-end' : 'justify-start'}`}>
+                        <div key={i} className={`flex items-end gap-1.5 ${mia ? 'justify-end' : 'justify-start'}`}>
+                          {!mia && (
+                            <img src="/logo-fd-sinlema.png" alt="FlotaDSP AI"
+                              className="h-6 w-6 shrink-0 rounded-full bg-dark-800 object-contain p-0.5" />
+                          )}
                           <div className={`max-w-[88%] rounded-xl px-3 py-2 text-[12.5px] ${mia ? 'bg-brand-500/20 text-brand-100' : 'bg-dark-800 text-dark-100'}`}>
                             <div className="whitespace-pre-wrap break-words">{m.texto}</div>
                             {m.tarjeta && <Tarjeta t={m.tarjeta} />}
@@ -334,6 +345,10 @@ export default function AsistenteBurbuja({ center, centers }) {
                             {m.error_accion && <div className="mt-1.5 rounded-lg bg-red-500/10 px-2 py-1 text-[11px] text-red-300">{m.error_accion}</div>}
                             {m.cancelada && <div className="mt-1 text-[10.5px] text-dark-500">Descartado.</div>}
                           </div>
+                          {mia && (miFoto
+                            ? <img src={miFoto} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
+                            : <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-500/25 text-[9px] font-semibold text-brand-200">{misIniciales}</span>
+                          )}
                         </div>
                       )
                     })}

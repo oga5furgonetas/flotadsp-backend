@@ -524,6 +524,13 @@ export const putDailyAssignment = (body) => api.put('/assignments/daily', body) 
 
 /* ── Negocio (super-admin) ── */
 export const getAdminOverview = () => api.get('/admin/overview')
+/* Quien esta conectado de tu empresa y los mensajes privados 1 a 1. El
+   prefijo es `/mensajes` y no `/chat` a proposito: `GET /chat/{center}` es
+   un comodin y se comeria cualquier ruta que colgara de el. */
+export const getMensajesGente = () => api.get('/mensajes/gente')
+export const getMensajesCon = (id, since) => api.get(`/mensajes/con/${id}`, { params: { since } })
+export const postMensaje = (id, texto) => api.post(`/mensajes/con/${id}`, { texto })
+
 export const getAnalitica = (dias, seg) => api.get('/admin/analitica', { params: { dias, seg } })
 export const getAdminOrgs = () => api.get('/admin/orgs')
 export const updateOrg = (body) => api.post('/admin/org', body) // {id, status?, plan?, extend_trial_days?, add_center?, max_centers?, modulos?}

@@ -6853,6 +6853,10 @@ async def get_my_assigned_vehicle(user: dict = Depends(get_current_user)):
 
 @auth_router.get("/me")
 async def get_me(user: dict = Depends(get_current_user)):
+    # Quien esta delante del panel AHORA sale de aqui: esta llamada la repite
+    # el panel cada 2 min y al volver a la pestaña, asi que no hace falta que
+    # nadie pulse «estoy conectado» -que seria una etiqueta, no un hecho-.
+    await _presencia_marcar(user)
     # Incluir theme, email y foto si existen en la BD (solo admins)
     theme = None
     email = None
@@ -14528,6 +14532,159 @@ async def push_center_event(center, title, body, url, exclude_id=None):
         logger.debug(f"push_center_event: {e}")
 
 
+# ─── QUIEN ESTA CONECTADO Y MENSAJES PRIVADOS ──────────────────────────────
+# El chat de la nave es una sala abierta; esto es lo otro que hace falta para
+# que la oficina no tenga que llamar por telefono: ver quien esta delante de la
+# pantalla ahora mismo y poder escribirle SOLO a esa persona.
+#
+# La presencia no se inventa con un «conectado/desconectado» que alguien pulsa:
+# se anota la ultima vez que su panel hablo con el servidor (`_presencia_marcar`
+# se llama desde /auth/me, que el panel pide cada 2 min, y desde el propio
+# chat). Por debajo de _PRESENCIA_MIN se considera que esta; por encima se dice
+# «hace N min», que es informacion util y no una etiqueta falsa.
+#
+# Los privados viven en la BD de la empresa (nunca en la global): son datos
+# suyos. La clave de la conversacion es el par de ids ORDENADO, asi que da
+# igual quien escriba primero.
+_PRESENCIA_MIN = 3          # por debajo de esto, se considera que esta delante
+_PRESENCIA_COL = "admin_presencia"
+
+
+async def _presencia_marcar(user: dict) -> None:
+    """Deja constancia de que este usuario esta usando el panel AHORA."""
+    uid = user.get("sub")
+    if not uid or user.get("role") != "admin":
+        return
+    try:
+        await global_db[_PRESENCIA_COL].update_one(
+            {"_id": uid},
+            {"$set": {"en": datetime.now(timezone.utc).isoformat(),
+                      "org_id": user.get("org_id") or ""}},
+            upsert=True)
+    except Exception as e:                                       # noqa: BLE001
+        logger.debug(f"presencia: {e}")
+
+
+def _hace_min(iso: str) -> Optional[int]:
+    if not iso:
+        return None
+    try:
+        d = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return max(0, int((datetime.now(timezone.utc) - d).total_seconds() // 60))
+
+
+def _conv_id(a: str, b: str) -> str:
+    return ":".join(sorted([a or "", b or ""]))
+
+
+def _mensajes_org(user: dict) -> str:
+    """La empresa de quien escribe, o 403. NUNCA «todas»: el chat privado cruza
+    a personas de `global_db.admin_users`, que es UNA sola coleccion para todas
+    las empresas. Con un token sin `org_id` la version anterior caia en `{}` —
+    o sea en TODOS los usuarios de TODAS las empresas— y dejaba listar y
+    escribir a gente de otro cliente, en silencio y con HTTP 200 (gotcha 26:
+    nunca fiarse de un valor por defecto). Hoy los 14 usuarios llevan
+    `org_id: "owner"`, asi que no cambia nada para ellos."""
+    org = user.get("org_id")
+    if not org:
+        raise HTTPException(403, "Tu sesión no tiene empresa: cierra sesión y vuelve a entrar")
+    return org
+
+
+@api_router.get("/mensajes/gente")
+async def mensajes_gente(user: dict = Depends(require_admin)):
+    """La gente de ESTA empresa, con su foto y si esta conectada ahora."""
+    await _presencia_marcar(user)
+    # Las cuentas desactivadas no pueden entrar, asi que no tiene sentido
+    # ofrecerlas como con quien hablar.
+    q = {"org_id": _mensajes_org(user), "disabled": {"$ne": True}}
+    gente = await global_db.admin_users.find(
+        q, {"_id": 0, "id": 1, "name": 1, "username": 1, "photo_url": 1,
+            "allowed_centers": 1, "role": 1}).to_list(200)
+    ids = [g["id"] for g in gente if g.get("id")]
+    pres = {p["_id"]: p.get("en") for p in await global_db[_PRESENCIA_COL].find(
+        {"_id": {"$in": ids}}, {"_id": 1, "en": 1}).to_list(len(ids) or 1)}
+    # Los no leidos de cada conversacion, en UNA consulta y no una por persona.
+    sin_leer = {}
+    for r in await db.chat_dm.aggregate([
+            {"$match": {"para": user.get("sub"), "leido_en": None}},
+            {"$group": {"_id": "$de", "n": {"$sum": 1}}}]).to_list(200):
+        sin_leer[r["_id"]] = r["n"]
+    salida = []
+    for g in gente:
+        if g.get("id") == user.get("sub"):
+            continue
+        m = _hace_min(pres.get(g.get("id")) or "")
+        salida.append({
+            "id": g.get("id"), "nombre": g.get("name") or g.get("username") or "—",
+            "foto": g.get("photo_url") or "", "centros": g.get("allowed_centers") or [],
+            "en_linea": m is not None and m < _PRESENCIA_MIN,
+            "hace_min": m, "sin_leer": sin_leer.get(g.get("id"), 0),
+        })
+    salida.sort(key=lambda x: (not x["en_linea"], -x["sin_leer"],
+                               (x["nombre"] or "").lower()))
+    return {"gente": salida, "minutos_en_linea": _PRESENCIA_MIN}
+
+
+@api_router.get("/mensajes/con/{otro_id}")
+async def mensajes_con(otro_id: str, since: Optional[str] = None,
+                       limit: int = 100, user: dict = Depends(require_admin)):
+    """La conversacion privada con esa persona. Al abrirla se marca leida."""
+    await _presencia_marcar(user)
+    yo = user.get("sub")
+    otro = await global_db.admin_users.find_one(
+        {"id": otro_id, "org_id": _mensajes_org(user)},
+        {"_id": 0, "id": 1, "name": 1, "username": 1, "photo_url": 1})
+    if not otro:
+        raise HTTPException(404, "Esa persona no está en tu empresa")
+    q = {"conv": _conv_id(yo, otro_id)}
+    if since:
+        q["creado_en"] = {"$gt": since}
+    limit = max(1, min(limit, 200))
+    msgs = await db.chat_dm.find(q, {"_id": 0}).sort("creado_en", -1).to_list(limit)
+    msgs.reverse()
+    await db.chat_dm.update_many(
+        {"conv": q["conv"], "para": yo, "leido_en": None},
+        {"$set": {"leido_en": datetime.now(timezone.utc).isoformat()}})
+    return {"mensajes": msgs,
+            "con": {"id": otro.get("id"), "nombre": otro.get("name") or otro.get("username") or "—",
+                    "foto": otro.get("photo_url") or ""}}
+
+
+@api_router.post("/mensajes/con/{otro_id}")
+async def mensajes_enviar(otro_id: str, data: dict = Body(...),
+                          user: dict = Depends(require_admin)):
+    texto = _texto_cuerpo(data.get("texto"), 2000)
+    if not texto:
+        raise HTTPException(400, "Escribe algo primero")
+    yo = user.get("sub")
+    if otro_id == yo:
+        raise HTTPException(400, "No puedes escribirte a ti mismo")
+    otro = await global_db.admin_users.find_one(
+        {"id": otro_id, "org_id": _mensajes_org(user), "disabled": {"$ne": True}},
+        {"_id": 0, "id": 1, "name": 1})
+    if not otro:
+        raise HTTPException(404, "Esa persona no está en tu empresa")
+    doc = {"id": str(uuid.uuid4()), "conv": _conv_id(yo, otro_id),
+           "de": yo, "de_nombre": user.get("name") or user.get("username") or "—",
+           "para": otro_id, "texto": texto,
+           "creado_en": datetime.now(timezone.utc).isoformat(), "leido_en": None}
+    await db.chat_dm.insert_one(dict(doc))
+    # Al movil de esa persona y SOLO de esa persona: un privado que avisara al
+    # centro entero seria justo lo contrario de lo que se pide aqui.
+    if _push_enabled:
+        try:
+            asyncio.create_task(send_web_push_to_users(
+                [otro_id], f"💬 {doc['de_nombre']}", texto[:120], "/panel/chat"))
+        except Exception as e:                                   # noqa: BLE001
+            logger.debug(f"push privado: {e}")
+    return {"ok": True, "mensaje": doc}
+
+
 @api_router.get("/chat/{center}")
 async def chat_get(center: str, since: Optional[str] = None,
                    limit: int = 100, user: dict = Depends(require_admin)):
@@ -14541,6 +14698,16 @@ async def chat_get(center: str, since: Optional[str] = None,
     limit = max(1, min(limit, 200))
     msgs = await db.chat_messages.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
     msgs.reverse()  # cronológico ascendente para el cliente
+    # La foto la pone el SERVIDOR con el id del autor: el cliente no tiene por
+    # que saber de donde sale la foto de otra persona, y asi cambiarla se nota
+    # en los mensajes viejos tambien.
+    await _presencia_marcar(user)
+    ids = {m.get("author_id") for m in msgs if m.get("author_id")}
+    if ids:
+        fotos = {a["id"]: a.get("photo_url") or "" for a in await global_db.admin_users.find(
+            {"id": {"$in": list(ids)}}, {"_id": 0, "id": 1, "photo_url": 1}).to_list(len(ids))}
+        for m in msgs:
+            m["author_photo"] = fotos.get(m.get("author_id"), "")
     return {"messages": msgs}
 
 
@@ -51263,10 +51430,27 @@ async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict
         matricula = _texto_cuerpo(filtros_in.get("matricula"), 20)
         if matricula:
             q["license_plate"] = {"$regex": re.escape(matricula.replace(" ", "")), "$options": "i"}
+        # LAS FECHAS VIAJAN SIEMPRE. Sin `itv_date` aqui, a «que furgonetas
+        # tienen la ITV a punto de caducar» el modelo contestaba con lo unico
+        # que tenia -la lista entera y su marca-: el 19-09-2026 respondio
+        # «74 encontradas», que son TODAS las de OGA5, cuando antes de fin de
+        # año solo vence una. Inventar con cara de dato es peor que no saber.
+        _caduca = _texto_cuerpo(filtros_in.get("vence"), 12).lower()
+        _campo_fecha = {"itv": "itv_date", "seguro": "insurance_expiry",
+                        "renting": "renting_end_date"}.get(_caduca)
+        _antes = _texto_cuerpo(filtros_in.get("antes_de"), 10)
+        if _campo_fecha:
+            q[_campo_fecha] = {"$nin": [None, ""]}
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", _antes):
+                q[_campo_fecha] = {"$gt": "", "$lte": _antes}
         vehiculos = await db.vehicles.find(
             q, {"_id": 0, "id": 1, "license_plate": 1, "provider": 1, "status": 1, "brand": 1, "model": 1,
-                "current_driver_id": 1}
+                "current_driver_id": 1, "itv_date": 1, "insurance_expiry": 1,
+                "renting_end_date": 1, "mileage": 1}
         ).to_list(200)
+        if _campo_fecha:
+            # Lo que antes vence, primero: es el orden en que se mira.
+            vehiculos.sort(key=lambda v: (v.get(_campo_fecha) or "9999"))
 
         # "qué furgoneta lleva Fulano": se filtra DESPUES de traer la flota,
         # porque el cruce es por el conductor asignado, no por un campo propio
@@ -51315,11 +51499,25 @@ async def _ai_ejecutar_consulta(user: dict, center: str, consulta: dict) -> dict
                 lineas.append("SIN ese documento: " + ", ".join(sin_doc[:40]))
         else:
             lineas.append(f"{len(vehiculos)} furgonetas encajan el filtro.")
+            # Dia de ESPAÑA, no de UTC: de 0 a 2 h el «hoy» de UTC es todavia
+            # ayer aqui, y una ITV que venció ayer saldria sin marcar PASADA.
+            hoy_txt = _dia_negocio()
+            if _campo_fecha:
+                _pas = sum(1 for v in vehiculos if (v.get(_campo_fecha) or "") < hoy_txt)
+                lineas.append(f"Hoy es {hoy_txt}. De estas, {_pas} ya tienen la fecha PASADA.")
+                lineas.append("Las que no tienen fecha guardada NO estan en esta lista: "
+                              f"{await db.vehicles.count_documents({**q, _campo_fecha: {'$in': [None, '']}})} "
+                              "furgonetas del centro no la tienen puesta.")
             for v in vehiculos[:40]:
                 cond = nombres_cond.get(v.get("current_driver_id"))
+                fechas = ", ".join(
+                    f"{et}: {v.get(cp)}" + (" (PASADA)" if (v.get(cp) or "") < hoy_txt else "")
+                    for cp, et in (("itv_date", "ITV"), ("insurance_expiry", "seguro"),
+                                   ("renting_end_date", "renting")) if v.get(cp))
                 lineas.append(f"- {v.get('license_plate')}: {v.get('provider') or 'sin proveedor'}, "
                               f"{v.get('status')}, {(v.get('brand') or '')} {(v.get('model') or '')}".strip()
-                              + (f", conductor: {cond}" if cond else ", sin conductor asignado"))
+                              + (f", conductor: {cond}" if cond else ", sin conductor asignado")
+                              + (f" | {fechas}" if fechas else " | sin fechas guardadas"))
         return {"resumen_texto": "\n".join(lineas), "documentos": documentos, "n": len(vehiculos)}
 
     if tipo == "conductores":
@@ -51616,13 +51814,22 @@ REGLAS QUE NO PUEDES SALTARTE:
   dicho "1 conductor va a pasarse"), PIDES la consulta igualmente — te trae
   la lista con nombre de cada uno. Responde ÚNICAMENTE con:
   {{"consulta_pedida": {{"tipo": "vehiculos" | "conductores" | "whc" | "dnr" | "inspecciones" | "rendimiento",
-                        "filtros": {{"provider": "...", "status": "...", "brand": "...", "model": "...", "matricula": "...", "conductor_nombre": "...", "nombre": "...", "active": true}},
+                        "filtros": {{"provider": "...", "status": "...", "brand": "...", "model": "...", "matricula": "...", "conductor_nombre": "...", "nombre": "...", "active": true, "vence": "itv" | "seguro" | "renting", "antes_de": "AAAA-MM-DD"}},
                         "doc_tipo": "ficha_tecnica" | "seguro" | "itv" | "contrato" | null}}}}
   Todos los filtros son opcionales, pon solo los que pidan.
     · vehiculos: "provider", "status", "brand", "model", "matricula",
       "conductor_nombre" (para "qué furgoneta lleva X" — el resultado ya
       dice qué conductor lleva cada una aunque no uses este filtro) y
       "doc_tipo" (solo si piden un documento en concreto).
+      FECHAS: el resultado trae SIEMPRE la ITV, el seguro y el fin de
+      renting de cada furgoneta, y marca «(PASADA)» la que ya venció. Para
+      "¿qué ITV caducan?" usa "vence": "itv"; si dan un plazo ("antes de fin
+      de año", "este mes"), añade "antes_de" con la fecha límite en
+      AAAA-MM-DD. Te llega ordenado de la que antes vence a la que después, y
+      con cuántas furgonetas NO tienen esa fecha guardada — dilo, porque "no
+      consta" no es "está bien". NUNCA des una fecha que no venga en el
+      resultado, y no llames "pendientes de ITV" a la lista entera de la
+      flota: si el resultado no trae fechas, di que no están guardadas.
     · conductores: "active" (true/false) y "nombre".
     · whc: "nombre" del conductor si preguntan por uno en concreto; SIN
       filtro trae a TODOS con su nombre y su aviso — úsalo para "quiénes

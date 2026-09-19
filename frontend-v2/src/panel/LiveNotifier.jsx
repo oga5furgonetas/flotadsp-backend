@@ -1,19 +1,23 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { MessageSquare, CheckSquare, X, AlertTriangle, UserPlus, Truck } from 'lucide-react'
-import { getChat, getChecklist, contarDnrPendientes, contarCandidatosNuevos } from './api'
+import { MessageSquare, CheckSquare, X, AlertTriangle, UserPlus, Truck, Fuel } from 'lucide-react'
+import { getChat, getChecklist, contarDnrPendientes, contarCandidatosNuevos, getAlerts } from './api'
 import { getAdmin } from './auth'
 import { hoyLocal } from '../lib/fecha'
 
-const ICONOS = { chat: MessageSquare, task: CheckSquare, dnr: AlertTriangle, candidato: UserPlus }
+const ICONOS = { chat: MessageSquare, task: CheckSquare, dnr: AlertTriangle, candidato: UserPlus, combustible: Fuel }
 
 /* ── Avisos EN VIVO dentro del panel (PC) ─────────────────────────────────────
    Con la app abierta en cualquier página: si alguien escribe en el chat de tu
-   centro, añade una tarea al checklist, entra un DNR sin contestar o un
-   candidato nuevo, se apunta como una FURGONETA arriba a la derecha —el
-   icono de la propia app— con el contador encima, como el badge de
-   notificaciones de un móvil. Se toca para desplegar la lista, se vuelve a
-   tocar para plegarla.
+   centro, añade una tarea al checklist, entra un DNR sin contestar, un
+   candidato nuevo o una furgoneta queda por debajo de medio depósito, se
+   apunta como una FURGONETA abajo a la derecha, JUNTO a la burbuja de
+   FlotaDSP AI, con el contador encima, como el badge de notificaciones de un
+   móvil. Se toca para desplegar la lista HACIA ARRIBA, se vuelve a tocar para
+   plegarla.
+   Estaba arriba a la derecha y pegaba con el avatar del usuario (Dani, 18-09-2026):
+   abajo y junto a la burbuja de la IA no tapa la cabecera y las dos cosas
+   «que te hablan» quedan juntas.
    Sin sonido ni parpadeos: Dani lo pidió explícitamente el 17-09-2026, "no
    me gusta nada ese sonido ni que se esté repitiendo como una alarma".
    · El aviso NO se cierra solo: hay que tocarlo (abre la página) o cerrarlo.
@@ -154,6 +158,37 @@ export default function LiveNotifier({ center, centers }) {
           }
           localStorage.setItem(k, String(n))
         } catch { /* siguiente tick */ }
+
+        // ── DEPOSITO BAJO: furgoneta por debajo de la mitad al hacer la inspeccion ──
+        // La alerta la crea el SERVIDOR al subir las fotos (`_combustible_registrar`,
+        // `kind: "combustible"`, una por furgoneta y dia) con el texto ya escrito:
+        // matricula, cuanto queda y quien la dejo asi. Aqui solo se ENSEÑA.
+        // Se recuerda por dispositivo cuales se han enseñado ya, como en el resto
+        // de bloques: sin eso, cada vuelta de 25 s volveria a apuntar la misma.
+        // Solo cuenta lo reciente (`PENDING_TTL_MS`): una alerta de hace dias no
+        // es un aviso "en vivo" y al abrir el panel un lunes inundaria la lista.
+        try {
+          const r = await getAlerts(c, 'combustible')
+          const k = `ln_fuel_${c}`
+          const vistos = new Set(JSON.parse(localStorage.getItem(k) || '[]'))
+          const desde = Date.now() - PENDING_TTL_MS
+          let hayNuevas = false
+          for (const a of Array.isArray(r.data) ? r.data : []) {
+            if (!a?.id || a.read || vistos.has(a.id)) continue
+            if (!(Date.parse(a.created_at) > desde)) continue
+            vistos.add(a.id)
+            hayNuevas = true
+            if (!pathRef.current.startsWith('/panel/vehiculos')) {
+              addNote({
+                key: `fuel-${a.id}`, icon: 'combustible',
+                title: `${a.title || 'Depósito bajo'} · ${c}`,
+                body: a.description || '',
+                to: '/panel/vehiculos',
+              })
+            }
+          }
+          if (hayNuevas) localStorage.setItem(k, JSON.stringify([...vistos].slice(-60)))
+        } catch { /* siguiente tick */ }
       }
     }
 
@@ -165,22 +200,16 @@ export default function LiveNotifier({ center, centers }) {
   if (notes.length === 0) return null
 
   return (
-    <div className="fixed right-4 top-4 z-[90] flex flex-col items-end gap-2">
-      {/* La furgoneta: el icono de la propia app como burbuja de avisos, con
-          el contador tipo badge de móvil. Un puntito de vida en vez de un
-          repique — se ve, no se oye. */}
-      <button onClick={() => setAbierto((a) => !a)}
-        title={`${notes.length} aviso${notes.length === 1 ? '' : 's'}`}
-        className={`relative flex h-11 w-11 items-center justify-center rounded-full border shadow-lg backdrop-blur transition ${
-          abierto ? 'border-brand-500/60 bg-brand-500/15 text-brand-200' : 'border-dark-700 bg-dark-900/95 text-dark-200 hover:border-brand-500/40'}`}>
-        <Truck size={20} />
-        <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10.5px] font-bold text-white ring-2 ring-dark-950">
-          {notes.length > 9 ? '9+' : notes.length}
-        </span>
-      </button>
-
+    // right-[4.5rem] = 1rem de margen + 3rem de la burbuja de la IA + 0,5rem de
+    // aire: queda pegada a su izquierda. La lista va ANTES del boton en el DOM
+    // y el contenedor esta anclado ABAJO, asi que al abrirse crece hacia
+    // arriba (como AsistenteBurbuja). `z-[90]` < el `z-[95]` de la IA: con la
+    // ventana de la IA abierta, esta tapa el boton hasta que se cierra.
+    <div className="fixed bottom-4 right-[4.5rem] z-[90] flex flex-col items-end gap-2">
       {abierto && (
-        <div className="flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-1.5">
+        // max-w descuenta los 5,5 rem de la derecha: con 4,5 rem de margen + 1 de
+        // aire, a 375 px la lista se salia por la izquierda de la pantalla.
+        <div className="flex max-h-[70vh] w-80 max-w-[calc(100vw-5.5rem)] flex-col gap-1.5 overflow-y-auto">
           {notes.length > 1 && (
             <div className="mb-0.5 flex items-center justify-between px-1">
               <span className="text-[11px] font-semibold uppercase tracking-wide text-dark-500">{notes.length} avisos</span>
@@ -213,6 +242,20 @@ export default function LiveNotifier({ center, centers }) {
           })}
         </div>
       )}
+
+      {/* La furgoneta: el icono de la propia app como burbuja de avisos, con
+          el contador tipo badge de móvil. Un puntito de vida en vez de un
+          repique — se ve, no se oye. Va DESPUES de la lista para quedar
+          abajo, junto a la burbuja de la IA. */}
+      <button onClick={() => setAbierto((a) => !a)}
+        title={`${notes.length} aviso${notes.length === 1 ? '' : 's'}`}
+        className={`relative flex h-12 w-12 items-center justify-center rounded-full border shadow-lg backdrop-blur transition ${
+          abierto ? 'border-brand-500/60 bg-brand-500/15 text-brand-200' : 'border-dark-700 bg-dark-900/95 text-dark-200 hover:border-brand-500/40'}`}>
+        <Truck size={20} />
+        <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-600 text-[10.5px] font-bold text-white ring-2 ring-dark-950">
+          {notes.length > 9 ? '9+' : notes.length}
+        </span>
+      </button>
     </div>
   )
 }

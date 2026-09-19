@@ -7,10 +7,11 @@ import {
   ChevronRight, ChevronDown, ExternalLink, FileSpreadsheet, AlertTriangle, BookUser, Search, Sun, Moon, Contrast,
   PackageX, FileBarChart,
   PackageSearch, PackageCheck, MapPin, Timer, MapPinned, Gauge, Mail, UserCircle2, Languages, ShieldAlert, LifeBuoy, Menu, CircleHelp,
-  Briefcase, Store, UserCheck, ImagePlus, Loader2,
+  Briefcase, Store, UserCheck, ImagePlus, Loader2, Bell, BellOff,
 } from 'lucide-react'
 import { getAdmin, isAuthed, isSuperAdmin, isCenterManager, logout, canSee, decodeToken, getVisibleCenters, SIEMPRE_VISIBLES, guardarAccesoFresco, esPlataforma, actualizarMiFoto } from './auth'
 import { getMe, contarPeticionesPendientes, contarCandidatosNuevos, contarDnrPendientes, subirFotoAdmin } from './api'
+import { pushSupported, isPushEnabled, enablePush, disablePush } from '../lib/push'
 import TrialBanner from './TrialBanner'
 import CommandPalette from './CommandPalette'
 import { BotonAyuda, PanelAyuda, PrimerosPasos } from './Ayuda'
@@ -134,7 +135,34 @@ const SIN_MODULO = new Set(['perfil', 'login', 'portal-conductor'])
    cerrarlo, y en esta app casi no hay huecos vacios. */
 function MenuUsuario({ admin, showAdmin, lang, setLang, langs, onLogout, t }) {
   const [abierto, setAbierto] = useState(false)
+  const [notif, setNotif] = useState(false)
+  const [notifBusy, setNotifBusy] = useState(false)
+  const [errPush, setErrPush] = useState('')
+  const canPush = pushSupported()
+
+  // El estado REAL de la suscripcion, no lo que creamos recordar: el navegador
+  // puede haberla revocado por su cuenta.
+  useEffect(() => { isPushEnabled().then(setNotif).catch(() => {}) }, [])
+
+  async function toggleNotif() {
+    if (notifBusy) return
+    setNotifBusy(true); setErrPush('')
+    try {
+      if (notif) {
+        await disablePush()
+        setNotif(false)
+      } else {
+        const r = await enablePush()
+        if (r === 'ok') setNotif(true)
+        else setErrPush(r === 'denied' ? t('push.denied')
+          : r === 'unsupported' ? t('push.unsupported') : t('push.error'))
+      }
+    } finally { setNotifBusy(false) }
+  }
   const [foto, setFoto] = useState(admin?.photo_url || null)
+  // El blob puede recibir la foto DESPUES de montar el menu (llega con el
+  // primer /auth/me): sin esto el useState de arriba solo la leia al montar.
+  useEffect(() => { setFoto(admin?.photo_url || null) }, [admin?.photo_url])
   const [subiendoFoto, setSubiendoFoto] = useState(false)
   const fileRef = useRef(null)
   const caja = useRef(null)
@@ -235,6 +263,26 @@ function MenuUsuario({ admin, showAdmin, lang, setLang, langs, onLogout, t }) {
               <Mail size={15} className="text-dark-400" /> Correo de la empresa
             </NavLink>
           )}
+
+          {/* LOS AVISOS AL MOVIL VIVEN AQUI, no dentro del chat. Estaban en una
+              esquina de UNA pantalla, asi que quien no entrara en el chat no
+              llegaba a saber que existian — y valen para todo: deposito bajo,
+              ITV, una orden de taller, un privado. Se activan por DISPOSITIVO,
+              y por eso el texto dice «en este dispositivo»: activarlo en el
+              ordenador no lo activa en el movil. */}
+          {canPush && (
+            <button onClick={toggleNotif} disabled={notifBusy} role="menuitem"
+              className="flex w-full items-center gap-2.5 border-t border-dark-800 px-3 py-2 text-left text-[13px] text-dark-200 hover:bg-dark-800 disabled:opacity-50">
+              {notifBusy ? <Loader2 size={15} className="animate-spin text-dark-400" />
+                : notif ? <Bell size={15} className="text-emerald-400" />
+                : <BellOff size={15} className="text-dark-400" />}
+              <span className="min-w-0 flex-1">
+                <span className="block">{notif ? 'Avisos activados' : 'Activar avisos'}</span>
+                <span className="block text-[11px] text-dark-500">en este dispositivo</span>
+              </span>
+            </button>
+          )}
+          {errPush && <p className="px-3 pb-1 text-[11px] text-amber-300">{errPush}</p>}
 
           {/* El idioma vive aqui y no suelto en la barra: se cambia una vez y
               ocupaba sitio fijo en una cabecera que ya iba llena. */}
@@ -429,7 +477,21 @@ export default function PanelLayout() {
     const mirar = () => {
       if (!vivo || !isAuthed() || document.hidden) return
       getMe()
-        .then((r) => { if (vivo && guardarAccesoFresco(r.data)) setAccesoTick((n) => n + 1) })
+        .then((r) => {
+          if (!vivo) return
+          let cambio = guardarAccesoFresco(r.data)
+          // LA FOTO NO VIAJA EN EL LOGIN, solo en /auth/me: sin copiarla aqui,
+          // quien iniciaba sesion de nuevo NO veia su foto guardada (ni en la
+          // cabecera, ni en la burbuja de la IA, ni en sus mensajes del chat)
+          // hasta volver a subirla. Es cosmetica: no pasa por el circuito de
+          // permisos de arriba, solo se copia al blob si la respuesta la trae.
+          if (r.data && 'photo_url' in r.data
+              && (getAdmin()?.photo_url || null) !== (r.data.photo_url || null)) {
+            actualizarMiFoto(r.data.photo_url || null)
+            cambio = true
+          }
+          if (cambio) setAccesoTick((n) => n + 1)
+        })
         .catch(() => {})
     }
     mirar()
@@ -633,6 +695,14 @@ export default function PanelLayout() {
               className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}
             >
               <Users size={16} /> {t('nav.users')}
+            </NavLink>
+          )}
+          {showAdmin && (
+            <NavLink
+              to="/panel/analitica"
+              className={({ isActive }) => `nav-item ${isActive ? 'nav-item-active' : ''}`}
+            >
+              <Activity size={16} /> Cómo va el negocio
             </NavLink>
           )}
           {showAdmin && (
